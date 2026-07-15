@@ -1,0 +1,6 @@
+*.docx
+*.pdf
+*.md
+admin/*.md
+admin/SETUP-NOTES.md
+assets/hero-loop-original.mp4

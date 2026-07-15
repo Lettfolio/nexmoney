@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>NexMoney — Introducer Portal</title>
+<link rel="stylesheet" href="/admin/admin.css">
+</head>
+<body>
+
+<div id="login-view" class="login-wrap hidden">
+  <form id="login-form" class="login-card">
+    <div class="login-logo">Nex<span>Money</span></div>
+    <h1>Introducer Portal</h1>
+    <label>Email
+      <input type="email" id="login-email" required autocomplete="username">
+    </label>
+    <label>Password
+      <span class="pw-wrap">
+        <input type="password" id="login-password" required autocomplete="current-password">
+        <button type="button" class="pw-toggle" id="pw-btn" aria-label="Show password">&#128065;</button>
+      </span>
+    </label>
+    <button type="submit" class="btn btn-primary btn-block">Sign in</button>
+    <p id="login-error" class="error hidden"></p>
+  </form>
+</div>
+
+<div id="app-view" class="hidden">
+  <header class="topbar">
+    <div class="topbar-logo">Nex<span>Money</span> <em>Introducer&nbsp;Portal</em></div>
+    <div class="topnav"></div>
+    <div class="topbar-right">
+      <span id="user-email"></span>
+      <button id="logout-btn" class="btn btn-ghost">Sign out</button>
+    </div>
+  </header>
+  <main>
+    <h2 id="intro-title">Your referrals</h2>
+    <p class="panel-sub">Live progress of the clients you've referred to NexMoney. Updated in real time — no need to call for updates.</p>
+    <div class="panel">
+      <h3>In progress</h3>
+      <div id="live-list"></div>
+    </div>
+    <div class="panel">
+      <h3>Completed / closed</h3>
+      <div id="done-list"></div>
+    </div>
+  </main>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script>
+const SUPABASE_URL = "https://sclghkmvzpwtmnzbkaoe.supabase.co";
+const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNjbGdoa212enB3dG1uemJrYW9lIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMxNzI1MDEsImV4cCI6MjA5ODc0ODUwMX0.LNm4vE071b359t8ACq459nVmQCUkk7BSVeGjddqNztg";
+const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+const $ = (s) => document.querySelector(s);
+const esc = (s) => (s == null ? "" : String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])));
+const fmtD = (d) => (d ? new Date(d).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "—");
+const STAGE_LABEL = { enquiry: "Enquiry received", fact_find: "Fact find", decision_in_principle: "Decision in principle", application: "Application submitted", offer: "Offer received", exchange: "Exchanged", completed: "Completed", not_proceeding: "Not proceeding" };
+
+function toast(m){ const t=$("#toast"); t.textContent=m; t.classList.remove("hidden"); setTimeout(()=>t.classList.add("hidden"),3000); }
+
+async function init() {
+  const { data: { session } } = await db.auth.getSession();
+  if (session) showApp(session); else showLogin();
+}
+function showLogin() {
+  $("#login-view").classList.remove("hidden");
+  $("#app-view").classList.add("hidden");
+}
+async function showApp(session) {
+  const { data: profile } = await db.from("profiles").select("role,introducer_id").eq("id", session.user.id).single();
+  if (!profile || profile.role !== "introducer") {
+    await db.auth.signOut();
+    $("#login-error").textContent = "This login is not an introducer account.";
+    $("#login-error").classList.remove("hidden");
+    showLogin();
+    return;
+  }
+  $("#login-view").classList.add("hidden");
+  $("#app-view").classList.remove("hidden");
+  $("#user-email").textContent = session.user.email;
+  const { data: me } = await db.from("introducers").select("name").eq("id", profile.introducer_id).single();
+  if (me) $("#intro-title").textContent = "Your referrals — " + me.name;
+
+  const { data: cases } = await db.from("cases")
+    .select("id,stage,case_kind,created_at,completed_at,clients(first_name,last_name)")
+    .order("created_at", { ascending: false });
+  const all = cases || [];
+  const row = (c) => `
+    <div class="row-item">
+      <div class="row-main">
+        <div class="t">${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" "))}</div>
+        <div class="s">Referred ${fmtD(c.created_at)}${c.completed_at ? " · completed " + fmtD(c.completed_at) : ""}</div>
+      </div>
+      <span class="badge ${c.stage === "completed" ? "green" : c.stage === "not_proceeding" ? "grey" : "blue"}">${STAGE_LABEL[c.stage] || c.stage}</span>
+    </div>`;
+  const live = all.filter((c) => !["completed", "not_proceeding"].includes(c.stage));
+  const done = all.filter((c) => ["completed", "not_proceeding"].includes(c.stage));
+  $("#live-list").innerHTML = live.map(row).join("") || '<div class="empty">No cases in progress right now.</div>';
+  $("#done-list").innerHTML = done.map(row).join("") || '<div class="empty">Nothing completed yet.</div>';
+}
+$("#login-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  $("#login-error").classList.add("hidden");
+  const { data, error } = await db.auth.signInWithPassword({
+    email: $("#login-email").value.trim(),
+    password: $("#login-password").value,
+  });
+  if (error) { $("#login-error").textContent = error.message; $("#login-error").classList.remove("hidden"); return; }
+  showApp(data.session);
+});
+$("#logout-btn").addEventListener("click", async () => { await db.auth.signOut(); showLogin(); });
+$("#pw-btn").addEventListener("click", () => {
+  const i = $("#login-password");
+  i.type = i.type === "password" ? "text" : "password";
+});
+init();
+</script>
+</body>
+</html>

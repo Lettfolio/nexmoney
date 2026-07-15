@@ -1,0 +1,33 @@
+# NexMoney — robots.txt
+# One universal group; named groups removed (a crawler obeys only its
+# most specific group, so per-bot "Allow: /" was overriding the Disallows).
+
+User-agent: *
+Allow: /
+Disallow: /portal/
+Disallow: /clienthub/
+Disallow: /admin/
+
+# AI answer-engine crawlers — explicitly welcome (citability in AI answers)
+User-agent: GPTBot
+Allow: /
+Disallow: /portal/
+Disallow: /clienthub/
+Disallow: /admin/
+
+User-agent: ClaudeBot
+Allow: /
+Disallow: /portal/
+Disallow: /clienthub/
+Disallow: /admin/
+
+User-agent: PerplexityBot
+Allow: /
+Disallow: /portal/
+Disallow: /clienthub/
+Disallow: /admin/
+
+User-agent: Google-Extended
+Allow: /
+
+Sitemap: https://www.nexmoney.co.uk/sitemap.xml

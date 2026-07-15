@@ -1,0 +1,13 @@
+# Secrets & Vercel local state
+.env*
+.vercel
+
+# Session / tooling artifacts
+.claude/
+.write_test_claude
+vercel_out.txt
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+node_modules/
