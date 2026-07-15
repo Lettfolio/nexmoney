@@ -11,3 +11,6 @@ vercel_out.txt
 .DS_Store
 Thumbs.db
 node_modules/
+git-setup.bat
+deploy-trigger.bat
+_cleanup.bat
