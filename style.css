@@ -1598,3 +1598,35 @@ p a:not(.btn), .faq-answer a, .form-consent a {
 .contact-info h2 { font-size: 22px; font-weight: 700; color: var(--ink); margin-bottom: 20px; }
 .contact-form h2 { font-size: 22px; font-weight: 700; color: var(--ink); margin-bottom: 24px; }
 .contact-item h3 { font-weight: 700; font-size: 14px; color: var(--ink); margin-bottom: 4px; }
+
+/* Hero background-video pause/play toggle (WCAG 2.2.2) — #heroVideoToggle sits top-right inside .hero (position:relative) */
+.hero-video-toggle {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 5;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid rgba(255,255,255,0.3);
+  background: rgba(10,14,25,0.55);
+  color: #fff;
+  cursor: pointer;
+  backdrop-filter: blur(4px);
+  transition: background .2s ease, border-color .2s ease;
+}
+.hero-video-toggle:hover,
+.hero-video-toggle:focus-visible {
+  background: rgba(10,14,25,0.85);
+  border-color: rgba(255,255,255,0.6);
+}
+@media (prefers-reduced-motion: reduce) {
+  .hero-video-toggle { display: none; }
+}
+
+/* Footer column headings promoted h4 -> h3 (calculators/faq/testimonials heading-hierarchy fix) — mirror of .footer-col h4 */
+.footer-col h3 { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: var(--white); margin-bottom: 20px; }

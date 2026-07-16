@@ -191,6 +191,9 @@
     </video>
     <div class="hero-overlay"></div>
   </div>
+  <button type="button" id="heroVideoToggle" class="hero-video-toggle" aria-pressed="false" aria-label="Pause background video">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>
+  </button>
   <div class="hero-aurora" aria-hidden="true"></div>
   <div class="container">
     <div class="hero-inner">
@@ -281,7 +284,7 @@
             <a href="tel:01202802677" class="path-phone">
               <svg width="22" height="22" fill="none" stroke="#f36f23" stroke-width="2" viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07A19.5 19.5 0 014.11 11.9a19.79 19.79 0 01-3.07-8.67A2 2 0 013 1.08h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L7.09 8.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/></svg>
               <div>
-                <span class="path-phone-label">Prefer to talk? Call us free</span>
+                <span class="path-phone-label">Prefer to talk? Call us</span>
                 <strong>01202 802 677</strong>
               </div>
             </a>
@@ -422,7 +425,7 @@
           <li>Based on current lender criteria</li>
           <li>Speak to an advisor to get a firm MIP</li>
         </ul>
-        <p style="margin-top:24px; font-size:14px; color:var(--muted);">Want to go further? <a href="/calculators" style="color:var(--orange); font-weight:600;">View all calculators →</a></p>
+        <p style="margin-top:24px; font-size:14px; color:var(--dim);">Want to go further? <a href="/calculators" style="color:var(--orange); font-weight:600;">View all calculators →</a></p>
       </div>
       <div class="calc-card">
         <div class="calc-tabs">
@@ -433,14 +436,14 @@
         <!-- Borrow tab -->
         <div id="calc-borrow">
           <div class="calc-group">
-            <label>Your annual income</label>
+            <label for="income1">Your annual income</label>
             <div class="calc-input-wrap">
               <span class="calc-prefix">£</span>
               <input type="number" id="income1" class="calc-input" value="35000" min="0" oninput="calcBorrow()">
             </div>
           </div>
           <div class="calc-group">
-            <label>Second applicant's income (optional)</label>
+            <label for="income2">Second applicant's income (optional)</label>
             <div class="calc-input-wrap">
               <span class="calc-prefix">£</span>
               <input type="number" id="income2" class="calc-input" value="0" min="0" oninput="calcBorrow()">
@@ -448,9 +451,9 @@
           </div>
           <div class="calc-result">
             <label>Estimated borrowing</label>
-            <div class="result-value" id="borrowResult">£161,000 – £192,500</div>
+            <div class="result-value" id="borrowResult">£140,000 – £193,000</div>
             <div class="calc-bar"><span id="borrowBar"></span></div>
-            <small>Based on 4.5×–5.5× income (indicative only)</small>
+            <small>Based on 4×–5.5× income (indicative only)</small>
             <p class="calc-disclaimer">This is an estimate. Actual amounts depend on credit history, outgoings and lender criteria. Speak to an advisor for a personalised figure.</p>
           </div>
           <a href="/contact" class="btn btn-primary" style="width:100%; margin-top:16px; text-align:center; display:block;">Get your personalised mortgage quote →</a>
@@ -459,21 +462,21 @@
         <!-- Repay tab -->
         <div id="calc-repay" style="display:none;">
           <div class="calc-group">
-            <label>Mortgage amount</label>
+            <label for="loanAmt">Mortgage amount</label>
             <div class="calc-input-wrap">
               <span class="calc-prefix">£</span>
               <input type="number" id="loanAmt" class="calc-input" value="200000" min="0" oninput="calcRepay()">
             </div>
           </div>
           <div class="calc-group">
-            <label>Interest rate (%)</label>
+            <label for="interestRate">Interest rate (%)</label>
             <div class="calc-input-wrap">
               <span class="calc-prefix">%</span>
               <input type="number" id="interestRate" class="calc-input" value="4.5" step="0.1" min="0" max="20" oninput="calcRepay()" style="padding-left:32px;">
             </div>
           </div>
           <div class="calc-group">
-            <label>Mortgage term (years)</label>
+            <label for="termYears">Mortgage term (years)</label>
             <div class="calc-input-wrap">
               <span class="calc-prefix" style="font-size:13px;">yr</span>
               <input type="number" id="termYears" class="calc-input" value="25" min="1" max="40" oninput="calcRepay()">
@@ -709,7 +712,7 @@
     <div style="text-align:center; margin-bottom:40px;">
       <span class="section-label">Local Mortgage Experts</span>
       <h2 class="section-title">Mortgage Advice Across<br><span>Bournemouth, Poole &amp; Dorset</span></h2>
-      <p style="font-size:16px; color:var(--muted); max-width:640px; margin:0 auto; line-height:1.8;">Based in Bournemouth, NexMoney provides whole-of-market mortgage advice to clients across Dorset and the South of England. Whether you're in the heart of Bournemouth or the Dorset countryside, our advisors are here to help.</p>
+      <p style="font-size:16px; color:var(--dim); max-width:640px; margin:0 auto; line-height:1.8;">Based in Bournemouth, NexMoney provides whole-of-market mortgage advice to clients across Dorset and the South of England. Whether you're in the heart of Bournemouth or the Dorset countryside, our advisors are here to help.</p>
     </div>
     <div class="local-area-grid">
       <div style="background:var(--white); border-radius:14px; padding:28px 24px; border:1px solid var(--border);">
@@ -746,7 +749,7 @@
     <div style="text-align:center; margin-bottom:40px;">
       <span class="section-label">Common Questions</span>
       <h2 class="section-title">Mortgage Questions<br><span>Answered</span></h2>
-      <p style="font-size:16px; color:var(--muted); max-width:580px; margin:0 auto;">Not sure where to start? Here are the questions we're asked most often — or <a href="/faq" style="color:var(--orange); font-weight:600;">visit our full FAQ page</a> for more.</p>
+      <p style="font-size:16px; color:var(--dim); max-width:580px; margin:0 auto;">Not sure where to start? Here are the questions we're asked most often — or <a href="/faq" style="color:var(--orange); font-weight:600;">visit our full FAQ page</a> for more.</p>
     </div>
     <div class="faq-list" style="max-width:800px; margin:0 auto 32px;">
 
@@ -943,10 +946,10 @@
 
   // Borrowing calculator
   function calcBorrow() {
-    const i1 = parseFloat(document.getElementById('income1').value) || 0;
-    const i2 = parseFloat(document.getElementById('income2').value) || 0;
+    const i1 = Math.max(0, parseFloat(document.getElementById('income1').value) || 0);
+    const i2 = Math.max(0, parseFloat(document.getElementById('income2').value) || 0);
     const total = i1 + i2;
-    const lo = Math.round(total * 4.5 / 1000) * 1000;
+    const lo = Math.round(total * 4 / 1000) * 1000;
     const hi = Math.round(total * 5.5 / 1000) * 1000;
     const out = document.getElementById('borrowResult');
     out.textContent = '£' + lo.toLocaleString() + ' – £' + hi.toLocaleString();
@@ -956,9 +959,9 @@
 
   // Repayment calculator
   function calcRepay() {
-    const P = parseFloat(document.getElementById('loanAmt').value) || 0;
-    const r = (parseFloat(document.getElementById('interestRate').value) || 0) / 100 / 12;
-    const n = (parseFloat(document.getElementById('termYears').value) || 25) * 12;
+    const P = Math.max(0, parseFloat(document.getElementById('loanAmt').value) || 0);
+    const r = Math.max(0, parseFloat(document.getElementById('interestRate').value) || 0) / 100 / 12;
+    const n = Math.max(1, parseFloat(document.getElementById('termYears').value) || 25) * 12;
     const out = document.getElementById('repayResult');
     let mo;
     if (r === 0) {
@@ -977,6 +980,33 @@
   // Initial render so results match the pre-filled values
   calcBorrow();
   calcRepay();
+
+  // Pause/play control for the hero background video (WCAG 2.2.2)
+  (function () {
+    const vid = document.querySelector('.hero-media video');
+    const btn = document.getElementById('heroVideoToggle');
+    if (!vid || !btn) return;
+    // Video is already hidden for users with reduced-motion set; hide the control too
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      btn.style.display = 'none';
+      return;
+    }
+    const pauseIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>';
+    const playIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="7 4 21 12 7 20 7 4"/></svg>';
+    btn.addEventListener('click', function () {
+      if (vid.paused) {
+        vid.play();
+        btn.setAttribute('aria-pressed', 'false');
+        btn.setAttribute('aria-label', 'Pause background video');
+        btn.innerHTML = pauseIcon;
+      } else {
+        vid.pause();
+        btn.setAttribute('aria-pressed', 'true');
+        btn.setAttribute('aria-label', 'Play background video');
+        btn.innerHTML = playIcon;
+      }
+    });
+  })();
 </script>
 
 </body>

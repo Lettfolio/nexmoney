@@ -735,7 +735,12 @@ function renderPipelineTable(filtered) {
   $("#csv-btn").onclick = () => exportCsv(rows);
 }
 function exportCsv(rows) {
-  const q2 = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const q2 = (v) => {
+    let s = String(v ?? "");
+    // Neutralise spreadsheet formula injection (=, +, -, @, tab, CR at start)
+    if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+    return `"${s.replace(/"/g, '""')}"`;
+  };
   const head = ["Client", "Stage", "Type", "Lender", "Rate %", "Rate end", "Rate end estimated", "ERC end", "Broker fee", "Fee status", "Protection", "Adviser", "Updated"];
   const lines = [head.map(q2).join(",")].concat(rows.map((c) => [
     [c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" "),
