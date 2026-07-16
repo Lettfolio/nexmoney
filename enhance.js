@@ -121,7 +121,7 @@
       '01-8.63-3.07A19.5 19.5 0 014.11 11.9a19.79 19.79 0 01-3.07-8.67A2 2 0 013 ' +
       '1.08h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L7.09 8.91a16 ' +
       '16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 ' +
-      '16.92z"/></svg><span>Call us free</span>';
+      '16.92z"/></svg><span>Call us</span>';
     doc.body.appendChild(fab);
     function toggleFab() {
       fab.classList.toggle('show', (window.pageYOffset || root.scrollTop) > 600);
@@ -190,6 +190,14 @@
       }
     }
 
+    /* Shared pause/play icons (carousel + marquee controls) */
+    var ICON_PAUSE =
+      '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">' +
+      '<rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>';
+    var ICON_PLAY =
+      '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">' +
+      '<path d="M8 5.5v13l11-6.5z"/></svg>';
+
     /* ---- 6. Testimonials carousel (auto-rotating) ---------- */
     var track = doc.getElementById('testiTrack');
     if (track) {
@@ -197,7 +205,7 @@
       var dotsWrap = doc.getElementById('testiDots');
       var prevBtn = doc.getElementById('testiPrev');
       var nextBtn = doc.getElementById('testiNext');
-      var page = 0, pages = 1, timer = null;
+      var page = 0, pages = 1, timer = null, userPaused = false;
 
       function visibleCount() {
         var w = window.innerWidth;
@@ -230,18 +238,44 @@
         }
         render();
       }
-      function startAuto() { if (reduce) return; stopAuto(); timer = setInterval(function () { go(page + 1); }, 5500); }
+      function startAuto() { if (reduce || userPaused) return; stopAuto(); timer = setInterval(function () { go(page + 1); }, 5500); }
       function stopAuto() { if (timer) { clearInterval(timer); timer = null; } }
       function restart() { startAuto(); }
 
       if (nextBtn) nextBtn.addEventListener('click', function () { go(page + 1); restart(); });
       if (prevBtn) prevBtn.addEventListener('click', function () { go(page - 1); restart(); });
 
+      /* WCAG 2.2.2: visible, focusable pause/play toggle so keyboard
+         and touch users can stop the auto-rotation (hover-only is not
+         operable for them). */
+      var controls = doc.querySelector('.testi-controls');
+      if (controls && !reduce) {
+        var pauseBtn = doc.createElement('button');
+        pauseBtn.type = 'button';
+        pauseBtn.className = 'testi-arrow testi-pause';
+        var syncPauseBtn = function () {
+          pauseBtn.setAttribute('aria-pressed', userPaused ? 'true' : 'false');
+          pauseBtn.setAttribute('aria-label', userPaused ?
+            'Play automatic review rotation' : 'Pause automatic review rotation');
+          pauseBtn.innerHTML = userPaused ? ICON_PLAY : ICON_PAUSE;
+        };
+        pauseBtn.addEventListener('click', function () {
+          userPaused = !userPaused;
+          if (userPaused) stopAuto(); else startAuto();
+          syncPauseBtn();
+        });
+        syncPauseBtn();
+        controls.appendChild(pauseBtn);
+      }
+
       var carousel = track.parentNode;
       while (carousel && carousel.className.indexOf('testi-carousel') === -1) carousel = carousel.parentNode;
       if (carousel) {
         carousel.addEventListener('mouseenter', stopAuto);
         carousel.addEventListener('mouseleave', startAuto);
+        // pause while any control inside the carousel holds keyboard focus
+        carousel.addEventListener('focusin', stopAuto);
+        carousel.addEventListener('focusout', startAuto);
       }
 
       var rt;
@@ -251,6 +285,44 @@
 
       build();
       startAuto();
+    }
+
+    /* ---- 7. Lender marquee: a11y + pause control ------------ */
+    var marquee = doc.querySelector('.marquee');
+    if (marquee) {
+      var mTrack = marquee.querySelector('.marquee-track');
+      if (mTrack) {
+        // The second half of the track is a purely visual duplicate for
+        // the seamless loop — hide it from screen readers so the lender
+        // names are not announced twice.
+        var mSpans = [].slice.call(mTrack.children);
+        for (var mi = Math.ceil(mSpans.length / 2); mi < mSpans.length; mi++) {
+          mSpans[mi].setAttribute('aria-hidden', 'true');
+        }
+      }
+      if (!reduce) {
+        /* WCAG 2.2.2: hover-pause alone is not operable by keyboard or
+           touch — add a small focusable pause/play toggle. */
+        var mWrap = marquee.parentNode;
+        mWrap.classList.add('has-marquee-pause');
+        var mBtn = doc.createElement('button');
+        mBtn.type = 'button';
+        mBtn.className = 'marquee-pause';
+        var mPaused = false;
+        var syncMBtn = function () {
+          mBtn.setAttribute('aria-pressed', mPaused ? 'true' : 'false');
+          mBtn.setAttribute('aria-label', mPaused ?
+            'Play the scrolling lender list' : 'Pause the scrolling lender list');
+          mBtn.innerHTML = mPaused ? ICON_PLAY : ICON_PAUSE;
+        };
+        mBtn.addEventListener('click', function () {
+          mPaused = !mPaused;
+          marquee.classList.toggle('paused', mPaused);
+          syncMBtn();
+        });
+        syncMBtn();
+        mWrap.insertBefore(mBtn, marquee.nextSibling);
+      }
     }
   });
 })();

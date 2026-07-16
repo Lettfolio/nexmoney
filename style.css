@@ -19,8 +19,8 @@
   --transition: 0.25s ease;
 }
 
-html { scroll-behavior: smooth; overflow-x: hidden; }
-body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; color: var(--text); line-height: 1.6; font-size: 16px; overflow-x: hidden; }
+html { scroll-behavior: smooth; overflow-x: clip; }
+body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; color: var(--text); line-height: 1.6; font-size: 16px; overflow-x: clip; }
 a { color: var(--navy); text-decoration: none; }
 a:hover { color: var(--orange); }
 img { max-width: 100%; display: block; }
@@ -1267,7 +1267,7 @@ nav a:hover, nav a.active { color: var(--ink); background: var(--glass2); }
 .calc-result { background: linear-gradient(135deg, #0a2a52, #0d4a8f); box-shadow: 0 16px 44px rgba(0,40,90,0.5), inset 0 1px 0 rgba(255,255,255,0.14); }
 .form-group label { color: var(--body2); }
 .form-consent label, .form-submit-note { color: var(--dim); }
-.form-group select { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%238fa0b8' stroke-width='1.5' fill='none'/%3E%3C/svg%3E"); }
+.form-group select { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%238fa0b8' stroke-width='1.5' fill='none'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 14px center; }
 select option { background: var(--bg2); color: var(--ink); }
 
 /* ---- Process ---- */
@@ -1326,14 +1326,18 @@ select option { background: var(--bg2); color: var(--ink); }
 footer { background: #04080f; border-top: 1px solid var(--brd); }
 
 /* ---- Reveal: add cinematic blur-in ---- */
+/* blur kept subtle (4px) — animating heavy blur across staggered card
+   groups is GPU-expensive on low-end mobiles */
 html.js .reveal {
   transform: translateY(34px);
-  filter: blur(10px);
+  filter: blur(4px);
   transition: opacity 0.8s cubic-bezier(.2,.7,.2,1),
               transform 0.8s cubic-bezier(.2,.7,.2,1),
               filter 0.8s cubic-bezier(.2,.7,.2,1);
 }
-html.js .reveal.in { filter: blur(0); }
+/* will-change:auto releases the compositor layer once revealed —
+   browsers auto-promote during the active transition anyway */
+html.js .reveal.in { filter: blur(0); will-change: auto; }
 
 /* ---- Stat band: glassy count-up cards (ported from 21st.dev Atlas Stat Band) ---- */
 .stats-strip { padding: 44px 0; }
@@ -1444,3 +1448,153 @@ html.js .stat-item.reveal.in {
   .hero-media video { display: none; }
   .hero-media { background: url('assets/hero-poster.jpg') center / cover no-repeat; }
 }
+
+/* =========================================================
+   FIX LAYER — accessibility, contrast & layout patches
+   (dark layer; appended last so it wins on source order)
+   ========================================================= */
+
+/* Process steps: anchor the ::after ring to the 72px number circle
+   (it was resolving against the whole .process-step card) */
+.step-num { position: relative; }
+
+/* Primary CTA: near-black text on the orange gradient — 6.4:1+ at the
+   darkest end (white was 2.95:1, failing AA at 15px/700) */
+.btn-primary, .btn-primary:hover { color: #1a0d04; }
+
+/* Footer legal / FCA repossession warning: 6.3:1 (was 4.47:1 at 12px) */
+.footer-legal { color: rgba(255,255,255,0.55); }
+
+/* Marquee lender names: 4.5:1 on --bg1 (was 2.59:1) */
+.marquee-track span { color: #6b7ea6; }
+
+/* Bento card index labels ('01'–'08'): 6.2:1 (was 2.6:1 at 11px) */
+.card-idx { color: rgba(255,255,255,0.55); }
+
+/* Testimonial dots: >=24px hit area (WCAG 2.5.8) — visual 9px dot is
+   unchanged; the transparent ::before extends the clickable region and
+   the wider gap keeps adjacent targets from overlapping */
+.testi-dots { gap: 16px; }
+.testi-dot { position: relative; }
+.testi-dot::before { content: ''; position: absolute; inset: -8px; }
+
+/* Lender marquee pause/play toggle (injected by enhance.js) */
+.has-marquee-pause { position: relative; }
+.marquee-pause {
+  position: absolute;
+  right: 14px;
+  bottom: 22px;
+  z-index: 6;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 1px solid var(--brd2);
+  background: rgba(10,20,36,0.85);
+  color: var(--body2);
+  cursor: pointer;
+  transition: all var(--transition);
+}
+.marquee-pause:hover,
+.marquee-pause:focus-visible { color: var(--ink); border-color: var(--orange); }
+.marquee.paused .marquee-track,
+.marquee:focus-within .marquee-track { animation-play-state: paused; }
+
+/* WCAG 1.4.1: in-content links distinguishable by more than hue alone
+   (standalone links with inline text-decoration:none are unaffected) */
+p a:not(.btn), .faq-answer a, .form-consent a {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* =========================================================
+   PAGE-FIXER REQUESTS (wave 1) — classes replacing inline styles
+   ========================================================= */
+
+/* index: Local Area Coverage grid — now mobile-compatible */
+.local-area-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 20px;
+  margin-bottom: 40px;
+}
+@media (max-width: 768px) {
+  .local-area-grid { grid-template-columns: 1fr; }
+}
+
+/* sitewide: skip link (visually hidden until focused).
+   Text is #1a0d04 to match the accessible .btn-primary treatment —
+   white on the orange bg would be 2.95:1. */
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 2000;
+  background: var(--orange);
+  color: #1a0d04;
+  padding: 10px 18px;
+  border-radius: 0 0 8px 0;
+  font-weight: 700;
+  font-size: 14px;
+  text-decoration: none;
+}
+.skip-link:focus { left: 0; outline: 2px solid #ffffff; outline-offset: -2px; }
+
+/* services: two-column split sections */
+.split-2col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 60px;
+  align-items: center;
+}
+@media (max-width: 768px) {
+  .split-2col { grid-template-columns: 1fr; gap: 32px; }
+}
+
+/* mortgages: 'How It Works' grid — mobile collapse. !important is
+   required because the desktop layout remains as inline styles on the
+   elements. Matches the index .process-grid breakpoint pattern. */
+@media (max-width: 768px) {
+  .mtg-process-grid { grid-template-columns: 1fr 1fr !important; gap: 28px 16px !important; }
+  .mtg-process-line { display: none !important; }
+}
+@media (max-width: 480px) {
+  .mtg-process-grid { grid-template-columns: 1fr !important; }
+}
+
+/* faq: bottom CTA card (carries no inline styles in the HTML) */
+.faq-cta {
+  background: var(--bg2);
+  border: 1px solid var(--brd);
+  border-radius: 20px;
+  padding: 60px 48px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 40px;
+  align-items: center;
+}
+.faq-cta-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: flex-end;
+  flex-shrink: 0;
+}
+.faq-cta-phone {
+  color: var(--blue);
+  font-weight: 700;
+  font-size: 16px;
+  text-decoration: none;
+  text-align: center;
+}
+@media (max-width: 768px) {
+  .faq-cta { grid-template-columns: 1fr; padding: 32px 20px; gap: 28px; }
+  .faq-cta-actions { align-items: flex-start; }
+}
+
+/* contact: sizing for headings promoted to h2/h3 for correct hierarchy */
+.contact-info h2 { font-size: 22px; font-weight: 700; color: var(--ink); margin-bottom: 20px; }
+.contact-form h2 { font-size: 22px; font-weight: 700; color: var(--ink); margin-bottom: 24px; }
+.contact-item h3 { font-weight: 700; font-size: 14px; color: var(--ink); margin-bottom: 4px; }

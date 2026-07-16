@@ -2,7 +2,10 @@
 const SUPABASE_URL = "https://sclghkmvzpwtmnzbkaoe.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNjbGdoa212enB3dG1uemJrYW9lIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMxNzI1MDEsImV4cCI6MjA5ODc0ODUwMX0.LNm4vE071b359t8ACq459nVmQCUkk7BSVeGjddqNztg";
 const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
-const ADMIN_URL = "https://nexmoney.vercel.app/admin/"; // update if the deployed URL differs
+// Derived at runtime so it can never drift from the deployed origin
+// (works on nexmoney-two.vercel.app now and www.nexmoney.co.uk later).
+// The origin(s) must be listed in Supabase Auth -> URL Configuration -> Redirect URLs.
+const ADMIN_URL = new URL("/admin/", window.location.origin).href;
 
 const STAGES = [
   ["enquiry", "Enquiry"],

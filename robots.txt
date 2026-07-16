@@ -4,27 +4,39 @@
 
 User-agent: *
 Allow: /
+Disallow: /portal
 Disallow: /portal/
+Disallow: /clienthub
 Disallow: /clienthub/
+Disallow: /admin
 Disallow: /admin/
 
 # AI answer-engine crawlers — explicitly welcome (citability in AI answers)
 User-agent: GPTBot
 Allow: /
+Disallow: /portal
 Disallow: /portal/
+Disallow: /clienthub
 Disallow: /clienthub/
+Disallow: /admin
 Disallow: /admin/
 
 User-agent: ClaudeBot
 Allow: /
+Disallow: /portal
 Disallow: /portal/
+Disallow: /clienthub
 Disallow: /clienthub/
+Disallow: /admin
 Disallow: /admin/
 
 User-agent: PerplexityBot
 Allow: /
+Disallow: /portal
 Disallow: /portal/
+Disallow: /clienthub
 Disallow: /clienthub/
+Disallow: /admin
 Disallow: /admin/
 
 User-agent: Google-Extended
