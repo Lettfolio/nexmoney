@@ -45,12 +45,13 @@
       <button data-page="clients"><span class="si">👥</span>Clients</button>
       <button data-page="import"><span class="si">📤</span>Import</button>
       <button data-page="reports"><span class="si">📊</span>Reports</button>
+      <button data-page="data"><span class="si">🩺</span>Data health</button>
       <button data-page="emails"><span class="si">✉️</span>Emails</button>
       <button data-page="settings"><span class="si">⚙️</span>Settings</button>
     </nav>
     <div class="sidebar-foot">
       <span id="user-email"></span>
-      <button id="logout-btn" class="btn btn-ghost" title="Sign out">⏻</button>
+      <button id="logout-btn" class="btn btn-ghost" title="Sign out" aria-label="Sign out">⏻</button>
     </div>
   </aside>
 
@@ -60,9 +61,9 @@
       <h2 id="today-heading">Today</h2>
       <div class="panel" id="briefing-panel">
         <h3>☀️ My Day
-          <button class="btn btn-sm seg-btn seg-first scope-active" id="brief-scope-mine">Mine</button>
-          <button class="btn btn-sm seg-btn seg-last" id="brief-scope-all">All</button>
-          <button class="btn btn-ghost btn-sm" id="sync-outlook-btn">⟳ Sync Outlook</button>
+          <button class="btn btn-sm seg-btn seg-first scope-active" id="brief-scope-mine" aria-label="Show only my items">Mine</button>
+          <button class="btn btn-sm seg-btn seg-last" id="brief-scope-all" aria-label="Show all team items">All</button>
+          <button class="btn btn-ghost btn-sm" id="sync-outlook-btn" aria-label="Sync Outlook inbox">⟳ Sync Outlook</button>
         </h3>
         <p class="panel-sub" id="briefing-date"></p>
         <div id="briefing-list" class="dash-scroll"></div>
@@ -205,6 +206,16 @@
         <div id="month-advisers"></div>
       </div>
       <div class="kpi-row" id="report-kpis"></div>
+      <div class="panel" id="report-forecast-panel">
+        <h3>Commission forecast (weighted pipeline)</h3>
+        <div class="kpi-row" id="report-forecast-headline" style="margin:8px 0 12px;"></div>
+        <div id="report-forecast-bars"></div>
+        <p class="panel-sub" style="margin:10px 0 0;">Weighted by typical conversion at each stage (enquiry 10% → exchange 95%).</p>
+      </div>
+      <div class="panel" id="report-scoreboard-panel">
+        <h3>Adviser scoreboard</h3>
+        <div id="report-advisers"></div>
+      </div>
       <div class="grid-2">
         <div class="panel">
           <h3>Completions by month (this year)</h3>
@@ -226,16 +237,37 @@
           <div id="report-introducers"></div>
         </div>
       </div>
+      <div class="panel" id="report-ltv-panel">
+        <h3>Client lifetime value (top 20)</h3>
+        <div id="report-ltv"></div>
+      </div>
+    </section>
+
+    <!-- Data health -->
+    <section id="page-data" class="page hidden">
+      <div class="page-head">
+        <h2>Data health</h2>
+        <button class="btn" id="data-refresh">↻ Refresh</button>
+      </div>
+      <p class="panel-sub">Automatic data-quality checks — fix these to keep automations and reporting accurate.</p>
+      <div id="data-content"></div>
     </section>
 
     <!-- Emails -->
     <section id="page-emails" class="page hidden">
       <div class="page-head">
         <h2>Email activity</h2>
-        <button class="btn" id="run-now-btn" title="Runs the daily automation immediately">▶ Run automation now</button>
+        <div class="page-tools">
+          <button class="btn" id="run-now-btn" title="Runs the daily automation immediately">▶ Run automation now</button>
+          <button class="btn" id="run-sms-btn" title="Sends any queued SMS immediately">▶ Send SMS now</button>
+        </div>
       </div>
       <p class="panel-sub">Automated emails run every morning at 8am: rate-end reminders, review requests, and any queued fee requests.</p>
       <div id="email-list"></div>
+      <div class="panel" style="margin-top:20px;">
+        <h3>SMS activity</h3>
+        <div id="sms-list"></div>
+      </div>
     </section>
 
     <!-- Settings -->
@@ -272,7 +304,7 @@
 
 <!-- ===== Modal ===== -->
 <div id="modal-backdrop" class="modal-backdrop hidden">
-  <div class="modal" id="modal"></div>
+  <div class="modal" id="modal" role="dialog" aria-modal="true"></div>
 </div>
 
 <button id="assistant-fab" class="hidden" title="AI assistant">✦</button>

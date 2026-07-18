@@ -9,9 +9,11 @@ const ADMIN_URL = new URL("/admin/", window.location.origin).href;
 
 const STAGES = [
   ["enquiry", "Enquiry"],
+  ["fact_find", "Fact Find"],
   ["decision_in_principle", "DIP"],
   ["application", "Application"],
   ["offer", "Offer"],
+  ["exchange", "Exchange"],
   ["completed", "Completed"],
   ["not_proceeding", "Not Proceeding"],
 ];
@@ -26,7 +28,13 @@ const EMAIL_LABEL = {
   offer_update: "Offer received", completion_congrats: "Completion congratulations",
   referral_request: "Referral request", rate_end_chase: "Rate-end chase",
   protection_offer: "Protection intro", gi_exchange: "GI / buildings insurance",
+  birthday_greeting: "Birthday greeting", completion_anniversary: "Completion anniversary",
 };
+const SMS_LABEL = {
+  rate_end: "Rate-end reminder", rate_end_reminder: "Rate-end reminder",
+  appointment: "Appointment reminder", appointment_reminder: "Appointment reminder",
+};
+const smsTypeLabel = (t) => SMS_LABEL[t] || (t ? String(t).replace(/_/g, " ") : "SMS");
 const SETTING_FIELDS = [
   ["company_name", "Company name"],
   ["adviser_name", "Adviser name (email sign-off)"],
@@ -53,6 +61,8 @@ const $ = (s) => document.querySelector(s);
 const esc = (s) => (s == null ? "" : String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])));
 const fmtD = (d) => (d ? new Date(d).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "—");
 const fmtM = (n) => (n == null || n === "" ? "—" : Number(n).toLocaleString("en-GB", { style: "currency", currency: "GBP", maximumFractionDigits: 0 }));
+// Exact-pence money — for fee figures on the case detail / evidence pack only. Dashboards keep fmtM (whole pounds).
+const fmtM2 = (n) => (n == null || n === "" ? "—" : Number(n).toLocaleString("en-GB", { style: "currency", currency: "GBP", minimumFractionDigits: 2, maximumFractionDigits: 2 }));
 let settings = {};
 let ME = null, TEAM = [], tasksScope = "mine";
 let pipelineView = "board", stageTab = "all", sortKey = "updated_at", sortDir = -1;
@@ -109,6 +119,18 @@ function toast(msg) {
   t._h = setTimeout(() => t.classList.add("hidden"), 3200);
 }
 
+/* Explicit error state for a view container — never show a reassuring
+   empty state when the underlying query actually failed. */
+function renderLoadError(containerSelector, error, retryFn) {
+  const el = $(containerSelector);
+  if (!el) return;
+  const id = "retry-" + Math.random().toString(36).slice(2);
+  const msg = (error && error.message) || String(error || "Unknown error");
+  el.innerHTML = `<div class="load-error">⚠️ Couldn't load this — ${esc(msg)} <button class="btn btn-sm" id="${id}">Try again</button></div>`;
+  const btn = document.getElementById(id);
+  if (btn && retryFn) btn.onclick = retryFn;
+}
+
 /* ---------- Auth ---------- */
 async function init() {
   const isRecovery = location.hash.includes("type=recovery");
@@ -160,6 +182,14 @@ async function showApp(session) {
   $("#user-email").textContent = session.user.email;
   await loadSettings();
   await loadTeam(session);
+  // Gate: only back-office staff may use the admin SPA (mirrors introducer.html).
+  const { data: myProfile } = await db.from("profiles").select("role").eq("id", session.user.id).single();
+  if (!myProfile || myProfile.role !== "staff") {
+    await db.auth.signOut();
+    showLogin();
+    toast("This login doesn't have back-office access.");
+    return;
+  }
   nav("dashboard");
 }
 async function loadTeam(session) {
@@ -210,7 +240,7 @@ function nav(page) {
   document.querySelectorAll(".page").forEach((p) => p.classList.add("hidden"));
   $("#page-" + page).classList.remove("hidden");
   document.querySelectorAll("#topnav button").forEach((b) => b.classList.toggle("active", b.dataset.page === page));
-  ({ dashboard: loadDashboard, pipeline: loadPipeline, protection: loadProtectionPage, diary: loadDiary, clients: loadClients, import: () => {}, reports: loadReports, emails: loadEmails, settings: renderSettings }[page])();
+  ({ dashboard: loadDashboard, pipeline: loadPipeline, protection: loadProtectionPage, diary: loadDiary, clients: loadClients, import: () => {}, reports: loadReports, data: loadDataHealth, emails: loadEmails, settings: renderSettings }[page])();
 }
 
 /* ---------- Settings ---------- */
@@ -266,7 +296,68 @@ function renderSettings() {
       <input name="owner_digest_email" type="email" value="${esc(settings.owner_digest_email ?? "")}" placeholder="you@nexmoney.co.uk">
     </label>
     <p class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;">Sent daily at ~07:30 UK time. Requires RESEND_API_KEY.</p>
-    <div style="grid-column:1/-1;"><button type="button" class="btn btn-sm" id="send-digest-btn">Send digest now</button></div>`;
+    <div style="grid-column:1/-1;"><button type="button" class="btn btn-sm" id="send-digest-btn">Send digest now</button></div>
+    <h3 style="grid-column:1/-1;margin:10px 0 0;">Client comms &amp; SMS</h3>
+    <label>Financial promotions approved (master switch)
+      <select name="financial_promotions_approved">
+        <option value="off" ${(settings.financial_promotions_approved ?? "off") === "on" ? "" : "selected"}>Off</option>
+        <option value="on" ${settings.financial_promotions_approved === "on" ? "selected" : ""}>On</option>
+      </select>
+    </label>
+    <p class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;">Master switch — no marketing email (referral, protection, GI) sends until this is on. Confirm your network has approved the templates.</p>
+    <label>SMS enabled
+      <select name="sms_enabled">
+        <option value="off" ${(settings.sms_enabled ?? "off") === "on" ? "" : "selected"}>Off</option>
+        <option value="on" ${settings.sms_enabled === "on" ? "selected" : ""}>On</option>
+      </select>
+    </label>
+    <label>SMS provider
+      <select name="sms_provider">
+        <option value="twilio" ${(settings.sms_provider ?? "twilio") === "clicksend" ? "" : "selected"}>Twilio</option>
+        <option value="clicksend" ${settings.sms_provider === "clicksend" ? "selected" : ""}>ClickSend</option>
+      </select>
+    </label>
+    <label>SMS sender (number / sender ID)
+      <input name="sms_from" value="${esc(settings.sms_from ?? "")}" placeholder="e.g. +447700900123 or NexMoney">
+    </label>
+    <label>Auto SMS — rate-end reminder
+      <select name="auto_sms_rate_end">
+        <option value="off" ${(settings.auto_sms_rate_end ?? "off") === "on" ? "" : "selected"}>Off</option>
+        <option value="on" ${settings.auto_sms_rate_end === "on" ? "selected" : ""}>On</option>
+      </select>
+    </label>
+    <label>Auto SMS — appointment reminder
+      <select name="auto_sms_appointment">
+        <option value="off" ${(settings.auto_sms_appointment ?? "off") === "on" ? "" : "selected"}>Off</option>
+        <option value="on" ${settings.auto_sms_appointment === "on" ? "selected" : ""}>On</option>
+      </select>
+    </label>
+    <p class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;">SMS also needs provider credentials set as Supabase secrets (Twilio: TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN; ClickSend: CLICKSEND_USERNAME / CLICKSEND_API_KEY). Nothing sends until sms_enabled is on and credentials are set.</p>
+    <label>Birthday greetings
+      <select name="birthday_enabled">
+        <option value="off" ${(settings.birthday_enabled ?? "off") === "on" ? "" : "selected"}>Off</option>
+        <option value="on" ${settings.birthday_enabled === "on" ? "selected" : ""}>On</option>
+      </select>
+    </label>
+    <label>Completion anniversary emails
+      <select name="anniversary_enabled">
+        <option value="off" ${(settings.anniversary_enabled ?? "off") === "on" ? "" : "selected"}>Off</option>
+        <option value="on" ${settings.anniversary_enabled === "on" ? "selected" : ""}>On</option>
+      </select>
+    </label>
+    <label>Review requests (NPS)
+      <select name="nps_enabled">
+        <option value="off" ${(settings.nps_enabled ?? "off") === "on" ? "" : "selected"}>Off</option>
+        <option value="on" ${settings.nps_enabled === "on" ? "selected" : ""}>On</option>
+      </select>
+    </label>
+    <p class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;">Review-request emails ask for a 1–5 rating; happy clients are routed to your review link, unhappy ones create a call-back task.</p>
+    <label>Review platform link (Google / Trustpilot)
+      <input name="review_platform_link" value="${esc(settings.review_platform_link ?? "")}" placeholder="https://g.page/r/…">
+    </label>
+    <label>Site URL
+      <input name="site_url" value="${esc(settings.site_url ?? "")}" placeholder="https://www.nexmoney.co.uk">
+    </label>`;
   $("#send-digest-btn").onclick = sendDigestNow;
   loadIntroducers();
 }
@@ -304,10 +395,17 @@ $("#save-settings-btn").addEventListener("click", async () => {
 /* ---------- Dashboard ---------- */
 async function loadDashboard() {
   const reminderMonths = Number(settings.rate_reminder_months || 6);
-  const [{ data: cases }, { data: alerts }] = await Promise.all([
+  const [{ data: cases, error: casesErr }, { data: alerts, error: alertsErr }] = await Promise.all([
     db.from("cases").select("id,stage,fee_status,broker_fee,completed_at"),
     db.from("v_alerts").select("*").order("rate_end_date"),
   ]);
+  if (casesErr || alertsErr) {
+    renderLoadError("#kpi-row", casesErr || alertsErr, loadDashboard);
+    renderLoadError("#alerts-rateerc", casesErr || alertsErr, loadDashboard);
+    // The independent dashboard widgets self-report their own errors.
+    loadRetention(); loadTasks(); loadProtection(); loadLeads(); loadTodayAppts(); loadBriefing(); loadWatchtower();
+    return;
+  }
   const active = (cases || []).filter((c) => !["completed", "not_proceeding"].includes(c.stage));
   const yr = new Date().getFullYear();
   const completedThisYear = (cases || []).filter((c) => c.completed_at && new Date(c.completed_at).getFullYear() === yr);
@@ -373,10 +471,11 @@ async function loadDashboard() {
 }
 
 async function loadRetention() {
-  const { data: rets } = await db.from("cases")
+  const { data: rets, error } = await db.from("cases")
     .select("id,stage,lender,rate_end_date,rate_end_estimated,clients(first_name,last_name)")
     .not("retention_source_case_id", "is", null)
     .order("rate_end_date");
+  if (error) { renderLoadError("#retention-list", error, loadRetention); return; }
   const all = rets || [];
   const open = all.filter((c) => !["completed", "not_proceeding"].includes(c.stage));
   const won = all.filter((c) => c.stage === "completed").length;
@@ -387,10 +486,10 @@ async function loadRetention() {
   $("#retention-list").innerHTML = open.length ? open.slice(0, 12).map((c) => `
     <div class="row-item">
       <div class="row-main">
-        <div class="t" onclick="openCase('${c.id}')">${esc([c.clients.first_name, c.clients.last_name].filter(Boolean).join(" "))}</div>
+        <div class="t" onclick="openCase('${c.id}')">${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" "))}</div>
         <div class="s">${lenderIcon(c.lender)}${esc(c.lender || "")} — rate ends ${fmtD(c.rate_end_date)}${c.rate_end_estimated ? " ≈" : ""}</div>
       </div>
-      <span class="badge blue">${STAGE_LABEL[c.stage]}</span>
+      <span class="badge blue">${STAGE_LABEL[c.stage] || c.stage}</span>
     </div>`).join("") + (open.length > 12 ? `<div class="empty">…and ${open.length - 12} more in the pipeline.</div>` : "")
     : '<div class="empty">No open retention opportunities yet — they\'ll appear here automatically.</div>';
   panelCount("#retention-list", open.length);
@@ -398,12 +497,13 @@ async function loadRetention() {
 
 async function loadTasks() {
   const horizon = new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10);
-  const { data: raw } = await db.from("case_tasks")
+  const { data: raw, error } = await db.from("case_tasks")
     .select("id,title,due_date,case_id,assigned_to,cases(clients(first_name,last_name))")
     .is("done_at", null)
     .lte("due_date", horizon)
     .order("due_date")
     .limit(40);
+  if (error) { renderLoadError("#tasks-list", error, loadTasks); return; }
   const tasks = (raw || []).filter((t) => tasksScope === "all" || !t.assigned_to || t.assigned_to === (ME && ME.id)).slice(0, 15);
   $("#tasks-list").innerHTML = (tasks || []).length ? tasks.map((t) => {
     const overdue = t.due_date && t.due_date < new Date().toISOString().slice(0, 10);
@@ -431,17 +531,18 @@ window.doneTaskInCase = async function (taskId, caseId) {
 
 async function loadProtection() {
   const cutoff = new Date(Date.now() - 30 * 86400000).toISOString();
-  const { data: opps } = await db.from("cases")
+  const { data: opps, error } = await db.from("cases")
     .select("id,stage,lender,completed_at,clients(first_name,last_name)")
     .eq("protection_status", "not_discussed")
     .or(`stage.in.(application,offer),and(stage.eq.completed,completed_at.gte.${cutoff})`)
     .order("updated_at", { ascending: false })
     .limit(12);
+  if (error) { renderLoadError("#protection-list", error, loadProtection); return; }
   $("#protection-list").innerHTML = (opps || []).length ? opps.map((c) => `
     <div class="row-item">
       <div class="row-main">
-        <div class="t" onclick="openCase('${c.id}')">${esc([c.clients.first_name, c.clients.last_name].filter(Boolean).join(" "))}</div>
-        <div class="s">${lenderIcon(c.lender)}${esc(c.lender || "")} — ${STAGE_LABEL[c.stage]}${c.stage === "completed" ? " " + fmtD(c.completed_at) : ""}</div>
+        <div class="t" onclick="openCase('${c.id}')">${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" "))}</div>
+        <div class="s">${lenderIcon(c.lender)}${esc(c.lender || "")} — ${STAGE_LABEL[c.stage] || c.stage}${c.stage === "completed" ? " " + fmtD(c.completed_at) : ""}</div>
       </div>
       <span class="badge amber">discuss protection</span>
     </div>`).join("") : '<div class="empty">All live cases have protection recorded. 👍</div>';
@@ -518,10 +619,16 @@ window.markEmailHandled = async function (id) {
 };
 window.queueEmail = queueEmail;
 window.briefQueueEmail = async function (caseId, type) {
-  const { data: c } = await db.from("cases").select("*").eq("id", caseId).single();
-  if (!c) return toast("Could not load case");
-  await queueEmail(caseId, c.client_id, type, c);
-  loadBriefing();
+  const btn = (typeof event !== "undefined" && event && (event.currentTarget || event.target)) || null;
+  if (btn) { if (btn.disabled) return; btn.disabled = true; } // guard against double-click double-insert
+  try {
+    const { data: c } = await db.from("cases").select("*").eq("id", caseId).single();
+    if (!c) return toast("Could not load case");
+    await queueEmail(caseId, c.client_id, type, c);
+    loadBriefing();
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 };
 async function syncOutlook(silent) {
   const btn = $("#sync-outlook-btn");
@@ -607,7 +714,15 @@ $("#watchtower-run").addEventListener("click", async () => {
 
 /* ---------- Pipeline ---------- */
 async function loadPipeline() {
-  const { data: cases } = await db.from("cases").select("*, clients(first_name,last_name)").order("updated_at", { ascending: false });
+  const { data: cases, error } = await db.from("cases").select("*, clients(first_name,last_name)").order("updated_at", { ascending: false });
+  if (error) {
+    $("#board").classList.remove("hidden");
+    $("#board-hint").classList.add("hidden");
+    $("#stage-tabs").classList.add("hidden");
+    $("#table-wrap").classList.add("hidden");
+    renderLoadError("#board", error, loadPipeline);
+    return;
+  }
   const q = ($("#board-search").value || "").trim().toLowerCase();
   const who = $("#board-adviser").value || "all";
   const filtered = (cases || []).filter((c) => {
@@ -633,7 +748,7 @@ async function loadPipeline() {
       ${byStage[k].map((c) => {
         const erc = c.erc_end_date && c.rate_end_date && c.erc_end_date > c.rate_end_date;
         return `<div class="card" draggable="true" data-id="${c.id}" onclick="openCase('${c.id}')">
-          <div class="cn" style="display:flex;justify-content:space-between;align-items:center;gap:6px;"><span>${esc([c.clients.first_name, c.clients.last_name].filter(Boolean).join(" "))}</span>${c.assigned_to ? `<span class="chip" title="${esc(staffName(c.assigned_to))}">${initials(c.assigned_to)}</span>` : ""}</div>
+          <div class="cn" style="display:flex;justify-content:space-between;align-items:center;gap:6px;"><span>${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ") || "—")}</span>${c.assigned_to ? `<span class="chip" title="${esc(staffName(c.assigned_to))}">${initials(c.assigned_to)}</span>` : ""}</div>
           <div class="cd">${lenderIcon(c.lender)}${esc(c.lender || KINDS.find(x=>x[0]===c.case_kind)?.[1] || "")}${c.loan_amount ? " · " + fmtM(c.loan_amount) : ""}</div>
           <div class="flags">
             ${c.rate_end_date ? `<span class="badge ${c.rate_end_estimated ? "purple" : "blue"}">Rate ends ${fmtD(c.rate_end_date)}${c.rate_end_estimated ? " ≈" : ""}</span>` : ""}
@@ -670,11 +785,19 @@ function wireBoardDnD() {
       col.classList.remove("dragover");
       const caseId = e.dataTransfer.getData("text/plain");
       if (!caseId) return;
-      const { data: cRow } = await db.from("cases").select("stage,protection_status").eq("id", caseId).single();
-      if (cRow && protectionGateBlocks(cRow, col.dataset.stage)) {
+      const targetStage = col.dataset.stage;
+      const { data: cRow } = await db.from("cases").select("stage,protection_status,clients(first_name,last_name)").eq("id", caseId).single();
+      if (cRow && protectionGateBlocks(cRow, targetStage)) {
         toast("🛡️ Record the protection conversation before submitting — set a protection status");
         loadPipeline(); // put the card back
         return;
+      }
+      if (targetStage === "completed" || targetStage === "not_proceeding") {
+        const nm = (cRow && cRow.clients ? [cRow.clients.first_name, cRow.clients.last_name].filter(Boolean).join(" ") : "") || "this case";
+        const msg = targetStage === "completed"
+          ? `Move ${nm} to Completed? This will trigger completion emails and retention setup.`
+          : `Move ${nm} to Not Proceeding? This hides the case from active views.`;
+        if (!confirm(msg)) { loadPipeline(); return; } // abort — snap the card back
       }
       const { error } = await db.from("cases").update({ stage: col.dataset.stage }).eq("id", caseId);
       if (error) return toast("Error: " + error.message);
@@ -714,7 +837,7 @@ function renderPipelineTable(filtered) {
       <tr>${cols.map(([k, l]) => `<th data-k="${k}" style="cursor:pointer;">${l}${sortKey === k ? (sortDir > 0 ? " ▲" : " ▼") : ""}</th>`).join("")}</tr>
       ${rows.map((c) => `<tr onclick="openCase('${c.id}')" style="cursor:pointer;">
         <td><strong>${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" "))}</strong></td>
-        <td><span class="badge blue">${STAGE_LABEL[c.stage]}</span></td>
+        <td><span class="badge blue">${STAGE_LABEL[c.stage] || c.stage}</span></td>
         <td>${esc((KINDS.find((x) => x[0] === c.case_kind) || [])[1] || "")}</td>
         <td>${lenderIcon(c.lender)}${esc(c.lender || "")}</td>
         <td>${c.rate_percent != null ? c.rate_percent + "%" : ""}</td>
@@ -744,7 +867,7 @@ function exportCsv(rows) {
   const head = ["Client", "Stage", "Type", "Lender", "Rate %", "Rate end", "Rate end estimated", "ERC end", "Broker fee", "Fee status", "Protection", "Adviser", "Updated"];
   const lines = [head.map(q2).join(",")].concat(rows.map((c) => [
     [c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" "),
-    c.stage, c.case_kind, c.lender || "", c.rate_percent ?? "", c.rate_end_date || "",
+    STAGE_LABEL[c.stage] || c.stage, (KINDS.find((x) => x[0] === c.case_kind) || [])[1] || c.case_kind, c.lender || "", c.rate_percent ?? "", c.rate_end_date || "",
     c.rate_end_estimated ? "yes" : "", c.erc_end_date || "", c.broker_fee ?? "",
     c.fee_status || "", c.protection_status || "", c.assigned_to ? staffName(c.assigned_to) : "",
     (c.updated_at || "").slice(0, 10),
@@ -812,6 +935,10 @@ async function loadProtectionPage() {
             <option value="">Set status…</option>
             ${[["discussed", "Discussed"], ["quoted", "Quoted"], ["policy_taken", "Policy taken"], ["declined", "Declined"]].map(([k, l]) => `<option value="${k}">${l}</option>`).join("")}
           </select>
+          ${gi ? `<select class="prot-status-set" onchange="setGiStatus('${r.case_id}', this.value)" title="Set GI status">
+            <option value="">Set GI…</option>
+            ${[["quoted", "GI quoted"], ["policy_taken", "GI taken"], ["declined", "GI declined"], ["not_applicable", "GI n/a"]].map(([k, l]) => `<option value="${k}">${l}</option>`).join("")}
+          </select>` : ""}
           <button class="btn btn-sm" onclick="protCallTask('${r.case_id}')">Task</button>
           ${r.has_email ? `<button class="btn btn-sm" onclick="protQueueEmail('${r.case_id}')">Email</button>` : '<span class="badge grey">no email</span>'}
         </td>
@@ -831,6 +958,13 @@ window.setProtStatus = async function (caseId, status) {
   toast("Protection status: " + status.replace(/_/g, " "));
   if (!$("#page-protection").classList.contains("hidden")) loadProtectionPage();
 };
+window.setGiStatus = async function (caseId, status) {
+  if (!status) return;
+  const { error } = await db.from("cases").update({ gi_status: status }).eq("id", caseId);
+  if (error) return toast("Error: " + error.message);
+  toast("GI status: " + status.replace(/_/g, " "));
+  if (!$("#page-protection").classList.contains("hidden")) loadProtectionPage();
+};
 window.protCallTask = async function (caseId) {
   const { data: c } = await db.from("cases").select("assigned_to").eq("id", caseId).single();
   const due = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
@@ -842,16 +976,74 @@ window.protCallTask = async function (caseId) {
   toast("Protection call task added for tomorrow");
 };
 window.protQueueEmail = async function (caseId) {
-  const { data: c } = await db.from("cases").select("*").eq("id", caseId).single();
-  if (!c) return toast("Could not load case");
-  const { data: cl } = await db.from("clients").select("email").eq("id", c.client_id).single();
-  if (!cl?.email) return toast("This client has no email address — add one first.");
-  if (!confirm("Queue the protection intro email? Ensure the template has principal approval.")) return;
-  const { error } = await db.from("email_queue").insert({ case_id: caseId, client_id: c.client_id, email_type: "protection_offer", to_email: cl.email });
-  if (error) return toast("Error: " + error.message);
-  const res = await runAutomation(true);
-  toast(res && res.sent > 0 ? "Email sent ✓" : "Email queued — check Emails tab");
+  const btn = (typeof event !== "undefined" && event && (event.currentTarget || event.target)) || null;
+  if (btn) { if (btn.disabled) return; btn.disabled = true; } // guard against double-click double-insert
+  try {
+    const { data: c } = await db.from("cases").select("*").eq("id", caseId).single();
+    if (!c) return toast("Could not load case");
+    const { data: cl } = await db.from("clients").select("email").eq("id", c.client_id).single();
+    if (!cl?.email) return toast("This client has no email address — add one first.");
+    if (!confirm("Queue the protection intro email? Ensure the template has principal approval.")) return;
+    const { error } = await db.from("email_queue").insert({ case_id: caseId, client_id: c.client_id, email_type: "protection_offer", to_email: cl.email });
+    if (error) return toast("Error: " + error.message);
+    const res = await runAutomation(true);
+    toast(res && res.sent > 0 ? "Email sent ✓" : "Email queued — check Emails tab");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 };
+window.factFind = async function (caseId, clientId) {
+  let { data: ff } = await db.from("fact_finds").select("*").eq("case_id", caseId).order("created_at", { ascending: false }).limit(1).maybeSingle();
+  if (!ff) {
+    const ins = await db.from("fact_finds").insert({ case_id: caseId, client_id: clientId, created_by: (ME && ME.id) || null }).select("*").single();
+    if (ins.error) return toast("Error: " + ins.error.message);
+    ff = ins.data;
+  }
+  const base = (settings.site_url || "https://nexmoney.co.uk").replace(/\/$/, "");
+  const link = `${base}/factfind?token=${ff.token}`;
+  const badge = { sent: "badge grey", started: "badge amber", submitted: "badge green" }[ff.status] || "badge grey";
+  const hasData = ff.status === "submitted" && ff.data && Object.keys(ff.data).length;
+  $("#modal").innerHTML = `
+    <h3>Digital fact-find</h3>
+    <p class="panel-sub">Send this secure link to the client. They fill it in on any device, can save as they go, and you get a task the moment they submit.</p>
+    <div style="margin:10px 0;"><span class="${badge}">${esc(ff.status)}</span>${ff.submitted_at ? " · submitted " + fmtD(ff.submitted_at) : ""}</div>
+    <label>Client link
+      <div style="display:flex;gap:8px;">
+        <input id="ff-link" readonly value="${esc(link)}" style="flex:1;">
+        <button class="btn btn-sm" id="ff-copy">Copy</button>
+      </div>
+    </label>
+    <div class="action-bar" style="margin-top:10px;">
+      <button class="btn btn-sm" id="ff-mail">✉️ Open email to client</button>
+      <button class="btn btn-sm" id="ff-refresh">↻ Refresh status</button>
+      <button class="btn btn-sm" id="ff-new">New blank fact-find</button>
+    </div>
+    ${hasData ? `<div style="margin-top:16px;"><h3 style="font-size:14px;">Submitted responses</h3>${renderFactFindData(ff.data)}</div>`
+              : '<p class="panel-sub" style="margin-top:16px;">Responses will appear here once the client submits.</p>'}
+    <div class="modal-actions"><div></div><div class="right"><button class="btn" id="ff-back">Back to case</button></div></div>`;
+  openModal();
+  $("#ff-copy").onclick = () => { const el = $("#ff-link"); el.select(); try { document.execCommand("copy"); } catch (e) {} if (navigator.clipboard) navigator.clipboard.writeText(el.value); toast("Link copied"); };
+  $("#ff-back").onclick = () => openCase(caseId);
+  $("#ff-refresh").onclick = () => factFind(caseId, clientId);
+  $("#ff-new").onclick = async () => { if (!confirm("Start a fresh blank fact-find? The current link stops being the active one.")) return; await db.from("fact_finds").insert({ case_id: caseId, client_id: clientId, created_by: (ME && ME.id) || null }); factFind(caseId, clientId); };
+  $("#ff-mail").onclick = async () => {
+    const { data: cl } = await db.from("clients").select("email,first_name").eq("id", clientId).single();
+    if (!cl || !cl.email) return toast("This client has no email address on file — add one first.");
+    const subj = encodeURIComponent(`${settings.company_name || "NexMoney"} — your quick mortgage fact-find`);
+    const body = encodeURIComponent(`Hi ${(cl.first_name || "there").trim()},\n\nBefore we speak, please could you complete this short, secure fact-find? It takes about 5–10 minutes and you can save and come back to it:\n\n${link}\n\nThanks,\n${settings.adviser_name || settings.company_name || "NexMoney"}`);
+    window.open(`mailto:${cl.email}?subject=${subj}&body=${body}`);
+  };
+};
+function renderFactFindData(data) {
+  return `<div class="ff-data">` + Object.keys(data).filter((k) => String(data[k] ?? "").trim() !== "")
+    .map((k) => `<div class="ff-row"><span class="ff-k">${esc(prettyFF(k))}</span><span class="ff-v">${esc(data[k])}</span></div>`).join("") + `</div>`;
+}
+function prettyFF(k) {
+  const pre = { a1: "You", a2: "2nd applicant", m: "Mortgage", c: "Commitments", p: "Protection" }[k.split("_")[0]];
+  let label = k.replace(/^[a-z0-9]+_/, "").replace(/_/g, " ");
+  label = label.charAt(0).toUpperCase() + label.slice(1);
+  return pre ? `${pre}: ${label}` : label;
+}
 function setProtScope(s) {
   protScope = s;
   $("#prot-scope-mine").classList.toggle("scope-active", s === "mine");
@@ -866,13 +1058,16 @@ $("#prot-filter").addEventListener("change", () => { protFilter = $("#prot-filte
 window.openCase = async function (id) {
   let c = { stage: "enquiry", case_kind: "remortgage", rate_type: "fixed" };
   let notes = [], tasks = [];
+  let openedUpdatedAt = null;
   if (id) {
     const [{ data: cs }, { data: ns }, { data: ts }] = await Promise.all([
       db.from("cases").select("*").eq("id", id).single(),
       db.from("case_notes").select("*").eq("case_id", id).order("created_at", { ascending: false }),
       db.from("case_tasks").select("*").eq("case_id", id).order("due_date"),
     ]);
+    if (!cs) return toast("Case not found — it may have been deleted or you don't have access");
     c = cs; notes = ns || []; tasks = ts || [];
+    openedUpdatedAt = cs.updated_at; // exact string from the loaded row, for the stale-write guard
   }
   const [{ data: clients }, { data: intros }] = await Promise.all([
     db.from("clients").select("id,first_name,last_name,email").order("last_name"),
@@ -886,6 +1081,7 @@ window.openCase = async function (id) {
   $("#modal").innerHTML = `
     <h3>${id ? "Case details" : "New case"}</h3>
     ${c.retention_source_case_id ? `<p class="panel-sub" style="margin-top:-8px;">🔁 Retention opportunity — auto-created from a completed case. <span class="t" style="cursor:pointer;text-decoration:underline;" onclick="openCase('${c.retention_source_case_id}')">View original case</span></p>` : ""}
+    ${c.nps_score != null ? `<p class="panel-sub" style="margin-top:-8px;">Client review score: <strong style="color:${c.nps_score >= 9 ? "var(--green)" : c.nps_score >= 7 ? "var(--amber)" : "var(--red)"};">${c.nps_score}/10</strong></p>` : ""}
     <form id="case-form" class="form-grid">
       <label class="full">Client
         <select name="client_id" required><option value="">— select client —</option>${clientOpts}</select>
@@ -927,6 +1123,7 @@ window.openCase = async function (id) {
       ${c.offer_doc_path ? '<button class="btn btn-sm" id="act-view-offer">View offer doc</button>' : ""}
       <button class="btn btn-sm" id="act-evidence">🗂 Evidence pack</button>
       <button class="btn btn-sm" id="act-appt">📅 Book appointment</button>
+      <button class="btn btn-sm" id="act-factfind">📋 Digital fact-find</button>
     </div>
     <div style="margin-top:14px;">
       <h3 style="font-size:14px;">Tasks</h3>
@@ -977,11 +1174,24 @@ window.openCase = async function (id) {
       return;
     }
     ["loan_amount", "property_value", "rate_percent", "term_years", "broker_fee", "proc_fee", "sols_fee", "protection_commission"].forEach((k) => { if (row[k] != null) row[k] = Number(row[k]); });
-    const q = id ? db.from("cases").update(row).eq("id", id) : db.from("cases").insert(row);
-    const { error } = await q;
-    if (error) return toast("Error: " + error.message);
-    closeModal(); toast("Case saved");
-    loadPipeline(); loadDashboard();
+    if (id) {
+      // Optimistic concurrency: only update if the row hasn't changed since we opened it.
+      const { data: updated, error } = await db.from("cases").update(row).eq("id", id).eq("updated_at", openedUpdatedAt).select();
+      if (error) return toast("Error: " + error.message);
+      if (!updated || updated.length === 0) {
+        toast("This case was changed by someone else since you opened it — reload before saving");
+        loadPipeline(); loadDashboard();
+        openCase(id); // reload the case with fresh data
+        return;
+      }
+      closeModal(); toast("Case saved");
+      loadPipeline(); loadDashboard();
+    } else {
+      const { error } = await db.from("cases").insert(row);
+      if (error) return toast("Error: " + error.message);
+      closeModal(); toast("Case saved");
+      loadPipeline(); loadDashboard();
+    }
   };
   if (id) {
     $("#del-case-btn").onclick = async () => {
@@ -1014,6 +1224,7 @@ window.openCase = async function (id) {
     $("#offer-file").onchange = () => handleOfferUpload(id);
     $("#act-evidence").onclick = () => buildEvidencePack(id);
     $("#act-appt").onclick = () => openAppt(null, { client_id: c.client_id, case_id: id });
+    $("#act-factfind").onclick = () => factFind(id, c.client_id);
     if (c.offer_doc_path) $("#act-view-offer").onclick = async () => {
       const { data, error } = await db.storage.from("offers").createSignedUrl(c.offer_doc_path, 300);
       if (error) return toast("Error: " + error.message);
@@ -1077,24 +1288,33 @@ async function handleOfferUpload(caseId) {
 }
 
 async function queueEmail(caseId, clientId, type, c) {
-  const { data: cl } = await db.from("clients").select("email,first_name").eq("id", clientId).single();
-  if (!cl?.email) return toast("This client has no email address — add one first.");
-  if (type === "fee_request" && !(c.broker_fee > 0)) return toast("Set a broker fee amount on the case first.");
-  if (type === "fee_request" && (!settings.bank_sort_code || !settings.bank_account_number)) return toast("Add your bank details in Settings first.");
-  if (type === "review_request" && !settings.google_review_link) return toast("Add your Google review link in Settings first.");
-  if (type === "rate_end_reminder" && !c.rate_end_date) return toast("Set the rate end date on the case first.");
-  if (!confirm(`Send ${EMAIL_LABEL[type].toLowerCase()} email to ${cl.email}?`)) return;
-  const { error } = await db.from("email_queue").insert({ case_id: caseId, client_id: clientId, email_type: type, to_email: cl.email });
-  if (error) return toast("Error: " + error.message);
-  if (type === "rate_end_reminder") await db.from("cases").update({ rate_reminder_queued_at: new Date().toISOString() }).eq("id", caseId);
-  if (type === "review_request") await db.from("cases").update({ review_requested_at: new Date().toISOString() }).eq("id", caseId);
-  const res = await runAutomation(true);
-  toast(res && res.sent > 0 ? "Email sent ✓" : "Email queued — check Emails tab (is your Resend key set up?)");
+  // Disable the clicked button while in flight so a double-click can't double-insert.
+  // (No early-abort on disabled: this is also called programmatically by briefQueueEmail.)
+  const btn = (typeof event !== "undefined" && event && (event.currentTarget || event.target)) || null;
+  if (btn) btn.disabled = true;
+  try {
+    const { data: cl } = await db.from("clients").select("email,first_name").eq("id", clientId).single();
+    if (!cl?.email) return toast("This client has no email address — add one first.");
+    if (type === "fee_request" && !(c.broker_fee > 0)) return toast("Set a broker fee amount on the case first.");
+    if (type === "fee_request" && (!settings.bank_sort_code || !settings.bank_account_number)) return toast("Add your bank details in Settings first.");
+    if (type === "review_request" && !settings.google_review_link) return toast("Add your Google review link in Settings first.");
+    if (type === "rate_end_reminder" && !c.rate_end_date) return toast("Set the rate end date on the case first.");
+    if (!confirm(`Send ${EMAIL_LABEL[type].toLowerCase()} email to ${cl.email}?`)) return;
+    const { error } = await db.from("email_queue").insert({ case_id: caseId, client_id: clientId, email_type: type, to_email: cl.email });
+    if (error) return toast("Error: " + error.message);
+    if (type === "rate_end_reminder") await db.from("cases").update({ rate_reminder_queued_at: new Date().toISOString() }).eq("id", caseId);
+    if (type === "review_request") await db.from("cases").update({ review_requested_at: new Date().toISOString() }).eq("id", caseId);
+    const res = await runAutomation(true);
+    toast(res && res.sent > 0 ? "Email sent ✓" : "Email queued — check Emails tab (is your Resend key set up?)");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 /* ---------- Clients ---------- */
 async function loadClients(filter = "") {
-  const { data: clients } = await db.from("clients").select("*, cases(id,stage)").order("last_name");
+  const { data: clients, error } = await db.from("clients").select("*, cases(id,stage)").order("last_name");
+  if (error) { renderLoadError("#client-list", error, () => loadClients(filter)); return; }
   const f = filter.toLowerCase();
   const list = (clients || []).filter((c) => !f || (c.first_name + " " + c.last_name + " " + (c.email || "")).toLowerCase().includes(f));
   $("#client-list").innerHTML = `<div class="panel">` + (list.length ? list.map((c) => {
@@ -1128,6 +1348,19 @@ window.openClient = async function (id) {
       <label>Last name<input name="last_name" required value="${esc(c.last_name)}"></label>
       <label>Email<input name="email" type="email" value="${esc(c.email)}"></label>
       <label>Phone<input name="phone" value="${esc(c.phone)}"></label>
+      <label>Date of birth<input name="date_of_birth" type="date" value="${c.date_of_birth ?? ""}"></label>
+      <label>SMS opt-out
+        <select name="sms_opt_out">
+          <option value="0" ${c.sms_opt_out ? "" : "selected"}>No</option>
+          <option value="1" ${c.sms_opt_out ? "selected" : ""}>Yes</option>
+        </select>
+      </label>
+      <label>Marketing opt-out
+        <select name="marketing_opt_out">
+          <option value="0" ${c.marketing_opt_out ? "" : "selected"}>No</option>
+          <option value="1" ${c.marketing_opt_out ? "selected" : ""}>Yes</option>
+        </select>
+      </label>
       <label class="full">Address<input name="address" value="${esc(c.address)}"></label>
       <label class="full">Notes<textarea name="notes" rows="2">${esc(c.notes)}</textarea></label>
     </form>
@@ -1135,7 +1368,7 @@ window.openClient = async function (id) {
       ${cases.map((x) => `<div class="row-item"><div class="row-main">
         <div class="t" onclick="closeModal();openCase('${x.id}')">${esc(x.lender || KINDS.find(k=>k[0]===x.case_kind)?.[1] || "Case")} ${x.loan_amount ? "· " + fmtM(x.loan_amount) : ""}</div>
         <div class="s">Started ${fmtD(x.created_at)}${x.rate_end_date ? " · rate ends " + fmtD(x.rate_end_date) : ""}</div></div>
-        <span class="badge blue">${STAGE_LABEL[x.stage]}</span></div>`).join("") || '<div class="empty">No cases yet.</div>'}
+        <span class="badge blue">${STAGE_LABEL[x.stage] || x.stage}</span></div>`).join("") || '<div class="empty">No cases yet.</div>'}
     </div>` : ""}
     <div class="modal-actions">
       <div>${id ? '<button class="btn btn-ghost btn-danger" id="del-client-btn">Delete client</button>' : ""}</div>
@@ -1150,6 +1383,10 @@ window.openClient = async function (id) {
     const f = new FormData($("#client-form"));
     const row = {};
     for (const [k, v] of f.entries()) row[k] = v.trim() || null;
+    // Real booleans / typed date for the comms fields (the loop above stringifies everything)
+    row.sms_opt_out = f.get("sms_opt_out") === "1";
+    row.marketing_opt_out = f.get("marketing_opt_out") === "1";
+    row.date_of_birth = (f.get("date_of_birth") || "").trim() || null;
     if (!row.first_name || !row.last_name) return toast("First and last name are required");
     const q = id ? db.from("clients").update(row).eq("id", id) : db.from("clients").insert(row);
     const { error } = await q;
@@ -1165,9 +1402,10 @@ window.openClient = async function (id) {
 
 /* ---------- Emails ---------- */
 async function loadEmails() {
-  const { data: emails } = await db.from("email_queue")
+  const { data: emails, error } = await db.from("email_queue")
     .select("*, clients(first_name,last_name)")
     .order("created_at", { ascending: false }).limit(100);
+  if (error) { renderLoadError("#email-list", error, loadEmails); return; }
   const badge = { queued: "amber", sent: "green", failed: "red", cancelled: "grey" };
   $("#email-list").innerHTML = `<div class="panel">` + ((emails || []).length ? emails.map((e) => `
     <div class="row-item">
@@ -1177,7 +1415,39 @@ async function loadEmails() {
       </div>
       <span class="badge ${badge[e.status]}">${e.status}</span>
     </div>`).join("") : '<div class="empty">No emails yet. They\'ll appear here once automation runs or you trigger one from a case.</div>') + `</div>`;
+
+  const { data: sms, error: smsErr } = await db.from("sms_queue")
+    .select("*, cases(*), clients(*)")
+    .order("created_at", { ascending: false }).limit(100);
+  if (smsErr) { renderLoadError("#sms-list", smsErr, loadEmails); return; }
+  const smsBadge = { queued: "amber", sending: "blue", sent: "green", failed: "red", cancelled: "grey" };
+  $("#sms-list").innerHTML = (sms || []).length ? sms.map((s) => `
+    <div class="row-item">
+      <div class="row-main">
+        <div class="t">${esc(smsTypeLabel(s.sms_type))} — ${esc(s.clients ? [s.clients.first_name, s.clients.last_name].filter(Boolean).join(" ") : s.to_phone || "")}</div>
+        <div class="s">${esc(s.to_phone || "")} · ${s.sent_at ? "sent " + new Date(s.sent_at).toLocaleString("en-GB") : "created " + new Date(s.created_at).toLocaleString("en-GB")}${s.error ? " · " + esc(s.error) : ""}</div>
+      </div>
+      <span class="badge ${smsBadge[s.status] || "grey"}">${esc(s.status)}</span>
+    </div>`).join("") : '<div class="empty">No SMS yet. They\'ll appear here once SMS automation runs or you send one.</div>';
 }
+async function runSms(silent) {
+  const { data: { session } } = await db.auth.getSession();
+  try {
+    const r = await fetch(`${SUPABASE_URL}/functions/v1/send-sms`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" },
+      body: "{}",
+    });
+    const j = await r.json();
+    if (!silent) toast(j.warning ? j.warning : `Done — ${j.sent || 0} sent, ${j.failed || 0} failed${j.appointment_queued ? `, ${j.appointment_queued} appointment reminders queued` : ""}`);
+    loadEmails();
+    return j;
+  } catch (e) {
+    if (!silent) toast("SMS error: " + e.message);
+    return null;
+  }
+}
+$("#run-sms-btn").addEventListener("click", () => runSms(false));
 async function runAutomation(silent) {
   const { data: { session } } = await db.auth.getSession();
   try {
@@ -1283,26 +1553,41 @@ async function runImport() {
   $("#import-save-btn").disabled = true;
   $("#import-status").textContent = "Saving…";
   const { data: existing } = await db.from("clients").select("id,first_name,last_name,email,phone");
-  const byName = {};
-  (existing || []).forEach((c) => (byName[(c.last_name + " " + c.first_name).trim().toLowerCase()] = c));
-  let nClients = 0, nCases = 0, nUpdated = 0, errs = 0;
+  // Canonical name key: lowercase, strip punctuation, collapse whitespace, sort tokens
+  // so "Smith John" and "John Smith" collide regardless of first/last order.
+  const nameKey = (s) => (s || "").toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter(Boolean).sort().join(" ");
+  const byName = {}, byEmail = {};
+  (existing || []).forEach((c) => {
+    const nk = nameKey((c.last_name || "") + " " + (c.first_name || ""));
+    if (nk) byName[nk] = c;
+    if (c.email) byEmail[c.email.trim().toLowerCase()] = c;
+  });
+  let nClients = 0, nCases = 0, nUpdated = 0;
+  const rowErrors = [];
 
-  for (const r of selected) {
+  for (let i = 0; i < selected.length; i++) {
+    const r = selected[i];
     try {
-      const key = (r.client_name || "").trim().toLowerCase();
-      if (!key) continue;
-      let client = byName[key];
+      const nk = nameKey(r.client_name);
+      const email = (r.email || "").trim().toLowerCase();
+      if (!nk && !email) continue;
+      let client = (email && byEmail[email]) || byName[nk];
       if (!client) {
         const { data, error } = await db.from("clients")
-          .insert({ first_name: "", last_name: r.client_name.trim(), email: r.email || null, phone: r.phone || null })
+          .insert({ first_name: "", last_name: (r.client_name || "").trim(), email: r.email || null, phone: r.phone || null })
           .select().single();
         if (error) throw error;
-        client = data; byName[key] = client; nClients++;
+        client = data; nClients++;
+        if (nk) byName[nk] = client;
+        if (email) byEmail[email] = client;
       } else if ((r.email && !client.email) || (r.phone && !client.phone)) {
         await db.from("clients").update({
           email: client.email || r.email || null,
           phone: client.phone || r.phone || null,
         }).eq("id", client.id);
+        // keep the local index fresh so later rows dedupe against the newly-set email
+        if (r.email && !client.email) { client.email = r.email; byEmail[email] = client; }
+        if (r.phone && !client.phone) client.phone = r.phone;
         nUpdated++;
       }
 
@@ -1328,12 +1613,25 @@ async function runImport() {
         await db.from("case_notes").insert({ case_id: nc.id, body: "AI bulk import" + (r.note ? " | " + r.note : "") });
         nCases++;
       }
-    } catch (e) { errs++; console.error(e); }
+    } catch (e) {
+      rowErrors.push({ row: i + 1, name: r.client_name || "(no name)", error: e.message || String(e) });
+      console.error(e);
+    }
   }
   $("#import-status").textContent = "";
   $("#import-save-btn").disabled = false;
-  toast(`Imported: ${nClients} new clients, ${nCases} cases, ${nUpdated} contact updates${errs ? `, ${errs} errors` : ""}`);
-  if (!errs) { importRows = []; $("#import-preview").innerHTML = ""; $("#import-text").value = ""; }
+  const errs = rowErrors.length;
+  toast(`Imported: ${nClients} new clients, ${nCases} cases, ${nUpdated} contact updates${errs ? `, ${errs} failed` : ""}`);
+  if (errs) {
+    // Surface exactly which rows failed and why, so nothing is silently dropped.
+    const errHtml = `<div class="panel"><h3>${errs} row${errs === 1 ? "" : "s"} could not be imported</h3>
+      <table class="imp-table"><tr><th>Row</th><th>Name</th><th>Error</th></tr>
+      ${rowErrors.map((e) => `<tr><td>${e.row}</td><td>${esc(e.name)}</td><td>${esc(e.error)}</td></tr>`).join("")}
+      </table></div>`;
+    $("#import-preview").insertAdjacentHTML("beforeend", errHtml);
+  } else {
+    importRows = []; $("#import-preview").innerHTML = ""; $("#import-text").value = "";
+  }
 }
 
 /* ---------- Website leads ---------- */
@@ -1460,12 +1758,18 @@ window.openAppt = async function (id, presets = {}) {
   const { data: clients } = await db.from("clients").select("id,first_name,last_name").order("last_name");
   const start = a.starts_at ? new Date(a.starts_at) : null;
   const mins = a.ends_at && start ? Math.round((new Date(a.ends_at) - start) / 60000) : 60;
+  // Derive both date and time from LOCAL components so a late-evening appointment
+  // doesn't show a day-shifted date (matches the local parse used on save).
+  const pad2 = (n) => String(n).padStart(2, "0");
+  const localDateStr = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  const dateVal = localDateStr(start || new Date());
+  const timeVal = start ? `${pad2(start.getHours())}:${pad2(start.getMinutes())}` : "10:00";
   $("#modal").innerHTML = `
     <h3>${id ? "Appointment" : "New appointment"}</h3>
     <form id="appt-form" class="form-grid">
       <label class="full">Title<input name="title" required value="${esc(a.title || "")}" placeholder="e.g. Fact find call"></label>
-      <label>Date<input name="date" type="date" required value="${start ? start.toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10)}"></label>
-      <label>Time<input name="time" type="time" required value="${start ? start.toTimeString().slice(0, 5) : "10:00"}"></label>
+      <label>Date<input name="date" type="date" required value="${dateVal}"></label>
+      <label>Time<input name="time" type="time" required value="${timeVal}"></label>
       <label>Duration (mins)<input name="mins" type="number" value="${mins}"></label>
       <label>Who<select name="staff_id">${TEAM.map((p) => `<option value="${p.id}" ${p.id === (a.staff_id || (ME && ME.id)) ? "selected" : ""}>${esc(staffName(p.id))}</option>`).join("")}</select></label>
       <label class="full">Client<select name="client_id"><option value="">— none —</option>${(clients || []).map((cl) => `<option value="${cl.id}" ${cl.id === a.client_id ? "selected" : ""}>${esc([cl.last_name, cl.first_name].filter(Boolean).join(", "))}</option>`).join("")}</select></label>
@@ -1550,7 +1854,8 @@ async function buildEvidencePack(caseId) {
       ${row("Rate end date", c.rate_end_date ? fmtD(c.rate_end_date) + (c.rate_end_estimated ? " (ESTIMATED — unverified)" : "") : null)}
       ${row("ERC end date", c.erc_end_date ? fmtD(c.erc_end_date) : null)}
       ${row("Loan amount", c.loan_amount != null ? fmtM(c.loan_amount) : null)}${row("Property value", c.property_value != null ? fmtM(c.property_value) : null)}
-      ${row("Broker fee", c.broker_fee != null ? fmtM(c.broker_fee) + " (" + c.fee_status + ")" : null)}
+      ${row("Broker fee", c.broker_fee != null ? fmtM2(c.broker_fee) + " (" + c.fee_status + ")" : null)}
+      ${row("Proc fee", c.proc_fee != null ? fmtM2(c.proc_fee) : null)}${row("Sols fee", c.sols_fee != null ? fmtM2(c.sols_fee) : null)}
       ${row("Protection", (c.protection_status || "not_discussed").replace("_", " "))}
       ${row("Lead source", c.lead_source)}${row("Introducer", c.introducers?.name)}
       ${row("Created", dt(c.created_at))}${row("Completed", c.completed_at ? dt(c.completed_at) : null)}
@@ -1605,13 +1910,14 @@ function renderMonthReport(all) {
 
 async function loadReports() {
   const yr = new Date().getFullYear();
-  const [{ data: cases }, { data: intros }] = await Promise.all([
-    db.from("cases").select("id,stage,case_kind,loan_amount,broker_fee,proc_fee,sols_fee,submitted_at,fee_status,fee_paid_at,completed_at,created_at,lead_source,introducer_id,protection_status,retention_source_case_id,assigned_to"),
+  const [{ data: cases }, { data: intros }, repRes] = await Promise.all([
+    db.from("cases").select("id,stage,case_kind,loan_amount,broker_fee,proc_fee,sols_fee,submitted_at,fee_status,fee_paid_at,completed_at,created_at,lead_source,introducer_id,protection_status,retention_source_case_id,assigned_to,nps_score"),
     db.from("introducers").select("id,name"),
+    db.rpc("get_reports"),
   ]);
   renderMonthReport(cases || []);
   const all = cases || [];
-  const activeStages = ["enquiry", "decision_in_principle", "application", "offer"];
+  const activeStages = ["enquiry", "fact_find", "decision_in_principle", "application", "offer", "exchange"];
   const active = all.filter((c) => activeStages.includes(c.stage));
   const completedYr = all.filter((c) => c.completed_at && new Date(c.completed_at).getFullYear() === yr);
   const pipelineValue = active.reduce((s, c) => s + Number(c.loan_amount || 0), 0);
@@ -1623,6 +1929,9 @@ async function loadReports() {
   const rWon = rets.filter((c) => c.stage === "completed").length;
   const rLost = rets.filter((c) => c.stage === "not_proceeding").length;
   const protDone = completedYr.filter((c) => c.protection_status === "policy_taken").length;
+  const scored = all.filter((c) => c.nps_score != null);
+  const avgNps = scored.length ? scored.reduce((s, c) => s + Number(c.nps_score), 0) / scored.length : null;
+  const promoterPct = scored.length ? Math.round((scored.filter((c) => c.nps_score >= 9).length / scored.length) * 100) : null;
 
   $("#report-kpis").innerHTML = `
     <div class="kpi"><div class="num">${completedYr.length}</div><div class="lbl">Completions ${yr}</div></div>
@@ -1631,7 +1940,8 @@ async function loadReports() {
     <div class="kpi"><div class="num">${fmtM(feesPaidYr)}</div><div class="lbl">Fees banked ${yr}</div></div>
     <div class="kpi ${feesOutstanding ? "warn" : ""}"><div class="num">${fmtM(feesOutstanding)}</div><div class="lbl">Fees outstanding</div></div>
     <div class="kpi"><div class="num">${rWon + rLost ? Math.round((rWon / (rWon + rLost)) * 100) + "%" : "—"}</div><div class="lbl">Retention conversion</div></div>
-    <div class="kpi"><div class="num">${completedYr.length ? Math.round((protDone / completedYr.length) * 100) + "%" : "—"}</div><div class="lbl">Protection uptake ${yr}</div></div>`;
+    <div class="kpi"><div class="num">${completedYr.length ? Math.round((protDone / completedYr.length) * 100) + "%" : "—"}</div><div class="lbl">Protection uptake ${yr}</div></div>
+    <div class="kpi"><div class="num">${scored.length ? avgNps.toFixed(1) : "—"}</div><div class="lbl">Avg review score (${scored.length})${promoterPct != null ? ` · ${promoterPct}% promoters` : ""}</div></div>`;
 
   const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
   const byMonth = months.map((_, i) => completedYr.filter((c) => new Date(c.completed_at).getMonth() === i).length);
@@ -1678,7 +1988,167 @@ async function loadReports() {
       Object.entries(iMap).sort((a, b) => b[1].total - a[1].total)
         .map(([k, v]) => `<tr><td>${esc(k)}</td><td>${v.total}</td><td>${v.done}</td></tr>`).join("") + `</table>`
     : '<div class="empty">No cases assigned to introducers yet.</div>';
+
+  // Extra panels backed by the get_reports() RPC. On error we skip them —
+  // the client-side report above still renders in full.
+  renderReportExtras(repRes && !repRes.error ? repRes.data : null);
 }
+
+/* New RPC-backed report panels (forecast, adviser scoreboard, client LTV, rich lead sources) */
+function renderReportExtras(rep) {
+  const extraPanels = ["#report-forecast-panel", "#report-scoreboard-panel", "#report-ltv-panel"];
+  if (!rep || !rep.forecast) {
+    extraPanels.forEach((s) => { const p = $(s); if (p) p.classList.add("hidden"); });
+    return;
+  }
+  extraPanels.forEach((s) => { const p = $(s); if (p) p.classList.remove("hidden"); });
+
+  // a) Commission forecast (weighted pipeline)
+  const fc = rep.forecast || {};
+  $("#report-forecast-headline").innerHTML = `
+    <div class="kpi"><div class="num">${fmtM(fc.weighted_total)}</div><div class="lbl">Weighted commission</div></div>
+    <div class="kpi"><div class="num">${fmtM(fc.gross_total)}</div><div class="lbl">Gross (unweighted)</div></div>`;
+  const byStage = Array.isArray(fc.by_stage) ? fc.by_stage : [];
+  const maxW = Math.max(...byStage.map((s) => Number(s.weighted) || 0), 1);
+  $("#report-forecast-bars").innerHTML = byStage.length ? byStage.map((s) => `
+    <div style="display:flex;align-items:center;gap:8px;margin:3px 0;">
+      <span style="width:90px;font-size:12px;color:var(--muted);">${esc(STAGE_LABEL[s.stage] || s.stage)}</span>
+      <div style="flex:1;background:var(--light);border-radius:4px;"><div style="width:${(Number(s.weighted) / maxW) * 100}%;background:var(--orange);border-radius:4px;height:16px;"></div></div>
+      <span style="width:130px;font-size:12px;font-weight:600;text-align:right;">${s.cases || 0} case${s.cases === 1 ? "" : "s"} · ${fmtM(s.weighted)}</span>
+    </div>`).join("") : '<div class="empty">No live pipeline to forecast.</div>';
+
+  // b) Adviser scoreboard (already sorted by fees banked)
+  const advs = Array.isArray(rep.advisers) ? rep.advisers : [];
+  $("#report-advisers").innerHTML = advs.length ? `<table class="imp-table">
+    <tr><th>Adviser</th><th>Open</th><th>Completions YTD</th><th>Fees banked YTD</th><th>Overdue</th><th>Avg days</th></tr>
+    ${advs.map((a) => `<tr>
+      <td>${esc(a.name)}</td>
+      <td>${a.open_cases ?? 0}</td>
+      <td>${a.completions_ytd ?? 0}</td>
+      <td>${fmtM(a.fees_banked_ytd)}</td>
+      <td>${a.overdue_tasks ? `<span class="badge red">${a.overdue_tasks}</span>` : "0"}</td>
+      <td>${a.avg_days_to_complete == null ? "—" : a.avg_days_to_complete}</td>
+    </tr>`).join("")}
+  </table>` : '<div class="empty">No adviser activity yet.</div>';
+
+  // c) Client lifetime value (top 20)
+  const ltv = Array.isArray(rep.client_ltv) ? rep.client_ltv : [];
+  $("#report-ltv").innerHTML = ltv.length ? `<table class="imp-table">
+    <tr><th>Name</th><th>Cases</th><th>LTV</th></tr>
+    ${ltv.map((c) => `<tr>
+      <td><button class="btn btn-sm" onclick="openClient('${c.client_id}')">${esc(c.name)}</button></td>
+      <td>${c.cases ?? 0}</td>
+      <td>${fmtM(c.ltv)}</td>
+    </tr>`).join("")}
+  </table>` : '<div class="empty">No completed revenue yet.</div>';
+
+  // d) Lead sources — richer table from the RPC (replaces the client-side one above)
+  const ls = Array.isArray(rep.lead_sources) ? rep.lead_sources : [];
+  if (ls.length) {
+    $("#report-sources").innerHTML = `<table class="imp-table">
+      <tr><th>Source</th><th>Cases</th><th>Completed</th><th>Conversion</th><th>Revenue</th></tr>
+      ${ls.slice().sort((a, b) => (Number(b.revenue) || 0) - (Number(a.revenue) || 0)).map((s) => `<tr>
+        <td>${esc(s.source || "(not set)")}</td>
+        <td>${s.cases ?? 0}</td>
+        <td>${s.completed ?? 0}</td>
+        <td>${s.conversion ?? 0}%</td>
+        <td>${fmtM(s.revenue)}</td>
+      </tr>`).join("")}
+    </table>`;
+  }
+}
+
+/* ---------- Data health ---------- */
+async function loadDataHealth() {
+  const el = $("#data-content");
+  el.innerHTML = '<div class="empty">Loading…</div>';
+  const [dqRes, dupRes] = await Promise.all([
+    db.rpc("get_data_quality"),
+    db.rpc("find_duplicate_clients"),
+  ]);
+  if (dqRes.error || dupRes.error) {
+    renderLoadError("#data-content", dqRes.error || dupRes.error, loadDataHealth);
+    return;
+  }
+  const dq = dqRes.data || {};
+  const dups = Array.isArray(dupRes.data) ? dupRes.data : [];
+  const missingEmail = Array.isArray(dq.missing_email) ? dq.missing_email : [];
+  const unassigned = Array.isArray(dq.live_unassigned) ? dq.live_unassigned : [];
+  const noFee = Array.isArray(dq.completed_missing_fee) ? dq.completed_missing_fee : [];
+
+  const kpis = `
+    <div class="kpi"><div class="num">${dq.clients_total ?? 0}</div><div class="lbl">Clients total</div></div>
+    <div class="kpi ${dq.missing_email_count ? "warn" : ""}"><div class="num">${dq.missing_email_count ?? 0}</div><div class="lbl">Missing email</div></div>
+    <div class="kpi ${dq.missing_phone_count ? "warn" : ""}"><div class="num">${dq.missing_phone_count ?? 0}</div><div class="lbl">Missing phone</div></div>
+    <div class="kpi ${dq.missing_both_count ? "warn" : ""}"><div class="num">${dq.missing_both_count ?? 0}</div><div class="lbl">Missing email &amp; phone</div></div>
+    <div class="kpi ${unassigned.length ? "warn" : ""}"><div class="num">${unassigned.length}</div><div class="lbl">Live cases unassigned</div></div>
+    <div class="kpi"><div class="num">${noFee.length}</div><div class="lbl">Completed, no fee</div></div>
+    <div class="kpi"><div class="num">${dq.completed_missing_rate_end ?? 0}</div><div class="lbl">Completed, no rate-end</div></div>
+    <div class="kpi"><div class="num">${dq.emails_failed ?? 0}</div><div class="lbl">Failed emails</div></div>`;
+
+  let stuckNotice = "";
+  if (dq.emails_stuck > 0 && dq.emails_sending_live) {
+    stuckNotice = `<div class="dq-notice bad">${dq.emails_stuck} email${dq.emails_stuck === 1 ? " is" : "s are"} stuck in the queue — the sender may be failing.</div>`;
+  } else if (dq.emails_stuck > 0 && !dq.emails_sending_live) {
+    stuckNotice = `<div class="dq-notice">${dq.emails_stuck} email${dq.emails_stuck === 1 ? "" : "s"} queued and waiting — the Resend key isn't set yet, so nothing has sent.</div>`;
+  }
+
+  const mutedSub = "color:var(--muted);font-size:12px;margin-top:2px;";
+  const dupPanel = `<div class="panel">
+    <h3>Possible duplicate clients</h3>
+    <p class="panel-sub">Flagged for human review — never merged automatically. Open each side to compare before merging by hand.</p>
+    ${dups.length ? `<table class="imp-table">
+      <tr><th>Client A</th><th>Client B</th><th>Reason</th><th>Score</th><th></th></tr>
+      ${dups.map((d) => `<tr>
+        <td>${esc(d.a_name)}<div style="${mutedSub}">${esc(d.a_email || "no email")}</div></td>
+        <td>${esc(d.b_name)}<div style="${mutedSub}">${esc(d.b_email || "no email")}</div></td>
+        <td>${esc(d.reason)}</td>
+        <td>${Math.round((Number(d.score) || 0) * 100)}%</td>
+        <td style="white-space:nowrap;"><button class="btn btn-sm" onclick="openClient('${d.a_id}')">Open A</button> <button class="btn btn-sm" onclick="openClient('${d.b_id}')">Open B</button></td>
+      </tr>`).join("")}
+    </table>` : '<div class="empty">No likely duplicates found. 👍</div>'}
+  </div>`;
+
+  const missingPanel = `<div class="panel">
+    <h3>Clients missing email (with a live case)</h3>
+    ${missingEmail.length === 300 ? '<p class="panel-sub">Showing the first 300 — there may be more.</p>' : ""}
+    ${missingEmail.length ? `<table class="imp-table">
+      ${missingEmail.map((c) => `<tr>
+        <td>${esc(c.name)}</td>
+        <td style="text-align:right;white-space:nowrap;"><button class="btn btn-sm" onclick="openClient('${c.id}')">Open</button></td>
+      </tr>`).join("")}
+    </table>` : '<div class="empty">Every client with a live case has an email. 👍</div>'}
+  </div>`;
+
+  const unassignedPanel = `<div class="panel">
+    <h3>Live cases with no adviser</h3>
+    ${unassigned.length ? unassigned.map((c) => `
+      <div class="row-item">
+        <div class="row-main">
+          <div class="t" onclick="openCase('${c.case_id}')">${esc(c.name)}</div>
+          <div class="s">${esc(STAGE_LABEL[c.stage] || c.stage)}</div>
+        </div>
+        <button class="btn btn-sm" onclick="openCase('${c.case_id}')">Open</button>
+      </div>`).join("") : '<div class="empty">Every live case has an adviser. 👍</div>'}
+  </div>`;
+
+  const noFeePanel = `<div class="panel">
+    <h3>Completed cases with no fee recorded</h3>
+    ${noFee.length ? noFee.map((c) => `
+      <div class="row-item">
+        <div class="row-main"><div class="t" onclick="openCase('${c.case_id}')">${esc(c.name)}</div></div>
+        <button class="btn btn-sm" onclick="openCase('${c.case_id}')">Open</button>
+      </div>`).join("") : '<div class="empty">All completed cases have a fee recorded. 👍</div>'}
+  </div>`;
+
+  el.innerHTML = `
+    <div class="kpi-row">${kpis}</div>
+    ${stuckNotice}
+    ${dupPanel}
+    <div class="grid-2">${missingPanel}${unassignedPanel}</div>
+    ${noFeePanel}`;
+}
+$("#data-refresh").addEventListener("click", () => loadDataHealth());
 
 /* ---------- Introducers & team (Settings) ---------- */
 async function loadIntroducers() {
@@ -1817,8 +2287,33 @@ $("#chat-form").addEventListener("submit", (e) => { e.preventDefault(); sendChat
 $("#chat-input").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); } });
 
 /* ---------- Modal helpers ---------- */
-function openModal() { $("#modal-backdrop").classList.remove("hidden"); }
-window.closeModal = function () { $("#modal-backdrop").classList.add("hidden"); };
+let modalPrevFocus = null;
+function modalFocusable() {
+  return [...$("#modal").querySelectorAll('a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')]
+    .filter((el) => el.offsetParent !== null);
+}
+function openModal() {
+  modalPrevFocus = document.activeElement;
+  $("#modal-backdrop").classList.remove("hidden");
+  const f = modalFocusable();
+  if (f.length) f[0].focus();
+}
+window.closeModal = function () {
+  $("#modal-backdrop").classList.add("hidden");
+  if (modalPrevFocus && typeof modalPrevFocus.focus === "function") modalPrevFocus.focus();
+  modalPrevFocus = null;
+};
 $("#modal-backdrop").addEventListener("click", (e) => { if (e.target === $("#modal-backdrop")) closeModal(); });
+document.addEventListener("keydown", (e) => {
+  if ($("#modal-backdrop").classList.contains("hidden")) return;
+  if (e.key === "Escape") { e.preventDefault(); closeModal(); return; }
+  if (e.key === "Tab") {
+    const f = modalFocusable();
+    if (!f.length) return;
+    const first = f[0], last = f[f.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  }
+});
 
 init();

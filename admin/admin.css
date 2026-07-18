@@ -327,6 +327,9 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
 .row-main .t:hover { color: var(--navy); text-decoration: underline; }
 .row-main .s { font-size: 12.5px; color: var(--muted); margin-top: 1px; font-variant-numeric: tabular-nums; }
 .empty { color: var(--muted); font-size: 13px; padding: 10px 0; }
+.load-error { color: var(--red); font-size: 13px; padding: 10px 0; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.dq-notice { font-size: 13px; padding: 10px 14px; border-radius: 8px; margin-bottom: 20px; background: var(--light); color: var(--muted); border: 1px solid #dbe3ec; }
+.dq-notice.bad { background: var(--red-bg); color: var(--red); border-color: #eec3bb; }
 
 /* ---------- Badges (soft, pill) ---------- */
 .badge {
@@ -659,3 +662,11 @@ main input:focus, main select:focus, main textarea:focus,
   .prot-table-wrap { -webkit-overflow-scrolling: touch; }
   #page-protection .page-tools select { flex: 1; }
 }
+
+/* Digital fact-find submitted responses */
+.ff-data { border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+.ff-row { display:flex; gap:12px; padding:8px 12px; border-bottom:1px solid var(--line); font-size:13.5px; }
+.ff-row:last-child { border-bottom:0; }
+.ff-row:nth-child(odd) { background:var(--light); }
+.ff-k { flex:0 0 42%; color:var(--muted); }
+.ff-v { flex:1; color:var(--ink); font-weight:500; }
