@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Your mortgage fact-find — NexMoney</title>
+<link rel="icon" href="/favicon.svg">
+<style>
+  :root{--navy:#0f2a4a;--navy2:#0b1f35;--orange:#e08a2b;--ink:#1f2937;--muted:#6b7280;--line:#e3e7ee;--bg:#eef2f7;--green:#177245;--red:#c0392b}
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{background:var(--bg);color:var(--ink);font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;line-height:1.55;font-size:16px}
+  .top{background:linear-gradient(120deg,var(--navy2),var(--navy));color:#fff;padding:22px 18px}
+  .top .in{max-width:760px;margin:0 auto}
+  .brand{font-weight:800;font-size:22px;letter-spacing:.2px}.brand span{color:var(--orange)}
+  .top p{margin:6px 0 0;color:#c4d0e0;font-size:14px}
+  .wrap{max-width:760px;margin:0 auto;padding:20px 18px 80px}
+  .card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:22px;margin:16px 0;box-shadow:0 1px 3px rgba(16,24,40,.05)}
+  h2{font-size:18px;margin:0 0 4px;color:var(--navy)}
+  .hint{color:var(--muted);font-size:13.5px;margin:0 0 16px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:560px){.grid{grid-template-columns:1fr}}
+  label{display:block;font-size:13.5px;font-weight:600;margin:0 0 5px;color:#374151}
+  .full{grid-column:1/-1}
+  input,select,textarea{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:9px;font:inherit;background:#fff;color:var(--ink)}
+  input:focus,select:focus,textarea:focus{outline:none;border-color:var(--navy);box-shadow:0 0 0 3px rgba(15,42,74,.12)}
+  textarea{min-height:84px;resize:vertical}
+  .row-check{display:flex;gap:10px;align-items:flex-start;font-size:14px;font-weight:500;color:#374151}
+  .row-check input{width:18px;height:18px;margin-top:2px;flex:none}
+  .actions{position:sticky;bottom:0;background:linear-gradient(#eef2f7cc,#eef2f7);backdrop-filter:blur(4px);padding:14px 0;display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:8px}
+  .btn{appearance:none;border:1px solid var(--navy);background:var(--navy);color:#fff;padding:12px 20px;border-radius:10px;font-weight:700;font-size:15px;cursor:pointer}
+  .btn.ghost{background:#fff;color:var(--navy)}
+  .btn:disabled{opacity:.55;cursor:default}
+  .save-note{font-size:13px;color:var(--muted)}
+  .banner{padding:12px 14px;border-radius:10px;font-size:14px;margin:0 0 16px}
+  .banner.ok{background:#e7f4ec;color:var(--green)}.banner.err{background:#fdecea;color:var(--red)}
+  .center{text-align:center;padding:60px 20px;color:var(--muted)}
+  .center h2{font-size:22px;color:var(--navy);margin-bottom:8px}
+  .foot{color:var(--muted);font-size:12px;text-align:center;margin-top:26px}
+  fieldset{border:0;padding:0;margin:0}
+  .secnum{display:inline-block;width:24px;height:24px;line-height:24px;text-align:center;background:var(--orange);color:#fff;border-radius:50%;font-size:13px;font-weight:800;margin-right:8px;vertical-align:middle}
+</style>
+</head>
+<body>
+<div class="top"><div class="in">
+  <div class="brand">Nex<span>Money</span></div>
+  <p id="top-sub">Your secure mortgage fact-find</p>
+</div></div>
+
+<div class="wrap">
+  <div id="loading" class="center"><h2>Loading your form…</h2><p>One moment.</p></div>
+
+  <div id="invalid" class="center" style="display:none">
+    <h2>This link isn't valid</h2>
+    <p>The link may have expired or been mistyped. Please contact your adviser and we'll send you a fresh one.</p>
+  </div>
+
+  <div id="done" class="center" style="display:none">
+    <h2>Thank you — that's all we need for now ✅</h2>
+    <p>Your fact-find has been sent securely to your adviser. We'll be in touch shortly. You can close this page.</p>
+  </div>
+
+  <form id="form" style="display:none" autocomplete="on">
+    <div id="banner"></div>
+    <p class="hint">This helps your adviser prepare the right advice before you speak. It takes about 5–10 minutes. You can <strong>save and come back later</strong> using the same link. Nothing is shared with lenders until you give the go-ahead.</p>
+
+    <div class="card">
+      <h2><span class="secnum">1</span>About you</h2>
+      <p class="hint">The main applicant.</p>
+      <div class="grid">
+        <div><label>Title</label><input name="a1_title" placeholder="Mr / Mrs / Ms / Dr"></div>
+        <div><label>Date of birth</label><input name="a1_dob" type="date"></div>
+        <div><label>First name</label><input name="a1_first"></div>
+        <div><label>Last name</label><input name="a1_last"></div>
+        <div><label>Marital status</label><select name="a1_marital"><option value="">Select…</option><option>Single</option><option>Married</option><option>Civil partnership</option><option>Living with partner</option><option>Divorced</option><option>Widowed</option></select></div>
+        <div><label>Nationality</label><input name="a1_nationality" placeholder="e.g. British"></div>
+        <div><label>Number of dependants</label><input name="a1_dependants" type="number" min="0" placeholder="0"></div>
+        <div><label>Residential status</label><select name="a1_resi"><option value="">Select…</option><option>Owner</option><option>Renting</option><option>Living with family</option><option>Other</option></select></div>
+        <div class="full"><label>Current address</label><input name="a1_address"></div>
+        <div><label>Postcode</label><input name="a1_postcode"></div>
+        <div><label>Years at this address</label><input name="a1_years_addr" type="number" min="0" step="0.5"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2><span class="secnum">2</span>How to reach you</h2>
+      <div class="grid">
+        <div><label>Email</label><input name="email" type="email"></div>
+        <div><label>Mobile</label><input name="phone" type="tel"></div>
+        <div class="full"><label>Best time to call</label><input name="best_time" placeholder="e.g. weekday evenings"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2><span class="secnum">3</span>A second applicant?</h2>
+      <p class="hint">Only if you're applying jointly.</p>
+      <label class="row-check"><input type="checkbox" id="hasA2" name="has_a2" value="yes"> Yes, there's a second applicant</label>
+      <div id="a2block" class="grid" style="display:none;margin-top:14px">
+        <div><label>Title</label><input name="a2_title"></div>
+        <div><label>Date of birth</label><input name="a2_dob" type="date"></div>
+        <div><label>First name</label><input name="a2_first"></div>
+        <div><label>Last name</label><input name="a2_last"></div>
+        <div><label>Relationship to you</label><input name="a2_relationship" placeholder="e.g. spouse"></div>
+        <div><label>Nationality</label><input name="a2_nationality"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2><span class="secnum">4</span>Work &amp; income</h2>
+      <div class="grid">
+        <div><label>Employment status</label><select name="a1_emp_status"><option value="">Select…</option><option>Employed</option><option>Self-employed</option><option>Company director</option><option>Retired</option><option>Not working</option></select></div>
+        <div><label>Job title</label><input name="a1_job_title"></div>
+        <div><label>Employer / business name</label><input name="a1_employer"></div>
+        <div><label>Time in role (years)</label><input name="a1_time_role" type="number" min="0" step="0.5"></div>
+        <div><label>Gross annual income (£)</label><input name="a1_income" type="number" min="0" placeholder="e.g. 42000"></div>
+        <div><label>Other income (£/yr)</label><input name="a1_other_income" type="number" min="0" placeholder="bonus, benefits, etc"></div>
+        <div class="full" id="a2incwrap" style="display:none"><label>Second applicant — gross annual income (£)</label><input name="a2_income" type="number" min="0"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2><span class="secnum">5</span>Monthly commitments</h2>
+      <p class="hint">Rough monthly figures are fine.</p>
+      <div class="grid">
+        <div><label>Loans / car finance (£/mo)</label><input name="c_loans" type="number" min="0"></div>
+        <div><label>Credit cards — total balance (£)</label><input name="c_cards" type="number" min="0"></div>
+        <div><label>Childcare / other (£/mo)</label><input name="c_other" type="number" min="0"></div>
+        <div><label>Any past credit issues?</label><select name="c_credit_issues"><option value="">Select…</option><option>No</option><option>Yes — resolved</option><option>Yes — ongoing</option></select></div>
+        <div class="full"><label>If yes, a brief note</label><input name="c_credit_note" placeholder="e.g. a missed payment in 2022, now up to date"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2><span class="secnum">6</span>Your mortgage plans</h2>
+      <div class="grid">
+        <div><label>What do you need?</label><select name="m_purpose"><option value="">Select…</option><option>Buying my first home</option><option>Moving home</option><option>Remortgaging</option><option>Buy-to-let</option><option>Product transfer / new rate</option><option>Other</option></select></div>
+        <div><label>Repayment type</label><select name="m_repay"><option value="">Select…</option><option>Repayment</option><option>Interest only</option><option>Not sure</option></select></div>
+        <div><label>Property price / value (£)</label><input name="m_value" type="number" min="0"></div>
+        <div><label>Deposit / equity (£)</label><input name="m_deposit" type="number" min="0"></div>
+        <div><label>Loan amount needed (£)</label><input name="m_loan" type="number" min="0"></div>
+        <div><label>Term (years)</label><input name="m_term" type="number" min="1" max="40" placeholder="e.g. 25"></div>
+        <div><label>Preferred rate type</label><select name="m_rate_type"><option value="">Select…</option><option>Fixed</option><option>Tracker / variable</option><option>Not sure — advise me</option></select></div>
+        <div><label>Target timescale</label><input name="m_timescale" placeholder="e.g. next 3 months"></div>
+        <div class="full"><label>Property address (if known)</label><input name="m_property_address"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2><span class="secnum">7</span>Protecting your home &amp; family</h2>
+      <div class="grid">
+        <div><label>Do you have life cover?</label><select name="p_life"><option value="">Select…</option><option>Yes</option><option>No</option><option>Not sure</option></select></div>
+        <div><label>Income protection / critical illness?</label><select name="p_ip"><option value="">Select…</option><option>Yes</option><option>No</option><option>Not sure</option></select></div>
+        <div class="full"><label class="row-check"><input type="checkbox" name="p_review" value="yes"> I'd like a no-obligation review of my protection alongside the mortgage</label></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2><span class="secnum">8</span>Anything else?</h2>
+      <div class="grid">
+        <div class="full"><label>What matters most to you, or anything we should know</label><textarea name="notes" placeholder="e.g. keeping monthly payments low, self-employed accounts, a move date…"></textarea></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <label class="row-check"><input type="checkbox" id="consent" name="consent" value="yes"> I confirm the information above is accurate to the best of my knowledge, and I'm happy for NexMoney to contact me about my mortgage and protection needs. <span style="font-weight:400;color:var(--muted)">(See our <a href="/privacy" target="_blank" rel="noopener">privacy notice</a>.)</span></label>
+    </div>
+
+    <div class="actions">
+      <button type="button" class="btn ghost" id="saveBtn">Save for later</button>
+      <button type="submit" class="btn" id="submitBtn">Submit to my adviser</button>
+      <span class="save-note" id="saveNote"></span>
+    </div>
+    <div class="foot">Your answers are stored securely and only visible to your NexMoney adviser. NexMoney is authorised and regulated for mortgage advice.</div>
+  </form>
+</div>
+
+<script>
+(function () {
+  var FN = "https://sclghkmvzpwtmnzbkaoe.supabase.co/functions/v1/fact-find";
+  var token = new URLSearchParams(location.search).get("token") || "";
+  var form = document.getElementById("form");
+  var show = function (id) { ["loading","invalid","done","form"].forEach(function (x) { document.getElementById(x).style.display = (x === id ? (x === "form" ? "block" : "block") : "none"); }); };
+  var banner = function (msg, cls) { var b = document.getElementById("banner"); if (!msg) { b.innerHTML = ""; return; } b.className = "banner " + cls; b.textContent = msg; b.scrollIntoView({ block: "nearest" }); };
+
+  function collect() {
+    var data = {};
+    Array.prototype.forEach.call(form.elements, function (el) {
+      if (!el.name) return;
+      if (el.type === "checkbox") data[el.name] = el.checked ? "yes" : "";
+      else data[el.name] = el.value;
+    });
+    return data;
+  }
+  function fill(data, prefill) {
+    var merged = Object.assign({}, prefill || {}, data || {});
+    // map a couple of prefill keys to form field names
+    if (prefill) {
+      if (prefill.first_name && !merged.a1_first) merged.a1_first = prefill.first_name;
+      if (prefill.last_name && !merged.a1_last) merged.a1_last = prefill.last_name;
+      if (prefill.email && !merged.email) merged.email = prefill.email;
+      if (prefill.phone && !merged.phone) merged.phone = prefill.phone;
+      if (prefill.date_of_birth && !merged.a1_dob) merged.a1_dob = prefill.date_of_birth;
+      if (prefill.address && !merged.a1_address) merged.a1_address = prefill.address;
+    }
+    Array.prototype.forEach.call(form.elements, function (el) {
+      if (!el.name || !(el.name in merged)) return;
+      if (el.type === "checkbox") el.checked = merged[el.name] === "yes";
+      else el.value = merged[el.name] == null ? "" : merged[el.name];
+    });
+    toggleA2();
+  }
+  function toggleA2() {
+    var on = document.getElementById("hasA2").checked;
+    document.getElementById("a2block").style.display = on ? "grid" : "none";
+    document.getElementById("a2incwrap").style.display = on ? "block" : "none";
+  }
+  document.getElementById("hasA2").addEventListener("change", toggleA2);
+
+  async function send(submit) {
+    var res = await fetch(FN, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: token, data: collect(), submit: !!submit }) });
+    if (!res.ok) throw new Error("save failed " + res.status);
+    return res.json();
+  }
+  var saveBtn = document.getElementById("saveBtn"), submitBtn = document.getElementById("submitBtn"), saveNote = document.getElementById("saveNote");
+  saveBtn.addEventListener("click", async function () {
+    saveBtn.disabled = true; saveNote.textContent = "Saving…";
+    try { await send(false); saveNote.textContent = "Saved — you can close this and return via the same link."; }
+    catch (e) { saveNote.textContent = ""; banner("Sorry, we couldn't save just now. Please try again.", "err"); }
+    finally { saveBtn.disabled = false; }
+  });
+  form.addEventListener("submit", async function (e) {
+    e.preventDefault();
+    if (!document.getElementById("consent").checked) { banner("Please tick the confirmation box before submitting.", "err"); return; }
+    submitBtn.disabled = true; saveBtn.disabled = true; submitBtn.textContent = "Submitting…"; banner("", "");
+    try { await send(true); show("done"); }
+    catch (e2) { banner("Sorry, we couldn't submit just now. Your answers are still here — please try again.", "err"); submitBtn.disabled = false; saveBtn.disabled = false; submitBtn.textContent = "Submit to my adviser"; }
+  });
+
+  if (!token) { show("invalid"); return; }
+  fetch(FN + "?token=" + encodeURIComponent(token)).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+    .then(function (o) {
+      if (!o.ok || !o.j || o.j.error) { show("invalid"); return; }
+      if (o.j.status === "submitted") { show("done"); return; }
+      if (o.j.company) { document.querySelector(".brand").innerHTML = o.j.company.replace(/Money/i, "<span>Money</span>"); }
+      fill(o.j.data, o.j.prefill);
+      show("form");
+    })
+    .catch(function () { show("invalid"); });
+})();
+</script>
+</body>
+</html>
