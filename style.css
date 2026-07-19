@@ -1630,3 +1630,58 @@ p a:not(.btn), .faq-answer a, .form-consent a {
 
 /* Footer column headings promoted h4 -> h3 (calculators/faq/testimonials heading-hierarchy fix) — mirror of .footer-col h4 */
 .footer-col h3 { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: var(--white); margin-bottom: 20px; }
+
+/* ---- Adviser Login nav link (dark layer) ---- */
+nav a.nav-adviser {
+  white-space: nowrap;
+  margin-left: 6px;
+  padding: 8px 14px;
+  font-size: 14px;
+  color: var(--dim);
+  border: 1px solid var(--brd);
+  border-radius: 999px;
+}
+nav a.nav-adviser:hover,
+nav a.nav-adviser:focus-visible {
+  color: var(--ink);
+  border-color: var(--orange);
+  background: var(--glass2);
+}
+@media (max-width: 768px) {
+  nav.open a.nav-adviser {
+    margin-left: 0;
+    border: 0;
+    border-top: 1px solid var(--brd);
+    border-radius: 0;
+    margin-top: 6px;
+    padding-top: 14px;
+  }
+}
+
+/* ---- R1 fixes: FAQ category spacing (dead-space between stacked sections) ---- */
+#borrowing, #process, #types, #brokers, #specialist { padding: 28px 0; }
+
+/* ---- R1 fixes: marquee pause button sits below the track, not over it ---- */
+.has-marquee-pause { padding-bottom: 64px; }
+.marquee-pause { bottom: 12px; }
+
+/* ---- R1 fixes: header no longer overflows at common laptop/tablet widths ---- */
+@media (min-width: 769px) and (max-width: 1099.98px) {
+  nav, .header-cta { display: none; }
+  .nav-toggle { display: flex; }
+  nav.open {
+    display: flex; flex-direction: column;
+    position: absolute; top: 100%; left: 0; right: 0;
+    background: #0a1424; border-bottom: 1px solid var(--brd);
+    padding: 12px; box-shadow: 0 18px 40px rgba(0,0,0,0.6);
+  }
+  nav.open a { padding: 12px 14px; }
+  nav.open a.nav-adviser { margin-left: 0; border: 0; border-top: 1px solid var(--brd); border-radius: 0; margin-top: 6px; padding-top: 14px; }
+}
+@media (min-width: 1100px) {
+  nav { gap: 0; }
+  nav a { padding: 8px 9px; font-size: 13.5px; }
+  nav a.nav-adviser { padding: 7px 11px; font-size: 13px; margin-left: 2px; }
+  .header-phone { display: none; }
+  .header-cta .btn { padding: 12px 18px; font-size: 14px; white-space: nowrap; }
+}

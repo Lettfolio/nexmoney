@@ -37,18 +37,23 @@
   .banner.ok{background:#e7f4ec;color:var(--green)}.banner.err{background:#fdecea;color:var(--red)}
   .center{text-align:center;padding:60px 20px;color:var(--muted)}
   .center h2{font-size:22px;color:var(--navy);margin-bottom:8px}
+  .skip-link{position:absolute;left:-9999px;top:0;background:var(--navy);color:#fff;padding:10px 16px;border-radius:0 0 8px 0;z-index:99}
+  .skip-link:focus{left:0}
+  .page-h1{font-size:24px;color:var(--navy);margin:0 0 4px}
   .foot{color:var(--muted);font-size:12px;text-align:center;margin-top:26px}
   fieldset{border:0;padding:0;margin:0}
   .secnum{display:inline-block;width:24px;height:24px;line-height:24px;text-align:center;background:var(--orange);color:#fff;border-radius:50%;font-size:13px;font-weight:800;margin-right:8px;vertical-align:middle}
 </style>
 </head>
 <body>
+<a class="skip-link" href="#main">Skip to content</a>
 <div class="top"><div class="in">
   <div class="brand">Nex<span>Money</span></div>
   <p id="top-sub">Your secure mortgage fact-find</p>
 </div></div>
 
-<div class="wrap">
+<main id="main" class="wrap">
+  <h1 class="page-h1">Your mortgage fact-find</h1>
   <div id="loading" class="center"><h2>Loading your form…</h2><p>One moment.</p></div>
 
   <div id="invalid" class="center" style="display:none">
@@ -69,26 +74,26 @@
       <h2><span class="secnum">1</span>About you</h2>
       <p class="hint">The main applicant.</p>
       <div class="grid">
-        <div><label>Title</label><input name="a1_title" placeholder="Mr / Mrs / Ms / Dr"></div>
-        <div><label>Date of birth</label><input name="a1_dob" type="date"></div>
-        <div><label>First name</label><input name="a1_first"></div>
-        <div><label>Last name</label><input name="a1_last"></div>
-        <div><label>Marital status</label><select name="a1_marital"><option value="">Select…</option><option>Single</option><option>Married</option><option>Civil partnership</option><option>Living with partner</option><option>Divorced</option><option>Widowed</option></select></div>
-        <div><label>Nationality</label><input name="a1_nationality" placeholder="e.g. British"></div>
-        <div><label>Number of dependants</label><input name="a1_dependants" type="number" min="0" placeholder="0"></div>
-        <div><label>Residential status</label><select name="a1_resi"><option value="">Select…</option><option>Owner</option><option>Renting</option><option>Living with family</option><option>Other</option></select></div>
-        <div class="full"><label>Current address</label><input name="a1_address"></div>
-        <div><label>Postcode</label><input name="a1_postcode"></div>
-        <div><label>Years at this address</label><input name="a1_years_addr" type="number" min="0" step="0.5"></div>
+        <div><label for="ff_a1_title">Title</label><input id="ff_a1_title" name="a1_title" autocomplete="honorific-prefix" placeholder="Mr / Mrs / Ms / Dr"></div>
+        <div><label for="ff_a1_dob">Date of birth</label><input id="ff_a1_dob" name="a1_dob" type="date" autocomplete="bday"></div>
+        <div><label for="ff_a1_first">First name</label><input id="ff_a1_first" name="a1_first" autocomplete="given-name"></div>
+        <div><label for="ff_a1_last">Last name</label><input id="ff_a1_last" name="a1_last" autocomplete="family-name"></div>
+        <div><label for="ff_a1_marital">Marital status</label><select id="ff_a1_marital" name="a1_marital"><option value="">Select…</option><option>Single</option><option>Married</option><option>Civil partnership</option><option>Living with partner</option><option>Divorced</option><option>Widowed</option></select></div>
+        <div><label for="ff_a1_nationality">Nationality</label><input id="ff_a1_nationality" name="a1_nationality" placeholder="e.g. British"></div>
+        <div><label for="ff_a1_dependants">Number of dependants</label><input id="ff_a1_dependants" name="a1_dependants" type="number" min="0" placeholder="0"></div>
+        <div><label for="ff_a1_resi">Residential status</label><select id="ff_a1_resi" name="a1_resi"><option value="">Select…</option><option>Owner</option><option>Renting</option><option>Living with family</option><option>Other</option></select></div>
+        <div class="full"><label for="ff_a1_address">Current address</label><input id="ff_a1_address" name="a1_address" autocomplete="street-address"></div>
+        <div><label for="ff_a1_postcode">Postcode</label><input id="ff_a1_postcode" name="a1_postcode" autocomplete="postal-code"></div>
+        <div><label for="ff_a1_years_addr">Years at this address</label><input id="ff_a1_years_addr" name="a1_years_addr" type="number" min="0" step="0.5"></div>
       </div>
     </div>
 
     <div class="card">
       <h2><span class="secnum">2</span>How to reach you</h2>
       <div class="grid">
-        <div><label>Email</label><input name="email" type="email"></div>
-        <div><label>Mobile</label><input name="phone" type="tel"></div>
-        <div class="full"><label>Best time to call</label><input name="best_time" placeholder="e.g. weekday evenings"></div>
+        <div><label for="ff_email">Email</label><input id="ff_email" name="email" type="email" autocomplete="email"></div>
+        <div><label for="ff_phone">Mobile</label><input id="ff_phone" name="phone" type="tel" autocomplete="tel"></div>
+        <div class="full"><label for="ff_best_time">Best time to call</label><input id="ff_best_time" name="best_time" placeholder="e.g. weekday evenings"></div>
       </div>
     </div>
 
@@ -97,25 +102,25 @@
       <p class="hint">Only if you're applying jointly.</p>
       <label class="row-check"><input type="checkbox" id="hasA2" name="has_a2" value="yes"> Yes, there's a second applicant</label>
       <div id="a2block" class="grid" style="display:none;margin-top:14px">
-        <div><label>Title</label><input name="a2_title"></div>
-        <div><label>Date of birth</label><input name="a2_dob" type="date"></div>
-        <div><label>First name</label><input name="a2_first"></div>
-        <div><label>Last name</label><input name="a2_last"></div>
-        <div><label>Relationship to you</label><input name="a2_relationship" placeholder="e.g. spouse"></div>
-        <div><label>Nationality</label><input name="a2_nationality"></div>
+        <div><label for="ff_a2_title">Title</label><input id="ff_a2_title" name="a2_title"></div>
+        <div><label for="ff_a2_dob">Date of birth</label><input id="ff_a2_dob" name="a2_dob" type="date"></div>
+        <div><label for="ff_a2_first">First name</label><input id="ff_a2_first" name="a2_first"></div>
+        <div><label for="ff_a2_last">Last name</label><input id="ff_a2_last" name="a2_last"></div>
+        <div><label for="ff_a2_relationship">Relationship to you</label><input id="ff_a2_relationship" name="a2_relationship" placeholder="e.g. spouse"></div>
+        <div><label for="ff_a2_nationality">Nationality</label><input id="ff_a2_nationality" name="a2_nationality"></div>
       </div>
     </div>
 
     <div class="card">
       <h2><span class="secnum">4</span>Work &amp; income</h2>
       <div class="grid">
-        <div><label>Employment status</label><select name="a1_emp_status"><option value="">Select…</option><option>Employed</option><option>Self-employed</option><option>Company director</option><option>Retired</option><option>Not working</option></select></div>
-        <div><label>Job title</label><input name="a1_job_title"></div>
-        <div><label>Employer / business name</label><input name="a1_employer"></div>
-        <div><label>Time in role (years)</label><input name="a1_time_role" type="number" min="0" step="0.5"></div>
-        <div><label>Gross annual income (£)</label><input name="a1_income" type="number" min="0" placeholder="e.g. 42000"></div>
-        <div><label>Other income (£/yr)</label><input name="a1_other_income" type="number" min="0" placeholder="bonus, benefits, etc"></div>
-        <div class="full" id="a2incwrap" style="display:none"><label>Second applicant — gross annual income (£)</label><input name="a2_income" type="number" min="0"></div>
+        <div><label for="ff_a1_emp_status">Employment status</label><select id="ff_a1_emp_status" name="a1_emp_status"><option value="">Select…</option><option>Employed</option><option>Self-employed</option><option>Company director</option><option>Retired</option><option>Not working</option></select></div>
+        <div><label for="ff_a1_job_title">Job title</label><input id="ff_a1_job_title" name="a1_job_title"></div>
+        <div><label for="ff_a1_employer">Employer / business name</label><input id="ff_a1_employer" name="a1_employer"></div>
+        <div><label for="ff_a1_time_role">Time in role (years)</label><input id="ff_a1_time_role" name="a1_time_role" type="number" min="0" step="0.5"></div>
+        <div><label for="ff_a1_income">Gross annual income (£)</label><input id="ff_a1_income" name="a1_income" type="number" min="0" placeholder="e.g. 42000"></div>
+        <div><label for="ff_a1_other_income">Other income (£/yr)</label><input id="ff_a1_other_income" name="a1_other_income" type="number" min="0" placeholder="bonus, benefits, etc"></div>
+        <div class="full" id="a2incwrap" style="display:none"><label for="ff_a2_income">Second applicant — gross annual income (£)</label><input id="ff_a2_income" name="a2_income" type="number" min="0"></div>
       </div>
     </div>
 
@@ -123,34 +128,34 @@
       <h2><span class="secnum">5</span>Monthly commitments</h2>
       <p class="hint">Rough monthly figures are fine.</p>
       <div class="grid">
-        <div><label>Loans / car finance (£/mo)</label><input name="c_loans" type="number" min="0"></div>
-        <div><label>Credit cards — total balance (£)</label><input name="c_cards" type="number" min="0"></div>
-        <div><label>Childcare / other (£/mo)</label><input name="c_other" type="number" min="0"></div>
-        <div><label>Any past credit issues?</label><select name="c_credit_issues"><option value="">Select…</option><option>No</option><option>Yes — resolved</option><option>Yes — ongoing</option></select></div>
-        <div class="full"><label>If yes, a brief note</label><input name="c_credit_note" placeholder="e.g. a missed payment in 2022, now up to date"></div>
+        <div><label for="ff_c_loans">Loans / car finance (£/mo)</label><input id="ff_c_loans" name="c_loans" type="number" min="0"></div>
+        <div><label for="ff_c_cards">Credit cards — total balance (£)</label><input id="ff_c_cards" name="c_cards" type="number" min="0"></div>
+        <div><label for="ff_c_other">Childcare / other (£/mo)</label><input id="ff_c_other" name="c_other" type="number" min="0"></div>
+        <div><label for="ff_c_credit_issues">Any past credit issues?</label><select id="ff_c_credit_issues" name="c_credit_issues"><option value="">Select…</option><option>No</option><option>Yes — resolved</option><option>Yes — ongoing</option></select></div>
+        <div class="full"><label for="ff_c_credit_note">If yes, a brief note</label><input id="ff_c_credit_note" name="c_credit_note" placeholder="e.g. a missed payment in 2022, now up to date"></div>
       </div>
     </div>
 
     <div class="card">
       <h2><span class="secnum">6</span>Your mortgage plans</h2>
       <div class="grid">
-        <div><label>What do you need?</label><select name="m_purpose"><option value="">Select…</option><option>Buying my first home</option><option>Moving home</option><option>Remortgaging</option><option>Buy-to-let</option><option>Product transfer / new rate</option><option>Other</option></select></div>
-        <div><label>Repayment type</label><select name="m_repay"><option value="">Select…</option><option>Repayment</option><option>Interest only</option><option>Not sure</option></select></div>
-        <div><label>Property price / value (£)</label><input name="m_value" type="number" min="0"></div>
-        <div><label>Deposit / equity (£)</label><input name="m_deposit" type="number" min="0"></div>
-        <div><label>Loan amount needed (£)</label><input name="m_loan" type="number" min="0"></div>
-        <div><label>Term (years)</label><input name="m_term" type="number" min="1" max="40" placeholder="e.g. 25"></div>
-        <div><label>Preferred rate type</label><select name="m_rate_type"><option value="">Select…</option><option>Fixed</option><option>Tracker / variable</option><option>Not sure — advise me</option></select></div>
-        <div><label>Target timescale</label><input name="m_timescale" placeholder="e.g. next 3 months"></div>
-        <div class="full"><label>Property address (if known)</label><input name="m_property_address"></div>
+        <div><label for="ff_m_purpose">What do you need?</label><select id="ff_m_purpose" name="m_purpose"><option value="">Select…</option><option>Buying my first home</option><option>Moving home</option><option>Remortgaging</option><option>Buy-to-let</option><option>Product transfer / new rate</option><option>Other</option></select></div>
+        <div><label for="ff_m_repay">Repayment type</label><select id="ff_m_repay" name="m_repay"><option value="">Select…</option><option>Repayment</option><option>Interest only</option><option>Not sure</option></select></div>
+        <div><label for="ff_m_value">Property price / value (£)</label><input id="ff_m_value" name="m_value" type="number" min="0"></div>
+        <div><label for="ff_m_deposit">Deposit / equity (£)</label><input id="ff_m_deposit" name="m_deposit" type="number" min="0"></div>
+        <div><label for="ff_m_loan">Loan amount needed (£)</label><input id="ff_m_loan" name="m_loan" type="number" min="0"></div>
+        <div><label for="ff_m_term">Term (years)</label><input id="ff_m_term" name="m_term" type="number" min="1" max="40" placeholder="e.g. 25"></div>
+        <div><label for="ff_m_rate_type">Preferred rate type</label><select id="ff_m_rate_type" name="m_rate_type"><option value="">Select…</option><option>Fixed</option><option>Tracker / variable</option><option>Not sure — advise me</option></select></div>
+        <div><label for="ff_m_timescale">Target timescale</label><input id="ff_m_timescale" name="m_timescale" placeholder="e.g. next 3 months"></div>
+        <div class="full"><label for="ff_m_property_address">Property address (if known)</label><input id="ff_m_property_address" name="m_property_address"></div>
       </div>
     </div>
 
     <div class="card">
       <h2><span class="secnum">7</span>Protecting your home &amp; family</h2>
       <div class="grid">
-        <div><label>Do you have life cover?</label><select name="p_life"><option value="">Select…</option><option>Yes</option><option>No</option><option>Not sure</option></select></div>
-        <div><label>Income protection / critical illness?</label><select name="p_ip"><option value="">Select…</option><option>Yes</option><option>No</option><option>Not sure</option></select></div>
+        <div><label for="ff_p_life">Do you have life cover?</label><select id="ff_p_life" name="p_life"><option value="">Select…</option><option>Yes</option><option>No</option><option>Not sure</option></select></div>
+        <div><label for="ff_p_ip">Income protection / critical illness?</label><select id="ff_p_ip" name="p_ip"><option value="">Select…</option><option>Yes</option><option>No</option><option>Not sure</option></select></div>
         <div class="full"><label class="row-check"><input type="checkbox" name="p_review" value="yes"> I'd like a no-obligation review of my protection alongside the mortgage</label></div>
       </div>
     </div>
@@ -158,7 +163,7 @@
     <div class="card">
       <h2><span class="secnum">8</span>Anything else?</h2>
       <div class="grid">
-        <div class="full"><label>What matters most to you, or anything we should know</label><textarea name="notes" placeholder="e.g. keeping monthly payments low, self-employed accounts, a move date…"></textarea></div>
+        <div class="full"><label for="ff_notes">What matters most to you, or anything we should know</label><textarea id="ff_notes" name="notes" placeholder="e.g. keeping monthly payments low, self-employed accounts, a move date…"></textarea></div>
       </div>
     </div>
 
@@ -173,7 +178,7 @@
     </div>
     <div class="foot">Your answers are stored securely and only visible to your NexMoney adviser. NexMoney is authorised and regulated for mortgage advice.</div>
   </form>
-</div>
+</main>
 
 <script>
 (function () {
@@ -181,7 +186,7 @@
   var token = new URLSearchParams(location.search).get("token") || "";
   var form = document.getElementById("form");
   var show = function (id) { ["loading","invalid","done","form"].forEach(function (x) { document.getElementById(x).style.display = (x === id ? (x === "form" ? "block" : "block") : "none"); }); };
-  var banner = function (msg, cls) { var b = document.getElementById("banner"); if (!msg) { b.innerHTML = ""; return; } b.className = "banner " + cls; b.textContent = msg; b.scrollIntoView({ block: "nearest" }); };
+  var banner = function (msg, cls) { var b = document.getElementById("banner"); if (!msg) { b.innerHTML = ""; b.className = ""; return; } b.className = "banner " + cls; b.textContent = msg; b.scrollIntoView({ block: "nearest" }); };
 
   function collect() {
     var data = {};

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
   <!-- Primary SEO -->
-  <title>Mortgage Calculator Bournemouth | How Much Can I Borrow? | NexMoney</title>
+  <title>Mortgage Calculators | How Much Can I Borrow? | NexMoney</title>
   <meta name="description" content="Free mortgage calculators from NexMoney, Bournemouth. Calculate how much you can borrow, your monthly repayments, overpayment savings, and rental yield. No registration needed.">
   <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
   <meta name="author" content="NexMoney Ltd">
@@ -80,6 +80,7 @@
 </head>
 <body>
 
+<a class="skip-link" href="#main">Skip to content</a>
 <!-- TOP BAR -->
 <div class="topbar">
   <div class="container">
@@ -114,6 +115,7 @@
         <a href="/about">About</a>
         <a href="/faq">FAQs</a>
         <a href="/contact">Contact</a>
+        <a href="/admin" class="nav-adviser" rel="nofollow">Adviser Login</a>
       </nav>
       <div class="header-cta">
         <a class="header-phone" href="tel:01202802677">
@@ -128,6 +130,8 @@
     </div>
   </div>
 </header>
+
+<main id="main">
 
 <!-- PAGE HERO -->
 <div class="page-hero">
@@ -191,7 +195,7 @@
         <div class="form-group">
           <label for="r_term">Mortgage term (years)</label>
           <div class="calc-input-wrap"><span class="calc-prefix" style="font-size:12px">yr</span>
-            <input type="number" id="r_term" class="calc-input" value="25" oninput="calcR()">
+            <input type="number" id="r_term" class="calc-input" value="25" min="1" max="50" oninput="calcR()">
           </div>
         </div>
         <div class="calc-output" role="status">
@@ -221,7 +225,7 @@
         <div class="form-group">
           <label for="o_term">Remaining term (years)</label>
           <div class="calc-input-wrap"><span class="calc-prefix" style="font-size:12px">yr</span>
-            <input type="number" id="o_term" class="calc-input" value="22" oninput="calcO()">
+            <input type="number" id="o_term" class="calc-input" value="22" min="1" max="50" oninput="calcO()">
           </div>
         </div>
         <div class="form-group">
@@ -297,6 +301,8 @@
 </section>
 
 <!-- FOOTER -->
+</main>
+
 <footer>
   <div class="container">
     <div class="footer-grid">
@@ -333,6 +339,8 @@
           <li><a href="/faq">Mortgage FAQs</a></li>
           <li><a href="/contact">Contact Us</a></li>
           <li><a href="/privacy">Privacy Policy</a></li>
+          <li><a href="/cookies">Cookie Policy</a></li>
+          <li><a href="/admin" rel="nofollow">Adviser Login</a></li>
         </ul>
       </div>
     </div>
@@ -368,7 +376,8 @@ function calcB() {
 function calcR() {
   const P = Math.max(0, +document.getElementById('r_loan').value || 0);
   const r = Math.max(0, +document.getElementById('r_rate').value || 0) / 100 / 12;
-  const n = (+document.getElementById('r_term').value || 25) * 12;
+  const rTermRaw = document.getElementById('r_term').value;
+  const n = Math.max(1, Math.min(50, rTermRaw === '' ? 25 : (+rTermRaw || 0))) * 12;
   if (r === 0) {
     const mo = P / n;
     document.getElementById('r_result').textContent = fmt(mo) + '/mo';
@@ -384,11 +393,15 @@ function calcR() {
 function calcO() {
   const P     = Math.max(0, +document.getElementById('o_balance').value || 0);
   const rate  = Math.max(0, +document.getElementById('o_rate').value || 0);
-  const years = +document.getElementById('o_term').value || 0;
+  const years = Math.max(0, Math.min(50, +document.getElementById('o_term').value || 0));
   const extra = Math.max(0, +document.getElementById('o_extra').value || 0);
   const r = rate / 100 / 12;
   const n = years * 12;
-  if (!P || !r || !n) return;
+  if (!P || !r || !n) {
+    document.getElementById('o_saving').textContent = '\u2014';
+    document.getElementById('o_years').textContent = 'Enter your mortgage details above';
+    return;
+  }
 
   // Standard payment
   const stdPmt = P * r * Math.pow(1+r, n) / (Math.pow(1+r, n) - 1);

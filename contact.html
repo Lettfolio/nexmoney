@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
   <!-- Primary SEO -->
-  <title>Contact NexMoney | Free Mortgage Advice Bournemouth | Call 01202 802 677</title>
+  <title>Contact NexMoney | Free Mortgage Advice | 01202 802 677</title>
   <meta name="description" content="Contact NexMoney's FCA-regulated mortgage advisors in Bournemouth for free, no-obligation mortgage advice. Call 01202 802 677 or complete our quick online enquiry form today.">
   <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
   <meta name="author" content="NexMoney Ltd">
@@ -66,6 +66,7 @@
 </head>
 <body>
 
+<a class="skip-link" href="#main">Skip to content</a>
 <!-- TOP BAR -->
 <div class="topbar">
   <div class="container">
@@ -100,6 +101,7 @@
         <a href="/about">About</a>
         <a href="/faq">FAQs</a>
         <a href="/contact" class="active">Contact</a>
+        <a href="/admin" class="nav-adviser" rel="nofollow">Adviser Login</a>
       </nav>
       <div class="header-cta">
         <a class="header-phone" href="tel:01202802677">
@@ -114,6 +116,8 @@
     </div>
   </div>
 </header>
+
+<main id="main">
 
 <!-- PAGE HERO -->
 <div class="page-hero">
@@ -205,21 +209,21 @@
           <div class="form-row">
             <div class="form-group">
               <label for="fname">First Name *</label>
-              <input type="text" id="fname" name="fname" placeholder="John" required>
+              <input type="text" id="fname" name="fname" autocomplete="given-name" placeholder="John" required>
             </div>
             <div class="form-group">
               <label for="lname">Last Name *</label>
-              <input type="text" id="lname" name="lname" placeholder="Smith" required>
+              <input type="text" id="lname" name="lname" autocomplete="family-name" placeholder="Smith" required>
             </div>
           </div>
           <div class="form-row">
             <div class="form-group">
               <label for="email">Email Address *</label>
-              <input type="email" id="email" name="email" placeholder="john@email.com" required>
+              <input type="email" id="email" name="email" autocomplete="email" placeholder="john@email.com" required>
             </div>
             <div class="form-group">
               <label for="phone">Phone Number *</label>
-              <input type="tel" id="phone" name="phone" placeholder="07700 900000" required>
+              <input type="tel" id="phone" name="phone" autocomplete="tel" placeholder="07700 900000" required>
             </div>
           </div>
           <div class="form-group">
@@ -235,7 +239,13 @@
               <option value="shared-ownership">Shared Ownership</option>
               <option value="right-to-buy">Right to Buy</option>
               <option value="protection">Life / Protection Insurance</option>
-              <option value="commercial">Commercial / Bridging Finance</option>
+              <option value="commercial">Commercial Finance</option>
+              <option value="bridging">Bridging Finance</option>
+              <option value="development">Development Finance</option>
+              <option value="secured">Secured Loan</option>
+              <option value="insurance">Buildings &amp; Home Insurance</option>
+              <option value="conveyancing">Conveyancing</option>
+              <option value="mortgage-recycle">Rate Review / Mortgage Recycle</option>
               <option value="other">Other</option>
             </select>
           </div>
@@ -276,6 +286,8 @@
 </section>
 
 <!-- FOOTER -->
+</main>
+
 <footer>
   <div class="container">
     <div class="footer-grid">
@@ -291,7 +303,7 @@
         </div>
       </div>
       <div class="footer-col">
-        <h4>Mortgages</h4>
+        <h3>Mortgages</h3>
         <ul>
           <li><a href="/first-time-buyer-mortgages-bournemouth">First Time Buyer</a></li>
           <li><a href="/remortgage-bournemouth">Remortgaging</a></li>
@@ -300,7 +312,7 @@
         </ul>
       </div>
       <div class="footer-col">
-        <h4>Services</h4>
+        <h3>Services</h3>
         <ul>
           <li><a href="/services#protection">Life Insurance</a></li>
           <li><a href="/services#insurance">Buildings Insurance</a></li>
@@ -309,13 +321,15 @@
         </ul>
       </div>
       <div class="footer-col">
-        <h4>Company</h4>
+        <h3>Company</h3>
         <ul>
           <li><a href="/about">About NexMoney</a></li>
           <li><a href="/calculators">Calculators</a></li>
           <li><a href="/faq">Mortgage FAQs</a></li>
           <li><a href="/contact">Contact Us</a></li>
           <li><a href="/privacy">Privacy Policy</a></li>
+          <li><a href="/cookies">Cookie Policy</a></li>
+          <li><a href="/admin" rel="nofollow">Adviser Login</a></li>
         </ul>
       </div>
     </div>
@@ -372,5 +386,16 @@ async function submitForm(e) {
 }
 </script>
 
+<script>
+(function () {
+  var t = new URLSearchParams(location.search).get('type');
+  if (!t) return;
+  var s = document.getElementById('enquiryType');
+  if (!s) return;
+  for (var i = 0; i < s.options.length; i++) {
+    if (s.options[i].value === t) { s.value = t; break; }
+  }
+})();
+</script>
 </body>
 </html>
