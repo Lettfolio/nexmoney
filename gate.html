@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>Reviewer Sign-in | NexMoney</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: radial-gradient(1200px 700px at 70% -10%, #12294a 0%, #0a1424 45%, #060b16 100%);
+    color: #f2f6fc; padding: 24px;
+  }
+  .card {
+    width: 100%; max-width: 400px; background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.09); border-radius: 16px;
+    padding: 36px 32px; backdrop-filter: blur(12px);
+    box-shadow: 0 24px 60px rgba(0,0,0,0.5);
+  }
+  .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+  .brand-mark {
+    width: 40px; height: 40px; border-radius: 10px; background: #f36f23;
+    display: flex; align-items: center; justify-content: center; flex: none;
+  }
+  .brand-mark svg { width: 22px; height: 22px; }
+  .brand-name { font-size: 22px; font-weight: 800; letter-spacing: -0.5px; }
+  .brand-name span { color: #f36f23; }
+  .sub { color: #8fa0b8; font-size: 13px; margin-bottom: 26px; }
+  h1 { font-size: 17px; font-weight: 700; margin-bottom: 4px; }
+  .hint { color: #8fa0b8; font-size: 13px; margin-bottom: 20px; line-height: 1.5; }
+  label { display: block; font-size: 13px; font-weight: 600; color: #c7d2e2; margin: 14px 0 6px; }
+  input {
+    width: 100%; padding: 12px 14px; border-radius: 8px; font-size: 15px;
+    background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.14);
+    color: #f2f6fc; outline: none;
+  }
+  input:focus { border-color: #f36f23; }
+  button {
+    width: 100%; margin-top: 22px; padding: 13px; border: 0; border-radius: 8px;
+    background: #f36f23; color: #fff; font-size: 15px; font-weight: 700; cursor: pointer;
+  }
+  button:hover { background: #ff8342; }
+  .err {
+    display: none; margin-top: 16px; padding: 10px 12px; border-radius: 8px;
+    background: rgba(220,80,80,0.15); border: 1px solid rgba(220,80,80,0.4);
+    color: #ffb4b4; font-size: 13px;
+  }
+  .foot { margin-top: 24px; color: #61708a; font-size: 11.5px; line-height: 1.5; text-align: center; }
+</style>
+</head>
+<body>
+<main class="card">
+  <div class="brand">
+    <div class="brand-mark"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg></div>
+    <div class="brand-name">Nex<span>Money</span></div>
+  </div>
+  <p class="sub">Mortgage &amp; Insurance Brokers</p>
+  <h1>Reviewer sign-in</h1>
+  <p class="hint">This site is in pre-launch compliance review and isn't public yet. Please sign in with the reviewer details you've been given.</p>
+  <form id="f">
+    <label for="u">Username</label>
+    <input id="u" name="username" autocomplete="username" autocapitalize="none" required autofocus>
+    <label for="p">Password</label>
+    <input id="p" name="password" type="password" autocomplete="current-password" required>
+    <button type="submit">Sign in</button>
+    <div class="err" id="err">Those details weren't recognised — please check them and try again.</div>
+  </form>
+  <p class="foot">NexMoney is a trading style of NexMoney Ltd, an Appointed Representative of Stonebridge Mortgage Solutions Ltd (FCA FRN 610875).</p>
+</main>
+<script>
+(function () {
+  var had = /(?:^|;\s*)nx_review=/.test(document.cookie);
+  if (had) {
+    // We were bounced back here with a cookie set — the details were wrong.
+    document.getElementById('err').style.display = 'block';
+    document.cookie = 'nx_review=; path=/; max-age=0';
+  }
+  document.getElementById('f').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var u = document.getElementById('u').value.trim().toLowerCase();
+    var p = document.getElementById('p').value.trim();
+    document.cookie = 'nx_review=' + encodeURIComponent(u + ':' + p) + '; path=/; max-age=2592000; SameSite=Lax';
+    location.replace('/');
+  });
+})();
+</script>
+</body>
+</html>
