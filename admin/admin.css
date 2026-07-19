@@ -367,6 +367,8 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
 .card .cn { font-weight: 600; font-size: 13.5px; color: var(--dark); }
 .card .cd { font-size: 12px; color: var(--muted); margin-top: 3px; }
 .card .flags { margin-top: 7px; display: flex; gap: 4px; flex-wrap: wrap; }
+/* Touch/mobile fallback for drag-and-drop — hidden on desktop, shown on narrow viewports. */
+.card-stage-move { display: none; }
 
 /* Drag & drop */
 .card.dragging { opacity: .4; }
@@ -597,6 +599,9 @@ main input:focus, main select:focus, main textarea:focus,
   background: transparent;
 }
 
+/* Hint text that swaps between desktop and mobile wording (see .mobile-hint in the mobile block). */
+.mobile-hint { display: none; }
+
 /* ---------- Mobile ---------- */
 @media (max-width: 760px) {
   body { font-size: 13.5px; }
@@ -608,6 +613,26 @@ main input:focus, main select:focus, main textarea:focus,
     padding: 8px 10px; gap: 8px;
     overflow-x: auto; -webkit-overflow-scrolling: touch;
     background: linear-gradient(90deg, var(--side-top), var(--side-bottom));
+  }
+  /* Scroll affordance: a subtle fade pinned to the sidebar's right edge, signalling the
+     nav tabs (Reports, Data health, Emails, Settings) that sit off-screen to the right. */
+  .sidebar::after {
+    content: "";
+    position: sticky; right: 0;
+    align-self: stretch;
+    flex: 0 0 30px; width: 30px; margin-left: -30px;
+    pointer-events: none; z-index: 1;
+    background: linear-gradient(90deg, rgba(14,42,71,0), var(--side-bottom));
+  }
+  /* Desktop/mobile hint text swap (e.g. the pipeline board hint). */
+  .desktop-hint { display: none; }
+  .mobile-hint { display: inline; }
+  /* Show the per-card stage picker so touch users can progress a case without HTML5 drag. */
+  .card-stage-move {
+    display: block; width: 100%; margin-top: 8px;
+    padding: 6px 8px; font-size: 12.5px;
+    border: 1px solid var(--border-strong); border-radius: 8px;
+    background: #fff; color: var(--dark);
   }
   .sidebar-logo { border-bottom: none; margin-bottom: 0; padding: 0 10px 0 2px; font-size: 17px; }
   .sidenav { flex-direction: row; padding: 0; gap: 2px; }

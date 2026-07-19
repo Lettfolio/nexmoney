@@ -1,7 +1,18 @@
 /* NexMoney Back Office v2 — Watchtower */
 const SUPABASE_URL = "https://sclghkmvzpwtmnzbkaoe.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNjbGdoa212enB3dG1uemJrYW9lIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMxNzI1MDEsImV4cCI6MjA5ODc0ODUwMX0.LNm4vE071b359t8ACq459nVmQCUkk7BSVeGjddqNztg";
-const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+let db;
+try {
+  db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+} catch (e) {
+  // Supabase SDK failed to load (CDN outage, ad-blocker, proxy, SRI mismatch).
+  // Show a visible message instead of a silent blank page, then stop.
+  const showFail = () => {
+    document.body.innerHTML = '<div style="max-width:460px;margin:15vh auto;padding:24px;font-family:system-ui,sans-serif;text-align:center;color:#333"><h1 style="font-size:20px;margin:0 0 12px">Something went wrong loading the app</h1><p style="margin:0 0 16px;color:#666">We couldn\'t load a required component. Check your connection and reload.</p><button onclick="location.reload()" style="padding:10px 20px;border:0;border-radius:6px;background:#1a5;color:#fff;font-size:15px;cursor:pointer">Reload</button></div>';
+  };
+  if (document.body) showFail(); else document.addEventListener("DOMContentLoaded", showFail);
+  throw e;
+}
 // Derived at runtime so it can never drift from the deployed origin
 // (works on nexmoney-two.vercel.app now and www.nexmoney.co.uk later).
 // The origin(s) must be listed in Supabase Auth -> URL Configuration -> Redirect URLs.
@@ -60,6 +71,11 @@ const SETTING_FIELDS = [
 const $ = (s) => document.querySelector(s);
 const esc = (s) => (s == null ? "" : String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])));
 const fmtD = (d) => (d ? new Date(d).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "—");
+// UK-local (Europe/London) date-only string YYYY-MM-DD. en-CA gives ISO-style ordering.
+// Used for "today"/overdue/horizon comparisons so they don't drift to the UTC calendar date after midnight BST.
+const localDateStr = (d) => new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/London", year: "numeric", month: "2-digit", day: "2-digit" }).format(d ? new Date(d) : new Date());
+// UK-local YYYY-MM month bucket for report grouping.
+const localMonthStr = (d) => localDateStr(d).slice(0, 7);
 const fmtM = (n) => (n == null || n === "" ? "—" : Number(n).toLocaleString("en-GB", { style: "currency", currency: "GBP", maximumFractionDigits: 0 }));
 // Exact-pence money — for fee figures on the case detail / evidence pack only. Dashboards keep fmtM (whole pounds).
 const fmtM2 = (n) => (n == null || n === "" ? "—" : Number(n).toLocaleString("en-GB", { style: "currency", currency: "GBP", minimumFractionDigits: 2, maximumFractionDigits: 2 }));
@@ -119,6 +135,20 @@ function toast(msg) {
   t._h = setTimeout(() => t.classList.add("hidden"), 3200);
 }
 
+/* Stronger confirmation for irreversible hard-deletes of regulated records.
+   Requires the user to type DELETE (guards against a misclick past a plain confirm)
+   and flags FCA / MCOB record-retention. `extra` adds a record-specific warning line. */
+function confirmHardDelete(what, extra) {
+  const typed = prompt(
+    `${what}\n\n` +
+    "This permanently deletes the record and CANNOT be undone. Completed cases may be " +
+    "subject to FCA / MCOB record-retention rules — check before deleting." +
+    (extra ? `\n\n${extra}` : "") +
+    "\n\nType DELETE to confirm:"
+  );
+  return typed != null && typed.trim().toUpperCase() === "DELETE";
+}
+
 /* Explicit error state for a view container — never show a reassuring
    empty state when the underlying query actually failed. */
 function renderLoadError(containerSelector, error, retryFn) {
@@ -176,13 +206,9 @@ function showLogin() {
   $("#assistant-drawer").classList.add("hidden");
 }
 async function showApp(session) {
-  $("#login-view").classList.add("hidden");
-  $("#app-view").classList.remove("hidden");
-  $("#assistant-fab").classList.remove("hidden");
-  $("#user-email").textContent = session.user.email;
-  await loadSettings();
-  await loadTeam(session);
-  // Gate: only back-office staff may use the admin SPA (mirrors introducer.html).
+  // Gate FIRST: only back-office staff may use the admin SPA (mirrors introducer.html).
+  // Done before revealing the shell or reading settings/team so a non-staff account
+  // never sees the admin UI or triggers those reads.
   const { data: myProfile } = await db.from("profiles").select("role").eq("id", session.user.id).single();
   if (!myProfile || myProfile.role !== "staff") {
     await db.auth.signOut();
@@ -190,6 +216,12 @@ async function showApp(session) {
     toast("This login doesn't have back-office access.");
     return;
   }
+  $("#login-view").classList.add("hidden");
+  $("#app-view").classList.remove("hidden");
+  $("#assistant-fab").classList.remove("hidden");
+  $("#user-email").textContent = session.user.email;
+  await loadSettings();
+  await loadTeam(session);
   nav("dashboard");
 }
 async function loadTeam(session) {
@@ -496,7 +528,7 @@ async function loadRetention() {
 }
 
 async function loadTasks() {
-  const horizon = new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10);
+  const horizon = localDateStr(Date.now() + 14 * 86400000);
   const { data: raw, error } = await db.from("case_tasks")
     .select("id,title,due_date,case_id,assigned_to,cases(clients(first_name,last_name))")
     .is("done_at", null)
@@ -504,9 +536,11 @@ async function loadTasks() {
     .order("due_date")
     .limit(40);
   if (error) { renderLoadError("#tasks-list", error, loadTasks); return; }
-  const tasks = (raw || []).filter((t) => tasksScope === "all" || !t.assigned_to || t.assigned_to === (ME && ME.id)).slice(0, 15);
+  const filtered = (raw || []).filter((t) => tasksScope === "all" || !t.assigned_to || t.assigned_to === (ME && ME.id));
+  const tasks = filtered.slice(0, 15);
+  const todayStr = localDateStr();
   $("#tasks-list").innerHTML = (tasks || []).length ? tasks.map((t) => {
-    const overdue = t.due_date && t.due_date < new Date().toISOString().slice(0, 10);
+    const overdue = t.due_date && t.due_date < todayStr;
     const who = t.cases?.clients ? [t.cases.clients.first_name, t.cases.clients.last_name].filter(Boolean).join(" ") : "";
     return `<div class="row-item">
       <div class="row-main">
@@ -516,8 +550,8 @@ async function loadTasks() {
       ${overdue ? '<span class="badge red">overdue</span>' : ""}
       <button class="btn btn-sm" onclick="doneTask('${t.id}')">✓ Done</button>
     </div>`;
-  }).join("") : '<div class="empty">Nothing due in the next 14 days.</div>';
-  panelCount("#tasks-list", tasks.length, true);
+  }).join("") + (filtered.length > tasks.length ? `<div class="empty">…and ${filtered.length - tasks.length} more due.</div>` : "") : '<div class="empty">Nothing due in the next 14 days.</div>';
+  panelCount("#tasks-list", filtered.length, true);
 }
 window.doneTask = async function (id) {
   await db.from("case_tasks").update({ done_at: new Date().toISOString() }).eq("id", id);
@@ -758,6 +792,9 @@ async function loadPipeline() {
             ${c.submitted_at && !["completed","not_proceeding"].includes(c.stage) ? `<span class="badge grey">📤 sub ${fmtD(c.submitted_at)}</span>` : ""}
             ${c.fee_status === "paid" ? '<span class="badge green">Fee paid</span>' : c.fee_status === "requested" ? '<span class="badge amber">Fee requested</span>' : ""}
           </div>
+          <select class="card-stage-move" aria-label="Move to stage" title="Move to stage" onclick="event.stopPropagation()" onchange="moveCaseToStage('${c.id}', this.value)">
+            ${STAGES.map(([k, l]) => `<option value="${k}" ${k === c.stage ? "selected" : ""}>${l}</option>`).join("")}
+          </select>
         </div>`;
       }).join("")}
     </div>`).join("");
@@ -780,32 +817,38 @@ function wireBoardDnD() {
   document.querySelectorAll("#board .col").forEach((col) => {
     col.addEventListener("dragover", (e) => { e.preventDefault(); col.classList.add("dragover"); });
     col.addEventListener("dragleave", () => col.classList.remove("dragover"));
-    col.addEventListener("drop", async (e) => {
+    col.addEventListener("drop", (e) => {
       e.preventDefault();
       col.classList.remove("dragover");
       const caseId = e.dataTransfer.getData("text/plain");
-      if (!caseId) return;
-      const targetStage = col.dataset.stage;
-      const { data: cRow } = await db.from("cases").select("stage,protection_status,clients(first_name,last_name)").eq("id", caseId).single();
-      if (cRow && protectionGateBlocks(cRow, targetStage)) {
-        toast("🛡️ Record the protection conversation before submitting — set a protection status");
-        loadPipeline(); // put the card back
-        return;
-      }
-      if (targetStage === "completed" || targetStage === "not_proceeding") {
-        const nm = (cRow && cRow.clients ? [cRow.clients.first_name, cRow.clients.last_name].filter(Boolean).join(" ") : "") || "this case";
-        const msg = targetStage === "completed"
-          ? `Move ${nm} to Completed? This will trigger completion emails and retention setup.`
-          : `Move ${nm} to Not Proceeding? This hides the case from active views.`;
-        if (!confirm(msg)) { loadPipeline(); return; } // abort — snap the card back
-      }
-      const { error } = await db.from("cases").update({ stage: col.dataset.stage }).eq("id", caseId);
-      if (error) return toast("Error: " + error.message);
-      toast("Moved to " + (STAGE_LABEL[col.dataset.stage] || col.dataset.stage));
-      loadPipeline();
+      if (caseId) moveCaseToStage(caseId, col.dataset.stage);
     });
   });
 }
+/* Move a case to a new stage. Shared by desktop drag-and-drop (the drop handler above)
+   and the per-card "Move to stage" dropdown, which gives touch/mobile users — for whom
+   HTML5 drag-and-drop does not fire — a working way to progress a case from the board. */
+window.moveCaseToStage = async function (caseId, targetStage) {
+  if (!caseId || !targetStage) return;
+  const { data: cRow } = await db.from("cases").select("stage,protection_status,clients(first_name,last_name)").eq("id", caseId).single();
+  if (cRow && cRow.stage === targetStage) return; // no-op (e.g. dropped back on the same column)
+  if (cRow && protectionGateBlocks(cRow, targetStage)) {
+    toast("🛡️ Record the protection conversation before submitting — set a protection status");
+    loadPipeline(); // put the card back
+    return;
+  }
+  if (targetStage === "completed" || targetStage === "not_proceeding") {
+    const nm = (cRow && cRow.clients ? [cRow.clients.first_name, cRow.clients.last_name].filter(Boolean).join(" ") : "") || "this case";
+    const msg = targetStage === "completed"
+      ? `Move ${nm} to Completed? This will trigger completion emails and retention setup.`
+      : `Move ${nm} to Not Proceeding? This hides the case from active views.`;
+    if (!confirm(msg)) { loadPipeline(); return; } // abort — snap the card back
+  }
+  const { error } = await db.from("cases").update({ stage: targetStage }).eq("id", caseId);
+  if (error) return toast("Error: " + error.message);
+  toast("Moved to " + (STAGE_LABEL[targetStage] || targetStage));
+  loadPipeline();
+};
 function renderPipelineTable(filtered) {
   $("#board").classList.add("hidden");
   $("#board-hint").classList.add("hidden");
@@ -967,7 +1010,7 @@ window.setGiStatus = async function (caseId, status) {
 };
 window.protCallTask = async function (caseId) {
   const { data: c } = await db.from("cases").select("assigned_to").eq("id", caseId).single();
-  const due = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+  const due = localDateStr(Date.now() + 86400000);
   const { error } = await db.from("case_tasks").insert({
     case_id: caseId, title: "Protection call", due_date: due,
     created_by: (ME && ME.id) || null, assigned_to: (c && c.assigned_to) || (ME && ME.id) || null,
@@ -1082,7 +1125,7 @@ window.openCase = async function (id) {
     <h3>${id ? "Case details" : "New case"}</h3>
     ${c.retention_source_case_id ? `<p class="panel-sub" style="margin-top:-8px;">🔁 Retention opportunity — auto-created from a completed case. <span class="t" style="cursor:pointer;text-decoration:underline;" onclick="openCase('${c.retention_source_case_id}')">View original case</span></p>` : ""}
     ${c.nps_score != null ? `<p class="panel-sub" style="margin-top:-8px;">Client review score: <strong style="color:${c.nps_score >= 9 ? "var(--green)" : c.nps_score >= 7 ? "var(--amber)" : "var(--red)"};">${c.nps_score}/10</strong></p>` : ""}
-    <form id="case-form" class="form-grid">
+    <form id="case-form" class="form-grid" data-case-id="${id || ""}">
       <label class="full">Client
         <select name="client_id" required><option value="">— select client —</option>${clientOpts}</select>
       </label>
@@ -1138,7 +1181,7 @@ window.openCase = async function (id) {
             <div style="${t.done_at ? "text-decoration:line-through;color:var(--muted);" : ""}">${esc(t.title)}</div>
             <div class="s">${t.due_date ? "due " + fmtD(t.due_date) : ""}${t.done_at ? " · done" : ""}</div>
           </div>
-          ${t.done_at ? "" : `<button class="btn btn-sm" onclick="doneTaskInCase('${t.id}','${id}')">✓</button>`}
+          ${t.done_at ? "" : `<button class="btn btn-sm" aria-label="Mark task done" title="Mark task done" onclick="doneTaskInCase('${t.id}','${id}')">✓</button>`}
         </div>`).join("") || '<div class="empty">No tasks.</div>'}</div>
     </div>
     <div style="margin-top:14px;">
@@ -1195,7 +1238,8 @@ window.openCase = async function (id) {
   };
   if (id) {
     $("#del-case-btn").onclick = async () => {
-      if (!confirm("Delete this case? This cannot be undone.")) return;
+      const extra = c.stage === "completed" ? "⚠ This case is COMPLETED — deleting removes its fee/commission history from your records." : null;
+      if (!confirmHardDelete("Delete this case?", extra)) return;
       await db.from("cases").delete().eq("id", id);
       closeModal(); toast("Case deleted"); loadPipeline(); loadDashboard();
     };
@@ -1238,7 +1282,15 @@ async function handleOfferUpload(caseId) {
   if (!file) return;
   if (file.type !== "application/pdf") return toast("Please choose a PDF");
   if (file.size > 15 * 1024 * 1024) return toast("PDF too large (max 15MB)");
+  const btn = $("#act-offer"), fileInput = $("#offer-file");
+  if (btn && btn.disabled) return; // re-entry guard: a parse is already running
+  const btnLabel = btn ? btn.textContent : "";
+  // Persistent busy state for the ~20s parse: disable the trigger + file input and
+  // keep a visible "reading…" label until the request settles (the toast auto-hides after 3.2s).
+  if (btn) { btn.disabled = true; btn.textContent = "⏳ Reading offer… (~20s)"; }
+  if (fileInput) fileInput.disabled = true;
   toast("Reading offer with AI — this takes ~20 seconds…");
+  try {
   const buf = await file.arrayBuffer();
   let bin = "";
   const bytes = new Uint8Array(buf);
@@ -1261,9 +1313,15 @@ async function handleOfferUpload(caseId) {
   const path = `${caseId}/${Date.now()}-${file.name.replace(/[^A-Za-z0-9._-]/g, "_")}`;
   const { error: upErr } = await db.storage.from("offers").upload(path, file, { contentType: "application/pdf", upsert: true });
   if (!upErr) await db.from("cases").update({ offer_doc_path: path }).eq("id", caseId);
+  else toast("Offer read, but saving the PDF failed — the details below are filled in, but please re-upload to store the document.");
 
-  // Apply extracted fields to the open form for review
+  // Apply extracted fields to the open form for review — but only if the modal still
+  // shows the case we parsed for. After the ~20s await the adviser may have opened a
+  // different case; writing offer fields into the wrong form could persist bad data.
   const form = $("#case-form");
+  if (!form || form.dataset.caseId !== String(caseId)) {
+    return toast("Offer read ✓ — reopen this case to fill in the details (the case view changed while reading).");
+  }
   const setVal = (name, v) => { if (v != null && v !== "" && form.elements[name]) form.elements[name].value = v; };
   setVal("lender", offer.lender);
   setVal("product_name", offer.product_name);
@@ -1285,6 +1343,11 @@ async function handleOfferUpload(caseId) {
     await db.from("case_notes").insert({ case_id: caseId, body: "From mortgage offer (AI-read): " + extras.join(" | "), created_by: user.id });
   }
   toast("Offer read ✓ — details filled in below. Check them, then press Save.");
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = btnLabel; }
+    // Re-enable and clear the picker so the same file can be chosen again if needed.
+    if (fileInput) { fileInput.disabled = false; fileInput.value = ""; }
+  }
 }
 
 async function queueEmail(caseId, clientId, type, c) {
@@ -1297,7 +1360,7 @@ async function queueEmail(caseId, clientId, type, c) {
     if (!cl?.email) return toast("This client has no email address — add one first.");
     if (type === "fee_request" && !(c.broker_fee > 0)) return toast("Set a broker fee amount on the case first.");
     if (type === "fee_request" && (!settings.bank_sort_code || !settings.bank_account_number)) return toast("Add your bank details in Settings first.");
-    if (type === "review_request" && !settings.google_review_link) return toast("Add your Google review link in Settings first.");
+    if (type === "review_request" && !(settings.google_review_link || settings.review_platform_link)) return toast("Add your review link in Settings first.");
     if (type === "rate_end_reminder" && !c.rate_end_date) return toast("Set the rate end date on the case first.");
     if (!confirm(`Send ${EMAIL_LABEL[type].toLowerCase()} email to ${cl.email}?`)) return;
     const { error } = await db.from("email_queue").insert({ case_id: caseId, client_id: clientId, email_type: type, to_email: cl.email });
@@ -1335,10 +1398,11 @@ window.openClient = async function (id) {
   let c = {};
   let cases = [];
   if (id) {
-    const [{ data: cl }, { data: cs }] = await Promise.all([
+    const [{ data: cl, error: clErr }, { data: cs }] = await Promise.all([
       db.from("clients").select("*").eq("id", id).single(),
       db.from("cases").select("*").eq("client_id", id).order("created_at", { ascending: false }),
     ]);
+    if (clErr || !cl) return toast("Client not found — it may have been deleted or you don't have access.");
     c = cl; cases = cs || [];
   }
   $("#modal").innerHTML = `
@@ -1394,7 +1458,11 @@ window.openClient = async function (id) {
     closeModal(); toast("Client saved"); loadClients();
   };
   if (id) $("#del-client-btn").onclick = async () => {
-    if (!confirm("Delete this client and all their cases?")) return;
+    const completed = cases.filter((x) => x.stage === "completed").length;
+    const extra = completed
+      ? `⚠ This client has ${completed} COMPLETED case${completed === 1 ? "" : "s"} with regulated records that will be permanently destroyed.`
+      : null;
+    if (!confirmHardDelete("Delete this client and all their cases?", extra)) return;
     await db.from("clients").delete().eq("id", id);
     closeModal(); toast("Client deleted"); loadClients();
   };
@@ -1548,7 +1616,8 @@ function renderImportPreview() {
 }
 
 async function runImport() {
-  const selected = [...document.querySelectorAll(".imp-row:checked")].map((c) => importRows[Number(c.dataset.i)]);
+  const selectedEls = [...document.querySelectorAll(".imp-row:checked")];
+  const selected = selectedEls.map((c) => importRows[Number(c.dataset.i)]);
   if (!selected.length) return toast("Nothing selected");
   $("#import-save-btn").disabled = true;
   $("#import-status").textContent = "Saving…";
@@ -1613,6 +1682,9 @@ async function runImport() {
         await db.from("case_notes").insert({ case_id: nc.id, body: "AI bulk import" + (r.note ? " | " + r.note : "") });
         nCases++;
       }
+      // Row succeeded — uncheck it so a retry after a partial failure doesn't
+      // re-import this row and create duplicate cases.
+      if (selectedEls[i]) selectedEls[i].checked = false;
     } catch (e) {
       rowErrors.push({ row: i + 1, name: r.client_name || "(no name)", error: e.message || String(e) });
       console.error(e);
@@ -1649,18 +1721,30 @@ async function loadLeads() {
         ${l.message ? `<div class="s">“${esc(l.message.slice(0, 140))}${l.message.length > 140 ? "…" : ""}”</div>` : ""}
       </div>
       <button class="btn btn-sm btn-primary" onclick="acceptLead('${l.id}')">Accept</button>
-      <button class="btn btn-sm btn-danger" onclick="discardLead('${l.id}')">✕</button>
+      <button class="btn btn-sm btn-danger" aria-label="Discard lead" title="Discard lead" onclick="discardLead('${l.id}')">✕</button>
     </div>`).join("") : '<div class="empty">No new leads. Website enquiries appear here the moment they\'re sent.</div>';
   panelCount("#leads-list", n, true);
 }
 window.acceptLead = async function (id) {
-  const { data: l } = await db.from("leads").select("*").eq("id", id).single();
-  if (!l) return;
+  const btn = (typeof event !== "undefined" && event && (event.currentTarget || event.target)) || null;
+  if (btn) { if (btn.disabled) return; btn.disabled = true; } // guard against double-click
+  // Atomically claim the lead: only converts if it's still 'new', so a fast double-click
+  // or a second adviser accepting the same lead can't create duplicate clients/cases/emails.
+  const { data: claimed, error: claimErr } = await db.from("leads")
+    .update({ status: "converted" }).eq("id", id).eq("status", "new").select();
+  if (claimErr) { if (btn) btn.disabled = false; return toast("Error: " + claimErr.message); }
+  if (!claimed || !claimed.length) { if (btn) btn.disabled = false; return toast("This lead has already been accepted."); }
+  const l = claimed[0];
   const kindMap = { "first-time-buyer": "first_time_buyer", "remortgage": "remortgage", "home-mover": "purchase", "buy-to-let": "buy_to_let" };
   const { data: client, error: cErr } = await db.from("clients")
     .insert({ first_name: "", last_name: l.name, email: l.email, phone: l.phone })
     .select().single();
-  if (cErr) return toast("Error: " + cErr.message);
+  if (cErr) {
+    // Roll the claim back so the lead reappears in the inbox and can be retried.
+    await db.from("leads").update({ status: "new" }).eq("id", id);
+    if (btn) btn.disabled = false;
+    return toast("Error: " + cErr.message);
+  }
   const { data: nc, error } = await db.from("cases").insert({
     client_id: client.id,
     case_kind: kindMap[l.enquiry_type] || "other",
@@ -1668,13 +1752,19 @@ window.acceptLead = async function (id) {
     lead_source: "Website",
     assigned_to: (ME && ME.id) || null,
   }).select("id").single();
-  if (error) return toast("Error: " + error.message);
+  if (error) {
+    // Undo the partial accept: remove the just-created client, then release the lead.
+    await db.from("clients").delete().eq("id", client.id);
+    await db.from("leads").update({ status: "new" }).eq("id", id);
+    if (btn) btn.disabled = false;
+    return toast("Error: " + error.message);
+  }
   await db.from("case_notes").insert({
     case_id: nc.id,
     body: `Website enquiry (${l.enquiry_type || "general"})${l.property_value ? " · property value " + l.property_value : ""}${l.message ? " · “" + l.message + "”" : ""}`,
   });
   if (l.email) await db.from("email_queue").insert({ case_id: nc.id, client_id: client.id, email_type: "welcome", to_email: l.email });
-  await db.from("leads").update({ status: "converted", converted_case_id: nc.id }).eq("id", id);
+  await db.from("leads").update({ converted_case_id: nc.id }).eq("id", id);
   runAutomation(true);
   toast("Lead accepted — case created, welcome email queued");
   loadLeads();
@@ -1882,9 +1972,10 @@ async function buildEvidencePack(caseId) {
 
 /* ---------- Reports ---------- */
 function renderMonthReport(all) {
-  const mv = $("#report-month").value || new Date().toISOString().slice(0, 7);
+  const mv = $("#report-month").value || localMonthStr();
   if (!$("#report-month").value) $("#report-month").value = mv;
-  const inMonth = (d) => d && String(d).slice(0, 7) === mv;
+  // Bucket on the UK-local month so this card agrees with the annual chart/YTD (which use local getMonth/getFullYear).
+  const inMonth = (d) => d && localMonthStr(d) === mv;
   const sub = all.filter((c) => inMonth(c.submitted_at));
   const done = all.filter((c) => inMonth(c.completed_at));
   const sum = (rows, k) => rows.reduce((s, c) => s + Number(c[k] || 0), 0);
