@@ -155,6 +155,30 @@ function fmtAgo(d) {
 }
 function initials(id) { const n = staffName(id); return n === "—" ? "" : n.split(/[\s@.]+/).filter(Boolean).map((w) => w[0]).slice(0, 2).join("").toUpperCase(); }
 
+/* ---------- Typed notes (SP3a) — prefix convention, NO schema change ----------
+   Classify a note body by a leading "Call:/Email:/Meeting:" prefix (case-insensitive —
+   matching Sprint 2's "Call: " convention). Un-prefixed bodies = generic note. Returns the
+   display icon and the body with the prefix stripped, so ONE helper drives both the case-modal
+   notes list and the client timeline. */
+const NOTE_ICON = { call: "📞", email: "✉️", meeting: "🤝", note: "📝" };
+const NOTE_PREFIX = { note: "", call: "Call: ", email: "Email: ", meeting: "Meeting: " };
+function noteType(body) {
+  const b = body == null ? "" : String(body);
+  const m = b.match(/^\s*(call|email|meeting)\s*:\s*/i);
+  const type = m ? m[1].toLowerCase() : "note";
+  return { type, icon: NOTE_ICON[type], cleanBody: m ? b.slice(m[0].length) : b };
+}
+// A single case-modal note row (icon + prefix-stripped body + timestamp). Shared by the initial
+// render and the in-place prepend paths so typed icons stay consistent everywhere notes render.
+function noteRowHtml(body, whenStr) {
+  const nt = noteType(body);
+  return `<div class="note"><span class="note-ic" title="${nt.type}">${nt.icon}</span>${esc(nt.cleanBody)}<div class="nd">${esc(whenStr)}</div></div>`;
+}
+// Timeline day-divider label, e.g. "Mon 20 Jul" (Europe/London — matches localDateStr grouping).
+const tlDayLabel = (ts) => new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", weekday: "short", day: "numeric", month: "short" }).format(new Date(ts)).replace(",", "");
+// Relative age that reads correctly for FUTURE items (upcoming appointments show "in Nd").
+const tlWhen = (ts) => { const t = new Date(ts).getTime(); if (isNaN(t)) return ""; return t > Date.now() ? "in " + Math.max(1, Math.ceil((t - Date.now()) / 86400000)) + "d" : fmtAgo(ts); };
+
 const LENDER_DOMAINS = {
   "halifax": "halifax.co.uk", "hsbc": "hsbc.co.uk", "santander": "santander.co.uk",
   "natwest": "natwest.com", "nationwide": "nationwide.co.uk", "barclays": "barclays.co.uk",
@@ -1335,11 +1359,17 @@ window.openCase = async function (id) {
     </div>
     <div style="margin-top:14px;">
       <h3 style="font-size:14px;">Notes</h3>
-      <div style="display:flex;gap:8px;margin:8px 0;">
+      <div style="display:flex;gap:8px;margin:8px 0 0;">
         <input id="new-note" placeholder="Add a note…" style="flex:1;">
         <button class="btn btn-sm" id="add-note-btn">Add</button>
       </div>
-      <div id="notes-list">${notes.map((n) => `<div class="note">${esc(n.body)}<div class="nd">${new Date(n.created_at).toLocaleString("en-GB")}</div></div>`).join("") || '<div class="empty">No notes yet.</div>'}</div>
+      <div class="type-chips" id="note-type-chips">
+        <button type="button" class="tl-chip active" data-type="note">📝 Note</button>
+        <button type="button" class="tl-chip" data-type="call">📞 Call</button>
+        <button type="button" class="tl-chip" data-type="email">✉️ Email</button>
+        <button type="button" class="tl-chip" data-type="meeting">🤝 Meeting</button>
+      </div>
+      <div id="notes-list">${notes.map((n) => noteRowHtml(n.body, new Date(n.created_at).toLocaleString("en-GB"))).join("") || '<div class="empty">No notes yet.</div>'}</div>
     </div>
     <div class="action-bar">
       <button class="btn btn-sm" id="act-fee">💷 Email fee request</button>
@@ -1440,8 +1470,11 @@ window.openCase = async function (id) {
     };
     const submitNote = async () => {
       const input = $("#new-note");
-      const body = input.value.trim();
-      if (!body) return;
+      const raw = input.value.trim();
+      if (!raw) return;
+      // Typed-note prefix (SP3a): the active chip prefixes the saved body, exactly matching Log call.
+      const typeBtn = $("#note-type-chips .tl-chip.active");
+      const body = (NOTE_PREFIX[(typeBtn && typeBtn.dataset.type) || "note"] || "") + raw;
       const { data: { user } } = await db.auth.getUser();
       const { error } = await db.from("case_notes").insert({ case_id: id, body, created_by: user.id });
       if (error) return toast("Error: " + error.message);
@@ -1449,15 +1482,20 @@ window.openCase = async function (id) {
       const list = $("#notes-list");
       const empty = list.querySelector(".empty");
       if (empty) empty.remove();
-      const row = document.createElement("div");
-      row.className = "note";
-      row.innerHTML = `${esc(body)}<div class="nd">${new Date().toLocaleString("en-GB")}</div>`;
-      list.insertBefore(row, list.firstChild);
+      const wrap = document.createElement("div");
+      wrap.innerHTML = noteRowHtml(body, new Date().toLocaleString("en-GB"));
+      list.insertBefore(wrap.firstChild, list.firstChild);
       input.value = "";
       input.focus();
     };
     $("#add-note-btn").onclick = submitNote;
     $("#new-note").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submitNote(); } });
+    // Note type chips: single-select, default Note (SP3a).
+    $("#note-type-chips").querySelectorAll(".tl-chip").forEach((b) => b.onclick = () => {
+      const cur = $("#note-type-chips .tl-chip.active"); if (cur) cur.classList.remove("active");
+      b.classList.add("active");
+      const inp = $("#new-note"); if (inp) inp.focus();
+    });
     $("#act-fee").onclick = (e) => queueEmail(id, c.client_id, "fee_request", c, e);
     $("#act-review").onclick = (e) => queueEmail(id, c.client_id, "review_request", c, e);
     $("#act-reminder").onclick = (e) => queueEmail(id, c.client_id, "rate_end_reminder", c, e);
@@ -1517,10 +1555,9 @@ window.openCase = async function (id) {
         if (nlist) {
           const emptyN = nlist.querySelector(".empty");
           if (emptyN) emptyN.remove();
-          const nrow = document.createElement("div");
-          nrow.className = "note";
-          nrow.innerHTML = `${esc(noteBody)}<div class="nd">${new Date().toLocaleString("en-GB")}</div>`;
-          nlist.insertBefore(nrow, nlist.firstChild);
+          const wrap = document.createElement("div");
+          wrap.innerHTML = noteRowHtml(noteBody, new Date().toLocaleString("en-GB"));
+          nlist.insertBefore(wrap.firstChild, nlist.firstChild);
         }
         // Keep the summary "Last note" line current.
         const noteVal = $("#cs-note-val");
@@ -1720,9 +1757,85 @@ async function loadClients(filter = "") {
 $("#client-search").addEventListener("input", (e) => loadClients(e.target.value));
 $("#new-client-btn").addEventListener("click", () => openClient(null));
 
+/* ---------- Unified client timeline (SP3b) ----------
+   A chronological, newest-first merge across ALL a client's cases plus client-level items.
+   Sources are all tables app.js already reads. Batched: the client's case ids are gathered
+   ONCE, then ONE query per table (.in("case_id", ids), or .eq("client_id") where the row
+   carries client linkage) — no per-case loops. Every source is wrapped so a blocked/absent
+   table in prod degrades to an empty source rather than breaking the modal. */
+const TL_CATS = [["all", "All"], ["call", "Calls"], ["email", "Emails"], ["meeting", "Meetings"], ["note", "Notes"], ["appointment", "Appointments"], ["system", "System"]];
+async function buildClientTimeline(clientId, cases) {
+  const ids = (cases || []).map((c) => c.id);
+  const caseLabel = {};
+  (cases || []).forEach((c) => { caseLabel[c.id] = (KINDS.find((k) => k[0] === c.case_kind) || [])[1] || c.case_kind || "Case"; });
+  const q = (p) => p.then((r) => (r && r.data) || []).catch(() => []);
+  let notes = [], events = [], appts = [], emails = [], sms = [], ffs = [], inbound = [];
+  try {
+    [notes, events, appts, emails, sms, ffs, inbound] = await Promise.all([
+      ids.length ? q(db.from("case_notes").select("body,created_at,case_id").in("case_id", ids)) : [],
+      ids.length ? q(db.from("case_events").select("event,detail,created_at,case_id").in("case_id", ids)) : [],
+      q(db.from("appointments").select("title,starts_at,location,case_id,client_id").eq("client_id", clientId)),
+      ids.length ? q(db.from("email_queue").select("email_type,status,subject,sent_at,created_at,case_id").in("case_id", ids)) : [],
+      ids.length ? q(db.from("sms_queue").select("sms_type,status,sent_at,created_at,case_id").in("case_id", ids)) : [],
+      ids.length ? q(db.from("fact_finds").select("status,submitted_at,created_at,case_id").in("case_id", ids)) : [],
+      ids.length ? q(db.from("case_emails").select("subject,snippet,received_at,created_at,case_id").in("case_id", ids)) : [],
+    ]);
+  } catch (_) { /* keep whatever resolved */ }
+  const items = [];
+  const push = (ts, cat, icon, title, caseId) => { if (!ts) return; items.push({ ts, cat, icon, title, caseLabel: caseLabel[caseId] }); };
+  notes.forEach((n) => { const nt = noteType(n.body); push(n.created_at, nt.type, nt.icon, esc(nt.cleanBody) || "(note)", n.case_id); });
+  emails.filter((e) => e.status === "sent" || e.status === "failed").forEach((e) => {
+    const lbl = EMAIL_LABEL[e.email_type] || e.email_type || "Email";
+    push(e.sent_at || e.created_at, "email", "✉️", esc(lbl) + (e.status === "failed" ? ' <span class="tl-fail">failed</span>' : ""), e.case_id);
+  });
+  sms.filter((s) => s.status === "sent" || s.status === "failed").forEach((s) => {
+    push(s.sent_at || s.created_at, "email", "💬", esc(smsTypeLabel(s.sms_type)) + " SMS" + (s.status === "failed" ? ' <span class="tl-fail">failed</span>' : ""), s.case_id);
+  });
+  appts.forEach((a) => { push(a.starts_at, "appointment", "📅", esc(a.title || "Appointment") + (a.location ? ` <span class="tl-muted">· ${esc(a.location)}</span>` : ""), a.case_id); });
+  // Inbound client emails (Outlook sync) — Priya's handover gap: correspondence must show both directions.
+  inbound.forEach((m) => { push(m.received_at || m.created_at, "email", "📥", esc(m.subject || m.snippet || "Email from client") + ' <span class="tl-muted">· from client</span>', m.case_id); });
+  ffs.filter((f) => f.status === "sent" || f.status === "submitted").forEach((f) => { push(f.submitted_at || f.created_at, "system", "📋", "Fact-find " + esc(f.status), f.case_id); });
+  events.forEach((ev) => { push(ev.created_at, "system", "⚙️", esc(ev.detail || ev.event || "Event"), ev.case_id); });
+  items.sort((a, b) => new Date(b.ts) - new Date(a.ts)); // newest first, robust across date-only + full ISO
+  return items;
+}
+function timelineRowHtml(it, multiCase) {
+  const caseTag = multiCase && it.caseLabel ? `<span class="tl-case">${esc(it.caseLabel)}</span>` : "";
+  return `<div class="tl-row" data-cat="${it.cat}" data-ts="${esc(it.ts)}">
+      <span class="tl-ic">${it.icon}</span>
+      <div class="tl-main">
+        <div class="tl-title">${it.title}</div>
+        <div class="tl-meta">${caseTag}<span class="tl-ago">${esc(tlWhen(it.ts))}</span></div>
+      </div>
+    </div>`;
+}
+function renderTimelineList(items, filter, cap, multiCase) {
+  const filtered = filter === "all" ? items : items.filter((it) => it.cat === filter);
+  if (!filtered.length) return '<div class="empty">No activity in this view yet.</div>';
+  // Sarah's "when did we last speak" fix: split future-dated items (booked appointments)
+  // into a compact Upcoming block so history starts right at the top of the main list.
+  const nowTs = Date.now();
+  const upcoming = filtered.filter((it) => new Date(it.ts) - nowTs > 0).sort((a, b) => new Date(a.ts) - new Date(b.ts));
+  const past = filtered.filter((it) => new Date(it.ts) - nowTs <= 0);
+  let html = "";
+  if (upcoming.length) {
+    html += `<div class="tl-upcoming"><div class="tl-upcoming-hd">Upcoming</div>${upcoming.map((it) => timelineRowHtml(it, multiCase)).join("")}</div>`;
+  }
+  const shown = past.slice(0, cap);
+  let lastDay = null;
+  shown.forEach((it) => {
+    const day = localDateStr(it.ts);
+    if (day !== lastDay) { html += `<div class="tl-day">${esc(tlDayLabel(it.ts))}</div>`; lastDay = day; }
+    html += timelineRowHtml(it, multiCase);
+  });
+  if (past.length > cap) html += `<button type="button" class="btn btn-sm tl-more" id="tl-more">Show more (${past.length - cap})</button>`;
+  return html;
+}
+
 window.openClient = async function (id) {
   let c = {};
   let cases = [];
+  let tlItems = [];
   if (id) {
     const [{ data: cl, error: clErr }, { data: cs }] = await Promise.all([
       db.from("clients").select("*").eq("id", id).single(),
@@ -1730,11 +1843,44 @@ window.openClient = async function (id) {
     ]);
     if (clErr || !cl) return toast("Client not found — it may have been deleted or you don't have access.");
     c = cl; cases = cs || [];
+    tlItems = await buildClientTimeline(id, cases);
   }
+  const multiCase = cases.length > 1;
+  const caseLabelById = {};
+  cases.forEach((x) => { caseLabelById[x.id] = (KINDS.find((k) => k[0] === x.case_kind) || [])[1] || x.case_kind || "Case"; });
+  // Quick-add target: OPEN cases (not completed/not_proceeding); default the most recently updated one.
+  const openCases = cases.filter((x) => x.stage !== "completed" && x.stage !== "not_proceeding");
+  const defaultCase = openCases.length
+    ? openCases.slice().sort((a, b) => (String(b.updated_at || "") < String(a.updated_at || "") ? -1 : 1))[0]
+    : (cases[0] || null);
+  const showCaseSel = openCases.length > 1; // selector only when the client has >1 OPEN case
+  const caseSelHtml = showCaseSel
+    ? `<select id="tl-case" class="tl-case-sel" aria-label="Case for this note">${openCases.map((oc) => `<option value="${esc(oc.id)}" ${defaultCase && oc.id === defaultCase.id ? "selected" : ""}>${esc(caseLabelById[oc.id])}${oc.lender ? " · " + esc(oc.lender) : ""}</option>`).join("")}</select>`
+    : "";
+  const timelineHtml = id ? `
+    <div class="tl-section">
+      <h3 style="font-size:14px;margin:0 0 2px;">Timeline</h3>
+      <div class="tl-add">
+        <input id="tl-note" placeholder="Add a note…" autocomplete="off">
+        ${caseSelHtml}
+        <button type="button" class="btn btn-sm btn-primary" id="tl-add-btn">Add</button>
+      </div>
+      <div class="type-chips" id="tl-type-chips">
+        <button type="button" class="tl-chip active" data-type="note">📝 Note</button>
+        <button type="button" class="tl-chip" data-type="call">📞 Call</button>
+        <button type="button" class="tl-chip" data-type="email">✉️ Email</button>
+        <button type="button" class="tl-chip" data-type="meeting">🤝 Meeting</button>
+      </div>
+      <div class="tl-filters" id="tl-filters">${TL_CATS.map(([k, l]) => `<button type="button" class="tl-chip tl-filter ${k === "all" ? "active" : ""}" data-cat="${k}">${esc(l)}</button>`).join("")}</div>
+      <div class="tl-list" id="tl-list">${renderTimelineList(tlItems, "all", 100, multiCase)}</div>
+    </div>` : "";
   $("#modal").innerHTML = `
     <h3>${id ? "Client details" : "New client"}</h3>
     ${id && (c.phone || c.email) ? `<p class="panel-sub" style="margin-top:-8px;display:flex;gap:16px;flex-wrap:wrap;">${c.phone ? "📞 " + telLink(c.phone) : ""}${c.email ? "✉️ " + mailLink(c.email) : ""}</p>` : ""}
-    <form id="client-form" class="form-grid">
+    ${timelineHtml}
+    <details class="case-details client-details" ${id ? "" : "open"}>
+      <summary>Client details</summary>
+      <form id="client-form" class="form-grid">
       <label>First name<input name="first_name" required value="${esc(c.first_name)}"></label>
       <label>Last name<input name="last_name" required value="${esc(c.last_name)}"></label>
       <label>Email<input name="email" type="email" value="${esc(c.email)}"></label>
@@ -1754,7 +1900,8 @@ window.openClient = async function (id) {
       </label>
       <label class="full">Address<input name="address" value="${esc(c.address)}"></label>
       <label class="full">Notes<textarea name="notes" rows="2">${esc(c.notes)}</textarea></label>
-    </form>
+      </form>
+    </details>
     ${id ? `<div style="margin-top:14px;"><h3 style="font-size:14px;">Cases</h3>
       ${cases.map((x) => `<div class="row-item"><div class="row-main">
         <div class="t" onclick="closeModal();openCase('${x.id}')">${esc(x.lender || KINDS.find(k=>k[0]===x.case_kind)?.[1] || "Case")} ${x.loan_amount ? "· " + fmtM(x.loan_amount) : ""}</div>
@@ -1787,15 +1934,76 @@ window.openClient = async function (id) {
     // lists/KPIs so a just-fixed row (e.g. missing email) doesn't linger stale until manual Refresh.
     if ($("#page-data") && !$("#page-data").classList.contains("hidden")) loadDataHealth();
   };
-  if (id) $("#del-client-btn").onclick = async () => {
-    const completed = cases.filter((x) => x.stage === "completed").length;
-    const extra = completed
-      ? `⚠ This client has ${completed} COMPLETED case${completed === 1 ? "" : "s"} with regulated records that will be permanently destroyed.`
-      : null;
-    if (!confirmHardDelete("Delete this client and all their cases?", extra)) return;
-    await db.from("clients").delete().eq("id", id);
-    closeModal(); toast("Client deleted"); loadClients();
-  };
+  if (id) {
+    // ---- Timeline interactions (SP3b) — filters, typed quick-add, show-more; all in place ----
+    let tlFilter = "all", tlCap = 100;
+    const rerenderTl = () => {
+      const list = $("#tl-list");
+      if (!list) return;
+      list.innerHTML = renderTimelineList(tlItems, tlFilter, tlCap, multiCase);
+      const more = $("#tl-more");
+      if (more) more.onclick = () => { tlCap += 100; rerenderTl(); };
+    };
+    const more0 = $("#tl-more"); if (more0) more0.onclick = () => { tlCap += 100; rerenderTl(); };
+    // Type chips (single-select, default Note) — shared class with the case modal.
+    const typeChips = $("#tl-type-chips");
+    if (typeChips) typeChips.querySelectorAll(".tl-chip").forEach((b) => b.onclick = () => {
+      const cur = $("#tl-type-chips .tl-chip.active"); if (cur) cur.classList.remove("active");
+      b.classList.add("active");
+      const inp = $("#tl-note"); if (inp) inp.focus();
+    });
+    // Filter chips — re-render just the list node (no full modal re-render).
+    const filterWrap = $("#tl-filters");
+    if (filterWrap) filterWrap.querySelectorAll(".tl-filter").forEach((b) => b.onclick = () => {
+      const cur = $("#tl-filters .tl-filter.active"); if (cur) cur.classList.remove("active");
+      b.classList.add("active");
+      tlFilter = b.dataset.cat; tlCap = 100;
+      rerenderTl();
+    });
+    // Quick-add: prefix by the active type chip, save to case_notes, prepend into the timeline in place.
+    const submitTlNote = async () => {
+      const inp = $("#tl-note");
+      const raw = (inp.value || "").trim();
+      if (!raw) return;
+      const typeBtn = $("#tl-type-chips .tl-chip.active");
+      const ntype = (typeBtn && typeBtn.dataset.type) || "note";
+      const body = (NOTE_PREFIX[ntype] || "") + raw;
+      const caseSel = $("#tl-case");
+      const targetCase = caseSel ? caseSel.value : (defaultCase ? defaultCase.id : null);
+      if (!targetCase) return toast("This client has no case to attach the note to — add a case first.");
+      const addBtn = $("#tl-add-btn"); if (addBtn) addBtn.disabled = true;
+      try {
+        const { data: { user } } = await db.auth.getUser();
+        const { error } = await db.from("case_notes").insert({ case_id: targetCase, body, created_by: (user && user.id) || null });
+        if (error) return toast("Error: " + error.message);
+        const nt = noteType(body);
+        // Insert in place, then re-sort so the newest-first invariant holds even when future-dated
+        // appointments sit above "now" (no DB refetch, no full modal re-render).
+        tlItems.push({ ts: new Date().toISOString(), cat: nt.type, icon: nt.icon, title: esc(nt.cleanBody) || "(note)", caseLabel: caseLabelById[targetCase] });
+        tlItems.sort((a, b) => new Date(b.ts) - new Date(a.ts));
+        inp.value = "";
+        // Reset to All so the just-added note is always visible at the top.
+        tlFilter = "all"; tlCap = 100;
+        const fcur = $("#tl-filters .tl-filter.active"); if (fcur) fcur.classList.remove("active");
+        const fall = $('#tl-filters .tl-filter[data-cat="all"]'); if (fall) fall.classList.add("active");
+        rerenderTl();
+        inp.focus();
+        toast("Note added ✓");
+      } finally { if (addBtn) addBtn.disabled = false; }
+    };
+    const addBtnEl = $("#tl-add-btn"); if (addBtnEl) addBtnEl.onclick = submitTlNote;
+    const tlNoteEl = $("#tl-note"); if (tlNoteEl) tlNoteEl.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submitTlNote(); } });
+
+    $("#del-client-btn").onclick = async () => {
+      const completed = cases.filter((x) => x.stage === "completed").length;
+      const extra = completed
+        ? `⚠ This client has ${completed} COMPLETED case${completed === 1 ? "" : "s"} with regulated records that will be permanently destroyed.`
+        : null;
+      if (!confirmHardDelete("Delete this client and all their cases?", extra)) return;
+      await db.from("clients").delete().eq("id", id);
+      closeModal(); toast("Client deleted"); loadClients();
+    };
+  }
 };
 
 /* ---------- Emails ---------- */
