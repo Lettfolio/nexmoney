@@ -4,3 +4,5 @@
 admin/*.md
 admin/SETUP-NOTES.md
 assets/hero-loop-original.mp4
+admin/mock.html
+admin/mock-supabase.js
