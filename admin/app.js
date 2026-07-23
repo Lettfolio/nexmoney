@@ -29,6 +29,46 @@ const STAGES = [
   ["not_proceeding", "Not Proceeding"],
 ];
 const STAGE_LABEL = Object.fromEntries(STAGES);
+/* Board time-in-stage aging (SP2b, senior-broker spec). Per-stage days-in-stage thresholds:
+   card goes amber past the threshold, red at 2×. completed/not_proceeding are intentionally
+   absent → those cards are never aged. Tune these numbers here. */
+const AGE_THRESHOLDS = { enquiry: 5, fact_find: 7, decision_in_principle: 10, application: 21, offer: 14, exchange: 30 };
+const daysSince = (iso) => { if (!iso) return null; const t = new Date(iso).getTime(); if (isNaN(t)) return null; return Math.max(0, Math.floor((Date.now() - t) / 86400000)); };
+/* Build the muted age line + colour level for a board card / table row. stageEntryIso is when
+   the case entered its current stage (most-recent stage_change case_event); null when unknown →
+   we show last-touched only and apply NO colour (honest: we can't claim days-in-stage). */
+function cardAge(c, stageEntryIso) {
+  const touched = daysSince(c.updated_at);
+  const inStage = daysSince(stageEntryIso);
+  const th = AGE_THRESHOLDS[c.stage];
+  let level = "";
+  if (th != null && inStage != null) {
+    if (inStage >= th * 2) level = "red";
+    else if (inStage >= th) level = "amber";
+  }
+  const parts = [];
+  if (inStage != null) parts.push(`${inStage}d in stage`);
+  if (touched != null) parts.push(`touched ${touched}d ago`);
+  return { level, text: parts.join(" · "), inStage, touched };
+}
+/* Batched, best-effort lookup of when each case entered its current stage, derived from the most
+   recent stage_change case_event. ONE query for the whole board — never a per-card query. Wrapped
+   so that if case_events is unavailable/blocked in prod the age feature silently degrades to
+   last-touched-only rather than breaking the board. */
+async function loadStageEntries(cases) {
+  const map = {};
+  const ids = (cases || []).map((c) => c.id);
+  if (!ids.length) return map;
+  try {
+    const { data, error } = await db.from("case_events").select("case_id,event,created_at").in("case_id", ids).eq("event", "stage_change");
+    if (error) return map;
+    (data || []).forEach((e) => {
+      if (!e || !e.case_id || !e.created_at) return;
+      if (!map[e.case_id] || e.created_at > map[e.case_id]) map[e.case_id] = e.created_at;
+    });
+  } catch (_) { /* degrade gracefully — no age line, no colour */ }
+  return map;
+}
 const KINDS = [
   ["purchase", "Purchase"], ["remortgage", "Remortgage"], ["product_transfer", "Product Transfer"],
   ["buy_to_let", "Buy to Let"], ["first_time_buyer", "First Time Buyer"], ["other", "Other"],
@@ -97,6 +137,22 @@ let settings = {};
 let ME = null, TEAM = [], tasksScope = "mine";
 let pipelineView = "board", stageTab = "all", sortKey = "updated_at", sortDir = -1;
 function staffName(id) { const p = TEAM.find((x) => x.id === id); return p ? (p.full_name || p.email) : "—"; }
+// Compact relative age ("3d ago", "2mo ago") for the case summary's last-note line.
+function fmtAgo(d) {
+  if (!d) return "";
+  const ms = Date.now() - new Date(d).getTime();
+  if (ms < 0) return "just now";
+  const mins = Math.floor(ms / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return mins + "m ago";
+  const hrs = Math.floor(ms / 3600000);
+  if (hrs < 24) return hrs + "h ago";
+  const days = Math.floor(ms / 86400000);
+  if (days < 30) return days + "d ago";
+  const mos = Math.floor(days / 30);
+  if (mos < 12) return mos + "mo ago";
+  return Math.floor(days / 365) + "y ago";
+}
 function initials(id) { const n = staffName(id); return n === "—" ? "" : n.split(/[\s@.]+/).filter(Boolean).map((w) => w[0]).slice(0, 2).join("").toUpperCase(); }
 
 const LENDER_DOMAINS = {
@@ -800,7 +856,8 @@ async function loadPipeline() {
     }
     return true;
   });
-  if (pipelineView === "table") { renderPipelineTable(filtered); return; }
+  const stageEntry = await loadStageEntries(filtered);
+  if (pipelineView === "table") { renderPipelineTable(filtered, stageEntry); return; }
   $("#board").classList.remove("hidden");
   $("#board-hint").classList.remove("hidden");
   $("#stage-tabs").classList.add("hidden");
@@ -808,12 +865,24 @@ async function loadPipeline() {
   const byStage = {};
   STAGES.forEach(([k]) => (byStage[k] = []));
   filtered.forEach((c) => byStage[c.stage]?.push(c));
+  // Stalled deals surface first: red, then amber (worst days-in-stage on top),
+  // then the rest in the existing updated_at order.
+  const AGE_RANK = { red: 0, amber: 1 };
+  STAGES.forEach(([k]) => byStage[k].sort((a, b) => {
+    const A = cardAge(a, stageEntry[a.id]), B = cardAge(b, stageEntry[b.id]);
+    const ra = A.level in AGE_RANK ? AGE_RANK[A.level] : 2;
+    const rb = B.level in AGE_RANK ? AGE_RANK[B.level] : 2;
+    if (ra !== rb) return ra - rb;
+    if (ra < 2) return (B.inStage ?? -1) - (A.inStage ?? -1);
+    return 0;
+  }));
   $("#board").innerHTML = STAGES.map(([k, label]) => `
     <div class="col" data-stage="${k}">
       <h4${k === "decision_in_principle" ? ` title="${TIP_DIP}"` : ""}>${label} <span>${byStage[k].length}</span></h4>
       ${byStage[k].map((c) => {
         const erc = c.erc_end_date && c.rate_end_date && c.erc_end_date > c.rate_end_date;
-        return `<div class="card" draggable="true" data-id="${c.id}" onclick="openCase('${c.id}')">
+        const age = cardAge(c, stageEntry[c.id]);
+        return `<div class="card${age.level ? " age-" + age.level : ""}" draggable="true" data-id="${c.id}" onclick="openCase('${c.id}')">
           <div class="cn" style="display:flex;justify-content:space-between;align-items:center;gap:6px;"><span>${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ") || "—")}</span>${c.assigned_to ? `<span class="chip" title="${esc(staffName(c.assigned_to))}">${initials(c.assigned_to)}</span>` : ""}</div>
           <div class="cd">${lenderIcon(c.lender)}${esc(c.lender || KINDS.find(x=>x[0]===c.case_kind)?.[1] || "")}${c.loan_amount ? " · " + fmtM(c.loan_amount) : ""}</div>
           <div class="flags">
@@ -824,6 +893,7 @@ async function loadPipeline() {
             ${c.submitted_at && !["completed","not_proceeding"].includes(c.stage) ? `<span class="badge grey" title="${TIP_SUB}">📤 sub ${fmtD(c.submitted_at)}</span>` : ""}
             ${c.fee_status === "paid" ? '<span class="badge green">Fee paid</span>' : c.fee_status === "requested" ? '<span class="badge amber">Fee requested</span>' : ""}
           </div>
+          ${age.text ? `<div class="age-line">${age.text}</div>` : ""}
           <select class="card-stage-move" aria-label="Move to stage" title="Move to stage" onclick="event.stopPropagation()" onchange="moveCaseToStage('${c.id}', this.value)">
             ${STAGES.map(([k, l]) => `<option value="${k}" ${k === c.stage ? "selected" : ""}${k === "decision_in_principle" ? ` title="${TIP_DIP}"` : ""}>${l}</option>`).join("")}
           </select>
@@ -892,7 +962,7 @@ window.moveCaseToStage = async function (caseId, targetStage) {
   toast("Moved to " + (STAGE_LABEL[targetStage] || targetStage));
   loadPipeline();
 };
-function renderPipelineTable(filtered) {
+function renderPipelineTable(filtered, stageEntry = {}) {
   $("#board").classList.add("hidden");
   $("#board-hint").classList.add("hidden");
   $("#stage-tabs").classList.remove("hidden");
@@ -911,12 +981,13 @@ function renderPipelineTable(filtered) {
       case "rate_percent": return c.rate_percent ?? -1;
       case "broker_fee": return c.broker_fee ?? -1;
       case "assigned": return staffName(c.assigned_to).toLowerCase();
+      case "days_in_stage": return daysSince(stageEntry[c.id]) ?? -1;
       default: return c[k] ?? "";
     }
   };
   rows = rows.slice().sort((a, b) => { const x = val(a, sortKey), y = val(b, sortKey); return (x < y ? -1 : x > y ? 1 : 0) * sortDir; });
 
-  const cols = [["client", "Client"], ["stage", "Stage"], ["case_kind", "Type"], ["lender", "Lender"], ["rate_percent", "Rate"], ["rate_end_date", "Rate ends"], ["erc_end_date", "ERC ends"], ["broker_fee", "Fee"], ["fee_status", "Fee status"], ["protection_status", "Protection"], ["assigned", "Adviser"], ["updated_at", "Updated"]];
+  const cols = [["client", "Client"], ["stage", "Stage"], ["days_in_stage", "In stage"], ["case_kind", "Type"], ["lender", "Lender"], ["rate_percent", "Rate"], ["rate_end_date", "Rate ends"], ["erc_end_date", "ERC ends"], ["broker_fee", "Fee"], ["fee_status", "Fee status"], ["protection_status", "Protection"], ["assigned", "Adviser"], ["updated_at", "Updated"]];
   $("#table-wrap").innerHTML = `<div class="panel" style="overflow-x:auto;">
     <div style="display:flex;justify-content:flex-end;margin-bottom:8px;"><button class="btn btn-sm" id="csv-btn">⬇ Download CSV</button></div>
     <table class="imp-table" id="pipe-table">
@@ -924,6 +995,7 @@ function renderPipelineTable(filtered) {
       ${rows.map((c) => `<tr onclick="openCase('${c.id}')" style="cursor:pointer;">
         <td><strong>${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" "))}</strong></td>
         <td><span class="badge blue">${STAGE_LABEL[c.stage] || c.stage}</span></td>
+        <td>${(() => { const a = cardAge(c, stageEntry[c.id]); return a.inStage == null ? "" : `<span class="age-cell${a.level ? " age-" + a.level : ""}">${a.inStage}d</span>`; })()}</td>
         <td>${esc((KINDS.find((x) => x[0] === c.case_kind) || [])[1] || "")}</td>
         <td>${lenderIcon(c.lender)}${esc(c.lender || "")}</td>
         <td>${c.rate_percent != null ? c.rate_percent + "%" : ""}</td>
@@ -1179,54 +1251,65 @@ window.openCase = async function (id) {
   const clientOpts = (clients || []).map((cl) =>
     `<option value="${cl.id}" ${cl.id === c.client_id ? "selected" : ""}>${esc([cl.last_name, cl.first_name].filter(Boolean).join(", "))}${cl.email ? "" : " (no email!)"}</option>`).join("");
 
+  // ---- Summary-header data (existing cases only) — BUILD 2a ----
+  const clientName = caseClient ? [caseClient.first_name, caseClient.last_name].filter(Boolean).join(" ") : "";
+  const todayStr = localDateStr();
+  const nextTask = tasks.find((t) => !t.done_at);           // tasks are due-date ordered → first open one
+  const hadOpenTask = !!nextTask;
+  const taskOverdue = nextTask && nextTask.due_date && nextTask.due_date < todayStr;
+  const lastNote = notes[0];                                 // notes load newest-first
+  const noteSnip = (b) => (b && b.length > 120 ? b.slice(0, 120) + "…" : (b || ""));
+  const rateOverdue = c.rate_end_date && c.rate_end_date < todayStr;
+  const rateSoon = c.rate_end_date && !rateOverdue && (new Date(c.rate_end_date) - new Date(todayStr)) < 183 * 86400000;
+  const summaryHeader = id ? `
+    <div class="case-summary">
+      <div class="cs-top">
+        <div class="cs-id">
+          <div class="cs-name">${esc(clientName) || "Client"}</div>
+          ${caseClient && (caseClient.phone || caseClient.email) ? `<div class="cs-contact">${caseClient.phone ? "📞 " + telLink(caseClient.phone) : ""}${caseClient.email ? "✉️ " + mailLink(caseClient.email) : ""}</div>` : ""}
+        </div>
+        <button type="button" class="btn btn-primary cs-logcall-btn" id="cs-logcall-btn">📞 Log call</button>
+      </div>
+      <div class="cs-stats">
+        <span class="badge blue">${esc(STAGE_LABEL[c.stage] || c.stage)}</span>
+        <div class="cs-stat"><span class="cs-lbl">Loan</span><span class="cs-val">${fmtM(c.loan_amount)}</span></div>
+        <div class="cs-stat"><span class="cs-lbl">Property</span><span class="cs-val">${fmtM(c.property_value)}</span></div>
+        ${c.lender ? `<div class="cs-stat"><span class="cs-lbl">Lender</span><span class="cs-val">${esc(c.lender)}</span></div>` : ""}
+        ${c.broker_fee > 0 ? `<div class="cs-stat"><span class="cs-lbl">Fee</span><span class="cs-val">${fmtM(c.broker_fee)}${c.fee_status ? ` <span class="cs-muted">(${esc(String(c.fee_status).replace(/_/g, " "))})</span>` : ""}</span></div>` : ""}
+        ${(c.protection_status || "not_discussed") === "not_discussed" ? '<div class="cs-stat cs-warn"><span class="cs-lbl">Protection</span><span class="cs-val">not discussed</span></div>' : ""}
+        ${c.rate_percent != null || c.rate_end_date ? `<div class="cs-stat ${rateOverdue ? "cs-danger" : rateSoon ? "cs-warn" : ""}"><span class="cs-lbl">Rate${rateOverdue ? " — ended" : rateSoon ? " — <6mo" : ""}</span><span class="cs-val">${c.rate_percent != null ? c.rate_percent + "%" : "—"}${c.rate_end_date ? ` · ends ${fmtD(c.rate_end_date)}` : ""}</span></div>` : ""}
+      </div>
+      <div class="cs-lines">
+        <div class="cs-line"><span class="cs-lbl">Next task</span><span id="cs-task-val">${nextTask ? `<span class="${taskOverdue ? "cs-danger-txt" : ""}">${esc(nextTask.title)}${nextTask.due_date ? " · " + (taskOverdue ? "overdue " : "due ") + fmtD(nextTask.due_date) : ""}</span>` : '<span class="cs-muted">none open</span>'}</span></div>
+        <div class="cs-line"><span class="cs-lbl">Last note</span><span id="cs-note-val">${lastNote ? `${esc(noteSnip(lastNote.body))} <span class="cs-muted">· ${fmtAgo(lastNote.created_at)}</span>` : '<span class="cs-muted">no notes yet</span>'}</span></div>
+      </div>
+      <div class="cs-logcall-panel hidden" id="cs-logcall-panel">
+        <label>Call outcome<textarea id="cs-call-note" rows="3" placeholder="What was discussed / agreed…"></textarea></label>
+        <label style="margin-top:8px;">Next follow-up (optional)</label>
+        <div style="display:flex;gap:8px;margin-top:4px;">
+          <input id="cs-call-fu-title" placeholder="Follow-up task…" style="flex:1;">
+          <input id="cs-call-fu-due" type="date" style="width:auto;">
+        </div>
+        <div class="due-chips" style="margin-top:8px;">
+          <span class="due-chips-lbl">Follow-up:</span>
+          <button type="button" class="btn btn-sm fu-chip" data-days="1">Tomorrow</button>
+          <button type="button" class="btn btn-sm fu-chip" data-days="3">+3d</button>
+          <button type="button" class="btn btn-sm fu-chip" data-days="7">+1wk</button>
+          <button type="button" class="btn btn-sm fu-chip" data-months="1">+1mo</button>
+        </div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px;">
+          <button type="button" class="btn btn-sm" id="cs-call-cancel">Cancel</button>
+          <button type="button" class="btn btn-sm btn-primary" id="cs-call-save">Save call</button>
+        </div>
+      </div>
+    </div>` : "";
+
   $("#modal").innerHTML = `
-    <h3>${id ? "Case details" : "New case"}</h3>
-    ${caseClient && (caseClient.phone || caseClient.email) ? `<p class="panel-sub" style="margin-top:-8px;display:flex;gap:16px;flex-wrap:wrap;">${caseClient.phone ? "📞 " + telLink(caseClient.phone) : ""}${caseClient.email ? "✉️ " + mailLink(caseClient.email) : ""}</p>` : ""}
+    <h3>${id ? "Case" : "New case"}</h3>
+    ${summaryHeader}
     ${c.retention_source_case_id ? `<p class="panel-sub" style="margin-top:-8px;">🔁 Retention opportunity — auto-created from a completed case. <span class="t" style="cursor:pointer;text-decoration:underline;" onclick="openCase('${c.retention_source_case_id}')">View original case</span></p>` : ""}
     ${c.nps_score != null ? `<p class="panel-sub" style="margin-top:-8px;">Client review score: <strong style="color:${c.nps_score >= 9 ? "var(--green)" : c.nps_score >= 7 ? "var(--amber)" : "var(--red)"};">${c.nps_score}/10</strong></p>` : ""}
-    <form id="case-form" class="form-grid" data-case-id="${id || ""}">
-      <label class="full">Client
-        <select name="client_id" required><option value="">— select client —</option>${clientOpts}</select>
-      </label>
-      <label>Type<select name="case_kind">${KINDS.map(([k, l]) => `<option value="${k}" ${k === c.case_kind ? "selected" : ""}>${l}</option>`).join("")}</select></label>
-      <label>Stage<select name="stage">${STAGES.map(([k, l]) => `<option value="${k}" ${k === c.stage ? "selected" : ""}${k === "decision_in_principle" ? ` title="${TIP_DIP}"` : ""}>${l}</option>`).join("")}</select></label>
-      <label>Lender<input name="lender" value="${esc(c.lender)}"></label>
-      <label>Product<input name="product_name" value="${esc(c.product_name)}"></label>
-      <label>Loan amount (£)<input name="loan_amount" type="number" step="any" value="${c.loan_amount ?? ""}"></label>
-      <label>Property value (£)<input name="property_value" type="number" step="any" value="${c.property_value ?? ""}"></label>
-      <label>Rate %<input name="rate_percent" type="number" step="any" value="${c.rate_percent ?? ""}"></label>
-      <label>Rate type<select name="rate_type">${["fixed", "tracker", "variable", "discount"].map((t) => `<option ${t === c.rate_type ? "selected" : ""}>${t}</option>`).join("")}</select></label>
-      <label>Rate end date<input name="rate_end_date" type="date" value="${c.rate_end_date ?? ""}">
-        <span style="display:flex;align-items:center;gap:5px;margin-top:4px;${c.rate_end_estimated ? "color:#6b21a8;font-weight:600;" : ""}"><input type="checkbox" name="rate_end_estimated" style="width:auto;margin:0;" ${c.rate_end_estimated ? "checked" : ""}> estimated — needs checking</span>
-      </label>
-      <label>ERC end date<input name="erc_end_date" type="date" value="${c.erc_end_date ?? ""}"></label>
-      <label>Offer expiry date<input name="offer_expiry_date" type="date" value="${c.offer_expiry_date ?? ""}"></label>
-      <label>Term (years)<input name="term_years" type="number" value="${c.term_years ?? ""}"></label>
-      <label>Submitted date<input name="submitted_at" type="date" value="${c.submitted_at ?? ""}"></label>
-      <label>Proc fee (£)<input name="proc_fee" type="number" step="any" value="${c.proc_fee ?? ""}"></label>
-      <label>Sols fee (£)<input name="sols_fee" type="number" step="any" value="${c.sols_fee ?? ""}"></label>
-      <label>Broker fee (£)<input name="broker_fee" type="number" step="any" value="${c.broker_fee ?? ""}"></label>
-      <label>Fee status<select name="fee_status">${["not_requested", "requested", "paid", "waived"].map((f) => `<option value="${f}" ${f === c.fee_status ? "selected" : ""}>${f.replace("_", " ")}</option>`).join("")}</select></label>
-      <label>Protection<select name="protection_status">${[["not_discussed","Not discussed"],["discussed","Discussed"],["quoted","Quoted"],["policy_taken","Policy taken"],["declined","Client declined"]].map(([k,l]) => `<option value="${k}" ${k === (c.protection_status || "not_discussed") ? "selected" : ""}>${l}</option>`).join("")}</select></label>
-      <label>Protection commission (£)<input name="protection_commission" type="number" step="any" value="${c.protection_commission ?? ""}"></label>
-      <label id="gi-status-label" ${["purchase","first_time_buyer"].includes(c.case_kind) ? "" : 'class="hidden"'}>GI / buildings insurance<select name="gi_status">${[["not_discussed","Not discussed"],["quoted","Quoted"],["policy_taken","Policy taken"],["declined","Declined"],["not_applicable","Not applicable"]].map(([k,l]) => `<option value="${k}" ${k === (c.gi_status || "not_discussed") ? "selected" : ""}>${l}</option>`).join("")}</select></label>
-      <label>Lead source<input name="lead_source" value="${esc(c.lead_source)}" placeholder="e.g. Google, referral, repeat"></label>
-      <label>Introducer<select name="introducer_id"><option value="">— none —</option>${introOpts}</select></label>
-      <label>Assigned to<select name="assigned_to"><option value="">— unassigned —</option>${TEAM.map((p) => `<option value="${p.id}" ${p.id === c.assigned_to ? "selected" : ""}>${esc(staffName(p.id))}</option>`).join("")}</select></label>
-    </form>
     ${id ? `
-    <div class="action-bar">
-      <button class="btn btn-sm" id="act-fee">💷 Email fee request</button>
-      <button class="btn btn-sm" id="act-review">⭐ Email review request</button>
-      <button class="btn btn-sm" id="act-reminder">📅 Email rate-end reminder</button>
-      <button class="btn btn-sm" id="act-paid">✓ Mark fee paid</button>
-      <button class="btn btn-sm" id="act-offer">📄 Read mortgage offer (AI)</button>
-      <input type="file" id="offer-file" accept="application/pdf" class="hidden">
-      ${c.offer_doc_path ? '<button class="btn btn-sm" id="act-view-offer">View offer doc</button>' : ""}
-      <button class="btn btn-sm" id="act-evidence">🗂 Evidence pack</button>
-      <button class="btn btn-sm" id="act-appt">📅 Book appointment</button>
-      <button class="btn btn-sm" id="act-factfind">📋 Digital fact-find</button>
-    </div>
     <div style="margin-top:14px;">
       <h3 style="font-size:14px;">Tasks</h3>
       <div style="display:flex;gap:8px;margin:8px 0;">
@@ -1257,7 +1340,52 @@ window.openCase = async function (id) {
         <button class="btn btn-sm" id="add-note-btn">Add</button>
       </div>
       <div id="notes-list">${notes.map((n) => `<div class="note">${esc(n.body)}<div class="nd">${new Date(n.created_at).toLocaleString("en-GB")}</div></div>`).join("") || '<div class="empty">No notes yet.</div>'}</div>
+    </div>
+    <div class="action-bar">
+      <button class="btn btn-sm" id="act-fee">💷 Email fee request</button>
+      <button class="btn btn-sm" id="act-review">⭐ Email review request</button>
+      <button class="btn btn-sm" id="act-reminder">📅 Email rate-end reminder</button>
+      <button class="btn btn-sm" id="act-paid">✓ Mark fee paid</button>
+      <button class="btn btn-sm" id="act-offer">📄 Read mortgage offer (AI)</button>
+      <input type="file" id="offer-file" accept="application/pdf" class="hidden">
+      ${c.offer_doc_path ? '<button class="btn btn-sm" id="act-view-offer">View offer doc</button>' : ""}
+      <button class="btn btn-sm" id="act-evidence">🗂 Evidence pack</button>
+      <button class="btn btn-sm" id="act-appt">📅 Book appointment</button>
+      <button class="btn btn-sm" id="act-factfind">📋 Digital fact-find</button>
     </div>` : ""}
+    <details class="case-details" ${id ? "" : "open"}>
+      <summary>Case details</summary>
+      <form id="case-form" class="form-grid" data-case-id="${id || ""}">
+      <label class="full">Client
+        <select name="client_id" required><option value="">— select client —</option>${clientOpts}</select>
+      </label>
+      <label>Type<select name="case_kind">${KINDS.map(([k, l]) => `<option value="${k}" ${k === c.case_kind ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+      <label>Stage<select name="stage">${STAGES.map(([k, l]) => `<option value="${k}" ${k === c.stage ? "selected" : ""}${k === "decision_in_principle" ? ` title="${TIP_DIP}"` : ""}>${l}</option>`).join("")}</select></label>
+      <label>Lender<input name="lender" value="${esc(c.lender)}"></label>
+      <label>Product<input name="product_name" value="${esc(c.product_name)}"></label>
+      <label>Loan amount (£)<input name="loan_amount" type="number" step="any" value="${c.loan_amount ?? ""}"></label>
+      <label>Property value (£)<input name="property_value" type="number" step="any" value="${c.property_value ?? ""}"></label>
+      <label>Rate %<input name="rate_percent" type="number" step="any" value="${c.rate_percent ?? ""}"></label>
+      <label>Rate type<select name="rate_type">${["fixed", "tracker", "variable", "discount"].map((t) => `<option ${t === c.rate_type ? "selected" : ""}>${t}</option>`).join("")}</select></label>
+      <label>Rate end date<input name="rate_end_date" type="date" value="${c.rate_end_date ?? ""}">
+        <span style="display:flex;align-items:center;gap:5px;margin-top:4px;${c.rate_end_estimated ? "color:#6b21a8;font-weight:600;" : ""}"><input type="checkbox" name="rate_end_estimated" style="width:auto;margin:0;" ${c.rate_end_estimated ? "checked" : ""}> estimated — needs checking</span>
+      </label>
+      <label>ERC end date<input name="erc_end_date" type="date" value="${c.erc_end_date ?? ""}"></label>
+      <label>Offer expiry date<input name="offer_expiry_date" type="date" value="${c.offer_expiry_date ?? ""}"></label>
+      <label>Term (years)<input name="term_years" type="number" value="${c.term_years ?? ""}"></label>
+      <label>Submitted date<input name="submitted_at" type="date" value="${c.submitted_at ?? ""}"></label>
+      <label>Proc fee (£)<input name="proc_fee" type="number" step="any" value="${c.proc_fee ?? ""}"></label>
+      <label>Sols fee (£)<input name="sols_fee" type="number" step="any" value="${c.sols_fee ?? ""}"></label>
+      <label>Broker fee (£)<input name="broker_fee" type="number" step="any" value="${c.broker_fee ?? ""}"></label>
+      <label>Fee status<select name="fee_status">${["not_requested", "requested", "paid", "waived"].map((f) => `<option value="${f}" ${f === c.fee_status ? "selected" : ""}>${f.replace("_", " ")}</option>`).join("")}</select></label>
+      <label>Protection<select name="protection_status">${[["not_discussed","Not discussed"],["discussed","Discussed"],["quoted","Quoted"],["policy_taken","Policy taken"],["declined","Client declined"]].map(([k,l]) => `<option value="${k}" ${k === (c.protection_status || "not_discussed") ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+      <label>Protection commission (£)<input name="protection_commission" type="number" step="any" value="${c.protection_commission ?? ""}"></label>
+      <label id="gi-status-label" ${["purchase","first_time_buyer"].includes(c.case_kind) ? "" : 'class="hidden"'}>GI / buildings insurance<select name="gi_status">${[["not_discussed","Not discussed"],["quoted","Quoted"],["policy_taken","Policy taken"],["declined","Declined"],["not_applicable","Not applicable"]].map(([k,l]) => `<option value="${k}" ${k === (c.gi_status || "not_discussed") ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+      <label>Lead source<input name="lead_source" value="${esc(c.lead_source)}" placeholder="e.g. Google, referral, repeat"></label>
+      <label>Introducer<select name="introducer_id"><option value="">— none —</option>${introOpts}</select></label>
+      <label>Assigned to<select name="assigned_to"><option value="">— unassigned —</option>${TEAM.map((p) => `<option value="${p.id}" ${p.id === c.assigned_to ? "selected" : ""}>${esc(staffName(p.id))}</option>`).join("")}</select></label>
+    </form>
+    </details>
     <div class="modal-actions">
       <div>${id ? '<button class="btn btn-ghost btn-danger" id="del-case-btn">Delete case</button>' : ""}</div>
       <div class="right">
@@ -1278,6 +1406,7 @@ window.openCase = async function (id) {
     if (!row.client_id) return toast("Please choose a client");
     if (id && row.stage !== c.stage && protectionGateBlocks({ stage: c.stage, protection_status: row.protection_status }, row.stage)) {
       toast("🛡️ Record the protection conversation before submitting — set a protection status");
+      const det = $(".case-details"); if (det) det.open = true; // the field is inside the collapsible section — reveal it
       const protSel = $("#case-form").elements.protection_status;
       if (protSel) { protSel.style.borderColor = "var(--red)"; protSel.style.boxShadow = "0 0 0 3px rgba(192,57,43,.18)"; protSel.focus(); }
       return;
@@ -1371,6 +1500,88 @@ window.openCase = async function (id) {
       $("#new-task-due").value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
       $("#new-task").focus();
     });
+    // ---- Log call (BUILD 2a): one action writes a "Call: " note + optional follow-up task ----
+    const submitCall = async () => {
+      const noteEl = $("#cs-call-note");
+      const body = noteEl.value.trim();
+      if (!body) { noteEl.focus(); return toast("Add a call outcome note"); }
+      const saveBtn = $("#cs-call-save");
+      if (saveBtn) saveBtn.disabled = true;
+      try {
+        const { data: { user } } = await db.auth.getUser();
+        const noteBody = "Call: " + body;
+        const { error: nErr } = await db.from("case_notes").insert({ case_id: id, body: noteBody, created_by: user.id });
+        if (nErr) return toast("Error: " + nErr.message);
+        // Prepend the note to the list in place (matches newest-first load order).
+        const nlist = $("#notes-list");
+        if (nlist) {
+          const emptyN = nlist.querySelector(".empty");
+          if (emptyN) emptyN.remove();
+          const nrow = document.createElement("div");
+          nrow.className = "note";
+          nrow.innerHTML = `${esc(noteBody)}<div class="nd">${new Date().toLocaleString("en-GB")}</div>`;
+          nlist.insertBefore(nrow, nlist.firstChild);
+        }
+        // Keep the summary "Last note" line current.
+        const noteVal = $("#cs-note-val");
+        if (noteVal) noteVal.innerHTML = `${esc(noteBody.length > 120 ? noteBody.slice(0, 120) + "…" : noteBody)} <span class="cs-muted">· just now</span>`;
+        // Optional follow-up task (created if a title and/or due date was given).
+        const fuTitle = ($("#cs-call-fu-title").value || "").trim();
+        const fuDue = $("#cs-call-fu-due").value || null;
+        let madeTask = false;
+        if (fuTitle || fuDue) {
+          const title = fuTitle || "Follow-up call";
+          const { data: inserted, error: tErr } = await db.from("case_tasks")
+            .insert({ case_id: id, title, due_date: fuDue, created_by: user.id, assigned_to: user.id })
+            .select().single();
+          if (tErr) return toast("Error: " + tErr.message);
+          madeTask = true;
+          const tlist = $("#tasks-inline");
+          if (tlist) {
+            const emptyT = tlist.querySelector(".empty");
+            if (emptyT) emptyT.remove();
+            const tid = inserted ? inserted.id : "";
+            const trow = document.createElement("div");
+            trow.className = "row-item";
+            trow.style.padding = "7px 4px";
+            trow.innerHTML = `<div class="row-main"><div>${esc(title)}</div><div class="s">${fuDue ? "due " + fmtD(fuDue) : ""}</div></div>`
+              + `<button class="btn btn-sm" aria-label="Mark task done" title="Mark task done" onclick="doneTaskInCase('${tid}','${id}')">✓</button>`;
+            tlist.appendChild(trow);
+          }
+          // If there was no open task before, surface this one in the summary line.
+          const taskVal = $("#cs-task-val");
+          if (taskVal && !hadOpenTask) {
+            const tOverdue = fuDue && fuDue < todayStr;
+            taskVal.innerHTML = `<span class="${tOverdue ? "cs-danger-txt" : ""}">${esc(title)}${fuDue ? " · " + (tOverdue ? "overdue " : "due ") + fmtD(fuDue) : ""}</span>`;
+          }
+        }
+        // Reset + close the panel.
+        noteEl.value = "";
+        $("#cs-call-fu-title").value = "";
+        $("#cs-call-fu-due").value = "";
+        const panel = $("#cs-logcall-panel");
+        if (panel) panel.classList.add("hidden");
+        toast(madeTask ? "Call logged + follow-up added ✓" : "Call logged ✓");
+      } finally {
+        if (saveBtn) saveBtn.disabled = false;
+      }
+    };
+    const logcallBtn = $("#cs-logcall-btn"), logcallPanel = $("#cs-logcall-panel");
+    if (logcallBtn && logcallPanel) {
+      logcallBtn.onclick = () => {
+        const nowHidden = logcallPanel.classList.toggle("hidden");
+        if (!nowHidden) $("#cs-call-note").focus();
+      };
+      $("#cs-call-cancel").onclick = () => logcallPanel.classList.add("hidden");
+      $("#cs-call-save").onclick = submitCall;
+      // Follow-up preset chips fill the log-call date input (kept separate from the task due-chips).
+      $("#modal").querySelectorAll(".fu-chip").forEach((b) => b.onclick = () => {
+        const d = new Date();
+        if (b.dataset.months) d.setMonth(d.getMonth() + Number(b.dataset.months));
+        else d.setDate(d.getDate() + Number(b.dataset.days || 0));
+        $("#cs-call-fu-due").value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      });
+    }
     $("#act-offer").onclick = () => $("#offer-file").click();
     $("#offer-file").onchange = () => handleOfferUpload(id);
     $("#act-evidence").onclick = () => buildEvidencePack(id);
@@ -2589,5 +2800,177 @@ document.addEventListener("keydown", (e) => {
     else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
   }
 });
+
+/* ---------- Global search / command palette (BUILD 2c) ----------
+   Persistent sidebar affordance + "/" hotkey. Opens a centered overlay that searches
+   CLIENTS (name/email/phone) and CASES (client name / lender / stage+kind label) via at
+   most two server-side ilike queries per keystroke (debounced) — never loads whole tables.
+   Every read is wrapped so a missing column or network error degrades to the zero-result
+   state instead of throwing. */
+(function () {
+  const backdrop = $("#palette-backdrop");
+  const input = $("#palette-input");
+  const resultsEl = $("#palette-results");
+  const btn = $("#global-search-btn");
+  if (!backdrop || !input || !resultsEl) return;
+  const KIND_LABEL = Object.fromEntries(KINDS);
+
+  let flat = [];        // flattened selectable rows: { type:"client"|"case", id }
+  let sel = -1;         // index into flat of the highlighted row
+  let seq = 0;          // request-sequence guard: only the latest keystroke may render
+  let debounceH = null;
+
+  const appVisible = () => { const a = $("#app-view"); return a && !a.classList.contains("hidden"); };
+  // Strip characters that would break a PostgREST .or() filter string (commas / parens).
+  const sanitize = (s) => String(s || "").replace(/[(),]/g, " ").replace(/\s+/g, " ").trim();
+
+  function openPalette() {
+    if (!appVisible() || !backdrop.classList.contains("hidden")) return;
+    backdrop.classList.remove("hidden");
+    input.value = "";
+    renderIdle();
+    setTimeout(() => input.focus(), 0);
+  }
+  function closePalette(returnFocus) {
+    if (backdrop.classList.contains("hidden")) return;
+    backdrop.classList.add("hidden");
+    clearTimeout(debounceH);
+    seq++;               // invalidate any in-flight query so it can't render after close
+    flat = []; sel = -1;
+    if (returnFocus && btn) btn.focus();
+  }
+  function renderIdle() {
+    flat = []; sel = -1;
+    resultsEl.innerHTML = '<div class="palette-empty">Search clients by name, email or phone — and cases by client, lender or stage.</div>';
+  }
+  function renderEmpty(q) {
+    flat = []; sel = -1;
+    resultsEl.innerHTML = `<div class="palette-empty">No matches for &ldquo;${esc(q)}&rdquo;</div>`;
+  }
+  function rowHtml(idx, icon, title, sub) {
+    return `<div class="palette-row" role="option" data-idx="${idx}">` +
+      `<span class="pr-ic" aria-hidden="true">${icon}</span>` +
+      `<span class="pr-main"><span class="pr-title">${esc(title)}</span><span class="pr-sub">${esc(sub)}</span></span></div>`;
+  }
+  function render(clients, cases, q) {
+    flat = [];
+    let html = "";
+    if (clients.length) {
+      html += '<div class="palette-group-label">Clients</div>';
+      clients.forEach((cl) => {
+        const name = [cl.first_name, cl.last_name].filter(Boolean).join(" ") || "(no name)";
+        const sub = [cl.phone, cl.email].filter(Boolean).join("  ·  ") || "No contact details";
+        const idx = flat.length; flat.push({ type: "client", id: cl.id });
+        html += rowHtml(idx, "👤", name, sub);
+      });
+    }
+    if (cases.length) {
+      html += '<div class="palette-group-label">Cases</div>';
+      cases.forEach((cs) => {
+        const cl = cs.clients || {};
+        const name = [cl.first_name, cl.last_name].filter(Boolean).join(" ") || "Case";
+        const bits = [STAGE_LABEL[cs.stage] || cs.stage];
+        if (cs.lender) bits.push(cs.lender);
+        else if (KIND_LABEL[cs.case_kind]) bits.push(KIND_LABEL[cs.case_kind]);
+        const idx = flat.length; flat.push({ type: "case", id: cs.id });
+        html += rowHtml(idx, "🗂️", name, bits.filter(Boolean).join("  ·  "));
+      });
+    }
+    if (!flat.length) { renderEmpty(q); return; }
+    resultsEl.innerHTML = html;
+    sel = 0; updateSel(false);
+  }
+  function updateSel(scroll) {
+    const rows = resultsEl.querySelectorAll(".palette-row");
+    rows.forEach((r) => r.classList.toggle("sel", Number(r.dataset.idx) === sel));
+    if (scroll && rows[sel]) rows[sel].scrollIntoView({ block: "nearest" });
+  }
+  function move(delta) {
+    if (!flat.length) return;
+    sel = (sel + delta + flat.length) % flat.length;
+    updateSel(true);
+  }
+  function openSel() {
+    const item = flat[sel];
+    if (!item) return;
+    closePalette(false);   // don't grab focus back — the modal will manage its own
+    if (item.type === "client") window.openClient(item.id);
+    else window.openCase(item.id);
+  }
+
+  async function runSearch(raw) {
+    const q = sanitize(raw);
+    const mySeq = ++seq;
+    if (q.length < 2) { renderIdle(); return; }
+    let clients = [], cases = [];
+    try {
+      // ---- Query 1: clients by name / email / phone ----
+      const orClient = [`first_name.ilike.%${q}%`, `last_name.ilike.%${q}%`, `email.ilike.%${q}%`];
+      const phoneDigits = String(raw).replace(/[^\d+]/g, "");
+      if (phoneDigits.replace(/\D/g, "").length >= 3) {
+        // Interleave digits with % so "07700 900123" matches however the number
+        // is spaced/punctuated in the DB (Sarah's headline use case).
+        const pd = normPhone(phoneDigits).replace(/\D/g, "");
+        orClient.push(`phone.ilike.%${pd.split("").join("%")}%`);
+      }
+      const { data: cl } = await db.from("clients")
+        .select("id,first_name,last_name,email,phone")
+        .or(orClient.join(",")).limit(8);
+      if (mySeq !== seq) return;
+      clients = cl || [];
+
+      // ---- Query 2: cases by client name (matched ids) / lender / stage+kind label ----
+      const ql = q.toLowerCase();
+      const stageMatches = STAGES.filter(([v, l]) => l.toLowerCase().includes(ql) || v.includes(ql)).map((s) => s[0]);
+      const kindMatches = KINDS.filter(([v, l]) => l.toLowerCase().includes(ql) || v.includes(ql)).map((k) => k[0]);
+      const orCase = [`lender.ilike.%${q}%`];
+      if (stageMatches.length) orCase.push(`stage.in.(${stageMatches.join(",")})`);
+      if (kindMatches.length) orCase.push(`case_kind.in.(${kindMatches.join(",")})`);
+      const cids = clients.map((c) => c.id).filter(Boolean);
+      if (cids.length) orCase.push(`client_id.in.(${cids.join(",")})`);
+      const { data: cs } = await db.from("cases")
+        .select("id,stage,case_kind,lender,client_id,clients(first_name,last_name)")
+        .or(orCase.join(",")).order("updated_at", { ascending: false }).limit(8);
+      if (mySeq !== seq) return;
+      cases = cs || [];
+    } catch (e) {
+      if (mySeq !== seq) return;
+      renderEmpty(q);      // errors degrade silently to the zero-result state
+      return;
+    }
+    if (mySeq !== seq) return;
+    render(clients, cases, q);
+  }
+
+  // Global "/" hotkey — opens the palette unless the user is typing in a field.
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return;
+    const t = e.target, tag = t && t.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (t && t.isContentEditable)) return;
+    if (!appVisible() || !backdrop.classList.contains("hidden")) return;
+    e.preventDefault();
+    openPalette();
+  });
+  if (btn) btn.addEventListener("click", openPalette);
+  input.addEventListener("input", () => {
+    const v = input.value;
+    clearTimeout(debounceH);
+    debounceH = setTimeout(() => runSearch(v), 250);
+  });
+  backdrop.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { e.preventDefault(); closePalette(true); }
+    else if (e.key === "ArrowDown") { e.preventDefault(); move(1); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); move(-1); }
+    else if (e.key === "Enter") { e.preventDefault(); openSel(); }
+    else if (e.key === "Tab") { e.preventDefault(); input.focus(); }  // keep focus inside the palette
+  });
+  backdrop.addEventListener("click", (e) => { if (e.target === backdrop) closePalette(true); });
+  resultsEl.addEventListener("click", (e) => {
+    const row = e.target.closest(".palette-row");
+    if (!row) return;
+    sel = Number(row.dataset.idx);
+    openSel();
+  });
+})();
 
 init();

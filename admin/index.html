@@ -37,6 +37,11 @@
 <div id="app-view" class="app-shell hidden">
   <aside class="sidebar">
     <div class="sidebar-logo">Nex<span>Money</span></div>
+    <button type="button" id="global-search-btn" class="global-search" aria-label="Search clients and cases (press /)" title="Search clients and cases (press /)">
+      <span class="gs-ic" aria-hidden="true">🔍</span>
+      <span class="gs-txt">Search…</span>
+      <kbd class="gs-kbd" aria-hidden="true">/</kbd>
+    </button>
     <nav class="sidenav" id="topnav">
       <button data-page="dashboard" class="active"><span class="si">🏠</span>Today</button>
       <button data-page="pipeline"><span class="si">🗂️</span>Pipeline</button>
@@ -305,6 +310,18 @@
       </div>
     </section>
   </main>
+</div>
+
+<!-- ===== Global search palette (BUILD 2c) ===== -->
+<div id="palette-backdrop" class="palette-backdrop hidden">
+  <div class="palette" role="dialog" aria-modal="true" aria-label="Search clients and cases">
+    <div class="palette-inputwrap">
+      <span class="palette-ic" aria-hidden="true">🔍</span>
+      <input id="palette-input" type="text" class="palette-input" placeholder="Search clients and cases…" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="Search clients and cases" aria-controls="palette-results">
+      <kbd class="palette-esc" aria-hidden="true">Esc</kbd>
+    </div>
+    <div id="palette-results" class="palette-results" role="listbox" aria-label="Search results"></div>
+  </div>
 </div>
 
 <!-- ===== Modal ===== -->
