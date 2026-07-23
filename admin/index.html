@@ -130,7 +130,10 @@
       <p class="panel-sub" id="board-hint"><span class="desktop-hint">Drag cards between columns to move a case on.</span><span class="mobile-hint">Tap a card to open it, or use the stage dropdown on each card to move it on.</span></p>
       <div id="stage-tabs" class="stage-tabs hidden"></div>
       <div id="table-wrap" class="hidden"></div>
-      <div class="board" id="board"></div>
+      <div class="board-scroll-wrap">
+        <div class="board" id="board"></div>
+        <button type="button" class="board-scroll-arrow" aria-label="Scroll to later stages" title="Scroll to later stages">›</button>
+      </div>
     </section>
 
     <!-- Protection & GI -->
@@ -139,7 +142,7 @@
       <div class="kpi-row" id="prot-summary">
         <div class="kpi"><div class="num" id="prot-kpi-count">—</div><div class="lbl">Opportunities</div></div>
         <div class="kpi"><div class="num" id="prot-kpi-comm">—</div><div class="lbl">Est. commission</div></div>
-        <div class="kpi"><div class="num" id="prot-kpi-quoted">—</div><div class="lbl">Quoted — close them</div></div>
+        <div class="kpi kpi-click" id="prot-tile-quoted" title="Click to filter the table to quoted cases awaiting a decision"><div class="num" id="prot-kpi-quoted">—</div><div class="lbl">Quoted, awaiting decision</div></div>
       </div>
       <div class="page-tools" style="margin-bottom:14px;">
         <button class="btn btn-sm seg-btn seg-first scope-active" id="prot-scope-mine">Mine</button>
@@ -204,7 +207,9 @@
         <h3 id="month-report-title">This month</h3>
         <div class="kpi-row" id="month-kpis" style="margin:12px 0 8px;"></div>
         <div id="month-advisers"></div>
+        <p class="panel-sub" style="margin:12px 0 0;">Proc £ = procuration fee (paid by the lender) · Broker £ = fee charged to the client · Sols £ = solicitor referral fee. Figures on this panel are scoped to the month selected above.</p>
       </div>
+      <p class="report-live-note">Live snapshot — the panels below are not affected by the month selected above.</p>
       <div class="kpi-row" id="report-kpis"></div>
       <div class="panel" id="report-forecast-panel">
         <h3>Commission forecast (weighted pipeline)</h3>
@@ -307,7 +312,7 @@
   <div class="modal" id="modal" role="dialog" aria-modal="true"></div>
 </div>
 
-<button id="assistant-fab" class="hidden" title="AI assistant">✦</button>
+<button id="assistant-fab" class="hidden" title="Ask AI — look up clients, draft replies, add tasks and notes" aria-label="Ask AI assistant">✦<span class="fab-label">Ask AI</span></button>
 <aside id="assistant-drawer" class="hidden">
   <div class="ad-head"><strong>NexMoney Assistant</strong><button id="assistant-close" class="btn btn-ghost btn-sm">✕</button></div>
   <div id="chat-log"></div>

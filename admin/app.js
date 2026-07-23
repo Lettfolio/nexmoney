@@ -46,6 +46,14 @@ const SMS_LABEL = {
   appointment: "Appointment reminder", appointment_reminder: "Appointment reminder",
 };
 const smsTypeLabel = (t) => SMS_LABEL[t] || (t ? String(t).replace(/_/g, " ") : "SMS");
+/* Plain-English tooltips for jargon a new starter hits constantly (QW7). Used as native title= attributes. */
+const TIP_DIP = "Decision in Principle — a lender's early indication of how much they'll lend, before a full application";
+const TIP_ERC = "Early Repayment Charge — a penalty for leaving a mortgage deal before its end date";
+const TIP_GI = "General Insurance — buildings & contents cover";
+const TIP_SUB = "Submitted — the date the application was sent to the lender";
+const TIP_APPROX = "estimated — needs checking";
+// Inline "≈" marker with a tooltip, used wherever a rate-end date is only estimated.
+const APPROX = `<span class="approx" title="${TIP_APPROX}">≈</span>`;
 const SETTING_FIELDS = [
   ["company_name", "Company name"],
   ["adviser_name", "Adviser name (email sign-off)"],
@@ -76,6 +84,12 @@ const fmtD = (d) => (d ? new Date(d).toLocaleDateString("en-GB", { day: "numeric
 const localDateStr = (d) => new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/London", year: "numeric", month: "2-digit", day: "2-digit" }).format(d ? new Date(d) : new Date());
 // UK-local YYYY-MM month bucket for report grouping.
 const localMonthStr = (d) => localDateStr(d).slice(0, 7);
+// Normalise a UK phone number for comparison/search: strip spaces/punctuation and map +44/0044 → 0.
+const normPhone = (p) => (p == null ? "" : String(p).replace(/[\s()\-.]/g, "").replace(/^\+44/, "0").replace(/^0044/, "0"));
+// Tap-to-call / tap-to-email links (M2). Displays the number/address verbatim; the tel: href is
+// space-stripped so the dialler gets a clean value. Returns "" for empty input so callers can guard.
+const telLink = (p) => { if (!p) return ""; const raw = String(p).trim(); const href = raw.replace(/[^\d+]/g, ""); return `<a class="contact-link" href="tel:${esc(href)}">${esc(raw)}</a>`; };
+const mailLink = (e) => { if (!e) return ""; const raw = String(e).trim(); return `<a class="contact-link" href="mailto:${encodeURIComponent(raw).replace(/%40/g, "@")}">${esc(raw)}</a>`; };
 const fmtM = (n) => (n == null || n === "" ? "—" : Number(n).toLocaleString("en-GB", { style: "currency", currency: "GBP", maximumFractionDigits: 0 }));
 // Exact-pence money — for fee figures on the case detail / evidence pack only. Dashboards keep fmtM (whole pounds).
 const fmtM2 = (n) => (n == null || n === "" ? "—" : Number(n).toLocaleString("en-GB", { style: "currency", currency: "GBP", minimumFractionDigits: 2, maximumFractionDigits: 2 }));
@@ -468,8 +482,8 @@ async function loadDashboard() {
         <div class="s">${lenderIcon(a.lender)}${esc(a.lender || "")} ${a.rate_percent ? a.rate_percent + "%" : ""} — ends ${fmtD(a.rate_end_date)}${a.days_to_rate_end != null ? ` (${a.days_to_rate_end < 0 ? Math.abs(a.days_to_rate_end) + " days ago" : "in " + a.days_to_rate_end + " days"})` : ""}${ercIds.has(a.case_id) ? ` — ERC runs until ${fmtD(a.erc_end_date)}` : ""}</div>
       </div>
       ${a.days_to_rate_end < 0 ? '<span class="badge red">OVERDUE</span>' : ""}
-      ${ercIds.has(a.case_id) ? '<span class="badge red">ERC conflict</span>' : ""}
-      ${a.rate_end_estimated ? '<span class="badge purple">≈ estimate</span>' : ""}
+      ${ercIds.has(a.case_id) ? `<span class="badge red" title="${TIP_ERC}">ERC conflict</span>` : ""}
+      ${a.rate_end_estimated ? `<span class="badge purple" title="${TIP_APPROX}">≈ estimate</span>` : ""}
       ${a.stage === "completed"
         ? (a.rate_reminder_queued_at ? '<span class="badge green">Reminder sent</span>' : '<span class="badge amber">Reminder pending</span>')
         : `<span class="badge blue">${STAGE_LABEL[a.stage] || a.stage}</span>`}
@@ -519,7 +533,7 @@ async function loadRetention() {
     <div class="row-item">
       <div class="row-main">
         <div class="t" onclick="openCase('${c.id}')">${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" "))}</div>
-        <div class="s">${lenderIcon(c.lender)}${esc(c.lender || "")} — rate ends ${fmtD(c.rate_end_date)}${c.rate_end_estimated ? " ≈" : ""}</div>
+        <div class="s">${lenderIcon(c.lender)}${esc(c.lender || "")} — rate ends ${fmtD(c.rate_end_date)}${c.rate_end_estimated ? " " + APPROX : ""}</div>
       </div>
       <span class="badge blue">${STAGE_LABEL[c.stage] || c.stage}</span>
     </div>`).join("") + (open.length > 12 ? `<div class="empty">…and ${open.length - 12} more in the pipeline.</div>` : "")
@@ -534,7 +548,7 @@ async function loadTasks() {
     .is("done_at", null)
     .lte("due_date", horizon)
     .order("due_date")
-    .limit(40);
+    .limit(200); // sane fetch cap; the "mine" scope filter is applied client-side below, so limit AFTER filtering (was .limit(40) which truncated busy advisers' lists/badges before scoping)
   if (error) { renderLoadError("#tasks-list", error, loadTasks); return; }
   const filtered = (raw || []).filter((t) => tasksScope === "all" || !t.assigned_to || t.assigned_to === (ME && ME.id));
   const tasks = filtered.slice(0, 15);
@@ -607,15 +621,15 @@ function briefActions(it) {
     case "task_today":
       return `<button class="btn btn-sm" onclick="briefDone('${it.task_id}')">✓ Done</button>${open}`;
     case "lead_new":
-      return `<button class="btn btn-sm btn-primary" onclick="acceptLead('${it.lead_id}')">Accept</button>`;
+      return `<button class="btn btn-sm btn-primary" onclick="acceptLead('${it.lead_id}', event)">Accept</button>`;
     case "email_new":
       return `${it.case_id ? `<button class="btn btn-sm" onclick="openCase('${it.case_id}')">Open case</button>` : ""}<button class="btn btn-sm" onclick="markEmailHandled('${it.email_id}')">Handled</button>${it.case_id ? `<button class="btn btn-sm" onclick="askAI('Draft a reply to the latest email from this client. Case id: ${it.case_id}')">Draft reply</button>` : ""}`;
     case "appt_today":
       return it.appt_id ? `<button class="btn btn-sm" onclick="openAppt('${it.appt_id}')">Open</button>` : "";
     case "rate_urgent":
-      return `${(it.sub || "").includes("not contacted") ? `<button class="btn btn-sm" onclick="briefQueueEmail('${it.case_id}','rate_end_reminder')">Send reminder</button>` : ""}${open}`;
+      return `${(it.sub || "").includes("not contacted") ? `<button class="btn btn-sm" onclick="briefQueueEmail('${it.case_id}','rate_end_reminder', event)">Send reminder</button>` : ""}${open}`;
     case "fee_chase":
-      return `<button class="btn btn-sm" onclick="briefQueueEmail('${it.case_id}','fee_request')">Chase fee</button>${open}`;
+      return `<button class="btn btn-sm" onclick="briefQueueEmail('${it.case_id}','fee_request', event)">Chase fee</button>${open}`;
     case "protection_hot":
       return `<button class="btn btn-sm" onclick="setProtStatus('${it.case_id}','quoted').then(()=>loadBriefing())">Mark quoted</button>${open}`;
     default:
@@ -652,8 +666,8 @@ window.markEmailHandled = async function (id) {
   loadBriefing();
 };
 window.queueEmail = queueEmail;
-window.briefQueueEmail = async function (caseId, type) {
-  const btn = (typeof event !== "undefined" && event && (event.currentTarget || event.target)) || null;
+window.briefQueueEmail = async function (caseId, type, ev) {
+  const btn = (ev && (ev.currentTarget || ev.target)) || null;
   if (btn) { if (btn.disabled) return; btn.disabled = true; } // guard against double-click double-insert
   try {
     const { data: c } = await db.from("cases").select("*").eq("id", caseId).single();
@@ -724,15 +738,33 @@ async function loadWatchtower() {
       </div>
       ${WATCH_BADGE[a.severity] || WATCH_BADGE.info}
       ${openBtn}
-      <button class="btn btn-sm" onclick="resolveAlert('${a.id}')">Resolve</button>
+      <button class="btn btn-sm" onclick="resolveAlert('${a.id}','${a.severity}','${a.case_id || ""}')">Dismiss</button>
     </div>`;
   }).join("") : '<div class="empty">No problems detected 🎉</div>';
   panelCount("#watchtower-list", alerts.length, alerts.some((a) => a.severity === "crit"));
 }
-window.resolveAlert = async function (id) {
+window.resolveAlert = async function (id, severity, caseId) {
+  let reason = null;
+  if (severity === "crit") {
+    reason = prompt(
+      "Dismiss this CRITICAL alert?\n\n" +
+      "This only clears the alert — it does NOT fix the underlying case, and the alert will " +
+      "reappear if the problem persists.\n\n" +
+      "Give a one-line reason (required — logged to the case for compliance):"
+    );
+    if (reason == null) return; // cancelled
+    reason = reason.trim();
+    if (!reason) { toast("A reason is required to dismiss a critical alert."); return; }
+  }
   const { error } = await db.from("watch_alerts").update({ resolved_at: new Date().toISOString() }).eq("id", id);
   if (error) return toast("Error: " + error.message);
-  toast("Resolved — it'll come back if the problem persists");
+  // Audit trail: record who dismissed a critical alert and why, in the case timeline. Written as a
+  // case_note (no schema change needed) so it works whether or not watch_alerts has resolver columns.
+  if (reason && caseId) {
+    const who = (ME && (ME.full_name || ME.email)) || "staff";
+    try { await db.from("case_notes").insert({ case_id: caseId, body: `🚨 Watchtower alert dismissed by ${who}: ${reason}` }); } catch (e) {}
+  }
+  toast(reason ? "Dismissed and logged — it'll come back if the problem persists" : "Dismissed — it'll come back if the problem persists");
   loadWatchtower();
 };
 $("#watchtower-run").addEventListener("click", async () => {
@@ -778,27 +810,38 @@ async function loadPipeline() {
   filtered.forEach((c) => byStage[c.stage]?.push(c));
   $("#board").innerHTML = STAGES.map(([k, label]) => `
     <div class="col" data-stage="${k}">
-      <h4>${label} <span>${byStage[k].length}</span></h4>
+      <h4${k === "decision_in_principle" ? ` title="${TIP_DIP}"` : ""}>${label} <span>${byStage[k].length}</span></h4>
       ${byStage[k].map((c) => {
         const erc = c.erc_end_date && c.rate_end_date && c.erc_end_date > c.rate_end_date;
         return `<div class="card" draggable="true" data-id="${c.id}" onclick="openCase('${c.id}')">
           <div class="cn" style="display:flex;justify-content:space-between;align-items:center;gap:6px;"><span>${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ") || "—")}</span>${c.assigned_to ? `<span class="chip" title="${esc(staffName(c.assigned_to))}">${initials(c.assigned_to)}</span>` : ""}</div>
           <div class="cd">${lenderIcon(c.lender)}${esc(c.lender || KINDS.find(x=>x[0]===c.case_kind)?.[1] || "")}${c.loan_amount ? " · " + fmtM(c.loan_amount) : ""}</div>
           <div class="flags">
-            ${c.rate_end_date ? `<span class="badge ${c.rate_end_estimated ? "purple" : "blue"}">Rate ends ${fmtD(c.rate_end_date)}${c.rate_end_estimated ? " ≈" : ""}</span>` : ""}
-            ${erc ? '<span class="badge red">ERC conflict</span>' : ""}
+            ${c.rate_end_date ? `<span class="badge ${c.rate_end_estimated ? "purple" : "blue"}">Rate ends ${fmtD(c.rate_end_date)}${c.rate_end_estimated ? " " + APPROX : ""}</span>` : ""}
+            ${erc ? `<span class="badge red" title="${TIP_ERC}">ERC conflict</span>` : ""}
             ${c.retention_source_case_id ? '<span class="badge grey">🔁 retention</span>' : ""}
             ${["application","offer"].includes(c.stage) && (c.protection_status || "not_discussed") === "not_discussed" ? '<span class="badge amber">🛡 protection?</span>' : ""}
-            ${c.submitted_at && !["completed","not_proceeding"].includes(c.stage) ? `<span class="badge grey">📤 sub ${fmtD(c.submitted_at)}</span>` : ""}
+            ${c.submitted_at && !["completed","not_proceeding"].includes(c.stage) ? `<span class="badge grey" title="${TIP_SUB}">📤 sub ${fmtD(c.submitted_at)}</span>` : ""}
             ${c.fee_status === "paid" ? '<span class="badge green">Fee paid</span>' : c.fee_status === "requested" ? '<span class="badge amber">Fee requested</span>' : ""}
           </div>
           <select class="card-stage-move" aria-label="Move to stage" title="Move to stage" onclick="event.stopPropagation()" onchange="moveCaseToStage('${c.id}', this.value)">
-            ${STAGES.map(([k, l]) => `<option value="${k}" ${k === c.stage ? "selected" : ""}>${l}</option>`).join("")}
+            ${STAGES.map(([k, l]) => `<option value="${k}" ${k === c.stage ? "selected" : ""}${k === "decision_in_principle" ? ` title="${TIP_DIP}"` : ""}>${l}</option>`).join("")}
           </select>
         </div>`;
       }).join("")}
     </div>`).join("");
   wireBoardDnD();
+  updateBoardScrollHint();
+}
+/* Horizontal-scroll affordance for the 8-stage board (QW16): edge fade + arrow appear
+   only while there are later stages hidden off the right edge. */
+function updateBoardScrollHint() {
+  const board = $("#board");
+  const wrap = board && board.closest(".board-scroll-wrap");
+  if (!wrap) return;
+  const max = board.scrollWidth - board.clientWidth;
+  wrap.classList.toggle("can-scroll-right", board.scrollLeft < max - 4);
+  wrap.classList.toggle("can-scroll-left", board.scrollLeft > 4);
 }
 /* Protection gate — block forward moves into Application+ while protection is unrecorded */
 const stageIdx = (s) => STAGES.findIndex(([k]) => k === s);
@@ -857,7 +900,7 @@ function renderPipelineTable(filtered) {
   const counts = {};
   STAGES.forEach(([k]) => (counts[k] = filtered.filter((c) => c.stage === k).length));
   $("#stage-tabs").innerHTML = [`<button class="stage-tab ${stageTab === "all" ? "active" : ""}" data-stage="all">All (${filtered.length})</button>`]
-    .concat(STAGES.map(([k, l]) => `<button class="stage-tab ${stageTab === k ? "active" : ""}" data-stage="${k}">${l} (${counts[k]})</button>`)).join("");
+    .concat(STAGES.map(([k, l]) => `<button class="stage-tab ${stageTab === k ? "active" : ""}" data-stage="${k}"${k === "decision_in_principle" ? ` title="${TIP_DIP}"` : ""}>${l} (${counts[k]})</button>`)).join("");
   document.querySelectorAll(".stage-tab").forEach((b) => (b.onclick = () => { stageTab = b.dataset.stage; loadPipeline(); }));
 
   let rows = stageTab === "all" ? filtered : filtered.filter((c) => c.stage === stageTab);
@@ -877,14 +920,14 @@ function renderPipelineTable(filtered) {
   $("#table-wrap").innerHTML = `<div class="panel" style="overflow-x:auto;">
     <div style="display:flex;justify-content:flex-end;margin-bottom:8px;"><button class="btn btn-sm" id="csv-btn">⬇ Download CSV</button></div>
     <table class="imp-table" id="pipe-table">
-      <tr>${cols.map(([k, l]) => `<th data-k="${k}" style="cursor:pointer;">${l}${sortKey === k ? (sortDir > 0 ? " ▲" : " ▼") : ""}</th>`).join("")}</tr>
+      <tr>${cols.map(([k, l]) => `<th data-k="${k}" style="cursor:pointer;"${k === "erc_end_date" ? ` title="${TIP_ERC}"` : ""}>${l}${sortKey === k ? (sortDir > 0 ? " ▲" : " ▼") : ""}</th>`).join("")}</tr>
       ${rows.map((c) => `<tr onclick="openCase('${c.id}')" style="cursor:pointer;">
         <td><strong>${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" "))}</strong></td>
         <td><span class="badge blue">${STAGE_LABEL[c.stage] || c.stage}</span></td>
         <td>${esc((KINDS.find((x) => x[0] === c.case_kind) || [])[1] || "")}</td>
         <td>${lenderIcon(c.lender)}${esc(c.lender || "")}</td>
         <td>${c.rate_percent != null ? c.rate_percent + "%" : ""}</td>
-        <td>${c.rate_end_date ? fmtD(c.rate_end_date) + (c.rate_end_estimated ? " ≈" : "") : ""}</td>
+        <td>${c.rate_end_date ? fmtD(c.rate_end_date) + (c.rate_end_estimated ? " " + APPROX : "") : ""}</td>
         <td>${c.erc_end_date ? fmtD(c.erc_end_date) : ""}</td>
         <td>${c.broker_fee ? fmtM(c.broker_fee) : ""}</td>
         <td>${esc((c.fee_status || "").replace(/_/g, " "))}</td>
@@ -930,6 +973,14 @@ $("#view-toggle").addEventListener("click", () => {
 $("#board-search").addEventListener("input", () => loadPipeline());
 $("#board-adviser").addEventListener("change", () => loadPipeline());
 $("#new-case-btn").addEventListener("click", () => openCase(null));
+// Board horizontal-scroll affordance wiring (QW16).
+(() => {
+  const board = $("#board");
+  if (board) board.addEventListener("scroll", updateBoardScrollHint, { passive: true });
+  const arrow = document.querySelector(".board-scroll-arrow");
+  if (arrow) arrow.addEventListener("click", () => $("#board").scrollBy({ left: 320, behavior: "smooth" }));
+  window.addEventListener("resize", updateBoardScrollHint);
+})();
 
 /* ---------- Protection & GI page ---------- */
 let protScope = "mine", protFilter = "all";
@@ -969,7 +1020,7 @@ async function loadProtectionPage() {
         <td><span class="prot-client" onclick="openClient('${r.client_id}')">${esc(r.client_name)}</span></td>
         <td><span class="badge blue">${STAGE_LABEL[r.stage] || esc(r.stage)}</span> ${esc(kind)}${r.lender ? " · " : " "}${lenderIcon(r.lender)}${esc(r.lender || "")}</td>
         <td>${fmtM(r.loan_amount)}</td>
-        <td><span class="badge ${p[0]}">${p[1]}</span>${gi ? ` <span class="badge ${gi[0]}">${gi[1]}</span>` : ""}</td>
+        <td><span class="badge ${p[0]}">${p[1]}</span>${gi ? ` <span class="badge ${gi[0]}" title="${TIP_GI}">${gi[1]}</span>` : ""}</td>
         <td class="prot-est">${fmtM(r.est_commission)}</td>
         <td>${r.owner ? `<span class="chip" title="${esc(staffName(r.owner))}">${initials(r.owner)}</span>` : ""}</td>
         <td style="white-space:nowrap;">
@@ -1096,6 +1147,12 @@ function setProtScope(s) {
 $("#prot-scope-mine").addEventListener("click", () => setProtScope("mine"));
 $("#prot-scope-all").addEventListener("click", () => setProtScope("all"));
 $("#prot-filter").addEventListener("change", () => { protFilter = $("#prot-filter").value; loadProtectionPage(); });
+// Clicking the "Quoted, awaiting decision" tile filters the table to those rows (QW15).
+$("#prot-tile-quoted").addEventListener("click", () => {
+  protFilter = "quoted";
+  $("#prot-filter").value = "quoted";
+  loadProtectionPage();
+});
 
 /* ---------- Case modal ---------- */
 window.openCase = async function (id) {
@@ -1113,9 +1170,10 @@ window.openCase = async function (id) {
     openedUpdatedAt = cs.updated_at; // exact string from the loaded row, for the stale-write guard
   }
   const [{ data: clients }, { data: intros }] = await Promise.all([
-    db.from("clients").select("id,first_name,last_name,email").order("last_name"),
+    db.from("clients").select("id,first_name,last_name,email,phone").order("last_name"),
     db.from("introducers").select("id,name").order("name"),
   ]);
+  const caseClient = id ? (clients || []).find((cl) => cl.id === c.client_id) : null;
   const introOpts = (intros || []).map((i) =>
     `<option value="${i.id}" ${i.id === c.introducer_id ? "selected" : ""}>${esc(i.name)}</option>`).join("");
   const clientOpts = (clients || []).map((cl) =>
@@ -1123,6 +1181,7 @@ window.openCase = async function (id) {
 
   $("#modal").innerHTML = `
     <h3>${id ? "Case details" : "New case"}</h3>
+    ${caseClient && (caseClient.phone || caseClient.email) ? `<p class="panel-sub" style="margin-top:-8px;display:flex;gap:16px;flex-wrap:wrap;">${caseClient.phone ? "📞 " + telLink(caseClient.phone) : ""}${caseClient.email ? "✉️ " + mailLink(caseClient.email) : ""}</p>` : ""}
     ${c.retention_source_case_id ? `<p class="panel-sub" style="margin-top:-8px;">🔁 Retention opportunity — auto-created from a completed case. <span class="t" style="cursor:pointer;text-decoration:underline;" onclick="openCase('${c.retention_source_case_id}')">View original case</span></p>` : ""}
     ${c.nps_score != null ? `<p class="panel-sub" style="margin-top:-8px;">Client review score: <strong style="color:${c.nps_score >= 9 ? "var(--green)" : c.nps_score >= 7 ? "var(--amber)" : "var(--red)"};">${c.nps_score}/10</strong></p>` : ""}
     <form id="case-form" class="form-grid" data-case-id="${id || ""}">
@@ -1130,7 +1189,7 @@ window.openCase = async function (id) {
         <select name="client_id" required><option value="">— select client —</option>${clientOpts}</select>
       </label>
       <label>Type<select name="case_kind">${KINDS.map(([k, l]) => `<option value="${k}" ${k === c.case_kind ? "selected" : ""}>${l}</option>`).join("")}</select></label>
-      <label>Stage<select name="stage">${STAGES.map(([k, l]) => `<option value="${k}" ${k === c.stage ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+      <label>Stage<select name="stage">${STAGES.map(([k, l]) => `<option value="${k}" ${k === c.stage ? "selected" : ""}${k === "decision_in_principle" ? ` title="${TIP_DIP}"` : ""}>${l}</option>`).join("")}</select></label>
       <label>Lender<input name="lender" value="${esc(c.lender)}"></label>
       <label>Product<input name="product_name" value="${esc(c.product_name)}"></label>
       <label>Loan amount (£)<input name="loan_amount" type="number" step="any" value="${c.loan_amount ?? ""}"></label>
@@ -1174,6 +1233,13 @@ window.openCase = async function (id) {
         <input id="new-task" placeholder="Add a task…" style="flex:1;">
         <input id="new-task-due" type="date" style="width:auto;">
         <button class="btn btn-sm" id="add-task-btn">Add</button>
+      </div>
+      <div class="due-chips">
+        <span class="due-chips-lbl">Due:</span>
+        <button type="button" class="btn btn-sm due-chip" data-days="1">Tomorrow</button>
+        <button type="button" class="btn btn-sm due-chip" data-days="3">+3d</button>
+        <button type="button" class="btn btn-sm due-chip" data-days="7">+1wk</button>
+        <button type="button" class="btn btn-sm due-chip" data-months="1">+1mo</button>
       </div>
       <div id="tasks-inline">${tasks.map((t) => `
         <div class="row-item" style="padding:7px 4px;">
@@ -1243,27 +1309,68 @@ window.openCase = async function (id) {
       await db.from("cases").delete().eq("id", id);
       closeModal(); toast("Case deleted"); loadPipeline(); loadDashboard();
     };
-    $("#add-note-btn").onclick = async () => {
-      const body = $("#new-note").value.trim();
+    const submitNote = async () => {
+      const input = $("#new-note");
+      const body = input.value.trim();
       if (!body) return;
       const { data: { user } } = await db.auth.getUser();
-      await db.from("case_notes").insert({ case_id: id, body, created_by: user.id });
-      openCase(id);
+      const { error } = await db.from("case_notes").insert({ case_id: id, body, created_by: user.id });
+      if (error) return toast("Error: " + error.message);
+      // In-place append (no full modal re-render / scroll reset): prepend to match the newest-first load order.
+      const list = $("#notes-list");
+      const empty = list.querySelector(".empty");
+      if (empty) empty.remove();
+      const row = document.createElement("div");
+      row.className = "note";
+      row.innerHTML = `${esc(body)}<div class="nd">${new Date().toLocaleString("en-GB")}</div>`;
+      list.insertBefore(row, list.firstChild);
+      input.value = "";
+      input.focus();
     };
-    $("#act-fee").onclick = () => queueEmail(id, c.client_id, "fee_request", c);
-    $("#act-review").onclick = () => queueEmail(id, c.client_id, "review_request", c);
-    $("#act-reminder").onclick = () => queueEmail(id, c.client_id, "rate_end_reminder", c);
+    $("#add-note-btn").onclick = submitNote;
+    $("#new-note").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submitNote(); } });
+    $("#act-fee").onclick = (e) => queueEmail(id, c.client_id, "fee_request", c, e);
+    $("#act-review").onclick = (e) => queueEmail(id, c.client_id, "review_request", c, e);
+    $("#act-reminder").onclick = (e) => queueEmail(id, c.client_id, "rate_end_reminder", c, e);
     $("#act-paid").onclick = async () => {
       await db.from("cases").update({ fee_status: "paid", fee_paid_at: new Date().toISOString() }).eq("id", id);
       toast("Fee marked as paid"); openCase(id);
     };
-    $("#add-task-btn").onclick = async () => {
-      const title = $("#new-task").value.trim();
+    const submitTask = async () => {
+      const input = $("#new-task");
+      const title = input.value.trim();
       if (!title) return;
+      const due = $("#new-task-due").value || null;
       const { data: { user } } = await db.auth.getUser();
-      await db.from("case_tasks").insert({ case_id: id, title, due_date: $("#new-task-due").value || null, created_by: user.id, assigned_to: user.id });
-      openCase(id);
+      const { data: inserted, error } = await db.from("case_tasks")
+        .insert({ case_id: id, title, due_date: due, created_by: user.id, assigned_to: user.id })
+        .select().single();
+      if (error) return toast("Error: " + error.message);
+      // In-place append (no full modal re-render / scroll reset). Task list is due-date ordered; new row goes at the end.
+      const list = $("#tasks-inline");
+      const empty = list.querySelector(".empty");
+      if (empty) empty.remove();
+      const tid = inserted ? inserted.id : "";
+      const row = document.createElement("div");
+      row.className = "row-item";
+      row.style.padding = "7px 4px";
+      row.innerHTML = `<div class="row-main"><div>${esc(title)}</div><div class="s">${due ? "due " + fmtD(due) : ""}</div></div>`
+        + `<button class="btn btn-sm" aria-label="Mark task done" title="Mark task done" onclick="doneTaskInCase('${tid}','${id}')">✓</button>`;
+      list.appendChild(row);
+      input.value = "";
+      $("#new-task-due").value = "";
+      input.focus();
     };
+    $("#add-task-btn").onclick = submitTask;
+    $("#new-task").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submitTask(); } });
+    // Due-date preset chips fill the date input (QW10) — no manual calendar clicking for common horizons.
+    $("#modal").querySelectorAll(".due-chip").forEach((b) => b.onclick = () => {
+      const d = new Date();
+      if (b.dataset.months) d.setMonth(d.getMonth() + Number(b.dataset.months));
+      else d.setDate(d.getDate() + Number(b.dataset.days || 0));
+      $("#new-task-due").value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      $("#new-task").focus();
+    });
     $("#act-offer").onclick = () => $("#offer-file").click();
     $("#offer-file").onchange = () => handleOfferUpload(id);
     $("#act-evidence").onclick = () => buildEvidencePack(id);
@@ -1350,10 +1457,11 @@ async function handleOfferUpload(caseId) {
   }
 }
 
-async function queueEmail(caseId, clientId, type, c) {
+async function queueEmail(caseId, clientId, type, c, ev) {
   // Disable the clicked button while in flight so a double-click can't double-insert.
-  // (No early-abort on disabled: this is also called programmatically by briefQueueEmail.)
-  const btn = (typeof event !== "undefined" && event && (event.currentTarget || event.target)) || null;
+  // The event is passed explicitly by callers (no reliance on the deprecated global window.event).
+  // When called programmatically by briefQueueEmail no ev is passed — that caller manages its own button.
+  const btn = (ev && (ev.currentTarget || ev.target)) || null;
   if (btn) btn.disabled = true;
   try {
     const { data: cl } = await db.from("clients").select("email,first_name").eq("id", clientId).single();
@@ -1378,18 +1486,25 @@ async function queueEmail(caseId, clientId, type, c) {
 async function loadClients(filter = "") {
   const { data: clients, error } = await db.from("clients").select("*, cases(id,stage)").order("last_name");
   if (error) { renderLoadError("#client-list", error, () => loadClients(filter)); return; }
-  const f = filter.toLowerCase();
-  const list = (clients || []).filter((c) => !f || (c.first_name + " " + c.last_name + " " + (c.email || "")).toLowerCase().includes(f));
+  const f = filter.trim().toLowerCase();
+  const fPhone = normPhone(filter);
+  const phoneSearch = /\d/.test(fPhone);
+  const list = (clients || []).filter((c) => {
+    if (!f) return true;
+    if ((c.first_name + " " + c.last_name + " " + (c.email || "")).toLowerCase().includes(f)) return true;
+    return phoneSearch && c.phone && normPhone(c.phone).includes(fPhone);
+  });
+  const emptyMsg = f ? `No matches for “${esc(filter.trim())}”.` : "No clients yet — add your first one.";
   $("#client-list").innerHTML = `<div class="panel">` + (list.length ? list.map((c) => {
     const active = c.cases.filter((x) => !["completed", "not_proceeding"].includes(x.stage)).length;
     return `<div class="row-item">
       <div class="row-main">
         <div class="t" onclick="openClient('${c.id}')">${esc([c.last_name, c.first_name].filter(Boolean).join(", "))}</div>
-        <div class="s">${esc(c.email || "no email")}${c.phone ? " · " + esc(c.phone) : ""}</div>
+        <div class="s">${c.email ? mailLink(c.email) : "no email"}${c.phone ? " · " + telLink(c.phone) : ""}</div>
       </div>
       <span class="badge ${active ? "blue" : "grey"}">${c.cases.length} case${c.cases.length === 1 ? "" : "s"}${active ? ` (${active} active)` : ""}</span>
     </div>`;
-  }).join("") : '<div class="empty">No clients yet — add your first one.</div>') + `</div>`;
+  }).join("") : `<div class="empty">${emptyMsg}</div>`) + `</div>`;
 }
 $("#client-search").addEventListener("input", (e) => loadClients(e.target.value));
 $("#new-client-btn").addEventListener("click", () => openClient(null));
@@ -1407,6 +1522,7 @@ window.openClient = async function (id) {
   }
   $("#modal").innerHTML = `
     <h3>${id ? "Client details" : "New client"}</h3>
+    ${id && (c.phone || c.email) ? `<p class="panel-sub" style="margin-top:-8px;display:flex;gap:16px;flex-wrap:wrap;">${c.phone ? "📞 " + telLink(c.phone) : ""}${c.email ? "✉️ " + mailLink(c.email) : ""}</p>` : ""}
     <form id="client-form" class="form-grid">
       <label>First name<input name="first_name" required value="${esc(c.first_name)}"></label>
       <label>Last name<input name="last_name" required value="${esc(c.last_name)}"></label>
@@ -1456,6 +1572,9 @@ window.openClient = async function (id) {
     const { error } = await q;
     if (error) return toast("Error: " + error.message);
     closeModal(); toast("Client saved"); loadClients();
+    // If the client was opened from Data health (that page sits behind the modal), refresh its
+    // lists/KPIs so a just-fixed row (e.g. missing email) doesn't linger stale until manual Refresh.
+    if ($("#page-data") && !$("#page-data").classList.contains("hidden")) loadDataHealth();
   };
   if (id) $("#del-client-btn").onclick = async () => {
     const completed = cases.filter((x) => x.stage === "completed").length;
@@ -1601,7 +1720,7 @@ function renderImportPreview() {
           <td>${r.stage ? `<span class="badge blue">${esc(r.stage)}</span>` : '<span class="badge grey">contact only</span>'}</td>
           <td>${esc(r.lender || "")}</td>
           <td>${r.rate_percent != null ? r.rate_percent + "%" : ""}</td>
-          <td>${r.rate_end_date ? fmtD(r.rate_end_date) + (r.rate_end_estimated ? ' <span class="badge purple">≈</span>' : "") : ""}</td>
+          <td>${r.rate_end_date ? fmtD(r.rate_end_date) + (r.rate_end_estimated ? ` <span class="badge purple" title="${TIP_APPROX}">≈</span>` : "") : ""}</td>
           <td>${r.completed_date ? fmtD(r.completed_date) : ""}</td>
           <td>${r.broker_fee ? fmtM(r.broker_fee) : ""}</td>
         </tr>`).join("")}
@@ -1717,16 +1836,16 @@ async function loadLeads() {
     <div class="row-item">
       <div class="row-main">
         <div class="t">${esc(l.name)}</div>
-        <div class="s">${esc(l.email || "")}${l.phone ? " · " + esc(l.phone) : ""}${l.enquiry_type ? " · " + esc(l.enquiry_type) : ""} · ${new Date(l.created_at).toLocaleString("en-GB")}</div>
+        <div class="s">${l.email ? mailLink(l.email) : ""}${l.phone ? " · " + telLink(l.phone) : ""}${l.enquiry_type ? " · " + esc(l.enquiry_type) : ""} · ${new Date(l.created_at).toLocaleString("en-GB")}</div>
         ${l.message ? `<div class="s">“${esc(l.message.slice(0, 140))}${l.message.length > 140 ? "…" : ""}”</div>` : ""}
       </div>
-      <button class="btn btn-sm btn-primary" onclick="acceptLead('${l.id}')">Accept</button>
+      <button class="btn btn-sm btn-primary" onclick="acceptLead('${l.id}', event)">Accept</button>
       <button class="btn btn-sm btn-danger" aria-label="Discard lead" title="Discard lead" onclick="discardLead('${l.id}')">✕</button>
     </div>`).join("") : '<div class="empty">No new leads. Website enquiries appear here the moment they\'re sent.</div>';
   panelCount("#leads-list", n, true);
 }
-window.acceptLead = async function (id) {
-  const btn = (typeof event !== "undefined" && event && (event.currentTarget || event.target)) || null;
+window.acceptLead = async function (id, ev) {
+  const btn = (ev && (ev.currentTarget || ev.target)) || null;
   if (btn) { if (btn.disabled) return; btn.disabled = true; } // guard against double-click
   // Atomically claim the lead: only converts if it's still 'new', so a fast double-click
   // or a second adviser accepting the same lead can't create duplicate clients/cases/emails.
@@ -1736,14 +1855,55 @@ window.acceptLead = async function (id) {
   if (!claimed || !claimed.length) { if (btn) btn.disabled = false; return toast("This lead has already been accepted."); }
   const l = claimed[0];
   const kindMap = { "first-time-buyer": "first_time_buyer", "remortgage": "remortgage", "home-mover": "purchase", "buy-to-let": "buy_to_let" };
-  const { data: client, error: cErr } = await db.from("clients")
-    .insert({ first_name: "", last_name: l.name, email: l.email, phone: l.phone })
-    .select().single();
-  if (cErr) {
-    // Roll the claim back so the lead reappears in the inbox and can be retried.
-    await db.from("leads").update({ status: "new" }).eq("id", id);
-    if (btn) btn.disabled = false;
-    return toast("Error: " + cErr.message);
+
+  // Split the lead's name into first/last (previously the whole name went into last_name with a blank
+  // first_name, breaking client sort and every "Hi {first_name}" template).
+  const rawName = (l.name || "").trim().replace(/\s+/g, " ");
+  let firstName = "", lastName = rawName;
+  if (rawName) {
+    if (/\s(&|and)\s/i.test(rawName) || rawName.includes("&")) {
+      // Joint / couple enquiry — don't guess; ask how to file it.
+      const firstTok = rawName.split(" ")[0];
+      if (confirm(`This looks like a joint enquiry: “${rawName}”.\n\nOK = file first name “${firstTok}” and keep the full name on the surname line.\nCancel = keep the whole name together on the surname line (blank first name).`)) {
+        firstName = firstTok; lastName = rawName;
+      } else {
+        firstName = ""; lastName = rawName;
+      }
+    } else {
+      const parts = rawName.split(" ");
+      if (parts.length > 1) { firstName = parts.shift(); lastName = parts.join(" "); }
+      // single token → keep it as the surname so last_name is never blank
+    }
+  }
+
+  // Before inserting, look for an existing client (same email, or same normalised phone when there's no
+  // email) and offer to attach the case to them rather than creating a duplicate.
+  let client = null, createdClient = false, existing = null;
+  if (l.email) {
+    const { data: byEmail } = await db.from("clients").select("id,first_name,last_name,email,phone").ilike("email", l.email).limit(1);
+    existing = byEmail && byEmail[0];
+  } else if (normPhone(l.phone)) {
+    const target = normPhone(l.phone);
+    const { data: all } = await db.from("clients").select("id,first_name,last_name,email,phone");
+    existing = (all || []).find((cl) => cl.phone && normPhone(cl.phone) === target) || null;
+  }
+  if (existing) {
+    const who = [existing.first_name, existing.last_name].filter(Boolean).join(" ") || existing.email || existing.phone || "this client";
+    if (confirm(`A client already exists: ${who}${existing.email ? " (" + existing.email + ")" : ""}.\n\nAttach this new case to the existing client instead of creating a duplicate?`)) {
+      client = existing;
+    }
+  }
+  if (!client) {
+    const { data: newClient, error: cErr } = await db.from("clients")
+      .insert({ first_name: firstName, last_name: lastName, email: l.email, phone: l.phone })
+      .select().single();
+    if (cErr) {
+      // Roll the claim back so the lead reappears in the inbox and can be retried.
+      await db.from("leads").update({ status: "new" }).eq("id", id);
+      if (btn) btn.disabled = false;
+      return toast("Error: " + cErr.message);
+    }
+    client = newClient; createdClient = true;
   }
   const { data: nc, error } = await db.from("cases").insert({
     client_id: client.id,
@@ -1753,8 +1913,8 @@ window.acceptLead = async function (id) {
     assigned_to: (ME && ME.id) || null,
   }).select("id").single();
   if (error) {
-    // Undo the partial accept: remove the just-created client, then release the lead.
-    await db.from("clients").delete().eq("id", client.id);
+    // Undo the partial accept: remove the just-created client (never an existing one we attached to), then release the lead.
+    if (createdClient) await db.from("clients").delete().eq("id", client.id);
     await db.from("leads").update({ status: "new" }).eq("id", id);
     if (btn) btn.disabled = false;
     return toast("Error: " + error.message);
@@ -1818,7 +1978,8 @@ async function loadDiary() {
   $("#diary-grid").innerHTML = days.map((day) => {
     const dayAppts = (appts || []).filter((a) => new Date(a.starts_at).toDateString() === day.toDateString());
     const dim = day.getMonth() !== monthStart.getMonth();
-    return `<div class="diary-day ${day.toDateString() === todayStr ? "today" : ""}${dayAppts.length ? " has-appts" : ""}" style="${dim ? "opacity:.45;" : ""}min-height:110px;">
+    const dstr = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(day.getDate()).padStart(2, "0")}`;
+    return `<div class="diary-day ${day.toDateString() === todayStr ? "today" : ""}${dayAppts.length ? " has-appts" : ""}" data-date="${dstr}" title="Add an appointment on this day" style="${dim ? "opacity:.45;" : ""}min-height:110px;">
       <h5>${day.toLocaleDateString("en-GB", { weekday: "short", day: "numeric" })}</h5>
       ${dayAppts.map((a) => `<div class="appt" onclick="openAppt('${a.id}')">
         <span class="at">${new Date(a.starts_at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</span> ${esc(a.title)}
@@ -1833,6 +1994,14 @@ $("#diary-next").addEventListener("click", () => { diaryMonth = new Date(diaryMo
 $("#diary-today").addEventListener("click", () => { diaryMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1); loadDiary(); });
 $("#diary-staff").addEventListener("change", () => loadDiary());
 $("#new-appt-btn").addEventListener("click", () => openAppt(null));
+// Click an empty part of a day cell → New appointment pre-filled with that date (QW9).
+// Clicks on an appointment inside a cell are handled by the appointment's own onclick.
+$("#diary-grid").addEventListener("click", (e) => {
+  if (e.target.closest(".appt")) return;
+  const cell = e.target.closest(".diary-day");
+  if (!cell || !cell.dataset.date) return;
+  openAppt(null, { starts_at: cell.dataset.date + "T10:00" });
+});
 $("#tasks-scope-btn").addEventListener("click", () => {
   tasksScope = tasksScope === "mine" ? "all" : "mine";
   $("#tasks-scope-btn").textContent = tasksScope === "mine" ? "Mine" : "All";
@@ -1939,7 +2108,7 @@ async function buildEvidencePack(caseId) {
       ${row("Name", name)}${row("Email", cl.email)}${row("Phone", cl.phone)}${row("Address", cl.address)}
     </table>
     <h2>Case details</h2><table>
-      ${row("Type", c.case_kind)}${row("Stage", c.stage)}${row("Lender", c.lender)}${row("Product", c.product_name)}
+      ${row("Type", (KINDS.find((x) => x[0] === c.case_kind) || [])[1] || c.case_kind)}${row("Stage", STAGE_LABEL[c.stage] || c.stage)}${row("Lender", c.lender)}${row("Product", c.product_name)}
       ${row("Rate", c.rate_percent != null ? c.rate_percent + "% " + (c.rate_type || "") : null)}
       ${row("Rate end date", c.rate_end_date ? fmtD(c.rate_end_date) + (c.rate_end_estimated ? " (ESTIMATED — unverified)" : "") : null)}
       ${row("ERC end date", c.erc_end_date ? fmtD(c.erc_end_date) : null)}
@@ -1955,7 +2124,7 @@ async function buildEvidencePack(caseId) {
       ${(events || []).map((e) => `<tr><td>${dt(e.created_at)}</td><td>${esc(e.event.replace(/_/g, " "))}</td><td>${esc(e.detail || "")}</td></tr>`).join("") || "<tr><td colspan=3>None recorded</td></tr>"}
     </table>
     <h2>Client communications</h2><table><tr><th>When</th><th>Type</th><th>To</th><th>Status</th><th>Subject</th></tr>
-      ${(emails || []).map((e) => `<tr><td>${dt(e.sent_at || e.created_at)}</td><td>${esc(e.email_type)}</td><td>${esc(e.to_email || "")}</td><td>${esc(e.status)}</td><td>${esc(e.subject || "")}</td></tr>`).join("") || "<tr><td colspan=5>None</td></tr>"}
+      ${(emails || []).map((e) => `<tr><td>${dt(e.sent_at || e.created_at)}</td><td>${esc(EMAIL_LABEL[e.email_type] || e.email_type)}</td><td>${esc(e.to_email || "")}</td><td>${esc(e.status)}</td><td>${esc(e.subject || "")}</td></tr>`).join("") || "<tr><td colspan=5>None</td></tr>"}
     </table>
     <h2>Notes</h2><table>
       ${(notes || []).map((n) => `<tr><td style="white-space:nowrap;">${dt(n.created_at)}</td><td>${esc(n.body)}</td></tr>`).join("") || "<tr><td>None</td></tr>"}
@@ -2169,7 +2338,7 @@ async function loadDataHealth() {
 
   const kpis = `
     <div class="kpi"><div class="num">${dq.clients_total ?? 0}</div><div class="lbl">Clients total</div></div>
-    <div class="kpi ${dq.missing_email_count ? "warn" : ""}"><div class="num">${dq.missing_email_count ?? 0}</div><div class="lbl">Missing email</div></div>
+    <div class="kpi ${missingEmail.length ? "warn" : ""}" title="${missingEmail.length} of ${dq.missing_email_count ?? 0} clients missing an email have a live case — only those are actionable below"><div class="num">${missingEmail.length} of ${dq.missing_email_count ?? 0}</div><div class="lbl">Missing email — with a live case</div></div>
     <div class="kpi ${dq.missing_phone_count ? "warn" : ""}"><div class="num">${dq.missing_phone_count ?? 0}</div><div class="lbl">Missing phone</div></div>
     <div class="kpi ${dq.missing_both_count ? "warn" : ""}"><div class="num">${dq.missing_both_count ?? 0}</div><div class="lbl">Missing email &amp; phone</div></div>
     <div class="kpi ${unassigned.length ? "warn" : ""}"><div class="num">${unassigned.length}</div><div class="lbl">Live cases unassigned</div></div>
@@ -2385,8 +2554,22 @@ function modalFocusable() {
 }
 function openModal() {
   modalPrevFocus = document.activeElement;
+  // Inject a persistent close (×) affordance (M3). Modal content is set via innerHTML on each
+  // open, so this is re-added every time; it sticks to the modal's top-right (see .modal-close).
+  const modal = $("#modal");
+  if (!modal.querySelector(".modal-close")) {
+    const x = document.createElement("button");
+    x.type = "button";
+    x.className = "modal-close";
+    x.setAttribute("aria-label", "Close");
+    x.title = "Close";
+    x.textContent = "✕";
+    x.addEventListener("click", closeModal);
+    modal.insertBefore(x, modal.firstChild);
+  }
   $("#modal-backdrop").classList.remove("hidden");
-  const f = modalFocusable();
+  // Focus the first real control, not the close button, so keyboard flow is unchanged.
+  const f = modalFocusable().filter((el) => !el.classList.contains("modal-close"));
   if (f.length) f[0].focus();
 }
 window.closeModal = function () {
