@@ -124,6 +124,7 @@ const SETTING_FIELDS = [
   ["bank_account_name", "Bank account name"],
   ["bank_sort_code", "Sort code"],
   ["bank_account_number", "Account number"],
+  ["monthly_fee_target", "Monthly fee target (£ banked, blank = off)"],
   ["rate_reminder_months", "Rate reminder lead time (months)"],
   ["review_delay_days", "Review request delay after completion (days)"],
   ["referral_delay_days", "Referral nudge delay after review request (days)"],
@@ -178,6 +179,26 @@ let pipelineView = "board", stageTab = "all", sortKey = "updated_at", sortDir = 
 // switches because it's module-scoped. viewBeforeCompleted remembers the board/table choice we
 // force-overrode when entering the Completed segment (its board makes no sense → auto-table).
 let pipelineSegment = "all", viewBeforeCompleted = null;
+// BUILD 6d — per-user persisted pipeline prefs (segment + board/table view). localStorage is a
+// normal feature of this web app, but every key is namespaced with the signed-in user's id (so a
+// shared machine never leaks one adviser's choice to another) and every access is try/catch-guarded
+// (file://, private-mode, or storage blocked by policy must all degrade to plain session behaviour).
+let authUid = null;
+function lsGet(key) { try { return localStorage.getItem(key); } catch (e) { return null; } }
+function lsSet(key, val) { try { localStorage.setItem(key, val); } catch (e) { /* storage unavailable — degrade to session-only */ } }
+const segStoreKey = (uid) => `nx_seg_${uid}`;
+const viewStoreKey = (uid) => `nx_view_${uid}`;
+// Called once, right after auth resolves (showApp) and before the first page render, so the
+// restored values are scoped to the right account. Leaves the existing session defaults
+// ("all" / "board") in place when nothing saved, invalid, or storage is unavailable.
+function restoreUserPrefs(uid) {
+  authUid = uid || null;
+  if (!uid) return;
+  const seg = lsGet(segStoreKey(uid));
+  if (seg && SEGMENTS.some(([k]) => k === seg)) pipelineSegment = seg;
+  const view = lsGet(viewStoreKey(uid));
+  if (view === "board" || view === "table") pipelineView = view;
+}
 function staffName(id) { const p = TEAM.find((x) => x.id === id); return p ? (p.full_name || p.email) : "—"; }
 // Compact relative age ("3d ago", "2mo ago") for the case summary's last-note line.
 function fmtAgo(d) {
@@ -387,6 +408,8 @@ async function showApp(session) {
   $("#app-view").classList.remove("hidden");
   $("#assistant-fab").classList.remove("hidden");
   $("#user-email").textContent = session.user.email;
+  // BUILD 6d — restore this user's pipeline segment/view prefs now that their id is known.
+  restoreUserPrefs(session.user.id);
   await loadSettings();
   await loadTeam(session);
   nav("dashboard");
@@ -807,6 +830,8 @@ function briefActions(it) {
       return `<button class="btn btn-sm" onclick="briefQueueEmail('${it.case_id}','fee_request', event)">Chase fee</button>${open}`;
     case "protection_hot":
       return `<button class="btn btn-sm" onclick="setProtStatus('${it.case_id}','quoted').then(()=>loadBriefing())">Mark quoted</button>${open}`;
+    case "no_completion_date":
+      return `<button class="btn btn-sm" onclick="gotoPipelineSegment('current')">View pipeline</button>`;
     default:
       return open;
   }
@@ -819,10 +844,32 @@ async function loadBriefing() {
     return;
   }
   const items = Array.isArray(data) ? data : [];
+  // BUILD 6c — completion-date chaser. get_briefing is RPC-driven (mirrored to prod, no schema
+  // access to add a bucket there), so this one extra item is computed client-side from the same
+  // `cases` table every other Today widget already queries directly, then merged in by priority —
+  // purely additive, doesn't touch/duplicate anything the RPC itself returns. Degrades silently:
+  // if this query errors, the rest of the briefing still renders untouched.
+  try {
+    const { data: openCases } = await db.from("cases")
+      .select("id,stage,assigned_to")
+      .in("stage", ["offer", "exchange"])
+      .is("expected_completion_date", null);
+    const mine = (owner) => briefingScope === "all" || owner == null || owner === (ME && ME.id);
+    const n = (openCases || []).filter((c) => mine(c.assigned_to)).length;
+    if (n > 0) {
+      items.push({
+        kind: "no_completion_date", pri: 45,
+        title: `${n} offer/exchange case${n === 1 ? "" : "s"} missing an expected completion date`,
+        sub: "Chase for a completion date — sharpens the commission forecast",
+        goto_segment: "current", owner: null,
+      });
+      items.sort((a, b) => a.pri - b.pri);
+    }
+  } catch (e) { /* graceful degradation — the RPC-driven items above still render */ }
   $("#briefing-list").innerHTML = items.length ? items.map((it) => `
     <div class="row-item brief-row ${it.pri < 15 ? "hot" : it.pri < 35 ? "warm" : ""}">
       <div class="row-main">
-        <div class="t" ${it.case_id ? `onclick="openCase('${it.case_id}')"` : it.client_id ? `onclick="openClient('${it.client_id}')"` : ""}>${esc(it.title)}</div>
+        <div class="t" ${it.case_id ? `onclick="openCase('${it.case_id}')"` : it.client_id ? `onclick="openClient('${it.client_id}')"` : it.goto_segment ? `onclick="gotoPipelineSegment('${it.goto_segment}')"` : ""}>${esc(it.title)}</div>
         <div class="s">${esc(it.sub || "")}${briefingScope === "all" && it.owner ? " · " + esc(staffName(it.owner)) : ""}</div>
       </div>
       ${briefBadge(it)}
@@ -1025,6 +1072,7 @@ async function loadPipeline() {
             ${erc ? `<span class="badge red" title="${TIP_ERC}">ERC conflict</span>` : ""}
             ${c.retention_source_case_id ? '<span class="badge grey">🔁 retention</span>' : ""}
             ${["application","offer"].includes(c.stage) && (c.protection_status || "not_discussed") === "not_discussed" ? '<span class="badge amber">🛡 protection?</span>' : ""}
+            ${["offer","exchange"].includes(c.stage) && !c.expected_completion_date ? `<span class="badge amber" title="No expected completion date set — chase the adviser">📅 no date</span>` : ""}
             ${c.submitted_at && !["completed","not_proceeding"].includes(c.stage) ? `<span class="badge grey" title="${TIP_SUB}">📤 sub ${fmtD(c.submitted_at)}</span>` : ""}
             ${c.fee_status === "paid" ? '<span class="badge green">Fee paid</span>' : c.fee_status === "requested" ? '<span class="badge amber">Fee requested</span>' : ""}
           </div>
@@ -1128,8 +1176,19 @@ function setSegment(seg) {
   else if (leavingCompleted && viewBeforeCompleted) { pipelineView = viewBeforeCompleted; viewBeforeCompleted = null; }
   pipelineSegment = seg;
   stageTab = "all";
+  if (authUid) lsSet(segStoreKey(authUid), seg);
   loadPipeline();
 }
+// BUILD 6c — jump straight to a pipeline segment from another page (e.g. the My Day completion-date
+// chaser). Mirrors setSegment's leaving-Completed board/table restore, then switches page via nav().
+window.gotoPipelineSegment = function (seg) {
+  const leavingCompleted = pipelineSegment === "completed" && seg !== "completed";
+  if (leavingCompleted && viewBeforeCompleted) { pipelineView = viewBeforeCompleted; viewBeforeCompleted = null; }
+  pipelineSegment = seg;
+  stageTab = "all";
+  if (authUid) lsSet(segStoreKey(authUid), seg);
+  nav("pipeline");
+};
 // Keep the board/table toggle honest: hidden in Completed (locked to table), otherwise labelled
 // for the view it would switch to.
 function syncViewToggle() {
@@ -1246,6 +1305,7 @@ $("#report-month").addEventListener("change", () => loadReports());
 $("#view-toggle").addEventListener("click", () => {
   if (pipelineSegment === "completed") return; // locked to table in Completed
   pipelineView = pipelineView === "board" ? "table" : "board";
+  if (authUid) lsSet(viewStoreKey(authUid), pipelineView);
   syncViewToggle();
   loadPipeline();
 });
@@ -2978,6 +3038,25 @@ function monthLabel(mv) {
   return new Date(mv + "-01").toLocaleDateString("en-GB", { month: "long", year: "numeric" });
 }
 
+// BUILD 6a — the 6 calendar months ending on the current one ("YYYY-MM", oldest first). Deliberately
+// independent of the Reports month picker: this is a rolling trend, not a scoped-to-selected-month figure.
+const MONTH_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function last6Months() {
+  const now = new Date();
+  const out = [];
+  for (let i = 5; i >= 0; i--) out.push(localMonthStr(new Date(now.getFullYear(), now.getMonth() - i, 1)));
+  return out;
+}
+// Tiny inline SVG sparkline — no chart libs. `values` is oldest-first; flat/zero series render as a
+// straight baseline rather than throwing on a 0/0 divide.
+function sparklineSvg(values) {
+  const w = 84, h = 22, pad = 3;
+  const max = Math.max(...values, 1);
+  const stepX = values.length > 1 ? (w - pad * 2) / (values.length - 1) : 0;
+  const pts = values.map((v, i) => `${(pad + i * stepX).toFixed(1)},${(h - pad - (v / max) * (h - pad * 2)).toFixed(1)}`).join(" ");
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" class="sparkline" aria-hidden="true"><polyline points="${pts}" fill="none" stroke="var(--navy)" stroke-width="1.6"/></svg>`;
+}
+
 function renderMonthReport(all, mv) {
   // Bucket on the UK-local month so this card agrees with the annual chart/YTD (which use local getMonth/getFullYear).
   const inMonth = (d) => d && localMonthStr(d) === mv;
@@ -2992,6 +3071,26 @@ function renderMonthReport(all, mv) {
     <div class="kpi"><div class="num">${fmtM(subTotal)}</div><div class="lbl">Submitted £ (proc+broker+sols)</div></div>
     <div class="kpi"><div class="num">${done.length}</div><div class="lbl">Completions</div></div>
     <div class="kpi"><div class="num">${fmtM(doneTotal)}</div><div class="lbl">Completed £ (proc+broker+sols)</div></div>`;
+
+  // BUILD 6a — firm monthly fee target (settings.monthly_fee_target, blank = off). "Banked" here
+  // means fees actually paid in the selected month (fee_paid_at), not just earned on completion,
+  // so it agrees with the "Fees banked" wording already used on the adviser scoreboard below.
+  const targetEl = $("#month-fee-target");
+  if (targetEl) {
+    const target = Number(settings.monthly_fee_target || 0);
+    if (target > 0) {
+      const banked = all.filter((c) => inMonth(c.fee_paid_at)).reduce((s, c) => s + Number(c.broker_fee || 0) + Number(c.proc_fee || 0) + Number(c.sols_fee || 0), 0);
+      const pct = Math.round((banked / target) * 100);
+      const color = pct >= 100 ? "var(--green)" : pct >= 60 ? "var(--amber)" : "var(--red)";
+      targetEl.innerHTML = `
+        <div class="panel-sub" style="margin:12px 0 4px;">Total fees collected vs target (proc + broker + sols) — ${fmtM(banked)} of ${fmtM(target)} (${pct}%)</div>
+        <div style="background:var(--light);border-radius:4px;height:16px;overflow:hidden;">
+          <div style="width:${Math.min(pct, 100)}%;background:${color};height:16px;"></div>
+        </div>`;
+    } else {
+      targetEl.innerHTML = "";
+    }
+  }
   const rows = TEAM.map((p) => {
     const s2 = sub.filter((c) => c.assigned_to === p.id);
     const d2 = done.filter((c) => c.assigned_to === p.id);
@@ -3014,9 +3113,13 @@ function renderThreadedPanels(all, mv, repAdvisers) {
   const label = monthLabel(mv);
   const activeStages = ["enquiry", "fact_find", "decision_in_principle", "application", "offer", "exchange"];
 
-  // ---- Adviser scoreboard: completions/fees/avg-days scoped to the selected month. ----
+  // ---- Adviser scoreboard: completions/fees/avg-days scoped to the selected month, plus a 6-month
+  // rolling completions trend (BUILD 6a) — same completed-cases data, just bucketed by calendar month
+  // instead of the single selected month, so no widened fetch was needed (the cases query already
+  // pulls every row with no date filter).
   const overdueByName = {};
   (Array.isArray(repAdvisers) ? repAdvisers : []).forEach((a) => { overdueByName[a.name] = a.overdue_tasks; });
+  const months6 = last6Months();
   const advRows = TEAM.map((p) => {
     const name = staffName(p.id);
     const mine = all.filter((c) => c.assigned_to === p.id);
@@ -3025,11 +3128,13 @@ function renderThreadedPanels(all, mv, repAdvisers) {
     const feesBanked = mine.filter((c) => inMonth(c.fee_paid_at)).reduce((s, c) => s + Number(c.broker_fee || 0), 0);
     const days = done.map((c) => Math.round((new Date(c.completed_at) - new Date(c.created_at)) / 86400000)).filter((n) => n > 0);
     const avg = days.length ? Math.round(days.reduce((a, b) => a + b, 0) / days.length) : null;
-    return { name, open, completions: done.length, feesBanked, overdue: overdueByName[name], avg };
-  }).filter((r) => r.open || r.completions || r.feesBanked);
-  $("#report-scoreboard-scope").textContent = `Completions, fees banked and avg days are for ${label}. Open cases and overdue tasks are as of now.`;
+    const trend = months6.map((m) => mine.filter((c) => c.completed_at && localMonthStr(c.completed_at) === m).length);
+    const trendTitle = months6.map((m, i) => `${MONTH_SHORT[Number(m.slice(5, 7)) - 1]}: ${trend[i]}`).join(" · ");
+    return { name, open, completions: done.length, feesBanked, overdue: overdueByName[name], avg, trend, trendTitle };
+  }).filter((r) => r.open || r.completions || r.feesBanked || r.trend.some((n) => n));
+  $("#report-scoreboard-scope").textContent = `Completions, fees banked and avg days are for ${label}. Open cases and overdue tasks are as of now. Trend is completions over the last 6 calendar months.`;
   $("#report-advisers").innerHTML = advRows.length ? `<table class="imp-table">
-    <tr><th>Adviser</th><th>Open</th><th>Completions</th><th>Fees banked</th><th>Overdue</th><th>Avg days</th></tr>
+    <tr><th>Adviser</th><th>Open</th><th>Completions</th><th>Fees banked</th><th>Overdue</th><th>Avg days</th><th>6-mo trend</th></tr>
     ${advRows.map((a) => `<tr>
       <td>${esc(a.name)}</td>
       <td>${a.open}</td>
@@ -3037,6 +3142,7 @@ function renderThreadedPanels(all, mv, repAdvisers) {
       <td>${fmtM(a.feesBanked)}</td>
       <td>${a.overdue ? `<span class="badge red">${a.overdue}</span>` : (a.overdue == null ? "—" : "0")}</td>
       <td>${a.avg == null ? "—" : a.avg}</td>
+      <td title="${esc(a.trendTitle)}">${sparklineSvg(a.trend)}</td>
     </tr>`).join("")}
   </table>` : `<div class="empty">No adviser activity in ${label}.</div>`;
 
@@ -3094,7 +3200,7 @@ function renderForecastBuckets(all) {
     this: { label: "This month", cases: 0, weighted: 0 },
     next: { label: "Next month", cases: 0, weighted: 0 },
     later: { label: "Later", cases: 0, weighted: 0 },
-    none: { label: "No date", cases: 0, weighted: 0 },
+    none: { label: "No date", cases: 0, weighted: 0, list: [] },
   };
   let gross_total = 0;
   open.forEach((c) => {
@@ -3108,6 +3214,7 @@ function renderForecastBuckets(all) {
     }
     buckets[key].cases++;
     buckets[key].weighted += weighted;
+    if (key === "none") buckets.none.list.push(c);
   });
   const weighted_total = Object.values(buckets).reduce((s, b) => s + b.weighted, 0);
   $("#report-forecast-headline").innerHTML = `
@@ -3116,12 +3223,27 @@ function renderForecastBuckets(all) {
   const maxW = Math.max(...Object.values(buckets).map((b) => b.weighted), 1);
   $("#report-forecast-buckets").innerHTML = open.length ? ["this", "next", "later", "none"].map((k) => {
     const b = buckets[k];
-    return `
+    // BUILD 6c — the "No date" bucket is the feed for the completion-date chaser: let the adviser
+    // drill into exactly which cases are missing a date, one click each straight to the case.
+    const canExpand = k === "none" && b.cases > 0;
+    const row = `
     <div style="display:flex;align-items:center;gap:8px;margin:3px 0;">
       <span style="width:90px;font-size:12px;color:var(--muted);">${b.label}</span>
       <div style="flex:1;background:var(--light);border-radius:4px;"><div style="width:${(b.weighted / maxW) * 100}%;background:var(--orange);border-radius:4px;height:16px;"></div></div>
       <span style="width:150px;font-size:12px;font-weight:600;text-align:right;">${b.cases} case${b.cases === 1 ? "" : "s"} · ${fmtM(b.weighted)}</span>
+      ${canExpand ? `<button type="button" class="btn btn-sm" id="report-forecast-none-toggle" onclick="toggleForecastNoneList()">▸ Show</button>` : ""}
     </div>`;
+    const expandList = canExpand ? `
+    <div id="report-forecast-none-list" class="hidden" style="margin:0 0 8px 98px;">
+      ${b.list.map((c) => `
+        <div class="row-item" style="padding:6px 8px;">
+          <div class="row-main">
+            <div class="t" style="cursor:pointer;" onclick="openCase('${c.id}')">${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ") || "—")}</div>
+            <div class="s">${esc(STAGE_LABEL[c.stage] || c.stage)}${c.assigned_to ? " · " + esc(initials(c.assigned_to)) : ""}</div>
+          </div>
+        </div>`).join("")}
+    </div>` : "";
+    return row + expandList;
   }).join("") : '<div class="empty">No live cases at offer or exchange.</div>';
   const hintEl = $("#report-forecast-hint");
   if (hintEl) {
@@ -3130,13 +3252,23 @@ function renderForecastBuckets(all) {
       : "Weighted by stage conversion (offer 80% · exchange 95%), bucketed by expected completion date.";
   }
 }
+// BUILD 6c — expand/collapse the "No date" bucket's offending-case list. State lives only on the
+// DOM (like toggleDrawer above) so it survives the panel's own re-renders within a session.
+window.toggleForecastNoneList = function () {
+  const list = $("#report-forecast-none-list");
+  const btn = $("#report-forecast-none-toggle");
+  if (!list) return;
+  const willShow = list.classList.contains("hidden");
+  list.classList.toggle("hidden", !willShow);
+  if (btn) btn.textContent = willShow ? "▾ Hide" : "▸ Show";
+};
 
 async function loadReports() {
   const yr = new Date().getFullYear();
   const mv = $("#report-month").value || localMonthStr();
   if (!$("#report-month").value) $("#report-month").value = mv;
   const [{ data: cases }, { data: intros }, repRes] = await Promise.all([
-    db.from("cases").select("id,stage,case_kind,loan_amount,broker_fee,proc_fee,sols_fee,submitted_at,fee_status,fee_paid_at,completed_at,created_at,lead_source,introducer_id,protection_status,retention_source_case_id,assigned_to,nps_score,expected_completion_date"),
+    db.from("cases").select("id,stage,case_kind,loan_amount,broker_fee,proc_fee,sols_fee,submitted_at,fee_status,fee_paid_at,completed_at,created_at,lead_source,introducer_id,protection_status,retention_source_case_id,assigned_to,nps_score,expected_completion_date,clients(first_name,last_name)"),
     db.from("introducers").select("id,name"),
     db.rpc("get_reports"),
   ]);
@@ -3181,18 +3313,22 @@ async function loadReports() {
       <span style="width:24px;font-size:12px;font-weight:600;">${byMonth[i] || ""}</span>
     </div>`).join("");
 
+  // BUILD 6a — Conversion % and Revenue added, computed the same way the Lead sources table above
+  // computes them (renderThreadedPanels): revenue is proc+broker+sols fee on completed cases only,
+  // conversion is completed / total cases. All-time (not scoped to the month picker), like the rest
+  // of this panel already was.
   const introMap = Object.fromEntries((intros || []).map((i) => [i.id, i.name]));
   const iMap = {};
   all.filter((c) => c.introducer_id).forEach((c) => {
     const k = introMap[c.introducer_id] || "Unknown";
-    iMap[k] = iMap[k] || { total: 0, done: 0 };
+    iMap[k] = iMap[k] || { total: 0, done: 0, revenue: 0 };
     iMap[k].total++;
-    if (c.stage === "completed") iMap[k].done++;
+    if (c.stage === "completed") { iMap[k].done++; iMap[k].revenue += Number(c.proc_fee || 0) + Number(c.broker_fee || 0) + Number(c.sols_fee || 0); }
   });
   $("#report-introducers").innerHTML = Object.keys(iMap).length
-    ? `<table class="imp-table"><tr><th>Introducer</th><th>Cases</th><th>Completed</th></tr>` +
+    ? `<table class="imp-table"><tr><th>Introducer</th><th>Cases</th><th>Completed</th><th>Conversion</th><th>Revenue</th></tr>` +
       Object.entries(iMap).sort((a, b) => b[1].total - a[1].total)
-        .map(([k, v]) => `<tr><td>${esc(k)}</td><td>${v.total}</td><td>${v.done}</td></tr>`).join("") + `</table>`
+        .map(([k, v]) => `<tr><td>${esc(k)}</td><td>${v.total}</td><td>${v.done}</td><td>${v.total ? Math.round((v.done / v.total) * 100) : 0}%</td><td>${fmtM(v.revenue)}</td></tr>`).join("") + `</table>`
     : '<div class="empty">No cases assigned to introducers yet.</div>';
 
   const rep = repRes && !repRes.error ? repRes.data : null;

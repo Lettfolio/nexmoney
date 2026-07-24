@@ -6,6 +6,8 @@
 <meta name="robots" content="noindex, nofollow">
 <title>NexMoney — Back Office</title>
 <link rel="icon" href="../favicon.svg">
+<link rel="manifest" href="/admin/manifest.webmanifest">
+<meta name="theme-color" content="#0b1f35">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -213,6 +215,7 @@
       <div class="panel">
         <h3 id="month-report-title">This month</h3>
         <div class="kpi-row" id="month-kpis" style="margin:12px 0 8px;"></div>
+        <div id="month-fee-target"></div>
         <div id="month-advisers"></div>
         <p class="panel-sub" style="margin:12px 0 0;">Proc £ = procuration fee (paid by the lender) · Broker £ = fee charged to the client · Sols £ = solicitor referral fee. Figures on this panel are scoped to the month selected above.</p>
       </div>
@@ -350,5 +353,15 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.110.7/dist/umd/supabase.js" integrity="sha384-hazsLVND17GNLVdtV19te6qbFT2YuLgl8SamcF+QR5eIOC+W4dGKrUNMxU1jH1zD" crossorigin="anonymous"></script>
 <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
 <script src="/admin/app.js"></script>
+<script>
+  // PWA install support. Register only over https (never file:// or the sandbox http harness).
+  if (location.protocol === 'https:' && 'serviceWorker' in navigator) {
+    try {
+      window.addEventListener('load', function () {
+        navigator.serviceWorker.register('/admin/sw.js', { scope: '/admin/' }).catch(function () {});
+      });
+    } catch (e) { /* non-blocking */ }
+  }
+</script>
 </body>
 </html>
