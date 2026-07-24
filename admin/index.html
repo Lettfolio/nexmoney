@@ -133,6 +133,7 @@
           <button class="btn btn-primary" id="new-case-btn">+ New case</button>
         </div>
       </div>
+      <div id="pipe-segment" class="pipe-segment" role="tablist" aria-label="Pipeline focus"></div>
       <p class="panel-sub" id="board-hint"><span class="desktop-hint">Drag cards between columns to move a case on.</span><span class="mobile-hint">Tap a card to open it, or use the stage dropdown on each card to move it on.</span></p>
       <div id="stage-tabs" class="stage-tabs hidden"></div>
       <div id="table-wrap" class="hidden"></div>
@@ -215,33 +216,36 @@
         <div id="month-advisers"></div>
         <p class="panel-sub" style="margin:12px 0 0;">Proc £ = procuration fee (paid by the lender) · Broker £ = fee charged to the client · Sols £ = solicitor referral fee. Figures on this panel are scoped to the month selected above.</p>
       </div>
+      <p class="report-month-note" id="report-month-note">Also scoped to the month selected above.</p>
+      <div class="panel" id="report-scoreboard-panel">
+        <h3>Adviser scoreboard</h3>
+        <p class="panel-sub" id="report-scoreboard-scope"></p>
+        <div id="report-advisers"></div>
+      </div>
+      <div class="grid-2">
+        <div class="panel">
+          <h3>Pipeline funnel</h3>
+          <p class="panel-sub" id="report-funnel-scope"></p>
+          <div id="report-funnel"></div>
+        </div>
+        <div class="panel">
+          <h3>Lead sources</h3>
+          <p class="panel-sub" id="report-sources-scope">Set the lead source on cases to build this up.</p>
+          <div id="report-sources"></div>
+        </div>
+      </div>
       <p class="report-live-note">Live snapshot — the panels below are not affected by the month selected above.</p>
       <div class="kpi-row" id="report-kpis"></div>
       <div class="panel" id="report-forecast-panel">
-        <h3>Commission forecast (weighted pipeline)</h3>
+        <h3>Commission forecast — offer &amp; exchange</h3>
         <div class="kpi-row" id="report-forecast-headline" style="margin:8px 0 12px;"></div>
-        <div id="report-forecast-bars"></div>
-        <p class="panel-sub" style="margin:10px 0 0;">Weighted by typical conversion at each stage (enquiry 10% → exchange 95%).</p>
-      </div>
-      <div class="panel" id="report-scoreboard-panel">
-        <h3>Adviser scoreboard</h3>
-        <div id="report-advisers"></div>
+        <div id="report-forecast-buckets"></div>
+        <p class="panel-sub" id="report-forecast-hint" style="margin:10px 0 0;">Weighted by stage conversion (offer 80% · exchange 95%), bucketed by expected completion date.</p>
       </div>
       <div class="grid-2">
         <div class="panel">
           <h3>Completions by month (this year)</h3>
           <div id="report-months"></div>
-        </div>
-        <div class="panel">
-          <h3>Pipeline funnel (live cases)</h3>
-          <div id="report-funnel"></div>
-        </div>
-      </div>
-      <div class="grid-2">
-        <div class="panel">
-          <h3>Lead sources</h3>
-          <p class="panel-sub">Set the lead source on cases to build this up.</p>
-          <div id="report-sources"></div>
         </div>
         <div class="panel">
           <h3>Introducers</h3>

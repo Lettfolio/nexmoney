@@ -29,6 +29,24 @@ const STAGES = [
   ["not_proceeding", "Not Proceeding"],
 ];
 const STAGE_LABEL = Object.fromEntries(STAGES);
+/* BUILD 5a — pipeline focus segments. A view filter (NOT permissions/pages): deals flow across
+   groups and the 4-person team wears multiple hats, so this just narrows which stage columns/tabs
+   show. Grouping tracks the code's own stage boundaries: the New→Current boundary is exactly where
+   the protection gate + protection badges fire (stage === application), and Completed = the two
+   terminal stages the app treats as "not live" (completed/not_proceeding) and never ages. */
+const SEGMENTS = [
+  ["all", "All"],
+  ["new", "New business"],
+  ["current", "Current"],
+  ["completed", "Completed & closed"],
+];
+const SEGMENT_STAGES = {
+  new: ["enquiry", "fact_find", "decision_in_principle"],
+  current: ["application", "offer", "exchange"],
+  completed: ["completed", "not_proceeding"],
+};
+const inSegment = (stage, seg) => seg === "all" || (SEGMENT_STAGES[seg] || []).includes(stage);
+const segmentStageList = (seg) => (seg === "all" ? STAGES : STAGES.filter(([k]) => inSegment(k, seg)));
 /* Board time-in-stage aging (SP2b, senior-broker spec). Per-stage days-in-stage thresholds:
    card goes amber past the threshold, red at 2×. completed/not_proceeding are intentionally
    absent → those cards are never aged. Tune these numbers here. */
@@ -60,7 +78,7 @@ async function loadStageEntries(cases) {
   const ids = (cases || []).map((c) => c.id);
   if (!ids.length) return map;
   try {
-    const { data, error } = await db.from("case_events").select("case_id,event,created_at").in("case_id", ids).eq("event", "stage_change");
+    const { data, error } = await db.from("case_events").select("case_id,event,created_at").in("case_id", ids).in("event", ["stage_changed", "stage_change", "case_created"]);
     if (error) return map;
     (data || []).forEach((e) => {
       if (!e || !e.case_id || !e.created_at) return;
@@ -156,6 +174,10 @@ let ME = null, TEAM = [], tasksScope = "mine";
 // never persisted — resets on reload). Keyed by drawer id (e.g. "watchtower", "leads").
 let dashDrawerTouched = {};
 let pipelineView = "board", stageTab = "all", sortKey = "updated_at", sortDir = -1;
+// BUILD 5a: pipeline focus segment (session-only JS var, default "all"). Persists across page
+// switches because it's module-scoped. viewBeforeCompleted remembers the board/table choice we
+// force-overrode when entering the Completed segment (its board makes no sense → auto-table).
+let pipelineSegment = "all", viewBeforeCompleted = null;
 function staffName(id) { const p = TEAM.find((x) => x.id === id); return p ? (p.full_name || p.email) : "—"; }
 // Compact relative age ("3d ago", "2mo ago") for the case summary's last-note line.
 function fmtAgo(d) {
@@ -954,19 +976,33 @@ async function loadPipeline() {
     }
     return true;
   });
+  renderSegmentControl(filtered);
   const stageEntry = await loadStageEntries(filtered);
+  // Completed segment: the board makes little sense — force the completion-focused table.
+  if (pipelineSegment === "completed") pipelineView = "table";
   if (pipelineView === "table") { renderPipelineTable(filtered, stageEntry); return; }
   $("#board").classList.remove("hidden");
   $("#board-hint").classList.remove("hidden");
   $("#stage-tabs").classList.add("hidden");
   $("#table-wrap").classList.add("hidden");
+  // In a focused segment only that segment's stage columns render (wider, less scrolling).
+  const stages = segmentStageList(pipelineSegment);
+  const board = $("#board");
+  board.classList.toggle("is-focused", pipelineSegment !== "all");
+  board.style.setProperty("--ncols", stages.length);
+  const segCases = filtered.filter((c) => inSegment(c.stage, pipelineSegment));
+  if (!segCases.length) {
+    board.innerHTML = `<div class="empty" style="grid-column:1/-1;padding:48px 16px;text-align:center;">No cases in ${esc(SEGMENTS.find(([k]) => k === pipelineSegment)?.[1] || "this view")}${$("#board-adviser").value && $("#board-adviser").value !== "all" ? " for this adviser" : ""}${q ? " matching your search" : ""}.</div>`;
+    updateBoardScrollHint();
+    return;
+  }
   const byStage = {};
-  STAGES.forEach(([k]) => (byStage[k] = []));
-  filtered.forEach((c) => byStage[c.stage]?.push(c));
+  stages.forEach(([k]) => (byStage[k] = []));
+  segCases.forEach((c) => byStage[c.stage]?.push(c));
   // Stalled deals surface first: red, then amber (worst days-in-stage on top),
   // then the rest in the existing updated_at order.
   const AGE_RANK = { red: 0, amber: 1 };
-  STAGES.forEach(([k]) => byStage[k].sort((a, b) => {
+  stages.forEach(([k]) => byStage[k].sort((a, b) => {
     const A = cardAge(a, stageEntry[a.id]), B = cardAge(b, stageEntry[b.id]);
     const ra = A.level in AGE_RANK ? AGE_RANK[A.level] : 2;
     const rb = B.level in AGE_RANK ? AGE_RANK[B.level] : 2;
@@ -974,9 +1010,10 @@ async function loadPipeline() {
     if (ra < 2) return (B.inStage ?? -1) - (A.inStage ?? -1);
     return 0;
   }));
-  $("#board").innerHTML = STAGES.map(([k, label]) => `
+  $("#board").innerHTML = stages.map(([k, label]) => `
     <div class="col" data-stage="${k}">
       <h4${k === "decision_in_principle" ? ` title="${TIP_DIP}"` : ""}>${label} <span>${byStage[k].length}</span></h4>
+      ${byStage[k].length === 0 ? '<div class="col-empty">No cases here</div>' : ""}
       ${byStage[k].map((c) => {
         const erc = c.erc_end_date && c.rate_end_date && c.erc_end_date > c.rate_end_date;
         const age = cardAge(c, stageEntry[c.id]);
@@ -1057,40 +1094,99 @@ window.moveCaseToStage = async function (caseId, targetStage) {
   }
   const { error } = await db.from("cases").update({ stage: targetStage }).eq("id", caseId);
   if (error) return toast("Error: " + error.message);
-  toast("Moved to " + (STAGE_LABEL[targetStage] || targetStage));
+  // If the case just left the focused segment its card vanishes from this view —
+  // name the segment it landed in so nobody thinks the deal disappeared.
+  let where = "";
+  if (pipelineSegment !== "all" && !inSegment(targetStage, pipelineSegment)) {
+    const segNames = { new: "New business", current: "Current", completed: "Completed & closed" };
+    const destSeg = Object.keys(SEGMENT_STAGES).find((k) => SEGMENT_STAGES[k].includes(targetStage));
+    if (destSeg) where = " — now in " + (segNames[destSeg] || destSeg);
+  }
+  toast("Moved to " + (STAGE_LABEL[targetStage] || targetStage) + where);
   loadPipeline();
 };
+/* BUILD 5a — segmented focus control above the pipeline. Counts are live against the current
+   adviser/search-filtered set, so each label reflects exactly what that segment would show. */
+function renderSegmentControl(filtered) {
+  const wrap = $("#pipe-segment");
+  if (!wrap) return;
+  const count = (seg) => filtered.filter((c) => inSegment(c.stage, seg)).length;
+  wrap.innerHTML = SEGMENTS.map(([k, l]) =>
+    `<button class="seg-btn${pipelineSegment === k ? " active" : ""}" role="tab" aria-selected="${pipelineSegment === k}" data-seg="${k}">${l} <span class="seg-count">${count(k)}</span></button>`
+  ).join("");
+  wrap.querySelectorAll(".seg-btn").forEach((b) => (b.onclick = () => setSegment(b.dataset.seg)));
+  syncViewToggle();
+}
+// Switch focus segment. Entering Completed forces the table (its board is meaningless) and
+// remembers the prior board/table choice; leaving Completed restores it. Segment change resets
+// the stage tab (a tab from another segment would filter to nothing).
+function setSegment(seg) {
+  if (seg === pipelineSegment) return;
+  const leavingCompleted = pipelineSegment === "completed" && seg !== "completed";
+  const enteringCompleted = seg === "completed" && pipelineSegment !== "completed";
+  if (enteringCompleted) { viewBeforeCompleted = pipelineView; pipelineView = "table"; }
+  else if (leavingCompleted && viewBeforeCompleted) { pipelineView = viewBeforeCompleted; viewBeforeCompleted = null; }
+  pipelineSegment = seg;
+  stageTab = "all";
+  loadPipeline();
+}
+// Keep the board/table toggle honest: hidden in Completed (locked to table), otherwise labelled
+// for the view it would switch to.
+function syncViewToggle() {
+  const btn = $("#view-toggle");
+  if (!btn) return;
+  btn.style.display = pipelineSegment === "completed" ? "none" : "";
+  btn.textContent = pipelineView === "board" ? "☰ Table view" : "⊞ Board view";
+}
 function renderPipelineTable(filtered, stageEntry = {}) {
   $("#board").classList.add("hidden");
   $("#board-hint").classList.add("hidden");
   $("#stage-tabs").classList.remove("hidden");
   $("#table-wrap").classList.remove("hidden");
+  // Stage tabs are scoped to the active segment (segment narrows which stage tabs show).
+  const segStages = segmentStageList(pipelineSegment);
+  const segFiltered = filtered.filter((c) => inSegment(c.stage, pipelineSegment));
   const counts = {};
-  STAGES.forEach(([k]) => (counts[k] = filtered.filter((c) => c.stage === k).length));
-  $("#stage-tabs").innerHTML = [`<button class="stage-tab ${stageTab === "all" ? "active" : ""}" data-stage="all">All (${filtered.length})</button>`]
-    .concat(STAGES.map(([k, l]) => `<button class="stage-tab ${stageTab === k ? "active" : ""}" data-stage="${k}"${k === "decision_in_principle" ? ` title="${TIP_DIP}"` : ""}>${l} (${counts[k]})</button>`)).join("");
+  segStages.forEach(([k]) => (counts[k] = segFiltered.filter((c) => c.stage === k).length));
+  $("#stage-tabs").innerHTML = [`<button class="stage-tab ${stageTab === "all" ? "active" : ""}" data-stage="all">All (${segFiltered.length})</button>`]
+    .concat(segStages.map(([k, l]) => `<button class="stage-tab ${stageTab === k ? "active" : ""}" data-stage="${k}"${k === "decision_in_principle" ? ` title="${TIP_DIP}"` : ""}>${l} (${counts[k]})</button>`)).join("");
   document.querySelectorAll(".stage-tab").forEach((b) => (b.onclick = () => { stageTab = b.dataset.stage; loadPipeline(); }));
 
-  let rows = stageTab === "all" ? filtered : filtered.filter((c) => c.stage === stageTab);
+  const completedMode = pipelineSegment === "completed";
+  let rows = stageTab === "all" ? segFiltered : segFiltered.filter((c) => c.stage === stageTab);
   const val = (c, k) => {
     switch (k) {
       case "client": return [c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ").toLowerCase();
       case "lender": return (c.lender || "").toLowerCase();
       case "rate_percent": return c.rate_percent ?? -1;
       case "broker_fee": return c.broker_fee ?? -1;
+      case "loan_amount": return c.loan_amount ?? -1;
       case "assigned": return staffName(c.assigned_to).toLowerCase();
       case "days_in_stage": return daysSince(stageEntry[c.id]) ?? -1;
       default: return c[k] ?? "";
     }
   };
-  rows = rows.slice().sort((a, b) => { const x = val(a, sortKey), y = val(b, sortKey); return (x < y ? -1 : x > y ? 1 : 0) * sortDir; });
+  // Completion-focused table: its own columns, defaulting to newest-completed first (falls back
+  // to completed_at desc whenever the active sort key isn't one of its columns).
+  const cols = completedMode
+    ? [["client", "Client"], ["stage", "Status"], ["completed_at", "Completed"], ["lender", "Lender"], ["loan_amount", "Loan"], ["broker_fee", "Broker fee"], ["fee_status", "Fee status"], ["assigned", "Adviser"]]
+    : [["client", "Client"], ["stage", "Stage"], ["days_in_stage", "In stage"], ["case_kind", "Type"], ["lender", "Lender"], ["rate_percent", "Rate"], ["rate_end_date", "Rate ends"], ["erc_end_date", "ERC ends"], ["broker_fee", "Fee"], ["fee_status", "Fee status"], ["protection_status", "Protection"], ["assigned", "Adviser"], ["updated_at", "Updated"]];
+  let sk = sortKey, sd = sortDir;
+  if (completedMode && !cols.some(([k]) => k === sortKey)) { sk = "completed_at"; sd = -1; }
+  rows = rows.slice().sort((a, b) => { const x = val(a, sk), y = val(b, sk); return (x < y ? -1 : x > y ? 1 : 0) * sd; });
 
-  const cols = [["client", "Client"], ["stage", "Stage"], ["days_in_stage", "In stage"], ["case_kind", "Type"], ["lender", "Lender"], ["rate_percent", "Rate"], ["rate_end_date", "Rate ends"], ["erc_end_date", "ERC ends"], ["broker_fee", "Fee"], ["fee_status", "Fee status"], ["protection_status", "Protection"], ["assigned", "Adviser"], ["updated_at", "Updated"]];
-  $("#table-wrap").innerHTML = `<div class="panel" style="overflow-x:auto;">
-    <div style="display:flex;justify-content:flex-end;margin-bottom:8px;"><button class="btn btn-sm" id="csv-btn">⬇ Download CSV</button></div>
-    <table class="imp-table" id="pipe-table">
-      <tr>${cols.map(([k, l]) => `<th data-k="${k}" style="cursor:pointer;"${k === "erc_end_date" ? ` title="${TIP_ERC}"` : ""}>${l}${sortKey === k ? (sortDir > 0 ? " ▲" : " ▼") : ""}</th>`).join("")}</tr>
-      ${rows.map((c) => `<tr onclick="openCase('${c.id}')" style="cursor:pointer;">
+  const bodyRows = completedMode
+    ? rows.map((c) => `<tr onclick="openCase('${c.id}')" style="cursor:pointer;">
+        <td><strong>${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" "))}</strong></td>
+        <td><span class="badge ${c.stage === "completed" ? "green" : "grey"}">${STAGE_LABEL[c.stage] || c.stage}</span></td>
+        <td>${c.completed_at ? fmtD(c.completed_at) : "—"}</td>
+        <td>${lenderIcon(c.lender)}${esc(c.lender || "")}</td>
+        <td>${c.loan_amount ? fmtM(c.loan_amount) : ""}</td>
+        <td>${c.broker_fee ? fmtM(c.broker_fee) : ""}</td>
+        <td>${esc((c.fee_status || "").replace(/_/g, " "))}</td>
+        <td>${c.assigned_to ? esc(staffName(c.assigned_to)) : ""}</td>
+      </tr>`).join("")
+    : rows.map((c) => `<tr onclick="openCase('${c.id}')" style="cursor:pointer;">
         <td><strong>${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" "))}</strong></td>
         <td><span class="badge blue">${STAGE_LABEL[c.stage] || c.stage}</span></td>
         <td>${(() => { const a = cardAge(c, stageEntry[c.id]); return a.inStage == null ? "" : `<span class="age-cell${a.level ? " age-" + a.level : ""}">${a.inStage}d</span>`; })()}</td>
@@ -1104,40 +1200,53 @@ function renderPipelineTable(filtered, stageEntry = {}) {
         <td>${esc((c.protection_status || "").replace(/_/g, " "))}</td>
         <td>${c.assigned_to ? esc(staffName(c.assigned_to)) : ""}</td>
         <td>${fmtD(c.updated_at)}</td>
-      </tr>`).join("")}
-    </table></div>`;
+      </tr>`).join("");
+  $("#table-wrap").innerHTML = `<div class="panel" style="overflow-x:auto;">
+    <div style="display:flex;justify-content:flex-end;margin-bottom:8px;"><button class="btn btn-sm" id="csv-btn">⬇ Download CSV</button></div>
+    ${rows.length ? `<table class="imp-table" id="pipe-table">
+      <tr>${cols.map(([k, l]) => `<th data-k="${k}" style="cursor:pointer;"${k === "erc_end_date" ? ` title="${TIP_ERC}"` : ""}>${l}${sk === k ? (sd > 0 ? " ▲" : " ▼") : ""}</th>`).join("")}</tr>
+      ${bodyRows}
+    </table>` : `<div class="empty" style="padding:40px 16px;text-align:center;">No cases in this view.</div>`}</div>`;
   document.querySelectorAll("#pipe-table th").forEach((th) => (th.onclick = () => {
     const k = th.dataset.k;
     if (sortKey === k) sortDir *= -1; else { sortKey = k; sortDir = 1; }
     loadPipeline();
   }));
-  $("#csv-btn").onclick = () => exportCsv(rows);
+  $("#csv-btn").onclick = () => exportCsv(rows, completedMode);
 }
-function exportCsv(rows) {
+function exportCsv(rows, completedMode = false) {
   const q2 = (v) => {
     let s = String(v ?? "");
     // Neutralise spreadsheet formula injection (=, +, -, @, tab, CR at start)
     if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
     return `"${s.replace(/"/g, '""')}"`;
   };
-  const head = ["Client", "Stage", "Type", "Lender", "Rate %", "Rate end", "Rate end estimated", "ERC end", "Broker fee", "Fee status", "Protection", "Adviser", "Updated"];
-  const lines = [head.map(q2).join(",")].concat(rows.map((c) => [
+  const head = completedMode
+    ? ["Client", "Status", "Completed", "Lender", "Loan", "Broker fee", "Fee status", "Adviser"]
+    : ["Client", "Stage", "Type", "Lender", "Rate %", "Rate end", "Rate end estimated", "ERC end", "Broker fee", "Fee status", "Protection", "Adviser", "Updated"];
+  const row = (c) => completedMode ? [
+    [c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" "),
+    STAGE_LABEL[c.stage] || c.stage, (c.completed_at || "").slice(0, 10), c.lender || "",
+    c.loan_amount ?? "", c.broker_fee ?? "", c.fee_status || "", c.assigned_to ? staffName(c.assigned_to) : "",
+  ] : [
     [c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" "),
     STAGE_LABEL[c.stage] || c.stage, (KINDS.find((x) => x[0] === c.case_kind) || [])[1] || c.case_kind, c.lender || "", c.rate_percent ?? "", c.rate_end_date || "",
     c.rate_end_estimated ? "yes" : "", c.erc_end_date || "", c.broker_fee ?? "",
     c.fee_status || "", c.protection_status || "", c.assigned_to ? staffName(c.assigned_to) : "",
     (c.updated_at || "").slice(0, 10),
-  ].map(q2).join(",")));
+  ];
+  const lines = [head.map(q2).join(",")].concat(rows.map((c) => row(c).map(q2).join(",")));
   const blob = new Blob(["﻿" + lines.join("\n")], { type: "text/csv" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = `pipeline-${stageTab}-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.download = `pipeline-${pipelineSegment}-${stageTab}-${new Date().toISOString().slice(0, 10)}.csv`;
   a.click();
 }
 $("#report-month").addEventListener("change", () => loadReports());
 $("#view-toggle").addEventListener("click", () => {
+  if (pipelineSegment === "completed") return; // locked to table in Completed
   pipelineView = pipelineView === "board" ? "table" : "board";
-  $("#view-toggle").textContent = pipelineView === "board" ? "☰ Table view" : "⊞ Board view";
+  syncViewToggle();
   loadPipeline();
 });
 $("#board-search").addEventListener("input", () => loadPipeline());
@@ -1520,6 +1629,9 @@ window.openCase = async function (id) {
         ${c.broker_fee > 0 ? `<div class="cs-stat"><span class="cs-lbl">Fee</span><span class="cs-val">${fmtM(c.broker_fee)}${c.fee_status ? ` <span class="cs-muted">(${esc(String(c.fee_status).replace(/_/g, " "))})</span>` : ""}</span></div>` : ""}
         ${(c.protection_status || "not_discussed") === "not_discussed" ? '<div class="cs-stat cs-warn"><span class="cs-lbl">Protection</span><span class="cs-val">not discussed</span></div>' : ""}
         ${c.rate_percent != null || c.rate_end_date ? `<div class="cs-stat ${rateOverdue ? "cs-danger" : rateSoon ? "cs-warn" : ""}"><span class="cs-lbl">Rate${rateOverdue ? " — ended" : rateSoon ? " — <6mo" : ""}</span><span class="cs-val">${c.rate_percent != null ? c.rate_percent + "%" : "—"}${c.rate_end_date ? ` · ends ${fmtD(c.rate_end_date)}` : ""}</span></div>` : ""}
+        ${["offer", "exchange"].includes(c.stage) ? (c.expected_completion_date
+          ? `<div class="cs-stat"><span class="cs-lbl">Expected completion</span><span class="cs-val">${fmtD(c.expected_completion_date)}</span></div>`
+          : `<div class="cs-stat cs-warn" id="cs-expected-nudge" style="cursor:pointer;" title="Click to set the expected completion date"><span class="cs-lbl">Expected completion</span><span class="cs-val">Set expected completion →</span></div>`) : ""}
       </div>
       <div class="cs-lines">
         <div class="cs-line"><span class="cs-lbl">Next task</span><span id="cs-task-val">${nextTask ? `<span class="${taskOverdue ? "cs-danger-txt" : ""}">${esc(nextTask.title)}${nextTask.due_date ? " · " + (taskOverdue ? "overdue " : "due ") + fmtD(nextTask.due_date) : ""}</span>` : '<span class="cs-muted">none open</span>'}</span></div>
@@ -1626,6 +1738,7 @@ window.openCase = async function (id) {
       </label>
       <label>ERC end date<input name="erc_end_date" type="date" value="${c.erc_end_date ?? ""}"></label>
       <label>Offer expiry date<input name="offer_expiry_date" type="date" value="${c.offer_expiry_date ?? ""}"></label>
+      <label>Expected completion date<input name="expected_completion_date" type="date" id="case-expected-completion" value="${c.expected_completion_date ?? ""}"></label>
       <label>Term (years)<input name="term_years" type="number" value="${c.term_years ?? ""}"></label>
       <label>Submitted date<input name="submitted_at" type="date" value="${c.submitted_at ?? ""}"></label>
       <label>Proc fee (£)<input name="proc_fee" type="number" step="any" value="${c.proc_fee ?? ""}"></label>
@@ -1840,6 +1953,13 @@ window.openCase = async function (id) {
       } finally {
         if (saveBtn) saveBtn.disabled = false;
       }
+    };
+    // "Set expected completion" nudge (BUILD 5c) — reveals Case details and focuses the field.
+    const expNudge = $("#cs-expected-nudge");
+    if (expNudge) expNudge.onclick = () => {
+      const det = $(".case-details"); if (det) det.open = true;
+      const inp = $("#case-expected-completion");
+      if (inp) { inp.scrollIntoView({ behavior: "smooth", block: "center" }); inp.focus(); }
     };
     const logcallBtn = $("#cs-logcall-btn"), logcallPanel = $("#cs-logcall-panel");
     if (logcallBtn && logcallPanel) {
@@ -2853,9 +2973,12 @@ async function buildEvidencePack(caseId) {
 }
 
 /* ---------- Reports ---------- */
-function renderMonthReport(all) {
-  const mv = $("#report-month").value || localMonthStr();
-  if (!$("#report-month").value) $("#report-month").value = mv;
+// "YYYY-MM" -> "July 2026", shared by the month-business panel and the threaded-panels note.
+function monthLabel(mv) {
+  return new Date(mv + "-01").toLocaleDateString("en-GB", { month: "long", year: "numeric" });
+}
+
+function renderMonthReport(all, mv) {
   // Bucket on the UK-local month so this card agrees with the annual chart/YTD (which use local getMonth/getFullYear).
   const inMonth = (d) => d && localMonthStr(d) === mv;
   const sub = all.filter((c) => inMonth(c.submitted_at));
@@ -2863,7 +2986,7 @@ function renderMonthReport(all) {
   const sum = (rows, k) => rows.reduce((s, c) => s + Number(c[k] || 0), 0);
   const subTotal = sum(sub, "proc_fee") + sum(sub, "broker_fee") + sum(sub, "sols_fee");
   const doneTotal = sum(done, "proc_fee") + sum(done, "broker_fee") + sum(done, "sols_fee");
-  $("#month-report-title").textContent = "Monthly business — " + new Date(mv + "-01").toLocaleDateString("en-GB", { month: "long", year: "numeric" });
+  $("#month-report-title").textContent = "Monthly business — " + monthLabel(mv);
   $("#month-kpis").innerHTML = `
     <div class="kpi"><div class="num">${sub.length}</div><div class="lbl">Applications submitted</div></div>
     <div class="kpi"><div class="num">${fmtM(subTotal)}</div><div class="lbl">Submitted £ (proc+broker+sols)</div></div>
@@ -2881,15 +3004,144 @@ function renderMonthReport(all) {
   </table></div>` : '<div class="empty">No submissions or completions recorded for this month.</div>';
 }
 
+/* BUILD 5c — the Reports month picker (defaults to the current month) now threads into every
+   panel where a month scope is meaningful: adviser scoreboard, pipeline funnel, lead sources.
+   Open-case counts and overdue-task counts describe "right now" rather than a historical window,
+   so those stay live even inside the threaded scoreboard panel. Computed entirely client-side from
+   `all` (the same cases already fetched for the rest of Reports) — no RPC change needed. */
+function renderThreadedPanels(all, mv, repAdvisers) {
+  const inMonth = (d) => d && localMonthStr(d) === mv;
+  const label = monthLabel(mv);
+  const activeStages = ["enquiry", "fact_find", "decision_in_principle", "application", "offer", "exchange"];
+
+  // ---- Adviser scoreboard: completions/fees/avg-days scoped to the selected month. ----
+  const overdueByName = {};
+  (Array.isArray(repAdvisers) ? repAdvisers : []).forEach((a) => { overdueByName[a.name] = a.overdue_tasks; });
+  const advRows = TEAM.map((p) => {
+    const name = staffName(p.id);
+    const mine = all.filter((c) => c.assigned_to === p.id);
+    const open = mine.filter((c) => activeStages.includes(c.stage)).length;
+    const done = mine.filter((c) => inMonth(c.completed_at));
+    const feesBanked = mine.filter((c) => inMonth(c.fee_paid_at)).reduce((s, c) => s + Number(c.broker_fee || 0), 0);
+    const days = done.map((c) => Math.round((new Date(c.completed_at) - new Date(c.created_at)) / 86400000)).filter((n) => n > 0);
+    const avg = days.length ? Math.round(days.reduce((a, b) => a + b, 0) / days.length) : null;
+    return { name, open, completions: done.length, feesBanked, overdue: overdueByName[name], avg };
+  }).filter((r) => r.open || r.completions || r.feesBanked);
+  $("#report-scoreboard-scope").textContent = `Completions, fees banked and avg days are for ${label}. Open cases and overdue tasks are as of now.`;
+  $("#report-advisers").innerHTML = advRows.length ? `<table class="imp-table">
+    <tr><th>Adviser</th><th>Open</th><th>Completions</th><th>Fees banked</th><th>Overdue</th><th>Avg days</th></tr>
+    ${advRows.map((a) => `<tr>
+      <td>${esc(a.name)}</td>
+      <td>${a.open}</td>
+      <td>${a.completions}</td>
+      <td>${fmtM(a.feesBanked)}</td>
+      <td>${a.overdue ? `<span class="badge red">${a.overdue}</span>` : (a.overdue == null ? "—" : "0")}</td>
+      <td>${a.avg == null ? "—" : a.avg}</td>
+    </tr>`).join("")}
+  </table>` : `<div class="empty">No adviser activity in ${label}.</div>`;
+
+  // ---- Pipeline funnel: cases created in the selected month, by current stage (all 8 stages,
+  // so a month's cohort that has already completed or dropped out still shows up). ----
+  const monthCases = all.filter((c) => inMonth(c.created_at));
+  $("#report-funnel-scope").textContent = `${monthCases.length} case${monthCases.length === 1 ? "" : "s"} created in ${label}, by current stage.`;
+  const maxF = Math.max(...STAGES.map(([s]) => monthCases.filter((c) => c.stage === s).length), 1);
+  $("#report-funnel").innerHTML = monthCases.length ? STAGES.map(([s, l]) => {
+    const n = monthCases.filter((c) => c.stage === s).length;
+    return n ? `
+    <div style="display:flex;align-items:center;gap:8px;margin:3px 0;">
+      <span style="width:90px;font-size:12px;color:var(--muted);">${l}</span>
+      <div style="flex:1;background:var(--light);border-radius:4px;"><div style="width:${(n / maxF) * 100}%;background:var(--orange);border-radius:4px;height:16px;"></div></div>
+      <span style="width:24px;font-size:12px;font-weight:600;">${n}</span>
+    </div>` : "";
+  }).join("") : `<div class="empty">No cases created in ${label}.</div>`;
+
+  // ---- Lead sources: leads (cases) created in the selected month. ----
+  const srcMap = {};
+  monthCases.forEach((c) => {
+    const k = (c.lead_source || "").trim() || "(not set)";
+    srcMap[k] = srcMap[k] || { cases: 0, completed: 0, revenue: 0 };
+    srcMap[k].cases++;
+    if (c.stage === "completed") { srcMap[k].completed++; srcMap[k].revenue += Number(c.proc_fee || 0) + Number(c.broker_fee || 0) + Number(c.sols_fee || 0); }
+  });
+  $("#report-sources-scope").textContent = `Set the lead source on cases to build this up. Scoped to leads created in ${label}.`;
+  $("#report-sources").innerHTML = monthCases.length ? `<table class="imp-table">
+    <tr><th>Source</th><th>Cases</th><th>Completed</th><th>Conversion</th><th>Revenue</th></tr>
+    ${Object.entries(srcMap).sort((a, b) => b[1].cases - a[1].cases).map(([k, v]) => `<tr>
+      <td>${esc(k)}</td>
+      <td>${v.cases}</td>
+      <td>${v.completed}</td>
+      <td>${v.cases ? Math.round((v.completed / v.cases) * 100) : 0}%</td>
+      <td>${fmtM(v.revenue)}</td>
+    </tr>`).join("")}
+  </table>` : `<div class="empty">No leads created in ${label}.</div>`;
+}
+
+/* BUILD 5c — Commission forecast, reworked into buckets. Scoped to open cases at offer/exchange
+   only (the two stages close enough to completion that a date is meaningful), weighted by the
+   same per-stage conversion the old by-stage forecast used (read from get_reports()'s mock:
+   offer 80%, exchange 95%). Bucketed by expected_completion_date — "This month" also swallows
+   any overdue date so nothing silently vanishes. Purely client-side from `all`, independent of
+   the Reports month picker (this is a live forward-look, not a historical one) and of the RPC,
+   so it renders — all under "No date" — even on day one in prod when the column is all-null. */
+function renderForecastBuckets(all) {
+  const STAGE_WEIGHT = { offer: 0.8, exchange: 0.95 };
+  const commission = (c) => Number(c.broker_fee || 0) + Number(c.proc_fee || 0);
+  const open = all.filter((c) => STAGE_WEIGHT[c.stage] != null);
+  const now = new Date();
+  const thisM = localMonthStr(now);
+  const nextM = localMonthStr(new Date(now.getFullYear(), now.getMonth() + 1, 1));
+  const buckets = {
+    this: { label: "This month", cases: 0, weighted: 0 },
+    next: { label: "Next month", cases: 0, weighted: 0 },
+    later: { label: "Later", cases: 0, weighted: 0 },
+    none: { label: "No date", cases: 0, weighted: 0 },
+  };
+  let gross_total = 0;
+  open.forEach((c) => {
+    const gross = commission(c);
+    gross_total += gross;
+    const weighted = gross * STAGE_WEIGHT[c.stage];
+    let key = "none";
+    if (c.expected_completion_date) {
+      const m = localMonthStr(c.expected_completion_date);
+      key = m <= thisM ? "this" : m === nextM ? "next" : "later";
+    }
+    buckets[key].cases++;
+    buckets[key].weighted += weighted;
+  });
+  const weighted_total = Object.values(buckets).reduce((s, b) => s + b.weighted, 0);
+  $("#report-forecast-headline").innerHTML = `
+    <div class="kpi"><div class="num">${fmtM(weighted_total)}</div><div class="lbl">Weighted commission</div></div>
+    <div class="kpi"><div class="num">${fmtM(gross_total)}</div><div class="lbl">Gross (unweighted)</div></div>`;
+  const maxW = Math.max(...Object.values(buckets).map((b) => b.weighted), 1);
+  $("#report-forecast-buckets").innerHTML = open.length ? ["this", "next", "later", "none"].map((k) => {
+    const b = buckets[k];
+    return `
+    <div style="display:flex;align-items:center;gap:8px;margin:3px 0;">
+      <span style="width:90px;font-size:12px;color:var(--muted);">${b.label}</span>
+      <div style="flex:1;background:var(--light);border-radius:4px;"><div style="width:${(b.weighted / maxW) * 100}%;background:var(--orange);border-radius:4px;height:16px;"></div></div>
+      <span style="width:150px;font-size:12px;font-weight:600;text-align:right;">${b.cases} case${b.cases === 1 ? "" : "s"} · ${fmtM(b.weighted)}</span>
+    </div>`;
+  }).join("") : '<div class="empty">No live cases at offer or exchange.</div>';
+  const hintEl = $("#report-forecast-hint");
+  if (hintEl) {
+    hintEl.textContent = (open.length && buckets.none.cases === open.length)
+      ? "None of these cases have an expected completion date yet — set one on each case (in Case details) to sharpen this forecast."
+      : "Weighted by stage conversion (offer 80% · exchange 95%), bucketed by expected completion date.";
+  }
+}
+
 async function loadReports() {
   const yr = new Date().getFullYear();
+  const mv = $("#report-month").value || localMonthStr();
+  if (!$("#report-month").value) $("#report-month").value = mv;
   const [{ data: cases }, { data: intros }, repRes] = await Promise.all([
-    db.from("cases").select("id,stage,case_kind,loan_amount,broker_fee,proc_fee,sols_fee,submitted_at,fee_status,fee_paid_at,completed_at,created_at,lead_source,introducer_id,protection_status,retention_source_case_id,assigned_to,nps_score"),
+    db.from("cases").select("id,stage,case_kind,loan_amount,broker_fee,proc_fee,sols_fee,submitted_at,fee_status,fee_paid_at,completed_at,created_at,lead_source,introducer_id,protection_status,retention_source_case_id,assigned_to,nps_score,expected_completion_date"),
     db.from("introducers").select("id,name"),
     db.rpc("get_reports"),
   ]);
-  renderMonthReport(cases || []);
   const all = cases || [];
+  renderMonthReport(all, mv);
   const activeStages = ["enquiry", "fact_find", "decision_in_principle", "application", "offer", "exchange"];
   const active = all.filter((c) => activeStages.includes(c.stage));
   const completedYr = all.filter((c) => c.completed_at && new Date(c.completed_at).getFullYear() === yr);
@@ -2906,6 +3158,9 @@ async function loadReports() {
   const avgNps = scored.length ? scored.reduce((s, c) => s + Number(c.nps_score), 0) / scored.length : null;
   const promoterPct = scored.length ? Math.round((scored.filter((c) => c.nps_score >= 9).length / scored.length) * 100) : null;
 
+  // Live snapshot — not affected by the month picker (see .report-live-note above these in the DOM):
+  // this KPI row mixes year-to-date and always-current figures, pipeline loan value and NPS are
+  // all-time/live-state, and client LTV (below, RPC-backed) is a lifetime figure by nature.
   $("#report-kpis").innerHTML = `
     <div class="kpi"><div class="num">${completedYr.length}</div><div class="lbl">Completions ${yr}</div></div>
     <div class="kpi"><div class="num">${active.length}</div><div class="lbl">Live cases</div></div>
@@ -2926,28 +3181,6 @@ async function loadReports() {
       <span style="width:24px;font-size:12px;font-weight:600;">${byMonth[i] || ""}</span>
     </div>`).join("");
 
-  const maxF = Math.max(...activeStages.map((s) => active.filter((c) => c.stage === s).length), 1);
-  $("#report-funnel").innerHTML = activeStages.map((s) => {
-    const n = active.filter((c) => c.stage === s).length;
-    return `
-    <div style="display:flex;align-items:center;gap:8px;margin:3px 0;">
-      <span style="width:90px;font-size:12px;color:var(--muted);">${STAGE_LABEL[s]}</span>
-      <div style="flex:1;background:var(--light);border-radius:4px;"><div style="width:${(n / maxF) * 100}%;background:var(--orange);border-radius:4px;height:16px;"></div></div>
-      <span style="width:24px;font-size:12px;font-weight:600;">${n || ""}</span>
-    </div>`;
-  }).join("");
-
-  const srcMap = {};
-  all.forEach((c) => {
-    const k = (c.lead_source || "").trim() || "(not set)";
-    srcMap[k] = srcMap[k] || { total: 0, done: 0 };
-    srcMap[k].total++;
-    if (c.stage === "completed") srcMap[k].done++;
-  });
-  $("#report-sources").innerHTML = `<table class="imp-table"><tr><th>Source</th><th>Cases</th><th>Completed</th></tr>` +
-    Object.entries(srcMap).sort((a, b) => b[1].total - a[1].total).slice(0, 12)
-      .map(([k, v]) => `<tr><td>${esc(k)}</td><td>${v.total}</td><td>${v.done}</td></tr>`).join("") + `</table>`;
-
   const introMap = Object.fromEntries((intros || []).map((i) => [i.id, i.name]));
   const iMap = {};
   all.filter((c) => c.introducer_id).forEach((c) => {
@@ -2962,49 +3195,19 @@ async function loadReports() {
         .map(([k, v]) => `<tr><td>${esc(k)}</td><td>${v.total}</td><td>${v.done}</td></tr>`).join("") + `</table>`
     : '<div class="empty">No cases assigned to introducers yet.</div>';
 
-  // Extra panels backed by the get_reports() RPC. On error we skip them —
-  // the client-side report above still renders in full.
-  renderReportExtras(repRes && !repRes.error ? repRes.data : null);
+  const rep = repRes && !repRes.error ? repRes.data : null;
+  renderThreadedPanels(all, mv, rep ? rep.advisers : null);
+  renderForecastBuckets(all);
+  // Client LTV is the one remaining RPC-only panel (needs client_id/name joins this page doesn't
+  // otherwise fetch) — hide it gracefully if the RPC failed; everything else above still renders.
+  renderReportExtras(rep);
 }
 
-/* New RPC-backed report panels (forecast, adviser scoreboard, client LTV, rich lead sources) */
+/* RPC-backed: client lifetime value (top 20). */
 function renderReportExtras(rep) {
-  const extraPanels = ["#report-forecast-panel", "#report-scoreboard-panel", "#report-ltv-panel"];
-  if (!rep || !rep.forecast) {
-    extraPanels.forEach((s) => { const p = $(s); if (p) p.classList.add("hidden"); });
-    return;
-  }
-  extraPanels.forEach((s) => { const p = $(s); if (p) p.classList.remove("hidden"); });
-
-  // a) Commission forecast (weighted pipeline)
-  const fc = rep.forecast || {};
-  $("#report-forecast-headline").innerHTML = `
-    <div class="kpi"><div class="num">${fmtM(fc.weighted_total)}</div><div class="lbl">Weighted commission</div></div>
-    <div class="kpi"><div class="num">${fmtM(fc.gross_total)}</div><div class="lbl">Gross (unweighted)</div></div>`;
-  const byStage = Array.isArray(fc.by_stage) ? fc.by_stage : [];
-  const maxW = Math.max(...byStage.map((s) => Number(s.weighted) || 0), 1);
-  $("#report-forecast-bars").innerHTML = byStage.length ? byStage.map((s) => `
-    <div style="display:flex;align-items:center;gap:8px;margin:3px 0;">
-      <span style="width:90px;font-size:12px;color:var(--muted);">${esc(STAGE_LABEL[s.stage] || s.stage)}</span>
-      <div style="flex:1;background:var(--light);border-radius:4px;"><div style="width:${(Number(s.weighted) / maxW) * 100}%;background:var(--orange);border-radius:4px;height:16px;"></div></div>
-      <span style="width:130px;font-size:12px;font-weight:600;text-align:right;">${s.cases || 0} case${s.cases === 1 ? "" : "s"} · ${fmtM(s.weighted)}</span>
-    </div>`).join("") : '<div class="empty">No live pipeline to forecast.</div>';
-
-  // b) Adviser scoreboard (already sorted by fees banked)
-  const advs = Array.isArray(rep.advisers) ? rep.advisers : [];
-  $("#report-advisers").innerHTML = advs.length ? `<table class="imp-table">
-    <tr><th>Adviser</th><th>Open</th><th>Completions YTD</th><th>Fees banked YTD</th><th>Overdue</th><th>Avg days</th></tr>
-    ${advs.map((a) => `<tr>
-      <td>${esc(a.name)}</td>
-      <td>${a.open_cases ?? 0}</td>
-      <td>${a.completions_ytd ?? 0}</td>
-      <td>${fmtM(a.fees_banked_ytd)}</td>
-      <td>${a.overdue_tasks ? `<span class="badge red">${a.overdue_tasks}</span>` : "0"}</td>
-      <td>${a.avg_days_to_complete == null ? "—" : a.avg_days_to_complete}</td>
-    </tr>`).join("")}
-  </table>` : '<div class="empty">No adviser activity yet.</div>';
-
-  // c) Client lifetime value (top 20)
+  const panel = $("#report-ltv-panel");
+  if (!rep) { if (panel) panel.classList.add("hidden"); return; }
+  if (panel) panel.classList.remove("hidden");
   const ltv = Array.isArray(rep.client_ltv) ? rep.client_ltv : [];
   $("#report-ltv").innerHTML = ltv.length ? `<table class="imp-table">
     <tr><th>Name</th><th>Cases</th><th>LTV</th></tr>
@@ -3014,21 +3217,6 @@ function renderReportExtras(rep) {
       <td>${fmtM(c.ltv)}</td>
     </tr>`).join("")}
   </table>` : '<div class="empty">No completed revenue yet.</div>';
-
-  // d) Lead sources — richer table from the RPC (replaces the client-side one above)
-  const ls = Array.isArray(rep.lead_sources) ? rep.lead_sources : [];
-  if (ls.length) {
-    $("#report-sources").innerHTML = `<table class="imp-table">
-      <tr><th>Source</th><th>Cases</th><th>Completed</th><th>Conversion</th><th>Revenue</th></tr>
-      ${ls.slice().sort((a, b) => (Number(b.revenue) || 0) - (Number(a.revenue) || 0)).map((s) => `<tr>
-        <td>${esc(s.source || "(not set)")}</td>
-        <td>${s.cases ?? 0}</td>
-        <td>${s.completed ?? 0}</td>
-        <td>${s.conversion ?? 0}%</td>
-        <td>${fmtM(s.revenue)}</td>
-      </tr>`).join("")}
-    </table>`;
-  }
 }
 
 /* ---------- Data health ---------- */
@@ -3077,7 +3265,7 @@ async function loadDataHealth() {
         <td>${esc(d.b_name)}<div style="${mutedSub}">${esc(d.b_email || "no email")}</div></td>
         <td>${esc(d.reason)}</td>
         <td>${Math.round((Number(d.score) || 0) * 100)}%</td>
-        <td style="white-space:nowrap;"><button class="btn btn-sm" onclick="openClient('${d.a_id}')">Open A</button> <button class="btn btn-sm" onclick="openClient('${d.b_id}')">Open B</button></td>
+        <td style="white-space:nowrap;"><button class="btn btn-sm" onclick="openClient('${d.a_id}')">Open A</button> <button class="btn btn-sm" onclick="openClient('${d.b_id}')">Open B</button> <button class="btn btn-sm btn-primary" onclick="openMergeClients('${d.a_id}','${d.b_id}')">Merge…</button></td>
       </tr>`).join("")}
     </table>` : '<div class="empty">No likely duplicates found. 👍</div>'}
   </div>`;
@@ -3122,6 +3310,156 @@ async function loadDataHealth() {
     ${noFeePanel}`;
 }
 $("#data-refresh").addEventListener("click", () => loadDataHealth());
+
+/* ---------- Duplicate-client merge (BUILD 5b) ---------- */
+const MERGE_FIELDS = [
+  ["first_name", "First name"],
+  ["last_name", "Last name"],
+  ["email", "Email"],
+  ["phone", "Phone"],
+  ["date_of_birth", "Date of birth"],
+  ["address", "Address"],
+  ["sms_opt_out", "SMS opt-out"],
+  ["marketing_opt_out", "Marketing opt-out"],
+];
+function mergeFieldEmpty(f, v) {
+  if (f === "sms_opt_out" || f === "marketing_opt_out") return false; // booleans are never "empty"
+  return v == null || v === "";
+}
+function mergeFieldDisplay(f, v) {
+  if (f === "sms_opt_out" || f === "marketing_opt_out") return v ? "Yes" : "No";
+  return mergeFieldEmpty(f, v) ? '<em style="color:var(--muted);">empty</em>' : esc(String(v));
+}
+function fullClientName(c) {
+  return [c.first_name, c.last_name].filter(Boolean).join(" ") || "(no name)";
+}
+/* Reworded confirmHardDelete pattern (typed keyword gate) — MERGE instead of DELETE, since the
+   irreversible part here is the loser record's permanent deletion after its records are moved. */
+function confirmMerge(what, extra) {
+  const typed = prompt(
+    `${what}\n\n` +
+    "This moves the losing record's cases, appointments and fact-finds onto the surviving record, " +
+    "then PERMANENTLY DELETES the losing record. This cannot be undone." +
+    (extra ? `\n\n${extra}` : "") +
+    "\n\nType MERGE to confirm:"
+  );
+  return typed != null && typed.trim().toUpperCase() === "MERGE";
+}
+
+window.openMergeClients = async function (aId, bId) {
+  const [{ data: aC, error: aErr }, { data: bC, error: bErr }] = await Promise.all([
+    db.from("clients").select("*").eq("id", aId).single(),
+    db.from("clients").select("*").eq("id", bId).single(),
+  ]);
+  if (aErr || bErr || !aC || !bC) return toast("Couldn't load one of these clients — it may have been deleted already.");
+  const countFor = async (table, id) => {
+    const { count, error } = await db.from(table).select("id", { count: "exact", head: true }).eq("client_id", id);
+    return error ? 0 : (count || 0);
+  };
+  const [aCases, bCases, aAppts, bAppts, aFF, bFF] = await Promise.all([
+    countFor("cases", aId), countFor("cases", bId),
+    countFor("appointments", aId), countFor("appointments", bId),
+    countFor("fact_finds", aId), countFor("fact_finds", bId),
+  ]);
+  const counts = {
+    [aId]: { cases: aCases, appointments: aAppts, fact_finds: aFF },
+    [bId]: { cases: bCases, appointments: bAppts, fact_finds: bFF },
+  };
+  // Default survivor: more cases wins; tie-break to the older (earlier created_at) record.
+  const defaultKeep = (counts[aId].cases !== counts[bId].cases)
+    ? (counts[aId].cases > counts[bId].cases ? aId : bId)
+    : (String(aC.created_at || "") <= String(bC.created_at || "") ? aId : bId);
+
+  const render = (keepId) => {
+    const keepSideA = keepId === aId;
+    const fieldRows = MERGE_FIELDS.map(([f, label]) => {
+      const av = aC[f], bv = bC[f];
+      const boolField = f === "sms_opt_out" || f === "marketing_opt_out";
+      const same = boolField ? (!!av === !!bv) : ((av ?? "") === (bv ?? ""));
+      const survVal = keepSideA ? av : bv;
+      const survEmpty = mergeFieldEmpty(f, survVal);
+      const otherEmpty = mergeFieldEmpty(f, keepSideA ? bv : av);
+      // Default to the surviving record's value, unless it's empty and the other side has data.
+      const defaultA = same ? true : (survEmpty && !otherEmpty ? !keepSideA : keepSideA);
+      return `<tr${same ? "" : ' style="background:#fff8ee;"'}>
+        <td>${esc(label)}</td>
+        <td><label class="row-check" style="display:flex;gap:6px;align-items:flex-start;font-weight:400;"><input type="radio" name="merge-field-${f}" value="a" ${defaultA ? "checked" : ""} style="width:auto;margin-top:3px;"> ${mergeFieldDisplay(f, av)}</label></td>
+        <td><label class="row-check" style="display:flex;gap:6px;align-items:flex-start;font-weight:400;"><input type="radio" name="merge-field-${f}" value="b" ${defaultA ? "" : "checked"} style="width:auto;margin-top:3px;"> ${mergeFieldDisplay(f, bv)}</label></td>
+      </tr>`;
+    }).join("");
+
+    const loserId = keepId === aId ? bId : aId;
+    const lc = counts[loserId];
+    const plural = (n, s) => `${n} ${s}${n === 1 ? "" : "s"}`;
+
+    $("#modal").innerHTML = `
+      <h3>Merge duplicate clients</h3>
+      <p class="panel-sub">Pick which record survives, then choose which value wins for each field. Everything belonging to the other record moves across, then it's deleted.</p>
+      <div class="merge-keep">
+        <label><input type="radio" name="merge-keep" value="${aId}" ${keepId === aId ? "checked" : ""}> Keep <strong>${esc(fullClientName(aC))}</strong> as the survivor <span class="merge-keep-meta">(${plural(counts[aId].cases, "case")}, created ${fmtD(aC.created_at)})</span></label>
+        <label><input type="radio" name="merge-keep" value="${bId}" ${keepId === bId ? "checked" : ""}> Keep <strong>${esc(fullClientName(bC))}</strong> as the survivor <span class="merge-keep-meta">(${plural(counts[bId].cases, "case")}, created ${fmtD(bC.created_at)})</span></label>
+      </div>
+      <table class="imp-table merge-table">
+        <tr><th>Field</th><th>Client A — ${esc(fullClientName(aC))}</th><th>Client B — ${esc(fullClientName(bC))}</th></tr>
+        ${fieldRows}
+      </table>
+      <p class="panel-sub" style="margin-top:12px;">${plural(lc.cases, "case")}, ${plural(lc.appointments, "appointment")} and ${plural(lc.fact_finds, "fact-find")} will move onto the surviving record.</p>
+      <div class="modal-actions">
+        <div></div>
+        <div class="right">
+          <button class="btn" id="modal-cancel">Cancel</button>
+          <button class="btn btn-primary" id="merge-confirm">Merge…</button>
+        </div>
+      </div>`;
+    openModal();
+    $("#modal-cancel").onclick = closeModal;
+    $("#modal").querySelectorAll('input[name="merge-keep"]').forEach((r) => {
+      r.onchange = () => render(r.value);
+    });
+    $("#merge-confirm").onclick = async () => {
+      const btn = $("#merge-confirm");
+      if (btn) { if (btn.disabled) return; btn.disabled = true; }
+      try {
+        const survivorId = keepId;
+        const loserId = keepId === aId ? bId : aId;
+        const survivorName = keepId === aId ? fullClientName(aC) : fullClientName(bC);
+        const loserName = keepId === aId ? fullClientName(bC) : fullClientName(aC);
+        const fieldUpd = {};
+        MERGE_FIELDS.forEach(([f]) => {
+          const sel = $("#modal").querySelector(`input[name="merge-field-${f}"]:checked`);
+          const side = sel ? sel.value : "a";
+          fieldUpd[f] = side === "a" ? aC[f] : bC[f];
+        });
+        const extra = `Surviving record: ${survivorName}. Being merged away: ${loserName} (${plural(lc.cases, "case")}, ${plural(lc.appointments, "appointment")}, ${plural(lc.fact_finds, "fact-find")}).`;
+        if (!confirmMerge("Merge these two client records?", extra)) return;
+
+        // Sequential, awaited, and checked at every step — never delete the loser if a
+        // reassignment fails partway through, or its cases/appointments/fact-finds orphan.
+        const { error: updErr } = await db.from("clients").update(fieldUpd).eq("id", survivorId);
+        if (updErr) return toast("Merge stopped — couldn't update the surviving record: " + updErr.message);
+
+        const { error: caseErr } = await db.from("cases").update({ client_id: survivorId }).eq("client_id", loserId);
+        if (caseErr) return toast("Merge stopped before deleting anything — couldn't move cases: " + caseErr.message);
+
+        const { error: apptErr } = await db.from("appointments").update({ client_id: survivorId }).eq("client_id", loserId);
+        if (apptErr) return toast("Merge stopped before deleting anything — cases moved, but couldn't move appointments: " + apptErr.message);
+
+        const { error: ffErr } = await db.from("fact_finds").update({ client_id: survivorId }).eq("client_id", loserId);
+        if (ffErr) return toast("Merge stopped before deleting anything — cases & appointments moved, but couldn't move fact-finds: " + ffErr.message);
+
+        const { error: delErr } = await db.from("clients").delete().eq("id", loserId);
+        if (delErr) return toast("Records were moved, but the duplicate couldn't be deleted: " + delErr.message + " — please delete it manually.");
+
+        closeModal();
+        toast("Clients merged ✓");
+        loadDataHealth();
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    };
+  };
+  render(defaultKeep);
+};
 
 /* ---------- Introducers & team (Settings) ---------- */
 async function loadIntroducers() {
