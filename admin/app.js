@@ -217,6 +217,11 @@ function fmtAgo(d) {
   return Math.floor(days / 365) + "y ago";
 }
 function initials(id) { const n = staffName(id); return n === "—" ? "" : n.split(/[\s@.]+/).filter(Boolean).map((w) => w[0]).slice(0, 2).join("").toUpperCase(); }
+// Author/owner attribution (defect #7). Both return "" for an unknown/absent id — old rows
+// without created_by/assigned_to render nothing rather than an "unknown" avatar.
+function assigneeChipHtml(id) { const ini = initials(id); return ini ? `<span class="chip" title="${esc(staffName(id))}">${esc(ini)}</span>` : ""; }
+// Compact inline variant for note/timeline meta lines (reuses .chip, shrunk inline — no new CSS).
+function authorChipHtml(id) { const ini = initials(id); return ini ? ` <span class="chip" title="${esc(staffName(id))}" style="width:16px;height:16px;font-size:8.5px;vertical-align:middle;">${esc(ini)}</span>` : ""; }
 
 /* ---------- Typed notes (SP3a) — prefix convention, NO schema change ----------
    Classify a note body by a leading "Call:/Email:/Meeting:" prefix (case-insensitive —
@@ -233,9 +238,9 @@ function noteType(body) {
 }
 // A single case-modal note row (icon + prefix-stripped body + timestamp). Shared by the initial
 // render and the in-place prepend paths so typed icons stay consistent everywhere notes render.
-function noteRowHtml(body, whenStr) {
+function noteRowHtml(body, whenStr, createdBy) {
   const nt = noteType(body);
-  return `<div class="note"><span class="note-ic" title="${nt.type}">${nt.icon}</span>${esc(nt.cleanBody)}<div class="nd">${esc(whenStr)}</div></div>`;
+  return `<div class="note"><span class="note-ic" title="${nt.type}">${nt.icon}</span>${esc(nt.cleanBody)}<div class="nd">${esc(whenStr)}${authorChipHtml(createdBy)}</div></div>`;
 }
 // Timeline day-divider label, e.g. "Mon 20 Jul" (Europe/London — matches localDateStr grouping).
 const tlDayLabel = (ts) => new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", weekday: "short", day: "numeric", month: "short" }).format(new Date(ts)).replace(",", "");
@@ -398,7 +403,9 @@ async function showApp(session) {
   // Done before revealing the shell or reading settings/team so a non-staff account
   // never sees the admin UI or triggers those reads.
   const { data: myProfile } = await db.from("profiles").select("role").eq("id", session.user.id).single();
-  if (!myProfile || myProfile.role !== "staff") {
+  // 'admin' is treated as staff-equivalent at the gate (harmless in prod where roles are
+  // staff/introducer; unblocks an admin-role login if the office ever issues one).
+  if (!myProfile || !["staff", "admin"].includes(myProfile.role)) {
     await db.auth.signOut();
     showLogin();
     toast("This login doesn't have back-office access.");
@@ -656,12 +663,16 @@ async function loadDashboard() {
   const ratesSoon = (alerts || []).filter((a) => a.days_to_rate_end != null && a.days_to_rate_end <= reminderMonths * 30);
   const ercFlags = (alerts || []).filter((a) => a.erc_outlasts_rate);
 
+  // KPI cards clickable (defect 19) — each jumps to where that number can be worked, rather than
+  // being a dead-end. The "Fees outstanding" card and the Protection & Fees drawer's "Fees due" tab
+  // count different scopes (see loadProtection below) — captioned here so the gap reads as scope,
+  // not a bug.
   $("#kpi-row").innerHTML = `
-    <div class="kpi"><div class="num">${active.length}</div><div class="lbl">Active cases</div></div>
-    <div class="kpi"><div class="num">${completedThisYear.length}</div><div class="lbl">Completions in ${yr}</div></div>
-    <div class="kpi ${ratesSoon.length ? "warn" : ""}"><div class="num">${ratesSoon.length}</div><div class="lbl">Rates ending ≤ ${reminderMonths}mo (or overdue)</div></div>
-    <div class="kpi ${ercFlags.length ? "bad" : ""}"><div class="num">${ercFlags.length}</div><div class="lbl">ERC outlasts rate</div></div>
-    <div class="kpi ${feesDue.length ? "warn" : ""}"><div class="num">${fmtM(feesDueTotal)}</div><div class="lbl">Fees outstanding (${feesDue.length})</div></div>`;
+    <div class="kpi" style="cursor:pointer;" onclick="kpiGoto('active')" title="View the pipeline"><div class="num">${active.length}</div><div class="lbl">Active cases</div></div>
+    <div class="kpi" style="cursor:pointer;" onclick="kpiGoto('completions')" title="View Reports"><div class="num">${completedThisYear.length}</div><div class="lbl">Completions in ${yr}</div></div>
+    <div class="kpi ${ratesSoon.length ? "warn" : ""}" style="cursor:pointer;" onclick="kpiGoto('rates')" title="View Rate &amp; ERC alerts"><div class="num">${ratesSoon.length}</div><div class="lbl">Rates ending ≤ ${reminderMonths}mo (or overdue)</div></div>
+    <div class="kpi ${ercFlags.length ? "bad" : ""}" style="cursor:pointer;" onclick="kpiGoto('erc')" title="View Rate &amp; ERC alerts"><div class="num">${ercFlags.length}</div><div class="lbl">ERC outlasts rate</div></div>
+    <div class="kpi ${feesDue.length ? "warn" : ""}" style="cursor:pointer;" onclick="kpiGoto('fees')" title="View the Protection &amp; Fees drawer — Fees due tab"><div class="num">${fmtM(feesDueTotal)}</div><div class="lbl">Fees outstanding (${feesDue.length}) <span style="font-weight:400;opacity:.7;">· all stages</span></div></div>`;
 
   const ercIds = new Set(ercFlags.map((a) => a.case_id));
   const rateErcMerged = [...ratesSoon];
@@ -700,15 +711,19 @@ async function loadDashboard() {
     }
   }
 
+  // This tab is narrower than the Today KPI's "Fees outstanding" card by design, not by bug: it
+  // comes from v_alerts, which only carries COMPLETED cases that also have a tracked rate_end_date.
+  // The KPI counts every outstanding fee at any live stage — the two numbers describe different scopes.
   const feeAlerts = (alerts || []).filter((a) => a.stage === "completed" && ["not_requested", "requested"].includes(a.fee_status) && a.broker_fee > 0);
-  $("#alerts-fees").innerHTML = feeAlerts.length ? feeAlerts.map((a) => `
+  const feesTabCaption = '<div class="panel-sub" style="margin:0 0 8px;">Completed cases with a tracked rate only. The Today KPI\'s "Fees outstanding" total is broader — it also counts fees due earlier in the pipeline.</div>';
+  $("#alerts-fees").innerHTML = feesTabCaption + (feeAlerts.length ? feeAlerts.map((a) => `
     <div class="row-item">
       <div class="row-main">
         <div class="t" onclick="openCase('${a.case_id}')">${esc(a.client_name)}</div>
         <div class="s">${fmtM(a.broker_fee)} — ${lenderIcon(a.lender)}${esc(a.lender || "")}</div>
       </div>
       <span class="badge ${a.fee_status === "requested" ? "amber" : "grey"}">${a.fee_status === "requested" ? "Requested" : "Not requested"}</span>
-    </div>`).join("") : '<div class="empty">No outstanding fees on completed cases.</div>';
+    </div>`).join("") : '<div class="empty">No outstanding fees on completed cases.</div>');
   $("#tab-fees-count").textContent = feeAlerts.length;
   updateRevenueDrawerCount();
 }
@@ -823,7 +838,11 @@ function briefActions(it) {
     case "email_new":
       return `${it.case_id ? `<button class="btn btn-sm" onclick="openCase('${it.case_id}')">Open case</button>` : ""}<button class="btn btn-sm" onclick="markEmailHandled('${it.email_id}')">Handled</button>${it.case_id ? `<button class="btn btn-sm" onclick="askAI('Draft a reply to the latest email from this client. Case id: ${it.case_id}')">Draft reply</button>` : ""}`;
     case "appt_today":
-      return it.appt_id ? `<button class="btn btn-sm" onclick="openAppt('${it.appt_id}')">Open</button>` : "";
+      // Defect 27: the row title now opens the same destination (the appointment editor) as this
+      // button — a small secondary "Case" link is offered too when a case is linked, rather than
+      // the title and button silently disagreeing on where "Open" means.
+      return (it.appt_id ? `<button class="btn btn-sm" onclick="openAppt('${it.appt_id}')">Open</button>` : "")
+        + (it.case_id ? `<button class="btn btn-sm btn-ghost" onclick="openCase('${it.case_id}')" title="Open the linked case">Case</button>` : "");
     case "rate_urgent":
       return `${(it.sub || "").includes("not contacted") ? `<button class="btn btn-sm" onclick="briefQueueEmail('${it.case_id}','rate_end_reminder', event)">Send reminder</button>` : ""}${open}`;
     case "fee_chase":
@@ -869,7 +888,7 @@ async function loadBriefing() {
   $("#briefing-list").innerHTML = items.length ? items.map((it) => `
     <div class="row-item brief-row ${it.pri < 15 ? "hot" : it.pri < 35 ? "warm" : ""}">
       <div class="row-main">
-        <div class="t" ${it.case_id ? `onclick="openCase('${it.case_id}')"` : it.client_id ? `onclick="openClient('${it.client_id}')"` : it.goto_segment ? `onclick="gotoPipelineSegment('${it.goto_segment}')"` : ""}>${esc(it.title)}</div>
+        <div class="t" ${it.kind === "appt_today" && it.appt_id ? `onclick="openAppt('${it.appt_id}')"` : it.case_id ? `onclick="openCase('${it.case_id}')"` : it.client_id ? `onclick="openClient('${it.client_id}')"` : it.goto_segment ? `onclick="gotoPipelineSegment('${it.goto_segment}')"` : ""}>${esc(it.title)}</div>
         <div class="s">${esc(it.sub || "")}${briefingScope === "all" && it.owner ? " · " + esc(staffName(it.owner)) : ""}</div>
       </div>
       ${briefBadge(it)}
@@ -1189,6 +1208,23 @@ window.gotoPipelineSegment = function (seg) {
   if (authUid) lsSet(segStoreKey(authUid), seg);
   nav("pipeline");
 };
+// Today KPI cards (defect 19) — jump each card to a sensible destination for that number, opening
+// and scrolling to the relevant Today drawer where the number already lives on this same page.
+function focusDashPanel(panelId, tab) {
+  const panel = document.getElementById(panelId);
+  if (!panel) return;
+  panel.classList.remove("collapsed");
+  dashDrawerTouched[panelId.replace(/-panel$/, "")] = true;
+  if (tab) { const tabBtn = panel.querySelector(`.dash-tab[data-tab="${tab}"]`); if (tabBtn) tabBtn.click(); }
+  panel.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+window.kpiGoto = function (which) {
+  if (which === "active") return gotoPipelineSegment("all");
+  if (which === "completions") return nav("reports");
+  nav("dashboard");
+  if (which === "rates" || which === "erc") return focusDashPanel("rate-erc-panel");
+  if (which === "fees") return focusDashPanel("revenue-panel", "fees");
+};
 // Keep the board/table toggle honest: hidden in Completed (locked to table), otherwise labelled
 // for the view it would switch to.
 function syncViewToggle() {
@@ -1425,12 +1461,25 @@ window.protQueueEmail = async function (caseId) {
     if (btn) btn.disabled = false;
   }
 };
+// Client link token for a fact-find. Generated here so a brand-new fact-find always carries a
+// usable token (defect #3: without this the copyable link renders "token=undefined" wherever the
+// DB doesn't back-fill the column). An explicit value is harmless where a DB default also exists.
+function ffToken() {
+  return (typeof crypto !== "undefined" && crypto.randomUUID)
+    ? crypto.randomUUID()
+    : "ff-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
+}
 window.factFind = async function (caseId, clientId) {
   let { data: ff } = await db.from("fact_finds").select("*").eq("case_id", caseId).order("created_at", { ascending: false }).limit(1).maybeSingle();
   if (!ff) {
-    const ins = await db.from("fact_finds").insert({ case_id: caseId, client_id: clientId, created_by: (ME && ME.id) || null }).select("*").single();
+    const ins = await db.from("fact_finds").insert({ case_id: caseId, client_id: clientId, created_by: (ME && ME.id) || null, token: ffToken() }).select("*").single();
     if (ins.error) return toast("Error: " + ins.error.message);
     ff = ins.data;
+  } else if (!ff.token) {
+    // Legacy row created before tokens were set client-side — back-fill so the link works.
+    const tok = ffToken();
+    await db.from("fact_finds").update({ token: tok }).eq("id", ff.id);
+    ff.token = tok;
   }
   const base = (settings.site_url || "https://nexmoney.co.uk").replace(/\/$/, "");
   const link = `${base}/factfind?token=${ff.token}`;
@@ -1459,7 +1508,7 @@ window.factFind = async function (caseId, clientId) {
   $("#ff-back").onclick = () => openCase(caseId);
   if ($("#ff-apply")) $("#ff-apply").onclick = () => ffApplyDiff(caseId, clientId, ff.data);
   $("#ff-refresh").onclick = () => factFind(caseId, clientId);
-  $("#ff-new").onclick = async () => { if (!confirm("Start a fresh blank fact-find? The current link stops being the active one.")) return; await db.from("fact_finds").insert({ case_id: caseId, client_id: clientId, created_by: (ME && ME.id) || null }); factFind(caseId, clientId); };
+  $("#ff-new").onclick = async () => { if (!confirm("Start a fresh blank fact-find? The current link stops being the active one.")) return; await db.from("fact_finds").insert({ case_id: caseId, client_id: clientId, created_by: (ME && ME.id) || null, token: ffToken() }); factFind(caseId, clientId); };
   $("#ff-mail").onclick = async () => {
     const { data: cl } = await db.from("clients").select("email,first_name").eq("id", clientId).single();
     if (!cl || !cl.email) return toast("This client has no email address on file — add one first.");
@@ -1596,17 +1645,27 @@ window.ffApplyDiff = async function (caseId, clientId, data) {
       try { const { data: { user } } = await db.auth.getUser(); if (user && user.id) uid = user.id; } catch (e) {}
       let body = `Fact-find applied: ${n} field${n === 1 ? "" : "s"} updated`;
       if (doProt) body += " · protection interest flagged";
-      await db.from("case_notes").insert({ case_id: caseId, body, created_by: uid });
+      let protTaskNote = "";
       if (doProt) {
-        // Due TODAY: a fresh cross-sell interest deserves a same-day call, and a
-        // today-dated task surfaces immediately on the My Day hero list.
-        const due = localDateStr(Date.now());
-        await db.from("case_tasks").insert({
-          case_id: caseId, title: "Protection: client expressed interest in fact-find", due_date: due,
-          created_by: uid, assigned_to: cRow.assigned_to || uid,
-        });
+        // Defect 11: don't stack a second protection follow-up on top of one that's already open —
+        // check for an existing open task with the same "Protection:" title prefix on this case first.
+        const { data: openTasks } = await db.from("case_tasks").select("id,title").eq("case_id", caseId).is("done_at", null);
+        const existingProtTask = (openTasks || []).find((t) => (t.title || "").startsWith("Protection:"));
+        if (existingProtTask) {
+          protTaskNote = " · existing protection task kept";
+        } else {
+          // Due TODAY: a fresh cross-sell interest deserves a same-day call, and a
+          // today-dated task surfaces immediately on the My Day hero list.
+          const due = localDateStr(Date.now());
+          await db.from("case_tasks").insert({
+            case_id: caseId, title: "Protection: client expressed interest in fact-find", due_date: due,
+            created_by: uid, assigned_to: cRow.assigned_to || uid,
+          });
+          protTaskNote = " · protection task created";
+        }
       }
-      toast(`Applied ${n} field${n === 1 ? "" : "s"}${doProt ? " · protection task created" : ""}`);
+      await db.from("case_notes").insert({ case_id: caseId, body, created_by: uid });
+      toast(`Applied ${n} field${n === 1 ? "" : "s"}${protTaskNote}`);
       openCase(caseId); // re-renders the case modal summary with the updated values, note & task
     } catch (e) {
       toast("Error applying fact-find: " + (e && e.message ? e.message : e));
@@ -1615,11 +1674,23 @@ window.ffApplyDiff = async function (caseId, clientId, data) {
     }
   };
 };
+// Fact-find key -> human label (defect 25, label half). Only strips a namespace prefix when it's
+// one we actually recognise — an unrecognised first token (e.g. "has_a2") used to be silently
+// treated as the namespace and dropped, leaking bare "A2 → yes" / "You: Dob" rows. Now anything
+// outside the known namespaces falls through to a best-effort title-case of the whole key instead.
+const FF_PREFIX = { a1: "Applicant 1", a2: "Applicant 2", m: "Mortgage", p: "Protection", c: "Commitments" };
+function titleCaseWords(s) {
+  return s.split(/[_\s]+/).filter(Boolean).map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+}
 function prettyFF(k) {
-  const pre = { a1: "You", a2: "2nd applicant", m: "Mortgage", c: "Commitments", p: "Protection" }[k.split("_")[0]];
-  let label = k.replace(/^[a-z0-9]+_/, "").replace(/_/g, " ");
-  label = label.charAt(0).toUpperCase() + label.slice(1);
-  return pre ? `${pre}: ${label}` : label;
+  const parts = k.split("_");
+  const pre = FF_PREFIX[parts[0]];
+  if (pre) {
+    const rest = parts.slice(1).join(" ");
+    return rest ? `${pre}: ${titleCaseWords(rest)}` : pre;
+  }
+  // No recognised namespace — best-effort title-case of the whole key rather than guessing a prefix.
+  return titleCaseWords(k);
 }
 function setProtScope(s) {
   protScope = s;
@@ -1726,8 +1797,9 @@ window.openCase = async function (id) {
     ${id ? `
     <div style="margin-top:14px;">
       <h3 style="font-size:14px;">Tasks</h3>
-      <div style="display:flex;gap:8px;margin:8px 0;">
-        <input id="new-task" placeholder="Add a task…" style="flex:1;">
+      <div style="display:flex;gap:8px;margin:8px 0;flex-wrap:wrap;">
+        <input id="new-task" placeholder="Add a task…" style="flex:1;min-width:140px;">
+        <select id="new-task-assignee" aria-label="Assign task to" style="width:auto;" title="Assign task to">${TEAM.map((p) => `<option value="${p.id}" ${p.id === (c.assigned_to || (ME && ME.id)) ? "selected" : ""}>${esc(staffName(p.id))}</option>`).join("")}</select>
         <input id="new-task-due" type="date" style="width:auto;">
         <button class="btn btn-sm" id="add-task-btn">Add</button>
       </div>
@@ -1744,7 +1816,7 @@ window.openCase = async function (id) {
             <div style="${t.done_at ? "text-decoration:line-through;color:var(--muted);" : ""}">${esc(t.title)}</div>
             <div class="s">${t.due_date ? "due " + fmtD(t.due_date) : ""}${t.done_at ? " · done" : ""}</div>
           </div>
-          ${t.done_at ? "" : `<button class="btn btn-sm" aria-label="Mark task done" title="Mark task done" onclick="doneTaskInCase('${t.id}','${id}')">✓</button>`}
+          ${assigneeChipHtml(t.assigned_to)}${t.done_at ? "" : `<button class="btn btn-sm" aria-label="Mark task done" title="Mark task done" onclick="doneTaskInCase('${t.id}','${id}')">✓</button>`}
         </div>`).join("") || '<div class="empty">No tasks.</div>'}</div>
     </div>
     <div style="margin-top:14px;">
@@ -1759,7 +1831,7 @@ window.openCase = async function (id) {
         <button type="button" class="tl-chip" data-type="email">✉️ Email</button>
         <button type="button" class="tl-chip" data-type="meeting">🤝 Meeting</button>
       </div>
-      <div id="notes-list">${notes.map((n) => noteRowHtml(n.body, new Date(n.created_at).toLocaleString("en-GB"))).join("") || '<div class="empty">No notes yet.</div>'}</div>
+      <div id="notes-list">${notes.map((n) => noteRowHtml(n.body, new Date(n.created_at).toLocaleString("en-GB"), n.created_by)).join("") || '<div class="empty">No notes yet.</div>'}</div>
     </div>
     <div class="action-bar">
       <button class="btn btn-sm" id="act-fee">💷 Email fee request</button>
@@ -1865,11 +1937,15 @@ window.openCase = async function (id) {
       }
       closeModal(); toast("Case saved");
       loadPipeline(); loadDashboard();
+      // Same guard as the client-save path (2379): a case-level fix (assign adviser, add fee) is
+      // exactly what Data Health flags, so refresh it if that page is the one behind the modal.
+      if ($("#page-data") && !$("#page-data").classList.contains("hidden")) loadDataHealth();
     } else {
       const { error } = await db.from("cases").insert(row);
       if (error) return toast("Error: " + error.message);
       closeModal(); toast("Case saved");
       loadPipeline(); loadDashboard();
+      if ($("#page-data") && !$("#page-data").classList.contains("hidden")) loadDataHealth();
     }
   };
   if (id) {
@@ -1894,7 +1970,7 @@ window.openCase = async function (id) {
       const empty = list.querySelector(".empty");
       if (empty) empty.remove();
       const wrap = document.createElement("div");
-      wrap.innerHTML = noteRowHtml(body, new Date().toLocaleString("en-GB"));
+      wrap.innerHTML = noteRowHtml(body, new Date().toLocaleString("en-GB"), user.id);
       list.insertBefore(wrap.firstChild, list.firstChild);
       input.value = "";
       input.focus();
@@ -1920,8 +1996,11 @@ window.openCase = async function (id) {
       if (!title) return;
       const due = $("#new-task-due").value || null;
       const { data: { user } } = await db.auth.getUser();
+      // Assignee from the quick-add select (defaults to the case adviser); falls back to me.
+      const asgSel = $("#new-task-assignee");
+      const assignee = (asgSel && asgSel.value) || user.id;
       const { data: inserted, error } = await db.from("case_tasks")
-        .insert({ case_id: id, title, due_date: due, created_by: user.id, assigned_to: user.id })
+        .insert({ case_id: id, title, due_date: due, created_by: user.id, assigned_to: assignee })
         .select().single();
       if (error) return toast("Error: " + error.message);
       // In-place append (no full modal re-render / scroll reset). Task list is due-date ordered; new row goes at the end.
@@ -1933,6 +2012,7 @@ window.openCase = async function (id) {
       row.className = "row-item";
       row.style.padding = "7px 4px";
       row.innerHTML = `<div class="row-main"><div>${esc(title)}</div><div class="s">${due ? "due " + fmtD(due) : ""}</div></div>`
+        + assigneeChipHtml(assignee)
         + `<button class="btn btn-sm" aria-label="Mark task done" title="Mark task done" onclick="doneTaskInCase('${tid}','${id}')">✓</button>`;
       list.appendChild(row);
       input.value = "";
@@ -1967,7 +2047,7 @@ window.openCase = async function (id) {
           const emptyN = nlist.querySelector(".empty");
           if (emptyN) emptyN.remove();
           const wrap = document.createElement("div");
-          wrap.innerHTML = noteRowHtml(noteBody, new Date().toLocaleString("en-GB"));
+          wrap.innerHTML = noteRowHtml(noteBody, new Date().toLocaleString("en-GB"), user.id);
           nlist.insertBefore(wrap.firstChild, nlist.firstChild);
         }
         // Keep the summary "Last note" line current.
@@ -1993,6 +2073,7 @@ window.openCase = async function (id) {
             trow.className = "row-item";
             trow.style.padding = "7px 4px";
             trow.innerHTML = `<div class="row-main"><div>${esc(title)}</div><div class="s">${fuDue ? "due " + fmtD(fuDue) : ""}</div></div>`
+              + assigneeChipHtml(user.id)
               + `<button class="btn btn-sm" aria-label="Mark task done" title="Mark task done" onclick="doneTaskInCase('${tid}','${id}')">✓</button>`;
             tlist.appendChild(trow);
           }
@@ -2190,7 +2271,7 @@ async function buildClientTimeline(clientId, cases) {
   let notes = [], events = [], appts = [], emails = [], sms = [], ffs = [], inbound = [];
   try {
     [notes, events, appts, emails, sms, ffs, inbound] = await Promise.all([
-      ids.length ? q(db.from("case_notes").select("body,created_at,case_id").in("case_id", ids)) : [],
+      ids.length ? q(db.from("case_notes").select("body,created_at,case_id,created_by").in("case_id", ids)) : [],
       ids.length ? q(db.from("case_events").select("event,detail,created_at,case_id").in("case_id", ids)) : [],
       q(db.from("appointments").select("title,starts_at,location,case_id,client_id").eq("client_id", clientId)),
       ids.length ? q(db.from("email_queue").select("email_type,status,subject,sent_at,created_at,case_id").in("case_id", ids)) : [],
@@ -2201,7 +2282,7 @@ async function buildClientTimeline(clientId, cases) {
   } catch (_) { /* keep whatever resolved */ }
   const items = [];
   const push = (ts, cat, icon, title, caseId) => { if (!ts) return; items.push({ ts, cat, icon, title, caseLabel: caseLabel[caseId] }); };
-  notes.forEach((n) => { const nt = noteType(n.body); push(n.created_at, nt.type, nt.icon, esc(nt.cleanBody) || "(note)", n.case_id); });
+  notes.forEach((n) => { const nt = noteType(n.body); push(n.created_at, nt.type, nt.icon, (esc(nt.cleanBody) || "(note)") + authorChipHtml(n.created_by), n.case_id); });
   emails.filter((e) => e.status === "sent" || e.status === "failed").forEach((e) => {
     const lbl = EMAIL_LABEL[e.email_type] || e.email_type || "Email";
     push(e.sent_at || e.created_at, "email", "✉️", esc(lbl) + (e.status === "failed" ? ' <span class="tl-fail">failed</span>' : ""), e.case_id);
@@ -2433,7 +2514,11 @@ async function loadEmails() {
   if (error) { renderLoadError("#email-list", error, loadEmails); return; }
   const badge = { queued: "amber", sent: "green", failed: "red", cancelled: "grey" };
   const emailRows = failedOnly ? (emails || []).filter((e) => e.status === "failed") : (emails || []);
-  $("#email-list").innerHTML = `<div class="panel">` + (emailRows.length ? emailRows.map((e) => {
+  // Retry-all-failed (defect 28) — only surfaces once the Failed-only filter narrows the list down
+  // to what it would act on, so it never fires against emails that are queued/sent/cancelled.
+  const retryAllEmailBtn = failedOnly && emailRows.length
+    ? `<div class="row-item" style="justify-content:flex-end;"><button class="btn btn-sm btn-primary" onclick="retryAllFailedEmails()">Retry all failed (${emailRows.length})</button></div>` : "";
+  $("#email-list").innerHTML = `<div class="panel">` + retryAllEmailBtn + (emailRows.length ? emailRows.map((e) => {
     const failed = e.status === "failed";
     const clickable = failed && e.case_id;
     return `
@@ -2453,7 +2538,9 @@ async function loadEmails() {
   if (smsErr) { renderLoadError("#sms-list", smsErr, loadEmails); return; }
   const smsBadge = { queued: "amber", sending: "blue", sent: "green", failed: "red", cancelled: "grey" };
   const smsRows = failedOnly ? (sms || []).filter((s) => s.status === "failed") : (sms || []);
-  $("#sms-list").innerHTML = smsRows.length ? smsRows.map((s) => {
+  const retryAllSmsBtn = failedOnly && smsRows.length
+    ? `<div class="row-item" style="justify-content:flex-end;"><button class="btn btn-sm btn-primary" onclick="retryAllFailedSms()">Retry all failed (${smsRows.length})</button></div>` : "";
+  $("#sms-list").innerHTML = retryAllSmsBtn + (smsRows.length ? smsRows.map((s) => {
     const failed = s.status === "failed";
     const clickable = failed && s.case_id;
     return `
@@ -2465,24 +2552,44 @@ async function loadEmails() {
       <span class="badge ${smsBadge[s.status] || "grey"}">${esc(s.status)}</span>
       ${failed ? `<button class="btn btn-sm" onclick="retrySms('${s.id}')">Retry</button>` : ""}
     </div>`;
-  }).join("") : `<div class="empty">${failedOnly ? "No failed SMS." : "No SMS yet. They'll appear here once SMS automation runs or you send one."}</div>`;
+  }).join("") : `<div class="empty">${failedOnly ? "No failed SMS." : "No SMS yet. They'll appear here once SMS automation runs or you send one."}</div>`);
 }
-async function retryEmail(id) {
+async function retryEmail(id, silent) {
   try {
     const { error } = await db.from("email_queue").update({ status: "queued", error: null, sent_at: null }).eq("id", id);
-    if (error) return toast("Error: " + error.message);
-    toast("Email re-queued for sending");
-    loadEmails();
-  } catch (e) { toast("Error: " + e.message); }
+    if (error) { if (!silent) toast("Error: " + error.message); return false; }
+    if (!silent) { toast("Email re-queued for sending"); loadEmails(); }
+    return true;
+  } catch (e) { if (!silent) toast("Error: " + e.message); return false; }
 }
-async function retrySms(id) {
+async function retrySms(id, silent) {
   try {
     const { error } = await db.from("sms_queue").update({ status: "queued", error: null, sent_at: null }).eq("id", id);
-    if (error) return toast("Error: " + error.message);
-    toast("SMS re-queued for sending");
-    loadEmails();
-  } catch (e) { toast("Error: " + e.message); }
+    if (error) { if (!silent) toast("Error: " + error.message); return false; }
+    if (!silent) { toast("SMS re-queued for sending"); loadEmails(); }
+    return true;
+  } catch (e) { if (!silent) toast("Error: " + e.message); return false; }
 }
+// Retry-all-failed (defect 28) — loops the existing per-row retry (silently, to avoid a toast per
+// row) then shows one summary toast and refreshes the list once.
+window.retryAllFailedEmails = async function () {
+  const { data: emails } = await db.from("email_queue").select("id").eq("status", "failed");
+  const ids = (emails || []).map((e) => e.id);
+  if (!ids.length) return toast("No failed emails to retry");
+  let ok = 0;
+  for (const id of ids) { if (await retryEmail(id, true)) ok++; }
+  toast(`Retried ${ok} of ${ids.length} failed email${ids.length === 1 ? "" : "s"} for sending`);
+  loadEmails();
+};
+window.retryAllFailedSms = async function () {
+  const { data: sms } = await db.from("sms_queue").select("id").eq("status", "failed");
+  const ids = (sms || []).map((s) => s.id);
+  if (!ids.length) return toast("No failed SMS to retry");
+  let ok = 0;
+  for (const id of ids) { if (await retrySms(id, true)) ok++; }
+  toast(`Retried ${ok} of ${ids.length} failed SMS for sending`);
+  loadEmails();
+};
 $("#email-failed-only").addEventListener("change", loadEmails);
 async function runSms(silent) {
   const { data: { session } } = await db.auth.getSession();
@@ -2523,6 +2630,7 @@ $("#run-now-btn").addEventListener("click", () => runAutomation(false));
 
 /* ---------- Bulk import (AI) ---------- */
 let importRows = [];
+let importAssignToMe = true; // defect 10: default new cases to the current user instead of unassigned
 
 $("#import-file").addEventListener("change", async () => {
   const file = $("#import-file").files[0];
@@ -2576,6 +2684,10 @@ function renderImportPreview() {
     <div class="panel">
       <h3>Review before saving</h3>
       <p class="panel-sub">Untick anything that shouldn't be imported. Click Client, Email, Stage, Lender or Rate to fix a misread field before importing. Estimated rate-end dates are marked ≈ and stay flagged until you confirm them.</p>
+      <label style="display:flex;gap:6px;align-items:center;font-weight:400;margin:4px 0 10px;">
+        <input type="checkbox" id="imp-assign-me" style="width:auto;" ${importAssignToMe ? "checked" : ""}>
+        Assign new cases to me — unticking leaves them unassigned (they'll appear in Data Health's unassigned list)
+      </label>
       <div style="overflow-x:auto;">
       <table class="imp-table">
         <tr><th><input type="checkbox" id="imp-all" checked></th><th>Client</th><th>Email</th><th>Stage</th><th>Lender</th><th>Rate</th><th>Rate ends</th><th>Completed</th><th>Fee</th></tr>
@@ -2601,6 +2713,7 @@ function renderImportPreview() {
       </div>
     </div>`;
   $("#imp-all").onchange = (e) => document.querySelectorAll(".imp-row").forEach((c) => (c.checked = e.target.checked));
+  $("#imp-assign-me").onchange = (e) => { importAssignToMe = e.target.checked; };
   $("#import-save-btn").onclick = runImport;
 
   // Editable preview cells write straight back into importRows[i], so a corrected value
@@ -2644,6 +2757,7 @@ async function runImport() {
   });
   let nClients = 0, nCases = 0, nUpdated = 0;
   const rowErrors = [];
+  const touchedClients = new Map(); // id -> name, for the post-import "view what landed" summary (defect 30)
 
   for (let i = 0; i < selected.length; i++) {
     const r = selected[i];
@@ -2688,11 +2802,13 @@ async function runImport() {
           property_value: r.property_value ?? null,
           broker_fee: r.broker_fee ?? null,
           completed_at: r.completed_date ? new Date(r.completed_date).toISOString() : null,
+          assigned_to: importAssignToMe ? ((ME && ME.id) || null) : null,
         }).select("id").single();
         if (error) throw error;
         await db.from("case_notes").insert({ case_id: nc.id, body: "AI bulk import" + (r.note ? " | " + r.note : "") });
         nCases++;
       }
+      touchedClients.set(client.id, [client.first_name, client.last_name].filter(Boolean).join(" ") || client.email || client.phone || "(no name)");
       // Row succeeded — uncheck it so a retry after a partial failure doesn't
       // re-import this row and create duplicate cases.
       if (selectedEls[i]) selectedEls[i].checked = false;
@@ -2713,7 +2829,15 @@ async function runImport() {
       </table></div>`;
     $("#import-preview").insertAdjacentHTML("beforeend", errHtml);
   } else {
-    importRows = []; $("#import-preview").innerHTML = ""; $("#import-text").value = "";
+    importRows = []; $("#import-text").value = "";
+    // Defect 30: don't just clear the preview to blank — leave a compact, clickable summary so
+    // verification doesn't require a search (which may itself be broken for multi-word names).
+    const names = [...touchedClients.entries()];
+    $("#import-preview").innerHTML = names.length ? `
+      <div class="panel">
+        <h3>Imported: ${nClients + nUpdated} client${(nClients + nUpdated) === 1 ? "" : "s"} / ${nCases} case${nCases === 1 ? "" : "s"}</h3>
+        <div class="row-list">${names.map(([id, name]) => `<div class="row-item"><div class="row-main"><a href="#" class="t" onclick="event.preventDefault();openClient('${id}')">${esc(name)}</a></div></div>`).join("")}</div>
+      </div>` : "";
   }
 }
 
@@ -2819,9 +2943,12 @@ window.acceptLead = async function (id, ev) {
   if (l.email) await db.from("email_queue").insert({ case_id: nc.id, client_id: client.id, email_type: "welcome", to_email: l.email });
   await db.from("leads").update({ converted_case_id: nc.id }).eq("id", id);
   runAutomation(true);
-  toast("Lead accepted — case created, welcome email queued");
+  // Accept-lead stays on Today (defect 22) — a toast confirms the case, but doesn't force-open the
+  // case modal, so running through a queue of leads is toast-and-move-on rather than a modal
+  // open/close per lead. The case is right where the toast says: New business.
+  const acceptedName = [client.first_name, client.last_name].filter(Boolean).join(" ") || "this lead";
+  toast(`Case created for ${acceptedName} — find it in New business`);
   loadLeads();
-  openCase(nc.id);
 };
 window.discardLead = async function (id) {
   if (!confirm("Discard this lead?")) return;
@@ -2954,6 +3081,19 @@ window.openAppt = async function (id, presets = {}) {
       location: String(f.get("location") || "").trim() || null,
       notes: String(f.get("notes") || "").trim() || null,
     };
+    // Diary double-booking warning (defect 5) — warn, never block: look for another appointment
+    // for the SAME adviser that overlaps this one in time, excluding this record when editing.
+    if (row.staff_id) {
+      const newStart = startAt, newEnd = new Date(row.ends_at);
+      let overlapQ = db.from("appointments").select("id,title,starts_at,ends_at").eq("staff_id", row.staff_id);
+      if (id) overlapQ = overlapQ.neq("id", id);
+      const { data: sameStaffAppts } = await overlapQ;
+      const clash = (sameStaffAppts || []).find((o) => new Date(o.starts_at) < newEnd && new Date(o.ends_at || o.starts_at) > newStart);
+      if (clash) {
+        const clashTime = new Date(clash.starts_at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+        if (!confirm(`${staffName(row.staff_id)} already has "${clash.title}" at ${clashTime} — book anyway?`)) return;
+      }
+    }
     const q = id ? db.from("appointments").update(row).eq("id", id) : db.from("appointments").insert(row);
     const { error } = await q;
     if (error) return toast("Error: " + error.message);
@@ -3098,7 +3238,7 @@ function renderMonthReport(all, mv) {
              nDone: d2.length, dTot: sum(d2, "proc_fee") + sum(d2, "broker_fee") + sum(d2, "sols_fee") };
   }).filter((r) => r.nSub || r.nDone);
   $("#month-advisers").innerHTML = rows.length ? `<div style="overflow-x:auto;"><table class="imp-table">
-    <tr><th>Adviser</th><th>Submitted</th><th>Proc £</th><th>Broker £</th><th>Sols £</th><th>Completed</th><th>Completed £</th></tr>
+    <tr><th>Adviser</th><th>Submitted</th><th>Proc £</th><th>Broker £</th><th>Sols £</th><th>Completed</th><th title="Value of fees earned on cases completed this month — whether or not those fees have been paid yet">Completed £ (earned)</th></tr>
     ${rows.map((r) => `<tr><td><strong>${esc(r.name)}</strong></td><td>${r.nSub}</td><td>${fmtM(r.sProc)}</td><td>${fmtM(r.sBrk)}</td><td>${fmtM(r.sSol)}</td><td>${r.nDone}</td><td>${fmtM(r.dTot)}</td></tr>`).join("")}
   </table></div>` : '<div class="empty">No submissions or completions recorded for this month.</div>';
 }
@@ -3132,9 +3272,9 @@ function renderThreadedPanels(all, mv, repAdvisers) {
     const trendTitle = months6.map((m, i) => `${MONTH_SHORT[Number(m.slice(5, 7)) - 1]}: ${trend[i]}`).join(" · ");
     return { name, open, completions: done.length, feesBanked, overdue: overdueByName[name], avg, trend, trendTitle };
   }).filter((r) => r.open || r.completions || r.feesBanked || r.trend.some((n) => n));
-  $("#report-scoreboard-scope").textContent = `Completions, fees banked and avg days are for ${label}. Open cases and overdue tasks are as of now. Trend is completions over the last 6 calendar months.`;
+  $("#report-scoreboard-scope").textContent = `Completions, fees banked and avg days are for ${label}. Open cases and overdue tasks are as of now. Trend is completions over the last 6 calendar months. "Fees banked" here is broker fees actually marked paid this month — a different scope from "Completed £ (earned)" on the Monthly business panel above, which is fee value earned on cases completed this month regardless of payment status.`;
   $("#report-advisers").innerHTML = advRows.length ? `<table class="imp-table">
-    <tr><th>Adviser</th><th>Open</th><th>Completions</th><th>Fees banked</th><th>Overdue</th><th>Avg days</th><th>6-mo trend</th></tr>
+    <tr><th>Adviser</th><th>Open</th><th>Completions</th><th title="Broker fees actually marked paid this month">Fees banked (paid)</th><th>Overdue</th><th>Avg days</th><th>6-mo trend</th></tr>
     ${advRows.map((a) => `<tr>
       <td>${esc(a.name)}</td>
       <td>${a.open}</td>
@@ -3359,9 +3499,13 @@ function renderReportExtras(rep) {
 async function loadDataHealth() {
   const el = $("#data-content");
   el.innerHTML = '<div class="empty">Loading…</div>';
-  const [dqRes, dupRes] = await Promise.all([
+  const [dqRes, dupRes, caseRows] = await Promise.all([
     db.rpc("get_data_quality"),
     db.rpc("find_duplicate_clients"),
+    // Defect 13: the RPC only ever returns bare counts for these two tiles. Rather than change the
+    // RPC (frontend-only, existing columns), pull the offending rows client-side from cases+clients
+    // so the tiles can expand into the same list-panel pattern as the other Data Health items.
+    db.from("cases").select("id,stage,rate_end_date,client_id,clients(id,first_name,last_name,phone)"),
   ]);
   if (dqRes.error || dupRes.error) {
     renderLoadError("#data-content", dqRes.error || dupRes.error, loadDataHealth);
@@ -3373,14 +3517,28 @@ async function loadDataHealth() {
   const unassigned = Array.isArray(dq.live_unassigned) ? dq.live_unassigned : [];
   const noFee = Array.isArray(dq.completed_missing_fee) ? dq.completed_missing_fee : [];
 
+  const allCases = Array.isArray(caseRows.data) ? caseRows.data : [];
+  const isLiveStage = (s) => s !== "completed" && s !== "not_proceeding";
+  const missingPhoneMap = new Map(); // dedupe by client — a client can have several live cases
+  allCases.forEach((cs) => {
+    const cl = cs.clients;
+    if (cl && isLiveStage(cs.stage) && !cl.phone && !missingPhoneMap.has(cl.id)) {
+      missingPhoneMap.set(cl.id, { id: cl.id, name: [cl.first_name, cl.last_name].filter(Boolean).join(" ") || "(no name)" });
+    }
+  });
+  const missingPhoneLive = [...missingPhoneMap.values()];
+  const noRateEnd = allCases
+    .filter((cs) => cs.stage === "completed" && !cs.rate_end_date)
+    .map((cs) => ({ case_id: cs.id, name: cs.clients ? [cs.clients.first_name, cs.clients.last_name].filter(Boolean).join(" ") || "(no name)" : "(no name)" }));
+
   const kpis = `
     <div class="kpi"><div class="num">${dq.clients_total ?? 0}</div><div class="lbl">Clients total</div></div>
     <div class="kpi ${missingEmail.length ? "warn" : ""}" title="${missingEmail.length} of ${dq.missing_email_count ?? 0} clients missing an email have a live case — only those are actionable below"><div class="num">${missingEmail.length} of ${dq.missing_email_count ?? 0}</div><div class="lbl">Missing email — with a live case</div></div>
-    <div class="kpi ${dq.missing_phone_count ? "warn" : ""}"><div class="num">${dq.missing_phone_count ?? 0}</div><div class="lbl">Missing phone</div></div>
+    <div class="kpi ${dq.missing_phone_count ? "warn" : ""} dq-clickable" id="dh-tile-phone" title="${missingPhoneLive.length} of ${dq.missing_phone_count ?? 0} clients missing a phone have a live case — click to list them"><div class="num">${missingPhoneLive.length} of ${dq.missing_phone_count ?? 0}</div><div class="lbl">Missing phone — with a live case ▾</div></div>
     <div class="kpi ${dq.missing_both_count ? "warn" : ""}"><div class="num">${dq.missing_both_count ?? 0}</div><div class="lbl">Missing email &amp; phone</div></div>
     <div class="kpi ${unassigned.length ? "warn" : ""}"><div class="num">${unassigned.length}</div><div class="lbl">Live cases unassigned</div></div>
     <div class="kpi"><div class="num">${noFee.length}</div><div class="lbl">Completed, no fee</div></div>
-    <div class="kpi"><div class="num">${dq.completed_missing_rate_end ?? 0}</div><div class="lbl">Completed, no rate-end</div></div>
+    <div class="kpi dq-clickable" id="dh-tile-rateend" title="Click to list these cases"><div class="num">${dq.completed_missing_rate_end ?? 0}</div><div class="lbl">Completed, no rate-end ▾</div></div>
     <div class="kpi"><div class="num">${dq.emails_failed ?? 0}</div><div class="lbl">Failed emails</div></div>`;
 
   let stuckNotice = "";
@@ -3438,12 +3596,42 @@ async function loadDataHealth() {
       </div>`).join("") : '<div class="empty">All completed cases have a fee recorded. 👍</div>'}
   </div>`;
 
+  // Defect 13: the two previously dead-end tiles, now expandable list panels — same row-item
+  // pattern as missingPanel/unassignedPanel/noFeePanel above. Hidden until the tile is clicked.
+  const phonePanel = `<div class="panel hidden" id="dh-phone-panel">
+    <h3>Clients missing phone (with a live case)</h3>
+    ${missingPhoneLive.length ? missingPhoneLive.map((c) => `
+      <div class="row-item">
+        <div class="row-main"><div class="t" onclick="openClient('${c.id}')">${esc(c.name)}</div></div>
+        <button class="btn btn-sm" onclick="openClient('${c.id}')">Open</button>
+      </div>`).join("") : '<div class="empty">Every client with a live case has a phone number. 👍</div>'}
+  </div>`;
+
+  const rateEndPanel = `<div class="panel hidden" id="dh-rateend-panel">
+    <h3>Completed cases with no rate-end date</h3>
+    ${noRateEnd.length ? noRateEnd.map((c) => `
+      <div class="row-item">
+        <div class="row-main"><div class="t" onclick="openCase('${c.case_id}')">${esc(c.name)}</div></div>
+        <button class="btn btn-sm" onclick="openCase('${c.case_id}')">Open</button>
+      </div>`).join("") : '<div class="empty">Every completed case has a rate-end date. 👍</div>'}
+  </div>`;
+
   el.innerHTML = `
     <div class="kpi-row">${kpis}</div>
     ${stuckNotice}
     ${dupPanel}
     <div class="grid-2">${missingPanel}${unassignedPanel}</div>
-    ${noFeePanel}`;
+    ${noFeePanel}
+    <div class="grid-2">${phonePanel}${rateEndPanel}</div>`;
+
+  const wireTile = (tileId, panelId) => {
+    const tile = $(tileId), panel = $(panelId);
+    if (!tile || !panel) return;
+    tile.style.cursor = "pointer";
+    tile.onclick = () => panel.classList.toggle("hidden");
+  };
+  wireTile("#dh-tile-phone", "#dh-phone-panel");
+  wireTile("#dh-tile-rateend", "#dh-rateend-panel");
 }
 $("#data-refresh").addEventListener("click", () => loadDataHealth());
 
@@ -3515,10 +3703,14 @@ window.openMergeClients = async function (aId, bId) {
       const survVal = keepSideA ? av : bv;
       const survEmpty = mergeFieldEmpty(f, survVal);
       const otherEmpty = mergeFieldEmpty(f, keepSideA ? bv : av);
-      // Default to the surviving record's value, unless it's empty and the other side has data.
-      const defaultA = same ? true : (survEmpty && !otherEmpty ? !keepSideA : keepSideA);
-      return `<tr${same ? "" : ' style="background:#fff8ee;"'}>
-        <td>${esc(label)}</td>
+      // Opt-out booleans (defect 9): never default to "quietly re-consent" a client. If either side
+      // has opted out, default the merged value to opted-out (true) regardless of which record
+      // survives — the operator can still override, but the safe choice is pre-selected.
+      const optOutForced = boolField && (!!av !== !!bv);
+      const defaultA = optOutForced ? !!av
+        : (same ? true : (survEmpty && !otherEmpty ? !keepSideA : keepSideA));
+      return `<tr${optOutForced ? ' style="background:#fdecea;"' : (same ? "" : ' style="background:#fff8ee;"')}>
+        <td>${esc(label)}${optOutForced ? ' <span style="color:var(--red);font-weight:600;" title="One record has opted out — the opt-out is kept by default so it is never silently discarded.">⚠ opt-out kept</span>' : ""}</td>
         <td><label class="row-check" style="display:flex;gap:6px;align-items:flex-start;font-weight:400;"><input type="radio" name="merge-field-${f}" value="a" ${defaultA ? "checked" : ""} style="width:auto;margin-top:3px;"> ${mergeFieldDisplay(f, av)}</label></td>
         <td><label class="row-check" style="display:flex;gap:6px;align-items:flex-start;font-weight:400;"><input type="radio" name="merge-field-${f}" value="b" ${defaultA ? "" : "checked"} style="width:auto;margin-top:3px;"> ${mergeFieldDisplay(f, bv)}</label></td>
       </tr>`;
@@ -3587,7 +3779,22 @@ window.openMergeClients = async function (aId, bId) {
         if (delErr) return toast("Records were moved, but the duplicate couldn't be deleted: " + delErr.message + " — please delete it manually.");
 
         closeModal();
-        toast("Clients merged ✓");
+        // Defect 12 (lite): merge moves the loser's cases onto the survivor but doesn't check whether
+        // that now leaves two live cases of the same kind sitting side by side — a likely duplicate
+        // that still needs a human to review/merge. No auto-merge of cases; just flag it.
+        const { data: survCases } = await db.from("cases").select("case_kind,stage").eq("client_id", survivorId);
+        const openByKind = {};
+        (survCases || []).forEach((x) => {
+          if (x.stage === "completed" || x.stage === "not_proceeding") return;
+          openByKind[x.case_kind] = (openByKind[x.case_kind] || 0) + 1;
+        });
+        const dupeKind = Object.entries(openByKind).find(([, n]) => n >= 2);
+        if (dupeKind) {
+          const label = KINDS.find((k) => k[0] === dupeKind[0])?.[1] || dupeKind[0];
+          toast(`⚠ Survivor has ${dupeKind[1]} similar open cases (${label}) — review for duplicates`);
+        } else {
+          toast("Clients merged ✓");
+        }
         loadDataHealth();
       } finally {
         if (btn) btn.disabled = false;
@@ -3751,7 +3958,7 @@ function openModal() {
     x.setAttribute("aria-label", "Close");
     x.title = "Close";
     x.textContent = "✕";
-    x.addEventListener("click", closeModal);
+    x.addEventListener("click", closeModalGuarded);
     modal.insertBefore(x, modal.firstChild);
   }
   $("#modal-backdrop").classList.remove("hidden");
@@ -3764,10 +3971,27 @@ window.closeModal = function () {
   if (modalPrevFocus && typeof modalPrevFocus.focus === "function") modalPrevFocus.focus();
   modalPrevFocus = null;
 };
-$("#modal-backdrop").addEventListener("click", (e) => { if (e.target === $("#modal-backdrop")) closeModal(); });
+// Log-call dirty guard (defect 14) — true when the case summary's inline Log-call panel is open
+// and has unsaved text (outcome note or follow-up title). Saving the call (submitCall) always
+// clears these fields before hiding the panel, so this naturally goes false again once saved.
+function hasUnsavedLogCall() {
+  const panel = $("#cs-logcall-panel");
+  if (!panel || panel.classList.contains("hidden")) return false;
+  const note = $("#cs-call-note");
+  const fuTitle = $("#cs-call-fu-title");
+  return !!((note && note.value.trim()) || (fuTitle && fuTitle.value.trim()));
+}
+// User-initiated "abandon the modal" paths (Escape, backdrop click, × button) — as opposed to
+// closeModal() itself, which is also called after successful saves/deletes elsewhere and shouldn't
+// be gated behind a confirm() there.
+function closeModalGuarded() {
+  if (hasUnsavedLogCall() && !confirm("Discard your unsaved note?")) return;
+  closeModal();
+}
+$("#modal-backdrop").addEventListener("click", (e) => { if (e.target === $("#modal-backdrop")) closeModalGuarded(); });
 document.addEventListener("keydown", (e) => {
   if ($("#modal-backdrop").classList.contains("hidden")) return;
-  if (e.key === "Escape") { e.preventDefault(); closeModal(); return; }
+  if (e.key === "Escape") { e.preventDefault(); closeModalGuarded(); return; }
   if (e.key === "Tab") {
     const f = modalFocusable();
     if (!f.length) return;
@@ -3828,9 +4052,10 @@ document.addEventListener("keydown", (e) => {
       `<span class="pr-ic" aria-hidden="true">${icon}</span>` +
       `<span class="pr-main"><span class="pr-title">${esc(title)}</span><span class="pr-sub">${esc(sub)}</span></span></div>`;
   }
-  function render(clients, cases, q) {
+  function render(clients, cases, leads, q) {
     flat = [];
     let html = "";
+    const caseIdxById = {};
     if (clients.length) {
       html += '<div class="palette-group-label">Clients</div>';
       clients.forEach((cl) => {
@@ -3849,12 +4074,30 @@ document.addEventListener("keydown", (e) => {
         if (cs.lender) bits.push(cs.lender);
         else if (KIND_LABEL[cs.case_kind]) bits.push(KIND_LABEL[cs.case_kind]);
         const idx = flat.length; flat.push({ type: "case", id: cs.id });
+        caseIdxById[cs.id] = idx;
         html += rowHtml(idx, "🗂️", name, bits.filter(Boolean).join("  ·  "));
+      });
+    }
+    if (leads && leads.length) {
+      html += '<div class="palette-group-label">Leads</div>';
+      leads.forEach((l) => {
+        const sub = ["Web enquiry", l.phone, l.email].filter(Boolean).join("  ·  ");
+        const idx = flat.length; flat.push({ type: "lead", id: l.id });
+        html += rowHtml(idx, "📥", l.name || "(no name)", sub);
       });
     }
     if (!flat.length) { renderEmpty(q); return; }
     resultsEl.innerHTML = html;
-    sel = 0; updateSel(false);
+    // Default highlight (defect #20 / A3): if the top client hit has exactly ONE open case,
+    // point Enter at that CASE modal (its one-tap Log-call / follow-up tools live there). The
+    // client row is still one arrow-key away.
+    sel = 0;
+    if (clients.length) {
+      const top = clients[0];
+      const open = cases.filter((cs) => cs.client_id === top.id && cs.stage !== "completed" && cs.stage !== "not_proceeding");
+      if (open.length === 1 && caseIdxById[open[0].id] != null) sel = caseIdxById[open[0].id];
+    }
+    updateSel(false);
   }
   function updateSel(scroll) {
     const rows = resultsEl.querySelectorAll(".palette-row");
@@ -3871,27 +4114,41 @@ document.addEventListener("keydown", (e) => {
     if (!item) return;
     closePalette(false);   // don't grab focus back — the modal will manage its own
     if (item.type === "client") window.openClient(item.id);
+    else if (item.type === "lead") openLeadOnToday();
     else window.openCase(item.id);
+  }
+  // A lead has no record modal — jump to Today with the leads drawer open so the enquiry can be
+  // Accepted/Discarded straight away (defect #2).
+  function openLeadOnToday() {
+    if (typeof nav === "function") nav("dashboard");
+    dashDrawerTouched.leads = true;              // stop autoDrawer from re-collapsing it
+    const panel = document.getElementById("leads-panel");
+    if (panel) { panel.classList.remove("collapsed"); setTimeout(() => { try { panel.scrollIntoView({ block: "nearest" }); } catch (e) {} }, 60); }
   }
 
   async function runSearch(raw) {
     const q = sanitize(raw);
     const mySeq = ++seq;
     if (q.length < 2) { renderIdle(); return; }
-    let clients = [], cases = [];
+    // Tokenisation (defect #1): split on whitespace so a multi-word / full-name query works.
+    const tokens = q.split(" ").filter(Boolean);
+    const phoneDigits = String(raw).replace(/[^\d+]/g, "");
+    const isPhone = phoneDigits.replace(/\D/g, "").length >= 3;
+    // Interleave digits with % so "07700 900123" matches however the number is spaced/punctuated.
+    const phoneOr = () => { const pd = normPhone(phoneDigits).replace(/\D/g, ""); return `phone.ilike.%${pd.split("").join("%")}%`; };
+    let clients = [], cases = [], leads = [];
     try {
       // ---- Query 1: clients by name / email / phone ----
-      const orClient = [`first_name.ilike.%${q}%`, `last_name.ilike.%${q}%`, `email.ilike.%${q}%`];
-      const phoneDigits = String(raw).replace(/[^\d+]/g, "");
-      if (phoneDigits.replace(/\D/g, "").length >= 3) {
-        // Interleave digits with % so "07700 900123" matches however the number
-        // is spaced/punctuated in the DB (Sarah's headline use case).
-        const pd = normPhone(phoneDigits).replace(/\D/g, "");
-        orClient.push(`phone.ilike.%${pd.split("").join("%")}%`);
+      // Phone lookups keep the single interleaved-digit OR (Sarah's headline use case). Text
+      // lookups tokenise: EACH token must match somewhere across first/last/email — chained
+      // .or() clauses AND together — so "James Whitfield" AND "whitfield james" both find him.
+      let clientQ = db.from("clients").select("id,first_name,last_name,email,phone");
+      if (isPhone) {
+        clientQ = clientQ.or([`first_name.ilike.%${q}%`, `last_name.ilike.%${q}%`, `email.ilike.%${q}%`, phoneOr()].join(","));
+      } else {
+        tokens.forEach((tok) => { clientQ = clientQ.or([`first_name.ilike.%${tok}%`, `last_name.ilike.%${tok}%`, `email.ilike.%${tok}%`].join(",")); });
       }
-      const { data: cl } = await db.from("clients")
-        .select("id,first_name,last_name,email,phone")
-        .or(orClient.join(",")).limit(8);
+      const { data: cl } = await clientQ.limit(8);
       if (mySeq !== seq) return;
       clients = cl || [];
 
@@ -3914,8 +4171,22 @@ document.addEventListener("keydown", (e) => {
       renderEmpty(q);      // errors degrade silently to the zero-result state
       return;
     }
+
+    // ---- Query 3: new website leads (defect #2). Wrapped on its own so a blocked/absent leads
+    // table degrades to "no leads" without wiping the client/case results. Same tokenisation. ----
+    try {
+      let leadQ = db.from("leads").select("id,name,email,phone,enquiry_type,status").eq("status", "new");
+      if (isPhone) {
+        leadQ = leadQ.or([`name.ilike.%${q}%`, `email.ilike.%${q}%`, phoneOr()].join(","));
+      } else {
+        tokens.forEach((tok) => { leadQ = leadQ.or([`name.ilike.%${tok}%`, `email.ilike.%${tok}%`].join(",")); });
+      }
+      const { data: ld } = await leadQ.limit(6);
+      if (mySeq === seq) leads = ld || [];
+    } catch (e) { /* leads table unavailable — leave empty */ }
+
     if (mySeq !== seq) return;
-    render(clients, cases, q);
+    render(clients, cases, leads, q);
   }
 
   // Global "/" hotkey — opens the palette unless the user is typing in a field.
