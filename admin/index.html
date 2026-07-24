@@ -73,8 +73,8 @@
         <p class="panel-sub" id="briefing-date"></p>
         <div id="briefing-list" class="dash-scroll"></div>
       </div>
-      <div class="panel" id="watchtower-panel">
-        <h3>🚨 Watchtower
+      <div class="panel dash-drawer collapsed" id="watchtower-panel">
+        <h3 onclick="toggleDrawer(event,'watchtower')">🚨 Watchtower
           <button class="btn btn-ghost btn-sm" id="watchtower-run">Run checks</button>
         </h3>
         <p class="panel-sub" id="watchtower-sub">Problems found automatically — resolves itself when fixed</p>
@@ -82,35 +82,36 @@
       </div>
       <div class="kpi-row" id="kpi-row"></div>
       <div class="grid-2">
-        <div class="panel dash-card" id="leads-panel">
-          <h3>📥 New website leads <span id="leads-count" class="badge red hidden"></span></h3>
-          <p class="panel-sub">Enquiries from nexmoney.co.uk land here. Accept to create the client + case, assigned to you.</p>
+        <div class="panel dash-card dash-drawer collapsed" id="leads-panel">
+          <h3 onclick="toggleDrawer(event,'leads')">📥 New website leads <span id="leads-count" class="badge red hidden"></span></h3>
+          <p class="panel-sub">Enquiries from nexmoney.co.uk land here — also flagged in My Day above. Accept here to create the client + case, assigned to you.</p>
           <div id="leads-list" class="dash-scroll"></div>
         </div>
-        <div class="panel dash-card">
-          <h3>📅 Today's appointments</h3>
+        <div class="panel dash-card dash-drawer collapsed" id="today-appts-panel">
+          <h3 onclick="toggleDrawer(event,'todayappts')">📅 Today's appointments</h3>
           <div id="today-appts" class="dash-scroll"></div>
         </div>
       </div>
       <div class="grid-2">
-        <div class="panel dash-card">
-          <h3>📞 Tasks due <button class="btn btn-sm" id="tasks-scope-btn">Mine</button></h3>
-          <p class="panel-sub">Call tasks from the retention sequence, plus anything you add on cases.</p>
+        <div class="panel dash-card dash-drawer collapsed" id="tasks-panel">
+          <h3 onclick="toggleDrawer(event,'tasks')">📞 Tasks due <button class="btn btn-sm" id="tasks-scope-btn">Mine</button></h3>
+          <p class="panel-sub">Call tasks from the retention sequence, plus anything you add on cases. Overdue &amp; due-today tasks also surface in My Day above.</p>
           <div id="tasks-list" class="dash-scroll"></div>
         </div>
-        <div class="panel dash-card" id="rate-erc-panel">
-          <h3>⚠️ Rate &amp; ERC alerts</h3>
+        <div class="panel dash-card dash-drawer collapsed" id="rate-erc-panel">
+          <h3 onclick="toggleDrawer(event,'rateerc')">⚠️ Rate &amp; ERC alerts</h3>
           <p class="panel-sub">Rates ending within the reminder window, and cases where the ERC outlasts the rate.</p>
           <div id="alerts-rateerc" class="dash-scroll"></div>
         </div>
       </div>
       <div class="grid-2">
-        <div class="panel dash-card">
-          <h3>🔁 Retention pipeline</h3>
+        <div class="panel dash-card dash-drawer collapsed" id="retention-panel">
+          <h3 onclick="toggleDrawer(event,'retention')">🔁 Retention pipeline</h3>
           <p class="panel-sub" id="retention-stats"></p>
           <div id="retention-list" class="dash-scroll"></div>
         </div>
-        <div class="panel dash-card" id="revenue-panel">
+        <div class="panel dash-card dash-drawer collapsed" id="revenue-panel">
+          <h3 onclick="toggleDrawer(event,'revenue')">🛡️💷 Protection &amp; fees <span class="count" id="revenue-count"></span></h3>
           <div class="dash-tabs">
             <button class="dash-tab active" data-tab="protection">🛡️ Protection <span class="count" id="tab-protection-count"></span></button>
             <button class="dash-tab" data-tab="fees">💷 Fees due <span class="count" id="tab-fees-count"></span></button>
@@ -268,6 +269,7 @@
       <div class="page-head">
         <h2>Email activity</h2>
         <div class="page-tools">
+          <label style="display:flex;align-items:center;gap:6px;font-weight:500;font-size:13px;color:var(--muted);"><input type="checkbox" id="email-failed-only" style="width:auto;margin:0;"> Failed only</label>
           <button class="btn" id="run-now-btn" title="Runs the daily automation immediately">▶ Run automation now</button>
           <button class="btn" id="run-sms-btn" title="Sends any queued SMS immediately">▶ Send SMS now</button>
         </div>
@@ -283,7 +285,7 @@
     <!-- Settings -->
     <section id="page-settings" class="page hidden">
       <h2>Settings</h2>
-      <form id="settings-form" class="panel settings-grid"></form>
+      <form id="settings-form" class="panel"></form>
       <button class="btn btn-primary" id="save-settings-btn">Save settings</button>
       <span id="settings-saved" class="saved-msg hidden">Saved ✓</span>
 

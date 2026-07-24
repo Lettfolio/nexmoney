@@ -94,13 +94,15 @@ const TIP_SUB = "Submitted — the date the application was sent to the lender";
 const TIP_APPROX = "estimated — needs checking";
 // Inline "≈" marker with a tooltip, used wherever a rate-end date is only estimated.
 const APPROX = `<span class="approx" title="${TIP_APPROX}">≈</span>`;
+// Each entry: [key, label, type?]. type: "email" / "url" light-validates on save;
+// "bool10" renders the same On/Off <select> pattern used across the page, stored as "1"/"0".
 const SETTING_FIELDS = [
   ["company_name", "Company name"],
   ["adviser_name", "Adviser name (email sign-off)"],
   ["adviser_phone", "Adviser phone"],
-  ["from_email", "From email (verified in Resend)"],
-  ["reply_to_email", "Reply-to email"],
-  ["google_review_link", "Google review link"],
+  ["from_email", "From email (verified in Resend)", "email"],
+  ["reply_to_email", "Reply-to email", "email"],
+  ["google_review_link", "Google review link", "url"],
   ["bank_account_name", "Bank account name"],
   ["bank_sort_code", "Sort code"],
   ["bank_account_number", "Account number"],
@@ -108,13 +110,28 @@ const SETTING_FIELDS = [
   ["review_delay_days", "Review request delay after completion (days)"],
   ["referral_delay_days", "Referral nudge delay after review request (days)"],
   ["solicitor_chase_days", "Solicitor chase task after exchange (days)"],
-  ["auto_docs_request", "Auto document-request email at Fact Find (on/off)"],
-  ["auto_submitted_update", "Auto submitted email at Application (on/off)"],
-  ["auto_offer_update", "Auto offer email at Offer (on/off)"],
-  ["auto_completion_email", "Auto completion email (on/off)"],
-  ["auto_referral", "Auto referral nudge after review (on/off)"],
+  ["auto_docs_request", "Auto document-request email at Fact Find", "bool10"],
+  ["auto_submitted_update", "Auto submitted email at Application", "bool10"],
+  ["auto_offer_update", "Auto offer email at Offer", "bool10"],
+  ["auto_completion_email", "Auto completion email", "bool10"],
+  ["auto_referral", "Auto referral nudge after review", "bool10"],
   ["docs_list", "Document checklist (separate items with |)"],
 ];
+// Friendly labels for the light save-time validation (email-shaped / URL-shaped fields
+// that live outside SETTING_FIELDS, e.g. rendered inline further down in renderSettings()).
+const SETTING_EMAIL_FIELDS = { from_email: "From email", reply_to_email: "Reply-to email", owner_digest_email: "Owner digest email address" };
+const SETTING_URL_FIELDS = { google_review_link: "Google review link", review_platform_link: "Review platform link", site_url: "Site URL" };
+function isValidEmailLike(v) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v); }
+function isValidUrlLike(v) { return /^https?:\/\/[^\s]+\.[^\s]+/i.test(v); }
+function settingFieldHtml([k, label, type]) {
+  if (type === "bool10") return `<label>${esc(label)} (on/off)
+      <select name="${k}">
+        <option value="0" ${settings[k] === "1" ? "" : "selected"}>Off</option>
+        <option value="1" ${settings[k] === "1" ? "selected" : ""}>On</option>
+      </select>
+    </label>`;
+  return `<label>${esc(label)}<input name="${k}" type="${type === "email" ? "email" : type === "url" ? "url" : "text"}" value="${esc(settings[k] ?? "")}"></label>`;
+}
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => (s == null ? "" : String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])));
@@ -135,6 +152,9 @@ const fmtM = (n) => (n == null || n === "" ? "—" : Number(n).toLocaleString("e
 const fmtM2 = (n) => (n == null || n === "" ? "—" : Number(n).toLocaleString("en-GB", { style: "currency", currency: "GBP", minimumFractionDigits: 2, maximumFractionDigits: 2 }));
 let settings = {};
 let ME = null, TEAM = [], tasksScope = "mine";
+// BUILD 4b: which Today drawers the user has manually opened/closed this session (session-only,
+// never persisted — resets on reload). Keyed by drawer id (e.g. "watchtower", "leads").
+let dashDrawerTouched = {};
 let pipelineView = "board", stageTab = "all", sortKey = "updated_at", sortDir = -1;
 function staffName(id) { const p = TEAM.find((x) => x.id === id); return p ? (p.full_name || p.email) : "—"; }
 // Compact relative age ("3d ago", "2mo ago") for the case summary's last-note line.
@@ -219,6 +239,37 @@ function panelCount(listSel, n, hot = false) {
   chip.textContent = n;
   chip.classList.toggle("hot", hot && n > 0);
   panel.classList.toggle("slim", n === 0);
+}
+
+/* ---------- Today drawers (BUILD 4b) ---------- */
+// Click on a drawer's <h3> collapses/expands it (clicks on buttons inside the header — e.g.
+// "Run checks", the Tasks "Mine/All" toggle — are left alone so they keep working as before).
+// The open/closed state lives only on the DOM (the .collapsed class), so it survives the
+// panel's own re-renders (which only replace the inner list, never the drawer element) for the
+// rest of the session; dashDrawerTouched just remembers that the user has taken manual control
+// of a drawer that would otherwise be auto-opened/closed (Watchtower, New website leads).
+window.toggleDrawer = function (ev, key) {
+  if (ev && ev.target.closest("button")) return;
+  const panel = (ev && ev.currentTarget && ev.currentTarget.closest(".panel")) || document.getElementById(key + "-panel");
+  if (!panel) return;
+  panel.classList.toggle("collapsed");
+  dashDrawerTouched[key] = true;
+};
+// Auto-open/close a drawer based on whether it currently holds anything attention-worthy —
+// unless the user has already manually toggled it this session, in which case leave it alone.
+function autoDrawer(key, shouldOpen) {
+  if (dashDrawerTouched[key]) return;
+  const panel = document.getElementById(key + "-panel");
+  if (!panel) return;
+  panel.classList.toggle("collapsed", !shouldOpen);
+}
+// The Protection/Fees drawer combines two independently-loading tabs — recompute its header
+// count from whichever of the two tab counts have rendered so far (called from both loaders).
+function updateRevenueDrawerCount() {
+  const p = Number(($("#tab-protection-count") || {}).textContent) || 0;
+  const f = Number(($("#tab-fees-count") || {}).textContent) || 0;
+  const el = $("#revenue-count");
+  if (el) el.textContent = p + f;
 }
 
 function toast(msg) {
@@ -375,19 +426,7 @@ async function loadSettings() {
   settings = Object.fromEntries((data || []).map((r) => [r.key, r.value]));
 }
 function renderSettings() {
-  $("#settings-form").innerHTML = SETTING_FIELDS.map(([k, label]) =>
-    `<label>${esc(label)}<input name="${k}" value="${esc(settings[k] ?? "")}"></label>`).join("") + `
-    <h3 style="grid-column:1/-1;margin:10px 0 0;">Outlook &amp; AI</h3>
-    <label>Outlook inbox sync (pulls client emails into My Day)
-      <select name="outlook_enabled">
-        <option value="0" ${settings.outlook_enabled === "1" ? "" : "selected"}>Off</option>
-        <option value="1" ${settings.outlook_enabled === "1" ? "selected" : ""}>On</option>
-      </select>
-    </label>
-    <label>Outlook mailboxes to scan
-      <input name="outlook_mailboxes" value="${esc(settings.outlook_mailboxes ?? "")}" placeholder="daniel@nexmoney.co.uk, wayne@nexmoney.co.uk — blank = all staff">
-    </label>
-    <p class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;">Outlook sync and the AI assistant need Supabase secrets: ANTHROPIC_API_KEY, MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET — plus an Azure app registration with Graph <em>Application</em> permission Mail.Read and admin consent.</p>
+  const general = SETTING_FIELDS.map(settingFieldHtml).join("") + `
     <h3 style="grid-column:1/-1;margin:10px 0 0;">Protection &amp; GI</h3>
     <label>Protection gate — block moves to Application+ until protection is recorded
       <select name="protection_gate">
@@ -423,7 +462,7 @@ function renderSettings() {
     </label>
     <p class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;">Sent daily at ~07:30 UK time. Requires RESEND_API_KEY.</p>
     <div style="grid-column:1/-1;"><button type="button" class="btn btn-sm" id="send-digest-btn">Send digest now</button></div>
-    <h3 style="grid-column:1/-1;margin:10px 0 0;">Client comms &amp; SMS</h3>
+    <h3 style="grid-column:1/-1;margin:10px 0 0;">Client comms &amp; sales</h3>
     <label>Financial promotions approved (master switch)
       <select name="financial_promotions_approved">
         <option value="off" ${(settings.financial_promotions_approved ?? "off") === "on" ? "" : "selected"}>Off</option>
@@ -431,21 +470,6 @@ function renderSettings() {
       </select>
     </label>
     <p class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;">Master switch — no marketing email (referral, protection, GI) sends until this is on. Confirm your network has approved the templates.</p>
-    <label>SMS enabled
-      <select name="sms_enabled">
-        <option value="off" ${(settings.sms_enabled ?? "off") === "on" ? "" : "selected"}>Off</option>
-        <option value="on" ${settings.sms_enabled === "on" ? "selected" : ""}>On</option>
-      </select>
-    </label>
-    <label>SMS provider
-      <select name="sms_provider">
-        <option value="twilio" ${(settings.sms_provider ?? "twilio") === "clicksend" ? "" : "selected"}>Twilio</option>
-        <option value="clicksend" ${settings.sms_provider === "clicksend" ? "selected" : ""}>ClickSend</option>
-      </select>
-    </label>
-    <label>SMS sender (number / sender ID)
-      <input name="sms_from" value="${esc(settings.sms_from ?? "")}" placeholder="e.g. +447700900123 or NexMoney">
-    </label>
     <label>Auto SMS — rate-end reminder
       <select name="auto_sms_rate_end">
         <option value="off" ${(settings.auto_sms_rate_end ?? "off") === "on" ? "" : "selected"}>Off</option>
@@ -458,7 +482,6 @@ function renderSettings() {
         <option value="on" ${settings.auto_sms_appointment === "on" ? "selected" : ""}>On</option>
       </select>
     </label>
-    <p class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;">SMS also needs provider credentials set as Supabase secrets (Twilio: TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN; ClickSend: CLICKSEND_USERNAME / CLICKSEND_API_KEY). Nothing sends until sms_enabled is on and credentials are set.</p>
     <label>Birthday greetings
       <select name="birthday_enabled">
         <option value="off" ${(settings.birthday_enabled ?? "off") === "on" ? "" : "selected"}>Off</option>
@@ -479,11 +502,49 @@ function renderSettings() {
     </label>
     <p class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;">Review-request emails ask for a 1–5 rating; happy clients are routed to your review link, unhappy ones create a call-back task.</p>
     <label>Review platform link (Google / Trustpilot)
-      <input name="review_platform_link" value="${esc(settings.review_platform_link ?? "")}" placeholder="https://g.page/r/…">
+      <input name="review_platform_link" type="url" value="${esc(settings.review_platform_link ?? "")}" placeholder="https://g.page/r/…">
     </label>
     <label>Site URL
-      <input name="site_url" value="${esc(settings.site_url ?? "")}" placeholder="https://www.nexmoney.co.uk">
+      <input name="site_url" type="url" value="${esc(settings.site_url ?? "")}" placeholder="https://www.nexmoney.co.uk">
     </label>`;
+  const advanced = `
+    <h3 style="grid-column:1/-1;margin:0;">Outlook &amp; AI</h3>
+    <label>Outlook inbox sync (pulls client emails into My Day)
+      <select name="outlook_enabled">
+        <option value="0" ${settings.outlook_enabled === "1" ? "" : "selected"}>Off</option>
+        <option value="1" ${settings.outlook_enabled === "1" ? "selected" : ""}>On</option>
+      </select>
+    </label>
+    <label>Outlook mailboxes to scan
+      <input name="outlook_mailboxes" value="${esc(settings.outlook_mailboxes ?? "")}" placeholder="daniel@nexmoney.co.uk, wayne@nexmoney.co.uk — blank = all staff">
+    </label>
+    <p class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;">Outlook sync and the AI assistant need Supabase secrets: ANTHROPIC_API_KEY, MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET — plus an Azure app registration with Graph <em>Application</em> permission Mail.Read and admin consent.</p>
+    <h3 style="grid-column:1/-1;margin:10px 0 0;">SMS provider</h3>
+    <label>SMS enabled
+      <select name="sms_enabled">
+        <option value="off" ${(settings.sms_enabled ?? "off") === "on" ? "" : "selected"}>Off</option>
+        <option value="on" ${settings.sms_enabled === "on" ? "selected" : ""}>On</option>
+      </select>
+    </label>
+    <label>SMS provider
+      <select name="sms_provider">
+        <option value="twilio" ${(settings.sms_provider ?? "twilio") === "clicksend" ? "" : "selected"}>Twilio</option>
+        <option value="clicksend" ${settings.sms_provider === "clicksend" ? "selected" : ""}>ClickSend</option>
+      </select>
+    </label>
+    <label>SMS sender (number / sender ID)
+      <input name="sms_from" value="${esc(settings.sms_from ?? "")}" placeholder="e.g. +447700900123 or NexMoney">
+    </label>
+    <p class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;">SMS also needs provider credentials set as Supabase secrets (Twilio: TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN; ClickSend: CLICKSEND_USERNAME / CLICKSEND_API_KEY). Nothing sends until sms_enabled is on and credentials are set.</p>`;
+  $("#settings-form").innerHTML = `
+    <details class="case-details settings-details" open>
+      <summary>General</summary>
+      <div class="settings-grid">${general}</div>
+    </details>
+    <details class="case-details settings-details">
+      <summary>Advanced — API keys &amp; integrations</summary>
+      <div class="settings-grid">${advanced}</div>
+    </details>`;
   $("#send-digest-btn").onclick = sendDigestNow;
   loadIntroducers();
 }
@@ -510,7 +571,17 @@ async function sendDigestNow() {
   }
 }
 $("#save-settings-btn").addEventListener("click", async () => {
-  const rows = [...$("#settings-form").querySelectorAll("input, select")].map((i) => ({ key: i.name, value: i.value.trim() }));
+  const fields = [...$("#settings-form").querySelectorAll("input, select")];
+  // Light validation only — warns but never blocks the save (nothing here should stop a workflow).
+  const warnings = [];
+  fields.forEach((i) => {
+    const v = i.value.trim();
+    if (!v) return;
+    if (SETTING_EMAIL_FIELDS[i.name] && !isValidEmailLike(v)) warnings.push(`${SETTING_EMAIL_FIELDS[i.name]} doesn't look like a valid email`);
+    if (SETTING_URL_FIELDS[i.name] && !isValidUrlLike(v)) warnings.push(`${SETTING_URL_FIELDS[i.name]} doesn't look like a valid URL`);
+  });
+  if (warnings.length) toast(warnings.join(" · "));
+  const rows = fields.map((i) => ({ key: i.name, value: i.value.trim() }));
   const { error } = await db.from("settings").upsert(rows);
   if (error) return toast("Error: " + error.message);
   await loadSettings();
@@ -594,6 +665,7 @@ async function loadDashboard() {
       <span class="badge ${a.fee_status === "requested" ? "amber" : "grey"}">${a.fee_status === "requested" ? "Requested" : "Not requested"}</span>
     </div>`).join("") : '<div class="empty">No outstanding fees on completed cases.</div>';
   $("#tab-fees-count").textContent = feeAlerts.length;
+  updateRevenueDrawerCount();
 }
 
 async function loadRetention() {
@@ -675,6 +747,7 @@ async function loadProtection() {
       <span class="badge amber">discuss protection</span>
     </div>`).join("") : '<div class="empty">All live cases have protection recorded. 👍</div>';
   $("#tab-protection-count").textContent = (opps || []).length;
+  updateRevenueDrawerCount();
 }
 
 /* ---------- My Day briefing ---------- */
@@ -822,6 +895,7 @@ async function loadWatchtower() {
     </div>`;
   }).join("") : '<div class="empty">No problems detected 🎉</div>';
   panelCount("#watchtower-list", alerts.length, alerts.some((a) => a.severity === "crit"));
+  autoDrawer("watchtower", alerts.some((a) => a.severity === "crit")); // auto-open on anything critical, else stay collapsed
 }
 window.resolveAlert = async function (id, severity, caseId) {
   let reason = null;
@@ -1208,12 +1282,13 @@ window.factFind = async function (caseId, clientId) {
       <button class="btn btn-sm" id="ff-refresh">↻ Refresh status</button>
       <button class="btn btn-sm" id="ff-new">New blank fact-find</button>
     </div>
-    ${hasData ? `<div style="margin-top:16px;"><h3 style="font-size:14px;">Submitted responses</h3>${renderFactFindData(ff.data)}</div>`
+    ${hasData ? `<div style="margin-top:16px;"><div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;"><h3 style="font-size:14px;margin:0;">Submitted responses</h3><button class="btn btn-sm btn-primary" id="ff-apply">➡️ Apply to case</button></div>${ffProtInterest(ff.data).interested ? '<p class="panel-sub" style="margin:6px 0 0;color:var(--green);font-weight:600;">💷 Protection interest flagged — capture the cross-sell when you apply.</p>' : ""}${renderFactFindData(ff.data)}</div>`
               : '<p class="panel-sub" style="margin-top:16px;">Responses will appear here once the client submits.</p>'}
     <div class="modal-actions"><div></div><div class="right"><button class="btn" id="ff-back">Back to case</button></div></div>`;
   openModal();
   $("#ff-copy").onclick = () => { const el = $("#ff-link"); el.select(); try { document.execCommand("copy"); } catch (e) {} if (navigator.clipboard) navigator.clipboard.writeText(el.value); toast("Link copied"); };
   $("#ff-back").onclick = () => openCase(caseId);
+  if ($("#ff-apply")) $("#ff-apply").onclick = () => ffApplyDiff(caseId, clientId, ff.data);
   $("#ff-refresh").onclick = () => factFind(caseId, clientId);
   $("#ff-new").onclick = async () => { if (!confirm("Start a fresh blank fact-find? The current link stops being the active one.")) return; await db.from("fact_finds").insert({ case_id: caseId, client_id: clientId, created_by: (ME && ME.id) || null }); factFind(caseId, clientId); };
   $("#ff-mail").onclick = async () => {
@@ -1228,6 +1303,149 @@ function renderFactFindData(data) {
   return `<div class="ff-data">` + Object.keys(data).filter((k) => String(data[k] ?? "").trim() !== "")
     .map((k) => `<div class="ff-row"><span class="ff-k">${esc(prettyFF(k))}</span><span class="ff-v">${esc(data[k])}</span></div>`).join("") + `</div>`;
 }
+/* ---------- BUILD 4a: fact-find → case "Apply" ----------
+   Maps digital fact-find answer keys (from factfind.html) onto the clients/cases columns
+   app.js already writes. Only columns already touched elsewhere are used (no schema changes). */
+const FF_MAP = [
+  { t: "client", col: "first_name",    label: "First name",     ff: ["a1_first"] },
+  { t: "client", col: "last_name",     label: "Last name",      ff: ["a1_last"] },
+  { t: "client", col: "email",         label: "Email",          ff: ["email"] },
+  { t: "client", col: "phone",         label: "Phone",          ff: ["phone"] },
+  { t: "client", col: "date_of_birth", label: "Date of birth",  ff: ["a1_dob"] },
+  { t: "client", col: "address",       label: "Address",        ff: ["a1_address", "a1_postcode"] },
+  { t: "case",   col: "loan_amount",    label: "Loan amount",    ff: ["m_loan"],  num: true, money: true },
+  { t: "case",   col: "property_value", label: "Property value", ff: ["m_value"], num: true, money: true },
+  { t: "case",   col: "term_years",     label: "Term (years)",   ff: ["m_term"],  num: true },
+];
+// Protection cross-sell signal from the fact-find protection section (section 7 of factfind.html).
+function ffProtInterest(d) {
+  d = d || {};
+  const reasons = [];
+  if (String(d.p_review || "").toLowerCase() === "yes") reasons.push("Asked for a protection review");
+  if (String(d.p_life || "").toLowerCase() === "no") reasons.push("No life cover in place");
+  if (String(d.p_ip || "").toLowerCase() === "no") reasons.push("No income protection / critical illness cover");
+  return { interested: reasons.length > 0, reasons };
+}
+window.ffApplyDiff = async function (caseId, clientId, data) {
+  data = data || {};
+  let cRow, clRow;
+  try {
+    const [rc, rcl] = await Promise.all([
+      db.from("cases").select("*").eq("id", caseId).single(),
+      db.from("clients").select("*").eq("id", clientId).single(),
+    ]);
+    cRow = rc.data; clRow = rcl.data;
+  } catch (e) { return toast("Could not load case/client to apply"); }
+  if (!cRow || !clRow) return toast("Could not load case/client to apply");
+
+  const rows = [];
+  FF_MAP.forEach((m, i) => {
+    const ffRaw = m.ff.map((k) => String(data[k] == null ? "" : data[k]).trim()).filter(Boolean).join(", ");
+    if (!ffRaw) return; // no fact-find answer to apply for this field
+    const ffVal = m.num ? Number(String(ffRaw).replace(/[^0-9.]/g, "")) : ffRaw;
+    if (m.num && !isFinite(ffVal)) return;
+    const src = m.t === "client" ? clRow : cRow;
+    const curRaw = src[m.col];
+    const curEmpty = curRaw == null || String(curRaw).trim() === "";
+    const equal = !curEmpty && (m.num ? Number(curRaw) === ffVal : String(curRaw).trim() === String(ffVal).trim());
+    if (equal) return; // already matches — nothing to do
+    const disp = (v) => (v === "" || v == null ? '<span class="cs-muted">— empty —</span>' : (m.money ? esc(fmtM(v)) : esc(v)));
+    rows.push({
+      idx: i, m, ffVal, conflict: !curEmpty, checked: curEmpty,
+      curHtml: disp(curEmpty ? "" : curRaw), ffHtml: disp(m.num ? ffVal : ffRaw),
+    });
+  });
+
+  const prot = ffProtInterest(data);
+  const curProt = cRow.protection_status || "not_discussed";
+  const protUpgradeable = prot.interested && curProt === "not_discussed";
+
+  const tableRows = rows.map((r) => `
+    <tr>
+      <td style="padding:6px 8px;font-weight:600;">${esc(r.m.label)}<div class="cs-muted" style="font-weight:400;font-size:11px;">${r.m.t}</div></td>
+      <td style="padding:6px 8px;">${r.curHtml}</td>
+      <td style="padding:6px 8px;">${r.ffHtml}${r.conflict ? ' <span class="badge amber" style="margin-left:4px;">conflict</span>' : ""}</td>
+      <td style="padding:6px 8px;text-align:center;"><input type="checkbox" id="ffchk-${r.idx}" ${r.checked ? "checked" : ""} style="width:auto;"></td>
+    </tr>`).join("");
+
+  const protBox = prot.interested ? `
+    <div style="margin-top:14px;border:1px solid var(--green);background:rgba(23,114,69,.07);border-radius:10px;padding:12px;">
+      <div style="font-weight:700;color:var(--green);">💷 Protection cross-sell opportunity</div>
+      <ul style="margin:6px 0 8px;padding-left:18px;font-size:13px;">${prot.reasons.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>
+      <label class="row-check" style="display:flex;gap:8px;align-items:flex-start;font-size:13px;font-weight:600;">
+        <input type="checkbox" id="ff-prot-chk" ${protUpgradeable ? "checked" : ""} style="width:auto;margin-top:2px;">
+        Flag protection ${protUpgradeable ? "" : "(current: " + esc(curProt.replace(/_/g, " ")) + ") "}and create a follow-up task for the adviser
+      </label>
+    </div>` : "";
+
+  $("#modal").innerHTML = `
+    <h3>Apply fact-find to case</h3>
+    <p class="panel-sub">Tick what to copy from the client's answers onto the case & client record. Empty fields are pre-ticked; values that would overwrite existing data start unticked.</p>
+    ${rows.length ? `
+    <table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:8px;">
+      <thead><tr style="text-align:left;border-bottom:1px solid var(--line);">
+        <th style="padding:6px 8px;">Field</th><th style="padding:6px 8px;">Current</th><th style="padding:6px 8px;">Fact-find</th><th style="padding:6px 8px;text-align:center;">Apply</th>
+      </tr></thead>
+      <tbody>${tableRows}</tbody>
+    </table>` : '<p class="panel-sub" style="margin-top:8px;">Every mapped field already matches the case — nothing to copy.</p>'}
+    ${protBox}
+    <div class="modal-actions">
+      <div></div>
+      <div class="right">
+        <button class="btn" id="ff-apply-back">Back</button>
+        <button class="btn btn-primary" id="ff-apply-confirm">Apply ticked fields</button>
+      </div>
+    </div>`;
+  openModal();
+  $("#ff-apply-back").onclick = () => factFind(caseId, clientId);
+  $("#ff-apply-confirm").onclick = async () => {
+    const btn = $("#ff-apply-confirm");
+    if (btn) { if (btn.disabled) return; btn.disabled = true; }
+    try {
+      const clientUpd = {}, caseUpd = {};
+      let n = 0;
+      rows.forEach((r) => {
+        const chk = $("#ffchk-" + r.idx);
+        if (!chk || !chk.checked) return;
+        (r.m.t === "client" ? clientUpd : caseUpd)[r.m.col] = r.ffVal;
+        n++;
+      });
+      const protChk = $("#ff-prot-chk");
+      const doProt = !!(protChk && protChk.checked);
+      // Only upgrade protection_status from the default; never clobber a more advanced status.
+      if (doProt && (cRow.protection_status || "not_discussed") === "not_discussed") caseUpd.protection_status = "discussed";
+      if (!n && !doProt) { toast("Nothing ticked to apply"); return; }
+      if (Object.keys(clientUpd).length) {
+        const { error } = await db.from("clients").update(clientUpd).eq("id", clientId);
+        if (error) { toast("Error: " + error.message); return; }
+      }
+      if (Object.keys(caseUpd).length) {
+        const { error } = await db.from("cases").update(caseUpd).eq("id", caseId);
+        if (error) { toast("Error: " + error.message); return; }
+      }
+      let uid = (ME && ME.id) || null;
+      try { const { data: { user } } = await db.auth.getUser(); if (user && user.id) uid = user.id; } catch (e) {}
+      let body = `Fact-find applied: ${n} field${n === 1 ? "" : "s"} updated`;
+      if (doProt) body += " · protection interest flagged";
+      await db.from("case_notes").insert({ case_id: caseId, body, created_by: uid });
+      if (doProt) {
+        // Due TODAY: a fresh cross-sell interest deserves a same-day call, and a
+        // today-dated task surfaces immediately on the My Day hero list.
+        const due = localDateStr(Date.now());
+        await db.from("case_tasks").insert({
+          case_id: caseId, title: "Protection: client expressed interest in fact-find", due_date: due,
+          created_by: uid, assigned_to: cRow.assigned_to || uid,
+        });
+      }
+      toast(`Applied ${n} field${n === 1 ? "" : "s"}${doProt ? " · protection task created" : ""}`);
+      openCase(caseId); // re-renders the case modal summary with the updated values, note & task
+    } catch (e) {
+      toast("Error applying fact-find: " + (e && e.message ? e.message : e));
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  };
+};
 function prettyFF(k) {
   const pre = { a1: "You", a2: "2nd applicant", m: "Mortgage", c: "Commitments", p: "Protection" }[k.split("_")[0]];
   let label = k.replace(/^[a-z0-9]+_/, "").replace(/_/g, " ");
@@ -1387,8 +1605,14 @@ window.openCase = async function (id) {
       <summary>Case details</summary>
       <form id="case-form" class="form-grid" data-case-id="${id || ""}">
       <label class="full">Client
-        <select name="client_id" required><option value="">— select client —</option>${clientOpts}</select>
+        <select name="client_id" id="case-client-select" required><option value="">— select client —</option>${clientOpts}<option value="__new__">+ New client…</option></select>
       </label>
+      <div class="full hidden" id="nc-new-client-fields" style="display:grid;grid-template-columns:1fr 1fr;gap:12px 16px;padding:10px 12px;background:#f8fafc;border:1px solid var(--border);border-radius:8px;margin:-4px 0 4px;">
+        <label>First name<input name="nc_first_name" placeholder="First name"></label>
+        <label>Last name<input name="nc_last_name" placeholder="Last name"></label>
+        <label>Email<input name="nc_email" type="email" placeholder="Email"></label>
+        <label>Phone<input name="nc_phone" placeholder="Phone"></label>
+      </div>
       <label>Type<select name="case_kind">${KINDS.map(([k, l]) => `<option value="${k}" ${k === c.case_kind ? "selected" : ""}>${l}</option>`).join("")}</select></label>
       <label>Stage<select name="stage">${STAGES.map(([k, l]) => `<option value="${k}" ${k === c.stage ? "selected" : ""}${k === "decision_in_principle" ? ` title="${TIP_DIP}"` : ""}>${l}</option>`).join("")}</select></label>
       <label>Lender<input name="lender" value="${esc(c.lender)}"></label>
@@ -1427,12 +1651,26 @@ window.openCase = async function (id) {
 
   const kindSel = $("#case-form").elements.case_kind;
   kindSel.onchange = () => $("#gi-status-label").classList.toggle("hidden", !["purchase", "first_time_buyer"].includes(kindSel.value));
+  const clientSel = $("#case-client-select");
+  clientSel.onchange = () => $("#nc-new-client-fields").classList.toggle("hidden", clientSel.value !== "__new__");
   $("#modal-cancel").onclick = closeModal;
   $("#modal-save").onclick = async () => {
     const f = new FormData($("#case-form"));
     const row = {};
     for (const [k, v] of f.entries()) row[k] = v === "" ? null : v;
     row.rate_end_estimated = f.get("rate_end_estimated") === "on";
+    // Inline "+ New client…" (Priya's fact-find pack): create the client here, in the same
+    // form flow — no nested modal — then point the case at its new id and carry on as normal.
+    const ncFirst = row.nc_first_name, ncLast = row.nc_last_name, ncEmail = row.nc_email, ncPhone = row.nc_phone;
+    delete row.nc_first_name; delete row.nc_last_name; delete row.nc_email; delete row.nc_phone;
+    if (row.client_id === "__new__") {
+      if (!ncFirst && !ncLast) return toast("Enter the new client's name");
+      const { data: newClient, error: ncErr } = await db.from("clients")
+        .insert({ first_name: ncFirst || "", last_name: ncLast || "", email: ncEmail || null, phone: ncPhone || null })
+        .select().single();
+      if (ncErr) return toast("Error creating client: " + ncErr.message);
+      row.client_id = newClient.id;
+    }
     if (!row.client_id) return toast("Please choose a client");
     if (id && row.stage !== c.stage && protectionGateBlocks({ stage: c.stage, protection_status: row.protection_status }, row.stage)) {
       toast("🛡️ Record the protection conversation before submitting — set a protection status");
@@ -2008,34 +2246,64 @@ window.openClient = async function (id) {
 
 /* ---------- Emails ---------- */
 async function loadEmails() {
+  const failedOnly = $("#email-failed-only") && $("#email-failed-only").checked;
   const { data: emails, error } = await db.from("email_queue")
     .select("*, clients(first_name,last_name)")
     .order("created_at", { ascending: false }).limit(100);
   if (error) { renderLoadError("#email-list", error, loadEmails); return; }
   const badge = { queued: "amber", sent: "green", failed: "red", cancelled: "grey" };
-  $("#email-list").innerHTML = `<div class="panel">` + ((emails || []).length ? emails.map((e) => `
+  const emailRows = failedOnly ? (emails || []).filter((e) => e.status === "failed") : (emails || []);
+  $("#email-list").innerHTML = `<div class="panel">` + (emailRows.length ? emailRows.map((e) => {
+    const failed = e.status === "failed";
+    const clickable = failed && e.case_id;
+    return `
     <div class="row-item">
       <div class="row-main">
-        <div class="t">${EMAIL_LABEL[e.email_type]} — ${esc(e.clients ? e.clients.first_name + " " + e.clients.last_name : e.to_email || "")}</div>
+        <div class="t"${clickable ? ` onclick="openCase('${e.case_id}')" style="cursor:pointer;"` : ""}>${EMAIL_LABEL[e.email_type]} — ${esc(e.clients ? e.clients.first_name + " " + e.clients.last_name : e.to_email || "")}</div>
         <div class="s">${esc(e.to_email || "")} · ${e.sent_at ? "sent " + new Date(e.sent_at).toLocaleString("en-GB") : "created " + new Date(e.created_at).toLocaleString("en-GB")}${e.error ? " · " + esc(e.error) : ""}</div>
       </div>
       <span class="badge ${badge[e.status]}">${e.status}</span>
-    </div>`).join("") : '<div class="empty">No emails yet. They\'ll appear here once automation runs or you trigger one from a case.</div>') + `</div>`;
+      ${failed ? `<button class="btn btn-sm" onclick="retryEmail('${e.id}')">Retry</button>` : ""}
+    </div>`;
+  }).join("") : `<div class="empty">${failedOnly ? "No failed emails." : "No emails yet. They'll appear here once automation runs or you trigger one from a case."}</div>`) + `</div>`;
 
   const { data: sms, error: smsErr } = await db.from("sms_queue")
     .select("*, cases(*), clients(*)")
     .order("created_at", { ascending: false }).limit(100);
   if (smsErr) { renderLoadError("#sms-list", smsErr, loadEmails); return; }
   const smsBadge = { queued: "amber", sending: "blue", sent: "green", failed: "red", cancelled: "grey" };
-  $("#sms-list").innerHTML = (sms || []).length ? sms.map((s) => `
+  const smsRows = failedOnly ? (sms || []).filter((s) => s.status === "failed") : (sms || []);
+  $("#sms-list").innerHTML = smsRows.length ? smsRows.map((s) => {
+    const failed = s.status === "failed";
+    const clickable = failed && s.case_id;
+    return `
     <div class="row-item">
       <div class="row-main">
-        <div class="t">${esc(smsTypeLabel(s.sms_type))} — ${esc(s.clients ? [s.clients.first_name, s.clients.last_name].filter(Boolean).join(" ") : s.to_phone || "")}</div>
+        <div class="t"${clickable ? ` onclick="openCase('${s.case_id}')" style="cursor:pointer;"` : ""}>${esc(smsTypeLabel(s.sms_type))} — ${esc(s.clients ? [s.clients.first_name, s.clients.last_name].filter(Boolean).join(" ") : s.to_phone || "")}</div>
         <div class="s">${esc(s.to_phone || "")} · ${s.sent_at ? "sent " + new Date(s.sent_at).toLocaleString("en-GB") : "created " + new Date(s.created_at).toLocaleString("en-GB")}${s.error ? " · " + esc(s.error) : ""}</div>
       </div>
       <span class="badge ${smsBadge[s.status] || "grey"}">${esc(s.status)}</span>
-    </div>`).join("") : '<div class="empty">No SMS yet. They\'ll appear here once SMS automation runs or you send one.</div>';
+      ${failed ? `<button class="btn btn-sm" onclick="retrySms('${s.id}')">Retry</button>` : ""}
+    </div>`;
+  }).join("") : `<div class="empty">${failedOnly ? "No failed SMS." : "No SMS yet. They'll appear here once SMS automation runs or you send one."}</div>`;
 }
+async function retryEmail(id) {
+  try {
+    const { error } = await db.from("email_queue").update({ status: "queued", error: null, sent_at: null }).eq("id", id);
+    if (error) return toast("Error: " + error.message);
+    toast("Email re-queued for sending");
+    loadEmails();
+  } catch (e) { toast("Error: " + e.message); }
+}
+async function retrySms(id) {
+  try {
+    const { error } = await db.from("sms_queue").update({ status: "queued", error: null, sent_at: null }).eq("id", id);
+    if (error) return toast("Error: " + error.message);
+    toast("SMS re-queued for sending");
+    loadEmails();
+  } catch (e) { toast("Error: " + e.message); }
+}
+$("#email-failed-only").addEventListener("change", loadEmails);
 async function runSms(silent) {
   const { data: { session } } = await db.auth.getSession();
   try {
@@ -2127,18 +2395,21 @@ function renderImportPreview() {
   $("#import-preview").innerHTML = `
     <div class="panel">
       <h3>Review before saving</h3>
-      <p class="panel-sub">Untick anything that shouldn't be imported. Estimated rate-end dates are marked ≈ and stay flagged until you confirm them.</p>
+      <p class="panel-sub">Untick anything that shouldn't be imported. Click Client, Email, Stage, Lender or Rate to fix a misread field before importing. Estimated rate-end dates are marked ≈ and stay flagged until you confirm them.</p>
       <div style="overflow-x:auto;">
       <table class="imp-table">
         <tr><th><input type="checkbox" id="imp-all" checked></th><th>Client</th><th>Email</th><th>Stage</th><th>Lender</th><th>Rate</th><th>Rate ends</th><th>Completed</th><th>Fee</th></tr>
         ${importRows.map((r, i) => `
         <tr>
           <td><input type="checkbox" class="imp-row" data-i="${i}" checked></td>
-          <td>${esc(r.client_name)}</td>
-          <td>${esc(r.email || "")}</td>
-          <td>${r.stage ? `<span class="badge blue">${esc(r.stage)}</span>` : '<span class="badge grey">contact only</span>'}</td>
-          <td>${esc(r.lender || "")}</td>
-          <td>${r.rate_percent != null ? r.rate_percent + "%" : ""}</td>
+          <td class="imp-edit" contenteditable="true" spellcheck="false" data-i="${i}" data-field="client_name" title="Click to edit">${esc(r.client_name || "")}</td>
+          <td class="imp-edit" contenteditable="true" spellcheck="false" data-i="${i}" data-field="email" title="Click to edit">${esc(r.email || "")}</td>
+          <td><select class="imp-edit-stage" data-i="${i}" title="Click to edit">
+            <option value="" ${!r.stage ? "selected" : ""}>contact only</option>
+            ${STAGES.map(([k, l]) => `<option value="${k}" ${k === r.stage ? "selected" : ""}>${l}</option>`).join("")}
+          </select></td>
+          <td class="imp-edit" contenteditable="true" spellcheck="false" data-i="${i}" data-field="lender" title="Click to edit">${esc(r.lender || "")}</td>
+          <td class="imp-edit" contenteditable="true" spellcheck="false" data-i="${i}" data-field="rate_percent" title="Click to edit">${r.rate_percent != null ? r.rate_percent : ""}</td>
           <td>${r.rate_end_date ? fmtD(r.rate_end_date) + (r.rate_end_estimated ? ` <span class="badge purple" title="${TIP_APPROX}">≈</span>` : "") : ""}</td>
           <td>${r.completed_date ? fmtD(r.completed_date) : ""}</td>
           <td>${r.broker_fee ? fmtM(r.broker_fee) : ""}</td>
@@ -2151,6 +2422,28 @@ function renderImportPreview() {
     </div>`;
   $("#imp-all").onchange = (e) => document.querySelectorAll(".imp-row").forEach((c) => (c.checked = e.target.checked));
   $("#import-save-btn").onclick = runImport;
+
+  // Editable preview cells write straight back into importRows[i], so a corrected value
+  // (one misread field) feeds the existing import/insert path unchanged — no need to
+  // reject and re-run the whole row through AI import again.
+  document.querySelectorAll(".imp-edit").forEach((td) => {
+    const commit = () => {
+      const i = Number(td.dataset.i), field = td.dataset.field;
+      if (!importRows[i]) return; // late blur after the preview was cleared post-import
+      let val = td.textContent.trim();
+      if (field === "rate_percent") {
+        val = val.replace("%", "").trim();
+        importRows[i][field] = val === "" ? null : Number(val);
+      } else {
+        importRows[i][field] = val || (field === "client_name" ? "" : null);
+      }
+    };
+    td.addEventListener("blur", commit);
+    td.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); td.blur(); } });
+  });
+  document.querySelectorAll(".imp-edit-stage").forEach((sel) => {
+    sel.onchange = () => { importRows[Number(sel.dataset.i)].stage = sel.value || null; };
+  });
 }
 
 async function runImport() {
@@ -2262,6 +2555,7 @@ async function loadLeads() {
       <button class="btn btn-sm btn-danger" aria-label="Discard lead" title="Discard lead" onclick="discardLead('${l.id}')">✕</button>
     </div>`).join("") : '<div class="empty">No new leads. Website enquiries appear here the moment they\'re sent.</div>';
   panelCount("#leads-list", n, true);
+  autoDrawer("leads", n > 0); // auto-open whenever there's a lead waiting, else stay collapsed
 }
 window.acceptLead = async function (id, ev) {
   const btn = (ev && (ev.currentTarget || ev.target)) || null;
