@@ -278,6 +278,14 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
 .brief-row.hot::before { background: var(--red); }
 .brief-row.warm { background: rgba(154,107,0,.045); }
 .brief-row.warm::before { background: #cf9b1c; }
+/* BUILD 7d (defect 18) — the "+N more" toggle on a grouped My Day row, and the folded-out rows it reveals. */
+.brief-more {
+  display: inline-block; margin-top: 4px; padding: 1px 0; border: none; background: none;
+  color: var(--muted); font-size: 11.5px; font-weight: 600; cursor: pointer;
+}
+.brief-more:hover { color: var(--navy); text-decoration: underline; }
+.brief-subrow { padding-left: 26px; background: #fafbfc; }
+.brief-subrow::before { background: var(--border); opacity: .6; }
 
 /* ---------- Dashboard cards & tabs ---------- */
 .dash-card { display: flex; flex-direction: column; height: 300px; }
@@ -347,6 +355,12 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
 .row-main .t:hover { color: var(--navy); text-decoration: underline; }
 .row-main .s { font-size: 12.5px; color: var(--muted); margin-top: 1px; font-variant-numeric: tabular-nums; }
 .empty { color: var(--muted); font-size: 13px; padding: 10px 0; }
+/* BUILD 7d (defect 31) — subtle possible-duplicate hint in the client modal. */
+.dup-hint {
+  margin: -6px 0 10px; padding: 6px 10px; font-size: 12.5px;
+  background: var(--amber-bg); color: var(--amber); border-radius: 6px;
+}
+.dup-hint a { color: var(--navy); font-weight: 600; text-decoration: underline; }
 .load-error { color: var(--red); font-size: 13px; padding: 10px 0; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .dq-notice { font-size: 13px; padding: 10px 14px; border-radius: 8px; margin-bottom: 20px; background: var(--light); color: var(--muted); border: 1px solid #dbe3ec; }
 .dq-notice.bad { background: var(--red-bg); color: var(--red); border-color: #eec3bb; }
@@ -403,6 +417,24 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
 .age-cell.age-red { color: #c23b3b; font-weight: 600; }
 /* Touch/mobile fallback for drag-and-drop — hidden on desktop, shown on narrow viewports. */
 .card-stage-move { display: none; }
+/* Board card "advance to next stage" affordance (BUILD 7b, defect 17) — a quick way to progress
+   a deal without the buried .card-stage-move <select>. Hover-revealed on desktop (widened touch
+   target + always-on at narrow/coarse-pointer viewports, in the media query below). Always calls
+   moveCaseToStage() — the single stage-move path — so the protection gate, completed/not_proceeding
+   confirms and the segment-destination toast all keep working. */
+.card-advance {
+  flex: 0 0 auto;
+  width: 20px; height: 20px;
+  border: 1px solid var(--border-strong); border-radius: 50%;
+  background: #fff; color: var(--navy);
+  font-size: 12px; font-weight: 700; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity .15s ease, background .15s ease;
+}
+.card:hover .card-advance, .card-advance:focus-visible { opacity: 1; }
+.card-advance:hover { background: var(--blue-bg); }
 
 /* Drag & drop */
 .card.dragging { opacity: .4; }
@@ -544,6 +576,10 @@ main input:focus, main select:focus, main textarea:focus,
 .tl-chip:hover { border-color: #b9c7d8; color: var(--navy); }
 .tl-chip.active { background: var(--navy); border-color: var(--navy); color: #fff; }
 .tl-chip:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+/* BUILD 7d (composer lite) — Log call is a one-shot action (jumps to the case), not a selectable
+   note type, so it gets its own accent rather than the note-type pill look. */
+.tl-chip-logcall { border-color: var(--orange); color: var(--orange-600); }
+.tl-chip-logcall:hover { background: var(--orange); border-color: var(--orange); color: #fff; }
 
 .tl-section { margin-top: 6px; }
 .tl-add { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
@@ -629,6 +665,11 @@ main input:focus, main select:focus, main textarea:focus,
 .appt:hover { background: #d8e7f7; }
 .appt .at { font-weight: 700; color: var(--navy); font-variant-numeric: tabular-nums; }
 @media (max-width: 900px) { .diary-grid { grid-template-columns: 1fr 1fr; } }
+/* BUILD 7d (defect 26) — adviser colour legend, shown only in the "Everyone" diary view. */
+.diary-legend { display: flex; flex-wrap: wrap; gap: 12px; margin: 0 0 10px; font-size: 12px; color: var(--muted); }
+.diary-legend:empty { margin: 0; }
+.diary-legend-item { display: inline-flex; align-items: center; gap: 5px; }
+.diary-legend-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
 
 /* Assignee chip */
 .chip {
@@ -761,6 +802,13 @@ main input:focus, main select:focus, main textarea:focus,
     padding: 6px 8px; font-size: 12.5px;
     border: 1px solid var(--border-strong); border-radius: 8px;
     background: #fff; color: var(--dark);
+  }
+  /* Advance affordance is always visible (no hover on touch) and sized to a real touch target. */
+  .card-advance {
+    opacity: 1;
+    width: 44px; height: 44px;
+    min-width: 44px; min-height: 44px;
+    font-size: 16px;
   }
 }
 
@@ -897,6 +945,9 @@ main input:focus, main select:focus, main textarea:focus,
 .cs-contact { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; color: var(--muted); margin-top: 3px; }
 .cs-logcall-btn { flex: 0 0 auto; min-height: 44px; }
 .cs-stats { display: flex; align-items: center; gap: 10px 18px; flex-wrap: wrap; margin-top: 12px; }
+/* "Advance to <next stage> →" (BUILD 7b, defect 17) — same single moveCaseToStage() path as the
+   board affordance; hidden entirely (no button rendered) for the two terminal stages. */
+.cs-advance-btn { flex: 0 0 auto; min-height: 36px; }
 .cs-stat { display: flex; flex-direction: column; line-height: 1.25; }
 .cs-lbl { font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
 .cs-val { font-size: 14px; font-weight: 600; color: var(--dark); }
@@ -1023,3 +1074,43 @@ main input:focus, main select:focus, main textarea:focus,
 .tl-upcoming { border: 1px dashed var(--border, #d5dce6); border-radius: 10px; padding: 6px 10px 4px; margin-bottom: 12px; background: rgba(37,99,235,0.04); }
 .tl-upcoming-hd { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #6b7a90; margin: 2px 0 4px; }
 .tl-upcoming .tl-row { opacity: 0.85; }
+
+/* ========== BULK-SELECT (BUILD 7c, defect 16) ========== */
+/* Shared action bar — appears above a list/table when >0 rows are selected. */
+.bulk-bar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 8px 12px; margin-bottom: 12px;
+  background: var(--blue-bg); border: 1px solid #cfe0f4; border-radius: 8px;
+}
+.bulk-bar[hidden] { display: none; }
+.bulk-bar-count { font-size: 13px; color: var(--dark); }
+.bulk-bar-count strong { font-variant-numeric: tabular-nums; }
+.bulk-bar-select {
+  font-size: 13px; padding: 6px 10px; border-radius: 6px;
+  border: 1px solid var(--border-strong); background: var(--white); color: var(--text);
+  min-height: 34px; cursor: pointer;
+}
+.bulk-bar .btn { margin-left: auto; }
+.bulk-bar .btn + .btn, .bulk-bar-select + .btn { margin-left: 0; }
+/* keep "Clear" pinned right; earlier controls stay left */
+.bulk-bar #pipe-bulk-clear, .bulk-bar #email-bulk-clear, .bulk-bar #dh-bulk-clear { margin-left: auto; }
+
+/* Checkbox column in the pipeline table */
+.imp-table th.bulk-col, .imp-table td.bulk-col { width: 1%; padding-left: 10px; padding-right: 4px; text-align: center; }
+/* Checkboxes: comfortable hit target, focusable outline preserved */
+.bulk-cb, .email-cb, .dh-cb, #pipe-bulk-all {
+  width: 18px; height: 18px; cursor: pointer; accent-color: var(--navy); margin: 0; flex: 0 0 auto;
+}
+.email-cb, .dh-cb { align-self: center; }
+
+/* Mobile: larger touch targets + sticky bottom action bar */
+@media (max-width: 760px) {
+  .bulk-cb, .email-cb, .dh-cb, #pipe-bulk-all { width: 24px; height: 24px; }
+  .imp-table th.bulk-col, .imp-table td.bulk-col { padding-left: 6px; }
+  .bulk-bar {
+    position: sticky; bottom: 0; z-index: 30;
+    margin: 0 0 12px; border-radius: 10px;
+    box-shadow: 0 -2px 12px rgba(16,24,40,.12);
+  }
+  .bulk-bar-select { flex: 1 1 auto; min-height: 40px; }
+}

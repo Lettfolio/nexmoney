@@ -171,6 +171,10 @@ const fmtM = (n) => (n == null || n === "" ? "—" : Number(n).toLocaleString("e
 const fmtM2 = (n) => (n == null || n === "" ? "—" : Number(n).toLocaleString("en-GB", { style: "currency", currency: "GBP", minimumFractionDigits: 2, maximumFractionDigits: 2 }));
 let settings = {};
 let ME = null, TEAM = [], tasksScope = "mine";
+// BUILD 7c — bulk-select selections, one Set of ids per surface. Pruned to what's currently
+// rendered on each re-render (so selections never act on rows the user can no longer see) and
+// cleared after a completed bulk action. Session-only; never persisted.
+let pipeSel = new Set(), emailSel = new Set(), dhSel = new Set();
 // BUILD 4b: which Today drawers the user has manually opened/closed this session (session-only,
 // never persisted — resets on reload). Keyed by drawer id (e.g. "watchtower", "leads").
 let dashDrawerTouched = {};
@@ -200,6 +204,13 @@ function restoreUserPrefs(uid) {
   if (view === "board" || view === "table") pipelineView = view;
 }
 function staffName(id) { const p = TEAM.find((x) => x.id === id); return p ? (p.full_name || p.email) : "—"; }
+// BUILD 7c — adviser <option>s for the bulk "Assign to…" selects. Current user surfaces first as
+// "Me (name)"; the rest of the team follows. `placeholder` is the disabled first option.
+function adviserOptionsHtml(placeholder) {
+  const meOpt = authUid && TEAM.some((p) => p.id === authUid) ? `<option value="${authUid}">Me (${esc(staffName(authUid))})</option>` : "";
+  const others = TEAM.filter((p) => p.id !== authUid).map((p) => `<option value="${p.id}">${esc(staffName(p.id))}</option>`).join("");
+  return `<option value="" selected>${esc(placeholder)}</option>${meOpt}${others}`;
+}
 // Compact relative age ("3d ago", "2mo ago") for the case summary's last-note line.
 function fmtAgo(d) {
   if (!d) return "";
@@ -419,7 +430,7 @@ async function showApp(session) {
   restoreUserPrefs(session.user.id);
   await loadSettings();
   await loadTeam(session);
-  nav("dashboard");
+  await routeFromHash(); // BUILD 7a — honour deep links (#reports, #case/<id>, …); no hash → dashboard
 }
 async function loadTeam(session) {
   const { data: team } = await db.from("profiles").select("id,full_name,email,role").eq("role", "staff").order("full_name");
@@ -451,7 +462,65 @@ $("#forgot-btn").addEventListener("click", async () => {
   toast(error ? "Error: " + error.message : "Password reset link sent — check your inbox.");
 });
 
-/* ---------- Navigation ---------- */
+/* ---------- Navigation + SPA history / deep links (BUILD 7a — defect 15) ----------
+   Minimal hash routing. Page switches push #<hash>; opening a case/client/appt modal pushes a
+   history entry (SAME page hash + a {modal,id} state flag) so browser Back CLOSES THE MODAL
+   instead of leaving the app — the single most valuable Back behaviour. Deep links
+   (#case/<id>, #reports, …) are honoured on cold load. Everything is hash-only (no pathname
+   routing) so file:// and the https edge review-gate behave identically; hash changes never hit
+   the PWA service worker. All history.* calls are wrapped — if the History API is unavailable or
+   blocked (some file:// contexts), modal history is simply not tracked and the app still works.
+   Segments/filters stay OUT of the hash (session/localStorage already persists those). */
+const PAGE_HASH = { dashboard: "today", pipeline: "pipeline", protection: "protection", diary: "diary", clients: "clients", import: "import", reports: "reports", data: "data", emails: "emails", settings: "settings" };
+const HASH_PAGE = Object.fromEntries(Object.entries(PAGE_HASH).map(([p, h]) => [h, p]));
+const MODAL_DEFAULT_PAGE = { case: "pipeline", client: "clients", appt: "diary" };
+let currentPage = "dashboard";
+let currentModal = null; // {type,id} while a case/client/appt modal owns a history entry; null otherwise
+const pageHash = (page) => "#" + (PAGE_HASH[page] || "today");
+function histPush(state, hash) { try { history.pushState(state, "", hash); return true; } catch (e) { return false; } }
+function histReplace(state, hash) { try { history.replaceState(state, "", hash); return true; } catch (e) { return false; } }
+// Push (or, while a modal is already open, replace) the modal's history entry. currentModal is only
+// set when the push actually succeeded, so a blocked History API degrades to "no back-to-close".
+function pushModalHistory(type, id) {
+  const state = { modal: type, id: id ?? null, page: currentPage };
+  const ok = currentModal ? histReplace(state, pageHash(currentPage)) : histPush(state, pageHash(currentPage));
+  currentModal = ok ? { type, id: id ?? null } : null;
+}
+// Cold-load / deep-link entrypoint: land on the hash's page (and open the record modal for
+// #case|#client|#appt/<id>). Called from showApp once auth + settings/team are ready.
+async function routeFromHash() {
+  const [head, id] = (location.hash || "").replace(/^#/, "").split("/");
+  if (MODAL_DEFAULT_PAGE[head] && id) {
+    const dp = MODAL_DEFAULT_PAGE[head];
+    nav(dp, false);                        // show the default page (no history push)…
+    histReplace({ page: dp }, pageHash(dp)); // …and rewrite the initial entry into a clean page base
+    currentModal = null;
+    if (head === "case") await openCase(id);
+    else if (head === "client") await openClient(id);
+    else await openAppt(id);
+    return;
+  }
+  const page = HASH_PAGE[head] || "dashboard";
+  nav(page, false);
+  histReplace({ page }, pageHash(page)); // establish a clean base entry (also normalises unknown hashes)
+}
+// Browser Back / Forward. Modal open → close it (honouring the log-call dirty guard; cancel re-pushes
+// the entry). Otherwise switch to the target page. Never traps: a Back past the first entry exits.
+window.addEventListener("popstate", (e) => {
+  if ($("#app-view").classList.contains("hidden")) return; // not in the app (login screen) — ignore
+  const modalOpen = !$("#modal-backdrop").classList.contains("hidden");
+  if (currentModal && modalOpen) {
+    if (hasUnsavedLogCall() && !confirm("Discard your unsaved note?")) {
+      histPush({ modal: currentModal.type, id: currentModal.id, page: currentPage }, pageHash(currentPage));
+      return; // cancelled — re-push to undo the Back and keep the modal open
+    }
+    closeModal();
+    return;
+  }
+  const st = e.state || {};
+  const page = st.page || HASH_PAGE[(location.hash || "#today").replace(/^#/, "").split("/")[0]] || "dashboard";
+  nav(page, false);
+});
 $("#topnav").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-page]");
   if (b) nav(b.dataset.page);
@@ -465,10 +534,18 @@ document.addEventListener("click", (e) => {
   card.querySelectorAll(".dash-tab").forEach((b) => b.classList.toggle("active", b === t));
   card.querySelectorAll(".dash-tab-panel").forEach((p, i) => p.classList.toggle("hidden", i !== [...t.parentElement.children].indexOf(t)));
 });
-function nav(page) {
+function nav(page, push = true) {
   document.querySelectorAll(".page").forEach((p) => p.classList.add("hidden"));
   $("#page-" + page).classList.remove("hidden");
   document.querySelectorAll("#topnav button").forEach((b) => b.classList.toggle("active", b.dataset.page === page));
+  currentPage = page;
+  currentModal = null; // switching pages dismisses any modal history ownership
+  if (push) {
+    const hash = pageHash(page);
+    // Already sitting on this page's hash with no modal → replace (avoid stacking duplicate entries).
+    if (location.hash === hash) histReplace({ page }, hash);
+    else histPush({ page }, hash);
+  }
   ({ dashboard: loadDashboard, pipeline: loadPipeline, protection: loadProtectionPage, diary: loadDiary, clients: loadClients, import: () => {}, reports: loadReports, data: loadDataHealth, emails: loadEmails, settings: renderSettings }[page])();
 }
 
@@ -812,6 +889,18 @@ async function loadProtection() {
 
 /* ---------- My Day briefing ---------- */
 let briefingScope = "mine";
+// BUILD 7d (defect 18) — the last-fetched briefing items, kept so toggling a group's expand state
+// can re-render instantly without re-hitting the RPC. Session-only.
+let lastBriefItems = [];
+// Case ids the user has manually expanded to see every item behind a grouped row. Pruned to only
+// cases still present in the briefing on every reload, so a stale key can't linger.
+let briefExpanded = new Set();
+const BRIEF_KIND_SHORT = {
+  task_overdue: "overdue task", task_today: "task today", lead_new: "lead", email_new: "email",
+  appt_today: "appointment", rate_urgent: "rate-end", stalled: "stalled", fee_chase: "fee",
+  protection_hot: "protection", no_completion_date: "completion date",
+};
+function briefKindShort(kind) { return BRIEF_KIND_SHORT[kind] || String(kind || "").replace(/_/g, " "); }
 
 function briefBadge(it) {
   switch (it.kind) {
@@ -885,17 +974,77 @@ async function loadBriefing() {
       items.sort((a, b) => a.pri - b.pri);
     }
   } catch (e) { /* graceful degradation — the RPC-driven items above still render */ }
-  $("#briefing-list").innerHTML = items.length ? items.map((it) => `
-    <div class="row-item brief-row ${it.pri < 15 ? "hot" : it.pri < 35 ? "warm" : ""}">
+  lastBriefItems = items;
+  // Prune expand-state to cases still present, so a stale key from a since-resolved case can't
+  // silently keep a future unrelated case pre-expanded.
+  const liveCaseIds = new Set(items.filter((it) => it.case_id).map((it) => it.case_id));
+  [...briefExpanded].forEach((k) => { if (!liveCaseIds.has(k)) briefExpanded.delete(k); });
+  renderBriefing();
+}
+// BUILD 7d (defect 18) — one case (e.g. Ruby Sinclair: overdue task + rate-end + protection, all
+// on the same case) otherwise surfaces as several separate briefing rows, inviting a double-contact.
+// Group consecutive-by-priority items sharing a case_id into ONE row (the highest-priority item's
+// title/badge/actions), with the rest folded behind a "+N more" toggle. Items has already been
+// sorted by priority (RPC + the client-side merge above), so the first occurrence of a case_id is
+// always its highest-priority item — no extra sort needed here.
+function groupBriefRows(items) {
+  const seen = new Set();
+  const rows = [];
+  items.forEach((it) => {
+    if (!it.case_id) { rows.push({ key: null, head: it, extra: [] }); return; }
+    if (seen.has(it.case_id)) return;
+    seen.add(it.case_id);
+    const group = items.filter((x) => x.case_id === it.case_id);
+    rows.push({ key: it.case_id, head: it, extra: group.filter((x) => x !== it) });
+  });
+  return rows;
+}
+function briefTitleClickAttr(it) {
+  if (it.kind === "appt_today" && it.appt_id) return `onclick="openAppt('${it.appt_id}')"`;
+  if (it.case_id) return `onclick="openCase('${it.case_id}')"`;
+  if (it.client_id) return `onclick="openClient('${it.client_id}')"`;
+  if (it.goto_segment) return `onclick="gotoPipelineSegment('${it.goto_segment}')"`;
+  return "";
+}
+function briefSubRowHtml(it) {
+  return `<div class="row-item brief-row brief-subrow">
       <div class="row-main">
-        <div class="t" ${it.kind === "appt_today" && it.appt_id ? `onclick="openAppt('${it.appt_id}')"` : it.case_id ? `onclick="openCase('${it.case_id}')"` : it.client_id ? `onclick="openClient('${it.client_id}')"` : it.goto_segment ? `onclick="gotoPipelineSegment('${it.goto_segment}')"` : ""}>${esc(it.title)}</div>
-        <div class="s">${esc(it.sub || "")}${briefingScope === "all" && it.owner ? " · " + esc(staffName(it.owner)) : ""}</div>
+        <div class="t" ${briefTitleClickAttr(it)}>${esc(it.title)}</div>
+        <div class="s">${esc(it.sub || "")}</div>
       </div>
       ${briefBadge(it)}
       ${briefActions(it)}
-    </div>`).join("") : '<div class="empty">All clear — nothing needs you right now 🎉</div>';
+    </div>`;
+}
+function briefRowHtml(row) {
+  const it = row.head;
+  const expanded = row.key && briefExpanded.has(row.key);
+  const moreHtml = row.extra.length
+    ? `<button type="button" class="brief-more" onclick="event.stopPropagation();toggleBriefGroup('${row.key}')">${expanded ? "▾ " : "▸ "}+${row.extra.length} more: ${row.extra.map((x) => briefKindShort(x.kind)).join(" · ")}</button>`
+    : "";
+  return `<div class="row-item brief-row ${it.pri < 15 ? "hot" : it.pri < 35 ? "warm" : ""}">
+      <div class="row-main">
+        <div class="t" ${briefTitleClickAttr(it)}>${esc(it.title)}</div>
+        <div class="s">${esc(it.sub || "")}${briefingScope === "all" && it.owner ? " · " + esc(staffName(it.owner)) : ""}</div>
+        ${moreHtml}
+      </div>
+      ${briefBadge(it)}
+      ${briefActions(it)}
+    </div>${expanded ? row.extra.map(briefSubRowHtml).join("") : ""}`;
+}
+// Renders from the cached lastBriefItems (no refetch) — used both after a fresh load and when a
+// group's expand toggle changes. The count badge stays on the real item total (rows collapse
+// visually, but nothing is hidden from the honest workload count).
+function renderBriefing() {
+  const items = lastBriefItems;
+  const rows = groupBriefRows(items);
+  $("#briefing-list").innerHTML = rows.length ? rows.map(briefRowHtml).join("") : '<div class="empty">All clear — nothing needs you right now 🎉</div>';
   panelCount("#briefing-list", items.length, items.some((it) => it.pri < 15));
 }
+window.toggleBriefGroup = function (caseId) {
+  if (briefExpanded.has(caseId)) briefExpanded.delete(caseId); else briefExpanded.add(caseId);
+  renderBriefing();
+};
 window.briefDone = async function (id) {
   await window.doneTask(id);
   loadBriefing();
@@ -1083,8 +1232,12 @@ async function loadPipeline() {
       ${byStage[k].map((c) => {
         const erc = c.erc_end_date && c.rate_end_date && c.erc_end_date > c.rate_end_date;
         const age = cardAge(c, stageEntry[c.id]);
+        const nextStage = nextStageFor(c.stage);
+        const advanceBtn = nextStage
+          ? `<button type="button" class="card-advance" onclick="event.stopPropagation(); moveCaseToStage('${c.id}', '${nextStage}')" title="Advance to ${esc(STAGE_LABEL[nextStage] || nextStage)}" aria-label="Advance to ${esc(STAGE_LABEL[nextStage] || nextStage)}">→</button>`
+          : "";
         return `<div class="card${age.level ? " age-" + age.level : ""}" draggable="true" data-id="${c.id}" onclick="openCase('${c.id}')">
-          <div class="cn" style="display:flex;justify-content:space-between;align-items:center;gap:6px;"><span>${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ") || "—")}</span>${c.assigned_to ? `<span class="chip" title="${esc(staffName(c.assigned_to))}">${initials(c.assigned_to)}</span>` : ""}</div>
+          <div class="cn" style="display:flex;justify-content:space-between;align-items:center;gap:6px;"><span>${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ") || "—")}</span><span style="display:flex;align-items:center;gap:6px;flex:0 0 auto;">${c.assigned_to ? `<span class="chip" title="${esc(staffName(c.assigned_to))}">${initials(c.assigned_to)}</span>` : ""}${advanceBtn}</span></div>
           <div class="cd">${lenderIcon(c.lender)}${esc(c.lender || KINDS.find(x=>x[0]===c.case_kind)?.[1] || "")}${c.loan_amount ? " · " + fmtM(c.loan_amount) : ""}</div>
           <div class="flags">
             ${c.rate_end_date ? `<span class="badge ${c.rate_end_estimated ? "purple" : "blue"}">Rate ends ${fmtD(c.rate_end_date)}${c.rate_end_estimated ? " " + APPROX : ""}</span>` : ""}
@@ -1124,6 +1277,15 @@ function protectionGateBlocks(caseRow, newStage) {
   if (to < stageIdx("application") || to <= from) return false;
   return (caseRow.protection_status || "not_discussed") === "not_discussed";
 }
+/* BUILD 7b — "Advance" stage stepper (defect 17). The next entry in STAGES, skipping nothing
+   (exchange -> completed included). No next stage from the two terminal stages — deliberately
+   no "back a stage" helper exists; regressions stay a considered act via the form <select>. */
+function nextStageFor(stage) {
+  if (stage === "completed" || stage === "not_proceeding") return null;
+  const idx = stageIdx(stage);
+  if (idx < 0 || idx >= STAGES.length - 1) return null;
+  return STAGES[idx + 1][0];
+}
 function wireBoardDnD() {
   document.querySelectorAll("#board .card").forEach((el) => {
     el.addEventListener("dragstart", (e) => { e.dataTransfer.setData("text/plain", el.dataset.id); el.classList.add("dragging"); });
@@ -1143,35 +1305,92 @@ function wireBoardDnD() {
 /* Move a case to a new stage. Shared by desktop drag-and-drop (the drop handler above)
    and the per-card "Move to stage" dropdown, which gives touch/mobile users — for whom
    HTML5 drag-and-drop does not fire — a working way to progress a case from the board. */
-window.moveCaseToStage = async function (caseId, targetStage) {
-  if (!caseId || !targetStage) return;
-  const { data: cRow } = await db.from("cases").select("stage,protection_status,clients(first_name,last_name)").eq("id", caseId).single();
-  if (cRow && cRow.stage === targetStage) return; // no-op (e.g. dropped back on the same column)
-  if (cRow && protectionGateBlocks(cRow, targetStage)) {
-    toast("🛡️ Record the protection conversation before submitting — set a protection status");
-    loadPipeline(); // put the card back
-    return;
+/* BUILD 7c — moveCaseToStage stays THE single stage-move path, but now takes an options bag so the
+   bulk-move flow can route each case through it while suppressing per-row toasts/reloads and doing
+   its own single confirm. Returns a status string ("moved" | "blocked" | "noop" | "cancelled" |
+   "error") so the caller can tally results; single-call behaviour (toast + reload) is unchanged when
+   no opts are passed. opts.cRow lets bulk pass a pre-fetched row to avoid a per-case round-trip. */
+window.moveCaseToStage = async function (caseId, targetStage, opts = {}) {
+  const { silent = false, skipReload = false, skipConfirm = false, cRow: preRow = null } = opts;
+  if (!caseId || !targetStage) return "noop";
+  let cRow = preRow;
+  if (!cRow) {
+    cRow = (await db.from("cases").select("stage,protection_status,clients(first_name,last_name)").eq("id", caseId).single()).data;
   }
-  if (targetStage === "completed" || targetStage === "not_proceeding") {
+  if (cRow && cRow.stage === targetStage) return "noop"; // no-op (e.g. dropped back on the same column)
+  if (cRow && protectionGateBlocks(cRow, targetStage)) {
+    if (!silent) {
+      toast("🛡️ Record the protection conversation before submitting — set a protection status");
+      if (!skipReload) loadPipeline(); // put the card back
+    }
+    return "blocked";
+  }
+  if (!skipConfirm && (targetStage === "completed" || targetStage === "not_proceeding")) {
     const nm = (cRow && cRow.clients ? [cRow.clients.first_name, cRow.clients.last_name].filter(Boolean).join(" ") : "") || "this case";
     const msg = targetStage === "completed"
       ? `Move ${nm} to Completed? This will trigger completion emails and retention setup.`
       : `Move ${nm} to Not Proceeding? This hides the case from active views.`;
-    if (!confirm(msg)) { loadPipeline(); return; } // abort — snap the card back
+    if (!confirm(msg)) { if (!skipReload) loadPipeline(); return "cancelled"; } // abort — snap the card back
   }
   const { error } = await db.from("cases").update({ stage: targetStage }).eq("id", caseId);
-  if (error) return toast("Error: " + error.message);
-  // If the case just left the focused segment its card vanishes from this view —
-  // name the segment it landed in so nobody thinks the deal disappeared.
-  let where = "";
-  if (pipelineSegment !== "all" && !inSegment(targetStage, pipelineSegment)) {
-    const segNames = { new: "New business", current: "Current", completed: "Completed & closed" };
-    const destSeg = Object.keys(SEGMENT_STAGES).find((k) => SEGMENT_STAGES[k].includes(targetStage));
-    if (destSeg) where = " — now in " + (segNames[destSeg] || destSeg);
+  if (error) { if (!silent) toast("Error: " + error.message); return "error"; }
+  if (!silent) {
+    // If the case just left the focused segment its card vanishes from this view —
+    // name the segment it landed in so nobody thinks the deal disappeared.
+    let where = "";
+    if (pipelineSegment !== "all" && !inSegment(targetStage, pipelineSegment)) {
+      const segNames = { new: "New business", current: "Current", completed: "Completed & closed" };
+      const destSeg = Object.keys(SEGMENT_STAGES).find((k) => SEGMENT_STAGES[k].includes(targetStage));
+      if (destSeg) where = " — now in " + (segNames[destSeg] || destSeg);
+    }
+    toast("Moved to " + (STAGE_LABEL[targetStage] || targetStage) + where);
+    if (!skipReload) loadPipeline();
   }
-  toast("Moved to " + (STAGE_LABEL[targetStage] || targetStage) + where);
-  loadPipeline();
+  return "moved";
 };
+/* BUILD 7c — bulk stage move (pipeline table). One confirm summarising the whole batch, then each
+   case routed through moveCaseToStage (silent, no reload). Protection-gate-blocked cases are skipped
+   and counted so the summary can report "M moved, K blocked (protection)". */
+async function bulkMoveStage(targetStage) {
+  const ids = [...pipeSel];
+  if (!ids.length || !targetStage) return;
+  const label = STAGE_LABEL[targetStage] || targetStage;
+  if (!confirm(`Move ${ids.length} case${ids.length === 1 ? "" : "s"} to ${label}?`)) return;
+  const { data: rows } = await db.from("cases").select("id,stage,protection_status,clients(first_name,last_name)").in("id", ids);
+  const byId = {}; (rows || []).forEach((r) => (byId[r.id] = r));
+  let moved = 0, blocked = 0, noop = 0, err = 0;
+  for (const id of ids) {
+    const res = await moveCaseToStage(id, targetStage, { silent: true, skipReload: true, skipConfirm: true, cRow: byId[id] });
+    if (res === "moved") moved++;
+    else if (res === "blocked") blocked++;
+    else if (res === "error") err++;
+    else noop++;
+  }
+  let msg = `${moved} moved`;
+  if (blocked) msg += `, ${blocked} blocked (protection)`;
+  if (err) msg += `, ${err} error${err === 1 ? "" : "s"}`;
+  if (!blocked && !err && noop) msg += ` (${noop} already in ${label})`;
+  toast(msg);
+  pipeSel.clear();
+  loadPipeline();
+}
+/* BUILD 7c — bulk assign adviser (pipeline table). Sequential awaited updates with an error tally. */
+async function bulkAssignCases(adviserId, reloadFn) {
+  const ids = [...pipeSel];
+  if (!ids.length || !adviserId) return;
+  const name = adviserId === authUid ? "you" : staffName(adviserId);
+  if (!confirm(`Assign ${ids.length} case${ids.length === 1 ? "" : "s"} to ${adviserId === authUid ? "yourself" : name}?`)) return;
+  let ok = 0, err = 0;
+  for (const id of ids) {
+    const { error } = await db.from("cases").update({ assigned_to: adviserId }).eq("id", id);
+    if (error) err++; else ok++;
+  }
+  let msg = `${ok} case${ok === 1 ? "" : "s"} assigned to ${name}`;
+  if (err) msg += `, ${err} error${err === 1 ? "" : "s"}`;
+  toast(msg);
+  pipeSel.clear();
+  (reloadFn || loadPipeline)();
+}
 /* BUILD 5a — segmented focus control above the pipeline. Counts are live against the current
    adviser/search-filtered set, so each label reflects exactly what that segment would show. */
 function renderSegmentControl(filtered) {
@@ -1270,8 +1489,15 @@ function renderPipelineTable(filtered, stageEntry = {}) {
   if (completedMode && !cols.some(([k]) => k === sortKey)) { sk = "completed_at"; sd = -1; }
   rows = rows.slice().sort((a, b) => { const x = val(a, sk), y = val(b, sk); return (x < y ? -1 : x > y ? 1 : 0) * sd; });
 
+  // BUILD 7c — prune any bulk selection down to what's still visible in this filter/segment/tab, so
+  // "select-all" and the action bar only ever act on the rows on screen.
+  const rowIds = new Set(rows.map((c) => c.id));
+  [...pipeSel].forEach((id) => { if (!rowIds.has(id)) pipeSel.delete(id); });
+  const cbCell = (c) => `<td class="bulk-col" onclick="event.stopPropagation()"><input type="checkbox" class="bulk-cb" data-id="${c.id}" aria-label="Select this case"${pipeSel.has(c.id) ? " checked" : ""}></td>`;
+
   const bodyRows = completedMode
     ? rows.map((c) => `<tr onclick="openCase('${c.id}')" style="cursor:pointer;">
+        ${cbCell(c)}
         <td><strong>${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" "))}</strong></td>
         <td><span class="badge ${c.stage === "completed" ? "green" : "grey"}">${STAGE_LABEL[c.stage] || c.stage}</span></td>
         <td>${c.completed_at ? fmtD(c.completed_at) : "—"}</td>
@@ -1282,6 +1508,7 @@ function renderPipelineTable(filtered, stageEntry = {}) {
         <td>${c.assigned_to ? esc(staffName(c.assigned_to)) : ""}</td>
       </tr>`).join("")
     : rows.map((c) => `<tr onclick="openCase('${c.id}')" style="cursor:pointer;">
+        ${cbCell(c)}
         <td><strong>${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" "))}</strong></td>
         <td><span class="badge blue">${STAGE_LABEL[c.stage] || c.stage}</span></td>
         <td>${(() => { const a = cardAge(c, stageEntry[c.id]); return a.inStage == null ? "" : `<span class="age-cell${a.level ? " age-" + a.level : ""}">${a.inStage}d</span>`; })()}</td>
@@ -1296,18 +1523,69 @@ function renderPipelineTable(filtered, stageEntry = {}) {
         <td>${c.assigned_to ? esc(staffName(c.assigned_to)) : ""}</td>
         <td>${fmtD(c.updated_at)}</td>
       </tr>`).join("");
-  $("#table-wrap").innerHTML = `<div class="panel" style="overflow-x:auto;">
+  $("#table-wrap").innerHTML = `
+    <div class="bulk-bar" id="pipe-bulk-bar"${pipeSel.size ? "" : " hidden"}>
+      <span class="bulk-bar-count"><strong id="pipe-bulk-n">${pipeSel.size}</strong> selected</span>
+      <select id="pipe-bulk-stage" class="bulk-bar-select" aria-label="Move selected cases to stage">
+        <option value="" selected>Move to stage…</option>
+        ${STAGES.map(([k, l]) => `<option value="${k}">${l}</option>`).join("")}
+      </select>
+      <select id="pipe-bulk-adviser" class="bulk-bar-select" aria-label="Assign selected cases to adviser">${adviserOptionsHtml("Assign to…")}</select>
+      <button type="button" class="btn btn-sm" id="pipe-bulk-clear">Clear</button>
+    </div>
+    <div class="panel" style="overflow-x:auto;">
     <div style="display:flex;justify-content:flex-end;margin-bottom:8px;"><button class="btn btn-sm" id="csv-btn">⬇ Download CSV</button></div>
-    ${rows.length ? `<table class="imp-table" id="pipe-table">
-      <tr>${cols.map(([k, l]) => `<th data-k="${k}" style="cursor:pointer;"${k === "erc_end_date" ? ` title="${TIP_ERC}"` : ""}>${l}${sk === k ? (sd > 0 ? " ▲" : " ▼") : ""}</th>`).join("")}</tr>
+    ${rows.length ? `<table class="imp-table has-bulk" id="pipe-table">
+      <tr><th class="bulk-col"><input type="checkbox" id="pipe-bulk-all" aria-label="Select all cases in this view"></th>${cols.map(([k, l]) => `<th data-k="${k}" style="cursor:pointer;"${k === "erc_end_date" ? ` title="${TIP_ERC}"` : ""}>${l}${sk === k ? (sd > 0 ? " ▲" : " ▼") : ""}</th>`).join("")}</tr>
       ${bodyRows}
     </table>` : `<div class="empty" style="padding:40px 16px;text-align:center;">No cases in this view.</div>`}</div>`;
-  document.querySelectorAll("#pipe-table th").forEach((th) => (th.onclick = () => {
+  document.querySelectorAll("#pipe-table th[data-k]").forEach((th) => (th.onclick = () => {
     const k = th.dataset.k;
     if (sortKey === k) sortDir *= -1; else { sortKey = k; sortDir = 1; }
     loadPipeline();
   }));
+  // BUILD 7c — bulk-select wiring (checkboxes, select-all, action bar). No full reload on toggle —
+  // the bar updates imperatively so scroll position and sort survive.
+  document.querySelectorAll("#pipe-table .bulk-cb").forEach((cb) => (cb.onchange = () => {
+    if (cb.checked) pipeSel.add(cb.dataset.id); else pipeSel.delete(cb.dataset.id);
+    updatePipeBulkBar();
+  }));
+  const allCb = $("#pipe-bulk-all");
+  if (allCb) allCb.onchange = () => {
+    document.querySelectorAll("#pipe-table .bulk-cb").forEach((cb) => {
+      cb.checked = allCb.checked;
+      if (allCb.checked) pipeSel.add(cb.dataset.id); else pipeSel.delete(cb.dataset.id);
+    });
+    updatePipeBulkBar();
+  };
+  const clearBtn = $("#pipe-bulk-clear");
+  if (clearBtn) clearBtn.onclick = () => {
+    pipeSel.clear();
+    document.querySelectorAll("#pipe-table .bulk-cb").forEach((cb) => (cb.checked = false));
+    updatePipeBulkBar();
+  };
+  const stageSel = $("#pipe-bulk-stage");
+  if (stageSel) stageSel.onchange = () => { const v = stageSel.value; stageSel.value = ""; if (v) bulkMoveStage(v); };
+  const advSel = $("#pipe-bulk-adviser");
+  if (advSel) advSel.onchange = () => { const v = advSel.value; advSel.value = ""; if (v) bulkAssignCases(v); };
+  updatePipeBulkBar();
   $("#csv-btn").onclick = () => exportCsv(rows, completedMode);
+}
+// BUILD 7c — reflect the current pipeline selection into the action bar (visibility + count) and the
+// select-all checkbox's checked/indeterminate state, without re-rendering the table.
+function updatePipeBulkBar() {
+  const bar = $("#pipe-bulk-bar");
+  if (!bar) return;
+  const n = pipeSel.size;
+  bar.hidden = n === 0;
+  const nEl = $("#pipe-bulk-n"); if (nEl) nEl.textContent = n;
+  const all = $("#pipe-bulk-all");
+  if (all) {
+    const boxes = [...document.querySelectorAll("#pipe-table .bulk-cb")];
+    const checked = boxes.filter((b) => b.checked).length;
+    all.checked = checked > 0 && checked === boxes.length;
+    all.indeterminate = checked > 0 && checked < boxes.length;
+  }
 }
 function exportCsv(rows, completedMode = false) {
   const q2 = (v) => {
@@ -1743,6 +2021,7 @@ window.openCase = async function (id) {
   const noteSnip = (b) => (b && b.length > 120 ? b.slice(0, 120) + "…" : (b || ""));
   const rateOverdue = c.rate_end_date && c.rate_end_date < todayStr;
   const rateSoon = c.rate_end_date && !rateOverdue && (new Date(c.rate_end_date) - new Date(todayStr)) < 183 * 86400000;
+  const nextStage = id ? nextStageFor(c.stage) : null; // BUILD 7b — drives the modal's "Advance to…" button (hidden on terminal stages)
   const summaryHeader = id ? `
     <div class="case-summary">
       <div class="cs-top">
@@ -1754,6 +2033,7 @@ window.openCase = async function (id) {
       </div>
       <div class="cs-stats">
         <span class="badge blue">${esc(STAGE_LABEL[c.stage] || c.stage)}</span>
+        ${nextStage ? `<button type="button" class="btn btn-sm cs-advance-btn" id="cs-advance-btn" title="Advance to ${esc(STAGE_LABEL[nextStage] || nextStage)}">Advance to ${esc(STAGE_LABEL[nextStage] || nextStage)} →</button>` : ""}
         <div class="cs-stat"><span class="cs-lbl">Loan</span><span class="cs-val">${fmtM(c.loan_amount)}</span></div>
         <div class="cs-stat"><span class="cs-lbl">Property</span><span class="cs-val">${fmtM(c.property_value)}</span></div>
         ${c.lender ? `<div class="cs-stat"><span class="cs-lbl">Lender</span><span class="cs-val">${esc(c.lender)}</span></div>` : ""}
@@ -1893,6 +2173,7 @@ window.openCase = async function (id) {
       </div>
     </div>`;
   openModal();
+  pushModalHistory("case", id); // BUILD 7a — Back closes this modal; reloads replace (no dup entry)
 
   const kindSel = $("#case-form").elements.case_kind;
   kindSel.onchange = () => $("#gi-status-label").classList.toggle("hidden", !["purchase", "first_time_buyer"].includes(kindSel.value));
@@ -2094,6 +2375,15 @@ window.openCase = async function (id) {
       } finally {
         if (saveBtn) saveBtn.disabled = false;
       }
+    };
+    // "Advance to <next stage>" (BUILD 7b, defect 17) — same single path (moveCaseToStage) as the
+    // board's drag/select/hover affordances, so the protection gate, completed/not_proceeding
+    // confirms and the segment-destination toast all still fire. Re-opens the case afterwards to
+    // refresh this modal's summary; moveCaseToStage's own loadPipeline() refreshes the board underneath.
+    const advanceBtn = $("#cs-advance-btn");
+    if (advanceBtn) advanceBtn.onclick = async () => {
+      advanceBtn.disabled = true;
+      try { await moveCaseToStage(id, nextStage); } finally { openCase(id); }
     };
     // "Set expected completion" nudge (BUILD 5c) — reveals Case details and focuses the field.
     const expNudge = $("#cs-expected-nudge");
@@ -2335,6 +2625,7 @@ window.openClient = async function (id) {
   let c = {};
   let cases = [];
   let tlItems = [];
+  let dupOf = null; // { id, name } — set when this client is half of a flagged duplicate pair
   if (id) {
     const [{ data: cl, error: clErr }, { data: cs }] = await Promise.all([
       db.from("clients").select("*").eq("id", id).single(),
@@ -2343,6 +2634,15 @@ window.openClient = async function (id) {
     if (clErr || !cl) return toast("Client not found — it may have been deleted or you don't have access.");
     c = cl; cases = cs || [];
     tlItems = await buildClientTimeline(id, cases);
+    // BUILD 7d (defect 31) — reuse Data Health's existing find_duplicate_clients RPC (no new
+    // detection engine) so a duplicate spotted here, on the client record itself, can go straight
+    // into the same merge modal Data Health uses — merge shouldn't require a detour via Data Health
+    // first. Best-effort: any failure here just means no banner; the client still opens fine.
+    try {
+      const { data: dups } = await db.rpc("find_duplicate_clients");
+      const pair = (Array.isArray(dups) ? dups : []).find((d) => d.a_id === id || d.b_id === id);
+      if (pair) dupOf = pair.a_id === id ? { id: pair.b_id, name: pair.b_name } : { id: pair.a_id, name: pair.a_name };
+    } catch (e) { /* no banner */ }
   }
   const multiCase = cases.length > 1;
   const caseLabelById = {};
@@ -2369,6 +2669,7 @@ window.openClient = async function (id) {
         <button type="button" class="tl-chip" data-type="call">📞 Call</button>
         <button type="button" class="tl-chip" data-type="email">✉️ Email</button>
         <button type="button" class="tl-chip" data-type="meeting">🤝 Meeting</button>
+        ${openCases.length === 1 ? `<button type="button" class="tl-chip tl-chip-logcall" id="tl-logcall-chip" title="Open ${esc(caseLabelById[openCases[0].id] || "the case")}'s Log call panel">📞 Log call</button>` : ""}
       </div>
       <div class="tl-filters" id="tl-filters">${TL_CATS.map(([k, l]) => `<button type="button" class="tl-chip tl-filter ${k === "all" ? "active" : ""}" data-cat="${k}">${esc(l)}</button>`).join("")}</div>
       <div class="tl-list" id="tl-list">${renderTimelineList(tlItems, "all", 100, multiCase)}</div>
@@ -2376,6 +2677,7 @@ window.openClient = async function (id) {
   $("#modal").innerHTML = `
     <h3>${id ? "Client details" : "New client"}</h3>
     ${id && (c.phone || c.email) ? `<p class="panel-sub" style="margin-top:-8px;display:flex;gap:16px;flex-wrap:wrap;">${c.phone ? "📞 " + telLink(c.phone) : ""}${c.email ? "✉️ " + mailLink(c.email) : ""}</p>` : ""}
+    ${dupOf ? `<p class="dup-hint">Possible duplicate of <strong>${esc(dupOf.name)}</strong> — <a href="javascript:void(0)" onclick="openMergeClients('${esc(id)}','${esc(dupOf.id)}')">Review &amp; merge</a></p>` : ""}
     ${timelineHtml}
     <details class="case-details client-details" ${id ? "" : "open"}>
       <summary>Client details</summary>
@@ -2415,6 +2717,7 @@ window.openClient = async function (id) {
       </div>
     </div>`;
   openModal();
+  pushModalHistory("client", id); // BUILD 7a — Back closes this modal
   $("#modal-cancel").onclick = closeModal;
   $("#modal-save").onclick = async () => {
     const f = new FormData($("#client-form"));
@@ -2432,6 +2735,10 @@ window.openClient = async function (id) {
     // If the client was opened from Data health (that page sits behind the modal), refresh its
     // lists/KPIs so a just-fixed row (e.g. missing email) doesn't linger stale until manual Refresh.
     if ($("#page-data") && !$("#page-data").classList.contains("hidden")) loadDataHealth();
+    // BUILD 7d (defect 29) — same pattern: a "Fix contact" link on a failed email/SMS opens this
+    // modal with the Emails page still open behind it. Refresh it so the just-fixed phone/email
+    // stops looking broken in the list without a manual Refresh.
+    if ($("#page-emails") && !$("#page-emails").classList.contains("hidden")) loadEmails();
   };
   if (id) {
     // ---- Timeline interactions (SP3b) — filters, typed quick-add, show-more; all in place ----
@@ -2444,13 +2751,28 @@ window.openClient = async function (id) {
       if (more) more.onclick = () => { tlCap += 100; rerenderTl(); };
     };
     const more0 = $("#tl-more"); if (more0) more0.onclick = () => { tlCap += 100; rerenderTl(); };
-    // Type chips (single-select, default Note) — shared class with the case modal.
+    // Type chips (single-select, default Note) — shared class with the case modal. The Log call
+    // chip (below) is excluded here: it's a one-shot action, not a typed-note type to select.
     const typeChips = $("#tl-type-chips");
-    if (typeChips) typeChips.querySelectorAll(".tl-chip").forEach((b) => b.onclick = () => {
+    if (typeChips) typeChips.querySelectorAll(".tl-chip:not(.tl-chip-logcall)").forEach((b) => b.onclick = () => {
       const cur = $("#tl-type-chips .tl-chip.active"); if (cur) cur.classList.remove("active");
       b.classList.add("active");
       const inp = $("#tl-note"); if (inp) inp.focus();
     });
+    // BUILD 7d (composer lite) — "Log call" chip: for a client with exactly one open case, skip the
+    // typed-note flow entirely and jump straight to that case's real Log call panel (outcome +
+    // follow-up chips), the tool Sarah calls "exactly right". Multi-case clients never see this chip
+    // (rendered above only when openCases.length === 1), so they keep the plain typed-note flow —
+    // there's no single case to route to without asking, which the "lite" composer avoids doing.
+    const logcallChip = $("#tl-logcall-chip");
+    if (logcallChip) logcallChip.onclick = async () => {
+      const targetCaseId = openCases[0] && openCases[0].id;
+      if (!targetCaseId) return;
+      closeModal();
+      await openCase(targetCaseId);
+      const btn = $("#cs-logcall-btn");
+      if (btn) btn.click();
+    };
     // Filter chips — re-render just the list node (no full modal re-render).
     const filterWrap = $("#tl-filters");
     if (filterWrap) filterWrap.querySelectorAll(".tl-filter").forEach((b) => b.onclick = () => {
@@ -2506,6 +2828,12 @@ window.openClient = async function (id) {
 };
 
 /* ---------- Emails ---------- */
+// BUILD 7d (defect 29) — a failure reason that plainly points at a bad contact detail (bounce,
+// invalid number, disconnected, …) rather than a transient sender problem. Deliberately narrow: a
+// generic timeout/rate-limit error shouldn't offer a contact-fix link that has nothing to do with it.
+function isBadContactError(err) {
+  return !!err && /bounc|invalid|undeliverable|no longer|disconnected|doesn.t exist|not a valid/i.test(err);
+}
 async function loadEmails() {
   const failedOnly = $("#email-failed-only") && $("#email-failed-only").checked;
   const { data: emails, error } = await db.from("email_queue")
@@ -2518,19 +2846,43 @@ async function loadEmails() {
   // to what it would act on, so it never fires against emails that are queued/sent/cancelled.
   const retryAllEmailBtn = failedOnly && emailRows.length
     ? `<div class="row-item" style="justify-content:flex-end;"><button class="btn btn-sm btn-primary" onclick="retryAllFailedEmails()">Retry all failed (${emailRows.length})</button></div>` : "";
-  $("#email-list").innerHTML = `<div class="panel">` + retryAllEmailBtn + (emailRows.length ? emailRows.map((e) => {
+  // BUILD 7c — bulk-select on failed email rows. Prune the selection to what's currently shown, then
+  // render checkboxes on failed rows and a slim action bar (mirrors the pipeline bulk bar).
+  const failedIds = new Set(emailRows.filter((e) => e.status === "failed").map((e) => e.id));
+  [...emailSel].forEach((id) => { if (!failedIds.has(id)) emailSel.delete(id); });
+  const emailBulkBar = `<div class="bulk-bar" id="email-bulk-bar"${emailSel.size ? "" : " hidden"}>
+      <span class="bulk-bar-count"><strong id="email-bulk-n">${emailSel.size}</strong> selected</span>
+      <button type="button" class="btn btn-sm btn-primary" id="email-bulk-retry">Retry selected (${emailSel.size})</button>
+      <button type="button" class="btn btn-sm" id="email-bulk-clear">Clear</button>
+    </div>`;
+  $("#email-list").innerHTML = `<div class="panel">` + emailBulkBar + retryAllEmailBtn + (emailRows.length ? emailRows.map((e) => {
     const failed = e.status === "failed";
     const clickable = failed && e.case_id;
     return `
     <div class="row-item">
+      ${failed ? `<input type="checkbox" class="email-cb" data-id="${e.id}" aria-label="Select this failed email"${emailSel.has(e.id) ? " checked" : ""} onclick="event.stopPropagation()">` : ""}
       <div class="row-main">
         <div class="t"${clickable ? ` onclick="openCase('${e.case_id}')" style="cursor:pointer;"` : ""}>${EMAIL_LABEL[e.email_type]} — ${esc(e.clients ? e.clients.first_name + " " + e.clients.last_name : e.to_email || "")}</div>
         <div class="s">${esc(e.to_email || "")} · ${e.sent_at ? "sent " + new Date(e.sent_at).toLocaleString("en-GB") : "created " + new Date(e.created_at).toLocaleString("en-GB")}${e.error ? " · " + esc(e.error) : ""}</div>
       </div>
       <span class="badge ${badge[e.status]}">${e.status}</span>
+      ${failed && e.client_id && isBadContactError(e.error) ? `<button class="btn btn-sm btn-ghost" onclick="openClient('${e.client_id}')" title="This looks like a bad contact detail, not a one-off send failure">Fix contact</button>` : ""}
       ${failed ? `<button class="btn btn-sm" onclick="retryEmail('${e.id}')">Retry</button>` : ""}
     </div>`;
   }).join("") : `<div class="empty">${failedOnly ? "No failed emails." : "No emails yet. They'll appear here once automation runs or you trigger one from a case."}</div>`) + `</div>`;
+  // Wire the failed-email bulk-select controls (imperative, no reload on toggle).
+  document.querySelectorAll("#email-list .email-cb").forEach((cb) => (cb.onchange = () => {
+    if (cb.checked) emailSel.add(cb.dataset.id); else emailSel.delete(cb.dataset.id);
+    updateEmailBulkBar();
+  }));
+  const emClear = $("#email-bulk-clear");
+  if (emClear) emClear.onclick = () => {
+    emailSel.clear();
+    document.querySelectorAll("#email-list .email-cb").forEach((cb) => (cb.checked = false));
+    updateEmailBulkBar();
+  };
+  const emRetry = $("#email-bulk-retry");
+  if (emRetry) emRetry.onclick = () => bulkRetryEmails();
 
   const { data: sms, error: smsErr } = await db.from("sms_queue")
     .select("*, cases(*), clients(*)")
@@ -2550,6 +2902,7 @@ async function loadEmails() {
         <div class="s">${esc(s.to_phone || "")} · ${s.sent_at ? "sent " + new Date(s.sent_at).toLocaleString("en-GB") : "created " + new Date(s.created_at).toLocaleString("en-GB")}${s.error ? " · " + esc(s.error) : ""}</div>
       </div>
       <span class="badge ${smsBadge[s.status] || "grey"}">${esc(s.status)}</span>
+      ${failed && s.client_id && isBadContactError(s.error) ? `<button class="btn btn-sm btn-ghost" onclick="openClient('${s.client_id}')" title="This looks like a bad contact detail, not a one-off send failure">Fix contact</button>` : ""}
       ${failed ? `<button class="btn btn-sm" onclick="retrySms('${s.id}')">Retry</button>` : ""}
     </div>`;
   }).join("") : `<div class="empty">${failedOnly ? "No failed SMS." : "No SMS yet. They'll appear here once SMS automation runs or you send one."}</div>`);
@@ -2569,6 +2922,29 @@ async function retrySms(id, silent) {
     if (!silent) { toast("SMS re-queued for sending"); loadEmails(); }
     return true;
   } catch (e) { if (!silent) toast("Error: " + e.message); return false; }
+}
+// BUILD 7c — reflect the failed-email selection into its action bar (visibility + count + button
+// label), without re-rendering the list.
+function updateEmailBulkBar() {
+  const bar = $("#email-bulk-bar");
+  if (!bar) return;
+  const n = emailSel.size;
+  bar.hidden = n === 0;
+  const nEl = $("#email-bulk-n"); if (nEl) nEl.textContent = n;
+  const btn = $("#email-bulk-retry"); if (btn) btn.textContent = `Retry selected (${n})`;
+}
+// BUILD 7c — retry just the selected failed emails via the existing silent retry path, one summary
+// toast (with an error tally), then refresh once.
+async function bulkRetryEmails() {
+  const ids = [...emailSel];
+  if (!ids.length) return;
+  let ok = 0, err = 0;
+  for (const id of ids) { if (await retryEmail(id, true)) ok++; else err++; }
+  let msg = `Retried ${ok} of ${ids.length} failed email${ids.length === 1 ? "" : "s"} for sending`;
+  if (err) msg += ` — ${err} error${err === 1 ? "" : "s"}`;
+  toast(msg);
+  emailSel.clear();
+  loadEmails();
 }
 // Retry-all-failed (defect 28) — loops the existing per-row retry (silently, to avoid a toast per
 // row) then shows one summary toast and refreshes the list once.
@@ -2976,6 +3352,23 @@ async function loadTodayAppts() {
 
 /* ---------- Diary ---------- */
 let diaryMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+// BUILD 7d (defect 26) — stable per-adviser colour palette for the "Everyone" diary view, so
+// overlapping/adjacent appointments across advisers are distinguishable at a glance. Keyed by an
+// adviser's fixed index in TEAM (populated once at login, ordered by full_name, not reshuffled
+// per render), so the same adviser gets the same colour all session. Single-adviser view is
+// unaffected — it keeps the plain uniform CSS look.
+const DIARY_PALETTE = [
+  { bg: "#e8f0fa", border: "#2f6fed" }, // blue
+  { bg: "#e7f6ee", border: "#16794c" }, // green
+  { bg: "#faf1dc", border: "#b8860b" }, // amber
+  { bg: "#f5e9fb", border: "#8e44ad" }, // purple
+  { bg: "#fdecea", border: "#c0392b" }, // red
+  { bg: "#e6f6f7", border: "#0e8a8f" }, // teal
+];
+function adviserColor(staffId) {
+  const idx = staffId ? TEAM.findIndex((p) => p.id === staffId) : -1;
+  return DIARY_PALETTE[(idx < 0 ? 0 : idx) % DIARY_PALETTE.length];
+}
 
 async function loadDiary() {
   const monthStart = diaryMonth;
@@ -3001,13 +3394,25 @@ async function loadDiary() {
     const dstr = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(day.getDate()).padStart(2, "0")}`;
     return `<div class="diary-day ${day.toDateString() === todayStr ? "today" : ""}${dayAppts.length ? " has-appts" : ""}" data-date="${dstr}" title="Add an appointment on this day" style="${dim ? "opacity:.45;" : ""}min-height:110px;">
       <h5>${day.toLocaleDateString("en-GB", { weekday: "short", day: "numeric" })}</h5>
-      ${dayAppts.map((a) => `<div class="appt" onclick="openAppt('${a.id}')">
+      ${dayAppts.map((a) => {
+        // Defect 26 — colour by adviser only in the "Everyone" view; single-adviser view keeps the
+        // plain default .appt styling (colour would add nothing when every card is the same person).
+        const colorStyle = who === "all" ? (() => { const c = adviserColor(a.staff_id); return ` style="background:${c.bg};border-left-color:${c.border};"`; })() : "";
+        return `<div class="appt" onclick="openAppt('${a.id}')"${colorStyle}>
         <span class="at">${new Date(a.starts_at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</span> ${esc(a.title)}
         ${a.clients ? `<div>${esc([a.clients.first_name, a.clients.last_name].filter(Boolean).join(" "))}</div>` : ""}
         ${a.staff_id && who === "all" ? `<div style="color:var(--muted);">${esc(staffName(a.staff_id))}</div>` : ""}
-      </div>`).join("")}
+      </div>`;
+      }).join("")}
     </div>`;
   }).join("");
+  // Legend row (defect 26) — only meaningful once cards are colour-coded, i.e. the "Everyone" view.
+  const legendEl = $("#diary-legend");
+  if (legendEl) {
+    legendEl.innerHTML = who === "all"
+      ? TEAM.map((p) => { const c = adviserColor(p.id); return `<span class="diary-legend-item"><span class="diary-legend-dot" style="background:${c.border};"></span>${esc(staffName(p.id))}</span>`; }).join("")
+      : "";
+  }
 }
 $("#diary-prev").addEventListener("click", () => { diaryMonth = new Date(diaryMonth.getFullYear(), diaryMonth.getMonth() - 1, 1); loadDiary(); });
 $("#diary-next").addEventListener("click", () => { diaryMonth = new Date(diaryMonth.getFullYear(), diaryMonth.getMonth() + 1, 1); loadDiary(); });
@@ -3063,6 +3468,7 @@ window.openAppt = async function (id, presets = {}) {
       </div>
     </div>`;
   openModal();
+  pushModalHistory("appt", id); // BUILD 7a — Back closes this modal
   $("#modal-cancel").onclick = closeModal;
   $("#modal-save").onclick = async () => {
     const f = new FormData($("#appt-form"));
@@ -3575,10 +3981,21 @@ async function loadDataHealth() {
     </table>` : '<div class="empty">Every client with a live case has an email. 👍</div>'}
   </div>`;
 
+  // BUILD 7c — bulk-select on the unassigned-cases panel. Prune the selection to the cases still
+  // listed, then add row checkboxes and a slim "Assign selected to…" action bar.
+  const unassignedIds = new Set(unassigned.map((c) => c.case_id));
+  [...dhSel].forEach((id) => { if (!unassignedIds.has(id)) dhSel.delete(id); });
+  const dhBulkBar = `<div class="bulk-bar" id="dh-bulk-bar"${dhSel.size ? "" : " hidden"}>
+      <span class="bulk-bar-count"><strong id="dh-bulk-n">${dhSel.size}</strong> selected</span>
+      <select id="dh-bulk-adviser" class="bulk-bar-select" aria-label="Assign selected cases to adviser">${adviserOptionsHtml("Assign selected to…")}</select>
+      <button type="button" class="btn btn-sm" id="dh-bulk-clear">Clear</button>
+    </div>`;
   const unassignedPanel = `<div class="panel">
     <h3>Live cases with no adviser</h3>
+    ${unassigned.length ? dhBulkBar : ""}
     ${unassigned.length ? unassigned.map((c) => `
       <div class="row-item">
+        <input type="checkbox" class="dh-cb" data-id="${c.case_id}" aria-label="Select this case"${dhSel.has(c.case_id) ? " checked" : ""} onclick="event.stopPropagation()">
         <div class="row-main">
           <div class="t" onclick="openCase('${c.case_id}')">${esc(c.name)}</div>
           <div class="s">${esc(STAGE_LABEL[c.stage] || c.stage)}</div>
@@ -3632,6 +4049,45 @@ async function loadDataHealth() {
   };
   wireTile("#dh-tile-phone", "#dh-phone-panel");
   wireTile("#dh-tile-rateend", "#dh-rateend-panel");
+
+  // BUILD 7c — unassigned-cases bulk-assign wiring. Selection toggles update the action bar
+  // imperatively; picking an adviser assigns the batch then refreshes Data Health.
+  const updateDhBulkBar = () => {
+    const bar = $("#dh-bulk-bar");
+    if (!bar) return;
+    bar.hidden = dhSel.size === 0;
+    const nEl = $("#dh-bulk-n"); if (nEl) nEl.textContent = dhSel.size;
+  };
+  document.querySelectorAll("#data-content .dh-cb").forEach((cb) => (cb.onchange = () => {
+    if (cb.checked) dhSel.add(cb.dataset.id); else dhSel.delete(cb.dataset.id);
+    updateDhBulkBar();
+  }));
+  const dhClear = $("#dh-bulk-clear");
+  if (dhClear) dhClear.onclick = () => {
+    dhSel.clear();
+    document.querySelectorAll("#data-content .dh-cb").forEach((cb) => (cb.checked = false));
+    updateDhBulkBar();
+  };
+  const dhAdv = $("#dh-bulk-adviser");
+  if (dhAdv) dhAdv.onchange = () => { const v = dhAdv.value; dhAdv.value = ""; if (v) bulkAssignDataHealth(v); };
+}
+// BUILD 7c — bulk assign the selected unassigned cases to an adviser, then refresh Data Health.
+async function bulkAssignDataHealth(adviserId) {
+  const ids = [...dhSel];
+  if (!ids.length || !adviserId) return;
+  const mine = adviserId === authUid;
+  const name = mine ? "you" : staffName(adviserId);
+  if (!confirm(`Assign ${ids.length} case${ids.length === 1 ? "" : "s"} to ${mine ? "yourself" : name}?`)) return;
+  let ok = 0, err = 0;
+  for (const id of ids) {
+    const { error } = await db.from("cases").update({ assigned_to: adviserId }).eq("id", id);
+    if (error) err++; else ok++;
+  }
+  let msg = `${ok} case${ok === 1 ? "" : "s"} assigned to ${name}`;
+  if (err) msg += `, ${err} error${err === 1 ? "" : "s"}`;
+  toast(msg);
+  dhSel.clear();
+  loadDataHealth();
 }
 $("#data-refresh").addEventListener("click", () => loadDataHealth());
 
@@ -3970,6 +4426,7 @@ window.closeModal = function () {
   $("#modal-backdrop").classList.add("hidden");
   if (modalPrevFocus && typeof modalPrevFocus.focus === "function") modalPrevFocus.focus();
   modalPrevFocus = null;
+  currentModal = null; // BUILD 7a — this modal no longer owns a history entry
 };
 // Log-call dirty guard (defect 14) — true when the case summary's inline Log-call panel is open
 // and has unsaved text (outcome note or follow-up title). Saving the call (submitCall) always
@@ -3985,6 +4442,9 @@ function hasUnsavedLogCall() {
 // closeModal() itself, which is also called after successful saves/deletes elsewhere and shouldn't
 // be gated behind a confirm() there.
 function closeModalGuarded() {
+  // BUILD 7a — for a history-tracked modal, close via Back so the pushed entry is popped and history
+  // stays in sync; the popstate handler runs the dirty guard (and re-pushes if the user cancels).
+  if (currentModal) { history.back(); return; }
   if (hasUnsavedLogCall() && !confirm("Discard your unsaved note?")) return;
   closeModal();
 }
