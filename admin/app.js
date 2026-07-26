@@ -56,17 +56,18 @@ const daysSince = (iso) => { if (!iso) return null; const t = new Date(iso).getT
    the case entered its current stage (most-recent stage_change case_event); null when unknown →
    we show last-touched only and apply NO colour (honest: we can't claim days-in-stage).
    T1-finalfix (finding 2) — an earlier "polish" pass suppressed the days-in-stage figure entirely
-   whenever the case row's updated_at was newer than the last recorded stage event. Nothing in this
-   app writes case_events, so that condition goes permanently true the first time anyone edits a
-   case: changing only the lender wiped both the figure AND the amber/red stalled-case colour off
-   the card for good, on every case the team touches. That colouring is the administrator's main
-   tool for spotting stalled work, so deleting the signal is worse than carrying a slightly stale
-   one — the suppression is reverted here.
+   whenever the case row's updated_at was newer than the last recorded stage event. Any ordinary
+   edit makes that true (changing only the lender bumps updated_at), so it wiped both the figure AND
+   the amber/red stalled-case colour off the card for good, on every case the team touches. That
+   colouring is the administrator's main tool for spotting stalled work, so deleting the signal is
+   worse than carrying a slightly stale one — the suppression is reverted here.
    What was genuinely missing is that the figure's BASIS was implied rather than stated, so every
-   age line now carries a tooltip (`basis`) naming the date it is measured from and warning that
-   stage moves are not written to the event log. The figure is NEVER derived from updated_at: an
-   ordinary edit is not a stage change, and reporting one as "in stage" would be a worse lie than
-   a stale date. */
+   age line now carries a tooltip (`basis`) naming the date it is measured from. BACKEND-R4 §2 —
+   round 3 asserted here that stage moves are never written to the event log; that was false and is
+   corrected: the database's log_case_event trigger records every stage change with its actor, so
+   stageEntryIso IS the date the case entered its current stage. The figure is still NEVER derived
+   from updated_at: an ordinary edit is not a stage change, and reporting one as "in stage" would be
+   a worse lie than a stale date. */
 function cardAge(c, stageEntryIso) {
   const touched = daysSince(c.updated_at);
   const inStage = daysSince(stageEntryIso);
@@ -86,7 +87,7 @@ function cardAge(c, stageEntryIso) {
     ? "No stage change is recorded for this case, so there is no days-in-stage figure — only when the case was last edited."
     : `Days in stage is measured from the last recorded stage change (${fmtD(stageEntryIso)})`
       + (stale ? ", and the case has been edited since" : "")
-      + ". Stage moves made in the app are not written to the event log, so this can be older than the case's real time in its current stage.";
+      + ". Stage moves are written to the event log automatically, with who made them, so this is when the case entered its current stage — not simply when it was last edited.";
   return { level, text: parts.join(" · "), inStage, touched, stale, basis };
 }
 /* Batched, best-effort lookup of when each case entered its current stage, derived from the most
@@ -294,6 +295,28 @@ const fmtM = (n) => (n == null || n === "" ? "—" : Number(n).toLocaleString("e
 const fmtM2 = (n) => (n == null || n === "" ? "—" : Number(n).toLocaleString("en-GB", { style: "currency", currency: "GBP", minimumFractionDigits: 2, maximumFractionDigits: 2 }));
 let settings = {};
 let ME = null, TEAM = [], tasksScope = "mine";
+/* ---------- BACKEND-R4 §1 — role awareness ----------
+   MY_ROLE is resolved ONCE at sign-in from the my_role() RPC (never by reading profiles.role
+   directly), so the UI's idea of the caller's role is literally the same value the RLS policies
+   test. If it cannot be resolved we assume the LEAST privilege ("none"), which switches every
+   owner/admin-only surface off and fails the sign-in gate — never the most.
+
+   NONE OF THESE HELPERS IS A SECURITY CONTROL. The database enforces every rule they mirror
+   (settings/profiles writes are Owner-only, client/case deletes are Owner/Admin-only, invite-user
+   is Owner-only, profiles_guard_role polices role changes). Their only job is to stop the UI
+   offering an action the database will refuse. The money gate on Reports is weaker still — a
+   PRESENTATION choice: get_reports stays readable by every staff account, so it must never be
+   described as a control. */
+let MY_ROLE = "none";
+const STAFF_ROLES = ["owner", "admin", "adviser", "staff"]; // 'staff' = legacy alias, kept so no login is locked out
+const isOwner = () => MY_ROLE === "owner";
+const isAdminOrOwner = () => MY_ROLE === "owner" || MY_ROLE === "admin";
+const ROLE_LABEL = { owner: "Owner", admin: "Administrator", adviser: "Adviser", staff: "Staff (legacy)", introducer: "Introducer", none: "No access" };
+/* Roles an Owner may set from the team roster. `owner` is here (promoting a colleague is exactly
+   how a second Owner is created — the invite edge function deliberately refuses to mint one).
+   `introducer` is NOT: an introducer profile needs an introducer_id, which this control can't set,
+   and moving a colleague onto the portal-only tier from a staff roster is not a thing anyone wants. */
+const ASSIGNABLE_ROLES = [["owner", "Owner"], ["admin", "Administrator"], ["adviser", "Adviser"], ["none", "No access"]];
 // BUILD 7c — bulk-select selections, one Set of ids per surface. Pruned to what's currently
 // rendered on each re-render (so selections never act on rows the user can no longer see) and
 // cleared after a completed bulk action. Session-only; never persisted.
@@ -333,6 +356,34 @@ function restoreUserPrefs(uid) {
   if (view === "board" || view === "table") pipelineView = view;
 }
 function staffName(id) { const p = TEAM.find((x) => x.id === id); return p ? (p.full_name || p.email) : "—"; }
+/* ---------- Assignment safety: ids that live OUTSIDE TEAM ----------
+   TEAM only ever contains STAFF_ROLES, but `assigned_to` / `staff_id` can legitimately point at
+   somebody who is no longer in it — set to "No access" (role `none`) in the roster, or re-tiered.
+   A select built purely from TEAM has no <option> carrying that id, so the browser falls back to
+   the first option and an ORDINARY SAVE of an unrelated field silently rewrites the assignee
+   (to null where there is a "— unassigned —" option, to whoever sorts first where there isn't),
+   writing a case_assigned event and an audit row that name the saver as having done it on purpose.
+   Every select below that renders a STORED id therefore keeps that id as an explicit, labelled
+   option. This is data integrity, not access control — the roster still removes their access, and
+   RLS is what stops them signing in. */
+let PROFILES = []; // every profile row, staff or not — TEAM is the STAFF_ROLES subset of this
+function profileName(id) {
+  const p = TEAM.find((x) => x.id === id) || PROFILES.find((x) => x.id === id);
+  return p ? (p.full_name || p.email || "") : "";
+}
+const onTeam = (id) => !!id && TEAM.some((p) => p.id === id);
+// <option>s for an assignee select that must be able to represent `currentId` even when that
+// person has left the team. Appends the stray, selected and labelled, after the team.
+function assigneeOptionsHtml(currentId) {
+  const opts = TEAM.map((p) => `<option value="${esc(p.id)}"${p.id === currentId ? " selected" : ""}>${esc(staffName(p.id))}</option>`).join("");
+  if (!currentId || onTeam(currentId)) return opts;
+  const nm = profileName(currentId) || "Former colleague";
+  return opts + `<option value="${esc(currentId)}" selected>${esc(nm)} — no access (still assigned)</option>`;
+}
+/* The default assignee for NEW work started from a case (follow-up task, case task, appointment).
+   Unlike the selects above this is not a stored value, so a colleague with no access must never be
+   the default — fall back to the signed-in user when the case's own assignee has left the team. */
+const defaultAssignee = (id) => (onTeam(id) ? id : ((ME && ME.id) || ""));
 // BUILD 7c — adviser <option>s for the bulk "Assign to…" selects. Current user surfaces first as
 // "Me (name)"; the rest of the team follows. `placeholder` is the disabled first option.
 function adviserOptionsHtml(placeholder) {
@@ -388,7 +439,7 @@ window.openReassign = function (ev, taskId, currentId, reloadKey) {
   if (!chip || !chip.parentNode) return;
   const sel = document.createElement("select");
   sel.className = "task-reassign";
-  sel.innerHTML = TEAM.map((p) => `<option value="${p.id}" ${p.id === currentId ? "selected" : ""}>${esc(staffName(p.id))}</option>`).join("");
+  sel.innerHTML = assigneeOptionsHtml(currentId);
   const restore = (id) => {
     if (!sel.parentNode) return;
     const wrap = document.createElement("span");
@@ -415,6 +466,20 @@ window.reassignTask = async function (taskId, adviserId, reloadKey) {
 };
 // Compact inline variant for note/timeline meta lines (reuses .chip, shrunk inline — no new CSS).
 function authorChipHtml(id) { const ini = initials(id); return ini ? ` <span class="chip" title="${esc(staffName(id))}" style="width:16px;height:16px;font-size:8.5px;vertical-align:middle;">${esc(ini)}</span>` : ""; }
+/* BACKEND-R4 §2 — case_events.actor is auth.uid() at the moment the log_case_event trigger fired.
+   It is NULL only when nobody was signed in (the 8am cron, an edge function, the service role), so
+   a missing chip is stated as "system" rather than left blank — "no chip" and "the cron did it"
+   must not look the same on a compliance timeline. */
+function eventActorHtml(actor) {
+  if (!actor) return ' <span class="tl-muted" title="No signed-in user — written by the 8am cron or an edge function">· system</span>';
+  return authorChipHtml(actor);
+}
+// The same answer in plain text, for the printed evidence pack.
+function actorName(id) {
+  if (!id) return "System (automation)";
+  const n = staffName(id);
+  return n === "—" ? "Unknown user" : n;
+}
 
 /* ---------- Typed notes (SP3a) — prefix convention, NO schema change ----------
    Classify a note body by a leading "Call:/Email:/Meeting:" prefix (case-insensitive —
@@ -591,15 +656,31 @@ function showLogin() {
   $("#assistant-fab").classList.add("hidden");
   $("#assistant-drawer").classList.add("hidden");
 }
+/* BACKEND-R4 §1 — resolve the caller's role from the my_role() RPC, which is the same expression
+   the RLS policies evaluate. Falls back to profiles.role only if the RPC is unavailable (an older
+   database), and to "none" if neither answers — least privilege, so an unresolvable role can never
+   unlock a surface. Sets MY_ROLE and returns it. */
+async function resolveMyRole(session) {
+  MY_ROLE = "none";
+  try {
+    const { data, error } = await db.rpc("my_role");
+    if (!error && typeof data === "string" && data) { MY_ROLE = data; return MY_ROLE; }
+  } catch (e) { /* RPC missing/blocked — fall through to the profiles read below */ }
+  try {
+    const { data: p } = await db.from("profiles").select("role").eq("id", session.user.id).single();
+    if (p && p.role) MY_ROLE = p.role;
+  } catch (e) { /* leave MY_ROLE at "none" */ }
+  return MY_ROLE;
+}
 async function showApp(session) {
   // Gate FIRST: only back-office staff may use the admin SPA (mirrors introducer.html).
   // Done before revealing the shell or reading settings/team so a non-staff account
   // never sees the admin UI or triggers those reads.
-  const { data: myProfile } = await db.from("profiles").select("role").eq("id", session.user.id).single();
-  // Back-office roles: owner / admin / adviser, plus 'staff' kept as a legacy alias so no
-  // existing login can ever be stranded. Must match is_staff() in the database, which accepts
-  // exactly these four — anything narrower locks real people out of their own back office.
-  if (!myProfile || !["owner", "admin", "adviser", "staff"].includes(myProfile.role)) {
+  // BACKEND-R4 §1 — the tiers are owner/admin/adviser (+ the legacy 'staff' alias). The old
+  // ["staff","admin"] allow-list locked the Owner and both advisers out of their own back office.
+  // This is a courtesy gate, not a control: RLS is what actually stops a non-staff account.
+  await resolveMyRole(session);
+  if (!STAFF_ROLES.includes(MY_ROLE)) {
     await db.auth.signOut();
     showLogin();
     toast("This login doesn't have back-office access.");
@@ -619,8 +700,16 @@ async function loadTeam(session) {
   // T1-1: 'admin' is a first-class back-office role (the login gate at showApp already admits it),
   // so it must appear in TEAM or ME resolves to null and every "Mine" scope silently matches
   // nothing. Deliberately an explicit allow-list — an 'introducer' profile can never leak in.
-  const { data: team } = await db.from("profiles").select("id,full_name,email,role").in("role", ["owner", "admin", "adviser", "staff"]).order("full_name");
-  TEAM = team || [];
+  // BACKEND-R4 §5.1 — 'owner' and 'adviser' belong here too. Without them the Owner and every
+  // adviser vanish from the adviser dropdowns, the diary legend and the scoreboard; worse, saving
+  // a case assigned to a missing adviser silently unassigned it, because the select had no option
+  // carrying that id.
+  // One fetch, two lists. PROFILES keeps everybody (including anyone moved to "No access") so a
+  // record still assigned to them can be shown, named and restored instead of silently orphaned;
+  // TEAM stays exactly the STAFF_ROLES subset it always was, so every dropdown is unchanged.
+  const { data: team } = await db.from("profiles").select("id,full_name,email,role").order("full_name");
+  PROFILES = team || [];
+  TEAM = PROFILES.filter((p) => STAFF_ROLES.includes(p.role));
   ME = TEAM.find((p) => p.id === session.user.id) || null;
   // Safe degradation: if this login still isn't in TEAM (profile row missing/renamed role), a
   // "Mine" scope can only ever show an empty screen — start everything on "All" instead.
@@ -631,10 +720,16 @@ async function loadTeam(session) {
   }
   const first = ((ME && ME.full_name) || session.user.email).split(/[\s@]/)[0];
   $("#today-heading").textContent = `Today — ${first}`;
+  // Somebody moved to "No access" can still be HOLDING work — the Owner is allowed to leave it
+  // with them. They stay in these two filters, marked, so that work can still be found and worked;
+  // without an option carrying their id it is reachable only as "everyone else's". Nobody has this
+  // role in an untouched team, so the lists are unchanged until someone is actually deactivated.
+  const formerOpts = PROFILES.filter((p) => p.role === "none")
+    .map((p) => `<option value="${esc(p.id)}">${esc(p.full_name || p.email || p.id)} — no access</option>`);
   $("#board-adviser").innerHTML = ['<option value="all">All advisers</option>', '<option value="unassigned">Unassigned</option>']
-    .concat(TEAM.map((p) => `<option value="${p.id}">${esc(staffName(p.id))}</option>`)).join("");
+    .concat(TEAM.map((p) => `<option value="${p.id}">${esc(staffName(p.id))}</option>`)).concat(formerOpts).join("");
   $("#diary-staff").innerHTML = ['<option value="all">Everyone</option>']
-    .concat(TEAM.map((p) => `<option value="${p.id}">${esc(staffName(p.id))}</option>`)).join("");
+    .concat(TEAM.map((p) => `<option value="${p.id}">${esc(staffName(p.id))}</option>`)).concat(formerOpts).join("");
 }
 $("#login-form").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -758,8 +853,17 @@ async function loadSettings() {
   const { data } = await db.from("settings").select("*");
   settings = Object.fromEntries((data || []).map((r) => [r.key, r.value]));
 }
+/* BACKEND-R4 §1/§5.3 — writing `settings` is Owner-only, enforced by RLS. A non-Owner opening this
+   page used to get the full form and a "new row violates row-level security policy" toast the
+   moment they pressed Save. The page below is what they see instead: a coherent read-only view of
+   the operational settings, with the bank details, the financial-promotions master switch and the
+   whole user-management block absent rather than present-and-broken. Hiding them is presentation;
+   the refusal is the database's. */
+const OWNER_ONLY_SETTING_KEYS = ["bank_account_name", "bank_sort_code", "bank_account_number"];
 function renderSettings() {
-  const general = SETTING_FIELDS.map(settingFieldHtml).join("") + `
+  const owner = isOwner();
+  const visibleFields = owner ? SETTING_FIELDS : SETTING_FIELDS.filter(([k]) => !OWNER_ONLY_SETTING_KEYS.includes(k));
+  const general = visibleFields.map(settingFieldHtml).join("") + `
     <h3 style="grid-column:1/-1;margin:10px 0 0;">Protection &amp; GI</h3>
     <label>Protection gate — block moves to Application+ until protection is recorded
       <select name="protection_gate">
@@ -796,15 +900,15 @@ function renderSettings() {
     <p class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;">Sent daily at ~07:30 UK time. Requires RESEND_API_KEY.</p>
     <div style="grid-column:1/-1;"><button type="button" class="btn btn-sm" id="send-digest-btn">Send digest now</button></div>
     <h3 style="grid-column:1/-1;margin:10px 0 0;">Client comms &amp; sales</h3>
-    <h4 style="grid-column:1/-1;margin:0;">Regulated financial promotions</h4>
+    ${owner ? `<h4 style="grid-column:1/-1;margin:0;">Regulated financial promotions</h4>
     <label>Financial promotions approved (master switch)
       <select name="financial_promotions_approved">
         <option value="off" ${(settings.financial_promotions_approved ?? "off") === "on" ? "" : "selected"}>Off</option>
         <option value="on" ${settings.financial_promotions_approved === "on" ? "selected" : ""}>On</option>
       </select>
     </label>
-    <p class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;">Master switch — no marketing email sends until this is on. It gates exactly these three email types: <strong>Referral request</strong> (auto referral nudge, above), <strong>Protection intro email</strong> and <strong>GI / buildings insurance email</strong> (both in Protection &amp; GI, above). Confirm your network has approved the templates before switching on.</p>
-    <h4 style="grid-column:1/-1;margin:10px 0 0;">Other automated client comms — not gated by the switch above</h4>
+    <p class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;">Master switch — no marketing email sends until this is on. It gates exactly these three email types: <strong>Referral request</strong> (auto referral nudge, above), <strong>Protection intro email</strong> and <strong>GI / buildings insurance email</strong> (both in Protection &amp; GI, above). Confirm your network has approved the templates before switching on.</p>` : ""}
+    <h4 style="grid-column:1/-1;margin:10px 0 0;">Other automated client comms${owner ? " — not gated by the switch above" : ""}</h4>
     <label>Auto SMS — rate-end reminder
       <select name="auto_sms_rate_end">
         <option value="off" ${(settings.auto_sms_rate_end ?? "off") === "on" ? "" : "selected"}>Off</option>
@@ -871,7 +975,14 @@ function renderSettings() {
       <input name="sms_from" value="${esc(settings.sms_from ?? "")}" placeholder="e.g. +447700900123 or NexMoney">
     </label>
     <p class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;">SMS also needs provider credentials set as Supabase secrets (Twilio: TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN; ClickSend: CLICKSEND_USERNAME / CLICKSEND_API_KEY). Nothing sends until sms_enabled is on and credentials are set.</p>`;
-  $("#settings-form").innerHTML = `
+  const readOnlyNote = owner ? "" : `
+    <div class="dq-notice" id="settings-readonly-note">🔒 <strong>Read-only — you are signed in as ${esc(ROLE_LABEL[MY_ROLE] || MY_ROLE)}.</strong>
+      Only the Owner can change settings; the database refuses the write, so this page shows you the current
+      configuration rather than a form that would fail on Save. The bank details are Owner-only in the database
+      itself — their values are never sent to this session, so there is nothing here to show. The
+      financial-promotions master switch and team logins are also Owner-only and are not shown. Ask an Owner to
+      make a change.</div>`;
+  $("#settings-form").innerHTML = readOnlyNote + `
     <details class="case-details settings-details" open>
       <summary>General</summary>
       <div class="settings-grid">${general}</div>
@@ -880,8 +991,27 @@ function renderSettings() {
       <summary>Advanced — API keys &amp; integrations</summary>
       <div class="settings-grid">${advanced}</div>
     </details>`;
+  if (!owner) {
+    // Presentation only — the fields are shown so the configuration is legible, but nothing here
+    // can be submitted (the Save button below is hidden, and RLS would refuse it anyway).
+    $("#settings-form").querySelectorAll("input, select, textarea").forEach((el) => { el.disabled = true; });
+  }
+  const saveBtn = $("#save-settings-btn");
+  if (saveBtn) saveBtn.classList.toggle("hidden", !owner);
+  const savedMsg = $("#settings-saved");
+  if (savedMsg) savedMsg.classList.add("hidden");
   $("#send-digest-btn").onclick = sendDigestNow;
+  // BACKEND-R4 §1 — creating/editing profiles is Owner-only, and invite-user v3 refuses a
+  // non-Owner caller outright. Hide the whole panel rather than let it 403 on click.
+  const teamPanel = $("#team-logins-panel");
+  if (teamPanel) teamPanel.classList.toggle("hidden", !owner);
+  renderInviteRoleHint();
+  renderTeamRoster();
   loadIntroducers();
+  /* The whole audit trail, including the settings and login entries that carry no case or client
+     and so appear on no other screen. Owner-only in the UI; the database is what actually
+     withholds those rows from everyone else. */
+  loadChangeHistory();
 }
 async function sendDigestNow() {
   const btn = $("#send-digest-btn");
@@ -906,6 +1036,9 @@ async function sendDigestNow() {
   }
 }
 $("#save-settings-btn").addEventListener("click", async () => {
+  // Presentation guard only — the button is already hidden for a non-Owner and RLS refuses the
+  // upsert regardless. This stops a stale/forced click producing a raw policy-violation toast.
+  if (!isOwner()) return toast("Only the Owner can change settings.");
   const fields = [...$("#settings-form").querySelectorAll("input, select")];
   // Light validation — warns but never blocks the save (nothing here should stop a workflow).
   const warnings = [];
@@ -943,6 +1076,8 @@ $("#save-settings-btn").addEventListener("click", async () => {
     await loadSettings();
     $("#settings-saved").classList.remove("hidden");
     setTimeout(() => $("#settings-saved").classList.add("hidden"), 2500);
+    refreshChangeHistory(); // the save just wrote to the log shown at the bottom of this page
+
   } finally { btn.disabled = false; }
 });
 
@@ -972,12 +1107,17 @@ async function loadDashboard() {
   // being a dead-end. The "Fees outstanding" card and the Protection & Fees drawer's "Fees due" tab
   // count different scopes (see loadProtection below) — captioned here so the gap reads as scope,
   // not a bug.
+  // BACKEND-R4 §1 (owner's decision) — firm-wide money is Owner-only IN THE UI, and that rule was
+  // being enforced on Reports but skipped here, so the same fee total the Reports page withholds
+  // was the biggest number on every adviser's home screen. Same gate, same caveat: PRESENTATION
+  // ONLY. The cases table still carries broker_fee to every staff session; this is not a control.
+  const money = showMoney();
   $("#kpi-row").innerHTML = `
     <div class="kpi" style="cursor:pointer;" onclick="kpiGoto('active')" title="View the pipeline"><div class="num">${active.length}</div><div class="lbl">Active cases</div></div>
     <div class="kpi" style="cursor:pointer;" onclick="kpiGoto('completions')" title="View Reports"><div class="num">${completedThisYear.length}</div><div class="lbl">Completions in ${yr}</div></div>
     <div class="kpi ${ratesSoon.length ? "warn" : ""}" style="cursor:pointer;" onclick="kpiGoto('rates')" title="View Rate &amp; ERC alerts"><div class="num">${ratesSoon.length}</div><div class="lbl">Rates ending ≤ ${reminderMonths}mo (or overdue)</div></div>
     <div class="kpi ${ercFlags.length ? "bad" : ""}" style="cursor:pointer;" onclick="kpiGoto('erc')" title="View Rate &amp; ERC alerts"><div class="num">${ercFlags.length}</div><div class="lbl">ERC outlasts rate</div></div>
-    <div class="kpi ${feesDue.length ? "warn" : ""}" style="cursor:pointer;" onclick="kpiGoto('fees')" title="View the Protection &amp; Fees drawer — Fees due tab"><div class="num">${fmtM(feesDueTotal)}</div><div class="lbl">Fees outstanding (${feesDue.length}) <span style="font-weight:400;opacity:.7;">· all stages</span></div></div>`;
+    ${money ? `<div class="kpi ${feesDue.length ? "warn" : ""}" style="cursor:pointer;" onclick="kpiGoto('fees')" title="View the Protection &amp; Fees drawer — Fees due tab"><div class="num">${fmtM(feesDueTotal)}</div><div class="lbl">Fees outstanding (${feesDue.length}) <span style="font-weight:400;opacity:.7;">· all stages</span></div></div>` : ""}`;
 
   const ercIds = new Set(ercFlags.map((a) => a.case_id));
   const rateErcMerged = [...ratesSoon];
@@ -1024,6 +1164,21 @@ async function loadDashboard() {
   // comes from v_alerts, which only carries COMPLETED cases that also have a tracked rate_end_date.
   // The KPI counts every outstanding fee at any live stage — the two numbers describe different scopes.
   const feeAlerts = (alerts || []).filter((a) => a.stage === "completed" && ["not_requested", "requested"].includes(a.fee_status) && a.broker_fee > 0);
+  // Same Owner-only money rule as the KPI above — this tab is a firm-wide list of broker fees on
+  // colleagues' clients, so the whole tab (button and panel) goes rather than being left as a door
+  // to the figures the tile just withheld. Presentation only; v_alerts is unchanged.
+  const feesTabBtn = $('#revenue-panel .dash-tab[data-tab="fees"]');
+  if (feesTabBtn) feesTabBtn.classList.toggle("hidden", !money);
+  if (!money) {
+    // Leave the Protection tab selected and its panel showing — hiding the button alone would let a
+    // previously-clicked Fees tab keep an empty panel on screen.
+    document.querySelectorAll("#revenue-panel .dash-tab").forEach((b, i) => b.classList.toggle("active", i === 0));
+    document.querySelectorAll("#revenue-panel .dash-tab-panel").forEach((p, i) => p.classList.toggle("hidden", i !== 0));
+    $("#alerts-fees").innerHTML = "";
+    $("#tab-fees-count").textContent = "0";
+    updateRevenueDrawerCount();
+    return;
+  }
   const feesTabCaption = '<div class="panel-sub" style="margin:0 0 8px;">Completed cases with a tracked rate only. The Today KPI\'s "Fees outstanding" total is broader — it also counts fees due earlier in the pipeline.</div>';
   $("#alerts-fees").innerHTML = feesTabCaption + (feeAlerts.length ? feeAlerts.map((a) => `
     <div class="row-item">
@@ -1976,20 +2131,26 @@ function exportCsv(rows, completedMode = false) {
     if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
     return `"${s.replace(/"/g, '""')}"`;
   };
-  const head = completedMode
+  // A firm-wide spreadsheet of every colleague's broker fee is the same figure the Today tile and
+  // the Reports page withhold from a non-Owner, so the column is dropped here too rather than
+  // exported one click later. Presentation only — nothing stops a signed-in adviser reading
+  // broker_fee from the API; the fee on an individual case is still on the case.
+  const money = showMoney();
+  const head = (completedMode
     ? ["Client", "Status", "Completed", "Lender", "Loan", "Broker fee", "Fee status", "Adviser"]
-    : ["Client", "Stage", "Type", "Lender", "Rate %", "Rate end", "Rate end estimated", "ERC end", "Broker fee", "Fee status", "Protection", "Adviser", "Updated"];
-  const row = (c) => completedMode ? [
+    : ["Client", "Stage", "Type", "Lender", "Rate %", "Rate end", "Rate end estimated", "ERC end", "Broker fee", "Fee status", "Protection", "Adviser", "Updated"]
+  ).filter((h) => money || h !== "Broker fee");
+  const row = (c) => (completedMode ? [
     [c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" "),
     STAGE_LABEL[c.stage] || c.stage, (c.completed_at || "").slice(0, 10), c.lender || "",
-    c.loan_amount ?? "", c.broker_fee ?? "", c.fee_status || "", c.assigned_to ? staffName(c.assigned_to) : "",
+    c.loan_amount ?? "", money ? c.broker_fee ?? "" : null, c.fee_status || "", c.assigned_to ? staffName(c.assigned_to) : "",
   ] : [
     [c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" "),
     STAGE_LABEL[c.stage] || c.stage, (KINDS.find((x) => x[0] === c.case_kind) || [])[1] || c.case_kind, c.lender || "", c.rate_percent ?? "", c.rate_end_date || "",
-    c.rate_end_estimated ? "yes" : "", c.erc_end_date || "", c.broker_fee ?? "",
+    c.rate_end_estimated ? "yes" : "", c.erc_end_date || "", money ? c.broker_fee ?? "" : null,
     c.fee_status || "", c.protection_status || "", c.assigned_to ? staffName(c.assigned_to) : "",
     (c.updated_at || "").slice(0, 10),
-  ];
+  ]).filter((v) => v !== null);
   const lines = [head.map(q2).join(",")].concat(rows.map((c) => row(c).map(q2).join(",")));
   const blob = new Blob(["﻿" + lines.join("\n")], { type: "text/csv" });
   const a = document.createElement("a");
@@ -2047,24 +2208,40 @@ async function loadProtectionPage() {
     return true;
   });
   const estTotal = rows.reduce((s, r) => s + Number(r.est_commission || 0), 0);
+  /* BACKEND-R4 §1 (owner's decision) — commission is money reporting, and money reporting is
+     Owner-only IN THE UI. This page was the one that never asked: the RPC is called with scope
+     "all", so "Est. commission" is the WHOLE firm's estimated protection commission and reads the
+     same for an adviser as for the Owner, and the Est. £ column is that same money case by case.
+     Same gate as Today and Reports, and the same caveat: THIS IS PRESENTATION, NOT A SECURITY
+     CONTROL. get_protection_pipeline() still returns est_commission to any staff session and the
+     cases table still carries protection_commission — anyone with the browser console can read
+     what this hides. Opportunity counts, statuses and who each case sits with are unaffected. */
+  const money = showMoney();
+  const commTile = $("#prot-kpi-comm") ? $("#prot-kpi-comm").closest(".kpi") : null;
+  if (commTile) commTile.classList.toggle("hidden", !money);
+  const protNote = $("#prot-money-note");
+  if (protNote) {
+    protNote.classList.toggle("hidden", money);
+    protNote.textContent = money ? "" : "Estimated commission is shown to the Owner only — the figure on this page is the whole firm's, not yours. Opportunity counts, protection and GI status and the adviser each case sits with are all below, and the commission on an individual case is on the case itself.";
+  }
   $("#prot-kpi-count").textContent = rows.length;
-  $("#prot-kpi-comm").textContent = fmtM(estTotal);
+  $("#prot-kpi-comm").textContent = money ? fmtM(estTotal) : "—";
   $("#prot-kpi-quoted").textContent = rows.filter((r) => r.protection_status === "quoted").length;
   $("#prot-table").innerHTML = rows.length ? `<div class="board-scroll-wrap">
     <div class="panel prot-table-wrap" id="prot-scroll">
     <table class="imp-table" id="prot-list-table">
-      <tr><th>#</th><th class="stick-col">Client</th><th>Case</th><th class="prot-col-loan">Loan</th><th>Status</th><th class="prot-col-est">Est. £</th><th>Adviser</th><th class="stick-col-right">Actions</th></tr>
+      <tr><th>#</th><th class="stick-col">Client</th><th>Case</th><th class="prot-col-loan">Loan</th><th>Status</th>${money ? '<th class="prot-col-est">Est. £</th>' : ""}<th>Adviser</th><th class="stick-col-right">Actions</th></tr>
       ${rows.map((r, i) => {
         const kind = (KINDS.find((x) => x[0] === r.case_kind) || [])[1] || "";
         const p = PROT_BADGE[r.protection_status] || PROT_BADGE.not_discussed;
         const gi = ["purchase", "first_time_buyer"].includes(r.case_kind) ? (GI_BADGE[r.gi_status] || GI_BADGE.not_discussed) : null;
         return `<tr>
         <td style="color:var(--muted);">${i + 1}</td>
-        <td class="stick-col"><span class="prot-client" onclick="openClient('${r.client_id}')">${esc(r.client_name)}</span><span class="prot-fold-info">Loan ${fmtM(r.loan_amount)} · Est. ${fmtM(r.est_commission)}</span></td>
+        <td class="stick-col"><span class="prot-client" onclick="openClient('${r.client_id}')">${esc(r.client_name)}</span><span class="prot-fold-info">Loan ${fmtM(r.loan_amount)}${money ? " · Est. " + fmtM(r.est_commission) : ""}</span></td>
         <td><span class="badge blue">${STAGE_LABEL[r.stage] || esc(r.stage)}</span> ${esc(kind)}${r.lender ? " · " : " "}${lenderIcon(r.lender)}${esc(r.lender || "")}</td>
         <td class="prot-col-loan">${fmtM(r.loan_amount)}</td>
         <td><span class="badge ${p[0]}">${p[1]}</span>${gi ? ` <span class="badge ${gi[0]}" title="${TIP_GI}">${gi[1]}</span>` : ""}</td>
-        <td class="prot-est prot-col-est">${fmtM(r.est_commission)}</td>
+        ${money ? `<td class="prot-est prot-col-est">${fmtM(r.est_commission)}</td>` : ""}
         <td>${r.owner ? `<span class="chip" title="${esc(staffName(r.owner))}">${esc(initials(r.owner))}</span>` : '<span class="cs-muted">— unassigned —</span>'}</td>
         <td class="stick-col-right" style="white-space:nowrap;">
           <button class="btn btn-sm" onclick="openCase('${r.case_id}')">Open</button>
@@ -2388,15 +2565,20 @@ $("#prot-tile-quoted").addEventListener("click", () => {
 window.openCase = async function (id) {
   let c = { stage: "enquiry", case_kind: "remortgage", rate_type: "fixed" };
   let notes = [], tasks = [];
+  let events = [], auditRows = [];
   let openedUpdatedAt = null;
   if (id) {
-    const [{ data: cs }, { data: ns }, { data: ts }] = await Promise.all([
+    // BACKEND-R4 §2/§3 — the curated event log (log_case_event, with its actor) and the forensic
+    // audit_log underneath it. Both soft-fail: a blocked table must not stop the case opening.
+    const [{ data: cs }, { data: ns }, { data: ts }, evs, aud] = await Promise.all([
       db.from("cases").select("*").eq("id", id).single(),
       db.from("case_notes").select("*").eq("case_id", id).order("created_at", { ascending: false }),
       db.from("case_tasks").select("*").eq("case_id", id).order("due_date"),
+      softRows(db.from("case_events").select("event,detail,created_at,actor").eq("case_id", id).order("created_at", { ascending: false })),
+      loadAuditRows("case_id", id),
     ]);
     if (!cs) return toast("Case not found — it may have been deleted or you don't have access");
-    c = cs; notes = ns || []; tasks = ts || [];
+    c = cs; notes = ns || []; tasks = ts || []; events = evs; auditRows = aud;
     openedUpdatedAt = cs.updated_at; // exact string from the loaded row, for the stale-write guard
   }
   const [{ data: clients }, { data: intros }] = await Promise.all([
@@ -2452,7 +2634,7 @@ window.openCase = async function (id) {
         <label style="margin-top:8px;">Next follow-up (optional)</label>
         <div style="display:flex;gap:8px;margin-top:4px;">
           <input id="cs-call-fu-title" placeholder="Follow-up task…" style="flex:1;">
-          <select id="cs-call-fu-assignee" aria-label="Assign follow-up to" title="Assign follow-up to" style="width:auto;">${TEAM.map((p) => `<option value="${p.id}" ${p.id === (c.assigned_to || (ME && ME.id)) ? "selected" : ""}>${esc(staffName(p.id))}</option>`).join("")}</select>
+          <select id="cs-call-fu-assignee" aria-label="Assign follow-up to" title="Assign follow-up to" style="width:auto;">${TEAM.map((p) => `<option value="${p.id}" ${p.id === defaultAssignee(c.assigned_to) ? "selected" : ""}>${esc(staffName(p.id))}</option>`).join("")}</select>
           <input id="cs-call-fu-due" type="date" style="width:auto;">
         </div>
         <div class="due-chips" style="margin-top:8px;">
@@ -2479,7 +2661,7 @@ window.openCase = async function (id) {
       <h3 style="font-size:14px;">Tasks</h3>
       <div style="display:flex;gap:8px;margin:8px 0;flex-wrap:wrap;">
         <input id="new-task" placeholder="Add a task…" style="flex:1;min-width:140px;">
-        <select id="new-task-assignee" aria-label="Assign task to" style="width:auto;" title="Assign task to">${TEAM.map((p) => `<option value="${p.id}" ${p.id === (c.assigned_to || (ME && ME.id)) ? "selected" : ""}>${esc(staffName(p.id))}</option>`).join("")}</select>
+        <select id="new-task-assignee" aria-label="Assign task to" style="width:auto;" title="Assign task to">${TEAM.map((p) => `<option value="${p.id}" ${p.id === defaultAssignee(c.assigned_to) ? "selected" : ""}>${esc(staffName(p.id))}</option>`).join("")}</select>
         <input id="new-task-due" type="date" style="width:auto;">
         <button class="btn btn-sm" id="add-task-btn">Add</button>
       </div>
@@ -2512,6 +2694,13 @@ window.openCase = async function (id) {
         <button type="button" class="tl-chip" data-type="meeting">🤝 Meeting</button>
       </div>
       <div id="notes-list">${notes.map((n) => noteRowHtml(n.body, new Date(n.created_at).toLocaleString("en-GB"), n.created_by)).join("") || '<div class="empty">No notes yet.</div>'}</div>
+    </div>
+    ${/* BACKEND-R4 §2/§3 — what the database recorded, as opposed to what anyone typed. */ ""}
+    <div style="margin-top:14px;" id="case-history">
+      <h3 style="font-size:14px;">History</h3>
+      <p class="panel-sub" style="margin:2px 0 6px;">Written by the database as the case progresses — stage changes, fee status, offer uploads, rate-end dates, protection status and reassignment, each with the person who made the change. Other field edits are in Change history below.</p>
+      <div class="tl-list" id="case-events-list">${eventTimelineHtml(events)}</div>
+      ${auditPanelHtml("case-audit", auditRows)}
     </div>
     <div class="action-bar">
       <button class="btn btn-sm" id="act-fee">💷 Email fee request</button>
@@ -2562,11 +2751,13 @@ window.openCase = async function (id) {
       <label id="gi-status-label" ${["purchase","first_time_buyer"].includes(c.case_kind) ? "" : 'class="hidden"'}>GI / buildings insurance<select name="gi_status">${[["not_discussed","Not discussed"],["quoted","Quoted"],["policy_taken","Policy taken"],["declined","Declined"],["not_applicable","Not applicable"]].map(([k,l]) => `<option value="${k}" ${k === (c.gi_status || "not_discussed") ? "selected" : ""}>${l}</option>`).join("")}</select></label>
       <label>Lead source<input name="lead_source" value="${esc(c.lead_source)}" placeholder="e.g. Google, referral, repeat"></label>
       <label>Introducer<select name="introducer_id"><option value="">— none —</option>${introOpts}</select></label>
-      <label>Assigned to<select name="assigned_to"><option value="">— unassigned —</option>${TEAM.map((p) => `<option value="${p.id}" ${p.id === c.assigned_to ? "selected" : ""}>${esc(staffName(p.id))}</option>`).join("")}</select></label>
+      <label>Assigned to<select name="assigned_to"><option value="">— unassigned —</option>${assigneeOptionsHtml(c.assigned_to)}</select></label>
     </form>
     </details>
     <div class="modal-actions">
-      <div>${id ? '<button class="btn btn-ghost btn-danger" id="del-case-btn">Delete case</button>' : ""}</div>
+      ${/* BACKEND-R4 §1 — deleting a case is Owner/Administrator only and RLS enforces it; an
+            adviser is simply never offered the button rather than shown a refusal. */ ""}
+      <div>${id && isAdminOrOwner() ? '<button class="btn btn-ghost btn-danger" id="del-case-btn">Delete case</button>' : ""}</div>
       <div class="right">
         <button class="btn" id="modal-cancel">Cancel</button>
         <button class="btn btn-primary" id="modal-save">Save</button>
@@ -2574,6 +2765,7 @@ window.openCase = async function (id) {
     </div>`;
   openModal();
   pushModalHistory("case", id); // BUILD 7a — Back closes this modal; reloads replace (no dup entry)
+  if (id) wireAuditPanel("case-audit", auditRows);
 
   const kindSel = $("#case-form").elements.case_kind;
   kindSel.onchange = () => $("#gi-status-label").classList.toggle("hidden", !["purchase", "first_time_buyer"].includes(kindSel.value));
@@ -2640,10 +2832,12 @@ window.openCase = async function (id) {
     } finally { saveBtn.disabled = false; }
   };
   if (id) {
-    $("#del-case-btn").onclick = async () => {
+    const delCaseBtn = $("#del-case-btn"); // absent for an adviser — see the modal-actions block above
+    if (delCaseBtn) delCaseBtn.onclick = async () => {
       const extra = c.stage === "completed" ? "⚠ This case is COMPLETED — deleting removes its fee/commission history from your records." : null;
       if (!confirmHardDelete("Delete this case?", extra)) return;
-      await db.from("cases").delete().eq("id", id);
+      const { error } = await db.from("cases").delete().eq("id", id);
+      if (error) return toast("Error: " + error.message);
       closeModal(); toast("Case deleted"); loadPipeline(); loadDashboard();
     };
     const submitNote = async () => {
@@ -2680,7 +2874,10 @@ window.openCase = async function (id) {
       b.classList.add("active");
       const inp = $("#new-note"); if (inp) inp.focus();
     });
-    $("#act-fee").onclick = (e) => queueEmail(id, c.client_id, "fee_request", c, e);
+    // Re-open on success so the fee badge and Fee status select show the "requested" the send just
+    // wrote — the same refresh "Mark fee paid" below already does. queueEmail returns true only
+    // when an email was actually queued (every guard and the confirm cancel return undefined).
+    $("#act-fee").onclick = async (e) => { if (await queueEmail(id, c.client_id, "fee_request", c, e)) openCase(id); };
     $("#act-review").onclick = (e) => queueEmail(id, c.client_id, "review_request", c, e);
     $("#act-reminder").onclick = (e) => queueEmail(id, c.client_id, "rate_end_reminder", c, e);
     $("#act-paid").onclick = async () => {
@@ -2930,7 +3127,17 @@ async function queueEmail(caseId, clientId, type, c, ev) {
     const { data: cl } = await db.from("clients").select("email,first_name").eq("id", clientId).single();
     if (!cl?.email) return toast("This client has no email address — add one first.");
     if (type === "fee_request" && !(c.broker_fee > 0)) return toast("Set a broker fee amount on the case first.");
-    if (type === "fee_request" && (!settings.bank_sort_code || !settings.bank_account_number)) return toast("Add your bank details in Settings first.");
+    /* BACKEND-R4 §6 — bank details are Owner-only AT THE DATABASE now, so `settings.bank_*` is
+       simply absent for an Administrator or an Adviser and this gate used to refuse them the
+       action outright. has_bank_details() is SECURITY DEFINER and returns the single boolean the
+       decision needs; the fee-request email body is composed server-side with the service role, so
+       no client ever needs the values. A failed RPC blocks rather than assumes — sending a fee
+       request with no account to pay into is the worse outcome. */
+    if (type === "fee_request") {
+      const { data: hasBank, error: bankErr } = await db.rpc("has_bank_details");
+      if (bankErr) return toast("Couldn't check the bank details just now — try again in a moment.");
+      if (!hasBank) return toast(isOwner() ? "Add your bank details in Settings first." : "The firm's bank details aren't set up yet — ask the Owner to add them in Settings.");
+    }
     if (type === "review_request" && !(settings.google_review_link || settings.review_platform_link)) return toast("Add your review link in Settings first.");
     if (type === "rate_end_reminder" && !c.rate_end_date) return toast("Set the rate end date on the case first.");
     if (!confirm(`Send ${EMAIL_LABEL[type].toLowerCase()} email to ${cl.email}?`)) return;
@@ -2938,8 +3145,22 @@ async function queueEmail(caseId, clientId, type, c, ev) {
     if (error) return toast("Error: " + error.message);
     if (type === "rate_end_reminder") await db.from("cases").update({ rate_reminder_queued_at: new Date().toISOString() }).eq("id", caseId);
     if (type === "review_request") await db.from("cases").update({ review_requested_at: new Date().toISOString() }).eq("id", caseId);
+    /* The fee request was the one type that sent and left no trace on the case: no fee_status, no
+       fee_requested_at. The case went on reading "Not requested", it stayed in the not-requested
+       half of the fee reporting, and nothing recorded that the client had been asked — so a second
+       adviser had no way to know an invoice was already out. Stamping fee_status also fires the
+       database's log_case_event trigger (fee_status_changed), so the request lands on the case
+       timeline and in the audit trail exactly like a manual change.
+       A fee already marked paid or waived is never walked backwards — only the timestamp is set. */
+    if (type === "fee_request") {
+      const patch = { fee_requested_at: new Date().toISOString() };
+      if (!c || !c.fee_status || c.fee_status === "not_requested") patch.fee_status = "requested";
+      const { error: feeErr } = await db.from("cases").update(patch).eq("id", caseId);
+      if (feeErr) toast("Email queued, but the fee status could not be updated: " + feeErr.message);
+    }
     const res = await runAutomation(true);
     toast(res && res.sent > 0 ? "Email sent ✓" : "Email queued — check Emails tab (is your Resend key set up?)");
+    return true;
   } finally {
     if (btn) btn.disabled = false;
   }
@@ -2988,7 +3209,7 @@ async function buildClientTimeline(clientId, cases) {
   try {
     [notes, events, appts, emails, sms, ffs, inbound] = await Promise.all([
       ids.length ? q(db.from("case_notes").select("body,created_at,case_id,created_by").in("case_id", ids)) : [],
-      ids.length ? q(db.from("case_events").select("event,detail,created_at,case_id").in("case_id", ids)) : [],
+      ids.length ? q(db.from("case_events").select("event,detail,created_at,case_id,actor").in("case_id", ids)) : [],
       q(db.from("appointments").select("title,starts_at,location,case_id,client_id").eq("client_id", clientId)),
       ids.length ? q(db.from("email_queue").select("email_type,status,subject,sent_at,created_at,case_id").in("case_id", ids)) : [],
       ids.length ? q(db.from("sms_queue").select("sms_type,status,sent_at,created_at,case_id").in("case_id", ids)) : [],
@@ -3010,7 +3231,8 @@ async function buildClientTimeline(clientId, cases) {
   // Inbound client emails (Outlook sync) — Priya's handover gap: correspondence must show both directions.
   inbound.forEach((m) => { push(m.received_at || m.created_at, "email", "📥", esc(m.subject || m.snippet || "Email from client") + ' <span class="tl-muted">· from client</span>', m.case_id); });
   ffs.filter((f) => f.status === "sent" || f.status === "submitted").forEach((f) => { push(f.submitted_at || f.created_at, "system", "📋", "Fact-find " + esc(f.status), f.case_id); });
-  events.forEach((ev) => { push(ev.created_at, "system", "⚙️", esc(ev.detail || ev.event || "Event"), ev.case_id); });
+  // BACKEND-R4 §2 — the trigger has always stamped who acted; the timeline just never selected it.
+  events.forEach((ev) => { push(ev.created_at, "system", "⚙️", esc(ev.detail || ev.event || "Event") + eventActorHtml(ev.actor), ev.case_id); });
   items.sort((a, b) => new Date(b.ts) - new Date(a.ts)); // newest first, robust across date-only + full ISO
   return items;
 }
@@ -3047,6 +3269,375 @@ function renderTimelineList(items, filter, cap, multiCase) {
   return html;
 }
 
+/* ---------- Change history (audit_log) — BACKEND-R4 §3 ----------
+   `audit_row()` writes an append-only audit_log row for every insert / update / delete on clients,
+   cases, case_tasks, case_notes, appointments, settings, profiles and introducers, carrying the
+   actor, a human summary and a field-level diff. It has no INSERT/UPDATE/DELETE policy and those
+   grants are revoked, so nothing here can be forged or erased through the app — the panel is a
+   read-only window onto it.
+   The table was created with the round-4 migration, so it genuinely holds nothing from before that
+   date; the empty state says so instead of implying nothing ever happened to the record. */
+const AUDIT_LOG_START = "2026-07-26";
+const AUDIT_COLS = "id,happened_at,actor,actor_label,action,table_name,row_id,case_id,client_id,summary,changes";
+const AUDIT_FETCH_MAX = 200;   // one indexed query per modal; the panel pages within what it fetched
+const AUDIT_PAGE = 20;         // rows shown before "Show more"
+const AUDIT_HIDDEN = "(hidden)";
+const auditStartLabel = () => fmtD(AUDIT_LOG_START);
+/* Any promise whose failure must not stop a modal rendering (a table blocked by RLS, a column that
+   isn't there yet) degrades to an empty list — the record still opens. */
+const softRows = (p) => Promise.resolve(p).then((r) => (r && r.data) || []).catch(() => []);
+// One indexed read of a record's history, newest first. `col` is "case_id" or "client_id".
+const loadAuditRows = (col, id) => softRows(db.from("audit_log").select(AUDIT_COLS).eq(col, id).order("happened_at", { ascending: false }).limit(AUDIT_FETCH_MAX));
+
+/* BACKEND-R4 §3 — audit_log rows for `settings` and `profiles` are Owner-only, and RLS already
+   removes them from everyone else's SELECT (that is the real control; a case/client history cannot
+   contain them anyway, since those rows carry no case_id or client_id). This filter is PRESENTATION
+   ONLY: it guarantees the panel can never render one even if a future query widens, and it means a
+   non-Owner sees a correctly-empty list rather than a broken one when the database filters them. */
+const AUDIT_OWNER_ONLY_TABLES = ["settings", "profiles"];
+function auditVisibleRows(rows) {
+  const all = Array.isArray(rows) ? rows : [];
+  return isOwner() ? all : all.filter((r) => AUDIT_OWNER_ONLY_TABLES.indexOf(r && r.table_name) === -1);
+}
+
+const auditFieldLabel = (f) => String(f).replace(/_/g, " ");
+// "(hidden)" is what the database itself stores for bank details/keys/tokens/passwords — the log
+// records THAT a sensitive value changed and deliberately never records the value.
+const AUDIT_HIDDEN_TITLE = "The database masks bank details, keys, tokens and passwords: it records that the value changed and never the value itself.";
+
+/* ---------- ONE standard for reading an audit value: on screen and in the evidence pack ----------
+   The pack resolved ids to names, humanised enums and wrote dates the way the rest of the app
+   writes them; the drawers printed the same rows raw ("assigned to  p2 → p3", "stage
+   application → offer", "rate end date  2031-06-30"), and in production those ids are uuids, so on
+   screen it read worse than the fixture suggests. Both renderers now go through the maps and the
+   resolver below, so there is one answer to "what does this value say". */
+
+// Coded value → the words the app already uses. STAGE_LABEL / KINDS / EMAIL_LABEL / ROLE_LABEL are
+// the app's own maps; the rest are the same words the case form and the badges show, spelled for a
+// document rather than for a badge.
+const PACK_ENUM = {
+  stage: STAGE_LABEL,
+  case_kind: Object.fromEntries(KINDS),
+  fee_status: { not_requested: "Not requested", requested: "Requested", paid: "Paid", waived: "Waived" },
+  protection_status: { not_discussed: "Not discussed", discussed: "Discussed", quoted: "Quoted", policy_taken: "Policy taken", declined: "Declined" },
+  gi_status: { not_discussed: "Not discussed", quoted: "Quoted", policy_taken: "Policy taken", declined: "Declined", not_applicable: "Not applicable" },
+  email_type: EMAIL_LABEL,
+  role: ROLE_LABEL,
+  status: { queued: "Queued", sent: "Sent", failed: "Failed", cancelled: "Cancelled", draft: "Draft", submitted: "Submitted" },
+};
+/* Fields whose value is an id, and what kind of thing the id points at. This list is a SHORTCUT,
+   not the guard. An insert or a delete records the WHOLE row rather than a diff, so a column
+   nobody enumerated here still arrives — `retention_source_case_id`, `nps_token` — and an earlier
+   pass removed the first of those from this list on the (true, but only-for-updates) reasoning
+   that nothing in the app writes it. auditFieldKind() below therefore falls back to the SHAPE of
+   the field name, and auditValueText() to the SHAPE of the value, so an id or a credential is
+   resolved or withheld wherever it turns up instead of only where it was listed. */
+const PACK_ID_FIELDS = {
+  assigned_to: "person", created_by: "person", actor: "person", staff_id: "person", claimed_by: "person",
+  client_id: "client", case_id: "case", introducer_id: "introducer",
+};
+/* A field name that says it holds a credential. `key` on its own is deliberately NOT one: on a
+   settings row that column holds the setting's NAME, which is the most useful thing on the row. */
+const AUDIT_SECRET_FIELD_RE = /token|secret|password|passphrase|credential|api_key|_key$/i;
+/* A value that can only be an internal reference: a uuid, or a long unbroken hex digest. Nothing a
+   person writes — a name, a lender, a product, a note, an address, an email, a path — takes either
+   shape, so there are no false positives to lose real detail to. In production every id in this
+   database IS a uuid, so this catches an id-bearing column whatever it happens to be called. */
+const AUDIT_OPAQUE_VALUE_RE = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32,})$/i;
+const AUDIT_REF_HIDDEN = "(reference not shown)";
+const AUDIT_SECRET_HIDDEN = "(credential — not shown)";
+const AUDIT_REF_TITLE = "An internal database reference. It names nothing a reader can look up, so it is withheld rather than printed.";
+function auditFieldKind(field) {
+  const f = String(field || "");
+  if (PACK_ID_FIELDS[f]) return PACK_ID_FIELDS[f];
+  if (AUDIT_SECRET_FIELD_RE.test(f)) return "secret";
+  if (/(^|_)case_id$/.test(f)) return "case";
+  if (/(^|_)client_id$/.test(f)) return "client";
+  if (/(^|_)introducer_id$/.test(f)) return "introducer";
+  if (/(^|_)(by|to|actor|staff|adviser|user|owner)_id$/.test(f)) return "person";
+  if (/(^|_)id$/.test(f)) return "ref";
+  return null;
+}
+/* `ctx` is what the surrounding screen or document can name. The pack passes its case, its client
+   and the introducers it fetched; the drawers pass nothing, and an id they cannot name is
+   withheld rather than printed — an id a reader cannot look up is not evidence of anything. */
+function auditIdText(kind, id, ctx) {
+  ctx = ctx || {};
+  const where = ctx.where || "here";
+  if (id == null || id === "") return "—";
+  // profileName() covers everyone with a profile row, including a colleague moved to "No access".
+  if (kind === "person") return profileName(id) || "A colleague no longer in the system";
+  if (kind === "client") return id === ctx.clientId ? (ctx.clientName || "This client") : `A different client (not named ${where})`;
+  if (kind === "case") return id === ctx.caseId ? (ctx.caseLabel || "This case") : `A different case (not named ${where})`;
+  if (kind === "introducer") return (ctx.introById || {})[id] || "An introducer no longer on file";
+  if (kind === "secret") return AUDIT_SECRET_HIDDEN;
+  return AUDIT_REF_HIDDEN;
+}
+// One value, as a person would read it: names for ids, words for enums, dates the way the rest of
+// the app writes them, and nothing raw left over.
+function auditValueText(field, v, ctx) {
+  if (v === AUDIT_HIDDEN) return AUDIT_HIDDEN;
+  if (v === null || v === undefined || v === "") return "—";
+  if (typeof v === "object") return JSON.stringify(v);
+  const kind = auditFieldKind(field);
+  if (kind) return auditIdText(kind, v, ctx);
+  const map = PACK_ENUM[field];
+  if (map && map[v]) return map[v];
+  const s = String(v);
+  if (/^\d{4}-\d{2}-\d{2}T/.test(s)) return new Date(s).toLocaleString("en-GB");
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return fmtD(s);
+  if (AUDIT_OPAQUE_VALUE_RE.test(s)) return AUDIT_REF_HIDDEN;
+  return s;
+}
+/* True when the database masked this entry rather than recording it. BACKEND-R4 §3 masks a
+   sensitive settings key on insert, update and delete ALIKE — an update stores {old,new} both
+   "(hidden)", an insert/delete stores the whole row with "(hidden)" in place of the value. */
+function auditIsMasked(v, isDiff) {
+  return isDiff && v && typeof v === "object" ? (v.old === AUDIT_HIDDEN && v.new === AUDIT_HIDDEN) : v === AUDIT_HIDDEN;
+}
+function auditValueHtml(field, v) {
+  const t = auditValueText(field, v);
+  if (t === AUDIT_HIDDEN) return `<span class="audit-hidden" title="${esc(AUDIT_HIDDEN_TITLE)}">${esc(AUDIT_HIDDEN)}</span>`;
+  if (t === "—") return '<span class="audit-nil">—</span>';
+  if (t === AUDIT_REF_HIDDEN || t === AUDIT_SECRET_HIDDEN) return `<span class="audit-hidden" title="${esc(AUDIT_REF_TITLE)}">${esc(t)}</span>`;
+  return esc(t);
+}
+// changes is {field:{old,new}} for an update and the whole row for an insert/delete.
+function auditChangesHtml(entry) {
+  const ch = entry && entry.changes;
+  if (!ch || typeof ch !== "object" || !Object.keys(ch).length) return '<div class="empty">No field detail recorded.</div>';
+  const isDiff = (entry.action === "update");
+  const rows = Object.keys(ch).map((f) => {
+    const v = ch[f];
+    const lbl = `<th>${esc(auditFieldLabel(f))}</th>`;
+    /* The masking is the same on all three actions, so it reads the same on all three. Before
+       this, only an update took this sentence; an insert or a delete of a masked settings key
+       printed the database's bare "(hidden)" marker instead, for the identical fact. */
+    if (auditIsMasked(v, isDiff)) {
+      return `<tr>${lbl}<td colspan="3"><span class="audit-hidden" title="${esc(AUDIT_HIDDEN_TITLE)}">changed — value not recorded (sensitive)</span></td></tr>`;
+    }
+    if (isDiff && v && typeof v === "object") {
+      return `<tr>${lbl}<td>${auditValueHtml(f, v.old)}</td><td class="audit-arrow">→</td><td>${auditValueHtml(f, v.new)}</td></tr>`;
+    }
+    return `<tr>${lbl}<td colspan="3">${auditValueHtml(f, v)}</td></tr>`;
+  }).join("");
+  return `<table class="audit-changes">${rows}</table>`;
+}
+function auditEntryHtml(r) {
+  const when = r.happened_at ? new Date(r.happened_at).toLocaleString("en-GB") : "";
+  return `<details class="audit-entry" data-table="${esc(r.table_name)}" data-action="${esc(r.action)}">
+      <summary><span class="audit-act audit-${esc(r.action)}">${esc(r.action)}</span><span class="audit-sum">${esc(r.summary || "")}</span>${authorChipHtml(r.actor)}<span class="audit-when">${esc(when)}</span></summary>
+      ${auditChangesHtml(r)}
+    </details>`;
+}
+function renderAuditList(rows, cap) {
+  const vis = auditVisibleRows(rows);
+  if (!vis.length) {
+    return `<div class="empty">No changes recorded for this record. The audit trail began on ${esc(auditStartLabel())} — anything done before that date is not in it.</div>`;
+  }
+  let html = vis.slice(0, cap).map(auditEntryHtml).join("");
+  if (vis.length > cap) html += `<button type="button" class="btn btn-sm audit-more">Show more (${vis.length - cap})</button>`;
+  else if ((rows || []).length >= AUDIT_FETCH_MAX) html += `<div class="audit-note">Showing the most recent ${vis.length} changes.</div>`;
+  return html;
+}
+/* A collapsed drawer, so an ordinary edit isn't buried under a forensic log. `domId` is unique per
+   modal so the case and client panels can never collide. */
+function auditPanelHtml(domId, rows) {
+  const vis = auditVisibleRows(rows);
+  return `<details class="audit-panel" id="${domId}">
+      <summary>Change history${vis.length ? ` <span class="audit-count">${vis.length}</span>` : ""}</summary>
+      <p class="panel-sub audit-intro">Every insert, update and delete the database recorded against this record, newest first. Written by the audit trigger — it cannot be edited or erased through the app. The log began on ${esc(auditStartLabel())}.</p>
+      <div class="audit-list" id="${domId}-list">${renderAuditList(rows, AUDIT_PAGE)}</div>
+    </details>`;
+}
+function wireAuditPanel(domId, rows) {
+  let cap = AUDIT_PAGE;
+  const wire = () => {
+    const list = $("#" + domId + "-list");
+    if (!list) return;
+    const more = list.querySelector(".audit-more");
+    if (more) more.onclick = () => { cap += AUDIT_PAGE; list.innerHTML = renderAuditList(rows, cap); wire(); };
+  };
+  wire();
+}
+
+/* ---------- Change history — the WHOLE log (BACKEND-R4 §3), on Settings ----------
+   Every other audit reader in this file is keyed on case_id or client_id. audit_log rows for
+   `settings` and `profiles` carry neither — a bank-detail edit or a role change belongs to no
+   client's file — so before this panel existed those entries could not be rendered anywhere in the
+   app, by anybody, including the Owner. This is the reader for the whole table: filter by what
+   changed, by who and by date, newest first, a page at a time, each row expandable to the
+   field-level before/after.
+
+   WHO MAY SEE THE settings/profiles ROWS IS DECIDED BY THE DATABASE. The audit_log SELECT policy
+   is "staff, except rows where table_name in ('settings','profiles'), which are Owner-only" — that
+   is the real control and it holds whatever this file does. Hiding the panel from a non-Owner is
+   PRESENTATION: it keeps them out of a view whose headline content the database would silently
+   withhold, which would look broken rather than restricted. */
+const CH_PAGE = 25;            // rows per page
+const CH_ACTOR_SCAN = 500;     // most recent rows scanned to build the "Who" list
+const CH_ALL = "all";
+const CH_SYSTEM = "__system__"; // actor IS NULL — the 8am cron, an edge function, the service role
+/* "What changed", grouped the way an Owner thinks about it rather than by table name.
+   Third element = the table_name values the group selects, null = no filter. */
+const CH_GROUPS = [
+  [CH_ALL, "Everything", null],
+  ["settings", "Settings", ["settings"]],
+  ["profiles", "Logins & roles", ["profiles"]],
+  ["clients", "Clients", ["clients"]],
+  ["cases", "Cases", ["cases"]],
+  ["work", "Tasks, notes & appointments", ["case_tasks", "case_notes", "appointments"]],
+  ["introducers", "Introducers", ["introducers"]],
+];
+// What each audit_log.table_name is called in front of a person.
+const AUDIT_TABLE_LABEL = {
+  settings: "Setting", profiles: "Login", clients: "Client", cases: "Case",
+  case_tasks: "Task", case_notes: "Note", appointments: "Appointment", introducers: "Introducer",
+};
+const auditTableLabel = (t) => AUDIT_TABLE_LABEL[t] || String(t || "record").replace(/_/g, " ");
+let chState = { group: CH_ALL, actor: CH_ALL, from: "", to: "", page: 0 };
+// The "To" box is inclusive of the day the user picked, so the query runs to the start of the next.
+function chNextDay(ymd) {
+  const d = new Date(ymd + "T12:00:00");
+  if (isNaN(d)) return ymd;
+  d.setDate(d.getDate() + 1);
+  return localDateStr(d);
+}
+/* One row of the whole-log view. Same expandable field-level detail as the case and client
+   drawers (auditChangesHtml, which already renders the database's "(hidden)" masking of bank
+   details, keys and tokens as "changed — value not recorded"), plus the record type and the actor,
+   which the per-record drawers never needed. */
+/* The trigger's summary opens with the actor's name, and this view shows the actor in its own
+   filterable column, so the prefix is dropped rather than printed twice. Anything that does not
+   start with the name beside it is left exactly as the database wrote it. */
+function chSummaryText(r) {
+  const s = String((r && r.summary) || "");
+  const who = (r && r.actor_label) || "";
+  return who && s.indexOf(who + " ") === 0 ? s.slice(who.length + 1) : s;
+}
+function chEntryHtml(r) {
+  const when = r.happened_at ? new Date(r.happened_at).toLocaleString("en-GB") : "";
+  return `<details class="audit-entry" data-table="${esc(r.table_name)}" data-action="${esc(r.action)}">
+      <summary><span class="audit-act audit-${esc(r.action)}">${esc(r.action)}</span><span class="audit-tbl">${esc(auditTableLabel(r.table_name))}</span><span class="audit-sum">${esc(chSummaryText(r))}</span><span class="audit-who">${esc(r.actor_label || actorName(r.actor))}</span><span class="audit-when">${esc(when)}</span></summary>
+      ${auditChangesHtml(r)}
+    </details>`;
+}
+const chFiltered = () => chState.group !== CH_ALL || chState.actor !== CH_ALL || !!chState.from || !!chState.to;
+async function renderChangeHistory() {
+  const list = $("#ch-list"), pager = $("#ch-pager");
+  if (!list) return;
+  if (pager) pager.innerHTML = "";
+  const start = chState.page * CH_PAGE;
+  let data, count, error;
+  /* Settings is a working page for the Owner; a log that cannot be read must cost them the panel,
+     never the page. Anything the query throws is shown as a retryable error in this box. */
+  try {
+    let q = db.from("audit_log").select(AUDIT_COLS, { count: "exact" });
+    const grp = CH_GROUPS.find((g) => g[0] === chState.group);
+    if (grp && grp[2]) q = q.in("table_name", grp[2]);
+    if (chState.actor === CH_SYSTEM) q = q.is("actor", null);
+    else if (chState.actor !== CH_ALL) q = q.eq("actor", chState.actor);
+    if (chState.from) q = q.gte("happened_at", chState.from);
+    if (chState.to) q = q.lt("happened_at", chNextDay(chState.to));
+    ({ data, count, error } = await q
+      .order("happened_at", { ascending: false }).order("id", { ascending: false })
+      .range(start, start + CH_PAGE - 1));
+  } catch (e) { error = e; }
+  if (error) { renderLoadError("#ch-list", error, renderChangeHistory); return; }
+  /* Belt and braces: the SELECT policy has already removed any settings/profiles row a non-Owner
+     could not see, so for them this filter removes nothing that arrived. PRESENTATION, not a
+     control — it exists so the panel can never render one even if a future query widens. */
+  const rows = auditVisibleRows(data || []);
+  const total = count == null ? rows.length : count;
+  // Never strand the reader past the end of a log that shrank under them — go back to page 1.
+  if (!rows.length && start > 0) { chState.page = 0; return renderChangeHistory(); }
+  if (!rows.length) {
+    list.innerHTML = `<div class="empty">${chFiltered()
+      ? `No changes match these filters. The change history began on ${esc(auditStartLabel())} — anything done before that date is not in it.`
+      : `Nothing recorded yet. The change history began on ${esc(auditStartLabel())} — anything done before that date is not in it.`}</div>`;
+    return;
+  }
+  list.innerHTML = rows.map(chEntryHtml).join("");
+  if (!pager) return;
+  const pages = Math.max(1, Math.ceil(total / CH_PAGE));
+  pager.innerHTML = `<button type="button" class="btn btn-sm" id="ch-prev"${chState.page === 0 ? " disabled" : ""}>← Newer</button>
+    <span class="ch-count">${start + 1}–${start + rows.length} of ${total} change${total === 1 ? "" : "s"} · page ${chState.page + 1} of ${pages}</span>
+    <button type="button" class="btn btn-sm" id="ch-next"${chState.page + 1 >= pages ? " disabled" : ""}>Older →</button>`;
+  const prev = $("#ch-prev"), next = $("#ch-next");
+  if (prev) prev.onclick = () => { if (chState.page > 0) { chState.page--; renderChangeHistory(); } };
+  if (next) next.onclick = () => { if (chState.page + 1 < pages) { chState.page++; renderChangeHistory(); } };
+}
+async function loadChangeHistory() {
+  const panel = $("#change-history-panel");
+  if (!panel) return;
+  panel.classList.toggle("hidden", !isOwner());
+  if (!isOwner()) return;
+  const tSel = $("#ch-table");
+  if (tSel && !tSel.options.length) {
+    tSel.innerHTML = CH_GROUPS.map((g) => `<option value="${esc(g[0])}">${esc(g[1])}</option>`).join("");
+    tSel.onchange = () => { chState.group = tSel.value; chState.page = 0; renderChangeHistory(); };
+  }
+  const aSel = $("#ch-actor");
+  if (aSel && !aSel.options.length) {
+    /* Built from the log itself, not from PROFILES: actor_label is a name snapshot that
+       deliberately survives the profile being deleted (§3), so someone who has since left the
+       firm is still selectable here. Scanned over the most recent CH_ACTOR_SCAN rows. */
+    let scan = [];
+    try {
+      scan = await softRows(db.from("audit_log").select("actor,actor_label").order("happened_at", { ascending: false }).limit(CH_ACTOR_SCAN));
+    } catch (e) { scan = []; } // a log that can't be scanned costs the Who list, not the page
+    const seen = {}, opts = [];
+    scan.forEach((r) => {
+      const key = r.actor || CH_SYSTEM;
+      if (seen[key]) return;
+      seen[key] = 1;
+      opts.push([key, r.actor ? (r.actor_label || actorName(r.actor)) : "System (automation)"]);
+    });
+    opts.sort((a, b) => String(a[1]).localeCompare(String(b[1])));
+    aSel.innerHTML = `<option value="${CH_ALL}">Anyone</option>` + opts.map((o) => `<option value="${esc(o[0])}">${esc(o[1])}</option>`).join("");
+    aSel.onchange = () => { chState.actor = aSel.value; chState.page = 0; renderChangeHistory(); };
+  }
+  const from = $("#ch-from"), to = $("#ch-to"), clear = $("#ch-clear");
+  if (from) from.onchange = () => { chState.from = from.value; chState.page = 0; renderChangeHistory(); };
+  if (to) to.onchange = () => { chState.to = to.value; chState.page = 0; renderChangeHistory(); };
+  if (clear) clear.onclick = () => {
+    chState = { group: CH_ALL, actor: CH_ALL, from: "", to: "", page: 0 };
+    if (tSel) tSel.value = CH_ALL;
+    if (aSel) aSel.value = CH_ALL;
+    if (from) from.value = "";
+    if (to) to.value = "";
+    renderChangeHistory();
+  };
+  await renderChangeHistory();
+}
+/* Every Owner-only action that writes an audit row — saving a setting, changing a role, creating a
+   login, adding an introducer — happens ON the Settings page, directly above this panel, and none
+   of them refreshed it: the log only re-read itself when the page loaded, so the Owner could do
+   all four and watch the identical top row throughout. Navigating away and back showed the lot.
+
+   This re-runs the query the Owner is ALREADY looking at. chState is left untouched, so the group,
+   the who, the date range and the page they chose all survive the refresh — a write must not
+   quietly throw their filters away and hand them back an unfiltered log. No-op when the panel
+   isn't on screen (a non-Owner never has it) so callers don't have to check. */
+async function refreshChangeHistory() {
+  const panel = $("#change-history-panel");
+  if (!panel || panel.classList.contains("hidden") || !isOwner() || !$("#ch-list")) return;
+  await renderChangeHistory();
+}
+
+/* The case modal's own event log: the curated human timeline log_case_event writes, with the actor
+   the trigger stamped on each row. The client modal shows the same rows merged into its Timeline. */
+function eventTimelineHtml(events) {
+  if (!events || !events.length) return '<div class="empty">No events recorded on this case yet.</div>';
+  return events.map((ev) => `<div class="tl-row" data-cat="system" data-ts="${esc(ev.created_at)}">
+      <span class="tl-ic">⚙️</span>
+      <div class="tl-main">
+        <div class="tl-title">${esc(ev.detail || ev.event || "Event")}${eventActorHtml(ev.actor)}</div>
+        <div class="tl-meta"><span class="tl-case">${esc(String(ev.event || "").replace(/_/g, " "))}</span><span class="tl-ago">${esc(tlWhen(ev.created_at))}</span></div>
+      </div>
+    </div>`).join("");
+}
+
 /* T1-2 — `focus` ("email" | "phone") and `attempted` come from a failed message's "Fix contact"
    link: the contact section is opened and the offending field focused, and the address the send
    ACTUALLY used is printed next to it. Without that, the modal header shows the corrected address
@@ -3056,6 +3647,7 @@ window.openClient = async function (id, focus, attempted) {
   let cases = [];
   let tlItems = [];
   let dupOf = null; // { id, name } — set when this client is half of a flagged duplicate pair
+  let auditRows = []; // audit_log for this client AND everything hanging off their cases
   if (id) {
     const [{ data: cl, error: clErr }, { data: cs }] = await Promise.all([
       db.from("clients").select("*").eq("id", id).single(),
@@ -3063,7 +3655,9 @@ window.openClient = async function (id, focus, attempted) {
     ]);
     if (clErr || !cl) return toast("Client not found — it may have been deleted or you don't have access.");
     c = cl; cases = cs || [];
-    tlItems = await buildClientTimeline(id, cases);
+    // audit_row() denormalises client_id onto the case/task/note/appointment rows too, so ONE
+    // query returns the whole record's forensic history. Soft-failing: no history ≠ no modal.
+    [tlItems, auditRows] = await Promise.all([buildClientTimeline(id, cases), loadAuditRows("client_id", id)]);
     // BUILD 7d (defect 31) — reuse Data Health's existing find_duplicate_clients RPC (no new
     // detection engine) so a duplicate spotted here, on the client record itself, can go straight
     // into the same merge modal Data Health uses — merge shouldn't require a detour via Data Health
@@ -3110,11 +3704,17 @@ window.openClient = async function (id, focus, attempted) {
       </div>
       <div class="tl-filters" id="tl-filters">${TL_CATS.map(([k, l]) => `<button type="button" class="tl-chip tl-filter ${k === "all" ? "active" : ""}" data-cat="${k}">${esc(l)}</button>`).join("")}</div>
       <div class="tl-list" id="tl-list">${renderTimelineList(tlItems, "all", 100, multiCase)}</div>
+      ${auditPanelHtml("client-audit", auditRows)}
     </div>` : "";
   $("#modal").innerHTML = `
     <h3>${id ? "Client details" : "New client"}</h3>
     ${id && (c.phone || c.email) ? `<p class="panel-sub client-contact-line" style="margin-top:-8px;display:flex;gap:16px;flex-wrap:wrap;">${c.phone ? "📞 " + telLink(c.phone) : ""}${c.email ? "✉️ " + mailLink(c.email) : ""}</p>` : ""}
-    ${dupOf ? `<p class="dup-hint">Possible duplicate of <strong>${esc(dupOf.name)}</strong> — <a href="javascript:void(0)" onclick="openMergeClients('${esc(id)}','${esc(dupOf.id)}','${jsArg(dupOf.reason)}',${Number(dupOf.score) || 0})">Review &amp; merge</a></p>` : ""}
+    ${/* A merge DELETES the absorbed client, so the merge tool is Owner/Administrator only for the
+          same reason Delete client is — RLS refuses the delete for an adviser. An adviser still
+          gets the duplicate WARNING (useful), just not the action. */ ""}
+    ${dupOf ? (isAdminOrOwner()
+      ? `<p class="dup-hint">Possible duplicate of <strong>${esc(dupOf.name)}</strong> — <a href="javascript:void(0)" onclick="openMergeClients('${esc(id)}','${esc(dupOf.id)}','${jsArg(dupOf.reason)}',${Number(dupOf.score) || 0})">Review &amp; merge</a></p>`
+      : `<p class="dup-hint">Possible duplicate of <strong>${esc(dupOf.name)}</strong> — ask an Administrator or the Owner to merge them.</p>`) : ""}
     ${timelineHtml}
     <details class="case-details client-details" ${id && !focus ? "" : "open"}>
       <summary>Client details</summary>
@@ -3149,7 +3749,8 @@ window.openClient = async function (id, focus, attempted) {
         <span class="badge blue">${STAGE_LABEL[x.stage] || x.stage}</span></div>`).join("") || '<div class="empty">No cases yet.</div>'}
     </div>` : ""}
     <div class="modal-actions">
-      <div>${id ? '<button class="btn btn-ghost btn-danger" id="del-client-btn">Delete client</button>' : ""}</div>
+      ${/* BACKEND-R4 §1 — deleting a client is Owner/Administrator only, enforced by RLS. */ ""}
+      <div>${id && isAdminOrOwner() ? '<button class="btn btn-ghost btn-danger" id="del-client-btn">Delete client</button>' : ""}</div>
       <div class="right">
         <button class="btn" id="modal-cancel">Cancel</button>
         <button class="btn btn-primary" id="modal-save">Save</button>
@@ -3169,6 +3770,7 @@ window.openClient = async function (id, focus, attempted) {
     }
   }
   pushModalHistory("client", id); // BUILD 7a — Back closes this modal
+  if (id) wireAuditPanel("client-audit", auditRows);
   $("#modal-cancel").onclick = closeModalGuarded; // defect 2 — Cancel is a "leave" path: it must warn about unsaved edits too
   $("#modal-save").onclick = async () => {
     const f = new FormData($("#client-form"));
@@ -3277,13 +3879,15 @@ window.openClient = async function (id, focus, attempted) {
     const addBtnEl = $("#tl-add-btn"); if (addBtnEl) addBtnEl.onclick = submitTlNote;
     const tlNoteEl = $("#tl-note"); if (tlNoteEl) tlNoteEl.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submitTlNote(); } });
 
-    $("#del-client-btn").onclick = async () => {
+    const delClientBtn = $("#del-client-btn"); // absent for an adviser — see the modal-actions block above
+    if (delClientBtn) delClientBtn.onclick = async () => {
       const completed = cases.filter((x) => x.stage === "completed").length;
       const extra = completed
         ? `⚠ This client has ${completed} COMPLETED case${completed === 1 ? "" : "s"} with regulated records that will be permanently destroyed.`
         : null;
       if (!confirmHardDelete("Delete this client and all their cases?", extra)) return;
-      await db.from("clients").delete().eq("id", id);
+      const { error } = await db.from("clients").delete().eq("id", id);
+      if (error) return toast("Error: " + error.message);
       closeModal(); toast("Client deleted"); loadClients();
     };
   }
@@ -4189,7 +4793,7 @@ window.openAppt = async function (id, presets = {}) {
       <label>Date<input name="date" type="date" required value="${dateVal}"></label>
       <label>Time<input name="time" type="time" required value="${timeVal}"></label>
       <label>Duration (mins)<input name="mins" type="number" value="${mins}"></label>
-      <label>Who<select name="staff_id">${TEAM.map((p) => `<option value="${p.id}" ${p.id === (a.staff_id || (ME && ME.id)) ? "selected" : ""}>${esc(staffName(p.id))}</option>`).join("")}</select></label>
+      <label>Who<select name="staff_id">${a.staff_id ? assigneeOptionsHtml(a.staff_id) : assigneeOptionsHtml(defaultAssignee(null))}</select></label>
       <label class="full">Client<select name="client_id"><option value="">— none —</option>${(clients || []).map((cl) => `<option value="${cl.id}" ${cl.id === a.client_id ? "selected" : ""}>${esc([cl.last_name, cl.first_name].filter(Boolean).join(", "))}</option>`).join("")}</select></label>
       <label class="full">Location<input name="location" value="${esc(a.location || "")}" placeholder="Office / phone / Teams"></label>
       <label class="full">Notes<textarea name="notes" rows="2">${esc(a.notes || "")}</textarea></label>
@@ -4252,21 +4856,124 @@ window.openAppt = async function (id, presets = {}) {
   };
 };
 
-/* ---------- Evidence pack ---------- */
+/* ---------- Evidence pack ----------
+   This is a document sent to a file reviewer or a regulator, so nothing in it may be an internal
+   identifier or a database enum: every id resolves to the name the app shows on screen, every
+   coded value is printed in the words the app shows on screen, and where something genuinely
+   cannot be recovered the pack says so in a sentence instead of printing a row id. */
+/* PACK_ENUM (coded value → the app's own words) and PACK_ID_FIELDS (which fields hold an id), plus
+   the resolver that reads a value through them, live with the audit renderers further up this
+   file: the on-screen change history and this document show the same rows and must say the same
+   thing about them. See auditValueText / auditIdText / auditFieldKind. */
+/* An insert or a delete records the whole row. The primary key and the parent linkage are internal
+   plumbing — a reviewer already knows which case this pack is about — so they are dropped rather
+   than printed as ids. Everything with meaning is kept and spelled out. */
+const PACK_INTERNAL_FIELDS = ["id", "case_id", "client_id", "updated_at", "last_seen_at", "claimed_at"];
+const PACK_VERB = { insert: "Created", update: "Changed", delete: "Deleted" };
+// The trigger-written case_events detail for these events is "<old> → <new>" in raw enum text.
+const PACK_EVENT_FIELD = {
+  stage_changed: "stage", fee_status_changed: "fee_status",
+  protection_status_changed: "protection_status", rate_end_date_changed: "rate_end_date",
+};
 async function buildEvidencePack(caseId) {
   toast("Building evidence pack…");
-  const [{ data: c }, { data: notes }, { data: tasks }, { data: events }, { data: emails }] = await Promise.all([
+  const [{ data: c }, { data: notes }, { data: tasks }, { data: events }, { data: emails }, auditAll, intros] = await Promise.all([
     db.from("cases").select("*, clients(*), introducers(name)").eq("id", caseId).single(),
     db.from("case_notes").select("*").eq("case_id", caseId).order("created_at"),
     db.from("case_tasks").select("*").eq("case_id", caseId).order("created_at"),
     db.from("case_events").select("*").eq("case_id", caseId).order("created_at"),
     db.from("email_queue").select("email_type,status,to_email,subject,sent_at,created_at").eq("case_id", caseId).order("created_at"),
+    loadAuditRows("case_id", caseId), // soft-fails: a blocked audit_log must not stop the pack
+    softRows(db.from("introducers").select("id,name")), // so an introducer_id can be named
   ]);
+  const audit = auditVisibleRows(auditAll);
   if (!c) return toast("Could not load case");
   const cl = c.clients || {};
   const name = [cl.first_name, cl.last_name].filter(Boolean).join(" ");
   const dt = (d) => (d ? new Date(d).toLocaleString("en-GB") : "—");
   const row = (k, v) => `<tr><td>${k}</td><td><strong>${esc(v ?? "—")}</strong></td></tr>`;
+
+  /* ---- ids → names. An id a reviewer cannot look up is not evidence of anything. ---- */
+  const introById = {};
+  (intros || []).forEach((i) => { introById[i.id] = i.name; });
+  const kindText = (KINDS.find((x) => x[0] === c.case_kind) || [])[1] || c.case_kind || "case";
+  const thisCaseLabel = (name ? name + " — " : "") + kindText;
+  // profileName() covers everyone with a profile row, including a colleague moved to "No access".
+  const packPerson = (id, whenAbsent) => (!id ? (whenAbsent || "Not recorded") : (profileName(id) || "A colleague no longer in the system"));
+  /* What this document can name, handed to the shared resolver. Everything it cannot name — an id
+     pointing at another case or client, an unlisted id column, a token — is withheld by
+     auditValueText rather than printed raw. */
+  const packCtx = { where: "in this pack", caseId: c.id, caseLabel: thisCaseLabel, clientId: cl.id, clientName: name || "This client", introById };
+  // One value, as a person would read it: names for ids, words for enums, dates for timestamps.
+  const packValue = (field, v) => auditValueText(field, v, packCtx);
+  // audit_log.changes, flattened for print. "(hidden)" is the database's own masking of bank
+  // details/keys/tokens — the value was never recorded, only the fact that it changed.
+  const changesText = (e) => {
+    const ch = (e && e.changes) || {};
+    const isDiff = e.action === "update";
+    const ks = Object.keys(ch).filter((f) => isDiff || PACK_INTERNAL_FIELDS.indexOf(f) === -1);
+    if (!ks.length) return isDiff ? "—" : "The record as it stood — no further detail recorded.";
+    return ks.map((f) => {
+      const v = ch[f], lbl = f.replace(/_/g, " ");
+      // Masked on insert, update and delete alike (§3), so the sentence is the same on all three.
+      if (auditIsMasked(v, isDiff)) return lbl + ": changed (value not recorded — sensitive)";
+      if (isDiff && v && typeof v === "object") return lbl + ": " + packValue(f, v.old) + " → " + packValue(f, v.new);
+      return lbl + ": " + packValue(f, v);
+    }).join("; ");
+  };
+  /* The summary the trigger wrote is `<who> <verb> <table> "<label>"`, where <label> is a snapshot
+     of the row's name AT THE TIME. On a cascade delete the parent was already gone when the label
+     was built, so it fell back to the row id — "deleted cases \"ca48\"" tells a reviewer nothing.
+     The "What" column is therefore recomposed from the row's own columns: the record type in
+     words, and the subject's name resolved NOW wherever it still can be. Where it genuinely cannot
+     be recovered the pack says so in words. The actor is dropped from the sentence because the
+     Who column beside it already carries it. */
+  const quotedLabel = (s) => { const m = /"([^"]*)"/.exec(String(s || "")); return m ? m[1] : null; };
+  /* Last resort before giving up on a name: an insert/delete records the whole row, so the row's
+     own name-bearing column is still there even when the trigger's label fell back to the id. */
+  const PACK_NAME_COLS = ["title", "name", "full_name", "key", "subject", "body"];
+  function subjectFromChanges(e) {
+    if (e.action === "update") return null;              // an update's changes are diffs, not a row
+    const ch = e.changes || {};
+    for (let i = 0; i < PACK_NAME_COLS.length; i++) {
+      const v = ch[PACK_NAME_COLS[i]];
+      if (typeof v === "string" && v.trim()) return v.trim().length > 80 ? v.trim().slice(0, 79) + "…" : v.trim();
+    }
+    const person = [ch.first_name, ch.last_name].filter((x) => typeof x === "string" && x.trim()).join(" ").trim();
+    return person || null;
+  }
+  function packSubject(e) {
+    const q = quotedLabel(e.summary);
+    if (q && q !== e.row_id) return q;                          // the trigger caught a real name
+    if (e.table_name === "cases" && e.row_id === c.id) return thisCaseLabel;
+    if (e.table_name === "clients" && e.row_id === cl.id) return name || null;
+    if (e.table_name === "profiles") return profileName(e.row_id) || null;
+    if (e.table_name === "introducers") return introById[e.row_id] || null;
+    if (e.table_name === "settings") return e.row_id || null;   // a settings key IS its name
+    return subjectFromChanges(e);
+  }
+  function packWhat(e) {
+    const verb = PACK_VERB[e.action] || "Changed";
+    const noun = auditTableLabel(e.table_name).toLowerCase();
+    const subj = packSubject(e);
+    if (subj) return `${verb} the ${noun} “${subj}”`;
+    const why = e.table_name === "cases"
+      ? "the client record had already been deleted, so this case could not be named"
+      : "no name was recorded for it and the record can no longer be looked up";
+    return `${verb} a ${noun} — ${why}`;
+  }
+  // "fact_find → decision_in_principle" is enum text; the timeline shows the same words as the app.
+  function packEventDetail(ev) {
+    const d = ev.detail == null ? "" : String(ev.detail);
+    const f = PACK_EVENT_FIELD[ev.event];
+    if (f && d.indexOf("→") !== -1) return d.split("→").map((s) => packValue(f, s.trim())).join(" → ");
+    if (ev.event === "case_created" && /^Stage:\s*/.test(d)) return "Stage: " + packValue("stage", d.replace(/^Stage:\s*/, ""));
+    return d;
+  }
+  // Who produced this document, and in what capacity — a pack with no provenance is not evidence.
+  const generatedBy = (ME && (ME.full_name || ME.email)) || (($("#user-email") || {}).textContent) || "Unknown user";
+  const generatedRole = ROLE_LABEL[MY_ROLE] || MY_ROLE;
+
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Evidence pack — ${esc(name)}</title>
     <style>
       body{font-family:Arial,sans-serif;color:#222;max-width:800px;margin:30px auto;font-size:13px;line-height:1.5;}
@@ -4276,7 +4983,7 @@ async function buildEvidencePack(caseId) {
     </style></head><body>
     <button class="noprint" onclick="window.print()" style="padding:8px 16px;">Print / Save as PDF</button>
     <h1>Case evidence pack — ${esc(name)}</h1>
-    <p class="muted">Generated ${new Date().toLocaleString("en-GB")} · NexMoney Back Office · Case ref ${String(c.id).slice(0, 8).toUpperCase()}</p>
+    <p class="muted">Generated ${new Date().toLocaleString("en-GB")} by ${esc(generatedBy)} (${esc(generatedRole)}) · NexMoney Back Office · Case ref ${String(c.id).slice(0, 8).toUpperCase()}</p>
     <h2>Client</h2><table>
       ${row("Name", name)}${row("Email", cl.email)}${row("Phone", cl.phone)}${row("Address", cl.address)}
     </table>
@@ -4289,26 +4996,33 @@ async function buildEvidencePack(caseId) {
       ${row("Rate end date", c.rate_end_date ? fmtD(c.rate_end_date) + (c.rate_end_estimated ? " (ESTIMATED — unverified)" : "") : null)}
       ${row("ERC end date", c.erc_end_date ? fmtD(c.erc_end_date) : null)}
       ${row("Loan amount", c.loan_amount != null ? fmtM(c.loan_amount) : null)}${row("Property value", c.property_value != null ? fmtM(c.property_value) : null)}
-      ${row("Broker fee", c.broker_fee != null ? fmtM2(c.broker_fee) + " (" + c.fee_status + ")" : null)}
+      ${row("Broker fee", c.broker_fee != null ? fmtM2(c.broker_fee) + " — " + packValue("fee_status", c.fee_status || "not_requested") : null)}
       ${row("Proc fee", c.proc_fee != null ? fmtM2(c.proc_fee) : null)}${row("Sols fee", c.sols_fee != null ? fmtM2(c.sols_fee) : null)}
-      ${row("Protection", (c.protection_status || "not_discussed").replace("_", " "))}
+      ${row("Protection", packValue("protection_status", c.protection_status || "not_discussed"))}
       ${row("Lead source", c.lead_source)}${row("Introducer", c.introducers?.name)}
       ${row("Created", dt(c.created_at))}${row("Completed", c.completed_at ? dt(c.completed_at) : null)}
       ${row("Offer document on file", c.offer_doc_path ? "Yes — " + c.offer_doc_path : "No")}
     </table>
     <h2>Event timeline</h2>
-    <p class="muted">Only shows events logged against this case — it is not a complete chronology and may not include the most recent stage change or update shown in Case details above.</p>
-    <table><tr><th>When</th><th>Event</th><th>Detail</th></tr>
-      ${(events || []).map((e) => `<tr><td>${dt(e.created_at)}</td><td>${esc(String(e.event || "").replace(/_/g, " "))}</td><td>${esc(e.detail || "")}</td></tr>`).join("") || "<tr><td colspan=3>None recorded</td></tr>"}
+    <p class="muted">Written by the database as the case progresses — stage changes, fee status, offer uploads, rate-end dates, protection status and reassignment are each recorded automatically, with the person who made the change. It is not a record of every edit: changes to other fields (loan amount, rate, lender, dates, client contact details) do not appear here — those are in Change history at the end of this pack, which covers everything from ${esc(auditStartLabel())} onwards. Notes, tasks and communications are listed separately below.</p>
+    <table><tr><th>When</th><th>Event</th><th>Detail</th><th>By</th></tr>
+      ${(events || []).map((e) => `<tr><td>${dt(e.created_at)}</td><td>${esc(String(e.event || "").replace(/_/g, " "))}</td><td>${esc(packEventDetail(e))}</td><td>${esc(actorName(e.actor))}</td></tr>`).join("") || "<tr><td colspan=4>None recorded</td></tr>"}
     </table>
     <h2>Client communications</h2><table><tr><th>When</th><th>Type</th><th>To</th><th>Status</th><th>Subject</th></tr>
-      ${(emails || []).map((e) => `<tr><td>${dt(e.sent_at || e.created_at)}</td><td>${esc(EMAIL_LABEL[e.email_type] || e.email_type)}</td><td>${esc(e.to_email || "")}</td><td>${esc(e.status)}</td><td>${esc(e.subject || "")}</td></tr>`).join("") || "<tr><td colspan=5>None</td></tr>"}
+      ${(emails || []).map((e) => `<tr><td>${dt(e.sent_at || e.created_at)}</td><td>${esc(EMAIL_LABEL[e.email_type] || e.email_type)}</td><td>${esc(e.to_email || "")}</td><td>${esc(packValue("status", e.status))}</td><td>${esc(e.subject || "")}</td></tr>`).join("") || "<tr><td colspan=5>None</td></tr>"}
     </table>
-    <h2>Notes</h2><table>
-      ${(notes || []).map((n) => `<tr><td style="white-space:nowrap;">${dt(n.created_at)}</td><td>${esc(n.body)}</td></tr>`).join("") || "<tr><td>None</td></tr>"}
+    ${/* The app shows who wrote a note and who owns a task on screen; the pack printed neither. */ ""}
+    <h2>Notes</h2><table><tr><th>When</th><th>Note</th><th>Written by</th></tr>
+      ${(notes || []).map((n) => `<tr><td style="white-space:nowrap;">${dt(n.created_at)}</td><td>${esc(n.body)}</td><td>${esc(packPerson(n.created_by, "Author not recorded"))}</td></tr>`).join("") || "<tr><td colspan=3>None</td></tr>"}
     </table>
-    <h2>Tasks</h2><table>
-      ${(tasks || []).map((t) => `<tr><td style="white-space:nowrap;">${t.due_date ? "due " + fmtD(t.due_date) : ""}</td><td>${esc(t.title)}</td><td>${t.done_at ? "done " + dt(t.done_at) : "open"}</td></tr>`).join("") || "<tr><td>None</td></tr>"}
+    <h2>Tasks</h2><table><tr><th>Due</th><th>Task</th><th>Assigned to</th><th>Status</th></tr>
+      ${(tasks || []).map((t) => `<tr><td style="white-space:nowrap;">${t.due_date ? "due " + fmtD(t.due_date) : "no due date"}</td><td>${esc(t.title)}</td><td>${esc(packPerson(t.assigned_to, "Unassigned"))}</td><td>${t.done_at ? "done " + dt(t.done_at) : "open"}</td></tr>`).join("") || "<tr><td colspan=4>None</td></tr>"}
+    </table>
+    <h2>Change history</h2>
+    <p class="muted">Every insert, update and delete the database recorded against this case and its tasks, notes and appointments, newest first, with the person who made it. Written by the audit trigger; it has no write path through the app, so it cannot be edited or erased from here. This log began on ${esc(auditStartLabel())} — changes made before that date were not captured, and it does not cover client-level edits made under the client record rather than this case.</p>
+    <table><tr><th>When</th><th>Who</th><th>What</th><th>Changed</th></tr>
+      ${audit.map((e) => `<tr><td style="white-space:nowrap;">${dt(e.happened_at)}</td><td>${esc(e.actor_label || actorName(e.actor))}</td><td>${esc(packWhat(e))}</td><td>${esc(changesText(e))}</td></tr>`).join("")
+        || `<tr><td colspan=4>No changes recorded for this case since ${esc(auditStartLabel())}.</td></tr>`}
     </table>
     </body></html>`;
   const w = window.open("", "_blank");
@@ -4361,7 +5075,17 @@ function convCell(done, lost) {
 }
 const CONV_TH_TITLE = "Completed ÷ (completed + not proceeding). Cases still live are excluded — they have not failed yet. Shown as (n<5) where fewer than 5 cases have resolved.";
 
+/* BACKEND-R4 §1 (owner's decision) — money reporting is Owner-only IN THE UI: fee figures, the
+   commission forecast, the adviser scoreboard, introducer revenue and client lifetime value.
+   Operational reporting — case counts, the funnel, completions, lead-source volumes, data health —
+   stays visible to everyone.
+   THIS IS A PRESENTATION CHOICE, NOT A SECURITY CONTROL. get_reports() is still readable by any
+   staff account and the cases table still carries broker_fee/proc_fee/sols_fee to every signed-in
+   adviser; anyone with the browser console can read what this hides. Do not describe it as a
+   control, and do not rely on it for anything that matters. */
+const showMoney = () => isOwner();
 function renderMonthReport(all, mv) {
+  const money = showMoney();
   // Bucket on the UK-local month so this card agrees with the annual chart/YTD (which use local getMonth/getFullYear).
   const inMonth = (d) => d && localMonthStr(d) === mv;
   const sub = all.filter((c) => inMonth(c.submitted_at));
@@ -4370,18 +5094,23 @@ function renderMonthReport(all, mv) {
   const subTotal = sum(sub, "proc_fee") + sum(sub, "broker_fee") + sum(sub, "sols_fee");
   const doneTotal = sum(done, "proc_fee") + sum(done, "broker_fee") + sum(done, "sols_fee");
   $("#month-report-title").textContent = "Monthly business — " + monthLabel(mv);
+  // The footnote explains the Proc £ / Broker £ / Sols £ columns and points at "Fees banked (paid)"
+  // on the Adviser scoreboard. For a non-Owner those columns are stripped and that panel is hidden,
+  // so it described things that aren't on the page — it now shows with the money it describes.
+  const legend = $("#month-legend");
+  if (legend) legend.classList.toggle("hidden", !money);
   $("#month-kpis").innerHTML = `
     <div class="kpi"><div class="num">${sub.length}</div><div class="lbl">Applications submitted</div></div>
-    <div class="kpi"><div class="num">${fmtM(subTotal)}</div><div class="lbl">Submitted £ (proc+broker+sols)</div></div>
+    ${money ? `<div class="kpi"><div class="num">${fmtM(subTotal)}</div><div class="lbl">Submitted £ (proc+broker+sols)</div></div>` : ""}
     <div class="kpi"><div class="num">${done.length}</div><div class="lbl">Completions</div></div>
-    <div class="kpi"><div class="num">${fmtM(doneTotal)}</div><div class="lbl">Completed £ (proc+broker+sols)</div></div>`;
+    ${money ? `<div class="kpi"><div class="num">${fmtM(doneTotal)}</div><div class="lbl">Completed £ (proc+broker+sols)</div></div>` : ""}`;
 
   // BUILD 6a — firm monthly fee target (settings.monthly_fee_target, blank = off). "Banked" here
   // means fees actually paid in the selected month (fee_paid_at), not just earned on completion,
   // so it agrees with the "Fees banked" wording already used on the adviser scoreboard below.
   const targetEl = $("#month-fee-target");
   if (targetEl) {
-    const target = Number(settings.monthly_fee_target || 0);
+    const target = money ? Number(settings.monthly_fee_target || 0) : 0;
     if (target > 0) {
       const banked = all.filter((c) => inMonth(c.fee_paid_at)).reduce((s, c) => s + Number(c.broker_fee || 0) + Number(c.proc_fee || 0) + Number(c.sols_fee || 0), 0);
       const pct = Math.round((banked / target) * 100);
@@ -4401,9 +5130,10 @@ function renderMonthReport(all, mv) {
     return { name: staffName(p.id), nSub: s2.length, sProc: sum(s2, "proc_fee"), sBrk: sum(s2, "broker_fee"), sSol: sum(s2, "sols_fee"),
              nDone: d2.length, dTot: sum(d2, "proc_fee") + sum(d2, "broker_fee") + sum(d2, "sols_fee") };
   }).filter((r) => r.nSub || r.nDone);
+  // Non-Owner: the per-adviser activity counts stay, the four fee columns go.
   $("#month-advisers").innerHTML = rows.length ? `<div style="overflow-x:auto;"><table class="imp-table">
-    <tr><th>Adviser</th><th>Submitted</th><th>Proc £</th><th>Broker £</th><th>Sols £</th><th>Completed</th><th title="Value of fees earned on cases completed this month — whether or not those fees have been paid yet">Completed £ (earned)</th></tr>
-    ${rows.map((r) => `<tr><td><strong>${esc(r.name)}</strong></td><td>${r.nSub}</td><td>${fmtM(r.sProc)}</td><td>${fmtM(r.sBrk)}</td><td>${fmtM(r.sSol)}</td><td>${r.nDone}</td><td>${fmtM(r.dTot)}</td></tr>`).join("")}
+    <tr><th>Adviser</th><th>Submitted</th>${money ? "<th>Proc £</th><th>Broker £</th><th>Sols £</th>" : ""}<th>Completed</th>${money ? '<th title="Value of fees earned on cases completed this month — whether or not those fees have been paid yet">Completed £ (earned)</th>' : ""}</tr>
+    ${rows.map((r) => `<tr><td><strong>${esc(r.name)}</strong></td><td>${r.nSub}</td>${money ? `<td>${fmtM(r.sProc)}</td><td>${fmtM(r.sBrk)}</td><td>${fmtM(r.sSol)}</td>` : ""}<td>${r.nDone}</td>${money ? `<td>${fmtM(r.dTot)}</td>` : ""}</tr>`).join("")}
   </table></div>` : '<div class="empty">No submissions or completions recorded for this month.</div>';
 }
 
@@ -4415,7 +5145,11 @@ function renderMonthReport(all, mv) {
 function renderThreadedPanels(all, mv, repAdvisers) {
   const inMonth = (d) => d && localMonthStr(d) === mv;
   const label = monthLabel(mv);
+  const money = showMoney();
   const activeStages = ["enquiry", "fact_find", "decision_in_principle", "application", "offer", "exchange"];
+  // The whole Adviser scoreboard is a money panel (fees banked per person) — Owner-only in the UI.
+  const board = $("#report-scoreboard-panel");
+  if (board) board.classList.toggle("hidden", !money);
 
   // ---- Adviser scoreboard: completions/fees/avg-days scoped to the selected month, plus a 6-month
   // rolling completions trend (BUILD 6a) — same completed-cases data, just bucketed by calendar month
@@ -4450,7 +5184,9 @@ function renderThreadedPanels(all, mv, repAdvisers) {
   const strays = [];
   all.forEach((c) => { if (c.assigned_to && teamIds.indexOf(c.assigned_to) === -1 && strays.indexOf(c.assigned_to) === -1) strays.push(c.assigned_to); });
   const advRows = TEAM.map((p) => mkAdvRow(p.id, staffName(p.id), false))
-    .concat(strays.map((id) => mkAdvRow(id, "Not on the team (" + id + ")", true)))
+    // A stray holder now has a name to show — PROFILES keeps everyone, so "Not on the team (p3)"
+    // only appears when the profile itself is gone.
+    .concat(strays.map((id) => mkAdvRow(id, profileName(id) ? profileName(id) + " — no access" : "Not on the team (" + id + ")", true)))
     .concat([mkAdvRow(null, "Unassigned", true)])
     .filter((r) => r.open || r.completions || r.feesBanked || r.trend.some((n) => n));
   // One vertical scale for the whole trend column (see sparklineSvg).
@@ -4474,6 +5210,8 @@ function renderThreadedPanels(all, mv, repAdvisers) {
       ? `<span class="stat-weak" title="${esc(basis)} Fewer than 3 completions — not a ranking.">${a.avg} <span class="stat-n">(${a.n})</span></span>`
       : `<span title="${esc(basis)}">${a.avg} <span class="stat-n">(${a.n})</span></span>`;
   };
+  if (!money) { $("#report-advisers").innerHTML = ""; $("#report-scoreboard-scope").textContent = ""; }
+  else {
   $("#report-scoreboard-scope").textContent = `Completions, fees banked and avg days are for ${label}. Open cases and overdue tasks are as of now. Trend is completions over the last 6 calendar months, all rows drawn on one shared scale. "Fees banked" here is broker fees actually marked paid this month — a different scope from "Completed £ (earned)" on the Monthly business panel above, which is fee value earned on cases completed this month regardless of payment status.`;
   $("#report-advisers").innerHTML = advRows.length ? `<table class="imp-table">
     <tr><th>Adviser</th><th>Open</th><th>Completions</th><th title="Broker fees actually marked paid this month">Fees banked (paid)</th><th>Overdue</th><th title="Mean days from case created to completed, over completions in the selected month only. The sample size is in brackets; fewer than 3 completions is greyed and should not be read as a ranking.">Avg days</th><th title="Completions per month over the last 6 calendar months. Every row shares one vertical scale (peak ${sparkMax}); the number is this month's value.">6-mo trend</th></tr>
@@ -4492,6 +5230,7 @@ function renderThreadedPanels(all, mv, repAdvisers) {
       <td colspan="5">${openSum === liveTotal ? "reconciles with" : `<strong>does not reconcile with</strong>`} the ${liveTotal} live cases on the KPI row below${unassignedLive ? ` · ${unassignedLive} of them unassigned` : ""}.</td>
     </tr>
   </table>` : `<div class="empty">No adviser activity in ${label}.</div>`;
+  }
 
   // ---- Pipeline funnel: cases created in the selected month, by current stage (all 8 stages,
   // so a month's cohort that has already completed or dropped out still shows up). ----
@@ -4521,8 +5260,9 @@ function renderThreadedPanels(all, mv, repAdvisers) {
     else v.live++;
   });
   $("#report-sources-scope").textContent = `Set the lead source on cases to build this up. Scoped to leads created in ${label}.`;
+  // Lead-source VOLUMES are operational and stay for everyone; the Revenue column is money.
   $("#report-sources").innerHTML = monthCases.length ? `<table class="imp-table">
-    <tr><th>Source</th><th>Cases</th><th title="Still in the live pipeline — neither won nor lost, and excluded from Conversion">Live</th><th>Completed</th><th title="${esc(CONV_TH_TITLE)}">Conversion</th><th>Last lead</th><th>Revenue</th></tr>
+    <tr><th>Source</th><th>Cases</th><th title="Still in the live pipeline — neither won nor lost, and excluded from Conversion">Live</th><th>Completed</th><th title="${esc(CONV_TH_TITLE)}">Conversion</th><th>Last lead</th>${money ? "<th>Revenue</th>" : ""}</tr>
     ${Object.entries(srcMap).sort((a, b) => b[1].cases - a[1].cases).map(([k, v]) => `<tr>
       <td>${k === "(not set)" ? esc(k) : `<button type="button" class="linkish" onclick="reportGotoSearch('${jsArg(k)}')" title="Open the pipeline filtered to ${esc(k)}">${esc(k)}</button>`}</td>
       <td>${v.cases}</td>
@@ -4530,7 +5270,7 @@ function renderThreadedPanels(all, mv, repAdvisers) {
       <td>${v.completed}</td>
       <td>${convCell(v.completed, v.lost)}</td>
       <td>${fmtD(v.last)}</td>
-      <td>${fmtM(v.revenue)}</td>
+      ${money ? `<td>${fmtM(v.revenue)}</td>` : ""}
     </tr>`).join("")}
   </table>` : `<div class="empty">No leads created in ${label}.</div>`;
 }
@@ -4543,6 +5283,10 @@ function renderThreadedPanels(all, mv, repAdvisers) {
    the Reports month picker (this is a live forward-look, not a historical one) and of the RPC,
    so it renders — all under "No date" — even on day one in prod when the column is all-null. */
 function renderForecastBuckets(all) {
+  // Commission forecast = money. Owner-only in the UI (presentation, not a control).
+  const fcPanel = $("#report-forecast-panel");
+  if (fcPanel) fcPanel.classList.toggle("hidden", !showMoney());
+  if (!showMoney()) { $("#report-forecast-headline").innerHTML = ""; $("#report-forecast-buckets").innerHTML = ""; return; }
   // T1-17 — the forecast now covers the live book, not just its last two stages. Application and
   // DIP cases carry real commission and were invisible here; they keep the same per-stage
   // conversion basis the offer/exchange weights already used, just further down the pipeline.
@@ -4658,12 +5402,18 @@ async function loadReports() {
   // defect 19; here they were inert markup, so the same number is a link on one page and a dead end
   // on the other. The three with an unambiguous destination now take the same kpiGoto route. The
   // `title` on .num carries the full value so a narrow column can never quietly truncate it.
+  const money = showMoney();
+  const moneyNote = $("#report-money-note");
+  if (moneyNote) {
+    moneyNote.classList.toggle("hidden", money);
+    moneyNote.textContent = money ? "" : "Firm-wide money figures — fees banked and outstanding, pipeline loan value, the adviser scoreboard, the forecast, introducer revenue and client lifetime value — are shown to the Owner only. Case counts, the funnel, completions and lead sources are below, and the fees on your own cases are on each case.";
+  }
   $("#report-kpis").innerHTML = `
     <div class="kpi kpi-click" onclick="kpiGoto('completed')" title="View completed cases in the pipeline"><div class="num">${completedYr.length}</div><div class="lbl">Completions ${yr}</div></div>
     <div class="kpi kpi-click" onclick="kpiGoto('active')" title="View the pipeline"><div class="num">${active.length}</div><div class="lbl">Live cases</div></div>
-    <div class="kpi kpi-click" onclick="kpiGoto('active')" title="View the pipeline — loan value of the ${active.length} live cases"><div class="num" title="${esc(fmtM(pipelineValue))}">${fmtM(pipelineValue)}</div><div class="lbl">Pipeline loan value</div></div>
-    <div class="kpi"><div class="num" title="${esc(fmtM(feesPaidYr))}">${fmtM(feesPaidYr)}</div><div class="lbl">Fees banked ${yr}</div></div>
-    <div class="kpi kpi-click ${feesOutstanding ? "warn" : ""}" onclick="kpiGoto('fees')" title="View the Protection &amp; Fees drawer — Fees due tab"><div class="num" title="${esc(fmtM(feesOutstanding))}">${fmtM(feesOutstanding)}</div><div class="lbl">Fees outstanding</div></div>
+    ${money ? `<div class="kpi kpi-click" onclick="kpiGoto('active')" title="View the pipeline — loan value of the ${active.length} live cases"><div class="num" title="${esc(fmtM(pipelineValue))}">${fmtM(pipelineValue)}</div><div class="lbl">Pipeline loan value</div></div>` : ""}
+    ${money ? `<div class="kpi"><div class="num" title="${esc(fmtM(feesPaidYr))}">${fmtM(feesPaidYr)}</div><div class="lbl">Fees banked ${yr}</div></div>
+    <div class="kpi kpi-click ${feesOutstanding ? "warn" : ""}" onclick="kpiGoto('fees')" title="View the Protection &amp; Fees drawer — Fees due tab"><div class="num" title="${esc(fmtM(feesOutstanding))}">${fmtM(feesOutstanding)}</div><div class="lbl">Fees outstanding</div></div>` : ""}
     <div class="kpi"><div class="num">${rWon + rLost ? Math.round((rWon / (rWon + rLost)) * 100) + "%" : "—"}</div><div class="lbl">Retention conversion</div></div>
     <div class="kpi"><div class="num">${completedYr.length ? Math.round((protDone / completedYr.length) * 100) + "%" : "—"}</div><div class="lbl">Protection uptake ${yr}</div></div>
     <div class="kpi"><div class="num">${scored.length ? avgNps.toFixed(1) : "—"}</div><div class="lbl">Avg review score (${scored.length})${promoterPct != null ? ` · ${promoterPct}% promoters` : ""}</div></div>`;
@@ -4696,10 +5446,11 @@ async function loadReports() {
     else if (c.stage === "not_proceeding") v.lost++;
     else v.live++;
   });
+  // Introducer referral VOLUMES stay for everyone; the Revenue column is Owner-only in the UI.
   $("#report-introducers").innerHTML = Object.keys(iMap).length
-    ? `<table class="imp-table"><tr><th>Introducer</th><th>Cases</th><th title="Still in the live pipeline — neither won nor lost, and excluded from Conversion">Live</th><th>Completed</th><th title="${esc(CONV_TH_TITLE)}">Conversion</th><th>Last referral</th><th>Revenue</th></tr>` +
+    ? `<table class="imp-table"><tr><th>Introducer</th><th>Cases</th><th title="Still in the live pipeline — neither won nor lost, and excluded from Conversion">Live</th><th>Completed</th><th title="${esc(CONV_TH_TITLE)}">Conversion</th><th>Last referral</th>${money ? "<th>Revenue</th>" : ""}</tr>` +
       Object.entries(iMap).sort((a, b) => b[1].total - a[1].total)
-        .map(([k, v]) => `<tr><td><button type="button" class="linkish" onclick="reportGotoSearch('${jsArg(k)}')" title="Open the pipeline filtered to ${esc(k)}">${esc(k)}</button></td><td>${v.total}</td><td>${v.live}</td><td>${v.done}</td><td>${convCell(v.done, v.lost)}</td><td>${fmtD(v.last)}</td><td>${fmtM(v.revenue)}</td></tr>`).join("") + `</table>`
+        .map(([k, v]) => `<tr><td><button type="button" class="linkish" onclick="reportGotoSearch('${jsArg(k)}')" title="Open the pipeline filtered to ${esc(k)}">${esc(k)}</button></td><td>${v.total}</td><td>${v.live}</td><td>${v.done}</td><td>${convCell(v.done, v.lost)}</td><td>${fmtD(v.last)}</td>${money ? `<td>${fmtM(v.revenue)}</td>` : ""}</tr>`).join("") + `</table>`
     : '<div class="empty">No cases assigned to introducers yet.</div>';
 
   const rep = repRes && !repRes.error ? repRes.data : null;
@@ -4713,6 +5464,8 @@ async function loadReports() {
 /* RPC-backed: client lifetime value (top 20). */
 function renderReportExtras(rep) {
   const panel = $("#report-ltv-panel");
+  // Lifetime VALUE is a money figure — Owner-only in the UI (presentation, not a control).
+  if (!showMoney()) { if (panel) panel.classList.add("hidden"); $("#report-ltv").innerHTML = ""; return; }
   if (!rep) { if (panel) panel.classList.add("hidden"); return; }
   if (panel) panel.classList.remove("hidden");
   const ltv = Array.isArray(rep.client_ltv) ? rep.client_ltv : [];
@@ -4822,7 +5575,7 @@ async function loadDataHealth() {
         <td>${esc(d.b_name)}<div style="${mutedSub}">${esc(d.b_email || "no email")}</div></td>
         <td>${esc(d.reason)}</td>
         <td>${Math.round((Number(d.score) || 0) * 100)}%</td>
-        <td style="white-space:nowrap;"><button class="btn btn-sm" onclick="openClient('${d.a_id}')">Open A</button> <button class="btn btn-sm" onclick="openClient('${d.b_id}')">Open B</button> <button class="btn btn-sm ${(Number(d.score) || 0) < 0.9 ? "" : "btn-primary"}" onclick="openMergeClients('${d.a_id}','${d.b_id}','${jsArg(d.reason)}',${Number(d.score) || 0})">Merge…</button></td>
+        <td style="white-space:nowrap;"><button class="btn btn-sm" onclick="openClient('${d.a_id}')">Open A</button> <button class="btn btn-sm" onclick="openClient('${d.b_id}')">Open B</button> ${isAdminOrOwner() ? `<button class="btn btn-sm ${(Number(d.score) || 0) < 0.9 ? "" : "btn-primary"}" onclick="openMergeClients('${d.a_id}','${d.b_id}','${jsArg(d.reason)}',${Number(d.score) || 0})">Merge…</button>` : '<span class="badge grey">merge: Owner / Admin</span>'}</td>
       </tr>`).join("")}
     </table>` : '<div class="empty">No likely duplicates found. 👍</div>'}
   </div>`;
@@ -5071,6 +5824,9 @@ function confirmMerge(what, extra, keyword) {
    renders them, then used to drop them on the way in here). A 72% "same phone number" pair and a
    95% "same email" pair must not open the same neutral modal with the same primary button. */
 window.openMergeClients = async function (aId, bId, reason, score) {
+  // Presentation guard only — the affordances above are already hidden for an adviser, and the
+  // clients DELETE at the end of the merge is refused by RLS regardless of what the UI does.
+  if (!isAdminOrOwner()) return toast("Merging clients is Owner / Administrator only.");
   const [{ data: aC, error: aErr }, { data: bC, error: bErr }] = await Promise.all([
     db.from("clients").select("*").eq("id", aId).single(),
     db.from("clients").select("*").eq("id", bId).single(),
@@ -5298,18 +6054,28 @@ window.openMergeClients = async function (aId, bId, reason, score) {
 };
 
 /* ---------- Introducers & team (Settings) ---------- */
+// Introducers currently on file, so the Team logins role picker can attach an introducer login to
+// one without a second fetch. Populated by loadIntroducers (Settings is the only page that shows it).
+let INTRODUCERS = [];
 async function loadIntroducers() {
   const { data: intros } = await db.from("introducers").select("*").order("name");
   const { data: logins } = await db.from("profiles").select("introducer_id,email").eq("role", "introducer");
   const hasLogin = new Set((logins || []).map((l) => l.introducer_id));
+  INTRODUCERS = (intros || []).map((i) => ({ id: i.id, name: i.name, email: i.email, hasLogin: hasLogin.has(i.id) }));
+  // invite-user is Owner-only (BACKEND-R4 §4) — a non-Owner is never offered the button, because
+  // the edge function would answer 403. The introducer list itself stays visible and editable.
+  const canInvite = isOwner();
   $("#intro-list").innerHTML = (intros || []).length ? intros.map((i) => `
     <div class="row-item">
       <div class="row-main">
         <div class="t">${esc(i.name)}</div>
         <div class="s">${esc(i.email || "no email")}</div>
       </div>
-      ${hasLogin.has(i.id) ? '<span class="badge green">portal login active</span>' : (i.email ? `<button class="btn btn-sm" onclick="inviteIntroducer('${i.id}')">Create portal login</button>` : '<span class="badge grey">add email to invite</span>')}
+      ${hasLogin.has(i.id) ? '<span class="badge green">portal login active</span>'
+        : !canInvite ? '<span class="badge grey">no portal login — Owner only</span>'
+        : (i.email ? `<button class="btn btn-sm" onclick="inviteIntroducer('${i.id}')">Create portal login</button>` : '<span class="badge grey">add email to invite</span>')}
     </div>`).join("") : '<div class="empty">No introducers yet.</div>';
+  renderInviteRoleHint();
 }
 $("#add-intro-btn").addEventListener("click", async () => {
   const name = $("#intro-name").value.trim();
@@ -5323,6 +6089,7 @@ $("#add-intro-btn").addEventListener("click", async () => {
     $("#intro-name").value = ""; $("#intro-email").value = "";
     toast("Introducer added");
     loadIntroducers();
+    refreshChangeHistory(); // introducers are audited — show the row this just wrote
   } finally { btn.disabled = false; }
 });
 window.inviteIntroducer = async function (introducerId) {
@@ -5333,24 +6100,227 @@ window.inviteIntroducer = async function (introducerId) {
   if (res) {
     $("#invite-result").innerHTML = `Portal login created for <strong>${esc(i.email)}</strong> — temporary password: <strong>${esc(res.temp_password)}</strong><br>Send them this with the back office address (they use the introducer page). They can change it via "Forgot password".`;
     loadIntroducers();
+    refreshChangeHistory(); // invite-user writes an audit row recording who granted access to whom
   }
 };
+/* BACKEND-R4 §4 — invite-user v3 accepts admin · adviser · introducer, and nothing else. `staff`
+   (what this form used to send) is now a 400, and `owner` is deliberately not invitable: a second
+   Owner is created by an existing Owner promoting someone in the roster below, so no single
+   unattended call can mint a top-level account. One line explains each tier as it is chosen. */
+const INVITE_ROLE_HINTS = {
+  admin: "Administrator — full back office, and can delete clients and cases. Cannot change settings or manage logins.",
+  adviser: "Adviser — full back office for cases, clients, diary and comms. Cannot delete records, change settings or manage logins.",
+  introducer: "Introducer — portal login only: they watch the progress of their own referrals and see nothing else.",
+};
+function renderInviteRoleHint() {
+  const sel = $("#staff-role"), hint = $("#staff-role-hint"), introSel = $("#staff-introducer");
+  if (!sel || !hint) return;
+  const role = sel.value || "adviser";
+  hint.textContent = (INVITE_ROLE_HINTS[role] || "") + " Owner level isn't invitable — promote a colleague in the list below instead.";
+  if (!introSel) return;
+  const wantIntro = role === "introducer";
+  introSel.classList.toggle("hidden", !wantIntro);
+  if (!wantIntro) return;
+  // The edge function requires introducer_id for an introducer login, so the picker asks for it
+  // rather than letting the call come back 400.
+  const keep = introSel.value;
+  introSel.innerHTML = ['<option value="">— which introducer? —</option>']
+    .concat(INTRODUCERS.filter((i) => !i.hasLogin).map((i) => `<option value="${esc(i.id)}">${esc(i.name)}</option>`)).join("");
+  if (keep) introSel.value = keep;
+}
+if ($("#staff-role")) $("#staff-role").addEventListener("change", renderInviteRoleHint);
 $("#invite-staff-btn").addEventListener("click", async () => {
   const email = $("#staff-email").value.trim();
   const name = $("#staff-name").value.trim();
+  const roleSel = $("#staff-role");
+  const role = (roleSel && roleSel.value) || "adviser";
+  const introducerId = role === "introducer" ? (($("#staff-introducer") || {}).value || "") : "";
+  if (!isOwner()) return toast("Only the Owner can create logins.");
   if (!email) return toast("Email required");
-  if (!confirm(`Create a full-access team login for ${email}?`)) return;
+  if (role === "introducer" && !introducerId) return toast("Choose which introducer this login belongs to");
+  const roleName = ROLE_LABEL[role] || role;
+  if (!confirm(`Create a ${roleName} login for ${email}?`)) return;
   const btn = $("#invite-staff-btn"); // T1-15 — in-flight guard
   if (btn.disabled) return;
   btn.disabled = true;
   try {
-    const res = await inviteUser({ email, full_name: name, role: "staff" });
+    const payload = { email, full_name: name, role };
+    if (introducerId) payload.introducer_id = introducerId;
+    const res = await inviteUser(payload);
     if (res) {
-      $("#invite-result").innerHTML = `Team login created for <strong>${esc(email)}</strong> — temporary password: <strong>${esc(res.temp_password)}</strong><br>They should change it after first sign-in ("Forgot password" works too).`;
+      $("#invite-result").innerHTML = `${esc(ROLE_LABEL[res.role] || roleName)} login created for <strong>${esc(email)}</strong> — temporary password: <strong>${esc(res.temp_password)}</strong><br>They should change it after first sign-in ("Forgot password" works too).`;
       $("#staff-email").value = ""; $("#staff-name").value = "";
+      await loadTeam((await db.auth.getSession()).data.session);
+      renderTeamRoster();
+      loadIntroducers();
+      refreshChangeHistory(); // invite-user writes an audit row recording who granted access to whom
     }
   } finally { btn.disabled = false; }
 });
+/* ---------- Team roster + role management (Owner only) ----------
+   BACKEND-R4 §1. Writing `profiles` is Owner-only under RLS, and the profiles_guard_role trigger
+   raises "Only an Owner can change a role" / "Cannot remove the last Owner — promote someone else
+   first". The control below is only rendered for an Owner (presentation), and every failure path
+   shows the DATABASE's own message verbatim rather than a generic "couldn't save" — those two
+   sentences are the whole explanation of what went wrong. */
+function roleMsg(text, bad) {
+  const el = $("#team-role-msg");
+  if (!el) return;
+  el.textContent = text || "";
+  el.classList.toggle("hidden", !text);
+  el.classList.toggle("error", !!bad);
+}
+/* The roster is drawn from PROFILES, not TEAM, so somebody set to "No access" STAYS ON THE LIST
+   (marked, and with `none` pre-selected) instead of disappearing the moment their access is
+   removed. Before this, TEAM excluded them and nothing in the app could render them again — the
+   only way back was the Supabase dashboard. Introducer logins are excluded: they are managed in
+   the Introducers panel and `introducer` is deliberately not an assignable role here. */
+const rosterRoles = () => STAFF_ROLES.concat(["none"]);
+function renderTeamRoster() {
+  const el = $("#team-roster");
+  if (!el) return;
+  if (!isOwner()) { el.innerHTML = ""; return; }
+  const roster = PROFILES.filter((p) => rosterRoles().includes(p.role));
+  el.innerHTML = roster.length ? roster.map((p) => {
+    // A legacy 'staff' row keeps its own value as an option so simply opening the page can never
+    // silently re-tier someone.
+    const opts = ASSIGNABLE_ROLES.concat(ASSIGNABLE_ROLES.some(([k]) => k === p.role) ? [] : [[p.role, ROLE_LABEL[p.role] || p.role]]);
+    const off = p.role === "none";
+    return `<div class="team-row" data-team-row="${esc(p.id)}">
+      <div class="row-item">
+      <div class="row-main">
+        <div class="t">${esc(p.full_name || p.email || p.id)}${off ? ' <span class="badge grey">No access</span>' : ""}</div>
+        <div class="s">${esc(p.email || "")}${p.id === (ME && ME.id) ? " · you" : ""}${off ? " · signed out of the back office — pick a role to restore them" : ""}</div>
+      </div>
+      <select class="team-role" data-id="${esc(p.id)}" data-prev="${esc(p.role)}" aria-label="Role for ${esc(p.full_name || p.email || p.id)}">
+        ${opts.map(([k, l]) => `<option value="${esc(k)}" ${k === p.role ? "selected" : ""}>${esc(l)}</option>`).join("")}
+      </select>
+      </div>
+      <div class="team-deact hidden" data-deact="${esc(p.id)}"></div>
+    </div>`;
+  }).join("") : '<div class="empty">No team logins yet.</div>';
+  el.querySelectorAll("select.team-role").forEach((sel) => { sel.onchange = () => changeRole(sel); });
+}
+/* What a colleague still holds. Counted before their access is removed so the Owner is told what
+   is about to be left behind, rather than finding out when a colleague's ordinary save clears it. */
+async function staffHoldings(id) {
+  const nowIso = new Date().toISOString();
+  const [cs, tk, ap] = await Promise.all([
+    db.from("cases").select("id,stage").eq("assigned_to", id),
+    db.from("case_tasks").select("id").eq("assigned_to", id).is("done_at", null),
+    db.from("appointments").select("id").eq("staff_id", id).gte("starts_at", nowIso),
+  ]);
+  const cases = cs.data || [];
+  return {
+    cases: cases.length,
+    live: cases.filter((c) => !["completed", "not_proceeding"].includes(c.stage)).length,
+    tasks: (tk.data || []).length,
+    appts: (ap.data || []).length,
+  };
+}
+const holdingsSentence = (h) => [
+  `${h.cases} case${h.cases === 1 ? "" : "s"} (${h.live} still live)`,
+  `${h.tasks} open task${h.tasks === 1 ? "" : "s"}`,
+  `${h.appts} future appointment${h.appts === 1 ? "" : "s"}`,
+].join(" · ");
+/* Removing access is the one role change that strands work, so it does not go straight through the
+   plain confirm() the other tiers use. The Owner is shown the exact holdings and must choose:
+   hand them to a named colleague, or knowingly leave them where they are. */
+async function openDeactivate(id, sel) {
+  const box = $(`#team-roster [data-deact="${id}"]`);
+  const who = profileName(id) || "this login";
+  if (!box) return;
+  // Only one of these open at a time — the panel uses fixed ids for its controls.
+  document.querySelectorAll("#team-roster .team-deact").forEach((b) => { if (b !== box) { b.classList.add("hidden"); b.innerHTML = ""; } });
+  box.classList.remove("hidden");
+  box.innerHTML = '<div class="dq-notice">Checking what this person still holds…</div>';
+  const h = await staffHoldings(id);
+  const others = TEAM.filter((p) => p.id !== id);
+  const nothing = !(h.cases || h.tasks || h.appts);
+  box.innerHTML = `<div class="dq-notice">
+    <strong>Remove ${esc(who)}'s access?</strong> They will be signed out of the back office and will no longer
+    appear in any adviser dropdown.
+    <div style="margin:6px 0;">${nothing
+      ? `${esc(who)} currently holds nothing — no cases, open tasks or future appointments.`
+      : `${esc(who)} still holds <strong>${esc(holdingsSentence(h))}</strong>. Records left with them stay assigned to them and keep showing their name, marked “no access”.`}</div>
+    ${nothing ? "" : `<label style="display:block;margin:6px 0;">Hand this work to
+      <select id="deact-to" aria-label="Reassign this work to" style="width:auto;">
+        <option value="">— choose a colleague —</option>
+        ${others.map((p) => `<option value="${esc(p.id)}">${esc(staffName(p.id))}</option>`).join("")}
+      </select></label>`}
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+      ${nothing ? "" : '<button class="btn btn-sm btn-primary" id="deact-reassign">Reassign, then remove access</button>'}
+      <button class="btn btn-sm" id="deact-leave">${nothing ? "Remove access" : "Remove access and leave the work with them"}</button>
+      <button class="btn btn-sm btn-ghost" id="deact-cancel">Cancel</button>
+    </div>
+  </div>`;
+  const close = () => { box.classList.add("hidden"); box.innerHTML = ""; if (sel) sel.value = sel.dataset.prev; };
+  $("#deact-cancel").onclick = close;
+  $("#deact-leave").onclick = async () => {
+    if (!confirm(`Remove ${who}'s access${nothing ? "" : ` and leave ${holdingsSentence(h)} assigned to them`}?`)) return;
+    box.classList.add("hidden"); box.innerHTML = "";
+    await applyRole(id, "none", sel);
+  };
+  const reBtn = $("#deact-reassign");
+  if (reBtn) reBtn.onclick = async () => {
+    const to = ($("#deact-to") || {}).value || "";
+    if (!to) return toast("Choose who this work goes to first.");
+    if (!confirm(`Move ${holdingsSentence(h)} from ${who} to ${staffName(to)}, then remove ${who}'s access?`)) return;
+    reBtn.disabled = true;
+    try {
+      const errs = [];
+      const r1 = await db.from("cases").update({ assigned_to: to }).eq("assigned_to", id);
+      if (r1.error) errs.push(r1.error.message);
+      const r2 = await db.from("case_tasks").update({ assigned_to: to }).eq("assigned_to", id).is("done_at", null);
+      if (r2.error) errs.push(r2.error.message);
+      const r3 = await db.from("appointments").update({ staff_id: to }).eq("staff_id", id).gte("starts_at", new Date().toISOString());
+      if (r3.error) errs.push(r3.error.message);
+      if (errs.length) { roleMsg("Nothing was reassigned and the role is unchanged — " + errs[0], true); toast(errs[0]); return; }
+      box.classList.add("hidden"); box.innerHTML = "";
+      toast(`Work moved to ${staffName(to)}`);
+      await applyRole(id, "none", sel, `${holdingsSentence(h)} moved to ${staffName(to)}.`);
+    } finally { reBtn.disabled = false; }
+  };
+}
+async function changeRole(sel) {
+  const id = sel.dataset.id, prev = sel.dataset.prev, next = sel.value;
+  if (next === prev) return;
+  // "No access" strands whatever they hold — take the deliberate-choice route instead.
+  if (next === "none") { sel.value = prev; return openDeactivate(id, sel); }
+  const who = (PROFILES.find((p) => p.id === id) || {});
+  if (!confirm(`Change ${who.full_name || who.email || "this login"}'s role from ${ROLE_LABEL[prev] || prev} to ${ROLE_LABEL[next] || next}?`)) {
+    sel.value = prev;
+    return;
+  }
+  return applyRole(id, next, sel);
+}
+// The write itself, shared by the plain role change and the deactivation flow. `note` is appended
+// to the confirmation line so "…and their work moved to X" is reported in the same sentence.
+async function applyRole(id, next, sel, note) {
+  const prev = sel ? sel.dataset.prev : null;
+  const who = (PROFILES.find((p) => p.id === id) || {});
+  if (sel) sel.disabled = true;
+  roleMsg("");
+  try {
+    const { error } = await db.from("profiles").update({ role: next }).eq("id", id);
+    if (error) {
+      // The trigger's own wording — "Cannot remove the last Owner — promote someone else first"
+      // or "Only an Owner can change a role" — is the message the user needs to read.
+      if (sel && prev != null) sel.value = prev;
+      roleMsg(error.message, true);
+      toast(error.message);
+      return;
+    }
+    roleMsg(`${who.full_name || who.email || "Login"} is now ${ROLE_LABEL[next] || next}.${note ? " " + note : ""}`, false);
+    toast("Role updated");
+    const { data: { session } } = await db.auth.getSession();
+    if (session) await loadTeam(session);
+    // Changing your OWN role changes what this session may do — re-resolve it from the database.
+    if (session && id === session.user.id) { await resolveMyRole(session); renderSettings(); return; }
+    renderTeamRoster();
+    refreshChangeHistory(); // the role change is an audit row on the panel below this roster
+  } finally { if (sel) sel.disabled = false; }
+}
 async function inviteUser(payload) {
   const { data: { session } } = await db.auth.getSession();
   try {

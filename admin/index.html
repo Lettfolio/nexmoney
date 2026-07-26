@@ -157,6 +157,7 @@
         <div class="kpi"><div class="num" id="prot-kpi-comm">—</div><div class="lbl">Est. commission</div></div>
         <div class="kpi kpi-click" id="prot-tile-quoted" title="Click to filter the table to quoted cases awaiting a decision"><div class="num" id="prot-kpi-quoted">—</div><div class="lbl">Quoted, awaiting decision</div></div>
       </div>
+      <p class="panel-sub hidden" id="prot-money-note"></p>
       <div class="page-tools" style="margin-bottom:14px;">
         <button class="btn btn-sm seg-btn seg-first scope-active" id="prot-scope-mine">Mine</button>
         <button class="btn btn-sm seg-btn" id="prot-scope-unassigned">Unassigned</button>
@@ -218,12 +219,13 @@
         <h2>Reports</h2>
         <input type="month" id="report-month">
       </div>
+      <p class="panel-sub hidden" id="report-money-note"></p>
       <div class="panel">
         <h3 id="month-report-title">This month</h3>
         <div class="kpi-row" id="month-kpis" style="margin:12px 0 8px;"></div>
         <div id="month-fee-target"></div>
         <div id="month-advisers"></div>
-        <p class="panel-sub" style="margin:12px 0 0;">Proc £ = procuration fee (paid by the lender) · Broker £ = fee charged to the client · Sols £ = solicitor referral fee. Figures on this panel are scoped to the month selected above. "Completed £" is the fee value <strong>earned</strong> on cases completed this month, regardless of whether it's been paid yet — see "Fees banked (paid)" on the Adviser scoreboard below for cash actually collected.</p>
+        <p class="panel-sub hidden" id="month-legend" style="margin:12px 0 0;">Proc £ = procuration fee (paid by the lender) · Broker £ = fee charged to the client · Sols £ = solicitor referral fee. Figures on this panel are scoped to the month selected above. "Completed £" is the fee value <strong>earned</strong> on cases completed this month, regardless of whether it's been paid yet — see "Fees banked (paid)" on the Adviser scoreboard below for cash actually collected.</p>
       </div>
       <p class="report-month-note" id="report-month-note">Also scoped to the month selected above.</p>
       <div class="panel" id="report-scoreboard-panel">
@@ -313,15 +315,40 @@
         <div id="intro-list"></div>
       </div>
 
-      <div class="panel">
+      <div class="panel" id="team-logins-panel">
         <h3>Team logins</h3>
-        <p class="panel-sub">Invite a colleague — they get full access like you.</p>
+        <p class="panel-sub">Owner only. Choose the tier before you send the invite — it decides what the new login may do, and the database enforces it.</p>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
           <input id="staff-name" placeholder="Full name" style="flex:2;min-width:160px;">
           <input id="staff-email" type="email" placeholder="Email" style="flex:2;min-width:160px;">
+          <select id="staff-role" style="flex:1;min-width:150px;">
+            <option value="adviser">Adviser</option>
+            <option value="admin">Administrator</option>
+            <option value="introducer">Introducer</option>
+          </select>
+          <select id="staff-introducer" class="hidden" style="flex:2;min-width:160px;"></select>
           <button class="btn btn-primary" id="invite-staff-btn">Create login</button>
         </div>
+        <p id="staff-role-hint" class="panel-sub" style="margin-top:8px;"></p>
         <p id="invite-result" class="panel-sub" style="margin-top:10px;"></p>
+        <h4 style="margin:20px 0 4px;font-size:14px;">Who has access</h4>
+        <p class="panel-sub">Change a colleague's role here. Only an Owner can, and the last Owner can't be demoted — promote someone else first.</p>
+        <div id="team-roster"></div>
+        <p id="team-role-msg" class="panel-sub hidden" style="margin-top:8px;"></p>
+      </div>
+
+      <div class="panel hidden" id="change-history-panel">
+        <h3>Change history</h3>
+        <p class="panel-sub">Owner only. Every insert, update and delete the database recorded — including changes to Settings and to who can sign in, which belong to no client or case and so appear on no other screen. Written by the audit trigger; there is no write path through the back office, so nothing here can be edited or erased. Bank details, keys, tokens and passwords record as “(hidden)”: the log proves the value changed and deliberately never stores the value.</p>
+        <div class="ch-filters">
+          <label>What changed<select id="ch-table"></select></label>
+          <label>Who<select id="ch-actor"></select></label>
+          <label>From<input type="date" id="ch-from"></label>
+          <label>To<input type="date" id="ch-to"></label>
+          <button type="button" class="btn btn-sm" id="ch-clear">Clear filters</button>
+        </div>
+        <div id="ch-list" class="ch-list"></div>
+        <div class="ch-pager" id="ch-pager"></div>
       </div>
     </section>
   </main>
