@@ -596,9 +596,10 @@ async function showApp(session) {
   // Done before revealing the shell or reading settings/team so a non-staff account
   // never sees the admin UI or triggers those reads.
   const { data: myProfile } = await db.from("profiles").select("role").eq("id", session.user.id).single();
-  // 'admin' is treated as staff-equivalent at the gate (harmless in prod where roles are
-  // staff/introducer; unblocks an admin-role login if the office ever issues one).
-  if (!myProfile || !["staff", "admin"].includes(myProfile.role)) {
+  // Back-office roles: owner / admin / adviser, plus 'staff' kept as a legacy alias so no
+  // existing login can ever be stranded. Must match is_staff() in the database, which accepts
+  // exactly these four — anything narrower locks real people out of their own back office.
+  if (!myProfile || !["owner", "admin", "adviser", "staff"].includes(myProfile.role)) {
     await db.auth.signOut();
     showLogin();
     toast("This login doesn't have back-office access.");
@@ -618,7 +619,7 @@ async function loadTeam(session) {
   // T1-1: 'admin' is a first-class back-office role (the login gate at showApp already admits it),
   // so it must appear in TEAM or ME resolves to null and every "Mine" scope silently matches
   // nothing. Deliberately an explicit allow-list — an 'introducer' profile can never leak in.
-  const { data: team } = await db.from("profiles").select("id,full_name,email,role").in("role", ["staff", "admin"]).order("full_name");
+  const { data: team } = await db.from("profiles").select("id,full_name,email,role").in("role", ["owner", "admin", "adviser", "staff"]).order("full_name");
   TEAM = team || [];
   ME = TEAM.find((p) => p.id === session.user.id) || null;
   // Safe degradation: if this login still isn't in TEAM (profile row missing/renamed role), a
