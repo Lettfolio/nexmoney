@@ -67,6 +67,11 @@ button { font-family: inherit; }
 /* Tap-to-call / tap-to-email links (M2): inherit surrounding colour, underline on hover only. */
 .contact-link { color: inherit; text-decoration: none; }
 .contact-link:hover { text-decoration: underline; }
+/* T1-29 — the client modal's tel: link is the "call this person" action a one-handed user
+   reaches for first; give it a real ~44px tap target via padding + a cancelling negative margin,
+   so the box grows for hit-testing without shifting any surrounding layout. Scoped to the client
+   modal's contact line only — other .contact-link spots (list rows, case summary) are unchanged. */
+.client-contact-line .contact-link { display: inline-flex; align-items: center; padding: 13px 4px; margin: -13px -4px; }
 
 h2 { color: var(--dark); font-size: 20px; font-weight: 700; letter-spacing: -0.01em; margin-bottom: 18px; }
 
@@ -176,6 +181,9 @@ h2 { color: var(--dark); font-size: 20px; font-weight: 700; letter-spacing: -0.0
 .sidebar-foot .btn-ghost:hover { color: #fff; background: rgba(255,255,255,.08); }
 
 /* ---------- Main layout ---------- */
+/* T1-12 — bottom padding at least as deep as the fixed #assistant-fab's own footprint (its
+   height + its "bottom" offset), so the last real content on any page always has scroll room
+   to clear the FAB rather than dead-ending underneath it. */
 main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 32px 88px; }
 .page-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 18px; }
 .page-head h2 { margin: 0; }
@@ -311,7 +319,12 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
 .dash-tab-panel.hidden { display: none; }
 
 /* ---------- KPI stat cards ---------- */
-.kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 20px; }
+/* T1-19 — 150px tracks clipped £6,388,000 to "£6,388,00": a still-plausible wrong number an order
+   of magnitude out, on the owner's biggest figure. Wider tracks, a fluid number size and a wrap
+   opportunity inside the digits mean a long value wraps rather than being silently cut. */
+.kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 20px; }
+/* The Reports row has 8 tiles — a column count that divides evenly, so there is no orphan row. */
+#report-kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .kpi {
   background: var(--white);
   border: 1px solid var(--border);
@@ -326,15 +339,20 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
   background: var(--navy); opacity: .45;
 }
 .kpi .num {
-  font-size: 26px; font-weight: 700; letter-spacing: -0.02em;
+  font-size: clamp(18px, 2.2vw, 26px); font-weight: 700; letter-spacing: -0.02em;
   color: var(--dark); line-height: 1.15;
   font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
 }
 .kpi .lbl {
   font-size: 11px; font-weight: 600;
   text-transform: uppercase; letter-spacing: .05em;
   color: var(--muted); margin-top: 4px;
 }
+/* T1-26 — a Data Health number you can act on looks like one, and they all look alike. The ▾/→ in
+   the label says where it goes; this says it goes somewhere at all. */
+.dq-clickable { cursor: pointer; transition: box-shadow .12s ease, border-color .12s ease, transform .12s ease; }
+.dq-clickable:hover { border-color: var(--navy); box-shadow: 0 2px 10px rgba(16, 42, 78, .12); transform: translateY(-1px); }
 .kpi.warn::before { background: var(--orange); opacity: .8; }
 .kpi.warn .num { color: var(--orange-600); }
 .kpi.bad::before { background: var(--red); opacity: .8; }
@@ -631,6 +649,10 @@ main input:focus, main select:focus, main textarea:focus,
 .imp-table td.imp-edit:hover { box-shadow: inset 0 0 0 1px var(--border); background: #fbfdff; }
 .imp-table td.imp-edit:focus { outline: none; box-shadow: inset 0 0 0 2px var(--blue, #2563eb); background: #fff; }
 .imp-table .imp-edit-stage { font-size: 12.5px; padding: 3px 4px; border-radius: 4px; border: 1px solid var(--border); background: #fff; }
+/* T1-21 — a date that could be read two ways (or not at all) is flagged in the preview. */
+.imp-table td.imp-date-warn { background: #fff8ee; color: #8a5a00; }
+.imp-table td.imp-date-bad { background: #fdecea; color: var(--red, #c0392b); }
+.imp-table td.imp-date-warn .btn { margin-left: 6px; padding: 1px 7px; }
 
 /* ---------- Duplicate-client merge modal (BUILD 5b) ---------- */
 .merge-keep { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
@@ -664,6 +686,11 @@ main input:focus, main select:focus, main textarea:focus,
 }
 .appt:hover { background: #d8e7f7; }
 .appt .at { font-weight: 700; color: var(--navy); font-variant-numeric: tabular-nums; }
+/* T1-14 — same-adviser double-booking, visible without opening either appointment. */
+.appt.clash { background: #fdecea; border-left-color: #c0392b; }
+.appt.clash:hover { background: #f9d9d5; }
+.clash-tag { color: #c0392b; }
+.diary-day.has-clash { border-color: #c0392b; box-shadow: 0 0 0 1px #c0392b, 0 4px 16px rgba(192,57,43,.12); }
 @media (max-width: 900px) { .diary-grid { grid-template-columns: 1fr 1fr; } }
 /* BUILD 7d (defect 26) — adviser colour legend, shown only in the "Everyone" diary view. */
 .diary-legend { display: flex; flex-wrap: wrap; gap: 12px; margin: 0 0 10px; font-size: 12px; color: var(--muted); }
@@ -679,6 +706,10 @@ main input:focus, main select:focus, main textarea:focus,
   color: #fff; font-size: 10px; font-weight: 700;
   box-shadow: 0 1px 3px rgba(0,72,140,.3);
 }
+/* Assignee chip that doubles as the reassign control (task rows) — T1-6. */
+.chip.chip-set { cursor: pointer; }
+.chip.chip-set:hover { box-shadow: 0 0 0 2px rgba(0,72,140,.3); }
+select.task-reassign { width: auto; padding: 3px 6px; font-size: 12px; }
 
 /* ---------- Toast ---------- */
 .toast {
@@ -853,10 +884,14 @@ main input:focus, main select:focus, main textarea:focus,
   /* margin:0 auto (desktop centring) creates auto cross-axis margins in the mobile column
      flex, which disables align-items:stretch and lets <main> size to the board's max-content
      (capped at max-width) — the real cause of the blown-out toolbar/board (M1/M6). Pin it. */
-  main { padding: 16px 12px 76px; margin: 0; width: 100%; max-width: 100%; }
+  /* T1-12 — bottom padding clears the compact mobile FAB's footprint (bottom:88px + its own
+     48px height, defined below), not just its old bottom:18px pill. */
+  main { padding: 16px 12px 148px; margin: 0; width: 100%; max-width: 100%; }
   .page-head { flex-direction: column; align-items: stretch; gap: 10px; }
   .page-head > div { flex-wrap: wrap; }
   .kpi-row { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  /* T1-19 — the #report-kpis id rule above outranks .kpi-row, so restate it inside the breakpoint. */
+  #report-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .kpi { padding: 11px 13px 10px; }
   .kpi .num { font-size: 21px; }
   .grid-2 { grid-template-columns: 1fr; gap: 12px; }
@@ -894,7 +929,14 @@ main input:focus, main select:focus, main textarea:focus,
   .stage-tabs { overflow-x: auto; flex-wrap: nowrap; -webkit-overflow-scrolling: touch; padding-bottom: 4px; }
   .stage-tab { white-space: nowrap; }
   #assistant-drawer { width: 100vw; }
-  #assistant-fab { bottom: 18px; }
+  /* T1-12 — collapse the FAB to a compact icon on narrow viewports, and raise it well clear of
+     44px of any doorstep-sized row of controls (a row-item's action buttons, the Watchtower
+     Dismiss button) that may naturally land at the foot of a long stacked page. */
+  #assistant-fab {
+    bottom: 88px; right: 16px; width: 48px; height: 48px;
+    padding: 0; justify-content: center; border-radius: 50%; font-size: 20px;
+  }
+  #assistant-fab .fab-label { display: none; }
 }
 @media (max-width: 760px) {
   .diary-day { display: none; }
@@ -913,6 +955,26 @@ main input:focus, main select:focus, main textarea:focus,
   #page-protection .page-tools select { flex: 1; }
 }
 
+/* T1-13 — sticky key column (Client) and, on the protection table, a sticky-right Actions
+   column, for every wide table that scrolls horizontally. Shared by the protection table, the
+   pipeline table view and the import review table. */
+.imp-table .stick-col { position: sticky; left: 0; z-index: 1; background: var(--white); box-shadow: 2px 0 4px rgba(16,24,40,.06); }
+.imp-table th.stick-col { background: var(--light); z-index: 2; }
+.imp-table tr:hover td.stick-col { background: #f8fafc; }
+.imp-table .stick-col-right { position: sticky; right: 0; z-index: 1; background: var(--white); box-shadow: -2px 0 4px rgba(16,24,40,.06); }
+.imp-table th.stick-col-right { background: var(--light); z-index: 2; }
+.imp-table tr:hover td.stick-col-right { background: #f8fafc; }
+/* Below 1500px, fold the low-value LOAN / EST. £ columns into the Client cell on Protection,
+   and drop the Updated column from the pipeline table — both stay reachable by opening the row. */
+/* white-space:normal (overriding the table's default nowrap) so this wraps onto its own line
+   inside the sticky Client cell instead of overflowing into the columns painted after it. */
+.prot-fold-info { display: none; white-space: normal; color: var(--muted); font-size: 12px; font-weight: 400; }
+@media (max-width: 1500px) {
+  .prot-col-loan, .prot-col-est { display: none; }
+  .prot-fold-info { display: block; }
+  .pipe-col-updated { display: none; }
+}
+
 /* ---------- Quick-win UX polish ---------- */
 /* Board horizontal-scroll affordance (QW16): edge fade + arrow shown only when later stages are hidden. */
 .board-scroll-wrap { position: relative; }
@@ -923,11 +985,14 @@ main input:focus, main select:focus, main textarea:focus,
 }
 .board-scroll-wrap.can-scroll-right::after { opacity: 1; }
 .board-scroll-arrow {
-  position: absolute; top: 38%; right: 6px; transform: translateY(-50%);
+  /* T1-12 — z-index above #assistant-fab's 60 so it's never the dead control underneath the FAB
+     at any viewport height, and nudged to 34% (rather than 38%) so it clears the FAB's footprint
+     at the taller desktop viewports where the two coincide. */
+  position: absolute; top: 34%; right: 6px; transform: translateY(-50%);
   width: 34px; height: 34px; border-radius: 50%;
   border: 1px solid var(--border-strong); background: var(--white); color: var(--navy);
   font-size: 20px; font-weight: 700; line-height: 1; cursor: pointer;
-  box-shadow: var(--shadow-lift); z-index: 2;
+  box-shadow: var(--shadow-lift); z-index: 70;
   opacity: 0; pointer-events: none; transition: opacity .2s ease, transform .15s ease;
 }
 .board-scroll-wrap.can-scroll-right .board-scroll-arrow { opacity: 1; pointer-events: auto; }
@@ -970,6 +1035,23 @@ main input:focus, main select:focus, main textarea:focus,
 /* Clickable KPI tiles (QW15). */
 .kpi-click { cursor: pointer; transition: border-color .15s ease, box-shadow .15s ease, transform .15s ease; }
 .kpi-click:hover { border-color: #b7cbe2; box-shadow: var(--shadow-lift); transform: translateY(-1px); }
+
+/* T1-19 — a report table cell that navigates. A link, not another button in a table full of them. */
+.linkish {
+  background: none; border: 0; padding: 0; margin: 0; font: inherit; text-align: left;
+  color: var(--navy); text-decoration: underline; text-underline-offset: 2px; cursor: pointer;
+}
+.linkish:hover { color: var(--orange-600); }
+/* T1-18 — a figure carrying its sample size, greyed where the sample is too small to rank on. */
+.stat-n { font-weight: 400; color: var(--muted); font-size: 11px; }
+.stat-weak { color: var(--muted); }
+/* T1-18 — this month's value printed beside the shared-scale sparkline. */
+.spark-now { font-size: 11px; font-weight: 600; color: var(--muted); vertical-align: middle; }
+/* T1-18 — the Unassigned / off-team scoreboard rows: real work, nobody's name against it. */
+#report-advisers tr.row-warn td { background: var(--amber-50, #fff7ec); }
+#report-advisers tr.row-warn td:first-child { font-weight: 600; color: var(--orange-600); }
+/* T1-18 — the footer that reconciles the Open column against the Live cases KPI. */
+#report-advisers tr.scoreboard-foot td { border-top: 2px solid var(--border); color: var(--muted); font-size: 12px; }
 
 /* Reports: live-vs-month scope cue (QW8). */
 .report-live-note {
@@ -1043,7 +1125,22 @@ main input:focus, main select:focus, main textarea:focus,
   font-family: var(--font); font-size: 16px; color: var(--dark); padding: 2px 0;
 }
 .palette-input::placeholder { color: var(--muted); }
-.palette-esc { font-size: 11px; font-weight: 600; color: var(--muted); background: var(--light); border-radius: 5px; padding: 2px 7px; flex-shrink: 0; }
+/* T1-29 — a real close button now (was an inert <kbd>Esc</kbd>), styled the same at rest.
+   border/cursor/font reset since it's a <button>, not the plain tag it used to be. */
+.palette-esc {
+  font-size: 11px; font-weight: 600; color: var(--muted); background: var(--light);
+  border: none; border-radius: 5px; padding: 2px 7px; flex-shrink: 0;
+  font-family: inherit; cursor: pointer;
+}
+.palette-esc:hover, .palette-esc:focus-visible { color: var(--navy); background: var(--border); }
+.palette-esc-coarse { display: none; }
+@media (pointer: coarse) {
+  /* On a phone there's no Esc key, so the only close instruction in the UI must say what to
+     tap — and be a real, comfortably-sized tap target. */
+  .palette-esc-fine { display: none; }
+  .palette-esc-coarse { display: inline; }
+  .palette-esc { padding: 10px 14px; font-size: 13px; min-height: 44px; display: flex; align-items: center; }
+}
 .palette-results { overflow-y: auto; padding: 6px; -webkit-overflow-scrolling: touch; }
 .palette-group-label {
   font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em;

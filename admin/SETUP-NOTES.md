@@ -21,21 +21,21 @@ When you first sign in, let your browser (Chrome/Edge/Safari) or password manage
 ## What it does
 
 ### The retention pipeline (added July 2026)
-When a completed client's rate-end date comes inside your reminder window (6 months by default), the system automatically:
-1. Creates a new **Enquiry** case for them, tagged 🔁 retention and linked to the original case.
-2. Emails them the rate-end reminder immediately, and schedules a **follow-up chase email** for around the 5-months-to-go mark.
-3. Creates a **"Call client" task** for around 4 months before the rate ends — visible in the Tasks due panel on the dashboard.
-4. If you win the case (Completed) or they go elsewhere (Not Proceeding), any unsent chase emails are cancelled and tasks closed automatically.
+**Retention is surfaced for you, but nothing about it happens on its own.** Nothing in the system creates a retention case, sends a retention email, schedules a chase or opens a task — every one of those is a click you make. What the system does is make sure a rate ending never goes unnoticed:
 
-The dashboard's Retention pipeline panel tracks open opportunities and your won/lost conversion rate. When a retention case completes and you upload the new mortgage offer, its new rate-end date is captured — so the cycle repeats itself for every client, forever.
+1. **It finds them.** Any completed case whose rate-end date falls inside your reminder window (6 months by default, Settings → "Rate reminder lead time") is counted in the Today screen's "Rates ending ≤ 6mo (or overdue)" figure and listed under **Rate & ERC alerts**, oldest first, with an OVERDUE badge once the date has passed. Completed cases in that list carry a **Reminder pending** badge until a rate-end reminder has gone out, and a green **Reminder sent** badge afterwards.
+2. **It shouts when one is missed.** If a rate has actually ended and there is no open retention case, Data health raises a **critical** alert ("Rate has ENDED with no retention case") — that alert exists precisely because nothing creates the case for you.
+3. **You do the rest.** Open the case → "Email rate-end reminder" to queue and send the email → create the new retention case yourself and set its **Lead source** to Retention → add a "Call client" task with a due date if you want the reminder on the Today screen. Chase emails are sent the same way, by hand, when you decide to send them.
+
+The dashboard's Retention pipeline panel tracks retention cases (those linked to an original case) and your won/lost conversion rate — it fills up as you create them, not by itself. When a retention case completes and you upload the new mortgage offer, "Read mortgage offer (AI)" fills in the new rate-end date for you to check and Save; from that point the case appears in the rate-end list again when the new date comes into the window.
 
 1. **Pipeline** — cases move through Enquiry → Fact Find → DIP → Application → Offer → Exchange → Completed.
 2. **Rate/ERC flags** — any completed case where the ERC end date runs past the rate end date is flagged "ERC conflict" on the dashboard.
-3. **Rate-end reminders** — clients are automatically emailed 6 months (configurable) before their rate ends, inviting them back to remortgage. This is the churn-reducer.
-4. **Review requests** — 3 days (configurable) after a case completes, the client automatically gets a "leave us a Google review" email.
+3. **Rate-end reminders** — the churn-reducer, but a manual one. Every completed case whose rate ends inside your reminder window (6 months by default, configurable in Settings) is listed on the Today screen under Rate & ERC alerts and badged **Reminder pending**. Open the case and click "Email rate-end reminder" to send it. Nothing emails the client for you, so work that list.
+4. **Review requests** — from a completed case, click "Email review request" to send the "leave us a Google review" email (you need a review link in Settings first). This is not on a timer: Settings has a "Review request delay after completion (days)" box, but nothing in the back office acts on it, so no review email goes out unless you send it.
 5. **Fee requests** — from any case, click "Email fee request" to send a bank-transfer payment email with a unique reference. Mark paid when the money lands.
 
-Automation runs every morning at **8am** (Supabase cron job). You can also trigger it any time from the Emails tab ("Run automation now").
+**What "automation" actually means here.** Emails you queue are *sent* automatically: the `process-emails` function runs every morning at **8am** (Supabase cron job), takes everything sitting in the email queue and sends it through Resend, recording sent/failed on the Emails tab. You can trigger the same run any time from the Emails tab ("Run automation now") — that is what the button does, and sending is also triggered immediately whenever you queue an email from a case. What the run does **not** do is compose anything new: it reports how many rate-end reminders, review requests and fee requests it newly queued and that figure comes back as **0**. Composing is your click, every time.
 
 ## One thing you must do: connect Resend (email sending)
 Emails queue up but won't send until this is done (~15 minutes):
@@ -62,7 +62,7 @@ The **Import tab** (bulk upload sorted by AI) and the **"Read mortgage offer" bu
 - **Read mortgage offer**: open a case → "Read mortgage offer (AI)" → choose the offer PDF. It fills in lender, rate, rate end date, ERC end date, loan amount etc. for you to check and Save, stores the PDF against the case, and clears the "estimated" flag on the rate end date.
 
 ### Estimated dates
-Rate-end dates carried over from the spreadsheet were calculated as completion date + product term. They're flagged **purple with a ≈ symbol** everywhere until confirmed — open the case, correct the date if needed, untick "estimated", Save. Uploading the mortgage offer does this automatically.
+Rate-end dates carried over from the spreadsheet were calculated as completion date + product term. They're flagged **purple with a ≈ symbol** everywhere until confirmed — open the case, correct the date if needed, untick "estimated", Save. "Read mortgage offer (AI)" fills in the real date and unticks "estimated" for you — it fills the form, so you still press Save to keep it.
 
 ## Fill in Settings on first login
 - Bank account name / sort code / account number (needed for fee request emails)
@@ -72,7 +72,7 @@ Rate-end dates carried over from the spreadsheet were calculated as completion d
 
 ## Added July 2026: protection prompts, evidence packs, reports, introducer portal
 - **Protection**: every case has a Protection status. Cases at Application/Offer/Exchange with "Not discussed" get a 🛡 badge and appear in the dashboard's Protection opportunities panel. Reports tracks protection uptake %.
-- **Evidence pack**: on any case, "🗂 Evidence pack" opens a printable FCA-file-ready report — client, case details, full event timeline (stage changes, emails sent, offer uploads are logged automatically), communications, notes and tasks. Print → Save as PDF.
+- **Evidence pack**: on any case, "🗂 Evidence pack" opens a printable FCA-file-ready report — client, case details, an event timeline, communications, notes and tasks. Print → Save as PDF. Note: nothing currently writes new rows into that event timeline as you use the app day to day (stage moves, offer uploads etc. are not auto-logged today), so it will not show recent activity — the pack says this on the timeline itself. Client communications (emails) are tracked and shown accurately; treat Case details above the timeline as the current position.
 - **Reports tab**: completions by month, live pipeline funnel, pipeline loan value, fees banked vs outstanding, retention conversion, protection uptake, lead sources and introducer league table. Set "Lead source" on cases to feed it.
 - **Introducers**: add them in Settings → assign on cases → their referrals show in Reports. "Create portal login" gives them access to `introducer.html` — a separate page where they see ONLY their own referrals' names and progress (nothing else; enforced by database security, not just the interface).
 - **Team logins**: Settings → Team logins creates full-access colleague accounts (temporary password shown once).
@@ -82,7 +82,7 @@ Rate-end dates carried over from the spreadsheet were calculated as completion d
 - **Website leads**: the contact form on nexmoney.co.uk now feeds straight into the back office (with anti-spam protection). New enquiries appear at the top of the **Today** screen — Accept creates the client + case assigned to you and opens it; Discard bins it. Works as soon as the site is live (the form posts to the system directly, wherever the site is hosted).
 - **Today screen** (was Dashboard): reorganised around your working day — new leads and today's appointments first, then retention/tasks, then alerts.
 - **Diary**: week view with prev/next, filter by staff member, appointments linked to clients/cases. "Book appointment" button on every case. Today's appointments show on the Today screen.
-- **Handoffs**: every case and task has an "Assigned to". Change it to hand a case to a colleague (it's recorded in the case's event log). Pipeline has a search box and an adviser filter (All / Unassigned / per person); cards show the owner's initials. Tasks panel defaults to "Mine" (yours + unassigned) — click to toggle All.
+- **Handoffs**: every case and task has an "Assigned to". Change it to hand a case to a colleague — this is not recorded anywhere (no event log, no audit trail of who held a case when); add a note on the case yourself if you need that history. Pipeline has a search box and an adviser filter (All / Unassigned / per person); cards show the owner's initials. Tasks panel defaults to "Mine" (yours + unassigned) — click to toggle All.
 - **Drag and drop**: drag pipeline cards between columns to move cases on.
 
 ## Technical reference
