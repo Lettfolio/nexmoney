@@ -78,9 +78,11 @@
       <div class="panel dash-drawer collapsed" id="watchtower-panel">
         <h3 onclick="toggleDrawer(event,'watchtower')">🚨 Watchtower
           <button class="btn btn-ghost btn-sm" id="watchtower-run">Run checks</button>
+          <button class="btn btn-ghost btn-sm hidden" id="watchtower-snoozed-toggle" title="Show/hide snoozed alerts">0 snoozed</button>
         </h3>
         <p class="panel-sub" id="watchtower-sub">Problems found automatically — resolves itself when fixed</p>
         <div id="watchtower-list" class="dash-scroll"></div>
+        <div id="watchtower-snoozed" class="dash-scroll hidden"></div>
       </div>
       <div class="kpi-row" id="kpi-row"></div>
       <div class="grid-2">
@@ -154,7 +156,9 @@
       <h2>Protection &amp; GI</h2>
       <div class="kpi-row" id="prot-summary">
         <div class="kpi"><div class="num" id="prot-kpi-count">—</div><div class="lbl">Opportunities</div></div>
-        <div class="kpi"><div class="num" id="prot-kpi-comm">—</div><div class="lbl">Est. commission</div></div>
+        <!-- R5-17 (label half) — this figure is a probability-weighted average of typical protection
+             commission, NOT a percentage of the loan. Saying so stops it being read as banked money. -->
+        <div class="kpi"><div class="num" id="prot-kpi-comm">—</div><div class="lbl">Est. commission</div><div class="s">(probability-weighted average, not loan-based)</div></div>
         <div class="kpi kpi-click" id="prot-tile-quoted" title="Click to filter the table to quoted cases awaiting a decision"><div class="num" id="prot-kpi-quoted">—</div><div class="lbl">Quoted, awaiting decision</div></div>
       </div>
       <p class="panel-sub hidden" id="prot-money-note"></p>
@@ -177,6 +181,12 @@
       <div class="page-head">
         <h2 id="diary-title">Diary</h2>
         <div class="page-tools">
+          <!-- B9 (R5-31) — Month/Day toggle. Same seg-btn/scope-active pattern as the Mine|All
+               scopes elsewhere, so it reads as "this page's current view" not a new widget type. -->
+          <div class="pipe-segment" id="diary-view-toggle" role="tablist" aria-label="Diary view">
+            <button type="button" class="btn btn-sm seg-btn seg-first scope-active" id="diary-view-month" role="tab" aria-selected="true">Month</button>
+            <button type="button" class="btn btn-sm seg-btn seg-last" id="diary-view-day" role="tab" aria-selected="false">Day</button>
+          </div>
           <select id="diary-staff"></select>
           <button class="btn" id="diary-prev">‹ Prev</button>
           <button class="btn" id="diary-today">Today</button>
@@ -186,6 +196,14 @@
       </div>
       <div class="diary-legend" id="diary-legend"></div>
       <div class="diary-grid" id="diary-grid"></div>
+      <!-- B9 (R5-31) — Day view: a single time-axis column, hidden while Month is active. The month
+           grid above is left completely alone so toggling never touches its markup. -->
+      <div class="diary-day-view hidden" id="diary-day-view">
+        <div class="diary-timeline-wrap">
+          <div class="diary-hour-labels" id="diary-hour-labels"></div>
+          <div class="diary-day-lane" id="diary-day-lane" title="Click an empty slot to book an appointment"></div>
+        </div>
+      </div>
     </section>
 
     <!-- Clients -->
@@ -220,6 +238,15 @@
         <input type="month" id="report-month">
       </div>
       <p class="panel-sub hidden" id="report-money-note"></p>
+      <!-- R5-17 — the one legend that links every money label on this page to the basis it is
+           counted on. Nothing here changes a calculation; it names the three bases so two figures
+           that legitimately disagree can be read as different questions rather than a bug. -->
+      <!-- G1N-2 — "outstanding" said "earned and invoiced", but the Fees outstanding tile counts
+           fee_status in ('not_requested','requested'): on the current book most of that money has
+           never been invoiced at all. The legend added to stop two honest figures looking like a
+           bug was itself the inaccurate one, and an owner chasing it would have gone looking for
+           invoices that do not exist. It now describes what the tile actually counts. -->
+      <p class="panel-sub hidden" id="report-basis-legend">Three money bases on this page — <strong>earned</strong>: fee value on a case that has completed or been submitted, paid or not · <strong>outstanding</strong>: earned but not yet received — whether it has been invoiced or is still to be invoiced · <strong>cash (banked)</strong>: money actually received, counted in the month it was paid. Every figure below says which one it is.</p>
       <div class="panel">
         <h3 id="month-report-title">This month</h3>
         <div class="kpi-row" id="month-kpis" style="margin:12px 0 8px;"></div>
@@ -245,8 +272,29 @@
           <div id="report-sources"></div>
         </div>
       </div>
+      <!-- B3 / R5-20 — where the work went. Populated by renderThreadedPanels(); month-scoped by
+           default (by the stage-change date where the event log has one, else last touched), with
+           an all-time toggle. -->
+      <div class="panel hidden" id="report-losses-panel">
+        <div class="panel-head-row">
+          <h3>Losses — why cases didn't proceed</h3>
+          <button type="button" class="btn btn-sm" id="report-losses-scope-btn" onclick="toggleLossesScope()">All time</button>
+        </div>
+        <p class="panel-sub" id="report-losses-scope"></p>
+        <div id="report-losses"></div>
+      </div>
       <p class="report-live-note">Live snapshot — the panels below are not affected by the month selected above.</p>
       <div class="kpi-row" id="report-kpis"></div>
+      <!-- S7 / R5-47 — the review-score drill-down. A score is a person; this lists them so the
+           tile can be answered ("who gave us a 6?") instead of only admired. -->
+      <div class="panel hidden" id="report-nps-panel">
+        <div class="panel-head-row">
+          <h3>Review scores — every respondent</h3>
+          <button type="button" class="btn btn-sm" onclick="toggleNpsList()">Hide</button>
+        </div>
+        <p class="panel-sub" id="report-nps-scope"></p>
+        <div id="report-nps-list"></div>
+      </div>
       <div class="panel" id="report-forecast-panel">
         <h3>Commission forecast — live pipeline</h3>
         <div class="kpi-row" id="report-forecast-headline" style="margin:8px 0 12px;"></div>
@@ -255,7 +303,8 @@
       </div>
       <div class="grid-2">
         <div class="panel">
-          <h3>Completions by month (this year)</h3>
+          <h3 id="report-months-title">Completions by month (this year)</h3>
+          <p class="panel-sub" id="report-months-legend"></p>
           <div id="report-months"></div>
         </div>
         <div class="panel">
@@ -285,11 +334,11 @@
         <h2>Email activity</h2>
         <div class="page-tools">
           <label style="display:flex;align-items:center;gap:6px;font-weight:500;font-size:13px;color:var(--muted);"><input type="checkbox" id="email-failed-only" style="width:auto;margin:0;"> Failed only</label>
-          <button class="btn" id="run-now-btn" title="Runs the daily automation immediately">▶ Run automation now</button>
+          <button class="btn hidden" id="run-now-btn" title="Sends every queued email for the whole firm — asks first">▶ Run automation now</button>
           <button class="btn" id="run-sms-btn" title="Sends any queued SMS immediately">▶ Send SMS now</button>
         </div>
       </div>
-      <p class="panel-sub">The 8am cron job — and this button — send whatever is sitting in the email queue. Nothing composes new emails for you: rate-end reminders, review requests and fee requests are queued by you from a case.</p>
+      <p class="panel-sub">The 8am cron job sends whatever is sitting in the email queue. Nothing composes new emails for you: rate-end reminders, review requests and fee requests are queued by you from a case, and each one sends on its own — pressing an action on a case never releases anybody else's queue. Sending the whole firm's queue early is an Owner / Administrator action, and it confirms the count and recipients first.</p>
       <div id="email-list"></div>
       <div class="panel" style="margin-top:20px;">
         <h3>SMS activity</h3>
@@ -304,6 +353,24 @@
       <button class="btn btn-primary" id="save-settings-btn">Save settings</button>
       <span id="settings-saved" class="saved-msg hidden">Saved ✓</span>
 
+      <!-- B4 UI (R5-8) — every signed-in staff member's own contact/sign-off, independent of the
+           Owner-only form above (M1's self-update RLS policy covers exactly this row). Hidden
+           outright when the database predates M1 — there is no column to write to. -->
+      <div class="panel hidden" id="my-details-panel" style="margin-top:24px;">
+        <h3>My details</h3>
+        <p class="panel-sub">Used to sign off automated emails to your clients.</p>
+        <div class="settings-grid">
+          <label>Phone
+            <input id="my-phone" type="tel" placeholder="e.g. 01202 900123">
+          </label>
+          <label>Email sign-off
+            <textarea id="my-signoff" rows="3" placeholder="Your name&#10;Job title&#10;NexMoney · 01202 900123"></textarea>
+          </label>
+        </div>
+        <button type="button" class="btn btn-sm btn-primary" id="save-my-details-btn">Save my details</button>
+        <span id="my-details-saved" class="saved-msg hidden">Saved ✓</span>
+      </div>
+
       <div class="panel" style="margin-top:24px;">
         <h3>Introducers</h3>
         <p class="panel-sub">Estate agents, accountants and other referrers. Give them a portal login and they can watch their referrals progress (and nothing else).</p>
@@ -316,23 +383,28 @@
       </div>
 
       <div class="panel" id="team-logins-panel">
-        <h3>Team logins</h3>
-        <p class="panel-sub">Owner only. Choose the tier before you send the invite — it decides what the new login may do, and the database enforces it.</p>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;">
-          <input id="staff-name" placeholder="Full name" style="flex:2;min-width:160px;">
-          <input id="staff-email" type="email" placeholder="Email" style="flex:2;min-width:160px;">
-          <select id="staff-role" style="flex:1;min-width:150px;">
-            <option value="adviser">Adviser</option>
-            <option value="admin">Administrator</option>
-            <option value="introducer">Introducer</option>
-          </select>
-          <select id="staff-introducer" class="hidden" style="flex:2;min-width:160px;"></select>
-          <button class="btn btn-primary" id="invite-staff-btn">Create login</button>
+        <h3>Team</h3>
+        <!-- R5-24 — Owner-only invite/create-login block; toggled by renderSettings(). An Admin
+             (isAdminOrOwner() but not Owner) sees the panel with this block hidden and the roster
+             below rendered read-only instead. -->
+        <div id="team-invite-block">
+          <p class="panel-sub">Owner only. Choose the tier before you send the invite — it decides what the new login may do, and the database enforces it.</p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <input id="staff-name" placeholder="Full name" style="flex:2;min-width:160px;">
+            <input id="staff-email" type="email" placeholder="Email" style="flex:2;min-width:160px;">
+            <select id="staff-role" style="flex:1;min-width:150px;">
+              <option value="adviser">Adviser</option>
+              <option value="admin">Administrator</option>
+              <option value="introducer">Introducer</option>
+            </select>
+            <select id="staff-introducer" class="hidden" style="flex:2;min-width:160px;"></select>
+            <button class="btn btn-primary" id="invite-staff-btn">Create login</button>
+          </div>
+          <p id="staff-role-hint" class="panel-sub" style="margin-top:8px;"></p>
+          <p id="invite-result" class="panel-sub" style="margin-top:10px;"></p>
         </div>
-        <p id="staff-role-hint" class="panel-sub" style="margin-top:8px;"></p>
-        <p id="invite-result" class="panel-sub" style="margin-top:10px;"></p>
         <h4 style="margin:20px 0 4px;font-size:14px;">Who has access</h4>
-        <p class="panel-sub">Change a colleague's role here. Only an Owner can, and the last Owner can't be demoted — promote someone else first.</p>
+        <p class="panel-sub" id="team-roster-caption">Change a colleague's role here. Only an Owner can, and the last Owner can't be demoted — promote someone else first.</p>
         <div id="team-roster"></div>
         <p id="team-role-msg" class="panel-sub hidden" style="margin-top:8px;"></p>
       </div>
@@ -369,6 +441,14 @@
 <!-- ===== Modal ===== -->
 <div id="modal-backdrop" class="modal-backdrop hidden">
   <div class="modal" id="modal" role="dialog" aria-modal="true"></div>
+</div>
+
+<!-- ===== Second-layer overlay =====
+     The small captures that have to sit ON TOP of an open record modal without destroying it:
+     the required lost reason on a Not-Proceeding move, and the per-fee-type "mark fee paid"
+     dates. Same .modal styling, its own backdrop, resolved via openOverlay() in app.js. -->
+<div id="overlay-backdrop" class="modal-backdrop overlay-backdrop hidden">
+  <div class="modal overlay-modal" id="overlay-modal" role="dialog" aria-modal="true"></div>
 </div>
 
 <button id="assistant-fab" class="hidden" title="Ask AI — look up clients, draft replies, add tasks and notes" aria-label="Ask AI assistant">✦<span class="fab-label">Ask AI</span></button>
