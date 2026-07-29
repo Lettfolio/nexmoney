@@ -145,7 +145,10 @@ const SETTING_FIELDS = [
   ["bank_account_name", "Bank account name"],
   ["bank_sort_code", "Sort code"],
   ["bank_account_number", "Account number"],
-  ["monthly_fee_target", "Monthly fee target (£ banked, blank = off)"],
+  // R5-F2 — the bar this setting drives now measures fees EARNED on the month's completions, with
+  // cash collected shown beneath it. The label says so, so the number being typed in means the
+  // same thing as the number being measured against it.
+  ["monthly_fee_target", "Monthly fee target (£ earned on completions, blank = off)"],
   ["rate_reminder_months", "Rate reminder lead time (months)"],
   ["review_delay_days", "Review request delay after completion (days)"],
   ["referral_delay_days", "Referral nudge delay after review request (days)"],
@@ -2968,11 +2971,15 @@ function exportCsv(rows, completedMode = false) {
     if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
     return `"${s.replace(/"/g, '""')}"`;
   };
-  // A firm-wide spreadsheet of every colleague's broker fee is the same figure the Today tile and
-  // the Reports page withhold from a non-Owner, so the column is dropped here too rather than
-  // exported one click later. Presentation only — nothing stops a signed-in adviser reading
-  // broker_fee from the API; the fee on an individual case is still on the case.
-  const money = showMoney();
+  /* A firm-wide spreadsheet of every colleague's broker fee is the same figure the Today tile and
+     the Reports page withhold from a non-Owner, so the column is dropped here rather than exported
+     one click later. Presentation only — nothing stops a signed-in adviser reading broker_fee from
+     the API; the fee on an individual case is still on the case.
+     R5-F1 (Daniel-approved) — but an adviser exporting THEIR OWN book was being denied their own
+     money, which is the same reversal as the My numbers card. csvShowsFee() keeps the column when
+     every row in this export is the signed-in adviser's own case and drops it the moment a
+     colleague's row is in view, so the scope decides, not the click. Owner and admin unchanged. */
+  const money = csvShowsFee(rows);
   const head = (completedMode
     ? ["Client", "Status", "Completed", "Lender", "Loan", "Broker fee", "Fee status", "Adviser"]
     : ["Client", "Stage", "Type", "Lender", "Rate %", "Rate end", "Rate end estimated", "ERC end", "Broker fee", "Fee status", "Protection", "Adviser", "Updated"]
@@ -7029,6 +7036,20 @@ const BASIS_CASH_YTD = "(broker only · cash · YTD)";
 const BASIS_TARGET = "cash · proc+broker+sols · by paid date";
 const BASIS_FORECAST = "(weighted · proc+broker, excl. sols)";
 const BASIS_INTRO_REV = "(all-time · earned · completed cases)";
+/* R5-F2 (Daniel-approved) — the HEADLINE basis. Fee value is now led with as EARNED ON COMPLETION:
+   proc + broker + sols on cases whose completed_at falls in the period, paid or not. The cash
+   figures (BASIS_TARGET / BASIS_CASH_*) are not deleted and not changed — they are demoted to
+   clearly-labelled secondary numbers beside the headline. Two figures answering two questions; the
+   page now leads with the one Daniel manages the business on. */
+const BASIS_EARNED_MONTH = "(earned · proc+broker+sols · completed this month)";
+const BASIS_EARNED_YTD = "(earned · proc+broker+sols · completed YTD)";
+const BASIS_TARGET_EARNED = "earned · proc+broker+sols · by completion date";
+/* R5-F1 (Daniel-approved) — the adviser's own three figures. Every one of these is scoped to
+   assigned_to = the signed-in person; the wording says so on the tile itself so the card can never
+   be mistaken for a firm-wide number. Same clamps as the owner figures: no future-dated cash. */
+const BASIS_MY_CASH_YTD = "(cash · proc+broker+sols · by paid date · my cases · YTD · excl. future-dated)";
+const BASIS_MY_OUTSTANDING = "(earned · not yet received · my completed cases)";
+const BASIS_MY_PIPELINE = "(unweighted estimate · proc+broker · offer & exchange · my cases)";
 const basisLine = (t) => `<div class="s">${esc(t)}</div>`;
 
 /* B7 — the per-fee-type amount/date pairing is FEE_TYPES, declared with the mark-paid flow above
@@ -7057,6 +7078,40 @@ function cashInMonth(rows, mv, types) {
     });
   });
   return { total, futureN, futureTotal };
+}
+/* R5-F1 — the same walk, scoped to a calendar YEAR instead of a month. Deliberately a separate
+   function rather than a "period" flag on cashInMonth: the month version is load-bearing for the
+   target bar and the scoreboard, and both keep the identical future-date clamp below. */
+function cashInYear(rows, yr, types) {
+  const today = localDateStr();
+  const wanted = FEE_TYPES.filter((f) => types.indexOf(f.key) >= 0);
+  let total = 0, futureN = 0, futureTotal = 0;
+  (rows || []).forEach((c) => {
+    wanted.forEach((f) => {
+      const amt = Number(c[f.amountCol] || 0);
+      if (!amt) return;
+      const d = feeCashDate(c, f.dateCol);
+      if (!d || localDateStr(d).slice(0, 4) !== String(yr)) return;
+      if (localDateStr(d) > today) { futureN++; futureTotal += amt; return; }
+      total += amt;
+    });
+  });
+  return { total, futureN, futureTotal };
+}
+/* R5-F2 — the HEADLINE basis, in one place so the month card, the target bar and the YTD tile
+   cannot drift apart: proc + broker + sols fee value on cases whose completed_at falls in the
+   period, whether or not any of it has been paid. `period` is "YYYY-MM" or "YYYY" — matched by
+   prefix against the Europe/London completion date, the same basis every other figure here uses. */
+function earnedOnCompletion(rows, period) {
+  const p = String(period || "");
+  let total = 0, n = 0;
+  (rows || []).forEach((c) => {
+    if (!c.completed_at) return;
+    if (localDateStr(c.completed_at).slice(0, p.length) !== p) return;
+    n++;
+    total += Number(c.proc_fee || 0) + Number(c.broker_fee || 0) + Number(c.sols_fee || 0);
+  });
+  return { total, n };
 }
 /* "YYYY-MM" ± n calendar months, on the same UK-local basis as localMonthStr. */
 function monthAdd(mv, n) {
@@ -7106,6 +7161,30 @@ const ATTRIB_NOTE = "Figures follow the adviser currently on each case; complete
    adviser; anyone with the browser console can read what this hides. Do not describe it as a
    control, and do not rely on it for anything that matters. */
 const showMoney = () => isOwner();
+/* R5-F1 (Daniel-approved, this round) — the one exception to the paragraph above. An adviser could
+   see every firm-wide money figure withheld and none of their OWN, which meant the person doing the
+   work had no way to answer "what have I banked this year". Daniel reversed that for the adviser's
+   own book only: ONE card, every figure on it scoped to assigned_to = me, nothing firm-wide and
+   nothing belonging to a colleague.
+   Audience is advisers; a working admin who holds cases gets it too (they are staff doing the same
+   job), which is why this keys off MY_ROLE + ME rather than a single role string. The Owner is
+   excluded — showMoney() already gives them the fuller, firm-wide set below, and a second "my
+   numbers" card would just be a subset of what they can already see.
+   Still a PRESENTATION choice, not a control: the same caveat as showMoney() applies verbatim. */
+const MY_NUMBERS_ROLES = ["adviser", "admin", "staff"];
+const showMyNumbers = () => !!ME && !isOwner() && MY_NUMBERS_ROLES.includes(MY_ROLE);
+/* R5-F1 (CSV half) — whether a pipeline export may carry the Broker fee column. The Owner is
+   unchanged (always). For an ADVISER the column is dropped only when the export would spill a
+   colleague's fee: an export whose every row is their own case is their own money and now keeps the
+   column. Admin exports are deliberately unchanged (still stripped) — Daniel scoped this reversal
+   to the advisers whose own numbers they are. */
+const csvFeeRoles = () => MY_ROLE === "adviser" || MY_ROLE === "staff";
+function csvShowsFee(rows) {
+  if (showMoney()) return true;
+  if (!csvFeeRoles() || !ME) return false;
+  const list = rows || [];
+  return list.length > 0 && list.every((c) => c && c.assigned_to === ME.id);
+}
 /* S8 / R5-19 — the month card's KPI set for ANY month, so the same numbers can be computed for the
    selected month, the month before it and the same month a year earlier without duplicating the
    arithmetic. `hasData` answers "do we hold any case rows for that month at all" — the test that
@@ -7124,6 +7203,71 @@ function monthKpiSet(all, mv) {
     hasData: all.some((c) => inMonth(c.created_at) || inMonth(c.submitted_at) || inMonth(c.completed_at)),
   };
 }
+
+/* ==========================================================================
+   R5-F1 — "MY NUMBERS" (Daniel-approved policy change, this round)
+   ONE card, on Reports, for the person doing the work. Reports is its home because the page is
+   already reachable by every staff role (only the figures on it were Owner-gated), so an adviser
+   lands on it without any page-level gating being loosened, and the card sits beside the
+   operational figures — completions, funnel, lead sources — that describe the very same cases. My
+   Day was the alternative and was rejected: that page is a to-do list scoped to today, and a
+   year-to-date money figure parked on it reads as a task.
+
+   THE ONE RULE THIS CARD MUST NEVER BREAK: every figure is scoped to cases assigned_to = the
+   signed-in person. No firm total, no colleague's number, no "your share of X". The scope line
+   above the tiles says so in words, and each tile states its basis in exactly the form the Owner's
+   figures use, so the two can be reconciled rather than argued about.
+
+   Bases, all three already defined and used elsewhere on this page:
+     · banked YTD  — cash, per fee type on ITS OWN paid date (coalesce(<type>_fee_paid_at,
+                     fee_paid_at)), calendar year, future-dated payments EXCLUDED (the same clamp
+                     the target bar applies) and footnoted rather than silently dropped.
+     · outstanding — earned but not received: fee amounts on MY COMPLETED cases that carry no paid
+                     date at all. Deliberately not fee_status, which is a broker-fee-only workflow
+                     field; "no cash date" is the question this tile asks.
+     · pipeline    — proc + broker estimate on my offer/exchange cases, UNWEIGHTED. Said on the
+                     tile, because the Owner's forecast beside it is probability-weighted and the
+                     two would otherwise look like the same number disagreeing.
+   ========================================================================== */
+function renderMyNumbers(all, yr) {
+  const panel = $("#report-mine-panel");
+  if (!panel) return;
+  const on = showMyNumbers();
+  panel.classList.toggle("hidden", !on);
+  if (!on) { $("#report-mine").innerHTML = ""; const s0 = $("#report-mine-scope"); if (s0) s0.textContent = ""; return; }
+
+  const mine = (all || []).filter((c) => c.assigned_to === ME.id);
+  const banked = cashInYear(mine, yr, ["broker", "proc", "sols"]);
+
+  // Earned but not received, on MY completed cases: every fee amount with no paid date against it.
+  let outstanding = 0, outstandingN = 0;
+  const outstandingCases = new Set();
+  mine.filter((c) => c.stage === "completed").forEach((c) => {
+    FEE_TYPES.forEach((f) => {
+      const amt = Number(c[f.amountCol] || 0);
+      if (!amt) return;
+      if (feeCashDate(c, f.dateCol)) return;   // already banked — counted in the tile above
+      outstanding += amt; outstandingN++;
+      outstandingCases.add(c.id);
+    });
+  });
+
+  // Pipeline at Offer+ — offer and exchange only, proc + broker, unweighted.
+  const OFFER_PLUS = ["offer", "exchange"];
+  const offerPlus = mine.filter((c) => OFFER_PLUS.includes(c.stage));
+  const pipeline = offerPlus.reduce((s, c) => s + Number(c.proc_fee || 0) + Number(c.broker_fee || 0), 0);
+
+  const scope = $("#report-mine-scope");
+  if (scope) {
+    scope.textContent = `Your own figures only — every number on this card counts cases assigned to you (${mine.length} case${mine.length === 1 ? "" : "s"}). `
+      + `Nothing here is a firm total and no colleague's cases are in it. ${ATTRIB_NOTE}`;
+  }
+  $("#report-mine").innerHTML = `
+    <div class="kpi"><div class="num" title="${esc(fmtM(banked.total))}">${fmtM(banked.total)}</div><div class="lbl">My fees banked ${yr}</div>${basisLine(BASIS_MY_CASH_YTD + (banked.futureN ? ` — ${fmtM(banked.futureTotal)} dated after today (${banked.futureN}) is excluded` : ""))}</div>
+    <div class="kpi ${outstanding ? "warn" : ""}"><div class="num" title="${esc(fmtM(outstanding))}">${fmtM(outstanding)}</div><div class="lbl">My fees outstanding</div>${basisLine(BASIS_MY_OUTSTANDING + ` — ${outstandingN} fee${outstandingN === 1 ? "" : "s"} across ${outstandingCases.size} completed case${outstandingCases.size === 1 ? "" : "s"} with no paid date`)}</div>
+    <div class="kpi"><div class="num" title="${esc(fmtM(pipeline))}">${fmtM(pipeline)}</div><div class="lbl">My pipeline at Offer+</div>${basisLine(BASIS_MY_PIPELINE + ` — ${offerPlus.length} case${offerPlus.length === 1 ? "" : "s"} at Offer or Exchange, not weighted for fall-through`)}</div>`;
+}
+
 function renderMonthReport(all, mv) {
   const money = showMoney();
   // Bucketed on the UK-local month (see monthKpiSet) so this card agrees with the annual chart/YTD.
@@ -7155,31 +7299,48 @@ function renderMonthReport(all, mv) {
   const legend = $("#month-legend");
   if (legend) legend.classList.toggle("hidden", !money);
   const basisLegend = $("#report-basis-legend");
-  if (basisLegend) basisLegend.classList.toggle("hidden", !money);
+  /* R5-F1 — the legend names the three bases every money label on this page is counted on, and
+     since the My numbers card uses all three it now describes figures an adviser CAN see. Hiding it
+     from them was correct while they had no money figures at all; it isn't any more. */
+  if (basisLegend) basisLegend.classList.toggle("hidden", !money && !showMyNumbers());
+  /* R5-F2 — "Completed £" is the headline: fee value EARNED on the cases that completed this
+     month. It is not moved (the tile order is load-bearing for the delta chips beside it) and its
+     label is unchanged; the emphasis is carried by kpi-headline, and by the target bar below, which
+     now measures the same basis. */
   $("#month-kpis").innerHTML = `
     <div class="kpi"><div class="num">${cur.nSub}</div><div class="lbl">Applications submitted</div>${cmpCount("nSub")}</div>
-    ${money ? `<div class="kpi"><div class="num">${fmtM(cur.subTotal)}</div><div class="lbl">Submitted £ (proc+broker+sols)</div>${basisLine(BASIS_EARNED_ALL)}${cmpMoney("subTotal")}</div>` : ""}
+    ${money ? `<div class="kpi kpi-secondary"><div class="num">${fmtM(cur.subTotal)}</div><div class="lbl">Submitted £ (proc+broker+sols)</div>${basisLine(BASIS_EARNED_ALL)}${cmpMoney("subTotal")}</div>` : ""}
     <div class="kpi"><div class="num">${cur.nDone}</div><div class="lbl">Completions</div>${cmpCount("nDone")}</div>
-    ${money ? `<div class="kpi"><div class="num">${fmtM(cur.doneTotal)}</div><div class="lbl">Completed £ (proc+broker+sols)</div>${basisLine(BASIS_EARNED_ALL)}${cmpMoney("doneTotal")}</div>` : ""}`;
+    ${money ? `<div class="kpi kpi-headline"><div class="num">${fmtM(cur.doneTotal)}</div><div class="lbl">Completed £ (proc+broker+sols)</div>${basisLine(BASIS_EARNED_ALL)}${cmpMoney("doneTotal")}</div>` : ""}`;
 
   // BUILD 6a — firm monthly fee target (settings.monthly_fee_target, blank = off).
   // B7 / Batch 6.4 — "collected" now means each fee type counted on ITS OWN paid date
   // (coalesce(<type>_fee_paid_at, fee_paid_at)), so a split-paid case lands each £ in the month
   // that money actually arrived, and a payment dated in the future is excluded outright with a
   // footnote rather than silently inflating this month's bar.
+  /* R5-F2 (Daniel-approved) — the BAR now measures fees EARNED ON COMPLETION in the month
+     (proc+broker+sols on cases whose completed_at falls in it, paid or not), because that is the
+     month's work and the thing a target is set against; cash arrives weeks later and used to make
+     a fully-worked month read as a miss. The cash figure is NOT deleted and NOT changed — it keeps
+     its own line, its own basis label and its own future-date footnote directly underneath, so
+     both numbers are on screen and neither can be mistaken for the other. The caption on each line
+     states which basis it is. */
   const targetEl = $("#month-fee-target");
   if (targetEl) {
     const target = money ? Number(settings.monthly_fee_target || 0) : 0;
     if (target > 0) {
+      const earned = earnedOnCompletion(all, mv);
       const cash = cashInMonth(all, mv, ["broker", "proc", "sols"]);
       const banked = cash.total;
-      const pct = Math.round((banked / target) * 100);
+      const pct = Math.round((earned.total / target) * 100);
+      const cashPct = Math.round((banked / target) * 100);
       const color = pct >= 100 ? "var(--green)" : pct >= 60 ? "var(--amber)" : "var(--red)";
       targetEl.innerHTML = `
-        <div class="panel-sub" style="margin:12px 0 4px;">Total fees collected vs target — ${fmtM(banked)} of ${fmtM(target)} (${pct}%) <span class="money-basis">${esc(BASIS_TARGET)}${cash.futureN ? ` — excludes future-dated payments (${cash.futureN})` : ""}</span></div>
+        <div class="panel-sub target-headline" style="margin:12px 0 4px;">Fees earned vs target — ${fmtM(earned.total)} of ${fmtM(target)} (${pct}%) <span class="money-basis">${esc(BASIS_TARGET_EARNED)} — ${earned.n} completion${earned.n === 1 ? "" : "s"} this month, paid or not</span></div>
         <div style="background:var(--light);border-radius:4px;height:16px;overflow:hidden;">
           <div style="width:${Math.min(pct, 100)}%;background:${color};height:16px;"></div>
-        </div>`;
+        </div>
+        <div class="panel-sub target-secondary" style="margin:6px 0 0;">Also — total fees collected ${fmtM(banked)} of ${fmtM(target)} (${cashPct}%) <span class="money-basis">${esc(BASIS_TARGET)}${cash.futureN ? ` — excludes future-dated payments (${cash.futureN})` : ""}</span></div>`;
     } else {
       targetEl.innerHTML = "";
     }
@@ -7391,6 +7552,7 @@ function renderThreadedPanels(all, mv, repAdvisers) {
    ========================================================================== */
 let lossesAllTime = false;
 let lossState = { all: [], mv: null, lostAt: {} };
+window.lossState = lossState; // test hook — mutated in place (see renderLossesPanel/loadLostDates), never reassigned, so this stays live.
 /* When a case stopped: the most recent stage_changed event INTO not_proceeding, else last touched.
    `lostAt` is loaded best-effort (loadLostDates) so a blocked/absent case_events degrades to
    updated_at rather than emptying the panel. */
@@ -7557,7 +7719,31 @@ window.toggleForecastNoneList = function () {
    bucket — no error, nothing on screen, exactly the failure mode M2/M5 were built to end. Past
    PostgREST's max-rows cap (1000 by default) an unordered, unbounded select is free to do that.
    Ordering both by id and asking for the same explicit ceiling keeps them walking the same set. */
-const REPORTS_ROW_CAP = 5000;
+let REPORTS_ROW_CAP = 5000;
+/* R5-F4 — the cap above is honest about being a cap only if the page says when it BITES. A select
+   that comes back holding exactly REPORTS_ROW_CAP rows is, as far as the client can tell, truncated:
+   every figure below then describes the first N cases by id and nothing on screen says so. These
+   two collect that fact per select and renderCapNotice() turns it into one line.
+   `=== cap` rather than `>=`: PostgREST cannot return more than the ceiling, and a book that is
+   exactly 5000 cases long is a false positive worth having over a silent truncation. */
+let reportsCapHits = [];
+function noteRowCap(label, rows) {
+  if (Array.isArray(rows) && rows.length === REPORTS_ROW_CAP) reportsCapHits.push(label);
+}
+function renderCapNotice() {
+  const el = $("#report-cap-notice");
+  if (!el) return;
+  const hit = reportsCapHits.length > 0;
+  el.classList.toggle("hidden", !hit);
+  el.textContent = hit
+    ? `⚠ Showing the first ${REPORTS_ROW_CAP.toLocaleString("en-GB")} cases — figures describe this subset, not the whole book. (Reached on: ${[...new Set(reportsCapHits)].join(", ")}.)`
+    : "";
+}
+/* SANDBOX ONLY — the mock harness needs to make the cap bite on a 50-case fixture. Defined only
+   when the mock supabase bundle is what loaded, so it cannot exist in the shipped app. */
+if (typeof window !== "undefined" && window.supabase && window.supabase.__isMock) {
+  window.__setReportsRowCap = function (n) { REPORTS_ROW_CAP = Number(n) || 5000; return REPORTS_ROW_CAP; };
+}
 /* G1N-9 — "…→ not_proceeding" (the move INTO the lost stage), never "not_proceeding → …" (a
    reopen). The bare-name alternative covers a writer that records only the new stage. */
 const LOST_EVENT_RE = /(?:→|->)\s*not_proceeding\s*$|^\s*not_proceeding\s*$/;
@@ -7566,6 +7752,7 @@ async function loadCaseExtraColumns() {
     const { data, error } = await db.from("cases").select("id,lost_reason,broker_fee_paid_at,proc_fee_paid_at,sols_fee_paid_at")
       .order("id").limit(REPORTS_ROW_CAP);
     if (error) return null;
+    noteRowCap("case fee dates", data);
     const map = {};
     (data || []).forEach((r) => { if (r && r.id) { const { id, ...rest } = r; map[id] = rest; } });
     return map;
@@ -7582,6 +7769,7 @@ async function loadLostDates() {
     const { data, error } = await db.from("case_events").select("case_id,event,detail,created_at")
       .eq("event", "stage_changed").order("created_at").limit(REPORTS_ROW_CAP);
     if (error) return {};
+    noteRowCap("stage-change history", data);
     const map = {};
     (data || []).forEach((e) => {
       if (!e || !e.case_id || !e.created_at) return;
@@ -7608,6 +7796,7 @@ async function loadReports() {
   if (picker && !picker.max) picker.max = thisMonth;
   const mv = (picker && picker.value) || thisMonth;
   if (picker && !picker.value) picker.value = mv;
+  reportsCapHits = []; // R5-F4 — one verdict per render, never carried over from the last one
   const [{ data: cases }, { data: intros }, repRes, extraCols, lostAt] = await Promise.all([
     // G1N-4 — same order and same explicit ceiling as loadCaseExtraColumns, so the two selects
     // that are merged by id below can never walk different subsets of the table.
@@ -7621,11 +7810,14 @@ async function loadReports() {
     loadLostDates(),
   ]);
   const all = cases || [];
+  noteRowCap("cases", cases);
+  renderCapNotice();
   // Merge the feature-detected columns onto the rows. Where the migration hasn't run these stay
   // undefined and every consumer falls back: feeCashDate → fee_paid_at, lost_reason → "(not
   // recorded)".
   if (extraCols) all.forEach((c) => { const x = extraCols[c.id]; if (x) Object.assign(c, x); });
   lossState.lostAt = lostAt || {};
+  renderMyNumbers(all, yr);
   renderMonthReport(all, mv);
   const activeStages = ["enquiry", "fact_find", "decision_in_principle", "application", "offer", "exchange"];
   const active = all.filter((c) => activeStages.includes(c.stage));
@@ -7679,13 +7871,19 @@ async function loadReports() {
   const moneyNote = $("#report-money-note");
   if (moneyNote) {
     moneyNote.classList.toggle("hidden", money);
-    moneyNote.textContent = money ? "" : "Firm-wide money figures — fees banked and outstanding, pipeline loan value, the adviser scoreboard, the forecast, introducer revenue and client lifetime value — are shown to the Owner only. Case counts, the funnel, completions and lead sources are below, and the fees on your own cases are on each case.";
+    moneyNote.textContent = money ? "" : "Firm-wide money figures — fees banked and outstanding, pipeline loan value, the adviser scoreboard, the forecast, introducer revenue and client lifetime value — are shown to the Owner only. Case counts, the funnel, completions and lead sources are below, your own numbers are in the My numbers card at the top, and the fees on your own cases are on each case.";
   }
+  /* R5-F2 (Daniel-approved) — the HEADLINE fee figure for the year is now what the firm EARNED on
+     the cases it completed (proc+broker+sols on completed_at), not what happened to arrive in the
+     bank. "Fees banked" is not deleted and its arithmetic is untouched — it keeps its tile, its
+     basis label and its future-dated footnote, one place further along and marked secondary. */
+  const earnedYr = earnedOnCompletion(all, String(yr));
   $("#report-kpis").innerHTML = `
     <div class="kpi kpi-click" onclick="kpiGoto('completed')" title="View completed cases in the pipeline"><div class="num">${completedYr.length}</div><div class="lbl">Completions ${yr}</div></div>
     <div class="kpi kpi-click" onclick="kpiGoto('active')" title="View the pipeline"><div class="num">${active.length}</div><div class="lbl">Live cases</div></div>
     ${money ? `<div class="kpi kpi-click" onclick="kpiGoto('active')" title="View the pipeline — loan value of the ${active.length} live cases"><div class="num" title="${esc(fmtM(pipelineValue))}">${fmtM(pipelineValue)}</div><div class="lbl">Pipeline loan value</div></div>` : ""}
-    ${money ? `<div class="kpi"><div class="num" title="${esc(fmtM(feesPaidYr))}">${fmtM(feesPaidYr)}</div><div class="lbl">Fees banked ${yr}</div>${basisLine(BASIS_CASH_YTD + (feesPaidYrFutureN ? ` — includes ${fmtM(feesPaidYrFuture)} dated after today (${feesPaidYrFutureN}); ${fmtM(feesPaidYr - feesPaidYrFuture)} actually received` : ""))}</div>
+    ${money ? `<div class="kpi kpi-headline"><div class="num" title="${esc(fmtM(earnedYr.total))}">${fmtM(earnedYr.total)}</div><div class="lbl">Fees earned ${yr}</div>${basisLine(BASIS_EARNED_YTD + ` — ${earnedYr.n} completion${earnedYr.n === 1 ? "" : "s"}, paid or not`)}</div>
+    <div class="kpi kpi-secondary"><div class="num" title="${esc(fmtM(feesPaidYr))}">${fmtM(feesPaidYr)}</div><div class="lbl">Fees banked ${yr}</div>${basisLine(BASIS_CASH_YTD + (feesPaidYrFutureN ? ` — includes ${fmtM(feesPaidYrFuture)} dated after today (${feesPaidYrFutureN}); ${fmtM(feesPaidYr - feesPaidYrFuture)} actually received` : ""))}</div>
     <div class="kpi kpi-click ${feesOutstanding ? "warn" : ""}" onclick="kpiGoto('fees')" title="View the Protection &amp; Fees drawer — Fees due tab"><div class="num" title="${esc(fmtM(feesOutstanding))}">${fmtM(feesOutstanding)}</div><div class="lbl">Fees outstanding</div>${basisLine(`(broker only · not yet received · ${fmtM(feesInvoiced)} invoiced + ${fmtM(feesNotInvoiced)} not yet invoiced)`)}</div>` : ""}
     <div class="kpi"><div class="num">${rWon + rLost ? Math.round((rWon / (rWon + rLost)) * 100) + "%" : "—"}</div><div class="lbl">Retention conversion</div></div>
     <div class="kpi"><div class="num">${completedYr.length ? Math.round((protDone / completedYr.length) * 100) + "%" : "—"}</div><div class="lbl">Protection uptake ${yr}</div></div>
@@ -8686,6 +8884,40 @@ const moveSentence = (h) => [
   `${h.tasks} open task${h.tasks === 1 ? "" : "s"}`,
   `${h.appts} future appointment${h.appts === 1 ? "" : "s"}`,
 ].join(" · ");
+/* R5-M6 — the atomic handover, and the one rule about it: this function NEVER throws and never
+   half-reports. It returns the RPC's {cases,tasks,appointments} tally when the whole transaction
+   committed, and null for every other outcome — the function not existing yet on an older database
+   (Postgres 42883), a refusal, a transport failure — so the caller falls back to the compensating
+   client-side path unchanged. Returning null on failure is safe precisely because the RPC is one
+   transaction: a failure inside it has already rolled every part of it back. */
+const isMissingFunctionError = (e) => !!e && (e.code === "42883" || /does not exist/i.test(String(e.message || "")));
+async function reassignHoldingsRpc(fromId, toId) {
+  try {
+    const { data, error } = await db.rpc("reassign_holdings", { p_from: fromId, p_to: toId });
+    if (error) {
+      if (!isMissingFunctionError(error)) {
+        // Worth saying out loud in the sandbox/console: the transaction was refused and we are
+        // about to do it the non-atomic way. The user-facing outcome is reported by the fallback.
+        console.warn("reassign_holdings unavailable, falling back to the client-side path:", error.message);
+      }
+      return null;
+    }
+    if (!data || typeof data !== "object") return null;
+    return {
+      cases: Number(data.cases || 0),
+      tasks: Number(data.tasks || 0),
+      appointments: Number(data.appointments || 0),
+    };
+  } catch (e) { return null; }
+}
+/* The RPC's own tally in the same words moveSentence() uses for the pre-flight estimate, so the
+   confirmation reports what actually moved rather than what was predicted a moment earlier. */
+const rpcMoveSentence = (t) => [
+  `${t.cases} live case${t.cases === 1 ? "" : "s"}`,
+  `${t.tasks} open task${t.tasks === 1 ? "" : "s"}`,
+  `${t.appointments} future appointment${t.appointments === 1 ? "" : "s"}`,
+].join(" · ");
+
 /* Removing access is the one role change that strands work, so it does not go straight through the
    plain confirm() the other tiers use. The Owner is shown the exact holdings and must choose:
    hand them to a named colleague, or knowingly leave them where they are. */
@@ -8738,6 +8970,23 @@ async function openDeactivate(id, sel) {
       + `\n\nCompleted and closed cases stay attributed to ${who} for reporting.`)) return;
     reBtn.disabled = true;
     try {
+      /* R5-M6 — the server-side transaction the compensating path below was written to stand in
+         for. reassign_holdings(p_from, p_to) is SECURITY DEFINER, Owner-only via is_owner(), and
+         moves the same three scopes (live cases, open tasks, future appointments) in ONE
+         transaction, returning a {cases,tasks,appointments} tally. Try it FIRST; anything that
+         comes back — the function missing on an older database (42883), a permissions refusal, a
+         network failure — falls through to the unchanged client-side path, which is still correct,
+         just not atomic. Nothing about the fallback is altered by this call succeeding or failing:
+         on failure the RPC's own transaction has already rolled back, so the fallback starts from
+         exactly the state it would have started from before. */
+      const rpcTally = await reassignHoldingsRpc(id, to);
+      if (rpcTally) {
+        box.classList.add("hidden"); box.innerHTML = "";
+        toast(`Work moved to ${staffName(to)}`);
+        await applyRole(id, "none", sel,
+          `${rpcMoveSentence(rpcTally)} moved to ${staffName(to)} in one transaction. Completed and closed cases stay with ${who}.`);
+        return;
+      }
       /* G1I-H1 (critical) — there is no transaction behind these three scoped moves, and they used
          to be fired unconditionally and judged only afterwards: one failure left the other two
          ALREADY COMMITTED while the panel reported "Nothing was reassigned and the role is

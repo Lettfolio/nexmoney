@@ -327,8 +327,9 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
    of magnitude out, on the owner's biggest figure. Wider tracks, a fluid number size and a wrap
    opportunity inside the digits mean a long value wraps rather than being silently cut. */
 .kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 20px; }
-/* The Reports row has 8 tiles — a column count that divides evenly, so there is no orphan row. */
-#report-kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+/* R5-F2 — the Owner's row is 9 tiles since "Fees earned" joined "Fees banked" as the headline; 3
+   columns divides evenly, so there is no orphan row. */
+#report-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .kpi {
   background: var(--white);
   border: 1px solid var(--border);
@@ -1409,3 +1410,34 @@ th .money-basis {
 .mchart-key { display: inline-flex; align-items: center; gap: 5px; margin-right: 10px; }
 .mchart-swatch { display: inline-block; width: 12px; height: 8px; border-radius: 2px; background: var(--navy); }
 .mchart-swatch.prev { background: #b9c6d6; }
+
+/* =========================================================================
+   ROUND 5 FINISH — adviser "My numbers", earned-on-completion headline,
+   REPORTS_ROW_CAP notice
+   ========================================================================= */
+
+/* R5-F2 — emphasis, not new information. The re-rank has to be legible without shouting: the
+   headline figure keeps a full-strength accent bar and a slightly larger number; the demoted cash
+   figure keeps every character of its label and its basis line, just visually one step back. No
+   figure is hidden, greyed out or made harder to read — this is ranking, not suppression. */
+.kpi.kpi-headline::before { background: var(--navy); opacity: 1; width: 40px; height: 4px; }
+.kpi.kpi-headline .num { font-size: clamp(20px, 2.5vw, 29px); }
+.kpi.kpi-secondary::before { opacity: .22; }
+.kpi.kpi-secondary .num { color: var(--muted); font-weight: 600; }
+
+/* The target bar's two captions: the earned figure it now measures, and the cash figure that used
+   to be the bar and is still on screen underneath it. */
+#month-fee-target .target-headline { font-weight: 600; color: var(--dark); }
+#month-fee-target .target-secondary { color: var(--muted); }
+
+/* R5-F1 — the adviser's own card. Deliberately styled as an ordinary panel: this is their normal
+   business information, not an alert and not a privilege badge. The scope line above the tiles is
+   the load-bearing part, so it is given a touch more presence than a plain .panel-sub. */
+#report-mine-panel .panel-sub { color: var(--muted); }
+#report-mine { grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); margin-bottom: 0; }
+#report-mine .kpi::before { background: var(--navy); opacity: .7; }
+
+/* R5-F4 — the row-cap line. It says the figures below describe a subset, which is a caveat on
+   everything on the page, so it sits above everything and reads as a caution rather than an error:
+   nothing has gone wrong, the book is simply bigger than one page of it. */
+#report-cap-notice { background: var(--amber-bg, #fdf6e3); border-color: #e8d9a8; color: var(--dark); }
