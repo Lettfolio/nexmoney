@@ -635,6 +635,459 @@ function lenderIcon(lender, size = 16) {
   for (const k in LENDER_DOMAINS) { if (l.includes(k)) { dom = LENDER_DOMAINS[k]; break; } }
   return dom ? `<img class="lfav" src="https://www.google.com/s2/favicons?domain=${dom}&sz=32" width="${size}" height="${size}" alt="" loading="lazy" onerror="this.style.display='none'">` : "";
 }
+
+/* ==========================================================================
+   R6 BATCH 1 · THE PROPERTY PRIMITIVE
+   A client is not a property. A portfolio landlord's five cases are five
+   buildings; a remortgage and a product transfer on one house are one
+   building twice. Until M7 (cases.property_address) there was nothing in the
+   UI that could say which — every screen fell back to "kind · lender", which
+   collapses precisely on those two shapes.
+
+   Everything property-shaped in the app is built from three functions so the
+   SAME address reads identically wherever it appears:
+     propLabel(c) — the short human label: first line + outcode.
+     propKey(c)   — the identity: normalised, for "is this the same place?".
+     propChip(c)  — the one reusable pill: deterministic colour dot + label,
+                    truncation-safe, full address in the title.
+   All three take a case row OR a raw address string, and all three return
+   null / "" for a case with no address rather than inventing one — 45 of the
+   63 fixture cases have nothing in the column and must read as well as the
+   ones that do.
+   ====================================================================== */
+/* R6-FIX G6-08 — sixteen, not ten. Ten buckets over the fifteen addresses this
+   book already holds put two of ONE landlord's five buy-to-lets on the same
+   colour, rendered as adjacent headings in his client modal ("Flat 4, 27
+   Stourwood Ave" and "63 Malvern Rd", both hue 9), which is the one place the
+   chip exists to disambiguate. Sixteen clears every within-client collision in
+   the current book, and the ramp is re-cut so neighbouring INDICES differ in
+   lightness as well as hue (see the --pc-* block in admin.css) — a mod-N hash
+   can never promise global uniqueness, so the colour is a hint and the label
+   stays the identity. */
+const PROP_HUE_COUNT = 16;
+/* A UK postcode with its outcode captured separately. Outcode alone is the
+   right amount of geography for a chip: it disambiguates BH6 from BH12
+   without turning a 60-character address into a 60-character label. */
+const POSTCODE_RE = /\b([A-Z]{1,2}\d[A-Z\d]?)\s*(\d[A-Z]{2})\b/i;
+/* "Flat 4", "Unit 2", "Apt 3" — a sub-premise on its own says nothing, so the
+   first line keeps the NEXT comma-part too ("Flat 4, 27 Stourwood Ave"). */
+const SUB_PREMISE_RE = /^(flat|apt|apartment|unit|room|suite|studio|no\.?)\s*\S+$/i;
+/* THE street-type table. ONE list, because the label and the identity have to
+   agree about what "Avenue" is: G6-01 shipped a label that abbreviated (Avenue
+   → Ave) and a key that did not, so the same building typed the way the app
+   itself displays it forked into two properties — two chips with identical text
+   and different dot colours, a RED "this offer names a different property"
+   banner on an offer for the right flat, and a shared-address check that went
+   silent. Both the display regexes (STREET_ABBR) and the identity regexes
+   (STREET_CANON) are derived from this one table so they cannot drift again. */
+const STREET_TYPES = [
+  ["Road", "Rd"], ["Street", "St"], ["Avenue", "Ave"],
+  ["Gardens", "Gdns"], ["Crescent", "Cres"], ["Terrace", "Terr"],
+  ["Drive", "Dr"], ["Lane", "Ln"], ["Close", "Cl"],
+  ["Court", "Ct"], ["Place", "Pl"], ["Square", "Sq"],
+  ["Buildings", "Bldgs"], ["Mansions", "Mans"],
+];
+/* Street-type abbreviations, applied to the first line only. The full address
+   is always one hover away in the chip's title, so shortening here costs
+   nothing and buys the label a fighting chance at 390px. */
+const STREET_ABBR = STREET_TYPES.map(([full, abbr]) => [new RegExp("\\b" + full + "\\b", "g"), abbr]);
+/* The same collapse for propKey, applied to the UPPERCASED text the key is
+   built from — so "8 Grand Avenue", "8 Grand Ave" and "8grandavenue" all reach
+   one canonical token. Deliberately NOT \b-anchored on the left (a key has no
+   word boundaries left to anchor to, and "8grandavenue" has none to begin with)
+   but it IS anchored on the right, so "BROADSTONE" and "BROADWAY" keep their
+   ROAD and only a street type that actually ENDS a run is collapsed. */
+const STREET_CANON = STREET_TYPES.map(([full, abbr]) =>
+  [new RegExp(full.toUpperCase() + "(?![A-Z0-9])", "g"), abbr.toUpperCase()]);
+/* Filler an operator types when the address is not to hand. It is not a
+   property, and keying it as one gives it a genuine cross-client identity:
+   "TBC" on three unrelated clients was reported by Data Health as ONE address
+   held by three clients, and propSoldWarning asked whether an unrelated house
+   had been sold (G6-07). Matched against the whole trimmed value only — never a
+   word inside a real address. */
+const PROP_FILLER_RE = /^(tbc|tba|tbd|n\/a|n\.a\.?|na|none|nil|null|unknown|not known|no address|pending|same as above|as above|see notes?|to follow|to confirm|\?+)[.!]*$/i;
+/* The raw address off a case row (or a bare string), whitespace-normalised.
+   null for "this case has no property", which is a real and common state.
+   A value with nothing alphanumeric in it (",", "-", "…") is ALSO no property:
+   it has no key, no label and no hue, and G6-09 had it rendering a blank pill in
+   a class (pc-hnull) with no CSS rule, bucketed with the address-less cases but
+   printed as "Security property: ," on an evidence pack. */
+function propAddress(c) {
+  const raw = c == null ? null : (typeof c === "string" ? c : c.property_address);
+  const s = raw == null ? "" : String(raw).replace(/\s+/g, " ").trim();
+  if (!s || !/[A-Za-z0-9]/.test(s)) return null;
+  return s;
+}
+/* Does this value carry enough shape to be treated as a PROPERTY IDENTITY —
+   i.e. may equal values be read as "the same building"? A recognisable postcode
+   is enough on its own; otherwise we want at least one number-bearing token and
+   one word, which is the minimum an address has and which no filler token has.
+   Everything identity-shaped (propKey and therefore grouping, the shared-address
+   panel, the sold warning, the import verdicts) goes through here; the string
+   itself is still stored, still shown and still editable — this only decides
+   whether the app is allowed to MATCH on it. */
+function propIsIdentity(c) {
+  const s = propAddress(c);
+  if (!s) return false;
+  if (PROP_FILLER_RE.test(s)) return false;
+  if (POSTCODE_RE.test(s)) return true;
+  const toks = s.split(/[^A-Za-z0-9]+/).filter(Boolean);
+  return toks.some((t) => /\d/.test(t)) && toks.some((t) => /[A-Za-z]/.test(t));
+}
+function propOutcode(c) {
+  const addr = propAddress(c);
+  if (!addr) return null;
+  const m = POSTCODE_RE.exec(addr);
+  return m ? m[1].toUpperCase() : null;
+}
+/* "Flat 4, 27 Stourwood Avenue, Southbourne, Bournemouth BH6 3QP"
+      → "Flat 4, 27 Stourwood Ave · BH6"
+   null when there is no address — callers fall back to caseTypeLabel · lender. */
+function propLabel(c) {
+  const addr = propAddress(c);
+  if (!addr) return null;
+  const parts = addr.split(",").map((p) => p.trim()).filter(Boolean);
+  let line = parts[0] || addr;
+  if (parts.length > 1 && SUB_PREMISE_RE.test(line)) line = line + ", " + parts[1];
+  // A one-part address ("12 Oak Road Bournemouth BH8 8EZ") carries its postcode
+  // in the first line: take the outcode off separately, don't print it twice.
+  line = line.replace(POSTCODE_RE, "").replace(/\s+/g, " ").trim().replace(/[,;\s]+$/, "");
+  STREET_ABBR.forEach(([re, to]) => { line = line.replace(re, to); });
+  const oc = propOutcode(addr);
+  if (!line) return oc; // the whole "address" was a postcode
+  return oc ? `${line} · ${oc}` : line;
+}
+/* Same-property identity. Case, spacing and punctuation are operator noise:
+   "8 Grand Avenue, Southbourne, Bournemouth BH6 3SY" and
+   "8 grand avenue southbourne bournemouth bh63sy" are one flat.
+   NOTE deliberately NOT a client key: 9 Bryanstone Road sits on two unrelated
+   clients' cases (a sale), so equal keys mean same PLACE, never same person.
+
+   Three things it has to get right, and the first shipped wrong:
+   · STREET TYPE (G6-01) — the label abbreviates, so the key must too, or the
+     spelling the app itself displays (and every lender offer that prints
+     "8 GRAND AVE") forks the building in two.
+   · DIGIT BOUNDARIES (G6-04) — stripping every separator merged the
+     sub-premise/house-number boundary: "Flat 1, 2 Poole Road" and "Flat 12,
+     Poole Road" became one key, one hue and one "has it been sold?" warning
+     between two unrelated clients holding two unrelated flats. Only a
+     separator sitting BETWEEN TWO DIGITS carries information, so that is the
+     only one kept (as "-"); spaces everywhere else stay noise, which is what
+     lets "8grandavenue …" still match "8 Grand Avenue, …".
+   · THE POSTCODE — normalised on its own, because "BH6 3SY" and "BH63SY" are
+     one postcode and that inner space is the one space nobody means.
+   Returns null for a value with no property identity at all (see
+   propIsIdentity): a placeholder must not become a building. */
+function propKey(c) {
+  const addr = propAddress(c);
+  if (!addr || !propIsIdentity(addr)) return null;
+  let s = addr.toUpperCase();
+  let pc = "";
+  const m = POSTCODE_RE.exec(s);
+  if (m) {
+    pc = (m[1] + m[2]).toUpperCase();
+    s = s.slice(0, m.index) + " " + s.slice(m.index + m[0].length);
+  }
+  STREET_CANON.forEach(([re, to]) => { s = s.replace(re, to); });
+  let out = "";
+  s.split(/[^A-Z0-9]+/).forEach((t) => {
+    if (!t) return;
+    if (out && /\d$/.test(out) && /^\d/.test(t)) out += "-";   // the boundary that means something
+    out += t;
+  });
+  return (out + pc) || null;
+}
+/* Deterministic hue index from the key (djb2). Stable across sessions,
+   machines and re-renders because it is a pure function of the address — no
+   registry, no ordering, nothing to drift. */
+function propHue(c) {
+  const k = propKey(c);
+  if (!k) return null;
+  let h = 5381;
+  for (let i = 0; i < k.length; i++) h = ((h * 33) ^ k.charCodeAt(i)) >>> 0;
+  return h % PROP_HUE_COUNT;
+}
+/* The kind on its own ("Buy to Let"), for the no-address fallback and the
+   case-modal identity line. timelineCaseLabel() is kind · lender and stays as
+   it is — this is its first half, named. */
+function caseTypeLabel(c) {
+  const k = c == null ? null : (typeof c === "string" ? c : c.case_kind);
+  return (KINDS.find((x) => x[0] === k) || [])[1] || (k ? String(k).replace(/_/g, " ") : "Case");
+}
+/* ---- R6 BATCH 4 · ONE STAGE BADGE ---------------------------------------
+   A stage was rendered blue on six surfaces and green-or-grey on a seventh, so
+   "Completed" was a blue pill in the case modal, on the diary row and on the
+   Rate & ERC row, and a GREEN pill in the pipeline table's completed view — the
+   same stage in two colours depending on where you were standing. Colour has to
+   mean the same thing everywhere or it means nothing, so there is now one
+   function and the mapping is stated once:
+     completed       → green (done)
+     not proceeding  → grey  (closed, no longer live)
+     everything else → blue  (a live, informational position in the pipeline)
+   `.badge-clip` lets a long stage label ellipsise inside a narrow column
+   instead of widening it. */
+function stageBadgeClass(stage) {
+  return stage === "completed" ? "green" : stage === "not_proceeding" ? "grey" : "blue";
+}
+function stageBadge(stage, opts = {}) {
+  const label = STAGE_LABEL[stage] || String(stage || "");
+  const extra = opts.cls ? " " + opts.cls : "";
+  return `<span class="badge ${stageBadgeClass(stage)} badge-clip${extra}">${esc(label)}</span>`;
+}
+/* The "this value is an estimate, not confirmed" marker. Same colour as the fact
+   it qualifies (see the .badge block in admin.css); a dashed edge and the ≈ glyph
+   are what say "unconfirmed". Previously an estimated rate-end date was rendered
+   PURPLE beside a confirmed one rendered BLUE, so one fact read as two. */
+const EST_BADGE_CLS = "blue is-est";
+/* THE chip. One implementation, so a property looks the same in the case
+   modal, on a board card and in a picker.
+     opts.fallback — render the hollow "no address" variant (type · lender)
+                     instead of nothing. ONLY pass this where differentiation
+                     matters (the client has more than one case): on a
+                     single-case client it is noise repeating the row above.
+     opts.cls      — extra classes for the caller's layout. */
+function propChip(c, opts = {}) {
+  const addr = propAddress(c);
+  const extra = opts.cls ? " " + opts.cls : "";
+  if (!addr) {
+    if (!opts.fallback) return "";
+    const label = [caseTypeLabel(c), c && c.lender].filter(Boolean).join(" · ");
+    return `<span class="prop-chip prop-chip-none${extra}" title="No property address recorded on this case">` +
+      `<span class="pc-dot"></span><span class="pc-txt">${esc(label || "No address")}</span></span>`;
+  }
+  /* G6-07 — something is stored but it is not a property ("TBC", "n/a"). Show it,
+     because the operator typed it and needs to see it to fix it, but show it as
+     the hollow variant: no hue, no data-prop-key, and a tooltip that says why
+     nothing groups on it. It must never look like a building. */
+  if (!propIsIdentity(addr)) {
+    return `<span class="prop-chip prop-chip-none prop-chip-unusable${extra}" data-prop-key="" ` +
+      `title="“${esc(addr)}” is recorded in the property field but is not a usable address, so nothing matches or groups on it. Edit the case to record the real property.">` +
+      `<span class="pc-dot"></span><span class="pc-txt">${esc(addr)}</span></span>`;
+  }
+  const hue = propHue(addr);
+  return `<span class="prop-chip pc-h${hue}${extra}" data-hue="${hue}" data-prop-key="${esc(propKey(addr))}" title="${esc(addr)}">` +
+    `<span class="pc-dot"></span><span class="pc-txt">${esc(propLabel(addr))}</span></span>`;
+}
+/* ---- M7 feature detection ------------------------------------------------
+   The column shipped today with no backfill; a database that has not taken the
+   migration answers 42703 on a write and simply omits the column from a read.
+   Same discipline as the M1-M6 detections: probe once, cache, and hide the
+   field rather than offering an input whose Save can only fail. */
+let PROP_ADDR_SUPPORTED = null; // null = not yet known
+async function propAddrSupported() {
+  if (PROP_ADDR_SUPPORTED !== null) return PROP_ADDR_SUPPORTED;
+  try {
+    const { data, error } = await db.from("cases").select("id,property_address").limit(1);
+    if (error) {
+      if (isMissingColumnError(error)) { PROP_ADDR_SUPPORTED = false; return false; }
+      return true; // some other failure (RLS, network) — don't cache a guess
+    }
+    if (!data || !data.length) return true; // empty book: nothing to learn, assume migrated
+    PROP_ADDR_SUPPORTED = Object.prototype.hasOwnProperty.call(data[0], "property_address");
+    return PROP_ADDR_SUPPORTED;
+  } catch (_) { return true; }
+}
+/* R6 batch 2 — keep that cached answer honest for free. A `select("*")` on cases returns EVERY
+   column the table has, so a row that comes back without `property_address` is proof the migration
+   is absent, and a row that has it is proof it is present — a stronger signal than the probe, at
+   zero cost. Batch 1 probed once and cached; now that six panels ask the question during a single
+   page load, a cache set before a migration lands (or is rolled back) would otherwise persist for
+   the whole session and either hide a working field or offer a Save that cannot work. */
+function notePropAddrFromStarRow(row) {
+  if (!row || typeof row !== "object") return;
+  PROP_ADDR_SUPPORTED = Object.prototype.hasOwnProperty.call(row, "property_address");
+}
+/* ==========================================================================
+   R6 BATCH 2 · THE SAME CASE, NAMED THE SAME WAY EVERYWHERE
+   Batch 1 gave the app a property primitive but only the case form and the
+   case modal used it. Every OTHER surface still named a case "client name"
+   (+ sometimes kind · lender), which is exactly the label that collapses on
+   the two shapes round 6 exists for: a portfolio landlord (five cases, one
+   name) and two cases on one building (kind · lender identical too).
+
+   So there is now ONE canonical case identifier:
+        property · type · lender · stage
+   rendered as text (caseIdentityLabel — for <option> and title=) or as HTML
+   with the chip leading (caseIdentityHtml). Every list that shows a case uses
+   the chip; the lists that had no room for more than a chip use just that.
+   ====================================================================== */
+/* The section heading for a group of cases on one property: the FULL address,
+   because a heading has the width for it and the chip's short label is already
+   sitting next to it. */
+function propHeading(c) { return propAddress(c) || "No address recorded"; }
+/* The canonical identifier, as plain text. Every part is dropped when it is
+   not known rather than printed as an empty separator, so a bare enquiry with
+   no lender still reads as a sentence. */
+function caseIdentityLabel(c) {
+  if (!c) return "";
+  const stage = c.stage ? (STAGE_LABEL[c.stage] || String(c.stage).replace(/_/g, " ")) : null;
+  return [propLabel(c), caseTypeLabel(c), c.lender, stage].filter(Boolean).join(" · ");
+}
+/* The same identity as HTML: the property chip, then whatever of
+   type · lender · stage the caller asked for. Used on rows that have to tell
+   two cases apart when the property alone can't (a product transfer and a
+   remortgage on the same house share an address AND a lender — see the Duncan
+   Armitage watchtower pair).
+     opts.stage / opts.lender / opts.type — include that part (default: all)
+     opts.fallback — hollow chip when there is no address (see propChip) */
+function caseIdentityHtml(c, opts = {}) {
+  if (!c) return "";
+  const chip = propChip(c, { fallback: opts.fallback, cls: opts.cls });
+  // The hollow no-address chip ALREADY reads "type · lender" — don't print it twice.
+  const chipSaysKind = !propAddress(c) && !!chip;
+  const bits = [];
+  if (opts.type !== false && !chipSaysKind) bits.push(caseTypeLabel(c));
+  if (opts.lender !== false && !chipSaysKind && c.lender) bits.push(c.lender);
+  if (opts.stage !== false && c.stage) bits.push(STAGE_LABEL[c.stage] || String(c.stage).replace(/_/g, " "));
+  const tail = bits.filter(Boolean).join(" · ");
+  if (!tail) return chip;
+  return chip + (chip ? " " : "") + `<span class="case-tag">${esc(tail)}</span>`;
+}
+/* ---- property context for a list of case ids -----------------------------
+   Most surfaces (Today, tasks, alerts, watchtower, emails, appointments) hold
+   only a case_id: they were built to name work by client, so they never needed
+   the case row. Rather than widen six different queries — several of which read
+   VIEWS (v_alerts) or RPC output (get_briefing) that this round may not touch —
+   this resolves a batch of case ids in TWO indexed reads:
+     1. the cases themselves (property, kind, lender, stage)
+     2. every case belonging to those cases' clients, for the "is this client
+        multi-case?" question that decides whether a no-address case is worth a
+        hollow chip at all.
+   M7-aware: the property column is only NAMED when the migration is present,
+   so an un-migrated database gets the round-5 behaviour rather than a 42703
+   that would blank the whole panel. Every failure degrades to "no chips". */
+async function loadPropContext(caseIds) {
+  const ctx = { byId: {}, caseCount: {}, sharedProp: {} };
+  const ids = [...new Set((caseIds || []).filter(Boolean))];
+  if (!ids.length) return ctx;
+  try {
+    const propOn = await propAddrSupported();
+    const cols = "id,client_id,case_kind,lender,stage" + (propOn ? ",property_address" : "");
+    const { data: rows } = await db.from("cases").select(cols).in("id", ids);
+    (rows || []).forEach((r) => { ctx.byId[r.id] = r; });
+    const clientIds = [...new Set((rows || []).map((r) => r.client_id).filter(Boolean))];
+    if (clientIds.length) {
+      const { data: sib } = await db.from("cases").select("id,client_id" + (propOn ? ",property_address" : "")).in("client_id", clientIds);
+      const perProp = {};
+      (sib || []).forEach((r) => {
+        ctx.caseCount[r.client_id] = (ctx.caseCount[r.client_id] || 0) + 1;
+        const k = propKey(r);
+        if (k) { const pk = r.client_id + "|" + k; perProp[pk] = (perProp[pk] || 0) + 1; }
+      });
+      /* The case the chip alone CANNOT answer: one client, two cases, one building (Duncan
+         Armitage's product transfer + remortgage on 4 Seafield Gardens, Ruby's DIP + application
+         on 8 Grand Avenue). Those rows need the case type and stage as well, and only those —
+         everywhere else the address is the whole answer and extra words are noise. */
+      (rows || []).forEach((r) => {
+        const k = propKey(r);
+        if (k && (perProp[r.client_id + "|" + k] || 0) > 1) ctx.sharedProp[r.id] = true;
+      });
+    }
+  } catch (_) { /* no context — rows render exactly as they did before */ }
+  return ctx;
+}
+function propCtxCase(ctx, caseId) { return (ctx && caseId && ctx.byId[caseId]) || null; }
+/* The rule for every list in this batch: show the chip whenever the case has
+   an address (it is the most useful thing on the row), and fall back to the
+   hollow type · lender chip ONLY when the client has more than one case — on a
+   single-case client that pill would just repeat the row above it. Where the
+   client has ANOTHER case on the same building, the type and stage follow the
+   chip, because there the address is shared and cannot separate the two. */
+function propCtxChip(ctx, caseId, cls) {
+  const r = propCtxCase(ctx, caseId);
+  if (!r) return "";
+  const multi = (ctx.caseCount[r.client_id] || 0) > 1;
+  const chip = propChip(r, { fallback: multi, cls });
+  if (!chip || !ctx.sharedProp[caseId]) return chip;
+  const tail = [caseTypeLabel(r), r.stage ? (STAGE_LABEL[r.stage] || String(r.stage).replace(/_/g, " ")) : null].filter(Boolean).join(" · ");
+  return chip + ` <span class="case-tag">${esc(tail)}</span>`;
+}
+/* ==========================================================================
+   R6 BATCH 3 · ONE BUILDING, POSSIBLY TWO CLIENTS
+   propKey means "same place", never "same person" (9 Bryanstone Road sits on
+   Kwame Boateng's completed purchase AND Gareth Pollard's live offer — Kwame
+   sold it to him). Two flows have to ask that question:
+     · Start retention case — is this client still the owner?
+     · Data health         — which addresses are held by more than one client?
+   Both go through here, so neither can drift into treating an equal address as
+   an equal client.
+
+   The key is a normalisation SQL cannot express, so the read is NARROWED in the
+   database (outcode, else the first address line — the same ilike the global
+   search palette uses) and the exact-key comparison happens here. An
+   un-migrated database (no M7) returns nothing rather than 42703-ing the flow
+   that called it: no property column means no property collisions to find. */
+async function casesOnSameProperty(addr) {
+  const key = propKey(addr);
+  if (!key) return [];
+  if (!(await propAddrSupported())) return [];
+  const full = propAddress(addr);
+  /* The narrowing has to survive the SAME normalisations the key does, or the
+     G6-01 fix stops at the database: "9 Bryanstone Rd" and "9 Bryanstone Road"
+     are one key but `ilike '%9 Bryanstone Rd%'` never reaches the row spelled
+     the long way. An outcode is immune (it is copied, not spelled), and with no
+     postcode the longest word of the first line — the street NAME, never its
+     type — is the widest thing that is still narrow. */
+  const firstLine = (full.split(",")[0] || "").trim();
+  const streetWord = (firstLine.match(/[A-Za-z]{4,}/g) || []).sort((a, b) => b.length - a.length)[0];
+  const needle = propOutcode(full) || streetWord || firstLine || full;
+  const { data, error } = await db.from("cases")
+    .select("id,client_id,stage,case_kind,lender,property_address,created_at,completed_at,clients(first_name,last_name)")
+    .ilike("property_address", `%${needle}%`);
+  if (error) return [];
+  return (data || [])
+    .filter((r) => propKey(r) === key)
+    // Newest first: "who holds the LATEST case on this building" is the question being asked.
+    .sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
+}
+/* The sold-property signal. `rows` is casesOnSameProperty() output, `srcCase` the case a retention
+   remortgage is about to be started from. It fires ONLY when ANOTHER client's case on this building
+   is NEWER than ours — an older one is the previous owner, which is normal (we advised both sides of
+   one sale) and must not nag. Returns null when there is nothing to say.
+
+   G6-05 — it also has to read the STAGE of the other client's case, which it did
+   not. "Has it been sold?" is a question about a transfer, and three stages are
+   evidence AGAINST one:
+     · not_proceeding — a purchase that fell through is the strongest available
+       proof the property did NOT change hands, and it was firing the warning.
+     · enquiry / fact_find — the ordinary shape of two people who both enquired
+       about one listed property. The loser's dead enquiry was nagging the actual
+       owner's retention flow forever, and if the adviser proceeded the claim was
+       written permanently into the successor's compliance note.
+   Nothing is hidden by this: Data Health's shared-address panel still lists every
+   case on the address, which is where "who else is interested in this building"
+   belongs. This function answers one narrower question and now only fires when
+   the other client's case has actually reached a lender. */
+const PROP_SOLD_MUTE_STAGES = new Set(["not_proceeding", "enquiry", "fact_find"]);
+function propSoldWarning(rows, srcCase) {
+  if (!srcCase || !rows || !rows.length) return null;
+  const srcWhen = String(srcCase.created_at || "");
+  const later = rows.filter((r) => r.client_id && r.client_id !== srcCase.client_id
+    && String(r.created_at || "") > srcWhen
+    && !PROP_SOLD_MUTE_STAGES.has(r.stage));
+  if (!later.length) return null;
+  const newest = later[0]; // rows are newest-first
+  const who = [newest.clients?.first_name, newest.clients?.last_name].filter(Boolean).join(" ") || "another client";
+  const what = [caseTypeLabel(newest), newest.stage ? (STAGE_LABEL[newest.stage] || String(newest.stage).replace(/_/g, " ")) : null].filter(Boolean).join(" · ");
+  return {
+    caseId: newest.id, clientId: newest.client_id, who, what, when: newest.created_at,
+    text: `⚠️ The newest case on this address belongs to ${who} (${what}, started ${fmtD(newest.created_at)}) — has it been sold?`,
+  };
+}
+// Exposed for the same reason openCase/moveCaseToStage are: inline handlers and tests.
+window.propLabel = propLabel;
+window.propKey = propKey;
+window.propAddress = propAddress;
+window.casesOnSameProperty = casesOnSameProperty;
+window.propSoldWarning = propSoldWarning;
+window.propChip = propChip;
+window.propHue = propHue;
+window.propIsIdentity = propIsIdentity;
+window.propOutcode = propOutcode;
+window.caseTypeLabel = caseTypeLabel;
+window.caseIdentityLabel = caseIdentityLabel;
+window.propHeading = propHeading;
+
 function panelCount(listSel, n, hot = false) {
   const el = $(listSel);
   if (!el) return;
@@ -795,7 +1248,12 @@ async function showApp(session) {
   $("#login-view").classList.add("hidden");
   $("#app-view").classList.remove("hidden");
   $("#assistant-fab").classList.remove("hidden");
+  /* R6-B4 (LR-20) — the sidebar identity ellipsises at 216px ("luke.richards@nexmo…")
+     and there was no way to read the rest. This is WHICH SEAT you are signed in as,
+     next to a Sign-out button, so it has to be recoverable: the title attribute
+     carries the full address for hover and for assistive tech. */
   $("#user-email").textContent = session.user.email;
+  $("#user-email").title = `Signed in as ${session.user.email}`;
   // BUILD 6d — restore this user's pipeline segment/view prefs now that their id is known.
   restoreUserPrefs(session.user.id);
   await loadSettings();
@@ -1353,18 +1811,23 @@ async function loadDashboard() {
   rateErcH3.innerHTML = `⚠️ Rate &amp; ERC alerts
     ${ratesSoon.length ? `<span class="count hot">${ratesSoon.length} ending soon</span>` : ""}
     ${ercFlags.length ? `<span class="count" style="background:#fbe9e7;color:var(--red);">${ercFlags.length} ERC conflict</span>` : ""}`;
+  /* R6 — v_alerts carries the client's NAME and nothing about the building, so Duncan Armitage's
+     two Skipton cases on 4 Seafield Gardens (and any two of a landlord's five) render as the same
+     row twice, inflating the counters above and offering two identical buttons. One batched
+     lookup of the cases behind the rows on screen gives every row its property. */
+  const rateErcCtx = await loadPropContext(rateErcMerged.slice(0, 15).map((a) => a.case_id));
   $("#alerts-rateerc").innerHTML = rateErcMerged.length ? rateErcMerged.slice(0, 15).map((a) => `
     <div class="row-item">
       <div class="row-main">
-        <div class="t" onclick="openCase('${a.case_id}')">${esc(a.client_name)}</div>
+        <div class="t" onclick="openCase('${a.case_id}')">${esc(a.client_name)} ${propCtxChip(rateErcCtx, a.case_id, "row-prop")}</div>
         <div class="s">${lenderIcon(a.lender)}${esc(a.lender || "")} ${a.rate_percent ? a.rate_percent + "%" : ""} — ends ${fmtD(a.rate_end_date)}${a.days_to_rate_end != null ? ` (${a.days_to_rate_end < 0 ? Math.abs(a.days_to_rate_end) + " days ago" : "in " + a.days_to_rate_end + " days"})` : ""}${ercIds.has(a.case_id) ? ` — ERC runs until ${fmtD(a.erc_end_date)}` : ""}</div>
       </div>
       ${a.days_to_rate_end < 0 ? '<span class="badge red">OVERDUE</span>' : ""}
       ${ercIds.has(a.case_id) ? `<span class="badge red" title="${TIP_ERC}">ERC conflict</span>` : ""}
-      ${a.rate_end_estimated ? `<span class="badge purple" title="${TIP_APPROX}">≈ estimate</span>` : ""}
+      ${a.rate_end_estimated ? `<span class="badge ${EST_BADGE_CLS}" title="${TIP_APPROX}">≈ estimate</span>` : ""}
       ${a.stage === "completed"
         ? (a.rate_reminder_queued_at ? '<span class="badge green">Reminder sent</span>' : '<span class="badge amber">Reminder pending</span>')
-        : `<span class="badge blue">${STAGE_LABEL[a.stage] || a.stage}</span>`}
+        : stageBadge(a.stage)}
       ${/* R5-6 — the backend auto-creates a retention case only while the rate is still in FUTURE
            reminder window; a rate that has already ended is never picked up, and these rows sat
            here saying "reminder pending" forever. This is the manual path for exactly those. */ ""}
@@ -1447,13 +1910,17 @@ async function loadRetention() {
      cannot do is reach back for a rate that has ALREADY ended — that is what the button is for. */
   $("#retention-stats").textContent =
     `${open.length} open · ${won} won · ${lost} lost${rate != null ? ` · ${rate}% conversion` : ""}. Created automatically when a completed client's rate enters the reminder window. For rates already past, open the case and press Start retention case.`;
+  /* R6 — a retention row is by definition about one specific mortgage on one specific building;
+     naming it by client alone put a landlord's two expiring rates on the panel as one repeated
+     line. (LR-18.) */
+  const retCtx = await loadPropContext(open.slice(0, 12).map((c) => c.id));
   $("#retention-list").innerHTML = open.length ? open.slice(0, 12).map((c) => `
     <div class="row-item">
       <div class="row-main">
-        <div class="t" onclick="openCase('${c.id}')">${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" "))}</div>
+        <div class="t" onclick="openCase('${c.id}')">${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" "))} ${propCtxChip(retCtx, c.id, "row-prop")}</div>
         <div class="s">${lenderIcon(c.lender)}${esc(c.lender || "")} — rate ends ${fmtD(c.rate_end_date)}${c.rate_end_estimated ? " " + APPROX : ""}</div>
       </div>
-      <span class="badge blue">${STAGE_LABEL[c.stage] || c.stage}</span>
+      ${stageBadge(c.stage)}
     </div>`).join("") + (open.length > 12 ? `<div class="empty">…and ${open.length - 12} more in the pipeline.</div>` : "")
     : '<div class="empty">No open retention opportunities. One is created for you when a completed client\'s rate enters the reminder window; for a rate that has already ended, use Start retention case on the completed case (see Rate &amp; ERC alerts above).</div>';
   panelCount("#retention-list", open.length);
@@ -1472,6 +1939,7 @@ window.startRetentionCase = async function (caseId, ev) {
   try {
     const { data: c } = await db.from("cases").select("*").eq("id", caseId).single();
     if (!c) return toast("Case not found — it may have been deleted or you don't have access.");
+    notePropAddrFromStarRow(c); // a select("*") is the strongest M7 signal there is
     if (c.stage !== "completed") return toast("A retention case starts from a completed case.");
     if (!c.rate_end_date) return toast("Set the rate end date on this case first.");
     const { data: already } = await db.from("cases").select("id").eq("retention_source_case_id", caseId).limit(1);
@@ -1483,14 +1951,34 @@ window.startRetentionCase = async function (caseId, ev) {
     due.setMonth(due.getMonth() - 3);
     const tomorrow = Date.now() + 86400000;
     const dueStr = localDateStr(Math.max(due.getTime(), tomorrow));
-    const taskTitle = `Call client — rate ends ${c.rate_end_date}`;
+    /* R6-31 — a retention case is about ONE BUILDING, and every artefact this flow creates used to
+       name only the person. On a portfolio landlord with two expiring rates the confirm dialog, the
+       call task and the origin note were byte-identical apart from a date, so the adviser could not
+       tell which mortgage he had just started work on (LR-03, W1). The short label goes on the
+       dialog and the task (which have to stay scannable), the FULL address goes in the note (which
+       is the compliance record of why the case exists). */
+    const propFull = propAddress(c);
+    const propShort = propLabel(c);
+    const taskTitle = `Call client — rate ends ${c.rate_end_date}` + (propShort ? ` · ${propShort}` : "");
     const kind = c.case_kind === "buy_to_let" ? "buy_to_let" : "remortgage";
     const kindLabel = (KINDS.find((k) => k[0] === kind) || [])[1] || kind;
+    /* R6-32 — the sold-property check (D6-05, W16). Kwame Boateng's completed purchase and Gareth
+       Pollard's live offer are both 9 Bryanstone Road: he sold it. Queueing "your rate is ending,
+       shall we remortgage?" at the former owner is the worst client-facing mistake this screen can
+       make, and nothing anywhere cross-checked addresses across clients. This is a WARNING, never a
+       block — two clients can legitimately hold cases on one building (a sale we advised on both
+       sides of, a couple filed separately) and only the adviser knows which. */
+    const sameProp = await casesOnSameProperty(c);
+    const sold = propSoldWarning(sameProp, c);
     if (!confirm([
-      `Start a retention case for ${clientName}?`,
+      `Start a retention case for ${clientName}${propShort ? " — " + propShort : ""}?`,
+      propFull
+        ? `Property: ${propFull}`
+        : "No property address is recorded on the completed case, so the new case will have none either — add it on the case so the task, the reminder and the evidence pack all say which building this is.",
+      ...(sold ? ["", sold.text, `Starting this queues a remortgage reminder to ${clientName} for a property they may no longer own. Check before continuing.`] : []),
       "",
       "This creates:",
-      `• a new ${kindLabel} case at Enquiry, linked back to this one`,
+      `• a new ${kindLabel} case at Enquiry${propShort ? ` on ${propShort}` : ""}, linked back to this one`,
       `• a task "${taskTitle}" due ${fmtD(dueStr)}`,
       cl && cl.email
         ? `• a rate-end reminder QUEUED to ${cl.email} — it goes out with the next automation run, nothing is sent now`
@@ -1512,13 +2000,28 @@ window.startRetentionCase = async function (caseId, ev) {
       assigned_to: c.assigned_to || (ME && ME.id) || null,
       retention_source_case_id: caseId,
     };
+    /* R6-30 — THE data-loss line (W1, LR-02, D6-04, SM-08). The successor copied ten fields off the
+       source and not the one thing the case is about; every retention case was born property-less,
+       and with no other write path for the column the value was unrecoverable. Only NAMED when M7 is
+       present — on an un-migrated database an unknown column fails the whole insert. */
+    if (propFull && (await propAddrSupported())) successor.property_address = propFull;
     let ins = await db.from("cases").insert(successor).select("id").single();
     if (ins.error && isMissingColumnError(ins.error)) {
       // Older DB: drop the optional carry-over fields and keep the link, which is the point of it.
-      const lean = { client_id: successor.client_id, case_kind: kind, stage: "enquiry", lender: c.lender,
-        loan_amount: c.loan_amount, rate_end_date: c.rate_end_date, lead_source: "Repeat client",
-        assigned_to: successor.assigned_to, retention_source_case_id: caseId };
-      ins = await db.from("cases").insert(lean).select("id").single();
+      /* R6-30 — the property column is the NEWEST of these optional fields, so try dropping just
+         that one first: a database missing only M7 keeps the other nine carry-overs it can hold. */
+      if ("property_address" in successor) {
+        PROP_ADDR_SUPPORTED = false;
+        const withoutProp = Object.assign({}, successor);
+        delete withoutProp.property_address;
+        ins = await db.from("cases").insert(withoutProp).select("id").single();
+      }
+      if (ins.error && isMissingColumnError(ins.error)) {
+        const lean = { client_id: successor.client_id, case_kind: kind, stage: "enquiry", lender: c.lender,
+          loan_amount: c.loan_amount, rate_end_date: c.rate_end_date, lead_source: "Repeat client",
+          assigned_to: successor.assigned_to, retention_source_case_id: caseId };
+        ins = await db.from("cases").insert(lean).select("id").single();
+      }
     }
     if (ins.error || !ins.data) return toast("Could not create the retention case: " + ((ins.error && ins.error.message) || "unknown error"));
     const newId = ins.data.id;
@@ -1536,7 +2039,13 @@ window.startRetentionCase = async function (caseId, ev) {
     // indistinguishable from an auto-created one, under an unqualified success message.
     const { error: noteErr } = await db.from("case_notes").insert({
       case_id: newId,
-      body: `Retention case started from the completed case — ${clientName}'s rate ends ${c.rate_end_date}.`,
+      /* R6-31 — the note is what a file reviewer reads to learn why this case exists, so it carries
+         the FULL address (not the chip's short label) and says outright when there is none. Where
+         another client holds a later case on the same building, that is recorded too: the adviser
+         was shown it and went ahead, and that decision belongs in the timeline. */
+      body: `Retention case started from the completed case — ${clientName}'s rate ends ${c.rate_end_date}.`
+        + (propFull ? ` Property: ${propFull}.` : " No property address was recorded on the source case.")
+        + (sold ? ` Note: ${sold.who} holds a later case on this address (${sold.what}, started ${fmtD(sold.when)}) — started anyway after the warning.` : ""),
       created_by: (ME && ME.id) || null,
     });
     if (noteErr) warn.push(`the note recording where it came from was NOT saved (${noteErr.message}) — add it by hand so the timeline explains the case`);
@@ -1564,7 +2073,7 @@ window.startRetentionCase = async function (caseId, ev) {
     }
     toast(warn.length
       ? `Retention case created, but ${warn.join("; and ")}`
-      : `Retention case created ✓${queued ? " — reminder queued, not sent" : ""}`);
+      : `Retention case created ✓${propShort ? " — " + propShort : ""}${queued ? " · reminder queued, not sent" : ""}`);
     if (currentModal && currentModal.type === "case" && currentModal.id === caseId) openCase(caseId);
     if (!$("#page-dashboard").classList.contains("hidden")) loadDashboard();
     else { loadRetention(); loadBriefing(); }
@@ -1603,13 +2112,17 @@ async function loadTasks() {
   // the explicit Unassigned scope so they get claimed deliberately.
   const filtered = (raw || []).filter((t) => tasksScope === "all" || (tasksScope === "unassigned" ? !t.assigned_to : t.assigned_to === (ME && ME.id)));
   const tasks = filtered.slice(0, 15);
+  /* R6 — "Ruby Sinclair · Review submitted fact-find" twice, one row per case, both on 8 Grand
+     Avenue and each with its own ✓ Done. The chip is the only thing on the row that can tell the
+     two apart. (W4 / SM-11.) */
+  const taskCtx = await loadPropContext(tasks.map((t) => t.case_id));
   const todayStr = localDateStr();
   $("#tasks-list").innerHTML = (tasks || []).length ? tasks.map((t) => {
     const overdue = t.due_date && t.due_date < todayStr;
     const who = t.cases?.clients ? [t.cases.clients.first_name, t.cases.clients.last_name].filter(Boolean).join(" ") : "";
     return `<div class="row-item">
       <div class="row-main">
-        <div class="t" onclick="openCase('${t.case_id}')">${esc(who)}</div>
+        <div class="t" onclick="openCase('${t.case_id}')">${esc(who)} ${propCtxChip(taskCtx, t.case_id, "row-prop")}</div>
         <div class="s">${esc(t.title)} — due ${fmtD(t.due_date)}</div>
       </div>
       ${overdue ? '<span class="badge red">overdue</span>' : ""}
@@ -1660,9 +2173,13 @@ let lastBriefItems = [];
 let briefExpanded = new Set();
 // T1-23 — case_id → "Product Transfer · DIP", populated only for clients with >1 open case.
 let briefCaseMeta = {};
+// R6 — case_id → the property chip, populated for EVERY case that has an address. Takes
+// precedence over briefCaseMeta above: a building beats a kind · stage guess.
+let briefCaseChip = {};
 function briefCaseDisc(it) {
+  const chip = (it && it.case_id && briefCaseChip[it.case_id]) || "";
   const d = it && it.case_id && briefCaseMeta[it.case_id];
-  return d ? ` <span class="cs-muted">(${esc(d)})</span>` : "";
+  return (chip ? " " + chip : "") + (d ? ` <span class="cs-muted">(${esc(d)})</span>` : "");
 }
 const BRIEF_KIND_SHORT = {
   task_overdue: "overdue task", task_today: "task today", lead_new: "lead", email_new: "email",
@@ -1770,14 +2287,26 @@ async function loadBriefing() {
   // whose Send-reminder buttons act on different cases. Look up kind + stage for every case behind
   // a row and hand briefRowHtml a discriminator for exactly those clients. Best-effort: on error
   // the rows render as before rather than not at all.
+  /* R6 — the (kind · stage) discriminator only ever worked by coincidence: it separates Ruby's
+     two 8 Grand Avenue cases because they differ in kind, and separates none of Gareth's five
+     buy-to-lets the moment two of them sit at the same stage. The property chip is the real
+     answer, so the SAME fetch now also carries property_address and every row whose case has an
+     address gets a chip — multi-case client or not. (W4 / D6-26.) M7-aware: the column is only
+     named when the migration is there, so an un-migrated database keeps the round-5 rows. */
   briefCaseMeta = {};
+  briefCaseChip = {};
   try {
     const clientIds = [...new Set(items.filter((it) => it.client_id).map((it) => it.client_id))];
     if (clientIds.length) {
-      const { data: cs } = await db.from("cases").select("id,client_id,stage,case_kind").in("client_id", clientIds);
+      const cols = "id,client_id,stage,case_kind,lender" + ((await propAddrSupported()) ? ",property_address" : "");
+      const { data: cs } = await db.from("cases").select(cols).in("client_id", clientIds);
       const live = (cs || []).filter((c) => c.stage !== "not_proceeding");
       const perClient = {};
       live.forEach((c) => { perClient[c.client_id] = (perClient[c.client_id] || 0) + 1; });
+      (cs || []).forEach((c) => { if (propAddress(c)) briefCaseChip[c.id] = propChip(c, { cls: "row-prop" }); });
+      /* The kind · stage discriminator STAYS alongside the chip rather than being replaced by it:
+         Ruby's two 8 Grand Avenue cases share an address, so the chip alone would take a pair of
+         rows that round 5 had made distinguishable and make them identical again. */
       live.forEach((c) => {
         if (perClient[c.client_id] < 2) return;
         const kind = (KINDS.find((k) => k[0] === c.case_kind) || [])[1] || "";
@@ -1988,14 +2517,33 @@ async function loadWatchtower() {
   const isSnoozed = (a) => !!a.snoozed_until && a.snoozed_until > nowIso;
   const alerts = all.filter((a) => !isSnoozed(a));
   const snoozed = all.filter(isSnoozed);
+  /* R6 / D6-03 — the alert TEXT is written by run_watchtower and is client-scoped ("Duncan
+     Armitage — ERC outlasts the rate / ERC runs to 2027-02-24 but the rate ends 2026-09-05"), so
+     his two cases produce two byte-identical CRITICAL rows whose Dismiss buttons resolve different
+     compliance problems. The natural reaction — "that's a duplicate, dismiss one" — silently kills
+     a live alert. The rule cannot be fixed here (it is a database function, and this round writes
+     no SQL), so the ROW is qualified instead: the case's property chip plus type · lender · stage.
+     Address alone is not enough for this pair — both cases are Skipton on 4 Seafield Gardens — so
+     the case type is what finally separates them. */
+  const wtCtx = await loadPropContext(alerts.map((a) => a.case_id));
   $("#watchtower-list").innerHTML = alerts.length ? alerts.map((a) => {
     const openClick = a.case_id ? `onclick="openCase('${a.case_id}')"` : a.client_id ? `onclick="openClient('${a.client_id}')"` : "";
     const openBtn = a.case_id ? `<button class="btn btn-sm" onclick="openCase('${a.case_id}')">Open</button>`
       : a.client_id ? `<button class="btn btn-sm" onclick="openClient('${a.client_id}')">Open</button>` : "";
-    return `<div class="row-item">
+    const wtCase = propCtxCase(wtCtx, a.case_id);
+    const wtTag = wtCase ? caseIdentityHtml(wtCase, { fallback: true, cls: "row-prop" }) : "";
+    /* R6-B4 (D6-22 / LR-17) — 14 consecutive rows at identical type weight,
+       identical height and identical layout, with the severity pill LAST in the
+       reading order, so severity read last and the whole block scanned as one
+       texture: "that flatness is precisely why the duplicate Duncan alert reads
+       as noise". The row gains a left accent in its own severity's colour.
+       Nothing about the row's content, its buttons, its order or the pill itself
+       changes — this is only the shape the eye needs to see the block has parts. */
+    const sevCls = a.severity === "crit" ? "wt-critical" : a.severity === "warn" ? "wt-warning" : "wt-fyi";
+    return `<div class="row-item wt-row ${sevCls}">
       <div class="row-main">
         <div class="t" ${openClick}>${esc(a.title)}</div>
-        <div class="s">${esc(a.detail || "")} · ${fmtD(a.created_at)}</div>
+        <div class="s">${esc(a.detail || "")}${wtTag ? " · " + wtTag : ""} · ${fmtD(a.created_at)}</div>
       </div>
       ${WATCH_BADGE[a.severity] || WATCH_BADGE.info}
       ${openBtn}
@@ -2138,11 +2686,15 @@ async function loadPipeline() {
   if (error) {
     $("#board").classList.remove("hidden");
     $("#board-hint").classList.add("hidden");
+    $("#board-legend").classList.add("hidden");
     $("#stage-tabs").classList.add("hidden");
     $("#table-wrap").classList.add("hidden");
     renderLoadError("#board", error, loadPipeline);
     return;
   }
+  // The select("*") above returns every column cases actually has, so it settles the M7 question
+  // for the table's Property column before it is asked (see notePropAddrFromStarRow).
+  if (cases && cases.length) notePropAddrFromStarRow(cases[0]);
   const q = ($("#board-search").value || "").trim().toLowerCase();
   const who = $("#board-adviser").value || "all";
   const filtered = (cases || []).filter((c) => {
@@ -2151,7 +2703,9 @@ async function loadPipeline() {
     if (q) {
       // T1-19 — lead source and introducer name are searchable too, so the Reports tables can hand
       // the board a filter the user can see in the box and clear.
-      const hay = ((c.clients?.first_name || "") + " " + (c.clients?.last_name || "") + " " + (c.lender || "") + " " + (c.product_name || "") + " " + (c.lead_source || "") + " " + (introducerNames[c.introducer_id] || "")).toLowerCase();
+      // R6 — and the property. "Herbert Avenue" / "BH12" is how a landlord's cases are asked for on
+      // the phone; before this the board could only be filtered by the people and the money.
+      const hay = ((c.clients?.first_name || "") + " " + (c.clients?.last_name || "") + " " + (c.lender || "") + " " + (c.product_name || "") + " " + (c.lead_source || "") + " " + (introducerNames[c.introducer_id] || "") + " " + (c.property_address || "")).toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;
@@ -2160,9 +2714,12 @@ async function loadPipeline() {
   const stageEntry = await loadStageEntries(filtered);
   // Completed segment: the board makes little sense — force the completion-focused table.
   if (pipelineSegment === "completed") pipelineView = "table";
-  if (pipelineView === "table") { renderPipelineTable(filtered, stageEntry); return; }
+  if (pipelineView === "table") { renderPipelineTable(filtered, stageEntry, await propAddrSupported()); return; }
   $("#board").classList.remove("hidden");
   $("#board-hint").classList.remove("hidden");
+  /* R6-B4 — the legend explains card furniture (the aging left edge, the ≈ marker), so it
+     belongs to the board view only; the table view shows neither. */
+  $("#board-legend").classList.remove("hidden");
   $("#stage-tabs").classList.add("hidden");
   $("#table-wrap").classList.add("hidden");
   // In a focused segment only that segment's stage columns render (wider, less scrolling).
@@ -2172,13 +2729,33 @@ async function loadPipeline() {
   board.style.setProperty("--ncols", stages.length);
   const segCases = filtered.filter((c) => inSegment(c.stage, pipelineSegment));
   if (!segCases.length) {
-    board.innerHTML = `<div class="empty" style="grid-column:1/-1;padding:48px 16px;text-align:center;">No cases in ${esc(SEGMENTS.find(([k]) => k === pipelineSegment)?.[1] || "this view")}${$("#board-adviser").value && $("#board-adviser").value !== "all" ? " for this adviser" : ""}${q ? " matching your search" : ""}.</div>`;
+    /* R6-B4 — the empty board was a centred grey sentence with 48px of padding
+       inside a grid that still reserved a full column row, which is how you get
+       "a handful of cards, one screen of content and several screens of nothing"
+       (W24). It is now an ordinary card of ordinary size that also says which of
+       the three filters is responsible for the emptiness, so the way out is on
+       screen rather than something to deduce. */
+    const segName = esc(SEGMENTS.find(([k]) => k === pipelineSegment)?.[1] || "this view");
+    const advOn = $("#board-adviser").value && $("#board-adviser").value !== "all";
+    const why = [advOn ? "the adviser filter" : "", q ? `the search “${esc(q)}”` : ""].filter(Boolean);
+    board.innerHTML = `<div class="board-empty">
+      <strong>Nothing in ${segName}${why.length ? " matching this filter" : ""}.</strong>
+      ${why.length
+        ? `Clear ${why.join(" or ")} to see the rest of the board.`
+        : `Cases appear here as soon as one reaches a stage in ${segName}.`}
+    </div>`;
     updateBoardScrollHint();
     return;
   }
   const byStage = {};
   stages.forEach(([k]) => (byStage[k] = []));
   segCases.forEach((c) => byStage[c.stage]?.push(c));
+  /* R6 — how many cases the client has IN THE BOOK (not in this filter), which is what decides
+     whether a case with no address still deserves the hollow type · lender chip. Counted off the
+     full `cases` read above, so narrowing the board to one adviser can't make a portfolio client
+     look like a single-case one. */
+  const clientCaseCount = {};
+  (cases || []).forEach((c) => { if (c.client_id) clientCaseCount[c.client_id] = (clientCaseCount[c.client_id] || 0) + 1; });
   // Stalled deals surface first: red, then amber (worst days-in-stage on top),
   // then the rest in the existing updated_at order.
   const AGE_RANK = { red: 0, amber: 1 };
@@ -2202,10 +2779,15 @@ async function loadPipeline() {
           ? `<button type="button" class="card-advance" onclick="event.stopPropagation(); moveCaseToStage('${c.id}', '${nextStage}')" title="Advance to ${esc(STAGE_LABEL[nextStage] || nextStage)}" aria-label="Advance to ${esc(STAGE_LABEL[nextStage] || nextStage)}">→</button>`
           : "";
         return `<div class="card${age.level ? " age-" + age.level : ""}" draggable="true" data-id="${c.id}" onclick="openCase('${c.id}')">
-          <div class="cn" style="display:flex;justify-content:space-between;align-items:center;gap:6px;"><span>${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ") || "—")}</span><span style="display:flex;align-items:center;gap:6px;flex:0 0 auto;">${c.assigned_to ? `<span class="chip" title="${esc(staffName(c.assigned_to))}">${initials(c.assigned_to)}</span>` : ""}${advanceBtn}</span></div>
+          <div class="cn" style="display:flex;justify-content:space-between;align-items:center;gap:6px;"><span class="cn-name" title="${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ") || "")}">${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ") || "—")}</span><span style="display:flex;align-items:center;gap:6px;flex:0 0 auto;">${c.assigned_to ? `<span class="chip" title="${esc(staffName(c.assigned_to))}">${initials(c.assigned_to)}</span>` : ""}${advanceBtn}</span></div>
+          ${/* R6 — the card's answer to "which one of his five is this?", directly under the name
+                and above the money. Address when there is one; the hollow kind · lender pill only
+                on a client who has more than one case (on a single-case client it would just
+                repeat the line below it). */ ""}
+          ${propChip(c, { fallback: (clientCaseCount[c.client_id] || 0) > 1, cls: "pc-card" })}
           <div class="cd">${lenderIcon(c.lender)}${esc(c.lender || KINDS.find(x=>x[0]===c.case_kind)?.[1] || "")}${c.loan_amount ? " · " + fmtM(c.loan_amount) : ""}</div>
           <div class="flags">
-            ${c.rate_end_date ? `<span class="badge ${c.rate_end_estimated ? "purple" : "blue"}">Rate ends ${fmtD(c.rate_end_date)}${c.rate_end_estimated ? " " + APPROX : ""}</span>` : ""}
+            ${c.rate_end_date ? `<span class="badge blue${c.rate_end_estimated ? " is-est" : ""}"${c.rate_end_estimated ? ` title="${TIP_APPROX}"` : ""}>Rate ends ${fmtD(c.rate_end_date)}${c.rate_end_estimated ? " " + APPROX : ""}</span>` : ""}
             ${erc ? `<span class="badge red" title="${TIP_ERC}">ERC conflict</span>` : ""}
             ${c.retention_source_case_id ? '<span class="badge grey">🔁 retention</span>' : ""}
             ${["application","offer"].includes(c.stage) && (c.protection_status || "not_discussed") === "not_discussed" ? '<span class="badge amber">🛡 protection?</span>' : ""}
@@ -2378,7 +2960,11 @@ window.moveCaseToStage = async function (caseId, targetStage, opts = {}) {
   if (!caseId || !targetStage) return "noop";
   let cRow = preRow;
   if (!cRow) {
-    cRow = (await db.from("cases").select("stage,protection_status,completed_at,clients(first_name,last_name)").eq("id", caseId).single()).data;
+    // G6-10 — the identity columns come along so the result toast can say WHICH case moved.
+    const propOn = await propAddrSupported();
+    cRow = (await db.from("cases")
+      .select("stage,protection_status,completed_at,case_kind,lender" + (propOn ? ",property_address" : "") + ",clients(first_name,last_name)")
+      .eq("id", caseId).single()).data;
   }
   if (cRow && cRow.stage === targetStage) return "noop"; // no-op (e.g. dropped back on the same column)
   if (cRow && protectionGateBlocks(cRow, targetStage)) {
@@ -2448,7 +3034,14 @@ window.moveCaseToStage = async function (caseId, targetStage, opts = {}) {
       const destSeg = Object.keys(SEGMENT_STAGES).find((k) => SEGMENT_STAGES[k].includes(targetStage));
       if (destSeg) where = " — now in " + (segNames[destSeg] || destSeg);
     }
-    toast("Moved to " + (STAGE_LABEL[targetStage] || targetStage) + where
+    /* G6-10 — "Moved to Offer" named nothing at all, on the one screen where a landlord has five
+       cards that differ only by building. The retention flow in the same round already says
+       "Retention case created ✓ — 8 Grand Ave"; this now matches it. The identity is built from the
+       row as it was BEFORE the move (its stage is the old one, so only the property/type/lender part
+       is used) — the stage the case landed in is already the subject of the sentence. */
+    const movedWhat = [propLabel(cRow), cRow && cRow.case_kind ? caseTypeLabel(cRow) : null, cRow && cRow.lender]
+      .filter(Boolean).join(" · ");
+    toast("Moved to " + (STAGE_LABEL[targetStage] || targetStage) + (movedWhat ? " — " + movedWhat : "") + where
       + (lostColsMissing ? " · reason kept as a note only (run migration M2)" : ""));
     if (!skipReload) loadPipeline();
   }
@@ -2464,18 +3057,33 @@ async function bulkMoveStage(targetStage) {
   const ids = [...pipeSel];
   if (!ids.length || !targetStage) return;
   const label = STAGE_LABEL[targetStage] || targetStage;
-  const { data: rows } = await db.from("cases").select("id,stage,protection_status,completed_at,clients(first_name,last_name)").in("id", ids);
+  const propOn = await propAddrSupported();
+  const { data: rows } = await db.from("cases")
+    .select("id,stage,protection_status,completed_at,case_kind,lender" + (propOn ? ",property_address" : "") + ",clients(first_name,last_name)")
+    .in("id", ids);
   const byId = {}; (rows || []).forEach((r) => (byId[r.id] = r));
   // Classify exactly the way moveCaseToStage will, so the confirm can't promise one thing and the
   // result report another.
   const plan = { move: 0, blocked: 0, already: 0, reopen: 0 };
+  // G6-10 — and keep the ROWS per bucket, not just the tallies, so the confirm can name the cases
+  // it is about to reopen or refuse instead of leaving the operator to guess which of five.
+  const bucketRows = { move: [], blocked: [], already: [], reopen: [] };
   ids.forEach((id) => {
     const r = byId[id];
-    if (r && r.stage === targetStage) plan.already++;
-    else if (r && protectionGateBlocks(r, targetStage)) plan.blocked++;
-    else if (r && isReopening(r.stage, targetStage)) plan.reopen++;
-    else plan.move++;
+    let bucket;
+    if (r && r.stage === targetStage) bucket = "already";
+    else if (r && protectionGateBlocks(r, targetStage)) bucket = "blocked";
+    else if (r && isReopening(r.stage, targetStage)) bucket = "reopen";
+    else bucket = "move";
+    plan[bucket]++;
+    if (r) bucketRows[bucket].push(r);
   });
+  const namedBucket = (key, heading) => {
+    const list = bucketRows[key];
+    if (!list.length) return "";
+    return `\n\n${heading}:\n${list.slice(0, 6).map((r) => "· " + bulkCaseLabel(r)).join("\n")}`
+      + (list.length > 6 ? `\n· and ${list.length - 6} more` : "");
+  };
   /* R5-20 / B3 — one reason for the batch, captured BEFORE the confirm so the confirm can name it
      and nobody stamps ten cases with a reason they never saw. Backing out aborts the whole move. */
   let lost = null;
@@ -2488,6 +3096,8 @@ async function bulkMoveStage(targetStage) {
     `${plan.blocked} are blocked (no protection status)\n` +
     `${plan.already} are already in ${label}\n` +
     `${plan.reopen} are Completed/Not Proceeding and will be REOPENED` +
+    namedBucket("move", "Moving") + namedBucket("reopen", "REOPENING") +
+    namedBucket("blocked", "Blocked (no protection status)") + namedBucket("already", `Already in ${label}`) +
     (lost ? `\n\nReason recorded on every case moved: ${lost.label}${lost.note ? " — " + lost.note : ""}\nTheir open tasks will be closed.` : "");
   if (plan.reopen) {
     const typed = prompt(
@@ -2576,12 +3186,29 @@ async function bulkQueueRateReminders() {
     await bulkQueueRateRemindersRun(ids);
   } finally { setBulkBusy(false); }
 }
+/* G6-02 / G6-10 — the bulk bar is the ONE list of cases round 6's canonical identifier never
+   reached, and on a multi-property client that was not cosmetic. Every confirm line, skip reason
+   and error report was built from the client's NAME, so a sweep over Gareth Pollard's five
+   buy-to-lets reported "Gareth Pollard, Gareth Pollard, Gareth Pollard" — and the retry pruning
+   matched the failure list against that same name, so ONE failed case re-selected ALL of that
+   client's selected cases and the second press re-queued the one that had already worked while
+   still never touching the one that failed. Failures are collected as case IDS now, and named with
+   the same property · type · lender · stage identity the rest of the app uses. */
+function bulkCaseLabel(c) {
+  const who = [c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ") || "this client";
+  const what = caseIdentityLabel(c);
+  return what ? `${who} — ${what}` : who;
+}
 async function bulkQueueRateRemindersRun(ids) {
+  // The identity needs the property column, which an un-migrated database does not have: name it
+  // only where it exists, exactly as loadPropContext does, so the sweep cannot 42703 on M7.
+  const propOn = await propAddrSupported();
   const { data: rows, error } = await db.from("cases")
-    .select("id,client_id,rate_end_date,assigned_to,rate_reminder_queued_at,clients(first_name,last_name,email)")
+    .select("id,client_id,rate_end_date,assigned_to,rate_reminder_queued_at,case_kind,lender,stage"
+      + (propOn ? ",property_address" : "") + ",clients(first_name,last_name,email)")
     .in("id", ids);
   if (error) return toast("Error: " + error.message);
-  const nameOf = (c) => [c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ") || "this client";
+  const nameOf = bulkCaseLabel;
   const eligible = [], skipped = [];
   (rows || []).forEach((c) => {
     if (!(c.clients && c.clients.email)) skipped.push(`${nameOf(c)} (no email)`);
@@ -2602,7 +3229,10 @@ async function bulkQueueRateRemindersRun(ids) {
     + `\n\nThey send with the next automation run — nothing is sent now.`
     + `\nEach one also gets a follow-up task due ${fmtD(chaseDue)}.`
     + (skipped.length ? `\n\nSkipped: ${skipped.slice(0, 5).join(", ")}${skipped.length > 5 ? ` and ${skipped.length - 5} more` : ""}` : "")
-    + (already.length ? `\n\n⚠ ${already.length} of these ${already.length === 1 ? "has" : "have"} already been reminded once — they will be reminded again.` : "");
+    + (already.length ? `\n\n⚠ ${already.length} of these ${already.length === 1 ? "has" : "have"} already been reminded once — they will be reminded again:\n${already.slice(0, 5).map((c) => "· " + nameOf(c)).join("\n")}${already.length > 5 ? `\n· and ${already.length - 5} more` : ""}` : "")
+    /* G6-10 — the batch has to say WHICH cases, not just how many. On a landlord with five
+       properties "2 rate-end reminders" and "1 has already been reminded" name nothing at all. */
+    + `\n\nQueueing for:\n${eligible.slice(0, 8).map((c) => "· " + nameOf(c)).join("\n")}${eligible.length > 8 ? `\n· and ${eligible.length - 8} more` : ""}`;
   if (!confirm(confirmMsg)) return;
   let queued = 0, tasks = 0, raced = 0;
   // G1I-B1/B3/B5 — every part of the promise this button made is now accounted for by name. The
@@ -2619,10 +3249,10 @@ async function bulkQueueRateRemindersRun(ids) {
     const { error: qErr } = await db.from("email_queue").insert({
       case_id: c.id, client_id: c.client_id, email_type: "rate_end_reminder", to_email: c.clients.email,
     });
-    if (qErr) { failedQueue.push(nameOf(c)); continue; }
+    if (qErr) { failedQueue.push({ id: c.id, label: nameOf(c) }); continue; }
     queued++;
     const { error: sErr } = await db.from("cases").update({ rate_reminder_queued_at: new Date().toISOString() }).eq("id", c.id);
-    if (sErr) failedStamp.push(nameOf(c));
+    if (sErr) failedStamp.push({ id: c.id, label: nameOf(c) });
     const { error: tErr } = await db.from("case_tasks").insert({
       case_id: c.id,
       title: `Follow up rate-end reminder — ${(c.clients.first_name || "client").trim()}`,
@@ -2630,10 +3260,10 @@ async function bulkQueueRateRemindersRun(ids) {
       assigned_to: c.assigned_to || (ME && ME.id) || null,
       created_by: (ME && ME.id) || null,
     });
-    if (tErr) failedTask.push(nameOf(c)); else tasks++;
+    if (tErr) failedTask.push({ id: c.id, label: nameOf(c) }); else tasks++;
   }
   const err = failedQueue.length + failedTask.length + failedStamp.length;
-  const names = (list) => list.slice(0, 4).join(", ") + (list.length > 4 ? ` and ${list.length - 4} more` : "");
+  const names = (list) => list.slice(0, 4).map((f) => f.label).join(", ") + (list.length > 4 ? ` and ${list.length - 4} more` : "");
   const detail = [];
   if (failedQueue.length) detail.push(`no reminder was queued for ${names(failedQueue)}`);
   if (failedTask.length) detail.push(`the follow-up task failed for ${names(failedTask)} — nothing holds the next step`);
@@ -2643,11 +3273,13 @@ async function bulkQueueRateRemindersRun(ids) {
   if (raced) msg += ` · ${raced} already reminded by another run`;
   if (err) msg += ` · ${err} error${err === 1 ? "" : "s"}: ${detail.join("; ")}`;
   toast(msg);
-  // Leave anything that failed selected, so the retry is targeted instead of a re-run over the
-  // whole selection (which would duplicate everything that did work).
-  const stillSelected = [...new Set([...failedQueue, ...failedTask, ...failedStamp])];
+  /* Leave anything that failed selected, so the retry is targeted instead of a re-run over the
+     whole selection (which would duplicate everything that did work). G6-02 — by ID. Pruning by
+     client NAME re-selected every case belonging to a client any of whose cases failed, which on a
+     multi-property landlord is the exact duplication this line exists to prevent. */
+  const stillSelected = new Set([...failedQueue, ...failedTask, ...failedStamp].map((f) => f.id));
   pipeSel.clear();
-  if (stillSelected.length) eligible.forEach((c) => { if (stillSelected.includes(nameOf(c))) pipeSel.add(c.id); });
+  stillSelected.forEach((id) => pipeSel.add(id));
   loadPipeline();
 }
 /* ---------- R5 Batch 5 · S3b — bulk "Add task…" (pipeline table) ----------
@@ -2700,9 +3332,14 @@ async function bulkAddTaskRun(ids) {
   // G1I-B5 — the client's name is fetched so a failure can be NAMED. Reporting "1 error" over a
   // selection that is then cleared left the operator with no way to tell which of five clients
   // missed its task; the only recovery was to re-run over all five and create four duplicates.
-  const { data: rows, error } = await db.from("cases").select("id,assigned_to,clients(first_name,last_name)").in("id", ids);
+  // G6-10 — and the failure is named with the case's identity, not just the client's name: "no task
+  // for Gareth Pollard" says nothing when three of the selected cases are his.
+  const propOn = await propAddrSupported();
+  const { data: rows, error } = await db.from("cases")
+    .select("id,assigned_to,case_kind,lender,stage" + (propOn ? ",property_address" : "") + ",clients(first_name,last_name)")
+    .in("id", ids);
   if (error) return toast("Error: " + error.message);
-  const nameOf = (c) => [c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ") || "an unnamed client";
+  const nameOf = bulkCaseLabel;
   const picked = await promptBulkTask((rows || []).length || ids.length);
   if (!picked) return;
   let ok = 0;
@@ -2818,9 +3455,10 @@ function syncViewToggle() {
   btn.style.display = pipelineSegment === "completed" ? "none" : "";
   btn.textContent = pipelineView === "board" ? "☰ Table view" : "⊞ Board view";
 }
-function renderPipelineTable(filtered, stageEntry = {}) {
+function renderPipelineTable(filtered, stageEntry = {}, propOn = true) {
   $("#board").classList.add("hidden");
   $("#board-hint").classList.add("hidden");
+  $("#board-legend").classList.add("hidden");
   $("#stage-tabs").classList.remove("hidden");
   $("#table-wrap").classList.remove("hidden");
   // Stage tabs are scoped to the active segment (segment narrows which stage tabs show).
@@ -2837,6 +3475,11 @@ function renderPipelineTable(filtered, stageEntry = {}) {
   const val = (c, k) => {
     switch (k) {
       case "client": return [c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ").toLowerCase();
+      /* R6 — sorting by property groups a landlord's cases by building rather than scattering them
+         by date. Sorted on the SHORT label (what the column actually shows) and lower-cased, with
+         the no-address rows pushed to the end of an ascending sort instead of clumping at the top
+         under an empty string. */
+      case "property": { const l = propLabel(c); return l ? l.toLowerCase() : "\uffff"; }
       case "lender": return (c.lender || "").toLowerCase();
       case "rate_percent": return c.rate_percent ?? -1;
       case "broker_fee": return c.broker_fee ?? -1;
@@ -2848,9 +3491,14 @@ function renderPipelineTable(filtered, stageEntry = {}) {
   };
   // Completion-focused table: its own columns, defaulting to newest-completed first (falls back
   // to completed_at desc whenever the active sort key isn't one of its columns).
+  /* R6 — Property sits immediately after Client in both tables: it is the second half of "which
+     case is this?", and anywhere else leaves a portfolio landlord's five rows identical for the
+     first two columns. Omitted entirely (not rendered empty) on a database that has not taken
+     migration M7 — same discipline as the case form's field. */
+  const propCol = propOn ? [["property", "Property"]] : [];
   const cols = completedMode
-    ? [["client", "Client"], ["stage", "Status"], ["completed_at", "Completed"], ["lender", "Lender"], ["loan_amount", "Loan"], ["broker_fee", "Broker fee"], ["fee_status", "Fee status"], ["assigned", "Adviser"]]
-    : [["client", "Client"], ["stage", "Stage"], ["days_in_stage", "In stage"], ["case_kind", "Type"], ["lender", "Lender"], ["rate_percent", "Rate"], ["rate_end_date", "Rate ends"], ["erc_end_date", "ERC ends"], ["broker_fee", "Fee"], ["fee_status", "Fee status"], ["protection_status", "Protection"], ["assigned", "Adviser"], ["updated_at", "Updated"]];
+    ? [["client", "Client"], ...propCol, ["stage", "Status"], ["completed_at", "Completed"], ["lender", "Lender"], ["loan_amount", "Loan"], ["broker_fee", "Broker fee"], ["fee_status", "Fee status"], ["assigned", "Adviser"]]
+    : [["client", "Client"], ...propCol, ["stage", "Stage"], ["days_in_stage", "In stage"], ["case_kind", "Type"], ["lender", "Lender"], ["rate_percent", "Rate"], ["rate_end_date", "Rate ends"], ["erc_end_date", "ERC ends"], ["broker_fee", "Fee"], ["fee_status", "Fee status"], ["protection_status", "Protection"], ["assigned", "Adviser"], ["updated_at", "Updated"]];
   let sk = sortKey, sd = sortDir;
   if (completedMode && !cols.some(([k]) => k === sortKey)) { sk = "completed_at"; sd = -1; }
   rows = rows.slice().sort((a, b) => { const x = val(a, sk), y = val(b, sk); return (x < y ? -1 : x > y ? 1 : 0) * sd; });
@@ -2865,7 +3513,8 @@ function renderPipelineTable(filtered, stageEntry = {}) {
     ? rows.map((c) => `<tr onclick="openCase('${c.id}')" style="cursor:pointer;">
         ${cbCell(c)}
         <td class="stick-col"><strong>${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" "))}</strong></td>
-        <td><span class="badge ${c.stage === "completed" ? "green" : "grey"}">${STAGE_LABEL[c.stage] || c.stage}</span></td>
+        ${propOn ? `<td class="pipe-col-prop">${propChip(c) || '<span class="cs-muted">—</span>'}</td>` : ""}
+        <td>${stageBadge(c.stage)}</td>
         <td>${c.completed_at ? fmtD(c.completed_at) : "—"}</td>
         <td>${lenderIcon(c.lender)}${esc(c.lender || "")}</td>
         <td>${c.loan_amount ? fmtM(c.loan_amount) : ""}</td>
@@ -2876,7 +3525,8 @@ function renderPipelineTable(filtered, stageEntry = {}) {
     : rows.map((c) => `<tr onclick="openCase('${c.id}')" style="cursor:pointer;">
         ${cbCell(c)}
         <td class="stick-col"><strong>${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" "))}</strong></td>
-        <td><span class="badge blue">${STAGE_LABEL[c.stage] || c.stage}</span></td>
+        ${propOn ? `<td class="pipe-col-prop">${propChip(c) || '<span class="cs-muted">—</span>'}</td>` : ""}
+        <td>${stageBadge(c.stage)}</td>
         <td>${(() => { const a = cardAge(c, stageEntry[c.id]); return a.inStage == null ? "" : `<span class="age-cell${a.level ? " age-" + a.level : ""}" title="${esc(a.basis)}">${a.inStage}d</span>`; })()}</td>
         <td>${esc((KINDS.find((x) => x[0] === c.case_kind) || [])[1] || "")}</td>
         <td>${lenderIcon(c.lender)}${esc(c.lender || "")}</td>
@@ -2901,7 +3551,7 @@ function renderPipelineTable(filtered, stageEntry = {}) {
       <button type="button" class="btn btn-sm" id="pipe-bulk-task">＋ Add task…</button>
       <button type="button" class="btn btn-sm" id="pipe-bulk-clear">Clear</button>
     </div>
-    <div class="board-scroll-wrap">
+    <div class="board-scroll-wrap board-scroll-wrap--table">
     <div class="panel" id="pipe-scroll" style="overflow-x:auto;">
     <div style="display:flex;justify-content:flex-end;margin-bottom:8px;"><button class="btn btn-sm" id="csv-btn">⬇ Download CSV</button></div>
     ${rows.length ? `<table class="imp-table has-bulk" id="pipe-table">
@@ -2946,7 +3596,7 @@ function renderPipelineTable(filtered, stageEntry = {}) {
   const taskBtn = $("#pipe-bulk-task");
   if (taskBtn) taskBtn.onclick = () => bulkAddTask();
   updatePipeBulkBar();
-  $("#csv-btn").onclick = () => exportCsv(rows, completedMode);
+  $("#csv-btn").onclick = () => exportCsv(rows, completedMode, propOn);
 }
 // BUILD 7c — reflect the current pipeline selection into the action bar (visibility + count) and the
 // select-all checkbox's checked/indeterminate state, without re-rendering the table.
@@ -2964,7 +3614,7 @@ function updatePipeBulkBar() {
     all.indeterminate = checked > 0 && checked < boxes.length;
   }
 }
-function exportCsv(rows, completedMode = false) {
+function exportCsv(rows, completedMode = false, propOn = true) {
   const q2 = (v) => {
     let s = String(v ?? "");
     // Neutralise spreadsheet formula injection (=, +, -, @, tab, CR at start)
@@ -2980,16 +3630,21 @@ function exportCsv(rows, completedMode = false) {
      every row in this export is the signed-in adviser's own case and drops it the moment a
      colleague's row is in view, so the scope decides, not the click. Owner and admin unchanged. */
   const money = csvShowsFee(rows);
+  /* R6 — the export carried twelve columns and no property, so a landlord's five cases left this
+     app as five identical name rows. The FULL address goes in the file (a spreadsheet has room,
+     and the short chip label is a screen affordance, not a record). */
   const head = (completedMode
-    ? ["Client", "Status", "Completed", "Lender", "Loan", "Broker fee", "Fee status", "Adviser"]
-    : ["Client", "Stage", "Type", "Lender", "Rate %", "Rate end", "Rate end estimated", "ERC end", "Broker fee", "Fee status", "Protection", "Adviser", "Updated"]
-  ).filter((h) => money || h !== "Broker fee");
+    ? ["Client", "Property", "Status", "Completed", "Lender", "Loan", "Broker fee", "Fee status", "Adviser"]
+    : ["Client", "Property", "Stage", "Type", "Lender", "Rate %", "Rate end", "Rate end estimated", "ERC end", "Broker fee", "Fee status", "Protection", "Adviser", "Updated"]
+  ).filter((h) => (money || h !== "Broker fee") && (propOn || h !== "Property"));
   const row = (c) => (completedMode ? [
     [c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" "),
+    propOn ? propAddress(c) || "" : null,
     STAGE_LABEL[c.stage] || c.stage, (c.completed_at || "").slice(0, 10), c.lender || "",
     c.loan_amount ?? "", money ? c.broker_fee ?? "" : null, c.fee_status || "", c.assigned_to ? staffName(c.assigned_to) : "",
   ] : [
     [c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" "),
+    propOn ? propAddress(c) || "" : null,
     STAGE_LABEL[c.stage] || c.stage, (KINDS.find((x) => x[0] === c.case_kind) || [])[1] || c.case_kind, c.lender || "", c.rate_percent ?? "", c.rate_end_date || "",
     c.rate_end_estimated ? "yes" : "", c.erc_end_date || "", money ? c.broker_fee ?? "" : null,
     c.fee_status || "", c.protection_status || "", c.assigned_to ? staffName(c.assigned_to) : "",
@@ -3089,31 +3744,37 @@ async function loadProtectionPage() {
       </select>
       <button type="button" class="btn btn-sm" id="prot-bulk-clear">Clear</button>
     </div>
-    <div class="board-scroll-wrap">
+    <div class="board-scroll-wrap board-scroll-wrap--table">
     <div class="panel prot-table-wrap" id="prot-scroll">
     <table class="imp-table has-bulk" id="prot-list-table">
-      <tr><th class="bulk-col"><input type="checkbox" id="prot-bulk-all" aria-label="Select all cases in this view"></th><th>#</th><th class="stick-col">Client</th><th>Case</th><th class="prot-col-loan">Loan</th><th>Status</th>${money ? '<th class="prot-col-est">Est. £</th>' : ""}<th>Adviser</th><th class="stick-col-right">Actions</th></tr>
+      <tr><th class="bulk-col"><input type="checkbox" id="prot-bulk-all" aria-label="Select all cases in this view"></th><th class="prot-col-n">#</th><th class="stick-col">Client</th><th>Case</th><th class="prot-col-loan">Loan</th><th>Status</th>${money ? '<th class="prot-col-est">Est. £</th>' : ""}<th>Adviser</th><th class="stick-col-right">Actions</th></tr>
       ${rows.map((r, i) => {
         const kind = (KINDS.find((x) => x[0] === r.case_kind) || [])[1] || "";
         const p = PROT_BADGE[r.protection_status] || PROT_BADGE.not_discussed;
         const gi = ["purchase", "first_time_buyer"].includes(r.case_kind) ? (GI_BADGE[r.gi_status] || GI_BADGE.not_discussed) : null;
         return `<tr>
         ${protCb(r)}
-        <td style="color:var(--muted);">${i + 1}</td>
+        <td class="prot-col-n" style="color:var(--muted);">${i + 1}</td>
         <td class="stick-col"><span class="prot-client" onclick="openClient('${r.client_id}')">${esc(r.client_name)}</span><span class="prot-fold-info">Loan ${fmtM(r.loan_amount)}${money ? " · Est. " + fmtM(r.est_commission) : ""}</span></td>
-        <td><span class="badge blue">${STAGE_LABEL[r.stage] || esc(r.stage)}</span> ${esc(kind)}${r.lender ? " · " : " "}${lenderIcon(r.lender)}${esc(r.lender || "")}</td>
+        <td>${stageBadge(r.stage)} ${esc(kind)}${r.lender ? " · " : " "}${lenderIcon(r.lender)}${esc(r.lender || "")}</td>
         <td class="prot-col-loan">${fmtM(r.loan_amount)}</td>
         <td><span class="badge ${p[0]}">${p[1]}</span>${gi ? ` <span class="badge ${gi[0]}" title="${TIP_GI}">${gi[1]}</span>` : ""}</td>
         ${money ? `<td class="prot-est prot-col-est">${fmtM(r.est_commission)}</td>` : ""}
         <td>${r.owner ? `<span class="chip" title="${esc(staffName(r.owner))}">${esc(initials(r.owner))}</span>` : '<span class="cs-muted">— unassigned —</span>'}</td>
-        <td class="stick-col-right" style="white-space:nowrap;">
+        <td class="stick-col-right prot-actions">
           <button class="btn btn-sm" onclick="openCase('${r.case_id}')">Open</button>
-          <select class="prot-status-set" onchange="setProtStatus('${r.case_id}', this.value)" title="Set protection status">
-            <option value="">Set status…</option>
+          ${/* R6-B4 (W21) — the placeholder is shortened from "Set status…"/"Set GI…" to
+               "Status…"/"GI…" and each select is sized to THAT rather than to its longest
+               option. Before, the pair were 132px each and still ellipsised — "Set GI…"
+               told you nothing — and together with three buttons they made this cell
+               429px wide, wider than a phone. The current value is not lost: it is the
+               badge in the STATUS column of the same row, which is now never covered. */ ""}
+          <select class="prot-status-set" onchange="setProtStatus('${r.case_id}', this.value)" title="Set protection status" aria-label="Set protection status">
+            <option value="">Status…</option>
             ${PROT_BULK_STATUS.map(([k, l]) => `<option value="${k}">${l}</option>`).join("")}
           </select>
-          ${gi ? `<select class="prot-status-set" onchange="setGiStatus('${r.case_id}', this.value)" title="Set GI status">
-            <option value="">Set GI…</option>
+          ${gi ? `<select class="prot-status-set prot-gi-set" onchange="setGiStatus('${r.case_id}', this.value)" title="Set general-insurance status" aria-label="Set general-insurance status">
+            <option value="">GI…</option>
             ${[["quoted", "GI quoted"], ["policy_taken", "GI taken"], ["declined", "GI declined"], ["not_applicable", "GI n/a"]].map(([k, l]) => `<option value="${k}">${l}</option>`).join("")}
           </select>` : ""}
           <button class="btn btn-sm" onclick="protCallTask('${r.case_id}')">Task</button>
@@ -3306,7 +3967,16 @@ const FF_MAP = [
   { t: "client", col: "email",         label: "Email",          ff: ["email"] },
   { t: "client", col: "phone",         label: "Phone",          ff: ["phone"] },
   { t: "client", col: "date_of_birth", label: "Date of birth",  ff: ["a1_dob"] },
-  { t: "client", col: "address",       label: "Address",        ff: ["a1_address", "a1_postcode"] },
+  /* R6-35 — "Address" alone was ambiguous on the one screen where the distinction matters most: this
+     row is the CLIENT's own home (factfind.html section 1), and the property row below is the
+     building being mortgaged. Both are now named for what they are (SM-09). */
+  { t: "client", col: "address",       label: "Client address (home)", ff: ["a1_address", "a1_postcode"] },
+  /* R6-35 — factfind.html:150 has asked the client "Property address (if known)" (m_property_address)
+     since it shipped, and FF_MAP had no entry for it, so the answer sat in fact_finds.data and never
+     reached the case — on the very day the column to hold it arrived. `prop: true` marks the row as
+     needing M7: it is filtered out of the diff on a database that has no property column, so nothing
+     offers an Apply whose write could only 42703. */
+  { t: "case",   col: "property_address", label: "Property address (security)", ff: ["m_property_address"], prop: true },
   { t: "case",   col: "loan_amount",    label: "Loan amount",    ff: ["m_loan"],  num: true, money: true },
   { t: "case",   col: "property_value", label: "Property value", ff: ["m_value"], num: true, money: true },
   { t: "case",   col: "term_years",     label: "Term (years)",   ff: ["m_term"],  num: true },
@@ -3331,9 +4001,12 @@ window.ffApplyDiff = async function (caseId, clientId, data) {
     cRow = rc.data; clRow = rcl.data;
   } catch (e) { return toast("Could not load case/client to apply"); }
   if (!cRow || !clRow) return toast("Could not load case/client to apply");
+  notePropAddrFromStarRow(cRow);
+  const ffPropOn = await propAddrSupported();
 
   const rows = [];
   FF_MAP.forEach((m, i) => {
+    if (m.prop && !ffPropOn) return;   // no property column on this database — don't offer the row
     const ffRaw = m.ff.map((k) => String(data[k] == null ? "" : data[k]).trim()).filter(Boolean).join(", ");
     if (!ffRaw) return; // no fact-find answer to apply for this field
     const ffVal = m.num ? Number(String(ffRaw).replace(/[^0-9.]/g, "")) : ffRaw;
@@ -3341,11 +4014,19 @@ window.ffApplyDiff = async function (caseId, clientId, data) {
     const src = m.t === "client" ? clRow : cRow;
     const curRaw = src[m.col];
     const curEmpty = curRaw == null || String(curRaw).trim() === "";
-    const equal = !curEmpty && (m.num ? Number(curRaw) === ffVal : String(curRaw).trim() === String(ffVal).trim());
+    /* R6-35 — an address is "the same" when it is the same BUILDING, not the same string:
+       "8 Grand Avenue, Bournemouth BH6 3SY" and "8 Grand Avenue, Southbourne, Bournemouth BH6 3SY"
+       are one flat, and proposing to rewrite one as the other is noise. propKey decides. */
+    const equal = !curEmpty && (m.prop
+      ? propKey(String(curRaw)) === propKey(String(ffVal))
+      : (m.num ? Number(curRaw) === ffVal : String(curRaw).trim() === String(ffVal).trim()));
     if (equal) return; // already matches — nothing to do
     const disp = (v) => (v === "" || v == null ? '<span class="cs-muted">— empty —</span>' : (m.money ? esc(fmtM(v)) : esc(v)));
     rows.push({
       idx: i, m, ffVal, conflict: !curEmpty, checked: curEmpty,
+      // A property conflict is not a typo to reconcile — it means the client has named a DIFFERENT
+      // building from the one on the case. It is called out as such, and stays unticked.
+      propMismatch: !!(m.prop && !curEmpty),
       curHtml: disp(curEmpty ? "" : curRaw), ffHtml: disp(m.num ? ffVal : ffRaw),
     });
   });
@@ -3358,7 +4039,7 @@ window.ffApplyDiff = async function (caseId, clientId, data) {
     <tr>
       <td style="padding:6px 8px;font-weight:600;">${esc(r.m.label)}<div class="cs-muted" style="font-weight:400;font-size:11px;">${r.m.t}</div></td>
       <td style="padding:6px 8px;">${r.curHtml}</td>
-      <td style="padding:6px 8px;">${r.ffHtml}${r.conflict ? ' <span class="badge amber" style="margin-left:4px;">conflict</span>' : ""}</td>
+      <td style="padding:6px 8px;">${r.ffHtml}${r.conflict ? ' <span class="badge amber" style="margin-left:4px;">conflict</span>' : ""}${r.propMismatch ? ' <span class="badge red" style="margin-left:4px;" title="The client has named a different building from the one on this case. Check which is right before applying — one of them belongs to a different case.">different property</span>' : ""}</td>
       <td style="padding:6px 8px;text-align:center;"><input type="checkbox" id="ffchk-${r.idx}" ${r.checked ? "checked" : ""} style="width:auto;"></td>
     </tr>`).join("");
 
@@ -3374,7 +4055,10 @@ window.ffApplyDiff = async function (caseId, clientId, data) {
 
   $("#modal").innerHTML = `
     <h3>Apply fact-find to case</h3>
-    <p class="panel-sub">Tick what to copy from the client's answers onto the case & client record. Empty fields are pre-ticked; values that would overwrite existing data start unticked.</p>
+    ${/* R6-35 — the modal wrote to ONE case and named none of them: on a client with six cases the
+          adviser could not see which record was about to change (SM-09). */ ""}
+    <p class="panel-sub" style="margin-bottom:2px;">${esc([clRow.first_name, clRow.last_name].filter(Boolean).join(" ") || "This client")} — ${caseIdentityHtml(cRow, { fallback: true })}</p>
+    <p class="panel-sub">Tick what to copy from the client's answers onto the case & client record. Empty fields are pre-ticked; values that would overwrite existing data start unticked. “Client address (home)” is where the client lives; “Property address (security)” is the building this case is secured on — they are different fields and a fact-find can disagree with the case about either.</p>
     ${rows.length ? `
     <table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:8px;">
       <thead><tr style="text-align:left;border-bottom:1px solid var(--line);">
@@ -3499,6 +4183,118 @@ async function refreshOpenedStamp(caseId) {
   if (data && data.updated_at) openedUpdatedAt = data.updated_at;
   return openedUpdatedAt;
 }
+/* R6 — the client's distinct properties, newest-address-wins on nothing: keyed by propKey so
+   "8 Grand Avenue…" typed two ways is one entry, and sorted so the list is stable between
+   openings. Returns the address strings themselves, which is what gets saved. */
+function distinctPropAddresses(rows) {
+  const seen = new Map();
+  (rows || []).forEach((r) => {
+    const a = propAddress(r);
+    if (!a) return;
+    const k = propKey(a);
+    if (!seen.has(k)) seen.set(k, a);
+  });
+  return [...seen.values()].sort((a, b) => a.localeCompare(b, "en"));
+}
+/* R6 · the property picker on the case form.
+   A portfolio landlord's sixth case is almost never a sixth property — it is one of the five
+   this firm already holds, and retyping it is how one flat becomes two propKeys and every
+   grouping downstream quietly stops working. So: pick from what we already have, or say
+   explicitly that this is a new address, or say explicitly that there isn't one.
+   The <select> carries no name= — it is a control for the textarea, which is the field that
+   saves and the field the unsaved-changes guard watches. */
+function wireCasePropertyPicker(preloadedSiblings) {
+  const pick = $("#case-prop-pick"), input = $("#case-prop-input");
+  if (!pick || !input) return; // M7 absent — no field was rendered
+  const NEW = "__new__";
+  const cache = new Map();
+  let addresses = [];
+  const hint = $("#case-prop-hint");
+  const HINT_BASE = "The property the mortgage is secured on — not the client's home address, unless they are the same.";
+  const HINT_PICK = HINT_BASE + " Choose “+ New address…” to type a different one, or to correct this one.";
+  const showInput = (on) => { input.classList.toggle("hidden", !on); };
+  /* G6-03 — the picker used to render the FIRST-SEEN sibling spelling of a
+     key-equal address and hide the textarea, so a case holding "8 Grand Avenue,
+     Southbourne, Bournemouth BH6 3SY" showed another case's "8 grand avenue
+     southbourne bournemouth bh63sy" as its own, and any interaction with the
+     select wrote that spelling back. The option list is therefore rebuilt with
+     THIS case's own string substituted for the key-equal sibling: the operator
+     always reads what is stored on the case in front of them, and picking the
+     option that is already picked is a no-op rather than a rewrite. */
+  const optionsFor = (cur) => {
+    if (!cur) return addresses.slice();
+    const k = propKey(cur);
+    if (!k) return addresses.slice();
+    let replaced = false;
+    return addresses.map((a) => {
+      if (!replaced && propKey(a) === k) { replaced = true; return cur; }
+      return a;
+    });
+  };
+  let lastValue = null;   // what the select last MEANT, so a no-change "change" writes nothing
+  /* G6-07 — the input-side half. Advisory, never a block: the address may genuinely not be known
+     yet. It states the consequence, which is the part the operator cannot otherwise see. */
+  const warn = $("#case-prop-warn");
+  const paintWarn = () => {
+    if (!warn) return;
+    const raw = String(input.value || "").trim();
+    const addr = propAddress(raw);
+    if (!raw || (addr && propIsIdentity(addr))) { warn.hidden = true; warn.textContent = ""; return; }
+    warn.hidden = false;
+    warn.style.color = "var(--amber, #a4620a)";
+    warn.textContent = addr
+      ? `⚠ “${addr}” will be saved, but it is not a usable address: nothing will group, match or warn on it. Leave the field empty rather than using a placeholder — an empty field reads as “not recorded yet”, a placeholder reads as a building.`
+      : "⚠ That is punctuation, not an address — it will be saved as no address at all.";
+  };
+  input.addEventListener("input", paintWarn);
+  const paint = () => {
+    if (hint) hint.textContent = addresses.length ? HINT_PICK : HINT_BASE;
+    if (!addresses.length) { // nothing to pick from: plain free-text, as before
+      pick.classList.add("hidden"); pick.innerHTML = ""; showInput(true); lastValue = null; paintWarn(); return;
+    }
+    const cur = propAddress(input.value);
+    const opts = optionsFor(cur);
+    const match = cur ? opts.find((a) => propKey(a) === propKey(cur)) : null;
+    pick.innerHTML = `<option value="">— No address —</option>`
+      + opts.map((a) => `<option value="${esc(a)}"${match === a ? " selected" : ""}>${esc(a)}</option>`).join("")
+      + `<option value="${NEW}"${cur && !match ? " selected" : ""}>+ New address…</option>`;
+    pick.classList.remove("hidden");
+    showInput(!!cur && !match); // reusing one of theirs? then the box is just noise
+    lastValue = pick.value;
+    paintWarn();
+  };
+  pick.addEventListener("change", () => {
+    const v = pick.value;
+    if (v === NEW) {
+      /* Text kept but fully selected: typing replaces it outright (so a genuinely new property
+         cannot be half-edited into a near-duplicate of an existing one), while correcting a typo
+         in the address already on the case — the only route there is to fix one — still works. */
+      lastValue = v;
+      showInput(true); input.focus(); input.select();
+    } else if (v === lastValue) {
+      // Re-picking what was already picked changes nothing, so it must WRITE nothing.
+      showInput(false);
+    } else {
+      lastValue = v;
+      input.value = v; // "" == No address
+      showInput(false);
+    }
+  });
+  const loadFor = async (clientId) => {
+    if (!clientId || clientId === "__new__") { addresses = []; paint(); return; }
+    if (!cache.has(clientId)) {
+      cache.set(clientId, distinctPropAddresses(await softRows(db.from("cases").select("*").eq("client_id", clientId))));
+    }
+    addresses = cache.get(clientId);
+    paint();
+  };
+  const clientSel = $("#case-client-select");
+  if (clientSel) {
+    if (clientSel.value) cache.set(clientSel.value, distinctPropAddresses(preloadedSiblings));
+    clientSel.addEventListener("change", () => loadFor(clientSel.value));
+    loadFor(clientSel.value);
+  } else paint();
+}
 /* opts: { revealProtection } opens the details drawer on a red-highlighted protection select
    (the protection gate's fix path, R5-34); { openDetails } just opens the drawer (offer apply). */
 window.openCase = async function (id, opts = {}) {
@@ -3522,6 +4318,7 @@ window.openCase = async function (id, opts = {}) {
     ]);
     if (!cs) return toast("Case not found — it may have been deleted or you don't have access");
     c = cs; notes = ns || []; tasks = ts || []; events = evs; auditRows = aud;
+    notePropAddrFromStarRow(cs); // the select("*") above settles the M7 question definitively
     hasRetentionSuccessor = (succ || []).length > 0;
     openedUpdatedAt = cs.updated_at; // exact string from the loaded row, for the stale-write guard
   }
@@ -3530,6 +4327,14 @@ window.openCase = async function (id, opts = {}) {
     db.from("introducers").select("id,name").order("name"),
   ]);
   const caseClient = id ? (clients || []).find((cl) => cl.id === c.client_id) : null;
+  /* R6 — the client's OTHER cases, for two jobs: (1) the header only spends a
+     "no address" chip where differentiation actually matters, i.e. the client
+     has more than one case; (2) the new-case property picker offers the
+     addresses this firm already holds for them instead of inviting a retype
+     that forks the property key. select("*") on purpose: an un-migrated
+     database has no property_address column and naming it would 42703. */
+  const propAddrOn = await propAddrSupported();
+  const siblingCases = c.client_id ? await softRows(db.from("cases").select("*").eq("client_id", c.client_id)) : [];
   const introOpts = (intros || []).map((i) =>
     `<option value="${i.id}" ${i.id === c.introducer_id ? "selected" : ""}>${esc(i.name)}</option>`).join("");
   const clientOpts = (clients || []).map((cl) =>
@@ -3537,6 +4342,11 @@ window.openCase = async function (id, opts = {}) {
 
   // ---- Summary-header data (existing cases only) — BUILD 2a ----
   const clientName = caseClient ? [caseClient.first_name, caseClient.last_name].filter(Boolean).join(" ") : "";
+  /* R6 — the property chip for the identity line. The hollow "no address" variant is spent ONLY
+     where it buys something: a client with one case has nothing to be confused with, and a chip
+     saying "no address" there is a reproach, not information. */
+  const identityChip = propChip(c, { fallback: siblingCases.length > 1 });
+  const identityChipIsFallback = identityChip.includes("prop-chip-none");
   const todayStr = localDateStr();
   const nextTask = tasks.find((t) => !t.done_at);           // tasks are due-date ordered → first open one
   const hadOpenTask = !!nextTask;
@@ -3551,6 +4361,19 @@ window.openCase = async function (id, opts = {}) {
       <div class="cs-top">
         <div class="cs-id">
           <div class="cs-name">${esc(clientName) || "Client"}</div>
+          ${/* R6 — the identity line. Every destructive or client-facing action in the app is
+               launched from this modal, and until now its header could not tell you WHICH of a
+               client's cases you had open: two Skipton cases on one house differed only by a
+               stage pill. Property first (the thing that varies), then what kind of case it is,
+               then who it's with, then where it has got to. */ ""}
+          <div class="cs-identity">
+            ${identityChip}
+            ${/* The no-address chip already IS "type · lender" — printing them again beside it
+                 would say the same thing twice on the cases that can least afford noise. */ ""}
+            ${identityChipIsFallback ? "" : `<span class="cs-kind">${esc(caseTypeLabel(c))}</span>
+            ${c.lender ? `<span class="cs-lender">${lenderIcon(c.lender, 14)}${esc(c.lender)}</span>` : ""}`}
+            ${stageBadge(c.stage, { cls: "cs-stage-badge" })}
+          </div>
           ${caseClient && (caseClient.phone || caseClient.email) ? `<div class="cs-contact">${caseClient.phone ? "📞 " + telLink(caseClient.phone) : ""}${caseClient.email ? "✉️ " + mailLink(caseClient.email) : ""}</div>` : ""}
         </div>
         <div class="cs-top-actions">
@@ -3562,11 +4385,14 @@ window.openCase = async function (id, opts = {}) {
         </div>
       </div>
       <div class="cs-stats">
-        <span class="badge blue">${esc(STAGE_LABEL[c.stage] || c.stage)}</span>
+        ${/* The stage moved up into the identity line above — this row is numbers. */ ""}
         ${nextStage ? `<button type="button" class="btn btn-sm cs-advance-btn" id="cs-advance-btn" title="Advance to ${esc(STAGE_LABEL[nextStage] || nextStage)}">Advance to ${esc(STAGE_LABEL[nextStage] || nextStage)} →</button>` : ""}
         <div class="cs-stat"><span class="cs-lbl">Adviser</span><span class="cs-val" id="cs-adviser-val">${c.assigned_to ? esc(staffName(c.assigned_to)) : '<span class="cs-muted">— unassigned —</span>'}</span></div>
         <div class="cs-stat"><span class="cs-lbl">Loan</span><span class="cs-val">${fmtM(c.loan_amount)}</span></div>
-        <div class="cs-stat"><span class="cs-lbl">Property</span><span class="cs-val">${fmtM(c.property_value)}</span></div>
+        ${/* R6 — was labelled "Property" and showed the property VALUE, which is the single most
+             misread token in the modal: the one field named after the property is a price. The
+             word "Property" now belongs to the address (the chip above); this is "Value". */ ""}
+        <div class="cs-stat"><span class="cs-lbl">Value</span><span class="cs-val">${fmtM(c.property_value)}</span></div>
         ${c.lender ? `<div class="cs-stat"><span class="cs-lbl">Lender</span><span class="cs-val">${esc(c.lender)}</span></div>` : ""}
         ${c.broker_fee > 0 ? `<div class="cs-stat"><span class="cs-lbl">Fee</span><span class="cs-val">${fmtM(c.broker_fee)}${c.fee_status ? ` <span class="cs-muted">(${esc(String(c.fee_status).replace(/_/g, " "))})</span>` : ""}</span></div>` : ""}
         ${(c.protection_status || "not_discussed") === "not_discussed" ? '<div class="cs-stat cs-warn" id="cs-prot-warn"><span class="cs-lbl">Protection</span><span class="cs-val">not discussed</span></div>' : ""}
@@ -3694,6 +4520,24 @@ window.openCase = async function (id, opts = {}) {
         <label>Email<input name="nc_email" type="email" placeholder="Email"></label>
         <label>Phone<input name="nc_phone" placeholder="Phone"></label>
       </div>
+      ${/* R6 · M7 — the field the whole round hangs off. Directly under the client, because
+           "which property" is the second thing a case is, not the twenty-fifth. Hidden entirely
+           on a database that has not taken the migration (propAddrSupported()): an input whose
+           Save can only fail is worse than no input. The picker above it is wired in
+           wireCasePropertyPicker() once the client is known. */ ""}
+      ${propAddrOn ? `
+      <label class="full" id="case-prop-field">Property address
+        <select id="case-prop-pick" class="hidden" aria-label="Which of this client's properties is this case about?"></select>
+        <textarea name="property_address" id="case-prop-input" rows="1" placeholder="e.g. 12 Oak Road, Bournemouth BH8 8EZ">${esc(c.property_address)}</textarea>
+        <span class="s cs-muted" id="case-prop-hint">The property the mortgage is secured on — not the client's home address, unless they are the same.</span>
+        ${/* G6-07 — said AT the input, not discovered downstream. A placeholder ("TBC", "n/a") saved
+             into this field used to become a first-class property: a coloured chip, a grouping key
+             and a genuine cross-client identity, so Data Health reported "TBC — 3 clients · 3 cases"
+             beside a real shared address and the sold-property warning fired between strangers.
+             Nothing is blocked — the operator may not have the address yet and the case still has to
+             be saved — but the field says plainly what will and will not happen. */ ""}
+        <span class="s" id="case-prop-warn" hidden></span>
+      </label>` : ""}
       <label>Type<select name="case_kind">${KINDS.map(([k, l]) => `<option value="${k}" ${k === c.case_kind ? "selected" : ""}>${l}</option>`).join("")}</select></label>
       <label>Stage<select name="stage">${STAGES.map(([k, l]) => `<option value="${k}" ${k === c.stage ? "selected" : ""}${k === "decision_in_principle" ? ` title="${TIP_DIP}"` : ""}>${l}</option>`).join("")}</select></label>
       <label>Lender<input name="lender" value="${esc(c.lender)}"></label>
@@ -3745,6 +4589,7 @@ window.openCase = async function (id, opts = {}) {
   kindSel.onchange = () => $("#gi-status-label").classList.toggle("hidden", !["purchase", "first_time_buyer"].includes(kindSel.value));
   const clientSel = $("#case-client-select");
   clientSel.onchange = () => $("#nc-new-client-fields").classList.toggle("hidden", clientSel.value !== "__new__");
+  wireCasePropertyPicker(siblingCases); // R6 — no-op when the M7 field isn't rendered
   $("#modal-cancel").onclick = closeModalGuarded; // defect 2 — Cancel is a "leave" path: it must warn about unsaved edits too
   $("#modal-save").onclick = async () => {
     // T1-15 — in-flight guard: a 0ms double-click on Save wrote the case twice.
@@ -3803,6 +4648,10 @@ window.openCase = async function (id, opts = {}) {
       if (row.stage === "completed") { if (!id || !c.completed_at) row.completed_at = new Date().toISOString(); }
       else if (id && c.stage === "completed") row.completed_at = null;
       ["loan_amount", "property_value", "rate_percent", "term_years", "broker_fee", "proc_fee", "sols_fee", "protection_commission"].forEach((k) => { if (row[k] != null) row[k] = Number(row[k]); });
+      /* R6/M7 — belt as well as braces. The field is only rendered when the probe says the column
+         is there, but a database can be migrated backwards between page load and Save, so a write
+         refused for property_address retries without it rather than losing the whole edit. */
+      if (!propAddrOn) delete row.property_address;
       if (id) {
         // Optimistic concurrency: only update if the row hasn't changed since we opened it.
         let { data: updated, error } = await db.from("cases").update(row).eq("id", id).eq("updated_at", openedUpdatedAt).select();
@@ -3812,6 +4661,12 @@ window.openCase = async function (id, opts = {}) {
         if (error && lost && isMissingColumnError(error)) {
           lostColsMissing = true;
           delete row.lost_reason; delete row.lost_detail;
+          ({ data: updated, error } = await db.from("cases").update(row).eq("id", id).eq("updated_at", openedUpdatedAt).select());
+        }
+        let propColMissing = false;
+        if (error && "property_address" in row && isMissingColumnError(error)) {
+          propColMissing = true; PROP_ADDR_SUPPORTED = false;
+          delete row.property_address;
           ({ data: updated, error } = await db.from("cases").update(row).eq("id", id).eq("updated_at", openedUpdatedAt).select());
         }
         if (error) return toast("Error: " + error.message);
@@ -3838,15 +4693,22 @@ window.openCase = async function (id, opts = {}) {
           if (nErr) toast("Case saved, but the reason note could not be written: " + nErr.message);
         }
         closeModal();
-        toast("Case saved" + (lostColsMissing ? " · reason kept as a note only (run migration M2)" : ""));
+        toast("Case saved" + (lostColsMissing ? " · reason kept as a note only (run migration M2)" : "")
+          + (propColMissing ? " · property address NOT saved (run migration M7)" : ""));
         loadPipeline(); loadDashboard();
         // Same guard as the client-save path (2379): a case-level fix (assign adviser, add fee) is
         // exactly what Data Health flags, so refresh it if that page is the one behind the modal.
         if ($("#page-data") && !$("#page-data").classList.contains("hidden")) loadDataHealth();
       } else {
-        const { error } = await db.from("cases").insert(row);
+        let { error } = await db.from("cases").insert(row);
+        let propColMissing = false;
+        if (error && "property_address" in row && isMissingColumnError(error)) {
+          propColMissing = true; PROP_ADDR_SUPPORTED = false;
+          delete row.property_address;
+          ({ error } = await db.from("cases").insert(row));
+        }
         if (error) return toast("Error: " + error.message);
-        closeModal(); toast("Case saved");
+        closeModal(); toast("Case saved" + (propColMissing ? " · property address NOT saved (run migration M7)" : ""));
         loadPipeline(); loadDashboard();
         if ($("#page-data") && !$("#page-data").classList.contains("hidden")) loadDataHealth();
       }
@@ -4241,7 +5103,18 @@ async function markFeePaid(caseId, c) {
    was silently lost while the note claimed it had happened. It now renders the same Current vs
    Incoming table the fact-find Apply uses — empty fields pre-ticked, conflicts unticked and
    flagged — and NOTHING is written until Apply. */
+/* R6-36 — the offer letter is the most authoritative statement there is of WHICH property is being
+   mortgaged, and this screen read ten fields off it and kept only the valuation figure. With no
+   address to sanity-check against, uploading Herbert Avenue's offer onto Bryanstone Road's case
+   produced a diff where every row looked like a believable lender revaluation (SM-03).
+
+   NOTE, honestly: the `parse-offer` function does not return a property address today (the mock stub
+   mirrors production, and edge functions are out of scope this round), so this row appears only when
+   the payload carries one. The mapping, the diff row, the M7 gate and the "different property"
+   warning are all wired and tested against a payload that does — the day parse-offer learns the
+   field, this works with no further change. `prop: true` marks the row as needing M7. */
 const OFFER_FIELDS = [
+  { col: "property_address", label: "Property address", prop: true },
   { col: "lender", label: "Lender" },
   { col: "product_name", label: "Product" },
   { col: "rate_percent", label: "Rate %", num: true },
@@ -4254,6 +5127,41 @@ const OFFER_FIELDS = [
   { col: "term_years", label: "Term (years)", num: true },
 ];
 let pendingOffer = null; // { caseId, path, offer, rows } while a parsed offer awaits Apply/Discard
+
+/* The Current-vs-Incoming rows, as a pure function of the parsed offer and the stored case — so the
+   table is testable without a PDF, a parse and a 20-second wait, and so the M7 gate lives in one
+   place. `propOn === false` drops the property row entirely (an un-migrated database cannot store
+   it, and offering an Apply that can only 42703 is worse than not offering it). */
+function offerDiffRows(offer, cRow, propOn) {
+  const rows = [];
+  OFFER_FIELDS.forEach((f, i) => {
+    if (f.prop && propOn === false) return;
+    let inc = offer[f.col];
+    if (inc == null || String(inc).trim() === "") return;      // the parser had nothing for this field
+    if (f.num) { inc = Number(String(inc).replace(/[^0-9.\-]/g, "")); if (!isFinite(inc)) return; }
+    const cur = cRow[f.col];
+    const curEmpty = cur == null || String(cur).trim() === "";
+    // Same building typed two ways is not a change to propose (see the fact-find diff, R6-35).
+    const same = !curEmpty && (f.prop
+      ? propKey(String(cur)) === propKey(String(inc))
+      : (f.num ? Number(cur) === Number(inc) : String(cur).trim() === String(inc).trim()));
+    if (same) return;                                          // already matches — nothing to propose
+    const disp = (v, empty) => (empty ? '<span class="cs-muted">— empty —</span>'
+      : f.money ? esc(fmtM(v)) : f.date ? esc(fmtD(v)) : esc(String(v)));
+    rows.push({
+      idx: i, col: f.col, label: f.label, incoming: inc,
+      conflict: !curEmpty, checked: curEmpty,
+      /* R6-36 — THE compliance signal on this screen. An offer naming a different building from the
+         case is not a field conflict, it is the wrong document on the wrong case: nine other
+         readings are about to be written onto the wrong security property and the PDF attached to it
+         as evidence. Flagged, unticked, and stated above the table. */
+      propMismatch: !!(f.prop && !curEmpty),
+      curHtml: disp(cur, curEmpty), incHtml: disp(inc, false),
+    });
+  });
+  return rows;
+}
+window.offerDiffRows = offerDiffRows;
 
 async function handleOfferUpload(caseId) {
   const file = $("#offer-file").files[0];
@@ -4304,33 +5212,20 @@ async function handleOfferUpload(caseId) {
   const { data: cRow } = await db.from("cases").select("*").eq("id", caseId).single();
   if (!cRow) return toast("Couldn't re-read the case to compare against — reopen it and try again.");
 
-  const rows = [];
-  OFFER_FIELDS.forEach((f, i) => {
-    let inc = offer[f.col];
-    if (inc == null || String(inc).trim() === "") return;      // the parser had nothing for this field
-    if (f.num) { inc = Number(String(inc).replace(/[^0-9.\-]/g, "")); if (!isFinite(inc)) return; }
-    const cur = cRow[f.col];
-    const curEmpty = cur == null || String(cur).trim() === "";
-    const same = !curEmpty && (f.num ? Number(cur) === Number(inc) : String(cur).trim() === String(inc).trim());
-    if (same) return;                                          // already matches — nothing to propose
-    const disp = (v, empty) => (empty ? '<span class="cs-muted">— empty —</span>'
-      : f.money ? esc(fmtM(v)) : f.date ? esc(fmtD(v)) : esc(String(v)));
-    rows.push({
-      idx: i, col: f.col, label: f.label, incoming: inc,
-      conflict: !curEmpty, checked: curEmpty,
-      curHtml: disp(cur, curEmpty), incHtml: disp(inc, false),
-    });
-  });
+  notePropAddrFromStarRow(cRow);
+  const rows = offerDiffRows(offer, cRow, await propAddrSupported());
 
   const extras = [];
   if (offer.erc_summary) extras.push("ERC: " + offer.erc_summary);
   if (offer.offer_expiry_date) extras.push("Offer expires: " + fmtD(offer.offer_expiry_date));
   if (offer.confidence_notes) extras.push("⚠ " + offer.confidence_notes);
-  pendingOffer = { caseId, path: upErr ? null : path, offer, rows, extras };
+  pendingOffer = { caseId, path: upErr ? null : path, offer, rows, extras, caseAddr: propAddress(cRow) };
   renderOfferDiff();
-  toast(rows.length
-    ? `Offer read ✓ — ${rows.length} reading${rows.length === 1 ? "" : "s"} proposed below. Nothing is saved until you press Apply.`
-    : "Offer read ✓ — every field already matches this case.");
+  toast(rows.some((r) => r.propMismatch)
+    ? `⚠ Offer read — it names a DIFFERENT property from this case. ${rows.length} reading${rows.length === 1 ? "" : "s"} proposed; check you are on the right case. Nothing is saved until you press Apply.`
+    : rows.length
+      ? `Offer read ✓ — ${rows.length} reading${rows.length === 1 ? "" : "s"} proposed below. Nothing is saved until you press Apply.`
+      : "Offer read ✓ — every field already matches this case.");
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = btnLabel; }
     // Re-enable and clear the picker so the same file can be chosen again if needed.
@@ -4341,13 +5236,18 @@ async function handleOfferUpload(caseId) {
 function renderOfferDiff() {
   const panel = $("#offer-diff");
   if (!panel || !pendingOffer) return;
-  const { rows, extras, path } = pendingOffer;
+  const { rows, extras, path, caseAddr } = pendingOffer;
   const conflicts = rows.filter((r) => r.conflict).length;
+  /* R6-36 — the wrong-document case gets a sentence of its own above the table, because a badge in a
+     row of six amber badges is not a warning anybody reads. */
+  const mismatch = rows.filter((r) => r.propMismatch).map((r) => ({ incoming: r.incoming, curAddr: caseAddr }))[0] || null;
   panel.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap;">
       <strong>📄 Read from the mortgage offer</strong>
       <span class="s" style="color:var(--muted);">Nothing is written until you press Apply${conflicts ? ` · ${conflicts} conflict${conflicts === 1 ? "" : "s"} left unticked` : ""}</span>
     </div>
+    ${mismatch ? `<div class="dq-notice bad" id="offer-prop-mismatch" style="margin-top:8px;">⚠ <strong>This offer names a different property from the case.</strong>
+      The case is ${esc(propAddress(mismatch.curAddr) || "—")}; the offer says ${esc(String(mismatch.incoming))}. Check you are on the right case before applying anything — the other readings would be written onto this property and the PDF attached to it as evidence.</div>` : ""}
     ${rows.length ? `
     <table>
       <thead><tr><th>Field</th><th>Current</th><th>From the offer</th><th style="text-align:center;">Apply</th></tr></thead>
@@ -4355,7 +5255,7 @@ function renderOfferDiff() {
         <tr>
           <td style="font-weight:600;">${esc(r.label)}</td>
           <td>${r.curHtml}</td>
-          <td>${r.incHtml}${r.conflict ? ' <span class="badge amber" style="margin-left:4px;">conflict</span>' : ""}</td>
+          <td>${r.incHtml}${r.conflict ? ' <span class="badge amber" style="margin-left:4px;">conflict</span>' : ""}${r.propMismatch ? ' <span class="badge red" style="margin-left:4px;" title="The offer names a different building from the one on this case.">different property</span>' : ""}</td>
           <td style="text-align:center;"><input type="checkbox" id="offchk-${r.idx}" ${r.checked ? "checked" : ""} aria-label="Apply ${esc(r.label)}"></td>
         </tr>`).join("")}</tbody>
     </table>` : '<p class="panel-sub" style="margin-top:6px;">Every field the offer gave already matches this case.</p>'}
@@ -4389,9 +5289,20 @@ async function applyOfferDiff() {
     if (patch.rate_end_date) patch.rate_end_estimated = false;
     if (path) patch.offer_doc_path = path;
     if (!n && !path) { toast("Nothing ticked to apply"); return; }
+    /* R6-36 — a ticked property row rewrites which building this case is about, which is exactly the
+       kind of change that should be legible in the timeline afterwards rather than only in the audit
+       diff. The note is written with the extras below. */
+    if (patch.property_address) extras.push(`Property address set from the offer: ${patch.property_address}`);
     // ONE write, guarded by the version this modal opened on: if the case moved under us the
     // readings stay on screen to re-apply rather than silently overwriting somebody else's edit.
-    const { data: updated, error } = await db.from("cases").update(patch).eq("id", caseId).eq("updated_at", openedUpdatedAt).select();
+    let { data: updated, error } = await db.from("cases").update(patch).eq("id", caseId).eq("updated_at", openedUpdatedAt).select();
+    if (error && "property_address" in patch && isMissingColumnError(error)) {
+      // The column is not there after all — apply everything else rather than losing the whole parse.
+      PROP_ADDR_SUPPORTED = false;
+      delete patch.property_address;
+      toast("This database has no property column yet — the address from the offer could NOT be saved; the other readings were applied.");
+      ({ data: updated, error } = await db.from("cases").update(patch).eq("id", caseId).eq("updated_at", openedUpdatedAt).select());
+    }
     if (error) { toast("Error: " + error.message); return; }
     if (!updated || !updated.length) {
       toast("This case changed while the offer was being read — reopen it and apply again (nothing was written).");
@@ -4547,7 +5458,15 @@ function timelineCaseLabel(c) {
 async function buildClientTimeline(clientId, cases) {
   const ids = (cases || []).map((c) => c.id);
   const caseLabel = {};
-  (cases || []).forEach((c) => { caseLabel[c.id] = timelineCaseLabel(c); });
+  /* R6 — the timeline's per-row case tag becomes the property chip wherever the case has an
+     address: Ruby's two 8 Grand Avenue threads were tagged "REMORTGAGE · SANTANDER" and
+     "BUY TO LET · NATWEST", which says nothing about them being one flat. The round-5
+     kind · lender tag stays as the fallback for the 45 cases that have no address. */
+  const caseChip = {};
+  (cases || []).forEach((c) => {
+    caseLabel[c.id] = timelineCaseLabel(c);
+    caseChip[c.id] = propAddress(c) ? propChip(c, { cls: "tl-prop" }) : "";
+  });
   const q = (p) => p.then((r) => (r && r.data) || []).catch(() => []);
   let notes = [], events = [], appts = [], emails = [], sms = [], ffs = [], inbound = [];
   try {
@@ -4562,7 +5481,7 @@ async function buildClientTimeline(clientId, cases) {
     ]);
   } catch (_) { /* keep whatever resolved */ }
   const items = [];
-  const push = (ts, cat, icon, title, caseId) => { if (!ts) return; items.push({ ts, cat, icon, title, caseLabel: caseLabel[caseId] }); };
+  const push = (ts, cat, icon, title, caseId) => { if (!ts) return; items.push({ ts, cat, icon, title, caseId, caseLabel: caseLabel[caseId], caseChip: caseChip[caseId] }); };
   notes.forEach((n) => { const nt = noteType(n.body); push(n.created_at, nt.type, nt.icon, (esc(nt.cleanBody) || "(note)") + authorChipHtml(n.created_by), n.case_id); });
   emails.filter((e) => e.status === "sent" || e.status === "failed").forEach((e) => {
     const lbl = EMAIL_LABEL[e.email_type] || e.email_type || "Email";
@@ -4581,7 +5500,11 @@ async function buildClientTimeline(clientId, cases) {
   return items;
 }
 function timelineRowHtml(it, multiCase) {
-  const caseTag = multiCase && it.caseLabel ? `<span class="tl-case">${esc(it.caseLabel)}</span>` : "";
+  /* R6 — the chip renders on every case-scoped row that HAS an address, multi-case or not: on a
+     client with one property it is the one thing on the timeline that names the building, and it
+     costs a pill. The kind · lender tag keeps its round-5 rule (multi-case clients only), because
+     on a single-case client it genuinely was noise. */
+  const caseTag = it.caseChip || (multiCase && it.caseLabel ? `<span class="tl-case">${esc(it.caseLabel)}</span>` : "");
   return `<div class="tl-row" data-cat="${it.cat}" data-ts="${esc(it.ts)}">
       <span class="tl-ic">${it.icon}</span>
       <div class="tl-main">
@@ -4988,6 +5911,71 @@ function eventTimelineHtml(events) {
    link: the contact section is opened and the offending field focused, and the address the send
    ACTUALLY used is printed next to it. Without that, the modal header shows the corrected address
    and there is nothing visibly wrong to fix. Both are optional; every other caller is unchanged. */
+/* ---------- Client record · the Cases list, grouped by property (R6 batch 2) ----------
+   Gareth Pollard's five buy-to-lets rendered as five sibling lines reading
+   "<Lender> · £<loan>", directly under an editable field labelled Address holding his HOME —
+   five different buildings in four towns, told apart by lender and loan size, with the wrong
+   address sitting above them teaching the reader it applied. Duncan Armitage's two cases on
+   4 Seafield Gardens were worse: same lender, same £210,000, same rate end, two days apart,
+   indistinguishable.
+
+   So: when a client's cases span more than one distinct property (propKey; the no-address cases
+   count as one bucket of their own), the list is GROUPED under full-address headings. When they
+   don't — one property, or the whole legacy shape where nothing has an address — it stays the
+   flat list it has always been, because a single heading over a single group is furniture. */
+const caseRecency = (x) => String((x && (x.created_at || x.updated_at)) || "");
+/* The buckets, newest-active-property first, "no address recorded" always last. */
+function groupCasesByProperty(cases) {
+  const groups = new Map();
+  (cases || []).forEach((x) => {
+    const k = propKey(x) || "";           // "" is the real, single "no address" bucket
+    /* G6-07/G6-09 — the "" bucket is "no address recorded", so it must be HEADED that way even when
+       the first row into it holds a placeholder ("TBC") or punctuation. Taking the heading off the
+       sample printed "TBC" over a group of cases that genuinely have nothing recorded. */
+    if (!groups.has(k)) groups.set(k, { key: k, heading: k ? propHeading(x) : "No address recorded", sample: k ? x : null, rows: [] });
+    groups.get(k).rows.push(x);
+  });
+  const out = [...groups.values()];
+  out.forEach((g) => g.rows.sort((a, b) => (caseRecency(a) < caseRecency(b) ? 1 : -1)));
+  out.sort((a, b) => {
+    if (!a.key !== !b.key) return a.key ? -1 : 1;   // no-address bucket last
+    return caseRecency(a.rows[0]) < caseRecency(b.rows[0]) ? 1 : -1;
+  });
+  return out;
+}
+/* "· 5 properties" next to the Cases heading — the count a landlord actually thinks in, which
+   the client list's "5 cases (3 active)" badge has never been able to give. Only shown when it
+   says something the case count doesn't. */
+function clientPropertyCountLabel(cases) {
+  const n = new Set((cases || []).map((x) => propKey(x)).filter(Boolean)).size;
+  if (n < 2) return "";
+  return ` <span class="cs-muted" style="font-weight:400;">· ${n} properties</span>`;
+}
+/* One case row. `opts.grouped` drops the chip (the group heading above already carries it) and
+   `opts.previous` badges an earlier case on the same building. */
+function clientCaseRowHtml(x, opts = {}) {
+  const chip = opts.grouped ? "" : propChip(x, { cls: "cl-case-chip" });
+  /* R6 — the row now leads with the case TYPE, which the client modal was showing in the timeline
+     tags immediately above and hiding here. Lender and loan follow, as before. */
+  const title = [caseTypeLabel(x), x.lender, x.loan_amount ? fmtM(x.loan_amount) : null].filter(Boolean).join(" · ");
+  return `<div class="row-item"><div class="row-main">
+        <div class="t" onclick="closeModal();openCase('${x.id}')">${esc(title)}</div>
+        <div class="s">${chip}${chip ? " " : ""}Started ${fmtD(x.created_at)}${x.rate_end_date ? " · rate ends " + fmtD(x.rate_end_date) : ""}</div></div>
+        ${opts.previous ? `<span class="badge grey" title="An earlier case on this property — the most recent one is listed first">previous</span>` : ""}
+        ${x.assigned_to ? assigneeChipHtml(x.assigned_to) : '<span class="chip" title="No adviser assigned">—</span>'}
+        ${stageBadge(x.stage)}</div>`;
+}
+function clientCasesHtml(cases) {
+  const list = cases || [];
+  if (!list.length) return '<div class="empty">No cases yet.</div>';
+  const groups = groupCasesByProperty(list);
+  if (groups.length < 2) return list.map((x) => clientCaseRowHtml(x)).join("");
+  return groups.map((g) => `<div class="cprop-group" data-prop-key="${esc(g.key)}">
+      <div class="cprop-hd">${propChip(g.sample)}<span class="cprop-addr">${esc(g.heading)}</span>${g.rows.length > 1 ? `<span class="cprop-n">${g.rows.length} cases</span>` : ""}</div>
+      ${g.rows.map((x, i) => clientCaseRowHtml(x, { grouped: true, previous: g.key && i > 0 })).join("")}
+    </div>`).join("");
+}
+
 window.openClient = async function (id, focus, attempted) {
   let c = {};
   let cases = [];
@@ -5024,7 +6012,16 @@ window.openClient = async function (id, focus, attempted) {
   }
   const multiCase = cases.length > 1;
   const caseLabelById = {};
-  cases.forEach((x) => { caseLabelById[x.id] = timelineCaseLabel(x); }); // R5-16 — kind · lender
+  const caseChipById = {};
+  cases.forEach((x) => {
+    // R6 — the picker's option text is the canonical case identifier (property · type · lender ·
+    // stage). Round-5's kind · lender gave Gareth Pollard three options reading "Buy to Let",
+    // "Buy to Let · Precise Mortgages", "Buy to Let · Paragon" for a five-property portfolio, and
+    // gave Ruby TWO identical strings for her two 8 Grand Avenue cases. Every note, logged call
+    // and logged email is filed from this list.
+    caseLabelById[x.id] = caseIdentityLabel(x) || timelineCaseLabel(x);
+    caseChipById[x.id] = propAddress(x) ? propChip(x, { cls: "tl-prop" }) : "";
+  });
   // Quick-add target: OPEN cases (not completed/not_proceeding); default the most recently updated one.
   const openCases = cases.filter((x) => x.stage !== "completed" && x.stage !== "not_proceeding");
   const defaultCase = openCases.length
@@ -5093,12 +6090,8 @@ window.openClient = async function (id, focus, attempted) {
       <label class="full">Notes<textarea name="notes" rows="2">${esc(c.notes)}</textarea></label>
       </form>
     </details>
-    ${id ? `<div style="margin-top:14px;"><h3 style="font-size:14px;">Cases</h3>
-      ${cases.map((x) => `<div class="row-item"><div class="row-main">
-        <div class="t" onclick="closeModal();openCase('${x.id}')">${esc(x.lender || KINDS.find(k=>k[0]===x.case_kind)?.[1] || "Case")} ${x.loan_amount ? "· " + fmtM(x.loan_amount) : ""}</div>
-        <div class="s">Started ${fmtD(x.created_at)}${x.rate_end_date ? " · rate ends " + fmtD(x.rate_end_date) : ""}</div></div>
-        ${x.assigned_to ? assigneeChipHtml(x.assigned_to) : '<span class="chip" title="No adviser assigned">—</span>'}
-        <span class="badge blue">${STAGE_LABEL[x.stage] || x.stage}</span></div>`).join("") || '<div class="empty">No cases yet.</div>'}
+    ${id ? `<div style="margin-top:14px;"><h3 style="font-size:14px;">Cases${clientPropertyCountLabel(cases)}</h3>
+      ${clientCasesHtml(cases)}
     </div>` : ""}
     <div class="modal-actions">
       ${/* BACKEND-R4 §1 — deleting a client is Owner/Administrator only, enforced by RLS. */ ""}
@@ -5219,7 +6212,7 @@ window.openClient = async function (id, focus, attempted) {
         /* R5-53 — the case-notes path stamps the author chip on a new note immediately; this one
            built its row by hand and left it off, so the same note looked authorless here and
            attributed there until the next reload. */
-        tlItems.push({ ts: new Date().toISOString(), cat: nt.type, icon: nt.icon, title: (esc(nt.cleanBody) || "(note)") + authorChipHtml((user && user.id) || null), caseLabel: caseLabelById[targetCase] });
+        tlItems.push({ ts: new Date().toISOString(), cat: nt.type, icon: nt.icon, title: (esc(nt.cleanBody) || "(note)") + authorChipHtml((user && user.id) || null), caseId: targetCase, caseLabel: timelineCaseLabel(cases.find((x) => x.id === targetCase) || {}), caseChip: caseChipById[targetCase] });
         tlItems.sort((a, b) => new Date(b.ts) - new Date(a.ts));
         inp.value = "";
         // Reset to All so the just-added note is always visible at the top.
@@ -5286,6 +6279,7 @@ async function loadEmails() {
   // render checkboxes on failed rows and a slim action bar (mirrors the pipeline bulk bar).
   const failedIds = new Set(emailRows.filter((e) => e.status === "failed").map((e) => e.id));
   [...emailSel].forEach((id) => { if (!failedIds.has(id)) emailSel.delete(id); });
+  const emailCtx = await loadPropContext(emailRows.map((e) => e.case_id));
   const emailBulkBar = `<div class="bulk-bar" id="email-bulk-bar"${emailSel.size ? "" : " hidden"}>
       <span class="bulk-bar-count"><strong id="email-bulk-n">${emailSel.size}</strong> selected</span>
       <button type="button" class="btn btn-sm btn-primary" id="email-bulk-retry">Retry selected (${emailSel.size})</button>
@@ -5298,7 +6292,6 @@ async function loadEmails() {
     const settled = e.status === "sent" || e.status === "cancelled";
     const errLine = e.error && !settled ? (failed ? " · " + esc(e.error) : " · re-queued — last error: " + esc(e.error)) : "";
     const noContact = isMissingContactError(e) && !!e.client_id;   // R5-43
-    const clickable = failed && e.case_id;
     /* R5-51 — a queue row stores the address as it was WHEN it was queued. Fix the client's email
        after a send is queued and the row still goes to the old one, silently. Flag the divergence
        and offer the one-click correction while the row is still unsent. */
@@ -5306,14 +6299,18 @@ async function loadEmails() {
     const staleAddr = e.status === "queued" && !!e.client_id && !!curEmail && !!e.to_email
       && curEmail.trim().toLowerCase() !== String(e.to_email).trim().toLowerCase();
     const fixContact = noContact || (!settled && e.client_id && isBadContactError(e.error));
+    /* R6 / D6-13 — every row read "<Type> — <Client name>", so five rate-end reminders for five
+       different mortgages were one line repeated five times, and cancel/retry was a coin flip.
+       The row now carries the case's property AND opens the case: it was only clickable when it
+       had FAILED, which is exactly backwards — a queued send is the one you can still stop. */
     const titleClick = noContact
       ? ` onclick="openClient('${e.client_id}','email','${jsArg(e.to_email)}')" style="cursor:pointer;"`
-      : (clickable ? ` onclick="openCase('${e.case_id}')" style="cursor:pointer;"` : "");
+      : (e.case_id ? ` onclick="openCase('${e.case_id}')" style="cursor:pointer;"` : "");
     return `
     <div class="row-item">
       ${failed ? `<input type="checkbox" class="email-cb" data-id="${e.id}" aria-label="Select this failed email"${emailSel.has(e.id) ? " checked" : ""} onclick="event.stopPropagation()">` : ""}
       <div class="row-main">
-        <div class="t"${titleClick}>${EMAIL_LABEL[e.email_type]} — ${esc(e.clients ? e.clients.first_name + " " + e.clients.last_name : e.to_email || "")}</div>
+        <div class="t"${titleClick}>${EMAIL_LABEL[e.email_type]} — ${esc(e.clients ? e.clients.first_name + " " + e.clients.last_name : e.to_email || "")} ${propCtxChip(emailCtx, e.case_id, "row-prop")}</div>
         <div class="s">${esc(e.to_email || (noContact ? "no address on file" : ""))} · ${e.sent_at ? "sent " + new Date(e.sent_at).toLocaleString("en-GB") : "created " + new Date(e.created_at).toLocaleString("en-GB")}${errLine}${staleAddr ? ` · now <strong>${esc(curEmail)}</strong>` : ""}</div>
       </div>
       ${staleAddr ? `<span class="badge amber" title="Queued to ${esc(e.to_email)}, but this client's email is now ${esc(curEmail)}">address changed since queued</span>` : ""}
@@ -5343,17 +6340,18 @@ async function loadEmails() {
   if (smsErr) { renderLoadError("#sms-list", smsErr, loadEmails); return; }
   const smsBadge = { queued: "amber", sending: "blue", sent: "green", failed: "red", cancelled: "grey" };
   const smsRows = failedOnly ? (sms || []).filter((s) => s.status === "failed") : (sms || []);
+  const smsCtx = await loadPropContext(smsRows.map((s) => s.case_id));   // R6 / F8 — same fix, same reason
   const retryAllSmsBtn = failedOnly && smsRows.length
     ? `<div class="row-item" style="justify-content:flex-end;"><button class="btn btn-sm btn-primary" onclick="retryAllFailedSms()">Retry all failed (${smsRows.length})</button></div>` : "";
   $("#sms-list").innerHTML = retryAllSmsBtn + (smsRows.length ? smsRows.map((s) => {
     const failed = s.status === "failed";
-    const clickable = failed && s.case_id;
+    const clickable = !!s.case_id;
     const settled = s.status === "sent" || s.status === "cancelled";
     const errLine = s.error && !settled ? (failed ? " · " + esc(s.error) : " · re-queued — last error: " + esc(s.error)) : "";
     return `
     <div class="row-item">
       <div class="row-main">
-        <div class="t"${clickable ? ` onclick="openCase('${s.case_id}')" style="cursor:pointer;"` : ""}>${esc(smsTypeLabel(s.sms_type))} — ${esc(s.clients ? [s.clients.first_name, s.clients.last_name].filter(Boolean).join(" ") : s.to_phone || "")}</div>
+        <div class="t"${clickable ? ` onclick="openCase('${s.case_id}')" style="cursor:pointer;"` : ""}>${esc(smsTypeLabel(s.sms_type))} — ${esc(s.clients ? [s.clients.first_name, s.clients.last_name].filter(Boolean).join(" ") : s.to_phone || "")} ${propCtxChip(smsCtx, s.case_id, "row-prop")}</div>
         <div class="s">${esc(s.to_phone || "")} · ${s.sent_at ? "sent " + new Date(s.sent_at).toLocaleString("en-GB") : "created " + new Date(s.created_at).toLocaleString("en-GB")}${errLine}</div>
       </div>
       <span class="badge ${smsBadge[s.status] || "grey"}">${esc(s.status)}</span>
@@ -5631,6 +6629,160 @@ $("#import-file").addEventListener("change", async () => {
   }
 });
 
+/* ==========================================================================
+   R6 BATCH 3 · THE IMPORT NO LONGER THROWS THE ADDRESS AWAY
+   Bringing a landlord's spreadsheet in is the ONE motion that carries a
+   property address for every case at once, and it was the motion that
+   guaranteed the address never arrived: the `ai-import` function has no header
+   pattern for a property column, so `Client,Address,Lender,Loan,Stage` parsed
+   two rows and dropped Address entirely (LR-13, f1).
+
+   The analyser is an edge function this round must not touch, so the app reads
+   the property column out of the pasted text ITSELF, aligns it to the rows the
+   analyser returned, and treats a `property_address` already present in the
+   payload as authoritative — so the day `ai-import` learns the column, this
+   code steps out of the way rather than fighting it.
+   ====================================================================== */
+/* Header → role. Deliberately narrow at both ends:
+     · "Property value" / "Purchase price" are MONEY and already mapped — never an address.
+     · "Client address" / "Home address" are the CLIENT's own address, which is a different
+       field with a different meaning (the evidence-pack finding is exactly this confusion).
+     · a bare "Postcode" is only ever APPENDED to an address column, never used alone: on its
+       own it is as likely to be the client's postcode as the property's. */
+function impPropHeaderRole(h) {
+  const s = String(h == null ? "" : h).trim().toLowerCase().replace(/[_\s]+/g, " ");
+  if (!s) return null;
+  if (/(value|price|valuation|worth|equity|amount)/.test(s)) return null;
+  const security = /(security|mortgag|subject|btl|buy to let|let|rental|investment)/.test(s);
+  if (/^(client|customer|home|correspondence|billing|applicant|borrower|owner)\b/.test(s) && !security) return null;
+  if (/(post ?code|postal code|zip)/.test(s)) return "postcode";
+  if (/(address|addr\b|premises|property|security|site)/.test(s)) return "property_address";
+  return null;
+}
+/* Is this cell plausibly a property address? Guards the loose headers ("Property", "Site") from
+   pulling in a number, a date, an email or a stage word, and lets an unheadered paste be mined for
+   a cell that carries a UK postcode. */
+function impLooksLikeAddress(v) {
+  const s = String(v == null ? "" : v).trim();
+  if (s.length < 6) return false;
+  if (!/[A-Za-z]/.test(s) || !/\d/.test(s)) return false;   // an address has a number and a word
+  if (/@/.test(s)) return false;
+  if (/^[£$]?\s*[\d,.]+\s*%?$/.test(s)) return false;        // money / percentage
+  if (/^\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4}$/.test(s) || /^\d{4}-\d{1,2}-\d{1,2}$/.test(s)) return false;
+  return true;
+}
+/* The pasted text, split the way the analyser splits it: the delimiter that appears on the most
+   lines (and at least half of them), quoted commas respected — a quoted address is the whole point.
+   Returns one entry per DATA line: the cells, plus whatever identity/address the header named. */
+function impSplitDelimited(line, delim) {
+  if (delim !== ",") return line.split(delim).map((s) => s.trim());
+  const out = [];
+  let cur = "", q = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') { if (q && line[i + 1] === '"') { cur += '"'; i++; } else q = !q; }
+    else if (ch === "," && !q) { out.push(cur); cur = ""; }
+    else cur += ch;
+  }
+  out.push(cur);
+  return out.map((s) => s.trim());
+}
+function impParsePaste(content) {
+  const text = String(content == null ? "" : content).replace(/\r/g, "").trim();
+  if (!text) return [];
+  const lines = text.split("\n").map((l) => l.trim())
+    .filter((l) => l && !/^===\s*Sheet:/i.test(l) && !/^-{3,}$/.test(l));
+  if (!lines.length) return [];
+  let delim = null, best = 0;
+  ["\t", ",", "|", ";"].forEach((d) => {
+    const n = lines.filter((l) => l.indexOf(d) >= 0).length;
+    if (n > best && n >= Math.max(1, Math.ceil(lines.length / 2))) { best = n; delim = d; }
+  });
+  const cells = lines.map((l) => {
+    const d = (delim && l.indexOf(delim) >= 0) ? delim : ["\t", "|", ";", ","].filter((x) => l.indexOf(x) >= 0)[0];
+    return d ? impSplitDelimited(l, d) : [l];
+  });
+  // Header detection mirrors the analyser's: a first row that names columns and looks nothing like data.
+  const first = cells[0] || [];
+  const nameRe = /^(client[_ ]?name|full[_ ]?name|name|client|customer|first[_ ]?name|forename|surname|last[_ ]?name)$/i;
+  let header = null;
+  if (first.length > 1) {
+    const roles = first.map((h) => {
+      if (/e-?mail/i.test(h)) return "email";
+      if (nameRe.test(String(h).trim())) return "name";
+      return impPropHeaderRole(h);
+    });
+    const looksLikeData = first.some((h) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(h) || impLooksLikeAddress(h));
+    if (roles.filter(Boolean).length && !looksLikeData) header = roles;
+  }
+  const out = [];
+  cells.forEach((cs, i) => {
+    if (header && i === 0) return;
+    const rec = { cells: cs, name: "", email: "", addr: "", postcode: "", headed: !!header };
+    if (header) {
+      header.forEach((role, j) => {
+        if (!role) return;
+        const v = String(cs[j] == null ? "" : cs[j]).trim();
+        if (!v) return;
+        if (role === "property_address") { if (!rec.addr && impLooksLikeAddress(v)) rec.addr = v; }
+        else if (role === "postcode") { if (!rec.postcode) rec.postcode = v; }
+        else if (!rec[role]) rec[role] = v;
+      });
+    } else {
+      // No header: only a cell carrying a UK postcode is confident enough to call an address.
+      cs.forEach((raw) => {
+        const v = String(raw == null ? "" : raw).trim();
+        if (!rec.addr && impLooksLikeAddress(v) && POSTCODE_RE.test(v)) rec.addr = v;
+        if (!rec.email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) rec.email = v;
+      });
+    }
+    // A separate postcode column belongs on the end of the address it goes with, exactly as the
+    // fact-find joins address + postcode into one value.
+    if (rec.addr && rec.postcode && rec.addr.toUpperCase().replace(/[^A-Z0-9]/g, "").indexOf(rec.postcode.toUpperCase().replace(/[^A-Z0-9]/g, "")) < 0) {
+      rec.addr = rec.addr.replace(/[,\s]+$/, "") + " " + rec.postcode;
+    }
+    out.push(rec);
+  });
+  return out;
+}
+/* Attach the recovered addresses to the analyser's rows. Matching is by identity FIRST (email, then
+   name) and consumes each parsed line once, so a landlord's two rows under one name still take their
+   own addresses in order; positional alignment is the fallback and only when the counts agree.
+   A `property_address` the payload already carried is never overwritten. */
+function impAttachProperties(content, rows) {
+  if (!rows || !rows.length) return 0;
+  // ONE parse. The positional fallback below needs the index of a line within THIS list, so parsing
+  // twice (and comparing objects across the two runs) would never match anything.
+  const lines = impParsePaste(content);
+  if (!lines.some((p) => p.addr)) return 0;
+  const norm = (s) => String(s == null ? "" : s).trim().toLowerCase();
+  const used = new Set();
+  let n = 0;
+  rows.forEach((r, ri) => {
+    if (r.property_address) return;                     // the analyser knew — leave it alone
+    let hit = -1;
+    for (let i = 0; i < lines.length; i++) {
+      if (used.has(i) || !lines[i].addr) continue;
+      const p = lines[i];
+      if (p.email && norm(p.email) === norm(r.email)) { hit = i; break; }
+      if (p.name && norm(p.name) === norm(r.client_name)) { hit = i; break; }
+    }
+    // Positional fallback: as many lines as rows, and this line has an address.
+    if (hit < 0 && lines.length === rows.length && lines[ri] && lines[ri].addr && !used.has(ri)) hit = ri;
+    if (hit < 0 || used.has(hit)) return;
+    used.add(hit);
+    r.property_address = lines[hit].addr;
+    n++;
+    // An unheaded paste's address usually landed in `note` or `lender` by shape — don't print it twice.
+    if (norm(r.note) === norm(r.property_address)) r.note = null;
+    if (norm(r.lender) === norm(r.property_address)) r.lender = "";
+  });
+  return n;
+}
+window.impAttachProperties = impAttachProperties;
+window.impPropHeaderRole = impPropHeaderRole;
+window.impParsePaste = impParsePaste;
+
 $("#analyse-btn").addEventListener("click", async () => {
   const content = $("#import-text").value.trim();
   if (!content) return toast("Paste some data or choose a file first");
@@ -5646,10 +6798,19 @@ $("#analyse-btn").addEventListener("click", async () => {
     const j = await r.json();
     if (!r.ok || j.error) { $("#import-status").textContent = ""; return toast("Error: " + (j.error || r.status)); }
     importRows = j.rows || [];
+    // R6-33 — recover the property column the analyser has no pattern for (see impAttachProperties).
+    const nProp = impAttachProperties(content, importRows);
     // R5-23a — one clients fetch feeds every row's match; runImport re-reads it before writing so a
     // record created since Analyse can't be duplicated.
     importClients = await fetchMatchClients();
-    $("#import-status").textContent = `${importRows.length} records found.`;
+    // R6-34 — and the cases those clients already hold, so a row can be judged "another case on a
+    // property we already have for this person" vs "a new property" BEFORE it is written.
+    importCases = await fetchMatchCases(importClients);
+    $("#import-status").textContent = `${importRows.length} records found.`
+      + (nProp
+        ? ` ${nProp} property address${nProp === 1 ? "" : "es"} read from the file.`
+          + (PROP_ADDR_SUPPORTED === false ? " ⚠ This database has no property column yet, so they cannot be stored — the cases will import without them." : "")
+        : "");
     renderImportPreview();
   } catch (e) {
     $("#import-status").textContent = "";
@@ -5703,6 +6864,10 @@ function impDateFlags(r) {
   out.flagged = flagged;
   return out;
 }
+/* Whether a row starts UNticked. Two independent reasons now: a date nobody has resolved (T1-21 /
+   defect 3) and a likely-duplicate case (R6-34). Both are "a human has to look at this", both have a
+   per-row way to accept, and neither hides the row. */
+function impRowFlagged(r) { return impDateFlags(r).flagged || impDupUnresolved(r); }
 // One preview cell for a date: amber with the interpretation + a Confirm button when it needs a human.
 function impDateCell(r, i, field, extraHtml) {
   const p = parseUkDate(r[field]);
@@ -5750,6 +6915,155 @@ function impDateCell(r, i, field, extraHtml) {
    per-field picker (existing pre-selected — the import never overwrites a known contact detail
    without being told to) and whatever is NOT kept is named in the result panel. */
 let importClients = [];   // one-shot clients fetch, refreshed on Analyse and again at save time
+/* R6-34 — the cases those clients already hold. The Match column resolved a row to a PERSON and
+   stopped there: for a portfolio landlord "→ attaches to Gareth Pollard" is true of a sixth
+   property and equally true of a second copy of a case we already have, and the operator was shown
+   the same green badge either way (f6). With the address recovered from the file (R6-33) the row can
+   now also be judged at CASE level. */
+let importCases = [];
+async function fetchMatchCases(clients) {
+  const ids = [...new Set((clients || []).map((c) => c.id).filter(Boolean))];
+  if (!ids.length) return [];
+  if ((await propAddrSupported()) === false) return [];   // no property column → no verdicts to give
+  const { data, error } = await db.from("cases")
+    .select("id,client_id,stage,case_kind,lender,property_address,created_at")
+    .not("property_address", "is", null);
+  /* This read is also the freshest possible M7 check, and it runs before the preview is drawn: a
+     cached "supported" from earlier in the session (or from before a rollback) is corrected here, so
+     the preview hides the Property column instead of offering an input whose save can only 42703.
+     Two shapes of "absent": an error naming the column (Postgres) and a row that comes back without
+     it (PostgREST returning only the columns that exist). */
+  if (error) {
+    if (isMissingColumnError(error)) PROP_ADDR_SUPPORTED = false;
+    return [];
+  }
+  if (data && data.length) {
+    notePropAddrFromStarRow(data[0]);   // this select NAMED the column, so a missing key proves absence
+    if (PROP_ADDR_SUPPORTED === false) return [];
+  }
+  return data || [];
+}
+const impLenderKey = (l) => String(l == null ? "" : l).toLowerCase().replace(/[^a-z0-9]/g, "");
+/* The row's CASE-level verdict against one client's existing cases. Three states, and only ever
+   about a row that carries an address — a row with none says nothing new and gets nothing.
+     dup  (amber) same client + same property + same lender → this is very likely a case we already
+                  hold. Not a certainty (a product transfer and a remortgage on one house with one
+                  lender are two real cases — Duncan Armitage has exactly that pair), so it is a
+                  flag and a decision, never a refusal.
+     same (grey)  same client + same property, DIFFERENT lender → a new case on a property we hold.
+     new  (green) same client + an address none of their cases has → a new property.
+
+   G6-06 — the comparison set now includes THE FILE'S OWN EARLIER ROWS. It only ever looked at the
+   database, so the most ordinary spreadsheet accident there is — the same client + property + lender
+   pasted twice, a re-exported overlapping range — got a GREEN "new property" on BOTH rows, both
+   pre-ticked, no gate, and created two identical cases with two verdict lines that were byte-identical
+   on screen. A batch row is judged exactly as a stored one is, and the verdict names the row it
+   collides with.
+   G6B-01 — and it now looks ACROSS clients. `importCases` is a firm-wide read (no client filter), so
+   the data to say "Kwame Boateng and Gareth Pollard already hold cases on 9 Bryanstone Road" was in
+   hand at the moment the screen printed a reassuring green badge for a third client on the same
+   building. Advisory only, never a refusal — two clients legitimately holding one building (a sale we
+   advised on both sides of) is the documented case. */
+function impPropVerdict(r) {
+  const key = propKey(r && r.property_address);
+  if (!key) return null;
+  const d = impResolveMatch(r);
+  /* The row's PERSON identity, so two rows in one file can be compared without both having to
+     resolve to a stored client: a matched client is its id, an unmatched one is its own name/email. */
+  const personKey = (row, dec) => {
+    if (dec && dec.mode === "attach" && dec.client) return "c:" + dec.client.id;
+    const em = String(row.email || "").trim().toLowerCase();
+    if (em) return "e:" + em;
+    const nm = String(row.client_name || "").trim().toLowerCase().replace(/\s+/g, " ");
+    return nm ? "n:" + nm : null;
+  };
+  const mePerson = personKey(r, d);
+  const idx = importRows.indexOf(r);
+  const earlier = [];
+  if (mePerson && idx > 0) {
+    for (let j = 0; j < idx; j++) {
+      const o = importRows[j];
+      if (!o || propKey(o.property_address) !== key) continue;
+      if (personKey(o, impResolveMatch(o)) !== mePerson) continue;
+      earlier.push({ row: o, n: j + 1 });
+    }
+  }
+  const batchDup = earlier.find((e) => impLenderKey(e.row.lender) === impLenderKey(r.lender));
+  // Everyone ELSE the firm already holds a case for on this exact building.
+  const mineId = d.mode === "attach" && d.client ? d.client.id : null;
+  const otherClientCases = importCases.filter((c) => propKey(c) === key && c.client_id && c.client_id !== mineId);
+  const otherClientIds = [...new Set(otherClientCases.map((c) => c.client_id))];
+  const otherClientNames = otherClientIds
+    .map((id) => clientFullName(importClients.find((c) => c.id === id)) || "another client");
+  const cross = { cases: otherClientCases, ids: otherClientIds, names: otherClientNames };
+  const base = { key, cross, earlier };
+  if (batchDup) return { ...base, kind: "batchdup", client: d.client || null, batchHit: batchDup };
+  if (d.mode !== "attach" || !d.client) {
+    return { ...base, kind: "newclient", batchHit: earlier[0] || null };
+  }
+  const mine = importCases.filter((c) => c.client_id === d.client.id);
+  const onProp = mine.filter((c) => propKey(c) === key);
+  if (!onProp.length) {
+    // No stored case, but possibly an earlier row in this same file on a different lender.
+    if (earlier.length) return { ...base, kind: "batchsame", client: d.client, batchHit: earlier[0] };
+    return { ...base, kind: "new", client: d.client };
+  }
+  const dup = onProp.find((c) => impLenderKey(c.lender) && impLenderKey(c.lender) === impLenderKey(r.lender));
+  if (dup) return { ...base, kind: "dup", client: d.client, hit: dup, others: onProp };
+  return { ...base, kind: "same", client: d.client, others: onProp };
+}
+/* A likely-duplicate row needs a conscious tick — the same discipline as "completed, no date".
+   An in-batch duplicate is the same decision and gets the same gate. */
+const impDupUnresolved = (r) => {
+  if (!r || r._dup_ok) return false;
+  const v = impPropVerdict(r);
+  return !!(v && (v.kind === "dup" || v.kind === "batchdup"));
+};
+/* The cross-client advisory, folded into whatever badge the row already has. Never its own refusal —
+   it is a "read this before you commit", which is the only honest thing to say about it. */
+function impCrossClientNote(v) {
+  if (!v || !v.cross || !v.cross.ids.length) return "";
+  const n = v.cross.ids.length;
+  const who = v.cross.names.slice(0, 3).join(", ") + (v.cross.names.length > 3 ? ` and ${v.cross.names.length - 3} more` : "");
+  return ` Also held by ${n} other client${n === 1 ? "" : "s"} — ${who}. That is legitimate for a sale advised on both sides; check it is not the wrong client on the wrong building.`;
+}
+function impCrossClientBadge(v) {
+  if (!v || !v.cross || !v.cross.ids.length) return "";
+  const n = v.cross.ids.length;
+  return ` <span class="badge amber" title="${esc(impCrossClientNote(v).trim())}">also held by ${n} other client${n === 1 ? "" : "s"}</span>`;
+}
+function impPropVerdictHtml(r, i) {
+  const v = impPropVerdict(r);
+  if (!v) return "";
+  const label = propLabel(r.property_address) || propAddress(r.property_address);
+  const xNote = impCrossClientNote(v);
+  const xBadge = impCrossClientBadge(v);
+  const dupBtn = r._dup_ok ? "" : `<button type="button" class="btn btn-sm imp-dup-ok" data-i="${i}" title="Import it anyway — a second case on the same property with the same lender is sometimes right">Import anyway</button>`;
+  if (v.kind === "batchdup") {
+    /* G6-06 — the collision is with another row in the SAME file, so the fix is to delete a row, not
+       to reconcile with the book. Say which row, and gate the tick exactly as a stored duplicate is. */
+    return `<div class="imp-prop-verdict"><span class="badge amber" title="${esc(`Row ${v.batchHit.n} of this same file is the same client, the same property (${propAddress(r.property_address)}) and the same lender. Importing both creates two identical cases. Nothing is refused — a product transfer and a remortgage are two real cases — but tick it consciously.` + xNote)}">duplicate of row ${v.batchHit.n} in this file</span> <span class="s">${esc(label)} · ${esc(r.lender || "")}</span>${xBadge}
+      ${dupBtn}</div>`;
+  }
+  if (v.kind === "dup") {
+    const hitWhat = [caseTypeLabel(v.hit), v.hit.stage ? (STAGE_LABEL[v.hit.stage] || v.hit.stage) : null].filter(Boolean).join(" · ");
+    return `<div class="imp-prop-verdict"><span class="badge amber" title="${esc(`${clientFullName(v.client) || "This client"} already has a case on ${propAddress(r.property_address)} with ${v.hit.lender} (${hitWhat}). Importing this row creates a SECOND case on the same property with the same lender. That can be right — a product transfer and a remortgage are two cases — so nothing is refused; tick it consciously.` + xNote)}">likely duplicate case</span> <span class="s">${esc(label)} · ${esc(r.lender || "")} already on file (${esc(hitWhat)})</span>${xBadge}
+      ${dupBtn}</div>`;
+  }
+  if (v.kind === "same") {
+    return `<div class="imp-prop-verdict"><span class="badge grey" title="${esc(`${clientFullName(v.client) || "This client"} already has ${v.others.length} case${v.others.length === 1 ? "" : "s"} on ${propAddress(r.property_address)}, but with a different lender — this imports as another case on that property.` + xNote)}">another case on a property we hold</span> <span class="s">${esc(label)}</span>${xBadge}</div>`;
+  }
+  if (v.kind === "batchsame") {
+    return `<div class="imp-prop-verdict"><span class="badge grey" title="${esc(`Row ${v.batchHit.n} of this same file is the same client on the same property (${propAddress(r.property_address)}) with a different lender — this imports as a second case on that property.` + xNote)}">also on row ${v.batchHit.n} of this file</span> <span class="s">${esc(label)}</span>${xBadge}</div>`;
+  }
+  if (v.kind === "new") {
+    return `<div class="imp-prop-verdict"><span class="badge ${v.cross.ids.length ? "amber" : "green"}" title="${esc(`No case on ${propAddress(r.property_address)} exists for ${clientFullName(v.client) || "this client"} — this imports as a new property.` + xNote)}">new property</span> <span class="s">${esc(label)}</span>${xBadge}</div>`;
+  }
+  /* A row that creates its own client: there is no case of THEIRS to compare it against, but the
+     firm's other clients are still a comparison (G6B-01) — this is the last screen that can stop a
+     third client being created on a shared property, and it used to print no badge at all. */
+  return `<div class="imp-prop-verdict">${v.batchHit ? `<span class="badge grey" title="${esc(`Row ${v.batchHit.n} of this same file is the same person on the same property, with a different lender — both rows import.` + xNote)}">also on row ${v.batchHit.n} of this file</span> ` : ""}<span class="s">${esc(label)}</span>${xBadge}</div>`;
+}
 
 // The row's resolved decision: an explicit operator choice first, then the matcher's exact hit.
 function impResolveMatch(r) {
@@ -5777,6 +7091,9 @@ function impConflicts(r, client) {
   return out;
 }
 function impMatchCellHtml(r, i) {
+  return impMatchCellPersonHtml(r, i) + impPropVerdictHtml(r, i);
+}
+function impMatchCellPersonHtml(r, i) {
   const d = impResolveMatch(r);
   if (d.mode === "attach") {
     const who = clientFullName(d.client) || d.client.email || d.client.phone || "this client";
@@ -5840,24 +7157,33 @@ function impRepaintMatch(i) {
 
 function renderImportPreview() {
   if (!importRows.length) { $("#import-preview").innerHTML = ""; return; }
+  /* M7 feature detection, read from the cache the Analyse step has already warmed
+     (fetchMatchCases → propAddrSupported). `false` is the only answer that hides the column:
+     "not yet known" behaves as present, exactly like every other M-detection in the app. */
+  const propOn = PROP_ADDR_SUPPORTED !== false;
+  const nCols = propOn ? 13 : 12;
   $("#import-preview").innerHTML = `
     <div class="panel">
       <h3>Review before saving</h3>
-      <p class="panel-sub">Untick anything that shouldn't be imported. Click Client, Email, Stage, Lender or Rate to fix a misread field before importing. Estimated rate-end dates are marked ≈ and stay flagged until you confirm them. Dates are read UK-first (dd/mm/yyyy) — anything that could also be read the American way is shown amber with the reading we'll use, and its row starts unticked until you press Confirm. A case marked Completed with no completion date is shown amber with a “no date” flag: no date is ever invented for it, so where the source itself said the case was completed the row starts unticked until you either press “Import with no date” or change its Stage. Any case that does import without a completion date is counted in the message at the end and listed on Data health. The <strong>Match</strong> column says who each row will land on before anything is written: green attaches to a client we already hold, amber is a possible match that needs your Attach / New client decision, and a blank cell creates a new client. Where an attaching row's email or phone disagrees with the record, the row expands so you choose which to keep — what you don't keep is named in the summary afterwards.</p>
+      <p class="panel-sub">Untick anything that shouldn't be imported. Click Client, Email, <strong>Property</strong>, Stage, Lender or Rate to fix a misread field before importing. Estimated rate-end dates are marked ≈ and stay flagged until you confirm them. Dates are read UK-first (dd/mm/yyyy) — anything that could also be read the American way is shown amber with the reading we'll use, and its row starts unticked until you press Confirm. A case marked Completed with no completion date is shown amber with a “no date” flag: no date is ever invented for it, so where the source itself said the case was completed the row starts unticked until you either press “Import with no date” or change its Stage. Any case that does import without a completion date is counted in the message at the end and listed on Data health. The <strong>Match</strong> column says who each row will land on before anything is written: green attaches to a client we already hold, amber is a possible match that needs your Attach / New client decision, and a blank cell creates a new client. Where an attaching row's email or phone disagrees with the record, the row expands so you choose which to keep — what you don't keep is named in the summary afterwards. A <strong>Property address</strong> column in the file (Property, Property address, Security address, Address, with an optional separate Postcode) is read onto the case, and the Match column then also says what the row means for that client: <span class="badge green">new property</span>, <span class="badge grey">another case on a property we hold</span>, or <span class="badge amber">likely duplicate case</span> — same client, same property and the same lender, which starts unticked until you press “Import anyway”.</p>
       <label style="display:flex;gap:6px;align-items:center;font-weight:400;margin:4px 0 10px;">
         <input type="checkbox" id="imp-assign-me" style="width:auto;" ${importAssignToMe ? "checked" : ""}>
         Assign new cases to me — unticking leaves them unassigned (they'll appear in Data Health's unassigned list)
       </label>
-      <div class="board-scroll-wrap">
+      <div class="board-scroll-wrap board-scroll-wrap--table">
       <div id="imp-scroll" style="overflow-x:auto;">
       <table class="imp-table">
-        <tr><th><input type="checkbox" id="imp-all" checked></th><th class="stick-col">Client</th><th>Email</th><th>Phone</th><th>Match</th><th>Stage</th><th>Lender</th><th>Rate</th><th>Rate ends</th><th>ERC ends</th><th>Completed</th><th>Fee</th></tr>
+        <tr><th><input type="checkbox" id="imp-all" checked></th><th class="stick-col">Client</th><th>Email</th><th>Phone</th>${propOn ? "<th>Property</th>" : ""}<th>Match</th><th>Stage</th><th>Lender</th><th>Rate</th><th>Rate ends</th><th>ERC ends</th><th>Completed</th><th>Fee</th></tr>
         ${importRows.map((r, i) => `
         <tr>
-          <td><input type="checkbox" class="imp-row" data-i="${i}" ${impDateFlags(r).flagged ? "" : "checked"}></td>
+          <td><input type="checkbox" class="imp-row" data-i="${i}" ${impRowFlagged(r) ? "" : "checked"}></td>
           <td class="imp-edit stick-col" contenteditable="true" spellcheck="false" data-i="${i}" data-field="client_name" title="Click to edit">${esc(r.client_name || "")}</td>
           <td class="imp-edit" contenteditable="true" spellcheck="false" data-i="${i}" data-field="email" title="Click to edit">${esc(r.email || "")}</td>
           <td class="imp-edit" contenteditable="true" spellcheck="false" data-i="${i}" data-field="phone" title="Click to edit">${esc(r.phone || "")}</td>
+          ${/* R6-33 — the address the file carried, editable like every other misreadable field. Where
+                the database has no property column at all the header and the cell are ABSENT rather
+                than empty, so nothing offers an input whose save could only 42703. */ ""}
+          ${propOn ? `<td class="imp-edit imp-prop-cell" contenteditable="true" spellcheck="false" data-i="${i}" data-field="property_address" title="The property this case is secured on — click to edit">${esc(r.property_address || "")}</td>` : ""}
           <td class="imp-match" data-i="${i}">${impMatchCellHtml(r, i)}</td>
           <td><select class="imp-edit-stage" data-i="${i}" title="Click to edit">
             <option value="" ${!r.stage ? "selected" : ""}>contact only</option>
@@ -5865,12 +7191,12 @@ function renderImportPreview() {
           </select></td>
           <td class="imp-edit" contenteditable="true" spellcheck="false" data-i="${i}" data-field="lender" title="Click to edit">${esc(r.lender || "")}</td>
           <td class="imp-edit" contenteditable="true" spellcheck="false" data-i="${i}" data-field="rate_percent" title="Click to edit">${r.rate_percent != null ? r.rate_percent : ""}</td>
-          ${impDateCell(r, i, "rate_end_date", r.rate_end_estimated ? ` <span class="badge purple" title="${TIP_APPROX}">≈</span>` : "")}
+          ${impDateCell(r, i, "rate_end_date", r.rate_end_estimated ? ` <span class="badge ${EST_BADGE_CLS}" title="${TIP_APPROX}">≈</span>` : "")}
           ${impDateCell(r, i, "erc_end_date")}
           ${impDateCell(r, i, "completed_date")}
           <td>${r.broker_fee ? fmtM(r.broker_fee) : ""}</td>
         </tr>
-        <tr class="imp-conf-tr${impConflictRowHtml(r, i) ? "" : " hidden"}"><td class="imp-conf-cell" colspan="12" data-i="${i}">${impConflictRowHtml(r, i)}</td></tr>`).join("")}
+        <tr class="imp-conf-tr${impConflictRowHtml(r, i) ? "" : " hidden"}"><td class="imp-conf-cell" colspan="${nCols}" data-i="${i}">${impConflictRowHtml(r, i)}</td></tr>`).join("")}
       </table>
       </div>
       <button type="button" class="board-scroll-arrow" aria-label="Scroll right" title="Scroll right">›</button>
@@ -5889,10 +7215,21 @@ function renderImportPreview() {
      change and a direct listener would be thrown away with the old markup. */
   const prev = $("#import-preview");
   prev.addEventListener("click", (e) => {
-    const btn = e.target.closest(".imp-match-attach, .imp-match-new, .imp-match-undo");
+    const btn = e.target.closest(".imp-match-attach, .imp-match-new, .imp-match-undo, .imp-dup-ok");
     if (!btn) return;
     const i = Number(btn.dataset.i), r = importRows[i];
     if (!r) return;
+    /* R6-34 — accepting a likely-duplicate case records the decision on the row and re-ticks it
+       (subject to any date flag that is still open); it writes nothing else, so the row imports
+       exactly as it reads. */
+    if (btn.classList.contains("imp-dup-ok")) {
+      r._dup_ok = true;
+      impRepaintMatch(i);
+      const cb = document.querySelector(`.imp-row[data-i="${i}"]`);
+      if (cb && !impRowFlagged(r)) cb.checked = true;
+      return;
+    }
+    const wasFlagged = impRowFlagged(r);
     if (btn.classList.contains("imp-match-attach")) {
       const sel = document.querySelector(`.imp-match-pick[data-i="${i}"]`);
       const d = impResolveMatch(r);
@@ -5904,7 +7241,12 @@ function renderImportPreview() {
     } else {
       r._force_new = false; r._match_client_id = null;
     }
+    /* R6-34 — the person decision decides which cases the property verdict compares against
+       ("New client" means there are none), so the duplicate flag can appear or vanish with it. */
     impRepaintMatch(i);
+    const nowFlagged = impRowFlagged(r);
+    const cb = document.querySelector(`.imp-row[data-i="${i}"]`);
+    if (cb && wasFlagged !== nowFlagged) cb.checked = !nowFlagged;
   });
   prev.addEventListener("change", (e) => {
     const radio = e.target.closest(".imp-conf-radio");
@@ -5938,6 +7280,18 @@ function renderImportPreview() {
         importRows[i]._conflict_choice = null;
         impRepaintMatch(i);
       }
+      /* R6-34 — correcting the property (or the lender) changes what the row MEANS for that client:
+         a typo'd address reads as a sixth property when it is really a duplicate of the fifth. Both
+         re-derive the verdict, and the accepted-duplicate decision is dropped with the value it was
+         made about. Re-tick / untick to match, unless the operator has already unticked by hand. */
+      if (field === "property_address" || field === "lender") {
+        const was = impRowFlagged(importRows[i]);
+        importRows[i]._dup_ok = false;
+        impRepaintMatch(i);
+        const now = impRowFlagged(importRows[i]);
+        const cb = document.querySelector(`.imp-row[data-i="${i}"]`);
+        if (cb && was !== now) cb.checked = !now;
+      }
     };
     td.addEventListener("blur", commit);
     td.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); td.blur(); } });
@@ -5950,9 +7304,11 @@ function renderImportPreview() {
     sel.onchange = () => {
       const i = Number(sel.dataset.i), r = importRows[i];
       if (!r) return;
-      const was = impDateFlags(r).flagged;
+      /* R6-34 — impRowFlagged, not impDateFlags: a row can also be held by an unaccepted
+         likely-duplicate flag, and changing the stage must never tick that row for the operator. */
+      const was = impRowFlagged(r);
       r.stage = sel.value || null;
-      const now = impDateFlags(r).flagged;
+      const now = impRowFlagged(r);
       const cell = sel.closest("tr")?.querySelector('td[data-cell="completed_date"]');
       if (cell) { cell.outerHTML = impDateCell(r, i, "completed_date"); wireImportRowButtons(); }
       const cb = document.querySelector(`.imp-row[data-i="${i}"]`);
@@ -5978,10 +7334,10 @@ function wireImportRowButtons() {
       const td = btn.closest("td");
       if (td) {
         td.className = ""; td.removeAttribute("title");
-        td.innerHTML = esc(fmtD(btn.dataset.iso)) + (field === "rate_end_date" && importRows[i].rate_end_estimated ? ` <span class="badge purple" title="${TIP_APPROX}">≈</span>` : "");
+        td.innerHTML = esc(fmtD(btn.dataset.iso)) + (field === "rate_end_date" && importRows[i].rate_end_estimated ? ` <span class="badge ${EST_BADGE_CLS}" title="${TIP_APPROX}">≈</span>` : "");
       }
       const cb = document.querySelector(`.imp-row[data-i="${i}"]`);
-      if (cb && !impDateFlags(importRows[i]).flagged) cb.checked = true;
+      if (cb && !impRowFlagged(importRows[i])) cb.checked = true;   // R6-34: any open flag still holds the row
     };
   });
   /* T1-finalfix (finding 1) — accept a completed case that genuinely has no completion date. This
@@ -5995,7 +7351,7 @@ function wireImportRowButtons() {
       const td = btn.closest("td");
       if (td) td.outerHTML = impDateCell(r, i, "completed_date");
       const cb = document.querySelector(`.imp-row[data-i="${i}"]`);
-      if (cb && !impDateFlags(r).flagged) cb.checked = true;
+      if (cb && !impRowFlagged(r)) cb.checked = true;   // R6-34: any open flag still holds the row
       wireImportRowButtons();
     };
   });
@@ -6011,6 +7367,16 @@ async function runImport() {
      database as it is NOW, not as it was when Analyse ran; the preview is repainted from the same
      data so what the operator confirms is what happens. */
   importClients = await fetchMatchClients();
+  /* R6-33/34 — the same discipline for the property side: re-read the cases the verdicts were made
+     against, and re-check M7 once for the whole run rather than per row. */
+  importCases = await fetchMatchCases(importClients);
+  const propAddrOk = await propAddrSupported();
+  let nPropSaved = 0, nPropDropped = 0;
+  /* G6-06 — "2 PROPERTY ADDRESSES" for one address, because this counted ROWS. Two identical rows on
+     one building are two cases and ONE property; the headline has to be able to tell the operator
+     that, which is the whole point of the number being there. */
+  const propKeysSaved = new Set();
+  let nPropUnkeyed = 0;
   const nameKey = clientNameKey;
   /* The save-time index is no longer the matcher — it now only dedupes rows against clients
      CREATED EARLIER IN THIS SAME RUN, so one file listing the same brand-new client twice still
@@ -6109,9 +7475,13 @@ async function runImport() {
         }
       }
 
-      const hasCase = r.stage || r.lender || r.rate_end_date || r.completed_date || r.rate_percent != null;
+      /* R6-33 — a property address on the row is part of the CASE, so a row that carries nothing but
+         a client and an address still creates one: throwing the address away because there was no
+         lender is the same silent loss this batch exists to close. */
+      const hasCase = r.stage || r.lender || r.rate_end_date || r.completed_date || r.rate_percent != null
+        || (propAddrOk && propAddress(r.property_address));
       if (hasCase) {
-        const { data: nc, error } = await db.from("cases").insert({
+        const caseRow = {
           client_id: client.id,
           case_kind: r.case_kind || "other",
           stage: r.stage || "enquiry",
@@ -6127,8 +7497,25 @@ async function runImport() {
           broker_fee: r.broker_fee ?? null,
           completed_at: dates.completed_date ? new Date(dates.completed_date).toISOString() : null,
           assigned_to: importAssignToMe ? ((ME && ME.id) || null) : null,
-        }).select("id").single();
+        };
+        // Only NAMED where M7 is present; an un-migrated database would 42703 the whole insert.
+        if (propAddrOk && propAddress(r.property_address)) caseRow.property_address = propAddress(r.property_address);
+        let ins = await db.from("cases").insert(caseRow).select("id").single();
+        if (ins.error && "property_address" in caseRow && isMissingColumnError(ins.error)) {
+          // The column went away between Analyse and Save (or the detection was wrong): keep the
+          // case, count the address that could not be stored, and say so in the summary.
+          PROP_ADDR_SUPPORTED = false;
+          delete caseRow.property_address;
+          nPropDropped++;
+          ins = await db.from("cases").insert(caseRow).select("id").single();
+        }
+        const { data: nc, error } = ins;
         if (error) throw error;
+        if (caseRow.property_address) {
+          const pk = propKey(caseRow.property_address);
+          if (pk) propKeysSaved.add(pk); else nPropUnkeyed++;   // stored, but not a property identity
+          nPropSaved = propKeysSaved.size + nPropUnkeyed;       // distinct buildings, not rows
+        }
         /* G1I-I6 — this note is the only record that a case arrived by bulk import rather than
            being keyed by a person, and it also carries the row's free-text `note` column, which is
            otherwise discarded. Unchecked, every one of them could fail and the summary said
@@ -6173,7 +7560,11 @@ async function runImport() {
   const noProvMsg = nNoProvenance
     ? ` — ${nNoProvenance} case${nNoProvenance === 1 ? "" : "s"} imported with NO “AI bulk import” note (${nNoProvenance === 1 ? "its" : "their"} import note and any free-text note on the row were not saved)`
     : "";
-  toast(`Imported: ${matchMsg}, ${nCases} cases, ${nUpdated} contact updates${errs ? `, ${errs} failed` : ""}${noDateMsg}${noProvMsg}`);
+  /* R6-33 — the address is the thing this file was imported FOR, so the count of addresses that
+     landed is stated, and an address the database could not hold is stated louder. */
+  const propMsg = (nPropSaved ? ` · ${nPropSaved} property address${nPropSaved === 1 ? "" : "es"} saved` : "")
+    + (nPropDropped ? ` — ⚠ ${nPropDropped} property address${nPropDropped === 1 ? "" : "es"} could NOT be stored (this database has no property column yet); the cases imported without ${nPropDropped === 1 ? "it" : "them"}` : "");
+  toast(`Imported: ${matchMsg}, ${nCases} cases, ${nUpdated} contact updates${errs ? `, ${errs} failed` : ""}${propMsg}${noDateMsg}${noProvMsg}`);
   if (errs) {
     // Surface exactly which rows failed and why, so nothing is silently dropped.
     const errHtml = `<div class="panel"><h3>${errs} row${errs === 1 ? "" : "s"} could not be imported</h3>
@@ -6188,7 +7579,8 @@ async function runImport() {
     const names = [...touchedClients.entries()];
     $("#import-preview").innerHTML = names.length ? `
       <div class="panel">
-        <h3>Imported: ${matchMsg} / ${nCases} case${nCases === 1 ? "" : "s"}</h3>
+        <h3>Imported: ${matchMsg} / ${nCases} case${nCases === 1 ? "" : "s"}${nPropSaved ? ` / ${nPropSaved} property address${nPropSaved === 1 ? "" : "es"}` : ""}</h3>
+        ${nPropDropped ? `<p class="panel-sub" style="color:var(--red);">⚠ ${nPropDropped} property address${nPropDropped === 1 ? "" : "es"} could not be stored — this database has no property column yet, so ${nPropDropped === 1 ? "that case" : "those cases"} imported without ${nPropDropped === 1 ? "it" : "them"}. Keep the file: the addresses are still in it.</p>` : ""}
         ${nNoDate ? `<p class="panel-sub" style="color:var(--red);">⚠ ${nNoDate} of ${nCases === 1 ? "them" : `those ${nCases} cases`} imported as <strong>completed with no completion date</strong> — no date was invented. They are missing from completions reporting and are listed on Data health as “Completed, no completion date” until someone fills ${nNoDate === 1 ? "it" : "them"} in.</p>` : ""}
         ${conflictLog.length ? `<div class="dq-notice" id="import-conflicts"><strong>${conflictLog.length} contact detail${conflictLog.length === 1 ? "" : "s"} had to be chosen between:</strong>
           <ul style="margin:6px 0 0 18px;">${conflictLog.map((c) => `<li>${esc(c.client)} — ${esc(c.label.toLowerCase())} kept as <strong>${esc(c.kept)}</strong>; <span title="This value was in the file and was NOT saved.">discarded ${esc(c.discarded)}</span></li>`).join("")}</ul></div>` : ""}
@@ -6384,10 +7776,13 @@ async function loadTodayAppts() {
     .select("*, clients(first_name,last_name)")
     .gte("starts_at", start.toISOString()).lt("starts_at", end.toISOString())
     .order("starts_at");
+  /* R6 — appointments already store case_id; the row just never read it. Six "Ruby Sinclair"
+     entries across five flats is the shape this fixes. (W13 / D6-12.) */
+  const apptCtx = await loadPropContext((appts || []).map((a) => a.case_id));
   $("#today-appts").innerHTML = (appts || []).length ? appts.map((a) => `
     <div class="row-item">
       <div class="row-main">
-        <div class="t" onclick="openAppt('${a.id}')">${new Date(a.starts_at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })} — ${esc(a.title)}</div>
+        <div class="t" onclick="openAppt('${a.id}')">${new Date(a.starts_at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })} — ${esc(a.title)} ${propCtxChip(apptCtx, a.case_id, "row-prop")}</div>
         <div class="s">${a.clients ? esc([a.clients.first_name, a.clients.last_name].filter(Boolean).join(" ")) + " · " : ""}${esc(a.location || "")}${a.staff_id ? " · " + esc(staffName(a.staff_id)) : ""}</div>
       </div>
     </div>`).join("") : '<div class="empty">Nothing booked today. The Diary tab has the full week.</div>';
@@ -6414,6 +7809,16 @@ function adviserColor(staffId) {
   return DIARY_PALETTE[(idx < 0 ? 0 : idx) % DIARY_PALETTE.length];
 }
 
+/* G6B-03 — a diary tile is small and was spending a third of itself restating the one thing that
+   cannot disambiguate two appointments. The client's name stays UNLESS the title already contains it
+   verbatim ("Fact find call — Ruby Sinclair" + a "Ruby Sinclair" line underneath), in which case the
+   room goes to the property instead. Only dropped when something else identifies the row. */
+function apptClientLine(a, chip) {
+  const who = a && a.clients ? [a.clients.first_name, a.clients.last_name].filter(Boolean).join(" ") : "";
+  if (!who) return "";
+  const titleSaysWho = !!chip && String(a.title || "").toLowerCase().includes(who.toLowerCase());
+  return titleSaysWho ? "" : `<div>${esc(who)}</div>`;
+}
 async function loadDiary() {
   const monthStart = diaryMonth;
   const monthEnd = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1);
@@ -6428,6 +7833,12 @@ async function loadDiary() {
     .order("starts_at");
   if (who !== "all") q = q.eq("staff_id", who);
   const { data: appts } = await q;
+  /* G6B-03 — the Diary is the screen an adviser reads their day off, and round 6 gave the property
+     to the dashboard panel and the appointment modal but not to this. Appointments already carry
+     case_id, so the chip comes from data we are already entitled to read — same call the dashboard
+     panel makes (loadPropContext → propCtxChip). Without it a portfolio landlord's six tiles say
+     "Ruby Sinclair" six times and cannot say which flat. */
+  const apptCtx = await loadPropContext((appts || []).map((a) => a.case_id));
   $("#diary-title").textContent = "Diary — " + monthStart.toLocaleDateString("en-GB", { month: "long", year: "numeric" });
   // T1-14 — compute per-staff clashes in one pass over the appointments already in memory. Keyed by
   // appt id → the (first) other same-staff appointment its time range overlaps, so both cards in a
@@ -6459,9 +7870,11 @@ async function loadDiary() {
         const partner = clashPartner[a.id];
         const partnerTime = partner ? new Date(partner.starts_at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) : "";
         const clashTitle = partner ? ` title="Clashes with &quot;${esc(partner.title)}&quot; at ${partnerTime}"` : "";
+        const chip = propCtxChip(apptCtx, a.case_id, "row-prop");
         return `<div class="appt${partner ? " clash" : ""}" onclick="openAppt('${a.id}')"${colorStyle}${clashTitle}>
         ${partner ? '<span class="clash-tag">⚠</span> ' : ""}<span class="at">${new Date(a.starts_at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}–${new Date(a.ends_at || a.starts_at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</span> ${esc(a.title)}
-        ${a.clients ? `<div>${esc([a.clients.first_name, a.clients.last_name].filter(Boolean).join(" "))}</div>` : ""}
+        ${chip ? `<div>${chip}</div>` : ""}
+        ${apptClientLine(a, chip)}
         ${a.staff_id && who === "all" ? `<div style="color:var(--muted);">${esc(staffName(a.staff_id))}</div>` : ""}
       </div>`;
       }).join("")}
@@ -6539,10 +7952,13 @@ async function loadDiaryDay() {
   if (who !== "all") q = q.eq("staff_id", who);
   const { data: appts } = await q;
   $("#diary-title").textContent = "Diary — " + dayStart.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
-  renderDiaryDay(appts || [], who);
+  // G6B-03 — the same property context the month grid and the dashboard panel carry.
+  const apptCtx = await loadPropContext((appts || []).map((a) => a.case_id));
+  renderDiaryDay(appts || [], who, apptCtx);
 }
 
-function renderDiaryDay(appts, who) {
+function renderDiaryDay(appts, who, apptCtx) {
+  const ctx = apptCtx || { byId: {}, caseCount: {}, sharedProp: {} };
   const startHour = DIARY_DAY_START_HOUR, endHour = DIARY_DAY_END_HOUR;
   const pxPerHour = DIARY_DAY_PX_PER_HOUR;
   const totalHeight = (endHour - startHour) * pxPerHour;
@@ -6568,8 +7984,10 @@ function renderDiaryDay(appts, who) {
     const colorStyle = who === "all" ? (() => { const c = adviserColor(a.staff_id); return `background:${c.bg};border-left-color:${c.border};`; })() : "";
     const others = layout.filter((o) => o.appt !== a && o.start < end && o.end > start).map((o) => o.appt.title);
     const clashTitle = clash ? ` title="Clashes with ${esc(others.join(", "))}"` : "";
+    const chip = propCtxChip(ctx, a.case_id, "row-prop");
     return `<div class="appt-block${clash ? " clash" : ""}" style="top:${top}px;height:${height}px;left:calc(${leftPct}% + 2px);width:calc(${widthPct}% - 4px);${colorStyle}" onclick="openAppt('${a.id}')"${clashTitle}>${clash ? '<span class="clash-tag">⚠</span> ' : ""}<span class="at">${timeLabel(start)}–${timeLabel(end)}</span> ${esc(a.title)}
-      ${a.clients ? `<div>${esc([a.clients.first_name, a.clients.last_name].filter(Boolean).join(" "))}</div>` : ""}
+      ${chip ? `<div>${chip}</div>` : ""}
+      ${apptClientLine(a, chip)}
       ${a.staff_id && who === "all" ? `<div style="color:var(--muted);">${esc(staffName(a.staff_id))}</div>` : ""}</div>`;
   }).join("");
   const lane = $("#diary-day-lane");
@@ -6703,6 +8121,11 @@ window.openAppt = async function (id, presets = {}) {
     a = data;
   }
   const { data: clients } = await db.from("clients").select("id,first_name,last_name").order("last_name");
+  /* R6 — the appointment already carries case_id and the modal showed nothing but an "Open case"
+     button, so "which of the six flats is this valuation for?" needed a round trip through the
+     case modal. The linked case's identity now sits on the form itself. */
+  const apptCtx = await loadPropContext([a.case_id]);
+  const apptCase = propCtxCase(apptCtx, a.case_id);
   const start = a.starts_at ? new Date(a.starts_at) : null;
   const mins = a.ends_at && start ? Math.round((new Date(a.ends_at) - start) / 60000) : 60;
   // Derive both date and time from LOCAL components so a late-evening appointment
@@ -6719,6 +8142,7 @@ window.openAppt = async function (id, presets = {}) {
   const timeVal = start ? `${pad2(start.getHours())}:${pad2(start.getMinutes())}` : "10:00";
   $("#modal").innerHTML = `
     <h3>${id ? "Appointment" : "New appointment"}</h3>
+    ${apptCase ? `<p class="panel-sub appt-case-line" style="margin-top:-8px;">About: ${caseIdentityHtml(apptCase, { fallback: true, cls: "row-prop" })}</p>` : ""}
     <form id="appt-form" class="form-grid">
       <label class="full">Title<input name="title" required value="${esc(a.title || "")}" placeholder="e.g. Fact find call"></label>
       <label>Date<input name="date" type="date" required value="${dateVal}"></label>
@@ -6772,6 +8196,17 @@ window.openAppt = async function (id, presets = {}) {
       location: String(f.get("location") || "").trim() || null,
       notes: String(f.get("notes") || "").trim() || null,
     };
+    /* G6B-02 — the case link was carried over from the row this modal opened with and never
+       re-validated against the client the operator just chose, and the form has no case_id control
+       to correct it with. Before round 6 that was latent (a stale link only powered an "Open case"
+       button); round 6 promotes it to the "About:" line above, so a wrong link now STATES another
+       client's property as fact. Clearing it fails safe — no link beats a wrong link — and the
+       operator is told, because a link silently disappearing is its own small lie. */
+    let caseUnlinked = false;
+    if (row.case_id && apptCase && apptCase.client_id && apptCase.client_id !== row.client_id) {
+      row.case_id = null;
+      caseUnlinked = true;
+    }
     // Diary double-booking warning (defect 5) — warn, never block: look for another appointment
     // for the SAME adviser that overlaps this one in time, excluding this record when editing.
     if (row.staff_id) {
@@ -6789,7 +8224,9 @@ window.openAppt = async function (id, presets = {}) {
     const { error } = await q;
     if (error) return toast("Error: " + error.message);
     closeModal();
-    toast("Appointment saved");
+    toast("Appointment saved" + (caseUnlinked
+      ? ` · the link to ${caseIdentityLabel(apptCase) || "the previous case"} was removed — that case belongs to a different client`
+      : ""));
     refreshDiaryView();
     if (!$("#page-dashboard").classList.contains("hidden")) loadTodayAppts();
   };
@@ -6921,7 +8358,10 @@ async function buildEvidencePack(caseId) {
   const generatedBy = (ME && (ME.full_name || ME.email)) || (($("#user-email") || {}).textContent) || "Unknown user";
   const generatedRole = ROLE_LABEL[MY_ROLE] || MY_ROLE;
 
-  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Evidence pack — ${esc(name)}</title>
+  // R6-37 — the short label distinguishes five packs for one landlord in the tab bar and the heading;
+  // the full address is stated in the document itself.
+  const packProp = propLabel(c);
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Evidence pack — ${esc(name)}${packProp ? " — " + esc(packProp) : ""}</title>
     <style>
       body{font-family:Arial,sans-serif;color:#222;max-width:800px;margin:30px auto;font-size:13px;line-height:1.5;}
       h1{font-size:20px;color:#00488c;} h2{font-size:15px;color:#00488c;margin-top:26px;border-bottom:1px solid #ddd;padding-bottom:4px;}
@@ -6929,12 +8369,25 @@ async function buildEvidencePack(caseId) {
       .muted{color:#777;} @media print {.noprint{display:none}}
     </style></head><body>
     <button class="noprint" onclick="window.print()" style="padding:8px 16px;">Print / Save as PDF</button>
-    <h1>Case evidence pack — ${esc(name)}</h1>
+    <h1>Case evidence pack — ${esc(name)}${packProp ? ` — ${esc(packProp)}` : ""}</h1>
+    ${/* R6-37 (W2, D6-01, SM-05) — THE line this document existed without. A mortgage file that does
+          not name the property is not evidence of suitable advice on that property: five of one
+          landlord's packs had an identical title, an identical client block and no way for a reviewer
+          — or the FCA — to tell which of five buy-to-lets each one evidenced. It is stated at the top,
+          again as the first row of Case details, and it says "not recorded" rather than nothing when
+          the case has no address, because a silent omission reads as "the client's home". */ ""}
+    <h2 style="margin-top:14px;">Security property</h2>
+    <p style="font-size:15px;font-weight:bold;margin:4px 0 0;">${propAddress(c) ? esc(propAddress(c)) : "Not recorded"}</p>
+    ${propAddress(c) ? "" : '<p class="muted" style="margin-top:2px;">No property address is held on this case. The address below under Client is the client\'s own home, which is not necessarily the property this mortgage is secured on.</p>'}
     <p class="muted">Generated ${new Date().toLocaleString("en-GB")} by ${esc(generatedBy)} (${esc(generatedRole)}) · NexMoney Back Office · Case ref ${String(c.id).slice(0, 8).toUpperCase()}</p>
     <h2>Client</h2><table>
-      ${row("Name", name)}${row("Email", cl.email)}${row("Phone", cl.phone)}${row("Address", cl.address)}
+      ${row("Name", name)}${row("Email", cl.email)}${row("Phone", cl.phone)}
+      ${/* Relabelled: the only row headed "Address" in the whole document used to be the client's own
+            home, so a reviewer read the wrong house. */ ""}
+      ${row("Client address (home)", cl.address)}
     </table>
     <h2>Case details</h2><table>
+      ${row("Security property", propAddress(c) || "Not recorded")}
       ${row("Type", (KINDS.find((x) => x[0] === c.case_kind) || [])[1] || c.case_kind)}${row("Stage", STAGE_LABEL[c.stage] || c.stage)}
       ${/* A file reviewer's first question is who advised this client — the pack didn't answer it. */ ""}
       ${row("Adviser", c.assigned_to ? staffName(c.assigned_to) : "Unassigned")}
@@ -7337,9 +8790,28 @@ function renderMonthReport(all, mv) {
       const color = pct >= 100 ? "var(--green)" : pct >= 60 ? "var(--amber)" : "var(--red)";
       targetEl.innerHTML = `
         <div class="panel-sub target-headline" style="margin:12px 0 4px;">Fees earned vs target — ${fmtM(earned.total)} of ${fmtM(target)} (${pct}%) <span class="money-basis">${esc(BASIS_TARGET_EARNED)} — ${earned.n} completion${earned.n === 1 ? "" : "s"} this month, paid or not</span></div>
-        <div style="background:var(--light);border-radius:4px;height:16px;overflow:hidden;">
-          <div style="width:${Math.min(pct, 100)}%;background:${color};height:16px;"></div>
-        </div>
+        ${/* R6-B4 (D6-23) — the fill used to be min(pct,100)% of a track, so anything
+             at or over target was a solid full-width slab: the track was invisible and
+             122% looked identical to 100%. The bar now scales to max(pct,100), so an
+             overshoot leaves visible track and a marker shows where target sat. Inline
+             styles moved to .fee-bar-* classes, except the one that is genuinely data
+             (the fill's width and its earned/target colour). */ ""}
+        ${(() => {
+          /* Under target the track's right end IS target, which is the conventional
+             reading and unchanged from round 5. Over target the track is stretched
+             12% past the achieved figure, so there is visible track to the right of
+             the fill and room for a marker at where target sat — the thing a solid
+             full-width slab could not say. */
+          const over = pct > 100;
+          const scale = over ? Math.ceil(pct * 1.12) : 100;
+          const fillPct = Math.max(0, Math.min(100, (pct / scale) * 100));
+          const markPct = (100 / scale) * 100;
+          return `<div class="fee-bar" role="img" aria-label="${pct}% of the ${fmtM(target)} monthly fee target">
+            <div class="fee-bar-fill" style="width:${fillPct}%;background:${color};"></div>
+            ${over ? `<div class="fee-bar-mark" style="left:${markPct}%;" title="Target — ${fmtM(target)}"></div>` : ""}
+          </div>
+          ${over ? `<span class="fee-bar-mark-lbl">The marker is the ${fmtM(target)} target; the bar runs to ${pct}% of it.</span>` : ""}`;
+        })()}
         <div class="panel-sub target-secondary" style="margin:6px 0 0;">Also — total fees collected ${fmtM(banked)} of ${fmtM(target)} (${cashPct}%) <span class="money-basis">${esc(BASIS_TARGET)}${cash.futureN ? ` — excludes future-dated payments (${cash.futureN})` : ""}</span></div>`;
     } else {
       targetEl.innerHTML = "";
@@ -8023,13 +9495,17 @@ function dhGotoEmails(failedOnly) {
 async function loadDataHealth() {
   const el = $("#data-content");
   el.innerHTML = '<div class="empty">Loading…</div>';
-  const [dqRes, dupRes, caseRows, clientRows, dismissRes] = await Promise.all([
+  /* R6-38 — the cases read gains the property column (and created_at, for "which case came last on
+     this building") so the shared-address panel below costs no extra round trip. NAMED only where M7
+     is present: on an un-migrated database the select would 42703 and blank the whole page. */
+  let dhPropOn = (await propAddrSupported()) !== false;
+  const [dqRes, dupRes, caseRowsFirst, clientRows, dismissRes] = await Promise.all([
     db.rpc("get_data_quality"),
     db.rpc("find_duplicate_clients"),
     // Defect 13: the RPC only ever returns bare counts for these two tiles. Rather than change the
     // RPC (frontend-only, existing columns), pull the offending rows client-side from cases+clients
     // so the tiles can expand into the same list-panel pattern as the other Data Health items.
-    db.from("cases").select("id,stage,rate_end_date,completed_at,client_id,clients(id,first_name,last_name,phone)"),
+    db.from("cases").select("id,stage,rate_end_date,completed_at,created_at,case_kind,lender,client_id,clients(id,first_name,last_name,phone)" + (dhPropOn ? ",property_address" : "")),
     // T1-9/T1-26: same trick for the client-shaped checks. The RPC returns counts for "missing
     // email & phone" and nothing at all for malformed values, so read the rows and judge them here.
     db.from("clients").select("id,first_name,last_name,email,phone"),
@@ -8041,6 +9517,21 @@ async function loadDataHealth() {
   if (dqRes.error || dupRes.error) {
     renderLoadError("#data-content", dqRes.error || dupRes.error, loadDataHealth);
     return;
+  }
+  /* R6-38 — if the cached M7 answer was stale (a rollback, or a detection from before this session's
+     migration state changed), the cases read above 42703s and would silently empty FIVE existing
+     panels. Correct the cache and read again without the column rather than reporting "0 problems"
+     for checks that were never run. */
+  let caseRows = caseRowsFirst;
+  if (caseRows.error && dhPropOn && isMissingColumnError(caseRows.error)) {
+    PROP_ADDR_SUPPORTED = false;
+    dhPropOn = false;
+    caseRows = await db.from("cases").select("id,stage,rate_end_date,completed_at,created_at,case_kind,lender,client_id,clients(id,first_name,last_name,phone)");
+  }
+  // …and the quieter shape of absence: the rows came back, without the column that was asked for.
+  if (dhPropOn && Array.isArray(caseRows.data) && caseRows.data.length) {
+    notePropAddrFromStarRow(caseRows.data[0]);
+    if (PROP_ADDR_SUPPORTED === false) dhPropOn = false;
   }
   const dq = dqRes.data || {};
   // Feature-detect M4: an older database has no duplicate_dismissals table yet — the panel simply
@@ -8075,6 +9566,42 @@ async function loadDataHealth() {
     .filter((cs) => cs.stage === "completed" && !cs.completed_at)
     .map((cs) => ({ case_id: cs.id, name: caseName(cs) }));
 
+  /* ---- R6-38 · SHARED PROPERTY ADDRESSES (F10, F8, LR-15, P11) ----------------------------------
+     Data health flags possible duplicate CLIENTS by email and phone similarity, and had no
+     equivalent for the state the fixtures deliberately seed: two DIFFERENT clients whose cases sit
+     on one building. 9 Bryanstone Road is on Kwame Boateng's completed purchase and Gareth
+     Pollard's live offer — he sold it to him — and nothing anywhere in the app connected them, so
+     the retention flow cheerfully offered to remortgage a house its client no longer owns.
+
+     This panel is INFORMATIONAL and says so loudly. An identical address is emphatically NOT a
+     duplicate-client signal (P11's warning: matching people on an address string alone merges two
+     unrelated humans) and it is not automatically wrong either — a sale we advised on both sides of
+     is exactly this shape and is correct. It groups by propKey, lists every case on the address with
+     the client who holds it and which came last, and links each one open. Nothing is offered to
+     "fix": the only action is a human reading it. */
+  const sharedProps = (() => {
+    if (!dhPropOn) return [];
+    const groups = new Map();
+    allCases.forEach((cs) => {
+      const k = propKey(cs);
+      if (!k) return;
+      if (!groups.has(k)) groups.set(k, { key: k, address: propAddress(cs), cases: [] });
+      groups.get(k).cases.push(cs);
+    });
+    return [...groups.values()]
+      .filter((g) => new Set(g.cases.map((c) => c.client_id).filter(Boolean)).size > 1)
+      .map((g) => {
+        // Newest case first — "who holds the latest case on this building" is the question a human
+        // is actually asking when they read this panel.
+        const cases = g.cases.slice().sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
+        return {
+          key: g.key, address: g.address, cases,
+          clients: [...new Set(cases.map((c) => c.client_id).filter(Boolean))].length,
+        };
+      })
+      .sort((a, b) => (b.cases.length - a.cases.length) || String(a.address).localeCompare(String(b.address)));
+  })();
+
   // T1-9/T1-26 — client-shaped lists, all computed from the one clients read above.
   const allClients = Array.isArray(clientRows.data) ? clientRows.data : [];
   const clName = (cl) => [cl.first_name, cl.last_name].filter(Boolean).join(" ") || "(no name)";
@@ -8098,7 +9625,10 @@ async function loadDataHealth() {
     <div class="kpi dq-clickable" id="dh-tile-nofee" title="Click to jump to the list"><div class="num">${noFee.length}</div><div class="lbl">Completed, no fee ▾</div></div>
     <div class="kpi dq-clickable" id="dh-tile-rateend" title="Click to list these cases"><div class="num">${dq.completed_missing_rate_end ?? 0}</div><div class="lbl">Completed, no rate-end ▾</div></div>
     <div class="kpi ${noCompletedAt.length ? "warn" : ""} dq-clickable" id="dh-tile-nocompleted" title="Completed cases with no completion date — invisible to Reports until it's set. Click to list them"><div class="num">${noCompletedAt.length}</div><div class="lbl">Completed, no completion date ▾</div></div>
-    <div class="kpi ${dq.emails_failed ? "warn" : ""} dq-clickable" id="dh-tile-failed" title="Click to open the Emails page filtered to failed sends"><div class="num">${dq.emails_failed ?? 0}</div><div class="lbl">Failed emails →</div></div>`;
+    <div class="kpi ${dq.emails_failed ? "warn" : ""} dq-clickable" id="dh-tile-failed" title="Click to open the Emails page filtered to failed sends"><div class="num">${dq.emails_failed ?? 0}</div><div class="lbl">Failed emails →</div></div>
+    ${/* R6-38 — deliberately NOT a "warn" tile: a shared address is something to read, not a fault to
+          clear. Absent entirely on a database with no property column. */ ""}
+    ${dhPropOn ? `<div class="kpi dq-clickable" id="dh-tile-sharedprop" title="Addresses that appear on more than one client's cases — usually a sale we advised on both sides of, occasionally a mistake. Informational: click to read them"><div class="num">${sharedProps.length}</div><div class="lbl">Shared property addresses ▾</div></div>` : ""}`;
 
   let stuckNotice = "";
   if (dq.emails_stuck > 0 && dq.emails_sending_live) {
@@ -8142,6 +9672,28 @@ async function loadDataHealth() {
       </tr>`).join("")}
     </table>` : '<div class="empty">No likely duplicates found. 👍</div>'}
     ${dismissedFooter}
+  </div>`;
+
+  /* R6-38 — the shared-address panel. It sits next to the duplicate-client panel because that is
+     where a human looks for "two records that might be about one thing", and it is worded to keep the
+     two apart: same PLACE, never same person. Every case links open; there is no bulk action, because
+     there is no safe automatic answer. */
+  const sharedPropPanel = !dhPropOn ? "" : `<div class="panel hidden" id="dh-sharedprop-panel">
+    <h3>Shared property addresses</h3>
+    <p class="panel-sub">Addresses that appear on more than one <strong>client's</strong> cases. This is information, not a fault: the usual cause is a sale we advised on both sides of, and the newest case is normally the current owner. It is <strong>not</strong> a duplicate-client signal — two people with cases at one address are two people, and nothing here should ever be merged. It matters because a retention or remortgage started on the wrong side of a sale chases a client about a house they have sold; “Start retention case” now warns when the newest case on the address belongs to somebody else.</p>
+    ${sharedProps.length ? sharedProps.map((g) => `
+      <div class="dh-sharedprop" data-prop-key="${esc(g.key)}">
+        <div class="dh-sharedprop-head">${propChip(g.address)} <strong>${esc(g.address)}</strong> <span class="s">${g.clients} clients · ${g.cases.length} cases</span></div>
+        <table class="imp-table">
+          <tr><th>Client</th><th>Case</th><th>Started</th><th></th></tr>
+          ${g.cases.map((cs, i) => `<tr>
+            <td>${esc(caseName(cs))}</td>
+            <td>${esc([caseTypeLabel(cs), cs.lender, cs.stage ? (STAGE_LABEL[cs.stage] || cs.stage) : null].filter(Boolean).join(" · "))}</td>
+            <td style="white-space:nowrap;">${fmtD(cs.created_at)}${i === 0 ? ' <span class="badge blue" title="The most recent case on this address — normally the current owner">newest</span>' : ""}</td>
+            <td style="text-align:right;white-space:nowrap;"><button class="btn btn-sm" onclick="openCase('${cs.id}')">Open case</button> <button class="btn btn-sm" onclick="openClient('${cs.client_id}')">Client</button></td>
+          </tr>`).join("")}
+        </table>
+      </div>`).join("") : '<div class="empty">No address appears on more than one client\'s cases. 👍</div>'}
   </div>`;
 
   const missingPanel = `<div class="panel" id="dh-missing-panel">
@@ -8251,6 +9803,7 @@ async function loadDataHealth() {
     <div class="kpi-row">${kpis}</div>
     ${stuckNotice}
     ${dupPanel}
+    ${sharedPropPanel}
     <div class="grid-2">${missingPanel}${unassignedPanel}</div>
     ${noFeePanel}
     <div class="grid-2">${phonePanel}${rateEndPanel}</div>
@@ -8281,6 +9834,7 @@ async function loadDataHealth() {
   wireTile("#dh-tile-both", "#dh-both-panel");
   wireTile("#dh-tile-invalid-email", "#dh-invalid-email-panel");
   wireTile("#dh-tile-invalid-phone", "#dh-invalid-phone-panel");
+  wireTile("#dh-tile-sharedprop", "#dh-sharedprop-panel");   // R6-38
   wireTileScroll("#dh-tile-email", "#dh-missing-panel");
   wireTileScroll("#dh-tile-unassigned", "#dh-unassigned-panel");
   wireTileScroll("#dh-tile-nofee", "#dh-nofee-panel");
@@ -9374,16 +10928,19 @@ document.addEventListener("keydown", (e) => {
   }
   function renderIdle() {
     flat = []; sel = -1;
-    resultsEl.innerHTML = '<div class="palette-empty">Search clients by name, email or phone — and cases by client, lender or stage.</div>';
+    resultsEl.innerHTML = '<div class="palette-empty">Search clients by name, email or phone — and cases by property address, client, lender or stage.</div>';
   }
   function renderEmpty(q) {
     flat = []; sel = -1;
     resultsEl.innerHTML = `<div class="palette-empty">No matches for &ldquo;${esc(q)}&rdquo;</div>`;
   }
-  function rowHtml(idx, icon, title, sub) {
+  /* `subHtml` is trusted markup (only ever the property chip, built by propChip) and leads the
+     sub-line; everything else stays escaped text. */
+  function rowHtml(idx, icon, title, sub, subHtml) {
     return `<div class="palette-row" role="option" data-idx="${idx}">` +
       `<span class="pr-ic" aria-hidden="true">${icon}</span>` +
-      `<span class="pr-main"><span class="pr-title">${esc(title)}</span><span class="pr-sub">${esc(sub)}</span></span></div>`;
+      `<span class="pr-main"><span class="pr-title">${esc(title)}</span>` +
+      `<span class="pr-sub">${subHtml || ""}${subHtml && sub ? " " : ""}${esc(sub)}</span></span></div>`;
   }
   function render(clients, cases, leads, q) {
     flat = [];
@@ -9408,7 +10965,9 @@ document.addEventListener("keydown", (e) => {
         else if (KIND_LABEL[cs.case_kind]) bits.push(KIND_LABEL[cs.case_kind]);
         const idx = flat.length; flat.push({ type: "case", id: cs.id });
         caseIdxById[cs.id] = idx;
-        html += rowHtml(idx, "🗂️", name, bits.filter(Boolean).join("  ·  "));
+        // R6 — the result reads as a place, not just a person: six rows for a portfolio client
+        // used to be six identical "Gareth Pollard" lines.
+        html += rowHtml(idx, "🗂️", name, bits.filter(Boolean).join("  ·  "), propChip(cs, { cls: "row-prop" }));
       });
     }
     if (leads && leads.length) {
@@ -9466,7 +11025,13 @@ document.addEventListener("keydown", (e) => {
     // Tokenisation (defect #1): split on whitespace so a multi-word / full-name query works.
     const tokens = q.split(" ").filter(Boolean);
     const phoneDigits = String(raw).replace(/[^\d+]/g, "");
-    const isPhone = phoneDigits.replace(/\D/g, "").length >= 3;
+    /* R6 / W9 — "BH12 4HR" left three digits behind ("124"), tripped the phone branch and
+       confidently returned an unrelated client whose number contains 124. A UK postcode is never a
+       phone number, so recognising one (full postcode, or a bare outcode like "BH12") keeps the
+       search on the property path this batch just opened. */
+    const qNoSpace = q.replace(/\s+/g, "");
+    const looksPostcode = POSTCODE_RE.test(raw) || /^[A-Z]{1,2}\d[A-Z\d]?$/i.test(qNoSpace);
+    const isPhone = !looksPostcode && phoneDigits.replace(/\D/g, "").length >= 3;
     // Interleave digits with % so "07700 900123" matches however the number is spaced/punctuated.
     const phoneOr = () => { const pd = normPhone(phoneDigits).replace(/\D/g, ""); return `phone.ilike.%${pd.split("").join("%")}%`; };
     let clients = [], cases = [], leads = [];
@@ -9490,12 +11055,23 @@ document.addEventListener("keydown", (e) => {
       const stageMatches = STAGES.filter(([v, l]) => l.toLowerCase().includes(ql) || v.includes(ql)).map((s) => s[0]);
       const kindMatches = KINDS.filter(([v, l]) => l.toLowerCase().includes(ql) || v.includes(ql)).map((k) => k[0]);
       const orCase = [`lender.ilike.%${q}%`];
+      /* R6 / W8 — "a property is not a thing you can look for": street name, house number and
+         postcode all missed, and a postcode fell through to the phone-digit branch and confidently
+         returned an unrelated client. One extra ilike on the address answers all three. The column
+         is only NAMED when migration M7 is present — on an un-migrated database naming it would
+         42703 the whole query and degrade the palette to "no matches". */
+      const propOn = await propAddrSupported();
+      if (propOn) {
+        orCase.push(`property_address.ilike.%${q}%`);
+        // "BH12 4HR" is stored with the space; "BH124HR" is how people often type it.
+        if (qNoSpace && qNoSpace !== q) orCase.push(`property_address.ilike.%${qNoSpace}%`);
+      }
       if (stageMatches.length) orCase.push(`stage.in.(${stageMatches.join(",")})`);
       if (kindMatches.length) orCase.push(`case_kind.in.(${kindMatches.join(",")})`);
       const cids = clients.map((c) => c.id).filter(Boolean);
       if (cids.length) orCase.push(`client_id.in.(${cids.join(",")})`);
       const { data: cs } = await db.from("cases")
-        .select("id,stage,case_kind,lender,client_id,clients(first_name,last_name)")
+        .select("id,stage,case_kind,lender,client_id" + (propOn ? ",property_address" : "") + ",clients(first_name,last_name)")
         .or(orCase.join(",")).order("updated_at", { ascending: false }).limit(8);
       if (mySeq !== seq) return;
       cases = cs || [];

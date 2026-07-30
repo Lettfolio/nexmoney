@@ -56,6 +56,16 @@
       <button data-page="emails"><span class="si">✉️</span>Emails</button>
       <button data-page="settings"><span class="si">⚙️</span>Settings</button>
     </nav>
+    <!-- R6-B4 — "Ask AI" was a position:fixed pill in the bottom-right corner of the
+         viewport. Four auditors independently measured it sitting on top of live
+         content: a Watchtower "Dismiss" button (so a click aimed at a destructive
+         action hit the assistant), pipeline card names and chips, a Reports KPI
+         tile. A fixed overlay over a centred content column has nowhere to go, so
+         it is docked here instead — same button, same id, same handler, no overlay
+         layer. See the #assistant-fab block in admin.css. -->
+    <div class="sidebar-ask">
+      <button id="assistant-fab" class="hidden" title="Ask AI — look up clients, draft replies, add tasks and notes" aria-label="Ask AI assistant">✦<span class="fab-label">Ask AI</span></button>
+    </div>
     <div class="sidebar-foot">
       <span id="user-email"></span>
       <button id="logout-btn" class="btn btn-ghost" title="Sign out" aria-label="Sign out">⏻</button>
@@ -143,6 +153,15 @@
       </div>
       <div id="pipe-segment" class="pipe-segment" role="tablist" aria-label="Pipeline focus"></div>
       <p class="panel-sub" id="board-hint"><span class="desktop-hint">Drag cards between columns to move a case on.</span><span class="mobile-hint">Tap a card to open it, or use the stage dropdown on each card to move it on.</span></p>
+      <!-- R6-B4 (D6-24 / SM-19) — the board carried two pieces of unlabelled colour
+           coding: a red/amber left edge on a card, and a "≈" glyph on a rate-end
+           date, neither explained anywhere. Both scan as rendering faults until
+           somebody tells you what they are, so the board now says what they mean. -->
+      <p class="board-legend" id="board-legend">
+        <span class="bl-item"><span class="bl-edge bl-edge-amber" aria-hidden="true"></span>Left edge: 14+ days in this stage</span>
+        <span class="bl-item"><span class="bl-edge bl-edge-red" aria-hidden="true"></span>30+ days in this stage</span>
+        <span class="bl-item"><span class="bl-approx" aria-hidden="true">&#8776;</span>&#8776; or a dashed pill means the date is an estimate, not confirmed</span>
+      </p>
       <div id="stage-tabs" class="stage-tabs hidden"></div>
       <div id="table-wrap" class="hidden"></div>
       <div class="board-scroll-wrap">
@@ -468,7 +487,7 @@
   <div class="modal overlay-modal" id="overlay-modal" role="dialog" aria-modal="true"></div>
 </div>
 
-<button id="assistant-fab" class="hidden" title="Ask AI — look up clients, draft replies, add tasks and notes" aria-label="Ask AI assistant">✦<span class="fab-label">Ask AI</span></button>
+<!-- #assistant-fab moved into the sidebar (R6-B4) — see the .sidebar-ask block above. -->
 <aside id="assistant-drawer" class="hidden">
   <div class="ad-head"><strong>NexMoney Assistant</strong><button id="assistant-close" class="btn btn-ghost btn-sm">✕</button></div>
   <div id="chat-log"></div>

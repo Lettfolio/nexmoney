@@ -28,11 +28,20 @@
   --text: #364358;
   --muted: #64748b;
 
-  /* Status */
+  /* Status.
+     R6-B4 — amber was #9a6b00, which measures 4.17:1 on --amber-bg: below AA for
+     the 11px semibold type every .badge uses, and amber is the busiest badge
+     colour on a pipeline card. #805800 measures 5.64:1 on --amber-bg and 6.34:1
+     on white, so the same hue now passes everywhere it is used (badge, dup-hint,
+     panel count.hot) with no change to the colour LANGUAGE. */
   --green: #16794c;  --green-bg: #e7f6ee;
   --red: #c0392b;    --red-bg: #fdecea;
-  --amber: #9a6b00;  --amber-bg: #faf1dc;
+  --amber: #805800;  --amber-bg: #faf1dc;
   --blue-bg: #e8f0fa;
+  /* Muted text sitting on --light / #edf1f7 rather than white: --muted measures
+     4.20:1 there (4.76:1 on white), so tinted surfaces get their own token rather
+     than every one of them being an individual near-miss. */
+  --muted-on-tint: #59677a;
 
   /* Shape & depth */
   --radius: 12px;
@@ -170,21 +179,32 @@ h2 { color: var(--dark); font-size: 20px; font-weight: 700; letter-spacing: -0.0
   color: #fff; font-weight: 600;
 }
 .sidenav button.active .si, .sidenav button:hover .si { opacity: 1; filter: none; }
+/* R6-B4 — the "Ask AI" control lives here now (see #assistant-fab below), and it
+   is what claims the flexible space above the footer, so the footer no longer
+   needs margin-top:auto of its own. */
+.sidebar-ask { margin-top: auto; padding: 12px 10px 0; }
 .sidebar-foot {
-  margin-top: auto; padding: 14px 20px 0;
+  padding: 14px 20px 0;
   border-top: 1px solid rgba(255,255,255,.08);
-  font-size: 12px; color: #8ca6c5;
+  /* #8ca6c5 measured 5.81:1 on the sidebar's bottom stop — passing, but this is
+     12px type identifying WHICH SEAT you are signed in as, next to a Sign-out
+     button, on the app's only dark surface. #a8c0dc takes it to 7.74:1 (LR-20). */
+  font-size: 12px; color: #a8c0dc;
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
 }
-.sidebar-foot span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* min-width:0 so the ellipsis can actually fire inside the flex row: the seat
+   email truncated to "luke.richards@nexmo…" with no way to read the rest, so
+   app.js now also sets title= to the full address (LR-20). */
+.sidebar-foot span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sidebar-foot .btn-ghost { color: #d5e2f2; font-size: 15px; padding: 2px 6px; }
 .sidebar-foot .btn-ghost:hover { color: #fff; background: rgba(255,255,255,.08); }
 
 /* ---------- Main layout ---------- */
-/* T1-12 — bottom padding at least as deep as the fixed #assistant-fab's own footprint (its
-   height + its "bottom" offset), so the last real content on any page always has scroll room
-   to clear the FAB rather than dead-ending underneath it. */
-main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 32px 88px; }
+/* T1-12 gave <main> 88px (mobile: 148px) of bottom padding purely so the last row on a
+   page could clear the FIXED Ask-AI pill. R6-B4 docked that pill into the sidebar, so the
+   padding is now just ordinary breathing room — and 60px of the old reserve was itself part
+   of the "screens of nothing below the content" complaint (W24). */
+main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 32px 40px; }
 .page-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 18px; }
 .page-head h2 { margin: 0; }
 .page-tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
@@ -239,7 +259,7 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
 .panel h3 .count {
   display: inline-block; min-width: 20px; text-align: center;
   padding: 1px 8px; border-radius: 20px;
-  background: var(--light); color: var(--muted);
+  background: var(--light); color: var(--muted-on-tint);
   font-size: 11px; font-weight: 700; letter-spacing: 0;
   font-variant-numeric: tabular-nums;
 }
@@ -316,7 +336,7 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
 .dash-tab .count {
   display: inline-block; min-width: 18px; text-align: center; margin-left: 4px;
   padding: 0 6px; border-radius: 20px;
-  background: var(--light); color: var(--muted);
+  background: var(--light); color: var(--muted-on-tint);
   font-size: 11px; font-weight: 700; letter-spacing: 0;
   font-variant-numeric: tabular-nums;
 }
@@ -388,18 +408,190 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
 .dq-notice { font-size: 13px; padding: 10px 14px; border-radius: 8px; margin-bottom: 20px; background: var(--light); color: var(--muted); border: 1px solid #dbe3ec; }
 .dq-notice.bad { background: var(--red-bg); color: var(--red); border-color: #eec3bb; }
 
-/* ---------- Badges (soft, pill) ---------- */
+/* ---------- Badges (soft, pill) ----------
+   R6-B4 — THE BADGE COLOUR VOCABULARY. Round 6's audit found the same colour
+   saying different things three centimetres apart on one pipeline card (SM-19,
+   W23): blue AND purple for "rate ends", red for both "ERC conflict" and
+   "stale", amber for three unrelated ideas. Five colours, one meaning each:
+
+     red    — a CONFLICT or a breach. Something is wrong with the data or the
+              deal and a human must resolve it. (ERC outlasts the rate; overdue.)
+     amber  — something is MISSING or WAITING on us. Nothing is wrong yet.
+              (protection not discussed, no completion date, fee requested.)
+     green  — DONE. Banked, paid, completed.
+     blue   — a neutral INFORMATIONAL fact, most often a date or a stage.
+     grey   — a neutral fact with no urgency at all, or a closed/void state.
+
+   `.is-est` is the one modifier: it marks a value as ESTIMATED rather than
+   confirmed, and it deliberately does NOT change the badge's colour, because
+   "estimated" is a confidence, not a meaning. A dashed edge plus the ≈ glyph
+   says it on top of whatever colour the fact already has. Before this, an
+   estimated rate-end date was rendered PURPLE next to a confirmed one rendered
+   BLUE, so the same fact read as two different facts.
+   `purple` therefore now has exactly one job left: the diary APPT marker. */
 .badge {
   display: inline-block; padding: 3px 10px; border-radius: 999px;
   font-size: 11px; font-weight: 600; letter-spacing: .01em;
   white-space: nowrap; font-variant-numeric: tabular-nums;
+  /* A transparent 1px edge on every badge so adding .is-est (which needs a real
+     border) cannot shift a badge's size relative to its neighbours in a row. */
+  border: 1px solid transparent;
 }
 .badge.green  { background: var(--green-bg); color: var(--green); }
 .badge.red    { background: var(--red-bg); color: var(--red); }
 .badge.amber  { background: var(--amber-bg); color: var(--amber); }
 .badge.blue   { background: var(--blue-bg); color: var(--navy); }
-.badge.grey   { background: #eef1f5; color: #5b6b7c; }
+.badge.grey   { background: #eef1f5; color: #556275; }
 .badge.purple { background: #f3ecfc; color: #6b21a8; border: 1px dashed #c4a2e8; }
+/* "Not confirmed" — same colour, dashed edge. Works on any of the five. */
+.badge.is-est { border-style: dashed; border-color: currentColor; opacity: .95; }
+/* Long values (a lender, a lost reason, a stage label on a narrow column) must
+   ellipsise inside the pill rather than push the row wider than its container. */
+.badge.badge-clip { max-width: 100%; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
+
+/* ---------- Property chip (R6 batch 1) ----------
+   One pill for "which building is this?", used wherever a case is named.
+   The dot's hue is a deterministic function of the normalised address
+   (app.js propHue), so the same property is the same colour on every screen
+   and in every session. Sixteen hues, spanning cyan → blue → indigo → violet →
+   magenta: deliberately NO red, green or amber anywhere in the ramp, because
+   in this app those three already mean overdue / done / warning, and a colour
+   that reads as status on an identity chip is worse than no colour at all.
+   Every one clears 4.5:1 against the white/--light chip surface.
+
+   G6-08 — this ramp was ten colours ordered straight along the arc, which did
+   two things wrong at 8px. Ten buckets collided inside a single client's list
+   (two of one landlord's five buy-to-lets came out the same colour, rendered as
+   adjacent group headings), and a 12-18° step between neighbouring indices was
+   not separable on a dot that small. So: sixteen swatches, ~10° apart on the
+   arc but ASSIGNED with a stride of 7 so consecutive indices land 71-92° apart,
+   and alternating between a dark tier (S70, contrast ≈ 6.6) and a light tier
+   (S56, contrast ≈ 4.9) so neighbouring indices differ in lightness as well as
+   hue. Sixteen is not infinity — a mod-N hash cannot promise global uniqueness
+   and the colour is a hint, never the identity; the label is the identity. */
+:root {
+  --pc-0:  hsl(182,   70%, 24.5%);
+  --pc-1:  hsl(252.9, 56%, 59.5%);
+  --pc-2:  hsl(323.9, 70%, 39.5%);
+  --pc-3:  hsl(232.7, 56%, 58.5%);
+  --pc-4:  hsl(303.6, 70%, 37%);
+  --pc-5:  hsl(212.4, 56%, 47%);
+  --pc-6:  hsl(283.3, 70%, 43.5%);
+  --pc-7:  hsl(192.1, 56%, 36%);
+  --pc-8:  hsl(263.1, 70%, 52.5%);
+  --pc-9:  hsl(334,   56%, 50.5%);
+  --pc-10: hsl(242.8, 70%, 56.5%);
+  --pc-11: hsl(313.7, 56%, 48.5%);
+  --pc-12: hsl(222.5, 70%, 46%);
+  --pc-13: hsl(293.5, 56%, 49%);
+  --pc-14: hsl(202.3, 70%, 32.5%);
+  --pc-15: hsl(273.2, 56%, 55.5%);
+}
+.prop-chip {
+  display: inline-flex; align-items: center; gap: 6px; vertical-align: middle;
+  max-width: 260px; min-width: 0; padding: 2px 10px 2px 8px;
+  border-radius: 999px; background: var(--white); border: 1px solid var(--border-strong);
+  font-size: 12.5px; font-weight: 600; color: var(--dark); line-height: 1.6;
+}
+/* Truncation is the chip's job, not the caller's: the label ellipsises and the
+   full address stays reachable through the title tooltip.
+   R6-B4 — `min-width: 0` is the whole fix. A flex item defaults to
+   min-width:auto, i.e. it refuses to shrink below its own min-content width, so
+   text-overflow:ellipsis never fired: the label simply overflowed the pill's
+   max-width and printed on top of whatever sat to its right. Measured on the
+   stress address ("Flat 9, Belvedere Court Mansions, 41-43 West Cliff Gardens
+   Road, …") the label was 470px wide inside a 260px chip. It now clips. */
+.prop-chip .pc-txt { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Belt and braces: whatever a caller's max-width is, nothing escapes the pill. */
+.prop-chip { overflow: hidden; }
+.prop-chip .pc-dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; background: var(--pc-0); }
+.prop-chip.pc-h0 .pc-dot { background: var(--pc-0); }
+.prop-chip.pc-h1 .pc-dot { background: var(--pc-1); }
+.prop-chip.pc-h2 .pc-dot { background: var(--pc-2); }
+.prop-chip.pc-h3 .pc-dot { background: var(--pc-3); }
+.prop-chip.pc-h4 .pc-dot { background: var(--pc-4); }
+.prop-chip.pc-h5 .pc-dot { background: var(--pc-5); }
+.prop-chip.pc-h6 .pc-dot { background: var(--pc-6); }
+.prop-chip.pc-h7 .pc-dot { background: var(--pc-7); }
+.prop-chip.pc-h8 .pc-dot { background: var(--pc-8); }
+.prop-chip.pc-h9 .pc-dot { background: var(--pc-9); }
+.prop-chip.pc-h10 .pc-dot { background: var(--pc-10); }
+.prop-chip.pc-h11 .pc-dot { background: var(--pc-11); }
+.prop-chip.pc-h12 .pc-dot { background: var(--pc-12); }
+.prop-chip.pc-h13 .pc-dot { background: var(--pc-13); }
+.prop-chip.pc-h14 .pc-dot { background: var(--pc-14); }
+.prop-chip.pc-h15 .pc-dot { background: var(--pc-15); }
+/* No address on the case: a hollow dot and the old kind · lender wording, so
+   the gap is visible as a gap rather than dressed up as an identity. */
+.prop-chip-none { color: var(--muted); border-style: dashed; font-weight: 600; }
+.prop-chip-none .pc-dot { width: 9px; height: 9px; background: transparent; border: 1.5px solid var(--muted); }
+/* G6-07 — something IS in the field but it is not an address ("TBC", "n/a").
+   Hollow like the no-address variant (nothing groups on it) but italic, so the
+   two states are not confused: one is empty, the other is filled with filler. */
+.prop-chip-unusable { font-style: italic; }
+
+/* ---------- Property chip on the OTHER surfaces (R6 batch 2) ----------
+   Same pill, four sizes of hole to fit it in. Nothing here changes the chip's
+   identity (hue, label, title) — only how much room it may take. */
+/* On a list row (Today, tasks, alerts, watchtower, emails, appointments, the
+   search palette) the chip rides alongside text, so it is a notch smaller and
+   never grows past a third of a wide row. */
+.row-prop { max-width: 210px; font-size: 11.5px; padding: 1px 8px 1px 7px; }
+.row-prop .pc-dot { width: 7px; height: 7px; }
+/* The rest of the canonical identity (type · lender · stage) next to the chip:
+   quiet, because the chip is the thing being scanned for.
+   R6-B4 — nowrap kept (it is a short compound label that reads badly broken),
+   but bounded and ellipsised, so an operator-typed 60-character lender cannot
+   widen the row it sits in. */
+.case-tag {
+  color: var(--muted); font-weight: 600; white-space: nowrap;
+  display: inline-block; vertical-align: bottom;
+  max-width: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+}
+/* Pipeline board card — the column is 244px, so the chip takes the width it is
+   given and ellipsises inside it. Sits between the client name and the money. */
+/* R6-B4 — the chip is the card's SECOND-most prominent element (after the client
+   name) because "which of his five is this?" is the question the card exists to
+   answer. It was 11.5px on a white pill on a white card, i.e. the same visual
+   weight as the metadata below it; it now carries a faint tinted fill so the
+   identity block reads as a block, and 12px so it outranks the badges (10.5px). */
+.card .pc-card {
+  display: flex; max-width: 100%; margin: 3px 0 5px;
+  font-size: 12px; background: #f7f9fc; border-color: #ccd7e6;
+}
+.card .pc-card .pc-dot { width: 7px; height: 7px; }
+/* Pipeline table — a real column, sized so the label reads without letting one
+   long address push the other twelve columns off the right edge. */
+.pipe-col-prop { max-width: 240px; }
+.pipe-col-prop .prop-chip { max-width: 224px; }
+/* Client timeline — the per-row case tag, where the chip REPLACES the round-5
+   kind · lender pill whenever the case has an address. */
+.tl-prop { max-width: 220px; font-size: 11px; padding: 1px 8px 1px 7px; }
+.tl-prop .pc-dot { width: 7px; height: 7px; }
+
+/* ---------- Client record · cases grouped by property (R6 batch 2) ----------
+   Only rendered when the client's cases actually span more than one property;
+   a single group would be furniture around a list that reads fine flat. */
+.cprop-group { margin-bottom: 10px; }
+.cprop-hd {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 6px 2px 5px; border-bottom: 1px solid var(--border);
+  margin-bottom: 2px; min-width: 0;
+}
+/* The heading carries the FULL address — it has the width the chip does not. */
+.cprop-addr { font-size: 12.5px; font-weight: 700; color: var(--dark); min-width: 0; overflow-wrap: anywhere; }
+.cprop-n { font-size: 11px; font-weight: 700; color: var(--muted-on-tint); background: var(--light); border-radius: 999px; padding: 1px 8px; }
+.cprop-group .row-item { padding-left: 8px; }
+.cl-case-chip { max-width: 100%; font-size: 11.5px; padding: 1px 8px 1px 7px; }
+.cl-case-chip .pc-dot { width: 7px; height: 7px; }
+/* Appointment modal — "About: <chip> type · lender · stage" under the title. */
+.appt-case-line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+
+/* Case form · property address (R6). A one-line textarea rather than an input:
+   a full UK address is long, and wrapping beats a box that scrolls sideways. */
+#case-prop-pick { margin-bottom: 6px; }
+#case-prop-input { min-height: 40px; resize: vertical; }
+#case-prop-hint { display: block; color: var(--muted); margin-top: 4px; }
 
 /* ---------- Pipeline board ---------- */
 .board { display: grid; grid-auto-flow: column; grid-auto-columns: 244px; gap: 14px; overflow-x: auto; padding-bottom: 16px; align-items: start; }
@@ -407,9 +599,35 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
 .col h4 {
   font-size: 11px; font-weight: 700;
   text-transform: uppercase; letter-spacing: .07em;
-  color: #5b6b7e; padding: 4px 6px 10px;
+  color: var(--muted-on-tint); padding: 4px 6px 10px;
   display: flex; justify-content: space-between;
   font-variant-numeric: tabular-nums;
+}
+/* ---- R6-B4 · board density (SM-20 / W24) -------------------------------------
+   The board is ONE grid row, so its height is the tallest column's height. With
+   26 cards in Completed and 5 in Not Proceeding, the row measured 4,353px while
+   the columns an adviser actually works (Enquiry→Application) ended around
+   700px: ~3,600px of empty background beside a column only reachable by
+   scrolling sideways, plus a vertical scrollbar promising pipeline that isn't
+   there. Measured document height was 4,650px for ~700px of live work.
+
+   Bounding each column to the viewport and letting it scroll internally fixes
+   the void without hiding or paginating a single card (every card stays in the
+   DOM and stays clickable — the browser scrolls it into view). The column
+   heading sticks so you never lose which stage you are inside.
+
+   Desktop/tablet only: on a phone the page is already one column of stacked
+   content and a nested vertical scroller there fights the page scroll. */
+@media (min-width: 761px) {
+  .col { max-height: calc(100vh - 200px); overflow-y: auto; overscroll-behavior-y: contain; }
+  .col > h4 {
+    /* top:-10px, not 0: sticky offsets are measured from the scrollport's PADDING
+       box, so top:0 parked the heading 10px down and let cards scroll through the
+       gap above it. -10px pins it flush to the column's border box, where the
+       heading's own negative margins already paint the full width. */
+    position: sticky; top: -10px; z-index: 2;
+    background: #edf1f7; margin: -10px -10px 0; padding: 12px 16px 8px;
+  }
 }
 .card {
   background: var(--white);
@@ -421,9 +639,28 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
   transition: box-shadow .15s ease, border-color .15s ease, transform .15s ease;
 }
 .card:hover { border-color: #b7cbe2; box-shadow: var(--shadow-lift); transform: translateY(-1px); }
-.card .cn { font-weight: 600; font-size: 13.5px; color: var(--dark); }
-.card .cd { font-size: 12px; color: var(--muted); margin-top: 3px; }
-.card .flags { margin-top: 7px; display: flex; gap: 4px; flex-wrap: wrap; }
+/* ---- R6-B4 · card hierarchy -------------------------------------------------
+   The audit's headline visual complaint (SM-19, W23, D6-24, f10): on a card the
+   client name, the lender/money line and up to five status badges all read at
+   roughly the same weight, and "the badge block is taller than the information
+   block". Nothing changes about WHAT the card shows; the ranking is made
+   explicit in type instead of being left to chance:
+     1. client name      14.5px / 700   — who
+     2. property chip     12px  / 600   — which building (rule above)
+     3. lender · money    12px  / muted — what
+     4. status badges     10.5px         — state
+   The badges keep their colours and their full text; they are simply the
+   smallest thing on the card rather than the largest block. */
+.card .cn { font-weight: 700; font-size: 14.5px; color: var(--dark); letter-spacing: -0.01em; line-height: 1.3; }
+/* A long client name ("Christopher Featherstonehaugh-Wallace") must ellipsise
+   rather than wrap to three lines and shove the adviser chip out of the card. */
+.card .cn .cn-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card .cd { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.card .flags { margin-top: 7px; display: flex; gap: 4px 4px; flex-wrap: wrap; }
+.card .flags .badge { font-size: 10.5px; padding: 2px 8px; letter-spacing: 0; }
+/* Even a badge cannot widen a 244px column: its text clips at the card's edge
+   rather than being sliced mid-glyph by the column's own overflow (W23). */
+.card .flags .badge { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 /* Time-in-stage aging (SP2b): subtle muted line + coloured left edge only when amber/red.
    Most cards carry no age-* class → no colour, keeping the board quiet. */
 .card .age-line { margin-top: 6px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
@@ -432,8 +669,10 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
 /* Keep the coloured edge on hover (the generic .card:hover recolours all borders). */
 .card.age-amber:hover { border-left-color: #e0a100; }
 .card.age-red:hover { border-left-color: #d64545; }
-.card.age-amber .age-line { color: #a97a00; }
-.card.age-red .age-line { color: #c23b3b; }
+/* R6-B4 — #a97a00 measured 3.84:1 on white, under AA. #8a6400 measures 5.38:1
+   and is the same amber the badges use, so the aging language is one colour. */
+.card.age-amber .age-line { color: #8a6400; }
+.card.age-red .age-line { color: #b8352a; }
 /* Table "In stage" cell colouring — matches the board thresholds. */
 .age-cell { font-variant-numeric: tabular-nums; }
 .age-cell.age-amber { color: #a97a00; font-weight: 600; }
@@ -492,13 +731,34 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
 .seg-btn.active { background: var(--white); color: var(--navy); font-weight: 600; box-shadow: 0 1px 2px rgba(16,24,40,.14); }
 .seg-count {
   font-variant-numeric: tabular-nums; font-size: 11.5px; line-height: 1;
-  background: rgba(16,24,40,.07); color: var(--muted);
+  background: rgba(16,24,40,.07); color: var(--muted-on-tint);
   border-radius: 999px; padding: 3px 7px; min-width: 20px; text-align: center;
 }
 .seg-btn.active .seg-count { background: var(--navy); color: #fff; }
 /* Focused segment: fewer columns fill the width (wider columns, no horizontal scroll) on desktop. */
 .board.is-focused { grid-auto-flow: row; grid-template-columns: repeat(var(--ncols, 3), minmax(0, 1fr)); }
-.col-empty { font-size: 12px; color: var(--muted); text-align: center; padding: 16px 6px; }
+/* R6-B4 — empty states, three problems and one rule each:
+   · contrast: --muted measures 4.20:1 on the column's own #edf1f7, under AA — the
+     copy that says "nothing here" was the least readable copy on the board;
+   · shape: a bare grey sentence floating in a tinted box reads as a failed render,
+     so an empty column gets the recognised dashed-placeholder idiom for "this is
+     a slot with nothing in it";
+   · size: the whole-board fallback was a 48px-padded centred paragraph in a
+     4,000px-tall grid, which is itself a screenful of void (W24). It is now a
+     card of ordinary size, left-aligned like every other panel on the page. */
+.col-empty {
+  font-size: 12px; color: var(--muted-on-tint); text-align: center;
+  padding: 14px 8px; border: 1px dashed #cdd8e6; border-radius: var(--radius-sm);
+  background: rgba(255,255,255,.5);
+}
+.board-empty {
+  grid-column: 1 / -1; max-width: 460px; margin: 2px 0;
+  padding: 20px; text-align: left;
+  color: var(--text); font-size: 13.5px;
+  background: var(--white); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+}
+.board-empty strong { display: block; color: var(--dark); font-size: 15px; margin-bottom: 3px; }
 
 #pipe-table tr { cursor: pointer; }
 #pipe-table tr:hover td { background: #f7fafd; }
@@ -707,7 +967,13 @@ main input:focus, main select:focus, main textarea:focus,
 
 /* ---------- Tables (import preview, reports, pipeline table) ---------- */
 .imp-table { border-collapse: collapse; width: 100%; font-size: 13px; font-variant-numeric: tabular-nums; }
-.imp-table th, .imp-table td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #eef2f6; white-space: nowrap; }
+/* R6-B4 · table density. 8px/10px of padding across the pipeline table's 14
+   columns is ~60px of the overflow SM-21 measured ("the table view cuts four
+   columns off the right edge"). 6px/9px reads no denser to the eye and buys back
+   most of a column; row height drops 34px → 30px, so two more rows fit a screen.
+   Declared HERE rather than in the R6-B4 block at the foot of the file so the
+   mobile override further down (padding: 6px) still wins by source order. */
+.imp-table th, .imp-table td { text-align: left; padding: 6px 9px; border-bottom: 1px solid #eef2f6; white-space: nowrap; }
 .imp-table th {
   color: #5b6b7e; font-size: 11px; font-weight: 700;
   text-transform: uppercase; letter-spacing: .06em;
@@ -746,7 +1012,15 @@ details.imp-conflict .s { color: var(--muted); font-size: 11.5px; }
 .lfav { border-radius: 3px; vertical-align: -3px; margin-right: 5px; }
 
 /* ---------- Diary ---------- */
-.diary-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 10px; }
+/* R6-B4 — `1fr` is shorthand for minmax(AUTO, 1fr), so any day cell whose
+   min-content is wider than a seventh of the row (a long client name, a property
+   chip, a two-line appointment title) forces the WHOLE grid wider than the page.
+   Measured at 1280: the grid reached x1380 with no scroller above it, so with
+   html/body on overflow-x:clip the last day of the week was unreachable, not just
+   cut off. minmax(0, 1fr) lets the cells shrink and their content wrap. */
+.diary-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 10px; }
+.diary-day { min-width: 0; }
+.diary-day .appt { overflow-wrap: anywhere; }
 .diary-day {
   background: var(--white);
   border: 1px solid var(--border);
@@ -771,7 +1045,7 @@ details.imp-conflict .s { color: var(--muted); font-size: 11.5px; }
 .appt.clash:hover { background: #f9d9d5; }
 .clash-tag { color: #c0392b; }
 .diary-day.has-clash { border-color: #c0392b; box-shadow: 0 0 0 1px #c0392b, 0 4px 16px rgba(192,57,43,.12); }
-@media (max-width: 900px) { .diary-grid { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 900px) { .diary-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
 /* BUILD 7d (defect 26) — adviser colour legend, shown only in the "Everyone" diary view. */
 .diary-legend { display: flex; flex-wrap: wrap; gap: 12px; margin: 0 0 10px; font-size: 12px; color: var(--muted); }
 .diary-legend:empty { margin: 0; }
@@ -816,6 +1090,14 @@ details.imp-conflict .s { color: var(--muted); font-size: 11.5px; }
    either view. */
 .appt-block.clash { background: #fdecea; border-left-color: #c0392b; }
 .appt-block.clash:hover { background: #f9d9d5; }
+/* G6B-03 — the property chip inside a diary tile or a day-view block. A month cell is ~150px and a
+   day-view lane can be a third of the column when three appointments overlap, so the chip takes the
+   width it is GIVEN and ellipsises inside it. Without this the 210px .row-prop max-width pushed the
+   chip past the right edge of the last column. */
+.diary-day .appt .prop-chip,
+.appt-block .prop-chip { max-width: 100%; font-size: 11px; padding: 1px 7px 1px 6px; }
+.diary-day .appt .prop-chip .pc-dot,
+.appt-block .prop-chip .pc-dot { width: 7px; height: 7px; }
 
 /* Assignee chip */
 .chip {
@@ -848,21 +1130,35 @@ select.task-reassign { width: auto; padding: 3px 6px; font-size: 12px; }
   to   { opacity: 1; transform: translate(-50%, 0); }
 }
 
-/* ---------- AI assistant ---------- */
+/* ---------- AI assistant ----------
+   R6-B4 — "Ask AI" is DOCKED, not floating. It used to be position:fixed at the
+   viewport's bottom-right corner, a 115×52 pill at z-index 60, and four separate
+   auditors filed it independently (D6-21, W20, SM-21, LR-17). Hit-testing its box
+   returned ["Dismiss", "✦Ask AI"], so a click aimed at Dismiss on the last
+   visible Watchtower alert landed on the assistant instead — a floating control
+   eating a destructive action. It also covered pipeline cards on the board (the
+   client name and chips: exactly the text you were reading), a Reports KPI tile,
+   and card content on a phone. Measured overlaps at the default scroll position:
+   3 interactive elements on Today and 1–3 on Pipeline, at 1280, 1440 and 390.
+
+   A fixed element over a centred 1400px-max content column cannot be positioned
+   out of the way — at 1440px there are 20px of gutter — so the answer is not to
+   shrink it or nudge it but to take it out of the overlay layer entirely. It now
+   sits in the sidebar, above the signed-in-seat footer: always in the same place,
+   never over content at any viewport or scroll position, and matching the rail it
+   lives on. The id, the click handler and the .hidden gating are unchanged. */
 #assistant-fab {
-  position: fixed; right: 20px; bottom: 20px;
-  display: inline-flex; align-items: center; gap: 8px;
-  height: 52px; padding: 0 20px; border-radius: 999px;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  width: 100%; height: 42px; padding: 0 12px; border-radius: 10px;
   background: linear-gradient(135deg, #0e5aa7, var(--navy) 55%, var(--navy-700));
-  color: #fff; font-size: 22px; line-height: 1;
-  border: none; cursor: pointer;
-  box-shadow: 0 6px 20px rgba(0,72,140,.38), 0 2px 6px rgba(16,24,40,.18);
-  z-index: 60;
-  transition: transform .18s ease, box-shadow .18s ease;
+  color: #fff; font-size: 16px; line-height: 1;
+  border: 1px solid rgba(255,255,255,.14); cursor: pointer;
+  box-shadow: 0 2px 8px rgba(4,12,24,.35);
+  transition: filter .18s ease, box-shadow .18s ease;
 }
-#assistant-fab .fab-label { font-size: 14px; font-weight: 600; letter-spacing: -0.01em; }
-#assistant-fab:hover { transform: scale(1.05); box-shadow: 0 10px 28px rgba(0,72,140,.45), 0 2px 8px rgba(16,24,40,.2); }
-#assistant-fab:focus-visible { outline: none; box-shadow: var(--focus-ring), 0 6px 20px rgba(0,72,140,.38); }
+#assistant-fab .fab-label { font-size: 13.5px; font-weight: 600; letter-spacing: -0.01em; }
+#assistant-fab:hover { filter: brightness(1.14); box-shadow: 0 4px 14px rgba(4,12,24,.45); }
+#assistant-fab:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(243,111,35,.55); }
 #assistant-drawer {
   position: fixed; top: 0; right: 0; height: 100vh;
   width: 384px; max-width: 100vw;
@@ -976,16 +1272,27 @@ select.task-reassign { width: auto; padding: 3px 6px; font-size: 12px; }
   }
   /* Scroll affordance: a fade + chevron pinned to the sidebar's right edge, signalling the
      nav tabs (Reports, Data health, Emails, Settings) that sit off-screen to the right. */
+  /* R6-B4 (D6-25) — the chevron overlaid the strip's last visible label, so the nav
+     read "Today | Pipeline | Protection | ›Di": the arrow printed on top of the "D"
+     of Diary, which looks like a rendering fault rather than a scroll hint. The
+     glyph is unchanged; it is simply given a wider, fully opaque backing that
+     reaches solid colour well before the arrow itself, so what you see is a label
+     fading out under an arrow (a scroll affordance) rather than two overlapping
+     glyphs. The fade also starts further left, which is what makes "there is more
+     to the right" read as intentional. */
   .sidebar::after {
     content: "›";
-    position: sticky; right: 0;
+    /* right:-10px, not 0: sticky pins to the PADDING box, so at right:0 the strip
+       kept scrolling visibly through the sidebar's own 10px right padding and a
+       sliver of the next label peeked past the arrow. -10px reaches the border box. */
+    position: sticky; right: -10px;
     align-self: stretch;
     display: flex; align-items: center; justify-content: flex-end;
-    flex: 0 0 34px; width: 34px; margin-left: -34px;
-    padding-right: 4px;
+    flex: 0 0 52px; width: 52px; margin-left: -52px;
+    padding-right: 12px;
     pointer-events: none; z-index: 1;
-    color: rgba(213,226,242,.92); font-size: 20px; font-weight: 700; line-height: 1;
-    background: linear-gradient(90deg, rgba(14,42,71,0), var(--side-bottom) 55%);
+    color: rgba(224,235,248,.98); font-size: 20px; font-weight: 700; line-height: 1;
+    background: linear-gradient(90deg, rgba(14,42,71,0), var(--side-bottom) 46%, var(--side-bottom));
   }
   .sidebar-logo { border-bottom: none; margin-bottom: 0; padding: 0 10px 0 2px; font-size: 17px; }
   .sidenav { flex-direction: row; padding: 0; gap: 2px; }
@@ -1003,9 +1310,9 @@ select.task-reassign { width: auto; padding: 3px 6px; font-size: 12px; }
   /* margin:0 auto (desktop centring) creates auto cross-axis margins in the mobile column
      flex, which disables align-items:stretch and lets <main> size to the board's max-content
      (capped at max-width) — the real cause of the blown-out toolbar/board (M1/M6). Pin it. */
-  /* T1-12 — bottom padding clears the compact mobile FAB's footprint (bottom:88px + its own
-     48px height, defined below), not just its old bottom:18px pill. */
-  main { padding: 16px 12px 148px; margin: 0; width: 100%; max-width: 100%; }
+  /* R6-B4 — no fixed FAB to clear any more (it is docked in the nav strip), so this is
+     ordinary end-of-page breathing room rather than 148px of reserved dead space. */
+  main { padding: 16px 12px 48px; margin: 0; width: 100%; max-width: 100%; }
   .page-head { flex-direction: column; align-items: stretch; gap: 10px; }
   .page-head > div { flex-wrap: wrap; }
   .kpi-row { grid-template-columns: repeat(2, 1fr); gap: 8px; }
@@ -1028,6 +1335,12 @@ select.task-reassign { width: auto; padding: 3px 6px; font-size: 12px; }
   .cs-top { flex-direction: column; }
   .cs-top-actions { width: 100%; flex-direction: column; }
   .cs-logcall-btn, .cs-top-actions .btn-retention { width: 100%; }
+  /* 390px: the chip takes the width it is given and ellipsises inside it — it
+     must never be the thing that widens the modal or a list row. */
+  .prop-chip { max-width: 100%; }
+  .row-prop, .tl-prop, .cl-case-chip, .pipe-col-prop .prop-chip { max-width: 100%; }
+  .case-tag { white-space: normal; }
+  .cs-identity { row-gap: 6px; }
   .diary-grid { grid-template-columns: 1fr; }
   .diary-day { min-height: 0 !important; }
   .diary-day:empty { display: none; }
@@ -1049,12 +1362,12 @@ select.task-reassign { width: auto; padding: 3px 6px; font-size: 12px; }
   .stage-tabs { overflow-x: auto; flex-wrap: nowrap; -webkit-overflow-scrolling: touch; padding-bottom: 4px; }
   .stage-tab { white-space: nowrap; }
   #assistant-drawer { width: 100vw; }
-  /* T1-12 — collapse the FAB to a compact icon on narrow viewports, and raise it well clear of
-     44px of any doorstep-sized row of controls (a row-item's action buttons, the Watchtower
-     Dismiss button) that may naturally land at the foot of a long stacked page. */
+  /* R6-B4 — docked, so nothing to raise clear of any more (T1-12's whole purpose).
+     In the horizontal nav strip it becomes a compact icon-only chip sized like the
+     nav buttons beside it; the label would double the strip's scroll width. */
+  .sidebar-ask { margin-top: 0; padding: 0; flex: 0 0 auto; }
   #assistant-fab {
-    bottom: 88px; right: 16px; width: 48px; height: 48px;
-    padding: 0; justify-content: center; border-radius: 50%; font-size: 20px;
+    width: 40px; height: 40px; padding: 0; border-radius: 10px; font-size: 18px;
   }
   #assistant-fab .fab-label { display: none; }
 }
@@ -1070,6 +1383,46 @@ select.task-reassign { width: auto; padding: 3px 6px; font-size: 12px; }
 .prot-est { font-weight: 700; color: var(--navy); font-variant-numeric: tabular-nums; }
 .prot-status-set { padding: 4px 8px; font-size: 12.5px; max-width: 132px; }
 #prot-list-table .btn-sm { vertical-align: middle; }
+
+/* ---- R6-B4 · the Protection ACTIONS column ---------------------------------
+   The single worst measurement in the whole round-6 audit (W6 critical, P7 high,
+   F10 high, plus W21): five inline controls — Open, Set status…, Set GI…, Task,
+   Email — on ONE line made this cell 429px wide. Consequences, all measured:
+
+     · At 1440px the cell pushed the table's scrollWidth to 1407 against a
+       1158px viewport, so the sticky-right cell painted over the STATUS column
+       on 10 of 14 rows: "NOT DISCUSSED" rendered as "NOT DISCUS" with the pill
+       sliced mid-glyph. The status is the entire point of the page.
+     · At 390px the cell (429px) was WIDER THAN THE PHONE. position:sticky;right:0
+       then pins it across the whole scrollport, and because it comes later in
+       the DOM at the same z-index as the sticky Client cell, it PAINTS ON TOP of
+       the client's name. Measured at scrollLeft 0: Client occupied x86→224,
+       Actions x29→458. So the page opened looking like fourteen anonymous rows
+       of "Open / Set status… / Task / Email" — and setting a protection status
+       is a live compliance write. An adviser could file protection against the
+       wrong property, on the phone screen they are most likely to use.
+
+   The fix is to stop the cell being 429px wide: the controls wrap onto two short
+   lines inside a bounded box. Below 760px the cell also stops being sticky
+   altogether — a sticky column can only work if it is narrower than the
+   scrollport, and this one never can be on a phone — so Client keeps the sticky
+   slot and the identity is on screen at scrollLeft 0, which is where the table
+   loads. Nothing is hidden and no control moves elsewhere. */
+/* The cell stays ONE line: wrapping it turned every row from 30px into 100px and
+   traded a width problem for a worse density problem (5 rows a screen instead of
+   10). It is narrowed instead — the two selects are sized to their own shortened
+   labels rather than to their longest option, which is also what stops them being
+   ellipsised into "Set GI…" (W21's second half) — and, below 1561px, it stops
+   being sticky (see the .stick-col-right block above), which is what actually
+   made it destructive. 429px → ~300px, on one line. */
+#prot-list-table .prot-actions { white-space: nowrap; }
+#prot-list-table .prot-actions > * { vertical-align: middle; }
+.prot-status-set { width: 96px; max-width: 96px; }
+.prot-status-set.prot-gi-set { width: 74px; max-width: 74px; }
+@media (max-width: 1560px) {
+  /* The row index is decoration; it is the first thing to go when width is scarce. */
+  #prot-list-table .prot-col-n { display: none; }
+}
 @media (max-width: 760px) {
   .prot-table-wrap { -webkit-overflow-scrolling: touch; }
   #page-protection .page-tools select { flex: 1; }
@@ -1084,6 +1437,23 @@ select.task-reassign { width: auto; padding: 3px 6px; font-size: 12px; }
 .imp-table .stick-col-right { position: sticky; right: 0; z-index: 1; background: var(--white); box-shadow: -2px 0 4px rgba(16,24,40,.06); }
 .imp-table th.stick-col-right { background: var(--light); z-index: 2; }
 .imp-table tr:hover td.stick-col-right { background: #f8fafc; }
+/* R6-B4 — A STICKY COLUMN IS ONLY LEGITIMATE IF IT IS NARROW RELATIVE TO THE
+   SCROLLPORT. `right: 0` pins the Actions column across whatever the scrollport
+   shows, so on any viewport where the table overflows it is painted over the
+   columns it is pinned in front of — measured, that was the STATUS pill on 10 of
+   14 rows at 1440 (W21), the STATUS and ADVISER headers at 1280, and the whole
+   CLIENT column on a phone (W6 critical / P7 / F10). Narrowing the cell (see the
+   .prot-actions block above) makes the table fit outright at ≥1561px, so above
+   that width sticky is a harmless no-op. Below it, the cell stops being sticky
+   and scrolls with its row: the identifying CLIENT column keeps the one sticky
+   slot, because the row's identity is what must never leave the screen. Nothing
+   is hidden; Open / Set status / Task / Email are one horizontal scroll away and
+   the scroll affordance above the table says so. */
+@media (max-width: 1560px) {
+  #prot-list-table .stick-col-right { position: static; box-shadow: none; }
+  #prot-list-table td.stick-col { z-index: 3; }
+  #prot-list-table th.stick-col { z-index: 4; }
+}
 /* Below 1500px, fold the low-value LOAN / EST. £ columns into the Client cell on Protection,
    and drop the Updated column from the pipeline table — both stay reachable by opening the row. */
 /* white-space:normal (overriding the table's default nowrap) so this wraps onto its own line
@@ -1094,29 +1464,54 @@ select.task-reassign { width: auto; padding: 3px 6px; font-size: 12px; }
   .prot-fold-info { display: block; }
   .pipe-col-updated { display: none; }
 }
+/* R6-B4 — the sticky Client cell is the one cell whose width is load-bearing for
+   every other column, so it is bounded and its name ellipsises. A double-barrelled
+   name used to widen the cell and push the columns to its right further off the
+   screen — the identity column making the identity harder to see. */
+.imp-table td.stick-col, .imp-table th.stick-col { max-width: 210px; overflow: hidden; text-overflow: ellipsis; }
 
 /* ---------- Quick-win UX polish ---------- */
 /* Board horizontal-scroll affordance (QW16): edge fade + arrow shown only when later stages are hidden. */
-.board-scroll-wrap { position: relative; }
+/* R6-B4 (W20) — "the circular › affordance is absolutely positioned OVER the
+   clipped card rather than beside it… the overlay lands exactly on the
+   information you were trying to read." It was worse than cosmetic. On the board
+   it sat on a .card, whose entire box opens a case; on the table views it sat on
+   a <tr>, ditto, and measured at 1280 it sat on a row's Task button. So a click
+   aimed at a case either opened a DIFFERENT case or scrolled the board — the
+   exact class of wrong-row error this round exists to remove.
+   Anywhere inside the scrollport the arrow will sit on something, so the wrap now
+   reserves 38px above the scroller and the arrow lives there: beside the content,
+   as the auditor asked, and over nothing. The edge fade stays — it is the passive
+   "there is more to the right" cue — and starts below the reserved strip. */
+.board-scroll-wrap { position: relative; padding-top: 38px; }
 .board-scroll-wrap::after {
-  content: ""; position: absolute; top: 0; right: 0; bottom: 16px; width: 52px;
+  content: ""; position: absolute; top: 38px; right: 0; bottom: 16px; width: 64px;
   pointer-events: none; opacity: 0; transition: opacity .2s ease;
-  background: linear-gradient(90deg, rgba(246,248,251,0), var(--canvas) 85%);
+  background: linear-gradient(90deg, rgba(246,248,251,0), var(--canvas) 62%, var(--canvas));
+  border-radius: 0 var(--radius) var(--radius) 0;
 }
 .board-scroll-wrap.can-scroll-right::after { opacity: 1; }
+/* A table scroller sits inside a white panel, so its gutter fades to white. */
+.board-scroll-wrap--table::after {
+  bottom: 0;
+  background: linear-gradient(90deg, rgba(255,255,255,0), var(--white) 62%, var(--white));
+}
 .board-scroll-arrow {
-  /* T1-12 — z-index above #assistant-fab's 60 so it's never the dead control underneath the FAB
-     at any viewport height, and nudged to 34% (rather than 38%) so it clears the FAB's footprint
-     at the taller desktop viewports where the two coincide. */
-  position: absolute; top: 34%; right: 6px; transform: translateY(-50%);
-  width: 34px; height: 34px; border-radius: 50%;
+  /* z-index 12: enough to beat the sticky table columns it sits beside (1–4), and
+     deliberately BELOW the modal backdrop's 50. It used to be 70 — set to clear the
+     old floating Ask-AI FAB's 60 — which meant the page's scroll chevron painted on
+     top of any open case or client modal, visible as a stray "›" floating over the
+     modal's own content. The FAB is docked now, so the only thing this has to beat
+     is a sticky column. */
+  position: absolute; top: 2px; right: 6px; z-index: 12;
+  width: 32px; height: 32px; border-radius: 50%;
   border: 1px solid var(--border-strong); background: var(--white); color: var(--navy);
-  font-size: 20px; font-weight: 700; line-height: 1; cursor: pointer;
-  box-shadow: var(--shadow-lift); z-index: 70;
+  font-size: 19px; font-weight: 700; line-height: 1; cursor: pointer;
+  box-shadow: var(--shadow-card);
   opacity: 0; pointer-events: none; transition: opacity .2s ease, transform .15s ease;
 }
 .board-scroll-wrap.can-scroll-right .board-scroll-arrow { opacity: 1; pointer-events: auto; }
-.board-scroll-arrow:hover { transform: translateY(-50%) scale(1.08); color: var(--navy-600); }
+.board-scroll-arrow:hover { transform: scale(1.08); color: var(--navy-600); }
 
 /* In-case task due-date preset chips (QW10). */
 .due-chips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: -2px 0 10px; }
@@ -1127,6 +1522,11 @@ select.task-reassign { width: auto; padding: 3px 6px; font-size: 12px; }
 .case-summary { background: var(--light); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; margin-bottom: 16px; }
 .cs-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .cs-name { font-size: 17px; font-weight: 700; color: var(--dark); letter-spacing: -0.01em; }
+/* R6 — the case identity line: property · type · lender · stage, directly under
+   the client name. Wraps rather than clips; the property chip ellipsises. */
+.cs-identity { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; margin-top: 6px; min-width: 0; }
+.cs-identity .cs-kind { font-size: 13px; font-weight: 600; color: var(--text); }
+.cs-identity .cs-lender { display: inline-flex; align-items: center; font-size: 13px; color: var(--muted); }
 .cs-contact { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; color: var(--muted); margin-top: 3px; }
 .cs-logcall-btn { flex: 0 0 auto; min-height: 44px; }
 /* R5-6 — "Start retention case" sits beside Log call in the case header, and on Rate & ERC rows. */
@@ -1441,3 +1841,181 @@ th .money-basis {
    everything on the page, so it sits above everything and reads as a caution rather than an error:
    nothing has gone wrong, the book is simply bigger than one page of it. */
 #report-cap-notice { background: var(--amber-bg, #fdf6e3); border-color: #e8d9a8; color: var(--dark); }
+
+/* =========================================================================
+   R6 BATCH 3 — property-aware flows: import verdicts, shared addresses
+   ========================================================================= */
+
+/* R6-33 — the recovered property column in the import preview. Wide enough to
+   read a real UK address without pushing the twelve other columns off the
+   right edge, and wrapping rather than ellipsising because the operator may be
+   editing it (a truncated contenteditable is a trap). */
+.imp-table .imp-prop-cell {
+  min-width: 190px; max-width: 280px;
+  white-space: normal; word-break: break-word;
+}
+/* R6-34 — the case-level verdict under the person-level Match badge. It is a
+   second sentence about the same row, so it sits under the badge with a hair
+   of space and never competes with it for the eye. */
+.imp-prop-verdict { margin-top: 4px; display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.imp-prop-verdict .s { color: var(--muted); font-size: 11.5px; }
+
+/* R6-38 — Data health's shared-address groups. Each address is one block, so
+   the grouping is visible without reading the table: the address heading owns
+   the block and the cases hang beneath it. */
+.dh-sharedprop { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+.dh-sharedprop:first-of-type { border-top: 0; padding-top: 0; }
+.dh-sharedprop-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 6px; }
+.dh-sharedprop-head .s { color: var(--muted); font-size: 12px; }
+.dh-sharedprop .imp-table th { color: var(--muted); font-weight: 600; }
+
+/* =========================================================================
+   R6 BATCH 4 — VISUAL ROBUSTNESS HARDENING
+   Everything above is the app's design language; nothing below changes it.
+   These are the concrete, measured gripes from the round-6 visual audit:
+   things that overlapped, things that clipped, colours that said two
+   different things, and hierarchy that left the eye with nowhere to land.
+   ========================================================================= */
+
+/* ---- The pipeline board's legend (index.html #board-legend) --------------
+   Deliberately quiet: it explains furniture, so it must never compete with
+   the cards. One line on desktop, wrapping on a phone. */
+.board-legend {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px;
+  margin: -6px 0 12px; font-size: 11.5px; color: var(--muted);
+}
+.board-legend .bl-item { display: inline-flex; align-items: center; gap: 6px; }
+.board-legend .bl-edge {
+  display: inline-block; width: 3px; height: 14px; border-radius: 3px; flex: 0 0 auto;
+}
+.board-legend .bl-edge-amber { background: #e0a100; }
+.board-legend .bl-edge-red { background: #d64545; }
+.board-legend .bl-approx {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 18px; height: 16px; padding: 0 4px; flex: 0 0 auto;
+  border: 1px dashed #9dbbe0; border-radius: 999px;
+  background: var(--blue-bg); color: var(--navy); font-weight: 700; font-size: 10px;
+}
+/* Table view has no accent bars and no card left-edge, so app.js hides the legend
+   with #board-hint whenever the board itself is hidden. */
+
+/* ---- Long-name truncation, everywhere a name is rendered -----------------
+   D6-24 / LR-20 / SM-21 all reduce to the same missing rule: a container that
+   scrolls or clips (a 244px board column, a sticky table cell, a 390px modal)
+   needs its text told what to do when it does not fit. Ellipsis, plus the full
+   value in a title attribute set by app.js, so nothing becomes unreadable. */
+.row-main .t, .row-main .s { min-width: 0; overflow-wrap: anywhere; }
+.cs-name { min-width: 0; overflow-wrap: anywhere; }
+/* The client-record property group heading and the case-modal identity line are
+   the two places that carry a FULL address rather than a shortened label. */
+.cprop-hd, .cs-identity { max-width: 100%; }
+
+/* ---- KPI tiles: one accent language, one height per row (D6-23) ----------
+   Four tile heights on one Reports page, because a label that wraps to two
+   lines makes its tile taller than its neighbours, and grid rows size
+   independently. `grid-auto-rows: 1fr` makes every tile in a grid the same
+   height — which is also what stops the tiles from looking like four different
+   components. And the accent bars came in five tints (navy at 1, .7, .45 and
+   .22, plus orange at .8) with no legible meaning; they are now exactly three
+   steps with a stated meaning: headline, ordinary, and status. */
+.kpi-row { grid-auto-rows: 1fr; }
+.kpi { display: flex; flex-direction: column; }
+/* The label sits on the tile's floor, so numbers line up across a row even when
+   one label wraps and its neighbour does not. */
+.kpi .lbl { margin-top: auto; padding-top: 4px; }
+.kpi.kpi-secondary::before { opacity: .45; }   /* was .22 — a fourth tint */
+#report-mine .kpi::before { opacity: .45; }    /* was .7  — a fifth tint  */
+
+/* ---- Reports: one divider language (D6-23) -------------------------------
+   Two dividers doing the same job — "the panels below are scoped differently" —
+   in two visual languages: one grey dashed all-caps, one ORANGE dashed all-caps.
+   Orange is this app's accent/warning colour, so the month divider read as a
+   warning banner about the data below it. Both are now the same neutral rule;
+   they already say which is which in words, which is the honest way to do it. */
+.report-month-note { color: var(--muted); border-top-color: var(--border-strong); }
+/* The month-scoped group keeps a cue, in the one channel that carries no alarm:
+   a navy tick at the start of the line rather than a full orange rule. */
+.report-month-note::before {
+  content: ""; display: inline-block; vertical-align: middle;
+  width: 3px; height: 11px; margin-right: 7px; border-radius: 2px;
+  background: var(--navy); opacity: .55;
+}
+
+/* ---- Reports: the funnel/lead-sources void (D6-23) ----------------------
+   .grid-2 is align-items:start, so a short panel beside a tall one leaves a
+   rectangle of empty page — measured 283px beside 388px, and 473px beside 294px.
+   Scoped to Reports because the dashboard's .grid-2 holds fixed-height cards. */
+#page-reports .grid-2 { align-items: stretch; }
+#page-reports .grid-2 > .panel { display: flex; flex-direction: column; }
+#page-reports .grid-2 > .panel > .dash-scroll,
+#page-reports .grid-2 > .panel > table:last-child { flex: 1 1 auto; }
+
+/* ---- The only underlined links in the app (D6-23) -----------------------
+   Every other clickable in the app is unstyled or a button; .linkish (report
+   table cells that navigate) was navy AND underlined, so lead-source names read
+   as web links from a different decade. Underline on hover, like .contact-link
+   — the app's existing convention for "this text is clickable". */
+.linkish { text-decoration: none; }
+.linkish:hover, .linkish:focus-visible { text-decoration: underline; }
+
+/* ---- The fee target bar (D6-23) ------------------------------------------
+   At 122% of target the fill was the full width of its track, so the track was
+   invisible and the bar conveyed no overshoot — a solid green slab. The bar now
+   scales to max(pct, 100), so at 122% the fill stops at 82% of the track and the
+   remaining 18% shows what overshoot looks like, with a marker where target was.
+   Moved out of inline styles in app.js and into classes at the same time. */
+.fee-bar {
+  position: relative; height: 16px; border-radius: 5px;
+  background: var(--light); border: 1px solid var(--border);
+  overflow: hidden;
+}
+.fee-bar-fill { height: 100%; border-radius: 4px 0 0 4px; transition: width .3s ease; }
+.fee-bar-mark {
+  position: absolute; top: -1px; bottom: -1px; width: 2px;
+  background: var(--dark); opacity: .55;
+}
+.fee-bar-mark-lbl { font-size: 11px; color: var(--muted); margin-top: 3px; display: block; }
+
+/* ---- Watchtower: severity you can see before you read (D6-22 / LR-17) ----
+   14 consecutive CRITICAL rows at identical type weight, identical row height
+   and identical layout, with the severity pill last in the reading order — so
+   severity read last and the whole block scanned as one texture. A left accent
+   in the severity's own colour gives the block internal shape without changing
+   a single row's content or its buttons, and consecutive rows of one severity
+   now read as a group rather than as noise. */
+.wt-row { position: relative; padding-left: 12px; }
+.wt-row::before {
+  content: ""; position: absolute; left: 0; top: 6px; bottom: 6px;
+  width: 3px; border-radius: 3px; background: var(--border);
+}
+.wt-row.wt-critical::before { background: var(--red); }
+.wt-row.wt-warning::before { background: #cf9b1c; }
+.wt-row.wt-fyi::before { background: #9db3cc; }
+.wt-row.wt-critical { background: rgba(192,57,43,.035); }
+.wt-row.wt-warning { background: rgba(154,107,0,.035); }
+/* ISO dates inside prose wrapped mid-token on a 390px viewport ("2028-" / "07-22"),
+   which looks like corrupted data. A date is one word: it breaks or it does not. */
+.wt-row .s, .row-main .s { overflow-wrap: break-word; }
+.nowrap-date { white-space: nowrap; }
+
+/* ---- 390px hardening ---------------------------------------------------- */
+@media (max-width: 760px) {
+  .board-legend { gap: 4px 14px; margin: -4px 0 10px; }
+  /* A card is a third of the phone's height mostly because of an always-visible
+     stage <select> (SM-22). It stays visible — it is the only way to move a case
+     without drag — but it is a compact control rather than a full-width block. */
+  .card .flags .badge { font-size: 10.5px; }
+  .kpi .lbl { margin-top: auto; }
+  /* An empty diary/board slot should not claim a whole screen on a phone. */
+  .board-empty { max-width: 100%; padding: 16px; }
+}
+
+/* ---- Wide tables that had no way out (R6-B4) ------------------------------
+   html/body carry overflow-x:clip (M1, so a wide board cannot blow out the
+   mobile layout viewport). The side effect is that a table wider than its panel
+   is not merely cut off — it is UNREACHABLE, with no scrollbar and no gesture,
+   because the clip happens above it. Measured on Data health: the duplicate-
+   clients table reached x1300 in a 1280px viewport and x1011 in a 390px one,
+   inside a plain .panel with no scroller anywhere in its ancestry. The pipeline
+   and protection tables already scroll (T1-13); these never did. */
+#page-data .panel, #page-reports .panel { overflow-x: auto; }
