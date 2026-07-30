@@ -253,6 +253,16 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
 }
 .panel-sub { font-size: 13px; color: var(--muted); margin-bottom: 12px; }
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
+/* R6-FIX V3 — `1fr` is not "half the width": a grid track's default minimum is
+   min-content, so a panel whose widest row cannot shrink pushes the track past
+   its share and the whole grid past the viewport. At 1280 the Rate & ERC panel
+   measured 1359px — 79px off-screen, with a quarter of every "Start retention
+   case" button sliced off and body overflow-x:clip meaning no scrollbar could
+   reach it. The property chip was only the last straw; the track has been
+   fragile since it was written. `min-width: 0` lets the track shrink and hands
+   the shrinking to the things that know how to do it (the chip ellipsises, the
+   text wraps, tables keep their own horizontal scroller). */
+.grid-2 > * { min-width: 0; }
 @media (max-width: 900px) { .grid-2 { grid-template-columns: 1fr; } }
 
 /* Panel count chips + slim empty panels */
@@ -391,6 +401,18 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
   font-size: 13.5px;
   transition: background .12s ease;
 }
+/* R6-FIX V3 — the other half of the 1280 overflow. A dashboard row is a text
+   block plus a stack of badges plus an action, and only the text block can
+   shrink: three badges and "🔁 Start retention case" need 440px whatever the
+   panel is. Unwrapped, that surplus went somewhere invisible — first by
+   stretching the grid track past the viewport (1359px at 1280), then, once the
+   track was capped, by pushing the button out of the panel. Wrapping is the
+   only honest answer: when it fits, nothing moves; when it doesn't, the actions
+   drop to a second line inside the row and stay clickable. The 220px basis
+   stops the text block being squeezed to zero width — it was rendering the
+   client's name and property chip at 0px rather than wrapping. */
+.row-item { flex-wrap: wrap; row-gap: 6px; }
+.row-item > .row-main { flex: 1 1 220px; }
 .row-item:hover { background: #f8fafc; }
 .row-item:last-child { border-bottom: none; }
 .row-main { flex: 1; min-width: 0; }
@@ -453,39 +475,44 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
    One pill for "which building is this?", used wherever a case is named.
    The dot's hue is a deterministic function of the normalised address
    (app.js propHue), so the same property is the same colour on every screen
-   and in every session. Sixteen hues, spanning cyan → blue → indigo → violet →
-   magenta: deliberately NO red, green or amber anywhere in the ramp, because
-   in this app those three already mean overdue / done / warning, and a colour
-   that reads as status on an identity chip is worse than no colour at all.
-   Every one clears 4.5:1 against the white/--light chip surface.
+   and in every session.
 
-   G6-08 — this ramp was ten colours ordered straight along the arc, which did
-   two things wrong at 8px. Ten buckets collided inside a single client's list
-   (two of one landlord's five buy-to-lets came out the same colour, rendered as
-   adjacent group headings), and a 12-18° step between neighbouring indices was
-   not separable on a dot that small. So: sixteen swatches, ~10° apart on the
-   arc but ASSIGNED with a stride of 7 so consecutive indices land 71-92° apart,
-   and alternating between a dark tier (S70, contrast ≈ 6.6) and a light tier
-   (S56, contrast ≈ 4.9) so neighbouring indices differ in lightness as well as
-   hue. Sixteen is not infinity — a mod-N hash cannot promise global uniqueness
-   and the colour is a hint, never the identity; the label is the identity. */
+   R6-FIX V2 — the ramp is re-cut, and the reason the last two cuts failed is
+   worth stating: both were chosen by ARC DISTANCE, and arc distance is not
+   perceptual distance. Sixteen hues 182°-334° (cyan → blue → violet → magenta)
+   held nine pairs under ΔE 15, i.e. indistinguishable at 8px, and the flagship
+   fixture landed on two of them — Ruby Sinclair's five addresses read as one
+   colour in her own client record.
+   So this ramp is SEARCHED, not stepped: candidates over the whole wheel
+   (h × s × l), filtered for ≥4.5:1 against the white chip surface, then chosen
+   by farthest-point sampling in CIELAB with a hard ≥15° hue-spread floor and a
+   local-improvement pass. Result: smallest pair ΔE 31.5 (was 12.8), ten
+   smallest 31.5-35.6, hues spread 0°-345°.
+   What is deliberately NOT in it: PURE red and PURE green at any lightness,
+   because in this app those two already mean overdue and done, and a colour
+   that reads as status on an identity chip is worse than no colour at all. A
+   burgundy, an orange, an amber, an olive and a teal are none of those things
+   and are in — that restriction is what boxed the old ramp into one quadrant.
+   Sixteen is still not infinity: a mod-N hash cannot promise global uniqueness,
+   which is why the dot also carries the per-client property INDEX (.pc-dot-n)
+   and the label remains the identity. */
 :root {
-  --pc-0:  hsl(182,   70%, 24.5%);
-  --pc-1:  hsl(252.9, 56%, 59.5%);
-  --pc-2:  hsl(323.9, 70%, 39.5%);
-  --pc-3:  hsl(232.7, 56%, 58.5%);
-  --pc-4:  hsl(303.6, 70%, 37%);
-  --pc-5:  hsl(212.4, 56%, 47%);
-  --pc-6:  hsl(283.3, 70%, 43.5%);
-  --pc-7:  hsl(192.1, 56%, 36%);
-  --pc-8:  hsl(263.1, 70%, 52.5%);
-  --pc-9:  hsl(334,   56%, 50.5%);
-  --pc-10: hsl(242.8, 70%, 56.5%);
-  --pc-11: hsl(313.7, 56%, 48.5%);
-  --pc-12: hsl(222.5, 70%, 46%);
-  --pc-13: hsl(293.5, 56%, 49%);
-  --pc-14: hsl(202.3, 70%, 32.5%);
-  --pc-15: hsl(273.2, 56%, 55.5%);
+  --pc-0:  hsl(0,   45%, 22%);   /* burgundy    · ΔE-min 32 · 13.4:1 */
+  --pc-1:  hsl(15,  90%, 40%);   /* vermilion   · ΔE-min 46 ·  5.4:1 */
+  --pc-2:  hsl(39,  65%, 34%);   /* amber-brown · ΔE-min 33 ·  5.0:1 */
+  --pc-3:  hsl(78,  45%, 22%);   /* olive       · ΔE-min 32 ·  8.6:1 */
+  --pc-4:  hsl(93,  78%, 28%);   /* moss        · ΔE-min 35 ·  4.9:1 */
+  --pc-5:  hsl(162, 78%, 28%);   /* teal-green  · ΔE-min 32 ·  5.0:1 */
+  --pc-6:  hsl(189, 90%, 28%);   /* teal        · ΔE-min 34 ·  5.4:1 */
+  --pc-7:  hsl(210, 78%, 46%);   /* blue        · ΔE-min 41 ·  4.7:1 */
+  --pc-8:  hsl(225, 45%, 22%);   /* navy        · ΔE-min 38 · 13.8:1 */
+  --pc-9:  hsl(240, 90%, 52%);   /* indigo      · ΔE-min 45 ·  8.6:1 */
+  --pc-10: hsl(255, 78%, 64%);   /* periwinkle  · ΔE-min 36 ·  4.5:1 */
+  --pc-11: hsl(276, 65%, 28%);   /* aubergine   · ΔE-min 33 · 12.0:1 */
+  --pc-12: hsl(297, 78%, 46%);   /* purple      · ΔE-min 32 ·  4.6:1 */
+  --pc-13: hsl(312, 55%, 46%);   /* orchid      · ΔE-min 32 ·  5.3:1 */
+  --pc-14: hsl(330, 90%, 46%);   /* magenta     · ΔE-min 32 ·  4.7:1 */
+  --pc-15: hsl(345, 45%, 46%);   /* dusty rose  · ΔE-min 32 ·  5.8:1 */
 }
 .prop-chip {
   display: inline-flex; align-items: center; gap: 6px; vertical-align: middle;
@@ -521,6 +548,25 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
 .prop-chip.pc-h13 .pc-dot { background: var(--pc-13); }
 .prop-chip.pc-h14 .pc-dot { background: var(--pc-14); }
 .prop-chip.pc-h15 .pc-dot { background: var(--pc-15); }
+/* R6-FIX V2 — the dot with a number in it: property 1..n of THIS client, in the
+   order the firm first opened a case on each (app.js propIndexOf). A hash of
+   any width collides; an index inside one client's book cannot, so this is what
+   guarantees two of a landlord's five buildings are still told apart when the
+   hue lands on the same bucket. Only rendered where the client is known and has
+   more than one property, so the ordinary single-property case keeps the plain
+   8px dot and nothing gains a "1" that distinguishes it from nothing.
+   Sized to hold two digits; every ramp colour clears 4.5:1 against white, which
+   is what makes the numeral legible at 9px. */
+.prop-chip .pc-dot-n {
+  width: auto; min-width: 14px; height: 14px; padding: 0 2px;
+  border-radius: 999px; flex: 0 0 auto;
+  color: var(--white); font-size: 9px; font-weight: 700; line-height: 14px;
+  text-align: center; font-variant-numeric: tabular-nums;
+}
+.prop-chip .pc-dot-n::after { content: attr(data-n); }
+/* The per-context sizes for this variant are NOT here — see the end of this
+   file (R6-FIX G63B-01). They have to come after every per-context `.pc-dot`
+   rule, and those are spread through the surface sections below. */
 /* No address on the case: a hollow dot and the old kind · lender wording, so
    the gap is visible as a gap rather than dressed up as an identity. */
 .prop-chip-none { color: var(--muted); border-style: dashed; font-weight: 600; }
@@ -586,6 +632,11 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
 .cl-case-chip .pc-dot { width: 7px; height: 7px; }
 /* Appointment modal — "About: <chip> type · lender · stage" under the title. */
 .appt-case-line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+/* R6FIX-1 (R6B-02) — .hidden wins over the flex above, so an empty About line collapses rather
+   than leaving a gap where a property used to be. */
+.appt-case-line.hidden { display: none !important; }
+/* The Case field's one-line explanation, under the select. */
+.appt-case-note { display: block; font-size: 11.5px; font-weight: 400; color: var(--muted); margin-top: 4px; }
 
 /* Case form · property address (R6). A one-line textarea rather than an input:
    a full UK address is long, and wrapping beats a box that scrolls sideways. */
@@ -897,6 +948,11 @@ main input:focus, main select:focus, main textarea:focus,
 .tl-add { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
 .tl-add > input { flex: 1 1 auto; min-width: 0; }
 .tl-case-sel { width: auto; max-width: 42%; flex: 0 1 auto; }
+/* R6FIX-1 (R6B-01 / F1) — the composer's target when nothing has been chosen yet. It is not an
+   error (the operator has done nothing wrong), it is an unanswered question, so it reads as a
+   prompt: the same orange every other "this needs you" marker uses, never red. */
+.tl-case-unset { border-color: var(--orange); box-shadow: 0 0 0 2px rgba(243, 111, 35, .15); }
+.tl-case-hint { font-size: 11.5px; color: var(--muted); margin: 5px 0 0; }
 .tl-filters { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 10px; }
 
 .tl-list { margin-top: 8px; max-height: 46vh; overflow-y: auto; }
@@ -1096,6 +1152,51 @@ details.imp-conflict .s { color: var(--muted); font-size: 11.5px; }
    chip past the right edge of the last column. */
 .diary-day .appt .prop-chip,
 .appt-block .prop-chip { max-width: 100%; font-size: 11px; padding: 1px 7px 1px 6px; }
+/* R6FIX-1 (R6B-03) — …but "ellipsise inside it" was the wrong trade HERE. A month cell gives the
+   chip about 88px and the labels need 113–177px, so every chip in the grid was cut — and because
+   the outcode is the LAST component of propLabel it is the first thing dropped, i.e. the one
+   component whose whole job is to disambiguate. Two of Gareth Pollard's houses, "148 Ashley Rd ·
+   BH14" and "148 Ashley Rd · BH1", both rendered "148 Ashley …": identical text, different
+   buildings, eight pixels of dot between them.
+   A diary tile has vertical room and no horizontal room, so the label WRAPS here instead of
+   clipping. Nothing else about the chip changes — same hue, same label, same full address in the
+   title — it just gets as many lines as it needs, and the outcode always survives. The pill's
+   999px radius is relaxed to a tag radius once it is more than one line high, because a stretched
+   lozenge reads as a mistake. */
+.diary-day .appt .prop-chip,
+.appt-block .prop-chip { align-items: flex-start; border-radius: 9px; }
+/* Every pixel of chrome here is a pixel the label does not get, and in a 7-column month grid on a
+   1280 laptop the label has about 65 of them: trimming the padding and the dot gap is what keeps a
+   street name ("Marlborough") on one line instead of split across two. */
+.diary-day .appt .prop-chip,
+.appt-block .prop-chip { padding: 1px 5px 1px 4px; gap: 4px; }
+.diary-day .appt .prop-chip .pc-txt,
+.appt-block .prop-chip .pc-txt {
+  white-space: normal; overflow: visible; text-overflow: clip;
+  /* `break-word`, deliberately not `anywhere`: `anywhere` also shrinks the element's min-content
+     width, which makes the browser break inside words it did not need to ("Remortga / ge",
+     "Marlborou / gh Ct") even when the line had room. `break-word` only splits a word that cannot
+     fit on a line of its own — so a street name stays a street name. */
+  overflow-wrap: break-word; word-break: normal; line-height: 1.35;
+}
+.diary-day .appt .prop-chip .pc-dot,
+.appt-block .prop-chip .pc-dot { margin-top: 3px; }
+/* R6FIX-1 (R6B-03) — the one-line variant, for a day-view block too short to stack (a 15- or
+   30-minute appointment; see renderDiaryDay). The title takes only the space left over
+   (flex-basis 0) and ellipsises; the chip is laid out at its natural width first, so the property
+   survives where the appointment's own name does not. */
+.appt-block-compact { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.appt-block-compact .at { flex: 0 0 auto; }
+.appt-block-compact .ab-title { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.appt-block-compact .prop-chip { flex: 0 0 auto; max-width: 72%; align-items: center; }
+.appt-block-compact .prop-chip .pc-txt { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.appt-block-compact .prop-chip .pc-dot { margin-top: 0; }
+/* Same argument for the tail that FOLLOWS the chip on a row where the address alone cannot
+   separate two cases (Ruby's DIP and remortgage on 8 Grand Avenue, Duncan's pair on 4 Seafield
+   Gardens). There it is the type and the stage doing the disambiguating, so "Remortgage · …" —
+   which is what 88px produced — clips away the only distinguishing word. It wraps here too. */
+.diary-day .appt .case-tag,
+.appt-block .case-tag { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
 .diary-day .appt .prop-chip .pc-dot,
 .appt-block .prop-chip .pc-dot { width: 7px; height: 7px; }
 
@@ -1464,6 +1565,14 @@ select.task-reassign { width: auto; padding: 3px 6px; font-size: 12px; }
   .prot-fold-info { display: block; }
   .pipe-col-updated { display: none; }
 }
+/* R6-FIX OP-02/V1 — the property on a Protection & GI row. It sits on its own line
+   under the stage/type/lender string rather than beside it, because that string is
+   still what says which PRODUCT the opportunity is, and this table's cells are
+   already the tightest in the app. The chip clips to the column like every other
+   in-table chip. */
+.prot-case-prop { margin-top: 3px; }
+.prot-case-prop .prop-chip { max-width: 210px; }
+.prot-col-case { white-space: normal; }
 /* R6-B4 — the sticky Client cell is the one cell whose width is load-bearing for
    every other column, so it is bounded and its name ellipsises. A double-barrelled
    name used to widen the cell and push the columns to its right further off the
@@ -1996,6 +2105,15 @@ th .money-basis {
 /* ISO dates inside prose wrapped mid-token on a 390px viewport ("2028-" / "07-22"),
    which looks like corrupted data. A date is one word: it breaks or it does not. */
 .wt-row .s, .row-main .s { overflow-wrap: break-word; }
+/* R6-FIX V11/R6B-11 — the alert's property + date line. Its own row under the
+   detail sentence, so the chip never has to share a line it cannot break out
+   of, and every alert has the same two-line shape whether or not its case has
+   an address. */
+.wt-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 3px; }
+.wt-meta .wt-when { color: var(--muted); font-variant-numeric: tabular-nums; }
+/* …and it reads as a continuation of the sentence above it, not as a heading
+   under it: the 600-weight tag was the other half of R6B-11's complaint. */
+.wt-meta .case-tag { font-weight: 500; }
 .nowrap-date { white-space: nowrap; }
 
 /* ---- 390px hardening ---------------------------------------------------- */
@@ -2019,3 +2137,33 @@ th .money-basis {
    inside a plain .panel with no scroller anywhere in its ancestry. The pipeline
    and protection tables already scroll (T1-13); these never did. */
 #page-data .panel, #page-reports .panel { overflow-x: auto; }
+
+/* ---- R6-FIX G63B-01 · the numbered property dot, at the END on purpose -----
+   V2's answer to a hue collision is the digit inside the dot, and the digit was
+   unreadable everywhere it mattered. The sizes below used to sit next to the
+   base .pc-dot-n rule (~line 560), ABOVE the per-surface `.pc-dot { width:7px;
+   height:7px }` rules for list rows (592), board cards (614), the timeline
+   (622), the client record (638) and the diary (1207). A numbered dot carries
+   BOTH classes, so those later rules matched it too and — at equal or higher
+   specificity, and later in the file — won on height only: the dot measured
+   13px wide by 7px HIGH with a 9px numeral in a 13px line box inside a chip
+   with overflow:hidden, i.e. a digit sliced top and bottom into a smear. Only
+   the client-record group heading (no size class at all) rendered correctly.
+   Two changes, either of which would be enough, kept together because this
+   regressed once already: the block now sits after every .pc-dot rule in the
+   file, and each selector is qualified so it also OUT-SPECIFIES them.
+   Regression-tested in tests/r6fix3.js by measuring getBoundingClientRect(). */
+.prop-chip.row-prop .pc-dot.pc-dot-n,
+.card .prop-chip.pc-card .pc-dot.pc-dot-n,
+.prop-chip.tl-prop .pc-dot.pc-dot-n,
+.prop-chip.cl-case-chip .pc-dot.pc-dot-n,
+.pipe-col-prop .prop-chip .pc-dot.pc-dot-n,
+.diary-day .appt .prop-chip .pc-dot.pc-dot-n,
+.appt-block .prop-chip .pc-dot.pc-dot-n {
+  width: auto; min-width: 13px; height: 13px; line-height: 13px; font-size: 8.5px;
+  padding: 0 2px; border-radius: 999px; text-align: center;
+}
+/* The diary tiles top-align their dot against a wrapping label (line ~1189);
+   a 13px numbered dot next to an 11px line needs no nudge. */
+.diary-day .appt .prop-chip .pc-dot.pc-dot-n,
+.appt-block .prop-chip .pc-dot.pc-dot-n { margin-top: 1px; }
