@@ -1636,6 +1636,15 @@ select.task-reassign { width: auto; padding: 3px 6px; font-size: 12px; }
 .cs-identity { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; margin-top: 6px; min-width: 0; }
 .cs-identity .cs-kind { font-size: 13px; font-weight: 600; color: var(--text); }
 .cs-identity .cs-lender { display: inline-flex; align-items: center; font-size: 13px; color: var(--muted); }
+/* R6-FIX OP-R62-05 — "also held by <other client>" on the identity line. Amber
+   like every other advisory in this app (the importer's cross-client badge, the
+   sold warning), and wraps to its own line on a narrow screen rather than
+   squeezing the stage pill. Advisory, never a refusal: two clients on one
+   building is a normal shape, so it states the fact and links the other file. */
+.cs-shared { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; font-size: 12px; font-weight: 600;
+  color: #a4620a; background: #fff8ec; border: 1px solid #f0d6a8; border-radius: 999px; padding: 2px 9px; max-width: 100%; }
+.cs-shared a { color: #8a4f06; text-decoration: underline; }
+.cs-shared a:hover { color: #6b3d04; }
 .cs-contact { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; color: var(--muted); margin-top: 3px; }
 .cs-logcall-btn { flex: 0 0 auto; min-height: 44px; }
 /* R5-6 — "Start retention case" sits beside Log call in the case header, and on Rate & ERC rows. */
@@ -1968,6 +1977,19 @@ th .money-basis {
    of space and never competes with it for the eye. */
 .imp-prop-verdict { margin-top: 4px; display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
 .imp-prop-verdict .s { color: var(--muted); font-size: 11.5px; }
+/* R6-FIX RV-06 — the locality-fork hint. A sentence, not a chip: it takes the
+   whole row beneath the badge rather than competing with it for the same line,
+   and it stays muted because it is information, not a verdict — the row is
+   still green, still tickable, still imported exactly as typed. */
+/* `white-space: normal` is load-bearing: the import table's cells are `nowrap`
+   (every other thing in them is a badge or a short phrase), and a 100-character
+   sentence inheriting that stretches the cell to ~790px and pushes the table
+   into horizontal scroll on a laptop. It wraps, inside a measure that stays
+   readable. */
+.imp-prop-verdict .imp-prop-hint {
+  flex: 0 0 100%; max-width: 52ch; white-space: normal;
+  color: var(--muted); font-size: 11.5px; line-height: 1.45;
+}
 
 /* R6-38 — Data health's shared-address groups. Each address is one block, so
    the grouping is visible without reading the table: the address heading owns

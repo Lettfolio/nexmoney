@@ -736,11 +736,98 @@ const STREET_COMPASS = new Set(["NORTH", "SOUTH", "EAST", "WEST", "N", "S", "E",
    where one does. Only consulted for an address with NO postcode, where the
    town has to re-enter the identity (see propKeyParts): a county or a country
    after the town must not fork "…, Bournemouth" from "…, Bournemouth, Dorset". */
+/* R6-FIX RV2-02 — "GREAT" is NOT in this list, and no other place-DISTINGUISHING
+   word may be either. It was here to swallow the "Great" of "Great Britain", and
+   the price was every town whose name begins with it: "12 Oak Road, Great
+   Yarmouth" and "12 Oak Road, Yarmouth" (Norfolk and the Isle of Wight, 130
+   miles apart) cleaned to the same run, so they shared one key, one hue, one
+   label — printed "· Yarmouth" for both — and merged with no question asked.
+   The same argument condemns LITTLE, NORTH, SOUTH, EAST, WEST, UPPER, LOWER and
+   the rest of the qualifier family: they are exactly what tells one place from
+   its neighbour. A qualifier that leaves the run makes two places one; a
+   qualifier that stays makes the pair a SUBSET pair, which propLocsDisagree
+   already reads as "one place, spelled to two depths" — so the operator gets the
+   did-you-mean question instead of a silent merge, and the label prints the name
+   in full. "Great Britain" is handled where it belongs, as a two-word country
+   (propIsLocNoise), not by condemning the word. */
 const PROP_LOC_NOISE = new Set([
-  "UK", "GB", "ENGLAND", "SCOTLAND", "WALES", "BRITAIN", "GREAT", "UNITED", "KINGDOM",
+  "UK", "GB", "ENGLAND", "SCOTLAND", "WALES", "BRITAIN", "UNITED", "KINGDOM",
   "DORSET", "HAMPSHIRE", "HANTS", "WILTSHIRE", "WILTS", "SOMERSET", "DEVON",
   "SUSSEX", "SURREY", "KENT", "ESSEX", "BERKSHIRE", "BERKS", "YORKSHIRE", "LANCASHIRE",
 ]);
+/* R6-FIX RV-01/RV-02 — the JOINING words inside a compound place name.
+   "Barton ON Sea", "Newcastle UPON Tyne", "Stoke-ON-Trent", "Weston SUPER Mare",
+   "Chester LE Street", "Newcastle UNDER Lyme", "Stanton BY Bridge", "Norton CUM
+   Hardwick", "Thornton IN Craven", "Headley NEXT Thames", "Bourton on THE
+   Water", "Isle OF Wight". They carry no distinguishing information — every one
+   of them appears in dozens of unrelated place names — so they are dropped
+   before a locality run is compared or folded into a key, which is what makes
+   "Barton on Sea" and "Barton-on-Sea" one place and "Barton on Sea" and
+   "Milford on Sea" two. Hyphens need no entry here: the tokeniser already
+   splits on every non-alphanumeric, so "Stoke-on-Trent" arrives as three
+   tokens whichever way it was typed.
+   NOTE "and" is deliberately NOT in this list. Dropping a token can only make
+   two runs agree MORE, and "Ashton and Lea" losing its middle word would start
+   matching "Ashton" — a joiner earns its place by being meaningless, and "and"
+   is not (it names a joint parish, not a relation to a landmark). */
+const PROP_LOC_JOINERS = new Set([
+  "ON", "UPON", "BY", "THE", "UNDER", "CUM", "LE", "SUPER", "IN", "NEXT", "OF",
+]);
+/* R6-FIX RV2-02 — the country, spelled the way a country is: two words. Only
+   "GREAT" IMMEDIATELY BEFORE "BRITAIN" is noise; the qualifier of a place name
+   ("Great Yarmouth", "Great Missenden") is not, and dropping it merged towns
+   (see PROP_LOC_NOISE). Takes the whole token list and an index rather than a
+   token, because that is the only way to ask the question. */
+function propIsLocNoise(toks, i) {
+  const t = (toks || [])[i];
+  if (!t) return false;
+  if (PROP_LOC_NOISE.has(t)) return true;
+  return t === "GREAT" && (toks[i + 1] === "BRITAIN");
+}
+/* R6-FIX RV2-01 — THE APOSTROPHE, removed rather than split on. The key
+   tokeniser cuts on every non-alphanumeric, so "Bishop's Waltham" arrived as
+   [BISHOP, S, WALTHAM] and "Bishops Waltham" — the same town, typed by the half
+   of the world that omits the mark — as [BISHOPS, WALTHAM]. Two token lists, so:
+   two keys (two hues, two labels, two rows in the note-target selector for one
+   building), propLocsDisagree said the towns DISAGREED (neither list is a subset
+   of the other, "S" being a token of its own), which switched off the
+   did-you-mean question, and the pretty scanner — hunting a [BISHOP, S, WALTHAM]
+   window through tokens it had cut the same way — could still find it, so the
+   screen printed one town in two spellings and swore they were two places.
+   The mark carries no information at all: nobody means a different town by it.
+   So it is DELETED before anything identity-shaped tokenises, in the key, in the
+   locality run and in the pretty scanner alike — one rule in one function, which
+   is what stops the three drifting apart again. Display is untouched: propLabel
+   slices the RAW address, so the apostrophe the operator typed is still printed.
+   Covers the typographic apostrophe (U+2019) too, which is what a phone, Word
+   and most CRM exports actually emit. */
+const PROP_APOS_RE = /['‘’ʼ´`]/g;
+const propDeApos = (s) => String(s == null ? "" : s).replace(PROP_APOS_RE, "");
+/* One token, in the spelling the identity uses: apostrophes gone, upper case,
+   street type canonicalised ("STREET" → "ST"). */
+function propCanonTok(t) {
+  let x = propDeApos(t).toUpperCase();
+  STREET_CANON.forEach(([re, to]) => { x = x.replace(re, to); });
+  return x;
+}
+/* Every word of a string with the character offset it starts at, canonicalised
+   the way propKeyParts canonicalises. The offsets are what let a caller hand
+   back a slice of the ORIGINAL text (propLocPretty) or abbreviate one end of a
+   line and not the other (propLabel, R6-FIX RV2-04). Apostrophes are kept
+   INSIDE the match so "Bishop's" is one word here as it is one token there. */
+function propTokenHits(str) {
+  return [...String(str == null ? "" : str).matchAll(/[A-Za-z0-9'‘’ʼ´`]+/g)]
+    .filter((m) => /[A-Za-z0-9]/.test(m[0]))
+    .map((m) => ({ raw: m[0], at: m.index, t: propCanonTok(m[0]) }));
+}
+/* The distinguishing tokens of a locality run: joiners dropped, duplicates
+   collapsed, order preserved. This is the ONLY form the identity and the
+   disagreement test are allowed to look at, so the two can never drift. */
+function propLocTokens(run) {
+  const out = [];
+  (run || []).forEach((t) => { if (!PROP_LOC_JOINERS.has(t) && !out.includes(t)) out.push(t); });
+  return out;
+}
 /* Filler an operator types when the address is not to hand. It is not a
    property, and keying it as one gives it a genuine cross-client identity:
    "TBC" on three unrelated clients was reported by Data Health as ONE address
@@ -794,10 +881,160 @@ function propLabel(c) {
   // A one-part address ("12 Oak Road Bournemouth BH8 8EZ") carries its postcode
   // in the first line: take the outcode off separately, don't print it twice.
   line = line.replace(POSTCODE_RE, "").replace(/\s+/g, " ").trim().replace(/[,;\s]+$/, "");
-  STREET_ABBR.forEach(([re, to]) => { line = line.replace(re, to); });
+  /* R6-FIX RV-05 — a UNIFORMLY-cased line gets its case normalised before the
+     street types are abbreviated, so a CSV that shouts ("12 OAK ROAD, POOLE")
+     and a keyboard that never reached the shift key ("12 oak road, poole") both
+     land on the label their properly-typed sibling already has — "12 Oak Rd ·
+     Poole" — instead of standing next to it as "12 OAK ROAD · Poole" and
+     "12 oak road · poole", three spellings of one building in one list.
+     Abbreviation is case-sensitive by design (see STREET_ABBR), so a shouted
+     line that skipped this step also skipped "Road" → "Rd" — half the reason
+     the two never matched. A line with BOTH cases in it was typed by someone
+     who meant them ("McDonald Road", "Flat 4, 27 Stourwood Ave") and is left
+     exactly alone. */
+  if (line && (!/[a-z]/.test(line) || !/[A-Z]/.test(line))) line = propTitleCase(line);
+  const p = propKeyParts(addr);
+  /* R6-FIX RV2-04 — abbreviation is for the FIRST ADDRESS LINE, and a locality
+     that ended up inside it (a comma-less "12 Oak Road Chester-le-Street") is
+     not part of that line's job. Abbreviating there rewrote a TOWN: "Chester-
+     le-Street" printed "Chester-le-St", "Barnet High Street" printed "Barnet
+     High St" — a place name shortened by a rule that exists to save width on a
+     street type, which is not something a reader can undo. Street types are
+     abbreviated up to where the locality run starts and left whole after it;
+     with no run in the line (the ordinary comma'd address) that is the whole
+     line, exactly as before. The comma'd form is safe for the same reason from
+     the other side: the town is printed by propLocPretty, which slices the raw
+     address and never sees STREET_ABBR at all. */
+  const runAt = propRunTailAt(line, p);
+  const head = runAt >= 0 ? line.slice(0, runAt) : line;
+  let shortHead = head;
+  STREET_ABBR.forEach(([re, to]) => { shortHead = shortHead.replace(re, to); });
+  line = runAt >= 0 ? shortHead + line.slice(runAt) : shortHead;
   const oc = propOutcode(addr);
   if (!line) return oc; // the whole "address" was a postcode
-  return oc ? `${line} · ${oc}` : line;
+  if (oc) return `${line} · ${oc}`;
+  /* R6-FIX OP-R62-03 — no postcode, so the outcode cannot be the geographic
+     suffix: fall back to the TOWN. Without this every chip, option, pipeline
+     row, diary tile and Today row printed a bare "12 Oak Rd" for two buildings
+     in two towns, which is how a merge (or two adjacent identities) became
+     invisible — and it defeated the composer's whole guarantee, which is that
+     the operator picks the target from strings that differ. This is the single
+     source every one of those surfaces already reads, so they all gain it at
+     once. Skipped when the first line already ENDS with the whole locality run
+     (a comma-less "12 Oak Road Bournemouth" is its own suffix — see
+     propLineHoldsRun for why "ends with the whole run" and not "contains a
+     token"). R6-FIX RV-03: the suffix is the WHOLE run, not its last token. */
+  const town = p && p.locs && p.locs.length ? propLocPretty(addr, p) : "";
+  if (!town || runAt >= 0) return line;
+  return `${line} · ${town}`;
+}
+/* R6-FIX RV-05 — one spelling rule for anything the label prints. Every token
+   is Title Case; a JOINING word that is not the first token is lower case, so a
+   compound name reads the way it is written on the sign ("Barton on Sea",
+   "Stoke-on-Trent", "Weston-super-Mare") whatever the operator typed. Casing is
+   normalised ALWAYS, not only when it was shouted: "poole", "POOLE" and "Poole"
+   are one town, and a label that renders them as three is a label that makes
+   one property look like three in a list of siblings. Separators — spaces,
+   hyphens, commas, apostrophes — are left exactly as typed, which is what keeps
+   the hyphens in "Stoke-on-Trent" and the comma in "Parkstone, Poole". */
+function propTitleCase(s) {
+  const str = String(s == null ? "" : s);
+  return str.replace(/[A-Za-z0-9'‘’]+/g, (w, off) => {
+    /* A token with a digit in it is a CODE, not a word — a house number with a
+       letter on it ("12A Herbert Avenue"), a flat number, a stray outcode the
+       postcode regex could not claim because its incode was missing ("… BH8").
+       Title-casing those produces "12a" and "Bh8", which is a worse spelling
+       than the shouted one it replaced, so they are left exactly as typed. */
+    if (/\d/.test(w)) return w;
+    /* R6-FIX RV2-03 — a joiner is only lower case MID-RUN. "off > 0" was the
+       wrong test for "mid-run": it is true of the first word of every clause
+       after the first, and of every word after a house number, so a shouted
+       "FLAT 4, THE OLD RECTORY, WIMBORNE" came back as "Flat 4, the Old
+       Rectory" — a house whose name starts with a lower-case letter, printed
+       that way on the chip, the pipeline row, the selector and the evidence
+       pack, and standing next to a properly-typed sibling that read "The".
+       "The" is a joiner INSIDE a place name ("Bourton on the Water") and an
+       article at the START of a building name ("The Old Rectory", "The
+       Limes"), and what tells the two apart is whether a WORD precedes it in
+       the same clause — a number does not count, because "12 The Broadway" is
+       an article too. Commas (and the label's own "·") end a clause. */
+    const clause = str.slice(0, off).split(/[,;·|(\/]/).pop();
+    return (/[A-Za-z]/.test(clause) && PROP_LOC_JOINERS.has(w.toUpperCase()))
+      ? w.toLowerCase()
+      : w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
+  });
+}
+/* R6-FIX RV-03 — the WHOLE locality run, spelled prettily. The previous cycle
+   printed parts.loc — the LAST token — which is not a place name at all when
+   the last token is half of one: "9 Cedar Road, Barton on Sea" labelled itself
+   "9 Cedar Rd · Sea" and "12 Oak Road, Stoke-on-Trent" labelled itself "· Trent".
+   Two properties in Barton on Sea and Barton under Needwood therefore read as
+   "· Sea" and "· Needwood" — two labels that name nowhere, and that a human
+   cannot map back to either building.
+   The run is lifted from the address AS TYPED (matched as a token window, so
+   the original separators come with it) and then re-cased by propTitleCase.
+   Falls back to joining the normalised tokens when the run cannot be found in
+   the raw text — which happens only when a street-type canonicalisation
+   rewrote a token ("Hampton Court" → "HAMPTON CT") — because a slightly
+   differently-spaced town beats no town at all. */
+function propLocPretty(addr, p) {
+  const run = (p && p.locs) || [];
+  if (!run.length) return "";
+  /* Tokenised the way propKeyParts tokenises — ONE function does both now
+     (propTokenHits), which is the whole point: a scanner that cut words on a
+     boundary the key does not use can never find the window it is looking for,
+     and the fallback prints a town nobody typed.
+     R6-FIX RV2-01 — the apostrophe. It used to be a token boundary here and in
+     the key, so "Bishop's Waltham" was [BISHOP, S, WALTHAM] on both sides and
+     the window did match — but the key it matched was a DIFFERENT key from
+     "Bishops Waltham"'s. Now the mark is deleted on both sides instead: the
+     window is found for either spelling, and the slice of the RAW string hands
+     the apostrophe back exactly as typed.
+     R6-FIX RV2-04 — the street type. Run tokens are canonicalised ("STREET" →
+     "ST"), so a locality with a street word in it — Chester-le-Street, Barnet
+     High Street — never matched its own raw text, fell back to joining the
+     tokens, and printed "Chester le St": a town abbreviated, de-hyphenated and
+     unrecognisable. propTokenHits canonicalises the address the same way, so
+     the window is found and the SLICE is what prints — whole, hyphens and all. */
+  const hits = propTokenHits(addr);
+  for (let i = hits.length - run.length; i >= 0; i--) {
+    if (!run.every((t, j) => hits[i + j].t === t)) continue;
+    const last = hits[i + run.length - 1];
+    return propTitleCase(String(addr).slice(hits[i].at, last.at + last.raw.length));
+  }
+  return propTitleCase(run.join(" "));
+}
+/* R6-FIX RV-04 — "the first line is already its own suffix". True only when the
+   line ENDS with the ENTIRE locality run, which is the shape a comma-less
+   address has ("12 Oak Road Bournemouth", "12 Oak Road Queens Park
+   Bournemouth"): there the town sits inside the first line because there was no
+   comma to cut it off, and printing it again would read "12 Oak Rd Bournemouth
+   · Bournemouth".
+   Testing for one token ANYWHERE in the line — what the previous cycle did —
+   suppressed the suffix on every street that shares a word with its town:
+   "3 Christchurch Road, Christchurch" printed a bare "3 Christchurch Rd", so the
+   Christchurch one and a "3 Christchurch Road, Poole" were two properties with
+   one label. A street named after a town is not the town, and the tail test is
+   what tells them apart. A trailing county or country is popped first, so
+   "12 Oak Road Bournemouth Dorset" still recognises its own town.
+   R6-FIX RV2-04 — returns WHERE the run starts, in characters, rather than a
+   bare yes/no, because propLabel needs the boundary as well as the fact: the
+   street types in the identifying half of the line are abbreviated and the ones
+   inside the locality are not. -1 for "the line does not end with the run". */
+function propRunTailAt(line, p) {
+  const run = (p && p.locs) || [];
+  if (!run.length) return -1;
+  const hits = propTokenHits(line);          // apostrophes stripped, street types canonicalised
+  const toks = hits.map((h) => h.t);
+  let end = toks.length;
+  while (end > 0 && propIsLocNoise(toks, end - 1)) end--;   // a trailing county or country
+  const start = end - run.length;
+  if (start < 0) return -1;
+  for (let j = 0; j < run.length; j++) if (hits[start + j].t !== run[j]) return -1;
+  return hits[start].at;
+}
+function propLineHoldsRun(line, p) {
+  return propRunTailAt(line, p) >= 0;
 }
 /* Same-property identity. Case, spacing and punctuation are operator noise:
    "8 Grand Avenue, Southbourne, Bournemouth BH6 3SY" and
@@ -844,23 +1081,40 @@ function propLabel(c) {
      casesOnSameProperty()/propSoldWarning() named an unrelated CLIENT as the
      possible buyer of this client's house, and Data Health reported one address
      held by two clients.
-     The key itself cannot fix this. Putting the town back in it re-forks the
-     pair OP-01 exists for ("Flat 4, 27 Stourwood Ave, Southbourne" against
-     "Flat 4, 27 Stourwood Avenue" — one has a locality, the other has none, and
-     no string equality can call those equal AND call Bournemouth/Poole
-     different). So the LOCALITY is carried alongside the key (parts.loc) and
-     the cross-client consumers — the only ones that can assert something about
-     a stranger — go through propSameBuilding()/propGroupKey() instead of a bare
-     key comparison. Within one client the merge stands, where both addresses
-     are on screen together under one heading and the near-match question fires
-     at entry; across clients it now takes a postcode, or the same town, to say
-     "these two people are on one building".
+     G63-01 answered that by carrying the LOCALITY alongside the key (parts.loc)
+     and sending the cross-client consumers — the only ones that assert something
+     about a stranger — through propSameBuilding()/propGroupKey(). Within one
+     client the merge was left standing, on the argument that both addresses are
+     on screen together and the near-match question fires at entry.
+   · WITHIN ONE CLIENT, TOO (OP-R62-01) — and that argument was wrong on both
+     halves. Neither address is on screen: the group heading takes ONE of the two
+     spellings and the other is never printed, because propLabel had no postcode
+     to print and so printed no geography at all. And the near-match question
+     cannot fire, by construction — an EQUAL key is not a near miss, so the one
+     path that silently merged was the one path that asked nothing. The result
+     was one hue, one index digit, one label and two byte-identical options in
+     the note-target selector: the composer refusing to guess, then offering two
+     choices a human cannot tell apart.
+     So the town is IN the key when there is no postcode, and only then. With a
+     postcode the geography is already complete, which is what keeps the pair
+     OP-01 exists for keying together ("Flat 4, 27 Stourwood Ave, Southbourne"
+     reaches the canonical "…Stourwood Avenue, Southbourne, Bournemouth BH6 3QP"
+     through the did-you-mean adopt, not through a string equality that could
+     never have called Bournemouth and Poole different). `base` — number, street
+     and postcode, the old key — stays available for propSameBuilding, which
+     applies its own looser rule on top of it: across clients a MISSING town is
+     still not evidence of a second building, so a stranger is only ever named on
+     a postcode or an agreeing town.
    Returns null for a value with no property identity at all (see
    propIsIdentity): a placeholder must not become a building. */
 function propKeyParts(c) {
   const addr = propAddress(c);
   if (!addr || !propIsIdentity(addr)) return null;
-  let s = addr.toUpperCase();
+  /* R6-FIX RV2-01 — apostrophes are DELETED here, not split on: this is the
+     tokeniser every other identity surface is measured against, so "Bishop's
+     Waltham" and "Bishops Waltham" have to become one token list before
+     anything else looks at them. */
+  let s = propDeApos(addr).toUpperCase();
   let pc = "", oc = "";
   const m = POSTCODE_RE.exec(s);
   if (m) {
@@ -948,24 +1202,78 @@ function propKeyParts(c) {
     if (core && /\d$/.test(core) && /^\d/.test(tok)) core += "-";  // the boundary that means something
     core += tok;
   });
-  /* R6-FIX G63-01 — the TOWN, kept beside the key rather than inside it: with
-     no postcode it is the only geography the address has, and propSameBuilding
-     needs it before it lets two different CLIENTS be told they share a
-     building. The last locality token, ignoring a trailing county or country
-     (PROP_LOC_NOISE), so "…, Queens Park, Bournemouth" and "…, Bournemouth,
-     Dorset" both read BOURNEMOUTH. Empty when a postcode is present (the
-     postcode is stronger) or when nothing follows the street. */
-  let loc = "";
-  if (!pc) {
-    const rest = toks(s).slice(t.length).filter((x) => !PROP_LOC_NOISE.has(x));
-    loc = rest.length ? rest[rest.length - 1] : "";
-  }
+  /* R6-FIX G63-01 — the TOWN. Everything past the street type LOCATES the
+     building: "…, Queens Park, Bournemouth" and "…, Bournemouth, Dorset" both
+     read BOURNEMOUTH once a trailing county or country (PROP_LOC_NOISE) is
+     dropped, and `loc` is that last token — the town, not the district.
+     R6-FIX OP-R62-02 — it is now extracted WHETHER OR NOT there is a postcode.
+     It used to be read only when `pc` was empty, which meant the one comparison
+     that most needs it — a typed, postcode-LESS address against a stored,
+     postcoded one ("148 Ashley Road, Boscombe, Bournemouth" against "148 Ashley
+     Road, Parkstone, Poole BH14 9BY") — had nothing to compare, so the town
+     disagreement was invisible and the app offered to overwrite one with the
+     other. `locs` keeps the whole locality run, because a district and its town
+     are BOTH in it ("Southbourne, Bournemouth") and only an overlap test can
+     tell "same place, spelled shorter" from "different town". */
+  const tail = toks(s).slice(t.length);
+  const locs = tail.filter((x, i) => !propIsLocNoise(tail, i));
+  const loc = locs.length ? locs[locs.length - 1] : "";
+  /* R6-FIX RV-01 — the WHOLE run is the identity, not its last token. `loc`
+     stays for the one consumer that genuinely wants "the town-ish end of it"
+     (nothing does any more; it is kept only so a reader can see what changed),
+     and `locKey` is what the key folds in: joiners dropped, so "Barton on Sea",
+     "Barton-on-Sea" and "BARTON ON SEA" are one place; every remaining token
+     kept, so "Barton on Sea" and "Barton under Needwood" are two — and so are
+     "Barton on Sea" and "Milford on Sea", which the last-token rule silently
+     merged into one property, one hue, one label and one importer row. */
+  const locKey = propLocTokens(locs).join("-");
   if (!core && !pc) return null;
-  return { core, pc, oc, loc, nums: t.filter((x) => /\d/.test(x)).join("-"), key: core + pc };
+  /* `base` is number + street + postcode — the old key, kept under its own name
+     for the consumers that must keep comparing exactly that (propSameBuilding
+     applies its own, looser locality rule on top of it).
+     R6-FIX OP-R62-01 — THE KEY ITSELF now carries the town when, and only when,
+     there is no postcode. With a postcode the geography is complete and folding
+     a locality in would re-fork the pair this extraction exists for ("Flat 4, 27
+     Stourwood Ave, Southbourne, Bournemouth BH6 3QP" against the same flat typed
+     without the locality). Without one, the town is the ONLY geography the
+     address has, and dropping it made "12 Oak Road, Bournemouth" and "12 Oak
+     Road, Poole" one property inside a client's book — one hue, one index digit,
+     one label, and two byte-identical options in the note-target selector. */
+  const base = core + pc;
+  return {
+    core, pc, oc, loc, locs, locKey, base,
+    nums: t.filter((x) => /\d/.test(x)).join("-"),
+    key: pc ? base : base + "@" + locKey,
+  };
 }
 function propKey(c) {
   const p = propKeyParts(c);
   return p ? (p.key || null) : null;
+}
+/* R6-FIX OP-R62-02 / RV-02 — "these two addresses name different places".
+   The question a locality run can honestly answer is not "do these overlap?"
+   but "is one of them the other, spelled to a different depth?". Two runs
+   AGREE when either cleaned set is a SUBSET of the other:
+     "Southbourne" ⊂ "Southbourne, Bournemouth"      — one place, two depths
+     "Parkstone, Poole"  vs  "Boscombe, Bournemouth" — nothing in common, two places
+     "Bishops Waltham"   vs  "Bishops Stortford"     — TWO places, 90 miles apart
+   That last pair is what the overlap rule got wrong (RV-02). It shared the
+   qualifier "Bishops" — as do Bishops Cleeve, Bishops Lydeard, Bishops
+   Itchington and a dozen more — and one shared token was enough to declare the
+   two towns the same, which turned off the near-match guard that exists to stop
+   the app offering to rewrite one town as another. A shared qualifier is
+   evidence of a naming convention, not of a place; a subset is evidence of a
+   place. Joiners are stripped first (propLocTokens), so "Barton on Sea" and
+   "Barton-on-Sea" agree and "Barton on Sea" and "Milford on Sea" — which share
+   only the joiner-adjacent "Sea" — do not.
+   A side that names no locality at all still disagrees with nothing: silence is
+   not evidence, and that is what keeps "Flat 4, 27 Stourwood Avenue" reaching
+   "…, Southbourne, Bournemouth BH6 3QP" through the did-you-mean adopt. */
+function propLocsDisagree(A, B) {
+  const a = propLocTokens((A && A.locs) || []), b = propLocTokens((B && B.locs) || []);
+  if (!a.length || !b.length) return false;
+  const subset = (x, y) => x.every((t) => y.includes(t));
+  return !(subset(a, b) || subset(b, a));
 }
 /* ---- R6-FIX G63-01 · "one building" when the two rows belong to DIFFERENT
    PEOPLE ---------------------------------------------------------------------
@@ -984,9 +1292,23 @@ function propKey(c) {
    "…Stourwood Avenue" — the pair the locality drop exists for). */
 function propSameBuilding(a, b) {
   const A = propKeyParts(a), B = propKeyParts(b);
-  if (!A || !B || !A.key || A.key !== B.key) return false;
+  /* R6-FIX OP-R62-01 — compared on `base` (number + street + postcode), not on
+     the key: the key now folds the town in for a postcode-less address, and this
+     test has its own, DELIBERATELY LOOSER locality rule underneath — one side
+     naming no town at all is still the same building (that is how "…Stourwood
+     Ave, Southbourne" stays one building with "…Stourwood Avenue"). Comparing
+     keys here would have quietly tightened the cross-client rule as well. */
+  if (!A || !B || !A.base || A.base !== B.base) return false;
   if (A.pc) return true;                                  // identity-complete
-  return !A.loc || !B.loc || A.loc === B.loc;
+  /* R6-FIX RV-01/RV-02 — the looser rule, but spelled with the same locality
+     comparison as everything else. `A.loc === B.loc` compared LAST TOKENS, so
+     it told two strangers that 9 Cedar Road, Barton on Sea and 9 Cedar Road,
+     Milford on Sea were one building ("Sea" === "Sea") and told them that
+     "…, Southbourne" and "…, Southbourne, Bournemouth" were two. Both errors
+     are cross-client claims — "the newest case on this address belongs to
+     someone else, has it been sold?" — and both disappear when the test is
+     "the runs do not disagree", which keeps the missing-town silence intact. */
+  return !propLocsDisagree(A, B);
 }
 /* The same rule as a GROUPING key, for the one consumer that buckets rather
    than compares (Data Health). Deliberately stricter than propSameBuilding —
@@ -996,7 +1318,14 @@ function propSameBuilding(a, b) {
 function propGroupKey(c) {
   const p = propKeyParts(c);
   if (!p || !p.key) return null;
-  return p.pc ? p.key : p.key + "@" + p.loc;
+  /* R6-FIX OP-R62-01 — this IS propKey now (the town went into the key), and the
+     function stays because the two answer different questions and only one of
+     them is allowed to drift: a grouping key must stay transitive.
+     R6-FIX RV-01 — the whole locality run, exactly as propKey folds it. A
+     subset rule cannot be a grouping key (subset is not transitive: Southbourne
+     ⊂ Southbourne+Bournemouth ⊃ Bournemouth, and the two ends are not one
+     bucket), so this stays an exact match on the cleaned run. */
+  return p.pc ? p.base : p.base + "@" + p.locKey;
 }
 /* R6-FIX OP-01/T1 — "this is not the same key, but it is probably the same
    building". Two shapes, both taken from what people actually type:
@@ -1020,6 +1349,18 @@ function propNearMatch(a, b) {
      Bournemouth. The rule the comment was written for — same number and street
      with a MISSING postcode on one side — is untouched. */
   if (A.pc && B.pc && A.oc !== B.oc) return false;
+  /* R6-FIX OP-R62-02 — the same guard for the case the outcode test cannot
+     reach, which is the ordinary one: an enquiry address typed off a phone call
+     with no postcode on it yet. "148 Ashley Road, Boscombe, Bournemouth" against
+     the stored "148 Ashley Road, Parkstone, Poole BH14 9BY" agreed on number and
+     street, so the app stated as fact that the client "already has that
+     property" and offered one click that rewrote a Bournemouth building to a
+     Poole address AND a Poole postcode. Two towns that share no token are the
+     same evidence of two buildings that two outcodes are — the only difference
+     is which side of the address it was written on. A missing town on either
+     side still asks the question (propLocsDisagree is false there), so the
+     Stourwood/Southbourne pair this prompt exists for is untouched. */
+  if ((!A.pc || !B.pc) && propLocsDisagree(A, B)) return false;
   if (A.core && A.core === B.core) return true;      // number + street agree; postcode differs or is missing
   if (A.pc && A.pc === B.pc && A.nums && A.nums === B.nums) return true;
   return false;
@@ -1032,6 +1373,59 @@ function propNearMatchIn(candidate, list) {
   if (!propKeyParts(candidate)) return null;
   return (list || []).map((x) => propAddress(x)).filter(Boolean)
     .find((a) => propNearMatch(candidate, a)) || null;
+}
+/* ---- R6-FIX RV-06 · THE FORK WITH NO QUESTION -----------------------------
+   propNearMatch deliberately refuses to ask "did you mean …?" when the number
+   and street agree but the two localities DISAGREE, because the answer it would
+   offer is a button that rewrites one town as another — and Ashley Road really
+   does exist in both Parkstone and Boscombe. That refusal is right. Saying
+   NOTHING is not: the operator typing "6 Cedar Road, Bmth" against a stored
+   "6 Cedar Road, Bournemouth" gets a silent second property, one label apart
+   from the first, and the abbreviation they used is exactly the kind of thing
+   that means "the same building" far more often than it means "a different one".
+   So the fork gets a HINT rather than a question: it names the other address,
+   names where it is, and points at the picker the operator can choose it from.
+   No button, because there is no safe one-click answer — adopting would rewrite
+   a town the app has no evidence about, and that is the bug OP-R62-02 fixed. */
+function propLocForkMatch(a, b) {
+  const A = propKeyParts(a), B = propKeyParts(b);
+  if (!A || !B) return false;
+  if (A.key === B.key) return false;                 // one property, not a fork
+  if (!A.core || A.core !== B.core) return false;    // a different building entirely
+  if (A.pc && B.pc && A.pc === B.pc) return false;   // one postcode: the towns are noise
+  return propLocsDisagree(A, B);
+}
+/* The first address in `list` (that client's own book, never a stranger's) that
+   this candidate forks away from on locality alone. */
+function propLocForkIn(candidate, list) {
+  if (!propKeyParts(candidate)) return null;
+  return (list || []).map((x) => propAddress(x)).filter(Boolean)
+    .find((a) => propLocForkMatch(candidate, a)) || null;
+}
+/* The identifying line of an address with no geography on it — "6 Cedar Road"
+   out of "6 Cedar Road, Bournemouth BH1 1AA". Deliberately NOT propLabel: the
+   hint prints the line and the place as separate clauses ("6 Cedar Road in
+   Bournemouth"), so a label that already carries a "· BH1" suffix would read
+   twice. */
+function propFirstLine(addr) {
+  const s = propAddress(addr);
+  if (!s) return "";
+  const parts = s.split(",").map((p) => p.trim()).filter(Boolean);
+  let line = parts[0] || s;
+  if (parts.length > 1 && SUB_PREMISE_RE.test(line)) line = line + ", " + parts[1];
+  return line.replace(POSTCODE_RE, "").replace(/\s+/g, " ").trim().replace(/[,;\s]+$/, "");
+}
+/* The sentence itself, built once so the case form and the importer cannot
+   drift into saying two different things about the same shape. `tail` is the
+   only part that differs — the two screens offer different ways to act on it. */
+function propLocForkHint(other, tail) {
+  const line = propFirstLine(other);
+  if (!line) return "";
+  const where = propLocPretty(other, propKeyParts(other));
+  const oc = propOutcode(other);
+  const place = where || oc || "";
+  return `This client also holds ${line}${place ? ` in ${place}` : ""}`
+    + ` — if this is the same building, ${tail || "pick it from the list"}.`;
 }
 /* R6-FIX G63B-04 — the same query, spelled the other way round. Returns 0-2
    extra needles for a property search: the query with every street abbreviation
@@ -1057,12 +1451,14 @@ function propSearchVariants(q) {
 /* Deterministic hue index from the key (djb2). Stable across sessions,
    machines and re-renders because it is a pure function of the address — no
    registry, no ordering, nothing to drift. */
-function propHue(c) {
-  const k = propKey(c);
+function propHashHue(k) {
   if (!k) return null;
   let h = 5381;
   for (let i = 0; i < k.length; i++) h = ((h * 33) ^ k.charCodeAt(i)) >>> 0;
   return h % PROP_HUE_COUNT;
+}
+function propHue(c) {
+  return propHashHue(propKey(c));
 }
 /* ---- R6-FIX V2/V4 · THE PER-CLIENT PROPERTY REGISTER --------------------
    A hue is a hash, and a hash of any width collides: sixteen buckets over one
@@ -1137,10 +1533,65 @@ function registerClientProps(clientId, rows) {
   reg.cases = reg.byCase.size + reg.anonCases;
   reg.addrCases = [...reg.byCase.values()].filter((v) => v.addr).length + reg.anonAddr;
   reg.order = null;                     // recomputed lazily below
+  reg.hues = null;                      // …and so is the collision-free palette
   PROP_REG.set(clientId, reg);
   return reg;
 }
 function propClientReg(clientId) { return clientId ? PROP_REG.get(clientId) || null : null; }
+/* The client's properties in FIRST-SEEN order (the first case ever opened on
+   each, then the key, so the order is total and stable). Both the index digit
+   and the hue assignment below read it, so they can never disagree. */
+function propRegOrder(reg) {
+  if (!reg) return [];
+  if (!reg.order) {
+    reg.order = [...reg.keys.entries()]
+      .sort((a, b) => String(a[1].first || "").localeCompare(String(b[1].first || "")) || a[0].localeCompare(b[0]))
+      .map((e) => e[0]);
+  }
+  return reg.order;
+}
+/* ---- R6-FIX OP-R62-04 · a hue per property, WITHIN one client ------------
+   propHue is a hash into sixteen buckets, so it is stable everywhere and
+   collides everywhere: Ruby Sinclair's five buildings drew four colours,
+   "Flat 5, Marlborough Ct · BH2" and "16 Kimberley Rd · BH6" both landing on
+   hue 15 — on the exact client the panel named when it asked for colour to be
+   the fast signal. Sixteen buckets over five properties collide roughly half
+   the time, so the hash alone can never carry that claim.
+   The register already knows the complete set of one client's properties and
+   an order for them, so the hue is ASSIGNED from that: hash first (which keeps
+   most properties on the colour they have always had), and where the bucket is
+   taken, probe to the next free one. First-seen order makes the assignment
+   deterministic — the same client always resolves to the same colours, and
+   adding a sixth property cannot renumber the first five's index digits.
+   What this gives up is cross-client hue stability for ONE address: the same
+   building may draw a different colour on the two clients who hold it. That is
+   the right trade — the colour's job is "these two rows are different
+   buildings" INSIDE a book, which is the only place it is ever read as a
+   comparison, and the index digit plus the label carry identity across books. */
+function propRegHues(reg) {
+  if (!reg) return null;
+  if (!reg.hues) {
+    const used = new Set(), m = new Map();
+    propRegOrder(reg).forEach((k) => {
+      let h = propHashHue(k);
+      if (h == null) return;
+      for (let n = 0; n < PROP_HUE_COUNT && used.has(h); n++) h = (h + 1) % PROP_HUE_COUNT;
+      used.add(h);            // past PROP_HUE_COUNT properties a repeat is unavoidable
+      m.set(k, h);
+    });
+    reg.hues = m;
+  }
+  return reg.hues;
+}
+/* The hue to paint for this client's property: the de-conflicted one where the
+   client is known to the register, the plain hash everywhere else (a stranger's
+   address on a shared list has no set to be de-conflicted against). */
+function propHueFor(clientId, c) {
+  const k = propKey(c);
+  if (!k) return null;
+  const m = propRegHues(propClientReg(clientId));
+  return m && m.has(k) ? m.get(k) : propHashHue(k);
+}
 /* 1-based index of this property within the client, or null when the client is
    unknown to the register or holds only one property (a lone "1" is noise). */
 function propIndexOf(clientId, c) {
@@ -1148,12 +1599,7 @@ function propIndexOf(clientId, c) {
   if (!reg || reg.keys.size < 2) return null;
   const k = propKey(c);
   if (!k) return null;
-  if (!reg.order) {
-    reg.order = [...reg.keys.entries()]
-      .sort((a, b) => String(a[1].first || "").localeCompare(String(b[1].first || "")) || a[0].localeCompare(b[0]))
-      .map((e) => e[0]);
-  }
-  const i = reg.order.indexOf(k);
+  const i = propRegOrder(reg).indexOf(k);
   return i < 0 ? null : i + 1;
 }
 /* Is a hollow "no address recorded" pill worth rendering for this client?
@@ -1254,7 +1700,10 @@ function propChip(c, opts = {}) {
       `title="“${esc(addr)}” is recorded in the property field but is not a usable address, so nothing matches or groups on it. Edit the case to record the real property.">` +
       `<span class="pc-dot"></span><span class="pc-txt">${esc(addr)}</span></span>`;
   }
-  const hue = propHue(addr);
+  /* R6-FIX OP-R62-04 — the client's de-conflicted hue where we know the client,
+     the plain hash otherwise. Same function everywhere, so a chip cannot draw
+     one colour on the client record and another on the board. */
+  const hue = propHueFor(clientId, addr);
   /* The index is the guarantee the hue cannot give (V2): "property 3 of 5" is
      unique inside the client whatever the hash does. It is only printed where
      the client is known AND holds more than one property — everywhere else a
@@ -1518,6 +1967,13 @@ window.casesOnSameProperty = casesOnSameProperty;
 window.propSoldWarning = propSoldWarning;
 window.propChip = propChip;
 window.propHue = propHue;
+window.propHueFor = propHueFor;
+window.propLocsDisagree = propLocsDisagree;
+window.propLocForkMatch = propLocForkMatch;
+window.propLocForkIn = propLocForkIn;
+window.propLocForkHint = propLocForkHint;
+window.propLocPretty = propLocPretty;
+window.propTitleCase = propTitleCase;
 window.propIsIdentity = propIsIdentity;
 window.propOutcode = propOutcode;
 window.caseTypeLabel = caseTypeLabel;
@@ -4786,6 +5242,26 @@ function wireCasePropertyPicker(preloadedSiblings, selfCaseId) {
         if (adopt) adopt.onclick = () => { input.value = near; paint(); input.dispatchEvent(new Event("input", { bubbles: true })); };
         return;
       }
+      /* R6-FIX RV-06 — number and street agree, the towns do not: no question,
+         because there is no answer this app is entitled to give, but not
+         silence either. Informational styling and NO adopt button — the
+         difference from the amber block above is the whole point, and the
+         operator's route to "yes, same building" is the picker, which already
+         holds the other address. */
+      /* Deliberately the POOL only, never this case's own address: an operator
+         retyping THIS case into another town is moving it, not forking it —
+         saving replaces the value and no second property appears — and
+         "this client also holds …" would be describing the very row they are
+         editing. The near-match branch above still covers the self case, which
+         is the one where a rewrite really would lose the match. */
+      const fork = propLocForkIn(addr, pool);
+      if (fork) {
+        warn.hidden = false;
+        warn.style.color = "var(--muted, #5b6472)";
+        warn.innerHTML = `ℹ ${esc(propLocForkHint(fork, "pick it from the list"))} `
+          + `<span class="cs-muted">Saved as typed, “${esc(addr)}” is a separate property — which is right if they really are two buildings.</span>`;
+        return;
+      }
       warn.hidden = true; warn.textContent = ""; return;
     }
     if (!raw) { warn.hidden = true; warn.textContent = ""; return; }
@@ -4885,6 +5361,37 @@ window.openCase = async function (id, opts = {}) {
   const propAddrOn = await propAddrSupported();
   const siblingCases = c.client_id ? await softRows(db.from("cases").select("*").eq("client_id", c.client_id)) : [];
   registerClientProps(c.client_id, siblingCases);   // R6-FIX V2/V4 — the client's whole book
+  /* ---- R6-FIX OP-R62-05 · "this building is on someone else's file too" ----
+     9 Bryanstone Road sits on Kwame Boateng's completed purchase and Gareth
+     Pollard's live offer. The app knows that in three places — the retention
+     confirm's sold warning, Data Health's shared-address panel, the importer's
+     "also held by 2 other clients" badge — and was silent in the one place an
+     adviser actually stands when the phone rings. Same mechanism as those
+     three (casesOnSameProperty → propSameBuilding, so it takes a postcode or an
+     agreeing town before it names a stranger), and advisory only: two clients
+     on one building is a normal, documented shape. */
+  let sharedHolders = [];
+  if (id && propAddress(c)) {
+    try {
+      const onProp = await casesOnSameProperty(c);
+      const seen = new Map();
+      onProp.forEach((r) => {
+        if (!r.client_id || r.client_id === c.client_id || seen.has(r.client_id)) return;
+        seen.set(r.client_id, {
+          clientId: r.client_id, caseId: r.id,
+          who: [r.clients?.first_name, r.clients?.last_name].filter(Boolean).join(" ") || "another client",
+          what: [caseTypeLabel(r), r.stage ? (STAGE_LABEL[r.stage] || String(r.stage).replace(/_/g, " ")) : null].filter(Boolean).join(" · "),
+        });
+      });
+      sharedHolders = [...seen.values()];
+    } catch (e) { /* advisory only — never block the case opening */ }
+  }
+  const sharedHtml = sharedHolders.length
+    ? `<span class="cs-shared" id="cs-shared-prop" title="${esc(`This property is on ${sharedHolders.length} other client${sharedHolders.length === 1 ? "'s" : "s'"} file${sharedHolders.length === 1 ? "" : "s"}: ${sharedHolders.map((h) => `${h.who} (${h.what})`).join(", ")}. That is legitimate — a sale advised on both sides, or a transfer between owners — but check you are on the right file before you act.`)}">`
+      + `⚠ also held by ${sharedHolders.length} other client${sharedHolders.length === 1 ? "" : "s"} — `
+      + sharedHolders.map((h) => `<a href="#" class="cs-shared-link" data-case="${esc(h.caseId)}" onclick="event.preventDefault();openCase('${esc(h.caseId)}')">${esc(h.who)}</a>`).join(", ")
+      + `</span>`
+    : "";
   const introOpts = (intros || []).map((i) =>
     `<option value="${i.id}" ${i.id === c.introducer_id ? "selected" : ""}>${esc(i.name)}</option>`).join("");
   const clientOpts = (clients || []).map((cl) =>
@@ -4923,6 +5430,7 @@ window.openCase = async function (id, opts = {}) {
             ${identityChipIsFallback ? "" : `<span class="cs-kind">${esc(caseTypeLabel(c))}</span>
             ${c.lender ? `<span class="cs-lender">${lenderIcon(c.lender, 14)}${esc(c.lender)}</span>` : ""}`}
             ${stageBadge(c.stage, { cls: "cs-stage-badge" })}
+            ${sharedHtml}
           </div>
           ${caseClient && (caseClient.phone || caseClient.email) ? `<div class="cs-contact">${caseClient.phone ? "📞 " + telLink(caseClient.phone) : ""}${caseClient.email ? "✉️ " + mailLink(caseClient.email) : ""}</div>` : ""}
         </div>
@@ -7637,13 +8145,19 @@ function impPropVerdict(r) {
      for "…, Parkstone, Poole") used to come through as a confident green "new property" with a chip
      identical to the one on the case it duplicates. Only ever the MATCHED client's own addresses,
      and only ever a question with a one-click answer. */
-  let near = null;
+  let near = null, fork = null;
   if (mineId) {
     const mineAddrs = importCases.filter((c) => c.client_id === mineId).map((c) => c.property_address);
     const earlierAddrs = earlier.map((e) => e.row.property_address);
     near = propNearMatchIn(r.property_address, mineAddrs.concat(earlierAddrs));
+    /* R6-FIX RV-06 — the same address on the same street in a DIFFERENT town.
+       Not a near miss (there is no spelling to adopt, only a town to overwrite),
+       so it carries no button — but a file that abbreviates "Bournemouth" to
+       "Bmth" imports a silent second property, and this is the last screen that
+       can say so. */
+    if (!near) fork = propLocForkIn(r.property_address, mineAddrs.concat(earlierAddrs));
   }
-  const base = { key, cross, earlier, near };
+  const base = { key, cross, earlier, near, fork };
   if (batchDup) return { ...base, kind: "batchdup", client: d.client || null, batchHit: batchDup };
   if (d.mode !== "attach" || !d.client) {
     return { ...base, kind: "newclient", batchHit: earlier[0] || null };
@@ -7708,6 +8222,15 @@ function impPropVerdictHtml(r, i) {
     if (v.near) {
       return `<div class="imp-prop-verdict"><span class="badge amber" title="${esc(`${clientFullName(v.client) || "This client"} already has a case on “${v.near}”. “${propAddress(r.property_address)}” is close enough to be the same building spelled differently — importing it as typed creates a SECOND property with the same short label and nothing matching between them. Adopt the address on file, or leave it if this really is a different building.` + xNote)}">did you mean “${esc(propLabel(v.near) || v.near)}”?</span> <span class="s">${esc(label)} — close to ${esc(v.near)}</span>${xBadge}
         <button type="button" class="btn btn-sm imp-prop-adopt" data-i="${i}" data-addr="${esc(v.near)}" title="Use the address already on file for this client instead of the one in the file">Use the address on file</button></div>`;
+    }
+    /* R6-FIX RV-06 — still a new property, and still importable as one: the row
+       keeps its green badge and its tick. What it gains is a sentence naming the
+       building this client already holds on that same number and street, so a
+       fork the file created by abbreviating a town is at least READ before it is
+       committed. No adopt button — see propLocForkMatch. */
+    if (v.fork) {
+      return `<div class="imp-prop-verdict"><span class="badge ${v.cross.ids.length ? "amber" : "green"}" title="${esc(`No case on ${propAddress(r.property_address)} exists for ${clientFullName(v.client) || "this client"} — this imports as a new property.` + xNote)}">new property</span> <span class="s">${esc(label)}</span>${xBadge}
+        <div class="imp-prop-hint s cs-muted">ℹ ${esc(propLocForkHint(v.fork, "correct the address in the file before importing"))}</div></div>`;
     }
     return `<div class="imp-prop-verdict"><span class="badge ${v.cross.ids.length ? "amber" : "green"}" title="${esc(`No case on ${propAddress(r.property_address)} exists for ${clientFullName(v.client) || "this client"} — this imports as a new property.` + xNote)}">new property</span> <span class="s">${esc(label)}</span>${xBadge}</div>`;
   }
