@@ -2210,3 +2210,124 @@ th .money-basis {
    a 13px numbered dot next to an 11px line needs no nudge. */
 .diary-day .appt .prop-chip .pc-dot.pc-dot-n,
 .appt-block .prop-chip .pc-dot.pc-dot-n { margin-top: 1px; }
+
+/* ==========================================================================
+   ROUND 7 — THE MONEY PACK
+   ==========================================================================
+   Money owed, the rate-end book-value ledger, the protection quote clock and
+   the Monday money page. Nothing here introduces a new colour, a new radius or
+   a new type size: every rule below reuses a token or a class the app already
+   has, because four new panels arriving at once is exactly how an interface
+   starts to look like four different products.
+   ========================================================================== */
+
+/* ---- Money owed (Reports) ------------------------------------------------ */
+.owed-tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+/* A group header carries the subtotals; the case rows underneath are indented
+   under it so the two reading levels are told apart by position, not colour. */
+.owed-table .owed-group-row > td { background: var(--light); border-top: 1px solid #dbe3ec; }
+.owed-table .owed-case-row { cursor: pointer; }
+.owed-table .owed-case-row:hover > td { background: var(--light); }
+.owed-table .owed-case-cell { padding-left: 22px; }
+.owed-table .owed-case-cell .s { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.owed-cell { text-align: right; white-space: nowrap; }
+.owed-table th:not(:first-child) { text-align: right; }
+.owed-total-row > td { border-top: 2px solid var(--navy); background: var(--white); }
+tr.owed-hot > td { background: var(--red-bg); }
+
+/* ---- Rate-end book value (Reports) --------------------------------------- */
+.rb-table .rb-bucket-row { cursor: pointer; }
+.rb-table .rb-bucket-row:hover > td { background: var(--light); }
+.rb-table .rb-bucket-row.is-open > td { background: var(--light); }
+.rb-caret { display: inline-block; width: 12px; color: var(--muted); }
+.rb-table .rb-case-row { cursor: pointer; }
+.rb-table .rb-case-row > td { font-size: 13px; }
+.rb-table .rb-case-row:hover > td { background: var(--light); }
+.rb-case-cell { padding-left: 26px; }
+.rb-case-cell .s { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.rb-total-row > td { border-top: 2px solid var(--navy); }
+/* The word that stops the expected-fee column being read as a forecast. It is
+   deliberately quiet — it qualifies the number, it does not compete with it. */
+.rb-proxy { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
+.rb-recover-row .btn-retention { flex: 0 0 auto; }
+
+/* ---- Rate & ERC alerts, now carrying money (Today) ------------------------ */
+.rate-money { color: var(--muted); margin-top: 3px; }
+.rate-money strong { color: var(--dark); }
+.rate-sort-btn { margin-left: auto; font-weight: 500; }
+/* "Too early" sits where the Start-retention button used to, so the row keeps
+   its shape and the absence of the button is explained rather than mysterious. */
+.rate-too-early { white-space: nowrap; }
+.rate-erc-dedupe-note { text-align: left; font-size: 12px; }
+.wt-link-btn { white-space: nowrap; }
+
+/* ---- The protection quote clock ------------------------------------------ */
+/* Same .badge shape as every other pill on the row; only the number and the
+   word inside it are new, so a quoted row gains information without gaining a
+   second visual language. */
+.badge.q-age { font-variant-numeric: tabular-nums; }
+
+/* ---- Monday money -------------------------------------------------------- */
+#page-money .panel { overflow-x: auto; }
+#page-money .panel-sub code { font-size: 12px; }
+#page-money .imp-table td:last-child,
+#page-money .imp-table th:last-child { text-align: right; }
+#page-money #money-adviser-table td:not(:first-child),
+#page-money #money-adviser-table th:not(:first-child) { text-align: right; }
+#page-money .row-item .t { cursor: pointer; }
+
+/* ---- Narrow screens ------------------------------------------------------
+   Everything above is inside a .panel with overflow-x:auto (Reports and Monday
+   money both), so a wide table scrolls rather than blowing out the layout
+   viewport — the R6-B4 rule. These two only tidy what the scroller cannot:
+   the segmented group toggle wraps instead of squeezing, and the indents that
+   buy a reading level on a desktop give the space back on a phone. */
+@media (max-width: 640px) {
+  .owed-tools { width: 100%; }
+  .owed-tools .btn { flex: 1 1 auto; min-height: 40px; }
+  .owed-table .owed-case-cell { padding-left: 12px; }
+  .rb-case-cell { padding-left: 14px; }
+  #page-money .kpi-row { gap: 10px; }
+}
+
+/* ==========================================================================
+   ROUND 7 — SPEED TO LEAD
+   ==========================================================================
+   The accept clock on the lead inbox, the round-robin routing note, and the
+   Lead-response tables on Reports. Same rule as the money pack above: no new
+   colour, no new radius, no new type size. The age chip is a plain .badge in
+   the three colours the app already uses for green/amber/red, because a fourth
+   visual language for "late" is how a screen stops being scannable.
+   ========================================================================== */
+
+/* ---- The accept clock (Today · lead inbox and My Day) -------------------- */
+.badge.lead-age { font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* The acknowledgement receipt. Deliberately quiet and deliberately NOT a
+   badge: it must never compete with the age chip, because "we emailed them"
+   is not "we answered them". */
+.lead-ack {
+  margin-left: 6px; font-size: 12px; color: var(--muted);
+  cursor: help; vertical-align: baseline;
+}
+/* The round-robin suggestion note, beside the adviser select. Hidden by the
+   .hidden utility the moment the selection moves off the suggestion. */
+.lead-rr { font-size: 12px; color: var(--muted); white-space: nowrap; margin-left: -4px; }
+/* The order line under the panel heading — plain until something is late. */
+#leads-order:empty { display: none; }
+#leads-order.lead-order-hot { color: var(--red); }
+/* Where a link from the Emails page (or a Watchtower alert) has just landed. */
+@keyframes leadFlash { from { background: var(--amber-bg); } to { background: transparent; } }
+.row-item.lead-flash { animation: leadFlash 2.2s ease-out; }
+/* A lead_ack row on the Emails page is about an enquiry, not a client. */
+.lead-email-chip { margin-left: 4px; }
+
+/* ---- Lead response (Reports) --------------------------------------------- */
+.leadresp-h { margin: 0 0 8px; font-size: 13px; color: var(--muted); font-weight: 600; letter-spacing: .02em; }
+.leadresp-table { width: 100%; }
+.leadresp-table td:not(:first-child), .leadresp-table th:not(:first-child) { text-align: right; white-space: nowrap; }
+.leadresp-table td:first-child { text-align: left; }
+.leadresp-empty { text-align: left; line-height: 1.5; }
+@media (max-width: 640px) {
+  #leadresp-tools { width: 100%; }
+  #leadresp-tools .btn { width: 100%; min-height: 40px; }
+}

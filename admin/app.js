@@ -119,7 +119,17 @@ const EMAIL_LABEL = {
   referral_request: "Referral request", rate_end_chase: "Rate-end chase",
   protection_offer: "Protection intro", gi_exchange: "GI / buildings insurance",
   birthday_greeting: "Birthday greeting", completion_anniversary: "Completion anniversary",
+  /* R7 — the lead acknowledgement. Queued by the database's AFTER INSERT trigger on `leads` the
+     moment a website enquiry arrives with an email address, so it appears on the Emails page with
+     no case and no adviser behind it. Without an entry here the row rendered as
+     "undefined — <address>", which is how a new email type announces itself. */
+  lead_ack: "Lead acknowledgement",
 };
+/* R7 — and the one place a missing type could still print "undefined": the Emails list heading.
+   Every other consumer already falls back to the raw type; this one did not. A type this map has
+   never heard of is now rendered as the type itself, humanised, rather than as a JavaScript
+   accident on a client-facing operations screen. */
+const emailTypeLabel = (t) => EMAIL_LABEL[t] || (t ? String(t).replace(/_/g, " ").replace(/^./, (ch) => ch.toUpperCase()) : "Email");
 const SMS_LABEL = {
   rate_end: "Rate-end reminder", rate_end_reminder: "Rate-end reminder",
   appointment: "Appointment reminder", appointment_reminder: "Appointment reminder",
@@ -477,14 +487,102 @@ function adviserOptionsHtml(placeholder) {
   const others = TEAM.filter((p) => p.id !== authUid).map((p) => `<option value="${p.id}">${esc(staffName(p.id))}</option>`).join("");
   return `<option value="" selected>${esc(placeholder)}</option>${meOpt}${others}`;
 }
-/* T1-3 — the "route this lead to…" select. Unlike adviserOptionsHtml there is no blank placeholder:
-   a lead always lands on somebody. R5-5: that somebody is ALWAYS me until a human says otherwise —
-   the previous "whoever the last lead went to" default made one routing decision leak onto every
-   other lead in the inbox, so leads quietly piled up on a colleague nobody chose for them. */
-function leadAdviserOptionsHtml() {
-  const sel = (ME && ME.id) || (TEAM[0] && TEAM[0].id) || "";
-  return TEAM.map((p) => `<option value="${p.id}" ${p.id === sel ? "selected" : ""}>${esc(staffName(p.id))}${p.id === (ME && ME.id) ? " (me)" : ""}</option>`).join("");
+/* ==========================================================================
+   R7-5 — ROUND-ROBIN ROUTING SUGGESTION.
+
+   R5-5 made every lead default to ME, because the thing it replaced ("whoever
+   the last lead went to") leaked one routing decision onto every other row.
+   "Me" is honest but it is not fair: the person who happens to be watching the
+   inbox at 9am takes the morning's leads on top of whatever they are already
+   carrying, and the colleague with an empty desk gets none.
+
+   So the default is now the LIGHTEST-LOADED member of the team — and three
+   rules keep that from becoming the leak R5-5 removed:
+
+   · IT IS ONLY A DEFAULT. The round-5 rule stands: nothing is auto-assigned
+     without being displayed first. The suggestion is selected in a visible
+     select, labelled "lightest load", and one click changes it.
+   · IT IS RECOMPUTED, NEVER REMEMBERED. There is no stored "last adviser";
+     the answer is derived from the load on screen every time the inbox paints.
+   · IT CANNOT SUGGEST SOMEBODY THE SELECT DOES NOT OFFER. The candidates are
+     exactly TEAM — the same STAFF_ROLES list the options are built from — so a
+     leaver (role "none") can never be suggested, and neither can an introducer.
+
+   LOAD is open cases + open tasks, both taken from data the Today screen has
+   ALREADY fetched for its own panels (loadDashboard's cases read and
+   loadTasks' fetch), so the suggestion costs no extra round-trip. Both bases
+   are stated in the select's tooltip rather than left to be guessed at:
+   "open" cases means every stage except completed / not proceeding, and "open"
+   tasks means undone tasks inside the fortnight horizon the Tasks panel itself
+   works to. Where neither has loaded (the panel painted outside a dashboard
+   load, or both queries failed), there is no answer and the round-5 default —
+   me — is used unchanged.
+   ========================================================================== */
+let advLoadCases = null;   // adviser id → open cases   (published by loadDashboard)
+let advLoadTasks = null;   // adviser id → open tasks   (published by loadTasks)
+function adviserLoadMap() {
+  /* BOTH halves or none. A "lightest load" claim computed off a caseload with the tasks missing
+     (or the other way round, when one of the two reads failed) is a ranking of half the work,
+     stated with the same confidence as the whole of it — so when either is unknown there is no
+     suggestion at all and the round-5 default stands. */
+  if (!advLoadCases || !advLoadTasks) return null;
+  const map = {};
+  TEAM.forEach((p) => {
+    const c = (advLoadCases && advLoadCases[p.id]) || 0;
+    const t = (advLoadTasks && advLoadTasks[p.id]) || 0;
+    map[p.id] = { cases: c, tasks: t, total: c + t };
+  });
+  return map;
 }
+/* The lightest desk on the team. Ties break on TEAM order, which is the
+   profiles list ordered by full_name — deterministic, so two people carrying
+   the same load do not swap places between two paints of the same inbox. */
+function leastLoadedAdviser() {
+  const map = adviserLoadMap();
+  if (!map || !TEAM.length) return null;
+  let best = null;
+  TEAM.forEach((p) => { if (!best || map[p.id].total < map[best].total) best = p.id; });
+  return best;
+}
+function leadRoutingSuggestion() {
+  const rr = leastLoadedAdviser();
+  return rr || (ME && ME.id) || (TEAM[0] && TEAM[0].id) || "";
+}
+function leadLoadTitle(id) {
+  const map = adviserLoadMap();
+  const l = map && map[id];
+  if (!l) return "Which adviser this lead's case is created for";
+  return `Which adviser this lead's case is created for. ${staffName(id)} has the lightest desk right now: `
+    + `${l.cases} open case${l.cases === 1 ? "" : "s"} + ${l.tasks} open task${l.tasks === 1 ? "" : "s"} due in the next fortnight = ${l.total}. `
+    + `It is a suggestion, not an assignment — change it and the lead goes where you say.`;
+}
+/* T1-3 — the "route this lead to…" select. Unlike adviserOptionsHtml there is no blank placeholder:
+   a lead always lands on somebody. R7-5: the pre-selected one is the lightest-loaded member of the
+   team (falling back to me when no load figures have been read), and it says so in the option text
+   as well as beside the control, so nobody has to hover to find out why that name is there. */
+function leadAdviserOptionsHtml() {
+  const sel = leadRoutingSuggestion();
+  const rr = leastLoadedAdviser();
+  return TEAM.map((p) => `<option value="${p.id}" ${p.id === sel ? "selected" : ""}>${esc(staffName(p.id))}${p.id === (ME && ME.id) ? " (me)" : ""}${p.id === rr ? " · lightest load" : ""}</option>`).join("");
+}
+/* The select plus the "(lightest load)" note that sits beside it. The note is hidden the moment the
+   selection moves off the suggestion (see the delegated change listener below) — a label that keeps
+   claiming "lightest load" over somebody the operator has just overridden would be a lie. */
+function leadRoutingHtml(leadId) {
+  const rr = leastLoadedAdviser();
+  const sel = leadRoutingSuggestion();
+  return `<select class="lead-adviser" data-lead="${esc(leadId || "")}" data-rr="${esc(rr || "")}" aria-label="Assign this lead to" title="${esc(leadLoadTitle(rr))}" style="width:auto;">${leadAdviserOptionsHtml()}</select>`
+    + (rr ? `<span class="lead-rr${sel === rr ? "" : " hidden"}" data-rr-for="${esc(leadId || "")}" title="${esc(leadLoadTitle(rr))}">(lightest load)</span>` : "");
+}
+function syncLeadRrNote(sel) {
+  if (!sel) return;
+  const note = sel.parentElement && sel.parentElement.querySelector(`.lead-rr[data-rr-for="${CSS.escape(sel.dataset.lead || "")}"]`);
+  if (note) note.classList.toggle("hidden", sel.value !== sel.dataset.rr);
+}
+document.addEventListener("change", (ev) => {
+  const sel = ev.target && ev.target.closest && ev.target.closest("select.lead-adviser");
+  if (sel) syncLeadRrNote(sel);
+});
 /* R5-5 — accepting a lead repaints the whole inbox (and My Day), which throws away any selection a
    human made on the OTHER rows. Capture them by lead id first, put them back after the repaint.
    Only selections that are still offered as an option are restored; everything else falls back to
@@ -499,6 +597,7 @@ function restoreLeadAdvSel(map) {
   document.querySelectorAll("select.lead-adviser[data-lead]").forEach((s) => {
     const want = map[s.dataset.lead];
     if (want && Array.prototype.some.call(s.options, (o) => o.value === want)) s.value = want;
+    syncLeadRrNote(s);   // R7-5 — a restored override must not keep the "lightest load" note
   });
 }
 // The lead-adviser select that sits beside an Accept button (same row), if there is one.
@@ -2310,6 +2409,11 @@ async function showApp(session) {
      carries the full address for hover and for assistive tech. */
   $("#user-email").textContent = session.user.email;
   $("#user-email").title = `Signed in as ${session.user.email}`;
+  /* R7-4 — the Monday money nav item appears only for the Owner. Done here, after resolveMyRole
+     has answered, and never in the markup, so an adviser cannot see the button at all — not even
+     for the frame between the shell being revealed and the role arriving. */
+  const navMoney = $("#nav-money");
+  if (navMoney) navMoney.classList.toggle("hidden", !isOwner());
   // BUILD 6d — restore this user's pipeline segment/view prefs now that their id is known.
   restoreUserPrefs(session.user.id);
   await loadSettings();
@@ -2390,7 +2494,13 @@ $("#forgot-btn").addEventListener("click", async () => {
    the PWA service worker. All history.* calls are wrapped — if the History API is unavailable or
    blocked (some file:// contexts), modal history is simply not tracked and the app still works.
    Segments/filters stay OUT of the hash (session/localStorage already persists those). */
-const PAGE_HASH = { dashboard: "today", pipeline: "pipeline", protection: "protection", diary: "diary", clients: "clients", import: "import", reports: "reports", data: "data", emails: "emails", settings: "settings" };
+const PAGE_HASH = { dashboard: "today", pipeline: "pipeline", protection: "protection", diary: "diary", clients: "clients", import: "import", reports: "reports", money: "money", data: "data", emails: "emails", settings: "settings" };
+/* R7-4 — pages only some roles may open. Monday money is entirely firm-wide money, so it is
+   Owner-only: the nav button is revealed by showApp and nav() below redirects anyone else who
+   reaches for it (a bookmarked #money, a hand-typed hash, an old link in an email). Same standing
+   caveat as showMoney(): this is PRESENTATION. The rows behind it are still readable over the API
+   by any signed-in staff account; do not describe it as a control. */
+const PAGE_ROLE_GATE = { money: () => isOwner() };
 const HASH_PAGE = Object.fromEntries(Object.entries(PAGE_HASH).map(([p, h]) => [h, p]));
 const MODAL_DEFAULT_PAGE = { case: "pipeline", client: "clients", appt: "diary" };
 let currentPage = "dashboard";
@@ -2435,7 +2545,10 @@ async function routeFromHash() {
     else await openAppt(id);
     return;
   }
-  const page = HASH_PAGE[head] || "dashboard";
+  let page = HASH_PAGE[head] || "dashboard";
+  // R7-4 — resolve the role gate HERE too, so the clean base entry written below is the page the
+  // user actually landed on rather than the one they asked for and did not get.
+  if (PAGE_ROLE_GATE[page] && !PAGE_ROLE_GATE[page]()) page = "dashboard";
   nav(page, false);
   histReplace({ page }, pageHash(page)); // establish a clean base entry (also normalises unknown hashes)
 }
@@ -2486,6 +2599,14 @@ document.addEventListener("click", (e) => {
   card.querySelectorAll(".dash-tab-panel").forEach((p, i) => p.classList.toggle("hidden", i !== [...t.parentElement.children].indexOf(t)));
 });
 function nav(page, push = true) {
+  /* R7-4 — a gated page reached by anyone who may not open it lands on Today instead. The hash is
+     rewritten to match WHATEVER the caller asked for (including the push=false cold-load and
+     popstate routes), because a URL bar reading #money over a Today page is a lie the next Back
+     press acts on: without this, Back re-enters the gated hash and bounces off the gate again. */
+  if (PAGE_ROLE_GATE[page] && !PAGE_ROLE_GATE[page]()) {
+    page = "dashboard";
+    histReplace({ page }, pageHash(page));
+  }
   document.querySelectorAll(".page").forEach((p) => p.classList.add("hidden"));
   $("#page-" + page).classList.remove("hidden");
   document.querySelectorAll("#topnav button").forEach((b) => b.classList.toggle("active", b.dataset.page === page));
@@ -2500,7 +2621,7 @@ function nav(page, push = true) {
   // B9 (R5-31) — the diary page can be showing either the month grid or the Day view; route to
   // whichever loader matches the persisted toggle so navigating back into #diary doesn't silently
   // flip it back to Month.
-  ({ dashboard: loadDashboard, pipeline: loadPipeline, protection: loadProtectionPage, diary: () => (diaryViewMode === "day" ? loadDiaryDay() : loadDiary()), clients: () => loadClients($("#client-search").value), import: () => {}, reports: loadReports, data: loadDataHealth, emails: loadEmails, settings: renderSettings }[page])();
+  ({ dashboard: loadDashboard, pipeline: loadPipeline, protection: loadProtectionPage, diary: () => (diaryViewMode === "day" ? loadDiaryDay() : loadDiary()), clients: () => loadClients($("#client-search").value), import: () => {}, reports: loadReports, money: loadMoneyPage, data: loadDataHealth, emails: loadEmails, settings: renderSettings }[page])();
 }
 
 /* ---------- Settings ---------- */
@@ -2814,10 +2935,22 @@ if ($("#save-my-details-btn")) $("#save-my-details-btn").addEventListener("click
 let hasBankDetails = null;
 /* R5-6 — source case ids that already have a retention successor (populated by loadDashboard). */
 let retentionSourceIds = new Set();
+/* R7-2 — how the Rate & ERC panel is ordered. "value" (loan at risk) is the default for the Owner;
+   an adviser has no money on that panel at all and stays on the date order round 6 shipped. */
+let rateErcSortMode = "value";
+window.toggleRateErcSort = function () {
+  rateErcSortMode = rateErcSortMode === "value" ? "date" : "value";
+  loadDashboard();
+};
 async function loadDashboard() {
   const reminderMonths = Number(settings.rate_reminder_months) || 6; // T1-10 — a stray already-stored non-numeric value can't render "≤ NaNmo"
   const [{ data: cases, error: casesErr }, { data: alerts, error: alertsErr }, bank] = await Promise.all([
-    db.from("cases").select("id,stage,fee_status,broker_fee,completed_at,retention_source_case_id"),
+    /* R7-2 — widened by four BASE columns so the Rate & ERC panel can show what each expiring rate
+       is WORTH (loan at risk, and the fee last earned on it) without a second read. v_alerts
+       carries neither, and adding them to the view is a backend change this round does not make. */
+    /* R7-5 — plus assigned_to, a base column since the original schema, so the lead-routing
+       suggestion can weigh each adviser's open caseload without a read of its own. */
+    db.from("cases").select("id,stage,fee_status,broker_fee,proc_fee,sols_fee,loan_amount,completed_at,retention_source_case_id,assigned_to"),
     db.from("v_alerts").select("*").order("rate_end_date"),
     /* R5-28 — one firm-wide question, asked once per dashboard load and cached for the briefing's
        "Chase fee" buttons (see briefActions). A failed RPC leaves the answer unknown (null), which
@@ -2836,6 +2969,11 @@ async function loadDashboard() {
     return;
   }
   const active = (cases || []).filter((c) => !["completed", "not_proceeding"].includes(c.stage));
+  /* R7-5 — half of the lead-routing load figure, from the rows this panel has already read. "Open"
+     is every stage except completed and not proceeding — the same `active` set the KPI above counts,
+     so the suggestion and the headline can never disagree about what an open case is. */
+  advLoadCases = {};
+  active.forEach((c) => { if (c.assigned_to) advLoadCases[c.assigned_to] = (advLoadCases[c.assigned_to] || 0) + 1; });
   const yr = new Date().getFullYear();
   const completedThisYear = (cases || []).filter((c) => c.completed_at && new Date(c.completed_at).getFullYear() === yr);
   const feesDue = (cases || []).filter((c) => ["not_requested", "requested"].includes(c.fee_status) && c.broker_fee > 0 && c.stage !== "not_proceeding");
@@ -2860,23 +2998,72 @@ async function loadDashboard() {
     ${money ? `<div class="kpi ${feesDue.length ? "warn" : ""}" style="cursor:pointer;" onclick="kpiGoto('fees')" title="View the Protection &amp; Fees drawer — Fees due tab"><div class="num">${fmtM(feesDueTotal)}</div><div class="lbl">Fees outstanding (${feesDue.length}) <span style="font-weight:400;opacity:.7;">· all stages</span></div></div>` : ""}`;
 
   const ercIds = new Set(ercFlags.map((a) => a.case_id));
-  const rateErcMerged = [...ratesSoon];
-  ercFlags.forEach((a) => { if (!rateErcMerged.some((x) => x.case_id === a.case_id)) rateErcMerged.push(a); });
-  rateErcMerged.sort((a, b) => (a.rate_end_date || "") < (b.rate_end_date || "") ? -1 : 1);
-  const rateErcH3 = $("#rate-erc-panel h3");
-  rateErcH3.innerHTML = `⚠️ Rate &amp; ERC alerts
-    ${ratesSoon.length ? `<span class="count hot">${ratesSoon.length} ending soon</span>` : ""}
-    ${ercFlags.length ? `<span class="count" style="background:#fbe9e7;color:var(--red);">${ercFlags.length} ERC conflict</span>` : ""}`;
+  const rateErcAll = [...ratesSoon];
+  ercFlags.forEach((a) => { if (!rateErcAll.some((x) => x.case_id === a.case_id)) rateErcAll.push(a); });
+  /* R7-2 — what each expiring rate is WORTH, keyed by case id, from the widened cases read above.
+     `lastFee` is proc + broker + sols on the case: the fee the firm earned last time it did this
+     mortgage, which is the only fee figure the schema holds and therefore the only honest proxy
+     for what a renewal is worth. Labelled as a proxy everywhere it appears. */
+  const rateMoney = {};
+  (cases || []).forEach((c) => { rateMoney[c.id] = { loan: Number(c.loan_amount || 0), lastFee: caseLastFee(c) }; });
   /* R6 — v_alerts carries the client's NAME and nothing about the building, so Duncan Armitage's
      two Skipton cases on 4 Seafield Gardens (and any two of a landlord's five) render as the same
      row twice, inflating the counters above and offering two identical buttons. One batched
-     lookup of the cases behind the rows on screen gives every row its property. */
-  const rateErcCtx = await loadPropContext(rateErcMerged.slice(0, 15).map((a) => a.case_id));
-  $("#alerts-rateerc").innerHTML = rateErcMerged.length ? rateErcMerged.slice(0, 15).map((a) => `
+     lookup of the cases behind the rows on screen gives every row its property.
+     R7-2 — the lookup now runs over the WHOLE merged list rather than the first fifteen, because
+     de-duplication has to happen before the slice: collapsing after cutting to fifteen would drop
+     real maturities off the end of the list to make room for rows it was about to merge anyway. */
+  const rateErcCtx = await loadPropContext(rateErcAll.map((a) => a.case_id));
+  /* R7-2 — ONE BUILDING, ONE MATURITY DATE, ONE ROW. Two cases on the same property whose rates
+     end on the same day are one mortgage conversation, and until now they were two identical rows
+     with two identical buttons, each of which would create its own retention case. Collapsed on
+     propKey + rate_end_date (the same key the Reports ledger uses), badged with how many cases are
+     behind the row, and never guessed at: a case with no address collapses with nothing. */
+  const rateErcSeen = new Map();
+  const rateErcMerged = [];
+  rateErcAll.forEach((a) => {
+    const row = propCtxCase(rateErcCtx, a.case_id);
+    const pk = row ? propKey(row) : "";
+    const key = pk ? pk + "|" + (a.rate_end_date || "") : "";
+    if (!key) { a.__dupes = 1; rateErcMerged.push(a); return; }
+    if (!rateErcSeen.has(key)) { a.__dupes = 1; rateErcSeen.set(key, a); rateErcMerged.push(a); return; }
+    rateErcSeen.get(key).__dupes++;
+  });
+  /* R7-2 — sorted by VALUE AT RISK by default (the loan on the case), because the question this
+     panel is scanned with is "which of these matters most", and a date sort answers a different
+     one. The date sort is one click away and the header says which is in force. Owner only: the
+     loan and fee columns are firm money and an adviser keeps the round-6 panel exactly as it was,
+     date-sorted, with no money on it. */
+  const rateValueSort = showMoney() && rateErcSortMode === "value";
+  if (rateValueSort) {
+    rateErcMerged.sort((a, b) => {
+      const d = ((rateMoney[b.case_id] || {}).loan || 0) - ((rateMoney[a.case_id] || {}).loan || 0);
+      return d || ((a.rate_end_date || "") < (b.rate_end_date || "") ? -1 : 1);
+    });
+  } else {
+    rateErcMerged.sort((a, b) => (a.rate_end_date || "") < (b.rate_end_date || "") ? -1 : 1);
+  }
+  const rateErcH3 = $("#rate-erc-panel h3");
+  const rateErcCollapsed = rateErcAll.length - rateErcMerged.length;
+  rateErcH3.innerHTML = `⚠️ Rate &amp; ERC alerts
+    ${ratesSoon.length ? `<span class="count hot">${ratesSoon.length} ending soon</span>` : ""}
+    ${ercFlags.length ? `<span class="count" style="background:#fbe9e7;color:var(--red);">${ercFlags.length} ERC conflict</span>` : ""}
+    ${showMoney() ? `<button type="button" class="btn btn-sm rate-sort-btn" id="rate-erc-sort" onclick="event.stopPropagation();toggleRateErcSort()" title="${rateValueSort ? "Sorted by loan size — the value at risk. Click to sort by date instead." : "Sorted by rate end date. Click to sort by loan size — the value at risk."}">${rateValueSort ? "↕ By value at risk" : "↕ By date"}</button>` : ""}`;
+  $("#alerts-rateerc").innerHTML = rateErcMerged.length ? rateErcMerged.slice(0, 15).map((a) => {
+    const mny = rateMoney[a.case_id] || { loan: 0, lastFee: 0 };
+    /* R7-2 — the button is suppressed beyond nine months out. Starting a retention case that far
+       ahead creates a live enquiry, a call task and a queued client email for a conversation that
+       cannot usefully happen yet — it clutters the pipeline for three quarters and the client gets
+       rung about a rate that has most of a year to run. Nine months is three months of runway
+       ahead of the six-month reminder window the nightly queue works to, so a case is never
+       stranded: the window reaches it before the button reappears. */
+    const farOut = a.days_to_rate_end != null && a.days_to_rate_end > 274;
+    return `
     <div class="row-item">
       <div class="row-main">
-        <div class="t" onclick="openCase('${a.case_id}')">${esc(a.client_name)} ${propCtxChip(rateErcCtx, a.case_id, "row-prop")}</div>
+        <div class="t" onclick="openCase('${a.case_id}')">${esc(a.client_name)} ${propCtxChip(rateErcCtx, a.case_id, "row-prop")}${a.__dupes > 1 ? ` <span class="badge grey" title="${a.__dupes} cases share this property and this rate end date — shown once, because it is one mortgage conversation.">${a.__dupes} cases</span>` : ""}</div>
         <div class="s">${lenderIcon(a.lender)}${esc(a.lender || "")} ${a.rate_percent ? a.rate_percent + "%" : ""} — ends ${fmtD(a.rate_end_date)}${a.days_to_rate_end != null ? ` (${a.days_to_rate_end < 0 ? Math.abs(a.days_to_rate_end) + " days ago" : "in " + a.days_to_rate_end + " days"})` : ""}${ercIds.has(a.case_id) ? ` — ERC runs until ${fmtD(a.erc_end_date)}` : ""}</div>
+        ${money ? `<div class="s rate-money">Loan <strong>${mny.loan ? fmtM(mny.loan) : "—"}</strong> · last fee <strong>${mny.lastFee ? fmtM(mny.lastFee) : "none recorded"}</strong> <span class="money-basis">(value at risk · loan on the case · last fee as proxy)</span></div>` : ""}
       </div>
       ${a.days_to_rate_end < 0 ? '<span class="badge red">OVERDUE</span>' : ""}
       ${ercIds.has(a.case_id) ? `<span class="badge red" title="${TIP_ERC}">ERC conflict</span>` : ""}
@@ -2888,7 +3075,9 @@ async function loadDashboard() {
            reminder window; a rate that has already ended is never picked up, and these rows sat
            here saying "reminder pending" forever. This is the manual path for exactly those. */ ""}
       ${a.stage === "completed" && !a.rate_reminder_queued_at && a.rate_end_date && !retentionSourceIds.has(a.case_id)
-        ? `<button class="btn btn-sm btn-retention" onclick="event.stopPropagation();startRetentionCase('${a.case_id}', event)" title="Create the follow-on remortgage case, the call task and a queued reminder">🔁 Start retention case</button>` : ""}
+        ? (farOut
+          ? `<span class="badge grey rate-too-early" title="This rate has more than nine months to run. Starting a retention case now would create a live enquiry, a call task and a queued client email for a conversation that cannot usefully happen yet — the ${reminderMonths}-month reminder window reaches this case long before it is too late.">too early — ${Math.round(a.days_to_rate_end / 30)}mo out</span>`
+          : `<button class="btn btn-sm btn-retention" onclick="event.stopPropagation();startRetentionCase('${a.case_id}', event)" title="Create the follow-on remortgage case, the call task and a queued reminder">🔁 Start retention case</button>`) : ""}
       ${/* G1I-R5 — the recovery control. A retention case already exists for this one, so the
            button above is (correctly) gone, but the source was never stamped: the row nags
            "Reminder pending" forever and the nightly RPC will never pick it up either, because
@@ -2896,10 +3085,18 @@ async function loadDashboard() {
            client a SECOND reminder email. */ ""}
       ${a.stage === "completed" && !a.rate_reminder_queued_at && retentionSourceIds.has(a.case_id)
         ? `<button class="btn btn-sm btn-retention" onclick="event.stopPropagation();markRateReminded('${a.case_id}', event)" title="This case already has a retention case, but it was never marked as reminded — clear the nag without emailing the client again">✓ Mark as reminded</button>` : ""}
-    </div>`).join("") + (rateErcMerged.length > 15 ? `<div class="empty">…and ${rateErcMerged.length - 15} more — see Pipeline table view.</div>` : "") : '<div class="empty">Nothing ending in the reminder window, and no ERC conflicts. 👍</div>';
+    </div>`;
+  }).join("")
+    + (rateErcMerged.length > 15 ? `<div class="empty">…and ${rateErcMerged.length - 15} more — see Pipeline table view.</div>` : "")
+    + (rateErcCollapsed ? `<div class="empty rate-erc-dedupe-note">${rateErcCollapsed} further case${rateErcCollapsed === 1 ? " is" : "s are"} folded into the rows above — same property, same rate end date, one conversation.</div>` : "")
+    : '<div class="empty">Nothing ending in the reminder window, and no ERC conflicts. 👍</div>';
 
   loadRetention();
-  loadTasks();
+  /* R7-5 — awaited, and the only one that is: loadTasks publishes the task half of the routing
+     load, and the two panels underneath it paint the lead-routing selects. Racing them would give
+     the first paint of the inbox a cases-only view of who is busiest, which would then differ from
+     the same select after any repaint. Everything else still runs unawaited, as before. */
+  await loadTasks();
   loadProtection();
   loadLeads();
   loadTodayAppts();
@@ -2989,17 +3186,26 @@ async function loadRetention() {
    cases nag "Reminder pending" forever and nobody ever books the conversation. This replicates the
    RPC's behaviour for ONE case, on demand, with the same shapes so the automatic and manual rows
    are indistinguishable afterwards. It QUEUES the reminder — it never sends (R5-1). */
-window.startRetentionCase = async function (caseId, ev) {
+/* R7-2 — `opts.silent` is what the pipeline's bulk verb runs this with. It suppresses the toast
+   and the page reloads (a six-case sweep must not repaint the board six times, and six toasts in a
+   row means five of them are never seen — see the G1I-R7 note below) and returns a RESULT the
+   caller can tally. Everything else is byte-identical, on purpose: the per-case confirm, the
+   sold-property warning, the property-less warning and every part-failure message are the machinery
+   this flow exists for, and a bulk action that skipped them would be a different, worse flow
+   wearing the same name. */
+window.startRetentionCase = async function (caseId, ev, opts) {
+  const o = opts || {};
+  const done = (status, msg) => { if (!o.silent && msg) toast(msg); return { status, message: msg || "", caseId }; };
   const btn = (ev && (ev.currentTarget || ev.target)) || null;
-  if (btn) { if (btn.disabled) return; btn.disabled = true; }
+  if (btn) { if (btn.disabled) return { status: "busy", message: "", caseId }; btn.disabled = true; }
   try {
     const { data: c } = await db.from("cases").select("*").eq("id", caseId).single();
-    if (!c) return toast("Case not found — it may have been deleted or you don't have access.");
+    if (!c) return done("error", "Case not found — it may have been deleted or you don't have access.");
     notePropAddrFromStarRow(c); // a select("*") is the strongest M7 signal there is
-    if (c.stage !== "completed") return toast("A retention case starts from a completed case.");
-    if (!c.rate_end_date) return toast("Set the rate end date on this case first.");
+    if (c.stage !== "completed") return done("skipped", "A retention case starts from a completed case.");
+    if (!c.rate_end_date) return done("skipped", "Set the rate end date on this case first.");
     const { data: already } = await db.from("cases").select("id").eq("retention_source_case_id", caseId).limit(1);
-    if (already && already.length) { toast("This case already has a retention case."); return; }
+    if (already && already.length) return done("skipped", "This case already has a retention case.");
     const { data: cl } = await db.from("clients").select("id,first_name,last_name,email").eq("id", c.client_id).single();
     const clientName = [cl?.first_name, cl?.last_name].filter(Boolean).join(" ") || "this client";
     // Same due-date formula as the RPC: three months before the rate ends, never in the past.
@@ -3041,7 +3247,7 @@ window.startRetentionCase = async function (caseId, ev) {
         : `• no reminder email — ${clientName} has no email address on file`,
       "",
       "This case will stop showing as \"reminder pending\".",
-    ].join("\n"))) return;
+    ].join("\n"))) return done("cancelled", "");
 
     const successor = {
       client_id: c.client_id,
@@ -3079,7 +3285,7 @@ window.startRetentionCase = async function (caseId, ev) {
         ins = await db.from("cases").insert(lean).select("id").single();
       }
     }
-    if (ins.error || !ins.data) return toast("Could not create the retention case: " + ((ins.error && ins.error.message) || "unknown error"));
+    if (ins.error || !ins.data) return done("error", "Could not create the retention case: " + ((ins.error && ins.error.message) || "unknown error"));
     const newId = ins.data.id;
 
     /* G1I-R7 — toast() writes to a single #toast node, so a warning emitted here and a success
@@ -3127,12 +3333,15 @@ window.startRetentionCase = async function (caseId, ev) {
       if (qErr) warn.push(`the rate-end reminder to ${cl.email} was NOT queued (${qErr.message}) — the client will not hear from us until you queue it from the case`);
       else queued = true;
     }
-    toast(warn.length
+    const outMsg = warn.length
       ? `Retention case created, but ${warn.join("; and ")}`
-      : `Retention case created ✓${propShort ? " — " + propShort : ""}${queued ? " · reminder queued, not sent" : ""}`);
+      : `Retention case created ✓${propShort ? " — " + propShort : ""}${queued ? " · reminder queued, not sent" : ""}`;
+    if (o.silent) return { status: warn.length ? "created_with_warnings" : "created", message: outMsg, caseId, warn };
+    toast(outMsg);
     if (currentModal && currentModal.type === "case" && currentModal.id === caseId) openCase(caseId);
     if (!$("#page-dashboard").classList.contains("hidden")) loadDashboard();
     else { loadRetention(); loadBriefing(); }
+    return { status: warn.length ? "created_with_warnings" : "created", message: outMsg, caseId, warn };
   } finally {
     if (btn) btn.disabled = false;
   }
@@ -3164,6 +3373,13 @@ async function loadTasks() {
     .order("due_date")
     .limit(200); // sane fetch cap; the "mine" scope filter is applied client-side below, so limit AFTER filtering (was .limit(40) which truncated busy advisers' lists/badges before scoping)
   if (error) { renderLoadError("#tasks-list", error, loadTasks); return; }
+  /* R7-5 — the other half of the lead-routing load figure. Counted off `raw`, BEFORE the Mine/All
+     scope filter below: how busy a colleague is does not depend on which scope this panel happens
+     to be showing. The horizon is this fetch's own (undone, due within a fortnight — overdue
+     included), which is what "on their desk right now" means on this screen; the select's tooltip
+     says so rather than claiming every open task ever. */
+  advLoadTasks = {};
+  (raw || []).forEach((t) => { if (t.assigned_to) advLoadTasks[t.assigned_to] = (advLoadTasks[t.assigned_to] || 0) + 1; });
   // T1-5: "Mine" means mine. Ownerless tasks are no longer silently everyone's — they live behind
   // the explicit Unassigned scope so they get claimed deliberately.
   const filtered = (raw || []).filter((t) => tasksScope === "all" || (tasksScope === "unassigned" ? !t.assigned_to : t.assigned_to === (ME && ME.id)));
@@ -3254,7 +3470,11 @@ function briefBadge(it) {
   switch (it.kind) {
     case "task_overdue": return '<span class="badge red">OVERDUE</span>';
     case "task_today": return '<span class="badge amber">TODAY</span>';
-    case "lead_new": return '<span class="badge green">NEW LEAD</span>';
+    /* R7-5 — the accept clock reaches My Day too. The NEW LEAD badge stays (it is what the row IS);
+       the age chip beside it is how late it is, and it is the one that changes colour. `it.lead` is
+       attached by loadBriefing's enrichment below and is simply absent if that fetch failed, in
+       which case the row renders exactly as it did in round 5. */
+    case "lead_new": return '<span class="badge green">NEW LEAD</span>' + (it.lead ? leadAckMark(it.lead) + leadAgeBadge(it.lead) : "");
     case "email_new": return '<span class="badge blue">EMAIL</span>';
     case "appt_today": return '<span class="badge purple">APPT</span>';
     case "rate_urgent": return it.days != null && it.days < 0 ? '<span class="badge red">RATE ENDED</span>' : '<span class="badge amber">RATE</span>';
@@ -3271,7 +3491,7 @@ function briefActions(it) {
     case "task_today":
       return `<button class="btn btn-sm" onclick="briefDone('${it.task_id}')">✓ Done</button>${open}`;
     case "lead_new":
-      return `<select class="lead-adviser" data-lead="${esc(it.lead_id || "")}" aria-label="Assign this lead to" title="Which adviser this lead's case is created for" style="width:auto;">${leadAdviserOptionsHtml()}</select><button class="btn btn-sm btn-primary" onclick="acceptLead('${it.lead_id}', event)">Accept</button>`;
+      return leadRoutingHtml(it.lead_id) + `<button class="btn btn-sm btn-primary" onclick="acceptLead('${it.lead_id}', event)">Accept</button>`;
     case "email_new":
       return `${it.case_id ? `<button class="btn btn-sm" onclick="openCase('${it.case_id}')">Open case</button>` : ""}<button class="btn btn-sm" onclick="markEmailHandled('${it.email_id}')">Handled</button>${it.case_id ? `<button class="btn btn-sm" onclick="askAI('Draft a reply to the latest email from this client. Case id: ${it.case_id}')">Draft reply</button>` : ""}`;
     case "appt_today":
@@ -3419,6 +3639,21 @@ async function loadBriefing() {
       });
     }
   } catch (e) { /* graceful degradation — appointment rows render un-enriched */ }
+  /* R7-5 — get_briefing's lead rows carry a name and a contact detail and nothing about WHEN the
+     enquiry landed, so My Day could not tell six minutes from thirty hours either. One batched
+     read of the leads behind the rows gives every one of them the same age chip and ✉ marker the
+     inbox has. Best-effort, like every other enrichment on this screen: on error the rows render
+     exactly as round 5 left them. */
+  try {
+    const leadItems = items.filter((it) => it.kind === "lead_new" && it.lead_id);
+    if (leadItems.length) {
+      const { data: lds } = await db.from("leads").select("*").in("id", leadItems.map((it) => it.lead_id));
+      if ((lds || []).length) noteLeadSlaFromStarRow(lds[0]);
+      const byId = {};
+      (lds || []).forEach((l) => { byId[l.id] = l; });
+      leadItems.forEach((it) => { const l = byId[it.lead_id]; if (l) it.lead = l; });
+    }
+  } catch (e) { /* graceful degradation — lead rows render without the clock */ }
   lastBriefItems = items;
   // Prune expand-state to cases still present, so a stale key from a since-resolved case can't
   // silently keep a future unrelated case pre-expanded.
@@ -3555,22 +3790,83 @@ $("#brief-scope-mine").addEventListener("click", () => setBriefScope("mine"));
 $("#brief-scope-all").addEventListener("click", () => setBriefScope("all"));
 
 /* ---------- Watchtower ---------- */
+/* R7 — the round-7 rules and the screen each one is worked on. Keyed by watch_alerts.rule, so a
+   rule the database doesn't emit simply never matches and nothing appears. `when` is the same
+   presentation gate the destination itself applies, so a link can never lead somewhere that would
+   turn the reader away. */
+const R7_ALERT_LINKS = {
+  fee_aging_60: { when: () => showMoney(), go: "gotoMoneyOwed()", label: "Money owed →",
+                  title: "Open the full Money owed list on Reports — every unpaid fee, aged from its completion date." },
+  protection_quote_stale: { when: () => true, go: "nav('protection')", label: "Protection →",
+                  title: "Open the Protection page, where every quote carries its age." },
+  /* R7-5 — a slow lead is worked in one place: the inbox at the top of this same screen. The link
+     opens the drawer and scrolls to the row, because "lead_slow" alerts and the lead they are
+     about were two unconnected lists until now. */
+  lead_slow: { when: () => true, go: (a) => `gotoLeadInbox('${jsArg((a && a.lead_id) || "")}')`, label: "Lead inbox →",
+                  title: "Open the New website leads drawer on Today, where this enquiry can be accepted or discarded." },
+};
+/* R7-1e — THE ALERT TEXT IS A MONEY SURFACE TOO.
+   The firm's money is Owner-only UI and has been since round 4: Monday money, the
+   Money owed panel, the rate-end book and the "Money owed →" button above are all
+   gated on showMoney(). When run_watchtower turned fee_aging_60 into ONE AGGREGATE
+   row, its detail line became the firm's whole unpaid book in a sentence —
+   "N completed cases with fees unpaid >60 days — £T outstanding (proc £X · broker
+   £Y · sols £Z)" — rendered on Today for everybody, which is precisely the figure
+   the gate exists to withhold. Gating the button and not the sentence beside it
+   would be a gate in name only.
+   So for a viewer without money visibility the ROW STAYS (the work is real and the
+   alert is theirs to see, snooze and dismiss exactly as before) and only the
+   FIGURES go: no total, no split, no case count. The neutral line says where the
+   detail lives rather than pretending there is none. The Owner's row is untouched.
+   Keyed by rule, so a rule that is not a money surface is never rewritten. */
+const MONEY_GATED_ALERT_DETAIL = {
+  fee_aging_60: "Unpaid-fee ageing across completed cases — details in the owner's Money owed view",
+};
+const watchDetailFor = (a) =>
+  (a && MONEY_GATED_ALERT_DETAIL[a.rule] && !showMoney()) ? MONEY_GATED_ALERT_DETAIL[a.rule] : ((a && a.detail) || "");
 const WATCH_SEV = { crit: 0, warn: 1, info: 2 };
 const WATCH_BADGE = {
   crit: '<span class="badge red">CRITICAL</span>',
   warn: '<span class="badge amber">WARNING</span>',
   info: '<span class="badge blue">FYI</span>',
 };
+/* R7 — THE FETCH CAP, and why it is now 400 with a count beside it.
+   The panel fetched 40 alerts, newest first, and sorted the forty it got by
+   severity. Round 7's three new rules (fee_aging_60, protection_quote_stale,
+   lead_slow) fire across the existing book, and open alerts went from 24 to 48
+   — so eight alerts were invisible, the header count read 39 instead of 47,
+   and, worse, the sort ran AFTER the cut: a CRITICAL alert older than the
+   fortieth-newest row would never reach the screen at all, while the panel
+   quietly displayed a smaller number and looked like it was under control.
+   (fee_aging_60 has since been revised into ONE aggregate row rather than one
+   per case, which brings the same book back to 38 open — under the old ceiling
+   again. The cap stays raised anyway: 38 is one rule's revision away from 48,
+   and a ceiling that only holds until the next rule ships is not a ceiling.)
+   Two changes: the ceiling is raised to something a real book will not reach,
+   and — because a raised cap is still a cap — a separate exact count of open
+   alerts is fetched, so when the ceiling ever does bite the panel says so
+   instead of silently describing a subset. The count is a HEAD request with
+   count:"exact", so it costs no rows. */
+const WATCH_FETCH_CAP = 400;
 async function loadWatchtower() {
-  const { data, error } = await db.from("watch_alerts")
-    .select("*")
-    .is("resolved_at", null)
-    .order("created_at", { ascending: false })
-    .limit(40);
+  const [res, tally] = await Promise.all([
+    db.from("watch_alerts")
+      .select("*")
+      .is("resolved_at", null)
+      .order("created_at", { ascending: false })
+      .limit(WATCH_FETCH_CAP),
+    /* Best-effort: an older PostgREST, or a client that does not support the head/count options,
+       simply leaves the truthful-total unknown and the notice unshown, exactly as before. */
+    db.from("watch_alerts").select("id", { count: "exact", head: true }).is("resolved_at", null)
+      .then((r) => r).catch(() => ({ count: null })),
+  ]);
+  const { data, error } = res;
   if (error) {
     $("#watchtower-list").innerHTML = `<div class="empty">Watchtower unavailable — ${esc(error.message)}</div>`;
     return;
   }
+  const openTotal = tally && typeof tally.count === "number" ? tally.count : null;
+  const truncated = (data || []).length >= WATCH_FETCH_CAP || (openTotal != null && openTotal > (data || []).length);
   const all = (data || []).slice().sort((a, b) => (WATCH_SEV[a.severity] ?? 3) - (WATCH_SEV[b.severity] ?? 3));
   // B5 / M3 — a snooze hides the row from the working list until its date passes. run_watchtower's
   // upserts never touch these columns (see mock-supabase.js note by dedupeKeyFor), so a snooze
@@ -3602,6 +3898,14 @@ async function loadWatchtower() {
        Nothing about the row's content, its buttons, its order or the pill itself
        changes — this is only the shape the eye needs to see the block has parts. */
     const sevCls = a.severity === "crit" ? "wt-critical" : a.severity === "warn" ? "wt-warning" : "wt-fyi";
+    /* R7-1 — the round-7 rules get somewhere to GO. A "fee 60 days old" alert is one row about one
+       case; the thing you actually do with it is work the whole ageing list, so the alert now
+       carries a door to it. Owner-gated on exactly the same terms as the panel it opens — for
+       anyone else the link is simply absent rather than leading to a page that would refuse. */
+    const wtLink = R7_ALERT_LINKS[a.rule];
+    // `go` may be a fixed expression or one built from the alert row (lead_slow needs its lead id).
+    const wtGo = wtLink ? (typeof wtLink.go === "function" ? wtLink.go(a) : wtLink.go) : "";
+    const wtLinkBtn = wtLink && wtLink.when() ? `<button class="btn btn-sm wt-link-btn" onclick="event.stopPropagation();${wtGo}" title="${esc(wtLink.title)}">${esc(wtLink.label)}</button>` : "";
     return `<div class="row-item wt-row ${sevCls}">
       <div class="row-main">
         <div class="t" ${openClick}>${esc(a.title)}</div>
@@ -3611,15 +3915,21 @@ async function loadWatchtower() {
              and the date now sit on their own line under the sentence, in the same shape whether
              the case has an address or not — the old layout changed shape depending on whether the
              property was known, which reads as a status difference when it is a width one. */ ""}
-        <div class="s">${esc(a.detail || "")}</div>
+        <div class="s">${esc(watchDetailFor(a))}</div>
         <div class="s wt-meta">${wtTag}${wtTag ? " " : ""}<span class="wt-when">${fmtD(a.created_at)}</span></div>
       </div>
       ${WATCH_BADGE[a.severity] || WATCH_BADGE.info}
       ${openBtn}
+      ${wtLinkBtn}
       <button class="btn btn-sm" onclick="snoozeAlert('${a.id}','${a.severity}','${a.case_id || ""}')">Snooze…</button>
       <button class="btn btn-sm" onclick="resolveAlert('${a.id}','${a.severity}','${a.case_id || ""}')">Dismiss</button>
     </div>`;
   }).join("") : '<div class="empty">No problems detected 🎉</div>';
+  /* R7 — if the ceiling ever bites, the panel says which subset it is showing rather than
+     under-reporting in silence. Appended to the list, so it cannot be mistaken for an alert. */
+  if (truncated) {
+    $("#watchtower-list").innerHTML += `<div class="empty" id="watchtower-truncated">⚠ Showing the newest ${(data || []).length.toLocaleString("en-GB")} of ${openTotal != null ? openTotal.toLocaleString("en-GB") : "more"} open alerts — the count above describes this subset, not the whole list. Work the critical ones down, or dismiss what no longer applies.</div>`;
+  }
   panelCount("#watchtower-list", alerts.length, alerts.some((a) => a.severity === "crit"));
   autoDrawer("watchtower", alerts.some((a) => a.severity === "crit")); // auto-open on anything critical, else stay collapsed
   renderSnoozedWatchAlerts(snoozed);
@@ -4395,7 +4705,7 @@ async function bulkAssignCases(adviserId, reloadFn) {
 let bulkBusy = false;
 function setBulkBusy(on) {
   bulkBusy = on;
-  ["#pipe-bulk-rate", "#pipe-bulk-task", "#pipe-bulk-stage", "#pipe-bulk-adviser", "#pipe-bulk-clear"]
+  ["#pipe-bulk-rate", "#pipe-bulk-retention", "#pipe-bulk-task", "#pipe-bulk-stage", "#pipe-bulk-adviser", "#pipe-bulk-clear"]
     .forEach((sel) => { const el = $(sel); if (el) el.disabled = on; });
 }
 async function bulkQueueRateReminders() {
@@ -4419,6 +4729,100 @@ function bulkCaseLabel(c) {
   const who = [c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ") || "this client";
   const what = caseIdentityLabel(c);
   return what ? `${who} — ${what}` : who;
+}
+/* ==========================================================================
+   R7-2 — BULK "START RETENTION CASE" from the pipeline table.
+
+   A rate-end review is done off this table, a dozen rows at a time; until now the
+   only route to the retention flow was one button on one row of one Today panel,
+   so working a list of twelve meant twelve trips to the dashboard.
+
+   THE DESIGN RULE HERE: this is a loop over the EXISTING single-case flow, not a
+   reimplementation of it. Every per-case confirm still appears — including the
+   sold-property warning that names another client's case on the same building,
+   and the "no property address is recorded" line — because those are the whole
+   point of that dialog and a bulk verb that skipped them would be a quietly
+   more dangerous flow wearing a familiar name. What the bulk verb adds is a
+   PRE-FLIGHT (which of the selected rows can even do this, and why not) and a
+   TALLY at the end, in one message, because six toasts in a row means five of
+   them were never seen (the G1I-R7 finding).
+   ========================================================================== */
+async function bulkStartRetention() {
+  const ids = [...pipeSel];
+  if (!ids.length) return;
+  if (bulkBusy) return;
+  setBulkBusy(true);
+  try { await bulkStartRetentionRun(ids); } finally { setBulkBusy(false); }
+}
+async function bulkStartRetentionRun(ids) {
+  const propOn = await propAddrSupported();
+  const { data: rows, error } = await db.from("cases")
+    .select("id,client_id,stage,rate_end_date,case_kind,lender,retention_source_case_id"
+      + (propOn ? ",property_address" : "") + ",clients(first_name,last_name)")
+    .in("id", ids);
+  if (error) return toast("Error: " + error.message);
+  const nameOf = bulkCaseLabel;
+  // Which of these already have a successor — one query, not one per row.
+  const { data: succ } = await db.from("cases").select("retention_source_case_id").in("retention_source_case_id", ids);
+  const hasSuccessor = new Set((succ || []).map((r) => r.retention_source_case_id));
+  const today = localDateStr();
+  const eligible = [], skipped = [];
+  (rows || []).forEach((c) => {
+    if (c.stage !== "completed") skipped.push(`${nameOf(c)} (not completed)`);
+    else if (!c.rate_end_date) skipped.push(`${nameOf(c)} (no rate-end date)`);
+    else if (hasSuccessor.has(c.id)) skipped.push(`${nameOf(c)} (already has a retention case)`);
+    else {
+      /* R7-2 — the same nine-month rule the Rate & ERC panel applies to its button. Starting a
+         retention case a year out creates a live enquiry, a call task and a queued client email
+         for a conversation that cannot usefully happen yet; doing twelve of them at once is how a
+         pipeline fills with work nobody can do. */
+      const daysOut = Math.round((new Date(c.rate_end_date + "T12:00:00") - new Date(today + "T12:00:00")) / 86400000);
+      if (daysOut > 274) skipped.push(`${nameOf(c)} (rate ends in ${Math.round(daysOut / 30)} months — too early)`);
+      else eligible.push(c);
+    }
+  });
+  if (!eligible.length) {
+    return toast(skipped.length
+      ? `Nothing to start — all ${skipped.length} selected case${skipped.length === 1 ? " is" : "s are"} ineligible (${skipped.slice(0, 3).join("; ")}${skipped.length > 3 ? `; and ${skipped.length - 3} more` : ""})`
+      : "Nothing to start");
+  }
+  eligible.sort((a, b) => (a.rate_end_date < b.rate_end_date ? -1 : 1));
+  if (!confirm([
+    `Start a retention case for ${eligible.length} of the ${ids.length} selected case${ids.length === 1 ? "" : "s"}?`,
+    "",
+    `You will be asked about each one separately — the same confirmation the single-case button shows, including any warning that another client holds a later case on the same property. Cancel on an individual case skips just that one.`,
+    "",
+    "Starting with:",
+    ...eligible.slice(0, 8).map((c) => `· ${nameOf(c)} — rate ends ${fmtD(c.rate_end_date)}`),
+    ...(eligible.length > 8 ? [`· and ${eligible.length - 8} more`] : []),
+    ...(skipped.length ? ["", `Skipped (${skipped.length}): ${skipped.slice(0, 5).join("; ")}${skipped.length > 5 ? `; and ${skipped.length - 5} more` : ""}`] : []),
+  ].join("\n"))) return;
+
+  let created = 0, cancelled = 0, failed = 0, partial = 0;
+  const failures = [], partials = [];
+  for (const c of eligible) {
+    const res = await startRetentionCase(c.id, null, { silent: true });
+    const st = (res && res.status) || "error";
+    if (st === "created") created++;
+    else if (st === "created_with_warnings") { created++; partial++; partials.push(nameOf(c)); }
+    else if (st === "cancelled") cancelled++;
+    else if (st === "skipped") { failed++; failures.push(`${nameOf(c)} — ${res.message}`); }
+    else { failed++; failures.push(`${nameOf(c)} — ${(res && res.message) || "unknown error"}`); }
+  }
+  /* ONE sentence at the end, naming every outcome that is not a clean success. A tally that says
+     only "6 created" when two of them failed to queue their reminder is the failure mode the
+     single-case flow already fixed for itself. */
+  let out = `${created} retention case${created === 1 ? "" : "s"} created`;
+  if (partial) out += ` (${partial} with problems: ${partials.slice(0, 3).join(", ")}${partials.length > 3 ? ` and ${partials.length - 3} more` : ""} — open them and check the note, task and queued email)`;
+  if (cancelled) out += ` · ${cancelled} cancelled by you`;
+  if (skipped.length) out += ` · ${skipped.length} skipped as ineligible`;
+  if (failed) out += ` · ${failed} failed: ${failures.slice(0, 2).join("; ")}${failures.length > 2 ? ` and ${failures.length - 2} more` : ""}`;
+  toast(out);
+  if (created) {
+    pipeSel.clear();
+    loadPipeline();
+    if (!$("#page-dashboard").classList.contains("hidden")) loadDashboard();
+  }
 }
 async function bulkQueueRateRemindersRun(ids) {
   // The identity needs the property column, which an un-migrated database does not have: name it
@@ -4786,6 +5190,10 @@ function renderPipelineTable(filtered, stageEntry = {}, propOn = true) {
       </select>
       <select id="pipe-bulk-adviser" class="bulk-bar-select" aria-label="Assign selected cases to adviser">${adviserOptionsHtml("Assign to…")}</select>
       <button type="button" class="btn btn-sm" id="pipe-bulk-rate" title="Queue a rate-end reminder for every selected case that has a client email and a rate end date. Nothing is sent now.">⏰ Queue rate-end reminders</button>
+      ${/* R7-2 — the bulk half of the retention sweep. A rate-end review is done a dozen rows at a
+           time off this table, and the only route to it was one button on one row of one dashboard
+           panel. It runs the SAME per-case flow, confirm by confirm, and tallies at the end. */ ""}
+      <button type="button" class="btn btn-sm" id="pipe-bulk-retention" title="Start a retention case for every selected completed case whose rate is ending. Each one asks you to confirm, exactly as the single-case button does.">🔁 Start retention cases</button>
       <button type="button" class="btn btn-sm" id="pipe-bulk-task">＋ Add task…</button>
       <button type="button" class="btn btn-sm" id="pipe-bulk-clear">Clear</button>
     </div>
@@ -4831,6 +5239,8 @@ function renderPipelineTable(filtered, stageEntry = {}, propOn = true) {
   // S3a / S3b — the two bulk verbs a rate-end sweep actually needs.
   const rateBtn = $("#pipe-bulk-rate");
   if (rateBtn) rateBtn.onclick = () => bulkQueueRateReminders();
+  const retBtn = $("#pipe-bulk-retention");
+  if (retBtn) retBtn.onclick = () => bulkStartRetention();
   const taskBtn = $("#pipe-bulk-task");
   if (taskBtn) taskBtn.onclick = () => bulkAddTask();
   updatePipeBulkBar();
@@ -4937,11 +5347,16 @@ async function loadProtectionPage() {
     $("#prot-table").innerHTML = `<div class="empty">Protection pipeline unavailable — ${esc(error.message)}</div>`;
     return;
   }
-  const rows = (Array.isArray(data) ? data : []).filter((r) => {
+  /* R7-3 — the scope filter is split out from the status filter, because the "completed, no
+     protection outcome" call list below answers to the SCOPE (whose book am I looking at) but not
+     to the drop-down (which slice of it) — a call list that disappeared when you filtered to
+     "Live cases" would be a call list nobody ever worked. */
+  const scoped = (Array.isArray(data) ? data : []).filter((r) => {
     if (protScope === "mine" && r.owner !== (ME && ME.id)) return false;
     if (protScope === "unassigned" && r.owner != null) return false;
     return true;
-  }).filter((r) => {
+  });
+  const rows = scoped.filter((r) => {
     if (protFilter === "live") return r.live;
     if (protFilter === "completed") return !r.live;
     if (protFilter === "quoted") return r.protection_status === "quoted";
@@ -4980,6 +5395,10 @@ async function loadProtectionPage() {
      chip, same rules, same batched lookup as Today's lists — the RPC carries no property column,
      so the cases behind the rows on screen are resolved in one read. */
   const protPageCtx = await loadPropContext(rows.map((r) => r.case_id));
+  /* R7-3 — the quote clock. get_protection_pipeline carries the status but not when it was set, so
+     the stamps for the quoted rows on screen are read in one batched query; on a database without
+     M8 the map comes back empty and every badge reads "quote age unknown" rather than throwing. */
+  const protQuoteCtx = await loadQuoteStamps(scoped.filter((r) => r.protection_status === "quoted").map((r) => r.case_id));
   $("#prot-table").innerHTML = rows.length ? `
     <div class="bulk-bar" id="prot-bulk-bar"${protBulkSel.size ? "" : " hidden"}>
       <span class="bulk-bar-count"><strong id="prot-bulk-n">${protBulkSel.size}</strong> selected</span>
@@ -5006,7 +5425,7 @@ async function loadProtectionPage() {
           return `${stageBadge(r.stage)} ${esc(kind)}${r.lender ? " · " : " "}${lenderIcon(r.lender)}${esc(r.lender || "")}${chip ? `<div class="prot-case-prop">${chip}</div>` : ""}`;
         })()}</td>
         <td class="prot-col-loan">${fmtM(r.loan_amount)}</td>
-        <td><span class="badge ${p[0]}">${p[1]}</span>${gi ? ` <span class="badge ${gi[0]}" title="${TIP_GI}">${gi[1]}</span>` : ""}</td>
+        <td><span class="badge ${p[0]}">${p[1]}</span>${r.protection_status === "quoted" ? " " + quoteAgeBadge((protQuoteCtx[r.case_id] || {}).protection_quoted_at) : ""}${gi ? ` <span class="badge ${gi[0]}" title="${TIP_GI}">${gi[1]}</span>` : ""}</td>
         ${money ? `<td class="prot-est prot-col-est">${fmtM(r.est_commission)}</td>` : ""}
         ${/* R6-FIX V14 — a case owned by a staff id that is not on the roster (a leaver) produced
               initials(""), i.e. an avatar with no letters in it: a solid navy circle, which now
@@ -5062,6 +5481,48 @@ async function loadProtectionPage() {
   const protStatusSel = $("#prot-bulk-status");
   if (protStatusSel) protStatusSel.onchange = () => { const v = protStatusSel.value; protStatusSel.value = ""; if (v) bulkSetProtStatus(v); };
   updateProtBulkBar();
+  renderProtCallList(scoped, protQuoteCtx);
+}
+/* ---------- R7-3 — "completed, no protection outcome" ----------
+   The cases that got all the way to completion with the protection conversation left open: status
+   still not_discussed, discussed or quoted, i.e. anything that is neither a policy nor a client
+   who said no. Those are the calls worth making — the client has just moved house or remortgaged,
+   the relationship is warm, and nobody has closed the loop.
+
+   Scope follows the Mine / Unassigned / All buttons above, so an adviser reads their own list and
+   the Owner reads the firm's. The rows themselves are counts and statuses, not money, so this
+   panel is NOT Owner-gated: it is a work list, and withholding an adviser's own follow-up calls
+   would be the opposite of the point. */
+function renderProtCallList(scoped, quoteCtx) {
+  const panel = $("#prot-calllist-panel");
+  if (!panel) return;
+  /* get_protection_pipeline already excludes not_proceeding and already returns ONLY the three
+     open statuses, so within its output `!live` is exactly "completed, still open". */
+  const list = (scoped || []).filter((r) => !r.live);
+  panel.classList.remove("hidden");
+  const scopeWord = protScope === "mine" ? "your cases" : protScope === "unassigned" ? "unassigned cases" : "every adviser's cases";
+  const byStatus = { not_discussed: 0, discussed: 0, quoted: 0 };
+  list.forEach((r) => { if (byStatus[r.protection_status] != null) byStatus[r.protection_status]++; });
+  $("#prot-calllist-count").textContent = list.length;
+  $("#prot-calllist-count").className = "badge " + (list.length ? "amber" : "green");
+  $("#prot-calllist-basis").innerHTML =
+    `Completed cases whose protection conversation is still open — ${byStatus.not_discussed} never discussed, ${byStatus.discussed} discussed, ${byStatus.quoted} quoted and waiting. `
+    + `A client who has just completed is the warmest call the firm has. Scoped to <strong>${esc(scopeWord)}</strong> (the buttons above); the status drop-down does not narrow this list. `
+    + `<span class="money-basis">(completed · protection_status not policy_taken and not declined)</span>`;
+  $("#prot-calllist").innerHTML = list.length ? list.slice(0, 25).map((r) => {
+    const p = PROT_BADGE[r.protection_status] || PROT_BADGE.not_discussed;
+    return `<div class="row-item">
+      <div class="row-main">
+        <div class="t" onclick="openCase('${r.case_id}')">${esc(r.client_name)}</div>
+        <div class="s">${stageBadge(r.stage)} ${lenderIcon(r.lender)}${esc(r.lender || "")} · loan ${fmtM(r.loan_amount)}${r.owner ? " · " + esc(staffName(r.owner)) : " · unassigned"}</div>
+      </div>
+      <span class="badge ${p[0]}">${p[1]}</span>
+      ${r.protection_status === "quoted" ? quoteAgeBadge(((quoteCtx || {})[r.case_id] || {}).protection_quoted_at) : ""}
+      <button class="btn btn-sm" onclick="protCallTask('${r.case_id}')">Task</button>
+      ${r.has_email ? `<button class="btn btn-sm" onclick="protQueueEmail('${r.case_id}', event)">Email</button>` : '<span class="badge grey">no email</span>'}
+    </div>`;
+  }).join("") + (list.length > 25 ? `<div class="empty">…and ${list.length - 25} more — filter to "Completed book" above to work the whole list.</div>` : "")
+    : '<div class="empty">Every completed case in this scope has a protection outcome recorded — a policy or a decline. Nothing to chase. 🛡️</div>';
 }
 // S3c — mirror the current protection selection into its action bar (count + select-all state).
 function updateProtBulkBar() {
@@ -5079,37 +5540,116 @@ function updateProtBulkBar() {
   }
 }
 /* S3c — set one protection status across the selection. Deliberately NOT setProtStatus in a loop:
-   that one prompts for the actual commission on "Policy taken", and six sequential prompts (plus
-   six full page reloads) is not a bulk action. The write itself is identical — the commission is
-   left for the case, and the confirm says so. */
+   six sequential prompts (plus six full page reloads) is not a bulk action.
+   R7-3 — but "the commission is left for the case" is exactly the hole the single-case flow just
+   closed, and leaving it open here would make the bulk bar the way round the rule. The figure is
+   asked for ONCE and applied to every selected case, with the confirm saying so in as many words
+   so nobody applies one policy's value to six by accident. Quoted stamps the quote clock on all of
+   them, the same way and with the same M8 fallback. */
 async function bulkSetProtStatus(status) {
   const ids = [...protBulkSel];
   if (!ids.length || !status) return;
   const label = (PROT_BULK_STATUS.find(([k]) => k === status) || [null, status])[1];
+  let commission = null;
+  if (status === "policy_taken") {
+    commission = askProtectionCommission(null, `This figure will be written to ALL ${ids.length} selected case${ids.length === 1 ? "" : "s"} — if their policies are worth different amounts, cancel and set them one at a time.`);
+    if (commission == null) return toast("Left unchanged — a policy needs a commission figure.");
+  }
   const msg = `Set protection status to "${label}" on ${ids.length} case${ids.length === 1 ? "" : "s"}?`
-    + (status === "policy_taken" ? "\n\nThe commission figure is not recorded in bulk — open each case to add it." : "");
+    + (status === "policy_taken" ? `\n\nCommission ${fmtM(commission)} will be recorded on every one of them.` : "")
+    + (status === "quoted" ? "\n\nThe quote clock starts today on every one of them." : "");
   if (!confirm(msg)) return;
   let ok = 0, err = 0;
   for (const id of ids) {
-    const { error } = await db.from("cases").update({ protection_status: status }).eq("id", id);
+    const patch = { protection_status: status };
+    if (commission != null) patch.protection_commission = commission;
+    const { error } = await protUpdateWithStamp(id, patch, status === "quoted");
     if (error) err++; else ok++;
   }
   let out = `${ok} case${ok === 1 ? "" : "s"} set to ${label.toLowerCase()}`;
+  if (commission != null) out += ` · commission ${fmtM(commission)} each`;
   if (err) out += ` · ${err} error${err === 1 ? "" : "s"}`;
   toast(out);
   protBulkSel.clear();
   loadProtectionPage();
 }
+/* ---------- R7-3 — the protection quote clock ----------
+   Two writes that used to lose the two facts the protection book is judged on.
+
+   1. QUOTED WITH NO DATE. "Quoted" was a label with no clock behind it, so a quote sent in March
+      and a quote sent yesterday were the same amber pill and nothing anywhere could tell you which
+      conversation had gone cold. Setting the status to quoted now stamps WHEN and BY WHOM, in the
+      same write, so the badge on the row is derived rather than remembered.
+
+   2. A POLICY WITH NO MONEY ON IT. The old prompt said "leave blank to skip" and most of them were
+      skipped, so "policy taken" — the only outcome that earns anything — routinely carried no
+      commission at all and the attach-rate figures below had nothing to weigh. The figure is now
+      required. It is pre-filled with what the case already holds, or failing that with the firm's
+      average from Settings, so the common case is one keystroke; Cancel abandons the change
+      entirely rather than writing a policy with no value, and the reason is said out loud.
+
+   Both columns behind (1) are M8. Feature-detected by absence, exactly as M1/M2/M7 are: on a
+   database that has not taken the migration the stamp is dropped and the status change still
+   lands, because refusing an adviser's status change over a reporting column would be absurd. */
+const PROT_STAMP_COLS = ["protection_quoted_at", "protection_quoted_by"];
+function protQuotedStamp() {
+  return { protection_quoted_at: new Date().toISOString(), protection_quoted_by: (ME && ME.id) || null };
+}
+/* One update, with the M8 stamp if the database will take it and without if it won't. Returns
+   {error, stamped} — `stamped` false on an un-migrated database, so the toast can say the status
+   changed WITHOUT claiming a clock started that nothing is recording. Never silently swallows a
+   real failure; only the missing column. */
+async function protUpdateWithStamp(caseId, patch, wantStamp) {
+  let stamped = !!wantStamp && (await protQuoteSupported());
+  const full = stamped ? Object.assign({}, patch, protQuotedStamp()) : patch;
+  let { error } = await db.from("cases").update(full).eq("id", caseId);
+  if (error && stamped && isMissingColumnError(error)) {
+    stamped = false; PROT_QUOTE_SUPPORTED = false;
+    ({ error } = await db.from("cases").update(patch).eq("id", caseId));
+  }
+  return { error: error || null, stamped };
+}
+/* The required-commission capture. Returns a number, or null when the operator cancelled — and
+   null MUST abort the status change, which is the whole point of it being required. */
+function askProtectionCommission(existing, contextLine) {
+  const avg = Number(settings.protection_avg_commission || 0);
+  let def = Number(existing || 0) > 0 ? String(Number(existing)) : (avg > 0 ? String(avg) : "");
+  /* Bounded, deliberately. "Required" must not mean "a modal you cannot leave except by Cancel":
+     three goes is plenty for a typo, and the fourth abandons the change and says why, which is the
+     same outcome as Cancel and never a policy written with no value on it. */
+  for (let tries = 0; tries < 3; tries++) {
+    const raw = prompt(
+      "Policy taken 🎉 — what is the commission worth?\n\n"
+      + (contextLine ? contextLine + "\n\n" : "")
+      + "A figure is required: \"policy taken\" is the only protection outcome that earns anything, and "
+      + "the attach-rate and commission figures on Reports are built from it. "
+      + (avg > 0 ? `The box is pre-filled with the firm average from Settings (${fmtM(avg)}) — change it to the real figure if you know it.` : "")
+      + "\n\nCancel leaves the status exactly as it is.",
+      def);
+    if (raw == null) return null;                       // cancelled — caller must abandon
+    const v = String(raw).trim().replace(/^£/, "").replace(/,/g, "");
+    if (v !== "" && !isNaN(Number(v)) && Number(v) > 0) return Number(v);
+    def = v;
+    toast(v === "" ? "A commission figure is required — enter one, or press Cancel to leave the status alone." : "That isn't a number above zero — try again, or press Cancel.");
+  }
+  return null;   // three goes, no usable figure — treated exactly as Cancel
+}
 window.setProtStatus = async function (caseId, status) {
   if (!status) return;
   const patch = { protection_status: status };
   if (status === "policy_taken") {
-    const amt = prompt("Policy taken 🎉 — actual commission £ (leave blank to skip):");
-    if (amt != null && amt.trim() !== "" && !isNaN(Number(amt))) patch.protection_commission = Number(amt);
+    const { data: cur } = await db.from("cases").select("protection_commission").eq("id", caseId).single();
+    const amt = askProtectionCommission(cur && cur.protection_commission, null);
+    if (amt == null) { loadProtectionPage(); return toast("Left unchanged — a policy needs a commission figure."); }
+    patch.protection_commission = amt;
   }
-  const { error } = await db.from("cases").update(patch).eq("id", caseId);
+  const { error, stamped } = await protUpdateWithStamp(caseId, patch, status === "quoted");
   if (error) return toast("Error: " + error.message);
-  toast("Protection status: " + status.replace(/_/g, " "));
+  toast(status === "quoted"
+    ? (stamped ? "Protection status: quoted — quote clock started today" : "Protection status: quoted — but this database has no quote-date column (migration M8), so the age badge will read \u201cunknown\u201d")
+    : status === "policy_taken"
+      ? `Policy taken ✓ — commission ${fmtM(patch.protection_commission)} recorded`
+      : "Protection status: " + status.replace(/_/g, " "));
   if (!$("#page-protection").classList.contains("hidden")) loadProtectionPage();
 };
 window.setGiStatus = async function (caseId, status) {
@@ -5978,6 +6518,40 @@ window.openCase = async function (id, opts = {}) {
         if (protSel) { protSel.style.borderColor = "var(--red)"; protSel.style.boxShadow = "0 0 0 3px rgba(192,57,43,.18)"; protSel.focus(); }
         return;
       }
+      /* R7-3 — the same rule the Protection page enforces, on the other route to the same column.
+         "Policy taken" with no commission on it is the one protection outcome that earns money,
+         recorded as if it earned nothing, and the attach-rate and commission figures on Reports are
+         built from exactly this field. The case form has the commission box three lines below the
+         status select, so this points at it rather than prompting over the top of a form the
+         operator is already filling in.
+
+         ON THE TRANSITION ONLY — deliberately. The book already holds cases sitting at "policy
+         taken" with no figure against them (ca046 is one), and a rule that fired on every save
+         would make those rows unsaveable: an adviser correcting an expected completion date on a
+         five-year-old case would be stopped by a commission nobody now remembers. The rule governs
+         the moment the outcome is RECORDED, which is the moment the figure is known; historic gaps
+         are a reporting problem, not this operator's problem. Same shape as the quote stamp below,
+         for the same reason. */
+      const protNowTaken = row.protection_status === "policy_taken" && (!id || (c.protection_status || "not_discussed") !== "policy_taken");
+      if (protNowTaken && !(Number(row.protection_commission) > 0)) {
+        toast("A policy needs a commission figure — fill in \"Protection commission (£)\" before saving.");
+        const det = $(".case-details"); if (det) det.open = true;
+        const commEl = $("#case-form").elements.protection_commission;
+        if (commEl) {
+          commEl.style.borderColor = "var(--red)";
+          commEl.style.boxShadow = "0 0 0 3px rgba(192,57,43,.18)";
+          commEl.scrollIntoView({ behavior: "smooth", block: "center" });
+          commEl.focus();
+        }
+        return;
+      }
+      /* R7-3 — and the quote clock, on the same route. Stamped only on the TRANSITION into quoted
+         (an edit that leaves the status alone must not reset the clock and make a three-week-old
+         quote look fresh), and only when the database has the M8 columns — the save is retried
+         without them rather than being refused over a reporting stamp. */
+      const protNowQuoted = row.protection_status === "quoted" && (!id || (c.protection_status || "not_discussed") !== "quoted");
+      let protStampApplied = false;
+      if (protNowQuoted && (await protQuoteSupported())) { Object.assign(row, protQuotedStamp()); protStampApplied = true; }
       /* R5-15 — dates nobody sanity-checked. An expected completion in the past on a live case is
          almost always a typo or a date that quietly slipped, and an expected completion long after
          the offer expires is a deal that cannot complete as planned. Warn, don't refuse: both are
@@ -6026,6 +6600,13 @@ window.openCase = async function (id, opts = {}) {
           delete row.property_address;
           ({ data: updated, error } = await db.from("cases").update(row).eq("id", id).eq("updated_at", openedUpdatedAt).select());
         }
+        /* R7-3 — and the same fallback for M8's quote stamp. A missing reporting column must never
+           cost the adviser the edit they actually made. */
+        if (error && protStampApplied && isMissingColumnError(error)) {
+          protStampApplied = false; PROT_QUOTE_SUPPORTED = false;
+          PROT_STAMP_COLS.forEach((k) => delete row[k]);
+          ({ data: updated, error } = await db.from("cases").update(row).eq("id", id).eq("updated_at", openedUpdatedAt).select());
+        }
         if (error) return toast("Error: " + error.message);
         if (!updated || updated.length === 0) {
           /* R5-3 — this used to reload the case over the operator's typing: minutes of work gone,
@@ -6062,6 +6643,11 @@ window.openCase = async function (id, opts = {}) {
         if (error && "property_address" in row && isMissingColumnError(error)) {
           propColMissing = true; PROP_ADDR_SUPPORTED = false;
           delete row.property_address;
+          ({ error } = await db.from("cases").insert(row));
+        }
+        if (error && protStampApplied && isMissingColumnError(error)) {  // R7-3 — M8 fallback, as above
+          protStampApplied = false; PROT_QUOTE_SUPPORTED = false;
+          PROT_STAMP_COLS.forEach((k) => delete row[k]);
           ({ error } = await db.from("cases").insert(row));
         }
         if (error) return toast("Error: " + error.message);
@@ -6884,7 +7470,7 @@ async function buildClientTimeline(clientId, cases) {
     push(n.created_at, nt.type, nt.icon, title, n.case_id);
   });
   emails.filter((e) => e.status === "sent" || e.status === "failed").forEach((e) => {
-    const lbl = EMAIL_LABEL[e.email_type] || e.email_type || "Email";
+    const lbl = emailTypeLabel(e.email_type);
     push(e.sent_at || e.created_at, "email", "✉️", esc(lbl) + (e.status === "failed" ? ' <span class="tl-fail">failed</span>' : ""), e.case_id);
   });
   sms.filter((s) => s.status === "sent" || s.status === "failed").forEach((s) => {
@@ -7762,6 +8348,21 @@ async function loadEmails() {
   const failedIds = new Set(emailRows.filter((e) => e.status === "failed").map((e) => e.id));
   [...emailSel].forEach((id) => { if (!failedIds.has(id)) emailSel.delete(id); });
   const emailCtx = await loadPropContext(emailRows.map((e) => e.case_id));
+  /* R7-5 — THE LEAD ACKNOWLEDGEMENTS. The database's AFTER INSERT trigger on `leads` queues a
+     `lead_ack` the moment a website enquiry arrives, and those rows carry a lead_id and NO
+     client_id — there is no client yet, that is the whole point. This list names its rows from
+     `clients(...)`, so every acknowledgement read "Lead acknowledgement — bethany.cargill@example.com":
+     the one row on the page that is about a person nobody has met, identified by an email address.
+     One batched read of the leads behind those rows gives them the enquirer's name and a way back
+     to the enquiry itself. Best-effort: on error the rows fall back to the address, as before. */
+  const leadIds = [...new Set(emailRows.map((e) => e.lead_id).filter(Boolean))];
+  const emailLeads = {};
+  if (leadIds.length) {
+    try {
+      const { data: lrows } = await db.from("leads").select("id,name,status,created_at").in("id", leadIds);
+      (lrows || []).forEach((l) => { if (l && l.id) emailLeads[l.id] = l; });
+    } catch (_) { /* named by address, exactly as before */ }
+  }
   const emailBulkBar = `<div class="bulk-bar" id="email-bulk-bar"${emailSel.size ? "" : " hidden"}>
       <span class="bulk-bar-count"><strong id="email-bulk-n">${emailSel.size}</strong> selected</span>
       <button type="button" class="btn btn-sm btn-primary" id="email-bulk-retry">Retry selected (${emailSel.size})</button>
@@ -7785,14 +8386,20 @@ async function loadEmails() {
        different mortgages were one line repeated five times, and cancel/retry was a coin flip.
        The row now carries the case's property AND opens the case: it was only clickable when it
        had FAILED, which is exactly backwards — a queued send is the one you can still stop. */
+    /* R7-5 — a lead_ack row has no case and no client, so its title opens the ENQUIRY on Today
+       instead. openLeadInToday says plainly when the enquiry has since been accepted or discarded
+       rather than navigating to an inbox that no longer holds it. */
+    const leadRow = e.lead_id ? emailLeads[e.lead_id] : null;
     const titleClick = noContact
       ? ` onclick="openClient('${e.client_id}','email','${jsArg(e.to_email)}')" style="cursor:pointer;"`
-      : (e.case_id ? ` onclick="openCase('${e.case_id}')" style="cursor:pointer;"` : "");
+      : (e.case_id ? ` onclick="openCase('${e.case_id}')" style="cursor:pointer;"` : "")
+        || (e.lead_id ? ` onclick="openLeadInToday('${jsArg(e.lead_id)}')" style="cursor:pointer;" title="Open this enquiry in the lead inbox on Today"` : "");
+    const whoTxt = e.clients ? e.clients.first_name + " " + e.clients.last_name : (leadRow && leadRow.name) || e.to_email || "";
     return `
-    <div class="row-item">
+    <div class="row-item"${e.lead_id ? ` data-lead-email="${esc(e.lead_id)}"` : ""}>
       ${failed ? `<input type="checkbox" class="email-cb" data-id="${e.id}" aria-label="Select this failed email"${emailSel.has(e.id) ? " checked" : ""} onclick="event.stopPropagation()">` : ""}
       <div class="row-main">
-        <div class="t"${titleClick}>${EMAIL_LABEL[e.email_type]} — ${esc(e.clients ? e.clients.first_name + " " + e.clients.last_name : e.to_email || "")} ${propCtxChip(emailCtx, e.case_id, "row-prop")}</div>
+        <div class="t"${titleClick}>${esc(emailTypeLabel(e.email_type))} — ${esc(whoTxt)}${leadRow ? ` <span class="badge grey lead-email-chip" title="This is a website enquiry, not a client — there is no case behind it yet.">enquiry</span>` : ""} ${propCtxChip(emailCtx, e.case_id, "row-prop")}</div>
         <div class="s">${esc(e.to_email || (noContact ? "no address on file" : ""))} · ${e.sent_at ? "sent " + new Date(e.sent_at).toLocaleString("en-GB") : "created " + new Date(e.created_at).toLocaleString("en-GB")}${errLine}${staleAddr ? ` · now <strong>${esc(curEmail)}</strong>` : ""}</div>
       </div>
       ${staleAddr ? `<span class="badge amber" title="Queued to ${esc(e.to_email)}, but this client's email is now ${esc(curEmail)}">address changed since queued</span>` : ""}
@@ -9119,6 +9726,94 @@ async function runImport() {
   }
 }
 
+/* ==========================================================================
+   R7-5 — SPEED TO LEAD.
+
+   The firm's website promises a same-day answer and the inbox showed a
+   timestamp — "31/07/2026, 09:14" — which is a fact, not a clock. Nothing on
+   the screen said which of these people had been waiting six minutes and which
+   had been waiting thirty hours, so the queue was worked top-down by whatever
+   order it happened to be in.
+
+   Three thresholds, one promise: fifteen minutes to accept.
+     · under 15 min   green — inside the promise
+     · 15 min to 1 h  amber — late, still recoverable
+     · over 1 h       red   — this is the point the Watchtower starts shouting
+                             (lead_slow: warn past 1h, crit past 24h)
+   The age is SPELLED OUT ("3h waiting") rather than shown as a bare number,
+   because the number on its own reads as a quantity of leads, not a delay.
+
+   The ✉ marker is a separate promise and is deliberately NOT allowed to look
+   like an answer: acknowledged_at means the robot has written to them, and a
+   lead can be acknowledged within a minute and still be a thirty-hour breach.
+   Both facts therefore appear on the same row, and the red chip is the loud one.
+   ========================================================================== */
+const LEAD_SLA_MIN = 15;        // the accept promise, in minutes
+const LEAD_SLA_RED_MIN = 60;    // past here the Watchtower is already raising lead_slow
+const leadAgeMins = (createdAt) => {
+  if (!createdAt) return null;
+  const t = new Date(createdAt).getTime();
+  if (isNaN(t)) return null;
+  return Math.max(0, Math.floor((Date.now() - t) / 60000));
+};
+/* "6min" · "3h" · "2d" — the same shape the age chip and the toast both use, so a
+   lead that reads "3h waiting" before the click reads "responded in 3h" after it. */
+function fmtWaitMins(m) {
+  if (m == null) return "";
+  if (m < 60) return `${m}min`;
+  const h = Math.floor(m / 60);
+  if (h < 48) return `${h}h`;
+  return `${Math.floor(h / 24)}d`;
+}
+/* created_at → first_contact_at, in whole minutes. Null unless BOTH exist, which is the one rule
+   the response report and the accept toast have to share: an unstamped lead has no response time,
+   and inventing one from "now" would make every unanswered enquiry look answered. */
+function leadResponseMins(createdAt, contactAt) {
+  if (!createdAt || !contactAt) return null;
+  const a = new Date(createdAt).getTime(), b = new Date(contactAt).getTime();
+  if (isNaN(a) || isNaN(b)) return null;
+  return Math.max(0, Math.floor((b - a) / 60000));
+}
+function leadAgeBadge(l) {
+  const m = leadAgeMins(l && l.created_at);
+  if (m == null) return "";
+  const cls = m > LEAD_SLA_RED_MIN ? "red" : m >= LEAD_SLA_MIN ? "amber" : "green";
+  const verdict = m > LEAD_SLA_RED_MIN
+    ? `Past the ${LEAD_SLA_RED_MIN}-minute mark — the Watchtower is already raising this one.`
+    : m >= LEAD_SLA_MIN ? `Past the ${LEAD_SLA_MIN}-minute promise.` : `Inside the ${LEAD_SLA_MIN}-minute promise.`;
+  return `<span class="badge ${cls} lead-age" data-mins="${m}" title="Arrived ${new Date(l.created_at).toLocaleString("en-GB")} — ${fmtWaitMins(m)} ago. ${verdict} Green under ${LEAD_SLA_MIN}min, amber ${LEAD_SLA_MIN}min–${LEAD_SLA_RED_MIN}min, red over ${LEAD_SLA_RED_MIN}min.">${fmtWaitMins(m)} waiting</span>`;
+}
+/* Deliberately small and quiet. It is a receipt, not a reply. */
+function leadAckMark(l) {
+  if (!l || !l.acknowledged_at) return "";
+  return `<span class="lead-ack" title="Acknowledged automatically at ${new Date(l.acknowledged_at).toLocaleString("en-GB")} — an email went out saying we have it. Nobody has spoken to them yet.">✉</span>`;
+}
+/* ---- leads.first_contact_at / acknowledged_at feature detection -----------
+   Same discipline as M1/M2/M7/M8: probe once, cache, and never name a column
+   the database has not got. PostgREST answers a write naming a missing column
+   with 42703; a SELECT of one simply comes back without the key, so both
+   signals are read. */
+let LEAD_SLA_SUPPORTED = null;
+async function leadSlaSupported() {
+  if (LEAD_SLA_SUPPORTED !== null) return LEAD_SLA_SUPPORTED;
+  try {
+    const { data, error } = await db.from("leads").select("id,acknowledged_at,first_contact_at").limit(1);
+    if (error) {
+      if (isMissingColumnError(error)) { LEAD_SLA_SUPPORTED = false; return false; }
+      return true;  // RLS/network — don't cache a guess
+    }
+    if (!data || !data.length) return true;   // empty inbox: nothing to learn
+    LEAD_SLA_SUPPORTED = Object.prototype.hasOwnProperty.call(data[0], "first_contact_at");
+    return LEAD_SLA_SUPPORTED;
+  } catch (_) { return true; }
+}
+/* loadLeads reads select("*"), which is proof either way and costs nothing —
+   the same free correction notePropAddrFromStarRow makes for M7. */
+function noteLeadSlaFromStarRow(row) {
+  if (!row || typeof row !== "object") return;
+  LEAD_SLA_SUPPORTED = Object.prototype.hasOwnProperty.call(row, "first_contact_at");
+}
+
 /* ---------- Website leads ---------- */
 async function loadLeads() {
   const { data: leads, error } = await db.from("leads").select("*").eq("status", "new").order("created_at");
@@ -9130,18 +9825,41 @@ async function loadLeads() {
     autoDrawer("leads", true); // a failed intake queue must not stay collapsed
     return;
   }
+  if ((leads || []).length) noteLeadSlaFromStarRow(leads[0]);
   const n = (leads || []).length;
   const badge = $("#leads-count");
   badge.textContent = n;
   badge.classList.toggle("hidden", !n);
-  $("#leads-list").innerHTML = n ? leads.map((l) => `
-    <div class="row-item">
+  /* R7-5 — THE ORDER. The fetch is oldest-first, which is right while anything is late: the
+     longest wait is the next call. It is NOT right on a quiet morning, where an inbox that puts
+     this minute's enquiry at the bottom of six read-and-parked ones reads as stale. So the order
+     is stated and it follows the clock: oldest-first the moment ANY lead is past the fifteen-minute
+     promise, newest-first when every one of them is inside it. Both orders are announced on the
+     panel, because a list that silently reorders itself is a list nobody trusts. */
+  const rows = (leads || []).slice();
+  const breaching = rows.filter((l) => { const m = leadAgeMins(l.created_at); return m != null && m >= LEAD_SLA_MIN; });
+  const oldestFirst = breaching.length > 0;
+  rows.sort((a, b) => {
+    const d = String(a.created_at || "").localeCompare(String(b.created_at || ""));
+    return oldestFirst ? d : -d;
+  });
+  const sub = $("#leads-order");
+  if (sub) {
+    sub.innerHTML = !n ? ""
+      : oldestFirst
+        ? `<strong>${breaching.length} past the ${LEAD_SLA_MIN}-minute promise</strong> — oldest first, longest wait at the top.`
+        : `Everything is inside the ${LEAD_SLA_MIN}-minute promise — newest first.`;
+    sub.classList.toggle("lead-order-hot", oldestFirst);
+  }
+  $("#leads-list").innerHTML = n ? rows.map((l) => `
+    <div class="row-item" data-lead-row="${esc(l.id)}">
       <div class="row-main">
-        <div class="t">${esc(l.name)}</div>
+        <div class="t">${esc(l.name)}${leadAckMark(l)}</div>
         <div class="s">${l.email ? mailLink(l.email) : ""}${l.phone ? " · " + telLink(l.phone) : ""}${l.enquiry_type ? " · " + esc(l.enquiry_type) : ""} · ${new Date(l.created_at).toLocaleString("en-GB")}</div>
         ${l.message ? `<div class="s">“${esc(l.message.slice(0, 140))}${l.message.length > 140 ? "…" : ""}”</div>` : ""}
       </div>
-      <select class="lead-adviser" data-lead="${esc(l.id)}" aria-label="Assign this lead to" title="Which adviser this lead's case is created for" style="width:auto;">${leadAdviserOptionsHtml()}</select>
+      ${leadAgeBadge(l)}
+      ${leadRoutingHtml(l.id)}
       <button class="btn btn-sm btn-primary" onclick="acceptLead('${l.id}', event)">Accept</button>
       <button class="btn btn-sm btn-danger" aria-label="Discard lead" title="Discard lead" onclick="discardLead('${l.id}')">✕</button>
     </div>`).join("") : '<div class="empty">No new leads. Website enquiries appear here the moment they\'re sent.</div>';
@@ -9270,18 +9988,54 @@ window.acceptLead = async function (id, ev) {
     welcomeId = (wq && wq.id) || null;
     if (wErr || !welcomeId) leadWarn.push(`the welcome email to ${l.email} was NOT queued (${(wErr && wErr.message) || "no row was written"}) — nothing will reach them until you queue it from the case`);
   }
-  // Without this the lead ends up status='converted' with converted_case_id null, so nothing joins
-  // the lead to the case it became. Retry once before reporting: it is a single-column update.
-  let link = await db.from("leads").update({ converted_case_id: nc.id }).eq("id", id);
-  if (link.error) link = await db.from("leads").update({ converted_case_id: nc.id }).eq("id", id);
-  if (link.error) leadWarn.push(`the lead could not be linked to the new case (${link.error.message}) — the enquiry will not show which case it became`);
+  /* Without this the lead ends up status='converted' with converted_case_id null, so nothing joins
+     the lead to the case it became. Retry once before reporting: it is a single-column update.
+
+     R7-5 — FIRST CONTACT, stamped in the same write. Accepting a lead is the moment a human takes
+     it on, and it is the only moment the app can honestly record: `acknowledged_at` is the robot's
+     receipt and says nothing about whether anybody has picked up the phone. The stamp is what
+     retires the lead_slow alert and what the Lead-response report measures, so it is written here
+     rather than left to be typed in later (which is to say: never).
+
+     Feature-detected and write-retried, exactly like M2's lost-reason columns: an un-migrated
+     database answers 42703, the column is dropped from the payload, the link write happens anyway,
+     and the accept succeeds. A lead that already carries a first_contact_at is never overwritten —
+     the first contact is the first one. */
+  const slaOn = await leadSlaSupported();
+  const stampAt = new Date().toISOString();
+  const wantStamp = slaOn && !l.first_contact_at;
+  const leadPatch = { converted_case_id: nc.id };
+  if (wantStamp) leadPatch.first_contact_at = stampAt;
+  let stamped = wantStamp;
+  let link = await db.from("leads").update(leadPatch).eq("id", id);
+  if (link.error && wantStamp && isMissingColumnError(link.error)) {
+    LEAD_SLA_SUPPORTED = false;
+    stamped = false;
+    delete leadPatch.first_contact_at;
+    link = await db.from("leads").update(leadPatch).eq("id", id);
+  }
+  if (link.error) link = await db.from("leads").update(leadPatch).eq("id", id);
+  if (link.error) {
+    stamped = false;
+    leadWarn.push(`the lead could not be linked to the new case (${link.error.message}) — the enquiry will not show which case it became`);
+  }
+  /* How long the client actually waited, from the enquiry landing to this click. Only stated when
+     there is a stamp behind it: a figure with nothing recorded under it is the reason nobody trusts
+     response reporting in the first place. */
+  const contactAt = stamped ? stampAt : (l.first_contact_at || null);
+  const respMins = leadResponseMins(l.created_at, contactAt);
+  const respTxt = respMins == null ? "" : ` · responded in ${fmtWaitMins(respMins)}`;
   if (welcomeId) runAutomation(true, { queueIds: [welcomeId] });
   // Accept-lead stays on Today (defect 22) — a toast confirms the case, but doesn't force-open the
   // case modal, so running through a queue of leads is toast-and-move-on rather than a modal
   // open/close per lead. The case is right where the toast says: New business.
   const acceptedName = [client.first_name, client.last_name].filter(Boolean).join(" ") || "this lead";
-  toast(`Case created for ${acceptedName}${assignTo ? " → " + staffName(assignTo) : ""} — find it in New business`
+  toast(`Case created for ${acceptedName}${assignTo ? " → " + staffName(assignTo) : ""}${respTxt} — find it in New business`
     + (leadWarn.length ? `, but ${leadWarn.join("; and ")}` : ""));
+  /* R7-5 — the desk this lead just landed on is one case heavier, and the repaint below is about to
+     ask which desk is lightest. Counted here rather than re-read: the case was created two writes
+     ago and the next dashboard load re-derives the whole map from the database anyway. */
+  if (assignTo && advLoadCases) advLoadCases[assignTo] = (advLoadCases[assignTo] || 0) + 1;
   /* R5-21 — the same lead is listed TWICE on Today: in the Leads panel and as a My Day "lead_new"
      row. Repainting only the panel left the My Day row advertising a lead that no longer exists,
      and clicking its Accept produced "already been accepted". Repaint both. */
@@ -9289,10 +10043,137 @@ window.acceptLead = async function (id, ev) {
   await loadBriefing();
   restoreLeadAdvSel(otherLeadSel);   // R5-5 — put the other rows' routing choices back
 };
+
+/* ==========================================================================
+   R7-5 — DISCARDING A LEAD, AND WHY IT CAN STAMP FIRST CONTACT.
+
+   "Discard this lead? OK / Cancel" threw away a real enquiry on one click and
+   recorded nothing about why, which made the discard pile the one part of the
+   funnel nobody could argue with. It now asks for a reason.
+
+   The reason also decides something the response report depends on. Some of
+   these reasons mean a human worked the lead — rang them, emailed them, told
+   them we cannot help. That IS first contact, and it is exactly as much of an
+   answer as accepting would have been, so first_contact_at is stamped and the
+   Watchtower's lead_slow alert retires. The rest (spam, a duplicate of an
+   enquiry already in the list, no usable contact details) mean nobody spoke to
+   anybody, and stamping those would manufacture a fast response time out of a
+   bin action — which would quietly flatter every median on the report. So they
+   do not stamp, and the dialog says which is which before the click.
+
+   Where the reason itself goes: nowhere yet. `leads` has no reason column and
+   this round adds no migration, so what is stored is the fact and the time —
+   both real, both queryable. The dialog says so rather than implying a filing
+   cabinet that does not exist.
+   ========================================================================== */
+const LEAD_DISCARD_OPTIONS = [
+  ["spoke_not_proceeding", "Spoke to them — not going ahead", true],
+  ["no_reply", "Tried to reach them — no reply", true],
+  ["cannot_help", "Contacted them — not something we can help with", true],
+  ["duplicate", "Duplicate of an enquiry we already have", false],
+  ["spam", "Spam or a test submission", false],
+  ["no_details", "No usable contact details", false],
+  ["other", "Other", false],
+];
+const LEAD_DISCARD_LABEL = Object.fromEntries(LEAD_DISCARD_OPTIONS.map(([k, l]) => [k, l]));
+const LEAD_DISCARD_CONTACTED = Object.fromEntries(LEAD_DISCARD_OPTIONS.map(([k, , c]) => [k, c]));
+function promptLeadDiscardReason(who) {
+  const html = `
+    <h3>Why are you discarding this enquiry?</h3>
+    <p class="panel-sub">${esc(who)} — required. The first three record that somebody actually made contact, which stops the
+      15-minute clock on this lead and counts it as a response on the Lead-response report. The rest record that nobody did.</p>
+    <label>Reason
+      <select id="lead-discard-reason"><option value="">— choose a reason —</option>${LEAD_DISCARD_OPTIONS.map(([k, l, c]) => `<option value="${k}">${esc(l)}${c ? " · counts as contact" : ""}</option>`).join("")}</select>
+    </label>
+    <label style="margin-top:10px;">Note (optional)
+      <textarea id="lead-discard-note" rows="3" placeholder="Anything worth knowing if they come back…"></textarea>
+    </label>
+    <p class="panel-sub" style="margin-top:10px;">The database has no column for the reason itself yet, so what is stored is the discard and — where contact was made — the time of it. The words stay in this confirmation.</p>
+    <div class="ovl-err" id="lead-discard-err"></div>
+    <div class="modal-actions">
+      <div></div>
+      <div class="right">
+        <button type="button" class="btn" id="lead-discard-cancel">Cancel</button>
+        <button type="button" class="btn btn-danger" id="lead-discard-ok">Discard lead</button>
+      </div>
+    </div>`;
+  return openOverlay(html, (finish, box) => {
+    box.querySelector("#lead-discard-cancel").onclick = () => finish(null);
+    box.querySelector("#lead-discard-ok").onclick = () => {
+      const sel = box.querySelector("#lead-discard-reason");
+      const reason = sel.value;
+      if (!reason) { box.querySelector("#lead-discard-err").textContent = "Choose a reason before continuing."; sel.focus(); return; }
+      finish({
+        reason,
+        label: LEAD_DISCARD_LABEL[reason] || reason,
+        contacted: !!LEAD_DISCARD_CONTACTED[reason],
+        note: (box.querySelector("#lead-discard-note").value || "").trim(),
+      });
+    };
+  });
+}
 window.discardLead = async function (id) {
-  if (!confirm("Discard this lead?")) return;
-  await db.from("leads").update({ status: "discarded" }).eq("id", id);
-  loadLeads();
+  const { data: lead } = await db.from("leads").select("*").eq("id", id).single();
+  if (lead) noteLeadSlaFromStarRow(lead);
+  const why = await promptLeadDiscardReason((lead && lead.name) || "This enquiry");
+  if (!why) return;   // cancelled — the lead stays in the inbox untouched
+  const slaOn = await leadSlaSupported();
+  const stampAt = new Date().toISOString();
+  const wantStamp = why.contacted && slaOn && !!lead && !lead.first_contact_at;
+  const patch = { status: "discarded" };
+  if (wantStamp) patch.first_contact_at = stampAt;
+  let stamped = wantStamp;
+  // Same write-retry as the accept path: an un-migrated database drops the stamp, never the discard.
+  let res = await db.from("leads").update(patch).eq("id", id);
+  if (res.error && wantStamp && isMissingColumnError(res.error)) {
+    LEAD_SLA_SUPPORTED = false;
+    stamped = false;
+    delete patch.first_contact_at;
+    res = await db.from("leads").update(patch).eq("id", id);
+  }
+  if (res.error) return toast("Error: " + res.error.message);
+  const respMins = leadResponseMins(lead && lead.created_at, stamped ? stampAt : (lead && lead.first_contact_at));
+  toast(`Lead discarded — ${why.label}`
+    + (respMins != null ? ` · responded in ${fmtWaitMins(respMins)}` : "")
+    + (why.contacted && !stamped ? " · contact time NOT stored (this database has no first_contact_at column)" : "")
+    + (!why.contacted ? " · no contact recorded, so it counts as unanswered" : ""));
+  await loadLeads();
+  await loadBriefing();
+};
+
+/* R7-5 — Today, with the lead inbox open. Used by the Emails page (a lead_ack row has nowhere else
+   to go) and by the Lead-response report's breach count. The drawer is opened explicitly rather
+   than left to autoDrawer, because a person who clicked "open this enquiry" has just taken manual
+   control of it, which is precisely the case autoDrawer refuses to touch. */
+window.gotoLeadInbox = function (leadId) {
+  nav("dashboard");
+  setTimeout(() => {
+    const panel = document.getElementById("leads-panel");
+    if (!panel) return;
+    panel.classList.remove("collapsed");
+    dashDrawerTouched.leads = true;
+    const row = leadId ? panel.querySelector(`.row-item[data-lead-row="${CSS.escape(leadId)}"]`) : null;
+    (row || panel).scrollIntoView({ behavior: "smooth", block: row ? "center" : "start" });
+    if (row) { row.classList.add("lead-flash"); setTimeout(() => row.classList.remove("lead-flash"), 2200); }
+  }, 400);
+};
+window.openLeadInToday = async function (leadId) {
+  if (!leadId) return;
+  /* Say what happened to it BEFORE navigating. An acknowledgement can sit on the Emails page for
+     months, by which time its enquiry may have become a case or been binned — and a jump to an
+     inbox that visibly does not contain it reads as a broken link rather than as old news. */
+  try {
+    const { data: l } = await db.from("leads").select("id,name,status,converted_case_id").eq("id", leadId).maybeSingle();
+    if (l && l.status !== "new") {
+      if (l.status === "converted" && l.converted_case_id) {
+        toast(`${l.name || "That enquiry"} was accepted — opening the case it became.`);
+        return openCase(l.converted_case_id);
+      }
+      toast(`${(l && l.name) || "That enquiry"} is no longer in the inbox (${(l && l.status) || "gone"}).`);
+      return;
+    }
+  } catch (_) { /* fall through and navigate — the inbox itself is the honest answer */ }
+  gotoLeadInbox(leadId);
 };
 
 /* ---------- Today's appointments ---------- */
@@ -10041,7 +10922,7 @@ async function buildEvidencePack(caseId) {
       ${(events || []).map((e) => `<tr><td>${dt(e.created_at)}</td><td>${esc(String(e.event || "").replace(/_/g, " "))}</td><td>${esc(packEventDetail(e))}</td><td>${esc(actorName(e.actor))}</td></tr>`).join("") || "<tr><td colspan=4>None recorded</td></tr>"}
     </table>
     <h2>Client communications</h2><table><tr><th>When</th><th>Type</th><th>To</th><th>Status</th><th>Subject</th></tr>
-      ${(emails || []).map((e) => `<tr><td>${dt(e.sent_at || e.created_at)}</td><td>${esc(EMAIL_LABEL[e.email_type] || e.email_type)}</td><td>${esc(e.to_email || "")}</td><td>${esc(packValue("status", e.status))}</td><td>${esc(e.subject || "")}</td></tr>`).join("") || "<tr><td colspan=5>None</td></tr>"}
+      ${(emails || []).map((e) => `<tr><td>${dt(e.sent_at || e.created_at)}</td><td>${esc(emailTypeLabel(e.email_type))}</td><td>${esc(e.to_email || "")}</td><td>${esc(packValue("status", e.status))}</td><td>${esc(e.subject || "")}</td></tr>`).join("") || "<tr><td colspan=5>None</td></tr>"}
     </table>
     ${/* The app shows who wrote a note and who owns a task on screen; the pack printed neither. */ ""}
     ${/* R6.4 H-01 — a re-filed note is struck through and badged HERE too. The pack is
@@ -10540,7 +11421,15 @@ function renderThreadedPanels(all, mv, repAdvisers) {
     const trend = months6.map((m) => mine.filter((c) => c.completed_at && localMonthStr(c.completed_at) === m).length);
     const trendTitle = months6.map((m, i) => `${MONTH_SHORT[Number(m.slice(5, 7)) - 1]}: ${trend[i]}`).join(" · ");
     const overdue = id ? (overdueById[id] != null ? overdueById[id] : overdueByName[name]) : undefined;
-    return { id, name, offTeam: !!offTeam, open, completions: done.length, feesBanked, overdue, avg, n: days.length, trend, trendTitle };
+    /* R7-3 — PROTECTION ATTACH RATE. Of the cases this adviser completed in the selected month,
+       how many ended with a policy. Scoped to the same month as every other column on this row
+       (mixing an all-time attach rate into a month-scoped table is how two people end up arguing
+       about which figure is wrong), and the sample size travels with the percentage because a
+       month is a small denominator: 1 of 2 is 50% and means almost nothing. Zero completions
+       renders as "—", never as 0%, because nobody attached nothing to nothing. */
+    const protTaken = done.filter((c) => c.protection_status === "policy_taken").length;
+    const attach = done.length ? Math.round((protTaken / done.length) * 100) : null;
+    return { id, name, offTeam: !!offTeam, open, completions: done.length, feesBanked, overdue, avg, n: days.length, trend, trendTitle, protTaken, attach };
   };
   // T1-18 — TEAM.map() alone cannot represent work nobody owns, so the Open column silently came up
   // short against the Live cases KPI. Append the unassigned bucket, plus a row for anyone holding
@@ -10589,15 +11478,16 @@ function renderThreadedPanels(all, mv, repAdvisers) {
     return d && Number(localDateStr(d).slice(0, 4)) === ytdYear ? s + Number(c.broker_fee || 0) : s;
   }, 0);
   const ytdGap = ytdFirm - ytdRpcSum;
-  $("#report-scoreboard-scope").textContent = `Completions, fees banked and avg days are for ${label}. Open cases and overdue tasks are as of now. Trend is completions over the last 6 calendar months, all rows drawn on one shared scale. "Fees banked" here is broker fees actually received this month, each counted on the date that fee was paid — a different scope from "Completed £ (earned)" on the Monthly business panel above, which is fee value earned on cases completed this month regardless of payment status.${bankedFuture ? ` Excludes future-dated payments (${bankedFuture}).` : ""} "Banked ${ytdYear}" is that adviser's broker cash for the calendar year, straight from get_reports.${ytdGap ? ` It covers people who still have a login, so it totals ${fmtM(ytdRpcSum)} against the ${fmtM(ytdFirm)} on the "Fees banked ${ytdYear}" tile below — the ${fmtM(ytdGap)} difference sits on completed cases still attributed to someone whose access has been removed.` : ""} ${ATTRIB_NOTE}`;
+  $("#report-scoreboard-scope").textContent = `Completions, fees banked, attach rate and avg days are for ${label}. Open cases and overdue tasks are as of now. Trend is completions over the last 6 calendar months, all rows drawn on one shared scale. "Fees banked" here is broker fees actually received this month, each counted on the date that fee was paid — a different scope from "Completed £ (earned)" on the Monthly business panel above, which is fee value earned on cases completed this month regardless of payment status.${bankedFuture ? ` Excludes future-dated payments (${bankedFuture}).` : ""} "Banked ${ytdYear}" is that adviser's broker cash for the calendar year, straight from get_reports.${ytdGap ? ` It covers people who still have a login, so it totals ${fmtM(ytdRpcSum)} against the ${fmtM(ytdFirm)} on the "Fees banked ${ytdYear}" tile below — the ${fmtM(ytdGap)} difference sits on completed cases still attributed to someone whose access has been removed.` : ""} "Attach rate" is the share of THIS MONTH's completions that ended with a protection policy, with the count in brackets — on a month's worth of completions a single case moves it a long way, so read the bracket before the percentage. ${ATTRIB_NOTE}`;
   $("#report-advisers").innerHTML = advRows.length ? `<table class="imp-table">
-    <tr><th>Adviser</th><th>Open</th><th>Completions</th><th title="Broker fees actually received this month, counted on the broker fee's own paid date. Payments dated in the future are excluded.">Fees banked (paid)<span class="money-basis">${esc(BASIS_CASH_MONTH)}</span></th><th title="Broker fees this adviser has banked so far in ${ytdYear}, as reported by get_reports (M5) — the same coalesce(broker_fee_paid_at, fee_paid_at) basis as the column beside it, widened to the whole year.">Banked ${ytdYear}<span class="money-basis">(broker only · cash · YTD)</span></th><th>Overdue</th><th title="Mean days from case created to completed, over completions in the selected month only. The sample size is in brackets; fewer than 3 completions is greyed and should not be read as a ranking.">Avg days</th><th title="Completions per month over the last 6 calendar months. Every row shares one vertical scale (peak ${sparkMax}); the number is this month's value.">6-mo trend</th></tr>
+    <tr><th>Adviser</th><th>Open</th><th>Completions</th><th title="Broker fees actually received this month, counted on the broker fee's own paid date. Payments dated in the future are excluded.">Fees banked (paid)<span class="money-basis">${esc(BASIS_CASH_MONTH)}</span></th><th title="Broker fees this adviser has banked so far in ${ytdYear}, as reported by get_reports (M5) — the same coalesce(broker_fee_paid_at, fee_paid_at) basis as the column beside it, widened to the whole year.">Banked ${ytdYear}<span class="money-basis">(broker only · cash · YTD)</span></th><th title="Of the cases this adviser completed in the selected month, the share that ended with a protection policy (protection_status = policy taken). The count is in brackets — a month is a small sample and a single case can swing it.">Attach rate<span class="money-basis">(policy taken ÷ completions · this month)</span></th><th>Overdue</th><th title="Mean days from case created to completed, over completions in the selected month only. The sample size is in brackets; fewer than 3 completions is greyed and should not be read as a ranking.">Avg days</th><th title="Completions per month over the last 6 calendar months. Every row shares one vertical scale (peak ${sparkMax}); the number is this month's value.">6-mo trend</th></tr>
     ${advRows.map((a) => `<tr${a.offTeam ? ' class="row-warn"' : ""}>
       <td>${advName(a)}</td>
       <td>${a.open}</td>
       <td>${a.completions}</td>
       <td>${fmtM(a.feesBanked)}</td>
       <td${a.id && ytdById[a.id] == null ? ' class="stat-weak" title="Not covered by get_reports — this row has no active login."' : ""}>${a.id && ytdById[a.id] != null ? fmtM(ytdById[a.id]) : "—"}</td>
+      <td${a.attach == null ? ' class="stat-weak" title="No completions in this month, so there is nothing to attach a policy to."' : (a.completions < 3 ? ' class="stat-weak" title="Fewer than 3 completions — too small a sample to read as a ranking."' : "")}>${a.attach == null ? "—" : `${a.attach}% <span class="cs-muted">(${a.protTaken}/${a.completions})</span>`}</td>
       <td>${a.overdue ? `<span class="badge red">${a.overdue}</span>` : (a.overdue == null ? "—" : "0")}</td>
       <td>${advAvg(a)}</td>
       <td title="${esc(a.trendTitle)}">${sparklineSvg(a.trend, sparkMax)} <span class="spark-now">${a.trend[a.trend.length - 1]}</span></td>
@@ -10605,7 +11495,7 @@ function renderThreadedPanels(all, mv, repAdvisers) {
     <tr id="report-scoreboard-foot" class="scoreboard-foot">
       <td><strong>Total</strong></td>
       <td><strong>${openSum}</strong></td>
-      <td colspan="6">${openSum === liveTotal ? "reconciles with" : `<strong>does not reconcile with</strong>`} the ${liveTotal} live cases on the KPI row below${unassignedLive ? ` · ${unassignedLive} of them unassigned` : ""}.</td>
+      <td colspan="7">${openSum === liveTotal ? "reconciles with" : `<strong>does not reconcile with</strong>`} the ${liveTotal} live cases on the KPI row below${unassignedLive ? ` · ${unassignedLive} of them unassigned` : ""}.</td>
     </tr>
   </table>` : `<div class="empty">No adviser activity in ${label}.</div>`;
   }
@@ -10873,6 +11763,21 @@ async function loadCaseExtraColumns() {
     return map;
   } catch (_) { return null; }
 }
+/* R7 — M7's property_address, read the same way loadCaseExtraColumns reads M2's: its own small,
+   ordered, capped query, so a database that has not taken the migration costs the rate-end
+   ledger's de-duplication and its property chips, and nothing else on the page. Returns
+   id → address (possibly null) or null when the column isn't there at all. */
+async function loadCasePropColumn() {
+  try {
+    if ((await propAddrSupported()) === false) return null;
+    const { data, error } = await db.from("cases").select("id,property_address").order("id").limit(REPORTS_ROW_CAP);
+    if (error) { if (isMissingColumnError(error)) PROP_ADDR_SUPPORTED = false; return null; }
+    noteRowCap("case property addresses", data);
+    const map = {};
+    (data || []).forEach((r) => { if (r && r.id) map[r.id] = r.property_address ?? null; });
+    return map;
+  } catch (_) { return null; }
+}
 /* When each case actually stopped, from the event log: the most recent stage_changed event whose
    detail names not_proceeding. Best-effort in the same spirit as loadStageEntries() — a blocked or
    absent case_events leaves the map empty and the losses panel dates by updated_at instead. */
@@ -10912,10 +11817,15 @@ async function loadReports() {
   const mv = (picker && picker.value) || thisMonth;
   if (picker && !picker.value) picker.value = mv;
   reportsCapHits = []; // R5-F4 — one verdict per render, never carried over from the last one
-  const [{ data: cases }, { data: intros }, repRes, extraCols, lostAt] = await Promise.all([
+  const [{ data: cases }, { data: intros }, repRes, extraCols, lostAt, propCols, leadRes] = await Promise.all([
     // G1N-4 — same order and same explicit ceiling as loadCaseExtraColumns, so the two selects
     // that are merged by id below can never walk different subsets of the table.
-    db.from("cases").select("id,stage,case_kind,loan_amount,broker_fee,proc_fee,sols_fee,submitted_at,fee_status,fee_paid_at,completed_at,created_at,updated_at,lead_source,introducer_id,protection_status,retention_source_case_id,assigned_to,nps_score,expected_completion_date,clients(first_name,last_name)")
+    /* R7 — widened by five BASE columns (client_id, lender, rate_end_date, rate_end_estimated)
+       so the Money owed and Rate-end book value panels below cost no second walk of the table.
+       Every one of them has existed since the original schema, so this select cannot start
+       42703-ing on an older database; the two columns that CAN (M2's per-type paid dates, M7's
+       property_address) stay in their own small queries underneath, exactly as before. */
+    db.from("cases").select("id,client_id,stage,case_kind,lender,loan_amount,broker_fee,proc_fee,sols_fee,submitted_at,fee_status,fee_paid_at,completed_at,created_at,updated_at,rate_end_date,rate_end_estimated,lead_source,introducer_id,protection_status,retention_source_case_id,assigned_to,nps_score,expected_completion_date,clients(first_name,last_name)")
       .order("id").limit(REPORTS_ROW_CAP),
     db.from("introducers").select("id,name"),
     db.rpc("get_reports"),
@@ -10923,6 +11833,16 @@ async function loadReports() {
     // the losses panel and the per-type cash dates, not the entire Reports page.
     loadCaseExtraColumns(),
     loadLostDates(),
+    // R7 — M7's property column, for the same reason: without it the rate-end ledger cannot
+    // collapse two cases on one building, and says so on the panel rather than failing to render.
+    loadCasePropColumn(),
+    /* R7-5 — the leads themselves, for the Lead-response panel. select("*") ON PURPOSE: naming
+       first_contact_at would 42703 the whole query on a database that has not taken the lead-SLA
+       migration, and this way the columns are simply absent and the panel says so. Unfiltered by
+       date because the "breaching now" count has to see an enquiry that has been sitting there
+       since before the 90-day window; the window is applied to the statistics client-side. */
+    db.from("leads").select("*").order("created_at", { ascending: false }).limit(LEAD_RESP_ROW_CAP)
+      .then((r) => r).catch(() => ({ data: [], error: true })),
   ]);
   const all = cases || [];
   noteRowCap("cases", cases);
@@ -10931,10 +11851,20 @@ async function loadReports() {
   // undefined and every consumer falls back: feeCashDate → fee_paid_at, lost_reason → "(not
   // recorded)".
   if (extraCols) all.forEach((c) => { const x = extraCols[c.id]; if (x) Object.assign(c, x); });
+  if (propCols) all.forEach((c) => { if (propCols[c.id] !== undefined) c.property_address = propCols[c.id]; });
   lossState.lostAt = lostAt || {};
   renderMyNumbers(all, yr);
   renderMonthReport(all, mv);
-  const activeStages = ["enquiry", "fact_find", "decision_in_principle", "application", "offer", "exchange"];
+  /* R7-1 / R7-2 — the two new money panels, from the same rows the rest of the page uses. Both
+     hide themselves for anyone but the Owner (see renderMoneyOwed / renderRateEndBook). */
+  renderMoneyOwed(all);
+  renderRateEndBook(all);
+  /* R7-5 — and the speed-to-lead panel, from the leads read above joined to those same case rows
+     for the adviser each accepted lead went to. Owner-only, like the two above it. */
+  const leadRows = (leadRes && !leadRes.error && leadRes.data) || [];
+  if (leadRows.length) noteLeadSlaFromStarRow(leadRows[0]);
+  renderLeadResponse(leadRows, all);
+  const activeStages =["enquiry", "fact_find", "decision_in_principle", "application", "offer", "exchange"];
   const active = all.filter((c) => activeStages.includes(c.stage));
   /* G1N-6 — bucket on the SAME Europe/London basis as every other Batch-6 figure. `new
      Date(x).getFullYear()` reads the BROWSER's timezone, so on a machine set to another zone a
@@ -11126,6 +12056,888 @@ function renderReportExtras(rep) {
     </tr>`).join("")}
   </table>` : '<div class="empty">No completed revenue yet.</div>';
 }
+
+/* ==========================================================================
+   ROUND 7 — THE MONEY PACK
+   ==========================================================================
+   Four surfaces, one subject: where the firm's money actually is.
+
+     R7-1  MONEY OWED           — every completed case carrying an unpaid fee,
+                                  aged from its completion date. (Reports.)
+     R7-2  RATE-END BOOK VALUE  — what the completed book is worth as it
+                                  matures over the next 24 months, plus the
+                                  RECOVER lane for rates that already ended.
+                                  (Reports.)
+     R7-3  PROTECTION QUOTE CLOCK — how old each quote is, and the commission a
+                                  policy is worth. (Protection page + Reports.)
+     R7-4  MONDAY MONEY         — the weekly read, on its own page.
+
+   EVERY ONE OF THESE IS FIRM-WIDE MONEY, so every one of them is OWNER-ONLY IN
+   THE UI, behind the same showMoney() gate the rest of Reports uses. An adviser
+   keeps exactly what round 5 gave them and nothing more: the "My numbers" card,
+   scoped to their own cases. The same standing caveat applies verbatim — THIS
+   IS PRESENTATION, NOT A SECURITY CONTROL. The cases table still carries
+   proc_fee / broker_fee / sols_fee to every signed-in staff session and anyone
+   with a browser console can read what these panels withhold. Do not describe
+   any of it as a control and do not rely on it for anything that matters.
+
+   Nothing here adds an RPC, a view or a column. Every figure is computed in the
+   browser from reads the app already makes, and every figure states its basis
+   in the round-6 form, so a number here can be reconciled against the number it
+   came from instead of argued with.
+   ========================================================================== */
+
+const R7_DAY = 86400000;
+
+/* --------------------------------------------------------------------------
+   R7-1a — WHAT "OWED" MEANS, in one place.
+
+   A fee is owed when the case has an AMOUNT for it and no date on which that
+   money arrived. The date is read through feeCashDate(), i.e.
+   coalesce(<type>_fee_paid_at, fee_paid_at) — the same expression M5 puts in
+   get_reports and the same one the My-numbers "outstanding" tile uses, so the
+   two figures reconcile by construction rather than by luck.
+
+   The ONE exception is fee_status = 'waived'. fee_status is a BROKER-fee
+   workflow field (see the FEE_TYPES note and markFeePaid): "waived" means the
+   firm decided not to charge the client. Money you chose not to charge is not
+   money you are owed, so the broker line drops out — and only the broker line.
+   A lender's procuration fee and a solicitor referral fee are not the firm's to
+   waive, so 'waived' has no bearing on either, and they stay.
+
+   Deliberately NOT keyed off fee_status otherwise: 'not_requested' and
+   'requested' describe whether an invoice has gone out, not whether the money
+   has arrived, and a case can sit at 'paid' with a proc fee still outstanding.
+   "No cash date" is the question this panel asks.
+   -------------------------------------------------------------------------- */
+function feeOwedLines(c) {
+  const out = [];
+  if (!c) return out;
+  FEE_TYPES.forEach((f) => {
+    const amt = Number(c[f.amountCol] || 0);
+    if (!(amt > 0)) return;
+    if (feeCashDate(c, f.dateCol)) return;                     // banked
+    if (f.key === "broker" && c.fee_status === "waived") return; // written off, not owed
+    out.push({ key: f.key, label: f.label, amount: amt });
+  });
+  return out;
+}
+/* Ageing from the COMPLETION date — the day the work finished and the clock on
+   getting paid started. Not from the invoice date (there isn't one on the
+   schema) and not from updated_at (an edit is not an event). */
+const OWED_BUCKETS = [
+  { key: "0-30", label: "0–30 days", lo: 0, hi: 30 },
+  { key: "30-60", label: "30–60 days", lo: 30, hi: 60 },
+  { key: "60-90", label: "60–90 days", lo: 60, hi: 90 },
+  { key: "90+", label: "90+ days", lo: 90, hi: Infinity },
+];
+/* A completed case with no completed_at cannot be aged at all. It is NOT
+   quietly dropped (that is money) and NOT parked in 90+ (that is a claim the
+   data doesn't support) — it gets its own bucket, which stays off the screen
+   entirely while it is empty. */
+const OWED_UNDATED = "undated";
+const OWED_BUCKET_LABEL = Object.fromEntries(OWED_BUCKETS.map((b) => [b.key, b.label]).concat([[OWED_UNDATED, "No completion date"]]));
+function owedBucketKey(days) {
+  if (days == null) return OWED_UNDATED;
+  const b = OWED_BUCKETS.find((x) => days >= x.lo && days < x.hi);
+  return b ? b.key : OWED_BUCKETS[OWED_BUCKETS.length - 1].key;
+}
+/* The model behind the Money owed panel, the Monday money ageing block and the
+   CSV alike — built once, from rows the caller already holds. */
+function moneyOwedModel(all) {
+  const rows = [];
+  (all || []).forEach((c) => {
+    if (c.stage !== "completed") return;
+    const lines = feeOwedLines(c);
+    if (!lines.length) return;
+    const days = daysSince(c.completed_at);
+    const amt = (k) => (lines.find((l) => l.key === k) || {}).amount || 0;
+    rows.push({
+      id: c.id, c, lines, days, bucket: owedBucketKey(days),
+      proc: amt("proc"), sols: amt("sols"), broker: amt("broker"),
+      total: lines.reduce((s, l) => s + l.amount, 0),
+    });
+  });
+  const buckets = {};
+  OWED_BUCKETS.concat([{ key: OWED_UNDATED }]).forEach((b) => (buckets[b.key] = { key: b.key, n: 0, total: 0, rows: [] }));
+  rows.forEach((r) => { const b = buckets[r.bucket]; b.n++; b.total += r.total; b.rows.push(r); });
+  const grand = rows.reduce((s, r) => s + r.total, 0);
+  const bucketList = OWED_BUCKETS.map((b) => buckets[b.key]).concat(buckets[OWED_UNDATED].n ? [buckets[OWED_UNDATED]] : []);
+  return { rows, buckets, bucketList, grand, n: rows.length,
+           procTotal: rows.reduce((s, r) => s + r.proc, 0),
+           solsTotal: rows.reduce((s, r) => s + r.sols, 0),
+           brokerTotal: rows.reduce((s, r) => s + r.broker, 0) };
+}
+const BASIS_OWED = "(earned · not yet received · completed cases · aged from completion date)";
+
+/* --------------------------------------------------------------------------
+   R7-1b — the panel. Grouped by lender or by adviser, because those are the two
+   people you chase: the lender's payments team for a proc fee, and the adviser
+   for the client's broker fee. The grouping is a view toggle, never a filter —
+   both groupings contain exactly the same rows and add to the same grand total,
+   which is the point of putting the totals row at the bottom of each.
+   -------------------------------------------------------------------------- */
+let owedGroupBy = "lender";
+let owedState = { model: null, all: null };
+function renderMoneyOwed(all) {
+  const panel = $("#report-owed-panel");
+  if (!panel) return;
+  owedState.all = all || [];
+  if (!showMoney()) {
+    panel.classList.add("hidden");
+    owedState.model = null;
+    $("#report-owed-table").innerHTML = "";
+    $("#report-owed-buckets").innerHTML = "";
+    return;
+  }
+  panel.classList.remove("hidden");
+  const m = moneyOwedModel(all);
+  owedState.model = m;
+  $("#report-owed-basis").innerHTML =
+    `Every completed case carrying a fee amount with no paid date against it — proc, solicitor and broker fees counted separately, each on <code>coalesce(&lt;type&gt;_fee_paid_at, fee_paid_at)</code>, the same basis as "Fees banked" above. `
+    + `A broker fee marked <strong>waived</strong> is excluded (money you chose not to charge is not money you are owed); a waived status has no effect on proc or solicitor fees. `
+    + `Aged from <strong>completed_at</strong>. <span class="money-basis">${esc(BASIS_OWED)}</span>`;
+
+  $("#report-owed-buckets").innerHTML = m.bucketList.map((b) => {
+    const hot = b.key === "60-90" || b.key === "90+";
+    return `<div class="kpi ${b.total && hot ? (b.key === "90+" ? "bad" : "warn") : ""}">
+      <div class="num" title="${esc(fmtM(b.total))}">${fmtM(b.total)}</div>
+      <div class="lbl">${esc(OWED_BUCKET_LABEL[b.key])}</div>
+      <div class="s">${b.n} case${b.n === 1 ? "" : "s"}</div>
+    </div>`;
+  }).join("") + `<div class="kpi kpi-headline"><div class="num" title="${esc(fmtM(m.grand))}">${fmtM(m.grand)}</div><div class="lbl">Total owed</div><div class="s">${m.n} case${m.n === 1 ? "" : "s"} · proc ${fmtM(m.procTotal)} · sols ${fmtM(m.solsTotal)} · broker ${fmtM(m.brokerTotal)}</div></div>`;
+
+  $("#owed-group-lender").classList.toggle("scope-active", owedGroupBy === "lender");
+  $("#owed-group-adviser").classList.toggle("scope-active", owedGroupBy === "adviser");
+
+  if (!m.n) {
+    $("#report-owed-table").innerHTML = '<div class="empty">Nothing outstanding — every completed case with a fee on it has a date against the money. 👏</div>';
+    return;
+  }
+  const groupOf = (r) => owedGroupBy === "lender"
+    ? (r.c.lender || "(no lender recorded)")
+    : (r.c.assigned_to ? (profileName(r.c.assigned_to) || staffName(r.c.assigned_to)) : "(unassigned)");
+  const groups = new Map();
+  m.rows.forEach((r) => { const k = groupOf(r); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(r); });
+  const cols = m.bucketList.map((b) => b.key);
+  const sorted = [...groups.entries()].sort((a, b) => {
+    const at = a[1].reduce((s, r) => s + r.total, 0), bt = b[1].reduce((s, r) => s + r.total, 0);
+    return bt - at;
+  });
+  const cellsFor = (rows) => cols.map((k) => {
+    const t = rows.filter((r) => r.bucket === k).reduce((s, r) => s + r.total, 0);
+    return `<td class="owed-cell">${t ? fmtM(t) : '<span class="cs-muted">—</span>'}</td>`;
+  }).join("");
+  const body = sorted.map(([name, rows]) => {
+    const gTot = rows.reduce((s, r) => s + r.total, 0);
+    const head = `<tr class="owed-group-row"><td><strong>${owedGroupBy === "lender" ? lenderIcon(name === "(no lender recorded)" ? "" : name) : ""}${esc(name)}</strong> <span class="cs-muted">${rows.length} case${rows.length === 1 ? "" : "s"}</span></td>${cellsFor(rows)}<td class="owed-cell"><strong>${fmtM(gTot)}</strong></td></tr>`;
+    const caseRows = rows.slice().sort((a, b) => (b.days ?? -1) - (a.days ?? -1)).map((r) => {
+      const parts = r.lines.map((l) => `${l.label} ${fmtM(l.amount)}`).join(" · ");
+      return `<tr class="owed-case-row" onclick="openCase('${r.id}')" title="Open this case">
+        <td class="owed-case-cell">${esc([r.c.clients?.first_name, r.c.clients?.last_name].filter(Boolean).join(" ")) || "(no name)"}
+          ${propChip(r.c, { cls: "row-prop" }) || ""}
+          <div class="s">${esc(parts)}${r.c.completed_at ? ` · completed ${fmtD(r.c.completed_at)}` : ""}${r.days == null ? " · <em>no completion date recorded</em>" : ` · ${r.days}d`}</div></td>
+        ${cols.map((k) => `<td class="owed-cell">${r.bucket === k ? fmtM(r.total) : '<span class="cs-muted">—</span>'}</td>`).join("")}
+        <td class="owed-cell">${fmtM(r.total)}</td>
+      </tr>`;
+    }).join("");
+    return head + caseRows;
+  }).join("");
+  $("#report-owed-table").innerHTML = `<div style="overflow-x:auto;"><table class="imp-table owed-table" id="owed-table">
+    <tr><th>${owedGroupBy === "lender" ? "Lender" : "Adviser"}</th>${cols.map((k) => `<th>${esc(OWED_BUCKET_LABEL[k])}</th>`).join("")}<th>Total owed</th></tr>
+    ${body}
+    <tr class="owed-total-row"><td><strong>All ${owedGroupBy === "lender" ? "lenders" : "advisers"}</strong></td>${cellsFor(m.rows)}<td class="owed-cell"><strong>${fmtM(m.grand)}</strong></td></tr>
+  </table></div>
+  <p class="panel-sub" style="margin:10px 0 0;">Both groupings hold the same ${m.n} case${m.n === 1 ? "" : "s"} and add to the same ${fmtM(m.grand)} — the toggle changes who you would chase, never what is outstanding. Click any case row to open it.</p>`;
+}
+window.setOwedGroup = function (g) {
+  if (g === owedGroupBy) return;
+  owedGroupBy = g;
+  renderMoneyOwed(owedState.all || []);
+};
+/* R7-1c — the owner export. It carries the proc and sols columns the pipeline
+   CSV has never had: this file is the chase list, and a proc fee you cannot see
+   is a proc fee nobody rings the lender about. Owner-only, like the panel. */
+window.exportOwedCsv = function () {
+  if (!showMoney()) return toast("The money-owed export is Owner-only.");
+  const m = owedState.model;
+  if (!m || !m.n) return toast("Nothing outstanding to export.");
+  const q2 = (v) => {
+    let s = String(v == null ? "" : v);
+    if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+    return `"${s.replace(/"/g, '""')}"`;
+  };
+  const head = ["Client", "Property", "Adviser", "Lender", "Completed", "Days since completion", "Ageing bucket",
+                "Proc fee owed", "Sols fee owed", "Broker fee owed", "Total owed", "Fee status", "Case id"];
+  const lines = [head.map(q2).join(",")].concat(m.rows
+    .slice()
+    .sort((a, b) => (b.days ?? -1) - (a.days ?? -1))
+    .map((r) => [
+      [r.c.clients?.first_name, r.c.clients?.last_name].filter(Boolean).join(" "),
+      propAddress(r.c) || "",
+      r.c.assigned_to ? staffName(r.c.assigned_to) : "",
+      r.c.lender || "",
+      (r.c.completed_at || "").slice(0, 10),
+      r.days == null ? "" : r.days,
+      OWED_BUCKET_LABEL[r.bucket],
+      r.proc || "", r.sols || "", r.broker || "", r.total,
+      r.c.fee_status || "",
+      r.id,
+    ].map(q2).join(",")));
+  const blob = new Blob(["﻿" + lines.join("\n")], { type: "text/csv" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `money-owed-${localDateStr()}.csv`;
+  a.click();
+  toast(`Exported ${m.n} case${m.n === 1 ? "" : "s"} · ${fmtM(m.grand)} outstanding`);
+};
+/* R7-1d — where the fee_aging_60 Watchtower alerts land. */
+window.gotoMoneyOwed = function () {
+  if (!showMoney()) return toast("Money owed is Owner-only.");
+  nav("reports");
+  setTimeout(() => {
+    const p = $("#report-owed-panel");
+    if (p && !p.classList.contains("hidden")) p.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, 350);
+};
+
+/* --------------------------------------------------------------------------
+   R7-2 — RATE-END BOOK VALUE.
+
+   The completed book, laid out by when each mortgage's rate matures over the
+   next 24 months. Three things it is careful about:
+
+   · WHOSE ROWS. Completed cases only, and only those carrying a rate end date.
+     A live case's rate end is a plan, not book value.
+
+   · DE-DUPLICATION. One building whose rate ends on one date is ONE maturity,
+     however many case rows the firm holds for it — a product transfer followed
+     by a remortgage on the same flat is two cases and one mortgage. Rows are
+     collapsed on propKey + rate_end_date and badged "N cases", and the
+     surviving row is the most recently completed one (the live mortgage). Both
+     the ledger totals and the per-case list use the collapsed set, so the book
+     is not double-counted. Cases with no address cannot be collapsed and are
+     never guessed at — they each stand alone.
+
+   · THE FEE. There is no "expected fee" column anywhere in the schema, so the
+     LAST fee the firm earned on that mortgage is used as the proxy, and the
+     column says so in its header rather than in a footnote nobody reads. Cases
+     with no fee recorded are counted in the case count and contribute nothing
+     to the value — the expected figure is a floor, and the row says how many
+     cases are behind it.
+   -------------------------------------------------------------------------- */
+const RATE_BUCKETS = [
+  { key: "0-3", label: "0–3 months", lo: 0, hi: 3 },
+  { key: "3-6", label: "3–6 months", lo: 3, hi: 6 },
+  { key: "6-12", label: "6–12 months", lo: 6, hi: 12 },
+  { key: "12-24", label: "12–24 months", lo: 12, hi: 24 },
+];
+/* Calendar-month arithmetic on a plain YYYY-MM-DD, at local midday so no
+   timezone can move a maturity into the previous day (and so into the previous
+   bucket). Month overflow follows the platform (31 Jan + 1 month = 3 Mar);
+   that is deterministic, which is what the buckets need. */
+function dateAddMonths(dateStr, n) {
+  const s = String(dateStr || "");
+  const y = Number(s.slice(0, 4)), m = Number(s.slice(5, 7)) - 1, d = Number(s.slice(8, 10));
+  if (!y) return s;
+  return localDateStr(new Date(y, m + n, d, 12, 0, 0));
+}
+const caseLastFee = (c) => Number((c && c.proc_fee) || 0) + Number((c && c.broker_fee) || 0) + Number((c && c.sols_fee) || 0);
+/* The collapse key: one building, one maturity date. Empty when the case has no
+   usable address — those never merge with anything. */
+function rateEndDedupeKey(c) {
+  const k = propKey(c);
+  return k ? k + "|" + (c.rate_end_date || "") : "";
+}
+function dedupeRateEndRows(rows) {
+  const byKey = new Map();
+  const out = [];
+  (rows || []).forEach((c) => {
+    const k = rateEndDedupeKey(c);
+    if (!k) { out.push({ c, dupes: 1, others: [] }); return; }
+    if (!byKey.has(k)) { const e = { c, dupes: 1, others: [] }; byKey.set(k, e); out.push(e); return; }
+    const e = byKey.get(k);
+    e.dupes++;
+    // Keep the most recently completed row — that is the mortgage actually in force.
+    const newer = String(c.completed_at || "") > String(e.c.completed_at || "")
+      || (String(c.completed_at || "") === String(e.c.completed_at || "") && String(c.id) > String(e.c.id));
+    if (newer) { e.others.push(e.c); e.c = c; } else e.others.push(c);
+  });
+  return out;
+}
+function rateEndBookModel(all) {
+  const today = localDateStr();
+  const edges = [0, 3, 6, 12, 24].map((n) => dateAddMonths(today, n));
+  const inWindow = (all || []).filter((c) => c.stage === "completed" && c.rate_end_date
+    && c.rate_end_date >= edges[0] && c.rate_end_date < edges[4]);
+  const entries = dedupeRateEndRows(inWindow);
+  const buckets = RATE_BUCKETS.map((b, i) => ({ key: b.key, label: b.label, from: edges[i], to: edges[i + 1], entries: [] }));
+  entries.forEach((e) => {
+    const d = e.c.rate_end_date;
+    const b = buckets.find((x) => d >= x.from && d < x.to) || buckets[buckets.length - 1];
+    b.entries.push(e);
+  });
+  buckets.forEach((b) => {
+    b.entries.sort((x, y) => (x.c.rate_end_date < y.c.rate_end_date ? -1 : x.c.rate_end_date > y.c.rate_end_date ? 1 : 0));
+    b.n = b.entries.length;
+    b.loan = b.entries.reduce((s, e) => s + Number(e.c.loan_amount || 0), 0);
+    b.fee = b.entries.reduce((s, e) => s + caseLastFee(e.c), 0);
+    b.noFee = b.entries.filter((e) => !caseLastFee(e.c)).length;
+    b.merged = b.entries.filter((e) => e.dupes > 1).length;
+  });
+  return {
+    buckets, edges,
+    n: buckets.reduce((s, b) => s + b.n, 0),
+    loan: buckets.reduce((s, b) => s + b.loan, 0),
+    fee: buckets.reduce((s, b) => s + b.fee, 0),
+    noFee: buckets.reduce((s, b) => s + b.noFee, 0),
+    rawN: inWindow.length,
+  };
+}
+/* The RECOVER lane. A completed case whose rate has ALREADY ended and which has
+   no successor case is money that has walked out of the door unnoticed — the
+   nightly queue only ever looks FORWARD into the reminder window, so nothing
+   automatic will ever pick it up again. The backend's recovery sweep now
+   creates successors for these; the lane deliberately shows BOTH sides, because
+   "the sweep handled 4" and "3 are still uncovered" are different sentences and
+   only one of them is work. */
+function rateEndRecoverModel(all) {
+  const today = localDateStr();
+  const successorOf = new Set((all || []).filter((c) => c.retention_source_case_id).map((c) => c.retention_source_case_id));
+  const past = (all || []).filter((c) => c.stage === "completed" && c.rate_end_date && c.rate_end_date < today);
+  const covered = past.filter((c) => successorOf.has(c.id));
+  const uncovered = past.filter((c) => !successorOf.has(c.id));
+  const value = (rows) => rows.reduce((s, c) => s + caseLastFee(c), 0);
+  return { past, covered, uncovered, coveredValue: value(covered), uncoveredValue: value(uncovered),
+           uncoveredLoan: uncovered.reduce((s, c) => s + Number(c.loan_amount || 0), 0) };
+}
+let rateEndOpen = new Set();
+let rateEndState = { all: null };
+function renderRateEndBook(all) {
+  const panel = $("#report-rateend-panel");
+  if (!panel) return;
+  rateEndState.all = all || [];
+  if (!showMoney()) {
+    panel.classList.add("hidden");
+    $("#report-rateend-table").innerHTML = "";
+    $("#report-rateend-recover").innerHTML = "";
+    return;
+  }
+  panel.classList.remove("hidden");
+  const m = rateEndBookModel(all);
+  const merged = m.buckets.reduce((s, b) => s + b.merged, 0);
+  $("#report-rateend-basis").innerHTML =
+    `Completed cases carrying a rate end date, bucketed by how far off that date is. `
+    + `<strong>Loan balance</strong> is the loan recorded on the case (not a redemption figure). `
+    + `<strong>Expected fee</strong> uses the <em>last fee earned on that mortgage</em> (proc + broker + sols) as a proxy — it is not a forecast and nothing weights it for whether the client stays. `
+    + (merged ? `${merged} maturit${merged === 1 ? "y is" : "ies are"} held by more than one case on the same property and the same date; each is counted <strong>once</strong> (${m.rawN} case rows → ${m.n} maturities). ` : "")
+    + (m.noFee ? `${m.noFee} of ${m.n} have no fee recorded and add nothing to the value, so the expected figure is a floor. ` : "")
+    + `<span class="money-basis">(book value · completed cases · last fee as proxy · next 24 months)</span>`;
+
+  const rows = m.buckets.map((b) => {
+    const open = rateEndOpen.has(b.key);
+    const head = `<tr class="rb-bucket-row${open ? " is-open" : ""}" onclick="toggleRateBucket('${b.key}')" title="${b.n ? "Show the cases behind this bucket" : "No maturities in this bucket"}">
+      <td><span class="rb-caret">${b.n ? (open ? "▾" : "▸") : "·"}</span> <strong>${esc(b.label)}</strong> <span class="cs-muted">${esc(fmtD(b.from))} – ${esc(fmtD(b.to))}</span></td>
+      <td>${b.n}</td>
+      <td>${fmtM(b.loan)}</td>
+      <td>${fmtM(b.fee)}</td>
+      <td>${fmtM(b.fee)} <span class="cs-muted rb-proxy" title="Last fee earned on the same mortgage, used as a proxy — not a forecast.">proxy</span>${b.noFee ? `<div class="s">${b.noFee} with no fee recorded</div>` : ""}</td>
+    </tr>`;
+    if (!open || !b.n) return head;
+    return head + b.entries.map((e) => {
+      const c = e.c;
+      return `<tr class="rb-case-row" onclick="openCase('${c.id}')" title="Open this case">
+        <td class="rb-case-cell">${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ")) || "(no name)"}
+          ${propChip(c, { cls: "row-prop" }) || '<span class="cs-muted">no property recorded</span>'}
+          ${e.dupes > 1 ? `<span class="badge grey" title="${e.dupes} cases share this property and this rate end date — counted once. The most recently completed one is shown.">${e.dupes} cases</span>` : ""}
+          <div class="s">${lenderIcon(c.lender)}${esc(c.lender || "no lender")} · rate ends ${fmtD(c.rate_end_date)}${c.rate_end_estimated ? " " + APPROX : ""}</div></td>
+        <td></td>
+        <td>${c.loan_amount ? fmtM(c.loan_amount) : '<span class="cs-muted">—</span>'}</td>
+        <td>${caseLastFee(c) ? fmtM(caseLastFee(c)) : '<span class="cs-muted">none recorded</span>'}</td>
+        <td></td>
+      </tr>`;
+    }).join("");
+  }).join("");
+  $("#report-rateend-table").innerHTML = `<div style="overflow-x:auto;"><table class="imp-table rb-table" id="rateend-table">
+    <tr><th>Maturing in</th><th>Cases</th><th>Loan balance</th><th>Last fee earned</th><th title="The last fee earned on the same mortgage, used as a proxy for what a renewal would earn.">Expected fee (proxy)</th></tr>
+    ${rows}
+    <tr class="rb-total-row"><td><strong>Next 24 months</strong></td><td><strong>${m.n}</strong></td><td><strong>${fmtM(m.loan)}</strong></td><td><strong>${fmtM(m.fee)}</strong></td><td><strong>${fmtM(m.fee)}</strong></td></tr>
+  </table></div>`;
+
+  const rec = rateEndRecoverModel(all);
+  $("#report-rateend-recover").innerHTML = `
+    <div class="panel-head-row"><h3 style="margin:0;">Recover — rates that already ended</h3>
+      <span class="badge ${rec.uncovered.length ? "red" : "green"}">${rec.uncovered.length} uncovered</span></div>
+    <p class="panel-sub">Completed cases whose rate end date has already passed. ${rec.covered.length} of ${rec.past.length} already have a follow-on case — created by the retention flow, by hand, or by the overnight recovery sweep; this panel does not distinguish between those and does not claim to. ${rec.uncovered.length ? `<strong>${rec.uncovered.length}</strong> still have none, worth ${fmtM(rec.uncoveredValue)} at last-fee rates on ${fmtM(rec.uncoveredLoan)} of lending.` : "Nothing is uncovered."} <span class="money-basis">(completed · rate end in the past · successor = a case whose retention_source_case_id points here)</span></p>
+    ${rec.uncovered.length ? `<div id="rateend-recover-list">${rec.uncovered
+      .slice()
+      .sort((a, b) => (a.rate_end_date < b.rate_end_date ? -1 : 1))
+      .slice(0, 20)
+      .map((c) => `<div class="row-item rb-recover-row">
+        <div class="row-main">
+          <div class="t" onclick="openCase('${c.id}')">${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ")) || "(no name)"} ${propChip(c, { cls: "row-prop" }) || ""}</div>
+          <div class="s">${lenderIcon(c.lender)}${esc(c.lender || "no lender")} — rate ended ${fmtD(c.rate_end_date)} (${daysSince(c.rate_end_date)} days ago) · last fee ${caseLastFee(c) ? fmtM(caseLastFee(c)) : "none recorded"}</div>
+        </div>
+        <button class="btn btn-sm btn-retention" onclick="event.stopPropagation();startRetentionCase('${c.id}', event)" title="Create the follow-on remortgage case, the call task and a queued reminder">🔁 Start retention case</button>
+      </div>`).join("")}${rec.uncovered.length > 20 ? `<div class="empty">…and ${rec.uncovered.length - 20} more.</div>` : ""}</div>`
+      : '<div class="empty">Every completed case whose rate has ended already has a follow-on case. Nothing to recover. 👍</div>'}`;
+}
+window.toggleRateBucket = function (key) {
+  if (rateEndOpen.has(key)) rateEndOpen.delete(key); else rateEndOpen.add(key);
+  if (rateEndState.all) renderRateEndBook(rateEndState.all);
+};
+
+/* --------------------------------------------------------------------------
+   R7-3a — the protection quote clock's shared arithmetic.
+   -------------------------------------------------------------------------- */
+const QUOTE_AGE_AMBER = 7, QUOTE_AGE_RED = 14;
+function quoteAgeBadge(quotedAt) {
+  if (!quotedAt) return `<span class="badge grey q-age" title="This case is quoted but carries no quote date — it was set before the quote clock existed, or the database has not taken the migration that stores it.">quote age unknown</span>`;
+  const d = daysSince(quotedAt);
+  const cls = d > QUOTE_AGE_RED ? "red" : d >= QUOTE_AGE_AMBER ? "amber" : "green";
+  const word = d > QUOTE_AGE_RED ? "cold" : d >= QUOTE_AGE_AMBER ? "ageing" : "fresh";
+  return `<span class="badge ${cls} q-age" title="Quoted ${fmtD(quotedAt)} — ${d} day${d === 1 ? "" : "s"} ago. Green under ${QUOTE_AGE_AMBER} days, amber ${QUOTE_AGE_AMBER}–${QUOTE_AGE_RED}, red over ${QUOTE_AGE_RED}.">${d}d · ${word}</span>`;
+}
+/* M8 feature detection, by absence and then by refusal — the same discipline as
+   M1/M2/M7 elsewhere in this file. Null means "not asked yet"; false means the
+   database answered 42703 and the stamp is silently dropped from every write
+   from then on, rather than failing the status change the adviser asked for. */
+let PROT_QUOTE_SUPPORTED = null;
+async function protQuoteSupported() {
+  if (PROT_QUOTE_SUPPORTED !== null) return PROT_QUOTE_SUPPORTED;
+  try {
+    const { error } = await db.from("cases").select("id,protection_quoted_at,protection_quoted_by").limit(1);
+    PROT_QUOTE_SUPPORTED = !error;
+  } catch (_) { PROT_QUOTE_SUPPORTED = false; }
+  return PROT_QUOTE_SUPPORTED;
+}
+/* One batched read of the quote stamps for the rows on screen. Returns {} when
+   the column isn't there, so every consumer degrades to "quote age unknown"
+   rather than throwing. */
+async function loadQuoteStamps(caseIds) {
+  const ids = [...new Set((caseIds || []).filter(Boolean))];
+  if (!ids.length) return {};
+  if (!(await protQuoteSupported())) return {};
+  try {
+    const { data, error } = await db.from("cases").select("id,protection_quoted_at,protection_quoted_by").in("id", ids);
+    if (error) return {};
+    const map = {};
+    (data || []).forEach((r) => { if (r && r.id) map[r.id] = r; });
+    return map;
+  } catch (_) { return {}; }
+}
+
+/* ==========================================================================
+   R7-5 — LEAD RESPONSE (Reports, Owner-only).
+
+   The one number nobody could produce: how long this firm takes to answer a
+   website enquiry. It is measured from `created_at` (the enquiry landing) to
+   `first_contact_at` (a human taking it on — see acceptLead / discardLead),
+   and it is measured on nothing else. In particular it does NOT use
+   `acknowledged_at`: the automatic "we've got it" email goes out inside a
+   minute of every enquiry with an email address, so a report built on it would
+   show a sixty-second response time for a lead nobody has rung in two days.
+
+   MEDIAN AND p90 TOGETHER, always. A median answers "what normally happens";
+   it is also the statistic that hides a tail, and the tail is the whole
+   problem — five leads answered in four minutes and one left for thirty hours
+   is a median of four minutes and a lost client. p90 is nearest-rank (the
+   value at position ceil(0.9n) of the sorted list), so it is always a real
+   response time that really happened, never an interpolation between two.
+
+   AND THE HONEST EMPTY STATE. Production has zero stamps today: the columns
+   landed this round and nothing has written one yet. So the panel says that,
+   in words, and shows what it CAN see — how many enquiries are past the
+   promise right this minute — rather than drawing an empty chart and letting
+   it read as "nobody waits long".
+   ========================================================================== */
+const LEAD_RESP_WINDOW_DAYS = 90;
+const LEAD_RESP_ROW_CAP = 2000;
+function leadRespMedian(xs) {
+  if (!xs.length) return null;
+  const s = xs.slice().sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 ? s[mid] : Math.round((s[mid - 1] + s[mid]) / 2);
+}
+function leadRespP90(xs) {
+  if (!xs.length) return null;
+  const s = xs.slice().sort((a, b) => a - b);
+  return s[Math.ceil(0.9 * s.length) - 1];
+}
+/* Minutes, read out the way a person says them. Deliberately not the compact
+   fmtWaitMins used on the inbox chip: a table of response times wants "1h 47m",
+   a badge on a row wants "1h". */
+function fmtRespMins(m) {
+  if (m == null) return "—";
+  if (m < 60) return `${m}min`;
+  if (m < 1440) { const h = Math.floor(m / 60), r = m % 60; return r ? `${h}h ${r}m` : `${h}h`; }
+  const d = Math.floor(m / 1440), h = Math.floor((m % 1440) / 60);
+  return h ? `${d}d ${h}h` : `${d}d`;
+}
+/* A lead is "won" when it carries the case it became, or when its status says
+   somebody took it on. Both are checked because the two are written by
+   different things: converted_case_id by acceptLead, the status by the website
+   integration and by anything that accepted a lead before that link existed. */
+const leadIsWon = (l) => !!(l && (l.converted_case_id || ["converted", "accepted"].includes(String(l.status || "").toLowerCase())));
+/* Source: the same expression Monday money's lead table uses, so the two
+   panels group the same enquiries the same way. */
+const leadRespSourceOf = (l) => String((l && (l.source || l.lead_source || l.enquiry_type)) || "").trim() || "(not recorded)";
+function leadRespModel(leads, cases) {
+  const rows = Array.isArray(leads) ? leads : [];
+  const cutoff = Date.now() - LEAD_RESP_WINDOW_DAYS * 86400000;
+  const caseAdviser = {};
+  (cases || []).forEach((c) => { if (c && c.id) caseAdviser[c.id] = c.assigned_to || null; });
+  const inWindow = rows.filter((l) => {
+    const t = l && l.created_at ? new Date(l.created_at).getTime() : NaN;
+    return !isNaN(t) && t >= cutoff;
+  });
+  const withMins = inWindow.map((l) => ({
+    lead: l,
+    mins: leadResponseMins(l.created_at, l.first_contact_at),
+    source: leadRespSourceOf(l),
+    adviser: (l.converted_case_id && caseAdviser[l.converted_case_id]) || null,
+    won: leadIsWon(l),
+  }));
+  const responded = withMins.filter((r) => r.mins != null);
+  /* Breaching NOW, and deliberately counted over every lead still sitting in
+     the inbox rather than only those inside the 90-day window: a lead that has
+     been ignored since the spring is the worst row on the screen, and dropping
+     it out of the count because it is old is exactly backwards. */
+  const breaching = rows.filter((l) => l && l.status === "new" && !l.first_contact_at
+    && (leadAgeMins(l.created_at) ?? -1) >= LEAD_SLA_MIN);
+  const group = (keyOf, labelOf) => {
+    const map = new Map();
+    withMins.forEach((r) => {
+      const k = keyOf(r);
+      if (!map.has(k)) map.set(k, { key: k, label: labelOf(k, r), leads: 0, won: 0, mins: [] });
+      const g = map.get(k);
+      g.leads++;
+      if (r.won) g.won++;
+      if (r.mins != null) g.mins.push(r.mins);
+    });
+    return [...map.values()].map((g) => ({
+      ...g,
+      n: g.mins.length,
+      median: leadRespMedian(g.mins),
+      p90: leadRespP90(g.mins),
+      conv: g.leads ? Math.round((g.won / g.leads) * 100) : null,
+    })).sort((a, b) => b.leads - a.leads || String(a.label).localeCompare(String(b.label)));
+  };
+  return {
+    windowDays: LEAD_RESP_WINDOW_DAYS,
+    all: withMins,
+    responded,
+    nLeads: withMins.length,
+    nResponded: responded.length,
+    won: withMins.filter((r) => r.won).length,
+    conv: withMins.length ? Math.round((withMins.filter((r) => r.won).length / withMins.length) * 100) : null,
+    median: leadRespMedian(responded.map((r) => r.mins)),
+    p90: leadRespP90(responded.map((r) => r.mins)),
+    bySource: group((r) => r.source, (k) => k),
+    byAdviser: group((r) => r.adviser || "", (k) => (k ? (profileName(k) || staffName(k)) : "(no adviser recorded)")),
+    breaching,
+  };
+}
+let leadRespState = { model: null };
+function renderLeadResponse(leads, cases) {
+  const panel = $("#report-leadresp-panel");
+  if (!panel) return;
+  if (!showMoney()) {
+    panel.classList.add("hidden");
+    leadRespState.model = null;
+    ["#report-leadresp-headline", "#report-leadresp-source", "#report-leadresp-adviser", "#leadresp-tools"].forEach((s) => { const el = $(s); if (el) el.innerHTML = ""; });
+    return;
+  }
+  panel.classList.remove("hidden");
+  const m = leadRespModel(leads, cases);
+  leadRespState.model = m;
+  const slaOff = LEAD_SLA_SUPPORTED === false;
+  $("#report-leadresp-basis").innerHTML =
+    `Website enquiries created in the last <strong>${m.windowDays} days</strong> (${m.nLeads} of them). Response time is <code>first_contact_at − created_at</code> — the moment a person accepted the lead, or discarded it having made contact — and is counted only where BOTH exist. `
+    + `The automatic acknowledgement is <strong>not</strong> a response and is not measured here. `
+    + `<strong>p90</strong> is nearest-rank: the value at position ceil(0.9 × n), so it is always a wait somebody really had. `
+    + `<strong>Conversion</strong> is the share of enquiries in the window that became a case, answered or not. `
+    + `Source is the enquiry type the website form recorded; adviser is whoever the accepted lead's case was created for. `
+    + (slaOff ? `<strong style="color:var(--red);">This database has no first_contact_at column yet, so nothing can be measured — run the lead-SLA migration.</strong> ` : "")
+    + ((leads || []).length >= LEAD_RESP_ROW_CAP ? `<strong style="color:var(--red);">Only the newest ${LEAD_RESP_ROW_CAP.toLocaleString("en-GB")} enquiries were read — these figures describe that subset, not the whole book.</strong> ` : "")
+    + `<span class="money-basis">(leads · first_contact_at − created_at · last ${m.windowDays} days)</span>`;
+
+  const nBreach = m.breaching.length;
+  $("#leadresp-tools").innerHTML = `<button type="button" class="btn btn-sm${nBreach ? " btn-danger" : ""}" id="leadresp-breach-btn" onclick="gotoLeadInbox()" title="${nBreach ? `${nBreach} enquir${nBreach === 1 ? "y is" : "ies are"} past the ${LEAD_SLA_MIN}-minute promise right now — open the inbox on Today.` : "Nothing is past the promise right now. Open the lead inbox on Today."}">${nBreach ? `⏱ ${nBreach} breaching now` : "⏱ none breaching"} →</button>`;
+
+  $("#report-leadresp-headline").innerHTML = [
+    `<div class="kpi kpi-headline"><div class="num">${m.nResponded ? esc(fmtRespMins(m.median)) : "—"}</div><div class="lbl">Median response</div><div class="s">${m.nResponded} of ${m.nLeads} enquir${m.nLeads === 1 ? "y" : "ies"} answered</div></div>`,
+    `<div class="kpi${m.p90 != null && m.p90 > LEAD_SLA_RED_MIN ? " bad" : ""}"><div class="num">${m.nResponded ? esc(fmtRespMins(m.p90)) : "—"}</div><div class="lbl">p90 response</div><div class="s">${m.nResponded ? `9 in 10 answered inside this` : "no answered enquiries yet"}</div></div>`,
+    `<div class="kpi"><div class="num">${m.conv == null ? "—" : m.conv + "%"}</div><div class="lbl">Conversion</div><div class="s">${m.won} of ${m.nLeads} became a case</div></div>`,
+    `<div class="kpi${nBreach ? " bad" : ""}" style="cursor:pointer;" onclick="gotoLeadInbox()" title="Open the lead inbox on Today"><div class="num" id="leadresp-breach-n">${nBreach}</div><div class="lbl">Breaching now</div><div class="s">waiting over ${LEAD_SLA_MIN} min, nobody yet</div></div>`,
+  ].join("");
+
+  const tableFor = (groups, headWord, emptyWord) => {
+    if (!groups.length) return `<div class="empty">${esc(emptyWord)}</div>`;
+    return `<div style="overflow-x:auto;"><table class="imp-table leadresp-table">
+      <tr><th>${esc(headWord)}</th><th>Enquiries</th><th>Answered</th><th>Median</th><th>p90</th><th>Became a case</th></tr>
+      ${groups.map((g) => `<tr data-lr-key="${esc(g.key)}">
+        <td><strong>${esc(g.label)}</strong></td>
+        <td>${g.leads}</td>
+        <td>${g.n ? g.n : '<span class="cs-muted">none</span>'}</td>
+        <td>${g.n ? esc(fmtRespMins(g.median)) : '<span class="cs-muted">—</span>'}</td>
+        <td>${g.n ? esc(fmtRespMins(g.p90)) : '<span class="cs-muted">—</span>'}</td>
+        <td>${g.conv == null ? '<span class="cs-muted">—</span>' : `${g.conv}% <span class="cs-muted">(${g.won}/${g.leads})</span>`}</td>
+      </tr>`).join("")}
+      <tr class="owed-total-row"><td><strong>All ${esc(headWord.toLowerCase())}s</strong></td><td><strong>${m.nLeads}</strong></td><td><strong>${m.nResponded}</strong></td>
+        <td><strong>${m.nResponded ? esc(fmtRespMins(m.median)) : "—"}</strong></td>
+        <td><strong>${m.nResponded ? esc(fmtRespMins(m.p90)) : "—"}</strong></td>
+        <td><strong>${m.conv == null ? "—" : m.conv + "%"}</strong></td></tr>
+    </table></div>`;
+  };
+  /* THE EMPTY STATE. Not "0min" and not a blank table: the reason there is
+     nothing, what will fill it, and the one figure that is real today. */
+  if (!m.nLeads) {
+    const none = `<div class="empty">No website enquiry has arrived in the last ${m.windowDays} days, so there is nothing to measure.</div>`;
+    $("#report-leadresp-source").innerHTML = none;
+    $("#report-leadresp-adviser").innerHTML = "";
+    return;
+  }
+  if (!m.nResponded) {
+    $("#report-leadresp-source").innerHTML = `<div class="empty leadresp-empty">No data yet — none of the ${m.nLeads} enquir${m.nLeads === 1 ? "y" : "ies"} in the last ${m.windowDays} days carries a first-contact time.
+      ${slaOff ? "This database has no <code>first_contact_at</code> column yet." : `The stamp is written the first time somebody Accepts one from the inbox on Today, or discards one having made contact. Nothing here is estimated in the meantime.`}
+      ${nBreach ? `<br><strong>${nBreach} of them ${nBreach === 1 ? "is" : "are"} past the ${LEAD_SLA_MIN}-minute promise right now.</strong>` : ""}</div>`;
+    $("#report-leadresp-adviser").innerHTML = "";
+    return;
+  }
+  $("#report-leadresp-source").innerHTML = `<h4 class="leadresp-h">By source</h4>` + tableFor(m.bySource, "Source", "No enquiries in the window.");
+  $("#report-leadresp-adviser").innerHTML = `<h4 class="leadresp-h">By adviser</h4>` + tableFor(m.byAdviser, "Adviser", "No enquiries in the window.")
+    + `<p class="panel-sub" style="margin:10px 0 0;">An enquiry with no case behind it has no adviser — it was never accepted, or it was accepted before the lead-to-case link existed — and it is counted in the “no adviser recorded” row rather than dropped. It is still an enquiry the firm received, and leaving it out would flatter every column beside it.</p>`;
+}
+
+/* --------------------------------------------------------------------------
+   R7-4 — MONDAY MONEY.
+   -------------------------------------------------------------------------- */
+/* The completed week before the current one, Monday to Sunday inclusive. "Last
+   week" on a Monday morning means the week that just finished, and every figure
+   on the page shares this one definition so they can be added together. */
+function lastWeekRange() {
+  const t = new Date(localDateStr() + "T12:00:00");
+  const dow = (t.getDay() + 6) % 7;                       // 0 = Monday
+  const thisMon = new Date(t.getTime() - dow * R7_DAY);
+  return {
+    start: localDateStr(new Date(thisMon.getTime() - 7 * R7_DAY)),
+    end: localDateStr(new Date(thisMon.getTime() - R7_DAY)),
+  };
+}
+/* Cash actually collected between two YYYY-MM-DD dates inclusive, per fee type
+   on its own paid date — the same walk cashInMonth() does, with a date range
+   instead of a month, and the identical future-date clamp. */
+function cashInRange(rows, from, to, types) {
+  const today = localDateStr();
+  const wanted = FEE_TYPES.filter((f) => (types || ["proc", "sols", "broker"]).indexOf(f.key) >= 0);
+  let total = 0, n = 0, futureN = 0;
+  (rows || []).forEach((c) => {
+    wanted.forEach((f) => {
+      const amt = Number(c[f.amountCol] || 0);
+      if (!amt) return;
+      const d = feeCashDate(c, f.dateCol);
+      if (!d) return;
+      const ds = localDateStr(d);
+      if (ds < from || ds > to) return;
+      if (ds > today) { futureN++; return; }
+      total += amt; n++;
+    });
+  });
+  return { total, n, futureN };
+}
+const MONEY_EMPTY = (what) => `<div class="empty">${esc(what)}</div>`;
+async function loadMoneyPage() {
+  const denied = $("#money-denied"), body = $("#money-body"), scope = $("#money-scope");
+  if (!showMoney()) {
+    /* Belt and braces behind nav()'s redirect: if this ever renders for anyone
+       but the Owner it renders nothing but the reason. */
+    if (body) body.classList.add("hidden");
+    if (scope) scope.textContent = "";
+    if (denied) {
+      denied.classList.remove("hidden");
+      denied.textContent = "Monday money is the firm's whole book — fees banked, fees owed, book value and per-adviser figures — so it is shown to the Owner only. Your own numbers are on the Reports page, in the My numbers card.";
+    }
+    return;
+  }
+  if (denied) { denied.classList.add("hidden"); denied.textContent = ""; }
+  if (body) body.classList.remove("hidden");
+  const wk = lastWeekRange();
+  if (scope) scope.textContent = `Last week means ${fmtD(wk.start)} to ${fmtD(wk.end)} (Monday to Sunday, Europe/London). Every figure below is computed in this browser from the same rows the rest of the app reads — nothing here is a separate report. ${ATTRIB_NOTE}`;
+
+  const propOn = (await propAddrSupported()) !== false;
+  const [casesRes, tasksRes, leadsRes, eventsRes] = await Promise.all([
+    db.from("cases").select("id,client_id,stage,case_kind,lender,loan_amount,proc_fee,broker_fee,sols_fee,fee_status,fee_paid_at,completed_at,created_at,updated_at,rate_end_date,rate_end_estimated,protection_status,retention_source_case_id,assigned_to,lead_source" + (propOn ? ",property_address" : "") + ",clients(first_name,last_name)")
+      .order("id").limit(REPORTS_ROW_CAP),
+    db.from("case_tasks").select("id,assigned_to,due_date,done_at").is("done_at", null).limit(REPORTS_ROW_CAP),
+    db.from("leads").select("*").limit(REPORTS_ROW_CAP),
+    db.from("case_events").select("case_id,event,created_at").eq("event", "stage_changed").order("created_at").limit(REPORTS_ROW_CAP),
+  ]);
+  if (casesRes.error) { renderLoadError("#money-owed", casesRes.error, loadMoneyPage); return; }
+  const all = casesRes.data || [];
+  // The per-fee-type paid dates live behind M2 and are read in their own small
+  // query for exactly the reason loadCaseExtraColumns exists: an un-migrated
+  // database must cost the itemised dates, not the whole page.
+  const extra = await loadCaseExtraColumns();
+  if (extra) all.forEach((c) => { const x = extra[c.id]; if (x) Object.assign(c, x); });
+
+  /* ---- banked last week vs the weekly slice of the monthly target ---- */
+  const banked = cashInRange(all, wk.start, wk.end, ["proc", "sols", "broker"]);
+  const monthTarget = Number(settings.monthly_fee_target || 0);
+  const weekTarget = monthTarget > 0 ? (monthTarget * 12) / 52 : 0;
+  const pct = weekTarget > 0 ? Math.round((banked.total / weekTarget) * 100) : null;
+  const prevWkStart = localDateStr(new Date(new Date(wk.start + "T12:00:00").getTime() - 7 * R7_DAY));
+  const prevWkEnd = localDateStr(new Date(new Date(wk.start + "T12:00:00").getTime() - R7_DAY));
+  const prevBanked = cashInRange(all, prevWkStart, prevWkEnd, ["proc", "sols", "broker"]);
+  $("#money-banked").innerHTML = `
+    <div class="kpi kpi-headline"><div class="num" title="${esc(fmtM(banked.total))}">${fmtM(banked.total)}</div><div class="lbl">Banked ${fmtD(wk.start)} – ${fmtD(wk.end)}</div><div class="s">(cash · proc+broker+sols · by paid date · ${banked.n} payment${banked.n === 1 ? "" : "s"})</div></div>
+    ${weekTarget > 0
+      ? `<div class="kpi ${pct >= 100 ? "" : pct >= 60 ? "warn" : "bad"}"><div class="num">${pct}%</div><div class="lbl">of the weekly slice — ${fmtM(weekTarget)}</div><div class="s">(monthly fee target ${fmtM(monthTarget)} × 12 ÷ 52 — a flat slice, not a working-day weighting)</div></div>`
+      : `<div class="kpi"><div class="num">—</div><div class="lbl">No weekly target</div><div class="s">Set a monthly fee target in Settings and this becomes target × 12 ÷ 52.</div></div>`}
+    <div class="kpi kpi-secondary"><div class="num" title="${esc(fmtM(prevBanked.total))}">${fmtM(prevBanked.total)}</div><div class="lbl">Week before (${fmtD(prevWkStart)} – ${fmtD(prevWkEnd)})</div><div class="s">(same basis — shown so last week can be read as a direction, not just a number)</div></div>`;
+
+  /* ---- owed, by age (the same model the Reports panel renders) ---- */
+  const owed = moneyOwedModel(all);
+  $("#money-owed-basis").innerHTML = `Unpaid proc, solicitor and broker fees on completed cases, aged from the completion date. Identical arithmetic to the Money owed panel on Reports — same rows, same total. <span class="money-basis">${esc(BASIS_OWED)}</span>`;
+  $("#money-owed").innerHTML = owed.n ? `<table class="imp-table">
+    <tr><th>Age</th><th>Cases</th><th>Owed</th></tr>
+    ${owed.bucketList.map((b) => `<tr${b.key === "90+" && b.total ? ' class="owed-hot"' : ""}><td>${esc(OWED_BUCKET_LABEL[b.key])}</td><td>${b.n}</td><td>${b.total ? fmtM(b.total) : '<span class="cs-muted">—</span>'}</td></tr>`).join("")}
+    <tr class="owed-total-row"><td><strong>Total</strong></td><td><strong>${owed.n}</strong></td><td><strong>${fmtM(owed.grand)}</strong></td></tr>
+  </table>` : MONEY_EMPTY("Nothing outstanding — every completed case with a fee on it has a date against the money.");
+
+  /* ---- top 5 rate-ends by value in the next 60 days ---- */
+  const today = localDateStr();
+  const in60 = localDateStr(new Date(new Date(today + "T12:00:00").getTime() + 60 * R7_DAY));
+  const soonRaw = all.filter((c) => c.stage === "completed" && c.rate_end_date && c.rate_end_date >= today && c.rate_end_date <= in60);
+  const soon = dedupeRateEndRows(soonRaw).sort((a, b) => Number(b.c.loan_amount || 0) - Number(a.c.loan_amount || 0));
+  const top5 = soon.slice(0, 5);
+  const soonValue = soon.reduce((s, e) => s + caseLastFee(e.c), 0);
+  $("#money-rateends-basis").innerHTML = `Completed cases whose rate ends between ${fmtD(today)} and ${fmtD(in60)}, ranked by <strong>loan size</strong> — the value at risk. ${soon.length} maturit${soon.length === 1 ? "y" : "ies"} in the window${soonRaw.length !== soon.length ? ` (${soonRaw.length} case rows, de-duplicated to one per property + rate end date)` : ""}, ${fmtM(soonValue)} of last-fee value in total. <span class="money-basis">(value at risk · loan amount · last fee as proxy)</span>`;
+  $("#money-rateends").innerHTML = top5.length ? `<table class="imp-table">
+    <tr><th>Client</th><th>Lender</th><th>Rate ends</th><th>Loan</th><th>Last fee</th></tr>
+    ${top5.map((e) => {
+      const c = e.c;
+      return `<tr onclick="openCase('${c.id}')" style="cursor:pointer;">
+        <td><strong>${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ")) || "(no name)"}</strong> ${propChip(c, { cls: "row-prop" }) || ""}${e.dupes > 1 ? ` <span class="badge grey">${e.dupes} cases</span>` : ""}</td>
+        <td>${lenderIcon(c.lender)}${esc(c.lender || "")}</td>
+        <td>${fmtD(c.rate_end_date)}${c.rate_end_estimated ? " " + APPROX : ""} <span class="cs-muted">(${Math.max(0, Math.round((new Date(c.rate_end_date + "T12:00:00") - new Date(today + "T12:00:00")) / R7_DAY))}d)</span></td>
+        <td>${c.loan_amount ? fmtM(c.loan_amount) : '<span class="cs-muted">—</span>'}</td>
+        <td>${caseLastFee(c) ? fmtM(caseLastFee(c)) : '<span class="cs-muted">none recorded</span>'}</td>
+      </tr>`;
+    }).join("")}
+  </table>` : MONEY_EMPTY("No completed rate ends in the next 60 days.");
+
+  /* ---- protection quotes gone cold ---- */
+  const quoted = all.filter((c) => c.protection_status === "quoted");
+  const stamps = await loadQuoteStamps(quoted.map((c) => c.id));
+  const withAge = quoted.map((c) => {
+    const at = (stamps[c.id] || {}).protection_quoted_at || null;
+    return { c, at, days: at ? daysSince(at) : null };
+  });
+  const cold = withAge.filter((x) => x.days != null && x.days > QUOTE_AGE_RED).sort((a, b) => b.days - a.days);
+  const undatedQuotes = withAge.filter((x) => x.days == null);
+  $("#money-cold-basis").innerHTML = `Cases sitting at <strong>Quoted</strong> whose quote is more than ${QUOTE_AGE_RED} days old, measured from the date the status was set to quoted. ${quoted.length} quoted in total${undatedQuotes.length ? `, ${undatedQuotes.length} of which carry no quote date and cannot be aged` : ""}. <span class="money-basis">(protection_status = quoted · aged from protection_quoted_at)</span>`;
+  $("#money-cold").innerHTML = cold.length ? cold.slice(0, 10).map((x) => `
+    <div class="row-item">
+      <div class="row-main">
+        <div class="t" onclick="openCase('${x.c.id}')">${esc([x.c.clients?.first_name, x.c.clients?.last_name].filter(Boolean).join(" ")) || "(no name)"} ${propChip(x.c, { cls: "row-prop" }) || ""}</div>
+        <div class="s">Quoted ${fmtD(x.at)} · ${lenderIcon(x.c.lender)}${esc(x.c.lender || "no lender")}</div>
+      </div>
+      ${quoteAgeBadge(x.at)}
+    </div>`).join("") + (cold.length > 10 ? `<div class="empty">…and ${cold.length - 10} more on the Protection page.</div>` : "")
+    : MONEY_EMPTY(undatedQuotes.length
+        ? `No quote is more than ${QUOTE_AGE_RED} days old. ${undatedQuotes.length} quoted case${undatedQuotes.length === 1 ? " carries" : "s carry"} no quote date, so ${undatedQuotes.length === 1 ? "it is" : "they are"} not counted here.`
+        : `No quote is more than ${QUOTE_AGE_RED} days old.`);
+
+  /* ---- movement: what moved last week vs what is stuck ---- */
+  const movedIds = new Set();
+  (eventsRes.data || []).forEach((e) => {
+    if (!e || !e.case_id || !e.created_at) return;
+    const d = localDateStr(e.created_at);
+    if (d >= wk.start && d <= wk.end) movedIds.add(e.case_id);
+  });
+  const ACTIVE_STAGES = ["enquiry", "fact_find", "decision_in_principle", "application", "offer", "exchange"];
+  const activeCases = all.filter((c) => ACTIVE_STAGES.includes(c.stage));
+  const entryMap = {};
+  (eventsRes.data || []).forEach((e) => {
+    if (!e || !e.case_id || !e.created_at) return;
+    if (!entryMap[e.case_id] || e.created_at > entryMap[e.case_id]) entryMap[e.case_id] = e.created_at;
+  });
+  const stuck = activeCases.filter((c) => {
+    const d = daysSince(entryMap[c.id] || c.created_at);
+    return d != null && d > 30;
+  });
+  const movedActive = activeCases.filter((c) => movedIds.has(c.id));
+  $("#money-movement-basis").innerHTML = `<strong>Moved</strong> counts live cases with at least one recorded stage change between ${fmtD(wk.start)} and ${fmtD(wk.end)}. <strong>Stuck</strong> counts live cases whose last recorded stage change (or, where there is none, their creation date) is more than 30 days ago. <span class="money-basis">(case_events · stage_changed · live stages only)</span>`;
+  $("#money-movement").innerHTML = `<table class="imp-table">
+    <tr><th>&nbsp;</th><th>Cases</th><th>Loan value</th></tr>
+    <tr><td>Moved last week</td><td><strong id="money-moved-n">${movedActive.length}</strong></td><td>${fmtM(movedActive.reduce((s, c) => s + Number(c.loan_amount || 0), 0))}</td></tr>
+    <tr${stuck.length ? ' class="owed-hot"' : ""}><td>Stuck more than 30 days</td><td><strong id="money-stuck-n">${stuck.length}</strong></td><td>${fmtM(stuck.reduce((s, c) => s + Number(c.loan_amount || 0), 0))}</td></tr>
+    <tr><td class="cs-muted">Live cases in total</td><td class="cs-muted">${activeCases.length}</td><td class="cs-muted">${fmtM(activeCases.reduce((s, c) => s + Number(c.loan_amount || 0), 0))}</td></tr>
+  </table>${stuck.length ? `<p class="panel-sub" style="margin:10px 0 0;">A case can be both — moved last week and still older than 30 days in its stage.</p>` : ""}`;
+
+  /* ---- new leads last week, by source ---- */
+  const leads = leadsRes.error ? [] : (leadsRes.data || []);
+  const wkLeads = leads.filter((l) => {
+    const d = l && l.created_at ? localDateStr(l.created_at) : null;
+    return d && d >= wk.start && d <= wk.end;
+  });
+  const leadSourceOf = (l) => String((l && (l.source || l.lead_source || l.enquiry_type)) || "").trim() || "(not recorded)";
+  const bySource = new Map();
+  wkLeads.forEach((l) => { const k = leadSourceOf(l); bySource.set(k, (bySource.get(k) || 0) + 1); });
+  $("#money-leads-basis").innerHTML = `Website enquiries created between ${fmtD(wk.start)} and ${fmtD(wk.end)}, whatever has since happened to them. Source is the enquiry type the website form recorded. <span class="money-basis">(leads · created_at · last week)</span>`;
+  $("#money-leads").innerHTML = wkLeads.length ? `<table class="imp-table">
+    <tr><th>Source</th><th>Leads</th><th>Accepted</th></tr>
+    ${[...bySource.entries()].sort((a, b) => b[1] - a[1]).map(([k, n]) => {
+      const acc = wkLeads.filter((l) => leadSourceOf(l) === k && l.status === "converted").length;
+      return `<tr><td>${esc(k)}</td><td>${n}</td><td>${acc}</td></tr>`;
+    }).join("")}
+    <tr class="owed-total-row"><td><strong>Total</strong></td><td><strong>${wkLeads.length}</strong></td><td><strong>${wkLeads.filter((l) => l.status === "converted").length}</strong></td></tr>
+  </table>` : MONEY_EMPTY(leadsRes.error ? "Leads could not be read — the figure is missing, not zero." : "No website enquiries arrived last week.");
+
+  /* ---- per-adviser strip ---- */
+  const tasks = tasksRes.error ? [] : (tasksRes.data || []);
+  const yr = String(new Date(localDateStr()).getFullYear());
+  const advRows = (TEAM.length ? TEAM : PROFILES).map((p) => {
+    const mine = all.filter((c) => c.assigned_to === p.id);
+    const doneYr = mine.filter((c) => c.completed_at && localDateStr(c.completed_at).slice(0, 4) === yr);
+    const taken = doneYr.filter((c) => c.protection_status === "policy_taken").length;
+    const rets = mine.filter((c) => c.retention_source_case_id);
+    const rWon = rets.filter((c) => c.stage === "completed").length;
+    const rLost = rets.filter((c) => c.stage === "not_proceeding").length;
+    const unpaidProc = mine.filter((c) => c.stage === "completed")
+      .reduce((s, c) => s + Number((feeOwedLines(c).find((l) => l.key === "proc") || {}).amount || 0), 0);
+    const overdue = tasks.filter((t) => t.assigned_to === p.id && t.due_date && t.due_date < today).length;
+    return { id: p.id, name: profileName(p.id) || staffName(p.id), nDone: doneYr.length, taken,
+             attach: doneYr.length ? Math.round((taken / doneYr.length) * 100) : null,
+             rWon, rLost, conv: rWon + rLost ? Math.round((rWon / (rWon + rLost)) * 100) : null,
+             unpaidProc, overdue };
+  }).filter((r) => r.nDone || r.rWon || r.rLost || r.unpaidProc || r.overdue);
+  $("#money-advisers-basis").innerHTML = `<strong>Attach rate</strong> is policy_taken ÷ completions, over ${yr} completions only — a whole-year sample, because a week of completions is too few to rank anybody on. <strong>Retention conversion</strong> is won ÷ (won + lost) over that adviser's retention cases, all time. <strong>Unpaid proc</strong> is the procuration fee owed on their completed cases. <strong>Overdue</strong> is open tasks due before today. ${ATTRIB_NOTE} <span class="money-basis">(per adviser · mixed bases, each named above)</span>`;
+  $("#money-advisers").innerHTML = advRows.length ? `<div style="overflow-x:auto;"><table class="imp-table" id="money-adviser-table">
+    <tr><th>Adviser</th><th title="Completed cases in ${yr} that ended with a protection policy.">Attach rate</th><th title="Retention cases won as a share of those decided.">Retention conversion</th><th>Unpaid proc</th><th>Overdue tasks</th></tr>
+    ${advRows.map((r) => `<tr data-adv="${esc(r.id)}">
+      <td><strong>${esc(r.name)}</strong></td>
+      <td>${r.attach == null ? '<span class="cs-muted">no completions</span>' : `${r.attach}% <span class="cs-muted">(${r.taken}/${r.nDone})</span>`}</td>
+      <td>${r.conv == null ? '<span class="cs-muted">none decided</span>' : `${r.conv}% <span class="cs-muted">(${r.rWon}/${r.rWon + r.rLost})</span>`}</td>
+      <td>${r.unpaidProc ? fmtM(r.unpaidProc) : '<span class="cs-muted">—</span>'}</td>
+      <td>${r.overdue ? `<span class="badge ${r.overdue > 5 ? "red" : "amber"}">${r.overdue}</span>` : '<span class="cs-muted">0</span>'}</td>
+    </tr>`).join("")}
+  </table></div>` : MONEY_EMPTY("No adviser has completions, retention cases, unpaid proc fees or overdue tasks.");
+}
+
+/* R7 — wiring for the controls added to Reports, Monday money and Protection.
+   Bound once at load, imperatively, exactly like the pipeline's bulk bar: these
+   nodes are in the shipped markup and are never re-created by a render, so a
+   listener here can never be attached twice or lost to an innerHTML rewrite. */
+(() => {
+  const on = (sel, fn) => { const el = $(sel); if (el) el.addEventListener("click", fn); };
+  on("#owed-group-lender", () => setOwedGroup("lender"));
+  on("#owed-group-adviser", () => setOwedGroup("adviser"));
+  on("#owed-csv-btn", () => exportOwedCsv());
+  on("#money-refresh", () => loadMoneyPage());
+  on("#money-owed-open", () => gotoMoneyOwed());
+})();
 
 /* ---------- Data health ---------- */
 /* T1-26 — Data Health numbers whose rows live on the Emails page. Set the filter first, then nav:
