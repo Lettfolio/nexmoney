@@ -600,11 +600,75 @@ function noteType(body) {
   const type = m ? m[1].toLowerCase() : "note";
   return { type, icon: NOTE_ICON[type], cleanBody: m ? b.slice(m[0].length) : b };
 }
+/* ---------- R6.4 H-01 · RE-FILING A NOTE ----------------------------------
+   A note is filed against ONE case (case_notes.case_id is NOT NULL, in the
+   schema and in the audit trigger), and on a portfolio landlord picking the
+   wrong one of six is a routine slip. Until now the only remedy was to add a
+   second note saying "ignore the one above", which a compliance reader has to
+   reconstruct by eye — or to delete, which an append-only audit trail is
+   deliberately built to prevent.
+
+   So a re-file is a CORRECTION, not a move: two rows, both permanent.
+     · on the TARGET case — a copy, prefixed with where it came from:
+         "Re-filed from <source case identity>: <original text>"
+     · on the SOURCE case — a marker naming where it went:
+         "Filed in error — see <target case identity> [re-filed:<note id>]"
+   The bracketed id is the only machine-readable part. It is what lets every
+   renderer strike the ORIGINAL through and badge it "re-filed" without a
+   schema change: a marker names the note it corrects, so the correction is
+   visible next to the thing corrected rather than filed somewhere else. It is
+   stripped before display — plumbing is not evidence — but the sentence around
+   it is shown verbatim, and escaped, everywhere.
+
+   Nothing is ever deleted or edited. A reader who wants the original still
+   finds it, struck through, on the case it was wrongly filed on, with the
+   marker underneath saying where the right copy lives. */
+const REFILE_MARK = "Filed in error — see ";
+const REFILE_FROM = "Re-filed from ";
+const REFILE_TAG_RE = /\s*\[re-filed:([^\]\s]+)\]\s*$/;
+function isRefileMarker(body) { return String(body == null ? "" : body).startsWith(REFILE_MARK); }
+// The note id a marker corrects, or null for anything that is not a marker.
+function refileMarkerNoteId(body) {
+  if (!isRefileMarker(body)) return null;
+  const m = REFILE_TAG_RE.exec(String(body));
+  return m ? m[1] : null;
+}
+// The marker's sentence without its machine tag. Everything else passes through.
+function refileDisplayBody(body) {
+  const s = String(body == null ? "" : body);
+  return isRefileMarker(s) ? s.replace(REFILE_TAG_RE, "") : s;
+}
+/* Which of these notes have been re-filed away, according to the markers sitting
+   among them. Ids as strings, because a note id crosses the wire as one. */
+function refiledNoteIds(notes) {
+  const out = new Set();
+  (notes || []).forEach((n) => {
+    const id = refileMarkerNoteId(n && n.body);
+    if (id) out.add(String(id));
+  });
+  return out;
+}
+// The badge every surface prints against a note that has been re-filed away.
+const REFILE_BADGE = '<span class="badge grey note-refiled-badge" title="This note was filed on the wrong case and has been re-filed. The marker below says where the correct copy is; this one is kept because a compliance record is not edited.">re-filed</span>';
+/* The "Re-file…" control. Offered on any note that is neither a marker nor
+   already re-filed — no role gate, because anyone who can read a note and see
+   it is on the wrong case is the right person to say so. */
+function refileBtnHtml(noteId) {
+  return ` <button type="button" class="btn btn-sm note-refile-btn" data-note-id="${esc(noteId)}" onclick="refileNote('${jsArg(noteId)}', event)" title="This note is on the wrong case — move a copy to the right one and mark this one as filed in error">Re-file…</button>`;
+}
 // A single case-modal note row (icon + prefix-stripped body + timestamp). Shared by the initial
 // render and the in-place prepend paths so typed icons stay consistent everywhere notes render.
-function noteRowHtml(body, whenStr, createdBy) {
-  const nt = noteType(body);
-  return `<div class="note"><span class="note-ic" title="${nt.type}">${nt.icon}</span>${esc(nt.cleanBody)}<div class="nd">${esc(whenStr)}${authorChipHtml(createdBy)}</div></div>`;
+/* opts.noteId — render the Re-file control (absent for the optimistic prepend,
+   which has no id yet); opts.refiled — this note has been re-filed away. */
+function noteRowHtml(body, whenStr, createdBy, opts = {}) {
+  const nt = noteType(refileDisplayBody(body));
+  const marker = isRefileMarker(body);
+  const refiled = !!opts.refiled;
+  const cls = "note" + (refiled ? " note-refiled" : "") + (marker ? " note-refile-marker" : "");
+  const act = opts.noteId && !refiled && !marker ? refileBtnHtml(opts.noteId) : "";
+  return `<div class="${cls}"${opts.noteId ? ` data-note-id="${esc(opts.noteId)}"` : ""}>` +
+    `<span class="note-ic" title="${nt.type}">${nt.icon}</span><span class="note-body">${esc(nt.cleanBody)}</span>${refiled ? " " + REFILE_BADGE : ""}` +
+    `<div class="nd">${esc(whenStr)}${authorChipHtml(createdBy)}${act}</div></div>`;
 }
 // Timeline day-divider label, e.g. "Mon 20 Jul" (Europe/London — matches localDateStr grouping).
 const tlDayLabel = (ts) => new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", weekday: "short", day: "numeric", month: "short" }).format(new Date(ts)).replace(",", "");
@@ -1520,9 +1584,15 @@ function registerClientProps(clientId, rows) {
     }
     if (!k) return;
     const when = String((r && r.created_at) || "");
-    const e = reg.keys.get(k) || { addr, first: when, ids: new Set() };
+    const e = reg.keys.get(k) || { addr, addrWhen: when, first: when, ids: new Set() };
     if (when && (!e.first || when < e.first)) e.first = when;
-    if (!e.addr) e.addr = addr;
+    /* R6.4 H-03 — the register is the single place that sees EVERY spelling one
+       client uses for one key, so it is the place that decides which one the app
+       prints. It used to keep the first it was handed, which made the canonical
+       spelling depend on read order. */
+    if (addr && (!e.addr || propSpellingBetter({ addr, when }, { addr: e.addr, when: e.addrWhen || "" }))) {
+      e.addr = addr; e.addrWhen = when;
+    }
     if (id) e.ids.add(id);
     reg.keys.set(k, e);
   });
@@ -1680,9 +1750,14 @@ const EST_BADGE_CLS = "blue is-est";
    exactly as they did before round 6. Its title also carries the label now — the
    old fixed string made a truncated pill unresolvable by hover. */
 function propChip(c, opts = {}) {
-  const addr = propAddress(c);
+  const raw = propAddress(c);
   const extra = opts.cls ? " " + opts.cls : "";
   const clientId = opts.clientId || (c && typeof c === "object" ? c.client_id : null) || null;
+  /* R6.4 H-03 — the chip prints the client's BEST spelling of this property, not
+     whichever spelling happens to be on the row being rendered, so a heading and
+     the chip beside it can never disagree about the same building. Key-equal by
+     construction, so the hue, the index and data-prop-key are all unchanged. */
+  const addr = propCanonAddr(clientId, raw) || raw;
   if (!addr) {
     if (!opts.fallback) return "";
     if (!propFallbackWorthIt(clientId)) return "";
@@ -1778,17 +1853,98 @@ function notePropAddrFromStarRow(row) {
    with the chip leading (caseIdentityHtml). Every list that shows a case uses
    the chip; the lists that had no room for more than a chip use just that.
    ====================================================================== */
+/* ---- R6.4 H-03 · ONE SPELLING PER PROPERTY -------------------------------
+   propKey already answers "is this the same building?", so two cases spelled
+   "8 Grand Avenue, Southbourne, Bournemouth BH6 3SY" and "8 grand avenue
+   southbourne bournemouth" group together correctly. What was NOT decided is
+   which of the two the app should then PRINT, and every surface answered
+   differently: the group heading took the first row into the bucket, the
+   picker took the first row it saw, the chip took whatever was on the row it
+   was rendering. One property therefore appeared under three spellings on one
+   screen — and the shabbiest of them, which is the one most likely to have
+   been typed in a hurry, could end up as the heading over the good one.
+
+   The rule, in the order a reader would defend it:
+     1. A POSTCODE first. It is the part that makes an address findable, and a
+        spelling that has one is carrying information the others are not.
+     2. Then the MOST COMPLETE — measured as how many distinct WORDS of the
+        address were actually typed, case- and punctuation-blind. Deliberately
+        not "how many commas": commas are punctuation, so counting them let
+        "8 GRAND AVENUE, SOUTHBOURNE, BOURNEMOUTH, BH6 3SY" beat the properly
+        cased spelling of the identical address on a stray comma before the
+        postcode. Words are the content; everything else is presentation.
+     3. Then MIXED CASE, which is the presentation question: an all-lowercase or
+        SHOUTED line is a transcription of the address, not a rendering of it.
+        It only ever decides between spellings that say exactly the same thing.
+     4. Then LENGTH, which at this point is punctuation and spacing — the
+        comma'd version of two otherwise identical spellings reads better.
+     5. Then the MOST RECENT, because where two spellings are equally good the
+        later one is the one somebody last chose to type.
+     6. Then the string itself, so the answer is a total order and can never
+        flicker between two renders of the same data.
+   ONE function decides, and headings, picker options, chips and the canonical
+   case identity all read it — which is the whole point: a "best spelling" that
+   only the heading knows about is a fourth spelling, not a fix. */
+function propSpellingRank(addr) {
+  const s = String(addr == null ? "" : addr).trim();
+  const words = new Set((s.toUpperCase().match(/[A-Z0-9]+/g) || []));
+  return [
+    POSTCODE_RE.test(s) ? 1 : 0,
+    words.size,
+    /[a-z]/.test(s) && /[A-Z]/.test(s) ? 1 : 0,
+    s.replace(/\s+/g, " ").length,
+  ];
+}
+/* Strictly better? `when` is the row's created_at (or ""), used only as the
+   tie-break at step 3. */
+function propSpellingBetter(a, b) {
+  const ra = propSpellingRank(a.addr), rb = propSpellingRank(b.addr);
+  for (let i = 0; i < ra.length; i++) if (ra[i] !== rb[i]) return ra[i] > rb[i];
+  const wa = String(a.when || ""), wb = String(b.when || "");
+  if (wa !== wb) return wa > wb;
+  return String(a.addr) < String(b.addr);
+}
+/* The best spelling among rows (or bare address strings) that are ALREADY known
+   to be one property — the caller groups by propKey first; this does not. */
+function propBestAddress(rows) {
+  let best = null;
+  (rows || []).forEach((r) => {
+    const addr = propAddress(r);
+    if (!addr) return;
+    const when = (r && typeof r === "object" && (r.created_at || r.updated_at)) || "";
+    const cand = { addr, when: String(when) };
+    if (!best || propSpellingBetter(cand, best)) best = cand;
+  });
+  return best ? best.addr : null;
+}
+/* The spelling to PRINT for this case's property. The client's register already
+   holds every spelling this client's book uses for each key and keeps the best
+   of them (see registerClientProps), so this is a lookup, not a re-scan — and a
+   client we have never registered simply gets what is on the row. */
+function propCanonAddr(clientId, c) {
+  const addr = propAddress(c);
+  if (!addr || !clientId) return addr;
+  const reg = propClientReg(clientId);
+  if (!reg) return addr;
+  const e = reg.keys.get(propKey(addr));
+  return (e && e.addr) || addr;
+}
 /* The section heading for a group of cases on one property: the FULL address,
    because a heading has the width for it and the chip's short label is already
-   sitting next to it. */
-function propHeading(c) { return propAddress(c) || "No address recorded"; }
+   sitting next to it. H-03 — in the group's best spelling. */
+function propHeading(c) {
+  return propCanonAddr(c && typeof c === "object" ? c.client_id : null, c) || propAddress(c) || "No address recorded";
+}
 /* The canonical identifier, as plain text. Every part is dropped when it is
    not known rather than printed as an empty separator, so a bare enquiry with
    no lender still reads as a sentence. */
 function caseIdentityLabel(c) {
   if (!c) return "";
   const stage = c.stage ? (STAGE_LABEL[c.stage] || String(c.stage).replace(/_/g, " ")) : null;
-  return [propLabel(c), caseTypeLabel(c), c.lender, stage].filter(Boolean).join(" · ");
+  /* H-03 — the identity a picker option prints has to be the SAME spelling the
+     chip next to it prints, or the operator is asked to match two strings that
+     this app knows are one place. */
+  return [propLabel(propCanonAddr(c.client_id, c)), caseTypeLabel(c), c.lender, stage].filter(Boolean).join(" · ");
 }
 /* The same identity as HTML: the property chip, then whatever of
    type · lender · stage the caller asked for. Used on rows that have to tell
@@ -1979,6 +2135,14 @@ window.propOutcode = propOutcode;
 window.caseTypeLabel = caseTypeLabel;
 window.caseIdentityLabel = caseIdentityLabel;
 window.propHeading = propHeading;
+/* R6.4 H-03 — exported so the acceptance tests can assert the ranking itself,
+   not just one surface's rendering of it. */
+window.propBestAddress = propBestAddress;
+window.propCanonAddr = propCanonAddr;
+window.propSpellingRank = propSpellingRank;
+/* distinctPropAddresses is a function declaration in this (non-module) script and
+   is therefore already window.distinctPropAddresses — re-exporting it through a
+   wrapper would overwrite the declaration with a call to itself. */
 
 function panelCount(listSel, n, hot = false) {
   const el = $(listSel);
@@ -3548,6 +3712,134 @@ function promptSnooze() {
       finish({ date, reason });
     };
   });
+}
+
+/* ==========================================================================
+   R6.4 H-01 · RE-FILE A NOTE (the action)
+   See the primitives near noteRowHtml for what a re-file IS and why it writes
+   two rows rather than moving one.
+   ========================================================================== */
+/* The target picker, on the shared second-layer overlay (openOverlay) so it can
+   be raised from inside an open case or client modal without fighting it for
+   focus or for the history entry. Options are the canonical
+   property · type · lender · stage — the same string the note composer's case
+   selector prints, which is the only reason an operator can match them up. */
+function promptRefileTarget(note, sourceCase, targets) {
+  const html = `
+    <h3>Re-file this note</h3>
+    <p class="panel-sub">It is on <strong>${esc(caseIdentityLabel(sourceCase) || "this case")}</strong>. Choose the case it should have been filed on.</p>
+    <blockquote class="refile-quote">${esc(refileDisplayBody(note.body))}</blockquote>
+    <label>File it on<select id="refile-target" aria-label="Case to re-file this note onto">
+      <option value="">— which case? —</option>
+      ${targets.map((t) => `<option value="${esc(t.id)}">${esc(caseIdentityLabel(t))}</option>`).join("")}
+    </select></label>
+    <p class="panel-sub" style="margin-top:8px;">Nothing is deleted. A copy is added to the case you pick, and this note is marked <em>filed in error</em> and struck through — so the correction is visible to anyone reading the file afterwards.</p>
+    <div class="ovl-err" id="refile-err"></div>
+    <div class="modal-actions">
+      <div></div>
+      <div class="right">
+        <button type="button" class="btn" id="refile-cancel">Cancel</button>
+        <button type="button" class="btn btn-primary" id="refile-ok">Re-file</button>
+      </div>
+    </div>`;
+  return openOverlay(html, (finish, box) => {
+    box.querySelector("#refile-cancel").onclick = () => finish(null);
+    box.querySelector("#refile-ok").onclick = () => {
+      const v = box.querySelector("#refile-target").value;
+      if (!v) { box.querySelector("#refile-err").textContent = "Choose the case this note belongs on."; return; }
+      finish(v);
+    };
+  });
+}
+/* Re-file the note with this id. Reachable from every surface that renders a
+   note (the case modal's Notes list and the client timeline), because "this is
+   on the wrong case" is noticed while reading, not while editing. */
+window.refileNote = async function (noteId, ev) {
+  const btn = (ev && (ev.currentTarget || ev.target)) || null;
+  if (btn) { if (btn.disabled) return; btn.disabled = true; }
+  try {
+    const { data: note, error: nErr } = await db.from("case_notes").select("id,case_id,body,created_at,created_by").eq("id", noteId).single();
+    if (nErr || !note) return toast("That note could not be loaded — reopen the record and try again.");
+    /* Guard 1 — a marker is the CORRECTION, not the thing corrected. Re-filing
+       one would produce a marker pointing at a marker and no reader could
+       unpick which note was actually mis-filed. */
+    if (isRefileMarker(note.body)) {
+      return toast("That is a “filed in error” marker, not a note. Re-file the note it refers to instead.");
+    }
+    const { data: sourceCase } = await db.from("cases").select("*").eq("id", note.case_id).single();
+    if (!sourceCase) return toast("The case this note is filed on could not be loaded.");
+    notePropAddrFromStarRow(sourceCase);
+    /* Guard 2 — already re-filed. The marker lives on this same case and names
+       this note, so the answer is in the rows we can already see. Re-filing
+       twice would leave two markers on one note pointing at two cases, i.e. a
+       correction that contradicts itself. */
+    const { data: siblings } = await db.from("case_notes").select("id,body").eq("case_id", note.case_id);
+    if (refiledNoteIds(siblings).has(String(note.id))) {
+      return toast("That note has already been re-filed — the “filed in error” marker under it says where the copy went.");
+    }
+    /* Guard 3 — the client's OTHER cases, and only those. Re-filing onto the
+       case the note is already on is not a correction, so that case is never
+       offered; a client with nothing else to offer is told so rather than shown
+       an empty picker. */
+    const propOn = await propAddrSupported();
+    const cols = "id,client_id,case_kind,lender,stage,created_at,updated_at" + (propOn ? ",property_address" : "");
+    const { data: others } = await db.from("cases").select(cols).eq("client_id", sourceCase.client_id);
+    registerClientProps(sourceCase.client_id, others || []); // H-03: options in the client's best spelling
+    const targets = (others || []).filter((x) => x && x.id !== note.case_id);
+    if (!targets.length) {
+      return toast("This client has no other case to re-file this note onto — a note has to live on a case.");
+    }
+    const picked = await promptRefileTarget(note, sourceCase, targets);
+    if (!picked) return;
+    const target = targets.find((x) => x.id === picked);
+    // Belt and braces: the picker cannot offer the source case, so this can only
+    // fire if the list moved under the operator between opening and confirming.
+    if (!target || target.id === note.case_id) {
+      return toast("That case is no longer available to re-file onto — reopen the record and try again.");
+    }
+    const srcIdentity = caseIdentityLabel(sourceCase) || "another case";
+    const tgtIdentity = caseIdentityLabel(target) || "another case";
+    const uid = (ME && ME.id) || null;
+    /* WRITE 1 · the copy, on the target case. Deliberately first: a copy with no
+       marker is an untidy file; a marker with no copy is a POINTER TO NOTHING,
+       and a reader following it finds an empty case. */
+    const { error: copyErr } = await db.from("case_notes").insert({
+      case_id: target.id,
+      body: `${REFILE_FROM}${srcIdentity}: ${note.body}`,
+      created_by: uid,
+    });
+    if (copyErr) {
+      return toast(`Nothing was written. The copy could not be added to ${tgtIdentity} (${copyErr.message}) — the note is still filed on ${srcIdentity} and is not marked in any way.`);
+    }
+    /* WRITE 2 · the marker, on the source case. There is no transaction across
+       two inserts from a browser, so if this one fails the honest report names
+       BOTH halves: what was written, what was not, and what the file therefore
+       says right now. Silence here would leave a duplicate note on two cases
+       with nothing anywhere explaining it. */
+    const { error: markErr } = await db.from("case_notes").insert({
+      case_id: note.case_id,
+      body: `${REFILE_MARK}${tgtIdentity} [re-filed:${note.id}]`,
+      created_by: uid,
+    });
+    await refreshAfterRefile(note.case_id, sourceCase.client_id);
+    if (markErr) {
+      toast(`Half done: the copy WAS added to ${tgtIdentity}, but the “filed in error” marker was NOT written on ${srcIdentity} (${markErr.message}). Both cases now carry the note and nothing says which is right — add the marker by hand, or delete the copy.`);
+      return false;
+    }
+    toast(`Note re-filed onto ${tgtIdentity} ✓`);
+    return true;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+};
+/* Repaint whatever is on screen, so the strike, the badge and the marker appear
+   without a manual reload. Driven off the DOM rather than off a remembered
+   modal type: the same action is reachable from two different modals. */
+async function refreshAfterRefile(caseId, clientId) {
+  const backdrop = $("#modal-backdrop");
+  if (!backdrop || backdrop.classList.contains("hidden")) return;
+  if ($("#notes-list")) { await window.openCase(caseId); return; }
+  if ($("#tl-list") && clientId) { await window.openClient(clientId); }
 }
 window.snoozeAlert = async function (id, severity, caseId) {
   const picked = await promptSnooze();
@@ -5153,9 +5445,13 @@ function distinctPropAddresses(rows) {
     const a = propAddress(r);
     if (!a) return;
     const k = propKey(a);
-    if (!seen.has(k)) seen.set(k, a);
+    if (!seen.has(k)) seen.set(k, []);
+    seen.get(k).push(r);
   });
-  return [...seen.values()].sort((a, b) => a.localeCompare(b, "en"));
+  /* R6.4 H-03 — first-seen was arbitrary: which spelling the picker offered
+     depended on the order the client's cases came back in, and picking a
+     shabby one wrote it onto a second case. Same decision as the heading. */
+  return [...seen.values()].map((g) => propBestAddress(g)).filter(Boolean).sort((a, b) => a.localeCompare(b, "en"));
 }
 /* R6 · the property picker on the case form.
    A portfolio landlord's sixth case is almost never a sixth property — it is one of the five
@@ -5542,7 +5838,10 @@ window.openCase = async function (id, opts = {}) {
         <button type="button" class="tl-chip" data-type="email">✉️ Email</button>
         <button type="button" class="tl-chip" data-type="meeting">🤝 Meeting</button>
       </div>
-      <div id="notes-list">${notes.map((n) => noteRowHtml(n.body, new Date(n.created_at).toLocaleString("en-GB"), n.created_by)).join("") || '<div class="empty">No notes yet.</div>'}</div>
+      ${/* R6.4 H-01 — the markers are in this same list, so the set of notes that have
+            been re-filed away is read straight off it: no extra query, and the strike
+            and the marker can never disagree about which note they describe. */ ""}
+      <div id="notes-list">${(() => { const rf = refiledNoteIds(notes); return notes.map((n) => noteRowHtml(n.body, new Date(n.created_at).toLocaleString("en-GB"), n.created_by, { noteId: n.id, refiled: rf.has(String(n.id)) })).join(""); })() || '<div class="empty">No notes yet.</div>'}</div>
     </div>
     ${/* BACKEND-R4 §2/§3 — what the database recorded, as opposed to what anyone typed. */ ""}
     <div style="margin-top:14px;" id="case-history">
@@ -6166,11 +6465,12 @@ async function markFeePaid(caseId, c) {
    address to sanity-check against, uploading Herbert Avenue's offer onto Bryanstone Road's case
    produced a diff where every row looked like a believable lender revaluation (SM-03).
 
-   NOTE, honestly: the `parse-offer` function does not return a property address today (the mock stub
-   mirrors production, and edge functions are out of scope this round), so this row appears only when
-   the payload carries one. The mapping, the diff row, the M7 gate and the "different property"
-   warning are all wired and tested against a payload that does — the day parse-offer learns the
-   field, this works with no further change. `prop: true` marks the row as needing M7. */
+   R6.4 — that day has arrived: `parse-offer` was redeployed and now returns `property_address`, and
+   the mock stub matches it. Nothing here changed to accommodate it, which was the point of wiring
+   the mapping, the diff row, the M7 gate and the "different property" warning against a payload
+   that carries one before the payload did. The row still appears only when the parse actually
+   found an address, so an offer letter it cannot read simply proposes the ten other fields.
+   `prop: true` marks the row as needing M7. */
 const OFFER_FIELDS = [
   { col: "property_address", label: "Property address", prop: true },
   { col: "lender", label: "Lender" },
@@ -6430,7 +6730,17 @@ async function queueEmail(caseId, clientId, type, c, ev) {
     const extraLine = type === "rate_end_reminder"
       ? `\n\nA follow-up task ("${chaseTitle}") will be added for ${fmtD(chaseDue)}.`
       : "";
-    if (!confirm(`Send ${EMAIL_LABEL[type].toLowerCase()} email to ${cl.email}?\n\nSigned off by: ${signedBy}${extraLine}`)) return;
+    /* R6.4 H-02 — the rate-end reminder is the one send that is ABOUT a building:
+       it says "your rate is ending, shall we look at it?", and on a portfolio
+       landlord with four fixed rates the confirm dialog named only the person and
+       the recipient address, so two of his properties produced the identical
+       prompt. The retention confirm has named the property since R6-31 and this
+       is the same sentence, deliberately word-for-word: `Property: <full address>`
+       on its own line, the FULL address rather than the chip's short label,
+       because this is the last thing shown before something leaves the firm. */
+    const propFull = type === "rate_end_reminder" ? propAddress(c) : null;
+    const propLine = propFull ? `\nProperty: ${propFull}` : "";
+    if (!confirm(`Send ${EMAIL_LABEL[type].toLowerCase()} email to ${cl.email}?\n\nSigned off by: ${signedBy}${propLine}${extraLine}`)) return;
     const { data: qRow, error } = await db.from("email_queue")
       .insert({ case_id: caseId, client_id: clientId, email_type: type, to_email: cl.email })
       .select("id").single();
@@ -6543,7 +6853,10 @@ async function buildClientTimeline(clientId, cases) {
   let notes = [], events = [], appts = [], emails = [], sms = [], ffs = [], inbound = [];
   try {
     [notes, events, appts, emails, sms, ffs, inbound] = await Promise.all([
-      ids.length ? q(db.from("case_notes").select("body,created_at,case_id,created_by").in("case_id", ids)) : [],
+      /* R6.4 H-01 — `id` joins the select so the timeline can offer Re-file and,
+         reading the markers among these same rows, strike the notes that have
+         already been re-filed away. */
+      ids.length ? q(db.from("case_notes").select("id,body,created_at,case_id,created_by").in("case_id", ids)) : [],
       ids.length ? q(db.from("case_events").select("event,detail,created_at,case_id,actor").in("case_id", ids)) : [],
       q(db.from("appointments").select("title,starts_at,location,case_id,client_id").eq("client_id", clientId)),
       ids.length ? q(db.from("email_queue").select("email_type,status,subject,sent_at,created_at,case_id").in("case_id", ids)) : [],
@@ -6554,7 +6867,22 @@ async function buildClientTimeline(clientId, cases) {
   } catch (_) { /* keep whatever resolved */ }
   const items = [];
   const push = (ts, cat, icon, title, caseId) => { if (!ts) return; items.push({ ts, cat, icon, title, caseId, caseLabel: caseLabel[caseId], caseChip: caseChip[caseId] }); };
-  notes.forEach((n) => { const nt = noteType(n.body); push(n.created_at, nt.type, nt.icon, (esc(nt.cleanBody) || "(note)") + authorChipHtml(n.created_by), n.case_id); });
+  /* R6.4 H-01 — the same correction the case modal shows, on the client's own
+     timeline: a re-filed note reads struck and badged, its marker reads plainly,
+     and everything else keeps its Re-file control. The body is escaped before it
+     is wrapped, exactly as it was — a marker names a case, and a case identity
+     carries an operator-typed address. */
+  const refiledTl = refiledNoteIds(notes);
+  notes.forEach((n) => {
+    const nt = noteType(refileDisplayBody(n.body));
+    const marker = isRefileMarker(n.body);
+    const refiled = refiledTl.has(String(n.id));
+    const text = esc(nt.cleanBody) || "(note)";
+    const title = (refiled ? `<s class="tl-refiled">${text}</s> ${REFILE_BADGE}` : text)
+      + authorChipHtml(n.created_by)
+      + (n.id && !refiled && !marker ? refileBtnHtml(n.id) : "");
+    push(n.created_at, nt.type, nt.icon, title, n.case_id);
+  });
   emails.filter((e) => e.status === "sent" || e.status === "failed").forEach((e) => {
     const lbl = EMAIL_LABEL[e.email_type] || e.email_type || "Email";
     push(e.sent_at || e.created_at, "email", "✉️", esc(lbl) + (e.status === "failed" ? ' <span class="tl-fail">failed</span>' : ""), e.case_id);
@@ -7009,6 +7337,18 @@ function groupCasesByProperty(cases) {
   });
   const out = [...groups.values()];
   out.forEach((g) => g.rows.sort((a, b) => (caseRecency(a) < caseRecency(b) ? 1 : -1)));
+  /* R6.4 H-03 — the heading is the group's BEST spelling, not the first row's.
+     Ruby's two 8 Grand Avenue cases can carry two strings for one flat; the
+     heading over both of them has to be the good one. `sample` (which draws the
+     chip beside the heading) moves to the row that carries it, so heading and
+     chip are the same words. */
+  out.forEach((g) => {
+    if (!g.key) return;
+    const best = propBestAddress(g.rows);
+    if (!best) return;
+    g.heading = best;
+    g.sample = g.rows.find((x) => propAddress(x) === best) || g.sample;
+  });
   out.sort((a, b) => {
     if (!a.key !== !b.key) return a.key ? -1 : 1;   // no-address bucket last
     return caseRecency(a.rows[0]) < caseRecency(b.rows[0]) ? 1 : -1;
@@ -9704,8 +10044,19 @@ async function buildEvidencePack(caseId) {
       ${(emails || []).map((e) => `<tr><td>${dt(e.sent_at || e.created_at)}</td><td>${esc(EMAIL_LABEL[e.email_type] || e.email_type)}</td><td>${esc(e.to_email || "")}</td><td>${esc(packValue("status", e.status))}</td><td>${esc(e.subject || "")}</td></tr>`).join("") || "<tr><td colspan=5>None</td></tr>"}
     </table>
     ${/* The app shows who wrote a note and who owns a task on screen; the pack printed neither. */ ""}
+    ${/* R6.4 H-01 — a re-filed note is struck through and badged HERE too. The pack is
+          what a compliance reader is handed, so the one surface where the correction
+          must not be invisible is this one: a note that was filed on the wrong case and
+          has been put right reads as a correction, not as a fact about this case. The
+          marker underneath it (kept, in full) says where the right copy lives. */ ""}
     <h2>Notes</h2><table><tr><th>When</th><th>Note</th><th>Written by</th></tr>
-      ${(notes || []).map((n) => `<tr><td style="white-space:nowrap;">${dt(n.created_at)}</td><td>${esc(n.body)}</td><td>${esc(packPerson(n.created_by, "Author not recorded"))}</td></tr>`).join("") || "<tr><td colspan=3>None</td></tr>"}
+      ${(() => { const rf = refiledNoteIds(notes); return (notes || []).map((n) => {
+        const gone = rf.has(String(n.id));
+        const text = esc(refileDisplayBody(n.body));
+        return `<tr><td style="white-space:nowrap;">${dt(n.created_at)}</td><td>${gone
+          ? `<s style="color:#777;">${text}</s> <strong style="font-size:11px;text-transform:uppercase;letter-spacing:.4px;">[re-filed]</strong>`
+          : text}</td><td>${esc(packPerson(n.created_by, "Author not recorded"))}</td></tr>`;
+      }).join(""); })() || "<tr><td colspan=3>None</td></tr>"}
     </table>
     <h2>Tasks</h2><table><tr><th>Due</th><th>Task</th><th>Assigned to</th><th>Status</th></tr>
       ${(tasks || []).map((t) => `<tr><td style="white-space:nowrap;">${t.due_date ? "due " + fmtD(t.due_date) : "no due date"}</td><td>${esc(t.title)}</td><td>${esc(packPerson(t.assigned_to, "Unassigned"))}</td><td>${t.done_at ? "done " + dt(t.done_at) : "open"}</td></tr>`).join("") || "<tr><td colspan=4>None</td></tr>"}

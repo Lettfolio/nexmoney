@@ -926,6 +926,27 @@ main input:focus, main select:focus, main textarea:focus,
 .note .nd { font-size: 11.5px; color: var(--muted); margin-top: 3px; }
 .note .note-ic { margin-right: 5px; }
 
+/* ---------- R6.4 H-01 · re-filed notes ----------
+   A re-filed note is struck AND dimmed, not hidden: the file has to show that
+   somebody put something right, and a reader has to be able to still read what
+   was originally written. The marker that corrects it keeps full contrast — it
+   is the live statement of where the note actually belongs. */
+.note.note-refiled { background: #f7f7f8; border-color: #ececf0; }
+.note.note-refiled .note-body { text-decoration: line-through; color: var(--muted); }
+.note.note-refiled .note-ic { opacity: .5; }
+.note.note-refile-marker { background: #fff8ec; border-color: #f1e2c6; }
+.note-refiled-badge { margin-left: 6px; vertical-align: middle; }
+.note-refile-btn { margin-left: 8px; padding: 1px 7px; font-size: 11px; line-height: 1.5; }
+/* The timeline's own strike — same meaning, inline rather than in a card. */
+.tl-refiled { color: var(--muted); }
+.tl-row .note-refile-btn { margin-left: 6px; }
+/* The quoted note in the re-file picker: what you are about to move, verbatim. */
+.refile-quote {
+  margin: 8px 0 0; padding: 8px 10px; border-left: 3px solid var(--line, #e3e8f0);
+  background: var(--light, #f6f8fb); font-size: 12.5px; color: var(--text, #222);
+  white-space: pre-wrap; word-break: break-word; max-height: 140px; overflow: auto;
+}
+
 /* ---------- Typed notes + unified client timeline (SP3) ---------- */
 /* Pill chips for note types + timeline filters. Distinct from the round assignee ".chip". */
 .type-chips, .tl-filters { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
