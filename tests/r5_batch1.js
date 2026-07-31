@@ -1,0 +1,393 @@
+#!/usr/bin/env node
+/* =============================================================================
+   tests/r5_batch1.js — acceptance tests for PLAN-R5 Batch 1
+   ("Outbound email safety & lead accept — the send path")
+
+   Covers, one block per plan item:
+     1. R5-1  scoped sends — a per-case action sends ONE row; the firm's queue is
+              untouched; accepting a lead sends only the welcome; the firm-wide
+              flush is Owner/Admin only and confirms count + recipients.
+     2. R5-5  lead-adviser dropdown: no sticky store, siblings survive a repaint.
+     3. R5-21 accepting a lead clears its My Day row without navigation.
+     4. R5-13 rate-end reminder creates the follow-up chase task.
+     5. R5-43 a no-address failure offers Fix contact and opens the CLIENT.
+     6. R5-51 a queued row whose client changed email is flagged and re-addressable.
+     7. R5-8  the send confirm names who the client will see it signed by.
+
+   Run:  node /root/nx/tests/r5_batch1.js       (expects a static server on 8099;
+                                                 starts one itself if absent)
+   ========================================================================== */
+"use strict";
+
+const { chromium } = require("playwright");
+const { spawn } = require("child_process");
+const http = require("http");
+
+const REPO = "/root/nx";
+const PORT = 8099;
+const BASE = `http://localhost:${PORT}/admin/mock.html`;
+const SETTLE = 1500;
+
+let pass = 0;
+const failures = [];
+function ok(name, cond, detail) {
+  if (cond) { pass++; console.log(`  ✓ ${name}`); }
+  else { failures.push(name + (detail ? ` — ${detail}` : "")); console.log(`  ✗ ${name}${detail ? " — " + detail : ""}`); }
+}
+const eq = (name, actual, expected) => ok(name, JSON.stringify(actual) === JSON.stringify(expected), `expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+
+function serverUp() {
+  return new Promise((res) => {
+    const r = http.get({ host: "localhost", port: PORT, path: "/admin/mock.html" }, (x) => { x.resume(); res(x.statusCode === 200); });
+    r.on("error", () => res(false));
+    r.setTimeout(1500, () => { r.destroy(); res(false); });
+  });
+}
+
+/* Every page starts with a dialog recorder: confirm()/prompt() are load-bearing in
+   this batch (the flush confirmation, the sign-off line, the joint-name prompts),
+   so the text is captured and the default action is "say yes". */
+async function newPage(browser, persona) {
+  const page = await browser.newPage();
+  page.__dialogs = [];
+  page.__dialogAnswer = "accept";
+  page.on("dialog", async (d) => {
+    page.__dialogs.push({ type: d.type(), message: d.message() });
+    if (page.__dialogAnswer === "dismiss") await d.dismiss();
+    else await d.accept();
+  });
+  page.on("console", (m) => { if (m.type() === "error" && !/40[0-9]|net::ERR/.test(m.text())) page.__err = (page.__err || []).concat(m.text()); });
+  await page.goto(`${BASE}?as=${persona}`);
+  await page.waitForTimeout(SETTLE);
+  return page;
+}
+const snapshot = (page, fn) => page.evaluate(fn);
+
+async function main() {
+  let srv = null;
+  if (!(await serverUp())) {
+    srv = spawn("python3", ["-m", "http.server", String(PORT)], { cwd: REPO, stdio: "ignore", detached: true });
+    await new Promise((r) => setTimeout(r, 1200));
+  }
+  const browser = await chromium.launch();
+  try {
+    /* ===================================================================
+       1 · R5-1 — a per-case send sends exactly one row (as p2, an adviser)
+       + 4 · R5-13 chase task + 7 · R5-8 sign-off line, all on the same click
+       =================================================================== */
+    console.log("\n— R5-1/R5-13/R5-8 · scoped send from a case (p2 Wayne, ca017 Louise Garnham)");
+    {
+      const page = await newPage(browser, "p2");
+      const before = await snapshot(page, async () => {
+        const db = window.__mockDb;
+        const { data: q } = await db.from("email_queue").select("id,status").eq("status", "queued");
+        const { data: t } = await db.from("case_tasks").select("id");
+        return { queuedIds: q.map((r) => r.id).sort(), tasks: t.length };
+      });
+      ok("fixture: several emails are queued firm-wide", before.queuedIds.length >= 4, `queued=${before.queuedIds.length}`);
+
+      await page.evaluate(() => window.openCase("ca017"));
+      await page.waitForTimeout(600);
+      await page.click("#act-reminder");
+      await page.waitForTimeout(1200);
+
+      const confirmMsg = (page.__dialogs.find((d) => d.type === "confirm") || {}).message || "";
+      ok("R5-8 · the confirm names the signatory (case adviser Wayne Kellow)", /Signed off by:\s*Wayne Kellow/.test(confirmMsg), JSON.stringify(confirmMsg));
+      ok("R5-13 · the confirm warns that a follow-up task will be created", /Follow up rate-end reminder/i.test(confirmMsg), JSON.stringify(confirmMsg));
+
+      const after = await snapshot(page, async () => {
+        const db = window.__mockDb;
+        const { data: all } = await db.from("email_queue").select("id,status,email_type,case_id,sent_at");
+        const { data: t } = await db.from("case_tasks").select("*").eq("case_id", "ca017");
+        return {
+          stillQueued: all.filter((r) => r.status === "queued").map((r) => r.id).sort(),
+          sentNow: all.filter((r) => r.status === "sent" && r.case_id === "ca017" && r.email_type === "rate_end_reminder").map((r) => r.id),
+          lastRun: window.__mock.lastEmailRun(),
+          tasks: t,
+        };
+      });
+      eq("R5-1 · exactly one email was sent by the click", after.sentNow.length, 1);
+      eq("R5-1 · every other queued email is still queued", after.stillQueued, before.queuedIds);
+      ok("R5-1 · process-emails was called scoped to that one row", after.lastRun && after.lastRun.scoped === true && after.lastRun.queue_ids && after.lastRun.queue_ids.length === 1,
+        JSON.stringify(after.lastRun && { scoped: after.lastRun.scoped, ids: after.lastRun.queue_ids }));
+      ok("R5-1 · the scoped run skipped the firm-wide queueing step", after.lastRun && after.lastRun.considered === 1, JSON.stringify(after.lastRun && after.lastRun.considered));
+
+      const chase = (after.tasks || []).filter((t) => /^Follow up rate-end reminder/.test(t.title));
+      eq("R5-13 · exactly one follow-up task was created", chase.length, 1);
+      if (chase.length) {
+        const t = chase[0];
+        const want = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+        ok("R5-13 · the task is due in 7 days", t.due_date === want, `due_date=${t.due_date}, expected ${want}`);
+        ok("R5-13 · the task is assigned to the case adviser (p2)", t.assigned_to === "p2", `assigned_to=${t.assigned_to}`);
+        ok("R5-13 · the task names the client", /Louise/.test(t.title), t.title);
+      }
+      ok("no console errors", !page.__err, JSON.stringify(page.__err));
+      await page.close();
+    }
+
+    /* ===================================================================
+       1b · R5-1 — accepting a lead sends the welcome and nothing else
+       (and a lead with NO email sends nothing at all)
+       =================================================================== */
+    console.log("\n— R5-1 · accept a lead (p1 Kim): only the welcome goes");
+    {
+      const page = await newPage(browser, "p1");
+      const before = await snapshot(page, async () => {
+        const { data: q } = await window.__mockDb.from("email_queue").select("id").eq("status", "queued");
+        return q.map((r) => r.id).sort();
+      });
+      await page.evaluate(() => {
+        const r = [...document.querySelectorAll("#leads-list .row-item")].find((x) => /Owen Trelawney/.test(x.textContent));
+        r.querySelector("button.btn-primary").click();
+      });
+      await page.waitForTimeout(1400);
+      const after = await snapshot(page, async () => {
+        const db = window.__mockDb;
+        const { data: all } = await db.from("email_queue").select("*");
+        const welcome = all.filter((r) => r.email_type === "welcome" && /trelawney/i.test(r.to_email || ""));
+        return {
+          stillQueued: all.filter((r) => r.status === "queued").map((r) => r.id).sort(),
+          welcome: welcome.map((r) => ({ status: r.status })),
+          lastRun: window.__mock.lastEmailRun(),
+        };
+      });
+      eq("R5-1 · the welcome email exists and is sent", after.welcome, [{ status: "sent" }]);
+      eq("R5-1 · nobody else's queued email was flushed", after.stillQueued, before);
+      ok("R5-1 · the run was scoped to the welcome row", after.lastRun && after.lastRun.scoped === true && after.lastRun.considered === 1, JSON.stringify(after.lastRun && after.lastRun.considered));
+
+      // …and a lead with no email address must not trigger a send at all.
+      const runBefore = await snapshot(page, () => window.__mock.lastEmailRun().at);
+      const hasNoEmailLead = await snapshot(page, () => [...document.querySelectorAll("#leads-list .row-item")].some((r) => /Colin Sharratt/.test(r.textContent)));
+      ok("fixture: the no-email lead (Colin Sharratt) is on screen", hasNoEmailLead === true);
+      if (hasNoEmailLead) {
+        await page.evaluate(() => {
+          const r = [...document.querySelectorAll("#leads-list .row-item")].find((x) => /Colin Sharratt/.test(x.textContent));
+          r.querySelector("button.btn-primary").click();
+        });
+        await page.waitForTimeout(1400);
+        const runAfter = await snapshot(page, () => window.__mock.lastEmailRun().at);
+        ok("R5-1 · a lead with no email triggers no send at all", runAfter === runBefore, `${runBefore} → ${runAfter}`);
+      }
+      ok("no console errors", !page.__err, JSON.stringify(page.__err));
+      await page.close();
+    }
+
+    /* ===================================================================
+       1c · R5-1 — the firm-wide flush: hidden for an adviser, confirmed for
+       an owner (count + named recipients), and a no-op on an empty queue
+       =================================================================== */
+    console.log("\n— R5-1 · the Run-automation-now button");
+    {
+      const p2 = await newPage(browser, "p2");
+      await p2.click('.nav-link[data-page="emails"], [data-page="emails"]');
+      await p2.waitForTimeout(900);
+      const advVisible = await p2.evaluate(() => {
+        const b = document.querySelector("#run-now-btn");
+        return !!b && !b.classList.contains("hidden") && b.offsetParent !== null;
+      });
+      ok("R5-1 · an adviser is not offered the firm-wide flush", advVisible === false);
+      await p2.close();
+
+      const p4 = await newPage(browser, "p4");
+      await p4.click('.nav-link[data-page="emails"], [data-page="emails"]');
+      await p4.waitForTimeout(900);
+      const ownerVisible = await p4.evaluate(() => {
+        const b = document.querySelector("#run-now-btn");
+        return !!b && !b.classList.contains("hidden") && b.offsetParent !== null;
+      });
+      ok("R5-1 · the Owner is offered it", ownerVisible === true);
+
+      const queuedBefore = await snapshot(p4, async () => {
+        const { data } = await window.__mockDb.from("email_queue").select("id,to_email,client_id").eq("status", "queued");
+        return data.length;
+      });
+      p4.__dialogAnswer = "dismiss";           // cancel: nothing may be sent
+      p4.__dialogs.length = 0;
+      const sentBefore = await snapshot(p4, () => (window.__mock.lastEmailRun() || {}).sent || 0);
+      await p4.click("#run-now-btn");
+      await p4.waitForTimeout(1200);
+      const msg = (p4.__dialogs.find((d) => d.type === "confirm") || {}).message || "";
+      /* GATE-R5 G1I-Q1 — this used to assert the confirm named the rows ALREADY in the queue
+         (`queuedBefore`, read before the click). That was the defect: an unscoped run does the
+         queueing RPCs first and then flushes what they create, so the Owner consented to 5 and 22
+         went out. The button now queues BEFORE it asks; the invariant under test is therefore the
+         one that matters — the number in the confirm is the number that will be sent (checked
+         against lastEmailRun() after the accepted run below). */
+      const promised = Number((/Send ALL (\d+) queued email/.exec(msg) || [])[1] || 0);
+      ok("R5-1 · the confirm states a count", promised > 0, JSON.stringify(msg));
+      ok("R5-1 · the confirm lists recipients by name", /Recipients:\s*\S/.test(msg), JSON.stringify(msg));
+      ok("R5-1 · the confirm says it covers the whole firm", /whole firm/i.test(msg), JSON.stringify(msg));
+      // Cancelling must SEND nothing. (Queue length is no longer the proxy for that: the queueing
+      // step the cron would have run tonight has already run, so rows may legitimately be waiting.)
+      const afterCancel = await snapshot(p4, () => (window.__mock.lastEmailRun() || {}).sent || 0);
+      eq("R5-1 · cancelling sends nothing", afterCancel, sentBefore);
+
+      p4.__dialogAnswer = "accept";
+      await p4.click("#run-now-btn");
+      await p4.waitForTimeout(1600);
+      const afterSend = await snapshot(p4, async () => {
+        const { data } = await window.__mockDb.from("email_queue").select("id").eq("status", "queued");
+        return { queued: data.length, run: window.__mock.lastEmailRun() };
+      });
+      ok("R5-1 · confirming does flush the queue", afterSend.queued < queuedBefore, `${queuedBefore} → ${afterSend.queued}`);
+      ok("R5-1 · the number consented to is the number sent", afterSend.run && afterSend.run.sent === promised,
+        `confirm promised ${promised}, sent ${afterSend.run && afterSend.run.sent}`);
+      ok("R5-1 · the deliberate flush is UNscoped (the cron's behaviour)", afterSend.run && afterSend.run.scoped === false, JSON.stringify(afterSend.run && afterSend.run.scoped));
+
+      // Empty queue → a toast, no round trip.
+      p4.__dialogs.length = 0;
+      const runAt = await snapshot(p4, () => window.__mock.lastEmailRun().at);
+      await p4.click("#run-now-btn");
+      await p4.waitForTimeout(1000);
+      const emptyState = await snapshot(p4, () => ({ at: window.__mock.lastEmailRun().at, toast: (document.querySelector("#toast") || {}).textContent || "" }));
+      eq("R5-1 · an empty queue asks nothing", p4.__dialogs.length, 0);
+      ok("R5-1 · an empty queue calls nothing", emptyState.at === runAt, `${runAt} → ${emptyState.at}`);
+      ok("R5-1 · an empty queue says so", /queue is empty/i.test(emptyState.toast), JSON.stringify(emptyState.toast));
+      ok("no console errors", !p4.__err, JSON.stringify(p4.__err));
+      await p4.close();
+    }
+
+    /* ===================================================================
+       2 · R5-5 — lead-adviser dropdown cross-contamination
+       3 · R5-21 — the stale My Day lead row
+       =================================================================== */
+    console.log("\n— R5-5/R5-21 · lead routing and the My Day row (p1 Kim)");
+    {
+      const page = await newPage(browser, "p1");
+      const initial = await page.evaluate(() => [...document.querySelectorAll("#leads-list select.lead-adviser")].map((s) => ({ lead: s.dataset.lead, val: s.value, text: s.options[s.selectedIndex].text })));
+      ok("R5-5 · every lead select defaults to me", initial.length >= 3 && initial.every((s) => /\(me\)/.test(s.text)), JSON.stringify(initial));
+
+      const leadA = initial[1].lead;   // ld002 Owen Trelawney — routed to Wayne
+      const leadB = initial[2].lead;   // ld003 Farida Bahri  — hand-changed to Luke
+      const others = initial.filter((s) => s.lead !== leadA && s.lead !== leadB).map((s) => s.lead);
+
+      await page.evaluate(([a, b]) => {
+        const q = (id) => document.querySelector(`#leads-list select.lead-adviser[data-lead="${id}"]`);
+        q(a).value = "p2"; q(a).dispatchEvent(new Event("change", { bubbles: true }));
+        q(b).value = "p3"; q(b).dispatchEvent(new Event("change", { bubbles: true }));
+      }, [leadA, leadB]);
+
+      const briefBefore = await page.evaluate((a) => (document.querySelector("#briefing-list").innerHTML.indexOf(`acceptLead('${a}'`) >= 0), leadA);
+      ok("R5-21 · fixture: the lead also has a My Day row", briefBefore === true);
+
+      await page.click(`#leads-list .row-item:has(select[data-lead="${leadA}"]) button.btn-primary`);
+      await page.waitForTimeout(1600);
+
+      const post = await page.evaluate(async ([a, b, o]) => {
+        const sels = [...document.querySelectorAll("#leads-list select.lead-adviser")].map((s) => ({ lead: s.dataset.lead, val: s.value }));
+        const { data: cases } = await window.__mockDb.from("cases").select("id,assigned_to,lead_source").order("created_at", { ascending: false }).limit(5);
+        const { data: lead } = await window.__mockDb.from("leads").select("*").eq("id", a).single();
+        return {
+          sels,
+          bVal: (sels.find((s) => s.lead === b) || {}).val,
+          otherVals: sels.filter((s) => o.indexOf(s.lead) >= 0).map((s) => s.val),
+          acceptedCaseAdviser: (cases.find((c) => c.id === lead.converted_case_id) || {}).assigned_to,
+          briefStillHasA: document.querySelector("#briefing-list").innerHTML.indexOf(`acceptLead('${a}'`) >= 0,
+          leadGone: sels.every((s) => s.lead !== a),
+        };
+      }, [leadA, leadB, others]);
+
+      eq("R5-5 · the accepted lead went to the adviser its own row named", post.acceptedCaseAdviser, "p2");
+      ok("R5-5 · the accepted lead has left the inbox", post.leadGone === true, JSON.stringify(post.sels));
+      eq("R5-5 · a hand-changed sibling row keeps its choice through the repaint", post.bVal, "p3");
+      ok("R5-5 · untouched sibling rows still say me (no cross-contamination)", post.otherVals.every((v) => v === "p1"), JSON.stringify(post.otherVals));
+      ok("R5-21 · the accepted lead's My Day row disappeared without navigating", post.briefStillHasA === false);
+
+      // …and nothing is remembered across a reload: every remaining lead is mine again.
+      await page.reload();
+      await page.waitForTimeout(SETTLE);
+      const reloaded = await page.evaluate(() => [...document.querySelectorAll("#leads-list select.lead-adviser")].map((s) => s.value));
+      ok("R5-5 · after a reload every lead defaults to me again (no sticky store)", reloaded.length > 0 && reloaded.every((v) => v === "p1"), JSON.stringify(reloaded));
+      ok("R5-5 · the old localStorage routing key is gone", await page.evaluate(() => Object.keys(localStorage).every((k) => k.indexOf("nx_lead_adviser") !== 0)));
+      ok("no console errors", !page.__err, JSON.stringify(page.__err));
+      await page.close();
+    }
+
+    /* ===================================================================
+       5 · R5-43 — a no-address failure has a fix path
+       =================================================================== */
+    console.log("\n— R5-43 · the no-email failure (p1 Kim)");
+    {
+      const page = await newPage(browser, "p1");
+      await page.click('[data-page="emails"]');
+      await page.waitForTimeout(1000);
+      const row = await page.evaluate(() => {
+        const r = [...document.querySelectorAll("#email-list .row-item")].find((x) => /no email on file|no address on file/i.test(x.textContent));
+        if (!r) return null;
+        const fix = [...r.querySelectorAll("button")].find((b) => /Fix contact/i.test(b.textContent));
+        return { hasFix: !!fix, titleOpensClient: /openClient\(/.test((r.querySelector(".t") || {}).outerHTML || ""), text: r.textContent.replace(/\s+/g, " ").trim().slice(0, 90) };
+      });
+      ok("R5-43 · the no-address failure is on screen", !!row, "row not found");
+      if (row) {
+        ok("R5-43 · it offers Fix contact", row.hasFix === true, row.text);
+        ok("R5-43 · its title opens the CLIENT, not the case", row.titleOpensClient === true, row.text);
+      }
+      await page.evaluate(() => {
+        const r = [...document.querySelectorAll("#email-list .row-item")].find((x) => /no email on file|no address on file/i.test(x.textContent));
+        [...r.querySelectorAll("button")].find((b) => /Fix contact/i.test(b.textContent)).click();
+      });
+      await page.waitForTimeout(1200);
+      const landed = await page.evaluate(() => ({
+        modalOpen: !!document.querySelector("#modal-backdrop:not(.hidden), #modal:not(.hidden)"),
+        isClientForm: !!document.querySelector("#client-form"),
+        focused: (document.activeElement && document.activeElement.getAttribute("name")) || "",
+        detailsOpen: !!(document.querySelector("#modal .client-details") || {}).open,
+      }));
+      ok("R5-43 · the click lands on the client editor", landed.isClientForm === true, JSON.stringify(landed));
+      ok("R5-43 · with the contact section open", landed.detailsOpen === true, JSON.stringify(landed));
+      ok("R5-43 · and the cursor in the email field", landed.focused === "email", JSON.stringify(landed));
+      ok("no console errors", !page.__err, JSON.stringify(page.__err));
+      await page.close();
+    }
+
+    /* ===================================================================
+       6 · R5-51 — a queued row addressed to a since-changed email
+       =================================================================== */
+    console.log("\n— R5-51 · stale queued address (p1 Kim)");
+    {
+      const page = await newPage(browser, "p1");
+      // Change a client's email while one of their emails is sitting queued.
+      const target = await snapshot(page, async () => {
+        const db = window.__mockDb;
+        const { data: q } = await db.from("email_queue").select("*").eq("status", "queued");
+        const row = q.find((r) => r.client_id && r.to_email && !/newdomain/.test(r.to_email));
+        await db.from("clients").update({ email: "moved.house@example.com" }).eq("id", row.client_id);
+        return { id: row.id, was: row.to_email, client: row.client_id };
+      });
+      await page.click('[data-page="emails"]');
+      await page.waitForTimeout(1100);
+      const flagged = await page.evaluate((id) => {
+        const rows = [...document.querySelectorAll("#email-list .row-item")];
+        const hit = rows.filter((r) => /address changed since queued/i.test(r.textContent));
+        const mine = hit.find((r) => /moved\.house@example\.com/.test(r.textContent));
+        return { count: hit.length, mine: !!mine, hasBtn: !!(mine && [...mine.querySelectorAll("button")].some((b) => /Use current address/i.test(b.textContent))) };
+      }, target.id);
+      ok("R5-51 · the changed-address row is badged", flagged.mine === true, JSON.stringify(flagged));
+      ok("R5-51 · it offers Use current address", flagged.hasBtn === true, JSON.stringify(flagged));
+      ok("R5-51 · the seeded stale-address row is badged too", flagged.count >= 2, `badged rows=${flagged.count}`);
+
+      await page.evaluate(() => {
+        const r = [...document.querySelectorAll("#email-list .row-item")].find((x) => /moved\.house@example\.com/.test(x.textContent));
+        [...r.querySelectorAll("button")].find((b) => /Use current address/i.test(b.textContent)).click();
+      });
+      await page.waitForTimeout(1200);
+      const fixed = await snapshot(page, async () => {
+        const { data } = await window.__mockDb.from("email_queue").select("*").eq("to_email", "moved.house@example.com");
+        return data.map((r) => ({ status: r.status }));
+      });
+      eq("R5-51 · the queued row now carries the current address, still unsent", fixed, [{ status: "queued" }]);
+      const gone = await page.evaluate(() => [...document.querySelectorAll("#email-list .row-item")].some((r) => /moved\.house/.test(r.textContent) && /address changed since queued/i.test(r.textContent)));
+      ok("R5-51 · the badge clears once corrected", gone === false);
+      ok("no console errors", !page.__err, JSON.stringify(page.__err));
+      await page.close();
+    }
+  } finally {
+    await browser.close();
+    if (srv) { try { process.kill(-srv.pid); } catch (e) { /* already gone */ } }
+  }
+
+  console.log(`\nR5 BATCH 1: ${pass} checks passed, ${failures.length} failed`);
+  if (failures.length) { failures.forEach((f) => console.log("  FAIL: " + f)); process.exit(1); }
+}
+
+main().catch((e) => { console.error(e); process.exit(1); });
