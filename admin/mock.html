@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>NexMoney — Back Office</title>
+<link rel="icon" href="../favicon.svg">
+<link rel="manifest" href="/admin/manifest.webmanifest">
+<meta name="theme-color" content="#0b1f35">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/admin/admin.css">
+</head>
+<body>
+
+<!-- ===== Login ===== -->
+<div id="login-view" class="login-wrap hidden">
+  <form id="login-form" class="login-card">
+    <div class="login-logo">Nex<span>Money</span></div>
+    <h1>Back Office</h1>
+    <label>Email
+      <input type="email" id="login-email" required autocomplete="username">
+    </label>
+    <label>Password
+      <span class="pw-wrap">
+        <input type="password" id="login-password" required autocomplete="current-password">
+        <button type="button" class="pw-toggle" data-target="login-password" aria-label="Show password" title="Show password">&#128065;</button>
+      </span>
+    </label>
+    <button type="submit" class="btn btn-primary btn-block">Sign in</button>
+    <button type="button" id="forgot-btn" class="btn btn-ghost btn-block">Forgot password?</button>
+    <p id="login-error" class="error hidden"></p>
+  </form>
+</div>
+
+<!-- ===== App ===== -->
+<div id="app-view" class="app-shell hidden">
+  <aside class="sidebar">
+    <div class="sidebar-logo">Nex<span>Money</span></div>
+    <button type="button" id="global-search-btn" class="global-search" aria-label="Search clients and cases (press /)" title="Search clients and cases (press /)">
+      <span class="gs-ic" aria-hidden="true">🔍</span>
+      <span class="gs-txt">Search…</span>
+      <kbd class="gs-kbd" aria-hidden="true">/</kbd>
+    </button>
+    <nav class="sidenav" id="topnav">
+      <button data-page="dashboard" class="active"><span class="si">🏠</span>Today</button>
+      <button data-page="pipeline"><span class="si">🗂️</span>Pipeline</button>
+      <button data-page="protection"><span class="si">🛡️</span>Protection</button>
+      <button data-page="diary"><span class="si">📅</span>Diary</button>
+      <button data-page="clients"><span class="si">👥</span>Clients</button>
+      <button data-page="import"><span class="si">📤</span>Import</button>
+      <button data-page="reports"><span class="si">📊</span>Reports</button>
+      <button data-page="data"><span class="si">🩺</span>Data health</button>
+      <button data-page="emails"><span class="si">✉️</span>Emails</button>
+      <button data-page="settings"><span class="si">⚙️</span>Settings</button>
+    </nav>
+    <!-- R6-B4 — "Ask AI" was a position:fixed pill in the bottom-right corner of the
+         viewport. Four auditors independently measured it sitting on top of live
+         content: a Watchtower "Dismiss" button (so a click aimed at a destructive
+         action hit the assistant), pipeline card names and chips, a Reports KPI
+         tile. A fixed overlay over a centred content column has nowhere to go, so
+         it is docked here instead — same button, same id, same handler, no overlay
+         layer. See the #assistant-fab block in admin.css. -->
+    <div class="sidebar-ask">
+      <button id="assistant-fab" class="hidden" title="Ask AI — look up clients, draft replies, add tasks and notes" aria-label="Ask AI assistant">✦<span class="fab-label">Ask AI</span></button>
+    </div>
+    <div class="sidebar-foot">
+      <span id="user-email"></span>
+      <button id="logout-btn" class="btn btn-ghost" title="Sign out" aria-label="Sign out">⏻</button>
+    </div>
+  </aside>
+
+  <main id="main">
+    <!-- Dashboard -->
+    <section id="page-dashboard" class="page">
+      <h2 id="today-heading">Today</h2>
+      <div class="panel" id="briefing-panel">
+        <h3>☀️ My Day
+          <button class="btn btn-sm seg-btn seg-first scope-active" id="brief-scope-mine" aria-label="Show only my items">Mine</button>
+          <button class="btn btn-sm seg-btn seg-last" id="brief-scope-all" aria-label="Show all team items">All</button>
+          <button class="btn btn-ghost btn-sm" id="sync-outlook-btn" aria-label="Sync Outlook inbox">⟳ Sync Outlook</button>
+        </h3>
+        <p class="panel-sub" id="briefing-date"></p>
+        <div id="briefing-list" class="dash-scroll"></div>
+      </div>
+      <div class="panel dash-drawer collapsed" id="watchtower-panel">
+        <h3 onclick="toggleDrawer(event,'watchtower')">🚨 Watchtower
+          <button class="btn btn-ghost btn-sm" id="watchtower-run">Run checks</button>
+          <button class="btn btn-ghost btn-sm hidden" id="watchtower-snoozed-toggle" title="Show/hide snoozed alerts">0 snoozed</button>
+        </h3>
+        <p class="panel-sub" id="watchtower-sub">Problems found automatically — resolves itself when fixed</p>
+        <div id="watchtower-list" class="dash-scroll"></div>
+        <div id="watchtower-snoozed" class="dash-scroll hidden"></div>
+      </div>
+      <div class="kpi-row" id="kpi-row"></div>
+      <div class="grid-2">
+        <div class="panel dash-card dash-drawer collapsed" id="leads-panel">
+          <h3 onclick="toggleDrawer(event,'leads')">📥 New website leads <span id="leads-count" class="badge red hidden"></span></h3>
+          <p class="panel-sub">Enquiries from nexmoney.co.uk land here — also flagged in My Day above. Pick the adviser on the row, then Accept to create the client + case assigned to them.</p>
+          <div id="leads-list" class="dash-scroll"></div>
+        </div>
+        <div class="panel dash-card dash-drawer collapsed" id="today-appts-panel">
+          <h3 onclick="toggleDrawer(event,'todayappts')">📅 Today's appointments</h3>
+          <div id="today-appts" class="dash-scroll"></div>
+        </div>
+      </div>
+      <div class="grid-2">
+        <div class="panel dash-card dash-drawer collapsed" id="tasks-panel">
+          <h3 onclick="toggleDrawer(event,'tasks')">📞 Tasks due
+            <button class="btn btn-sm seg-btn seg-first scope-active" id="tasks-scope-mine" aria-label="Show only my tasks">Mine</button>
+            <button class="btn btn-sm seg-btn" id="tasks-scope-unassigned" aria-label="Show tasks nobody owns">Unassigned</button>
+            <button class="btn btn-sm seg-btn seg-last" id="tasks-scope-all" aria-label="Show all team tasks">All</button>
+          </h3>
+          <p class="panel-sub">Call tasks from the retention sequence, plus anything you add on cases. Overdue &amp; due-today tasks also surface in My Day above.</p>
+          <div id="tasks-list" class="dash-scroll"></div>
+        </div>
+        <div class="panel dash-card dash-drawer collapsed" id="rate-erc-panel">
+          <h3 onclick="toggleDrawer(event,'rateerc')">⚠️ Rate &amp; ERC alerts</h3>
+          <p class="panel-sub">Rates ending within the reminder window, and cases where the ERC outlasts the rate.</p>
+          <div id="alerts-rateerc" class="dash-scroll"></div>
+        </div>
+      </div>
+      <div class="grid-2">
+        <div class="panel dash-card dash-drawer collapsed" id="retention-panel">
+          <h3 onclick="toggleDrawer(event,'retention')">🔁 Retention pipeline</h3>
+          <p class="panel-sub" id="retention-stats"></p>
+          <div id="retention-list" class="dash-scroll"></div>
+        </div>
+        <div class="panel dash-card dash-drawer collapsed" id="revenue-panel">
+          <h3 onclick="toggleDrawer(event,'revenue')">🛡️💷 Protection &amp; fees <span class="count" id="revenue-count"></span></h3>
+          <div class="dash-tabs">
+            <button class="dash-tab active" data-tab="protection">🛡️ Protection <span class="count" id="tab-protection-count"></span></button>
+            <button class="dash-tab" data-tab="fees">💷 Fees due <span class="count" id="tab-fees-count"></span></button>
+          </div>
+          <div id="protection-list" class="dash-scroll dash-tab-panel"></div>
+          <div id="alerts-fees" class="dash-scroll dash-tab-panel hidden"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Pipeline -->
+    <section id="page-pipeline" class="page hidden">
+      <div class="page-head">
+        <h2>Case pipeline</h2>
+        <div class="page-tools">
+          <input type="search" id="board-search" class="search" placeholder="Search cases…">
+          <select id="board-adviser"></select>
+          <button class="btn" id="view-toggle">☰ Table view</button>
+          <button class="btn btn-primary" id="new-case-btn">+ New case</button>
+        </div>
+      </div>
+      <div id="pipe-segment" class="pipe-segment" role="tablist" aria-label="Pipeline focus"></div>
+      <p class="panel-sub" id="board-hint"><span class="desktop-hint">Drag cards between columns to move a case on.</span><span class="mobile-hint">Tap a card to open it, or use the stage dropdown on each card to move it on.</span></p>
+      <!-- R6-B4 (D6-24 / SM-19) — the board carried two pieces of unlabelled colour
+           coding: a red/amber left edge on a card, and a "≈" glyph on a rate-end
+           date, neither explained anywhere. Both scan as rendering faults until
+           somebody tells you what they are, so the board now says what they mean. -->
+      <p class="board-legend" id="board-legend">
+        <span class="bl-item"><span class="bl-edge bl-edge-amber" aria-hidden="true"></span>Left edge: 14+ days in this stage</span>
+        <span class="bl-item"><span class="bl-edge bl-edge-red" aria-hidden="true"></span>30+ days in this stage</span>
+        <span class="bl-item"><span class="bl-approx" aria-hidden="true">&#8776;</span>&#8776; or a dashed pill means the date is an estimate, not confirmed</span>
+      </p>
+      <div id="stage-tabs" class="stage-tabs hidden"></div>
+      <div id="table-wrap" class="hidden"></div>
+      <div class="board-scroll-wrap">
+        <div class="board" id="board"></div>
+        <button type="button" class="board-scroll-arrow" aria-label="Scroll to later stages" title="Scroll to later stages">›</button>
+      </div>
+    </section>
+
+    <!-- Protection & GI -->
+    <section id="page-protection" class="page hidden">
+      <h2>Protection &amp; GI</h2>
+      <div class="kpi-row" id="prot-summary">
+        <div class="kpi"><div class="num" id="prot-kpi-count">—</div><div class="lbl">Opportunities</div></div>
+        <!-- R5-17 (label half) — this figure is a probability-weighted average of typical protection
+             commission, NOT a percentage of the loan. Saying so stops it being read as banked money. -->
+        <div class="kpi"><div class="num" id="prot-kpi-comm">—</div><div class="lbl">Est. commission</div><div class="s">(probability-weighted average, not loan-based)</div></div>
+        <div class="kpi kpi-click" id="prot-tile-quoted" title="Click to filter the table to quoted cases awaiting a decision"><div class="num" id="prot-kpi-quoted">—</div><div class="lbl">Quoted, awaiting decision</div></div>
+      </div>
+      <p class="panel-sub hidden" id="prot-money-note"></p>
+      <div class="page-tools" style="margin-bottom:14px;">
+        <button class="btn btn-sm seg-btn seg-first scope-active" id="prot-scope-mine">Mine</button>
+        <button class="btn btn-sm seg-btn" id="prot-scope-unassigned">Unassigned</button>
+        <button class="btn btn-sm seg-btn seg-last" id="prot-scope-all">All</button>
+        <select id="prot-filter">
+          <option value="all">All</option>
+          <option value="live">Live cases</option>
+          <option value="completed">Completed book</option>
+          <option value="quoted">Quoted</option>
+        </select>
+      </div>
+      <div id="prot-table"></div>
+    </section>
+
+    <!-- Diary -->
+    <section id="page-diary" class="page hidden">
+      <div class="page-head">
+        <h2 id="diary-title">Diary</h2>
+        <div class="page-tools">
+          <!-- B9 (R5-31) — Month/Day toggle. Same seg-btn/scope-active pattern as the Mine|All
+               scopes elsewhere, so it reads as "this page's current view" not a new widget type. -->
+          <div class="pipe-segment" id="diary-view-toggle" role="tablist" aria-label="Diary view">
+            <button type="button" class="btn btn-sm seg-btn seg-first scope-active" id="diary-view-month" role="tab" aria-selected="true">Month</button>
+            <button type="button" class="btn btn-sm seg-btn seg-last" id="diary-view-day" role="tab" aria-selected="false">Day</button>
+          </div>
+          <select id="diary-staff"></select>
+          <button class="btn" id="diary-prev">‹ Prev</button>
+          <button class="btn" id="diary-today">Today</button>
+          <button class="btn" id="diary-next">Next ›</button>
+          <button class="btn btn-primary" id="new-appt-btn">+ Appointment</button>
+        </div>
+      </div>
+      <div class="diary-legend" id="diary-legend"></div>
+      <div class="diary-grid" id="diary-grid"></div>
+      <!-- B9 (R5-31) — Day view: a single time-axis column, hidden while Month is active. The month
+           grid above is left completely alone so toggling never touches its markup. -->
+      <div class="diary-day-view hidden" id="diary-day-view">
+        <div class="diary-timeline-wrap">
+          <div class="diary-hour-labels" id="diary-hour-labels"></div>
+          <div class="diary-day-lane" id="diary-day-lane" title="Click an empty slot to book an appointment"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Clients -->
+    <section id="page-clients" class="page hidden">
+      <div class="page-head">
+        <h2>Clients</h2>
+        <button class="btn btn-primary" id="new-client-btn">+ New client</button>
+      </div>
+      <input type="search" id="client-search" class="search" placeholder="Search clients…">
+      <div id="client-list"></div>
+    </section>
+
+    <!-- Import -->
+    <section id="page-import" class="page hidden">
+      <h2>Bulk import</h2>
+      <p class="panel-sub">Drop in existing-client data from anywhere — a spreadsheet, an email, rough notes. AI sorts it into clients and cases, and nothing is saved until you review and confirm.</p>
+      <div class="panel">
+        <input type="file" id="import-file" accept=".csv,.tsv,.txt,.xlsx,.xls">
+        <textarea id="import-text" rows="9" placeholder="…or paste rows / text here"></textarea>
+        <div style="margin-top:10px;display:flex;align-items:center;gap:12px;">
+          <button class="btn btn-primary" id="analyse-btn">✨ Analyse with AI</button>
+          <span id="import-status" class="panel-sub" style="margin:0;"></span>
+        </div>
+      </div>
+      <div id="import-preview"></div>
+    </section>
+
+    <!-- Reports -->
+    <section id="page-reports" class="page hidden">
+      <div class="page-head">
+        <h2>Reports</h2>
+        <input type="month" id="report-month">
+      </div>
+      <p class="panel-sub hidden" id="report-money-note"></p>
+      <!-- R5-17 — the one legend that links every money label on this page to the basis it is
+           counted on. Nothing here changes a calculation; it names the three bases so two figures
+           that legitimately disagree can be read as different questions rather than a bug. -->
+      <!-- G1N-2 — "outstanding" said "earned and invoiced", but the Fees outstanding tile counts
+           fee_status in ('not_requested','requested'): on the current book most of that money has
+           never been invoiced at all. The legend added to stop two honest figures looking like a
+           bug was itself the inaccurate one, and an owner chasing it would have gone looking for
+           invoices that do not exist. It now describes what the tile actually counts. -->
+      <!-- R5-F2 (Daniel-approved) — the hierarchy changed: the HEADLINE fee figures are now
+           earned-on-completion, and cash received is a secondary figure beside them. The legend is
+           re-ranked to match, so the three bases still reconcile but in the order the page now
+           leads with. No figure was removed. -->
+      <p class="panel-sub hidden" id="report-basis-legend">Three money bases on this page, headline first — <strong>earned</strong> (the headline): proc + broker + sols fee value on a case, counted in the month it <em>completed</em>, paid or not · <strong>outstanding</strong>: earned but not yet received — whether it has been invoiced or is still to be invoiced · <strong>cash (banked)</strong> (secondary): money actually received, counted in the month it was paid. Every figure below says which one it is.</p>
+      <!-- R5-F4 — REPORTS_ROW_CAP. Every Reports select is explicitly bounded; when one comes back
+           holding exactly the cap the figures below describe a subset of the book, and this line
+           says so instead of letting the page truncate in silence. -->
+      <p class="dq-notice hidden" id="report-cap-notice"></p>
+      <!-- R5-F1 (Daniel-approved policy change) — the adviser's own money, and only their own.
+           Every figure on this card is scoped to cases assigned to the signed-in person; nothing
+           firm-wide and nothing belonging to another adviser appears on it. Hidden for the Owner,
+           whose fuller figures are below. -->
+      <div class="panel hidden" id="report-mine-panel">
+        <h3 id="report-mine-title">My numbers</h3>
+        <p class="panel-sub" id="report-mine-scope"></p>
+        <div class="kpi-row" id="report-mine" style="margin:12px 0 0;"></div>
+      </div>
+      <div class="panel">
+        <h3 id="month-report-title">This month</h3>
+        <div class="kpi-row" id="month-kpis" style="margin:12px 0 8px;"></div>
+        <div id="month-fee-target"></div>
+        <div id="month-advisers"></div>
+        <p class="panel-sub hidden" id="month-legend" style="margin:12px 0 0;">Proc £ = procuration fee (paid by the lender) · Broker £ = fee charged to the client · Sols £ = solicitor referral fee. Figures on this panel are scoped to the month selected above. "Completed £" is the fee value <strong>earned</strong> on cases completed this month, regardless of whether it's been paid yet — see "Fees banked (paid)" on the Adviser scoreboard below for cash actually collected.</p>
+      </div>
+      <p class="report-month-note" id="report-month-note">Also scoped to the month selected above.</p>
+      <div class="panel" id="report-scoreboard-panel">
+        <h3>Adviser scoreboard</h3>
+        <p class="panel-sub" id="report-scoreboard-scope"></p>
+        <div id="report-advisers"></div>
+      </div>
+      <div class="grid-2">
+        <div class="panel">
+          <h3>Pipeline funnel</h3>
+          <p class="panel-sub" id="report-funnel-scope"></p>
+          <div id="report-funnel"></div>
+        </div>
+        <div class="panel">
+          <h3>Lead sources</h3>
+          <p class="panel-sub" id="report-sources-scope">Set the lead source on cases to build this up.</p>
+          <div id="report-sources"></div>
+        </div>
+      </div>
+      <!-- B3 / R5-20 — where the work went. Populated by renderThreadedPanels(); month-scoped by
+           default (by the stage-change date where the event log has one, else last touched), with
+           an all-time toggle. -->
+      <div class="panel hidden" id="report-losses-panel">
+        <div class="panel-head-row">
+          <h3>Losses — why cases didn't proceed</h3>
+          <button type="button" class="btn btn-sm" id="report-losses-scope-btn" onclick="toggleLossesScope()">All time</button>
+        </div>
+        <p class="panel-sub" id="report-losses-scope"></p>
+        <div id="report-losses"></div>
+      </div>
+      <p class="report-live-note">Live snapshot — the panels below are not affected by the month selected above.</p>
+      <div class="kpi-row" id="report-kpis"></div>
+      <!-- S7 / R5-47 — the review-score drill-down. A score is a person; this lists them so the
+           tile can be answered ("who gave us a 6?") instead of only admired. -->
+      <div class="panel hidden" id="report-nps-panel">
+        <div class="panel-head-row">
+          <h3>Review scores — every respondent</h3>
+          <button type="button" class="btn btn-sm" onclick="toggleNpsList()">Hide</button>
+        </div>
+        <p class="panel-sub" id="report-nps-scope"></p>
+        <div id="report-nps-list"></div>
+      </div>
+      <div class="panel" id="report-forecast-panel">
+        <h3>Commission forecast — live pipeline</h3>
+        <div class="kpi-row" id="report-forecast-headline" style="margin:8px 0 12px;"></div>
+        <div id="report-forecast-buckets"></div>
+        <p class="panel-sub" id="report-forecast-hint" style="margin:10px 0 0;">Live cases from DIP to exchange, weighted by stage conversion, bucketed by how far off the expected completion date is.</p>
+      </div>
+      <div class="grid-2">
+        <div class="panel">
+          <h3 id="report-months-title">Completions by month (this year)</h3>
+          <p class="panel-sub" id="report-months-legend"></p>
+          <div id="report-months"></div>
+        </div>
+        <div class="panel">
+          <h3>Introducers</h3>
+          <div id="report-introducers"></div>
+        </div>
+      </div>
+      <div class="panel" id="report-ltv-panel">
+        <h3>Client lifetime value (top 20)</h3>
+        <div id="report-ltv"></div>
+      </div>
+    </section>
+
+    <!-- Data health -->
+    <section id="page-data" class="page hidden">
+      <div class="page-head">
+        <h2>Data health</h2>
+        <button class="btn" id="data-refresh">↻ Refresh</button>
+      </div>
+      <p class="panel-sub">Automatic data-quality checks — fix these to keep automations and reporting accurate.</p>
+      <div id="data-content"></div>
+    </section>
+
+    <!-- Emails -->
+    <section id="page-emails" class="page hidden">
+      <div class="page-head">
+        <h2>Email activity</h2>
+        <div class="page-tools">
+          <label style="display:flex;align-items:center;gap:6px;font-weight:500;font-size:13px;color:var(--muted);"><input type="checkbox" id="email-failed-only" style="width:auto;margin:0;"> Failed only</label>
+          <button class="btn hidden" id="run-now-btn" title="Sends every queued email for the whole firm — asks first">▶ Run automation now</button>
+          <button class="btn" id="run-sms-btn" title="Sends any queued SMS immediately">▶ Send SMS now</button>
+        </div>
+      </div>
+      <p class="panel-sub">The 8am cron job sends whatever is sitting in the email queue. Nothing composes new emails for you: rate-end reminders, review requests and fee requests are queued by you from a case, and each one sends on its own — pressing an action on a case never releases anybody else's queue. Sending the whole firm's queue early is an Owner / Administrator action, and it confirms the count and recipients first.</p>
+      <div id="email-list"></div>
+      <div class="panel" style="margin-top:20px;">
+        <h3>SMS activity</h3>
+        <div id="sms-list"></div>
+      </div>
+    </section>
+
+    <!-- Settings -->
+    <section id="page-settings" class="page hidden">
+      <h2>Settings</h2>
+      <form id="settings-form" class="panel"></form>
+      <button class="btn btn-primary" id="save-settings-btn">Save settings</button>
+      <span id="settings-saved" class="saved-msg hidden">Saved ✓</span>
+
+      <!-- B4 UI (R5-8) — every signed-in staff member's own contact/sign-off, independent of the
+           Owner-only form above (M1's self-update RLS policy covers exactly this row). Hidden
+           outright when the database predates M1 — there is no column to write to. -->
+      <div class="panel hidden" id="my-details-panel" style="margin-top:24px;">
+        <h3>My details</h3>
+        <p class="panel-sub">Used to sign off automated emails to your clients.</p>
+        <div class="settings-grid">
+          <label>Phone
+            <input id="my-phone" type="tel" placeholder="e.g. 01202 900123">
+          </label>
+          <label>Email sign-off
+            <textarea id="my-signoff" rows="3" placeholder="Your name&#10;Job title&#10;NexMoney · 01202 900123"></textarea>
+          </label>
+        </div>
+        <button type="button" class="btn btn-sm btn-primary" id="save-my-details-btn">Save my details</button>
+        <span id="my-details-saved" class="saved-msg hidden">Saved ✓</span>
+      </div>
+
+      <div class="panel" style="margin-top:24px;">
+        <h3>Introducers</h3>
+        <p class="panel-sub">Estate agents, accountants and other referrers. Give them a portal login and they can watch their referrals progress (and nothing else).</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+          <input id="intro-name" placeholder="Name / firm" style="flex:2;min-width:160px;">
+          <input id="intro-email" type="email" placeholder="Email" style="flex:2;min-width:160px;">
+          <button class="btn btn-primary" id="add-intro-btn">Add introducer</button>
+        </div>
+        <div id="intro-list"></div>
+      </div>
+
+      <div class="panel" id="team-logins-panel">
+        <h3>Team</h3>
+        <!-- R5-24 — Owner-only invite/create-login block; toggled by renderSettings(). An Admin
+             (isAdminOrOwner() but not Owner) sees the panel with this block hidden and the roster
+             below rendered read-only instead. -->
+        <div id="team-invite-block">
+          <p class="panel-sub">Owner only. Choose the tier before you send the invite — it decides what the new login may do, and the database enforces it.</p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <input id="staff-name" placeholder="Full name" style="flex:2;min-width:160px;">
+            <input id="staff-email" type="email" placeholder="Email" style="flex:2;min-width:160px;">
+            <select id="staff-role" style="flex:1;min-width:150px;">
+              <option value="adviser">Adviser</option>
+              <option value="admin">Administrator</option>
+              <option value="introducer">Introducer</option>
+            </select>
+            <select id="staff-introducer" class="hidden" style="flex:2;min-width:160px;"></select>
+            <button class="btn btn-primary" id="invite-staff-btn">Create login</button>
+          </div>
+          <p id="staff-role-hint" class="panel-sub" style="margin-top:8px;"></p>
+          <p id="invite-result" class="panel-sub" style="margin-top:10px;"></p>
+        </div>
+        <h4 style="margin:20px 0 4px;font-size:14px;">Who has access</h4>
+        <p class="panel-sub" id="team-roster-caption">Change a colleague's role here. Only an Owner can, and the last Owner can't be demoted — promote someone else first.</p>
+        <div id="team-roster"></div>
+        <p id="team-role-msg" class="panel-sub hidden" style="margin-top:8px;"></p>
+      </div>
+
+      <div class="panel hidden" id="change-history-panel">
+        <h3>Change history</h3>
+        <p class="panel-sub">Owner only. Every insert, update and delete the database recorded — including changes to Settings and to who can sign in, which belong to no client or case and so appear on no other screen. Written by the audit trigger; there is no write path through the back office, so nothing here can be edited or erased. Bank details, keys, tokens and passwords record as “(hidden)”: the log proves the value changed and deliberately never stores the value.</p>
+        <div class="ch-filters">
+          <label>What changed<select id="ch-table"></select></label>
+          <label>Who<select id="ch-actor"></select></label>
+          <label>From<input type="date" id="ch-from"></label>
+          <label>To<input type="date" id="ch-to"></label>
+          <button type="button" class="btn btn-sm" id="ch-clear">Clear filters</button>
+        </div>
+        <div id="ch-list" class="ch-list"></div>
+        <div class="ch-pager" id="ch-pager"></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- ===== Global search palette (BUILD 2c) ===== -->
+<div id="palette-backdrop" class="palette-backdrop hidden">
+  <div class="palette" role="dialog" aria-modal="true" aria-label="Search clients and cases">
+    <div class="palette-inputwrap">
+      <span class="palette-ic" aria-hidden="true">🔍</span>
+      <input id="palette-input" type="text" class="palette-input" placeholder="Search clients and cases…" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="Search clients and cases" aria-controls="palette-results">
+      <button type="button" id="palette-close-btn" class="palette-esc" aria-label="Close search"><span class="palette-esc-fine">Esc</span><span class="palette-esc-coarse">✕ Cancel</span></button>
+    </div>
+    <div id="palette-results" class="palette-results" role="listbox" aria-label="Search results"></div>
+  </div>
+</div>
+
+<!-- ===== Modal ===== -->
+<div id="modal-backdrop" class="modal-backdrop hidden">
+  <div class="modal" id="modal" role="dialog" aria-modal="true"></div>
+</div>
+
+<!-- ===== Second-layer overlay =====
+     The small captures that have to sit ON TOP of an open record modal without destroying it:
+     the required lost reason on a Not-Proceeding move, and the per-fee-type "mark fee paid"
+     dates. Same .modal styling, its own backdrop, resolved via openOverlay() in app.js. -->
+<div id="overlay-backdrop" class="modal-backdrop overlay-backdrop hidden">
+  <div class="modal overlay-modal" id="overlay-modal" role="dialog" aria-modal="true"></div>
+</div>
+
+<!-- #assistant-fab moved into the sidebar (R6-B4) — see the .sidebar-ask block above. -->
+<aside id="assistant-drawer" class="hidden">
+  <div class="ad-head"><strong>NexMoney Assistant</strong><button id="assistant-close" class="btn btn-ghost btn-sm">✕</button></div>
+  <div id="chat-log"></div>
+  <form id="chat-form">
+    <textarea id="chat-input" rows="2" placeholder="Ask anything — 'what's due today?', 'draft a chase for the Bellamys'…"></textarea>
+    <button class="btn btn-primary" id="chat-send">Send</button>
+  </form>
+</aside>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="mock-supabase.js"></script>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
+<script src="/admin/app.js"></script>
+<script>
+  // PWA install support. Register only over https (never file:// or the sandbox http harness).
+  if (location.protocol === 'https:' && 'serviceWorker' in navigator) {
+    try {
+      window.addEventListener('load', function () {
+        navigator.serviceWorker.register('/admin/sw.js', { scope: '/admin/' }).catch(function () {});
+      });
+    } catch (e) { /* non-blocking */ }
+  }
+</script>
+</body>
+</html>
