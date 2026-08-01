@@ -278,17 +278,31 @@ const sendCalls = (page) => page.evaluate(() => window.__sendCalls || []);
       eq("S3c · the bulk bar appears with the count", await page.evaluate(() => ({ hidden: document.querySelector("#prot-bulk-bar").hidden, n: document.querySelector("#prot-bulk-n").textContent })), { hidden: false, n: "6" });
 
       page.__dialogs = [];
+      /* R7-3 UPDATE — "policy taken" now REQUIRES a commission figure (see
+         askProtectionCommission): the old bulk verb wrote the status and said out loud
+         that no money was captured, which is exactly the hole R7-3 closed, because
+         "policy taken" is the only outcome that earns anything and the attach-rate
+         figures on Reports are built from it. So the flow is now prompt-then-confirm,
+         and the two assertions that asserted the OLD honesty ("commission is not
+         recorded in bulk") are replaced by assertions on the new one. */
+      page.__dialogPlan = ["1250"];        // the commission prompt; the confirm that follows is accepted
       await page.selectOption("#prot-bulk-status", "policy_taken");
       await page.waitForTimeout(1600);
+      const promptMsg = lastDialog(page, /what is the commission worth/);
+      ok("S3c · a bulk 'policy taken' asks for the commission before anything is written",
+        /Policy taken/.test(promptMsg), JSON.stringify(promptMsg));
+      ok("S3c · …and warns that ONE figure will be written to all six",
+        /written to ALL 6 selected cases/.test(promptMsg), JSON.stringify(promptMsg));
       const msg = lastDialog(page, /Set protection status/);
       ok("S3c · the confirm names the status and the count", /Set protection status to "Policy taken" on 6 cases\?/.test(msg), JSON.stringify(msg));
-      ok("S3c · …and is honest that the commission is not captured in bulk", /commission figure is not recorded in bulk/.test(msg), JSON.stringify(msg));
+      ok("S3c · …and names the commission it is about to record on every one of them", /Commission £1,250 will be recorded on every one of them/.test(msg), JSON.stringify(msg));
 
       const res = await page.evaluate(async (ids) => {
         const { data } = await window.__mockDb.from("cases").select("id,protection_status,protection_commission").in("id", ids);
-        return { statuses: (data || []).map((c) => c.protection_status), n: (data || []).length };
+        return { statuses: (data || []).map((c) => c.protection_status), commissions: (data || []).map((c) => c.protection_commission), n: (data || []).length };
       }, picked);
       eq("S3c · all six cases were updated", res.statuses, new Array(6).fill("policy_taken"));
+      eq("S3c · …each carrying the commission that was typed", res.commissions, new Array(6).fill(1250));
       const quotedAfter = await page.evaluate(() => Number(document.querySelector("#prot-kpi-quoted").textContent));
       eq("S3c · the KPI tiles refresh — six fewer quoted", quotedAfter, quotedBefore - 6);
       eq("S3c · the selection is cleared afterwards", await page.evaluate(() => document.querySelector("#prot-bulk-bar") ? document.querySelector("#prot-bulk-bar").hidden : true), true);

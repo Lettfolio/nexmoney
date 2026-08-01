@@ -146,34 +146,61 @@ const shiftMv = (mv, n) => {
         [...document.querySelectorAll("#month-kpis .kpi")].map((k) => k.querySelectorAll(".kpi-delta .delta").length));
       ok("S8 · every KPI tile carries exactly two chips (MoM · YoY)", chipCount.length === 4 && chipCount.every((n) => n === 2), JSON.stringify(chipCount));
 
-      // The same month a year earlier holds no case rows at all, so the year-on-year chip must say
-      // so rather than computing a fall of 100% from a period we simply have no history for.
-      const yoyMv = shiftMv(fx.thisMv, -12);
-      const anyPriorYear = fx.cases.some((c) => ["submitted_at", "completed_at", "created_at"]
-        .some((k) => inM(c[k], yoyMv)));
-      ok("fixture · the same month a year earlier holds no case rows at all", anyPriorYear === false, yoyMv);
-      ok("S8 · the year-on-year chip reads 'no data', not a −100% fall",
-        kpis.includes(`no data vs ${shortMonthYear(yoyMv)}`) && !kpis.includes("−100%"), JSON.stringify(kpis.slice(0, 200)));
-
-      // That empty month selected: the month before IT holds no rows either, so its chip must read
-      // "no data" and NOT a −100% collapse from a zero we never had.
-      await setMonth(page, yoyMv);
-      const oldKpis = await txt(page, "#month-kpis");
-      const chipsBy = await page.evaluate(() =>
+      /* "No data" vs "a fall to zero" — the property this block is really about.
+         R8 — the three months these chips are read in used to be hardcoded to (this month − 12)
+         and (− 24), which held only while the prior-year twin of the current month was empty.
+         Round 8's annual-review fixtures complete a case on TODAY's date one year and two years
+         back — deliberately, because that is what the anniversary touch fires on — so that month
+         is not empty any more and never can be again, whatever the calendar says. The months are
+         therefore DERIVED from the fixture rows now, exactly like every other expectation in this
+         file: one month whose year-earlier twin holds nothing (its YoY chip must say "no data"),
+         one empty month whose year-earlier twin holds something (its YoY chip must compute a real
+         fall), and one month with nothing on either side (every chip "no data"). */
+      const rowMonths = new Set();
+      fx.cases.forEach((c) => ["submitted_at", "completed_at", "created_at"]
+        .forEach((k) => { if (c[k]) rowMonths.add(String(c[k]).slice(0, 7)); }));
+      const hasRows = (mv) => rowMonths.has(mv);
+      const months = [];
+      for (let back = 0; back <= 30; back++) months.push(shiftMv(fx.thisMv, -back));
+      const chipsNow = (p) => p.evaluate(() =>
         [...document.querySelectorAll("#month-kpis .kpi")].map((k) => [...k.querySelectorAll(".kpi-delta .delta")]
           .map((d) => ({ cls: d.className, text: d.textContent.trim() }))));
-      const momChips = chipsBy.map((k) => k[0]);
-      const emptyPrevMv = shiftMv(yoyMv, -1);
-      ok(`S8 · ${yoyMv} · every month-on-month chip reads 'no data' (${emptyPrevMv} holds no rows)`,
+
+      const completionsIn = (mv) => fx.cases.filter((c) => inM(c.completed_at, mv)).length;
+      const noDataYoyMv = months.find((mv) => hasRows(mv) && !hasRows(shiftMv(mv, -12)));
+      const deadPairMv = months.find((mv) => !hasRows(mv) && !hasRows(shiftMv(mv, -1)));
+      /* "A real fall" needs a month whose year-earlier twin holds rows (so no chip may read
+         "no data") and a metric that was something then and is nothing now (so a chip must read
+         −100%). Completions are that metric: an empty month qualifies, and so does a busy month
+         with nothing completed in it yet, which is what the first days of a month look like. */
+      const fallMv = months.find((mv) => hasRows(shiftMv(mv, -12)) && completionsIn(mv) === 0 && completionsIn(shiftMv(mv, -12)) > 0);
+      ok("fixture · the book holds a month with rows whose year-earlier twin has none, an empty month whose twin has rows, and a month empty on both sides",
+        !!noDataYoyMv && !!deadPairMv && !!fallMv, JSON.stringify({ noDataYoyMv, deadPairMv, fallMv }));
+
+      // A month that HAS rows, a year after one that has none: the chip must say so rather than
+      // computing a fall of 100% from a period we simply have no history for.
+      await setMonth(page, noDataYoyMv);
+      const noDataChips = (await chipsNow(page)).map((k) => k[1]);
+      ok(`S8 · ${noDataYoyMv} · every year-on-year chip reads 'no data' (${shiftMv(noDataYoyMv, -12)} holds no rows)`,
+        noDataChips.length === 4 && noDataChips.every((c) => /delta none/.test(c.cls) && c.text === `no data vs ${shortMonthYear(shiftMv(noDataYoyMv, -12))}`),
+        JSON.stringify(noDataChips));
+
+      // An empty month whose previous month is empty too: "no data", NOT a −100% collapse from a
+      // zero we never had.
+      await setMonth(page, deadPairMv);
+      const momChips = (await chipsNow(page)).map((k) => k[0]);
+      const emptyPrevMv = shiftMv(deadPairMv, -1);
+      ok(`S8 · ${deadPairMv} · every month-on-month chip reads 'no data' (${emptyPrevMv} holds no rows)`,
         momChips.length === 4 && momChips.every((c) => /delta none/.test(c.cls) && c.text === `no data vs ${shortMonth(emptyPrevMv)}`),
         JSON.stringify(momChips));
       ok("S8 · … and not one of them reads −100%", !momChips.some((c) => c.text.includes("−100%")), JSON.stringify(momChips));
-      // The distinction has to work in BOTH directions: the same month two years back DOES hold a
-      // completion (the ERC-trap fixture), so its year-on-year chip is a real fall, not a "no data".
-      const yoyChips = chipsBy.map((k) => k[1]);
-      const twoBackMv = shiftMv(yoyMv, -12);
-      ok(`S8 · … while ${twoBackMv}, which DOES hold a completion, computes a real fall`,
-        yoyChips.some((c) => c.text.includes(`−100% vs ${shortMonthYear(twoBackMv)}`)) && yoyChips.every((c) => !/delta none/.test(c.cls)),
+      // The distinction has to work in BOTH directions: an empty month whose year-earlier twin
+      // DOES hold rows is a real fall, not a "no data".
+      await setMonth(page, fallMv);
+      const yoyChips = (await chipsNow(page)).map((k) => k[1]);
+      const fallFromMv = shiftMv(fallMv, -12);
+      ok(`S8 · … while ${fallMv}, whose year-earlier twin ${fallFromMv} holds rows, computes a real fall`,
+        yoyChips.some((c) => c.text.includes(`−100% vs ${shortMonthYear(fallFromMv)}`)) && yoyChips.every((c) => !/delta none/.test(c.cls)),
         JSON.stringify(yoyChips));
       // A month with no history on either side: every chip must be "no data".
       await setMonth(page, (fx.yr - 3) + "-05");
@@ -188,8 +215,13 @@ const shiftMv = (mv, n) => {
 
       // Adviser table: a previous-month column pair, values matching the same arithmetic.
       const advTable = await txt(page, "#month-advisers");
+      /* HARNESS RULE (never hardcode a date-relative value) — the abbreviation was
+         written as a literal "JUN", which was only true in the month the assertion
+         was authored. The header names the PREVIOUS month, so derive it from
+         fx.prevMv like every other month string in this file. */
+      const prevAbbr = shortMonth(fx.prevMv).toUpperCase();
       ok("S8 · the adviser table gains a previous-month column pair",
-        advTable.includes("COMPLETED (JUN)") && advTable.includes("COMPLETED £ (JUN)"), JSON.stringify(advTable.slice(0, 200)));
+        advTable.includes(`COMPLETED (${prevAbbr})`) && advTable.includes(`COMPLETED £ (${prevAbbr})`), JSON.stringify({ prevAbbr, head: advTable.slice(0, 200) }));
       const prevRow = await page.evaluate(() => {
         const rows = [...document.querySelectorAll("#month-advisers table tr")].slice(1);
         return rows.map((r) => [...r.children].map((td) => td.textContent.trim()));

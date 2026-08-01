@@ -223,15 +223,24 @@ async function main() {
       eq("R5-1 · cancelling sends nothing", afterCancel, sentBefore);
 
       p4.__dialogAnswer = "accept";
+      /* R8 — the promise has to be read from the run that was ACCEPTED, not from the cancelled
+         one before it. Round 8's review-request drip queues at most five a run, so a second run
+         legitimately creates the next five: comparing this run's send against the previous run's
+         confirm was only ever accidentally valid, back when one run queued the entire eligible
+         book and the run after it queued nothing. The property under test is unchanged and now
+         actually stated — what THIS confirm says is what THIS click sends. */
+      p4.__dialogs.length = 0;
       await p4.click("#run-now-btn");
       await p4.waitForTimeout(1600);
+      const acceptedMsg = (p4.__dialogs.find((d) => d.type === "confirm") || {}).message || "";
+      const promisedNow = Number((/Send ALL (\d+) queued email/.exec(acceptedMsg) || [])[1] || 0);
       const afterSend = await snapshot(p4, async () => {
         const { data } = await window.__mockDb.from("email_queue").select("id").eq("status", "queued");
         return { queued: data.length, run: window.__mock.lastEmailRun() };
       });
       ok("R5-1 · confirming does flush the queue", afterSend.queued < queuedBefore, `${queuedBefore} → ${afterSend.queued}`);
-      ok("R5-1 · the number consented to is the number sent", afterSend.run && afterSend.run.sent === promised,
-        `confirm promised ${promised}, sent ${afterSend.run && afterSend.run.sent}`);
+      ok("R5-1 · the number consented to is the number sent", afterSend.run && promisedNow > 0 && afterSend.run.sent === promisedNow,
+        `confirm promised ${promisedNow}, sent ${afterSend.run && afterSend.run.sent}`);
       ok("R5-1 · the deliberate flush is UNscoped (the cron's behaviour)", afterSend.run && afterSend.run.scoped === false, JSON.stringify(afterSend.run && afterSend.run.scoped));
 
       // Empty queue → a toast, no round trip.
