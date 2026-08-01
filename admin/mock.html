@@ -52,6 +52,10 @@
       <button data-page="clients"><span class="si">👥</span>Clients</button>
       <button data-page="import"><span class="si">📤</span>Import</button>
       <button data-page="reports"><span class="si">📊</span>Reports</button>
+      <!-- R7 — Monday money. Every figure on the page is firm-wide money, so the nav item itself
+           is Owner-only. Hidden in the markup and revealed by showApp() once the role is known, so
+           it can never flash for an adviser between the shell appearing and my_role() answering. -->
+      <button data-page="money" id="nav-money" class="hidden"><span class="si">💷</span>Monday money</button>
       <button data-page="data"><span class="si">🩺</span>Data health</button>
       <button data-page="emails"><span class="si">✉️</span>Emails</button>
       <button data-page="settings"><span class="si">⚙️</span>Settings</button>
@@ -98,7 +102,10 @@
       <div class="grid-2">
         <div class="panel dash-card dash-drawer collapsed" id="leads-panel">
           <h3 onclick="toggleDrawer(event,'leads')">📥 New website leads <span id="leads-count" class="badge red hidden"></span></h3>
-          <p class="panel-sub">Enquiries from nexmoney.co.uk land here — also flagged in My Day above. Pick the adviser on the row, then Accept to create the client + case assigned to them.</p>
+          <p class="panel-sub">Enquiries from nexmoney.co.uk land here — also flagged in My Day above. The adviser on the row is pre-picked as whoever is carrying the least right now; change it if you like, then Accept to create the client + case assigned to them.</p>
+          <!-- R7-5 — which way the list is sorted, and why. Written by loadLeads: oldest-first
+               while anything is past the 15-minute promise, newest-first when nothing is. -->
+          <p class="panel-sub" id="leads-order"></p>
           <div id="leads-list" class="dash-scroll"></div>
         </div>
         <div class="panel dash-card dash-drawer collapsed" id="today-appts-panel">
@@ -193,6 +200,18 @@
         </select>
       </div>
       <div id="prot-table"></div>
+      <!-- R7-3 — the call list. Cases that COMPLETED with no protection outcome recorded
+           (not discussed / discussed / quoted, i.e. anything that is neither a policy nor a
+           decline). It honours the Mine / Unassigned / All scope buttons above, so an adviser
+           sees their own and the Owner sees the firm's. -->
+      <div class="panel hidden" id="prot-calllist-panel" style="margin-top:18px;">
+        <div class="panel-head-row">
+          <h3>Completed, no protection outcome</h3>
+          <span class="badge amber" id="prot-calllist-count">0</span>
+        </div>
+        <p class="panel-sub" id="prot-calllist-basis"></p>
+        <div id="prot-calllist"></div>
+      </div>
     </section>
 
     <!-- Diary -->
@@ -232,6 +251,12 @@
         <button class="btn btn-primary" id="new-client-btn">+ New client</button>
       </div>
       <input type="search" id="client-search" class="search" placeholder="Search clients…">
+      <!-- R8-1 — CLIENT SEGMENTS. The chips, the definition line under them and the bulk bar are
+           all rendered by loadClients(); these are the containers, in the order they read:
+           search → which slice of the book → what that slice MEANS → what you can do to it. -->
+      <div id="client-segment" class="pipe-segment client-segment" role="tablist" aria-label="Client segment"></div>
+      <p class="panel-sub client-seg-def" id="client-seg-def"></p>
+      <div id="client-bulk"></div>
       <div id="client-list"></div>
     </section>
 
@@ -248,6 +273,31 @@
         </div>
       </div>
       <div id="import-preview"></div>
+
+      <!-- ==================================================================
+           R8-REV · REVOLUTION SYNC
+           Everything is keyed into Revolution first; this reads the weekly
+           Stonebridge client_data_export_V2 and shows, field by field, what
+           would change HERE. Three deliberate rules, stated on screen:
+             · headers are recognised by NAME, never by position
+             · nothing is written until a human confirms it, per field
+             · nothing is emailed, and no stage moves, as a side effect
+           =============================================================== -->
+      <h2 id="rev-heading">Revolution sync</h2>
+      <p class="panel-sub">The weekly <code>client_data_export_V2</code> from Stonebridge. Everything is keyed into Revolution first, so this reads <em>from</em> it: it matches each row to a client and a case you already hold, shows the field-by-field difference, and writes only what you tick. It never queues an email, and it never moves a case stage on its own.</p>
+      <div class="panel" id="rev-input-panel">
+        <div class="rev-lastsync" id="rev-lastsync">Last import: checking…</div>
+        <input type="file" id="rev-file" accept=".csv,.tsv,.txt,.xlsx,.xls">
+        <textarea id="rev-text" rows="6" placeholder="…or paste the export here — the first row must be the column headings"></textarea>
+        <div class="rev-actions">
+          <button class="btn btn-primary" id="rev-read-btn">Read the export</button>
+          <button class="btn" id="rev-reset-btn" hidden>Start again</button>
+          <span id="rev-status" class="panel-sub" style="margin:0;"></span>
+        </div>
+      </div>
+      <div id="rev-mapping"></div>
+      <div id="rev-preview"></div>
+      <div id="rev-result"></div>
     </section>
 
     <!-- Reports -->
@@ -321,6 +371,57 @@
       </div>
       <p class="report-live-note">Live snapshot — the panels below are not affected by the month selected above.</p>
       <div class="kpi-row" id="report-kpis"></div>
+
+      <!-- ==================================================================
+           R7-1 — MONEY OWED. Lives on Reports rather than in a page of its own:
+           it is a live money panel about completed cases, and every other
+           firm-wide money figure it has to reconcile against (fees earned,
+           fees banked, outstanding) is already on this page one scroll away.
+           Owner-only, same gate as the rest of Reports' money.
+           The fee_aging_60 Watchtower alerts link here (see gotoMoneyOwed).
+           ================================================================== -->
+      <div class="panel hidden" id="report-owed-panel">
+        <div class="panel-head-row">
+          <h3>Money owed — unpaid fees on completed cases</h3>
+          <div class="owed-tools">
+            <button type="button" class="btn btn-sm seg-btn seg-first scope-active" id="owed-group-lender">By lender</button>
+            <button type="button" class="btn btn-sm seg-btn seg-last" id="owed-group-adviser">By adviser</button>
+            <button type="button" class="btn btn-sm" id="owed-csv-btn" title="Download every unpaid fee line, including the proc and sols columns">⬇ CSV</button>
+          </div>
+        </div>
+        <p class="panel-sub" id="report-owed-basis"></p>
+        <div class="kpi-row" id="report-owed-buckets" style="margin:12px 0 4px;"></div>
+        <div id="report-owed-table"></div>
+      </div>
+
+      <!-- ==================================================================
+           R7-2 — RATE-END BOOK VALUE. The 24-month maturity ledger, its
+           expandable per-case rows, and the RECOVER lane (past-rate-end
+           completions with no successor case). Owner-only: it values the book.
+           ================================================================== -->
+      <div class="panel hidden" id="report-rateend-panel">
+        <h3>Rate-end book value — next 24 months</h3>
+        <p class="panel-sub" id="report-rateend-basis"></p>
+        <div id="report-rateend-table"></div>
+        <div id="report-rateend-recover" style="margin-top:18px;"></div>
+      </div>
+      <!-- ==================================================================
+           R7-5 — LEAD RESPONSE. How long the firm takes to answer a website
+           enquiry, by source and by adviser, and what share of those enquiries
+           become a case. Owner-only, the same gate as the rest of Reports'
+           firm-wide numbers. Median AND p90, because a median on its own hides
+           the tail — and the tail is where the lost enquiries are.
+           ================================================================== -->
+      <div class="panel hidden" id="report-leadresp-panel">
+        <div class="panel-head-row">
+          <h3>Lead response — how fast we answer an enquiry</h3>
+          <div class="owed-tools" id="leadresp-tools"></div>
+        </div>
+        <p class="panel-sub" id="report-leadresp-basis"></p>
+        <div class="kpi-row" id="report-leadresp-headline" style="margin:12px 0 4px;"></div>
+        <div id="report-leadresp-source"></div>
+        <div id="report-leadresp-adviser" style="margin-top:18px;"></div>
+      </div>
       <!-- S7 / R5-47 — the review-score drill-down. A score is a person; this lists them so the
            tile can be answered ("who gave us a 6?") instead of only admired. -->
       <div class="panel hidden" id="report-nps-panel">
@@ -354,6 +455,67 @@
       </div>
     </section>
 
+    <!-- ====================================================================
+         R7-4 — MONDAY MONEY. One page, read once a week, answering "where is
+         the firm's money right now". Every figure is computed client-side from
+         reads that already exist elsewhere in the app (no new RPC, no widened
+         backend), and every figure carries the same basis label the round-6
+         Reports panels use, so a number here can be reconciled against the
+         number it came from rather than argued with.
+         Owner-only — the nav item and the page body are both gated.
+         ==================================================================== -->
+    <section id="page-money" class="page hidden">
+      <div class="page-head">
+        <h2>Monday money</h2>
+        <button class="btn btn-sm" id="money-refresh">↻ Refresh</button>
+      </div>
+      <p class="panel-sub" id="money-scope"></p>
+      <div id="money-denied" class="dq-notice hidden"></div>
+      <div id="money-body">
+        <div class="panel" id="money-banked-panel">
+          <h3>Banked last week</h3>
+          <div class="kpi-row" id="money-banked" style="margin:12px 0 0;"></div>
+        </div>
+        <div class="panel" id="money-owed-panel">
+          <div class="panel-head-row">
+            <h3>Owed to you, by age</h3>
+            <button type="button" class="btn btn-sm" id="money-owed-open" title="Open the full Money owed list on Reports">Open the full list →</button>
+          </div>
+          <p class="panel-sub" id="money-owed-basis"></p>
+          <div id="money-owed"></div>
+        </div>
+        <div class="grid-2">
+          <div class="panel" id="money-rateends-panel">
+            <h3>Top rate-ends in the next 60 days</h3>
+            <p class="panel-sub" id="money-rateends-basis"></p>
+            <div id="money-rateends"></div>
+          </div>
+          <div class="panel" id="money-cold-panel">
+            <h3>Protection quotes gone cold</h3>
+            <p class="panel-sub" id="money-cold-basis"></p>
+            <div id="money-cold"></div>
+          </div>
+        </div>
+        <div class="grid-2">
+          <div class="panel" id="money-movement-panel">
+            <h3>Movement</h3>
+            <p class="panel-sub" id="money-movement-basis"></p>
+            <div id="money-movement"></div>
+          </div>
+          <div class="panel" id="money-leads-panel">
+            <h3>New leads last week, by source</h3>
+            <p class="panel-sub" id="money-leads-basis"></p>
+            <div id="money-leads"></div>
+          </div>
+        </div>
+        <div class="panel" id="money-advisers-panel">
+          <h3>Per adviser</h3>
+          <p class="panel-sub" id="money-advisers-basis"></p>
+          <div id="money-advisers"></div>
+        </div>
+      </div>
+    </section>
+
     <!-- Data health -->
     <section id="page-data" class="page hidden">
       <div class="page-head">
@@ -375,6 +537,10 @@
         </div>
       </div>
       <p class="panel-sub">The 8am cron job sends whatever is sitting in the email queue. Nothing composes new emails for you: rate-end reminders, review requests and fee requests are queued by you from a case, and each one sends on its own — pressing an action on a case never releases anybody else's queue. Sending the whole firm's queue early is an Owner / Administrator action, and it confirms the count and recipients first.</p>
+      <!-- R8-5 — copy audit for the round-8 behaviours. Both sentences describe what the backend
+           actually does, not what would be nice: the drip is a cap inside queue_comms_extras, and
+           the annual review is a TASK, so it will never appear in the list below. -->
+      <p class="panel-sub" id="emails-r8-note"><strong>Review requests are dripped:</strong> the automation queues at most <strong>5 per run</strong>, oldest completion first, so a back-catalogue of completed cases doesn't land on your review page in one afternoon. The rest wait for the next run. · <strong>Annual reviews send no email.</strong> When the annual-review setting is on, each completion anniversary creates a <em>call task</em> (“Annual review call — …”) for the case's adviser; it appears in My Day and on the case, and nothing here.</p>
       <div id="email-list"></div>
       <div class="panel" style="margin-top:20px;">
         <h3>SMS activity</h3>

@@ -1853,7 +1853,7 @@ select.task-reassign { width: auto; padding: 3px 6px; font-size: 12px; }
 .bulk-bar .btn { margin-left: auto; }
 .bulk-bar .btn + .btn, .bulk-bar-select + .btn { margin-left: 0; }
 /* keep "Clear" pinned right; earlier controls stay left */
-.bulk-bar #pipe-bulk-clear, .bulk-bar #email-bulk-clear, .bulk-bar #dh-bulk-clear, .bulk-bar #prot-bulk-clear { margin-left: auto; }
+.bulk-bar #pipe-bulk-clear, .bulk-bar #email-bulk-clear, .bulk-bar #dh-bulk-clear, .bulk-bar #prot-bulk-clear, .bulk-bar #client-bulk-clear { margin-left: auto; }
 
 /* Checkbox column in the pipeline table */
 .imp-table th.bulk-col, .imp-table td.bulk-col { width: 1%; padding-left: 10px; padding-right: 4px; text-align: center; }
@@ -1873,6 +1873,42 @@ select.task-reassign { width: auto; padding: 3px 6px; font-size: 12px; }
     box-shadow: 0 -2px 12px rgba(16,24,40,.12);
   }
   .bulk-bar-select { flex: 1 1 auto; min-height: 40px; }
+}
+
+/* ========== R8 · CLIENT TOUCH PROGRAMME (segments + bulk on the Clients page) ========== */
+/* The chip row reuses the pipeline's segmented control wholesale (.pipe-segment/.seg-btn/
+   .seg-count); the only difference is that eight segments wrap onto two lines on a laptop and
+   four on a phone, so it needs to breathe rather than sit flush against the search box. */
+.client-segment { margin-top: 12px; }
+/* The definition line. It is the one piece of copy on this page that stops a segment from being
+   a word someone has to guess the meaning of, so it is legible, not a footnote. */
+.client-seg-def {
+  margin: -4px 0 12px; max-width: 78ch; font-size: 12.5px; line-height: 1.5;
+}
+.client-seg-def.hidden { display: none; }
+.client-selall {
+  display: flex; align-items: center; gap: 8px;
+  padding: 2px 2px 10px; font-size: 13px; color: var(--muted);
+}
+.client-selall label { display: inline-flex; align-items: center; gap: 8px; margin: 0; font-weight: 500; cursor: pointer; }
+.client-selall input { width: 18px; height: 18px; margin: 0; cursor: pointer; accent-color: var(--navy); }
+.client-bulk-note { margin: -6px 0 12px; max-width: 78ch; font-size: 12px; line-height: 1.5; }
+.client-row > .client-cb { align-self: center; margin-right: 2px; }
+.client-row.is-sel { background: var(--blue-bg); }
+.client-dob-missing { color: var(--red, #b42318); font-weight: 600; }
+.client-dob-add { font-weight: 600; }
+.client-lastcontact { font-variant-numeric: tabular-nums; }
+/* Date of birth in the client form: the one field the touch programme cannot work without. */
+.client-dob-field .field-hint { display: block; margin-top: 3px; font-size: 11.5px; color: var(--muted); font-weight: 400; }
+.client-dob-flag {
+  display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px;
+  background: #fef3f2; color: #b42318; font-size: 10.5px; font-weight: 700;
+  letter-spacing: .02em; text-transform: uppercase; vertical-align: middle;
+}
+@media (max-width: 760px) {
+  .client-selall input { width: 24px; height: 24px; }
+  .client-segment { margin-top: 10px; }
+  .client-seg-def { margin-bottom: 10px; }
 }
 
 /* Team roster — each row wraps its .row-item so the "remove access" panel can open underneath it
@@ -2331,3 +2367,86 @@ tr.owed-hot > td { background: var(--red-bg); }
   #leadresp-tools { width: 100%; }
   #leadresp-tools .btn { width: 100%; min-height: 40px; }
 }
+
+/* ==========================================================================
+   R8-REV — REVOLUTION SYNC (Import tab)
+   Built on the classes the bulk import already uses (.panel / .imp-table /
+   .badge / .dq-notice) so the two halves of the page read as one screen. The
+   only genuinely new shapes are the header-mapping table (their column → our
+   field) and the per-row field diff, which is a KEEP/UPDATE decision list and
+   has to look like one: the conflict rows are the loud ones, and a row that
+   would change nothing is deliberately quiet.
+   ========================================================================== */
+.rev-lastsync { font-size: 12.5px; color: var(--muted); margin: 0 0 10px; }
+#rev-file { display: block; }
+#rev-text { width: 100%; margin-top: 12px; resize: vertical; }
+/* The HTML `hidden` attribute loses to .btn's own display rule — say it again. */
+.rev-actions .btn[hidden] { display: none; }
+.rev-lastsync .rev-caveat { font-style: italic; }
+.rev-actions { margin-top: 10px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.rev-actions .btn { min-height: 38px; }
+
+/* ---- header mapping ------------------------------------------------------ */
+.rev-map-table { border-collapse: collapse; width: 100%; font-size: 13px; }
+.rev-map-table th, .rev-map-table td { text-align: left; padding: 5px 8px; border-bottom: 1px solid #eef2f6; vertical-align: top; }
+.rev-map-table th { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 700; }
+.rev-map-table td.rev-h { font-weight: 600; white-space: nowrap; }
+.rev-map-table td.rev-eg { color: var(--muted); max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rev-map-table select { font-size: 12.5px; padding: 4px 6px; min-width: 190px; }
+.rev-map-table tr.rev-unstored td.rev-h, .rev-map-table tr.rev-ignored td.rev-h { font-weight: 500; color: var(--muted); }
+.rev-why { display: block; font-size: 11.5px; color: var(--muted); margin-top: 2px; white-space: normal; }
+.rev-map-summary { font-size: 13px; margin: 0 0 10px; }
+.rev-map-scroll { max-height: 420px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; }
+
+/* ---- row preview --------------------------------------------------------- */
+.rev-row.rev-quarantine td { background: var(--red-bg); }
+.rev-row td { vertical-align: top; }
+.rev-diff-row > td { background: #f8fafc; padding: 0 0 10px 34px; }
+.rev-diff-table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+.rev-diff-table th, .rev-diff-table td { text-align: left; padding: 4px 8px; border-bottom: 1px solid #eef2f6; white-space: normal; }
+.rev-diff-table th { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.rev-diff-table tr.rev-conflict td { background: var(--amber-bg); }
+.rev-diff-table tr.rev-same td { color: var(--muted); }
+.rev-diff-table select { font-size: 12px; padding: 3px 5px; }
+.rev-nostore { font-size: 12px; color: var(--muted); margin: 8px 0 0; }
+.rev-nostore code { font-size: 11.5px; }
+.rev-stage-move { font-size: 12.5px; margin-top: 8px; padding: 8px 10px; border-radius: 6px; background: var(--amber-bg); color: var(--amber); }
+.rev-stage-move label { display: inline-flex; gap: 6px; align-items: center; font-weight: 600; }
+.rev-stage-move input { width: auto; margin: 0; }
+.rev-apply-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 12px; }
+.rev-outcome-table td:first-child { white-space: nowrap; }
+@media (max-width: 640px) {
+  .rev-map-table select { min-width: 0; width: 100%; }
+  .rev-diff-row > td { padding-left: 8px; }
+  .rev-actions .btn, .rev-apply-bar .btn { width: 100%; }
+}
+/* The row preview holds a whole diff table inside one cell, so it is laid out
+   fixed and its cells wrap — an auto-width table would size itself to the
+   widest diff row and push the KEEP/UPDATE controls off the side of the panel,
+   which is the one control on this screen that must never be out of reach. */
+.rev-rows-scroll { overflow-x: auto; }
+.rev-rows-table { table-layout: fixed; width: 100%; min-width: 560px; }
+.rev-rows-table td, .rev-rows-table th { white-space: normal; }
+.rev-rows-table td:first-child { font-variant-numeric: tabular-nums; color: var(--muted); }
+.rev-diff-table td:nth-child(2), .rev-diff-table td:nth-child(3) { word-break: break-word; }
+/* At phone width the diff table has to compress rather than scroll sideways:
+   the KEEP/UPDATE control is the whole point of the screen and must never sit
+   off the edge of it. */
+@media (max-width: 640px) {
+  .rev-rows-table { min-width: 0; }
+  .rev-diff-table select { width: 100%; min-width: 0; }
+  .rev-diff-table th, .rev-diff-table td { padding: 4px 5px; }
+}
+.rev-diff-table select { max-width: 100%; }
+/* The diff table sits inside one cell of the row table, so it has to be told
+   its own width: left to auto-layout it sizes to its longest sentence and
+   pushes the KEEP/UPDATE control out past the edge of the phone. */
+.rev-diff-table { table-layout: fixed; }
+.rev-diff-table th:nth-child(1), .rev-diff-table td:nth-child(1) { width: 26%; }
+.rev-diff-table th:nth-child(2), .rev-diff-table td:nth-child(2) { width: 21%; }
+.rev-diff-table th:nth-child(3), .rev-diff-table td:nth-child(3) { width: 27%; }
+.rev-diff-table th:nth-child(4), .rev-diff-table td:nth-child(4) { width: 26%; }
+.rev-diff-table td { overflow-wrap: anywhere; }
+/* Badges in the row table live in narrow fixed columns — they wrap rather than
+   run over the cell beside them. */
+.rev-rows-table .badge { white-space: normal; word-break: keep-all; }

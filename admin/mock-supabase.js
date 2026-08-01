@@ -37,6 +37,34 @@
        otherwise runs queue_automated_emails + queue_comms_extras and sends all
        due; per-adviser sign-off is read from profiles.
      · fact_finds carry the log_fact_find_submit() trigger (event + note + task).
+
+   ROUND 8 (migration r8_m1 parity + the client-touch fixtures):
+     · queue_comms_extras() gains the ANNUAL REVIEW TOUCH — a completed case
+       whose completion anniversary is TODAY and which completed at least 12
+       months ago gets ONE call task ("Annual review call — <client> (completed
+       DD/MM/YYYY[, on <first address line>])"), due today, on the case's
+       adviser. No email: the anniversary of a completion is a phone call, not a
+       mailshot. Idempotent on an 11-month look-back over that case's own tasks,
+       so a re-run (or the app's queue-before-you-ask on the Emails page) can
+       never write the same call twice. Gated on the new setting
+       `annual_review_enabled`, seeded OFF exactly as production ships it. The
+       returned tally gains `annual_review_tasks`.
+     · The review-request block is now a DRIP: at most 5 per run, oldest
+       completed_at first, and only those 5 are stamped — the rest roll to the
+       next run. PARITY NOTE: the round-8 brief describes this change as landing
+       in queue_automated_emails(); in this mock (and in the production function
+       this mock was built from) the review-request block lives in
+       queue_comms_extras(), so that is where the cap is implemented. The
+       behaviour an operator or a test can observe — 5 queued and stamped per
+       run, oldest first, remainder waiting — is identical either way, because
+       process-emails runs both functions back to back on every unscoped run.
+     · Fixtures for the round-8 client-touch UI: DOBs on ~60% of the book (one
+       birthday today, one tomorrow, the rest of the book deliberately blank so
+       the "Missing DOB" segment has members), annual-review fodder at exactly
+       12 / 24 months ago today plus an 11-month control, a review-request
+       backlog of 8 (bigger than one run's cap of 5, so the rollover is
+       observable in two runs), and members for every client segment including
+       clients last contacted 8 and 14 months ago. See FIXTURES-R7.md § R8.
      edge   : process-emails, send-sms, outlook-sync, owner-digest, invite-user,
               ai-import, parse-offer, assistant
      auth   : getSession, getUser, onAuthStateChange, signInWithPassword,
@@ -56,6 +84,13 @@
   var pad2 = function (n) { return String(n).padStart(2, "0"); };
   var dateOnly = function (d) { var x = new Date(d); return x.getFullYear() + "-" + pad2(x.getMonth() + 1) + "-" + pad2(x.getDate()); };
   var iso = function (d) { return new Date(d).toISOString(); };
+  /* DD/MM/YYYY — how a date is written INSIDE a title an adviser reads, which is
+     the one place in this file a date is not an ISO string (r8_m1's annual-review
+     call task quotes the completion date the same way production does). */
+  var ukDate = function (d) {
+    var p = String(d == null ? "" : d).slice(0, 10).split("-");
+    return p.length === 3 ? p[2] + "/" + p[1] + "/" + p[0] : String(d == null ? "" : d);
+  };
   var shift = function (days, base) { return new Date((base ? new Date(base).getTime() : NOW.getTime()) + days * DAY); };
   var TODAY = dateOnly(NOW);
 
@@ -664,6 +699,12 @@
     financial_promotions_approved: "off",
     birthday_enabled: "off",
     anniversary_enabled: "off",
+    /* r8_m1 — the annual review touch, seeded OFF exactly as production ships
+       it: a firm that has never been asked must not start booking calls into
+       its advisers' task lists on the strength of a deploy. The tests that
+       exercise it turn it on themselves, which is also the only way to prove
+       the switch is really the gate. */
+    annual_review_enabled: "off",
     nps_enabled: "on",
     owner_digest: "on",
     owner_digest_email: "daniel@nexmoney.co.uk",
@@ -722,11 +763,22 @@
     ["Chloe", "Pennington", "chloe.pennington@example.com", "07700 900136", 29, "17 Cecil Avenue, Bournemouth"],
     ["Harold", "Mainwaring", "harold.mainwaring@example.com", "07700 900137", 71, "1 Undercliff Drive, Bournemouth BH1 3AQ"]
   ];
+  /* R8 — WHO HAS A DATE OF BIRTH. Every fixture client used to have one, which
+     made the "Missing DOB" segment (and the fix-it-from-the-row affordance next
+     to it) permanently empty, and made a fixture book that looks nothing like a
+     real one: a DOB is captured on a fact-find and almost never on the phone
+     call that opened the case, so a real book is full of holes.
+     ~60% carry one here. The pattern is deterministic — the same clients are
+     blank on every run — and it leaves the seed's own age spread (26 → 71)
+     intact on the ones that have it, so anything age-banded has bands to draw.
+     Clients 2 and 3 are exempt from the blanking: they are the strong duplicate
+     pair and their matching DOB is what makes that match strong. */
+  var HAS_DOB = function (i) { return i === 2 || i === 3 || (i % 5 !== 3 && i % 5 !== 4); };
   CLIENT_SEED.forEach(function (c, i) {
     DB.clients.push({
       id: nid("cl"),
       first_name: c[0], last_name: c[1], email: c[2], phone: c[3],
-      date_of_birth: dateOnly(new Date(NOW.getFullYear() - c[4], (i * 7) % 12, ((i * 5) % 27) + 1)),
+      date_of_birth: HAS_DOB(i) ? dateOnly(new Date(NOW.getFullYear() - c[4], (i * 7) % 12, ((i * 5) % 27) + 1)) : null,
       address: c[5], notes: null,
       sms_opt_out: i === 9 || i === 21, marketing_opt_out: i === 7 || i === 30,
       created_at: iso(shift(-(400 - i * 8))), updated_at: iso(shift(-(120 - (i % 90))))
@@ -1123,12 +1175,41 @@
      must stay behind its completion date. */
   (function currentMonthCohort() {
     var wanted = ["enquiry", "fact_find", "decision_in_principle", "application", "offer", "exchange", "not_proceeding"];
-    var maxBack = Math.max(2, NOW.getDate() - 2);
+    /* R8 FIXTURE REPAIR — `Math.max(2, NOW.getDate() - 2)` broke this block for the
+       first days of every month, i.e. two days in thirty:
+         · on the 1st and 2nd it back-dated the "current-month" cohort into the
+           PREVIOUS month, which is the one thing the block exists to avoid;
+         · with no room to spread, every row landed on the same instant, so two
+           cases on one property stopped being "at different times" and the M7
+           fixture assertion in r5_batch2 failed; and
+         · a row landing at exactly `NOW` ties with rows the APP inserts during a
+           test (applyInsertDefaults stamps iso(NOW) too), which makes "the three
+           most recent cases" ambiguous and cost r5_batch7 its import assertion.
+       Rows are now placed inside this month by construction, spread across the
+       part of it that has actually happened, and never within a minute of NOW. */
+    var maxBack = Math.max(0, NOW.getDate() - 1);
+    var monthStart = new Date(NOW.getFullYear(), NOW.getMonth(), 1, 0, 0, 0).getTime();
+    var latest = NOW.getTime() - 60000;
+    var elapsed = Math.max(0, NOW.getTime() - monthStart);
+    var COHORT_MAX = wanted.length * 2;
+    var seq = 0;
     wanted.forEach(function (stage, i) {
       var pool = DB.cases.filter(function (c) { return c.stage === stage; });
       pool.slice(0, 2).forEach(function (c, j) {
         var back = Math.min(maxBack, 1 + i * 2 + j);
-        c.created_at = iso(shift(-back));
+        var t = shift(-back).getTime() - (seq * 3) * 60000;
+        /* Too new, or before the month began (a month only hours old): fall back to
+           an even spread over the elapsed part of the month, which is distinct per
+           row and always in the past. */
+        if (t > latest || t < monthStart) t = monthStart + Math.round((elapsed * (seq + 1)) / (COHORT_MAX + 2));
+        var when = new Date(t);
+        seq++;
+        c.created_at = iso(when);
+        /* The submitted stages carry a submission INSIDE this month too — without
+           it, on the 1st the reports page's default month opens with no
+           applications at all and every month-on-month comparison is against
+           nothing. A case is submitted no earlier than it is created. */
+        if (["application", "offer", "exchange"].indexOf(stage) >= 0) c.submitted_at = dateOnly(when);
         if (new Date(c.updated_at) < new Date(c.created_at)) c.updated_at = c.created_at;
         if (!c.lead_source) c.lead_source = LEAD_SOURCES[(i + j) % (LEAD_SOURCES.length - 1)];
         DB.case_events.forEach(function (ev) {
@@ -1681,6 +1762,293 @@
        the same shape as Ruby's pair, on a residential rather than a rental. */
     DB.cases.filter(function (c) { return c.client_id === CL(1); })
       .forEach(function (c) { c.property_address = "4 Seafield Gardens, Poole BH14 8EQ"; });
+  })();
+
+  /* =========================================================================
+     ROUND 8 — THE CLIENT-TOUCH FIXTURES
+
+     Round 8 asks the book questions it has never been asked: whose birthday is
+     it, who completed a year ago today, who have we not actually spoken to
+     since last winter, and who is waiting behind today's five review requests.
+     Every one of those has a right answer only if the fixtures contain the
+     shape being asked about, so each block below exists for one question:
+
+       (a) BIRTHDAYS — one client whose birthday is TODAY and one whose birthday
+           is TOMORROW, so "today's birthdays" is provably not "every client
+           with a DOB", and the day boundary is a fixture rather than something
+           a test has to manufacture. (Whose DOB is missing entirely is decided
+           up in CLIENT_SEED — see HAS_DOB.)
+       (b) ANNUAL REVIEW — completions on today's MM-DD exactly 12 and 24 months
+           back (both must fire), and one 11 months back (must not: it is not
+           its anniversary today). The 24-month case also carries LAST year's
+           annual-review call task, dated 12 months ago, which is OUTSIDE the
+           11-month idempotency look-back and therefore must not suppress this
+           year's call — the boundary that decides whether the touch is annual
+           or one-off.
+       (c) SEGMENT MEMBERS — a client with no case at all, two clients whose
+           last real contact is 8 and 14 months old, and one at 5 months who
+           must NOT read as cold. Note the 8-month one's CASE was updated three
+           weeks ago: a case moving through the pipeline is not the same thing
+           as the client hearing from us, and that is precisely the distinction
+           the segment exists to draw.
+       (d) REVIEW DRIP — the eligible backlog is trimmed to 8, which is bigger
+           than one run's cap of 5 and small enough to drain in two runs. Both
+           halves matter: 8 > 5 makes the cap observable, and draining in two
+           runs keeps the Emails page's "queue is empty" state reachable.
+
+     Placement: after the multi-property block (so nothing above is renumbered)
+     and before the case_events / audit seeds (so the new cases still get a
+     stage history and a change log).
+     ======================================================================= */
+  (function roundEightFixtures() {
+    var noonOn = function (y, m, d) { return new Date(y, m, d, 12, 0, 0); };
+    /* The same calendar day, n whole years back: the MM-DD match production's
+       annual-review touch does. (29 February is the one day of the year that
+       has no anniversary in a non-leap year; JS rolls it to 1 March here and
+       the touch simply finds nothing that day, which is what the SQL does too.) */
+    var yearsAgoToday = function (n) { return noonOn(NOW.getFullYear() - n, NOW.getMonth(), NOW.getDate()); };
+    var monthsAgo = function (n) { return noonOn(NOW.getFullYear(), NOW.getMonth() - n, NOW.getDate()); };
+    var addClient = function (o) {
+      var c = {
+        id: nid("cl"), first_name: o.first, last_name: o.last, email: o.email, phone: o.phone,
+        date_of_birth: o.dob || null, address: o.address, notes: null,
+        sms_opt_out: false, marketing_opt_out: false,
+        created_at: iso(o.created), updated_at: iso(o.updated || o.created)
+      };
+      DB.clients.push(c);
+      return c.id;
+    };
+    var addNote = function (caseId, body, when, by) {
+      DB.case_notes.push({ id: nid("nt"), case_id: caseId, body: body, created_by: by || null, created_at: iso(when) });
+    };
+
+    /* ---- (a) birthdays --------------------------------------------------- */
+    /* Ruby Sinclair's birthday is today, Duncan Armitage's is tomorrow. Their
+       ages are left exactly as CLIENT_SEED set them — only the day moves, so
+       nothing that reads an age changes. */
+    var bdayFor = function (client, when) {
+      if (!client || !client.date_of_birth) return;
+      client.date_of_birth = dateOnly(new Date(Number(String(client.date_of_birth).slice(0, 4)), when.getMonth(), when.getDate()));
+    };
+    bdayFor(DB.clients[0], NOW);
+    bdayFor(DB.clients[1], shift(1));
+
+    /* FIXED dates of birth for the seven clients tests/fixtures/revolution_sample.csv
+       is written against. Everything else in these fixtures is generated relative
+       to "now", which is right — but a CSV file on disk cannot chase a moving
+       date, and "the import matched this client on name + DOB" is exactly the
+       assertion a moving DOB would quietly turn into "the import matched on name
+       alone". These seven therefore carry absolute dates, and the sample file
+       carries the same seven. (A real person's DOB does not move either; only
+       their age does, which is the point.) */
+    var FIXED_DOB = {
+      "James Whitfield": "1990-03-14",
+      "Priya Nadkarni": "1992-11-02",
+      "Sarah Ellingham": "1981-06-27",
+      "Owen Cadwallader": "1970-09-09",
+      "Nadia Hussain": "1989-01-21",
+      "Callum Brodie": "1997-12-05",
+      "Nigel Trewin": "1967-04-30"
+    };
+    DB.clients.forEach(function (c) {
+      var k = [c.first_name, c.last_name].filter(Boolean).join(" ");
+      if (FIXED_DOB[k]) c.date_of_birth = FIXED_DOB[k];
+    });
+
+    /* ---- (b) annual-review fodder ---------------------------------------- */
+    /* Three completions with addresses, so the call task can name the property
+       the review is about. Rate ends are all well outside the 6-month reminder
+       window: this block must add annual-review fodder and nothing else — no
+       retention successors, no rate-end alerts. */
+    var reviewFodder = [
+      {
+        first: "Nathaniel", last: "Fearnley", email: "nathaniel.fearnley@example.com", phone: "07700 900151",
+        age: 47, home: "26 Talbot Avenue, Bournemouth BH3 7HU",
+        property: "26 Talbot Avenue, Bournemouth BH3 7HU",
+        completed: yearsAgoToday(1), rateEndMonths: 14, adv: "p2",
+        lender: "Coventry Building Society", loan: 204000, value: 312000, proc: 1465, broker: 495
+      },
+      {
+        first: "Marguerite", last: "Vasey", email: "marguerite.vasey@example.com", phone: "07700 900152",
+        age: 61, home: "4 Beaufort Road, Southbourne, Bournemouth BH6 5AJ",
+        property: "Flat 2, 11 Wharncliffe Road, Boscombe, Bournemouth BH5 1AH",
+        completed: yearsAgoToday(2), rateEndMonths: 20, adv: "p3",
+        lender: "Skipton", loan: 143000, value: 198000, proc: 1080, broker: 595
+      },
+      {
+        /* the control: eleven months old, so today is NOT its anniversary */
+        first: "Douglas", last: "Hearn", email: "douglas.hearn@example.com", phone: "07700 900153",
+        age: 39, home: "17 Draycott Road, Bournemouth BH10 5EN",
+        property: "17 Draycott Road, Bournemouth BH10 5EN",
+        completed: monthsAgo(11), rateEndMonths: 8, adv: "p2",
+        lender: "Nationwide", loan: 176000, value: 265000, proc: 1310, broker: 0
+      }
+    ];
+    reviewFodder.forEach(function (f, i) {
+      var comp = f.completed;
+      var cid = addClient({
+        first: f.first, last: f.last, email: f.email, phone: f.phone,
+        /* one of the three has no DOB on file — the annual review call is the
+           moment an adviser would notice and fill it in */
+        dob: i === 2 ? null : dateOnly(noonOn(NOW.getFullYear() - f.age, (i * 5 + 2) % 12, 9 + i * 4)),
+        address: f.home,
+        created: noonOn(comp.getFullYear(), comp.getMonth() - 5, Math.min(28, comp.getDate())),
+        updated: comp
+      });
+      var c = mkCase({
+        client_id: cid, case_kind: i === 1 ? "buy_to_let" : "remortgage", stage: "completed",
+        property_address: f.property,
+        lender: f.lender, product_name: "5yr Fixed 75%",
+        loan_amount: f.loan, property_value: f.value, rate_percent: 4.64, term_years: 24,
+        rate_end_date: dateOnly(noonOn(NOW.getFullYear(), NOW.getMonth() + f.rateEndMonths, 18)),
+        rate_end_estimated: false,
+        submitted_at: dateOnly(noonOn(comp.getFullYear(), comp.getMonth() - 2, Math.min(28, comp.getDate()))),
+        proc_fee: f.proc, broker_fee: f.broker, sols_fee: 0,
+        fee_status: "paid",
+        fee_requested_at: iso(comp), fee_paid_at: iso(comp),
+        protection_status: i === 1 ? "policy_taken" : "declined",
+        protection_commission: i === 1 ? 690 : null,
+        gi_status: "not_applicable",
+        lead_source: i === 1 ? "Referral" : "Google",
+        assigned_to: f.adv,
+        completed_at: iso(comp),
+        created_at: iso(noonOn(comp.getFullYear(), comp.getMonth() - 5, Math.min(28, comp.getDate()))),
+        updated_at: iso(comp)
+      });
+      c.broker_fee_paid_at = f.broker > 0 ? iso(comp) : null;
+      c.proc_fee_paid_at = f.proc > 0 ? iso(comp) : null;
+      /* the review request went out a fortnight after completion, years ago —
+         these are annual-review fodder, not review-drip fodder */
+      c.review_requested_at = iso(new Date(comp.getTime() + 14 * DAY));
+      addNote(c.id, "Call: completion day — keys collected, client delighted.", comp, f.adv);
+      if (i === 1) {
+        /* LAST year's annual review call on the two-year-old case: created 12
+           months ago, i.e. OUTSIDE the 11-month idempotency window, so this
+           year's call must still be written. */
+        DB.case_tasks.push({
+          id: nid("tk"), case_id: c.id,
+          title: "Annual review call — " + f.first + " " + f.last + " (completed " +
+            ukDate(dateOnly(comp)) + ", on " + firstAddrLine(f.property) + ")",
+          due_date: dateOnly(yearsAgoToday(1)), done_at: iso(yearsAgoToday(1)),
+          created_by: null, assigned_to: f.adv, created_at: iso(yearsAgoToday(1))
+        });
+        addNote(c.id, "Call: annual review — happy on the current rate, nothing to do until the fix ends.", yearsAgoToday(1), f.adv);
+      }
+    });
+
+    /* ---- (c) segment members --------------------------------------------- */
+    /* A client with NO case at all. The "No live case" segment says "or they
+       have no case at all" and until now nothing in the book was in that state,
+       so the words were untested. An enquiry that never became a case is the
+       ordinary way it happens. */
+    addClient({
+      first: "Petra", last: "Winsloe", email: "petra.winsloe@example.com", phone: "07700 900154",
+      dob: null, address: "9 Portman Crescent, Bournemouth BH5 2AR",
+      created: shift(-210), updated: shift(-210)
+    });
+
+    /* Cold: last real contact 14 months ago. The case completed long before
+       that and nothing has been said since. */
+    var northcote = addClient({
+      first: "Alfred", last: "Northcote", email: "alfred.northcote@example.com", phone: "07700 900155",
+      dob: dateOnly(noonOn(NOW.getFullYear() - 68, 10, 3)),
+      address: "31 Gloucester Road, Boscombe, Bournemouth BH7 6JB",
+      created: monthsAgo(30), updated: monthsAgo(14)
+    });
+    var northcoteCase = mkCase({
+      client_id: northcote, case_kind: "remortgage", stage: "completed",
+      property_address: "31 Gloucester Road, Boscombe, Bournemouth BH7 6JB",
+      lender: "Leeds Building Society", product_name: "5yr Fixed 80%",
+      loan_amount: 158000, property_value: 219000, rate_percent: 4.44, term_years: 17,
+      rate_end_date: dateOnly(noonOn(NOW.getFullYear() + 2, 4, 22)), rate_end_estimated: false,
+      submitted_at: dateOnly(monthsAgo(21)),
+      proc_fee: 1185, broker_fee: 395, sols_fee: 0, fee_status: "paid",
+      fee_requested_at: iso(monthsAgo(19)), fee_paid_at: iso(monthsAgo(19)),
+      protection_status: "declined", gi_status: "not_applicable",
+      lead_source: "Referral", assigned_to: "p3",
+      completed_at: iso(monthsAgo(19)),
+      created_at: iso(monthsAgo(24)), updated_at: iso(monthsAgo(19))
+    });
+    northcoteCase.broker_fee_paid_at = northcoteCase.fee_paid_at;
+    northcoteCase.proc_fee_paid_at = northcoteCase.fee_paid_at;
+    northcoteCase.review_requested_at = iso(monthsAgo(18));
+    addNote(northcoteCase.id, "Call: courtesy call after completion — all well.", monthsAgo(14), "p3");
+
+    /* Cold WITH a live case: the case moved three weeks ago (a stage change an
+       administrator made), but the last time anyone actually spoke to her was
+       eight months back. Case activity is not client contact — this is the
+       client the segment is for. Protection is "discussed" with no outcome, so
+       she is a member of the no-protection-outcome segment too, and the stage
+       (fact find) keeps her out of the protection-gap watchtower rule, which
+       only fires at application/offer. */
+    var farrant = addClient({
+      first: "Suki", last: "Farrant", email: "suki.farrant@example.com", phone: "07700 900156",
+      dob: dateOnly(noonOn(NOW.getFullYear() - 36, 6, 28)),
+      address: "5 Rothesay Road, Bournemouth BH3 7HA",
+      created: monthsAgo(10), updated: shift(-21)
+    });
+    var farrantCase = mkCase({
+      client_id: farrant, case_kind: "remortgage", stage: "fact_find",
+      property_address: "5 Rothesay Road, Bournemouth BH3 7HA",
+      lender: null, loan_amount: 167000, property_value: 244000, term_years: 22,
+      rate_end_date: dateOnly(noonOn(NOW.getFullYear() + 1, 9, 7)), rate_end_estimated: true,
+      proc_fee: 1250, broker_fee: 495, sols_fee: 0, fee_status: "not_requested",
+      protection_status: "discussed", gi_status: "not_discussed",
+      lead_source: "Website", assigned_to: "p3",
+      created_at: iso(monthsAgo(10)), updated_at: iso(shift(-21))
+    });
+    addNote(farrantCase.id, "Call: talked through the options, sending a fact find over.", monthsAgo(8), "p3");
+
+    /* The control the cold segment is measured against: five months, which is
+       inside the six-month line and must NOT read as cold. */
+    var halloran = addClient({
+      first: "Gwen", last: "Halloran", email: "gwen.halloran@example.com", phone: "07700 900157",
+      dob: dateOnly(noonOn(NOW.getFullYear() - 52, 1, 14)),
+      address: "12 Petersfield Road, Bournemouth BH7 6QL",
+      created: monthsAgo(20), updated: monthsAgo(5)
+    });
+    var halloranCase = mkCase({
+      client_id: halloran, case_kind: "product_transfer", stage: "completed",
+      property_address: "12 Petersfield Road, Bournemouth BH7 6QL",
+      lender: "Halifax", product_name: "2yr Fixed 70%",
+      loan_amount: 121000, property_value: 196000, rate_percent: 4.89, term_years: 15,
+      /* Deliberately 18 months out, NOT inside the 6-month reminder window: this
+         client exists to be the not-quite-cold control, and a rate ending sooner
+         would quietly hand queue_automated_emails() a SECOND retention case to
+         create on every run. A fixture that changes what another block is
+         measuring is worse than no fixture at all. */
+      rate_end_date: dateOnly(noonOn(NOW.getFullYear() + 1, 11, 30)), rate_end_estimated: false,
+      submitted_at: dateOnly(monthsAgo(9)),
+      proc_fee: 605, broker_fee: 0, sols_fee: 0, fee_status: "paid",
+      fee_requested_at: iso(monthsAgo(8)), fee_paid_at: iso(monthsAgo(8)),
+      protection_status: "policy_taken", protection_commission: 540, gi_status: "not_applicable",
+      lead_source: "Repeat client", assigned_to: "p2",
+      completed_at: iso(monthsAgo(8)),
+      created_at: iso(monthsAgo(11)), updated_at: iso(monthsAgo(5))
+    });
+    halloranCase.proc_fee_paid_at = halloranCase.fee_paid_at;
+    halloranCase.review_requested_at = iso(monthsAgo(7));
+    addNote(halloranCase.id, "Call: five-month check-in — rate ends this December, diarised.", monthsAgo(5), "p2");
+
+    /* ---- (d) the review-request drip backlog ------------------------------ */
+    /* Eight eligible completions, not nineteen. The cap is 5 a run, so eight
+       proves the cap AND drains in two runs — which is what keeps the Emails
+       page's "nothing is waiting" state reachable, and keeps the firm-wide
+       flush's promise ("N will be sent") true, since a run can never create
+       rows behind the confirm it has already shown. Everything older is
+       stamped as already asked, on the date it would have gone out. */
+    (function reviewDripBacklog() {
+      var delay = Number(setting("review_delay_days", "14")) || 14;
+      var eligible = DB.cases.filter(function (c) {
+        if (c.stage !== "completed" || !c.completed_at || c.review_requested_at) return false;
+        if ((NOW - new Date(c.completed_at)) / DAY < delay) return false;
+        var cl = DB.clients.filter(function (x) { return x.id === c.client_id; })[0];
+        return !!(cl && cl.email && !cl.marketing_opt_out);
+      }).sort(function (a, b) { return a.completed_at < b.completed_at ? 1 : -1; });   /* newest first */
+      eligible.slice(8).forEach(function (c) {
+        c.review_requested_at = iso(new Date(new Date(c.completed_at).getTime() + delay * DAY));
+      });
+    })();
   })();
 
   /* --- case_events: give the live cases a stage history ------------------ */
@@ -2769,8 +3137,71 @@
     return out;
   }
   /* public.queue_comms_extras() — review requests on completed cases */
+  /* r8_m1 — the annual review touch.
+       ONE call task, on the anniversary of a completion that is at least a year
+       old, due today, owned by the adviser whose case it is. Deliberately NOT an
+       email: a year after completion the useful act is a conversation, and an
+       automated "happy anniversary" from a mortgage broker is the kind of mail
+       that gets a firm unsubscribed from. The title carries the two facts the
+       adviser needs before dialling — when they completed and which property —
+       because a task list is read out of context.
+       Idempotency is an 11-month look-back over that case's own tasks matching
+       'Annual review call — %', which is what makes the touch safe to run as
+       often as you like: the app queues before every firm-wide flush, the cron
+       queues nightly, and neither may write the same call twice. Eleven, not
+       twelve, so a run a day or two either side of the anniversary can never
+       double up, while last year's call — 12 months old — does not suppress
+       this year's. */
+  var ANNUAL_REVIEW_TITLE_PREFIX = "Annual review call — ";
+  function queueAnnualReviewTasks() {
+    var made = 0;
+    if (setting("annual_review_enabled", "off") !== "on") return made;
+    var todayMd = TODAY.slice(5);                                   /* MM-DD */
+    var twelveMonthsAgo = new Date(NOW.getFullYear(), NOW.getMonth() - 12, NOW.getDate(), 23, 59, 59);
+    var elevenMonthsAgo = new Date(NOW.getFullYear(), NOW.getMonth() - 11, NOW.getDate(), 0, 0, 0);
+    DB.cases.filter(function (c) {
+      if (c.stage !== "completed" || !c.completed_at) return false;
+      var comp = new Date(c.completed_at);
+      if (comp.getTime() > twelveMonthsAgo.getTime()) return false;  /* not yet a year old */
+      if (dateOnly(comp).slice(5) !== todayMd) return false;         /* not their anniversary */
+      /* already called (or already asked to call) within the last 11 months */
+      return !DB.case_tasks.some(function (t) {
+        return t.case_id === c.id &&
+          String(t.title || "").indexOf(ANNUAL_REVIEW_TITLE_PREFIX) === 0 &&
+          new Date(t.created_at).getTime() >= elevenMonthsAgo.getTime();
+      });
+    }).slice().forEach(function (c) {
+      var when = iso(new Date());
+      var addr = (MIGRATIONS.m7 && c.property_address) ? firstAddrLine(c.property_address) : "";
+      DB.case_tasks.push({
+        id: nid("tk"), case_id: c.id,
+        title: ANNUAL_REVIEW_TITLE_PREFIX + clientName(c.client_id) +
+          " (completed " + ukDate(c.completed_at) + (addr ? ", on " + addr : "") + ")",
+        due_date: TODAY, done_at: null,
+        /* SECURITY DEFINER: the system wrote it, not whoever happened to be
+           signed in when the queueing ran */
+        created_by: null,
+        assigned_to: c.assigned_to || null,
+        created_at: when
+      });
+      made++;
+    });
+    return made;
+  }
+  /* r8_m1 — at most five review requests per run. Before, one run asked every
+     eligible client at once: a firm switching the feature on emailed its entire
+     back book in a single evening, and a quiet month followed by a busy one sent
+     a spike that reads as spam to both the client and the mail provider. Five a
+     run, oldest completion first (the people who have been waiting longest go
+     first, and nobody is skipped forever), and ONLY those five are stamped — the
+     stamp is the queue's memory, so stamping a row that was not queued would
+     silently drop it for good. */
+  var REVIEW_REQUESTS_PER_RUN = 5;
   function queueCommsExtras() {
-    var out = { review_requests_queued: 0 };
+    var out = { review_requests_queued: 0, annual_review_tasks: 0 };
+    /* The annual review touch is a task, not an email, so it is NOT gated on the
+       review link or the NPS switch — it has its own. */
+    out.annual_review_tasks = queueAnnualReviewTasks();
     var link = setting("google_review_link") || setting("review_platform_link");
     if (!link || setting("nps_enabled", "off") !== "on") return out;
     var delay = Number(setting("review_delay_days", "14")) || 14;
@@ -2779,7 +3210,11 @@
       if ((NOW - new Date(c.completed_at)) / DAY < delay) return false;
       var cl = DB.clients.filter(function (x) { return x.id === c.client_id; })[0];
       return !!(cl && cl.email && !cl.marketing_opt_out);
-    }).slice().forEach(function (c) {
+    }).sort(function (a, b) {
+      /* oldest completion first — a stable order, so the same run twice over
+         picks the same five */
+      return a.completed_at < b.completed_at ? -1 : (a.completed_at > b.completed_at ? 1 : (a.id < b.id ? -1 : 1));
+    }).slice(0, REVIEW_REQUESTS_PER_RUN).forEach(function (c) {
       var cl = DB.clients.filter(function (x) { return x.id === c.client_id; })[0];
       var when = iso(new Date());
       queueRow({
@@ -3183,6 +3618,74 @@
         CURRENT_UID = prev;
         return clone(rows);
       }
+    };
+    /* ------------------------------------------------------------------
+       R8-REV fixture hook (APPEND-ONLY — nothing above this line changed).
+
+       tests/r8_rev.js needs a book in which the Revolution sample file
+       actually OVERLAPS what we hold: the sync's whole subject is the
+       field-level difference between our case and the network's row, and
+       the seeded cases deliberately do not line up with
+       tests/fixtures/revolution_sample.csv (FIXTURES-R7.md § 4 says as
+       much — only the names and the seven fixed DOBs are guaranteed).
+
+       These two cases are therefore NOT part of the default fixture set:
+       nothing is inserted until a test calls this, so no other suite's
+       counts, segments, reports or alerts move by a single row.
+
+         · James Whitfield — the same mortgage as row 1 of the sample
+           (Halifax, same rate end), with the gaps a real book has: no
+           ERC date, no protection outcome, no lead source, no fees. Every
+           one of those is an UPDATE-into-blank.
+         · Nigel Trewin — the same mortgage as row 11 (The Mortgage Works,
+           rate end 59 days from the file's), still sitting at Application
+           with a rate end that DISAGREES. That is the conflict row: KEEP
+           by default, and an incoming "Completed" that must not move the
+           stage on its own.
+
+       Assigned to two different advisers on purpose, so the money rule
+       (Owner always · adviser on their own case · Administrator never)
+       has both sides to test.
+       ------------------------------------------------------------------ */
+    window.__mock.seedRevolutionCases = function () {
+      var template = DB.cases[0] || {};
+      var byName = function (n) {
+        return DB.clients.filter(function (c) { return [c.first_name, c.last_name].filter(Boolean).join(" ") === n; })[0];
+      };
+      var SPEC = [
+        ["James Whitfield", {
+          lender: "Halifax", product_name: "2 Year Fixed 85% LTV", rate_type: "fixed", rate_percent: 4.44,
+          rate_end_date: "2027-05-31", erc_end_date: null, loan_amount: 186000, property_value: 242000,
+          term_years: 28, case_kind: "remortgage", stage: "completed", completed_at: iso("2024-03-22T12:00:00Z"),
+          submitted_at: "2024-02-04", fee_status: "paid", proc_fee: null, broker_fee: null,
+          protection_status: "not_discussed", protection_commission: null, gi_status: "not_discussed",
+          lead_source: null, assigned_to: "p2"
+        }],
+        ["Nigel Trewin", {
+          lender: "The Mortgage Works", product_name: "5 Year Fixed 75% LTV", rate_type: "fixed", rate_percent: 5.24,
+          rate_end_date: "2031-01-31", erc_end_date: null, loan_amount: 212000, property_value: 298000,
+          term_years: 19, case_kind: "buy_to_let", stage: "application", completed_at: null,
+          submitted_at: "2025-06-09", fee_status: "paid", proc_fee: null, broker_fee: null,
+          protection_status: "declined", protection_commission: null, gi_status: "not_discussed",
+          lead_source: "Introducer", assigned_to: "p3"
+        }]
+      ];
+      var made = [];
+      SPEC.forEach(function (s) {
+        var cl = byName(s[0]);
+        if (!cl) return;
+        var row = {};
+        Object.keys(template).forEach(function (k) { row[k] = null; });
+        row.id = nid("ca");
+        row.client_id = cl.id;
+        row.rate_end_estimated = false;
+        row.created_at = iso(shift(-200));
+        row.updated_at = iso(shift(-9));
+        Object.keys(s[1]).forEach(function (k) { row[k] = s[1][k]; });
+        DB.cases.push(row);
+        made.push(row.id);
+      });
+      return made;
     };
     return client;
   }

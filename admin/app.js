@@ -403,6 +403,9 @@ const ASSIGNABLE_ROLES = [["owner", "Owner"], ["admin", "Administrator"], ["advi
 // rendered on each re-render (so selections never act on rows the user can no longer see) and
 // cleared after a completed bulk action. Session-only; never persisted.
 let pipeSel = new Set(), emailSel = new Set(), dhSel = new Set(), protBulkSel = new Set();
+// R8-2 — the Clients page joins them. Same contract: pruned to the rows the current
+// segment + search actually shows, cleared after a completed bulk action, never persisted.
+let clientSel = new Set();
 // BUILD 4b: which Today drawers the user has manually opened/closed this session (session-only,
 // never persisted — resets on reload). Keyed by drawer id (e.g. "watchtower", "leads").
 let dashDrawerTouched = {};
@@ -2621,7 +2624,7 @@ function nav(page, push = true) {
   // B9 (R5-31) — the diary page can be showing either the month grid or the Day view; route to
   // whichever loader matches the persisted toggle so navigating back into #diary doesn't silently
   // flip it back to Month.
-  ({ dashboard: loadDashboard, pipeline: loadPipeline, protection: loadProtectionPage, diary: () => (diaryViewMode === "day" ? loadDiaryDay() : loadDiary()), clients: () => loadClients($("#client-search").value), import: () => {}, reports: loadReports, money: loadMoneyPage, data: loadDataHealth, emails: loadEmails, settings: renderSettings }[page])();
+  ({ dashboard: loadDashboard, pipeline: loadPipeline, protection: loadProtectionPage, diary: () => (diaryViewMode === "day" ? loadDiaryDay() : loadDiary()), clients: () => loadClients($("#client-search").value, { force: true }), import: () => renderRevLastSync(), reports: loadReports, money: loadMoneyPage, data: loadDataHealth, emails: loadEmails, settings: renderSettings }[page])();
 }
 
 /* ---------- Settings ---------- */
@@ -2653,8 +2656,21 @@ async function loadProfileContactFields() {
    whole user-management block absent rather than present-and-broken. Hiding them is presentation;
    the refusal is the database's. */
 const OWNER_ONLY_SETTING_KEYS = ["bank_account_name", "bank_sort_code", "bank_account_number"];
+/* R8-3 — the honest half of the birthday switch. "Birthday greetings: On" is a claim about a
+   feature; "N of M clients have a date of birth" is a claim about whether it can actually reach
+   anybody. One small read of two columns; a failure degrades to no status line rather than to a
+   made-up number. */
+async function clientDobStats() {
+  try {
+    const { data, error } = await db.from("clients").select("id,date_of_birth");
+    if (error) return null;
+    const rows = data || [];
+    return { total: rows.length, withDob: rows.filter((r) => r && r.date_of_birth).length };
+  } catch (e) { return null; }
+}
 async function renderSettings() {
   const owner = isOwner();
+  const dobStats = await clientDobStats();
   const visibleFields = owner ? SETTING_FIELDS : SETTING_FIELDS.filter(([k]) => !OWNER_ONLY_SETTING_KEYS.includes(k));
   const general = visibleFields.map(settingFieldHtml).join("") + `
     <h3 style="grid-column:1/-1;margin:10px 0 0;">Protection &amp; GI</h3>
@@ -2720,19 +2736,35 @@ async function renderSettings() {
         <option value="on" ${settings.birthday_enabled === "on" ? "selected" : ""}>On</option>
       </select>
     </label>
+    ${/* R8-3 — the switch and the data it depends on, in one sentence, with the door to fixing it. */ ""}
+    <p class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;" id="birthday-status">Birthday greetings: <strong>${settings.birthday_enabled === "on" ? "ON" : "OFF"}</strong>${
+      dobStats ? ` · <strong>${dobStats.withDob}</strong> of <strong>${dobStats.total}</strong> client${dobStats.total === 1 ? "" : "s"} have a date of birth${
+        dobStats.total > dobStats.withDob ? ` — <a href="javascript:void(0)" id="birthday-missing-link" onclick="gotoClientSegment('no_dob')">${dobStats.total - dobStats.withDob} missing →</a>` : " — none missing"}`
+      : " · client count unavailable just now"}. A greeting can only be sent to a client whose date of birth is on file.</p>
     <label>Completion anniversary emails
       <select name="anniversary_enabled">
         <option value="off" ${(settings.anniversary_enabled ?? "off") === "on" ? "" : "selected"}>Off</option>
         <option value="on" ${settings.anniversary_enabled === "on" ? "selected" : ""}>On</option>
       </select>
     </label>
+    ${/* R8-4 — ANNUAL REVIEW. Deliberately worded to say what it is NOT: it sits directly under the
+          completion-anniversary EMAIL toggle, and the two are one keystroke apart in a settings
+          list, so the copy has to make it impossible to switch this on expecting a client to hear
+          anything. It creates a task. That is the whole feature. */ ""}
+    <label>Annual review call task
+      <select name="annual_review_enabled">
+        <option value="off" ${(settings.annual_review_enabled ?? "off") === "on" ? "" : "selected"}>Off</option>
+        <option value="on" ${settings.annual_review_enabled === "on" ? "selected" : ""}>On</option>
+      </select>
+    </label>
+    <p class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;" id="annual-review-note">Creates a <strong>call task</strong> each year on the case's completion anniversary — “Annual review call — …”, assigned to that case's adviser, appearing in My Day and on the case like any other task. <strong>No email is sent to the client</strong>; the conversation is yours to have. Independent of the completion-anniversary email above, which is an email and creates no task.</p>
     <label>Review requests (NPS)
       <select name="nps_enabled">
         <option value="off" ${(settings.nps_enabled ?? "off") === "on" ? "" : "selected"}>Off</option>
         <option value="on" ${settings.nps_enabled === "on" ? "selected" : ""}>On</option>
       </select>
     </label>
-    <p class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;">Review-request emails ask for a 1–5 rating; happy clients are routed to your review link, unhappy ones create a call-back task.</p>
+    <p class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;" id="nps-note">Review-request emails ask for a 1–5 rating; happy clients are routed to your review link, unhappy ones create a call-back task. <strong>Dripped: at most 5 per automation run</strong>, oldest completion first — switching this on does not mail your whole back catalogue on day one, and the rest queue up on later runs.</p>
     <label>Review platform link (Google / Trustpilot)
       <input name="review_platform_link" type="url" value="${esc(settings.review_platform_link ?? "")}" placeholder="https://g.page/r/…">
     </label>
@@ -7367,32 +7399,405 @@ async function queueEmail(caseId, clientId, type, c, ev) {
   }
 }
 
-/* ---------- Clients ---------- */
-async function loadClients(filter = "") {
-  const { data: clients, error } = await db.from("clients").select("*, cases(id,stage)").order("last_name");
-  if (error) { renderLoadError("#client-list", error, () => loadClients(filter)); return; }
+/* ---------- Clients ----------
+   R8-1 — THE CLIENT TOUCH PROGRAMME. Round 7 gave the firm a money book; this gives it a
+   people book. The Clients page was a flat alphabetical list with a name search: fine for
+   "where is Mrs Okafor", useless for "who have we not spoken to since January", which is the
+   question that actually loses a client.
+
+   Seven segments, all computed in the browser from ONE clients read (with the cases embedded)
+   plus FOUR whole-table comms reads issued in parallel — a constant five queries for the whole
+   page, no matter how many clients there are. Nothing here loops a query per client, and
+   nothing here is re-fetched while you type: the fetch is cached and the search box re-renders
+   from the cache (which is also why typing in it is now instant rather than a round trip a
+   keystroke).
+
+   The last-contact definition is the one that could quietly mean anything, so it is stated on
+   screen, in the same words as the code below, whenever that segment is selected. */
+const CLIENT_SEG_CONTACT_MONTHS = 6;
+/* The three rate-end years are generated, not hardcoded: "2026/2027/2028" is only right until
+   January, and a segment that silently stops matching anything is worse than no segment. The
+   window is this calendar year + the two after it, which is what a rate-end sweep looks at. */
+function clientRateYears() {
+  const y = new Date().getFullYear();
+  return [y, y + 1, y + 2];
+}
+/* The date a client must have been touched SINCE to count as contacted. Calendar months, not
+   183 days, so the line the screen draws is the line a human would draw. */
+function clientContactCutoff(now) {
+  const d = new Date(now || Date.now());
+  d.setMonth(d.getMonth() - CLIENT_SEG_CONTACT_MONTHS);
+  return d;
+}
+const CLIENT_LIVE = (s) => s !== "completed" && s !== "not_proceeding";
+function clientSegments() {
+  const [y1, y2, y3] = clientRateYears();
+  return [
+    ["all", "All", "Every client on the book."],
+    ["no_live_case", "No live case", "Clients with no case at a live stage — every case is Completed or Not proceeding, or they have no case at all. These are the people nothing in the pipeline will remind you about."],
+    ["rate_" + y1, `Rate ends ${y1}`, `Clients with at least one case whose rate end date falls in ${y1}.`],
+    ["rate_" + y2, `Rate ends ${y2}`, `Clients with at least one case whose rate end date falls in ${y2}.`],
+    ["rate_" + y3, `Rate ends ${y3}`, `Clients with at least one case whose rate end date falls in ${y3}.`],
+    ["no_protection", "No protection outcome", "Clients with at least one LIVE case whose protection status is still “not discussed” or “discussed” — i.e. the conversation has no outcome recorded either way. A blank status counts as not discussed, exactly as it does everywhere else in the app."],
+    ["no_dob", "Missing DOB", "Clients with no date of birth on file. Birthday greetings can never reach them, and the age-based questions on a fact-find start blank."],
+    ["cold", `Not contacted ${CLIENT_SEG_CONTACT_MONTHS}+ months`, ""],  // definition filled in below — it moves with the date
+  ];
+}
+function clientColdDefinition(cutoff) {
+  return `Last contact = the most recent of: a note on any of their cases · an email we SENT them (a queued or failed one has not reached them, so it does not count) · an appointment that has already started · a task completed on one of their cases. This segment is every client whose last contact is before ${fmtD(localDateStr(cutoff))}, plus every client with no contact of any kind on record.`;
+}
+let clientSegment = "all";
+/* One fetch, cached for the life of the page visit. force:true re-reads (page navigation, a
+   save, a completed bulk action); a keystroke in the search box does not. */
+let clientCache = null;
+async function loadClientData() {
+  const [clientsRes, notesRes, emailsRes, apptRes, tasksRes] = await Promise.all([
+    db.from("clients").select("*, cases(id,stage,rate_end_date,protection_status,broker_fee,assigned_to,completed_at,updated_at,created_at)").order("last_name"),
+    db.from("case_notes").select("case_id,created_at"),
+    db.from("email_queue").select("client_id,case_id,status,sent_at"),
+    db.from("appointments").select("client_id,case_id,starts_at"),
+    db.from("case_tasks").select("case_id,done_at"),
+  ]);
+  if (clientsRes.error) return { error: clientsRes.error };
+  const clients = clientsRes.data || [];
+  // case_id → client_id, built once from the rows we already hold. This is what lets the four
+  // comms reads stay whole-table: nothing has to be re-queried per client to attribute a row.
+  const caseOwner = new Map();
+  clients.forEach((c) => (c.cases || []).forEach((cs) => caseOwner.set(cs.id, c.id)));
+  const nowMs = Date.now();
+  const last = new Map();           // client_id → { at:ISO, what:string }
+  const bump = (clientId, at, what) => {
+    if (!clientId || !at) return;
+    const cur = last.get(clientId);
+    if (!cur || String(at) > String(cur.at)) last.set(clientId, { at: String(at), what });
+  };
+  (notesRes.data || []).forEach((n) => bump(caseOwner.get(n.case_id), n.created_at, "note"));
+  // Only a row that actually WENT. queued/failed/cancelled are things we meant to say, not things
+  // the client has heard, and counting them would let a bounced email hide a silent client.
+  (emailsRes.data || []).forEach((e) => {
+    if (e.status !== "sent" || !e.sent_at) return;
+    bump(e.client_id || caseOwner.get(e.case_id), e.sent_at, "email sent");
+  });
+  // An appointment in the diary for next week has not happened yet.
+  (apptRes.data || []).forEach((a) => {
+    if (!a.starts_at || new Date(a.starts_at).getTime() > nowMs) return;
+    bump(a.client_id || caseOwner.get(a.case_id), a.starts_at, "appointment");
+  });
+  (tasksRes.data || []).forEach((t) => { if (t.done_at) bump(caseOwner.get(t.case_id), t.done_at, "task done"); });
+  return { clients, last };
+}
+function clientInSegment(c, seg, ctx) {
+  if (seg === "all") return true;
+  const cases = c.cases || [];
+  if (seg === "no_live_case") return !cases.some((x) => CLIENT_LIVE(x.stage));
+  if (seg.startsWith("rate_")) {
+    const y = seg.slice(5);
+    return cases.some((x) => x.rate_end_date && String(x.rate_end_date).slice(0, 4) === y);
+  }
+  if (seg === "no_protection") return cases.some((x) => CLIENT_LIVE(x.stage) && ["not_discussed", "discussed"].includes(x.protection_status || "not_discussed"));
+  if (seg === "no_dob") return !c.date_of_birth;
+  if (seg === "cold") {
+    const lc = ctx.last.get(c.id);
+    return !lc || new Date(lc.at).getTime() < ctx.cutoffMs;
+  }
+  return true;
+}
+function clientTextMatch(c, f, fPhone, phoneSearch) {
+  if (!f) return true;
+  if (((c.first_name || "") + " " + (c.last_name || "") + " " + (c.email || "")).toLowerCase().includes(f)) return true;
+  return phoneSearch && c.phone && normPhone(c.phone).includes(fPhone);
+}
+window.gotoClientSegment = function (seg) {
+  clientSegment = seg;
+  const box = $("#client-search");
+  if (box) box.value = "";                  // a segment reached from another page means the whole segment
+  nav("clients");
+};
+async function loadClients(filter = "", opts = {}) {
+  if (opts.force || !clientCache) {
+    const res = await loadClientData();
+    if (res.error) { renderLoadError("#client-list", res.error, () => loadClients(filter, { force: true })); return; }
+    clientCache = res;
+  }
+  const { clients, last } = clientCache;
+  const cutoff = clientContactCutoff();
+  const ctx = { last, cutoffMs: cutoff.getTime() };
   const f = filter.trim().toLowerCase();
   const fPhone = normPhone(filter);
   const phoneSearch = /\d/.test(fPhone);
-  const list = (clients || []).filter((c) => {
-    if (!f) return true;
-    if ((c.first_name + " " + c.last_name + " " + (c.email || "")).toLowerCase().includes(f)) return true;
-    return phoneSearch && c.phone && normPhone(c.phone).includes(fPhone);
-  });
-  const emptyMsg = f ? `No matches for “${esc(filter.trim())}”.` : "No clients yet — add your first one.";
+  // Search first, segment second — so the chip counts describe what the CURRENT search would
+  // give you if you pressed that chip, the same contract the pipeline's segment counts have had
+  // since BUILD 5a. (Search a name and every count re-reads against that name.)
+  const searched = clients.filter((c) => clientTextMatch(c, f, fPhone, phoneSearch));
+  const segs = clientSegments();
+  if (!segs.some(([k]) => k === clientSegment)) clientSegment = "all";   // year rolled over mid-session
+  const list = searched.filter((c) => clientInSegment(c, clientSegment, ctx));
+  renderClientSegments(searched, ctx, segs, cutoff);
+  // Prune the selection to what this segment + search actually shows, so a bulk verb can never
+  // act on a client scrolled out of the operator's view two filters ago.
+  const visible = new Set(list.map((c) => c.id));
+  [...clientSel].forEach((id) => { if (!visible.has(id)) clientSel.delete(id); });
+  renderClientBulkBar(list);
+  const emptyMsg = f && clientSegment !== "all"
+    ? `No clients match “${esc(filter.trim())}” in this segment.`
+    : f ? `No matches for “${esc(filter.trim())}”.`
+    : clientSegment !== "all" ? "No clients in this segment — nothing to do here."
+    : "No clients yet — add your first one.";
+  const showDob = clientSegment === "no_dob";
   $("#client-list").innerHTML = `<div class="panel">` + (list.length ? list.map((c) => {
-    const active = c.cases.filter((x) => !["completed", "not_proceeding"].includes(x.stage)).length;
-    return `<div class="row-item">
+    const cases = c.cases || [];
+    const active = cases.filter((x) => CLIENT_LIVE(x.stage)).length;
+    const lc = last.get(c.id);
+    return `<div class="row-item client-row${clientSel.has(c.id) ? " is-sel" : ""}" data-client="${esc(c.id)}">
+      <input type="checkbox" class="bulk-cb client-cb" data-id="${esc(c.id)}" aria-label="Select ${esc([c.first_name, c.last_name].filter(Boolean).join(" "))}"${clientSel.has(c.id) ? " checked" : ""}>
       <div class="row-main">
         <div class="t" onclick="openClient('${c.id}')">${esc([c.last_name, c.first_name].filter(Boolean).join(", "))}</div>
-        <div class="s">${c.email ? mailLink(c.email) : "no email"}${c.phone ? " · " + telLink(c.phone) : ""}</div>
+        <div class="s">${c.email ? mailLink(c.email) : "no email"}${c.phone ? " · " + telLink(c.phone) : ""}${
+          /* R8-3 — the DOB is on the ROW in the segment that exists because it is missing, with the
+             one-click way to put it right. Everywhere else it stays off the row: a list of birthdays
+             is not what the other six segments are for. */
+          showDob ? ` · <span class="client-dob-missing">DOB: —</span> <a href="javascript:void(0)" class="client-dob-add" onclick="event.stopPropagation();openClient('${c.id}','dob')">add</a>` : ""}${
+          clientSegment === "cold" ? ` · <span class="client-lastcontact">${lc ? `last contact ${fmtD(String(lc.at).slice(0, 10))} (${esc(lc.what)})` : "no contact on record"}</span>` : ""}</div>
       </div>
-      <span class="badge ${active ? "blue" : "grey"}">${c.cases.length} case${c.cases.length === 1 ? "" : "s"}${active ? ` (${active} active)` : ""}</span>
+      <span class="badge ${active ? "blue" : "grey"}">${cases.length} case${cases.length === 1 ? "" : "s"}${active ? ` (${active} active)` : ""}</span>
     </div>`;
   }).join("") : `<div class="empty">${emptyMsg}</div>`) + `</div>`;
+  document.querySelectorAll("#client-list .client-cb").forEach((cb) => (cb.onchange = () => {
+    if (cb.checked) clientSel.add(cb.dataset.id); else clientSel.delete(cb.dataset.id);
+    const row = cb.closest(".client-row"); if (row) row.classList.toggle("is-sel", cb.checked);
+    renderClientBulkBar(list);
+  }));
+}
+function renderClientSegments(searched, ctx, segs, cutoff) {
+  const wrap = $("#client-segment");
+  if (!wrap) return;
+  wrap.innerHTML = segs.map(([k, l]) => {
+    const n = searched.filter((c) => clientInSegment(c, k, ctx)).length;
+    return `<button class="seg-btn${clientSegment === k ? " active" : ""}" role="tab" aria-selected="${clientSegment === k}" data-seg="${esc(k)}">${esc(l)} <span class="seg-count">${n}</span></button>`;
+  }).join("");
+  wrap.querySelectorAll(".seg-btn").forEach((b) => (b.onclick = () => {
+    if (b.dataset.seg === clientSegment) return;
+    clientSegment = b.dataset.seg;
+    loadClients($("#client-search").value);
+  }));
+  const def = $("#client-seg-def");
+  if (def) {
+    const row = segs.find(([k]) => k === clientSegment);
+    const text = clientSegment === "cold" ? clientColdDefinition(cutoff) : (row ? row[2] : "");
+    def.innerHTML = text ? esc(text) : "";
+    def.classList.toggle("hidden", !text);
+  }
+}
+function renderClientBulkBar(list) {
+  const wrap = $("#client-bulk");
+  if (!wrap) return;
+  const n = clientSel.size;
+  wrap.innerHTML = `
+    <div class="client-selall">
+      <label><input type="checkbox" id="client-bulk-all" aria-label="Select every client in this view"${n && n === list.length ? " checked" : ""}> Select all ${list.length} shown</label>
+    </div>
+    <div class="bulk-bar" id="client-bulk-bar"${n ? "" : " hidden"}>
+      <span class="bulk-bar-count"><strong id="client-bulk-n">${n}</strong> selected</span>
+      <button type="button" class="btn btn-sm" id="client-bulk-task" title="One task per selected client, on that client's case. Says which clients it can and cannot place a task for before it writes anything.">＋ Add task…</button>
+      <button type="button" class="btn btn-sm" id="client-bulk-csv" title="Download the selected clients as a spreadsheet.">⬇ Export CSV</button>
+      <button type="button" class="btn btn-sm" id="client-bulk-clear">Clear</button>
+    </div>
+    ${/* R8-2 — said where someone would look for the verb that isn't here, rather than only in a
+          code comment: the absence is a decision, and an unexplained absence reads as an oversight. */ ""}
+    ${n ? `<p class="panel-sub client-bulk-note" id="client-bulk-note">No bulk email yet: every email this app sends is composed from a <em>case</em> (that is where the template, the subject and the adviser sign-off come from), and a client-level message has none of those. It needs a template decision first.</p>` : ""}`;
+  const all = $("#client-bulk-all");
+  if (all) {
+    all.indeterminate = n > 0 && n < list.length;
+    all.onchange = () => {
+      if (all.checked) list.forEach((c) => clientSel.add(c.id)); else clientSel.clear();
+      loadClients($("#client-search").value);
+    };
+  }
+  const clearBtn = $("#client-bulk-clear");
+  if (clearBtn) clearBtn.onclick = () => { clientSel.clear(); loadClients($("#client-search").value); };
+  const taskBtn = $("#client-bulk-task");
+  if (taskBtn) taskBtn.onclick = () => bulkClientAddTask();
+  const csvBtn = $("#client-bulk-csv");
+  if (csvBtn) csvBtn.onclick = () => bulkClientExportCsv();
 }
 $("#client-search").addEventListener("input", (e) => loadClients(e.target.value));
 $("#new-client-btn").addEventListener("click", () => openClient(null));
+
+/* ---------- R8-2 · BULK ACTIONS ON THE FILTERED SET ----------------------------------------
+   TASK TARGETING, HONESTLY. case_tasks.case_id is NOT NULL — the schema has no client-level
+   task row, exactly as R6FIX-1 found the schema has no client-level NOTE row. That fix ended
+   the silent default in the note composer ("every case is offered, and a target is pre-picked
+   ONLY where there is nothing to get wrong"), and this verb inherits the rule rather than
+   quietly reinventing the guess a hundred rows at a time:
+
+     · one case on the client                  → that case
+     · several cases, exactly one of them LIVE → that live case
+     · several, none live / several live       → NOT guessed. The client is named and skipped.
+     · no cases at all                         → nothing to attach to. Named and skipped.
+
+   The confirm dialog shows those four numbers BEFORE anything is written, so "Add 40 tasks"
+   never turns out to have meant 23. A skipped client is not a failure — it is a client whose
+   case you have to choose yourself, so they are named and the selection is kept. */
+function clientTaskTarget(c) {
+  const cases = (c.cases || []).slice();
+  if (!cases.length) return { why: "no_case" };
+  if (cases.length === 1) return { caseId: cases[0].id, assignedTo: cases[0].assigned_to || null };
+  const live = cases.filter((x) => CLIENT_LIVE(x.stage));
+  if (live.length === 1) return { caseId: live[0].id, assignedTo: live[0].assigned_to || null };
+  return { why: live.length > 1 ? "many_live" : "no_live" };
+}
+function clientDisplayName(c) {
+  return [c.first_name, c.last_name].filter(Boolean).join(" ") || c.email || c.phone || "(no name)";
+}
+const namedList = (names) => names.slice(0, 4).join(", ") + (names.length > 4 ? ` and ${names.length - 4} more` : "");
+function promptClientBulkTask(plan) {
+  const today = localDateStr(new Date());
+  const n = plan.targets.length;
+  const skipLine = (label, arr) => arr.length ? `<li><strong>${arr.length}</strong> ${label} — ${esc(namedList(arr.map((x) => x.name)))}</li>` : "";
+  const html = `
+    <h3>Add a task to ${n} client${n === 1 ? "" : "s"}</h3>
+    <p class="panel-sub">A task hangs off a case, so each one is filed on the client's case: their only case, or their only live case where they have several. Nothing is guessed — a client with more than one live case (or none) is listed below and left for you to file by hand.</p>
+    ${plan.skipped.length ? `<div class="dq-notice" id="btaskc-skip"><strong>${plan.skipped.length} of the ${plan.total} selected will be skipped:</strong>
+      <ul style="margin:6px 0 0;padding-left:18px;">
+        ${skipLine("have several live cases — which one is this about?", plan.byWhy.many_live)}
+        ${skipLine("have several cases and none of them live", plan.byWhy.no_live)}
+        ${skipLine("have no case at all to attach a task to", plan.byWhy.no_case)}
+      </ul>
+      <p style="margin:6px 0 0;">They stay selected, so you can open them one at a time.</p></div>` : ""}
+    <label>Task<input id="btaskc-title" type="text" placeholder="e.g. Book the annual review call" maxlength="120"></label>
+    <div class="due-chips" style="margin-top:10px;">
+      <span class="due-chips-lbl">Due:</span>
+      <button type="button" class="btn btn-sm btaskc-chip" data-days="0">Today</button>
+      <button type="button" class="btn btn-sm btaskc-chip" data-days="3">+3 days</button>
+      <button type="button" class="btn btn-sm btaskc-chip" data-days="7">+1 week</button>
+    </div>
+    <label style="margin-top:10px;">Date<input type="date" id="btaskc-due" value="${today}"></label>
+    <label style="margin-top:10px;">Assign to
+      <select id="btaskc-who"><option value="" selected>That case's adviser (you, where nobody is on it)</option>${
+        /* the same roster the pipeline's bulk "Assign to…" offers, minus its placeholder — the
+           default above IS the placeholder here, and it is a real, meaningful choice. */
+        (authUid && TEAM.some((p) => p.id === authUid) ? `<option value="${esc(authUid)}">Me (${esc(staffName(authUid))})</option>` : "")
+        + TEAM.filter((p) => p.id !== authUid).map((p) => `<option value="${esc(p.id)}">${esc(staffName(p.id))}</option>`).join("")}</select>
+    </label>
+    <div class="ovl-err" id="btaskc-err"></div>
+    <div class="modal-actions">
+      <div></div>
+      <div class="right">
+        <button type="button" class="btn" id="btaskc-cancel">Cancel</button>
+        <button type="button" class="btn btn-primary" id="btaskc-ok"${n ? "" : " disabled"}>Add ${n} task${n === 1 ? "" : "s"}</button>
+      </div>
+    </div>`;
+  return openOverlay(html, (finish, box) => {
+    const dateInput = box.querySelector("#btaskc-due");
+    box.querySelectorAll(".btaskc-chip").forEach((b) => (b.onclick = () => {
+      const d = new Date();
+      d.setDate(d.getDate() + Number(b.dataset.days || 0));
+      dateInput.value = localDateStr(d);
+    }));
+    box.querySelector("#btaskc-cancel").onclick = () => finish(null);
+    box.querySelector("#btaskc-ok").onclick = () => {
+      const title = (box.querySelector("#btaskc-title").value || "").trim();
+      if (!title) { box.querySelector("#btaskc-err").textContent = "Give the task a title."; box.querySelector("#btaskc-title").focus(); return; }
+      finish({ title, due: dateInput.value || null, who: box.querySelector("#btaskc-who").value || "" });
+    };
+  });
+}
+let clientBulkBusy = false;
+function setClientBulkBusy(on) {
+  clientBulkBusy = on;
+  ["#client-bulk-task", "#client-bulk-csv", "#client-bulk-clear"].forEach((s) => { const el = $(s); if (el) el.disabled = on; });
+}
+function selectedClientRows() {
+  const rows = ((clientCache && clientCache.clients) || []).filter((c) => clientSel.has(c.id));
+  return rows;
+}
+async function bulkClientAddTask() {
+  if (clientBulkBusy) return;
+  const rows = selectedClientRows();
+  if (!rows.length) return;
+  setClientBulkBusy(true);
+  try { await bulkClientAddTaskRun(rows); } finally { setClientBulkBusy(false); }
+}
+async function bulkClientAddTaskRun(rows) {
+  const byWhy = { many_live: [], no_live: [], no_case: [] };
+  const targets = [];
+  rows.forEach((c) => {
+    const t = clientTaskTarget(c);
+    const name = clientDisplayName(c);
+    if (t.why) byWhy[t.why].push({ id: c.id, name });
+    else targets.push({ id: c.id, name, caseId: t.caseId, assignedTo: t.assignedTo });
+  });
+  const skipped = byWhy.many_live.concat(byWhy.no_live, byWhy.no_case);
+  const picked = await promptClientBulkTask({ targets, skipped, byWhy, total: rows.length });
+  if (!picked) return;
+  let ok = 0;
+  const failed = [];
+  for (const t of targets) {
+    const { error } = await db.from("case_tasks").insert({
+      case_id: t.caseId, title: picked.title, due_date: picked.due,
+      assigned_to: picked.who || t.assignedTo || (ME && ME.id) || null,
+      created_by: (ME && ME.id) || null,
+    });
+    if (error) failed.push(t); else ok++;
+  }
+  let msg = `${ok} task${ok === 1 ? "" : "s"} added (“${picked.title}”)${picked.due ? " · due " + fmtD(picked.due) : ""}`;
+  if (skipped.length) msg += ` · ${skipped.length} skipped (no single case to file on) — ${namedList(skipped.map((s) => s.name))}`;
+  if (failed.length) msg += ` · ${failed.length} error${failed.length === 1 ? "" : "s"} — no task for ${namedList(failed.map((f) => f.name))}`;
+  toast(msg);
+  // Everything that got a task is deselected; everything that did NOT stays selected, so pressing
+  // the verb again retries exactly the leftovers instead of duplicating the successes.
+  targets.filter((t) => !failed.includes(t)).forEach((t) => clientSel.delete(t.id));
+  await loadClients($("#client-search").value, { force: true });
+}
+/* CSV over the SELECTED clients — the same money rule the pipeline export has carried since
+   R5-F1, reusing csvShowsFee() itself rather than a second copy of the reasoning: the Owner
+   always sees the fee column; an adviser sees it only when every case in the file is their own;
+   an Administrator never does. Presentation, not a control — the caveat on csvShowsFee applies
+   here verbatim. */
+function bulkClientExportCsv() {
+  const rows = selectedClientRows();
+  if (!rows.length) return;
+  const allCases = rows.reduce((a, c) => a.concat(c.cases || []), []);
+  const money = csvShowsFee(allCases);
+  const last = (clientCache && clientCache.last) || new Map();
+  const q2 = (v) => {
+    let s = String(v ?? "");
+    if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;      // spreadsheet formula injection, same as exportCsv
+    return `"${s.replace(/"/g, '""')}"`;
+  };
+  const head = ["Client", "Email", "Phone", "Date of birth", "Cases", "Live cases", "Next rate end", "Protection outstanding", "Last contact", "Advisers", "Broker fees total"]
+    .filter((h) => money || h !== "Broker fees total");
+  const line = (c) => {
+    const cases = c.cases || [];
+    const live = cases.filter((x) => CLIENT_LIVE(x.stage));
+    const rateEnds = cases.map((x) => x.rate_end_date).filter(Boolean).sort();
+    const advisers = [...new Set(cases.map((x) => x.assigned_to).filter(Boolean))].map((id) => staffName(id)).filter((n) => n && n !== "—");
+    const lc = last.get(c.id);
+    return [
+      clientDisplayName(c), c.email || "", c.phone || "", c.date_of_birth || "",
+      cases.length, live.length, rateEnds[0] || "",
+      live.some((x) => ["not_discussed", "discussed"].includes(x.protection_status || "not_discussed")) ? "yes" : "no",
+      lc ? String(lc.at).slice(0, 10) : "",
+      advisers.join(" / "),
+      money ? cases.reduce((s, x) => s + Number(x.broker_fee || 0), 0) : null,
+    ].filter((v) => v !== null);
+  };
+  const lines = [head.map(q2).join(",")].concat(rows.map((c) => line(c).map(q2).join(",")));
+  const blob = new Blob(["﻿" + lines.join("\n")], { type: "text/csv" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `clients-${clientSegment}-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  toast(`${rows.length} client${rows.length === 1 ? "" : "s"} exported${money ? "" : " · broker fees are not in this file"}`);
+}
+/* NO BULK EMAIL THIS ROUND — deliberately.
+   Every email this app sends is composed server-side from a CASE (process-emails picks the
+   template by email_type and signs it off with that case's adviser), and email_queue rows carry
+   a case_id for exactly that reason. A client-level send has no case, so it has no template, no
+   subject and no signatory — and the one thing worse than no bulk email is forty clients each
+   receiving a mortgage email about a case nobody chose. That is a template decision (what does a
+   client-level "touch" email actually SAY?) plus a backend change, and neither belongs in a
+   round that promised not to touch the database. Revisit when there is a client-level template. */
 
 /* ---------- Unified client timeline (SP3b) ----------
    A chronological, newest-first merge across ALL a client's cases plus client-level items.
@@ -8115,9 +8520,15 @@ window.openClient = async function (id, focus, attempted, presetCaseId) {
       <form id="client-form" class="form-grid">
       <label>First name<input name="first_name" required value="${esc(c.first_name)}"></label>
       <label>Last name<input name="last_name" required value="${esc(c.last_name)}"></label>
+      ${/* R8-3 — DOB moves up next to the name and gets a label that says what it is FOR. It sat
+            sixth, between the phone number and two opt-out selects, and was blank on a third of the
+            book: birthday greetings can't fire without it, the annual-review conversation has no
+            age to hang off, and a fact-find starts with a hole in it. When the row's "add" link
+            opened this form the field was below the fold of the collapsed section. */ ""}
+      <label class="client-dob-field">Date of birth${c.date_of_birth ? "" : ' <span class="client-dob-flag">missing</span>'}<input name="date_of_birth" type="date" value="${c.date_of_birth ?? ""}">
+        <span class="field-hint">Drives birthday greetings; blank means this client can never receive one.</span></label>
       <label>Email<input name="email" type="email" value="${esc(c.email)}"></label>
       <label>Phone<input name="phone" value="${esc(c.phone)}"></label>
-      <label>Date of birth<input name="date_of_birth" type="date" value="${c.date_of_birth ?? ""}"></label>
       <label>SMS opt-out
         <select name="sms_opt_out">
           <option value="0" ${c.sms_opt_out ? "" : "selected"}>No</option>
@@ -8151,7 +8562,10 @@ window.openClient = async function (id, focus, attempted, presetCaseId) {
   // to run after it.
   if (focus) {
     const det = $("#modal .client-details"); if (det) det.open = true;
-    const fld = $(`#client-form [name="${focus === "phone" ? "phone" : "email"}"]`);
+    // R8-3 — "dob" joins phone/email as a focus target: the Missing-DOB segment's "add" link is a
+    // deep link to this one field, and landing on the form with the cursor anywhere else would make
+    // the operator hunt for the thing they just clicked.
+    const fld = $(`#client-form [name="${focus === "phone" ? "phone" : focus === "dob" ? "date_of_birth" : "email"}"]`);
     if (fld) {
       try { fld.scrollIntoView({ block: "center" }); } catch (e) { /* older browsers */ }
       fld.focus();
@@ -8184,7 +8598,7 @@ window.openClient = async function (id, focus, attempted, presetCaseId) {
     // as well; the case save path gets it via loadDashboard. Guarded: a failing RPC must not stop
     // the save being reported as done.
     try { await db.rpc("run_watchtower"); } catch (e) { /* alerts just stay as they were */ }
-    closeModal(); toast("Client saved"); loadClients();
+    closeModal(); toast("Client saved"); loadClients($("#client-search").value, { force: true });
     // If the client was opened from Data health (that page sits behind the modal), refresh its
     // lists/KPIs so a just-fixed row (e.g. missing email) doesn't linger stale until manual Refresh.
     if ($("#page-data") && !$("#page-data").classList.contains("hidden")) loadDataHealth();
@@ -8304,7 +8718,7 @@ window.openClient = async function (id, focus, attempted, presetCaseId) {
       if (!confirmHardDelete("Delete this client and all their cases?", extra)) return;
       const { error } = await db.from("clients").delete().eq("id", id);
       if (error) return toast("Error: " + error.message);
-      closeModal(); toast("Client deleted"); loadClients();
+      closeModal(); toast("Client deleted"); loadClients($("#client-search").value, { force: true });
     };
   }
 };
@@ -14601,5 +15015,1282 @@ document.addEventListener("keydown", (e) => {
     openSel();
   });
 })();
+
+/* ==========================================================================
+   R8-REV — REVOLUTION SYNC (Import tab)
+
+   THE RULE THIS IS BUILT AROUND: every client, case and product is keyed into
+   Revolution FIRST. Revolution is the book of record; this system is the thing
+   that chases rate ends, protection and reviews off the back of it. So the
+   weekly Stonebridge `client_data_export_V2` is not "an import" — it is a
+   RECONCILIATION, and it runs every week against a book that has drifted since
+   the last one.
+
+   Four things follow from that, and they are the whole design:
+
+   1. HEADERS ARE RECOGNISED BY NAME, NEVER BY POSITION. Nobody has seen the
+      real export; the sample this was built against is a plausible
+      reconstruction (FIXTURES-R7.md § 4 says so in as many words). A column
+      order assumption would break silently and write the wrong values into the
+      right fields. Every column is matched against a synonym list, the mapping
+      is SHOWN for confirmation before anything is read, every select is
+      correctable, and the corrections are remembered for next week.
+
+   2. MATCHING IS THE EXISTING MATCHING. There is no revolution_ref column —
+      that schema change was declined — so there is no key to join on and there
+      never will be until there is. Every run therefore re-identifies people the
+      same way the bulk import and lead accept already do: findClientMatches()
+      (email / phone / name, with a contradicting contact detail downgrading a
+      name hit), plus the date of birth this export carries, which is the one
+      identity column strong enough to promote a name match to a certainty.
+
+   3. NOTHING IS WRITTEN THAT WAS NOT TICKED. The heart of the screen is a
+      field-level diff — incoming vs held, per field, with a KEEP/UPDATE choice.
+      A blank field here defaults to UPDATE (there is nothing to lose). A field
+      that DISAGREES defaults to KEEP and is highlighted: the export is the book
+      of record for what the lender did, but this database is where a human has
+      been putting corrections, and a weekly file must never quietly overwrite
+      one of those without being told to.
+
+   4. IT IS SILENT. No email is queued, ever — the drip and the rate-end
+      reminders are consent-shaped surfaces and a spreadsheet is not consent.
+      And no case stage moves as a side effect: an incoming "Completed" that
+      would move a live case is shown as its own decision, per row, unticked.
+
+   WHAT IT CANNOT DO, SAID OUT LOUD ON SCREEN: this export carries ~55 fields
+   and this database has nowhere to put a good third of them (policy type,
+   premium, provider, LTV, reversion rate, second applicant, vulnerability
+   flag). Those columns are listed as "not stored (no field here)" with the
+   reason. They are not silently dropped, and they are not invented into a
+   notes blob pretending to be data.
+   ========================================================================== */
+
+/* ---- 1 · WHAT WE CAN ACTUALLY STORE -------------------------------------
+   key, label, scope (client | case | meta), kind. `meta` is a field that is
+   read and shown but is never part of the automatic update set: `stage`
+   because moving a case is a decision, `note` because it is prose. */
+const REV_FIELDS = [
+  ["first_name", "First name", "client", "text"],
+  ["last_name", "Surname", "client", "text"],
+  ["date_of_birth", "Date of birth", "client", "date"],
+  ["email", "Email", "client", "text"],
+  ["phone", "Phone", "client", "phone"],
+  ["addr_line1", "Address line 1", "client", "addr"],
+  ["addr_line2", "Address line 2", "client", "addr"],
+  ["addr_town", "Town", "client", "addr"],
+  ["addr_county", "County", "client", "addr"],
+  ["addr_postcode", "Postcode", "client", "addr"],
+  ["lender", "Lender", "case", "text"],
+  ["product_name", "Product", "case", "text"],
+  ["rate_type", "Rate type", "case", "rate_type"],
+  ["rate_percent", "Rate %", "case", "pct"],
+  ["rate_end_date", "Rate end date", "case", "date"],
+  ["erc_end_date", "ERC end date", "case", "date"],
+  ["loan_amount", "Loan amount", "case", "money_plain"],
+  ["property_value", "Property value", "case", "money_plain"],
+  ["term_years", "Term (years)", "case", "int"],
+  ["case_kind", "Case type", "case", "case_kind"],
+  ["lead_source", "Lead source", "case", "text"],
+  ["submitted_at", "Submitted date", "case", "date"],
+  ["completed_date", "Completion date", "case", "date"],
+  ["proc_fee", "Proc fee", "case", "money"],
+  ["broker_fee", "Broker fee", "case", "money"],
+  ["fee_status", "Fee status", "case", "fee_status"],
+  ["protection_status", "Protection", "case", "prot_flag"],
+  ["protection_commission", "Protection commission", "case", "money"],
+  ["gi_status", "GI / buildings insurance", "case", "gi_flag"],
+  ["stage", "Case status", "meta", "stage"],
+  ["note", "File note", "meta", "text"],
+];
+const REV_FIELD = Object.fromEntries(REV_FIELDS.map(([key, label, scope, kind]) => [key, { key, label, scope, kind }]));
+/* The case columns a diff is drawn over, in the order a human reads them: the two
+   dates this whole system runs on first, then the deal, then the money, then the
+   protection outcome. `completed_date` writes to `completed_at`; everything else
+   is its own column name. */
+const REV_CASE_DIFF = ["rate_end_date", "erc_end_date", "lender", "product_name", "rate_type", "rate_percent",
+  "loan_amount", "property_value", "term_years", "case_kind", "fee_status", "proc_fee", "broker_fee",
+  "protection_status", "protection_commission", "gi_status", "lead_source", "submitted_at", "completed_date"];
+const REV_CLIENT_DIFF = ["date_of_birth", "email", "phone", "address"];
+const REV_MONEY_FIELDS = new Set(["proc_fee", "broker_fee", "protection_commission"]);
+const REV_ADDR_PARTS = ["addr_line1", "addr_line2", "addr_town", "addr_county", "addr_postcode"];
+const REV_CASE_COL = { completed_date: "completed_at" };
+
+/* ---- 2 · HEADER RECOGNITION ---------------------------------------------
+   Ordered: FIRST match wins, so every rule below is written knowing what is
+   above it. The ordering is load-bearing in five places and each is commented:
+   "Initial Term Expiry Date" must reach rate_end_date before /term/ claims it,
+   "Reversion Rate %" must be spent before /rate/, "Adviser FCA Ref" before
+   /adviser/, "Fee Status" before /fee/, and the whole insurance block before
+   the protection block (an "Income Protection" or "GI Premium" column that
+   fell through to /protection|premium/ would be read as the life policy).
+
+   A key beginning "__" is RECOGNISED BUT UNSTORABLE: we know exactly what the
+   column is and we have nowhere to put it. That is a different thing from a
+   column we do not recognise, and the mapping table says which is which. */
+const REV_UNSTORED_WHY = {
+  __ref: "no reference field on a client or case here — Revolution's own references are not stored (the revolution_ref column was declined, so every run re-matches on identity instead)",
+  __title: "no title field — the client record holds first and last name only",
+  __middle: "no middle-name field",
+  __applicant2: "no second-applicant record — this system holds one client per case, and a joint application's second applicant has nowhere to live",
+  __ltv: "not stored — LTV is loan ÷ property value, both of which are stored",
+  __reversion: "no reversion/SVR rate field — only the initial rate is held",
+  __repayment: "no repayment-method field (repayment vs interest-only)",
+  __offer_date: "no offer-date field — this system holds the offer EXPIRY date, which is a different thing and is not in this file",
+  __adviser: "not written — advisers are assigned in this system, and a weekly file must not silently reassign a colleague's case",
+  __fca: "no FCA-reference field on a profile",
+  __introducer: "not written — an introducer here is a linked record, not free text, so a name in a spreadsheet cannot be matched to one safely",
+  __network: "no network field — every case here is Stonebridge",
+  __prot_type: "no policy-type field — this system records the protection OUTCOME (discussed / quoted / policy taken / declined), not the policy",
+  __prot_provider: "no protection-provider field",
+  __prot_premium: "no premium field — this system holds the protection COMMISSION (what the firm earns), which is a different number and is mapped separately",
+  __income_protection: "no income-protection field — protection is one outcome per case, not a policy list",
+  __gi_provider: "no GI-provider field",
+  __gi_premium: "no GI-premium field — GI is held as an outcome (quoted / policy taken / declined), not an amount",
+  __vulnerable: "⚠ no vulnerable-customer flag exists in this database. This is the one unstorable column worth raising with Daniel: it is a Consumer Duty field and it is arriving weekly with nowhere to land",
+  __consent: "not written — contact consent is held here as marketing_opt_out / sms_opt_out, and flipping a client's consent from a spreadsheet is not something a sync should ever do on its own",
+  __last_reviewed: "no last-reviewed field — this system derives last contact from notes, sent emails, appointments and completed tasks",
+};
+const REV_HEADER_RULES = [
+  [/^(case|client|customer|lender|account|policy|application)\s*(ref|reference|number|no|id)\b/, "__ref"],
+  [/\b(fca)\b/, "__fca"],                                   // before /adviser/
+  [/^(title|salutation)$/, "__title"],
+  [/^middle/, "__middle"],
+  [/^(applicant 2|applicant two|second applicant|joint applicant|app 2|partner)\b/, "__applicant2"],
+  [/(income protection|^ip$|ip cover)/, "__income_protection"],   // before every /protection/ rule
+  [/^(gi|general insurance|home insurance|buildings insurance|home ins)\b.*(provider|insurer)/, "__gi_provider"],
+  [/^(gi|general insurance|home insurance|buildings insurance|home ins)\b.*(premium|cost|monthly|annual)/, "__gi_premium"],
+  [/^(gi|general insurance|home insurance|buildings insurance|home ins)\b/, "gi_status"],
+  [/protection.*(commission|proc)/, "protection_commission"],
+  [/protection.*(premium|monthly|cost)/, "__prot_premium"],
+  [/(protection.*(policy )?type|policy type)/, "__prot_type"],
+  [/protection.*(provider|insurer)/, "__prot_provider"],
+  [/(taken protection|protection (sold|taken|status)|^protection$|life cover|life policy)/, "protection_status"],
+  [/(vulnerab)/, "__vulnerable"],
+  [/(consent|opt in|opt out|marketing preference)/, "__consent"],
+  [/(last review|reviewed date|last annual review)/, "__last_reviewed"],
+  [/^(first name|forename|given name|christian name|first)$/, "first_name"],
+  [/^(surname|last name|family name|last)$/, "last_name"],
+  [/(date of birth|^dob$|birth date|d o b)/, "date_of_birth"],
+  [/(e ?mail)/, "email"],
+  [/(mobile|^phone|telephone|^tel$|contact number|landline|cell)/, "phone"],
+  [/^(address line 2|address 2)/, "addr_line2"],
+  [/^(address line 1|address 1|address|street|house)/, "addr_line1"],
+  [/^(town|city|post town)$/, "addr_town"],
+  [/^county$/, "addr_county"],
+  [/(post ?code|postal code|^zip)/, "addr_postcode"],
+  [/^(ltv|loan to value)/, "__ltv"],
+  [/(reversion|svr|standard variable|revert)/, "__reversion"],      // before every /rate/ rule
+  [/(initial term expiry|term expiry|rate end|end of rate|deal end|product end|fixed rate end|fix end|maturity|rate expiry|deal expiry)/, "rate_end_date"],
+  [/(^erc|early repayment)/, "erc_end_date"],
+  [/^(rate type|product type|repayment basis)$/, "rate_type"],
+  [/(initial rate|interest rate|rate percent|^rate$|^rate %$|pay rate)/, "rate_percent"],
+  [/(^lender|^bank$|^provider$|product provider|lender name)/, "lender"],
+  [/^(product name|product|scheme)$/, "product_name"],
+  [/(loan amount|^loan$|borrowing|mortgage amount|advance|balance)/, "loan_amount"],
+  [/(property value|valuation|purchase price|^value$|security value)/, "property_value"],
+  [/(repayment method|repayment type|method of repayment)/, "__repayment"],
+  [/(^term|term years|mortgage term|term in years)/, "term_years"],
+  [/(mortgage purpose|^purpose$|case type|enquiry type|application type|loan type|business type)/, "case_kind"],
+  [/(procuration|^proc fee|proc$)/, "proc_fee"],
+  [/(fee status|fee paid|fee state)/, "fee_status"],                 // before /fee/
+  [/(broker fee|advice fee|client fee|adviser fee|arrangement fee|^fee$)/, "broker_fee"],
+  [/(application date|date of application|submitted|submission date)/, "submitted_at"],
+  [/(offer date|offer issued|date of offer)/, "__offer_date"],
+  [/(completion date|completed|date completed)/, "completed_date"],
+  [/(case status|^status$|^stage$|case stage)/, "stage"],
+  [/(^adviser|^advisor|^consultant|^broker$|written by|case owner)/, "__adviser"],
+  [/(introducer|referrer|referred by)/, "__introducer"],
+  [/(lead source|^source$|origin|marketing source)/, "lead_source"],
+  [/^(network|firm|principal)$/, "__network"],
+  [/(note|comment|remark|free text)/, "note"],
+];
+/* Their header text, flattened for comparison: bracketed qualifiers dropped
+   ("Protection Premium (Monthly)" → "protection premium"), punctuation and
+   case gone. Kept as its own function because the remembered-mapping key in
+   localStorage is this normalised form — so a header that gains a stray space
+   or changes case between weeks still finds last week's correction. */
+const revNormHeader = (h) => String(h == null ? "" : h).toLowerCase().replace(/\([^)]*\)/g, " ").replace(/[^a-z0-9]+/g, " ").trim();
+function revRecognise(header) {
+  const s = revNormHeader(header);
+  if (!s) return null;
+  for (let i = 0; i < REV_HEADER_RULES.length; i++) if (REV_HEADER_RULES[i][0].test(s)) return REV_HEADER_RULES[i][1];
+  return null;
+}
+
+/* ---- 3 · VALUES ---------------------------------------------------------
+   Every incoming cell is normalised to the shape the column actually holds
+   BEFORE anything is compared, so a diff can never be a formatting artefact
+   ("31/05/2027" vs "2027-05-31" is not a change). A value that cannot be read
+   is never guessed: it is dropped from the update set and named on the row. */
+const REV_STAGE_WORDS = [
+  [/(not proceed|withdraw|cancel|lapsed|dead|lost|declined by client|npd)/, "not_proceeding"],
+  [/(complet|drawn down|funds released)/, "completed"],
+  [/(exchange)/, "exchange"],
+  [/(offer)/, "offer"],
+  [/(application|submitted|with lender|awaiting valuation)/, "application"],
+  [/(dip|decision in principle|aip|agreement in principle)/, "decision_in_principle"],
+  [/(fact ?find|advice|research|recommend)/, "fact_find"],
+  [/(enquiry|inquiry|lead|new case|prospect)/, "enquiry"],
+];
+const REV_KIND_WORDS = [
+  [/(first ?time ?buyer|^ftb)/, "first_time_buyer"],
+  [/(product ?transfer|^pt$|retention|switch)/, "product_transfer"],
+  [/(buy ?to ?let|^btl|let to buy|investment)/, "buy_to_let"],
+  [/(remortgage|refinance)/, "remortgage"],
+  [/(purchase|home ?mover|moving|new build)/, "purchase"],
+];
+const REV_YES = /^(y|yes|true|1|taken|sold|policy taken)$/i;
+const REV_NO = /^(n|no|false|0|none|not taken|declined)$/i;
+/* One cell → { v, note, bad }. `v` is null when there is nothing to propose —
+   which is NOT the same as "set this to blank": the sync never blanks a stored
+   value from an empty cell, because an empty cell in a weekly export means
+   "not exported", not "deleted". */
+function revValue(key, raw) {
+  const f = REV_FIELD[key];
+  const s = String(raw == null ? "" : raw).trim();
+  if (!f || !s) return { v: null };
+  const num = (x) => {
+    const n = Number(String(x).replace(/[£$,%\s]/g, ""));
+    return isNaN(n) ? null : n;
+  };
+  switch (f.kind) {
+    case "date": {
+      const p = parseUkDate(s);
+      if (!p.ok) return { v: null, bad: true, note: `couldn't read ${f.label.toLowerCase()} “${s}” (${p.note})` };
+      if (p.ambiguous) return { v: p.iso, amb: `${f.label.toLowerCase()} ${s} → ${fmtD(p.iso)}` };
+      return { v: p.iso };
+    }
+    case "money": case "money_plain": case "pct": {
+      const n = num(s);
+      if (n == null) return { v: null, bad: true, note: `couldn't read ${f.label.toLowerCase()} “${s}” as a number` };
+      return { v: n };
+    }
+    case "int": {
+      const n = num(s);
+      if (n == null) return { v: null, bad: true, note: `couldn't read ${f.label.toLowerCase()} “${s}” as a number` };
+      return { v: Math.round(n) };
+    }
+    case "stage": {
+      const low = s.toLowerCase();
+      for (const [re, st] of REV_STAGE_WORDS) if (re.test(low)) return { v: st };
+      return { v: null, note: `case status “${s}” doesn't match any stage here` };
+    }
+    case "case_kind": {
+      const low = s.toLowerCase();
+      for (const [re, k] of REV_KIND_WORDS) if (re.test(low)) return { v: k };
+      return { v: "other" };
+    }
+    case "rate_type": {
+      const low = s.toLowerCase();
+      if (/track/.test(low)) return { v: "tracker" };
+      if (/discount/.test(low)) return { v: "discount" };
+      if (/(variable|svr)/.test(low)) return { v: "variable" };
+      if (/fix/.test(low)) return { v: "fixed" };
+      return { v: null, note: `rate type “${s}” doesn't match any of fixed / tracker / variable / discount` };
+    }
+    case "fee_status": {
+      const low = s.toLowerCase();
+      if (/paid|received|banked/.test(low)) return { v: "paid" };
+      if (/(waiv|not charged|no fee|free|nil)/.test(low)) return { v: "waived" };
+      if (/(request|invoic|due|outstanding|owed)/.test(low)) return { v: "requested" };
+      return { v: "not_requested" };
+    }
+    /* Y/N flags. "Y" is an outcome we can record. "N" deliberately proposes
+       NOTHING: it says a policy was not sold, which is not the same as
+       "declined" and certainly not "not discussed" — reading it as either
+       would be this system inventing an advice record. */
+    case "prot_flag": case "gi_flag": {
+      if (REV_YES.test(s)) return { v: "policy_taken" };
+      if (REV_NO.test(s)) return { v: null, note: `${f.label}: “${s}” only says no policy was sold — it doesn't say what was discussed, so nothing is proposed here` };
+      const low = s.toLowerCase();
+      if (/declin/.test(low)) return { v: "declined" };
+      if (/quot/.test(low)) return { v: "quoted" };
+      if (/discuss/.test(low)) return { v: "discussed" };
+      return { v: null, note: `“${s}” isn't a protection outcome this system holds` };
+    }
+    case "phone": return { v: s };
+    default: return { v: s };
+  }
+}
+/* How a value PRINTS in the diff. Money uses the app's own formatter so the
+   sync can never show a fee in a different shape from the case screen. */
+function revShow(key, v) {
+  if (v == null || v === "") return "—";
+  const f = REV_FIELD[key] || { kind: "text" };
+  if (key === "date_of_birth" || f.kind === "date") return fmtD(v);
+  if (f.kind === "money" || f.kind === "money_plain") return fmtM(v);
+  if (f.kind === "pct") return v + "%";
+  if (key === "stage") return STAGE_LABEL[v] || v;
+  if (key === "case_kind") return (KINDS.find((k) => k[0] === v) || [])[1] || v;
+  if (key === "protection_status" || key === "gi_status" || key === "fee_status") return String(v).replace(/_/g, " ");
+  return String(v);
+}
+/* Same value? Compared on the NORMALISED value, and numerically where the
+   column is a number, so 4.44 vs "4.440" is not a conflict and 186000 vs
+   "186,000" is not either. */
+function revSame(key, a, b) {
+  if (a == null || a === "") return b == null || b === "";
+  if (b == null || b === "") return false;
+  const f = REV_FIELD[key] || { kind: "text" };
+  if (["money", "money_plain", "pct", "int"].includes(f.kind)) return Number(a) === Number(b);
+  if (f.kind === "date" || key === "date_of_birth") return String(a).slice(0, 10) === String(b).slice(0, 10);
+  if (key === "phone") return normPhone(a) === normPhone(b);
+  if (key === "email") return String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
+  return String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
+}
+
+/* ---- 4 · STATE ---------------------------------------------------------- */
+let revHeaders = [];      // their header row, verbatim
+let revCells = [];        // data rows, verbatim cells
+let revMapping = [];      // one entry per header — see revBuildMapping()
+let revRows = [];         // the decided rows (see revBuildRows)
+let revClients = [], revCases = [];
+let revFileLabel = "";
+const REV_ROW_CAP = 400;  // rows drawn; a bigger file still imports in slices
+const REV_CASE_WINDOW_DAYS = 62;
+/* The remembered mapping. Per signed-in user (a shared machine must not leak
+   one person's correction into another's screen) and per browser — which is
+   stated on screen, because that is the honest description of localStorage. */
+const revMapStoreKey = () => `nx_revmap_${authUid || "anon"}`;
+function revMapRemembered() {
+  try { return JSON.parse(lsGet(revMapStoreKey()) || "{}") || {}; } catch (e) { return {}; }
+}
+function revRememberMap(norm, key) {
+  const m = revMapRemembered();
+  m[norm] = key;
+  lsSet(revMapStoreKey(), JSON.stringify(m));
+}
+
+/* ---- 5 · THE MAPPING TABLE ---------------------------------------------
+   Auto-map, then apply the operator's remembered corrections on top, then
+   resolve collisions: two columns cannot write one field, so the FIRST one
+   wins and the second is listed as a duplicate rather than silently ignored
+   (a real export has both "Mobile Number" and "Home Telephone"). */
+function revBuildMapping(headers) {
+  const remembered = revMapRemembered();
+  const claimed = new Map();
+  return headers.map((h, i) => {
+    const norm = revNormHeader(h);
+    const auto = revRecognise(h);
+    const hasMemory = Object.prototype.hasOwnProperty.call(remembered, norm);
+    let key = hasMemory ? remembered[norm] : auto;
+    if (key && !REV_FIELD[key] && !String(key).startsWith("__")) key = null;   // a field that no longer exists
+    const e = { header: String(h == null ? "" : h), norm, key: null, auto, bucket: "ignored", why: "", remembered: hasMemory, i };
+    if (!norm) { e.bucket = "ignored"; e.why = "column has no heading"; return e; }
+    if (!key) {
+      e.bucket = "ignored";
+      e.why = hasMemory ? "you told this sync to ignore this column" : "not recognised — nothing here is read from it";
+      return e;
+    }
+    if (String(key).startsWith("__")) {
+      e.bucket = "unstored";
+      e.why = REV_UNSTORED_WHY[key] || "recognised, but there is no field here to store it in";
+      e.key = null; e.recognisedAs = key;
+      return e;
+    }
+    if (claimed.has(key)) {
+      e.bucket = "unstored";
+      e.why = `duplicate of “${claimed.get(key)}” — only the first column that maps to ${REV_FIELD[key].label} is read`;
+      e.recognisedAs = key;
+      return e;
+    }
+    claimed.set(key, e.header);
+    e.key = key; e.bucket = "mapped";
+    return e;
+  });
+}
+
+/* ---- 6 · READING THE FILE ----------------------------------------------
+   Delimiter by vote, quoted fields respected (a real export has commas inside
+   Notes), and the SheetJS path the bulk import already uses for .xlsx —
+   converted to CSV text first so there is exactly one parser below it. */
+/* A QUOTED CELL MAY CONTAIN A LINE BREAK, so physical lines are folded back into
+   records before anything is split. The Notes column of a real export is free text a
+   human typed, and one with a newline in it used to become TWO rows: the tail of the
+   note arrived as a row of its own, and a row with any text in its name column is a
+   client this sync offers to CREATE — a phantom person, sitting next to a real row
+   that had silently lost every column after the note. Folding is comma-only (quoting
+   is a CSV convention; a tab or semicolon export can carry a bare `"` legitimately)
+   and is abandoned wholesale if the file ends mid-quote, because a malformed file
+   swallowed into one record is worse than a malformed file read line by line. */
+function revFoldQuoted(raw) {
+  const out = [];
+  let cur = null;
+  for (const l of raw) {
+    cur = cur == null ? l : cur + "\n" + l;
+    if (((cur.match(/"/g) || []).length) % 2 === 0) { out.push(cur); cur = null; }
+  }
+  return cur == null ? out : null;   // null = unbalanced quoting; the caller keeps the raw lines
+}
+function revSplitRows(text) {
+  const raw = String(text == null ? "" : text).replace(/\r\n?/g, "\n").split("\n");
+  const keep = (l) => l.trim() !== "" && !/^===\s*Sheet:/i.test(l.trim());
+  const first = raw.filter(keep)[0] || "";
+  let delim = ",", best = -1;
+  [",", "\t", ";", "|"].forEach((d) => {
+    const n = impSplitDelimited(first, d).length;
+    if (n > best) { best = n; delim = d; }
+  });
+  const folded = delim === "," ? revFoldQuoted(raw) : null;
+  const lines = (folded || raw).filter(keep);
+  if (!lines.length) return { headers: [], rows: [] };
+  const headers = impSplitDelimited(lines[0], delim).map((h) => h.replace(/^"|"$/g, ""));
+  const rows = lines.slice(1).map((l) => impSplitDelimited(l, delim));
+  return { headers, rows, delim };
+}
+const revDays = (a, b) => Math.round((new Date(String(a).slice(0, 10) + "T12:00:00") - new Date(String(b).slice(0, 10) + "T12:00:00")) / 86400000);
+function revComposeAddress(g) {
+  const parts = REV_ADDR_PARTS.map((k) => (g[k] || "").trim()).filter(Boolean);
+  return parts.join(", ");
+}
+/* Whether THIS operator may see and write the money on THIS case. Same rule as
+   the CSV exports (csvShowsFee): the Owner always, an adviser/staff member on
+   their own case, an Administrator not at all. Presentation, not a control —
+   the same caveat that is on showMoney() applies here verbatim — but a weekly
+   sync that quietly rewrote a colleague's fee would be a genuinely new leak,
+   so the fee columns are dropped from the update set rather than just hidden. */
+function revMoneyOk(caseRow) {
+  if (showMoney()) return true;
+  if (!csvFeeRoles() || !ME) return false;
+  return !!caseRow && caseRow.assigned_to === ME.id;
+}
+
+/* ---- 7 · WHO IS THIS ROW ABOUT -----------------------------------------
+   findClientMatches() does the identity work — the SAME function the bulk
+   import and lead accept use, extended here by the one column this export has
+   that neither of those doors carries: the date of birth.
+
+     exact    name key matches AND the dates of birth agree. Nothing else is
+              strong enough to write to a client record unattended, and this is
+              the pairing the network's own export is keyed on.
+     exact    name key matches AND email-or-phone matches AND nothing
+              contradicts (no DOB clash, no different email, no different
+              phone) — the ordinary row for a client whose DOB we never
+              captured, which is most of the book.
+     review   anything else with a candidate: a DOB that disagrees, a name that
+              disagrees, an email that disagrees. It is shown with the candidate
+              and the reason, and it writes nothing until a human picks.
+     new      no candidate at all.
+     quarantine  no person in the row at all — the trailing junk row every
+              report tool leaves behind. */
+function revMatchClient(r) {
+  const name = [r.g.first_name, r.g.last_name].filter(Boolean).join(" ").trim();
+  const email = (r.g.email || "").trim();
+  const phone = (r.g.phone || "").trim();
+  if (!name && !email && !phone) {
+    return { verdict: "quarantine", reason: "the row has no name, email or phone — there is no person in it" };
+  }
+  if (!name) {
+    return { verdict: "quarantine", reason: "the row has contact details but no name" };
+  }
+  const q = { name, email, phone, address: r.address, postcode: r.g.addr_postcode || "" };
+  const m = findClientMatches(q, revClients);
+  const dobIn = r.v.date_of_birth || null;
+  const nk = clientNameKey(name);
+  const contradicts = (c) =>
+    (email && c.email && String(c.email).trim().toLowerCase() !== email.toLowerCase())
+    || (phone && c.phone && normPhone(c.phone) !== normPhone(phone));
+  if (m.exact) {
+    const c = m.exact;
+    const sameName = clientNameKey(clientFullName(c)) === nk;
+    const dobHeld = c.date_of_birth || null;
+    const dobAgree = !!(dobIn && dobHeld && String(dobIn).slice(0, 10) === String(dobHeld).slice(0, 10));
+    const dobClash = !!(dobIn && dobHeld && !dobAgree);
+    if (sameName && dobAgree) return { verdict: "exact", clientId: c.id, reason: "name and date of birth both match", candidates: [c] };
+    if (sameName && !dobClash && !contradicts(c)) {
+      return { verdict: "exact", clientId: c.id, reason: `name matches and ${m.reason}${dobIn && !dobHeld ? " — we hold no date of birth for them, so the file's one can fill it" : ""}`, candidates: [c] };
+    }
+    const why = dobClash
+      ? `${m.reason}, but the date of birth in the file (${fmtD(dobIn)}) is not the one we hold (${fmtD(dobHeld)})`
+      : !sameName
+        ? `${m.reason}, but the name in the file is not the name we hold (“${clientFullName(c)}”)`
+        : `${m.reason}, but the contact details in the file disagree with the ones we hold`;
+    return { verdict: "review", candidates: [c].concat(m.near.map((n) => n.client)).slice(0, 5), reason: why };
+  }
+  if (m.near.length) {
+    return {
+      verdict: "review",
+      candidates: m.near.map((n) => n.client),
+      reason: m.near.map((n) => `${clientFullName(n.client)} — ${n.reason}`).join(" · "),
+    };
+  }
+  return { verdict: "new", reason: "nobody on the book looks like this person" };
+}
+/* ---- 8 · WHICH CASE IS THIS THE SAME MORTGAGE AS -----------------------
+   Same client + same lender + rate ends within 62 days = the same mortgage.
+   62 days because a product's end date is routinely recorded as the last day of
+   the month at one end and the completion anniversary at the other, and two
+   months is wider than that gap and narrower than any real remortgage cycle.
+
+   Two documented departures from the letter of that rule, both in the same
+   direction (they only ever ADD a match, and both say why on screen):
+     · our case has no rate end date at all — then there is nothing to be more
+       than 62 days from, and filling it in is the single most valuable thing
+       this sync does;
+     · the file has no rate end date — same reasoning, in reverse.
+   Anything else is a CANDIDATE NEW CASE, which is a decision, not a write. */
+function revMatchCase(r, clientId) {
+  const cases = revCases.filter((c) => c.client_id === clientId);
+  if (!cases.length) return { verdict: "new", reason: "this client has no cases here yet" };
+  const lk = impLenderKey(r.v.lender);
+  if (!lk) return { verdict: "none", reason: "the file gives no lender for this row, so it cannot be tied to one of their cases" };
+  const same = cases.filter((c) => impLenderKey(c.lender) === lk);
+  if (!same.length) {
+    /* NOT esc()'d: every consumer of `reason` escapes it on the way to the screen
+       (the row table, the detail panel, the quarantine list and the apply log all
+       wrap it in esc()), so escaping here too printed real lender names back at the
+       operator as entities — "Legal &amp; General" instead of "Legal & General". */
+    return { verdict: "new", reason: `no case with this lender (${r.v.lender}) — their cases here are with ${[...new Set(cases.map((c) => c.lender || "no lender"))].join(", ")}` };
+  }
+  const inWin = same.filter((c) => c.rate_end_date && r.v.rate_end_date && Math.abs(revDays(c.rate_end_date, r.v.rate_end_date)) <= REV_CASE_WINDOW_DAYS);
+  if (inWin.length) {
+    inWin.sort((a, b) => Math.abs(revDays(a.rate_end_date, r.v.rate_end_date)) - Math.abs(revDays(b.rate_end_date, r.v.rate_end_date)));
+    return {
+      verdict: "same", caseId: inWin[0].id,
+      reason: `same lender and the rate ends within ${REV_CASE_WINDOW_DAYS} days of ours`
+        + (inWin.length > 1 ? ` (${inWin.length} of their cases are with this lender — matched the closest)` : ""),
+    };
+  }
+  const blank = same.filter((c) => !c.rate_end_date || !r.v.rate_end_date);
+  if (blank.length === 1) {
+    return {
+      verdict: "same", caseId: blank[0].id,
+      reason: blank[0].rate_end_date ? "same lender, and the file gives no rate end date to compare" : "same lender, and our case has no rate end date to compare — treated as the same mortgage",
+    };
+  }
+  return {
+    verdict: "new",
+    reason: `same lender, but the rate end dates are more than ${REV_CASE_WINDOW_DAYS} days apart (ours ${same.map((c) => fmtD(c.rate_end_date)).join(", ")}) — this looks like a different deal`,
+  };
+}
+
+/* ---- 9 · THE DIFF ------------------------------------------------------
+   Per field, one of four states:
+     same     nothing to do
+     fill     we hold nothing → default UPDATE (there is nothing to lose)
+     conflict we hold something else → default KEEP, highlighted. The export is
+              the book of record for what the LENDER did, but this database is
+              where a human has been correcting things, and a weekly file must
+              never overwrite one of those unasked.
+     money    a fee column this operator may not write (see revMoneyOk)
+   An incoming blank is never a change: an empty cell in a weekly export means
+   "not exported", not "delete what you hold". */
+function revDiffCase(r, caseRow) {
+  const out = [];
+  /* A case that does not exist yet will be created assigned to ME, so the money
+     rule has to be asked about THAT case, not about nothing — otherwise the
+     preview tells an adviser their own new case's fee will not be written and
+     then the write puts it in anyway. */
+  const moneyOk = revMoneyOk(caseRow || { assigned_to: (ME && ME.id) || null });
+  REV_CASE_DIFF.forEach((key) => {
+    const inc = r.v[key];
+    if (inc == null || inc === "") return;
+    const col = REV_CASE_COL[key] || key;
+    let held = caseRow ? caseRow[col] : null;
+    if (col === "completed_at" && held) held = String(held).slice(0, 10);
+    if (REV_MONEY_FIELDS.has(key) && !moneyOk) {
+      out.push({ key, label: REV_FIELD[key].label, incoming: inc, held: null, state: "money", choice: "keep" });
+      return;
+    }
+    if (revSame(key, held, inc)) { out.push({ key, label: REV_FIELD[key].label, incoming: inc, held, state: "same", choice: "keep" }); return; }
+    const blank = held == null || held === "" || (key === "protection_status" && held === "not_discussed") || (key === "gi_status" && held === "not_discussed");
+    out.push({ key, label: REV_FIELD[key].label, incoming: inc, held, state: blank ? "fill" : "conflict", choice: blank ? "update" : "keep" });
+  });
+  return out;
+}
+function revDiffClient(r, clientRow) {
+  const out = [];
+  const push = (key, label, held, inc) => {
+    if (inc == null || inc === "") return;
+    if (revSame(key, held, inc)) { out.push({ key, label, incoming: inc, held, state: "same", choice: "keep" }); return; }
+    const blank = held == null || held === "";
+    out.push({ key, label, incoming: inc, held, state: blank ? "fill" : "conflict", choice: blank ? "update" : "keep" });
+  };
+  push("date_of_birth", "Date of birth", clientRow.date_of_birth, r.v.date_of_birth);
+  push("email", "Email", clientRow.email, r.g.email);
+  push("phone", "Phone", clientRow.phone, r.g.phone);
+  /* THE ADDRESS IS NOT A STRING COMPARISON. Every row of this export composes an
+     address out of five columns, so the file's version of an address we already
+     hold is routinely the same place written more fully ("18 Belle Vue Road,
+     Bournemouth" → "18 Belle Vue Road, Southbourne, Bournemouth, Dorset, BH6
+     3DL"). Flagging that as a conflict on every single row would bury the two or
+     three that are a REAL disagreement, which is the failure this screen exists
+     to avoid. So: identical → no change; ours is contained in theirs → "adds
+     detail", defaulted to UPDATE because nothing we hold is lost; anything else
+     → a genuine conflict, defaulted to KEEP. */
+  if (r.address) {
+    const held = clientRow.address || "";
+    if (!held) out.push({ key: "address", label: "Client address", incoming: r.address, held: null, state: "fill", choice: "update" });
+    else if (revAddrTokens(held).size && revAddrSubset(held, r.address)) {
+      const same = revAddrSubset(r.address, held);
+      out.push({ key: "address", label: "Client address", incoming: r.address, held, state: same ? "same" : "extend", choice: same ? "keep" : "update" });
+    } else out.push({ key: "address", label: "Client address", incoming: r.address, held, state: "conflict", choice: "keep" });
+  }
+  return out;
+}
+const revAddrTokens = (s) => new Set(String(s == null ? "" : s).toLowerCase().replace(/[^a-z0-9]+/g, " ").split(" ").filter(Boolean));
+// Every word of `a` appears in `b` — "b says everything a says, and maybe more".
+function revAddrSubset(a, b) {
+  const B = revAddrTokens(b);
+  return [...revAddrTokens(a)].every((t) => B.has(t));
+}
+/* Recompute everything downstream of "which client is this row about". Called
+   on build and again every time the operator attaches a review row, so the
+   preview and the write can never be looking at two different decisions. */
+function revResolveRow(r) {
+  r.caseMatch = null; r.caseDiff = []; r.clientDiff = []; r.stageMove = null;
+  const clientId = r.clientId;
+  if (!clientId) {
+    // Creating the client: everything mapped is written, nothing is a conflict.
+    r.caseMatch = { verdict: "new", reason: "new client — the case comes with them" };
+    r.caseDiff = revDiffCase(r, null).filter((d) => d.state !== "same");
+    return r;
+  }
+  const clientRow = revClients.find((c) => c.id === clientId) || {};
+  r.clientDiff = revDiffClient(r, clientRow);
+  r.caseMatch = revMatchCase(r, clientId);
+  const caseRow = r.caseMatch.caseId ? revCases.find((c) => c.id === r.caseMatch.caseId) : null;
+  r.caseDiff = revDiffCase(r, caseRow);
+  /* THE STAGE IS NEVER PART OF THE UPDATE SET. An incoming "Completed" on a
+     case sitting at Application is a real and useful signal — and it is also
+     the thing that fires completion reporting, the review request, the fee
+     chase and the retention clock. It gets its own tick, per row, off by
+     default, and it says what else moving it would set off. */
+  if (caseRow && r.v.stage && r.v.stage !== caseRow.stage) {
+    r.stageMove = { from: caseRow.stage, to: r.v.stage, accepted: !!r.stageAccepted };
+  }
+  revApplyStageLock(r);
+  return r;
+}
+/* A COMPLETION DATE IS PART OF THE STAGE DECISION, not a field of its own.
+   Writing completed_at onto a case still sitting at Application produces a case
+   that is completed for every money report and live for every pipeline — the
+   exact inconsistency Data Health exists to find. So while an unticked stage
+   move is on the row, the completion date is locked to KEEP and says why; tick
+   the stage and it unlocks with its normal default. */
+function revApplyStageLock(r) {
+  const d = (r.caseDiff || []).find((x) => x.key === "completed_date");
+  if (!d) return;
+  if (r.stageMove && !r.stageAccepted && d.state !== "same") { d.choice = "keep"; d.locked = true; }
+  else if (d.locked) { d.locked = false; d.choice = d.state === "conflict" ? "keep" : "update"; }
+}
+
+/* ---- 10 · BUILDING THE ROWS -------------------------------------------- */
+function revBuildRows() {
+  revRows = revCells.slice(0, REV_ROW_CAP).map((cells, i) => {
+    const g = {}, v = {}, problems = [];
+    revMapping.forEach((m) => {
+      if (!m.key) return;
+      const raw = cells[m.i] == null ? "" : String(cells[m.i]).trim();
+      if (raw) g[m.key] = raw;
+    });
+    const amb = [];
+    Object.keys(g).forEach((k) => {
+      const res = revValue(k, g[k]);
+      v[k] = res.v;
+      if (res.amb) amb.push(res.amb);
+      else if (res.note && !problems.some((x) => x.text === res.note)) problems.push({ text: res.note, bad: !!res.bad });
+    });
+    /* Every date in a UK network's export is dd/mm/yyyy, and parseUkDate flags
+       every one whose day is also a valid month. Listing all six per row would
+       bury the one that matters, so they are counted once and spelled out — the
+       reading is still shown, it is just said once. */
+    if (amb.length) problems.unshift({ text: `${amb.length} date${amb.length === 1 ? "" : "s"} read in UK day/month order: ${amb.join("; ")}`, bad: false });
+    const r = { i, cells, g, v, problems, address: revComposeAddress(g), skipped: false, stageAccepted: false, clientId: null, forceNew: false };
+    const mc = revMatchClient(r);
+    r.match = mc.verdict;
+    r.matchReason = mc.reason;
+    r.candidates = mc.candidates || [];
+    r.clientId = mc.clientId || null;
+    r.forceNew = mc.verdict === "new";
+    if (r.match !== "quarantine") revResolveRow(r);
+    return r;
+  });
+  return revRows;
+}
+const revRowIncluded = (r) => !!(!r.skipped && r.match !== "quarantine"
+  && (r.match === "exact" || r.match === "new" || (r.match === "review" && (r.clientId || r.forceNew))));
+const revRowName = (r) => [r.g.first_name, r.g.last_name].filter(Boolean).join(" ").trim() || r.g.email || r.g.phone || "(no name)";
+/* What this row would WRITE if Apply were pressed now — the number in the
+   Changes column, and the thing the apply bar totals. */
+function revRowWrites(r) {
+  if (!revRowIncluded(r)) return { fields: 0, creates: [] };
+  const creates = [];
+  if (!r.clientId) creates.push("client");
+  const newCase = r.caseMatch && r.caseMatch.verdict === "new";
+  if (newCase) creates.push("case");
+  let fields = 0;
+  if (r.clientId) (r.clientDiff || []).forEach((d) => { if (d.choice === "update" && d.state !== "same") fields++; });
+  if (!newCase) (r.caseDiff || []).forEach((d) => { if (d.choice === "update" && d.state !== "same" && d.state !== "money") fields++; });
+  if (r.stageMove && r.stageAccepted) fields++;
+  return { fields, creates };
+}
+
+/* ---- 11 · THE MAPPING SCREEN ------------------------------------------- */
+function revFieldOptionsHtml(sel) {
+  const grp = (scope, label) => `<optgroup label="${label}">`
+    + REV_FIELDS.filter(([, , s]) => s === scope).map(([k, l]) => `<option value="${k}" ${k === sel ? "selected" : ""}>${esc(l)}</option>`).join("")
+    + "</optgroup>";
+  return `<option value="" ${sel ? "" : "selected"}>— not stored —</option>`
+    + grp("client", "Client") + grp("case", "Case") + grp("meta", "Shown, never written automatically");
+}
+function renderRevMapping() {
+  const el = $("#rev-mapping");
+  if (!el) return;
+  if (!revMapping.length) { el.innerHTML = ""; return; }
+  const nMapped = revMapping.filter((m) => m.bucket === "mapped").length;
+  const nUnstored = revMapping.filter((m) => m.bucket === "unstored").length;
+  const nIgnored = revMapping.filter((m) => m.bucket === "ignored").length;
+  const eg = (m) => {
+    const first = (revCells.find((c) => (c[m.i] || "").trim()) || [])[m.i];
+    return first ? String(first).slice(0, 60) : "";
+  };
+  el.innerHTML = `<div class="panel" id="rev-map-panel">
+    <h3>Their columns → our fields</h3>
+    <p class="rev-map-summary" id="rev-map-summary"><strong>${revMapping.length} column${revMapping.length === 1 ? "" : "s"}</strong> in ${esc(revFileLabel || "the file")}:
+      ${nMapped} mapped to a field · ${nUnstored} recognised but <strong>not stored (no field here)</strong> · ${nIgnored} ignored.
+      Nothing is read from a column until this table is right. Corrections are remembered <em>in this browser</em> for next week.</p>
+    <div class="rev-map-scroll"><table class="rev-map-table">
+      <thead><tr><th>Their header</th><th>Our field</th><th>First value in the file</th></tr></thead>
+      <tbody>${revMapping.map((m) => `
+        <tr data-h="${m.i}" class="rev-${m.bucket}">
+          <td class="rev-h">${esc(m.header || "(no heading)")}${m.remembered ? ' <span class="badge grey" title="You corrected this column before; the choice was remembered in this browser.">remembered</span>' : ""}
+            ${m.bucket !== "mapped" ? `<span class="rev-why">${m.bucket === "unstored" ? "Not stored — " : "Ignored — "}${esc(m.why)}</span>` : ""}</td>
+          <td><select class="rev-map-sel" data-h="${m.i}" aria-label="Field for ${esc(m.header)}">${revFieldOptionsHtml(m.key)}</select></td>
+          <td class="rev-eg" title="${esc(eg(m))}">${esc(eg(m))}</td>
+        </tr>`).join("")}</tbody>
+    </table></div>
+  </div>`;
+}
+
+/* ---- 12 · THE PREVIEW -------------------------------------------------- */
+const REV_VERDICT_BADGE = {
+  exact: ["green", "matched"],
+  review: ["amber", "review"],
+  new: ["blue", "new client"],
+  quarantine: ["red", "needs attention"],
+};
+function revDiffTableHtml(r, diffs, scope) {
+  if (!diffs.length) return "";
+  const isNewCase = scope === "case" && r.caseMatch && r.caseMatch.verdict === "new";
+  return `<table class="rev-diff-table"><thead><tr>
+      <th>${scope === "case" ? "Case field" : "Client field"}</th><th>We hold</th><th>Revolution says</th><th>${isNewCase ? "" : "Do what"}</th>
+    </tr></thead><tbody>
+    ${diffs.map((d) => {
+      const cls = d.state === "conflict" ? "rev-conflict" : d.state === "same" ? "rev-same" : "";
+      const extra = d.state === "conflict"
+        ? ' <span class="badge amber" title="Both sides hold a value and they disagree. Defaulted to KEEP: this database is where corrections get made by hand, and a weekly file must not overwrite one unasked.">conflict</span>'
+        : d.state === "extend" ? ' <span class="badge grey" title="Everything we already hold is still in the incoming value — it is the same address written more fully.">adds detail</span>' : "";
+      const held = d.state === "money" ? "—" : revShow(d.key, d.held);
+      const control = d.state === "same"
+        ? '<span class="badge grey">no change</span>'
+        : d.state === "money"
+          ? `<span class="badge grey" title="Firm money. The same rule as the CSV exports: the Owner sees every fee, an adviser sees their own case, an Administrator sees neither — so this sync leaves it alone rather than writing a figure it will not show you.">not shown / not written — money</span>`
+          : isNewCase
+            ? '<span class="badge blue">will be set</span>'
+            : d.locked
+            ? `<span class="badge grey" title="A completion date on a case that is still live would make it completed for every money report and live for every pipeline at the same time. Tick the stage move below and this unlocks.">tied to the stage decision</span>`
+            : `<select class="rev-choice" data-i="${r.i}" data-f="${esc(d.key)}" data-scope="${scope}" aria-label="${esc(d.label)}">
+                 <option value="keep" ${d.choice === "keep" ? "selected" : ""}>KEEP ours</option>
+                 <option value="update" ${d.choice === "update" ? "selected" : ""}>UPDATE from Revolution</option>
+               </select>${extra}${d.stale ? ' <span class="badge red" title="This value changed here between the preview and Apply, so the choice was reset to KEEP.">changed since you looked</span>' : ""}`;
+      return `<tr class="${cls}" data-f="${esc(d.key)}"><td>${esc(d.label)}</td><td>${esc(held)}</td><td>${esc(revShow(d.key, d.incoming))}</td><td>${control}</td></tr>`;
+    }).join("")}
+  </tbody></table>`;
+}
+function revRowDetailHtml(r) {
+  const bits = [];
+  if (r.match === "review") {
+    bits.push(`<div class="dq-notice"><strong>Which client is this?</strong> ${esc(r.matchReason)}.
+      ${r.candidates.map((c) => `<button type="button" class="btn btn-sm rev-attach" data-i="${r.i}" data-cid="${c.id}">Attach to ${esc(clientFullName(c) || c.email || "this client")}</button>`).join(" ")}
+      <button type="button" class="btn btn-sm rev-newclient" data-i="${r.i}">It's a new client</button>
+      <button type="button" class="btn btn-sm rev-skip" data-i="${r.i}">Skip this row</button>
+      ${r.clientId || r.forceNew ? ` <span class="badge green">decided — ${r.clientId ? "attaching to " + esc(clientFullName(revClients.find((c) => c.id === r.clientId) || {})) : "new client"}</span>` : ""}
+      ${r.skipped ? ' <span class="badge grey">skipped</span>' : ""}</div>`);
+  }
+  if (!r.clientId && revRowIncluded(r)) {
+    bits.push(`<p class="rev-nostore">Creates a client: <strong>${esc(revRowName(r))}</strong>${r.v.date_of_birth ? ` · DOB ${esc(fmtD(r.v.date_of_birth))}` : ""}${r.g.email ? ` · ${esc(r.g.email)}` : ""}${r.address ? ` · ${esc(r.address)}` : ""}</p>`);
+  }
+  if (r.clientId && (r.clientDiff || []).some((d) => d.state !== "same")) bits.push(revDiffTableHtml(r, r.clientDiff.filter((d) => d.state !== "same"), "client"));
+  if (r.caseMatch) {
+    bits.push(`<p class="rev-nostore"><strong>Case:</strong> ${r.caseMatch.verdict === "same" ? "same mortgage" : r.caseMatch.verdict === "new" ? "candidate new case" : "not matched"} — ${esc(r.caseMatch.reason)}</p>`);
+    if (r.caseDiff && r.caseDiff.length) bits.push(revDiffTableHtml(r, r.caseDiff, "case"));
+  }
+  if (r.stageMove) {
+    bits.push(`<div class="rev-stage-move">
+      <label><input type="checkbox" class="rev-stage-ok" data-i="${r.i}" ${r.stageAccepted ? "checked" : ""}>
+        Move this case from <strong>${esc(STAGE_LABEL[r.stageMove.from] || r.stageMove.from)}</strong> to <strong>${esc(STAGE_LABEL[r.stageMove.to] || r.stageMove.to)}</strong>?</label>
+      <div>The file says so, but a stage is how this system decides what to chase — completing a case here starts the review, the fee chase and the rate-end clock. The sync never moves one on its own; tick it if it's right.</div>
+    </div>`);
+  }
+  if (r.problems.length) {
+    bits.push(`<p class="rev-nostore">${r.problems.map((p) => `<span class="badge ${p.bad ? "red" : "amber"}">${esc(p.text)}</span>`).join(" ")}</p>`);
+  }
+  /* EVERY ROW CAN BE LEFT OUT, not just the ones asking a question. A review row has
+     always had "Skip this row" because it has a decision attached; a matched row could be
+     emptied field by field (every choice is a KEEP away); but a NEW row had no control at
+     all — it created a client and a case and there was no way to say no short of editing
+     the file. A weekly export carries rows a human wants out of it (a test record, a
+     duplicate applicant, a row a report tool left behind that still has a name on it), and
+     "nothing is written that was not confirmed" has to include those. */
+  if (r.match !== "review") {
+    bits.push(`<p class="rev-nostore"><button type="button" class="btn btn-sm rev-toggle" data-i="${r.i}">${r.skipped ? "Put this row back in" : "Leave this row out"}</button>${r.skipped ? ' <span class="badge grey">left out — nothing is written for this row</span>' : ""}</p>`);
+  }
+  return bits.join("");
+}
+function renderRevPreview() {
+  const el = $("#rev-preview");
+  if (!el) return;
+  if (!revRows.length) { el.innerHTML = ""; return; }
+  const quarantined = revRows.filter((r) => r.match === "quarantine");
+  const live = revRows.filter((r) => r.match !== "quarantine");
+  const nExact = revRows.filter((r) => r.match === "exact").length;
+  const nReview = revRows.filter((r) => r.match === "review").length;
+  const nNew = revRows.filter((r) => r.match === "new").length;
+  const nConflict = revRows.filter((r) => (r.caseDiff || []).concat(r.clientDiff || []).some((d) => d.state === "conflict")).length;
+  const totals = revRows.reduce((a, r) => {
+    const w = revRowWrites(r);
+    a.fields += w.fields;
+    w.creates.forEach((c) => { a[c] = (a[c] || 0) + 1; });
+    return a;
+  }, { fields: 0 });
+  const unstored = revMapping.filter((m) => m.bucket === "unstored");
+  el.innerHTML = `<div class="panel" id="rev-preview-panel">
+    <h3>${revRows.length} row${revRows.length === 1 ? "" : "s"} — ${nExact} matched · ${nReview} to review · ${nNew} new · ${quarantined.length} needing attention</h3>
+    <p class="panel-sub">${nConflict ? `<strong>${nConflict} row${nConflict === 1 ? " has" : "s have"} a field that disagrees with what we hold</strong> — those default to KEEP and are highlighted. ` : ""}Nothing below is written until you press Apply, and nothing here queues an email.</p>
+    <div class="rev-rows-scroll"><table class="imp-table rev-rows-table" id="rev-rows">
+      <colgroup><col style="width:34px;"><col style="width:20%;"><col style="width:27%;"><col style="width:19%;"><col></colgroup>
+      <thead><tr><th>#</th><th>Client (from the file)</th><th>Match</th><th>Case</th><th>Would write</th></tr></thead>
+      <tbody>${live.map((r) => {
+        const w = revRowWrites(r);
+        const b = REV_VERDICT_BADGE[r.match] || ["grey", r.match];
+        const bits = [];
+        if (w.creates.includes("client")) bits.push("creates client");
+        if (w.creates.includes("case")) bits.push("creates case");
+        if (w.fields) bits.push(`${w.fields} field${w.fields === 1 ? "" : "s"}`);
+        return `<tr class="rev-row" data-i="${r.i}" data-v="${r.match}" data-case="${r.caseMatch ? r.caseMatch.verdict : "none"}" data-conflict="${(r.caseDiff || []).concat(r.clientDiff || []).some((d) => d.state === "conflict") ? "1" : "0"}" data-writes="${w.fields}">
+            <td>${r.i + 1}</td>
+            <td>${esc(revRowName(r))}${r.v.date_of_birth ? `<span class="rev-why">DOB ${esc(fmtD(r.v.date_of_birth))}</span>` : ""}</td>
+            <td class="rev-verdict"><span class="badge ${b[0]}">${b[1]}</span><span class="rev-why">${esc(r.matchReason || "")}</span></td>
+            <td>${r.caseMatch ? `<span class="badge ${r.caseMatch.verdict === "same" ? "green" : r.caseMatch.verdict === "new" ? "blue" : "grey"}">${r.caseMatch.verdict === "same" ? "same mortgage" : r.caseMatch.verdict === "new" ? "new case" : "not matched"}</span>` : ""}</td>
+            <td>${bits.length ? esc(bits.join(" · ")) : '<span class="badge grey">nothing</span>'}</td>
+          </tr>
+          <tr class="rev-diff-row" data-i="${r.i}"><td colspan="5">${revRowDetailHtml(r)}</td></tr>`;
+      }).join("")}</tbody>
+    </table></div>
+    ${unstored.length ? `<p class="rev-nostore"><strong>Not stored (no field here):</strong> ${unstored.map((m) => `<code>${esc(m.header)}</code>`).join(", ")}. Nothing in those columns is read — see the mapping table above for why, one by one.</p>` : ""}
+    <div class="rev-apply-bar">
+      <button class="btn btn-primary" id="rev-apply-btn">Apply the confirmed changes</button>
+      <span class="panel-sub" style="margin:0;" id="rev-apply-note">${totals.client || 0} client${(totals.client || 0) === 1 ? "" : "s"} created · ${totals.case || 0} case${(totals.case || 0) === 1 ? "" : "s"} created · ${totals.fields} field${totals.fields === 1 ? "" : "s"} updated. No emails are queued.</span>
+    </div>
+  </div>
+  ${quarantined.length ? `<div class="panel" id="rev-quarantine">
+    <h3>${quarantined.length} row${quarantined.length === 1 ? "" : "s"} could not be used — unmatched / needs attention</h3>
+    <p class="panel-sub">Nothing is written for these and nothing is guessed. They are listed so the file can be fixed at the Revolution end, which is where the data belongs.</p>
+    ${/* Wrapped, like the mapping and the row tables above it: .imp-table cells are
+          white-space:nowrap and this one prints up to 120 characters of a raw row, so
+          unwrapped it pushed the WHOLE Import page sideways — mapping table, preview and
+          apply bar included — instead of scrolling inside its own panel. */ ""}
+    <div class="rev-rows-scroll"><table class="imp-table" id="rev-quarantine-rows"><thead><tr><th>Row</th><th>What was in it</th><th>Why it was left</th></tr></thead>
+    <tbody>${quarantined.map((r) => `<tr data-i="${r.i}"><td>${r.i + 1}</td>
+      <td>${esc(r.cells.filter((c) => String(c || "").trim()).join(" · ").slice(0, 120) || "(every cell empty)")}</td>
+      <td>${esc(r.matchReason)}${r.problems.map((p) => ` · ${esc(p.text)}`).join("")}</td></tr>`).join("")}</tbody></table></div>
+  </div>` : ""}`;
+}
+
+/* ---- 13 · READING THE BOOK ---------------------------------------------
+   Two reads, both firm-wide, both re-run at Apply time so the decision that
+   gets written is made against the database as it is NOW — the same discipline
+   runImport() has carried since R5-23a. `property_address` is deliberately NOT
+   in the case select: this file's address is the client's correspondence
+   address and may not be the security property, so the sync never touches the
+   property column (it says so on screen too). */
+async function revFetchClients() {
+  const { data, error } = await db.from("clients").select("id,first_name,last_name,email,phone,address,date_of_birth");
+  if (error) { console.error(error); return []; }
+  return data || [];
+}
+async function revFetchCases() {
+  const { data, error } = await db.from("cases")
+    .select("id,client_id,stage,case_kind,lender,product_name,rate_type,rate_percent,rate_end_date,rate_end_estimated,erc_end_date,loan_amount,property_value,term_years,proc_fee,broker_fee,fee_status,protection_status,protection_commission,gi_status,lead_source,submitted_at,completed_at,assigned_to,updated_at");
+  if (error) { console.error(error); return []; }
+  return data || [];
+}
+/* ---- 14 · "LAST IMPORT" ------------------------------------------------
+   Asked for as a weekly cadence stamp, and the honest answer is that this app
+   has nowhere shared to put one: `settings` is Owner-only on write and the
+   sync is admin work, and no schema change was available. So the stamp is
+   DERIVED from the sync's own audit trail — the "Revolution sync <date>" notes
+   it writes on every case it touches. That is a real, shared, staff-visible
+   fact rather than a per-browser guess, and it is free (one indexed read).
+   Only when there are no such notes yet does it fall back to this browser's
+   localStorage, and then it SAYS it is per-browser. */
+const revStampKey = () => `nx_revsync_${authUid || "anon"}`;
+async function revLastSync() {
+  const { data, error } = await db.from("case_notes").select("created_at,body")
+    .ilike("body", "Revolution sync%").order("created_at", { ascending: false }).limit(1);
+  if (!error && data && data.length) return { at: data[0].created_at, shared: true };
+  const local = lsGet(revStampKey());
+  return local ? { at: local, shared: false } : null;
+}
+async function renderRevLastSync() {
+  const el = $("#rev-lastsync");
+  if (!el) return;
+  const s = await revLastSync();
+  if (!s) { el.innerHTML = "No Revolution sync has been run from this system yet."; return; }
+  const when = `${fmtD(String(s.at).slice(0, 10))}`;
+  el.innerHTML = s.shared
+    ? `Last import: <strong>${esc(when)}</strong> — taken from the sync notes this tool writes on the cases it touches, so everyone sees the same date.`
+    : `Last import: <strong>${esc(when)}</strong> <span class="rev-caveat">— from this browser only (nothing was written last time, so there is no shared note to read). On another machine this line will be blank.</span>`;
+}
+
+/* ---- 15 · WIRING ------------------------------------------------------- */
+function revReset(keepText) {
+  revHeaders = []; revCells = []; revMapping = []; revRows = [];
+  if (!keepText && $("#rev-text")) $("#rev-text").value = "";
+  renderRevMapping(); renderRevPreview();
+  const res = $("#rev-result"); if (res) res.innerHTML = "";
+  const rb = $("#rev-reset-btn"); if (rb) rb.hidden = true;
+}
+async function revRead() {
+  const text = ($("#rev-text") && $("#rev-text").value || "").trim();
+  if (!text) return toast("Choose the export file, or paste it in first");
+  const parsed = revSplitRows(text);
+  if (!parsed.headers.length || !parsed.rows.length) { $("#rev-status").textContent = ""; return toast("That doesn't look like an export — the first row must be the column headings, with the data under it"); }
+  revHeaders = parsed.headers;
+  revCells = parsed.rows;
+  revMapping = revBuildMapping(revHeaders);
+  $("#rev-status").textContent = "Matching against the book…";
+  revClients = await revFetchClients();
+  revCases = await revFetchCases();
+  revBuildRows();
+  const over = parsed.rows.length - revRows.length;
+  $("#rev-status").textContent = `${revRows.length} row${revRows.length === 1 ? "" : "s"} read`
+    + (over > 0 ? ` — only the first ${REV_ROW_CAP} are shown; run the rest as a second file` : "")
+    + ". Check the column mapping, then the rows.";
+  const rb = $("#rev-reset-btn"); if (rb) rb.hidden = false;
+  renderRevMapping();
+  renderRevPreview();
+}
+if ($("#rev-file")) {
+  $("#rev-file").addEventListener("change", async () => {
+    const file = $("#rev-file").files[0];
+    if (!file) return;
+    revFileLabel = file.name;
+    try {
+      if (/\.(xlsx|xls)$/i.test(file.name)) {
+        // The same SheetJS path the bulk import uses — one sheet, flattened to CSV.
+        const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
+        const sn = wb.SheetNames[0];
+        $("#rev-text").value = XLSX.utils.sheet_to_csv(wb.Sheets[sn]);
+      } else {
+        $("#rev-text").value = await file.text();
+      }
+      $("#rev-status").textContent = `Loaded ${file.name} — now press “Read the export”.`;
+    } catch (e) {
+      toast("Could not read that file: " + e.message);
+    }
+  });
+}
+if ($("#rev-read-btn")) $("#rev-read-btn").addEventListener("click", async () => {
+  const btn = $("#rev-read-btn");
+  btn.disabled = true;
+  try { await revRead(); } catch (e) { console.error(e); toast("Error: " + e.message); $("#rev-status").textContent = ""; }
+  finally { btn.disabled = false; }
+});
+if ($("#rev-reset-btn")) $("#rev-reset-btn").addEventListener("click", () => { revReset(false); $("#rev-status").textContent = ""; });
+/* Correcting a column re-reads the whole file through the new mapping — the
+   rows, the matches and the diffs all derive from it, so nothing is left
+   showing a verdict that was reached under the old one. */
+if ($("#rev-mapping")) $("#rev-mapping").addEventListener("change", async (e) => {
+  const sel = e.target.closest(".rev-map-sel");
+  if (!sel) return;
+  const i = Number(sel.dataset.h);
+  const m = revMapping[i];
+  if (!m) return;
+  revRememberMap(m.norm, sel.value || "");
+  revMapping = revBuildMapping(revHeaders);
+  revBuildRows();
+  renderRevMapping();
+  renderRevPreview();
+});
+if ($("#rev-preview")) {
+  $("#rev-preview").addEventListener("change", (e) => {
+    const sel = e.target.closest(".rev-choice");
+    if (sel) {
+      const r = revRows[Number(sel.dataset.i)];
+      if (!r) return;
+      const list = sel.dataset.scope === "client" ? r.clientDiff : r.caseDiff;
+      const d = (list || []).find((x) => x.key === sel.dataset.f);
+      if (d) d.choice = sel.value;
+      renderRevPreview();
+      return;
+    }
+    const cb = e.target.closest(".rev-stage-ok");
+    if (cb) {
+      const r = revRows[Number(cb.dataset.i)];
+      if (!r) return;
+      r.stageAccepted = cb.checked;
+      if (r.stageMove) r.stageMove.accepted = cb.checked;
+      revApplyStageLock(r);
+      renderRevPreview();
+    }
+  });
+  $("#rev-preview").addEventListener("click", (e) => {
+    const el = e.target.closest(".rev-attach, .rev-newclient, .rev-skip, .rev-toggle, #rev-apply-btn");
+    if (!el) return;
+    if (el.id === "rev-apply-btn") { revApply(); return; }
+    const r = revRows[Number(el.dataset.i)];
+    if (!r) return;
+    /* Leave-out / put-back only flips the flag: the row's identity decision (which client,
+       which case) is untouched, so putting it back gives exactly the row that was there. */
+    if (el.classList.contains("rev-toggle")) { r.skipped = !r.skipped; revResolveRow(r); renderRevPreview(); return; }
+    if (el.classList.contains("rev-attach")) { r.clientId = el.dataset.cid; r.forceNew = false; r.skipped = false; }
+    else if (el.classList.contains("rev-newclient")) { r.clientId = null; r.forceNew = true; r.skipped = false; }
+    else { r.clientId = null; r.forceNew = false; r.skipped = true; }
+    revResolveRow(r);
+    renderRevPreview();
+  });
+}
+
+/* ---- 16 · APPLY --------------------------------------------------------
+   Writes ONLY what is on screen as confirmed, in this order per row: the
+   client, then the case, then the note that records what was done. Three
+   things it deliberately never does:
+     · queue an email — nothing on this path touches email_queue, and the
+       result panel says so out loud every time;
+     · move a case stage unless that row's own tick says to;
+     · overwrite a value that changed in this database between the preview and
+       the press (those are reset to KEEP and reported). */
+/* "ERC end date" must not become "erc end date" in a note a human reads, and
+   "Lead source" must not stay capitalised mid-sentence. Only the first word is
+   touched, and only when it is not an acronym. */
+const revLbl = (label) => {
+  const s = String(label || "");
+  const first = s.split(" ")[0] || "";
+  return first && first === first.toUpperCase() && /[A-Z]/.test(first) ? s : s.charAt(0).toLowerCase() + s.slice(1);
+};
+function revNoteBody(parts, prefix) {
+  const day = fmtD(localDateStr());
+  return `Revolution sync ${day}: ${prefix ? prefix + (parts.length ? " — " : "") : ""}${parts.join(", ")}`.replace(/\s+$/, "");
+}
+/* Re-derive a row against the book as it is NOW, keeping the operator's
+   choices — except where the held value itself moved, which forces KEEP and
+   flags the row. */
+function revRefreshRow(r) {
+  const prevCase = {}, prevClient = {};
+  (r.caseDiff || []).forEach((d) => { prevCase[d.key] = { choice: d.choice, held: d.held }; });
+  (r.clientDiff || []).forEach((d) => { prevClient[d.key] = { choice: d.choice, held: d.held }; });
+  revResolveRow(r);
+  const restore = (list, prev) => (list || []).forEach((d) => {
+    const p = prev[d.key];
+    if (!p) return;
+    if (!revSame(d.key, p.held, d.held)) { d.choice = "keep"; d.stale = true; }
+    else d.choice = p.choice;
+  });
+  restore(r.caseDiff, prevCase);
+  restore(r.clientDiff, prevClient);
+  revApplyStageLock(r);
+  return r;
+}
+async function revApply() {
+  const btn = $("#rev-apply-btn");
+  const rows = revRows.filter(revRowIncluded);
+  if (!rows.length) return toast("Nothing is confirmed yet — decide the rows that need a decision first");
+  if (btn) btn.disabled = true;
+  $("#rev-status").textContent = "Writing the confirmed changes…";
+  // The same discipline as the bulk import: re-read, then decide.
+  revClients = await revFetchClients();
+  revCases = await revFetchCases();
+  const log = [];
+  let nClients = 0, nCases = 0, nFields = 0, nNotes = 0, nNoteFail = 0, nStale = 0, nStageMoved = 0, nMoneySkipped = 0;
+  const touched = new Map();
+  const sameRunClients = new Map();   // key → client row created earlier in THIS run
+  const runKey = (r) => (r.g.email ? r.g.email.trim().toLowerCase() : clientNameKey(revRowName(r)) + "|" + (r.v.date_of_birth || ""));
+  for (const r of rows) {
+    const name = revRowName(r);
+    try {
+      // A brand-new client this run already created (the same person twice in one file).
+      if (!r.clientId && sameRunClients.has(runKey(r))) r.clientId = sameRunClients.get(runKey(r));
+      revRefreshRow(r);
+      if ((r.caseDiff || []).concat(r.clientDiff || []).some((d) => d.stale)) nStale++;
+      let clientRow = r.clientId ? revClients.find((c) => c.id === r.clientId) : null;
+      const noteParts = [];
+      let madeClient = false, clientFields = 0;
+      /* ---- the client ---- */
+      if (!clientRow) {
+        let first = (r.g.first_name || "").trim(), last = (r.g.last_name || "").trim();
+        if (!last && first) { last = first; first = ""; }   // splitName's rule: a lone name is a surname
+        const ins = await db.from("clients").insert({
+          first_name: first || null, last_name: last || null,
+          email: r.g.email || null, phone: r.g.phone || null,
+          date_of_birth: r.v.date_of_birth || null,
+          address: r.address || null,
+        }).select().single();
+        if (ins.error) throw ins.error;
+        clientRow = ins.data;
+        revClients.push(clientRow);
+        sameRunClients.set(runKey(r), clientRow.id);
+        r.clientId = clientRow.id;
+        nClients++;
+        madeClient = true;
+      } else {
+        const patch = {};
+        (r.clientDiff || []).forEach((d) => {
+          if (d.choice !== "update" || d.state === "same") return;
+          patch[d.key === "address" ? "address" : d.key] = d.incoming;
+          noteParts.push(d.state === "conflict" ? `updated ${revLbl(d.label)} (${revShow(d.key, d.held)} → ${revShow(d.key, d.incoming)})` : d.state === "extend" ? `extended ${revLbl(d.label)} (${revShow(d.key, d.incoming)})` : `filled ${revLbl(d.label)} (${revShow(d.key, d.incoming)})`);
+        });
+        if (Object.keys(patch).length) {
+          const up = await db.from("clients").update(patch).eq("id", clientRow.id);
+          if (up.error) throw up.error;
+          Object.assign(clientRow, patch);
+          clientFields = Object.keys(patch).length;
+          nFields += clientFields;
+        }
+      }
+      touched.set(clientRow.id, [clientRow.first_name, clientRow.last_name].filter(Boolean).join(" ") || name);
+      /* ---- the case ---- */
+      const cm = r.caseMatch || { verdict: "none", reason: "" };
+      let caseId = null, created = false, caseFields = 0;
+      if (cm.verdict === "same" && cm.caseId) {
+        const caseRow = revCases.find((c) => c.id === cm.caseId);
+        const patch = {};
+        (r.caseDiff || []).forEach((d) => {
+          if (d.choice !== "update" || d.state === "same" || d.state === "money") return;
+          patch[REV_CASE_COL[d.key] || d.key] = d.key === "completed_date" ? new Date(d.incoming + "T12:00:00").toISOString() : d.incoming;
+          noteParts.push(d.state === "conflict" ? `updated ${revLbl(d.label)} (${revShow(d.key, d.held)} → ${revShow(d.key, d.incoming)})` : d.state === "extend" ? `extended ${revLbl(d.label)} (${revShow(d.key, d.incoming)})` : `filled ${revLbl(d.label)} (${revShow(d.key, d.incoming)})`);
+        });
+        if ((r.caseDiff || []).some((d) => d.state === "money")) nMoneySkipped++;
+        // A rate end that came from the network's own export is not an estimate.
+        if (patch.rate_end_date && caseRow && caseRow.rate_end_estimated) { patch.rate_end_estimated = false; noteParts.push("rate end no longer marked estimated"); }
+        if (r.stageMove && r.stageAccepted) {
+          patch.stage = r.stageMove.to;
+          noteParts.push(`stage moved ${STAGE_LABEL[r.stageMove.from] || r.stageMove.from} → ${STAGE_LABEL[r.stageMove.to] || r.stageMove.to} (confirmed on the row)`);
+          nStageMoved++;
+        }
+        caseFields = Object.keys(patch).length;
+        if (caseFields) {
+          const up = await db.from("cases").update(patch).eq("id", cm.caseId);
+          if (up.error) throw up.error;
+          Object.assign(caseRow || {}, patch);
+          nFields += caseFields;
+        }
+        caseId = cm.caseId;
+      } else if (cm.verdict === "new") {
+        const moneyOk = revMoneyOk({ assigned_to: (ME && ME.id) || null });
+        const row = { client_id: clientRow.id, case_kind: r.v.case_kind || "other", stage: r.v.stage || "enquiry", assigned_to: (ME && ME.id) || null };
+        REV_CASE_DIFF.forEach((k) => {
+          const val = r.v[k];
+          if (val == null || val === "") return;
+          if (REV_MONEY_FIELDS.has(k) && !moneyOk) return;
+          if (k === "completed_date") row.completed_at = new Date(val + "T12:00:00").toISOString();
+          else row[k] = val;
+        });
+        if (!moneyOk && REV_CASE_DIFF.some((k) => REV_MONEY_FIELDS.has(k) && r.v[k] != null)) nMoneySkipped++;
+        const ins = await db.from("cases").insert(row).select("id").single();
+        if (ins.error) throw ins.error;
+        caseId = ins.data.id;
+        created = true;
+        nCases++;
+        revCases.push(Object.assign({ id: caseId }, row));
+      }
+      /* ---- the note: the only record that this case was touched by a sync,
+              and the thing the "last import" stamp is read back out of ---- */
+      if (caseId && (created || noteParts.length)) {
+        const body = created
+          ? revNoteBody([], `case created from the Stonebridge export${r.v.lender ? ` — ${r.v.lender}` : ""}${r.v.rate_end_date ? `, rate ends ${fmtD(r.v.rate_end_date)}` : ""}`)
+          : revNoteBody(noteParts);
+        const full = body + (r.g.note ? ` | File note: ${r.g.note}` : "");
+        const ne = await db.from("case_notes").insert({ case_id: caseId, body: full });
+        if (ne.error) nNoteFail++; else nNotes++;
+      }
+      /* The outcome line is computed from what was actually WRITTEN on this row —
+         never from what the preview predicted — so a row that half-failed can
+         never be summarised as a success. */
+      const rowFields = caseFields + clientFields;
+      const outcome = madeClient
+        ? (created ? "created client + case" : "created client")
+        : created
+          ? (rowFields ? `created case, updated ${rowFields} field${rowFields === 1 ? "" : "s"}` : "created case")
+          : rowFields ? `updated ${rowFields} field${rowFields === 1 ? "" : "s"}` : "no change";
+      log.push({ row: r.i + 1, name, outcome, detail: cm.reason || r.matchReason || "" });
+      r.applied = true;
+    } catch (e) {
+      console.error(e);
+      log.push({ row: r.i + 1, name, outcome: "FAILED", detail: e.message || String(e) });
+    }
+  }
+  const skipped = revRows.filter((x) => !revRowIncluded(x));
+  skipped.forEach((r) => log.push({ row: r.i + 1, name: revRowName(r), outcome: r.match === "quarantine" ? "quarantined — nothing written" : "skipped — nothing confirmed", detail: r.matchReason || "" }));
+  log.sort((a, b) => a.row - b.row);
+  lsSet(revStampKey(), new Date().toISOString());
+  if (btn) btn.disabled = false;
+  $("#rev-status").textContent = "";
+  const fails = log.filter((l) => l.outcome === "FAILED").length;
+  toast(`Revolution sync: ${nClients} client${nClients === 1 ? "" : "s"} created · ${nCases} case${nCases === 1 ? "" : "s"} created · ${nFields} field${nFields === 1 ? "" : "s"} updated · ${nNotes} note${nNotes === 1 ? "" : "s"} written · 0 emails queued${fails ? ` · ${fails} failed` : ""}`);
+  $("#rev-result").innerHTML = `<div class="panel" id="rev-result-panel">
+    <h3>Sync complete — ${nClients} client${nClients === 1 ? "" : "s"} created, ${nCases} case${nCases === 1 ? "" : "s"} created, ${nFields} field${nFields === 1 ? "" : "s"} updated</h3>
+    <p class="panel-sub" id="rev-no-emails"><strong>0 emails were queued</strong> — this tool never queues one. ${nStageMoved ? `${nStageMoved} case stage${nStageMoved === 1 ? " was" : "s were"} moved, each one ticked by you.` : "No case stage was moved."}
+      ${nNoteFail ? ` ⚠ ${nNoteFail} sync note${nNoteFail === 1 ? "" : "s"} could not be written, so ${nNoteFail === 1 ? "that case" : "those cases"} carries no record of what this run changed.` : ""}
+      ${nStale ? ` ⚠ ${nStale} row${nStale === 1 ? " had a field that" : "s had fields that"} changed here between the preview and the press — those were left alone.` : ""}
+      ${nMoneySkipped ? ` ${nMoneySkipped} row${nMoneySkipped === 1 ? "'s" : "s'"} fee columns were not written (firm money — not yours to see on this screen).` : ""}</p>
+    <table class="imp-table rev-outcome-table" id="rev-outcome"><thead><tr><th>Row</th><th>Client</th><th>Outcome</th><th>Why</th></tr></thead>
+      <tbody>${log.map((l) => `<tr data-row="${l.row}" data-outcome="${esc(l.outcome)}"><td>${l.row}</td><td>${esc(l.name)}</td>
+        <td>${l.outcome === "FAILED" ? `<span class="badge red">failed</span>` : l.outcome === "no change" ? `<span class="badge grey">no change</span>` : `<span class="badge green">${esc(l.outcome)}</span>`}</td>
+        <td>${esc(l.detail)}</td></tr>`).join("")}</tbody></table>
+    ${touched.size ? `<div class="row-list">${[...touched.entries()].map(([id, n]) => `<div class="row-item"><div class="row-main"><a href="#" class="t" onclick="event.preventDefault();openClient('${id}')">${esc(n)}</a></div></div>`).join("")}</div>` : ""}
+  </div>`;
+  // Re-derive every row against what is now stored: a second press writes nothing.
+  // The "changed since you looked" marks are carried ACROSS that re-derive on purpose:
+  // the summary line above says how many fields drifted, and without the per-field badge
+  // there is no way to find them again in a 400-row file — which is the only reason the
+  // count is worth printing.
+  revClients = await revFetchClients();
+  revCases = await revFetchCases();
+  revRows.forEach((r) => {
+    if (r.match === "quarantine") return;
+    const wasStale = new Set((r.caseDiff || []).concat(r.clientDiff || []).filter((d) => d.stale).map((d) => d.key));
+    r.stageAccepted = false; r.stageMove = null;
+    revResolveRow(r);
+    if (wasStale.size) (r.caseDiff || []).concat(r.clientDiff || []).forEach((d) => { if (wasStale.has(d.key)) d.stale = true; });
+  });
+  renderRevPreview();
+  renderRevLastSync();
+}
+
+/* ---- 17 · TEST HOOKS ---------------------------------------------------
+   Read-only views of the same objects the screen is drawn from (the app has
+   the same arrangement for the bulk import's property recovery). Nothing here
+   writes, and nothing in app.js reads them. */
+window.__rev = {
+  mapping: () => revMapping.map((m) => ({ header: m.header, norm: m.norm, key: m.key, bucket: m.bucket, why: m.why, remembered: m.remembered, recognisedAs: m.recognisedAs || null })),
+  rows: () => revRows.map((r) => ({
+    i: r.i, name: revRowName(r), match: r.match, reason: r.matchReason, clientId: r.clientId,
+    caseVerdict: r.caseMatch ? r.caseMatch.verdict : null, caseId: r.caseMatch ? r.caseMatch.caseId || null : null,
+    caseReason: r.caseMatch ? r.caseMatch.reason : null,
+    included: revRowIncluded(r), writes: revRowWrites(r),
+    diffs: (r.caseDiff || []).map((d) => ({ key: d.key, state: d.state, choice: d.choice, held: d.held, incoming: d.incoming, locked: !!d.locked })),
+    clientDiffs: (r.clientDiff || []).map((d) => ({ key: d.key, state: d.state, choice: d.choice, held: d.held, incoming: d.incoming })),
+    stageMove: r.stageMove ? { from: r.stageMove.from, to: r.stageMove.to, accepted: !!r.stageAccepted } : null,
+    problems: r.problems.map((p) => p.text),
+  })),
+  read: () => revRead(),
+  apply: () => revApply(),
+  setChoice: (i, key, choice, scope) => {
+    const r = revRows[i];
+    if (!r) return false;
+    const d = ((scope === "client" ? r.clientDiff : r.caseDiff) || []).find((x) => x.key === key);
+    if (!d) return false;
+    d.choice = choice;
+    renderRevPreview();
+    return true;
+  },
+  setMap: (headerNorm, key) => { revRememberMap(headerNorm, key); return revMapRemembered(); },
+  forgetMap: () => { lsSet(revMapStoreKey(), "{}"); return true; },
+  lastSync: () => revLastSync(),
+};
+/* Drawn when the Import page is opened (see nav()), not at load: this is a
+   database read and there is no session yet when this file is evaluated. */
 
 init();

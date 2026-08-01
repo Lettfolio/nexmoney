@@ -251,6 +251,12 @@
         <button class="btn btn-primary" id="new-client-btn">+ New client</button>
       </div>
       <input type="search" id="client-search" class="search" placeholder="Search clients…">
+      <!-- R8-1 — CLIENT SEGMENTS. The chips, the definition line under them and the bulk bar are
+           all rendered by loadClients(); these are the containers, in the order they read:
+           search → which slice of the book → what that slice MEANS → what you can do to it. -->
+      <div id="client-segment" class="pipe-segment client-segment" role="tablist" aria-label="Client segment"></div>
+      <p class="panel-sub client-seg-def" id="client-seg-def"></p>
+      <div id="client-bulk"></div>
       <div id="client-list"></div>
     </section>
 
@@ -267,6 +273,31 @@
         </div>
       </div>
       <div id="import-preview"></div>
+
+      <!-- ==================================================================
+           R8-REV · REVOLUTION SYNC
+           Everything is keyed into Revolution first; this reads the weekly
+           Stonebridge client_data_export_V2 and shows, field by field, what
+           would change HERE. Three deliberate rules, stated on screen:
+             · headers are recognised by NAME, never by position
+             · nothing is written until a human confirms it, per field
+             · nothing is emailed, and no stage moves, as a side effect
+           =============================================================== -->
+      <h2 id="rev-heading">Revolution sync</h2>
+      <p class="panel-sub">The weekly <code>client_data_export_V2</code> from Stonebridge. Everything is keyed into Revolution first, so this reads <em>from</em> it: it matches each row to a client and a case you already hold, shows the field-by-field difference, and writes only what you tick. It never queues an email, and it never moves a case stage on its own.</p>
+      <div class="panel" id="rev-input-panel">
+        <div class="rev-lastsync" id="rev-lastsync">Last import: checking…</div>
+        <input type="file" id="rev-file" accept=".csv,.tsv,.txt,.xlsx,.xls">
+        <textarea id="rev-text" rows="6" placeholder="…or paste the export here — the first row must be the column headings"></textarea>
+        <div class="rev-actions">
+          <button class="btn btn-primary" id="rev-read-btn">Read the export</button>
+          <button class="btn" id="rev-reset-btn" hidden>Start again</button>
+          <span id="rev-status" class="panel-sub" style="margin:0;"></span>
+        </div>
+      </div>
+      <div id="rev-mapping"></div>
+      <div id="rev-preview"></div>
+      <div id="rev-result"></div>
     </section>
 
     <!-- Reports -->
@@ -506,6 +537,10 @@
         </div>
       </div>
       <p class="panel-sub">The 8am cron job sends whatever is sitting in the email queue. Nothing composes new emails for you: rate-end reminders, review requests and fee requests are queued by you from a case, and each one sends on its own — pressing an action on a case never releases anybody else's queue. Sending the whole firm's queue early is an Owner / Administrator action, and it confirms the count and recipients first.</p>
+      <!-- R8-5 — copy audit for the round-8 behaviours. Both sentences describe what the backend
+           actually does, not what would be nice: the drip is a cap inside queue_comms_extras, and
+           the annual review is a TASK, so it will never appear in the list below. -->
+      <p class="panel-sub" id="emails-r8-note"><strong>Review requests are dripped:</strong> the automation queues at most <strong>5 per run</strong>, oldest completion first, so a back-catalogue of completed cases doesn't land on your review page in one afternoon. The rest wait for the next run. · <strong>Annual reviews send no email.</strong> When the annual-review setting is on, each completion anniversary creates a <em>call task</em> (“Annual review call — …”) for the case's adviser; it appears in My Day and on the case, and nothing here.</p>
       <div id="email-list"></div>
       <div class="panel" style="margin-top:20px;">
         <h3>SMS activity</h3>
