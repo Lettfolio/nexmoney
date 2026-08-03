@@ -68,6 +68,7 @@ node tests/r8_touch.js
 node tests/r8_rev.js
 node tests/r9_adv.js
 node tests/r9_docs.js
+node tests/r9_embed.js
 ```
 
 Current green counts (end of round 9):
@@ -81,7 +82,8 @@ Current green counts (end of round 9):
 | `tests/r8_rev.js` | 166 |
 | `tests/r9_adv.js` | 169 |
 | `tests/r9_docs.js` | 255 |
-| **Total** | **1,528** |
+| `tests/r9_embed.js` | 104 |
+| **Total** | **1,632** |
 
 `tests/r9_docs.js` is the only file in the battery that drives pages OUTSIDE
 `/admin`: the two client-facing pages `/docs` and `/feedback`. It loads them
@@ -121,6 +123,26 @@ for anyone writing tests here:
   R9-8 block mints its own after page load; copy that, do not relax the guard.
 - **A stored score outranks the one in the URL.** Clear `nps_score` on the case
   first if the band under test is meant to come from the request.
+
+**The embed resolver is strict, and that is deliberate.** Round 9's m11
+migration gave `cases` and `clients` TWO foreign keys
+(`cases_client_id_fkey` and `cases_referrer_client_id_fkey`), so real PostgREST
+refuses every unhinted embed between them — in both directions, at every
+nesting depth — with HTTP 300 / `PGRST201`. The mock's resolver used to take the
+first FK column it found, which is why 1,528 checks watched the deployed
+Pipeline 300 without noticing. `relationCandidates()` / `resolveRelation()` in
+`mock-supabase.js` now enumerate EVERY relationship between a pair, return the
+exact PostgREST error when more than one matches with no hint, and honour the
+`!column_name` and `!constraint_name` hints (plus `!inner`). `FK_COLUMNS` is the
+relationship map: a target lists every FK column that reaches it. Two rules
+follow:
+
+- **Write app and test queries in the hinted form** — `clients!client_id(...)`,
+  `cases!client_id(...)`, `clients!referrer_client_id(...)`. An unhinted
+  cases↔clients embed is now a failing query here, exactly as in production.
+- **Do not loosen the resolver to make a query pass.** The permissive version is
+  the bug. If a new pair becomes ambiguous, add its columns to `FK_COLUMNS` and
+  hint the call sites.
 
 Every run should end 0 failures. Playwright's chromium browser is preinstalled
 in this environment — no `npx playwright install` needed.
