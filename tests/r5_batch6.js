@@ -546,7 +546,17 @@ const shiftMv = (mv, n) => {
       await openReports(page);
       const fx = await fixture(page);
       const scored = fx.cases.filter((c) => c.nps_score != null).sort((a, b) => a.nps_score - b.nps_score);
-      ok("fixture · six cases carry a review score", scored.length === 6, String(scored.length));
+      /* R9 — was "six". The round-9 advocacy fixtures took the scored book from 6 to 12 and gave
+         it a real spread (4 → 10, detractors, passives and promoters), because a review dashboard
+         drawn from six scores that are all 6, 8 or 9 can say nothing about a firm. The count is
+         still asserted exactly, so a fixture drifting silently still fails here; what it has to be
+         has moved. */
+      ok("fixture · twelve cases carry a review score, spanning detractors, passives and promoters",
+        scored.length === 12
+        && scored.some((c) => c.nps_score <= 6)
+        && scored.some((c) => c.nps_score === 7 || c.nps_score === 8)
+        && scored.some((c) => c.nps_score >= 9),
+        JSON.stringify(scored.map((c) => c.nps_score)));
 
       ok("S7 · the list is collapsed until the tile is clicked",
         await page.evaluate(() => document.querySelector("#report-nps-panel").classList.contains("hidden")));
@@ -562,7 +572,10 @@ const shiftMv = (mv, n) => {
         })),
         scope: (document.querySelector("#report-nps-scope") || {}).textContent || "",
       }));
-      eq("S7 · the tile expands to every respondent", list.rows.length, 6);
+      /* R9 — was a hardcoded 6. The property under test is "every respondent appears", which is a
+         statement about the fixtures, not about the number six: read the count off the fixtures at
+         run time, the way the standing rule in HARNESS.md requires. */
+      eq("S7 · the tile expands to every respondent", list.rows.length, scored.length);
       eq("S7 · sorted ascending — the worst score is first", list.rows.map((r) => Number(r.score.split("/")[0])),
         scored.map((c) => Number(c.nps_score)));
       // The top row is the lowest score in the fixture, and it is tinted as a detractor.
