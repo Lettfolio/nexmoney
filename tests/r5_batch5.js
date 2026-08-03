@@ -112,7 +112,7 @@ const sendCalls = (page) => page.evaluate(() => window.__sendCalls || []);
       // Fixture: four live cases with a client email AND a rate end date, plus one with no email.
       const fix = await page.evaluate(async () => {
         const ids = [...document.querySelectorAll("#pipe-table .bulk-cb")].map((cb) => cb.dataset.id);
-        const { data } = await window.__mockDb.from("cases").select("id,stage,rate_end_date,assigned_to,rate_reminder_queued_at,clients(first_name,email)").in("id", ids);
+        const { data } = await window.__mockDb.from("cases").select("id,stage,rate_end_date,assigned_to,rate_reminder_queued_at,clients!client_id(first_name,email)").in("id", ids);
         const live = (data || []).filter((c) => ["completed", "not_proceeding"].indexOf(c.stage) === -1);
         const good = live.filter((c) => c.clients && c.clients.email && c.rate_end_date && !c.rate_reminder_queued_at).slice(0, 4);
         const noEmail = live.filter((c) => !(c.clients && c.clients.email))[0];

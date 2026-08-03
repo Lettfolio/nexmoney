@@ -582,7 +582,7 @@ const shiftMv = (mv, n) => {
       const top = list.rows[0];
       const topCase = scored[0];
       const topName = await page.evaluate(async (id) => {
-        const { data } = await window.__mockDb.from("cases").select("id,clients(first_name,last_name)").eq("id", id);
+        const { data } = await window.__mockDb.from("cases").select("id,clients!client_id(first_name,last_name)").eq("id", id);
         const cl = data[0].clients;
         return [cl.first_name, cl.last_name].filter(Boolean).join(" ");
       }, topCase.id);
