@@ -265,19 +265,107 @@
   }
 
   /* Relationship resolution for PostgREST-style embeds. `<embed>` on table T is
-     to-one when T carries the FK column, else to-many from the target back. */
+     to-one when T carries the FK column, else to-many from the target back.
+
+     R9 — a table pair can be joined by MORE THAN ONE foreign key. Migration m11
+     added `cases.referrer_client_id -> clients(id)` (constraint
+     cases_referrer_client_id_fkey) alongside the original `cases.client_id`
+     (cases_client_id_fkey), so `cases` and `clients` now have two relationships
+     in BOTH directions. Real PostgREST refuses to guess: an unhinted embed
+     between them comes back as HTTP 300 / PGRST201 "Could not embed because more
+     than one relationship was found". This map therefore lists EVERY FK column
+     that reaches a target, not one, and the resolver below is strict about it —
+     a permissive resolver is exactly what let the live Pipeline break while the
+     harness stayed green. A request disambiguates with the column-name hint
+     (`clients!client_id(...)`) or the constraint-name hint
+     (`clients!cases_client_id_fkey(...)`).
+
+     Note the migration gate: with m11 OFF, cases.referrer_client_id does not
+     exist, only one relationship matches, and an unhinted embed is legal again —
+     which is precisely what a database that has not taken m11 does. */
+  var FK_COLUMNS = {
+    clients: ["client_id", "referrer_client_id"],
+    cases: ["case_id"],
+    introducers: ["introducer_id"],
+    profiles: ["id"]
+  };
+  /* kept for callers that only ever needed the primary hop */
   var FK_FOR = { clients: "client_id", cases: "case_id", introducers: "introducer_id", profiles: "id" };
-  function relation(table, embed) {
-    var fk = FK_FOR[embed];
-    if (!fk || !DB[embed]) return null;
-    var sample = DB[table] && DB[table][0];
-    if (sample && Object.prototype.hasOwnProperty.call(sample, fk) && embed !== table) {
-      return { kind: "one", target: embed, fk: fk };
+  /* Postgres' default constraint name for `<source>.<column> references <target>` */
+  function fkConstraint(source, column) { return source + "_" + column + "_fkey"; }
+  function hasCol(table, col) {
+    if (!DB[table]) return false;
+    var sample = DB[table][0];
+    if (!sample || !Object.prototype.hasOwnProperty.call(sample, col)) return false;
+    return disabledColumns(table).indexOf(col) < 0;
+  }
+  /* every relationship between `table` and `embed`, in resolution order.
+     -> [{ kind, target, fk, column, constraint, source }] */
+  function relationCandidates(table, embed) {
+    var out = [];
+    if (!DB[embed]) return out;
+    if (embed !== table) {
+      (FK_COLUMNS[embed] || []).forEach(function (col) {
+        if (hasCol(table, col)) {
+          out.push({ kind: "one", target: embed, fk: col, column: col, source: table, constraint: fkConstraint(table, col) });
+        }
+      });
     }
-    var tfk = FK_FOR[table];
-    var tsample = DB[embed] && DB[embed][0];
-    if (tfk && tsample && Object.prototype.hasOwnProperty.call(tsample, tfk)) {
-      return { kind: "many", target: embed, fk: tfk };
+    if (out.length) return out;
+    (FK_COLUMNS[table] || []).forEach(function (col) {
+      if (hasCol(embed, col)) {
+        out.push({ kind: "many", target: embed, fk: col, column: col, source: embed, constraint: fkConstraint(embed, col) });
+      }
+    });
+    return out;
+  }
+  function matchesHint(cand, hint) {
+    return hint === cand.column || hint === cand.constraint;
+  }
+  /* -> { rel } | { ambiguous:[cands] } | { none:true } */
+  function resolveRelation(table, embed, hint) {
+    var cands = relationCandidates(table, embed);
+    if (hint) {
+      var picked = cands.filter(function (c) { return matchesHint(c, hint); });
+      if (picked.length === 1) return { rel: picked[0] };
+      if (picked.length > 1) return { ambiguous: picked };
+      return { none: true };
+    }
+    if (cands.length === 1) return { rel: cands[0] };
+    if (cands.length > 1) return { ambiguous: cands };
+    return { none: true };
+  }
+  /* the exact shape PostgREST returns for an ambiguous embed */
+  function ambiguousEmbedError(table, embed, cands) {
+    var names = cands.map(function (c) { return "'" + embed + "!" + c.constraint + "'"; }).join(", ");
+    return {
+      code: "PGRST201",
+      message: "Could not embed because more than one relationship was found for '" + table + "' and '" + embed + "'",
+      details: cands.map(function (c) {
+        return {
+          cardinality: c.kind === "one" ? "many-to-one" : "one-to-many",
+          embedding: table + " with " + embed,
+          relationship: c.constraint + " using " + c.source + "(" + c.column + ") and " +
+            (c.kind === "one" ? c.target : table) + "(" + pkOf(c.kind === "one" ? c.target : table) + ")"
+        };
+      }),
+      hint: "Try changing '" + embed + "' to one of the following: " + names +
+        ". Find the desired relationship in the 'details' key."
+    };
+  }
+  /* Walk a select list before any row is projected and refuse the whole request
+     if any embed — at any nesting depth, in either direction — is ambiguous.
+     Returns null when the select is resolvable. */
+  function embedError(table, sel) {
+    var p = parseSelect(sel);
+    for (var i = 0; i < p.embeds.length; i++) {
+      var e = p.embeds[i];
+      var r = resolveRelation(table, e.name, e.hint);
+      if (r.ambiguous) return ambiguousEmbedError(table, e.name, r.ambiguous);
+      if (r.rel) {
+        var nested = embedError(r.rel.target, e.spec);
+        if (nested) return nested;
+      }
     }
     return null;
   }
@@ -295,36 +383,67 @@
     out.push(cur);
     return out.map(function (x) { return x.trim(); }).filter(function (x) { return x.length; });
   }
-  /* -> { star:bool, cols:[..], embeds:[{name, spec}] } */
+  /* -> { star:bool, cols:[..], embeds:[{name, hint, inner, spec}] }
+     An embed token is `<table>[!<hint>][!inner](<spec>)`. The hint is either the
+     FK column name (`clients!client_id`) or the constraint name
+     (`clients!cases_client_id_fkey`); `!inner` is a join modifier, not a hint.
+     The result key is always the bare table name — a hint disambiguates the
+     relationship, it does not rename the field. */
   function parseSelect(sel) {
     var res = { star: false, cols: [], embeds: [] };
     if (sel == null || sel === "") { res.star = true; return res; }
     splitTop(String(sel), ",").forEach(function (tok) {
-      var m = /^([A-Za-z0-9_]+)\s*\((.*)\)$/.exec(tok);
-      if (m) { res.embeds.push({ name: m[1], spec: m[2] }); return; }
+      var m = /^([A-Za-z0-9_]+)((?:\s*!\s*[A-Za-z0-9_]+)*)\s*\((.*)\)$/.exec(tok);
+      if (m) {
+        var mods = (m[2] || "").split("!").map(function (x) { return x.trim(); }).filter(function (x) { return x.length; });
+        var inner = false, hint = null;
+        mods.forEach(function (x) {
+          if (x === "inner") inner = true;
+          else if (x === "left") { /* default join, no-op */ }
+          else if (hint == null) hint = x;
+        });
+        res.embeds.push({ name: m[1], hint: hint, inner: inner, spec: m[3] });
+        return;
+      }
       if (tok === "*") { res.star = true; return; }
       res.cols.push(tok);
     });
     return res;
   }
+  /* set by project() when an `!inner` embed came back empty for this row */
   function project(table, row, sel) {
     var p = parseSelect(sel);
     var out = {};
     if (p.star || (!p.cols.length && !p.embeds.length)) { out = clone(row); }
     else { p.cols.forEach(function (c) { out[c] = clone(row[c]); }); }
     p.embeds.forEach(function (e) {
-      var rel = relation(table, e.name);
-      if (!rel) { out[e.name] = null; return; }
+      var r = resolveRelation(table, e.name, e.hint);
+      var rel = r.rel;
+      if (!rel) { out[e.name] = null; if (e.inner) out.__innerDrop = true; return; }
       if (rel.kind === "one") {
-        var parent = DB[rel.target].filter(function (r) { return r[pkOf(rel.target)] === row[rel.fk]; })[0];
+        var parent = DB[rel.target].filter(function (r2) { return r2[pkOf(rel.target)] === row[rel.fk]; })[0];
         out[e.name] = parent ? project(rel.target, parent, e.spec) : null;
+        if (e.inner && !parent) out.__innerDrop = true;
       } else {
-        var kids = DB[rel.target].filter(function (r) { return r[rel.fk] === row[pkOf(table)]; });
+        var kids = DB[rel.target].filter(function (r2) { return r2[rel.fk] === row[pkOf(table)]; });
         out[e.name] = kids.map(function (k) { return project(rel.target, k, e.spec); });
+        if (e.inner && !kids.length) out.__innerDrop = true;
       }
     });
     /* an un-migrated column simply isn't in the result set */
     disabledColumns(table).forEach(function (c) { delete out[c]; });
+    return out;
+  }
+  /* project a whole result set, applying `!inner` (a row whose inner-joined
+     embed is empty does not come back at all) */
+  function projectRows(table, rows, sel) {
+    var out = [];
+    for (var i = 0; i < rows.length; i++) {
+      var r = project(table, rows[i], sel);
+      if (r && r.__innerDrop) continue;
+      if (r) delete r.__innerDrop;
+      out.push(r);
+    }
     return out;
   }
 
@@ -2814,13 +2933,15 @@
   };
 
   BP._runSelect = function () {
+    var embErr = embedError(this._table, this._columns);
+    if (embErr) return { data: null, error: embErr, count: null, status: 300, statusText: "Multiple Choices" };
     var rows = readFilter(this._table, this._matching());
     var total = rows.length;
     rows = this._sort(rows);
     if (this._range) rows = rows.slice(this._range[0], this._range[1] + 1);
     else if (this._limit != null) rows = rows.slice(0, this._limit);
     var table = this._table, cols = this._columns;
-    var out = rows.map(function (r) { return project(table, r, cols); });
+    var out = projectRows(table, rows, cols);
     return this._finish(out, total);
   };
 
@@ -2870,7 +2991,9 @@
     }
     if (this._returning == null) return this._finish([], written.length);
     var t = table, ret = this._returning;
-    return this._finish(written.map(function (r) { return project(t, r, ret); }), written.length);
+    var wErr = embedError(t, ret);
+    if (wErr) return { data: null, error: wErr, count: null, status: 300, statusText: "Multiple Choices" };
+    return this._finish(projectRows(t, written, ret), written.length);
   };
 
   BP._runUpdate = function () {
@@ -2906,7 +3029,9 @@
     });
     if (this._returning == null) return this._finish([], updated.length);
     var t = table, ret = this._returning;
-    return this._finish(updated.map(function (r) { return project(t, r, ret); }), updated.length);
+    var uErr = embedError(t, ret);
+    if (uErr) return { data: null, error: uErr, count: null, status: 300, statusText: "Multiple Choices" };
+    return this._finish(projectRows(t, updated, ret), updated.length);
   };
 
   BP._runDelete = function () {
@@ -2936,7 +3061,9 @@
     });
     if (this._returning == null) return this._finish([], removed.length);
     var t = table, ret = this._returning;
-    return this._finish(removed.map(function (r) { return project(t, r, ret); }), removed.length);
+    var dErr = embedError(t, ret);
+    if (dErr) return { data: null, error: dErr, count: null, status: 300, statusText: "Multiple Choices" };
+    return this._finish(projectRows(t, removed, ret), removed.length);
   };
   function cascadeCase(caseId) {
     ["case_tasks", "case_notes", "case_events", "email_queue", "sms_queue", "case_emails", "fact_finds", "watch_alerts", "appointments"].forEach(function (t) {

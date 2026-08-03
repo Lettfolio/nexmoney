@@ -2830,7 +2830,7 @@ async function casesOnSameProperty(addr) {
   const streetWord = (firstLine.match(/[A-Za-z]{4,}/g) || []).sort((a, b) => b.length - a.length)[0];
   const needle = propOutcode(full) || streetWord || firstLine || full;
   const { data, error } = await db.from("cases")
-    .select("id,client_id,stage,case_kind,lender,property_address,created_at,completed_at,clients(first_name,last_name)")
+    .select("id,client_id,stage,case_kind,lender,property_address,created_at,completed_at,clients!client_id(first_name,last_name)")
     .ilike("property_address", `%${needle}%`);
   if (error) return [];
   return (data || [])
@@ -3866,7 +3866,7 @@ async function loadDashboard() {
 
 async function loadRetention() {
   const { data: rets, error } = await db.from("cases")
-    .select("id,stage,lender,rate_end_date,rate_end_estimated,clients(first_name,last_name)")
+    .select("id,stage,lender,rate_end_date,rate_end_estimated,clients!client_id(first_name,last_name)")
     .not("retention_source_case_id", "is", null)
     .order("rate_end_date");
   if (error) { renderLoadError("#retention-list", error, loadRetention); return; }
@@ -4085,7 +4085,7 @@ window.markRateReminded = async function (caseId, ev) {
 async function loadTasks() {
   const horizon = localDateStr(Date.now() + 14 * 86400000);
   const { data: raw, error } = await db.from("case_tasks")
-    .select("id,title,due_date,case_id,assigned_to,cases(clients(first_name,last_name))")
+    .select("id,title,due_date,case_id,assigned_to,cases(clients!client_id(first_name,last_name))")
     .is("done_at", null)
     .lte("due_date", horizon)
     .order("due_date")
@@ -4138,7 +4138,7 @@ window.doneTaskInCase = async function (taskId, caseId) {
 async function loadProtection() {
   const cutoff = new Date(Date.now() - 30 * 86400000).toISOString();
   const { data: opps, error } = await db.from("cases")
-    .select("id,stage,lender,completed_at,clients(first_name,last_name)")
+    .select("id,stage,lender,completed_at,clients!client_id(first_name,last_name)")
     .eq("protection_status", "not_discussed")
     .or(`stage.in.(application,offer),and(stage.eq.completed,completed_at.gte.${cutoff})`)
     .order("updated_at", { ascending: false })
@@ -4316,7 +4316,7 @@ async function loadBriefing() {
      losing money this minute. */
   try {
     const { data: revTasks } = await db.from("case_tasks")
-      .select("id,title,due_date,case_id,assigned_to,cases(client_id,clients(first_name,last_name))")
+      .select("id,title,due_date,case_id,assigned_to,cases(client_id,clients!client_id(first_name,last_name))")
       .is("done_at", null).order("due_date").limit(200);
     const already = new Set(items.map((it) => it.task_id).filter(Boolean).map(String));
     const todayStr = localDateStr();
@@ -4961,7 +4961,7 @@ $("#watchtower-run").addEventListener("click", async () => {
 
 /* ---------- Pipeline ---------- */
 async function loadPipeline() {
-  const { data: cases, error } = await db.from("cases").select("*, clients(first_name,last_name)").order("updated_at", { ascending: false });
+  const { data: cases, error } = await db.from("cases").select("*, clients!client_id(first_name,last_name)").order("updated_at", { ascending: false });
   if (error) {
     $("#board").classList.remove("hidden");
     $("#board-hint").classList.add("hidden");
@@ -5275,7 +5275,7 @@ window.moveCaseToStage = async function (caseId, targetStage, opts = {}) {
        below can say whether one will be offered at all. */
     const refOn = await referrerSupported();
     cRow = (await db.from("cases")
-      .select("id,client_id,assigned_to,stage,protection_status,completed_at,case_kind,lender" + (propOn ? ",property_address" : "") + (refOn ? ",referrer_client_id" : "") + ",clients(first_name,last_name)")
+      .select("id,client_id,assigned_to,stage,protection_status,completed_at,case_kind,lender" + (propOn ? ",property_address" : "") + (refOn ? ",referrer_client_id" : "") + ",clients!client_id(first_name,last_name)")
       .eq("id", caseId).single()).data;
   }
   if (cRow && cRow.stage === targetStage) return "noop"; // no-op (e.g. dropped back on the same column)
@@ -5389,7 +5389,7 @@ async function bulkMoveStage(targetStage) {
   const label = STAGE_LABEL[targetStage] || targetStage;
   const propOn = await propAddrSupported();
   const { data: rows } = await db.from("cases")
-    .select("id,stage,protection_status,completed_at,case_kind,lender" + (propOn ? ",property_address" : "") + ",clients(first_name,last_name)")
+    .select("id,stage,protection_status,completed_at,case_kind,lender" + (propOn ? ",property_address" : "") + ",clients!client_id(first_name,last_name)")
     .in("id", ids);
   const byId = {}; (rows || []).forEach((r) => (byId[r.id] = r));
   // Classify exactly the way moveCaseToStage will, so the confirm can't promise one thing and the
@@ -5557,7 +5557,7 @@ async function bulkStartRetentionRun(ids) {
   const propOn = await propAddrSupported();
   const { data: rows, error } = await db.from("cases")
     .select("id,client_id,stage,rate_end_date,case_kind,lender,retention_source_case_id"
-      + (propOn ? ",property_address" : "") + ",clients(first_name,last_name)")
+      + (propOn ? ",property_address" : "") + ",clients!client_id(first_name,last_name)")
     .in("id", ids);
   if (error) return toast("Error: " + error.message);
   const nameOf = bulkCaseLabel;
@@ -5629,7 +5629,7 @@ async function bulkQueueRateRemindersRun(ids) {
   const propOn = await propAddrSupported();
   const { data: rows, error } = await db.from("cases")
     .select("id,client_id,rate_end_date,assigned_to,rate_reminder_queued_at,case_kind,lender,stage"
-      + (propOn ? ",property_address" : "") + ",clients(first_name,last_name,email)")
+      + (propOn ? ",property_address" : "") + ",clients!client_id(first_name,last_name,email)")
     .in("id", ids);
   if (error) return toast("Error: " + error.message);
   const nameOf = bulkCaseLabel;
@@ -5760,7 +5760,7 @@ async function bulkAddTaskRun(ids) {
   // for Gareth Pollard" says nothing when three of the selected cases are his.
   const propOn = await propAddrSupported();
   const { data: rows, error } = await db.from("cases")
-    .select("id,assigned_to,case_kind,lender,stage" + (propOn ? ",property_address" : "") + ",clients(first_name,last_name)")
+    .select("id,assigned_to,case_kind,lender,stage" + (propOn ? ",property_address" : "") + ",clients!client_id(first_name,last_name)")
     .in("id", ids);
   if (error) return toast("Error: " + error.message);
   const nameOf = bulkCaseLabel;
@@ -8387,7 +8387,7 @@ let clientSegment = "all";
 let clientCache = null;
 async function loadClientData() {
   const [clientsRes, notesRes, emailsRes, apptRes, tasksRes] = await Promise.all([
-    db.from("clients").select("*, cases(id,stage,rate_end_date,protection_status,broker_fee,assigned_to,completed_at,updated_at,created_at)").order("last_name"),
+    db.from("clients").select("*, cases!client_id(id,stage,rate_end_date,protection_status,broker_fee,assigned_to,completed_at,updated_at,created_at)").order("last_name"),
     db.from("case_notes").select("case_id,created_at"),
     db.from("email_queue").select("client_id,case_id,status,sent_at"),
     db.from("appointments").select("client_id,case_id,starts_at"),
@@ -12186,7 +12186,7 @@ const PACK_EVENT_FIELD = {
 async function buildEvidencePack(caseId) {
   toast("Building evidence pack…");
   const [{ data: c }, { data: notes }, { data: tasks }, { data: events }, { data: emails }, auditAll, intros] = await Promise.all([
-    db.from("cases").select("*, clients(*), introducers(name)").eq("id", caseId).single(),
+    db.from("cases").select("*, clients!client_id(*), introducers(name)").eq("id", caseId).single(),
     db.from("case_notes").select("*").eq("case_id", caseId).order("created_at"),
     db.from("case_tasks").select("*").eq("case_id", caseId).order("created_at"),
     db.from("case_events").select("*").eq("case_id", caseId).order("created_at"),
@@ -13239,7 +13239,7 @@ async function loadReports() {
     /* R9-2 — plus review_requested_at, which the advocacy panel's monthly series falls back to
        when the database records no date for when a score came BACK. It is an original-schema
        column (the review drip has stamped it since round 5), so it cannot 42703 this select. */
-    db.from("cases").select("id,client_id,stage,case_kind,lender,loan_amount,broker_fee,proc_fee,sols_fee,submitted_at,fee_status,fee_paid_at,completed_at,created_at,updated_at,rate_end_date,rate_end_estimated,lead_source,introducer_id,protection_status,retention_source_case_id,assigned_to,nps_score,review_requested_at,expected_completion_date,clients(first_name,last_name)")
+    db.from("cases").select("id,client_id,stage,case_kind,lender,loan_amount,broker_fee,proc_fee,sols_fee,submitted_at,fee_status,fee_paid_at,completed_at,created_at,updated_at,rate_end_date,rate_end_estimated,lead_source,introducer_id,protection_status,retention_source_case_id,assigned_to,nps_score,review_requested_at,expected_completion_date,clients!client_id(first_name,last_name)")
       .order("id").limit(REPORTS_ROW_CAP),
     db.from("introducers").select("id,name"),
     db.rpc("get_reports"),
@@ -13795,7 +13795,7 @@ function renderConveyancerSpeed(all, firmMap) {
 async function loadDetractorTasks() {
   try {
     const { data, error } = await db.from("case_tasks")
-      .select("id,title,due_date,case_id,assigned_to,done_at,cases(client_id,clients(first_name,last_name))")
+      .select("id,title,due_date,case_id,assigned_to,done_at,cases(client_id,clients!client_id(first_name,last_name))")
       .is("done_at", null).order("due_date").limit(REPORTS_ROW_CAP);
     if (error) return [];
     return (data || []).filter((t) => t && isReviewFeedbackTask(t.title));
@@ -14530,7 +14530,7 @@ async function loadMoneyPage() {
 
   const propOn = (await propAddrSupported()) !== false;
   const [casesRes, tasksRes, leadsRes, eventsRes] = await Promise.all([
-    db.from("cases").select("id,client_id,stage,case_kind,lender,loan_amount,proc_fee,broker_fee,sols_fee,fee_status,fee_paid_at,completed_at,created_at,updated_at,rate_end_date,rate_end_estimated,protection_status,retention_source_case_id,assigned_to,lead_source" + (propOn ? ",property_address" : "") + ",clients(first_name,last_name)")
+    db.from("cases").select("id,client_id,stage,case_kind,lender,loan_amount,proc_fee,broker_fee,sols_fee,fee_status,fee_paid_at,completed_at,created_at,updated_at,rate_end_date,rate_end_estimated,protection_status,retention_source_case_id,assigned_to,lead_source" + (propOn ? ",property_address" : "") + ",clients!client_id(first_name,last_name)")
       .order("id").limit(REPORTS_ROW_CAP),
     db.from("case_tasks").select("id,assigned_to,due_date,done_at").is("done_at", null).limit(REPORTS_ROW_CAP),
     db.from("leads").select("*").limit(REPORTS_ROW_CAP),
@@ -14723,7 +14723,7 @@ async function loadDataHealth() {
     // Defect 13: the RPC only ever returns bare counts for these two tiles. Rather than change the
     // RPC (frontend-only, existing columns), pull the offending rows client-side from cases+clients
     // so the tiles can expand into the same list-panel pattern as the other Data Health items.
-    db.from("cases").select("id,stage,rate_end_date,completed_at,created_at,case_kind,lender,client_id,clients(id,first_name,last_name,phone)" + (dhPropOn ? ",property_address" : "")),
+    db.from("cases").select("id,stage,rate_end_date,completed_at,created_at,case_kind,lender,client_id,clients!client_id(id,first_name,last_name,phone)" + (dhPropOn ? ",property_address" : "")),
     // T1-9/T1-26: same trick for the client-shaped checks. The RPC returns counts for "missing
     // email & phone" and nothing at all for malformed values, so read the rows and judge them here.
     db.from("clients").select("id,first_name,last_name,email,phone"),
@@ -14744,7 +14744,7 @@ async function loadDataHealth() {
   if (caseRows.error && dhPropOn && isMissingColumnError(caseRows.error)) {
     PROP_ADDR_SUPPORTED = false;
     dhPropOn = false;
-    caseRows = await db.from("cases").select("id,stage,rate_end_date,completed_at,created_at,case_kind,lender,client_id,clients(id,first_name,last_name,phone)");
+    caseRows = await db.from("cases").select("id,stage,rate_end_date,completed_at,created_at,case_kind,lender,client_id,clients!client_id(id,first_name,last_name,phone)");
   }
   // …and the quieter shape of absence: the rows came back, without the column that was asked for.
   if (dhPropOn && Array.isArray(caseRows.data) && caseRows.data.length) {
@@ -16303,7 +16303,7 @@ document.addEventListener("keydown", (e) => {
       const cids = clients.map((c) => c.id).filter(Boolean);
       if (cids.length) orCase.push(`client_id.in.(${cids.join(",")})`);
       const { data: cs } = await db.from("cases")
-        .select("id,stage,case_kind,lender,client_id" + (propOn ? ",property_address" : "") + ",clients(first_name,last_name)")
+        .select("id,stage,case_kind,lender,client_id" + (propOn ? ",property_address" : "") + ",clients!client_id(first_name,last_name)")
         .or(orCase.join(",")).order("updated_at", { ascending: false }).limit(8);
       if (mySeq !== seq) return;
       cases = cs || [];

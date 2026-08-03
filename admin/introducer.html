@@ -88,7 +88,7 @@ async function showApp(session) {
   if (me) $("#intro-title").textContent = "Your referrals — " + me.name;
 
   const { data: cases } = await db.from("cases")
-    .select("id,stage,case_kind,created_at,completed_at,clients(first_name,last_name)")
+    .select("id,stage,case_kind,created_at,completed_at,clients!client_id(first_name,last_name)")
     .order("created_at", { ascending: false });
   const all = cases || [];
   const row = (c) => `
