@@ -124,6 +124,10 @@ const EMAIL_LABEL = {
      no case and no adviser behind it. Without an entry here the row rendered as
      "undefined — <address>", which is how a new email type announces itself. */
   lead_ack: "Lead acknowledgement",
+  /* R9-3 — the review REMINDER, queued a week after a review request that never got answered.
+     Distinct from "Review request" on purpose: an operator scanning the queue has to be able to
+     see that a client is being asked twice, because that is the row somebody may want to cancel. */
+  review_reminder: "Review reminder (2nd ask)",
 };
 /* R7 — and the one place a missing type could still print "undefined": the Emails list heading.
    Every other consumer already falls back to the raw type; this one did not. A type this map has
@@ -161,6 +165,11 @@ const SETTING_FIELDS = [
   ["monthly_fee_target", "Monthly fee target (£ earned on completions, blank = off)"],
   ["rate_reminder_months", "Rate reminder lead time (months)"],
   ["review_delay_days", "Review request delay after completion (days)"],
+  /* R9-3 — the SECOND ask, and it was already happening. The backend has queued a review reminder
+     a week after an unanswered request since this round's comms pass; the setting that governs it
+     existed and no screen named it, so a firm could not see that some clients get asked twice, let
+     alone change the gap. It sits directly under the first delay because the two compose. */
+  ["review_reminder_days", "Review reminder if unanswered (days after the request)"],
   ["referral_delay_days", "Referral nudge delay after review request (days)"],
   ["solicitor_chase_days", "Solicitor chase task after exchange (days)"],
   ["auto_docs_request", "Auto document-request email at Fact Find", "bool10"],
@@ -178,7 +187,7 @@ const SETTING_URL_FIELDS = { google_review_link: "Google review link", review_pl
    a bad number here corrupts a live metric (the rate-reminder KPI renders "≤ NaNmo" and the whole
    "ending soon" bucket vanishes), and a bad bank field is the one setting with direct
    misdirected-payment risk once queueEmail lets a fee-request email through on it. */
-const SETTING_NUMERIC_FIELDS = { rate_reminder_months: "Rate reminder lead time", review_delay_days: "Review request delay", referral_delay_days: "Referral nudge delay", solicitor_chase_days: "Solicitor chase task delay", monthly_fee_target: "Monthly fee target", protection_avg_commission: "Average protection commission" };
+const SETTING_NUMERIC_FIELDS = { rate_reminder_months: "Rate reminder lead time", review_delay_days: "Review request delay", review_reminder_days: "Review reminder delay", referral_delay_days: "Referral nudge delay", solicitor_chase_days: "Solicitor chase task delay", monthly_fee_target: "Monthly fee target", protection_avg_commission: "Average protection commission" };
 const SETTING_BANK_FIELDS = { bank_sort_code: { label: "Sort code", re: /^\d{2}-?\d{2}-?\d{2}$/ }, bank_account_number: { label: "Account number", re: /^\d{8}$/ } };
 function isValidEmailLike(v) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v); }
 function isValidUrlLike(v) { return /^https?:\/\/[^\s]+\.[^\s]+/i.test(v); }
@@ -190,8 +199,15 @@ function settingFieldHtml([k, label, type]) {
       </select>
     </label>`;
   const inputType = type === "email" ? "email" : type === "url" ? "url" : SETTING_NUMERIC_FIELDS[k] ? "number" : "text";
-  return `<label>${esc(label)}<input name="${k}" type="${inputType}" value="${esc(settings[k] ?? "")}"></label>`;
+  /* R9-5 — docs_list stopped being the whole story the moment cases got their own checklists, and
+     a setting whose description is a round out of date is how an operator learns not to trust the
+     screen. Said next to the field rather than in release notes nobody reads. */
+  const note = SETTING_NOTES[k] ? `<p class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;" id="setting-note-${k}">${SETTING_NOTES[k]}</p>` : "";
+  return `<label>${esc(label)}<input name="${k}" type="${inputType}" value="${esc(settings[k] ?? "")}"></label>` + note;
 }
+const SETTING_NOTES = {
+  docs_list: `Your firm's standard list. It is used in two places: it is what a <strong>document request goes out with when the case has no checklist of its own</strong>, and it is the menu the case modal's “Add items…” offers when you build one (narrowed to what that kind of case needs). Once a case has a checklist, that checklist wins — the emails then list <strong>only what is still outstanding on that case</strong>, so nobody is asked twice for a document they have already sent. Editing this list does not change any checklist already built.`,
+};
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => (s == null ? "" : String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])));
@@ -702,6 +718,58 @@ function noteType(body) {
   const type = m ? m[1].toLowerCase() : "note";
   return { type, icon: NOTE_ICON[type], cleanBody: m ? b.slice(m[0].length) : b };
 }
+
+/* ==========================================================================
+   R9-3 · DETRACTOR VISIBILITY
+
+   The review-capture page writes what a client actually said back into the
+   case as a note — "Review feedback (4/10): they never rang me back" — and
+   raises a call-back task on the unhappy ones. Both were invisible: the note
+   rendered as an ordinary grey 📝 with the score buried mid-sentence, and the
+   task sat in My Day looking like a reminder to chase a solicitor.
+
+   Neither of these is a schema change. A note is recognised by its opening
+   phrase (the same convention Call:/Email:/Meeting: has used since Sprint 2,
+   and the same one the re-file marker uses), and a task by the phrase in its
+   title. Recognition is therefore TOLERANT — leading whitespace, an optional
+   colon, a 1- or 2-digit score — because the writer is a backend function this
+   file does not own, and a renderer that only works against one exact string
+   is a renderer that silently stops working.
+
+   SCORE-BANDED, not just flagged. 0–6 is a detractor and reads red, 7–8
+   passive amber, 9–10 promoter green — the same three bands the Reports
+   drill-down has used since R5-47, so a 6 means the same thing on both pages.
+   ========================================================================== */
+const REVIEW_NOTE_RE = /^\s*review\s+feedback\s*\(\s*(\d{1,2})\s*\/\s*10\s*\)\s*[:\-–]?\s*/i;
+/* The task the same capture raises on an unhappy score. Keyed on the phrase, not on an exact
+   title, for the reason in the block comment above. */
+const REVIEW_TASK_RE = /review\s+feedback/i;
+const isReviewFeedbackTask = (title) => REVIEW_TASK_RE.test(String(title == null ? "" : title));
+// 0–6 detractor · 7–8 passive · 9–10 promoter — one band function, used by every surface.
+function reviewBand(n) {
+  const s = Number(n);
+  if (!isFinite(s)) return null;
+  return s <= 6 ? "detractor" : s <= 8 ? "passive" : "promoter";
+}
+const REVIEW_BAND_WORD = { detractor: "detractor", passive: "passive", promoter: "promoter" };
+/* Does this note body carry a review score, and if so what? Returns null for everything else, so
+   every caller can stay a one-line "if". */
+function reviewNoteParse(body) {
+  const b = body == null ? "" : String(body);
+  const m = REVIEW_NOTE_RE.exec(b);
+  if (!m) return null;
+  const score = Number(m[1]);
+  if (!isFinite(score) || score < 0 || score > 10) return null;
+  return { score, band: reviewBand(score), comment: b.slice(m[0].length).trim() };
+}
+/* The score, rendered where the eye lands first rather than mid-sentence. */
+function reviewScoreChipHtml(score, opts = {}) {
+  const band = reviewBand(score);
+  const word = REVIEW_BAND_WORD[band] || "";
+  return `<span class="review-score-chip ${band}${opts.cls ? " " + opts.cls : ""}" title="This client scored us ${score} out of 10 — a ${word}. 0–6 detractor, 7–8 passive, 9–10 promoter.">${score}/10 · ${word}</span>`;
+}
+// The badge a "review feedback" task wears, wherever tasks are listed.
+const REVIEW_TASK_BADGE = '<span class="badge red review-task-badge" title="An unhappy client left a review score and a comment. The case timeline holds what they said. This is a call-back, not paperwork — it goes stale faster than anything else on this list.">⚠ REVIEW FEEDBACK</span>';
 /* ---------- R6.4 H-01 · RE-FILING A NOTE ----------------------------------
    A note is filed against ONE case (case_notes.case_id is NOT NULL, in the
    schema and in the audit trigger), and on a portfolio landlord picking the
@@ -766,10 +834,20 @@ function noteRowHtml(body, whenStr, createdBy, opts = {}) {
   const nt = noteType(refileDisplayBody(body));
   const marker = isRefileMarker(body);
   const refiled = !!opts.refiled;
-  const cls = "note" + (refiled ? " note-refiled" : "") + (marker ? " note-refile-marker" : "");
+  /* R9-3 — a review-feedback note is the one note on a case that a reader must not have to
+     finish reading to grade. The score comes out of the sentence and onto a banded chip; what
+     the client actually SAID stays verbatim and escaped, exactly as every other note body does.
+     A note with a score but no comment renders the chip and an honest "(no comment left)"
+     rather than an empty row. */
+  const rev = reviewNoteParse(refileDisplayBody(body));
+  const cls = "note" + (refiled ? " note-refiled" : "") + (marker ? " note-refile-marker" : "") + (rev ? " note-review note-review-" + rev.band : "");
   const act = opts.noteId && !refiled && !marker ? refileBtnHtml(opts.noteId) : "";
+  const icon = rev ? "⭐" : nt.icon;
+  const bodyHtml = rev
+    ? `${reviewScoreChipHtml(rev.score)} <span class="note-body">${rev.comment ? esc(rev.comment) : '<span class="cs-muted">(no comment left)</span>'}</span>`
+    : `<span class="note-body">${esc(nt.cleanBody)}</span>`;
   return `<div class="${cls}"${opts.noteId ? ` data-note-id="${esc(opts.noteId)}"` : ""}>` +
-    `<span class="note-ic" title="${nt.type}">${nt.icon}</span><span class="note-body">${esc(nt.cleanBody)}</span>${refiled ? " " + REFILE_BADGE : ""}` +
+    `<span class="note-ic" title="${rev ? "review feedback" : nt.type}">${icon}</span>${bodyHtml}${refiled ? " " + REFILE_BADGE : ""}` +
     `<div class="nd">${esc(whenStr)}${authorChipHtml(createdBy)}${act}</div></div>`;
 }
 // Timeline day-divider label, e.g. "Mon 20 Jul" (Europe/London — matches localDateStr grouping).
@@ -1941,6 +2019,594 @@ function notePropAddrFromStarRow(row) {
   if (!row || typeof row !== "object") return;
   PROP_ADDR_SUPPORTED = Object.prototype.hasOwnProperty.call(row, "property_address");
 }
+
+/* ==========================================================================
+   R9-1 · REFERRER ATTRIBUTION (migration m11 — cases.referrer_client_id)
+
+   The firm's best lead source is a client who tells a friend, and until now
+   that fact left no trace anywhere in the system: "referral" got typed into
+   the free-text Lead source box, WHOSE referral was never recorded, and the
+   person who sent the business was never thanked. One nullable column on
+   `cases` fixes the record; everything else this round reads off it.
+
+   Feature-detected exactly like M7's property_address and M8's quote stamp —
+   probe once, cache, and keep the cache honest for free off any select("*")
+   row that comes past. A database without the migration renders NO referrer
+   field at all: an input whose Save can only fail is worse than no input.
+   ========================================================================== */
+let REFERRER_SUPPORTED = null;
+async function referrerSupported() {
+  if (REFERRER_SUPPORTED !== null) return REFERRER_SUPPORTED;
+  try {
+    const { data, error } = await db.from("cases").select("id,referrer_client_id").limit(1);
+    if (error) {
+      if (isMissingColumnError(error)) { REFERRER_SUPPORTED = false; return false; }
+      return false; // some other failure (RLS, network) — don't offer a field we can't verify
+    }
+    if (!data || !data.length) return true; // empty book: nothing to learn, assume migrated
+    REFERRER_SUPPORTED = Object.prototype.hasOwnProperty.call(data[0], "referrer_client_id");
+    return REFERRER_SUPPORTED;
+  } catch (_) { return false; }
+}
+/* The free half of the probe — see notePropAddrFromStarRow for the reasoning. */
+function noteReferrerFromStarRow(row) {
+  if (!row || typeof row !== "object") return;
+  REFERRER_SUPPORTED = Object.prototype.hasOwnProperty.call(row, "referrer_client_id");
+}
+/* One batched read of the referrer column for a set of cases, or null when the
+   column isn't there — every consumer then renders its migration-absent state
+   rather than a wrong zero. */
+async function loadReferrerColumn(cap) {
+  try {
+    if ((await referrerSupported()) === false) return null;
+    const { data, error } = await db.from("cases").select("id,referrer_client_id").order("id").limit(cap || 5000);
+    if (error) { if (isMissingColumnError(error)) REFERRER_SUPPORTED = false; return null; }
+    /* …and the same check the probe makes, on the rows we just got, because a cached "yes" set
+       before the migration was rolled back would otherwise turn into a confident map of nulls —
+       a panel reporting "0 referrals" about a database that cannot store one. A row that comes
+       back WITHOUT the column is proof, so correct the cache and return the honest null. */
+    if ((data || []).length && !Object.prototype.hasOwnProperty.call(data[0], "referrer_client_id")) {
+      REFERRER_SUPPORTED = false;
+      return null;
+    }
+    const map = {};
+    (data || []).forEach((r) => { if (r && r.id) map[r.id] = r.referrer_client_id ?? null; });
+    return map;
+  } catch (_) { return null; }
+}
+/* The thank-you task's title, in ONE place, because three surfaces have to agree on it: the writer
+   (below), the idempotency check that stops a re-completion writing it twice, and any reader that
+   wants to count them. */
+const referralThankTitle = (referrerName, clientName) => `Thank ${referrerName} for referring ${clientName}`;
+/* Which of the referrer's cases the thank-you is filed on. Deliberately the SAME rule the Clients
+   page's bulk "Add task…" already uses (clientTaskTarget): a task hangs off a case, so it goes on
+   their only case, or on their only LIVE case where they have several — and where neither of those
+   is true nothing is guessed, because filing a thank-you on the wrong one of a landlord's six
+   buy-to-lets is worse than not filing it. */
+function referrerTaskTarget(cases) {
+  const list = (cases || []).slice();
+  if (!list.length) return { why: "no_case" };
+  if (list.length === 1) return { caseId: list[0].id, row: list[0] };
+  const live = list.filter((x) => CLIENT_LIVE(x.stage));
+  if (live.length === 1) return { caseId: live[0].id, row: live[0] };
+  return { why: live.length > 1 ? "many_live" : "no_live" };
+}
+/* R9-1 · THE THANK-YOU. Called on exactly one event — a case with a referrer reaching Completed —
+   from BOTH routes into that stage (the board/stage-select move and the case form's Save), so the
+   behaviour cannot depend on which one an adviser happened to use.
+
+   A TASK, NOT AN EMAIL, and PROMPTED, never silent. Two reasons, both about the same thing: an
+   automated "thanks for the referral" email is exactly the kind of message that arrives the week a
+   referrer's own case has gone wrong, and the person who just completed the case is the only one
+   who knows whether this referral is one to thank for. So the app offers it, names who and where,
+   and does nothing at all if the answer is no.
+
+   Idempotent by title on the target case: re-completing a reopened case, or two advisers completing
+   in quick succession, must not stack duplicates on the referrer's file. Wholly best-effort — a
+   thank-you that cannot be written must never cost the completion that triggered it. */
+/* opts.quiet — say nothing and hand the sentence back instead, for a caller that is about to toast
+   anyway. Without it the courtesy's own toast fires first and is immediately overwritten by
+   "Moved to Completed", so the one message explaining why no thank-you was created never survives
+   long enough to be read. */
+async function maybeQueueReferralThankYou(caseId, cRow, opts = {}) {
+  const say = (msg, res) => { if (opts.quiet) return { ...res, message: msg }; toast(msg); return res; };
+  try {
+    if (!caseId) return null;
+    if ((await referrerSupported()) === false) return null;
+    let row = cRow;
+    if (!row || !Object.prototype.hasOwnProperty.call(row, "referrer_client_id")) {
+      const { data } = await db.from("cases").select("id,client_id,assigned_to,referrer_client_id").eq("id", caseId).single();
+      row = data;
+    }
+    const referrerId = row && row.referrer_client_id;
+    if (!referrerId) return null;
+    if (row.client_id && referrerId === row.client_id) return null; // self-referral — nothing to thank
+    const [{ data: people }, { data: refCases }] = await Promise.all([
+      db.from("clients").select("id,first_name,last_name").in("id", [referrerId, row.client_id].filter(Boolean)),
+      db.from("cases").select("id,stage,assigned_to,updated_at,created_at").eq("client_id", referrerId),
+    ]);
+    const byId = {};
+    (people || []).forEach((p) => { byId[p.id] = p; });
+    const referrerName = clientFullName(byId[referrerId]) || "your referrer";
+    const clientName = clientFullName(byId[row.client_id]) || "this client";
+    const title = referralThankTitle(referrerName, clientName);
+    const target = referrerTaskTarget(refCases || []);
+    if (target.why) {
+      const why = target.why === "no_case" ? "they have no case to file a task on"
+        : target.why === "many_live" ? "they have several live cases and nothing here can say which one this belongs on"
+        : "they have several cases and none of them live";
+      return say(`${referrerName} referred ${clientName} — no thank-you task created: ${why}. Open their record to file one by hand.`,
+        { skipped: target.why, referrerId, title });
+    }
+    // Idempotency — the same thank-you, already on that case, from an earlier completion.
+    const { data: existing } = await db.from("case_tasks").select("id,title").eq("case_id", target.caseId);
+    if ((existing || []).some((t) => t && String(t.title || "").trim() === title)) return { skipped: "already", referrerId, title, caseId: target.caseId };
+    const adviser = row.assigned_to || null;   // the COMPLETING case's adviser — they made the relationship
+    const adviserTxt = adviser ? staffName(adviser) : "nobody (unassigned)";
+    if (!confirm(`${clientName}'s case has completed, and ${referrerName} referred them.\n\n`
+      + `Create a thank-you task on ${referrerName}'s case?\n\n`
+      + `“${title}” — due today, assigned to ${adviserTxt}.\n\n`
+      + `No email is sent to anybody. OK = create the task, Cancel = nothing happens.`)) {
+      return { skipped: "declined", referrerId, title, caseId: target.caseId };
+    }
+    const { error } = await db.from("case_tasks").insert({
+      case_id: target.caseId, title, due_date: localDateStr(),
+      assigned_to: adviser, created_by: (ME && ME.id) || null,
+    });
+    if (error) return say("Thank-you task could not be created: " + error.message, { error: error.message });
+    return say(`Thank-you task created on ${referrerName}'s case — “${title}”`,
+      { created: true, caseId: target.caseId, title, referrerId, assignedTo: adviser });
+  } catch (e) { return null; } // never let a courtesy break a completion
+}
+
+/* ==========================================================================
+   R9-5 · THE DOCUMENT CHECKLIST AND THE CHASE  (migration m10)
+
+   m10 ships FOUR things in one migration — the `case_documents` table and
+   `cases.waiting_on` / `solicitor_firm` / `doc_token` — so ONE feature probe
+   governs all four. Splitting them would model a database that cannot exist.
+
+   What the round is actually for: "have we got her documents yet" was a
+   question with no answer anywhere in the system. The firm-wide docs_list in
+   Settings is a template for an EMAIL, not a record of a case, so the same
+   four items were asked for over and over, including of clients who had
+   already handed a passport across a desk. A checklist is a record; the email
+   then lists only what is missing, and the nightly chase can stop.
+
+   THREE RULES THIS FILE ENFORCES, all of them about not lying to an operator:
+
+   1. WAIVED IS AN OUTCOME, NOT A DELETE. A document we decided we did not need
+      is a fact about the case. Deleting the row would leave the checklist
+      reading as though it was never asked for, which is exactly the state that
+      gets a self-employed client asked for payslips a fourth time. Delete
+      exists — for a row added by mistake — and it is Owner/Administrator only.
+   2. THE CHASE LINE IS DERIVED, NEVER STORED. It is read off the case's own
+      document emails every time it is drawn, using the same three constants
+      the backend chases on (fact_find/application · 3-day window · max 3).
+      A counter in a column would be a second source of truth and would drift.
+   3. THE UPLOAD LINK IS A BEARER TOKEN AND THE SCREEN SAYS SO. Anyone holding
+      it can upload to this case with no login. That is the whole point of the
+      link — a client cannot be asked to make an account to send a payslip —
+      but it is not something an operator should have to infer.
+   ========================================================================== */
+let DOCS_SUPPORTED = null;
+async function docsSupported() {
+  if (DOCS_SUPPORTED !== null) return DOCS_SUPPORTED;
+  try {
+    const { error } = await db.from("case_documents").select("id").limit(1);
+    if (error) {
+      if (isMissingTableError(error) || isMissingColumnError(error)) { DOCS_SUPPORTED = false; return false; }
+      return false; // RLS, network — never offer a checklist we cannot verify
+    }
+    DOCS_SUPPORTED = true;
+    return true;
+  } catch (_) { return false; }
+}
+/* The free half of the probe, and it only ever answers NO. A select("*") on `cases` that comes
+   back without `waiting_on` proves the migration is absent; one that comes back WITH it proves
+   only that the columns are there, not that the table is readable — so a positive is never taken
+   from here. (notePropAddrFromStarRow can go both ways because M7 is a column and nothing else.) */
+function noteDocsFromStarRow(row) {
+  if (!row || typeof row !== "object") return;
+  if (!Object.prototype.hasOwnProperty.call(row, "waiting_on")) DOCS_SUPPORTED = false;
+}
+/* The three constants the backend chases on. Named here so the status line an operator reads and
+   the rule the cron applies cannot describe different behaviour. */
+const DOC_CHASE_MAX = 3;
+const DOC_CHASE_STAGES = ["fact_find", "application"];
+const docChaseDays = () => Number(settings.doc_chase_days ?? 3) || 3;
+const DOC_MAIL_TYPES = ["docs_request", "docs_chase"];
+const DOC_OVERDUE_TITLE = (who) => `Documents overdue — call ${who}`;
+const DOC_STATUSES = ["requested", "received", "waived"];
+const DOC_STATUS_LABEL = { requested: "outstanding", received: "received", waived: "waived" };
+const DOC_STATUS_CLASS = { requested: "amber", received: "green", waived: "grey" };
+function docStatusChip(status) {
+  const s = DOC_STATUSES.includes(status) ? status : "requested";
+  const tip = s === "requested" ? "Asked for and not yet in."
+    : s === "received" ? "In — either filed by hand or uploaded through the client's link."
+    : "Decided against — we are not collecting this one. Kept on the list so nobody asks for it again.";
+  return `<span class="badge ${DOC_STATUS_CLASS[s]} doc-chip doc-chip-${s}" title="${esc(tip)}">${DOC_STATUS_LABEL[s]}</span>`;
+}
+const docOutstanding = (rows) => (rows || []).filter((d) => d.status === "requested");
+
+/* ---- WAITING ON --------------------------------------------------------
+   Deliberately NOT the stage. A case can sit at Application for a month
+   waiting on the CLIENT, and the question an adviser opens the board with is
+   "who do I have to ring", which the stage cannot answer. Four values only —
+   a free-text box here would produce forty spellings of "solicitor" and a
+   report that can group none of them. */
+const WAITING_ON_OPTIONS = [
+  ["client", "Client"], ["lender", "Lender"], ["solicitor", "Solicitor"], ["other", "Someone else"],
+];
+const WAITING_ON_LABEL = Object.fromEntries(WAITING_ON_OPTIONS);
+const waitingOnLabel = (v) => WAITING_ON_LABEL[v] || (v ? String(v).replace(/_/g, " ") : "");
+/* The chip the board card and the pipeline table both wear. Subtle on purpose: it is a fact about
+   who we are waiting for, not a warning — the time-in-stage colouring is what says a case is late,
+   and this round does not touch it. Names the firm in the tooltip where there is one, because
+   "waiting on solicitor" with no solicitor named is a shrug. */
+function waitingChipHtml(c) {
+  if (!c || !c.waiting_on) return "";
+  const label = waitingOnLabel(c.waiting_on);
+  const firm = c.waiting_on === "solicitor" && c.solicitor_firm ? String(c.solicitor_firm) : "";
+  const tip = `Waiting on ${label.toLowerCase()}${firm ? " — " + firm : ""}. This is who the case is sitting with, not what stage it is at.`;
+  return `<span class="badge wait-chip" title="${esc(tip)}">⏳ ${esc(label.toLowerCase())}${firm ? " · " + esc(firm) : ""}</span>`;
+}
+/* Every solicitor firm the book already names, for the case form's datalist. Retyping a firm that
+   is already on file with a different spelling is what turns a three-row conveyancer report into a
+   nine-row one, so the names we hold are offered before anybody types. */
+async function knownSolicitorFirms() {
+  try {
+    if ((await docsSupported()) === false) return [];
+    const rows = await softRows(db.from("cases").select("solicitor_firm").limit(5000));
+    const seen = new Map();
+    rows.forEach((r) => {
+      const v = r && r.solicitor_firm ? String(r.solicitor_firm).trim() : "";
+      if (!v) return;
+      const k = v.toLowerCase();
+      if (!seen.has(k)) seen.set(k, v);
+    });
+    return [...seen.values()].sort((a, b) => a.localeCompare(b));
+  } catch (_) { return []; }
+}
+/* One batched read of the solicitor column for the Reports panel, or null when m10 is absent —
+   the panel then renders its "not recorded yet" state instead of a confident empty table. Same
+   shape and same reasoning as loadReferrerColumn. */
+async function loadSolicitorColumn(cap) {
+  try {
+    if ((await docsSupported()) === false) return null;
+    const { data, error } = await db.from("cases").select("id,solicitor_firm").order("id").limit(cap || 5000);
+    if (error) { if (isMissingColumnError(error)) DOCS_SUPPORTED = false; return null; }
+    if ((data || []).length && !Object.prototype.hasOwnProperty.call(data[0], "solicitor_firm")) {
+      DOCS_SUPPORTED = false;
+      return null;
+    }
+    const map = {};
+    (data || []).forEach((r) => { if (r && r.id) map[r.id] = r.solicitor_firm ?? null; });
+    return map;
+  } catch (_) { return null; }
+}
+
+/* ---- WHAT TO PUT ON A CHECKLIST ----------------------------------------
+   The firm's own docs_list from Settings is the base — it is what this firm
+   has decided it asks for, and the checklist has to agree with the email that
+   has been going out for a year. The case KIND then adds the documents that
+   kind alone needs and drops the ones it never needs (nobody remortgaging is
+   asked for proof of deposit).
+
+   NOTHING HERE IS ENFORCED. The kind decides what is SUGGESTED and pre-ticked;
+   every dropped item is still one click away under "the rest of the firm's
+   list", and the free-text box takes anything at all. A checklist that refuses
+   to hold the document this particular lender has asked for is a checklist an
+   adviser stops using. */
+const DOC_KIND_DROP = {
+  remortgage: [/deposit/i, /memorandum/i, /gift/i],
+  product_transfer: [/deposit/i, /memorandum/i, /gift/i, /bank statement/i],
+  buy_to_let: [/gift/i],
+};
+const DOC_KIND_EXTRA = {
+  purchase: ["Memorandum of sale", "Proof of deposit"],
+  first_time_buyer: ["Proof of deposit", "Gifted deposit letter"],
+  buy_to_let: ["Tenancy agreement", "Portfolio schedule"],
+  remortgage: ["Current mortgage statement"],
+  product_transfer: ["Current mortgage statement"],
+  other: [],
+};
+function docsListFromSettings() {
+  return String(settings.docs_list || "").split("|").map((s) => s.trim()).filter(Boolean);
+}
+/* → { suggested, dropped } for a case kind. Deduplicated case-insensitively, so a kind extra that
+   is already on the firm's list is offered once rather than twice. */
+function docSuggestionsFor(kind) {
+  const base = docsListFromSettings();
+  const drop = DOC_KIND_DROP[kind] || [];
+  const suggested = [], dropped = [];
+  base.forEach((item) => (drop.some((re) => re.test(item)) ? dropped : suggested).push(item));
+  const seen = new Set(suggested.map((s) => s.toLowerCase()));
+  (DOC_KIND_EXTRA[kind] || []).forEach((item) => {
+    if (seen.has(item.toLowerCase()) || drop.some((re) => re.test(item))) return;
+    seen.add(item.toLowerCase());
+    suggested.push(item);
+  });
+  return { suggested, dropped };
+}
+
+/* ---- THE CHASE STATUS LINE ---------------------------------------------
+   Derived, every time, from the case's own document emails. Returns
+   { text, cls, chases, nextEligible } — text is a sentence an operator can act
+   on, not a flag they have to interpret. */
+function docChaseState({ docs, mails, tasks, clientName, stage }) {
+  const list = docs || [];
+  const chases = (mails || []).filter((m) => m.email_type === "docs_chase").length;
+  const outstanding = docOutstanding(list).length;
+  const chaseOn = (settings.doc_chase_enabled ?? "off") === "on";
+  const offNote = chaseOn ? "" : " Automatic chasing is off — turn it on in Settings.";
+  if (!list.length) {
+    return { chases, cls: "muted", text: "No checklist on this case, so nothing is chased. A case with no checklist is not “fully documented”, it is unknown — automatic chasing skips it entirely." };
+  }
+  if (!outstanding) {
+    return { chases, cls: "ok", text: "Everything on this checklist is in or waived — nothing is outstanding, so no chase will ever be sent on it." };
+  }
+  if (chases >= DOC_CHASE_MAX) {
+    const title = DOC_OVERDUE_TITLE(clientName || "the client");
+    const task = (tasks || []).find((t) => !t.done_at && String(t.title || "").trim() === title);
+    return {
+      chases, cls: "warn",
+      text: task
+        ? `Chases exhausted — ${chases} of ${DOC_CHASE_MAX} sent, and a call task has been created${task.due_date ? ` (due ${fmtD(task.due_date)})` : ""}. The fourth email is not the one that works; ring them.`
+        : `Chases exhausted — ${chases} of ${DOC_CHASE_MAX} sent. No further email goes out; the next automation run raises a call task for the adviser instead.${offNote}`,
+    };
+  }
+  const last = (mails || []).map((m) => m.sent_at || m.created_at).filter(Boolean).sort().slice(-1)[0];
+  const next = last ? new Date(new Date(last).getTime() + docChaseDays() * 86400000) : null;
+  const stageOk = DOC_CHASE_STAGES.includes(stage);
+  const when = !stageOk
+    ? "nothing is chased from this stage — automatic chasing covers Fact Find and Application only"
+    : (!next || next <= new Date()) ? "eligible now" : `next eligible ${fmtD(next)}`;
+  return {
+    chases, nextEligible: next, cls: "info",
+    text: `${chases} of ${DOC_CHASE_MAX} chases sent · ${when}${last ? ` · last document email ${fmtAgo(last)}` : " · no document email has gone out yet"}.${offNote}`,
+  };
+}
+/* The client's upload page. site_url from Settings, falling back to this origin so the link is
+   never the string "undefined/docs?token=…" on a firm that has not filled the setting in. */
+function docsUploadUrl(token) {
+  const base = String(settings.site_url || location.origin || "").replace(/\/+$/, "");
+  return `${base}/docs?token=${encodeURIComponent(token || "")}`;
+}
+/* A token, generated here rather than server-side because the case row is the only thing that has
+   to hold it and the app is already writing that row. crypto.randomUUID where it exists; the
+   fallback is getRandomValues, never Math.random — this is a bearer credential, and a predictable
+   one is no credential at all. Null means neither was available, and the caller says so rather
+   than inventing a weak token. */
+function newDocToken() {
+  try {
+    if (window.crypto && typeof window.crypto.randomUUID === "function") return window.crypto.randomUUID();
+    if (window.crypto && window.crypto.getRandomValues) {
+      const a = new Uint8Array(18);
+      window.crypto.getRandomValues(a);
+      return [...a].map((b) => b.toString(16).padStart(2, "0")).join("");
+    }
+  } catch (_) { /* fall through */ }
+  return null;
+}
+
+/* ---- THE SECTION ITSELF -------------------------------------------------
+   Painted into #case-docs-body by its own small read, and repainted the same
+   way after every mutation. Deliberately NOT a full openCase() re-render: an
+   adviser ticking four documents off in a row would otherwise lose their
+   scroll position, any half-typed note and the open/closed state of the
+   details drawer four times.
+
+   `state` is passed down from openCase on the first paint so the modal's own
+   reads are not duplicated; every later paint fetches for itself. */
+async function renderCaseDocs(caseId, c, state) {
+  const body = $("#case-docs-body");
+  if (!body || !caseId) return;
+  let docs, mails, tasks;
+  if (state) ({ docs, mails, tasks } = state);
+  else {
+    [docs, mails, tasks] = await Promise.all([
+      softRows(db.from("case_documents").select("*").eq("case_id", caseId).order("created_at")),
+      softRows(db.from("email_queue").select("id,email_type,status,sent_at,created_at").eq("case_id", caseId).in("email_type", DOC_MAIL_TYPES)),
+      softRows(db.from("case_tasks").select("id,title,due_date,done_at").eq("case_id", caseId)),
+    ]);
+  }
+  const who = (c && c.__clientName) || "";
+  const chase = docChaseState({ docs, mails, tasks, clientName: who, stage: c && c.stage });
+  const out = docOutstanding(docs);
+  const canDelete = isAdminOrOwner();
+  const token = c && c.doc_token;
+  const rowsHtml = docs.length
+    ? docs.map((d) => {
+      const s = DOC_STATUSES.includes(d.status) ? d.status : "requested";
+      return `<div class="doc-row" data-doc="${esc(d.id)}" data-status="${esc(s)}">
+        <div class="doc-main">
+          <div class="doc-item">${esc(d.item)}</div>
+          <div class="doc-meta">${docStatusChip(s)}
+            ${d.requested_at ? `<span class="doc-date">asked ${fmtD(d.requested_at)}</span>` : ""}
+            ${d.received_at ? `<span class="doc-date">in ${fmtD(d.received_at)}</span>` : ""}
+            ${d.storage_path ? '<span class="doc-date" title="A file was uploaded through the client\'s link.">📎 file</span>' : ""}
+          </div>
+          ${d.note ? `<div class="doc-note">${esc(d.note)}</div>` : ""}
+        </div>
+        <div class="doc-acts">
+          ${s === "requested"
+            ? `<button type="button" class="btn btn-sm doc-act" data-act="received" data-doc="${esc(d.id)}" title="Mark this document as received">✓ Received</button>
+               <button type="button" class="btn btn-sm doc-act" data-act="waive" data-doc="${esc(d.id)}" title="We have decided not to collect this one. It stays on the list so nobody asks again.">Waive</button>`
+            : `<button type="button" class="btn btn-sm doc-act" data-act="undo" data-doc="${esc(d.id)}" title="Put this back to outstanding">↺ Undo</button>`}
+          ${canDelete ? `<button type="button" class="btn btn-sm btn-ghost btn-danger doc-act" data-act="delete" data-doc="${esc(d.id)}" title="Remove this row entirely — only for something added by mistake. Waive is what you want if we decided not to collect it.">🗑</button>` : ""}
+        </div>
+      </div>`;
+    }).join("")
+    : `<div class="empty" id="docs-empty">No checklist on this case yet. “Add items…” builds one from your firm's document list, filtered to what a ${esc((KINDS.find((k) => k[0] === (c && c.case_kind)) || [])[1] || "case").toLowerCase()} actually needs.</div>`;
+  body.innerHTML = `
+    <div class="doc-summary" id="docs-summary">${docs.length
+      ? `<strong>${out.length}</strong> of <strong>${docs.length}</strong> outstanding${docs.filter((d) => d.status === "waived").length ? ` · ${docs.filter((d) => d.status === "waived").length} waived` : ""}`
+      : "<strong>No checklist</strong>"}</div>
+    <div class="doc-chase doc-chase-${chase.cls}" id="docs-chase-line">${esc(chase.text)}</div>
+    <div class="doc-list" id="docs-list">${rowsHtml}</div>
+    <div class="doc-actions">
+      <button type="button" class="btn btn-sm" id="docs-add-btn">＋ Add items…</button>
+      <button type="button" class="btn btn-sm" id="docs-link-btn" title="${token ? "Copy this case's existing upload link" : "Create an upload link for this case and copy it"}">🔗 ${token ? "Copy upload link" : "Create upload link"}</button>
+      <button type="button" class="btn btn-sm" id="docs-send-btn" title="Queue the document-request email for this case only. Nothing else in the queue is sent.">✉️ Send document request now</button>
+    </div>
+    <div class="doc-link-out hidden" id="docs-link-out"></div>`;
+  body.querySelectorAll(".doc-act").forEach((b) => (b.onclick = () => docAction(b.dataset.act, b.dataset.doc, caseId, c)));
+  $("#docs-add-btn").onclick = () => addDocItems(caseId, c);
+  $("#docs-link-btn").onclick = () => copyDocUploadLink(caseId, c);
+  $("#docs-send-btn").onclick = (e) => sendDocsRequestNow(caseId, c, e);
+}
+/* One handler for the four row actions. Every write is a single UPDATE (or DELETE) on the row's
+   own id, and every one repaints the section so the summary, the chase line and the buttons can
+   never disagree with the list above them. */
+async function docAction(act, docId, caseId, c) {
+  if (!docId) return;
+  if (act === "delete") {
+    if (!isAdminOrOwner()) return toast("Only an Owner or Administrator can delete a checklist row.");
+    if (!confirm("Delete this checklist row?\n\nUse Waive instead if you decided not to collect it — a waived item stays on the record, so nobody asks the client for it again. Deleting is for a row added by mistake.")) return;
+    const { error } = await db.from("case_documents").delete().eq("id", docId);
+    if (error) return toast("Error: " + error.message);
+    toast("Checklist row deleted");
+    return renderCaseDocs(caseId, c);
+  }
+  if (act === "waive") {
+    const why = await promptWaiveReason();
+    if (why === null) return;                       // cancelled — nothing written
+    const { error } = await db.from("case_documents")
+      .update({ status: "waived", note: why || null, received_at: null }).eq("id", docId);
+    if (error) return toast("Error: " + error.message);
+    toast("Waived — it stays on the list so nobody asks for it again");
+    return renderCaseDocs(caseId, c);
+  }
+  const patch = act === "received"
+    ? { status: "received", received_at: new Date().toISOString() }
+    /* Undo returns the row to the state it was in when it was asked for: outstanding, no received
+       date, and no waiver reason left behind to contradict the status beside it. */
+    : { status: "requested", received_at: null, note: null };
+  const { error } = await db.from("case_documents").update(patch).eq("id", docId);
+  if (error) return toast("Error: " + error.message);
+  toast(act === "received" ? "Marked received" : "Back to outstanding");
+  return renderCaseDocs(caseId, c);
+}
+/* The waiver reason. Optional — an adviser who waives a document knows why and may be on the
+   phone — but asked for, because "waived" with no reason is the line that gets read back in six
+   months by somebody who wasn't there. Returns the string, "" for none, or null for cancel. */
+function promptWaiveReason() {
+  return openOverlay(`
+    <h3>Waive this document?</h3>
+    <p class="panel-sub">It stays on the checklist marked <em>waived</em>, so it stops being chased and nobody asks the client for it again. This is not a delete — the record still shows it was considered.</p>
+    <label>Why are we not collecting it? (optional)
+      <textarea id="doc-waive-note" rows="3" placeholder="e.g. self-employed — SA302s requested instead"></textarea>
+    </label>
+    <div class="modal-actions">
+      <div></div>
+      <div class="right">
+        <button type="button" class="btn" id="doc-waive-cancel">Cancel</button>
+        <button type="button" class="btn btn-primary" id="doc-waive-ok">Waive it</button>
+      </div>
+    </div>`, (finish, box) => {
+    box.querySelector("#doc-waive-cancel").onclick = () => finish(null);
+    box.querySelector("#doc-waive-ok").onclick = () => finish((box.querySelector("#doc-waive-note").value || "").trim());
+  });
+}
+/* ADD ITEMS — multi-select off the firm's list, narrowed by case kind, plus free text.
+   Items already on the checklist are shown ticked and disabled rather than hidden: "why is Photo
+   ID not in this list" is a worse question than "why is it greyed out". */
+async function addDocItems(caseId, c) {
+  const existing = await softRows(db.from("case_documents").select("id,item").eq("case_id", caseId));
+  const have = new Set(existing.map((d) => String(d.item || "").trim().toLowerCase()));
+  const kind = (c && c.case_kind) || "other";
+  const kindLabel = (KINDS.find((k) => k[0] === kind) || [])[1] || "case";
+  const { suggested, dropped } = docSuggestionsFor(kind);
+  const line = (item, i, pre) => {
+    const on = have.has(item.trim().toLowerCase());
+    return `<label class="doc-pick${on ? " is-on" : ""}"><input type="checkbox" value="${esc(item)}" ${on ? "checked disabled" : pre ? "checked" : ""} data-i="${pre ? "s" : "d"}${i}"> ${esc(item)}${on ? ' <span class="cs-muted">— already on this checklist</span>' : ""}</label>`;
+  };
+  const picked = await openOverlay(`
+    <h3>Add documents to this checklist</h3>
+    <p class="panel-sub">Ticked items are added as <strong>outstanding</strong>, dated today. The list below is your firm's document list from Settings, narrowed to what a <strong>${esc(kindLabel)}</strong> needs — nothing is enforced, so add anything you like.</p>
+    <div class="doc-picks" id="doc-pick-suggested">${suggested.length ? suggested.map((it, i) => line(it, i, true)).join("") : '<div class="empty">Your firm\'s document list in Settings is empty — type what you need below.</div>'}</div>
+    ${dropped.length ? `<details class="doc-dropped"><summary>The rest of the firm's list (${dropped.length} item${dropped.length === 1 ? "" : "s"} a ${esc(kindLabel.toLowerCase())} does not usually need)</summary><div class="doc-picks" id="doc-pick-dropped">${dropped.map((it, i) => line(it, i, false)).join("")}</div></details>` : ""}
+    <label style="margin-top:10px;">Anything else — one per line
+      <textarea id="doc-free" rows="3" placeholder="e.g. Latest SA302&#10;Landlord reference"></textarea>
+    </label>
+    <div class="ovl-err" id="doc-add-err"></div>
+    <div class="modal-actions">
+      <div></div>
+      <div class="right">
+        <button type="button" class="btn" id="doc-add-cancel">Cancel</button>
+        <button type="button" class="btn btn-primary" id="doc-add-ok">Add to checklist</button>
+      </div>
+    </div>`, (finish, box) => {
+    box.querySelector("#doc-add-cancel").onclick = () => finish(null);
+    box.querySelector("#doc-add-ok").onclick = () => {
+      const ticked = [...box.querySelectorAll(".doc-picks input:checked:not(:disabled)")].map((i) => i.value);
+      const free = (box.querySelector("#doc-free").value || "").split("\n").map((s) => s.trim()).filter(Boolean);
+      const all = [];
+      const seen = new Set(have);
+      ticked.concat(free).forEach((it) => {
+        const k = it.toLowerCase();
+        if (seen.has(k)) return;             // already on the list, or ticked twice
+        seen.add(k);
+        all.push(it);
+      });
+      if (!all.length) { box.querySelector("#doc-add-err").textContent = "Nothing new is ticked or typed."; return; }
+      finish(all);
+    };
+  });
+  if (!picked || !picked.length) return;
+  const now = new Date().toISOString();
+  const { error } = await db.from("case_documents")
+    .insert(picked.map((item) => ({ case_id: caseId, item, status: "requested", requested_at: now })));
+  if (error) return toast("Error: " + error.message);
+  toast(`${picked.length} item${picked.length === 1 ? "" : "s"} added — nothing has been emailed`);
+  await renderCaseDocs(caseId, c);
+}
+/* COPY UPLOAD LINK. Generates the token on first use and saves it to the case, then shows the URL
+   with the one sentence that matters said plainly: it is a bearer link. The URL is left on screen
+   (selectable) as well as copied, because clipboard writes fail silently in more browsers than
+   anybody expects and a link an operator cannot see is a link they cannot send. */
+async function copyDocUploadLink(caseId, c) {
+  const out = $("#docs-link-out");
+  let token = c && c.doc_token;
+  if (!token) {
+    if ((await docsSupported()) === false) return toast("This database has no upload-link column yet (run migration m10).");
+    token = newDocToken();
+    if (!token) return toast("This browser cannot generate a secure link — open the case in a current browser.");
+    const { error } = await db.from("cases").update({ doc_token: token }).eq("id", caseId);
+    if (error) { if (isMissingColumnError(error)) DOCS_SUPPORTED = false; return toast("The link could not be saved: " + error.message); }
+    if (c) c.doc_token = token;
+    /* The case row's version just moved — re-baseline, or the operator's very next Save on this
+       modal is refused as "somebody else changed this". Same reason the review/reminder actions do. */
+    await refreshOpenedStamp(caseId);
+  }
+  const url = docsUploadUrl(token);
+  if (out) {
+    out.classList.remove("hidden");
+    out.innerHTML = `<label>Upload link
+        <div style="display:flex;gap:8px;"><input id="docs-link-input" readonly value="${esc(url)}" style="flex:1;"><button type="button" class="btn btn-sm" id="docs-link-copy">Copy</button></div>
+      </label>
+      <p class="panel-sub" id="docs-link-warn"><strong>Anyone with this link can upload documents to this case.</strong> It does not ask for a login and it does not expire on its own. The page shows the client's first name and the list of items — nothing else about them or the case. Send it to the client, not to a group.</p>`;
+    const copy = () => {
+      const el = $("#docs-link-input");
+      el.select();
+      try { document.execCommand("copy"); } catch (e) { /* older browsers */ }
+      if (navigator.clipboard) navigator.clipboard.writeText(url).catch(() => {});
+      toast("Upload link copied");
+    };
+    $("#docs-link-copy").onclick = copy;
+    copy();
+  }
+  const btn = $("#docs-link-btn");
+  if (btn) btn.textContent = "🔗 Copy upload link";
+}
+/* SEND DOCUMENT REQUEST NOW. Goes through queueEmail, which queues ONE row and sends exactly that
+   row by id — it never flushes the queue. The refusal below is the honest half: a checklist with
+   nothing outstanding would produce an email asking for nothing. */
+async function sendDocsRequestNow(caseId, c, ev) {
+  if (!c || !c.client_id) return toast("This case has no client on it.");
+  if (await queueEmail(caseId, c.client_id, "docs_request", c, ev)) await renderCaseDocs(caseId, c);
+}
 /* ==========================================================================
    R6 BATCH 2 · THE SAME CASE, NAMED THE SAME WAY EVERYWHERE
    Batch 1 gave the app a property primitive but only the case form and the
@@ -2758,13 +3424,33 @@ async function renderSettings() {
       </select>
     </label>
     <p class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;" id="annual-review-note">Creates a <strong>call task</strong> each year on the case's completion anniversary — “Annual review call — …”, assigned to that case's adviser, appearing in My Day and on the case like any other task. <strong>No email is sent to the client</strong>; the conversation is yours to have. Independent of the completion-anniversary email above, which is an email and creates no task.</p>
+    ${/* R9-5 — THE DOCUMENT CHASE. Off in the database and off here: chasing a client is a decision
+          a firm makes, not something a deploy starts doing to their book. The copy states all four
+          rules the cron actually applies (which cases, how often, only-what-is-missing, and where
+          it stops) plus the dependency that makes it work at all, because a firm switching this on
+          with no Resend key would otherwise see a toggle saying On and nothing happening. */ ""}
+    <h4 style="grid-column:1/-1;margin:10px 0 0;">Documents</h4>
+    <label>Automatic document chasing
+      <select name="doc_chase_enabled">
+        <option value="off" ${(settings.doc_chase_enabled ?? "off") === "on" ? "" : "selected"}>Off</option>
+        <option value="on" ${settings.doc_chase_enabled === "on" ? "selected" : ""}>On</option>
+      </select>
+    </label>
+    <p class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;" id="doc-chase-note">Emails a client <strong>every ${esc(String(settings.doc_chase_days ?? "3"))} days</strong> while documents are still outstanding on their case's checklist, listing <strong>only the items still missing</strong> — never the whole list again. After <strong>${DOC_CHASE_MAX} chases it stops emailing</strong> and puts a call task on the case's adviser instead; the fourth email is not the one that works. Only cases at <strong>Fact Find or Application</strong> with a checklist are chased: a case with no checklist is not “fully documented”, it is unknown, and it is skipped rather than guessed at. The ${esc(String(settings.doc_chase_days ?? "3"))}-day gap counts any document email, request or chase, so a cron run and someone pressing “Send document request now” cannot become two emails in an evening. <strong>Requires email sending to be set up</strong> (a verified From address and a Resend key) — with no sender configured nothing goes out, whatever this says.</p>
     <label>Review requests (NPS)
       <select name="nps_enabled">
         <option value="off" ${(settings.nps_enabled ?? "off") === "on" ? "" : "selected"}>Off</option>
         <option value="on" ${settings.nps_enabled === "on" ? "selected" : ""}>On</option>
       </select>
     </label>
-    <p class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;" id="nps-note">Review-request emails ask for a 1–5 rating; happy clients are routed to your review link, unhappy ones create a call-back task. <strong>Dripped: at most 5 per automation run</strong>, oldest completion first — switching this on does not mail your whole back catalogue on day one, and the rest queue up on later runs.</p>
+    ${/* R9-3 — COPY AUDIT. Two things this paragraph did not say, both of which a firm switching
+          the feature on is entitled to know before it does: a client who ignores the first email
+          gets a SECOND one about a week later, and an unhappy answer writes what they said onto
+          the case as a note as well as raising the call-back. Written against what the backend
+          actually does (the reminder is queued inside the same 5-a-run drip, off
+          review_reminder_days), not against what would be tidy. */ ""}
+    <p class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;" id="nps-note">Review-request emails ask for a rating out of 10; happy clients are routed to your review link, unhappy ones (6 or below) create a <strong>call-back task</strong> for the case's adviser and write what they said onto the case timeline as a note, score and all. <strong>Dripped: at most 5 per automation run</strong>, oldest completion first — switching this on does not mail your whole back catalogue on day one, and the rest queue up on later runs.</p>
+    <p class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;" id="nps-reminder-note"><strong>They are asked twice.</strong> A request that goes unanswered for <strong>${esc(String(settings.review_reminder_days ?? "7"))} days</strong> (the “Review reminder if unanswered” setting above) is followed by one reminder email, and one only — it shares the same 5-per-run cap, so the two together can never exceed five sends in a single automation run. Set the field to blank or 0 if you would rather ask once.</p>
     <label>Review platform link (Google / Trustpilot)
       <input name="review_platform_link" type="url" value="${esc(settings.review_platform_link ?? "")}" placeholder="https://g.page/r/…">
     </label>
@@ -3429,6 +4115,9 @@ async function loadTasks() {
         <div class="t" onclick="openCase('${t.case_id}')">${esc(who)} ${propCtxChip(taskCtx, t.case_id, "row-prop")}</div>
         <div class="s">${esc(t.title)} — due ${fmtD(t.due_date)}</div>
       </div>
+      ${/* R9-3 — the Today panel's half of the detractor flag. Same badge, same reasoning as
+           briefBadge: an unhappy client is not one of a fortnight's chores. */ ""}
+      ${isReviewFeedbackTask(t.title) ? REVIEW_TASK_BADGE : ""}
       ${overdue ? '<span class="badge red">overdue</span>' : ""}
       ${taskAssigneeHtml(t.id, t.assigned_to, "tasks")}
       <button class="btn btn-sm" onclick="doneTask('${t.id}')">✓ Done</button>
@@ -3495,13 +4184,22 @@ const BRIEF_KIND_SHORT = {
   task_overdue: "overdue task", task_today: "task today", lead_new: "lead", email_new: "email",
   appt_today: "appointment", rate_urgent: "rate-end", stalled: "stalled", fee_chase: "fee",
   protection_hot: "protection", no_completion_date: "completion date",
+  review_feedback: "review feedback",   // R9-3
 };
 function briefKindShort(kind) { return BRIEF_KIND_SHORT[kind] || String(kind || "").replace(/_/g, " "); }
 
 function briefBadge(it) {
+  /* R9-3 — a review-feedback call-back is not "a task due today". It is a client who has already
+     told us we let them down, sitting in a list beside "chase the solicitor for the TR1". The
+     badge goes FIRST, before the timing badge, because the timing is the least important thing
+     about it. Only on task rows, and only while the task is open — get_briefing does not return
+     completed ones, so nothing further is needed to stop a done one shouting. */
+  const rev = (it.kind === "task_overdue" || it.kind === "task_today") && isReviewFeedbackTask(it.title) ? REVIEW_TASK_BADGE : "";
   switch (it.kind) {
-    case "task_overdue": return '<span class="badge red">OVERDUE</span>';
-    case "task_today": return '<span class="badge amber">TODAY</span>';
+    case "task_overdue": return rev + '<span class="badge red">OVERDUE</span>';
+    case "task_today": return rev + '<span class="badge amber">TODAY</span>';
+    // R9-3 — the merged-in row. The badge IS the row: nothing else about it needs saying twice.
+    case "review_feedback": return REVIEW_TASK_BADGE;
     /* R7-5 — the accept clock reaches My Day too. The NEW LEAD badge stays (it is what the row IS);
        the age chip beside it is how late it is, and it is the one that changes colour. `it.lead` is
        attached by loadBriefing's enrichment below and is simply absent if that fetch failed, in
@@ -3522,6 +4220,11 @@ function briefActions(it) {
     case "task_overdue":
     case "task_today":
       return `<button class="btn btn-sm" onclick="briefDone('${it.task_id}')">✓ Done</button>${open}`;
+    /* R9-3 — the same two verbs as any other task, in the opposite order. "Open case" leads
+       because the thing worth doing first is READING what the client said, and marking a
+       complaint done without reading it is the one outcome this row exists to prevent. */
+    case "review_feedback":
+      return `${it.case_id ? `<button class="btn btn-sm btn-primary" onclick="openCase('${it.case_id}')" title="Read the client's own words on the case timeline, then ring them">Open case</button>` : ""}<button class="btn btn-sm" onclick="briefDone('${it.task_id}')">✓ Done</button>`;
     case "lead_new":
       return leadRoutingHtml(it.lead_id) + `<button class="btn btn-sm btn-primary" onclick="acceptLead('${it.lead_id}', event)">Accept</button>`;
     case "email_new":
@@ -3596,6 +4299,43 @@ async function loadBriefing() {
       items.sort((a, b) => a.pri - b.pri);
     }
   } catch (e) { /* graceful degradation — the RPC-driven items above still render */ }
+  /* ---- R9-3 · THE UNHAPPY CLIENT REACHES MY DAY ON THE DAY THEY SAY SO ----
+     get_briefing only returns tasks that are due TODAY or already overdue, and the review-capture
+     function deliberately dates its call-back TOMORROW (an unhappy client filling a form in at
+     23:40 should not generate a task that is already late by the time anyone reads it). Between
+     those two entirely reasonable decisions, the single most urgent thing in the firm's day was
+     invisible in My Day until it had gone stale.
+
+     Merged client-side, exactly the way the completion-date chaser above is: purely additive,
+     de-duplicated against whatever the RPC already returned (an overdue one comes back as
+     task_overdue and must not appear twice), and silently skipped if the read fails.
+
+     Priority 9 — above overdue tasks (10), below a rate that has already ended (8). An overdue
+     internal chore costs time; a client who has told us we failed them costs the client, and the
+     referrals they would have made. It is not put above the rate-ended row because that one is
+     losing money this minute. */
+  try {
+    const { data: revTasks } = await db.from("case_tasks")
+      .select("id,title,due_date,case_id,assigned_to,cases(client_id,clients(first_name,last_name))")
+      .is("done_at", null).order("due_date").limit(200);
+    const already = new Set(items.map((it) => it.task_id).filter(Boolean).map(String));
+    const todayStr = localDateStr();
+    (revTasks || []).filter((t) => t && isReviewFeedbackTask(t.title) && !already.has(String(t.id)))
+      // R5-35's rule, verbatim: Mine means owner === me. An ownerless one lives under All.
+      .filter((t) => briefingScope === "all" || t.assigned_to === (ME && ME.id))
+      .forEach((t) => {
+        const who = t.cases?.clients ? [t.cases.clients.first_name, t.cases.clients.last_name].filter(Boolean).join(" ") : "";
+        const late = t.due_date && t.due_date < todayStr;
+        items.push({
+          kind: "review_feedback", pri: 9,
+          title: t.title,
+          sub: `Unhappy review — ring them back${t.due_date ? (late ? ` · was due ${fmtD(t.due_date)}` : ` · due ${fmtD(t.due_date)}`) : ""}. What they actually said is on the case timeline.`,
+          task_id: t.id, case_id: t.case_id, client_id: (t.cases && t.cases.client_id) || null,
+          owner: t.assigned_to || null, who,
+        });
+      });
+    items.sort((a, b) => a.pri - b.pri);
+  } catch (e) { /* graceful degradation — the rest of My Day is unaffected */ }
   // T1-23 — a client with more than one open case (Duncan Armitage's rate-end sits on two of them,
   // Ruby Sinclair has four) produces briefing rows whose titles are word-for-word identical and
   // whose Send-reminder buttons act on different cases. Look up kind + stage for every case behind
@@ -4233,7 +4973,7 @@ async function loadPipeline() {
   }
   // The select("*") above returns every column cases actually has, so it settles the M7 question
   // for the table's Property column before it is asked (see notePropAddrFromStarRow).
-  if (cases && cases.length) notePropAddrFromStarRow(cases[0]);
+  if (cases && cases.length) { notePropAddrFromStarRow(cases[0]); noteDocsFromStarRow(cases[0]); }
   const q = ($("#board-search").value || "").trim().toLowerCase();
   const who = $("#board-adviser").value || "all";
   const filtered = (cases || []).filter((c) => {
@@ -4350,6 +5090,11 @@ async function loadPipeline() {
           ${cardChip}
           <div class="cd">${lenderIcon(c.lender)}${esc(cdText)}${c.loan_amount ? " · " + fmtM(c.loan_amount) : ""}</div>
           <div class="flags">
+            ${/* R9-5 · m10 — WHO THE CASE IS SITTING WITH. First in the flag row because it is the
+                 one thing on a card that tells an adviser what to do next; deliberately quiet
+                 (grey, no colour of its own) because it is a fact, not an alarm — the aging edge
+                 is what says a case is late, and this round leaves that untouched. */ ""}
+            ${waitingChipHtml(c)}
             ${c.rate_end_date ? `<span class="badge blue${c.rate_end_estimated ? " is-est" : ""}"${c.rate_end_estimated ? ` title="${TIP_APPROX}"` : ""}>Rate ends ${fmtD(c.rate_end_date)}${c.rate_end_estimated ? " " + APPROX : ""}</span>` : ""}
             ${erc ? `<span class="badge red" title="${TIP_ERC}">ERC conflict</span>` : ""}
             ${c.retention_source_case_id ? '<span class="badge grey">🔁 retention</span>' : ""}
@@ -4525,8 +5270,12 @@ window.moveCaseToStage = async function (caseId, targetStage, opts = {}) {
   if (!cRow) {
     // G6-10 — the identity columns come along so the result toast can say WHICH case moved.
     const propOn = await propAddrSupported();
+    /* R9-1 — client_id/assigned_to and (where m11 is there) the referrer come along too, so a
+       completion can offer the thank-you task without a second round-trip, and so the confirm
+       below can say whether one will be offered at all. */
+    const refOn = await referrerSupported();
     cRow = (await db.from("cases")
-      .select("stage,protection_status,completed_at,case_kind,lender" + (propOn ? ",property_address" : "") + ",clients(first_name,last_name)")
+      .select("id,client_id,assigned_to,stage,protection_status,completed_at,case_kind,lender" + (propOn ? ",property_address" : "") + (refOn ? ",referrer_client_id" : "") + ",clients(first_name,last_name)")
       .eq("id", caseId).single()).data;
   }
   if (cRow && cRow.stage === targetStage) return "noop"; // no-op (e.g. dropped back on the same column)
@@ -4563,7 +5312,11 @@ window.moveCaseToStage = async function (caseId, targetStage, opts = {}) {
       // only completion-related emails are the ones an adviser sends by hand from the case (fee
       // request, review request, rate-end reminder), and there is no code path anywhere that
       // creates a retention case. Say what actually happens, not what would be nice.
+      /* R9-1 — and the one thing that IS now offered, named before it happens rather than
+         appearing as a surprise second dialog. Still nothing automatic: the next prompt asks,
+         and Cancel there leaves the referrer's file untouched. */
       ? `Move ${nm} to Completed? Nothing is sent or set up automatically — email the fee request, review request and rate-end reminder from the case yourself, and set a reminder for retention when the rate ends.`
+        + (cRow && cRow.referrer_client_id ? `\n\nThis client was referred, so you will be asked next whether to add a thank-you task on the referrer's case. No email is sent to anybody either way.` : "")
       : "";
     if (msg && !confirm(msg)) { if (!skipReload) loadPipeline(); return "cancelled"; } // abort — snap the card back
   }
@@ -4588,6 +5341,16 @@ window.moveCaseToStage = async function (caseId, targetStage, opts = {}) {
       .insert({ case_id: caseId, body: lostReasonNoteBody(lost), created_by: (ME && ME.id) || null });
     if (nErr && !silent) toast("Case moved, but the reason note could not be saved: " + nErr.message);
   }
+  /* R9-1 — THE ONE EVENT the thank-you hangs off: a case with a referrer arriving at Completed.
+     Deliberately AFTER the update has succeeded (a courtesy task for a completion that did not
+     happen is worse than no task), and only on a genuine arrival — a re-save of an already
+     completed case is not a completion, and the idempotency check inside catches the rest. It is
+     suppressed on the bulk path (silent) for the same reason bulk suppresses every other prompt:
+     one dialog per case, in the middle of a fifty-case move, is not a prompt, it is a wall. */
+  let refResult = null;
+  if (targetStage === "completed" && !silent && (!cRow || cRow.stage !== "completed")) {
+    refResult = await maybeQueueReferralThankYou(caseId, cRow, { quiet: true });
+  }
   if (!silent) {
     // If the case just left the focused segment its card vanishes from this view —
     // name the segment it landed in so nobody thinks the deal disappeared.
@@ -4605,7 +5368,11 @@ window.moveCaseToStage = async function (caseId, targetStage, opts = {}) {
     const movedWhat = [propLabel(cRow), cRow && cRow.case_kind ? caseTypeLabel(cRow) : null, cRow && cRow.lender]
       .filter(Boolean).join(" · ");
     toast("Moved to " + (STAGE_LABEL[targetStage] || targetStage) + (movedWhat ? " — " + movedWhat : "") + where
-      + (lostColsMissing ? " · reason kept as a note only (run migration M2)" : ""));
+      + (lostColsMissing ? " · reason kept as a note only (run migration M2)" : "")
+      /* R9-1 — the referral outcome rides on THIS toast rather than firing its own a moment
+         earlier and being overwritten by it. Both outcomes are worth a sentence: a task was
+         created on somebody else's file, or one deliberately was not and here is why. */
+      + (refResult && refResult.message ? " · " + refResult.message : ""));
     if (!skipReload) loadPipeline();
   }
   return reopening ? "reopened" : "moved";
@@ -5200,7 +5967,10 @@ function renderPipelineTable(filtered, stageEntry = {}, propOn = true) {
         ${cbCell(c)}
         <td class="stick-col"><strong>${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" "))}</strong></td>
         ${propOn ? `<td class="pipe-col-prop">${propChip(c) || '<span class="cs-muted">—</span>'}</td>` : ""}
-        <td>${stageBadge(c.stage)}</td>
+        ${/* R9-5 — the waiting-on chip rides in the Stage cell rather than taking a column of its
+             own: the table is already fourteen columns wide on a live segment, and "who is it
+             with" is a qualifier on the stage, not a separate axis. */ ""}
+        <td>${stageBadge(c.stage)}${waitingChipHtml(c)}</td>
         <td>${(() => { const a = cardAge(c, stageEntry[c.id]); return a.inStage == null ? "" : `<span class="age-cell${a.level ? " age-" + a.level : ""}" title="${esc(a.basis)}">${a.inStage}d</span>`; })()}</td>
         <td>${esc((KINDS.find((x) => x[0] === c.case_kind) || [])[1] || "")}</td>
         <td>${lenderIcon(c.lender)}${esc(c.lender || "")}</td>
@@ -6195,12 +6965,13 @@ window.openCase = async function (id, opts = {}) {
   let notes = [], tasks = [];
   let events = [], auditRows = [];
   let hasRetentionSuccessor = false;
+  let caseDocs = [], docMails = [];      // R9-5 · m10 — the checklist and its document emails
   openedUpdatedAt = null;
   pendingOffer = null; // a re-render replaces the diff panel — don't leave a stale proposal armed
   if (id) {
     // BACKEND-R4 §2/§3 — the curated event log (log_case_event, with its actor) and the forensic
     // audit_log underneath it. Both soft-fail: a blocked table must not stop the case opening.
-    const [{ data: cs }, { data: ns }, { data: ts }, evs, aud, succ] = await Promise.all([
+    const [{ data: cs }, { data: ns }, { data: ts }, evs, aud, succ, docs, dmail] = await Promise.all([
       db.from("cases").select("*").eq("id", id).single(),
       db.from("case_notes").select("*").eq("case_id", id).order("created_at", { ascending: false }),
       db.from("case_tasks").select("*").eq("case_id", id).order("due_date"),
@@ -6208,10 +6979,17 @@ window.openCase = async function (id, opts = {}) {
       loadAuditRows("case_id", id),
       // R5-6 — does this case already have a retention successor? Decides the header button.
       softRows(db.from("cases").select("id").eq("retention_source_case_id", id).limit(1)),
+      /* R9-5 · m10 — the checklist and the document emails the chase line is derived from. Both
+         soft: a database without the table answers 42P01 and the section simply never renders. */
+      softRows(db.from("case_documents").select("*").eq("case_id", id).order("created_at")),
+      softRows(db.from("email_queue").select("id,email_type,status,sent_at,created_at").eq("case_id", id).in("email_type", DOC_MAIL_TYPES)),
     ]);
     if (!cs) return toast("Case not found — it may have been deleted or you don't have access");
     c = cs; notes = ns || []; tasks = ts || []; events = evs; auditRows = aud;
+    caseDocs = docs || []; docMails = dmail || [];
     notePropAddrFromStarRow(cs); // the select("*") above settles the M7 question definitively
+    noteReferrerFromStarRow(cs); // …and the m11 one, at the same zero cost (R9-1)
+    noteDocsFromStarRow(cs);     // …and m10's, which can only ever be answered "no" from here
     hasRetentionSuccessor = (succ || []).length > 0;
     openedUpdatedAt = cs.updated_at; // exact string from the loaded row, for the stale-write guard
   }
@@ -6227,6 +7005,13 @@ window.openCase = async function (id, opts = {}) {
      that forks the property key. select("*") on purpose: an un-migrated
      database has no property_address column and naming it would 42703. */
   const propAddrOn = await propAddrSupported();
+  const referrerOn = await referrerSupported();   // R9-1 · m11 — decides whether the field exists at all
+  /* R9-5 · m10 — decides whether the Documents section, the Waiting-on select and the Solicitor
+     field exist at all. Same rule as the two above it: a control whose Save can only fail is
+     worse than no control. The firm's known solicitors are only fetched when the field will
+     actually be drawn, so an un-migrated database pays nothing for it. */
+  const docsOn = await docsSupported();
+  const solicitorFirms = docsOn ? await knownSolicitorFirms() : [];
   const siblingCases = c.client_id ? await softRows(db.from("cases").select("*").eq("client_id", c.client_id)) : [];
   registerClientProps(c.client_id, siblingCases);   // R6-FIX V2/V4 — the client's whole book
   /* ---- R6-FIX OP-R62-05 · "this building is on someone else's file too" ----
@@ -6264,6 +7049,21 @@ window.openCase = async function (id, opts = {}) {
     `<option value="${i.id}" ${i.id === c.introducer_id ? "selected" : ""}>${esc(i.name)}</option>`).join("");
   const clientOpts = (clients || []).map((cl) =>
     `<option value="${cl.id}" ${cl.id === c.client_id ? "selected" : ""}>${esc([cl.last_name, cl.first_name].filter(Boolean).join(", "))}${cl.email ? "" : " (no email!)"}</option>`).join("");
+  /* R9-1 — the referrer picker's options. Same shape and same ordering ("Last, First", ordered by
+     last_name) as the appointment client picker and the case's own client select above it, so all
+     three read alike and a native <select>'s type-ahead finds a name the same way in each.
+     THE CASE'S OWN CLIENT IS EXCLUDED: a client cannot refer themselves, and offering it invites a
+     mis-click that would show "Referred by <the client>" on their own case forever. */
+  const referrerCandidates = (clients || []).filter((cl) => cl.id !== c.client_id);
+  const referrerOpts = referrerCandidates.map((cl) =>
+    `<option value="${cl.id}" ${cl.id === c.referrer_client_id ? "selected" : ""}>${esc([cl.last_name, cl.first_name].filter(Boolean).join(", "))}</option>`).join("");
+  /* The stored referrer may be the one name the list above cannot show — the case's own client
+     (bad historic data) or someone since deleted. Keeping the value visible beats silently
+     rewriting it to "none" the next time anybody presses Save on this form. */
+  const referrerRow = c.referrer_client_id ? (clients || []).find((cl) => cl.id === c.referrer_client_id) : null;
+  const referrerName = clientFullName(referrerRow);
+  const referrerOrphanOpt = c.referrer_client_id && !referrerCandidates.some((cl) => cl.id === c.referrer_client_id)
+    ? `<option value="${esc(c.referrer_client_id)}" selected>${esc(referrerName || "(referrer no longer on file)")}</option>` : "";
 
   // ---- Summary-header data (existing cases only) — BUILD 2a ----
   const clientName = caseClient ? [caseClient.first_name, caseClient.last_name].filter(Boolean).join(" ") : "";
@@ -6299,6 +7099,13 @@ window.openCase = async function (id, opts = {}) {
             ${c.lender ? `<span class="cs-lender">${lenderIcon(c.lender, 14)}${esc(c.lender)}</span>` : ""}`}
             ${stageBadge(c.stage, { cls: "cs-stage-badge" })}
             ${sharedHtml}
+            ${/* R9-1 — WHO SENT THIS CLIENT. It belongs on the identity line and nowhere else: an
+                 adviser picking up the phone on a referred client should not be able to miss that
+                 a name in their own book is behind this case, and the link goes to that person's
+                 record so the relationship is one click away rather than a search. Rendered from
+                 the referrer's own row, so it says a name or it says nothing — never an id. */ ""}
+            ${referrerOn && c.referrer_client_id && referrerName
+              ? `<span class="cs-referrer" id="cs-referrer" title="${esc(referrerName)} referred this client. Open their record to see everyone they have sent.">🤝 Referred by <a href="#" class="cs-referrer-link" data-client="${esc(c.referrer_client_id)}" onclick="event.preventDefault();openClient('${jsArg(c.referrer_client_id)}')">${esc(referrerName)}</a></span>` : ""}
           </div>
           ${caseClient && (caseClient.phone || caseClient.email) ? `<div class="cs-contact">${caseClient.phone ? "📞 " + telLink(caseClient.phone) : ""}${caseClient.email ? "✉️ " + mailLink(caseClient.email) : ""}</div>` : ""}
         </div>
@@ -6398,6 +7205,15 @@ window.openCase = async function (id, opts = {}) {
           ${t.done_at ? assigneeChipHtml(t.assigned_to) : taskAssigneeHtml(t.id, t.assigned_to, "")}${t.done_at ? "" : `<button class="btn btn-sm" aria-label="Mark task done" title="Mark task done" onclick="doneTaskInCase('${t.id}','${id}')">✓</button>`}
         </div>`).join("") || '<div class="empty">No tasks.</div>'}</div>
     </div>
+    ${/* R9-5 · m10 — THE DOCUMENT CHECKLIST. Between Tasks and Notes because that is where it sits
+         in the day: it is work outstanding, not history. Absent entirely on a database without the
+         migration — see docsSupported(). Painted by renderCaseDocs() below. */ ""}
+    ${docsOn ? `
+    <div style="margin-top:14px;" id="case-docs">
+      <h3 style="font-size:14px;">Documents</h3>
+      <p class="panel-sub" style="margin:2px 0 6px;">What this client has been asked for, and what has actually arrived. The document emails list <strong>only what is still outstanding</strong>, so nobody is asked twice for something they have already sent.</p>
+      <div id="case-docs-body"></div>
+    </div>` : ""}
     <div style="margin-top:14px;">
       <h3 style="font-size:14px;">Notes</h3>
       <div style="display:flex;gap:8px;margin:8px 0 0;">
@@ -6494,8 +7310,35 @@ window.openCase = async function (id, opts = {}) {
       <label>Protection<select name="protection_status">${[["not_discussed","Not discussed"],["discussed","Discussed"],["quoted","Quoted"],["policy_taken","Policy taken"],["declined","Client declined"]].map(([k,l]) => `<option value="${k}" ${k === (c.protection_status || "not_discussed") ? "selected" : ""}>${l}</option>`).join("")}</select></label>
       <label>Protection commission (£)<input name="protection_commission" type="number" step="any" value="${c.protection_commission ?? ""}"></label>
       <label id="gi-status-label" ${["purchase","first_time_buyer"].includes(c.case_kind) ? "" : 'class="hidden"'}>GI / buildings insurance<select name="gi_status">${[["not_discussed","Not discussed"],["quoted","Quoted"],["policy_taken","Policy taken"],["declined","Declined"],["not_applicable","Not applicable"]].map(([k,l]) => `<option value="${k}" ${k === (c.gi_status || "not_discussed") ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+      ${/* R9-5 · m10 — WHO IS THIS CASE SITTING WITH. Next to the stage because that is the field
+           people currently misuse to answer it, and the two are not the same question: a case can
+           sit at Application for a month waiting on the CLIENT. The solicitor box is beside it and
+           offers every firm already on the book, because a second spelling of "Trelawny" is a
+           second row in the conveyancer report and a firm that looks twice as fast as it is. */ ""}
+      ${docsOn ? `
+      <label id="case-waiting-field">Waiting on
+        <select name="waiting_on" id="case-waiting-select">
+          <option value="">— nobody / not waiting —</option>
+          ${WAITING_ON_OPTIONS.map(([k, l]) => `<option value="${k}" ${k === c.waiting_on ? "selected" : ""}>${esc(l)}</option>`).join("")}
+        </select>
+      </label>
+      <label id="case-solicitor-field">Solicitor firm
+        <input name="solicitor_firm" id="case-solicitor-input" list="case-solicitor-firms" value="${esc(c.solicitor_firm)}" placeholder="e.g. Harker &amp; Bligh LLP" autocomplete="off">
+        <datalist id="case-solicitor-firms">${solicitorFirms.map((f) => `<option value="${esc(f)}"></option>`).join("")}</datalist>
+        <span class="s cs-muted" id="case-solicitor-hint">Pick from the firms you already use where you can — the conveyancer-speed report groups on this exact text.</span>
+      </label>` : ""}
       <label>Lead source<input name="lead_source" value="${esc(c.lead_source)}" placeholder="e.g. Google, referral, repeat"></label>
       <label>Introducer<select name="introducer_id"><option value="">— none —</option>${introOpts}</select></label>
+      ${/* R9-1 · m11 — REFERRED BY. Next to Lead source and Introducer because it answers the same
+           question they do — where did this case come from — and it is the answer those two could
+           never hold: "referral" in a free-text box, and an Introducer row is a business (an estate
+           agent, an accountant), not a client. Hidden outright without the migration, exactly like
+           the M7 property field above: a select whose Save can only fail is worse than no select. */ ""}
+      ${referrerOn ? `
+      <label id="case-referrer-field">Referred by (client)
+        <select name="referrer_client_id" id="case-referrer-select"><option value="">— nobody —</option>${referrerOrphanOpt}${referrerOpts}</select>
+        <span class="s cs-muted" id="case-referrer-hint">The existing client who sent this one to you. Start typing a surname to jump down the list. When this case completes you will be offered a thank-you task on their case — nothing is emailed to anyone.</span>
+      </label>` : ""}
       ${/* R5-36 — a new case starts on ME, not on nobody: unassigned cases were being created by the
            dozen and only surfaced later in Data Health. An existing case keeps whatever it has. */ ""}
       <label>Assigned to<select name="assigned_to"><option value="">— unassigned —</option>${assigneeOptionsHtml(id ? c.assigned_to : defaultAssignee((ME && ME.id) || null))}</select></label>
@@ -6513,11 +7356,37 @@ window.openCase = async function (id, opts = {}) {
   openModal();
   pushModalHistory("case", id); // BUILD 7a — Back closes this modal; reloads replace (no dup entry)
   if (id) wireAuditPanel("case-audit", auditRows);
+  /* R9-5 — the Documents section, painted from the reads the modal already made. `docCase` is a
+     deliberately small object rather than `c` itself: renderCaseDocs stores the generated upload
+     token on it, and nothing that mutable should be hanging off the row the Save path reads. */
+  if (id && docsOn) {
+    const docCase = {
+      id, stage: c.stage, case_kind: c.case_kind, client_id: c.client_id,
+      assigned_to: c.assigned_to, doc_token: c.doc_token, __clientName: clientName,
+    };
+    renderCaseDocs(id, docCase, { docs: caseDocs, mails: docMails, tasks });
+  }
 
   const kindSel = $("#case-form").elements.case_kind;
   kindSel.onchange = () => $("#gi-status-label").classList.toggle("hidden", !["purchase", "first_time_buyer"].includes(kindSel.value));
   const clientSel = $("#case-client-select");
-  clientSel.onchange = () => $("#nc-new-client-fields").classList.toggle("hidden", clientSel.value !== "__new__");
+  clientSel.onchange = () => {
+    $("#nc-new-client-fields").classList.toggle("hidden", clientSel.value !== "__new__");
+    /* R9-1 — the two selects must never be able to name the same person. The candidate list was
+       built for the client this case had when the modal opened; changing the client mid-form would
+       otherwise leave them offered as their own referrer. Hide, don't just refuse on Save. */
+    syncReferrerOptions();
+  };
+  /* Keeps the "Referred by" list free of whoever is currently picked as the client, and clears the
+     referrer outright if the case has just been pointed at the person who supposedly referred it. */
+  function syncReferrerOptions() {
+    const sel = $("#case-referrer-select");
+    if (!sel) return;
+    const cid = clientSel.value;
+    if (cid && sel.value === cid) sel.value = "";
+    [...sel.options].forEach((o) => { if (o.value) o.hidden = !!cid && o.value === cid; });
+  }
+  syncReferrerOptions();
   wireCasePropertyPicker(siblingCases, id); // R6 — no-op when the M7 field isn't rendered
   $("#modal-cancel").onclick = closeModalGuarded; // defect 2 — Cancel is a "leave" path: it must warn about unsaved edits too
   $("#modal-save").onclick = async () => {
@@ -6615,6 +7484,17 @@ window.openCase = async function (id, opts = {}) {
          is there, but a database can be migrated backwards between page load and Save, so a write
          refused for property_address retries without it rather than losing the whole edit. */
       if (!propAddrOn) delete row.property_address;
+      /* R9-1 — same belt-and-braces for m11, plus the one rule the column itself cannot enforce:
+         a case may not be referred by its own client. The picker hides that option, so reaching
+         here means a stale form or a hand-edited DOM; drop the value rather than write a
+         self-reference that every advocacy figure would then have to special-case. */
+      if (!referrerOn) delete row.referrer_client_id;
+      else if (row.referrer_client_id && row.referrer_client_id === row.client_id) row.referrer_client_id = null;
+      /* R9-5 — and the same for m10's two case-level fields. The solicitor name is trimmed here
+         rather than at read time because the conveyancer report groups on the exact string, and
+         "Trelawny Conveyancing " is a fourth firm nobody chose to create. */
+      if (!docsOn) { delete row.waiting_on; delete row.solicitor_firm; }
+      else if (row.solicitor_firm) row.solicitor_firm = String(row.solicitor_firm).trim() || null;
       if (id) {
         // Optimistic concurrency: only update if the row hasn't changed since we opened it.
         let { data: updated, error } = await db.from("cases").update(row).eq("id", id).eq("updated_at", openedUpdatedAt).select();
@@ -6637,6 +7517,22 @@ window.openCase = async function (id, opts = {}) {
         if (error && protStampApplied && isMissingColumnError(error)) {
           protStampApplied = false; PROT_QUOTE_SUPPORTED = false;
           PROT_STAMP_COLS.forEach((k) => delete row[k]);
+          ({ data: updated, error } = await db.from("cases").update(row).eq("id", id).eq("updated_at", openedUpdatedAt).select());
+        }
+        /* R9-1 — and the same for m11's referrer. Identical reasoning: a firm that has not taken
+           the migration still gets to save the rest of the form, and is told what did not land. */
+        let refColMissing = false;
+        if (error && "referrer_client_id" in row && isMissingColumnError(error)) {
+          refColMissing = true; REFERRER_SUPPORTED = false;
+          delete row.referrer_client_id;
+          ({ data: updated, error } = await db.from("cases").update(row).eq("id", id).eq("updated_at", openedUpdatedAt).select());
+        }
+        /* R9-5 — and m10's pair. Identical reasoning again: a firm that has not taken the
+           migration still gets to save the rest of the form, and is told what did not land. */
+        let docColsMissing = false;
+        if (error && ("waiting_on" in row || "solicitor_firm" in row) && isMissingColumnError(error)) {
+          docColsMissing = true; DOCS_SUPPORTED = false;
+          delete row.waiting_on; delete row.solicitor_firm;
           ({ data: updated, error } = await db.from("cases").update(row).eq("id", id).eq("updated_at", openedUpdatedAt).select());
         }
         if (error) return toast("Error: " + error.message);
@@ -6664,7 +7560,16 @@ window.openCase = async function (id, opts = {}) {
         }
         closeModal();
         toast("Case saved" + (lostColsMissing ? " · reason kept as a note only (run migration M2)" : "")
-          + (propColMissing ? " · property address NOT saved (run migration M7)" : ""));
+          + (propColMissing ? " · property address NOT saved (run migration M7)" : "")
+          + (refColMissing ? " · referrer NOT saved (run migration m11)" : "")
+          + (docColsMissing ? " · waiting-on / solicitor NOT saved (run migration m10)" : ""));
+        /* R9-1 — the case form is the OTHER route to Completed, so the thank-you has to be offered
+           here too or the behaviour would depend on whether an adviser used the board or the form.
+           Only on a genuine arrival at Completed: a re-save of an already completed case is not a
+           completion. Awaited before the reloads so the prompt is not racing a repaint. */
+        if (row.stage === "completed" && c.stage !== "completed") {
+          await maybeQueueReferralThankYou(id, { ...c, ...row, id });
+        }
         loadPipeline(); loadDashboard();
         // Same guard as the client-save path (2379): a case-level fix (assign adviser, add fee) is
         // exactly what Data Health flags, so refresh it if that page is the one behind the modal.
@@ -6682,8 +7587,22 @@ window.openCase = async function (id, opts = {}) {
           PROT_STAMP_COLS.forEach((k) => delete row[k]);
           ({ error } = await db.from("cases").insert(row));
         }
+        let refColMissing = false;   // R9-1 — m11 fallback, as above
+        if (error && "referrer_client_id" in row && isMissingColumnError(error)) {
+          refColMissing = true; REFERRER_SUPPORTED = false;
+          delete row.referrer_client_id;
+          ({ error } = await db.from("cases").insert(row));
+        }
+        let docColsMissing = false;  // R9-5 — m10 fallback, as above
+        if (error && ("waiting_on" in row || "solicitor_firm" in row) && isMissingColumnError(error)) {
+          docColsMissing = true; DOCS_SUPPORTED = false;
+          delete row.waiting_on; delete row.solicitor_firm;
+          ({ error } = await db.from("cases").insert(row));
+        }
         if (error) return toast("Error: " + error.message);
-        closeModal(); toast("Case saved" + (propColMissing ? " · property address NOT saved (run migration M7)" : ""));
+        closeModal(); toast("Case saved" + (propColMissing ? " · property address NOT saved (run migration M7)" : "")
+          + (refColMissing ? " · referrer NOT saved (run migration m11)" : "")
+          + (docColsMissing ? " · waiting-on / solicitor NOT saved (run migration m10)" : ""));
         loadPipeline(); loadDashboard();
         if ($("#page-data") && !$("#page-data").classList.contains("hidden")) loadDataHealth();
       }
@@ -7334,6 +8253,22 @@ async function queueEmail(caseId, clientId, type, c, ev) {
     }
     if (type === "review_request" && !(settings.google_review_link || settings.review_platform_link)) return toast("Add your review link in Settings first.");
     if (type === "rate_end_reminder" && !c.rate_end_date) return toast("Set the rate end date on the case first.");
+    /* R9-5 — the document request is now checklist-aware at the SERVER, so the confirm has to say
+       what the client will actually read: the outstanding items, or the firm-wide list where the
+       case has no checklist. And a checklist with nothing outstanding REFUSES — an email asking a
+       client for nothing is worse than no email, and it restarts the quiet window for free. */
+    let docsLine = "";
+    if (type === "docs_request") {
+      const chk = (await docsSupported()) === false ? []
+        : await softRows(db.from("case_documents").select("item,status").eq("case_id", caseId));
+      if (chk.length) {
+        const out = docOutstanding(chk).map((d) => d.item);
+        if (!out.length) return toast("Everything on this checklist is in or waived — there is nothing to ask for.");
+        docsLine = `\n\nIt lists only what is still outstanding (${out.length}): ${out.join(", ")}.`;
+      } else {
+        docsLine = `\n\nThis case has no checklist, so the email sends your firm-wide document list from Settings. Build a checklist on the case if you would rather ask for only what is missing.`;
+      }
+    }
     /* R5-8 (app slice) — "what will my client actually see?" The email is composed server-side and
        signed off by the case's adviser (process-emails v8), falling back to the firm-wide name in
        Settings. Naming the signatory here is the cheap half of that fix: nobody sends an email in a
@@ -7358,7 +8293,7 @@ async function queueEmail(caseId, clientId, type, c, ev) {
        because this is the last thing shown before something leaves the firm. */
     const propFull = type === "rate_end_reminder" ? propAddress(c) : null;
     const propLine = propFull ? `\nProperty: ${propFull}` : "";
-    if (!confirm(`Send ${EMAIL_LABEL[type].toLowerCase()} email to ${cl.email}?\n\nSigned off by: ${signedBy}${propLine}${extraLine}`)) return;
+    if (!confirm(`Send ${EMAIL_LABEL[type].toLowerCase()} email to ${cl.email}?\n\nSigned off by: ${signedBy}${propLine}${extraLine}${docsLine}`)) return;
     const { data: qRow, error } = await db.from("email_queue")
       .insert({ case_id: caseId, client_id: clientId, email_type: type, to_email: cl.email })
       .select("id").single();
@@ -7868,11 +8803,17 @@ async function buildClientTimeline(clientId, cases) {
     const nt = noteType(refileDisplayBody(n.body));
     const marker = isRefileMarker(n.body);
     const refiled = refiledTl.has(String(n.id));
-    const text = esc(nt.cleanBody) || "(note)";
+    /* R9-3 — the same banded chip the case modal now puts on a review-feedback note, so the one
+       screen a client's whole history lives on grades a score at a glance too. Filed under
+       "note" so the existing category filters keep working unchanged. */
+    const rev = reviewNoteParse(refileDisplayBody(n.body));
+    const text = rev
+      ? reviewScoreChipHtml(rev.score, { cls: "tl-review-chip" }) + " " + (rev.comment ? esc(rev.comment) : '<span class="tl-muted">(no comment left)</span>')
+      : (esc(nt.cleanBody) || "(note)");
     const title = (refiled ? `<s class="tl-refiled">${text}</s> ${REFILE_BADGE}` : text)
       + authorChipHtml(n.created_by)
       + (n.id && !refiled && !marker ? refileBtnHtml(n.id) : "");
-    push(n.created_at, nt.type, nt.icon, title, n.case_id);
+    push(n.created_at, nt.type, rev ? "⭐" : nt.icon, title, n.case_id);
   });
   emails.filter((e) => e.status === "sent" || e.status === "failed").forEach((e) => {
     const lbl = emailTypeLabel(e.email_type);
@@ -8422,6 +9363,52 @@ window.openClient = async function (id, focus, attempted, presetCaseId) {
         : { id: pair.a_id, name: pair.a_name, reason: pair.reason, score: pair.score };
     } catch (e) { /* no banner */ }
   }
+  /* R9-4 · THE ADVOCACY LINE. Two facts, one line, and only where there is something to say —
+     "Referred 0 clients" on every record in the book is noise, and this modal has none to spare.
+     Read off the same m11 column everything else this round uses; absent migration means the
+     block simply does not render, rather than asserting a zero it cannot know. */
+  let advocacy = null;
+  /* The client's cases were read with select("*"), so they are proof of whether m11 is there —
+     a stronger and cheaper signal than the cached probe, and the one that keeps a cache set
+     before a rollback from turning into a confident wrong answer. Same trick as
+     notePropAddrFromStarRow; see the R9-1 block for why the cache needs keeping honest at all. */
+  if (cases.length) noteReferrerFromStarRow(cases[0]);
+  if (id && (await referrerSupported()) !== false) {
+    try {
+      // Cases this client REFERRED, and the person who referred THEM. Two small reads.
+      const [{ data: sent }, { data: refPeople }] = await Promise.all([
+        db.from("cases").select("id,client_id,stage,referrer_client_id").eq("referrer_client_id", id),
+        (() => {
+          const ids = [...new Set(cases.map((x) => x && x.referrer_client_id).filter(Boolean))];
+          return ids.length ? db.from("clients").select("id,first_name,last_name").in("id", ids) : Promise.resolve({ data: [] });
+        })(),
+      ]);
+      const sentRows = sent || [];
+      /* People, not cases. One referred friend who took out two mortgages is ONE referral of a
+         person — counting cases here would let a single relationship read as two. */
+      const referredClientIds = [...new Set(sentRows.map((r) => r.client_id).filter(Boolean))];
+      const byId = {};
+      (refPeople || []).forEach((p) => { byId[p.id] = p; });
+      const referredBy = [...new Set(cases.map((x) => x && x.referrer_client_id).filter(Boolean))]
+        .map((rid) => ({ id: rid, name: clientFullName(byId[rid]) }))
+        .filter((r) => r.name);
+      if (referredClientIds.length || referredBy.length) {
+        advocacy = {
+          referredN: referredClientIds.length,
+          convertedN: sentRows.filter((r) => r.stage === "completed").length,
+          referredBy,
+        };
+      }
+    } catch (e) { /* the record opens without it — this is a courtesy, not the record */ }
+  }
+  const advocacyHtml = advocacy ? `<p class="panel-sub client-advocacy-line" id="client-advocacy">🤝 ${[
+    advocacy.referredN
+      ? `<strong>Referred ${advocacy.referredN} client${advocacy.referredN === 1 ? "" : "s"}</strong>${advocacy.convertedN ? ` <span class="cs-muted">(${advocacy.convertedN} case${advocacy.convertedN === 1 ? "" : "s"} completed)</span>` : ""}`
+      : "",
+    advocacy.referredBy.length
+      ? "Referred by " + advocacy.referredBy.map((r) => `<a href="#" class="client-referrer-link" data-client="${esc(r.id)}" onclick="event.preventDefault();openClient('${jsArg(r.id)}')">${esc(r.name)}</a>`).join(", ")
+      : "",
+  ].filter(Boolean).join(" · ")}</p>` : "";
   const multiCase = cases.length > 1;
   const caseLabelById = {};
   const caseChipById = {};
@@ -8507,6 +9494,7 @@ window.openClient = async function (id, focus, attempted, presetCaseId) {
           collapsible field summary further down, where it means something specific. */ ""}
     <h3>${id ? esc([c.first_name, c.last_name].filter(Boolean).join(" ") || "Client details") : "New client"}</h3>
     ${id && (c.phone || c.email) ? `<p class="panel-sub client-contact-line" style="margin-top:-8px;display:flex;gap:16px;flex-wrap:wrap;">${c.phone ? "📞 " + telLink(c.phone) : ""}${c.email ? "✉️ " + mailLink(c.email) : ""}</p>` : ""}
+    ${advocacyHtml}
     ${/* A merge DELETES the absorbed client, so the merge tool is Owner/Administrator only for the
           same reason Delete client is — RLS refuses the delete for an adviser. An adviser still
           gets the duplicate WARNING (useful), just not the action. */ ""}
@@ -9037,7 +10025,11 @@ async function runAutomation(silent, opts) {
        reported success-ish and nobody would ever have learned that sending was broken. Give the
        callers something they can tell apart. */
     const failure = (!r.ok && (j.error || `the send service returned HTTP ${r.status}`)) || j.error || null;
-    if (!silent) toast(failure ? `Send failed: ${failure}` : j.warning ? j.warning : `Done — ${j.sent} sent, ${j.failed} failed, ${j.queued ? (j.queued.rate_reminders_queued + j.queued.review_requests_queued) : 0} newly queued`);
+    // R9-3 — review reminders are queued emails like any other; count them (see the confirm above).
+    const newlyQueued = j.queued
+      ? Number(j.queued.rate_reminders_queued || 0) + Number(j.queued.review_requests_queued || 0) + Number(j.queued.review_reminders_queued || 0)
+      : 0;
+    if (!silent) toast(failure ? `Send failed: ${failure}` : j.warning ? j.warning : `Done — ${j.sent} sent, ${j.failed} failed, ${newlyQueued} newly queued`);
     loadEmails();
     return failure ? { ...j, sent: j.sent || 0, failed: j.failed || 0, error: failure } : j;
   } catch (e) {
@@ -9091,12 +10083,17 @@ $("#run-now-btn").addEventListener("click", async () => {
     if (!due.length) return toast("Nothing is waiting to be sent — the queue is empty.");
     const who = due.slice(0, 5).map((e) => (e.clients ? [e.clients.first_name, e.clients.last_name].filter(Boolean).join(" ") : "") || e.to_email || "unknown recipient");
     const more = due.length > who.length ? ` …and ${due.length - who.length} more` : "";
+    /* R9-3 — review REMINDERS count too. They are emails a client receives, queued by the same run,
+       and leaving them out of "N of these were queued just now" made the sentence quietly wrong the
+       moment the second ask shipped. */
     const newly = queueingRan
-      ? Number((qa.data && (qa.data.rate_reminders_queued || 0)) || 0) + Number((qc.data && (qc.data.review_requests_queued || 0)) || 0)
+      ? Number((qa.data && (qa.data.rate_reminders_queued || 0)) || 0)
+        + Number((qc.data && (qc.data.review_requests_queued || 0)) || 0)
+        + Number((qc.data && (qc.data.review_reminders_queued || 0)) || 0)
       : 0;
     if (!confirm(`Send ALL ${due.length} queued email${due.length === 1 ? "" : "s"} now?`
       + `\n\nRecipients: ${who.join(", ")}${more}`
-      + (newly ? `\n\n${newly} of these were queued just now by the automation (rate-end reminders and review requests that fell due).` : "")
+      + (newly ? `\n\n${newly} of these were queued just now by the automation (rate-end reminders, review requests that fell due, and reminders for review requests nobody answered).` : "")
       + `\n\nThis sends for the whole firm, not just your cases.`
       + `\nCancel sends nothing — anything queued stays in the queue for the overnight run.`)) return;
     // Unscoped = the cron's own behaviour (the queueing RPCs re-run harmlessly: everything they
@@ -12231,7 +13228,7 @@ async function loadReports() {
   const mv = (picker && picker.value) || thisMonth;
   if (picker && !picker.value) picker.value = mv;
   reportsCapHits = []; // R5-F4 — one verdict per render, never carried over from the last one
-  const [{ data: cases }, { data: intros }, repRes, extraCols, lostAt, propCols, leadRes] = await Promise.all([
+  const [{ data: cases }, { data: intros }, repRes, extraCols, lostAt, propCols, leadRes, refCols, advDates, detrTasks, solCols] = await Promise.all([
     // G1N-4 — same order and same explicit ceiling as loadCaseExtraColumns, so the two selects
     // that are merged by id below can never walk different subsets of the table.
     /* R7 — widened by five BASE columns (client_id, lender, rate_end_date, rate_end_estimated)
@@ -12239,7 +13236,10 @@ async function loadReports() {
        Every one of them has existed since the original schema, so this select cannot start
        42703-ing on an older database; the two columns that CAN (M2's per-type paid dates, M7's
        property_address) stay in their own small queries underneath, exactly as before. */
-    db.from("cases").select("id,client_id,stage,case_kind,lender,loan_amount,broker_fee,proc_fee,sols_fee,submitted_at,fee_status,fee_paid_at,completed_at,created_at,updated_at,rate_end_date,rate_end_estimated,lead_source,introducer_id,protection_status,retention_source_case_id,assigned_to,nps_score,expected_completion_date,clients(first_name,last_name)")
+    /* R9-2 — plus review_requested_at, which the advocacy panel's monthly series falls back to
+       when the database records no date for when a score came BACK. It is an original-schema
+       column (the review drip has stamped it since round 5), so it cannot 42703 this select. */
+    db.from("cases").select("id,client_id,stage,case_kind,lender,loan_amount,broker_fee,proc_fee,sols_fee,submitted_at,fee_status,fee_paid_at,completed_at,created_at,updated_at,rate_end_date,rate_end_estimated,lead_source,introducer_id,protection_status,retention_source_case_id,assigned_to,nps_score,review_requested_at,expected_completion_date,clients(first_name,last_name)")
       .order("id").limit(REPORTS_ROW_CAP),
     db.from("introducers").select("id,name"),
     db.rpc("get_reports"),
@@ -12257,6 +13257,16 @@ async function loadReports() {
        since before the 90-day window; the window is applied to the statistics client-side. */
     db.from("leads").select("*").order("created_at", { ascending: false }).limit(LEAD_RESP_ROW_CAP)
       .then((r) => r).catch(() => ({ data: [], error: true })),
+    /* R9-2 — the three reads the advocacy panel needs, each in its own small query for exactly the
+       reason M2's and M7's are: a database without m11 (or without a score-capture date, or with
+       case_tasks locked down by RLS) loses one BLOCK of that panel and says so, rather than
+       taking the whole Reports page down with it. */
+    loadReferrerColumn(REPORTS_ROW_CAP),
+    loadAdvScoreDates(REPORTS_ROW_CAP),
+    loadDetractorTasks(),
+    /* R9-6 — and m10's solicitor column, in its own query for exactly the same reason: without the
+       migration the conveyancer panel says so and every other panel on the page is unaffected. */
+    loadSolicitorColumn(REPORTS_ROW_CAP),
   ]);
   const all = cases || [];
   noteRowCap("cases", cases);
@@ -12278,6 +13288,14 @@ async function loadReports() {
   const leadRows = (leadRes && !leadRes.error && leadRes.data) || [];
   if (leadRows.length) noteLeadSlaFromStarRow(leadRows[0]);
   renderLeadResponse(leadRows, all);
+  /* R9-2 — the advocacy dashboard, from those same rows plus its three feature-detected extras.
+     Owner-gated inside renderAdvocacy, like every panel above it. */
+  if (refCols) all.forEach((c) => { if (refCols[c.id] !== undefined) c.referrer_client_id = refCols[c.id]; });
+  renderAdvocacy(all, { referrers: refCols, scoreDates: advDates, detractorTasks: detrTasks });
+  /* R9-6 — and the conveyancer-speed panel, from the same rows plus m10's solicitor column.
+     Owner-gated inside renderConveyancerSpeed, like every panel above it. */
+  if (solCols) all.forEach((c) => { if (solCols[c.id] !== undefined) c.solicitor_firm = solCols[c.id]; });
+  renderConveyancerSpeed(all, solCols);
   const activeStages =["enquiry", "fact_find", "decision_in_principle", "application", "offer", "exchange"];
   const active = all.filter((c) => activeStages.includes(c.stage));
   /* G1N-6 — bucket on the SAME Europe/London basis as every other Batch-6 figure. `new
@@ -12452,6 +13470,337 @@ window.toggleNpsList = function () {
   if (panel) panel.classList.toggle("hidden", !npsListOpen || !$("#report-nps-list").innerHTML);
   if (npsListOpen && panel) panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
 };
+
+/* ==========================================================================
+   R9-2 · THE ADVOCACY DASHBOARD  (Reports, Owner-only)
+
+   Five blocks, five separate honest empty states, one shared set of rows —
+   the same `all` array the rest of Reports is computed from, so a figure here
+   can be reconciled against the figure it came from rather than argued with.
+
+   THE SUPPRESSION RULE IS ROUND 3's, VERBATIM. Below five scored cases an
+   adviser's average is shown but marked (n<5) and greyed, exactly the way
+   convCell() has marked thin conversion rates since T1-20 — because at n=2 a
+   league table produces a 10.0 and a 4.0 with equal confidence and someone
+   reads it as a performance difference. Five is the boundary: n=4 is marked,
+   n=5 is not. Nothing is HIDDEN by the rule — an adviser with one furious
+   client is exactly who an owner needs to see — it is labelled.
+
+   THE MONEY OBEYS THE OWNER RULE. "Converted value" on the top-referrer table
+   is fee value, so it is behind showMoney() as well as behind the panel's own
+   owner gate: two independent checks, because a money column that leaks is
+   the one mistake on this page that cannot be taken back. The referral COUNTS
+   are not money and would be safe to show more widely — they are inside the
+   owner panel only because the panel is one panel.
+
+   AND THE DATES ARE HONEST ABOUT THEMSELVES. There is no column recording
+   when a score CAME BACK unless the review-capture migration added one, so
+   the monthly series says which date it is actually counting on — the capture
+   stamp where it exists, the request stamp where it does not — rather than
+   quietly presenting "when we asked" as "when they answered".
+   ========================================================================== */
+const ADV_MIN_N = 5;                 // the round-3 conversion boundary, reused
+const ADV_TOP_REFERRERS = 10;
+const ADV_SERIES_MONTHS = 6;
+/* The score on a case, whichever of the two names the column carries. `nps_score` is what this
+   schema has always called it; `review_score` is the name the round-9 brief uses. Reading both
+   costs one `??` and means the dashboard cannot be silently emptied by a rename. */
+const caseReviewScore = (c) => {
+  const v = c && (c.review_score != null ? c.review_score : c.nps_score);
+  return v == null || v === "" ? null : Number(v);
+};
+/* Candidate names for "when the score came back", newest convention first. Probed ONCE against a
+   select("*") row (the notePropAddrFromStarRow trick — one query, definitive) rather than five
+   speculative selects. Null means the database records no such date and the series falls back. */
+const ADV_SCORE_DATE_COLS = ["review_score_at", "review_scored_at", "nps_scored_at", "nps_score_at", "reviewed_at"];
+let ADV_SCORE_DATE_COL;              // undefined = not asked yet · null = none · string = the column
+async function advScoreDateColumn() {
+  if (ADV_SCORE_DATE_COL !== undefined) return ADV_SCORE_DATE_COL;
+  ADV_SCORE_DATE_COL = null;
+  try {
+    const { data, error } = await db.from("cases").select("*").limit(1);
+    if (!error && data && data.length) {
+      ADV_SCORE_DATE_COL = ADV_SCORE_DATE_COLS.find((k) => Object.prototype.hasOwnProperty.call(data[0], k)) || null;
+    }
+  } catch (_) { /* stays null — the series falls back and says so */ }
+  return ADV_SCORE_DATE_COL;
+}
+/* One batched read of that column for every case on the page, or null when there is no such
+   column. Same shape and same reasoning as loadCasePropColumn. */
+async function loadAdvScoreDates(cap) {
+  const col = await advScoreDateColumn();
+  if (!col) return null;
+  try {
+    const { data, error } = await db.from("cases").select("id," + col).order("id").limit(cap || REPORTS_ROW_CAP);
+    if (error) return null;
+    const map = {};
+    (data || []).forEach((r) => { if (r && r.id) map[r.id] = r[col] ?? null; });
+    return { col, map };
+  } catch (_) { return null; }
+}
+/* The round-3 marking, applied to a mean rather than a percentage. Same class names, same (n<5)
+   marker, same "indicative only, not a track record" sentence, so the two tables teach the reader
+   one rule instead of two. */
+function advScoreCell(scores) {
+  const n = scores.length;
+  const marker = ' <span class="stat-n">(n&lt;' + ADV_MIN_N + ')</span>';
+  if (!n) return `<span class="stat-weak" title="Nobody on this adviser's completed cases has returned a score yet. That is an absence of data, not a bad result.">—${marker}</span>`;
+  const avg = scores.reduce((s, x) => s + x, 0) / n;
+  const det = scores.filter((x) => x <= 6).length;
+  const basis = `Mean of ${n} score${n === 1 ? "" : "s"} returned on this adviser's completed cases, all time${det ? ` · ${det} detractor${det === 1 ? "" : "s"} (6 or below)` : ""}.`;
+  return n < ADV_MIN_N
+    ? `<span class="stat-weak" title="${esc(basis)} Fewer than ${ADV_MIN_N} scores — indicative only, not a track record.">${avg.toFixed(1)}${marker}</span>`
+    : `<span title="${esc(basis)}">${avg.toFixed(1)}</span>`;
+}
+const ADV_EMPTY = (txt) => `<div class="adv-empty">${txt}</div>`;
+/* A tiny bar column — six months of counts. Not sparklineSvg(): that draws a LINE, and a line
+   between two months of zero and one month of one implies a trend that three reviews cannot
+   support. Bars say "three things happened in March" and nothing more. */
+function advMiniSeries(months, counts) {
+  const max = Math.max(...counts, 1);
+  return `<div class="adv-series">` + months.map((mv, i) => {
+    const n = counts[i];
+    const h = Math.round((n / max) * 44);
+    return `<div class="adv-mon" title="${esc(monthLabel(mv))}: ${n} review${n === 1 ? "" : "s"}">
+      <div class="adv-mn">${n || ""}</div>
+      <div class="adv-bar" style="height:${Math.max(n ? h : 0, n ? 3 : 0)}px;"></div>
+      <div class="adv-mlbl">${esc(MONTH_SHORT[Number(mv.slice(5, 7)) - 1] || mv)}</div>
+    </div>`;
+  }).join("") + `</div>`;
+}
+function renderAdvocacy(all, ctx) {
+  const panel = $("#report-advocacy-panel");
+  if (!panel) return;
+  /* The gate, both halves. isOwner() decides whether the panel exists at all; showMoney() decides
+     the money column inside it. They are the same person today — that is the point of writing
+     both, so a future role change cannot silently widen one without the other. */
+  if (!isOwner()) { panel.classList.add("hidden"); $("#report-advocacy-grid").innerHTML = ""; return; }
+  panel.classList.remove("hidden");
+  const rows = all || [];
+  const refMap = ctx && ctx.referrers;          // null ⇒ migration m11 absent
+  const scoreDates = ctx && ctx.scoreDates;     // null ⇒ no capture-date column
+  const tasks = (ctx && ctx.detractorTasks) || [];
+  const money = showMoney();
+  const nameOf = (c) => [c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ").trim();
+
+  // ---- 1 · NPS by adviser -------------------------------------------------
+  const completed = rows.filter((c) => c.stage === "completed");
+  const byAdviser = new Map();
+  completed.forEach((c) => {
+    const s = caseReviewScore(c);
+    if (s == null) return;
+    const k = c.assigned_to || "";
+    if (!byAdviser.has(k)) byAdviser.set(k, []);
+    byAdviser.get(k).push(s);
+  });
+  const advRowsList = [...byAdviser.entries()]
+    .map(([k, scores]) => ({ id: k, name: k ? (profileName(k) || staffName(k)) : "Unassigned", scores }))
+    .sort((a, b) => b.scores.length - a.scores.length || String(a.name).localeCompare(String(b.name)));
+  const totalScored = advRowsList.reduce((s, a) => s + a.scores.length, 0);
+  const thinN = advRowsList.filter((a) => a.scores.length < ADV_MIN_N).length;
+  const npsBlock = advRowsList.length
+    ? `<table id="adv-nps-table"><tr><th>Adviser</th><th class="num">Scores</th><th class="num" title="Mean score out of 10 on that adviser's completed cases. Marked (n&lt;${ADV_MIN_N}) where fewer than ${ADV_MIN_N} clients have answered.">Avg</th><th class="num" title="Scores of 6 or below.">Detractors</th></tr>`
+      + advRowsList.map((a) => `<tr data-adviser="${esc(a.id)}"><td>${esc(a.name)}</td><td class="num">${a.scores.length}</td><td class="num adv-avg">${advScoreCell(a.scores)}</td><td class="num">${a.scores.filter((x) => x <= 6).length || ""}</td></tr>`).join("")
+      + `</table>`
+      + `<p class="adv-basis" id="adv-nps-note">${totalScored} score${totalScored === 1 ? "" : "s"} across ${advRowsList.length} adviser${advRowsList.length === 1 ? "" : "s"}${thinN ? ` · ${thinN} marked (n&lt;${ADV_MIN_N}) — too few answers to read as a track record` : ""}.</p>`
+    : ADV_EMPTY(`No completed case has returned a review score yet, so there is nothing to average. Switch review requests on in Settings and the first scores will appear here — a blank table is the truthful state, not a broken one.`);
+
+  // ---- 2 · Reviews received per month ------------------------------------
+  const months = last6Months().slice(-ADV_SERIES_MONTHS);
+  /* WHICH DATE. The capture stamp if the database keeps one; the request stamp otherwise; and the
+     basis line below says which, in words, so nobody reads "when we asked" as "when they replied". */
+  const dateOf = (c) => (scoreDates && scoreDates.map[c.id]) || c.review_requested_at || c.completed_at || null;
+  const scoredRows = rows.filter((c) => caseReviewScore(c) != null);
+  const perMonth = months.map((mv) => scoredRows.filter((c) => { const d = dateOf(c); return d && localMonthStr(d) === mv; }).length);
+  const seriesTotal = perMonth.reduce((s, n) => s + n, 0);
+  const dateBasis = scoreDates
+    ? `dated by <code>${esc(scoreDates.col)}</code> — when the score came back`
+    : (`dated by <code>review_requested_at</code> — <strong>the database records no date for when a score came back</strong>, so this is when the request went out. `
+      + `Treat it as "reviews prompted", not "reviews received", until that column exists.`);
+  const reviewsBlock = seriesTotal
+    ? advMiniSeries(months, perMonth) + `<p class="adv-basis" id="adv-series-basis">${seriesTotal} score${seriesTotal === 1 ? "" : "s"} in the last ${ADV_SERIES_MONTHS} months · ${dateBasis}</p>`
+    : ADV_EMPTY(`No scores fall in the last ${ADV_SERIES_MONTHS} months${scoredRows.length ? ` (the book holds ${scoredRows.length} in total, all older)` : ""}. ${scoreDates ? "" : "There is also no column recording when a score came back, so even the older ones can only be dated by when they were asked for."}`);
+
+  // ---- 3 · Referrals per completion --------------------------------------
+  /* PEOPLE per completion, not cases: one friend who takes two mortgages is one referral. The
+     denominator is completed cases, all time, which is what "per completion" has to mean if the
+     figure is to be comparable month to month. */
+  let referralBlock;
+  if (!refMap) {
+    referralBlock = ADV_EMPTY(`Referrals are not being recorded yet — this database has not taken migration <code>m11</code> (<code>cases.referrer_client_id</code>), so no case can name who sent the client. Nothing here is a zero; it is an absence.`);
+  } else {
+    const referredCases = rows.filter((c) => refMap[c.id]);
+    const referredPeople = new Set(referredCases.map((c) => c.client_id).filter(Boolean));
+    const nDone = completed.length;
+    const ratio = nDone ? referredPeople.size / nDone : null;
+    referralBlock = `<div class="adv-headline">
+        <span class="adv-big" id="adv-ratio">${ratio == null ? "—" : ratio.toFixed(2)}</span>
+        <span class="cs-muted">referrals per completion</span>
+      </div>
+      <p class="adv-basis" id="adv-ratio-basis">${referredPeople.size} referred client${referredPeople.size === 1 ? "" : "s"} ÷ ${nDone} completed case${nDone === 1 ? "" : "s"} — all time, whole book. Counted as PEOPLE referred (a client who came back for a second mortgage is one referral, not two) over completions, so a firm doing more business has to earn more referrals to hold the number steady.${referredCases.length !== referredPeople.size ? ` ${referredCases.length} referred cases sit behind those ${referredPeople.size} people.` : ""}${nDone ? "" : " No completions yet, so there is nothing to divide by."}</p>`;
+  }
+
+  // ---- 4 · Top referrers -------------------------------------------------
+  let topBlock;
+  if (!refMap) {
+    topBlock = ADV_EMPTY(`No referrer can be named until migration <code>m11</code> is in place.`);
+  } else {
+    const byReferrer = new Map();
+    rows.forEach((c) => {
+      const rid = refMap[c.id];
+      if (!rid) return;
+      if (!byReferrer.has(rid)) byReferrer.set(rid, { id: rid, clients: new Set(), cases: 0, done: 0, value: 0 });
+      const v = byReferrer.get(rid);
+      v.cases++;
+      if (c.client_id) v.clients.add(c.client_id);
+      /* CONVERTED VALUE = fee value EARNED on the referred cases that completed — proc + broker +
+         sols, paid or not. Deliberately the same expression earnedOnCompletion() uses for the
+         headline "Fees earned" tile, so the two cannot disagree about what a completion is worth. */
+      if (c.stage === "completed") { v.done++; v.value += Number(c.proc_fee || 0) + Number(c.broker_fee || 0) + Number(c.sols_fee || 0); }
+    });
+    const list = [...byReferrer.values()]
+      .sort((a, b) => b.clients.size - a.clients.size || b.value - a.value)
+      .slice(0, ADV_TOP_REFERRERS);
+    /* The referrer's own name comes from any case of theirs on this page; where they have none
+       (they referred somebody but have no case in the capped set) the row still counts, and says
+       so, rather than being dropped for want of a label. */
+    const nameById = {};
+    rows.forEach((c) => { if (c.client_id && !nameById[c.client_id]) { const n = nameOf(c); if (n) nameById[c.client_id] = n; } });
+    topBlock = list.length
+      ? `<table id="adv-top-table"><tr><th>Referrer</th><th class="num" title="Distinct people they have sent us.">Referrals</th><th class="num" title="How many of those referred cases have completed.">Completed</th>${money ? `<th class="num" title="Fee value (proc + broker + sols) earned on this referrer's referred cases that completed — paid or not. All time.">Converted value</th>` : ""}</tr>`
+        + list.map((v) => `<tr data-referrer="${esc(v.id)}"><td><button type="button" class="linkish" onclick="openClient('${jsArg(v.id)}')" title="Open this client's record">${esc(nameById[v.id] || "(client not in this view)")}</button></td><td class="num">${v.clients.size}</td><td class="num">${v.done}</td>${money ? `<td class="num adv-value">${fmtM(v.value)}</td>` : ""}</tr>`).join("")
+        + `</table>`
+        + (money ? `<p class="adv-basis" id="adv-top-basis">Converted value ${esc(BASIS_INTRO_REV)} — fee value on the completed cases behind each referral, whether or not it has been paid. Not cash.</p>`
+          : `<p class="adv-basis" id="adv-top-basis">Referral counts only — fee value is not shown at your access level.</p>`)
+      : ADV_EMPTY(`Nobody has been recorded as a referrer yet. The field is on the case form (“Referred by (client)”), under Lead source — fill it in as referrals arrive and this table builds itself.`);
+  }
+
+  // ---- 5 · Detractor follow-ups outstanding ------------------------------
+  const todayStr = localDateStr();
+  const openTasks = tasks.slice().sort((a, b) => String(a.due_date || "").localeCompare(String(b.due_date || "")));
+  const overdueN = openTasks.filter((t) => t.due_date && t.due_date < todayStr).length;
+  const detractorBlock = openTasks.length
+    ? `<table id="adv-detractor-table"><tr><th>Client</th><th>Task</th><th class="num">Due</th><th>Adviser</th><th></th></tr>`
+      + openTasks.map((t) => {
+        const who = t.cases?.clients ? [t.cases.clients.first_name, t.cases.clients.last_name].filter(Boolean).join(" ") : "(client unknown)";
+        const late = t.due_date && t.due_date < todayStr;
+        return `<tr data-task="${esc(t.id)}"><td>${esc(who)}</td><td>${esc(t.title)}</td><td class="num${late ? " cs-danger-txt" : ""}">${t.due_date ? fmtD(t.due_date) : "—"}${late ? " <span class=\"badge red\">overdue</span>" : ""}</td><td>${t.assigned_to ? esc(staffName(t.assigned_to)) : '<span class="cs-muted">unassigned</span>'}</td>`
+          + `<td>${t.case_id ? `<button type="button" class="btn btn-sm adv-open-btn" onclick="openCase('${jsArg(t.case_id)}')" title="Open the case — the timeline holds what the client actually said">Open</button>` : ""}</td></tr>`;
+      }).join("")
+      + `</table>`
+      + `<p class="adv-basis" id="adv-detractor-basis">${openTasks.length} open review-feedback task${openTasks.length === 1 ? "" : "s"}${overdueN ? ` · <strong>${overdueN} overdue</strong>` : ""}. These are raised when an unhappy client answers a review request; the score and their comment are on the case timeline. Open tasks only — a completed call-back drops off this list.</p>`
+    : ADV_EMPTY(`No review-feedback call-backs are outstanding. That means either nobody has scored us badly, or every one that came in has been rung back and closed — the case timelines say which.`);
+
+  $("#report-advocacy-grid").innerHTML = `
+    <div class="adv-block" id="adv-block-nps"><h4>Review score by adviser</h4>
+      <p class="adv-basis">Mean score out of 10 on each adviser's <strong>completed</strong> cases, all time. Fewer than ${ADV_MIN_N} answers is marked (n&lt;${ADV_MIN_N}) and greyed — the same rule the conversion columns use.</p>${npsBlock}</div>
+    <div class="adv-block" id="adv-block-series"><h4>Reviews per month — last ${ADV_SERIES_MONTHS}</h4>${reviewsBlock}</div>
+    <div class="adv-block" id="adv-block-ratio"><h4>Referrals per completion</h4>${referralBlock}</div>
+    <div class="adv-block" id="adv-block-top"><h4>Top referrers</h4>${topBlock}</div>
+    <div class="adv-block" id="adv-block-detractors"><h4>Detractor follow-ups outstanding</h4>${detractorBlock}</div>`;
+  const basis = $("#report-advocacy-basis");
+  if (basis) basis.innerHTML = `Everything on this panel is computed from the ${rows.length} case row${rows.length === 1 ? "" : "s"} this page already holds — no separate report, nothing scoped to the month picker above. `
+    + `${refMap ? "" : "<strong>Referral figures are unavailable: migration m11 has not run.</strong> "}`
+    + `Owner-only, like the rest of the firm-wide figures here.`;
+}
+/* ==========================================================================
+   R9-6 · CONVEYANCER SPEED  (Reports, Owner-only)
+
+   The one number a firm can act on about its solicitors: how long a case takes
+   from submission to completion, by the firm doing the conveyancing. A broker
+   cannot make a slow conveyancer faster, but they can stop recommending one —
+   and until this panel existed there was nowhere the difference showed up.
+
+   THE BASIS IS STATED BECAUSE IT IS NOT THE OBVIOUS ONE. There is no column
+   anywhere recording the date an offer was ISSUED (offer_expiry_date is the
+   date it runs out, which is a different fact), so "offer to completion"
+   cannot be computed from this schema without inventing a date. What CAN be
+   computed honestly is submission to completion, and that is what this is —
+   said in words on the panel rather than left for someone to assume.
+
+   n<3 IS MARKED, NOT HIDDEN. Three completions is not a track record, but a
+   firm you have used twice and both times took ten weeks is exactly what an
+   owner wants to see. Same discipline as the advocacy panel's n<5, with a
+   lower boundary because a conveyancer is picked case by case, not annually.
+   ========================================================================== */
+const CONV_MIN_N = 3;
+const CONV_DAY = 86400000;
+function renderConveyancerSpeed(all, firmMap) {
+  const panel = $("#report-conveyancer-panel");
+  if (!panel) return;
+  if (!isOwner()) { panel.classList.add("hidden"); $("#report-conveyancer-body").innerHTML = ""; return; }
+  panel.classList.remove("hidden");
+  const body = $("#report-conveyancer-body");
+  const basisEl = $("#report-conveyancer-basis");
+  if (basisEl) {
+    basisEl.innerHTML = `Average days from <strong>application submitted</strong> to <strong>completed</strong>, grouped by the solicitor named on the case. `
+      + `The database records no date an offer was issued — <code>offer_expiry_date</code> is when an offer runs out, not when it arrived — so this measures from submission, which is the last date on a case that is definitely real. `
+      + `Owner-only, like the rest of the firm-wide figures here.`;
+  }
+  if (!firmMap) {
+    body.innerHTML = `<div class="adv-empty">Solicitors are not being recorded yet — this database has not taken migration <code>m10</code> (<code>cases.solicitor_firm</code>), so no case can name its conveyancer. Nothing here is a zero; it is an absence.</div>`;
+    return;
+  }
+  /* Rounded to whole days per case BEFORE averaging, deliberately: that is how anybody checking
+     this by hand off two dates would do it, and it means the panel's figure can be reconciled
+     against a case-by-case count rather than argued with. */
+  const byFirm = new Map();
+  let named = 0, unnamed = 0;
+  (all || []).forEach((c) => {
+    if (c.stage !== "completed" || !c.completed_at || !c.submitted_at) return;
+    const firm = (firmMap[c.id] || "").trim();
+    const days = Math.round((new Date(c.completed_at) - new Date(c.submitted_at)) / CONV_DAY);
+    if (!(days > 0)) return;              // a same-day or reversed pair is bad data, not a fast solicitor
+    if (!firm) { unnamed++; return; }
+    named++;
+    if (!byFirm.has(firm)) byFirm.set(firm, []);
+    byFirm.get(firm).push(days);
+  });
+  if (!byFirm.size) {
+    body.innerHTML = `<div class="adv-empty">No completed case names a solicitor yet${unnamed ? ` — ${unnamed} completion${unnamed === 1 ? " has" : "s have"} a submission and completion date but no firm on the case` : ""}. The field is on the case form (“Solicitor firm”), beside “Waiting on”; fill it in as cases complete and this table builds itself. A product transfer has no conveyancer, so leaving those blank is correct.</div>`;
+    return;
+  }
+  const rows = [...byFirm.entries()].map(([firm, days]) => ({
+    firm, n: days.length,
+    avg: days.reduce((s, d) => s + d, 0) / days.length,
+    min: Math.min(...days), max: Math.max(...days),
+  })).sort((a, b) => a.avg - b.avg);
+  /* "Slowest" is only a meaningful word when there is somebody to be slower THAN, and only when
+     the row is not itself marked as too thin to read. Two firms with three cases each is a
+     comparison; one firm with two is a fact about one firm. */
+  const solid = rows.filter((r) => r.n >= CONV_MIN_N);
+  const slowest = solid.length > 1 ? solid[solid.length - 1].firm : null;
+  const thin = rows.filter((r) => r.n < CONV_MIN_N).length;
+  const spread = solid.length > 1 ? solid[solid.length - 1].avg - solid[0].avg : null;
+  body.innerHTML = `<table id="conv-table">
+      <tr><th>Solicitor</th><th class="num" title="Completed cases with both a submission and a completion date on them.">Cases</th><th class="num" title="Mean days from submission to completion. Marked (n&lt;${CONV_MIN_N}) where fewer than ${CONV_MIN_N} cases sit behind it.">Avg days</th><th class="num" title="Fastest and slowest single case for this firm.">Range</th></tr>
+      ${rows.map((r) => `<tr data-firm="${esc(r.firm)}" class="${r.firm === slowest ? "conv-slowest" : ""}">
+        <td>${esc(r.firm)}${r.firm === slowest ? ' <span class="badge red conv-slow-badge" title="The slowest firm you use with enough cases behind it to say so.">slowest</span>' : ""}</td>
+        <td class="num">${r.n}</td>
+        <td class="num conv-avg">${r.n < CONV_MIN_N
+          ? `<span class="stat-weak" title="Mean of ${r.n} case${r.n === 1 ? "" : "s"} — fewer than ${CONV_MIN_N}, so indicative only, not a track record.">${r.avg.toFixed(1)} <span class="stat-n">(n&lt;${CONV_MIN_N})</span></span>`
+          : `<span title="Mean of ${r.n} completed cases.">${r.avg.toFixed(1)}</span>`}</td>
+        <td class="num">${r.min}–${r.max}</td>
+      </tr>`).join("")}
+    </table>
+    <p class="adv-basis" id="conv-basis">${named} completion${named === 1 ? "" : "s"} across ${rows.length} firm${rows.length === 1 ? "" : "s"}`
+    + `${thin ? ` · ${thin} marked (n&lt;${CONV_MIN_N})` : ""}`
+    + `${spread != null ? ` · ${spread.toFixed(1)} days between your fastest and slowest firm` : ""}`
+    + `${unnamed ? ` · ${unnamed} completion${unnamed === 1 ? "" : "s"} name no solicitor and ${unnamed === 1 ? "is" : "are"} left out entirely — a product transfer has no conveyancer, so blank is often correct` : ""}.</p>`;
+}
+
+/* The open "review feedback" call-backs behind block 5. Its own small read (the Reports page does
+   not otherwise fetch tasks), matched on the title phrase rather than on an exact string — see the
+   R9-3 block comment for why. Best-effort: on error the block renders its empty state. */
+async function loadDetractorTasks() {
+  try {
+    const { data, error } = await db.from("case_tasks")
+      .select("id,title,due_date,case_id,assigned_to,done_at,cases(client_id,clients(first_name,last_name))")
+      .is("done_at", null).order("due_date").limit(REPORTS_ROW_CAP);
+    if (error) return [];
+    return (data || []).filter((t) => t && isReviewFeedbackTask(t.title));
+  } catch (_) { return []; }
+}
 
 /* RPC-backed: client lifetime value (top 20). */
 function renderReportExtras(rep) {

@@ -432,6 +432,48 @@
         <p class="panel-sub" id="report-nps-scope"></p>
         <div id="report-nps-list"></div>
       </div>
+
+      <!-- ==================================================================
+           R9-2 — THE ADVOCACY DASHBOARD. Five questions the firm could not
+           previously answer about the only lead source that costs nothing:
+             · Are some advisers producing happier clients than others?
+             · Are reviews still coming in, or did they stop three months ago?
+             · How many referrals does a completion actually produce?
+             · Who are our advocates, and what have they been worth?
+             · Is anybody actually ringing the unhappy ones back?
+           Owner-only — the panel carries per-adviser scores and referral
+           money, which is the same gate the rest of Reports' firm-wide
+           figures sit behind (showMoney / BACKEND-R4 §1). Every block states
+           its own basis and has its own honest empty state: production holds
+           very few scores today, and a panel that draws a confident chart
+           over four data points is worse than one that says so.
+           ================================================================== -->
+      <div class="panel hidden" id="report-advocacy-panel">
+        <h3>Advocacy — reviews, referrals and the people who send us business</h3>
+        <p class="panel-sub" id="report-advocacy-basis"></p>
+        <div class="adv-grid" id="report-advocacy-grid"></div>
+      </div>
+
+      <!-- ==================================================================
+           R9-6 · CONVEYANCER SPEED. The one thing a broker can learn about a
+           solicitor from their own book: how long cases take with each firm.
+           They cannot make a slow conveyancer faster, but they can stop
+           recommending one — and a client asking "how long will this take?"
+           deserves an answer drawn from what actually happened rather than
+           from what the firm's website claims.
+
+           The basis is deliberately stated on the panel: nothing in this
+           schema records the date an offer was ISSUED, so the honest measure
+           is submission to completion. Owner-only, same gate as the panels
+           either side of it, and it renders an explicit "no solicitor is
+           recorded yet" state rather than an empty table that reads as a zero.
+           ================================================================== -->
+      <div class="panel hidden" id="report-conveyancer-panel">
+        <h3>Conveyancer speed — how long each solicitor takes</h3>
+        <p class="panel-sub" id="report-conveyancer-basis"></p>
+        <div id="report-conveyancer-body"></div>
+      </div>
+
       <div class="panel" id="report-forecast-panel">
         <h3>Commission forecast — live pipeline</h3>
         <div class="kpi-row" id="report-forecast-headline" style="margin:8px 0 12px;"></div>
@@ -541,6 +583,13 @@
            actually does, not what would be nice: the drip is a cap inside queue_comms_extras, and
            the annual review is a TASK, so it will never appear in the list below. -->
       <p class="panel-sub" id="emails-r8-note"><strong>Review requests are dripped:</strong> the automation queues at most <strong>5 per run</strong>, oldest completion first, so a back-catalogue of completed cases doesn't land on your review page in one afternoon. The rest wait for the next run. · <strong>Annual reviews send no email.</strong> When the annual-review setting is on, each completion anniversary creates a <em>call task</em> (“Annual review call — …”) for the case's adviser; it appears in My Day and on the case, and nothing here.</p>
+      <!-- R9-3 — copy audit for the round-9 comms. The second ask is a real email that a real
+           client receives, and until now the only place it existed was in the backend: an
+           operator seeing "Review reminder (2nd ask)" in the list below had no way to know
+           whether it was expected. Stated in the same paragraph slot, in the same voice, and
+           deliberately including the part an operator can ACT on — the row is cancellable while
+           it is still queued. -->
+      <p class="panel-sub" id="emails-r9-note"><strong>An unanswered review request is followed up once.</strong> About <strong>a week</strong> after a review request that was actually <em>sent</em> and never answered (the exact gap is the “Review reminder if unanswered” setting), one reminder is queued — shown below as <em>Review reminder (2nd ask)</em>. One per case ever, never a third, and it comes out of the same 5-a-run budget as the requests, taken only after them: a client who has never been asked always goes before one who is being asked twice. If somebody should not be asked again, cancel the row while it is still queued. · <strong>An unhappy answer creates work, not an email.</strong> A score of 6 or below raises a call-back task for the case's adviser and writes the client's own words onto the case timeline; nothing is sent back to the client automatically.</p>
       <div id="email-list"></div>
       <div class="panel" style="margin-top:20px;">
         <h3>SMS activity</h3>

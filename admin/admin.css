@@ -2450,3 +2450,158 @@ tr.owed-hot > td { background: var(--red-bg); }
 /* Badges in the row table live in narrow fixed columns — they wrap rather than
    run over the cell beside them. */
 .rev-rows-table .badge { white-space: normal; word-break: keep-all; }
+
+/* ============================================================
+   R9 — ADVOCACY ENGINE
+   Referrer attribution on the case, review scores made legible
+   wherever a note or a task renders, and the owner's advocacy
+   dashboard on Reports. No new colour language: the three
+   review bands reuse --red / --amber / --green exactly as the
+   R5-47 review drill-down already does, and the referrer pill
+   borrows the shape (not the colour) of .cs-shared beside it.
+   ============================================================ */
+
+/* ---- Referrer, on the case identity line ---- */
+/* Green rather than .cs-shared's amber, and deliberately so: .cs-shared is a
+   warning ("check you are on the right file"), this is good news. Same pill
+   geometry so the line stays visually even when both are present. */
+.cs-referrer { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; font-size: 12px; font-weight: 600;
+  color: var(--green); background: var(--green-bg); border: 1px solid #bfe3ce; border-radius: 999px; padding: 2px 9px; max-width: 100%; }
+.cs-referrer a { color: #0f5c39; text-decoration: underline; }
+.cs-referrer a:hover { color: #0a4429; }
+/* The picker's hint sits under a <select> in the form grid, like the property hint. */
+#case-referrer-field .cs-muted { display: block; margin-top: 4px; line-height: 1.45; }
+
+/* ---- The advocacy line on a client record ---- */
+.client-advocacy-line { margin-top: -4px; display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; }
+.client-advocacy-line a { color: var(--navy); text-decoration: underline; }
+.client-advocacy-line a:hover { color: var(--navy-700); }
+
+/* ---- Review score chip (case notes + client timeline + dashboard) ---- */
+/* Tabular numerals so a column of scores lines up, and the band word spelled
+   out beside the number — "4/10" alone relies on the reader knowing which end
+   of a 10-point scale is bad, and half of them do not. */
+.review-score-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 700;
+  border-radius: 999px; padding: 1px 8px; white-space: nowrap; font-variant-numeric: tabular-nums; vertical-align: middle; }
+.review-score-chip.detractor { color: var(--red); background: var(--red-bg); border: 1px solid #f3c8c2; }
+.review-score-chip.passive { color: var(--amber); background: var(--amber-bg); border: 1px solid #e8d5a8; }
+.review-score-chip.promoter { color: var(--green); background: var(--green-bg); border: 1px solid #bfe3ce; }
+/* A detractor's note is tinted, exactly as the Reports drill-down tints its row. */
+.note.note-review { background: #fbfdff; border-color: #e2ebf5; }
+.note.note-review-detractor { background: var(--red-bg); border-color: #f3c8c2; }
+.note.note-review-passive { background: var(--amber-bg); border-color: #e8d5a8; }
+.tl-review-chip { margin-right: 2px; }
+/* The task badge — wraps rather than pushing the ✓ Done button off a phone. */
+.review-task-badge { white-space: normal; }
+
+/* ---- Advocacy dashboard (Reports, Owner-only) ---- */
+/* min() on the track floor and min-width:0 on the block, both load-bearing: a
+   grid item's automatic minimum size is its MIN-CONTENT, so a table holding a
+   long task title ("Call Ian Corrigan — review feedback needs attention")
+   widens its own track past the panel and runs off the right of a phone —
+   where body{overflow-x:clip} then hides it rather than letting it scroll, so
+   the failure is silent. The pair caps the track at the panel; table-layout
+   fixed plus wrapping cells is what makes the content fit inside it. */
+#report-advocacy-panel .adv-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr)); gap: 16px; margin-top: 12px; min-width: 0; }
+#report-advocacy-panel .adv-block { min-width: 0; }
+#report-advocacy-panel .adv-block h4 { font-size: 13px; margin: 0 0 2px; color: var(--dark); }
+#report-advocacy-panel .adv-basis { font-size: 11.5px; color: var(--muted); margin: 0 0 8px; line-height: 1.45; }
+#report-advocacy-panel table { width: 100%; max-width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 13px; }
+#report-advocacy-panel td, #report-advocacy-panel th { overflow-wrap: anywhere; }
+/* The four narrow numeric columns are sized so the name/title column gets what
+   is left — under `table-layout: fixed` the first row would otherwise divide
+   the width evenly and squeeze a person's name into three characters. */
+#report-advocacy-panel #adv-nps-table th:first-child, #report-advocacy-panel #adv-top-table th:first-child { width: 40%; }
+#report-advocacy-panel #adv-detractor-table th:nth-child(1) { width: 24%; }
+#report-advocacy-panel #adv-detractor-table th:nth-child(2) { width: 30%; }
+#report-advocacy-panel #adv-detractor-table th:nth-child(3) { width: 18%; }
+#report-advocacy-panel #adv-detractor-table th:nth-child(4) { width: 16%; }
+#report-advocacy-panel #adv-detractor-table th:nth-child(5) { width: 12%; }
+#report-advocacy-panel th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .03em;
+  color: var(--muted); font-weight: 700; padding: 4px 6px; border-bottom: 1px solid var(--border);
+  /* Wrapping, not nowrap: five blocks share an auto-fit grid, so at desktop a
+     track is ~300px and a nowrap "CONVERTED VALUE" spills out of its own 60px
+     column and over the number beside it. A two-line column head is fine; a
+     heading lying across a figure is not. */
+  white-space: normal; }
+#report-advocacy-panel td { padding: 6px; border-bottom: 1px solid #eef2f6; vertical-align: middle; }
+#report-advocacy-panel tr:last-child td { border-bottom: none; }
+#report-advocacy-panel td.num, #report-advocacy-panel th.num { text-align: right; font-variant-numeric: tabular-nums; }
+#report-advocacy-panel .adv-empty { font-size: 12.5px; color: var(--muted); background: var(--light);
+  border: 1px dashed var(--border-strong); border-radius: var(--radius-sm); padding: 10px 12px; line-height: 1.5; }
+#report-advocacy-panel .adv-series { display: flex; align-items: flex-end; gap: 6px; margin: 6px 0 2px; }
+#report-advocacy-panel .adv-mon { flex: 1 1 0; text-align: center; min-width: 0; }
+#report-advocacy-panel .adv-mon .adv-bar { background: var(--navy); border-radius: 3px 3px 0 0; min-height: 2px; }
+#report-advocacy-panel .adv-mon .adv-mlbl { font-size: 10px; color: var(--muted); margin-top: 3px; white-space: nowrap; }
+#report-advocacy-panel .adv-mon .adv-mn { font-size: 11px; font-weight: 700; color: var(--dark); font-variant-numeric: tabular-nums; }
+#report-advocacy-panel .adv-headline { display: flex; gap: 18px; flex-wrap: wrap; align-items: baseline; margin: 2px 0 6px; }
+#report-advocacy-panel .adv-big { font-size: 22px; font-weight: 800; color: var(--dark); font-variant-numeric: tabular-nums; }
+#report-advocacy-panel .adv-open-btn { padding: 1px 8px; font-size: 11px; line-height: 1.6; }
+@media (max-width: 640px) {
+  #report-advocacy-panel .adv-grid { grid-template-columns: 1fr; }
+  #report-advocacy-panel table { font-size: 12.5px; }
+  #report-advocacy-panel th, #report-advocacy-panel td { padding: 5px 4px; }
+  #report-advocacy-panel .adv-open-btn { padding: 1px 5px; }
+}
+
+/* ==========================================================================
+   R9-5 · DOCUMENT CHECKLIST (case modal) + the waiting-on chip
+   ========================================================================== */
+/* The chip is deliberately the quietest badge on a card. "Waiting on the
+   lender" is a fact, not an alarm — the aging left edge is what says a case is
+   late, and colouring this would put two competing urgency signals on one
+   card. Grey, and the same size as everything else in the flag row. */
+.badge.wait-chip { background: var(--light); color: var(--muted); border: 1px solid var(--border-strong); font-weight: 600; }
+#pipe-table .badge.wait-chip { margin-left: 6px; }
+
+#case-docs .doc-summary { font-size: 12.5px; color: var(--dark); margin: 0 0 6px; }
+#case-docs .doc-chase { font-size: 12px; line-height: 1.45; border-radius: var(--radius-sm); padding: 7px 10px; margin: 0 0 10px; border: 1px solid var(--border); background: var(--light); color: var(--muted); }
+#case-docs .doc-chase-info { background: #f2f7fd; border-color: #d6e4f5; color: #2b4a6f; }
+#case-docs .doc-chase-warn { background: var(--amber-bg); border-color: #e8d5a8; color: #7a5a10; }
+#case-docs .doc-chase-ok { background: var(--green-bg); border-color: #bfe3ce; color: var(--green); }
+#case-docs .doc-list { border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+#case-docs .doc-list .empty { border: 0; margin: 0; }
+/* Row layout: the item and its meta take what is left, the buttons never
+   shrink. On a phone the two stack rather than the action buttons being
+   squeezed to three characters wide. */
+#case-docs .doc-row { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border-bottom: 1px solid #eef2f6; }
+#case-docs .doc-row:last-child { border-bottom: 0; }
+#case-docs .doc-row[data-status="received"] .doc-item { color: var(--muted); }
+#case-docs .doc-row[data-status="waived"] .doc-item { color: var(--muted); text-decoration: line-through; }
+#case-docs .doc-main { flex: 1 1 auto; min-width: 0; }
+#case-docs .doc-item { font-size: 13px; font-weight: 600; color: var(--dark); overflow-wrap: anywhere; }
+#case-docs .doc-meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 3px; }
+#case-docs .doc-date { font-size: 11px; color: var(--muted); }
+#case-docs .doc-note { font-size: 11.5px; color: var(--muted); margin-top: 3px; font-style: italic; overflow-wrap: anywhere; }
+#case-docs .doc-acts { display: flex; gap: 6px; flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; }
+#case-docs .doc-acts .btn { padding: 2px 8px; font-size: 11.5px; }
+#case-docs .doc-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+#case-docs .doc-link-out { margin-top: 10px; }
+#case-docs .doc-link-out input { font-size: 12px; }
+/* The bearer-link warning is the one sentence on this panel that must not be
+   skimmed past, so it is the only thing here that is not muted grey. */
+#case-docs #docs-link-warn { color: #7a2f1f; background: var(--red-bg); border: 1px solid #f3c8c2; border-radius: var(--radius-sm); padding: 8px 10px; margin-top: 6px; }
+@media (max-width: 560px) {
+  #case-docs .doc-row { flex-direction: column; }
+  #case-docs .doc-acts { justify-content: flex-start; }
+}
+/* The "Add items…" overlay */
+.doc-picks { display: grid; gap: 4px; margin-top: 4px; }
+.doc-pick { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; font-weight: 500; color: var(--dark); padding: 4px 2px; }
+.doc-pick input { width: 16px; height: 16px; margin: 2px 0 0; flex: none; }
+.doc-pick.is-on { color: var(--muted); }
+.doc-dropped { margin-top: 8px; }
+.doc-dropped > summary { font-size: 12px; color: var(--muted); cursor: pointer; }
+
+/* ---- R9-6 · Conveyancer speed (Reports, Owner-only) ---- */
+#report-conveyancer-panel table { width: 100%; max-width: 100%; border-collapse: collapse; font-size: 13px; }
+#report-conveyancer-panel th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .03em;
+  color: var(--muted); font-weight: 700; padding: 4px 6px; border-bottom: 1px solid var(--border); white-space: normal; }
+#report-conveyancer-panel td { padding: 6px; border-bottom: 1px solid #eef2f6; vertical-align: middle; overflow-wrap: anywhere; }
+#report-conveyancer-panel tr:last-child td { border-bottom: none; }
+#report-conveyancer-panel td.num, #report-conveyancer-panel th.num { text-align: right; font-variant-numeric: tabular-nums; }
+#report-conveyancer-panel .conv-slowest td { background: var(--red-bg); }
+#report-conveyancer-panel .conv-slow-badge { margin-left: 6px; }
+#report-conveyancer-panel .adv-basis { font-size: 11.5px; color: var(--muted); margin: 8px 0 0; line-height: 1.45; }
+#report-conveyancer-panel .adv-empty { font-size: 12.5px; color: var(--muted); background: var(--light);
+  border: 1px dashed var(--border-strong); border-radius: var(--radius-sm); padding: 10px 12px; line-height: 1.5; }

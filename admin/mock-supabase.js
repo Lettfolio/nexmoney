@@ -65,8 +65,54 @@
        backlog of 8 (bigger than one run's cap of 5, so the rollover is
        observable in two runs), and members for every client segment including
        clients last contacted 8 and 14 months ago. See FIXTURES-R7.md § R8.
+   ROUND 9 (migrations r9_m10 / r9_m11 parity + the document-chase fixtures):
+     · M10 = the document checklist. New table `case_documents` (id, case_id,
+       item, status requested|received|waived, requested_at, received_at, note,
+       storage_path, created_at) plus three columns on `cases`: `waiting_on`,
+       `solicitor_firm` and `doc_token`. One toggle covers the lot (m10), because
+       they shipped as one migration: setMigrations({m10:false}) takes the table
+       to 42P01 and the three columns to 42703 at once.
+     · M11 = cases.referrer_client_id (nullable, self-referencing clients). Its
+       own toggle m11, because it is its own migration — app.js feature-detects
+       it separately (referrerSupported()) and hides the "Referred by" field
+       outright when it is not there.
+     · doc-upload edge function — the client-facing half of the checklist, and
+       the only thing here a client without a login ever touches. Mirrors the
+       DEPLOYED v1 contract, not a convenient version of it:
+         GET  ?token=…  → {ok, company, first_name, greeting, items[{id,item,
+                          status}], outstanding:<int>, complete}. Waived items
+                          are filtered out server-side; a first name is the only
+                          personal thing that comes back.
+         POST multipart/form-data ONLY — parts `token` (in the BODY; query
+              params are ignored on POST), `item_id` (the ID from the GET, never
+              the name), `file` (a real file part with a filename; the EXTENSION
+              is authoritative, not Content-Type) and an optional `website`
+              honeypot. A JSON body is a 400 before any logic runs, which is the
+              whole reason this stub refuses it too — a page that works against
+              a lenient stub and 400s for every real client is exactly the
+              failure this mirror exists to catch.
+         Success is 200 {ok:true, item, outstanding:<int>}; a bare {ok:true} is
+         the HONEYPOT answer and means nothing was written. Errors are matched
+         on STATUS: 400 malformed · 404 dead link or unknown item · 409 already
+         received (carries `status`) or a claim race · 413 over 10MB · 415 bad
+         extension or magic bytes · 429 rate cap (per link, per minute) · 500
+         storage. The 429 cap and the 500 are reachable from __mock hooks.
+     · nps-capture v2 — a detractor (≤6) submission carrying a reason writes the
+       verbatim feedback to the case as a note and puts a call task on the case's
+       adviser, due tomorrow.
+     · Comms: the docs_request template is CHECKLIST-AWARE (it lists only what is
+       still missing, plus the upload link, whenever the case has a checklist,
+       and keeps its old firm-wide wording where it has none); a nightly DOC
+       CHASE queues at most three chases per case and then writes an adviser task
+       instead; and a REVIEW REMINDER goes out a week after an unanswered review
+       request, inside the same 5-a-run drip the requests themselves respect.
+     · Fixtures: four document checklists (one per state — part-received, chase
+       due, chases exhausted, all in), solicitor firms and waiting-on values
+       across the book, referrer attribution, and a review-score spread. See
+       FIXTURES-R7.md § R9.
+     tables : … + case_documents (M10)
      edge   : process-emails, send-sms, outlook-sync, owner-digest, invite-user,
-              ai-import, parse-offer, assistant
+              ai-import, parse-offer, assistant, doc-upload, nps-capture
      auth   : getSession, getUser, onAuthStateChange, signInWithPassword,
               signOut, resetPasswordForEmail, updateUser
      storage: offers bucket (upload, createSignedUrl)
@@ -138,7 +184,10 @@
     clients: [], cases: [], case_tasks: [], case_notes: [], case_events: [],
     appointments: [], email_queue: [], sms_queue: [], case_emails: [],
     fact_finds: [], leads: [], introducers: [], profiles: [], settings: [],
-    watch_alerts: [], audit_log: [], duplicate_dismissals: []
+    watch_alerts: [], audit_log: [], duplicate_dismissals: [],
+    /* R9-M10 — the document checklist. One row per item we have asked a client
+       for, on the case it belongs to. */
+    case_documents: []
   };
   var PK = { settings: "key" };
   function pkOf(t) { return PK[t] || "id"; }
@@ -150,7 +199,7 @@
      writes to the new columns come back as Postgres 42703 (undefined_column),
      selects stop returning them, an un-migrated TABLE comes back as 42P01 and an
      un-migrated FUNCTION comes back as 42883 (undefined_function). */
-  var MIGRATIONS = { m1: true, m2: true, m3: true, m4: true, m5: true, m6: true, m7: true };
+  var MIGRATIONS = { m1: true, m2: true, m3: true, m4: true, m5: true, m6: true, m7: true, m10: true, m11: true };
   var MIGRATION_COLUMNS = {
     m1: { profiles: ["phone", "email_signoff"] },
     m2: { cases: ["lost_reason", "lost_detail", "broker_fee_paid_at", "proc_fee_paid_at", "sols_fee_paid_at"] },
@@ -159,9 +208,20 @@
        property_address text` (nullable, no backfill). OFF ⇒ a write naming the
        column returns 42703 and a SELECT simply does not return it, which is what
        an app running against a database that has not taken the migration sees. */
-    m7: { cases: ["property_address"] }
+    m7: { cases: ["property_address"] },
+    /* R9-M10 — `alter table cases add column waiting_on text, add column
+       solicitor_firm text, add column doc_token text` shipped in the SAME
+       migration as the case_documents table, so one toggle governs both: a
+       database that has not taken r9_m10 has neither the table nor the columns,
+       and flipping them independently would model a state that cannot exist. */
+    m10: { cases: ["waiting_on", "solicitor_firm", "doc_token"] },
+    /* R9-M11 — `alter table cases add column referrer_client_id uuid references
+       clients(id)`. Its own migration and its own toggle: app.js probes for it
+       separately (referrerSupported()) and renders no "Referred by" field at all
+       when it is missing. */
+    m11: { cases: ["referrer_client_id"] }
   };
-  var MIGRATION_TABLES = { m4: ["duplicate_dismissals"] };
+  var MIGRATION_TABLES = { m4: ["duplicate_dismissals"], m10: ["case_documents"] };
   /* R5-M6 — reassign_holdings(p_from, p_to) shipped as a migration too, so an older
      database simply does not have the function. OFF ⇒ 42883, which is exactly what
      app.js's isMissingFunctionError() feature-detects on before falling back to the
@@ -356,6 +416,11 @@
   }
   var LOST_REASONS = ["went_direct", "product_transfer_online", "another_broker", "staying_put", "affordability",
     "rate_price", "valuation", "client_changed_mind", "our_service", "other"];
+  /* R9-M10 — case_documents_status_chk. "waived" is a first-class outcome, not a
+     deletion: a document we decided we did not need after all is a fact about
+     the case, and dropping the row would leave the checklist looking as though
+     it was never asked for. */
+  var DOC_STATUSES = ["requested", "received", "waived"];
   function isStaff() { return ["owner", "admin", "adviser", "staff"].indexOf(myRole()) >= 0; }
   function writePolicy(table, op, payload, targets) {
     if (table === "audit_log") {
@@ -387,6 +452,24 @@
       });
       if (clash.length) {
         return pgError('duplicate key value violates unique constraint "dup_pair_unique"', "23505");
+      }
+      return null;
+    }
+    /* R9-M10 — case_documents. Staff write it from the case; nobody else can,
+       and the check constraint on `status` is real, because the one value that
+       must never be invented is "received". The public upload link does NOT
+       come through here: the edge function runs as the service role, which is
+       what makes a link a client can use without a login possible at all. */
+    if (table === "case_documents") {
+      if (!isStaff()) {
+        return pgError('new row violates row-level security policy for table "case_documents"', "42501");
+      }
+      var dpay = payload || {};
+      if (dpay.status != null && DOC_STATUSES.indexOf(dpay.status) === -1) {
+        return pgError('new row for relation "case_documents" violates check constraint "case_documents_status_chk"', "23514");
+      }
+      if (op === "insert" && !dpay.item) {
+        return pgError('null value in column "item" of relation "case_documents" violates not-null constraint', "23502");
       }
       return null;
     }
@@ -430,6 +513,11 @@
     }
     /* M4 — "dup dismiss read staff" */
     if (table === "duplicate_dismissals" && !isStaff()) return [];
+    /* R9-M10 — "case docs read staff". A client's document checklist says what
+       they have and have not been able to produce; an introducer login has no
+       business seeing it. The client's own view of it comes from the doc-upload
+       function on the service role, not from a policy here. */
+    if (table === "case_documents" && !isStaff()) return [];
     return rows;
   }
 
@@ -440,13 +528,18 @@
      CRITICAL snooze mirrored its reason into a case note (which IS audited), so criticals left an
      indirect trail, but every warn/info snooze left none — and even for criticals the trail showed
      a note, not who suppressed which alert until when. */
+  /* R9 — case_documents joins the audited set under the same round-4 rule that
+     put duplicate_dismissals there: every new table gets the trigger. Marking a
+     document "received" or "waived" is a decision about whether a file is
+     complete, and who made it is worth keeping. */
   var AUDITED = ["clients", "cases", "case_tasks", "case_notes", "appointments", "settings", "profiles",
-    "introducers", "duplicate_dismissals", "watch_alerts"];
+    "introducers", "duplicate_dismissals", "watch_alerts", "case_documents"];
   var AUDIT_HIDDEN = "(hidden)";
   var AUDIT_TABLE_WORD = {
     clients: "client", cases: "case", case_tasks: "task", case_notes: "note",
     appointments: "appointment", settings: "setting", profiles: "login", introducers: "introducer",
-    duplicate_dismissals: "not-a-duplicate mark", watch_alerts: "watchtower alert"
+    duplicate_dismissals: "not-a-duplicate mark", watch_alerts: "watchtower alert",
+    case_documents: "document"
   };
   function rowLabel(table, row) {
     if (!row) return "";
@@ -462,6 +555,7 @@
     if (table === "settings") return row.key;
     if (table === "profiles") return row.full_name || row.email || row.id;
     if (table === "introducers") return row.name || row.id;
+    if (table === "case_documents") return row.item || row.id;
     // G1N-5 — the alert's own title, so the summary reads "<who> updated watch_alerts
     // "James Whitfield — ERC outlasts the rate"" rather than a row id.
     if (table === "watch_alerts") return row.title || row.dedupe_key || row.id;
@@ -584,7 +678,8 @@
     clients: "cl", cases: "ca", case_tasks: "tk", case_notes: "nt", case_events: "ev",
     appointments: "ap", email_queue: "eq", sms_queue: "sq", case_emails: "ce",
     fact_finds: "ff", leads: "ld", introducers: "in", profiles: "pr",
-    watch_alerts: "wa", audit_log: "au", duplicate_dismissals: "dd"
+    watch_alerts: "wa", audit_log: "au", duplicate_dismissals: "dd",
+    case_documents: "cd"
   };
   function applyInsertDefaults(table, row) {
     var r = clone(row);
@@ -597,9 +692,20 @@
       if (r.protection_status == null) r.protection_status = "not_discussed";
       if (r.fee_status == null) r.fee_status = "not_requested";
       if (r.rate_end_estimated == null) r.rate_end_estimated = false;
-      /* M2 / M7 columns exist on every row, null until something records them */
-      ["lost_reason", "lost_detail", "broker_fee_paid_at", "proc_fee_paid_at", "sols_fee_paid_at", "property_address"]
+      /* M2 / M7 / M10 / M11 columns exist on every row, null until something
+         records them. waiting_on, solicitor_firm, doc_token and
+         referrer_client_id join the list for round 9 — a case created by the app
+         has all four, empty, exactly as the migrations leave them. */
+      ["lost_reason", "lost_detail", "broker_fee_paid_at", "proc_fee_paid_at", "sols_fee_paid_at", "property_address",
+        "waiting_on", "solicitor_firm", "doc_token", "referrer_client_id"]
         .forEach(function (f) { if (r[f] === undefined) r[f] = null; });
+    }
+    /* R9-M10 — a checklist item starts life REQUESTED, stamped with the moment
+       it was asked for, with nothing received against it. */
+    if (table === "case_documents") {
+      if (!r.status) r.status = "requested";
+      if (r.requested_at === undefined || r.requested_at === null) r.requested_at = r.created_at;
+      ["received_at", "note", "storage_path"].forEach(function (f) { if (r[f] === undefined) r[f] = null; });
     }
     if (table === "duplicate_dismissals") {
       if (!r.kind) r.kind = "client";
@@ -705,6 +811,18 @@
        exercise it turn it on themselves, which is also the only way to prove
        the switch is really the gate. */
     annual_review_enabled: "off",
+    /* r9_m10 — the nightly document chase, seeded OFF for the same reason the
+       annual review touch is: chasing a client is a decision a firm makes, not
+       something a deploy starts doing to their book on its own. The tests that
+       exercise it turn it on themselves, which is also the only way to prove the
+       switch really is the gate. `doc_chase_days` is the quiet window — nothing
+       is chased if anything about documents went to that client inside it. */
+    doc_chase_enabled: "off",
+    doc_chase_days: "3",
+    /* r9 — how long an unanswered review request is left before it is nudged
+       once. Seven days: long enough not to read as nagging, short enough that
+       the completion is still recent to the client. */
+    review_reminder_days: "7",
     nps_enabled: "on",
     owner_digest: "on",
     owner_digest_email: "daniel@nexmoney.co.uk",
@@ -831,6 +949,15 @@
          column landed today with no backfill, so every case created before it
          has nothing in it. */
       property_address: o.property_address || null,
+      /* M10 — what the case is waiting on, who is conveyancing it, and the
+         token behind the client's document-upload link. NULL on nearly every
+         row on purpose: these landed with no backfill, so the book the app has
+         to cope with is mostly blank. */
+      waiting_on: o.waiting_on || null,
+      solicitor_firm: o.solicitor_firm || null,
+      doc_token: o.doc_token || null,
+      /* M11 — the client who sent this one to us. */
+      referrer_client_id: o.referrer_client_id || null,
       protection_status: o.protection_status || "not_discussed",
       protection_commission: o.protection_commission == null ? null : o.protection_commission,
       gi_status: o.gi_status || "not_discussed",
@@ -2051,6 +2178,324 @@
     })();
   })();
 
+  /* =========================================================================
+     ROUND 9 — THE DOCUMENT-CHASE AND ADVOCACY FIXTURES
+
+     Round 9 asks the book three questions it has never been asked: what is this
+     case actually waiting for, who is slowing our completions down, and who
+     sent us this client. Each block below exists for one of them.
+
+     A DELIBERATE CONSTRAINT ON THIS WHOLE PASS: it adds NO clients and NO cases.
+     Everything here is written onto rows that already exist. Round 8 learned the
+     hard way that a fixture which changes what another block is measuring is
+     worse than no fixture at all, and every new completed case is a new member
+     of the review drip, a new row in every month's completions, and possibly a
+     new watchtower alert. The new COLUMNS are invisible to all of that, so
+     writing them onto the existing book costs nothing and keeps every count in
+     the battery where round 8 left it. The only rows added anywhere are
+     case_documents (a brand-new table), the document emails those checklists
+     imply, and the one note-and-task pair that a detractor's review left behind.
+
+       (a) CHECKLISTS — four cases, one per state the chase can be in:
+             · part-received, and mailed yesterday   → nothing due (the control)
+             · three outstanding, two chases already → the third is due tonight
+             · three chases already spent            → a task, not a fourth email
+             · everything in                         → nothing due, ever again
+           Sixty-five other cases have NO checklist at all, which is the legacy
+           majority the checklist-aware template has to keep sending the old
+           firm-wide list to.
+       (b) SOLICITORS AND WAITING-ON — three firms across the completed book,
+           assigned so that each one's average submission-to-completion time is
+           genuinely different, and a waiting_on value on the live cases that are
+           stuck. Note what waiting_on is NOT: it is not the stage. A case can
+           sit at Application for a month waiting on the CLIENT, and the report
+           that matters is "who do I have to ring", not "what stage is it".
+       (c) ADVOCACY — referrer attribution on three cases (one client having
+           sent two of them), a review request that went out eight days ago and
+           was never answered, a detractor who told us why, a promoter, and
+           enough scores overall to draw a distribution rather than a number.
+
+     Placement: after the round-8 block (so nothing above is renumbered) and
+     before the case_events / audit seeds (so anything new still gets a history).
+     ======================================================================= */
+  (function roundNineFixtures() {
+    var nameOf = function (cid) {
+      var c = DB.clients.filter(function (x) { return x.id === cid; })[0];
+      return c ? [c.first_name, c.last_name].filter(Boolean).join(" ") : "";
+    };
+    /* Cases are chosen BY CLIENT NAME AND STAGE, never by id: ids renumber the
+       moment anything above this block seeds one more row, and a fixture that
+       silently lands on a different case is the worst kind of harness bug. */
+    var caseFor = function (client, stage) {
+      return DB.cases.filter(function (c) {
+        return nameOf(c.client_id) === client && (!stage || c.stage === stage);
+      })[0] || null;
+    };
+    var clientNamed = function (n) {
+      return DB.clients.filter(function (c) { return [c.first_name, c.last_name].filter(Boolean).join(" ") === n; })[0] || null;
+    };
+    var addNote = function (caseId, body, whenDaysAgo, by) {
+      DB.case_notes.push({ id: nid("nt"), case_id: caseId, body: body, created_by: by || null, created_at: iso(shift(-whenDaysAgo)) });
+    };
+    /* A document mail that has already gone out. Status "sent" on purpose: a
+       queued row has not reached the client, so it must not count as a chase and
+       must not count as contact. */
+    var sentMail = function (cs, type, daysAgo, subject) {
+      var cl = DB.clients.filter(function (x) { return x.id === cs.client_id; })[0] || {};
+      DB.email_queue.push({
+        id: nid("eq"), case_id: cs.id, client_id: cs.client_id, email_type: type,
+        to_email: cl.email || "", subject: subject,
+        status: "sent", error: null,
+        sent_at: iso(shift(-daysAgo)), scheduled_for: iso(shift(-daysAgo)), created_at: iso(shift(-daysAgo))
+      });
+    };
+    var addDoc = function (cs, item, o) {
+      var opts = o || {};
+      var reqDays = opts.requestedDaysAgo == null ? 14 : opts.requestedDaysAgo;
+      DB.case_documents.push({
+        id: nid("cd"), case_id: cs.id, item: item,
+        status: opts.status || "requested",
+        requested_at: iso(shift(-reqDays)),
+        received_at: opts.receivedDaysAgo == null ? null : iso(shift(-opts.receivedDaysAgo)),
+        note: opts.note || null,
+        storage_path: opts.storage_path || null,
+        created_at: iso(shift(-reqDays))
+      });
+    };
+
+    /* ---- (a) the four checklists ----------------------------------------- */
+    /* The items are the firm's own docs_list, verbatim. A checklist is created
+       FROM that list, so the two agreeing is not a coincidence to be tested
+       around — it is how the feature works. */
+    var DOCS = String(setting("docs_list", "")).split("|").map(function (s) { return s.trim(); }).filter(Boolean);
+    var D_ID = DOCS[0] || "Photo ID";
+    var D_PAY = DOCS[1] || "Last 3 payslips";
+    var D_BANK = DOCS[2] || "Last 3 months bank statements";
+    var D_DEP = DOCS[3] || "Proof of deposit";
+
+    /* A1 · PART-RECEIVED, RECENTLY MAILED — Sarah Ellingham, at Fact Find.
+       Four items, two of them in (both through the link, which is why the case
+       carries the two notes the upload function writes), and a docs_request that
+       went out YESTERDAY. This is the control the quiet window exists for: there
+       are outstanding items and no chase has ever been sent, and still nothing
+       may go tonight, because we spoke to her yesterday. */
+    var partial = caseFor("Sarah Ellingham", "fact_find");
+    if (partial) {
+      partial.doc_token = "doc-ellingham-4f21c8";
+      partial.waiting_on = "client";
+      addDoc(partial, D_ID, { requestedDaysAgo: 9, status: "received", receivedDaysAgo: 7, storage_path: "docs/" + partial.id + "/photo-id.pdf" });
+      addDoc(partial, D_PAY, { requestedDaysAgo: 9, status: "received", receivedDaysAgo: 6, storage_path: "docs/" + partial.id + "/payslips.pdf" });
+      addDoc(partial, D_BANK, { requestedDaysAgo: 9 });
+      addDoc(partial, D_DEP, { requestedDaysAgo: 9 });
+      addNote(partial.id, "Document received via upload link: " + D_ID, 7, null);
+      addNote(partial.id, "Document received via upload link: " + D_PAY, 6, null);
+      sentMail(partial, "docs_request", 1, "Your document checklist");
+    }
+
+    /* A2 · THE THIRD CHASE IS DUE — Bethany Quirke, at Application.
+       Three items, none of them in, an original request twelve days ago and two
+       chases since. The last of them was four days ago, so the quiet window
+       (three days) has passed and tonight's run must send the third — and the
+       third is the LAST. */
+    var chaseDue = caseFor("Bethany Quirke", "application");
+    if (chaseDue) {
+      chaseDue.doc_token = "doc-quirke-90b7ae";
+      chaseDue.waiting_on = "client";
+      [D_ID, D_BANK, D_DEP].forEach(function (item) { addDoc(chaseDue, item, { requestedDaysAgo: 12 }); });
+      sentMail(chaseDue, "docs_request", 12, "Your document checklist");
+      sentMail(chaseDue, "docs_chase", 8, "Still waiting on your documents");
+      sentMail(chaseDue, "docs_chase", 4, "Still waiting on your documents");
+    }
+
+    /* A3 · CHASES EXHAUSTED — Rosalind Amery, at Application.
+       Three chases spent over a month and nothing has arrived. The next run must
+       write the adviser a call task instead of a fourth email. Deliberately the
+       one checklist case with NO doc_token: the upload link is not the point of
+       the feature, chasing is, and the mails on this case therefore prove the
+       checklist-aware template still lists the missing items when there is no
+       link to offer. One item is WAIVED — she is not on payslips, she is self
+       employed — which is why "three outstanding" and "four items" are both
+       true here, and why anything counting outstanding work must count status,
+       not rows. */
+    var exhausted = caseFor("Rosalind Amery", "application");
+    if (exhausted) {
+      exhausted.waiting_on = "client";
+      [D_ID, D_BANK, D_DEP].forEach(function (item) { addDoc(exhausted, item, { requestedDaysAgo: 34 }); });
+      addDoc(exhausted, D_PAY, {
+        requestedDaysAgo: 34, status: "waived",
+        note: "Self-employed — SA302s and tax year overviews requested instead."
+      });
+      sentMail(exhausted, "docs_request", 34, "Your document checklist");
+      sentMail(exhausted, "docs_chase", 22, "Still waiting on your documents");
+      sentMail(exhausted, "docs_chase", 15, "Still waiting on your documents");
+      sentMail(exhausted, "docs_chase", 8, "Still waiting on your documents");
+    }
+
+    /* A4 · EVERYTHING IN — Tanya Osei, at Fact Find. The clean state: a
+       checklist with nothing outstanding, so no chase may ever fire on it and
+       the upload page has nothing left to ask for. It keeps its token, because a
+       client who opens yesterday's link after sending everything must get a page
+       that says so rather than a 404. */
+    var clean = caseFor("Tanya Osei", "fact_find");
+    if (clean) {
+      clean.doc_token = "doc-osei-2d64f0";
+      [D_ID, D_PAY, D_BANK].forEach(function (item, i) {
+        addDoc(clean, item, { requestedDaysAgo: 20, status: "received", receivedDaysAgo: 17 - i * 2, storage_path: "docs/" + clean.id + "/" + (i + 1) + ".pdf" });
+      });
+      sentMail(clean, "docs_request", 20, "Your document checklist");
+    }
+
+    /* ---- (b) solicitors, and what each live case is waiting on ------------ */
+    /* Three firms, and they are not interchangeable: the whole point of putting
+       the name on the case is that after a year the firm can say which
+       conveyancer costs it weeks. The assignment below is by MEASURED duration
+       (submission → completion) on the cases that already exist, fastest third
+       to Harker & Bligh and slowest to Bexley Rowe, so an average-days-by-
+       solicitor report has three genuinely different answers to give. Doing it
+       the other way round — naming firms at random and then moving the dates —
+       would have rewritten completion dates that a dozen other fixtures and
+       reports depend on. */
+    var SOLICITORS = ["Harker & Bligh LLP", "Trelawny Conveyancing", "Bexley Rowe Solicitors"];
+    (function seedSolicitors() {
+      /* A product transfer has no solicitor — nothing changes hands — so those
+         are left blank on purpose, along with everything that never completed.
+         "Blank" here means "there was no conveyancer", not "we forgot". */
+      var withDuration = DB.cases.filter(function (c) {
+        return c.stage === "completed" && c.completed_at && c.submitted_at && c.case_kind !== "product_transfer";
+      }).map(function (c) {
+        return { c: c, days: Math.round((new Date(c.completed_at) - new Date(c.submitted_at)) / DAY) };
+      }).filter(function (x) { return x.days > 0; })
+        .sort(function (a, b) { return a.days - b.days || (a.c.id < b.c.id ? -1 : 1); });
+      var third = Math.ceil(withDuration.length / 3);
+      withDuration.forEach(function (x, i) {
+        x.c.solicitor_firm = SOLICITORS[Math.min(2, Math.floor(i / third))];
+      });
+    })();
+
+    /* WAITING ON. Only live cases, and only from Application onwards — before
+       that there is nothing outside the office to wait for. The value cycles so
+       all three appear, and every case that says it is waiting on a solicitor is
+       given the solicitor it is waiting on: a "waiting on solicitor" report whose
+       rows cannot name the solicitor is a list of shrugs. */
+    (function seedWaitingOn() {
+      var order = ["client", "lender", "solicitor"];
+      var live = DB.cases.filter(function (c) {
+        return ["application", "offer", "exchange"].indexOf(c.stage) >= 0;
+      });
+      live.forEach(function (c, i) {
+        if (c.waiting_on) return;                       /* the checklist cases already said "client" */
+        c.waiting_on = order[i % order.length];
+        if (c.waiting_on === "solicitor" && !c.solicitor_firm) {
+          c.solicitor_firm = SOLICITORS[i % SOLICITORS.length];
+        }
+      });
+      /* And the ones that are genuinely STUCK — nothing has moved on them in
+         over six weeks — get the value spelled out even where the cycle above
+         did not reach them, because these are the rows the report exists for. */
+      DB.cases.filter(function (c) {
+        return isLive(c.stage) && (NOW - new Date(c.updated_at)) / DAY > 45 && !c.waiting_on;
+      }).forEach(function (c, i) {
+        c.waiting_on = order[(i + 2) % order.length];
+        if (c.waiting_on === "solicitor" && !c.solicitor_firm) c.solicitor_firm = SOLICITORS[(i + 1) % SOLICITORS.length];
+      });
+    })();
+
+    /* ---- (c) advocacy ----------------------------------------------------- */
+    /* WHO SENT US THIS CLIENT. Three cases, two referrers, and the two of them
+       are deliberately different shapes, because app.js has to decide WHERE the
+       thank-you task goes:
+         · Meera Chandran has exactly ONE case, so a thank-you lands on it with
+           nothing to decide. She has referred TWO clients, which is what makes a
+           "who refers us business" list have a top row at all.
+         · Gareth Pollard is the landlord with five cases, three of them live.
+           There is no right answer to "which of his six buy-to-lets does this
+           thank-you belong on", so the app must decline to guess — and that path
+           needs a fixture or it is never walked. */
+    (function seedReferrers() {
+      var meera = clientNamed("Meera Chandran");
+      var pollard = clientNamed("Gareth Pollard");
+      var pairs = [
+        [caseFor("Amara Okonkwo", "offer"), meera],
+        [caseFor("Ian & Susan Fairweather", "offer"), meera],
+        [caseFor("Ross McKay", "fact_find"), pollard]
+      ];
+      pairs.forEach(function (p) {
+        if (!p[0] || !p[1]) return;
+        p[0].referrer_client_id = p[1].id;
+        if (!p[0].lead_source) p[0].lead_source = "Referral";
+      });
+    })();
+
+    /* THE REVIEW LOOP. Three states, because the reminder only means anything if
+       all three exist side by side:
+         · asked eight days ago, never answered      → the reminder is due
+         · answered badly, with a reason             → note + call task
+         · answered well                             → nothing happens at all
+       The unanswered one carries a SENT email as well as the stamp on the case:
+       the stamp records that we decided to ask, the sent row records that the
+       client was actually asked, and the reminder is keyed on the second. */
+    (function seedReviewLoop() {
+      /* Their first completion that has been ASKED and not yet scored — the same
+         rule for all three, so none of these lands on a case that already
+         carries somebody else's answer. */
+      var askedUnscored = function (client) {
+        return DB.cases.filter(function (x) {
+          return nameOf(x.client_id) === client && x.stage === "completed" &&
+            x.nps_score == null && !!x.review_requested_at;
+        })[0] || null;
+      };
+      var unanswered = askedUnscored("Sophie Ravenhill");
+      if (unanswered) {
+        unanswered.review_requested_at = iso(shift(-8));
+        unanswered.nps_score = null;
+        sentMail(unanswered, "review_request", 8, "How did we do?");
+      }
+
+      /* The detractor, exactly as nps-capture v2 leaves a case: the score on the
+         case, the client's own words in a note, and a call task on the case's
+         adviser due tomorrow. Written here rather than by calling the edge
+         function so the state exists on a cold page load — the Reports review
+         panel and the adviser's task list both have to show it before anybody
+         submits anything. */
+      var detractor = askedUnscored("Ian Corrigan");
+      if (detractor) {
+        var reason = "Took nearly three weeks to get an answer on the valuation and I had to chase every time.";
+        detractor.nps_score = 4;
+        DB.case_notes.push({
+          id: nid("nt"), case_id: detractor.id,
+          body: "Review feedback (4/10): " + reason,
+          created_by: null, created_at: iso(shift(-2))
+        });
+        DB.case_tasks.push({
+          id: nid("tk"), case_id: detractor.id,
+          title: "Call " + nameOf(detractor.client_id) + " — review feedback needs attention",
+          due_date: dateOnly(shift(1)), done_at: null,
+          created_by: null, assigned_to: detractor.assigned_to || null,
+          created_at: iso(shift(-2))
+        });
+      }
+
+      /* The rest of the distribution. Six cases carried a score before this
+         round and every one of them was a 6, an 8 or a 9 — a book with no
+         extremes at either end, which is the one shape a review dashboard can
+         say nothing useful about. These take it to twelve, spanning 4 to 10,
+         with detractors, passives and promoters all represented. Each one is
+         written onto a case that had ALREADY been asked (review_requested_at is
+         set), so nothing here changes who is waiting in the review drip. */
+      [["Damian Fairhurst", 9], ["Fiona Strachan", 7], ["Peter Thackeray", 10],
+       ["Bruce Lindquist", 10], ["Kwame Boateng", 10]].forEach(function (p) {
+        /* Their first already-asked, not-yet-scored completion — not simply
+           their first completion, which for a two-time client can be one that
+           already carries a score. */
+        var c = DB.cases.filter(function (x) {
+          return nameOf(x.client_id) === p[0] && x.stage === "completed" &&
+            x.nps_score == null && !!x.review_requested_at;
+        })[0];
+        if (c) c.nps_score = p[1];
+      });
+    })();
+  })();
+
   /* --- case_events: give the live cases a stage history ------------------ */
   var STAGE_ORDER = ["enquiry", "fact_find", "decision_in_principle", "application", "offer", "exchange", "completed"];
   DB.cases.forEach(function (c) {
@@ -2977,14 +3422,105 @@
     completion_congrats: "Congratulations — {M} has completed today.",
     protection_offer: "While we were arranging your mortgage we talked about protecting the payments.",
     fee_request: "Please find below the details for our advice fee.",
-    gi_exchange: "Now that you are exchanging, this is the point at which buildings insurance needs to be in place."
+    gi_exchange: "Now that you are exchanging, this is the point at which buildings insurance needs to be in place.",
+    /* R9 — the three types round 9 composes. The docs_request opening is the v10
+       wording, WORD FOR WORD: a case with no checklist must read exactly as it
+       did before this round, and only the list underneath it changes. */
+    docs_request: "Before we can get your application moving we need a few documents from you.",
+    docs_chase: "Just a quick reminder — we are still waiting on some documents before your application can move on.",
+    review_reminder: "A little while ago I asked how we did. If you have a spare minute, a short review really does help us."
   };
-  function emailBodyLines(type, addr, mention) {
+  /* R9 — the document checklist as the email templates see it. Empty whenever
+     the migration is not there, which is what makes "checklist-aware" degrade to
+     "exactly the email we sent before" on an un-migrated database rather than to
+     an email with an empty list in it. */
+  var DOC_TYPES = ["docs_request", "docs_chase"];
+  function caseChecklist(caseId) {
+    if (!MIGRATIONS.m10 || !caseId) return [];
+    return DB.case_documents.filter(function (d) { return d.case_id === caseId; });
+  }
+  function outstandingDocs(caseId) {
+    return caseChecklist(caseId).filter(function (d) { return d.status === "requested"; });
+  }
+  /* ---- r9 · what the DEPLOYED doc-upload enforces on a file --------------
+     Kept beside the checklist helpers rather than inside the handler so the
+     limits are readable in one place and the test hooks below can reach them.
+     The extension list is the contract's, in the contract's order. */
+  var DOC_UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
+  var DOC_UPLOAD_EXT = ["pdf", "jpg", "jpeg", "png", "heic", "heif"];
+  var DOC_UPLOAD_RATE_CAP = 20;          /* uploads per link per rolling minute */
+  var DOC_UPLOAD_HITS = {};              /* token -> [timestamps] */
+  var DOC_UPLOAD_FAIL_STORAGE = false;   /* armed by __mock.failDocStorageOnce() */
+  /* The first bytes of the file, as a plain array. Files arrive from a real
+     <input type=file> in the harness, so this is genuine content, not a
+     declared type — which is the whole point of checking it. */
+  function docUploadHead(file) {
+    try {
+      if (typeof file.slice === "function" && typeof Blob !== "undefined") {
+        return Promise.resolve(file.slice(0, 16).arrayBuffer()).then(function (buf) {
+          return Array.prototype.slice.call(new Uint8Array(buf));
+        }).catch(function () { return []; });
+      }
+    } catch (e) { /* fall through */ }
+    return Promise.resolve([]);
+  }
+  /* Magic bytes, per accepted extension. An extension is something the caller
+     chooses; these are what is actually in the file. An empty head (a runtime
+     that could not read the blob) is allowed through rather than refused —
+     failing closed here would reject every upload on an older browser over a
+     check that is a second line of defence, not the first. */
+  function docBytesMatch(ext, h) {
+    if (!h || !h.length) return true;
+    var starts = function (sig) { return sig.every(function (b, i) { return h[i] === b; }); };
+    if (ext === "pdf") return starts([0x25, 0x50, 0x44, 0x46]);                        /* %PDF */
+    if (ext === "jpg" || ext === "jpeg") return starts([0xff, 0xd8, 0xff]);
+    if (ext === "png") return starts([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    if (ext === "heic" || ext === "heif") {
+      /* ISO-BMFF: a 4-byte box length, then "ftyp", then the brand. */
+      return h[4] === 0x66 && h[5] === 0x74 && h[6] === 0x79 && h[7] === 0x70;
+    }
+    return true;
+  }
+  /* The client's upload link. Built from site_url + the case's own token, so a
+     case whose checklist predates the token (or a database without m10) gets the
+     list of items and no link — which is the state the firm was in yesterday,
+     and still has to read properly. */
+  function docsLinkFor(cs) {
+    var token = (MIGRATIONS.m10 && cs && cs.doc_token) ? String(cs.doc_token) : "";
+    if (!token) return null;
+    var base = setting("site_url", "https://www.nexmoney.co.uk").replace(/\/+$/, "");
+    return base + "/docs.html?token=" + token;
+  }
+  /* The firm-wide list from Settings — the v10 behaviour, and still the right
+     answer for a case nobody has built a checklist on. */
+  function settingsDocsList() {
+    return String(setting("docs_list", "")).split("|")
+      .map(function (s) { return s.trim(); })
+      .filter(Boolean);
+  }
+  function emailBodyLines(type, addr, mention, cs) {
     var opening = EMAIL_OPENING[type];
     if (!opening) return null;                      // a type this stub does not compose
     var lines = [];
     if (mention === "regarding") lines.push("Regarding: " + addr);
     lines.push(opening.replace("{M}", mention === "sentence" ? "your mortgage on " + addr : "your mortgage"));
+    /* R9 — THE CHECKLIST-AWARE HALF. With a checklist on the case the mail lists
+       ONLY what is still missing: a client who has already sent their passport
+       and is asked for it again a second time reasonably concludes we lost it.
+       With no checklist it falls back to the firm's static docs_list, which is
+       the wording (and the whole list, every time) that v10 sent. */
+    if (DOC_TYPES.indexOf(type) >= 0) {
+      var chk = caseChecklist(cs && cs.id);
+      var items = chk.length
+        ? outstandingDocs(cs.id).map(function (d) { return d.item; })
+        : settingsDocsList();
+      if (items.length) {
+        lines.push(chk.length ? "Still outstanding:" : "Please send:");
+        items.forEach(function (it) { lines.push("· " + it); });
+      }
+      var link = chk.length ? docsLinkFor(cs) : null;
+      if (link) lines.push("You can upload them here: " + link);
+    }
     return lines;
   }
   function composeEmail(row) {
@@ -3020,7 +3556,16 @@
          reads rather than a flag about it. */
       property_line: mention === "regarding" ? "Regarding: " + addr : null,
       property_phrase: mention === "sentence" ? "your mortgage on " + addr : null,
-      body_lines: emailBodyLines(t, addr, mention),
+      body_lines: emailBodyLines(t, addr, mention, cs),
+      /* R9 — what the document mails actually asked for, so a test can assert the
+         list a client reads rather than a flag about it. Null on every type that
+         is not about documents: "this mail carries no checklist" and "it carries
+         an empty one" are different facts. */
+      checklist_source: DOC_TYPES.indexOf(t) >= 0 ? (caseChecklist(cs && cs.id).length ? "case" : "settings") : null,
+      checklist_items: DOC_TYPES.indexOf(t) >= 0
+        ? (caseChecklist(cs && cs.id).length ? outstandingDocs(cs.id).map(function (d) { return d.item; }) : settingsDocsList())
+        : null,
+      docs_link: DOC_TYPES.indexOf(t) >= 0 && caseChecklist(cs && cs.id).length ? docsLinkFor(cs) : null,
       signoff: advSignoff ? String(advSignoff).split("\n") : [name, setting("company_name", "NexMoney")].concat(phone ? [phone] : []),
       signoff_source: advSignoff ? "profile" : (adv ? "adviser_name" : "settings")
     };
@@ -3197,11 +3742,140 @@
      stamp is the queue's memory, so stamping a row that was not queued would
      silently drop it for good. */
   var REVIEW_REQUESTS_PER_RUN = 5;
+  /* =========================================================================
+     r9 — THE NIGHTLY DOCUMENT CHASE
+
+     A case sitting at Fact Find or Application with items still outstanding is
+     the single most common reason a mortgage application stops moving, and
+     until now the only thing that chased it was an adviser remembering to.
+
+     The rules, and why each one is where it is:
+       · Only fact_find / application. Before that there is nothing to collect;
+         after it the lender has what it needs and a chase is just noise.
+       · Only cases with a CHECKLIST that still has requested items. A case with
+         no checklist is not "fully documented", it is unknown — and inventing a
+         chase for an unknown is how a client gets asked for a passport they
+         handed over in person.
+       · A quiet window (`doc_chase_days`, 3): if ANY document mail — the
+         original request or an earlier chase — went to that client inside it,
+         nothing goes tonight. This is what stops a run-twice-in-an-evening (the
+         cron, plus an operator pressing Run now) turning into two chases.
+       · THREE chases, then stop and tell a human. The fourth email would not be
+         the one that works; a phone call might be. The adviser task is written
+         instead of an email, once, and it is idempotent on its own title so a
+         week of nightly runs leaves one task, not seven.
+     Gated on `doc_chase_enabled`, seeded OFF — see the settings block.
+     ======================================================================= */
+  var DOC_CHASE_MAX = 3;
+  var DOC_OVERDUE_TITLE_PREFIX = "Documents overdue — call ";
+  function docMailsFor(caseId, type) {
+    return DB.email_queue.filter(function (e) {
+      return e.case_id === caseId && (type ? e.email_type === type : DOC_TYPES.indexOf(e.email_type) >= 0);
+    });
+  }
+  function queueDocChases() {
+    var out = { doc_chases_queued: 0, doc_overdue_tasks: 0 };
+    if (setting("doc_chase_enabled", "off") !== "on") return out;
+    if (!MIGRATIONS.m10) return out;                 /* no checklist table, nothing to chase from */
+    var quiet = Number(setting("doc_chase_days", "3")) || 3;
+    DB.cases.filter(function (c) {
+      return ["fact_find", "application"].indexOf(c.stage) >= 0 && outstandingDocs(c.id).length > 0;
+    }).slice().forEach(function (c) {
+      var chases = docMailsFor(c.id, "docs_chase");
+      var when = iso(new Date());
+      if (chases.length >= DOC_CHASE_MAX) {
+        /* Out of chases. A task, not a fourth email — and deliberately NOT
+           subject to the quiet window: the window governs how often we mail a
+           client, and this is the point at which we stop mailing them. */
+        var title = DOC_OVERDUE_TITLE_PREFIX + clientName(c.client_id);
+        var already = DB.case_tasks.some(function (t) {
+          return t.case_id === c.id && t.title === title && !t.done_at;
+        });
+        if (already) return;
+        DB.case_tasks.push({
+          id: nid("tk"), case_id: c.id, title: title,
+          due_date: TODAY, done_at: null,
+          created_by: null,                          /* SECURITY DEFINER — the system wrote it */
+          assigned_to: c.assigned_to || null, created_at: when
+        });
+        out.doc_overdue_tasks++;
+        return;
+      }
+      var last = docMailsFor(c.id).map(function (e) { return e.sent_at || e.created_at; })
+        .sort().slice(-1)[0];
+      if (last && (NOW - new Date(last)) / DAY < quiet) return;      /* said something too recently */
+      var cl = DB.clients.filter(function (x) { return x.id === c.client_id; })[0];
+      if (!cl || !cl.email) return;                  /* nothing to send to — Data health owns that */
+      queueRow({
+        case_id: c.id, client_id: c.client_id, email_type: "docs_chase",
+        to_email: cl.email, subject: "Still waiting on your documents",
+        scheduled_for: when, created_at: when
+      });
+      out.doc_chases_queued++;
+    });
+    return out;
+  }
+  /* =========================================================================
+     r9 — THE REVIEW REMINDER
+
+     One nudge, a week after a review request that was actually SENT and never
+     answered. Keyed on the email_queue row rather than on
+     `cases.review_requested_at`, deliberately: the stamp records that we decided
+     to ask, the sent row records that the client was asked, and only the second
+     of those is worth chasing. (It also means a back-book stamped as "already
+     asked" during a migration is never nudged for a mail nobody ever received.)
+
+     One reminder per case, ever — the existence of a `review_reminder` row is
+     the memory, so no new column is needed and a re-run can never double up.
+     It shares the review drip's budget of five a run, and takes what is left
+     AFTER the new requests: someone who has never been asked comes before
+     someone who is being asked twice.
+     ======================================================================= */
+  function queueReviewReminders(budget) {
+    if (budget <= 0) return 0;
+    var days = Number(setting("review_reminder_days", "7")) || 7;
+    var sentAt = {};
+    DB.email_queue.forEach(function (e) {
+      if (e.email_type !== "review_request" || e.status !== "sent" || !e.sent_at || !e.case_id) return;
+      if (!sentAt[e.case_id] || e.sent_at > sentAt[e.case_id]) sentAt[e.case_id] = e.sent_at;
+    });
+    var made = 0;
+    Object.keys(sentAt).filter(function (cid) {
+      if ((NOW - new Date(sentAt[cid])) / DAY < days) return false;          /* not a week yet */
+      var c = DB.cases.filter(function (x) { return x.id === cid; })[0];
+      if (!c || c.nps_score != null) return false;                           /* they answered */
+      if (DB.email_queue.some(function (e) {
+        return e.case_id === cid && e.email_type === "review_reminder";
+      })) return false;                                                      /* already nudged */
+      var cl = DB.clients.filter(function (x) { return x.id === c.client_id; })[0];
+      return !!(cl && cl.email && !cl.marketing_opt_out);
+    }).sort(function (a, b) {
+      /* longest-unanswered first, then by id — stable, so the same run twice
+         over picks the same people */
+      return sentAt[a] < sentAt[b] ? -1 : (sentAt[a] > sentAt[b] ? 1 : (a < b ? -1 : 1));
+    }).slice(0, budget).forEach(function (cid) {
+      var c = DB.cases.filter(function (x) { return x.id === cid; })[0];
+      var cl = DB.clients.filter(function (x) { return x.id === c.client_id; })[0];
+      var when = iso(new Date());
+      queueRow({
+        case_id: c.id, client_id: c.client_id, email_type: "review_reminder",
+        to_email: cl.email, subject: "How did we do? — a gentle reminder",
+        scheduled_for: when, created_at: when
+      });
+      made++;
+    });
+    return made;
+  }
   function queueCommsExtras() {
-    var out = { review_requests_queued: 0, annual_review_tasks: 0 };
+    var out = { review_requests_queued: 0, annual_review_tasks: 0, review_reminders_queued: 0, doc_chases_queued: 0, doc_overdue_tasks: 0 };
     /* The annual review touch is a task, not an email, so it is NOT gated on the
        review link or the NPS switch — it has its own. */
     out.annual_review_tasks = queueAnnualReviewTasks();
+    /* …and so is the document chase: it has nothing to do with reviews, and a
+       firm with no review link still has clients who owe it payslips. */
+    var docs = queueDocChases();
+    out.doc_chases_queued = docs.doc_chases_queued;
+    out.doc_overdue_tasks = docs.doc_overdue_tasks;
     var link = setting("google_review_link") || setting("review_platform_link");
     if (!link || setting("nps_enabled", "off") !== "on") return out;
     var delay = Number(setting("review_delay_days", "14")) || 14;
@@ -3224,6 +3898,9 @@
       c.review_requested_at = when;
       out.review_requests_queued++;
     });
+    /* r9 — whatever is left of tonight's five goes on nudging the people who
+       were asked a week ago and said nothing. */
+    out.review_reminders_queued = queueReviewReminders(REVIEW_REQUESTS_PER_RUN - out.review_requests_queued);
     return out;
   }
   var LAST_EMAIL_RUN = null;
@@ -3406,13 +4083,19 @@
          interactive caller. owner/admin/adviser/staff all pass now. */
       if (!isStaff()) return { __status: 403, error: "forbidden — staff only" };
       var ids = body && Array.isArray(body.queue_ids) ? body.queue_ids.filter(Boolean) : null;
-      var queued = { rate_reminders_queued: 0, review_requests_queued: 0, retention_cases_created: 0 };
+      var queued = { rate_reminders_queued: 0, review_requests_queued: 0, retention_cases_created: 0,
+        review_reminders_queued: 0, doc_chases_queued: 0, doc_overdue_tasks: 0 };
       if (!ids) {
         var auto = queueAutomatedEmails();
         var extras = queueCommsExtras();
         queued.rate_reminders_queued = auto.rate_reminders_queued;
         queued.retention_cases_created = auto.retention_cases_created;
         queued.review_requests_queued = extras.review_requests_queued;
+        /* r9 — the two new nightly touches, reported the same way, so "what did
+           the cron actually do last night" is answerable from one object. */
+        queued.review_reminders_queued = extras.review_reminders_queued;
+        queued.doc_chases_queued = extras.doc_chases_queued;
+        queued.doc_overdue_tasks = extras.doc_overdue_tasks;
       }
       var nowIso = iso(new Date());
       var due = DB.email_queue.filter(function (e) {
@@ -3504,6 +4187,274 @@
         }
       };
     },
+    /* ---------------------------------------------------------------------
+       r9 · doc-upload — the ONE part of this system a client without a login
+       ever touches, mirroring the DEPLOYED v1 contract exactly.
+
+       GET  ?token=…                      what is still outstanding, and who we
+                                          think they are.
+       POST multipart/form-data           one file has arrived.
+              token    the case's uuid — IN THE BODY. Query params are ignored
+                       on POST, deliberately: a token in a URL ends up in proxy
+                       logs, browser history and referrer headers, and a POST
+                       that accepted it there would quietly undo the reason the
+                       body exists.
+              item_id  the item's ID from the GET — never its NAME. Names are
+                       free text an adviser can edit while the client has the
+                       page open, so matching on one is a race with a typo.
+              file     a real file part WITH a filename. The EXTENSION is
+                       authoritative for the type, not the browser's Content-Type
+                       header, which is guesswork on Android and empty for HEIC.
+              website  a honeypot, normally absent. See below.
+
+       WHY A JSON BODY IS A 400 BEFORE ANY LOGIC: the deployed function reads
+       multipart and nothing else. A stub that quietly accepted JSON as well
+       would let a page ship that works in the harness and 400s for every real
+       client, which is the exact failure this mirror exists to prevent.
+
+       THE HONEYPOT ANSWERS 200 AND DOES NOTHING. A bot that fills every field
+       it finds gets {ok:true} and no more — no item, no outstanding count, and
+       nothing written. Anything reading this response has to treat a bare
+       {ok:true} as "not a real upload", because that is precisely what it is.
+
+       ERRORS ARE STATUS CODES. The messages are for humans and contain
+       em-dashes and wording that will change; the number is the contract:
+         400 malformed — no token, no item_id, no file part, empty file
+         404 the token resolves to nothing, or that item is not on this list
+         409 that item is already received (carries `status`), or a claim race
+         413 over 10MB
+         415 extension not accepted, or the bytes disagree with the extension
+         429 too many uploads on one link in one minute
+         500 the storage write failed
+       --------------------------------------------------------------------- */
+    "doc-upload": async function (body, req) {
+      var method = String((req && req.method) || "POST").toUpperCase();
+      var err = function (code, msg, extra) {
+        var o = { __status: code, error: msg };
+        if (extra) Object.keys(extra).forEach(function (k) { o[k] = extra[k]; });
+        return o;
+      };
+      /* The one 404 a bad link ever gets — the same words whether the token is
+         invented, expired or belonged to a case since cleared. An error that
+         distinguishes "no such link" from "not your link" is an oracle for
+         guessing tokens. */
+      var notFound = err(404, "This document link is not valid — it may have expired.");
+      var resolve = function (token) {
+        if (!token) return null;
+        /* Without m10 there is no doc_token column at all, so no link can
+           resolve — the same 404, which is what an un-migrated database does. */
+        if (!MIGRATIONS.m10) return null;
+        return DB.cases.filter(function (c) { return c.doc_token && String(c.doc_token) === token; })[0] || null;
+      };
+      /* What the CLIENT is allowed to see: requested and received only. A
+         waived item is a decision the firm made about its own file; showing it
+         invites "why have you crossed that out" on a page with nobody to ask. */
+      var visible = function (caseId) {
+        return caseChecklist(caseId).filter(function (d) { return d.status !== "waived"; });
+      };
+
+      if (method === "GET") {
+        var gToken = String(((req && req.query && req.query.token) || "")).trim();
+        var gCase = resolve(gToken);
+        if (!gCase) return notFound;
+        var gcl = DB.clients.filter(function (x) { return x.id === gCase.client_id; })[0] || {};
+        var items = visible(gCase.id).map(function (d) {
+          return { id: d.id, item: d.item, status: d.status };
+        });
+        var out = items.filter(function (d) { return d.status === "requested"; });
+        return {
+          ok: true,
+          company: setting("company_name", "NexMoney"),
+          /* first name only — a document link gets forwarded and pasted into
+             WhatsApp, so everything this returns is effectively public */
+          first_name: gcl.first_name || null,
+          greeting: "Hi " + (gcl.first_name || "there"),
+          items: items,
+          outstanding: out.length,
+          complete: out.length === 0
+        };
+      }
+
+      /* ---- POST ---------------------------------------------------------
+         Multipart or nothing. `req.form` is only populated by the fetch stub
+         when the request body was a FormData; a JSON string never produces
+         one, which is how the 400 below happens "before any logic". */
+      var form = req && req.form;
+      if (!form) return err(400, "This upload was not sent as a file upload.");
+      /* THE HONEYPOT, CHECKED FIRST. Before the token, before the item, before
+         anything is looked up: a bot must not be able to use the error codes
+         below as a probe. Answers 200 with nothing in it. */
+      var pot = form.website;
+      if (pot != null && String(pot.value != null ? pot.value : pot).trim() !== "") return { ok: true };
+
+      var fToken = form.token ? String(form.token.value != null ? form.token.value : form.token).trim() : "";
+      if (!fToken) return err(400, "This upload did not say which link it came from.");
+      var cs = resolve(fToken);
+      if (!cs) return notFound;
+
+      /* Rate cap, per link, per rolling minute. A link with no login on it is a
+         public endpoint; without a cap one leaked URL is a way to fill the
+         firm's storage. Deliberately per TOKEN rather than per IP — the point
+         is to bound what one link can do. */
+      var nowMs = Date.now();
+      var hits = (DOC_UPLOAD_HITS[fToken] || []).filter(function (t) { return nowMs - t < 60000; });
+      if (hits.length >= DOC_UPLOAD_RATE_CAP) { DOC_UPLOAD_HITS[fToken] = hits; return err(429, "That is a lot of uploads at once — wait a minute and try again."); }
+      hits.push(nowMs);
+      DOC_UPLOAD_HITS[fToken] = hits;
+
+      var itemId = form.item_id ? String(form.item_id.value != null ? form.item_id.value : form.item_id).trim() : "";
+      if (!itemId) return err(400, "This upload did not say which document it is.");
+      /* Matched on ID against the list the CLIENT can see. An id belonging to a
+         waived row is "unknown" from here, because the GET never showed it. */
+      var row = visible(cs.id).filter(function (d) { return d.id === itemId; })[0];
+      if (!row) return err(404, "That document is not on this checklist.");
+      if (row.status === "received") return err(409, "We already have that one — thank you.", { status: row.status });
+
+      var file = form.file;
+      if (!file || typeof file !== "object" || typeof file.size !== "number") return err(400, "No file was attached.");
+      var filename = String(file.name || "").trim();
+      if (!filename) return err(400, "That file arrived without a name.");
+      if (!file.size) return err(400, "That file is empty.");
+      if (file.size > DOC_UPLOAD_MAX_BYTES) return err(413, "That file is over the 10MB limit.");
+      /* THE EXTENSION IS AUTHORITATIVE, not file.type — a browser reports
+         application/octet-stream for HEIC and an empty string often enough that
+         trusting it would refuse legitimate photographs from iPhones. */
+      var ext = (filename.split(".").pop() || "").toLowerCase();
+      if (DOC_UPLOAD_EXT.indexOf(ext) < 0) return err(415, "That file type is not accepted — send a PDF, JPG, PNG or HEIC.");
+      /* …and then the bytes have to agree with it, because an extension is
+         something a caller chooses. */
+      var head = await docUploadHead(file);
+      if (!docBytesMatch(ext, head)) return err(415, "That file does not look like a " + ext.toUpperCase() + " inside.");
+      if (DOC_UPLOAD_FAIL_STORAGE) { DOC_UPLOAD_FAIL_STORAGE = false; return err(500, "The file could not be stored — please try again."); }
+
+      /* The claim, and the race. Re-read the row: between the check above and
+         here another request on the same link could have taken it. */
+      var live = caseChecklist(cs.id).filter(function (d) { return d.id === itemId; })[0];
+      if (!live || live.status !== "requested") return err(409, "We already have that one — thank you.", { status: live ? live.status : "unknown" });
+      var when = iso(new Date());
+      live.status = "received";
+      live.received_at = when;
+      live.storage_path = "docs/" + cs.id + "/" + itemId + "." + ext;
+      /* THE NOTE. A file arriving through a link is a real event on the case,
+         because an adviser looking at the file next week must be able to see it
+         happened without knowing this feature exists. created_by is null: the
+         service role wrote it, not a member of staff. */
+      DB.case_notes.push({
+        id: nid("nt"), case_id: cs.id,
+        body: "Document received via upload link: " + live.item,
+        created_by: null, created_at: when
+      });
+      return {
+        ok: true,
+        item: live.item,
+        outstanding: visible(cs.id).filter(function (d) { return d.status === "requested"; }).length
+      };
+    },
+    /* ---------------------------------------------------------------------
+       r9 · nps-capture v2 — the review form coming back.
+
+       v1 recorded the score and stopped, which is the wrong way round: a 10 needs
+       nothing from anybody, and a 4 is the most urgent thing in the firm's inbox
+       that day. v2 keeps the score AND, for a detractor (6 or below):
+
+         · writes the client's own words to the case, verbatim, prefixed with the
+           score — "Review feedback (4/10): <text>". Verbatim on purpose: a
+           summary of a complaint is a way of losing the complaint.
+         · puts a CALL task on the case's adviser, due TOMORROW. Not today —
+           an unhappy client submitting a form at 23:40 should not generate a
+           task that is already overdue by the time anybody reads it; and not in
+           a week either.
+
+       No email goes anywhere. Nobody wants an automated reply to a complaint.
+
+       THE TOKEN IS THE ONLY THING THAT RESOLVES A CASE, and the guard below runs
+       before ANY write. This is stated at length because an earlier version of
+       this stub got it wrong in a way the deployed function never did: it looked
+       the case up by `case_id` FIRST and only fell back to the token, and it
+       never checked the two agreed. Against that stub a POST carrying somebody
+       else's case id and no token at all returned 200 and rewrote their score,
+       wrote a note and raised a task on their file. The deployed v1 has always
+       had `if (!kase || !kase.nps_token || kase.nps_token !== token) return 404`
+       ahead of every write, so production was never open to it — but a mock that
+       is more permissive than the thing it mirrors is worse than no mock, because
+       it makes a page look safe on a property the harness is not actually
+       testing. The rules, in the order the handler applies them:
+
+         website present   200 {ok:true} and NOTHING else — the honeypot, first,
+                           so the codes below cannot be used as a probe
+         no token          400. A submission that names no link is malformed;
+                           there is nothing to resolve and nothing to write
+         unknown token     404, the same 404 an expired one gets
+         case_id ≠ the token's case
+                           404. `case_id` is an ASSERTION TO BE VERIFIED, never a
+                           lookup key — this is the whole of the fix
+         score             WRITE-ONCE. effective = stored ?? request: a case that
+                           already holds a score keeps it, and the request's
+                           number cannot move it. The band that decides whether a
+                           call-back is raised is therefore the score the firm
+                           actually captured, not one edited into a URL
+
+       Every refusal above returns before a single row is touched.
+       --------------------------------------------------------------------- */
+    "nps-capture": function (body) {
+      var notFound = { __status: 404, error: "This review link is not valid — it may have expired." };
+      var bad = function (msg) { return { __status: 400, error: msg }; };
+      /* THE HONEYPOT, CHECKED FIRST — before the token, before anything is looked
+         up, for the same reason doc-upload checks its own first: a bot must not
+         be able to read the codes below as a probe. Answers 200 with nothing in
+         it and writes nothing at all. */
+      var pot = body && body.website;
+      if (pot != null && String(pot).trim() !== "") return { ok: true };
+
+      var token = String((body && body.token) || "").trim();
+      if (!token) return bad("This review link is not valid — it may have expired.");
+      var cs = DB.cases.filter(function (c) { return c.nps_token && String(c.nps_token) === token; })[0];
+      /* THE GUARD, spelled out the way the deployed function spells it. */
+      if (!cs || !cs.nps_token || String(cs.nps_token) !== token) return notFound;
+      /* …and the case id, if one came along, has to BE that case. */
+      var caseId = String((body && body.case_id) || "").trim();
+      if (caseId && caseId !== cs.id) return notFound;
+
+      /* WRITE-ONCE. The stored score wins where there is one; the request's is
+         accepted only to fill a blank. A client re-following their own link with
+         a different number in it changes nothing. */
+      var stored = (cs.nps_score == null || cs.nps_score === "") ? null : Number(cs.nps_score);
+      var asked = (body && body.score != null && body.score !== "") ? Number(body.score) : null;
+      var score = stored != null ? stored : asked;
+      if (score == null || !isFinite(score) || score < 0 || score > 10) {
+        return bad("A review score must be a whole number from 0 to 10.");
+      }
+      score = Math.round(score);
+      var reason = String((body && (body.reason || body.comment)) || "").trim();
+      var when = iso(new Date());
+      if (stored == null) { cs.nps_score = score; cs.updated_at = when; }
+      var out = { ok: true, score: score, detractor: score <= 6, note_created: false, task_created: false };
+      if (score > 6) return out;
+      if (reason) {
+        DB.case_notes.push({
+          id: nid("nt"), case_id: cs.id,
+          body: "Review feedback (" + score + "/10): " + reason,
+          created_by: null, created_at: when
+        });
+        out.note_created = true;
+      }
+      /* The call happens whether or not they typed anything — a bare 4 still
+         needs a phone call. Idempotent on the title, so a client who submits the
+         form twice does not create two. */
+      var title = "Call " + clientName(cs.client_id) + " — review feedback needs attention";
+      var dupe = DB.case_tasks.some(function (t) { return t.case_id === cs.id && t.title === title && !t.done_at; });
+      if (!dupe) {
+        DB.case_tasks.push({
+          id: nid("tk"), case_id: cs.id, title: title,
+          due_date: dateOnly(shift(1)), done_at: null,
+          created_by: null,                          /* SECURITY DEFINER — a public form wrote it */
+          assigned_to: cs.assigned_to || null, created_at: when
+        });
+        out.task_created = true;
+      }
+      out.task_title = title;
+      return out;
+    },
     "assistant": function (body) {
       var last = "";
       try { var ms = (body && body.messages) || []; last = (ms[ms.length - 1] || {}).content || ""; } catch (e) { }
@@ -3517,6 +4468,37 @@
       };
     }
   };
+  /* r9 — the query string, parsed. doc-upload is the first edge function in this
+     app that is reached with a GET and a `?token=`, because it is the only one a
+     client without a login ever opens; everything else is a POST with a JSON
+     body. The handler signature gains an optional second argument rather than
+     changing, so every existing handler is untouched. */
+  function parseQuery(url) {
+    var q = {};
+    var i = String(url).indexOf("?");
+    if (i < 0) return q;
+    String(url).slice(i + 1).split("&").forEach(function (pair) {
+      if (!pair) return;
+      var bits = pair.split("=");
+      var k = decodeURIComponent(bits[0] || "").trim();
+      if (!k) return;
+      q[k] = decodeURIComponent((bits[1] || "").replace(/\+/g, " "));
+    });
+    return q;
+  }
+  /* r9 · MULTIPART. `doc-upload` is the only deployed function that takes a
+     file, and it takes multipart/form-data and nothing else — a JSON body is a
+     400 there before any logic runs. The stub therefore has to be able to tell
+     the two apart, so a FormData body is unpacked into `req.form` (values kept
+     as they are, File objects included) and `body` stays null. A JSON body
+     never produces a `req.form`, which is exactly how that 400 happens.
+     Every existing handler still reads `body` and is untouched. */
+  function parseForm(b) {
+    if (typeof FormData === "undefined" || !(b instanceof FormData)) return null;
+    var form = {};
+    b.forEach(function (v, k) { if (!(k in form)) form[k] = v; });
+    return form;
+  }
   var realFetch = window.fetch ? window.fetch.bind(window) : null;
   window.fetch = function (input, init) {
     var url = typeof input === "string" ? input : (input && input.url) || "";
@@ -3524,16 +4506,28 @@
     if (!m) return realFetch ? realFetch(input, init) : Promise.reject(new Error("fetch unavailable"));
     var fnName = m[1];
     var handler = EDGE[fnName];
+    var raw = init && init.body;
+    var form = parseForm(raw);
     var body = null;
-    try { body = init && init.body ? JSON.parse(init.body) : null; } catch (e) { body = null; }
+    if (!form) { try { body = raw ? JSON.parse(raw) : null; } catch (e) { body = null; } }
+    var req = {
+      method: String((init && init.method) || (input && input.method) || "POST").toUpperCase(),
+      url: url, query: parseQuery(url), form: form
+    };
     if (!handler) return Promise.resolve(jsonResponse({ error: "Function not found: " + fnName }, 404));
     return new Promise(function (resolve) {
       setTimeout(function () {
-        var out;
-        try { out = handler(body) || {}; } catch (e) { out = { error: String((e && e.message) || e) }; }
-        var status = out.__status || 200;
-        delete out.__status;
-        resolve(jsonResponse(out, status));
+        /* Handlers may be sync (all the originals) or async (doc-upload, which
+           has to read the file's first bytes). Promise.resolve covers both, so
+           adding one async handler did not touch the other fifteen. */
+        Promise.resolve().then(function () { return handler(body, req); })
+          .then(function (out) { return out || {}; })
+          .catch(function (e) { return { error: String((e && e.message) || e) }; })
+          .then(function (out) {
+            var status = out.__status || 200;
+            delete out.__status;
+            resolve(jsonResponse(out, status));
+          });
       }, 10);
     });
   };
@@ -3595,6 +4589,19 @@
       /* What the last process-emails run actually did — including the composed
          per-adviser sign-off for every message it sent. */
       lastEmailRun: function () { return LAST_EMAIL_RUN ? clone(LAST_EMAIL_RUN) : null; },
+      /* --- round-9 doc-upload hooks -------------------------------------
+         The deployed function's 429 and 500 are real rules with no other way
+         in: the rate cap needs twenty-one uploads to reach and the storage
+         failure needs storage to fall over. Both are shrunk/armed from here
+         rather than being softened in the handler, so what the tests exercise
+         is the same code path a real client hits. */
+      setDocUploadRateCap: function (n) {
+        DOC_UPLOAD_RATE_CAP = Number(n) > 0 ? Number(n) : 20;
+        DOC_UPLOAD_HITS = {};
+        return DOC_UPLOAD_RATE_CAP;
+      },
+      resetDocUploadRate: function () { DOC_UPLOAD_HITS = {}; return true; },
+      failDocStorageOnce: function () { DOC_UPLOAD_FAIL_STORAGE = true; return true; },
       /* Fast-forward a snooze so expiry can be tested without waiting. */
       expireSnooze: function (alertId) {
         var a = DB.watch_alerts.filter(function (x) { return x.id === alertId; })[0];
