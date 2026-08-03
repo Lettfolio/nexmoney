@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Tell us what went wrong — NexMoney</title>
+<link rel="icon" href="/favicon.svg">
+<style>
+  :root{--navy:#0f2a4a;--navy2:#0b1f35;--orange:#e08a2b;--ink:#1f2937;--muted:#6b7280;--line:#e3e7ee;--bg:#eef2f7;--green:#177245;--green-bg:#e7f4ec;--red:#c0392b;--red-bg:#fdecea;--amber:#805800;--amber-bg:#faf1dc}
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{background:var(--bg);color:var(--ink);font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;line-height:1.55;font-size:16px}
+  .top{background:linear-gradient(120deg,var(--navy2),var(--navy));color:#fff;padding:22px 18px}
+  .top .in{max-width:660px;margin:0 auto}
+  .brand{font-weight:800;font-size:22px;letter-spacing:.2px}.brand span{color:var(--orange)}
+  .top p{margin:6px 0 0;color:#c4d0e0;font-size:14px}
+  .wrap{max-width:660px;margin:0 auto;padding:20px 18px 80px}
+  .card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:22px;margin:16px 0;box-shadow:0 1px 3px rgba(16,24,40,.05)}
+  h2{font-size:18px;margin:0 0 4px;color:var(--navy)}
+  .page-h1{font-size:24px;color:var(--navy);margin:0 0 4px}
+  .hint{color:var(--muted);font-size:13.5px;margin:0 0 16px}
+  label{display:block;font-size:13.5px;font-weight:600;margin:0 0 5px;color:#374151}
+  textarea{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:9px;font:inherit;background:#fff;color:var(--ink);min-height:130px;resize:vertical}
+  textarea:focus{outline:none;border-color:var(--navy);box-shadow:0 0 0 3px rgba(15,42,74,.12)}
+  .btn{appearance:none;border:1px solid var(--navy);background:var(--navy);color:#fff;padding:12px 20px;border-radius:10px;font-weight:700;font-size:15px;cursor:pointer}
+  .btn:disabled{opacity:.55;cursor:default}
+  .actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:14px}
+  .center{text-align:center;padding:60px 20px;color:var(--muted)}
+  .center h2{font-size:22px;color:var(--navy);margin-bottom:8px}
+  .skip-link{position:absolute;left:-9999px;top:0;background:var(--navy);color:#fff;padding:10px 16px;border-radius:0 0 8px 0;z-index:99}
+  .skip-link:focus{left:0}
+  .foot{color:var(--muted);font-size:12px;text-align:center;margin-top:26px}
+  .banner{padding:12px 14px;border-radius:10px;font-size:14px;margin:0 0 16px}
+  .banner.err{background:var(--red-bg);color:var(--red)}
+  /* The score, shown back to the client rather than hidden: they are being
+     asked to explain a number, so the number has to be on the page. Banded,
+     but quietly — a huge red 3 reads as an accusation. */
+  .score{display:flex;gap:12px;align-items:center;margin:0 0 12px}
+  .score-num{flex:none;width:58px;height:58px;border-radius:14px;display:flex;align-items:center;justify-content:center;
+    font-size:22px;font-weight:800;font-variant-numeric:tabular-nums;background:var(--amber-bg);color:var(--amber);border:1px solid #e8d5a8}
+  .score.low .score-num{background:var(--red-bg);color:var(--red);border-color:#f3c8c2}
+  .score.high .score-num{background:var(--green-bg);color:var(--green);border-color:#bfe3ce}
+  .score-txt{font-size:14.5px;color:var(--ink)}
+  .score-txt small{display:block;color:var(--muted);font-size:12.5px;margin-top:2px}
+  .count{font-size:12.5px;color:var(--muted);margin-top:6px}
+  @media(max-width:560px){.btn{width:100%}}
+</style>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="top"><div class="in">
+  <div class="brand">Nex<span>Money</span></div>
+  <p>Your feedback</p>
+</div></div>
+
+<main id="main" class="wrap">
+  <div id="loading" class="center"><h2>One moment…</h2></div>
+
+  <div id="invalid" class="center" style="display:none">
+    <h2>This link isn't valid</h2>
+    <p>It may have expired or been mistyped. If you would still like to tell us how we did, please reply to the email we sent you and it will reach your adviser directly.</p>
+  </div>
+
+  <div id="done" class="center" style="display:none">
+    <h2>Thank you — that has gone straight to us</h2>
+    <p id="done-sub">Your adviser will call you. Nothing you have said here is automated away, and there is no form letter coming back at you. You can close this page.</p>
+  </div>
+
+  <div id="page" style="display:none">
+    <h1 class="page-h1">Tell us what went wrong</h1>
+    <div id="banner"></div>
+    <div class="card">
+      <div class="score" id="score-block">
+        <div class="score-num" id="score-num">—</div>
+        <div class="score-txt" id="score-txt"></div>
+      </div>
+      <p class="hint" id="lead"></p>
+      <form id="form">
+        <label for="reason">In your own words — what went wrong?</label>
+        <textarea id="reason" name="reason" placeholder="Whatever you want to say. It is read by a person, not sorted by a machine."></textarea>
+        <div class="count" id="count">Nothing is edited or summarised — your adviser sees exactly what you type.</div>
+        <div class="actions">
+          <button type="submit" class="btn" id="submitBtn">Send this to my adviser</button>
+        </div>
+      </form>
+    </div>
+    <div class="foot">Sent directly to your NexMoney adviser. NexMoney is authorised and regulated for mortgage advice.</div>
+  </div>
+</main>
+
+<script>
+(function () {
+  "use strict";
+  /* Same override as the document page — the harness points this at the
+     sandbox stub without the page needing to know it is being tested. */
+  var FN_BASE = String(window.__NEX_FN_BASE || "https://sclghkmvzpwtmnzbkaoe.supabase.co/functions/v1").replace(/\/+$/, "");
+  var FN = FN_BASE + "/nps-capture";
+
+  var q = new URLSearchParams(location.search);
+  var caseId = q.get("case") || "";
+  var token = q.get("token") || "";
+  var scoreRaw = q.get("score");
+  var score = scoreRaw == null || scoreRaw === "" ? null : Number(scoreRaw);
+
+  var $ = function (id) { return document.getElementById(id); };
+  var show = function (id) {
+    ["loading", "invalid", "done", "page"].forEach(function (x) { $(x).style.display = (x === id ? "block" : "none"); });
+  };
+  var banner = function (msg) {
+    var b = $("banner");
+    if (!msg) { b.innerHTML = ""; b.className = ""; return; }
+    b.className = "banner err";
+    b.textContent = msg;
+  };
+
+  /* The wording, by band. Written to be read by somebody who is annoyed:
+     no apology theatre, no exclamation marks, and no attempt to talk them
+     out of the score they have already given. */
+  function words(n) {
+    if (n == null || isNaN(n)) return { cls: "", head: "Thank you for answering.", sub: "", lead: "Tell us what happened and your adviser will pick it up." };
+    if (n <= 3) return {
+      cls: "low",
+      head: "A " + n + " out of 10. We got this badly wrong.",
+      sub: "Thank you for saying so rather than saying nothing.",
+      lead: "Your adviser will ring you about this. Before they do, it helps to have your side of it in your own words — take as much space as you need.",
+    };
+    if (n <= 6) return {
+      cls: "low",
+      head: "A " + n + " out of 10. That is not the job we set out to do.",
+      sub: "Thank you for telling us.",
+      lead: "Your adviser will ring you about this. Before they do, it helps to have your side of it in your own words — take as much space as you need.",
+    };
+    if (n <= 8) return {
+      cls: "",
+      head: "A " + n + " out of 10. Thank you.",
+      sub: "There is clearly something we could have done better.",
+      lead: "If you tell us what it was, we would like to know.",
+    };
+    return {
+      cls: "high",
+      head: "A " + n + " out of 10. Thank you.",
+      sub: "",
+      lead: "If there is anything you would change, we would still like to hear it.",
+    };
+  }
+  /* WHAT THIS PAGE IS ALLOWED TO PROMISE, BY BAND. The capture function files
+     the client's own words on the case and raises a call-back for a score of
+     6 or below; above that it records the score and keeps nothing else. So the
+     line under the box says what will actually happen to what they type rather
+     than making one promise to everybody — "your adviser sees exactly what you
+     type" is a specific claim, and it has to be true of the person reading it. */
+  function boxNote(n) {
+    return (n != null && !isNaN(n) && n <= 6)
+      ? "Nothing is edited or summarised — your adviser sees exactly what you type."
+      : "Only your score is recorded automatically. If you would like your adviser to read this and ring you, reply to the email we sent you — that reaches them directly.";
+  }
+
+  function paint() {
+    var w = words(score);
+    $("score-block").className = "score " + w.cls;
+    $("score-num").textContent = (score == null || isNaN(score)) ? "—" : score + "/10";
+    $("score-txt").innerHTML = "<strong></strong>";
+    $("score-txt").firstChild.textContent = w.head;
+    if (w.sub) {
+      var s = document.createElement("small");
+      s.textContent = w.sub;
+      $("score-txt").appendChild(s);
+    }
+    $("lead").textContent = w.lead;
+    $("count").textContent = boxNote(score);
+  }
+
+  /* WHAT MAKES A LINK REAL: the TOKEN, and only the token. The capture function
+     resolves a submission by it and refuses anything it cannot resolve —
+     no token is a 400, an unknown one is a 404, and a `case` naming a different
+     case from the token's is a 404 with nothing written. `case` is sent because
+     the function verifies it, not because it looks anything up with it, so a
+     client who edits it in the address bar gets a refusal rather than somebody
+     else's file.
+
+     AND THE SCORE IS WRITE-ONCE SERVER-SIDE. What is shown below comes from the
+     URL, but what is RECORDED is the score the firm already holds where there is
+     one; the number in the address bar can only ever fill a blank. So editing it
+     changes what this page says, not what goes on the file, and not whether an
+     adviser is asked to ring — which is why every claim this page makes after a
+     submission is keyed off the response rather than off `score`. */
+  if (!caseId && !token) { show("invalid"); return; }
+
+  paint();
+  show("page");
+
+  /* Best effort only: where the function offers a JSON view of the case it
+     gives us a first name and the score it actually holds, which is better
+     than the one in the URL. Where it does not, the page carries on exactly
+     as it is — this call can never be the reason somebody cannot complain. */
+  fetch(FN + "?format=json&case=" + encodeURIComponent(caseId) + "&token=" + encodeURIComponent(token), { method: "GET" })
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (j) {
+      if (!j || j.error) return;
+      if (typeof j.score === "number" && !isNaN(j.score)) { score = j.score; paint(); }
+      if (j.first_name) {
+        $("lead").textContent = j.first_name + " — " + $("lead").textContent.charAt(0).toLowerCase() + $("lead").textContent.slice(1);
+      }
+    })
+    .catch(function () { /* no context available — the page already works */ });
+
+  $("form").addEventListener("submit", async function (e) {
+    e.preventDefault();
+    var btn = $("submitBtn");
+    if (btn.disabled) return;
+    var reason = ($("reason").value || "").trim();
+    banner("");
+    btn.disabled = true;
+    btn.textContent = "Sending…";
+    try {
+      /* The score is only sent when we actually have one. A link that arrived
+         without it must not be turned into a recorded 0 — the server holds the
+         score it captured and can use that; inventing one here would put a
+         number on somebody's file that they never gave. */
+      var payload = { case_id: caseId, token: token, reason: reason };
+      if (score != null && !isNaN(score)) payload.score = score;
+      var res = await fetch(FN, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      var j = null;
+      try { j = await res.json(); } catch (e2) { j = null; }
+      if (res.status === 404) { show("invalid"); return; }
+      /* A 400 IS NOT A CONNECTION PROBLEM, and must not be dressed as one. The
+         capture function refuses a submission it cannot attach a score to — a
+         link that reached the client without its score on it, or with one that
+         is not 0-10 — and pressing Send again will refuse it again, for ever.
+         Saying "check your connection" to somebody in that position sends them
+         round a loop that cannot end; the reply-to-the-email route can. */
+      if (res.status === 400) {
+        banner("We could not record this from the link you followed — it may have been cut short when it was forwarded. Please reply to the email we sent you and what you have written here will reach your adviser directly.");
+        btn.disabled = false;
+        btn.textContent = "Send this to my adviser";
+        return;
+      }
+      if (!res.ok || !j || j.error) throw new Error((j && j.error) || "failed");
+      /* WHAT WE MAY SAY WE DID WITH THEIR WORDS. `note_created` is the server
+         telling us whether it kept them. Above a 6 it does not, so a client who
+         typed something has to be told where to send it instead — the old copy
+         here said their comments were on their file, which for that client was
+         not true. Nothing is claimed that the response does not report. */
+      if (j.note_created === false && j.detractor === false) {
+        $("done-sub").textContent = reason
+          ? "Your score has been recorded — thank you for taking the time. If you would like your adviser to read what you have written and ring you, reply to the email we sent you and it reaches them directly. You can close this page."
+          : "Your score has been recorded. Thank you for taking the time. You can close this page.";
+      }
+      show("done");
+    } catch (e3) {
+      banner("Sorry, that didn't send. Please check your connection and try again — what you have written is still here.");
+      btn.disabled = false;
+      btn.textContent = "Send this to my adviser";
+    }
+  });
+})();
+</script>
+</body>
+</html>

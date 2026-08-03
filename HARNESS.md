@@ -64,15 +64,63 @@ node tests/r5_batch7.js
 node tests/r5_batch8.js
 node tests/r5_batch9.js
 node tests/r64.js
+node tests/r8_touch.js
+node tests/r8_rev.js
+node tests/r9_adv.js
+node tests/r9_docs.js
 ```
 
-Current green counts (repo @ b78faaa):
+Current green counts (end of round 9):
 
 | Suite | Checks |
 |---|---|
 | `smoke.js` | 144 |
-| `tests/r5_batch1..9.js` (sum) | 551 |
+| `tests/r5_batch1..9.js` (sum) | 554 |
 | `tests/r64.js` | 91 |
+| `tests/r8_touch.js` | 149 |
+| `tests/r8_rev.js` | 166 |
+| `tests/r9_adv.js` | 169 |
+| `tests/r9_docs.js` | 255 |
+| **Total** | **1,528** |
+
+`tests/r9_docs.js` is the only file in the battery that drives pages OUTSIDE
+`/admin`: the two client-facing pages `/docs` and `/feedback`. It loads them
+with `admin/mock-supabase.js` injected via `page.addInitScript` (which runs
+before the page's own script, so `window.fetch` is already stubbed) and sets
+`window.__NEX_FN_BASE` to the mock's function host. Both pages read that
+variable and otherwise have no idea they are being tested — do not add
+test-only branches to them.
+
+Its `newPublicPage(..., {record:true})` wraps the mock's `window.fetch` a
+second time and records what the PAGE built — method, headers, whether the body
+was a `FormData`, and each part. That exists because the mock stub being happy
+with a request proves nothing about the deployed function: the first version of
+`docs.html` posted JSON, passed a lenient stub, and would have 400'd for every
+real client. `doc-upload`'s stub now mirrors the deployed v1 contract strictly
+(multipart only, `token` in the body, `item_id` not the item name, extension-
+authoritative typing plus a magic-byte check, a honeypot that answers a bare
+`{ok:true}`, and status-code semantics), so **keep the stub strict** — loosening
+it to make a test pass is how a page ships broken.
+
+**A stub can also be too LAX, and that is the harder bug to see.** The round-9
+verification pass found `nps-capture`'s stub resolving a submission by `case_id`
+first and only falling back to the token, with no check that the two agreed —
+so a forged POST carrying somebody else's case id and no token at all "worked"
+in the harness. The deployed function has always had
+`if (!kase || !kase.nps_token || kase.nps_token !== token) return 404` ahead of
+every write, so production was never open to it; the mock was simply wrong, and
+a mock that is more permissive than the thing it mirrors makes a page look safe
+on a property nothing is actually testing. The stub now carries the identical
+unconditional guard, the score is write-once (`effective = stored ?? request`),
+and `tests/r9_docs.js` § **R9-8b** asserts the whole forged-path matrix — every
+refusal checked for zero writes as well as for its status code. Two consequences
+for anyone writing tests here:
+
+- **A feedback link has to be MINTED on the case** (`cases.nps_token`) before it
+  will do anything. No fixture seeds one, so an invented token is a 404. The
+  R9-8 block mints its own after page load; copy that, do not relax the guard.
+- **A stored score outranks the one in the URL.** Clear `nps_score` on the case
+  first if the band under test is meant to come from the request.
 
 Every run should end 0 failures. Playwright's chromium browser is preinstalled
 in this environment — no `npx playwright install` needed.
@@ -89,6 +137,12 @@ test scripts to reach into the mock without going through the UI:
 - `window.__mock.lastEmailRun()` — what the last `process-emails` invocation
   actually sent, including the composed per-adviser sign-off text for every
   message.
+- `window.__mock.setDocUploadRateCap(n)` / `resetDocUploadRate()` /
+  `failDocStorageOnce()` — the deployed `doc-upload` returns 429 on a per-link
+  rate cap and 500 when storage fails. Both are real rules with no other way
+  in (the cap needs twenty-one uploads to reach; the failure needs storage to
+  fall over), so these shrink/arm them rather than the handler softening them —
+  what the tests exercise is the same code path a real client hits.
 - `window.__mock.expireSnooze(alertId)` — fast-forwards a watch_alerts row's
   `snoozed_until` into the past so snooze-expiry behaviour can be tested
   without waiting.
