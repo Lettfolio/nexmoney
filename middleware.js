@@ -1,7 +1,7 @@
 // Site-wide review gate (Stonebridge compliance review).
 // Runs at the edge before every request except /gate itself.
 // Remove this file (and gate.html) to reopen the site to the public.
-export const config = { matcher: '/((?!gate).*)' };
+export const config = { matcher: '/((?!gate($|[.?#])).*)' };
 
 const CRED_HASH = 'e1c332f3f691c4f7549c6c8899d49930f25811c4594bb860054b3964945a1a48'; // sha256("username:password", both lowercased username
 

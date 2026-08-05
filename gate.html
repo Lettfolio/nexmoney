@@ -75,13 +75,13 @@
   if (had) {
     // We were bounced back here with a cookie set — the details were wrong.
     document.getElementById('err').style.display = 'block';
-    document.cookie = 'nx_review=; path=/; max-age=0';
+    document.cookie = 'nx_review=; path=/; max-age=0; Secure';
   }
   document.getElementById('f').addEventListener('submit', function (e) {
     e.preventDefault();
     var u = document.getElementById('u').value.trim().toLowerCase();
     var p = document.getElementById('p').value.trim();
-    document.cookie = 'nx_review=' + encodeURIComponent(u + ':' + p) + '; path=/; max-age=2592000; SameSite=Lax';
+    document.cookie = 'nx_review=' + encodeURIComponent(u + ':' + p) + '; path=/; max-age=2592000; SameSite=Lax; Secure';
     location.replace('/');
   });
 })();

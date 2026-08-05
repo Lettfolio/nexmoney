@@ -1022,17 +1022,28 @@ html.js .reveal.in {
   transition: all var(--transition);
 }
 .testi-arrow:hover { background: var(--navy); color: #fff; border-color: var(--navy); transform: translateY(-2px); box-shadow: var(--shadow); }
-.testi-dots { display: flex; gap: 8px; }
+.testi-dots { display: flex; gap: 16px; }
 .testi-dot {
-  width: 9px; height: 9px;
-  border-radius: 50%;
+  /* 24x24 hit area (WCAG 2.5.8); the visible dot is the ::before so the
+     button's measured client box is >=24px while the dot stays 9px */
+  width: 24px; height: 24px;
   border: none;
-  background: var(--border);
+  background: transparent;
   cursor: pointer;
   padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   transition: all var(--transition);
 }
-.testi-dot.active { background: var(--orange); width: 26px; border-radius: 5px; }
+.testi-dot::before {
+  content: '';
+  width: 9px; height: 9px;
+  border-radius: 50%;
+  background: var(--border);
+  transition: all var(--transition);
+}
+.testi-dot.active::before { background: var(--orange); width: 26px; border-radius: 5px; }
 
 /* =========================================================
    WAVE DIVIDER — soft white→navy transition into the CTA
@@ -1079,6 +1090,7 @@ html.js .reveal.in {
   --ink:   #f2f6fc;                 /* headings */
   --body2: #c3cfe2;                 /* body text */
   --dim:   #8fa0b8;                 /* muted */
+  --muted: #8fa0b8;                 /* dark-theme override of light #666 (7.4:1 on --bg0, passes WCAG AA) */
   --blue:  #3da2ff;                 /* bright accent on dark */
   --shadow-dk: 0 18px 50px rgba(0,0,0,0.45);
 }
@@ -1283,8 +1295,8 @@ select option { background: var(--bg2); color: var(--ink); }
 /* ---- Testimonials carousel controls ---- */
 .testi-arrow { background: var(--glass2); border-color: var(--brd2); color: var(--ink); }
 .testi-arrow:hover { background: linear-gradient(135deg, var(--orange), #ff8a3d); border-color: transparent; }
-.testi-dot { background: var(--brd2); }
-.testi-dot.active { background: var(--orange); }
+.testi-dot::before { background: var(--brd2); }
+.testi-dot.active::before { background: var(--orange); }
 
 /* ---- Marquee ---- */
 .lenders-head { color: var(--dim); }
@@ -1471,12 +1483,9 @@ html.js .stat-item.reveal.in {
 /* Bento card index labels ('01'–'08'): 6.2:1 (was 2.6:1 at 11px) */
 .card-idx { color: rgba(255,255,255,0.55); }
 
-/* Testimonial dots: >=24px hit area (WCAG 2.5.8) — visual 9px dot is
-   unchanged; the transparent ::before extends the clickable region and
-   the wider gap keeps adjacent targets from overlapping */
-.testi-dots { gap: 16px; }
-.testi-dot { position: relative; }
-.testi-dot::before { content: ''; position: absolute; inset: -8px; }
+/* Testimonial dots >=24px hit area (WCAG 2.5.8) is defined in the base
+   .testi-dot rule above: the button is a 24x24 transparent box and the
+   visible 9px dot is painted by ::before, so the measured client box passes. */
 
 /* Lender marquee pause/play toggle (injected by enhance.js) */
 .has-marquee-pause { position: relative; }

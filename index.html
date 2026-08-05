@@ -460,7 +460,7 @@
             <label for="loanAmt">Mortgage amount</label>
             <div class="calc-input-wrap">
               <span class="calc-prefix">£</span>
-              <input type="number" id="loanAmt" class="calc-input" value="200000" min="0" oninput="calcRepay()">
+              <input type="number" id="loanAmt" class="calc-input" value="200000" min="0" max="1000000000" oninput="calcRepay()">
             </div>
           </div>
           <div class="calc-group">
@@ -955,20 +955,26 @@
 
   // Repayment calculator
   function calcRepay() {
-    const P = Math.max(0, parseFloat(document.getElementById('loanAmt').value) || 0);
-    const r = Math.max(0, parseFloat(document.getElementById('interestRate').value) || 0) / 100 / 12;
-    const n = Math.max(1, parseFloat(document.getElementById('termYears').value) || 25) * 12;
+    const P = Math.max(0, Math.min(1e9, parseFloat(document.getElementById('loanAmt').value) || 0));
+    const r = Math.max(0, Math.min(100, parseFloat(document.getElementById('interestRate').value) || 0)) / 100 / 12;
+    const n = Math.max(1, Math.min(50, parseFloat(document.getElementById('termYears').value) || 25)) * 12;
     const out = document.getElementById('repayResult');
     let mo;
     if (r === 0) {
       mo = P / n;
-      out.textContent = '£' + Math.round(mo).toLocaleString() + '/mo';
-      document.getElementById('repayTotal').textContent = 'Total repaid: £' + Math.round(mo * n).toLocaleString();
     } else {
       mo = P * r * Math.pow(1+r, n) / (Math.pow(1+r, n) - 1);
-      out.textContent = '£' + Math.round(mo).toLocaleString() + '/mo';
-      document.getElementById('repayTotal').textContent = 'Total repaid over term: £' + Math.round(mo * n).toLocaleString();
     }
+    if (!isFinite(mo) || mo < 0) {
+      out.textContent = '—';
+      document.getElementById('repayTotal').textContent = 'Enter realistic figures to see repayments';
+      setBar('repayBar', 0);
+      pop(out);
+      return;
+    }
+    out.textContent = '£' + Math.round(mo).toLocaleString() + '/mo';
+    document.getElementById('repayTotal').textContent =
+      (r === 0 ? 'Total repaid: £' : 'Total repaid over term: £') + Math.round(mo * n).toLocaleString();
     setBar('repayBar', (mo / 2500) * 100);   // bar fills toward a ~£2,500/mo scale
     pop(out);
   }

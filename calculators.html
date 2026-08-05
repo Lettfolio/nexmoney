@@ -183,13 +183,13 @@
         <div class="form-group">
           <label for="r_loan">Mortgage amount</label>
           <div class="calc-input-wrap"><span class="calc-prefix">£</span>
-            <input type="number" id="r_loan" class="calc-input" value="200000" min="0" oninput="calcR()">
+            <input type="number" id="r_loan" class="calc-input" value="200000" min="0" max="1000000000" oninput="calcR()">
           </div>
         </div>
         <div class="form-group">
           <label for="r_rate">Interest rate (%)</label>
           <div class="calc-input-wrap"><span class="calc-prefix">%</span>
-            <input type="number" id="r_rate" class="calc-input" value="4.5" step="0.1" min="0" oninput="calcR()" style="padding-left:32px;">
+            <input type="number" id="r_rate" class="calc-input" value="4.5" step="0.1" min="0" max="100" oninput="calcR()" style="padding-left:32px;">
           </div>
         </div>
         <div class="form-group">
@@ -374,8 +374,8 @@ function calcB() {
 }
 
 function calcR() {
-  const P = Math.max(0, +document.getElementById('r_loan').value || 0);
-  const r = Math.max(0, +document.getElementById('r_rate').value || 0) / 100 / 12;
+  const P = Math.max(0, Math.min(1e9, +document.getElementById('r_loan').value || 0));
+  const r = Math.max(0, Math.min(100, +document.getElementById('r_rate').value || 0)) / 100 / 12;
   const rTermRaw = document.getElementById('r_term').value;
   const n = Math.max(1, Math.min(50, rTermRaw === '' ? 25 : (+rTermRaw || 0))) * 12;
   if (r === 0) {
@@ -386,6 +386,11 @@ function calcR() {
   }
   const mo = P * r * Math.pow(1+r, n) / (Math.pow(1+r, n) - 1);
   const total = mo * n;
+  if (!isFinite(mo) || mo < 0 || !isFinite(total)) {
+    document.getElementById('r_result').textContent = '—';
+    document.getElementById('r_total').textContent = 'Enter realistic figures to see repayments';
+    return;
+  }
   document.getElementById('r_result').textContent = fmt(mo) + '/mo';
   document.getElementById('r_total').textContent = 'Total repaid: ' + fmt(total) + ' (includes ' + fmt(total - P) + ' interest)';
 }
