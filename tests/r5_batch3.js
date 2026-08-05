@@ -199,6 +199,35 @@ const openDrawer = async (page, panelId) => {
       await page.waitForTimeout(400);
       const nagGone = await page.evaluate(() => document.querySelector("#briefing-list").innerHTML.indexOf("briefQueueEmail('ca018'") < 0);
       ok("R5-6 · My Day no longer offers a bare Send reminder on the source case", nagGone);
+
+      /* RES-1 — the dedupe was a non-atomic check-then-insert guarded only by a per-DOM-button
+         btn.disabled, so the same case fired from two surfaces (or the ev-null bulk/programmatic
+         path) raced through and produced TWO successors + two client reminders. The in-flight lock
+         keyed by source caseId must let ONLY ONE of two concurrent silent starts through. */
+      const conc = await page.evaluate(async () => {
+        const db = window.__mockDb;
+        const { data: cases } = await db.from("cases").select("*");
+        const sources = new Set(cases.filter((c) => c.retention_source_case_id).map((c) => c.retention_source_case_id));
+        const cand = cases.find((c) => c.stage === "completed" && c.rate_end_date && !sources.has(c.id) && c.id !== "ca018");
+        if (!cand) return { err: "no eligible completed case for the concurrency probe" };
+        const [a, b] = await Promise.all([
+          window.startRetentionCase(cand.id, null, { silent: true }),
+          window.startRetentionCase(cand.id, null, { silent: true }),
+        ]);
+        const { data: after } = await db.from("cases").select("id,retention_source_case_id");
+        const { data: q } = await db.from("email_queue").select("case_id,email_type");
+        const succIds = after.filter((c) => c.retention_source_case_id === cand.id).map((c) => c.id);
+        return {
+          candId: cand.id,
+          successors: succIds.length,
+          statuses: [a && a.status, b && b.status].sort(),
+          reminders: q.filter((e) => succIds.includes(e.case_id) && e.email_type === "rate_end_reminder").length,
+        };
+      });
+      ok("RES-1 · two concurrent silent starts create exactly ONE successor", conc.successors === 1, JSON.stringify(conc));
+      eq("RES-1 · one start is refused as busy, the other created", conc.statuses, ["busy", "created"]);
+      ok("RES-1 · only one client rate-end reminder is queued (no duplicate email)", conc.reminders <= 1, JSON.stringify(conc));
+
       ok("no console errors", !page.__err, JSON.stringify(page.__err));
       await page.close();
     }
