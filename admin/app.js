@@ -2108,8 +2108,16 @@ function referrerTaskTarget(cases) {
    anyway. Without it the courtesy's own toast fires first and is immediately overwritten by
    "Moved to Completed", so the one message explaining why no thank-you was created never survives
    long enough to be read. */
+/* RES-4 — same non-atomic read-then-insert as RES-1: two concurrent completions of one referred
+   case file raced the existing-task check and duplicated the thank-you task. Lock keyed by the
+   completing caseId, set synchronously before the first await, refuses the second concurrent run. */
+const REFERRAL_THANKYOU_INFLIGHT = new Set();
 async function maybeQueueReferralThankYou(caseId, cRow, opts = {}) {
   const say = (msg, res) => { if (opts.quiet) return { ...res, message: msg }; toast(msg); return res; };
+  if (caseId && REFERRAL_THANKYOU_INFLIGHT.has(caseId)) {
+    return say("A thank-you for this completion is already being filed — give it a moment.", { skipped: "inflight", caseId });
+  }
+  if (caseId) REFERRAL_THANKYOU_INFLIGHT.add(caseId);
   try {
     if (!caseId) return null;
     if ((await referrerSupported()) === false) return null;
@@ -2157,6 +2165,7 @@ async function maybeQueueReferralThankYou(caseId, cRow, opts = {}) {
     return say(`Thank-you task created on ${referrerName}'s case — “${title}”`,
       { created: true, caseId: target.caseId, title, referrerId, assignedTo: adviser });
   } catch (e) { return null; } // never let a courtesy break a completion
+  finally { if (caseId) REFERRAL_THANKYOU_INFLIGHT.delete(caseId); }
 }
 
 /* ==========================================================================
@@ -3911,11 +3920,23 @@ async function loadRetention() {
    sold-property warning, the property-less warning and every part-failure message are the machinery
    this flow exists for, and a bulk action that skipped them would be a different, worse flow
    wearing the same name. */
+/* RES-1 — btn.disabled only guards ONE rendered button, and the ev-null bulk/programmatic path
+   skips it entirely, so the same case started from two surfaces (or by the sweep) raced through the
+   check-then-insert and produced a duplicate successor case + duplicate client reminder. This
+   module-level lock is keyed by the SOURCE caseId and set synchronously before the first await, so a
+   second concurrent invocation for the same case — from any surface, including {silent:true} — is
+   refused instead of duplicating. (A DB unique constraint is the deeper fix, handled separately.) */
+const RETENTION_INFLIGHT = new Set();
 window.startRetentionCase = async function (caseId, ev, opts) {
   const o = opts || {};
   const done = (status, msg) => { if (!o.silent && msg) toast(msg); return { status, message: msg || "", caseId }; };
   const btn = (ev && (ev.currentTarget || ev.target)) || null;
   if (btn) { if (btn.disabled) return { status: "busy", message: "", caseId }; btn.disabled = true; }
+  if (RETENTION_INFLIGHT.has(caseId)) {
+    if (btn) btn.disabled = false; // bail without owning the lock — release the button we just grabbed
+    return done("busy", "A retention case for this client is already being started — give it a moment.");
+  }
+  RETENTION_INFLIGHT.add(caseId);
   try {
     const { data: c } = await db.from("cases").select("*").eq("id", caseId).single();
     if (!c) return done("error", "Case not found — it may have been deleted or you don't have access.");
@@ -4061,6 +4082,7 @@ window.startRetentionCase = async function (caseId, ev, opts) {
     else { loadRetention(); loadBriefing(); }
     return { status: warn.length ? "created_with_warnings" : "created", message: outMsg, caseId, warn };
   } finally {
+    RETENTION_INFLIGHT.delete(caseId);
     if (btn) btn.disabled = false;
   }
 };
@@ -4935,11 +4957,18 @@ window.snoozeAlert = async function (id, severity, caseId) {
     return toast("Error: " + error.message);
   }
   // Mirror the dismiss pattern above: a CRITICAL alert's reason also lands on the case timeline.
+  // RES-2 — a failed timeline-note write used to vanish into an empty catch under an unconditional
+  // "Snoozed" toast, so a lost compliance note reported full success. Collect the failure and
+  // disclose it on the toast, the same way startRetentionCase/acceptLead aggregate their warnings.
+  let noteWarn = "";
   if (severity === "crit" && caseId) {
     const who = (ME && (ME.full_name || ME.email)) || "staff";
-    try { await db.from("case_notes").insert({ case_id: caseId, body: `⏰ Watchtower alert snoozed by ${who} until ${fmtD(snoozedUntil)}: ${picked.reason}` }); } catch (e) {}
+    try {
+      const { error: noteErr } = await db.from("case_notes").insert({ case_id: caseId, body: `⏰ Watchtower alert snoozed by ${who} until ${fmtD(snoozedUntil)}: ${picked.reason}` });
+      if (noteErr) noteWarn = `the reason was NOT added to the case timeline (${noteErr.message}) — add it by hand so the record explains the snooze`;
+    } catch (e) { noteWarn = `the reason was NOT added to the case timeline (${(e && e.message) || e}) — add it by hand so the record explains the snooze`; }
   }
-  toast(`Snoozed until ${fmtD(snoozedUntil)}`);
+  toast(noteWarn ? `Snoozed until ${fmtD(snoozedUntil)}, but ${noteWarn}` : `Snoozed until ${fmtD(snoozedUntil)}`);
   loadWatchtower();
 };
 window.unsnoozeAlert = async function (id) {
@@ -8273,9 +8302,17 @@ async function queueEmail(caseId, clientId, type, c, ev) {
        signed off by the case's adviser (process-emails v8), falling back to the firm-wide name in
        Settings. Naming the signatory here is the cheap half of that fix: nobody sends an email in a
        colleague's name by accident, and an unassigned case shows the firm default before it goes. */
+    /* ADV-1 — on an UNASSIGNED case the old fallback jumped straight to settings.adviser_name (the
+       OWNER), so when a non-owner adviser (e.g. Wayne) sent to a client the sign-off named Daniel and
+       gave the owner's phone — the wrong contact. When the case is unassigned and the sender is staff
+       but NOT the owner, sign off as the SENDER (their own profile name); only fall back to the
+       firm/owner default when the sender genuinely has no profile name (or the owner is sending). */
+    const senderName = ((ME && ME.full_name) || "").trim();
     const signedBy = (c && c.assigned_to && staffName(c.assigned_to) !== "—")
       ? staffName(c.assigned_to)
-      : (settings.adviser_name || "your firm");
+      : (!isOwner() && senderName)
+        ? senderName
+        : (settings.adviser_name || "your firm");
     // R5-13 — the rate-end reminder now leaves a real next action behind, so the case can't go quiet
     // after the email. Say so BEFORE the send, so the task isn't a surprise in someone's list.
     const chaseDue = localDateStr(Date.now() + 7 * 86400000);
