@@ -2195,6 +2195,62 @@ th .money-basis {
 .wt-meta .case-tag { font-weight: 500; }
 .nowrap-date { white-space: nowrap; }
 
+/* ---- R11-2 · Watchtower: filter chips, groups, and a ceiling -------------
+   The panel rendered every open alert at full height — 23 rows in the harness,
+   unbounded in production — which measured ~1,250px on a 1440 desktop and made
+   up most of a 7,800px phone page. Everything below is presentation: the rows,
+   their buttons and the order they arrive in are unchanged.
+
+   (c) THE CEILING. 60vh with the panel's own scroller, so the Watchtower can
+   grow to any length without ever again pushing the rest of Today off screen.
+   .dash-scroll already supplies overflow-y:auto; this only bounds the height,
+   which is why it is a modifier class and not a new scroll pattern. */
+.wt-scroll { max-height: 60vh; }
+.wt-filters { margin-bottom: 10px; }
+.wt-sev-chip { padding: 5px 12px; font-size: 12.5px; }
+
+/* (b) THE GROUPS. A header row per check type, carrying its own count, with the
+   rows folded underneath it. Deliberately NOT position:sticky — a sticky header
+   inside a 60vh scroller sits permanently on top of the first row of its own
+   group, and half a client's name reads as a rendering fault, which is a worse
+   trade than scrolling back up to see which group you are in. */
+.wt-group + .wt-group { margin-top: 6px; }
+.wt-group-head {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 7px 8px 7px 10px; margin: 0 0 2px;
+  border: none; border-radius: 8px;
+  background: var(--light);
+  font: inherit; font-size: 12.5px; font-weight: 700; color: var(--navy);
+  text-align: left; cursor: pointer;
+}
+.wt-group-head:hover { background: #e3e9f1; }
+/* The caret is the only thing that changes when a group folds, so it has to be
+   unmistakable — same ▾ / ▸ pair the Today drawers already use. */
+.wt-group-caret::before { content: "\25BE"; font-size: 9px; color: var(--muted); }
+.wt-group.wt-folded .wt-group-caret::before { content: "\25B8"; }
+.wt-group-label { flex: 0 1 auto; min-width: 0; }
+/* "ERC outlasts the rate — 8" is one phrase, so the count sits against the label
+   rather than being flushed to the far right where it reads as a second column.
+   The dash lives in CSS so the markup carries only the number. */
+.wt-group-n::before { content: "\2014\00a0"; font-weight: 400; color: var(--muted); }
+.wt-group-n { flex: 0 0 auto; margin-right: auto; font-variant-numeric: tabular-nums; }
+.wt-group.wt-folded .wt-group-rows { display: none; }
+/* A group is tinted by its own severity, in the same three colours the rows use,
+   so the block's temperature is legible while it is folded. */
+.wt-group-crit .wt-group-head { background: var(--red-bg); color: #922b21; }
+.wt-group-crit .wt-group-head:hover { background: #f7ddd8; }
+.wt-group-warn .wt-group-head { background: var(--amber-bg); color: #7a5a00; }
+.wt-group-warn .wt-group-head:hover { background: #f6e7c4; }
+/* At 390px .pipe-segment turns into a horizontal scroller (see the 760px block
+   below), which is right for the pipeline's eight segments but wrong for four
+   chips that miss fitting by 45px — a filter you have to scroll sideways to
+   discover is a filter nobody presses. Tightened just enough that all four are
+   on screen at 390; the scroller stays as the fallback if they ever aren't. */
+@media (max-width: 760px) {
+  .wt-sev-chip { padding: 5px 8px; gap: 5px; }
+  .wt-sev-chip .seg-count { padding: 3px 5px; min-width: 16px; }
+}
+
 /* ---- 390px hardening ---------------------------------------------------- */
 @media (max-width: 760px) {
   .board-legend { gap: 4px 14px; margin: -4px 0 10px; }
@@ -2605,3 +2661,82 @@ tr.owed-hot > td { background: var(--red-bg); }
 #report-conveyancer-panel .adv-basis { font-size: 11.5px; color: var(--muted); margin: 8px 0 0; line-height: 1.45; }
 #report-conveyancer-panel .adv-empty { font-size: 12.5px; color: var(--muted); background: var(--light);
   border: 1px dashed var(--border-strong); border-radius: var(--radius-sm); padding: 10px 12px; line-height: 1.5; }
+
+/* ==========================================================================
+   R11 · Round-11 UI additions
+   ========================================================================== */
+
+/* ---- R11-4 · Reports jump nav ----
+   A sticky strip of chips under the page header, one per panel the signed-in role can
+   actually see. Three things it has to get right:
+   · it must COVER the content sliding under it, so it takes main's own horizontal padding
+     back as negative margin and paints the canvas colour across the full content width —
+     .pipe-segment is inline-flex and would otherwise leave the page showing through beside it;
+   · sixteen chips must not become two stacked rows of sticky furniture on a laptop, so this
+     one segmented control scrolls horizontally instead of wrapping (the mobile rule at 760px
+     already does exactly this to every .pipe-segment);
+   · the sticky offset is not a constant. On a phone .app-shell stacks and the sidebar becomes
+     a sticky top strip of its own, so `top` is set from that strip's measured height in
+     buildReportsJumpNav() rather than guessed here. */
+.rep-nav {
+  position: sticky; top: 0; z-index: 12;
+  margin: 0 -32px 4px; padding: 10px 32px 2px;
+  background: var(--canvas);
+  border-bottom: 1px solid var(--border);
+}
+.rep-nav[hidden] { display: none; }
+/* Scroll affordance. Fifteen chips do not fit a 1,440px content column, and a chip clipped flat by
+   the container edge reads as a rendering fault rather than as "there is more this way" — the same
+   problem, and the same answer, as the mobile sidebar's nav strip. The class is only applied when
+   the strip really does overflow, so a seven-chip adviser bar gets no phantom fade. */
+.rep-nav.is-scrollable { position: sticky; }
+.rep-nav.is-scrollable::after {
+  content: "";
+  position: absolute; top: 0; right: 0; bottom: 0; width: 44px;
+  pointer-events: none;
+  background: linear-gradient(90deg, rgba(246,248,251,0), var(--canvas) 72%);
+}
+.rep-nav-chips {
+  /* position:relative is load-bearing, not decoration: setRepJumpActive() keeps the lit chip
+     inside this scroller using chip.offsetLeft, and offsetLeft is measured from the offsetParent.
+     Without it the chips measure from the page and the strip scrolls to the wrong place — which
+     showed up as the first chip clipped by its own left edge. */
+  position: relative;
+  display: flex; flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch;
+  width: 100%; margin-bottom: 8px; scrollbar-width: thin;
+}
+.rep-nav-chips .seg-btn { flex: 0 0 auto; }
+/* The chip for the section currently under the bar. Same "active" language as every other
+   segmented control on the site — this is navigation, not a filter, so nothing else changes. */
+.rep-nav-chips .seg-btn.active { background: var(--white); color: var(--navy); font-weight: 600; }
+/* Land the heading BELOW the bar, not behind it. --rep-jump-scroll is measured (bar height +
+   whatever the sidebar is taking on a phone) and written by buildReportsJumpNav(). */
+#page-reports .panel,
+#page-reports #report-kpis,
+#page-reports .report-live-note { scroll-margin-top: var(--rep-jump-scroll, 96px); }
+@media (max-width: 760px) {
+  .rep-nav { margin: 0 -12px 4px; padding: 8px 12px 2px; }
+}
+
+/* ---- R11-5 · Email / SMS status chips ---- */
+.em-filters { margin-bottom: 10px; }
+.em-summary { margin: -2px 0 12px; font-weight: 500; }
+.em-summary:empty { display: none; }
+
+/* ---- R11-6 · Clients sort ----
+   Sits between the segment definition line and the bulk bar: pick the slice, read what the
+   slice means, then choose the order to work it in. */
+.client-sort {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin: 0 0 10px; font-size: 13px; color: var(--muted);
+}
+.client-sort label { margin: 0; font-weight: 500; }
+.client-sort select { width: auto; min-width: 168px; margin: 0; }
+.client-sort-note { font-size: 12px; color: var(--muted); }
+.client-sort-note:empty { display: none; }
+/* The per-row detail the active segment/sort puts on a client. Same weight as the rest of the
+   .s line — it is context, not a second title. */
+.client-rateend { font-variant-numeric: tabular-nums; }
+@media (max-width: 760px) {
+  .client-sort select { flex: 1 1 auto; min-height: 40px; }
+}

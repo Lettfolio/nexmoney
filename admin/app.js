@@ -4642,6 +4642,75 @@ const WATCH_BADGE = {
    instead of silently describing a subset. The count is a HEAD request with
    count:"exact", so it costs no rows. */
 const WATCH_FETCH_CAP = 400;
+
+/* =========================================================================
+   R11-2 — TAMING THE PANEL. WHY.
+   The Watchtower rendered every open alert at full height, in one flat list:
+   23 rows in the fixtures, unbounded in production. On a 1440 desktop that was
+   ~1,250px of alerts before anything else on Today could be reached, and on a
+   390px phone the dashboard measured 7,800px, nearly all of it this panel. The
+   list is also the thing that grows fastest as the book grows, so "it's fine
+   today" was never an argument.
+   Three presentation changes, and NOTHING ELSE — the fetch, the sort, the row
+   markup, the snooze/dismiss handlers and the auto-open rule are all untouched:
+     a. severity chips (All / Critical / Warning / FYI) with live counts, so
+        "show me only what is on fire" is one click rather than a scroll;
+     b. consecutive alerts of the same CHECK are drawn as one named group with
+        a count, folded by default once a group is big enough to be a wall;
+     c. the list is capped at 60vh and scrolls inside itself, so the panel can
+        never again push the rest of the dashboard off the screen.
+   ========================================================================= */
+let wtSevFilter = "all";                       // "all" | "crit" | "warn" | "info"
+const wtGroupOpen = Object.create(null);       // group key -> bool, ONLY for groups the user clicked
+/* The rows the last fetch returned, so a chip click re-renders what is already in hand instead of
+   going back to the database. Filtering is a presentation question; it should not cost a query. */
+let wtLast = null;
+const WT_SEV_CHIPS = [["all", "All"], ["crit", "Critical"], ["warn", "Warning"], ["info", "FYI"]];
+/* Anything that is not crit/warn is drawn with the FYI badge (see WATCH_BADGE's fallback), so the
+   chips have to bucket it the same way or a row would be countable under no chip at all. */
+const wtSevKey = (a) => (a && (a.severity === "crit" || a.severity === "warn") ? a.severity : "info");
+/* A group folds by default at this many rows. Four is where a block stops being a list you read
+   and starts being a wall you scroll past. */
+const WT_GROUP_FOLD_AT = 4;
+/* R11-2b — THE GROUP'S NAME COMES OUT OF THE DATA.
+   `watch_alerts.rule` is a machine token (erc_conflict, no_contact, …) and the rules themselves
+   are written in SQL, in the database — so any pretty-name lookup table kept in this file would
+   be wrong the day someone adds a rule, and silently: a new check would render under a header
+   nobody wrote. Every title run_watchtower writes has the shape "<who> — <what is wrong>", so
+   the half after the dash IS the group's subject, straight from the rows on screen. It is used
+   only when every row in the group agrees on it; otherwise the rule token is prettified, which
+   is ugly but never a lie. */
+function wtGroupLabel(items, rule) {
+  const tally = new Map();
+  (items || []).forEach((a) => {
+    const t = String((a && a.title) || "");
+    const i = t.indexOf(" — ");
+    const suffix = i > 0 ? t.slice(i + 3).trim() : "";
+    if (suffix) tally.set(suffix, (tally.get(suffix) || 0) + 1);
+  });
+  let best = "", n = 0;
+  tally.forEach((v, k) => { if (v > n) { n = v; best = k; } });
+  const label = n === (items || []).length && best ? best : String(rule || "other").replace(/_/g, " ");
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
+/* Chip click — re-render only. No fetch, no drawer state change. */
+window.wtSetSevFilter = function (sev) {
+  wtSevFilter = sev;
+  renderWatchtower();
+};
+/* Group header click — flips this group and remembers the choice for the rest of the session, so
+   a snooze or a dismiss (both of which re-render the whole panel) does not re-fold what the user
+   just opened. Toggled on the DOM directly: re-rendering the list to hide a div would throw away
+   the scroll position of the panel the user is working down. */
+window.wtToggleGroup = function (key, el) {
+  const g = el && el.closest ? el.closest(".wt-group") : null;
+  if (!g) return;
+  const open = g.classList.toggle("wt-folded") ? false : true;
+  wtGroupOpen[key] = open;
+  const head = g.querySelector(".wt-group-head");
+  if (head) head.setAttribute("aria-expanded", String(open));
+};
+
 async function loadWatchtower() {
   const [res, tally] = await Promise.all([
     db.from("watch_alerts")
@@ -4678,7 +4747,58 @@ async function loadWatchtower() {
      Address alone is not enough for this pair — both cases are Skipton on 4 Seafield Gardens — so
      the case type is what finally separates them. */
   const wtCtx = await loadPropContext(alerts.map((a) => a.case_id));
-  $("#watchtower-list").innerHTML = alerts.length ? alerts.map((a) => {
+  /* R11-2 — everything above this line is the fetch, and it is unchanged. Everything below is
+     drawing, so it is now a separate function the severity chips can call on their own. */
+  wtLast = { alerts, snoozed, ctx: wtCtx, fetched: (data || []).length, openTotal, truncated };
+  renderWatchtower();
+}
+
+function renderWatchtower() {
+  if (!wtLast || !$("#watchtower-list")) return;
+  const { alerts, snoozed, ctx: wtCtx, fetched, openTotal, truncated } = wtLast;
+
+  /* R11-2a — the chips. Counts are of the WHOLE working list (snoozed rows excluded, exactly as
+     the list itself excludes them), not of the current filter, so the row of numbers always
+     answers "how much of each is there" rather than "how much of what I already chose". */
+  const sevCounts = { all: alerts.length, crit: 0, warn: 0, info: 0 };
+  alerts.forEach((a) => { sevCounts[wtSevKey(a)]++; });
+  const chips = $("#wt-filters");
+  if (chips) {
+    chips.innerHTML = WT_SEV_CHIPS.map(([k, label]) =>
+      `<button type="button" class="seg-btn wt-sev-chip${wtSevFilter === k ? " active" : ""}" id="wt-sev-${k}" data-sev="${k}" aria-pressed="${wtSevFilter === k}" onclick="wtSetSevFilter('${k}')" title="${k === "all" ? "Show every open alert" : `Show only ${label.toLowerCase()} alerts`} — this only filters what is on screen, nothing is dismissed or hidden permanently">${label} <span class="seg-count">${sevCounts[k]}</span></button>`
+    ).join("");
+  }
+  const shown = wtSevFilter === "all" ? alerts : alerts.filter((a) => wtSevKey(a) === wtSevFilter);
+
+  /* R11-2b — ONE GROUP PER CHECK, and the groups keep the order the flat list already had.
+     Grouping only RUNS of adjacent same-rule rows was the first thing tried and it is wrong: the
+     list is sorted by severity and then by age, so the nine ERC conflicts arrive as 6 + 3 with two
+     "rate has already ended" rows in between, and the panel drew "ERC outlasts the rate — 6" above
+     a second "ERC outlasts the rate — 3" further down. Two headers for one problem is worse than
+     no header at all. So every row of a rule joins that rule's group, and a group sits where its
+     FIRST row sat — which, because the flat list leads with the most severe and then the newest,
+     keeps CRITICAL blocks above WARNING blocks without re-sorting anything by hand. */
+  const groups = [];
+  const groupByRule = new Map();
+  shown.forEach((a) => {
+    const rule = a.rule || "other";
+    let g = groupByRule.get(rule);
+    if (!g) { g = { rule, sev: wtSevKey(a), items: [] }; groupByRule.set(rule, g); groups.push(g); }
+    g.items.push(a);
+  });
+  groups.forEach((g, i) => {
+    g.key = g.rule + "|" + g.sev;
+    g.label = wtGroupLabel(g.items, g.rule);
+    /* Folded by default once the block is big — EXCEPT the first group. A panel that opens
+       showing nothing but a column of headers has replaced one problem (too much) with another
+       (nothing to work), and because the list is severity-ordered the first group is always the
+       most urgent one, which is the block you opened the Watchtower to deal with. Once the user
+       has clicked a header, their choice wins for the rest of the session. */
+    const foldedByDefault = i > 0 && g.items.length >= WT_GROUP_FOLD_AT;
+    g.open = wtGroupOpen[g.key] === undefined ? !foldedByDefault : !!wtGroupOpen[g.key];
+  });
+
+  const rowHtml = (a) => {
     const openClick = a.case_id ? `onclick="openCase('${a.case_id}')"` : a.client_id ? `onclick="openClient('${a.client_id}')"` : "";
     const openBtn = a.case_id ? `<button class="btn btn-sm" onclick="openCase('${a.case_id}')">Open</button>`
       : a.client_id ? `<button class="btn btn-sm" onclick="openClient('${a.client_id}')">Open</button>` : "";
@@ -4718,11 +4838,31 @@ async function loadWatchtower() {
       <button class="btn btn-sm" onclick="snoozeAlert('${a.id}','${a.severity}','${a.case_id || ""}')">Snooze…</button>
       <button class="btn btn-sm" onclick="resolveAlert('${a.id}','${a.severity}','${a.case_id || ""}')">Dismiss</button>
     </div>`;
-  }).join("") : '<div class="empty">No problems detected 🎉</div>';
+  };
+
+  /* R11-2b — the group header. A button, not a styled div, so it is reachable by keyboard and
+     announces its own open/closed state; the rows it owns stay in the list exactly as they were,
+     with their existing Open / Snooze… / Dismiss buttons untouched. */
+  const groupHtml = (g) => `<div class="wt-group wt-group-${g.sev}${g.open ? "" : " wt-folded"}" data-wt-key="${esc(g.key)}">
+      <button type="button" class="wt-group-head" aria-expanded="${g.open}" onclick="wtToggleGroup('${jsArg(g.key)}', this)" title="${g.open ? "Hide" : "Show"} the ${g.items.length} alert${g.items.length === 1 ? "" : "s"} of this type">
+        <span class="wt-group-caret" aria-hidden="true"></span>
+        <span class="wt-group-label">${esc(g.label)}</span>
+        <span class="wt-group-n">${g.items.length}</span>
+      </button>
+      <div class="wt-group-rows">${g.items.map(rowHtml).join("")}</div>
+    </div>`;
+
+  $("#watchtower-list").innerHTML = groups.length
+    ? groups.map(groupHtml).join("")
+    /* Two different kinds of empty, and they must not read the same: nothing wrong at all, versus
+       plenty wrong but none of it matching the chip you pressed. */
+    : (alerts.length
+      ? `<div class="empty" id="watchtower-filter-empty">No ${esc((WT_SEV_CHIPS.find(([k]) => k === wtSevFilter) || [, wtSevFilter])[1]).toLowerCase()} alerts right now — ${alerts.length} other open alert${alerts.length === 1 ? " is" : "s are"} hidden by this filter. <button type="button" class="btn btn-sm" onclick="wtSetSevFilter('all')">Show all</button></div>`
+      : '<div class="empty">No problems detected 🎉</div>');
   /* R7 — if the ceiling ever bites, the panel says which subset it is showing rather than
      under-reporting in silence. Appended to the list, so it cannot be mistaken for an alert. */
   if (truncated) {
-    $("#watchtower-list").innerHTML += `<div class="empty" id="watchtower-truncated">⚠ Showing the newest ${(data || []).length.toLocaleString("en-GB")} of ${openTotal != null ? openTotal.toLocaleString("en-GB") : "more"} open alerts — the count above describes this subset, not the whole list. Work the critical ones down, or dismiss what no longer applies.</div>`;
+    $("#watchtower-list").innerHTML += `<div class="empty" id="watchtower-truncated">⚠ Showing the newest ${(fetched || 0).toLocaleString("en-GB")} of ${openTotal != null ? openTotal.toLocaleString("en-GB") : "more"} open alerts — the count above describes this subset, not the whole list. Work the critical ones down, or dismiss what no longer applies.</div>`;
   }
   panelCount("#watchtower-list", alerts.length, alerts.some((a) => a.severity === "crit"));
   autoDrawer("watchtower", alerts.some((a) => a.severity === "crit")); // auto-open on anything critical, else stay collapsed
@@ -4983,9 +5123,34 @@ $("#watchtower-run").addEventListener("click", async () => {
   const { data, error } = await db.rpc("run_watchtower");
   btn.disabled = false; btn.textContent = "Run checks";
   if (error) return toast("Error: " + error.message);
+  /* R11-3 — WHY THIS TOAST NO LONGER PROMISES "N new".
+     The backlog item was "Run checks always says 0 new". It does, and the reason is not a bug in
+     the reading: run_watchtower returns jsonb {"new":N,"open":N,"resolved":N} and `r.new` reads
+     the right key. The reason is that by the time anyone can press this button, the same checker
+     has ALREADY run — T1-11 made loadDashboard() call run_watchtower() before it reads the alerts
+     (so a list being actively worked actually shrinks), saveClient() calls it again after an edit,
+     and the nightly cron calls it too. The function is idempotent and upserts on dedupe_key, so
+     the second run inside a second finds nothing new by construction. A manual run reporting
+     "0 new" was therefore telling the truth about a number that could essentially never be
+     anything else, while the sentence's shape implied it might be.
+     So the copy now reports what a manual run actually establishes — that the checks have just
+     been re-run and here is where the book stands — and only mentions new/resolved when there
+     were some, which is when they mean something. No behaviour change; the RPC is the same call
+     with the same result. */
   const r = data || {};
-  toast(`Checks run — ${r.open ?? 0} open (${r.new ?? 0} new, ${r.resolved ?? 0} auto-resolved)`);
-  loadWatchtower();
+  const open = Number(r.open ?? 0), added = Number(r.new ?? 0), cleared = Number(r.resolved ?? 0);
+  const changes = [added ? `${added} new` : "", cleared ? `${cleared} auto-resolved` : ""].filter(Boolean).join(", ");
+  /* …and the count is the panel's own, not the RPC's. run_watchtower counts every unresolved row,
+     which INCLUDES the snoozed ones the list deliberately hides — so the old toast said "24 open"
+     over a panel headed 23, and the two numbers disagreeing on screen is exactly the sort of small
+     lie this fix is about. Re-reading the list first costs one query on a button press. */
+  await loadWatchtower();
+  const working = wtLast ? wtLast.alerts.length : open;
+  const asleep = wtLast ? wtLast.snoozed.length : 0;
+  const tail = `${working} open alert${working === 1 ? "" : "s"} on the list${asleep ? ` (plus ${asleep} snoozed)` : ""}.`;
+  toast(changes
+    ? `Checks re-run — ${changes}. ${tail}`
+    : `Checks re-run — nothing has changed since the last run. ${tail}`);
 });
 
 /* ---------- Pipeline ---------- */
@@ -8424,7 +8589,11 @@ let clientSegment = "all";
 let clientCache = null;
 async function loadClientData() {
   const [clientsRes, notesRes, emailsRes, apptRes, tasksRes] = await Promise.all([
-    db.from("clients").select("*, cases!client_id(id,stage,rate_end_date,protection_status,broker_fee,assigned_to,completed_at,updated_at,created_at)").order("last_name"),
+    /* R11-6 — widened by ONE existing base column, `lender`, so a row in a rate-end segment can
+       say which lender the rate is with. It is an original-schema column (Reports has selected it
+       since R7), so this cannot start 42703-ing on an older database, and it is a widening of the
+       read this page already does rather than a second query. */
+    db.from("clients").select("*, cases!client_id(id,stage,rate_end_date,lender,protection_status,broker_fee,assigned_to,completed_at,updated_at,created_at)").order("last_name"),
     db.from("case_notes").select("case_id,created_at"),
     db.from("email_queue").select("client_id,case_id,status,sent_at"),
     db.from("appointments").select("client_id,case_id,starts_at"),
@@ -8479,6 +8648,78 @@ function clientTextMatch(c, f, fPhone, phoneSearch) {
   if (((c.first_name || "") + " " + (c.last_name || "") + " " + (c.email || "")).toLowerCase().includes(f)) return true;
   return phoneSearch && c.phone && normPhone(c.phone).includes(fPhone);
 }
+/* ==========================================================================
+   R11-6 — SORTING THE CLIENT LIST, AND THE ROW DETAIL THAT MAKES A SORT READABLE.
+
+   Alphabetical answers "where is Mrs Okafor" and nothing else. The two orders
+   an adviser actually works the book in — who is coming up for a rate end, and
+   who has just arrived — were not available at all.
+
+   NO NEW QUERY. All three orders come out of what loadClientData() already
+   reads: `clients.created_at` (the select is `*`) and `rate_end_date` on the
+   embedded cases. `lender` is one extra column on that same embed, which is
+   what lets the row NAME the rate rather than just date it. If a third order
+   had needed a read this page does not do, the honest move would have been to
+   drop the option, not to add the read.
+
+   And the row says WHY it is where it is: an ordering whose key is invisible
+   looks arbitrary, so a rate-end sort (or a rate-end segment) puts the date and
+   the lender on the row it sorted by.
+   ========================================================================== */
+let clientSort = "name";
+/* The earliest rate end on any of this client's cases that has not already passed. Past rate ends
+   are deliberately not counted: "next" means next, and a mortgage that matured in 2019 is a
+   different conversation from one maturing in March. */
+function clientNextRateEnd(c, todayStr) {
+  let best = null;
+  (c.cases || []).forEach((x) => {
+    const d = x.rate_end_date ? String(x.rate_end_date).slice(0, 10) : null;
+    if (!d || d < todayStr) return;
+    if (!best || d < best.date) best = { date: d, lender: x.lender || null, n: 0 };
+  });
+  return best;
+}
+/* The rate end that put this client into the active "Rate ends YYYY" segment. That segment counts
+   any date in the year, past or future (clientInSegment), so this must too — otherwise a January
+   maturity would vanish from the row of a client the chip is showing precisely because of it. */
+function clientRateEndInYear(c, year) {
+  let best = null, n = 0;
+  (c.cases || []).forEach((x) => {
+    const d = x.rate_end_date ? String(x.rate_end_date).slice(0, 10) : null;
+    if (!d || d.slice(0, 4) !== String(year)) return;
+    n++;
+    if (!best || d < best.date) best = { date: d, lender: x.lender || null, n: 0 };
+  });
+  if (best) best.n = n;
+  return best;
+}
+/* The one rate-end date this row is ABOUT, given what is on screen. Inside a "Rate ends YYYY"
+   segment that is the date in that year (the reason the client is in the list at all); otherwise it
+   is the next one ahead. Sorting and the row detail both go through this, so the order can never be
+   driven by a date the row is not showing. */
+function clientRateKey(c, rateYear, todayStr) {
+  return rateYear ? clientRateEndInYear(c, rateYear) : clientNextRateEnd(c, todayStr);
+}
+function sortClientList(list, sort, todayStr, rateYear) {
+  if (sort === "recent") {
+    // clients.created_at — when the record was added here, not when they became a client of the
+    // firm. Said on the control, because those are not the same date for an imported book.
+    return list.slice().sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
+  }
+  if (sort === "rate_end") {
+    const key = new Map(list.map((c) => [c.id, clientRateKey(c, rateYear, todayStr)]));
+    return list.slice().sort((a, b) => {
+      const ka = key.get(a.id), kb = key.get(b.id);
+      if (ka && kb) return ka.date.localeCompare(kb.date);
+      if (ka) return -1;
+      if (kb) return 1;
+      // Array.prototype.sort is stable, so everybody with nothing to sort by keeps the
+      // alphabetical order the query returned them in rather than being shuffled.
+      return 0;
+    });
+  }
+  return list;   // "name" — exactly the order the .order("last_name") query came back in
+}
 window.gotoClientSegment = function (seg) {
   clientSegment = seg;
   const box = $("#client-search");
@@ -8503,8 +8744,13 @@ async function loadClients(filter = "", opts = {}) {
   const searched = clients.filter((c) => clientTextMatch(c, f, fPhone, phoneSearch));
   const segs = clientSegments();
   if (!segs.some(([k]) => k === clientSegment)) clientSegment = "all";   // year rolled over mid-session
-  const list = searched.filter((c) => clientInSegment(c, clientSegment, ctx));
+  /* R11-6 — segment first, then order. The chip counts above still describe the segment, and the
+     sort only ever re-orders what the segment already chose to show. */
+  const todayStr = localDateStr();
+  const rateYear = clientSegment.startsWith("rate_") ? clientSegment.slice(5) : null;
+  const list = sortClientList(searched.filter((c) => clientInSegment(c, clientSegment, ctx)), clientSort, todayStr, rateYear);
   renderClientSegments(searched, ctx, segs, cutoff);
+  renderClientSort(list, todayStr, rateYear);
   // Prune the selection to what this segment + search actually shows, so a bulk verb can never
   // act on a client scrolled out of the operator's view two filters ago.
   const visible = new Set(list.map((c) => c.id));
@@ -8516,10 +8762,18 @@ async function loadClients(filter = "", opts = {}) {
     : clientSegment !== "all" ? "No clients in this segment — nothing to do here."
     : "No clients yet — add your first one.";
   const showDob = clientSegment === "no_dob";
+  /* R11-6 — which extra fact the row carries. A rate-end segment names the rate it selected the
+     client for; sorting by rate end names the key it sorted on. The other segments add nothing —
+     a list of rate ends is not what "Missing DOB" is for. */
+  const showNextRate = !rateYear && clientSort === "rate_end";
   $("#client-list").innerHTML = `<div class="panel">` + (list.length ? list.map((c) => {
     const cases = c.cases || [];
     const active = cases.filter((x) => CLIENT_LIVE(x.stage)).length;
     const lc = last.get(c.id);
+    const re = (rateYear || showNextRate) ? clientRateKey(c, rateYear, todayStr) : null;
+    const rateBit = re
+      ? ` · <span class="client-rateend">rate ends ${esc(fmtD(re.date))} · ${re.lender ? esc(re.lender) : "lender not recorded"}${re.n > 1 ? ` (+${re.n - 1} more in ${esc(rateYear)})` : ""}</span>`
+      : (showNextRate ? ` · <span class="client-rateend">no rate end ahead</span>` : "");
     return `<div class="row-item client-row${clientSel.has(c.id) ? " is-sel" : ""}" data-client="${esc(c.id)}">
       <input type="checkbox" class="bulk-cb client-cb" data-id="${esc(c.id)}" aria-label="Select ${esc([c.first_name, c.last_name].filter(Boolean).join(" "))}"${clientSel.has(c.id) ? " checked" : ""}>
       <div class="row-main">
@@ -8529,7 +8783,7 @@ async function loadClients(filter = "", opts = {}) {
              one-click way to put it right. Everywhere else it stays off the row: a list of birthdays
              is not what the other six segments are for. */
           showDob ? ` · <span class="client-dob-missing">DOB: —</span> <a href="javascript:void(0)" class="client-dob-add" onclick="event.stopPropagation();openClient('${c.id}','dob')">add</a>` : ""}${
-          clientSegment === "cold" ? ` · <span class="client-lastcontact">${lc ? `last contact ${fmtD(String(lc.at).slice(0, 10))} (${esc(lc.what)})` : "no contact on record"}</span>` : ""}</div>
+          clientSegment === "cold" ? ` · <span class="client-lastcontact">${lc ? `last contact ${fmtD(String(lc.at).slice(0, 10))} (${esc(lc.what)})` : "no contact on record"}</span>` : ""}${rateBit}</div>
       </div>
       <span class="badge ${active ? "blue" : "grey"}">${cases.length} case${cases.length === 1 ? "" : "s"}${active ? ` (${active} active)` : ""}</span>
     </div>`;
@@ -8558,6 +8812,31 @@ function renderClientSegments(searched, ctx, segs, cutoff) {
     const text = clientSegment === "cold" ? clientColdDefinition(cutoff) : (row ? row[2] : "");
     def.innerHTML = text ? esc(text) : "";
     def.classList.toggle("hidden", !text);
+  }
+}
+/* R11-6 — the sort control, plus the one line that says what the chosen order is measuring.
+   Wired imperatively on every render (the same way the segment chips are) so the select can never
+   show one thing while the list is in another order. */
+function renderClientSort(list, todayStr, rateYear) {
+  const sel = $("#cl-sort");
+  if (!sel) return;
+  if (sel.value !== clientSort) sel.value = clientSort;
+  if (!sel.dataset.wired) {
+    sel.dataset.wired = "1";
+    sel.onchange = () => { clientSort = sel.value; loadClients($("#client-search").value); };
+  }
+  const note = $("#cl-sort-note");
+  if (!note) return;
+  if (clientSort === "rate_end") {
+    const none = (list || []).filter((c) => !clientRateKey(c, rateYear, todayStr)).length;
+    note.textContent = (rateYear
+      ? `Earliest ${rateYear} rate end first — the date shown on each row.`
+      : `Soonest rate end first, counting only dates from today onwards.`)
+      + (none ? ` ${none} of the ${list.length} shown ${none === 1 ? "has" : "have"} no ${rateYear ? `${rateYear} ` : ""}rate end${rateYear ? "" : " ahead of them"} and stay at the bottom, in name order.` : "");
+  } else if (clientSort === "recent") {
+    note.textContent = "Newest first, by the date the client record was created here — not necessarily the date they became a client of the firm.";
+  } else {
+    note.textContent = "";
   }
 }
 function renderClientBulkBar(list) {
@@ -9764,20 +10043,75 @@ function isMissingContactError(e) {
   if (!e.to_email) return true;
   return /no email|no recipient|missing client|no address/i.test(e.error || "");
 }
+/* ==========================================================================
+   R11-5 — EMAIL / SMS STATUS FILTERS.
+
+   The page was one "Failed only" checkbox over a hundred flat rows. Failed is
+   the state you go looking for when something has already gone wrong; queued
+   is the state you go looking for BEFORE it does — "what is going out at 8am,
+   and should it?" — and there was no way to ask it.
+
+   The checkbox is gone rather than kept alongside the chips: nothing in tests/
+   or smoke.js referenced it, and its one programmatic caller (dhGotoEmails,
+   which the Data-health tiles use to arrive pre-filtered) now sets the chip
+   state directly, so every behaviour it had is still reachable.
+
+   THE COUNTS DESCRIBE THE ROWS ON THE PAGE, and the page reads the newest 100.
+   That is the same bounded read it has always done; what is new is that the
+   summary line says so when the read comes back full, instead of letting a
+   count that is really "100 of who-knows" read as the whole queue.
+   ========================================================================== */
+const EMAIL_STATUSES = ["queued", "sent", "failed", "cancelled"];
+// The SMS queue has one state the email queue does not: a row handed to the sender and not yet
+// confirmed. It gets its own list rather than sharing one that would be wrong for both.
+const SMS_STATUSES = ["queued", "sending", "sent", "failed", "cancelled"];
+let emailStatusFilter = "all";
+let smsStatusFilter = "all";
+/* Chips for one queue. `rows` is what was actually read, so a status nobody has any rows in still
+   gets a chip reading 0 — a chip that appears and disappears is a chip you cannot aim for. */
+function renderQueueChips(sel, statuses, rows, current, onPick) {
+  const wrap = $(sel);
+  if (!wrap) return;
+  const idBase = sel === "#sms-filters" ? "sms-chip-" : "em-chip-";
+  const count = (k) => (k === "all" ? rows.length : rows.filter((r) => r.status === k).length);
+  const label = (k) => (k === "all" ? "All" : k.charAt(0).toUpperCase() + k.slice(1));
+  wrap.innerHTML = ["all", ...statuses].map((k) => {
+    const on = current === k;
+    return `<button type="button" class="seg-btn${on ? " active" : ""}" role="tab" aria-selected="${on}" id="${idBase}${esc(k)}" data-em-status="${esc(k)}">${esc(label(k))} <span class="seg-count">${count(k)}</span></button>`;
+  }).join("");
+  wrap.querySelectorAll("[data-em-status]").forEach((b) => (b.onclick = () => {
+    if (b.dataset.emStatus === current) return;
+    onPick(b.dataset.emStatus);
+  }));
+}
 async function loadEmails() {
   // R5-1 — an adviser has no business flushing the firm's queue; the button is Owner/Admin only
   // (the click handler refuses too — this just stops it looking available).
   const runBtn = $("#run-now-btn");
   if (runBtn) runBtn.classList.toggle("hidden", !isAdminOrOwner());
-  const failedOnly = $("#email-failed-only") && $("#email-failed-only").checked;
+  const failedOnly = emailStatusFilter === "failed";
   // R5-51 — the client's CURRENT email comes back with each row so a queued row addressed to an
   // address the client has since changed can be spotted before it sends to the old one.
+  const EMAIL_ROW_LIMIT = 100;
   const { data: emails, error } = await db.from("email_queue")
     .select("*, clients(first_name,last_name,email)")
-    .order("created_at", { ascending: false }).limit(100);
+    .order("created_at", { ascending: false }).limit(EMAIL_ROW_LIMIT);
   if (error) { renderLoadError("#email-list", error, loadEmails); return; }
   const badge = { queued: "amber", sent: "green", failed: "red", cancelled: "grey" };
-  const emailRows = failedOnly ? (emails || []).filter((e) => e.status === "failed") : (emails || []);
+  const allEmails = emails || [];
+  renderQueueChips("#em-filters", EMAIL_STATUSES, allEmails, emailStatusFilter, (k) => { emailStatusFilter = k; loadEmails(); });
+  /* R11-5 — the one line this page is opened to read. `queued` is precisely what the 8am cron
+     picks up, so the number is not an estimate; the caveat only appears when the bounded read
+     came back full, because only then can there be queued rows this page has not seen. */
+  const nQueued = allEmails.filter((e) => e.status === "queued").length;
+  const capped = allEmails.length >= EMAIL_ROW_LIMIT;
+  const emSummary = $("#em-summary");
+  if (emSummary) {
+    emSummary.innerHTML = nQueued
+      ? `The next 8am run will send <strong>${nQueued}</strong> queued email${nQueued === 1 ? "" : "s"}.${capped ? ` Only the newest ${EMAIL_ROW_LIMIT} rows are listed, so there may be older queued ones too.` : ""}`
+      : `Nothing is queued — the next 8am run has nothing to send${capped ? `, at least in the newest ${EMAIL_ROW_LIMIT} rows listed here` : ""}.`;
+  }
+  const emailRows = emailStatusFilter === "all" ? allEmails : allEmails.filter((e) => e.status === emailStatusFilter);
   // Retry-all-failed (defect 28) — only surfaces once the Failed-only filter narrows the list down
   // to what it would act on, so it never fires against emails that are queued/sent/cancelled.
   const retryAllEmailBtn = failedOnly && emailRows.length
@@ -9847,7 +10181,7 @@ async function loadEmails() {
       ${fixContact ? `<button class="btn btn-sm btn-ghost" onclick="openClient('${e.client_id}','email','${jsArg(e.to_email)}')" title="${noContact ? "This client has no email address on file — add one, then retry" : "This looks like a bad contact detail, not a one-off send failure"}">Fix contact</button>` : ""}
       ${failed ? `<button class="btn btn-sm" onclick="retryEmail('${e.id}')">Retry</button>` : ""}
     </div>`;
-  }).join("") : `<div class="empty">${failedOnly ? "No failed emails." : "No emails yet. They'll appear here once automation runs or you trigger one from a case."}</div>`) + `</div>`;
+  }).join("") : `<div class="empty">${emailStatusFilter !== "all" ? `No ${esc(emailStatusFilter)} emails in the newest ${EMAIL_ROW_LIMIT} rows.` : "No emails yet. They'll appear here once automation runs or you trigger one from a case."}</div>`) + `</div>`;
   // Wire the failed-email bulk-select controls (imperative, no reload on toggle).
   document.querySelectorAll("#email-list .email-cb").forEach((cb) => (cb.onchange = () => {
     if (cb.checked) emailSel.add(cb.dataset.id); else emailSel.delete(cb.dataset.id);
@@ -9864,12 +10198,24 @@ async function loadEmails() {
 
   const { data: sms, error: smsErr } = await db.from("sms_queue")
     .select("*, cases(*), clients(*)")
-    .order("created_at", { ascending: false }).limit(100);
+    .order("created_at", { ascending: false }).limit(EMAIL_ROW_LIMIT);
   if (smsErr) { renderLoadError("#sms-list", smsErr, loadEmails); return; }
   const smsBadge = { queued: "amber", sending: "blue", sent: "green", failed: "red", cancelled: "grey" };
-  const smsRows = failedOnly ? (sms || []).filter((s) => s.status === "failed") : (sms || []);
+  const allSms = sms || [];
+  renderQueueChips("#sms-filters", SMS_STATUSES, allSms, smsStatusFilter, (k) => { smsStatusFilter = k; loadEmails(); });
+  /* R11-5 — SMS has no cron of its own: the queue sits there until somebody presses "Send SMS
+     now", so the honest summary is who is waiting, not when it goes. */
+  const nSmsQueued = allSms.filter((s) => s.status === "queued" || s.status === "sending").length;
+  const smsSummary = $("#sms-summary");
+  if (smsSummary) {
+    smsSummary.innerHTML = nSmsQueued
+      ? `<strong>${nSmsQueued}</strong> SMS waiting — SMS is not on the 8am cron, so nothing goes until somebody presses “Send SMS now”.`
+      : `Nothing waiting to send.`;
+  }
+  const smsFailedOnly = smsStatusFilter === "failed";
+  const smsRows = smsStatusFilter === "all" ? allSms : allSms.filter((s) => s.status === smsStatusFilter);
   const smsCtx = await loadPropContext(smsRows.map((s) => s.case_id));   // R6 / F8 — same fix, same reason
-  const retryAllSmsBtn = failedOnly && smsRows.length
+  const retryAllSmsBtn = smsFailedOnly && smsRows.length
     ? `<div class="row-item" style="justify-content:flex-end;"><button class="btn btn-sm btn-primary" onclick="retryAllFailedSms()">Retry all failed (${smsRows.length})</button></div>` : "";
   $("#sms-list").innerHTML = retryAllSmsBtn + (smsRows.length ? smsRows.map((s) => {
     const failed = s.status === "failed";
@@ -9886,7 +10232,7 @@ async function loadEmails() {
       ${!settled && s.client_id && isBadContactError(s.error) ? `<button class="btn btn-sm btn-ghost" onclick="openClient('${s.client_id}','phone','${jsArg(s.to_phone)}')" title="This looks like a bad contact detail, not a one-off send failure">Fix contact</button>` : ""}
       ${failed ? `<button class="btn btn-sm" onclick="retrySms('${s.id}')">Retry</button>` : ""}
     </div>`;
-  }).join("") : `<div class="empty">${failedOnly ? "No failed SMS." : "No SMS yet. They'll appear here once SMS automation runs or you send one."}</div>`);
+  }).join("") : `<div class="empty">${smsStatusFilter !== "all" ? `No ${esc(smsStatusFilter)} SMS in the newest ${EMAIL_ROW_LIMIT} rows.` : "No SMS yet. They'll appear here once SMS automation runs or you send one."}</div>`);
 }
 /* T1-2 — a retry is only honest if it goes somewhere new. The queue row holds a SNAPSHOT of the
    address taken when the message was created, so re-queueing it unchanged re-sends to exactly the
@@ -10018,7 +10364,8 @@ window.retryAllFailedSms = async function () {
   toast(retryReport(ok, blocked));
   loadEmails();
 };
-$("#email-failed-only").addEventListener("change", loadEmails);
+/* R11-5 — the "Failed only" checkbox and its change listener are gone; the chips above the list
+   own this now (renderQueueChips → loadEmails). */
 async function runSms(silent) {
   const { data: { session } } = await db.auth.getSession();
   try {
@@ -11509,10 +11856,12 @@ window.acceptLead = async function (id, ev) {
    bin action — which would quietly flatter every median on the report. So they
    do not stamp, and the dialog says which is which before the click.
 
-   Where the reason itself goes: nowhere yet. `leads` has no reason column and
-   this round adds no migration, so what is stored is the fact and the time —
-   both real, both queryable. The dialog says so rather than implying a filing
-   cabinet that does not exist.
+   Where the reason itself goes: R11 — into `leads.discard_reason`. Production
+   has taken the column (nullable text) and the mock mirrors it, so the answer
+   to "why is the discard pile this big" is now a query rather than a memory.
+   Feature-detected like every other post-original column on this page: an
+   un-migrated database drops the reason and keeps the discard, and the toast
+   says which happened rather than letting a silent 42703 look like a save.
    ========================================================================== */
 const LEAD_DISCARD_OPTIONS = [
   ["spoke_not_proceeding", "Spoke to them — not going ahead", true],
@@ -11525,6 +11874,30 @@ const LEAD_DISCARD_OPTIONS = [
 ];
 const LEAD_DISCARD_LABEL = Object.fromEntries(LEAD_DISCARD_OPTIONS.map(([k, l]) => [k, l]));
 const LEAD_DISCARD_CONTACTED = Object.fromEntries(LEAD_DISCARD_OPTIONS.map(([k, , c]) => [k, c]));
+/* R11-7 — one nullable text column, two things worth keeping: the picked reason (a stable code, so
+   it can be grouped) and the optional note (words, which were previously thrown away the moment the
+   dialog closed). Stored as `code` or `code — note`, and read back by splitting on the first " — ".
+   The code is [a-z_]+ by construction, so the split is unambiguous whatever somebody types. */
+function leadDiscardReasonValue(why) {
+  const note = (why && why.note) || "";
+  return note ? `${why.reason} — ${note}` : (why && why.reason) || "";
+}
+function leadDiscardReasonParts(raw) {
+  const s = String(raw || "").trim();
+  if (!s) return null;
+  const m = s.match(/^([a-z_]+)(?: — ([\s\S]*))?$/);
+  // Written by something other than this dialog (a script, a fix-up) — show it verbatim rather
+  // than guessing at a label it was never given.
+  if (!m) return { label: s, note: "" };
+  return { label: LEAD_DISCARD_LABEL[m[1]] || m[1], note: (m[2] || "").trim() };
+}
+/* Same free feature-detect noteLeadSlaFromStarRow does: discardLead reads the row with select("*")
+   before it writes, which is proof either way and costs nothing. */
+let LEAD_DISCARD_REASON_SUPPORTED = null;
+function noteLeadDiscardReasonFromStarRow(row) {
+  if (!row || typeof row !== "object") return;
+  LEAD_DISCARD_REASON_SUPPORTED = Object.prototype.hasOwnProperty.call(row, "discard_reason");
+}
 function promptLeadDiscardReason(who) {
   const html = `
     <h3>Why are you discarding this enquiry?</h3>
@@ -11536,7 +11909,7 @@ function promptLeadDiscardReason(who) {
     <label style="margin-top:10px;">Note (optional)
       <textarea id="lead-discard-note" rows="3" placeholder="Anything worth knowing if they come back…"></textarea>
     </label>
-    <p class="panel-sub" style="margin-top:10px;">The database has no column for the reason itself yet, so what is stored is the discard and — where contact was made — the time of it. The words stay in this confirmation.</p>
+    <p class="panel-sub" style="margin-top:10px;">The reason — and anything you type below it — is saved on the enquiry, so the discard pile can be read back later rather than only counted.</p>
     <div class="ovl-err" id="lead-discard-err"></div>
     <div class="modal-actions">
       <div></div>
@@ -11562,7 +11935,7 @@ function promptLeadDiscardReason(who) {
 }
 window.discardLead = async function (id) {
   const { data: lead } = await db.from("leads").select("*").eq("id", id).single();
-  if (lead) noteLeadSlaFromStarRow(lead);
+  if (lead) { noteLeadSlaFromStarRow(lead); noteLeadDiscardReasonFromStarRow(lead); }
   const why = await promptLeadDiscardReason((lead && lead.name) || "This enquiry");
   if (!why) return;   // cancelled — the lead stays in the inbox untouched
   const slaOn = await leadSlaSupported();
@@ -11571,8 +11944,20 @@ window.discardLead = async function (id) {
   const patch = { status: "discarded" };
   if (wantStamp) patch.first_contact_at = stampAt;
   let stamped = wantStamp;
-  // Same write-retry as the accept path: an un-migrated database drops the stamp, never the discard.
+  /* R11-7 — THE REASON GOES IN THE SAME UPDATE that marks the lead discarded. One statement, so
+     there is no window in which the inbox has lost the row and nothing records why it went. */
+  let reasonSaved = LEAD_DISCARD_REASON_SUPPORTED !== false;
+  if (reasonSaved) patch.discard_reason = leadDiscardReasonValue(why);
+  /* Same write-retry as the accept path: an un-migrated database drops the OPTIONAL columns, never
+     the discard. Dropped one at a time, reason first, so a database missing only one of them still
+     keeps the other. */
   let res = await db.from("leads").update(patch).eq("id", id);
+  if (res.error && reasonSaved && isMissingColumnError(res.error)) {
+    LEAD_DISCARD_REASON_SUPPORTED = false;
+    reasonSaved = false;
+    delete patch.discard_reason;
+    res = await db.from("leads").update(patch).eq("id", id);
+  }
   if (res.error && wantStamp && isMissingColumnError(res.error)) {
     LEAD_SLA_SUPPORTED = false;
     stamped = false;
@@ -11580,11 +11965,13 @@ window.discardLead = async function (id) {
     res = await db.from("leads").update(patch).eq("id", id);
   }
   if (res.error) return toast("Error: " + res.error.message);
+  if (reasonSaved) LEAD_DISCARD_REASON_SUPPORTED = true;
   const respMins = leadResponseMins(lead && lead.created_at, stamped ? stampAt : (lead && lead.first_contact_at));
   toast(`Lead discarded — ${why.label}`
     + (respMins != null ? ` · responded in ${fmtWaitMins(respMins)}` : "")
     + (why.contacted && !stamped ? " · contact time NOT stored (this database has no first_contact_at column)" : "")
-    + (!why.contacted ? " · no contact recorded, so it counts as unanswered" : ""));
+    + (!why.contacted ? " · no contact recorded, so it counts as unanswered" : "")
+    + (reasonSaved ? "" : " · reason NOT stored (this database has no discard_reason column)"));
   await loadLeads();
   await loadBriefing();
 };
@@ -11611,13 +11998,29 @@ window.openLeadInToday = async function (leadId) {
      months, by which time its enquiry may have become a case or been binned — and a jump to an
      inbox that visibly does not contain it reads as a broken link rather than as old news. */
   try {
-    const { data: l } = await db.from("leads").select("id,name,status,converted_case_id").eq("id", leadId).maybeSingle();
+    /* R11-7 — select("*") rather than a named list: `discard_reason` is a post-original column, so
+       naming it would 42703 the whole read on a database that has not taken the migration and turn
+       an honest "that enquiry was discarded" into a silent fall-through. Same reason loadLeads
+       reads "*". */
+    const { data: l } = await db.from("leads").select("*").eq("id", leadId).maybeSingle();
+    if (l) { noteLeadSlaFromStarRow(l); noteLeadDiscardReasonFromStarRow(l); }
     if (l && l.status !== "new") {
       if (l.status === "converted" && l.converted_case_id) {
         toast(`${l.name || "That enquiry"} was accepted — opening the case it became.`);
         return openCase(l.converted_case_id);
       }
-      toast(`${(l && l.name) || "That enquiry"} is no longer in the inbox (${(l && l.status) || "gone"}).`);
+      /* R11-7 — this is the one place a discarded enquiry is still reachable in the UI (from its
+         acknowledgement row on the Emails page), so it is the one place the stored reason can
+         answer "why did this go?" instead of "it went". */
+      const who = (l && l.name) || "That enquiry";
+      const why = l.status === "discarded" ? leadDiscardReasonParts(l.discard_reason) : null;
+      if (l.status === "discarded") {
+        toast(why
+          ? `${who} was discarded — ${why.label}${why.note ? ` · “${why.note}”` : ""}`
+          : `${who} was discarded${LEAD_DISCARD_REASON_SUPPORTED === false ? " · no reason is stored (this database has no discard_reason column)" : " · no reason was recorded"}`);
+        return;
+      }
+      toast(`${who} is no longer in the inbox (${l.status || "gone"}).`);
       return;
     }
   } catch (_) { /* fall through and navigate — the inbox itself is the honest answer */ }
@@ -13470,6 +13873,166 @@ async function loadReports() {
   // Client LTV is the one remaining RPC-only panel (needs client_id/name joins this page doesn't
   // otherwise fetch) — hide it gracefully if the RPC failed; everything else above still renders.
   renderReportExtras(rep);
+  /* R11-4 — LAST, deliberately. Every panel above has just decided whether it exists for this
+     role and this data, and the jump bar is built by READING those decisions rather than by
+     re-deriving them: one gate, not seventeen copies of one, so a money panel and its chip can
+     never disagree. */
+  buildReportsJumpNav();
+}
+
+/* ==========================================================================
+   R11-4 — THE REPORTS JUMP NAV.
+
+   Reports is one page about sixteen different questions, stacked, roughly
+   7,700px tall on an Owner's screen. The only navigation it had was the scroll
+   wheel, so "what is the rate-end book worth" meant six seconds of scrolling
+   past four panels about something else, every time.
+
+   Three decisions worth stating:
+
+   · THE CHIP LIST IS READ, NOT DECLARED. Half these panels are Owner-only and
+     each one already owns its own gate (showMoney() inside renderMoneyOwed,
+     renderRateEndBook, renderLeadResponse, renderAdvocacy, …). Re-testing the
+     role here would be a second copy of the gate that could drift from the
+     first, which is exactly how a money chip leaks to an adviser. So the bar
+     is built at the END of loadReports and simply asks each target element
+     whether it — or anything it sits inside — is .hidden. An adviser's bar has
+     no chip for a panel an adviser has no panel for, because the panel said so.
+
+   · IT IS BUILT ONCE THE ANSWER IS KNOWN. The markup ships EMPTY and `hidden`;
+     nothing is rendered before role and data are in hand, so there is no
+     moment where a money chip is on screen and then withdrawn.
+
+   · HIGHLIGHTING IS A SCROLL LISTENER, NOT AN OBSERVER. rAF-throttled, one
+     getBoundingClientRect per visible section per frame that actually scrolls,
+     and it returns immediately when Reports is not the open page. An
+     IntersectionObserver would need a rootMargin recomputed from the sticky
+     bar's own measured height anyway, and would still have to break ties
+     between the several panels visible at once on a laptop.
+   ========================================================================== */
+const REPORT_JUMP_SECTIONS = [
+  ["mine", "My numbers", "#report-mine-panel"],
+  ["month", "Monthly business", "#report-month-panel"],
+  ["advisers", "Adviser scoreboard", "#report-scoreboard-panel"],
+  ["funnel", "Funnel", "#report-funnel-panel"],
+  ["sources", "Lead sources", "#report-sources-panel"],
+  ["losses", "Losses", "#report-losses-panel"],
+  ["live", "Live snapshot", "#report-live-note"],
+  ["owed", "Money owed", "#report-owed-panel"],
+  ["rateend", "Rate-end book", "#report-rateend-panel"],
+  ["leadresp", "Lead response", "#report-leadresp-panel"],
+  ["advocacy", "Advocacy", "#report-advocacy-panel"],
+  ["conveyancer", "Conveyancers", "#report-conveyancer-panel"],
+  ["forecast", "Forecast", "#report-forecast-panel"],
+  ["months", "Completions", "#report-months-panel"],
+  ["introducers", "Introducers", "#report-introducers-panel"],
+  ["ltv", "Client LTV", "#report-ltv-panel"],
+];
+/* Visible = on the page AND not inside anything hidden. The .grid-2 wrappers mean a panel's own
+   class is not the whole answer, so walk up to the page section. */
+function repJumpVisible(el) {
+  let n = el;
+  while (n && n.id !== "page-reports") {
+    if (n.classList && n.classList.contains("hidden")) return false;
+    n = n.parentElement;
+  }
+  return !!n;
+}
+/* The gap a jumped-to heading is left sitting below the bar, and — because they must be the same
+   number — the line the highlighter measures "is this section at the top of the screen" against.
+   With two different constants a chip you had just clicked could arrive one pixel short of its own
+   threshold and light up the section ABOVE it, which is how a jump nav ends up looking broken. */
+const REP_JUMP_GAP = 12;
+let repJumpItems = [];
+let repJumpActive = "";
+let repJumpTick = false;
+let repJumpWired = false;
+function buildReportsJumpNav() {
+  const bar = $("#rep-nav"), wrap = $("#rep-nav-chips");
+  if (!bar || !wrap) return;
+  repJumpItems = REPORT_JUMP_SECTIONS
+    .map(([key, label, sel]) => ({ key, label, el: $(sel) }))
+    .filter((s) => s.el && repJumpVisible(s.el));
+  // One chip is not navigation, it is decoration. (Can't happen today; cheap insurance against a
+  // future role that only ever sees one panel.)
+  if (repJumpItems.length < 2) { wrap.innerHTML = ""; bar.hidden = true; return; }
+  wrap.innerHTML = repJumpItems.map((s) =>
+    `<button type="button" class="seg-btn" id="rep-nav-${esc(s.key)}" role="tab" aria-selected="false" data-rep-jump="${esc(s.key)}" title="Jump to ${esc(s.label)}">${esc(s.label)}</button>`).join("");
+  wrap.querySelectorAll("[data-rep-jump]").forEach((b) => (b.onclick = () => {
+    const it = repJumpItems.find((s) => s.key === b.dataset.repJump);
+    if (!it || !it.el) return;
+    // scroll-margin-top (set from the measured bar height below) is what stops the sticky bar
+    // landing on top of the heading it just took you to.
+    it.el.scrollIntoView({ behavior: "smooth", block: "start" });
+    setRepJumpActive(it.key);
+  }));
+  bar.hidden = false;
+  repJumpActive = "";                 // the chips are new elements — nothing is active yet
+  measureRepJumpOffsets();
+  if (!repJumpWired) {
+    repJumpWired = true;
+    window.addEventListener("scroll", onRepJumpScroll, { passive: true });
+    window.addEventListener("resize", () => { measureRepJumpOffsets(); onRepJumpScroll(); }, { passive: true });
+  }
+  onRepJumpScroll();
+}
+/* The sticky offset is not a constant: at =<760px .app-shell stacks and the sidebar becomes a
+   sticky strip across the top, so the jump bar has to sit under it. Measured from the layout that
+   is actually in force rather than from a duplicated breakpoint number. */
+function measureRepJumpOffsets() {
+  const bar = $("#rep-nav"), page = $("#page-reports");
+  // A resize while another page is open would measure a bar of height 0 and leave every heading on
+  // Reports with a 12px scroll margin. Nothing to measure until Reports is the page on screen.
+  if (!bar || bar.hidden || !page || page.classList.contains("hidden")) return;
+  const shell = document.querySelector(".app-shell");
+  const side = document.querySelector(".sidebar");
+  let off = 0;
+  try {
+    if (shell && side && getComputedStyle(shell).flexDirection === "column") off = Math.round(side.getBoundingClientRect().height);
+  } catch (_) { off = 0; }
+  bar.style.top = off + "px";
+  const h = Math.round(bar.getBoundingClientRect().height);
+  document.documentElement.style.setProperty("--rep-jump-scroll", (off + h + REP_JUMP_GAP) + "px");
+  // Only fade the right edge when there is genuinely more strip out there to scroll to.
+  const wrap = $("#rep-nav-chips");
+  bar.classList.toggle("is-scrollable", !!wrap && wrap.scrollWidth > wrap.clientWidth + 1);
+}
+function setRepJumpActive(key) {
+  if (key === repJumpActive) return;
+  repJumpActive = key;
+  document.querySelectorAll("#rep-nav-chips [data-rep-jump]").forEach((b) => {
+    const on = b.dataset.repJump === key;
+    b.classList.toggle("active", on);
+    b.setAttribute("aria-selected", on ? "true" : "false");
+  });
+  /* Keep the active chip inside the horizontal scroller by hand. scrollIntoView() on the chip
+     would also scroll the PAGE, which would fight the scroll that just triggered this. */
+  const act = key ? document.getElementById("rep-nav-" + key) : null;
+  const wrap = $("#rep-nav-chips");
+  if (act && wrap && wrap.scrollWidth > wrap.clientWidth) {
+    const l = act.offsetLeft, r = l + act.offsetWidth;
+    if (l < wrap.scrollLeft) wrap.scrollLeft = Math.max(0, l - 12);
+    else if (r > wrap.scrollLeft + wrap.clientWidth) wrap.scrollLeft = r - wrap.clientWidth + 12;
+  }
+}
+function onRepJumpScroll() {
+  if (repJumpTick) return;
+  repJumpTick = true;
+  requestAnimationFrame(() => {
+    repJumpTick = false;
+    const page = $("#page-reports"), bar = $("#rep-nav");
+    if (!page || page.classList.contains("hidden") || !bar || bar.hidden || !repJumpItems.length) return;
+    const line = bar.getBoundingClientRect().bottom + REP_JUMP_GAP + 2;
+    let cur = repJumpItems[0].key;
+    for (const s of repJumpItems) {
+      if (s.el && s.el.getBoundingClientRect().top <= line) cur = s.key; else break;
+    }
+    /* At the very bottom of the page the last panel may never reach the line (it is shorter than
+       the viewport), which would leave the second-to-last chip lit on a page that has stopped
+       scrolling. Bottom of the document means the last section. */
+    if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2) cur = repJumpItems[repJumpItems.length - 1].key;
+    setRepJumpActive(cur);
+  });
 }
 
 /* ==========================================================================
@@ -14741,10 +15304,13 @@ async function loadMoneyPage() {
 
 /* ---------- Data health ---------- */
 /* T1-26 — Data Health numbers whose rows live on the Emails page. Set the filter first, then nav:
-   nav() calls loadEmails(), which reads the checkbox, so the list arrives already narrowed. */
+   nav() calls loadEmails(), which reads the filter, so the list arrives already narrowed.
+   R11-5 — the filter is chip state rather than a checkbox now; the SMS list is set alongside it
+   because narrowing both is exactly what this did before, and the failed-SMS rows are part of what
+   the Data-health tile is pointing at. */
 function dhGotoEmails(failedOnly) {
-  const cb = $("#email-failed-only");
-  if (cb) cb.checked = !!failedOnly;
+  emailStatusFilter = failedOnly ? "failed" : "all";
+  smsStatusFilter = failedOnly ? "failed" : "all";
   nav("emails");
 }
 async function loadDataHealth() {

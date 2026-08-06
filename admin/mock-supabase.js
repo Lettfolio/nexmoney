@@ -138,6 +138,17 @@
     return p.length === 3 ? p[2] + "/" + p[1] + "/" + p[0] : String(d == null ? "" : d);
   };
   var shift = function (days, base) { return new Date((base ? new Date(base).getTime() : NOW.getTime()) + days * DAY); };
+  /* Same as shift(), but pinned to local noon on the resulting calendar day.
+     A `date` column (submitted_at) rendered via dateOnly() always lands on
+     midnight of the right day, but a `timestamptz` column (completed_at)
+     rendered via iso(shift(...)) keeps whatever hh:mm:ss real "now" happened
+     to have when the fixtures loaded — so the whole-day gap between the two,
+     rounded, could be one day higher or lower purely depending on what time
+     of day a test happened to run. Anywhere a completed_at is paired with a
+     dateOnly() submitted_at and the gap between them is measured (conveyancer
+     speed), build the timestamp with shiftNoon() instead so the gap is a
+     fixed number of days regardless of real wall-clock time at load. */
+  var shiftNoon = function (days, base) { var d = shift(days, base); return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12, 0, 0); };
   var TODAY = dateOnly(NOW);
 
   var _seed = 20260726;
@@ -843,7 +854,14 @@
       if (r.sent_at === undefined) r.sent_at = null;
     }
     if (table === "sms_queue" && !r.status) r.status = "queued";
-    if (table === "leads" && !r.status) r.status = "new";
+    if (table === "leads") {
+      if (!r.status) r.status = "new";
+      /* R11 — discard_reason exists on every row, null until something records it */
+      if (r.discard_reason === undefined) r.discard_reason = null;
+      /* R7-5 — first_contact_at exists on every row, null until acceptLead()
+         or a contacted discardLead() stamps it */
+      if (r.first_contact_at === undefined) r.first_contact_at = null;
+    }
     if (table === "fact_finds" && !r.status) r.status = "sent";
     if (table === "case_emails" && !r.triage_status) r.triage_status = "new";
     return r;
@@ -1103,7 +1121,17 @@
     for (var k = 0; k < 3; k++) {
       var idx = m * 3 + k;
       var compDays = -(m * 30 + 6 + k * 8);
-      var comp = shift(compDays);
+      /* noon-pinned: submitted_at below is dateOnly() (midnight); completed_at
+         is iso(comp) (keeps hh:mm:ss) — see shiftNoon() comment. EXCEPT the one
+         case that lands exactly on review_delay_days (14): the review-request
+         drip backlog below decides "already 14 days old" with
+         (NOW - completed_at)/DAY < delay, and shift(-14) is the one
+         construction that keeps that exactly 14.000 days — always the same
+         side of the line — because it is built from the identical NOW
+         instance the drip check reads. Noon-pinning that one case would make
+         its age wobble either side of 14 with real wall-clock time instead,
+         which is a second copy of the very bug this pin is fixing. */
+      var comp = compDays === -14 ? shift(compDays) : shiftNoon(compDays);
       var clientIdx = 10 + idx;                      /* clients 10..27 */
       var proc = 1150 + rint(0, 22) * 100;
       var broker = pick([0, 0, 395, 495, 695, 995]);
@@ -1185,8 +1213,9 @@
     protection_status: "policy_taken", protection_commission: 910,
     lead_source: "Repeat client", assigned_to: "p2",
     retention_source_case_id: completedCases[11].id,
-    completed_at: iso(shift(-55)), submitted_at: dateOnly(shift(-96)),
-    created_at: iso(shift(-130)), updated_at: iso(shift(-55))
+    /* noon-pinned to match its dateOnly() submitted_at — see shiftNoon() comment */
+    completed_at: iso(shiftNoon(-55)), submitted_at: dateOnly(shift(-96)),
+    created_at: iso(shift(-130)), updated_at: iso(shiftNoon(-55))
   });
   mkCase({
     client_id: completedCases[15].client_id, case_kind: "remortgage", stage: "not_proceeding",
@@ -1784,7 +1813,45 @@
     DB.leads.push({
       id: nid("ld"), name: l[0], email: l[1], phone: l[2], enquiry_type: l[3],
       message: l[4], status: l[5], created_at: iso(shift(l[6])),
-      property_value: l[7], converted_case_id: null
+      property_value: l[7], converted_case_id: null,
+      /* R11 — `alter table leads add column discard_reason text` (nullable, no
+         backfill, no RLS change). Null on every fixture row, including the
+         one already discarded — production shipped this with nothing filled
+         in, so a discarded lead with no reason on file is the honest state,
+         not a fixture gap. */
+      discard_reason: null,
+      /* R7-5 — `alter table leads add column first_contact_at timestamptz`
+         (nullable, no backfill). Null on every row above; none of them has
+         ever been accepted or discarded-after-contact. */
+      first_contact_at: null
+    });
+  });
+
+  /* R7-5 — three already-accepted leads, so the owner-only Lead-response
+     report (Reports) has real data instead of its degraded "no
+     first_contact_at column" state. first_contact_at is built as N MINUTES
+     after the same row's created_at — a span, not a wall-clock timestamp —
+     so the response time this report shows never depends on what real
+     instant the fixtures happened to load at (the lesson from the
+     conveyancer-speed noon-pinning above: a stable span comes from anchoring
+     both ends to the same reference, not from picking an absolute time).
+     Two carry a span; the third is left null — an accept from before this
+     column existed and never backfilled, exactly as production shipped it,
+     and the one shape leadResponseMins() must handle (both dates required,
+     or no response time). All three sit inside the report's 90-day window;
+     Janet Pilkington above (-95 days, no stamp either) does not, and was
+     never meant to. */
+  [
+    ["Priya Nathan", "priya.nathan@example.com", "07700 900307", "remortgage", "Two-year fix ending soon, want to compare.", -10, 22],
+    ["Martin Oyelaran", "martin.oyelaran@example.com", "07700 900308", "buy-to-let", "New-build BTL, need advice on rates.", -22, 3 * 60 + 40],
+    ["Harriet Coombes", "harriet.coombes@example.com", "07700 900309", "home-mover", "Chain of three, need an AIP fast.", -35, null]
+  ].forEach(function (l) {
+    var createdAt = shift(l[5]);
+    DB.leads.push({
+      id: nid("ld"), name: l[0], email: l[1], phone: l[2], enquiry_type: l[3],
+      message: l[4], status: "converted", created_at: iso(createdAt),
+      property_value: null, converted_case_id: null, discard_reason: null,
+      first_contact_at: l[6] == null ? null : iso(new Date(createdAt.getTime() + l[6] * 60000))
     });
   });
 
@@ -2111,14 +2178,14 @@
         first: "Nathaniel", last: "Fearnley", email: "nathaniel.fearnley@example.com", phone: "07700 900151",
         age: 47, home: "26 Talbot Avenue, Bournemouth BH3 7HU",
         property: "26 Talbot Avenue, Bournemouth BH3 7HU",
-        completed: yearsAgoToday(1), rateEndMonths: 14, adv: "p2",
+        completed: yearsAgoToday(1), subDays: 61, rateEndMonths: 14, adv: "p2",
         lender: "Coventry Building Society", loan: 204000, value: 312000, proc: 1465, broker: 495
       },
       {
         first: "Marguerite", last: "Vasey", email: "marguerite.vasey@example.com", phone: "07700 900152",
         age: 61, home: "4 Beaufort Road, Southbourne, Bournemouth BH6 5AJ",
         property: "Flat 2, 11 Wharncliffe Road, Boscombe, Bournemouth BH5 1AH",
-        completed: yearsAgoToday(2), rateEndMonths: 20, adv: "p3",
+        completed: yearsAgoToday(2), subDays: 61, rateEndMonths: 20, adv: "p3",
         lender: "Skipton", loan: 143000, value: 198000, proc: 1080, broker: 595
       },
       {
@@ -2126,7 +2193,7 @@
         first: "Douglas", last: "Hearn", email: "douglas.hearn@example.com", phone: "07700 900153",
         age: 39, home: "17 Draycott Road, Bournemouth BH10 5EN",
         property: "17 Draycott Road, Bournemouth BH10 5EN",
-        completed: monthsAgo(11), rateEndMonths: 8, adv: "p2",
+        completed: monthsAgo(11), subDays: 62, rateEndMonths: 8, adv: "p2",
         lender: "Nationwide", loan: 176000, value: 265000, proc: 1310, broker: 0
       }
     ];
@@ -2148,7 +2215,16 @@
         loan_amount: f.loan, property_value: f.value, rate_percent: 4.64, term_years: 24,
         rate_end_date: dateOnly(noonOn(NOW.getFullYear(), NOW.getMonth() + f.rateEndMonths, 18)),
         rate_end_estimated: false,
-        submitted_at: dateOnly(noonOn(comp.getFullYear(), comp.getMonth() - 2, Math.min(28, comp.getDate()))),
+        /* A fixed day count, not "2 calendar months before" — these three feed
+           the conveyancer-speed report (any completed, non-product-transfer
+           case with both dates counts) as well as the annual-review fodder
+           they were built for, and "2 months" measured in calendar months
+           wobbles by a day or two depending which two months it lands on,
+           which in turn nudges which third a firm's average falls in every
+           time the fixture "now" crosses a month boundary. subDays is that
+           wobble pinned to today's value so the gap is exact regardless of
+           what real date the fixtures load on. */
+        submitted_at: dateOnly(shift(-f.subDays, comp)),
         proc_fee: f.proc, broker_fee: f.broker, sols_fee: 0,
         fee_status: "paid",
         fee_requested_at: iso(comp), fee_paid_at: iso(comp),
@@ -2201,19 +2277,28 @@
       address: "31 Gloucester Road, Boscombe, Bournemouth BH7 6JB",
       created: monthsAgo(30), updated: monthsAgo(14)
     });
+    /* submitted_at below is a FIXED day count before completion, not
+       monthsAgo(21) — this case also feeds the conveyancer-speed report
+       (any completed, non-product-transfer case with both dates counts), and
+       two independent monthsAgo() calls wobble against each other by a day
+       or two depending which two calendar months separate them, nudging
+       which third a firm's average falls in as the fixture "now" crosses a
+       month boundary. 61 is today's gap, pinned — see reviewFodder's
+       subDays for the same fix. */
+    var northcoteCompleted = monthsAgo(19);
     var northcoteCase = mkCase({
       client_id: northcote, case_kind: "remortgage", stage: "completed",
       property_address: "31 Gloucester Road, Boscombe, Bournemouth BH7 6JB",
       lender: "Leeds Building Society", product_name: "5yr Fixed 80%",
       loan_amount: 158000, property_value: 219000, rate_percent: 4.44, term_years: 17,
       rate_end_date: dateOnly(noonOn(NOW.getFullYear() + 2, 4, 22)), rate_end_estimated: false,
-      submitted_at: dateOnly(monthsAgo(21)),
+      submitted_at: dateOnly(shift(-61, northcoteCompleted)),
       proc_fee: 1185, broker_fee: 395, sols_fee: 0, fee_status: "paid",
-      fee_requested_at: iso(monthsAgo(19)), fee_paid_at: iso(monthsAgo(19)),
+      fee_requested_at: iso(northcoteCompleted), fee_paid_at: iso(northcoteCompleted),
       protection_status: "declined", gi_status: "not_applicable",
       lead_source: "Referral", assigned_to: "p3",
-      completed_at: iso(monthsAgo(19)),
-      created_at: iso(monthsAgo(24)), updated_at: iso(monthsAgo(19))
+      completed_at: iso(northcoteCompleted),
+      created_at: iso(monthsAgo(24)), updated_at: iso(northcoteCompleted)
     });
     northcoteCase.broker_fee_paid_at = northcoteCase.fee_paid_at;
     northcoteCase.proc_fee_paid_at = northcoteCase.fee_paid_at;
