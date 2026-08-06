@@ -1120,7 +1120,11 @@ details.imp-conflict .s { color: var(--muted); font-size: 11.5px; }
 /* T1-14 — same-adviser double-booking, visible without opening either appointment. */
 .appt.clash { background: #fdecea; border-left-color: #c0392b; }
 .appt.clash:hover { background: #f9d9d5; }
-.clash-tag { color: #c0392b; }
+/* R12a·D11 — the ⚠ now carries its own title=, so give it a cursor that says "hover me". */
+.clash-tag { color: #c0392b; cursor: help; }
+/* R12a·D11 — the appointment editor's live clash line. Amber, not red: this is a warning about
+   something the operator is still allowed to do, not a refusal. */
+.dq-notice.clash-notice { background: #fdf3e0; color: #b45309; border-color: #f0d9ac; margin-bottom: 12px; }
 .diary-day.has-clash { border-color: #c0392b; box-shadow: 0 0 0 1px #c0392b, 0 4px 16px rgba(192,57,43,.12); }
 @media (max-width: 900px) { .diary-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
 /* BUILD 7d (defect 26) — adviser colour legend, shown only in the "Everyone" diary view. */
@@ -1247,6 +1251,18 @@ select.task-reassign { width: auto; padding: 3px 6px; font-size: 12px; }
   box-shadow: 0 6px 24px rgba(4,12,24,.35);
   animation: toast-in .25s ease;
 }
+/* R12a·D12 — an action toast. The BAR stays pointer-events:none (see above); only the button
+   itself accepts clicks, so an undo link floating over a form can never eat a tap meant for the
+   field underneath it. */
+.toast.has-action { display: inline-flex; align-items: center; gap: 14px; }
+.toast .toast-action {
+  pointer-events: auto;
+  background: none; border: 0; padding: 0;
+  color: #ffd479; font-size: 13.5px; font-weight: 700;
+  text-decoration: underline; text-underline-offset: 2px;
+  cursor: pointer; white-space: nowrap; font-family: inherit;
+}
+.toast .toast-action:hover, .toast .toast-action:focus-visible { color: #fff; }
 @keyframes toast-in {
   from { opacity: 0; transform: translate(-50%, 12px); }
   to   { opacity: 1; transform: translate(-50%, 0); }
@@ -1681,6 +1697,9 @@ select.task-reassign { width: auto; padding: 3px 6px; font-size: 12px; }
 .cs-val { font-size: 14px; font-weight: 600; color: var(--dark); }
 .cs-stat.cs-warn .cs-val { color: #b45309; }
 .cs-stat.cs-danger .cs-val { color: var(--red); }
+/* R12a·D4 — the case header had amber and red but no "this one is actually settled" colour, so a
+   good outcome could only be shown as the absence of a warning. Same weight as its two siblings. */
+.cs-stat.cs-good .cs-val { color: var(--green); }
 .cs-lines { margin-top: 12px; display: flex; flex-direction: column; gap: 6px; }
 .cs-line { font-size: 13px; color: var(--dark); }
 .cs-line .cs-lbl { margin-right: 6px; }
@@ -2629,6 +2648,10 @@ tr.owed-hot > td { background: var(--red-bg); }
 #case-docs .doc-meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 3px; }
 #case-docs .doc-date { font-size: 11px; color: var(--muted); }
 #case-docs .doc-note { font-size: 11.5px; color: var(--muted); margin-top: 3px; font-style: italic; overflow-wrap: anywhere; }
+/* R12a·D8 — the "Open" control lives on the meta line, beside the dates it belongs with, not in
+   the actions column on the right (which is about CHANGING the row's status). Sized to sit in a
+   row of 11px date text without shouting over it. */
+#case-docs .doc-meta .doc-open { padding: 1px 7px; font-size: 11px; line-height: 1.5; min-height: 0; }
 #case-docs .doc-acts { display: flex; gap: 6px; flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; }
 #case-docs .doc-acts .btn { padding: 2px 8px; font-size: 11.5px; }
 #case-docs .doc-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }

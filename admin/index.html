@@ -623,8 +623,12 @@
            operator seeing "Review reminder (2nd ask)" in the list below had no way to know
            whether it was expected. Stated in the same paragraph slot, in the same voice, and
            deliberately including the part an operator can ACT on — the row is cancellable while
-           it is still queued. -->
-      <p class="panel-sub" id="emails-r9-note"><strong>An unanswered review request is followed up once.</strong> About <strong>a week</strong> after a review request that was actually <em>sent</em> and never answered (the exact gap is the “Review reminder if unanswered” setting), one reminder is queued — shown below as <em>Review reminder (2nd ask)</em>. One per case ever, never a third, and it comes out of the same 5-a-run budget as the requests, taken only after them: a client who has never been asked always goes before one who is being asked twice. If somebody should not be asked again, cancel the row while it is still queued. · <strong>An unhappy answer creates work, not an email.</strong> A score of 6 or below raises a call-back task for the case's adviser and writes the client's own words onto the case timeline; nothing is sent back to the client automatically.</p>
+           it is still queued.
+           R12a K-6 — and now it actually is. Until this round nothing in the app wrote
+           status "cancelled", so this paragraph described a control that did not exist;
+           the sentence names the button by its label rather than leaving "cancel the row"
+           to be hunted for, and says what cancelling records. -->
+      <p class="panel-sub" id="emails-r9-note"><strong>An unanswered review request is followed up once.</strong> About <strong>a week</strong> after a review request that was actually <em>sent</em> and never answered (the exact gap is the “Review reminder if unanswered” setting), one reminder is queued — shown below as <em>Review reminder (2nd ask)</em>. One per case ever, never a third, and it comes out of the same 5-a-run budget as the requests, taken only after them: a client who has never been asked always goes before one who is being asked twice. If somebody should not be asked again, cancel the row while it is still queued: press <strong>Cancel</strong> on it, confirm, and the email never sends — its status becomes <em>cancelled</em>, and where the row belongs to a case the cancellation is written onto that case's timeline with your name. · <strong>An unhappy answer creates work, not an email.</strong> A score of 6 or below raises a call-back task for the case's adviser and writes the client's own words onto the case timeline; nothing is sent back to the client automatically.</p>
       <!-- R11-5 — status chips + the one line that answers the question this page is actually
            opened to answer ("is anything going out in the morning, and how much"). Both are built
            in loadEmails() from the rows it already reads — no extra query — so the counts always

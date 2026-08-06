@@ -115,7 +115,20 @@
               ai-import, parse-offer, assistant, doc-upload, nps-capture
      auth   : getSession, getUser, onAuthStateChange, signInWithPassword,
               signOut, resetPasswordForEmail, updateUser
-     storage: offers bucket (upload, createSignedUrl)
+     storage: offers bucket (upload, createSignedUrl); case-documents bucket
+              (createSignedUrl — R12a·D8, the admin "open" link on a checklist
+              row a client uploaded through doc-upload)
+
+   ROUND 12a (D8 — signed-URL open link on a received checklist document):
+     · No new mock surface was needed: `storage.from(bucket)` was already
+       bucket-name-agnostic (built once for `offers`, never validated the
+       bucket string), so `storage.from("case-documents").createSignedUrl(...)`
+       already behaves exactly like the `offers` case. What the fixtures
+       lacked was any row with real content behind its `storage_path` to open,
+       and any row proving the app must NOT offer the link at all — a document
+       marked received over email/phone has no file, and `storage_path` is how
+       the app tells the two apart (see case_documents fixtures, search
+       "R12a·D8").
 
    Personas (?as=…):  p1 Kim Martin (admin, DEFAULT) · p2 Wayne Kellow (adviser)
                       p3 Luke Richards (adviser) · p4 Daniel Potts (owner)
@@ -202,6 +215,13 @@
   };
   var PK = { settings: "key" };
   function pkOf(t) { return PK[t] || "id"; }
+
+  /* R12a·D8 — storage object registry, moved up here (ahead of the STORAGE
+     section below which merely defines the `storage.from()` surface) so the
+     fixture block can seed real entries for the case-documents checklist
+     files a client uploaded, the same way a genuine upload would populate it.
+     Keyed "<bucket>/<path>", same as the `storage` object writes below. */
+  var storageFiles = {};
 
   /* ------------------------------------------------- migrations M1-M7 (parity)
      Every migration the app feature-detects is mirrored here and is ON by default,
@@ -2466,6 +2486,19 @@
         created_at: iso(shift(-reqDays))
       });
     };
+    /* R12a·D8 — a document received THROUGH THE UPLOAD LINK gets a real entry in
+       `storageFiles` behind its storage_path, the same shape `storage.upload()`
+       writes for a genuine file (size/type/at) — so the admin "open" link's
+       createSignedUrl exercises a file that is actually there. A document
+       received by some other route (email, phone, handed over at a meeting) has
+       no storage_path at all — that is the field the app uses to decide whether
+       an "open" link renders, not the status, and at least one fixture row below
+       is deliberately left that way (see "received by EMAIL" below). */
+    var DOC_STORAGE_BUCKET = "case-documents";
+    var seedDocFile = function (path, sizeBytes) {
+      storageFiles[DOC_STORAGE_BUCKET + "/" + path] = { size: sizeBytes || 84213, type: "application/pdf", at: iso(shift(-7)) };
+      return path;
+    };
 
     /* ---- (a) the four checklists ----------------------------------------- */
     /* The items are the firm's own docs_list, verbatim. A checklist is created
@@ -2487,8 +2520,8 @@
     if (partial) {
       partial.doc_token = "doc-ellingham-4f21c8";
       partial.waiting_on = "client";
-      addDoc(partial, D_ID, { requestedDaysAgo: 9, status: "received", receivedDaysAgo: 7, storage_path: "docs/" + partial.id + "/photo-id.pdf" });
-      addDoc(partial, D_PAY, { requestedDaysAgo: 9, status: "received", receivedDaysAgo: 6, storage_path: "docs/" + partial.id + "/payslips.pdf" });
+      addDoc(partial, D_ID, { requestedDaysAgo: 9, status: "received", receivedDaysAgo: 7, storage_path: seedDocFile("docs/" + partial.id + "/photo-id.pdf") });
+      addDoc(partial, D_PAY, { requestedDaysAgo: 9, status: "received", receivedDaysAgo: 6, storage_path: seedDocFile("docs/" + partial.id + "/payslips.pdf") });
       addDoc(partial, D_BANK, { requestedDaysAgo: 9 });
       addDoc(partial, D_DEP, { requestedDaysAgo: 9 });
       addNote(partial.id, "Document received via upload link: " + D_ID, 7, null);
@@ -2539,12 +2572,23 @@
        checklist with nothing outstanding, so no chase may ever fire on it and
        the upload page has nothing left to ask for. It keeps its token, because a
        client who opens yesterday's link after sending everything must get a page
-       that says so rather than a 404. */
+       that says so rather than a 404.
+       R12a·D8 — not every "received" item arrived through the link: the first two
+       (Photo ID, payslips) came back that way and carry a real seeded file, but
+       the bank statements arrived by EMAIL — received is a decision a member of
+       staff records with the ✓ Received button regardless of how the file turned
+       up, and storage_path is null on that row on purpose. The admin "open" link
+       must render for the first two and must NOT render for the third — this is
+       the one field that tells the two apart, not the status. */
     var clean = caseFor("Tanya Osei", "fact_find");
     if (clean) {
       clean.doc_token = "doc-osei-2d64f0";
-      [D_ID, D_PAY, D_BANK].forEach(function (item, i) {
-        addDoc(clean, item, { requestedDaysAgo: 20, status: "received", receivedDaysAgo: 17 - i * 2, storage_path: "docs/" + clean.id + "/" + (i + 1) + ".pdf" });
+      [D_ID, D_PAY].forEach(function (item, i) {
+        addDoc(clean, item, { requestedDaysAgo: 20, status: "received", receivedDaysAgo: 17 - i * 2, storage_path: seedDocFile("docs/" + clean.id + "/" + (i + 1) + ".pdf") });
+      });
+      addDoc(clean, D_BANK, {
+        requestedDaysAgo: 20, status: "received", receivedDaysAgo: 13,
+        note: "Received by email — client couldn't get the upload link to work on her phone."
       });
       sentMail(clean, "docs_request", 20, "Your document checklist");
     }
@@ -3537,9 +3581,21 @@
   };
 
   /* =========================================================================
-     STORAGE (the `offers` bucket)
+     STORAGE — `offers` (offer-letter PDFs) and `case-documents` (R12a·D8,
+     the checklist files a client sends back through their upload link).
+     `storage.from(bucket)` below is bucket-name-agnostic by construction — it
+     was written once for `offers` and never validates the bucket string — so
+     no code change was needed to make `case-documents` work; what WAS missing
+     was any seeded content to open. See the fixture block (search
+     "R12a·D8 — seed real storage content") for the two checklist files that
+     now have a real entry in `storageFiles`, so `createSignedUrl` on them
+     exercises the same path a genuine upload would have taken, not just an
+     empty path string with nothing behind it. Semantics are identical to
+     `offers`: `createSignedUrl` does not check that the object exists (same
+     looseness offers already had — not something this pass introduces or
+     tightens), so a test asserting the open-link flow has to do it via the
+     encoded fragment URL / `storageFiles` entry, not via actually fetching it.
      ======================================================================= */
-  var storageFiles = {};
   var storage = {
     from: function (bucket) {
       return {
@@ -3621,7 +3677,10 @@
      WORD-FOR-WORD as it was: this feature adds a mention, it does not reword the
      firm's existing emails. */
   var PROP_SENTENCE_TYPES = ["rate_end_reminder", "rate_end_chase", "submitted_update", "offer_update", "completion_congrats"];
-  var PROP_REGARDING_TYPES = ["protection_offer", "fee_request", "gi_exchange"];
+  /* R12a·D3 — v12 adds "factfind" here: "Regarding: <property>" is the same
+     mechanism every other adjacent-to-the-mortgage mail already uses, not a
+     bespoke line of its own. */
+  var PROP_REGARDING_TYPES = ["protection_offer", "fee_request", "gi_exchange", "factfind"];
   /* The opening line each type sends. "{M}" is the subject of the sentence: with
      an address it becomes "your mortgage on <full address>", without one it stays
      "your mortgage" — which is the wording every one of these emails has always
@@ -3735,6 +3794,80 @@
     }
     return lines;
   }
+  /* =========================================================================
+     R12a·D3 — process-emails v12: the digital fact-find link as a real queued
+     email ("factfind"), replacing the admin's own bare mailto. Mirrors the
+     DEPLOYED v12 behaviour exactly — everything else about v12 is byte-
+     identical to v11 (EMAIL_OPENING/DOC_TYPES/emailBodyLines above are
+     untouched).
+
+     A token generator for a fact_finds row created HERE, server-side (the
+     service role, same as doc-upload) — analogous to app.js's own ffToken(),
+     which only ever runs client-side and has no reason to exist in this file
+     otherwise. */
+  function ffTokenServerSide() {
+    return "ff-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
+  }
+  /* The case's newest fact_finds row (created_at desc, limit 1) — the same
+     "active" row the admin's own factFind() reads and reuses. If none exists
+     yet, ONE IS INSERTED here: {case_id, client_id (the queue row's, falling
+     back to the case's — a service-role write has only the queue row and the
+     case to go on), status: "created"}. status "created" is what pass B's
+     client-side factFind() now inserts explicitly rather than relying on a
+     column default, and fact_finds carries NO check constraint on status in
+     production (verified against the real schema) or in this mock — nothing
+     here or in writePolicy() rejects it. */
+  function resolveFactFindForEmail(row, cs) {
+    var caseId = row.case_id;
+    if (!caseId) return null;
+    var existing = DB.fact_finds.filter(function (f) { return f.case_id === caseId; })
+      .slice()
+      .sort(function (a, b) { return new Date(b.created_at) - new Date(a.created_at); });
+    if (existing.length) return existing[0];
+    var clientId = row.client_id || (cs && cs.client_id) || null;
+    var created = applyInsertDefaults("fact_finds", {
+      case_id: caseId, client_id: clientId, status: "created", token: ffTokenServerSide(),
+      created_by: null /* the service role wrote it, not a member of staff */
+    });
+    DB.fact_finds.push(created);
+    return created;
+  }
+  /* The CTA body. The leading "Regarding: <addr>" line follows the exact same
+     rule emailBodyLines() applies to every other REGARDING type — `factfind`
+     having joined PROP_REGARDING_TYPES above is what makes `mention` arrive
+     here already resolved, not a second copy of that decision. */
+  function factfindBodyLines(mention, addr, link) {
+    var lines = [];
+    if (mention === "regarding") lines.push("Regarding: " + addr);
+    lines.push("Before we speak, please could you complete this short, secure fact-find? It takes about 5–10 minutes.");
+    lines.push("Start your fact-find → " + link);
+    lines.push("You can save as you go and come back to finish it later.");
+    return lines;
+  }
+  /* THE THROW. No site_url configured means no link can be built at all — v12
+     raises rather than send a mail with nothing to click, and
+     "process-emails" below turns that into status='failed' with this EXACT
+     message on the row, which is what a misconfigured install is meant to
+     see, not have quietly swallowed. Deliberately no fallback default here
+     (unlike docsLinkFor's, which is a pre-existing, unrelated convenience for
+     the docs bucket) — v12's own rule is "not set = throw", and mirroring a
+     default in would hide exactly the misconfiguration this exists to catch. */
+  function composeFactfind(row, cs) {
+    var ff = resolveFactFindForEmail(row, cs);
+    var siteUrlRaw = String(setting("site_url", "")).trim();
+    if (!ff || !siteUrlRaw) {
+      throw new Error("site_url not set — cannot build the fact-find link");
+    }
+    var base = siteUrlRaw.replace(/\/+$/, "");
+    var link = base + "/factfind?token=" + ff.token;
+    var company = setting("company_name", "NexMoney");
+    return {
+      subject: company + " – your mortgage fact find (5–10 minutes)",
+      link: link,
+      fact_find_id: ff.id,
+      fact_find_token: ff.token
+    };
+  }
   function composeEmail(row) {
     var cs = row.case_id ? DB.cases.filter(function (c) { return c.id === row.case_id; })[0] : null;
     var adv = staffProfile(cs && cs.assigned_to);
@@ -3750,10 +3883,21 @@
     var mention = "";
     if (addr && PROP_SENTENCE_TYPES.indexOf(t) >= 0) mention = "sentence";
     else if (addr && PROP_REGARDING_TYPES.indexOf(t) >= 0) mention = "regarding";
+    /* R12a·D3 — factfind's subject/body/link come from a side read (and maybe
+       a side WRITE) of fact_finds, not from EMAIL_OPENING. This runs BEFORE
+       the object below is built, and can throw (composeFactfind's THROW
+       comment) — deliberately, so that throw propagates out of composeEmail()
+       untouched for "process-emails" to catch, exactly like a real function
+       invocation failing before it returns anything. */
+    var ffCompose = t === "factfind" ? composeFactfind(row, cs) : null;
     return {
       queue_id: row.id,
       to_email: row.to_email,
       email_type: row.email_type,
+      /* Null on every type except factfind: those are display-only via the
+         row's own `subject` column, set once at queue time — v12 is the only
+         type where compose() itself decides the subject. */
+      subject: ffCompose ? ffCompose.subject : null,
       from: name + " <" + setting("from_email", "hello@nexmoney.co.uk") + ">",
       reply_to: (adv && adv.email) || setting("reply_to_email", "hello@nexmoney.co.uk"),
       adviser_id: adv ? adv.id : null,
@@ -3768,7 +3912,7 @@
          reads rather than a flag about it. */
       property_line: mention === "regarding" ? "Regarding: " + addr : null,
       property_phrase: mention === "sentence" ? "your mortgage on " + addr : null,
-      body_lines: emailBodyLines(t, addr, mention, cs),
+      body_lines: ffCompose ? factfindBodyLines(mention, addr, ffCompose.link) : emailBodyLines(t, addr, mention, cs),
       /* R9 — what the document mails actually asked for, so a test can assert the
          list a client reads rather than a flag about it. Null on every type that
          is not about documents: "this mail carries no checklist" and "it carries
@@ -3778,6 +3922,13 @@
         ? (caseChecklist(cs && cs.id).length ? outstandingDocs(cs.id).map(function (d) { return d.item; }) : settingsDocsList())
         : null,
       docs_link: DOC_TYPES.indexOf(t) >= 0 && caseChecklist(cs && cs.id).length ? docsLinkFor(cs) : null,
+      /* R12a·D3 — the fact-find row this send resolved (created if it did not
+         already exist) and the link built from its token, so a test can
+         assert the exact link a client would click, and process-emails below
+         can advance that row's status after a successful send without
+         re-deriving it. Null on every type but factfind. */
+      fact_find_id: ffCompose ? ffCompose.fact_find_id : null,
+      fact_find_link: ffCompose ? ffCompose.link : null,
       signoff: advSignoff ? String(advSignoff).split("\n") : [name, setting("company_name", "NexMoney")].concat(phone ? [phone] : []),
       signoff_source: advSignoff ? "profile" : (adv ? "adviser_name" : "settings")
     };
@@ -4323,11 +4474,34 @@
           failed++;
           return;
         }
-        composed.push(composeEmail(e));
+        /* R12a·D3 — v12: compose() can now throw (factfind, no site_url). A
+           row whose compose blows up goes status='failed' with THAT error,
+           the same as a bounce or a missing address — never quietly sent, and
+           never left dangling in 'queued' either. Everything before this row
+           in the loop is unaffected; the try/catch is per-row on purpose. */
+        var composedRow;
+        try {
+          composedRow = composeEmail(e);
+        } catch (composeErr) {
+          e.status = "failed";
+          e.error = (composeErr && composeErr.message) || String(composeErr);
+          failed++;
+          return;
+        }
+        composed.push(composedRow);
         e.status = "sent";
         e.sent_at = iso(new Date());
         e.error = null;
         sent++;
+        /* R12a·D3 — AFTER a successful send only: advance that fact_finds row
+           to 'sent'. Guarded to only move it on from 'created' or 'sent' —
+           never regresses a row the client already moved on to 'started' or
+           'submitted' themselves, which could easily be true by the time a
+           chase/retry send lands. */
+        if (e.email_type === "factfind" && composedRow.fact_find_id) {
+          var ffRow = DB.fact_finds.filter(function (f) { return f.id === composedRow.fact_find_id; })[0];
+          if (ffRow && ["created", "sent"].indexOf(ffRow.status) >= 0) ffRow.status = "sent";
+        }
       });
       LAST_EMAIL_RUN = {
         at: nowIso, scoped: !!ids, queue_ids: ids, considered: due.length,

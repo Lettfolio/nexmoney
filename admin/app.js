@@ -128,6 +128,10 @@ const EMAIL_LABEL = {
      Distinct from "Review request" on purpose: an operator scanning the queue has to be able to
      see that a client is being asked twice, because that is the row somebody may want to cancel. */
   review_reminder: "Review reminder (2nd ask)",
+  /* R12a·D3 — the digital fact-find link, sent as a real queued email (process-emails v12) instead
+     of the dialog's old bare mailto:. Without an entry here the Emails page — the one screen that
+     answers "did that actually go?" — would render the row as "Factfind" or worse. */
+  factfind: "Fact-find link",
 };
 /* R7 — and the one place a missing type could still print "undefined": the Emails list heading.
    Every other consumer already falls back to the raw type; this one did not. A type this map has
@@ -591,16 +595,91 @@ function leadRoutingHtml(leadId) {
   const rr = leastLoadedAdviser();
   const sel = leadRoutingSuggestion();
   return `<select class="lead-adviser" data-lead="${esc(leadId || "")}" data-rr="${esc(rr || "")}" aria-label="Assign this lead to" title="${esc(leadLoadTitle(rr))}" style="width:auto;">${leadAdviserOptionsHtml()}</select>`
-    + (rr ? `<span class="lead-rr${sel === rr ? "" : " hidden"}" data-rr-for="${esc(leadId || "")}" title="${esc(leadLoadTitle(rr))}">(lightest load)</span>` : "");
+    + (rr ? `<span class="lead-rr${sel === rr ? "" : " hidden"}" data-rr-for="${esc(leadId || "")}" data-rr="${esc(rr)}" title="${esc(leadLoadTitle(rr))}">(lightest load)</span>` : "");
+}
+/* ==========================================================================
+   R12a · K-1/K-2 — ONE LEAD, ONE ANSWER TO "WHO IS THIS GOING TO?"
+
+   The same lead is on screen TWICE — as a My Day `lead_new` row and as a row
+   in the New-website-leads drawer — and until now each copy carried its OWN
+   `<select class="lead-adviser">`. The two never spoke to each other, so a
+   reassignment made in one place was invisible in the other, and Accept read
+   whichever select sat beside the button that happened to be clicked. Change
+   the routing in My Day, press Accept in the drawer, and the case was created
+   for the drawer's untouched default while the toast confidently named the
+   wrong adviser. Nothing on screen said the choice had been dropped.
+
+   The fix is a single source of truth per LEAD, not per control:
+     · LEAD_ADV_CHOICE — lead id → the adviser a human actually picked. Set on
+       change, in memory only (R5-5's "no sticky store" rule is unchanged: a
+       reload forgets everything and every row is back to the suggestion).
+     · syncLeadRouting() — pushes one value into EVERY select sharing that
+       data-lead and re-judges EVERY "(lightest load)" note for it. Notes are
+       found document-wide rather than inside the select's own parent, because
+       the two copies live in different panels.
+     · applyLeadAdvChoices() — re-applies the map after any repaint, so the two
+       copies cannot drift apart just because one list painted after the other.
+       With no human choice on file the copies are still reconciled, to the
+       first one in the DOM, so "the two selects disagree" is not a state this
+       screen can be in at all.
+     · leadAdviserValue() — what Accept reads. The map first, the DOM second;
+       the clicked button's own row is only ever a last resort.
+   ========================================================================== */
+const LEAD_ADV_CHOICE = {};   // lead id → adviser id, this session only
+function leadAdvSelects(leadId) {
+  if (!leadId) return [];
+  return [...document.querySelectorAll(`select.lead-adviser[data-lead="${CSS.escape(leadId)}"]`)];
+}
+/* K-2 — the "(lightest load)" caption is a claim about the CURRENT selection, so it is judged
+   against the value, not against which control was touched. Every copy of the note for this lead
+   is re-judged together; leaving one behind is how the caption ends up describing a person the
+   operator has just overridden. */
+function syncLeadRrNotes(leadId, value) {
+  if (!leadId) return;
+  document.querySelectorAll(`.lead-rr[data-rr-for="${CSS.escape(leadId)}"]`).forEach((note) => {
+    const sel = note.parentElement && note.parentElement.querySelector(`select.lead-adviser[data-lead="${CSS.escape(leadId)}"]`);
+    const rr = (sel && sel.dataset.rr) || note.dataset.rr || "";
+    note.classList.toggle("hidden", !rr || value !== rr);
+  });
+}
+function syncLeadRouting(leadId, value) {
+  const sels = leadAdvSelects(leadId);
+  if (!sels.length) return;
+  const offered = (s) => Array.prototype.some.call(s.options, (o) => o.value === value);
+  sels.forEach((s) => { if (value != null && s.value !== value && offered(s)) s.value = value; });
+  syncLeadRrNotes(leadId, value);
 }
 function syncLeadRrNote(sel) {
   if (!sel) return;
-  const note = sel.parentElement && sel.parentElement.querySelector(`.lead-rr[data-rr-for="${CSS.escape(sel.dataset.lead || "")}"]`);
-  if (note) note.classList.toggle("hidden", sel.value !== sel.dataset.rr);
+  syncLeadRrNotes(sel.dataset.lead || "", sel.value);
+}
+/* Re-applied after every repaint of either list. A lead with a human choice on file gets it back;
+   a lead without one is reconciled to its first select so the two copies always agree. */
+function applyLeadAdvChoices() {
+  const seen = new Set();
+  document.querySelectorAll("select.lead-adviser[data-lead]").forEach((s) => {
+    const id = s.dataset.lead;
+    if (!id || seen.has(id)) return;
+    seen.add(id);
+    const chosen = LEAD_ADV_CHOICE[id];
+    const want = (chosen && Array.prototype.some.call(s.options, (o) => o.value === chosen)) ? chosen : s.value;
+    syncLeadRouting(id, want);
+  });
+}
+/* What Accept must read: the lead's answer, not the clicked row's copy of it. */
+function leadAdviserValue(leadId, btn) {
+  const chosen = LEAD_ADV_CHOICE[leadId];
+  if (chosen && TEAM.some((p) => p.id === chosen)) return chosen;
+  const sels = leadAdvSelects(leadId);
+  if (sels.length) return sels[0].value || "";
+  const near = leadAdviserFor(btn);
+  return (near && near.value) || "";
 }
 document.addEventListener("change", (ev) => {
   const sel = ev.target && ev.target.closest && ev.target.closest("select.lead-adviser");
-  if (sel) syncLeadRrNote(sel);
+  if (!sel) return;
+  if (sel.dataset.lead) LEAD_ADV_CHOICE[sel.dataset.lead] = sel.value;
+  syncLeadRouting(sel.dataset.lead, sel.value);
 });
 /* R5-5 — accepting a lead repaints the whole inbox (and My Day), which throws away any selection a
    human made on the OTHER rows. Capture them by lead id first, put them back after the repaint.
@@ -618,6 +697,9 @@ function restoreLeadAdvSel(map) {
     if (want && Array.prototype.some.call(s.options, (o) => o.value === want)) s.value = want;
     syncLeadRrNote(s);   // R7-5 — a restored override must not keep the "lightest load" note
   });
+  /* R12a K-1 — the restore above walks controls; the reconcile walks LEADS. Without it a lead whose
+     two copies were repainted at slightly different moments would come back out of step. */
+  applyLeadAdvChoices();
 }
 // The lead-adviser select that sits beside an Accept button (same row), if there is one.
 function leadAdviserFor(btn) {
@@ -2434,7 +2516,16 @@ async function renderCaseDocs(caseId, c, state) {
           <div class="doc-meta">${docStatusChip(s)}
             ${d.requested_at ? `<span class="doc-date">asked ${fmtD(d.requested_at)}</span>` : ""}
             ${d.received_at ? `<span class="doc-date">in ${fmtD(d.received_at)}</span>` : ""}
-            ${d.storage_path ? '<span class="doc-date" title="A file was uploaded through the client\'s link.">📎 file</span>' : ""}
+            ${/* R12a·D8 — this was a dead text label. The client had uploaded the document through
+                  their own link, the object was sitting in the case-documents bucket, and the only
+                  thing the case said about it was "📎 file" — so the one place an adviser goes to
+                  check what actually arrived could not open it. Items received by EMAIL or in
+                  person carry no storage_path (cd014 is exactly that), and they deliberately get no
+                  control: offering "Open" on a row with nothing behind it is the same lie the other
+                  way round. */ ""}
+            ${d.storage_path
+              ? `<button type="button" class="btn btn-sm doc-open" data-doc="${esc(d.id)}" data-path="${esc(d.storage_path)}" title="Open the file the client uploaded through their link. The link is signed and expires after 5 minutes.">📎 Open</button>`
+              : ""}
           </div>
           ${d.note ? `<div class="doc-note">${esc(d.note)}</div>` : ""}
         </div>
@@ -2461,6 +2552,7 @@ async function renderCaseDocs(caseId, c, state) {
     </div>
     <div class="doc-link-out hidden" id="docs-link-out"></div>`;
   body.querySelectorAll(".doc-act").forEach((b) => (b.onclick = () => docAction(b.dataset.act, b.dataset.doc, caseId, c)));
+  body.querySelectorAll(".doc-open").forEach((b) => (b.onclick = () => openDocFile(b.dataset.path, b)));
   $("#docs-add-btn").onclick = () => addDocItems(caseId, c);
   $("#docs-link-btn").onclick = () => copyDocUploadLink(caseId, c);
   $("#docs-send-btn").onclick = (e) => sendDocsRequestNow(caseId, c, e);
@@ -2496,6 +2588,29 @@ async function docAction(act, docId, caseId, c) {
   if (error) return toast("Error: " + error.message);
   toast(act === "received" ? "Marked received" : "Back to outstanding");
   return renderCaseDocs(caseId, c);
+}
+/* R12a·D8 — OPEN A CLIENT-UPLOADED DOCUMENT.
+   Same shape as the offer-letter viewer (~8051): mint a short-lived signed URL and open it in a
+   new tab. Nothing is downloaded through the app and no public URL is ever produced — the bucket
+   stays private and the link dies in five minutes, which is the whole reason for signing it.
+   An error is TOASTED with what the storage layer actually said rather than swallowed: "nothing
+   happened when I clicked Open" is the worst possible outcome on a document an adviser is trying
+   to check before submitting a case. */
+const DOC_BUCKET = "case-documents";
+async function openDocFile(path, btn) {
+  if (!path) return;
+  if (btn) btn.disabled = true;   // the round trip is a network call — don't let it be double-fired
+  try {
+    const { data, error } = await db.storage.from(DOC_BUCKET).createSignedUrl(path, 300);
+    if (error || !data || !data.signedUrl) {
+      return toast("Couldn't open that file — " + ((error && error.message) || "storage gave no link back") + ". The upload may have been removed.");
+    }
+    window.open(data.signedUrl, "_blank");
+  } catch (e) {
+    toast("Couldn't open that file — " + (e && e.message ? e.message : String(e)));
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 /* The waiver reason. Optional — an adviser who waives a document knows why and may be on the
    phone — but asked for, because "waived" with no reason is the line that gets read back in six
@@ -2970,12 +3085,40 @@ function updateRevenueDrawerCount() {
   if (el) el.textContent = p + f;
 }
 
-function toast(msg) {
+/* R12a·D12 — THE TOAST CAN NOW CARRY ONE ACTION.
+   It was text-only, which is why "Task done" was a one-way door: the row vanished from every list
+   and the only route back was the database. `action` is deliberately generic — {label, onClick,
+   ms} — and deliberately singular: a toast is a passing sentence, not a menu, and a second button
+   on it would be a dialog wearing the wrong clothes. Other flows (delete, waive, dismiss) can use
+   the same hook without touching this function again.
+
+   The toast element itself stays pointer-events:none (M7 — it must never intercept a tap on a
+   field beneath it); only the action button turns pointer events back on, so an undo link cannot
+   swallow clicks on whatever it happens to be floating over. An action toast lives longer than a
+   plain one — 10s — because it has to be readable AND reachable, not just readable. */
+const TOAST_ACTION_MS = 10000;
+function toast(msg, action) {
   const t = $("#toast");
-  t.textContent = msg;
-  t.classList.remove("hidden");
   clearTimeout(t._h);
-  t._h = setTimeout(() => t.classList.add("hidden"), 3200);
+  const live = action && action.label && typeof action.onClick === "function";
+  if (live) {
+    t.innerHTML = '<span class="toast-msg"></span><button type="button" class="toast-action" id="toast-action"></button>';
+    t.querySelector(".toast-msg").textContent = msg;
+    const b = t.querySelector("#toast-action");
+    b.textContent = action.label;
+    b.onclick = () => {
+      clearTimeout(t._h);
+      t.classList.add("hidden");
+      t.classList.remove("has-action");
+      action.onClick();
+    };
+    t.classList.add("has-action");
+  } else {
+    t.classList.remove("has-action");
+    t.textContent = msg;   // replaces any previous action markup outright
+  }
+  t.classList.remove("hidden");
+  t._h = setTimeout(() => { t.classList.add("hidden"); t.classList.remove("has-action"); }, live ? (action.ms || TOAST_ACTION_MS) : 3200);
 }
 
 /* Stronger confirmation for irreversible hard-deletes of regulated records.
@@ -4147,15 +4290,36 @@ async function loadTasks() {
   }).join("") + (filtered.length > tasks.length ? `<div class="empty">…and ${filtered.length - tasks.length} more due.</div>` : "") : '<div class="empty">Nothing due in the next 14 days.</div>';
   panelCount("#tasks-list", filtered.length, true);
 }
-window.doneTask = async function (id) {
-  await db.from("case_tasks").update({ done_at: new Date().toISOString() }).eq("id", id);
-  toast("Task done");
-  loadTasks();
-};
-window.doneTaskInCase = async function (taskId, caseId) {
-  await db.from("case_tasks").update({ done_at: new Date().toISOString() }).eq("id", taskId);
-  openCase(caseId);
-};
+/* ---------- R12a·D12 — DONE, AND UNDONE ----------
+   "Done" was one unconfirmed click on a small ✓ next to another small ✓, the row disappeared, and
+   nothing anywhere offered a way back. A confirm on every tick would be worse — this is the most
+   repeated gesture in the app — so the fix is the other one: do it instantly, and hand back an
+   Undo for ten seconds.
+
+   Completion is modelled by a nullable done_at, so reopening is literally `done_at = null`: no
+   status enum, no second row, nothing to reconcile. One helper does the write for all three places
+   a task can be ticked (My Day, Tasks due, the case modal) and each passes the repaint for the
+   list the click came FROM, so undoing puts the row back where it vanished from rather than
+   somewhere the operator has to go looking.
+
+   A failed write is now surfaced too: all three call sites used to ignore the error object
+   entirely and repaint, so a refused update read on screen as a completed task. */
+async function markTaskDone(id, repaint) {
+  const { error } = await db.from("case_tasks").update({ done_at: new Date().toISOString() }).eq("id", id);
+  if (error) { toast("Couldn't mark that task done — " + error.message); return false; }
+  toast("Task done", { label: "Undo", onClick: () => reopenTask(id, repaint) });
+  if (repaint) repaint();
+  return true;
+}
+async function reopenTask(id, repaint) {
+  const { error } = await db.from("case_tasks").update({ done_at: null }).eq("id", id);
+  if (error) return toast("Couldn't reopen that task — " + error.message);
+  toast("Task reopened — it is back on the list");
+  if (repaint) repaint();
+}
+window.doneTask = function (id) { return markTaskDone(id, loadTasks); };
+window.doneTaskInCase = function (taskId, caseId) { return markTaskDone(taskId, () => openCase(caseId)); };
+window.reopenTaskInCase = function (taskId, caseId) { return reopenTask(taskId, () => openCase(caseId)); };
 
 async function loadProtection() {
   const cutoff = new Date(Date.now() - 30 * 86400000).toISOString();
@@ -4207,7 +4371,23 @@ const BRIEF_KIND_SHORT = {
   appt_today: "appointment", rate_urgent: "rate-end", stalled: "stalled", fee_chase: "fee",
   protection_hot: "protection", no_completion_date: "completion date",
   review_feedback: "review feedback",   // R9-3
+  comms_failed: "bounced message",      // R12a K-5
 };
+/* R12a K-5 — how much of the failed-message read each briefing paint takes, and how many rows it
+   is allowed to add. Bounded on purpose: My Day is a working list, not the failure log, and the
+   Emails page (Failed chip) is where the whole set lives. */
+const BRIEF_FAILED_READ = 40;
+const BRIEF_FAILED_MAX = 8;
+/* The bounce reason in English. The SMTP status code is diagnostics, not a sentence, and the row
+   title already carries the verb — repeating "message bounced" after "bounced" is noise. The full
+   untouched error stays on the Emails row, which is where somebody debugging a send goes. */
+function commsFailReason(err) {
+  let s = String(err == null ? "" : err).trim();
+  if (!s) return "";
+  s = s.replace(/^\d{3}[ \t]+(?:\d+\.\d+\.\d+[ \t]+)?/, "");
+  s = s.replace(/\s*[—–-]\s*(message bounced|could not be delivered)\.?$/i, "").trim();
+  return s.length > 80 ? s.slice(0, 77) + "…" : s;
+}
 function briefKindShort(kind) { return BRIEF_KIND_SHORT[kind] || String(kind || "").replace(/_/g, " "); }
 
 function briefBadge(it) {
@@ -4222,6 +4402,9 @@ function briefBadge(it) {
     case "task_today": return rev + '<span class="badge amber">TODAY</span>';
     // R9-3 — the merged-in row. The badge IS the row: nothing else about it needs saying twice.
     case "review_feedback": return REVIEW_TASK_BADGE;
+    /* R12a K-5 — red, because the case believes a message was sent and it was not. "BOUNCED" and
+       "NOT SENT" are different facts (a bad address vs a send that fell over) and the fix differs. */
+    case "comms_failed": return it.bounced ? '<span class="badge red">BOUNCED</span>' : '<span class="badge red">NOT SENT</span>';
     /* R7-5 — the accept clock reaches My Day too. The NEW LEAD badge stays (it is what the row IS);
        the age chip beside it is how late it is, and it is the one that changes colour. `it.lead` is
        attached by loadBriefing's enrichment below and is simply absent if that fetch failed, in
@@ -4249,6 +4432,16 @@ function briefActions(it) {
       return `${it.case_id ? `<button class="btn btn-sm btn-primary" onclick="openCase('${it.case_id}')" title="Read the client's own words on the case timeline, then ring them">Open case</button>` : ""}<button class="btn btn-sm" onclick="briefDone('${it.task_id}')">✓ Done</button>`;
     case "lead_new":
       return leadRoutingHtml(it.lead_id) + `<button class="btn btn-sm btn-primary" onclick="acceptLead('${it.lead_id}', event)">Accept</button>`;
+    /* R12a K-5 — the same two verbs the Emails row offers, in the order that fixes it: the address
+       is wrong, so correcting the client record comes first and re-sending second. `Fix contact`
+       is the EXISTING route (openClient with the field to focus and the address that failed), not
+       a new one; with no client behind the row, the Emails page's failed filter is the fallback,
+       which is the same destination the Data-health tiles use. */
+    case "comms_failed":
+      return (it.client_id
+        ? `<button class="btn btn-sm btn-primary" onclick="openClient('${it.client_id}','${it.fix_focus || "email"}','${jsArg(it.fix_value || "")}')" title="Open the client record with the ${it.fix_focus === "phone" ? "phone number" : "email address"} that failed, so it can be corrected">Fix contact</button>`
+        : `<button class="btn btn-sm btn-primary" onclick="dhGotoEmails(true)" title="Open the Emails page filtered to failed messages">Fix contact</button>`)
+        + (it.case_id ? `<button class="btn btn-sm" onclick="openCase('${it.case_id}')">Open case</button>` : "");
     case "email_new":
       return `${it.case_id ? `<button class="btn btn-sm" onclick="openCase('${it.case_id}')">Open case</button>` : ""}<button class="btn btn-sm" onclick="markEmailHandled('${it.email_id}')">Handled</button>${it.case_id ? `<button class="btn btn-sm" onclick="askAI('Draft a reply to the latest email from this client. Case id: ${it.case_id}')">Draft reply</button>` : ""}`;
     case "appt_today":
@@ -4357,6 +4550,69 @@ async function loadBriefing() {
         });
       });
     items.sort((a, b) => a.pri - b.pri);
+  } catch (e) { /* graceful degradation — the rest of My Day is unaffected */ }
+  /* ---- R12a · K-5 — A MESSAGE THAT NEVER ARRIVED IS THE CASE'S PROBLEM, NOT THE QUEUE'S ----
+     A document request to a live case bouncing on a 550 appeared in exactly one place: the Emails
+     page, which is opened when somebody already suspects something. There is no Watchtower rule
+     for it and get_briefing knows nothing about the queues, so the case just went quiet — the
+     adviser is waiting on documents the client was never asked for, and the first sign of it is
+     the chase that goes nowhere a fortnight later.
+
+     Merged client-side exactly like the completion-date chaser and the review call-back above:
+     purely additive, best-effort, and it changes nothing about the RPC. The rules it obeys are
+     the screen's existing ones, not new ones:
+       · ONLY A LIVE CASE. A bounce on a completed or not-proceeding case is history; My Day is
+         for work that is still worth doing. A failed row with no case at all (a lead
+         acknowledgement) has no case to stall, so it is skipped too.
+       · R5-35's SCOPE RULE, VERBATIM. Mine means the case's adviser is me; an ownerless case's
+         bounce lives under All, labelled "unassigned" by briefOwnerSuffix like everything else.
+       · ONE ROW PER FAILED MESSAGE, capped. Two bounces on one case are two facts, but the
+         grouping in groupBriefRows keeps them to one visible row with the rest behind "+N more".
+     Priority 11: below an overdue task (10) because the task is a commitment already broken,
+     above a new lead (12) because this one is a commitment we think we have KEPT. */
+  try {
+    const failedRows = [];
+    const [emFail, smsFail] = await Promise.all([
+      db.from("email_queue").select("id,case_id,client_id,email_type,to_email,error,created_at,clients(first_name,last_name)")
+        .eq("status", "failed").order("created_at", { ascending: false }).limit(BRIEF_FAILED_READ),
+      db.from("sms_queue").select("id,case_id,client_id,sms_type,to_phone,error,created_at,clients(first_name,last_name)")
+        .eq("status", "failed").order("created_at", { ascending: false }).limit(BRIEF_FAILED_READ),
+    ]);
+    (emFail.data || []).forEach((e) => failedRows.push({ ...e, __sms: false }));
+    (smsFail.data || []).forEach((s) => failedRows.push({ ...s, __sms: true }));
+    const failCaseIds = [...new Set(failedRows.map((r) => r.case_id).filter(Boolean))];
+    if (failCaseIds.length) {
+      const { data: fcs } = await db.from("cases").select("id,stage,assigned_to,client_id").in("id", failCaseIds);
+      const caseById = {};
+      (fcs || []).forEach((c) => { caseById[c.id] = c; });
+      // One row per failed MESSAGE: the queue id is the identity, so the same row read twice
+      // (email and SMS ids never collide, but a repaint mid-flight could) can only appear once.
+      const seenFail = new Set();
+      failedRows
+        .filter((r) => { const k = (r.__sms ? "s:" : "e:") + r.id; if (!r.case_id || seenFail.has(k)) return false; seenFail.add(k); return true; })
+        .filter((r) => { const c = caseById[r.case_id]; return c && c.stage !== "completed" && c.stage !== "not_proceeding"; })
+        .filter((r) => briefingScope === "all" || (caseById[r.case_id].assigned_to === (ME && ME.id)))
+        .slice(0, BRIEF_FAILED_MAX)
+        .forEach((r) => {
+          const c = caseById[r.case_id];
+          const who = (r.clients ? [r.clients.first_name, r.clients.last_name].filter(Boolean).join(" ") : "")
+            || (r.__sms ? r.to_phone : r.to_email) || "this client";
+          const label = r.__sms ? smsTypeLabel(r.sms_type) : emailTypeLabel(r.email_type);
+          const verb = isBadContactError(r.error) ? "bounced" : "failed to send";
+          const why = commsFailReason(r.error);
+          items.push({
+            kind: "comms_failed", pri: 11,
+            title: `${label} ${r.__sms ? "SMS" : "email"} to ${who} ${verb}${why ? " — " + why : ""}`,
+            sub: `Nothing reached them${r.created_at ? " · " + fmtAgo(r.created_at) : ""} · case still at ${STAGE_LABEL[c.stage] || c.stage}. Fix the contact detail, then retry the row on Emails.`,
+            case_id: r.case_id, client_id: c.client_id || r.client_id || null,
+            owner: c.assigned_to || null,
+            fix_focus: r.__sms ? "phone" : "email",
+            fix_value: (r.__sms ? r.to_phone : r.to_email) || "",
+            bounced: verb === "bounced",
+          });
+        });
+      items.sort((a, b) => a.pri - b.pri);
+    }
   } catch (e) { /* graceful degradation — the rest of My Day is unaffected */ }
   // T1-23 — a client with more than one open case (Duncan Armitage's rate-end sits on two of them,
   // Ruby Sinclair has four) produces briefing rows whose titles are word-for-word identical and
@@ -4524,14 +4780,17 @@ function renderBriefing() {
   const rows = groupBriefRows(items);
   $("#briefing-list").innerHTML = rows.length ? rows.map(briefRowHtml).join("") : '<div class="empty">All clear — nothing needs you right now 🎉</div>';
   panelCount("#briefing-list", items.length, items.some((it) => it.pri < 15));
+  applyLeadAdvChoices();   // R12a K-1 — a lead_new row's select is the SAME control as the drawer's
 }
 window.toggleBriefGroup = function (caseId) {
   if (briefExpanded.has(caseId)) briefExpanded.delete(caseId); else briefExpanded.add(caseId);
   renderBriefing();
 };
-window.briefDone = async function (id) {
-  await window.doneTask(id);
-  loadBriefing();
+window.briefDone = function (id) {
+  /* R12a·D12 — My Day and the Tasks-due panel show the same task, so an undo from here has to
+     repaint BOTH; the old version chained doneTask (which repaints Tasks) and then reloaded the
+     briefing, which is the same pair spelled as a side effect. */
+  return markTaskDone(id, () => { loadBriefing(); loadTasks(); });
 };
 window.markEmailHandled = async function (id) {
   const { error } = await db.from("case_emails").update({ triage_status: "handled" }).eq("id", id);
@@ -6334,6 +6593,34 @@ const GI_BADGE = {
 // The settable protection statuses, shared by the per-row select and S3c's bulk bar so the two can
 // never drift apart. (not_discussed is deliberately absent — nothing moves a case backwards here.)
 const PROT_BULK_STATUS = [["discussed", "Discussed"], ["quoted", "Quoted"], ["policy_taken", "Policy taken"], ["declined", "Declined"]];
+/* ---------- R12a·D4 — THE CASE-HEADER PROTECTION CHIP, ALWAYS ----------
+   It used to render ONLY for `not_discussed`, so the act of recording the conversation DELETED the
+   indicator: the header went from "not discussed" to saying nothing at all, while Reports went on
+   counting that same case under "No protection outcome" (see the Data-health item at ~8749 and the
+   Protection call list's own basis line, "protection_status not policy_taken and not declined").
+   Screen and report disagreed about the identical case — and the disagreement was in the direction
+   that hides work, because "no chip" reads as "nothing to do here".
+
+   So the chip is now unconditional and says which of the five states the case is actually in, in
+   the report's own words. `discussed` is deliberately still AMBER: it is an open gap by every
+   measure this app takes, and colouring it neutral would be the same lie in a quieter voice.
+   `declined` is neutral rather than red — a client saying no is a finished conversation, not a
+   problem. Only `policy_taken` is green.
+
+   The id stays `cs-prot-warn` (the call-logger at ~8105 reaches for it by that id) — the element
+   is now REPLACED rather than removed when the call logger records the conversation. */
+function protStatChipHtml(c) {
+  const st = (c && c.protection_status) || "not_discussed";
+  const quotedAt = c && c.protection_quoted_at;
+  const S = {
+    not_discussed: ["cs-warn", "not discussed", "Nobody has recorded a protection conversation on this case. It counts as an open gap on Reports and Data health."],
+    discussed: ["cs-warn", "discussed — no outcome yet", "The conversation happened but nothing came of it yet — no quote, no policy, no decline. Reports still count this case under “No protection outcome”."],
+    quoted: ["cs-warn", quotedAt ? "quoted " + fmtD(quotedAt) : "quoted", quotedAt ? `Quoted ${fmtD(quotedAt)}. Still an open outcome until a policy is taken or the client declines.` : "Quoted, but no quote date is recorded — the “quotes gone cold” report cannot age this one."],
+    policy_taken: ["cs-good", "policy taken", "A policy was taken. This is the only protection outcome that earns anything."],
+    declined: ["", "declined", "The client was asked and said no. A finished conversation, not an open gap."],
+  }[st] || ["cs-warn", String(st).replace(/_/g, " "), ""];
+  return `<div class="cs-stat ${S[0]}" id="cs-prot-warn" data-prot="${esc(st)}" title="${esc(S[2])}"><span class="cs-lbl">Protection</span><span class="cs-val">${esc(S[1])}</span></div>`;
+}
 async function loadProtectionPage() {
   // T1-5: the RPC's "mine" scope also hands back every ownerless case, so "Mine" meant "mine plus
   // nobody's" for all three advisers at once. Fetch the whole book and apply the scope here, where
@@ -6553,17 +6840,21 @@ async function bulkSetProtStatus(status) {
   }
   const msg = `Set protection status to "${label}" on ${ids.length} case${ids.length === 1 ? "" : "s"}?`
     + (status === "policy_taken" ? `\n\nCommission ${fmtM(commission)} will be recorded on every one of them.` : "")
-    + (status === "quoted" ? "\n\nThe quote clock starts today on every one of them." : "");
+    /* R12a·D9 — this used to promise "the quote clock starts today on every one of them", and
+       that is exactly the sweep that used to reset a cold quote to fresh. It now says what
+       protUpdateWithStamp actually does. */
+    + (status === "quoted" ? "\n\nThe quote clock starts today on any that are not already quoted. A quote date already on a case is left alone, so its age keeps counting." : "");
   if (!confirm(msg)) return;
-  let ok = 0, err = 0;
+  let ok = 0, err = 0, keptDates = 0;
   for (const id of ids) {
     const patch = { protection_status: status };
     if (commission != null) patch.protection_commission = commission;
-    const { error } = await protUpdateWithStamp(id, patch, status === "quoted");
-    if (error) err++; else ok++;
+    const { error, kept } = await protUpdateWithStamp(id, patch, status === "quoted");
+    if (error) err++; else { ok++; if (kept) keptDates++; }
   }
   let out = `${ok} case${ok === 1 ? "" : "s"} set to ${label.toLowerCase()}`;
   if (commission != null) out += ` · commission ${fmtM(commission)} each`;
+  if (keptDates) out += ` · ${keptDates} kept the quote date already on file`;
   if (err) out += ` · ${err} error${err === 1 ? "" : "s"}`;
   toast(out);
   protBulkSel.clear();
@@ -6591,19 +6882,52 @@ const PROT_STAMP_COLS = ["protection_quoted_at", "protection_quoted_by"];
 function protQuotedStamp() {
   return { protection_quoted_at: new Date().toISOString(), protection_quoted_by: (ME && ME.id) || null };
 }
-/* One update, with the M8 stamp if the database will take it and without if it won't. Returns
-   {error, stamped} — `stamped` false on an un-migrated database, so the toast can say the status
-   changed WITHOUT claiming a clock started that nothing is recording. Never silently swallows a
-   real failure; only the missing column. */
+/* R12a·D9 — AND THE CLOCK MAY NEVER BE WOUND BACKWARDS.
+   R7-3 above started the clock but stamped it on EVERY write that set the status to quoted, and
+   the two entry points that go through here (the Protection page's per-row select and S3c's bulk
+   bar) do not know what the status was before. So re-applying "Quoted" to a case that was already
+   quoted — one bulk-bar sweep over a filtered "quoted" list is enough — moved
+   protection_quoted_at to today, and a three-week-old quote that the "quotes gone cold" report
+   exists to surface came back reading "0d · fresh". A report that can be silently reset by an
+   unrelated click is worse than no report.
+
+   The rule, decided once, here, so both callers and the case form agree:
+
+     • CHANGING to quoted from anything else  → stamp. The quote was sent now.
+     • ALREADY quoted, and no date on record  → stamp. This is the only route by which the twelve
+       legacy rows carrying "quote age unknown" can ever acquire a date, and re-picking a value a
+       <select> is already showing is a deliberate act (a same-value pick fires no change event at
+       all, so this can only arrive from the bulk bar or the My Day "Mark quoted" button — both of
+       which mean "I have just quoted this").
+     • ALREADY quoted, date already on record → LEAVE IT. Never overwritten, never cleared.
+
+   The pre-read is one narrow select on the row about to be written; it is skipped entirely unless
+   a stamp is actually in play. If it fails we fall back to stamping, which is R7-3's behaviour and
+   the safe end of the trade: the following update is about to fail for the same reason anyway.
+
+   Returns {error, stamped, kept} — `kept` distinguishes "left the existing quote date alone" from
+   `stamped:false`'s "this database has no column to stamp", so the toast can tell the truth about
+   which of the two just happened. */
+async function protQuoteStampDecision(caseId) {
+  const { data, error } = await db.from("cases").select("protection_status,protection_quoted_at").eq("id", caseId).maybeSingle();
+  if (error || !data) return { stamp: true, kept: false };
+  if ((data.protection_status || "not_discussed") !== "quoted") return { stamp: true, kept: false };
+  return data.protection_quoted_at ? { stamp: false, kept: true } : { stamp: true, kept: false };
+}
 async function protUpdateWithStamp(caseId, patch, wantStamp) {
   let stamped = !!wantStamp && (await protQuoteSupported());
+  let kept = false;
+  if (stamped) {
+    const d = await protQuoteStampDecision(caseId);
+    stamped = d.stamp; kept = d.kept;
+  }
   const full = stamped ? Object.assign({}, patch, protQuotedStamp()) : patch;
   let { error } = await db.from("cases").update(full).eq("id", caseId);
   if (error && stamped && isMissingColumnError(error)) {
     stamped = false; PROT_QUOTE_SUPPORTED = false;
     ({ error } = await db.from("cases").update(patch).eq("id", caseId));
   }
-  return { error: error || null, stamped };
+  return { error: error || null, stamped, kept };
 }
 /* The required-commission capture. Returns a number, or null when the operator cancelled — and
    null MUST abort the status change, which is the whole point of it being required. */
@@ -6639,10 +6963,16 @@ window.setProtStatus = async function (caseId, status) {
     if (amt == null) { loadProtectionPage(); return toast("Left unchanged — a policy needs a commission figure."); }
     patch.protection_commission = amt;
   }
-  const { error, stamped } = await protUpdateWithStamp(caseId, patch, status === "quoted");
+  const { error, stamped, kept } = await protUpdateWithStamp(caseId, patch, status === "quoted");
   if (error) return toast("Error: " + error.message);
   toast(status === "quoted"
-    ? (stamped ? "Protection status: quoted — quote clock started today" : "Protection status: quoted — but this database has no quote-date column (migration M8), so the age badge will read \u201cunknown\u201d")
+    /* R12a·D9 — three outcomes, three sentences. "kept" is the one that used to be a silent lie:
+       the clock was reset and the toast congratulated the adviser on starting it. */
+    ? (kept
+      ? "Protection status: quoted — the quote date already on this case was left as it is, so its age keeps counting"
+      : stamped
+        ? "Protection status: quoted — quote clock started today"
+        : "Protection status: quoted — but this database has no quote-date column (migration M8), so the age badge will read \u201cunknown\u201d")
     : status === "policy_taken"
       ? `Policy taken ✓ — commission ${fmtM(patch.protection_commission)} recorded`
       : "Protection status: " + status.replace(/_/g, " "));
@@ -6695,10 +7025,44 @@ function ffToken() {
     ? crypto.randomUUID()
     : "ff-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
 }
+/* ---------- R12a·D3 — THE FACT-FIND SEND PATH ----------
+   Three lies lived in this dialog, all of them about the same thing: whether anything was sent.
+
+   1. OPENING IT MARKED THE FACT-FIND "SENT". The insert relied on the column default, which is
+      'sent', so merely LOOKING at the dialog wrote a row claiming the client had been emailed a
+      link. Nothing had been. The row is now inserted with an explicit status:'created' — the
+      status the client link genuinely has the moment it is minted — and the badge for it says
+      "not sent yet" in words, not a status enum.
+   2. THE ONLY SEND WAS A mailto:. It opened the operator's mail client and recorded NOTHING —
+      no email_queue row, no case note, no task, nothing on the Emails page. If the operator then
+      closed the draft, the case still said "sent".
+   3. THE mailto WAS SIGNED BY THE OWNER. It used settings.adviser_name, the firm-wide default,
+      so Wayne emailing his own client signed off as Daniel and gave Daniel's contact details.
+      queueEmail has had the right rule since ADV-1 (the CASE's adviser, falling back to the
+      sender, and only then to the firm) — the mailto never got it.
+
+   The primary control is now a real queued send: email_type "factfind", through the same
+   queueEmail + scoped runAutomation machinery the docs_request "send now" button uses, which
+   process-emails v12 composes server-side (it resolves this same fact_finds row, builds the link
+   from site_url, and advances the row to 'sent' only AFTER the send succeeds). The mailto stays
+   as an explicit second choice for the adviser who wants to write it themselves — signed off
+   correctly now, and leaving a case note that says exactly what the system does and does not
+   know about it. */
+const FF_BADGE = {
+  created:   ["badge grey",  "not sent yet", "The link exists but nothing has gone to the client yet."],
+  sent:      ["badge blue",  "sent",         "The link was emailed to the client. If no date is shown beside this, the send predates the queued fact-find email and no date was recorded for it."],
+  started:   ["badge amber", "started",      "The client has opened the form and begun filling it in."],
+  submitted: ["badge green", "submitted",    "The client has finished and sent their answers back."],
+};
 window.factFind = async function (caseId, clientId) {
+  /* The case row is read here for one reason: the sign-off. Both send routes have to name the
+     CASE's adviser, and neither of them had the case to hand before. */
+  const { data: kase } = await db.from("cases").select("*").eq("id", caseId).single();
   let { data: ff } = await db.from("fact_finds").select("*").eq("case_id", caseId).order("created_at", { ascending: false }).limit(1).maybeSingle();
   if (!ff) {
-    const ins = await db.from("fact_finds").insert({ case_id: caseId, client_id: clientId, created_by: (ME && ME.id) || null, token: ffToken() }).select("*").single();
+    /* R12a·D3 — status is EXPLICIT. The column default is 'sent' (it predates there being any
+       send path at all), so omitting it here is what made opening this dialog a lie. */
+    const ins = await db.from("fact_finds").insert({ case_id: caseId, client_id: clientId, status: "created", created_by: (ME && ME.id) || null, token: ffToken() }).select("*").single();
     if (ins.error) return toast("Error: " + ins.error.message);
     ff = ins.data;
   } else if (!ff.token) {
@@ -6707,22 +7071,41 @@ window.factFind = async function (caseId, clientId) {
     await db.from("fact_finds").update({ token: tok }).eq("id", ff.id);
     ff.token = tok;
   }
-  const base = (settings.site_url || "https://nexmoney.co.uk").replace(/\/$/, "");
+  const siteUrl = String(settings.site_url || "").trim();
+  const base = (siteUrl || "https://nexmoney.co.uk").replace(/\/$/, "");
   const link = `${base}/factfind?token=${ff.token}`;
-  const badge = { sent: "badge grey", started: "badge amber", submitted: "badge green" }[ff.status] || "badge grey";
+  const [badgeCls, badgeBase, badgeTip] = FF_BADGE[ff.status] || ["badge grey", String(ff.status || "unknown"), ""];
+  /* R12a·D3 (d) — the badge states WHEN, not just what: "sent" with no date is the same
+     unanswerable question the old dialog left behind ("sent when? by whom?").
+     fact_finds carries submitted_at but no sent_at, and inventing one client-side would be a
+     guess. The date therefore comes from the thing that actually did the sending: the newest
+     SENT "factfind" row in email_queue for this case. A row advanced to 'sent' by some other
+     route (or before v12 existed) has no such email and simply shows no date — the tooltip says
+     why rather than the badge implying one. */
+  let sentOn = null;
+  if (ff.status === "sent") {
+    const ffMails = await softRows(db.from("email_queue").select("sent_at,created_at,status")
+      .eq("case_id", caseId).eq("email_type", "factfind").eq("status", "sent"));
+    sentOn = ffMails.map((m) => m.sent_at || m.created_at).filter(Boolean).sort().slice(-1)[0] || null;
+  }
+  /* "sent" carries its date IN the pill, because "sent" on its own is the question, not the
+     answer. started/submitted keep exactly the line they always had. */
+  const badgeWord = ff.status === "sent" && sentOn ? `sent ${fmtD(sentOn)}` : badgeBase;
   const hasData = ff.status === "submitted" && ff.data && Object.keys(ff.data).length;
   $("#modal").innerHTML = `
     <h3>Digital fact-find</h3>
     <p class="panel-sub">Send this secure link to the client. They fill it in on any device, can save as they go, and you get a task the moment they submit.</p>
-    <div style="margin:10px 0;"><span class="${badge}">${esc(ff.status)}</span>${ff.submitted_at ? " · submitted " + fmtD(ff.submitted_at) : ""}</div>
+    <div style="margin:10px 0;"><span class="${badgeCls}" id="ff-status-badge" title="${esc(badgeTip)}">${esc(badgeWord)}</span>${ff.submitted_at ? " · submitted " + esc(fmtD(ff.submitted_at)) : ""}</div>
     <label>Client link
       <div style="display:flex;gap:8px;">
         <input id="ff-link" readonly value="${esc(link)}" style="flex:1;">
         <button class="btn btn-sm" id="ff-copy">Copy</button>
       </div>
     </label>
+    ${siteUrl ? "" : '<p class="dq-notice bad" id="ff-no-site-url" style="margin-top:10px;">No <strong>Site URL</strong> is set in Settings, so there is no address to build the client\'s link from. The link above is a guess and the email cannot be sent until somebody fills that setting in.</p>'}
     <div class="action-bar" style="margin-top:10px;">
-      <button class="btn btn-sm" id="ff-mail">✉️ Open email to client</button>
+      <button class="btn btn-sm btn-primary" id="ff-send">✉️ Send fact-find email</button>
+      <button class="btn btn-sm" id="ff-mail" title="Opens a draft in your own email program. Nothing is recorded as sent, because the system cannot see what you do in there.">Open in your email app instead</button>
       <button class="btn btn-sm" id="ff-refresh">↻ Refresh status</button>
       <button class="btn btn-sm" id="ff-new">New blank fact-find</button>
     </div>
@@ -6734,15 +7117,50 @@ window.factFind = async function (caseId, clientId) {
   $("#ff-back").onclick = () => openCase(caseId);
   if ($("#ff-apply")) $("#ff-apply").onclick = () => ffApplyDiff(caseId, clientId, ff.data);
   $("#ff-refresh").onclick = () => factFind(caseId, clientId);
-  $("#ff-new").onclick = async () => { if (!confirm("Start a fresh blank fact-find? The current link stops being the active one.")) return; await db.from("fact_finds").insert({ case_id: caseId, client_id: clientId, created_by: (ME && ME.id) || null, token: ffToken() }); factFind(caseId, clientId); };
+  $("#ff-new").onclick = async () => {
+    if (!confirm("Start a fresh blank fact-find? The current link stops being the active one.")) return;
+    // R12a·D3 — same explicit 'created': a brand-new blank fact-find has not been sent either.
+    await db.from("fact_finds").insert({ case_id: caseId, client_id: clientId, status: "created", created_by: (ME && ME.id) || null, token: ffToken() });
+    factFind(caseId, clientId);
+  };
+  /* THE REAL SEND. queueEmail does the confirm (naming the signatory), the single email_queue
+     insert, the scoped runAutomation that sends exactly that row, the case note and the chase
+     task — see its `factfind` branches. Reopening afterwards repaints the badge from whatever
+     process-emails actually left on the fact_finds row, rather than assuming success. */
+  $("#ff-send").onclick = async (ev) => {
+    if (await queueEmail(caseId, clientId, "factfind", kase || { id: caseId }, ev)) factFind(caseId, clientId);
+  };
+  /* THE mailto, kept and made honest. The sign-off rule is queueEmail's, deliberately duplicated
+     in one small helper rather than re-derived, so the two routes can never sign off differently.
+     The case note is the point: this is the one send the system genuinely cannot confirm, and the
+     note says so in those words rather than implying delivery. */
   $("#ff-mail").onclick = async () => {
-    const { data: cl } = await db.from("clients").select("email,first_name").eq("id", clientId).single();
+    const { data: cl } = await db.from("clients").select("email,first_name,last_name").eq("id", clientId).single();
     if (!cl || !cl.email) return toast("This client has no email address on file — add one first.");
+    const signedBy = caseSignOffName(kase);
     const subj = encodeURIComponent(`${settings.company_name || "NexMoney"} — your quick mortgage fact-find`);
-    const body = encodeURIComponent(`Hi ${(cl.first_name || "there").trim()},\n\nBefore we speak, please could you complete this short, secure fact-find? It takes about 5–10 minutes and you can save and come back to it:\n\n${link}\n\nThanks,\n${settings.adviser_name || settings.company_name || "NexMoney"}`);
+    const body = encodeURIComponent(`Hi ${(cl.first_name || "there").trim()},\n\nBefore we speak, please could you complete this short, secure fact-find? It takes about 5–10 minutes and you can save and come back to it:\n\n${link}\n\nThanks,\n${signedBy}`);
     window.open(`mailto:${cl.email}?subject=${subj}&body=${body}`);
+    const who = [cl.first_name, cl.last_name].filter(Boolean).join(" ").trim() || cl.email;
+    const { error: nErr } = await db.from("case_notes").insert({
+      case_id: caseId,
+      body: `Fact-find link prepared in your email app for ${who} — the system cannot confirm it was sent. Signed off by ${signedBy}.`,
+      created_by: (ME && ME.id) || null,
+    });
+    toast(nErr
+      ? "Draft opened in your email app — but the case note could not be written: " + nErr.message
+      : "Draft opened in your email app — the case now says the link was prepared, not sent (we cannot see what happens in there).");
   };
 };
+/* R12a·D3 — ADV-1's sign-off rule, in one place. The CASE's adviser signs; on an unassigned case a
+   non-owner signs in their own name; only then does it fall back to the firm-wide default (which
+   is the OWNER's name, and is exactly what made this wrong when anybody else pressed send). */
+function caseSignOffName(c) {
+  const senderName = ((ME && ME.full_name) || "").trim();
+  if (c && c.assigned_to && staffName(c.assigned_to) !== "—") return staffName(c.assigned_to);
+  if (!isOwner() && senderName) return senderName;
+  return settings.adviser_name || "your firm";
+}
 function renderFactFindData(data) {
   return `<div class="ff-data">` + Object.keys(data).filter((k) => String(data[k] ?? "").trim() !== "")
     .map((k) => `<div class="ff-row"><span class="ff-k">${esc(prettyFF(k))}</span><span class="ff-v">${esc(data[k])}</span></div>`).join("") + `</div>`;
@@ -7322,7 +7740,7 @@ window.openCase = async function (id, opts = {}) {
         <div class="cs-stat"><span class="cs-lbl">Value</span><span class="cs-val">${fmtM(c.property_value)}</span></div>
         ${c.lender ? `<div class="cs-stat"><span class="cs-lbl">Lender</span><span class="cs-val">${esc(c.lender)}</span></div>` : ""}
         ${c.broker_fee > 0 ? `<div class="cs-stat"><span class="cs-lbl">Fee</span><span class="cs-val">${fmtM(c.broker_fee)}${c.fee_status ? ` <span class="cs-muted">(${esc(String(c.fee_status).replace(/_/g, " "))})</span>` : ""}</span></div>` : ""}
-        ${(c.protection_status || "not_discussed") === "not_discussed" ? '<div class="cs-stat cs-warn" id="cs-prot-warn"><span class="cs-lbl">Protection</span><span class="cs-val">not discussed</span></div>' : ""}
+        ${protStatChipHtml(c)}
         ${c.rate_percent != null || c.rate_end_date ? `<div class="cs-stat ${rateOverdue ? "cs-danger" : rateSoon ? "cs-warn" : ""}"><span class="cs-lbl">Rate${rateOverdue ? " — ended" : rateSoon ? " — <6mo" : ""}</span><span class="cs-val">${c.rate_percent != null ? c.rate_percent + "%" : "—"}${c.rate_end_date ? ` · ends ${fmtD(c.rate_end_date)}` : ""}</span></div>` : ""}
         ${["offer", "exchange"].includes(c.stage) ? (c.expected_completion_date
           ? `<div class="cs-stat"><span class="cs-lbl">Expected completion</span><span class="cs-val">${fmtD(c.expected_completion_date)}</span></div>`
@@ -7377,18 +7795,23 @@ window.openCase = async function (id, opts = {}) {
     ${id ? `
     <div style="margin-top:14px;">
       <h3 style="font-size:14px;">Tasks</h3>
-      <div style="display:flex;gap:8px;margin:8px 0;flex-wrap:wrap;">
-        <input id="new-task" placeholder="Add a task…" style="flex:1;min-width:140px;">
-        <select id="new-task-assignee" aria-label="Assign task to" style="width:auto;" title="Assign task to">${TEAM.map((p) => `<option value="${p.id}" ${p.id === defaultAssignee(c.assigned_to) ? "selected" : ""}>${esc(staffName(p.id))}</option>`).join("")}</select>
-        <input id="new-task-due" type="date" style="width:auto;">
-        <button class="btn btn-sm" id="add-task-btn">Add</button>
-      </div>
-      <div class="due-chips">
+      ${/* R12a·D10 — the DUE chips used to sit BELOW this row, i.e. after the Add button in both
+            reading and tab order, so the natural gesture (type the title, press Enter) submitted
+            before the operator had reached the thing that sets the date. They now sit between the
+            title box and the row that ends in Add, which is the order the task is actually
+            composed in. The dateless-submit default below is the belt to this braces. */ ""}
+      <div class="due-chips" style="margin:8px 0 6px;">
         <span class="due-chips-lbl">Due:</span>
         <button type="button" class="btn btn-sm due-chip" data-days="1">Tomorrow</button>
         <button type="button" class="btn btn-sm due-chip" data-days="3">+3d</button>
         <button type="button" class="btn btn-sm due-chip" data-days="7">+1wk</button>
         <button type="button" class="btn btn-sm due-chip" data-months="1">+1mo</button>
+      </div>
+      <div style="display:flex;gap:8px;margin:0 0 8px;flex-wrap:wrap;">
+        <input id="new-task" placeholder="Add a task…" style="flex:1;min-width:140px;">
+        <select id="new-task-assignee" aria-label="Assign task to" style="width:auto;" title="Assign task to">${TEAM.map((p) => `<option value="${p.id}" ${p.id === defaultAssignee(c.assigned_to) ? "selected" : ""}>${esc(staffName(p.id))}</option>`).join("")}</select>
+        <input id="new-task-due" type="date" style="width:auto;" title="Leave this empty and the task is due tomorrow — a task with no date appears on no list anywhere.">
+        <button class="btn btn-sm" id="add-task-btn">Add</button>
       </div>
       <div id="tasks-inline">${tasks.map((t) => `
         <div class="row-item" style="padding:7px 4px;">
@@ -7396,7 +7819,12 @@ window.openCase = async function (id, opts = {}) {
             <div style="${t.done_at ? "text-decoration:line-through;color:var(--muted);" : ""}">${esc(t.title)}</div>
             <div class="s">${t.due_date ? "due " + fmtD(t.due_date) : ""}${t.done_at ? " · done" : ""}</div>
           </div>
-          ${t.done_at ? assigneeChipHtml(t.assigned_to) : taskAssigneeHtml(t.id, t.assigned_to, "")}${t.done_at ? "" : `<button class="btn btn-sm" aria-label="Mark task done" title="Mark task done" onclick="doneTaskInCase('${t.id}','${id}')">✓</button>`}
+          ${/* R12a·D12 — a done row used to be a dead end: struck through, no control, and the only
+                way back was the database. done_at is nullable and reopening is simply setting it
+                back to null, so the row that RECORDS the mistake is also the row that fixes it. */ ""}
+          ${t.done_at ? assigneeChipHtml(t.assigned_to) : taskAssigneeHtml(t.id, t.assigned_to, "")}${t.done_at
+            ? `<button class="btn btn-sm task-reopen" aria-label="Reopen this task" title="Put this task back on the list — it was marked done" onclick="reopenTaskInCase('${t.id}','${id}')">↺ Reopen</button>`
+            : `<button class="btn btn-sm" aria-label="Mark task done" title="Mark task done" onclick="doneTaskInCase('${t.id}','${id}')">✓</button>`}
         </div>`).join("") || '<div class="empty">No tasks.</div>'}</div>
     </div>
     ${/* R9-5 · m10 — THE DOCUMENT CHECKLIST. Between Tasks and Notes because that is where it sits
@@ -7643,7 +8071,11 @@ window.openCase = async function (id, opts = {}) {
       /* R7-3 — and the quote clock, on the same route. Stamped only on the TRANSITION into quoted
          (an edit that leaves the status alone must not reset the clock and make a three-week-old
          quote look fresh), and only when the database has the M8 columns — the save is retried
-         without them rather than being refused over a reporting stamp. */
+         without them rather than being refused over a reporting stamp.
+         R12a·D9 — deliberately TRANSITION-ONLY here, unlike protUpdateWithStamp's back-fill branch.
+         Saving this form is a general edit — a corrected loan amount, a lender typo — and must not
+         be read as "I quoted this today" just because the status happens to already say quoted.
+         The back-fill belongs to the three controls whose only meaning is "mark this quoted". */
       const protNowQuoted = row.protection_status === "quoted" && (!id || (c.protection_status || "not_discussed") !== "quoted");
       let protStampApplied = false;
       if (protNowQuoted && (await protQuoteSupported())) { Object.assign(row, protQuotedStamp()); protStampApplied = true; }
@@ -7864,7 +8296,18 @@ window.openCase = async function (id, opts = {}) {
       if (taskBtn.disabled) return;
       taskBtn.disabled = true;
       try {
-        const due = $("#new-task-due").value || null;
+        /* R12a·D10 — A TASK WITH NO DATE IS ON NO LIST ANYWHERE.
+           Tasks due filters `lte(due_date, +14d)`, My Day works off due dates, the diary is dates:
+           a dateless row was written to the database, appeared once in this modal, and then
+           existed nowhere a human would ever look at it again. So a submit with no date picked is
+           defaulted to TOMORROW rather than refused — refusing would punish the fastest, most
+           common gesture in the app (type, Enter) for a field the operator was never taken past.
+           Tomorrow, not today: a task typed while on the phone is almost never for the next ten
+           minutes, and tomorrow is what the first DUE chip offers anyway.
+           A chosen date always wins, and the toast SAYS which of the two happened — a silent
+           default is just a different surprise. */
+        const pickedDue = $("#new-task-due").value || null;
+        const due = pickedDue || localDateStr(Date.now() + 86400000);
         const { data: { user } } = await db.auth.getUser();
         // Assignee from the quick-add select (defaults to the case adviser); falls back to me.
         const asgSel = $("#new-task-assignee");
@@ -7885,6 +8328,7 @@ window.openCase = async function (id, opts = {}) {
           + taskAssigneeHtml(tid, assignee, "")
           + `<button class="btn btn-sm" aria-label="Mark task done" title="Mark task done" onclick="doneTaskInCase('${tid}','${id}')">✓</button>`;
         list.appendChild(row);
+        toast(pickedDue ? `Task added — due ${fmtD(due)}` : "Task added — due tomorrow (no date was picked)");
         input.value = "";
         $("#new-task-due").value = "";
         input.focus();
@@ -7931,7 +8375,12 @@ window.openCase = async function (id, opts = {}) {
             await refreshOpenedStamp(id); // R5-3 — this modal just wrote the case row
             const protSel = $("#case-form") && $("#case-form").elements.protection_status;
             if (protSel) protSel.value = "discussed";
-            const warn = $("#cs-prot-warn"); if (warn) warn.remove();
+            /* R12a·D4 — this used to REMOVE the chip, which is exactly the defect: recording the
+               conversation made the indicator disappear while the reports carried on counting the
+               case as an open gap. Repaint it instead, so the header immediately says the honest
+               new thing ("discussed — no outcome yet"). */
+            const warn = $("#cs-prot-warn");
+            if (warn) warn.outerHTML = protStatChipHtml({ ...c, protection_status: "discussed" });
             protChk.checked = true; protChk.disabled = true;
             snapshotModalState(); // the app made this change, not the operator — not an unsaved edit
           }
@@ -8431,7 +8880,7 @@ async function queueEmail(caseId, clientId, type, c, ev) {
   const btn = (ev && (ev.currentTarget || ev.target)) || null;
   if (btn) btn.disabled = true;
   try {
-    const { data: cl } = await db.from("clients").select("email,first_name").eq("id", clientId).single();
+    const { data: cl } = await db.from("clients").select("email,first_name,last_name").eq("id", clientId).single();
     if (!cl?.email) return toast("This client has no email address — add one first.");
     if (type === "fee_request" && !(c.broker_fee > 0)) return toast("Set a broker fee amount on the case first.");
     /* BACKEND-R4 §6 — bank details are Owner-only AT THE DATABASE now, so `settings.bank_*` is
@@ -8446,6 +8895,15 @@ async function queueEmail(caseId, clientId, type, c, ev) {
       if (!hasBank) return toast(isOwner() ? "Add your bank details in Settings first." : "The firm's bank details aren't set up yet — ask the Owner to add them in Settings.");
     }
     if (type === "review_request" && !(settings.google_review_link || settings.review_platform_link)) return toast("Add your review link in Settings first.");
+    /* R12a·D3 — the fact-find email is nothing BUT a link, and process-emails v12 fails the row
+       outright ("site_url not set — cannot build the fact-find link") when there is no site to
+       build one from. Refusing here, before anything is queued, is the same judgement as the
+       review-link gate above: a send that is certain to fail should not be queued and then
+       reported as a failure, it should be refused with the reason. The server-side guard stays as
+       the backstop for every route that does not come through this button. */
+    if (type === "factfind" && !String(settings.site_url || "").trim()) {
+      return toast(isOwner() ? "Set your Site URL in Settings first — the fact-find email is just that link." : "The firm's Site URL isn't set, so the fact-find link cannot be built — ask the Owner to add it in Settings.");
+    }
     if (type === "rate_end_reminder" && !c.rate_end_date) return toast("Set the rate end date on the case first.");
     /* R9-5 — the document request is now checklist-aware at the SERVER, so the confirm has to say
        what the client will actually read: the outstanding items, or the firm-wide list where the
@@ -8472,19 +8930,26 @@ async function queueEmail(caseId, clientId, type, c, ev) {
        gave the owner's phone — the wrong contact. When the case is unassigned and the sender is staff
        but NOT the owner, sign off as the SENDER (their own profile name); only fall back to the
        firm/owner default when the sender genuinely has no profile name (or the owner is sending). */
-    const senderName = ((ME && ME.full_name) || "").trim();
-    const signedBy = (c && c.assigned_to && staffName(c.assigned_to) !== "—")
-      ? staffName(c.assigned_to)
-      : (!isOwner() && senderName)
-        ? senderName
-        : (settings.adviser_name || "your firm");
+    /* R12a·D3 — the rule itself now lives in caseSignOffName() (with the fact-find dialog), because
+       the fact-find's mailto route needs the identical answer and a second copy of this ladder is
+       exactly how the two would drift apart again. */
+    const signedBy = caseSignOffName(c);
     // R5-13 — the rate-end reminder now leaves a real next action behind, so the case can't go quiet
     // after the email. Say so BEFORE the send, so the task isn't a surprise in someone's list.
     const chaseDue = localDateStr(Date.now() + 7 * 86400000);
     const chaseTitle = `Follow up rate-end reminder — ${(cl.first_name || "client").trim()}`;
+    /* R12a·D3 — the fact-find gets the same treatment for the same reason: a link sent and never
+       chased is a case that goes quiet at Fact Find, which is where cases go quiet. Three days,
+       not seven — a fact-find is the thing blocking the next conversation, a rate-end reminder is
+       not. Named and dated in the confirm BEFORE the send, exactly as R5-13 does above, so the
+       task is never a surprise in somebody's list. */
+    const ffChaseDue = localDateStr(Date.now() + 3 * 86400000);
+    const ffChaseTitle = `Chase fact-find — ${(cl.first_name || "client").trim()}`;
     const extraLine = type === "rate_end_reminder"
       ? `\n\nA follow-up task ("${chaseTitle}") will be added for ${fmtD(chaseDue)}.`
-      : "";
+      : type === "factfind"
+        ? `\n\nA chase task ("${ffChaseTitle}") will be added for ${fmtD(ffChaseDue)}.`
+        : "";
     /* R6.4 H-02 — the rate-end reminder is the one send that is ABOUT a building:
        it says "your rate is ending, shall we look at it?", and on a portfolio
        landlord with four fixed rates the confirm dialog named only the person and
@@ -8511,6 +8976,25 @@ async function queueEmail(caseId, clientId, type, c, ev) {
         created_by: (ME && ME.id) || null,
       });
       if (taskErr) toast("Email queued, but the follow-up task could not be created: " + taskErr.message);
+    }
+    /* R12a·D3 — the fact-find send's own trail. The fact_finds row itself is advanced to 'sent' by
+       process-emails v12 AFTER the send succeeds (never here — the app must not claim a send it
+       has not watched happen), so what this writes is what the CASE needs: a note naming who it
+       went to and who signed it, and the chase task. Both best-effort: a failed note or task must
+       not make an email that IS queued look like a failure. */
+    if (type === "factfind") {
+      const who = [cl.first_name, cl.last_name].filter(Boolean).join(" ").trim() || cl.email;
+      const { error: nErr } = await db.from("case_notes").insert({
+        case_id: caseId, body: `Fact-find link emailed to ${who} — signed off by ${signedBy}.`,
+        created_by: (ME && ME.id) || null,
+      });
+      if (nErr) toast("Email queued, but the case note could not be written: " + nErr.message);
+      const { error: ffTaskErr } = await db.from("case_tasks").insert({
+        case_id: caseId, title: ffChaseTitle, due_date: ffChaseDue,
+        assigned_to: (c && c.assigned_to) || (ME && ME.id) || null,
+        created_by: (ME && ME.id) || null,
+      });
+      if (ffTaskErr) toast("Email queued, but the chase task could not be created: " + ffTaskErr.message);
     }
     if (type === "review_request") await db.from("cases").update({ review_requested_at: new Date().toISOString() }).eq("id", caseId);
     /* The fee request was the one type that sent and left no trace on the case: no fee_status, no
@@ -10100,16 +10584,40 @@ async function loadEmails() {
   const badge = { queued: "amber", sent: "green", failed: "red", cancelled: "grey" };
   const allEmails = emails || [];
   renderQueueChips("#em-filters", EMAIL_STATUSES, allEmails, emailStatusFilter, (k) => { emailStatusFilter = k; loadEmails(); });
-  /* R11-5 — the one line this page is opened to read. `queued` is precisely what the 8am cron
-     picks up, so the number is not an estimate; the caveat only appears when the bounded read
-     came back full, because only then can there be queued rows this page has not seen. */
-  const nQueued = allEmails.filter((e) => e.status === "queued").length;
+  /* R11-5 — the one line this page is opened to read.
+
+     R12a K-7 — AND IT WAS COUNTING THE WRONG THING. "queued" is not what the 8am run picks up:
+     the run takes queued rows that are DUE (scheduled_for null or already past), and leaves a
+     deliberately deferred send — a rate-end chase dated a fortnight out — exactly where it is.
+     Counting every queued row put this line at "will send 12" beside a Run-automation-now dialog
+     saying "Send ALL 16", and the two numbers were computed from different rules with nothing on
+     screen to say so.
+
+     Three facts now, in the order somebody reads them:
+       · DUE — what the morning run will actually put in front of clients.
+       · DEFERRED — stated separately and only when there are any, so the Queued chip's total is
+         accounted for rather than contradicted. The line names the chip's number too, which is why
+         "N of the Q queued" is spelled out rather than left as a bare N.
+       · THE RUN COMPOSES MORE. queue_automated_emails / queue_comms_extras run FIRST, so the
+         morning also creates and sends rows that do not exist yet — review requests (up to 5 a
+         run), reminders for review requests nobody answered, and rate-end reminders that have
+         fallen due. Same vocabulary as the Run-automation-now confirm, deliberately.
+     The bounded-read caveat is unchanged and still only appears when the read came back full. */
+  const emNowIso = new Date().toISOString();
+  const emQueuedRows = allEmails.filter((e) => e.status === "queued");
+  const nQueued = emQueuedRows.length;
+  const nDue = emQueuedRows.filter((e) => !e.scheduled_for || e.scheduled_for <= emNowIso).length;
+  const nDeferred = nQueued - nDue;
   const capped = allEmails.length >= EMAIL_ROW_LIMIT;
   const emSummary = $("#em-summary");
   if (emSummary) {
+    const cappedTxt = capped ? ` Only the newest ${EMAIL_ROW_LIMIT} rows are listed, so there may be older queued ones too.` : "";
+    const composes = ` It may also compose and send NEW emails as it runs — rate-end reminders that have fallen due, review requests (up to 5 a run) and reminders for review requests nobody answered — so the total that leaves can be higher than the number above.`;
     emSummary.innerHTML = nQueued
-      ? `The next 8am run will send <strong>${nQueued}</strong> queued email${nQueued === 1 ? "" : "s"}.${capped ? ` Only the newest ${EMAIL_ROW_LIMIT} rows are listed, so there may be older queued ones too.` : ""}`
-      : `Nothing is queued — the next 8am run has nothing to send${capped ? `, at least in the newest ${EMAIL_ROW_LIMIT} rows listed here` : ""}.`;
+      ? (nDeferred
+          ? `The next 8am run will send <strong>${nDue}</strong> of the <strong>${nQueued}</strong> queued emails listed here — the ones due now <strong>(+${nDeferred} deferred to a later date)</strong>. The Queued chip counts all ${nQueued}, deferred ones included.${cappedTxt}${composes}`
+          : `The next 8am run will send <strong>${nQueued}</strong> queued email${nQueued === 1 ? "" : "s"} — all of them due now.${cappedTxt}${composes}`)
+      : `Nothing is queued — the next 8am run has nothing waiting to send${capped ? `, at least in the newest ${EMAIL_ROW_LIMIT} rows listed here` : ""}. That is not the same as "nothing will go": the run composes its own sends first — rate-end reminders that have fallen due, review requests (up to 5 a run) and reminders for review requests nobody answered.`;
   }
   const emailRows = emailStatusFilter === "all" ? allEmails : allEmails.filter((e) => e.status === emailStatusFilter);
   // Retry-all-failed (defect 28) — only surfaces once the Failed-only filter narrows the list down
@@ -10155,6 +10663,11 @@ async function loadEmails() {
     const staleAddr = e.status === "queued" && !!e.client_id && !!curEmail && !!e.to_email
       && curEmail.trim().toLowerCase() !== String(e.to_email).trim().toLowerCase();
     const fixContact = noContact || (!settled && e.client_id && isBadContactError(e.error));
+    /* R12a K-7 — the summary above now says "+N deferred to a later date", and a reader who is told
+       that immediately wants to know WHICH. Stated on the row's own meta line rather than as a new
+       badge: it is a date, it belongs beside the other dates, and a count nobody can resolve to a
+       row is only half an answer. */
+    const emDeferred = e.status === "queued" && !!e.scheduled_for && e.scheduled_for > emNowIso;
     /* R6 / D6-13 — every row read "<Type> — <Client name>", so five rate-end reminders for five
        different mortgages were one line repeated five times, and cancel/retry was a coin flip.
        The row now carries the case's property AND opens the case: it was only clickable when it
@@ -10173,13 +10686,14 @@ async function loadEmails() {
       ${failed ? `<input type="checkbox" class="email-cb" data-id="${e.id}" aria-label="Select this failed email"${emailSel.has(e.id) ? " checked" : ""} onclick="event.stopPropagation()">` : ""}
       <div class="row-main">
         <div class="t"${titleClick}>${esc(emailTypeLabel(e.email_type))} — ${esc(whoTxt)}${leadRow ? ` <span class="badge grey lead-email-chip" title="This is a website enquiry, not a client — there is no case behind it yet.">enquiry</span>` : ""} ${propCtxChip(emailCtx, e.case_id, "row-prop")}</div>
-        <div class="s">${esc(e.to_email || (noContact ? "no address on file" : ""))} · ${e.sent_at ? "sent " + new Date(e.sent_at).toLocaleString("en-GB") : "created " + new Date(e.created_at).toLocaleString("en-GB")}${errLine}${staleAddr ? ` · now <strong>${esc(curEmail)}</strong>` : ""}</div>
+        <div class="s">${esc(e.to_email || (noContact ? "no address on file" : ""))} · ${e.sent_at ? "sent " + new Date(e.sent_at).toLocaleString("en-GB") : "created " + new Date(e.created_at).toLocaleString("en-GB")}${errLine}${staleAddr ? ` · now <strong>${esc(curEmail)}</strong>` : ""}${emDeferred ? ` · <strong>deferred to ${fmtD(e.scheduled_for)}</strong> — the 8am run leaves it until then` : ""}</div>
       </div>
       ${staleAddr ? `<span class="badge amber" title="Queued to ${esc(e.to_email)}, but this client's email is now ${esc(curEmail)}">address changed since queued</span>` : ""}
       <span class="badge ${badge[e.status]}">${e.status}</span>
       ${staleAddr ? `<button class="btn btn-sm btn-primary" onclick="useCurrentEmailAddress('${e.id}','${e.client_id}')" title="Re-address this queued email to ${esc(curEmail)}">Use current address</button>` : ""}
       ${fixContact ? `<button class="btn btn-sm btn-ghost" onclick="openClient('${e.client_id}','email','${jsArg(e.to_email)}')" title="${noContact ? "This client has no email address on file — add one, then retry" : "This looks like a bad contact detail, not a one-off send failure"}">Fix contact</button>` : ""}
       ${failed ? `<button class="btn btn-sm" onclick="retryEmail('${e.id}')">Retry</button>` : ""}
+      ${e.status === "queued" || failed ? `<button class="btn btn-sm btn-ghost em-cancel" data-id="${esc(e.id)}" onclick="cancelQueuedEmail('${e.id}')" title="${failed ? "Stop retrying this one — it is marked cancelled and never sends" : "Stop this email before the 8am run picks it up — it never sends"}">Cancel</button>` : ""}
     </div>`;
   }).join("") : `<div class="empty">${emailStatusFilter !== "all" ? `No ${esc(emailStatusFilter)} emails in the newest ${EMAIL_ROW_LIMIT} rows.` : "No emails yet. They'll appear here once automation runs or you trigger one from a case."}</div>`) + `</div>`;
   // Wire the failed-email bulk-select controls (imperative, no reload on toggle).
@@ -10231,6 +10745,7 @@ async function loadEmails() {
       <span class="badge ${smsBadge[s.status] || "grey"}">${esc(s.status)}</span>
       ${!settled && s.client_id && isBadContactError(s.error) ? `<button class="btn btn-sm btn-ghost" onclick="openClient('${s.client_id}','phone','${jsArg(s.to_phone)}')" title="This looks like a bad contact detail, not a one-off send failure">Fix contact</button>` : ""}
       ${failed ? `<button class="btn btn-sm" onclick="retrySms('${s.id}')">Retry</button>` : ""}
+      ${s.status === "queued" || failed ? `<button class="btn btn-sm btn-ghost sms-cancel" data-id="${esc(s.id)}" onclick="cancelQueuedSms('${s.id}')" title="${failed ? "Stop retrying this one — it is marked cancelled and never sends" : "Stop this SMS before anybody presses Send SMS now — it never sends"}">Cancel</button>` : ""}
     </div>`;
   }).join("") : `<div class="empty">${smsStatusFilter !== "all" ? `No ${esc(smsStatusFilter)} SMS in the newest ${EMAIL_ROW_LIMIT} rows.` : "No SMS yet. They'll appear here once SMS automation runs or you send one."}</div>`);
 }
@@ -10314,6 +10829,72 @@ async function retrySms(id, silent) {
     return { ok: true, value: fresh.value };
   } catch (e) { if (!silent) toast("Error: " + e.message); return { ok: false, reason: e.message }; }
 }
+/* ==========================================================================
+   R12a · K-6 — CANCELLING A QUEUED MESSAGE, WHICH THE PAGE ALREADY PROMISED
+
+   The Emails page has told operators since round 9 to "cancel the row while it
+   is still queued" if a client should not be asked for a review again. There
+   was no way to do it. Nothing in the app ever wrote status "cancelled" — the
+   cancelled rows visible in the list are seeded fixtures and the status chip
+   counts them, which is exactly what makes the instruction believable. An
+   operator following it either left the row alone and let the email go, or
+   deleted something they should not have.
+
+   So: a Cancel button on every row it can honestly act on.
+     · QUEUED — the state the page copy is about. It never sends.
+     · FAILED — "stop retrying this" is a real decision, and a failed row with
+       a bad address otherwise sits in the list forever inviting a Retry that
+       will fail again. Cancelled is the honest resting place for it.
+     · NOT `sending` (SMS only) — that row is already with the sender and
+       nothing here can recall it. Offering Cancel on it would be the same lie
+       in a new place.
+
+   The write is guarded on the status the row was rendered with, so a row that
+   sent between paint and click is left alone and says so rather than
+   rewriting the history of a message the client has already received. Where
+   there is a case, a note records it — a message a client was expecting and
+   never got is a case fact, not a queue detail, and "cancelled by" names the
+   person so the timeline can answer who decided. The note is best-effort: the
+   cancel itself has already happened and must not be reported as failed
+   because its note did not save. */
+function cancelActorName() { return (ME && (ME.full_name || ME.email)) || "staff"; }
+async function cancelQueuedRow(kind, id) {
+  const isSms = kind === "sms";
+  const table = isSms ? "sms_queue" : "email_queue";
+  const noun = isSms ? "SMS" : "email";
+  const { data: row, error: readErr } = await db.from(table).select("*, clients(first_name,last_name)").eq("id", id).single();
+  if (readErr || !row) return toast(`Couldn't read that ${noun} just now — try again in a moment.`);
+  if (row.status !== "queued" && row.status !== "failed") {
+    toast(`That ${noun} is ${row.status} — only a queued or failed one can be cancelled.`);
+    return loadEmails();
+  }
+  const who = (row.clients ? [row.clients.first_name, row.clients.last_name].filter(Boolean).join(" ") : "")
+    || (isSms ? row.to_phone : row.to_email) || "this recipient";
+  const label = isSms ? smsTypeLabel(row.sms_type) : emailTypeLabel(row.email_type);
+  const wasQueued = row.status === "queued";
+  const ask = wasQueued
+    ? `Cancel this queued ${noun} to ${who}?\n\n${label}\n\nIt will never send; this is recorded${row.case_id ? " on the case" : ""}.`
+    : `Cancel this failed ${noun} to ${who}?\n\n${label}\n\nIt stops being retried and will never send; this is recorded${row.case_id ? " on the case" : ""}.`;
+  if (!confirm(ask)) return;
+  const { data: upd, error } = await db.from(table)
+    .update({ status: "cancelled" }).eq("id", id).eq("status", row.status).select("id");
+  if (error) return toast("Error: " + error.message);
+  if (!upd || !upd.length) {
+    toast(`That ${noun} is no longer ${row.status} — nothing was cancelled.`);
+    return loadEmails();
+  }
+  let noteWarn = "";
+  if (row.case_id) {
+    const body = `${wasQueued ? "Queued" : "Failed"} ${label} ${noun} to ${who} cancelled by ${cancelActorName()}`
+      + (wasQueued ? " — it will not send." : " — it will not be retried.");
+    const { error: noteErr } = await db.from("case_notes").insert({ case_id: row.case_id, body });
+    if (noteErr) noteWarn = `, but the case note did NOT save (${noteErr.message})`;
+  }
+  toast(`${noun === "SMS" ? "SMS" : "Email"} to ${who} cancelled — it will never send${noteWarn}`);
+  loadEmails();
+}
+window.cancelQueuedEmail = (id) => cancelQueuedRow("email", id);
+window.cancelQueuedSms = (id) => cancelQueuedRow("sms", id);
 // BUILD 7c — reflect the failed-email selection into its action bar (visibility + count + button
 // label), without re-rendering the list.
 function updateEmailBulkBar() {
@@ -11659,21 +12240,25 @@ async function loadLeads() {
       <button class="btn btn-sm btn-danger" aria-label="Discard lead" title="Discard lead" onclick="discardLead('${l.id}')">✕</button>
     </div>`).join("") : '<div class="empty">No new leads. Website enquiries appear here the moment they\'re sent.</div>';
   panelCount("#leads-list", n, true);
+  applyLeadAdvChoices();   // R12a K-1 — this list and My Day show the same leads; keep them agreeing
   autoDrawer("leads", n > 0); // auto-open whenever there's a lead waiting, else stay collapsed
 }
 window.acceptLead = async function (id, ev) {
   const btn = (ev && (ev.currentTarget || ev.target)) || null;
   if (btn) { if (btn.disabled) return; btn.disabled = true; } // guard against double-click
-  // T1-3 — route at accept time. The adviser select sits on the same row as the button that fired
-  // this; read it before anything is written so the case is created for the right person first
-  // time. Falls back to me when the row has no select (nothing else calls acceptLead today).
-  const advSel = leadAdviserFor(btn);
-  const assignTo = (advSel && advSel.value) || (ME && ME.id) || null;
+  /* T1-3 — route at accept time, read before anything is written so the case is created for the
+     right person first time. R12a K-1: read the LEAD's choice, not the clicked row's copy of it.
+     The same lead has an Accept button in My Day and another in the drawer, and taking whichever
+     select sat next to the button pressed silently discarded a reassignment made in the other
+     place — with the toast then naming the adviser that was NOT used. Falls back to me when the
+     lead has no select anywhere (nothing else calls acceptLead today). */
+  const assignTo = leadAdviserValue(id, btn) || (ME && ME.id) || null;
   /* R5-5 — this row's choice is NOT remembered for the next lead (that was the cross-contamination
      bug). What IS remembered is every OTHER visible row's current choice, so the repaint at the end
      of this function doesn't quietly reset a colleague's routing back to me. */
   const otherLeadSel = captureLeadAdvSel();
   delete otherLeadSel[id];
+  delete LEAD_ADV_CHOICE[id];   // R12a K-1 — this lead is leaving the inbox; its answer goes with it
   // Atomically claim the lead: only converts if it's still 'new', so a fast double-click
   // or a second adviser accepting the same lead can't create duplicate clients/cases/emails.
   const { data: claimed, error: claimErr } = await db.from("leads")
@@ -11696,10 +12281,23 @@ window.acceptLead = async function (id, ev) {
       const guess = splitJointName(rawName);
       const askedFirst = prompt(`This looks like a joint enquiry: “${rawName}”.\n\nFile the client record under one name — the second applicant is recorded on the case note.\n\nFirst name:`, guess.first_name);
       const askedLast = askedFirst === null ? null : prompt(`Joint enquiry: “${rawName}”.\n\nSurname:`, guess.last_name);
-      // Cancelling either prompt keeps the best guess — the lead is already claimed, and a record
-      // named "Deborah Ashworth" is editable; a doubled name is what we're here to stop.
-      firstName = ((askedFirst === null ? guess.first_name : askedFirst) || "").trim();
-      lastName = ((askedLast === null ? guess.last_name : askedLast) || "").trim();
+      /* Cancelling either prompt keeps the best guess — the lead is already claimed, and a record
+         named "Deborah Ashworth" is editable; a doubled name is what we're here to stop.
+
+         R12a K-3 — AND SO DOES CLEARING IT. Cancel was guarded and an EMPTY answer was not, so the
+         one input everybody actually gives these prompts — Enter, Enter, because the defaults look
+         right — produced "" for both fields, fell through to `if (!firstName && !lastName)` and
+         filed the client as the whole doubled string: precisely the record the prompt exists to
+         prevent, followed by "Hi there," on every template that greets by first name. Empty and
+         whitespace-only are now treated exactly like Cancel, PER FIELD: the parsed guess stands.
+         The rawName backstop below is kept for the genuinely unparseable name (no guess, nothing
+         typed) — something on the record beats an unnamed client. */
+      const keptOr = (asked, fallback) => {
+        const typed = asked === null ? "" : String(asked).trim();
+        return typed || String(fallback || "").trim();
+      };
+      firstName = keptOr(askedFirst, guess.first_name);
+      lastName = keptOr(askedLast, guess.last_name);
       if (!firstName && !lastName) lastName = rawName;
       if (guess.second) jointNote = ` · Joint applicant: ${guess.second}`;
       else jointNote = ` · Joint enquiry as submitted: ${rawName}`;
@@ -12102,14 +12700,15 @@ async function loadDiary() {
   // T1-14 — compute per-staff clashes in one pass over the appointments already in memory. Keyed by
   // appt id → the (first) other same-staff appointment its time range overlaps, so both cards in a
   // clashing pair can name each other without a second query.
+  /* R12a·D11 — the overlap test is apptOverlaps() now (same adviser, half-open [start,end),
+     an end-less row treated as a minute rather than an instant), so this grid, the day lane, the
+     editor's live notice and the save-time confirm all agree on what a clash is. */
   const clashPartner = {};
   (appts || []).forEach((a) => {
     if (!a.staff_id) return;
-    const aStart = new Date(a.starts_at), aEnd = new Date(a.ends_at || a.starts_at);
     (appts || []).forEach((b) => {
-      if (b === a || b.staff_id !== a.staff_id || clashPartner[a.id]) return;
-      const bStart = new Date(b.starts_at), bEnd = new Date(b.ends_at || b.starts_at);
-      if (aStart < bEnd && bStart < aEnd) clashPartner[a.id] = b;
+      if (b === a || clashPartner[a.id]) return;
+      if (apptOverlaps(a, b)) clashPartner[a.id] = b;
     });
   });
   const todayStr = new Date().toDateString();
@@ -12127,11 +12726,15 @@ async function loadDiary() {
         // plain default .appt styling (colour would add nothing when every card is the same person).
         const colorStyle = who === "all" ? (() => { const c = adviserColor(a.staff_id); return ` style="background:${c.bg};border-left-color:${c.border};"`; })() : "";
         const partner = clashPartner[a.id];
-        const partnerTime = partner ? new Date(partner.starts_at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) : "";
-        const clashTitle = partner ? ` title="Clashes with &quot;${esc(partner.title)}&quot; at ${partnerTime}"` : "";
+        /* R12a·D11 — the ⚠ itself carried NO title: the tooltip was on the card, so hovering the
+           one glyph that means "something is wrong here" explained nothing, and on a tile dense
+           enough to clash the card is mostly other text. Both now say the same sentence, and it
+           names the other appointment's full time range rather than only its start. */
+        const clashWords = partner ? `Clashes with ${apptClashPhrase(partner)}` : "";
+        const clashTitle = partner ? ` title="${esc(clashWords)}"` : "";
         const chip = propCtxChip(apptCtx, a.case_id, "row-prop");
         return `<div class="appt${partner ? " clash" : ""}" onclick="openAppt('${a.id}')"${colorStyle}${clashTitle}>
-        ${partner ? '<span class="clash-tag">⚠</span> ' : ""}<span class="at">${new Date(a.starts_at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}–${new Date(a.ends_at || a.starts_at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</span> ${esc(a.title)}
+        ${partner ? `<span class="clash-tag" title="${esc(clashWords)}" aria-label="${esc(clashWords)}">⚠</span> ` : ""}<span class="at">${new Date(a.starts_at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}–${new Date(a.ends_at || a.starts_at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</span> ${esc(a.title)}
         ${chip ? `<div>${chip}</div>` : ""}
         ${apptClientLine(a, chip)}
         ${a.staff_id && who === "all" ? `<div style="color:var(--muted);">${esc(staffName(a.staff_id))}</div>` : ""}
@@ -12196,7 +12799,10 @@ function computeDayLayout(dayAppts) {
     });
     idxs.forEach((idx) => { cols[idx] = colEnds.length; });
   });
-  return items.map((it, i) => ({ ...it, col: col[i], cols: cols[i], clash: cols[i] > 1 }));
+  /* `cols > 1` means "shares a column cluster", which is a LAYOUT fact, not a diary clash — two
+     different advisers booked at the same hour are drawn side by side and are perfectly fine.
+     R12a·D11: renderDiaryDay decides the ⚠ separately, off apptOverlaps(). */
+  return items.map((it, i) => ({ ...it, col: col[i], cols: cols[i], sharesColumn: cols[i] > 1 }));
 }
 
 async function loadDiaryDay() {
@@ -12229,7 +12835,7 @@ function renderDiaryDay(appts, who, apptCtx) {
   $("#diary-hour-labels").innerHTML = hours.map((h) => `<div class="diary-hour-label" style="top:${(h - startHour) * pxPerHour}px;">${pad2(h)}:00</div>`).join("");
   const layout = computeDayLayout(appts);
   const lines = hours.map((h) => `<div class="diary-hour-line" style="top:${(h - startHour) * pxPerHour}px;"></div>`).join("");
-  const blocks = layout.map(({ appt: a, start, end, col, cols, clash }) => {
+  const blocks = layout.map(({ appt: a, start, end, col, cols }) => {
     // Clamp to the visible axis rather than hide — an appointment starting before 08:00 or running
     // past 19:00 still needs to be findable, it just sits pinned to the edge of the lane.
     const minsFromStart = Math.min(Math.max(0, (start.getHours() * 60 + start.getMinutes()) - startHour * 60), (endHour - startHour) * 60);
@@ -12254,11 +12860,18 @@ function renderDiaryDay(appts, who, apptCtx) {
     // Defect 26's per-adviser palette, reused so the "Everyone" filter reads the same way here as
     // it does on the month grid.
     const colorStyle = who === "all" ? (() => { const c = adviserColor(a.staff_id); return `background:${c.bg};border-left-color:${c.border};`; })() : "";
-    const others = layout.filter((o) => o.appt !== a && o.start < end && o.end > start).map((o) => o.appt.title);
-    const clashTitle = clash ? ` title="Clashes with ${esc(others.join(", "))}"` : "";
+    /* R12a·D11 — `clash` off computeDayLayout means "this block shares a column cluster", which in
+       the Everyone view is true of two DIFFERENT advisers booked at the same time: not a clash,
+       just a busy firm. The ⚠ is now driven by apptOverlaps() — same adviser — while the
+       side-by-side COLUMN layout above still keys off geometry, because two blocks at the same
+       time have to be drawn side by side whoever they belong to. */
+    const clashers = layout.filter((o) => o.appt !== a && apptOverlaps(a, o.appt)).map((o) => o.appt);
+    const isClash = clashers.length > 0;
+    const clashWords = isClash ? `Clashes with ${clashers.map(apptClashPhrase).join(", ")}` : "";
+    const clashTitle = isClash ? ` title="${esc(clashWords)}"` : "";
     const chip = propCtxChip(ctx, a.case_id, "row-prop");
     const box = `style="top:${top}px;height:${height}px;left:calc(${leftPct}% + 2px);width:calc(${widthPct}% - 4px);${colorStyle}" onclick="openAppt('${a.id}')"`;
-    const warn = clash ? '<span class="clash-tag">⚠</span> ' : "";
+    const warn = isClash ? `<span class="clash-tag" title="${esc(clashWords)}" aria-label="${esc(clashWords)}">⚠</span> ` : "";
     const whoName = a.clients ? [a.clients.first_name, a.clients.last_name].filter(Boolean).join(" ") : "";
     const staffLine = a.staff_id && who === "all" ? staffName(a.staff_id) : "";
     const clientLine = apptClientLine(a, chip); // "" when the title already names them
@@ -12271,9 +12884,9 @@ function renderDiaryDay(appts, who, apptCtx) {
       !showClient && whoName ? whoName : null, !showStaff && staffLine ? staffLine : null].filter(Boolean);
     const tip = clashTitle || (hidden.length ? ` title="${esc([a.title].concat(hidden).join(" · "))}"` : "");
     if (compact) {
-      return `<div class="appt-block appt-block-compact${clash ? " clash" : ""}" ${box}${tip}>${warn}<span class="at">${timeLabel(start)}–${timeLabel(end)}</span><span class="ab-title">${esc(a.title)}</span>${chip}</div>`;
+      return `<div class="appt-block appt-block-compact${isClash ? " clash" : ""}" ${box}${tip}>${warn}<span class="at">${timeLabel(start)}–${timeLabel(end)}</span><span class="ab-title">${esc(a.title)}</span>${chip}</div>`;
     }
-    return `<div class="appt-block${clash ? " clash" : ""}" ${box}${tip}>${warn}<span class="at">${timeLabel(start)}–${timeLabel(end)}</span> ${esc(a.title)}
+    return `<div class="appt-block${isClash ? " clash" : ""}" ${box}${tip}>${warn}<span class="at">${timeLabel(start)}–${timeLabel(end)}</span> ${esc(a.title)}
       ${showChip ? `<div>${chip}</div>` : ""}
       ${showClient ? clientLine : ""}
       ${showStaff ? `<div style="color:var(--muted);">${esc(staffLine)}</div>` : ""}</div>`;
@@ -12387,6 +13000,55 @@ function refreshDiaryView() {
   if ($("#page-diary").classList.contains("hidden")) return;
   if (diaryViewMode === "day") loadDiaryDay(); else loadDiary();
 }
+/* ---------- R12a·D11 — ONE DEFINITION OF "CLASH" ----------
+   Two people cannot be in two places at once; two appointments for DIFFERENT people at the same
+   time are not a clash at all, they are a Tuesday. So a clash is: same staff_id, and the two
+   [start, end) intervals genuinely overlap. Half-open on purpose — 09:00–09:45 followed by
+   09:45–10:30 is back-to-back, which is how a diary is meant to be packed, not a double-booking.
+
+   An appointment with no ends_at is treated as its start plus one minute rather than as a
+   zero-length instant: a zero-length interval overlaps nothing under a strict test, so a legacy
+   row with no end used to be invisible to the very check that exists to catch it.
+
+   Shared by the appointment editor's live notice, the save-time confirm, the month grid's ⚠ and
+   the day lane's ⚠, so all four can never disagree about whether a given pair clashes. */
+function apptInterval(o) {
+  const st = new Date(o.starts_at);
+  const en = o.ends_at ? new Date(o.ends_at) : new Date(st.getTime() + 60000);
+  return [st, en > st ? en : new Date(st.getTime() + 60000)];
+}
+function apptOverlaps(a, b) {
+  if (!a || !b || !a.staff_id || a.staff_id !== b.staff_id) return false;
+  const [aS, aE] = apptInterval(a), [bS, bE] = apptInterval(b);
+  return aS < bE && bS < aE;
+}
+/* The words a human reads for the OTHER appointment: what it is and exactly when, e.g.
+   `"Fact find call" (09:00–09:45)`. One phrase, so the confirm, the toast, the tile tooltip and
+   the editor's notice all name a clash identically. */
+function apptClashPhrase(o) {
+  if (!o) return "another appointment";
+  const [st, en] = apptInterval(o);
+  const t = (d) => d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+  return `"${o.title || "an appointment"}" (${t(st)}–${t(en)})`;
+}
+/* The first appointment this proposed slot would double-book, or null. Narrowed at the database to
+   the day before and the day after, rather than reading the adviser's whole diary as this used to:
+   an overlap has to START within a day either side of the slot being tested (nothing this app
+   books runs longer than that), and pulling every appointment an adviser has ever had in order to
+   test one slot got slower every year they used it. */
+async function apptClashFor(staffId, startAt, endAt, excludeId) {
+  if (!staffId || !startAt || isNaN(startAt)) return null;
+  const from = new Date(startAt.getFullYear(), startAt.getMonth(), startAt.getDate());
+  from.setDate(from.getDate() - 1);
+  const to = new Date(from); to.setDate(to.getDate() + 3);
+  let q = db.from("appointments").select("id,title,starts_at,ends_at,staff_id")
+    .eq("staff_id", staffId)
+    .gte("starts_at", from.toISOString()).lt("starts_at", to.toISOString());
+  if (excludeId) q = q.neq("id", excludeId);
+  const { data } = await q;
+  const mine = { staff_id: staffId, starts_at: startAt.toISOString(), ends_at: (endAt || startAt).toISOString() };
+  return (data || []).find((o) => apptOverlaps(mine, o)) || null;
+}
 window.openAppt = async function (id, presets = {}) {
   // T1-14 — default to the adviser the diary is filtered to (rather than always "me"), so
   // "+ Appointment" while looking at Tom's diary books it for Tom, not for whoever is signed in.
@@ -12468,6 +13130,11 @@ window.openAppt = async function (id, presets = {}) {
     <h3>${id ? "Appointment" : "New appointment"}</h3>
     <p class="panel-sub appt-case-line${apptSelCaseId ? "" : " hidden"}" id="appt-about" style="margin-top:-8px;">${apptSelCaseId ? `About: ${caseIdentityHtml(findApptCase(apptSelCaseId) || apptCase, { fallback: true, cls: "row-prop" })}` : ""}</p>
     ${apptStaleLink ? `<p class="dq-notice bad" id="appt-stale-case">The case this appointment was linked to (${esc(caseIdentityLabel(apptCase))}) belongs to a different client, so it is not offered below. Pick one of this client's cases, or leave it as none.</p>` : ""}
+    ${/* R12a·D11 — the clash was only ever discovered at the moment of saving (a confirm) and then
+          again, afterwards, as a ⚠ on a diary tile. This line says it while the appointment is
+          still being composed, so moving it is a matter of changing the time field that is already
+          on screen rather than backing out of a dialog. Filled in by syncApptClash(). */ ""}
+    <p class="dq-notice clash-notice hidden" id="appt-clash-note"></p>
     <form id="appt-form" class="form-grid">
       <label class="full">Title<input name="title" required value="${esc(a.title || "")}" placeholder="e.g. Fact find call"></label>
       <label>Date<input name="date" type="date" required value="${dateVal}"></label>
@@ -12535,6 +13202,31 @@ window.openAppt = async function (id, presets = {}) {
   });
   const openCaseBtn = $("#appt-open-case");
   if (openCaseBtn) openCaseBtn.onclick = apptGoto(window.openCase, a.case_id);
+  /* R12a·D11 — LIVE CLASH NOTICE. Reads the form exactly as the save does (same local
+     `date + "T" + time` parse, same duration field), asks the same apptClashFor() the save-time
+     confirm asks, and says the answer in one sentence above the form. Debounced only by the fact
+     that it is bound to change/input on the four fields that can move an appointment; a typed time
+     fires it a handful of times, and each is one narrow query. It never blocks anything. */
+  const apptClashEl = $("#appt-clash-note");
+  const syncApptClash = async () => {
+    if (!apptClashEl) return;
+    const f = new FormData($("#appt-form"));
+    const st = new Date(f.get("date") + "T" + f.get("time"));
+    const staffId = f.get("staff_id") || null;
+    if (!staffId || isNaN(st)) { apptClashEl.classList.add("hidden"); apptClashEl.textContent = ""; return; }
+    const en = new Date(st.getTime() + (Number(f.get("mins")) || 60) * 60000);
+    const clash = await apptClashFor(staffId, st, en, id);
+    if (!clash) { apptClashEl.classList.add("hidden"); apptClashEl.textContent = ""; return; }
+    apptClashEl.textContent = `⚠ Clashes with ${apptClashPhrase(clash)} — ${staffName(staffId)} is already booked. You can still save this; the diary will show both, flagged.`;
+    apptClashEl.classList.remove("hidden");
+  };
+  ["date", "time", "mins", "staff_id"].forEach((n) => {
+    const el = $("#appt-form") && $("#appt-form").elements[n];
+    if (!el) return;
+    el.addEventListener("change", syncApptClash);
+    el.addEventListener("input", syncApptClash);
+  });
+  syncApptClash();
   $("#modal-save").onclick = async () => {
     const f = new FormData($("#appt-form"));
     const title = String(f.get("title") || "").trim();
@@ -12571,24 +13263,23 @@ window.openAppt = async function (id, presets = {}) {
        a different client". Both halves were false. It may only speak when the
        appointment ends up with NO case at all, and it names the OLD case. */
     if (!caseUnlinked && id && a.case_id && apptStaleLink && !row.case_id) caseUnlinked = apptCase;
-    // Diary double-booking warning (defect 5) — warn, never block: look for another appointment
-    // for the SAME adviser that overlaps this one in time, excluding this record when editing.
+    /* Diary double-booking warning (defect 5) — warn, never block.
+       R12a·D11 — the overlap test itself now lives in apptClashFor(), shared with the live notice
+       above and stated once: SAME adviser, half-open [start, end) intervals, so 09:00–09:45
+       followed by 09:45–10:30 is back-to-back and not a clash. The confirm names the clashing
+       appointment's full time RANGE rather than just its start, because "at 09:00" is not enough
+       to judge a 14:30 booking against a 14:00–15:30 one, and a saved clash now says so in the
+       toast instead of reading as an ordinary save. */
+    let savedOverClash = null;
     if (row.staff_id) {
-      const newStart = startAt, newEnd = new Date(row.ends_at);
-      let overlapQ = db.from("appointments").select("id,title,starts_at,ends_at").eq("staff_id", row.staff_id);
-      if (id) overlapQ = overlapQ.neq("id", id);
-      const { data: sameStaffAppts } = await overlapQ;
-      const clash = (sameStaffAppts || []).find((o) => new Date(o.starts_at) < newEnd && new Date(o.ends_at || o.starts_at) > newStart);
-      if (clash) {
-        const clashTime = new Date(clash.starts_at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
-        if (!confirm(`${staffName(row.staff_id)} already has "${clash.title}" at ${clashTime} — book anyway?`)) return;
-      }
+      savedOverClash = await apptClashFor(row.staff_id, startAt, new Date(row.ends_at), id);
+      if (savedOverClash && !confirm(`${staffName(row.staff_id)} already has ${apptClashPhrase(savedOverClash)}.\n\nThis appointment overlaps it. Book anyway?`)) return;
     }
     const q = id ? db.from("appointments").update(row).eq("id", id) : db.from("appointments").insert(row);
     const { error } = await q;
     if (error) return toast("Error: " + error.message);
     closeModal();
-    toast("Appointment saved" + (caseUnlinked
+    toast("Appointment saved" + (savedOverClash ? ` · double-booked over ${apptClashPhrase(savedOverClash)}` : "") + (caseUnlinked
       ? ` · the link to ${caseIdentityLabel(caseUnlinked) || "the previous case"} was removed — that case belongs to a different client`
       : ""));
     refreshDiaryView();
