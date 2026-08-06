@@ -70,14 +70,15 @@ node tests/r9_adv.js
 node tests/r9_docs.js
 node tests/r9_embed.js
 node tests/r11_ux.js
+node tests/r12a.js
 ```
 
-Current green counts (end of round 11):
+Current green counts (end of round 12a):
 
 | Suite | Checks |
 |---|---|
 | `smoke.js` | 144 |
-| `tests/r5_batch1..9.js` (sum) | 554 |
+| `tests/r5_batch1..9.js` (sum) | 557 |
 | `tests/r64.js` | 91 |
 | `tests/r8_touch.js` | 149 |
 | `tests/r8_rev.js` | 166 |
@@ -85,7 +86,14 @@ Current green counts (end of round 11):
 | `tests/r9_docs.js` | 255 |
 | `tests/r9_embed.js` | 104 |
 | `tests/r11_ux.js` | 117 |
-| **Total** | **1,752** |
+| `tests/r12a.js` | 109 |
+| **Total** | **1,861** |
+
+R12a notes: the mock's process-emails stub mirrors the DEPLOYED v12, which added
+the `factfind` email type (per-row fact_finds resolution, site_url-required
+failure path, status advance to 'sent' on real send only). The `case-documents`
+storage bucket is now exercised (signed URLs, same semantics as `offers`).
+`tests/r12a.js` regression-locks the 12 broker-panel defects (D1–D12).
 
 R11 notes: the three conveyancer-average literal anchors in `tests/r9_docs.js`
 used to flake with the time of day the battery ran — the cause was fixture
