@@ -69,9 +69,10 @@ node tests/r8_rev.js
 node tests/r9_adv.js
 node tests/r9_docs.js
 node tests/r9_embed.js
+node tests/r11_ux.js
 ```
 
-Current green counts (end of round 9):
+Current green counts (end of round 11):
 
 | Suite | Checks |
 |---|---|
@@ -83,7 +84,18 @@ Current green counts (end of round 9):
 | `tests/r9_adv.js` | 169 |
 | `tests/r9_docs.js` | 255 |
 | `tests/r9_embed.js` | 104 |
-| **Total** | **1,632** |
+| `tests/r11_ux.js` | 117 |
+| **Total** | **1,752** |
+
+R11 notes: the three conveyancer-average literal anchors in `tests/r9_docs.js`
+used to flake with the time of day the battery ran — the cause was fixture
+inconsistency (date-only `submitted_at` paired with load-time `completed_at`,
+and two "calendar months ago" derivations), fixed in the fixtures via
+`shiftNoon()` + fixed day offsets, NOT by widening tolerance. The mock `leads`
+table now carries `discard_reason` and `first_contact_at` to mirror the r7/r11
+production migrations — the Lead response panel's real path renders in the
+harness now; keep new prod columns mirrored here or `hasOwnProperty`-style
+feature detection in app.js will silently take the degraded branch in tests.
 
 `tests/r9_docs.js` is the only file in the battery that drives pages OUTSIDE
 `/admin`: the two client-facing pages `/docs` and `/feedback`. It loads them
