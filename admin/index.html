@@ -83,6 +83,13 @@
   <main id="main">
     <!-- Dashboard -->
     <section id="page-dashboard" class="page">
+      <!-- R13 · M-42/M-43 — the notice strip. Deliberately ABOVE the page heading rather than
+           between the heading and the KPI row: R11-1 established that the five headline figures
+           come first and tests/r11_ux.js locks that order (#today-heading → #kpi-row →
+           #briefing-panel). These are system-health banners — "the 8am automation has not
+           confirmed a run", "there is no firm backup" — and a banner above the title is where a
+           reader expects one. Empty (and display:none) whenever there is nothing to say. -->
+      <div id="dash-notices"></div>
       <h2 id="today-heading">Today</h2>
       <!-- R11-1 — THE NUMBERS COME FIRST. This row used to sit BELOW the Watchtower panel, which
            on a real book put the five headline figures roughly 1,500px down the page: on a phone
@@ -241,6 +248,19 @@
         <p class="panel-sub" id="prot-calllist-basis"></p>
         <div id="prot-calllist"></div>
       </div>
+      <!-- R13 · M-23/M-25 — THE CLAWBACK WINDOW. Policies taken inside the last 24 months, i.e.
+           the ones a provider could still reclaim commission on if they lapse. Its more useful
+           half is the second line: the policies with NO start date, whose window cannot be
+           watched at all. Hidden outright on a database with no policy_start_date column. -->
+      <div class="panel hidden" id="prot-clawback-panel" style="margin-top:18px;">
+        <div class="panel-head-row">
+          <h3>Clawback window</h3>
+          <span class="badge grey" id="prot-clawback-count">0</span>
+        </div>
+        <p class="panel-sub" id="prot-clawback-basis"></p>
+        <p class="panel-sub" id="prot-clawback-nodate"></p>
+        <div id="prot-clawback-list"></div>
+      </div>
     </section>
 
     <!-- Diary -->
@@ -275,6 +295,11 @@
           <div class="diary-day-lane" id="diary-day-lane" title="Click an empty slot to book an appointment"></div>
         </div>
       </div>
+      <!-- R13 · M-31 — Holidays & absence. On the Diary because that is where "who is in this
+           week" is already asked; a page of its own would be a page nobody visits. Painted by
+           renderAbsencePanel(); absent entirely (with a stated reason) on a database that has
+           not taken the staff_absences migration. -->
+      <div id="diary-absence-panel"></div>
     </section>
 
     <!-- Clients -->
@@ -685,6 +710,21 @@
     <!-- Settings -->
     <section id="page-settings" class="page hidden">
       <h2>Settings</h2>
+      <!-- R13 · M-42 — FIRM EXPORT. Near the top of the Owner's Settings on purpose: it is the
+           one control on this page that is about the firm's ability to walk away with its own
+           data, and burying it under forty configuration fields would be a statement about how
+           much it matters. Hidden for everyone but the Owner (renderSettings toggles it); the
+           reads it makes are RLS'd anyway, so a non-Owner's export would be a partial file
+           labelled as a backup, which is worse than no button. -->
+      <div class="panel hidden" id="firm-export-panel" style="margin-bottom:20px;">
+        <h3>Export the firm's data</h3>
+        <p class="panel-sub">One file containing every row this back office holds — clients, cases, tasks, notes, documents, appointments, leads, the email and SMS queues, fact-finds, introducers, settings, logins, alerts, absences and the audit log. It is a <strong>backup you control</strong>: keep it somewhere safe outside this system, so the firm's record of itself does not depend on this application or its hosting continuing to exist.</p>
+        <p class="panel-sub"><strong class="export-warn">It is not encrypted.</strong> It is a plain JSON file with your clients' names, contact details, dates of birth and financial figures in it. Treat the file exactly as you would treat the database: somewhere access-controlled, not a shared drive and not an email attachment.</p>
+        <p class="panel-sub">This is a copy, not a migration: nothing here restores it, and no other system reads this format. It is what you would hand a developer, an auditor or a successor firm.</p>
+        <button type="button" class="btn btn-primary" id="firm-export-btn">Export the firm's data</button>
+        <span id="firm-export-last" class="panel-sub" style="margin-left:10px;"></span>
+        <div id="firm-export-result"></div>
+      </div>
       <form id="settings-form" class="panel"></form>
       <button class="btn btn-primary" id="save-settings-btn">Save settings</button>
       <span id="settings-saved" class="saved-msg hidden">Saved ✓</span>
@@ -720,6 +760,11 @@
 
       <div class="panel" id="team-logins-panel">
         <h3>Team</h3>
+        <!-- R13 · M-44 — the single-Owner notice. Owner-only, shown only while exactly one profile
+             holds the owner role. No enforcement of any kind: promoting a second Owner is a
+             judgement about who you trust with the firm's keys, and an app has no business making
+             it. Saying the sentence out loud is the whole feature. -->
+        <p class="dq-notice hidden" id="second-owner-notice"></p>
         <!-- R5-24 — Owner-only invite/create-login block; toggled by renderSettings(). An Admin
              (isAdminOrOwner() but not Owner) sees the panel with this block hidden and the roster
              below rendered read-only instead. -->

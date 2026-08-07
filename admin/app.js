@@ -498,7 +498,11 @@ const onTeam = (id) => !!id && TEAM.some((p) => p.id === id);
 // <option>s for an assignee select that must be able to represent `currentId` even when that
 // person has left the team. Appends the stray, selected and labelled, after the team.
 function assigneeOptionsHtml(currentId) {
-  const opts = TEAM.map((p) => `<option value="${esc(p.id)}"${p.id === currentId ? " selected" : ""}>${esc(staffName(p.id))}</option>`).join("");
+  /* R13 · M-31 — "(away until <date>)" on anybody absent today. Purely informational: the option
+     is not disabled and the save is not blocked, because giving a task to somebody who is back on
+     Thursday for a job due next week is a perfectly ordinary thing to do. What was not ordinary
+     was doing it without knowing. */
+  const opts = TEAM.map((p) => `<option value="${esc(p.id)}"${p.id === currentId ? " selected" : ""}>${esc(staffName(p.id))}${esc(awaySuffix(p.id))}</option>`).join("");
   if (!currentId || onTeam(currentId)) return opts;
   const nm = profileName(currentId) || "Former colleague";
   return opts + `<option value="${esc(currentId)}" selected>${esc(nm)} — no access (still assigned)</option>`;
@@ -510,8 +514,11 @@ const defaultAssignee = (id) => (onTeam(id) ? id : ((ME && ME.id) || ""));
 // BUILD 7c — adviser <option>s for the bulk "Assign to…" selects. Current user surfaces first as
 // "Me (name)"; the rest of the team follows. `placeholder` is the disabled first option.
 function adviserOptionsHtml(placeholder) {
-  const meOpt = authUid && TEAM.some((p) => p.id === authUid) ? `<option value="${authUid}">Me (${esc(staffName(authUid))})</option>` : "";
-  const others = TEAM.filter((p) => p.id !== authUid).map((p) => `<option value="${p.id}">${esc(staffName(p.id))}</option>`).join("");
+  // R13 · M-31 — the same away label on the bulk targets (Data Health's "Live cases with no
+  // adviser" is the one that matters: handing forty cases to somebody on leave is the bulk version
+  // of the defect). Informational only, exactly as in assigneeOptionsHtml.
+  const meOpt = authUid && TEAM.some((p) => p.id === authUid) ? `<option value="${authUid}">Me (${esc(staffName(authUid))})${esc(awaySuffix(authUid))}</option>` : "";
+  const others = TEAM.filter((p) => p.id !== authUid).map((p) => `<option value="${p.id}">${esc(staffName(p.id))}${esc(awaySuffix(p.id))}</option>`).join("");
   return `<option value="" selected>${esc(placeholder)}</option>${meOpt}${others}`;
 }
 /* ==========================================================================
@@ -592,6 +599,89 @@ function adviserLoadMap() {
    and still selectable — an administrator or the owner can be given a lead
    deliberately. It restricts only which name arrives pre-picked.
    ========================================================================== */
+/* ==========================================================================
+   R13 · M-31 — STAFF ABSENCES (holiday, course, sick day)
+
+   One table, `staff_absences` (profile_id, starts_on, ends_on, note), and one
+   fact it answers everywhere: IS THIS PERSON HERE TODAY. The firm had nowhere
+   to record it, so leads were routed to an adviser on a beach, tasks were
+   assigned to somebody back on Thursday, and the only way to find out was to
+   ring them.
+
+   THREE RULES, and they are all about not pretending to authority the app
+   does not have:
+
+   1. IT IS NEVER A BLOCK. Absence is INFORMATION. Every select still offers an
+      absent colleague, labelled; every assignment still goes through. A rota
+      is not an access-control system, and a UI that refuses to let an adviser
+      pick a colleague who is back tomorrow afternoon is a UI they work around.
+      The one place it changes an OUTCOME is the lead-routing SUGGESTION — a
+      pre-picked default, one click from being overridden.
+   2. THE UI MIRRORS RLS, so it never offers a write the database refuses.
+      The policy is "own row, or admin/owner"; the person select in the add
+      form is restricted exactly that far, and delete is offered on the same
+      test. See canWriteAbsenceFor().
+   3. IT IS FEATURE-DETECTED like every other migration this file carries. No
+      table ⇒ the Diary panel says so in words and nothing else on any screen
+      changes: no away labels, no diary bands, no routing exclusion.
+
+   Dates are DATE columns (no time), compared as YYYY-MM-DD strings against
+   localDateStr() — the same London-derived "today" the rest of the file uses,
+   never `new Date()` arithmetic that drifts an hour twice a year.
+   ========================================================================== */
+let ABSENCES_SUPPORTED = null;   // null = not yet known
+let ABSENCES = [];               // every row this session can read (staff read them all)
+async function absencesSupported() {
+  if (ABSENCES_SUPPORTED !== null) return ABSENCES_SUPPORTED;
+  try {
+    const { error } = await db.from("staff_absences").select("id").limit(1);
+    if (error) {
+      if (isMissingTableError(error) || isMissingColumnError(error)) { ABSENCES_SUPPORTED = false; return false; }
+      return false;   // RLS or network — never claim a rota we cannot read
+    }
+    ABSENCES_SUPPORTED = true;
+    return true;
+  } catch (_) { return false; }
+}
+/* Read once per sign-in (loadTeam) and again after every write. Held in memory because it is read
+   on every diary cell, every assignee select and every lead row — a query per label would be
+   hundreds of round-trips for a table with a dozen rows in it. */
+async function loadAbsences() {
+  if ((await absencesSupported()) === false) { ABSENCES = []; return ABSENCES; }
+  ABSENCES = await softRows(db.from("staff_absences").select("*").order("starts_on"));
+  return ABSENCES;
+}
+/* The absence covering `ymd` for this person, or null. Inclusive at both ends: somebody whose
+   leave "ends on" Friday is away ON Friday — the other reading is how you book a meeting with
+   somebody on their last day off. */
+function absenceOn(profileId, ymd) {
+  if (!profileId || !ymd) return null;
+  const d = String(ymd).slice(0, 10);
+  return ABSENCES.find((a) => a && a.profile_id === profileId
+    && String(a.starts_on || "").slice(0, 10) <= d
+    && String(a.ends_on || "").slice(0, 10) >= d) || null;
+}
+const absenceToday = (profileId) => absenceOn(profileId, localDateStr());
+const isAwayToday = (profileId) => !!absenceToday(profileId);
+/* " (away until 12 Aug)" — the suffix every informational label uses, so the wording is identical
+   on a task assignee select, a lead dropdown and the retention confirm. Empty string when the
+   person is here, so a caller can concatenate it unconditionally. */
+function awaySuffix(profileId) {
+  const a = absenceToday(profileId);
+  return a ? ` (away until ${fmtD(a.ends_on)})` : "";
+}
+/* The same fact as a sentence, for a confirm dialog. */
+function awaySentence(profileId) {
+  const a = absenceToday(profileId);
+  return a ? `${staffName(profileId)} is away until ${fmtD(a.ends_on)}${a.note ? ` (${a.note})` : ""}` : "";
+}
+/* RULE 2 — the UI's copy of the RLS policy: you may write your own absences; an admin or owner may
+   write anybody's. Kept as one function so the add form, the person select and the delete button
+   can never disagree with each other or with the database. */
+function canWriteAbsenceFor(profileId) {
+  if (isAdminOrOwner()) return true;
+  return !!(ME && ME.id && profileId === ME.id);
+}
 const ADVISING_ROLES_ALWAYS = ["adviser"];
 const ADVISING_ROLES_IF_CARRYING = ["owner", "staff"];
 function isAdvisingStaff(p) {
@@ -608,8 +698,19 @@ function leastLoadedAdviser() {
   const map = adviserLoadMap();
   const pool = advisingStaff();
   if (!map || !pool.length) return null;
+  /* R13 · M-31 — SOMEBODY ON HOLIDAY IS NOT THE LIGHTEST DESK, THEY ARE AN EMPTY ONE.
+     An absent adviser scores well on exactly the measure this ranks by (no meetings booked, tasks
+     cleared before they left), so without this the routing suggestion actively PREFERS the person
+     who cannot ring the client back. They stay in the dropdown, labelled — this removes them from
+     the SUGGESTION only.
+     THE FALLBACK RULE, stated because it is the interesting half: if EVERY advising colleague is
+     away, the lightest desk is chosen from the whole pool regardless. A lead that cannot be routed
+     is worse than a lead routed to somebody who is back on Tuesday, and the label on the option
+     says which one this is, so nobody is misled about it. */
+  const here = pool.filter((p) => !isAwayToday(p.id));
+  const candidates = here.length ? here : pool;
   let best = null;
-  pool.forEach((p) => { if (!best || map[p.id].total < map[best].total) best = p.id; });
+  candidates.forEach((p) => { if (!best || map[p.id].total < map[best].total) best = p.id; });
   return best;
 }
 function leadRoutingSuggestion() {
@@ -630,6 +731,13 @@ function leadLoadTitle(id) {
   return `Which adviser this lead's case is created for. ${staffName(id)} has the lightest desk right now: `
     + `${l.cases} open case${l.cases === 1 ? "" : "s"} + ${l.tasks} open task${l.tasks === 1 ? "" : "s"} due in the next fortnight = ${l.total}. `
     + `Compared across the ${pool.length} advising ${pool.length === 1 ? "colleague" : "colleagues"} only — an administrator can still be picked from the list, but is never suggested. `
+    /* R13 · M-31 — say the exclusion out loud, and say when it has been waived, or "lightest load"
+       over a name that is demonstrably not the lightest total reads as a bug. */
+    + (pool.some((p) => isAwayToday(p.id))
+      ? (pool.every((p) => isAwayToday(p.id))
+        ? "Everyone who advises is away today, so this is the lightest desk regardless — the lead still has to go somewhere. "
+        : "Anyone away today is skipped for this suggestion; they are still in the list, labelled. ")
+      : "")
     + `It is a suggestion, not an assignment — change it and the lead goes where you say.`;
 }
 /* T1-3 — the "route this lead to…" select. Unlike adviserOptionsHtml there is no blank placeholder:
@@ -646,7 +754,10 @@ function leadAdviserOptionsHtml() {
   const meId = (ME && ME.id) || null;
   const pinMe = !!meId && isAdvisingStaff(ME) && TEAM.some((p) => p.id === meId);
   const ordered = pinMe ? [ME].concat(TEAM.filter((p) => p.id !== meId)) : TEAM;
-  return ordered.map((p) => `<option value="${p.id}" ${p.id === sel ? "selected" : ""}>${esc(staffName(p.id))}${p.id === meId ? " (me)" : ""}${p.id === rr ? " · lightest load" : ""}</option>`).join("");
+  /* R13 · M-31 — an away colleague is still offered and still selectable; the label says so. The
+     suffix goes LAST so the "(me)" and "· lightest load" markers the tests and the operator read
+     are exactly where they were. */
+  return ordered.map((p) => `<option value="${p.id}" ${p.id === sel ? "selected" : ""}>${esc(staffName(p.id))}${p.id === meId ? " (me)" : ""}${p.id === rr ? " · lightest load" : ""}${esc(awaySuffix(p.id))}</option>`).join("");
 }
 /* The select plus the "(lightest load)" note that sits beside it. The note is hidden the moment the
    selection moves off the suggestion (see the delegated change listener below) — a label that keeps
@@ -2361,6 +2472,122 @@ function noteDocsFromStarRow(row) {
   if (!row || typeof row !== "object") return;
   if (!Object.prototype.hasOwnProperty.call(row, "waiting_on")) DOCS_SUPPORTED = false;
 }
+/* ==========================================================================
+   R13 · M-4 / M-30 — CARE & CONTACT (vulnerability + automation suppression)
+
+   Three columns on `clients`, all live in production:
+     is_vulnerable        boolean — a Consumer Duty flag
+     vulnerability_note   text    — what the care need actually is
+     suppress_automation  boolean — the DATABASE refuses automated email AND
+                                    SMS to this client; the suppression is
+                                    enforced inside every queueing function,
+                                    not here.
+
+   What the app owes on top of that: (a) somewhere to set them, (b) making them
+   IMPOSSIBLE TO MISS on the two screens a client is worked from, and (c) a
+   pre-flight on the interactive sends, because the server-side rule only
+   covers the automated queueing path — a human pressing "send this one email"
+   is exactly the hole it does not close.
+
+   Feature-detected the same way M2 / M7 / m10 / the call pack are: the client
+   record already reads select("*"), so a row that comes back WITHOUT
+   `is_vulnerable` settles the question for free; the probe below is only for
+   the screens that never read a whole client row. */
+let CARE_SUPPORTED = null;   // null = not yet known
+const CARE_COLS = ["is_vulnerable", "vulnerability_note", "suppress_automation"];
+const CARE_SELECT = "id," + CARE_COLS.join(",");
+function noteCareFromStarRow(row) {
+  if (!row || typeof row !== "object") return;
+  CARE_SUPPORTED = Object.prototype.hasOwnProperty.call(row, "is_vulnerable");
+}
+async function careSupported() {
+  if (CARE_SUPPORTED !== null) return CARE_SUPPORTED;
+  try {
+    const { data, error } = await db.from("clients").select(CARE_SELECT).limit(1);
+    if (error) { if (isMissingColumnError(error)) { CARE_SUPPORTED = false; return false; } return false; }
+    if (!data || !data.length) return false;    // an empty table proves nothing — ask again next time
+    CARE_SUPPORTED = Object.prototype.hasOwnProperty.call(data[0], "is_vulnerable");
+    return CARE_SUPPORTED;
+  } catch (e) { return false; }
+}
+/* The care columns for a set of clients, or {} on a database that has not taken the migration.
+   Its own small query, so nothing else on a page degrades when the answer is "no such column". */
+async function loadClientCare(ids) {
+  const want = [...new Set((ids || []).filter(Boolean))];
+  if (!want.length) return {};
+  if ((await careSupported()) === false) return {};
+  try {
+    const { data, error } = await db.from("clients").select(CARE_SELECT).in("id", want);
+    if (error) { if (isMissingColumnError(error)) CARE_SUPPORTED = false; return {}; }
+    const map = {};
+    (data || []).forEach((r) => { if (r && r.id) map[r.id] = r; });
+    return map;
+  } catch (_) { return {}; }
+}
+/* THE CHIPS. Deliberately small and text-only — this is a care flag on a person, not an alert, and
+   a red siren beside somebody's name is both wrong in tone and the thing operators learn to skim.
+   Two independent facts, so two independent chips: a vulnerable client is not necessarily
+   suppressed, and a suppressed one is not necessarily vulnerable. */
+function careChipsHtml(c, opts = {}) {
+  if (!c) return "";
+  const bits = [];
+  if (c.is_vulnerable) {
+    const note = String(c.vulnerability_note || "").trim();
+    bits.push(`<span class="care-chip care-chip-vuln" title="${esc(note ? "Vulnerable client — " + note : "Flagged as a vulnerable client. No note has been written explaining what the care need is; add one on the client record.")}">⚑ vulnerable${note ? " — see note" : " — no note recorded"}</span>`);
+  }
+  if (c.suppress_automation) {
+    bits.push(`<span class="care-chip care-chip-supp" title="Automated email and SMS to this client are refused by the database itself — no rate-end reminder, review request, document chase, birthday or anniversary can reach them. Sending one by hand still works, and will ask you to confirm first.">🔇 automation suppressed</span>`);
+  }
+  if (!bits.length) return "";
+  return `<span class="care-chips"${opts.id ? ` id="${esc(opts.id)}"` : ""}>${bits.join("")}</span>`;
+}
+/* THE BLOCK ON THE CLIENT RECORD. Plain English on every line, because both switches have
+   consequences a colleague cannot infer from their labels: the first is a Consumer Duty record
+   that other people will read, the second silently stops a client hearing from the firm at all.
+   The note is revealed by the checkbox (and stays visible whenever a flag or a note already
+   exists), because an empty "why?" box under an unticked box is just clutter. */
+function careBlockHtml(c, on) {
+  if (!on) return "";
+  const vuln = !!(c && c.is_vulnerable);
+  const note = String((c && c.vulnerability_note) || "");
+  const supp = !!(c && c.suppress_automation);
+  return `<div class="care-block" id="client-care-block">
+    <h4>Care &amp; contact</h4>
+    <p class="care-sub">Two separate decisions about how this person is looked after. They are recorded on the client, so they apply to every case, every reminder and every colleague who opens this record.</p>
+    <label class="care-check" for="client-vulnerable">
+      <input type="checkbox" id="client-vulnerable" name="is_vulnerable" ${vuln ? "checked" : ""}>
+      <span>Vulnerable client
+        <span class="care-why">A Consumer Duty flag. It changes nothing automatically — no email stops, no case moves — it puts a mark on this record so whoever picks the phone up next knows before they dial. Tick it and say what the need is below; the flag on its own tells a colleague nothing they can act on.</span>
+      </span>
+    </label>
+    <div class="care-note-wrap${vuln || note ? "" : " hidden"}" id="client-vuln-note-wrap">
+      <label for="client-vuln-note">What is the care need?
+        <textarea id="client-vuln-note" name="vulnerability_note" rows="2" placeholder="e.g. recently bereaved — prefers post, not phone; give extra time on decisions">${esc(note)}</textarea>
+      </label>
+      <span class="care-why">Written for the next colleague, not for the file. Everyone with a back-office login can read it, and it shows in the tooltip on the ⚑ chip wherever this client appears.</span>
+    </div>
+    <label class="care-check" for="client-suppress">
+      <input type="checkbox" id="client-suppress" name="suppress_automation" ${supp ? "checked" : ""}>
+      <span>Suppress automated contact
+        <span class="care-why">With this on, <strong>the database itself refuses every automated email and SMS to this client</strong> — rate-end reminders, review requests, document chases, birthday and anniversary messages. It is not a setting this screen enforces and it is not something a colleague can accidentally override: the queueing functions will not create the row. Sending something <strong>by hand still works</strong>, and you will be asked to confirm the suppression first, so nothing goes out to them unnoticed.</span>
+      </span>
+    </label>
+  </div>`;
+}
+/* PRE-FLIGHT ON AN INTERACTIVE SEND. The database refuses the AUTOMATED routes; this is the human
+   one. It does not block — an adviser ringing round after a bereavement may well need to send the
+   one email that matters — it makes the operator say the suppression out loud first, with the note
+   in front of them. Returns true to proceed. A database without the columns, or a read that fails,
+   never invents a warning: it proceeds exactly as before. */
+async function confirmSuppressedSend(clientId, what) {
+  if (!clientId) return true;
+  const care = (await loadClientCare([clientId]))[clientId];
+  if (!care || !care.suppress_automation) return true;
+  const note = String(care.vulnerability_note || "").trim();
+  return confirm(`This client's automation is suppressed${note ? ` (${note})` : ""}.\n\n`
+    + `The database refuses every automated email and SMS to them. This ${what} is being sent by hand, so it WILL go.\n\n`
+    + `Send this one ${what} anyway?`);
+}
 /* The three constants the backend chases on. Named here so the status line an operator reads and
    the rule the cron applies cannot describe different behaviour. */
 const DOC_CHASE_MAX = 3;
@@ -2609,7 +2836,8 @@ async function renderCaseDocs(caseId, c, state) {
             ${d.requested_at ? `<span class="doc-date">asked ${fmtD(d.requested_at)}</span>` : ""}
             ${d.received_at ? `<span class="doc-date">in ${fmtD(d.received_at)}</span>` : ""}
             ${/* R12a·D8 — this was a dead text label. The client had uploaded the document through
-                  their own link, the object was sitting in the case-documents bucket, and the only
+                  their own link, the object was sitting in the client-docs bucket (R13 — R12a said
+                  "case-documents" here and in DOC_BUCKET; that bucket does not exist), and the only
                   thing the case said about it was "📎 file" — so the one place an adviser goes to
                   check what actually arrived could not open it. Items received by EMAIL or in
                   person carry no storage_path (cd014 is exactly that), and they deliberately get no
@@ -2692,12 +2920,28 @@ async function docAction(act, docId, caseId, c) {
    An error is TOASTED with what the storage layer actually said rather than swallowed: "nothing
    happened when I clicked Open" is the worst possible outcome on a document an adviser is trying
    to check before submitting a case. */
-const DOC_BUCKET = "case-documents";
+/* R13 · PRODUCTION HOTFIX — THE BUCKET NAME WAS WRONG.
+   R12a shipped `case-documents`. The bucket that actually exists in production is `client-docs`,
+   so every "📎 Open" in the live back office was minting a signed URL against a bucket that isn't
+   there — the one control an adviser presses to check what a client sent could only ever fail.
+
+   THE STORAGE-PATH CONTRACT, written down because it is not obvious and it bit us once:
+   the deployed doc-upload function stores `case_documents.storage_path` WITH the bucket prefix
+   ("client-docs/<caseId>/<file>"), while `storage.from(bucket).createSignedUrl(path)` wants the
+   path RELATIVE to the bucket. Handing it the stored value verbatim would sign
+   "client-docs/client-docs/<caseId>/<file>" — a 404 that looks like a missing upload. So the
+   prefix is stripped here, once, and rows written by any earlier/other path (no prefix at all)
+   still work untouched: strip it if it is there, use what is left either way. */
+const DOC_BUCKET = "client-docs";
+function docBucketPath(path) {
+  const s = String(path == null ? "" : path).replace(/^\/+/, "");
+  return s.startsWith(DOC_BUCKET + "/") ? s.slice(DOC_BUCKET.length + 1) : s;
+}
 async function openDocFile(path, btn) {
   if (!path) return;
   if (btn) btn.disabled = true;   // the round trip is a network call — don't let it be double-fired
   try {
-    const { data, error } = await db.storage.from(DOC_BUCKET).createSignedUrl(path, 300);
+    const { data, error } = await db.storage.from(DOC_BUCKET).createSignedUrl(docBucketPath(path), 300);
     if (error || !data || !data.signedUrl) {
       return toast("Couldn't open that file — " + ((error && error.message) || "storage gave no link back") + ". The upload may have been removed.");
     }
@@ -2707,6 +2951,204 @@ async function openDocFile(path, btn) {
   } finally {
     if (btn) btn.disabled = false;
   }
+}
+/* ==========================================================================
+   R13 · M-2 — CASE FILES: THE FIRM'S OWN PAPERS.
+
+   THIS IS NOT THE DOCUMENT CHECKLIST, and the distinction is the whole point:
+
+     Documents  = things we ask the CLIENT for. Passport, payslips, bank
+                  statements. They arrive through the client's upload link,
+                  they are chased by email, and the interesting state is
+                  "outstanding".
+     Files      = papers the FIRM produces or receives about the case. The
+                  ESIS/illustration, the research evidence behind the
+                  recommendation, the signed client agreement, the offer
+                  letter, the suitability letter. Nobody chases them and they
+                  have no "outstanding" state — they either exist on the file
+                  or they do not, and at a file check that is the first thing
+                  asked for.
+
+   Before this, the suitability letter lived in somebody's Outlook and the
+   research evidence lived in a folder on a laptop. A compliance file that
+   cannot produce its own advice paperwork is not a file.
+
+   Same bucket as the checklist uploads (`client-docs`) and the same
+   storage_path convention — stored WITH the bucket prefix, stripped by
+   docBucketPath() before signing. Deliberately reusing both rather than
+   inventing a second bucket: one place to secure, one convention to remember,
+   and R13's bucket hotfix already paid for getting that convention written
+   down (see docBucketPath above).
+   ========================================================================== */
+let CASE_FILES_SUPPORTED = null;   // null = not yet known
+async function caseFilesSupported() {
+  if (CASE_FILES_SUPPORTED !== null) return CASE_FILES_SUPPORTED;
+  try {
+    const { error } = await db.from("case_files").select("id").limit(1);
+    if (error) {
+      if (isMissingTableError(error) || isMissingColumnError(error)) { CASE_FILES_SUPPORTED = false; return false; }
+      return false;   // RLS or network — never offer an upload we cannot verify a home for
+    }
+    CASE_FILES_SUPPORTED = true;
+    return true;
+  } catch (_) { return false; }
+}
+/* The kinds, as a list rather than free text, because "Suitability", "suitability ltr" and
+   "SL" are three rows in any report anybody ever builds off this. `kind` is a free-text column, so
+   a row written by an import or an earlier hand keeps whatever it says — the label falls back to
+   the stored string rather than showing a blank chip over a value that is really there. */
+const CASE_FILE_KINDS = [
+  ["illustration", "Illustration / ESIS"],
+  ["research_evidence", "Research evidence"],
+  ["client_agreement", "Client agreement"],
+  ["suitability", "Suitability letter"],
+  ["offer_letter", "Offer letter"],
+  ["other", "Other"],
+];
+const caseFileKindLabel = (k) => (CASE_FILE_KINDS.find((x) => x[0] === k) || [])[1] || (k ? String(k) : "Not categorised");
+/* pdf / jpg / png only, and 15MB. Both limits are the client-facing upload function's, deliberately
+   — an adviser and a client putting things in the same bucket under different rules is how one of
+   them ends up with a file the other cannot open. */
+const CASE_FILE_EXTS = ["pdf", "jpg", "jpeg", "png"];
+const CASE_FILE_MAX_BYTES = 15 * 1024 * 1024;
+const caseFileExt = (name) => String(name || "").split(".").pop().toLowerCase();
+/* A storage key is not a display name: spaces, apostrophes and accents in "Suitability — O'Neill
+   (final).pdf" are exactly what turns a signed URL into a 404. The DISPLAY name keeps the original
+   verbatim in the row; only the key is slugged, and a timestamp keeps two uploads of the same
+   letter from overwriting one another. */
+function caseFileSlug(name) {
+  const base = String(name || "file").replace(/\.[^.]*$/, "");
+  const slug = base.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
+  return slug || "file";
+}
+/* THE SECTION. Same shape as renderCaseDocs: its own small read, repainted after every mutation
+   rather than re-rendering the whole modal over an adviser's half-typed note. */
+async function renderCaseFiles(caseId, c, state) {
+  const body = $("#case-files-body");
+  if (!body || !caseId) return;
+  const files = state && state.files
+    ? state.files
+    : await softRows(db.from("case_files").select("*").eq("case_id", caseId).order("created_at"));
+  const rowsHtml = files.length
+    ? files.map((f) => `<div class="doc-row cf-row" data-file="${esc(f.id)}">
+        <div class="doc-main">
+          <div class="doc-item">${esc(f.name || "(unnamed file)")}</div>
+          <div class="doc-meta">
+            <span class="badge grey cf-kind">${esc(caseFileKindLabel(f.kind))}</span>
+            <span class="doc-date">${esc(fmtD(f.created_at))}</span>
+            <span class="doc-date">${esc(f.uploaded_by ? (profileName(f.uploaded_by) || "a colleague no longer in the system") : "uploader not recorded")}</span>
+            ${f.storage_path
+              ? `<button type="button" class="btn btn-sm cf-open" data-path="${esc(f.storage_path)}" title="Open this file. The link is signed and expires after 5 minutes.">📎 Open</button>`
+              : '<span class="cs-muted" title="This row records a file that has no object behind it — nothing to open.">no file stored</span>'}
+          </div>
+        </div>
+        <div class="doc-acts">
+          <button type="button" class="btn btn-sm btn-ghost btn-danger cf-del" data-file="${esc(f.id)}" title="Remove this file from the case">🗑</button>
+        </div>
+      </div>`).join("")
+    : '<div class="empty" id="cf-empty">No case papers are on file here yet — no illustration, no research evidence, no suitability letter. Upload them as they are produced; this is the section a file check asks for first.</div>';
+  body.innerHTML = `
+    <div class="doc-list" id="cf-list">${rowsHtml}</div>
+    <div class="doc-actions cf-actions">
+      <select id="cf-kind" aria-label="What kind of file is this" title="What kind of file is this">
+        ${CASE_FILE_KINDS.map(([k, l]) => `<option value="${k}">${esc(l)}</option>`).join("")}
+      </select>
+      <input type="file" id="cf-file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" aria-label="Choose a file to upload">
+      <button type="button" class="btn btn-sm btn-primary" id="cf-upload-btn">⬆️ Upload to this case</button>
+    </div>
+    <p class="panel-sub" id="cf-limits">PDF, JPG or PNG, up to 15MB. The file is stored privately — nothing is shared with the client and no public link is ever produced.</p>`;
+  body.querySelectorAll(".cf-open").forEach((b) => (b.onclick = () => openDocFile(b.dataset.path, b)));
+  body.querySelectorAll(".cf-del").forEach((b) => (b.onclick = () => deleteCaseFile(b.dataset.file, caseId, c, files)));
+  const up = $("#cf-upload-btn");
+  if (up) up.onclick = (e) => uploadCaseFile(caseId, c, e);
+}
+/* THE UPLOAD. Object first, row second — a row pointing at nothing is the failure mode that wastes
+   somebody's afternoon at a file check ("it says the suitability letter is here"), while an
+   orphaned object is invisible and harmless. If the row insert then fails, the object is removed
+   again so the bucket does not silently accumulate files nothing references. */
+async function uploadCaseFile(caseId, c, ev) {
+  const input = $("#cf-file");
+  const file = input && input.files && input.files[0];
+  if (!file) return toast("Choose a file first.");
+  const ext = caseFileExt(file.name);
+  if (CASE_FILE_EXTS.indexOf(ext) === -1) return toast(`That is a .${ext || "?"} — case files must be a PDF, JPG or PNG.`);
+  if (file.size > CASE_FILE_MAX_BYTES) {
+    return toast(`That file is ${(file.size / 1048576).toFixed(1)}MB and the limit is 15MB. Nothing has been uploaded.`);
+  }
+  const kind = ($("#cf-kind") || {}).value || "other";
+  const btn = (ev && (ev.currentTarget || ev.target)) || $("#cf-upload-btn");
+  if (btn) { if (btn.disabled) return; btn.disabled = true; btn.textContent = "⏳ Uploading…"; }
+  const restore = () => { if (btn) { btn.disabled = false; btn.textContent = "⬆️ Upload to this case"; } };
+  const key = `files/${caseId}/${caseFileSlug(file.name)}-${Date.now()}.${ext}`;
+  try {
+    const { error: upErr } = await db.storage.from(DOC_BUCKET).upload(key, file, { contentType: file.type || undefined, upsert: false });
+    if (upErr) { restore(); return toast("The file was NOT uploaded: " + upErr.message + ". Nothing has been added to the case."); }
+    /* The stored path carries the bucket prefix — the convention docBucketPath() exists to undo.
+       Writing it the other way would work here and break every row read by anything that assumes
+       the prefix, which is what R13's bucket hotfix was cleaning up. */
+    const storagePath = `${DOC_BUCKET}/${key}`;
+    const { error: insErr } = await db.from("case_files").insert({
+      case_id: caseId, client_id: (c && c.client_id) || null,
+      name: file.name, kind, storage_path: storagePath,
+      uploaded_by: (ME && ME.id) || null,
+    });
+    if (insErr) {
+      // Undo the half-done state rather than leaving an object nothing points at.
+      let removed = true;
+      try { const r = await db.storage.from(DOC_BUCKET).remove([key]); if (r && r.error) removed = false; } catch (_) { removed = false; }
+      restore();
+      return toast("The file uploaded but could NOT be recorded on the case: " + insErr.message
+        + (removed ? " — the uploaded copy has been removed again, so nothing is left half-done. Try once more."
+          : " — and the uploaded copy could not be removed either, so a stray object may be sitting in storage. Try once more; tell whoever administers the bucket."));
+    }
+    /* The case's own history. A file appearing on a case with nothing in the timeline saying who
+       put it there, or when, is exactly the gap the audit trail exists to close. */
+    const who = (ME && (ME.full_name || ME.email)) || "a colleague";
+    const { error: nErr } = await db.from("case_notes").insert({
+      case_id: caseId, body: `File added: ${file.name} (${caseFileKindLabel(kind)}) by ${who}`,
+      created_by: (ME && ME.id) || null,
+    });
+    if (input) input.value = "";
+    restore();
+    toast(nErr
+      ? `${file.name} added to the case — but the history note could not be written: ${nErr.message}`
+      : `${file.name} added to the case as ${caseFileKindLabel(kind).toLowerCase()}`);
+    await renderCaseFiles(caseId, c);
+  } catch (e) {
+    restore();
+    toast("The upload failed: " + (e && e.message ? e.message : String(e)) + ". Nothing has been added to the case.");
+  }
+}
+/* DELETE. Any member of staff — this is the firm's own paperwork, and the person who uploaded the
+   wrong version at 4pm is the person who should be able to take it down at 4:01. The confirm NAMES
+   the file, because "Delete this file?" over a list of six is how the wrong one goes.
+   THE ROW GOES FIRST and the object second, and the report is honest about the second: some
+   storage policies do not permit a delete from a browser session at all, and telling an operator
+   "removed" when a copy is still in the bucket is the one thing this must not do. */
+async function deleteCaseFile(fileId, caseId, c, files) {
+  const f = (files || []).find((x) => x && x.id === fileId);
+  if (!f) return;
+  if (!confirm(`Remove “${f.name || "this file"}” (${caseFileKindLabel(f.kind)}) from this case?\n\nThe row comes off the case and the stored copy is deleted. This is not a version history — there is nothing to undo it with.`)) return;
+  const { error } = await db.from("case_files").delete().eq("id", fileId);
+  if (error) return toast("It was not removed: " + error.message);
+  let storageGone = true, storageWhy = "";
+  if (f.storage_path) {
+    try {
+      const r = await db.storage.from(DOC_BUCKET).remove([docBucketPath(f.storage_path)]);
+      if (r && r.error) { storageGone = false; storageWhy = r.error.message || ""; }
+    } catch (e) { storageGone = false; storageWhy = (e && e.message) || String(e); }
+  }
+  const who = (ME && (ME.full_name || ME.email)) || "a colleague";
+  try {
+    await db.from("case_notes").insert({
+      case_id: caseId, body: `File removed: ${f.name || "(unnamed file)"} (${caseFileKindLabel(f.kind)}) by ${who}`,
+      created_by: (ME && ME.id) || null,
+    });
+  } catch (_) { /* the removal itself is done — never fail it on the note */ }
+  toast(storageGone
+    ? `“${f.name || "That file"}” removed from the case`
+    : `“${f.name || "That file"}” is off the case, but the stored copy may still be in the bucket${storageWhy ? " — " + storageWhy : ""}. Tell whoever administers storage if it matters.`);
+  await renderCaseFiles(caseId, c);
 }
 /* The waiver reason. Optional — an adviser who waives a document knows why and may be on the
    phone — but asked for, because "waived" with no reason is the line that gets read back in six
@@ -3406,6 +3848,11 @@ async function loadTeam(session) {
   // B9 (R5-31) — #diary-staff was just rebuilt from scratch (any prior selection is gone), so this
   // is the one safe place to apply the restored Month/Day mode's own default selection.
   initDiaryViewFromPrefs();
+  /* R13 · M-31 — the rota, once, right after the team it is about. Awaited rather than fired and
+     forgotten: the very first paint of My Day carries lead-routing selects, and a rota that
+     arrives after them would leave the first screen of the day showing the one answer this
+     feature exists to correct. Soft — a database without the table simply reads back nothing. */
+  await loadAbsences();
 }
 $("#login-form").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -4010,6 +4457,16 @@ async function renderSettings() {
   const savedMsg = $("#settings-saved");
   if (savedMsg) savedMsg.classList.add("hidden");
   $("#send-digest-btn").onclick = sendDigestNow;
+  /* R13 · M-42 — the export panel. Owner-only, and outside #settings-form on purpose: everything
+     inside that form is swept into the settings upsert by the Save button, and a button that
+     happened to sit in it would become a phantom settings key. */
+  const exportPanel = $("#firm-export-panel");
+  if (exportPanel) exportPanel.classList.toggle("hidden", !owner);
+  const exportBtn = $("#firm-export-btn");
+  if (exportBtn) exportBtn.onclick = exportFirmData;
+  // Same re-read the Today banner does, for the same reason: "last export" is a claim about now.
+  refreshHeartbeatKeys().then(renderExportLastLine);
+  renderSecondOwnerNotice();
   // BACKEND-R4 §1 — inviting/editing OTHER logins is Owner-only, and invite-user v3 refuses a
   // non-Owner caller outright, so that block stays hidden. R5-24 — the panel itself now also opens
   // for an Admin (isAdminOrOwner()), who gets a read-only roster instead of nothing.
@@ -4032,6 +4489,156 @@ async function renderSettings() {
      and so appear on no other screen. Owner-only in the UI; the database is what actually
      withholds those rows from everyone else. */
   loadChangeHistory();
+}
+/* ==========================================================================
+   R13 · M-42 — THE FIRM EXPORT ("would not go live without it")
+
+   The firm's data belongs to the firm. Until now the only way to get it out of
+   this system was table by table through the Supabase console, which is a thing
+   the Owner cannot do and would not want to. This is one button that produces
+   one file.
+
+   FOUR RULES, all of them load-bearing:
+
+   1. EVERY TABLE THE APP KNOWS. Not a curated subset — a backup that quietly
+      omits the audit log or the email queue is not a backup, it is a summary,
+      and the omission is only discovered when it matters.
+
+   2. IT PAGES. PostgREST caps a response at 1,000 rows. `audit_log` is past
+      that already on a 50-client fixture and `case_events` is the fastest
+      growing table in the schema. An export that silently stopped at row 1,000
+      would be the single worst bug this feature could ship — it would look
+      exactly like a complete file. Every table is read in .range() slices
+      until a short page comes back.
+
+   3. A FAILING TABLE DOES NOT ABORT THE FILE. RLS refusing one table (or a
+      table that does not exist on this deployment yet) must not cost the Owner
+      the other seventeen. The failure is recorded IN the file, under
+      `failed`, and named in the toast — so the file can never be mistaken for
+      a complete one, and the person holding it knows exactly what is missing.
+
+   4. IT SAYS WHAT IT IS NOT. The copy above the button says the file is not
+      encrypted and that nothing restores it. Both are true, both are things
+      somebody would otherwise assume the other way round.
+
+   Owner-only in the UI. That is presentation — the reads below are ordinary
+   RLS'd reads, and a non-Owner running them would get a partial file with a
+   confident-looking name on it, which is the risk actually worth avoiding. */
+const EXPORT_TABLES = [
+  "clients", "cases", "case_tasks", "case_notes", "case_documents", "case_files", "case_events",
+  "case_emails", "appointments", "leads", "email_queue", "sms_queue", "fact_finds", "introducers",
+  "settings", "profiles", "watch_alerts", "staff_absences", "duplicate_dismissals", "audit_log",
+];
+const EXPORT_PAGE = 1000;
+/* One table, paged. Returns { rows } or { error } — never throws, because one bad table must not
+   take the file down with it. The order-by is `id` where the table has one so the pages cannot
+   overlap or skip under concurrent writes; `settings` is keyed on `key` and has no id column,
+   which is why the ordering column is chosen per table rather than assumed. */
+const EXPORT_ORDER_BY = { settings: "key" };
+async function exportReadTable(table) {
+  const orderCol = EXPORT_ORDER_BY[table] || "id";
+  const rows = [];
+  for (let from = 0; ; from += EXPORT_PAGE) {
+    let res;
+    try {
+      res = await db.from(table).select("*").order(orderCol).range(from, from + EXPORT_PAGE - 1);
+    } catch (e) {
+      return { error: (e && e.message) || String(e) };
+    }
+    if (res.error) {
+      /* A table whose ORDER column does not exist on this deployment is still worth exporting —
+         retry once, unordered, rather than dropping the rows over a sort. */
+      if (isMissingColumnError(res.error) && from === 0) {
+        const plain = await db.from(table).select("*").range(0, EXPORT_PAGE - 1);
+        if (plain.error) return { error: plain.error.message || String(plain.error) };
+        return { rows: plain.data || [], unordered: true, capped: (plain.data || []).length === EXPORT_PAGE };
+      }
+      return { error: res.error.message || String(res.error) };
+    }
+    const page = res.data || [];
+    rows.push(...page);
+    if (page.length < EXPORT_PAGE) break;
+    if (rows.length > 500000) break;   // a runaway loop is worse than a truncated file that says so
+  }
+  return { rows };
+}
+async function exportFirmData() {
+  const btn = $("#firm-export-btn");
+  const out = $("#firm-export-result");
+  if (btn && btn.disabled) return;
+  if (!isOwner()) return toast("Only the Owner can export the firm's data.");
+  if (btn) { btn.disabled = true; btn.textContent = "Exporting…"; }
+  if (out) out.textContent = "Reading every table — this can take a moment on a large book.";
+  try {
+    const tables = {};
+    const counts = {};
+    const failed = {};
+    const notes = {};
+    for (const t of EXPORT_TABLES) {
+      const r = await exportReadTable(t);
+      if (r.error) { failed[t] = r.error; continue; }
+      tables[t] = r.rows;
+      counts[t] = r.rows.length;
+      if (r.unordered) notes[t] = "read without an ordering column; if this table holds more than " + EXPORT_PAGE + " rows the file may be incomplete";
+      if (r.capped) notes[t] = (notes[t] ? notes[t] + "; " : "") + "possibly truncated at " + EXPORT_PAGE + " rows";
+    }
+    const total = Object.values(counts).reduce((a, b) => a + b, 0);
+    const failedNames = Object.keys(failed);
+    const payload = {
+      exported_at: new Date().toISOString(),
+      exported_by: (ME && (ME.email || ME.full_name)) || authUid || "unknown",
+      app: "nexmoney-backoffice",
+      /* Said INSIDE the file as well as on screen: a file outlives the page that made it, and the
+         person who opens it in two years is not the person who read the panel. */
+      about: "A complete copy of this firm's back-office data, exported by the firm. It is NOT encrypted — treat it as you would the database itself. Nothing restores this file automatically; it is a record, not a migration.",
+      tables,
+      counts,
+      /* Always present, even when empty, so "did anything fail?" is answered by reading a key
+         rather than by noticing the absence of one. */
+      failed,
+      notes,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    const url = URL.createObjectURL(blob);
+    a.href = url;
+    a.download = `nexmoney-export-${localDateStr()}.json`;
+    a.click();
+    setTimeout(() => { try { URL.revokeObjectURL(url); } catch (_) { /* already gone */ } }, 30000);
+    /* The stamp is what the Today-page nag reads. Best effort and reported honestly: a file that
+       downloaded is a backup whether or not the stamp saved, and claiming otherwise would push
+       someone into exporting twice. */
+      let stampWarn = "";
+    const nowIso = new Date().toISOString();
+    const { error: stampErr } = await db.from("settings").upsert([{ key: "last_full_export_at", value: nowIso }]);
+    if (stampErr) stampWarn = " · the export date could not be saved (" + stampErr.message + "), so the reminder on Today may still show";
+    else { settings.last_full_export_at = nowIso; renderExportLastLine(); }
+    const okTables = Object.keys(counts).length;
+    const summary = `Exported ${total.toLocaleString()} rows from ${okTables} table${okTables === 1 ? "" : "s"}`
+      + (failedNames.length ? ` · ${failedNames.length} table${failedNames.length === 1 ? "" : "s"} FAILED and ${failedNames.length === 1 ? "is" : "are"} named in the file: ${failedNames.join(", ")}` : "")
+      + stampWarn;
+    if (out) {
+      out.innerHTML = `<strong>${esc(summary)}</strong><br>${Object.entries(counts).map(([t, n]) => `${esc(t)} ${n}`).join(" · ")}`
+        + (failedNames.length ? `<br><span class="export-warn">Not in the file: ${esc(failedNames.map((t) => `${t} (${failed[t]})`).join(" · "))}</span>` : "");
+    }
+    toast(summary);
+    refreshChangeHistory();
+  } catch (e) {
+    if (out) out.textContent = "";
+    toast("Export failed: " + ((e && e.message) || String(e)));
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "Export the firm's data"; }
+  }
+}
+/* "When did we last do this?" — the only question the button cannot answer by itself. */
+function renderExportLastLine() {
+  const el = $("#firm-export-last");
+  if (!el) return;
+  const at = settings.last_full_export_at;
+  const days = at ? daysSinceLocal(at) : null;
+  el.textContent = at && days != null && !isNaN(days)
+    ? `Last export: ${fmtD(at)} — ${days === 0 ? "today" : days === 1 ? "yesterday" : days + " days ago"}.`
+    : "No export has ever been taken from this system.";
 }
 async function sendDigestNow() {
   const btn = $("#send-digest-btn");
@@ -4253,6 +4860,96 @@ async function callPackSupported() {
     return CALLPACK_SUPPORTED;
   } catch (e) { return false; }
 }
+/* ==========================================================================
+   R13 · M-23/M-25 — THE CLAWBACK WINDOW
+
+   `cases.policy_start_date` is live in production. It is the date the
+   protection policy STARTED, which is the only date a clawback can be measured
+   from: providers reclaim commission on a policy that lapses inside (typically)
+   the first 24 months, and until now this app held the commission figure and
+   nothing at all about when the clock started. A firm could not answer "which
+   of my policies could still take money back off me", and the answer to that
+   question is money.
+
+   Deliberately minimal: 24 months, stated on screen as the assumption it is
+   (providers differ, and inventing a per-provider table would be pretending to
+   a precision nobody has given us). What the panel is really for is the second
+   half — the policies with NO start date, whose window cannot be watched at
+   all. That count is the actionable number. */
+const CLAWBACK_MONTHS = 24;
+let POLICY_START_SUPPORTED = null;   // null = not yet known
+function notePolicyStartFromStarRow(row) {
+  if (!row || typeof row !== "object") return;
+  POLICY_START_SUPPORTED = Object.prototype.hasOwnProperty.call(row, "policy_start_date");
+}
+async function policyStartSupported() {
+  if (POLICY_START_SUPPORTED !== null) return POLICY_START_SUPPORTED;
+  try {
+    const { data, error } = await db.from("cases").select("id,policy_start_date").limit(1);
+    if (error) { if (isMissingColumnError(error)) { POLICY_START_SUPPORTED = false; return false; } return false; }
+    if (!data || !data.length) return false;   // an empty table proves nothing — ask again next time
+    POLICY_START_SUPPORTED = Object.prototype.hasOwnProperty.call(data[0], "policy_start_date");
+    return POLICY_START_SUPPORTED;
+  } catch (e) { return false; }
+}
+/* ==========================================================================
+   R13 · M-11 / M-13 / M-10 — THE THREE FORWARD-CAPTURE COLUMNS.
+
+   `offer_issued_date`, `exchange_date` and `repayment_method` are three facts
+   the firm has always known and never had anywhere to put:
+
+     · offer issued — the date the lender's offer letter is DATED, as distinct
+       from the date it expires (which we already held) and the date somebody
+       got round to moving the case to Offer (which is a stage event, not the
+       lender's act).
+     · exchanged on — the day contracts exchanged. Between exchange and
+       completion the client is legally committed; a case waiting on documents
+       past that date is a different kind of problem from one waiting before it.
+     · repayment method — repayment / interest only / part and part. Read on
+       every call and recorded nowhere.
+
+   THIS ROUND CAPTURES THEM AND NOTHING ELSE. No report is built on any of the
+   three — an average or a conversion computed over three fixture rows and
+   fifteen years of nulls would be a number with the confidence of a
+   measurement and the content of a guess. The columns need honest capture
+   surfaces first; the reports come when there is something in them to report.
+
+   One probe for all three: they arrived in one migration, so a database either
+   has the lot or none of it, and three separate feature flags would be three
+   ways to describe one state.
+   ========================================================================== */
+const FORWARD_COLS = ["offer_issued_date", "exchange_date", "repayment_method"];
+const REPAYMENT_METHODS = [["repayment", "Repayment"], ["interest_only", "Interest only"], ["part_and_part", "Part and part"]];
+const repaymentMethodLabel = (v) => (REPAYMENT_METHODS.find((r) => r[0] === v) || [])[1] || (v ? String(v).replace(/_/g, " ") : "");
+let FORWARD_SUPPORTED = null;   // null = not yet known
+/* Free half of the probe: any select("*") on `cases` settles it in both directions, exactly like
+   notePropAddrFromStarRow — these are plain columns and nothing else can explain their absence. */
+function noteForwardFromStarRow(row) {
+  if (!row || typeof row !== "object") return;
+  FORWARD_SUPPORTED = Object.prototype.hasOwnProperty.call(row, "exchange_date");
+}
+async function forwardDatesSupported() {
+  if (FORWARD_SUPPORTED !== null) return FORWARD_SUPPORTED;
+  try {
+    const { data, error } = await db.from("cases").select("id," + FORWARD_COLS.join(",")).limit(1);
+    if (error) { if (isMissingColumnError(error)) { FORWARD_SUPPORTED = false; return false; } return false; }
+    if (!data || !data.length) return false;   // an empty table proves nothing — ask again next time
+    FORWARD_SUPPORTED = Object.prototype.hasOwnProperty.call(data[0], "exchange_date");
+    return FORWARD_SUPPORTED;
+  } catch (e) { return false; }
+}
+/* Whole months between a policy start and today, London-derived like every other date here.
+   Returns null for anything unreadable rather than a number nobody should trust. */
+function clawbackMonthsElapsed(startYmd) {
+  const s = String(startYmd || "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+  const [sy, sm, sd] = s.split("-").map(Number);
+  const t = localDateStr();
+  const [ty, tm, td] = t.split("-").map(Number);
+  let months = (ty - sy) * 12 + (tm - sm);
+  if (td < sd) months--;                      // the anniversary day has not come round yet this month
+  return months;
+}
 /* One nullable money/percent value, rendered honestly. `pct` switches the unit. */
 function callPackVal(v, pct) {
   if (v == null || v === "") return '<span class="cs-muted">—</span>';
@@ -4386,7 +5083,110 @@ function renderTodayKpis() {
      permanent "—" is worse than a clean four. */
   row.title = money ? "" : "Fee totals on this strip are the firm's money and are shown to the Owner only. Your own fees banked and outstanding are on the Reports page, in the \"My numbers\" card.";
 }
+/* ==========================================================================
+   R13 · M-43 — THE CRON HEARTBEAT, and M-42's backup nag.
+
+   THE PROBLEM THE HEARTBEAT SOLVES: every automated email this firm sends goes
+   out of an 8am cron run. If that cron stops — a paused project, an expired
+   key, a scheduler nobody renewed — NOTHING on any screen changes. The queue
+   fills quietly, "queued" is a normal-looking status, and the first symptom is
+   a client six weeks later asking why they never heard about their rate ending.
+   process-emails v13 stamps `settings.last_cron_run_at` on every full run, so
+   the app can finally tell the difference between "nothing to send" and
+   "nothing is running".
+
+   Three states, and the middle one matters most:
+     · key absent entirely  → nothing is shown (an un-migrated database must not
+       grow a scary banner it cannot clear).
+     · key present but empty → grey: the automation has never confirmed a run.
+       That is a fact, not yet an emergency — it is what a firm sees on day one.
+     · older than 48h → amber, with the date and the days, and the sentence that
+       says what it costs: emails may be silently stuck.
+
+   48 hours rather than 24 on purpose: a daily job that runs at 08:00 and is
+   read at 07:55 the next morning is 23h59m old and perfectly healthy, and a
+   banner that cries wolf every morning is a banner nobody reads by Thursday.
+
+   Everyone sees the heartbeat — an adviser whose client emails are not going
+   out is the person who finds out first. The BACKUP nag is Owner-only: it is
+   Owner-only work (the export button is), and nobody else can act on it.
+   ========================================================================== */
+const CRON_STALE_HOURS = 48;
+const EXPORT_NAG_DAYS = 14;
+const HEARTBEAT_KEYS = ["last_cron_run_at", "last_full_export_at"];
+/* CALENDAR days, London, not elapsed 24-hour blocks. Both notices print a DATE beside the count,
+   and a run stamped at noon on the 4th read as "2 days ago" on the morning of the 7th — the
+   sentence contradicting itself in the space of six words. The reader is counting dates off a
+   calendar, so the app has to as well. Null for anything unreadable. */
+function daysSinceLocal(iso) {
+  const t = Date.parse(localDateStr() + "T00:00:00Z");
+  const d = Date.parse(localDateStr(new Date(iso)) + "T00:00:00Z");
+  if (isNaN(t) || isNaN(d)) return null;
+  return Math.round((t - d) / 86400000);
+}
+/* Both keys are RE-READ on every dashboard paint rather than taken from the `settings` object
+   loaded at sign-in. This app is left open all day; a heartbeat answered from a snapshot taken at
+   09:02 is not a heartbeat, and the failure mode it would produce is the exact one this feature
+   exists to end — a banner claiming the automation is dead hours after it came back, or (worse)
+   staying silent while it dies. Two keys, one indexed read, folded into the same `settings` object
+   so nothing else has to know where they came from. Failure is silent: an unreachable settings
+   table leaves the last known values in place rather than inventing an alarm. */
+async function refreshHeartbeatKeys() {
+  try {
+    const { data, error } = await db.from("settings").select("key,value").in("key", HEARTBEAT_KEYS);
+    if (error || !Array.isArray(data)) return;
+    /* Presence is read from the QUERY, not from the row set: a key that exists with an empty value
+       and a key that does not exist at all mean different things here (see the three states in the
+       comment above), and a row simply missing from the result is the second of those. */
+    HEARTBEAT_KEYS.forEach((k) => {
+      const row = data.find((r) => r && r.key === k);
+      if (row) settings[k] = row.value;
+      else delete settings[k];
+    });
+  } catch (_) { /* leave the last known values alone */ }
+}
+function renderDashNotices() {
+  const el = $("#dash-notices");
+  if (!el) return;
+  const bits = [];
+  /* Feature-detected on PRESENCE of the key, not on its truthiness: `settings` is built from the
+     rows the database returned, so a deployment that has never taken the v13 stamp simply has no
+     key here and gets no notice at all. */
+  const cronKnown = Object.prototype.hasOwnProperty.call(settings, "last_cron_run_at");
+  const cronAt = String(settings.last_cron_run_at || "").trim();
+  if (cronKnown && !cronAt) {
+    bits.push(`<div class="dash-notice" id="dash-cron-notice" data-state="never">⏱ The 8am automation has never confirmed a run.
+      <button type="button" class="dash-notice-link" onclick="nav('emails')">Open Emails</button></div>`);
+  } else if (cronAt) {
+    const ms = Date.now() - new Date(cronAt).getTime();
+    if (!isNaN(ms) && ms > CRON_STALE_HOURS * 3600000) {
+      const days = daysSinceLocal(cronAt);
+      bits.push(`<div class="dash-notice warn" id="dash-cron-notice" data-state="stale">⏱ <strong>The 8am automation last ran ${esc(fmtD(cronAt))} — ${days} day${days === 1 ? "" : "s"} ago.</strong>
+        Emails may be silently stuck: the queue fills up and nothing on this page changes when the sender stops.
+        <button type="button" class="dash-notice-link" onclick="nav('emails')">Check the queue</button></div>`);
+    }
+  }
+  /* R13 · M-42 — the backup nag. Same key the Settings panel stamps. Owner-only, quiet, and it
+     names the number of days rather than saying "a while ago", because "62" is what makes somebody
+     press the button and "a while" is what makes them scroll past. */
+  if (isOwner()) {
+    const expKnown = Object.prototype.hasOwnProperty.call(settings, "last_full_export_at");
+    const expAt = String(settings.last_full_export_at || "").trim();
+    const days = expAt ? daysSinceLocal(expAt) : null;
+    if (!expAt) {
+      bits.push(`<div class="dash-notice" id="dash-export-notice" data-state="never">💾 No firm backup has ever been taken${expKnown ? "" : ""} — export from Settings.
+        <button type="button" class="dash-notice-link" onclick="nav('settings')">Go to Settings</button></div>`);
+    } else if (days != null && !isNaN(days) && days > EXPORT_NAG_DAYS) {
+      bits.push(`<div class="dash-notice" id="dash-export-notice" data-state="stale">💾 No firm backup in ${days} days — export from Settings.
+        <button type="button" class="dash-notice-link" onclick="nav('settings')">Go to Settings</button></div>`);
+    }
+  }
+  el.innerHTML = bits.join("");
+}
 async function loadDashboard() {
+  /* R13 · M-42/M-43 — the two health banners. Fire-and-forget: a slow settings read must never
+     hold up the KPI row behind it, and a banner arriving 200ms late is still a banner. */
+  refreshHeartbeatKeys().then(renderDashNotices);
   const reminderMonths = Number(settings.rate_reminder_months) || 6; // T1-10 — a stray already-stored non-numeric value can't render "≤ NaNmo"
   const [{ data: cases, error: casesErr }, { data: alerts, error: alertsErr }, bank] = await Promise.all([
     /* R7-2 — widened by four BASE columns so the Rate & ERC panel can show what each expiring rate
@@ -4794,6 +5594,14 @@ window.startRetentionCase = async function (caseId, ev, opts) {
       : wantMe
         ? `• it will be assigned to YOU (${assignName}) — you ticked "to me"; without that it would have gone to ${staffName(defaultWho.id)}, ${defaultWho.why}`
         : `• it will be assigned to ${assignName} — ${defaultWho.why}`;
+    /* R13 · M-31 — a retention case is time-critical (the rate ends on a date nobody can move) and
+       the assignee is INHERITED, not chosen, so the one moment to say "they are on holiday" is
+       here, in the dialog that is already asking. Not a block and not a re-route: the tick beside
+       the button is the fix, and this sentence points at it. Silent when the assignee is me, since
+       I know where I am. */
+    const awayNote = assignTo && assignTo !== ((ME && ME.id) || null) && isAwayToday(assignTo)
+      ? `• ${awaySentence(assignTo)} — tick "to me" beside the button if this should not wait`
+      : "";
     if (!confirm([
       `Start a retention case for ${clientName}${propShort ? " — " + propShort : ""}?`,
       propFull
@@ -4804,6 +5612,7 @@ window.startRetentionCase = async function (caseId, ev, opts) {
       "This creates:",
       `• a new ${kindLabel} case at Enquiry${propShort ? ` on ${propShort}` : ""}, linked back to this one`,
       assignLine,
+      ...(awayNote ? [awayNote] : []),
       `• a task "${taskTitle}" due ${fmtD(dueStr)}${assignTo ? `, on ${assignName}'s list` : ""}`,
       cl && cl.email
         ? `• a rate-end reminder QUEUED to ${cl.email} — it goes out with the next automation run, nothing is sent now`
@@ -6518,10 +7327,21 @@ async function promptStageEntry(targetStage, cRow, caseName) {
   }
   if (targetStage === "offer") {
     if (cRow && cRow.offer_expiry_date) return {};
+    /* R13 · M-11 — the SAME letter carries both dates, so both are asked for in the one dialog
+       rather than in two prompts a fortnight apart. "Issued" is prefilled with today because in
+       practice the offer is filed the day it lands and that is the answer nine times in ten; it is
+       a PREFILL, not a write — clearing the box, or pressing Skip, leaves the column null. Skip
+       still writes absolutely nothing, including this. */
+    const issuedDefault = localDateStr();
+    const forwardOn = (await forwardDatesSupported()) === true;
     return openOverlay(`
       <h3>Moving ${esc(caseName || "this case")} to Offer</h3>
       <p class="panel-sub">An offer runs out. The date is on the offer letter, and it is what every completion date after this has to beat — the case has no <strong>offer expiry date</strong> recorded.</p>
       <label>Offer expiry date<input type="date" id="se-expiry"></label>
+      ${forwardOn ? `<label style="margin-top:8px;">When was the offer issued? (today)
+        <input type="date" id="se-issued" value="${esc(issuedDefault)}">
+        <span class="s cs-muted">The date printed on the offer letter. Today is filled in because that is usually right — change it or clear it if it is not.</span>
+      </label>` : ""}
       <p class="panel-sub" style="margin-top:8px;">Leave it blank and nothing is written. <strong>Skip</strong> advances the case and changes nothing else; the field is on the case form whenever the letter turns up.</p>
       <div class="modal-actions">
         <div><button type="button" class="btn btn-ghost" id="se-cancel">Don't advance</button></div>
@@ -6534,7 +7354,12 @@ async function promptStageEntry(targetStage, cRow, caseName) {
       box.querySelector("#se-skip").onclick = () => finish({});
       box.querySelector("#se-ok").onclick = () => {
         const v = String(box.querySelector("#se-expiry").value || "").trim();
-        finish({ patch: v ? { offer_expiry_date: v } : null });
+        const issuedEl = box.querySelector("#se-issued");
+        const iv = issuedEl ? String(issuedEl.value || "").trim() : "";
+        const patch = {};
+        if (v) patch.offer_expiry_date = v;
+        if (iv) patch.offer_issued_date = iv;
+        finish({ patch: Object.keys(patch).length ? patch : null });
       };
     });
   }
@@ -6695,6 +7520,8 @@ window.moveCaseToStage = async function (caseId, targetStage, opts = {}) {
          than in a second one that would overwrite it. */
       + (stageEntry.patch && stageEntry.patch.lender ? ` · lender set to ${stageEntry.patch.lender}` : "")
       + (stageEntry.patch && stageEntry.patch.offer_expiry_date ? ` · offer expiry ${fmtD(stageEntry.patch.offer_expiry_date)}` : "")
+      // R13 · M-11 — the toast names everything the prompt actually wrote, or it is not a receipt.
+      + (stageEntry.patch && stageEntry.patch.offer_issued_date ? ` · offer issued ${fmtD(stageEntry.patch.offer_issued_date)}` : "")
       + stageEntryTaskNote);
     if (!skipReload) loadPipeline();
   }
@@ -7635,6 +8462,70 @@ async function loadProtectionPage() {
   if (protStatusSel) protStatusSel.onchange = () => { const v = protStatusSel.value; protStatusSel.value = ""; if (v) bulkSetProtStatus(v); };
   updateProtBulkBar();
   renderProtCallList(scoped, protQuoteCtx);
+  renderClawbackWindow();
+}
+/* ---------- R13 · M-23/M-25 — THE CLAWBACK WINDOW ----------
+   get_protection_pipeline deliberately returns only the OPEN protection statuses, so this panel
+   cannot be built from `scoped` — a policy that was taken is exactly what it left out. One extra
+   read of the cases whose protection status is policy_taken, feature-detected on the column and
+   silent (panel hidden) without it.
+
+   NOT scoped by the Mine / Unassigned / All buttons above, and that is deliberate: a clawback is
+   money the FIRM pays back. Whose case it was does not change who is out of pocket, and an adviser
+   filtering to "Mine" and seeing an empty clawback list would be reading a true statement about
+   their book as a false one about the risk. The adviser IS named on every row. */
+async function renderClawbackWindow() {
+  const panel = $("#prot-clawback-panel");
+  if (!panel) return;
+  if ((await policyStartSupported()) === false) { panel.classList.add("hidden"); return; }
+  const { data, error } = await db.from("cases")
+    .select("id,client_id,policy_start_date,protection_commission,assigned_to,clients!client_id(first_name,last_name)")
+    .eq("protection_status", "policy_taken");
+  if (error) {
+    if (isMissingColumnError(error)) { POLICY_START_SUPPORTED = false; panel.classList.add("hidden"); return; }
+    panel.classList.remove("hidden");
+    $("#prot-clawback-list").innerHTML = `<div class="empty">Clawback window unavailable just now — ${esc(error.message)}</div>`;
+    return;
+  }
+  const rows = Array.isArray(data) ? data : [];
+  if (rows.length) notePolicyStartFromStarRow(rows[0]);
+  panel.classList.remove("hidden");
+  const money = showMoney();
+  const noDate = rows.filter((r) => !r.policy_start_date);
+  const inWindow = rows
+    .map((r) => ({ ...r, months: clawbackMonthsElapsed(r.policy_start_date) }))
+    .filter((r) => r.months != null && r.months >= 0 && r.months < CLAWBACK_MONTHS)
+    .sort((a, b) => (b.months - a.months) || 0);   // closest to falling out of the window first
+  const nameOf = (r) => [r.clients && r.clients.first_name, r.clients && r.clients.last_name].filter(Boolean).join(" ") || "(client not on file)";
+  const countEl = $("#prot-clawback-count");
+  countEl.textContent = inWindow.length;
+  countEl.className = "badge " + (inWindow.length ? "amber" : "grey");
+  $("#prot-clawback-basis").innerHTML = `Policies recorded as taken whose start date falls inside the last <strong>${CLAWBACK_MONTHS} months</strong> — the period in which a provider would typically reclaim the commission if the policy lapses. `
+    + `<strong>${CLAWBACK_MONTHS} months is an assumption</strong>, not a figure read from anywhere: providers differ, and this app holds no per-provider clawback terms. Check the provider's own schedule before you rely on a number here.`
+    + (money ? "" : ` Commission is shown to the Owner only; the count and the dates are not money and are shown to everyone.`);
+  /* THE HONEST HALF, and the reason the panel exists at all. A policy with no start date is not a
+     policy outside the window — it is a policy whose window nobody can see. Said as a count with
+     the fix attached, because the fix is one date on one case. */
+  $("#prot-clawback-nodate").innerHTML = noDate.length
+    ? `<strong id="prot-clawback-nodate-n">${noDate.length} polic${noDate.length === 1 ? "y has" : "ies have"} no start date recorded</strong> — their clawback window cannot be watched. Add the date on the case (Protection section of the case form). They are listed below the table.`
+    : rows.length ? `Every policy taken has a start date recorded. 👍` : "";
+  const rowHtml = (r) => `<tr data-case="${esc(r.id)}">
+      <td><span class="prot-client" onclick="openCase('${jsArg(r.id)}')">${esc(nameOf(r))}</span></td>
+      <td>${fmtD(r.policy_start_date)}</td>
+      <td class="clawback-months">${r.months} of ${CLAWBACK_MONTHS}</td>
+      <td class="clawback-months${CLAWBACK_MONTHS - r.months <= 3 ? " clawback-left-hot" : ""}">${CLAWBACK_MONTHS - r.months}</td>
+      ${money ? `<td>${r.protection_commission > 0 ? fmtM(r.protection_commission) : '<span class="cs-muted">none recorded</span>'}</td>` : ""}
+      <td>${r.assigned_to ? esc(staffName(r.assigned_to)) : '<span class="cs-muted">— unassigned —</span>'}</td>
+      <td style="text-align:right;"><button class="btn btn-sm" onclick="openCase('${jsArg(r.id)}')">Open</button></td>
+    </tr>`;
+  $("#prot-clawback-list").innerHTML = (inWindow.length ? `<table class="imp-table" id="prot-clawback-table">
+      <tr><th>Client</th><th>Policy started</th><th>Months elapsed</th><th>Months left in window</th>${money ? "<th>Commission</th>" : ""}<th>Adviser</th><th></th></tr>
+      ${inWindow.map(rowHtml).join("")}
+    </table>` : `<div class="empty">No policy started in the last ${CLAWBACK_MONTHS} months${rows.length ? " — nothing is inside a clawback window" : ""}. 👍</div>`)
+    + (noDate.length ? `<div class="dq-notice" id="prot-clawback-nodate-list" style="margin-top:12px;">
+      <strong>No start date — window cannot be watched:</strong>
+      ${noDate.map((r) => `<button type="button" class="btn btn-sm" onclick="openCase('${jsArg(r.id)}')">${esc(nameOf(r))}</button>`).join(" ")}
+    </div>` : "");
 }
 /* ---------- R7-3 — "completed, no protection outcome" ----------
    The cases that got all the way to completion with the protection conversation left open: status
@@ -8492,6 +9383,12 @@ window.openCase = async function (id, opts = {}) {
     db.from("introducers").select("id,name").order("name"),
   ]);
   const caseClient = id ? (clients || []).find((cl) => cl.id === c.client_id) : null;
+  /* R13 · M-4/M-30 — the case modal is where a client is actually WORKED (every email button, the
+     document chase, the log-call panel), so the two care chips have to be on it. The clients read
+     above names its columns on purpose (it feeds a select of the whole book), so widening it would
+     42703 an un-migrated database; this is one extra row-scoped read, feature-detected, empty when
+     the columns are not there. */
+  const caseCare = id && c.client_id ? (await loadClientCare([c.client_id]))[c.client_id] : null;
   /* R6 — the client's OTHER cases, for two jobs: (1) the header only spends a
      "no address" chip where differentiation actually matters, i.e. the client
      has more than one case; (2) the new-case property picker offers the
@@ -8508,6 +9405,15 @@ window.openCase = async function (id, opts = {}) {
   /* R12b · W-15b — the four call-pack columns. Same rule as the three flags above: hidden outright
      without the migration, because four inputs whose Save can only 42703 are worse than none. */
   const callPackOn = await callPackSupported();
+  // R13 · M-23/M-25 — decides whether the policy-start box exists at all. Same rule again.
+  if (id) notePolicyStartFromStarRow(c);
+  const policyStartOn = id ? Object.prototype.hasOwnProperty.call(c, "policy_start_date") : ((await policyStartSupported()) === true);
+  // R13 · M-2 — the Files section. Its own table, so its own probe, and the "no" is SAID rather
+  // than rendered as an empty list (which would read as "this case has no papers").
+  const filesOn = id ? await caseFilesSupported() : false;
+  // R13 · M-11/M-13/M-10 — offer issued / exchanged on / repayment method. Same rule a sixth time.
+  if (id) noteForwardFromStarRow(c);
+  const forwardOn = id ? Object.prototype.hasOwnProperty.call(c, "exchange_date") : ((await forwardDatesSupported()) === true);
   const solicitorFirms = docsOn ? await knownSolicitorFirms() : [];
   const siblingCases = c.client_id ? await softRows(db.from("cases").select("*").eq("client_id", c.client_id)) : [];
   registerClientProps(c.client_id, siblingCases);   // R6-FIX V2/V4 — the client's whole book
@@ -8597,7 +9503,7 @@ window.openCase = async function (id, opts = {}) {
     <div class="case-summary">
       <div class="cs-top">
         <div class="cs-id">
-          <div class="cs-name">${esc(clientName) || "Client"}</div>
+          <div class="cs-name">${esc(clientName) || "Client"} ${careChipsHtml(caseCare, { id: "cs-care-chips" })}</div>
           ${/* R6 — the identity line. Every destructive or client-facing action in the app is
                launched from this modal, and until now its header could not tell you WHICH of a
                client's cases you had open: two Skipton cases on one house differed only by a
@@ -8645,6 +9551,11 @@ window.openCase = async function (id, opts = {}) {
         ${["offer", "exchange"].includes(c.stage) ? (c.expected_completion_date
           ? `<div class="cs-stat"><span class="cs-lbl">Expected completion</span><span class="cs-val">${fmtD(c.expected_completion_date)}</span></div>`
           : `<div class="cs-stat cs-warn" id="cs-expected-nudge" style="cursor:pointer;" title="Click to set the expected completion date"><span class="cs-lbl">Expected completion</span><span class="cs-val">Set expected completion →</span></div>`) : ""}
+        ${/* R13 · M-13 — EXCHANGED. Only ever drawn from a recorded date, so there is no nudge and
+             no empty state: an unexchanged case has nothing to say here, and a prompt asking for a
+             date that does not exist yet would be noise on every case at Enquiry. Deliberately
+             stage-independent — a completed case that exchanged is still a case that exchanged. */ ""}
+        ${c.exchange_date ? `<div class="cs-stat" id="cs-exchanged" title="Contracts exchanged on ${esc(fmtD(c.exchange_date))}. From this date the client is legally committed."><span class="cs-lbl">Exchanged</span><span class="cs-val">${fmtD(c.exchange_date)}</span></div>` : ""}
         ${/* R12b · W-15b — THE CALL PACK, on the header an adviser reads with the phone in their
              hand. Four stats, drawn only when the case actually carries at least one of them, each
              absent value rendered "—" rather than £0. This is the same block the Rate & ERC row
@@ -8749,6 +9660,17 @@ window.openCase = async function (id, opts = {}) {
       <p class="panel-sub" style="margin:2px 0 6px;">What this client has been asked for, and what has actually arrived. The document emails list <strong>only what is still outstanding</strong>, so nobody is asked twice for something they have already sent.</p>
       <div id="case-docs-body"></div>
     </div>` : ""}
+    ${/* R13 · M-2 — THE FIRM'S OWN PAPERS. Directly under Documents so the pair read as one idea
+         with two halves, and worded so nobody has to work out which is which: the sub-line names
+         the distinction outright. Absent entirely, with the absence STATED, on a database without
+         the table — see caseFilesSupported(). Painted by renderCaseFiles() below. */ ""}
+    ${id ? `<div style="margin-top:14px;" id="case-files">
+      <h3 style="font-size:14px;">Files</h3>
+      <p class="panel-sub" style="margin:2px 0 6px;">${filesOn
+        ? "The firm's own case papers — the illustration/ESIS, the research behind the recommendation, the signed client agreement, the offer letter, the suitability letter. <strong>Documents above are what we ask the client for; these are what we produce or receive about the case.</strong> Nothing here is chased and nothing here is sent to the client."
+        : "This database has no <code>case_files</code> table yet, so the firm's own case papers (illustration, research, client agreement, suitability letter) cannot be held on the case. The Documents checklist above is unaffected."}</p>
+      ${filesOn ? '<div id="case-files-body"></div>' : ""}
+    </div>` : ""}
     <div style="margin-top:14px;">
       <h3 style="font-size:14px;">Notes</h3>
       <div style="display:flex;gap:8px;margin:8px 0 0;flex-wrap:wrap;">
@@ -8847,7 +9769,32 @@ window.openCase = async function (id, opts = {}) {
       <label>ERC amount (£)<input name="erc_amount" type="number" step="any" value="${c.erc_amount ?? ""}" placeholder="not recorded">
         <span class="s cs-muted">What leaving early would cost right now. Blank is “not recorded”; £0 means there genuinely is no charge.</span>
       </label>` : ""}
+      ${/* R13 · M-10 — REPAYMENT METHOD, with the loan it describes rather than in a section of its
+           own: "£245,000 over 27 years" is not a mortgage until you know whether any of it is
+           being repaid. Blank is "not recorded" and stays blank — there is no safe default here,
+           and pre-selecting "Repayment" because it is the common answer would put a fact on the
+           file nobody established. */ ""}
+      ${forwardOn ? `
+      <label id="case-repayment-field">Repayment method
+        <select name="repayment_method" id="case-repayment-select">
+          <option value=""${c.repayment_method ? "" : " selected"}>— not recorded —</option>
+          ${REPAYMENT_METHODS.map(([k, l]) => `<option value="${k}"${k === c.repayment_method ? " selected" : ""}>${esc(l)}</option>`).join("")}
+        </select>
+      </label>` : ""}
+      ${/* R13 · M-11 — OFFER ISSUED, beside the expiry it is so easily confused with. Two dates off
+           one letter: the day the lender made the offer, and the day it runs out. */ ""}
+      ${forwardOn ? `<label id="case-offer-issued-field">Offer issued<input name="offer_issued_date" type="date" value="${c.offer_issued_date ?? ""}">
+        <span class="s cs-muted">The date on the offer letter itself, not the day it was filed here.</span>
+      </label>` : ""}
       <label>Offer expiry date<input name="offer_expiry_date" type="date" value="${c.offer_expiry_date ?? ""}"></label>
+      ${/* R13 · M-13 — EXCHANGED ON. Shown from the OFFER stage onwards (and always where a date is
+           already recorded, so a stage corrected backwards can never orphan one): asking an
+           enquiry when contracts exchanged is asking about something two months away, and a form
+           full of fields that cannot yet apply is how a form stops being read. */ ""}
+      ${forwardOn ? `<label id="case-exchange-field"${["offer", "exchange", "completed"].includes(c.stage) || c.exchange_date ? "" : ' class="hidden"'}>Exchanged on
+        <input name="exchange_date" id="case-exchange-date" type="date" value="${c.exchange_date ?? ""}">
+        <span class="s cs-muted">The day contracts exchanged. From here the client is committed — anything still outstanding after this date is urgent, not routine.</span>
+      </label>` : ""}
       <label>Expected completion date<input name="expected_completion_date" type="date" id="case-expected-completion" value="${c.expected_completion_date ?? ""}"></label>
       <label>Term (years)<input name="term_years" type="number" value="${c.term_years ?? ""}"></label>
       <label>Submitted date<input name="submitted_at" type="date" value="${c.submitted_at ?? ""}"></label>
@@ -8861,6 +9808,18 @@ window.openCase = async function (id, opts = {}) {
       ${feePaidDatesHtml(c)}
       <label>Protection<select name="protection_status">${[["not_discussed","Not discussed"],["discussed","Discussed"],["quoted","Quoted"],["policy_taken","Policy taken"],["declined","Client declined"]].map(([k,l]) => `<option value="${k}" ${k === (c.protection_status || "not_discussed") ? "selected" : ""}>${l}</option>`).join("")}</select></label>
       <label>Protection commission (£)<input name="protection_commission" type="number" step="any" value="${c.protection_commission ?? ""}"></label>
+      ${/* R13 · M-23/M-25 — POLICY START DATE. Rendered only where it MEANS something: this box is
+           a clawback clock, and a clawback clock on a case where no policy was taken is a field
+           that invites a date nobody can interpret. It appears the moment the status says "policy
+           taken" (and stays for a case that already carries a date, so a status corrected in the
+           wrong direction can never orphan one), and is hidden outright on a database that has not
+           taken the column — the same rule the referrer and call-pack fields follow. The Protection
+           page's clawback panel is built from exactly this field, and says so. */ ""}
+      ${policyStartOn ? `
+      <label id="case-policy-start-field" ${c.protection_status === "policy_taken" || c.policy_start_date ? "" : 'class="hidden"'}>Policy start date
+        <input name="policy_start_date" id="case-policy-start" type="date" value="${c.policy_start_date ?? ""}">
+        <span class="s cs-muted">When the protection policy started — the date a clawback is measured from. Providers typically reclaim commission if the policy lapses inside ${CLAWBACK_MONTHS} months. Blank means the clawback window on this policy <strong>cannot be watched</strong>; the Protection page counts those.</span>
+      </label>` : ""}
       <label id="gi-status-label" ${["purchase","first_time_buyer"].includes(c.case_kind) ? "" : 'class="hidden"'}>GI / buildings insurance<select name="gi_status">${[["not_discussed","Not discussed"],["quoted","Quoted"],["policy_taken","Policy taken"],["declined","Declined"],["not_applicable","Not applicable"]].map(([k,l]) => `<option value="${k}" ${k === (c.gi_status || "not_discussed") ? "selected" : ""}>${l}</option>`).join("")}</select></label>
       ${/* R9-5 · m10 — WHO IS THIS CASE SITTING WITH. Next to the stage because that is the field
            people currently misuse to answer it, and the two are not the same question: a case can
@@ -8922,9 +9881,35 @@ window.openCase = async function (id, opts = {}) {
     };
     renderCaseDocs(id, docCase, { docs: caseDocs, mails: docMails, tasks });
   }
+  // R13 · M-2 — the Files section makes its own read; it is one small query on one case id and it
+  // keeps openCase's already-long parallel read from growing a seventh table.
+  if (id && filesOn) renderCaseFiles(id, { id, client_id: c.client_id });
 
   const kindSel = $("#case-form").elements.case_kind;
   kindSel.onchange = () => $("#gi-status-label").classList.toggle("hidden", !["purchase", "first_time_buyer"].includes(kindSel.value));
+  /* R13 · M-23 — the policy start date follows the protection status live, so an adviser recording
+     "policy taken" is asked for the clawback date in the same breath rather than on a later visit.
+     A date already typed keeps the field visible whatever the select then says: hiding a value the
+     operator can still save would be the worst of both. */
+  const protSelLive = $("#case-form").elements.protection_status;
+  const policyStartField = $("#case-policy-start-field");
+  if (protSelLive && policyStartField) {
+    protSelLive.addEventListener("change", () => {
+      const val = ($("#case-policy-start") || {}).value || "";
+      policyStartField.classList.toggle("hidden", protSelLive.value !== "policy_taken" && !val);
+    });
+  }
+  /* R13 · M-13 — "Exchanged on" follows the stage select live, on the same terms the policy-start
+     box follows the protection status: it appears from Offer onwards, and a date already typed
+     keeps it visible whatever the select then says. */
+  const stageSelLive = $("#case-form").elements.stage;
+  const exchangeField = $("#case-exchange-field");
+  if (stageSelLive && exchangeField) {
+    stageSelLive.addEventListener("change", () => {
+      const val = ($("#case-exchange-date") || {}).value || "";
+      exchangeField.classList.toggle("hidden", !["offer", "exchange", "completed"].includes(stageSelLive.value) && !val);
+    });
+  }
   const clientSel = $("#case-client-select");
   clientSel.onchange = () => {
     $("#nc-new-client-fields").classList.toggle("hidden", clientSel.value !== "__new__");
@@ -9073,6 +10058,10 @@ window.openCase = async function (id, opts = {}) {
       else if (row.solicitor_firm) row.solicitor_firm = String(row.solicitor_firm).trim() || null;
       /* R12b · W-15b — same belt-and-braces for the call-pack columns. */
       if (!callPackOn) CALLPACK_COLS.forEach((k) => delete row[k]);
+      // R13 · M-23 — and the same for the policy start date.
+      if (!policyStartOn) delete row.policy_start_date;
+      // R13 · M-11/M-13/M-10 — and the forward three. Belt as well as braces, same as the rest.
+      if (!forwardOn) FORWARD_COLS.forEach((k) => delete row[k]);
       if (id) {
         // Optimistic concurrency: only update if the row hasn't changed since we opened it.
         let { data: updated, error } = await db.from("cases").update(row).eq("id", id).eq("updated_at", openedUpdatedAt).select();
@@ -9121,6 +10110,22 @@ window.openCase = async function (id, opts = {}) {
           CALLPACK_COLS.forEach((k) => delete row[k]);
           ({ data: updated, error } = await db.from("cases").update(row).eq("id", id).eq("updated_at", openedUpdatedAt).select());
         }
+        /* R13 · M-23 — and a sixth time for the policy start date. A clawback date is a reporting
+           field; losing an adviser's whole edit over one is the wrong trade. */
+        let policyStartMissing = false;
+        if (error && "policy_start_date" in row && isMissingColumnError(error)) {
+          policyStartMissing = true; POLICY_START_SUPPORTED = false;
+          delete row.policy_start_date;
+          ({ data: updated, error } = await db.from("cases").update(row).eq("id", id).eq("updated_at", openedUpdatedAt).select());
+        }
+        /* R13 · M-11/M-13/M-10 — and a seventh time for the forward three. Same trade every time:
+           a capture column is not worth an adviser's whole edit. */
+        let forwardMissing = false;
+        if (error && FORWARD_COLS.some((k) => k in row) && isMissingColumnError(error)) {
+          forwardMissing = true; FORWARD_SUPPORTED = false;
+          FORWARD_COLS.forEach((k) => delete row[k]);
+          ({ data: updated, error } = await db.from("cases").update(row).eq("id", id).eq("updated_at", openedUpdatedAt).select());
+        }
         if (error) return toast("Error: " + error.message);
         if (!updated || updated.length === 0) {
           /* R5-3 — this used to reload the case over the operator's typing: minutes of work gone,
@@ -9149,7 +10154,9 @@ window.openCase = async function (id, opts = {}) {
           + (propColMissing ? " · property address NOT saved (run migration M7)" : "")
           + (refColMissing ? " · referrer NOT saved (run migration m11)" : "")
           + (docColsMissing ? " · waiting-on / solicitor NOT saved (run migration m10)" : "")
-          + (callPackMissing ? " · balance / reversion / payment / ERC amount NOT saved (this database has no call-pack columns)" : ""));
+          + (callPackMissing ? " · balance / reversion / payment / ERC amount NOT saved (this database has no call-pack columns)" : "")
+          + (policyStartMissing ? " · policy start date NOT saved (this database has no policy_start_date column)" : "")
+          + (forwardMissing ? " · offer issued / exchanged on / repayment method NOT saved (this database has none of those columns)" : ""));
         /* R9-1 — the case form is the OTHER route to Completed, so the thank-you has to be offered
            here too or the behaviour would depend on whether an adviser used the board or the form.
            Only on a genuine arrival at Completed: a re-save of an already completed case is not a
@@ -9192,11 +10199,25 @@ window.openCase = async function (id, opts = {}) {
           CALLPACK_COLS.forEach((k) => delete row[k]);
           ({ error } = await db.from("cases").insert(row));
         }
+        let policyStartMissing = false;  // R13 · M-23 — policy-start fallback, as above
+        if (error && "policy_start_date" in row && isMissingColumnError(error)) {
+          policyStartMissing = true; POLICY_START_SUPPORTED = false;
+          delete row.policy_start_date;
+          ({ error } = await db.from("cases").insert(row));
+        }
+        let forwardMissing = false;  // R13 · M-11/M-13/M-10 — forward-capture fallback, as above
+        if (error && FORWARD_COLS.some((k) => k in row) && isMissingColumnError(error)) {
+          forwardMissing = true; FORWARD_SUPPORTED = false;
+          FORWARD_COLS.forEach((k) => delete row[k]);
+          ({ error } = await db.from("cases").insert(row));
+        }
         if (error) return toast("Error: " + error.message);
         closeModal(); toast("Case saved" + (propColMissing ? " · property address NOT saved (run migration M7)" : "")
           + (refColMissing ? " · referrer NOT saved (run migration m11)" : "")
           + (docColsMissing ? " · waiting-on / solicitor NOT saved (run migration m10)" : "")
-          + (callPackMissing ? " · balance / reversion / payment / ERC amount NOT saved (this database has no call-pack columns)" : ""));
+          + (callPackMissing ? " · balance / reversion / payment / ERC amount NOT saved (this database has no call-pack columns)" : "")
+          + (policyStartMissing ? " · policy start date NOT saved (this database has no policy_start_date column)" : "")
+          + (forwardMissing ? " · offer issued / exchanged on / repayment method NOT saved (this database has none of those columns)" : ""));
         loadPipeline(); loadDashboard();
         if ($("#page-data") && !$("#page-data").classList.contains("hidden")) loadDataHealth();
       }
@@ -9931,6 +10952,12 @@ async function queueEmail(caseId, clientId, type, c, ev) {
        because this is the last thing shown before something leaves the firm. */
     const propFull = type === "rate_end_reminder" ? propAddress(c) : null;
     const propLine = propFull ? `\nProperty: ${propFull}` : "";
+    /* R13 · M-30 — the suppression pre-flight, ahead of the ordinary confirm and ahead of the
+       insert. The database refuses this client every AUTOMATED email; a person pressing a button
+       is the one route it cannot see, which is exactly why it is asked about here in words that
+       name the suppression and quote the care note. It warns, it does not block: an adviser
+       sending the one email a suppressed client genuinely needs is a legitimate act. */
+    if (!(await confirmSuppressedSend(clientId, "email"))) return;
     if (!confirm(`Send ${EMAIL_LABEL[type].toLowerCase()} email to ${cl.email}?\n\nSigned off by: ${signedBy}${propLine}${extraLine}${docsLine}`)) return;
     const { data: qRow, error } = await db.from("email_queue")
       .insert({ case_id: caseId, client_id: clientId, email_type: type, to_email: cl.email })
@@ -11277,6 +12304,13 @@ window.openClient = async function (id, focus, attempted, presetCaseId) {
   const lastContactHtml = id ? `<p class="panel-sub client-last-contact" id="client-last-contact">${lastContactItem
     ? `Last contact: ${esc(CONTACT_KIND_LABEL[lastContactItem.cat] || lastContactItem.cat)}, ${lastContactAgeLabel(lastContactItem.ts)}`
     : "No contact recorded"}</p>` : "";
+  /* R13 · M-4/M-30 — is this database carrying the care columns? An existing client was read with
+     select("*"), so the row itself is the answer and costs nothing; a NEW client has no row, so
+     the probe is asked (it caches). A "no" hides the block outright rather than offering a
+     checkbox whose Save can only fail — the same rule the referrer select and the property field
+     follow. */
+  if (id) noteCareFromStarRow(c);
+  const careOn = id ? Object.prototype.hasOwnProperty.call(c, "is_vulnerable") : ((await careSupported()) === true);
   const multiCase = cases.length > 1;
   const caseLabelById = {};
   const caseChipById = {};
@@ -11360,7 +12394,7 @@ window.openClient = async function (id, focus, attempted, presetCaseId) {
           "Client details", i.e. the one screen built around WHOSE five properties these are never
           said whose. The name is the heading now; "Client details" survives exactly once, on the
           collapsible field summary further down, where it means something specific. */ ""}
-    <h3>${id ? esc([c.first_name, c.last_name].filter(Boolean).join(" ") || "Client details") : "New client"}</h3>
+    <h3>${id ? esc([c.first_name, c.last_name].filter(Boolean).join(" ") || "Client details") : "New client"}${careOn && id ? " " + careChipsHtml(c, { id: "client-care-chips" }) : ""}</h3>
     ${id && (c.phone || c.email) ? `<p class="panel-sub client-contact-line" style="margin-top:-8px;display:flex;gap:16px;flex-wrap:wrap;">${c.phone ? "📞 " + telLink(c.phone) : ""}${c.email ? "✉️ " + mailLink(c.email) : ""}</p>` : ""}
     ${lastContactHtml}
     ${advocacyHtml}
@@ -11400,6 +12434,7 @@ window.openClient = async function (id, focus, attempted, presetCaseId) {
       </label>
       <label class="full">Address<input name="address" value="${esc(c.address)}"></label>
       <label class="full">Notes<textarea name="notes" rows="2">${esc(c.notes)}</textarea></label>
+      ${careBlockHtml(c, careOn)}
       </form>
     </details>
     ${id ? `<div style="margin-top:14px;"><h3 style="font-size:14px;">Cases${clientPropertyCountLabel(cases)}</h3>
@@ -11418,6 +12453,17 @@ window.openClient = async function (id, focus, attempted, presetCaseId) {
   // next Save attempt. Delegated on the form (rebuilt fresh on every render, so nothing to unbind).
   const clientFormEl = $("#client-form");
   if (clientFormEl) clientFormEl.addEventListener("input", (e) => { if (e.target && e.target.classList) e.target.classList.remove("field-invalid"); });
+  /* R13 · M-4 — the note appears the moment the flag is ticked (that is when it is worth asking
+     for) and, once written, never hides again while it still has text in it: a note that vanished
+     when somebody unticked the box would look deleted while it was still on the row. */
+  const vulnChk = $("#client-vulnerable"), vulnWrap = $("#client-vuln-note-wrap"), vulnNote = $("#client-vuln-note");
+  if (vulnChk && vulnWrap) {
+    vulnChk.addEventListener("change", () => {
+      const keep = vulnChk.checked || !!(vulnNote && vulnNote.value.trim());
+      vulnWrap.classList.toggle("hidden", !keep);
+      if (vulnChk.checked && vulnNote) vulnNote.focus();
+    });
+  }
   // T1-2 — deep-linked from a failed send: open the (normally collapsed) contact section and put
   // the cursor in the field that has to change. openModal() focuses the first control, so this has
   // to run after it.
@@ -11444,6 +12490,18 @@ window.openClient = async function (id, focus, attempted, presetCaseId) {
     row.sms_opt_out = f.get("sms_opt_out") === "1";
     row.marketing_opt_out = f.get("marketing_opt_out") === "1";
     row.date_of_birth = (f.get("date_of_birth") || "").trim() || null;
+    /* R13 · M-4/M-30 — the care columns ride the EXISTING client save (one write, one audit entry,
+       one "Client saved"). An unchecked checkbox is simply absent from FormData, so each is read as
+       a real boolean rather than left undefined. On a database without the columns the block was
+       never rendered, so the keys are deleted outright — sending them would 42703 the whole save
+       and lose the operator's other edits with it. */
+    if (careOn) {
+      row.is_vulnerable = f.get("is_vulnerable") != null;
+      row.suppress_automation = f.get("suppress_automation") != null;
+      row.vulnerability_note = (f.get("vulnerability_note") || "").trim() || null;
+    } else {
+      CARE_COLS.forEach((k) => delete row[k]);
+    }
     if (!row.first_name || !row.last_name) {
       // R12b · L-7 — highlight whichever of the two is actually blank, not both by default.
       const ff = $("#client-form [name=\"first_name\"]"), lf = $("#client-form [name=\"last_name\"]");
@@ -11870,6 +12928,10 @@ async function retryEmail(id, silent) {
     if (readErr || !row) { const reason = "this email couldn't be read"; if (!silent) toast("Not re-queued — " + reason); return { ok: false, reason }; }
     const fresh = await freshContactFor(row.client_id, "email", row.to_email);
     if (!fresh.ok) { if (!silent) toast("Not re-queued — " + fresh.reason); return fresh; }
+    /* R13 · M-30 — a retry is a person deciding to send again, so it gets the same pre-flight the
+       per-case buttons get. Only on the interactive path: the bulk/retry-all loops call this with
+       silent=true and are gated once, by their own caller, rather than asking forty times. */
+    if (!silent && !(await confirmSuppressedSend(row.client_id, "email"))) return { ok: false, reason: "the send was cancelled — this client's automation is suppressed" };
     const { error } = await db.from("email_queue").update({ status: "queued", sent_at: null, to_email: fresh.value }).eq("id", id);
     if (error) { if (!silent) toast("Error: " + error.message); return { ok: false, reason: error.message }; }
     if (!silent) {
@@ -11900,6 +12962,7 @@ async function retrySms(id, silent) {
     if (readErr || !row) { const reason = "this SMS couldn't be read"; if (!silent) toast("Not re-queued — " + reason); return { ok: false, reason }; }
     const fresh = await freshContactFor(row.client_id, "phone", row.to_phone);
     if (!fresh.ok) { if (!silent) toast("Not re-queued — " + fresh.reason); return fresh; }
+    if (!silent && !(await confirmSuppressedSend(row.client_id, "SMS"))) return { ok: false, reason: "the send was cancelled — this client's automation is suppressed" };
     const { error } = await db.from("sms_queue").update({ status: "queued", sent_at: null, to_phone: fresh.value }).eq("id", id);
     if (error) { if (!silent) toast("Error: " + error.message); return { ok: false, reason: error.message }; }
     if (!silent) {
@@ -12044,7 +13107,28 @@ async function runSms(silent) {
     return null;
   }
 }
-$("#run-sms-btn").addEventListener("click", () => runSms(false));
+/* R13 · M-30 — "Send SMS now" is the interactive SMS send: it flushes whatever is already queued,
+   and a row can predate a suppression (the database refuses new automated rows; it does not go
+   back and delete the ones already sitting there). So before the flush, look at who the queue is
+   actually addressed to and name any suppressed client in the confirm. Feature-detected and
+   fail-open: no columns, or a read that errors, sends exactly as it did before. */
+async function smsFlushSuppressionOk() {
+  try {
+    const { data, error } = await db.from("sms_queue").select("id,client_id").eq("status", "queued");
+    if (error || !data || !data.length) return true;
+    const care = await loadClientCare(data.map((s) => s.client_id));
+    const hitIds = [...new Set(data.map((s) => s.client_id).filter((cid) => care[cid] && care[cid].suppress_automation))];
+    if (!hitIds.length) return true;
+    const { data: people } = await db.from("clients").select("id,first_name,last_name").in("id", hitIds);
+    const names = (people || []).map((p) => [p.first_name, p.last_name].filter(Boolean).join(" ")).filter(Boolean);
+    const n = data.filter((s) => hitIds.includes(s.client_id)).length;
+    return confirm(`${n} SMS in this queue ${n === 1 ? "is" : "are"} addressed to a client whose automation is suppressed`
+      + `${names.length ? ` (${names.join(", ")})` : ""}.\n\n`
+      + `Those rows were queued before the suppression, so sending now WILL deliver them. `
+      + `Cancel the individual rows in the list below instead if that is not what you want.\n\nSend the queue anyway?`);
+  } catch (e) { return true; }
+}
+$("#run-sms-btn").addEventListener("click", async () => { if (await smsFlushSuppressionOk()) runSms(false); });
 /* R5-1 (critical) — sending is no longer a side effect.
    process-emails v8 accepts `{queue_ids:[…]}`: given ids it sends ONLY those rows and skips the
    queueing RPCs entirely. Every per-case action (Send reminder, Chase fee, protection intro,
@@ -14048,6 +15132,131 @@ function diaryTaskChipHtml(t, todayStr) {
   const click = t.case_id ? ` onclick="event.stopPropagation();openCase('${jsArg(t.case_id)}')"` : "";
   return `<div class="diary-task${overdue ? " overdue" : ""}${t.case_id ? "" : " no-case"}" title="${esc(tip)}"${click}><span class="dt-mark">☑</span><span class="dt-title">${esc(t.title || "(untitled task)")}</span></div>`;
 }
+/* ==========================================================================
+   R13 · M-31 — THE DIARY'S HALF OF ABSENCE: the band, and the panel.
+   ========================================================================== */
+/* The all-day band(s) for one date, honouring the page's person filter. Deliberately NOT an
+   appointment: it carries no time, sits above the timed cards, and is styled muted-and-striped so
+   it reads as a state of the day rather than as something booked in it. */
+function diaryAbsenceBandsHtml(ymd, who) {
+  if (!ABSENCES.length) return "";
+  const d = String(ymd).slice(0, 10);
+  const rows = ABSENCES.filter((a) => a && a.profile_id
+    && String(a.starts_on || "").slice(0, 10) <= d && String(a.ends_on || "").slice(0, 10) >= d
+    && (who === "all" || a.profile_id === who));
+  return rows.map((a) => {
+    const nm = profileName(a.profile_id) || "A colleague";
+    const note = String(a.note || "").trim();
+    const tip = `${nm} is away ${fmtD(a.starts_on)} – ${fmtD(a.ends_on)}${note ? ` · ${note}` : ""}. Recorded under Holidays & absence at the foot of this page.`;
+    /* "Away" comes FIRST, before the name. A month cell is ~130px wide and truncates with an
+       ellipsis, so whatever leads is the only word guaranteed to survive — and a band that reads
+       "Luke Richa…" tells nobody anything. The name and the reason follow, and the full sentence
+       is in the title. */
+    return `<div class="diary-away" data-absence="${esc(a.id)}" data-who="${esc(a.profile_id)}" title="${esc(tip)}">`
+      + `Away${who === "all" ? ` — <span class="diary-away-who">${esc(nm)}</span>` : ""}${note ? (who === "all" ? " · " : " — ") + esc(note) : ""}</div>`;
+  }).join("");
+}
+/* The management panel at the foot of the Diary. Repainted after every write rather than
+   re-rendering the whole page: the grid above it has just been drawn and reflows badly. */
+async function renderAbsencePanel() {
+  const host = $("#diary-absence-panel");
+  if (!host) return;
+  if ((await absencesSupported()) === false) {
+    /* RULE 3 — a stated absence, never a silent one. An empty "nobody is away" panel on a database
+       with no table would be the same lie as an empty checklist on a case with no checklist. */
+    host.innerHTML = `<div class="panel" id="abs-panel">
+      <h3>Holidays &amp; absence</h3>
+      <div class="empty">This database has no <code>staff_absences</code> table yet, so holidays cannot be recorded here. Nothing else on this page is affected — the diary, the routing suggestion and the assignee lists all behave exactly as they did before.</div>
+    </div>`;
+    return;
+  }
+  const today = localDateStr();
+  /* CURRENT AND UPCOMING only. A panel that also listed last February's leave would be a history
+     nobody reads sitting on top of the rota everybody does; the past rows are still in the table
+     and still colour the diary if you page back to them. */
+  const rows = ABSENCES.filter((a) => a && String(a.ends_on || "").slice(0, 10) >= today)
+    .slice().sort((a, b) => String(a.starts_on).localeCompare(String(b.starts_on)));
+  /* RULE 2 — the person select mirrors the RLS policy exactly, so the form can never offer a write
+     the database will refuse. An adviser sees only themselves (not disabled — a select of one is
+     honest about what they may do); an admin or owner sees the whole team. */
+  const canAny = isAdminOrOwner();
+  const meId = (ME && ME.id) || "";
+  const people = canAny ? TEAM : TEAM.filter((p) => p.id === meId);
+  const spanText = (a) => (String(a.starts_on).slice(0, 10) === String(a.ends_on).slice(0, 10)
+    ? fmtD(a.starts_on)
+    : `${fmtD(a.starts_on)} – ${fmtD(a.ends_on)}`);
+  host.innerHTML = `<div class="panel" id="abs-panel">
+    <h3>Holidays &amp; absence</h3>
+    <p class="panel-sub">Who is off, and when. Recording leave here puts an <strong>Away</strong> band on that person's diary days, labels them in every assignee list, and stops new website leads being <em>suggested</em> to them while they are out. It never blocks anything: you can still book a meeting or assign a task to somebody on holiday — you will just see that you are doing it.</p>
+    ${people.length ? `<form id="abs-add-form" class="abs-form">
+      <label>Who
+        <select id="abs-who" ${canAny ? "" : 'title="You can record your own absence. An Administrator or the Owner records anyone else\'s — the database enforces that, so the list here shows only what you may actually save."'}>
+          ${people.map((p) => `<option value="${esc(p.id)}"${p.id === meId ? " selected" : ""}>${esc(staffName(p.id))}${p.id === meId ? " (me)" : ""}</option>`).join("")}
+        </select>
+      </label>
+      <label>First day away<input type="date" id="abs-from" value="${esc(today)}"></label>
+      <label>Last day away<input type="date" id="abs-to" value="${esc(today)}"></label>
+      <label>Note (optional)<input type="text" id="abs-note" placeholder="e.g. Annual leave" maxlength="120"></label>
+      <button type="submit" class="btn btn-sm btn-primary" id="abs-add-btn">Add absence</button>
+    </form>
+    <div class="ovl-err" id="abs-err"></div>` : ""}
+    ${!canAny ? '<p class="panel-sub" id="abs-rls-note">You can add and remove <strong>your own</strong> absences. An Administrator or the Owner records anybody else\'s — that is a database rule, not a screen one, so nothing here offers you a save that would be refused.</p>' : ""}
+    <div id="abs-list">${rows.length ? rows.map((a) => {
+      const nm = profileName(a.profile_id) || "A colleague no longer in the system";
+      const live = String(a.starts_on).slice(0, 10) <= today;
+      const mine = canWriteAbsenceFor(a.profile_id);
+      return `<div class="row-item abs-row" data-absence="${esc(a.id)}">
+        <div class="row-main">
+          <div class="t">${esc(nm)}${live ? ' <span class="badge amber" title="Away today">away now</span>' : ""}</div>
+          <div class="s">${esc(spanText(a))}${a.note ? " · " + esc(a.note) : ""}</div>
+        </div>
+        ${mine ? `<button type="button" class="btn btn-sm btn-ghost btn-danger abs-del" data-absence="${esc(a.id)}" title="Remove this absence">🗑</button>`
+          : `<span class="cs-muted" title="Only ${esc(nm)}, an Administrator or the Owner can remove this — the database enforces it.">—</span>`}
+      </div>`;
+    }).join("") : '<div class="empty" id="abs-empty">Nobody is recorded as away today or in the future. That may be right, or it may mean nothing has been entered yet — this list is only as good as what people put in it.</div>'}</div>
+  </div>`;
+  const form = $("#abs-add-form");
+  if (form) form.onsubmit = (e) => { e.preventDefault(); addAbsence(); };
+  host.querySelectorAll(".abs-del").forEach((b) => (b.onclick = () => deleteAbsence(b.dataset.absence)));
+}
+async function addAbsence() {
+  const err = $("#abs-err");
+  const say = (m) => { if (err) err.textContent = m; };
+  say("");
+  const who = ($("#abs-who") || {}).value || "";
+  const from = ($("#abs-from") || {}).value || "";
+  const to = ($("#abs-to") || {}).value || "";
+  const note = String((($("#abs-note") || {}).value || "")).trim();
+  if (!who) return say("Pick who is away.");
+  if (!from || !to) return say("Both dates are needed — a holiday with no end is not something anyone can plan around.");
+  if (to < from) return say("The last day away is before the first day away.");
+  // RULE 2 again, at the write. The select cannot offer a refused row, but a stale page could.
+  if (!canWriteAbsenceFor(who)) return say("You can only record your own absence. An Administrator or the Owner records anybody else's.");
+  const { error } = await db.from("staff_absences").insert({
+    profile_id: who, starts_on: from, ends_on: to, note: note || null, created_by: (ME && ME.id) || null,
+  });
+  if (error) return say("It was not saved: " + error.message);
+  await loadAbsences();
+  await renderAbsencePanel();
+  /* The diary above it has to agree with the list below it, and the band is drawn from ABSENCES —
+     so the grid is repainted rather than left showing the state before the write. */
+  if (diaryViewMode === "day") await loadDiaryDay(); else await loadDiary();
+  toast(`${staffName(who)} is recorded as away ${fmtD(from)}${from === to ? "" : " – " + fmtD(to)}`);
+}
+async function deleteAbsence(id) {
+  const a = ABSENCES.find((x) => x && x.id === id);
+  if (!a) return;
+  if (!canWriteAbsenceFor(a.profile_id)) return toast("Only that person, an Administrator or the Owner can remove this absence.");
+  const nm = profileName(a.profile_id) || "that colleague";
+  if (!confirm(`Remove ${nm}'s absence ${fmtD(a.starts_on)}${a.starts_on === a.ends_on ? "" : " – " + fmtD(a.ends_on)}${a.note ? ` (${a.note})` : ""}?\n\nThe Away band comes off the diary and they go back into the lead-routing suggestion.`)) return;
+  const { error } = await db.from("staff_absences").delete().eq("id", id);
+  if (error) return toast("It could not be removed: " + error.message);
+  await loadAbsences();
+  await renderAbsencePanel();
+  if (diaryViewMode === "day") await loadDiaryDay(); else await loadDiary();
+  toast("Absence removed");
+}
+
 async function loadDiary() {
   const monthStart = diaryMonth;
   const monthEnd = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1);
@@ -14113,6 +15322,11 @@ async function loadDiary() {
     const hiddenTaskCount = dayTasks.length - shownTasks.length;
     return `<div class="diary-day ${day.toDateString() === todayStr ? "today" : ""}${dayAppts.length ? " has-appts" : ""}${dayHasClash ? " has-clash" : ""}" data-date="${dstr}" title="Add an appointment on this day" style="${dim ? "opacity:.45;" : ""}min-height:110px;">
       <h5>${day.toLocaleDateString("en-GB", { weekday: "short", day: "numeric" })}</h5>
+      ${/* R13 · M-31 — the Away band, ABOVE everything else in the cell: it is a fact about the
+           whole day, and reading it after three appointments is reading it too late. It respects
+           the person filter for the same reason the appointments do — "Everyone" is the view where
+           the name is worth the space, and a single-adviser view already knows whose day it is. */ ""}
+      ${diaryAbsenceBandsHtml(dstr, who)}
       ${/* R12b · W-18 — the day's dated tasks, above the meetings: a task is an all-day
            commitment and has no time to sort it by, so it cannot sit inside a time-ordered list
            without pretending to a slot it hasn't got. */ ""}
@@ -14167,6 +15381,7 @@ async function loadDiary() {
       ? TEAM.map((p) => { const c = adviserColor(p.id); return `<span class="diary-legend-item"><span class="diary-legend-dot" style="background:${c.border};"></span>${esc(staffName(p.id))}</span>`; }).join("")
       : "";
   }
+  await renderAbsencePanel();   // R13 · M-31 — the rota lives under the month it describes
 }
 
 /* ---------- Diary: Day view (Batch 9, STRETCH — R5-31 + Wayne's wish) ----------
@@ -14242,23 +15457,29 @@ async function loadDiaryDay() {
      WHOLE day: no cap here. */
   const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   const dayTasks = await loadDiaryTasks(ymd(dayStart), ymd(dayEnd), who);
-  renderDiaryDayTasks(dayTasks);
+  renderDiaryDayTasks(dayTasks, ymd(dayStart), who);
   renderDiaryDay(appts || [], who, apptCtx);
+  await renderAbsencePanel();   // R13 · M-31 — the same panel, under either view
 }
 /* R12b · W-18 — dated tasks get their OWN row above the time lanes, not a lane position: they are
    all-day commitments with no start time, and dropping them at 00:00 (or at "now") would be the
    app inventing a fact. Empty means the row disappears entirely rather than sitting there as a
    labelled blank — a diary with nothing due should look like a diary with nothing due. */
-function renderDiaryDayTasks(tasks) {
+function renderDiaryDayTasks(tasks, dayYmd, who) {
   const el = $("#diary-day-tasks");
   if (!el) return;
   const rows = tasks || [];
   const todayStr = localDateStr();
-  el.classList.toggle("hidden", !rows.length);
-  el.innerHTML = rows.length
-    ? `<span class="ddt-lbl" title="Tasks due on this day, from the cases. These have no time on them — they are jobs for the day, not slots in it.">Due this day</span>`
-      + rows.map((t) => diaryTaskChipHtml(t, todayStr)).join("")
-    : "";
+  /* R13 · M-31 — the Away band shares this row for the same reason the tasks are in it: it has no
+     time either. It comes FIRST, because "he is not in today" changes how you read everything
+     underneath it, and the row now appears when there is a band even with nothing due. */
+  const bands = dayYmd ? diaryAbsenceBandsHtml(dayYmd, who || "all") : "";
+  el.classList.toggle("hidden", !rows.length && !bands);
+  el.innerHTML = bands
+    + (rows.length
+      ? `<span class="ddt-lbl" title="Tasks due on this day, from the cases. These have no time on them — they are jobs for the day, not slots in it.">Due this day</span>`
+        + rows.map((t) => diaryTaskChipHtml(t, todayStr)).join("")
+      : "");
 }
 
 function renderDiaryDay(appts, who, apptCtx) {
@@ -14857,6 +16078,28 @@ async function buildEvidencePack(caseId) {
   ]);
   const audit = auditVisibleRows(auditAll);
   if (!c) return toast("Could not load case");
+  /* ==========================================================================
+     R13 · M-7 — THE THREE THINGS A FILE CHECKER ASKS FOR FIRST, and the three
+     this pack did not print: the digital fact-find (the client's own recorded
+     circumstances — the basis of every recommendation in the document), the
+     document checklist (what was asked for and what came back), and the case
+     files (the illustration, the research, the client agreement, the
+     suitability letter). A pack that carries the notes, the tasks and the
+     audit trail but not the advice paperwork is a pack that cannot answer the
+     first question asked of it.
+
+     Three small reads, each feature-detected on its own, each stating its
+     absence in words rather than printing an empty table — an empty
+     "Document checklist" on a database with no checklists reads as "nothing
+     was ever asked for", which is a different and much worse claim.
+     ========================================================================== */
+  const packDocsOn = (await docsSupported()) !== false;
+  const packFilesOn = (await caseFilesSupported()) !== false;
+  const [packFF, packDocs, packFiles] = await Promise.all([
+    softRows(db.from("fact_finds").select("*").eq("case_id", caseId).order("created_at")),
+    packDocsOn ? softRows(db.from("case_documents").select("*").eq("case_id", caseId).order("created_at")) : Promise.resolve([]),
+    packFilesOn ? softRows(db.from("case_files").select("*").eq("case_id", caseId).order("created_at")) : Promise.resolve([]),
+  ]);
   const cl = c.clients || {};
   const name = [cl.first_name, cl.last_name].filter(Boolean).join(" ");
   const dt = (d) => (d ? new Date(d).toLocaleString("en-GB") : "—");
@@ -14943,6 +16186,94 @@ async function buildEvidencePack(caseId) {
   const generatedBy = (ME && (ME.full_name || ME.email)) || (($("#user-email") || {}).textContent) || "Unknown user";
   const generatedRole = ROLE_LABEL[MY_ROLE] || MY_ROLE;
 
+  /* ---- R13 · M-7 · (a) THE DIGITAL FACT-FIND ------------------------------
+     A status TIMELINE, not a badge: "submitted" on its own does not tell a reviewer when it was
+     asked for, how long the client sat on it, or whether it was ever sent at all. The four steps
+     are printed with their dates, and a step with no date says which of the two reasons applies —
+     never reached, or reached with nothing recorded.
+     `started` genuinely has no column on `fact_finds`; the pack says so rather than inventing one
+     or quietly leaving the row out, because a reviewer counting four steps and finding three will
+     assume the third did not happen.
+     `sent` has no column either — it is derived from the queued fact-find email that did the
+     sending, which is exactly what the case screen does (see FF_BADGE / factFind()). */
+  const FF_ORDER = ["created", "sent", "started", "submitted"];
+  const ffSentAt = (emails || [])
+    .filter((e) => e.email_type === "factfind" && e.status === "sent")
+    .map((e) => e.sent_at || e.created_at).filter(Boolean).sort().slice(-1)[0] || null;
+  function packFactFindHtml() {
+    if (!packFF.length) {
+      return '<p class="muted">No fact-find was created for this case. The client\'s circumstances were not captured through the digital fact-find; anything recorded about them is in the notes and the case details above.</p>';
+    }
+    return packFF.map((ff, i) => {
+      const reached = FF_ORDER.indexOf(String(ff.status || ""));
+      const stepRow = (step, label, when, whenAbsentReason) => {
+        const idx = FF_ORDER.indexOf(step);
+        if (reached < 0 || idx > reached) return `<tr><td>${label}</td><td class="muted">Not reached</td></tr>`;
+        return `<tr><td>${label}</td><td><strong>${when ? esc(dt(when)) : ""}</strong>${when ? "" : `<span class="muted">${esc(whenAbsentReason)}</span>`}</td></tr>`;
+      };
+      const answers = ff.status === "submitted" && ff.data && Object.keys(ff.data).length
+        ? (() => {
+          /* The pack is regulator-facing: the FULL answers belong in it. The case screen can
+             reasonably show a summary and a link; a document handed to a file checker cannot,
+             because there is nothing behind it to click. Same key labelling (prettyFF) and same
+             blank-dropping rule as the on-screen renderer, printed in the pack's own table
+             furniture rather than the app's. */
+          const keys = Object.keys(ff.data).filter((k) => String(ff.data[k] ?? "").trim() !== "");
+          if (!keys.length) return '<p class="muted">The fact-find was submitted, but every answer on it was left blank.</p>';
+          return `<p class="muted">The client's own answers, as submitted. Blank answers are not printed.</p>
+            <table>${keys.map((k) => `<tr><td>${esc(prettyFF(k))}</td><td><strong>${esc(ff.data[k])}</strong></td></tr>`).join("")}</table>`;
+        })()
+        : `<p class="muted">${reached >= FF_ORDER.indexOf("submitted") ? "Marked submitted, but no answers were recorded against it." : "No answers — this fact-find was not submitted, so there is nothing the client filled in to print."}</p>`;
+      return (packFF.length > 1 ? `<p class="muted"><strong>Fact-find ${i + 1} of ${packFF.length}</strong> — a new blank fact-find replaces the previous one as the active link; earlier ones are kept and printed here so the sequence is visible.</p>` : "")
+        + `<table><tr><th>Step</th><th>When</th></tr>
+          ${stepRow("created", "Created", ff.created_at, "no date recorded")}
+          ${stepRow("sent", "Sent to the client", ffSentAt, "no date recorded — the send predates the queued fact-find email, or it was sent by hand from the adviser's own mail program")}
+          ${stepRow("started", "Started by the client", null, "no date is recorded for this step — the database holds no start timestamp")}
+          ${stepRow("submitted", "Submitted", ff.submitted_at, "no date recorded")}
+        </table>${answers}`;
+    }).join("");
+  }
+  /* ---- R13 · M-7 · (b) THE DOCUMENT CHECKLIST -----------------------------
+     NAMES ONLY, deliberately. The pack has never carried a live link and must not start: a signed
+     URL expires in five minutes, so a printed one is a dead link by the time anybody reads the
+     document, and a permanent one would be a public copy of a client's passport sitting in a PDF.
+     The row says whether a file was uploaded; getting at it is done in the back office. */
+  function packDocsHtml() {
+    if (!packDocsOn) {
+      return '<p class="muted">This database does not hold document checklists, so none can be printed here. It is not a statement that nothing was asked for — the records simply do not exist in this system.</p>';
+    }
+    if (!packDocs.length) {
+      return '<p class="muted">No document checklist was created for this case. Nothing was recorded as asked for and nothing as received; documents may still have been collected by email or in person, and would be in the notes above if so.</p>';
+    }
+    return `<p class="muted">What this client was asked for and what came back. <strong>Files are named, not linked</strong> — this document carries no live links, so nothing in it can hand a reader a client's identity documents. The uploads themselves are in the back office, on the case.</p>
+      <table><tr><th>Item</th><th>Status</th><th>Asked for</th><th>Received</th><th>File uploaded</th><th>Note</th></tr>
+      ${packDocs.map((d) => {
+        const s = DOC_STATUSES.includes(d.status) ? d.status : "requested";
+        const label = s === "requested" ? "Outstanding" : s === "received" ? "Received" : "Waived";
+        return `<tr><td>${esc(d.item || "(unnamed item)")}</td><td><strong>${label}</strong></td>`
+          + `<td>${d.requested_at ? esc(fmtD(d.requested_at)) : '<span class="muted">—</span>'}</td>`
+          + `<td>${d.received_at ? esc(fmtD(d.received_at)) : '<span class="muted">—</span>'}</td>`
+          + `<td>${d.storage_path ? "Yes — " + esc(String(d.storage_path).split("/").pop()) : '<span class="muted">No file — received by email or in person, or not received</span>'}</td>`
+          + `<td>${d.note ? esc(d.note) : '<span class="muted">—</span>'}</td></tr>`;
+      }).join("")}
+      </table>`;
+  }
+  /* ---- R13 · M-7 · (c) THE CASE FILES -------------------------------------
+     The firm's own advice paperwork. Same no-live-links principle, said again here rather than
+     assumed from the section above it, because these are the ones a file checker will actually go
+     looking for and "why can't I open the suitability letter" deserves an answer on the page. */
+  function packFilesHtml() {
+    if (!packFilesOn) {
+      return '<p class="muted">This database does not hold case files, so none can be printed here. It is not a statement that no paperwork exists — the records simply do not exist in this system.</p>';
+    }
+    if (!packFiles.length) {
+      return '<p class="muted">No case files are held on this case — no illustration, no research evidence, no client agreement and no suitability letter have been uploaded to it. Any such papers are held outside this system.</p>';
+    }
+    return `<p class="muted">The firm's own papers on this case, as distinct from the documents asked of the client above. <strong>Named, not linked</strong>, for the same reason: this document carries no live links. The files themselves are on the case in the back office.</p>
+      <table><tr><th>File</th><th>Kind</th><th>Added</th><th>Added by</th></tr>
+      ${packFiles.map((f) => `<tr><td>${esc(f.name || "(unnamed file)")}</td><td>${esc(caseFileKindLabel(f.kind))}</td><td>${esc(dt(f.created_at))}</td><td>${esc(packPerson(f.uploaded_by, "Uploader not recorded"))}</td></tr>`).join("")}
+      </table>`;
+  }
   // R6-37 — the short label distinguishes five packs for one landlord in the tab bar and the heading;
   // the full address is stated in the document itself.
   const packProp = propLabel(c);
@@ -15014,6 +16345,16 @@ async function buildEvidencePack(caseId) {
     <h2>Tasks</h2><table><tr><th>Due</th><th>Task</th><th>Assigned to</th><th>Status</th></tr>
       ${(tasks || []).map((t) => `<tr><td style="white-space:nowrap;">${t.due_date ? "due " + fmtD(t.due_date) : "no due date"}</td><td>${esc(t.title)}</td><td>${esc(packPerson(t.assigned_to, "Unassigned"))}</td><td>${t.done_at ? "done " + dt(t.done_at) : "open"}</td></tr>`).join("") || "<tr><td colspan=4>None</td></tr>"}
     </table>
+    ${/* R13 · M-7 — the three paperwork sections, between the work (notes/tasks) and the machine
+         record (change history). In that order because it is the order they are asked for: what
+         did the client tell us, what did we ask them for, and what did we produce. Each states
+         its own absence — none of the three is ever silently omitted. */ ""}
+    <h2>Digital fact-find</h2>
+    ${packFactFindHtml()}
+    <h2>Document checklist</h2>
+    ${packDocsHtml()}
+    <h2>Case files</h2>
+    ${packFilesHtml()}
     <h2>Change history</h2>
     <p class="muted">Every insert, update and delete the database recorded against this case and its tasks, notes and appointments, newest first, with the person who made it. Written by the audit trigger; it has no write path through the app, so it cannot be edited or erased from here. This log began on ${esc(auditStartLabel())} — changes made before that date were not captured, and it does not cover client-level edits made under the client record rather than this case.</p>
     <table><tr><th>When</th><th>Who</th><th>What</th><th>Changed</th></tr>
@@ -17726,6 +19067,13 @@ async function loadDataHealth() {
     });
     const mailsBy = {};
     dhDocMails.forEach((m) => { if (m.case_id) (mailsBy[m.case_id] = mailsBy[m.case_id] || []).push(m); });
+    /* R13 · M-13 — the exchange date, in its OWN feature-detected read. Naming it in the m10 select
+       above would 42703 the whole thing on a database that took m10 but not this round's columns,
+       and cost the panel its seven other facts to gain one. */
+    const dhExchangeBy = {};
+    if ((await forwardDatesSupported()) === true) {
+      (await softRows(db.from("cases").select("id,exchange_date"))).forEach((r) => { if (r && r.id) dhExchangeBy[r.id] = r.exchange_date || null; });
+    }
     const extraBy = Object.fromEntries(dhWaitRows.map((r) => [r.id, r]));
     const emailBy = new Map(allClients.map((cl) => [cl.id, cl.email || ""]));
     waitingDocs = allCases
@@ -17745,12 +19093,38 @@ async function loadDataHealth() {
           waitingOn: extra.waiting_on || null, solicitorFirm: extra.solicitor_firm || null,
           assignedTo: extra.assigned_to || null,
           caseKind: cs.case_kind || null,
+          exchangeDate: dhExchangeBy[cs.id] || null,
         };
       })
       /* Ordered by the thing the reader is deciding on: the ones that have gone quiet longest,
          with the never-emailed cases first — a checklist that has never been asked for is more
          urgent than one chased on Tuesday. */
       .sort((a, b) => String(a.lastMailAt || "").localeCompare(String(b.lastMailAt || "")) || b.outstanding - a.outstanding);
+  }
+
+  /* R13 · M-4/M-30 — the two care lists, and the clawback gap. All three are their own small,
+     feature-detected reads: the page's main clients/cases selects name their columns, and widening
+     either would 42703 the whole page on a database that has not taken the migrations. A "no"
+     costs exactly the three tiles below and nothing else. */
+  const dhCareOn = (await careSupported()) === true;
+  let dhVulnerable = [], dhSuppressed = [];
+  if (dhCareOn) {
+    const { data: careRows, error: careErr } = await db.from("clients").select("id,first_name,last_name," + CARE_COLS.join(","));
+    if (careErr) { if (isMissingColumnError(careErr)) CARE_SUPPORTED = false; }
+    else {
+      const cn = (r) => [r.first_name, r.last_name].filter(Boolean).join(" ") || "(no name)";
+      dhVulnerable = (careRows || []).filter((r) => r.is_vulnerable).map((r) => ({ id: r.id, name: cn(r), note: r.vulnerability_note || "" }));
+      dhSuppressed = (careRows || []).filter((r) => r.suppress_automation).map((r) => ({ id: r.id, name: cn(r), note: r.vulnerability_note || "" }));
+    }
+  }
+  const dhClawbackOn = (await policyStartSupported()) === true;
+  let dhNoPolicyStart = [];
+  if (dhClawbackOn) {
+    const { data: pol, error: polErr } = await db.from("cases")
+      .select("id,policy_start_date,clients!client_id(first_name,last_name)")
+      .eq("protection_status", "policy_taken").is("policy_start_date", null);
+    if (polErr) { if (isMissingColumnError(polErr)) POLICY_START_SUPPORTED = false; }
+    else dhNoPolicyStart = (pol || []).map((r) => ({ id: r.id, name: [r.clients && r.clients.first_name, r.clients && r.clients.last_name].filter(Boolean).join(" ") || "(client not on file)" }));
   }
 
   /* T1-26 — every number on this page is a door. `▾` = expands a list panel further down the page,
@@ -17772,7 +19146,16 @@ async function loadDataHealth() {
           clear. Absent entirely on a database with no property column. */ ""}
     ${/* R12b · K-11 — a work queue, not a fault: no "warn" class, however big the number gets. */ ""}
     ${dhDocsOn ? `<div class="kpi dq-clickable" id="dh-tile-waitingdocs" title="Live cases with at least one document still outstanding on their checklist — the paperwork queue. Click to read it."><div class="num">${waitingDocs.length}</div><div class="lbl">Waiting on documents ▾</div></div>` : ""}
-    ${dhPropOn ? `<div class="kpi dq-clickable" id="dh-tile-sharedprop" title="Addresses that appear on more than one client's cases — usually a sale we advised on both sides of, occasionally a mistake. Informational: click to read them"><div class="num">${sharedProps.length}</div><div class="lbl">Shared property addresses ▾</div></div>` : ""}`;
+    ${dhPropOn ? `<div class="kpi dq-clickable" id="dh-tile-sharedprop" title="Addresses that appear on more than one client's cases — usually a sale we advised on both sides of, occasionally a mistake. Informational: click to read them"><div class="num">${sharedProps.length}</div><div class="lbl">Shared property addresses ▾</div></div>` : ""}
+    ${/* R13 · M-4 — DELIBERATELY NOT A "warn" TILE, however high the number goes. A vulnerable
+          client is not a data fault and colouring the count amber would say the firm has a problem
+          to clear, which is the opposite of what a Consumer Duty record means. It is here because
+          "who are they, and does each one have a note?" is a question a compliance-minded owner
+          should be able to answer in one click, and until now could not answer at all. */ ""}
+    ${dhCareOn ? `<div class="kpi dq-clickable" id="dh-tile-vulnerable" title="Clients flagged as vulnerable. Information, not a fault — click to read the list and check each one carries a note explaining the care need."><div class="num">${dhVulnerable.length}</div><div class="lbl">Vulnerable clients ▾</div></div>` : ""}
+    ${dhCareOn ? `<div class="kpi dq-clickable" id="dh-tile-suppressed" title="Clients the database refuses every automated email and SMS to. Click to list them — worth reading, because nothing automated will ever reach these people again until it is turned off."><div class="num">${dhSuppressed.length}</div><div class="lbl">Automation suppressed ▾</div></div>` : ""}
+    ${/* R13 · M-23 — this one IS a fault: a policy whose clawback window nobody can watch. */ ""}
+    ${dhClawbackOn ? `<div class="kpi ${dhNoPolicyStart.length ? "warn" : ""} dq-clickable" id="dh-tile-nopolicystart" title="Policies recorded as taken with no start date — their clawback window cannot be watched. Click to open the Protection page's Clawback window panel."><div class="num">${dhNoPolicyStart.length}</div><div class="lbl">Policies with no start date →</div></div>` : ""}`;
 
   let stuckNotice = "";
   if (dq.emails_stuck > 0 && dq.emails_sending_live) {
@@ -17943,6 +19326,28 @@ async function loadDataHealth() {
       </div>`).join("") : '<div class="empty">Every phone number on file looks textable. 👍</div>'}
   </div>`;
 
+  /* R13 · M-4/M-30 — the two care lists. Neutral wording throughout: these are not faults, and the
+     empty state is not a 👍 (having no vulnerable clients on file is not an achievement — on a book
+     of this size it is more likely nobody has recorded one yet, and the copy says so). */
+  const vulnerablePanel = !dhCareOn ? "" : `<div class="panel hidden" id="dh-vulnerable-panel">
+    <h3>Vulnerable clients</h3>
+    <p class="panel-sub">Clients flagged as vulnerable on their record. This is <strong>information, not a problem list</strong> — nothing here needs clearing. What is worth checking is that each one carries a note: a flag with no explanation tells the next colleague to be careful without telling them how.</p>
+    ${dhVulnerable.length ? dhVulnerable.map((c) => `
+      <div class="row-item">
+        <div class="row-main"><div class="t" onclick="openClient('${jsArg(c.id)}')">${esc(c.name)}</div><div class="s">${c.note ? esc(c.note) : '<span class="cs-muted">no note recorded — add one so a colleague knows what the care need is</span>'}</div></div>
+        <button class="btn btn-sm" onclick="openClient('${jsArg(c.id)}')">Open</button>
+      </div>`).join("") : '<div class="empty">No client is flagged as vulnerable. That may be right, or it may mean nobody has recorded one yet — the flag is on the client record, under “Care &amp; contact”.</div>'}
+  </div>`;
+  const suppressedPanel = !dhCareOn ? "" : `<div class="panel hidden" id="dh-suppressed-panel">
+    <h3>Clients with automation suppressed</h3>
+    <p class="panel-sub">The database refuses <strong>every automated email and SMS</strong> to these clients — rate-end reminders, review requests, document chases, birthday and anniversary messages. Nothing scheduled will reach them until the switch is turned off on their record. Sending by hand still works and asks you to confirm first. Worth reading occasionally: a suppression set for a good reason in March is easy to forget by September.</p>
+    ${dhSuppressed.length ? dhSuppressed.map((c) => `
+      <div class="row-item">
+        <div class="row-main"><div class="t" onclick="openClient('${jsArg(c.id)}')">${esc(c.name)}</div><div class="s">${c.note ? esc(c.note) : '<span class="cs-muted">no note recorded</span>'}</div></div>
+        <button class="btn btn-sm" onclick="openClient('${jsArg(c.id)}')">Open</button>
+      </div>`).join("") : '<div class="empty">No client has automated contact suppressed.</div>'}
+  </div>`;
+
   /* R12b · K-11 / W-24 — THE PANEL. One row per live case with outstanding items: who, where the
      case is, how much is missing, how much of the chase budget is spent, how long since the last
      document email, when the next one is due, and who the case is sitting with. Two verbs, both
@@ -17967,7 +19372,14 @@ async function loadDataHealth() {
         const blocked = spent ? "budget spent — ring them" : noEmail ? "no email on file" : "";
         return `<tr data-case="${esc(r.id)}">
         <td>${esc(r.name)}${r.assignedTo ? `<div style="${mutedSub}">${esc(staffName(r.assignedTo))}</div>` : `<div style="${mutedSub}">unassigned</div>`}</td>
-        <td>${esc(STAGE_LABEL[r.stage] || r.stage)}</td>
+        ${/* R13 · M-13 — EXCHANGED, in the stage cell rather than as a ninth column: it is a fact
+             about where the case has got to, and this table is already at the width the panel can
+             hold. Once contracts have exchanged the client is legally committed, so an outstanding
+             document PAST that date is not a queue item, it is a fire — hence red, and a title
+             that says why rather than leaving the colour to be interpreted. */ ""}
+        <td>${esc(STAGE_LABEL[r.stage] || r.stage)}${r.exchangeDate ? (String(r.exchangeDate).slice(0, 10) < localDateStr()
+          ? `<div style="${mutedSub}"><span class="badge red" title="Contracts exchanged on ${esc(fmtD(r.exchangeDate))} and this case is STILL waiting on paperwork. The client is legally committed from that date — this is not a routine chase.">exchanged ${esc(fmtD(r.exchangeDate))}</span></div>`
+          : `<div style="${mutedSub}" title="Contracts are due to exchange on ${esc(fmtD(r.exchangeDate))}.">exchanges ${esc(fmtD(r.exchangeDate))}</div>`) : ""}</td>
         <td><strong>${r.outstanding}</strong></td>
         <td>${r.chases} of ${DOC_CHASE_MAX}</td>
         <td style="white-space:nowrap;">${r.lastMailAt ? esc(fmtAgo(r.lastMailAt)) : '<span class="cs-muted">never</span>'}</td>
@@ -17999,7 +19411,8 @@ async function loadDataHealth() {
     ${noFeePanel}
     <div class="grid-2">${phonePanel}${rateEndPanel}</div>
     <div class="grid-2">${bothPanel}${noCompletedPanel}</div>
-    <div class="grid-2">${invalidEmailPanel}${invalidPhonePanel}</div>`;
+    <div class="grid-2">${invalidEmailPanel}${invalidPhonePanel}</div>
+    ${dhCareOn ? `<div class="grid-2">${vulnerablePanel}${suppressedPanel}</div>` : ""}`;
 
   // Tiles whose panel is hidden until asked for: toggle, and scroll to it when revealing so the
   // list isn't opened off-screen below the fold.
@@ -18026,6 +19439,18 @@ async function loadDataHealth() {
   wireTile("#dh-tile-invalid-email", "#dh-invalid-email-panel");
   wireTile("#dh-tile-invalid-phone", "#dh-invalid-phone-panel");
   wireTile("#dh-tile-sharedprop", "#dh-sharedprop-panel");   // R6-38
+  wireTile("#dh-tile-vulnerable", "#dh-vulnerable-panel");   // R13 · M-4
+  wireTile("#dh-tile-suppressed", "#dh-suppressed-panel");   // R13 · M-30
+  /* R13 · M-23 — this tile leaves the page: the list it belongs to is the Protection page's
+     Clawback window panel, and duplicating it here would be a second place to fix the same date. */
+  const clawTile = $("#dh-tile-nopolicystart");
+  if (clawTile) {
+    clawTile.style.cursor = "pointer";
+    clawTile.onclick = () => {
+      nav("protection");
+      setTimeout(() => { const p = $("#prot-clawback-panel"); if (p) p.scrollIntoView({ behavior: "smooth", block: "start" }); }, 700);
+    };
+  }
   wireTileScroll("#dh-tile-email", "#dh-missing-panel");
   wireTileScroll("#dh-tile-unassigned", "#dh-unassigned-panel");
   wireTileScroll("#dh-tile-nofee", "#dh-nofee-panel");
@@ -18563,6 +19988,25 @@ const rosterRoles = () => STAFF_ROLES.concat(["none"]);
    Those stay Owner-only in the database (role changes: guard_role_change / "Only an Owner can
    change a role"; handover: the reassign RPC path here is a plain UI action gated the same way),
    so this is a straight read-only render, not a disabled form. */
+/* R13 · M-44 — ONE OWNER IS A SINGLE POINT OF FAILURE, AND NOBODY IS TOLD.
+   Owner is the only role that can change settings, keys, roles and bank details, and the app
+   already refuses to demote the last one — which is the right rule and also the proof that losing
+   that login is unrecoverable from inside the product. This says so, once, in the place where the
+   fix lives (the Team panel, six inches above the roster the promotion is made on).
+
+   No enforcement, no nag counter, no dismissal: who else the firm trusts with its keys is a
+   judgement about people, and the honest contribution here is the sentence, not a policy.
+   Owner-only — an Administrator reading "appoint a second Owner" cannot act on it, and telling
+   somebody about a gap they cannot close is just anxiety. */
+function renderSecondOwnerNotice() {
+  const el = $("#second-owner-notice");
+  if (!el) return;
+  const owners = (PROFILES || []).filter((p) => p && p.role === "owner");
+  const show = isOwner() && owners.length === 1;
+  el.classList.toggle("hidden", !show);
+  if (!show) { el.innerHTML = ""; return; }
+  el.innerHTML = `<strong>The firm has one Owner.</strong> If that login is lost — a forgotten password on a closed mailbox, an account nobody else can reach — nobody can change settings, keys or roles, and this application has no way to appoint one from the outside. <strong>Appoint a second Owner.</strong> Nothing here forces it and nothing is blocked; it is one change on the roster below.`;
+}
 async function renderTeamRoster() {
   const el = $("#team-roster");
   if (!el) return;
@@ -19480,10 +20924,16 @@ document.addEventListener("keydown", (e) => {
 
    WHAT IT CANNOT DO, SAID OUT LOUD ON SCREEN: this export carries ~55 fields
    and this database has nowhere to put a good third of them (policy type,
-   premium, provider, LTV, reversion rate, second applicant, vulnerability
-   flag). Those columns are listed as "not stored (no field here)" with the
-   reason. They are not silently dropped, and they are not invented into a
-   notes blob pretending to be data.
+   premium, provider, LTV, reversion rate, second applicant). Those columns are
+   listed as "not stored (no field here)" with the reason. They are not silently
+   dropped, and they are not invented into a notes blob pretending to be data.
+
+   R13 · M-4 — the vulnerable-customer column has come OFF that list. It was the
+   one entry on it flagged as worth escalating ("a Consumer Duty field arriving
+   weekly with nowhere to land"); `clients.is_vulnerable` /
+   `clients.vulnerability_note` shipped, and this sync now maps to them. The
+   old sentence survives as the fallback for a database that has not taken the
+   migration — see REV_UNSTORED_WHY.__vulnerable and revBuildMapping.
    ========================================================================== */
 
 /* ---- 1 · WHAT WE CAN ACTUALLY STORE -------------------------------------
@@ -19501,6 +20951,14 @@ const REV_FIELDS = [
   ["addr_town", "Town", "client", "addr"],
   ["addr_county", "County", "client", "addr"],
   ["addr_postcode", "Postcode", "client", "addr"],
+  /* R13 · M-4 — THE COLUMN THAT USED TO HAVE NOWHERE TO LAND. Every week this export carried a
+     vulnerable-customer flag and this sync's own mapping table said, in as many words, "no
+     vulnerable-customer flag exists in this database… it is a Consumer Duty field and it is
+     arriving weekly with nowhere to land". The columns exist now, so it lands. The flag and the
+     free-text reason are separate fields for the same reason they are separate on the client
+     record: a boolean nobody can act on is not a care record. */
+  ["is_vulnerable", "Vulnerable client", "client", "yesno"],
+  ["vulnerability_note", "Vulnerability note", "client", "text"],
   ["lender", "Lender", "case", "text"],
   ["product_name", "Product", "case", "text"],
   ["rate_type", "Rate type", "case", "rate_type"],
@@ -19531,7 +20989,11 @@ const REV_FIELD = Object.fromEntries(REV_FIELDS.map(([key, label, scope, kind]) 
 const REV_CASE_DIFF = ["rate_end_date", "erc_end_date", "lender", "product_name", "rate_type", "rate_percent",
   "loan_amount", "property_value", "term_years", "case_kind", "fee_status", "proc_fee", "broker_fee",
   "protection_status", "protection_commission", "gi_status", "lead_source", "submitted_at", "completed_date"];
-const REV_CLIENT_DIFF = ["date_of_birth", "email", "phone", "address"];
+const REV_CLIENT_DIFF = ["date_of_birth", "email", "phone", "address", "is_vulnerable", "vulnerability_note"];
+/* R13 — the care columns this sync can write, and the only place the list is spelled out. Used by
+   the mapping builder to fall back to "not stored" on a database that has not taken the migration,
+   so the honest old sentence survives for anyone still on it. */
+const REV_CARE_FIELDS = ["is_vulnerable", "vulnerability_note"];
 const REV_MONEY_FIELDS = new Set(["proc_fee", "broker_fee", "protection_commission"]);
 const REV_ADDR_PARTS = ["addr_line1", "addr_line2", "addr_town", "addr_county", "addr_postcode"];
 const REV_CASE_COL = { completed_date: "completed_at" };
@@ -19567,7 +21029,9 @@ const REV_UNSTORED_WHY = {
   __income_protection: "no income-protection field — protection is one outcome per case, not a policy list",
   __gi_provider: "no GI-provider field",
   __gi_premium: "no GI-premium field — GI is held as an outcome (quoted / policy taken / declined), not an amount",
-  __vulnerable: "⚠ no vulnerable-customer flag exists in this database. This is the one unstorable column worth raising with Daniel: it is a Consumer Duty field and it is arriving weekly with nowhere to land",
+  /* R13 · M-4 — kept, but it is now the FALLBACK rather than the answer: the columns shipped, so
+     this sentence is only reached on a database that has not taken the migration yet. */
+  __vulnerable: "⚠ this database has no vulnerable-customer columns yet (they shipped in a later migration). Until it takes them, this Consumer Duty field still has nowhere to land",
   __consent: "not written — contact consent is held here as marketing_opt_out / sms_opt_out, and flipping a client's consent from a spreadsheet is not something a sync should ever do on its own",
   __last_reviewed: "no last-reviewed field — this system derives last contact from notes, sent emails, appointments and completed tasks",
 };
@@ -19586,7 +21050,10 @@ const REV_HEADER_RULES = [
   [/(protection.*(policy )?type|policy type)/, "__prot_type"],
   [/protection.*(provider|insurer)/, "__prot_provider"],
   [/(taken protection|protection (sold|taken|status)|^protection$|life cover|life policy)/, "protection_status"],
-  [/(vulnerab)/, "__vulnerable"],
+  /* R13 · M-4 — the note rule must come first: "Vulnerability Notes" would otherwise be claimed by
+     the flag rule below it and a paragraph of care detail would be read as a yes/no. */
+  [/(vulnerab|vulnerable customer).*(note|detail|reason|comment|why)/, "vulnerability_note"],
+  [/(vulnerab)/, "is_vulnerable"],
   [/(consent|opt in|opt out|marketing preference)/, "__consent"],
   [/(last review|reviewed date|last annual review)/, "__last_reviewed"],
   [/^(first name|forename|given name|christian name|first)$/, "first_name"],
@@ -19729,6 +21196,16 @@ function revValue(key, raw) {
       if (/discuss/.test(low)) return { v: "discussed" };
       return { v: null, note: `“${s}” isn't a protection outcome this system holds` };
     }
+    /* R13 · M-4 — the vulnerability flag, on the same discipline as prot_flag above and for a
+       sharper reason. "Y" is a care record and is proposed. "N" or a blank proposes NOTHING: a
+       vulnerability recorded HERE by an adviser who took the call is the better record, and a
+       weekly spreadsheet quietly clearing it is precisely the Consumer Duty failure this column
+       exists to prevent. Un-flagging is a human act, done on the client record. */
+    case "yesno": {
+      if (REV_YES.test(s)) return { v: true };
+      if (REV_NO.test(s)) return { v: null, note: `${f.label}: “${s}” means this file does not flag them — a flag recorded here by hand is never cleared from the export, so nothing is proposed` };
+      return { v: null, note: `${f.label}: “${s}” isn't a yes or a no, so nothing is proposed` };
+    }
     case "phone": return { v: s };
     default: return { v: s };
   }
@@ -19736,8 +21213,10 @@ function revValue(key, raw) {
 /* How a value PRINTS in the diff. Money uses the app's own formatter so the
    sync can never show a fee in a different shape from the case screen. */
 function revShow(key, v) {
+  const f0 = REV_FIELD[key] || { kind: "text" };
+  if (f0.kind === "yesno") return v == null || v === "" ? "—" : (v === true || v === "true" ? "Yes" : "No");   // R13 — false is a value, not an absence
   if (v == null || v === "") return "—";
-  const f = REV_FIELD[key] || { kind: "text" };
+  const f = f0;
   if (key === "date_of_birth" || f.kind === "date") return fmtD(v);
   if (f.kind === "money" || f.kind === "money_plain") return fmtM(v);
   if (f.kind === "pct") return v + "%";
@@ -19750,9 +21229,13 @@ function revShow(key, v) {
    column is a number, so 4.44 vs "4.440" is not a conflict and 186000 vs
    "186,000" is not either. */
 function revSame(key, a, b) {
+  const f0 = REV_FIELD[key] || { kind: "text" };
+  // R13 — a stored `false` is not an empty value: without this, "held false / incoming true"
+  // would compare as "we hold nothing" and be offered as a fill rather than as the change it is.
+  if (f0.kind === "yesno") return (a === true) === (b === true);
   if (a == null || a === "") return b == null || b === "";
   if (b == null || b === "") return false;
-  const f = REV_FIELD[key] || { kind: "text" };
+  const f = f0;
   if (["money", "money_plain", "pct", "int"].includes(f.kind)) return Number(a) === Number(b);
   if (f.kind === "date" || key === "date_of_birth") return String(a).slice(0, 10) === String(b).slice(0, 10);
   if (key === "phone") return normPhone(a) === normPhone(b);
@@ -19796,6 +21279,11 @@ function revBuildMapping(headers) {
     const hasMemory = Object.prototype.hasOwnProperty.call(remembered, norm);
     let key = hasMemory ? remembered[norm] : auto;
     if (key && !REV_FIELD[key] && !String(key).startsWith("__")) key = null;   // a field that no longer exists
+    /* R13 · M-4 — on a database that predates the care migration the columns are real fields
+       everywhere else in this file, but there is nothing to write them to HERE. Fall back to the
+       unstorable marker so the mapping table keeps saying so, in the honest old words, rather
+       than offering a mapping whose Apply would fail row by row. */
+    if (REV_CARE_FIELDS.includes(key) && CARE_SUPPORTED === false) key = "__vulnerable";
     const e = { header: String(h == null ? "" : h), norm, key: null, auto, bucket: "ignored", why: "", remembered: hasMemory, i };
     if (!norm) { e.bucket = "ignored"; e.why = "column has no heading"; return e; }
     if (!key) {
@@ -20030,6 +21518,11 @@ function revDiffClient(r, clientRow) {
   push("date_of_birth", "Date of birth", clientRow.date_of_birth, r.v.date_of_birth);
   push("email", "Email", clientRow.email, r.g.email);
   push("phone", "Phone", clientRow.phone, r.g.phone);
+  /* R13 · M-4 — the care fields, offered exactly like any other: shown, defaulted, and never
+     written without a choice. Only reachable when the mapping actually mapped them, which the
+     mapping builder only allows on a database that has the columns. */
+  push("is_vulnerable", "Vulnerable client", clientRow.is_vulnerable, r.v.is_vulnerable);
+  push("vulnerability_note", "Vulnerability note", clientRow.vulnerability_note, r.v.vulnerability_note);
   /* THE ADDRESS IS NOT A STRING COMPARISON. Every row of this export composes an
      address out of five columns, so the file's version of an address we already
      hold is routinely the same place written more fully ("18 Belle Vue Road,
@@ -20170,7 +21663,13 @@ function renderRevMapping() {
     <h3>Their columns → our fields</h3>
     <p class="rev-map-summary" id="rev-map-summary"><strong>${revMapping.length} column${revMapping.length === 1 ? "" : "s"}</strong> in ${esc(revFileLabel || "the file")}:
       ${nMapped} mapped to a field · ${nUnstored} recognised but <strong>not stored (no field here)</strong> · ${nIgnored} ignored.
-      Nothing is read from a column until this table is right. Corrections are remembered <em>in this browser</em> for next week.</p>
+      Nothing is read from a column until this table is right. Corrections are remembered <em>in this browser</em> for next week.
+      ${/* R13 · M-4 — said here rather than only in the row's own "why" line, because the change is
+            to what this screen is CAPABLE of, and the person who was told for a year that the flag
+            had nowhere to go is the person reading this paragraph. */ ""}
+      ${revMapping.some((m) => REV_CARE_FIELDS.includes(m.key))
+        ? `<br><strong id="rev-map-vuln-note">The vulnerable-customer column now lands.</strong> It used to be listed here as “not stored (no field here)” — the client record holds a vulnerability flag and a note, and this file writes to both. A “no” in that column is never written: it proposes nothing, so a flag somebody set here by hand is never cleared by a spreadsheet.`
+        : ""}</p>
     <div class="rev-map-scroll"><table class="rev-map-table">
       <thead><tr><th>Their header</th><th>Our field</th><th>First value in the file</th></tr></thead>
       <tbody>${revMapping.map((m) => `
@@ -20230,7 +21729,13 @@ function revRowDetailHtml(r) {
       ${r.skipped ? ' <span class="badge grey">skipped</span>' : ""}</div>`);
   }
   if (!r.clientId && revRowIncluded(r)) {
+    /* R13 · M-4 — the care flag is called out on its own, with the same "will be set" badge the
+       new-case diff uses, rather than being a fourth item in a dot-separated string. A Consumer
+       Duty flag arriving on a client this file is about to create is worth its own line. */
     bits.push(`<p class="rev-nostore">Creates a client: <strong>${esc(revRowName(r))}</strong>${r.v.date_of_birth ? ` · DOB ${esc(fmtD(r.v.date_of_birth))}` : ""}${r.g.email ? ` · ${esc(r.g.email)}` : ""}${r.address ? ` · ${esc(r.address)}` : ""}</p>`);
+    if (r.v.is_vulnerable === true || r.v.vulnerability_note) {
+      bits.push(`<p class="rev-nostore" data-rev-care="new"><strong>Vulnerable client${r.v.is_vulnerable === true ? "" : " note"}:</strong> ${r.v.vulnerability_note ? esc(r.v.vulnerability_note) : "flagged in the export, no reason given"} <span class="badge blue">will be set</span></p>`);
+    }
   }
   if (r.clientId && (r.clientDiff || []).some((d) => d.state !== "same")) bits.push(revDiffTableHtml(r, r.clientDiff.filter((d) => d.state !== "same"), "client"));
   if (r.caseMatch) {
@@ -20327,7 +21832,13 @@ function renderRevPreview() {
    address and may not be the security property, so the sync never touches the
    property column (it says so on screen too). */
 async function revFetchClients() {
-  const { data, error } = await db.from("clients").select("id,first_name,last_name,email,phone,address,date_of_birth");
+  /* R13 · M-4 — the care columns are NAMED only where they exist. Naming them unconditionally
+     would 42703 this read on a database that has not taken the migration and empty the whole
+     screen; the mapping builder has already downgraded those columns to "not stored" in that
+     case, so there is nothing here that needs them. */
+  const careOn = (await careSupported()) === true;
+  const cols = "id,first_name,last_name,email,phone,address,date_of_birth" + (careOn ? ",is_vulnerable,vulnerability_note" : "");
+  const { data, error } = await db.from("clients").select(cols);
   if (error) { console.error(error); return []; }
   return data || [];
 }
@@ -20380,6 +21891,9 @@ async function revRead() {
   if (!parsed.headers.length || !parsed.rows.length) { $("#rev-status").textContent = ""; return toast("That doesn't look like an export — the first row must be the column headings, with the data under it"); }
   revHeaders = parsed.headers;
   revCells = parsed.rows;
+  // R13 · M-4 — settle the care-column question BEFORE the mapping is built; revBuildMapping reads
+  // the cached answer synchronously and would otherwise map a column this database cannot store.
+  await careSupported();
   revMapping = revBuildMapping(revHeaders);
   $("#rev-status").textContent = "Matching against the book…";
   revClients = await revFetchClients();
@@ -20547,6 +22061,11 @@ async function revApply() {
           email: r.g.email || null, phone: r.g.phone || null,
           date_of_birth: r.v.date_of_birth || null,
           address: r.address || null,
+          /* R13 · M-4 — a NEW client created from the export carries the care flag in with them.
+             Spread conditionally: on a database without the columns the mapping never produced
+             these values, and sending the keys anyway would fail the insert. */
+          ...(CARE_SUPPORTED === true && r.v.is_vulnerable === true ? { is_vulnerable: true } : {}),
+          ...(CARE_SUPPORTED === true && r.v.vulnerability_note ? { vulnerability_note: r.v.vulnerability_note } : {}),
         }).select().single();
         if (ins.error) throw ins.error;
         clientRow = ins.data;

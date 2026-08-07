@@ -115,9 +115,11 @@
               ai-import, parse-offer, assistant, doc-upload, nps-capture
      auth   : getSession, getUser, onAuthStateChange, signInWithPassword,
               signOut, resetPasswordForEmail, updateUser
-     storage: offers bucket (upload, createSignedUrl); case-documents bucket
+     storage: offers bucket (upload, createSignedUrl); client-docs bucket
               (createSignedUrl — R12a·D8, the admin "open" link on a checklist
-              row a client uploaded through doc-upload)
+              row a client uploaded through doc-upload; R13 — the bucket is
+              named `client-docs` in production, NOT `case-documents` as R12a
+              shipped it here; see "R13 · BUCKET CORRECTION" below)
 
    ROUND 12a (D8 — signed-URL open link on a received checklist document):
      · No new mock surface was needed: `storage.from(bucket)` was already
@@ -129,6 +131,46 @@
        marked received over email/phone has no file, and `storage_path` is how
        the app tells the two apart (see case_documents fixtures, search
        "R12a·D8").
+
+   ROUND 13 · BUCKET CORRECTION (a real production defect R12a's mock hid):
+     · Production has NO "case-documents" bucket. The real buckets are
+       web / offers / client-docs. The deployed doc-upload edge function (a)
+       uses bucket "client-docs", (b) stores paths as
+       `<caseId>/<slug>-<ts>.<ext>` INSIDE the bucket, and (c) writes
+       `case_documents.storage_path` WITH the bucket prefix on it:
+       `client-docs/<caseId>/<file>`. Every fixture storage_path below is
+       re-prefixed the same way, `DOC_STORAGE_BUCKET` is now "client-docs",
+       and the doc-upload stub writes the prefixed form on a real upload
+       (search "R13 · BUCKET CORRECTION" below for both). `storage.from(bucket)`
+       needed no change — it was already bucket-name-agnostic — but every
+       piece of fixture content keyed into `storageFiles` moved with the
+       bucket rename. `tests/r12a.js` D8 still asserts the OLD
+       "case-documents/<path>" signed-URL shape and is not this file's to
+       edit; that one check is now expected to fail — see HARNESS.md / the
+       handoff notes for the exact line.
+     · `clients` gains `is_vulnerable` (bool), `vulnerability_note` (text) and
+       `suppress_automation` (bool), mirroring app.js's CARE_COLS. Suppression
+       is enforced in every automated queueing path that actually exists in
+       this mock (see "R13 · SUPPRESSION" below for the exact list and the
+       honest gaps — some settings-gated sends production has were never
+       built here and still are not).
+     · `cases` gains four nullable, writable columns with no backfill:
+       `policy_start_date`, `exchange_date`, `offer_issued_date`,
+       `repayment_method`.
+     · Two new tables: `staff_absences` (id, profile_id, starts_on, ends_on,
+       note, created_by, created_at — staff read; write is own-row or
+       admin/owner, mirroring the `profiles` self-edit policy) and
+       `case_files` (id, case_id, client_id, name, kind, storage_path,
+       uploaded_by, created_at — staff all).
+     · `settings` gains `last_full_export_at` and `last_cron_run_at` (M-42/
+       M-43). `process-emails` UPSERTs `last_cron_run_at` on every FULL
+       (unscoped) run, never on a scoped one.
+     · `run_watchtower` is replaced wholesale with production's ten rules —
+       see "R13 · WATCHTOWER" below. The old seven-rule set this file used to
+       run (rate_ended, erc_conflict, no_adviser, protection_gap, stalled,
+       completed_no_date, no_contact) is GONE; two existing tests
+       (tests/r5_batch4.js) hard-assert two of those old rule names on
+       fixture rows and are not this file's to edit — see the handoff notes.
 
    ROUND 12b (retention call-pack, first-run tour, appointment outcomes,
    doc-chase widening — mirrors production migrations deployed just before
@@ -251,7 +293,12 @@
     watch_alerts: [], audit_log: [], duplicate_dismissals: [],
     /* R9-M10 — the document checklist. One row per item we have asked a client
        for, on the case it belongs to. */
-    case_documents: []
+    case_documents: [],
+    /* R13 — staff out-of-office spans (for lead-routing exclusion) and staff-
+       uploaded case files (the checklist above is client-uploaded; this is
+       the mirror for what the FIRM attaches — signed illustrations, offer
+       letters kept as a record, etc.). */
+    staff_absences: [], case_files: []
   };
   var PK = { settings: "key" };
   function pkOf(t) { return PK[t] || "id"; }
@@ -262,6 +309,11 @@
      files a client uploaded, the same way a genuine upload would populate it.
      Keyed "<bucket>/<path>", same as the `storage` object writes below. */
   var storageFiles = {};
+  /* R13 · BUCKET CORRECTION — module-scope so both the fixture pass (which
+     seeds content into `storageFiles`) and the doc-upload handler (which
+     writes a real upload into it) agree on the same bucket name. Production's
+     real bucket, not R12a's invented "case-documents". */
+  var DOC_STORAGE_BUCKET = "client-docs";
 
   /* ------------------------------------------------- migrations M1-M7 (parity)
      Every migration the app feature-detects is mirrored here and is ON by default,
@@ -663,6 +715,39 @@
       }
       return null;
     }
+    /* R13 — case_files: staff all. Nobody outside the firm (an introducer never
+       reaches /admin at all — see the staff login gate) touches this table. */
+    if (table === "case_files") {
+      if (!isStaff()) {
+        return pgError('new row violates row-level security policy for table "case_files"', "42501");
+      }
+      return null;
+    }
+    /* R13 — staff_absences: staff read (see readFilter), but a write is only
+       ever your OWN row, or an Owner/Administrator's on anybody's — the same
+       shape as the M1 "profiles self edit" policy just above, because
+       recording somebody else's absence for them is exactly the kind of edit
+       that has to be traceable to whoever actually made it, unless they run
+       the firm. */
+    if (table === "staff_absences") {
+      if (!isStaff()) {
+        return pgError('new row violates row-level security policy for table "staff_absences"', "42501");
+      }
+      if (isAdminOrOwner()) return null;
+      if (op === "insert") {
+        var apay = payload || {};
+        if (apay.profile_id !== CURRENT_UID) {
+          return pgError('new row violates row-level security policy for table "staff_absences"', "42501");
+        }
+        return null;
+      }
+      /* update / delete — every target must already be the caller's own row */
+      var ownAll = (targets || []).length > 0 && (targets || []).every(function (t) { return t.profile_id === CURRENT_UID; });
+      if (!ownAll) {
+        return pgError('new row violates row-level security policy for table "staff_absences"', "42501");
+      }
+      return null;
+    }
     if (table === "settings" && !isOwner()) {
       return pgError('new row violates row-level security policy for table "settings"', "42501");
     }
@@ -708,6 +793,11 @@
        business seeing it. The client's own view of it comes from the doc-upload
        function on the service role, not from a policy here. */
     if (table === "case_documents" && !isStaff()) return [];
+    /* R13 — "staff read" / "staff all": staff_absences and case_files are
+       both firm-internal records with no client- or introducer-facing view
+       anywhere in the app. */
+    if (table === "staff_absences" && !isStaff()) return [];
+    if (table === "case_files" && !isStaff()) return [];
     return rows;
   }
 
@@ -722,14 +812,18 @@
      put duplicate_dismissals there: every new table gets the trigger. Marking a
      document "received" or "waived" is a decision about whether a file is
      complete, and who made it is worth keeping. */
+  /* R13 — staff_absences and case_files join the audited set under the same
+     round-4 rule that put duplicate_dismissals and case_documents there:
+     every new table gets the trigger. */
   var AUDITED = ["clients", "cases", "case_tasks", "case_notes", "appointments", "settings", "profiles",
-    "introducers", "duplicate_dismissals", "watch_alerts", "case_documents"];
+    "introducers", "duplicate_dismissals", "watch_alerts", "case_documents",
+    "staff_absences", "case_files"];
   var AUDIT_HIDDEN = "(hidden)";
   var AUDIT_TABLE_WORD = {
     clients: "client", cases: "case", case_tasks: "task", case_notes: "note",
     appointments: "appointment", settings: "setting", profiles: "login", introducers: "introducer",
     duplicate_dismissals: "not-a-duplicate mark", watch_alerts: "watchtower alert",
-    case_documents: "document"
+    case_documents: "document", staff_absences: "absence", case_files: "file"
   };
   function rowLabel(table, row) {
     if (!row) return "";
@@ -746,6 +840,11 @@
     if (table === "profiles") return row.full_name || row.email || row.id;
     if (table === "introducers") return row.name || row.id;
     if (table === "case_documents") return row.item || row.id;
+    if (table === "staff_absences") {
+      var absP = DB.profiles.filter(function (p) { return p.id === row.profile_id; })[0];
+      return (absP ? (absP.full_name || absP.email) : row.profile_id) + " — " + row.starts_on + " to " + row.ends_on;
+    }
+    if (table === "case_files") return row.name || row.id;
     // G1N-5 — the alert's own title, so the summary reads "<who> updated watch_alerts
     // "James Whitfield — ERC outlasts the rate"" rather than a row id.
     if (table === "watch_alerts") return row.title || row.dedupe_key || row.id;
@@ -869,7 +968,8 @@
     appointments: "ap", email_queue: "eq", sms_queue: "sq", case_emails: "ce",
     fact_finds: "ff", leads: "ld", introducers: "in", profiles: "pr",
     watch_alerts: "wa", audit_log: "au", duplicate_dismissals: "dd",
-    case_documents: "cd"
+    case_documents: "cd",
+    staff_absences: "sa", case_files: "cf"
   };
   function applyInsertDefaults(table, row) {
     var r = clone(row);
@@ -889,11 +989,26 @@
          the retention call-pack numerics the same way: they exist, empty,
          on a case the app creates — nobody types a reversion rate in on the
          New Case form. */
+      /* R13 — policy_start_date / exchange_date / offer_issued_date /
+         repayment_method land with no backfill, same as every other M-round
+         column above: null on every row until something records it. */
       ["lost_reason", "lost_detail", "broker_fee_paid_at", "proc_fee_paid_at", "sols_fee_paid_at", "property_address",
         "waiting_on", "solicitor_firm", "doc_token", "referrer_client_id",
-        "current_balance", "reversion_rate", "monthly_payment", "erc_amount"]
+        "current_balance", "reversion_rate", "monthly_payment", "erc_amount",
+        "policy_start_date", "exchange_date", "offer_issued_date", "repayment_method"]
         .forEach(function (f) { if (r[f] === undefined) r[f] = null; });
     }
+    /* R13 — the care columns exist on every client row, false/null/false until
+       the client-detail form (or the reviewer sync) sets them. */
+    if (table === "clients") {
+      if (r.is_vulnerable === undefined) r.is_vulnerable = false;
+      if (r.vulnerability_note === undefined) r.vulnerability_note = null;
+      if (r.suppress_automation === undefined) r.suppress_automation = false;
+    }
+    /* R13 — staff_absences: nothing is optional but the note, which is free text. */
+    if (table === "staff_absences" && r.note === undefined) r.note = null;
+    /* R13 — case_files: `kind` is a free-text label ("ID", "Payslip", …), optional. */
+    if (table === "case_files" && r.kind === undefined) r.kind = null;
     /* R9-M10 — a checklist item starts life REQUESTED, stamped with the moment
        it was asked for, with nothing received against it. */
     if (table === "case_documents") {
@@ -1041,7 +1156,21 @@
     sms_enabled: "off",
     sms_provider: "twilio",
     sms_from: "NexMoney",
-    cron_key: "cron_9f2b41ce77a04e13b6d5"
+    cron_key: "cron_9f2b41ce77a04e13b6d5",
+    /* R13 · M-42 — the backup nag. Empty string, not null/absent: this is a
+       firm that has NEVER exported, which is the "never" state the nag's
+       copy has to render (as opposed to a database that hasn't taken the
+       migration at all, which is feature-detected on the KEY being absent —
+       see app.js's hasOwnProperty check — and this key is always present). */
+    last_full_export_at: "",
+    /* R13 · M-43 — the cron heartbeat. Noon-pinned, ~3 days ago: comfortably
+       past the 48h staleness threshold, so the amber "may be silently stuck"
+       state is the harness default and is testable without a test having to
+       manufacture staleness itself. process-emails UPSERTs this on every
+       FULL (unscoped) run — see the process-emails stub — so a battery that
+       runs an unscoped send will move this value forward; nothing in the
+       existing suites relies on it staying exactly 3 days stale. */
+    last_cron_run_at: iso(shiftNoon(-3))
   };
   Object.keys(SETTINGS_SEED).forEach(function (k) {
     DB.settings.push({ key: k, value: SETTINGS_SEED[k], updated_at: iso(shift(-30)) });
@@ -1102,6 +1231,19 @@
      Clients 2 and 3 are exempt from the blanking: they are the strong duplicate
      pair and their matching DOB is what makes that match strong. */
   var HAS_DOB = function (i) { return i === 2 || i === 3 || (i % 5 !== 3 && i % 5 !== 4); };
+  /* R13 · CARE COLUMNS (Consumer Duty) — `is_vulnerable` / `vulnerability_note` /
+     `suppress_automation`, mirroring app.js's CARE_COLS. Two fixture rows carry
+     something other than the false/null/false default, chosen deliberately:
+       · i===11 (Priya Nadkarni) — vulnerable, WITH a note, AND suppressed. A
+         completed-book client (indices 10..27 get a completed case below) with
+         an email on file, so suppression is actually observable in the queueing
+         paths that would otherwise mail her (review request/reminder, rate-end
+         reminder if she ever gets a retention successor).
+       · i===20 (Hannah Verity) — suppressed but NOT vulnerable: the "do not
+         contact" case, a business decision with no care reason behind it. Also
+         completed-book, also has an email, for the same observability reason.
+     Everyone else stays false/null/false — the untouched default a real book
+     is mostly made of. */
   CLIENT_SEED.forEach(function (c, i) {
     DB.clients.push({
       id: nid("cl"),
@@ -1109,6 +1251,9 @@
       date_of_birth: HAS_DOB(i) ? dateOnly(new Date(NOW.getFullYear() - c[4], (i * 7) % 12, ((i * 5) % 27) + 1)) : null,
       address: c[5], notes: null,
       sms_opt_out: i === 9 || i === 21, marketing_opt_out: i === 7 || i === 30,
+      is_vulnerable: i === 11,
+      vulnerability_note: i === 11 ? "Recently bereaved — prefers correspondence by post, not phone; give extra time on decisions." : null,
+      suppress_automation: i === 11 || i === 20,
       created_at: iso(shift(-(400 - i * 8))), updated_at: iso(shift(-(120 - (i % 90))))
     });
   });
@@ -1189,6 +1334,15 @@
       reversion_rate: o.reversion_rate == null ? null : o.reversion_rate,
       monthly_payment: o.monthly_payment == null ? null : o.monthly_payment,
       erc_amount: o.erc_amount == null ? null : o.erc_amount,
+      /* r13 — policy_start_date / exchange_date / offer_issued_date /
+         repayment_method. Four more nullable, writable columns with no
+         backfill — null on nearly every row on purpose, exactly like the
+         r12b call-pack numerics above. See the r13 fixture pass below for
+         the handful of rows that carry real values. */
+      policy_start_date: o.policy_start_date || null,
+      exchange_date: o.exchange_date || null,
+      offer_issued_date: o.offer_issued_date || null,
+      repayment_method: o.repayment_method || null,
       created_at: o.created_at || iso(shift(-30)),
       updated_at: o.updated_at || o.created_at || iso(shift(-10))
     };
@@ -1994,6 +2148,7 @@
         id: nid("cl"), first_name: first, last_name: last, email: email, phone: phone,
         date_of_birth: dateOnly(new Date(NOW.getFullYear() - ageYears, 3, 17)),
         address: address, notes: null, sms_opt_out: false, marketing_opt_out: false,
+        is_vulnerable: false, vulnerability_note: null, suppress_automation: false,
         created_at: iso(shift(-madeDaysAgo)), updated_at: iso(shift(-Math.round(madeDaysAgo / 4)))
       };
       DB.clients.push(c);
@@ -2210,6 +2365,7 @@
         id: nid("cl"), first_name: o.first, last_name: o.last, email: o.email, phone: o.phone,
         date_of_birth: o.dob || null, address: o.address, notes: null,
         sms_opt_out: false, marketing_opt_out: false,
+        is_vulnerable: false, vulnerability_note: null, suppress_automation: false,
         created_at: iso(o.created), updated_at: iso(o.updated || o.created)
       };
       DB.clients.push(c);
@@ -2558,10 +2714,19 @@
        no storage_path at all — that is the field the app uses to decide whether
        an "open" link renders, not the status, and at least one fixture row below
        is deliberately left that way (see "received by EMAIL" below). */
-    var DOC_STORAGE_BUCKET = "case-documents";
+    /* R13 · BUCKET CORRECTION — the bucket is "client-docs" in production, not
+       "case-documents". `case_documents.storage_path` is written WITH the
+       bucket prefix on it (that's the real contract — see the file banner),
+       so `seedDocFile` now returns the PREFIXED value for the fixture row
+       while `storageFiles` keeps keying "<bucket>/<path-in-bucket>" exactly
+       as `storage.from(bucket)` below writes it — the two agree because
+       DOC_STORAGE_BUCKET + "/" + path === the prefixed value returned.
+       DOC_STORAGE_BUCKET itself is declared at module scope now (search
+       "storage object registry" near the top of this file) — the doc-upload
+       handler needs to reach the exact same constant. */
     var seedDocFile = function (path, sizeBytes) {
       storageFiles[DOC_STORAGE_BUCKET + "/" + path] = { size: sizeBytes || 84213, type: "application/pdf", at: iso(shift(-7)) };
-      return path;
+      return DOC_STORAGE_BUCKET + "/" + path;
     };
 
     /* ---- (a) the four checklists ----------------------------------------- */
@@ -2919,6 +3084,119 @@
     }
   })();
 
+  /* =========================================================================
+     ROUND 13 FIXTURES — the four new `cases` columns (policy_start_date /
+     exchange_date / offer_issued_date / repayment_method), staff_absences,
+     case_files. (Client care columns are seeded in-line on the CLIENT_SEED
+     pass above, and the two new settings keys in the SETTINGS_SEED block —
+     search "R13" in each.)
+
+     Same constraint as every fixture pass since round 9: no new clients, no
+     new cases — everything here is written onto rows that already exist, so
+     every count the rest of the battery depends on stays exactly where round
+     12b left it.
+     ========================================================================= */
+  (function roundThirteenFixtures() {
+    var nameOf = function (cid) {
+      var c = DB.clients.filter(function (x) { return x.id === cid; })[0];
+      return c ? [c.first_name, c.last_name].filter(Boolean).join(" ") : "";
+    };
+    var caseFor = function (client, stage) {
+      return DB.cases.filter(function (c) {
+        return nameOf(c.client_id) === client && (!stage || c.stage === stage);
+      })[0] || null;
+    };
+    var monthsAgo = function (n) { return dateOnly(new Date(NOW.getFullYear(), NOW.getMonth() - n, NOW.getDate())); };
+
+    /* ---- (a) policy_start_date — two of the three policy_taken/completed
+       cases the book already carries (Tom Beresford, Elaine Mowbray, Bruce
+       Lindquist — all PROT[idx%5===3] from the completedCases loop). Bruce is
+       left untouched on purpose: "most stay null" is the honest state a
+       data-quality panel needs something to render against. */
+    var tom = caseFor("Tom Beresford", "completed");
+    /* inside the 24-month clawback window, ~4 months of it left to run */
+    if (tom) tom.policy_start_date = monthsAgo(20);
+    var elaine = caseFor("Elaine Mowbray", "completed");
+    /* outside the clawback window entirely */
+    if (elaine) elaine.policy_start_date = monthsAgo(26);
+    /* Bruce Lindquist (policy_taken, completed) — policy_start_date stays
+       null: the third policy_taken/completed case, deliberately untouched. */
+
+    /* ---- (b) repayment_method — two completed cases, one of each value,
+       from clients otherwise untouched by any earlier fixture pass. */
+    var owen = caseFor("Owen Cadwallader", "completed");
+    if (owen) owen.repayment_method = "repayment";
+    var nadia = caseFor("Nadia Hussain", "completed");
+    if (nadia) nadia.repayment_method = "interest_only";
+
+    /* ---- (c) offer_issued_date / exchange_date — one case at each of
+       those two live stages. */
+    var amara = caseFor("Amara Okonkwo", "offer");
+    if (amara) amara.offer_issued_date = dateOnly(shift(-9));
+    var harold = caseFor("Harold Mainwaring", "exchange");
+    if (harold) harold.exchange_date = dateOnly(shift(-4));
+
+    /* ---- (d) staff_absences — p3 Luke Richards, absent TODAY spanning a
+       few fixed days (started yesterday, runs two more), so lead-routing
+       exclusion is testable against a stable, non-flaky window. Plus one
+       past absence, so the table is not a single-row fixture. Noon-pinned
+       per house rules (see shiftNoon() and the R11/R12b flake-fix notes) —
+       `created_at` is a timestamp, `starts_on`/`ends_on` are dates and need
+       no time component at all. */
+    DB.staff_absences.push({
+      id: nid("sa"), profile_id: "p3",
+      starts_on: dateOnly(shift(-1)), ends_on: dateOnly(shift(2)),
+      note: "Annual leave", created_by: "p3", created_at: iso(shiftNoon(-6))
+    });
+    DB.staff_absences.push({
+      id: nid("sa"), profile_id: "p3",
+      starts_on: dateOnly(shift(-40)), ends_on: dateOnly(shift(-37)),
+      note: "Conference — out of office", created_by: "p4", created_at: iso(shiftNoon(-45))
+    });
+
+    /* ---- (e) case_files — 1-2 fixture rows with a real blob behind them,
+       mirroring the case_documents pattern (search "R12a·D8 — seed real
+       storage content" above): a real `storageFiles` entry keyed
+       "client-docs/files/<caseId>/…", the same shape a genuine app upload
+       via supabase-js storage.upload() would leave, so createSignedUrl on
+       either of these exercises a file that is actually there. */
+    var CASE_FILES_BUCKET = "client-docs";
+    var seedCaseFile = function (caseId, clientId, name, kind, path, uploadedBy, daysAgo) {
+      var full = CASE_FILES_BUCKET + "/files/" + caseId + "/" + path;
+      storageFiles[full] = { size: 42117, type: "application/pdf", at: iso(shift(-daysAgo)) };
+      DB.case_files.push({
+        id: nid("cf"), case_id: caseId, client_id: clientId, name: name, kind: kind,
+        storage_path: full, uploaded_by: uploadedBy, created_at: iso(shift(-daysAgo))
+      });
+    };
+    if (tom) seedCaseFile(tom.id, tom.client_id, "Signed mortgage illustration.pdf", "Illustration", "illustration.pdf", "p2", 200);
+    if (amara) seedCaseFile(amara.id, amara.client_id, "Offer letter — Amara Okonkwo.pdf", "Offer letter", "offer-letter.pdf", "p3", 9);
+
+    /* ---- (f) three small, deliberate nudges so the new run_watchtower rule
+       set (below, search "R13 · FULL-FIDELITY MIRROR") has real fixture
+       content to fire on rather than reading zero across the book for a
+       brand-new rule — every other row this pass touches was already
+       exercising something; these three exist FOR the watchtower mirror:
+         · ca031 (Ruby Sinclair, offer stage, protection_status 'quoted') —
+           an ad hoc protection_quoted_at 20 days ago, so protection_quote_stale
+           has one row on the ">14 days, not yet completed" branch as well as
+           the "no date, completed" branch the fixture book already has four
+           of.
+         · ca058 (Gareth Pollard, one of his three live cases, offer stage) —
+           offer_expiry_date pulled in to 10 days away, so offer_stale has a
+           CRITICAL row (≤14 days) rather than reading zero across a book
+           where every other live offer expires 8+ weeks out.
+         · ca061 (application stage) — submitted_at cleared, so
+           app_not_submitted has one row rather than reading zero across a
+           book where every other application-stage case already has one. */
+    var ruby031 = DB.cases.filter(function (c) { return c.id === "ca031"; })[0];
+    if (ruby031) ruby031.protection_quoted_at = iso(shift(-20));
+    var pollard058 = DB.cases.filter(function (c) { return c.id === "ca058"; })[0];
+    if (pollard058) pollard058.offer_expiry_date = dateOnly(shift(10));
+    var app061 = DB.cases.filter(function (c) { return c.id === "ca061"; })[0];
+    if (app061) app061.submitted_at = null;
+  })();
+
   /* --- case_events: give the live cases a stage history ------------------ */
   var STAGE_ORDER = ["enquiry", "fact_find", "decision_in_principle", "application", "offer", "exchange", "completed"];
   DB.cases.forEach(function (c) {
@@ -2981,66 +3259,258 @@
 
   /* =========================================================================
      WATCHTOWER — computed rules over the fixtures (idempotent, re-runnable)
+
+     R13 · FULL-FIDELITY MIRROR of production's `run_watchtower` — see
+     /root/fleet/run_watchtower_prod_rules.md. This replaces the mock's old,
+     different seven-rule set (rate_ended, erc_conflict, no_adviser,
+     protection_gap, stalled, completed_no_date, no_contact — none of which
+     production actually has) with production's real ten:
+       1. offer_stale            — per-case, dedupe offer_stale:<case_id>
+       2. app_not_submitted      — per-case, dedupe app_not_submitted:<case_id>
+       3. exchange_no_chase      — per-case, dedupe exchange_no_chase:<case_id>
+       4. lead_slow              — per-lead, dedupe lead_slow:<lead_id>
+       5. email_unanswered       — per-email, dedupe email_unanswered:<email_id>
+       6. fee_aging              — per-case, dedupe fee_aging:<case_id>
+       7. workload               — per-staff, dedupe workload:<profile_id>
+       8. retention_gap          — AGGREGATE, one row, dedupe retention_gap:global
+       9. fee_aging_60           — AGGREGATE, one row, dedupe fee_aging_60
+      10. protection_quote_stale — per-case, dedupe protection_quote_stale:<case_id>
+
+     `email_unanswered` reads `case_emails` — the mock already models an
+     inbound-email table under that exact name (triage_status/received_at,
+     seeded a few rows up — search "case_emails (inbound, Outlook sync)"),
+     so this rule is real, not modelled against a substitute or skipped.
+
+     `lead_slow`'s production detail branch on `leads.acknowledged_at` is NOT
+     mirrored: this mock's `leads` table has never carried that column (only
+     `first_contact_at` / `discard_reason` from earlier rounds), and adding a
+     new column purely to light up one sentence of alert copy was out of
+     scope for this pass. Stated here rather than guessed at — the rule
+     itself (status/age/severity/dedupe) is otherwise exact.
+
+     `protection_quote_stale` reads `cases.protection_quoted_at`, a column
+     this mock has never formally declared (mkCase() does not default it) —
+     it exists only because app.js already writes it ad hoc via `.update()`
+     when a case is marked "quoted" (see tests/r12a.js § D9), and the mock's
+     update path merges arbitrary payload keys onto a row without a fixed
+     schema. Rows never touched by that code path simply have it undefined,
+     which this rule treats identically to null (no quote date recorded).
+
+     Every rule below upserts on `dedupe_key`, mirroring production's
+     `ON CONFLICT (dedupe_key) DO UPDATE SET severity, title, detail,
+     last_seen_at, resolved_at` — it never writes the M3 snooze columns,
+     which is exactly why a snooze survives every Run checks / cron pass.
      ======================================================================= */
   function watchtowerRules() {
     var out = [];
     var today = TODAY;
+    var nowMs = NOW.getTime();
+    var GBP = function (n) { return "£" + Math.round(n).toLocaleString("en-GB"); };
+
+    /* 1 · offer_stale — stage 'offer', expiry within 30 days (crit ≤14) OR no
+       expiry recorded and untouched for 30+ days (warn). */
     DB.cases.forEach(function (c) {
-      var cl = DB.clients.filter(function (x) { return x.id === c.client_id; })[0] || {};
-      var nm = [cl.first_name, cl.last_name].filter(Boolean).join(" ") || "(no name)";
-      var live = ["completed", "not_proceeding"].indexOf(c.stage) === -1;
-      if (c.rate_end_date && c.rate_end_date < today && c.stage === "completed" && !c.rate_reminder_queued_at) {
-        out.push({ rule: "rate_ended", severity: "crit", case_id: c.id, client_id: c.client_id,
-          title: nm + " — the rate has already ended", detail: "Rate ended " + c.rate_end_date + " and no reminder has been sent." });
-      }
-      if (c.erc_end_date && c.rate_end_date && c.erc_end_date > c.rate_end_date) {
-        out.push({ rule: "erc_conflict", severity: "crit", case_id: c.id, client_id: c.client_id,
-          title: nm + " — ERC outlasts the rate", detail: "ERC runs to " + c.erc_end_date + " but the rate ends " + c.rate_end_date + "." });
-      }
-      if (live && !c.assigned_to) {
-        out.push({ rule: "no_adviser", severity: "warn", case_id: c.id, client_id: c.client_id,
-          title: nm + " — live case with no adviser", detail: "Stage " + c.stage + " and nobody owns it." });
-      }
-      if (live && ["application", "offer"].indexOf(c.stage) >= 0 && (c.protection_status || "not_discussed") === "not_discussed") {
-        out.push({ rule: "protection_gap", severity: "info", case_id: c.id, client_id: c.client_id,
-          title: nm + " — protection not discussed", detail: "Case is at " + c.stage + " with no protection conversation recorded." });
-      }
-      if (live && (NOW - new Date(c.updated_at)) / DAY > 45) {
-        out.push({ rule: "stalled", severity: "warn", case_id: c.id, client_id: c.client_id,
-          title: nm + " — case has not moved in 45+ days", detail: "Last touched " + String(c.updated_at).slice(0, 10) + "." });
-      }
-      if (c.stage === "completed" && !c.completed_at) {
-        out.push({ rule: "completed_no_date", severity: "warn", case_id: c.id, client_id: c.client_id,
-          title: nm + " — completed with no completion date", detail: "Invisible to every completions report until it is filled in." });
+      if (c.stage !== "offer") return;
+      var nm = clientName(c.client_id);
+      if (c.offer_expiry_date) {
+        var days = Math.round((new Date(c.offer_expiry_date + "T12:00:00").getTime() - new Date(today + "T12:00:00").getTime()) / DAY);
+        if (days > 30) return;
+        out.push({
+          rule: "offer_stale", severity: days <= 14 ? "crit" : "warn", case_id: c.id, client_id: c.client_id,
+          title: "Offer expiry risk: " + nm,
+          detail: "Offer expires " + c.offer_expiry_date + " (" + days + (days === 1 ? " day" : " days") + ")",
+          dedupe_key: "offer_stale:" + c.id
+        });
+      } else {
+        if ((nowMs - new Date(c.updated_at).getTime()) / DAY <= 30) return;
+        out.push({
+          rule: "offer_stale", severity: "warn", case_id: c.id, client_id: c.client_id,
+          title: "Offer expiry risk: " + nm,
+          detail: "In offer stage since " + String(c.updated_at).slice(0, 10) + " with no expiry date recorded",
+          dedupe_key: "offer_stale:" + c.id
+        });
       }
     });
-    DB.clients.forEach(function (cl) {
-      if (!cl.email && !cl.phone) {
-        out.push({ rule: "no_contact", severity: "crit", case_id: null, client_id: cl.id,
-          title: [cl.first_name, cl.last_name].filter(Boolean).join(" ") + " — no way to contact them",
-          detail: "No email address and no phone number on file." });
-      }
+
+    /* 2 · app_not_submitted — stage 'application', submitted_at null,
+       untouched for 3+ days. */
+    DB.cases.forEach(function (c) {
+      if (c.stage !== "application" || c.submitted_at) return;
+      if ((nowMs - new Date(c.updated_at).getTime()) / DAY <= 3) return;
+      out.push({
+        rule: "app_not_submitted", severity: "warn", case_id: c.id, client_id: c.client_id,
+        title: "Application not yet submitted: " + clientName(c.client_id),
+        detail: "At Application since " + String(c.updated_at).slice(0, 10) + " and not yet marked submitted.",
+        dedupe_key: "app_not_submitted:" + c.id
+      });
     });
+
+    /* 3 · exchange_no_chase — stage 'exchange', no open 'Chase solicitors%'
+       task and none completed in the last 14 days. */
+    DB.cases.forEach(function (c) {
+      if (c.stage !== "exchange") return;
+      var openChase = DB.case_tasks.some(function (t) {
+        return t.case_id === c.id && !t.done_at && /^Chase solicitors/.test(t.title || "");
+      });
+      if (openChase) return;
+      var recentlyDone = DB.case_tasks.some(function (t) {
+        return t.case_id === c.id && t.done_at && /^Chase solicitors/.test(t.title || "") &&
+          (nowMs - new Date(t.done_at).getTime()) / DAY <= 14;
+      });
+      if (recentlyDone) return;
+      out.push({
+        rule: "exchange_no_chase", severity: "warn", case_id: c.id, client_id: c.client_id,
+        title: "No solicitor chase on file: " + clientName(c.client_id),
+        detail: "At Exchange with no open \"Chase solicitors\" task, and none completed in the last 14 days.",
+        dedupe_key: "exchange_no_chase:" + c.id
+      });
+    });
+
+    /* 4 · lead_slow — status 'new', created over an hour ago, never contacted. */
+    DB.leads.forEach(function (l) {
+      if (l.status !== "new" || l.first_contact_at) return;
+      var ageH = (nowMs - new Date(l.created_at).getTime()) / 3600000;
+      if (ageH <= 1) return;
+      out.push({
+        rule: "lead_slow", severity: ageH > 24 ? "crit" : "warn",
+        case_id: null, client_id: null, lead_id: l.id,
+        title: "Lead not yet contacted: " + (l.name || "(no name)"),
+        detail: "Received " + Math.floor(ageH) + "h ago with no first contact recorded.",
+        dedupe_key: "lead_slow:" + l.id
+      });
+    });
+
+    /* 5 · email_unanswered — case_emails, triage_status 'new', received 24h+ ago. */
+    DB.case_emails.forEach(function (e) {
+      if (e.triage_status !== "new") return;
+      if ((nowMs - new Date(e.received_at).getTime()) / DAY <= 1) return;
+      var cs = DB.cases.filter(function (x) { return x.id === e.case_id; })[0];
+      out.push({
+        rule: "email_unanswered", severity: "warn",
+        case_id: e.case_id, client_id: e.client_id || (cs ? cs.client_id : null),
+        title: "Unanswered email: " + (e.from_email || "(unknown sender)"),
+        detail: "\"" + (e.subject || "(no subject)") + "\" received " + String(e.received_at).slice(0, 10) + " and still marked new.",
+        dedupe_key: "email_unanswered:" + e.id
+      });
+    });
+
+    /* 6 · fee_aging — fee_status 'requested', fee_requested_at 14+ days ago
+       (crit past 30). */
+    DB.cases.forEach(function (c) {
+      if (c.fee_status !== "requested" || !c.fee_requested_at) return;
+      var days = Math.floor((nowMs - new Date(c.fee_requested_at).getTime()) / DAY);
+      if (days <= 14) return;
+      out.push({
+        rule: "fee_aging", severity: days > 30 ? "crit" : "warn", case_id: c.id, client_id: c.client_id,
+        title: "Fee requested and unpaid: " + clientName(c.client_id),
+        detail: "Requested " + String(c.fee_requested_at).slice(0, 10) + " (" + days + " days ago) and still unpaid.",
+        dedupe_key: "fee_aging:" + c.id
+      });
+    });
+
+    /* 7 · workload — staff with 5+ overdue open tasks. */
+    var overdueByStaff = {};
+    DB.case_tasks.forEach(function (t) {
+      if (t.done_at || !t.due_date || t.due_date >= today || !t.assigned_to) return;
+      overdueByStaff[t.assigned_to] = (overdueByStaff[t.assigned_to] || 0) + 1;
+    });
+    Object.keys(overdueByStaff).forEach(function (pid) {
+      var n = overdueByStaff[pid];
+      if (n < 5) return;
+      var p = DB.profiles.filter(function (x) { return x.id === pid; })[0];
+      out.push({
+        rule: "workload", severity: "warn",
+        case_id: null, client_id: null, staff_id: pid,
+        title: "Heavy overdue task load: " + ((p && p.full_name) || pid),
+        detail: n + " tasks overdue.",
+        dedupe_key: "workload:" + pid
+      });
+    });
+
+    /* 8 · retention_gap — AGGREGATE, single row, only when count > 0: cases
+       with a rate ending inside 90 days, no reminder queued, no retention
+       successor already started, not lost. */
+    var retentionGapCases = DB.cases.filter(function (c) {
+      if (c.stage === "not_proceeding" || !c.rate_end_date || c.rate_reminder_queued_at || c.retention_source_case_id) return false;
+      var days = (new Date(c.rate_end_date + "T12:00:00").getTime() - new Date(today + "T12:00:00").getTime()) / DAY;
+      return days >= 0 && days <= 90;
+    });
+    if (retentionGapCases.length > 0) {
+      out.push({
+        rule: "retention_gap", severity: "info", case_id: null, client_id: null,
+        title: "Rates ending soon with no retention case started",
+        detail: retentionGapCases.length + " case" + (retentionGapCases.length === 1 ? "" : "s") +
+          " with a rate ending inside 90 days and no retention successor started.",
+        dedupe_key: "retention_gap:global"
+      });
+    }
+
+    /* 9 · fee_aging_60 — AGGREGATE, single row, only when count > 0:
+       completed 60+ days ago with any of proc/broker/sols still unpaid. */
+    var unpaidCases = DB.cases.filter(function (c) {
+      if (c.stage !== "completed" || !c.completed_at) return false;
+      if ((nowMs - new Date(c.completed_at).getTime()) / DAY <= 60) return false;
+      var brokerUnpaid = c.broker_fee > 0 && !c.broker_fee_paid_at && ["paid", "waived"].indexOf(c.fee_status) === -1;
+      var procUnpaid = c.proc_fee > 0 && !c.proc_fee_paid_at;
+      var solsUnpaid = c.sols_fee > 0 && !c.sols_fee_paid_at;
+      return brokerUnpaid || procUnpaid || solsUnpaid;
+    });
+    if (unpaidCases.length > 0) {
+      var procTotal = 0, brokerTotal = 0, solsTotal = 0;
+      unpaidCases.forEach(function (c) {
+        if (c.proc_fee > 0 && !c.proc_fee_paid_at) procTotal += c.proc_fee;
+        if (c.broker_fee > 0 && !c.broker_fee_paid_at && ["paid", "waived"].indexOf(c.fee_status) === -1) brokerTotal += c.broker_fee;
+        if (c.sols_fee > 0 && !c.sols_fee_paid_at) solsTotal += c.sols_fee;
+      });
+      out.push({
+        rule: "fee_aging_60", severity: "warn", case_id: null, client_id: null,
+        title: "Unpaid fees aged over 60 days",
+        detail: unpaidCases.length + " completed case" + (unpaidCases.length === 1 ? "" : "s") +
+          " with fees unpaid >60 days — " + GBP(procTotal + brokerTotal + solsTotal) +
+          " outstanding (proc " + GBP(procTotal) + " · broker " + GBP(brokerTotal) + " · sols " + GBP(solsTotal) + ")",
+        dedupe_key: "fee_aging_60"
+      });
+    }
+
+    /* 10 · protection_quote_stale — protection_status 'quoted' AND (quoted
+       14+ days ago, OR no quote date recorded and the case is completed). */
+    DB.cases.forEach(function (c) {
+      if (c.protection_status !== "quoted") return;
+      var qAt = c.protection_quoted_at || null;
+      var detail = null;
+      if (qAt) {
+        var days = Math.floor((nowMs - new Date(qAt).getTime()) / DAY);
+        if (days > 14) detail = "Quoted " + String(qAt).slice(0, 10) + " (" + days + "d) with no outcome recorded";
+      } else if (c.stage === "completed") {
+        detail = "Marked quoted with no quote date recorded · case completed " + String(c.completed_at || "").slice(0, 10);
+      }
+      if (!detail) return;
+      out.push({
+        rule: "protection_quote_stale", severity: "warn", case_id: c.id, client_id: c.client_id,
+        title: "Protection quote stale: " + clientName(c.client_id),
+        detail: detail,
+        dedupe_key: "protection_quote_stale:" + c.id
+      });
+    });
+
     return out;
   }
-  /* Production `run_watchtower` upserts on `dedupe_key` with
-        ON CONFLICT (dedupe_key) DO UPDATE SET severity, title, detail,
-                                               last_seen_at, resolved_at
-     — it never writes the M3 snooze columns, which is exactly why a snooze
-     survives every Run checks / cron pass. Mirrored here so PLAN-R5 B5's
-     "snooze survives Run checks" acceptance test is honest. */
-  function dedupeKeyFor(r) { return r.rule + "|" + (r.case_id || "") + "|" + (r.client_id || ""); }
   function runWatchtower() {
     var wanted = watchtowerRules();
     var wantedKeys = {};
-    wanted.forEach(function (r) { wantedKeys[dedupeKeyFor(r)] = r; });
+    wanted.forEach(function (r) { wantedKeys[r.dedupe_key] = r; });
     var byKey = {};
-    DB.watch_alerts.forEach(function (a) { byKey[a.dedupe_key || dedupeKeyFor(a)] = a; });
+    DB.watch_alerts.forEach(function (a) { byKey[a.dedupe_key] = a; });
     var resolved = 0, added = 0;
+    /* auto-resolve sweep — any open alert not named by THIS run's rule set
+       (i.e. whose last_seen_at was not just refreshed to "now" below) closes.
+       Equivalent to comparing last_seen_at against the run start, since every
+       alert this run DOES want gets last_seen_at stamped to now() a few
+       lines down — so anything left with a stale last_seen_at after this
+       loop is exactly "not named this run". */
     DB.watch_alerts.forEach(function (a) {
-      var k = a.dedupe_key || dedupeKeyFor(a);
       if (a.resolved_at) return;
-      if (!wantedKeys[k]) { a.resolved_at = iso(NOW); resolved++; }
+      if (!wantedKeys[a.dedupe_key]) { a.resolved_at = iso(NOW); resolved++; }
     });
     Object.keys(wantedKeys).forEach(function (k) {
       var r = wantedKeys[k];
@@ -3055,8 +3525,10 @@
         return;
       }
       DB.watch_alerts.push({
-        id: nid("wa"), rule: r.rule, severity: r.severity, case_id: r.case_id, client_id: r.client_id,
-        staff_id: null, lead_id: null, dedupe_key: k,
+        id: nid("wa"), rule: r.rule, severity: r.severity,
+        case_id: r.case_id || null, client_id: r.client_id || null,
+        staff_id: r.staff_id || null, lead_id: r.lead_id || null,
+        dedupe_key: k,
         title: r.title, detail: r.detail,
         created_at: iso(NOW), last_seen_at: iso(NOW), resolved_at: null,
         /* M3 */
@@ -3071,21 +3543,18 @@
   /* backdate the seeded alerts so "created" reads sensibly on the drawer */
   DB.watch_alerts.forEach(function (a, i) { a.created_at = iso(shift(-(i % 9) - 1)); });
   /* M3 — one alert already snoozed, so the "N snoozed" header/toggle has a row
-     on first load. Invisible to the pre-round-5 app, which ignores the columns. */
+     on first load. Invisible to the pre-round-5 app, which ignores the columns.
+     R13 — re-pointed from the retired "protection_gap" rule to
+     "protection_quote_stale", production's closest analogue (also an
+     info-adjacent, non-urgent protection-conversation state). */
   (function seedSnooze() {
-    var a = DB.watch_alerts.filter(function (x) { return x.rule === "protection_gap" && !x.resolved_at; })[0];
+    var a = DB.watch_alerts.filter(function (x) { return x.rule === "protection_quote_stale" && !x.resolved_at; })[0]
+      || DB.watch_alerts.filter(function (x) { return x.severity !== "crit" && !x.resolved_at; })[0];
     if (!a) return;
     a.snoozed_until = iso(shift(9));
     a.snooze_note = "Client is abroad until the 12th — protection call booked for their return.";
     a.snoozed_by = "p2";
   })();
-
-  /* HARNESS NOTE (PLAN-R5 § Harness fixes 7) — the rule set above
-     (rate_ended, erc_conflict, no_adviser, protection_gap, stalled,
-     completed_no_date, no_contact) is NOT production's `run_watchtower` rule set
-     (offer_stale, app_not_submitted, exchange_no_chase, lead_slow,
-     email_unanswered, fee_aging, workload, retention_gap). Snooze is
-     rule-agnostic so round 5 is unaffected; logged for a future parity pass. */
 
   /* =========================================================================
      v_alerts — a computed view over cases + clients
@@ -3770,20 +4239,28 @@
   };
 
   /* =========================================================================
-     STORAGE — `offers` (offer-letter PDFs) and `case-documents` (R12a·D8,
-     the checklist files a client sends back through their upload link).
+     STORAGE — `offers` (offer-letter PDFs), `client-docs` (R12a·D8 / R13,
+     the checklist files a client sends back through their upload link, and
+     the case_files staff-uploaded blobs — see "R13 · case_files" below), and
+     `web` (unused by anything the mock exercises).
      `storage.from(bucket)` below is bucket-name-agnostic by construction — it
      was written once for `offers` and never validates the bucket string — so
-     no code change was needed to make `case-documents` work; what WAS missing
-     was any seeded content to open. See the fixture block (search
-     "R12a·D8 — seed real storage content") for the two checklist files that
-     now have a real entry in `storageFiles`, so `createSignedUrl` on them
-     exercises the same path a genuine upload would have taken, not just an
-     empty path string with nothing behind it. Semantics are identical to
-     `offers`: `createSignedUrl` does not check that the object exists (same
-     looseness offers already had — not something this pass introduces or
-     tightens), so a test asserting the open-link flow has to do it via the
-     encoded fragment URL / `storageFiles` entry, not via actually fetching it.
+     no code change was needed to make a second/third bucket work; what WAS
+     missing was any seeded content to open. See the fixture block (search
+     "R12a·D8 — seed real storage content") for the checklist files that have
+     a real entry in `storageFiles`, so `createSignedUrl` on them exercises
+     the same path a genuine upload would have taken, not just an empty path
+     string with nothing behind it. Semantics are identical across buckets:
+     `createSignedUrl` does not check that the object exists (same looseness
+     `offers` already had — not something this pass introduces or tightens),
+     so a test asserting an open-link flow has to do it via the encoded
+     fragment URL / `storageFiles` entry, not via actually fetching it.
+     R13 · BUCKET CORRECTION — production's bucket is `client-docs`, not
+     `case-documents` as R12a shipped it here. `storage.from()` itself needed
+     no code change (it was always bucket-name-agnostic); what moved is every
+     piece of fixture content keyed into `storageFiles`, and the doc-upload
+     stub below, which now writes storage_path WITH the "client-docs/" prefix
+     — see DOC_STORAGE_BUCKET and the file banner at the top of this file.
      ======================================================================= */
   var storage = {
     from: function (bucket) {
@@ -3906,6 +4383,12 @@
      Kept beside the checklist helpers rather than inside the handler so the
      limits are readable in one place and the test hooks below can reach them.
      The extension list is the contract's, in the contract's order. */
+  /* R13 · BUCKET CORRECTION — the slug half of production's
+     `<caseId>/<slug>-<ts>.<ext>` storage path. Lowercased, non-alphanumeric
+     runs collapsed to one hyphen, leading/trailing hyphens trimmed. */
+  function slugify(s) {
+    return String(s == null ? "" : s).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "file";
+  }
   var DOC_UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
   var DOC_UPLOAD_EXT = ["pdf", "jpg", "jpeg", "png", "heic", "heif"];
   var DOC_UPLOAD_RATE_CAP = 20;          /* uploads per link per rolling minute */
@@ -4204,7 +4687,15 @@
         assigned_to: src.assigned_to || null, created_at: when
       });
       out.retention_tasks_created++;
-      if (cl.email) {
+      /* R13 · SUPPRESSION — the retention case, its note and the adviser's
+         call task are all created regardless: those are staff-facing (or, for
+         the case/note, just a record of what happened), not automated contact
+         TO the client, and the exchange-chase-task precedent says a task is
+         never what suppress_automation withholds. Only the two client emails
+         below are gated on it — "a suppressed client must get NOTHING
+         automated" means nothing sent to them, not nothing recorded about
+         them. */
+      if (cl.email && !cl.suppress_automation) {
         queueRow({
           case_id: succ.id, client_id: src.client_id, email_type: "rate_end_reminder",
           to_email: cl.email, subject: "Your rate is coming to an end",
@@ -4220,7 +4711,7 @@
         });
         out.rate_end_chases_queued++;
       }
-      if (setting("auto_sms_rate_end", "off") === "on" && cl.phone && !cl.sms_opt_out) {
+      if (setting("auto_sms_rate_end", "off") === "on" && cl.phone && !cl.sms_opt_out && !cl.suppress_automation) {
         DB.sms_queue.push({
           id: nid("sq"), case_id: succ.id, client_id: src.client_id, sms_type: "rate_end",
           to_phone: cl.phone, status: "queued", error: null, sent_at: null, created_at: when
@@ -4371,6 +4862,11 @@
       if (last && (NOW - new Date(last)) / DAY < quiet) return;      /* said something too recently */
       var cl = DB.clients.filter(function (x) { return x.id === c.client_id; })[0];
       if (!cl || !cl.email) return;                  /* nothing to send to — Data health owns that */
+      /* R13 · SUPPRESSION — the chase EMAIL is withheld; the overdue-tasks
+         branch above is NOT gated on it (a task for staff, same as the
+         exchange-chase task), consistent everywhere suppression is checked
+         in this file. */
+      if (cl.suppress_automation) return;
       queueRow({
         case_id: c.id, client_id: c.client_id, email_type: "docs_chase",
         to_email: cl.email, subject: "Still waiting on your documents",
@@ -4413,7 +4909,8 @@
         return e.case_id === cid && e.email_type === "review_reminder";
       })) return false;                                                      /* already nudged */
       var cl = DB.clients.filter(function (x) { return x.id === c.client_id; })[0];
-      return !!(cl && cl.email && !cl.marketing_opt_out);
+      /* R13 · SUPPRESSION */
+      return !!(cl && cl.email && !cl.marketing_opt_out && !cl.suppress_automation);
     }).sort(function (a, b) {
       /* longest-unanswered first, then by id — stable, so the same run twice
          over picks the same people */
@@ -4431,6 +4928,30 @@
     });
     return made;
   }
+  /* R13 · SUPPRESSION — HONEST GAP, STATED NOT GUESSED.
+     The round-13 brief asks for suppress_automation to be enforced across
+     "all 4 client-email branches: birthday, anniversary, doc chase, review
+     reminders" of queue_comms_extras(). This mock's queueCommsExtras only
+     ever HAD two of those four as actual queueing code — doc chase
+     (queueDocChases, suppressed above) and review reminders
+     (queueReviewReminders, suppressed above), plus review requests
+     (suppressed above too, a close cousin of review reminders). `birthday`
+     and `anniversary` are real settings (birthday_enabled, anniversary_enabled)
+     with real Settings-panel UI and copy in app.js, but there has never been
+     any code anywhere in this file that queues a birthday or completion-
+     anniversary EMAIL — the only anniversary-shaped thing this mock sends is
+     queueAnnualReviewTasks() above, which is a CALL TASK, gated on the
+     separate annual_review_enabled setting, and explicitly documented in
+     app.js as "Independent of the completion-anniversary email above, which
+     is an email and creates no task". Suppression cannot be wired onto
+     queueing code that was never written; inventing that feature from
+     scratch was out of scope for this pass, so it stays exactly as absent as
+     it was before this round, and is named here rather than left for the
+     next person to rediscover by grepping for nothing. Same absence, same
+     reason, for auto_sms_appointment (the settings key exists; nothing ever
+     queues off it) and for the stage-comms trigger equivalent
+     (auto_docs_request / auto_submitted_update / auto_offer_update /
+     auto_completion_email — four settings, zero queueing code in this file). */
   function queueCommsExtras() {
     var out = { review_requests_queued: 0, annual_review_tasks: 0, review_reminders_queued: 0, doc_chases_queued: 0, doc_overdue_tasks: 0 };
     /* The annual review touch is a task, not an email, so it is NOT gated on the
@@ -4448,7 +4969,8 @@
       if (c.stage !== "completed" || !c.completed_at || c.review_requested_at) return false;
       if ((NOW - new Date(c.completed_at)) / DAY < delay) return false;
       var cl = DB.clients.filter(function (x) { return x.id === c.client_id; })[0];
-      return !!(cl && cl.email && !cl.marketing_opt_out);
+      /* R13 · SUPPRESSION */
+      return !!(cl && cl.email && !cl.marketing_opt_out && !cl.suppress_automation);
     }).sort(function (a, b) {
       /* oldest completion first — a stable order, so the same run twice over
          picks the same five */
@@ -4661,6 +5183,14 @@
         queued.review_reminders_queued = extras.review_reminders_queued;
         queued.doc_chases_queued = extras.doc_chases_queued;
         queued.doc_overdue_tasks = extras.doc_overdue_tasks;
+        /* R13 · M-43 — v13 UPSERTs the cron heartbeat on every FULL (unscoped)
+           run, never on a scoped one (a "Send reminder" on one case is not
+           the 8am cron confirming it is alive). Mirrors the settings write
+           pattern used elsewhere (find-or-push on `key`). */
+        var heartbeatRow = DB.settings.filter(function (s) { return s.key === "last_cron_run_at"; })[0];
+        var heartbeatAt = iso(new Date());
+        if (heartbeatRow) { heartbeatRow.value = heartbeatAt; heartbeatRow.updated_at = heartbeatAt; }
+        else DB.settings.push({ key: "last_cron_run_at", value: heartbeatAt, updated_at: heartbeatAt });
       }
       var nowIso = iso(new Date());
       var due = DB.email_queue.filter(function (e) {
@@ -4922,7 +5452,15 @@
       var when = iso(new Date());
       live.status = "received";
       live.received_at = when;
-      live.storage_path = "docs/" + cs.id + "/" + itemId + "." + ext;
+      /* R13 · BUCKET CORRECTION — the deployed function's real path shape:
+         `<caseId>/<slug>-<ts>.<ext>` INSIDE the "client-docs" bucket, with
+         `case_documents.storage_path` carrying the bucket prefix on it. A
+         real storageFiles entry is registered too, the same shape
+         `storage.upload()` writes, so the file this row points at actually
+         exists in the mock's storage registry. */
+      var pathInBucket = cs.id + "/" + slugify(live.item) + "-" + Date.now() + "." + ext;
+      storageFiles[DOC_STORAGE_BUCKET + "/" + pathInBucket] = { size: file.size, type: file.type || "application/octet-stream", at: when };
+      live.storage_path = DOC_STORAGE_BUCKET + "/" + pathInBucket;
       /* THE NOTE. A file arriving through a link is a real event on the case,
          because an adviser looking at the file next week must be able to see it
          happened without knowing this feature exists. created_by is null: the

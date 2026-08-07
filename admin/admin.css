@@ -3033,3 +3033,115 @@ tr.owed-hot > td { background: var(--red-bg); }
 @media (max-width: 480px) {
   #tour-bubble { width: calc(100vw - 24px); }
 }
+
+/* ==========================================================================
+   R13 — CARE & CONTACT, FIRM EXPORT, CRON HEARTBEAT, CLAWBACK
+   ========================================================================== */
+
+/* R13 · M-4/M-30 — the two care chips. Text-first and quiet on purpose: a
+   vulnerability flag is a fact about a person, not an alarm, and the badge
+   vocabulary above is spoken for (red = conflict, amber = missing). These read
+   as annotations on a name rather than as another problem to clear, which is
+   exactly what they are — and it is why they survive being on screen all day
+   next to a client who will always carry them. */
+.care-chips { display: inline-flex; gap: 6px; flex-wrap: wrap; vertical-align: middle; }
+.care-chip {
+  display: inline-block; padding: 2px 9px; border-radius: 999px;
+  font-size: 11px; font-weight: 600; white-space: nowrap;
+  border: 1px solid transparent; cursor: help;
+}
+.care-chip-vuln { background: #f3ecfb; color: #6d3fa8; border-color: #e0d0f2; }
+.care-chip-supp { background: #eef1f5; color: #556275; border-color: #dbe3ec; }
+/* The client-record block itself. Bordered rather than coloured — the block is
+   always there, and colouring a permanently-present block trains the eye to
+   ignore the colour. */
+.care-block { grid-column: 1/-1; border: 1px solid #dbe3ec; border-radius: 10px; padding: 12px 14px; margin-top: 4px; background: var(--light); }
+.care-block h4 { margin: 0 0 4px; font-size: 13.5px; font-weight: 700; color: var(--dark); }
+.care-block .care-sub { margin: 0 0 10px; font-size: 12.5px; color: var(--muted); line-height: 1.5; }
+.care-check { display: flex; gap: 9px; align-items: flex-start; margin: 0 0 8px; font-size: 13px; color: var(--dark); font-weight: 600; }
+.care-check input[type="checkbox"] { width: auto; margin: 2px 0 0; flex: 0 0 auto; }
+.care-check .care-why { display: block; font-weight: 400; font-size: 12.5px; color: var(--muted); line-height: 1.5; margin-top: 2px; }
+.care-note-wrap { margin: 2px 0 10px; }
+.care-note-wrap textarea { width: 100%; }
+.care-note-wrap .care-why { font-size: 12.5px; color: var(--muted); line-height: 1.5; }
+
+/* R13 · M-42/M-43 — the Today-page notice strip. Same visual family as
+   .dq-notice (this app's one "read this sentence" surface) so a new banner does
+   not invent a new grammar; amber only when something is actually wrong. */
+#dash-notices { display: flex; flex-direction: column; gap: 8px; }
+#dash-notices:empty { display: none; }
+.dash-notice {
+  font-size: 13px; padding: 9px 14px; border-radius: 8px; margin: 0;
+  background: var(--light); color: var(--muted); border: 1px solid #dbe3ec;
+  display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap;
+}
+.dash-notice.warn { background: var(--amber-bg); color: var(--amber); border-color: #f0d9ac; }
+.dash-notice a, .dash-notice .dash-notice-link {
+  color: inherit; font-weight: 700; text-decoration: underline; cursor: pointer; background: none; border: 0; padding: 0; font-size: inherit; font-family: inherit;
+}
+
+/* R13 · M-42 — the export panel. */
+#firm-export-panel .export-warn { color: var(--amber); font-weight: 600; }
+#firm-export-result { margin-top: 10px; font-size: 12.5px; white-space: pre-wrap; }
+
+/* R13 · M-23/M-25 — the clawback table's month columns read as numbers. */
+.clawback-months { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.clawback-left-hot { color: var(--red); font-weight: 700; }
+
+/* ==========================================================================
+   R13 · M-31 — STAFF ABSENCES
+   The Away band is deliberately the QUIETEST thing in a diary cell: grey,
+   striped, no colour of its own. An appointment is blue, a task is amber, a
+   clash is red — those are things to do. An absence is a fact about the day,
+   and the stripe is what says "this is not a booking" at a glance without
+   competing with the bookings around it.
+   ========================================================================== */
+.diary-away {
+  display: block; border-radius: 6px; padding: 3px 7px; margin-bottom: 4px;
+  font-size: 11.5px; font-weight: 600; color: var(--muted);
+  border-left: 3px solid #b9c2cd; cursor: help;
+  background: repeating-linear-gradient(135deg, #eef1f5 0 6px, #e5e9ef 6px 12px);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.diary-away .diary-away-who { color: var(--dark); font-weight: 700; }
+.diary-day-tasks .diary-away { margin-bottom: 0; max-width: 340px; }
+
+/* The Diary-page management panel. The add form is one wrapping row so it
+   never becomes a column of full-width boxes on a wide screen. */
+#diary-absence-panel { margin-top: 16px; }
+.abs-form { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin: 4px 0 10px; }
+.abs-form label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; font-weight: 600; color: var(--dark); margin: 0; }
+.abs-form input, .abs-form select { width: auto; min-width: 150px; }
+.abs-form input[type="date"] { min-width: 140px; }
+.abs-form button { flex: 0 0 auto; }
+#abs-err:empty { display: none; }
+.abs-row .badge { margin-left: 6px; }
+
+/* ==========================================================================
+   R13 · M-2 — CASE FILES.
+   Reuses the checklist's .doc-row/.doc-list geometry on purpose: the two
+   sections sit one under the other and a second visual grammar between them
+   would imply a difference in kind that isn't there. What separates them is
+   the wording and the kind chip, not the furniture.
+   ========================================================================== */
+#case-files .doc-list { border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+#case-files .doc-list .empty { border: 0; margin: 0; }
+#case-files .doc-row { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border-bottom: 1px solid #eef2f6; }
+#case-files .doc-row:last-child { border-bottom: 0; }
+#case-files .doc-main { flex: 1 1 auto; min-width: 0; }
+#case-files .doc-item { font-size: 13px; font-weight: 600; color: var(--dark); overflow-wrap: anywhere; }
+#case-files .doc-meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 3px; }
+#case-files .doc-date { font-size: 11px; color: var(--muted); }
+#case-files .doc-meta .cf-open { padding: 1px 7px; font-size: 11px; line-height: 1.5; min-height: 0; }
+#case-files .doc-acts { display: flex; gap: 6px; flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; }
+#case-files .doc-acts .btn { padding: 2px 8px; font-size: 11.5px; }
+#case-files .doc-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+@media (max-width: 560px) {
+  #case-files .doc-row { flex-direction: column; }
+  #case-files .doc-acts { justify-content: flex-start; }
+}
+.cf-actions { align-items: center; flex-wrap: wrap; gap: 8px; }
+.cf-actions select { width: auto; min-width: 170px; }
+.cf-actions input[type="file"] { width: auto; max-width: 260px; font-size: 12px; border: 0; padding: 0; }
+.cf-row .cf-kind { font-weight: 600; }
+#cf-limits { margin: 6px 0 0; }
