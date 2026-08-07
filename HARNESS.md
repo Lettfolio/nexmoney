@@ -71,9 +71,10 @@ node tests/r9_docs.js
 node tests/r9_embed.js
 node tests/r11_ux.js
 node tests/r12a.js
+node tests/r12b.js
 ```
 
-Current green counts (end of round 12a):
+Current green counts (end of round 12b):
 
 | Suite | Checks |
 |---|---|
@@ -87,7 +88,22 @@ Current green counts (end of round 12a):
 | `tests/r9_embed.js` | 104 |
 | `tests/r11_ux.js` | 117 |
 | `tests/r12a.js` | 109 |
-| **Total** | **1,861** |
+| `tests/r12b.js` | 158 |
+| **Total** | **2,019** |
+
+R12b notes: leads default to the lightest-loaded ADVISING staff member (never the
+admin) — r5_batch1's R5-5 block asserts the rule, not a name. Advisers see no
+fee-chase My Day rows while bank details are absent (r5_batch3 R5-28 updated).
+Doc chasing covers every live stage (r9_docs:569 copy check updated; the
+`checklistCases` lock is now `>= 4` protecting the four named chase-state
+fixtures, and a DIP-stage checklist case exists). Three midnight-London flakes
+(r5_batch1 R5-13, r5_batch2 R5-12, r9_docs feedback-tomorrow) were fixed at the
+source with Europe/London date derivations — never widen tolerances for these.
+The mock mirrors r12b prod migrations: cases call-pack columns
+(current_balance/reversion_rate/monthly_payment/erc_amount),
+profiles.tour_seen_at + mark_tour_seen() RPC, appointments.outcome, widened
+queue_comms_extras. The first-run tour fires only for a profile with null
+tour_seen_at (fixture: p3 Luke); tests can suppress it via window.__NEX_SKIP_TOUR.
 
 R12a notes: the mock's process-emails stub mirrors the DEPLOYED v12, which added
 the `factfind` email type (per-row fact_finds resolution, site_url-required
