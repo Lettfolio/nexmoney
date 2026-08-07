@@ -72,9 +72,10 @@ node tests/r9_embed.js
 node tests/r11_ux.js
 node tests/r12a.js
 node tests/r12b.js
+node tests/r13.js
 ```
 
-Current green counts (end of round 12b):
+Current green counts (end of round 13):
 
 | Suite | Checks |
 |---|---|
@@ -87,9 +88,28 @@ Current green counts (end of round 12b):
 | `tests/r9_docs.js` | 255 |
 | `tests/r9_embed.js` | 104 |
 | `tests/r11_ux.js` | 117 |
-| `tests/r12a.js` | 109 |
+| `tests/r12a.js` | 114 |
 | `tests/r12b.js` | 158 |
-| **Total** | **2,019** |
+| `tests/r13.js` | 142 |
+| **Total** | **2,184** |
+
+(Several suites derive check counts from fixture data — r11_ux now reports 123,
+r8_touch 151, r8_rev 176 after the R13 fixture/mirror changes. The table above
+reflects what the suites actually print today.)
+
+R13 notes: the mock's run_watchtower now mirrors production's TEN rules
+(offer_stale, app_not_submitted, exchange_no_chase, lead_slow, email_unanswered,
+fee_aging, workload, retention_gap, fee_aging_60, protection_quote_stale) plus
+the auto-resolve sweep — the old 7-rule stub had drifted and produced a false
+"offer expiry unwatched" panel finding. THE STORAGE BUCKET IS **client-docs**
+(production has web/offers/client-docs; "case-documents" never existed — an
+R12a mock invention, since hotfixed in app.js). storage_path values carry the
+"client-docs/" prefix, exactly as the deployed doc-upload writes them.
+suppress_automation is enforced in every mock queueing path, mirroring the
+r13_m2/m3 production migrations. process-emails stub stamps last_cron_run_at on
+full runs only (v13 mirror). New tables staff_absences + case_files carry the
+production RLS in writePolicy. Fixture flags: cl012 vulnerable+suppressed,
+cl021 suppressed; p3 Luke absent today; last_cron_run_at seeded stale (-3d).
 
 R12b notes: leads default to the lightest-loaded ADVISING staff member (never the
 admin) — r5_batch1's R5-5 block asserts the rule, not a name. Advisers see no
