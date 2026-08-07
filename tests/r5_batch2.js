@@ -42,6 +42,24 @@ function ok(name, cond, detail) {
 const eq = (name, actual, expected) =>
   ok(name, JSON.stringify(actual) === JSON.stringify(expected), `expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
 
+/* R15 — the case action bar is now stage/kind-reactive: only some of the 8
+   action ids are PRIMARY (directly clickable) for a given case's stage; the
+   rest live in the "More actions" overflow (#case-more-actions), which is
+   display:none (via .hidden on the wrap's child) until the toggle is
+   clicked. Every action id still exists in the DOM at every stage — this
+   helper just finds out where it currently lives and opens the overflow
+   first when needed, then clicks it exactly as before. */
+async function clickAction(page, id) {
+  const visible = await page.evaluate((sel) => {
+    const el = document.querySelector(sel);
+    if (!el) return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  }, `#${id}`);
+  if (!visible) await page.click("#case-more-actions-toggle");
+  await page.click(`#${id}`);
+}
+
 function serverUp() {
   return new Promise((res) => {
     const r = http.get({ host: "localhost", port: PORT, path: "/admin/mock.html" }, (x) => { x.resume(); res(x.statusCode === 200); });
@@ -113,7 +131,7 @@ async function main() {
 
       await page.evaluate(() => window.openCase("ca033"));
       await page.waitForTimeout(700);
-      await page.click("#act-reminder");          // stamps rate_reminder_queued_at on the case row
+      await clickAction(page, "act-reminder");     // stamps rate_reminder_queued_at on the case row
       await page.waitForTimeout(1200);
       const stamped = await caseRow(page, "ca033");
       ok("the send stamped the case (so the row moved under the open form)", !!stamped.rate_reminder_queued_at
@@ -284,7 +302,7 @@ async function main() {
 
       await page.evaluate(() => window.openCase("ca027"));
       await page.waitForTimeout(700);
-      await page.click("#act-paid");
+      await clickAction(page, "act-paid");
       await page.waitForTimeout(500);
       const rows = await page.evaluate(() => [...document.querySelectorAll("#overlay-modal .ovl-fee-row")].map((r) => ({
         key: r.querySelector(".fee-chk").dataset.key, text: r.textContent.replace(/\s+/g, " ").trim(),
@@ -311,7 +329,7 @@ async function main() {
 
       // …now the proc fee arrives, later. The case completes and takes the LATER date.
       await page.waitForTimeout(300);
-      await page.click("#act-paid");
+      await clickAction(page, "act-paid");
       await page.waitForTimeout(500);
       const shown = await page.evaluate(() => [...document.querySelectorAll("#overlay-modal .ovl-fee-row")].map((r) => ({
         key: r.querySelector(".fee-chk").dataset.key, disabled: r.querySelector(".fee-chk").disabled,
@@ -612,7 +630,7 @@ async function main() {
       await page.evaluate(() => window.openCase("ca011"));
       await page.waitForTimeout(700);
       page.__dialogs = [];
-      await page.click("#act-paid");
+      await clickAction(page, "act-paid");
       await page.waitForTimeout(900);
       const feeMsg = lastDialog(page, /M2|paid/i);
       ok("M2 · the fee capture explains the missing migration instead of erroring", /migration M2/i.test(feeMsg), JSON.stringify(feeMsg));

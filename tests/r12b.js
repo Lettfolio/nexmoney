@@ -96,6 +96,24 @@ function ok(name, cond, detail) {
 const eq = (name, actual, expected) =>
   ok(name, JSON.stringify(actual) === JSON.stringify(expected), `expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
 
+/* R15 — the case action bar is now stage/kind-reactive: only some of the 8
+   action ids are PRIMARY (directly clickable) for a given case's stage; the
+   rest live in the "More actions" overflow (#case-more-actions), which is
+   display:none (via .hidden on the wrap's child) until the toggle is
+   clicked. Every action id still exists in the DOM at every stage — this
+   helper just finds out where it currently lives and opens the overflow
+   first when needed, then clicks it exactly as before. */
+async function clickAction(page, id) {
+  const visible = await page.evaluate((sel) => {
+    const el = document.querySelector(sel);
+    if (!el) return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  }, `#${id}`);
+  if (!visible) await page.click("#case-more-actions-toggle");
+  await page.click(`#${id}`);
+}
+
 function serverUp() {
   return new Promise((res) => {
     const r = http.get({ host: "localhost", port: PORT, path: "/admin/mock.html" }, (x) => { x.resume(); res(x.statusCode === 200); });
@@ -534,7 +552,7 @@ async function readRows(page, table, filters) {
       const gt = await mkClientCase(page, { first: "Book", last: "Fromcase", stage: "fact_find" });
       await page.evaluate((id) => window.openCase(id), gt.caseId);
       await wait(page, 500);
-      await page.click("#act-appt");
+      await clickAction(page, "act-appt");
       await wait(page, 400);
       const title = await page.$eval("#modal h3", (e) => e.textContent).catch(() => "");
       ok("B2 · the appointment form opens (replacing the case modal in the same host)", title === "New appointment", title);

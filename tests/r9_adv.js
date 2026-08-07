@@ -248,7 +248,7 @@ const tasksOnCase = (page, caseId) => page.evaluate(async (cid) =>
           value: s.value,
           label: (lab ? lab.textContent : "").replace(/\s+/g, " ").trim().slice(0, 40),
           nOpts: s.options.length,
-          hint: (document.querySelector("#case-referrer-hint") || {}).textContent || "",
+          hint: (document.querySelector("#case-referrer-field") || {}).title || "",
           selText: (s.selectedOptions[0] || {}).text || "",
         };
       });
