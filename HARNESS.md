@@ -74,26 +74,88 @@ node tests/r12a.js
 node tests/r12b.js
 node tests/r13.js
 node tests/r14.js
+node tests/r15.js
 ```
 
-Current green counts (end of round 14):
+Current green counts (end of round 15). r8_touch/r8_rev/r11_ux still carry the
+151/176/123 figures the R13 note below already flagged (fixture-derived
+counts, unrelated to R15 — see "compute test expectations from fixtures at
+runtime" in Standing rules); every other suite's count is unchanged by R15
+except the new r15.js row itself:
 
 | Suite | Checks |
 |---|---|
 | `smoke.js` | 144 |
 | `tests/r5_batch1..9.js` (sum) | 557 |
 | `tests/r64.js` | 91 |
-| `tests/r8_touch.js` | 149 |
-| `tests/r8_rev.js` | 166 |
+| `tests/r8_touch.js` | 151 |
+| `tests/r8_rev.js` | 176 |
 | `tests/r9_adv.js` | 169 |
 | `tests/r9_docs.js` | 255 |
 | `tests/r9_embed.js` | 104 |
-| `tests/r11_ux.js` | 117 |
+| `tests/r11_ux.js` | 123 |
 | `tests/r12a.js` | 114 |
 | `tests/r12b.js` | 158 |
 | `tests/r13.js` | 142 |
 | `tests/r14.js` | 167 |
-| **Total** | **2,351** |
+| `tests/r15.js` | 160 |
+| **Total** | **2,511** |
+
+R15 notes: the case modal's action bar is now stage/kind-reactive.
+`CASE_ACTION_RULES` (app.js) maps each of the eight ORIGINAL action ids —
+act-factfind, act-appt, act-offer, act-fee, act-paid, act-review,
+act-reminder, act-evidence — to the stages where it belongs in the PRIMARY
+row; everywhere else it renders into `#case-more-actions`, an overflow menu
+that starts `class="hidden"` and is opened by `#case-more-actions-toggle`
+(click flips the class, nothing more). **Every id keeps its handler and stays
+in the DOM at every stage** — gating only decides which row paints it, never
+whether it exists — so `page.click("#act-XXX")` on a non-primary action now
+needs the toggle opened first. One brand-NEW id, `#act-record-reason`, is
+different: it exists in the DOM ONLY at `not_proceeding` (primary/hero
+there), everywhere else it is genuinely absent, not just overflowed —
+`caseActionBarHtml`'s `onlyStage` guard. `act-offer`/`act-view-offer` also
+carry a kind override (`notKinds: ["product_transfer"]`) that drops them to
+overflow even at a stage (offer/exchange/completed) where they would
+otherwise be primary. Sections: the security card (`#case-sec-wrap`) and
+Files (`#case-files`) are wrapped and hidden via `class="hidden"` at
+enquiry/fact_find, shown DIP→terminal (`CASE_SECTION_RULES`); Documents
+renders as a plain `<div>` up to Exchange and collapses into a `<details>` at
+completed/not_proceeding (`#case-docs-body` exists identically in both).
+Type reactivity (`c.case_kind`): a product_transfer case hides
+`#case-solicitor-field`, drops the "Solicitor" option from the waiting-on
+`<select>`, hides `#case-exchange-field` even at a stage that would normally
+show it, and `nextStageFor()` skips `exchange` in the Advance stepper (offer
+→ completed directly) — the manual stage `<select>` is untouched, this only
+narrows the one-click hero button. `GI_KINDS` (buildings-insurance field)
+widened to purchase/first_time_buyer/buy_to_let/remortgage, never
+product_transfer. Wording: the Documents and History section intros were CUT
+outright (bare `<h3>` + a `title=` tooltip on a `?` span, no `<p>` left) —
+Files, by contrast, kept a shortened one-line `<p>`, so "no intro paragraph"
+is NOT true of every section, only Documents/History.
+
+Existing suites fixed for the overflow relocation (all via the same
+`clickAction(page, id)` helper — checks visibility, opens the toggle first if
+needed, then clicks): `tests/r5_batch1.js` (#act-reminder), `r5_batch2.js`
+(#act-reminder, #act-paid ×2), `r9_adv.js` (read `#case-referrer-field`'s
+`title` attr instead of the now-removed `#case-referrer-hint` element — the
+hint moved to a tooltip, not overflow), `r12a.js` (#act-factfind ×2),
+`r13.js` (#act-review ×2, #act-evidence ×3 via a sibling `ensureActionOpen`
+that opens the menu without also clicking, for call sites already wrapped in
+their own `Promise.all([waitForEvent, click])`), `r12b.js` (#act-appt).
+`tests/r5_batch3/4/5/6/7/8/9.js`, `r8_touch.js`, `r8_rev.js`, `r9_docs.js`,
+`r9_embed.js`, `r11_ux.js`, `r64.js` needed no change — none of them click an
+action id that R15 moved for the stage/kind their fixture case happens to be
+at. No mock-fixture gap: R15 reads only `stage`/`case_kind`, both already
+represented at every value the fixture book needs (product_transfer cases
+exist at enquiry/application/completed already); `tests/r15.js` creates every
+stage/kind combination it needs fresh via `mkClientCase`, including the one
+combination (product_transfer AT the offer stage) nothing else in the
+harness had exercised, so no fixture edit was required either. One process
+note for anyone extending this suite: `mock-supabase.js`'s whole in-memory
+DB is rebuilt by the IIFE that runs when `mock.html` loads, so it is
+PER-PAGE — a case id minted on one `page` is meaningless to a different
+`newPage()` instance. r15.js therefore runs its entire battery on one shared
+page for the whole file, not a fresh page per section like most suites here.
 
 R14 notes: `vault_entries` (company password safe) added — RLS staff read (gated by
 visible_to text[]: null/empty = all staff), staff insert/update, OWNER/ADMIN delete
