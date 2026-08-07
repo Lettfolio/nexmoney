@@ -5592,7 +5592,12 @@ window.startRetentionCase = async function (caseId, ev, opts) {
     // R12b · W-25 — British date, not the raw ISO the column stores. Only ever affects titles
     // composed from here on; a task already sitting in the database keeps whatever it was written with.
     const taskTitle = `Call client — rate ends ${fmtD(c.rate_end_date)}` + (propShort ? ` · ${propShort}` : "");
-    const kind = c.case_kind === "buy_to_let" ? "buy_to_let" : "remortgage";
+    /* R15 · §5 — the successor kind is inherited where it is meaningful: a buy-to-let stays BTL and
+       a product transfer stays a product transfer (the client is likely to do the same again with
+       the same lender); everything else becomes a remortgage, which is what a retention case is. */
+    const kind = c.case_kind === "buy_to_let" ? "buy_to_let"
+      : c.case_kind === "product_transfer" ? "product_transfer"
+      : "remortgage";
     const kindLabel = (KINDS.find((k) => k[0] === kind) || [])[1] || kind;
     /* R6-32 — the sold-property check (D6-05, W16). Kwame Boateng's completed purchase and Gareth
        Pollard's live offer are both 9 Bryanstone Road: he sold it. Queueing "your rate is ending,
@@ -7067,7 +7072,7 @@ async function loadPipeline() {
       ${byStage[k].map((c) => {
         const erc = c.erc_end_date && c.rate_end_date && c.erc_end_date > c.rate_end_date;
         const age = cardAge(c, stageEntry[c.id]);
-        const nextStage = nextStageFor(c.stage);
+        const nextStage = nextStageFor(c.stage, c.case_kind);
         const advanceBtn = nextStage
           ? `<button type="button" class="card-advance" onclick="event.stopPropagation(); moveCaseToStage('${c.id}', '${nextStage}', {promptStageEntry:true})" title="Advance to ${esc(STAGE_LABEL[nextStage] || nextStage)}" aria-label="Advance to ${esc(STAGE_LABEL[nextStage] || nextStage)}">→</button>`
           : "";
@@ -7183,12 +7188,132 @@ function isReopening(fromStage, toStage) {
 /* BUILD 7b — "Advance" stage stepper (defect 17). The next entry in STAGES, skipping nothing
    (exchange -> completed included). No next stage from the two terminal stages — deliberately
    no "back a stage" helper exists; regressions stay a considered act via the form <select>. */
-function nextStageFor(stage) {
+function nextStageFor(stage, kind) {
   if (stage === "completed" || stage === "not_proceeding") return null;
   const idx = stageIdx(stage);
   if (idx < 0 || idx >= STAGES.length - 1) return null;
-  return STAGES[idx + 1][0];
+  const next = STAGES[idx + 1][0];
+  /* R15 · §5 — a product transfer never exchanges contracts (same lender, no conveyancing), so
+     the Advance HERO skips exchange for PT and offers the stage after it. This narrows only the
+     one-click stepper; the manual stage <select> in the case form stays full = the escape hatch,
+     and every other kind is untouched. */
+  if (kind === "product_transfer" && next === "exchange") return STAGES[idx + 2] ? STAGES[idx + 2][0] : null;
+  return next;
 }
+/* ==========================================================================
+   R15 — STAGE- & TYPE-REACTIVE CASE SCREEN · the relevance engine.
+   The case modal's action bar and its sections used to render identically at
+   every stage and every kind. These two maps ARE the reactivity: a reviewer
+   reads them and knows what shows where. Gating decides the PRIMARY row vs the
+   "More actions" overflow ONLY — every button keeps its id + handler and stays
+   reachable in the overflow when it is not primary. Nothing is removed from the
+   DOM; a hidden section is wrapped, never deleted.
+   ========================================================================== */
+// Each action id → the stages where it belongs in the PRIMARY row. `notKinds`
+// drops it to the overflow for those case kinds (a product transfer has no
+// lender offer to read). `hero` marks the actions that become the visual heroes
+// at a terminal stage, where there is no Advance button to be the hero.
+const CASE_ACTION_RULES = {
+  "act-factfind":      { stages: ["enquiry", "fact_find"] },
+  "act-appt":          { stages: ["enquiry", "fact_find", "decision_in_principle", "application"] },
+  "act-offer":         { stages: ["offer", "exchange", "completed"], notKinds: ["product_transfer"] },
+  "act-view-offer":    { stages: ["offer", "exchange", "completed"], notKinds: ["product_transfer"] },
+  "act-fee":           { stages: ["completed"], hero: true },
+  "act-paid":          { stages: ["completed"], hero: true },
+  "act-review":        { stages: ["completed"], hero: true },
+  "act-reminder":      { stages: ["completed"] },
+  "act-evidence":      { stages: ["completed", "not_proceeding"] },
+  "act-record-reason": { stages: ["not_proceeding"], hero: true },
+};
+// Each toggleable section → the stages where it is shown. Sections not listed
+// (header, tasks, notes, history, change-history, case-details) are stage-
+// independent and always render. `showStages` = shown at all; `fullStages` =
+// shown in full (else compact/collapsed but still present).
+const CASE_SECTION_RULES = {
+  security:  { showStages: ["decision_in_principle", "application", "offer", "exchange", "completed", "not_proceeding"] },
+  files:     { showStages: ["decision_in_principle", "application", "offer", "exchange", "completed", "not_proceeding"] },
+  documents: { fullStages: ["enquiry", "fact_find", "decision_in_principle", "application", "offer", "exchange"] },
+};
+// GI / buildings insurance applies to a purchase-shaped or owner-occupier case;
+// never to a product transfer (same lender, cover already in place). R15 · §5.
+const GI_KINDS = ["purchase", "first_time_buyer", "buy_to_let", "remortgage"];
+function caseGiApplies(kind) { return GI_KINDS.includes(kind); }
+function caseActionIsPrimary(actionId, stage, kind) {
+  const rule = CASE_ACTION_RULES[actionId];
+  if (!rule) return false;
+  if (rule.notKinds && rule.notKinds.includes(kind)) return false;
+  if (rule.kinds && !rule.kinds.includes(kind)) return false;
+  return rule.stages.includes(stage);
+}
+function caseSectionVisible(section, stage) {
+  const rule = CASE_SECTION_RULES[section];
+  if (!rule || !rule.showStages) return true;
+  return rule.showStages.includes(stage);
+}
+function caseSectionFull(section, stage) {
+  const rule = CASE_SECTION_RULES[section];
+  if (!rule || !rule.fullStages) return true;
+  return rule.fullStages.includes(stage);
+}
+/* The case action bar, split into a PRIMARY row and a "More actions" overflow. Every button is
+   built here exactly once (same ids, same labels; handlers are wired downstream by id whether the
+   button landed in the primary row or the overflow). CASE_ACTION_RULES decides the split. The
+   overflow (#case-more-actions) is ALWAYS present and reachable — it is the escape hatch, so no
+   action is ever lost when a stage does not feature it. At a terminal stage with no Advance hero,
+   the `hero` actions carry btn-primary so the bar still has a visual centre of gravity. */
+function caseActionBarHtml(c, stage, kind, opts) {
+  const heroesActive = !!(opts && opts.heroesActive); // no Advance button on screen (terminal stage)
+  const defs = [
+    { id: "act-fee",           label: "💷 Email fee request" },
+    { id: "act-review",        label: "⭐ Email review request" },
+    { id: "act-reminder",      label: "📅 Email rate-end reminder" },
+    { id: "act-paid",          label: "✓ Mark fee paid" },
+    { id: "act-offer",         label: "📄 Read mortgage offer (AI)" },
+    ...(c.offer_doc_path ? [{ id: "act-view-offer", label: "View offer doc" }] : []),
+    { id: "act-evidence",      label: "🗂 Evidence pack" },
+    { id: "act-appt",          label: "📅 Book appointment" },
+    { id: "act-factfind",      label: "📋 Digital fact-find" },
+    // Record-reason only ever exists at not_proceeding (it is meaningless elsewhere): primary
+    // there, absent otherwise, so it never clutters the overflow of a live case.
+    { id: "act-record-reason", label: "✏️ Record reason", onlyStage: "not_proceeding" },
+  ];
+  const primary = [], overflow = [];
+  defs.forEach((d) => {
+    if (d.onlyStage && stage !== d.onlyStage) return;
+    (caseActionIsPrimary(d.id, stage, kind) ? primary : overflow).push(d);
+  });
+  const btn = (d, isPrimary) => {
+    const rule = CASE_ACTION_RULES[d.id] || {};
+    const heroCls = isPrimary && heroesActive && rule.hero ? " btn-primary" : "";
+    return `<button class="btn btn-sm${heroCls}" id="${d.id}">${d.label}</button>`;
+  };
+  const primaryHtml = primary.map((d) => btn(d, true)).join("");
+  const overflowHtml = overflow.map((d) => btn(d, false)).join("");
+  return `<div class="action-bar" id="case-action-bar">
+      ${primaryHtml}
+      <input type="file" id="offer-file" accept="application/pdf" class="hidden">
+      <div class="more-actions" id="case-more-actions-wrap">
+        <button type="button" class="btn btn-sm more-actions-toggle" id="case-more-actions-toggle" aria-expanded="false" aria-haspopup="true" title="Every other action for this case — always here, whatever the stage">More actions ▾</button>
+        <div class="more-actions-menu hidden" id="case-more-actions" role="menu">${overflowHtml || '<span class="more-actions-empty">No other actions at this stage.</span>'}</div>
+      </div>
+    </div>`;
+}
+/* R15 · §6 — record / update why a case is not proceeding, from the case screen itself. The stage
+   move already captures a reason (promptLostReason); this is the affordance for a case that is
+   ALREADY not_proceeding — a reason added late, or corrected. Same prompt, same note trail and the
+   same missing-column fallback as moveCaseToStage, then reopen so the header's lost-reason line
+   repaints. */
+window.recordLostReason = async function (caseId, c) {
+  const lost = await promptLostReason("Recording why this case did not proceed");
+  if (!lost) return;
+  let { error } = await db.from("cases").update({ lost_reason: lost.reason, lost_detail: lost.note || null }).eq("id", caseId);
+  if (error && isMissingColumnError(error)) error = null; // pre-M2 db has no columns — the note below still lands
+  if (error) return toast("Error: " + error.message);
+  const { error: nErr } = await db.from("case_notes").insert({ case_id: caseId, body: lostReasonNoteBody(lost), created_by: (ME && ME.id) || null });
+  if (nErr) return toast("Reason saved, but the note could not be written: " + nErr.message);
+  toast("Reason recorded.");
+  openCase(caseId);
+};
 function wireBoardDnD() {
   document.querySelectorAll("#board .card").forEach((el) => {
     el.addEventListener("dragstart", (e) => { e.dataTransfer.setData("text/plain", el.dataset.id); el.classList.add("dragging"); });
@@ -8329,9 +8454,15 @@ const PROT_BULK_STATUS = [["discussed", "Discussed"], ["quoted", "Quoted"], ["po
 
    The id stays `cs-prot-warn` (the call-logger at ~8105 reaches for it by that id) — the element
    is now REPLACED rather than removed when the call logger records the conversation. */
-function protStatChipHtml(c) {
+function protStatChipHtml(c, stage) {
   const st = (c && c.protection_status) || "not_discussed";
   const quotedAt = c && c.protection_quoted_at;
+  /* R15 · §6 — at OFFER/EXCHANGE a passive "not discussed / discussed" chip is a gap the adviser
+     can close RIGHT NOW (the offer is out; protection is the last open thing), so the chip becomes
+     an active prompt that reveals the protection field. Elsewhere it stays the plain status chip. */
+  if (["offer", "exchange"].includes(stage) && ["not_discussed", "discussed"].includes(st)) {
+    return `<div class="cs-stat cs-warn cs-prot-prompt" id="cs-prot-warn" data-prot="${esc(st)}" style="cursor:pointer;" title="Protection is the last open thing on a case at ${esc(STAGE_LABEL[stage] || stage)}. Click to record the conversation."><span class="cs-lbl">Protection</span><span class="cs-val">Discuss protection →</span></div>`;
+  }
   const S = {
     not_discussed: ["cs-warn", "not discussed", "Nobody has recorded a protection conversation on this case. It counts as an open gap on Reports and Data health."],
     discussed: ["cs-warn", "discussed — no outcome yet", "The conversation happened but nothing came of it yet — no quote, no policy, no decline. Reports still count this case under “No protection outcome”."],
@@ -9597,7 +9728,7 @@ window.openCase = async function (id, opts = {}) {
   const noteSnip = (b) => (b && b.length > 120 ? b.slice(0, 120) + "…" : (b || ""));
   const rateOverdue = c.rate_end_date && c.rate_end_date < todayStr;
   const rateSoon = c.rate_end_date && !rateOverdue && (new Date(c.rate_end_date) - new Date(todayStr)) < 183 * 86400000;
-  const nextStage = id ? nextStageFor(c.stage) : null; // BUILD 7b — drives the modal's "Advance to…" button (hidden on terminal stages)
+  const nextStage = id ? nextStageFor(c.stage, c.case_kind) : null; // BUILD 7b — drives the modal's "Advance to…" button (hidden on terminal stages) · R15 · §5 skips exchange for PT
   const summaryHeader = id ? `
     <div class="case-summary">
       <div class="cs-top">
@@ -9643,9 +9774,12 @@ window.openCase = async function (id, opts = {}) {
              misread token in the modal: the one field named after the property is a price. The
              word "Property" now belongs to the address (the chip above); this is "Value". */ ""}
         <div class="cs-stat"><span class="cs-lbl">Value</span><span class="cs-val">${fmtM(c.property_value)}</span></div>
+        ${/* R15 · §6 — a completed case says WHEN it completed, right here in the header stats.
+             Drawn only from the recorded completed_at, so there is no nudge and no empty state. */ ""}
+        ${c.stage === "completed" && c.completed_at ? `<div class="cs-stat" id="cs-completed-stat" title="This case completed on ${esc(fmtD(c.completed_at))}."><span class="cs-lbl">Completed</span><span class="cs-val">${fmtD(c.completed_at)}</span></div>` : ""}
         ${c.lender ? `<div class="cs-stat"><span class="cs-lbl">Lender</span><span class="cs-val">${esc(c.lender)}</span></div>` : ""}
         ${c.broker_fee > 0 ? `<div class="cs-stat"><span class="cs-lbl">Fee</span><span class="cs-val">${fmtM(c.broker_fee)}${c.fee_status ? ` <span class="cs-muted">(${esc(String(c.fee_status).replace(/_/g, " "))})</span>` : ""}</span></div>` : ""}
-        ${protStatChipHtml(c)}
+        ${protStatChipHtml(c, c.stage)}
         ${c.rate_percent != null || c.rate_end_date ? `<div class="cs-stat ${rateOverdue ? "cs-danger" : rateSoon ? "cs-warn" : ""}"><span class="cs-lbl">Rate${rateOverdue ? " — ended" : rateSoon ? " — <6mo" : ""}</span><span class="cs-val">${c.rate_percent != null ? c.rate_percent + "%" : "—"}${c.rate_end_date ? ` · ends ${fmtD(c.rate_end_date)}` : ""}</span></div>` : ""}
         ${["offer", "exchange"].includes(c.stage) ? (c.expected_completion_date
           ? `<div class="cs-stat"><span class="cs-lbl">Expected completion</span><span class="cs-val">${fmtD(c.expected_completion_date)}</span></div>`
@@ -9712,9 +9846,19 @@ window.openCase = async function (id, opts = {}) {
 
   $("#modal").innerHTML = `
     <h3>${id ? "Case" : "New case"}</h3>
-    ${id ? securityCardHtml(c, caseClient, secClient) : ""}
+    ${/* R15 · §3 — the security card is a lender-call tool; it has nothing to hold before a lender
+         is involved, so it is HIDDEN at enquiry+fact_find and shown DIP→terminal. Wrapped, never
+         deleted: the node (and its toggle wiring) stays in the DOM, just hidden. */ ""}
+    ${id ? `<div id="case-sec-wrap"${caseSectionVisible("security", c.stage) ? "" : ' class="hidden"'}>${securityCardHtml(c, caseClient, secClient)}</div>` : ""}
     ${summaryHeader}
     ${c.retention_source_case_id ? `<p class="panel-sub" style="margin-top:-8px;">🔁 Retention opportunity — linked to a completed case. <span class="t" style="cursor:pointer;text-decoration:underline;" onclick="openCase('${c.retention_source_case_id}')">View original case</span></p>` : ""}
+    ${/* R15 · §6 — a not-proceeding case says WHY, prominently. Prefer the recorded lost_reason (a
+         select("*") carries it when the M2 columns exist); fall back to the last note; and offer a
+         one-click "record reason" that fires the same affordance the action bar carries. */ ""}
+    ${id && c.stage === "not_proceeding" ? `<p class="panel-sub case-lost-banner" style="margin-top:-8px;color:var(--red);">🚫 Not proceeding${
+        c.lost_reason ? ` — <strong>${esc(LOST_REASON_LABEL[c.lost_reason] || String(c.lost_reason).replace(/_/g, " "))}</strong>${c.lost_detail ? ": " + esc(c.lost_detail) : ""}`
+        : lastNote ? ` — <span class="cs-muted">last note:</span> ${esc(noteSnip(lastNote.body))}`
+        : " — <span class=\"cs-muted\">no reason recorded.</span>"} <a href="#" class="t" style="text-decoration:underline;" title="Record or correct why this case did not proceed" onclick="event.preventDefault();var b=document.getElementById('act-record-reason');if(b)b.click();">record reason</a></p>` : ""}
     ${c.nps_score != null ? `<p class="panel-sub" style="margin-top:-8px;">Client review score: <strong style="color:${c.nps_score >= 9 ? "var(--green)" : c.nps_score >= 7 ? "var(--amber)" : "var(--red)"};">${c.nps_score}/10</strong></p>` : ""}
     ${id ? `
     <div style="margin-top:14px;">
@@ -9754,22 +9898,33 @@ window.openCase = async function (id, opts = {}) {
     ${/* R9-5 · m10 — THE DOCUMENT CHECKLIST. Between Tasks and Notes because that is where it sits
          in the day: it is work outstanding, not history. Absent entirely on a database without the
          migration — see docsSupported(). Painted by renderCaseDocs() below. */ ""}
-    ${docsOn ? `
+    ${/* R15 · §3+§4 — Documents renders in full up to Exchange; at completed+not_proceeding it
+         collapses into a <details> (kept reachable, not front-and-centre). The static intro is CUT:
+         the section title and its outstanding/received counts already say what it is. #case-docs-body
+         exists in both variants, so renderCaseDocs paints the same either way. */ ""}
+    ${docsOn ? (caseSectionFull("documents", c.stage) ? `
     <div style="margin-top:14px;" id="case-docs">
-      <h3 style="font-size:14px;">Documents</h3>
-      <p class="panel-sub" style="margin:2px 0 6px;">What this client has been asked for, and what has actually arrived. The document emails list <strong>only what is still outstanding</strong>, so nobody is asked twice for something they have already sent.</p>
+      <h3 style="font-size:14px;">Documents <span class="cs-muted" style="font-weight:400;" title="What this client has been asked for and what has arrived. The document emails list only what is still outstanding.">?</span></h3>
       <div id="case-docs-body"></div>
-    </div>` : ""}
+    </div>` : `
+    <details style="margin-top:14px;" id="case-docs" class="case-docs-compact">
+      <summary style="font-size:14px;font-weight:600;cursor:pointer;">Documents <span class="cs-muted" style="font-weight:400;">(checklist — click to expand)</span></summary>
+      <div id="case-docs-body"></div>
+    </details>`) : ""}
     ${/* R13 · M-2 — THE FIRM'S OWN PAPERS. Directly under Documents so the pair read as one idea
          with two halves, and worded so nobody has to work out which is which: the sub-line names
          the distinction outright. Absent entirely, with the absence STATED, on a database without
          the table — see caseFilesSupported(). Painted by renderCaseFiles() below. */ ""}
-    ${id ? `<div style="margin-top:14px;" id="case-files">
+    ${/* R15 · §3+§4 — the firm's own case papers appear once a case is real (DIP onward) and are
+         HIDDEN at enquiry+fact_find. Wrapped/hidden, never deleted (#case-files-body stays for
+         renderCaseFiles). Intro shortened to one line + a title tooltip; the old "no case_files
+         table" migration paragraph is CUT to a single muted line. */ ""}
+    ${id ? `<div style="margin-top:14px;" id="case-files"${caseSectionVisible("files", c.stage) ? "" : ' class="hidden"'}>
       <h3 style="font-size:14px;">Files</h3>
-      <p class="panel-sub" style="margin:2px 0 6px;">${filesOn
-        ? "The firm's own case papers — the illustration/ESIS, the research behind the recommendation, the signed client agreement, the offer letter, the suitability letter. <strong>Documents above are what we ask the client for; these are what we produce or receive about the case.</strong> Nothing here is chased and nothing here is sent to the client."
-        : "This database has no <code>case_files</code> table yet, so the firm's own case papers (illustration, research, client agreement, suitability letter) cannot be held on the case. The Documents checklist above is unaffected."}</p>
-      ${filesOn ? '<div id="case-files-body"></div>' : ""}
+      ${filesOn
+        ? `<p class="panel-sub" style="margin:2px 0 6px;" title="The illustration/ESIS, the research, the signed client agreement, the offer and suitability letters. Documents above are what we ask the client for; these are what we produce or receive. Nothing here is chased or sent to the client.">The firm's own case papers — what we produce or receive, not what we ask the client for. <span class="cs-muted">?</span></p>
+      <div id="case-files-body"></div>`
+        : '<p class="panel-sub cs-muted" style="margin:2px 0 6px;">No case-files table on this database yet.</p>'}
     </div>` : ""}
     <div style="margin-top:14px;">
       <h3 style="font-size:14px;">Notes</h3>
@@ -9790,23 +9945,17 @@ window.openCase = async function (id, opts = {}) {
     </div>
     ${/* BACKEND-R4 §2/§3 — what the database recorded, as opposed to what anyone typed. */ ""}
     <div style="margin-top:14px;" id="case-history">
-      <h3 style="font-size:14px;">History</h3>
-      <p class="panel-sub" style="margin:2px 0 6px;">Written by the database as the case progresses — stage changes, fee status, offer uploads, rate-end dates, protection status and reassignment, each with the person who made the change. Other field edits are in Change history below.</p>
+      ${/* R15 · §4 — History intro CUT. The heading and the timeline itself say what it is; the
+           detail lives in the tooltip. Change history sits directly below. */ ""}
+      <h3 style="font-size:14px;">History <span class="cs-muted" style="font-weight:400;" title="Written by the database as the case progresses — stage changes, fee status, offer uploads, rate-end dates, protection status and reassignment, each with who made the change. Other field edits are in Change history below.">?</span></h3>
       <div class="tl-list" id="case-events-list">${eventTimelineHtml(events)}</div>
       ${auditPanelHtml("case-audit", auditRows)}
     </div>
-    <div class="action-bar">
-      <button class="btn btn-sm" id="act-fee">💷 Email fee request</button>
-      <button class="btn btn-sm" id="act-review">⭐ Email review request</button>
-      <button class="btn btn-sm" id="act-reminder">📅 Email rate-end reminder</button>
-      <button class="btn btn-sm" id="act-paid">✓ Mark fee paid</button>
-      <button class="btn btn-sm" id="act-offer">📄 Read mortgage offer (AI)</button>
-      <input type="file" id="offer-file" accept="application/pdf" class="hidden">
-      ${c.offer_doc_path ? '<button class="btn btn-sm" id="act-view-offer">View offer doc</button>' : ""}
-      <button class="btn btn-sm" id="act-evidence">🗂 Evidence pack</button>
-      <button class="btn btn-sm" id="act-appt">📅 Book appointment</button>
-      <button class="btn btn-sm" id="act-factfind">📋 Digital fact-find</button>
-    </div>
+    ${/* R15 · §2 — the action bar is now stage- and type-reactive: only stage-relevant actions in
+         the primary row, the Advance button is the hero when not terminal, and EVERYTHING else
+         collapses into #case-more-actions. Every id + handler is preserved (see caseActionBarHtml
+         and CASE_ACTION_RULES); a non-primary action is reachable in the overflow, never removed. */ ""}
+    ${caseActionBarHtml(c, c.stage, c.case_kind, { heroesActive: !nextStage })}
     ${/* R5-4 — where a parsed mortgage offer PROPOSES its readings (Current vs Incoming, ticked
          field by field) instead of writing them behind the operator's back. Empty until a parse. */ ""}
     <div id="offer-diff" class="offer-diff hidden"></div>` : ""}
@@ -9847,9 +9996,7 @@ window.openCase = async function (id, opts = {}) {
             asks for to pull the case up, and it feeds the security-check card at the top of this
             modal. Hidden outright on a database without the column (mortgageAcctOn) — an input whose
             Save can only 42703 is worse than none, the same rule the call-pack fields follow. */ ""}
-      ${mortgageAcctOn ? `<label>Mortgage / account no.<input name="mortgage_account_number" id="case-mortgage-acct" value="${esc(c.mortgage_account_number)}" placeholder="e.g. 12345678" autocomplete="off">
-        <span class="s cs-muted">The lender's account/roll number for this mortgage — what they ask for on the phone. Shows on the security-check card at the top.</span>
-      </label>` : ""}
+      ${mortgageAcctOn ? `<label title="The lender's account/roll number for this mortgage — what they ask for on the phone. Shows on the security-check card at the top.">Mortgage / account no.<input name="mortgage_account_number" id="case-mortgage-acct" value="${esc(c.mortgage_account_number)}" placeholder="e.g. 12345678" autocomplete="off"></label>` : ""}
       <label>Product<input name="product_name" value="${esc(c.product_name)}"></label>
       <label>Loan amount (£)<input name="loan_amount" type="number" step="any" value="${c.loan_amount ?? ""}"></label>
       <label>Property value (£)<input name="property_value" type="number" step="any" value="${c.property_value ?? ""}"></label>
@@ -9865,17 +10012,12 @@ window.openCase = async function (id, opts = {}) {
            leave". Blank means NOT RECORDED and is stored as null (see the save path) — a zero
            balance is a repaid mortgage and a zero ERC is a free exit, and neither is what an empty
            box means. Hidden entirely without the migration. */ ""}
+      ${/* R15 · §4 — call-pack hints moved to title tooltips (short label + tooltip). */ ""}
       ${callPackOn ? `
-      <label>Current balance (£)<input name="current_balance" type="number" step="any" value="${c.current_balance ?? ""}" placeholder="not recorded">
-        <span class="s cs-muted">What is still owed today. Leave blank if you do not know it — it shows as “—”, never as £0.</span>
-      </label>
-      <label>Reversion rate (%)<input name="reversion_rate" type="number" step="any" value="${c.reversion_rate ?? ""}" placeholder="not recorded">
-        <span class="s cs-muted">The rate this loan falls onto when the fix ends. With the balance and the current rate, this is what the “≈ £X/mo more” estimate is built from.</span>
-      </label>
+      <label title="What is still owed today. Leave blank if you do not know it — it shows as “—”, never as £0.">Current balance (£)<input name="current_balance" type="number" step="any" value="${c.current_balance ?? ""}" placeholder="not recorded"></label>
+      <label title="The rate this loan falls onto when the fix ends. With the balance and the current rate, this is what the “≈ £X/mo more” estimate is built from.">Reversion rate (%)<input name="reversion_rate" type="number" step="any" value="${c.reversion_rate ?? ""}" placeholder="not recorded"></label>
       <label>Monthly payment (£)<input name="monthly_payment" type="number" step="any" value="${c.monthly_payment ?? ""}" placeholder="not recorded"></label>
-      <label>ERC amount (£)<input name="erc_amount" type="number" step="any" value="${c.erc_amount ?? ""}" placeholder="not recorded">
-        <span class="s cs-muted">What leaving early would cost right now. Blank is “not recorded”; £0 means there genuinely is no charge.</span>
-      </label>` : ""}
+      <label title="What leaving early would cost right now. Blank is “not recorded”; £0 means there genuinely is no charge.">ERC amount (£)<input name="erc_amount" type="number" step="any" value="${c.erc_amount ?? ""}" placeholder="not recorded"></label>` : ""}
       ${/* R13 · M-10 — REPAYMENT METHOD, with the loan it describes rather than in a section of its
            own: "£245,000 over 27 years" is not a mortgage until you know whether any of it is
            being repaid. Blank is "not recorded" and stays blank — there is no safe default here,
@@ -9890,17 +10032,17 @@ window.openCase = async function (id, opts = {}) {
       </label>` : ""}
       ${/* R13 · M-11 — OFFER ISSUED, beside the expiry it is so easily confused with. Two dates off
            one letter: the day the lender made the offer, and the day it runs out. */ ""}
-      ${forwardOn ? `<label id="case-offer-issued-field">Offer issued<input name="offer_issued_date" type="date" value="${c.offer_issued_date ?? ""}">
-        <span class="s cs-muted">The date on the offer letter itself, not the day it was filed here.</span>
-      </label>` : ""}
+      ${forwardOn ? `<label id="case-offer-issued-field" title="The date on the offer letter itself, not the day it was filed here.">Offer issued<input name="offer_issued_date" type="date" value="${c.offer_issued_date ?? ""}"></label>` : ""}
       <label>Offer expiry date<input name="offer_expiry_date" type="date" value="${c.offer_expiry_date ?? ""}"></label>
       ${/* R13 · M-13 — EXCHANGED ON. Shown from the OFFER stage onwards (and always where a date is
            already recorded, so a stage corrected backwards can never orphan one): asking an
            enquiry when contracts exchanged is asking about something two months away, and a form
            full of fields that cannot yet apply is how a form stops being read. */ ""}
-      ${forwardOn ? `<label id="case-exchange-field"${["offer", "exchange", "completed"].includes(c.stage) || c.exchange_date ? "" : ' class="hidden"'}>Exchanged on
+      ${/* R15 · §5 — a product transfer never exchanges contracts, so the field is hidden for PT
+           (unless a date is already recorded, so a kind corrected in the wrong direction can never
+           orphan one). §4 — hint moved to a title tooltip. */ ""}
+      ${forwardOn ? `<label id="case-exchange-field"${(["offer", "exchange", "completed"].includes(c.stage) && c.case_kind !== "product_transfer") || c.exchange_date ? "" : ' class="hidden"'} title="The day contracts exchanged. From here the client is committed — anything still outstanding after this date is urgent, not routine.">Exchanged on
         <input name="exchange_date" id="case-exchange-date" type="date" value="${c.exchange_date ?? ""}">
-        <span class="s cs-muted">The day contracts exchanged. From here the client is committed — anything still outstanding after this date is urgent, not routine.</span>
       </label>` : ""}
       <label>Expected completion date<input name="expected_completion_date" type="date" id="case-expected-completion" value="${c.expected_completion_date ?? ""}"></label>
       <label>Term (years)<input name="term_years" type="number" value="${c.term_years ?? ""}"></label>
@@ -9923,27 +10065,31 @@ window.openCase = async function (id, opts = {}) {
            taken the column — the same rule the referrer and call-pack fields follow. The Protection
            page's clawback panel is built from exactly this field, and says so. */ ""}
       ${policyStartOn ? `
-      <label id="case-policy-start-field" ${c.protection_status === "policy_taken" || c.policy_start_date ? "" : 'class="hidden"'}>Policy start date
+      <label id="case-policy-start-field" ${c.protection_status === "policy_taken" || c.policy_start_date ? "" : 'class="hidden"'} title="When the protection policy started — the date a clawback is measured from. Providers typically reclaim commission if the policy lapses inside ${CLAWBACK_MONTHS} months. Blank means the clawback window cannot be watched; the Protection page counts those.">Policy start date
         <input name="policy_start_date" id="case-policy-start" type="date" value="${c.policy_start_date ?? ""}">
-        <span class="s cs-muted">When the protection policy started — the date a clawback is measured from. Providers typically reclaim commission if the policy lapses inside ${CLAWBACK_MONTHS} months. Blank means the clawback window on this policy <strong>cannot be watched</strong>; the Protection page counts those.</span>
       </label>` : ""}
-      <label id="gi-status-label" ${["purchase","first_time_buyer"].includes(c.case_kind) ? "" : 'class="hidden"'}>GI / buildings insurance<select name="gi_status">${[["not_discussed","Not discussed"],["quoted","Quoted"],["policy_taken","Policy taken"],["declined","Declined"],["not_applicable","Not applicable"]].map(([k,l]) => `<option value="${k}" ${k === (c.gi_status || "not_discussed") ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+      ${/* R15 · §5 — GI applies to a purchase-shaped or owner-occupier case, not a product transfer.
+           Gate widened from [purchase, first_time_buyer] to GI_KINDS (adds buy_to_let + remortgage). */ ""}
+      <label id="gi-status-label" ${caseGiApplies(c.case_kind) ? "" : 'class="hidden"'}>GI / buildings insurance<select name="gi_status">${[["not_discussed","Not discussed"],["quoted","Quoted"],["policy_taken","Policy taken"],["declined","Declined"],["not_applicable","Not applicable"]].map(([k,l]) => `<option value="${k}" ${k === (c.gi_status || "not_discussed") ? "selected" : ""}>${l}</option>`).join("")}</select></label>
       ${/* R9-5 · m10 — WHO IS THIS CASE SITTING WITH. Next to the stage because that is the field
            people currently misuse to answer it, and the two are not the same question: a case can
            sit at Application for a month waiting on the CLIENT. The solicitor box is beside it and
            offers every firm already on the book, because a second spelling of "Trelawny" is a
            second row in the conveyancer report and a firm that looks twice as fast as it is. */ ""}
+      ${/* R15 · §5 — a product transfer has no conveyancer, so the "Solicitor" waiting-on option and
+           the Solicitor-firm field are dropped for PT (the field is hidden, not deleted; a firm
+           already on the case keeps the option so a stored value never orphans). §4 — solicitor hint
+           moved to a title tooltip. */ ""}
       ${docsOn ? `
       <label id="case-waiting-field">Waiting on
         <select name="waiting_on" id="case-waiting-select">
           <option value="">— nobody / not waiting —</option>
-          ${WAITING_ON_OPTIONS.map(([k, l]) => `<option value="${k}" ${k === c.waiting_on ? "selected" : ""}>${esc(l)}</option>`).join("")}
+          ${WAITING_ON_OPTIONS.filter(([k]) => k !== "solicitor" || c.case_kind !== "product_transfer" || c.waiting_on === "solicitor").map(([k, l]) => `<option value="${k}" ${k === c.waiting_on ? "selected" : ""}>${esc(l)}</option>`).join("")}
         </select>
       </label>
-      <label id="case-solicitor-field">Solicitor firm
+      <label id="case-solicitor-field"${c.case_kind === "product_transfer" && !c.solicitor_firm ? ' class="hidden"' : ""} title="Pick from the firms you already use where you can — the conveyancer-speed report groups on this exact text.">Solicitor firm
         <input name="solicitor_firm" id="case-solicitor-input" list="case-solicitor-firms" value="${esc(c.solicitor_firm)}" placeholder="e.g. Harker &amp; Bligh LLP" autocomplete="off">
         <datalist id="case-solicitor-firms">${solicitorFirms.map((f) => `<option value="${esc(f)}"></option>`).join("")}</datalist>
-        <span class="s cs-muted" id="case-solicitor-hint">Pick from the firms you already use where you can — the conveyancer-speed report groups on this exact text.</span>
       </label>` : ""}
       <label>Lead source<input name="lead_source" value="${esc(c.lead_source)}" placeholder="e.g. Google, referral, repeat"></label>
       <label>Introducer<select name="introducer_id"><option value="">— none —</option>${introOpts}</select></label>
@@ -9953,9 +10099,8 @@ window.openCase = async function (id, opts = {}) {
            agent, an accountant), not a client. Hidden outright without the migration, exactly like
            the M7 property field above: a select whose Save can only fail is worse than no select. */ ""}
       ${referrerOn ? `
-      <label id="case-referrer-field">Referred by (client)
+      <label id="case-referrer-field" title="The existing client who sent this one to you. Start typing a surname to jump down the list. When this case completes you will be offered a thank-you task on their case — nothing is emailed to anyone.">Referred by (client)
         <select name="referrer_client_id" id="case-referrer-select"><option value="">— nobody —</option>${referrerOrphanOpt}${referrerOpts}</select>
-        <span class="s cs-muted" id="case-referrer-hint">The existing client who sent this one to you. Start typing a surname to jump down the list. When this case completes you will be offered a thank-you task on their case — nothing is emailed to anyone.</span>
       </label>` : ""}
       ${/* R5-36 — a new case starts on ME, not on nobody: unassigned cases were being created by the
            dozen and only surfaced later in Data Health. An existing case keeps whatever it has. */ ""}
@@ -10005,7 +10150,21 @@ window.openCase = async function (id, opts = {}) {
   if (id && filesOn) renderCaseFiles(id, { id, client_id: c.client_id });
 
   const kindSel = $("#case-form").elements.case_kind;
-  kindSel.onchange = () => $("#gi-status-label").classList.toggle("hidden", !["purchase", "first_time_buyer"].includes(kindSel.value));
+  /* R15 · §5 — the type-reactive fields follow the kind select live: GI shows for GI_KINDS; a
+     product transfer hides the Solicitor firm field and the Exchanged-on field (each kept visible
+     if a value is already recorded, so switching kind never hides something the operator can save). */
+  kindSel.onchange = () => {
+    $("#gi-status-label").classList.toggle("hidden", !caseGiApplies(kindSel.value));
+    const isPT = kindSel.value === "product_transfer";
+    const solField = $("#case-solicitor-field");
+    if (solField) solField.classList.toggle("hidden", isPT && !(($("#case-solicitor-input") || {}).value || "").trim());
+    const exField = $("#case-exchange-field");
+    if (exField) {
+      const exVal = ($("#case-exchange-date") || {}).value || "";
+      const stageNow = ($("#case-form").elements.stage || {}).value || "";
+      exField.classList.toggle("hidden", (isPT || !["offer", "exchange", "completed"].includes(stageNow)) && !exVal);
+    }
+  };
   /* R13 · M-23 — the policy start date follows the protection status live, so an adviser recording
      "policy taken" is asked for the clawback date in the same breath rather than on a later visit.
      A date already typed keeps the field visible whatever the select then says: hiding a value the
@@ -10508,7 +10667,7 @@ window.openCase = async function (id, opts = {}) {
                case as an open gap. Repaint it instead, so the header immediately says the honest
                new thing ("discussed — no outcome yet"). */
             const warn = $("#cs-prot-warn");
-            if (warn) warn.outerHTML = protStatChipHtml({ ...c, protection_status: "discussed" });
+            if (warn) warn.outerHTML = protStatChipHtml({ ...c, protection_status: "discussed" }, c.stage);
             protChk.checked = true; protChk.disabled = true;
             snapshotModalState(); // the app made this change, not the operator — not an unsaved edit
           }
@@ -10631,6 +10790,30 @@ window.openCase = async function (id, opts = {}) {
       const { data, error } = await db.storage.from("offers").createSignedUrl(c.offer_doc_path, 300);
       if (error) return toast("Error: " + error.message);
       window.open(data.signedUrl, "_blank");
+    };
+    /* R15 · §2 — the "More actions" overflow toggle. In-memory only, like the security card: the
+       modal re-renders on every open so the menu is born closed and this just flips .hidden + the
+       aria state. A click on the menu itself does not bubble up and re-close it. */
+    const moreToggle = $("#case-more-actions-toggle"), moreMenu = $("#case-more-actions");
+    if (moreToggle && moreMenu) {
+      moreToggle.onclick = (e) => {
+        e.stopPropagation();
+        const open = !moreMenu.classList.toggle("hidden");
+        moreToggle.setAttribute("aria-expanded", open ? "true" : "false");
+      };
+      moreMenu.addEventListener("click", (e) => e.stopPropagation());
+    }
+    // R15 · §6 — record-reason exists only at not_proceeding (primary there). Reuses promptLostReason.
+    const recordReasonBtn = $("#act-record-reason");
+    if (recordReasonBtn) recordReasonBtn.onclick = () => window.recordLostReason(id, c);
+    /* R15 · §6 — the OFFER/EXCHANGE "Discuss protection →" prompt chip. Reveals the protection
+       field in Case details (same gesture as the expected-completion nudge), so the adviser records
+       the conversation on the field the reports read. */
+    const protPrompt = $("#cs-prot-warn.cs-prot-prompt") || (function () { const el = $("#cs-prot-warn"); return el && el.classList.contains("cs-prot-prompt") ? el : null; })();
+    if (protPrompt) protPrompt.onclick = () => {
+      const det = $(".case-details"); if (det) det.open = true;
+      const sel = $("#case-form") && $("#case-form").elements.protection_status;
+      if (sel) { sel.scrollIntoView({ behavior: "smooth", block: "center" }); sel.focus(); }
     };
   }
   /* Callers that opened this case to point at something specific.

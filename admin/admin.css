@@ -895,6 +895,15 @@ main input:focus, main select:focus, main textarea:focus,
 .modal-actions .right { display: flex; gap: 10px; }
 .action-bar { display: flex; gap: 8px; flex-wrap: wrap; margin: 16px 0 4px; padding-top: 16px; border-top: 1px solid var(--border); }
 
+/* R15 — the "More actions" overflow. The escape hatch on the case action bar: every action a stage
+   does not feature lives here, one click away, so nothing is ever lost when the primary row narrows. */
+.more-actions { position: relative; display: inline-flex; margin-left: auto; }
+.more-actions-menu { position: absolute; bottom: calc(100% + 6px); right: 0; z-index: 20;
+  display: flex; flex-direction: column; gap: 6px; padding: 8px; min-width: 220px;
+  background: #fff; border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 8px 28px rgba(9,20,38,.16); }
+.more-actions-menu .btn { width: 100%; justify-content: flex-start; text-align: left; }
+.more-actions-empty { color: var(--muted); font-size: 13px; padding: 4px 6px; }
+
 /* ---------- Second-layer overlay (R5 batch 2) ----------
    Sits above an open record modal (lost reason, per-fee paid dates) so the case form
    underneath survives the capture instead of being replaced by it. */
