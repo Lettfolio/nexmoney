@@ -234,6 +234,26 @@
        James Whitfield's case → "MTG-TEST-4471", Owen Cadwallader's
        completed case → "ACC-0099-TEST".
 
+   ROUND 16 (BTL rental + ICR affordability, submit-to-lender tracker):
+     · `cases` gains six more plain nullable columns, same no-migration-toggle
+       rule as R14b: `monthly_rent`, `icr_stress_rate`, `icr_required_pct`
+       (the BTL trio — app.js probes presence via `monthly_rent`) and
+       `lender_reference`, `application_status`, `application_status_at` (the
+       tracker trio — probed via `application_status`). Defaulted null in
+       `mkCase()` and `applyInsertDefaults()`. Canonical ICR/yield formula
+       lives ONLY in app.js's `btlIcr()` — this file computes nothing, it
+       just stores the numbers. Four fixture rows carry real (fake) values
+       (search "R16" in the fixture pass after roundFourteenBFixtures): two
+       of Gareth Pollard's BTL cases (application-stage ICR fail, offer-stage
+       ICR pass) and two lender-tracker rows (Melanie Underhill's BTL
+       application case — status "underwriting" stamped 15 days ago, so the
+       chase nudge fires; the Fairweathers' BTL offer case — status
+       "offer_issued" stamped 25 days ago, so it does NOT, despite being
+       older, since offer_issued is excluded from the chase). `tests/r16.js`
+       mints its own fresh cases for every exact-number assertion, exactly
+       like `tests/r15.js` does — these fixture rows exist for realism/manual
+       verification, not because any suite's count depends on their figures.
+
    Personas (?as=…):  p1 Kim Martin (admin, DEFAULT) · p2 Wayne Kellow (adviser)
                       p3 Luke Richards (adviser) · p4 Daniel Potts (owner)
                       p5 Rachel Foyle (introducer — fails the staff login gate)
@@ -1109,11 +1129,18 @@
          on every row a write doesn't name, undefined-safe so select("*")
          always returns the key (app.js's hasOwnProperty feature-detect
          depends on that). */
+      /* R16 — the BTL rent/ICR trio and the three lender-tracker columns join
+         the list on the identical rule: plain nullable columns, no migration
+         toggle (same as mortgage_account_number above), null on every row a
+         write doesn't name so btlIcrSupported()/lenderTrackSupported()'s
+         hasOwnProperty probe always sees them. */
       ["lost_reason", "lost_detail", "broker_fee_paid_at", "proc_fee_paid_at", "sols_fee_paid_at", "property_address",
         "waiting_on", "solicitor_firm", "doc_token", "referrer_client_id",
         "current_balance", "reversion_rate", "monthly_payment", "erc_amount",
         "policy_start_date", "exchange_date", "offer_issued_date", "repayment_method",
-        "mortgage_account_number"]
+        "mortgage_account_number",
+        "monthly_rent", "icr_stress_rate", "icr_required_pct",
+        "lender_reference", "application_status", "application_status_at"]
         .forEach(function (f) { if (r[f] === undefined) r[f] = null; });
     }
     /* R13 — the care columns exist on every client row, false/null/false until
@@ -1478,6 +1505,18 @@
          See the R14 fixture pass below for the two rows that carry a
          (plainly fake) value. */
       mortgage_account_number: o.mortgage_account_number || null,
+      /* R16 §A/§B — BTL rent/ICR trio (numerics, null = not recorded) and the
+         submit-to-lender tracker (lender_reference text, application_status
+         text, application_status_at timestamptz). No backfill — null on
+         nearly every row, exactly like every other plain-column addition
+         above. See the R16 fixture pass below for the handful of rows that
+         carry real (fake) values. */
+      monthly_rent: o.monthly_rent == null ? null : o.monthly_rent,
+      icr_stress_rate: o.icr_stress_rate == null ? null : o.icr_stress_rate,
+      icr_required_pct: o.icr_required_pct == null ? null : o.icr_required_pct,
+      lender_reference: o.lender_reference || null,
+      application_status: o.application_status || null,
+      application_status_at: o.application_status_at || null,
       created_at: o.created_at || iso(shift(-30)),
       updated_at: o.updated_at || o.created_at || iso(shift(-10))
     };
@@ -3352,6 +3391,63 @@
     if (jw) jw.mortgage_account_number = "MTG-TEST-4471";
     var owen = caseForClientName("Owen Cadwallader", "completed");
     if (owen) owen.mortgage_account_number = "ACC-0099-TEST";
+  })();
+
+  /* --- R16 — BTL rental/ICR + submit-to-lender tracker --------------------
+     Six new plain nullable columns (monthly_rent, icr_stress_rate,
+     icr_required_pct, lender_reference, application_status,
+     application_status_at), same no-migration-toggle rule as R14b's
+     mortgage_account_number: null on nearly every case, a handful of real
+     (fake) values set below on cases that already exist — no new clients, no
+     new cases, so no count anywhere else in the battery moves.
+
+     `tests/r16.js` mints its OWN fresh cases for every numbered assertion
+     (exact ICR fail/pass/muted/null fixtures, and the chase-nudge boundary),
+     the same way tests/r15.js does — see HARNESS.md's per-page-DB note. The
+     values set here exist only so a BTL case and a tracked application are
+     visibly present on the ordinary fixture book (open Gareth Pollard's
+     application-stage BTL case and the block renders with real numbers),
+     not because any suite's pass/fail count depends on the exact figures. */
+  (function roundSixteenFixtures() {
+    var caseForClientKindStage = function (name, kind, stage) {
+      var cl = DB.clients.filter(function (c) { return [c.first_name, c.last_name].filter(Boolean).join(" ") === name; })[0];
+      if (!cl) return null;
+      return DB.cases.filter(function (c) { return c.client_id === cl.id && c.case_kind === kind && c.stage === stage; })[0] || null;
+    };
+    /* (a) ICR FAIL — Gareth Pollard's application-stage BTL case (loan
+       196000, value 268000). rent 1200 -> annualRent 14400, stressInterest
+       (default 5.5%) 10780, icrPct round(133.58)=134, needs default 145 -> fail. */
+    var pollardApp = caseForClientKindStage("Gareth Pollard", "buy_to_let", "application");
+    if (pollardApp) pollardApp.monthly_rent = 1200;
+    /* (b) ICR PASS — Gareth Pollard's offer-stage BTL case (loan 154000,
+       value 224000). rent 1500 -> annualRent 18000, stressInterest 8470,
+       icrPct round(212.5..)=213 >= 145 -> pass. */
+    var pollardOffer = caseForClientKindStage("Gareth Pollard", "buy_to_let", "offer");
+    if (pollardOffer) pollardOffer.monthly_rent = 1500;
+    /* (c) lender tracker, CHASEABLE — Harold Mainwaring's exchange-stage case
+       (not BTL — the tracker itself is not kind-gated): status "submitted"
+       stamped 15 days ago (>= the 10-day LENDER_CHASE_DAYS window) — the
+       header nudge fires. Deliberately NOT Melanie Underhill's application
+       case (ca061), which R13's fixture pass already uses for the
+       app_not_submitted watchtower rule (submitted_at cleared there) —
+       stacking an "in underwriting" status on a case fixtured as "not yet
+       submitted" would be confusing to read even though nothing actually
+       collides (app_not_submitted never reads application_status). */
+    var haroldExchange = caseForClientKindStage("Harold Mainwaring", "first_time_buyer", "exchange");
+    if (haroldExchange) {
+      haroldExchange.lender_reference = "APP-441829";
+      haroldExchange.application_status = "submitted";
+      haroldExchange.application_status_at = iso(shift(-15));
+    }
+    /* (d) lender tracker, NOT chaseable despite being old — the Fairweathers'
+       offer-stage BTL case: status "offer_issued" stamped 25 days ago. The
+       chase nudge excludes offer_issued regardless of age. */
+    var fairweatherOffer = caseForClientKindStage("Ian & Susan Fairweather", "buy_to_let", "offer");
+    if (fairweatherOffer) {
+      fairweatherOffer.lender_reference = "APP-552013";
+      fairweatherOffer.application_status = "offer_issued";
+      fairweatherOffer.application_status_at = iso(shift(-25));
+    }
   })();
 
   /* --- vault_entries (R14 — the company password safe) -------------------

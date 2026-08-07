@@ -4961,6 +4961,112 @@ async function forwardDatesSupported() {
     return FORWARD_SUPPORTED;
   } catch (e) { return false; }
 }
+/* ==========================================================================
+   R16 — BTL rental + ICR affordability, and the submit-to-lender tracker.
+   Two independent migrations, so two independent feature flags, each on the
+   exact `mortgageAcctSupported()` pattern above: the inputs/chips render only
+   where the columns exist, and the Save path strips them (belt) and retries on
+   a 42703 (braces) so a database without the migration never gets a failing
+   write. BTL_COLS is probed via `monthly_rent` (a proxy for the whole trio);
+   the tracker is probed via `application_status`.
+   ========================================================================== */
+const BTL_COLS = ["monthly_rent", "icr_stress_rate", "icr_required_pct"];
+const LENDER_COLS = ["lender_reference", "application_status", "application_status_at"];
+const LENDER_CHASE_DAYS = 10;   // days in a chaseable status before the nudge fires
+const APP_STATUS_LABEL = { submitted: "Submitted", underwriting: "Underwriting", valuation: "Valuation", offer_issued: "Offer issued" };
+// The stage window where the tracker chip/nudge is meaningful — the R15 relevance
+// window for a lender application (DIP is fine; application/offer/exchange are the core).
+const LENDER_TRACK_STAGES = ["decision_in_principle", "application", "offer", "exchange"];
+function lenderTrackVisible(stage) { return LENDER_TRACK_STAGES.includes(stage); }
+let BTL_ICR_SUPPORTED = null;   // null = not yet known
+function noteBtlIcrFromStarRow(row) {
+  if (!row || typeof row !== "object") return;
+  BTL_ICR_SUPPORTED = Object.prototype.hasOwnProperty.call(row, "monthly_rent");
+}
+async function btlIcrSupported() {
+  if (BTL_ICR_SUPPORTED !== null) return BTL_ICR_SUPPORTED;
+  try {
+    const { data, error } = await db.from("cases").select("id,monthly_rent").limit(1);
+    if (error) { if (isMissingColumnError(error)) { BTL_ICR_SUPPORTED = false; return false; } return false; }
+    if (!data || !data.length) return false;   // an empty table proves nothing — ask again next time
+    BTL_ICR_SUPPORTED = Object.prototype.hasOwnProperty.call(data[0], "monthly_rent");
+    return BTL_ICR_SUPPORTED;
+  } catch (e) { return false; }
+}
+let LENDER_TRACK_SUPPORTED = null;   // null = not yet known
+function noteLenderTrackFromStarRow(row) {
+  if (!row || typeof row !== "object") return;
+  LENDER_TRACK_SUPPORTED = Object.prototype.hasOwnProperty.call(row, "application_status");
+}
+async function lenderTrackSupported() {
+  if (LENDER_TRACK_SUPPORTED !== null) return LENDER_TRACK_SUPPORTED;
+  try {
+    const { data, error } = await db.from("cases").select("id,application_status").limit(1);
+    if (error) { if (isMissingColumnError(error)) { LENDER_TRACK_SUPPORTED = false; return false; } return false; }
+    if (!data || !data.length) return false;
+    LENDER_TRACK_SUPPORTED = Object.prototype.hasOwnProperty.call(data[0], "application_status");
+    return LENDER_TRACK_SUPPORTED;
+  } catch (e) { return false; }
+}
+/* CANONICAL ICR/yield calc (R16 SPEC §A). One helper, so the chip, the header echo
+   and the tests all read the same numbers. Returns null when there is nothing to
+   assess yet (no rent). icrPct is an integer %, yieldPct is 1 dp; both are null when
+   their inputs are missing rather than a misleading zero. */
+function btlIcr(c) {
+  const rent = Number(c.monthly_rent);          // £/mo
+  const loan = Number(c.loan_amount);           // £
+  const stress = Number(c.icr_stress_rate) || 5.5;   // % (null/0/NaN -> 5.5 default)
+  const req = Number(c.icr_required_pct) || 145;     // % (null/0/NaN -> 145 default)
+  const val = Number(c.property_value);         // £
+  if (!rent || rent <= 0) return null;                       // nothing to assess yet
+  const annualRent = rent * 12;
+  const stressInterest = loan > 0 ? loan * (stress / 100) : 0;
+  const icrPct = stressInterest > 0 ? Math.round(annualRent / stressInterest * 100) : null;   // integer %
+  const pass = icrPct != null ? icrPct >= req : null;
+  const yieldPct = val > 0 ? Math.round(annualRent / val * 1000) / 10 : null;                  // 1 dp
+  return { icrPct, pass, yieldPct, annualRent };
+}
+/* The ICR chip — reused live in the BTL block, echoed compactly in the case header.
+   Red when it fails the required cover, green when it passes, muted when the loan
+   is missing (so there is a rent but no interest to test it against). */
+function btlIcrChipHtml(c) {
+  const r = btlIcr(c);
+  if (!r) return "";
+  const req = Number(c.icr_required_pct) || 145;
+  let cls, txt;
+  if (r.icrPct == null) { cls = "grey"; txt = "ICR — add loan amount"; }
+  else if (r.pass) { cls = "green"; txt = `ICR ${r.icrPct}% ✓`; }
+  else { cls = "red"; txt = `ICR ${r.icrPct}% · needs ${req}% ✗`; }
+  const y = r.yieldPct != null ? ` · Yield ${r.yieldPct}%` : "";
+  return `<span class="badge ${cls} icr-chip" title="Interest Cover Ratio — annual rent ÷ stressed annual interest, against the required cover. Yield is annual rent ÷ property value.">${esc(txt + y)}</span>`;
+}
+/* The submit-to-lender status chip (board card + header). Gated to the lender-application
+   stage window; degrades to nothing where the column is absent (the row simply has no
+   `application_status` property). */
+function lenderStatusBadgeHtml(c) {
+  const st = c.application_status;
+  if (st && APP_STATUS_LABEL[st] && lenderTrackVisible(c.stage)) {
+    if (st === "offer_issued") return `<span class="badge blue" title="The lender has issued its offer.">📄 Offer issued</span>`;
+    if (st === "submitted") return `<span class="badge grey" title="${esc(TIP_SUB)}${c.submitted_at ? " — " + esc(fmtD(c.submitted_at)) : ""}">📤 Submitted${c.submitted_at ? " " + fmtD(c.submitted_at) : ""}</span>`;
+    return `<span class="badge grey" title="With the lender — ${esc(APP_STATUS_LABEL[st])}.">🏦 ${esc(APP_STATUS_LABEL[st])}</span>`;
+  }
+  // No tracked status → the existing R12b "sub {date}" badge, unchanged.
+  return c.submitted_at && !["completed", "not_proceeding"].includes(c.stage)
+    ? `<span class="badge grey" title="${esc(TIP_SUB)} — submitted to lender ${esc(fmtD(c.submitted_at))}">📤 sub ${fmtD(c.submitted_at)}</span>`
+    : "";
+}
+/* Chase clock: whole days spent in a chaseable status. `application_status_at` drives it
+   (it is re-stamped on every status change), falling back to `submitted_at` for a case
+   submitted before the tracker existed. Returns null unless a nudge is actually due. */
+function lenderChaseDays(c) {
+  const st = c.application_status;
+  if (!["submitted", "underwriting", "valuation"].includes(st)) return null;   // not offer_issued, not null
+  const since = c.application_status_at || c.submitted_at;
+  if (!since) return null;
+  const days = Math.floor((Date.now() - new Date(since).getTime()) / 86400000);
+  if (isNaN(days) || days < LENDER_CHASE_DAYS) return null;
+  return { status: st, days };
+}
 /* Whole months between a policy start and today, London-derived like every other date here.
    Returns null for anything unreadable rather than a number nobody should trust. */
 function clawbackMonthsElapsed(startYmd) {
@@ -7114,7 +7220,9 @@ async function loadPipeline() {
             ${/* R12b · L-1/L-5/L-18 — the tooltip now names the actual date, not just what "sub"
                   is short for: TIP_SUB alone answered "what does sub mean" but not "sub WHEN",
                   which is the more common reason to hover a pill that already prints the date. */ ""}
-            ${c.submitted_at && !["completed","not_proceeding"].includes(c.stage) ? `<span class="badge grey" title="${esc(TIP_SUB)} — submitted to lender ${esc(fmtD(c.submitted_at))}">📤 sub ${fmtD(c.submitted_at)}</span>` : ""}
+            ${/* R16 §B — a tracked application status supersedes the plain "sub {date}" badge; the
+                 helper falls back to that exact badge when no status is set (or the column is absent). */ ""}
+            ${lenderStatusBadgeHtml(c)}
             ${c.fee_status === "paid" ? '<span class="badge green">Fee paid</span>' : c.fee_status === "requested" ? '<span class="badge amber">Fee requested</span>' : ""}
           </div>
           ${age.text ? `<div class="age-line" title="${esc(age.basis)}">${age.text}</div>` : ""}
@@ -9644,6 +9752,12 @@ window.openCase = async function (id, opts = {}) {
   // R14 — mortgage / account number. Same rule again: the input is only drawn where the column exists.
   if (id) noteMortgageAcctFromStarRow(c);
   const mortgageAcctOn = id ? Object.prototype.hasOwnProperty.call(c, "mortgage_account_number") : ((await mortgageAcctSupported()) === true);
+  // R16 — BTL rental + ICR trio, and the submit-to-lender tracker. Same rule again: the inputs
+  // and chips are only drawn where the columns exist; a Save that can only 42703 is worse than none.
+  if (id) noteBtlIcrFromStarRow(c);
+  const btlIcrOn = id ? Object.prototype.hasOwnProperty.call(c, "monthly_rent") : ((await btlIcrSupported()) === true);
+  if (id) noteLenderTrackFromStarRow(c);
+  const lenderTrackOn = id ? Object.prototype.hasOwnProperty.call(c, "application_status") : ((await lenderTrackSupported()) === true);
   const solicitorFirms = docsOn ? await knownSolicitorFirms() : [];
   const siblingCases = c.client_id ? await softRows(db.from("cases").select("*").eq("client_id", c.client_id)) : [];
   registerClientProps(c.client_id, siblingCases);   // R6-FIX V2/V4 — the client's whole book
@@ -9789,6 +9903,10 @@ window.openCase = async function (id, opts = {}) {
              date that does not exist yet would be noise on every case at Enquiry. Deliberately
              stage-independent — a completed case that exchanged is still a case that exchanged. */ ""}
         ${c.exchange_date ? `<div class="cs-stat" id="cs-exchanged" title="Contracts exchanged on ${esc(fmtD(c.exchange_date))}. From this date the client is legally committed."><span class="cs-lbl">Exchanged</span><span class="cs-val">${fmtD(c.exchange_date)}</span></div>` : ""}
+        ${/* R16 §A — the ICR verdict, echoed compactly here for a BTL case an adviser reads on the phone. */ ""}
+        ${btlIcrOn && c.case_kind === "buy_to_let" && btlIcr(c) ? `<div class="cs-stat" id="cs-btl-icr"><span class="cs-lbl">Affordability</span><span class="cs-val">${btlIcrChipHtml(c)}</span></div>` : ""}
+        ${/* R16 §B — the submit-to-lender status, drawn only in the application window (DIP→exchange). */ ""}
+        ${lenderTrackOn && lenderTrackVisible(c.stage) && c.application_status && APP_STATUS_LABEL[c.application_status] ? `<div class="cs-stat" id="cs-lender-status"${c.lender_reference ? ` title="Lender ref: ${esc(c.lender_reference)}"` : ""}><span class="cs-lbl">Application</span><span class="cs-val">${c.application_status === "offer_issued" ? "📄" : c.application_status === "submitted" ? "📤" : "🏦"} ${esc(APP_STATUS_LABEL[c.application_status])}${c.application_status === "submitted" && c.submitted_at ? " " + fmtD(c.submitted_at) : ""}</span></div>` : ""}
         ${/* R12b · W-15b — THE CALL PACK, on the header an adviser reads with the phone in their
              hand. Four stats, drawn only when the case actually carries at least one of them, each
              absent value rendered "—" rather than £0. This is the same block the Rate & ERC row
@@ -9798,6 +9916,9 @@ window.openCase = async function (id, opts = {}) {
         <div class="cs-stat cs-callpack" id="cs-callpack-payment"><span class="cs-lbl">Monthly payment</span><span class="cs-val">${callPackVal(c.monthly_payment)}</span></div>
         <div class="cs-stat cs-callpack" id="cs-callpack-erc"><span class="cs-lbl">ERC amount</span><span class="cs-val">${callPackVal(c.erc_amount)}</span></div>` : ""}
       </div>
+      ${/* R16 §B — the chase nudge. Amber, header-only, and silent unless a case has genuinely sat
+           in a chaseable status (submitted/underwriting/valuation) past LENDER_CHASE_DAYS. */ ""}
+      ${lenderTrackOn && lenderTrackVisible(c.stage) && lenderChaseDays(c) ? (() => { const ch = lenderChaseDays(c); return `<div class="cs-chase" id="cs-lender-chase" title="No status change for ${ch.days} days — ring the lender${c.lender_reference ? " (ref " + esc(c.lender_reference) + ")" : ""} for an update.">⏰ In ${esc(APP_STATUS_LABEL[ch.status])} ${ch.days} days — chase the lender</div>`; })() : ""}
       ${/* R12b · W-15c — the one sentence the retention call opens with, where the whole pack is
            already on screen. Silent unless the balance, the reversion rate and the ended rate are
            all recorded. */ ""}
@@ -10000,6 +10121,17 @@ window.openCase = async function (id, opts = {}) {
       <label>Product<input name="product_name" value="${esc(c.product_name)}"></label>
       <label>Loan amount (£)<input name="loan_amount" type="number" step="any" value="${c.loan_amount ?? ""}"></label>
       <label>Property value (£)<input name="property_value" type="number" step="any" value="${c.property_value ?? ""}"></label>
+      ${/* R16 §A — BTL rental + ICR affordability. Kind-gated to buy_to_let (like the solicitor and
+           GI fields) AND hidden outright without the migration (btlIcrOn), the same rule the fields
+           above follow. Re-gates live in kindSel.onchange; the chip recomputes on any input via the
+           form-level listener below. Placed with loan/value because those are the ICR's inputs. */ ""}
+      ${btlIcrOn ? `
+      <div class="full btl-block${c.case_kind === "buy_to_let" ? "" : " hidden"}" id="case-btl-block">
+        <label>Monthly rent (£)<input name="monthly_rent" type="number" step="any" value="${c.monthly_rent ?? ""}" placeholder="e.g. 1200"></label>
+        <label title="Interest rate the rent is stress-tested at. Leave blank to use 5.5%.">ICR stress rate (%)<input name="icr_stress_rate" type="number" step="any" placeholder="5.5" value="${c.icr_stress_rate ?? ""}"></label>
+        <label title="Rent must cover this % of stressed interest. Typically 125% (basic-rate/Ltd Co) or 145% (higher-rate).">ICR required (%)<input name="icr_required_pct" type="number" step="any" placeholder="145" value="${c.icr_required_pct ?? ""}"></label>
+        <div class="btl-chip-wrap" id="btl-icr-chip">${btlIcrChipHtml(c)}</div>
+      </div>` : ""}
       <label>Rate %<input name="rate_percent" type="number" step="any" value="${c.rate_percent ?? ""}"></label>
       <label>Rate type<select name="rate_type">${["fixed", "tracker", "variable", "discount"].map((t) => `<option ${t === c.rate_type ? "selected" : ""}>${t}</option>`).join("")}</select></label>
       <label>Rate end date<input name="rate_end_date" type="date" value="${c.rate_end_date ?? ""}">
@@ -10047,6 +10179,17 @@ window.openCase = async function (id, opts = {}) {
       <label>Expected completion date<input name="expected_completion_date" type="date" id="case-expected-completion" value="${c.expected_completion_date ?? ""}"></label>
       <label>Term (years)<input name="term_years" type="number" value="${c.term_years ?? ""}"></label>
       <label>Submitted date<input name="submitted_at" type="date" value="${c.submitted_at ?? ""}"></label>
+      ${/* R16 §B — the submit-to-lender tracker, beside the submitted date it belongs with. Hidden
+           outright without the migration (lenderTrackOn). The status drives the header chip and the
+           chase nudge; application_status_at is stamped on change in the Save handler, never typed. */ ""}
+      ${lenderTrackOn ? `
+      <label title="The lender's application/case reference for chasing.">Lender reference<input name="lender_reference" value="${esc(c.lender_reference)}" placeholder="e.g. APP-482913" autocomplete="off"></label>
+      <label title="Where the application is with the lender. Changing this resets the chase clock; a submitted date defaults it to Submitted.">Application status
+        <select name="application_status">
+          <option value=""${c.application_status ? "" : " selected"}>— not submitted —</option>
+          ${["submitted", "underwriting", "valuation", "offer_issued"].map((k) => `<option value="${k}"${k === c.application_status ? " selected" : ""}>${esc(APP_STATUS_LABEL[k])}</option>`).join("")}
+        </select>
+      </label>` : ""}
       <label>Proc fee (£)<input name="proc_fee" type="number" step="any" value="${c.proc_fee ?? ""}"></label>
       <label>Sols fee (£)<input name="sols_fee" type="number" step="any" value="${c.sols_fee ?? ""}"></label>
       <label>Broker fee (£)<input name="broker_fee" type="number" step="any" value="${c.broker_fee ?? ""}"></label>
@@ -10164,7 +10307,24 @@ window.openCase = async function (id, opts = {}) {
       const stageNow = ($("#case-form").elements.stage || {}).value || "";
       exField.classList.toggle("hidden", (isPT || !["offer", "exchange", "completed"].includes(stageNow)) && !exVal);
     }
+    // R16 §A — the BTL rental/ICR block follows the kind live: shown only for buy_to_let.
+    const btlBlock = $("#case-btl-block");
+    if (btlBlock) btlBlock.classList.toggle("hidden", kindSel.value !== "buy_to_let");
   };
+  /* R16 §A — the ICR chip recomputes on any input that feeds it (rent, loan, stress, required,
+     value). One form-level listener, reading the live field values into the shared btlIcr helper. */
+  const btlChipEl = $("#btl-icr-chip");
+  if (btlChipEl) {
+    const caseForm = $("#case-form");
+    const g = (n) => (caseForm.elements[n] ? caseForm.elements[n].value : "");
+    caseForm.addEventListener("input", () => {
+      btlChipEl.innerHTML = btlIcrChipHtml({
+        monthly_rent: g("monthly_rent"), loan_amount: g("loan_amount"),
+        icr_stress_rate: g("icr_stress_rate"), icr_required_pct: g("icr_required_pct"),
+        property_value: g("property_value"),
+      });
+    });
+  }
   /* R13 · M-23 — the policy start date follows the protection status live, so an adviser recording
      "policy taken" is asked for the clawback date in the same breath rather than on a later visit.
      A date already typed keeps the field visible whatever the select then says: hiding a value the
@@ -10318,6 +10478,7 @@ window.openCase = async function (id, opts = {}) {
          Number(null) would turn "we don't know" into a hard £0. */
       ["loan_amount", "property_value", "rate_percent", "term_years", "broker_fee", "proc_fee", "sols_fee", "protection_commission"]
         .concat(CALLPACK_COLS)
+        .concat(BTL_COLS)   // R16 §A — the rent/stress/required trio are stored as numbers, blank = null
         .forEach((k) => { if (row[k] != null) row[k] = Number(row[k]); });
       /* R6/M7 — belt as well as braces. The field is only rendered when the probe says the column
          is there, but a database can be migrated backwards between page load and Save, so a write
@@ -10344,6 +10505,25 @@ window.openCase = async function (id, opts = {}) {
       // and dropped outright when the column is not there, exactly like the fields above.
       if (!mortgageAcctOn) delete row.mortgage_account_number;
       else if (row.mortgage_account_number) row.mortgage_account_number = String(row.mortgage_account_number).trim() || null;
+      /* R16 §A — the BTL trio. Stripped when the column set is absent (belt); a 42703 retries
+         without it (braces, below). No stamping here — these are plain numbers. */
+      if (!btlIcrOn) BTL_COLS.forEach((k) => delete row[k]);
+      /* R16 §B — the submit-to-lender tracker. application_status_at is never a form field; it is
+         stamped here so the chase clock resets on each status change, and NOT touched when the
+         status is unchanged (so an unrelated edit does not make an old application look fresh).
+         A submitted date set for the first time with no status implies at least "submitted". */
+      if (!lenderTrackOn) { LENDER_COLS.forEach((k) => delete row[k]); }
+      else {
+        const prevStatus = id ? (c.application_status || null) : null;
+        const newStatus = row.application_status || null;
+        if (newStatus !== prevStatus) row.application_status_at = new Date().toISOString();
+        const submittedNowSet = row.submitted_at && (!id || !c.submitted_at);
+        if (submittedNowSet && !newStatus) {
+          row.application_status = "submitted";
+          row.application_status_at = new Date().toISOString();
+        }
+        if (row.lender_reference) row.lender_reference = String(row.lender_reference).trim() || null;
+      }
       if (id) {
         // Optimistic concurrency: only update if the row hasn't changed since we opened it.
         let { data: updated, error } = await db.from("cases").update(row).eq("id", id).eq("updated_at", openedUpdatedAt).select();
@@ -10416,6 +10596,20 @@ window.openCase = async function (id, opts = {}) {
           delete row.mortgage_account_number;
           ({ data: updated, error } = await db.from("cases").update(row).eq("id", id).eq("updated_at", openedUpdatedAt).select());
         }
+        /* R16 §A — and the BTL trio. Same trade: a rental/ICR column is not worth the whole edit. */
+        let btlMissing = false;
+        if (error && BTL_COLS.some((k) => k in row) && isMissingColumnError(error)) {
+          btlMissing = true; BTL_ICR_SUPPORTED = false;
+          BTL_COLS.forEach((k) => delete row[k]);
+          ({ data: updated, error } = await db.from("cases").update(row).eq("id", id).eq("updated_at", openedUpdatedAt).select());
+        }
+        /* R16 §B — and the lender-tracker trio (reference, status, status stamp). Same trade again. */
+        let lenderTrackMissing = false;
+        if (error && LENDER_COLS.some((k) => k in row) && isMissingColumnError(error)) {
+          lenderTrackMissing = true; LENDER_TRACK_SUPPORTED = false;
+          LENDER_COLS.forEach((k) => delete row[k]);
+          ({ data: updated, error } = await db.from("cases").update(row).eq("id", id).eq("updated_at", openedUpdatedAt).select());
+        }
         if (error) return toast("Error: " + error.message);
         if (!updated || updated.length === 0) {
           /* R5-3 — this used to reload the case over the operator's typing: minutes of work gone,
@@ -10447,7 +10641,9 @@ window.openCase = async function (id, opts = {}) {
           + (callPackMissing ? " · balance / reversion / payment / ERC amount NOT saved (this database has no call-pack columns)" : "")
           + (policyStartMissing ? " · policy start date NOT saved (this database has no policy_start_date column)" : "")
           + (forwardMissing ? " · offer issued / exchanged on / repayment method NOT saved (this database has none of those columns)" : "")
-          + (mortgageAcctMissing ? " · mortgage / account number NOT saved (this database has no mortgage_account_number column)" : ""));
+          + (mortgageAcctMissing ? " · mortgage / account number NOT saved (this database has no mortgage_account_number column)" : "")
+          + (btlMissing ? " · rent / ICR NOT saved (this database has no BTL rental columns)" : "")
+          + (lenderTrackMissing ? " · lender reference / application status NOT saved (this database has no lender-tracker columns)" : ""));
         /* R9-1 — the case form is the OTHER route to Completed, so the thank-you has to be offered
            here too or the behaviour would depend on whether an adviser used the board or the form.
            Only on a genuine arrival at Completed: a re-save of an already completed case is not a
@@ -10508,6 +10704,18 @@ window.openCase = async function (id, opts = {}) {
           delete row.mortgage_account_number;
           ({ error } = await db.from("cases").insert(row));
         }
+        let btlMissing = false;  // R16 §A — BTL trio fallback, as above
+        if (error && BTL_COLS.some((k) => k in row) && isMissingColumnError(error)) {
+          btlMissing = true; BTL_ICR_SUPPORTED = false;
+          BTL_COLS.forEach((k) => delete row[k]);
+          ({ error } = await db.from("cases").insert(row));
+        }
+        let lenderTrackMissing = false;  // R16 §B — lender-tracker fallback, as above
+        if (error && LENDER_COLS.some((k) => k in row) && isMissingColumnError(error)) {
+          lenderTrackMissing = true; LENDER_TRACK_SUPPORTED = false;
+          LENDER_COLS.forEach((k) => delete row[k]);
+          ({ error } = await db.from("cases").insert(row));
+        }
         if (error) return toast("Error: " + error.message);
         closeModal(); toast("Case saved" + (propColMissing ? " · property address NOT saved (run migration M7)" : "")
           + (refColMissing ? " · referrer NOT saved (run migration m11)" : "")
@@ -10515,7 +10723,9 @@ window.openCase = async function (id, opts = {}) {
           + (callPackMissing ? " · balance / reversion / payment / ERC amount NOT saved (this database has no call-pack columns)" : "")
           + (policyStartMissing ? " · policy start date NOT saved (this database has no policy_start_date column)" : "")
           + (forwardMissing ? " · offer issued / exchanged on / repayment method NOT saved (this database has none of those columns)" : "")
-          + (mortgageAcctMissing ? " · mortgage / account number NOT saved (this database has no mortgage_account_number column)" : ""));
+          + (mortgageAcctMissing ? " · mortgage / account number NOT saved (this database has no mortgage_account_number column)" : "")
+          + (btlMissing ? " · rent / ICR NOT saved (this database has no BTL rental columns)" : "")
+          + (lenderTrackMissing ? " · lender reference / application status NOT saved (this database has no lender-tracker columns)" : ""));
         loadPipeline(); loadDashboard();
         if ($("#page-data") && !$("#page-data").classList.contains("hidden")) loadDataHealth();
       }

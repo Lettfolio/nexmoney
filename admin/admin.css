@@ -1751,6 +1751,16 @@ select.task-reassign { width: auto; padding: 3px 6px; font-size: 12px; }
 .cs-line .cs-lbl { margin-right: 6px; }
 .cs-muted { color: var(--muted); }
 .cs-danger-txt { color: var(--red); font-weight: 600; }
+/* R16 §B — the submit-to-lender chase nudge. Amber banner, header-only, same visual family as the
+   other in-header prompts (a quiet call to action, not an alarm edge). */
+.cs-chase { margin-top: 10px; padding: 7px 11px; border-radius: 8px; background: var(--amber-bg); color: var(--amber);
+  font-size: 13px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }
+/* R16 §A — the BTL rental + ICR block: a self-contained sub-grid inside the case form, with its
+   live ICR chip sitting full-width beneath the three inputs. */
+.btl-block { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px 16px; padding: 10px 12px;
+  background: #f8fafc; border: 1px solid var(--border); border-radius: 8px; margin: -2px 0 4px; }
+.btl-block .btl-chip-wrap { grid-column: 1 / -1; min-height: 20px; }
+.btl-block .icr-chip { font-size: 12px; }
 .cs-logcall-panel { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
 .cs-logcall-panel textarea { width: 100%; }
 .case-details { margin-top: 4px; border-top: 1px solid var(--border); padding-top: 14px; }
