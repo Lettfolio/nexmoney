@@ -4893,6 +4893,29 @@ async function policyStartSupported() {
   } catch (e) { return false; }
 }
 /* ==========================================================================
+   R14 — cases.mortgage_account_number (nullable text), live in production.
+
+   The one thing a lender asks for to pull the case up on the phone, and the
+   security-check card at the top of the case modal had nowhere to show it. Same
+   feature-detect discipline as policy_start_date above: an un-migrated database
+   simply renders "—" on the card and never offers the input, and a save that
+   42703s on it retries without it rather than losing the adviser's whole edit. */
+let MORTGAGE_ACCT_SUPPORTED = null;   // null = not yet known
+function noteMortgageAcctFromStarRow(row) {
+  if (!row || typeof row !== "object") return;
+  MORTGAGE_ACCT_SUPPORTED = Object.prototype.hasOwnProperty.call(row, "mortgage_account_number");
+}
+async function mortgageAcctSupported() {
+  if (MORTGAGE_ACCT_SUPPORTED !== null) return MORTGAGE_ACCT_SUPPORTED;
+  try {
+    const { data, error } = await db.from("cases").select("id,mortgage_account_number").limit(1);
+    if (error) { if (isMissingColumnError(error)) { MORTGAGE_ACCT_SUPPORTED = false; return false; } return false; }
+    if (!data || !data.length) return false;   // an empty table proves nothing — ask again next time
+    MORTGAGE_ACCT_SUPPORTED = Object.prototype.hasOwnProperty.call(data[0], "mortgage_account_number");
+    return MORTGAGE_ACCT_SUPPORTED;
+  } catch (e) { return false; }
+}
+/* ==========================================================================
    R13 · M-11 / M-13 / M-10 — THE THREE FORWARD-CAPTURE COLUMNS.
 
    `offer_issued_date`, `exchange_date` and `repayment_method` are three facts
@@ -9333,11 +9356,15 @@ function wireCasePropertyPicker(preloadedSiblings, selfCaseId) {
 }
 /* R14 — the "read this out to the lender" strip at the top of the case modal. A lender doing a
    security check on the phone asks the same handful of questions every time — name, date of birth,
-   the property, the loan, the current rate — and until now an adviser answered them by scrolling the
-   Case-details form. This is those answers in one always-visible block, each with a one-click Copy.
-   Every value is a REAL column; the only derived figure is LTV (loan ÷ value), and an absent value
-   shows "—", never a guess. There is NO mortgage/account-number column on a case, so that question
-   has no row here rather than a permanent blank that could never be filled. */
+   the property, the loan, the current rate, the mortgage/account number — and until now an adviser
+   answered them by scrolling the Case-details form. This is those answers in one block, each with a
+   one-click Copy. Every value is a REAL column; the only derived figure is LTV (loan ÷ value), and
+   an absent value shows "—", never a guess.
+   R14b — COLLAPSED BY DEFAULT. Daniel found it too heavy always-open; it is a reference strip you
+   open DURING a lender call, not something you read on every case. Collapsed shows one line — the
+   icon, the label and the client's NAME (so you know whose it is) and a "Show details" toggle;
+   expanding reveals the full grid, still always-visible-and-copyable once open. In-memory only: it
+   re-renders collapsed on every case open, which is the right default for a call-time strip. */
 function secRow(label, value, opts) {
   opts = opts || {};
   const has = value != null && value !== "" && value !== "—";
@@ -9364,15 +9391,28 @@ function securityCardHtml(c, caseClient, secClient) {
   // LTV only where BOTH figures are real and positive — a zero value would divide to nonsense.
   const ltv = (Number(c.loan_amount) > 0 && Number(c.property_value) > 0)
     ? (Math.round((Number(c.loan_amount) / Number(c.property_value)) * 1000) / 10) + "%" : null;
-  return `<div class="sec-card" id="case-sec-card">
-    <div class="sec-head">🔐 Client — security check <span class="sec-sub">what a lender asks on the phone · one-click copy · always visible</span></div>
-    <div class="sec-grid">
+  /* R14b — the mortgage / account number. Reads c.mortgage_account_number directly: on a database
+     without the column that is simply undefined → "—", so no feature-detect is needed to render it
+     safely (the input in the case form IS gated — see mortgageAcctOn). Placed with loan/lender
+     because it is what a lender asks for to pull the case up. */
+  const mortgageNo = c.mortgage_account_number || null;
+  return `<div class="sec-card sec-collapsed" id="case-sec-card">
+    <div class="sec-head">
+      <button type="button" class="sec-toggle" id="sec-toggle" aria-expanded="false" aria-controls="sec-grid" title="Show the security-check details">
+        <span class="sec-title">🔐 Client — security check</span>
+        ${fn ? `<span class="sec-who">${esc(fn)}</span>` : ""}
+        <span class="sec-toggle-hint"><span class="sec-toggle-show">Show details ▾</span><span class="sec-toggle-hide">Hide details ▴</span></span>
+      </button>
+    </div>
+    <div class="sec-grid" id="sec-grid">
+      <div class="sec-grid-note">What a lender asks on the phone · one-click copy on every value.</div>
       ${secRow("Name", fn || null)}
       ${dobRow}
       ${secRow("Property", propAddr)}
       ${secRow("Home address", homeAddr)}
       ${secRow("Loan amount", loan)}
       ${secRow("Lender", c.lender || null)}
+      ${secRow("Mortgage / account no.", mortgageNo)}
       ${secRow("Product", c.product_name || null)}
       ${secRow("Rate", rate)}
       ${secRow("LTV", ltv)}
@@ -9470,6 +9510,9 @@ window.openCase = async function (id, opts = {}) {
   // R13 · M-11/M-13/M-10 — offer issued / exchanged on / repayment method. Same rule a sixth time.
   if (id) noteForwardFromStarRow(c);
   const forwardOn = id ? Object.prototype.hasOwnProperty.call(c, "exchange_date") : ((await forwardDatesSupported()) === true);
+  // R14 — mortgage / account number. Same rule again: the input is only drawn where the column exists.
+  if (id) noteMortgageAcctFromStarRow(c);
+  const mortgageAcctOn = id ? Object.prototype.hasOwnProperty.call(c, "mortgage_account_number") : ((await mortgageAcctSupported()) === true);
   const solicitorFirms = docsOn ? await knownSolicitorFirms() : [];
   const siblingCases = c.client_id ? await softRows(db.from("cases").select("*").eq("client_id", c.client_id)) : [];
   registerClientProps(c.client_id, siblingCases);   // R6-FIX V2/V4 — the client's whole book
@@ -9800,6 +9843,13 @@ window.openCase = async function (id, opts = {}) {
       <label>Type<select name="case_kind">${KINDS.map(([k, l]) => `<option value="${k}" ${k === c.case_kind ? "selected" : ""}>${l}</option>`).join("")}</select></label>
       <label>Stage<select name="stage">${STAGES.map(([k, l]) => `<option value="${k}" ${k === c.stage ? "selected" : ""}${k === "decision_in_principle" ? ` title="${TIP_DIP}"` : ""}>${l}</option>`).join("")}</select></label>
       <label>Lender<input name="lender" value="${esc(c.lender)}"></label>
+      ${/* R14 — the mortgage / account number, beside the lender it belongs to. It is what a lender
+            asks for to pull the case up, and it feeds the security-check card at the top of this
+            modal. Hidden outright on a database without the column (mortgageAcctOn) — an input whose
+            Save can only 42703 is worse than none, the same rule the call-pack fields follow. */ ""}
+      ${mortgageAcctOn ? `<label>Mortgage / account no.<input name="mortgage_account_number" id="case-mortgage-acct" value="${esc(c.mortgage_account_number)}" placeholder="e.g. 12345678" autocomplete="off">
+        <span class="s cs-muted">The lender's account/roll number for this mortgage — what they ask for on the phone. Shows on the security-check card at the top.</span>
+      </label>` : ""}
       <label>Product<input name="product_name" value="${esc(c.product_name)}"></label>
       <label>Loan amount (£)<input name="loan_amount" type="number" step="any" value="${c.loan_amount ?? ""}"></label>
       <label>Property value (£)<input name="property_value" type="number" step="any" value="${c.property_value ?? ""}"></label>
@@ -9926,6 +9976,18 @@ window.openCase = async function (id, opts = {}) {
   // the next Save attempt.
   const caseFormEl = $("#case-form");
   if (caseFormEl) caseFormEl.addEventListener("input", (e) => { if (e.target && e.target.classList) e.target.classList.remove("field-invalid"); });
+  /* R14b — the security-check card's collapse toggle. In-memory only: the modal re-renders on every
+     open, so the card is born collapsed (the .sec-collapsed class is in its markup) and this just
+     flips the class + the aria-expanded state on click. No persistence by design — it is a strip you
+     open during a lender call, not a preference. */
+  const secToggle = $("#sec-toggle");
+  if (secToggle) secToggle.addEventListener("click", () => {
+    const card = $("#case-sec-card");
+    if (!card) return;
+    const collapsed = card.classList.toggle("sec-collapsed");
+    secToggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+    secToggle.title = collapsed ? "Show the security-check details" : "Hide the security-check details";
+  });
   pushModalHistory("case", id); // BUILD 7a — Back closes this modal; reloads replace (no dup entry)
   if (id) wireAuditPanel("case-audit", auditRows);
   /* R9-5 — the Documents section, painted from the reads the modal already made. `docCase` is a
@@ -10119,6 +10181,10 @@ window.openCase = async function (id, opts = {}) {
       if (!policyStartOn) delete row.policy_start_date;
       // R13 · M-11/M-13/M-10 — and the forward three. Belt as well as braces, same as the rest.
       if (!forwardOn) FORWARD_COLS.forEach((k) => delete row[k]);
+      // R14 — and the mortgage / account number. Trimmed (a stray space is not a different account),
+      // and dropped outright when the column is not there, exactly like the fields above.
+      if (!mortgageAcctOn) delete row.mortgage_account_number;
+      else if (row.mortgage_account_number) row.mortgage_account_number = String(row.mortgage_account_number).trim() || null;
       if (id) {
         // Optimistic concurrency: only update if the row hasn't changed since we opened it.
         let { data: updated, error } = await db.from("cases").update(row).eq("id", id).eq("updated_at", openedUpdatedAt).select();
@@ -10183,6 +10249,14 @@ window.openCase = async function (id, opts = {}) {
           FORWARD_COLS.forEach((k) => delete row[k]);
           ({ data: updated, error } = await db.from("cases").update(row).eq("id", id).eq("updated_at", openedUpdatedAt).select());
         }
+        /* R14 — and an eighth time for the mortgage / account number. Same trade: a capture column
+           is not worth an adviser's whole edit. */
+        let mortgageAcctMissing = false;
+        if (error && "mortgage_account_number" in row && isMissingColumnError(error)) {
+          mortgageAcctMissing = true; MORTGAGE_ACCT_SUPPORTED = false;
+          delete row.mortgage_account_number;
+          ({ data: updated, error } = await db.from("cases").update(row).eq("id", id).eq("updated_at", openedUpdatedAt).select());
+        }
         if (error) return toast("Error: " + error.message);
         if (!updated || updated.length === 0) {
           /* R5-3 — this used to reload the case over the operator's typing: minutes of work gone,
@@ -10213,7 +10287,8 @@ window.openCase = async function (id, opts = {}) {
           + (docColsMissing ? " · waiting-on / solicitor NOT saved (run migration m10)" : "")
           + (callPackMissing ? " · balance / reversion / payment / ERC amount NOT saved (this database has no call-pack columns)" : "")
           + (policyStartMissing ? " · policy start date NOT saved (this database has no policy_start_date column)" : "")
-          + (forwardMissing ? " · offer issued / exchanged on / repayment method NOT saved (this database has none of those columns)" : ""));
+          + (forwardMissing ? " · offer issued / exchanged on / repayment method NOT saved (this database has none of those columns)" : "")
+          + (mortgageAcctMissing ? " · mortgage / account number NOT saved (this database has no mortgage_account_number column)" : ""));
         /* R9-1 — the case form is the OTHER route to Completed, so the thank-you has to be offered
            here too or the behaviour would depend on whether an adviser used the board or the form.
            Only on a genuine arrival at Completed: a re-save of an already completed case is not a
@@ -10268,13 +10343,20 @@ window.openCase = async function (id, opts = {}) {
           FORWARD_COLS.forEach((k) => delete row[k]);
           ({ error } = await db.from("cases").insert(row));
         }
+        let mortgageAcctMissing = false;  // R14 — mortgage / account number fallback, as above
+        if (error && "mortgage_account_number" in row && isMissingColumnError(error)) {
+          mortgageAcctMissing = true; MORTGAGE_ACCT_SUPPORTED = false;
+          delete row.mortgage_account_number;
+          ({ error } = await db.from("cases").insert(row));
+        }
         if (error) return toast("Error: " + error.message);
         closeModal(); toast("Case saved" + (propColMissing ? " · property address NOT saved (run migration M7)" : "")
           + (refColMissing ? " · referrer NOT saved (run migration m11)" : "")
           + (docColsMissing ? " · waiting-on / solicitor NOT saved (run migration m10)" : "")
           + (callPackMissing ? " · balance / reversion / payment / ERC amount NOT saved (this database has no call-pack columns)" : "")
           + (policyStartMissing ? " · policy start date NOT saved (this database has no policy_start_date column)" : "")
-          + (forwardMissing ? " · offer issued / exchanged on / repayment method NOT saved (this database has none of those columns)" : ""));
+          + (forwardMissing ? " · offer issued / exchanged on / repayment method NOT saved (this database has none of those columns)" : "")
+          + (mortgageAcctMissing ? " · mortgage / account number NOT saved (this database has no mortgage_account_number column)" : ""));
         loadPipeline(); loadDashboard();
         if ($("#page-data") && !$("#page-data").classList.contains("hidden")) loadDataHealth();
       }

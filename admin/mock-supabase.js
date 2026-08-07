@@ -225,6 +225,15 @@
        secret value (nothing filled in yet), and several mixing secret/
        non-secret fields on the same row.
 
+   ROUND 14b (`cases.mortgage_account_number`):
+     · Nullable text, no migration toggle (plain column, always present —
+       app.js feature-detects it by `hasOwnProperty`, same as
+       `protection_quoted_at`, not by the M-flag system). Defaulted null in
+       `mkCase()` and `applyInsertDefaults()`, alongside the R13
+       forward-capture columns. Two fixture values, both plainly fake:
+       James Whitfield's case → "MTG-TEST-4471", Owen Cadwallader's
+       completed case → "ACC-0099-TEST".
+
    Personas (?as=…):  p1 Kim Martin (admin, DEFAULT) · p2 Wayne Kellow (adviser)
                       p3 Luke Richards (adviser) · p4 Daniel Potts (owner)
                       p5 Rachel Foyle (introducer — fails the staff login gate)
@@ -1096,10 +1105,15 @@
       /* R13 — policy_start_date / exchange_date / offer_issued_date /
          repayment_method land with no backfill, same as every other M-round
          column above: null on every row until something records it. */
+      /* R14b — mortgage_account_number joins the list on the same rule: null
+         on every row a write doesn't name, undefined-safe so select("*")
+         always returns the key (app.js's hasOwnProperty feature-detect
+         depends on that). */
       ["lost_reason", "lost_detail", "broker_fee_paid_at", "proc_fee_paid_at", "sols_fee_paid_at", "property_address",
         "waiting_on", "solicitor_firm", "doc_token", "referrer_client_id",
         "current_balance", "reversion_rate", "monthly_payment", "erc_amount",
-        "policy_start_date", "exchange_date", "offer_issued_date", "repayment_method"]
+        "policy_start_date", "exchange_date", "offer_issued_date", "repayment_method",
+        "mortgage_account_number"]
         .forEach(function (f) { if (r[f] === undefined) r[f] = null; });
     }
     /* R13 — the care columns exist on every client row, false/null/false until
@@ -1459,6 +1473,11 @@
       exchange_date: o.exchange_date || null,
       offer_issued_date: o.offer_issued_date || null,
       repayment_method: o.repayment_method || null,
+      /* R14b — cases.mortgage_account_number, nullable text, no backfill —
+         null on nearly every row, exactly like the four r13 columns above.
+         See the R14 fixture pass below for the two rows that carry a
+         (plainly fake) value. */
+      mortgage_account_number: o.mortgage_account_number || null,
       created_at: o.created_at || iso(shift(-30)),
       updated_at: o.updated_at || o.created_at || iso(shift(-10))
     };
@@ -3311,6 +3330,28 @@
     if (pollard058) pollard058.offer_expiry_date = dateOnly(shift(10));
     var app061 = DB.cases.filter(function (c) { return c.id === "ca061"; })[0];
     if (app061) app061.submitted_at = null;
+  })();
+
+  /* --- R14b — cases.mortgage_account_number ------------------------------
+     Nullable text, no backfill — null on nearly every case, exactly like the
+     r13 forward-capture columns above. Two plainly-fake values, chosen on
+     stable-named clients: James Whitfield is one of the seven FIXED_DOB
+     clients above (always present, with a real loan_amount + lender), which
+     is exactly the case tests/r14.js's security-card section already opens
+     for its "DOB present" fixture — so this row lights up there rather than
+     reading "—" on every run. Owen Cadwallader (also FIXED_DOB, completed,
+     already carries a repayment_method from the r13 pass) gets the second
+     value for variety, so a card with a number is not a one-off. */
+  (function roundFourteenBFixtures() {
+    var caseForClientName = function (name, stage) {
+      var cl = DB.clients.filter(function (c) { return [c.first_name, c.last_name].filter(Boolean).join(" ") === name; })[0];
+      if (!cl) return null;
+      return DB.cases.filter(function (c) { return c.client_id === cl.id && (!stage || c.stage === stage); })[0] || null;
+    };
+    var jw = caseForClientName("James Whitfield");
+    if (jw) jw.mortgage_account_number = "MTG-TEST-4471";
+    var owen = caseForClientName("Owen Cadwallader", "completed");
+    if (owen) owen.mortgage_account_number = "ACC-0099-TEST";
   })();
 
   /* --- vault_entries (R14 — the company password safe) -------------------
