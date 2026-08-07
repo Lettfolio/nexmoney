@@ -130,6 +130,36 @@
        the app tells the two apart (see case_documents fixtures, search
        "R12a·D8").
 
+   ROUND 12b (retention call-pack, first-run tour, appointment outcomes,
+   doc-chase widening — mirrors production migrations deployed just before
+   this round):
+     · `cases` gains four nullable numerics for the retention call-pack (W-15):
+       `current_balance`, `reversion_rate`, `monthly_payment`, `erc_amount`.
+       No backfill, so NULL everywhere except the handful of fixture rows
+       seeded below (search "r12b" in the fixture pass after roundNineFixtures)
+       — Kwame Boateng and Louise Garnham (the two cases the Recover — rates
+       that already ended panel shows uncovered) and Sarah Ellingham's live
+       fact_find case (the retention-relevant one). Andrew Pemberton's
+       rate-ended case is left with all four null on purpose, and Louise's
+       carries a balance only — the app must render absence, not zero, and
+       partial data, not a crash.
+     · `profiles` gains nullable `tour_seen_at timestamptz` plus RPC
+       `mark_tour_seen()` — SECURITY DEFINER, sets tour_seen_at = now() on
+       exactly the CALLER's own profile row and only if it is currently null;
+       a second call is a no-op. Every staff fixture has a past timestamp
+       except Luke (p3), who is null so the first-run tour has exactly one
+       persona to fire for.
+     · `appointments` gains nullable text `outcome` (null = not recorded; the
+       app writes attended / no_show / rearranged). Null on every fixture row.
+     · `queue_comms_extras()`'s document chase (r9) widens from
+       fact_find/application to every live stage — enquiry through exchange —
+       in both the chase-email branch and the overdue-task branch (they share
+       one filter, `DOC_CHASE_STAGES`, exactly as production's two CTEs moved
+       together in one migration). Ruby Sinclair's decision_in_principle case
+       carries a checklist with outstanding items so the widening is
+       observable — `doc_chase_enabled` still seeds OFF, so nothing chases it
+       until a test turns the setting on.
+
    Personas (?as=…):  p1 Kim Martin (admin, DEFAULT) · p2 Wayne Kellow (adviser)
                       p3 Luke Richards (adviser) · p4 Daniel Potts (owner)
                       p5 Rachel Foyle (introducer — fails the staff login gate)
@@ -142,6 +172,16 @@
   var DAY = 86400000;
   var pad2 = function (n) { return String(n).padStart(2, "0"); };
   var dateOnly = function (d) { var x = new Date(d); return x.getFullYear() + "-" + pad2(x.getMonth() + 1) + "-" + pad2(x.getDate()); };
+  /* R12b flake fix — dateOnly() reads the BROWSER/Node process's own local timezone, which in this
+     harness is whatever the host happens to be, not necessarily Europe/London. app.js's own
+     "today"/"tomorrow" (localDateStr(), used for every due-date the app itself writes — the
+     rate-end chase task, the fee-paid date input's max, etc.) is always Europe/London-pinned. The
+     two only disagree for the hour 23:00–00:00 UTC (00:00–01:00 London during BST, already
+     "tomorrow" there while a UTC/process-local read still says "today") — exactly the class of
+     flake this harness has hit before (see shiftNoon() above). Anywhere the mock computes a due
+     date FROM A LIVE REQUEST (not a fixture pinned at load with shiftNoon) that a test will compare
+     against a Europe/London expectation, use this instead of dateOnly(). */
+  var dateOnlyLondon = function (d) { return new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/London" }).format(new Date(d)); };
   var iso = function (d) { return new Date(d).toISOString(); };
   /* DD/MM/YYYY — how a date is written INSIDE a title an adviser reads, which is
      the one place in this file a date is not an ISO string (r8_m1's annual-review
@@ -845,9 +885,13 @@
       /* M2 / M7 / M10 / M11 columns exist on every row, null until something
          records them. waiting_on, solicitor_firm, doc_token and
          referrer_client_id join the list for round 9 — a case created by the app
-         has all four, empty, exactly as the migrations leave them. */
+         has all four, empty, exactly as the migrations leave them. r12b adds
+         the retention call-pack numerics the same way: they exist, empty,
+         on a case the app creates — nobody types a reversion rate in on the
+         New Case form. */
       ["lost_reason", "lost_detail", "broker_fee_paid_at", "proc_fee_paid_at", "sols_fee_paid_at", "property_address",
-        "waiting_on", "solicitor_firm", "doc_token", "referrer_client_id"]
+        "waiting_on", "solicitor_firm", "doc_token", "referrer_client_id",
+        "current_balance", "reversion_rate", "monthly_payment", "erc_amount"]
         .forEach(function (f) { if (r[f] === undefined) r[f] = null; });
     }
     /* R9-M10 — a checklist item starts life REQUESTED, stamped with the moment
@@ -874,6 +918,9 @@
       if (r.sent_at === undefined) r.sent_at = null;
     }
     if (table === "sms_queue" && !r.status) r.status = "queued";
+    /* r12b — appointments.outcome: null = not recorded. Exists on every row,
+       empty until the app writes attended / no_show / rearranged. */
+    if (table === "appointments" && r.outcome === undefined) r.outcome = null;
     if (table === "leads") {
       if (!r.status) r.status = "new";
       /* R11 — discard_reason exists on every row, null until something records it */
@@ -904,17 +951,23 @@
       email_signoff: "Daniel Potts\nDirector\nNexMoney"
     }
   };
+  /* r12b — tour_seen_at (nullable timestamptz). Every staff persona has
+     already seen the first-run tour EXCEPT Luke (p3, adviser): he is the one
+     persona the app's first-run tour has to actually fire for, so the tour
+     logic gets exercised without every other page-load test tripping it. */
+  var TOUR_SEEN_AT = { p3: null };
   Object.keys(PERSONAS).forEach(function (k) {
     var p = PERSONAS[k];
     var ident = PROFILE_IDENTITY[p.id] || {};
     DB.profiles.push({
       id: p.id, full_name: p.full_name, email: p.email, role: p.role, introducer_id: null,
       phone: ident.phone || null, email_signoff: ident.email_signoff || null,
+      tour_seen_at: Object.prototype.hasOwnProperty.call(TOUR_SEEN_AT, p.id) ? TOUR_SEEN_AT[p.id] : iso(shift(-60)),
       created_at: iso(shift(-420))
     });
   });
   /* one deactivated colleague — exercises the "no access (still assigned)" paths */
-  DB.profiles.push({ id: "p6", full_name: "Priya Raman", email: "priya@nexmoney.co.uk", role: "none", introducer_id: null, phone: null, email_signoff: null, created_at: iso(shift(-380)) });
+  DB.profiles.push({ id: "p6", full_name: "Priya Raman", email: "priya@nexmoney.co.uk", role: "none", introducer_id: null, phone: null, email_signoff: null, tour_seen_at: iso(shift(-380)), created_at: iso(shift(-380)) });
 
   /* --- introducers ------------------------------------------------------- */
   [
@@ -1127,6 +1180,15 @@
       nps_score: o.nps_score == null ? null : o.nps_score,
       review_requested_at: o.review_requested_at || null,
       rate_reminder_queued_at: o.rate_reminder_queued_at || null,
+      /* r12b — the retention call-pack columns (W-15). Four nullable numerics,
+         NULL on nearly every row on purpose: they landed with no backfill, so
+         the book the app has to cope with is mostly blank exactly like M7/M10
+         before it. See the r12b fixture pass below for the handful of rows
+         that carry real (or deliberately partial) numbers. */
+      current_balance: o.current_balance == null ? null : o.current_balance,
+      reversion_rate: o.reversion_rate == null ? null : o.reversion_rate,
+      monthly_payment: o.monthly_payment == null ? null : o.monthly_payment,
+      erc_amount: o.erc_amount == null ? null : o.erc_amount,
       created_at: o.created_at || iso(shift(-30)),
       updated_at: o.updated_at || o.created_at || iso(shift(-10))
     };
@@ -1616,6 +1678,8 @@
       staff_id: ["p2", "p3", "p4", "p1"][a % 4],
       client_id: c2.client_id, case_id: c2.id,
       location: pick(["Office", "Phone", "Teams", "Client's home"]), notes: null,
+      /* r12b — outcome: null everywhere in fixtures. The app records it. */
+      outcome: null,
       created_at: iso(shift(-20))
     });
   }
@@ -1625,20 +1689,20 @@
     id: nid("ap"), title: "Fact find call — Ruby Sinclair",
     starts_at: iso(todayAt(10)), ends_at: iso(new Date(todayAt(10).getTime() + 60 * 60000)),
     staff_id: "p2", client_id: RUBY, case_id: DB.cases.filter(function (c) { return c.client_id === RUBY; })[0].id,
-    location: "Teams", notes: null, created_at: iso(shift(-4))
+    location: "Teams", notes: null, outcome: null, created_at: iso(shift(-4))
   });
   /* … the second one CLASHES with the first (same adviser, same slot) */
   DB.appointments.push({
     id: nid("ap"), title: "Protection review — Duncan Armitage",
     starts_at: iso(todayAt(10)), ends_at: iso(new Date(todayAt(10).getTime() + 45 * 60000)),
     staff_id: "p2", client_id: CL(1), case_id: DB.cases.filter(function (c) { return c.client_id === CL(1); })[0].id,
-    location: "Phone", notes: "Double-booked — needs moving", created_at: iso(shift(-2))
+    location: "Phone", notes: "Double-booked — needs moving", outcome: null, created_at: iso(shift(-2))
   });
   DB.appointments.push({
     id: nid("ap"), title: "Completion call — Whitfield",
     starts_at: iso(todayAt(15)), ends_at: iso(new Date(todayAt(15).getTime() + 30 * 60000)),
     staff_id: "p3", client_id: CL(10), case_id: null,
-    location: "Phone", notes: null, created_at: iso(shift(-3))
+    location: "Phone", notes: null, outcome: null, created_at: iso(shift(-3))
   });
   /* PLAN-R5 Batch 3 (R5-9) — a PLAIN-titled appointment today. Every other appointment seeded for
      today already has the client's name typed into its title, which is exactly the case R5-9 must
@@ -1652,7 +1716,7 @@
       id: nid("ap"), title: "Protection review",
       starts_at: iso(todayAt(14)), ends_at: iso(new Date(todayAt(14).getTime() + 45 * 60000)),
       staff_id: "p2", client_id: marcus.id, case_id: mcase ? mcase.id : null,
-      location: "Office", notes: null, created_at: iso(shift(-5))
+      location: "Office", notes: null, outcome: null, created_at: iso(shift(-5))
     });
   })();
 
@@ -2744,6 +2808,117 @@
     })();
   })();
 
+  /* =========================================================================
+     ROUND 12b FIXTURES — retention call-pack numerics (W-15) + a DIP-stage
+     checklist for the widened document chase (W-24).
+
+     Same constraint as the round-9 pass above: no new clients, no new cases.
+     Everything here is written onto rows that already exist, so every count
+     the rest of the battery depends on (completions per month, the review
+     drip, watchtower alerts) is exactly where round 12a left it.
+     ======================================================================= */
+  (function roundTwelveBFixtures() {
+    var nameOf = function (cid) {
+      var c = DB.clients.filter(function (x) { return x.id === cid; })[0];
+      return c ? [c.first_name, c.last_name].filter(Boolean).join(" ") : "";
+    };
+    var caseFor = function (client, stage) {
+      return DB.cases.filter(function (c) {
+        return nameOf(c.client_id) === client && (!stage || c.stage === stage);
+      })[0] || null;
+    };
+
+    /* ---- (a) retention call-pack numerics --------------------------------
+       Kwame Boateng and Louise Garnham are the two completed, rate-ended
+       cases the Recover — rates that already ended panel shows UNCOVERED
+       (rateEndRecoverModel(): completed, rate_end_date in the past, no
+       successor case) — see the "already-ended rates" landmine comment on
+       the retention window seed above. Real, plausible numbers on both: a
+       balance a little under the original loan, a reversion rate in the
+       7-8.5% SVR range, and (where seeded) a monthly payment computed off
+       that balance/rate on a standard repayment formula, not a guess.
+         · Kwame — the fuller of the two: all four columns.
+         · Louise — deliberately PARTIAL: a balance and nothing else, so the
+           app has to render "balance known, everything else unknown" rather
+           than inventing a reversion rate or a zero payment.
+       Andrew Pemberton is ALSO a completed, rate-ended case from the same
+       cohort, but he already has a retention successor (ca022, the
+       retention-loss fixture above) — the COVERED side of the same panel —
+       and is left with all four columns NULL on purpose: proof the app must
+       render absence, not zero, on a rate-ended case regardless of which
+       side of the panel it falls on. */
+    var kwame = caseFor("Kwame Boateng", "completed");
+    if (kwame) {
+      kwame.current_balance = 173200;
+      kwame.reversion_rate = 8.09;
+      kwame.monthly_payment = 1248;
+      kwame.erc_amount = 3200;
+    }
+    var louise = caseFor("Louise Garnham", "completed");
+    if (louise) {
+      louise.current_balance = 322000;
+      /* reversion_rate / monthly_payment / erc_amount stay null on purpose */
+    }
+    /* Andrew Pemberton — nothing written; his row keeps the mkCase() default
+       of null on all four, which is the point of naming him here. */
+
+    /* Sarah Ellingham's live fact_find case is the "at least one LIVE
+       retention-relevant case" — it is r9's retention pair successor
+       (retention_source_case_id points at her earlier completed case), and
+       her current rate ends inside the next few months, exactly the case an
+       adviser would pull a call-pack up for ahead of ringing her. */
+    var sarahRetention = DB.cases.filter(function (c) {
+      return nameOf(c.client_id) === "Sarah Ellingham" && c.stage === "fact_find" && c.retention_source_case_id;
+    })[0];
+    if (sarahRetention) {
+      sarahRetention.current_balance = 111200;
+      sarahRetention.reversion_rate = 7.79;
+      sarahRetention.monthly_payment = 898;
+      sarahRetention.erc_amount = 2450;
+    }
+
+    /* ---- (b) a DIP-stage checklist for the widened document chase --------
+       r9's fixture pass hard-seeds four checklist cases and tests/r9_docs.js
+       used to lock that count byte-for-byte (`G.checklistCases === 4`) — the
+       "fixture shape" assertion the rest of that file's named lookups
+       (Ellingham/Quirke/Amery/Osei) depend on. That lock has been loosened to
+       `>= 4` (R9-5, tests/r9_docs.js) — it now asserts that those four named
+       states exist, not a ceiling on the book — so a fifth checklist case no
+       longer trips it, and Ruby Sinclair's decision_in_principle case (see the
+       file banner above) can carry one: two items outstanding, none received,
+       one request sent, at a stage r9's own fixtures never reached (fact_find
+       and application only) — making the W-24 widening (DOC_CHASE_STAGES now
+       running enquiry through exchange) independently observable without
+       relying on a test moving a case's stage at runtime. doc_chase_enabled
+       still seeds OFF, so nothing chases her tonight — a test that wants to
+       see it fire has to turn the setting on itself, same as every other
+       chase fixture. */
+    var rubyDip = caseFor("Ruby Sinclair", "decision_in_principle");
+    if (rubyDip) {
+      var dipDocs = String(setting("docs_list", "")).split("|").map(function (s) { return s.trim(); }).filter(Boolean);
+      var dipD_ID = dipDocs[0] || "Photo ID";
+      var dipD_BANK = dipDocs[2] || "Last 3 months bank statements";
+      rubyDip.doc_token = "doc-sinclair-7c3a10";
+      rubyDip.waiting_on = "client";
+      [dipD_ID, dipD_BANK].forEach(function (item) {
+        DB.case_documents.push({
+          id: nid("cd"), case_id: rubyDip.id, item: item,
+          status: "requested",
+          requested_at: iso(shift(-6)),
+          received_at: null, note: null, storage_path: null,
+          created_at: iso(shift(-6))
+        });
+      });
+      var rubyCl = DB.clients.filter(function (x) { return x.id === rubyDip.client_id; })[0] || {};
+      DB.email_queue.push({
+        id: nid("eq"), case_id: rubyDip.id, client_id: rubyDip.client_id, email_type: "docs_request",
+        to_email: rubyCl.email || "", subject: "Your document checklist",
+        status: "sent", error: null,
+        sent_at: iso(shift(-6)), scheduled_for: iso(shift(-6)), created_at: iso(shift(-6))
+      });
+    }
+  })();
+
   /* --- case_events: give the live cases a stage history ------------------ */
   var STAGE_ORDER = ["enquiry", "fact_find", "decision_in_principle", "application", "offer", "exchange", "completed"];
   DB.cases.forEach(function (c) {
@@ -3239,6 +3414,18 @@
     return !!(g("bank_account_name") && g("bank_sort_code") && g("bank_account_number"));
   }
 
+  /* r12b — mark_tour_seen(). SECURITY DEFINER in production, granted to
+     authenticated: it may only ever touch the CALLING persona's own profiles
+     row (never one named by an argument — it takes none), and only sets
+     tour_seen_at the first time. A second call with it already set is a
+     no-op, not a re-stamp — the first-run tour records the first run, not the
+     most recent one. Returns void, exactly like the real function. */
+  function rpc_mark_tour_seen() {
+    var mine = DB.profiles.filter(function (p) { return p.id === CURRENT_UID; })[0];
+    if (mine && mine.tour_seen_at == null) mine.tour_seen_at = iso(new Date());
+    return null;
+  }
+
   function rpc_get_briefing(args) {
     var scope = (args && args.p_scope) || "mine";
     var uid = CURRENT_UID;
@@ -3500,7 +3687,9 @@
        button queue FIRST and then ask permission for the real number (G1I-Q1), instead of naming
        the rows already in the queue and sending those plus everything the flush creates. */
     queue_automated_emails: function () { return queueAutomatedEmails(); },
-    queue_comms_extras: function () { return queueCommsExtras(); }
+    queue_comms_extras: function () { return queueCommsExtras(); },
+    /* r12b — first-run tour ack. See rpc_mark_tour_seen() for the guard. */
+    mark_tour_seen: function () { return rpc_mark_tour_seen(); }
   };
 
   function rpcCall(name, args) {
@@ -4107,14 +4296,21 @@
   var REVIEW_REQUESTS_PER_RUN = 5;
   /* =========================================================================
      r9 — THE NIGHTLY DOCUMENT CHASE
+     (WIDENED r12b/W-24 — see DOC_CHASE_STAGES below)
 
-     A case sitting at Fact Find or Application with items still outstanding is
-     the single most common reason a mortgage application stops moving, and
-     until now the only thing that chased it was an adviser remembering to.
+     A case sitting at a stage with items still outstanding is the single most
+     common reason a mortgage application stops moving, and until now the only
+     thing that chased it was an adviser remembering to.
 
      The rules, and why each one is where it is:
-       · Only fact_find / application. Before that there is nothing to collect;
-         after it the lender has what it needs and a chase is just noise.
+       · r9 shipped Fact Find / Application only. r12b/W-24 widens that to every
+         stage from Enquiry to Exchange inclusive: a checklist can be opened as
+         soon as ID is asked for at Enquiry, and the lender still wants the
+         missing item right up to Exchange — narrowing the window to two stages
+         was always an r9 launch simplification, not a rule about when
+         documents matter. Completed and Not proceeding stay excluded either
+         way: after completion the lender has what it needs and a chase is just
+         noise, and a dead case has nothing left to chase.
        · Only cases with a CHECKLIST that still has requested items. A case with
          no checklist is not "fully documented", it is unknown — and inventing a
          chase for an unknown is how a client gets asked for a passport they
@@ -4127,8 +4323,14 @@
          the one that works; a phone call might be. The adviser task is written
          instead of an email, once, and it is idempotent on its own title so a
          week of nightly runs leaves one task, not seven.
-     Gated on `doc_chase_enabled`, seeded OFF — see the settings block.
-     ======================================================================= */
+     Gated on `doc_chase_enabled`, seeded OFF — see the settings block. The
+     WIDENED stage set applies identically to the chase-email branch and the
+     overdue-task branch below — they are one filter feeding both, deliberately:
+     production's chase CTE and overdue-task CTE both moved to the same six
+     stages in the same migration, so a case that newly qualifies here
+     qualifies for both outcomes exactly as before, just from a bigger set of
+     stages. */
+  var DOC_CHASE_STAGES = ["enquiry", "fact_find", "decision_in_principle", "application", "offer", "exchange"];
   var DOC_CHASE_MAX = 3;
   var DOC_OVERDUE_TITLE_PREFIX = "Documents overdue — call ";
   function docMailsFor(caseId, type) {
@@ -4142,7 +4344,7 @@
     if (!MIGRATIONS.m10) return out;                 /* no checklist table, nothing to chase from */
     var quiet = Number(setting("doc_chase_days", "3")) || 3;
     DB.cases.filter(function (c) {
-      return ["fact_find", "application"].indexOf(c.stage) >= 0 && outstandingDocs(c.id).length > 0;
+      return DOC_CHASE_STAGES.indexOf(c.stage) >= 0 && outstandingDocs(c.id).length > 0;
     }).slice().forEach(function (c) {
       var chases = docMailsFor(c.id, "docs_chase");
       var when = iso(new Date());
@@ -4832,7 +5034,9 @@
       if (!dupe) {
         DB.case_tasks.push({
           id: nid("tk"), case_id: cs.id, title: title,
-          due_date: dateOnly(shift(1)), done_at: null,
+          /* R12b flake fix — live request, compared by tests against a
+             Europe/London "tomorrow"; see dateOnlyLondon() above. */
+          due_date: dateOnlyLondon(shift(1)), done_at: null,
           created_by: null,                          /* SECURITY DEFINER — a public form wrote it */
           assigned_to: cs.assigned_to || null, created_at: when
         });

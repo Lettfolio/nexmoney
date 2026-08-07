@@ -83,6 +83,10 @@ button { font-family: inherit; }
 .client-contact-line .contact-link { display: inline-flex; align-items: center; padding: 13px 4px; margin: -13px -4px; }
 
 h2 { color: var(--dark); font-size: 20px; font-weight: 700; letter-spacing: -0.01em; margin-bottom: 18px; }
+/* R12b · L-1/L-5/L-18 — a page heading's one-time abbreviation expansion (e.g. "Protection &
+   GI (General Insurance)"): quieter than the heading itself, so it reads as a footnote rather
+   than doubling the title's visual weight. */
+.page-h2-expand { font-size: 14px; font-weight: 500; color: var(--muted); letter-spacing: normal; }
 
 /* Panel headers: uppercase muted micro-labels (emoji kept) */
 .panel > h3 {
@@ -882,6 +886,11 @@ main input:focus, main select:focus, main textarea:focus,
 .modal input, .modal select, .modal textarea,
 .settings-grid input, .settings-grid select, .settings-grid textarea { width: 100%; margin-top: 4px; }
 .modal textarea, .settings-grid textarea { resize: vertical; }
+/* R12b · L-7 — required-field highlight on the new-client/new-case forms, alongside (not instead
+   of) the existing toast: a toast is easy to miss once it fades, and a form with eight fields
+   gives no clue WHICH one it meant. Cleared on input (see the delegated listeners in openClient/
+   openCase) rather than on the next Save attempt, so fixing the field is what removes the mark. */
+.field-invalid { border-color: var(--red) !important; box-shadow: 0 0 0 3px rgba(192, 57, 43, .18); }
 .modal-actions { display: flex; justify-content: space-between; align-items: center; margin-top: 22px; gap: 10px; }
 .modal-actions .right { display: flex; gap: 10px; }
 .action-bar { display: flex; gap: 8px; flex-wrap: wrap; margin: 16px 0 4px; padding-top: 16px; border-top: 1px solid var(--border); }
@@ -901,6 +910,13 @@ main input:focus, main select:focus, main textarea:focus,
 .ovl-fee-row input[type="date"] { width: 158px; margin: 0; }
 .ovl-fee-row.is-paid { background: var(--light); }
 .ovl-err { color: var(--red); font-size: 12px; font-weight: 600; margin-top: 8px; min-height: 15px; }
+
+/* ---------- Help / glossary (R12b · L-1/L-5/L-18) ---------- */
+#help-btn { font-weight: 700; }
+.glossary-list { margin: 12px 0 4px; display: flex; flex-direction: column; gap: 12px; }
+.glossary-row dt { font-weight: 700; color: var(--dark); font-size: 13.5px; }
+.glossary-row dd { margin: 2px 0 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
+.glossary-row dd strong { color: var(--dark); }
 
 /* ---------- Offer parse diff (R5-4) ----------
    The AI-read mortgage offer no longer writes anything on its own: it proposes, in the same
@@ -1040,6 +1056,16 @@ main input:focus, main select:focus, main textarea:focus,
   .tl-list { max-height: 54vh; }
   .tl-row { padding: 10px 2px; }
   .tl-ic { line-height: 1.4; }
+  /* R12b · Luke's phone finding — the sticky close × sits on `background: var(--light)` at every
+     width already, but at a phone width a long client name / case identity heading has far less
+     room to wrap clear of it before the float takes effect, and the modal's own padding shrinks
+     from 28px to 18px right under it (see the general mobile .modal rule) without the button's
+     pull-in margin shrinking to match. Belt and braces: an explicit opaque backdrop with its own
+     border/shadow (so it reads as a control sitting ON TOP rather than a hole in the text if
+     anything ever renders behind it), and the heading reserves the button's own width as
+     right-hand padding so its text can never lay out underneath in the first place. */
+  .modal-close { background: var(--white); border: 1px solid var(--border); box-shadow: var(--shadow-card); }
+  .modal h3 { padding-right: 46px; }
 }
 
 /* ---------- Tables (import preview, reports, pipeline table) ---------- */
@@ -1406,6 +1432,11 @@ select.task-reassign { width: auto; padding: 3px 6px; font-size: 12px; }
     flex-direction: row; align-items: center;
     padding: 8px 10px; gap: 8px;
     overflow-x: auto; -webkit-overflow-scrolling: touch;
+    /* R12b · L-20 — proximity, not mandatory: a mandatory snap FORCES every rest position onto a
+       button boundary, which is exactly what would hide the "there's another item peeking past
+       the edge" cue this is meant to add. Proximity only pulls in when a drag already ended near
+       one, so a mid-drag release can still stop with the next button's icon half showing. */
+    scroll-snap-type: x proximity;
     background: linear-gradient(90deg, var(--side-top), var(--side-bottom));
   }
   /* Scroll affordance: a fade + chevron pinned to the sidebar's right edge, signalling the
@@ -1432,6 +1463,11 @@ select.task-reassign { width: auto; padding: 3px 6px; font-size: 12px; }
     color: rgba(224,235,248,.98); font-size: 20px; font-weight: 700; line-height: 1;
     background: linear-gradient(90deg, rgba(14,42,71,0), var(--side-bottom) 46%, var(--side-bottom));
   }
+  /* R12b · L-20 — the chevron above is a plain ::after: unconditional, with no way for CSS alone
+     to know the strip has been scrolled all the way to Settings and there is nothing left to
+     hint at. A tiny scroll listener in app.js (updateSidenavScrollHint) adds this class once the
+     strip is at its true right end; nothing else about the affordance changes. */
+  .sidebar.nav-scroll-end::after { opacity: 0; }
   .sidebar-logo { border-bottom: none; margin-bottom: 0; padding: 0 10px 0 2px; font-size: 17px; }
   .sidenav { flex-direction: row; padding: 0; gap: 2px; }
   .sidenav button {
@@ -1440,6 +1476,7 @@ select.task-reassign { width: auto; padding: 3px 6px; font-size: 12px; }
     white-space: nowrap;
     border-left: none; border-bottom: 3px solid transparent;
     border-radius: 8px 8px 0 0;
+    scroll-snap-align: start;
   }
   .sidenav button.active { border-left-color: transparent; border-bottom-color: var(--orange); }
   .sidebar-foot { margin-top: 0; border-top: none; padding: 0; }
@@ -2292,6 +2329,32 @@ th .money-basis {
    and protection tables already scroll (T1-13); these never did. */
 #page-data .panel, #page-reports .panel { overflow-x: auto; }
 
+/* R12b · L-13 — that scroller is REAL (report-introducers-panel measured 701px of table in a
+   364px panel at 390px, report-scoreboard-panel 1031px in 364px) but at a narrow width it is
+   invisible: the table just looks cut off dead at the panel's edge, with nothing on screen
+   suggesting a swipe would reveal the rest — the same class of problem the sidenav's own fade +
+   chevron (further down this file) exists to solve, and #money-adviser-table (Monday money,
+   same #page-money .panel overflow-x rule) has it too, just as undiscoverably. A pure-CSS
+   scroll-shadow: two gradients pinned to the CONTENT (background-attachment:local, so they slide
+   away once you've actually scrolled past them) painting over a third and fourth pinned to the
+   CONTAINER (background-attachment:scroll, so they stay put at the true left/right edges) — a
+   table that fits gets four gradients that cancel out to plain white, so nothing changes for the
+   common case where there is genuinely nothing to scroll. */
+@media (max-width: 760px) {
+  #page-reports .panel:has(table), #page-data .panel:has(table), #page-money .panel:has(table) {
+    background-color: var(--white);
+    background-repeat: no-repeat;
+    background-image:
+      linear-gradient(to right, var(--white) 40%, rgba(255, 255, 255, 0)),
+      linear-gradient(to left, var(--white) 40%, rgba(255, 255, 255, 0)),
+      linear-gradient(to right, rgba(15, 30, 50, .3), rgba(15, 30, 50, 0)),
+      linear-gradient(to left, rgba(15, 30, 50, .3), rgba(15, 30, 50, 0));
+    background-position: left center, right center, left center, right center;
+    background-size: 26px 100%, 26px 100%, 16px 100%, 16px 100%;
+    background-attachment: local, local, scroll, scroll;
+  }
+}
+
 /* ---- R6-FIX G63B-01 · the numbered property dot, at the END on purpose -----
    V2's answer to a hue collision is the digit inside the dot, and the digit was
    unreadable everywhere it mattered. The sizes below used to sit next to the
@@ -2762,4 +2825,211 @@ tr.owed-hot > td { background: var(--red-bg); }
 .client-rateend { font-variant-numeric: tabular-nums; }
 @media (max-width: 760px) {
   .client-sort select { flex: 1 1 auto; min-height: 40px; }
+}
+
+/* ==========================================================================
+   ROUND 12b (pass A) — scope honesty, the call pack, and the two new filters
+   ========================================================================== */
+
+/* W-7 — the scope word under every Today KPI number. Deliberately quiet: it is a caveat on the
+   figure, not a second label competing with it, and it must survive being screenshotted. */
+.kpi-scope {
+  margin-top: 5px; font-size: 10px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .06em;
+  color: var(--muted); opacity: .85;
+}
+
+/* W-16 — the Rate & ERC drawer's Mine/Unassigned/All row. It sits under the heading rather than
+   inside it (the heading is a click target for the drawer toggle and is rewritten on every paint),
+   so the buttons stop their own clicks from collapsing the panel — see setRateScope. */
+.rate-scope-row { display: flex; flex-wrap: wrap; gap: 0; margin: 0 0 8px; }
+.rate-scope-row .seg-btn { flex: 0 0 auto; }
+
+/* W-15b — the call pack on a Rate & ERC row: one quiet line of client figures under the lender. */
+.rate-callpack { font-variant-numeric: tabular-nums; }
+/* W-15c — the "£X/mo more" estimate. Amber-ish so it reads as the reason to ring, never green
+   (which would look like money earned) and never red (it is an estimate, not an alert). */
+.rate-uplift { color: var(--orange-600, #b35309); font-variant-numeric: tabular-nums; }
+.cs-uplift { margin: 6px 0 0; font-size: 13px; }
+
+/* W-14a — "assign to me instead", beside the Start-retention button it modifies. */
+.ret-tome {
+  display: inline-flex; align-items: center; gap: 5px;
+  margin: 0 6px 0 0; font-size: 12px; font-weight: 600;
+  color: var(--muted); white-space: nowrap; cursor: pointer;
+}
+.ret-tome input { width: auto; margin: 0; min-height: 0; }
+
+/* W-29 — the Clients adviser filter. Same shape as the R11 sort control below it, because they
+   are read as a pair: whose book, then in what order. */
+.client-advfilter {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin: 10px 0 8px; font-size: 13px; color: var(--muted);
+}
+.client-advfilter label { margin: 0; font-weight: 500; }
+.client-advfilter select { width: auto; min-width: 200px; margin: 0; }
+.client-adv-note { font-size: 12px; color: var(--muted); flex: 1 1 260px; }
+.client-adv-note:empty, .client-adv-note.hidden { display: none; }
+@media (max-width: 760px) {
+  .client-advfilter select { flex: 1 1 auto; min-height: 40px; }
+  .client-adv-note { flex: 1 1 100%; }
+}
+/* W-14a — inside the case header the control sits ON the same baseline as the button it modifies,
+   not floating above it: a bare "assign to me" with nothing beside it reads as a stray. */
+.cs-top-actions .ret-tome { align-self: center; margin: 0; }
+@media (max-width: 760px) {
+  .cs-top-actions .ret-tome { align-self: flex-start; }
+}
+/* W-15c — inline on a list row, so a rate-end row stays four lines rather than five. */
+.rate-callpack .rate-uplift { font-weight: 600; }
+
+/* ============================================================
+   R12b (pass B) — the case↔diary and documents flow
+   ============================================================ */
+
+/* ---- W-17 · appointment outcomes -------------------------------------------
+   A footnote on a booking, not a second badge competing with the stage pills:
+   small, low-chroma, and always carrying its own words rather than a bare
+   glyph. Green for attended, red for a no-show, grey for rearranged — a
+   rearranged slot is nobody's fault, it just did not happen here. */
+.appt-outcome {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: 10.5px; font-weight: 700; line-height: 1.5;
+  padding: 0 6px; border-radius: 999px;
+  border: 1px solid transparent; white-space: nowrap;
+}
+.appt-outcome-attended { background: var(--green-bg); color: var(--green); border-color: #bfe3d0; }
+.appt-outcome-no_show { background: var(--red-bg); color: var(--red); border-color: #f2c6c0; }
+.appt-outcome-rearranged { background: var(--light); color: var(--muted); border-color: var(--border-strong); }
+/* The booking is still on the record; the TITLE is struck to say the meeting did not happen.
+   Only the title — striking the time as well makes the card look deleted, which it is not. */
+.appt.outcome-struck .at, .appt-block.outcome-struck .at { text-decoration: line-through; opacity: .75; }
+.appt.outcome-struck, .appt-block.outcome-struck { opacity: .82; }
+.appt.has-outcome, .appt-block.has-outcome { border-left-style: double; border-left-width: 4px; }
+
+/* My Day's one-click ✓/✗ pair. Deliberately narrow and quiet until pressed: this sits on every
+   appointment row and must not out-shout the appointment itself. */
+.appt-quick { display: inline-flex; gap: 4px; flex: 0 0 auto; }
+.appt-quick-btn { min-width: 30px; padding: 3px 7px; font-weight: 700; line-height: 1.2; }
+.appt-quick-btn[data-outcome="attended"].is-set { background: var(--green-bg); border-color: #bfe3d0; color: var(--green); }
+.appt-quick-btn[data-outcome="no_show"].is-set { background: var(--red-bg); border-color: #f2c6c0; color: var(--red); }
+.appt-quick-btn:disabled { opacity: .5; cursor: default; }
+
+/* The editor's outcome radios, styled as chips so the three read as one choice rather than as a
+   form the operator has to parse. */
+.appt-outcome-wrap { border-top: 1px solid var(--border); padding-top: 12px; margin-top: 4px; }
+.appt-outcome-lbl { display: block; font-size: 13px; font-weight: 700; color: var(--dark); margin-bottom: 6px; }
+.appt-outcome-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.ao-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12.5px; font-weight: 600; color: var(--text);
+  background: var(--white); border: 1px solid var(--border-strong); border-radius: 999px;
+  padding: 5px 12px; cursor: pointer; margin: 0;
+}
+.ao-chip input { width: auto; margin: 0; }
+.ao-chip:hover { border-color: var(--navy); }
+.ao-chip:has(input:checked) { background: var(--blue-bg); border-color: var(--navy); color: var(--navy); }
+.ao-chip.ao-attended:has(input:checked) { background: var(--green-bg); border-color: var(--green); color: var(--green); }
+.ao-chip.ao-no_show:has(input:checked) { background: var(--red-bg); border-color: var(--red); color: var(--red); }
+
+/* ---- W-11 · the case header's appointment line ---------------------------- */
+.cs-appt-link { color: var(--navy); font-weight: 700; text-decoration: none; }
+.cs-appt-link:hover { text-decoration: underline; }
+#cs-appt-val .appt-outcome { margin-left: 6px; }
+
+/* ---- W-18 · dated tasks in the diary --------------------------------------
+   Amber, and nothing else in the diary is amber: an appointment is blue (or an
+   adviser's palette colour), a clash is red, a task is amber. The ☑ carries the
+   same meaning it carries everywhere else in the app. */
+.diary-task {
+  display: flex; align-items: baseline; gap: 5px;
+  background: var(--amber-bg); border-left: 3px solid var(--amber);
+  border-radius: 6px; padding: 3px 7px; margin-bottom: 4px;
+  font-size: 11.5px; color: var(--dark); cursor: pointer;
+  transition: background .12s ease;
+}
+.diary-task:hover { background: #f4e6c6; }
+.diary-task.no-case { cursor: default; }
+.diary-task.overdue { border-left-color: var(--red); }
+.diary-task .dt-mark { flex: 0 0 auto; color: var(--amber); font-weight: 700; }
+.diary-task.overdue .dt-mark { color: var(--red); }
+/* Truncated in CSS, so the full title stays in the DOM for the title= tooltip. */
+.diary-task .dt-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The Day view's own task row — one line above the lanes, wrapping if it has to. */
+.diary-day-tasks { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 10px; }
+.diary-day-tasks.hidden { display: none !important; }
+.diary-day-tasks .ddt-lbl {
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--muted); cursor: help;
+}
+.diary-day-tasks .diary-task { margin-bottom: 0; max-width: 320px; }
+
+/* ---- W-26 · the month cell's "+N more" ------------------------------------
+   Reads as a control, not as another entry: no left bar, no fill, just a link
+   that says how much is behind it. */
+.diary-more {
+  display: block; font-size: 11.5px; font-weight: 700; color: var(--navy);
+  padding: 2px 4px; margin-bottom: 4px; cursor: pointer; border-radius: 4px;
+}
+.diary-more:hover { background: var(--light); text-decoration: underline; }
+.diary-more-tasks { color: var(--amber); }
+.diary-more.has-clash { color: var(--red); }
+
+/* ---- K-10 · a send that is inside the quiet window ------------------------
+   Amber-edged rather than disabled: it still works, and it still should. */
+.btn.btn-cooldown { border-color: #e0c58a; background: var(--amber-bg); color: var(--amber); }
+.btn.btn-cooldown:hover { background: #f4e6c6; }
+.doc-cool-tag { font-weight: 600; opacity: .85; }
+
+/* ---- K-11 · the waiting-on-documents queue -------------------------------- */
+#dh-waitingdocs-panel .imp-table td { vertical-align: top; }
+#dh-waitingdocs-panel .wait-chip { white-space: nowrap; }
+/* The queue's action cell: two stacked verbs, right-aligned, so seven columns of facts plus an
+   action still fit a 1280 screen without the table pushing the page sideways. */
+#dh-waitingdocs-panel .dh-wd-scroll { overflow-x: auto; }
+#dh-waitingdocs-panel .imp-table { font-size: 12.5px; }
+#dh-waitingdocs-panel .imp-table th { white-space: nowrap; }
+#dh-waitingdocs-panel .dh-wd-acts { text-align: right; white-space: nowrap; }
+#dh-waitingdocs-panel .dh-wd-acts > * { display: block; margin-left: auto; margin-top: 4px; width: fit-content; }
+#dh-waitingdocs-panel .dh-wd-acts > *:first-child { margin-top: 0; }
+
+/* ==========================================================================
+   R12b · FIRST-RUN TOUR
+
+   #tour-overlay is a full-viewport dim, deliberately pointer-events:none — see
+   the tour's own safety notes in app.js for why: every click has to reach the
+   real element under it, exactly as if this were not on screen at all. Only
+   the small bubble takes clicks.
+   ========================================================================== */
+#tour-overlay {
+  position: fixed; inset: 0; z-index: 90;
+  background: rgba(9, 20, 38, .35);
+  pointer-events: none;
+}
+#tour-bubble {
+  position: fixed;
+  width: 300px; max-width: calc(100vw - 24px);
+  background: var(--white); color: var(--dark);
+  border-radius: 14px; padding: 16px 18px;
+  box-shadow: var(--shadow-pop);
+  pointer-events: auto;
+  animation: modal-in .15s ease;
+}
+.tour-step-n { font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+#tour-bubble h4 { margin: 4px 0 6px; font-size: 15px; font-weight: 700; color: var(--dark); }
+#tour-bubble p { margin: 0; font-size: 13px; line-height: 1.45; color: var(--muted); }
+.tour-actions { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 14px; }
+/* The spotlight: a bright ring around whichever element the current step is about, so the bubble
+   (which can sit above, below or beside it depending on space) is never the only cue. z-index 15:
+   enough to clear ordinary page content and a collapsed dash-drawer's own siblings, but well UNDER
+   #tour-overlay's 90 — it must never end up outranking the overlay/bubble it sits beside, which
+   would put the real page content on top of the bubble and swallow its own Next/Skip clicks.
+   outline (not border) so it never nudges the target's own layout by a pixel. */
+.tour-spotlight {
+  position: relative; z-index: 15;
+  outline: 3px solid var(--orange); outline-offset: 3px;
+  border-radius: 10px;
+}
+@media (max-width: 480px) {
+  #tour-bubble { width: calc(100vw - 24px); }
 }

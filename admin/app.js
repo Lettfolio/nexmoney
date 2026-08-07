@@ -149,6 +149,10 @@ const TIP_ERC = "Early Repayment Charge — a penalty for leaving a mortgage dea
 const TIP_GI = "General Insurance — buildings & contents cover";
 const TIP_SUB = "Submitted — the date the application was sent to the lender";
 const TIP_APPROX = "estimated — needs checking";
+/* R12b · K-15/K-17/L-16 — the "— no access" options that appear in the adviser filters
+   (board-adviser, diary-staff, client-adviser) when somebody has left the team but still holds
+   live work. Named once so every filter explains it the same way. */
+const NO_ACCESS_OPTION_TITLE = "Former/removed login — still shown because cases remain attributed to them";
 // Inline "≈" marker with a tooltip, used wherever a rate-end date is only estimated.
 const APPROX = `<span class="approx" title="${TIP_APPROX}">≈</span>`;
 // Each entry: [key, label, type?]. type: "email" / "url" light-validates on save;
@@ -557,36 +561,92 @@ function adviserLoadMap() {
   });
   return map;
 }
-/* The lightest desk on the team. Ties break on TEAM order, which is the
+/* ==========================================================================
+   R12b · W-9 — WHO A NEW ENQUIRY MAY BE SUGGESTED TO.
+
+   R7-5's suggestion ranked the WHOLE of TEAM by load, and TEAM is every
+   back-office login: the Owner, both advisers AND the Administrator. Kim
+   carries four cases because an administrator sometimes holds one, so she was
+   permanently the lightest desk in the firm, and every website enquiry
+   defaulted to the person who does not advise. Nobody was auto-assigned — the
+   round-5 rule held — but the pre-picked name on every row was wrong, and a
+   default that is wrong every time is a default people stop reading.
+
+   THE RULE, and it is the same test the rest of this file already uses for
+   "advising staff" (the Reports scoreboard and the Monday-money adviser strip
+   both build a row per TEAM member and then drop everyone with no cases,
+   nothing banked and nothing overdue — i.e. carrying work is what makes you an
+   adviser on those tables):
+
+     · role 'adviser'          → always a candidate. It is the job.
+     · role 'owner' / 'staff'  → a candidate ONLY while they actually carry
+                                 open cases. Daniel takes his own clients, so
+                                 at this firm he is one; an owner who has
+                                 stopped advising drops out by himself, with no
+                                 setting to remember to change.
+     · role 'admin'            → never a candidate. An administrator holding
+                                 four cases is holding admin, not a caseload,
+                                 and this is the exact defect.
+
+   NONE OF THIS RESTRICTS THE DROPDOWN. Every member of TEAM is still offered
+   and still selectable — an administrator or the owner can be given a lead
+   deliberately. It restricts only which name arrives pre-picked.
+   ========================================================================== */
+const ADVISING_ROLES_ALWAYS = ["adviser"];
+const ADVISING_ROLES_IF_CARRYING = ["owner", "staff"];
+function isAdvisingStaff(p) {
+  if (!p) return false;
+  if (ADVISING_ROLES_ALWAYS.includes(p.role)) return true;
+  if (!ADVISING_ROLES_IF_CARRYING.includes(p.role)) return false;
+  return !!(advLoadCases && advLoadCases[p.id] > 0);
+}
+function advisingStaff() { return TEAM.filter(isAdvisingStaff); }
+/* The lightest desk among the ADVISING staff. Ties break on TEAM order, which is the
    profiles list ordered by full_name — deterministic, so two people carrying
    the same load do not swap places between two paints of the same inbox. */
 function leastLoadedAdviser() {
   const map = adviserLoadMap();
-  if (!map || !TEAM.length) return null;
+  const pool = advisingStaff();
+  if (!map || !pool.length) return null;
   let best = null;
-  TEAM.forEach((p) => { if (!best || map[p.id].total < map[best].total) best = p.id; });
+  pool.forEach((p) => { if (!best || map[p.id].total < map[best].total) best = p.id; });
   return best;
 }
 function leadRoutingSuggestion() {
   const rr = leastLoadedAdviser();
-  return rr || (ME && ME.id) || (TEAM[0] && TEAM[0].id) || "";
+  /* R12b · W-9 — the fallback order changed with it. "Me" is only a sane default when I am one of
+     the people who advises; for Kim on the admin desk it was the same wrong answer by a different
+     route, so an advising colleague comes first and me only after that. */
+  if (rr) return rr;
+  if (ME && isAdvisingStaff(ME)) return ME.id;
+  const pool = advisingStaff();
+  return (pool[0] && pool[0].id) || (ME && ME.id) || (TEAM[0] && TEAM[0].id) || "";
 }
 function leadLoadTitle(id) {
   const map = adviserLoadMap();
   const l = map && map[id];
   if (!l) return "Which adviser this lead's case is created for";
+  const pool = advisingStaff();
   return `Which adviser this lead's case is created for. ${staffName(id)} has the lightest desk right now: `
     + `${l.cases} open case${l.cases === 1 ? "" : "s"} + ${l.tasks} open task${l.tasks === 1 ? "" : "s"} due in the next fortnight = ${l.total}. `
+    + `Compared across the ${pool.length} advising ${pool.length === 1 ? "colleague" : "colleagues"} only — an administrator can still be picked from the list, but is never suggested. `
     + `It is a suggestion, not an assignment — change it and the lead goes where you say.`;
 }
 /* T1-3 — the "route this lead to…" select. Unlike adviserOptionsHtml there is no blank placeholder:
    a lead always lands on somebody. R7-5: the pre-selected one is the lightest-loaded member of the
    team (falling back to me when no load figures have been read), and it says so in the option text
-   as well as beside the control, so nobody has to hover to find out why that name is there. */
+   as well as beside the control, so nobody has to hover to find out why that name is there.
+   R12b · W-9 — and when the signed-in user advises, they are PINNED FIRST and labelled "(me)".
+   "I'll take this one" is the commonest thing anybody does to this control, and it was seven names
+   down an alphabetical list. The suggestion keeps its own "· lightest load" marker wherever it
+   sits, so pinning me first never disguises whose desk is actually emptiest. */
 function leadAdviserOptionsHtml() {
   const sel = leadRoutingSuggestion();
   const rr = leastLoadedAdviser();
-  return TEAM.map((p) => `<option value="${p.id}" ${p.id === sel ? "selected" : ""}>${esc(staffName(p.id))}${p.id === (ME && ME.id) ? " (me)" : ""}${p.id === rr ? " · lightest load" : ""}</option>`).join("");
+  const meId = (ME && ME.id) || null;
+  const pinMe = !!meId && isAdvisingStaff(ME) && TEAM.some((p) => p.id === meId);
+  const ordered = pinMe ? [ME].concat(TEAM.filter((p) => p.id !== meId)) : TEAM;
+  return ordered.map((p) => `<option value="${p.id}" ${p.id === sel ? "selected" : ""}>${esc(staffName(p.id))}${p.id === meId ? " (me)" : ""}${p.id === rr ? " · lightest load" : ""}</option>`).join("");
 }
 /* The select plus the "(lightest load)" note that sits beside it. The note is hidden the moment the
    selection moves off the suggestion (see the delegated change listener below) — a label that keeps
@@ -2304,7 +2364,14 @@ function noteDocsFromStarRow(row) {
 /* The three constants the backend chases on. Named here so the status line an operator reads and
    the rule the cron applies cannot describe different behaviour. */
 const DOC_CHASE_MAX = 3;
-const DOC_CHASE_STAGES = ["fact_find", "application"];
+/* R12b · W-24 — WIDENED to every live stage, mirroring the r12b backend change to
+   queue_comms_extras(). r9 shipped Fact Find / Application as a launch simplification, not as a
+   rule about when documents matter: a checklist can be opened the moment ID is asked for at
+   Enquiry, and a lender still wants the missing payslip right up to Exchange. Completed and Not
+   proceeding stay out — after completion the lender has what it needs, and a dead case has
+   nothing left to chase. This list exists so the app's own "will this be chased?" sentence agrees
+   with what the server will actually do; it is not itself the gate. */
+const DOC_CHASE_STAGES = ["enquiry", "fact_find", "decision_in_principle", "application", "offer", "exchange"];
 const docChaseDays = () => Number(settings.doc_chase_days ?? 3) || 3;
 const DOC_MAIL_TYPES = ["docs_request", "docs_chase"];
 const DOC_OVERDUE_TITLE = (who) => `Documents overdue — call ${who}`;
@@ -2450,12 +2517,36 @@ function docChaseState({ docs, mails, tasks, clientName, stage }) {
   const last = (mails || []).map((m) => m.sent_at || m.created_at).filter(Boolean).sort().slice(-1)[0];
   const next = last ? new Date(new Date(last).getTime() + docChaseDays() * 86400000) : null;
   const stageOk = DOC_CHASE_STAGES.includes(stage);
+  /* R12b · W-24 — the stage set is SIX stages now, not two, so the sentence that named the two is
+     gone. The remaining exclusions are Completed and Not proceeding, and they are worth naming:
+     "why is this not being chased?" on a dead case has an answer. */
   const when = !stageOk
-    ? "nothing is chased from this stage — automatic chasing covers Fact Find and Application only"
+    ? "nothing is chased from this stage — a completed or closed case has nothing left to chase"
     : (!next || next <= new Date()) ? "eligible now" : `next eligible ${fmtD(next)}`;
   return {
-    chases, nextEligible: next, cls: "info",
+    chases, nextEligible: next, lastMailAt: last || null, cls: "info",
     text: `${chases} of ${DOC_CHASE_MAX} chases sent · ${when}${last ? ` · last document email ${fmtAgo(last)}` : " · no document email has gone out yet"}.${offNote}`,
+  };
+}
+/* R12b · K-10 — IS THE QUIET WINDOW STILL RUNNING?
+   The chase line has advertised a "next eligible" date since r9 and the button beside it ignored
+   it completely: one click sent an email the app had just finished saying would not go until
+   Friday, and — because the quiet window counts ANY document mail — silently pushed the automatic
+   chase three days further out. The automation has always respected the window server-side; only
+   the human path did not.
+   The answer is a WARNING, not a refusal. "Ring them, they said they never got it" is a real
+   reason to send inside the window, and an app that blocks it teaches people to work around it. */
+function docChaseCooldown(chase) {
+  if (!chase || !chase.nextEligible) return null;
+  const next = new Date(chase.nextEligible);
+  if (!(next > new Date())) return null;
+  return {
+    next,
+    dateText: fmtD(next),
+    agoText: chase.lastMailAt ? fmtAgo(chase.lastMailAt) : "",
+    // One sentence, used verbatim by the case button, the Data-health queue row and both titles,
+    // so the three can never quote different dates at the same operator.
+    sentence: `The quiet window runs to ${fmtD(next)}${chase.lastMailAt ? ` (last document email ${fmtAgo(chase.lastMailAt)})` : ""}.`,
   };
 }
 /* The client's upload page. site_url from Settings, falling back to this origin so the link is
@@ -2504,6 +2595,7 @@ async function renderCaseDocs(caseId, c, state) {
   }
   const who = (c && c.__clientName) || "";
   const chase = docChaseState({ docs, mails, tasks, clientName: who, stage: c && c.stage });
+  const cool = docChaseCooldown(chase);   // R12b · K-10 — null unless the quiet window is still running
   const out = docOutstanding(docs);
   const canDelete = isAdminOrOwner();
   const token = c && c.doc_token;
@@ -2548,14 +2640,18 @@ async function renderCaseDocs(caseId, c, state) {
     <div class="doc-actions">
       <button type="button" class="btn btn-sm" id="docs-add-btn">＋ Add items…</button>
       <button type="button" class="btn btn-sm" id="docs-link-btn" title="${token ? "Copy this case's existing upload link" : "Create an upload link for this case and copy it"}">🔗 ${token ? "Copy upload link" : "Create upload link"}</button>
-      <button type="button" class="btn btn-sm" id="docs-send-btn" title="Queue the document-request email for this case only. Nothing else in the queue is sent.">✉️ Send document request now</button>
+      ${/* R12b · K-10 — the button now KNOWS about the window the line above it just advertised.
+           Inside it, the label says so and the title carries the same date the summary carries, so
+           nobody has to read one sentence to understand the other control. Still enabled: warning,
+           not blocking. */ ""}
+      <button type="button" class="btn btn-sm${cool ? " btn-cooldown" : ""}" id="docs-send-btn" title="${esc(cool ? `${cool.sentence} Sending now goes out anyway and restarts the window — you will be asked to confirm. Nothing else in the queue is sent.` : "Queue the document-request email for this case only. Nothing else in the queue is sent.")}">✉️ Send document request now${cool ? ` <span class="doc-cool-tag">· quiet until ${esc(cool.dateText)}</span>` : ""}</button>
     </div>
     <div class="doc-link-out hidden" id="docs-link-out"></div>`;
   body.querySelectorAll(".doc-act").forEach((b) => (b.onclick = () => docAction(b.dataset.act, b.dataset.doc, caseId, c)));
   body.querySelectorAll(".doc-open").forEach((b) => (b.onclick = () => openDocFile(b.dataset.path, b)));
   $("#docs-add-btn").onclick = () => addDocItems(caseId, c);
   $("#docs-link-btn").onclick = () => copyDocUploadLink(caseId, c);
-  $("#docs-send-btn").onclick = (e) => sendDocsRequestNow(caseId, c, e);
+  $("#docs-send-btn").onclick = (e) => sendDocsRequestNow(caseId, c, e, chase);
 }
 /* One handler for the four row actions. Every write is a single UPDATE (or DELETE) on the row's
    own id, and every one repaints the section so the summary, the chase line and the buttons can
@@ -2727,8 +2823,13 @@ async function copyDocUploadLink(caseId, c) {
 /* SEND DOCUMENT REQUEST NOW. Goes through queueEmail, which queues ONE row and sends exactly that
    row by id — it never flushes the queue. The refusal below is the honest half: a checklist with
    nothing outstanding would produce an email asking for nothing. */
-async function sendDocsRequestNow(caseId, c, ev) {
+async function sendDocsRequestNow(caseId, c, ev, chase) {
   if (!c || !c.client_id) return toast("This case has no client on it.");
+  /* R12b · K-10 — the quiet window, asked about BEFORE queueEmail's own "here is what the client
+     will read" confirm, because this is a question about whether to send at all and that one is a
+     question about what to send. Cancelling here writes nothing. */
+  const cool = docChaseCooldown(chase);
+  if (cool && !confirm(`${cool.sentence}\n\nSending now also restarts that window, so the next automatic chase moves back by ${docChaseDays()} day${docChaseDays() === 1 ? "" : "s"}.\n\nSend anyway?`)) return;
   if (await queueEmail(caseId, c.client_id, "docs_request", c, ev)) await renderCaseDocs(caseId, c);
 }
 /* ==========================================================================
@@ -3270,7 +3371,26 @@ async function loadTeam(session) {
     briefingScope = "all"; tasksScope = "all"; protScope = "all";
     ["#brief-scope-mine", "#tasks-scope-mine", "#prot-scope-mine"].forEach((s) => $(s).classList.remove("scope-active"));
     ["#brief-scope-all", "#tasks-scope-all", "#prot-scope-all"].forEach((s) => $(s).classList.add("scope-active"));
+  } else if (isAdminOrOwner()) {
+    /* R12b · W-7 — WHOSE DAY THIS SCREEN OPENS ON, decided by the job the reader actually does.
+       The Today strip now follows this same Mine/All toggle (see loadDashboard), and an adviser
+       opening the app to "33 active cases" when twelve of them are his was the defect: his home
+       screen described somebody else's week. Mine is therefore the adviser's default.
+       The Owner and the Administrator are the opposite case — they run the firm, the firm-wide
+       number IS their number, and defaulting them to Mine would hide the book they are
+       accountable for behind a click. So they open on All.
+       This moves the DEFAULT only. Both buttons are still there, both still work, and nothing is
+       remembered between sessions (no store — the round-5 rule about sticky per-user routing
+       state applies here too). */
+    briefingScope = "all";
+    $("#brief-scope-mine").classList.remove("scope-active");
+    $("#brief-scope-all").classList.add("scope-active");
   }
+  /* R12b · W-16 — the Rate & ERC drawer's own scope starts on the same footing, for the same
+     reason. Set here rather than at declaration because MY_ROLE is only known once sign-in has
+     resolved it. */
+  rateScope = ME && !isAdminOrOwner() ? "mine" : "all";
+  syncRateScopeButtons();
   const first = ((ME && ME.full_name) || session.user.email).split(/[\s@]/)[0];
   $("#today-heading").textContent = `Today — ${first}`;
   // Somebody moved to "No access" can still be HOLDING work — the Owner is allowed to leave it
@@ -3278,7 +3398,7 @@ async function loadTeam(session) {
   // without an option carrying their id it is reachable only as "everyone else's". Nobody has this
   // role in an untouched team, so the lists are unchanged until someone is actually deactivated.
   const formerOpts = PROFILES.filter((p) => p.role === "none")
-    .map((p) => `<option value="${esc(p.id)}">${esc(p.full_name || p.email || p.id)} — no access</option>`);
+    .map((p) => `<option value="${esc(p.id)}" title="${esc(NO_ACCESS_OPTION_TITLE)}">${esc(p.full_name || p.email || p.id)} — no access</option>`);
   $("#board-adviser").innerHTML = ['<option value="all">All advisers</option>', '<option value="unassigned">Unassigned</option>']
     .concat(TEAM.map((p) => `<option value="${p.id}">${esc(staffName(p.id))}</option>`)).concat(formerOpts).join("");
   $("#diary-staff").innerHTML = ['<option value="all">Everyone</option>']
@@ -3411,6 +3531,224 @@ $("#topnav").addEventListener("click", (e) => {
   if (b) nav(b.dataset.page);
 });
 
+/* R12b · L-20 — the mobile nav strip's scroll-hint chevron (.sidebar::after, CSS) is a plain
+   pseudo-element and has no way to know when the strip has actually been scrolled to its true
+   right end (Settings, fully on screen) — it would otherwise keep pointing at content that no
+   longer exists. This is the only part of that hint that needed script: everything else (the
+   fade, the horizontal scroll itself, the snap points) is CSS. Cheap and mobile-only in effect —
+   on a desktop width the strip never overflows, so scrollWidth <= clientWidth and the class is
+   simply never toggled true's opposite; harmless either way. */
+function updateSidenavScrollHint() {
+  const sb = $(".sidebar");
+  if (!sb) return;
+  const atEnd = sb.scrollWidth - sb.clientWidth <= sb.scrollLeft + 2;
+  sb.classList.toggle("nav-scroll-end", atEnd);
+}
+(() => {
+  const sb = $(".sidebar");
+  if (!sb) return;
+  sb.addEventListener("scroll", updateSidenavScrollHint, { passive: true });
+  window.addEventListener("resize", updateSidenavScrollHint);
+  updateSidenavScrollHint();
+})();
+
+/* ==========================================================================
+   R12b · L-1/L-5/L-18 — HELP / GLOSSARY
+
+   Plain-English explanations of the jargon that shows up everywhere else in
+   the app, reusing the SAME strings those other surfaces already use (TIP_ERC,
+   TIP_GI, TIP_DIP, TIP_SUB, NO_ACCESS_OPTION_TITLE, the Reports BASIS_* money
+   captions) rather than writing a second, driftable copy of each definition.
+   ========================================================================== */
+function helpGlossaryHtml() {
+  const row = (term, def) => `<div class="glossary-row"><dt>${esc(term)}</dt><dd>${def}</dd></div>`;
+  return `<h3>Help &amp; glossary</h3>
+    <p class="panel-sub" style="margin-top:-6px;">Plain-English answers to the shorthand this app uses everywhere else — the same words, not a second explanation of them.</p>
+    <dl class="glossary-list">
+      ${row("ERC", `${esc(TIP_ERC)}. "ERC outlasts the rate" means that charge is still running <strong>after</strong> the client's discounted rate has already finished — they are locked in past the very deal that locked them in, so leaving still costs money even though the good rate is already gone.`)}
+      ${row("GI", esc(TIP_GI) + ".")}
+      ${row("DIP", esc(TIP_DIP) + ".")}
+      ${row("Sols fee", "Solicitor referral fee — one of the three fee types a case can carry, alongside <strong>Proc £</strong> (paid by the lender) and <strong>Broker £</strong> (charged to the client).")}
+      ${row("“sub” date", esc(TIP_SUB) + " — shown on a case's stage tag once it has one.")}
+      ${row("Watchtower", "Automatic checks run across the whole book — a case with no adviser, a rate that ended with nobody reminded, and so on. “Resolves itself when fixed” means an alert is not a task to tick off by hand: fix the actual thing it is complaining about (assign an adviser, record a rate end) and the alert clears itself the next time checks run. Dismissing an alert is for a false positive — something the checker got wrong, not something you have since fixed.")}
+      ${row("Revolution", "The firm's own book of record. The Import page synchronises this app AGAINST it, one direction only — where the two disagree, Revolution is treated as correct, never the other way round.")}
+      ${row("Numbered property circles", "Where a client holds more than one property, each gets its own colour and, on the client record, a small number in the dot (“property 2 of 3”) — so two mortgages on two different buildings are never mistaken for the same address.")}
+      ${row("“— no access”", esc(NO_ACCESS_OPTION_TITLE) + ".")}
+      ${row("Waiting-on chips", "Who a LIVE case is sitting with right now — client, lender, solicitor or someone else — as distinct from its pipeline stage, which only says which step of the process it has reached, not who is holding it up.")}
+      ${row("The money bases (Reports)", "A figure on Reports is either <strong>cash</strong> (money actually paid, counted on the date it was paid) or <strong>earned</strong> (fee value on a case that has completed, whether or not it has been paid yet). The small grey caption under almost every money figure says which — e.g. “" + esc(BASIS_CASH_MONTH) + "” or “" + esc(BASIS_INTRO_REV) + "”. The two answer different questions on purpose and are never meant to add up to one total.")}
+    </dl>
+    <div class="modal-actions">
+      <div><button type="button" class="btn btn-primary" id="help-retake-tour">Retake the tour</button></div>
+      <div class="right"><button type="button" class="btn" id="help-close">Close</button></div>
+    </div>`;
+}
+function openHelpPanel() {
+  openOverlay(helpGlossaryHtml(), (finish, box) => {
+    const closeBtn = box.querySelector("#help-close");
+    if (closeBtn) closeBtn.onclick = () => finish(null);
+    const retakeBtn = box.querySelector("#help-retake-tour");
+    /* Runs regardless of tour_seen_at, and — same as the first-run tour itself — never touches
+       that column: retaking is a request to SEE it again, not a request to be treated as a
+       first-time sign-in. mark_tour_seen() only ever runs from the tour's own Skip/Finish/Escape. */
+    if (retakeBtn) retakeBtn.onclick = () => { finish(null); runFirstRunTour({ force: true }); };
+  });
+}
+(() => {
+  const btn = $("#help-btn");
+  if (btn) btn.addEventListener("click", openHelpPanel);
+})();
+
+/* ==========================================================================
+   R12b · FIRST-RUN TOUR (Luke's wish, verbatim: "five or six spotlight
+   bubbles, dismissible, triggered once on first sign-in")
+
+   Fires once, only when the signed-in profile's tour_seen_at is null, and
+   only on the dashboard. Lean by design: one overlay div + a bubble stepping
+   through target selectors; a step whose target is missing is skipped rather
+   than shown pointing at nothing.
+
+   SAFETY — this must never fire when tour_seen_at is set, and must never
+   block a test (or a person) from using the app underneath it:
+     1. window.__NEX_SKIP_TOUR is checked FIRST, before any DB read.
+     2. Only ever started from loadDashboard() (see maybeStartTour), and only
+        once per page session (tourFired) — reloading the dashboard mid-tour
+        cannot start a second one.
+     3. The dim backdrop is pointer-events:none. Every click reaches the REAL
+        element under it exactly as if the tour were not there — only the
+        small bubble itself (Next/Skip) takes clicks. This alone is why nav,
+        modal opens and ordinary page interaction are never blocked by it.
+     4. Belt and braces on top of (3): nav() and openModal() both end the
+        tour (see the "if (tourState) tourEnd(false)" line at the top of
+        each) the instant either runs, including when triggered
+        PROGRAMMATICALLY (page.evaluate(() => window.nav(...)), a test/
+        automation calling openCase/openClient directly) rather than by a
+        real click the pointer-events design would otherwise have to catch.
+     5. Ending the tour this way — by navigating, or by any click outside the
+        bubble — is a quiet interruption, not a dismissal: it does NOT call
+        mark_tour_seen(). Only Skip tour, the last step's Next/Finish, and
+        Escape count as the operator actually being done with it, and only
+        those call the RPC. A stray click while it's up just means it may
+        offer itself again next time the flag is still null.
+   ========================================================================== */
+const TOUR_STEPS = [
+  { target: "#briefing-panel", title: "My Day", body: "This is the merged feed of everything today — tasks due, appointments, new leads and rate alerts, all in one list instead of four separate screens." },
+  { target: "#tasks-panel", title: "Tasks vs Diary", body: "Tasks are things to DO — chase a document, make a call — each with a due date. The Diary (its own page in the nav) is where you're supposed to BE: appointments with a time. Different questions, kept as different lists." },
+  { target: "#watchtower-panel", title: "Watchtower", body: "Automatic checks across the whole book. “Resolves itself when fixed” means an alert isn't a task to tick off by hand — fix the thing it's complaining about (assign an adviser, record a rate end) and it clears itself next time checks run." },
+  { target: "#topnav button[data-page=\"pipeline\"]", title: "Where cases are created", body: "New cases start on Pipeline, with the “+ New case” button there — not on Today." },
+  { target: "#today-appts-panel", title: "Booking an appointment", body: "There's no “new appointment” button on Today. Booking one lives INSIDE a case — open the case, then book it from there." },
+  { target: "#help-btn", title: "Need a definition?", body: "ERC, GI, DIP, Watchtower and the rest are explained here — and you can replay this tour from the same button, any time." },
+];
+let tourFired = false;   // this page session only — separate from the DB flag
+let tourState = null;    // { steps, idx } while a tour is actually on screen
+function tourPositionBubble(bubbleEl, targetEl) {
+  const r = targetEl.getBoundingClientRect();
+  const margin = 12;
+  const bw = bubbleEl.offsetWidth || 300, bh = bubbleEl.offsetHeight || 140;
+  let top = r.bottom + margin;
+  if (top + bh > window.innerHeight - margin) top = Math.max(margin, r.top - bh - margin);
+  let left = r.left;
+  if (left + bw > window.innerWidth - margin) left = Math.max(margin, window.innerWidth - bw - margin);
+  if (left < margin) left = margin;
+  bubbleEl.style.top = top + "px";
+  bubbleEl.style.left = left + "px";
+}
+function tourKeyHandler(e) {
+  if (e.key === "Escape") { e.preventDefault(); tourEnd(true); }
+}
+function tourClickHandler(e) {
+  if (!tourState) return;
+  const bubble = $("#tour-bubble");
+  if (bubble && bubble.contains(e.target)) return; // the bubble's own Next/Skip handle themselves
+  tourEnd(false); // a real interaction with the app underneath — step aside quietly, do not mark seen
+}
+function tourRender() {
+  if (!tourState) return;
+  const step = tourState.steps[tourState.idx];
+  if (!step) { tourEnd(true); return; }
+  const targetEl = document.querySelector(step.target);
+  if (!targetEl) { tourState.idx++; tourRender(); return; } // target vanished since the tour started — skip it
+  document.querySelectorAll(".tour-spotlight").forEach((el) => el.classList.remove("tour-spotlight"));
+  targetEl.classList.add("tour-spotlight");
+  try { targetEl.scrollIntoView({ block: "center" }); } catch (e) { /* older browsers */ }
+  const bubble = $("#tour-bubble");
+  if (!bubble) return;
+  const last = tourState.idx === tourState.steps.length - 1;
+  bubble.innerHTML = `
+    <div class="tour-step-n">${tourState.idx + 1} of ${tourState.steps.length}</div>
+    <h4>${esc(step.title)}</h4>
+    <p>${esc(step.body)}</p>
+    <div class="tour-actions">
+      <button type="button" class="btn btn-ghost btn-sm" id="tour-skip">Skip tour</button>
+      <button type="button" class="btn btn-primary btn-sm" id="tour-next">${last ? "Finish" : "Next"}</button>
+    </div>`;
+  const skipBtn = bubble.querySelector("#tour-skip"); if (skipBtn) skipBtn.onclick = () => tourEnd(true);
+  const nextBtn = bubble.querySelector("#tour-next"); if (nextBtn) nextBtn.onclick = () => {
+    if (last) { tourEnd(true); return; }
+    tourState.idx++; tourRender();
+  };
+  requestAnimationFrame(() => { try { tourPositionBubble(bubble, targetEl); } catch (e) { /* off-screen target */ } });
+}
+function tourReposition() {
+  if (!tourState) return;
+  const step = tourState.steps[tourState.idx];
+  const targetEl = step && document.querySelector(step.target);
+  const bubble = $("#tour-bubble");
+  if (targetEl && bubble) tourPositionBubble(bubble, targetEl);
+}
+function tourEnd(markSeen) {
+  if (!tourState) return;
+  tourState = null;
+  document.querySelectorAll(".tour-spotlight").forEach((el) => el.classList.remove("tour-spotlight"));
+  const overlay = $("#tour-overlay");
+  if (overlay) overlay.remove();
+  document.removeEventListener("keydown", tourKeyHandler, true);
+  // R12b: capture phase — must run (and evaluate bubble.contains(e.target)) before the clicked
+  // button's own bubble-phase onclick handler can call tourRender() and replace #tour-bubble's
+  // innerHTML, which would otherwise detach e.target before this handler ever sees it.
+  document.removeEventListener("click", tourClickHandler, true);
+  window.removeEventListener("resize", tourReposition);
+  if (markSeen) {
+    // Fire-and-forget: mark_tour_seen() is a no-op the second time it's ever called (mock and
+    // prod both guard it), and a failure here must never re-show a dismissed tour — just toast.
+    db.rpc("mark_tour_seen").catch(() => { try { toast("Couldn't record that you've seen the tour — it may show again next time."); } catch (e) { /* toast unavailable — nothing else to do */ } });
+  }
+}
+function runFirstRunTour(opts) {
+  const o = opts || {};
+  if (window.__NEX_SKIP_TOUR) return;   // checked first, even for an explicit "Retake"
+  if (tourState) return;                // already showing
+  const steps = TOUR_STEPS.filter((s) => { try { return !!document.querySelector(s.target); } catch (e) { return false; } });
+  if (!steps.length) return;            // nothing on screen to point at — say nothing rather than guess
+  const overlay = document.createElement("div");
+  overlay.id = "tour-overlay";
+  overlay.innerHTML = '<div id="tour-bubble" role="dialog" aria-label="Guided tour"></div>';
+  document.body.appendChild(overlay);
+  tourState = { steps, idx: 0 };
+  document.addEventListener("keydown", tourKeyHandler, true);
+  // R12b: capture phase, see matching comment on the removeEventListener call in tourEnd().
+  document.addEventListener("click", tourClickHandler, true);
+  window.addEventListener("resize", tourReposition);
+  tourRender();
+}
+/* Only ever called from loadDashboard(), after the page's own first paint. Gate order: the skip
+   hatch first, then "has a tour already fired this session", then "is this actually the dashboard
+   right now" (a race is possible — loadDashboard is async and the operator may have clicked
+   elsewhere before it resolves), then the DB read, which degrades to "don't show it" on any
+   failure — an unmigrated column or a network hiccup must never be mistaken for "first sign-in". */
+async function maybeStartTour() {
+  if (window.__NEX_SKIP_TOUR) return;
+  if (tourFired) return;
+  if (currentPage !== "dashboard") return;
+  if (!ME || !ME.id) return;
+  try {
+    const { data, error } = await db.from("profiles").select("id,tour_seen_at").eq("id", ME.id).maybeSingle();
+    if (error || !data || data.tour_seen_at != null) return;
+  } catch (e) { return; }
+  if (currentPage !== "dashboard") return; // re-check — the await above is the race window
+  tourFired = true;
+  runFirstRunTour();
+}
+
 /* ---------- Dashboard tab widgets (e.g. Protection / Fees due) ---------- */
 document.addEventListener("click", (e) => {
   const t = e.target.closest(".dash-tab");
@@ -3420,6 +3758,9 @@ document.addEventListener("click", (e) => {
   card.querySelectorAll(".dash-tab-panel").forEach((p, i) => p.classList.toggle("hidden", i !== [...t.parentElement.children].indexOf(t)));
 });
 function nav(page, push = true) {
+  // R12b — the first-run tour is dashboard-only; navigating anywhere (including a test/automation
+  // calling nav() directly, not just a click — see the tour's own safety notes) ends it quietly.
+  if (tourState) tourEnd(false);
   /* R7-4 — a gated page reached by anyone who may not open it lands on Today instead. The hash is
      rewritten to match WHATEVER the caller asked for (including the push=false cold-load and
      popstate routes), because a URL bar reading #money over a Today page is a lie the next Back
@@ -3588,7 +3929,7 @@ async function renderSettings() {
         <option value="on" ${settings.doc_chase_enabled === "on" ? "selected" : ""}>On</option>
       </select>
     </label>
-    <p class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;" id="doc-chase-note">Emails a client <strong>every ${esc(String(settings.doc_chase_days ?? "3"))} days</strong> while documents are still outstanding on their case's checklist, listing <strong>only the items still missing</strong> — never the whole list again. After <strong>${DOC_CHASE_MAX} chases it stops emailing</strong> and puts a call task on the case's adviser instead; the fourth email is not the one that works. Only cases at <strong>Fact Find or Application</strong> with a checklist are chased: a case with no checklist is not “fully documented”, it is unknown, and it is skipped rather than guessed at. The ${esc(String(settings.doc_chase_days ?? "3"))}-day gap counts any document email, request or chase, so a cron run and someone pressing “Send document request now” cannot become two emails in an evening. <strong>Requires email sending to be set up</strong> (a verified From address and a Resend key) — with no sender configured nothing goes out, whatever this says.</p>
+    <p class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;" id="doc-chase-note">Emails a client <strong>every ${esc(String(settings.doc_chase_days ?? "3"))} days</strong> while documents are still outstanding on their case's checklist, listing <strong>only the items still missing</strong> — never the whole list again. After <strong>${DOC_CHASE_MAX} chases it stops emailing</strong> and puts a call task on the case's adviser instead; the fourth email is not the one that works. Every <strong>live stage is covered — Enquiry through Exchange</strong> (widened from Fact Find and Application only): a checklist can be opened as soon as ID is asked for, and the lender still wants the missing item right up to exchange. Completed and Not proceeding are never chased. Only cases <strong>with a checklist</strong> are chased at all: a case with no checklist is not “fully documented”, it is unknown, and it is skipped rather than guessed at. The ${esc(String(settings.doc_chase_days ?? "3"))}-day gap counts any document email, request or chase, so a cron run and someone pressing “Send document request now” cannot become two emails in an evening. <strong>Requires email sending to be set up</strong> (a verified From address and a Resend key) — with no sender configured nothing goes out, whatever this says.</p>
     <label>Review requests (NPS)
       <select name="nps_enabled">
         <option value="off" ${(settings.nps_enabled ?? "off") === "on" ? "" : "selected"}>Off</option>
@@ -3812,6 +4153,239 @@ window.toggleRateErcSort = function () {
   rateErcSortMode = rateErcSortMode === "value" ? "date" : "value";
   loadDashboard();
 };
+/* ==========================================================================
+   R12b · W-16 — THE RATE & ERC DRAWER GETS THE SAME SCOPE AS ITS SIBLINGS.
+
+   My Day, Tasks due and the Protection page all carry a Mine / (Unassigned) /
+   All segment. This drawer carried none, so Wayne's "rates ending soon" was
+   the whole firm's — thirty-odd rows, most of them Luke's, with a "Start
+   retention case" button on each that would have created a case on somebody
+   else's client. Same three-state segment the Tasks panel uses, scoped by the
+   CASE's adviser (v_alerts has no owner column of its own — the map comes from
+   the cases read loadDashboard already makes), same role-based default as the
+   Today strip above.
+   ========================================================================== */
+let rateScope = "all";
+function syncRateScopeButtons() {
+  const m = $("#rate-scope-mine"), u = $("#rate-scope-unassigned"), a = $("#rate-scope-all");
+  if (!m || !u || !a) return;
+  m.classList.toggle("scope-active", rateScope === "mine");
+  u.classList.toggle("scope-active", rateScope === "unassigned");
+  a.classList.toggle("scope-active", rateScope === "all");
+}
+function setRateScope(s) {
+  rateScope = s;
+  syncRateScopeButtons();
+  loadDashboard();
+}
+if ($("#rate-scope-mine")) {
+  $("#rate-scope-mine").addEventListener("click", (e) => { e.stopPropagation(); setRateScope("mine"); });
+  $("#rate-scope-unassigned").addEventListener("click", (e) => { e.stopPropagation(); setRateScope("unassigned"); });
+  $("#rate-scope-all").addEventListener("click", (e) => { e.stopPropagation(); setRateScope("all"); });
+}
+/* The word the panel uses for whichever scope is in force, so a count and its caption cannot
+   describe different sets. */
+const rateScopeWord = (s) => (s === "mine" ? "your cases" : s === "unassigned" ? "cases nobody owns" : "every adviser's cases");
+/* ==========================================================================
+   R12b · W-15c — "THEY ARE PAYING £X A MONTH MORE THAN THEY NEED TO."
+
+   The one sentence that turns a rate-end row into a phone call. It needs three
+   figures and refuses to guess at any of them:
+
+     balance      cases.current_balance  — what is still owed
+     reversion    cases.reversion_rate   — the SVR the loan falls onto
+     old rate     cases.rate_percent     — the fixed rate that has ended
+
+   ARITHMETIC, stated because a number nobody can reproduce is a number nobody
+   believes:  monthly ≈ balance × (reversion − old) ÷ 100 ÷ 12.
+   That is INTEREST ONLY on the rate difference — it is not a repayment
+   recalculation, and on a repayment mortgage the true difference is a little
+   larger because the capital element moves too. It is deliberately the simpler,
+   smaller figure: an estimate that overstates the pain is worse than one that
+   understates it. Rounded to the nearest £5 so nobody reads "£127.43" as a
+   quotation, and labelled "estimate" everywhere it appears.
+
+   Returns null — meaning SHOW NOTHING — whenever any input is missing, or when
+   the reversion is not above the old rate. A £0 line would be read as "no
+   difference" rather than "we don't know", and that is the lie this guards. */
+function monthlyUpliftEstimate(balance, reversionRate, oldRate) {
+  const b = Number(balance), r = Number(reversionRate), o = Number(oldRate);
+  if (!(b > 0) || !isFinite(r) || !isFinite(o)) return null;
+  if (balance == null || reversionRate == null || oldRate == null) return null;
+  const diff = r - o;
+  if (!(diff > 0)) return null;              // the new rate is no worse — there is no "more"
+  const perMonth = (b * diff) / 100 / 12;
+  const rounded = Math.round(perMonth / 5) * 5;
+  if (!(rounded > 0)) return null;           // rounds to nothing — say nothing
+  return { perMonth: rounded, diff, balance: b, reversion: r, old: o };
+}
+/* ==========================================================================
+   R12b · W-15b — THE CALL PACK: four nullable money columns on `cases`.
+
+   `current_balance`, `reversion_rate`, `monthly_payment`, `erc_amount`. They
+   are what an adviser actually needs in front of them to ring a client whose
+   rate is ending, and until now every one of them lived in somebody's head or
+   in a note. Production has taken them; older databases have not, so they are
+   feature-detected exactly like M1/M2/M7 before them: probed by absence from a
+   select("*") row where one is going past anyway, and by refusal (42703) where
+   a widened read is the only way to ask.
+
+   ABSENCE RENDERS AS "—", NEVER AS 0. A balance of zero is a paid-off
+   mortgage; a blank is a fact nobody has typed in yet. Everything below goes
+   through callPackVal()/fmtM (which already returns "—" for null) rather than
+   through `|| 0`, and monthlyUpliftEstimate() refuses to produce a line at all
+   when any input is missing.
+   ========================================================================== */
+const CALLPACK_COLS = ["current_balance", "reversion_rate", "monthly_payment", "erc_amount"];
+const CALLPACK_SELECT = CALLPACK_COLS.join(",");
+let CALLPACK_SUPPORTED = null; // null = not yet known
+function noteCallPackFromStarRow(row) {
+  if (!row || typeof row !== "object") return;
+  CALLPACK_SUPPORTED = Object.prototype.hasOwnProperty.call(row, "current_balance");
+}
+async function callPackSupported() {
+  if (CALLPACK_SUPPORTED !== null) return CALLPACK_SUPPORTED;
+  try {
+    const { data, error } = await db.from("cases").select("id," + CALLPACK_SELECT).limit(1);
+    if (error) { if (isMissingColumnError(error)) { CALLPACK_SUPPORTED = false; return false; } return false; }
+    if (!data || !data.length) return false;   // empty table proves nothing — ask again next time
+    CALLPACK_SUPPORTED = Object.prototype.hasOwnProperty.call(data[0], "current_balance");
+    return CALLPACK_SUPPORTED;
+  } catch (e) { return false; }
+}
+/* One nullable money/percent value, rendered honestly. `pct` switches the unit. */
+function callPackVal(v, pct) {
+  if (v == null || v === "") return '<span class="cs-muted">—</span>';
+  return pct ? `${Number(v)}%` : fmtM(v);
+}
+/* Does this row carry ANY of the four? Used to decide whether a "call pack" block is worth
+   drawing at all — four dashes in a row is noise, not information. */
+const hasCallPack = (c) => !!c && CALLPACK_COLS.some((k) => c[k] != null && c[k] !== "");
+/* The one-line version, for a list row. Only the figures that ARE recorded appear: on a dense row
+   "Balance £322,000 · reverts to — · pays —/mo" is three quarters punctuation, and the reader has
+   to decode two dashes to learn one fact. The case modal's version keeps all four labelled slots
+   (see the cs-callpack stats) because there the empty ones are the prompt to go and fill them in. */
+function callPackLineHtml(c, withUplift) {
+  if (!hasCallPack(c)) return "";
+  const has = (k) => c[k] != null && c[k] !== "";
+  const bits = [];
+  if (has("current_balance")) bits.push(`Balance <strong>${fmtM(c.current_balance)}</strong>`);
+  if (has("reversion_rate")) bits.push(`reverts to <strong>${Number(c.reversion_rate)}%</strong>`);
+  if (has("monthly_payment")) bits.push(`pays <strong>${fmtM(c.monthly_payment)}</strong>/mo`);
+  if (has("erc_amount")) bits.push(`ERC <strong>${fmtM(c.erc_amount)}</strong>`);
+  /* R12b · W-15c — the uplift rides on the END of this line rather than taking one of its own.
+     These rows sit in a half-width drawer with a fixed scroll height: a fifth line per row meant
+     one and a half rows visible where three used to be, which is a worse list even when every
+     line on it is true. `withUplift` is off for the case modal, where there is room to give the
+     estimate its own line and the extra prominence is wanted. */
+  const up = withUplift ? upliftInlineHtml(c) : "";
+  return `<div class="s rate-callpack" title="Figures recorded on the case. Anything not shown here has not been recorded — it is not zero.">${bits.join(" · ")}${up}</div>`;
+}
+/* The estimate's tooltip — one place, so the row version and the modal version cannot drift. */
+function upliftTip(est) {
+  return `Estimate. ${fmtM(est.balance)} still owed × the ${est.diff.toFixed(2)} point gap between the ${est.reversion}% reversion rate and the ${est.old}% rate that has ended, ÷ 12. `
+    + "Interest only on the difference, rounded to the nearest £5 — not a repayment recalculation and not a quotation.";
+}
+/* Inline, for a dense list row. */
+function upliftInlineHtml(c) {
+  const est = c && monthlyUpliftEstimate(c.current_balance, c.reversion_rate, c.rate_percent);
+  if (!est) return "";
+  return ` <span class="rate-uplift" title="${esc(upliftTip(est))}">— ≈ <strong>${fmtM(est.perMonth)}/mo</strong> more than their old rate <span class="money-basis">(estimate)</span></span>`;
+}
+/* On its own line, for somewhere with room. `cls` lets the callers keep their own layout classes. */
+function upliftLineHtml(c, cls) {
+  if (!c) return "";
+  const est = monthlyUpliftEstimate(c.current_balance, c.reversion_rate, c.rate_percent);
+  if (!est) return "";
+  return `<div class="s rate-uplift${cls ? " " + cls : ""}" title="${esc(upliftTip(est))}">≈ <strong>${fmtM(est.perMonth)}/mo</strong> more than their old rate <span class="money-basis">— estimate</span></div>`;
+}
+/* R12b · W-15b — the dashboard's cases read, widened by the four call-pack columns so the Rate &
+   ERC rows can carry the balance/reversion figures the "£X/mo more" estimate needs. Retried
+   without them on 42703 rather than letting an un-migrated database blank the whole dashboard —
+   the same write-retry discipline the lead accept path uses for its post-original columns. */
+const DASH_CASE_COLS = "id,stage,fee_status,broker_fee,proc_fee,sols_fee,loan_amount,rate_percent,completed_at,retention_source_case_id,assigned_to";
+async function readDashboardCases() {
+  if (CALLPACK_SUPPORTED === false) return db.from("cases").select(DASH_CASE_COLS);
+  const res = await db.from("cases").select(DASH_CASE_COLS + "," + CALLPACK_SELECT);
+  if (res.error && isMissingColumnError(res.error)) {
+    CALLPACK_SUPPORTED = false;
+    return db.from("cases").select(DASH_CASE_COLS);
+  }
+  if (!res.error && res.data && res.data.length) noteCallPackFromStarRow(res.data[0]);
+  return res;
+}
+/* ==========================================================================
+   R12b · W-7 — THE TODAY STRIP IS NOW SCOPED, AND SAYS WHICH SCOPE IT IS IN.
+
+   "Today — Wayne" led with 33 active cases. Eleven of them were Wayne's. The
+   tiles were the firm's book under a heading with his name on it, on the one
+   screen he opens first every morning, and nothing on them said so.
+
+   The tiles follow the My Day Mine/All toggle that already sits just below
+   them — ONE control, one answer, rather than a second toggle nobody would
+   think to look for. And every tile carries the scope word under its number
+   ("mine" / "whole firm"), because a screenshot of a number with no scope on
+   it is exactly how the wrong figure ends up in a meeting.
+
+   Mine means assigned_to = me. Unowned cases are NOT swept into it — the same
+   rule R5-35 settled for My Day itself: Mine means mine, full stop. They are
+   visible under All.
+
+   Rendered from `dashKpiData`, the rows the last load already fetched, so
+   flipping the toggle repaints instantly and costs no query: the scope decides
+   which subset is COUNTED, not which rows exist.
+   ========================================================================== */
+let dashKpiData = null;
+const kpiScopeMine = () => briefingScope !== "all" && !!(ME && ME.id);
+function renderTodayKpis() {
+  const row = $("#kpi-row");
+  if (!row || !dashKpiData) return;
+  const { cases, alerts, caseAdviser, reminderMonths } = dashKpiData;
+  const mine = kpiScopeMine();
+  const scopeWord = mine ? "mine" : "whole firm";
+  const scopeTip = mine
+    ? `Cases assigned to you only — ${staffName(ME.id)}. Switch My Day below to "All" to see the firm's figures.`
+    : `Every adviser's cases, the whole firm. Switch My Day below to "Mine" to see only your own.`;
+  const scopeTag = `<div class="kpi-scope" title="${esc(scopeTip)}">${scopeWord}</div>`;
+  const scoped = cases.filter((c) => !mine || c.assigned_to === ME.id);
+  const active = scoped.filter((c) => !["completed", "not_proceeding"].includes(c.stage));
+  const yr = new Date().getFullYear();
+  const completedThisYear = scoped.filter((c) => c.completed_at && new Date(c.completed_at).getFullYear() === yr);
+  const feesDue = scoped.filter((c) => ["not_requested", "requested"].includes(c.fee_status) && c.broker_fee > 0 && c.stage !== "not_proceeding");
+  const feesDueTotal = feesDue.reduce((s, c) => s + Number(c.broker_fee || 0), 0);
+  /* The two alert tiles scope on the CASE's adviser, not on the alert row — the same map the
+     drawer below uses, so a tile and the panel it links to can never disagree about whose rate
+     this is. */
+  const alertMine = (a) => !mine || caseAdviser[a.case_id] === ME.id;
+  const ratesSoon = alerts.filter((a) => a.days_to_rate_end != null && a.days_to_rate_end <= reminderMonths * 30 && alertMine(a));
+  const ercFlags = alerts.filter((a) => a.erc_outlasts_rate && alertMine(a));
+  // KPI cards clickable (defect 19) — each jumps to where that number can be worked, rather than
+  // being a dead-end. The "Fees outstanding" card and the Protection & Fees drawer's "Fees due" tab
+  // count different scopes (see loadProtection below) — captioned here so the gap reads as scope,
+  // not a bug.
+  // BACKEND-R4 §1 (owner's decision) — firm-wide money is Owner-only IN THE UI, and that rule was
+  // being enforced on Reports but skipped here, so the same fee total the Reports page withholds
+  // was the biggest number on every adviser's home screen. Same gate, same caveat: PRESENTATION
+  // ONLY. The cases table still carries broker_fee to every staff session; this is not a control.
+  /* R12b · W-7 — and the money gate is UNCHANGED by the scoping work. An adviser under Mine still
+     gets no fee tile here. There IS an owner-approved per-adviser money basis in this codebase
+     (Reports' "My numbers" card, BASIS_MY_OUTSTANDING — earned, not yet received, on my completed
+     cases), but it answers a DIFFERENT question from this tile's (fee_status at any live stage),
+     so dropping it into this slot would have quietly changed what the tile means as well as whose
+     it is. The adviser's own figure stays where Daniel approved it — on Reports — and the strip's
+     title says so rather than leaving an unexplained gap. */
+  const money = showMoney();
+  row.innerHTML = `
+    <div class="kpi" style="cursor:pointer;" onclick="kpiGoto('active')" title="View the pipeline"><div class="num">${active.length}</div><div class="lbl">Active cases</div>${scopeTag}</div>
+    <div class="kpi" style="cursor:pointer;" onclick="kpiGoto('completions')" title="View Reports"><div class="num">${completedThisYear.length}</div><div class="lbl">Completions in ${yr}</div>${scopeTag}</div>
+    <div class="kpi ${ratesSoon.length ? "warn" : ""}" style="cursor:pointer;" onclick="kpiGoto('rates')" title="View Rate &amp; ERC alerts"><div class="num">${ratesSoon.length}</div><div class="lbl">Rates ending ≤ ${reminderMonths}mo (or overdue)</div>${scopeTag}</div>
+    <div class="kpi ${ercFlags.length ? "bad" : ""}" style="cursor:pointer;" onclick="kpiGoto('erc')" title="View Rate &amp; ERC alerts. ERC = Early Repayment Charge, the fee for leaving a deal early — &quot;outlasts the rate&quot; means it is still running after the client's discounted rate has already finished, so they are locked in past the deal that locked them in."><div class="num">${ercFlags.length}</div><div class="lbl">ERC outlasts rate</div>${scopeTag}</div>
+    ${money ? `<div class="kpi ${feesDue.length ? "warn" : ""}" style="cursor:pointer;" onclick="kpiGoto('fees')" title="View the Protection &amp; Fees drawer — Fees due tab"><div class="num">${fmtM(feesDueTotal)}</div><div class="lbl">Fees outstanding (${feesDue.length}) <span style="font-weight:400;opacity:.7;">· all stages</span></div>${scopeTag}</div>` : ""}`;
+  /* The fee tile's absence, explained where someone would look for it. No placeholder tile: an
+     empty fifth card on every adviser's home screen would be four-fifths of a strip, and a
+     permanent "—" is worse than a clean four. */
+  row.title = money ? "" : "Fee totals on this strip are the firm's money and are shown to the Owner only. Your own fees banked and outstanding are on the Reports page, in the \"My numbers\" card.";
+}
 async function loadDashboard() {
   const reminderMonths = Number(settings.rate_reminder_months) || 6; // T1-10 — a stray already-stored non-numeric value can't render "≤ NaNmo"
   const [{ data: cases, error: casesErr }, { data: alerts, error: alertsErr }, bank] = await Promise.all([
@@ -3820,7 +4394,7 @@ async function loadDashboard() {
        carries neither, and adding them to the view is a backend change this round does not make. */
     /* R7-5 — plus assigned_to, a base column since the original schema, so the lead-routing
        suggestion can weigh each adviser's open caseload without a read of its own. */
-    db.from("cases").select("id,stage,fee_status,broker_fee,proc_fee,sols_fee,loan_amount,completed_at,retention_source_case_id,assigned_to"),
+    readDashboardCases(),
     db.from("v_alerts").select("*").order("rate_end_date"),
     /* R5-28 — one firm-wide question, asked once per dashboard load and cached for the briefing's
        "Chase fee" buttons (see briefActions). A failed RPC leaves the answer unknown (null), which
@@ -3838,44 +4412,68 @@ async function loadDashboard() {
     loadRetention(); loadTasks(); loadProtection(); loadLeads(); loadTodayAppts(); loadBriefing(); loadWatchtower();
     return;
   }
-  const active = (cases || []).filter((c) => !["completed", "not_proceeding"].includes(c.stage));
+  const activeAll = (cases || []).filter((c) => !["completed", "not_proceeding"].includes(c.stage));
   /* R7-5 — half of the lead-routing load figure, from the rows this panel has already read. "Open"
      is every stage except completed and not proceeding — the same `active` set the KPI above counts,
-     so the suggestion and the headline can never disagree about what an open case is. */
+     so the suggestion and the headline can never disagree about what an open case is.
+     R12b · W-7 — computed from the WHOLE book, never from the scoped subset below: "who is carrying
+     the least" is a question about the team, and answering it off one adviser's own filtered view
+     would make every desk but his look empty. */
   advLoadCases = {};
-  active.forEach((c) => { if (c.assigned_to) advLoadCases[c.assigned_to] = (advLoadCases[c.assigned_to] || 0) + 1; });
-  const yr = new Date().getFullYear();
-  const completedThisYear = (cases || []).filter((c) => c.completed_at && new Date(c.completed_at).getFullYear() === yr);
-  const feesDue = (cases || []).filter((c) => ["not_requested", "requested"].includes(c.fee_status) && c.broker_fee > 0 && c.stage !== "not_proceeding");
-  const feesDueTotal = feesDue.reduce((s, c) => s + Number(c.broker_fee || 0), 0);
-  const ratesSoon = (alerts || []).filter((a) => a.days_to_rate_end != null && a.days_to_rate_end <= reminderMonths * 30);
-  const ercFlags = (alerts || []).filter((a) => a.erc_outlasts_rate);
+  activeAll.forEach((c) => { if (c.assigned_to) advLoadCases[c.assigned_to] = (advLoadCases[c.assigned_to] || 0) + 1; });
+  /* R12b · W-7 — case id → the adviser carrying it. Used to scope both the KPI strip and the
+     Rate & ERC drawer, because v_alerts is a view over cases and carries no owner of its own in
+     every deployment. Built from the cases read above, so it costs nothing. */
+  const caseAdviser = {};
+  (cases || []).forEach((c) => { caseAdviser[c.id] = c.assigned_to || null; });
 
-  // KPI cards clickable (defect 19) — each jumps to where that number can be worked, rather than
-  // being a dead-end. The "Fees outstanding" card and the Protection & Fees drawer's "Fees due" tab
-  // count different scopes (see loadProtection below) — captioned here so the gap reads as scope,
-  // not a bug.
-  // BACKEND-R4 §1 (owner's decision) — firm-wide money is Owner-only IN THE UI, and that rule was
-  // being enforced on Reports but skipped here, so the same fee total the Reports page withholds
-  // was the biggest number on every adviser's home screen. Same gate, same caveat: PRESENTATION
-  // ONLY. The cases table still carries broker_fee to every staff session; this is not a control.
+  /* R12b · W-7 — the strip. See renderTodayKpis() above for the whole rationale. */
+  const ratesSoonAll = (alerts || []).filter((a) => a.days_to_rate_end != null && a.days_to_rate_end <= reminderMonths * 30);
+  const ercFlagsAll = (alerts || []).filter((a) => a.erc_outlasts_rate);
+  /* R12b · W-7 — everything the tiles are computed from, kept so the Mine/All toggle can repaint
+     them WITHOUT a second round-trip. The toggle changes which subset is counted, not which rows
+     exist, so re-reading the table to answer it would be a query spent on nothing. */
+  dashKpiData = { cases: cases || [], alerts: alerts || [], caseAdviser, reminderMonths };
+  renderTodayKpis();
+  // R12b — after the dashboard's own first paint (the KPI row above), and gated entirely inside
+  // maybeStartTour(): the skip hatch, "already fired this session", "still on the dashboard", and
+  // the DB read all have to say yes before anything shows. Fire-and-forget on purpose — a slow or
+  // failed check must never hold up the rest of this render.
+  maybeStartTour();
   const money = showMoney();
-  $("#kpi-row").innerHTML = `
-    <div class="kpi" style="cursor:pointer;" onclick="kpiGoto('active')" title="View the pipeline"><div class="num">${active.length}</div><div class="lbl">Active cases</div></div>
-    <div class="kpi" style="cursor:pointer;" onclick="kpiGoto('completions')" title="View Reports"><div class="num">${completedThisYear.length}</div><div class="lbl">Completions in ${yr}</div></div>
-    <div class="kpi ${ratesSoon.length ? "warn" : ""}" style="cursor:pointer;" onclick="kpiGoto('rates')" title="View Rate &amp; ERC alerts"><div class="num">${ratesSoon.length}</div><div class="lbl">Rates ending ≤ ${reminderMonths}mo (or overdue)</div></div>
-    <div class="kpi ${ercFlags.length ? "bad" : ""}" style="cursor:pointer;" onclick="kpiGoto('erc')" title="View Rate &amp; ERC alerts"><div class="num">${ercFlags.length}</div><div class="lbl">ERC outlasts rate</div></div>
-    ${money ? `<div class="kpi ${feesDue.length ? "warn" : ""}" style="cursor:pointer;" onclick="kpiGoto('fees')" title="View the Protection &amp; Fees drawer — Fees due tab"><div class="num">${fmtM(feesDueTotal)}</div><div class="lbl">Fees outstanding (${feesDue.length}) <span style="font-weight:400;opacity:.7;">· all stages</span></div></div>` : ""}`;
 
-  const ercIds = new Set(ercFlags.map((a) => a.case_id));
-  const rateErcAll = [...ratesSoon];
-  ercFlags.forEach((a) => { if (!rateErcAll.some((x) => x.case_id === a.case_id)) rateErcAll.push(a); });
+  /* ==========================================================================
+     R12b · W-16 — THE DRAWER'S OWN SCOPE, INDEPENDENT OF THE STRIP'S.
+
+     Deliberately NOT built off the KPI-scoped sets above. The tiles answer
+     "how big is my week"; this drawer is a worklist, and a worklist has the
+     third state a headline number does not need — Unassigned, the rates nobody
+     is carrying, which is precisely the pile that goes cold. Stacking the two
+     scopes would also mean the drawer silently narrowing when someone touched
+     a control six inches away that says nothing about this panel.
+     ========================================================================== */
+  const rateInScope = (a) => {
+    if (rateScope === "all") return true;
+    const who = caseAdviser[a.case_id] !== undefined ? caseAdviser[a.case_id] : (a.assigned_to || null);
+    if (rateScope === "unassigned") return !who;
+    return !!(ME && ME.id) && who === ME.id;
+  };
+  const ratesSoonScoped = ratesSoonAll.filter(rateInScope);
+  const ercFlagsScoped = ercFlagsAll.filter(rateInScope);
+  const ercIds = new Set(ercFlagsScoped.map((a) => a.case_id));
+  const rateErcAll = [...ratesSoonScoped];
+  ercFlagsScoped.forEach((a) => { if (!rateErcAll.some((x) => x.case_id === a.case_id)) rateErcAll.push(a); });
   /* R7-2 — what each expiring rate is WORTH, keyed by case id, from the widened cases read above.
      `lastFee` is proc + broker + sols on the case: the fee the firm earned last time it did this
      mortgage, which is the only fee figure the schema holds and therefore the only honest proxy
      for what a renewal is worth. Labelled as a proxy everywhere it appears. */
   const rateMoney = {};
   (cases || []).forEach((c) => { rateMoney[c.id] = { loan: Number(c.loan_amount || 0), lastFee: caseLastFee(c) }; });
+  /* R12b · W-15b/c — the call-pack figures for the rows on this panel, keyed by case id from the
+     same widened read. Empty on a database without the columns, which is why every consumer below
+     is null-safe rather than assuming the keys are there. */
+  const rateCallPack = {};
+  (cases || []).forEach((c) => { rateCallPack[c.id] = c; });
   /* R6 — v_alerts carries the client's NAME and nothing about the building, so Duncan Armitage's
      two Skipton cases on 4 Seafield Gardens (and any two of a landlord's five) render as the same
      row twice, inflating the counters above and offering two identical buttons. One batched
@@ -3915,12 +4513,23 @@ async function loadDashboard() {
   }
   const rateErcH3 = $("#rate-erc-panel h3");
   const rateErcCollapsed = rateErcAll.length - rateErcMerged.length;
+  /* R12b · W-16 — the counts in the heading COUNT WHAT THE LIST SHOWS, and say whose. A badge that
+     kept reading "31 ending soon" over eight visible rows is the same class of lie the KPI strip
+     was telling one panel higher up. The firm-wide figure is not deleted, it is put in the
+     tooltip, so switching scope never looks like work vanishing. */
+  const rateCountTip = (n, all, what) => `${n} ${what} on ${rateScopeWord(rateScope)}${rateScope === "all" ? "" : ` — ${all} across the whole firm`}.`;
   rateErcH3.innerHTML = `⚠️ Rate &amp; ERC alerts
-    ${ratesSoon.length ? `<span class="count hot">${ratesSoon.length} ending soon</span>` : ""}
-    ${ercFlags.length ? `<span class="count" style="background:#fbe9e7;color:var(--red);">${ercFlags.length} ERC conflict</span>` : ""}
+    ${ratesSoonScoped.length ? `<span class="count hot" title="${esc(rateCountTip(ratesSoonScoped.length, ratesSoonAll.length, "ending soon"))}">${ratesSoonScoped.length} ending soon</span>` : ""}
+    ${ercFlagsScoped.length ? `<span class="count" style="background:#fbe9e7;color:var(--red);" title="${esc(rateCountTip(ercFlagsScoped.length, ercFlagsAll.length, "ERC conflicts"))}">${ercFlagsScoped.length} ERC conflict</span>` : ""}
     ${showMoney() ? `<button type="button" class="btn btn-sm rate-sort-btn" id="rate-erc-sort" onclick="event.stopPropagation();toggleRateErcSort()" title="${rateValueSort ? "Sorted by loan size — the value at risk. Click to sort by date instead." : "Sorted by rate end date. Click to sort by loan size — the value at risk."}">${rateValueSort ? "↕ By value at risk" : "↕ By date"}</button>` : ""}`;
+  const rateSub = $("#rate-erc-sub");
+  if (rateSub) {
+    rateSub.textContent = `Rates ending within the reminder window, and cases where the ERC outlasts the rate. `
+      + `Showing ${rateScopeWord(rateScope)}${rateScope === "all" ? "" : ` — ${ratesSoonAll.length + ercFlagsAll.filter((a) => !ratesSoonAll.some((r) => r.case_id === a.case_id)).length} alerts firm-wide.`}`;
+  }
   $("#alerts-rateerc").innerHTML = rateErcMerged.length ? rateErcMerged.slice(0, 15).map((a) => {
     const mny = rateMoney[a.case_id] || { loan: 0, lastFee: 0 };
+    const cp = rateCallPack[a.case_id] || null;
     /* R7-2 — the button is suppressed beyond nine months out. Starting a retention case that far
        ahead creates a live enquiry, a call task and a queued client email for a conversation that
        cannot usefully happen yet — it clutters the pipeline for three quarters and the client gets
@@ -3934,6 +4543,14 @@ async function loadDashboard() {
         <div class="t" onclick="openCase('${a.case_id}')">${esc(a.client_name)} ${propCtxChip(rateErcCtx, a.case_id, "row-prop")}${a.__dupes > 1 ? ` <span class="badge grey" title="${a.__dupes} cases share this property and this rate end date — shown once, because it is one mortgage conversation.">${a.__dupes} cases</span>` : ""}</div>
         <div class="s">${lenderIcon(a.lender)}${esc(a.lender || "")} ${a.rate_percent ? a.rate_percent + "%" : ""} — ends ${fmtD(a.rate_end_date)}${a.days_to_rate_end != null ? ` (${a.days_to_rate_end < 0 ? Math.abs(a.days_to_rate_end) + " days ago" : "in " + a.days_to_rate_end + " days"})` : ""}${ercIds.has(a.case_id) ? ` — ERC runs until ${fmtD(a.erc_end_date)}` : ""}</div>
         ${money ? `<div class="s rate-money">Loan <strong>${mny.loan ? fmtM(mny.loan) : "—"}</strong> · last fee <strong>${mny.lastFee ? fmtM(mny.lastFee) : "none recorded"}</strong> <span class="money-basis">(value at risk · loan on the case · last fee as proxy)</span></div>` : ""}
+        ${/* R12b · W-15b — the call pack, on the row the call is made from. Client money, not firm
+             money, so it is NOT behind showMoney(): the balance and the payment are the client's
+             own figures and the adviser ringing them needs both. Only drawn when at least one is
+             recorded; each one absent renders "—", never 0. */ ""}
+        ${/* R12b · W-15c — the uplift is inline here, and ONLY on rows whose rate has actually
+             ENDED. A client still inside their fix is not paying anything extra yet, and a
+             "£X/mo more" over a rate with four months to run reads as a bill they already get. */ ""}
+        ${callPackLineHtml(cp, a.days_to_rate_end != null && a.days_to_rate_end < 0)}
       </div>
       ${a.days_to_rate_end < 0 ? '<span class="badge red">OVERDUE</span>' : ""}
       ${ercIds.has(a.case_id) ? `<span class="badge red" title="${TIP_ERC}">ERC conflict</span>` : ""}
@@ -3947,7 +4564,7 @@ async function loadDashboard() {
       ${a.stage === "completed" && !a.rate_reminder_queued_at && a.rate_end_date && !retentionSourceIds.has(a.case_id)
         ? (farOut
           ? `<span class="badge grey rate-too-early" title="This rate has more than nine months to run. Starting a retention case now would create a live enquiry, a call task and a queued client email for a conversation that cannot usefully happen yet — the ${reminderMonths}-month reminder window reaches this case long before it is too late.">too early — ${Math.round(a.days_to_rate_end / 30)}mo out</span>`
-          : `<button class="btn btn-sm btn-retention" onclick="event.stopPropagation();startRetentionCase('${a.case_id}', event)" title="Create the follow-on remortgage case, the call task and a queued reminder">🔁 Start retention case</button>`) : ""}
+          : retentionToMeHtml(a.case_id, cp) + `<button class="btn btn-sm btn-retention" onclick="event.stopPropagation();startRetentionCase('${a.case_id}', event)" title="Create the follow-on remortgage case, the call task and a queued reminder">🔁 Start retention case</button>`) : ""}
       ${/* G1I-R5 — the recovery control. A retention case already exists for this one, so the
            button above is (correctly) gone, but the source was never stamped: the row nags
            "Reminder pending" forever and the nightly RPC will never pick it up either, because
@@ -4070,6 +4687,52 @@ async function loadRetention() {
    second concurrent invocation for the same case — from any surface, including {silent:true} — is
    refused instead of duplicating. (A DB unique constraint is the deeper fix, handled separately.) */
 const RETENTION_INFLIGHT = new Set();
+/* ==========================================================================
+   R12b · W-14a — WHO A RETENTION CASE LANDS ON, SAID OUT LOUD.
+
+   THE RULE THAT WAS ALREADY THERE, unchanged and now named: the successor
+   inherits `assigned_to` from the completed source case, falling back to the
+   signed-in user when the source has nobody. What was missing is that nothing
+   ever SAID so — the confirm listed the case, the task and the queued email
+   and never mentioned that it was about to hand a client to a colleague, so
+   the adviser who pressed it on a Tuesday afternoon found the call task on
+   somebody else's list on Wednesday.
+
+   One correction to the old fallback while naming it: a source case assigned
+   to somebody who has since been moved to "No access" used to hand the new
+   case straight back to them, complete with a call task nobody can open. That
+   is the same class of bug `defaultAssignee()` exists to prevent for every
+   other kind of new work, so this now uses the same test (onTeam) and says
+   which of the three answers it reached.
+   ========================================================================== */
+function retentionAssigneeFor(c) {
+  const meId = (ME && ME.id) || null;
+  const src = (c && c.assigned_to) || null;
+  if (src && onTeam(src)) return { id: src, why: "the adviser on the completed case", inherited: true };
+  if (src) return { id: meId, why: `${profileName(src) || "the previous adviser"} no longer has access, so it comes to you`, inherited: false };
+  return { id: meId, why: "the completed case has no adviser, so it comes to you", inherited: false };
+}
+/* The "assign to me instead" control. Rendered ONLY where there is a real choice to make — the
+   computed assignee exists, is somebody else, and I am on the team. Offering "assign to me" over a
+   case that is already coming to me is a control that cannot do anything, which is exactly the
+   dead-end R5-28 removed from the fee rows.
+   It sits WITH the button rather than inside the confirm because the confirm here is a native
+   dialog: it can carry the sentence naming the assignee (and it now does), but it cannot carry a
+   checkbox, and splitting one decision across two stacked native dialogs is worse than either. */
+function retentionToMeHtml(caseId, c) {
+  const meId = (ME && ME.id) || null;
+  const a = retentionAssigneeFor(c);
+  if (!meId || !a.id || a.id === meId) return "";
+  return `<label class="ret-tome" title="Leave this unticked and the case, the call task and the queued reminder all go to ${esc(staffName(a.id))} — ${esc(a.why)}. Tick it and they come to you instead.">`
+    + `<input type="checkbox" class="ret-tome-cb" data-ret-tome="${esc(caseId)}"> assign to me</label>`;
+}
+/* What the flow reads back. Document-wide by case id, for the same reason the lead selects are
+   (R12a K-1): the same case can offer this control on more than one surface at once. */
+function retentionWantsMe(caseId) {
+  if (!caseId) return false;
+  const cb = document.querySelector(`input.ret-tome-cb[data-ret-tome="${CSS.escape(String(caseId))}"]:checked`);
+  return !!cb;
+}
 window.startRetentionCase = async function (caseId, ev, opts) {
   const o = opts || {};
   const done = (status, msg) => { if (!o.silent && msg) toast(msg); return { status, message: msg || "", caseId }; };
@@ -4103,7 +4766,9 @@ window.startRetentionCase = async function (caseId, ev, opts) {
        is the compliance record of why the case exists). */
     const propFull = propAddress(c);
     const propShort = propLabel(c);
-    const taskTitle = `Call client — rate ends ${c.rate_end_date}` + (propShort ? ` · ${propShort}` : "");
+    // R12b · W-25 — British date, not the raw ISO the column stores. Only ever affects titles
+    // composed from here on; a task already sitting in the database keeps whatever it was written with.
+    const taskTitle = `Call client — rate ends ${fmtD(c.rate_end_date)}` + (propShort ? ` · ${propShort}` : "");
     const kind = c.case_kind === "buy_to_let" ? "buy_to_let" : "remortgage";
     const kindLabel = (KINDS.find((k) => k[0] === kind) || [])[1] || kind;
     /* R6-32 — the sold-property check (D6-05, W16). Kwame Boateng's completed purchase and Gareth
@@ -4114,6 +4779,21 @@ window.startRetentionCase = async function (caseId, ev, opts) {
        sides of, a couple filed separately) and only the adviser knows which. */
     const sameProp = await casesOnSameProperty(c);
     const sold = propSoldWarning(sameProp, c);
+    /* R12b · W-14a — resolve the assignee BEFORE the confirm, so the dialog can name the person
+       this is about to become somebody's job for, and honour the "to me" tick that sits beside
+       whichever button was pressed. `opts.assignTo` lets a programmatic caller state it outright.
+       Everything downstream — the case, the call task and the toast — reads this ONE value, so
+       the three can never disagree about who ended up with the client. */
+    const defaultWho = retentionAssigneeFor(c);
+    const wantMe = o.assignTo === undefined ? retentionWantsMe(caseId) : false;
+    const assignTo = o.assignTo !== undefined ? (o.assignTo || null)
+      : (wantMe ? ((ME && ME.id) || defaultWho.id) : defaultWho.id);
+    const assignName = assignTo ? staffName(assignTo) : "nobody";
+    const assignLine = assignTo == null
+      ? "• nobody is assigned to it — there is no adviser on the completed case and you are not on the team list"
+      : wantMe
+        ? `• it will be assigned to YOU (${assignName}) — you ticked "to me"; without that it would have gone to ${staffName(defaultWho.id)}, ${defaultWho.why}`
+        : `• it will be assigned to ${assignName} — ${defaultWho.why}`;
     if (!confirm([
       `Start a retention case for ${clientName}${propShort ? " — " + propShort : ""}?`,
       propFull
@@ -4123,7 +4803,8 @@ window.startRetentionCase = async function (caseId, ev, opts) {
       "",
       "This creates:",
       `• a new ${kindLabel} case at Enquiry${propShort ? ` on ${propShort}` : ""}, linked back to this one`,
-      `• a task "${taskTitle}" due ${fmtD(dueStr)}`,
+      assignLine,
+      `• a task "${taskTitle}" due ${fmtD(dueStr)}${assignTo ? `, on ${assignName}'s list` : ""}`,
       cl && cl.email
         ? `• a rate-end reminder QUEUED to ${cl.email} — it goes out with the next automation run, nothing is sent now`
         : `• no reminder email — ${clientName} has no email address on file`,
@@ -4141,7 +4822,10 @@ window.startRetentionCase = async function (caseId, ev, opts) {
       rate_end_date: c.rate_end_date, rate_end_estimated: !!c.rate_end_estimated,
       erc_end_date: c.erc_end_date, term_years: c.term_years,
       lead_source: "Repeat client",
-      assigned_to: c.assigned_to || (ME && ME.id) || null,
+      /* R12b · W-14a — the resolved assignee, not the raw inherit-or-me expression this used to
+         carry. Same answer in the ordinary case (the source's adviser); different, and correct,
+         when that adviser has left or the operator ticked "to me". */
+      assigned_to: assignTo,
       retention_source_case_id: caseId,
     };
     /* R6-30 — THE data-loss line (W1, LR-02, D6-04, SM-08). The successor copied ten fields off the
@@ -4187,8 +4871,12 @@ window.startRetentionCase = async function (caseId, ev, opts) {
          the FULL address (not the chip's short label) and says outright when there is none. Where
          another client holds a later case on the same building, that is recorded too: the adviser
          was shown it and went ahead, and that decision belongs in the timeline. */
-      body: `Retention case started from the completed case — ${clientName}'s rate ends ${c.rate_end_date}.`
+      body: `Retention case started from the completed case — ${clientName}'s rate ends ${fmtD(c.rate_end_date)}.` // R12b · W-25
         + (propFull ? ` Property: ${propFull}.` : " No property address was recorded on the source case.")
+        /* R12b · W-14a — who it went to, and why, in the record a file reviewer reads. A hand-made
+           reassignment away from the source's adviser is a decision, and decisions belong in the
+           timeline rather than only in the assigned_to column where they read as the default. */
+        + (assignTo ? ` Assigned to ${assignName} — ${wantMe ? `chosen by ${staffName((ME && ME.id) || "")} over the case's own adviser` : defaultWho.why}.` : " Nobody is assigned to it.")
         + (sold ? ` Note: ${sold.who} holds a later case on this address (${sold.what}, started ${fmtD(sold.when)}) — started anyway after the warning.` : ""),
       created_by: (ME && ME.id) || null,
     });
@@ -4215,9 +4903,13 @@ window.startRetentionCase = async function (caseId, ev, opts) {
       if (qErr) warn.push(`the rate-end reminder to ${cl.email} was NOT queued (${qErr.message}) — the client will not hear from us until you queue it from the case`);
       else queued = true;
     }
+    /* R12b · W-14a — the toast names the adviser it ACTUALLY landed on. Same discipline as the
+       lead-accept toast (which has named its adviser since R7-5): if the operator has just handed
+       a client to a colleague, the confirmation of that is the one moment they will read it. */
+    const assignTxt = assignTo ? ` · assigned to ${assignName}` : " · nobody assigned";
     const outMsg = warn.length
-      ? `Retention case created, but ${warn.join("; and ")}`
-      : `Retention case created ✓${propShort ? " — " + propShort : ""}${queued ? " · reminder queued, not sent" : ""}`;
+      ? `Retention case created${assignTxt}, but ${warn.join("; and ")}`
+      : `Retention case created ✓${propShort ? " — " + propShort : ""}${assignTxt}${queued ? " · reminder queued, not sent" : ""}`;
     if (o.silent) return { status: warn.length ? "created_with_warnings" : "created", message: outMsg, caseId, warn };
     toast(outMsg);
     if (currentModal && currentModal.type === "case" && currentModal.id === caseId) openCase(caseId);
@@ -4489,7 +5181,19 @@ async function loadBriefing() {
      firm's shared inbox, it is what the Accept dropdown on the row is for, and R5-21 (Batch 1)
      depends on it being in My Day. Leads are therefore kept in both scopes. */
   const items = (Array.isArray(data) ? data : []).filter((it) =>
-    briefingScope === "all" || it.kind === "lead_new" || it.owner === (ME && ME.id));
+    (briefingScope === "all" || it.kind === "lead_new" || it.owner === (ME && ME.id))
+    /* R12b · W-19 — A ROW WITH NOTHING AN ADVISER CAN DO TO IT IS NOT A ROW.
+       With no bank details in Settings, every fee-request email is refused server-side, so R5-28
+       (correctly) replaced the dead "Chase fee" button with a badge explaining why. For the Owner
+       and the Administrator that badge is actionable — there is an "Open Settings" button beside
+       it and clearing the blocker is their job. For an ADVISER it is a row they can neither send
+       nor fix, repeated once per outstanding fee, pushing the work they CAN do off the screen: on
+       Wayne's My Day it was the single largest block of the list.
+       So it is withheld from them entirely while the blocker stands, and restored the moment it
+       clears (or if the check itself fails — hasBankDetails === null means "unknown", and nothing
+       is hidden on an unknown). Nothing is lost: the fee is still on the case, still on the
+       Protection & Fees drawer's Fees due tab, and still counted everywhere it was before. */
+    && !(it.kind === "fee_chase" && hasBankDetails === false && !isAdminOrOwner()));
   // BUILD 6c — completion-date chaser. get_briefing is RPC-driven (mirrored to prod, no schema
   // access to add a bucket there), so this one extra item is computed client-side from the same
   // `cases` table every other Today widget already queries directly, then merged in by priority —
@@ -4837,6 +5541,10 @@ function setBriefScope(s) {
   briefingScope = s;
   $("#brief-scope-mine").classList.toggle("scope-active", s === "mine");
   $("#brief-scope-all").classList.toggle("scope-active", s === "all");
+  /* R12b · W-7 — the KPI strip follows this toggle, so it repaints WITH the list rather than a
+     load later. Straight from the rows loadDashboard already read (dashKpiData): no query, and no
+     window in which the tiles and the list underneath them describe different people. */
+  renderTodayKpis();
   loadBriefing();
 }
 $("#brief-scope-mine").addEventListener("click", () => setBriefScope("mine"));
@@ -4877,6 +5585,13 @@ const MONEY_GATED_ALERT_DETAIL = {
 };
 const watchDetailFor = (a) =>
   (a && MONEY_GATED_ALERT_DETAIL[a.rule] && !showMoney()) ? MONEY_GATED_ALERT_DETAIL[a.rule] : ((a && a.detail) || "");
+/* R12b · W-25 — run_watchtower's title/detail TEXT is composed server-side (a stored Postgres
+   function this round does not touch) and prints raw ISO dates ("rate ends 2026-03-27"). Rather
+   than change the RPC, every whole YYYY-MM-DD substring in the DISPLAYED text is swapped for the
+   app's own British format before it is escaped and printed — same date, same source, just read
+   the way every other date on this page is read. \b...\b so nothing else in the sentence (a case
+   reference, a number) is touched. */
+const humanizeAlertDates = (s) => (s == null ? "" : String(s).replace(/\b\d{4}-\d{2}-\d{2}\b/g, (m) => fmtD(m)));
 const WATCH_SEV = { crit: 0, warn: 1, info: 2 };
 const WATCH_BADGE = {
   crit: '<span class="badge red">CRITICAL</span>',
@@ -4951,6 +5666,12 @@ function wtGroupLabel(items, rule) {
   tally.forEach((v, k) => { if (v > n) { n = v; best = k; } });
   const label = n === (items || []).length && best ? best : String(rule || "other").replace(/_/g, " ");
   return label.charAt(0).toUpperCase() + label.slice(1);
+}
+/* R12b · L-1/L-5/L-18 — the group's own title already explains Hide/Show; this appends a plain-
+   English expansion for the one abbreviation that group label can carry (ERC), the same
+   definition the glossary panel gives. Nothing to add for a label without it. */
+function wtGroupTitleSuffix(label) {
+  return /\berc\b/i.test(label || "") ? " — ERC = Early Repayment Charge, the fee for leaving a deal early. \"Outlasts the rate\" means it is still running after the discounted rate itself has finished, so the client is locked in past the deal that locked them in." : "";
 }
 /* Chip click — re-render only. No fetch, no drawer state change. */
 window.wtSetSevFilter = function (sev) {
@@ -5081,14 +5802,14 @@ function renderWatchtower() {
     const wtLinkBtn = wtLink && wtLink.when() ? `<button class="btn btn-sm wt-link-btn" onclick="event.stopPropagation();${wtGo}" title="${esc(wtLink.title)}">${esc(wtLink.label)}</button>` : "";
     return `<div class="row-item wt-row ${sevCls}">
       <div class="row-main">
-        <div class="t" ${openClick}>${esc(a.title)}</div>
+        <div class="t" ${openClick}>${esc(humanizeAlertDates(a.title))}</div>
         ${/* R6-FIX V11/R6B-11 — the detail sentence ends in a full stop, so the " · " that followed
              it read as a dot floating in the gap; and the chip is an unbreakable inline-flex block,
              so what came after it wrapped into fragments ("Enquiry ·" / "25 Jul 2026"). The chip
              and the date now sit on their own line under the sentence, in the same shape whether
              the case has an address or not — the old layout changed shape depending on whether the
              property was known, which reads as a status difference when it is a width one. */ ""}
-        <div class="s">${esc(watchDetailFor(a))}</div>
+        <div class="s">${esc(humanizeAlertDates(watchDetailFor(a)))}</div>
         <div class="s wt-meta">${wtTag}${wtTag ? " " : ""}<span class="wt-when">${fmtD(a.created_at)}</span></div>
       </div>
       ${WATCH_BADGE[a.severity] || WATCH_BADGE.info}
@@ -5103,7 +5824,7 @@ function renderWatchtower() {
      announces its own open/closed state; the rows it owns stay in the list exactly as they were,
      with their existing Open / Snooze… / Dismiss buttons untouched. */
   const groupHtml = (g) => `<div class="wt-group wt-group-${g.sev}${g.open ? "" : " wt-folded"}" data-wt-key="${esc(g.key)}">
-      <button type="button" class="wt-group-head" aria-expanded="${g.open}" onclick="wtToggleGroup('${jsArg(g.key)}', this)" title="${g.open ? "Hide" : "Show"} the ${g.items.length} alert${g.items.length === 1 ? "" : "s"} of this type">
+      <button type="button" class="wt-group-head" aria-expanded="${g.open}" onclick="wtToggleGroup('${jsArg(g.key)}', this)" title="${g.open ? "Hide" : "Show"} the ${g.items.length} alert${g.items.length === 1 ? "" : "s"} of this type${esc(wtGroupTitleSuffix(g.label))}">
         <span class="wt-group-caret" aria-hidden="true"></span>
         <span class="wt-group-label">${esc(g.label)}</span>
         <span class="wt-group-n">${g.items.length}</span>
@@ -5516,7 +6237,7 @@ async function loadPipeline() {
         const age = cardAge(c, stageEntry[c.id]);
         const nextStage = nextStageFor(c.stage);
         const advanceBtn = nextStage
-          ? `<button type="button" class="card-advance" onclick="event.stopPropagation(); moveCaseToStage('${c.id}', '${nextStage}')" title="Advance to ${esc(STAGE_LABEL[nextStage] || nextStage)}" aria-label="Advance to ${esc(STAGE_LABEL[nextStage] || nextStage)}">→</button>`
+          ? `<button type="button" class="card-advance" onclick="event.stopPropagation(); moveCaseToStage('${c.id}', '${nextStage}', {promptStageEntry:true})" title="Advance to ${esc(STAGE_LABEL[nextStage] || nextStage)}" aria-label="Advance to ${esc(STAGE_LABEL[nextStage] || nextStage)}">→</button>`
           : "";
         /* R6-FIX G63-03 — the pill and the .cd line have to be decided TOGETHER.
            The board's chip is rendered with noLender, i.e. on an address-less
@@ -5553,7 +6274,10 @@ async function loadPipeline() {
             ${c.retention_source_case_id ? '<span class="badge grey">🔁 retention</span>' : ""}
             ${["application","offer"].includes(c.stage) && (c.protection_status || "not_discussed") === "not_discussed" ? '<span class="badge amber">🛡 protection?</span>' : ""}
             ${["offer","exchange"].includes(c.stage) && !c.expected_completion_date ? `<span class="badge amber" title="No expected completion date set — chase the adviser">📅 no date</span>` : ""}
-            ${c.submitted_at && !["completed","not_proceeding"].includes(c.stage) ? `<span class="badge grey" title="${TIP_SUB}">📤 sub ${fmtD(c.submitted_at)}</span>` : ""}
+            ${/* R12b · L-1/L-5/L-18 — the tooltip now names the actual date, not just what "sub"
+                  is short for: TIP_SUB alone answered "what does sub mean" but not "sub WHEN",
+                  which is the more common reason to hover a pill that already prints the date. */ ""}
+            ${c.submitted_at && !["completed","not_proceeding"].includes(c.stage) ? `<span class="badge grey" title="${esc(TIP_SUB)} — submitted to lender ${esc(fmtD(c.submitted_at))}">📤 sub ${fmtD(c.submitted_at)}</span>` : ""}
             ${c.fee_status === "paid" ? '<span class="badge green">Fee paid</span>' : c.fee_status === "requested" ? '<span class="badge amber">Fee requested</span>' : ""}
           </div>
           ${age.text ? `<div class="age-line" title="${esc(age.basis)}">${age.text}</div>` : ""}
@@ -5708,6 +6432,115 @@ function promptLostReason(whatMoves) {
 function lostReasonNoteBody(lost) {
   return `Not proceeding — ${lost.label}${lost.note ? ": " + lost.note : ""}`;
 }
+/* ==========================================================================
+   R12b · W-30 — STAGE-ENTRY PROMPTS
+   Two stages have a field that is effectively part of arriving at them, and
+   both were routinely left blank because nothing ever asked: a case at
+   Decision in Principle with no LENDER (a DIP is a decision BY somebody), and
+   a case at Offer with no OFFER EXPIRY DATE (an offer that never expires is a
+   fiction, and the expiry is what the completion date has to beat).
+
+   WHERE THIS IS ALLOWED TO SPEAK, and why it is that narrow:
+   `moveCaseToStage` is the app's single stage-move path AND the entry point
+   several test suites drive headlessly — tests/r5_batch2.js and
+   tests/r9_adv.js both call `window.moveCaseToStage(...)` directly, with no
+   UI and nobody to answer a dialog. It is also what desktop drag-and-drop,
+   the per-card "Move to stage" select, the pipeline table and the bulk mover
+   all funnel through, and a dialog in the middle of a drag is a dialog over a
+   card that is still following the mouse.
+   So the prompt is OPT-IN, on `opts.promptStageEntry`, and exactly two call
+   sites pass it: the case modal's "Advance to <stage>" button and the board
+   card's "→" advance button. Both are a single deliberate click on one case,
+   with the operator already looking at it. Drag, the stage select, the table,
+   the bulk mover and every programmatic call are untouched and behave exactly
+   as they did before this round.
+
+   SKIPPING IS FREE AND LEAVES NOTHING BEHIND (D2's lesson): blank is skip,
+   never a garbage value written to look like an answer. "Skip" advances and
+   writes nothing at all — not the field, not the task. Cancel does not
+   advance. Escape and the backdrop are Cancel, which is the outcome that
+   changes least.
+   ====================================================================== */
+/* Every lender already on the book, for the datalist. Same reasoning as knownSolicitorFirms: a
+   retyped "Nationwide BS" beside "Nationwide" is how a lender report becomes two lender reports. */
+async function knownLenders() {
+  try {
+    const rows = await softRows(db.from("cases").select("lender").limit(5000));
+    const seen = new Map();
+    rows.forEach((r) => {
+      const v = r && r.lender ? String(r.lender).trim() : "";
+      if (!v) return;
+      const k = v.toLowerCase();
+      if (!seen.has(k)) seen.set(k, v);
+    });
+    return [...seen.values()].sort((a, b) => a.localeCompare(b));
+  } catch (_) { return []; }
+}
+const DIP_CHASE_TASK_TITLE = "Chase DIP decision";
+/* Returns { patch, task } to apply, or null for "do not advance". `{}` means "advance, change
+   nothing" — which is both the Skip button and the case where nothing was missing in the first
+   place, so the caller has one shape to handle. */
+async function promptStageEntry(targetStage, cRow, caseName) {
+  if (targetStage === "decision_in_principle") {
+    if (cRow && String(cRow.lender || "").trim()) return {};   // already answered — do not ask
+    const lenders = await knownLenders();
+    const dueStr = localDateStr(Date.now() + 7 * 86400000);
+    return openOverlay(`
+      <h3>Moving ${esc(caseName || "this case")} to Decision in Principle</h3>
+      <p class="panel-sub">A DIP is a decision by a <strong>lender</strong>, and this case does not name one. Worth a moment now — every later screen (the board card, the reports, the offer comparison) reads a blank lender as “we do not know”, because that is what it is.</p>
+      <label>Lender
+        <input id="se-lender" list="se-lender-list" placeholder="e.g. Skipton" autocomplete="off">
+        <datalist id="se-lender-list">${lenders.map((l) => `<option value="${esc(l)}"></option>`).join("")}</datalist>
+      </label>
+      <label class="row-check" style="display:flex;gap:8px;align-items:center;font-size:13px;font-weight:600;color:var(--dark);margin-top:10px;">
+        <input type="checkbox" id="se-dip-task" checked style="width:auto;margin:0;">
+        Add a “${esc(DIP_CHASE_TASK_TITLE)}” task for ${esc(fmtD(dueStr))} (one week)
+      </label>
+      <p class="panel-sub" style="margin-top:8px;">Leave the lender blank and this writes nothing — a guessed lender is worse than an empty one. <strong>Skip</strong> advances the case and changes nothing else.</p>
+      <div class="modal-actions">
+        <div><button type="button" class="btn btn-ghost" id="se-cancel">Don't advance</button></div>
+        <div class="right">
+          <button type="button" class="btn" id="se-skip">Skip — advance anyway</button>
+          <button type="button" class="btn btn-primary" id="se-ok">Save &amp; advance</button>
+        </div>
+      </div>`, (finish, box) => {
+      box.querySelector("#se-cancel").onclick = () => finish(null);
+      box.querySelector("#se-skip").onclick = () => finish({});
+      box.querySelector("#se-ok").onclick = () => {
+        const lender = String(box.querySelector("#se-lender").value || "").trim();
+        const wantTask = box.querySelector("#se-dip-task").checked;
+        finish({
+          patch: lender ? { lender } : null,
+          task: wantTask ? { title: DIP_CHASE_TASK_TITLE, due_date: dueStr } : null,
+        });
+      };
+    });
+  }
+  if (targetStage === "offer") {
+    if (cRow && cRow.offer_expiry_date) return {};
+    return openOverlay(`
+      <h3>Moving ${esc(caseName || "this case")} to Offer</h3>
+      <p class="panel-sub">An offer runs out. The date is on the offer letter, and it is what every completion date after this has to beat — the case has no <strong>offer expiry date</strong> recorded.</p>
+      <label>Offer expiry date<input type="date" id="se-expiry"></label>
+      <p class="panel-sub" style="margin-top:8px;">Leave it blank and nothing is written. <strong>Skip</strong> advances the case and changes nothing else; the field is on the case form whenever the letter turns up.</p>
+      <div class="modal-actions">
+        <div><button type="button" class="btn btn-ghost" id="se-cancel">Don't advance</button></div>
+        <div class="right">
+          <button type="button" class="btn" id="se-skip">Skip — advance anyway</button>
+          <button type="button" class="btn btn-primary" id="se-ok">Save &amp; advance</button>
+        </div>
+      </div>`, (finish, box) => {
+      box.querySelector("#se-cancel").onclick = () => finish(null);
+      box.querySelector("#se-skip").onclick = () => finish({});
+      box.querySelector("#se-ok").onclick = () => {
+        const v = String(box.querySelector("#se-expiry").value || "").trim();
+        finish({ patch: v ? { offer_expiry_date: v } : null });
+      };
+    });
+  }
+  return {};
+}
+
 /* Move a case to a new stage. Shared by desktop drag-and-drop (the drop handler above)
    and the per-card "Move to stage" dropdown, which gives touch/mobile users — for whom
    HTML5 drag-and-drop does not fire — a working way to progress a case from the board. */
@@ -5728,7 +6561,10 @@ window.moveCaseToStage = async function (caseId, targetStage, opts = {}) {
        below can say whether one will be offered at all. */
     const refOn = await referrerSupported();
     cRow = (await db.from("cases")
-      .select("id,client_id,assigned_to,stage,protection_status,completed_at,case_kind,lender" + (propOn ? ",property_address" : "") + (refOn ? ",referrer_client_id" : "") + ",clients!client_id(first_name,last_name)")
+      /* R12b · W-30 — offer_expiry_date comes along so the Offer stage-entry prompt can tell
+         "already recorded" from "never asked". A base column (the case form has always written it
+         unconditionally), so naming it costs no feature detection. */
+      .select("id,client_id,assigned_to,stage,protection_status,completed_at,case_kind,lender,offer_expiry_date" + (propOn ? ",property_address" : "") + (refOn ? ",referrer_client_id" : "") + ",clients!client_id(first_name,last_name)")
       .eq("id", caseId).single()).data;
   }
   if (cRow && cRow.stage === targetStage) return "noop"; // no-op (e.g. dropped back on the same column)
@@ -5773,9 +6609,19 @@ window.moveCaseToStage = async function (caseId, targetStage, opts = {}) {
       : "";
     if (msg && !confirm(msg)) { if (!skipReload) loadPipeline(); return "cancelled"; } // abort — snap the card back
   }
+  /* R12b · W-30 — the stage-entry prompt, opt-in and interactive-only (see promptStageEntry's
+     header for exactly which call sites pass this and why every other one must not). It runs
+     LAST, after the protection gate and the lost/completed confirms, so a move that was going to
+     be refused or abandoned never asks for a lender first. */
+  let stageEntry = {};
+  if (opts.promptStageEntry && !skipConfirm) {
+    stageEntry = await promptStageEntry(targetStage, cRow, caseName);
+    if (!stageEntry) { if (!skipReload) loadPipeline(); return "cancelled"; }
+  }
   // T1-7 — completed_at is the basis every completion report counts on, and nothing but the
   // importer ever wrote it. Stamp it on the way in, clear it on the way out.
   const patch = { stage: targetStage };
+  if (stageEntry.patch) Object.assign(patch, stageEntry.patch);   // R12b · W-30 — blank stays blank
   if (targetStage === "completed") { if (!cRow || !cRow.completed_at) patch.completed_at = new Date().toISOString(); }
   else if (cRow && cRow.stage === "completed") patch.completed_at = null;
   if (lost && targetStage === "not_proceeding") { patch.lost_reason = lost.reason; patch.lost_detail = lost.note || null; }
@@ -5800,6 +6646,25 @@ window.moveCaseToStage = async function (caseId, targetStage, opts = {}) {
      completed case is not a completion, and the idempotency check inside catches the rest. It is
      suppressed on the bulk path (silent) for the same reason bulk suppresses every other prompt:
      one dialog per case, in the middle of a fifty-case move, is not a prompt, it is a wall. */
+  /* R12b · W-30 — the DIP chase task, only ever from the "Save & advance" path and only when the
+     operator left the box ticked. Written AFTER the stage move has succeeded, for the same reason
+     the referral thank-you is: a chase task for a DIP the case never reached is litter. Idempotent
+     on its own title so pressing Advance twice cannot leave two. */
+  let stageEntryTaskNote = "";
+  if (stageEntry.task) {
+    const existing = await softRows(db.from("case_tasks").select("id,title,done_at").eq("case_id", caseId));
+    if (existing.some((t) => !t.done_at && String(t.title || "").trim() === stageEntry.task.title)) {
+      stageEntryTaskNote = ` · a “${stageEntry.task.title}” task was already open`;
+    } else {
+      const { error: tErr } = await db.from("case_tasks").insert({
+        case_id: caseId, title: stageEntry.task.title, due_date: stageEntry.task.due_date,
+        assigned_to: (cRow && cRow.assigned_to) || (ME && ME.id) || null,
+      });
+      stageEntryTaskNote = tErr
+        ? ` · the “${stageEntry.task.title}” task could not be created: ${tErr.message}`
+        : ` · “${stageEntry.task.title}” task added for ${fmtD(stageEntry.task.due_date)}`;
+    }
+  }
   let refResult = null;
   if (targetStage === "completed" && !silent && (!cRow || cRow.stage !== "completed")) {
     refResult = await maybeQueueReferralThankYou(caseId, cRow, { quiet: true });
@@ -5825,7 +6690,12 @@ window.moveCaseToStage = async function (caseId, targetStage, opts = {}) {
       /* R9-1 — the referral outcome rides on THIS toast rather than firing its own a moment
          earlier and being overwritten by it. Both outcomes are worth a sentence: a task was
          created on somebody else's file, or one deliberately was not and here is why. */
-      + (refResult && refResult.message ? " · " + refResult.message : ""));
+      + (refResult && refResult.message ? " · " + refResult.message : "")
+      /* R12b · W-30 — what the entry prompt actually wrote, named on the move's own toast rather
+         than in a second one that would overwrite it. */
+      + (stageEntry.patch && stageEntry.patch.lender ? ` · lender set to ${stageEntry.patch.lender}` : "")
+      + (stageEntry.patch && stageEntry.patch.offer_expiry_date ? ` · offer expiry ${fmtD(stageEntry.patch.offer_expiry_date)}` : "")
+      + stageEntryTaskNote);
     if (!skipReload) loadPipeline();
   }
   return reopening ? "reopened" : "moved";
@@ -7578,12 +8448,13 @@ window.openCase = async function (id, opts = {}) {
   let events = [], auditRows = [];
   let hasRetentionSuccessor = false;
   let caseDocs = [], docMails = [];      // R9-5 · m10 — the checklist and its document emails
+  let caseAppts = [];                    // R12b · W-11 — this case's diary, from the start of today
   openedUpdatedAt = null;
   pendingOffer = null; // a re-render replaces the diff panel — don't leave a stale proposal armed
   if (id) {
     // BACKEND-R4 §2/§3 — the curated event log (log_case_event, with its actor) and the forensic
     // audit_log underneath it. Both soft-fail: a blocked table must not stop the case opening.
-    const [{ data: cs }, { data: ns }, { data: ts }, evs, aud, succ, docs, dmail] = await Promise.all([
+    const [{ data: cs }, { data: ns }, { data: ts }, evs, aud, succ, docs, dmail, appts] = await Promise.all([
       db.from("cases").select("*").eq("id", id).single(),
       db.from("case_notes").select("*").eq("case_id", id).order("created_at", { ascending: false }),
       db.from("case_tasks").select("*").eq("case_id", id).order("due_date"),
@@ -7595,13 +8466,24 @@ window.openCase = async function (id, opts = {}) {
          soft: a database without the table answers 42P01 and the section simply never renders. */
       softRows(db.from("case_documents").select("*").eq("case_id", id).order("created_at")),
       softRows(db.from("email_queue").select("id,email_type,status,sent_at,created_at").eq("case_id", id).in("email_type", DOC_MAIL_TYPES)),
+      /* R12b · W-11 — THE CASE'S OWN DIARY. The header could say "Next task: none open" with the
+         client sitting in reception, because nothing in this modal had ever read `appointments`
+         — a table that has carried `case_id` since round 6. From the start of TODAY forward and
+         capped at a handful of rows: the header needs the soonest one, and reading a case's whole
+         appointment history to print one line is the kind of query that gets slower every year.
+         select("*") rather than naming `outcome`, so a database that predates the column answers
+         with the rest of the row instead of 42703-ing the whole read. */
+      softRows(db.from("appointments").select("*").eq("case_id", id)
+        .gte("starts_at", new Date(new Date().setHours(0, 0, 0, 0)).toISOString())
+        .order("starts_at").limit(5)),
     ]);
     if (!cs) return toast("Case not found — it may have been deleted or you don't have access");
     c = cs; notes = ns || []; tasks = ts || []; events = evs; auditRows = aud;
-    caseDocs = docs || []; docMails = dmail || [];
+    caseDocs = docs || []; docMails = dmail || []; caseAppts = appts || [];
     notePropAddrFromStarRow(cs); // the select("*") above settles the M7 question definitively
     noteReferrerFromStarRow(cs); // …and the m11 one, at the same zero cost (R9-1)
     noteDocsFromStarRow(cs);     // …and m10's, which can only ever be answered "no" from here
+    noteCallPackFromStarRow(cs); // R12b · W-15b — …and the call-pack four, at the same zero cost
     hasRetentionSuccessor = (succ || []).length > 0;
     openedUpdatedAt = cs.updated_at; // exact string from the loaded row, for the stale-write guard
   }
@@ -7623,6 +8505,9 @@ window.openCase = async function (id, opts = {}) {
      worse than no control. The firm's known solicitors are only fetched when the field will
      actually be drawn, so an un-migrated database pays nothing for it. */
   const docsOn = await docsSupported();
+  /* R12b · W-15b — the four call-pack columns. Same rule as the three flags above: hidden outright
+     without the migration, because four inputs whose Save can only 42703 are worse than none. */
+  const callPackOn = await callPackSupported();
   const solicitorFirms = docsOn ? await knownSolicitorFirms() : [];
   const siblingCases = c.client_id ? await softRows(db.from("cases").select("*").eq("client_id", c.client_id)) : [];
   registerClientProps(c.client_id, siblingCases);   // R6-FIX V2/V4 — the client's whole book
@@ -7688,6 +8573,21 @@ window.openCase = async function (id, opts = {}) {
   const nextTask = tasks.find((t) => !t.done_at);           // tasks are due-date ordered → first open one
   const hadOpenTask = !!nextTask;
   const taskOverdue = nextTask && nextTask.due_date && nextTask.due_date < todayStr;
+  /* R12b · W-11 — WHAT IS IN THE DIARY FOR THIS CASE.
+     The soonest appointment still AHEAD of us; failing that, one earlier TODAY, because a case
+     whose fact find was at nine this morning is a case somebody has to record an outcome on and
+     a header that says nothing about it is the same silence this finding is about. The two are
+     labelled differently — calling this morning's meeting "next" would be a small lie, and small
+     lies in a header are how a header stops being read.
+     ABSENCE IS THE EMPTY STATE. No line at all when there is nothing booked: this strip already
+     carries eight to twelve values and a row of em-dashes is what makes a dense strip unreadable.
+     "Next task" keeps its "none open" because an empty task list is a fact worth stating; an
+     empty diary is not. */
+  const apptNow = Date.now();
+  const nextAppt = (caseAppts || []).find((a) => a.starts_at && new Date(a.starts_at).getTime() >= apptNow)
+    || (caseAppts || []).filter((a) => a.starts_at && localDateStr(new Date(a.starts_at)) === todayStr).slice(-1)[0]
+    || null;
+  const nextApptIsAhead = !!nextAppt && new Date(nextAppt.starts_at).getTime() >= apptNow;
   const lastNote = notes[0];                                 // notes load newest-first
   const noteSnip = (b) => (b && b.length > 120 ? b.slice(0, 120) + "…" : (b || ""));
   const rateOverdue = c.rate_end_date && c.rate_end_date < todayStr;
@@ -7725,7 +8625,7 @@ window.openCase = async function (id, opts = {}) {
           ${/* R5-6 — only on a completed case with a tracked rate and no successor yet. The nightly
                RPC covers rates still ahead of us; this covers the ones that already ended. */ ""}
           ${c.stage === "completed" && c.rate_end_date && !hasRetentionSuccessor
-            ? `<button type="button" class="btn btn-retention" id="cs-retention-btn" title="Create the follow-on case, the call task and a queued rate-end reminder">🔁 Start retention case</button>` : ""}
+            ? retentionToMeHtml(id, c) + `<button type="button" class="btn btn-retention" id="cs-retention-btn" title="Create the follow-on case, the call task and a queued rate-end reminder">🔁 Start retention case</button>` : ""}
           <button type="button" class="btn btn-primary cs-logcall-btn" id="cs-logcall-btn">📞 Log call</button>
         </div>
       </div>
@@ -7745,9 +8645,22 @@ window.openCase = async function (id, opts = {}) {
         ${["offer", "exchange"].includes(c.stage) ? (c.expected_completion_date
           ? `<div class="cs-stat"><span class="cs-lbl">Expected completion</span><span class="cs-val">${fmtD(c.expected_completion_date)}</span></div>`
           : `<div class="cs-stat cs-warn" id="cs-expected-nudge" style="cursor:pointer;" title="Click to set the expected completion date"><span class="cs-lbl">Expected completion</span><span class="cs-val">Set expected completion →</span></div>`) : ""}
+        ${/* R12b · W-15b — THE CALL PACK, on the header an adviser reads with the phone in their
+             hand. Four stats, drawn only when the case actually carries at least one of them, each
+             absent value rendered "—" rather than £0. This is the same block the Rate & ERC row
+             shows in one line; a retention case is exactly where it earns its space. */ ""}
+        ${hasCallPack(c) ? `<div class="cs-stat cs-callpack" id="cs-callpack-balance"><span class="cs-lbl">Balance</span><span class="cs-val">${callPackVal(c.current_balance)}</span></div>
+        <div class="cs-stat cs-callpack" id="cs-callpack-reversion"><span class="cs-lbl">Reverts to</span><span class="cs-val">${callPackVal(c.reversion_rate, true)}</span></div>
+        <div class="cs-stat cs-callpack" id="cs-callpack-payment"><span class="cs-lbl">Monthly payment</span><span class="cs-val">${callPackVal(c.monthly_payment)}</span></div>
+        <div class="cs-stat cs-callpack" id="cs-callpack-erc"><span class="cs-lbl">ERC amount</span><span class="cs-val">${callPackVal(c.erc_amount)}</span></div>` : ""}
       </div>
+      ${/* R12b · W-15c — the one sentence the retention call opens with, where the whole pack is
+           already on screen. Silent unless the balance, the reversion rate and the ended rate are
+           all recorded. */ ""}
+      ${upliftLineHtml(c, "cs-uplift")}
       <div class="cs-lines">
         <div class="cs-line"><span class="cs-lbl">Next task</span><span id="cs-task-val">${nextTask ? `<span class="${taskOverdue ? "cs-danger-txt" : ""}">${esc(nextTask.title)}${nextTask.due_date ? " · " + (taskOverdue ? "overdue " : "due ") + fmtD(nextTask.due_date) : ""}</span>` : '<span class="cs-muted">none open</span>'}</span></div>
+        ${nextAppt ? `<div class="cs-line" id="cs-appt-line"><span class="cs-lbl">${nextApptIsAhead ? "Next appointment" : "Earlier today"}</span><span id="cs-appt-val"><a href="#" class="cs-appt-link" data-appt="${esc(nextAppt.id)}" title="${esc(`Open this appointment${nextAppt.staff_id ? ` — ${staffName(nextAppt.staff_id)}` : ""}${nextAppt.location ? ` · ${nextAppt.location}` : ""}`)}" onclick="event.preventDefault();openApptFromCase('${jsArg(nextAppt.id)}','${jsArg(id)}')">${esc(nextAppt.title || "Appointment")} · ${esc(apptWhenLabel(nextAppt))}${nextAppt.staff_id ? " · " + esc(staffName(nextAppt.staff_id)) : ""}</a>${apptOutcomeChipHtml(nextAppt.outcome)}</span></div>` : ""}
         <div class="cs-line"><span class="cs-lbl">Last note</span><span id="cs-note-val">${lastNote ? `${esc(noteSnip(lastNote.body))} <span class="cs-muted">· ${fmtAgo(lastNote.created_at)}</span>` : '<span class="cs-muted">no notes yet</span>'}</span></div>
       </div>
       <div class="cs-logcall-panel hidden" id="cs-logcall-panel">
@@ -7811,7 +8724,7 @@ window.openCase = async function (id, opts = {}) {
         <input id="new-task" placeholder="Add a task…" style="flex:1;min-width:140px;">
         <select id="new-task-assignee" aria-label="Assign task to" style="width:auto;" title="Assign task to">${TEAM.map((p) => `<option value="${p.id}" ${p.id === defaultAssignee(c.assigned_to) ? "selected" : ""}>${esc(staffName(p.id))}</option>`).join("")}</select>
         <input id="new-task-due" type="date" style="width:auto;" title="Leave this empty and the task is due tomorrow — a task with no date appears on no list anywhere.">
-        <button class="btn btn-sm" id="add-task-btn">Add</button>
+        <button class="btn btn-sm" id="add-task-btn" title="Add task">Add task</button>
       </div>
       <div id="tasks-inline">${tasks.map((t) => `
         <div class="row-item" style="padding:7px 4px;">
@@ -7838,9 +8751,9 @@ window.openCase = async function (id, opts = {}) {
     </div>` : ""}
     <div style="margin-top:14px;">
       <h3 style="font-size:14px;">Notes</h3>
-      <div style="display:flex;gap:8px;margin:8px 0 0;">
-        <input id="new-note" placeholder="Add a note…" style="flex:1;">
-        <button class="btn btn-sm" id="add-note-btn">Add</button>
+      <div style="display:flex;gap:8px;margin:8px 0 0;flex-wrap:wrap;">
+        <input id="new-note" placeholder="Add a note…" style="flex:1;min-width:140px;">
+        <button class="btn btn-sm" id="add-note-btn" title="Add note">Add note</button>
       </div>
       <div class="type-chips" id="note-type-chips">
         <button type="button" class="tl-chip active" data-type="note">📝 Note</button>
@@ -7917,6 +8830,23 @@ window.openCase = async function (id, opts = {}) {
         <span style="display:flex;align-items:center;gap:5px;margin-top:4px;${c.rate_end_estimated ? "color:#6b21a8;font-weight:600;" : ""}"><input type="checkbox" name="rate_end_estimated" style="width:auto;margin:0;" ${c.rate_end_estimated ? "checked" : ""}> estimated — needs checking</span>
       </label>
       <label>ERC end date<input name="erc_end_date" type="date" value="${c.erc_end_date ?? ""}"></label>
+      ${/* R12b · W-15b — THE CALL PACK. Four nullable columns, sitting with the rate and the ERC
+           they belong to rather than in a section of their own, because they are read together:
+           "what is left, what does it revert to, what are they paying, what would it cost to
+           leave". Blank means NOT RECORDED and is stored as null (see the save path) — a zero
+           balance is a repaid mortgage and a zero ERC is a free exit, and neither is what an empty
+           box means. Hidden entirely without the migration. */ ""}
+      ${callPackOn ? `
+      <label>Current balance (£)<input name="current_balance" type="number" step="any" value="${c.current_balance ?? ""}" placeholder="not recorded">
+        <span class="s cs-muted">What is still owed today. Leave blank if you do not know it — it shows as “—”, never as £0.</span>
+      </label>
+      <label>Reversion rate (%)<input name="reversion_rate" type="number" step="any" value="${c.reversion_rate ?? ""}" placeholder="not recorded">
+        <span class="s cs-muted">The rate this loan falls onto when the fix ends. With the balance and the current rate, this is what the “≈ £X/mo more” estimate is built from.</span>
+      </label>
+      <label>Monthly payment (£)<input name="monthly_payment" type="number" step="any" value="${c.monthly_payment ?? ""}" placeholder="not recorded"></label>
+      <label>ERC amount (£)<input name="erc_amount" type="number" step="any" value="${c.erc_amount ?? ""}" placeholder="not recorded">
+        <span class="s cs-muted">What leaving early would cost right now. Blank is “not recorded”; £0 means there genuinely is no charge.</span>
+      </label>` : ""}
       <label>Offer expiry date<input name="offer_expiry_date" type="date" value="${c.offer_expiry_date ?? ""}"></label>
       <label>Expected completion date<input name="expected_completion_date" type="date" id="case-expected-completion" value="${c.expected_completion_date ?? ""}"></label>
       <label>Term (years)<input name="term_years" type="number" value="${c.term_years ?? ""}"></label>
@@ -7976,6 +8906,10 @@ window.openCase = async function (id, opts = {}) {
       </div>
     </div>`;
   openModal();
+  // R12b · L-7 — same rule as the client form: clear a required-field highlight on input, not on
+  // the next Save attempt.
+  const caseFormEl = $("#case-form");
+  if (caseFormEl) caseFormEl.addEventListener("input", (e) => { if (e.target && e.target.classList) e.target.classList.remove("field-invalid"); });
   pushModalHistory("case", id); // BUILD 7a — Back closes this modal; reloads replace (no dup entry)
   if (id) wireAuditPanel("case-audit", auditRows);
   /* R9-5 — the Documents section, painted from the reads the modal already made. `docCase` is a
@@ -8026,14 +8960,24 @@ window.openCase = async function (id, opts = {}) {
       const ncFirst = row.nc_first_name, ncLast = row.nc_last_name, ncEmail = row.nc_email, ncPhone = row.nc_phone;
       delete row.nc_first_name; delete row.nc_last_name; delete row.nc_email; delete row.nc_phone;
       if (row.client_id === "__new__") {
-        if (!ncFirst && !ncLast) return toast("Enter the new client's name");
+        if (!ncFirst && !ncLast) {
+          // R12b · L-7
+          const nf = $("#case-form [name=\"nc_first_name\"]"), nl = $("#case-form [name=\"nc_last_name\"]");
+          if (nf) nf.classList.add("field-invalid");
+          if (nl) nl.classList.add("field-invalid");
+          return toast("Enter the new client's name");
+        }
         const { data: newClient, error: ncErr } = await db.from("clients")
           .insert({ first_name: ncFirst || "", last_name: ncLast || "", email: ncEmail || null, phone: ncPhone || null })
           .select().single();
         if (ncErr) return toast("Error creating client: " + ncErr.message);
         row.client_id = newClient.id;
       }
-      if (!row.client_id) return toast("Please choose a client");
+      if (!row.client_id) {
+        // R12b · L-7
+        const cs = $("#case-client-select"); if (cs) cs.classList.add("field-invalid");
+        return toast("Please choose a client");
+      }
       if (id && row.stage !== c.stage && protectionGateBlocks({ stage: c.stage, protection_status: row.protection_status }, row.stage)) {
         toast("🛡️ Record the protection conversation before submitting — set a protection status");
         const det = $(".case-details"); if (det) det.open = true; // the field is inside the collapsible section — reveal it
@@ -8105,7 +9049,13 @@ window.openCase = async function (id, opts = {}) {
       // without the completion date every report counts on. Stamp on the way in, clear on the way out.
       if (row.stage === "completed") { if (!id || !c.completed_at) row.completed_at = new Date().toISOString(); }
       else if (id && c.stage === "completed") row.completed_at = null;
-      ["loan_amount", "property_value", "rate_percent", "term_years", "broker_fee", "proc_fee", "sols_fee", "protection_commission"].forEach((k) => { if (row[k] != null) row[k] = Number(row[k]); });
+      /* R12b · W-15b — the call-pack fields join this list, so a typed "250000" is stored as a
+         number rather than as the string the FormData hands over. The `!= null` guard is what
+         keeps blank meaning NOT RECORDED: an empty box is already null two dozen lines above, and
+         Number(null) would turn "we don't know" into a hard £0. */
+      ["loan_amount", "property_value", "rate_percent", "term_years", "broker_fee", "proc_fee", "sols_fee", "protection_commission"]
+        .concat(CALLPACK_COLS)
+        .forEach((k) => { if (row[k] != null) row[k] = Number(row[k]); });
       /* R6/M7 — belt as well as braces. The field is only rendered when the probe says the column
          is there, but a database can be migrated backwards between page load and Save, so a write
          refused for property_address retries without it rather than losing the whole edit. */
@@ -8121,6 +9071,8 @@ window.openCase = async function (id, opts = {}) {
          "Trelawny Conveyancing " is a fourth firm nobody chose to create. */
       if (!docsOn) { delete row.waiting_on; delete row.solicitor_firm; }
       else if (row.solicitor_firm) row.solicitor_firm = String(row.solicitor_firm).trim() || null;
+      /* R12b · W-15b — same belt-and-braces for the call-pack columns. */
+      if (!callPackOn) CALLPACK_COLS.forEach((k) => delete row[k]);
       if (id) {
         // Optimistic concurrency: only update if the row hasn't changed since we opened it.
         let { data: updated, error } = await db.from("cases").update(row).eq("id", id).eq("updated_at", openedUpdatedAt).select();
@@ -8161,6 +9113,14 @@ window.openCase = async function (id, opts = {}) {
           delete row.waiting_on; delete row.solicitor_firm;
           ({ data: updated, error } = await db.from("cases").update(row).eq("id", id).eq("updated_at", openedUpdatedAt).select());
         }
+        /* R12b · W-15b — and the call-pack four. Same reasoning a fifth time: a database that has
+           not taken them still saves everything else on the form. */
+        let callPackMissing = false;
+        if (error && CALLPACK_COLS.some((k) => k in row) && isMissingColumnError(error)) {
+          callPackMissing = true; CALLPACK_SUPPORTED = false;
+          CALLPACK_COLS.forEach((k) => delete row[k]);
+          ({ data: updated, error } = await db.from("cases").update(row).eq("id", id).eq("updated_at", openedUpdatedAt).select());
+        }
         if (error) return toast("Error: " + error.message);
         if (!updated || updated.length === 0) {
           /* R5-3 — this used to reload the case over the operator's typing: minutes of work gone,
@@ -8188,7 +9148,8 @@ window.openCase = async function (id, opts = {}) {
         toast("Case saved" + (lostColsMissing ? " · reason kept as a note only (run migration M2)" : "")
           + (propColMissing ? " · property address NOT saved (run migration M7)" : "")
           + (refColMissing ? " · referrer NOT saved (run migration m11)" : "")
-          + (docColsMissing ? " · waiting-on / solicitor NOT saved (run migration m10)" : ""));
+          + (docColsMissing ? " · waiting-on / solicitor NOT saved (run migration m10)" : "")
+          + (callPackMissing ? " · balance / reversion / payment / ERC amount NOT saved (this database has no call-pack columns)" : ""));
         /* R9-1 — the case form is the OTHER route to Completed, so the thank-you has to be offered
            here too or the behaviour would depend on whether an adviser used the board or the form.
            Only on a genuine arrival at Completed: a re-save of an already completed case is not a
@@ -8225,10 +9186,17 @@ window.openCase = async function (id, opts = {}) {
           delete row.waiting_on; delete row.solicitor_firm;
           ({ error } = await db.from("cases").insert(row));
         }
+        let callPackMissing = false;  // R12b · W-15b — call-pack fallback, as above
+        if (error && CALLPACK_COLS.some((k) => k in row) && isMissingColumnError(error)) {
+          callPackMissing = true; CALLPACK_SUPPORTED = false;
+          CALLPACK_COLS.forEach((k) => delete row[k]);
+          ({ error } = await db.from("cases").insert(row));
+        }
         if (error) return toast("Error: " + error.message);
         closeModal(); toast("Case saved" + (propColMissing ? " · property address NOT saved (run migration M7)" : "")
           + (refColMissing ? " · referrer NOT saved (run migration m11)" : "")
-          + (docColsMissing ? " · waiting-on / solicitor NOT saved (run migration m10)" : ""));
+          + (docColsMissing ? " · waiting-on / solicitor NOT saved (run migration m10)" : "")
+          + (callPackMissing ? " · balance / reversion / payment / ERC amount NOT saved (this database has no call-pack columns)" : ""));
         loadPipeline(); loadDashboard();
         if ($("#page-data") && !$("#page-data").classList.contains("hidden")) loadDataHealth();
       }
@@ -8455,7 +9423,9 @@ window.openCase = async function (id, opts = {}) {
       let res;
       // R5-34 — a blocked move has already re-opened this case ON the protection select; re-opening
       // it again here would throw that away and leave the operator back where they started.
-      try { res = await moveCaseToStage(id, nextStage); }
+      // R12b · W-30 — an interactive, single-case advance: this is one of exactly two call sites
+      // allowed to raise the stage-entry prompt.
+      try { res = await moveCaseToStage(id, nextStage, { promptStageEntry: true }); }
       finally { if (res === "blocked") advanceBtn.disabled = false; else openCase(id); }
     };
     // "Set expected completion" nudge (BUILD 5c) — reveals Case details and focuses the field.
@@ -8494,7 +9464,8 @@ window.openCase = async function (id, opts = {}) {
     $("#act-offer").onclick = () => $("#offer-file").click();
     $("#offer-file").onchange = () => handleOfferUpload(id);
     $("#act-evidence").onclick = () => buildEvidencePack(id);
-    $("#act-appt").onclick = () => openAppt(null, { client_id: c.client_id, case_id: id });
+    // R12b · W-10 — booked from here, so Save comes back to here.
+    $("#act-appt").onclick = () => openAppt(null, { client_id: c.client_id, case_id: id }, { returnCaseId: id });
     $("#act-factfind").onclick = () => factFind(id, c.client_id);
     if (c.offer_doc_path) $("#act-view-offer").onclick = async () => {
       const { data, error } = await db.storage.from("offers").createSignedUrl(c.offer_doc_path, 300);
@@ -9068,6 +10039,70 @@ function clientColdDefinition(cutoff) {
   return `Last contact = the most recent of: a note on any of their cases · an email we SENT them (a queued or failed one has not reached them, so it does not count) · an appointment that has already started · a task completed on one of their cases. This segment is every client whose last contact is before ${fmtD(localDateStr(cutoff))}, plus every client with no contact of any kind on record.`;
 }
 let clientSegment = "all";
+/* ==========================================================================
+   R12b · W-29 — THE CLIENT LIST, NARROWED TO ONE ADVISER.
+
+   WHAT "BELONGS TO" MEANS HERE, and it is the only sane answer: a client is
+   this adviser's when at least ONE of their cases is assigned to them. A
+   client can therefore appear under two advisers at once, and that is not a
+   bug — a landlord whose purchase Wayne did and whose remortgage Luke is doing
+   IS both advisers' client, and hiding them from one of the two would be the
+   actual error. The note under the control says so, so nobody has to work it
+   out from the counts.
+
+   "Nobody" is offered as well: clients whose every case is unassigned, plus
+   clients with no case at all. That pile is the one nothing else on this page
+   can find, and it is where a book quietly rots.
+
+   THE OPTIONS follow the same PROFILES-vs-TEAM rule as #board-adviser (see
+   loadTeam and the "Assignment safety" block at the top of this file): TEAM
+   for the live roster, plus a labelled option for anybody with role 'none' who
+   is still holding cases. Without that last part, filtering to a departed
+   colleague's book — which is exactly what you do when you are redistributing
+   it — is impossible, because no option carries their id.
+   ========================================================================== */
+let clientAdviser = "all";
+function clientAdviserIds(c) {
+  const ids = new Set();
+  (c.cases || []).forEach((x) => { if (x.assigned_to) ids.add(x.assigned_to); });
+  return ids;
+}
+function clientHasAdviser(c, who) {
+  if (!who || who === "all") return true;
+  const ids = clientAdviserIds(c);
+  if (who === "none") return ids.size === 0;
+  return ids.has(who);
+}
+/* Rebuilt on every render (the same way the segment chips are) so a roster change or a case
+   reassignment can never leave the control offering a name the list cannot honour. The current
+   selection survives when it is still offered, and falls back to Everyone when it is not. */
+function renderClientAdviser(clients) {
+  const sel = $("#client-adviser");
+  if (!sel) return;
+  const holders = new Set();
+  (clients || []).forEach((c) => clientAdviserIds(c).forEach((id) => holders.add(id)));
+  const teamOpts = TEAM.map((p) => [p.id, staffName(p.id)]);
+  // Anyone holding cases who is NOT on the team — a leaver, or a profile that has gone entirely.
+  const strays = [...holders].filter((id) => !TEAM.some((p) => p.id === id))
+    .map((id) => [id, (profileName(id) || `Not on the team (${id})`) + (profileName(id) ? " — no access" : ""), !!profileName(id)]);
+  const noneN = (clients || []).filter((c) => clientAdviserIds(c).size === 0).length;
+  const opts = [["all", "Everyone"]].concat(teamOpts, strays, noneN ? [["none", "Nobody (unassigned cases only)"]] : []);
+  if (!opts.some(([k]) => k === clientAdviser)) clientAdviser = "all";
+  // R12b · K-15/K-17/L-16 — the third tuple element (present only on a "no access" stray) carries
+  // the same explanation the other adviser filters give.
+  sel.innerHTML = opts.map(([k, l, noAccess]) => `<option value="${esc(k)}"${k === clientAdviser ? " selected" : ""}${noAccess ? ` title="${esc(NO_ACCESS_OPTION_TITLE)}"` : ""}>${esc(l)}</option>`).join("");
+  if (!sel.dataset.wired) {
+    sel.dataset.wired = "1";
+    sel.onchange = () => { clientAdviser = sel.value; clientSel.clear(); loadClients($("#client-search").value); };
+  }
+  const note = $("#client-adv-note");
+  if (!note) return;
+  if (clientAdviser === "all") { note.textContent = ""; note.classList.add("hidden"); return; }
+  note.classList.remove("hidden");
+  note.textContent = clientAdviser === "none"
+    ? "Clients with no case assigned to anybody — including clients with no case at all."
+    : `Clients with at least one case assigned to ${staffName(clientAdviser)}. A client whose cases are split between two advisers appears under both — that is correct, they are both advisers' client. The segment counts and the sort below all follow this filter.`;
+}
 /* One fetch, cached for the life of the page visit. force:true re-reads (page navigation, a
    save, a completed bulk action); a keystroke in the search box does not. */
 let clientCache = null;
@@ -9208,6 +10243,7 @@ window.gotoClientSegment = function (seg) {
   clientSegment = seg;
   const box = $("#client-search");
   if (box) box.value = "";                  // a segment reached from another page means the whole segment
+  clientAdviser = "all";                    // R12b · W-29 — …and the whole firm's, for the same reason
   nav("clients");
 };
 async function loadClients(filter = "", opts = {}) {
@@ -9225,7 +10261,13 @@ async function loadClients(filter = "", opts = {}) {
   // Search first, segment second — so the chip counts describe what the CURRENT search would
   // give you if you pressed that chip, the same contract the pipeline's segment counts have had
   // since BUILD 5a. (Search a name and every count re-reads against that name.)
-  const searched = clients.filter((c) => clientTextMatch(c, f, fPhone, phoneSearch));
+  /* R12b · W-29 — ADVISER, then search, then segment, then sort. The adviser filter sits OUTSIDE
+     the chip counts on purpose: the counts have described "what pressing this chip would give you
+     right now" since BUILD 5a, so they have to be computed over the adviser-filtered set as well
+     as the searched one, or the chips would advertise rows the filter is about to remove. */
+  renderClientAdviser(clients);
+  const scopedClients = clients.filter((c) => clientHasAdviser(c, clientAdviser));
+  const searched = scopedClients.filter((c) => clientTextMatch(c, f, fPhone, phoneSearch));
   const segs = clientSegments();
   if (!segs.some(([k]) => k === clientSegment)) clientSegment = "all";   // year rolled over mid-session
   /* R11-6 — segment first, then order. The chip counts above still describe the segment, and the
@@ -9240,10 +10282,14 @@ async function loadClients(filter = "", opts = {}) {
   const visible = new Set(list.map((c) => c.id));
   [...clientSel].forEach((id) => { if (!visible.has(id)) clientSel.delete(id); });
   renderClientBulkBar(list);
+  /* R12b · W-29 — the empty state names EVERY filter in force, so "no clients" can never be read
+     as "no clients exist" when it means "none of this adviser's". */
+  const advWord = clientAdviser === "all" ? "" : clientAdviser === "none" ? " with no adviser on any case" : ` assigned to ${staffName(clientAdviser)}`;
   const emptyMsg = f && clientSegment !== "all"
-    ? `No clients match “${esc(filter.trim())}” in this segment.`
-    : f ? `No matches for “${esc(filter.trim())}”.`
-    : clientSegment !== "all" ? "No clients in this segment — nothing to do here."
+    ? `No clients${advWord} match “${esc(filter.trim())}” in this segment.`
+    : f ? `No matches for “${esc(filter.trim())}”${advWord}.`
+    : clientSegment !== "all" ? `No clients${advWord} in this segment — nothing to do here.`
+    : advWord ? `No clients${advWord}.`
     : "No clients yet — add your first one.";
   const showDob = clientSegment === "no_dob";
   /* R11-6 — which extra fact the row carries. A rate-end segment names the rate it selected the
@@ -9540,7 +10586,22 @@ function bulkClientExportCsv() {
    ONCE, then ONE query per table (.in("case_id", ids), or .eq("client_id") where the row
    carries client linkage) — no per-case loops. Every source is wrapped so a blocked/absent
    table in prod degrades to an empty source rather than breaking the modal. */
-const TL_CATS = [["all", "All"], ["call", "Calls"], ["email", "Emails"], ["meeting", "Meetings"], ["note", "Notes"], ["appointment", "Appointments"], ["system", "System"]];
+/* R12b · W-21 — "activity" is a pseudo-category, not a real one: it means "everything a human
+   did or that happened TO them", i.e. every row except the system stage-change noise. It is the
+   default view (see renderTimelineList / the modal's initial render below) — "All" is still one
+   click away, and so is "System" itself; nothing is hidden that a click can't reach. */
+const TL_CATS = [["activity", "What happened"], ["all", "All"], ["call", "Calls"], ["email", "Emails"], ["meeting", "Meetings"], ["note", "Notes"], ["appointment", "Appointments"], ["system", "System"]];
+/* R12b · W-21 — the categories that count as an actual conversation with the client, for the
+   client header's "Last contact" line. Appointments and system rows deliberately excluded: a
+   booked meeting that hasn't happened yet isn't contact, and a stage change isn't a conversation. */
+const CONTACT_TL_CATS = new Set(["call", "email", "meeting", "note"]);
+const CONTACT_KIND_LABEL = { call: "call", email: "email", meeting: "meeting", note: "note" };
+function lastContactAgeLabel(ts) {
+  const days = Math.floor((Date.now() - new Date(ts).getTime()) / 86400000);
+  if (days <= 0) return "today";
+  if (days === 1) return "1 day ago";
+  return `${days} days ago`;
+}
 /* R5-16 — a client with four buy-to-lets got four timeline tags all reading "Buy to Let", so the
    one column that exists to say WHICH case a row belongs to said nothing. Same label the note
    composer's case selector uses: kind · lender, falling back to the kind alone when there is no
@@ -9646,7 +10707,8 @@ function timelineRowHtml(it, multiCase) {
     </div>`;
 }
 function renderTimelineList(items, filter, cap, multiCase) {
-  const filtered = filter === "all" ? items : items.filter((it) => it.cat === filter);
+  // R12b · W-21 — "activity" (the default) is everything except the system stage-change rows.
+  const filtered = filter === "all" ? items : filter === "activity" ? items.filter((it) => it.cat !== "system") : items.filter((it) => it.cat === filter);
   if (!filtered.length) return '<div class="empty">No activity in this view yet.</div>';
   // Sarah's "when did we last speak" fix: split future-dated items (booked appointments)
   // into a compact Upcoming block so history starts right at the top of the main list.
@@ -10209,6 +11271,12 @@ window.openClient = async function (id, focus, attempted, presetCaseId) {
       ? "Referred by " + advocacy.referredBy.map((r) => `<a href="#" class="client-referrer-link" data-client="${esc(r.id)}" onclick="event.preventDefault();openClient('${jsArg(r.id)}')">${esc(r.name)}</a>`).join(", ")
       : "",
   ].filter(Boolean).join(" · ")}</p>` : "";
+  /* R12b · W-21 — read off the SAME timeline items already built above (newest first), so this
+     line can never disagree with what the timeline underneath it shows. Never a system row. */
+  const lastContactItem = id ? tlItems.find((it) => CONTACT_TL_CATS.has(it.cat) && new Date(it.ts) - Date.now() <= 0) : null;
+  const lastContactHtml = id ? `<p class="panel-sub client-last-contact" id="client-last-contact">${lastContactItem
+    ? `Last contact: ${esc(CONTACT_KIND_LABEL[lastContactItem.cat] || lastContactItem.cat)}, ${lastContactAgeLabel(lastContactItem.ts)}`
+    : "No contact recorded"}</p>` : "";
   const multiCase = cases.length > 1;
   const caseLabelById = {};
   const caseChipById = {};
@@ -10283,8 +11351,8 @@ window.openClient = async function (id, focus, attempted, presetCaseId) {
         <button type="button" class="tl-chip" data-type="meeting">🤝 Meeting</button>
         ${logCallTarget ? `<button type="button" class="tl-chip tl-chip-logcall" id="tl-logcall-chip" title="${showCaseSel ? "Open the selected case's Log call panel" : `Open ${esc(caseLabelById[logCallTarget.id] || "the case")}'s Log call panel`}">📞 Log call</button>` : ""}
       </div>
-      <div class="tl-filters" id="tl-filters">${TL_CATS.map(([k, l]) => `<button type="button" class="tl-chip tl-filter ${k === "all" ? "active" : ""}" data-cat="${k}">${esc(l)}</button>`).join("")}</div>
-      <div class="tl-list" id="tl-list">${renderTimelineList(tlItems, "all", 100, multiCase)}</div>
+      <div class="tl-filters" id="tl-filters">${TL_CATS.map(([k, l]) => `<button type="button" class="tl-chip tl-filter ${k === "activity" ? "active" : ""}" data-cat="${k}">${esc(l)}</button>`).join("")}</div>
+      <div class="tl-list" id="tl-list">${renderTimelineList(tlItems, "activity", 100, multiCase)}</div>
       ${auditPanelHtml("client-audit", auditRows)}
     </div>` : "";
   $("#modal").innerHTML = `
@@ -10294,6 +11362,7 @@ window.openClient = async function (id, focus, attempted, presetCaseId) {
           collapsible field summary further down, where it means something specific. */ ""}
     <h3>${id ? esc([c.first_name, c.last_name].filter(Boolean).join(" ") || "Client details") : "New client"}</h3>
     ${id && (c.phone || c.email) ? `<p class="panel-sub client-contact-line" style="margin-top:-8px;display:flex;gap:16px;flex-wrap:wrap;">${c.phone ? "📞 " + telLink(c.phone) : ""}${c.email ? "✉️ " + mailLink(c.email) : ""}</p>` : ""}
+    ${lastContactHtml}
     ${advocacyHtml}
     ${/* A merge DELETES the absorbed client, so the merge tool is Owner/Administrator only for the
           same reason Delete client is — RLS refuses the delete for an adviser. An adviser still
@@ -10345,6 +11414,10 @@ window.openClient = async function (id, focus, attempted, presetCaseId) {
       </div>
     </div>`;
   openModal();
+  // R12b · L-7 — clear a required-field highlight the moment its own field is edited, not on the
+  // next Save attempt. Delegated on the form (rebuilt fresh on every render, so nothing to unbind).
+  const clientFormEl = $("#client-form");
+  if (clientFormEl) clientFormEl.addEventListener("input", (e) => { if (e.target && e.target.classList) e.target.classList.remove("field-invalid"); });
   // T1-2 — deep-linked from a failed send: open the (normally collapsed) contact section and put
   // the cursor in the field that has to change. openModal() focuses the first control, so this has
   // to run after it.
@@ -10371,7 +11444,13 @@ window.openClient = async function (id, focus, attempted, presetCaseId) {
     row.sms_opt_out = f.get("sms_opt_out") === "1";
     row.marketing_opt_out = f.get("marketing_opt_out") === "1";
     row.date_of_birth = (f.get("date_of_birth") || "").trim() || null;
-    if (!row.first_name || !row.last_name) return toast("First and last name are required");
+    if (!row.first_name || !row.last_name) {
+      // R12b · L-7 — highlight whichever of the two is actually blank, not both by default.
+      const ff = $("#client-form [name=\"first_name\"]"), lf = $("#client-form [name=\"last_name\"]");
+      if (ff) ff.classList.toggle("field-invalid", !row.first_name);
+      if (lf) lf.classList.toggle("field-invalid", !row.last_name);
+      return toast("First and last name are required");
+    }
     /* T1-9 — Save is a plain button outside any submit flow, so the email input's type="email" is
        never checked by the browser: "totally not an email" saved cheerfully, and the same typo then
        counted as "has an email" in every health check. Block on the helpers the rest of the app
@@ -10397,7 +11476,7 @@ window.openClient = async function (id, focus, attempted, presetCaseId) {
   };
   if (id) {
     // ---- Timeline interactions (SP3b) — filters, typed quick-add, show-more; all in place ----
-    let tlFilter = "all", tlCap = 100;
+    let tlFilter = "activity", tlCap = 100; // R12b · W-21 — default view is "what happened", not "all incl. system"
     const rerenderTl = () => {
       const list = $("#tl-list");
       if (!list) return;
@@ -10485,10 +11564,11 @@ window.openClient = async function (id, focus, attempted, presetCaseId) {
         tlItems.push({ ts: new Date().toISOString(), cat: nt.type, icon: nt.icon, title: (esc(nt.cleanBody) || "(note)") + authorChipHtml((user && user.id) || null), caseId: targetCase, caseLabel: timelineCaseLabel(cases.find((x) => x.id === targetCase) || {}), caseChip: caseChipById[targetCase] });
         tlItems.sort((a, b) => new Date(b.ts) - new Date(a.ts));
         inp.value = "";
-        // Reset to All so the just-added note is always visible at the top.
-        tlFilter = "all"; tlCap = 100;
+        // Reset to "What happened" so the just-added note is always visible at the top (it is
+        // never a system row, so this view can never hide the thing that was just typed).
+        tlFilter = "activity"; tlCap = 100;
         const fcur = $("#tl-filters .tl-filter.active"); if (fcur) fcur.classList.remove("active");
-        const fall = $('#tl-filters .tl-filter[data-cat="all"]'); if (fall) fall.classList.add("active");
+        const fall = $('#tl-filters .tl-filter[data-cat="activity"]'); if (fall) fall.classList.add("active");
         rerenderTl();
         inp.focus();
         toast("Note added ✓");
@@ -12164,6 +13244,78 @@ function leadAckMark(l) {
   if (!l || !l.acknowledged_at) return "";
   return `<span class="lead-ack" title="Acknowledged automatically at ${new Date(l.acknowledged_at).toLocaleString("en-GB")} — an email went out saying we have it. Nobody has spoken to them yet.">✉</span>`;
 }
+/* ==========================================================================
+   R12b · W-28 — WHAT THE WEBSITE FORM ACTUALLY SENDS, AND WHERE IT LANDS.
+
+   The enquiry form (contact.html) POSTs six fields to the `new-lead` function:
+   name, email, phone, enquiry_type, property_value and message. `leads` holds
+   every one of them as its own column. So there are exactly TWO structured
+   fields on a lead beyond the contact details — enquiry_type and
+   property_value — and until now only the first of them reached the case:
+   property_value was written into the prose of the origin note and nowhere
+   else, so the "Property value (£)" box on the case it created sat empty while
+   the number the client had typed sat three lines down in a sentence.
+
+   MAPPING, IN FULL:
+     enquiry_type   → cases.case_kind   (via LEAD_KIND_MAP below)
+     property_value → cases.property_value
+     message        → the origin note. It stays prose because it IS prose.
+
+   NOTHING ELSE IS GUESSED. The rate, the current lender, the balance and the
+   rate-end date are not fields on this form and do not exist on `leads`; where
+   a client has typed them into the message box they are read by a human, not
+   by a regular expression, because "my rate is 4.5 until March" and "I can pay
+   £4.50 a month more" are the same digits to a regex and a mis-parsed rate on
+   a case is worse than an empty box. See leadFiguresHint() — the accept flow
+   points the adviser at the note instead.
+
+   THE ENQUIRY-TYPE MAP was four entries long against a form offering
+   seventeen, so thirteen of them silently became "other" — a self-build, a
+   BTL remortgage and a bridging enquiry all filed identically. Every option
+   the form can send now has an answer, and the ones this schema genuinely
+   cannot represent (bridging, commercial, development, conveyancing,
+   insurance) map to "other" DELIBERATELY rather than by falling off the end. */
+const LEAD_KIND_MAP = {
+  "first-time-buyer": "first_time_buyer",
+  "remortgage": "remortgage",
+  "home-mover": "purchase",
+  "buy-to-let": "buy_to_let",
+  "capital-raising": "remortgage",      // raising money on a property you own is a remortgage
+  "self-build": "other",
+  "shared-ownership": "purchase",
+  "right-to-buy": "purchase",
+  "mortgage-recycle": "remortgage",     // the form's label for a rate review
+  "protection": "other",
+  "insurance": "other",
+  "commercial": "other",
+  "bridging": "other",
+  "development": "other",
+  "secured": "other",
+  "conveyancing": "other",
+  "other": "other",
+};
+/* The property value the client typed. It is a DEDICATED numeric field on the form
+   (`inputmode="numeric"`, placeholder "e.g. £250,000") and its own column on `leads`, so reading
+   it is not guessing at free text — but it is a text column, because the form does not enforce a
+   format. Currency symbol, thousands separators and stray spaces are stripped; anything still not
+   a plain number (a range, "about 250k", a sentence) returns null and the value stays in the
+   origin note where a human can read it. Deliberately no "k" expansion: 250k and 250 are one
+   keystroke apart and a thousand-fold error on a case is not worth the convenience. */
+function parseLeadPropertyValue(raw) {
+  if (raw == null) return null;
+  const s = String(raw).trim();
+  if (!s) return null;
+  const cleaned = s.replace(/[£$€,\s]/g, "");
+  if (!/^\d+(\.\d+)?$/.test(cleaned)) return null;
+  const n = Number(cleaned);
+  if (!isFinite(n) || n <= 0) return null;
+  return n;
+}
+/* Does the enquiry MESSAGE contain figures nobody has captured? Used to nudge, never to parse.
+   Two digits or more, so a lone "2" in "2 bed" does not raise it. */
+function leadFiguresHint(message) {
+  return /\d{2,}/.test(String(message || ""));
+}
 /* ---- leads.first_contact_at / acknowledged_at feature detection -----------
    Same discipline as M1/M2/M7/M8: probe once, cache, and never name a column
    the database has not got. PostgREST answers a write naming a missing column
@@ -12266,7 +13418,7 @@ window.acceptLead = async function (id, ev) {
   if (claimErr) { if (btn) btn.disabled = false; return toast("Error: " + claimErr.message); }
   if (!claimed || !claimed.length) { if (btn) btn.disabled = false; return toast("This lead has already been accepted."); }
   const l = claimed[0];
-  const kindMap = { "first-time-buyer": "first_time_buyer", "remortgage": "remortgage", "home-mover": "purchase", "buy-to-let": "buy_to_let" };
+  const kindMap = LEAD_KIND_MAP;
 
   /* T1-22 — split the lead's name through the shared splitName() helper, the same one bulk import
      uses. A joint enquiry ("Deborah & Michael Ashworth") used to be filed as
@@ -12342,13 +13494,20 @@ window.acceptLead = async function (id, ev) {
     }
     client = newClient; createdClient = true;
   }
-  const { data: nc, error } = await db.from("cases").insert({
+  /* R12b · W-28 — the structured fields land on the case's real columns, not only in the note.
+     `property_value` is an original-schema column (the case form has had a box for it since day
+     one) so naming it here cannot 42703 an older database. Written only when the client's answer
+     parses to a plain number: an unparseable one stays in the note, where it reads as words. */
+  const leadPropValue = parseLeadPropertyValue(l.property_value);
+  const newCase = {
     client_id: client.id,
     case_kind: kindMap[l.enquiry_type] || "other",
     stage: "enquiry",
     lead_source: "Website",
     assigned_to: assignTo,
-  }).select("id").single();
+  };
+  if (leadPropValue != null) newCase.property_value = leadPropValue;
+  const { data: nc, error } = await db.from("cases").insert(newCase).select("id").single();
   if (error) {
     // Undo the partial accept: remove the just-created client (never an existing one we attached to), then release the lead.
     if (createdClient) await db.from("clients").delete().eq("id", client.id);
@@ -12366,7 +13525,15 @@ window.acceptLead = async function (id, ev) {
   // text survives the lead being marked converted.
   const { error: noteErr } = await db.from("case_notes").insert({
     case_id: nc.id,
-    body: `Website enquiry (${l.enquiry_type || "general"})${jointNote}${l.property_value ? " · property value " + l.property_value : ""}${l.message ? " · “" + l.message + "”" : ""}`,
+    /* R12b · W-28 — the property value stays in the note as WELL as on the case, and says which
+       happened. The note is the compliance record of what the client actually typed; the column is
+       the working figure. Where the two would differ (an unparseable answer), the note is the only
+       place it exists, and it says so rather than leaving the empty box on the case unexplained. */
+    body: `Website enquiry (${l.enquiry_type || "general"})${jointNote}`
+      + (l.property_value
+        ? ` · property value “${l.property_value}”${leadPropValue != null ? ` (recorded on the case as ${fmtM(leadPropValue)})` : " — not a plain number, so it has NOT been written to the case's Property value field; check it and enter it by hand"}`
+        : "")
+      + (l.message ? " · “" + l.message + "”" : ""),
   });
   if (noteErr) leadWarn.push(`the enquiry note did NOT save (${noteErr.message}) — the joint applicant and the client's own message are only on the lead now`);
   /* R5-1 — accepting a lead used to call runAutomation() unscoped, which flushed the FIRM's entire
@@ -12423,8 +13590,20 @@ window.acceptLead = async function (id, ev) {
   // case modal, so running through a queue of leads is toast-and-move-on rather than a modal
   // open/close per lead. The case is right where the toast says: New business.
   const acceptedName = [client.first_name, client.last_name].filter(Boolean).join(" ") || "this lead";
-  toast(`Case created for ${acceptedName}${assignTo ? " → " + staffName(assignTo) : ""}${respTxt} — find it in New business`
+  /* R12b · W-28 — the figures nobody can safely parse. The enquiry MESSAGE is free text: "my rate
+     is 4.5 until March 2027" and "I could manage £450 a month" are the same digits to a regular
+     expression, and a mis-read rate written onto a case is worse than an empty field, so nothing
+     here guesses. What it does instead is put the adviser in front of the case with the note
+     visible and one line saying why — the capture is a human decision, taken once, at the only
+     moment the enquiry is still in their head. Deliberately NOT fired on every accept: R5's
+     toast-and-move-on rule stands for the ordinary lead, and this opens only when the client has
+     actually written numbers down. */
+  const figures = leadFiguresHint(l.message);
+  const propTxt = leadPropValue != null ? ` · property value ${fmtM(leadPropValue)} captured on the case` : "";
+  toast(`Case created for ${acceptedName}${assignTo ? " → " + staffName(assignTo) : ""}${respTxt}${propTxt} — find it in New business`
+    + (figures ? " · the enquiry mentions figures — worth capturing on the case now" : "")
     + (leadWarn.length ? `, but ${leadWarn.join("; and ")}` : ""));
+  if (figures) openCase(nc.id);
   /* R7-5 — the desk this lead just landed on is one case heavier, and the repaint below is about to
      ask which desk is lightest. Counted here rather than re-read: the case was created two writes
      ago and the next dashboard load re-derives the whole map from the database anyway. */
@@ -12625,6 +13804,103 @@ window.openLeadInToday = async function (leadId) {
   gotoLeadInbox(leadId);
 };
 
+/* ==========================================================================
+   R12b · W-17 / K-14 — WHAT ACTUALLY HAPPENED AT THE APPOINTMENT
+   A diary that only records intentions is half a diary. Until now the ONLY
+   thing that could be done to a booking after the fact was Delete, so the
+   client who did not turn up and the client who was never booked left the
+   database in exactly the same state — and the one question a broker asks
+   about last week ("who wasted my Tuesday?") had no answer anywhere.
+
+   `appointments.outcome` is a nullable text column (attended / no_show /
+   rearranged). NULL is a real value here and means "not recorded yet", not
+   "did not happen": most appointments are in the future, and a past one
+   nobody has judged is honestly unknown.
+
+   Deliberately NOT built this round: no-show ANALYTICS. Counting no-shows per
+   adviser or per client is a report, and a report built on three days of
+   outcome data says more about when the column shipped than about anybody's
+   diary. The recording comes first; the counting is a later round's job.
+   ====================================================================== */
+const APPT_OUTCOMES = [
+  ["attended", "Attended", "✓"],
+  ["no_show", "No-show", "✗"],
+  ["rearranged", "Rearranged", "↻"],
+];
+const APPT_OUTCOME_LABEL = Object.fromEntries(APPT_OUTCOMES.map(([v, l]) => [v, l]));
+const APPT_OUTCOME_MARK = Object.fromEntries(APPT_OUTCOMES.map(([v, , m]) => [v, m]));
+const APPT_OUTCOME_TIP = {
+  attended: "Recorded as attended.",
+  no_show: "Recorded as a no-show — the client did not turn up.",
+  rearranged: "Recorded as rearranged — this slot did not happen; any replacement is booked separately.",
+};
+const isApptOutcome = (v) => Object.prototype.hasOwnProperty.call(APPT_OUTCOME_LABEL, String(v || ""));
+/* The badge every surface wears. Small on purpose — the outcome is a footnote on a booking, not
+   the booking — and it carries its own title, because "✗" alone is a rune. */
+function apptOutcomeChipHtml(outcome) {
+  const v = String(outcome || "");
+  if (!isApptOutcome(v)) return "";
+  return `<span class="appt-outcome appt-outcome-${v}" title="${esc(APPT_OUTCOME_TIP[v])}">${esc(APPT_OUTCOME_MARK[v])} ${esc(APPT_OUTCOME_LABEL[v])}</span>`;
+}
+/* "Today 14:30" / "Tomorrow 09:00" / "Tue 12 Aug · 09:00". The date a human would say out loud —
+   a case header has room for one line, and "12/08/2026, 09:00" spends it on punctuation. */
+function apptWhenLabel(a) {
+  if (!a || !a.starts_at) return "";
+  const d = new Date(a.starts_at);
+  if (isNaN(d)) return "";
+  const t = d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+  const ymd = localDateStr(d);
+  if (ymd === localDateStr()) return `Today ${t}`;
+  if (ymd === localDateStr(Date.now() + 86400000)) return `Tomorrow ${t}`;
+  return `${d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })} · ${t}`;
+}
+/* A no-show is the one outcome with something left to DO, so it offers the call rather than just
+   filing the fact. Offered, never silent: a task appearing on somebody's list unannounced is how
+   an app loses the operator's trust in every other task it creates.
+
+   The task hangs off the CASE (case_tasks has no client-only shape in this schema), so an
+   appointment with no case linked can record the outcome and cannot raise the task — which is
+   said out loud rather than quietly skipped. Assigned to the appointment's own staff member: it
+   was their slot that was wasted, and the call-back is theirs. Idempotent on its own title +
+   open state, so ticking no-show twice does not leave two identical tasks. */
+const NO_SHOW_TASK_TITLE = (who) => `Call ${who || "the client"} — missed appointment`;
+async function offerNoShowTask(appt, clientName) {
+  if (!appt) return "";
+  const who = String(clientName || "").trim();
+  const title = NO_SHOW_TASK_TITLE(who);
+  if (!appt.case_id) return " · no case is linked to this appointment, so there is nowhere to put a call-back task";
+  const staffId = appt.staff_id || null;
+  const due = localDateStr();
+  const existing = await softRows(db.from("case_tasks").select("id,title,done_at").eq("case_id", appt.case_id));
+  if (existing.some((t) => !t.done_at && String(t.title || "").trim() === title)) {
+    return " · a call-back task for this is already open on the case";
+  }
+  const askedOf = staffId ? staffName(staffId) : "nobody in particular (this appointment has no adviser on it)";
+  if (!confirm(`Recorded as a no-show.\n\nAdd a task “${title}” on the case, due today (${fmtD(due)}), for ${askedOf}?\n\nNo email or text is sent to anybody either way.`)) {
+    return " · no call-back task was created";
+  }
+  const { error } = await db.from("case_tasks").insert({ case_id: appt.case_id, title, due_date: due, assigned_to: staffId });
+  if (error) return " · the call-back task could not be created: " + error.message;
+  return ` · call-back task added for ${staffId ? staffName(staffId) : "nobody yet"}, due today`;
+}
+/* The write itself, shared by the appointment editor's radios and My Day's ✓/✗ pair so the two can
+   never disagree about what recording an outcome does. Returns the toast suffix. `prev` is what
+   the row held before, so an Undo can put it back exactly (including back to "not recorded"). */
+async function writeApptOutcome(appt, outcome, clientName, opts = {}) {
+  const next = isApptOutcome(outcome) ? outcome : null;
+  const { error } = await db.from("appointments").update({ outcome: next }).eq("id", appt.id);
+  if (error) {
+    /* The column is live in production, but a database that predates it must not turn a one-click
+       gesture into a red error with no explanation. Feature-detect exactly as the rest of the app
+       does, and say what is actually wrong. */
+    if (isMissingColumnError(error)) return { ok: false, msg: "This database has no appointment outcome column yet — nothing was recorded." };
+    return { ok: false, msg: "Couldn't record that — " + error.message };
+  }
+  let extra = "";
+  if (next === "no_show" && !opts.skipTask) extra = await offerNoShowTask(appt, clientName);
+  return { ok: true, msg: (next ? `Recorded: ${APPT_OUTCOME_LABEL[next].toLowerCase()}` : "Outcome cleared — back to not recorded") + extra };
+}
+
 /* ---------- Today's appointments ---------- */
 async function loadTodayAppts() {
   const start = new Date(); start.setHours(0, 0, 0, 0);
@@ -12639,11 +13915,57 @@ async function loadTodayAppts() {
   $("#today-appts").innerHTML = (appts || []).length ? appts.map((a) => `
     <div class="row-item">
       <div class="row-main">
-        <div class="t" onclick="openAppt('${a.id}')">${new Date(a.starts_at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })} — ${esc(a.title)} ${propCtxChip(apptCtx, a.case_id, "row-prop")}</div>
+        <div class="t" onclick="openAppt('${a.id}')">${new Date(a.starts_at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })} — ${esc(a.title)} ${propCtxChip(apptCtx, a.case_id, "row-prop")} ${apptOutcomeChipHtml(a.outcome)}</div>
         <div class="s">${a.clients ? esc([a.clients.first_name, a.clients.last_name].filter(Boolean).join(" ")) + " · " : ""}${esc(a.location || "")}${a.staff_id ? " · " + esc(staffName(a.staff_id)) : ""}</div>
       </div>
+      ${/* R12b · W-17 — recording that a client turned up should not cost opening a form. Two
+           buttons, on the one screen where today's appointments are already listed in the order
+           they happen, writing the same column the editor writes. Pressed state = already
+           recorded, and pressing it again clears it, so nothing here is a one-way door. The
+           REARRANGED outcome is deliberately not offered as a one-click: rearranging means a new
+           booking exists, which is a trip to the editor anyway. */ ""}
+      <span class="appt-quick" role="group" aria-label="Record what happened at this appointment">
+        ${APPT_OUTCOMES.filter(([v]) => v !== "rearranged").map(([v, label, mark]) => `<button type="button" class="btn btn-sm appt-quick-btn${a.outcome === v ? " is-set" : ""}" data-appt="${esc(a.id)}" data-outcome="${v}" aria-pressed="${a.outcome === v ? "true" : "false"}" title="${a.outcome === v ? `Recorded as ${label.toLowerCase()} — press again to clear it` : `Record this appointment as ${label.toLowerCase()}`}">${mark}</button>`).join("")}
+      </span>
     </div>`).join("") : '<div class="empty">Nothing booked today. The Diary tab has the full week.</div>';
+  $("#today-appts").querySelectorAll(".appt-quick-btn").forEach((b) => (b.onclick = (e) => {
+    e.stopPropagation();
+    quickApptOutcome(b.dataset.appt, b.dataset.outcome, b);
+  }));
   panelCount("#today-appts", (appts || []).length);
+}
+/* R12b · W-17 — My Day's one-click outcome. Reads the row back first (the panel may have been
+   painted a while ago and the appointment may be gone), writes through the same helper the editor
+   uses, and hands back an Undo for ten seconds — the R12a task-done pattern, for the same reason:
+   this is a fast gesture on a small target and the cheapest possible repair beats a confirm. */
+async function quickApptOutcome(apptId, outcome, btn) {
+  if (!apptId) return;
+  if (btn) btn.disabled = true;
+  try {
+    const { data: a } = await db.from("appointments").select("*, clients(first_name,last_name)").eq("id", apptId).single();
+    if (!a) { toast("That appointment no longer exists — it may have been deleted."); return loadTodayAppts(); }
+    const prev = a.outcome || null;
+    const next = prev === outcome ? null : outcome;   // pressing the set one again clears it
+    const who = a.clients ? [a.clients.first_name, a.clients.last_name].filter(Boolean).join(" ") : "";
+    const res = await writeApptOutcome(a, next, who);
+    if (!res.ok) return toast(res.msg);
+    loadTodayAppts();
+    refreshDiaryView();
+    toast(res.msg, {
+      label: "Undo",
+      onClick: async () => {
+        /* Undo puts the OUTCOME back. It deliberately does not delete a call-back task that was
+           just created: that task may already have been assigned, seen or actioned, and silently
+           removing somebody's work is worse than leaving one they can tick off. */
+        const r = await writeApptOutcome(a, prev, who, { skipTask: true });
+        toast(r.ok ? (prev ? `Back to: ${APPT_OUTCOME_LABEL[prev].toLowerCase()}` : "Back to not recorded") : r.msg);
+        loadTodayAppts();
+        refreshDiaryView();
+      },
+    });
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 /* ---------- Diary ---------- */
@@ -12676,6 +13998,56 @@ function apptClientLine(a, chip) {
   const titleSaysWho = !!chip && String(a.title || "").toLowerCase().includes(who.toLowerCase());
   return titleSaysWho ? "" : `<div>${esc(who)}</div>`;
 }
+
+/* ==========================================================================
+   R12b · W-18 — DATED TASKS BELONG IN THE DIARY
+   A task with a due date IS a diary entry: "chase the solicitor on Thursday"
+   is a commitment to spend part of Thursday on it. The app knew that in My
+   Day and on the case, and the one screen an adviser plans a week on showed
+   an empty Thursday. So the diary is not a picture of the week — it is a
+   picture of the meetings in the week, which is a different and smaller thing.
+
+   Kept deliberately cheap: ONE extra read per diary paint, narrowed to the
+   dates already on screen, reusing loadTasks' own query shape (undone only,
+   due-date ordered). Done tasks are omitted outright — a diary is what is
+   left to do, and a tick that stays on the grid all month is clutter that
+   teaches people to stop reading the grid.
+
+   Colour is deliberately distinct from every appointment colour (including
+   the per-adviser palette): a chip is a job, a tile is a meeting, and the two
+   must never be confused at a glance.
+   ====================================================================== */
+const DIARY_TASK_CHIP_CAP = 2;   // per month cell, before "+N more" rolls into the Day view
+/* R12b · W-26 — how many appointment tiles a month cell may draw before the rest roll into
+   "+N more". Three is what fits under the ~160px the grid is built around without the row
+   growing; four already pushes it. */
+const DIARY_MONTH_APPT_CAP = 3;
+async function loadDiaryTasks(fromYmd, toYmd, who) {
+  /* `who` is the diary's own person filter, applied to the task's assigned_to. An UNASSIGNED task
+     is nobody's Thursday, so it is not drawn into somebody's filtered diary — it still shows in
+     Everyone, which is where ownerless work is supposed to be noticed. */
+  const rows = await softRows(db.from("case_tasks")
+    .select("id,title,due_date,case_id,assigned_to")
+    .is("done_at", null)
+    .gte("due_date", fromYmd).lt("due_date", toYmd)
+    .order("due_date")
+    .limit(400));
+  return who && who !== "all" ? rows.filter((t) => t.assigned_to === who) : rows;
+}
+function diaryTasksByDay(rows) {
+  const by = {};
+  (rows || []).forEach((t) => { if (t.due_date) (by[t.due_date] = by[t.due_date] || []).push(t); });
+  return by;
+}
+/* One chip. Truncated in CSS rather than in JS so the full title stays in the DOM for the title=
+   tooltip — a task called "Chase Skipton for the DIP decision on the Bryanstone flat" is useless
+   cut to "Chase Skipton for…" with nothing to hover. */
+function diaryTaskChipHtml(t, todayStr) {
+  const overdue = t.due_date && t.due_date < todayStr;
+  const tip = `Task${overdue ? " (overdue)" : ""}: ${t.title || "(untitled)"}${t.assigned_to ? " · " + staffName(t.assigned_to) : " · unassigned"}. Click to open the case.`;
+  const click = t.case_id ? ` onclick="event.stopPropagation();openCase('${jsArg(t.case_id)}')"` : "";
+  return `<div class="diary-task${overdue ? " overdue" : ""}${t.case_id ? "" : " no-case"}" title="${esc(tip)}"${click}><span class="dt-mark">☑</span><span class="dt-title">${esc(t.title || "(untitled task)")}</span></div>`;
+}
 async function loadDiary() {
   const monthStart = diaryMonth;
   const monthEnd = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1);
@@ -12696,6 +14068,9 @@ async function loadDiary() {
      panel makes (loadPropContext → propCtxChip). Without it a portfolio landlord's six tiles say
      "Ruby Sinclair" six times and cannot say which flat. */
   const apptCtx = await loadPropContext((appts || []).map((a) => a.case_id));
+  /* R12b · W-18 — the one extra read, over exactly the dates the grid is about to draw. */
+  const gridYmd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const tasksByDay = diaryTasksByDay(await loadDiaryTasks(gridYmd(gridStart), gridYmd(gridEnd), who));
   $("#diary-title").textContent = "Diary — " + monthStart.toLocaleDateString("en-GB", { month: "long", year: "numeric" });
   // T1-14 — compute per-staff clashes in one pass over the appointments already in memory. Keyed by
   // appt id → the (first) other same-staff appointment its time range overlaps, so both cards in a
@@ -12712,6 +14087,7 @@ async function loadDiary() {
     });
   });
   const todayStr = new Date().toDateString();
+  const todayStrYmd = localDateStr();   // R12b · W-18 — the overdue test for the task chips
   const days = [];
   for (let d = new Date(gridStart); d < gridEnd; d.setDate(d.getDate() + 1)) days.push(new Date(d));
   $("#diary-grid").innerHTML = days.map((day) => {
@@ -12719,9 +14095,30 @@ async function loadDiary() {
     const dim = day.getMonth() !== monthStart.getMonth();
     const dstr = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(day.getDate()).padStart(2, "0")}`;
     const dayHasClash = dayAppts.some((a) => clashPartner[a.id]);
+    /* R12b · W-26 — THE CELL HAS A CEILING NOW.
+       A six-appointment day grew its cell to ~900px, and because the grid rows are as tall as
+       their tallest cell that one busy Wednesday stretched the whole WEEK — six other days of
+       empty white, and the rest of the month pushed off the screen. So a month cell shows at most
+       three appointments and the rest roll into "+N more", which jumps to the Day view for that
+       date: the month grid is for spotting shape, and the Day view is the thing that was built to
+       read a full day off. Nothing is hidden without being counted.
+       The clash flags are computed over ALL of the day's appointments, not the visible three, so
+       the cell's red border still means what it meant — and if the clashing one is behind the
+       "+N more", that link says so too rather than the warning silently vanishing. */
+    const shownAppts = dayAppts.slice(0, DIARY_MONTH_APPT_CAP);
+    const hiddenAppts = dayAppts.slice(DIARY_MONTH_APPT_CAP);
+    const hiddenClash = hiddenAppts.some((a) => clashPartner[a.id]);
+    const dayTasks = tasksByDay[dstr] || [];
+    const shownTasks = dayTasks.slice(0, DIARY_TASK_CHIP_CAP);
+    const hiddenTaskCount = dayTasks.length - shownTasks.length;
     return `<div class="diary-day ${day.toDateString() === todayStr ? "today" : ""}${dayAppts.length ? " has-appts" : ""}${dayHasClash ? " has-clash" : ""}" data-date="${dstr}" title="Add an appointment on this day" style="${dim ? "opacity:.45;" : ""}min-height:110px;">
       <h5>${day.toLocaleDateString("en-GB", { weekday: "short", day: "numeric" })}</h5>
-      ${dayAppts.map((a) => {
+      ${/* R12b · W-18 — the day's dated tasks, above the meetings: a task is an all-day
+           commitment and has no time to sort it by, so it cannot sit inside a time-ordered list
+           without pretending to a slot it hasn't got. */ ""}
+      ${shownTasks.map((t) => diaryTaskChipHtml(t, todayStrYmd)).join("")}
+      ${hiddenTaskCount > 0 ? `<div class="diary-more diary-more-tasks" data-date="${dstr}" title="${esc(`${hiddenTaskCount} more task${hiddenTaskCount === 1 ? "" : "s"} due this day — open the Day view to read them all`)}">+${hiddenTaskCount} more task${hiddenTaskCount === 1 ? "" : "s"}</div>` : ""}
+      ${shownAppts.map((a) => {
         // Defect 26 — colour by adviser only in the "Everyone" view; single-adviser view keeps the
         // plain default .appt styling (colour would add nothing when every card is the same person).
         const colorStyle = who === "all" ? (() => { const c = adviserColor(a.staff_id); return ` style="background:${c.bg};border-left-color:${c.border};"`; })() : "";
@@ -12733,15 +14130,36 @@ async function loadDiary() {
         const clashWords = partner ? `Clashes with ${apptClashPhrase(partner)}` : "";
         const clashTitle = partner ? ` title="${esc(clashWords)}"` : "";
         const chip = propCtxChip(apptCtx, a.case_id, "row-prop");
-        return `<div class="appt${partner ? " clash" : ""}" onclick="openAppt('${a.id}')"${colorStyle}${clashTitle}>
+        /* R12b · W-17 — the outcome, where the appointment already is. A no-show or a rearranged
+           slot is struck through: the meeting is still on the record (it was booked, it took the
+           time) but it did not happen, and a diary that shows it identically to one that did is
+           the thing this round exists to fix. An ATTENDED one is not struck — it happened. */
+        const outcomeSet = isApptOutcome(a.outcome);
+        const outcomeStruck = a.outcome === "no_show" || a.outcome === "rearranged";
+        return `<div class="appt${partner ? " clash" : ""}${outcomeSet ? " has-outcome outcome-" + a.outcome : ""}${outcomeStruck ? " outcome-struck" : ""}" onclick="openAppt('${a.id}')"${colorStyle}${clashTitle}>
         ${partner ? `<span class="clash-tag" title="${esc(clashWords)}" aria-label="${esc(clashWords)}">⚠</span> ` : ""}<span class="at">${new Date(a.starts_at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}–${new Date(a.ends_at || a.starts_at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</span> ${esc(a.title)}
+        ${outcomeSet ? `<div>${apptOutcomeChipHtml(a.outcome)}</div>` : ""}
         ${chip ? `<div>${chip}</div>` : ""}
         ${apptClientLine(a, chip)}
         ${a.staff_id && who === "all" ? `<div style="color:var(--muted);">${esc(staffName(a.staff_id))}</div>` : ""}
       </div>`;
       }).join("")}
+      ${hiddenAppts.length ? `<div class="diary-more diary-more-appts${hiddenClash ? " has-clash" : ""}" data-date="${dstr}" title="${esc(`${hiddenAppts.length} more appointment${hiddenAppts.length === 1 ? "" : "s"} on this day${hiddenClash ? " (one of them is double-booked)" : ""} — opens the Day view, which has room for all of them`)}">${hiddenClash ? "⚠ " : ""}+${hiddenAppts.length} more</div>` : ""}
     </div>`;
   }).join("");
+  /* R12b · W-26 / W-18 — both "+N more" links do the same thing: move to the Day view for that
+     date. The Day view is the screen that can actually hold a busy day, so overflow ROUTES there
+     rather than expanding the cell (which is what wrecked the grid) or opening a popover (which
+     is a third place to read a day from). stopPropagation because the cell itself books a new
+     appointment on click. */
+  $("#diary-grid").querySelectorAll(".diary-more").forEach((el) => (el.onclick = (e) => {
+    e.stopPropagation();
+    const [y, m, d] = String(el.dataset.date || "").split("-").map(Number);
+    if (!y) return;
+    diaryDay = new Date(y, m - 1, d);
+    diaryStaffDayVal = $("#diary-staff") ? ($("#diary-staff").value || "all") : "all";  // keep the filter you were reading under
+    setDiaryViewMode("day");
+  }));
   // Legend row (defect 26) — only meaningful once cards are colour-coded, i.e. the "Everyone" view.
   const legendEl = $("#diary-legend");
   if (legendEl) {
@@ -12819,7 +14237,28 @@ async function loadDiaryDay() {
   $("#diary-title").textContent = "Diary — " + dayStart.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
   // G6B-03 — the same property context the month grid and the dashboard panel carry.
   const apptCtx = await loadPropContext((appts || []).map((a) => a.case_id));
+  /* R12b · W-18 — the same one read the month grid makes, narrowed to one day. The Day view is
+     where the month grid's "+N more" sends people, so it is the view that must have room for the
+     WHOLE day: no cap here. */
+  const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const dayTasks = await loadDiaryTasks(ymd(dayStart), ymd(dayEnd), who);
+  renderDiaryDayTasks(dayTasks);
   renderDiaryDay(appts || [], who, apptCtx);
+}
+/* R12b · W-18 — dated tasks get their OWN row above the time lanes, not a lane position: they are
+   all-day commitments with no start time, and dropping them at 00:00 (or at "now") would be the
+   app inventing a fact. Empty means the row disappears entirely rather than sitting there as a
+   labelled blank — a diary with nothing due should look like a diary with nothing due. */
+function renderDiaryDayTasks(tasks) {
+  const el = $("#diary-day-tasks");
+  if (!el) return;
+  const rows = tasks || [];
+  const todayStr = localDateStr();
+  el.classList.toggle("hidden", !rows.length);
+  el.innerHTML = rows.length
+    ? `<span class="ddt-lbl" title="Tasks due on this day, from the cases. These have no time on them — they are jobs for the day, not slots in it.">Due this day</span>`
+      + rows.map((t) => diaryTaskChipHtml(t, todayStr)).join("")
+    : "";
 }
 
 function renderDiaryDay(appts, who, apptCtx) {
@@ -12875,18 +14314,27 @@ function renderDiaryDay(appts, who, apptCtx) {
     const whoName = a.clients ? [a.clients.first_name, a.clients.last_name].filter(Boolean).join(" ") : "";
     const staffLine = a.staff_id && who === "all" ? staffName(a.staff_id) : "";
     const clientLine = apptClientLine(a, chip); // "" when the title already names them
+    /* R12b · W-17 — the same outcome treatment the month grid wears, so a day read in either view
+       says the same thing about what happened. It takes the FIRST line of the budget below,
+       ahead of the property chip: on a block too short for everything, "this did not happen" beats
+       "which flat it was about". */
+    const outcomeSet = isApptOutcome(a.outcome);
+    const outCls = (outcomeSet ? " has-outcome outcome-" + a.outcome : "") + (a.outcome === "no_show" || a.outcome === "rearranged" ? " outcome-struck" : "");
     let budget = lines - 1;                     // the time + title line is never optional
+    const showOutcome = outcomeSet && !compact && budget >= 1; if (showOutcome) budget--;
     // In the one-line layout the chip shares that line rather than needing one of its own.
     const showChip = !!chip && (compact || budget >= 1); if (showChip && !compact) budget--;
     const showClient = !!clientLine && budget >= 1; if (showClient) budget--;
     const showStaff = !!staffLine && budget >= 1;
     const hidden = [!showChip && chip ? propCtxCase(ctx, a.case_id) && propAddress(propCtxCase(ctx, a.case_id)) : null,
-      !showClient && whoName ? whoName : null, !showStaff && staffLine ? staffLine : null].filter(Boolean);
+      !showClient && whoName ? whoName : null, !showStaff && staffLine ? staffLine : null,
+      outcomeSet && !showOutcome && !compact ? APPT_OUTCOME_LABEL[a.outcome] : null].filter(Boolean);
     const tip = clashTitle || (hidden.length ? ` title="${esc([a.title].concat(hidden).join(" · "))}"` : "");
     if (compact) {
-      return `<div class="appt-block appt-block-compact${isClash ? " clash" : ""}" ${box}${tip}>${warn}<span class="at">${timeLabel(start)}–${timeLabel(end)}</span><span class="ab-title">${esc(a.title)}</span>${chip}</div>`;
+      return `<div class="appt-block appt-block-compact${isClash ? " clash" : ""}${outCls}" ${box}${tip}>${warn}<span class="at">${timeLabel(start)}–${timeLabel(end)}</span><span class="ab-title">${esc(a.title)}</span>${outcomeSet ? apptOutcomeChipHtml(a.outcome) : chip}</div>`;
     }
-    return `<div class="appt-block${isClash ? " clash" : ""}" ${box}${tip}>${warn}<span class="at">${timeLabel(start)}–${timeLabel(end)}</span> ${esc(a.title)}
+    return `<div class="appt-block${isClash ? " clash" : ""}${outCls}" ${box}${tip}>${warn}<span class="at">${timeLabel(start)}–${timeLabel(end)}</span> ${esc(a.title)}
+      ${showOutcome ? `<div>${apptOutcomeChipHtml(a.outcome)}</div>` : ""}
       ${showChip ? `<div>${chip}</div>` : ""}
       ${showClient ? clientLine : ""}
       ${showStaff ? `<div style="color:var(--muted);">${esc(staffLine)}</div>` : ""}</div>`;
@@ -13049,7 +14497,18 @@ async function apptClashFor(staffId, startAt, endAt, excludeId) {
   const mine = { staff_id: staffId, starts_at: startAt.toISOString(), ends_at: (endAt || startAt).toISOString() };
   return (data || []).find((o) => apptOverlaps(mine, o)) || null;
 }
-window.openAppt = async function (id, presets = {}) {
+/* R12b · W-10 — "book an appointment" from a case is a DETOUR, not a departure.
+   The appointment form replaces the case modal (they share one host), and Save closed the lot,
+   dumping the operator back on whatever page was underneath — so booking a fact find while
+   reading a case cost the case, its scroll position and the train of thought that started the
+   booking. `returnCaseId` says "we came from there", and Save/Delete reopen it instead of closing,
+   which also puts the new appointment straight in front of the person who just made it (see the
+   Next appointment line, W-11). It REPLACES the modal's history entry rather than stacking one —
+   the same thing openCase does for "View original case" — so Back still means "leave the modal",
+   not "walk back through a chain of modals nobody thinks of as a chain". */
+window.openApptFromCase = function (apptId, caseId) { return window.openAppt(apptId, {}, { returnCaseId: caseId }); };
+window.openAppt = async function (id, presets = {}, openOpts = {}) {
+  const returnCaseId = openOpts.returnCaseId || null;
   // T1-14 — default to the adviser the diary is filtered to (rather than always "me"), so
   // "+ Appointment" while looking at Tom's diary books it for Tom, not for whoever is signed in.
   const filterStaff = $("#diary-staff") && $("#diary-staff").value;
@@ -13126,6 +14585,14 @@ window.openAppt = async function (id, presets = {}) {
   const formDateStr = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
   const dateVal = formDateStr(start || new Date());
   const timeVal = start ? `${pad2(start.getHours())}:${pad2(start.getMinutes())}` : "10:00";
+  /* R12b · W-17 — the outcome controls exist on an EXISTING appointment whose day has arrived:
+     anything already started, plus the rest of today (a 4pm booking gets its ✓ at 4:45 without
+     the operator having to wait for midnight to be allowed to say so). A row that already carries
+     an outcome always shows them, whatever its date — otherwise a mis-set one on a rearranged
+     future slot would be unfixable from the only screen that could fix it. */
+  const apptOutcomeOn = !!id && (!start || localDateStr(start) <= localDateStr() || isApptOutcome(a.outcome));
+  const apptClientName = (clients || []).filter((cl) => cl.id === a.client_id)
+    .map((cl) => [cl.first_name, cl.last_name].filter(Boolean).join(" "))[0] || "";
   $("#modal").innerHTML = `
     <h3>${id ? "Appointment" : "New appointment"}</h3>
     <p class="panel-sub appt-case-line${apptSelCaseId ? "" : " hidden"}" id="appt-about" style="margin-top:-8px;">${apptSelCaseId ? `About: ${caseIdentityHtml(findApptCase(apptSelCaseId) || apptCase, { fallback: true, cls: "row-prop" })}` : ""}</p>
@@ -13146,6 +14613,19 @@ window.openAppt = async function (id, presets = {}) {
         <span class="appt-case-note" id="appt-case-note">${apptClientId && !apptCases.length ? "This client has no cases yet." : "Optional — attaching one puts the property on this appointment in the diary."}</span></label>
       <label class="full">Location<input name="location" value="${esc(a.location || "")}" placeholder="Office / phone / Teams"></label>
       <label class="full">Notes<textarea name="notes" rows="2">${esc(a.notes || "")}</textarea></label>
+      ${/* R12b · W-17 / K-14 — WHAT HAPPENED. Only on an appointment that has been or is being
+           held: asking "did they turn up?" about next Tuesday is nonsense, and a control that is
+           nonsense two thirds of the time teaches people to ignore it. Radios, inside the form, so
+           the unsaved-changes guard sees them like every other field. "Not recorded" is a real
+           option and the default — it is what the column honestly holds until somebody judges. */ ""}
+      ${apptOutcomeOn ? `<div class="full appt-outcome-wrap" id="appt-outcome-wrap">
+        <span class="appt-outcome-lbl">What happened?</span>
+        <div class="appt-outcome-chips" id="appt-outcome-chips">
+          <label class="ao-chip"><input type="radio" name="outcome" value=""${isApptOutcome(a.outcome) ? "" : " checked"}> Not recorded</label>
+          ${APPT_OUTCOMES.map(([v, label, mark]) => `<label class="ao-chip ao-${v}"><input type="radio" name="outcome" value="${v}"${a.outcome === v ? " checked" : ""}> ${mark} ${esc(label)}</label>`).join("")}
+        </div>
+        <span class="appt-case-note">Recording an outcome keeps the booking on the record — the slot was taken whether or not the client came. <strong>Delete</strong> below is for one booked in error, and leaves no trace of it at all.</span>
+      </div>` : ""}
     </form>
     <div class="modal-actions">
       <div>
@@ -13275,23 +14755,73 @@ window.openAppt = async function (id, presets = {}) {
       savedOverClash = await apptClashFor(row.staff_id, startAt, new Date(row.ends_at), id);
       if (savedOverClash && !confirm(`${staffName(row.staff_id)} already has ${apptClashPhrase(savedOverClash)}.\n\nThis appointment overlaps it. Book anyway?`)) return;
     }
-    const q = id ? db.from("appointments").update(row).eq("id", id) : db.from("appointments").insert(row);
-    const { error } = await q;
+    /* R12b · W-17 — the outcome rides on the SAME write as everything else on the form, so a
+       Save is one round trip and the two can never end up half-applied. Only sent when the
+       control was actually drawn: a future appointment's form has no radios, and silently
+       writing null from it would erase an outcome somebody set earlier. */
+    let outcomeChanged = false;
+    if (apptOutcomeOn) {
+      const chosen = String(f.get("outcome") || "");
+      row.outcome = isApptOutcome(chosen) ? chosen : null;
+      outcomeChanged = (a.outcome || null) !== row.outcome;
+    }
+    const runSave = () => (id ? db.from("appointments").update(row).eq("id", id) : db.from("appointments").insert(row));
+    let { error } = await runSave();
+    /* A database that predates the outcome column must still be able to save an appointment.
+       Same feature-detect ladder as the lost-reason columns in moveCaseToStage: drop the field,
+       write the rest, and say what could not be stored rather than failing the whole save. */
+    let outcomeColMissing = false;
+    if (error && "outcome" in row && isMissingColumnError(error)) {
+      outcomeColMissing = true;
+      delete row.outcome;
+      outcomeChanged = false;
+      ({ error } = await runSave());
+    }
     if (error) return toast("Error: " + error.message);
-    closeModal();
-    toast("Appointment saved" + (savedOverClash ? ` · double-booked over ${apptClashPhrase(savedOverClash)}` : "") + (caseUnlinked
-      ? ` · the link to ${caseIdentityLabel(caseUnlinked) || "the previous case"} was removed — that case belongs to a different client`
-      : ""));
+    /* R12b · W-17 — the no-show call-back, offered AFTER the write has succeeded (a task chasing
+       a no-show that was never recorded is worse than no task) and only on a genuine CHANGE to
+       no_show, so re-saving an already-recorded no-show does not ask again. */
+    let outcomeExtra = "";
+    if (outcomeChanged && row.outcome === "no_show") {
+      outcomeExtra = await offerNoShowTask({ id, case_id: row.case_id, staff_id: row.staff_id }, apptClientName);
+    } else if (outcomeChanged && row.outcome) {
+      outcomeExtra = ` · recorded as ${APPT_OUTCOME_LABEL[row.outcome].toLowerCase()}`;
+    } else if (outcomeChanged) {
+      outcomeExtra = " · outcome cleared";
+    }
+    const savedMsg = "Appointment saved"
+      + (savedOverClash ? ` · double-booked over ${apptClashPhrase(savedOverClash)}` : "")
+      + outcomeExtra
+      + (outcomeColMissing ? " · the outcome could NOT be stored — this database has no appointments.outcome column yet" : "")
+      + (caseUnlinked ? ` · the link to ${caseIdentityLabel(caseUnlinked) || "the previous case"} was removed — that case belongs to a different client` : "");
     refreshDiaryView();
     if (!$("#page-dashboard").classList.contains("hidden")) loadTodayAppts();
+    /* R12b · W-10 — booked FROM a case: go back to it rather than closing everything. openCase
+       replaces this modal (and its history entry) exactly as the "Open case" button above does. */
+    if (returnCaseId) {
+      toast(savedMsg + " · back on the case");
+      await window.openCase(returnCaseId);
+      return;
+    }
+    closeModal();
+    toast(savedMsg);
   };
   if (id) $("#del-appt-btn").onclick = async () => {
-    if (!confirm("Delete this appointment?")) return;
-    await db.from("appointments").delete().eq("id", id);
-    closeModal();
-    toast("Appointment deleted");
+    /* R12b · W-17 — Delete and "record an outcome" are different verbs and the copy now says so.
+       Deleting a meeting that HAPPENED to tidy the diary destroys the only evidence the firm has
+       that it was offered — which is exactly the record a complaint turns on. */
+    if (!confirm("Delete this appointment?\n\nUse this only for one booked in error: it is removed outright and leaves no trace that the slot was ever held.\n\nIf it happened, or the client did not turn up, record that under “What happened?” instead — the booking stays on the record either way.")) return;
+    const { error } = await db.from("appointments").delete().eq("id", id);
+    if (error) return toast("Couldn't delete that appointment — " + error.message);
     refreshDiaryView();
     if (!$("#page-dashboard").classList.contains("hidden")) loadTodayAppts();
+    if (returnCaseId) {
+      toast("Appointment deleted · back on the case");
+      await window.openCase(returnCaseId);
+      return;
+    }
+    closeModal();
+    toast("Appointment deleted");
   };
 };
 
@@ -14320,6 +15850,21 @@ async function loadCasePropColumn() {
     return map;
   } catch (_) { return null; }
 }
+/* R12b · W-15c — the four call-pack columns, read exactly the way M2's and M7's are above: its
+   own small, ordered, capped query, so a database that has not taken them costs the "£X/mo more"
+   estimate on the Recover rows and nothing else on the page. `rate_percent` comes from the main
+   select, so this only has to fetch what that select cannot risk naming. */
+async function loadCaseCallPack() {
+  try {
+    if ((await callPackSupported()) === false) return null;
+    const { data, error } = await db.from("cases").select("id," + CALLPACK_SELECT).order("id").limit(REPORTS_ROW_CAP);
+    if (error) { if (isMissingColumnError(error)) CALLPACK_SUPPORTED = false; return null; }
+    noteRowCap("case call-pack figures", data);
+    const map = {};
+    (data || []).forEach((r) => { if (r && r.id) { const { id, ...rest } = r; map[id] = rest; } });
+    return map;
+  } catch (_) { return null; }
+}
 /* When each case actually stopped, from the event log: the most recent stage_changed event whose
    detail names not_proceeding. Best-effort in the same spirit as loadStageEntries() — a blocked or
    absent case_events leaves the map empty and the losses panel dates by updated_at instead. */
@@ -14359,7 +15904,7 @@ async function loadReports() {
   const mv = (picker && picker.value) || thisMonth;
   if (picker && !picker.value) picker.value = mv;
   reportsCapHits = []; // R5-F4 — one verdict per render, never carried over from the last one
-  const [{ data: cases }, { data: intros }, repRes, extraCols, lostAt, propCols, leadRes, refCols, advDates, detrTasks, solCols] = await Promise.all([
+  const [{ data: cases }, { data: intros }, repRes, extraCols, lostAt, propCols, leadRes, refCols, advDates, detrTasks, solCols, callPack] = await Promise.all([
     // G1N-4 — same order and same explicit ceiling as loadCaseExtraColumns, so the two selects
     // that are merged by id below can never walk different subsets of the table.
     /* R7 — widened by five BASE columns (client_id, lender, rate_end_date, rate_end_estimated)
@@ -14370,7 +15915,11 @@ async function loadReports() {
     /* R9-2 — plus review_requested_at, which the advocacy panel's monthly series falls back to
        when the database records no date for when a score came BACK. It is an original-schema
        column (the review drip has stamped it since round 5), so it cannot 42703 this select. */
-    db.from("cases").select("id,client_id,stage,case_kind,lender,loan_amount,broker_fee,proc_fee,sols_fee,submitted_at,fee_status,fee_paid_at,completed_at,created_at,updated_at,rate_end_date,rate_end_estimated,lead_source,introducer_id,protection_status,retention_source_case_id,assigned_to,nps_score,review_requested_at,expected_completion_date,clients!client_id(first_name,last_name)")
+    /* R12b · W-15c — plus `rate_percent`, the third input the "£X/mo more" estimate needs (the
+       other two ride in loadCaseCallPack's own query). It is an ORIGINAL-schema column — the case
+       form, the pipeline table and the CSV export have all selected it since day one — so, like
+       the five R7 widened this select by, it cannot start 42703-ing an older database. */
+    db.from("cases").select("id,client_id,stage,case_kind,lender,loan_amount,broker_fee,proc_fee,sols_fee,submitted_at,fee_status,fee_paid_at,completed_at,created_at,updated_at,rate_percent,rate_end_date,rate_end_estimated,lead_source,introducer_id,protection_status,retention_source_case_id,assigned_to,nps_score,review_requested_at,expected_completion_date,clients!client_id(first_name,last_name)")
       .order("id").limit(REPORTS_ROW_CAP),
     db.from("introducers").select("id,name"),
     db.rpc("get_reports"),
@@ -14398,6 +15947,8 @@ async function loadReports() {
     /* R9-6 — and m10's solicitor column, in its own query for exactly the same reason: without the
        migration the conveyancer panel says so and every other panel on the page is unaffected. */
     loadSolicitorColumn(REPORTS_ROW_CAP),
+    /* R12b · W-15c — and the call-pack columns, same discipline again. */
+    loadCaseCallPack(),
   ]);
   const all = cases || [];
   noteRowCap("cases", cases);
@@ -14407,6 +15958,7 @@ async function loadReports() {
   // recorded)".
   if (extraCols) all.forEach((c) => { const x = extraCols[c.id]; if (x) Object.assign(c, x); });
   if (propCols) all.forEach((c) => { if (propCols[c.id] !== undefined) c.property_address = propCols[c.id]; });
+  if (callPack) all.forEach((c) => { const x = callPack[c.id]; if (x) Object.assign(c, x); });
   lossState.lostAt = lostAt || {};
   renderMyNumbers(all, yr);
   renderMonthReport(all, mv);
@@ -15531,7 +17083,13 @@ function renderRateEndBook(all) {
         <div class="row-main">
           <div class="t" onclick="openCase('${c.id}')">${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ")) || "(no name)"} ${propChip(c, { cls: "row-prop" }) || ""}</div>
           <div class="s">${lenderIcon(c.lender)}${esc(c.lender || "no lender")} — rate ended ${fmtD(c.rate_end_date)} (${daysSince(c.rate_end_date)} days ago) · last fee ${caseLastFee(c) ? fmtM(caseLastFee(c)) : "none recorded"}</div>
+          ${/* R12b · W-15c — the reason to ring them today, on the row that lists the ones nobody
+               has rung. Rendered only when the balance, the reversion rate and the ended rate are
+               all on the case; a missing input shows nothing at all rather than a £0 that would be
+               read as "no difference". */ ""}
+          ${upliftLineHtml(c)}
         </div>
+        ${retentionToMeHtml(c.id, c)}
         <button class="btn btn-sm btn-retention" onclick="event.stopPropagation();startRetentionCase('${c.id}', event)" title="Create the follow-on remortgage case, the call task and a queued reminder">🔁 Start retention case</button>
       </div>`).join("")}${rec.uncovered.length > 20 ? `<div class="empty">…and ${rec.uncovered.length - 20} more.</div>` : ""}</div>`
       : '<div class="empty">Every completed case whose rate has ended already has a follow-on case. Nothing to recover. 👍</div>'}`;
@@ -16078,6 +17636,7 @@ async function loadDataHealth() {
     .filter((cs) => cs.stage === "completed" && !cs.completed_at)
     .map((cs) => ({ case_id: cs.id, name: caseName(cs) }));
 
+
   /* ---- R6-38 · SHARED PROPERTY ADDRESSES (F10, F8, LR-15, P11) ----------------------------------
      Data health flags possible duplicate CLIENTS by email and phone similarity, and had no
      equivalent for the state the fixtures deliberately seed: two DIFFERENT clients whose cases sit
@@ -16127,6 +17686,73 @@ async function loadDataHealth() {
   const invalidEmail = allClients.filter((cl) => cl.email && !isValidEmailLike(cl.email)).map((cl) => ({ id: cl.id, name: clName(cl), value: cl.email }));
   const invalidPhone = allClients.filter((cl) => cl.phone && !isValidPhoneLike(cl.phone)).map((cl) => ({ id: cl.id, name: clName(cl), value: cl.phone }));
 
+  /* ==========================================================================
+     R12b · K-11 / W-24 — WAITING ON DOCUMENTS
+     The document checklist has existed since r9 and there has never been a
+     screen that answered "which of my cases are stuck on paperwork?" — the
+     only way to find out was to open cases one at a time and look. So the
+     chase state the app already derives per case was information nobody could
+     act on in bulk, and the automatic chase (off by default) was the only
+     thing that saw the whole set.
+
+     This is a WORK QUEUE, not a fault list: every row here is a normal live
+     case doing what live cases do. Deliberately NOT a "warn" tile and
+     deliberately NO bulk send-all button — a document request is a client-
+     facing email under the firm's financial-promotions rules, and one button
+     that fires forty of them is exactly the control nobody should have. The
+     panel is the queue; each send stays a deliberate, per-case act with the
+     same confirms (including K-10's quiet window) the case button carries.
+
+     Everything here is read behind docsSupported(): on a database without m10
+     the panel does not exist at all, rather than rendering an empty
+     "nothing outstanding 👍" that would be a lie.
+     ====================================================================== */
+  const dhDocsOn = (await docsSupported()) !== false;
+  let waitingDocs = [];
+  if (dhDocsOn) {
+    /* Three small reads, in parallel, all soft. `waiting_on`/`solicitor_firm` are m10 columns and
+       are asked for SEPARATELY rather than added to the big cases select above — naming them
+       there would 42703 on an un-migrated database and blank five existing panels. */
+    const [dhDocRows, dhDocMails, dhWaitRows] = await Promise.all([
+      softRows(db.from("case_documents").select("case_id,status")),
+      softRows(db.from("email_queue").select("case_id,email_type,status,sent_at,created_at").in("email_type", DOC_MAIL_TYPES)),
+      softRows(db.from("cases").select("id,waiting_on,solicitor_firm,assigned_to")),
+    ]);
+    const outstandingBy = {}, docsBy = {};
+    dhDocRows.forEach((d) => {
+      if (!d.case_id) return;
+      docsBy[d.case_id] = (docsBy[d.case_id] || 0) + 1;
+      if (d.status === "requested") outstandingBy[d.case_id] = (outstandingBy[d.case_id] || 0) + 1;
+    });
+    const mailsBy = {};
+    dhDocMails.forEach((m) => { if (m.case_id) (mailsBy[m.case_id] = mailsBy[m.case_id] || []).push(m); });
+    const extraBy = Object.fromEntries(dhWaitRows.map((r) => [r.id, r]));
+    const emailBy = new Map(allClients.map((cl) => [cl.id, cl.email || ""]));
+    waitingDocs = allCases
+      .filter((cs) => isLiveStage(cs.stage) && (outstandingBy[cs.id] || 0) > 0)
+      .map((cs) => {
+        const extra = extraBy[cs.id] || {};
+        const chase = docChaseState({
+          docs: new Array(docsBy[cs.id] || 0).fill(0).map((_, i) => ({ status: i < (outstandingBy[cs.id] || 0) ? "requested" : "received" })),
+          mails: mailsBy[cs.id] || [], tasks: [], clientName: caseName(cs), stage: cs.stage,
+        });
+        return {
+          id: cs.id, clientId: cs.client_id, name: caseName(cs), stage: cs.stage,
+          outstanding: outstandingBy[cs.id] || 0,
+          chases: chase.chases, chase, cool: docChaseCooldown(chase),
+          lastMailAt: chase.lastMailAt,
+          email: emailBy.get(cs.client_id) || "",
+          waitingOn: extra.waiting_on || null, solicitorFirm: extra.solicitor_firm || null,
+          assignedTo: extra.assigned_to || null,
+          caseKind: cs.case_kind || null,
+        };
+      })
+      /* Ordered by the thing the reader is deciding on: the ones that have gone quiet longest,
+         with the never-emailed cases first — a checklist that has never been asked for is more
+         urgent than one chased on Tuesday. */
+      .sort((a, b) => String(a.lastMailAt || "").localeCompare(String(b.lastMailAt || "")) || b.outstanding - a.outstanding);
+  }
+
   /* T1-26 — every number on this page is a door. `▾` = expands a list panel further down the page,
      `→` = leaves for the page that number lives on. Only "Clients total" (which isn't a fault
      count and has nothing to drill into) stays plain, so "clickable" reads consistently. */
@@ -16144,6 +17770,8 @@ async function loadDataHealth() {
     <div class="kpi ${dq.emails_failed ? "warn" : ""} dq-clickable" id="dh-tile-failed" title="Click to open the Emails page filtered to failed sends"><div class="num">${dq.emails_failed ?? 0}</div><div class="lbl">Failed emails →</div></div>
     ${/* R6-38 — deliberately NOT a "warn" tile: a shared address is something to read, not a fault to
           clear. Absent entirely on a database with no property column. */ ""}
+    ${/* R12b · K-11 — a work queue, not a fault: no "warn" class, however big the number gets. */ ""}
+    ${dhDocsOn ? `<div class="kpi dq-clickable" id="dh-tile-waitingdocs" title="Live cases with at least one document still outstanding on their checklist — the paperwork queue. Click to read it."><div class="num">${waitingDocs.length}</div><div class="lbl">Waiting on documents ▾</div></div>` : ""}
     ${dhPropOn ? `<div class="kpi dq-clickable" id="dh-tile-sharedprop" title="Addresses that appear on more than one client's cases — usually a sale we advised on both sides of, occasionally a mistake. Informational: click to read them"><div class="num">${sharedProps.length}</div><div class="lbl">Shared property addresses ▾</div></div>` : ""}`;
 
   let stuckNotice = "";
@@ -16315,12 +17943,59 @@ async function loadDataHealth() {
       </div>`).join("") : '<div class="empty">Every phone number on file looks textable. 👍</div>'}
   </div>`;
 
+  /* R12b · K-11 / W-24 — THE PANEL. One row per live case with outstanding items: who, where the
+     case is, how much is missing, how much of the chase budget is spent, how long since the last
+     document email, when the next one is due, and who the case is sitting with. Two verbs, both
+     per-case: open it, or send. */
+  const chaseOnNow = (settings.doc_chase_enabled ?? "off") === "on";
+  const waitingDocsPanel = !dhDocsOn ? "" : `<div class="panel" id="dh-waitingdocs-panel">
+    <h3>Waiting on documents</h3>
+    <p class="panel-sub">Every <strong>live</strong> case with at least one item still outstanding on its checklist — the paperwork queue, in the order it has gone quiet. ${chaseOnNow
+      ? `<strong>Automatic chasing is ON</strong>: these are chased by email every ${esc(String(settings.doc_chase_days ?? "3"))} days, up to ${DOC_CHASE_MAX} times, and then a call task is raised instead.`
+      : `<strong>Automatic chasing is OFF</strong>, so nothing on this list is being chased by anybody except by hand. Turn it on in Settings.`} It now covers <strong>every live stage — Enquiry through Exchange</strong> (it used to be Fact Find and Application only), so a checklist opened at Enquiry is chased from the day it is opened. Cases with no checklist at all are not on this list and are never chased — an unknown is not the same as complete.</p>
+    <p class="panel-sub">There is deliberately <strong>no “send to all”</strong> here. A document request is a client-facing email, and one button that fires forty of them is not a time-saver, it is an incident. Each send below is its own decision, with the same confirmation the case screen asks for.</p>
+    ${/* Eight columns is a lot for 1280, and this page already clips a table that overruns its
+         panel (nothing on it scrolls horizontally). Short headers, and a scroller round the table
+         as the backstop, so the action column can always be REACHED rather than merely existing. */ ""}
+    ${waitingDocs.length ? `<div class="dh-wd-scroll"><table class="imp-table">
+      <tr><th>Client</th><th>Stage</th><th title="Checklist items still outstanding">Missing</th><th title="Chase emails already sent, of the maximum">Chases</th><th title="How long since any document email — request or chase — went to this client">Last email</th><th title="When the next automatic chase becomes eligible — the quiet window between document emails">Next eligible</th><th>Waiting on</th><th></th></tr>
+      ${waitingDocs.map((r) => {
+        /* The two reasons the button cannot be offered, each said in the button's place rather
+           than as a dead control that does nothing when pressed. */
+        const spent = r.chases >= DOC_CHASE_MAX;
+        const noEmail = !r.email;
+        const blocked = spent ? "budget spent — ring them" : noEmail ? "no email on file" : "";
+        return `<tr data-case="${esc(r.id)}">
+        <td>${esc(r.name)}${r.assignedTo ? `<div style="${mutedSub}">${esc(staffName(r.assignedTo))}</div>` : `<div style="${mutedSub}">unassigned</div>`}</td>
+        <td>${esc(STAGE_LABEL[r.stage] || r.stage)}</td>
+        <td><strong>${r.outstanding}</strong></td>
+        <td>${r.chases} of ${DOC_CHASE_MAX}</td>
+        <td style="white-space:nowrap;">${r.lastMailAt ? esc(fmtAgo(r.lastMailAt)) : '<span class="cs-muted">never</span>'}</td>
+        <td style="white-space:nowrap;">${r.cool ? esc(fmtD(r.cool.next)) : '<span class="badge green">now</span>'}</td>
+        <td>${waitingChipHtml({ waiting_on: r.waitingOn, solicitor_firm: r.solicitorFirm }) || '<span class="cs-muted">—</span>'}</td>
+        ${/* The two verbs stack rather than sitting side by side: on a 1280 screen this table
+             already carries seven columns of facts, and a wide action cell is what pushes it off
+             the page. The quiet-window DATE is not repeated on the button here — the "Next
+             eligible" column two cells to the left is already showing it — so the button carries
+             the amber state and the hourglass, and the full sentence lives in its title. */ ""}
+        <td class="dh-wd-acts">
+          <button class="btn btn-sm" onclick="openCase('${jsArg(r.id)}')">Open case</button>
+          ${blocked
+            ? `<span class="badge grey" title="${esc(spent ? `${r.chases} of ${DOC_CHASE_MAX} chases have already gone. The fourth email is not the one that works — the automation raises a call task instead, and so should you.` : "This client has no email address on file, so nothing can be sent to them. Open the case and add one.")}">${esc(blocked)}</span>`
+            : `<button class="btn btn-sm${r.cool ? " btn-cooldown" : ""}" onclick="dhSendDocsChase('${jsArg(r.id)}', event)" title="${esc(r.cool ? `${r.cool.sentence} Sending now goes out anyway and restarts the window — you will be asked to confirm.` : "Queue the document-request email for this case. It lists only the items still outstanding. Nothing else in the queue is sent.")}">${r.cool ? "⏳" : "✉️"} Chase now</button>`}
+        </td>
+      </tr>`;
+      }).join("")}
+    </table></div>` : '<div class="empty">No live case has an outstanding document on its checklist. 👍</div>'}
+  </div>`;
+
   el.innerHTML = `
     <div class="kpi-row">${kpis}</div>
     ${stuckNotice}
     ${dupPanel}
     ${sharedPropPanel}
     <div class="grid-2">${missingPanel}${unassignedPanel}</div>
+    ${waitingDocsPanel}
     ${noFeePanel}
     <div class="grid-2">${phonePanel}${rateEndPanel}</div>
     <div class="grid-2">${bothPanel}${noCompletedPanel}</div>
@@ -16354,6 +18029,7 @@ async function loadDataHealth() {
   wireTileScroll("#dh-tile-email", "#dh-missing-panel");
   wireTileScroll("#dh-tile-unassigned", "#dh-unassigned-panel");
   wireTileScroll("#dh-tile-nofee", "#dh-nofee-panel");
+  wireTileScroll("#dh-tile-waitingdocs", "#dh-waitingdocs-panel");   // R12b · K-11
   /* T1-26 — the two numbers whose rows live on another page. The failed tile pre-ticks the
      failed-only filter so the list on arrival is exactly the number that was clicked; the stuck
      notice deliberately does NOT, because stuck emails are queued, not failed — ticking it there
@@ -16384,6 +18060,34 @@ async function loadDataHealth() {
   const dhAdv = $("#dh-bulk-adviser");
   if (dhAdv) dhAdv.onchange = () => { const v = dhAdv.value; dhAdv.value = ""; if (v) bulkAssignDataHealth(v); };
 }
+/* R12b · K-11 — SEND FROM THE QUEUE, THROUGH THE SAME DOOR AS THE CASE.
+   Deliberately the same function the case screen's button calls (sendDocsRequestNow), with a
+   freshly-read case row and a freshly-derived chase state, so this row can never send under
+   different rules from the case it names: the checklist gate ("nothing outstanding — nothing to
+   ask for"), the recipient confirm listing exactly what the client will read, and K-10's quiet-
+   window confirm all fire here identically. The state is re-read rather than trusted from the
+   painted row because Data Health may have been on screen for a while and an email sent from a
+   case in the meantime must move this window. */
+window.dhSendDocsChase = async function (caseId, ev) {
+  const btn = ev && (ev.currentTarget || ev.target);
+  if (btn) btn.disabled = true;
+  try {
+    const { data: c } = await db.from("cases").select("*").eq("id", caseId).single();
+    if (!c) return toast("That case is no longer there — refreshing the list.");
+    const [docs, mails, tasks] = await Promise.all([
+      softRows(db.from("case_documents").select("*").eq("case_id", caseId)),
+      softRows(db.from("email_queue").select("id,email_type,status,sent_at,created_at").eq("case_id", caseId).in("email_type", DOC_MAIL_TYPES)),
+      softRows(db.from("case_tasks").select("id,title,due_date,done_at").eq("case_id", caseId)),
+    ]);
+    const { data: cl } = await db.from("clients").select("first_name,last_name").eq("id", c.client_id).single();
+    c.__clientName = cl ? [cl.first_name, cl.last_name].filter(Boolean).join(" ") : "";
+    const chase = docChaseState({ docs, mails, tasks, clientName: c.__clientName, stage: c.stage });
+    await sendDocsRequestNow(caseId, c, null, chase);
+  } finally {
+    if (btn) btn.disabled = false;
+    loadDataHealth();   // the row's chase count, last-email age and next-eligible date all just moved
+  }
+};
 // BUILD 7c — bulk assign the selected unassigned cases to an adviser, then refresh Data Health.
 async function bulkAssignDataHealth(adviserId) {
   const ids = [...dhSel];
@@ -17260,6 +18964,9 @@ $("#chat-input").addEventListener("keydown", (e) => { if (e.key === "Enter" && !
    Escape and a backdrop click are swallowed here so they cancel the CAPTURE, never the modal
    underneath. `wire(finish, box)` gets the resolve function and the overlay element. */
 function openOverlay(html, wire) {
+  // R12b — same rule as nav()/openModal(); openHelpPanel() is itself built on this, so the tour's
+  // own "Retake the tour" path is unaffected (tourState is already null by the time it re-opens).
+  if (tourState) tourEnd(false);
   return new Promise((resolve) => {
     const backdrop = $("#overlay-backdrop"), box = $("#overlay-modal");
     if (!backdrop || !box) return resolve(null); // no overlay host (old markup) — caller falls back
@@ -17307,6 +19014,9 @@ function modalFocusable() {
     .filter((el) => el.offsetParent !== null);
 }
 function openModal() {
+  // R12b — same rule as nav(): opening a record modal (however it was triggered — click, or a
+  // test calling openCase/openClient directly) ends a still-open first-run tour quietly.
+  if (tourState) tourEnd(false);
   modalPrevFocus = document.activeElement;
   // Inject a persistent close (×) affordance (M3). Modal content is set via innerHTML on each
   // open, so this is re-added every time; it sticks to the modal's top-right (see .modal-close).
@@ -17446,9 +19156,55 @@ document.addEventListener("keydown", (e) => {
     flat = []; sel = -1;
     resultsEl.innerHTML = '<div class="palette-empty">Search clients by name, email or phone — and cases by property address, client, lender or stage.</div>';
   }
+  /* R12b · W-20/K-15 — "did you mean". Cheap on purpose: no new query (it scans whatever the
+     Clients page has ALREADY loaded into clientCache this session — nothing if it hasn't been
+     opened yet, which is a fine trade-off for a nudge, not a search), capped so a large book can
+     never make a keystroke feel slow, and stops at the first plausible hit rather than ranking
+     every candidate. */
+  function withinOneEdit(a, b) {
+    if (a === b) return true;
+    const la = a.length, lb = b.length;
+    if (Math.abs(la - lb) > 1) return false;
+    let i = 0, j = 0, edits = 0;
+    while (i < la && j < lb) {
+      if (a[i] === b[j]) { i++; j++; continue; }
+      edits++;
+      if (edits > 1) return false;
+      if (la === lb) { i++; j++; }       // substitution
+      else if (la > lb) { i++; }         // a has the extra character — treat as a deletion from a
+      else { j++; }                      // b has the extra character — treat as an insertion into a
+    }
+    if (i < la || j < lb) edits++;
+    return edits <= 1;
+  }
+  const DYM_SCAN_CAP = 300;
+  function findDidYouMean(q) {
+    if (!clientCache || !Array.isArray(clientCache.clients) || !clientCache.clients.length) return null;
+    const qn = q.trim().toLowerCase();
+    const pool = clientCache.clients.slice(0, DYM_SCAN_CAP);
+    for (const c of pool) {
+      const full = [c.first_name, c.last_name].filter(Boolean).join(" ").trim();
+      if (!full) continue;
+      const fn = (c.first_name || "").toLowerCase(), ln = (c.last_name || "").toLowerCase(), fulln = full.toLowerCase();
+      const hit = withinOneEdit(qn, fn) || withinOneEdit(qn, ln) || withinOneEdit(qn, fulln)
+        || (qn.length >= 3 && (fn.startsWith(qn) || ln.startsWith(qn)));
+      if (hit) return full;
+    }
+    return null;
+  }
+  // Alpha (letters, spaces, hyphens, apostrophes only) and at least 4 real letters — a phone
+  // digit-string or a lender/postcode fragment is never worth a "did you mean a person" guess.
+  const looksLikeNameQuery = (q) => /^[a-z][a-z\s'-]*$/i.test(q.trim()) && q.replace(/[^a-z]/gi, "").length >= 4;
   function renderEmpty(q) {
     flat = []; sel = -1;
-    resultsEl.innerHTML = `<div class="palette-empty">No matches for &ldquo;${esc(q)}&rdquo;</div>`;
+    const suggestion = looksLikeNameQuery(q) ? findDidYouMean(q) : null;
+    resultsEl.innerHTML = `<div class="palette-empty">No matches for &ldquo;${esc(q)}&rdquo;` +
+      (suggestion ? `<br><button type="button" class="btn btn-sm palette-didyoumean" id="palette-dym">No exact match — did you mean <strong>${esc(suggestion)}</strong>?</button>` : "") +
+      `</div>`;
+    if (suggestion) {
+      const b = resultsEl.querySelector("#palette-dym");
+      if (b) b.onclick = () => { input.value = suggestion; runSearch(suggestion); };
+    }
   }
   /* `subHtml` is trusted markup (only ever the property chip, built by propChip) and leads the
      sub-line; everything else stays escaped text. */
@@ -17548,8 +19304,20 @@ document.addEventListener("keydown", (e) => {
     const qNoSpace = q.replace(/\s+/g, "");
     const looksPostcode = POSTCODE_RE.test(raw) || /^[A-Z]{1,2}\d[A-Z\d]?$/i.test(qNoSpace);
     const isPhone = !looksPostcode && phoneDigits.replace(/\D/g, "").length >= 3;
+    const phoneQueryDigits = normPhone(phoneDigits).replace(/\D/g, "");
     // Interleave digits with % so "07700 900123" matches however the number is spaced/punctuated.
-    const phoneOr = () => { const pd = normPhone(phoneDigits).replace(/\D/g, ""); return `phone.ilike.%${pd.split("").join("%")}%`; };
+    // R12b · W-20/K-15 — this ilike is a deliberate SUPERSET fetch, not the final answer: SQL LIKE
+    // has no way to say "any PUNCTUATION between these digits, but no extra digits", so %-between-
+    // every-digit also matched "9001" against 07700 900411 by skipping straight over the 4 and a 1
+    // — an ordered-subsequence match, not a phone number anybody typed. The true "consecutive digits
+    // of the normalised number" test happens in JS below, on the fetched rows, where punctuation can
+    // actually be told apart from digits; this pattern only has to not miss a real match.
+    const phoneOr = () => `phone.ilike.%${phoneQueryDigits.split("").join("%")}%`;
+    // R12b · W-20/K-15 — the real match test: strip everything but digits from the STORED number
+    // (same rule normPhone already applies) and require the query's digits to appear as one
+    // unbroken run in it. This is what "consecutive digit substring" means, and it is the only
+    // check that can't be fooled by a coincidental extra digit sitting in the right place.
+    const phoneDigitsMatch = (storedPhone) => normPhone(storedPhone).replace(/\D/g, "").includes(phoneQueryDigits);
     let clients = [], cases = [], leads = [];
     try {
       // ---- Query 1: clients by name / email / phone ----
@@ -17562,9 +19330,16 @@ document.addEventListener("keydown", (e) => {
       } else {
         tokens.forEach((tok) => { clientQ = clientQ.or([`first_name.ilike.%${tok}%`, `last_name.ilike.%${tok}%`, `email.ilike.%${tok}%`].join(",")); });
       }
-      const { data: cl } = await clientQ.limit(8);
+      // R12b · W-20/K-15 — a phone query fetches more than the usual 8 (the ilike above is a
+      // superset), because the true match count after the JS narrowing below can only ever shrink.
+      const { data: cl } = await clientQ.limit(isPhone ? 40 : 8);
       if (mySeq !== seq) return;
       clients = cl || [];
+      if (isPhone) {
+        // Text matches (name/email) on a phone-shaped query are kept as-is; only rows that got in
+        // via the phone branch are subject to the consecutive-digits test.
+        clients = clients.filter((c) => phoneDigitsMatch(c.phone) || tokens.some((t) => (c.first_name || "").toLowerCase().includes(t.toLowerCase()) || (c.last_name || "").toLowerCase().includes(t.toLowerCase()) || (c.email || "").toLowerCase().includes(t.toLowerCase()))).slice(0, 8);
+      }
 
       // ---- Query 2: cases by client name (matched ids) / lender / stage+kind label ----
       const ql = q.toLowerCase();
@@ -17616,8 +19391,11 @@ document.addEventListener("keydown", (e) => {
       } else {
         tokens.forEach((tok) => { leadQ = leadQ.or([`name.ilike.%${tok}%`, `email.ilike.%${tok}%`].join(",")); });
       }
-      const { data: ld } = await leadQ.limit(6);
-      if (mySeq === seq) leads = ld || [];
+      const { data: ld } = await leadQ.limit(isPhone ? 30 : 6);
+      let ldRows = ld || [];
+      // R12b · W-20/K-15 — same consecutive-digits narrowing as the client fetch above.
+      if (isPhone) ldRows = ldRows.filter((l) => phoneDigitsMatch(l.phone) || tokens.some((t) => (l.name || "").toLowerCase().includes(t.toLowerCase()) || (l.email || "").toLowerCase().includes(t.toLowerCase()))).slice(0, 6);
+      if (mySeq === seq) leads = ldRows;
     } catch (e) { /* leads table unavailable — leave empty */ }
 
     if (mySeq !== seq) return;
