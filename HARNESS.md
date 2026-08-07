@@ -75,13 +75,15 @@ node tests/r12b.js
 node tests/r13.js
 node tests/r14.js
 node tests/r15.js
+node tests/r16.js
 ```
 
-Current green counts (end of round 15). r8_touch/r8_rev/r11_ux still carry the
+Current green counts (end of round 16). r8_touch/r8_rev/r11_ux still carry the
 151/176/123 figures the R13 note below already flagged (fixture-derived
-counts, unrelated to R15 — see "compute test expectations from fixtures at
-runtime" in Standing rules); every other suite's count is unchanged by R15
-except the new r15.js row itself:
+counts, unrelated to R15/R16 — see "compute test expectations from fixtures
+at runtime" in Standing rules); every other suite's count is unchanged by R16
+except the new r16.js row itself — R16 needed NO existing-suite edits (see the
+R16 notes below for why):
 
 | Suite | Checks |
 |---|---|
@@ -99,7 +101,68 @@ except the new r15.js row itself:
 | `tests/r13.js` | 142 |
 | `tests/r14.js` | 167 |
 | `tests/r15.js` | 160 |
-| **Total** | **2,511** |
+| `tests/r16.js` | 81 |
+| **Total** | **2,592** |
+
+R16 notes: BTL rental + ICR affordability, and a submit-to-lender tracker.
+Six new plain nullable `cases` columns, mirrored into the mock with NO
+migration toggle — same precedent as R14b's `mortgage_account_number`: they
+just exist on every row (null until written), defaulted in both `mkCase()`
+and `applyInsertDefaults()`, so `btlIcrSupported()`/`lenderTrackSupported()`'s
+`hasOwnProperty` probe always sees them and the block/tracker always render in
+this harness. The BTL trio — `monthly_rent`, `icr_stress_rate` (defaults to
+5.5 when null/0/NaN), `icr_required_pct` (defaults to 145) — feeds ONE
+canonical helper, `btlIcr(c)` in app.js: `icrPct = round(annualRent /
+stressInterest * 100)` (integer, null with no loan), `pass = icrPct >=
+required`, `yieldPct = round(annualRent / propertyValue * 1000) / 10` (1dp).
+The chip (`#btl-icr-chip`, echoed at `#cs-btl-icr` in the case header) is red
+on fail, green on pass, grey ("ICR — add loan amount") when there is rent but
+no loan, and renders nothing at all when there is no rent — the block itself
+(`#case-btl-block`) is kind-gated to `case_kind === 'buy_to_let'` and re-gates
+LIVE on the Type `<select>` via `kindSel.onchange`, no reopen needed; the chip
+recomputes live too, on a form-level `input` listener, independent of Save.
+The tracker trio — `lender_reference`, `application_status`
+(submitted/underwriting/valuation/offer_issued/null), `application_status_at`
+— drives a header chip (`#cs-lender-status`) and a board-card badge
+(`lenderStatusBadgeHtml`), both gated to `LENDER_TRACK_STAGES`
+(decision_in_principle/application/offer/exchange — the same R15 relevance
+window), and a chase nudge (`#cs-lender-chase`,
+`⏰ In {Status} {N} days — chase the lender`) that fires only for
+submitted/underwriting/valuation whose `application_status_at` (falling back
+to `submitted_at`) is `>= LENDER_CHASE_DAYS` (10) days old — never for
+offer_issued or a null status, however old. **The board's `📤 sub {date}`
+badge was NOT deleted** — `lenderStatusBadgeHtml` falls back to that exact
+markup whenever `application_status` is null (or the stage is outside the
+tracker window), so it only supersedes the old badge on a case that actually
+has a tracked status; `tests/r16.js` §F asserts both shapes on two fresh
+cases. On Save: `application_status_at` is (re)stamped only when
+`application_status` actually CHANGES on that save (an unrelated edit to a
+case that already has a status/stamp leaves the stamp untouched — the chase
+clock does not reset on every edit); a `submitted_at` set for the FIRST time
+(the case had none before) with the status left blank defaults
+`application_status` to `'submitted'` and stamps it too; a case that already
+carried a `submitted_at` before this round does NOT get a status invented for
+it retroactively. Grepped app.js to confirm no existing test asserted the old
+board badge text/emoji before touching anything — **none did**, so the whole
+pre-existing battery (smoke + every suite through r15) needed ZERO edits; only
+`admin/mock-supabase.js` (the six columns, `mkCase()`, `applyInsertDefaults()`,
+and a light fixture pass on four already-existing cases — Gareth Pollard's
+application/offer-stage BTL cases for a live ICR fail/pass example, Harold
+Mainwaring's exchange case and the Fairweathers' BTL offer case for a
+chaseable/not-chaseable lender-tracker example — chosen to avoid Melanie
+Underhill's `ca061`, which R13's own fixture pass already uses for the
+`app_not_submitted` watchtower rule) and the new `tests/r16.js` changed.
+`tests/r16.js` mints every one of its own exact-scenario cases fresh via
+`mkClientCase`, on ONE shared page for the whole file, exactly like
+`tests/r15.js` — and needed the same `.case-details` collapsed-by-default fix
+r13.js already carries (`<details class="case-details" ${id ? "" : "open"}>`
+starts CLOSED on an existing case, which hides every field inside it —
+including Type, the BTL block and the lender-tracker fields — from
+Playwright's actionability checks even though `$eval` can still read their
+text; `openCase()` now force-opens it after every call). Not tested (no
+harness path exists for it, same as `mortgage_account_number`): the
+"database without the migration" degrade branch — neither R16 column trio was
+wired into `MIGRATION_COLUMNS`, on purpose, matching the R14b precedent.
 
 R15 notes: the case modal's action bar is now stage/kind-reactive.
 `CASE_ACTION_RULES` (app.js) maps each of the eight ORIGINAL action ids —
