@@ -73,9 +73,10 @@ node tests/r11_ux.js
 node tests/r12a.js
 node tests/r12b.js
 node tests/r13.js
+node tests/r14.js
 ```
 
-Current green counts (end of round 13):
+Current green counts (end of round 14):
 
 | Suite | Checks |
 |---|---|
@@ -91,7 +92,22 @@ Current green counts (end of round 13):
 | `tests/r12a.js` | 114 |
 | `tests/r12b.js` | 158 |
 | `tests/r13.js` | 142 |
-| **Total** | **2,184** |
+| `tests/r14.js` | 154 |
+| **Total** | **2,338** |
+
+R14 notes: `vault_entries` (company password safe) added — RLS staff read (gated by
+visible_to text[]: null/empty = all staff), staff insert/update, OWNER/ADMIN delete
+only; a dedicated audit path masks every secret field VALUE to "(hidden)" while
+keeping non-secret fields + labels. Mock fixtures are DELIBERATELY FAKE (test-pass-N,
+bluecar) — never seed real credentials. Production holds 203 REAL entries imported
+from Passwords MASTER.xlsx (not in the mock, not in the repo). vault_entries is
+EXCLUDED from EXPORT_TABLES (the firm export) on purpose — never add it. The case
+modal gained a "Client — security check" strip (securityCardHtml) at the top: name,
+DOB, home address, property, loan, lender, product, rate, LTV — real columns only,
+always-visible, each copyable; NOTE there is no mortgage/account-number column on
+cases (a candidate for a later round). Mock `sameValue()` fix: array/object-valued
+columns now diff by JSON.stringify, not String() — needed so vault `fields` edits
+actually write + audit.
 
 (Several suites derive check counts from fixture data — r11_ux now reports 123,
 r8_touch 151, r8_rev 176 after the R13 fixture/mirror changes. The table above
