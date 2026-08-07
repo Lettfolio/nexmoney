@@ -176,10 +176,10 @@ const counts = (page) => page.evaluate(() => {
       eq("Home Telephone is not stored — it is a duplicate of the mobile column", bucketOf("Home Telephone"), "unstored");
       ok("…and it says so", /duplicate/i.test((map.find((m) => m.header === "Home Telephone") || {}).why || ""));
 
-      // The Consumer Duty column with nowhere to land is named, loudly.
+      // R13 · M-4 — the Consumer Duty column now HAS somewhere to land.
       const vuln = map.find((m) => m.header === "Vulnerable Customer");
-      eq("Vulnerable Customer is recognised but not stored", vuln.bucket, "unstored");
-      ok("…and the reason says there is no field for it", /no vulnerable-customer flag/i.test(vuln.why), vuln.why);
+      eq("Vulnerable Customer is recognised and mapped (the columns shipped)", vuln.bucket, "mapped");
+      eq("…to clients.is_vulnerable", vuln.key, "is_vulnerable");
 
       // The screen says it too, in the operator's own words.
       const summary = await page.$eval("#rev-map-summary", (e) => e.textContent.replace(/\s+/g, " "));
@@ -545,6 +545,65 @@ const counts = (page) => page.evaluate(() => {
       eq("…but the date of birth we did NOT hold was filled from the file", out.bruceRow.date_of_birth, "1963-05-03");
       const after = await counts(page);
       eq("still nothing emailed", after.emails, before.emails);
+      ok("no console errors", !page.__err, JSON.stringify(page.__err));
+      await page.close();
+    }
+
+    /* ===================================================================
+       7b · R13 · M-4 — VULNERABLE CUSTOMER IS STORED, AND ONLY ONE WAY
+       "Y" is a care record and is proposed (recognised → "will be set" in
+       preview on a new client → written on Apply). An incoming "N" proposes
+       NOTHING — it is never treated as "clear the flag", so a hand-set flag
+       on an already-matched client survives an "N" row untouched.
+       =================================================================== */
+    {
+      console.log("\n— R13 · M-4 · Vulnerable Customer: Y is proposed and written, N never clears a hand-set flag");
+
+      // Row 10 (Rowena Tasker-Hyde) is "Y" and a brand-new client in this file.
+      const rowenaIdx = CSV_ROWS.findIndex((_, i) => rowName(i) === "Rowena Tasker-Hyde");
+      ok("fixture sanity: Rowena Tasker-Hyde's row really is flagged Y", cell(rowenaIdx, "Vulnerable Customer").toUpperCase() === "Y", cell(rowenaIdx, "Vulnerable Customer"));
+
+      const page = await newPage(browser, "p4");
+      const seeded = await loadSample(page, { seed: true });
+      const rows = await revRows(page);
+      const rowena = rows.find((r) => r.name === "Rowena Tasker-Hyde");
+      eq("Rowena is a new-client row", rowena.match, "new");
+
+      // Preview: the new-client care line renders with the "will be set" badge.
+      const careLine = await page.$eval(`[data-i="${rowena.i}"] [data-rev-care="new"]`, (e) => e.textContent.replace(/\s+/g, " ")).catch(() => "");
+      ok("the preview names the flag on the new client, with a 'will be set' badge", /Vulnerable client/i.test(careLine) && /will be set/i.test(careLine), careLine);
+
+      // A matched, already-existing client, hand-flagged BEFORE the sync runs.
+      const before2 = await page.evaluate(async () => {
+        const db = window.__mockDb;
+        const { data: cl } = await db.from("clients").select("id,first_name,last_name,is_vulnerable").ilike("first_name", "James").ilike("last_name", "Whitfield").single();
+        await db.from("clients").update({ is_vulnerable: true, vulnerability_note: "Flagged by Wayne after a call — struggling since redundancy" }).eq("id", cl.id);
+        return cl.id;
+      });
+      const rows2 = await revRows(page);
+      const whitfield = rows2.find((r) => r.name === "James Whitfield");
+      eq("James Whitfield's row is genuinely N in the file", cell(whitfield.i, "Vulnerable Customer").toUpperCase(), "N");
+      const cd2 = (r, k) => r.clientDiffs.find((x) => x.key === k) || {};
+      eq("…so is_vulnerable never appears as a proposed field at all — N proposes nothing", cd2(whitfield, "is_vulnerable").key, undefined);
+      eq("…and vulnerability_note is likewise not proposed", cd2(whitfield, "vulnerability_note").key, undefined);
+
+      await page.evaluate(() => window.__rev.apply());
+      await page.waitForTimeout(900);
+
+      const wState = await page.evaluate(async (id) => {
+        const db = window.__mockDb;
+        return (await db.from("clients").select("is_vulnerable,vulnerability_note").eq("id", id).single()).data;
+      }, before2);
+      eq("Apply never clears a hand-set flag off the back of an incoming N", wState.is_vulnerable, true);
+      eq("…nor touches the hand-written note", wState.vulnerability_note, "Flagged by Wayne after a call — struggling since redundancy");
+
+      const rState = await page.evaluate(async (name) => {
+        const db = window.__mockDb;
+        const { data } = await db.from("clients").select("is_vulnerable,vulnerability_note").eq("first_name", "Rowena").ilike("last_name", "Tasker%").single();
+        return data;
+      }, "Rowena");
+      eq("…while the new client's Y flag really was written on Apply", rState.is_vulnerable, true);
+
       ok("no console errors", !page.__err, JSON.stringify(page.__err));
       await page.close();
     }

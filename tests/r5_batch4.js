@@ -87,24 +87,29 @@ const openDrawer = async (page, panelId) => {
       const page = await newPage(browser, "p1");
       await openDrawer(page, "#watchtower-panel");
 
-      // Fixture check — a seeded CRITICAL erc_conflict alert on ca001, and the seeded
-      // pre-snoozed protection_gap row (so "N snoozed" already has one entry on first load).
+      // R13 — the mock's ten production rules (see watchtowerRules()/runWatchtower() in
+      // mock-supabase.js) replaced the old seven, retiring erc_conflict/protection_gap.
+      // Fixture check, driven by rules that actually exist: ANY currently-open CRITICAL
+      // alert that is tied to a case (offer_stale/fee_aging both produce crit rows here,
+      // and snoozeAlert() only mirrors a note when severity==='crit' AND a case_id is
+      // present — see app.js), plus the seeded pre-snoozed protection_quote_stale row
+      // (seedSnooze() re-points to it — "N snoozed" already has one entry on first load).
       const fixture = await page.evaluate(async () => {
         const { data } = await window.__mockDb.from("watch_alerts").select("*").is("resolved_at", null);
-        const crit = data.find((a) => a.rule === "erc_conflict" && a.case_id === "ca001");
-        const preSnoozed = data.find((a) => a.rule === "protection_gap" && a.snoozed_until);
+        const crit = data.filter((a) => a.severity === "crit" && a.case_id).sort((a, b) => (a.id < b.id ? -1 : 1))[0];
+        const preSnoozed = data.find((a) => a.rule === "protection_quote_stale" && a.snoozed_until);
         return {
-          critId: crit && crit.id, critCase: crit && crit.case_id,
+          critId: crit && crit.id, critCase: crit && crit.case_id, critRule: crit && crit.rule,
           preSnoozedId: preSnoozed && preSnoozed.id, preSnoozedCase: preSnoozed && preSnoozed.case_id, preSnoozedClient: preSnoozed && preSnoozed.client_id,
         };
       });
-      ok("fixture · ca001 has a seeded CRITICAL erc_conflict alert", !!fixture.critId, JSON.stringify(fixture));
-      ok("fixture · one alert already arrives pre-snoozed", !!fixture.preSnoozedId, JSON.stringify(fixture));
+      ok("fixture · a CRITICAL alert tied to a case exists among the production ten rules", !!fixture.critId, JSON.stringify(fixture));
+      ok("fixture · one alert already arrives pre-snoozed (protection_quote_stale, per seedSnooze)", !!fixture.preSnoozedId, JSON.stringify(fixture));
 
       ok("R5-22 · the pre-snoozed alert is hidden from the working list", await page.evaluate((id) => !document.querySelector("#watchtower-list").innerHTML.includes(`snoozeAlert('${id}'`), fixture.preSnoozedId));
       eq("R5-22 · the 'N snoozed' toggle starts at 1", await page.evaluate(() => document.querySelector("#watchtower-snoozed-toggle").textContent.trim()), "1 snoozed");
 
-      // Snooze the ERC-conflict CRITICAL until +7d with a reason.
+      // Snooze the CRITICAL alert (whichever real rule produced it) until +7d with a reason.
       const snoozeBtnSel = `#watchtower-list button[onclick*="snoozeAlert('${fixture.critId}'"]`;
       ok("R5-22 · the row offers a Snooze… action beside Dismiss", await page.evaluate((s) => !!document.querySelector(s), snoozeBtnSel));
       await page.click(snoozeBtnSel);
@@ -118,7 +123,8 @@ const openDrawer = async (page, panelId) => {
 
       // Reject: a date before tomorrow (custom date = today).
       const todayStr = await page.evaluate(() => new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/London" }).format(new Date()));
-      await page.fill("#snooze-reason", "ERC conflict — client is aware, lender confirming a fix");
+      const snoozeReason = "Reviewed with the client — chasing directly, will update once resolved";
+      await page.fill("#snooze-reason", snoozeReason);
       await page.evaluate((t) => { document.querySelector("#snooze-date").value = t; }, todayStr);
       await page.click("#snooze-ok");
       ok("R5-22 · a date before tomorrow is refused", await page.evaluate(() => !document.querySelector("#overlay-backdrop").classList.contains("hidden") && /at least tomorrow/i.test(document.querySelector("#snooze-err").textContent)));
@@ -135,14 +141,14 @@ const openDrawer = async (page, panelId) => {
         const { data } = await window.__mockDb.from("watch_alerts").select("*").eq("id", id).single();
         return data;
       }, fixture.critId);
-      ok("R5-22 · snoozed_until / snooze_note / snoozed_by are written", !!row.snoozed_until && row.snooze_note === "ERC conflict — client is aware, lender confirming a fix" && !!row.snoozed_by, JSON.stringify(row));
+      ok("R5-22 · snoozed_until / snooze_note / snoozed_by are written", !!row.snoozed_until && row.snooze_note === snoozeReason && !!row.snoozed_by, JSON.stringify(row));
 
       // CRITICAL alerts also mirror the reason to the case as a note (dismiss pattern).
       const note = await page.evaluate(async (cid) => {
         const { data } = await window.__mockDb.from("case_notes").select("*").eq("case_id", cid).order("created_at", { ascending: false });
         return data[0];
       }, fixture.critCase);
-      ok("R5-22 · the CRITICAL alert's reason is written to the case as a note", /snoozed/i.test(note.body) && note.body.includes("ERC conflict — client is aware"), JSON.stringify(note));
+      ok("R5-22 · the CRITICAL alert's reason is written to the case as a note", /snoozed/i.test(note.body) && note.body.includes(snoozeReason), JSON.stringify(note));
 
       // Snooze survives "Run checks" — run_watchtower's ON CONFLICT upsert never touches M3 columns.
       await page.click("#watchtower-run");
@@ -152,7 +158,7 @@ const openDrawer = async (page, panelId) => {
         const { data } = await window.__mockDb.from("watch_alerts").select("snoozed_until,snooze_note").eq("id", id).single();
         return data;
       }, fixture.critId);
-      ok("R5-22 · the snooze columns are untouched by Run checks", !!rowAfterRun.snoozed_until && rowAfterRun.snooze_note === "ERC conflict — client is aware, lender confirming a fix", JSON.stringify(rowAfterRun));
+      ok("R5-22 · the snooze columns are untouched by Run checks", !!rowAfterRun.snoozed_until && rowAfterRun.snooze_note === snoozeReason, JSON.stringify(rowAfterRun));
 
       // Fast-forward the snooze (test hook) → reappears automatically once the date passes.
       await page.evaluate((id) => window.__mock.expireSnooze(id), fixture.critId);

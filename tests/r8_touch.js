@@ -661,11 +661,16 @@ function parseCsvLine(line) {
       ok("R8-5 · …and the order", /oldest completion first/i.test(npsNote), npsNote);
       ok("R8-5 · …and what happens to the rest", /queue up on later runs/i.test(npsNote), npsNote);
 
+      // R13 · M-4/M-30 — a client hand-flagged suppress_automation=true gets NO
+      // automated review-request either, mirrored here independently rather
+      // than trusted from the app: cl021 (Hannah Verity, "do not contact") is
+      // suppressed and completed, so her case (ca011-ish) drops out of the
+      // eligible backlog and whichever case is next in line takes her slot.
       const eligible = await page.evaluate(async () => {
         const db = window.__mockDb;
         const [cs, cl, st] = await Promise.all([
           db.from("cases").select("id,client_id,stage,completed_at,review_requested_at"),
-          db.from("clients").select("id,email,marketing_opt_out"),
+          db.from("clients").select("id,email,marketing_opt_out,suppress_automation"),
           db.from("settings").select("key,value"),
         ]);
         const delay = Number((st.data.find((r) => r.key === "review_delay_days") || {}).value || 14) || 14;
@@ -674,10 +679,24 @@ function parseCsvLine(line) {
           if (c.stage !== "completed" || !c.completed_at || c.review_requested_at) return false;
           if ((Date.now() - new Date(c.completed_at).getTime()) / 86400000 < delay) return false;
           const x = byId[c.client_id];
-          return !!(x && x.email && !x.marketing_opt_out);
+          return !!(x && x.email && !x.marketing_opt_out && !x.suppress_automation);
         }).sort((a, b) => (a.completed_at < b.completed_at ? -1 : a.completed_at > b.completed_at ? 1 : (a.id < b.id ? -1 : 1))).map((c) => c.id);
       });
       ok("fixture · the review backlog is bigger than one run's cap", eligible.length > 5, `${eligible.length} eligible`);
+
+      // Independent proof that suppression is actually doing something here,
+      // not just a filter that never fires on this fixture.
+      const suppressedCompleted = await page.evaluate(async () => {
+        const db = window.__mockDb;
+        const [cs, cl] = await Promise.all([
+          db.from("cases").select("id,client_id,stage,completed_at"),
+          db.from("clients").select("id,email,suppress_automation"),
+        ]);
+        const byId = {}; cl.data.forEach((c) => (byId[c.id] = c));
+        return cs.data.filter((c) => c.stage === "completed" && c.completed_at && byId[c.client_id] && byId[c.client_id].suppress_automation && byId[c.client_id].email).map((c) => c.id);
+      });
+      ok("fixture · at least one completed, emailable case belongs to a suppressed client", suppressedCompleted.length > 0, JSON.stringify(suppressedCompleted));
+      eq("…and none of them ever appear in the eligible backlog", suppressedCompleted.filter((id) => eligible.includes(id)).length, 0);
 
       /* the review link is a real gate, and proving it costs one run: blank both
          link settings, run, and nothing may be queued or stamped */

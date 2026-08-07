@@ -654,10 +654,55 @@ async function mkClientCase(page, opts) {
       ]);
       const popupUrl = popup.url();
       await popup.close();
-      const expectedFragment = encodeURIComponent("case-documents/" + target.storage_path);
-      ok("D8 · Open mints a signed URL scoped to the case-documents bucket and this exact path", popupUrl.includes(expectedFragment), popupUrl);
+      // R13 · BUCKET CORRECTION — the real bucket is "client-docs", and
+      // storage_path is already written WITH that prefix on it, so the
+      // signed URL's path (independently computed, not via app's own
+      // docBucketPath) is just the prefixed storage_path unchanged.
+      ok("D8 · fixture storage_path already carries the client-docs/ prefix", target.storage_path.startsWith("client-docs/"), target.storage_path);
+      const expectedFragment = encodeURIComponent(target.storage_path);
+      ok("D8 · Open mints a signed URL scoped to the client-docs bucket and this exact path", popupUrl.includes(expectedFragment), JSON.stringify({ popupUrl, storage_path: target.storage_path }));
 
       ok("D8 · no console errors", !page.__err, JSON.stringify(page.__err));
+      await page.close();
+    }
+
+    /* ===================================================================
+       D8b · A LEGACY UN-PREFIXED storage_path SIGNS AGAINST client-docs
+       WITHOUT DOUBLING THE PREFIX (app's docBucketPath handles both shapes)
+       =================================================================== */
+    {
+      console.log("\n— D8b · legacy un-prefixed storage_path opens cleanly");
+      const page = await newPage(browser, "p1");
+
+      const legacy = await page.evaluate(async () => {
+        const db = window.__mockDb;
+        const { data: cl } = await db.from("clients").select("id,last_name").ilike("last_name", "Osei").limit(1).single();
+        const { data: cs } = await db.from("cases").select("id").eq("client_id", cl.id).limit(1).single();
+        const legacyPath = "docs/legacy-" + cs.id + "/old-payslip.pdf";
+        const { data: row } = await db.from("case_documents").insert({
+          case_id: cs.id, item: "Legacy payslip (pre-R13 upload)", status: "received", storage_path: legacyPath
+        }).select().single();
+        return { caseId: cs.id, row, legacyPath };
+      });
+
+      await page.evaluate((id) => window.openCase(id), legacy.caseId);
+      await wait(page, 900);
+      const n = await page.$$eval(`.doc-open[data-doc="${legacy.row.id}"]`, (els) => els.length);
+      eq("D8b · the legacy un-prefixed row still shows an Open button", n, 1);
+
+      const [popup2] = await Promise.all([
+        page.waitForEvent("popup"),
+        page.click(`.doc-open[data-doc="${legacy.row.id}"]`),
+      ]);
+      const popupUrl2 = popup2.url();
+      await popup2.close();
+      // Independently-computed expectation: bucket "client-docs" + "/" + the
+      // legacy path, exactly once — never "client-docs/client-docs/...".
+      const expectedFragment2 = encodeURIComponent("client-docs/" + legacy.legacyPath);
+      ok("D8b · signs against client-docs without doubling the prefix", popupUrl2.includes(expectedFragment2), JSON.stringify({ popupUrl2, expected: expectedFragment2 }));
+      ok("D8b · no accidental double-prefix in the URL", !popupUrl2.includes(encodeURIComponent("client-docs/client-docs/")), popupUrl2);
+
+      ok("D8b · no console errors", !page.__err, JSON.stringify(page.__err));
       await page.close();
     }
 
