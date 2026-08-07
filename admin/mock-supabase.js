@@ -7,7 +7,8 @@
      tables : clients, cases, case_tasks, case_notes, case_events, appointments,
               email_queue, sms_queue, case_emails, fact_finds, leads,
               introducers, profiles, settings, watch_alerts, audit_log,
-              duplicate_dismissals (M4)
+              duplicate_dismissals (M4), case_documents (M10), staff_absences,
+              case_files (R13), vault_entries (R14)
      view   : v_alerts
      rpcs   : my_role, get_briefing, get_reports, get_data_quality,
               get_protection_pipeline, run_watchtower, find_duplicate_clients,
@@ -202,6 +203,28 @@
        observable — `doc_chase_enabled` still seeds OFF, so nothing chases it
        until a test turns the setting on.
 
+   ROUND 14 (the company password safe — `vault_entries`):
+     · New table `vault_entries` (id, category text default 'other' — lender|
+       protection|gi|admin|contact|other, name, owner_label — Daniel|Luke|
+       Wayne|Shared|null, fields jsonb array of {label,value,secret}, note,
+       visible_to text[] — null/empty = every staff role, else only the roles
+       listed, sort_order int default 0, updated_by, created_at, updated_at).
+       RLS mirrors profiles/settings exactly: SELECT is any staff AND
+       (visible_to empty OR the caller's role is in it — see readFilter());
+       INSERT/UPDATE is any staff; DELETE is Owner/Administrator ONLY, same
+       shape as the clients/cases delete rule from R4 (see writePolicy()).
+       Every insert/update/delete writes an audit_log row exactly like every
+       other AUDITED table, except `maskChanges()` reaches INTO the `fields`
+       array and rewrites the `value` of every entry with `secret:true` to
+       "(hidden)" — a non-secret field's value is left in the clear, mirroring
+       production's audit_vault_row() trigger. Fixtures: 12 entries, all
+       plainly-fake test data (no real password ever), covering every
+       category, three individually-owned "Test Bank A" rows (Daniel/Luke/
+       Wayne) plus a Shared one, one gated admin row (visible_to=['owner'])
+       so the RLS gate is exercised, one entry with a note, one with a blank
+       secret value (nothing filled in yet), and several mixing secret/
+       non-secret fields on the same row.
+
    Personas (?as=…):  p1 Kim Martin (admin, DEFAULT) · p2 Wayne Kellow (adviser)
                       p3 Luke Richards (adviser) · p4 Daniel Potts (owner)
                       p5 Rachel Foyle (introducer — fails the staff login gate)
@@ -263,6 +286,27 @@
     var o = {}; for (var k in v) if (Object.prototype.hasOwnProperty.call(v, k)) o[k] = clone(v[k]);
     return o;
   }
+  /* R14 — generic-diff comparator used by _runInsert (upsert branch) and
+     _runUpdate. Plain `String(a) === String(b)` (what both call sites used
+     exclusively pre-R14) is correct for scalars and even for a text[] like
+     `visible_to` (Array.prototype.join stringifies each element as itself),
+     but it is WRONG for an array of OBJECTS: `vault_entries.fields` is a
+     jsonb array of {label,value,secret}, and every element's default
+     toString() is the literal string "[object Object]" — so two DIFFERENT
+     fields arrays of the same length stringify identically and a real edit
+     (e.g. changing a password's value) would silently compare "equal",
+     never get written to the row, and never reach the audit trail. Anything
+     that is an array or object on either side is compared by JSON.stringify
+     instead; everything else keeps the original String() behaviour so no
+     existing comparison changes shape. */
+  function sameValue(a, b) {
+    var aIsObj = a !== null && typeof a === "object";
+    var bIsObj = b !== null && typeof b === "object";
+    if (aIsObj || bIsObj) {
+      try { return JSON.stringify(a) === JSON.stringify(b); } catch (e) { /* fall through */ }
+    }
+    return String(a) === String(b);
+  }
 
   /* ------------------------------------------------------------ persona/auth */
   var PERSONAS = {
@@ -298,7 +342,9 @@
        uploaded case files (the checklist above is client-uploaded; this is
        the mirror for what the FIRM attaches — signed illustrations, offer
        letters kept as a record, etc.). */
-    staff_absences: [], case_files: []
+    staff_absences: [], case_files: [],
+    /* R14 — the company password safe. */
+    vault_entries: []
   };
   var PK = { settings: "key" };
   function pkOf(t) { return PK[t] || "id"; }
@@ -748,6 +794,24 @@
       }
       return null;
     }
+    /* R14 — vault_entries: SELECT is gated in readFilter() by visible_to; write
+       (insert/update) is any staff, mirroring the "case_files: staff all" shape
+       just above; DELETE is Owner/Administrator ONLY — the same rule the M4
+       clients/cases delete check below applies, called out here explicitly
+       because vault_entries is not one of the two table names that generic
+       check tests for. */
+    if (table === "vault_entries") {
+      if (op === "delete") {
+        if (!isAdminOrOwner()) {
+          return pgError('permission denied: deleting a vault entry is Owner / Administrator only', "42501");
+        }
+        return null;
+      }
+      if (!isStaff()) {
+        return pgError('new row violates row-level security policy for table "vault_entries"', "42501");
+      }
+      return null;
+    }
     if (table === "settings" && !isOwner()) {
       return pgError('new row violates row-level security policy for table "settings"', "42501");
     }
@@ -798,6 +862,18 @@
        anywhere in the app. */
     if (table === "staff_absences" && !isStaff()) return [];
     if (table === "case_files" && !isStaff()) return [];
+    /* R14 — "vault select": is_staff() AND (visible_to is null/empty OR the
+       signed-in user's role = any(visible_to)). An introducer (never staff)
+       sees nothing; every other staff role sees every row whose visible_to
+       is unset, plus any row that names their own role. */
+    if (table === "vault_entries") {
+      if (!isStaff()) return [];
+      var myR = myRole();
+      return rows.filter(function (r) {
+        var vt = r.visible_to;
+        return !vt || !vt.length || vt.indexOf(myR) !== -1;
+      });
+    }
     return rows;
   }
 
@@ -817,13 +893,14 @@
      every new table gets the trigger. */
   var AUDITED = ["clients", "cases", "case_tasks", "case_notes", "appointments", "settings", "profiles",
     "introducers", "duplicate_dismissals", "watch_alerts", "case_documents",
-    "staff_absences", "case_files"];
+    "staff_absences", "case_files", "vault_entries"];
   var AUDIT_HIDDEN = "(hidden)";
   var AUDIT_TABLE_WORD = {
     clients: "client", cases: "case", case_tasks: "task", case_notes: "note",
     appointments: "appointment", settings: "setting", profiles: "login", introducers: "introducer",
     duplicate_dismissals: "not-a-duplicate mark", watch_alerts: "watchtower alert",
-    case_documents: "document", staff_absences: "absence", case_files: "file"
+    case_documents: "document", staff_absences: "absence", case_files: "file",
+    vault_entries: "vault entry"
   };
   function rowLabel(table, row) {
     if (!row) return "";
@@ -845,6 +922,9 @@
       return (absP ? (absP.full_name || absP.email) : row.profile_id) + " — " + row.starts_on + " to " + row.ends_on;
     }
     if (table === "case_files") return row.name || row.id;
+    // R14 — "<name> (<owner>)" when an owner is set, else just the name; matches
+    // how the vault list itself disambiguates the three "Test Bank A" rows.
+    if (table === "vault_entries") return row.name + (row.owner_label ? " (" + row.owner_label + ")" : "");
     // G1N-5 — the alert's own title, so the summary reads "<who> updated watch_alerts
     // "James Whitfield — ERC outlasts the rate"" rather than a row id.
     if (table === "watch_alerts") return row.title || row.dedupe_key || row.id;
@@ -856,7 +936,30 @@
     }
     return row.id;
   }
+  /* R14 — mirrors production's audit_vault_row() trigger: every field entry
+     flagged secret:true has its VALUE replaced with "(hidden)"; the label and
+     the secret flag itself (and every non-secret field, untouched) stay in
+     the clear, because "what fields exist" is not the secret — the values
+     behind the secret ones are. */
+  function maskVaultFieldsArray(arr) {
+    return (Array.isArray(arr) ? arr : []).map(function (f) {
+      if (f && f.secret) return { label: f.label, value: AUDIT_HIDDEN, secret: true };
+      return f;
+    });
+  }
   function maskChanges(table, row, changes) {
+    if (table === "vault_entries") {
+      var vout = {};
+      Object.keys(changes || {}).forEach(function (f) {
+        var v = changes[f];
+        if (f !== "fields") { vout[f] = v; return; }
+        var isDiffShape = v && typeof v === "object" && !Array.isArray(v) && ("old" in v || "new" in v);
+        vout[f] = isDiffShape
+          ? { old: maskVaultFieldsArray(v.old), new: maskVaultFieldsArray(v.new) }
+          : maskVaultFieldsArray(v);
+      });
+      return vout;
+    }
     if (table !== "settings") return changes;
     var key = (row && row.key) || "";
     if (SENSITIVE_SETTING_KEYS.indexOf(key) === -1) return changes;
@@ -969,14 +1072,15 @@
     fact_finds: "ff", leads: "ld", introducers: "in", profiles: "pr",
     watch_alerts: "wa", audit_log: "au", duplicate_dismissals: "dd",
     case_documents: "cd",
-    staff_absences: "sa", case_files: "cf"
+    staff_absences: "sa", case_files: "cf",
+    vault_entries: "ve"
   };
   function applyInsertDefaults(table, row) {
     var r = clone(row);
     var pk = pkOf(table);
     if (pk === "id" && !r.id) r.id = nid(PREFIX[table] || "row");
     if (!r.created_at && table !== "settings") r.created_at = iso(NOW);
-    if (table === "cases" || table === "clients") { if (!r.updated_at) r.updated_at = iso(NOW); }
+    if (table === "cases" || table === "clients" || table === "vault_entries") { if (!r.updated_at) r.updated_at = iso(NOW); }
     if (table === "cases") {
       if (!r.stage) r.stage = "enquiry";
       if (r.protection_status == null) r.protection_status = "not_discussed";
@@ -1046,6 +1150,18 @@
     }
     if (table === "fact_finds" && !r.status) r.status = "sent";
     if (table === "case_emails" && !r.triage_status) r.triage_status = "new";
+    /* R14 — vault_entries: category default 'other', fields default '[]'::jsonb,
+       visible_to default null (= visible to every staff role), sort_order
+       default 0. owner_label/note/updated_by are nullable with no default. */
+    if (table === "vault_entries") {
+      if (!r.category) r.category = "other";
+      if (r.fields === undefined || r.fields === null) r.fields = [];
+      if (r.visible_to === undefined) r.visible_to = null;
+      if (r.sort_order === undefined || r.sort_order === null) r.sort_order = 0;
+      if (r.owner_label === undefined) r.owner_label = null;
+      if (r.note === undefined) r.note = null;
+      if (r.updated_by === undefined) r.updated_by = null;
+    }
     return r;
   }
 
@@ -3197,6 +3313,111 @@
     if (app061) app061.submitted_at = null;
   })();
 
+  /* --- vault_entries (R14 — the company password safe) -------------------
+     EVERY value below is plainly, deliberately fake — no real lender login,
+     no real staff password, ever. sort_order is left at the column default
+     (0) for all twelve; nothing in this pass depends on a particular within-
+     category order. */
+  (function roundFourteenFixtures() {
+    var V = function (o) {
+      var row = {
+        id: nid("ve"), category: o.category, name: o.name,
+        owner_label: o.owner_label || null, fields: o.fields || [],
+        note: o.note || null, visible_to: o.visible_to || null,
+        sort_order: 0, updated_by: o.updated_by || null,
+        created_at: iso(shift(o.daysAgo == null ? -180 : -o.daysAgo)),
+        updated_at: iso(shift(o.updatedDaysAgo == null ? (o.daysAgo == null ? -180 : -o.daysAgo) : -o.updatedDaysAgo))
+      };
+      DB.vault_entries.push(row);
+      return row;
+    };
+    var F = function (label, value, secret) { return { label: label, value: value, secret: !!secret }; };
+
+    /* lender — "Test Bank A" held individually by all three advising/owner
+       personas, plus a Shared "Test Bank B" (note lives here, exercising the
+       note field). Each row mixes a non-secret Username with two secrets
+       (Password + a memorable word), so masking is exercised everywhere. */
+    V({
+      category: "lender", name: "Test Bank A", owner_label: "Daniel",
+      fields: [F("Username", "daniel.p", false), F("Password", "test-pass-1", true), F("Memorable word", "bluecar", true)],
+      updated_by: "p4", daysAgo: 210
+    });
+    V({
+      category: "lender", name: "Test Bank A", owner_label: "Luke",
+      fields: [F("Username", "luke.r", false), F("Password", "test-pass-2", true), F("Memorable word", "redkite", true)],
+      updated_by: "p3", daysAgo: 205
+    });
+    V({
+      category: "lender", name: "Test Bank A", owner_label: "Wayne",
+      fields: [F("Username", "wayne.k", false), F("Password", "test-pass-3", true), F("Memorable word", "greenfern", true)],
+      updated_by: "p2", daysAgo: 200
+    });
+    V({
+      category: "lender", name: "Test Bank B", owner_label: "Shared",
+      fields: [F("Username", "team.bankb", false), F("Password", "hunter2", true)],
+      note: "Shared desk login — do not change without telling the whole team first.",
+      updated_by: "p1", daysAgo: 190
+    });
+    /* a second Shared lender so the category has more than the one obvious
+       pair, and so a search on "Test Bank" without "A"/"B" has three+ hits */
+    V({
+      category: "lender", name: "Test Building Society", owner_label: "Wayne",
+      fields: [F("Username", "wayne.k2", false), F("Password", "test-pass-8", true)],
+      updated_by: "p2", daysAgo: 150
+    });
+
+    /* protection — agency number (non-secret) + passcode (secret) */
+    V({
+      category: "protection", name: "Test Protect", owner_label: "Luke",
+      fields: [F("Agency number", "AG-10293", false), F("Passcode", "test-pass-4", true)],
+      updated_by: "p3", daysAgo: 170
+    });
+
+    /* gi (general insurance) — Shared */
+    V({
+      category: "gi", name: "Test GI", owner_label: "Shared",
+      fields: [F("Username", "nexmoney-gi", false), F("Password", "test-pass-5", true)],
+      updated_by: "p1", daysAgo: 160
+    });
+
+    /* admin — an ordinary Shared row everyone sees, PLUS a gated one
+       (visible_to = ['owner']) so the RLS visibility gate has something to
+       test: only the owner role sees it, not admin, not adviser. */
+    V({
+      category: "admin", name: "Test Admin System", owner_label: "Shared",
+      fields: [F("Username", "admin@nexmoney.test", false), F("Password", "test-pass-6", true)],
+      updated_by: "p1", daysAgo: 140
+    });
+    V({
+      category: "admin", name: "Test Admin Restricted", owner_label: "Shared",
+      fields: [F("Username", "root@nexmoney.test", false), F("Password", "test-pass-7", true)],
+      visible_to: ["owner"], updated_by: "p4", daysAgo: 130
+    });
+    V({
+      category: "admin", name: "Test Backup Email", owner_label: "Daniel",
+      fields: [F("Email", "backup@example.com", false), F("Recovery code", "test-pass-9", true)],
+      updated_by: "p4", daysAgo: 100
+    });
+
+    /* contact — both fields non-secret on purpose (a BDM's direct line is
+       not a credential) */
+    V({
+      category: "contact", name: "Test BDM", owner_label: "Shared",
+      fields: [F("Direct number", "01202 900199", false), F("Email", "bdm@example.com", false)],
+      updated_by: "p1", daysAgo: 120
+    });
+
+    /* other — a blank secret value: something the team knows it needs to
+       fill in but has not yet, exercising the "nothing behind the mask yet"
+       state. Also carries a note. */
+    V({
+      category: "other", name: "Test Office WiFi", owner_label: "Shared",
+      fields: [F("Network", "NexMoney-Guest", false), F("Password", "", true)],
+      note: "Router reset — password not set yet, ask Daniel.",
+      updated_by: "p2", daysAgo: 30
+    });
+  })();
+
   /* --- case_events: give the live cases a stage history ------------------ */
   var STAGE_ORDER = ["enquiry", "fact_find", "decision_in_principle", "application", "offer", "exchange", "completed"];
   DB.cases.forEach(function (c) {
@@ -3240,6 +3461,11 @@
     DB.case_notes.slice(0, 20).forEach(function (n) { auditRow("case_notes", "insert", n, clone(n), n.created_at, n.created_by); });
     DB.appointments.slice(0, 10).forEach(function (ap) { auditRow("appointments", "insert", ap, clone(ap), ap.created_at, ap.staff_id); });
     DB.introducers.forEach(function (i2) { auditRow("introducers", "insert", i2, clone(i2), i2.created_at, "p4"); });
+    /* R14 — every vault entry gets its creation audited too, exactly like
+       every other AUDITED table above; this also exercises maskChanges()'s
+       secret-field masking at fixture-load time, not just from a live test
+       write. */
+    DB.vault_entries.forEach(function (v) { auditRow("vault_entries", "insert", v, clone(v), v.created_at, v.updated_by || "p1"); });
     /* Owner-only rows: settings + profiles (withheld from everyone else on SELECT) */
     ["company_name", "monthly_fee_target", "google_review_link"].forEach(function (key, i) {
       var row = DB.settings.filter(function (s) { return s.key === key; })[0];
@@ -3739,12 +3965,12 @@
         var before = clone(existing);
         var diff = {};
         Object.keys(raw).forEach(function (k) {
-          if (String(before[k]) === String(raw[k])) return;
+          if (sameValue(before[k], raw[k])) return;
           diff[k] = { old: before[k] === undefined ? null : before[k], new: raw[k] };
           existing[k] = raw[k];
         });
         if (Object.keys(diff).length) {
-          if (table === "cases" || table === "clients") existing.updated_at = iso(new Date());
+          if (table === "cases" || table === "clients" || table === "vault_entries") existing.updated_at = iso(new Date());
           auditRow(table, "update", existing, diff);
           if (table === "cases") caseEventsForUpdate(before, existing);
           if (table === "fact_finds" && before.status !== "submitted" && existing.status === "submitted") {
@@ -3786,11 +4012,11 @@
       Object.keys(patch).forEach(function (k) {
         var a = before[k] === undefined ? null : before[k];
         var b = patch[k];
-        if (String(a) === String(b)) return;
+        if (sameValue(a, b)) return;
         diff[k] = { old: a, new: b };
         row[k] = b;
       });
-      if (table === "cases" || table === "clients") row.updated_at = iso(new Date());
+      if (table === "cases" || table === "clients" || table === "vault_entries") row.updated_at = iso(new Date());
       if (Object.keys(diff).length) {
         auditRow(table, "update", row, diff);
         if (table === "cases") caseEventsForUpdate(before, row);

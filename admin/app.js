@@ -3882,7 +3882,7 @@ $("#forgot-btn").addEventListener("click", async () => {
    the PWA service worker. All history.* calls are wrapped — if the History API is unavailable or
    blocked (some file:// contexts), modal history is simply not tracked and the app still works.
    Segments/filters stay OUT of the hash (session/localStorage already persists those). */
-const PAGE_HASH = { dashboard: "today", pipeline: "pipeline", protection: "protection", diary: "diary", clients: "clients", import: "import", reports: "reports", money: "money", data: "data", emails: "emails", settings: "settings" };
+const PAGE_HASH = { dashboard: "today", pipeline: "pipeline", protection: "protection", diary: "diary", clients: "clients", import: "import", reports: "reports", money: "money", data: "data", emails: "emails", vault: "vault", settings: "settings" };
 /* R7-4 — pages only some roles may open. Monday money is entirely firm-wide money, so it is
    Owner-only: the nav button is revealed by showApp and nav() below redirects anyone else who
    reaches for it (a bookmarked #money, a hand-typed hash, an old link in an email). Same standing
@@ -4230,7 +4230,7 @@ function nav(page, push = true) {
   // B9 (R5-31) — the diary page can be showing either the month grid or the Day view; route to
   // whichever loader matches the persisted toggle so navigating back into #diary doesn't silently
   // flip it back to Month.
-  ({ dashboard: loadDashboard, pipeline: loadPipeline, protection: loadProtectionPage, diary: () => (diaryViewMode === "day" ? loadDiaryDay() : loadDiary()), clients: () => loadClients($("#client-search").value, { force: true }), import: () => renderRevLastSync(), reports: loadReports, money: loadMoneyPage, data: loadDataHealth, emails: loadEmails, settings: renderSettings }[page])();
+  ({ dashboard: loadDashboard, pipeline: loadPipeline, protection: loadProtectionPage, diary: () => (diaryViewMode === "day" ? loadDiaryDay() : loadDiary()), clients: () => loadClients($("#client-search").value, { force: true }), import: () => renderRevLastSync(), reports: loadReports, money: loadMoneyPage, data: loadDataHealth, emails: loadEmails, vault: loadVault, settings: renderSettings }[page])();
 }
 
 /* ---------- Settings ---------- */
@@ -9331,6 +9331,54 @@ function wireCasePropertyPicker(preloadedSiblings, selfCaseId) {
     loadFor(clientSel.value);
   } else paint();
 }
+/* R14 — the "read this out to the lender" strip at the top of the case modal. A lender doing a
+   security check on the phone asks the same handful of questions every time — name, date of birth,
+   the property, the loan, the current rate — and until now an adviser answered them by scrolling the
+   Case-details form. This is those answers in one always-visible block, each with a one-click Copy.
+   Every value is a REAL column; the only derived figure is LTV (loan ÷ value), and an absent value
+   shows "—", never a guess. There is NO mortgage/account-number column on a case, so that question
+   has no row here rather than a permanent blank that could never be filled. */
+function secRow(label, value, opts) {
+  opts = opts || {};
+  const has = value != null && value !== "" && value !== "—";
+  const copyBtn = has && !opts.noCopy
+    ? ` <button type="button" class="btn btn-sm sec-copy" data-nexcopy="${esc(String(value))}" data-copylabel="${esc(label)}" title="Copy ${esc(label)}" aria-label="Copy ${esc(label)}">⧉</button>`
+    : "";
+  const shown = opts.rawHtml != null ? opts.rawHtml : (has ? esc(String(value)) : '<span class="sec-empty">—</span>');
+  return `<div class="sec-item"><span class="sec-lbl">${esc(label)}</span><span class="sec-val">${shown}${copyBtn}</span></div>`;
+}
+function securityCardHtml(c, caseClient, secClient) {
+  const fn = (secClient && [secClient.first_name, secClient.last_name].filter(Boolean).join(" "))
+    || (caseClient && [caseClient.first_name, caseClient.last_name].filter(Boolean).join(" ")) || "";
+  const dob = secClient && secClient.date_of_birth ? secClient.date_of_birth : null;
+  // The "add DOB" affordance mirrors the Missing-DOB client segment's link: openClient(id,'dob')
+  // focuses the date-of-birth field on the client record. Only offered when we know the client id.
+  const dobRow = dob
+    ? secRow("Date of birth", fmtD(dob))
+    : secRow("Date of birth", null, { noCopy: true, rawHtml: `<span class="sec-empty">—</span>${c.client_id ? ` <a href="#" class="sec-dob-add" onclick="event.preventDefault();openClient('${jsArg(c.client_id)}','dob')" title="Add this client's date of birth">(add DOB)</a>` : ""}` });
+  const propAddr = c.property_address || null;
+  const homeAddr = secClient && secClient.address ? secClient.address : null;
+  const loan = c.loan_amount != null && c.loan_amount !== "" ? fmtM(c.loan_amount) : null;
+  const rate = c.rate_percent != null && c.rate_percent !== ""
+    ? c.rate_percent + "%" + (c.rate_type ? " " + c.rate_type : "") : null;
+  // LTV only where BOTH figures are real and positive — a zero value would divide to nonsense.
+  const ltv = (Number(c.loan_amount) > 0 && Number(c.property_value) > 0)
+    ? (Math.round((Number(c.loan_amount) / Number(c.property_value)) * 1000) / 10) + "%" : null;
+  return `<div class="sec-card" id="case-sec-card">
+    <div class="sec-head">🔐 Client — security check <span class="sec-sub">what a lender asks on the phone · one-click copy · always visible</span></div>
+    <div class="sec-grid">
+      ${secRow("Name", fn || null)}
+      ${dobRow}
+      ${secRow("Property", propAddr)}
+      ${secRow("Home address", homeAddr)}
+      ${secRow("Loan amount", loan)}
+      ${secRow("Lender", c.lender || null)}
+      ${secRow("Product", c.product_name || null)}
+      ${secRow("Rate", rate)}
+      ${secRow("LTV", ltv)}
+    </div>
+  </div>`;
+}
 /* opts: { revealProtection } opens the details drawer on a red-highlighted protection select
    (the protection gate's fix path, R5-34); { openDetails } just opens the drawer (offer apply). */
 window.openCase = async function (id, opts = {}) {
@@ -9389,6 +9437,14 @@ window.openCase = async function (id, opts = {}) {
      42703 an un-migrated database; this is one extra row-scoped read, feature-detected, empty when
      the columns are not there. */
   const caseCare = id && c.client_id ? (await loadClientCare([c.client_id]))[c.client_id] : null;
+  /* R14 — the client's DOB and home address for the security-check card at the top of this modal.
+     caseClient (from the whole-book select above) carries only name/email/phone, so this is one
+     extra row-scoped read for just this case's client. date_of_birth is R8 and address predates it,
+     so both columns exist — but softRows swallows any failure and the card simply shows "—" rather
+     than blocking the case opening. Not fetched at all for a brand-new (unsaved) case. */
+  const secClient = id && c.client_id
+    ? (await softRows(db.from("clients").select("id,first_name,last_name,date_of_birth,address").eq("id", c.client_id).limit(1)))[0] || null
+    : null;
   /* R6 — the client's OTHER cases, for two jobs: (1) the header only spends a
      "no address" chip where differentiation actually matters, i.e. the client
      has more than one case; (2) the new-case property picker offers the
@@ -9613,6 +9669,7 @@ window.openCase = async function (id, opts = {}) {
 
   $("#modal").innerHTML = `
     <h3>${id ? "Case" : "New case"}</h3>
+    ${id ? securityCardHtml(c, caseClient, secClient) : ""}
     ${summaryHeader}
     ${c.retention_source_case_id ? `<p class="panel-sub" style="margin-top:-8px;">🔁 Retention opportunity — linked to a completed case. <span class="t" style="cursor:pointer;text-decoration:underline;" onclick="openCase('${c.retention_source_case_id}')">View original case</span></p>` : ""}
     ${c.nps_score != null ? `<p class="panel-sub" style="margin-top:-8px;">Client review score: <strong style="color:${c.nps_score >= 9 ? "var(--green)" : c.nps_score >= 7 ? "var(--amber)" : "var(--red)"};">${c.nps_score}/10</strong></p>` : ""}
@@ -22232,5 +22289,366 @@ window.__rev = {
 };
 /* Drawn when the Import page is opened (see nav()), not at load: this is a
    database read and there is no session yet when this file is evaluated. */
+
+/* ============================================================
+   R14 — THE VAULT (company password safe) + shared copy/reveal
+   ============================================================
+   Two Daniel features share the clipboard plumbing below: this page and the
+   case modal's security-check card. Everything is client-side over rows the
+   page already holds — no value ever reaches a URL or localStorage, and secret
+   values live only in the DOM (a data-val attribute the Reveal/Copy read), the
+   same place they must be for Reveal to work at all. The masked-audit of secret
+   VALUES happens server-side in the vault_entries trigger; nothing here needs to
+   (or can) touch that. */
+
+/* Clipboard, robustly: the async API where it exists, a hidden-textarea
+   execCommand fallback where it doesn't (older Safari, insecure contexts). Both
+   paths toast honestly; a failure says "copy it by hand" rather than lying that
+   it worked. */
+function fallbackCopy(text, done) {
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed"; ta.style.top = "-1000px"; ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand("copy");
+    document.body.removeChild(ta);
+    done();
+  } catch (e) { toast("Couldn't copy — select the value and copy it by hand."); }
+}
+window.nexCopy = function (text, label) {
+  const t = text == null ? "" : String(text);
+  if (!t) { toast("Nothing to copy."); return; }
+  const done = () => toast((label ? label + " " : "") + "copied");
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(t).then(done, () => fallbackCopy(t, done));
+    else fallbackCopy(t, done);
+  } catch (e) { fallbackCopy(t, done); }
+};
+/* One delegated handler for every copy/reveal affordance the two features paint,
+   so cards re-rendered on each search keystroke never need re-wiring:
+   · .vf-copy / .vf-reveal — a vault field (reads/toggles the sibling .vf-value's
+     data-val; getAttribute decodes the HTML-escaped value back to the real one);
+   · [data-nexcopy] — the security-card rows and the "Copy password" shortcut,
+     which carry their value inline. Scoped by closest(): a click anywhere else in
+     the app matches nothing and falls straight through. */
+document.addEventListener("click", (e) => {
+  const cp = e.target.closest(".vf-copy");
+  if (cp) {
+    e.preventDefault();
+    const field = cp.closest(".vault-field");
+    const valEl = field && field.querySelector(".vf-value");
+    const lbl = field && field.querySelector(".vf-label");
+    nexCopy(valEl ? valEl.getAttribute("data-val") : "", lbl ? lbl.textContent : "");
+    return;
+  }
+  const rev = e.target.closest(".vf-reveal");
+  if (rev) {
+    e.preventDefault();
+    const field = rev.closest(".vault-field");
+    const valEl = field && field.querySelector(".vf-value");
+    if (!valEl) return;
+    const shown = valEl.getAttribute("data-shown") === "1";
+    valEl.setAttribute("data-shown", shown ? "0" : "1");
+    valEl.textContent = shown ? "••••••••" : (valEl.getAttribute("data-val") || "");
+    rev.textContent = shown ? "👁" : "🙈";
+    rev.title = shown ? "Show" : "Hide";
+    return;
+  }
+  const nx = e.target.closest("[data-nexcopy]");
+  if (nx) { e.preventDefault(); nexCopy(nx.getAttribute("data-nexcopy"), nx.getAttribute("data-copylabel") || ""); }
+});
+
+// Friendly headings, in display order. The chip row and the grouping both read this.
+const VAULT_CATS = [
+  ["lender", "Lenders"],
+  ["protection", "Protection"],
+  ["gi", "GI"],
+  ["admin", "Admin & systems"],
+  ["contact", "Contacts"],
+  ["other", "Other"],
+];
+const VAULT_CAT_LABEL = Object.fromEntries(VAULT_CATS.map(([k, l]) => [k, l]));
+const VAULT_CAT_INDEX = Object.fromEntries(VAULT_CATS.map(([k], i) => [k, i]));
+// owner_label is a fixed short set; colour-coded, with Shared deliberately its own hue.
+const VAULT_OWNERS = [
+  { v: "", l: "— none —" },
+  { v: "Daniel", l: "Daniel" },
+  { v: "Luke", l: "Luke" },
+  { v: "Wayne", l: "Wayne" },
+  { v: "Shared", l: "Shared" },
+];
+const VAULT_OWNER_CLASS = { Daniel: "vault-owner-daniel", Luke: "vault-owner-luke", Wayne: "vault-owner-wayne", Shared: "vault-owner-shared" };
+let VAULT_ROWS = [];
+let vaultCategory = "all";
+let vaultSearch = "";
+let vaultLoaded = false;
+
+function vaultMatch(r, q) {
+  if (!q) return true;
+  const hay = [r.name, r.owner_label, r.note]
+    .concat(Array.isArray(r.fields) ? r.fields.reduce((a, f) => a.concat([f && f.label, f && f.value]), []) : [])
+    .filter(Boolean).join(" ").toLowerCase();
+  return hay.indexOf(q) >= 0;
+}
+async function loadVault() {
+  const list = $("#vault-list");
+  if (!list) return;
+  if (!vaultLoaded) list.innerHTML = '<div class="empty">Loading the vault…</div>';
+  let res;
+  try { res = await db.from("vault_entries").select("*"); }
+  catch (e) { res = { error: (e && { message: String(e.message || e) }) || { message: "unknown" } }; }
+  if (res && res.error) {
+    /* A database without the vault table (the harness mock, until it mirrors production) answers
+       42P01. That is "not set up here yet", not a fault to shout about on a page every staff member
+       can open — so it renders a calm empty state and, crucially, no console error for the smoke
+       battery to trip on. A genuine failure (network, RLS) still shows the retry affordance. */
+    if (isMissingTableError(res.error)) {
+      VAULT_ROWS = []; vaultLoaded = true;
+      const seg = $("#vault-segment"); if (seg) seg.innerHTML = "";
+      list.innerHTML = `<div class="board-empty"><strong>The password vault isn't set up in this database yet.</strong>Once the <code>vault_entries</code> table is live, company logins and passwords appear here for all staff.</div>`;
+      return;
+    }
+    renderLoadError("#vault-list", res.error, loadVault);
+    return;
+  }
+  VAULT_ROWS = (res && res.data) || [];
+  vaultLoaded = true;
+  renderVault();
+}
+function renderVaultSegments() {
+  const wrap = $("#vault-segment");
+  if (!wrap) return;
+  const q = (vaultSearch || "").trim().toLowerCase();
+  const searched = VAULT_ROWS.filter((r) => vaultMatch(r, q));
+  const count = (k) => k === "all" ? searched.length : searched.filter((r) => (r.category || "other") === k).length;
+  const chips = [["all", "All"]].concat(VAULT_CATS);
+  wrap.innerHTML = chips.map(([k, l]) =>
+    `<button class="seg-btn${vaultCategory === k ? " active" : ""}" role="tab" aria-selected="${vaultCategory === k}" data-seg="${esc(k)}">${esc(l)} <span class="seg-count">${count(k)}</span></button>`
+  ).join("");
+  wrap.querySelectorAll(".seg-btn").forEach((b) => (b.onclick = () => {
+    if (b.dataset.seg === vaultCategory) return;
+    vaultCategory = b.dataset.seg;
+    renderVault();
+  }));
+}
+function vaultOwnerChip(label) {
+  if (!label) return "";
+  const cls = VAULT_OWNER_CLASS[label] || "vault-owner-other";
+  return `<span class="vault-owner ${cls}">${esc(label)}</span>`;
+}
+function vaultVisChip(r) {
+  const vt = Array.isArray(r.visible_to) ? r.visible_to.filter(Boolean) : [];
+  if (vt.length) {
+    const roles = vt.map((x) => String(x).charAt(0).toUpperCase() + String(x).slice(1)).join(", ");
+    return `<span class="vault-vis vault-vis-restricted" title="Restricted: only these roles can see this entry — ${esc(roles)}. Set under ‘Who can see this’.">🔒 Restricted · ${esc(roles)}</span>`;
+  }
+  return `<span class="vault-vis vault-vis-all" title="All staff can see this entry (the default).">Everyone</span>`;
+}
+function vaultFieldHtml(f) {
+  if (!f || (f.label == null && f.value == null)) return "";
+  const label = f.label || "";
+  const val = f.value == null ? "" : String(f.value);
+  const secret = !!f.secret;
+  const has = val !== "";
+  const display = !has ? "—" : (secret ? "••••••••" : val);
+  const reveal = `<button type="button" class="btn btn-sm vf-reveal" title="Show" aria-label="Show ${esc(label)}">👁</button>`;
+  const copy = `<button type="button" class="btn btn-sm vf-copy" title="Copy ${esc(label)}" aria-label="Copy ${esc(label)}">⧉</button>`;
+  const btns = !has ? "" : (secret ? reveal + copy : copy);
+  return `<div class="vault-field${secret ? " is-secret" : ""}">
+    <span class="vf-label">${esc(label)}</span>
+    <span class="vf-value" data-val="${esc(val)}" data-shown="0">${esc(display)}</span>
+    ${btns}
+  </div>`;
+}
+function vaultCardHtml(r) {
+  const fields = Array.isArray(r.fields) ? r.fields : [];
+  // "Copy password" shortcut: the first SECRET field whose label reads like a password.
+  const pw = fields.find((f) => f && f.secret && /pass|pwd/i.test(String(f.label || "")));
+  const pwCopy = pw && pw.value != null && String(pw.value) !== ""
+    ? `<button type="button" class="btn btn-sm vault-pw-copy" data-nexcopy="${esc(String(pw.value))}" data-copylabel="Password" title="Copy the password">🔑 Copy password</button>` : "";
+  return `<div class="vault-card" data-id="${esc(r.id)}">
+    <div class="vault-card-head">
+      <div class="vault-card-title">
+        <span class="vault-name">${esc(r.name || "(no name)")}</span>
+        ${vaultOwnerChip(r.owner_label)}
+        ${vaultVisChip(r)}
+      </div>
+      <div class="vault-card-actions">
+        ${pwCopy}
+        <button type="button" class="btn btn-sm vault-edit" data-id="${esc(r.id)}">Edit</button>
+        ${isAdminOrOwner() ? `<button type="button" class="btn btn-sm btn-danger vault-del" data-id="${esc(r.id)}">Delete</button>` : ""}
+      </div>
+    </div>
+    <div class="vault-fields">${fields.map(vaultFieldHtml).join("") || '<span class="empty">No fields recorded.</span>'}</div>
+    ${r.note ? `<div class="vault-note">${esc(r.note)}</div>` : ""}
+  </div>`;
+}
+function renderVault() {
+  const list = $("#vault-list");
+  if (!list) return;
+  renderVaultSegments();
+  const q = (vaultSearch || "").trim().toLowerCase();
+  let rows = VAULT_ROWS.filter((r) => vaultMatch(r, q));
+  if (vaultCategory !== "all") rows = rows.filter((r) => (r.category || "other") === vaultCategory);
+  rows.sort((a, b) => {
+    const ca = VAULT_CAT_INDEX[a.category] == null ? 99 : VAULT_CAT_INDEX[a.category];
+    const cb = VAULT_CAT_INDEX[b.category] == null ? 99 : VAULT_CAT_INDEX[b.category];
+    if (ca !== cb) return ca - cb;
+    const sa = a.sort_order == null ? 0 : a.sort_order, sb = b.sort_order == null ? 0 : b.sort_order;
+    if (sa !== sb) return sa - sb;
+    return String(a.name || "").localeCompare(String(b.name || ""));
+  });
+  if (!rows.length) {
+    list.innerHTML = VAULT_ROWS.length
+      ? `<div class="empty">No entries match your search.</div>`
+      : `<div class="board-empty"><strong>The vault is empty.</strong>Add the first company login with the “+ New entry” button above.</div>`;
+    return;
+  }
+  const byCat = {};
+  rows.forEach((r) => { const k = r.category || "other"; (byCat[k] = byCat[k] || []).push(r); });
+  const groups = [];
+  VAULT_CATS.forEach(([k, l]) => { if (byCat[k]) groups.push([k, l, byCat[k]]); });
+  Object.keys(byCat).forEach((k) => { if (VAULT_CAT_INDEX[k] == null) groups.push([k, VAULT_CAT_LABEL[k] || k, byCat[k]]); });
+  list.innerHTML = groups.map(([k, l, items]) =>
+    `<div class="vault-group"><h3 class="vault-group-head">${esc(l)} <span class="seg-count">${items.length}</span></h3>${items.map(vaultCardHtml).join("")}</div>`
+  ).join("");
+}
+function vaultEditorFieldRowHtml(f) {
+  f = f || { label: "", value: "", secret: false };
+  return `<div class="ve-field-row">
+    <input class="ve-f-label" placeholder="Label (e.g. Username)" value="${esc(f.label || "")}" aria-label="Field label">
+    <input class="ve-f-value" placeholder="Value" value="${esc(f.value == null ? "" : f.value)}" aria-label="Field value">
+    <label class="ve-f-secret" title="Hide this value behind a Reveal toggle on the card"><input type="checkbox" ${f.secret ? "checked" : ""}> secret</label>
+    <button type="button" class="btn btn-sm ve-f-up" title="Move up" aria-label="Move field up">↑</button>
+    <button type="button" class="btn btn-sm ve-f-down" title="Move down" aria-label="Move field down">↓</button>
+    <button type="button" class="btn btn-sm ve-f-del" title="Remove this field" aria-label="Remove field">✕</button>
+  </div>`;
+}
+/* The editor — add (entry=null) or edit. An overlay rather than the record modal: it is fully
+   self-contained (no history deep-link, no dirty-guard fields to register) and openOverlay already
+   handles Escape / backdrop / focus / browser-Back. */
+function openVaultEditor(entry) {
+  const isNew = !entry;
+  const e = entry || { name: "", category: (vaultCategory !== "all" ? vaultCategory : "lender"), owner_label: "", fields: [{ label: "", value: "", secret: false }], note: "", visible_to: null };
+  const fields = Array.isArray(e.fields) && e.fields.length ? e.fields : [{ label: "", value: "", secret: false }];
+  const canGate = isAdminOrOwner();   // mirrors is_admin_or_owner(): advisers never see the gate control
+  const vt = Array.isArray(e.visible_to) ? e.visible_to : [];
+  const html = `<div class="vault-editor">
+    <h3>${isNew ? "New vault entry" : "Edit vault entry"}</h3>
+    <label class="ve-full">Name<input id="ve-name" value="${esc(e.name || "")}" placeholder="e.g. Halifax Intermediaries portal"></label>
+    <div class="ve-row2">
+      <label>Category<select id="ve-cat">${VAULT_CATS.map(([k, l]) => `<option value="${k}" ${k === (e.category || "lender") ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label>
+      <label>Owner<select id="ve-owner">${VAULT_OWNERS.map((o) => `<option value="${esc(o.v)}" ${o.v === (e.owner_label || "") ? "selected" : ""}>${esc(o.l)}</option>`).join("")}</select></label>
+    </div>
+    <div class="ve-fields-head">Fields <span class="panel-sub">label, value, and whether it's a secret (hidden until revealed)</span></div>
+    <div id="ve-fields">${fields.map(vaultEditorFieldRowHtml).join("")}</div>
+    <button type="button" class="btn btn-sm" id="ve-add-field">+ Add field</button>
+    <label class="ve-full" style="margin-top:12px;">Note<textarea id="ve-note" rows="2" placeholder="Anything else worth recording">${esc(e.note || "")}</textarea></label>
+    ${canGate ? `<div class="ve-gate">
+      <div class="ve-gate-head">Who can see this <span class="panel-sub">the future-gating switch. Leave all unticked and every staff member can see this entry (today's behaviour). Tick roles to restrict it to only those roles — the database enforces it.</span></div>
+      <label class="ve-gate-opt"><input type="checkbox" class="ve-vt" value="owner" ${vt.indexOf("owner") >= 0 ? "checked" : ""}> Owner</label>
+      <label class="ve-gate-opt"><input type="checkbox" class="ve-vt" value="admin" ${vt.indexOf("admin") >= 0 ? "checked" : ""}> Admin</label>
+      <label class="ve-gate-opt"><input type="checkbox" class="ve-vt" value="adviser" ${vt.indexOf("adviser") >= 0 ? "checked" : ""}> Adviser</label>
+    </div>` : ""}
+    <div class="ve-actions">
+      <button type="button" class="btn" id="ve-cancel">Cancel</button>
+      <button type="button" class="btn btn-primary" id="ve-save">${isNew ? "Add entry" : "Save"}</button>
+    </div>
+  </div>`;
+  openOverlay(html, (finish, box) => {
+    const fieldsWrap = box.querySelector("#ve-fields");
+    box.querySelector("#ve-add-field").onclick = () => {
+      fieldsWrap.insertAdjacentHTML("beforeend", vaultEditorFieldRowHtml());
+      const rows = fieldsWrap.querySelectorAll(".ve-field-row");
+      const last = rows[rows.length - 1];
+      if (last) last.querySelector(".ve-f-label").focus();
+    };
+    // add / remove / reorder, delegated so new rows need no wiring
+    fieldsWrap.addEventListener("click", (ev) => {
+      const row = ev.target.closest(".ve-field-row");
+      if (!row) return;
+      if (ev.target.closest(".ve-f-del")) {
+        row.remove();
+        if (!fieldsWrap.querySelector(".ve-field-row")) fieldsWrap.insertAdjacentHTML("beforeend", vaultEditorFieldRowHtml());
+      } else if (ev.target.closest(".ve-f-up")) {
+        const p = row.previousElementSibling; if (p) fieldsWrap.insertBefore(row, p);
+      } else if (ev.target.closest(".ve-f-down")) {
+        const n = row.nextElementSibling; if (n) fieldsWrap.insertBefore(n, row);
+      }
+    });
+    box.querySelector("#ve-cancel").onclick = () => finish(null);
+    box.querySelector("#ve-save").onclick = async () => {
+      const nameEl = box.querySelector("#ve-name");
+      const name = nameEl.value.trim();
+      if (!name) { nameEl.focus(); toast("Give the entry a name."); return; }
+      const fieldRows = [...fieldsWrap.querySelectorAll(".ve-field-row")].map((row) => ({
+        label: row.querySelector(".ve-f-label").value.trim(),
+        value: row.querySelector(".ve-f-value").value,
+        secret: row.querySelector(".ve-f-secret input").checked,
+      })).filter((f) => f.label !== "" || f.value !== "");
+      let visible_to = null;
+      if (canGate) {
+        const vts = [...box.querySelectorAll(".ve-vt:checked")].map((c) => c.value);
+        visible_to = vts.length ? vts : null;
+      } else if (!isNew && Array.isArray(entry.visible_to)) {
+        visible_to = entry.visible_to;   // adviser can't see the control — never silently widen it
+      }
+      const payload = {
+        name,
+        category: box.querySelector("#ve-cat").value,
+        owner_label: box.querySelector("#ve-owner").value || null,
+        fields: fieldRows,
+        note: box.querySelector("#ve-note").value.trim() || null,
+        visible_to,
+      };
+      if (ME && ME.id) payload.updated_by = ME.id;
+      const saveBtn = box.querySelector("#ve-save");
+      saveBtn.disabled = true; saveBtn.textContent = "Saving…";
+      try {
+        const res = isNew
+          ? await db.from("vault_entries").insert([payload]).select()
+          : await db.from("vault_entries").update(payload).eq("id", entry.id).select();
+        if (res && res.error) { saveBtn.disabled = false; saveBtn.textContent = isNew ? "Add entry" : "Save"; toast("Couldn't save: " + res.error.message); return; }
+        finish(true);
+        toast(isNew ? "Entry added." : "Entry saved.");
+        loadVault();
+      } catch (err) {
+        saveBtn.disabled = false; saveBtn.textContent = isNew ? "Add entry" : "Save";
+        toast("Couldn't save: " + ((err && err.message) || String(err)));
+      }
+    };
+  });
+}
+async function deleteVaultEntry(id) {
+  const row = VAULT_ROWS.find((r) => String(r.id) === String(id));
+  // Delete is Owner/Admin only and RLS enforces it; advisers are never shown the button, and this
+  // is the belt to that braces in case one is reached another way.
+  if (!isAdminOrOwner()) return toast("Only an Owner or Administrator can delete a vault entry.");
+  if (!confirm(`Delete the vault entry “${(row && row.name) || "this entry"}”? This can't be undone.`)) return;
+  try {
+    const res = await db.from("vault_entries").delete().eq("id", id);
+    if (res && res.error) return toast("Couldn't delete: " + res.error.message);
+    toast("Entry deleted.");
+    loadVault();
+  } catch (e) { toast("Couldn't delete: " + ((e && e.message) || String(e))); }
+}
+// Page-level wiring (the containers exist in the shell markup from load; the list is delegated so
+// re-renders never orphan a handler).
+(function wireVaultPage() {
+  const nb = $("#new-vault-btn");
+  if (nb) nb.onclick = () => openVaultEditor(null);
+  const search = $("#vault-search");
+  if (search) search.addEventListener("input", () => { vaultSearch = search.value; if (vaultLoaded) renderVault(); });
+  const list = $("#vault-list");
+  if (list) list.addEventListener("click", (ev) => {
+    const edit = ev.target.closest(".vault-edit");
+    if (edit) { const r = VAULT_ROWS.find((x) => String(x.id) === String(edit.dataset.id)); if (r) openVaultEditor(r); return; }
+    const del = ev.target.closest(".vault-del");
+    if (del) { deleteVaultEntry(del.dataset.id); return; }
+  });
+})();
 
 init();

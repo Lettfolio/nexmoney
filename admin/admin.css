@@ -3145,3 +3145,83 @@ tr.owed-hot > td { background: var(--red-bg); }
 .cf-actions input[type="file"] { width: auto; max-width: 260px; font-size: 12px; border: 0; padding: 0; }
 .cf-row .cf-kind { font-weight: 600; }
 #cf-limits { margin: 6px 0 0; }
+
+/* ============================================================
+   R14 — Vault page + case security-check card
+   ============================================================ */
+/* ---- Security-check card (top of the case modal) ---- */
+.sec-card {
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  background: linear-gradient(180deg, #f7fafd, #fff);
+  padding: 12px 14px; margin: 10px 0 4px;
+}
+.sec-head { font-size: 13px; font-weight: 700; color: var(--dark); display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.sec-sub { font-size: 11.5px; font-weight: 400; color: var(--muted); }
+.sec-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px 18px; margin-top: 8px; }
+.sec-item { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.sec-lbl { font-size: 11px; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); flex: 0 0 92px; }
+.sec-val { font-size: 13.5px; color: var(--dark); font-weight: 600; min-width: 0; overflow-wrap: anywhere; display: flex; align-items: center; gap: 6px; }
+.sec-empty { color: var(--muted); font-weight: 400; }
+.sec-dob-add { font-size: 12px; font-weight: 600; }
+.sec-copy, .vf-copy, .vf-reveal { padding: 2px 7px; line-height: 1.2; }
+.sec-copy { opacity: .8; }
+.sec-copy:hover { opacity: 1; }
+
+/* ---- Vault page ---- */
+#vault-intro { max-width: 720px; }
+.vault-group { margin-bottom: 22px; }
+.vault-group-head { font-size: 14px; color: var(--dark); display: flex; align-items: center; gap: 8px; margin: 0 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+.vault-card {
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--white); box-shadow: var(--shadow-card);
+  padding: 12px 14px; margin-bottom: 10px;
+}
+.vault-card-head { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; align-items: flex-start; }
+.vault-card-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.vault-name { font-weight: 700; color: var(--dark); font-size: 14px; overflow-wrap: anywhere; }
+.vault-card-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.vault-owner { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; letter-spacing: .01em; }
+.vault-owner-daniel { background: var(--blue-bg); color: var(--navy); }
+.vault-owner-luke   { background: var(--green-bg); color: var(--green); }
+.vault-owner-wayne  { background: #f3ecfc; color: #6b21a8; }
+.vault-owner-shared { background: var(--amber-bg); color: var(--amber); border: 1px dashed currentColor; }
+.vault-owner-other  { background: #eef1f5; color: #556275; }
+.vault-vis { font-size: 10.5px; font-weight: 600; padding: 2px 7px; border-radius: 999px; }
+.vault-vis-all { background: #eef1f5; color: #59677a; }
+.vault-vis-restricted { background: var(--amber-bg); color: var(--amber); }
+.vault-fields { margin-top: 10px; display: grid; gap: 4px; }
+.vault-field { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-bottom: 1px dashed var(--border); }
+.vault-field:last-child { border-bottom: none; }
+.vf-label { flex: 0 0 150px; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.vf-value { flex: 1 1 auto; font-size: 13.5px; color: var(--dark); font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; overflow-wrap: anywhere; min-width: 0; }
+.vault-field.is-secret .vf-value[data-shown="0"] { letter-spacing: 2px; }
+.vault-note { margin-top: 8px; font-size: 12.5px; color: var(--text); background: #f8fafc; border-radius: 6px; padding: 7px 9px; overflow-wrap: anywhere; }
+@media (max-width: 560px) {
+  .vf-label { flex-basis: 100%; }
+  .vault-field { flex-wrap: wrap; }
+  .sec-lbl { flex-basis: 78px; }
+}
+
+/* ---- Vault editor (overlay) ---- */
+.vault-editor h3 { margin: 0 0 12px; }
+.vault-editor .ve-full { display: block; }
+.vault-editor label { display: block; font-size: 12px; font-weight: 600; color: var(--text); margin-bottom: 10px; }
+.vault-editor .ve-full input, .vault-editor textarea, .vault-editor select { width: 100%; margin-top: 4px; }
+.ve-row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
+.ve-fields-head { font-size: 12px; font-weight: 700; color: var(--dark); margin: 4px 0 8px; }
+.ve-fields-head .panel-sub { display: block; font-weight: 400; margin: 2px 0 0; }
+.ve-field-row { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
+.ve-field-row .ve-f-label { flex: 1 1 130px; min-width: 0; margin: 0; }
+.ve-field-row .ve-f-value { flex: 2 1 180px; min-width: 0; margin: 0; }
+.ve-field-row .ve-f-secret { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 500; margin: 0; white-space: nowrap; }
+.ve-field-row .ve-f-secret input { width: auto; margin: 0; }
+.ve-gate { margin-top: 12px; padding: 10px 12px; border: 1px dashed var(--border-strong); border-radius: 8px; background: #f8fafc; }
+.ve-gate-head { font-size: 12px; font-weight: 700; color: var(--dark); }
+.ve-gate-head .panel-sub { display: block; font-weight: 400; margin: 2px 0 8px; }
+.ve-gate-opt { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; font-weight: 500; margin: 0 14px 0 0; }
+.ve-gate-opt input { width: auto; margin: 0; }
+.ve-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+@media (max-width: 560px) {
+  .ve-row2 { grid-template-columns: 1fr; }
+  .ve-field-row { flex-wrap: wrap; }
+}

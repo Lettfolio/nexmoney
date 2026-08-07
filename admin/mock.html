@@ -58,6 +58,9 @@
       <button data-page="money" id="nav-money" class="hidden"><span class="si">💷</span>Monday money</button>
       <button data-page="data"><span class="si">🩺</span>Data health</button>
       <button data-page="emails"><span class="si">✉️</span>Emails</button>
+      <!-- R14 — the password vault. Every staff role sees it (the DB's SELECT policy is all-staff by
+           default), so unlike Monday money it is NOT hidden in the markup — it just renders. -->
+      <button data-page="vault"><span class="si">🔑</span>Vault</button>
       <button data-page="settings"><span class="si">⚙️</span>Settings</button>
     </nav>
     <!-- R6-B4 — "Ask AI" was a position:fixed pill in the bottom-right corner of the
@@ -721,6 +724,11 @@
         <p class="panel-sub">One file containing every row this back office holds — clients, cases, tasks, notes, documents, appointments, leads, the email and SMS queues, fact-finds, introducers, settings, logins, alerts, absences and the audit log. It is a <strong>backup you control</strong>: keep it somewhere safe outside this system, so the firm's record of itself does not depend on this application or its hosting continuing to exist.</p>
         <p class="panel-sub"><strong class="export-warn">It is not encrypted.</strong> It is a plain JSON file with your clients' names, contact details, dates of birth and financial figures in it. Treat the file exactly as you would treat the database: somewhere access-controlled, not a shared drive and not an email attachment.</p>
         <p class="panel-sub">This is a copy, not a migration: nothing here restores it, and no other system reads this format. It is what you would hand a developer, an auditor or a successor firm.</p>
+        <!-- R14 — the password vault is DELIBERATELY excluded from this file. The export is unencrypted
+             JSON the owner keeps outside the system; dumping every company login and password into it
+             is exactly the file you would least want to leak. Vault entries are not in EXPORT_TABLES,
+             and this line says so out loud so nobody assumes the backup covers them. -->
+        <p class="panel-sub"><strong>The password vault is not in this file.</strong> Company logins and passwords are deliberately excluded — an unencrypted backup is the last place they belong. Manage them on the Vault page instead.</p>
         <button type="button" class="btn btn-primary" id="firm-export-btn">Export the firm's data</button>
         <span id="firm-export-last" class="panel-sub" style="margin-left:10px;"></span>
         <div id="firm-export-result"></div>
@@ -803,6 +811,21 @@
         <div id="ch-list" class="ch-list"></div>
         <div class="ch-pager" id="ch-pager"></div>
       </div>
+    </section>
+
+    <!-- Vault (R14) — the company password safe. All staff can see every entry; a single entry can be
+         restricted with "Who can see this" (visible_to), which the DB's SELECT policy enforces. The
+         search box, the category chips and the list are all painted by loadVault()/renderVault(); the
+         editor is an overlay (openVaultEditor). Nothing here is ever written to a URL or localStorage. -->
+    <section id="page-vault" class="page hidden">
+      <div class="page-head">
+        <h2>Vault</h2>
+        <button class="btn btn-primary" id="new-vault-btn">+ New entry</button>
+      </div>
+      <p class="panel-sub" id="vault-intro">Company password safe — all staff can see every entry. Individual entries can be restricted using “Who can see this”. Passwords are hidden until you reveal them, and are never included in the firm data export.</p>
+      <input type="search" id="vault-search" class="search" placeholder="Search the vault — name, owner, username, anything…">
+      <div id="vault-segment" class="pipe-segment" role="tablist" aria-label="Vault category"></div>
+      <div id="vault-list"></div>
     </section>
   </main>
 </div>
