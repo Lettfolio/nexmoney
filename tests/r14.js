@@ -659,7 +659,43 @@ const fmtMGT = (n) => (n == null || n === "" ? "—" : Number(n).toLocaleString(
       await page.evaluate((id) => window.openCase(id), found.withDob.caseId);
       await wait(page, 700);
       ok("J1 · the security card renders", !!(await page.$("#case-sec-card")));
+
+      // J1b — R14b: the card is COLLAPSED BY DEFAULT on every open.
       const expectedName = [found.withDob.client.first_name, found.withDob.client.last_name].filter(Boolean).join(" ");
+      const collapsedState = await page.evaluate(() => {
+        const card = document.querySelector("#case-sec-card");
+        const grid = document.querySelector("#sec-grid");
+        const toggle = document.querySelector("#sec-toggle");
+        const who = document.querySelector("#case-sec-card .sec-who");
+        return {
+          hasCollapsedClass: card.classList.contains("sec-collapsed"),
+          gridVisible: grid.offsetParent !== null && getComputedStyle(grid).display !== "none",
+          ariaExpanded: toggle.getAttribute("aria-expanded"),
+          who: who ? who.textContent.trim() : null,
+        };
+      });
+      ok("J1b · the card is collapsed by default (.sec-collapsed present)", collapsedState.hasCollapsedClass);
+      ok("J1b · #sec-grid is hidden while collapsed", !collapsedState.gridVisible);
+      eq("J1b · the collapsed header's aria-expanded reads false", collapsedState.ariaExpanded, "false");
+      eq("J1b · the collapsed header names the client in .sec-who", collapsedState.who, expectedName);
+
+      // J1c — clicking the toggle expands it.
+      await page.click("#sec-toggle");
+      await wait(page, 200);
+      const expandedState = await page.evaluate(() => {
+        const card = document.querySelector("#case-sec-card");
+        const grid = document.querySelector("#sec-grid");
+        const toggle = document.querySelector("#sec-toggle");
+        return {
+          hasCollapsedClass: card.classList.contains("sec-collapsed"),
+          gridVisible: grid.offsetParent !== null && getComputedStyle(grid).display !== "none",
+          ariaExpanded: toggle.getAttribute("aria-expanded"),
+        };
+      });
+      ok("J1c · clicking #sec-toggle removes .sec-collapsed", !expandedState.hasCollapsedClass);
+      ok("J1c · #sec-grid is visible once expanded", expandedState.gridVisible);
+      eq("J1c · aria-expanded now reads true", expandedState.ariaExpanded, "true");
+
       const rowsGot = await page.$$eval("#case-sec-card .sec-item", (els) => els.map((e) => ({
         label: e.querySelector(".sec-lbl").textContent.trim(),
         val: (() => { const v = e.querySelector(".sec-val").cloneNode(true); const b = v.querySelector(".sec-copy"); if (b) b.remove(); return v.textContent.trim(); })(),
@@ -685,6 +721,14 @@ const fmtMGT = (n) => (n == null || n === "" ? "—" : Number(n).toLocaleString(
       const expectedHome = found.withDob.client.address || "—";
       eq("J6 · Home address matches the client record (or the em dash)", homeRow && homeRow.val, expectedHome);
 
+      // J6b — R14b: cases.mortgage_account_number. Recomputed from the SAME
+      // live fixture read (found.withDob.kase), never hardcoded.
+      const mortRow = rowsGot.find((r) => r.label === "Mortgage / account no.");
+      const expectedMort = found.withDob.kase.mortgage_account_number || "—";
+      ok("J6b · fixture sanity — this case carries a real mortgage/account number", !!found.withDob.kase.mortgage_account_number, JSON.stringify(found.withDob.kase.mortgage_account_number));
+      eq("J6b · 'Mortgage / account no.' shows the fixture value", mortRow && mortRow.val, expectedMort);
+      ok("J6b · it carries a matching copy control", mortRow && mortRow.hasCopy && mortRow.copyTarget === expectedMort);
+
       // Every row that has a real value carries a copy control; the empty
       // ones (em dash) do not.
       let allGood = true;
@@ -694,12 +738,23 @@ const fmtMGT = (n) => (n == null || n === "" ? "—" : Number(n).toLocaleString(
       // --- the DOB-absent case ---
       await page.evaluate((id) => window.openCase(id), found.withoutDob.caseId);
       await wait(page, 700);
+      // Collapsed again on this fresh open — expand before reading its rows.
+      ok("J7b · the re-opened modal is collapsed again too", await page.$eval("#case-sec-card", (e) => e.classList.contains("sec-collapsed")));
+      await page.click("#sec-toggle");
+      await wait(page, 200);
       const rows2 = await page.$$eval("#case-sec-card .sec-item", (els) => els.map((e) => ({
         label: e.querySelector(".sec-lbl").textContent.trim(),
         val: (() => { const v = e.querySelector(".sec-val").cloneNode(true); const b = v.querySelector(".sec-copy"); if (b) b.remove(); return v.textContent.trim(); })(),
         hasCopy: !!e.querySelector(".sec-copy"),
         hasAddDob: !!e.querySelector(".sec-dob-add"),
       })));
+      // J7c — the DOB-absent case's mortgage/account row: whatever the
+      // fixture actually holds (usually null → "—"), recomputed, not assumed.
+      const mortRow2 = rows2.find((r) => r.label === "Mortgage / account no.");
+      const expectedMort2 = (found.withoutDob.kase.mortgage_account_number || "—");
+      eq("J7c · the second case's mortgage/account row matches its own fixture value", mortRow2 && mortRow2.val, expectedMort2);
+      eq("J7c · its copy control is present only when there's a real value", !!(mortRow2 && mortRow2.hasCopy), expectedMort2 !== "—");
+
       const dobRow2 = rows2.find((r) => r.label === "Date of birth");
       ok("J8 · the missing-DOB row shows the em dash", dobRow2 && dobRow2.val.indexOf("—") === 0, JSON.stringify(dobRow2));
       ok('J8 · the missing-DOB row offers the "(add DOB)" affordance', dobRow2 && dobRow2.hasAddDob);
