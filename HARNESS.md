@@ -92,8 +92,8 @@ Current green counts (end of round 14):
 | `tests/r12a.js` | 114 |
 | `tests/r12b.js` | 158 |
 | `tests/r13.js` | 142 |
-| `tests/r14.js` | 154 |
-| **Total** | **2,338** |
+| `tests/r14.js` | 167 |
+| **Total** | **2,351** |
 
 R14 notes: `vault_entries` (company password safe) added — RLS staff read (gated by
 visible_to text[]: null/empty = all staff), staff insert/update, OWNER/ADMIN delete
@@ -104,8 +104,11 @@ from Passwords MASTER.xlsx (not in the mock, not in the repo). vault_entries is
 EXCLUDED from EXPORT_TABLES (the firm export) on purpose — never add it. The case
 modal gained a "Client — security check" strip (securityCardHtml) at the top: name,
 DOB, home address, property, loan, lender, product, rate, LTV — real columns only,
-always-visible, each copyable; NOTE there is no mortgage/account-number column on
-cases (a candidate for a later round). Mock `sameValue()` fix: array/object-valued
+each copyable. R14 follow-up: the card now starts COLLAPSED by default
+(`#case-sec-card.sec-collapsed`, `#sec-toggle` expands, `.sec-who` shows the name
+while collapsed, `#sec-grid` holds the expanded grid) and gained a
+`cases.mortgage_account_number` row (nullable text, editable via `#case-mortgage-acct`,
+mirrored in the mock). Mock `sameValue()` fix: array/object-valued
 columns now diff by JSON.stringify, not String() — needed so vault `fields` edits
 actually write + audit.
 
