@@ -255,7 +255,16 @@ const groundTruth = (page) => page.evaluate(async ({ CHASE_MAX }) => {
   console.log(`  conveyancer: ${G.conv.map((c) => `${c.firm} ${c.avg}d (n=${c.n})`).join(" · ")}`);
 
   console.log("\n=== R9-5 · FIXTURE SHAPE (the four chase states exist) ===");
-  ok("fixture · four cases carry a checklist", G.checklistCases === 4, `got ${G.checklistCases}`);
+  /* R12b — this used to be a hard `=== 4`. What it actually protects (per the
+     file banner above: "the derived chase status line in all four fixture
+     states") is that the four NAMED chase-state fixtures below — Ellingham
+     (started, 0 chases), Quirke (mid-chase), Amery (chases maxed out), Osei
+     (fully documented) — all exist with a checklist attached; it was never a
+     ceiling on how many checklist-bearing cases the book may hold. Loosened
+     to >= 4 so a later stage's fixture (e.g. a DIP-stage checklist case) can
+     be added without this line going stale; the four named states are still
+     verified individually by the eq() checks right below.  */
+  ok("fixture · at least the four named chase-state cases carry a checklist", G.checklistCases >= 4, `got ${G.checklistCases}`);
   ok("fixture · the legacy majority has no checklist at all", G.noChecklistCases >= 60, `got ${G.noChecklistCases}`);
   eq("fixture · Ellingham — 4 items, 2 in, 2 outstanding, 0 chases",
     [G.perCase[G.ids.ellingham].items, G.perCase[G.ids.ellingham].received, G.perCase[G.ids.ellingham].outstanding, G.perCase[G.ids.ellingham].chases],
@@ -566,8 +575,12 @@ const groundTruth = (page) => page.evaluate(async ({ CHASE_MAX }) => {
   ok("copy states the 3-day cadence", new RegExp(`every ${G.docChaseDays} days`).test(chaseCopy), chaseCopy);
   ok("copy states that only MISSING items are listed", /only the items still missing/i.test(chaseCopy), chaseCopy);
   ok("copy states the max of 3 and what replaces the fourth email", /3 chases it stops emailing/i.test(chaseCopy) && /call task/i.test(chaseCopy), chaseCopy);
-  ok("copy states which cases are chased and that a case with no checklist is skipped",
-    /Fact Find or Application/.test(chaseCopy) && /skipped/.test(chaseCopy), chaseCopy);
+  // R12b · W-24 — the chase widened from "Fact Find or Application" to every live stage
+  // (Enquiry through Exchange); the copy now says so explicitly, and names the old two-stage rule
+  // as what it was widened FROM, so this assertion reads the actual new sentence rather than a
+  // guess at its wording.
+  ok("copy states which cases are chased (every live stage, widened from Fact Find/Application) and that a case with no checklist is skipped",
+    /live stage.{0,20}covered/i.test(chaseCopy) && /Enquiry through Exchange/.test(chaseCopy) && /widened from Fact Find and Application only/.test(chaseCopy) && /skipped/.test(chaseCopy), chaseCopy);
   ok("copy states the dependency — nothing sends without email sending configured",
     /Requires email sending to be set up/i.test(chaseCopy) && /Resend/.test(chaseCopy), chaseCopy);
   const docsListCopy = await txt(owner, "#setting-note-docs_list");

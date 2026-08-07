@@ -260,26 +260,37 @@ const openDrawer = async (page, panelId) => {
     /* ===================================================================
        4 · R5-28 — no dead-end Chase fee
        =================================================================== */
-    console.log("\n— R5-28 · the fee-chase gate (p2 adviser, p4 owner)");
+    console.log("\n— R5-28 / R12b·W-19 · the fee-chase gate (p2 adviser, p4 owner)");
     {
       const page = await newPage(browser, "p2");
-      const state = await page.evaluate(() => {
+      /* R12b · W-19 — with bank details missing, a fee_chase row is now WITHHELD ENTIRELY from an
+         adviser (not shown-but-disabled, as R5-28 originally had it): "a row with nothing an
+         adviser can do to it is not a row". Ground truth is the RAW get_briefing RPC output,
+         scoped "mine" server-side exactly as the app's own default scope is — read directly, before
+         the app's own client-side W-19 filter runs — so the check proves the row is genuinely being
+         withheld, not merely absent for lack of data. */
+      const state = await page.evaluate(async () => {
+        // R5-35's rule (below, in this same file): "mine" means owner === me, strictly — the RPC's
+        // own p_scope:"mine" is laxer (it also hands back ownerless rows, the way lead_new alone is
+        // meant to survive app.js's own post-filter), so p_scope:"all" is read here and then the
+        // exact same narrowing app.js applies is redone independently.
+        const { data: raw } = await window.__mockDb.rpc("get_briefing", { p_scope: "all" });
+        const rawFeeChase = (raw || []).filter((r) => r.kind === "fee_chase" && r.owner === "p2");
         const rows = [...document.querySelectorAll("#briefing-list .brief-row")].filter((r) => /\bFEE\b/.test(r.innerText));
         return {
+          rawFeeChaseCount: rawFeeChase.length,
           feeRows: rows.length,
           chaseButtons: rows.filter((r) => /Chase fee/.test(r.innerText)).length,
           badges: rows.filter((r) => /fee requests blocked — no bank details/.test(r.innerText)).length,
-          ownerLink: rows.filter((r) => /Open Settings/.test(r.innerText)).length,
-          tip: (rows[0] && rows[0].querySelector(".badge.grey") || {}).title || "",
         };
       });
-      ok("fixture · the adviser has fee-chase rows to act on", state.feeRows > 0, JSON.stringify(state));
-      eq("R5-28 · zero dead-end Chase fee buttons", state.chaseButtons, 0);
-      eq("R5-28 · one explanatory badge per row", state.badges, state.feeRows);
-      eq("R5-28 · an adviser is not sent to Settings they cannot edit", state.ownerLink, 0);
-      ok("R5-28 · the badge says why", /bank details/i.test(state.tip), state.tip);
+      ok("fixture · the RPC itself still has fee-chase rows for this adviser's book (proves W-19 is withholding, not lacking data)", state.rawFeeChaseCount > 0, JSON.stringify(state));
+      eq("R12b · W-19 an adviser with missing bank details sees NO fee-chase rows at all — not shown-and-disabled", state.feeRows, 0);
+      eq("R12b · W-19 …so there are no dead-end Chase fee buttons either", state.chaseButtons, 0);
+      eq("R12b · W-19 …and no blocked-badge rows either — the row itself is gone, not just its button", state.badges, 0);
 
-      /* with the details set, the buttons come back (same page, so the fixture DB survives) */
+      /* with the details set, the rows (and their Chase fee buttons) return — this half is R5-28's
+         original behaviour and is unchanged by W-19 (same page, so the fixture DB survives). */
       await page.evaluate(() => {
         window.__mock.db.settings.forEach((s) => {
           if (s.key === "bank_account_name") s.value = "NexMoney Ltd";
@@ -292,10 +303,17 @@ const openDrawer = async (page, panelId) => {
       await page.click('#topnav button[data-page="dashboard"]');
       await page.waitForTimeout(SETTLE + 500);
       const restored = await page.evaluate(() => {
-        const rows = [...document.querySelectorAll("#briefing-list .brief-row")].filter((r) => /\bFEE\b/.test(r.innerText));
-        return { chase: rows.filter((r) => /Chase fee/.test(r.innerText)).length, badges: rows.filter((r) => /blocked/.test(r.innerText)).length };
+        const allRows = [...document.querySelectorAll("#briefing-list .brief-row")];
+        const rows = allRows.filter((r) => /\bFEE\b/.test(r.innerText));
+        // groupBriefRows folds a case's other items behind "+N more: <kind> · <kind>" when a
+        // higher-priority item (e.g. an overdue task) on the SAME case wins the row — so a
+        // fee_chase item can be present but not carry its own top-level FEE badge. Count those
+        // collapsed mentions too ("+1 more: fee") so the total is checked against the RPC count.
+        const collapsedFeeMentions = allRows.filter((r) => !/\bFEE\b/.test(r.innerText) && /\bmore:.*\bfee\b/i.test(r.innerText)).length;
+        return { feeRows: rows.length, collapsedFeeMentions, chase: rows.filter((r) => /Chase fee/.test(r.innerText)).length, badges: rows.filter((r) => /blocked/.test(r.innerText)).length };
       });
-      ok("R5-28 · with bank details set the Chase fee buttons return", restored.chase > 0 && restored.badges === 0, JSON.stringify(restored));
+      eq("R5-28 · with bank details set, every fee-chase row from the RPC is accounted for (own row or folded into a +N more)", restored.feeRows + restored.collapsedFeeMentions, state.rawFeeChaseCount);
+      ok("R5-28 · with bank details set the Chase fee buttons return, and no badges remain", restored.chase > 0 && restored.chase === restored.feeRows && restored.badges === 0, JSON.stringify(restored));
       ok("no console errors", !page.__err, JSON.stringify(page.__err));
       await page.close();
 

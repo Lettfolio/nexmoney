@@ -80,10 +80,15 @@ const notesFor = (page, id) => page.evaluate(async (cid) => {
   const { data } = await window.__mockDb.from("case_notes").select("body,created_at").eq("case_id", cid);
   return (data || []).map((n) => n.body);
 }, id);
-const dstr = (offsetDays) => {
-  const d = new Date(Date.now() + offsetDays * 86400000);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-};
+// R12b flake fix (R5-12) — this used to format with the Node PROCESS's own local timezone
+// (getFullYear/getMonth/getDate), while the app's own "today" for this exact field
+// (admin/app.js's `const today = localDateStr()`, just above the fee-date <input max=...>) is
+// pinned to Europe/London. The two only disagreed for the hour 23:00–00:00 UTC (00:00–01:00
+// London during BST) when the test happened to run in that window — a process-local UTC read
+// says "still today", Europe/London says "already tomorrow". Root-caused, not tolerance-widened:
+// dstr() now uses the identical Intl.DateTimeFormat("en-CA", {timeZone:"Europe/London"}) call
+// localDateStr() does, so this test and the app can never read different clocks again.
+const dstr = (offsetDays) => new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/London" }).format(new Date(Date.now() + offsetDays * 86400000));
 // The case form lives inside a collapsed <details> drawer — open it before driving its fields.
 const openDetails = (page) => page.evaluate(() => { const d = document.querySelector(".case-details"); if (d) d.open = true; });
 const PDF = { name: "offer.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4\n% mock offer\n%%EOF\n") };

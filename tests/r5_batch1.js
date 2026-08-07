@@ -116,7 +116,11 @@ async function main() {
       eq("R5-13 · exactly one follow-up task was created", chase.length, 1);
       if (chase.length) {
         const t = chase[0];
-        const want = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+        // R12b flake fix — app.js's own `chaseDue = localDateStr(Date.now() + 7*86400000)` is
+        // Europe/London-pinned; a bare `.toISOString().slice(0,10)` is UTC, and the two only
+        // disagreed for the hour 23:00–00:00 UTC (already tomorrow in London during BST). Root-
+        // caused to read the identical clock, not widened into a tolerance.
+        const want = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/London" }).format(new Date(Date.now() + 7 * 86400000));
         ok("R5-13 · the task is due in 7 days", t.due_date === want, `due_date=${t.due_date}, expected ${want}`);
         ok("R5-13 · the task is assigned to the case adviser (p2)", t.assigned_to === "p2", `assigned_to=${t.assigned_to}`);
         ok("R5-13 · the task names the client", /Louise/.test(t.title), t.title);
@@ -263,8 +267,38 @@ async function main() {
     console.log("\n— R5-5/R5-21 · lead routing and the My Day row (p1 Kim)");
     {
       const page = await newPage(browser, "p1");
+
+      /* R12b · W-9 — Kim is an Administrator, and W-9's rule is that role is NEVER a routing
+         candidate: the default is the lightest-loaded ADVISING member of staff (adviser always a
+         candidate; owner/staff only while they carry an open case), recomputed independently here
+         from the same fixture tables the app reads (cases' open stage + case_tasks' 14-day undone
+         horizon), never by calling the app's own leastLoadedAdviser(). "(me)" is a label on KIM'S
+         OWN option in the list (wherever it sits) — it is never what gets PRE-SELECTED for her,
+         because she never advises. */
+      const leastLoadedGroundTruth = () => page.evaluate(async () => {
+        const db = window.__mockDb;
+        const STAFF_ROLES = ["owner", "admin", "adviser", "staff"];
+        const { data: profiles } = await db.from("profiles").select("id,full_name,role").order("full_name");
+        const { data: cases } = await db.from("cases").select("assigned_to,stage");
+        const { data: tasks } = await db.from("case_tasks").select("assigned_to,due_date,done_at");
+        const team = (profiles || []).filter((p) => STAFF_ROLES.includes(p.role));
+        const openCases = {};
+        (cases || []).forEach((c) => { if (c.assigned_to && c.stage !== "completed" && c.stage !== "not_proceeding") openCases[c.assigned_to] = (openCases[c.assigned_to] || 0) + 1; });
+        const horizon = localDateStr(Date.now() + 14 * 86400000);   // pure formatting helper — see r12a.js precedent
+        const openTasks = {};
+        (tasks || []).forEach((t) => { if (t.assigned_to && !t.done_at && t.due_date && t.due_date <= horizon) openTasks[t.assigned_to] = (openTasks[t.assigned_to] || 0) + 1; });
+        const isAdvising = (p) => p.role === "adviser" || (["owner", "staff"].includes(p.role) && (openCases[p.id] || 0) > 0);
+        const pool = team.filter(isAdvising);
+        let best = null;
+        pool.forEach((p) => { const tot = (openCases[p.id] || 0) + (openTasks[p.id] || 0); if (!best || tot < best.tot) best = { id: p.id, tot }; });
+        return { rr: best && best.id, poolIds: pool.map((p) => p.id) };
+      });
+
+      const gt0 = await leastLoadedGroundTruth();
       const initial = await page.evaluate(() => [...document.querySelectorAll("#leads-list select.lead-adviser")].map((s) => ({ lead: s.dataset.lead, val: s.value, text: s.options[s.selectedIndex].text })));
-      ok("R5-5 · every lead select defaults to me", initial.length >= 3 && initial.every((s) => /\(me\)/.test(s.text)), JSON.stringify(initial));
+      ok("R5-5 · every lead select defaults to the lightest-loaded ADVISING adviser, never Kim (admin)",
+        initial.length >= 3 && initial.every((s) => s.val === gt0.rr && s.val !== "p1" && /· lightest load/.test(s.text) && !/\(me\)/.test(s.text)),
+        JSON.stringify({ initial, gt0 }));
 
       const leadA = initial[1].lead;   // ld002 Owen Trelawney — routed to Wayne
       const leadB = initial[2].lead;   // ld003 Farida Bahri  — hand-changed to Luke
@@ -299,14 +333,18 @@ async function main() {
       eq("R5-5 · the accepted lead went to the adviser its own row named", post.acceptedCaseAdviser, "p2");
       ok("R5-5 · the accepted lead has left the inbox", post.leadGone === true, JSON.stringify(post.sels));
       eq("R5-5 · a hand-changed sibling row keeps its choice through the repaint", post.bVal, "p3");
-      ok("R5-5 · untouched sibling rows still say me (no cross-contamination)", post.otherVals.every((v) => v === "p1"), JSON.stringify(post.otherVals));
+      ok("R5-5 · untouched sibling rows still default to the lightest-loaded adviser (no cross-contamination)", post.otherVals.every((v) => v === gt0.rr), JSON.stringify({ otherVals: post.otherVals, rr: gt0.rr }));
       ok("R5-21 · the accepted lead's My Day row disappeared without navigating", post.briefStillHasA === false);
 
-      // …and nothing is remembered across a reload: every remaining lead is mine again.
+      // …and nothing is remembered across a reload: every remaining lead is back to a freshly
+      // recomputed suggestion (accepting leadA just gave p2 an extra open case, so the ground
+      // truth is recomputed here rather than reused from gt0 — R5-5's "recomputed, never
+      // remembered" rule, unchanged by W-9).
       await page.reload();
       await page.waitForTimeout(SETTLE);
+      const gt1 = await leastLoadedGroundTruth();
       const reloaded = await page.evaluate(() => [...document.querySelectorAll("#leads-list select.lead-adviser")].map((s) => s.value));
-      ok("R5-5 · after a reload every lead defaults to me again (no sticky store)", reloaded.length > 0 && reloaded.every((v) => v === "p1"), JSON.stringify(reloaded));
+      ok("R5-5 · after a reload every lead defaults to the (recomputed) lightest-loaded adviser again — no sticky store, and never Kim", reloaded.length > 0 && reloaded.every((v) => v === gt1.rr && v !== "p1"), JSON.stringify({ reloaded, gt1 }));
       ok("R5-5 · the old localStorage routing key is gone", await page.evaluate(() => Object.keys(localStorage).every((k) => k.indexOf("nx_lead_adviser") !== 0)));
       ok("no console errors", !page.__err, JSON.stringify(page.__err));
       await page.close();
