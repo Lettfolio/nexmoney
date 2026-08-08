@@ -18,6 +18,63 @@ try {
 // The origin(s) must be listed in Supabase Auth -> URL Configuration -> Redirect URLs.
 const ADMIN_URL = new URL("/admin/", window.location.origin).href;
 
+/* ==========================================================================
+   R21 Part A — global client-side error capture (the safety net BELOW
+   showFail()/renderLoadError()). Installed here, the earliest safe point after
+   `db` exists, so the two window listeners are registered before init() runs and
+   catch anything the per-view handlers and the bootstrap catch don't.
+
+   ERROR_LOG is an in-memory ring buffer (capped, session-only, NEVER persisted,
+   NEVER sent over the network). Each entry:
+     { t:<ISO>, kind:"error"|"promise"|"caught", msg, where, count, [stack],
+       [recordId], user:ME?.email, role:MY_ROLE, view:<hash/path> }
+   De-dupe: a repeat of the LAST entry's msg inside ERROR_DEDUPE_MS bumps its
+   `count` instead of pushing a new row (stops a render loop flooding the buffer)
+   and shows NO extra toast. Only a genuinely-new error raises ONE non-blocking
+   toast. logClientError() is itself fully try/caught — logging can never throw.
+   Privacy: we record message/stack/where only, never the Supabase key or vault
+   data, and the buffer is visible solely to owner/admin via the Diagnostics panel. */
+const ERROR_LOG = [];
+const ERROR_LOG_CAP = 100;
+const ERROR_DEDUPE_MS = 5000;
+function logClientError(kind, message, detail) {
+  try {
+    detail = detail || {};
+    let msg = String((message && message.message) || message || "").trim();
+    if (!msg) msg = "(no message)";
+    if (msg.length > 500) msg = msg.slice(0, 500);
+    const now = Date.now();
+    const last = ERROR_LOG[ERROR_LOG.length - 1];
+    if (last && last.msg === msg && (now - (last._ms || 0)) <= ERROR_DEDUPE_MS) {
+      last.count = (last.count || 1) + 1;   // de-dupe: bump count, no new row, no new toast
+      last._ms = now;
+      return;
+    }
+    const entry = { t: new Date().toISOString(), _ms: now, kind: kind || "error", msg, where: detail.where || "", count: 1 };
+    if (detail.recordId != null) entry.recordId = String(detail.recordId);
+    if (detail.stack) entry.stack = String(detail.stack).slice(0, 2000);
+    try { entry.user = ME ? ME.email : undefined; } catch (_) {}
+    try { entry.role = MY_ROLE; } catch (_) {}
+    try { entry.view = (location.hash || location.pathname || ""); } catch (_) {}
+    ERROR_LOG.push(entry);
+    while (ERROR_LOG.length > ERROR_LOG_CAP) ERROR_LOG.shift();
+    try { toast("Something went wrong — a diagnostic was logged."); } catch (_) {}
+  } catch (_) { /* logging must NEVER throw */ }
+}
+window.logClientError = logClientError;      // so caught-but-notable errors + tests can record one
+window.__errorLog = ERROR_LOG;               // stable reference; tests read .length (mutated in place)
+try {
+  window.addEventListener("error", (e) => {
+    logClientError("error", (e && (e.message || (e.error && e.error.message))) || "Uncaught error",
+      { where: e && e.filename ? (e.filename + ":" + (e.lineno || 0)) : "", stack: e && e.error && e.error.stack });
+  });
+  window.addEventListener("unhandledrejection", (e) => {
+    const r = e && e.reason;
+    logClientError("promise", (r && (r.message || r)) || "Unhandled promise rejection",
+      { where: "unhandledrejection", stack: r && r.stack });
+  });
+} catch (_) { /* addEventListener unavailable — nothing else we can safely do */ }
+
 const STAGES = [
   ["enquiry", "Enquiry"],
   ["fact_find", "Fact Find"],
@@ -7308,7 +7365,8 @@ async function loadPipeline() {
     if (ra < 2) return (B.inStage ?? -1) - (A.inStage ?? -1);
     return 0;
   }));
-  $("#board").innerHTML = stages.map(([k, label]) => {
+  let boardSkipped = 0;   // R21 Part B — skip-and-count: one malformed card must not white-screen the board
+  const boardHtml = stages.map(([k, label]) => {
     const colCards = boardExpandedStages.has(k) ? byStage[k] : byStage[k].slice(0, BOARD_COL_CAP);
     const hiddenCount = byStage[k].length - colCards.length;
     return `
@@ -7316,6 +7374,7 @@ async function loadPipeline() {
       <h4${k === "decision_in_principle" ? ` title="${TIP_DIP}"` : ""}>${label} <span>${byStage[k].length}</span></h4>
       ${byStage[k].length === 0 ? '<div class="col-empty">No cases here</div>' : ""}
       ${colCards.map((c) => {
+        try {
         const erc = c.erc_end_date && c.rate_end_date && c.erc_end_date > c.rate_end_date;
         const age = cardAge(c, stageEntry[c.id]);
         const nextStage = nextStageFor(c.stage, c.case_kind);
@@ -7370,10 +7429,18 @@ async function loadPipeline() {
             ${STAGES.map(([k, l]) => `<option value="${k}" ${k === c.stage ? "selected" : ""}${k === "decision_in_principle" ? ` title="${TIP_DIP}"` : ""}>${l}</option>`).join("")}
           </select>
         </div>`;
+        } catch (err) {
+          boardSkipped++;
+          logClientError("caught", "board card render failed: " + ((err && err.message) || err), { recordId: c && c.id, where: "loadPipeline" });
+          return "";
+        }
       }).join("")}
       ${hiddenCount > 0 ? `<button type="button" class="board-show-more" onclick="window.boardShowMore('${k}')">Show ${hiddenCount} more</button>` : ""}
     </div>`;
   }).join("");
+  $("#board").innerHTML = boardHtml + (boardSkipped > 0
+    ? `<div class="client-list-cap-note board-skip-note">${boardSkipped} record(s) couldn't be displayed — logged</div>`
+    : "");
   wireBoardDnD();
   updateBoardScrollHint();
 }
@@ -12168,7 +12235,9 @@ async function loadClients(filter = "", opts = {}) {
   const capNote = list.length > CLIENT_LIST_CAP
     ? `<div class="client-list-cap-note">Showing ${CLIENT_LIST_CAP} of ${list.length} — refine your search to narrow the list.</div>`
     : "";
-  $("#client-list").innerHTML = `<div class="panel">` + (list.length ? capped.map((c) => {
+  let clientSkipped = 0;   // R21 Part B — skip-and-count: one malformed row must not white-screen the list
+  const clientRowsHtml = (list.length ? capped.map((c) => {
+    try {
     const cases = c.cases || [];
     const active = cases.filter((x) => CLIENT_LIVE(x.stage)).length;
     const lc = last.get(c.id);
@@ -12189,7 +12258,16 @@ async function loadClients(filter = "", opts = {}) {
       </div>
       <span class="badge ${active ? "blue" : "grey"}">${cases.length} case${cases.length === 1 ? "" : "s"}${active ? ` (${active} active)` : ""}</span>
     </div>`;
-  }).join("") + capNote : `<div class="empty">${emptyMsg}</div>`) + `</div>`;
+    } catch (err) {
+      clientSkipped++;
+      logClientError("caught", "client-list row render failed: " + ((err && err.message) || err), { recordId: c && c.id, where: "loadClients" });
+      return "";
+    }
+  }).join("") : "");
+  const clientSkipNote = clientSkipped > 0
+    ? `<div class="client-list-cap-note">${clientSkipped} record(s) couldn't be displayed — logged</div>`
+    : "";
+  $("#client-list").innerHTML = `<div class="panel">` + (list.length ? clientRowsHtml + clientSkipNote + capNote : `<div class="empty">${emptyMsg}</div>`) + `</div>`;
 }
 /* R18-P2 — ONE delegated change handler for the client-row checkboxes, wired once, instead of a
    fresh onchange per row on every render (which was O(rows) DOM work per keystroke). Class
@@ -18067,7 +18145,9 @@ function renderPipelineMI(all, mv) {
   const vCreatedApp = [], vAppOffer = [], vOfferComp = [], vCreatedComp = [];
   const advMap = new Map(); // assigned_to || "__unassigned"
 
+  let miSkipped = 0;   // R21 Part B — one bad case must not abort the whole MI aggregation
   rows.forEach((c) => {
+    try {
     const live = MI_LIVE_STAGES.includes(c.stage);
     if (live) { funnel[c.stage]++; liveFeeByStage[c.stage] += fee(c); }
 
@@ -18098,10 +18178,15 @@ function renderPipelineMI(all, mv) {
     if (c.stage === "completed") { a.won++; if (c.created_at && hasComp) { const d = miDays(c.created_at, c.completed_at); if (d != null && d >= 0) a.cycles.push(d); } }
     else if (c.stage === "not_proceeding") a.lost++;
     if (hasComp && localMonthStr(c.completed_at) === mv) { a.completedPeriod++; a.feesPeriod += fee(c); }
+    } catch (err) {
+      miSkipped++;
+      logClientError("caught", "reports MI aggregation failed for a case: " + ((err && err.message) || err), { recordId: c && c.id, where: "renderPipelineMI" });
+    }
   });
 
   const label = monthLabel(mv);
   $("#report-mi-scope").textContent = "Owner management information, derived from the case book's milestone dates (created → submitted → offer issued → completed). Pre-launch the samples are small; every figure below states its own basis and sharpens as the book grows.";
+  if (miSkipped > 0) $("#report-mi-scope").insertAdjacentHTML("beforeend", ` <span class="client-list-cap-note">${miSkipped} record(s) couldn't be displayed — logged</span>`);
 
   // ---- Panel 1: funnel + conversion + win rate ----
   const liveTot = MI_LIVE_STAGES.reduce((s, st) => s + funnel[st], 0);
@@ -18347,6 +18432,99 @@ function miDrilldown(title, cases) {
   };
 }
 window.miDrilldown = miDrilldown;
+
+/* ==========================================================================
+   R21 Part C — OWNER/ADMIN diagnostics panel (#report-diag-section).
+   Gated exactly like renderPipelineMI's #report-mi-section (isAdminOrOwner() +
+   classList.toggle('hidden')). Renders a health summary + a newest-first table of
+   the in-memory ERROR_LOG, and wires the CSV / copy / clear buttons. Reuses miCsv
+   (as the MI CSV buttons do), toast, esc — no new libraries, no network send. */
+function diagTimeFmt(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return String(iso);
+  // local, human — date + HH:MM:SS
+  const p = (n) => String(n).padStart(2, "0");
+  return `${fmtD(iso)} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+function diagErrorTotal() {
+  return ERROR_LOG.reduce((s, e) => s + (e.count || 1), 0);
+}
+function renderDiagnostics(all) {
+  const sec = $("#report-diag-section");
+  if (!sec) return;
+  const show = isAdminOrOwner();
+  sec.classList.toggle("hidden", !show);
+  if (!show) return;
+  const recCount = (all || []).length;
+  const total = diagErrorTotal();
+
+  const health = $("#report-diag-health");
+  if (health) health.innerHTML =
+    `<span>Records loaded (last Reports read): <strong>${recCount}</strong></span> · ` +
+    `<span>User: <strong>${esc((ME && ME.email) || "—")}</strong> (${esc(MY_ROLE)})</span> · ` +
+    `<span>Origin: <strong>${esc(location.origin)}</strong></span> · ` +
+    `<span>Errors this session: <strong>${total}</strong></span>`;
+
+  const tbl = $("#diag-error-table");
+  if (tbl) {
+    if (!ERROR_LOG.length) {
+      tbl.innerHTML = `<div class="empty">No errors logged this session. ✅</div>`;
+    } else {
+      const rowsNewestFirst = ERROR_LOG.slice().reverse();
+      tbl.innerHTML = `<table class="imp-table"><tr><th>Time</th><th>Kind</th><th>Message</th><th title="Times this identical error repeated">×</th><th>Where</th></tr>` +
+        rowsNewestFirst.map((e) => `<tr>
+          <td style="white-space:nowrap;">${esc(diagTimeFmt(e.t))}</td>
+          <td>${esc(e.kind || "")}</td>
+          <td>${esc(e.msg || "")}</td>
+          <td>${e.count || 1}</td>
+          <td>${esc(e.where || "")}</td>
+        </tr>`).join("") + `</table>`;
+    }
+  }
+
+  const csvBtn = $("#report-diag-csv");
+  if (csvBtn) csvBtn.onclick = () => {
+    const rowsOut = ERROR_LOG.slice().reverse().map((e) =>
+      [e.t || "", e.kind || "", e.msg || "", e.count || 1, e.where || "", e.view || "", e.role || ""]);
+    miCsv(`nexmoney-diagnostics-${new Date().toISOString().slice(0, 10)}.csv`,
+      ["time", "kind", "message", "count", "where", "view", "role"], rowsOut);
+  };
+  const copyBtn = $("#report-diag-copy");
+  if (copyBtn) copyBtn.onclick = () => copyDiagnostics(recCount);
+  const clearBtn = $("#report-diag-clear");
+  if (clearBtn) clearBtn.onclick = () => { ERROR_LOG.length = 0; renderDiagnostics(all); toast("Diagnostics cleared for this session."); };
+}
+/* Plain-text dump (health summary + error rows) → clipboard, so an owner can paste it to
+   support. navigator.clipboard is wrapped: absent/denied → a toast, never an exception. */
+function copyDiagnostics(recCount) {
+  try {
+    const lines = [];
+    lines.push("NexMoney diagnostics — " + new Date().toISOString());
+    lines.push("User: " + ((ME && ME.email) || "—") + " (" + MY_ROLE + ")");
+    lines.push("Origin: " + location.origin);
+    lines.push("Records loaded (last Reports read): " + (recCount || 0));
+    lines.push("Errors this session: " + diagErrorTotal());
+    lines.push("");
+    if (!ERROR_LOG.length) {
+      lines.push("No errors logged this session.");
+    } else {
+      ERROR_LOG.slice().reverse().forEach((e) => {
+        lines.push([diagTimeFmt(e.t), e.kind, "x" + (e.count || 1), e.where || "-", String(e.msg || "").replace(/\s+/g, " ")].join(" | "));
+      });
+    }
+    const text = lines.join("\n");
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(
+        () => toast("Diagnostics copied to clipboard."),
+        () => toast("Couldn't copy — check clipboard permissions, or use ⭳ CSV."));
+    } else {
+      toast("Clipboard unavailable — use ⭳ CSV instead.");
+    }
+  } catch (_) {
+    toast("Couldn't copy diagnostics.");
+  }
+}
 
 /* Batch 6 feature-detection (M2). PostgREST answers a select naming a column that doesn't exist
    with 42703 for the WHOLE statement, so these columns are read in a separate, small query: on an
@@ -18682,6 +18860,9 @@ async function loadReports() {
   /* R19 — the OWNER/ADMIN Pipeline MI section, from the same `all` rows plus the two milestone
      dates in the select above. Gated inside (isAdminOrOwner); hidden for plain advisers. */
   renderPipelineMI(all, mv);
+  /* R21 Part C — OWNER/ADMIN diagnostics panel, from the same `all` count already in scope
+     plus the session ERROR_LOG. Gated inside (isAdminOrOwner); hidden for plain advisers. */
+  renderDiagnostics(all);
   renderForecastBuckets(all);
   // Client LTV is the one remaining RPC-only panel (needs client_id/name joins this page doesn't
   // otherwise fetch) — hide it gracefully if the RPC failed; everything else above still renders.
