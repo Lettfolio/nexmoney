@@ -89,6 +89,7 @@ async function showApp(session) {
 
   const { data: cases } = await db.from("cases")
     .select("id,stage,case_kind,created_at,completed_at,clients!client_id(first_name,last_name)")
+    .eq("introducer_id", profile.introducer_id) // R18-S1 — defence-in-depth: RLS already scopes this, make the intent explicit
     .order("created_at", { ascending: false });
   const all = cases || [];
   const row = (c) => `

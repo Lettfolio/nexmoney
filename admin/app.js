@@ -219,6 +219,15 @@ const SETTING_NOTES = {
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => (s == null ? "" : String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])));
+// R18-P2 — trailing-edge debounce for high-frequency search/filter inputs. The wrapped fn reads the
+// live input value at fire time, so the delayed call always sees the latest keystroke.
+function debounce(fn, wait) {
+  let t;
+  return function (...args) {
+    clearTimeout(t);
+    t = setTimeout(() => fn.apply(this, args), wait);
+  };
+}
 /* T1-21 — fmtD no longer hands a non-ISO string to new Date(). `new Date("01/02/2026")` is parsed
    by the engine as US month-first and silently renders "2 Jan 2026" for a UK 1 February, which is
    exactly how a mis-read import date survived review. Date objects, timestamps and ISO strings
@@ -271,7 +280,10 @@ function parseUkDate(s) {
 }
 // UK-local (Europe/London) date-only string YYYY-MM-DD. en-CA gives ISO-style ordering.
 // Used for "today"/overdue/horizon comparisons so they don't drift to the UTC calendar date after midnight BST.
-const localDateStr = (d) => new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/London", year: "numeric", month: "2-digit", day: "2-digit" }).format(d ? new Date(d) : new Date());
+// R18-P1: ONE module-level Intl.DateTimeFormat singleton — building a new formatter per call cost
+// ~100k allocations on a Reports render (12.9s). Same locale/options, so output is byte-identical.
+const _localDateFmt = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/London", year: "numeric", month: "2-digit", day: "2-digit" });
+const localDateStr = (d) => _localDateFmt.format(d ? new Date(d) : new Date());
 // UK-local YYYY-MM month bucket for report grouping.
 const localMonthStr = (d) => localDateStr(d).slice(0, 7);
 // Normalise a UK phone number for comparison/search: strip spaces/punctuation and map +44/0044 → 0.
@@ -7139,12 +7151,18 @@ async function loadUnactioned() {
   const listEl = $("#unactioned-list");
   if (!listEl) return;
   const sinceIso = new Date(Date.now() - UNACTIONED_DAYS * 86400000).toISOString();
+  /* R18-P3 — the note/event reads used to ship the ENTIRE case_notes/case_events tables on every
+     dashboard load (unbounded, index-served nowhere). Read a WIDER 90-day window: MEMBERSHIP still
+     tests `lastActivity >= sinceIso` (7 days), but reading 90 days lets the "quiet N days" LABEL
+     show the true last-touch date rather than falling back to case creation. A case with no touch
+     in 90 days falls back to created_at exactly as before. Bounded + index-served. */
+  const activitySinceIso = new Date(Date.now() - 90 * 86400000).toISOString();
   const [casesRes, tasksRes, notesRes, eventRows] = await Promise.all([
     db.from("cases").select("id,stage,assigned_to,client_id,created_at,clients!client_id(first_name,last_name)")
       .not("stage", "in", "(completed,not_proceeding)"),
     db.from("case_tasks").select("case_id").is("done_at", null),
-    db.from("case_notes").select("case_id,created_at"),
-    softRows(db.from("case_events").select("case_id,created_at")),
+    db.from("case_notes").select("case_id,created_at").gte("created_at", activitySinceIso),
+    softRows(db.from("case_events").select("case_id,created_at").gte("created_at", activitySinceIso)),
   ]);
   if (casesRes.error) {
     listEl.innerHTML = `<div class="empty">No-next-action radar unavailable — ${esc(casesRes.error.message)}</div>`;
@@ -7185,6 +7203,17 @@ async function loadUnactioned() {
 }
 
 /* ---------- Pipeline ---------- */
+/* R18-P4 — cap cards rendered per board column. Cards are pre-sorted worst-aging-first, so the cap
+   always keeps the cases that most need attention. The column HEADER count still counts ALL cases;
+   a per-column "Show N more" button reveals the rest, and boardExpandedStages survives re-renders so
+   an expanded column stays expanded across drag/drop/filter re-renders. Cap > fixture volumes
+   (≤7/col), so tests see every card. */
+const BOARD_COL_CAP = 50;
+const boardExpandedStages = new Set();
+window.boardShowMore = function (stage) {
+  boardExpandedStages.add(stage);
+  loadPipeline();
+};
 async function loadPipeline() {
   const { data: cases, error } = await db.from("cases").select("*, clients!client_id(first_name,last_name)").order("updated_at", { ascending: false });
   if (error) {
@@ -7279,11 +7308,14 @@ async function loadPipeline() {
     if (ra < 2) return (B.inStage ?? -1) - (A.inStage ?? -1);
     return 0;
   }));
-  $("#board").innerHTML = stages.map(([k, label]) => `
+  $("#board").innerHTML = stages.map(([k, label]) => {
+    const colCards = boardExpandedStages.has(k) ? byStage[k] : byStage[k].slice(0, BOARD_COL_CAP);
+    const hiddenCount = byStage[k].length - colCards.length;
+    return `
     <div class="col" data-stage="${k}">
       <h4${k === "decision_in_principle" ? ` title="${TIP_DIP}"` : ""}>${label} <span>${byStage[k].length}</span></h4>
       ${byStage[k].length === 0 ? '<div class="col-empty">No cases here</div>' : ""}
-      ${byStage[k].map((c) => {
+      ${colCards.map((c) => {
         const erc = c.erc_end_date && c.rate_end_date && c.erc_end_date > c.rate_end_date;
         const age = cardAge(c, stageEntry[c.id]);
         const nextStage = nextStageFor(c.stage, c.case_kind);
@@ -7339,7 +7371,9 @@ async function loadPipeline() {
           </select>
         </div>`;
       }).join("")}
-    </div>`).join("");
+      ${hiddenCount > 0 ? `<button type="button" class="board-show-more" onclick="window.boardShowMore('${k}')">Show ${hiddenCount} more</button>` : ""}
+    </div>`;
+  }).join("");
   wireBoardDnD();
   updateBoardScrollHint();
 }
@@ -8749,8 +8783,8 @@ $("#view-toggle").addEventListener("click", () => {
   syncViewToggle();
   loadPipeline();
 });
-$("#board-search").addEventListener("input", () => loadPipeline());
-$("#board-adviser").addEventListener("change", () => loadPipeline());
+$("#board-search").addEventListener("input", debounce(() => loadPipeline(), 250));
+$("#board-adviser").addEventListener("change", debounce(() => loadPipeline(), 250));
 $("#new-case-btn").addEventListener("click", () => openCase(null));
 // Board horizontal-scroll affordance wiring (QW16).
 (() => {
@@ -9635,11 +9669,27 @@ $("#prot-tile-quoted").addEventListener("click", () => {
    else's edit and, worse, silently reloaded over the operator's typing. Module scope so the writes
    that don't re-render can re-stamp it (refreshOpenedStamp) instead of poisoning the save. */
 let openedUpdatedAt = null;
+/* R18-P6 — session cache for the case modal's client-picker list. Null means "refetch on next open".
+   Every client-insert path MUST call invalidateClientPicker() so a newly created client shows up in
+   the picker: openClient save, the case modal's inline "+ New client…" flow, and the Revolution
+   importer's new-client insert. */
+let clientPickerCache = null;
+function invalidateClientPicker() { clientPickerCache = null; }
 async function refreshOpenedStamp(caseId) {
   if (!caseId) return null;
   const { data } = await db.from("cases").select("updated_at").eq("id", caseId).single();
   if (data && data.updated_at) openedUpdatedAt = data.updated_at;
   return openedUpdatedAt;
+}
+/* R18-D1 — the same stale-write guard for the client modal. Captured when the client opens; null for
+   a brand-new client (whose save is an INSERT and therefore unguarded). refreshOpenedClientStamp
+   re-baselines it on the "keep editing" branch of a conflict, exactly like refreshOpenedStamp does. */
+let openedClientUpdatedAt = null;
+async function refreshOpenedClientStamp(clientId) {
+  if (!clientId) return null;
+  const { data } = await db.from("clients").select("updated_at").eq("id", clientId).single();
+  if (data && data.updated_at) openedClientUpdatedAt = data.updated_at;
+  return openedClientUpdatedAt;
 }
 /* R6 — the client's distinct properties, newest-address-wins on nothing: keyed by propKey so
    "8 Grand Avenue…" typed two ways is one entry, and sorted so the list is stable between
@@ -9933,10 +9983,23 @@ window.openCase = async function (id, opts = {}) {
     hasRetentionSuccessor = (succ || []).length > 0;
     openedUpdatedAt = cs.updated_at; // exact string from the loaded row, for the stale-write guard
   }
-  const [{ data: clients }, { data: intros }] = await Promise.all([
-    db.from("clients").select("id,first_name,last_name,email,phone").order("last_name"),
-    db.from("introducers").select("id,name").order("name"),
-  ]);
+  /* R18-P6 — the client-picker list was re-read whole (every client, ordered) on EVERY case open.
+     Cache it for the session (clientPickerCache) and reuse it; invalidateClientPicker() drops the
+     cache on every path that inserts a client (openClient save, the inline "+ New client…" flow,
+     the Revolution importer) so the picker never goes stale. The introducers read is small and
+     stays per-open. */
+  const introsPromise = db.from("introducers").select("id,name").order("name");
+  const fetchClientPicker = async () => {
+    const { data } = await db.from("clients").select("id,first_name,last_name,email,phone").order("last_name");
+    clientPickerCache = data || [];
+    return clientPickerCache;
+  };
+  let clients = clientPickerCache || (await fetchClientPicker());
+  /* Self-heal: if this case's client is somehow absent from the cached list (e.g. it was inserted by
+     a path that forgot to invalidate, or a race), force ONE refetch so the picker always carries the
+     matching pre-selected option rather than silently blanking the client on the case. */
+  if (id && c.client_id && !clients.some((cl) => cl.id === c.client_id)) clients = await fetchClientPicker();
+  const { data: intros } = await introsPromise;
   const caseClient = id ? (clients || []).find((cl) => cl.id === c.client_id) : null;
   /* R13 · M-4/M-30 — the case modal is where a client is actually WORKED (every email button, the
      document chase, the log-call panel), so the two care chips have to be on it. The clients read
@@ -10626,6 +10689,7 @@ window.openCase = async function (id, opts = {}) {
           .insert({ first_name: ncFirst || "", last_name: ncLast || "", email: ncEmail || null, phone: ncPhone || null })
           .select().single();
         if (ncErr) return toast("Error creating client: " + ncErr.message);
+        invalidateClientPicker(); // R18-P6 — new client must appear in the picker on the next open
         row.client_id = newClient.id;
       }
       if (!row.client_id) {
@@ -11898,16 +11962,21 @@ function renderClientAdviser(clients) {
    save, a completed bulk action); a keystroke in the search box does not. */
 let clientCache = null;
 async function loadClientData() {
+  /* R18-P3 — bound the four comms reads to the last 210 days. These reads only feed the "last
+     contact" detail and the cold segment. 210 days is wider than the ~183-day cold cutoff, so
+     cold-segment membership is unchanged; only a client with no contact at all in 210 days shows a
+     blank last-contact detail. The clients/cases embedded read stays unbounded. Index-served. */
+  const commsSinceIso = new Date(Date.now() - 210 * 86400000).toISOString();
   const [clientsRes, notesRes, emailsRes, apptRes, tasksRes] = await Promise.all([
     /* R11-6 — widened by ONE existing base column, `lender`, so a row in a rate-end segment can
        say which lender the rate is with. It is an original-schema column (Reports has selected it
        since R7), so this cannot start 42703-ing on an older database, and it is a widening of the
        read this page already does rather than a second query. */
     db.from("clients").select("*, cases!client_id(id,stage,rate_end_date,lender,protection_status,broker_fee,assigned_to,completed_at,updated_at,created_at)").order("last_name"),
-    db.from("case_notes").select("case_id,created_at"),
-    db.from("email_queue").select("client_id,case_id,status,sent_at"),
-    db.from("appointments").select("client_id,case_id,starts_at"),
-    db.from("case_tasks").select("case_id,done_at"),
+    db.from("case_notes").select("case_id,created_at").gte("created_at", commsSinceIso),
+    db.from("email_queue").select("client_id,case_id,status,sent_at").gte("sent_at", commsSinceIso),
+    db.from("appointments").select("client_id,case_id,starts_at").gte("starts_at", commsSinceIso),
+    db.from("case_tasks").select("case_id,done_at").gte("done_at", commsSinceIso),
   ]);
   if (clientsRes.error) return { error: clientsRes.error };
   const clients = clientsRes.data || [];
@@ -12037,6 +12106,13 @@ window.gotoClientSegment = function (seg) {
   clientAdviser = "all";                    // R12b · W-29 — …and the whole firm's, for the same reason
   nav("clients");
 };
+/* R18-P4 — cap the number of client rows rendered. Segment/bulk counts are computed over the FULL
+   filtered list; only the DOM render is capped, with a note when there is more to see. Cap > fixture
+   volume (50 clients), so tests see every row. */
+const CLIENT_LIST_CAP = 100;
+// The current full filtered+sorted list, kept module-level so the ONE delegated #client-list change
+// handler (R18-P2) can re-render the bulk bar against it without re-wiring per row.
+let clientRenderedList = [];
 async function loadClients(filter = "", opts = {}) {
   if (opts.force || !clientCache) {
     const res = await loadClientData();
@@ -12087,7 +12163,12 @@ async function loadClients(filter = "", opts = {}) {
      client for; sorting by rate end names the key it sorted on. The other segments add nothing —
      a list of rate ends is not what "Missing DOB" is for. */
   const showNextRate = !rateYear && clientSort === "rate_end";
-  $("#client-list").innerHTML = `<div class="panel">` + (list.length ? list.map((c) => {
+  clientRenderedList = list;
+  const capped = list.slice(0, CLIENT_LIST_CAP);
+  const capNote = list.length > CLIENT_LIST_CAP
+    ? `<div class="client-list-cap-note">Showing ${CLIENT_LIST_CAP} of ${list.length} — refine your search to narrow the list.</div>`
+    : "";
+  $("#client-list").innerHTML = `<div class="panel">` + (list.length ? capped.map((c) => {
     const cases = c.cases || [];
     const active = cases.filter((x) => CLIENT_LIVE(x.stage)).length;
     const lc = last.get(c.id);
@@ -12108,13 +12189,22 @@ async function loadClients(filter = "", opts = {}) {
       </div>
       <span class="badge ${active ? "blue" : "grey"}">${cases.length} case${cases.length === 1 ? "" : "s"}${active ? ` (${active} active)` : ""}</span>
     </div>`;
-  }).join("") : `<div class="empty">${emptyMsg}</div>`) + `</div>`;
-  document.querySelectorAll("#client-list .client-cb").forEach((cb) => (cb.onchange = () => {
+  }).join("") + capNote : `<div class="empty">${emptyMsg}</div>`) + `</div>`;
+}
+/* R18-P2 — ONE delegated change handler for the client-row checkboxes, wired once, instead of a
+   fresh onchange per row on every render (which was O(rows) DOM work per keystroke). Class
+   .client-cb and the bulk-bar behaviour are unchanged. */
+(() => {
+  const listEl = $("#client-list");
+  if (!listEl) return;
+  listEl.addEventListener("change", (e) => {
+    const cb = e.target;
+    if (!cb || !cb.classList || !cb.classList.contains("client-cb")) return;
     if (cb.checked) clientSel.add(cb.dataset.id); else clientSel.delete(cb.dataset.id);
     const row = cb.closest(".client-row"); if (row) row.classList.toggle("is-sel", cb.checked);
-    renderClientBulkBar(list);
-  }));
-}
+    renderClientBulkBar(clientRenderedList);
+  });
+})();
 function renderClientSegments(searched, ctx, segs, cutoff) {
   const wrap = $("#client-segment");
   if (!wrap) return;
@@ -12192,7 +12282,7 @@ function renderClientBulkBar(list) {
   const csvBtn = $("#client-bulk-csv");
   if (csvBtn) csvBtn.onclick = () => bulkClientExportCsv();
 }
-$("#client-search").addEventListener("input", (e) => loadClients(e.target.value));
+$("#client-search").addEventListener("input", debounce(() => loadClients($("#client-search").value), 250)); // R18-P2 — read the live value at fire time
 $("#new-client-btn").addEventListener("click", () => openClient(null));
 
 /* ---------- R8-2 · BULK ACTIONS ON THE FILTERED SET ----------------------------------------
@@ -12984,6 +13074,7 @@ window.openClient = async function (id, focus, attempted, presetCaseId) {
   let tlItems = [];
   let dupOf = null; // { id, name } — set when this client is half of a flagged duplicate pair
   let auditRows = []; // audit_log for this client AND everything hanging off their cases
+  openedClientUpdatedAt = null; // R18-D1 — null baseline (new-client INSERT stays unguarded)
   if (id) {
     const [{ data: cl, error: clErr }, { data: cs }] = await Promise.all([
       db.from("clients").select("*").eq("id", id).single(),
@@ -12991,6 +13082,7 @@ window.openClient = async function (id, focus, attempted, presetCaseId) {
     ]);
     if (clErr || !cl) return toast("Client not found — it may have been deleted or you don't have access.");
     c = cl; cases = cs || [];
+    openedClientUpdatedAt = cl.updated_at; // R18-D1 — exact string from the loaded row, for the stale-write guard
     /* R6-FIX V2/V4 — this is the client's whole book by definition, so it is the authoritative
        registration: it fixes the property numbers on the dots and answers whether a hollow
        "no address" pill differentiates anything on this record. */
@@ -13280,9 +13372,29 @@ window.openClient = async function (id, focus, attempted, presetCaseId) {
        a different (and already-reported) problem from a wrong one. */
     if (row.email && !isValidEmailLike(row.email)) return toast(`"${row.email}" isn't a valid email address — not saved`);
     if (row.phone && !isValidPhoneLike(row.phone)) return toast(`"${row.phone}" isn't a valid phone number — UK numbers need 11 digits (e.g. 07700 900123). Not saved.`);
-    const q = id ? db.from("clients").update(row).eq("id", id) : db.from("clients").insert(row);
-    const { error } = await q;
-    if (error) return toast("Error: " + error.message);
+    if (id) {
+      /* R18-D1 — optimistic-concurrency guard, mirroring the case save. Only update if the row has
+         not changed since we opened it; zero rows back means someone else saved first, so ask rather
+         than silently overwrite (or reload over) the operator's edits. */
+      const { data: updated, error } = await db.from("clients").update(row).eq("id", id).eq("updated_at", openedClientUpdatedAt).select();
+      if (error) return toast("Error: " + error.message);
+      if (!updated || updated.length === 0) {
+        const reload = confirm(
+          "This client was changed elsewhere since you opened it.\n\n" +
+          "OK = reload the client (DISCARDS the edits you have on screen)\n" +
+          "Cancel = keep editing (your values stay; Save again to overwrite the other change)"
+        );
+        if (reload) { closeModal(); openClient(id); return; }
+        // Kept editing: re-baseline on the current row so the next Save is a deliberate overwrite.
+        await refreshOpenedClientStamp(id);
+        toast("Your edits are still here — press Save again to overwrite the other change");
+        return;
+      }
+    } else {
+      const { error } = await db.from("clients").insert(row);
+      if (error) return toast("Error: " + error.message);
+      invalidateClientPicker(); // R18-P6 — new client must appear in the case-modal picker
+    }
     // T1-11 — a client save can resolve (or create) a watchtower alert, so re-run the checker here
     // as well; the case save path gets it via loadDashboard. Guarded: a failing RPC must not stop
     // the save being reported as done.
@@ -14872,6 +14984,7 @@ async function runImport() {
           .select().single();
         if (error) throw error;
         client = data; nClients++;
+        invalidateClientPicker(); // R18-P6 — bulk-imported clients must appear in the case-modal picker
         if (nk) byName[nk] = client;
         if (email) byEmail[email] = client;
         // Deliberately NOT added to importClients: a client created by this run belongs to the
@@ -15341,6 +15454,7 @@ window.acceptLead = async function (id, ev) {
       return toast("Error: " + cErr.message);
     }
     client = newClient; createdClient = true;
+    invalidateClientPicker(); // R18-P6 — a lead-accepted new client must appear in the case-modal picker
   }
   /* R12b · W-28 — the structured fields land on the case's real columns, not only in the note.
      `property_value` is an original-schema column (the case form has had a box for it since day
@@ -17901,7 +18015,7 @@ window.toggleForecastNoneList = function () {
    bucket — no error, nothing on screen, exactly the failure mode M2/M5 were built to end. Past
    PostgREST's max-rows cap (1000 by default) an unordered, unbounded select is free to do that.
    Ordering both by id and asking for the same explicit ceiling keeps them walking the same set. */
-let REPORTS_ROW_CAP = 5000;
+let REPORTS_ROW_CAP = 20000; // R18-P7 — raised 5000→20000: stage_changed case_events already exceed 5000 at current scale, so 5000 silently truncated MI. Truncation-disclosure note below still fires at the new ceiling.
 /* R5-F4 — the cap above is honest about being a cap only if the page says when it BITES. A select
    that comes back holding exactly REPORTS_ROW_CAP rows is, as far as the client can tell, truncated:
    every figure below then describes the first N cases by id and nothing on screen says so. These
@@ -22838,6 +22952,7 @@ async function revApply() {
         r.clientId = clientRow.id;
         nClients++;
         madeClient = true;
+        invalidateClientPicker(); // R18-P6 — importer-created clients must appear in the case-modal picker
       } else {
         const patch = {};
         (r.clientDiff || []).forEach((d) => {
