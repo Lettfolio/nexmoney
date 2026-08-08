@@ -76,14 +76,22 @@ node tests/r13.js
 node tests/r14.js
 node tests/r15.js
 node tests/r16.js
+node tests/r17.js
 ```
 
-Current green counts (end of round 16). r8_touch/r8_rev/r11_ux still carry the
+Current green counts (end of round 17). r8_touch/r8_rev/r11_ux still carry the
 151/176/123 figures the R13 note below already flagged (fixture-derived
-counts, unrelated to R15/R16 — see "compute test expectations from fixtures
-at runtime" in Standing rules); every other suite's count is unchanged by R16
-except the new r16.js row itself — R16 needed NO existing-suite edits (see the
-R16 notes below for why):
+counts, unrelated to R15/R16/R17 — see "compute test expectations from fixtures
+at runtime" in Standing rules); every other suite's count is unchanged by R17
+except the new r17.js row itself — R17 needed NO existing-suite edits either
+(see the R17 notes below for why — including why the GI-badge fix, despite
+looking like an obvious candidate for an existing-suite update, turned out not
+to need one).
+
+**Full battery is 100% green (2,704/2,704).** R17 also made two long-standing
+date-fragile checks in `r12b.js` deterministic (B1 "Earlier today" crossed
+midnight when run just after 00:00; B5's month-cap date collided with the
+even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes below.
 
 | Suite | Checks |
 |---|---|
@@ -97,12 +105,124 @@ R16 notes below for why):
 | `tests/r9_embed.js` | 104 |
 | `tests/r11_ux.js` | 123 |
 | `tests/r12a.js` | 114 |
-| `tests/r12b.js` | 158 |
+| `tests/r12b.js` | 158 (date-fragile B1/B5 made deterministic in R17) |
 | `tests/r13.js` | 142 |
 | `tests/r14.js` | 167 |
 | `tests/r15.js` | 160 |
 | `tests/r16.js` | 81 |
-| **Total** | **2,592** |
+| `tests/r17.js` | 112 |
+| **Total** | **2,704** |
+
+R17 notes: proactive workflow (three features) + six papercut fixes, frontend
++ tests only, no new DB columns — every task write in this round uses the
+existing `case_tasks` table.
+
+**§1 Stage playbooks.** `CASE_STAGE_PLAYBOOK` (app.js) maps each stage to an
+array of `{title, dueOffsetDays, notKinds?, onlyKinds?}` suggested tasks —
+enquiry(2) / fact_find(3) / decision_in_principle(2) / application(4,
+one BTL-only) / offer(3, one non-PT) / exchange(2) / completed(3);
+not_proceeding has no entry on purpose. `caseStageChecklistHtml(c, tasks)`
+renders it as a "Stage checklist" panel for the case's CURRENT stage only —
+`#case-stage-checklist` wraps `#stage-checklist-items`, each row either a
+`.playbook-add` button (`aria-label="Add task: <title>"`) or, once an OPEN
+(`done_at` null) `case_tasks` row with a matching title exists, a disabled
+`.playbook-done` "✓ added" marker — the map returns `""` (no panel at all)
+when the stage has no entry, which is how not_proceeding stays clean.
+`window.playbookAdd(caseId, stage, kind, idx)` RE-READS the case's open tasks
+at click time before inserting, so a double-click (or a second tab) can never
+write a duplicate — it just repaints to the ✓ state. `#playbook-add-all` /
+`window.playbookAddAll` inserts every not-yet-open step in ONE call and only
+renders while at least one step is outstanding. Kind-gating: "Instruct
+valuation" and "Confirm solicitor instructed" carry `notKinds:
+["product_transfer"]`; "Confirm ICR / rental income" (application stage)
+carries `onlyKinds: ["buy_to_let"]` — verified live (not just by reading the
+code) by opening a fresh buy_to_let application case and a fresh
+product_transfer application/offer case through the mock and reading the
+rendered checklist for both.
+
+**§2 Unactioned-cases radar.** `#unactioned-panel` / `#unactioned-list` on the
+dashboard, `loadUnactioned()` (app.js). Predicate: stage NOT IN
+(completed, not_proceeding) AND zero OPEN `case_tasks` AND no `case_notes` /
+`case_events` row in the last `UNACTIONED_DAYS` (7) days. Adviser-scoped
+exactly like the rest of Today: `mine = !!(ME && ME.id) && !isAdminOrOwner()`
+— an adviser sees only cases whose `assigned_to` is them, owner/admin see the
+whole firm. The panel is a `dash-drawer` that starts `class="collapsed"`;
+`autoDrawer("unactioned", quiet.length > 0)` auto-opens it whenever there is
+something to show (same pattern as the Watchtower and Leads drawers) —
+content is always in the DOM and readable via `$eval` regardless of the
+collapsed state, only a real click needs the drawer opened first.
+**MOCK BEHAVIOUR THAT MATTERS FOR TESTING THIS**: every `cases` insert
+auto-logs a `case_created` `case_events` row stamped "now"
+(`mock-supabase.js`'s `_runInsert`: `if (table === "cases") caseEvent(row.id,
+"case_created", …)`), so a case fresh out of `mkClientCase` is NEVER quiet on
+its own — it always has activity inside the 7-day window. `tests/r17.js`'s
+`mkQuietCase()` helper creates the case and then deletes its `case_events` (and
+`case_notes`, belt-and-braces) to reach the same end-state a real case reaches
+only once its creation-day activity has aged out — this is a TEST-SETUP
+technique, not a mock or app change. No mock table/column gaps were found —
+`case_tasks`, `case_notes` and `case_events` already supported everything the
+radar reads and the playbook/dedupe writes (a generic `.not(col, op, val)`
+filter already existed in the query builder for the `stage NOT IN (...)`
+read).
+
+**§3 Task snooze.** `taskSnoozeControlsHtml(taskId, ctx)` renders
+`#snooze-1d-<ctx>-<taskId>` / `-3d-` / `-1wk-` (buttons, each with its own
+`aria-label`) and `#snooze-pick-<ctx>-<taskId>` (a labelled date input),
+`ctx` is `"tasks"` (Tasks-due panel) or `"brief"` (My Day) — the same task can
+carry both simultaneously since it can appear on both lists.
+`window.snoozeTask(id, days)` moves `due_date` FORWARD by `days` from
+`max(today, current due_date)` — an overdue or undated task snoozes from
+today, a task already due in the future snoozes from its OWN due date, so
++1d on a task due in 5 days lands on +6, never pulls it earlier.
+`window.snoozeTaskTo(id, value)` sets an exact date outright. Both call
+`snoozeRepaintAll()` (`loadTasks(); loadBriefing();`), repainting both lists
+regardless of which one the click came from. **TEST-HARNESS NOTE**: `#tasks-panel`
+is a `dash-drawer` that starts `class="collapsed"` and — unlike Watchtower/
+Leads/the radar — has NO `autoDrawer()` call, so it never auto-opens; a real
+click on a snooze button needs the drawer opened first
+(`tests/r17.js`'s `openDrawer()`, same pattern `tests/r12b.js` already uses).
+My Day (`#briefing-panel`) is a plain panel, not a drawer, always visible.
+
+**§4-9 Papercut fixes**, each confirmed at the line the CTO spec named:
+1. GI badge (Protection page, ~8888) — `caseGiApplies(r.case_kind)`
+   (`GI_KINDS` = purchase/first_time_buyer/buy_to_let/remortgage) replaces the
+   old `["purchase","first_time_buyer"].includes(...)`. **No existing suite
+   needed updating** — grepped every test file for `gi_status`/`GI_BADGE`/
+   `loadProtectionPage` assertions and none asserted the old (buggy)
+   behaviour for a BTL/remortgage case; `tests/r17.js` §E is the first
+   coverage of this path, on fresh cases.
+2. Singular "1 day ago" — both sites (~5478 dashboard rate chip, ~19190
+   Reports rate-end recovery) already carry the `=== 1 ? "day" : "days"`
+   branch.
+3. `fmtM`/`fmtM2` (~399-401) — both now read
+   `n == null || n === "" || isNaN(Number(n)) ? "—" : …`; `fmtM(0)` still
+   formats as a real currency figure (0 is a valid number, not "missing").
+4. `admin/index.html` — `aria-label` confirmed present on `#board-search`,
+   `#board-adviser`, `#prot-filter`, `#client-search`, `#report-month`.
+5. Tour — `tourRender()` focuses `#tour-next` after rendering (~4140).
+6. `.more-actions-menu` (~7633) no longer carries `role="menu"`.
+
+**Why no existing suite needed a fixture/assertion edit.** Grepped every test
+file for the six fixed symbols/behaviours (GI badge, "1 day"/"day ago",
+`fmtM`/`fmtM2`, the five aria-label ids, `#tour-next`, `role="menu"`) —
+nothing in the pre-R17 battery asserted the OLD buggy shape of any of them,
+so nothing needed correcting. **Ran the WHOLE battery** (smoke +
+r5_batch1..9 + r64 + r8_touch + r8_rev + r9_adv + r9_docs + r9_embed + r11_ux
++ r12a + r12b + r13 + r14 + r15 + r16) after the R17 build. Two `r12b.js`
+checks were failing on a date/wall-clock artifact (the session had rolled past
+UTC midnight); Fable made them DETERMINISTIC in R17 rather than leave the
+battery amber (a trustworthy battery is the loop's safety net):
+  - **B1** constructed an "earlier today" appointment as `Date.now() - 3h`,
+    which lands on the PREVIOUS calendar day when the run is within ~3h of
+    local midnight. Fixed: clamp the timestamp to no earlier than the start of
+    today, so it is always same-day (`tests/r12b.js` ~529).
+  - **B5** booked its 4th appointment on `today + 12`, which collided with the
+    even-day appointment seed (`mock-supabase.js:2001` seeds days 2..28) whenever
+    `today+12` was even. Fixed: pick an ODD day-of-month (clamped ≤27) in the
+    current month, which the seed never touches (`tests/r12b.js` ~716).
+  RULE for future date-sensitive fixtures: never key a fixture date off raw
+  `Date.now()` near a day boundary, and never reuse the even-day appt-seed days
+  (2..28) — choose odd days in the current month.
 
 R16 notes: BTL rental + ICR affordability, and a submit-to-lender tracker.
 Six new plain nullable `cases` columns, mirrored into the mock with NO
