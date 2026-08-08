@@ -79,19 +79,23 @@ node tests/r16.js
 node tests/r17.js
 node tests/r18.js
 node tests/r19.js
+node tests/r20.js
 ```
 
-Current green counts (end of round 19). r8_touch/r8_rev/r11_ux still carry the
+Current green counts (end of round 20). r8_touch/r8_rev/r11_ux still carry the
 151/176/123 figures the R13 note below already flagged (fixture-derived
-counts, unrelated to R15/R16/R17/R18/R19 — see "compute test expectations
+counts, unrelated to R15/R16/R17/R18/R19/R20 — see "compute test expectations
 from fixtures at runtime" in Standing rules); every other pre-existing
-suite's count is unchanged by R18 or R19 — **neither round needed ANY
-existing-suite edit**, only the two new files below (see the R18 and R19
-notes for why: R18 is scale/perf hardening behind selectors nothing else
-asserted the old shape of, and R19 is new owner-gated Reports content that no
-earlier suite reaches).
+suite's count is unchanged by R18, R19 or R20 — R20 needed exactly ONE
+existing-suite edit, a one-line selector fix in `tests/r19.js` (see the R20
+notes below for exactly why — a real, precise, non-masking fix, not a
+work-around) — every other existing suite passed R20 completely unedited
+(see the R18 and R19 notes for why those needed none at all: R18 is
+scale/perf hardening behind selectors nothing else asserted the old shape
+of, and R19 is new owner-gated Reports content that no earlier suite
+reaches).
 
-**Full battery is 100% green (2,786/2,786).** R17 also made two long-standing
+**Full battery is 100% green (2,867/2,867).** R17 also made two long-standing
 date-fragile checks in `r12b.js` deterministic (B1 "Earlier today" crossed
 midnight when run just after 00:00; B5's month-cap date collided with the
 even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes below.
@@ -115,8 +119,124 @@ even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes belo
 | `tests/r16.js` | 81 |
 | `tests/r17.js` | 112 |
 | `tests/r18.js` | 43 |
-| `tests/r19.js` | 39 |
-| **Total** | **2,786** |
+| `tests/r19.js` | 39 (unchanged count — R20 fixed HOW one row is queried, not what it asserts) |
+| `tests/r20.js` | 81 |
+| **Total** | **2,867** |
+
+R20 notes: "actionable" Pipeline MI — per-panel CSV export + click-through
+drill-downs on top of R19's `#report-mi-section`, frontend + tests only, no
+new DB schema. Everything filters the SAME in-memory `all`/`rows` array
+`renderPipelineMI` (app.js ~18041) already reads for R19's panels — no new
+query, no new `REPORTS_ROW_CAP` walk.
+
+**CSV export.** Each of the four MI panels gets a small "⭳ CSV" button in
+its header — `#report-mi-csv-funnel` / `#report-mi-csv-velocity` /
+`#report-mi-csv-revenue` / `#report-mi-csv-scoreboard` (static markup in
+`admin/index.html`, wired at the END of `renderPipelineMI`, app.js
+~18258-18288) — plus the drill-down modal's own `#mi-drilldown-csv`
+(app.js ~18339). All five emit through one shared `miCsv(filename, header,
+rows)` (app.js ~18297), which is **NOT** exposed on `window` and reuses
+`exportCsv`'s (app.js ~8735) EXACT serialization contract byte-for-byte —
+same `q2()` quote-doubling, same `=+-@\t\r` formula-injection guard (prefix
+a literal `'`), same UTF-8 BOM, same `Blob` + `<a download>` click — rather
+than a second CSV library. Filenames `nexmoney-mi-<panel>-YYYY-MM-DD.csv`
+(the panel CSVs' date is fixed at RENDER time inside the `dstr` closure
+variable; the drill-down CSV's is computed fresh at CLICK time inside
+`miDrilldown`'s own `csvBtn.onclick` — a real, if very low-probability,
+UTC-midnight-crossing distinction `tests/r20.js` notes but doesn't chase).
+Because the owner/admin gate (`isAdminOrOwner()`) is an early `return`
+at the TOP of `renderPipelineMI`, before any of the panel content or CSV
+wiring runs, an adviser's `#report-mi-csv-*` buttons exist in the DOM
+(they're static HTML in the panel headers) but their `.onclick` is simply
+never assigned — `tests/r20.js` §A asserts this directly
+(`typeof btn.onclick === "function"`) rather than only checking the
+section's `.hidden` class, which is the precise mechanical reason they
+"aren't reachable" for an adviser.
+
+**Drill-down modal.** `window.miDrilldown(title, cases)` (app.js ~18316,
+window-exposed) renders `#mi-drilldown` (class `mi-drilldown`) inside the
+pre-existing `#modal` / `openModal()` / `closeModal()` infra — no new modal
+system. A titled table (`.mi-drill-table`): client (`clients.first_name` +
+`last_name`, joined — the Reports `cases` select already embeds
+`clients!client_id(first_name,last_name)`, present since before R19) ·
+stage (`STAGE_LABEL`) · adviser (`staffName`, "Unassigned" when
+`assigned_to` is null) · fee (`fmtM`, broker+proc) · an `Open` button
+(`onclick="closeModal(); openCase('<id>')"` — verified live, not just by
+reading the code: `tests/r20.js` §F clicks it and reads `#case-form`'s
+`data-case-id`, since `openCase` renders `<form id="case-form"
+data-case-id="...">`, app.js ~10380). A `.mi-drill-count` header chip
+states the exact row count; `#mi-drilldown-csv` only renders when the list
+is non-empty ("nothing to export" — `tests/r20.js` §G proves the empty
+path: `window.miDrilldown('x', [])` → "No cases match.", count chip `0`,
+`#mi-drilldown-csv` absent from the DOM entirely, not just hidden).
+`#mi-drilldown-close` closes it the normal way (`closeModalGuarded`).
+
+**Click-through figures, and their exact filters** (all real `<button>`s,
+so Enter/Space work with no extra keydown handling — `tests/r20.js` §E
+proves the Enter path end to end, not just the tag name):
+- Funnel stage bars — `#report-mi-funnel .mi-bar-row[data-mi-stage]` → live
+  cases where `c.stage === s`. **The bar's tag changed from a plain `<div>`
+  to a real `<button class="mi-bar-row" data-mi-stage="…">`** (title/
+  `aria-label` carry the click affordance and the count) — this is the ONE
+  shared-markup change R20 made that an earlier suite's selector reached: see
+  the `tests/r19.js` fix below. A zero-count bar (this round's fixture
+  deliberately leaves "Fact Find" at 0 live cases to prove it) renders
+  `disabled` — nothing to open behind it, and a disabled `<button>` is
+  neither focusable nor clickable, so this is a real a11y guarantee, not
+  just a visual dimming.
+- Scoreboard adviser rows — `#report-mi-scoreboard .mi-adv-link[data-mi-adv]`
+  → **ALL** of that adviser's cases, `(c.assigned_to || "__unassigned") ===
+  key` — live AND terminal both, not scoped to the Reports month picker
+  (unlike the scoreboard table's own `completedPeriod`/`feesPeriod`
+  columns) — `tests/r20.js` §D3 proves this by seeding a p2 case with NO
+  period-relevant dates and confirming it's still in the drill-down.
+- Win-rate figure — `#report-mi-winrate-link` (only rendered at all once
+  `terminal >= 5`, same thin-data guard as the headline text it replaces)
+  → every terminal case, `c.stage === "completed" || c.stage ===
+  "not_proceeding"`, unfiltered by adviser or month.
+- Conversion steps and velocity rows are NOT click-through this round
+  (SPEC20.md marked them optional/"do if cheap"; not done — noted here so a
+  future agent doesn't go looking for a test that was never going to exist).
+
+**The one existing-suite edit, and exactly why it was correct (not a
+mask).** `tests/r19.js`'s own funnel assertion
+(`#report-mi-funnel > div`, then `querySelectorAll("span")[0]`/`[1]` by
+POSITION for label/count) broke against current `app.js` on two counts: (1)
+the div→button change above, and (2) the funnel bar's progress-fill is
+nested one level deeper than the r19 author's positional-span assumption
+expected (`<span class="mi-bar-track"><span class="mi-bar-fill"
+…></span></span>` — `querySelectorAll("span")` walks depth-first, so
+`spans[1]` lands on the empty-text `.mi-bar-track` wrapper, not
+`.mi-bar-n`). Both are genuine R20-era shared-markup changes to the same
+funnel row R19 already asserted against, not new assertions and not a
+pre-existing bug the fix happens to paper over — grepping `#report-mi-funnel`
+confirms `tests/r19.js` was the ONLY other file that ever queried inside a
+funnel row. The fix (`tests/r19.js`, Panel-1-funnel block) replaces both the
+row selector (`#report-mi-funnel > .mi-bar-row`) and the label/count reads
+(`.querySelector(".mi-bar-lbl")` / `.querySelector(".mi-bar-n")` by CLASS,
+not position) — same two facts asserted (stage order + exact count per
+stage), same expected values, zero change to what the test proves, only to
+how it locates the DOM it's reading. Re-ran the full `tests/r19.js` suite
+after the fix: 39/39, unchanged from its R19-era count. Every other R19
+selector this round's `grep` checked (`#report-mi-winrate`,
+`#report-mi-scoreboard table tr`, all four panel container ids, all four
+jump-nav chip ids) reads via `.textContent`/`td` values that don't care
+whether their ancestor is a `<div>` or a `<button>`, or was never touched by
+R20 at all, and needed no change.
+
+**Why the rest of the pre-existing battery needed zero edits for R20.**
+Grepped every test file for `report-mi-`, `mi-bar`, `mi-adv-link`,
+`mi-drill`, `openCase`, `exportCsv`, and `#modal`/`openModal`/`closeModal`
+before writing anything new: no suite before r19/r20 reaches
+`#report-mi-section` at all (owner-gated Reports content an adviser never
+sees, same as R19), `exportCsv`'s own callers (`tests/r8_touch.js`'s CSV
+export panel, `tests/r13.js`'s bulk client export) are untouched fixed-shape
+CSVs with their own filenames/columns that `miCsv` doesn't touch, and
+`openModal`/`closeModal`/`openCase` are called exactly the same way R20
+calls them (no signature change) so every earlier modal-driving suite
+(r5_batch1/2/4, r12b) kept passing unmodified. Ran the WHOLE battery in
+HARNESS order after building `tests/r20.js` and fixing `tests/r19.js`: every
+suite passed, confirming no other shared selector or count drifted.
 
 R19 notes: owner/admin Pipeline MI on Reports — four panels, no new DB
 schema, computed client-side in ONE O(n) pass over the same `cases` read
