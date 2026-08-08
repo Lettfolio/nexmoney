@@ -387,10 +387,16 @@ function monthIso(t0, deltaMonths, day, hour = 12) {
       await goto(page, "reports", 1500);
 
       // ---- Panel 1: funnel ----
-      const funnelRows = await page.$$eval("#report-mi-funnel > div", (els) => els.map((d) => {
-        const spans = d.querySelectorAll("span");
-        return { label: spans[0].textContent.trim(), n: Number(spans[1].textContent.trim()) };
-      }));
+      // R20 — each stage row is now a real <button class="mi-bar-row"> (was a plain <div>), so it
+      // can drill down to the live cases at that stage (Enter/Space work natively); it also nests
+      // the progress-bar fill inside the track (an extra <span class="mi-bar-fill">), which shifts
+      // a POSITIONAL span[i] index. Selecting by class (.mi-bar-lbl / .mi-bar-n) instead of by
+      // position is the precise fix — it asserts the exact same two facts (label, count) without
+      // depending on how many spans sit between them.
+      const funnelRows = await page.$$eval("#report-mi-funnel > .mi-bar-row", (els) => els.map((d) => ({
+        label: d.querySelector(".mi-bar-lbl").textContent.trim(),
+        n: Number(d.querySelector(".mi-bar-n").textContent.trim()),
+      })));
       eq("C · funnel: stage order matches MI_LIVE_STAGES", funnelRows.map((r) => r.label), ["Enquiry", "Fact Find", "DIP", "Application", "Offer", "Exchange"]);
       eq("C · funnel: counts per stage", funnelRows.map((r) => r.n), MI_LIVE_STAGES.map((s) => exp.funnel[s]));
 
