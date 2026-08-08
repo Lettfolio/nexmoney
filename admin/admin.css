@@ -269,6 +269,12 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
 .grid-2 > * { min-width: 0; }
 @media (max-width: 900px) { .grid-2 { grid-template-columns: 1fr; } }
 
+/* R19 — the Owner/Admin Pipeline MI block groups its four panels under one
+   heading. A slim top rule sets it apart from the panels above without adding
+   another card chrome around the cards. */
+.mi-section { margin: 24px 0; border-top: 2px solid var(--line, var(--light)); padding-top: 16px; }
+.mi-section-head { margin: 0 0 4px; font-size: 18px; }
+
 /* Panel count chips + slim empty panels */
 .panel h3 .count {
   display: inline-block; min-width: 20px; text-align: center;

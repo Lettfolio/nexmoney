@@ -18005,6 +18005,230 @@ window.toggleForecastNoneList = function () {
   if (btn) btn.textContent = willShow ? "▾ Hide" : "▸ Show";
 };
 
+/* ==========================================================================
+   R19 — PIPELINE MI (Owner / Admin management information).
+
+   Owner-facing MI, computed CLIENT-SIDE in a single O(n) pass over the same
+   `all` cases Reports already reads, plus the submitted_at / offer_issued_date
+   milestone dates now in the Reports select. NO new DB schema.
+
+   DATA REALITY (CTO): the DB holds only ~36 stage_changed case_events today
+   (pre-launch), so the funnel/conversion/velocity are derived from the POPULATED
+   milestone DATE columns — created_at → submitted_at → offer_issued_date →
+   completed_at — NOT from stage-change history. These are real data now and get
+   richer as the book grows. Every panel guards thin data explicitly.
+
+   Four panels, all inside #report-mi-section (OWNER/ADMIN-gated as a whole):
+     1. Funnel (live pipeline by stage) + historical conversion from milestone
+        dates + win rate among terminal cases (thin-data guard <5).
+     2. Velocity — median (headline) & average days between milestones, with the
+        slowest sub-step named as the bottleneck.
+     3. Revenue — monthly completed-fee run-rate (broker+proc, last 12 months) +
+        a stage-weighted pipeline forecast (historical weights, default fallback).
+     4. Per-adviser scoreboard.
+   ========================================================================== */
+const MI_STAGE_DEFAULT_WEIGHT = { enquiry: 0.1, fact_find: 0.2, decision_in_principle: 0.4, application: 0.6, offer: 0.85, exchange: 0.95 };
+const MI_LIVE_STAGES = ["enquiry", "fact_find", "decision_in_principle", "application", "offer", "exchange"];
+const miMedian = (arr) => {
+  if (!arr.length) return null;
+  const s = arr.slice().sort((a, b) => a - b);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : Math.round((s[m - 1] + s[m]) / 2);
+};
+const miMean = (arr) => (arr.length ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length) : null);
+const miDays = (a, b) => { const d = Math.round((new Date(b) - new Date(a)) / 86400000); return isNaN(d) ? null : d; };
+
+function renderPipelineMI(all, mv) {
+  const sec = $("#report-mi-section");
+  if (!sec) return;
+  /* OWNER/ADMIN gate — the whole section, hidden for plain advisers. Same mechanism the money
+     panels use (classList.toggle('hidden')), and the jump nav reads that .hidden to decide whether
+     to draw a chip, so an adviser gets neither the section nor a chip for it. isAdminOrOwner()
+     rather than showMoney()/isOwner() because MI is explicitly owner-AND-admin (per spec). */
+  const show = isAdminOrOwner();
+  sec.classList.toggle("hidden", !show);
+  if (!show) return;
+  const rows = all || [];
+  const fee = (c) => Number(c.broker_fee || 0) + Number(c.proc_fee || 0);
+
+  // ---- last 12 completion months for the run-rate, oldest→newest ----
+  const now = new Date();
+  const runMonths = [];
+  for (let i = 11; i >= 0; i--) runMonths.push(localMonthStr(new Date(now.getFullYear(), now.getMonth() - i, 1)));
+  const runMap = Object.fromEntries(runMonths.map((m) => [m, 0]));
+
+  // ---- ONE O(n) pass: funnel, conversion milestones, terminal outcomes, velocity arrays,
+  // run-rate month map, live fee by stage, per-adviser aggregate ----
+  const funnel = Object.fromEntries(MI_LIVE_STAGES.map((s) => [s, 0]));
+  const liveFeeByStage = Object.fromEntries(MI_LIVE_STAGES.map((s) => [s, 0]));
+  let reachedApp = 0, reachedOffer = 0, reachedCompleted = 0;   // milestone-date counts
+  let completedN = 0, notProceedingN = 0;                       // terminal outcomes
+  let appAndCompleted = 0, offerAndCompleted = 0;               // for historical stage weights
+  const vCreatedApp = [], vAppOffer = [], vOfferComp = [], vCreatedComp = [];
+  const advMap = new Map(); // assigned_to || "__unassigned"
+
+  rows.forEach((c) => {
+    const live = MI_LIVE_STAGES.includes(c.stage);
+    if (live) { funnel[c.stage]++; liveFeeByStage[c.stage] += fee(c); }
+
+    const hasApp = !!c.submitted_at, hasOffer = !!c.offer_issued_date, hasComp = !!c.completed_at;
+    if (hasApp) reachedApp++;
+    if (hasOffer) reachedOffer++;
+    if (hasComp) reachedCompleted++;
+    if (hasApp && hasComp) appAndCompleted++;
+    if (hasOffer && hasComp) offerAndCompleted++;
+
+    if (c.stage === "completed") completedN++;
+    else if (c.stage === "not_proceeding") notProceedingN++;
+
+    // velocity — only where BOTH endpoints exist and the gap is sane (>= 0)
+    if (c.created_at && hasApp) { const d = miDays(c.created_at, c.submitted_at); if (d != null && d >= 0) vCreatedApp.push(d); }
+    if (hasApp && hasOffer) { const d = miDays(c.submitted_at, c.offer_issued_date); if (d != null && d >= 0) vAppOffer.push(d); }
+    if (hasOffer && hasComp) { const d = miDays(c.offer_issued_date, c.completed_at); if (d != null && d >= 0) vOfferComp.push(d); }
+    if (c.created_at && hasComp) { const d = miDays(c.created_at, c.completed_at); if (d != null && d >= 0) vCreatedComp.push(d); }
+
+    // run-rate — completed fee income (broker + proc) bucketed by completed_at month
+    if (hasComp) { const m = localMonthStr(c.completed_at); if (m in runMap) runMap[m] += fee(c); }
+
+    // per-adviser aggregate
+    const key = c.assigned_to || "__unassigned";
+    let a = advMap.get(key);
+    if (!a) { a = { id: c.assigned_to || null, live: 0, completedPeriod: 0, feesPeriod: 0, won: 0, lost: 0, cycles: [] }; advMap.set(key, a); }
+    if (live) a.live++;
+    if (c.stage === "completed") { a.won++; if (c.created_at && hasComp) { const d = miDays(c.created_at, c.completed_at); if (d != null && d >= 0) a.cycles.push(d); } }
+    else if (c.stage === "not_proceeding") a.lost++;
+    if (hasComp && localMonthStr(c.completed_at) === mv) { a.completedPeriod++; a.feesPeriod += fee(c); }
+  });
+
+  const label = monthLabel(mv);
+  $("#report-mi-scope").textContent = "Owner management information, derived from the case book's milestone dates (created → submitted → offer issued → completed). Pre-launch the samples are small; every figure below states its own basis and sharpens as the book grows.";
+
+  // ---- Panel 1: funnel + conversion + win rate ----
+  const liveTot = MI_LIVE_STAGES.reduce((s, st) => s + funnel[st], 0);
+  const maxFun = Math.max(...MI_LIVE_STAGES.map((s) => funnel[s]), 1);
+  $("#report-mi-funnel").innerHTML = liveTot ? MI_LIVE_STAGES.map((s) => `
+    <div style="display:flex;align-items:center;gap:8px;margin:3px 0;">
+      <span style="width:90px;font-size:12px;color:var(--muted);">${STAGE_LABEL[s]}</span>
+      <div style="flex:1;background:var(--light);border-radius:4px;"><div style="width:${(funnel[s] / maxFun) * 100}%;background:var(--orange);border-radius:4px;height:16px;"></div></div>
+      <span style="width:24px;font-size:12px;font-weight:600;">${funnel[s]}</span>
+    </div>`).join("") : '<div class="empty">No live cases in the pipeline.</div>';
+
+  const total = rows.length;
+  const stepPct = (num, den) => (den ? Math.round((num / den) * 100) + "%" : "—");
+  $("#report-mi-conversion").innerHTML = `
+    <table class="imp-table">
+      <tr><th>Milestone</th><th>Cases</th><th title="Share reaching this milestone from the one before it">Step %</th></tr>
+      <tr><td>Created</td><td>${total}</td><td><span class="cs-muted">—</span></td></tr>
+      <tr><td>Reached application <span class="cs-muted">(submitted)</span></td><td>${reachedApp}</td><td>${stepPct(reachedApp, total)}</td></tr>
+      <tr><td>Reached offer <span class="cs-muted">(offer issued)</span></td><td>${reachedOffer}</td><td>${stepPct(reachedOffer, reachedApp)}</td></tr>
+      <tr><td>Completed</td><td>${reachedCompleted}</td><td>${stepPct(reachedCompleted, reachedOffer)}</td></tr>
+    </table>
+    <p class="panel-sub" style="margin:6px 0 0;">From milestone dates, not stage-change history.</p>`;
+
+  const terminal = completedN + notProceedingN;
+  $("#report-mi-winrate").innerHTML = terminal < 5
+    ? `<span class="stat-weak">Win rate: not enough completed cases yet for a reliable rate (${terminal} terminal case${terminal === 1 ? "" : "s"}).</span>`
+    : `<strong>Win rate ${Math.round((completedN / terminal) * 100)}%</strong> — ${completedN} completed of ${terminal} terminal (completed + not proceeding).`;
+
+  // ---- Panel 2: velocity ----
+  const vMetrics = [
+    { label: "Created → application", arr: vCreatedApp },
+    { label: "Application → offer", arr: vAppOffer },
+    { label: "Offer → completion", arr: vOfferComp },
+    { label: "Created → completion (total)", arr: vCreatedComp },
+  ];
+  $("#report-mi-velocity").innerHTML = `<table class="imp-table">
+    <tr><th>Transition</th><th title="Headline — robust to outliers">Median</th><th>Average</th><th>n</th></tr>
+    ${vMetrics.map((m) => {
+      const md = miMedian(m.arr), av = miMean(m.arr);
+      return `<tr>
+        <td>${m.label}</td>
+        <td>${md == null ? '<span class="cs-muted">—</span>' : `<strong>${md}d</strong>`}</td>
+        <td>${av == null ? '<span class="cs-muted">—</span>' : av + "d"}</td>
+        <td>${m.arr.length}</td>
+      </tr>`;
+    }).join("")}
+  </table>`;
+  const subSteps = [
+    { name: "to application", arr: vCreatedApp },
+    { name: "underwriting", arr: vAppOffer },
+    { name: "completion", arr: vOfferComp },
+  ].map((s) => ({ name: s.name, med: miMedian(s.arr), n: s.arr.length })).filter((s) => s.med != null);
+  subSteps.sort((a, b) => b.med - a.med);
+  $("#report-mi-bottleneck").innerHTML = subSteps.length
+    ? `Longest stage: <strong>${subSteps[0].name}</strong>, median ${subSteps[0].med} day${subSteps[0].med === 1 ? "" : "s"} (n=${subSteps[0].n}).`
+    : "Not enough dated cases yet to identify a bottleneck.";
+
+  // ---- Panel 3: run-rate + forecast ----
+  const runVals = runMonths.map((m) => runMap[m]);
+  const runTotal = runVals.reduce((a, b) => a + b, 0);
+  const maxRun = Math.max(...runVals, 1);
+  $("#report-mi-runrate").innerHTML = runMonths.map((m, i) => {
+    const v = runVals[i];
+    const lbl = MONTH_SHORT[Number(m.slice(5, 7)) - 1] + " " + m.slice(2, 4);
+    return `<div style="display:flex;align-items:center;gap:8px;margin:3px 0;" title="${m}: ${esc(fmtM(v))}">
+      <span style="width:56px;font-size:11px;color:var(--muted);">${lbl}</span>
+      <div style="flex:1;background:var(--light);border-radius:4px;"><div style="width:${(v / maxRun) * 100}%;background:var(--orange);border-radius:4px;height:14px;"></div></div>
+      <span style="width:84px;font-size:12px;font-weight:600;text-align:right;">${v ? fmtM(v) : '<span class="cs-muted">—</span>'}</span>
+    </div>`;
+  }).join("");
+  $("#report-mi-runrate-basis").innerHTML = `Completed-fee income (broker + proc) by completion month, last 12 months. 12-month total <strong>${fmtM(runTotal)}</strong>.`;
+
+  // stage weights: historical stage→completed rate where the sample is big enough, defaults otherwise.
+  const thin = reachedCompleted < 5;
+  const weightOf = {};
+  MI_LIVE_STAGES.forEach((s) => { weightOf[s] = MI_STAGE_DEFAULT_WEIGHT[s]; });
+  let calibrated = false;
+  if (!thin) {
+    if (reachedApp >= 5) { weightOf.application = appAndCompleted / reachedApp; calibrated = true; }
+    if (reachedOffer >= 5) { weightOf.offer = offerAndCompleted / reachedOffer; calibrated = true; }
+  }
+  const liveFeeTotal = MI_LIVE_STAGES.reduce((s, st) => s + liveFeeByStage[st], 0);
+  const weightedTotal = MI_LIVE_STAGES.reduce((s, st) => s + liveFeeByStage[st] * weightOf[st], 0);
+  const weightLabel = calibrated
+    ? "(application/offer weights calibrated from history; other stages default likelihoods)"
+    : "(default likelihoods — will calibrate as cases complete)";
+  $("#report-mi-forecast-headline").innerHTML = `
+    <div class="kpi kpi-headline"><div class="num" title="${esc(fmtM(weightedTotal))}">${fmtM(weightedTotal)}</div><div class="lbl">Weighted-expected to land</div></div>
+    <div class="kpi"><div class="num" title="${esc(fmtM(liveFeeTotal))}">${fmtM(liveFeeTotal)}</div><div class="lbl">Fees in live pipeline</div></div>`;
+  $("#report-mi-forecast").innerHTML = `
+    <p class="panel-sub" style="margin:0 0 6px;"><strong>${fmtM(liveFeeTotal)}</strong> of fees in the live pipeline, <strong>~${fmtM(weightedTotal)}</strong> weighted-expected to land. <span class="money-basis">${weightLabel}</span></p>
+    <table class="imp-table">
+      <tr><th>Stage</th><th>Live £</th><th title="Completion likelihood">Weight</th><th>Expected £</th></tr>
+      ${MI_LIVE_STAGES.map((s) => `<tr>
+        <td>${STAGE_LABEL[s]}</td>
+        <td>${fmtM(liveFeeByStage[s])}</td>
+        <td>${Math.round(weightOf[s] * 100)}%</td>
+        <td>${fmtM(liveFeeByStage[s] * weightOf[s])}</td>
+      </tr>`).join("")}
+    </table>`;
+
+  // ---- Panel 4: per-adviser scoreboard ----
+  const boardRows = [...advMap.values()]
+    .filter((a) => a.live || a.completedPeriod || a.feesPeriod || a.won || a.lost)
+    .map((a) => {
+      const term = a.won + a.lost;
+      return {
+        id: a.id, live: a.live, completedPeriod: a.completedPeriod, feesPeriod: a.feesPeriod,
+        term, winPct: term ? Math.round((a.won / term) * 100) : null, medCycle: miMedian(a.cycles),
+        name: a.id ? staffName(a.id) : "Unassigned",
+      };
+    })
+    .sort((x, y) => y.feesPeriod - x.feesPeriod);
+  $("#report-mi-scoreboard-scope").textContent = `Live cases are as of now; completed and fees written are for ${label}; win rate and median cycle are all-time. Sorted by fees written.`;
+  $("#report-mi-scoreboard").innerHTML = boardRows.length ? `<table class="imp-table">
+    <tr><th>Adviser</th><th>Live</th><th title="Completed in ${esc(label)}">Completed</th><th title="Broker + proc fee on cases completed in ${esc(label)}">Fees written</th><th title="All-time completed ÷ (completed + not proceeding)">Win rate</th><th title="All-time median days, created → completed">Median cycle</th></tr>
+    ${boardRows.map((a) => `<tr>
+      <td>${esc(a.name)}</td>
+      <td>${a.live}</td>
+      <td>${a.completedPeriod}</td>
+      <td>${fmtM(a.feesPeriod)}</td>
+      <td>${a.winPct == null ? '<span class="cs-muted">—</span>' : (a.term < 5 ? `<span class="stat-weak" title="Fewer than 5 terminal cases — not a reliable rate">${a.winPct}% <span class="stat-n">(${a.term})</span></span>` : `${a.winPct}% <span class="cs-muted">(${a.term})</span>`)}</td>
+      <td>${a.medCycle == null ? '<span class="cs-muted">—</span>' : a.medCycle + "d"}</td>
+    </tr>`).join("")}
+  </table>` : '<div class="empty">No adviser activity yet.</div>';
+}
+
 /* Batch 6 feature-detection (M2). PostgREST answers a select naming a column that doesn't exist
    with 42703 for the WHOLE statement, so these columns are read in a separate, small query: on an
    older database it fails alone and Reports still renders with the legacy single fee_paid_at and
@@ -18138,7 +18362,12 @@ async function loadReports() {
        other two ride in loadCaseCallPack's own query). It is an ORIGINAL-schema column — the case
        form, the pipeline table and the CSV export have all selected it since day one — so, like
        the five R7 widened this select by, it cannot start 42703-ing an older database. */
-    db.from("cases").select("id,client_id,stage,case_kind,lender,loan_amount,broker_fee,proc_fee,sols_fee,submitted_at,fee_status,fee_paid_at,completed_at,created_at,updated_at,rate_percent,rate_end_date,rate_end_estimated,lead_source,introducer_id,protection_status,retention_source_case_id,assigned_to,nps_score,review_requested_at,expected_completion_date,clients!client_id(first_name,last_name)")
+    /* R19 — plus `offer_issued_date`, the fourth pipeline milestone date the Pipeline MI section
+       reads (created_at → submitted_at → offer_issued_date → completed_at) for its conversion funnel
+       and velocity. It is an R13 date column, present in prod (like submitted_at beside it), so it
+       cannot 42703 this select on the current database; on an older one it simply comes back
+       undefined and the MI conversion/velocity fall back to the milestones that ARE populated. */
+    db.from("cases").select("id,client_id,stage,case_kind,lender,loan_amount,broker_fee,proc_fee,sols_fee,submitted_at,offer_issued_date,fee_status,fee_paid_at,completed_at,created_at,updated_at,rate_percent,rate_end_date,rate_end_estimated,lead_source,introducer_id,protection_status,retention_source_case_id,assigned_to,nps_score,review_requested_at,expected_completion_date,clients!client_id(first_name,last_name)")
       .order("id").limit(REPORTS_ROW_CAP),
     db.from("introducers").select("id,name"),
     db.rpc("get_reports"),
@@ -18331,6 +18560,9 @@ async function loadReports() {
 
   const rep = repRes && !repRes.error ? repRes.data : null;
   renderThreadedPanels(all, mv, rep ? rep.advisers : null);
+  /* R19 — the OWNER/ADMIN Pipeline MI section, from the same `all` rows plus the two milestone
+     dates in the select above. Gated inside (isAdminOrOwner); hidden for plain advisers. */
+  renderPipelineMI(all, mv);
   renderForecastBuckets(all);
   // Client LTV is the one remaining RPC-only panel (needs client_id/name joins this page doesn't
   // otherwise fetch) — hide it gracefully if the RPC failed; everything else above still renders.
@@ -18376,6 +18608,10 @@ const REPORT_JUMP_SECTIONS = [
   ["mine", "My numbers", "#report-mine-panel"],
   ["month", "Monthly business", "#report-month-panel"],
   ["advisers", "Adviser scoreboard", "#report-scoreboard-panel"],
+  ["mi", "Pipeline MI", "#report-mi-funnel-panel"],
+  ["mivelocity", "Velocity", "#report-mi-velocity-panel"],
+  ["mirevenue", "Run-rate", "#report-mi-revenue-panel"],
+  ["miboard", "MI scoreboard", "#report-mi-scoreboard-panel"],
   ["funnel", "Funnel", "#report-funnel-panel"],
   ["sources", "Lead sources", "#report-sources-panel"],
   ["losses", "Losses", "#report-losses-panel"],
