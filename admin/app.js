@@ -396,9 +396,9 @@ const jsArg = (v) => esc(String(v == null ? "" : v).replace(/\\/g, "\\\\").repla
 // space-stripped so the dialler gets a clean value. Returns "" for empty input so callers can guard.
 const telLink = (p) => { if (!p) return ""; const raw = String(p).trim(); const href = raw.replace(/[^\d+]/g, ""); return `<a class="contact-link" href="tel:${esc(href)}">${esc(raw)}</a>`; };
 const mailLink = (e) => { if (!e) return ""; const raw = String(e).trim(); return `<a class="contact-link" href="mailto:${encodeURIComponent(raw).replace(/%40/g, "@")}">${esc(raw)}</a>`; };
-const fmtM = (n) => (n == null || n === "" ? "—" : Number(n).toLocaleString("en-GB", { style: "currency", currency: "GBP", maximumFractionDigits: 0 }));
+const fmtM = (n) => (n == null || n === "" || isNaN(Number(n)) ? "—" : Number(n).toLocaleString("en-GB", { style: "currency", currency: "GBP", maximumFractionDigits: 0 }));
 // Exact-pence money — for fee figures on the case detail / evidence pack only. Dashboards keep fmtM (whole pounds).
-const fmtM2 = (n) => (n == null || n === "" ? "—" : Number(n).toLocaleString("en-GB", { style: "currency", currency: "GBP", minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+const fmtM2 = (n) => (n == null || n === "" || isNaN(Number(n)) ? "—" : Number(n).toLocaleString("en-GB", { style: "currency", currency: "GBP", minimumFractionDigits: 2, maximumFractionDigits: 2 }));
 let settings = {};
 let ME = null, TEAM = [], tasksScope = "mine";
 /* ---------- BACKEND-R4 §1 — role awareness ----------
@@ -4133,7 +4133,12 @@ function tourRender() {
     if (last) { tourEnd(true); return; }
     tourState.idx++; tourRender();
   };
-  requestAnimationFrame(() => { try { tourPositionBubble(bubble, targetEl); } catch (e) { /* off-screen target */ } });
+  requestAnimationFrame(() => {
+    try { tourPositionBubble(bubble, targetEl); } catch (e) { /* off-screen target */ }
+    // R17 · a11y — land keyboard focus inside the dialog (mirrors openModal's focus handling), so
+    // a keyboard user is on the Next/Finish button rather than left back on the page behind it.
+    try { const nb = bubble.querySelector("#tour-next"); if (nb) nb.focus(); } catch (e) { /* focus unsupported */ }
+  });
 }
 function tourReposition() {
   if (!tourState) return;
@@ -5338,7 +5343,7 @@ async function loadDashboard() {
     renderLoadError("#kpi-row", casesErr || alertsErr, loadDashboard);
     renderLoadError("#alerts-rateerc", casesErr || alertsErr, loadDashboard);
     // The independent dashboard widgets self-report their own errors.
-    loadRetention(); loadTasks(); loadProtection(); loadLeads(); loadTodayAppts(); loadBriefing(); loadWatchtower();
+    loadRetention(); loadTasks(); loadProtection(); loadLeads(); loadTodayAppts(); loadBriefing(); loadWatchtower(); loadUnactioned();
     return;
   }
   const activeAll = (cases || []).filter((c) => !["completed", "not_proceeding"].includes(c.stage));
@@ -5470,7 +5475,7 @@ async function loadDashboard() {
     <div class="row-item">
       <div class="row-main">
         <div class="t" onclick="openCase('${a.case_id}')">${esc(a.client_name)} ${propCtxChip(rateErcCtx, a.case_id, "row-prop")}${a.__dupes > 1 ? ` <span class="badge grey" title="${a.__dupes} cases share this property and this rate end date — shown once, because it is one mortgage conversation.">${a.__dupes} cases</span>` : ""}</div>
-        <div class="s">${lenderIcon(a.lender)}${esc(a.lender || "")} ${a.rate_percent ? a.rate_percent + "%" : ""} — ends ${fmtD(a.rate_end_date)}${a.days_to_rate_end != null ? ` (${a.days_to_rate_end < 0 ? Math.abs(a.days_to_rate_end) + " days ago" : "in " + a.days_to_rate_end + " days"})` : ""}${ercIds.has(a.case_id) ? ` — ERC runs until ${fmtD(a.erc_end_date)}` : ""}</div>
+        <div class="s">${lenderIcon(a.lender)}${esc(a.lender || "")} ${a.rate_percent ? a.rate_percent + "%" : ""} — ends ${fmtD(a.rate_end_date)}${a.days_to_rate_end != null ? ` (${a.days_to_rate_end < 0 ? Math.abs(a.days_to_rate_end) + (Math.abs(a.days_to_rate_end) === 1 ? " day" : " days") + " ago" : "in " + a.days_to_rate_end + (a.days_to_rate_end === 1 ? " day" : " days")})` : ""}${ercIds.has(a.case_id) ? ` — ERC runs until ${fmtD(a.erc_end_date)}` : ""}</div>
         ${money ? `<div class="s rate-money">Loan <strong>${mny.loan ? fmtM(mny.loan) : "—"}</strong> · last fee <strong>${mny.lastFee ? fmtM(mny.lastFee) : "none recorded"}</strong> <span class="money-basis">(value at risk · loan on the case · last fee as proxy)</span></div>` : ""}
         ${/* R12b · W-15b — the call pack, on the row the call is made from. Client money, not firm
              money, so it is NOT behind showMoney(): the balance and the payment are the client's
@@ -5522,6 +5527,7 @@ async function loadDashboard() {
   // Re-run it before reading the alerts; if the RPC fails, still render whatever rows exist.
   try { await db.rpc("run_watchtower"); } catch (e) { /* degraded: show the last known alerts */ }
   loadWatchtower();
+  loadUnactioned(); // R17 · §2 — the no-next-action radar, its own reads, scoped like the strip
   if (settings.outlook_enabled === "1") {
     const last = Number(localStorage.getItem("nm_last_outlook_sync") || 0);
     if (Date.now() - last > 10 * 60000) {
@@ -5920,6 +5926,7 @@ async function loadTasks() {
       ${isReviewFeedbackTask(t.title) ? REVIEW_TASK_BADGE : ""}
       ${overdue ? '<span class="badge red">overdue</span>' : ""}
       ${taskAssigneeHtml(t.id, t.assigned_to, "tasks")}
+      ${taskSnoozeControlsHtml(t.id, "tasks")}
       <button class="btn btn-sm" onclick="doneTask('${t.id}')">✓ Done</button>
     </div>`;
   }).join("") + (filtered.length > tasks.length ? `<div class="empty">…and ${filtered.length - tasks.length} more due.</div>` : "") : '<div class="empty">Nothing due in the next 14 days.</div>';
@@ -5955,6 +5962,50 @@ async function reopenTask(id, repaint) {
 window.doneTask = function (id) { return markTaskDone(id, loadTasks); };
 window.doneTaskInCase = function (taskId, caseId) { return markTaskDone(taskId, () => openCase(caseId)); };
 window.reopenTaskInCase = function (taskId, caseId) { return reopenTask(taskId, () => openCase(caseId)); };
+
+/* ---------- R17 · §3 — INLINE TASK SNOOZE / DEFER ----------
+   Rescheduling a task meant opening the case, finding the row, editing the date. These quick
+   controls PATCH case_tasks.due_date in place from My Day and Tasks due. My Day and Tasks show the
+   same tasks, so a snooze from either repaints BOTH (same discipline as briefDone's dual repaint).
+   The +Nd controls move the due date FORWARD without ever pulling a future task earlier: an overdue
+   or undated task snoozes from today; a task already due in the future snoozes from its own date.
+   The 📅 date input sets an exact date (its own value wins outright). Keyboard-accessible: real
+   buttons + a labelled date input, each with an aria-label. */
+function snoozeRepaintAll() { loadTasks(); loadBriefing(); }
+window.snoozeTask = async function (taskId, days) {
+  const { data: t, error: rerr } = await db.from("case_tasks").select("due_date").eq("id", taskId).single();
+  if (rerr) return toast("Couldn't snooze that task — " + rerr.message);
+  const today = localDateStr();
+  const base = t && t.due_date && t.due_date > today ? t.due_date : today;
+  const d = new Date(base + "T00:00:00");
+  d.setDate(d.getDate() + Number(days || 0));
+  const newDue = localDateStr(d.getTime());
+  const { error } = await db.from("case_tasks").update({ due_date: newDue }).eq("id", taskId);
+  if (error) return toast("Couldn't snooze that task — " + error.message);
+  toast("Snoozed — now due " + fmtD(newDue));
+  snoozeRepaintAll();
+};
+window.snoozeTaskTo = async function (taskId, value) {
+  if (!value) return;
+  const { error } = await db.from("case_tasks").update({ due_date: value }).eq("id", taskId);
+  if (error) return toast("Couldn't reschedule that task — " + error.message);
+  toast("Due date set to " + fmtD(value));
+  snoozeRepaintAll();
+};
+// The control cluster reused by both lists. `taskId` is a uuid (safe inline). Buttons carry their
+// own aria-labels; the date input is the 📅 pick and applies on change.
+function taskSnoozeControlsHtml(taskId, ctx) {
+  const t = localDateStr();
+  // A task can appear on BOTH My Day and Tasks due, so the DOM id carries the list context to stay
+  // unique across the two panels. Class hooks (.snooze-btn / .snooze-date) are shared for styling.
+  const p = (ctx || "task") + "-" + taskId;
+  return `<span class="task-snooze" role="group" aria-label="Snooze task">
+      <button type="button" class="btn btn-sm snooze-btn" id="snooze-1d-${p}" aria-label="Snooze task by 1 day" title="Push the due date on by 1 day" onclick="snoozeTask('${taskId}',1)">+1d</button>
+      <button type="button" class="btn btn-sm snooze-btn" id="snooze-3d-${p}" aria-label="Snooze task by 3 days" title="Push the due date on by 3 days" onclick="snoozeTask('${taskId}',3)">+3d</button>
+      <button type="button" class="btn btn-sm snooze-btn" id="snooze-1wk-${p}" aria-label="Snooze task by 1 week" title="Push the due date on by 1 week" onclick="snoozeTask('${taskId}',7)">+1wk</button>
+      <input type="date" class="snooze-date" id="snooze-pick-${p}" min="${t}" aria-label="Snooze task to a chosen date" title="Pick a new due date" onchange="snoozeTaskTo('${taskId}', this.value)">
+    </span>`;
+}
 
 async function loadProtection() {
   const cutoff = new Date(Date.now() - 30 * 86400000).toISOString();
@@ -6059,7 +6110,7 @@ function briefActions(it) {
   switch (it.kind) {
     case "task_overdue":
     case "task_today":
-      return `<button class="btn btn-sm" onclick="briefDone('${it.task_id}')">✓ Done</button>${open}`;
+      return `${taskSnoozeControlsHtml(it.task_id, "brief")}<button class="btn btn-sm" onclick="briefDone('${it.task_id}')">✓ Done</button>${open}`;
     /* R9-3 — the same two verbs as any other task, in the opposite order. "Open case" leads
        because the thing worth doing first is READING what the client said, and marking a
        complaint done without reading it is the one outcome this row exists to prevent. */
@@ -7076,6 +7127,63 @@ $("#watchtower-run").addEventListener("click", async () => {
     : `Checks re-run — nothing has changed since the last run. ${tail}`);
 });
 
+/* ---------- R17 · §2 — Unactioned-cases radar ----------
+   A live case (stage not completed / not_proceeding) with ZERO open case_tasks AND no note or event
+   in the last UNACTIONED_DAYS is invisible until the 45-day `stalled` trigger — six weeks of silent
+   drift. This client-side check (no new schema) surfaces those cases on Today so they get a next
+   step. Adviser-scoped the same way the Today strip / Rate drawer default: an adviser sees only
+   their own book; the Owner/Administrator see the whole firm. Self-contained (own reads) so it is
+   robust on the dashboard's error path, exactly like loadWatchtower and the other Today widgets. */
+const UNACTIONED_DAYS = 7;
+async function loadUnactioned() {
+  const listEl = $("#unactioned-list");
+  if (!listEl) return;
+  const sinceIso = new Date(Date.now() - UNACTIONED_DAYS * 86400000).toISOString();
+  const [casesRes, tasksRes, notesRes, eventRows] = await Promise.all([
+    db.from("cases").select("id,stage,assigned_to,client_id,created_at,clients!client_id(first_name,last_name)")
+      .not("stage", "in", "(completed,not_proceeding)"),
+    db.from("case_tasks").select("case_id").is("done_at", null),
+    db.from("case_notes").select("case_id,created_at"),
+    softRows(db.from("case_events").select("case_id,created_at")),
+  ]);
+  if (casesRes.error) {
+    listEl.innerHTML = `<div class="empty">No-next-action radar unavailable — ${esc(casesRes.error.message)}</div>`;
+    return;
+  }
+  // case_id → most recent note/event timestamp (activity). Undated / absent ⇒ never touched.
+  const lastActivity = {};
+  const note = (cid, ts) => { if (cid && ts && (!lastActivity[cid] || ts > lastActivity[cid])) lastActivity[cid] = ts; };
+  ((notesRes && notesRes.data) || []).forEach((r) => note(r.case_id, r.created_at));
+  (eventRows || []).forEach((r) => note(r.case_id, r.created_at));
+  const openTaskCases = new Set(((tasksRes && tasksRes.data) || []).map((r) => r.case_id).filter(Boolean));
+  const mine = !!(ME && ME.id) && !isAdminOrOwner();
+  const quiet = (casesRes.data || []).filter((c) =>
+    (!mine || c.assigned_to === ME.id) &&
+    !openTaskCases.has(c.id) &&
+    !(lastActivity[c.id] && lastActivity[c.id] >= sinceIso)
+  );
+  const ctx = await loadPropContext(quiet.map((c) => c.id));
+  // Quietest first — the case that has drifted longest is the one to ring today.
+  const daysQuiet = (c) => daysSince(lastActivity[c.id] || c.created_at);
+  quiet.sort((a, b) => (daysQuiet(b) ?? 9999) - (daysQuiet(a) ?? 9999));
+  listEl.innerHTML = quiet.length ? quiet.map((c) => {
+    const who = c.clients ? [c.clients.first_name, c.clients.last_name].filter(Boolean).join(" ") : "";
+    const n = daysQuiet(c);
+    const nLabel = n == null ? "no activity recorded" : `quiet ${n} ${n === 1 ? "day" : "days"}`;
+    const stageLbl = STAGE_LABEL[c.stage] || String(c.stage || "").replace(/_/g, " ");
+    return `<div class="row-item">
+      <div class="row-main">
+        <div class="t" onclick="openCase('${c.id}')">${esc(who) || "(no name)"} ${propCtxChip(ctx, c.id, "row-prop")}</div>
+        <div class="s">${esc(stageLbl)} · ${esc(staffName(c.assigned_to))} · ${nLabel}</div>
+      </div>
+      <span class="badge grey">NO NEXT ACTION</span>
+      <button class="btn btn-sm" onclick="openCase('${c.id}')">Open</button>
+    </div>`;
+  }).join("") : `<div class="empty">Every live case has a next action 🎉</div>`;
+  panelCount("#unactioned-list", quiet.length, quiet.length > 0);
+  autoDrawer("unactioned", quiet.length > 0);
+}
+
 /* ---------- Pipeline ---------- */
 async function loadPipeline() {
   const { data: cases, error } = await db.from("cases").select("*, clients!client_id(first_name,last_name)").order("updated_at", { ascending: false });
@@ -7346,6 +7454,126 @@ const CASE_SECTION_RULES = {
 // never to a product transfer (same lender, cover already in place). R15 · §5.
 const GI_KINDS = ["purchase", "first_time_buyer", "buy_to_let", "remortgage"];
 function caseGiApplies(kind) { return GI_KINDS.includes(kind); }
+/* ==========================================================================
+   R17 · §1 — STAGE PLAYBOOKS. Advancing a stage creates zero work today, so
+   advisers re-invent "what do I do at DIP/Application" from memory and drop
+   steps. This map is the house checklist per stage: suggested tasks with a due
+   offset (days from today) and optional kind-gating. It is ADVISORY — the case
+   modal OFFERS these as one-click adds, it never auto-creates on stage change.
+   `notKinds` drops a step for those case kinds; `onlyKinds` restricts it to
+   those. Product transfers skip valuation / solicitor / purchase-side steps and
+   stay lean. Stage tokens match STAGES; not_proceeding has no entry (nothing to
+   suggest), so the panel simply does not render there. */
+const CASE_STAGE_PLAYBOOK = {
+  enquiry: [
+    { title: "Qualify enquiry — budget, timeline, goal", dueOffsetDays: 0 },
+    { title: "Book fact-find appointment", dueOffsetDays: 2 },
+  ],
+  fact_find: [
+    { title: "Complete fact-find", dueOffsetDays: 1 },
+    { title: "Collect ID & proof of income/deposit", dueOffsetDays: 3 },
+    { title: "Discuss protection needs", dueOffsetDays: 3 },
+  ],
+  decision_in_principle: [
+    { title: "Submit DIP to lender", dueOffsetDays: 0 },
+    { title: "Confirm DIP outcome with client", dueOffsetDays: 2 },
+  ],
+  application: [
+    { title: "Submit full application to lender", dueOffsetDays: 1 },
+    { title: "Chase outstanding documents", dueOffsetDays: 3 },
+    { title: "Instruct valuation", dueOffsetDays: 2, notKinds: ["product_transfer"] },
+    { title: "Confirm ICR / rental income", dueOffsetDays: 1, onlyKinds: ["buy_to_let"] },
+  ],
+  offer: [
+    { title: "Check mortgage offer terms", dueOffsetDays: 0 },
+    { title: "Send offer to client & explain", dueOffsetDays: 1 },
+    { title: "Confirm solicitor instructed", dueOffsetDays: 2, notKinds: ["product_transfer"] },
+  ],
+  exchange: [
+    { title: "Confirm exchange", dueOffsetDays: 0 },
+    { title: "Prepare for completion", dueOffsetDays: 1 },
+  ],
+  completed: [
+    { title: "Send fee request", dueOffsetDays: 3 },
+    { title: "Request a review", dueOffsetDays: 7 },
+    { title: "Set/confirm rate-end reminder", dueOffsetDays: 3 },
+  ],
+};
+// The playbook steps that actually apply to this stage × kind (kind-gating resolved here).
+function stagePlaybookItems(stage, kind) {
+  return (CASE_STAGE_PLAYBOOK[stage] || []).filter((it) =>
+    (!it.notKinds || !it.notKinds.includes(kind)) &&
+    (!it.onlyKinds || it.onlyKinds.includes(kind)));
+}
+const playbookTitleKey = (t) => String(t == null ? "" : t).trim().toLowerCase();
+/* The Stage checklist panel for the case modal. Rendered for the case's CURRENT stage; each step
+   is deduped against the case's OPEN tasks (done_at null) by title — a matching open task shows
+   "✓ added" (disabled) and is never offered again. Returns "" when the stage has no applicable
+   steps (e.g. not_proceeding), which is how it stays out of the way where it would be noise. */
+function caseStageChecklistHtml(c, tasks) {
+  if (!c || !c.id) return "";
+  const items = stagePlaybookItems(c.stage, c.case_kind);
+  if (!items.length) return "";
+  const openTitles = new Set((tasks || []).filter((t) => !t.done_at).map((t) => playbookTitleKey(t.title)));
+  const stageLbl = STAGE_LABEL[c.stage] || String(c.stage || "").replace(/_/g, " ");
+  const rows = items.map((it, i) => {
+    const added = openTitles.has(playbookTitleKey(it.title));
+    const due = localDateStr(Date.now() + it.dueOffsetDays * 86400000);
+    return `<div class="row-item playbook-item" style="padding:6px 4px;">
+      <div class="row-main">
+        <div${added ? ' style="color:var(--muted);"' : ""}>${esc(it.title)}</div>
+        <div class="s">${added ? "already on the task list" : "suggested due " + fmtD(due)}</div>
+      </div>
+      ${added
+        ? '<span class="badge green playbook-done" title="A matching open task already exists on this case">✓ added</span>'
+        : `<button type="button" class="btn btn-sm playbook-add" aria-label="Add task: ${esc(it.title)}" title="Add this task — due ${fmtD(due)}, assigned to the case adviser" onclick="playbookAdd('${c.id}','${c.stage}','${c.case_kind}',${i})">+ Add</button>`}
+    </div>`;
+  });
+  const anyToAdd = items.some((it) => !openTitles.has(playbookTitleKey(it.title)));
+  return `<div style="margin-top:14px;" id="case-stage-checklist">
+      <h3 style="font-size:14px;">Stage checklist <span class="cs-muted" style="font-weight:400;">— suggested for ${esc(stageLbl)}</span></h3>
+      <p class="panel-sub" style="margin:2px 0 6px;">One-click tasks for this stage. Advisory — nothing is added until you press Add.</p>
+      <div id="stage-checklist-items">${rows.join("")}</div>
+      ${anyToAdd ? `<button type="button" class="btn btn-sm" id="playbook-add-all" title="Add every suggested task not already on the list" onclick="playbookAddAll('${c.id}','${c.stage}','${c.case_kind}')">+ Add all</button>` : ""}
+    </div>`;
+}
+/* One suggested task → a real case_tasks row. Re-reads the case's open tasks at click time so a
+   parallel add (or the same click twice) can never write a duplicate: matched by title, it just
+   repaints. due_date = today + the step's offset; assigned to the case's adviser (falling back to
+   the actor), created_by the actor — the exact shape the modal's own Add-task uses. */
+window.playbookAdd = async function (caseId, stage, kind, idx) {
+  const it = stagePlaybookItems(stage, kind)[idx];
+  if (!it) return;
+  const { data: openT } = await db.from("case_tasks").select("id,title").eq("case_id", caseId).is("done_at", null);
+  if ((openT || []).some((t) => playbookTitleKey(t.title) === playbookTitleKey(it.title))) {
+    toast("Already on the task list");
+    return openCase(caseId);
+  }
+  const { data: { user } } = await db.auth.getUser();
+  const { data: caseRow } = await db.from("cases").select("assigned_to").eq("id", caseId).single();
+  const assignee = (caseRow && caseRow.assigned_to) || (user && user.id);
+  const due = localDateStr(Date.now() + it.dueOffsetDays * 86400000);
+  const { error } = await db.from("case_tasks").insert({ case_id: caseId, title: it.title, due_date: due, created_by: user && user.id, assigned_to: assignee });
+  if (error) return toast("Couldn't add task — " + error.message);
+  toast("Task added — due " + fmtD(due));
+  openCase(caseId); // repaints the Tasks list AND the checklist (the added step flips to ✓ added)
+};
+// "Add all" — every applicable step not already open, in one insert. Dedupe is the same title match.
+window.playbookAddAll = async function (caseId, stage, kind) {
+  const items = stagePlaybookItems(stage, kind);
+  const { data: openT } = await db.from("case_tasks").select("id,title").eq("case_id", caseId).is("done_at", null);
+  const have = new Set((openT || []).map((t) => playbookTitleKey(t.title)));
+  const toAdd = items.filter((it) => !have.has(playbookTitleKey(it.title)));
+  if (!toAdd.length) { toast("All suggested tasks are already on the list"); return openCase(caseId); }
+  const { data: { user } } = await db.auth.getUser();
+  const { data: caseRow } = await db.from("cases").select("assigned_to").eq("id", caseId).single();
+  const assignee = (caseRow && caseRow.assigned_to) || (user && user.id);
+  const rows = toAdd.map((it) => ({ case_id: caseId, title: it.title, due_date: localDateStr(Date.now() + it.dueOffsetDays * 86400000), created_by: user && user.id, assigned_to: assignee }));
+  const { error } = await db.from("case_tasks").insert(rows);
+  if (error) return toast("Couldn't add tasks — " + error.message);
+  toast(`Added ${rows.length} task${rows.length === 1 ? "" : "s"}`);
+  openCase(caseId);
+};
 function caseActionIsPrimary(actionId, stage, kind) {
   const rule = CASE_ACTION_RULES[actionId];
   if (!rule) return false;
@@ -7402,7 +7630,7 @@ function caseActionBarHtml(c, stage, kind, opts) {
       <input type="file" id="offer-file" accept="application/pdf" class="hidden">
       <div class="more-actions" id="case-more-actions-wrap">
         <button type="button" class="btn btn-sm more-actions-toggle" id="case-more-actions-toggle" aria-expanded="false" aria-haspopup="true" title="Every other action for this case — always here, whatever the stage">More actions ▾</button>
-        <div class="more-actions-menu hidden" id="case-more-actions" role="menu">${overflowHtml || '<span class="more-actions-empty">No other actions at this stage.</span>'}</div>
+        <div class="more-actions-menu hidden" id="case-more-actions">${overflowHtml || '<span class="more-actions-empty">No other actions at this stage.</span>'}</div>
       </div>
     </div>`;
 }
@@ -8657,7 +8885,7 @@ async function loadProtectionPage() {
       ${rows.map((r, i) => {
         const kind = (KINDS.find((x) => x[0] === r.case_kind) || [])[1] || "";
         const p = PROT_BADGE[r.protection_status] || PROT_BADGE.not_discussed;
-        const gi = ["purchase", "first_time_buyer"].includes(r.case_kind) ? (GI_BADGE[r.gi_status] || GI_BADGE.not_discussed) : null;
+        const gi = caseGiApplies(r.case_kind) ? (GI_BADGE[r.gi_status] || GI_BADGE.not_discussed) : null;
         return `<tr>
         ${protCb(r)}
         <td class="prot-col-n" style="color:var(--muted);">${i + 1}</td>
@@ -10016,6 +10244,10 @@ window.openCase = async function (id, opts = {}) {
             : `<button class="btn btn-sm" aria-label="Mark task done" title="Mark task done" onclick="doneTaskInCase('${t.id}','${id}')">✓</button>`}
         </div>`).join("") || '<div class="empty">No tasks.</div>'}</div>
     </div>
+    ${/* R17 · §1 — the Stage checklist sits directly under Tasks: the house steps for the current
+         stage, each a one-click add that writes a real case_tasks row and dedupes against what is
+         already open. Advisory; renders only where the stage has steps (never on not_proceeding). */ ""}
+    ${id ? caseStageChecklistHtml(c, tasks) : ""}
     ${/* R9-5 · m10 — THE DOCUMENT CHECKLIST. Between Tasks and Notes because that is where it sits
          in the day: it is work outstanding, not history. Absent entirely on a database without the
          migration — see docsSupported(). Painted by renderCaseDocs() below. */ ""}
@@ -18955,7 +19187,7 @@ function renderRateEndBook(all) {
       .map((c) => `<div class="row-item rb-recover-row">
         <div class="row-main">
           <div class="t" onclick="openCase('${c.id}')">${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ")) || "(no name)"} ${propChip(c, { cls: "row-prop" }) || ""}</div>
-          <div class="s">${lenderIcon(c.lender)}${esc(c.lender || "no lender")} — rate ended ${fmtD(c.rate_end_date)} (${daysSince(c.rate_end_date)} days ago) · last fee ${caseLastFee(c) ? fmtM(caseLastFee(c)) : "none recorded"}</div>
+          <div class="s">${lenderIcon(c.lender)}${esc(c.lender || "no lender")} — rate ended ${fmtD(c.rate_end_date)} (${daysSince(c.rate_end_date)} ${daysSince(c.rate_end_date) === 1 ? "day" : "days"} ago) · last fee ${caseLastFee(c) ? fmtM(caseLastFee(c)) : "none recorded"}</div>
           ${/* R12b · W-15c — the reason to ring them today, on the row that lists the ones nobody
                has rung. Rendered only when the balance, the reversion rate and the ended rate are
                all on the case; a missing input shows nothing at all rather than a £0 that would be

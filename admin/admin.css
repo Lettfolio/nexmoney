@@ -1710,6 +1710,18 @@ select.task-reassign { width: auto; padding: 3px 6px; font-size: 12px; }
 .due-chips-lbl { font-size: 11.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
 .due-chip, .fu-chip { padding: 3px 10px; font-size: 12px; border-radius: 999px; }
 
+/* ---------- R17 · §3 — inline task snooze controls (My Day + Tasks rows) ---------- */
+.task-snooze { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.snooze-btn { padding: 3px 8px; font-size: 11.5px; border-radius: 999px; }
+.snooze-date { width: auto; max-width: 140px; padding: 3px 6px; font-size: 12px; cursor: pointer; }
+.snooze-date::-webkit-calendar-picker-indicator { cursor: pointer; }
+
+/* ---------- R17 · §1 — stage checklist (case modal) ---------- */
+#case-stage-checklist .playbook-item { border-bottom: 1px dashed var(--border); }
+#case-stage-checklist .playbook-item:last-of-type { border-bottom: none; }
+.playbook-add { white-space: nowrap; }
+.playbook-done { align-self: center; }
+
 /* ---------- Case modal: summary header + collapsible details (BUILD 2a) ---------- */
 .case-summary { background: var(--light); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; margin-bottom: 16px; }
 .cs-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
