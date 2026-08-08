@@ -275,6 +275,25 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
 .mi-section { margin: 24px 0; border-top: 2px solid var(--line, var(--light)); padding-top: 16px; }
 .mi-section-head { margin: 0 0 4px; font-size: 18px; }
 
+/* R20 — actionable MI: the small per-panel CSV button, the clickable funnel bars, and the
+   drill-down modal. The CSV button rides the existing `.panel > h3 .btn:first-of-type { margin-left:auto }`
+   rule, so it sits unobtrusively at the right of each panel header. */
+.mi-csv-btn { font-weight: 600; }
+/* Funnel stage bars are now real <button>s — reset the button chrome so they read like the old
+   rows, and give a clear hover/focus affordance for the ones that drill through. */
+.mi-bar-row { display: flex; align-items: center; gap: 8px; margin: 3px 0; width: 100%; padding: 2px 4px; background: none; border: 0; border-radius: 5px; text-align: left; font: inherit; color: inherit; cursor: pointer; }
+.mi-bar-row[disabled] { cursor: default; opacity: .65; }
+.mi-bar-row:not([disabled]):hover { background: #f3f6fa; }
+.mi-bar-row:focus-visible { outline: 2px solid var(--blue, #2563eb); outline-offset: 1px; }
+.mi-bar-lbl { width: 90px; font-size: 12px; color: var(--muted); }
+.mi-bar-track { flex: 1; background: var(--light); border-radius: 4px; }
+.mi-bar-fill { display: block; background: var(--orange); border-radius: 4px; height: 16px; }
+.mi-bar-n { width: 24px; font-size: 12px; font-weight: 600; }
+.mi-drilldown h3 { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+.mi-drilldown .mi-drill-count { min-width: 20px; text-align: center; padding: 1px 8px; border-radius: 20px; background: var(--light); color: var(--muted-on-tint); font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.mi-drilldown .mi-drill-count + .mi-csv-btn { margin-left: auto; }
+.mi-drill-table { margin-top: 6px; }
+
 /* Panel count chips + slim empty panels */
 .panel h3 .count {
   display: inline-block; min-width: 20px; text-align: center;

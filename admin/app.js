@@ -18106,12 +18106,15 @@ function renderPipelineMI(all, mv) {
   // ---- Panel 1: funnel + conversion + win rate ----
   const liveTot = MI_LIVE_STAGES.reduce((s, st) => s + funnel[st], 0);
   const maxFun = Math.max(...MI_LIVE_STAGES.map((s) => funnel[s]), 1);
+  /* R20 — each stage bar is now a real <button> (keyboard-accessible, Enter/Space native) that
+     drills to the live cases at that stage. A zero-count bar is `disabled` so it is neither
+     focusable nor clickable — there is nothing to open behind it. Listeners wired below. */
   $("#report-mi-funnel").innerHTML = liveTot ? MI_LIVE_STAGES.map((s) => `
-    <div style="display:flex;align-items:center;gap:8px;margin:3px 0;">
-      <span style="width:90px;font-size:12px;color:var(--muted);">${STAGE_LABEL[s]}</span>
-      <div style="flex:1;background:var(--light);border-radius:4px;"><div style="width:${(funnel[s] / maxFun) * 100}%;background:var(--orange);border-radius:4px;height:16px;"></div></div>
-      <span style="width:24px;font-size:12px;font-weight:600;">${funnel[s]}</span>
-    </div>`).join("") : '<div class="empty">No live cases in the pipeline.</div>';
+    <button type="button" class="mi-bar-row mi-drill" data-mi-stage="${s}"${funnel[s] ? ` title="Click to see the cases"` : " disabled"} aria-label="${esc(STAGE_LABEL[s])}: ${funnel[s]} live case${funnel[s] === 1 ? "" : "s"}">
+      <span class="mi-bar-lbl">${STAGE_LABEL[s]}</span>
+      <span class="mi-bar-track"><span class="mi-bar-fill" style="width:${(funnel[s] / maxFun) * 100}%;"></span></span>
+      <span class="mi-bar-n">${funnel[s]}</span>
+    </button>`).join("") : '<div class="empty">No live cases in the pipeline.</div>';
 
   const total = rows.length;
   const stepPct = (num, den) => (den ? Math.round((num / den) * 100) + "%" : "—");
@@ -18128,7 +18131,7 @@ function renderPipelineMI(all, mv) {
   const terminal = completedN + notProceedingN;
   $("#report-mi-winrate").innerHTML = terminal < 5
     ? `<span class="stat-weak">Win rate: not enough completed cases yet for a reliable rate (${terminal} terminal case${terminal === 1 ? "" : "s"}).</span>`
-    : `<strong>Win rate ${Math.round((completedN / terminal) * 100)}%</strong> — ${completedN} completed of ${terminal} terminal (completed + not proceeding).`;
+    : `<button type="button" class="linkish mi-drill" id="report-mi-winrate-link" title="Click to see the cases"><strong>Win rate ${Math.round((completedN / terminal) * 100)}%</strong> — ${completedN} completed of ${terminal} terminal (completed + not proceeding).</button>`;
 
   // ---- Panel 2: velocity ----
   const vMetrics = [
@@ -18209,7 +18212,7 @@ function renderPipelineMI(all, mv) {
     .map((a) => {
       const term = a.won + a.lost;
       return {
-        id: a.id, live: a.live, completedPeriod: a.completedPeriod, feesPeriod: a.feesPeriod,
+        id: a.id, key: a.id || "__unassigned", live: a.live, completedPeriod: a.completedPeriod, feesPeriod: a.feesPeriod,
         term, winPct: term ? Math.round((a.won / term) * 100) : null, medCycle: miMedian(a.cycles),
         name: a.id ? staffName(a.id) : "Unassigned",
       };
@@ -18219,7 +18222,7 @@ function renderPipelineMI(all, mv) {
   $("#report-mi-scoreboard").innerHTML = boardRows.length ? `<table class="imp-table">
     <tr><th>Adviser</th><th>Live</th><th title="Completed in ${esc(label)}">Completed</th><th title="Broker + proc fee on cases completed in ${esc(label)}">Fees written</th><th title="All-time completed ÷ (completed + not proceeding)">Win rate</th><th title="All-time median days, created → completed">Median cycle</th></tr>
     ${boardRows.map((a) => `<tr>
-      <td>${esc(a.name)}</td>
+      <td><button type="button" class="linkish mi-drill mi-adv-link" data-mi-adv="${esc(a.key)}" title="Click to see the cases">${esc(a.name)}</button></td>
       <td>${a.live}</td>
       <td>${a.completedPeriod}</td>
       <td>${fmtM(a.feesPeriod)}</td>
@@ -18227,7 +18230,123 @@ function renderPipelineMI(all, mv) {
       <td>${a.medCycle == null ? '<span class="cs-muted">—</span>' : a.medCycle + "d"}</td>
     </tr>`).join("")}
   </table>` : '<div class="empty">No adviser activity yet.</div>';
+
+  /* ============================ R20 — ACTIONABLE MI ============================
+     Drill-downs and per-panel CSV, all off the in-scope `all`/`rows` set already read by
+     Reports (no new query) and inside this owner/admin-gated render (gate inherited). The
+     click targets rendered above are real <button>s, so Enter/Space work natively; each just
+     filters `rows` and hands the subset to miDrilldown(). CSV buttons live in the static panel
+     headers; their handlers reuse the aggregates computed above and emit via miCsv() (which
+     mirrors exportCsv's serialization — same injection guard, BOM, Blob, anchor download). */
+  const dstr = new Date().toISOString().slice(0, 10);
+
+  // Funnel stage bars → live cases at that stage.
+  $("#report-mi-funnel").querySelectorAll(".mi-bar-row[data-mi-stage]").forEach((btn) => {
+    const s = btn.getAttribute("data-mi-stage");
+    btn.addEventListener("click", () => miDrilldown(`Live cases · ${STAGE_LABEL[s] || s}`, rows.filter((c) => c.stage === s)));
+  });
+  // Scoreboard adviser rows → that adviser's cases (all of them, live + terminal).
+  $("#report-mi-scoreboard").querySelectorAll(".mi-adv-link[data-mi-adv]").forEach((btn) => {
+    const key = btn.getAttribute("data-mi-adv");
+    const nm = key === "__unassigned" ? "Unassigned" : staffName(key);
+    btn.addEventListener("click", () => miDrilldown(`${nm} · all cases`, rows.filter((c) => (c.assigned_to || "__unassigned") === key)));
+  });
+  // Win-rate figure → the terminal cases (completed + not proceeding) behind the rate.
+  const wrLink = $("#report-mi-winrate-link");
+  if (wrLink) wrLink.addEventListener("click", () => miDrilldown("Terminal cases · win rate", rows.filter((c) => c.stage === "completed" || c.stage === "not_proceeding")));
+
+  // ---- Per-panel CSV export ----
+  const csvFunnel = $("#report-mi-csv-funnel");
+  if (csvFunnel) csvFunnel.onclick = () => {
+    const r = [];
+    MI_LIVE_STAGES.forEach((s) => r.push(["Live funnel", STAGE_LABEL[s], funnel[s], ""]));
+    r.push(["Conversion", "Created", total, ""]);
+    r.push(["Conversion", "Reached application (submitted)", reachedApp, stepPct(reachedApp, total)]);
+    r.push(["Conversion", "Reached offer (offer issued)", reachedOffer, stepPct(reachedOffer, reachedApp)]);
+    r.push(["Conversion", "Completed", reachedCompleted, stepPct(reachedCompleted, reachedOffer)]);
+    r.push(["Win rate", `${completedN} completed of ${terminal} terminal`, terminal >= 5 ? Math.round((completedN / terminal) * 100) + "%" : "n/a (<5 terminal)", ""]);
+    miCsv(`nexmoney-mi-funnel-${dstr}.csv`, ["Section", "Item", "Count", "Step %"], r);
+  };
+  const csvVel = $("#report-mi-csv-velocity");
+  if (csvVel) csvVel.onclick = () => {
+    const r = vMetrics.map((m) => [m.label, miMedian(m.arr) ?? "", miMean(m.arr) ?? "", m.arr.length]);
+    miCsv(`nexmoney-mi-velocity-${dstr}.csv`, ["Transition", "Median days", "Mean days", "n"], r);
+  };
+  const csvRev = $("#report-mi-csv-revenue");
+  if (csvRev) csvRev.onclick = () => {
+    const r = [];
+    runMonths.forEach((m, i) => r.push(["Run-rate", m, runVals[i], "", ""]));
+    r.push(["Run-rate", "12-month total", runTotal, "", ""]);
+    MI_LIVE_STAGES.forEach((s) => r.push(["Forecast", STAGE_LABEL[s], liveFeeByStage[s], Math.round(weightOf[s] * 100) + "%", Math.round(liveFeeByStage[s] * weightOf[s])]));
+    r.push(["Forecast", "Live pipeline total", liveFeeTotal, "", Math.round(weightedTotal)]);
+    miCsv(`nexmoney-mi-revenue-${dstr}.csv`, ["Section", "Item", "£ / count", "Weight", "Weighted £"], r);
+  };
+  const csvBoard = $("#report-mi-csv-scoreboard");
+  if (csvBoard) csvBoard.onclick = () => {
+    const r = boardRows.map((a) => [a.name, a.live, a.completedPeriod, a.feesPeriod, a.winPct == null ? "" : a.winPct + "%", a.term, a.medCycle == null ? "" : a.medCycle]);
+    miCsv(`nexmoney-mi-scoreboard-${dstr}.csv`, ["Adviser", "Live", `Completed (${label})`, "Fees written £", "Win rate", "Terminal n", "Median cycle days"], r);
+  };
 }
+
+/* R20 — one thin CSV emitter for the MI panels and drill-downs. exportCsv() (~8735) is
+   case-book-shaped: fixed columns + a fixed `pipeline-…` filename, so it cannot serialize the
+   aggregate MI tables. Rather than a second CSV library, this reuses exportCsv's EXACT
+   serialization contract — the same formula-injection guard, the same UTF-8 BOM, the same
+   Blob + anchor download — parameterized by filename/header/rows. Owner/admin-gated by virtue
+   of only being reachable from inside #report-mi-section. */
+function miCsv(filename, header, rows) {
+  const q2 = (v) => {
+    let s = String(v ?? "");
+    if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;   // spreadsheet formula injection, same guard as exportCsv
+    return `"${s.replace(/"/g, '""')}"`;
+  };
+  const lines = [header.map(q2).join(",")].concat((rows || []).map((r) => r.map(q2).join(",")));
+  const blob = new Blob(["﻿" + lines.join("\n")], { type: "text/csv" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+}
+
+/* R20 — the reusable drill-down modal. Reuses the existing #modal / openModal() infra (same
+   pattern as the merge/appointment modals: set #modal.innerHTML, then openModal()). Lists the
+   passed-in cases (already filtered from `all` by the caller — no query), each row client ·
+   stage · adviser · fee, with an Open button that routes through openCase(), a header count,
+   and its own CSV (client, stage, adviser, fee, key milestone dates). Empty → "No cases match." */
+function miDrilldown(title, cases) {
+  const list = (cases || []).slice();
+  const feeOf = (c) => Number(c.broker_fee || 0) + Number(c.proc_fee || 0);
+  const nameOf = (c) => [c.clients && c.clients.first_name, c.clients && c.clients.last_name].filter(Boolean).join(" ") || "—";
+  list.sort((a, b) => feeOf(b) - feeOf(a) || nameOf(a).localeCompare(nameOf(b)));
+  const body = list.length ? `<table class="imp-table mi-drill-table">
+    <tr><th>Client</th><th>Stage</th><th>Adviser</th><th>Fee</th><th></th></tr>
+    ${list.map((c) => `<tr>
+      <td>${esc(nameOf(c))}</td>
+      <td>${esc(STAGE_LABEL[c.stage] || c.stage)}</td>
+      <td>${c.assigned_to ? esc(staffName(c.assigned_to)) : '<span class="cs-muted">Unassigned</span>'}</td>
+      <td>${fmtM(feeOf(c))}</td>
+      <td><button type="button" class="btn btn-sm" onclick="closeModal(); openCase('${c.id}')">Open</button></td>
+    </tr>`).join("")}
+  </table>` : '<div class="empty">No cases match.</div>';
+  $("#modal").innerHTML = `<div id="mi-drilldown" class="mi-drilldown">
+    <h3>${esc(title)} <span class="mi-drill-count">${list.length}</span>${list.length ? `<button type="button" class="btn btn-sm mi-csv-btn" id="mi-drilldown-csv" title="Download these cases as CSV">⭳ CSV</button>` : ""}</h3>
+    ${body}
+    <div class="modal-actions"><div></div><div class="right"><button type="button" class="btn" id="mi-drilldown-close">Close</button></div></div>
+  </div>`;
+  openModal();
+  const closeBtn = $("#mi-drilldown-close");
+  if (closeBtn) closeBtn.onclick = closeModalGuarded;
+  const csvBtn = $("#mi-drilldown-csv");
+  if (csvBtn) csvBtn.onclick = () => {
+    const rowsOut = list.map((c) => [
+      nameOf(c), STAGE_LABEL[c.stage] || c.stage, c.assigned_to ? staffName(c.assigned_to) : "Unassigned", feeOf(c),
+      (c.created_at || "").slice(0, 10), (c.submitted_at || "").slice(0, 10), (c.offer_issued_date || "").slice(0, 10), (c.completed_at || "").slice(0, 10),
+    ]);
+    miCsv(`nexmoney-mi-drilldown-${new Date().toISOString().slice(0, 10)}.csv`,
+      ["Client", "Stage", "Adviser", "Fee £", "Created", "Submitted", "Offer issued", "Completed"], rowsOut);
+  };
+}
+window.miDrilldown = miDrilldown;
 
 /* Batch 6 feature-detection (M2). PostgREST answers a select naming a column that doesn't exist
    with 42703 for the WHOLE statement, so these columns are read in a separate, small query: on an
