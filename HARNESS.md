@@ -77,18 +77,21 @@ node tests/r14.js
 node tests/r15.js
 node tests/r16.js
 node tests/r17.js
+node tests/r18.js
+node tests/r19.js
 ```
 
-Current green counts (end of round 17). r8_touch/r8_rev/r11_ux still carry the
+Current green counts (end of round 19). r8_touch/r8_rev/r11_ux still carry the
 151/176/123 figures the R13 note below already flagged (fixture-derived
-counts, unrelated to R15/R16/R17 — see "compute test expectations from fixtures
-at runtime" in Standing rules); every other suite's count is unchanged by R17
-except the new r17.js row itself — R17 needed NO existing-suite edits either
-(see the R17 notes below for why — including why the GI-badge fix, despite
-looking like an obvious candidate for an existing-suite update, turned out not
-to need one).
+counts, unrelated to R15/R16/R17/R18/R19 — see "compute test expectations
+from fixtures at runtime" in Standing rules); every other pre-existing
+suite's count is unchanged by R18 or R19 — **neither round needed ANY
+existing-suite edit**, only the two new files below (see the R18 and R19
+notes for why: R18 is scale/perf hardening behind selectors nothing else
+asserted the old shape of, and R19 is new owner-gated Reports content that no
+earlier suite reaches).
 
-**Full battery is 100% green (2,704/2,704).** R17 also made two long-standing
+**Full battery is 100% green (2,786/2,786).** R17 also made two long-standing
 date-fragile checks in `r12b.js` deterministic (B1 "Earlier today" crossed
 midnight when run just after 00:00; B5's month-cap date collided with the
 even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes below.
@@ -111,7 +114,216 @@ even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes belo
 | `tests/r15.js` | 160 |
 | `tests/r16.js` | 81 |
 | `tests/r17.js` | 112 |
-| **Total** | **2,704** |
+| `tests/r18.js` | 43 |
+| `tests/r19.js` | 39 |
+| **Total** | **2,786** |
+
+R19 notes: owner/admin Pipeline MI on Reports — four panels, no new DB
+schema, computed client-side in ONE O(n) pass over the same `cases` read
+Reports already does (plus `submitted_at`/`offer_issued_date`, now added to
+that select alongside the pre-existing `completed_at`/`created_at`).
+**Everything is derived from milestone DATE columns, never from
+`stage_changed` case_events** — the CTO spec called this out explicitly
+because the DB carries only ~36 pre-launch stage-change events, nowhere near
+enough to drive a funnel; date columns are populated on every real case and
+only get richer as the book grows.
+
+**Container + gate.** `#report-mi-section` (`renderPipelineMI`, app.js ~18041)
+holds all four panels; gated as a whole with the same `classList.toggle
+("hidden", !isAdminOrOwner())` mechanism the pre-existing money panels use —
+NOT `isOwner()`, MI is explicitly owner-AND-admin per spec. The Reports jump
+nav (`REPORT_JUMP_SECTIONS`) reads that same `.hidden` via `repJumpVisible()`,
+so an adviser gets neither the section nor any of its four chips
+(`#rep-nav-mi` / `-mivelocity` / `-mirevenue` / `-miboard`) — verified on
+both personas, not just read from the source.
+
+**Panel 1 — funnel & conversion** (`#report-mi-funnel-panel`,
+bodies `#report-mi-funnel` / `#report-mi-conversion` / `#report-mi-winrate`).
+Funnel = live-stage counts (`MI_LIVE_STAGES` = enquiry/fact_find/
+decision_in_principle/application/offer/exchange) as horizontal bars.
+Conversion walks `created → submitted_at set → offer_issued_date set →
+completed_at set`, each step's % = `round(thisStageCount / previousStageCount
+* 100)` — note this is **not clamped to 100%** anywhere in the code (a case
+can have `completed_at` without `offer_issued_date`, since these are
+independent date-presence checks, not a strict funnel), and `tests/r19.js`'s
+own fixture deliberately keeps `reachedCompleted` comfortably below
+`reachedOffer` to stay in the intuitive range while still proving the exact
+un-clamped formula. Win rate = `completedN / (completedN + notProceedingN)`
+among cases that reached a terminal stage, with a `< 5` terminal thin-data
+guard ("not enough completed cases yet for a reliable rate (N terminal
+case(s))") in place of a noisy %.
+
+**Panel 2 — velocity** (`#report-mi-velocity-panel`, bodies
+`#report-mi-velocity` / `#report-mi-bottleneck`). Four transitions —
+created→application, application→offer, offer→completion, created→completion
+(total) — each counted ONLY where both its endpoints exist and the gap is
+`>= 0` days; median is the headline (`miMedian`: sorted-array middle, or the
+rounded average of the two middles when even-length), average alongside
+(`miMean`: rounded mean), `n=` shown per row. Bottleneck names the sub-step
+(to application / underwriting / completion — the total-cycle row is
+excluded from bottleneck candidacy) with the LARGEST median, or "Not enough
+dated cases yet to identify a bottleneck." when none of the three have any
+data at all.
+
+**Panel 3 — revenue** (`#report-mi-revenue-panel`, bodies
+`#report-mi-forecast-headline` / `#report-mi-runrate` / `-basis` /
+`#report-mi-forecast`). Run-rate = `sum(broker_fee + proc_fee)` for cases
+whose `completed_at` falls in each of the last 12 calendar months
+(oldest→newest, host-local Y/M exactly like the existing 6-month completions
+trend), rendered as bars with a `title="YYYY-MM: £X"` attribute per bar (the
+easiest, least-brittle way for a test to read the exact bucketed figure) plus
+a 12-month total in the basis line. Forecast = `Σ(live-stage fee × stage
+weight)`; weight is `MI_STAGE_DEFAULT_WEIGHT` (enquiry .1 / fact_find .2 /
+decision_in_principle .4 / application .6 / offer .85 / exchange .95) UNLESS
+`reachedCompleted >= 5` (NOT thin) AND that specific stage's own reach count
+is `>= 5`, in which case application/offer are individually replaced with
+their historical `stageAndCompleted / stageReached` rate — enquiry/fact_find/
+DIP/exchange never calibrate (no historical reach counted for them at all in
+this round's formula), so the label reads "(application/offer weights
+calibrated from history; other stages default likelihoods)" the moment
+EITHER one calibrates, "(default likelihoods — will calibrate as cases
+complete)" otherwise. `tests/r19.js` exercises BOTH branches on two separate,
+fully-wiped-and-reseeded case books (Block B: 2 terminal cases, thin,
+zero-value default-weight forecast; Block C: a larger known set with
+`reachedCompleted/reachedApp/reachedOffer` all `>= 5`, calibrated).
+
+**Panel 4 — scoreboard** (`#report-mi-scoreboard-panel`, body
+`#report-mi-scoreboard`). Grouped by `cases.assigned_to` (`|| "__unassigned"`
+→ an "Unassigned" row, name resolved via `staffName`/profiles); columns are
+live count (now), completed + fees written (both scoped to the Reports
+MONTH PICKER's selected month, `mv` — defaulting to the current month, same
+variable `renderMonthReport` already uses), win rate + median cycle (BOTH
+all-time, not period-scoped — `winPct` and `medCycle` read the FULL history
+of `stage==='completed'`/`'not_proceeding'` regardless of when), sorted by
+fees-written-(period)-descending. Win rate carries its own `< 5`-terminal
+"weak" wrapper (`.stat-weak`) per adviser row, same threshold and same
+textual shape as Panel 1's headline guard, just per-row instead of once;
+`tests/r19.js`'s fixture deliberately puts one adviser exactly AT the
+term-5 boundary (confident) and the Unassigned row at term=1 (weak) to prove
+both branches render.
+
+**Test design note for anyone extending `tests/r19.js`.** Every panel reads
+the WHOLE `cases` table (bounded by `REPORTS_ROW_CAP`, not date-filtered to
+the selected month — only the scoreboard's completed/fees columns are
+period-scoped), so a meaningful precision test has to fully control that
+table: each block starts `await window.__mockDb.from("cases").delete()`
+(unconditional — Owner/Administrator only, which `p4` is) then reseeds a
+fully-known row set, rather than trying to reason about fixture composition.
+`computeExpectedMI()` in the test file is an independent re-implementation of
+every formula above (never calls `renderPipelineMI`); the only app.js
+functions it calls directly are pure DISPLAY formatters (`fmtM`,
+`localMonthStr`) used purely to render the SAME already-independently-computed
+number the same way the page would, exactly as `tests/r17.js` unit-tests
+`fmtM`/`fmtM2` directly — never the feature logic itself. Velocity/conversion/
+run-rate/forecast rows are built with deliberately DECOUPLED milestone dates
+(e.g. a row testing `submitted_at → offer_issued_date` omits `created_at`
+entirely, which defaults to "now" in the mock and therefore yields a NEGATIVE
+`created_at → submitted_at` gap that the `>= 0` guard excludes) so one fixture
+row never silently pollutes an arithmetic array it isn't meant to be part of.
+
+R18 notes: scale/speed hardening — five fixes (P1 perf-only, no behaviour to
+test) plus P2/P3/P4/P6/D1/P7, frontend + mock only, no new DB columns.
+
+**P2 — `debounce()`** (app.js ~224), a plain trailing-edge wrapper (default
+250ms) around `#client-search` and `#board-search`'s `input` listeners, and
+the client-row bulk-select checkbox handler is now ONE delegated listener on
+`#client-list` instead of one per row (perf only — the existing bulk-bar
+suites already cover its behaviour, nothing new to assert). **RULE FOR
+FUTURE TESTS: never assert on a search/filter box's result within ~250ms of
+the last keystroke** — `tests/r18.js` §D checks the list is UNCHANGED at
+~50ms and HAS updated by ~450ms, the same margin `tests/r17.js`'s snooze
+waits already use, comfortably clear of the 250ms boundary in either
+direction.
+
+**P3 — the unactioned radar's 90-day activity read** (app.js ~7154, inside
+the existing `loadUnactioned()` from R17 §2). MEMBERSHIP is still the 7-day
+`UNACTIONED_DAYS` rule (a case with any note/event inside the last 7 days is
+never quiet); what changed is the LABEL's basis — `lastActivity` is now read
+from a 90-day window (previously it only ever saw what the 7-day query
+returned, i.e. nothing for a genuinely quiet case, so the label ALWAYS fell
+back to `created_at`). A note 8–90 days old now shows its TRUE age ("quiet N
+days"); a note beyond 90 days is invisible to the read and the label still
+falls back to `created_at`, exactly as before this round.
+`tests/r18.js` §F proves all three bands on fresh `mkQuietCase()` fixtures
+(30-day note → true age shown; 3-day note → excluded from the radar
+entirely, membership unchanged; 100-day note on a case with a KNOWN
+`created_at` → falls back to that date, not the invisible note).
+
+**P4 — render caps.** `BOARD_COL_CAP` (50, app.js ~7211) per pipeline-board
+column: `boardExpandedStages` (a `Set` of stage keys) plus `window.
+boardShowMore(stage)` and a `.board-show-more` "Show N more" button reveal
+the rest; the column's `<h4><span>` count is always the TRUE total, never the
+capped render count, and the Set persists across re-renders (a search/filter
+change, or any other `loadPipeline()` call) so an expanded column stays
+expanded with no re-click. `CLIENT_LIST_CAP` (100, app.js ~12112) on the
+client list works the same way but has no expand control — a
+`.client-list-cap-note` ("Showing 100 of N — refine your search to narrow the
+list.") is the only way past it, and BOTH the segment chip counts
+(`renderClientSegments`, reads the full `searched` array) and the bulk bar's
+"Select all N shown" (`renderClientBulkBar`, reads the full `list`) describe
+the uncapped total throughout. `tests/r18.js` §B/§C seed fresh rows ON TOP OF
+whatever the fixture book already has and read the BASELINE count off the
+app's own rendered header/total before seeding — no test in this file
+assumes fixture composition, exactly the "compute from fixtures at runtime"
+standing rule.
+
+**D1 — client-save optimistic-concurrency guard** (app.js ~13376), mirroring
+the case-save guard from an earlier round exactly: `openedClientUpdatedAt` is
+captured the moment `openClient(id)` loads the row (`null` for a brand-new
+client — an INSERT is never guarded) and the save is `.update(row).eq("id",
+id).eq("updated_at", openedClientUpdatedAt)`. Zero rows back means the row
+changed since it was opened; a `confirm()` offers OK (reload — discards the
+on-screen edit and re-opens showing the CONCURRENT value) or Cancel (keep
+editing — `refreshOpenedClientStamp(id)` re-baselines the stamp to the
+current row and returns WITHOUT writing, so a second Save then succeeds and
+applies the operator's edit on top of the concurrent one). `tests/r18.js` §E
+drives all three paths for real (happy path / Cancel-then-retry / OK-reload)
+against `window.__mockDb`-mutated rows, checking the database state at each
+intermediate step so a silent overwrite would be caught even if the dialog
+handling looked right.
+
+**P6 — client-picker cache.** `clientPickerCache` (app.js ~9676) holds the
+case modal's `#case-client-select` option list for the session;
+`invalidateClientPicker()` drops it and is called from every client-INSERT
+path (`openClient`'s own Save, the case modal's inline "+ New client…" flow,
+the Revolution importer). A case already open on a client absent from the
+cache self-heals with one refetch (`if (id && c.client_id && !clients.some
+(...)) clients = await fetchClientPicker()`), for a path that forgot to
+invalidate or a race — this affects only an EXISTING case being reopened, not
+a brand-new one. `tests/r18.js` §G drives the real UI (not a direct DB
+insert) — clicks "+ New client…", saves, then opens a brand-new case in the
+SAME session with no reload — and confirms the client is in the select.
+
+**P7 — `REPORTS_ROW_CAP`** raised 5000 → 20000 (app.js ~18242): at current
+scale `stage_changed` case_events alone already exceed 5000, so the old cap
+was silently truncating Reports/MI reads. `tests/r18.js` §A reads the live
+constant directly (`page.evaluate(() => REPORTS_ROW_CAP)`, the same top-level-
+lexical-scope trick `tests/r17.js` already uses for `localDateStr()`) —
+checked FIRST in the file, before anything could call the test hook
+`window.__setReportsRowCap(n)` and mutate it away.
+
+**Server-side note (not testable in this harness, carried here for the
+record):** the CTO spec's index recommendations for the newly-hot `cases`
+(`assigned_to`, `stage`), `case_notes`/`case_events` (`case_id, created_at`)
+columns are a production-database concern with no mock-Supabase equivalent —
+`mock-supabase.js` has no query planner to regress, so there is nothing for
+a harness test to assert here; noted so a future agent doesn't go looking
+for a test that was never going to exist.
+
+**Why the pre-existing battery needed zero edits for R18 or R19.** Grepped
+every test file for the touched symbols/selectors before writing anything
+new — `BOARD_COL_CAP`/`.board-show-more`/`boardExpandedStages`,
+`CLIENT_LIST_CAP`/`.client-list-cap-note`, `debounce`, `openedClientUpdatedAt`
+/`refreshOpenedClientStamp`, `UNACTIONED_DAYS`/the radar's old 7-day activity
+read, `clientPickerCache`/`invalidateClientPicker`, `REPORTS_ROW_CAP`, and
+every R19 MI id/selector — and nothing in the pre-R18 battery asserted the
+OLD (uncapped / undebounced / unguarded / 7-day-only) shape of any of them,
+nor does any earlier suite reach `#report-mi-section` or its chips (R19 is
+new, additively-gated content an adviser never sees and the jump nav only
+draws for owner/admin). Ran the WHOLE battery (smoke + r5_batch1..9 + r64 +
+r8_touch + r8_rev + r9_adv + r9_docs + r9_embed + r11_ux + r12a + r12b + r13
++ r14 + r15 + r16 + r17) after building both rounds: every suite passed
+UNCHANGED, confirming no shared selector or count drifted.
 
 R17 notes: proactive workflow (three features) + six papercut fixes, frontend
 + tests only, no new DB columns — every task write in this round uses the
