@@ -526,7 +526,14 @@ async function readRows(page, table, filters) {
 
       // Delete and re-add an EARLIER-TODAY appointment.
       await page.evaluate((id) => window.__mockDb.from("appointments").delete().eq("id", id), apptId);
-      const earlier = new Date(Date.now() - 3 * 3600000).toISOString();
+      // Robust near the midnight boundary: "3 hours ago" can fall on the previous
+      // calendar day when the run happens just after 00:00, which the app then
+      // (correctly) treats as not-today. Clamp to no earlier than the start of today.
+      const _now = Date.now();
+      const _sod = new Date(_now); _sod.setHours(0, 0, 0, 0);
+      let _earlierMs = _now - 3 * 3600000;
+      if (_earlierMs < _sod.getTime()) _earlierMs = _sod.getTime() + Math.floor((_now - _sod.getTime()) / 2);
+      const earlier = new Date(_earlierMs).toISOString();
       await mkAppt(page, { client_id: gt.clientId, case_id: gt.caseId, title: "Morning call", starts_at: earlier, ends_at: earlier, staff_id: "p4" });
       await page.evaluate((id) => window.openCase(id), gt.caseId);
       await wait(page, 500);
@@ -713,7 +720,14 @@ async function readRows(page, table, filters) {
       console.log("\n— B5 · W-26 · month cell caps appointments at 3, “+N more” flags a hidden clash (p4)");
       const page = await newPage(browser, "p4", { skipTour: true });
       const gt = await mkClientCase(page, { first: "Month", last: "Capclash", stage: "application" });
-      const day = new Date(); day.setDate(day.getDate() + 12); day.setHours(9, 0, 0, 0);
+      // Pick an ODD day-of-month in the CURRENT month: the fixture seeds 16 appts on
+      // even days 2–28 (mock-supabase.js:2001), so today+12 collided whenever it landed
+      // on an even day. An odd day is never seeded, and staying in the current month keeps
+      // the cell one the diary reliably renders. Clamp to <=27 so it never rolls over.
+      const day = new Date();
+      let _dom = Math.min(27, day.getDate() + 9);
+      if (_dom % 2 === 0) _dom += 1;
+      day.setDate(_dom); day.setHours(9, 0, 0, 0);
       const dayYmd = day.toISOString().slice(0, 10);
       const mk = (h, mAdd) => { const d = new Date(day); d.setHours(h, mAdd || 0, 0, 0); return d.toISOString(); };
       await mkAppt(page, { client_id: gt.clientId, case_id: gt.caseId, title: "Slot A", starts_at: mk(9), ends_at: mk(10), staff_id: "p4" });
