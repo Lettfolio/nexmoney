@@ -98,7 +98,7 @@ async function showApp(session) {
         <div class="t">${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" "))}</div>
         <div class="s">Referred ${fmtD(c.created_at)}${c.completed_at ? " · completed " + fmtD(c.completed_at) : ""}</div>
       </div>
-      <span class="badge ${c.stage === "completed" ? "green" : c.stage === "not_proceeding" ? "grey" : "blue"}">${STAGE_LABEL[c.stage] || c.stage}</span>
+      <span class="badge ${c.stage === "completed" ? "green" : c.stage === "not_proceeding" ? "grey" : "blue"}">${esc(STAGE_LABEL[c.stage] || c.stage)}</span>
     </div>`;
   const live = all.filter((c) => !["completed", "not_proceeding"].includes(c.stage));
   const done = all.filter((c) => ["completed", "not_proceeding"].includes(c.stage));
