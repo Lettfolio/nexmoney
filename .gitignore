@@ -6,6 +6,9 @@
 .claude/
 .write_test_claude
 vercel_out.txt
+package.json
+package-lock.json
+shots/
 
 # OS / editor cruft
 .DS_Store
