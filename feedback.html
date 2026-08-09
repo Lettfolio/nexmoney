@@ -102,6 +102,11 @@
   var token = q.get("token") || "";
   var scoreRaw = q.get("score");
   var score = scoreRaw == null || scoreRaw === "" ? null : Number(scoreRaw);
+  /* The server only ever records 0–10, so anything else in the URL is a
+     mangled link, not a score. Treat it as absent: the page greets neutrally
+     instead of painting "999/10", and the submission omits it (the server
+     holds the real one where it exists). */
+  if (score != null && (isNaN(score) || score < 0 || score > 10)) score = null;
 
   var $ = function (id) { return document.getElementById(id); };
   var show = function (id) {

@@ -236,8 +236,8 @@
         </div>
         <div class="calc-output" role="status">
           <div class="calc-output-label">Estimated interest saving</div>
-          <div class="calc-output-value" id="o_saving">£18,240</div>
-          <div class="calc-output-sub" id="o_years">Mortgage paid off approx. 3 years 2 months early</div>
+          <div class="calc-output-value" id="o_saving">£27,145</div>
+          <div class="calc-output-sub" id="o_years">Mortgage paid off approx. 5 years 2 months early</div>
         </div>
         <a href="/contact" class="btn btn-outline" style="width:100%; display:block; text-align:center; margin-top:16px;">Talk to an advisor →</a>
       </div>
@@ -266,7 +266,7 @@
         </div>
         <div class="calc-output" role="status">
           <div class="calc-output-label">Minimum monthly rental income required</div>
-          <div class="calc-output-value" id="ri_result">£1,015/mo</div>
+          <div class="calc-output-value" id="ri_result">£1,074/mo</div>
           <div class="calc-output-sub" id="ri_sub">Based on 125% rental coverage ratio at 5.5% stress rate. Actual lender criteria vary.</div>
         </div>
         <a href="/contact?type=buy-to-let" class="btn btn-primary" style="width:100%; display:block; text-align:center; margin-top:16px;">Get buy-to-let advice →</a>
@@ -436,8 +436,12 @@ function calcO() {
 
 function calcRI() {
   const val     = Math.max(0, +document.getElementById('ri_value').value || 0);
-  const depPct  = Math.min(99, Math.max(1, +document.getElementById('ri_deposit').value || 25));
-  const rate    = Math.max(0, +document.getElementById('ri_rate').value || 5.5);
+  // NaN (empty field) falls back to the pre-filled default; a typed 0 is
+  // clamped/respected rather than silently swapped for the default.
+  const depRaw  = parseFloat(document.getElementById('ri_deposit').value);
+  const depPct  = Math.min(99, Math.max(1, isNaN(depRaw) ? 25 : depRaw));
+  const rateRaw = parseFloat(document.getElementById('ri_rate').value);
+  const rate    = Math.max(0, isNaN(rateRaw) ? 5.5 : rateRaw);
   const loan    = val * (1 - depPct / 100);
   // Typical BTL: monthly interest / 0.8 (125% coverage)
   const monthlyInterest = loan * rate / 100 / 12;

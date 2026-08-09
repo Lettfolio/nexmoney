@@ -192,6 +192,11 @@
   var FN = "https://sclghkmvzpwtmnzbkaoe.supabase.co/functions/v1/fact-find";
   var token = new URLSearchParams(location.search).get("token") || "";
   var form = document.getElementById("form");
+  var esc = function (s) {
+    return s == null ? "" : String(s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  };
   var show = function (id) { ["loading","invalid","done","form"].forEach(function (x) { document.getElementById(x).style.display = (x === id ? (x === "form" ? "block" : "block") : "none"); }); };
   var banner = function (msg, cls) { var b = document.getElementById("banner"); if (!msg) { b.innerHTML = ""; b.className = ""; return; } b.className = "banner " + cls; b.textContent = msg; b.scrollIntoView({ block: "nearest" }); };
 
@@ -254,7 +259,10 @@
     .then(function (o) {
       if (!o.ok || !o.j || o.j.error) { show("invalid"); return; }
       if (o.j.status === "submitted") { show("done"); return; }
-      if (o.j.company) { document.querySelector(".brand").innerHTML = o.j.company.replace(/Money/i, "<span>Money</span>"); }
+      /* ESCAPED FIRST — same rule as docs.html: this is the one innerHTML write
+         on the page, the value is a settings row, and there is no login in
+         front of this page. Escaping cannot touch the word the span wraps. */
+      if (o.j.company) { document.querySelector(".brand").innerHTML = esc(o.j.company).replace(/Money/i, "<span>Money</span>"); }
       fill(o.j.data, o.j.prefill);
       show("form");
     })

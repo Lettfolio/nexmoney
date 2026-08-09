@@ -3,8 +3,9 @@
    Lightweight, dependency-free progressive enhancement:
    scroll reveals, count-up stats, sticky-header state,
    hero-video handling, and a scroll-progress bar.
-   Loaded in <head> (non-deferred) so the .js class lands
-   before first paint — no flash of hidden content.
+   Loaded with `defer`; each page sets the .js class via an
+   inline one-liner in <head> so reveal styling never flashes
+   even though this file runs later.
    ========================================================= */
 (function () {
   var doc = document;

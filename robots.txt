@@ -41,5 +41,11 @@ Disallow: /admin/
 
 User-agent: Google-Extended
 Allow: /
+Disallow: /portal
+Disallow: /portal/
+Disallow: /clienthub
+Disallow: /clienthub/
+Disallow: /admin
+Disallow: /admin/
 
 Sitemap: https://www.nexmoney.co.uk/sitemap.xml
