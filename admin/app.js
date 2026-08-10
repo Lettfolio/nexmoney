@@ -5249,8 +5249,10 @@ function renderTodayKpis() {
   const scopeTag = `<div class="kpi-scope" title="${esc(scopeTip)}">${scopeWord}</div>`;
   const scoped = cases.filter((c) => !mine || c.assigned_to === ME.id);
   const active = scoped.filter((c) => !["completed", "not_proceeding"].includes(c.stage));
-  const yr = new Date().getFullYear();
-  const completedThisYear = scoped.filter((c) => c.completed_at && new Date(c.completed_at).getFullYear() === yr);
+  /* G1N-6 basis — Europe/London via localDateStr, same as the Reports tiles, so this KPI and
+     "Completions <yr>" on Reports can never disagree about a completion near a year boundary. */
+  const yr = localDateStr().slice(0, 4);
+  const completedThisYear = scoped.filter((c) => c.completed_at && localDateStr(c.completed_at).slice(0, 4) === yr);
   const feesDue = scoped.filter((c) => ["not_requested", "requested"].includes(c.fee_status) && c.broker_fee > 0 && c.stage !== "not_proceeding");
   const feesDueTotal = feesDue.reduce((s, c) => s + Number(c.broker_fee || 0), 0);
   /* The two alert tiles scope on the CASE's adviser, not on the alert row — the same map the
@@ -8650,6 +8652,11 @@ function renderPipelineTable(filtered, stageEntry = {}, propOn = true) {
       case "loan_amount": return c.loan_amount ?? -1;
       case "assigned": return staffName(c.assigned_to).toLowerCase();
       case "days_in_stage": return daysSince(stageEntry[c.id]) ?? -1;
+      /* Stage sorts in PIPELINE order (the order STAGES declares and every other stage-ordered
+         surface uses), not alphabetically by enum string — an alphabetical sort put DIP between
+         Completed and Enquiry, which looks deliberate and corresponds to nothing. Unknown stages
+         sort last rather than first. */
+      case "stage": { const i = stageIdx(c.stage); return i === -1 ? STAGES.length : i; }
       default: return c[k] ?? "";
     }
   };
@@ -9083,8 +9090,13 @@ async function renderClawbackWindow() {
   panel.classList.remove("hidden");
   const money = showMoney();
   const noDate = rows.filter((r) => !r.policy_start_date);
-  const inWindow = rows
-    .map((r) => ({ ...r, months: clawbackMonthsElapsed(r.policy_start_date) }))
+  const dated = rows.map((r) => ({ ...r, months: clawbackMonthsElapsed(r.policy_start_date) }));
+  /* A start date in the FUTURE (elapsed months negative) is almost certainly a typo'd year, and a
+     policy the panel silently drops is exactly the invisible-window failure this panel exists to
+     prevent — so it joins the cannot-be-watched list beside the no-date rows rather than
+     vanishing from both. */
+  const badDate = dated.filter((r) => r.months != null && r.months < 0);
+  const inWindow = dated
     .filter((r) => r.months != null && r.months >= 0 && r.months < CLAWBACK_MONTHS)
     .sort((a, b) => (b.months - a.months) || 0);   // closest to falling out of the window first
   const nameOf = (r) => [r.clients && r.clients.first_name, r.clients && r.clients.last_name].filter(Boolean).join(" ") || "(client not on file)";
@@ -9097,9 +9109,12 @@ async function renderClawbackWindow() {
   /* THE HONEST HALF, and the reason the panel exists at all. A policy with no start date is not a
      policy outside the window — it is a policy whose window nobody can see. Said as a count with
      the fix attached, because the fix is one date on one case. */
-  $("#prot-clawback-nodate").innerHTML = noDate.length
+  $("#prot-clawback-nodate").innerHTML = (noDate.length
     ? `<strong id="prot-clawback-nodate-n">${noDate.length} polic${noDate.length === 1 ? "y has" : "ies have"} no start date recorded</strong> — their clawback window cannot be watched. Add the date on the case (Protection section of the case form). They are listed below the table.`
-    : rows.length ? `Every policy taken has a start date recorded. 👍` : "";
+    : rows.length && !badDate.length ? `Every policy taken has a start date recorded. 👍` : "")
+    + (badDate.length
+      ? `${noDate.length ? " " : ""}<strong>${badDate.length} polic${badDate.length === 1 ? "y has" : "ies have"} a start date in the future</strong> — almost certainly a mistyped year. Until it is corrected the clawback window cannot be watched. Listed below the table.`
+      : "");
   const rowHtml = (r) => `<tr data-case="${esc(r.id)}">
       <td><span class="prot-client" onclick="openCase('${jsArg(r.id)}')">${esc(nameOf(r))}</span></td>
       <td>${fmtD(r.policy_start_date)}</td>
@@ -9116,6 +9131,10 @@ async function renderClawbackWindow() {
     + (noDate.length ? `<div class="dq-notice" id="prot-clawback-nodate-list" style="margin-top:12px;">
       <strong>No start date — window cannot be watched:</strong>
       ${noDate.map((r) => `<button type="button" class="btn btn-sm" onclick="openCase('${jsArg(r.id)}')">${esc(nameOf(r))}</button>`).join(" ")}
+    </div>` : "")
+    + (badDate.length ? `<div class="dq-notice" id="prot-clawback-baddate-list" style="margin-top:12px;">
+      <strong>Start date in the future — check the year on the case:</strong>
+      ${badDate.map((r) => `<button type="button" class="btn btn-sm" onclick="openCase('${jsArg(r.id)}')">${esc(nameOf(r))} (${fmtD(r.policy_start_date)})</button>`).join(" ")}
     </div>` : "");
 }
 /* ---------- R7-3 — "completed, no protection outcome" ----------
@@ -11933,7 +11952,9 @@ const CLIENT_SEG_CONTACT_MONTHS = 6;
    January, and a segment that silently stops matching anything is worse than no segment. The
    window is this calendar year + the two after it, which is what a rate-end sweep looks at. */
 function clientRateYears() {
-  const y = new Date().getFullYear();
+  // Europe/London year (localDateStr), not the device's: around New Year a browser in another
+  // timezone would otherwise offer last year's chip and miss the third maturity year.
+  const y = Number(localDateStr().slice(0, 4));
   return [y, y + 1, y + 2];
 }
 /* The date a client must have been touched SINCE to count as contacted. Calendar months, not
@@ -12925,6 +12946,18 @@ function chNextDay(ymd) {
   d.setDate(d.getDate() + 1);
   return localDateStr(d);
 }
+/* The UTC instant at which the picked day BEGINS in Europe/London. A bare YYYY-MM-DD sent to
+   PostgREST compares against happened_at as UTC midnight, which during BST is 01:00 London — so
+   audit rows written 00:00–00:59 London fell on the wrong side of the pickers' day boundary,
+   one hour off the day every other grouping in this file draws (localDateStr). London midnight
+   is either 00:00Z or 23:00Z the evening before; try the BST candidate and keep whichever
+   instant localDateStr maps back to the picked day. (DST switches at 01:00, never midnight,
+   so London midnight always exists exactly once.) */
+function chLondonDayStart(ymd) {
+  const bst = new Date(ymd + "T00:00:00+01:00");
+  if (isNaN(bst)) return ymd;
+  return (localDateStr(bst) === ymd ? bst : new Date(ymd + "T00:00:00Z")).toISOString();
+}
 /* One row of the whole-log view. Same expandable field-level detail as the case and client
    drawers (auditChangesHtml, which already renders the database's "(hidden)" masking of bank
    details, keys and tokens as "changed — value not recorded"), plus the record type and the actor,
@@ -12959,8 +12992,8 @@ async function renderChangeHistory() {
     if (grp && grp[2]) q = q.in("table_name", grp[2]);
     if (chState.actor === CH_SYSTEM) q = q.is("actor", null);
     else if (chState.actor !== CH_ALL) q = q.eq("actor", chState.actor);
-    if (chState.from) q = q.gte("happened_at", chState.from);
-    if (chState.to) q = q.lt("happened_at", chNextDay(chState.to));
+    if (chState.from) q = q.gte("happened_at", chLondonDayStart(chState.from));
+    if (chState.to) q = q.lt("happened_at", chLondonDayStart(chNextDay(chState.to)));
     ({ data, count, error } = await q
       .order("happened_at", { ascending: false }).order("id", { ascending: false })
       .range(start, start + CH_PAGE - 1));
@@ -17785,7 +17818,10 @@ function renderThreadedPanels(all, mv, repAdvisers) {
     // B7 / Batch 6.4 — broker cash counted on the BROKER fee's own paid date (M2), falling back to
     // the legacy single date, and never counting a payment dated in the future.
     const feesBanked = cashInMonth(mine, mv, ["broker"]).total;
-    const days = done.map((c) => Math.round((new Date(c.completed_at) - new Date(c.created_at)) / 86400000)).filter((n) => n > 0);
+    /* >= 0, not > 0: a case created and completed the same day (a fast PT, a retrospectively keyed
+       completion) is a real 0-day completion and belongs in the mean the tooltip promises — only
+       negative gaps (bad data: completed before created) are excluded from the sample. */
+    const days = done.map((c) => Math.round((new Date(c.completed_at) - new Date(c.created_at)) / 86400000)).filter((n) => n >= 0);
     const avg = days.length ? Math.round(days.reduce((a, b) => a + b, 0) / days.length) : null;
     const trend = months6.map((m) => mine.filter((c) => c.completed_at && localMonthStr(c.completed_at) === m).length);
     const trendTitle = months6.map((m, i) => `${MONTH_SHORT[Number(m.slice(5, 7)) - 1]}: ${trend[i]}`).join(" · ");
