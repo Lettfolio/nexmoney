@@ -82,6 +82,7 @@ node tests/r19.js
 node tests/r20.js
 node tests/r23.js
 node tests/r24.js
+node tests/r25.js
 ```
 
 Current green counts (end of round 23; r21/r22 were never committed to this
@@ -100,17 +101,13 @@ nothing else asserted the old shape of, and R19 is new owner-gated Reports
 content that no earlier suite reaches; R23 is the same story again — see the
 R23 notes below).
 
-**Full battery was 100% green at 2,943/2,943 as of R23.** R24's regression run
-found `tests/r11_ux.js` now fails 2 of its 123 checks (`R11-A` top-of-page
-ordering: `#dash-cap-notice`, R23's hidden owner-cap notice, sits between
-`#kpi-row` and `#briefing-panel` in the DOM, which r11_ux's positional
-`#kpi-row` → `#briefing-panel` adjacency check does not expect) — confirmed
-with `git stash` to predate R24 entirely (fails identically on the R23
-baseline with R24's diff stashed out), so it is an R23-era regression this
-round surfaced, not something R24 caused or should paper over; left unfixed
-here as out of scope for a read-narrowing round and flagged for whoever picks
-up R25. Every other suite, including R24's own field-level regression, is
-green. R17 also made two long-standing
+**Full battery is 100% green (3,077/3,077).** R24 also FIXED a 2-check regression
+R23 had introduced in `tests/r11_ux.js`: R23's hidden `#dash-cap-notice` sits
+between `#kpi-row` and `#briefing-panel`, which r11_ux's `R11-A` top-of-page
+adjacency check didn't expect (R23's own regression run hadn't included r11_ux,
+so origin briefly shipped it 2-red). The two `R11-A` asserts now skip the optional
+hidden notice — the "numbers first" intent is preserved (kpi-row still immediately
+follows the heading), non-masking. r11_ux is back to 123/0. R17 also made two long-standing
 date-fragile checks in `r12b.js` deterministic (B1 "Earlier today" crossed
 midnight when run just after 00:00; B5's month-cap date collided with the
 even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes below.
@@ -125,7 +122,7 @@ even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes belo
 | `tests/r9_adv.js` | 169 |
 | `tests/r9_docs.js` | 255 |
 | `tests/r9_embed.js` | 104 |
-| `tests/r11_ux.js` | 123 (2 now failing — pre-existing R23-era `#dash-cap-notice` ordering issue, found and documented in R24 notes, not fixed here) |
+| `tests/r11_ux.js` | 123 (R11-A adjacency asserts updated in R24 to skip R23's hidden `#dash-cap-notice`) |
 | `tests/r12a.js` | 114 |
 | `tests/r12b.js` | 158 (date-fragile B1/B5 made deterministic in R17) |
 | `tests/r13.js` | 142 |
@@ -138,7 +135,8 @@ even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes belo
 | `tests/r20.js` | 81 |
 | `tests/r23.js` | 76 |
 | `tests/r24.js` | 89 |
-| **Total** | **3,032** |
+| `tests/r25.js` | 45 |
+| **Total** | **3,077** |
 
 R24 notes: narrows the Pipeline board's `cases` read (`loadPipeline()`,
 app.js ~7275 — the app's fattest read, up to `OWNER_ROW_CAP` rows on the
@@ -199,9 +197,63 @@ No bug found: every field the board's named select is supposed to carry
 renders with a real value on both the card and the table, for both the
 owner and an adviser; the un-migrated path never 42703s; and the full
 regression battery (`smoke.js`, `r8_rev.js`, `r13.js`, `r18.js`, `r23.js`)
-passed unedited at its pre-R24 counts. The only regression surfaced by this
-round's full run is `tests/r11_ux.js`'s pre-existing, R23-era ordering
-failure noted above — unrelated to R24, confirmed by `git stash`.
+passed unedited at its pre-R24 counts. The one regression R24's full run
+surfaced — `tests/r11_ux.js`'s R23-era `#dash-cap-notice` ordering failure —
+was FIXED in R24 (the two `R11-A` asserts now skip the hidden notice); r11_ux
+is back to 123/0.
+
+R25 notes: Data health's new "Missing application/offer date" check
+(`loadDataHealth()`, app.js), a new `#dh-tile-milestone` tile (placed right
+after `#dh-tile-nocompleted`, `.warn` when its count is >0) + `#dh-milestone-
+panel`, wired through the pre-existing `wireTile` helper exactly like
+`#dh-tile-nocompleted`. The `noMilestoneDate` predicate walks every case
+outside `not_proceeding` stage, via STAGES' canonical rank: a case that has
+reached >= application with `submitted_at` blank is flagged for the
+application date; otherwise, if forward dates are supported, a case that has
+reached >= offer with `offer_issued_date` blank is flagged for the offer
+date — earliest-missing wins, so a case can only ever appear once. This is
+deliberately independent of the pre-existing `#dh-tile-nocompleted` tile
+(missing `completed_at`) — a completed case with both earlier dates present
+but no `completed_at` must not appear here, and doesn't. `submitted_at`
+joined the page's main (already-existing) `cases` select; `offer_issued_date`
+is read in its own soft query behind `forwardDatesSupported()`, the same
+pattern `dhExchangeBy` already uses for `exchange_date`, so an un-migrated
+database is never asked for a column it doesn't have.
+
+`tests/r25.js` (45 checks) proves this two ways: §B recomputes the whole
+`noMilestoneDate` set independently off `window.__mockDb` (STAGES' order is
+read directly off the page, the same fair-game shared-constant convention
+r19/r20/r24 already use for `STAGE_LABEL`/`fmtM`/etc. — but the filtering
+logic itself is reimplemented from the round's spec, not borrowed from
+app.js) and asserts the panel's exact case-id set (parsed off each row's
+`Open` button `onclick`) against it — not merely a matching count. Six
+purpose-built synthetic cases, inserted independently of fixture composition
+per the standing rule (the natural fixture happens not to contain a
+completed case with a blank `completed_at` but both earlier dates present —
+the one scenario that most directly tells this tile apart from
+`#dh-tile-nocompleted`), pin down every boundary the round's spec names:
+past-application-no-submitted_at (flagged), pre-application (not),
+not_proceeding (not), both-dates-present (not), completed-missing-only-
+completed_at (not — the key one), and a genuine offer-date miss (flagged).
+§C checks the reason-text format for one app- and one offer-reason row,
+picked programmatically off the recomputed ground truth. §D is a light
+regression check that `#dh-tile-nocompleted`/`#dh-tile-rateend` still exist
+and work (r13.js owns their full coverage). §E checks no console errors for
+owner and admin. §F forces `FORWARD_SUPPORTED = false` directly (same
+module-scope-`let` technique r24.js §E already uses) before Data health's
+first load and confirms the offer half of the predicate is genuinely
+skipped (not merely empty by chance — no row cites the offer-date reason)
+with no console error and no 42703 anywhere on the page.
+
+No bug found: the predicate matches its independent recompute exactly on
+both the natural fixture and all six synthetic boundary cases, the reason
+text is formatted exactly as specified, the forward-dates-off path never
+42703s, and the full regression run below (`smoke.js`, `tests/r13.js`,
+`tests/r18.js`, `tests/r23.js`, `tests/r24.js`) passed completely unedited
+at its pre-R25 counts — R25 did not perturb `#dh-tile-nocompleted`/
+`#dh-tile-rateend` or anything else on the page. (An earlier draft of this note
+repeated a stale "r11_ux still failing" line from the R24 notes; in fact R24
+FIXED r11_ux — it runs 123/0 on this HEAD, verified.)
 
 R23 notes: defeats the silent 1,000-row PostgREST cap on the 19 OWNER-facing
 full-table reads R18-P7's `REPORTS_ROW_CAP` fix never reached (that round

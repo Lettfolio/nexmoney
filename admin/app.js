@@ -20373,7 +20373,7 @@ async function loadDataHealth() {
     // Defect 13: the RPC only ever returns bare counts for these two tiles. Rather than change the
     // RPC (frontend-only, existing columns), pull the offending rows client-side from cases+clients
     // so the tiles can expand into the same list-panel pattern as the other Data Health items.
-    db.from("cases").select("id,stage,rate_end_date,completed_at,created_at,case_kind,lender,client_id,clients!client_id(id,first_name,last_name,phone)" + (dhPropOn ? ",property_address" : "")).order("id").limit(OWNER_ROW_CAP),
+    db.from("cases").select("id,stage,rate_end_date,completed_at,created_at,submitted_at,case_kind,lender,client_id,clients!client_id(id,first_name,last_name,phone)" + (dhPropOn ? ",property_address" : "")).order("id").limit(OWNER_ROW_CAP),
     // T1-9/T1-26: same trick for the client-shaped checks. The RPC returns counts for "missing
     // email & phone" and nothing at all for malformed values, so read the rows and judge them here.
     db.from("clients").select("id,first_name,last_name,email,phone").order("id").limit(OWNER_ROW_CAP),
@@ -20394,7 +20394,7 @@ async function loadDataHealth() {
   if (caseRows.error && dhPropOn && isMissingColumnError(caseRows.error)) {
     PROP_ADDR_SUPPORTED = false;
     dhPropOn = false;
-    caseRows = await db.from("cases").select("id,stage,rate_end_date,completed_at,created_at,case_kind,lender,client_id,clients!client_id(id,first_name,last_name,phone)").order("id").limit(OWNER_ROW_CAP);
+    caseRows = await db.from("cases").select("id,stage,rate_end_date,completed_at,created_at,submitted_at,case_kind,lender,client_id,clients!client_id(id,first_name,last_name,phone)").order("id").limit(OWNER_ROW_CAP);
   }
   // …and the quieter shape of absence: the rows came back, without the column that was asked for.
   if (dhPropOn && Array.isArray(caseRows.data) && caseRows.data.length) {
@@ -20585,6 +20585,38 @@ async function loadDataHealth() {
     else dhNoPolicyStart = (pol || []).map((r) => ({ id: r.id, name: [r.clients && r.clients.first_name, r.clients && r.clients.last_name].filter(Boolean).join(" ") || "(client not on file)" }));
   }
 
+  /* R25 · MI-1 — the two EARLIER milestone dates (submitted_at / offer_issued_date), the funnel &
+     velocity inputs Reports derives its medians from (created_at → submitted_at → offer_issued_date
+     → completed_at). A record that has reached application/offer with the date blank silently drops
+     out of those medians and the conversion funnel with nothing surfacing it — imported books arrive
+     full of exactly this gap. submitted_at rides the main cases select above (an original column, no
+     gate). offer_issued_date is a forward-dates column and MUST be read separately behind
+     forwardDatesSupported(), exactly like dhExchangeBy reads exchange_date — naming it in the big
+     select would 42703 the whole page (blanking five existing panels) on an un-migrated database. */
+  const dhForwardOn = (await forwardDatesSupported()) === true;
+  const dhOfferIssuedBy = {};
+  if (dhForwardOn) {
+    (await softRows(db.from("cases").select("id,offer_issued_date").order("id").limit(OWNER_ROW_CAP))).forEach((r) => { if (r && r.id) dhOfferIssuedBy[r.id] = r.offer_issued_date || null; });
+  }
+  // Stage rank via the canonical STAGES order. "Reached ≥ X" = the case's stage sits at or past X in
+  // pipeline order; completed (rank 6) has reached application AND offer, so it can legitimately show
+  // here for a missing EARLIER date (that's separate from the noCompletedAt tile). not_proceeding
+  // (rank 7) is excluded outright — a dropped case owes no milestone date.
+  const DH_STAGE_RANK = Object.fromEntries(STAGES.map(([k], i) => [k, i]));
+  const DH_APP_RANK = DH_STAGE_RANK["application"], DH_OFFER_RANK = DH_STAGE_RANK["offer"];
+  const noMilestoneDate = allCases.reduce((acc, cs) => {
+    if (cs.stage === "not_proceeding") return acc;
+    const rank = DH_STAGE_RANK[cs.stage];
+    if (rank == null) return acc;
+    // Earliest missing milestone per case: application before offer.
+    if (rank >= DH_APP_RANK && !cs.submitted_at) {
+      acc.push({ case_id: cs.id, name: caseName(cs), stage: cs.stage, missing: "application date (submitted_at)" });
+    } else if (dhForwardOn && rank >= DH_OFFER_RANK && !dhOfferIssuedBy[cs.id]) {
+      acc.push({ case_id: cs.id, name: caseName(cs), stage: cs.stage, missing: "offer date (offer_issued_date)" });
+    }
+    return acc;
+  }, []);
+
   /* T1-26 — every number on this page is a door. `▾` = expands a list panel further down the page,
      `→` = leaves for the page that number lives on. Only "Clients total" (which isn't a fault
      count and has nothing to drill into) stays plain, so "clickable" reads consistently. */
@@ -20599,6 +20631,7 @@ async function loadDataHealth() {
     <div class="kpi dq-clickable" id="dh-tile-nofee" title="Click to jump to the list"><div class="num">${noFee.length}</div><div class="lbl">Completed, no fee ▾</div></div>
     <div class="kpi dq-clickable" id="dh-tile-rateend" title="Click to list these cases"><div class="num">${dq.completed_missing_rate_end ?? 0}</div><div class="lbl">Completed, no rate-end ▾</div></div>
     <div class="kpi ${noCompletedAt.length ? "warn" : ""} dq-clickable" id="dh-tile-nocompleted" title="Completed cases with no completion date — invisible to Reports until it's set. Click to list them"><div class="num">${noCompletedAt.length}</div><div class="lbl">Completed, no completion date ▾</div></div>
+    <div class="kpi ${noMilestoneDate.length ? "warn" : ""} dq-clickable" id="dh-tile-milestone" title="Cases past application or offer with the milestone date (submitted_at / offer_issued_date) blank — they silently skew the Reports velocity & funnel until filled in. Click to list them."><div class="num">${noMilestoneDate.length}</div><div class="lbl">Missing application/offer date ▾</div></div>
     <div class="kpi ${dq.emails_failed ? "warn" : ""} dq-clickable" id="dh-tile-failed" title="Click to open the Emails page filtered to failed sends"><div class="num">${dq.emails_failed ?? 0}</div><div class="lbl">Failed emails →</div></div>
     ${/* R6-38 — deliberately NOT a "warn" tile: a shared address is something to read, not a fault to
           clear. Absent entirely on a database with no property column. */ ""}
@@ -20755,6 +20788,19 @@ async function loadDataHealth() {
       </div>`).join("") : '<div class="empty">Every completed case has a completion date. 👍</div>'}
   </div>`;
 
+  // R25 · MI-1 — same row-item shape as the other date panels. Each row names WHICH milestone date is
+  // missing (application before offer); opening the case and saving the date puts the record back into
+  // the Reports velocity medians and conversion funnel it was silently dropping out of.
+  const milestonePanel = `<div class="panel hidden" id="dh-milestone-panel">
+    <h3>Cases missing an application/offer date</h3>
+    <p class="panel-sub">Cases that have reached application or offer with the milestone date (<strong>submitted_at</strong> / <strong>offer_issued_date</strong>) blank. Reports derives its funnel conversion and velocity medians from these dates, so a gap here silently skews the MI. Open each one and set the date to fix it.</p>
+    ${noMilestoneDate.length ? noMilestoneDate.map((c) => `
+      <div class="row-item">
+        <div class="row-main"><div class="t" onclick="openCase('${c.case_id}')">${esc(c.name)}</div><div class="s">${esc(STAGE_LABEL[c.stage] || c.stage)} · missing: ${esc(c.missing)}</div></div>
+        <button class="btn btn-sm" onclick="openCase('${c.case_id}')">Open</button>
+      </div>`).join("") : '<div class="empty">Every case past application or offer has its milestone date. 👍</div>'}
+  </div>`;
+
   // T1-26 — the least-reachable records in the database, which previously had no list anywhere.
   const bothPanel = `<div class="panel hidden" id="dh-both-panel">
     <h3>Clients with no email and no phone</h3>
@@ -20870,6 +20916,7 @@ async function loadDataHealth() {
     <div class="grid-2">${phonePanel}${rateEndPanel}</div>
     <div class="grid-2">${bothPanel}${noCompletedPanel}</div>
     <div class="grid-2">${invalidEmailPanel}${invalidPhonePanel}</div>
+    <div class="grid-2">${milestonePanel}</div>
     ${dhCareOn ? `<div class="grid-2">${vulnerablePanel}${suppressedPanel}</div>` : ""}`;
 
   // Tiles whose panel is hidden until asked for: toggle, and scroll to it when revealing so the
@@ -20893,6 +20940,7 @@ async function loadDataHealth() {
   wireTile("#dh-tile-phone", "#dh-phone-panel");
   wireTile("#dh-tile-rateend", "#dh-rateend-panel");
   wireTile("#dh-tile-nocompleted", "#dh-nocompleted-panel");
+  wireTile("#dh-tile-milestone", "#dh-milestone-panel");   // R25 · MI-1
   wireTile("#dh-tile-both", "#dh-both-panel");
   wireTile("#dh-tile-invalid-email", "#dh-invalid-email-panel");
   wireTile("#dh-tile-invalid-phone", "#dh-invalid-phone-panel");
