@@ -80,22 +80,26 @@ node tests/r17.js
 node tests/r18.js
 node tests/r19.js
 node tests/r20.js
+node tests/r23.js
 ```
 
-Current green counts (end of round 20). r8_touch/r8_rev/r11_ux still carry the
-151/176/123 figures the R13 note below already flagged (fixture-derived
-counts, unrelated to R15/R16/R17/R18/R19/R20 — see "compute test expectations
-from fixtures at runtime" in Standing rules); every other pre-existing
-suite's count is unchanged by R18, R19 or R20 — R20 needed exactly ONE
-existing-suite edit, a one-line selector fix in `tests/r19.js` (see the R20
-notes below for exactly why — a real, precise, non-masking fix, not a
-work-around) — every other existing suite passed R20 completely unedited
-(see the R18 and R19 notes for why those needed none at all: R18 is
-scale/perf hardening behind selectors nothing else asserted the old shape
-of, and R19 is new owner-gated Reports content that no earlier suite
-reaches).
+Current green counts (end of round 23; r21/r22 were never committed to this
+checkout and are excluded from the run list and the count below). r8_touch/
+r8_rev/r11_ux still carry the 151/176/123 figures the R13 note below already
+flagged (fixture-derived counts, unrelated to R15/R16/R17/R18/R19/R20/R23 —
+see "compute test expectations from fixtures at runtime" in Standing rules);
+every other pre-existing suite's count is unchanged by R18, R19, R20 or R23
+— R20 needed exactly ONE existing-suite edit, a one-line selector fix in
+`tests/r19.js` (see the R20 notes below for exactly why — a real, precise,
+non-masking fix, not a work-around) — every other existing suite (through
+R23, re-run in full: r18/r19/r20/r13/r12b regression-checked green with
+unchanged counts) passed completely unedited (see the R18 and R19 notes for
+why those needed none at all: R18 is scale/perf hardening behind selectors
+nothing else asserted the old shape of, and R19 is new owner-gated Reports
+content that no earlier suite reaches; R23 is the same story again — see the
+R23 notes below).
 
-**Full battery is 100% green (2,867/2,867).** R17 also made two long-standing
+**Full battery is 100% green (2,943/2,943).** R17 also made two long-standing
 date-fragile checks in `r12b.js` deterministic (B1 "Earlier today" crossed
 midnight when run just after 00:00; B5's month-cap date collided with the
 even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes below.
@@ -121,7 +125,65 @@ even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes belo
 | `tests/r18.js` | 43 |
 | `tests/r19.js` | 39 (unchanged count — R20 fixed HOW one row is queried, not what it asserts) |
 | `tests/r20.js` | 81 |
-| **Total** | **2,867** |
+| `tests/r23.js` | 76 |
+| **Total** | **2,943** |
+
+R23 notes: defeats the silent 1,000-row PostgREST cap on the 19 OWNER-facing
+full-table reads R18-P7's `REPORTS_ROW_CAP` fix never reached (that round
+only bounded Reports/Monday money). One new shared ceiling,
+`let OWNER_ROW_CAP = REPORTS_ROW_CAP;` (app.js, just after `renderCapNotice()`,
+= 20,000), added to: `readDashboardCases` (all 3 branches), `loadPipeline`,
+`loadClientData`, `loadDataHealth` (cases/clients primary reads + the
+42703-retry + `case_documents` + `email_queue` + waiting-on cases +
+`exchange_date` cases + care/vulnerability clients), `fetchMatchClients`,
+`clientDobStats`, `openCase`'s `fetchClientPicker`, `openAppt`'s client read,
+`revFetchClients`, `revFetchCases` — every one gets `.order(<pk>).limit
+(OWNER_ROW_CAP)`. A truncation-disclosure notice mirrors Reports' own
+`renderCapNotice`/`#report-cap-notice` pattern exactly but stays a fully
+separate mechanism: `ownerCapHit(rows)` + `renderOwnerCapNotice(sel, hit)`,
+four new hidden `.dq-notice` containers (`#dash-cap-notice`,
+`#board-cap-notice`, `#clients-cap-notice`, `#data-cap-notice`), rendered
+right after each page's relevant read. Reports (`REPORTS_ROW_CAP`) and
+Monday money (which reads under `REPORTS_ROW_CAP`, not the new cap) are
+deliberately untouched — two independent ceilings, proven independent in
+`tests/r23.js` §E (moving one never moves the other, and each notice fires
+only off its own cap). `window.__setOwnerRowCap(n)` (mock-only, guarded
+behind `window.supabase.__isMock` exactly like the pre-existing
+`window.__setReportsRowCap`) is what lets `tests/r23.js` make the cap bite
+on this book's 69-case/50-client fixture without needing a 20,000-row seed.
+
+`tests/r23.js` (76 checks, re-created from scratch this session — a prior
+session's copy was written and green-lit but lost to a sandbox recycle
+before being committed; this file both re-establishes the coverage and
+independently verifies the round's hand-reconstruction) monkeypatches
+`window.__mockDb.from` to wrap each returned builder's `.limit()` call,
+recording the table name, the limit argument AND the row count the read
+actually resolved with — so every assertion is proof a real `.limit()` call
+fired and truncated real data, not just a source-level grep. §A confirms the
+two constants and both test hooks. §B (the most important section — "zero
+regression below the cap") loads Dashboard/Pipeline/Clients/Data health as
+the owner with the cap at its 20,000 default and asserts each page's
+cases/clients read resolves with the FULL fixture count (never merely
+`<=` the cap), every page renders normally, and all four notices stay
+hidden. §C spot-checks two of Data health's subsidiary capped reads
+(`case_documents`, `email_queue`). §D sets `__setOwnerRowCap(10)` (below the
+fixture), reloads all four pages, and confirms each read now resolves with
+EXACTLY 10 rows, the matching notice becomes visible with the exact expected
+text, and the page still renders on the truncated set (e.g. the client list
+renders exactly 10 rows, not zero and not 50) — then resets the cap and
+confirms every notice hides again and the client list is back to the full
+50. §E proves Reports/Monday money independence as described above. §F is
+the gating light-check: an adviser (p2) navigating to `#money` is bounced to
+the dashboard with the hash rewritten off `#money` too, while Pipeline and
+Clients stay reachable and render content for that same adviser; no console
+errors anywhere in the file. To confirm the suite isn't trivially green, one
+of the nineteen `.limit(OWNER_ROW_CAP)` call sites (`loadPipeline`'s cases
+read) was temporarily reverted during this session and re-run — `tests/r23.js`
+failed exactly the 6 checks that call site's own reads feed (§B2, §D2), then
+passed 76/76 again once restored. No bug was found in the R23
+reconstruction itself: every read named in the round's own spec carries its
+`.limit`, every notice fires and clears correctly, and Reports/Monday money
+are untouched, confirmed by the full regression run below.
 
 R20 notes: "actionable" Pipeline MI — per-panel CSV export + click-through
 drill-downs on top of R19's `#report-mi-section`, frontend + tests only, no

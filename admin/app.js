@@ -412,7 +412,7 @@ const postcodeOf = (s) => {
   return m ? (m[1] + (m[2] || "")) : "";
 };
 async function fetchMatchClients() {
-  const { data, error } = await db.from("clients").select("id,first_name,last_name,email,phone,address");
+  const { data, error } = await db.from("clients").select("id,first_name,last_name,email,phone,address").order("id").limit(OWNER_ROW_CAP);
   if (error) { console.error(error); return []; }
   return data || [];
 }
@@ -4342,7 +4342,7 @@ const OWNER_ONLY_SETTING_KEYS = ["bank_account_name", "bank_sort_code", "bank_ac
    made-up number. */
 async function clientDobStats() {
   try {
-    const { data, error } = await db.from("clients").select("id,date_of_birth");
+    const { data, error } = await db.from("clients").select("id,date_of_birth").order("id").limit(OWNER_ROW_CAP);
     if (error) return null;
     const rows = data || [];
     return { total: rows.length, withDob: rows.filter((r) => r && r.date_of_birth).length };
@@ -5205,11 +5205,11 @@ function upliftLineHtml(c, cls) {
    the same write-retry discipline the lead accept path uses for its post-original columns. */
 const DASH_CASE_COLS = "id,stage,fee_status,broker_fee,proc_fee,sols_fee,loan_amount,rate_percent,completed_at,retention_source_case_id,assigned_to";
 async function readDashboardCases() {
-  if (CALLPACK_SUPPORTED === false) return db.from("cases").select(DASH_CASE_COLS);
-  const res = await db.from("cases").select(DASH_CASE_COLS + "," + CALLPACK_SELECT);
+  if (CALLPACK_SUPPORTED === false) return db.from("cases").select(DASH_CASE_COLS).order("id").limit(OWNER_ROW_CAP);
+  const res = await db.from("cases").select(DASH_CASE_COLS + "," + CALLPACK_SELECT).order("id").limit(OWNER_ROW_CAP);
   if (res.error && isMissingColumnError(res.error)) {
     CALLPACK_SUPPORTED = false;
-    return db.from("cases").select(DASH_CASE_COLS);
+    return db.from("cases").select(DASH_CASE_COLS).order("id").limit(OWNER_ROW_CAP);
   }
   if (!res.error && res.data && res.data.length) noteCallPackFromStarRow(res.data[0]);
   return res;
@@ -5415,6 +5415,7 @@ async function loadDashboard() {
     loadRetention(); loadTasks(); loadProtection(); loadLeads(); loadTodayAppts(); loadBriefing(); loadWatchtower(); loadUnactioned();
     return;
   }
+  renderOwnerCapNotice("#dash-cap-notice", ownerCapHit(cases)); // R23 — never silently truncate the KPI book
   const activeAll = (cases || []).filter((c) => !["completed", "not_proceeding"].includes(c.stage));
   /* R7-5 — half of the lead-routing load figure, from the rows this panel has already read. "Open"
      is every stage except completed and not proceeding — the same `active` set the KPI above counts,
@@ -7272,7 +7273,7 @@ window.boardShowMore = function (stage) {
   loadPipeline();
 };
 async function loadPipeline() {
-  const { data: cases, error } = await db.from("cases").select("*, clients!client_id(first_name,last_name)").order("updated_at", { ascending: false });
+  const { data: cases, error } = await db.from("cases").select("*, clients!client_id(first_name,last_name)").order("updated_at", { ascending: false }).limit(OWNER_ROW_CAP);
   if (error) {
     $("#board").classList.remove("hidden");
     $("#board-hint").classList.add("hidden");
@@ -7285,6 +7286,7 @@ async function loadPipeline() {
   // The select("*") above returns every column cases actually has, so it settles the M7 question
   // for the table's Property column before it is asked (see notePropAddrFromStarRow).
   if (cases && cases.length) { notePropAddrFromStarRow(cases[0]); noteDocsFromStarRow(cases[0]); }
+  renderOwnerCapNotice("#board-cap-notice", ownerCapHit(cases)); // R23 — never silently truncate the board
   const q = ($("#board-search").value || "").trim().toLowerCase();
   const who = $("#board-adviser").value || "all";
   const filtered = (cases || []).filter((c) => {
@@ -10057,7 +10059,7 @@ window.openCase = async function (id, opts = {}) {
      stays per-open. */
   const introsPromise = db.from("introducers").select("id,name").order("name");
   const fetchClientPicker = async () => {
-    const { data } = await db.from("clients").select("id,first_name,last_name,email,phone").order("last_name");
+    const { data } = await db.from("clients").select("id,first_name,last_name,email,phone").order("last_name").limit(OWNER_ROW_CAP);
     clientPickerCache = data || [];
     return clientPickerCache;
   };
@@ -12039,7 +12041,7 @@ async function loadClientData() {
        say which lender the rate is with. It is an original-schema column (Reports has selected it
        since R7), so this cannot start 42703-ing on an older database, and it is a widening of the
        read this page already does rather than a second query. */
-    db.from("clients").select("*, cases!client_id(id,stage,rate_end_date,lender,protection_status,broker_fee,assigned_to,completed_at,updated_at,created_at)").order("last_name"),
+    db.from("clients").select("*, cases!client_id(id,stage,rate_end_date,lender,protection_status,broker_fee,assigned_to,completed_at,updated_at,created_at)").order("last_name").limit(OWNER_ROW_CAP),
     db.from("case_notes").select("case_id,created_at").gte("created_at", commsSinceIso),
     db.from("email_queue").select("client_id,case_id,status,sent_at").gte("sent_at", commsSinceIso),
     db.from("appointments").select("client_id,case_id,starts_at").gte("starts_at", commsSinceIso),
@@ -12268,6 +12270,7 @@ async function loadClients(filter = "", opts = {}) {
     ? `<div class="client-list-cap-note">${clientSkipped} record(s) couldn't be displayed — logged</div>`
     : "";
   $("#client-list").innerHTML = `<div class="panel">` + (list.length ? clientRowsHtml + clientSkipNote + capNote : `<div class="empty">${emptyMsg}</div>`) + `</div>`;
+  renderOwnerCapNotice("#clients-cap-notice", ownerCapHit(clients)); // R23 — the full clients read is the one most certain to exceed 1,000
 }
 /* R18-P2 — ONE delegated change handler for the client-row checkboxes, wired once, instead of a
    fresh onchange per row on every render (which was O(rows) DOM work per keystroke). Class
@@ -16706,7 +16709,7 @@ window.openAppt = async function (id, presets = {}, openOpts = {}) {
     }
     a = data;
   }
-  const { data: clients } = await db.from("clients").select("id,first_name,last_name").order("last_name");
+  const { data: clients } = await db.from("clients").select("id,first_name,last_name").order("last_name").limit(OWNER_ROW_CAP);
   /* R6 — the appointment already carries case_id and the modal showed nothing but an "Open case"
      button, so "which of the six flats is this valuation for?" needed a round trip through the
      case modal. The linked case's identity now sits on the form itself. */
@@ -18556,10 +18559,28 @@ function renderCapNotice() {
     ? `⚠ Showing the first ${REPORTS_ROW_CAP.toLocaleString("en-GB")} cases — figures describe this subset, not the whole book. (Reached on: ${[...new Set(reportsCapHits)].join(", ")}.)`
     : "";
 }
+/* R23 — the same silent-1000-cap fix, extended to the owner-facing full-table reads R18 left
+   unbounded (Dashboard, Pipeline, Clients, Data health, plus the client pickers and the Revolution
+   importer). ONE shared ceiling with Reports: below it (20,000 ≫ Daniel's ~2,000) every capped read
+   is byte-identical to today — it only lifts PostgREST's silent 1,000-row ceiling so a 2,000+ book is
+   read whole instead of an arbitrary first ~1,000. A read that comes back holding EXACTLY the cap is,
+   as far as the client can tell, truncated (same `=== cap` principle Reports uses above), so the page
+   surfaces one small notice. This effectively NEVER fires for Daniel — it is the safety net. */
+let OWNER_ROW_CAP = REPORTS_ROW_CAP;
+const ownerCapHit = (rows) => Array.isArray(rows) && rows.length === OWNER_ROW_CAP;
+function renderOwnerCapNotice(sel, hit) {
+  const el = $(sel);
+  if (!el) return;
+  el.classList.toggle("hidden", !hit);
+  el.textContent = hit
+    ? `⚠ Showing the first ${OWNER_ROW_CAP.toLocaleString("en-GB")} records — this view describes a subset, not the whole book.`
+    : "";
+}
 /* SANDBOX ONLY — the mock harness needs to make the cap bite on a 50-case fixture. Defined only
    when the mock supabase bundle is what loaded, so it cannot exist in the shipped app. */
 if (typeof window !== "undefined" && window.supabase && window.supabase.__isMock) {
   window.__setReportsRowCap = function (n) { REPORTS_ROW_CAP = Number(n) || 5000; return REPORTS_ROW_CAP; };
+  window.__setOwnerRowCap = function (n) { OWNER_ROW_CAP = Number(n) || 5000; return OWNER_ROW_CAP; };
 }
 /* G1N-9 — "…→ not_proceeding" (the move INTO the lost stage), never "not_proceeding → …" (a
    reopen). The bare-name alternative covers a writer that records only the new stage. */
@@ -20330,10 +20351,10 @@ async function loadDataHealth() {
     // Defect 13: the RPC only ever returns bare counts for these two tiles. Rather than change the
     // RPC (frontend-only, existing columns), pull the offending rows client-side from cases+clients
     // so the tiles can expand into the same list-panel pattern as the other Data Health items.
-    db.from("cases").select("id,stage,rate_end_date,completed_at,created_at,case_kind,lender,client_id,clients!client_id(id,first_name,last_name,phone)" + (dhPropOn ? ",property_address" : "")),
+    db.from("cases").select("id,stage,rate_end_date,completed_at,created_at,case_kind,lender,client_id,clients!client_id(id,first_name,last_name,phone)" + (dhPropOn ? ",property_address" : "")).order("id").limit(OWNER_ROW_CAP),
     // T1-9/T1-26: same trick for the client-shaped checks. The RPC returns counts for "missing
     // email & phone" and nothing at all for malformed values, so read the rows and judge them here.
-    db.from("clients").select("id,first_name,last_name,email,phone"),
+    db.from("clients").select("id,first_name,last_name,email,phone").order("id").limit(OWNER_ROW_CAP),
     // B6 / M4 — every dismissal is one select; find_duplicate_clients (the RPC) is never touched,
     // it just gets filtered client-side against this table (§Batch4 note: the RPC's own upsert
     // logic can't know about "not a duplicate" without a schema change it doesn't need).
@@ -20351,13 +20372,14 @@ async function loadDataHealth() {
   if (caseRows.error && dhPropOn && isMissingColumnError(caseRows.error)) {
     PROP_ADDR_SUPPORTED = false;
     dhPropOn = false;
-    caseRows = await db.from("cases").select("id,stage,rate_end_date,completed_at,created_at,case_kind,lender,client_id,clients!client_id(id,first_name,last_name,phone)");
+    caseRows = await db.from("cases").select("id,stage,rate_end_date,completed_at,created_at,case_kind,lender,client_id,clients!client_id(id,first_name,last_name,phone)").order("id").limit(OWNER_ROW_CAP);
   }
   // …and the quieter shape of absence: the rows came back, without the column that was asked for.
   if (dhPropOn && Array.isArray(caseRows.data) && caseRows.data.length) {
     notePropAddrFromStarRow(caseRows.data[0]);
     if (PROP_ADDR_SUPPORTED === false) dhPropOn = false;
   }
+  renderOwnerCapNotice("#data-cap-notice", ownerCapHit(caseRows.data) || ownerCapHit(clientRows.data)); // R23 — data-health must see the whole book
   const dq = dqRes.data || {};
   // Feature-detect M4: an older database has no duplicate_dismissals table yet — the panel simply
   // shows every RPC-flagged pair (as before) and hides the "Not a duplicate" action.
@@ -20469,9 +20491,9 @@ async function loadDataHealth() {
        are asked for SEPARATELY rather than added to the big cases select above — naming them
        there would 42703 on an un-migrated database and blank five existing panels. */
     const [dhDocRows, dhDocMails, dhWaitRows] = await Promise.all([
-      softRows(db.from("case_documents").select("case_id,status")),
-      softRows(db.from("email_queue").select("case_id,email_type,status,sent_at,created_at").in("email_type", DOC_MAIL_TYPES)),
-      softRows(db.from("cases").select("id,waiting_on,solicitor_firm,assigned_to")),
+      softRows(db.from("case_documents").select("case_id,status").order("case_id").limit(OWNER_ROW_CAP)),
+      softRows(db.from("email_queue").select("case_id,email_type,status,sent_at,created_at").in("email_type", DOC_MAIL_TYPES).order("created_at").limit(OWNER_ROW_CAP)),
+      softRows(db.from("cases").select("id,waiting_on,solicitor_firm,assigned_to").order("id").limit(OWNER_ROW_CAP)),
     ]);
     const outstandingBy = {}, docsBy = {};
     dhDocRows.forEach((d) => {
@@ -20486,7 +20508,7 @@ async function loadDataHealth() {
        and cost the panel its seven other facts to gain one. */
     const dhExchangeBy = {};
     if ((await forwardDatesSupported()) === true) {
-      (await softRows(db.from("cases").select("id,exchange_date"))).forEach((r) => { if (r && r.id) dhExchangeBy[r.id] = r.exchange_date || null; });
+      (await softRows(db.from("cases").select("id,exchange_date").order("id").limit(OWNER_ROW_CAP))).forEach((r) => { if (r && r.id) dhExchangeBy[r.id] = r.exchange_date || null; });
     }
     const extraBy = Object.fromEntries(dhWaitRows.map((r) => [r.id, r]));
     const emailBy = new Map(allClients.map((cl) => [cl.id, cl.email || ""]));
@@ -20523,7 +20545,7 @@ async function loadDataHealth() {
   const dhCareOn = (await careSupported()) === true;
   let dhVulnerable = [], dhSuppressed = [];
   if (dhCareOn) {
-    const { data: careRows, error: careErr } = await db.from("clients").select("id,first_name,last_name," + CARE_COLS.join(","));
+    const { data: careRows, error: careErr } = await db.from("clients").select("id,first_name,last_name," + CARE_COLS.join(",")).order("id").limit(OWNER_ROW_CAP);
     if (careErr) { if (isMissingColumnError(careErr)) CARE_SUPPORTED = false; }
     else {
       const cn = (r) => [r.first_name, r.last_name].filter(Boolean).join(" ") || "(no name)";
@@ -23252,13 +23274,13 @@ async function revFetchClients() {
      case, so there is nothing here that needs them. */
   const careOn = (await careSupported()) === true;
   const cols = "id,first_name,last_name,email,phone,address,date_of_birth" + (careOn ? ",is_vulnerable,vulnerability_note" : "");
-  const { data, error } = await db.from("clients").select(cols);
+  const { data, error } = await db.from("clients").select(cols).order("id").limit(OWNER_ROW_CAP);
   if (error) { console.error(error); return []; }
   return data || [];
 }
 async function revFetchCases() {
   const { data, error } = await db.from("cases")
-    .select("id,client_id,stage,case_kind,lender,product_name,rate_type,rate_percent,rate_end_date,rate_end_estimated,erc_end_date,loan_amount,property_value,term_years,proc_fee,broker_fee,fee_status,protection_status,protection_commission,gi_status,lead_source,submitted_at,completed_at,assigned_to,updated_at");
+    .select("id,client_id,stage,case_kind,lender,product_name,rate_type,rate_percent,rate_end_date,rate_end_estimated,erc_end_date,loan_amount,property_value,term_years,proc_fee,broker_fee,fee_status,protection_status,protection_commission,gi_status,lead_source,submitted_at,completed_at,assigned_to,updated_at").order("id").limit(OWNER_ROW_CAP);
   if (error) { console.error(error); return []; }
   return data || [];
 }
