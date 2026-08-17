@@ -83,6 +83,7 @@ node tests/r20.js
 node tests/r23.js
 node tests/r24.js
 node tests/r25.js
+node tests/r26.js
 ```
 
 Current green counts (end of round 23; r21/r22 were never committed to this
@@ -101,7 +102,10 @@ nothing else asserted the old shape of, and R19 is new owner-gated Reports
 content that no earlier suite reaches; R23 is the same story again — see the
 R23 notes below).
 
-**Full battery is 100% green (3,077/3,077).** R24 also FIXED a 2-check regression
+**Full battery is 100% green (3,113/3,113).** R26 added `tests/r26.js` (36
+checks) unedited into a full re-run of every pre-existing suite — every one
+of them passed at its EXACT pre-R26 count (see the table below), so R26
+needed no other suite touched. R24 also FIXED a 2-check regression
 R23 had introduced in `tests/r11_ux.js`: R23's hidden `#dash-cap-notice` sits
 between `#kpi-row` and `#briefing-panel`, which r11_ux's `R11-A` top-of-page
 adjacency check didn't expect (R23's own regression run hadn't included r11_ux,
@@ -136,7 +140,63 @@ even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes belo
 | `tests/r23.js` | 76 |
 | `tests/r24.js` | 89 |
 | `tests/r25.js` | 45 |
-| **Total** | **3,077** |
+| `tests/r26.js` | 36 |
+| **Total** | **3,113** |
+
+R26 notes: per-adviser monthly fee targets, entirely `admin/app.js`, no
+schema and no `index.html` change. Storage is ONE new settings row —
+`key="adviser_fee_targets"`, `value=JSON.stringify({staffId:number})` —
+parsed everywhere through one defensive `adviserTargets()` (a bad/missing/
+non-object/array value degrades to `{}`, never throws). Two new pieces:
+(1) `renderAdviserTargetsEditor(owner)`, an owner-only editor built in JS and
+injected right after `#settings-saved` on every `renderSettings()` run
+(`#adviser-targets-section`, one `.adv-target-input[data-staff]` per `TEAM`
+member, `#adviser-targets-save`), removed outright for a non-owner — same
+`isOwner()` gate every other owner-only Settings block already uses; (2) a
+new "Target" column on the owner Reports scoreboard (`#report-advisers`,
+inside the pre-existing `showMoney()`-gated `#report-scoreboard-panel`),
+right after "Fees banked (paid)". The attainment basis is `feeEarnedBroker`
+— broker fee EARNED (paid or not) on that adviser's completions in the
+selected report month, the same basis as the firm "Fees earned vs target"
+bar, deliberately not the cash "Fees banked" column beside it — against the
+target set in Settings, `pct = Math.round(earned/target*100)`. No target (or
+the Unassigned/off-team rows) renders "—" / `data-pct=""`, never `0%`. The
+foot row sums earned/target only over advisers who have a target on both
+sides.
+
+`tests/r26.js` (36 checks) proves this end to end, on ONE continuing
+page/session for §B–§E (mock-supabase.js's whole DB and `settings` live in
+that page's own in-memory JS state, reinitialized fresh on every navigation
+to `mock.html` — so state written in one section has to be read back within
+the same page, not a fresh `newPage()`, exactly like `tests/r25.js`'s A/B
+share one page). §A confirms the editor's shape against `window.TEAM` read
+off the page, never hardcoded. §B saves a target through the real editor UI
+and reads `settings.adviser_fee_targets` straight back off
+`window.__mockDb`, exact JSON, then confirms a fresh Settings render
+prefills it. §C is the critical arithmetic case the build agent flagged it
+could not exercise off the stock fixture: a case is seeded (via the same
+`insertCase` technique `tests/r25.js` uses) assigned to an adviser, with a
+`broker_fee` and a `completed_at` inside the SAME month Reports defaults to
+(`localMonthStr()`, read off the page). That adviser's true
+`feeEarnedBroker` for the month is recomputed independently off
+`window.__mockDb` (so the assertion holds regardless of what the fixture
+already contributed that month, not merely off the one seeded case), a
+target is set that does NOT divide the earned total evenly (so a truncation-
+vs-rounding bug in the pct formula would actually be caught), and the
+scoreboard's `data-pct` and cell text are asserted against that independent
+recompute exactly. §D confirms a no-target adviser row and the Unassigned
+row both render "—" / `data-pct=""`. §E confirms the header's `<th>`
+colspan-sum (10) equals every body row's and the foot row's `<td>`
+colspan-sum, so the new column didn't misalign any row. §F confirms a
+non-owner (p2) gets neither the Settings editor nor a visible scoreboard
+panel, with no console error on either page.
+
+No bug found — the pct arithmetic (including the deliberately non-round
+target case) matched an independent recompute exactly, the editor round-
+trips through the real settings table with no schema, and the full
+regression run above (every suite `smoke.js` through `tests/r25.js`, in
+full) passed completely unedited at its exact pre-R26 count. `admin/app.js`
+was not modified.
 
 R24 notes: narrows the Pipeline board's `cases` read (`loadPipeline()`,
 app.js ~7275 — the app's fattest read, up to `OWNER_ROW_CAP` rows on the
