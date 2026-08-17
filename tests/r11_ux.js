@@ -102,13 +102,19 @@ const noErr = (page, label) => ok(`no console errors (${label})`, !page.__err, J
         const h = document.getElementById("today-heading");
         const kpi = document.getElementById("kpi-row");
         const brief = document.getElementById("briefing-panel");
+        // R23 inserted a normally-hidden #dash-cap-notice between #kpi-row and #briefing-panel
+        // (the "showing first 20,000 records" caveat, adjacent to the numbers it qualifies). The
+        // R11 "numbers first" intent is unchanged — #kpi-row still immediately follows the heading
+        // and the briefing still follows the numbers — so skip the optional hidden notice.
+        let afterKpi = kpi && kpi.nextElementSibling;
+        if (afterKpi && afterKpi.id === "dash-cap-notice") afterKpi = afterKpi.nextElementSibling;
         return {
           afterHeading: h && h.nextElementSibling && h.nextElementSibling.id,
-          beforeBrief: kpi && kpi.nextElementSibling && kpi.nextElementSibling.id,
+          beforeBrief: afterKpi && afterKpi.id,
         };
       });
       eq("R11-A · #kpi-row sits immediately after #today-heading", order.afterHeading, "kpi-row");
-      eq("R11-A · #kpi-row sits immediately before #briefing-panel", order.beforeBrief, "briefing-panel");
+      eq("R11-A · #kpi-row sits immediately before #briefing-panel (skipping R23's hidden cap-notice)", order.beforeBrief, "briefing-panel");
 
       const gt = await page.evaluate(async () => {
         const db = window.__mockDb;
@@ -164,7 +170,10 @@ const noErr = (page, label) => ok(`no console errors (${label})`, !page.__err, J
       const advOrder = await page.evaluate(() => {
         const h = document.getElementById("today-heading");
         const brief = document.getElementById("briefing-panel");
-        return { afterHeading: h.nextElementSibling.id, kpiBeforeBrief: brief.previousElementSibling.id };
+        // Skip R23's hidden #dash-cap-notice between the numbers and the briefing (see the owner block above).
+        let prev = brief.previousElementSibling;
+        if (prev && prev.id === "dash-cap-notice") prev = prev.previousElementSibling;
+        return { afterHeading: h.nextElementSibling.id, kpiBeforeBrief: prev.id };
       });
       eq("R11-A · same top-of-page order for an adviser", advOrder, { afterHeading: "kpi-row", kpiBeforeBrief: "kpi-row" });
       noErr(page, "adviser KPI");

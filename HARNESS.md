@@ -81,6 +81,7 @@ node tests/r18.js
 node tests/r19.js
 node tests/r20.js
 node tests/r23.js
+node tests/r24.js
 ```
 
 Current green counts (end of round 23; r21/r22 were never committed to this
@@ -99,7 +100,17 @@ nothing else asserted the old shape of, and R19 is new owner-gated Reports
 content that no earlier suite reaches; R23 is the same story again — see the
 R23 notes below).
 
-**Full battery is 100% green (2,943/2,943).** R17 also made two long-standing
+**Full battery was 100% green at 2,943/2,943 as of R23.** R24's regression run
+found `tests/r11_ux.js` now fails 2 of its 123 checks (`R11-A` top-of-page
+ordering: `#dash-cap-notice`, R23's hidden owner-cap notice, sits between
+`#kpi-row` and `#briefing-panel` in the DOM, which r11_ux's positional
+`#kpi-row` → `#briefing-panel` adjacency check does not expect) — confirmed
+with `git stash` to predate R24 entirely (fails identically on the R23
+baseline with R24's diff stashed out), so it is an R23-era regression this
+round surfaced, not something R24 caused or should paper over; left unfixed
+here as out of scope for a read-narrowing round and flagged for whoever picks
+up R25. Every other suite, including R24's own field-level regression, is
+green. R17 also made two long-standing
 date-fragile checks in `r12b.js` deterministic (B1 "Earlier today" crossed
 midnight when run just after 00:00; B5's month-cap date collided with the
 even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes below.
@@ -114,7 +125,7 @@ even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes belo
 | `tests/r9_adv.js` | 169 |
 | `tests/r9_docs.js` | 255 |
 | `tests/r9_embed.js` | 104 |
-| `tests/r11_ux.js` | 123 |
+| `tests/r11_ux.js` | 123 (2 now failing — pre-existing R23-era `#dash-cap-notice` ordering issue, found and documented in R24 notes, not fixed here) |
 | `tests/r12a.js` | 114 |
 | `tests/r12b.js` | 158 (date-fragile B1/B5 made deterministic in R17) |
 | `tests/r13.js` | 142 |
@@ -126,7 +137,71 @@ even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes belo
 | `tests/r19.js` | 39 (unchanged count — R20 fixed HOW one row is queried, not what it asserts) |
 | `tests/r20.js` | 81 |
 | `tests/r23.js` | 76 |
-| **Total** | **2,943** |
+| `tests/r24.js` | 89 |
+| **Total** | **3,032** |
+
+R24 notes: narrows the Pipeline board's `cases` read (`loadPipeline()`,
+app.js ~7275 — the app's fattest read, up to `OWNER_ROW_CAP` rows on the
+screen brokers keep open all day) from `select("*, clients!client_id
+(first_name,last_name)")` to a named column list: a fixed `BOARD_CASE_COLS`
+(22 always-present columns) plus three migration-gated columns appended only
+when their own feature detector currently answers true —
+`property_address` (`propAddrSupported()`, M7), `waiting_on,solicitor_firm`
+(`docsSupported()`, m10) and `application_status` (`lenderTrackSupported()`,
+a plain no-migration-toggle column, still probed defensively) — then the
+pre-existing `clients!client_id(first_name,last_name)` embed and
+`.order("updated_at",{ascending:false}).limit(OWNER_ROW_CAP)` (R23),
+unchanged. Frontend-only, no schema, no other function touched.
+
+`tests/r24.js` (89 checks) proves the narrowing two ways, not just by
+reading the source: (1) monkeypatches `window.__mockDb.from` to wrap
+`.select()` (same technique tests/r23.js's `installLimitRecorder` uses for
+`.limit()`) and captures the literal string `loadPipeline()` passes —
+confirmed NOT `"*"`, confirmed to start with `BOARD_CASE_COLS` verbatim,
+confirmed to include the clients embed, and confirmed to exclude four
+deliberately-dropped columns that ARE real schema used elsewhere in app.js
+(`proc_fee`, `notes`, `offer_doc_path`, `property_value` — so the check is
+meaningful, not just probing for typos); (2) a purpose-built "kitchen sink"
+case carrying a real, non-null value in every field the board's select must
+still provide is inserted independently for the owner (p4) and an adviser
+(p2), and every field the round's own spec calls out — client name, stage,
+adviser, lender, loan amount, rate, rate-end date, fee status, protection
+status, property, the waiting/solicitor chip, and the submit-to-lender
+status badge — is read back off the live board card AND the live table row,
+never re-derived from app.js's own constants except the same handful of
+pure DISPLAY formatters (`fmtM`/`fmtD`/`staffName`/`propLabel`/
+`STAGE_LABEL`) r19/r20 already treat as fair game. `product_name` (selected
+but never displayed directly — it only feeds the board search filter) is
+proven live via an actual `#board-search` query on a token unique to the
+seeded case, not just left unchecked because it has no visible field.
+
+The un-migrated-safety path (§E) is the one part of the round's own spec
+that isn't reachable through the mock's normal migration toggles:
+`application_status` ships as a plain nullable column with no `m*` toggle in
+`mock-supabase.js` (same rule as `mortgage_account_number`/the R16 BTL
+trio), so `window.__mock.setMigrations({...})` cannot make it 42703 the way
+`m7`/`m10` can for `property_address`/`waiting_on`. `tests/r24.js` instead
+sets the three module-scope feature-detect caches app.js itself checks with
+`!== null` (`PROP_ADDR_SUPPORTED`/`DOCS_SUPPORTED`/`LENDER_TRACK_SUPPORTED`)
+directly to `false` from the test — reachable because these are top-level
+`let`s in a classic (non-module) `<script>`, so a page-scoped global, not a
+closure variable; verified this actually resolves to the same runtime state
+a real un-migrated database produces, not a shortcut around it. With all
+three forced false, the board reloads with zero console errors, zero
+42703s, `#board` stays visible and rendered (not the `renderLoadError`
+branch), and the captured select is proven to have OMITTED exactly
+`property_address`/`waiting_on`/`solicitor_firm`/`application_status` while
+still carrying the base list and the clients embed — the gated columns are
+structurally impossible to 42703 because they are simply never asked for
+when their detector says no, not because the mock happens to be forgiving.
+
+No bug found: every field the board's named select is supposed to carry
+renders with a real value on both the card and the table, for both the
+owner and an adviser; the un-migrated path never 42703s; and the full
+regression battery (`smoke.js`, `r8_rev.js`, `r13.js`, `r18.js`, `r23.js`)
+passed unedited at its pre-R24 counts. The only regression surfaced by this
+round's full run is `tests/r11_ux.js`'s pre-existing, R23-era ordering
+failure noted above — unrelated to R24, confirmed by `git stash`.
 
 R23 notes: defeats the silent 1,000-row PostgREST cap on the 19 OWNER-facing
 full-table reads R18-P7's `REPORTS_ROW_CAP` fix never reached (that round

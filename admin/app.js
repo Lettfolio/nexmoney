@@ -7272,8 +7272,27 @@ window.boardShowMore = function (stage) {
   boardExpandedStages.add(stage);
   loadPipeline();
 };
+/* R24 — the board is the app's fattest read (every column of up to OWNER_ROW_CAP cases, on the
+   screen brokers keep open all day). It is narrowed here from select("*") to exactly the columns the
+   cards, the table view, the search/filter/sort, the segment counts and the two star-row detectors
+   consume — nothing else. Migration-gated columns are appended ONLY where their feature detector says
+   the column is present, so an un-migrated database never 42703s and blanks the board:
+     property_address  → propAddrSupported()   (same convention as Money / Data health)
+     waiting_on, solicitor_firm → docsSupported() (m10, same gate as loadSolicitorColumn)
+     application_status → lenderTrackSupported() (R16 lender tracker)
+   Every column below is present in the original/prod schema (see the Reports and revFetchCases named
+   selects) and cannot 42703. Order/limit and the clients embed are preserved exactly (R23). */
+const BOARD_CASE_COLS = "id,client_id,stage,case_kind,lender,product_name,loan_amount,rate_percent,rate_end_date,rate_end_estimated,erc_end_date,broker_fee,fee_status,protection_status,submitted_at,completed_at,created_at,updated_at,expected_completion_date,retention_source_case_id,lead_source,introducer_id,assigned_to";
 async function loadPipeline() {
-  const { data: cases, error } = await db.from("cases").select("*, clients!client_id(first_name,last_name)").order("updated_at", { ascending: false }).limit(OWNER_ROW_CAP);
+  const propOn = (await propAddrSupported()) !== false;
+  const docsOn = (await docsSupported()) !== false;
+  const lenderOn = (await lenderTrackSupported()) !== false;
+  const boardSelect = BOARD_CASE_COLS
+    + (propOn ? ",property_address" : "")
+    + (docsOn ? ",waiting_on,solicitor_firm" : "")
+    + (lenderOn ? ",application_status" : "")
+    + ",clients!client_id(first_name,last_name)";
+  const { data: cases, error } = await db.from("cases").select(boardSelect).order("updated_at", { ascending: false }).limit(OWNER_ROW_CAP);
   if (error) {
     $("#board").classList.remove("hidden");
     $("#board-hint").classList.add("hidden");
@@ -7283,8 +7302,11 @@ async function loadPipeline() {
     renderLoadError("#board", error, loadPipeline);
     return;
   }
-  // The select("*") above returns every column cases actually has, so it settles the M7 question
-  // for the table's Property column before it is asked (see notePropAddrFromStarRow).
+  // R24 — the named select above carries property_address exactly when propOn was true, so the M7
+  // question is still settled for free off the first row (notePropAddrFromStarRow reads its presence).
+  // noteDocsFromStarRow only ever flips DOCS_SUPPORTED to false off a missing waiting_on, which the
+  // select omits precisely when docsOn was already false — so both detectors stay consistent with the
+  // columns actually requested (mirrors how loadDataHealth re-notes M7 after its own named select).
   if (cases && cases.length) { notePropAddrFromStarRow(cases[0]); noteDocsFromStarRow(cases[0]); }
   renderOwnerCapNotice("#board-cap-notice", ownerCapHit(cases)); // R23 — never silently truncate the board
   const q = ($("#board-search").value || "").trim().toLowerCase();
