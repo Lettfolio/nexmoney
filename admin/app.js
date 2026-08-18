@@ -4846,8 +4846,9 @@ function renderAdviserTargetsEditor(owner) {
   const anchor = $("#settings-saved");
   if (!anchor || !anchor.parentNode) return;
   const targets = adviserTargets();
-  // One row per ACTIVE TEAM adviser — the same TEAM the scoreboard iterates.
-  const rows = TEAM.map((p) => {
+  // R28 (Daniel-approved) — one row per ADVISING staff member only (advisingStaff() = TEAM filtered by
+  // isAdvisingStaff), not the whole team: an owner/admin who doesn't advise carries no fee target.
+  const rows = advisingStaff().map((p) => {
     const v = Number(targets[p.id] || 0);
     return `<label>${esc(staffName(p.id))}
       <input class="adv-target-input" data-staff="${esc(p.id)}" type="number" min="0" step="100" inputmode="numeric" value="${v > 0 ? esc(String(v)) : ""}" placeholder="e.g. 12000">
@@ -4858,7 +4859,7 @@ function renderAdviserTargetsEditor(owner) {
   sec.id = "adviser-targets-section";
   sec.style.marginTop = "24px";
   sec.innerHTML = `<h3>Per-adviser monthly fee targets</h3>
-    <p class="panel-sub">On the owner Reports scoreboard, each adviser's <strong>broker fee earned on their completions this month</strong> (paid or not — the same basis as the firm "Fees earned vs target" bar, not the cash "Fees banked" column) is measured against the target you set here. <strong>Blank or 0 = no target</strong> for that adviser (their Target cell shows "—"). This complements — it does not replace — the firm-wide monthly fee target above.</p>
+    <p class="panel-sub">On the owner Reports scoreboard, each adviser's <strong>fees earned (procuration + broker + solicitor) on their completions this month</strong> (paid or not — the same basis as the firm "Fees earned vs target" bar, not the cash "Fees banked" column) is measured against the target you set here. <strong>Blank or 0 = no target</strong> for that adviser (their Target cell shows "—"). This complements — it does not replace — the firm-wide monthly fee target above.</p>
     <div class="settings-grid">${rows || '<p class="panel-sub" style="grid-column:1/-1;">No active team advisers to set targets for.</p>'}</div>
     <button type="button" class="btn btn-primary btn-sm" id="adviser-targets-save">Save targets</button>`;
   anchor.parentNode.insertBefore(sec, anchor.nextSibling);
@@ -17894,8 +17895,11 @@ function renderThreadedPanels(all, mv, repAdvisers) {
        The adviser-attributed analogue of the firm "Fees earned vs target" bar (broker only, because
        proc/sols fees don't attribute cleanly to one adviser). This is the attainment basis for the
        new per-adviser Target column — deliberately NOT the cash "Fees banked" figure beside it. */
-    const feeEarnedBroker = done.reduce((s, c) => s + (Number(c.broker_fee) || 0), 0);
-    return { id, name, offTeam: !!offTeam, open, completions: done.length, feesBanked, overdue, avg, n: days.length, trend, trendTitle, protTaken, attach, feeEarnedBroker };
+    // R28 (Daniel-approved) — target basis now folds procuration + solicitor fees in with the broker
+    // fee, so it matches the firm "Fees earned vs target" bar EXACTLY (earnedOnCompletion = proc+broker+
+    // sols on the month's completions). Each fee sits on the case, summed over the adviser's completions.
+    const feeEarnedTotal = done.reduce((s, c) => s + (Number(c.proc_fee) || 0) + (Number(c.broker_fee) || 0) + (Number(c.sols_fee) || 0), 0);
+    return { id, name, offTeam: !!offTeam, open, completions: done.length, feesBanked, overdue, avg, n: days.length, trend, trendTitle, protTaken, attach, feeEarnedTotal };
   };
   // T1-18 — TEAM.map() alone cannot represent work nobody owns, so the Open column silently came up
   // short against the Live cases KPI. Append the unassigned bucket, plus a row for anyone holding
@@ -17931,19 +17935,20 @@ function renderThreadedPanels(all, mv, repAdvisers) {
       : `<span title="${esc(basis)}">${a.avg} <span class="stat-n">(${a.n})</span></span>`;
   };
   /* R26 — per-adviser monthly fee targets (owner-only, same JSON settings key everywhere). The cell
-     measures feeEarnedBroker (broker fee EARNED on this month's completions, paid or not) against
-     this adviser's target — the same basis as the firm "Fees earned vs target" bar above, NOT the
+     measures feeEarnedTotal (procuration + broker + solicitor fees EARNED on this month's completions,
+     paid or not) against this adviser's target — the SAME basis as the firm "Fees earned vs target" bar
+     above (earnedOnCompletion sums the same three fees), NOT the
      cash "Fees banked" column beside it. Colour rule mirrors the firm bar: green>=100 / amber>=60 /
      red<60. No target (or the Unassigned/off-team rows, id falsy) → "—", never 0%. */
   const advTargets = adviserTargets();
   const advTargetCell = (a) => {
     const t = a.id ? Number(advTargets[a.id] || 0) : 0;
     if (!(t > 0)) return `<td class="adv-target-cell" data-pct="">—</td>`;
-    const earned = Number(a.feeEarnedBroker) || 0;
+    const earned = Number(a.feeEarnedTotal) || 0;
     const pct = Math.round((earned / t) * 100);
     const color = pct >= 100 ? "var(--green)" : pct >= 60 ? "var(--amber)" : "var(--red)";
     const fill = Math.max(0, Math.min(100, pct));
-    const title = `Broker fee earned on ${a.name}'s completions in ${label} vs their monthly target — earned on completion, paid or not, so it matches the firm 'Fees earned vs target' bar above, not the cash 'Fees banked' column beside it.`;
+    const title = `Fees earned (procuration + broker + solicitor) on ${a.name}'s completions in ${label} vs their monthly target — earned on completion, paid or not, so it matches the firm 'Fees earned vs target' bar above, not the cash 'Fees banked' column beside it.`;
     return `<td class="adv-target-cell" data-pct="${pct}" title="${esc(title)}">${fmtM(earned)} / ${fmtM(t)} <span style="color:${color};font-weight:600;">${pct}%</span><div class="adv-target-bar" style="margin-top:3px;height:5px;border-radius:3px;background:var(--light);overflow:hidden;"><div style="width:${fill}%;height:100%;background:${color};"></div></div></td>`;
   };
   if (!money) { $("#report-advisers").innerHTML = ""; $("#report-scoreboard-scope").textContent = ""; }
@@ -17960,19 +17965,19 @@ function renderThreadedPanels(all, mv, repAdvisers) {
     return d && Number(localDateStr(d).slice(0, 4)) === ytdYear ? s + Number(c.broker_fee || 0) : s;
   }, 0);
   const ytdGap = ytdFirm - ytdRpcSum;
-  $("#report-scoreboard-scope").textContent = `Completions, fees banked, attach rate and avg days are for ${label}. Open cases and overdue tasks are as of now. Trend is completions over the last 6 calendar months, all rows drawn on one shared scale. "Fees banked" here is broker fees actually received this month, each counted on the date that fee was paid — a different scope from "Completed £ (earned)" on the Monthly business panel above, which is fee value earned on cases completed this month regardless of payment status.${bankedFuture ? ` Excludes future-dated payments (${bankedFuture}).` : ""} "Banked ${ytdYear}" is that adviser's broker cash for the calendar year, straight from get_reports.${ytdGap ? ` It covers people who still have a login, so it totals ${fmtM(ytdRpcSum)} against the ${fmtM(ytdFirm)} on the "Fees banked ${ytdYear}" tile below — the ${fmtM(ytdGap)} difference sits on completed cases still attributed to someone whose access has been removed.` : ""} "Attach rate" is the share of THIS MONTH's completions that ended with a protection policy, with the count in brackets — on a month's worth of completions a single case moves it a long way, so read the bracket before the percentage. "Target" is broker fee EARNED on that adviser's ${label} completions (paid or not) against the per-adviser monthly target set in Settings — the same earned-on-completion basis as the firm "Fees earned vs target" bar above, and deliberately a different figure from the cash "Fees banked" column beside it; advisers with no target set show "—". ${ATTRIB_NOTE}`;
+  $("#report-scoreboard-scope").textContent = `Completions, fees banked, attach rate and avg days are for ${label}. Open cases and overdue tasks are as of now. Trend is completions over the last 6 calendar months, all rows drawn on one shared scale. "Fees banked" here is broker fees actually received this month, each counted on the date that fee was paid — a different scope from "Completed £ (earned)" on the Monthly business panel above, which is fee value earned on cases completed this month regardless of payment status.${bankedFuture ? ` Excludes future-dated payments (${bankedFuture}).` : ""} "Banked ${ytdYear}" is that adviser's broker cash for the calendar year, straight from get_reports.${ytdGap ? ` It covers people who still have a login, so it totals ${fmtM(ytdRpcSum)} against the ${fmtM(ytdFirm)} on the "Fees banked ${ytdYear}" tile below — the ${fmtM(ytdGap)} difference sits on completed cases still attributed to someone whose access has been removed.` : ""} "Attach rate" is the share of THIS MONTH's completions that ended with a protection policy, with the count in brackets — on a month's worth of completions a single case moves it a long way, so read the bracket before the percentage. "Target" is fees earned (procuration + broker + solicitor) on that adviser's ${label} completions (paid or not) against the per-adviser monthly target set in Settings — the same earned-on-completion basis as the firm "Fees earned vs target" bar above, and deliberately a different figure from the cash "Fees banked" column beside it; advisers with no target set show "—". ${ATTRIB_NOTE}`;
   /* R26 — foot Target cell: apples-to-apples, summing ONLY advisers who HAVE a target on both
-     sides (their broker-earned this month vs the sum of set targets). No targets set at all → "—". */
+     sides (their fees earned — proc+broker+sols — this month vs the sum of set targets). None set → "—". */
   const footTargetCell = (() => {
     let sumTargets = 0, sumEarned = 0;
-    advRows.forEach((a) => { const t = a.id ? Number(advTargets[a.id] || 0) : 0; if (t > 0) { sumTargets += t; sumEarned += Number(a.feeEarnedBroker) || 0; } });
+    advRows.forEach((a) => { const t = a.id ? Number(advTargets[a.id] || 0) : 0; if (t > 0) { sumTargets += t; sumEarned += Number(a.feeEarnedTotal) || 0; } });
     if (!(sumTargets > 0)) return `<td class="adv-target-cell">—</td>`;
     const p = Math.round((sumEarned / sumTargets) * 100);
     const c = p >= 100 ? "var(--green)" : p >= 60 ? "var(--amber)" : "var(--red)";
     return `<td class="adv-target-cell"><strong>${fmtM(sumEarned)} / ${fmtM(sumTargets)}</strong> <span style="color:${c};font-weight:600;">(${p}%)</span></td>`;
   })();
   $("#report-advisers").innerHTML = advRows.length ? `<table class="imp-table">
-    <tr><th>Adviser</th><th>Open</th><th>Completions</th><th title="Broker fees actually received this month, counted on the broker fee's own paid date. Payments dated in the future are excluded.">Fees banked (paid)<span class="money-basis">${esc(BASIS_CASH_MONTH)}</span></th><th title="Broker fee EARNED on each adviser's completions this month (paid or not) versus their monthly target set in Settings — the same earned-on-completion basis as the firm 'Fees earned vs target' bar above, NOT the cash 'Fees banked' column beside it. Blank target = no target (shows —).">Target<span class="money-basis">(broker earned ÷ target · this month)</span></th><th title="Broker fees this adviser has banked so far in ${ytdYear}, as reported by get_reports (M5) — the same coalesce(broker_fee_paid_at, fee_paid_at) basis as the column beside it, widened to the whole year.">Banked ${ytdYear}<span class="money-basis">(broker only · cash · YTD)</span></th><th title="Of the cases this adviser completed in the selected month, the share that ended with a protection policy (protection_status = policy taken). The count is in brackets — a month is a small sample and a single case can swing it.">Attach rate<span class="money-basis">(policy taken ÷ completions · this month)</span></th><th>Overdue</th><th title="Mean days from case created to completed, over completions in the selected month only. The sample size is in brackets; fewer than 3 completions is greyed and should not be read as a ranking.">Avg days</th><th title="Completions per month over the last 6 calendar months. Every row shares one vertical scale (peak ${sparkMax}); the number is this month's value.">6-mo trend</th></tr>
+    <tr><th>Adviser</th><th>Open</th><th>Completions</th><th title="Broker fees actually received this month, counted on the broker fee's own paid date. Payments dated in the future are excluded.">Fees banked (paid)<span class="money-basis">${esc(BASIS_CASH_MONTH)}</span></th><th title="Fees earned (procuration + broker + solicitor) on each adviser's completions this month (paid or not) versus their monthly target set in Settings — the same earned-on-completion basis as the firm 'Fees earned vs target' bar above, NOT the cash 'Fees banked' column beside it. Blank target = no target (shows —).">Target<span class="money-basis">(fees earned ÷ target · this month)</span></th><th title="Broker fees this adviser has banked so far in ${ytdYear}, as reported by get_reports (M5) — the same coalesce(broker_fee_paid_at, fee_paid_at) basis as the column beside it, widened to the whole year.">Banked ${ytdYear}<span class="money-basis">(broker only · cash · YTD)</span></th><th title="Of the cases this adviser completed in the selected month, the share that ended with a protection policy (protection_status = policy taken). The count is in brackets — a month is a small sample and a single case can swing it.">Attach rate<span class="money-basis">(policy taken ÷ completions · this month)</span></th><th>Overdue</th><th title="Mean days from case created to completed, over completions in the selected month only. The sample size is in brackets; fewer than 3 completions is greyed and should not be read as a ranking.">Avg days</th><th title="Completions per month over the last 6 calendar months. Every row shares one vertical scale (peak ${sparkMax}); the number is this month's value.">6-mo trend</th></tr>
     ${advRows.map((a) => `<tr${a.offTeam ? ' class="row-warn"' : ""}>
       <td>${advName(a)}</td>
       <td>${a.open}</td>

@@ -8,11 +8,12 @@
        editor built entirely in JS and injected right after `#settings-saved`
        on every `renderSettings()` run, removed outright for a non-owner.
        `#adviser-targets-section` contains one `.adv-target-input[data-staff
-       ="<id>"]` per entry in `TEAM` (the STAFF_ROLES subset of PROFILES —
-       owner/admin/adviser/staff, exactly what every other TEAM-driven
-       dropdown in this app already iterates) and one `#adviser-targets-save`
-       button. Saving builds `{staffId:number}` from every input with a
-       finite value > 0 (blank/0/NaN dropped), upserts ONE settings row
+       ="<id>"]` per entry in `advisingStaff()` (app.js ~762, `TEAM.filter(
+       isAdvisingStaff)` — as of R28; R26 originally iterated the whole
+       `TEAM` STAFF_ROLES subset, but a non-advising owner/admin no longer
+       gets a target input) and one `#adviser-targets-save` button. Saving
+       builds `{staffId:number}` from every input with a finite value > 0
+       (blank/0/NaN dropped), upserts ONE settings row
        `key="adviser_fee_targets"`, `value=JSON.stringify(map)`, reloads
        settings, and — if Reports is the open page — re-renders it.
      - `adviserTargets()` (app.js ~4319) — defensive JSON parser for that one
@@ -22,39 +23,43 @@
        `#report-scoreboard-panel`, itself gated on `showMoney()` === owner-
        only) gained a new "Target" `<th>` right after "Fees banked (paid)".
        Body cells carry `class="adv-target-cell" data-pct="<pct or empty
-       string>"`. The attainment basis is `feeEarnedBroker`: the SUM of
-       `broker_fee` over that adviser's cases whose `completed_at` falls in
-       the selected report month (`mv`, default this calendar month) — paid
-       or not, the same earned-on-completion basis as the firm "Fees earned
-       vs target" bar, deliberately NOT the cash "Fees banked" column beside
-       it. `pct = Math.round(earned / target * 100)`. No target set (or the
-       Unassigned / off-team rows, whose `a.id` is falsy) → cell text "—",
-       `data-pct=""`. The foot row (`#report-scoreboard-foot`) gets a
-       matching Target `<td>` that sums earned/target ONLY over advisers who
-       have a target set on both sides; if nobody has a target it is also
-       "—".
+       string>"`. The attainment basis is `feeEarnedTotal` (renamed from R26's
+       `feeEarnedBroker` by R28): the SUM of `proc_fee + broker_fee +
+       sols_fee` over that adviser's cases whose `completed_at` falls in the
+       selected report month (`mv`, default this calendar month) — paid or
+       not, the same earned-on-completion basis as the firm "Fees earned vs
+       target" bar EXACTLY (R26 measured broker fee alone; R28 folded in
+       procuration + solicitor fees so the two figures match). `pct =
+       Math.round(earned / target * 100)`. No target set (or the Unassigned /
+       off-team rows, whose `a.id` is falsy) → cell text "—", `data-pct=""`.
+       The foot row (`#report-scoreboard-foot`) gets a matching Target `<td>`
+       that sums earned/target ONLY over advisers who have a target set on
+       both sides; if nobody has a target it is also "—".
 
    §A — owner (p4) Settings: `#adviser-targets-section` present, one
-        `.adv-target-input[data-staff]` per TEAM member (checked against
-        `window.TEAM` read straight off the page, never hardcoded against
-        fixture composition per the HARNESS.md standing rule), and
-        `#adviser-targets-save` present.
+        `.adv-target-input[data-staff]` per ADVISING staff member — i.e.
+        `window.advisingStaff()` (`TEAM.filter(isAdvisingStaff)`, both
+        exposed globally since app.js is a plain script, not a module),
+        never `window.TEAM` wholesale as R26 checked — and every non-
+        advising TEAM member (e.g. an admin persona who never advises) gets
+        NO input, and `#adviser-targets-save` present.
    §B — set a target via the input + Save; the persisted
         `settings.adviser_fee_targets` row is read back through
         `window.__mockDb` and matches the expected `{staffId:number}` JSON
         exactly; a fresh Settings render prefills the input from it.
    §C — THE CORE, non-zero pct arithmetic. A case assigned to a known
-        adviser (p3) is seeded with a `broker_fee` and a `completed_at`
-        dated inside the SAME calendar month Reports defaults to
-        (`localMonthStr()`, read off the page — not hardcoded). The
-        adviser's true `feeEarnedBroker` for that month is recomputed
-        independently off `window.__mockDb` (summing `broker_fee` over every
-        case assigned to them with `completed_at` in that month — the exact
-        predicate the round's own spec names, reimplemented here, not
-        borrowed from app.js), so the assertion holds regardless of what the
-        surrounding fixture already contributes that month. A target is then
-        set for that adviser and the Reports scoreboard is opened: the
-        adviser's `.adv-target-cell[data-pct]` must equal
+        adviser (p3, role "adviser" so always in `advisingStaff()`) is
+        seeded with `proc_fee`+`broker_fee`+`sols_fee` and a `completed_at` dated inside the
+        SAME calendar month Reports defaults to (`localMonthStr()`, read off
+        the page — not hardcoded). The adviser's true `feeEarnedTotal` for
+        that month is recomputed independently off `window.__mockDb`
+        (summing `proc_fee + broker_fee + sols_fee` over every case assigned
+        to them with `completed_at` in that month — the exact predicate the
+        round's own spec names, reimplemented here, not borrowed from
+        app.js), so the assertion holds regardless of what the surrounding
+        fixture already contributes that month. A target is then set for
+        that adviser and the Reports scoreboard is opened: the adviser's
+        `.adv-target-cell[data-pct]` must equal
         `Math.round(earned/target*100)` and the cell text must read
         `<fmtM(earned)> / <fmtM(target)> <pct>%`.
    §D — an adviser with NO target shows "—" / `data-pct=""`; the Unassigned
@@ -145,17 +150,18 @@ async function readTargetsRow(page) {
   });
 }
 
-/* Independently recompute one adviser's feeEarnedBroker for month mv straight off
-   window.__mockDb: sum of broker_fee over every case assigned_to that adviser whose
-   completed_at falls inside mv (YYYY-MM). This is the round's own spec, reimplemented here,
-   not borrowed from app.js. */
+/* Independently recompute one adviser's feeEarnedTotal for month mv straight off
+   window.__mockDb: sum of proc_fee + broker_fee + sols_fee over every case assigned_to that
+   adviser whose completed_at falls inside mv (YYYY-MM). This is R28's own spec (folding
+   procuration + solicitor fees in with the broker fee so the figure matches the firm "Fees
+   earned vs target" bar exactly), reimplemented here, not borrowed from app.js. */
 async function earnedForMonth(page, staffId, mv) {
   return page.evaluate(async ({ staffId, mv }) => {
-    const { data } = await window.__mockDb.from("cases").select("id,assigned_to,broker_fee,completed_at");
+    const { data } = await window.__mockDb.from("cases").select("id,assigned_to,proc_fee,broker_fee,sols_fee,completed_at");
     return (data || []).reduce((s, c) => {
       if (c.assigned_to !== staffId) return s;
       if (!c.completed_at || String(c.completed_at).slice(0, 7) !== mv) return s;
-      return s + (Number(c.broker_fee) || 0);
+      return s + (Number(c.proc_fee) || 0) + (Number(c.broker_fee) || 0) + (Number(c.sols_fee) || 0);
     }, 0);
   }, { staffId, mv });
 }
@@ -194,10 +200,18 @@ async function setTargetsViaEditor(page, map) {
       const sectionExists = await page.$("#adviser-targets-section");
       ok("A1 · #adviser-targets-section exists", !!sectionExists);
 
+      // R28 — scoped to ADVISING staff only (TEAM.filter(isAdvisingStaff)), not the whole TEAM.
+      // Both advisingStaff() and TEAM are plain top-level functions/vars in app.js (a classic
+      // script, not a module), so they're reachable as globals in the page.
       const teamIds = await page.evaluate(() => TEAM.map((p) => p.id));
+      const advisingIds = await page.evaluate(() => advisingStaff().map((p) => p.id));
+      const nonAdvisingIds = teamIds.filter((id) => !advisingIds.includes(id));
+      ok("A1b · fixture has at least one non-advising TEAM member to prove the scoping (e.g. an admin)", nonAdvisingIds.length > 0, JSON.stringify({ teamIds, advisingIds }));
+
       const inputIds = await page.$$eval(".adv-target-input[data-staff]", (els) => els.map((e) => e.dataset.staff));
-      eq("A2 · exactly one .adv-target-input[data-staff] per TEAM member (order-independent)", inputIds.slice().sort(), teamIds.slice().sort());
+      eq("A2 · exactly one .adv-target-input[data-staff] per ADVISING staff member (order-independent, via window.advisingStaff())", inputIds.slice().sort(), advisingIds.slice().sort());
       eq("A3 · no duplicate staff inputs", inputIds.length, new Set(inputIds).size);
+      ok("A2b · no non-advising TEAM member (e.g. an admin who doesn't advise) gets an input", nonAdvisingIds.every((id) => !inputIds.includes(id)), JSON.stringify({ nonAdvisingIds, inputIds }));
 
       const saveBtn = await page.$("#adviser-targets-save");
       ok("A4 · #adviser-targets-save exists", !!saveBtn);
@@ -242,7 +256,7 @@ async function setTargetsViaEditor(page, map) {
 
     /* =======================================================================
        C · THE CORE — non-zero pct arithmetic on a seeded current-month
-           broker-fee completion, independently recomputed.
+           proc+broker+sols completion, independently recomputed.
        ======================================================================= */
     {
       console.log("\n— C · Target column pct arithmetic, seeded current-month completion (p4)");
@@ -253,17 +267,20 @@ async function setTargetsViaEditor(page, map) {
 
       const earnedBefore = await earnedForMonth(page, p3Id, mv);
 
-      // Seed a case for p3, completed_at inside mv, a distinctive broker fee.
-      const seededFee = 1237;
+      // Seed a case for p3, completed_at inside mv, with distinctive proc/broker/sols fees so the
+      // R28 fold (proc_fee + broker_fee + sols_fee, not broker_fee alone) is actually exercised —
+      // a bug that dropped proc/sols back out would still pass a broker-only seed.
+      const seededProc = 411, seededBroker = 1237, seededSols = 250;
+      const seededFee = seededProc + seededBroker + seededSols;
       const day = "12";
       const completedAt = `${mv}-${day}T09:00:00.000Z`;
       const caseId = await insertCase(page, {
         first: "R26Target", last: "SeededCompletion",
-        fields: { stage: "completed", assigned_to: p3Id, broker_fee: seededFee, completed_at: completedAt, submitted_at: `${mv}-01T09:00:00.000Z` },
+        fields: { stage: "completed", assigned_to: p3Id, proc_fee: seededProc, broker_fee: seededBroker, sols_fee: seededSols, completed_at: completedAt, submitted_at: `${mv}-01T09:00:00.000Z` },
       });
 
       const earnedAfter = await earnedForMonth(page, p3Id, mv);
-      eq("C1 · independent recompute of p3's feeEarnedBroker rose by exactly the seeded fee", earnedAfter, earnedBefore + seededFee);
+      eq("C1 · independent recompute of p3's feeEarnedTotal (proc+broker+sols) rose by exactly the seeded fees' sum", earnedAfter, earnedBefore + seededFee);
       ok("C2 · earned total is non-zero (the arithmetic below is meaningfully exercised)", earnedAfter > 0, earnedAfter);
 
       // Set p3's target to a value that will NOT divide evenly, so a truncation-vs-rounding bug

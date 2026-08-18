@@ -103,7 +103,16 @@ nothing else asserted the old shape of, and R19 is new owner-gated Reports
 content that no earlier suite reaches; R23 is the same story again — see the
 R23 notes below).
 
-**Full battery is 100% green (3,156/3,156).** R27 added `tests/r27.js` (43
+**Full battery is 100% green (3,158/3,158).** R28 is a small, already-built,
+uncommitted change to R26's per-adviser fee targets (`admin/app.js` only —
+see the "R28 notes" section below) that required updating `tests/r26.js`
+in place: its check count rose from 36 to 38 (two new assertions proving the
+editor's new advisingStaff()-only scoping — see the R28 notes). No other
+suite needed any edit; the rest of the battery (`smoke.js` through
+`tests/r27.js`) re-ran unedited at its exact pre-R28 counts. `admin/app.js`
+was not touched by this test-maintenance pass.
+
+R27 added `tests/r27.js` (43
 checks) into a full re-run of every pre-existing suite. Two pre-existing
 suites needed a fix, both DATE-FRAGILITY — the same class already documented
 for R17's `r12b.js` B1/B5, not anything R27's own `admin/app.js` change
@@ -175,9 +184,55 @@ even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes belo
 | `tests/r23.js` | 76 |
 | `tests/r24.js` | 89 |
 | `tests/r25.js` | 45 |
-| `tests/r26.js` | 36 |
+| `tests/r26.js` | 38 (R28 updated the basis/scoping assertions and added 2 new checks — see the R28 notes) |
 | `tests/r27.js` | 43 |
-| **Total** | **3,156** |
+| **Total** | **3,158** |
+
+R28 notes: a small, already-built, uncommitted refinement of R26's
+per-adviser monthly fee targets — `admin/app.js` only, no schema, no
+`index.html` change. Two changes, both test-visible:
+  1. **Attainment basis refolded.** `mkAdvRow`'s row field was renamed
+     `feeEarnedBroker` → `feeEarnedTotal`, and its formula now sums
+     `proc_fee + broker_fee + sols_fee` over the adviser's completions in the
+     selected report month (was `broker_fee` alone) — `advTargetCell` and the
+     foot-row sum both read the renamed field. This makes the per-adviser
+     Target column match the firm "Fees earned vs target" bar's basis
+     EXACTLY (`earnedOnCompletion` = proc+broker+sols on the month's
+     completions), where R26 measured broker fee only.
+  2. **Editor scoped to advisers.** `renderAdviserTargetsEditor(owner)` now
+     builds its `.adv-target-input[data-staff]` rows from `advisingStaff()`
+     (app.js ~762, `TEAM.filter(isAdvisingStaff)`) instead of the whole
+     `TEAM` STAFF_ROLES subset — an owner/admin who doesn't personally advise
+     no longer gets a target input. (The Reports scoreboard itself is
+     unchanged: `mkAdvRow`/`advRows` still iterate the whole `TEAM`, so a
+     non-advising team member still gets a scoreboard row, just never a
+     target — same "—" / `data-pct=""` treatment as any other untargeted
+     row.)
+
+`tests/r26.js` was updated in place (no new test file — this is a small
+in-round refinement of the same feature, not a new one) to 38 checks (was
+36): §A's editor-shape assertion now derives its expected input-id set from
+`window.advisingStaff()` (confirmed exposed as a plain global — app.js is a
+classic `<script>` tag, not a module) instead of `window.TEAM`, plus two new
+checks (A1b/A2b) that a non-advising TEAM member (the admin persona, p1 Kim
+— guaranteed never-advising regardless of fixture load, since `isAdvisingStaff`
+only allows role `"adviser"` unconditionally or `"owner"`/`"staff"` when
+carrying live cases, and `"admin"` is in neither list) gets no input at all.
+§C's independent recompute (`earnedForMonth`) now sums `proc_fee +
+broker_fee + sols_fee`, not `broker_fee` alone, and the seeded probe case
+(assigned to p3, an adviser — always in `advisingStaff()`) now carries
+distinctive `proc_fee`/`broker_fee`/`sols_fee` values so a regression that
+dropped proc/sols back out of the fold would be caught (a broker-only seed
+could not have told the difference). §B/§D/§F needed no changes: §B/§C's p2/
+p3 are both role `"adviser"` so stay in `advisingStaff()` unconditionally,
+and §D's/§F's assertions don't touch a specific non-advising id.
+
+No product bug found — `admin/app.js` was not modified for this pass; the
+change described above was already shipped/built before this session
+started. Ran the WHOLE regression battery (`smoke.js` through `tests/
+r27.js`) after updating `tests/r26.js`; every other suite passed unedited at
+its exact pre-R28 count (see the table above and the "Full battery is 100%
+green" paragraph). `node smoke.js` alone: 144/0.
 
 R27 notes: Data health's new "dead-book" hygiene check — every LIVE case
 (stage NOT `completed`, NOT `not_proceeding`) whose own forward date has
