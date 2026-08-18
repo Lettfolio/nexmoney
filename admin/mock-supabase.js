@@ -1998,7 +1998,14 @@
   /* --- appointments (incl. a deliberate same-slot clash for p2) ---------- */
   var APPT_TITLES = ["Fact find call", "Review meeting", "Protection review", "Document collection", "Completion call"];
   for (var a = 0; a < 16; a++) {
-    var when = new Date(NOW.getFullYear(), NOW.getMonth(), Math.min(28, 2 + a * 2), 9 + (a % 7), 0, 0, 0);
+    var apptDom = Math.min(28, 2 + a * 2);
+    /* Never let this spread land ON TODAY: the dedicated "today" appointments seeded right below
+       this loop (Ruby/Duncan's deliberate p2 clash + Marcus's plain-titled one) are the exact,
+       closed set several tests (tests/r5_batch9.js's Day-view §2) key off — "today has exactly
+       these 3". apptDom is always even (2 + a*2), so nudging it off today by 1 always lands on an
+       odd day this loop never otherwise uses, with no risk of colliding with another seeded day. */
+    if (apptDom === NOW.getDate()) apptDom = apptDom >= 28 ? apptDom - 1 : apptDom + 1;
+    var when = new Date(NOW.getFullYear(), NOW.getMonth(), apptDom, 9 + (a % 7), 0, 0, 0);
     var c2 = liveCases[a % liveCases.length];
     DB.appointments.push({
       id: nid("ap"), title: APPT_TITLES[a % APPT_TITLES.length],

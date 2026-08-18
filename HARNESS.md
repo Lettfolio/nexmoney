@@ -84,6 +84,7 @@ node tests/r23.js
 node tests/r24.js
 node tests/r25.js
 node tests/r26.js
+node tests/r27.js
 ```
 
 Current green counts (end of round 23; r21/r22 were never committed to this
@@ -102,10 +103,44 @@ nothing else asserted the old shape of, and R19 is new owner-gated Reports
 content that no earlier suite reaches; R23 is the same story again — see the
 R23 notes below).
 
-**Full battery is 100% green (3,113/3,113).** R26 added `tests/r26.js` (36
-checks) unedited into a full re-run of every pre-existing suite — every one
-of them passed at its EXACT pre-R26 count (see the table below), so R26
-needed no other suite touched. R24 also FIXED a 2-check regression
+**Full battery is 100% green (3,156/3,156).** R27 added `tests/r27.js` (43
+checks) into a full re-run of every pre-existing suite. Two pre-existing
+suites needed a fix, both DATE-FRAGILITY — the same class already documented
+for R17's `r12b.js` B1/B5, not anything R27's own `admin/app.js` change
+touched — and both fixed the same non-masking way (a real date chosen so it
+can never coincide with the fixture, not a loosened assertion), with their
+check COUNTS unchanged either side of the fix:
+  - `tests/r12a.js` D11 booked its two probe appointments on `today + 10`
+    days, which lands on day 28 of the month whenever that offset reaches or
+    passes it — colliding with THREE pre-existing fixture appointments the
+    `mock-supabase.js:2001` loop piles onto day 28 via its own `Math.min(28,
+    …)` cap, pushing the day's total past the diary's month-cell 3-tile cap
+    (`tests/r12b.js`'s own W-26) and hiding the probe row the assertion
+    expected to find. Fixed by picking an ODD day-of-month (clamped ≤27) in
+    the current month instead — the exact rule R17 already wrote down for
+    this fixture, applied a second time (`tests/r12a.js` ~814). 113/1 → 114/0.
+  - `tests/r5_batch9.js`'s Day-view §2 asserts "today has exactly 3
+    appointments for p2" (the fixture's own deliberately-seeded Ruby/Duncan
+    clash pair plus Marcus's plain-titled one). The SAME `mock-supabase.js`
+    loop places 16 more appointments on absolute days 2–28 of the current
+    month using real `Date.now()`, uncoordinated with those three — so on any
+    day-of-month where that spread happens to land a `staff_id:"p2"` entry
+    (days 2/10/18/26), "today" silently grows a 4th p2 appointment and the
+    count assertion goes red. This is a fixture bug, not a test bug: the loop
+    has no awareness of the dedicated "today" set seeded right after it, and
+    the day it happened to hit this round (the 18th) is exactly as arbitrary
+    as the next one will be. Fixed in `mock-supabase.js` itself — the loop
+    now nudges that one day off `NOW.getDate()` by 1 when they'd otherwise
+    coincide (always landing on an odd day the loop never otherwise uses, so
+    it can't newly collide with another seeded day), leaving all 16
+    appointments' hours/staff/titles/count untouched. 25/2 → 27/0. Every
+    other test file was grepped for a hardcoded appointment count/id from
+    this fixture (`APPT_TITLES`, the specific titles, `"appointments":20`)
+    and none exists — this suite alone reads that spread's composition.
+  Both fixes are pure test/harness maintenance, in `tests/r12a.js` and
+  `admin/mock-supabase.js` — `admin/app.js` was not touched for either.
+  Every OTHER suite passed at its EXACT pre-R27 count (see the table below).
+  R24 also FIXED a 2-check regression
 R23 had introduced in `tests/r11_ux.js`: R23's hidden `#dash-cap-notice` sits
 between `#kpi-row` and `#briefing-panel`, which r11_ux's `R11-A` top-of-page
 adjacency check didn't expect (R23's own regression run hadn't included r11_ux,
@@ -119,7 +154,7 @@ even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes belo
 | Suite | Checks |
 |---|---|
 | `smoke.js` | 144 |
-| `tests/r5_batch1..9.js` (sum) | 557 |
+| `tests/r5_batch1..9.js` (sum) | 557 (BATCH 9's day-collision fixed in R27 — see the R27 notes; sum unchanged) |
 | `tests/r64.js` | 91 |
 | `tests/r8_touch.js` | 151 |
 | `tests/r8_rev.js` | 176 |
@@ -127,7 +162,7 @@ even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes belo
 | `tests/r9_docs.js` | 255 |
 | `tests/r9_embed.js` | 104 |
 | `tests/r11_ux.js` | 123 (R11-A adjacency asserts updated in R24 to skip R23's hidden `#dash-cap-notice`) |
-| `tests/r12a.js` | 114 |
+| `tests/r12a.js` | 114 (D11's date-fragility fixed in R27 — see the R27 notes; count unchanged) |
 | `tests/r12b.js` | 158 (date-fragile B1/B5 made deterministic in R17) |
 | `tests/r13.js` | 142 |
 | `tests/r14.js` | 167 |
@@ -141,7 +176,69 @@ even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes belo
 | `tests/r24.js` | 89 |
 | `tests/r25.js` | 45 |
 | `tests/r26.js` | 36 |
-| **Total** | **3,113** |
+| `tests/r27.js` | 43 |
+| **Total** | **3,156** |
+
+R27 notes: Data health's new "dead-book" hygiene check — every LIVE case
+(stage NOT `completed`, NOT `not_proceeding`) whose own forward date has
+already elapsed, entirely `admin/app.js`, no schema and no `index.html`
+change. `expected_completion_date` and `rate_end_date` both already ride the
+page's main `caseRows` select (~app.js:20477) as plain columns — unlike
+R25's `offer_issued_date`, neither needed a separate forward-dates-gated
+read. Predicate `deadBook` (loadDataHealth()): for each live case, prefer
+`expected_completion_date` when it is strictly in the past (`daysSince(...)
+> 0`, reason `"expected completion N days ago"`); only when that date is
+absent or not yet overdue does it fall back to `rate_end_date` (`"rate ended
+N days ago"`). A case with BOTH dates in the past gets the expected-
+completion reason, never the rate-end one — a deliberate preference, not an
+either/or. Sorted most-overdue (largest N) first. `#dh-tile-deadbook` sits
+right after `#dh-tile-milestone`, `.warn` when its count is >0, wired
+through the same `wireTile` helper as every other list-panel tile;
+`#dh-deadbook-panel`'s rows carry the stage label and reason in `.s`
+("`<Stage> · <reason>`"), same shape as every other Data health list.
+
+`tests/r27.js` (43 checks) proves this end to end on ONE continuing p4
+(owner) page for §A–§C, the same shared-page pattern `tests/r25.js`'s A/B
+and `tests/r26.js`'s B–E already use. §A confirms the tile/panel exist,
+`.warn` tracks count, placement immediately after `#dh-tile-milestone`, and
+clicking it reveals the panel. §B is the core: an independent recompute of
+`deadBook` straight off `window.__mockDb` (STAGES' canonical list read off
+the page as a fair-game shared ordering constant, the filtering/day-math
+logic reimplemented from the round's own spec, not borrowed from app.js) is
+compared against the panel's exact rendered case-id set — not merely the
+same length. Seven purpose-built synthetic cases (the `insertCase` technique
+`tests/r25.js` uses), independent of fixture composition, pin every named
+boundary: ~90 days past `expected_completion_date` (flagged, exact day count
+recomputed and cross-checked against an independent formula, sanity-checked
+within 2 days of the ~90 seeded); `rate_end_date`-only overdue (flagged,
+"rate ended", no "expected completion" wording); BOTH dates in the past
+(flagged with the PREFERRED expected-completion reason, proving the
+preference order rather than an accidental either/or); a FUTURE
+`expected_completion_date` with no rate-end date (not flagged — `daysSince`
+clamps negative diffs to 0, never negative, so this also proves the `> 0`
+guard genuinely excludes it rather than merely not triggering by luck); a
+COMPLETED case with a past `rate_end_date` (not flagged — that date is
+legitimately historic for a closed case); a not_proceeding case with a past
+date (not flagged — a dropped case owes no forward date); and two more live
+overdue cases at deliberately different overdue amounts. §C confirms the
+more-overdue of those last two renders ABOVE the less-overdue one in the
+panel — sort order, not just membership. §D is a light regression check that
+`#dh-tile-milestone`/`#dh-tile-nocompleted` and their panels still exist and
+still open on click (r13.js/r25.js own full coverage of those two). §E
+confirms zero console errors on Data health for both owner (p4) and admin
+(p1), and that the tile also renders for admin.
+
+No product bug found — `admin/app.js` was not modified for R27's own
+feature. Ran the WHOLE regression battery (every suite `smoke.js` through
+`tests/r26.js`) after adding `tests/r27.js`, unedited, and found two
+PRE-EXISTING, date-fragile failures — both entirely unrelated to R27's own
+`admin/app.js` change (confirmed by re-running each against the pre-R27,
+committed `admin/app.js` via `git stash`, where they failed identically) —
+and fixed both the same way R17 already established for this exact class of
+bug: a real, non-masking date choice, never a loosened assertion. See the
+"Full battery is 100% green" paragraph above for the two fixes
+(`tests/r12a.js` D11, and the `mock-supabase.js:2001` appointment seed
+itself) and exactly why each was needed.
 
 R26 notes: per-adviser monthly fee targets, entirely `admin/app.js`, no
 schema and no `index.html` change. Storage is ONE new settings row —

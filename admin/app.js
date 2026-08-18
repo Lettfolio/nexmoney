@@ -20474,7 +20474,7 @@ async function loadDataHealth() {
     // Defect 13: the RPC only ever returns bare counts for these two tiles. Rather than change the
     // RPC (frontend-only, existing columns), pull the offending rows client-side from cases+clients
     // so the tiles can expand into the same list-panel pattern as the other Data Health items.
-    db.from("cases").select("id,stage,rate_end_date,completed_at,created_at,submitted_at,case_kind,lender,client_id,clients!client_id(id,first_name,last_name,phone)" + (dhPropOn ? ",property_address" : "")).order("id").limit(OWNER_ROW_CAP),
+    db.from("cases").select("id,stage,rate_end_date,expected_completion_date,completed_at,created_at,submitted_at,case_kind,lender,client_id,clients!client_id(id,first_name,last_name,phone)" + (dhPropOn ? ",property_address" : "")).order("id").limit(OWNER_ROW_CAP),
     // T1-9/T1-26: same trick for the client-shaped checks. The RPC returns counts for "missing
     // email & phone" and nothing at all for malformed values, so read the rows and judge them here.
     db.from("clients").select("id,first_name,last_name,email,phone").order("id").limit(OWNER_ROW_CAP),
@@ -20495,7 +20495,7 @@ async function loadDataHealth() {
   if (caseRows.error && dhPropOn && isMissingColumnError(caseRows.error)) {
     PROP_ADDR_SUPPORTED = false;
     dhPropOn = false;
-    caseRows = await db.from("cases").select("id,stage,rate_end_date,completed_at,created_at,submitted_at,case_kind,lender,client_id,clients!client_id(id,first_name,last_name,phone)").order("id").limit(OWNER_ROW_CAP);
+    caseRows = await db.from("cases").select("id,stage,rate_end_date,expected_completion_date,completed_at,created_at,submitted_at,case_kind,lender,client_id,clients!client_id(id,first_name,last_name,phone)").order("id").limit(OWNER_ROW_CAP);
   }
   // …and the quieter shape of absence: the rows came back, without the column that was asked for.
   if (dhPropOn && Array.isArray(caseRows.data) && caseRows.data.length) {
@@ -20718,6 +20718,29 @@ async function loadDataHealth() {
     return acc;
   }, []);
 
+  /* R27 — dead-book hygiene: a LIVE (open) case whose own forward date has already elapsed. This is a
+     data-driven signal, not a time-since one: it works on freshly imported rows (which arrive with
+     created_at/updated_at ≈ now and no case_events) from the first minute, and it's distinct from
+     R17's 7-day activity radar and the 45-day days-in-stage card colour. Prefer the completion date
+     (a more direct "should have closed") over the rate-end date. completed/not_proceeding excluded:
+     a completed case legitimately has a past rate_end_date. */
+  const deadBook = [];
+  allCases.forEach((cs) => {
+    if (cs.stage === "completed" || cs.stage === "not_proceeding") return;
+    if (DH_STAGE_RANK[cs.stage] == null) return;
+    let overdueDays = null, reason = null;
+    if (cs.expected_completion_date && daysSince(cs.expected_completion_date) > 0) {
+      overdueDays = daysSince(cs.expected_completion_date);
+      reason = "expected completion " + overdueDays + " days ago";
+    } else if (cs.rate_end_date && daysSince(cs.rate_end_date) > 0) {
+      overdueDays = daysSince(cs.rate_end_date);
+      reason = "rate ended " + overdueDays + " days ago";
+    }
+    if (reason == null) return;
+    deadBook.push({ case_id: cs.id, name: caseName(cs), stage: cs.stage, reason, overdueDays });
+  });
+  deadBook.sort((a, b) => b.overdueDays - a.overdueDays);
+
   /* T1-26 — every number on this page is a door. `▾` = expands a list panel further down the page,
      `→` = leaves for the page that number lives on. Only "Clients total" (which isn't a fault
      count and has nothing to drill into) stays plain, so "clickable" reads consistently. */
@@ -20733,6 +20756,7 @@ async function loadDataHealth() {
     <div class="kpi dq-clickable" id="dh-tile-rateend" title="Click to list these cases"><div class="num">${dq.completed_missing_rate_end ?? 0}</div><div class="lbl">Completed, no rate-end ▾</div></div>
     <div class="kpi ${noCompletedAt.length ? "warn" : ""} dq-clickable" id="dh-tile-nocompleted" title="Completed cases with no completion date — invisible to Reports until it's set. Click to list them"><div class="num">${noCompletedAt.length}</div><div class="lbl">Completed, no completion date ▾</div></div>
     <div class="kpi ${noMilestoneDate.length ? "warn" : ""} dq-clickable" id="dh-tile-milestone" title="Cases past application or offer with the milestone date (submitted_at / offer_issued_date) blank — they silently skew the Reports velocity & funnel until filled in. Click to list them."><div class="num">${noMilestoneDate.length}</div><div class="lbl">Missing application/offer date ▾</div></div>
+    <div class="kpi ${deadBook.length ? "warn" : ""} dq-clickable" id="dh-tile-deadbook" title="Live cases still open after their expected completion date — or their rate-end date — has already passed. Likely dead or stuck, and they inflate the live pipeline until closed or revived. Click to list them."><div class="num">${deadBook.length}</div><div class="lbl">Overdue — open past a key date ▾</div></div>
     <div class="kpi ${dq.emails_failed ? "warn" : ""} dq-clickable" id="dh-tile-failed" title="Click to open the Emails page filtered to failed sends"><div class="num">${dq.emails_failed ?? 0}</div><div class="lbl">Failed emails →</div></div>
     ${/* R6-38 — deliberately NOT a "warn" tile: a shared address is something to read, not a fault to
           clear. Absent entirely on a database with no property column. */ ""}
@@ -20902,6 +20926,17 @@ async function loadDataHealth() {
       </div>`).join("") : '<div class="empty">Every case past application or offer has its milestone date. 👍</div>'}
   </div>`;
 
+  // R27 — live cases whose forward date has already passed. See the deadBook compute above.
+  const deadBookPanel = `<div class="panel hidden" id="dh-deadbook-panel">
+    <h3>Overdue — open cases past a key date</h3>
+    <p class="panel-sub">Live cases still open after their <strong>expected completion date</strong> — or, failing that, their <strong>rate-end date</strong> — has already passed. These are the classic dead-wood that silently inflates the live pipeline and pollutes MI. Open each one and either close it or push the date out. Sorted most-overdue first.</p>
+    ${deadBook.length ? deadBook.map((c) => `
+      <div class="row-item">
+        <div class="row-main"><div class="t" onclick="openCase('${c.case_id}')">${esc(c.name)}</div><div class="s">${esc(STAGE_LABEL[c.stage] || c.stage)} · ${esc(c.reason)}</div></div>
+        <button class="btn btn-sm" onclick="openCase('${c.case_id}')">Open</button>
+      </div>`).join("") : '<div class="empty">No open cases are past a completion or rate-end date. 👍</div>'}
+  </div>`;
+
   // T1-26 — the least-reachable records in the database, which previously had no list anywhere.
   const bothPanel = `<div class="panel hidden" id="dh-both-panel">
     <h3>Clients with no email and no phone</h3>
@@ -21017,7 +21052,7 @@ async function loadDataHealth() {
     <div class="grid-2">${phonePanel}${rateEndPanel}</div>
     <div class="grid-2">${bothPanel}${noCompletedPanel}</div>
     <div class="grid-2">${invalidEmailPanel}${invalidPhonePanel}</div>
-    <div class="grid-2">${milestonePanel}</div>
+    <div class="grid-2">${milestonePanel}${deadBookPanel}</div>
     ${dhCareOn ? `<div class="grid-2">${vulnerablePanel}${suppressedPanel}</div>` : ""}`;
 
   // Tiles whose panel is hidden until asked for: toggle, and scroll to it when revealing so the
@@ -21042,6 +21077,7 @@ async function loadDataHealth() {
   wireTile("#dh-tile-rateend", "#dh-rateend-panel");
   wireTile("#dh-tile-nocompleted", "#dh-nocompleted-panel");
   wireTile("#dh-tile-milestone", "#dh-milestone-panel");   // R25 · MI-1
+  wireTile("#dh-tile-deadbook", "#dh-deadbook-panel");   // R27
   wireTile("#dh-tile-both", "#dh-both-panel");
   wireTile("#dh-tile-invalid-email", "#dh-invalid-email-panel");
   wireTile("#dh-tile-invalid-phone", "#dh-invalid-phone-panel");

@@ -811,7 +811,20 @@ async function mkClientCase(page, opts) {
       console.log("\n— D11 · apptOverlaps(): same staff, half-open intervals");
       const page = await newPage(browser, "p3");
 
-      const dstr = await page.evaluate(() => localDateStr(Date.now() + 10 * 86400000));
+      // Pick an ODD day-of-month in the CURRENT month, clamped <=27: the fixture seeds 16
+      // appointments on even days 2-28 (mock-supabase.js:2001, three of them piled onto day 28
+      // alone via its Math.min(28,...) cap), so a plain "today+10" collides with that pile-up
+      // whenever it lands on day >=28 — exactly the R17 rule already applied to tests/r12b.js's
+      // B5 ("never key a fixture date off raw Date.now() near a day boundary, and never reuse
+      // the even-day appt-seed days"). An odd day is never seeded and staying in the current
+      // month keeps the cell one the diary reliably renders without spilling past its 3-tile cap.
+      const dstr = await page.evaluate(() => {
+        const d = new Date();
+        let dom = Math.min(27, d.getDate() + 10);
+        if (dom % 2 === 0) dom += 1;
+        d.setDate(dom);
+        return localDateStr(d);
+      });
       const apptA = await page.evaluate(async (d) => {
         const start = new Date(d + "T14:00");
         const end = new Date(d + "T14:45");
