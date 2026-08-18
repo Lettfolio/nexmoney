@@ -1,12 +1,12 @@
 # NexMoney
 
-> NexMoney Ltd is an FCA-regulated, whole-of-market mortgage and insurance broker based in Bournemouth, Dorset, UK. We compare hundreds of lenders to find the best mortgage for first-time buyers, home movers, remortgagers and buy-to-let investors, and arrange protection insurance (life, critical illness, income protection). Appointed Representative of Stonebridge Mortgage Solutions Ltd (FCA reference 610875).
+> NexMoney is a trading style of NexMoney Ltd, an Appointed Representative of Stonebridge Mortgage Solutions Ltd which is authorised and regulated by the Financial Conduct Authority (firm reference number 610875). We are a whole-of-market mortgage and insurance broker based in Bournemouth, Dorset, UK. We compare hundreds of lenders to find a suitable mortgage for first-time buyers, home movers, remortgagers and buy-to-let investors, and arrange protection insurance (life, critical illness, income protection). Appointed Representative of Stonebridge Mortgage Solutions Ltd (FCA reference 610875).
 
 Key facts:
 - Location: Bournemouth, Dorset — serving Poole, Christchurch, Wimborne and all of the UK
 - Phone: 01202 802 677 · Email: info@nexmoney.co.uk
 - Whole-of-market: not tied to any lender or panel
-- Typical broker fee: £375 (many remortgages fee-free); always disclosed upfront
+- Fee statement: Typically, we charge a fee of £375 for arranging a mortgage but will also depend on your circumstances. The fees may be waived subject to the terms of the fee waiver agreement.
 - Hours: Mon–Fri 09:00–18:00, Sat 09:00–13:00
 
 ## Pages
@@ -20,8 +20,12 @@ Key facts:
 - [Calculators](https://www.nexmoney.co.uk/calculators): How much can I borrow, monthly repayments, overpayments, rental yield
 - [FAQ](https://www.nexmoney.co.uk/faq): Common mortgage questions answered — deposits, bad credit, broker fees, timelines
 - [About](https://www.nexmoney.co.uk/about): Who we are and how we're regulated
-- [Contact](https://www.nexmoney.co.uk/contact): Free, no-obligation mortgage advice
+- [Contact](https://www.nexmoney.co.uk/contact): No-obligation initial consultation, free of charge
 
 ## Important
 
-Your home may be repossessed if you do not keep up repayments on your mortgage. The FCA does not regulate most buy-to-let mortgages.
+Your home may be repossessed if you do not keep up repayments on your mortgage.
+Not all Buy to Let Mortgages are regulated by The Financial Conduct Authority.
+You may have to pay an early repayment charge to your existing lender if you remortgage.
+Think carefully before securing other debts against your home. The overall cost of repayment of other debts might be more when added to your mortgage. Your home might be repossessed if you do not keep up repayments on your mortgage.
+As with all insurance policies, conditions and exclusions will apply.
