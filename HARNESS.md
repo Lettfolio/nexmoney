@@ -88,6 +88,7 @@ node tests/r27.js
 node tests/r29_scale.js
 node tests/r30.js
 node tests/r31.js
+node tests/r33.js
 ```
 
 Current green counts (end of round 23; r21/r22 were never committed to this
@@ -106,12 +107,17 @@ nothing else asserted the old shape of, and R19 is new owner-gated Reports
 content that no earlier suite reaches; R23 is the same story again — see the
 R23 notes below).
 
-**Full battery is 100% green (3,356/3,356), `tests/r9_docs.js` included
-(255/0).** R31 added `tests/r31.js` (55 checks) — see the "R31 notes" section
-below — and every pre-existing suite (`smoke.js` through `tests/r30.js`)
-re-ran unedited at its exact pre-R31 count; `admin/app.js`/`admin/index.html`/
-`admin/mock-supabase.js` were not touched by this test-writing pass (R31's
-product code was already built/uncommitted before this session started).
+**Full battery is 100% green (3,414/3,414), `tests/r9_docs.js` included
+(255/0).** R33 added `tests/r33.js` (55 checks) — see the "R33 notes" section
+below — and re-pointed three pre-existing suites at their new homes/fixed a
+genuine cross-suite selector collision (see those notes for the exact,
+non-masking fixes and why each was needed); every other pre-existing suite
+re-ran unedited at its exact pre-R33 count. R31 added `tests/r31.js` (55
+checks) — see the "R31 notes" section below — and every pre-existing suite
+(`smoke.js` through `tests/r30.js`) re-ran unedited at its exact pre-R31
+count; `admin/app.js`/`admin/index.html`/`admin/mock-supabase.js` were not
+touched by this test-writing pass (R31's product code was already
+built/uncommitted before this session started).
 R30 added `tests/r30.js` (37 checks) — see the "R30 notes" section
 below — and every pre-existing suite (`smoke.js` through `tests/r29_scale.js`)
 re-ran unedited at its exact pre-R30 count; `admin/app.js`/`admin/mock-supabase.js`
@@ -176,12 +182,12 @@ even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes belo
 | Suite | Checks |
 |---|---|
 | `smoke.js` | 144 |
-| `tests/r5_batch1..9.js` (sum) | 557 (BATCH 9's day-collision fixed in R27 — see the R27 notes; sum unchanged) |
+| `tests/r5_batch1..9.js` (sum) | 557 (BATCH 9's day-collision fixed in R27 — see the R27 notes; R33 re-pointed a nav click in BATCH 1 and BATCH 8's `gotoSettings()` at the collapsed Firm group — see the R33 notes; sum unchanged) |
 | `tests/r64.js` | 91 |
 | `tests/r8_touch.js` | 151 |
 | `tests/r8_rev.js` | 176 |
-| `tests/r9_adv.js` | 169 |
-| `tests/r9_docs.js` | 255 |
+| `tests/r9_adv.js` | 169 (R33 re-scoped a `.case-details` reveal to `#modal .case-details` — see the R33 notes; count unchanged) |
+| `tests/r9_docs.js` | 255 (same R33 `#modal .case-details` re-scope; count unchanged) |
 | `tests/r9_embed.js` | 104 |
 | `tests/r11_ux.js` | 123 (R11-A adjacency asserts updated in R24 to skip R23's hidden `#dash-cap-notice`) |
 | `tests/r12a.js` | 114 (D11's date-fragility fixed in R27 — see the R27 notes; count unchanged) |
@@ -189,9 +195,9 @@ even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes belo
 | `tests/r13.js` | 142 |
 | `tests/r14.js` | 167 |
 | `tests/r15.js` | 160 |
-| `tests/r16.js` | 81 |
-| `tests/r17.js` | 112 |
-| `tests/r18.js` | 43 |
+| `tests/r16.js` | 81 (R33 re-scoped its `openCase()` details-opener to `#modal .case-details` — see the R33 notes; count unchanged) |
+| `tests/r17.js` | 112 (same R33 `#modal .case-details` re-scope; count unchanged) |
+| `tests/r18.js` | 43 (same R33 `#modal .case-details` re-scope; count unchanged) |
 | `tests/r19.js` | 39 (unchanged count — R20 fixed HOW one row is queried, not what it asserts) |
 | `tests/r20.js` | 81 |
 | `tests/r23.js` | 76 |
@@ -200,9 +206,166 @@ even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes belo
 | `tests/r26.js` | 38 (R28 updated the basis/scoping assertions and added 2 new checks — see the R28 notes) |
 | `tests/r27.js` | 43 |
 | `tests/r29_scale.js` | 106 |
-| `tests/r30.js` | 37 |
+| `tests/r30.js` | 40 (R33 re-pointed §C/§D4/§E from Reports to Settings' `#diag-details` and added 3 assertions proving the wrapper itself gates correctly — see the R33 notes; count rose from 37) |
 | `tests/r31.js` | 55 |
-| **Total** | **3,356** |
+| `tests/r33.js` | 55 |
+| **Total** | **3,414** |
+
+R33 notes: a small, already-built, uncommitted round shipping a role-aware
+GROUPED sidebar plus five small, independent quick wins (`admin/app.js` +
+`admin/index.html` + `admin/admin.css` only, no schema).
+
+  - **Sidebar regroup.** `#topnav` gained `.nav-group-head` labels
+    (Work/Book/Money) and a collapsible "Firm" group (`#nav-firm-group`:
+    Emails/Import/Data health/Settings, toggled by `#nav-firm-toggle`,
+    `aria-expanded`). The default state is a ROLE judgement computed once at
+    sign-in (`applyNavRole()`, app.js ~L4103): collapsed for an adviser
+    (p2/p3), expanded for admin/owner (p1/p4) — unless `localStorage
+    nx_nav_firm` ("open"/"closed") already holds an answer, which beats the
+    role default in both directions the moment the operator has touched the
+    toggle. `nav(page)` (app.js ~L4374) additionally auto-expands the group
+    — without writing to `nx_nav_firm` — whenever it lands on a page inside
+    it (a command-palette jump, a deep link, `gotoDataHealth()`), so the
+    active tab is never hidden behind a folded group; this expansion does
+    not survive a reload once the operator has navigated off that page.
+    `smoke.js` needed one accommodation (expand `#nav-firm-group` before
+    driving pages; page count still 144) which the build agent had already
+    made — left as-is. All 12 `button[data-page]`s are unchanged and still
+    live inside `#topnav`.
+  - **Diagnostics relocation.** `#report-diag-section` (CSV/copy/clear/
+    health, `#diag-error-table`, R30's `#diag-persist-table` +
+    `#report-diag-persist-clear`) moved from Reports to a new
+    `<details id="diag-details">` at the bottom of Settings, collapsed by
+    default and hidden outright for an adviser (same `isAdminOrOwner()`
+    gate it always had — `renderDiagnostics()`, app.js ~L18872). Called
+    from `renderSettings()` with no Reports read behind it (`all == null`),
+    so the "Records loaded" fragment is omitted rather than reported as a
+    fake zero.
+  - **Quick wins.** `#new-note` (case-modal note box) is now a `<textarea>`
+    (Enter still submits). A new Settings field, `name="doc_chase_days"`
+    ("Document chase interval"), finally lets an owner SET the number
+    `docChaseDays()` already read (blank = the 3-day default). The import
+    preview's four-hundred-word rules paragraph is now foldable
+    (`#imp-review-blurb` / `#imp-blurb-toggle`, persisted via `localStorage
+    nx_import_blurb`). `#diary-staff` and `#client-adviser`'s first option
+    LABEL is now "All advisers" (matching `#board-adviser`, unchanged since
+    R31) — the VALUE stays "all".
+
+`tests/r33.js` (55 checks: §A sidebar/adviser 17, §A5 owner 5, §B
+diagnostics 12, §C quick wins 21) covers all of the above on fresh, isolated pages per
+persona/section, the same convention every suite in this harness uses. §A's
+sharpest assertion is proving the auto-expand is genuinely NOT persisted:
+naively reloading right after `window.nav('settings')` would always show the
+group open again regardless of `nx_nav_firm`, because the reload itself
+re-lands on the `#settings` hash and re-triggers the very same auto-expand —
+so §A4e navigates AWAY to `#dashboard` first, THEN reloads, which is the only
+way to isolate "was this remembered" from "did I just land somewhere that
+auto-expands". §C2 proves the `doc_chase_days` round-trip through the actual
+rendered prose (`#doc-chase-note`), not just the input's echoed value, since
+that prose is where the blank-defaults-to-3 promise is user-visible.
+
+Three pre-existing suites needed a genuine, non-masking re-point because the
+UI they drive genuinely moved or is now selectively unreachable by a raw
+click, not because anything they asserted stopped being true:
+
+  - **`tests/r30.js` §C/§D4/§E** drove Diagnostics on Reports; it now lives
+    on Settings inside a collapsed `<details>`. Fixed by navigating to
+    `settings` instead of `reports` and opening the details
+    (`document.getElementById("diag-details")?.setAttribute("open","")`)
+    before reading `#diag-persist-table`/`#report-diag-section` — the exact
+    accommodation the round brief specified. §E was rewritten to check
+    `#diag-details` itself (hidden for p2, present+openable for p1/p4) IN
+    ADDITION to the pre-existing `#report-diag-section` checks, which is why
+    its count rose by 3 (37 → 40) rather than staying flat like the other
+    two files — a real, additional assertion about the new wrapper's own
+    gate, not a loosening of anything that was there before.
+  - **`tests/r5_batch8.js`'s `gotoSettings()`** and **`tests/r5_batch1.js`'s
+    p2 `[data-page="emails"]` click** both drove `#topnav` buttons that now
+    sit inside the collapsed-by-default Firm group for an adviser (p2/p3) —
+    a raw Playwright click on a `display:none` button times out. Both fixed
+    by switching to `page.evaluate(() => window.nav("<page>"))`, the exact
+    route the button's own click handler ends up calling (and which
+    auto-expands the group when it lands on a page inside it), so it works
+    for every persona unconditionally — not a weaker check, the same
+    destination reached a different way. Neither file's check count moved
+    (`r5_batch8.js` 42, `r5_batch1.js` 54).
+
+One GENUINE PRODUCT BUG found and fixed, reported loudly per the round
+brief — not test-only fragility:
+
+  1. **`.case-details` selector collision breaking five real, user-facing
+     "reveal the field that needs fixing" flows.** `#diag-details` (Settings'
+     new diagnostics wrapper) carries the SAME `class="case-details
+     settings-details"` the case-modal's own collapsible section and
+     Settings' pre-existing General/Advanced sections already share (a
+     class that exists purely to reuse `<details>` disclosure-triangle CSS,
+     not to identify "the current case"). Settings' General/Advanced copies
+     of this class were already latent — but harmless in practice, because
+     `renderSettings()` only ever creates them once Settings has actually
+     been visited in that session. `#diag-details` is different: it is
+     STATIC markup in `index.html`, present in the DOM from initial page
+     load regardless of navigation. The effect: `admin/app.js`'s own
+     internal `$(".case-details")` — used at five call sites to force open
+     the case modal's collapsible section right before pointing the
+     operator at a field inside it (a blocked stage-move pending a
+     protection status, a missing protection commission, the "Set expected
+     completion" nudge, the "Discuss protection →" prompt, and
+     `openCase({revealProtection|openDetails})` after applying a mortgage
+     offer) — now resolves to `#diag-details` FIRST (it sits earlier in the
+     DOM than the modal, which is injected later), leaving the ACTUAL
+     field the operator was just told to go fix sitting collapsed and
+     invisible. Confirmed with a standalone repro
+     (`document.querySelector(".case-details")` resolves to `#diag-details`
+     both before and after opening a case) before touching anything.
+     Fixed by scoping all five call sites to `$("#modal .case-details")` —
+     the exact pattern `admin/app.js`'s own `revealProtection` sibling code
+     already used one line below one of them (`$("#modal .client-details")`
+     at ~L13766), so this is bringing the other five in line with an
+     existing, already-correct convention, not inventing a new one.
+  2. **The SAME collision was silently masking a second, harness-only
+     effect first**: it broke the *test* helper pattern six suites share —
+     `document.querySelector(".case-details")`, used to force-open the
+     modal's collapsed details drawer before driving fields inside it
+     (documented in `tests/r13.js` as the origin of the pattern, which
+     already scoped it to `#modal .case-details` and was therefore
+     unaffected). `tests/r16.js`, `tests/r17.js`, `tests/r18.js`,
+     `tests/r5_batch2.js` (3 call sites), `tests/r9_adv.js` and
+     `tests/r9_docs.js` all used the unscoped form and went red running the
+     full battery (always the same shape: a `selectOption`/`fill` timeout
+     on a field that "exists" per `$eval` but is not actionable because the
+     wrong `<details>` opened). Fixed the same way, in every file, restoring
+     each test's own documented intent rather than loosening any assertion
+     — re-run individually AND as part of the full battery afterward, all
+     green at their exact pre-existing counts (r16 81, r17 112, r18 43,
+     r5_batch2 112 as part of the 557 batch sum, r9_adv 169, r9_docs 255).
+  3. **A second, smaller, related bug**: the round's own new "Document
+     chase interval" prose used `settings.doc_chase_days ?? "3"` in three
+     places (the Settings note, the Data Health "Waiting on documents"
+     panel) to fall back to the 3-day default. `??` only falls back on
+     `null`/`undefined` — but saving a BLANK input genuinely upserts
+     `value: ""` (an empty string, not absent), so a firm that saved blank
+     — exactly the documented, intended way to ask for the default — saw
+     "Emails a client every&nbsp;&nbsp;days" (the number silently missing),
+     not "every 3 days" as the round's own code comment promised. Confirmed
+     with a standalone repro before and after. Fixed by reusing the
+     existing `docChaseDays()` helper (`Number(x) || 3`, which already
+     handled this correctly) at all three template sites instead of
+     re-deriving the same fallback a third, subtly different way.
+
+`tests/r33.js` §C2d's blank-save assertion (`/every 3 days/.test(noteBlank)`)
+now exercises the FIXED behaviour directly — it would have failed against
+the pre-fix code, and was written and verified against the bug before the
+fix was applied, not backfilled to match whatever the code happened to do.
+
+Ran the WHOLE regression battery (`smoke.js` through `tests/r31.js`)
+alongside the new suite, twice — once to catch the two issues above, once
+clean afterward. Final run: every suite green, `node smoke.js` alone
+144/0, full battery 3,414/3,414 (table above), zero new console errors
+anywhere. `admin/app.js` was modified for the two genuine product-bug fixes
+above (the `#modal`-scoped `.case-details` selectors at five call sites, and
+the three `docChaseDays()` template sites) — both minimal, precise,
+non-masking fixes matching an existing in-file convention, not new
+behaviour; `admin/index.html` and `admin/admin.css` were not touched.
 
 R31 notes: a small, already-built, uncommitted round shipping THREE
 independent features in `admin/app.js` + `admin/index.html` only (no schema,

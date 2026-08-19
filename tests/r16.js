@@ -135,7 +135,13 @@ const openCase = async (page, caseId) => {
   // actionability checks even though $eval can still read their text. Force it open on every
   // openCase() so fill()/selectOption() work the same way for a freshly-created case as for one
   // opened cold, exactly the pattern tests/r13.js uses ahead of its own form edits.
-  await page.evaluate(() => { const d = document.querySelector(".case-details"); if (d) d.open = true; });
+  // R33 — scoped to #modal: Settings' new #diag-details also carries the shared `.case-details`
+  // disclosure-styling class and, unlike Settings' own General/Advanced sections, is STATIC markup
+  // present in the DOM from initial page load (not only once Settings has been rendered) — so an
+  // unscoped querySelector(".case-details") now matches IT first, leaving the modal's own section
+  // (and everything inside it) collapsed and un-interactable. Same fix app.js's own internal
+  // $(".case-details") call sites needed — see the R33 notes.
+  await page.evaluate(() => { const d = document.querySelector("#modal .case-details"); if (d) d.open = true; });
 };
 
 const readCase = (page, caseId) => page.evaluate(async (id) => {

@@ -183,6 +183,26 @@ h2 { color: var(--dark); font-size: 20px; font-weight: 700; letter-spacing: -0.0
   color: #fff; font-weight: 600;
 }
 .sidenav button.active .si, .sidenav button:hover .si { opacity: 1; filter: none; }
+/* R33 — GROUPED NAV. Work / Book / Money are labels, not controls: aria-hidden, no pointer
+   events, no tab stop. "Firm" is the one real control — an actual <button> with aria-expanded,
+   styled to read as a group heading with a caret so it is obvious the four items below belong
+   to it. It carries no data-page, so the router ignores it entirely. */
+.nav-group-head, .sidenav .nav-group-toggle {
+  font-size: 10px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
+  color: #a9bfda; opacity: .55; padding: 12px 11px 4px; line-height: 1.4;
+}
+.nav-group-head { pointer-events: none; user-select: none; }
+.sidenav button.nav-group-toggle {
+  display: flex; align-items: center; gap: 6px; width: 100%;
+  background: none; border: none; border-left: 3px solid transparent;
+  border-radius: 8px; cursor: pointer; text-align: left;
+  transition: opacity .15s ease, background .15s ease, color .15s ease;
+}
+.sidenav button.nav-group-toggle:hover { opacity: .95; color: #e8f0fa; background: rgba(255,255,255,.06); }
+.nav-caret { display: inline-block; font-size: 9px; transition: transform .15s ease; }
+.nav-group-toggle[aria-expanded="false"] .nav-caret { transform: rotate(-90deg); }
+#nav-firm-group { display: flex; flex-direction: column; gap: 2px; }
+#nav-firm-group.collapsed { display: none; }
 /* R6-B4 — the "Ask AI" control lives here now (see #assistant-fab below), and it
    is what claims the flexible space above the footer, so the footer no longer
    needs margin-top:auto of its own. */
@@ -1513,6 +1533,15 @@ select.task-reassign { width: auto; padding: 3px 6px; font-size: 12px; }
     scroll-snap-align: start;
   }
   .sidenav button.active { border-left-color: transparent; border-bottom-color: var(--orange); }
+  /* R33 — the mobile nav is a single horizontal scrolling strip, where group HEADINGS would be
+     noise between the tabs; they go. The Firm toggle stays (it is the only way back to the four
+     items it hides), and #nav-firm-group becomes a row so its buttons sit in the strip as before. */
+  .sidenav .nav-group-head { display: none; }
+  .sidenav .nav-group-toggle {
+    flex-direction: row; padding: 6px 8px; white-space: nowrap;
+    border-left: none; border-bottom: 3px solid transparent; border-radius: 8px 8px 0 0;
+  }
+  #nav-firm-group { flex-direction: row; gap: 2px; }
   .sidebar-foot { margin-top: 0; border-top: none; padding: 0; }
   .sidebar-foot span#user-email { display: none; }
   .dash-card { height: auto !important; }

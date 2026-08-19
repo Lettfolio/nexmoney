@@ -201,7 +201,11 @@ async function main() {
     console.log("\n— R5-1 · the Run-automation-now button");
     {
       const p2 = await newPage(browser, "p2");
-      await p2.click('.nav-link[data-page="emails"], [data-page="emails"]');
+      // R33 — Emails now sits inside the collapsible "Firm" group, folded by default for an
+      // adviser: a raw click on the nav button targets a display:none element for p2 and times
+      // out. window.nav() is the same route the click handler ends up calling and auto-expands
+      // the group when it lands on a page inside it, so it works unconditionally here.
+      await p2.evaluate(() => window.nav("emails"));
       await p2.waitForTimeout(900);
       const advVisible = await p2.evaluate(() => {
         const b = document.querySelector("#run-now-btn");

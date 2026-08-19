@@ -108,7 +108,9 @@ const notesFor = (page, id) => page.evaluate(async (cid) => {
 // localDateStr() does, so this test and the app can never read different clocks again.
 const dstr = (offsetDays) => new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/London" }).format(new Date(Date.now() + offsetDays * 86400000));
 // The case form lives inside a collapsed <details> drawer — open it before driving its fields.
-const openDetails = (page) => page.evaluate(() => { const d = document.querySelector(".case-details"); if (d) d.open = true; });
+// R33 — scoped to #modal: Settings' new #diag-details shares the `.case-details` styling class
+// and, being static markup, is always in the DOM — an unscoped selector now matches it first.
+const openDetails = (page) => page.evaluate(() => { const d = document.querySelector("#modal .case-details"); if (d) d.open = true; });
 const PDF = { name: "offer.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4\n% mock offer\n%%EOF\n") };
 
 async function main() {
@@ -260,7 +262,8 @@ async function main() {
       ok("R5-4 · the AI-read note was written on apply", notesAfter.some((n) => /^From mortgage offer \(AI-read\)/.test(n)), JSON.stringify(notesAfter.slice(0, 3)));
       ok("R5-4 · no conflict dialog was raised by the apply", !page.__dialogs.length, JSON.stringify(page.__dialogs));
       const drawer = await page.evaluate(() => {
-        const d = document.querySelector(".case-details");
+        // R33 — scoped to #modal (see openDetails above — the same collision applies here).
+        const d = document.querySelector("#modal .case-details");
         return { open: !!(d && d.open), panelGone: !!document.querySelector("#offer-diff") && document.querySelector("#offer-diff").classList.contains("hidden") };
       });
       eq("R5-4 · the case re-opens with the details drawer open and the proposal cleared", drawer, { open: true, panelGone: true });
@@ -534,7 +537,8 @@ async function main() {
       eq("R5-34 · the move is still blocked", res, "blocked");
       const state = await page.evaluate(() => {
         const sel = document.querySelector("#case-form select[name='protection_status']");
-        const det = document.querySelector(".case-details");
+        // R33 — scoped to #modal (see openDetails above — the same collision applies here).
+        const det = document.querySelector("#modal .case-details");
         return {
           modalOpen: !document.querySelector("#modal-backdrop").classList.contains("hidden"),
           caseId: (document.querySelector("#case-form") || {}).dataset ? document.querySelector("#case-form").dataset.caseId : null,

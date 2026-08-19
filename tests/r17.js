@@ -152,7 +152,9 @@ const openCase = async (page, caseId) => {
   await wait(page, 900);
   // The case-details <details> starts COLLAPSED on an existing case (r13.js/r16.js's fix, same
   // reason here): force it open so the checklist/BTL/etc fields are all actionable by Playwright.
-  await page.evaluate(() => { const d = document.querySelector(".case-details"); if (d) d.open = true; });
+  // R33 — scoped to #modal: Settings' new #diag-details shares the `.case-details` styling class
+  // and, being static markup, is always in the DOM — an unscoped selector now matches it first.
+  await page.evaluate(() => { const d = document.querySelector("#modal .case-details"); if (d) d.open = true; });
 };
 
 const readCase = (page, caseId) => page.evaluate(async (id) => {

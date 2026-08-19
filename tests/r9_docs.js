@@ -136,7 +136,9 @@ async function newPublicPage(browser, url, viewport, opts = {}) {
   await page.waitForTimeout(900);
   return page;
 }
-const openDetails = (page) => page.evaluate(() => { const d = document.querySelector(".case-details"); if (d) d.open = true; });
+// R33 — scoped to #modal: Settings' new #diag-details shares the `.case-details` styling class
+// and, being static markup, is always in the DOM — an unscoped selector now matches it first.
+const openDetails = (page) => page.evaluate(() => { const d = document.querySelector("#modal .case-details"); if (d) d.open = true; });
 const gotoReports = async (page) => { await page.evaluate(() => window.nav("reports")); await page.waitForTimeout(2400); };
 const gotoPipeline = async (page) => { await page.evaluate(() => window.nav("pipeline")); await page.waitForTimeout(1500); };
 const gotoSettings = async (page) => { await page.evaluate(() => window.nav("settings")); await page.waitForTimeout(1300); };

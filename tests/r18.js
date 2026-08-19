@@ -147,7 +147,9 @@ const goto = async (page, pageName, ms) => {
 const openCase = async (page, caseId) => {
   await page.evaluate((id) => window.openCase(id), caseId);
   await wait(page, 900);
-  await page.evaluate(() => { const d = document.querySelector(".case-details"); if (d) d.open = true; });
+  // R33 — scoped to #modal: Settings' new #diag-details shares the `.case-details` styling class
+  // and, being static markup, is always in the DOM — an unscoped selector now matches it first.
+  await page.evaluate(() => { const d = document.querySelector("#modal .case-details"); if (d) d.open = true; });
 };
 const openClient = async (page, id) => {
   await page.evaluate((cid) => window.openClient(cid), id);

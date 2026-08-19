@@ -276,7 +276,7 @@ const SETTING_URL_FIELDS = { google_review_link: "Google review link", review_pl
    a bad number here corrupts a live metric (the rate-reminder KPI renders "≤ NaNmo" and the whole
    "ending soon" bucket vanishes), and a bad bank field is the one setting with direct
    misdirected-payment risk once queueEmail lets a fee-request email through on it. */
-const SETTING_NUMERIC_FIELDS = { rate_reminder_months: "Rate reminder lead time", review_delay_days: "Review request delay", review_reminder_days: "Review reminder delay", referral_delay_days: "Referral nudge delay", solicitor_chase_days: "Solicitor chase task delay", monthly_fee_target: "Monthly fee target", protection_avg_commission: "Average protection commission" };
+const SETTING_NUMERIC_FIELDS = { rate_reminder_months: "Rate reminder lead time", review_delay_days: "Review request delay", review_reminder_days: "Review reminder delay", referral_delay_days: "Referral nudge delay", solicitor_chase_days: "Solicitor chase task delay", monthly_fee_target: "Monthly fee target", protection_avg_commission: "Average protection commission", doc_chase_days: "Document chase interval" };
 const SETTING_BANK_FIELDS = { bank_sort_code: { label: "Sort code", re: /^\d{2}-?\d{2}-?\d{2}$/ }, bank_account_number: { label: "Account number", re: /^\d{8}$/ } };
 function isValidEmailLike(v) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v); }
 function isValidUrlLike(v) { return /^https?:\/\/[^\s]+\.[^\s]+/i.test(v); }
@@ -3871,6 +3871,9 @@ async function showApp(session) {
      for the frame between the shell being revealed and the role arriving. */
   const navMoney = $("#nav-money");
   if (navMoney) navMoney.classList.toggle("hidden", !isOwner());
+  /* R33 — and, for the same reason and in the same place, the Firm group's default state: the
+     role is known now and not a frame earlier. See applyNavRole(). */
+  applyNavRole();
   // BUILD 6d — restore this user's pipeline segment/view prefs now that their id is known.
   restoreUserPrefs(session.user.id);
   await loadSettings();
@@ -3936,7 +3939,9 @@ async function loadTeam(session) {
     .map((p) => `<option value="${esc(p.id)}" title="${esc(NO_ACCESS_OPTION_TITLE)}">${esc(p.full_name || p.email || p.id)} — no access</option>`);
   $("#board-adviser").innerHTML = ['<option value="all">All advisers</option>', '<option value="unassigned">Unassigned</option>']
     .concat(TEAM.map((p) => `<option value="${p.id}">${esc(staffName(p.id))}</option>`)).concat(formerOpts).join("");
-  $("#diary-staff").innerHTML = ['<option value="all">Everyone</option>']
+  // R33 — "All advisers", matching #board-adviser above and #client-adviser. The VALUE is still
+  // "all"; only the word changed. Three filters that mean the same thing said it three ways.
+  $("#diary-staff").innerHTML = ['<option value="all">All advisers</option>']
     .concat(TEAM.map((p) => `<option value="${p.id}">${esc(staffName(p.id))}</option>`)).concat(formerOpts).join("");
   // B9 (R5-31) — #diary-staff was just rebuilt from scratch (any prior selection is gone), so this
   // is the one safe place to apply the restored Month/Day mode's own default selection.
@@ -4069,6 +4074,43 @@ window.addEventListener("popstate", (e) => {
 $("#topnav").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-page]");
   if (b) nav(b.dataset.page);
+});
+/* ==========================================================================
+   R33 — THE FIRM GROUP. Emails / Import / Data health / Settings are four
+   destinations an adviser opens roughly never and an Owner or Administrator
+   lives in. Rather than reorder the nav per role (a different DOM for every
+   seat is a maintenance and test liability, and the R32 panel agreed it was
+   overkill), there is ONE order for everybody and one group that starts
+   folded for the people who don't use it.
+
+   The default is a role judgement, not a preference: collapsed for an adviser,
+   expanded for admin/owner — the same argument that already hides Monday
+   money. The moment the operator touches the toggle, their choice wins and is
+   remembered (nx_nav_firm), because a default is a guess about somebody and
+   they have just told us the answer.
+   ========================================================================== */
+const NAV_FIRM_KEY = "nx_nav_firm";
+function setNavFirmOpen(open) {
+  const group = $("#nav-firm-group");
+  const toggle = $("#nav-firm-toggle");
+  if (group) group.classList.toggle("collapsed", !open);
+  if (toggle) toggle.setAttribute("aria-expanded", open ? "true" : "false");
+}
+function navFirmOpen() {
+  const group = $("#nav-firm-group");
+  return !!group && !group.classList.contains("collapsed");
+}
+function applyNavRole() {
+  const saved = lsGet(NAV_FIRM_KEY);
+  // A stored answer beats the role default in both directions — an adviser who opened the group
+  // keeps it open, an owner who folded it keeps it folded.
+  const open = saved === "open" ? true : saved === "closed" ? false : isAdminOrOwner();
+  setNavFirmOpen(open);
+}
+$("#nav-firm-toggle")?.addEventListener("click", () => {
+  const open = !navFirmOpen();
+  setNavFirmOpen(open);
+  lsSet(NAV_FIRM_KEY, open ? "open" : "closed");
 });
 // R31-A · a11y — the "Skip to main content" link moves keyboard focus into the
 // main content region so a keyboard/screen-reader user can jump past the nav.
@@ -4329,6 +4371,16 @@ function nav(page, push = true) {
     // R31-A · a11y — expose the current page to assistive tech, not just visually.
     if (on) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
   });
+  /* R33 — the active tab must never be invisible. The command palette, a deep link and
+     gotoDataHealth() can all land an adviser on a page inside the folded Firm group, and a nav
+     whose highlight is hidden is a nav that lies about where you are. Opened for the visit only —
+     deliberately NOT persisted, because arriving somewhere is not the same as asking for the
+     group back, and nx_nav_firm is reserved for what the operator actually chose. */
+  const firmGroup = $("#nav-firm-group");
+  if (firmGroup && firmGroup.classList.contains("collapsed")
+      && [...firmGroup.querySelectorAll("button[data-page]")].some((b) => b.dataset.page === page)) {
+    setNavFirmOpen(true);
+  }
   currentPage = page;
   currentModal = null; // switching pages dismisses any modal history ownership
   if (push) {
@@ -4494,7 +4546,14 @@ async function renderSettings() {
         <option value="on" ${settings.doc_chase_enabled === "on" ? "selected" : ""}>On</option>
       </select>
     </label>
-    <p class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;" id="doc-chase-note">Emails a client <strong>every ${esc(String(settings.doc_chase_days ?? "3"))} days</strong> while documents are still outstanding on their case's checklist, listing <strong>only the items still missing</strong> — never the whole list again. After <strong>${DOC_CHASE_MAX} chases it stops emailing</strong> and puts a call task on the case's adviser instead; the fourth email is not the one that works. Every <strong>live stage is covered — Enquiry through Exchange</strong> (widened from Fact Find and Application only): a checklist can be opened as soon as ID is asked for, and the lender still wants the missing item right up to exchange. Completed and Not proceeding are never chased. Only cases <strong>with a checklist</strong> are chased at all: a case with no checklist is not “fully documented”, it is unknown, and it is skipped rather than guessed at. The ${esc(String(settings.doc_chase_days ?? "3"))}-day gap counts any document email, request or chase, so a cron run and someone pressing “Send document request now” cannot become two emails in an evening. <strong>Requires email sending to be set up</strong> (a verified From address and a Resend key) — with no sender configured nothing goes out, whatever this says.</p>
+    ${/* R33 — the interval was already the number the chaser and the paragraph below both run on
+          (docChaseDays() reads settings.doc_chase_days ?? 3); the only thing missing was a way to
+          set it. Blank is a legitimate answer and means the 3-day default, which is what the note
+          underneath will then say. */ ""}
+    <label title="How long to wait between document chase emails. Blank = the default, 3 days.">Document chase interval (days, blank = 3)
+      <input name="doc_chase_days" type="number" min="1" value="${esc(settings.doc_chase_days ?? "")}" placeholder="3">
+    </label>
+    <p class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;" id="doc-chase-note">Emails a client <strong>every ${esc(String(docChaseDays()))} days</strong> while documents are still outstanding on their case's checklist, listing <strong>only the items still missing</strong> — never the whole list again. After <strong>${DOC_CHASE_MAX} chases it stops emailing</strong> and puts a call task on the case's adviser instead; the fourth email is not the one that works. Every <strong>live stage is covered — Enquiry through Exchange</strong> (widened from Fact Find and Application only): a checklist can be opened as soon as ID is asked for, and the lender still wants the missing item right up to exchange. Completed and Not proceeding are never chased. Only cases <strong>with a checklist</strong> are chased at all: a case with no checklist is not “fully documented”, it is unknown, and it is skipped rather than guessed at. The ${esc(String(docChaseDays()))}-day gap counts any document email, request or chase, so a cron run and someone pressing “Send document request now” cannot become two emails in an evening. <strong>Requires email sending to be set up</strong> (a verified From address and a Resend key) — with no sender configured nothing goes out, whatever this says.</p>
     <label>Review requests (NPS)
       <select name="nps_enabled">
         <option value="off" ${(settings.nps_enabled ?? "off") === "on" ? "" : "selected"}>Off</option>
@@ -4606,6 +4665,11 @@ async function renderSettings() {
   // function already uses for every other owner-only block (SETTING fields, master switch, export).
   renderAdviserTargetsEditor(owner);
   loadIntroducers();
+  /* R33 — the diagnostics block, moved here from Reports. `null` rather than a row set: there is
+     no Reports read behind this render, so the "Records loaded" line is omitted rather than
+     reported as zero. Gated inside on isAdminOrOwner(), exactly as it was on Reports — a plain
+     adviser gets no <details> at all. */
+  renderDiagnostics(null);
   /* The whole audit trail, including the settings and login entries that carry no case or client
      and so appear on no other screen. Owner-only in the UI; the database is what actually
      withholds those rows from everyone else. */
@@ -10648,7 +10712,12 @@ window.openCase = async function (id, opts = {}) {
     <div style="margin-top:14px;">
       <h3 style="font-size:14px;">Notes</h3>
       <div style="display:flex;gap:8px;margin:8px 0 0;flex-wrap:wrap;">
-        <input id="new-note" placeholder="Add a note…" style="flex:1;min-width:140px;">
+        ${/* R33 · W5 — a textarea, not a single-line input. The call logger six inches above this
+              (#cs-call-note) is a textarea, and a note is the same kind of writing: the R32 panel
+              watched people compose a three-line note in a box that showed them forty characters
+              of it. Enter still submits and Shift+Enter still makes a newline — the keydown
+              handler below was already written that way, it just had nowhere to put the line. */ ""}
+        <textarea id="new-note" rows="2" placeholder="Add a note…" style="flex:1;min-width:140px;"></textarea>
         <button class="btn btn-sm" id="add-note-btn" title="Add note">Add note</button>
       </div>
       <div class="type-chips" id="note-type-chips">
@@ -11002,7 +11071,7 @@ window.openCase = async function (id, opts = {}) {
       }
       if (id && row.stage !== c.stage && protectionGateBlocks({ stage: c.stage, protection_status: row.protection_status }, row.stage)) {
         toast("🛡️ Record the protection conversation before submitting — set a protection status");
-        const det = $(".case-details"); if (det) det.open = true; // the field is inside the collapsible section — reveal it
+        const det = $("#modal .case-details"); if (det) det.open = true; // the field is inside the collapsible section — reveal it
         const protSel = $("#case-form").elements.protection_status;
         if (protSel) { protSel.style.borderColor = "var(--red)"; protSel.style.boxShadow = "0 0 0 3px rgba(192,57,43,.18)"; protSel.focus(); }
         return;
@@ -11024,7 +11093,7 @@ window.openCase = async function (id, opts = {}) {
       const protNowTaken = row.protection_status === "policy_taken" && (!id || (c.protection_status || "not_discussed") !== "policy_taken");
       if (protNowTaken && !(Number(row.protection_commission) > 0)) {
         toast("A policy needs a commission figure — fill in \"Protection commission (£)\" before saving.");
-        const det = $(".case-details"); if (det) det.open = true;
+        const det = $("#modal .case-details"); if (det) det.open = true;
         const commEl = $("#case-form").elements.protection_commission;
         if (commEl) {
           commEl.style.borderColor = "var(--red)";
@@ -11559,7 +11628,7 @@ window.openCase = async function (id, opts = {}) {
     // "Set expected completion" nudge (BUILD 5c) — reveals Case details and focuses the field.
     const expNudge = $("#cs-expected-nudge");
     if (expNudge) expNudge.onclick = () => {
-      const det = $(".case-details"); if (det) det.open = true;
+      const det = $("#modal .case-details"); if (det) det.open = true;
       const inp = $("#case-expected-completion");
       if (inp) { inp.scrollIntoView({ behavior: "smooth", block: "center" }); inp.focus(); }
     };
@@ -11620,7 +11689,7 @@ window.openCase = async function (id, opts = {}) {
        the conversation on the field the reports read. */
     const protPrompt = $("#cs-prot-warn.cs-prot-prompt") || (function () { const el = $("#cs-prot-warn"); return el && el.classList.contains("cs-prot-prompt") ? el : null; })();
     if (protPrompt) protPrompt.onclick = () => {
-      const det = $(".case-details"); if (det) det.open = true;
+      const det = $("#modal .case-details"); if (det) det.open = true;
       const sel = $("#case-form") && $("#case-form").elements.protection_status;
       if (sel) { sel.scrollIntoView({ behavior: "smooth", block: "center" }); sel.focus(); }
     };
@@ -11630,7 +11699,7 @@ window.openCase = async function (id, opts = {}) {
      unblocks it, highlighted, rather than leaving the operator to hunt for it.
      openDetails: an offer was just applied — show the values that changed. */
   if (id && (opts.revealProtection || opts.openDetails)) {
-    const det = $(".case-details"); if (det) det.open = true;
+    const det = $("#modal .case-details"); if (det) det.open = true;
     if (opts.revealProtection) {
       const protSel = $("#case-form") && $("#case-form").elements.protection_status;
       if (protSel) {
@@ -12244,7 +12313,9 @@ function renderClientAdviser(clients) {
   const strays = [...holders].filter((id) => !TEAM.some((p) => p.id === id))
     .map((id) => [id, (profileName(id) || `Not on the team (${id})`) + (profileName(id) ? " — no access" : ""), !!profileName(id)]);
   const noneN = (clients || []).filter((c) => clientAdviserIds(c).size === 0).length;
-  const opts = [["all", "Everyone"]].concat(teamOpts, strays, noneN ? [["none", "Nobody (unassigned cases only)"]] : []);
+  // R33 — label only ("All advisers", as #board-adviser and #diary-staff now say); the value is
+  // still "all" and every branch below still tests for it.
+  const opts = [["all", "All advisers"]].concat(teamOpts, strays, noneN ? [["none", "Nobody (unassigned cases only)"]] : []);
   if (!opts.some(([k]) => k === clientAdviser)) clientAdviser = "all";
   // R12b · K-15/K-17/L-16 — the third tuple element (present only on a "no access" stray) carries
   // the same explanation the other adviser filters give.
@@ -15068,10 +15139,18 @@ function renderImportPreview() {
      "not yet known" behaves as present, exactly like every other M-detection in the app. */
   const propOn = PROP_ADDR_SUPPORTED !== false;
   const nCols = propOn ? 13 : 12;
+  /* R33 · K3 — THE RULES PARAGRAPH. It is four hundred words of genuinely load-bearing rules, and
+     it reprinted in full on every single Analyse: the R32 panel found operators who import weekly
+     scrolling past it every time to reach their own data. Read once, folded thereafter — and only
+     because the operator SAID so by pressing "Got it", never on a guess. Reopening it is one
+     click and does not clear the flag: wanting to re-read the rules is not the same as wanting
+     them shouted at you again next week. */
+  const blurbSeen = lsGet("nx_import_blurb") === "seen";
   $("#import-preview").innerHTML = `
     <div class="panel">
       <h3>Review before saving</h3>
-      <p class="panel-sub">Untick anything that shouldn't be imported. Click Client, Email, <strong>Property</strong>, Stage, Lender or Rate to fix a misread field before importing. Estimated rate-end dates are marked ≈ and stay flagged until you confirm them. Dates are read UK-first (dd/mm/yyyy) — anything that could also be read the American way is shown amber with the reading we'll use, and its row starts unticked until you press Confirm. A case marked Completed with no completion date is shown amber with a “no date” flag: no date is ever invented for it, so where the source itself said the case was completed the row starts unticked until you either press “Import with no date” or change its Stage. Any case that does import without a completion date is counted in the message at the end and listed on Data health. The <strong>Match</strong> column says who each row will land on before anything is written: green attaches to a client we already hold, amber is a possible match that needs your Attach / New client decision, and a blank cell creates a new client. Where an attaching row's email or phone disagrees with the record, the row expands so you choose which to keep — what you don't keep is named in the summary afterwards. A <strong>Property address</strong> column in the file (Property, Property address, Security address, Address, with an optional separate Postcode) is read onto the case, and the Match column then also says what the row means for that client: <span class="badge green">new property</span>, <span class="badge grey">another case on a property we hold</span>, or <span class="badge amber">likely duplicate case</span> — same client, same property and the same lender, which starts unticked until you press “Import anyway”.</p>
+      <button type="button" class="btn btn-sm" id="imp-blurb-toggle" aria-expanded="${blurbSeen ? "false" : "true"}" aria-controls="imp-review-blurb" style="margin:0 0 8px;">${blurbSeen ? "Review rules ▸" : "Got it — collapse"}</button>
+      <p class="panel-sub${blurbSeen ? " hidden" : ""}" id="imp-review-blurb">Untick anything that shouldn't be imported. Click Client, Email, <strong>Property</strong>, Stage, Lender or Rate to fix a misread field before importing. Estimated rate-end dates are marked ≈ and stay flagged until you confirm them. Dates are read UK-first (dd/mm/yyyy) — anything that could also be read the American way is shown amber with the reading we'll use, and its row starts unticked until you press Confirm. A case marked Completed with no completion date is shown amber with a “no date” flag: no date is ever invented for it, so where the source itself said the case was completed the row starts unticked until you either press “Import with no date” or change its Stage. Any case that does import without a completion date is counted in the message at the end and listed on Data health. The <strong>Match</strong> column says who each row will land on before anything is written: green attaches to a client we already hold, amber is a possible match that needs your Attach / New client decision, and a blank cell creates a new client. Where an attaching row's email or phone disagrees with the record, the row expands so you choose which to keep — what you don't keep is named in the summary afterwards. A <strong>Property address</strong> column in the file (Property, Property address, Security address, Address, with an optional separate Postcode) is read onto the case, and the Match column then also says what the row means for that client: <span class="badge green">new property</span>, <span class="badge grey">another case on a property we hold</span>, or <span class="badge amber">likely duplicate case</span> — same client, same property and the same lender, which starts unticked until you press “Import anyway”.</p>
       <label style="display:flex;gap:6px;align-items:center;font-weight:400;margin:4px 0 10px;">
         <input type="checkbox" id="imp-assign-me" style="width:auto;" ${importAssignToMe ? "checked" : ""}>
         Assign new cases to me — unticking leaves them unassigned (they'll appear in Data Health's unassigned list)
@@ -15115,6 +15194,18 @@ function renderImportPreview() {
   $("#imp-all").onchange = (e) => document.querySelectorAll(".imp-row").forEach((c) => (c.checked = e.target.checked));
   $("#imp-assign-me").onchange = (e) => { importAssignToMe = e.target.checked; };
   $("#import-save-btn").onclick = runImport;
+  /* R33 · K3 — fold/unfold the rules paragraph. The first fold is what records the preference;
+     re-opening it afterwards is a session act and deliberately leaves nx_import_blurb alone. */
+  const blurbBtn = $("#imp-blurb-toggle");
+  if (blurbBtn) blurbBtn.onclick = () => {
+    const p = $("#imp-review-blurb");
+    if (!p) return;
+    const nowOpen = p.classList.contains("hidden");
+    p.classList.toggle("hidden", !nowOpen);
+    blurbBtn.textContent = nowOpen ? "Got it — collapse" : "Review rules ▸";
+    blurbBtn.setAttribute("aria-expanded", nowOpen ? "true" : "false");
+    if (!nowOpen) lsSet("nx_import_blurb", "seen");
+  };
 
   /* R5-23a/b — match + conflict controls are wired by delegation on the preview container, because
      a row's match cell and its expander are repainted in place whenever the row's identity fields
@@ -18783,13 +18874,21 @@ function renderDiagnostics(all) {
   if (!sec) return;
   const show = isAdminOrOwner();
   sec.classList.toggle("hidden", !show);
+  /* R33 — the block now lives inside a <details> on Settings. The gate is unchanged; it just has
+     to reach the wrapper too, or an adviser would be offered a "Diagnostics" disclosure that
+     opens onto nothing. */
+  const det = $("#diag-details");
+  if (det) det.classList.toggle("hidden", !show);
   if (!show) return;
-  const recCount = (all || []).length;
+  /* R33 — `all` is the Reports read this used to be rendered from. Called from Settings there is
+     no such read and `all` is null: the record count is then OMITTED rather than reported as 0,
+     which would be a made-up number about a page the reader isn't on. */
+  const recCount = all == null ? null : all.length;
   const total = diagErrorTotal();
 
   const health = $("#report-diag-health");
   if (health) health.innerHTML =
-    `<span>Records loaded (last Reports read): <strong>${recCount}</strong></span> · ` +
+    (recCount == null ? "" : `<span>Records loaded (last Reports read): <strong>${recCount}</strong></span> · `) +
     `<span>User: <strong>${esc((ME && ME.email) || "—")}</strong> (${esc(MY_ROLE)})</span> · ` +
     `<span>Origin: <strong>${esc(location.origin)}</strong></span> · ` +
     `<span>Errors this session: <strong>${total}</strong></span>`;
@@ -18885,7 +18984,8 @@ function copyDiagnostics(recCount) {
     lines.push("NexMoney diagnostics — " + new Date().toISOString());
     lines.push("User: " + ((ME && ME.email) || "—") + " (" + MY_ROLE + ")");
     lines.push("Origin: " + location.origin);
-    lines.push("Records loaded (last Reports read): " + (recCount || 0));
+    // R33 — omitted entirely when there is no Reports read behind this render (see renderDiagnostics).
+    if (recCount != null) lines.push("Records loaded (last Reports read): " + recCount);
     lines.push("Errors this session: " + diagErrorTotal());
     lines.push("");
     if (!ERROR_LOG.length) {
@@ -19260,9 +19360,10 @@ async function loadReports() {
   /* R19 — the OWNER/ADMIN Pipeline MI section, from the same `all` rows plus the two milestone
      dates in the select above. Gated inside (isAdminOrOwner); hidden for plain advisers. */
   renderPipelineMI(all, mv);
-  /* R21 Part C — OWNER/ADMIN diagnostics panel, from the same `all` count already in scope
-     plus the session ERROR_LOG. Gated inside (isAdminOrOwner); hidden for plain advisers. */
-  renderDiagnostics(all);
+  /* R21 Part C / R33 — the diagnostics panel used to render from here, off the `all` count in
+     scope. It now lives on Settings (renderSettings → renderDiagnostics(null)): it is a support
+     artefact, not management information, and it was costing every owner a scroll past it on
+     every Reports read. Nothing else about it changed. */
   renderForecastBuckets(all);
   // Client LTV is the one remaining RPC-only panel (needs client_id/name joins this page doesn't
   // otherwise fetch) — hide it gracefully if the RPC failed; everything else above still renders.
@@ -21258,7 +21359,7 @@ async function loadDataHealth() {
   const waitingDocsPanel = !dhDocsOn ? "" : `<div class="panel" id="dh-waitingdocs-panel">
     <h3>Waiting on documents</h3>
     <p class="panel-sub">Every <strong>live</strong> case with at least one item still outstanding on its checklist — the paperwork queue, in the order it has gone quiet. ${chaseOnNow
-      ? `<strong>Automatic chasing is ON</strong>: these are chased by email every ${esc(String(settings.doc_chase_days ?? "3"))} days, up to ${DOC_CHASE_MAX} times, and then a call task is raised instead.`
+      ? `<strong>Automatic chasing is ON</strong>: these are chased by email every ${esc(String(docChaseDays()))} days, up to ${DOC_CHASE_MAX} times, and then a call task is raised instead.`
       : `<strong>Automatic chasing is OFF</strong>, so nothing on this list is being chased by anybody except by hand. Turn it on in Settings.`} It now covers <strong>every live stage — Enquiry through Exchange</strong> (it used to be Fact Find and Application only), so a checklist opened at Enquiry is chased from the day it is opened. Cases with no checklist at all are not on this list and are never chased — an unknown is not the same as complete.</p>
     <p class="panel-sub">There is deliberately <strong>no “send to all”</strong> here. A document request is a client-facing email, and one button that fires forty of them is not a time-saver, it is an incident. Each send below is its own decision, with the same confirmation the case screen asks for.</p>
     ${/* Eight columns is a lot for 1280, and this page already clips a table that overruns its

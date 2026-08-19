@@ -69,7 +69,13 @@ async function newPage(browser, persona) {
   return page;
 }
 const gotoSettings = async (page) => {
-  await page.click('[data-page="settings"]');
+  // R33 — Settings now sits inside the collapsible "Firm" group, folded by default for an
+  // adviser (p2/p3): a raw click on the nav button would target a display:none element and
+  // time out for those personas. window.nav() is the same route the button's own click
+  // handler ends up calling and works for every persona (nav() itself auto-expands the group
+  // when it lands on a page inside it), so this one change fixes every gotoSettings() call in
+  // this file without needing to special-case which persona is calling it.
+  await page.evaluate(() => window.nav("settings"));
   await page.waitForTimeout(1200);
 };
 const readProfile = (page, id) => page.evaluate((pid) =>

@@ -68,24 +68,38 @@
       <span class="gs-txt">Search…</span>
       <kbd class="gs-kbd" aria-hidden="true">/</kbd>
     </button>
+    <!-- R33 — GROUPED NAV. One DOM order for every role: the twelve destinations were a flat list
+         nobody could scan, and the R32 usability panel measured advisers hunting for Clients past
+         four items they never open. The headings below are labels, not controls; the only
+         role-aware part is the FIRM group, which applyNavRole() collapses for an adviser and
+         leaves open for an Owner/Administrator (the same argument that already hides Monday
+         money). Every button keeps its data-page, icon and label — this is a reorder and a wrap,
+         nothing else, so the click delegation on #topnav and nav()'s `#topnav button` loop are
+         untouched. The toggle carries NO data-page, so it can never route. -->
     <nav class="sidenav" id="topnav" aria-label="Main navigation">
+      <div class="nav-group-head" aria-hidden="true">Work</div>
       <button data-page="dashboard" class="active"><span class="si">🏠</span>Today</button>
       <button data-page="pipeline"><span class="si">🗂️</span>Pipeline</button>
-      <button data-page="protection"><span class="si">🛡️</span>Protection</button>
       <button data-page="diary"><span class="si">📅</span>Diary</button>
+      <div class="nav-group-head" aria-hidden="true">Book</div>
       <button data-page="clients"><span class="si">👥</span>Clients</button>
-      <button data-page="import"><span class="si">📤</span>Import</button>
+      <button data-page="protection"><span class="si">🛡️</span>Protection</button>
+      <div class="nav-group-head" aria-hidden="true">Money</div>
       <button data-page="reports"><span class="si">📊</span>Reports</button>
       <!-- R7 — Monday money. Every figure on the page is firm-wide money, so the nav item itself
            is Owner-only. Hidden in the markup and revealed by showApp() once the role is known, so
            it can never flash for an adviser between the shell appearing and my_role() answering. -->
       <button data-page="money" id="nav-money" class="hidden"><span class="si">💷</span>Monday money</button>
-      <button data-page="data"><span class="si">🩺</span>Data health</button>
-      <button data-page="emails"><span class="si">✉️</span>Emails</button>
       <!-- R14 — the password vault. Every staff role sees it (the DB's SELECT policy is all-staff by
            default), so unlike Monday money it is NOT hidden in the markup — it just renders. -->
       <button data-page="vault"><span class="si">🔑</span>Vault</button>
-      <button data-page="settings"><span class="si">⚙️</span>Settings</button>
+      <button type="button" class="nav-group-toggle" id="nav-firm-toggle" aria-expanded="true" aria-controls="nav-firm-group">Firm <span class="nav-caret" aria-hidden="true">▾</span></button>
+      <div id="nav-firm-group">
+        <button data-page="emails"><span class="si">✉️</span>Emails</button>
+        <button data-page="import"><span class="si">📤</span>Import</button>
+        <button data-page="data"><span class="si">🩺</span>Data health</button>
+        <button data-page="settings"><span class="si">⚙️</span>Settings</button>
+      </div>
     </nav>
     <!-- R6-B4 — "Ask AI" was a position:fixed pill in the bottom-right corner of the
          viewport. Four auditors independently measured it sitting on top of live
@@ -528,22 +542,10 @@
           <div id="report-mi-scoreboard"></div>
         </div>
       </div>
-      <!-- R21 Part C — OWNER/ADMIN-only diagnostics. Same gate + .hidden mechanism as #report-mi-section
-           above; filled by renderDiagnostics(all). Session-only, never sent over the network. -->
-      <div class="mi-section hidden" id="report-diag-section">
-        <h3 class="mi-section-head">Diagnostics</h3>
-        <p class="panel-sub">Client-side error capture for this session — visible to Owners / Administrators only and never sent anywhere. Export or copy it to share with support.</p>
-        <div class="panel" id="report-diag-panel">
-          <h3>Session health<button type="button" class="btn btn-sm mi-csv-btn" id="report-diag-csv" title="Download the error log as CSV">⭳ CSV</button><button type="button" class="btn btn-sm" id="report-diag-copy" title="Copy the diagnostics to your clipboard">Copy diagnostics</button><button type="button" class="btn btn-sm" id="report-diag-clear" title="Clear this session's in-memory error log">Clear</button></h3>
-          <div class="panel-sub" id="report-diag-health"></div>
-          <div id="diag-error-table" style="margin-top:12px;"></div>
-          <!-- R30 — additive cross-session table. Sanitised fingerprints only (error type,
-               code location, base page route, staff role); no messages, names or client data. -->
-          <h3 style="margin-top:18px;">Across sessions (persisted)<button type="button" class="btn btn-sm" id="report-diag-persist-clear" title="Delete the persisted cross-session error log">Clear persisted</button></h3>
-          <p class="panel-sub">A sanitised, cross-session history — error type, code location, page and staff role only. No messages, names or client data are ever stored here.</p>
-          <div id="diag-persist-table" style="margin-top:8px;"></div>
-        </div>
-      </div>
+      <!-- R33 — the #report-diag-section block that stood here has MOVED to Settings (see
+           #diag-details at the bottom of #page-settings). It is a configuration/support artefact,
+           not management information: the R32 panel found owners scrolling past it on every
+           Reports read to get to the money panels. Every id inside it is unchanged. -->
       <div class="grid-2">
         <div class="panel" id="report-funnel-panel">
           <h3>Pipeline funnel</h3>
@@ -919,6 +921,30 @@
         <div id="ch-list" class="ch-list"></div>
         <div class="ch-pager" id="ch-pager"></div>
       </div>
+
+      <!-- R21 Part C / R33 — OWNER/ADMIN-only diagnostics, moved here from Reports. Same gate +
+           .hidden mechanism it always had (renderDiagnostics → isAdminOrOwner()), now called from
+           renderSettings() with no record count. Deliberately OUTSIDE #settings-form: everything
+           inside that form is swept into the settings upsert by Save, and these controls are not
+           settings. Collapsed by default — it is here to be found when something is wrong, not to
+           be read every time somebody opens Settings. -->
+      <details id="diag-details" class="case-details settings-details hidden" style="margin-top:24px;">
+        <summary>Diagnostics</summary>
+        <div class="mi-section hidden" id="report-diag-section">
+          <h3 class="mi-section-head">Diagnostics</h3>
+          <p class="panel-sub">Client-side error capture for this session — visible to Owners / Administrators only and never sent anywhere. Export or copy it to share with support.</p>
+          <div class="panel" id="report-diag-panel">
+            <h3>Session health<button type="button" class="btn btn-sm mi-csv-btn" id="report-diag-csv" title="Download the error log as CSV">⭳ CSV</button><button type="button" class="btn btn-sm" id="report-diag-copy" title="Copy the diagnostics to your clipboard">Copy diagnostics</button><button type="button" class="btn btn-sm" id="report-diag-clear" title="Clear this session's in-memory error log">Clear</button></h3>
+            <div class="panel-sub" id="report-diag-health"></div>
+            <div id="diag-error-table" style="margin-top:12px;"></div>
+            <!-- R30 — additive cross-session table. Sanitised fingerprints only (error type,
+                 code location, base page route, staff role); no messages, names or client data. -->
+            <h3 style="margin-top:18px;">Across sessions (persisted)<button type="button" class="btn btn-sm" id="report-diag-persist-clear" title="Delete the persisted cross-session error log">Clear persisted</button></h3>
+            <p class="panel-sub">A sanitised, cross-session history — error type, code location, page and staff role only. No messages, names or client data are ever stored here.</p>
+            <div id="diag-persist-table" style="margin-top:8px;"></div>
+          </div>
+        </div>
+      </details>
     </section>
 
     <!-- Vault (R14) — the company password safe. All staff can see every entry; a single entry can be

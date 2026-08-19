@@ -465,7 +465,10 @@ const tasksOnCase = (page, caseId) => page.evaluate(async (cid) =>
         const before = await tasksOnCase(page, ref.target.caseId);
         await page.evaluate((id) => window.openCase(id), ref.caseId);
         await page.waitForTimeout(900);
-        await page.evaluate(() => { document.querySelector(".case-details").open = true; document.querySelector("#case-form").elements.stage.value = "completed"; });
+        // R33 — scoped to #modal: Settings' new #diag-details shares the `.case-details` styling
+        // class and, being static markup, is always in the DOM — an unscoped selector now matches
+        // it first, leaving the actual modal's drawer (and the stage select inside it) collapsed.
+        await page.evaluate(() => { document.querySelector("#modal .case-details").open = true; document.querySelector("#case-form").elements.stage.value = "completed"; });
         await page.click("#modal-save");
         await page.waitForTimeout(1600);
         const after = await tasksOnCase(page, ref.target.caseId);

@@ -99,6 +99,11 @@ const goto = async (page, pageName, ms) => {
   await wait(page, ms == null ? 1000 : ms);
 };
 const noNewErr = (page, before) => (page.__err || []).length === before;
+/* R33 — the diagnostics block (and its persisted table) moved from Reports to a collapsed
+   <details id="diag-details"> at the bottom of Settings. Opening the details is the one extra
+   step every diagnostics assertion below now needs before the table it's reading is actually
+   in the render tree at all. */
+const openDiagDetails = (page) => page.evaluate(() => document.getElementById("diag-details")?.setAttribute("open", ""));
 
 /* Raw, un-projected snapshot of the mock's in-memory error_events store — the same
    live-object handle `window.__mock.db.error_events` the harness's own r5-batch tests
@@ -206,7 +211,9 @@ const errorLog = (page) => page.evaluate(() => window.__errorLog);
       const rowsSeeded = await rawErrorEvents(page);
       eq("C0 · two distinct persisted rows seeded", rowsSeeded.length, 2);
 
-      await goto(page, "reports", 1500);
+      // R33 — diagnostics now lives on Settings, inside a collapsed <details>.
+      await goto(page, "settings", 1500);
+      await openDiagDetails(page);
       await wait(page, 500);
 
       const tblText = await page.$eval("#diag-persist-table", (e) => e.textContent);
@@ -253,7 +260,9 @@ const errorLog = (page) => page.evaluate(() => window.__errorLog);
       const rows = await rawErrorEvents(page);
       eq("D3 · error_events stayed empty (no insert attempted/succeeded)", rows.length, 0);
 
-      await goto(page, "reports", 1500);
+      // R33 — diagnostics now lives on Settings, inside a collapsed <details>.
+      await goto(page, "settings", 1500);
+      await openDiagDetails(page);
       await wait(page, 500);
       const tblText = await page.$eval("#diag-persist-table", (e) => e.textContent);
       ok("D4 · #diag-persist-table shows the \"isn't enabled\" note", /isn.t\s+enabled/i.test(tblText), tblText);
@@ -264,23 +273,33 @@ const errorLog = (page) => page.evaluate(() => window.__errorLog);
     }
 
     /* =======================================================================
-       E · AUDIENCE — hidden for adviser, visible for admin + owner
+       E · AUDIENCE — hidden for adviser, visible+functional for admin + owner
+       R33 — the panel (and its <details> wrapper) moved from Reports to
+       Settings; the audience gate is unchanged, it just has a new home and a
+       new wrapper to check (#diag-details), which is what an adviser must
+       never even be offered a disclosure for.
        ======================================================================= */
     {
-      console.log("\n— E · #report-diag-section hidden for adviser (p2), visible for admin (p1) + owner (p4)");
+      console.log("\n— E · #diag-details hidden for adviser (p2), visible+functional for admin (p1) + owner (p4), on Settings");
       const pageAdv = await newPage(browser, "p2");
       const errBeforeAdv = (pageAdv.__err || []).length;
-      await goto(pageAdv, "reports", 1500);
-      const advHidden = await pageAdv.$eval("#report-diag-section", (e) => e.classList.contains("hidden"));
-      ok("E1 · adviser (p2): #report-diag-section IS hidden", advHidden);
+      await goto(pageAdv, "settings", 1500);
+      const advHidden = await pageAdv.$eval("#diag-details", (e) => e.classList.contains("hidden"));
+      ok("E1 · adviser (p2): #diag-details IS hidden", advHidden);
+      const advSection = await pageAdv.$eval("#report-diag-section", (e) => e.classList.contains("hidden"));
+      ok("E1b · adviser (p2): #report-diag-section (inside it) is ALSO hidden", advSection);
       ok("E · no console errors (p2)", noNewErr(pageAdv, errBeforeAdv), JSON.stringify(pageAdv.__err));
       await pageAdv.close();
 
       const pageAdmin = await newPage(browser, "p1");
       const errBeforeAdmin = (pageAdmin.__err || []).length;
-      await goto(pageAdmin, "reports", 1500);
+      await goto(pageAdmin, "settings", 1500);
+      const adminDetailsHidden = await pageAdmin.$eval("#diag-details", (e) => e.classList.contains("hidden"));
+      ok("E2 · admin (p1): #diag-details is NOT hidden", !adminDetailsHidden);
+      await openDiagDetails(pageAdmin);
+      await wait(pageAdmin, 300);
       const adminHidden = await pageAdmin.$eval("#report-diag-section", (e) => e.classList.contains("hidden"));
-      ok("E2 · admin (p1): #report-diag-section is NOT hidden", !adminHidden);
+      ok("E2b · admin (p1): #report-diag-section (opened) is NOT hidden", !adminHidden);
       const adminPersistTbl = await pageAdmin.$("#diag-persist-table");
       ok("E3 · admin (p1): #diag-persist-table exists", !!adminPersistTbl);
       ok("E · no console errors (p1)", noNewErr(pageAdmin, errBeforeAdmin), JSON.stringify(pageAdmin.__err));
@@ -288,9 +307,13 @@ const errorLog = (page) => page.evaluate(() => window.__errorLog);
 
       const pageOwner = await newPage(browser, "p4");
       const errBeforeOwner = (pageOwner.__err || []).length;
-      await goto(pageOwner, "reports", 1500);
+      await goto(pageOwner, "settings", 1500);
+      const ownerDetailsHidden = await pageOwner.$eval("#diag-details", (e) => e.classList.contains("hidden"));
+      ok("E4 · owner (p4): #diag-details is NOT hidden", !ownerDetailsHidden);
+      await openDiagDetails(pageOwner);
+      await wait(pageOwner, 300);
       const ownerHidden = await pageOwner.$eval("#report-diag-section", (e) => e.classList.contains("hidden"));
-      ok("E4 · owner (p4): #report-diag-section is NOT hidden", !ownerHidden);
+      ok("E4b · owner (p4): #report-diag-section (opened) is NOT hidden", !ownerHidden);
       const ownerPersistTbl = await pageOwner.$("#diag-persist-table");
       ok("E5 · owner (p4): #diag-persist-table exists", !!ownerPersistTbl);
       ok("E · no console errors (p4)", noNewErr(pageOwner, errBeforeOwner), JSON.stringify(pageOwner.__err));
