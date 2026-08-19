@@ -749,8 +749,13 @@ const groundTruth = (page) => page.evaluate(async ({ CHASE_MAX }) => {
     eq(`${tag} · a valid token renders the checklist page`, shown, ["page"]);
     eq(`${tag} · the greeting uses the first name and nothing else`, await txt(dp, "#greeting"), "Hi Sarah");
     const body = await dp.evaluate(() => document.body.innerText);
-    ok(`${tag} · no surname, email, address or money appears anywhere on the page`,
-      !/Ellingham/i.test(body) && !/@/.test(body) && !/£/.test(body), body.slice(0, 200));
+    // The reviewed Stonebridge compliance footer (Aug 2026) carries a MANDATORY, boilerplate FCA
+    // fee disclosure ("Typically, we charge a fee of £375…") — identical for every client, NOT the
+    // client's own figures. Strip that one sentence before the money check so the privacy guarantee
+    // (no CLIENT-SPECIFIC money/PII leaks onto the public upload page) still holds against any OTHER £.
+    const bodyNoFeeBoilerplate = body.replace(/Typically, we charge a fee[\s\S]*?fee waiver agreement\./i, "");
+    ok(`${tag} · no surname, email, address or client-specific money appears (the standard FCA fee-disclosure footer is allowed)`,
+      !/Ellingham/i.test(body) && !/@/.test(body) && !/£/.test(bodyNoFeeBoilerplate), body.slice(0, 200));
     const getCall = await dp.evaluate(() => window.__calls[0]);
     eq(`${tag} · the page opens with a GET carrying the token on the query string`,
       [getCall.method, /\?token=/.test(getCall.url), getCall.bodyType], ["GET", true, null]);

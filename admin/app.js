@@ -20844,14 +20844,19 @@ async function loadDataHealth() {
       </div>`).join("") : '<div class="empty">No address appears on more than one client\'s cases. 👍</div>'}
   </div>`;
 
+  // R29 — cap each issue panel's rendered rows so a bulk import that leaves hundreds of flagged
+  // cases can't balloon the DOM. Only the RENDER is bounded; every compute/selection stays as-is.
+  const DH_PANEL_CAP = 200;
+  const dhMoreNote = (n) => n > DH_PANEL_CAP ? `<div class="empty">…and ${n - DH_PANEL_CAP} more not shown — clear the ones above first, or use the firm export to work the whole list.</div>` : "";
+
   const missingPanel = `<div class="panel" id="dh-missing-panel">
     <h3>Clients missing email (with a live case)</h3>
     ${missingEmail.length === 300 ? '<p class="panel-sub">Showing the first 300 — there may be more.</p>' : ""}
     ${missingEmail.length ? `<table class="imp-table">
-      ${missingEmail.map((c) => `<tr>
+      ${missingEmail.slice(0, DH_PANEL_CAP).map((c) => `<tr>
         <td>${esc(c.name)}</td>
         <td style="text-align:right;white-space:nowrap;"><button class="btn btn-sm" onclick="openClient('${c.id}')">Open</button></td>
-      </tr>`).join("")}
+      </tr>`).join("")}${missingEmail.length > DH_PANEL_CAP ? `<tr><td colspan="2">…and ${missingEmail.length - DH_PANEL_CAP} more not shown — use the firm export to work the whole list.</td></tr>` : ""}
     </table>` : '<div class="empty">Every client with a live case has an email. 👍</div>'}
   </div>`;
 
@@ -20867,7 +20872,7 @@ async function loadDataHealth() {
   const unassignedPanel = `<div class="panel" id="dh-unassigned-panel">
     <h3>Live cases with no adviser</h3>
     ${unassigned.length ? dhBulkBar : ""}
-    ${unassigned.length ? unassigned.map((c) => `
+    ${unassigned.length ? unassigned.slice(0, DH_PANEL_CAP).map((c) => `
       <div class="row-item">
         <input type="checkbox" class="dh-cb" data-id="${c.case_id}" aria-label="Select this case"${dhSel.has(c.case_id) ? " checked" : ""} onclick="event.stopPropagation()">
         <div class="row-main">
@@ -20875,47 +20880,47 @@ async function loadDataHealth() {
           <div class="s">${esc(STAGE_LABEL[c.stage] || c.stage)}</div>
         </div>
         <button class="btn btn-sm" onclick="openCase('${c.case_id}')">Open</button>
-      </div>`).join("") : '<div class="empty">Every live case has an adviser. 👍</div>'}
+      </div>`).join("") + dhMoreNote(unassigned.length) : '<div class="empty">Every live case has an adviser. 👍</div>'}
   </div>`;
 
   const noFeePanel = `<div class="panel" id="dh-nofee-panel">
     <h3>Completed cases with no fee recorded</h3>
-    ${noFee.length ? noFee.map((c) => `
+    ${noFee.length ? noFee.slice(0, DH_PANEL_CAP).map((c) => `
       <div class="row-item">
         <div class="row-main"><div class="t" onclick="openCase('${c.case_id}')">${esc(c.name)}</div></div>
         <button class="btn btn-sm" onclick="openCase('${c.case_id}')">Open</button>
-      </div>`).join("") : '<div class="empty">All completed cases have a fee recorded. 👍</div>'}
+      </div>`).join("") + dhMoreNote(noFee.length) : '<div class="empty">All completed cases have a fee recorded. 👍</div>'}
   </div>`;
 
   // Defect 13: the two previously dead-end tiles, now expandable list panels — same row-item
   // pattern as missingPanel/unassignedPanel/noFeePanel above. Hidden until the tile is clicked.
   const phonePanel = `<div class="panel hidden" id="dh-phone-panel">
     <h3>Clients missing phone (with a live case)</h3>
-    ${missingPhoneLive.length ? missingPhoneLive.map((c) => `
+    ${missingPhoneLive.length ? missingPhoneLive.slice(0, DH_PANEL_CAP).map((c) => `
       <div class="row-item">
         <div class="row-main"><div class="t" onclick="openClient('${c.id}')">${esc(c.name)}</div></div>
         <button class="btn btn-sm" onclick="openClient('${c.id}')">Open</button>
-      </div>`).join("") : '<div class="empty">Every client with a live case has a phone number. 👍</div>'}
+      </div>`).join("") + dhMoreNote(missingPhoneLive.length) : '<div class="empty">Every client with a live case has a phone number. 👍</div>'}
   </div>`;
 
   const rateEndPanel = `<div class="panel hidden" id="dh-rateend-panel">
     <h3>Completed cases with no rate-end date</h3>
-    ${noRateEnd.length ? noRateEnd.map((c) => `
+    ${noRateEnd.length ? noRateEnd.slice(0, DH_PANEL_CAP).map((c) => `
       <div class="row-item">
         <div class="row-main"><div class="t" onclick="openCase('${c.case_id}')">${esc(c.name)}</div></div>
         <button class="btn btn-sm" onclick="openCase('${c.case_id}')">Open</button>
-      </div>`).join("") : '<div class="empty">Every completed case has a rate-end date. 👍</div>'}
+      </div>`).join("") + dhMoreNote(noRateEnd.length) : '<div class="empty">Every completed case has a rate-end date. 👍</div>'}
   </div>`;
 
   // T1-7 — same shape as rateEndPanel. Opening the case and saving it re-stamps completed_at.
   const noCompletedPanel = `<div class="panel hidden" id="dh-nocompleted-panel">
     <h3>Completed cases with no completion date</h3>
     <p class="panel-sub">Reports count completions by date — these are complete in the pipeline but missing from every month's figures. Open each one and save it to stamp the date.</p>
-    ${noCompletedAt.length ? noCompletedAt.map((c) => `
+    ${noCompletedAt.length ? noCompletedAt.slice(0, DH_PANEL_CAP).map((c) => `
       <div class="row-item">
         <div class="row-main"><div class="t" onclick="openCase('${c.case_id}')">${esc(c.name)}</div></div>
         <button class="btn btn-sm" onclick="openCase('${c.case_id}')">Open</button>
-      </div>`).join("") : '<div class="empty">Every completed case has a completion date. 👍</div>'}
+      </div>`).join("") + dhMoreNote(noCompletedAt.length) : '<div class="empty">Every completed case has a completion date. 👍</div>'}
   </div>`;
 
   // R25 · MI-1 — same row-item shape as the other date panels. Each row names WHICH milestone date is
@@ -20924,51 +20929,51 @@ async function loadDataHealth() {
   const milestonePanel = `<div class="panel hidden" id="dh-milestone-panel">
     <h3>Cases missing an application/offer date</h3>
     <p class="panel-sub">Cases that have reached application or offer with the milestone date (<strong>submitted_at</strong> / <strong>offer_issued_date</strong>) blank. Reports derives its funnel conversion and velocity medians from these dates, so a gap here silently skews the MI. Open each one and set the date to fix it.</p>
-    ${noMilestoneDate.length ? noMilestoneDate.map((c) => `
+    ${noMilestoneDate.length ? noMilestoneDate.slice(0, DH_PANEL_CAP).map((c) => `
       <div class="row-item">
         <div class="row-main"><div class="t" onclick="openCase('${c.case_id}')">${esc(c.name)}</div><div class="s">${esc(STAGE_LABEL[c.stage] || c.stage)} · missing: ${esc(c.missing)}</div></div>
         <button class="btn btn-sm" onclick="openCase('${c.case_id}')">Open</button>
-      </div>`).join("") : '<div class="empty">Every case past application or offer has its milestone date. 👍</div>'}
+      </div>`).join("") + dhMoreNote(noMilestoneDate.length) : '<div class="empty">Every case past application or offer has its milestone date. 👍</div>'}
   </div>`;
 
   // R27 — live cases whose forward date has already passed. See the deadBook compute above.
   const deadBookPanel = `<div class="panel hidden" id="dh-deadbook-panel">
     <h3>Overdue — open cases past a key date</h3>
     <p class="panel-sub">Live cases still open after their <strong>expected completion date</strong> — or, failing that, their <strong>rate-end date</strong> — has already passed. These are the classic dead-wood that silently inflates the live pipeline and pollutes MI. Open each one and either close it or push the date out. Sorted most-overdue first.</p>
-    ${deadBook.length ? deadBook.map((c) => `
+    ${deadBook.length ? deadBook.slice(0, DH_PANEL_CAP).map((c) => `
       <div class="row-item">
         <div class="row-main"><div class="t" onclick="openCase('${c.case_id}')">${esc(c.name)}</div><div class="s">${esc(STAGE_LABEL[c.stage] || c.stage)} · ${esc(c.reason)}</div></div>
         <button class="btn btn-sm" onclick="openCase('${c.case_id}')">Open</button>
-      </div>`).join("") : '<div class="empty">No open cases are past a completion or rate-end date. 👍</div>'}
+      </div>`).join("") + dhMoreNote(deadBook.length) : '<div class="empty">No open cases are past a completion or rate-end date. 👍</div>'}
   </div>`;
 
   // T1-26 — the least-reachable records in the database, which previously had no list anywhere.
   const bothPanel = `<div class="panel hidden" id="dh-both-panel">
     <h3>Clients with no email and no phone</h3>
-    ${missingBoth.length ? missingBoth.map((c) => `
+    ${missingBoth.length ? missingBoth.slice(0, DH_PANEL_CAP).map((c) => `
       <div class="row-item">
         <div class="row-main"><div class="t" onclick="openClient('${c.id}')">${esc(c.name)}</div></div>
         <button class="btn btn-sm" onclick="openClient('${c.id}')">Open</button>
-      </div>`).join("") : '<div class="empty">Every client has at least one way to reach them. 👍</div>'}
+      </div>`).join("") + dhMoreNote(missingBoth.length) : '<div class="empty">Every client has at least one way to reach them. 👍</div>'}
   </div>`;
 
   // T1-9 — present but unusable. The value is shown so the typo is visible without opening anything.
   const invalidEmailPanel = `<div class="panel hidden" id="dh-invalid-email-panel">
     <h3>Clients with an invalid email address</h3>
-    ${invalidEmail.length ? invalidEmail.map((c) => `
+    ${invalidEmail.length ? invalidEmail.slice(0, DH_PANEL_CAP).map((c) => `
       <div class="row-item">
         <div class="row-main"><div class="t" onclick="openClient('${c.id}','email')">${esc(c.name)}</div><div class="s">${esc(c.value)}</div></div>
         <button class="btn btn-sm" onclick="openClient('${c.id}','email')">Fix</button>
-      </div>`).join("") : '<div class="empty">Every email address on file looks sendable. 👍</div>'}
+      </div>`).join("") + dhMoreNote(invalidEmail.length) : '<div class="empty">Every email address on file looks sendable. 👍</div>'}
   </div>`;
 
   const invalidPhonePanel = `<div class="panel hidden" id="dh-invalid-phone-panel">
     <h3>Clients with an invalid phone number</h3>
-    ${invalidPhone.length ? invalidPhone.map((c) => `
+    ${invalidPhone.length ? invalidPhone.slice(0, DH_PANEL_CAP).map((c) => `
       <div class="row-item">
         <div class="row-main"><div class="t" onclick="openClient('${c.id}','phone')">${esc(c.name)}</div><div class="s">${esc(c.value)}</div></div>
         <button class="btn btn-sm" onclick="openClient('${c.id}','phone')">Fix</button>
-      </div>`).join("") : '<div class="empty">Every phone number on file looks textable. 👍</div>'}
+      </div>`).join("") + dhMoreNote(invalidPhone.length) : '<div class="empty">Every phone number on file looks textable. 👍</div>'}
   </div>`;
 
   /* R13 · M-4/M-30 — the two care lists. Neutral wording throughout: these are not faults, and the
@@ -20977,20 +20982,20 @@ async function loadDataHealth() {
   const vulnerablePanel = !dhCareOn ? "" : `<div class="panel hidden" id="dh-vulnerable-panel">
     <h3>Vulnerable clients</h3>
     <p class="panel-sub">Clients flagged as vulnerable on their record. This is <strong>information, not a problem list</strong> — nothing here needs clearing. What is worth checking is that each one carries a note: a flag with no explanation tells the next colleague to be careful without telling them how.</p>
-    ${dhVulnerable.length ? dhVulnerable.map((c) => `
+    ${dhVulnerable.length ? dhVulnerable.slice(0, DH_PANEL_CAP).map((c) => `
       <div class="row-item">
         <div class="row-main"><div class="t" onclick="openClient('${jsArg(c.id)}')">${esc(c.name)}</div><div class="s">${c.note ? esc(c.note) : '<span class="cs-muted">no note recorded — add one so a colleague knows what the care need is</span>'}</div></div>
         <button class="btn btn-sm" onclick="openClient('${jsArg(c.id)}')">Open</button>
-      </div>`).join("") : '<div class="empty">No client is flagged as vulnerable. That may be right, or it may mean nobody has recorded one yet — the flag is on the client record, under “Care &amp; contact”.</div>'}
+      </div>`).join("") + dhMoreNote(dhVulnerable.length) : '<div class="empty">No client is flagged as vulnerable. That may be right, or it may mean nobody has recorded one yet — the flag is on the client record, under “Care &amp; contact”.</div>'}
   </div>`;
   const suppressedPanel = !dhCareOn ? "" : `<div class="panel hidden" id="dh-suppressed-panel">
     <h3>Clients with automation suppressed</h3>
     <p class="panel-sub">The database refuses <strong>every automated email and SMS</strong> to these clients — rate-end reminders, review requests, document chases, birthday and anniversary messages. Nothing scheduled will reach them until the switch is turned off on their record. Sending by hand still works and asks you to confirm first. Worth reading occasionally: a suppression set for a good reason in March is easy to forget by September.</p>
-    ${dhSuppressed.length ? dhSuppressed.map((c) => `
+    ${dhSuppressed.length ? dhSuppressed.slice(0, DH_PANEL_CAP).map((c) => `
       <div class="row-item">
         <div class="row-main"><div class="t" onclick="openClient('${jsArg(c.id)}')">${esc(c.name)}</div><div class="s">${c.note ? esc(c.note) : '<span class="cs-muted">no note recorded</span>'}</div></div>
         <button class="btn btn-sm" onclick="openClient('${jsArg(c.id)}')">Open</button>
-      </div>`).join("") : '<div class="empty">No client has automated contact suppressed.</div>'}
+      </div>`).join("") + dhMoreNote(dhSuppressed.length) : '<div class="empty">No client has automated contact suppressed.</div>'}
   </div>`;
 
   /* R12b · K-11 / W-24 — THE PANEL. One row per live case with outstanding items: who, where the

@@ -85,6 +85,7 @@ node tests/r24.js
 node tests/r25.js
 node tests/r26.js
 node tests/r27.js
+node tests/r29_scale.js
 ```
 
 Current green counts (end of round 23; r21/r22 were never committed to this
@@ -103,7 +104,8 @@ nothing else asserted the old shape of, and R19 is new owner-gated Reports
 content that no earlier suite reaches; R23 is the same story again — see the
 R23 notes below).
 
-**Full battery is 100% green (3,158/3,158).** R28 is a small, already-built,
+**Full battery is 100% green (3,264/3,264), `tests/r9_docs.js` included
+(255/0).** R28 is a small, already-built,
 uncommitted change to R26's per-adviser fee targets (`admin/app.js` only —
 see the "R28 notes" section below) that required updating `tests/r26.js`
 in place: its check count rose from 36 to 38 (two new assertions proving the
@@ -186,7 +188,108 @@ even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes belo
 | `tests/r25.js` | 45 |
 | `tests/r26.js` | 38 (R28 updated the basis/scoping assertions and added 2 new checks — see the R28 notes) |
 | `tests/r27.js` | 43 |
-| **Total** | **3,158** |
+| `tests/r29_scale.js` | 106 |
+| **Total** | **3,264** |
+
+R29 notes: started as a VERIFICATION round (no product-code changes) and
+became a find-then-fix round within the same pass once the finding below was
+confirmed. The brief was to prove the back office is robust at the
+production scale it is heading for (R23's own comment on `OWNER_ROW_CAP`
+already calls out "2,000+ ≫ Daniel's book") and leave a permanent regression
+suite behind. `tests/r29_scale.js` (106 checks) seeds ~2,500 clients and
+~2,500 cases DIRECTLY into the mock's in-memory store — one `Builder.insert()`
+array-payload call per table (`window.__mockDb.from("clients"/"cases")
+.insert([...2,500 rows...]).select("id")`), so `applyInsertDefaults()` still
+runs (ids, timestamps, the M2/M7/M10/M11 null-default columns) exactly as any
+other insert this harness makes, but in TWO round trips instead of 2,500 —
+the fastest canonical path the mock exposes. The seed is realistic and
+varied on purpose: all 8 stages (weighted 72% live / 18% completed / 10% not
+proceeding), `assigned_to` spread across the team plus ~1/7 unassigned, a
+genuine mix of past/future `rate_end_date` and `expected_completion_date`,
+and clients/cases missing email/phone/`submitted_at`/`offer_issued_date` at
+realistic minority rates. Because each Playwright `page` re-executes
+`mock-supabase.js` from scratch (its `DB` is a fresh IIFE-scoped variable per
+page load, not a shared/global store), the owner pass and the adviser pass
+each carry their OWN seed — proven held via `window.__mock.counts()` and a
+live `window.__mockDb` read (not a copy) before every page is driven.
+
+Every owner page (Dashboard, Pipeline board, Clients, Reports incl. Pipeline
+MI + adviser scoreboard, Monday money, Data health, Emails) and the lighter
+adviser pass (Dashboard, Pipeline, Clients) render at this scale with ZERO
+new console errors and ZERO new `window.__errorLog` entries. Every DOM render
+cap that exists in `admin/app.js` holds exactly as documented and un-touched:
+Clients' `CLIENT_LIST_CAP=100` (with `.client-list-cap-note` correctly
+reading "Showing 100 of &lt;2,500+&gt;"), the board's `BOARD_COL_CAP=50`/column
+(with a working "Show N more" control on every over-cap column, and the
+column HEADER counts — deliberately uncapped — summing exactly to the true
+case total), the dashboard's rate/ERC (15) and retention (12) panels,
+Monday money's rate-ends (top 5) and cold-quotes (top 10) lists, and every
+adviser scoreboard (team-sized, never case-sized). The R23 OWNER_ROW_CAP
+notices (`#dash-cap-notice`/`#board-cap-notice`/`#clients-cap-notice`/
+`#data-cap-notice`) all correctly stay HIDDEN at ~2,600 rows — OWNER_ROW_CAP
+is 20,000, so this is R23's own "never fires for Daniel" claim, verified.
+Every KPI/MI number checked renders as a real number — no `NaN`/`undefined`
+in any kpi-row, MI panel or money strip touched.
+
+**The finding — FOUND then FIXED, same round:** the original scale run found
+Data health's per-issue list panels (`#dh-unassigned-panel`,
+`#dh-nofee-panel`, `#dh-phone-panel`, `#dh-milestone-panel`,
+`#dh-deadbook-panel`, `#dh-both-panel`, and siblings) had NO render cap at
+all — unlike every other page (Clients 100, board 50/column, dashboard
+15/12/15, Money top-5/top-10). `loadDataHealth()` was computing these lists
+off the full OWNER_ROW_CAP-limited read and rendering one DOM row per match
+with no CLIENT_LIST_CAP/BOARD_COL_CAP-style slice and no "Showing N of M"
+note. At this round's realistic (not deliberately adversarial) seed,
+`#dh-tile-deadbook` alone reached **1,021 rows** (live cases whose
+`expected_completion_date` or `rate_end_date` had already passed — a 25%
+past-date rate among live cases with a date), `#dh-tile-unassigned` reached
+260 and `#dh-tile-milestone` reached 207, pushing `#data-content`'s total DOM
+node count to 37,774. No crash, no console error, no `NaN` — but a
+data-quality issue that is common at real scale (a bulk import, a quiet
+quarter) would have grown an unbounded DOM tree on this one page.
+
+That gap was FIXED in `admin/app.js`, same round: `const DH_PANEL_CAP = 200;`
+plus a `dhMoreNote(n)` helper now slice every one of those list panels to
+`.slice(0, DH_PANEL_CAP)` and append `<div class="empty">…and N more not
+shown — clear the ones above first, or use the firm export to work the whole
+list.</div>` whenever the true count exceeds 200 (`#dh-missing-panel`'s
+`<table>` — already capped at 300 inside the `get_data_quality` RPC — gets
+the same treatment via a `<tr><td colspan="2">…and N more not shown…</td></tr>`
+row, since it is a table, not `.row-item`s). `tests/r29_scale.js` §G was
+updated in place (the same file, no new test file — this is the round's own
+fix being verified, not a separate feature) to prove the FIX: for every
+panel, an independent ground-truth recompute off `window.__mockDb` is
+checked against the KPI tile's own number (unchanged — tiles still report
+the TRUE, un-sliced count), the panel's rendered row count (now exactly
+`min(true count, 200)`), and the overflow note (present, naming the exact
+remainder, iff the true count exceeds 200; asserted absent otherwise).
+`#dh-deadbook-panel` — the panel that hit 1,021 raw rows — is pinned to
+exactly 200 rendered rows plus its overflow note, the direct regression test
+for the fix; a dedicated check also confirms deadBook's ground truth is
+still well over 200 at this seed, so the fix is actually exercised, not
+vacuously true. Post-fix, `#data-content`'s total DOM node count at the same
+~2,600-row seed is 33,277 (down from 37,774, and — the point of the fix —
+no longer proportional to the underlying book: the panels that were near or
+past the cap are now flat at 200 regardless of how large the true count
+grows). `tests/r29_scale.js` rose from 98 to 106 checks (the 8 new checks:
+one "overflow note present/absent" assertion per panel-plus-the-deadbook
+exercised-not-vacuous check). `tests/r25.js`/`tests/r27.js` (Data health's
+other Data-health-touching suites, both re-run in the full battery below at
+their exact pre-existing counts, 45/0 and 43/0) are unaffected — their
+synthetic fixtures are single-digit/low-double-digit per tile, nowhere near
+DH_PANEL_CAP=200, so the cap never engages for them; "below the cap,
+byte-identical" (R23's own governing rule, extended here).
+
+`tests/r9_docs.js`'s two pre-existing, R29-unrelated failures (its R9-8 "no
+surname, email, address or money on /docs.html" check tripping on the
+mandatory FCA `£375` fee-disclosure footer the "Compliance: Stonebridge
+remedial review Aug 2026" commit added to `docs.html` before this round
+started) were fixed separately, outside `tests/r29_scale.js`, by stripping
+that one boilerplate sentence before the money check
+(`bodyNoFeeBoilerplate`) rather than loosening the privacy guarantee itself
+— re-run as part of this round's full battery and confirmed 255/0.
+`tests/r29_scale.js` was not touched for that fix and did not need to be —
+it never exercises `docs.html`.
 
 R28 notes: a small, already-built, uncommitted refinement of R26's
 per-adviser monthly fee targets — `admin/app.js` only, no schema, no
