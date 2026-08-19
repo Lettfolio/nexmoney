@@ -89,6 +89,7 @@ node tests/r29_scale.js
 node tests/r30.js
 node tests/r31.js
 node tests/r33.js
+node tests/r34.js
 ```
 
 Current green counts (end of round 23; r21/r22 were never committed to this
@@ -107,8 +108,15 @@ nothing else asserted the old shape of, and R19 is new owner-gated Reports
 content that no earlier suite reaches; R23 is the same story again — see the
 R23 notes below).
 
-**Full battery is 100% green (3,414/3,414), `tests/r9_docs.js` included
-(255/0).** R33 added `tests/r33.js` (55 checks) — see the "R33 notes" section
+**Full battery is 100% green (3,474/3,474), `tests/r9_docs.js` included
+(255/0).** R34 added `tests/r34.js` (60 checks) — see the "R34 notes" section
+below — and required two genuine, non-masking fixes to pre-existing suites
+whose seeded fixtures collided with R34's new adviser-scoped `#board-adviser`
+default (`tests/r18.js` §B and `tests/r24.js` §C — see the R34 notes for
+exactly why and how), plus a third to `tests/r5_batch9.js` where R34's diary
+default change altered the very state the check's PRE-condition assumed (see
+the R34 notes); every other pre-existing suite re-ran unedited at its exact
+pre-R34 count. R33 added `tests/r33.js` (55 checks) — see the "R33 notes" section
 below — and re-pointed three pre-existing suites at their new homes/fixed a
 genuine cross-suite selector collision (see those notes for the exact,
 non-masking fixes and why each was needed); every other pre-existing suite
@@ -182,7 +190,7 @@ even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes belo
 | Suite | Checks |
 |---|---|
 | `smoke.js` | 144 |
-| `tests/r5_batch1..9.js` (sum) | 557 (BATCH 9's day-collision fixed in R27 — see the R27 notes; R33 re-pointed a nav click in BATCH 1 and BATCH 8's `gotoSettings()` at the collapsed Firm group — see the R33 notes; sum unchanged) |
+| `tests/r5_batch1..9.js` (sum) | 557 (BATCH 9's day-collision fixed in R27 — see the R27 notes; R33 re-pointed a nav click in BATCH 1 and BATCH 8's `gotoSettings()` at the collapsed Firm group — see the R33 notes; R34 pre-seeded BATCH 9's Month/Day scenario with `nx_diary_staff="all"` so its Month-vs-Day memory check still guards what it always guarded — see the R34 notes; sum unchanged) |
 | `tests/r64.js` | 91 |
 | `tests/r8_touch.js` | 151 |
 | `tests/r8_rev.js` | 176 |
@@ -197,11 +205,11 @@ even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes belo
 | `tests/r15.js` | 160 |
 | `tests/r16.js` | 81 (R33 re-scoped its `openCase()` details-opener to `#modal .case-details` — see the R33 notes; count unchanged) |
 | `tests/r17.js` | 112 (same R33 `#modal .case-details` re-scope; count unchanged) |
-| `tests/r18.js` | 43 (same R33 `#modal .case-details` re-scope; count unchanged) |
+| `tests/r18.js` | 43 (same R33 `#modal .case-details` re-scope; R34 pinned `#board-adviser` to "all" before its board-cap seed of unassigned cases — see the R34 notes; count unchanged) |
 | `tests/r19.js` | 39 (unchanged count — R20 fixed HOW one row is queried, not what it asserts) |
 | `tests/r20.js` | 81 |
 | `tests/r23.js` | 76 |
-| `tests/r24.js` | 89 |
+| `tests/r24.js` | 89 (R34 pinned `#board-adviser` to "all" before §C's p3-assigned kitchen-sink seed, viewed as p2 — see the R34 notes; count unchanged) |
 | `tests/r25.js` | 45 |
 | `tests/r26.js` | 38 (R28 updated the basis/scoping assertions and added 2 new checks — see the R28 notes) |
 | `tests/r27.js` | 43 |
@@ -209,7 +217,113 @@ even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes belo
 | `tests/r30.js` | 40 (R33 re-pointed §C/§D4/§E from Reports to Settings' `#diag-details` and added 3 assertions proving the wrapper itself gates correctly — see the R33 notes; count rose from 37) |
 | `tests/r31.js` | 55 |
 | `tests/r33.js` | 55 |
-| **Total** | **3,414** |
+| `tests/r34.js` | 60 |
+| **Total** | **3,474** |
+
+R34 notes: a small, already-built, uncommitted round shipping an adviser
+SCOPING pack (`admin/app.js` + `admin/index.html` only, no schema).
+
+  - **Watchtower Mine/All scope.** `#wt-scope-mine`/`#wt-scope-all` seg-btns
+    in the Watchtower header, the same shape the Tasks and Rate & ERC drawers
+    already carry. Default is a role judgement — Mine for an adviser (p2/p3),
+    All for admin/owner (p1/p4) — beaten in both directions by a stored
+    `localStorage nx_wt_scope` ("mine"/"all"). Scoping is by the ALERT's
+    CASE's adviser (`wtLast.assignedBy`, one bounded `cases` read keyed on
+    the case ids already in hand — costs nothing extra per chip click or
+    scope flip, both of which re-filter what is already in memory). The one
+    carve-out: an alert with NO case behind it (`workload`, `retention_gap`,
+    `fee_aging_60`, a slow `lead_slow`) is a firm-level fact, shown to
+    admin/owner in BOTH scopes and to an adviser in NEITHER — flipping an
+    adviser to All must not hand them somebody else's firm-wide to-do list.
+    Chips, the panel's own count, and `autoDrawer`'s auto-open all read off
+    the same scoped list, so none of them can disagree with what is on
+    screen.
+  - **Board/diary default-to-me + persist.** `#board-adviser`
+    (`nx_board_adviser`) and `#diary-staff` (`nx_diary_staff`) now open on: a
+    stored VALID value if one exists (a leaver's id silently falls through
+    rather than leaving the select on a value nothing matches); else the
+    signed-in adviser's own id for p2/p3; else "all" for admin/owner. The
+    default itself writes nothing — only a real choice persists — so
+    clearing the key genuinely restores the role default. Wired into R31's
+    saved-view apply on the board too: a view that pins the adviser filter
+    is a choice like any other and now re-persists the moment it is applied.
+  - **Drawer persistence.** `toggleDrawer` now writes `nx_drawer_<key>`
+    ("open"/"closed") for every dashboard drawer (watchtower/unactioned/
+    leads/todayappts/tasks/rateerc/retention/revenue — the "-panel" id
+    convention has two exceptions, `todayappts`→`#today-appts-panel` and
+    `rateerc`→`#rate-erc-panel`, both accounted for). `applyStoredDrawers()`
+    runs at the very top of `loadDashboard`, before any loader can call
+    `autoDrawer`, so a restored drawer is never briefly re-collapsed on the
+    way past; a stored preference now outranks the auto-open/auto-close
+    heuristic permanently rather than just for the session that set it.
+  - **Synthetic adviser data-health rows.** Two rules computed client-side,
+    purely additive, from an adviser's OWN book (never shown to admin/owner,
+    who already have the firm-wide Data health page): `my_missing_email`
+    (warn — a live case whose client has no email on file) and
+    `my_no_rateend` (info — a completed case with no rate_end_date),
+    de-duplicated against whatever `run_watchtower` already returned on the
+    same rule+case identity. Rows carry `data-wt-synth="<rule>"` and class
+    `wt-row-mine`, are Open-only (no Snooze/Dismiss — there is no
+    `watch_alerts` row behind them to snooze or dismiss), and cap at 8 with
+    a tail "…and N more" row linking to Data health.
+
+`tests/r34.js` (60 checks: §A watchtower scope 17, §B synthetic rows 13, §C
+board/diary defaults 18, §D drawer persistence 12) covers all of the above on
+fresh, isolated pages per persona/section, seeding its own cases/clients
+straight into `window.__mockDb` (never depending on the fixture's current
+composition, per the Standing rules) for the synthetic-row and board-cap
+scenarios.
+
+Two pre-existing suites needed a genuine, non-masking fix, both the SAME root
+cause: `#board-adviser` no longer opens on "all" for an adviser, and both
+suites seed cases that are deliberately NOT the viewing adviser's own (to
+prove something about rendering/caps that has nothing to do with who owns the
+case) — so the new default silently hid the very rows each suite went on to
+assert against. Both are fixed by pinning `#board-adviser` to "all" with a
+real `selectOption` right after the page's own board load, before the
+assertions that need every row visible — the mechanism each suite was
+actually written to test is untouched:
+  - `tests/r18.js` §B seeds 55 `assigned_to: null` cases to prove the board
+    column's render CAP (50) against its TRUE total (header count); as p2,
+    the new adviser default filtered them all out, so the header read the
+    baseline (1) instead of 56, and the next assertion's `.board-show-more`
+    lookup then threw outright (an uncaught rejection, never reaching a final
+    tally) rather than reporting a clean red. 43/0 after the fix.
+  - `tests/r24.js` §C seeds one `assigned_to: "p3"` kitchen-sink case and
+    opens it AS p2, specifically to prove the board/table render every field
+    correctly regardless of who is looking — the new p2-own-id default hid
+    a p3-owned card from a p2-scoped board entirely, and everything gated
+    behind "is the card/row actually there" (19 further C-block assertions)
+    never ran either: 68/2 (70 executed of 89) → 89/0 after the fix.
+
+A third fix, in `tests/r5_batch9.js`, is the SAME root cause reaching a
+PRE-condition rather than an assertion: R34 also changed the plain default —
+an adviser's diary now opens on their OWN id in Month view too, not just Day
+— but `r5_batch9`'s "Month's own adviser selection ('all'/Everyone) is
+restored, untouched by Day's default" check exists to prove a DIFFERENT
+mechanism (that Month and Day each keep their own remembered selection when
+you flip between them), which only means something if Month actually starts
+on something other than Day's default. The fix pre-seeds
+`localStorage.nx_diary_staff = "all"` before that scenario, restoring the
+exact starting condition the check was written to assume, rather than
+weakening what it asserts — the alternative (asserting `"p2"` instead of
+`"all"`) would have quietly stopped testing the Month/Day memory mechanism
+altogether, since both views would then trivially agree. 26/1 → 27/0 (same
+27 the R27 fix already left it at; this pass changed a precondition, not the
+check count).
+
+LOCALSTORAGE KEYS a test must clear before exercising any of the above:
+`nx_wt_scope`, `nx_board_adviser`, `nx_diary_staff`, and one `nx_drawer_<key>`
+per drawer key (watchtower/unactioned/leads/todayappts/tasks/rateerc/
+retention/revenue) — `tests/r34.js` clears all of them (plus `nx_views_v1`,
+since §C's saved-view test touches it) at the top of every block that needs a
+clean slate, the same per-block convention `tests/r33.js` uses for
+`nx_nav_firm`/`nx_import_blurb`.
+
+`admin/app.js`/`admin/index.html` were not touched by this test-writing pass
+(R34's product code was already built/uncommitted before this session
+started) — no product bug was found; the two pre-existing-suite fixes above
+are fixture/assertion adjustments in the TEST files only.
 
 R33 notes: a small, already-built, uncommitted round shipping a role-aware
 GROUPED sidebar plus five small, independent quick wins (`admin/app.js` +

@@ -3697,18 +3697,53 @@ function panelCount(listSel, n, hot = false) {
 // panel's own re-renders (which only replace the inner list, never the drawer element) for the
 // rest of the session; dashDrawerTouched just remembers that the user has taken manual control
 // of a drawer that would otherwise be auto-opened/closed (Watchtower, New website leads).
+/* R34 · W3/L5 — AND NOW IT SURVIVES THE RELOAD.
+   Two drawer keys do not follow the "<key>-panel" convention their toggleDrawer call implies
+   ('todayappts' → #today-appts-panel, 'rateerc' → #rate-erc-panel). toggleDrawer never noticed
+   because it finds its panel from the clicked header; anything that has to find a drawer by key
+   alone (the stored-state pass below) does, so the exceptions are written down once here. */
+const DASH_DRAWER_PANEL_ID = { todayappts: "today-appts-panel", rateerc: "rate-erc-panel" };
+const DASH_DRAWER_KEYS = ["watchtower", "unactioned", "leads", "todayappts", "tasks", "rateerc", "retention", "revenue"];
+const drawerPanelEl = (key) => document.getElementById(DASH_DRAWER_PANEL_ID[key] || key + "-panel");
+const drawerStoreKey = (key) => "nx_drawer_" + key;
+/* "open" | "closed" | null. Null means the user has never made a choice about this drawer, which
+   is the ONLY state in which autoDrawer is allowed to decide for them. */
+function storedDrawerPref(key) {
+  const v = lsGet(drawerStoreKey(key));
+  return v === "open" || v === "closed" ? v : null;
+}
+/* Apply one drawer's remembered state. Returns whether a preference existed, so callers can tell
+   "restored" from "left at the markup default". */
+function applyStoredDrawer(key) {
+  const pref = storedDrawerPref(key);
+  if (!pref) return false;
+  const panel = drawerPanelEl(key);
+  if (!panel) return false;
+  panel.classList.toggle("collapsed", pref === "closed");
+  return true;
+}
+/* Called at the very top of the dashboard render, BEFORE any loader runs and therefore before any
+   autoDrawer call, so a restored drawer is never briefly re-collapsed on the way past. */
+function applyStoredDrawers() { DASH_DRAWER_KEYS.forEach(applyStoredDrawer); }
 window.toggleDrawer = function (ev, key) {
   if (ev && ev.target.closest("button")) return;
-  const panel = (ev && ev.currentTarget && ev.currentTarget.closest(".panel")) || document.getElementById(key + "-panel");
+  const panel = (ev && ev.currentTarget && ev.currentTarget.closest(".panel")) || drawerPanelEl(key);
   if (!panel) return;
   panel.classList.toggle("collapsed");
   dashDrawerTouched[key] = true;
+  /* R34 · W3 — "2.6 screens of dashboard every morning": a drawer the user closes must STAY
+     closed, and Luke's retention drawer must stay open, across reloads and across sessions.
+     Session-only dashDrawerTouched is kept as-is — it still governs the within-session case. */
+  lsSet(drawerStoreKey(key), panel.classList.contains("collapsed") ? "closed" : "open");
 };
 // Auto-open/close a drawer based on whether it currently holds anything attention-worthy —
 // unless the user has already manually toggled it this session, in which case leave it alone.
 function autoDrawer(key, shouldOpen) {
   if (dashDrawerTouched[key]) return;
-  const panel = document.getElementById(key + "-panel");
+  /* R34 · L5 — a stored choice outranks the automation permanently, not just for the session that
+     made it. With no stored choice the behaviour is exactly what it was. */
+  if (storedDrawerPref(key)) return;
+  const panel = drawerPanelEl(key);
   if (!panel) return;
   panel.classList.toggle("collapsed", !shouldOpen);
 }
@@ -3880,6 +3915,47 @@ async function showApp(session) {
   await loadTeam(session);
   await routeFromHash(); // BUILD 7a — honour deep links (#reports, #case/<id>, …); no hash → dashboard
 }
+/* =========================================================================
+   R34 · W2 — THE BOARD AND THE DIARY OPEN ON THE PERSON READING THEM.
+   Both filters opened on "All advisers" for everybody, so an adviser's first sight of the
+   pipeline and of the diary was the whole firm's, and re-picking themselves was the first two
+   clicks of every day. Two rules, in this order:
+     1. a value this user chose before, IF it is still a real option (a colleague who has left
+        takes their option with them — the stored id then silently falls through to rule 2 rather
+        than leaving the select on a value nothing matches);
+     2. otherwise ME, but only for someone who advises — the Owner and the Administrator run the
+        whole firm and "all" IS their default (same reasoning as R12b · W-7's scope defaults).
+   Nothing is written to storage by the defaulting itself; only an actual choice persists, so
+   clearing the key genuinely restores the role default.
+   ========================================================================= */
+const BOARD_ADVISER_KEY = "nx_board_adviser";
+const DIARY_STAFF_KEY = "nx_diary_staff";
+function staffFilterDefault(sel, key) {
+  const el = $(sel);
+  if (!el) return null;
+  const has = (v) => !!v && [...el.options].some((o) => o.value === v);
+  const stored = lsGet(key);
+  if (has(stored)) return stored;
+  if (ME && !isAdminOrOwner() && has(ME.id)) return ME.id;
+  return "all";
+}
+// Applies the rule above to a freshly-rebuilt select and returns what it landed on (or null when
+// the select isn't there).
+function applyStoredStaffFilter(sel, key) {
+  const el = $(sel);
+  if (!el) return null;
+  const v = staffFilterDefault(sel, key);
+  el.value = v;
+  return v;
+}
+// The only writer. Called from the selects' own change events and from R31's saved-view apply —
+// a view that pins the board to one adviser is a choice like any other, and the next visit to the
+// board should still be showing what the user last left it showing.
+function persistStaffFilter(sel, key) {
+  const el = $(sel);
+  if (!el) return;
+  lsSet(key, el.value || "all");
+}
 async function loadTeam(session) {
   // T1-1: 'admin' is a first-class back-office role (the login gate at showApp already admits it),
   // so it must appear in TEAM or ME resolves to null and every "Mine" scope silently matches
@@ -3939,6 +4015,9 @@ async function loadTeam(session) {
     .map((p) => `<option value="${esc(p.id)}" title="${esc(NO_ACCESS_OPTION_TITLE)}">${esc(p.full_name || p.email || p.id)} — no access</option>`);
   $("#board-adviser").innerHTML = ['<option value="all">All advisers</option>', '<option value="unassigned">Unassigned</option>']
     .concat(TEAM.map((p) => `<option value="${p.id}">${esc(staffName(p.id))}</option>`)).concat(formerOpts).join("");
+  // R34 · W2 — the options exist now, so this is the one place the stored/role default can be
+  // applied (the select was just rebuilt from scratch; any prior selection is already gone).
+  applyStoredStaffFilter("#board-adviser", BOARD_ADVISER_KEY);
   // R33 — "All advisers", matching #board-adviser above and #client-adviser. The VALUE is still
   // "all"; only the word changed. Three filters that mean the same thing said it three ways.
   $("#diary-staff").innerHTML = ['<option value="all">All advisers</option>']
@@ -3946,6 +4025,15 @@ async function loadTeam(session) {
   // B9 (R5-31) — #diary-staff was just rebuilt from scratch (any prior selection is gone), so this
   // is the one safe place to apply the restored Month/Day mode's own default selection.
   initDiaryViewFromPrefs();
+  /* R34 · W2 — and then, AFTER that sync (which re-points #diary-staff at the current view's own
+     remembered value), the stored/role default. The value is written back into whichever view's
+     slot is live, so switching Month↔Day and back does not throw it away; the other view keeps
+     the behaviour it already had. */
+  const diaryDefault = applyStoredStaffFilter("#diary-staff", DIARY_STAFF_KEY);
+  if (diaryDefault != null) {
+    if (diaryViewMode === "day") diaryStaffDayVal = diaryDefault;
+    else diaryStaffMonthVal = diaryDefault;
+  }
   /* R13 · M-31 — the rota, once, right after the team it is about. Awaited rather than fired and
      forgotten: the very first paint of My Day carries lead-routing selects, and a rota that
      arrives after them would leave the first screen of the day showing the one answer this
@@ -5555,6 +5643,9 @@ function renderDashNotices() {
   el.innerHTML = bits.join("");
 }
 async function loadDashboard() {
+  /* R34 · W3 — restore every drawer the user has an opinion about BEFORE anything that could call
+     autoDrawer (the loaders below, and the error branch's loaders too). */
+  applyStoredDrawers();
   /* R13 · M-42/M-43 — the two health banners. Fire-and-forget: a slow settings read must never
      hold up the KPI row behind it, and a banner arriving 200ms late is still a banner. */
   refreshHeartbeatKeys().then(renderDashNotices);
@@ -6871,6 +6962,53 @@ const wtGroupOpen = Object.create(null);       // group key -> bool, ONLY for gr
 /* The rows the last fetch returned, so a chip click re-renders what is already in hand instead of
    going back to the database. Filtering is a presentation question; it should not cost a query. */
 let wtLast = null;
+/* =========================================================================
+   R34 · W1 — WHOSE PROBLEMS THIS PANEL IS ABOUT.
+   The Watchtower showed every open alert in the firm to everybody, so an adviser's most urgent
+   compliance surface was mostly other people's cases — and the drawer auto-opened on somebody
+   else's critical. It now carries the same Mine|All segment the Tasks and Rate & ERC drawers
+   have, scoped by the CASE's adviser, with the same role-shaped default (Mine for an adviser,
+   All for the Owner/Administrator, whose number the firm-wide one genuinely is).
+   ONE rule is not a matter of scope at all: an alert with NO case behind it (workload,
+   retention_gap, fee_aging_60, a slow LEAD) is a firm-level fact addressed to whoever runs the
+   firm. Those rows are shown to the Owner and the Administrator in BOTH scopes, and to an adviser
+   in NEITHER — flipping to All must not hand an adviser a to-do list that is not theirs to work.
+   ========================================================================= */
+let wtScope = null;                            // "mine" | "all" — resolved on first render
+const WT_SCOPE_KEY = "nx_wt_scope";
+function wtScopeResolved() {
+  if (wtScope) return wtScope;
+  const stored = lsGet(WT_SCOPE_KEY);
+  wtScope = (stored === "mine" || stored === "all") ? stored : (ME && !isAdminOrOwner() ? "mine" : "all");
+  return wtScope;
+}
+function syncWtScopeButtons() {
+  const m = $("#wt-scope-mine"), a = $("#wt-scope-all");
+  if (!m || !a) return;
+  const s = wtScopeResolved();
+  m.classList.toggle("scope-active", s === "mine");
+  a.classList.toggle("scope-active", s === "all");
+  m.setAttribute("aria-pressed", String(s === "mine"));
+  a.setAttribute("aria-pressed", String(s === "all"));
+}
+/* Re-render only. Like the severity chips, this filters rows already in hand — it costs no query,
+   and it never touches the drawer's open/closed state. */
+window.wtSetScope = function (s) {
+  wtScope = s === "mine" ? "mine" : "all";
+  lsSet(WT_SCOPE_KEY, wtScope);
+  syncWtScopeButtons();
+  renderWatchtower();
+};
+/* The scope test for one row. `assignedBy` is the case id → adviser map built by the fetch; when
+   it is null the context read failed, and the panel shows everything rather than going blank on a
+   network hiccup — an alert nobody sees is worse than an alert shown to the wrong desk. */
+function wtInScope(a, scope, assignedBy) {
+  if (a && a.__synth) return true;              // computed FROM my book — mine by construction
+  if (!a || !a.case_id) return isAdminOrOwner(); // firm-level: owner/admin territory, both scopes
+  if (scope !== "mine") return true;
+  if (!assignedBy) return true;
+  return assignedBy[a.case_id] === (ME && ME.id);
+}
 const WT_SEV_CHIPS = [["all", "All"], ["crit", "Critical"], ["warn", "Warning"], ["info", "FYI"]];
 /* Anything that is not crit/warn is drawn with the FYI badge (see WATCH_BADGE's fallback), so the
    chips have to bucket it the same way or a row would be countable under no chip at all. */
@@ -6958,16 +7096,114 @@ async function loadWatchtower() {
      no SQL), so the ROW is qualified instead: the case's property chip plus type · lender · stage.
      Address alone is not enough for this pair — both cases are Skipton on 4 Seafield Gardens — so
      the case type is what finally separates them. */
-  const wtCtx = await loadPropContext(alerts.map((a) => a.case_id));
+  /* R34 · W1 — WHO OWNS EACH ALERT'S CASE. watch_alerts carries a case_id and nothing about the
+     desk behind it, and v_alerts is no help here either, so the owner has to be looked up — ONE
+     bounded read, keyed on the case ids already in hand, kept in wtLast so flipping Mine↔All (or
+     a severity chip) re-filters what is in memory instead of going back to the database.
+     Best-effort by design: a failure leaves the map null, which wtInScope reads as "show
+     everything" rather than blanking a compliance panel. */
+  const wtCaseIds = [...new Set(alerts.map((a) => a.case_id).filter(Boolean))];
+  let wtAssignedBy = {};
+  if (wtCaseIds.length) {
+    try {
+      const { data: owners, error: ownErr } = await db.from("cases").select("id,assigned_to").in("id", wtCaseIds).limit(WATCH_FETCH_CAP);
+      if (ownErr) wtAssignedBy = null;
+      else (owners || []).forEach((c) => { wtAssignedBy[c.id] = c.assigned_to || null; });
+    } catch (e) { wtAssignedBy = null; }
+  }
+  // R34 · Part 4 — my own data-health rows, computed client-side. Additive, silent on failure.
+  const wtSynth = await loadMyDataHealthAlerts(all);
+  const wtCtx = await loadPropContext(alerts.concat(wtSynth).map((a) => a.case_id));
   /* R11-2 — everything above this line is the fetch, and it is unchanged. Everything below is
      drawing, so it is now a separate function the severity chips can call on their own. */
-  wtLast = { alerts, snoozed, ctx: wtCtx, fetched: (data || []).length, openTotal, truncated };
+  wtLast = { alerts, snoozed, ctx: wtCtx, fetched: (data || []).length, openTotal, truncated, assignedBy: wtAssignedBy, synth: wtSynth };
   renderWatchtower();
+}
+
+/* =========================================================================
+   R34 · Part 4 — THE ADVISER'S OWN DATA HEALTH, ON THE PANEL THEY ALREADY READ.
+   Two facts about an adviser's own book that nothing tells them until it costs something: a LIVE
+   case whose client has no email address (every automated chase, rate reminder and document
+   request to that client is refused before it is sent), and a COMPLETED case with no rate-end
+   date (it will never appear in the retention window, so the client is remortgaged by somebody
+   else). Both are already on the firm-wide Data health page — which is exactly the page an
+   adviser does not open, because most of what is on it is not theirs.
+   Built the same way as My Day's completion-date chaser and review call-back (see loadBriefing):
+   purely additive, client-side, best-effort, and it changes NOTHING about run_watchtower. The
+   rows have no watch_alerts row behind them, so they cannot be snoozed or dismissed — there is
+   nothing to snooze; fixing the record makes the row disappear on the next load. They are
+   therefore rendered with the Open action alone.
+   Advising staff only: the Owner and the Administrator get the firm-wide Data health page, which
+   is the same information without a personal filter.
+   ========================================================================= */
+const WT_MY_DH_CAP = 8;
+async function loadMyDataHealthAlerts(existingAlerts) {
+  if (!ME || isAdminOrOwner()) return [];
+  try {
+    const { data, error } = await db.from("cases")
+      .select("id,stage,rate_end_date,client_id,assigned_to,clients!client_id(first_name,last_name,email)")
+      .eq("assigned_to", ME.id).order("id").limit(OWNER_ROW_CAP);
+    if (error) return [];
+    /* De-duplicated against whatever run_watchtower already returned, on the same rule+case
+       identity the RPC's own dedupe_key uses: the day one of these checks moves into the SQL
+       (where it belongs), its row wins and the client-side one stands down, with no second edit
+       here. Snoozed rows are in this set too — a row the user has explicitly parked must not
+       walk back in wearing a different hat. */
+    const already = new Set((existingAlerts || []).map((a) => `${a.rule}|${a.case_id || ""}`));
+    const rows = [];
+    (data || []).forEach((c) => {
+      const cl = c.clients || null;
+      const who = cl ? [cl.first_name, cl.last_name].filter(Boolean).join(" ").trim() : "";
+      const name = who || "A client";
+      const live = !["completed", "not_proceeding"].includes(c.stage);
+      const mk = (rule, severity, title, detail) => {
+        if (already.has(`${rule}|${c.id}`)) return;
+        rows.push({
+          __synth: true, id: `synth:${rule}:${c.id}`, rule, severity,
+          case_id: c.id, client_id: c.client_id || null, title, detail,
+          created_at: null, snoozed_until: null,
+        });
+      };
+      if (live && !(cl && String(cl.email || "").trim())) {
+        mk("my_missing_email", "warn", `${name} — no email on file (your case)`,
+          "Nothing can be emailed to this client — rate reminders, document requests and fee requests are all refused before they are sent. Open the case and add an address.");
+      } else if (c.stage === "completed" && !c.rate_end_date) {
+        mk("my_no_rateend", "info", `${name} — completed with no rate-end date (your case)`,
+          "Without a rate-end date this case never enters the retention window, so the reminder that wins the remortgage is never raised. Open the case and record the date from the offer.");
+      }
+    });
+    if (rows.length <= WT_MY_DH_CAP) return rows;
+    /* A wall of these would push the real alerts off the panel, which is the exact defect R11-2
+       was written to fix. Eight, then one honest row saying how many are left and where the whole
+       list lives. */
+    const extra = rows.length - WT_MY_DH_CAP;
+    const capped = rows.slice(0, WT_MY_DH_CAP);
+    capped.push({
+      __synth: true, __go: "nav('data')", id: "synth:my_data_health:more", rule: "my_data_health",
+      severity: "info", case_id: null, client_id: null,
+      title: `Your data health — …and ${extra} more to fix`,
+      detail: `${rows.length} of your cases have a missing email address or a missing rate-end date. The whole list, with the rest of the firm's, is on Data health.`,
+      created_at: null, snoozed_until: null,
+    });
+    return capped;
+  } catch (e) { return []; /* silent — the panel is exactly what it was without these rows */ }
 }
 
 function renderWatchtower() {
   if (!wtLast || !$("#watchtower-list")) return;
-  const { alerts, snoozed, ctx: wtCtx, fetched, openTotal, truncated } = wtLast;
+  const { alerts: fetchedAlerts, snoozed, ctx: wtCtx, fetched, openTotal, truncated, assignedBy, synth } = wtLast;
+
+  /* R34 · W1/Part 4 — the working list this whole function draws: what run_watchtower returned,
+     plus my own client-side data-health rows, cut to the current scope. The sort is by severity
+     only and Array#sort is stable, so the RPC's own severity-then-newest order is preserved and
+     the synthetic rows land at the end of their own severity band rather than on top of a
+     critical. Every count below — the chips, the header count, the auto-open — is taken from
+     THIS list, so an adviser's drawer opens for THEIR criticals and nobody else's. */
+  const wtScopeNow = wtScopeResolved();
+  syncWtScopeButtons();
+  const alerts = fetchedAlerts.concat(synth || [])
+    .sort((a, b) => (WATCH_SEV[a.severity] ?? 3) - (WATCH_SEV[b.severity] ?? 3))
+    .filter((a) => wtInScope(a, wtScopeNow, assignedBy));
 
   /* R11-2a — the chips. Counts are of the WHOLE working list (snoozed rows excluded, exactly as
      the list itself excludes them), not of the current filter, so the row of numbers always
@@ -7032,7 +7268,18 @@ function renderWatchtower() {
     // `go` may be a fixed expression or one built from the alert row (lead_slow needs its lead id).
     const wtGo = wtLink ? (typeof wtLink.go === "function" ? wtLink.go(a) : wtLink.go) : "";
     const wtLinkBtn = wtLink && wtLink.when() ? `<button class="btn btn-sm wt-link-btn" onclick="event.stopPropagation();${wtGo}" title="${esc(wtLink.title)}">${esc(wtLink.label)}</button>` : "";
-    return `<div class="row-item wt-row ${sevCls}">
+    /* R34 · Part 4 — a client-side row has no watch_alerts row behind it, so Snooze and Dismiss
+       would both be lies (there is nothing to update, and the row would be back on the next
+       paint). It carries the Open action alone — and, for the "…and N more" tail, a door to the
+       page that holds the whole list. Fixing the record is what clears it. */
+    const synthGoBtn = a.__synth && a.__go ? `<button class="btn btn-sm wt-link-btn" onclick="event.stopPropagation();${a.__go}" title="Open the firm's Data health page">Data health</button>` : "";
+    const rowActions = a.__synth ? synthGoBtn
+      : `<button class="btn btn-sm" onclick="snoozeAlert('${a.id}','${a.severity}','${a.case_id || ""}')">Snooze…</button>
+      <button class="btn btn-sm" onclick="resolveAlert('${a.id}','${a.severity}','${a.case_id || ""}')">Dismiss</button>`;
+    // A synthetic row is a statement about the record as it is RIGHT NOW, not an event with a
+    // date, so it shows no "created" date rather than a misleading one.
+    const wtWhen = a.__synth ? "" : `<span class="wt-when">${fmtD(a.created_at)}</span>`;
+    return `<div class="row-item wt-row ${sevCls}${a.__synth ? " wt-row-mine" : ""}"${a.__synth ? ` data-wt-synth="${esc(a.rule)}"` : ""}>
       <div class="row-main">
         <div class="t" ${openClick}>${esc(humanizeAlertDates(a.title))}</div>
         ${/* R6-FIX V11/R6B-11 — the detail sentence ends in a full stop, so the " · " that followed
@@ -7042,13 +7289,12 @@ function renderWatchtower() {
              the case has an address or not — the old layout changed shape depending on whether the
              property was known, which reads as a status difference when it is a width one. */ ""}
         <div class="s">${esc(humanizeAlertDates(watchDetailFor(a)))}</div>
-        <div class="s wt-meta">${wtTag}${wtTag ? " " : ""}<span class="wt-when">${fmtD(a.created_at)}</span></div>
+        <div class="s wt-meta">${wtTag}${wtTag ? " " : ""}${wtWhen}</div>
       </div>
       ${WATCH_BADGE[a.severity] || WATCH_BADGE.info}
       ${openBtn}
       ${wtLinkBtn}
-      <button class="btn btn-sm" onclick="snoozeAlert('${a.id}','${a.severity}','${a.case_id || ""}')">Snooze…</button>
-      <button class="btn btn-sm" onclick="resolveAlert('${a.id}','${a.severity}','${a.case_id || ""}')">Dismiss</button>
+      ${rowActions}
     </div>`;
   };
 
@@ -7329,6 +7575,11 @@ window.unsnoozeAlert = async function (id) {
   toast("Unsnoozed — back on the working list");
   loadWatchtower();
 };
+// R34 · W1 — the Mine|All segment. Wired here, beside the panel's other header controls; the
+// buttons live inside the drawer's <h3>, and toggleDrawer already leaves clicks on buttons alone,
+// so choosing a scope never opens or closes the drawer.
+if ($("#wt-scope-mine")) $("#wt-scope-mine").addEventListener("click", () => wtSetScope("mine"));
+if ($("#wt-scope-all")) $("#wt-scope-all").addEventListener("click", () => wtSetScope("all"));
 $("#watchtower-run").addEventListener("click", async () => {
   const btn = $("#watchtower-run");
   btn.disabled = true; btn.textContent = "Running…";
@@ -7512,7 +7763,10 @@ function pipelineFilterState() {
 function applyPipelineFilterState(f) {
   if (!f) return;
   const s = $("#board-search"); if (s) s.value = f.search || "";
-  const a = $("#board-adviser"); if (a && f.adviser != null) a.value = f.adviser;
+  // R34 · W2 — a saved view that pins the board to one adviser is a choice like any other: it is
+  // persisted here so applying a view and then coming back tomorrow shows what was left on screen,
+  // rather than the stored value from before the view was applied.
+  const a = $("#board-adviser"); if (a && f.adviser != null) { a.value = f.adviser; persistStaffFilter("#board-adviser", BOARD_ADVISER_KEY); }
   if (f.segment != null) pipelineSegment = f.segment;
   if (f.stageTab != null) stageTab = f.stageTab;
   if (f.sortKey != null) sortKey = f.sortKey;
@@ -9121,6 +9375,9 @@ $("#view-toggle").addEventListener("click", () => {
 });
 $("#board-search").addEventListener("input", debounce(() => loadPipeline(), 250));
 $("#board-adviser").addEventListener("change", debounce(() => loadPipeline(), 250));
+// R34 · W2 — remembering the choice is not the same job as re-running the query, so it is not
+// behind the query's debounce: the value is stored the moment it is picked.
+$("#board-adviser").addEventListener("change", () => persistStaffFilter("#board-adviser", BOARD_ADVISER_KEY));
 // R31-B — saved filter views on the board. Selecting one applies its captured filter set and
 // re-renders; save prompts for a name and captures the live set; delete removes the picked view.
 (() => {
@@ -16975,7 +17232,10 @@ $("#diary-today").addEventListener("click", () => {
   if (diaryViewMode === "day") { diaryDay = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()); loadDiaryDay(); }
   else { diaryMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1); loadDiary(); }
 });
-$("#diary-staff").addEventListener("change", () => { if (diaryViewMode === "day") loadDiaryDay(); else loadDiary(); });
+$("#diary-staff").addEventListener("change", () => {
+  persistStaffFilter("#diary-staff", DIARY_STAFF_KEY); // R34 · W2
+  if (diaryViewMode === "day") loadDiaryDay(); else loadDiary();
+});
 $("#new-appt-btn").addEventListener("click", () => openAppt(null));
 // Click an empty part of a day cell → New appointment pre-filled with that date (QW9).
 // Clicks on an appointment inside a cell are handled by the appointment's own onclick.

@@ -204,6 +204,14 @@ const openClient = async (page, id) => {
       const STAGE = "application";
 
       await goto(page, "pipeline", 1200);
+      // R34 · W2 — #board-adviser now defaults to the signed-in adviser's own id rather than "all",
+      // and this block seeds UNASSIGNED (assigned_to: null) cases to prove the column's TRUE total
+      // vs. its render cap — a comparison the adviser's own default would silently break by hiding
+      // every seeded card behind a filter this block never meant to exercise. Pinned to "all" here,
+      // a real UI selection like every other control this suite drives, and left there for the rest
+      // of this block's `pipeline` visits (nothing re-defaults it mid-session).
+      await page.selectOption("#board-adviser", "all");
+      await wait(page, 300);
       // Baseline: however many 'application'-stage cases the fixture book already has, read straight
       // off the app's OWN rendered header — never assumed from fixture composition.
       const baselineTxt = await page.$eval(`.col[data-stage="${STAGE}"] h4 span`, (e) => e.textContent.trim()).catch(() => "0");

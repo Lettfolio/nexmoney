@@ -403,6 +403,12 @@ async function readTableRow(page, fullName) {
       const expC = await expectedDisplay(pageC, ins.row);
 
       await goto(pageC, "pipeline", 1200);
+      // R34 · W2 — #board-adviser now defaults to the signed-in adviser's own id, not "all". This
+      // case is deliberately assigned to p3 (proving the RENDER is correct regardless of who is
+      // looking, not that p2 owns it), so p2's own default would hide it entirely. Pinned to "all",
+      // same real-UI-action fix as tests/r18.js's board-cap block.
+      await pageC.selectOption("#board-adviser", "all");
+      await wait(pageC, 300);
       const card = await readCard(pageC, ins.caseId);
       ok("C1 · the kitchen-sink card is present on the board for an adviser", !!card, ins.caseId);
       if (card) {

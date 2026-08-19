@@ -80,6 +80,14 @@ const gotoDiary = async (page) => {
     console.log("\n— Month/Day toggle (p2 Wayne, adviser)");
     {
       const page = await newPage(browser, "p2");
+      // R34 · W2 — an adviser's Month AND Day now both open on their own id by default (see
+      // tests/r34.js §C), so Month's own "Everyone" default this block exists to prove is no
+      // longer what a fresh load lands on. Pre-seeding the stored filter as "all" restores the
+      // ORIGINAL scenario this check guards — Month keeping its own remembered value untouched by
+      // Day's separate default — without pretending R34 didn't change the plain default.
+      await page.evaluate(() => { try { localStorage.setItem("nx_diary_staff", "all"); } catch (e) { /* ignore */ } });
+      await page.reload();
+      await page.waitForTimeout(SETTLE);
       await gotoDiary(page);
 
       const initial = await page.evaluate(() => ({

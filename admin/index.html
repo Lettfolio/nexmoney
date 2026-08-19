@@ -151,6 +151,12 @@
       </div>
       <div class="panel dash-drawer collapsed" id="watchtower-panel">
         <h3 onclick="toggleDrawer(event,'watchtower')">🚨 Watchtower
+          <!-- R34 · W1 — the same Mine|All segment the Tasks and Rate & ERC drawers carry, scoped
+               by the CASE's adviser. Which one starts active is decided in JS (renderWatchtower →
+               syncWtScopeButtons), because it depends on the signed-in role and on a stored
+               choice, neither of which is known when this markup is parsed. -->
+          <button class="btn btn-sm seg-btn seg-first" id="wt-scope-mine" aria-label="Show only alerts on my cases">Mine</button>
+          <button class="btn btn-sm seg-btn seg-last" id="wt-scope-all" aria-label="Show every alert, including firm-wide ones">All</button>
           <button class="btn btn-ghost btn-sm" id="watchtower-run">Run checks</button>
           <button class="btn btn-ghost btn-sm hidden" id="watchtower-snoozed-toggle" title="Show/hide snoozed alerts">0 snoozed</button>
         </h3>
