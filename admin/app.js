@@ -4070,6 +4070,13 @@ $("#topnav").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-page]");
   if (b) nav(b.dataset.page);
 });
+// R31-A · a11y — the "Skip to main content" link moves keyboard focus into the
+// main content region so a keyboard/screen-reader user can jump past the nav.
+// Only fires on an explicit activation of the link — nav() never steals focus.
+document.querySelector(".skip-link")?.addEventListener("click", (e) => {
+  e.preventDefault();
+  document.getElementById("main")?.focus();
+});
 
 /* R12b · L-20 — the mobile nav strip's scroll-hint chevron (.sidebar::after, CSS) is a plain
    pseudo-element and has no way to know when the strip has actually been scrolled to its true
@@ -4316,7 +4323,12 @@ function nav(page, push = true) {
   }
   document.querySelectorAll(".page").forEach((p) => p.classList.add("hidden"));
   $("#page-" + page).classList.remove("hidden");
-  document.querySelectorAll("#topnav button").forEach((b) => b.classList.toggle("active", b.dataset.page === page));
+  document.querySelectorAll("#topnav button").forEach((b) => {
+    const on = b.dataset.page === page;
+    b.classList.toggle("active", on);
+    // R31-A · a11y — expose the current page to assistive tech, not just visually.
+    if (on) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
+  });
   currentPage = page;
   currentModal = null; // switching pages dismisses any modal history ownership
   if (push) {
@@ -7375,6 +7387,83 @@ window.boardShowMore = function (stage) {
    Every column below is present in the original/prod schema (see the Reports and revFetchCases named
    selects) and cannot 42703. Order/limit and the clients embed are preserved exactly (R23). */
 const BOARD_CASE_COLS = "id,client_id,stage,case_kind,lender,product_name,loan_amount,rate_percent,rate_end_date,rate_end_estimated,erc_end_date,broker_fee,fee_status,protection_status,submitted_at,completed_at,created_at,updated_at,expected_completion_date,retention_source_case_id,lead_source,introducer_id,assigned_to";
+/* ---------- R31-B · SAVED FILTER VIEWS (Clients + Pipeline) ----------------------------------
+   Per-BROWSER only. Every saved view lives in localStorage under one key, shaped
+   { clients: [ {name, filters} ], pipeline: [ {name, filters} ] }. There is no server row and
+   no schema for this on purpose — it is a per-device convenience, so it is deliberately NOT
+   synced between browsers or users. ALL store access is wrapped so a disabled / quota-full /
+   private-mode localStorage degrades to "no saved views" and can never throw. */
+const NX_VIEWS_KEY = "nx_views_v1";
+function savedViews(scope) {
+  try {
+    const raw = localStorage.getItem(NX_VIEWS_KEY);
+    if (!raw) return [];
+    const all = JSON.parse(raw);
+    const list = all && all[scope];
+    return Array.isArray(list) ? list.filter((v) => v && typeof v.name === "string") : [];
+  } catch (e) { return []; }
+}
+function saveView(scope, name, filters) {
+  const nm = String(name == null ? "" : name).trim();
+  if (!nm) return savedViews(scope);
+  try {
+    let all;
+    try { all = JSON.parse(localStorage.getItem(NX_VIEWS_KEY)); } catch (e) { all = null; }
+    if (!all || typeof all !== "object") all = {};
+    if (!Array.isArray(all.clients)) all.clients = [];
+    if (!Array.isArray(all.pipeline)) all.pipeline = [];
+    if (!Array.isArray(all[scope])) all[scope] = [];
+    const list = all[scope];
+    const view = { name: nm, filters: filters || {} };
+    const idx = list.findIndex((v) => v && v.name === nm);
+    if (idx >= 0) list[idx] = view; else list.push(view);
+    localStorage.setItem(NX_VIEWS_KEY, JSON.stringify(all));
+  } catch (e) { /* storage unavailable — not persisted, but the UI still applied it this session */ }
+  return savedViews(scope);
+}
+function deleteView(scope, name) {
+  try {
+    let all;
+    try { all = JSON.parse(localStorage.getItem(NX_VIEWS_KEY)); } catch (e) { all = null; }
+    if (!all || typeof all !== "object") return savedViews(scope);
+    if (Array.isArray(all[scope])) all[scope] = all[scope].filter((v) => !(v && v.name === name));
+    localStorage.setItem(NX_VIEWS_KEY, JSON.stringify(all));
+  } catch (e) { /* ignore */ }
+  return savedViews(scope);
+}
+
+// Pipeline board — capture / restore / repopulate the Views <select>.
+function pipelineFilterState() {
+  const s = $("#board-search"), a = $("#board-adviser");
+  return {
+    search: s ? s.value : "",
+    adviser: a ? a.value : "",
+    segment: pipelineSegment,
+    stageTab: stageTab,
+    sortKey: sortKey,
+    sortDir: sortDir,
+    view: pipelineView,
+  };
+}
+function applyPipelineFilterState(f) {
+  if (!f) return;
+  const s = $("#board-search"); if (s) s.value = f.search || "";
+  const a = $("#board-adviser"); if (a && f.adviser != null) a.value = f.adviser;
+  if (f.segment != null) pipelineSegment = f.segment;
+  if (f.stageTab != null) stageTab = f.stageTab;
+  if (f.sortKey != null) sortKey = f.sortKey;
+  if (f.sortDir != null) sortDir = f.sortDir;
+  if (f.view != null) pipelineView = f.view;
+}
+function refreshPipelineViews() {
+  const sel = $("#board-views");
+  if (!sel) return;
+  const cur = sel.value;
+  sel.innerHTML = `<option value="">Saved views…</option>`
+    + savedViews("pipeline").map((v) => `<option value="${esc(v.name)}">${esc(v.name)}</option>`).join("");
+  if (cur && savedViews("pipeline").some((v) => v.name === cur)) sel.value = cur;
+}
+
 async function loadPipeline() {
   const propOn = (await propAddrSupported()) !== false;
   const docsOn = (await docsSupported()) !== false;
@@ -8968,6 +9057,37 @@ $("#view-toggle").addEventListener("click", () => {
 });
 $("#board-search").addEventListener("input", debounce(() => loadPipeline(), 250));
 $("#board-adviser").addEventListener("change", debounce(() => loadPipeline(), 250));
+// R31-B — saved filter views on the board. Selecting one applies its captured filter set and
+// re-renders; save prompts for a name and captures the live set; delete removes the picked view.
+(() => {
+  const sel = $("#board-views"), saveBtn = $("#board-view-save"), delBtn = $("#board-view-del");
+  if (!sel) return;
+  refreshPipelineViews();
+  sel.addEventListener("change", (e) => {
+    const v = savedViews("pipeline").find((x) => x.name === e.target.value);
+    if (!v) return;
+    applyPipelineFilterState(v.filters);
+    loadPipeline();
+  });
+  if (saveBtn) saveBtn.addEventListener("click", () => {
+    const name = prompt("Save current pipeline filters as…");
+    if (name == null) return;
+    const nm = String(name).trim();
+    if (!nm) return;
+    saveView("pipeline", nm, pipelineFilterState());
+    refreshPipelineViews();
+    sel.value = nm;
+    toast("View saved");
+  });
+  if (delBtn) delBtn.addEventListener("click", () => {
+    const name = sel.value;
+    if (!name) { toast("Pick a saved view to delete"); return; }
+    if (!confirm(`Delete saved view "${name}"?`)) return;
+    deleteView("pipeline", name);
+    refreshPipelineViews();
+    toast("View deleted");
+  });
+})();
 $("#new-case-btn").addEventListener("click", () => openCase(null));
 // Board horizontal-scroll affordance wiring (QW16).
 (() => {
@@ -12479,6 +12599,59 @@ function renderClientBulkBar(list) {
 }
 $("#client-search").addEventListener("input", debounce(() => loadClients($("#client-search").value), 250)); // R18-P2 — read the live value at fire time
 $("#new-client-btn").addEventListener("click", () => openClient(null));
+
+// R31-B — saved filter views on the Clients page. Captured set is search + adviser + segment +
+// sort (the four filters the list actually reads). Same localStorage store as the board, under
+// the "clients" scope; applying one restores the vars and controls then re-renders the list.
+function clientsFilterState() {
+  const s = $("#client-search");
+  return { search: s ? s.value : "", adviser: clientAdviser, segment: clientSegment, sort: clientSort };
+}
+function applyClientsFilterState(f) {
+  if (!f) return;
+  const s = $("#client-search"); if (s) s.value = f.search || "";
+  if (f.adviser != null) clientAdviser = f.adviser;
+  if (f.segment != null) clientSegment = f.segment;
+  if (f.sort != null) { clientSort = f.sort; const cs = $("#cl-sort"); if (cs) cs.value = f.sort; }
+}
+function refreshClientViews() {
+  const sel = $("#client-views");
+  if (!sel) return;
+  const cur = sel.value;
+  sel.innerHTML = `<option value="">Saved views…</option>`
+    + savedViews("clients").map((v) => `<option value="${esc(v.name)}">${esc(v.name)}</option>`).join("");
+  if (cur && savedViews("clients").some((v) => v.name === cur)) sel.value = cur;
+}
+(() => {
+  const sel = $("#client-views"), saveBtn = $("#client-view-save"), delBtn = $("#client-view-del");
+  if (!sel) return;
+  refreshClientViews();
+  sel.addEventListener("change", (e) => {
+    const v = savedViews("clients").find((x) => x.name === e.target.value);
+    if (!v) return;
+    applyClientsFilterState(v.filters);
+    clientSel.clear();
+    loadClients($("#client-search").value);
+  });
+  if (saveBtn) saveBtn.addEventListener("click", () => {
+    const name = prompt("Save current client filters as…");
+    if (name == null) return;
+    const nm = String(name).trim();
+    if (!nm) return;
+    saveView("clients", nm, clientsFilterState());
+    refreshClientViews();
+    sel.value = nm;
+    toast("View saved");
+  });
+  if (delBtn) delBtn.addEventListener("click", () => {
+    const name = sel.value;
+    if (!name) { toast("Pick a saved view to delete"); return; }
+    if (!confirm(`Delete saved view "${name}"?`)) return;
+    deleteView("clients", name);
+    refreshClientViews();
+    toast("View deleted");
+  });
+})();
 
 /* ---------- R8-2 · BULK ACTIONS ON THE FILTERED SET ----------------------------------------
    TASK TARGETING, HONESTLY. case_tasks.case_id is NOT NULL — the schema has no client-level
@@ -20547,6 +20720,7 @@ function dhGotoEmails(failedOnly) {
 async function loadDataHealth() {
   const el = $("#data-content");
   el.innerHTML = '<div class="empty">Loading…</div>';
+  { const rEl = document.getElementById("dh-readiness"); if (rEl) rEl.innerHTML = ""; } // R31-C — clear the rollup while reloading
   /* R6-38 — the cases read gains the property column (and created_at, for "which case came last on
      this building") so the shared-address panel below costs no extra round trip. NAMED only where M7
      is present: on an un-migrated database the select would 42703 and blank the whole page. */
@@ -21142,6 +21316,45 @@ async function loadDataHealth() {
     <div class="grid-2">${invalidEmailPanel}${invalidPhonePanel}</div>
     <div class="grid-2">${milestonePanel}${deadBookPanel}</div>
     ${dhCareOn ? `<div class="grid-2">${vulnerablePanel}${suppressedPanel}</div>` : ""}`;
+
+  /* R31-C — BOOK READINESS ROLLUP. The Data-health page grew to ~13 scattered tiles; before the
+     2,000-record import the owner needs one at-a-glance answer to "how clean is the book, and what
+     do I clear first?". This rolls up ONLY the genuine data-quality faults the page already
+     computed above (adds no data, no schema, no gating) into #dh-readiness, sorted worst-first,
+     each row jumping to — and expanding — its existing tile. Deliberately EXCLUDES the page's
+     informational / care lists (shared addresses, waiting-on-documents, vulnerable, automation-
+     suppressed): those are not faults "to clear", and this page is emphatic about never colouring
+     a Consumer-Duty record as a problem. Each label + tileId matches its existing tile 1:1. */
+  const dhReadinessChecks = [
+    { label: "Missing email — with a live case", count: missingEmail.length, tileId: "dh-tile-email" },
+    { label: "Missing phone — with a live case", count: missingPhoneLive.length, tileId: "dh-tile-phone" },
+    { label: "Missing email &amp; phone", count: missingBoth.length, tileId: "dh-tile-both" },
+    { label: "Invalid email", count: invalidEmail.length, tileId: "dh-tile-invalid-email" },
+    { label: "Invalid phone", count: invalidPhone.length, tileId: "dh-tile-invalid-phone" },
+    { label: "Live cases unassigned", count: unassigned.length, tileId: "dh-tile-unassigned" },
+    { label: "Completed, no fee", count: noFee.length, tileId: "dh-tile-nofee" },
+    { label: "Completed, no rate-end", count: noRateEnd.length, tileId: "dh-tile-rateend" },
+    { label: "Completed, no completion date", count: noCompletedAt.length, tileId: "dh-tile-nocompleted" },
+    { label: "Missing application/offer date", count: noMilestoneDate.length, tileId: "dh-tile-milestone" },
+    { label: "Overdue — open past a key date", count: deadBook.length, tileId: "dh-tile-deadbook" },
+  ].filter((c) => c.count > 0).sort((a, b) => b.count - a.count);
+  const dhReadinessTotal = dhReadinessChecks.reduce((n, c) => n + c.count, 0);
+  const dhReadinessEl = document.getElementById("dh-readiness");
+  if (dhReadinessEl) {
+    if (dhReadinessTotal === 0) {
+      dhReadinessEl.innerHTML = `<div class="panel" id="dh-readiness-panel"><p class="panel-sub" style="margin:0;">Your book looks clean — no data-quality issues flagged. ✅</p></div>`;
+    } else {
+      // The onclick jumps to the tile and clicks it — the tiles are already wired (above) to
+      // scroll to and expand their own list panel, so one line reuses that behaviour verbatim.
+      const jump = (id) => `document.getElementById('${id}')?.scrollIntoView({behavior:'smooth'}); document.getElementById('${id}')?.click();`;
+      dhReadinessEl.innerHTML = `<div class="panel" id="dh-readiness-panel">
+        <p class="panel-sub" id="dh-readiness-headline" style="margin:0 0 8px;"><strong>${dhReadinessTotal} data-quality issue${dhReadinessTotal === 1 ? "" : "s"}</strong> across ${dhReadinessChecks.length} check${dhReadinessChecks.length === 1 ? "" : "s"} to clear before importing.</p>
+        <div style="display:flex;flex-direction:column;gap:2px;">
+          ${dhReadinessChecks.map((c) => `<div class="dh-readiness-item" role="button" tabindex="0" title="Jump to “${c.label}”" style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:4px 8px;border-radius:4px;cursor:pointer;" onclick="${jump(c.tileId)}"><span class="dh-readiness-label">${c.label}</span> <strong class="dh-readiness-count">${c.count}</strong></div>`).join("")}
+        </div>
+      </div>`;
+    }
+  }
 
   // Tiles whose panel is hidden until asked for: toggle, and scroll to it when revealing so the
   // list isn't opened off-screen below the fold.

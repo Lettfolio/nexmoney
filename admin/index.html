@@ -12,8 +12,32 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/admin/admin.css">
+<!-- R31-A · a11y — skip link styling. Lives here (not admin.css) so the whole
+     main-nav accessibility pass ships in index.html + app.js only. Off-screen
+     until focused, then brought on-screen top-left. Does not touch any existing
+     :focus/outline rule in admin.css. -->
+<style>
+  .skip-link {
+    position: absolute;
+    left: -9999px;
+    top: 0;
+    z-index: 2000;
+    padding: 10px 16px;
+    background: var(--navy, #0b1f35);
+    color: #fff;
+    font-weight: 600;
+    text-decoration: none;
+    border-radius: 0 0 6px 0;
+  }
+  .skip-link:focus {
+    left: 0;
+    outline: 3px solid var(--orange, #f36f23);
+    outline-offset: 2px;
+  }
+</style>
 </head>
 <body>
+<a href="#main" class="skip-link">Skip to main content</a>
 
 <!-- ===== Login ===== -->
 <div id="login-view" class="login-wrap hidden">
@@ -44,7 +68,7 @@
       <span class="gs-txt">Search…</span>
       <kbd class="gs-kbd" aria-hidden="true">/</kbd>
     </button>
-    <nav class="sidenav" id="topnav">
+    <nav class="sidenav" id="topnav" aria-label="Main navigation">
       <button data-page="dashboard" class="active"><span class="si">🏠</span>Today</button>
       <button data-page="pipeline"><span class="si">🗂️</span>Pipeline</button>
       <button data-page="protection"><span class="si">🛡️</span>Protection</button>
@@ -83,7 +107,7 @@
     </div>
   </aside>
 
-  <main id="main">
+  <main id="main" tabindex="-1">
     <!-- Dashboard -->
     <section id="page-dashboard" class="page">
       <!-- R13 · M-42/M-43 — the notice strip. Deliberately ABOVE the page heading rather than
@@ -198,6 +222,10 @@
         <div class="page-tools">
           <input type="search" id="board-search" class="search" placeholder="Search cases…" aria-label="Search cases">
           <select id="board-adviser" aria-label="Filter by adviser"></select>
+          <!-- R31-B — SAVED FILTER VIEWS (per-browser, localStorage). -->
+          <select id="board-views" aria-label="Saved views"><option value="">Saved views…</option></select>
+          <button class="btn btn-sm" id="board-view-save">＋ Save view</button>
+          <button class="btn btn-sm" id="board-view-del" aria-label="Delete saved view" title="Delete saved view">🗑</button>
           <button class="btn" id="view-toggle">☰ Table view</button>
           <button class="btn btn-primary" id="new-case-btn">+ New case</button>
         </div>
@@ -322,6 +350,12 @@
         <button class="btn btn-primary" id="new-client-btn">+ New client</button>
       </div>
       <input type="search" id="client-search" class="search" placeholder="Search clients…" aria-label="Search clients">
+      <!-- R31-B — SAVED FILTER VIEWS (per-browser, localStorage). Captures search + adviser + segment + sort. -->
+      <div class="client-views">
+        <select id="client-views" aria-label="Saved views"><option value="">Saved views…</option></select>
+        <button class="btn btn-sm" id="client-view-save">＋ Save view</button>
+        <button class="btn btn-sm" id="client-view-del" aria-label="Delete saved view" title="Delete saved view">🗑</button>
+      </div>
       <!-- R12b · W-29 — ADVISER FILTER. Every other list of people in this app can be narrowed to
            one adviser and this one could not, so "my clients" was a page an adviser had to read
            past his colleagues' book to assemble. It sits ABOVE the segment chips because it
@@ -730,6 +764,9 @@
       </div>
       <p class="panel-sub">Automatic data-quality checks — fix these to keep automations and reporting accurate.</p>
       <p class="dq-notice hidden" id="data-cap-notice"></p>
+      <!-- R31-C — book-readiness rollup: one at-a-glance summary of the data-quality faults below,
+           populated by loadDataHealth. Sits above the tile row (#dh-tile-* live inside #data-content). -->
+      <div id="dh-readiness"></div>
       <div id="data-content"></div>
     </section>
 

@@ -87,6 +87,7 @@ node tests/r26.js
 node tests/r27.js
 node tests/r29_scale.js
 node tests/r30.js
+node tests/r31.js
 ```
 
 Current green counts (end of round 23; r21/r22 were never committed to this
@@ -105,8 +106,13 @@ nothing else asserted the old shape of, and R19 is new owner-gated Reports
 content that no earlier suite reaches; R23 is the same story again — see the
 R23 notes below).
 
-**Full battery is 100% green (3,301/3,301), `tests/r9_docs.js` included
-(255/0).** R30 added `tests/r30.js` (37 checks) — see the "R30 notes" section
+**Full battery is 100% green (3,356/3,356), `tests/r9_docs.js` included
+(255/0).** R31 added `tests/r31.js` (55 checks) — see the "R31 notes" section
+below — and every pre-existing suite (`smoke.js` through `tests/r30.js`)
+re-ran unedited at its exact pre-R31 count; `admin/app.js`/`admin/index.html`/
+`admin/mock-supabase.js` were not touched by this test-writing pass (R31's
+product code was already built/uncommitted before this session started).
+R30 added `tests/r30.js` (37 checks) — see the "R30 notes" section
 below — and every pre-existing suite (`smoke.js` through `tests/r29_scale.js`)
 re-ran unedited at its exact pre-R30 count; `admin/app.js`/`admin/mock-supabase.js`
 were not touched by this test-writing pass (R30's product code was already
@@ -195,7 +201,115 @@ even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes belo
 | `tests/r27.js` | 43 |
 | `tests/r29_scale.js` | 106 |
 | `tests/r30.js` | 37 |
-| **Total** | **3,301** |
+| `tests/r31.js` | 55 |
+| **Total** | **3,356** |
+
+R31 notes: a small, already-built, uncommitted round shipping THREE
+independent features in `admin/app.js` + `admin/index.html` only (no schema,
+no `admin/mock-supabase.js` change beyond what R31's own tests needed to
+seed, which was nothing — every check rides the existing mock surface).
+
+  - **A · main-nav accessibility.** `a.skip-link[href="#main"]` ("Skip to
+    main content") is now the first element in `<body>`, off-screen
+    (`left:-9999px`) until `:focus` brings it on-screen (`left:0`) via a
+    small inline `<style>` block in `index.html` scoped to this feature; its
+    click handler (app.js ~L4076) `preventDefault()`s the native fragment
+    jump and calls `#main.focus()` directly. `<main id="main" tabindex="-1">`
+    makes that focus call legal without adding `#main` to the normal Tab
+    order. `#topnav` gained `aria-label="Main navigation"`. `nav()` (app.js
+    ~L4312) now sets `aria-current="page"` on the active `#topnav
+    button[data-page]` and strips it from every other one on every
+    navigation — both the programmatic `nav()` path and the existing
+    `#topnav` click-delegate route through the same function, so a raw
+    button click keeps the attribute correct too.
+  - **B · saved filter views**, Clients + Pipeline, `localStorage` key
+    `nx_views_v1` (`{clients:[{name,filters}], pipeline:[{name,filters}]}`).
+    Deliberately per-BROWSER only — no server row, no schema, never synced
+    across devices/users. `savedViews`/`saveView`/`deleteView` (app.js
+    ~L7396) wrap every store access so a disabled, quota-full or corrupt
+    localStorage degrades to "no saved views" and can never throw. Pipeline's
+    bar (`#board-views`/`#board-view-save`/`#board-view-del`) captures
+    `#board-search`, `#board-adviser`, `pipelineSegment`, `stageTab`,
+    `sortKey`, `sortDir`, `pipelineView`; Clients' bar
+    (`#client-views`/`#client-view-save`/`#client-view-del`) captures
+    `#client-search`, `clientAdviser`, `clientSegment`, `clientSort`. Save
+    reads `window.prompt()`, delete reads `window.confirm()`; selecting a
+    saved option restores every captured filter and re-renders.
+  - **C · data-health readiness rollup**, `#dh-readiness` (app.js ~L21320),
+    rendered above the tile row inside `#page-data` and rebuilt on every
+    `loadDataHealth()`. Rolls up ONLY the page's genuine data-quality FAULT
+    tiles (missing/invalid email/phone, live cases unassigned, completed
+    with no fee/rate-end/completion date, missing milestone date, R27's
+    dead-book/overdue) into one worst-first list, each row's real count
+    read off the SAME arrays the tiles themselves already computed — no new
+    data, no new query. It deliberately EXCLUDES the page's informational /
+    Consumer-Duty care lists (shared addresses, waiting-on-documents,
+    vulnerable, automation-suppressed) — those are not faults to "clear".
+    Zero issues renders a plain "…looks clean… ✅" empty state instead of
+    the list. Each row is wired via the SAME `wireTile`/`wireTileScroll`
+    handler its tile already had (an inline `onclick` resolves
+    `document.getElementById(<realTileId>)` and clicks it), so clicking a
+    rollup row scrolls to, and — for tiles whose panel starts hidden — also
+    expands, the exact same panel the tile itself opens.
+
+`tests/r31.js` (55 checks) covers all three on fresh, isolated pages per
+section (§A, §B1/§B2/§B3, §C), the same per-page-isolation convention every
+suite in this harness uses. §A proves the skip-link is genuinely first in
+tab order with one real `page.keyboard.press("Tab")` from a page where
+nothing is focused yet (not merely "exists in the DOM somewhere early"),
+checks its off-screen/on-screen CSS contract via `getComputedStyle`, proves
+clicking it moves focus to `#main`, and proves `aria-current="page"` moves
+between tabs — and only the active one carries it — across three separate
+navigations (two via `window.nav()`, one via a raw `#topnav` button click,
+proving both routes stay correct). §B1 (Pipeline, the full round-trip) sets
+`#board-search` + `#board-adviser`, stubs `prompt`, saves, and checks BOTH
+the new `#board-views` option AND the exact `localStorage.nx_views_v1` shape
+(name + captured filters) — not just that *something* got written; then
+changes the live filters away from the saved values, selects the saved view,
+and proves both fields are RESTORED to the saved values, not merely that the
+select's own value changed; then stubs `confirm`, deletes, and checks the
+option AND the storage array are both empty. §B2 repeats a lighter version
+on Clients (save → verify option + storage + one restore assertion → delete
+→ verify both are empty). §B3 seeds `localStorage.nx_views_v1 = "not json"`,
+reloads, and confirms zero new console errors and that both saved-view
+selects still render (degrading to just their placeholder option, not a
+crash). §C reads the rollup's existing structure off the fixture first
+(headline total/checks-count math, worst-first ordering, every row's target
+`tileId` resolving to a real element) with a headline-math fallback in place
+of the (impractical-to-reach-live) empty state, then SEEDS — independent of
+fixture composition, the same `window.__mockDb` insert technique
+`tests/r25.js`/`tests/r27.js` use — enough freshly-unassigned live cases
+(count computed from the fixture's own current worst count at runtime, so it
+is always strictly larger, never a hardcoded guess) to prove "Live cases
+unassigned" sorts to the very top after reload, plus one deliberately
+malformed-email client so the click-to-expand assertion never depends on the
+fixture already having one; the first seed batch sets `submitted_at` so it
+trips ONLY the unassigned predicate and not R25's milestone-date one too
+(the first draft of this suite caught exactly that double-count — see
+below). §C's final assertion clicks the "Invalid email" row (a `wireTile`
+tile, panel starts hidden) rather than "Live cases unassigned" (a
+`wireTileScroll` tile, panel always rendered) specifically because only the
+former can prove the "expands" half of "scrolls/expands its tile's panel";
+a spied `Element.prototype.scrollIntoView` proves the "scrolls" half on the
+same click.
+
+One self-caught, self-fixed test bug during authoring, not a product bug:
+the first draft's seeded unassigned cases left `submitted_at` null, which
+also tripped R25's "Missing application/offer date" tile
+(`dh-tile-milestone`) — since that tile's own baseline count in the fixture
+happened to already be the run's largest, seeding N more onto both tiles
+made `dh-tile-milestone` grow faster than the case actually being tested for
+top-of-sort, and §C11 failed on this pre-existing tile's count, not R31's.
+Fixed by setting `submitted_at` on the seeded rows so they trip only the
+predicate under test — a real, precise, non-masking fix to the TEST's own
+seed data, not a loosened assertion; `admin/app.js` was never in question.
+
+No product bug found otherwise. `admin/app.js`, `admin/index.html` and
+`admin/mock-supabase.js` were not modified for this pass — R31's product
+code was already built/uncommitted before this session started. Ran the
+WHOLE regression battery (`smoke.js` through `tests/r30.js`) alongside the
+new suite; every pre-existing suite passed unedited at its exact pre-R31
+count (see the table above). `node smoke.js` alone: 144/0.
 
 R30 notes: a small, already-built, uncommitted round persisting a
 SANITISED client-error fingerprint to a new `error_events` table, plus a
