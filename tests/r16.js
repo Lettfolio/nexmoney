@@ -250,8 +250,20 @@ function chaseExpected(status, days) {
           const headerChip = await page.$eval("#cs-btl-icr .cs-val", (e) => e.textContent).catch(() => "ABSENT");
           eq(`${t.name} · header echo (#cs-btl-icr) matches the block chip`, headerChip, chipText(r));
         } else {
-          const headerAbsent = await page.evaluate(() => !document.querySelector("#cs-btl-icr"));
-          ok(`${t.name} · no rent at all -> #cs-btl-icr is entirely ABSENT (not just empty)`, headerAbsent);
+          /* R35 §3 — affordability never silently vanishes: a BTL case with NO rent at all used to
+             drop #cs-btl-icr entirely (the row required btlIcr(c), which is null with no rent), so
+             the one case where affordability is genuinely UNKNOWN looked identical to a non-BTL
+             case with nothing to say. The row is now always drawn for a BTL case: the amber
+             "Rent — not captured" badge plus the #cs-btl-add-rent fix-it button take its place.
+             Stronger than the old absence check, not a work-around of it — see the R35 notes. */
+          const row = await page.evaluate(() => {
+            const el = document.querySelector("#cs-btl-icr");
+            const amber = el ? el.querySelector(".badge.amber") : null;
+            return el ? { present: true, amberText: amber ? amber.textContent : null, hasAddBtn: !!document.querySelector("#cs-btl-add-rent") } : { present: false };
+          });
+          ok(`${t.name} · no rent at all -> #cs-btl-icr is PRESENT (R35 §3 — affordability never silently vanishes)`, row.present, JSON.stringify(row));
+          eq(`${t.name} · …with the amber "Rent — not captured" badge`, row.amberText, "Rent — not captured");
+          ok(`${t.name} · …and the #cs-btl-add-rent button`, row.hasAddBtn, JSON.stringify(row));
         }
       }
       ok("A · no console errors", noNewErr(errBefore), JSON.stringify(page.__err));

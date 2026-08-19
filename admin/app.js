@@ -5690,9 +5690,31 @@ async function loadDashboard() {
   const caseAdviser = {};
   (cases || []).forEach((c) => { caseAdviser[c.id] = c.assigned_to || null; });
 
+  /* ==========================================================================
+     R35 §4 — THE RETENTION FLOW STOPS NAGGING ABOUT ITS OWN SUCCESSOR.
+     Starting a retention case copies the source case's rate_end_date onto the new live case (see
+     startRetentionCase), which is right — that date is what the conversation is about. But the
+     successor is then itself a case with a rate end in the past, so the Rate & ERC feed grew a
+     SECOND "rate ended N days ago" alert for the same client, the same building and the same
+     mortgage: one for the completed case and one for the live case that already IS the answer to
+     it. The adviser who did the right thing got more alerts, not fewer.
+     A LIVE successor is therefore excluded from this feed. The SOURCE case's row stays exactly as
+     it was — it is the row that carries "Start retention case" / "retention started", and dropping
+     it would hide the conversation rather than de-duplicate it. A successor that has itself
+     completed or fallen through is handling nothing, so it is not suppressed.
+     Applied to the feed's own sets (below), which is everything this drawer draws — the list, the
+     scoped counts in the heading and the firm-wide figures in their tooltips all move together,
+     because a badge counting rows the list does not show is the W-16 defect. Built off the
+     dashboard cases already read (DASH_CASE_COLS carries retention_source_case_id), so it costs no
+     query; v_alerts carries no such column of its own. The KPI strip above is untouched — it
+     counts the book, not this worklist. */
+  const retentionSuccessorLive = new Set((cases || [])
+    .filter((c) => c.retention_source_case_id && !["completed", "not_proceeding"].includes(c.stage))
+    .map((c) => c.id));
+  const notSelfNag = (a) => !retentionSuccessorLive.has(a.case_id);
   /* R12b · W-7 — the strip. See renderTodayKpis() above for the whole rationale. */
-  const ratesSoonAll = (alerts || []).filter((a) => a.days_to_rate_end != null && a.days_to_rate_end <= reminderMonths * 30);
-  const ercFlagsAll = (alerts || []).filter((a) => a.erc_outlasts_rate);
+  const ratesSoonAll = (alerts || []).filter((a) => a.days_to_rate_end != null && a.days_to_rate_end <= reminderMonths * 30).filter(notSelfNag);
+  const ercFlagsAll = (alerts || []).filter((a) => a.erc_outlasts_rate).filter(notSelfNag);
   /* R12b · W-7 — everything the tiles are computed from, kept so the Mine/All toggle can repaint
      them WITHOUT a second round-trip. The toggle changes which subset is counted, not which rows
      exist, so re-reading the table to answer it would be a query spent on nothing. */
@@ -5724,7 +5746,7 @@ async function loadDashboard() {
   const ratesSoonScoped = ratesSoonAll.filter(rateInScope);
   const ercFlagsScoped = ercFlagsAll.filter(rateInScope);
   const ercIds = new Set(ercFlagsScoped.map((a) => a.case_id));
-  const rateErcAll = [...ratesSoonScoped];
+  const rateErcAll = [...ratesSoonScoped];   // R35 §4 — live retention successors already excluded above
   ercFlagsScoped.forEach((a) => { if (!rateErcAll.some((x) => x.case_id === a.case_id)) rateErcAll.push(a); });
   /* R7-2 — what each expiring rate is WORTH, keyed by case id, from the widened cases read above.
      `lastFee` is proc + broker + sols on the case: the fee the firm earned last time it did this
@@ -7823,6 +7845,23 @@ async function loadPipeline() {
     }
     return true;
   });
+  /* R35 §2 — TWO LIVE CASES ON THE SAME BUILDING FOR THE SAME CLIENT RENDER BYTE-IDENTICAL.
+     Duncan Armitage's two Skipton cases on 4 Seafield Gardens are the same name, the same chip,
+     the same lender and the same loan; nothing on either card said which was which, and the only
+     way to tell them apart was to open both. The board already holds every case it needs to
+     answer this, so the count is taken off the rows just read — no extra query.
+     The key is the client plus the CANONICAL property identity (propKey — the same normaliser
+     propChip and the Rate & ERC merge use; a second address normaliser is the R6 defect this
+     codebase exists not to repeat). Only LIVE cases count: a completed case on the same building
+     is history, not a twin, and would put a tag on a card that has no sibling on the board. */
+  const twinKey = (c) => (c.client_id || "") + "|" + (propKey(c) || "");
+  const twinCount = new Map();
+  filtered.forEach((c) => {
+    if (TERMINAL_STAGES.includes(c.stage)) return;
+    if (!propKey(c)) return;                       // no address identity — nothing to disambiguate
+    const k = twinKey(c);
+    twinCount.set(k, (twinCount.get(k) || 0) + 1);
+  });
   renderSegmentControl(filtered);
   const stageEntry = await loadStageEntries(filtered);
   // Completed segment: the board makes little sense — force the completion-focused table.
@@ -7915,9 +7954,24 @@ async function loadPipeline() {
            rendered at all, the kind goes back into the card body. */
         const cardChip = propChip(c, { fallback: (clientCaseCount[c.client_id] || 0) > 1, cls: "pc-card", noLender: true });
         const cardKind = KINDS.find((x) => x[0] === c.case_kind)?.[1] || "";
-        const cdText = cardChip
-          ? (c.lender || cardKind)                       // the chip already carries the address or the kind
+        /* R35 §1 — THE KIND IS ONLY OMITTED WHEN THE CHIP ITSELF SAYS IT. The old rule dropped the
+           kind whenever a chip was rendered at all, so an ADDRESSED case printed "Nationwide ·
+           £218,000" and never said whether it was a remortgage, a purchase or a buy-to-let — the
+           one fact that separates a landlord's home remortgage from the BTL next to it on the
+           board. The hollow no-address chip IS "type · lender" (propChip's fallback), and there
+           alone repeating the kind would say the same thing twice. */
+        const chipSaysKind = !!cardChip && !propAddress(c);
+        const cdText = chipSaysKind
+          ? (c.lender || cardKind)                       // the hollow chip already carries the kind
           : [cardKind, c.lender].filter(Boolean).join(" · ");
+        /* R35 §2 — the twin tail. Only on a card whose chip shows a real ADDRESS (a hollow chip
+           carries no address, so there is nothing shared to disambiguate) and only where another
+           LIVE case of the same client sits on the same building. Kind and lender are printed
+           above by §1, so the stage is the remaining differentiator — the same tail propCtxChip
+           appends for a shared property elsewhere. Off single cases entirely: no noise. */
+        const twinTail = (cardChip && propAddress(c) && (twinCount.get(twinKey(c)) || 0) > 1)
+          ? ` <span class="case-tag">${esc(STAGE_LABEL[c.stage] || String(c.stage).replace(/_/g, " "))}</span>`
+          : "";
         return `<div class="card${age.level ? " age-" + age.level : ""}" draggable="true" data-id="${c.id}" onclick="openCase('${c.id}')">
           <div class="cn" style="display:flex;justify-content:space-between;align-items:center;gap:6px;"><span class="cn-name" title="${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ") || "")}">${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ") || "—")}</span><span style="display:flex;align-items:center;gap:6px;flex:0 0 auto;">${c.assigned_to ? `<span class="chip" title="${esc(staffName(c.assigned_to))}">${initials(c.assigned_to)}</span>` : ""}${advanceBtn}</span></div>
           ${/* R6 — the card's answer to "which one of his five is this?", directly under the name
@@ -7927,7 +7981,7 @@ async function loadPipeline() {
           ${/* R6-FIX V4a — noLender: the hollow pill printed "Product Transfer · Nationwide"
                 directly above the card's own "Nationwide · £265,000". The lender once. */ ""}
           ${cardChip}
-          <div class="cd">${lenderIcon(c.lender)}${esc(cdText)}${c.loan_amount ? " · " + fmtM(c.loan_amount) : ""}</div>
+          <div class="cd">${lenderIcon(c.lender)}${esc(cdText)}${c.loan_amount ? " · " + fmtM(c.loan_amount) : ""}${twinTail}</div>
           <div class="flags">
             ${/* R9-5 · m10 — WHO THE CASE IS SITTING WITH. First in the flag row because it is the
                  one thing on a card that tells an adviser what to do next; deliberately quiet
@@ -8236,6 +8290,13 @@ function caseActionBarHtml(c, stage, kind, opts) {
     // Record-reason only ever exists at not_proceeding (it is meaningless elsewhere): primary
     // there, absent otherwise, so it never clutters the overflow of a live case.
     { id: "act-record-reason", label: "✏️ Record reason", onlyStage: "not_proceeding" },
+    /* R35 §5 — killing a case is an ordinary, frequent outcome with no affordance of its own on
+       this screen: it meant dragging the card to the last board column. It belongs in the
+       overflow, not the primary row — it is destructive and it is never the suggested next move —
+       and it has no CASE_ACTION_RULES entry precisely so it lands there at every stage. Absent on
+       a case that is already not_proceeding, where "Record reason" is the primary action instead.
+       The write goes through moveCaseToStage like every other stage change. */
+    ...(stage === "not_proceeding" ? [] : [{ id: "case-mark-np", label: "🚫 Mark not proceeding" }]),
   ];
   const primary = [], overflow = [];
   defs.forEach((d) => {
@@ -10797,6 +10858,16 @@ window.openCase = async function (id, opts = {}) {
       <div class="cs-stats">
         ${/* The stage moved up into the identity line above — this row is numbers. */ ""}
         ${nextStage ? `<button type="button" class="btn btn-sm cs-advance-btn" id="cs-advance-btn" title="Advance to ${esc(STAGE_LABEL[nextStage] || nextStage)}">Advance to ${esc(STAGE_LABEL[nextStage] || nextStage)} →</button>` : ""}
+        ${/* R35 §5 — MOVE TO ANY STAGE, FROM THE CASE ITSELF. Advance only ever offers the NEXT
+             stage, so every other move — back a stage after a lender declines, straight to Not
+             Proceeding, a jump the workflow does not model — meant closing the modal, finding the
+             card on the board and using the select that has been there all along. Same control,
+             same options, same single write path (moveCaseToStage), now beside the button it
+             complements. Options are built exactly as the board card's .card-stage-move builds
+             them, with the current stage selected. */ ""}
+        <select id="cs-stage-select" class="card-stage-move" aria-label="Move to stage" title="Move this case to any stage">
+          ${STAGES.map(([k, l]) => `<option value="${k}" ${k === c.stage ? "selected" : ""}${k === "decision_in_principle" ? ` title="${TIP_DIP}"` : ""}>${l}</option>`).join("")}
+        </select>
         <div class="cs-stat"><span class="cs-lbl">Adviser</span><span class="cs-val" id="cs-adviser-val">${c.assigned_to ? esc(staffName(c.assigned_to)) : '<span class="cs-muted">— unassigned —</span>'}</span></div>
         <div class="cs-stat"><span class="cs-lbl">Loan</span><span class="cs-val">${fmtM(c.loan_amount)}</span></div>
         ${/* R6 — was labelled "Property" and showed the property VALUE, which is the single most
@@ -10819,7 +10890,15 @@ window.openCase = async function (id, opts = {}) {
              stage-independent — a completed case that exchanged is still a case that exchanged. */ ""}
         ${c.exchange_date ? `<div class="cs-stat" id="cs-exchanged" title="Contracts exchanged on ${esc(fmtD(c.exchange_date))}. From this date the client is legally committed."><span class="cs-lbl">Exchanged</span><span class="cs-val">${fmtD(c.exchange_date)}</span></div>` : ""}
         ${/* R16 §A — the ICR verdict, echoed compactly here for a BTL case an adviser reads on the phone. */ ""}
-        ${btlIcrOn && c.case_kind === "buy_to_let" && btlIcr(c) ? `<div class="cs-stat" id="cs-btl-icr"><span class="cs-lbl">Affordability</span><span class="cs-val">${btlIcrChipHtml(c)}</span></div>` : ""}
+        ${/* R35 §3 — AFFORDABILITY NEVER SILENTLY VANISHES. The row used to require btlIcr(c),
+             which is null until a rent is captured — so the one BTL case where affordability is
+             unknown (the case most likely to be sent to a lender that will refuse it) showed
+             nothing at all, and the absence was indistinguishable from "not a BTL". The row is
+             now drawn for every BTL case: the chip when there is a rent, an amber "not captured"
+             with the way to fix it when there is not. Non-BTL cases are unchanged — no row. */ ""}
+        ${btlIcrOn && c.case_kind === "buy_to_let" ? `<div class="cs-stat" id="cs-btl-icr"><span class="cs-lbl">Affordability</span>${btlIcr(c)
+          ? `<span class="cs-val">${btlIcrChipHtml(c)}</span>`
+          : `<span class="cs-val"><span class="badge amber">Rent — not captured</span> <button type="button" class="linkish" id="cs-btl-add-rent">add</button></span>`}</div>` : ""}
         ${/* R16 §B — the submit-to-lender status, drawn only in the application window (DIP→exchange). */ ""}
         ${lenderTrackOn && lenderTrackVisible(c.stage) && c.application_status && APP_STATUS_LABEL[c.application_status] ? `<div class="cs-stat" id="cs-lender-status"${c.lender_reference ? ` title="Lender ref: ${esc(c.lender_reference)}"` : ""}><span class="cs-lbl">Application</span><span class="cs-val">${c.application_status === "offer_issued" ? "📄" : c.application_status === "submitted" ? "📤" : "🏦"} ${esc(APP_STATUS_LABEL[c.application_status])}${c.application_status === "submitted" && c.submitted_at ? " " + fmtD(c.submitted_at) : ""}</span></div>` : ""}
         ${/* R12b · W-15b — THE CALL PACK, on the header an adviser reads with the phone in their
@@ -11882,11 +11961,40 @@ window.openCase = async function (id, opts = {}) {
       try { res = await moveCaseToStage(id, nextStage, { promptStageEntry: true }); }
       finally { if (res === "blocked") advanceBtn.disabled = false; else openCase(id); }
     };
+    /* R35 §5 — the modal's move-to-any-stage select, beside Advance. Deliberately the SAME single
+       path as the advance button, the board card select and the board's drag: moveCaseToStage
+       carries the protection gate, the lost-reason capture, the reopen/complete confirms and the
+       missing-column fallbacks, and a second stage-write anywhere in this app would be a second
+       set of rules. Post-move handling mirrors the advance button exactly — reopen the case so
+       this modal's header, badges and action bar repaint at the new stage; a refusal or a
+       cancellation puts the select back to where the case actually is, because nothing moved. */
+    const stageSel = $("#cs-stage-select");
+    if (stageSel) stageSel.onchange = async () => {
+      const target = stageSel.value;
+      if (!target || target === c.stage) return;
+      stageSel.disabled = true;
+      let res;
+      try { res = await moveCaseToStage(id, target); }
+      finally {
+        if (res === "moved" || res === "reopened") openCase(id);
+        else { stageSel.value = c.stage; stageSel.disabled = false; }
+      }
+    };
     // "Set expected completion" nudge (BUILD 5c) — reveals Case details and focuses the field.
     const expNudge = $("#cs-expected-nudge");
     if (expNudge) expNudge.onclick = () => {
       const det = $("#modal .case-details"); if (det) det.open = true;
       const inp = $("#case-expected-completion");
+      if (inp) { inp.scrollIntoView({ behavior: "smooth", block: "center" }); inp.focus(); }
+    };
+    /* R35 §3 — "add" beside the amber Rent — not captured badge. Same gesture as the
+       expected-completion nudge above: open Case details and land on the field that fixes it.
+       The selector is #modal-scoped (R33) — .case-details also exists on the client screen behind
+       the modal, and an unscoped $(".case-details") opens that one instead. */
+    const btlAddRent = $("#cs-btl-add-rent");
+    if (btlAddRent) btlAddRent.onclick = () => {
+      const det = $("#modal .case-details"); if (det) det.setAttribute("open", "");
+      const inp = $("#modal [name=monthly_rent]");
       if (inp) { inp.scrollIntoView({ behavior: "smooth", block: "center" }); inp.focus(); }
     };
     const retentionBtn = $("#cs-retention-btn"); // R5-6 — the manual retention path
@@ -11941,6 +12049,20 @@ window.openCase = async function (id, opts = {}) {
     // R15 · §6 — record-reason exists only at not_proceeding (primary there). Reuses promptLostReason.
     const recordReasonBtn = $("#act-record-reason");
     if (recordReasonBtn) recordReasonBtn.onclick = () => window.recordLostReason(id, c);
+    /* R35 §5 — "Mark not proceeding", from the overflow. The confirm names the consequence before
+       moveCaseToStage's own lost-reason capture asks WHY; cancelling either one leaves the case
+       exactly where it was. No stage write of its own — the single path does all of it. */
+    const markNpBtn = $("#case-mark-np");
+    if (markNpBtn) markNpBtn.onclick = async () => {
+      if (!confirm("Mark this case as Not proceeding? It leaves the live pipeline — it stops appearing on the board's working stages and in the live figures. You will be asked to record why. It can be moved back later.")) return;
+      markNpBtn.disabled = true;
+      let res;
+      try { res = await moveCaseToStage(id, "not_proceeding"); }
+      finally {
+        if (res === "moved" || res === "reopened") openCase(id);
+        else markNpBtn.disabled = false;
+      }
+    };
     /* R15 · §6 — the OFFER/EXCHANGE "Discuss protection →" prompt chip. Reveals the protection
        field in Case details (same gesture as the expected-completion nudge), so the adviser records
        the conversation on the field the reports read. */

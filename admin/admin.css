@@ -1804,6 +1804,19 @@ select.task-reassign { width: auto; padding: 3px 6px; font-size: 12px; }
 /* "Advance to <next stage> →" (BUILD 7b, defect 17) — same single moveCaseToStage() path as the
    board affordance; hidden entirely (no button rendered) for the two terminal stages. */
 .cs-advance-btn { flex: 0 0 auto; min-height: 36px; }
+/* R35 §5 — the case modal's "move to any stage" select, beside Advance. It carries
+   .card-stage-move because it is the same control with the same options and the same single
+   moveCaseToStage() path — but the board's copy is a TOUCH FALLBACK (display:none above the
+   coarse-pointer breakpoint above), and this one is a first-class control on every viewport: it
+   is the only way to move a case backwards, or straight to a stage the workflow does not offer,
+   without closing the modal and hunting for the card. The id keeps it out of the board's rules
+   (and above the media query's width:100%) without touching them. */
+#cs-stage-select.card-stage-move {
+  display: block; width: auto; flex: 0 0 auto;
+  min-height: 36px; padding: 6px 8px; font-size: 12.5px;
+  border: 1px solid var(--border-strong); border-radius: 8px;
+  background: #fff; color: var(--dark);
+}
 .cs-stat { display: flex; flex-direction: column; line-height: 1.25; }
 .cs-lbl { font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
 .cs-val { font-size: 14px; font-weight: 600; color: var(--dark); }

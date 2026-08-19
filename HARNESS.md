@@ -90,6 +90,7 @@ node tests/r30.js
 node tests/r31.js
 node tests/r33.js
 node tests/r34.js
+node tests/r35.js
 ```
 
 Current green counts (end of round 23; r21/r22 were never committed to this
@@ -108,8 +109,14 @@ nothing else asserted the old shape of, and R19 is new owner-gated Reports
 content that no earlier suite reaches; R23 is the same story again — see the
 R23 notes below).
 
-**Full battery is 100% green (3,474/3,474), `tests/r9_docs.js` included
-(255/0).** R34 added `tests/r34.js` (60 checks) — see the "R34 notes" section
+**Full battery is 100% green (3,521/3,521), `tests/r9_docs.js` included
+(255/0).** R35 added `tests/r35.js` (43 checks) — see the "R35 notes" section
+below — and required one genuine, non-masking fix to a pre-existing suite whose
+own assertion R35's product change directly inverted (`tests/r16.js` A4 — see
+the R35 notes for exactly why: 81 → 83), plus one deliberate strengthening of
+`tests/r5_batch3.js`'s existing retention flow (66 → 68, two new assertions,
+see the R35 notes); every other pre-existing suite re-ran unedited at its
+exact pre-R35 count. R34 added `tests/r34.js` (60 checks) — see the "R34 notes" section
 below — and required two genuine, non-masking fixes to pre-existing suites
 whose seeded fixtures collided with R34's new adviser-scoped `#board-adviser`
 default (`tests/r18.js` §B and `tests/r24.js` §C — see the R34 notes for
@@ -190,7 +197,7 @@ even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes belo
 | Suite | Checks |
 |---|---|
 | `smoke.js` | 144 |
-| `tests/r5_batch1..9.js` (sum) | 557 (BATCH 9's day-collision fixed in R27 — see the R27 notes; R33 re-pointed a nav click in BATCH 1 and BATCH 8's `gotoSettings()` at the collapsed Firm group — see the R33 notes; R34 pre-seeded BATCH 9's Month/Day scenario with `nx_diary_staff="all"` so its Month-vs-Day memory check still guards what it always guarded — see the R34 notes; sum unchanged) |
+| `tests/r5_batch1..9.js` (sum) | 559 (BATCH 9's day-collision fixed in R27 — see the R27 notes; R33 re-pointed a nav click in BATCH 1 and BATCH 8's `gotoSettings()` at the collapsed Firm group — see the R33 notes; R34 pre-seeded BATCH 9's Month/Day scenario with `nx_diary_staff="all"` so its Month-vs-Day memory check still guards what it always guarded — see the R34 notes; R35 added two assertions to BATCH 3's retention flow proving the live successor doesn't renag its own Rate & ERC row — see the R35 notes; sum 557 → 559) |
 | `tests/r64.js` | 91 |
 | `tests/r8_touch.js` | 151 |
 | `tests/r8_rev.js` | 176 |
@@ -203,7 +210,7 @@ even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes belo
 | `tests/r13.js` | 142 |
 | `tests/r14.js` | 167 |
 | `tests/r15.js` | 160 |
-| `tests/r16.js` | 81 (R33 re-scoped its `openCase()` details-opener to `#modal .case-details` — see the R33 notes; count unchanged) |
+| `tests/r16.js` | 83 (R33 re-scoped its `openCase()` details-opener to `#modal .case-details` — see the R33 notes; R35's own §A4 was intentionally inverted by the round's own affordability-never-vanishes change — see the R35 notes; count rose from 81) |
 | `tests/r17.js` | 112 (same R33 `#modal .case-details` re-scope; count unchanged) |
 | `tests/r18.js` | 43 (same R33 `#modal .case-details` re-scope; R34 pinned `#board-adviser` to "all" before its board-cap seed of unassigned cases — see the R34 notes; count unchanged) |
 | `tests/r19.js` | 39 (unchanged count — R20 fixed HOW one row is queried, not what it asserts) |
@@ -218,7 +225,103 @@ even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes belo
 | `tests/r31.js` | 55 |
 | `tests/r33.js` | 55 |
 | `tests/r34.js` | 60 |
-| **Total** | **3,474** |
+| `tests/r35.js` | 43 |
+| **Total** | **3,521** |
+
+R35 notes: a small, already-built, uncommitted round shipping a CASE IDENTITY
+pack (`admin/app.js` only, no schema, no `admin/index.html`/`admin/mock-supabase.js`
+changes) — every path already existed; this round only changes what they render.
+
+  - **Board cards always show the case KIND.** The `.cd` line used to drop the
+    kind the instant ANY chip rendered at all, so an addressed remortgage and
+    the BTL beside it on the board read identically apart from the lender —
+    the one fact separating a landlord's home remortgage from the BTL next to
+    it vanished the moment the address chip appeared. The kind is now dropped
+    ONLY when the chip itself already says it — the hollow no-address chip
+    (`propChip`'s own `fallback` label, shown only when the client has more
+    than one case and at least one of them carries a real address) — every
+    addressed card's `.cd` is `kind · lender`.
+  - **Same-property live twins get a stage tail.** Two LIVE (non-terminal)
+    cases for the same `client_id` + `propKey`, on a card that carries a real
+    address chip, get ` <span class="case-tag">Stage label</span>` appended to
+    `.cd` — Duncan Armitage's Application/Offer pair on 4 Seafield Gardens
+    (the app's own worked example in the source comment) is the canonical
+    case. Off entirely on a solo card, on a hollow (no-address) chip, or once
+    a twin completes and the count falls back to one.
+  - **BTL affordability never silently vanishes.** `#cs-btl-icr` used to
+    require `btlIcr(c)`, which is `null` until a rent is captured — so the one
+    BTL case where affordability is genuinely UNKNOWN (arguably the case most
+    worth flagging, since it is the one most likely to get sent to a lender
+    that will refuse it) rendered nothing at all, indistinguishable from "not
+    a BTL". The row is now drawn for EVERY `buy_to_let` case: the existing ICR
+    chip when there is a rent, an amber "Rent — not captured" badge plus a
+    `#cs-btl-add-rent` button (same gesture as the expected-completion nudge —
+    opens `#modal .case-details`, focuses `[name=monthly_rent]`) when there is
+    not. Non-BTL cases are unchanged: still no row at all.
+  - **Retention self-nag stops.** Starting a retention case copies the
+    source's `rate_end_date` onto the new live successor, which is right — but
+    the successor was then itself a case with a rate end in the past, so the
+    Rate & ERC drawer grew a SECOND "rate ended N days ago" row for the same
+    client/building/mortgage: one for the completed source and one for the
+    live case that already IS the answer to it. A live successor
+    (`retention_source_case_id` set, stage not terminal) is now excluded from
+    the feed's own sets before the list, the heading's scoped counts and the
+    tooltip's firm-wide figures are built, so none of them can disagree. The
+    SOURCE row is untouched — it is what still carries "Start retention case"
+    and the 🔁 badge.
+  - **The modal grows a move-to-any-stage control.** `#cs-stage-select`
+    (class `card-stage-move`, same shape and same options as the board card's
+    own per-card select) sits beside `#cs-advance-btn`, all 8 STAGES with the
+    current one selected; its `onchange` routes through the SAME
+    `moveCaseToStage` single path as Advance, the board's drag-and-drop and
+    the board card's own select — the protection gate, the lost-reason
+    capture and the reopen/complete confirms all still apply, because there is
+    only ever the one write path. `#case-mark-np` ("🚫 Mark not proceeding")
+    is new in the More-actions overflow at every stage except not_proceeding
+    itself (where "Record reason" already does that job) — a confirm names
+    the consequence, then the same lost-reason capture Not Proceeding has
+    always required.
+
+`tests/r35.js` (43 checks, §A–§F) seeds/reads every fixture it needs directly
+against `window.__mockDb` (never relying on the shifting fixture's current
+composition) except §B's twin pair, which reuses Duncan Armitage's own
+fixture cases — the round's own source comment cites them as the worked
+example, and they are a live Application/Offer pair on one property that
+needs no seeding to demonstrate. §B's "complete one twin, then look again"
+step does NOT call `page.reload()` — a real reload rebuilds the mock db's
+whole in-memory fixture from scratch (see "What this is" above), which would
+silently undo the very update the check depends on. It re-navigates to the
+same page instead (`window.nav("pipeline")`, called again): `nav()`
+unconditionally re-runs the destination page's loader even when already on
+it, which is the "come back and look again" the check needs without the
+reset.
+
+One genuine, NON-MASKING fix to a pre-existing suite: `tests/r16.js` §A4
+asserted that `#cs-btl-icr` is entirely ABSENT for a BTL case with no rent —
+true before this round, and exactly the behaviour R35 §3 deliberately
+inverted (see above). The fix does not loosen or delete the assertion; it
+replaces the absence-check with three new ones proving the STRONGER
+replacement behaviour: the row is present, it carries `.badge.amber` reading
+"Rent — not captured", and it carries `#cs-btl-add-rent`. A3 (the
+rent-present ICR chip) is untouched, because R35 did not touch that path.
+81/0 → 83/0.
+
+One deliberate strengthening, not a fix: `tests/r5_batch3.js`'s existing
+"Start retention case" flow (driven from a live Rate & ERC row, same as
+before) now asserts — right after the button-gone check, using the successor
+id the block already resolved — that the re-rendered drawer shows exactly
+ONE row for Kwame Boateng (the source; unchanged) and that the successor's
+own case id never appears in it. This is the R35 §4 behaviour exercised
+through the real UI flow rather than a direct seed, complementing
+`tests/r35.js` §D's independent (seeded, not button-driven) coverage of the
+same rule. 66/0 → 68/0.
+
+Every OTHER pre-existing suite (`smoke.js` through `tests/r34.js`, minus the
+two above) re-ran unedited at its exact pre-R35 count — grepped for
+`#cs-btl-icr`, `case-tag`, `cs-stage-select` and `case-mark-np` and none of
+the others touch any of them. `admin/mock-supabase.js` was not touched by
+this test-writing pass (R35's product code was already built/uncommitted
+before this session started, and no fixture needed changing to exercise it).
 
 R34 notes: a small, already-built, uncommitted round shipping an adviser
 SCOPING pack (`admin/app.js` + `admin/index.html` only, no schema).

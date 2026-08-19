@@ -190,6 +190,21 @@ const openDrawer = async (page, panelId) => {
       ok("R5-6 · the stats line repainted", /^3 open/.test(after.statsLine), after.statsLine);
       ok("R5-6 · the button has gone from the Rate & ERC row", after.rowBtnGone);
 
+      /* R35 §4 — the retention flow must not renag the very drawer it was raised from: the
+         successor just created inherits ca018's rate_end_date, so it would otherwise grow a
+         SECOND "rate ended N days ago" row for Kwame Boateng right under the one that started
+         it. Exactly one row for him now — the source's, still — and the successor's own id never
+         appears in the drawer. */
+      const rateErcRows = await page.evaluate((succId) => {
+        const rows = [...document.querySelectorAll("#alerts-rateerc .row-item")];
+        return {
+          kwameRows: rows.filter((r) => /Kwame Boateng/.test(r.textContent)).length,
+          succPresent: rows.some((r) => (((r.querySelector(".t") || {}).getAttribute && r.querySelector(".t").getAttribute("onclick")) || "").includes(`'${succId}'`)),
+        };
+      }, after.succ.id);
+      eq("R35 §4 · exactly ONE Rate & ERC row for Kwame Boateng — the live successor doesn't renag it", rateErcRows.kwameRows, 1);
+      ok("R35 §4 · the successor's own case id is not in the drawer", !rateErcRows.succPresent, JSON.stringify(rateErcRows));
+
       /* the successor is recognisable as a retention case, and the source's My Day nag has gone */
       await page.evaluate((cid) => window.openCase(cid), after.succ.id);
       await page.waitForTimeout(700);
