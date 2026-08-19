@@ -4,6 +4,7 @@ const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 let db;
 try {
   db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+  window.db = db;   // R30 — expose the client so logClientError's `window.db && db.from` guard can gate the best-effort persist (and stays undefined before init, covering very-early errors)
 } catch (e) {
   // Supabase SDK failed to load (CDN outage, ad-blocker, proxy, SRI mismatch).
   // Show a visible message instead of a silent blank page, then stop.
@@ -37,6 +38,7 @@ const ADMIN_URL = new URL("/admin/", window.location.origin).href;
 const ERROR_LOG = [];
 const ERROR_LOG_CAP = 100;
 const ERROR_DEDUPE_MS = 5000;
+let errorEventsOff = false;   // R30 — once error_events is proven absent/denied this session, stop trying to persist (no console-error storms)
 function logClientError(kind, message, detail) {
   try {
     detail = detail || {};
@@ -59,6 +61,28 @@ function logClientError(kind, message, detail) {
     ERROR_LOG.push(entry);
     while (ERROR_LOG.length > ERROR_LOG_CAP) ERROR_LOG.shift();
     try { toast("Something went wrong — a diagnostic was logged."); } catch (_) {}
+    /* R30 — best-effort, SANITISED cross-session fingerprint. Only on the NEW-entry
+       path (the de-dupe branch above early-returns, so a flood inserts at most one
+       row per genuinely-new error). The payload has EXACTLY four coarse fields and
+       is built ONLY from local vars — no way for message/stack/recordId/name/email
+       to reach it. error_type = the JS error CLASS name from the stack (never the
+       message after the colon) or the kind; location = code file:line/fn only;
+       page = the base route (ids stripped); role = the staff role already captured.
+       Fire-and-forget with BOTH .then handlers so it can never throw or raise an
+       unhandledrejection (which would re-enter logClientError → infinite loop). */
+    const m = String(detail.stack || "").match(/^\s*([A-Z][A-Za-z]*(?:Error|Exception))\b/);
+    const etype = m ? m[1] : (kind || "error");
+    const location_ = String(entry.where || "").slice(0, 120);
+    let page = "";
+    try { page = String(location.hash || "").replace(/^#/, "").split(/[/?]/)[0].slice(0, 40); } catch (_) {}
+    try {
+      if (!errorEventsOff && window.db && db.from) {
+        db.from("error_events").insert([{ error_type: etype, location: location_, page: page, role: entry.role || null }])
+          .then((res) => { const c = res && res.error && res.error.code;
+                           if (c === "42P01" || c === "42501" || c === "PGRST205" || c === "PGRST106") errorEventsOff = true; },
+                () => {});   // BOTH handlers present → no unhandledrejection → no recursion
+      }
+    } catch (_) {}
   } catch (_) { /* logging must NEVER throw */ }
 }
 window.logClientError = logClientError;      // so caught-but-notable errors + tests can record one
@@ -18625,6 +18649,60 @@ function renderDiagnostics(all) {
   if (copyBtn) copyBtn.onclick = () => copyDiagnostics(recCount);
   const clearBtn = $("#report-diag-clear");
   if (clearBtn) clearBtn.onclick = () => { ERROR_LOG.length = 0; renderDiagnostics(all); toast("Diagnostics cleared for this session."); };
+  /* R30 — fill the additive cross-session table (async, self-contained). renderDiagnostics
+     stays sync; loadPersistedDiagnostics never throws and never calls logClientError. */
+  try { loadPersistedDiagnostics(); } catch (_) {}
+}
+/* R30 — the PERSISTED, cross-session error log (owner/admin), additive to the session
+   table above. Reads the sanitised error_events fingerprints, aggregates by
+   error_type|location|page → count + last-seen + roles, and renders it. Defensive by
+   design: it must NEVER throw and NEVER call logClientError (either would re-enter the
+   error path), so every branch swallows and an unsupported DB degrades to a plain note. */
+async function loadPersistedDiagnostics() {
+  const box = $("#diag-persist-table");
+  if (!box) return;
+  let res;
+  try {
+    res = await db.from("error_events").select("error_type,location,page,role,created_at").order("created_at", { ascending: false }).limit(OWNER_ROW_CAP);
+  } catch (e) { res = { error: e }; }
+  try {
+    if (!res || res.error || !Array.isArray(res.data)) {
+      box.innerHTML = '<div class="empty">Cross-session error log isn’t enabled on this database.</div>';
+      return;
+    }
+    const rows = res.data;
+    if (!rows.length) {
+      box.innerHTML = `<div class="empty">No cross-session errors recorded. ✅</div>`;
+    } else {
+      const groups = new Map();
+      rows.forEach((r) => {
+        const key = (r.error_type || "") + "|" + (r.location || "") + "|" + (r.page || "");
+        let g = groups.get(key);
+        if (!g) { g = { error_type: r.error_type || "", location: r.location || "", page: r.page || "", count: 0, last: "", roles: new Set() }; groups.set(key, g); }
+        g.count++;
+        if (r.created_at && r.created_at > g.last) g.last = r.created_at;
+        if (r.role) g.roles.add(r.role);
+      });
+      const list = Array.from(groups.values()).sort((a, b) => (b.count - a.count) || (a.last < b.last ? 1 : a.last > b.last ? -1 : 0));
+      box.innerHTML = `<table class="imp-table"><tr><th>Type</th><th>Where</th><th>Page</th><th title="Times seen">×</th><th>Last seen</th><th>Roles</th></tr>` +
+        list.map((g) => `<tr>
+          <td>${esc(g.error_type)}</td>
+          <td>${esc(g.location)}</td>
+          <td>${esc(g.page)}</td>
+          <td>${g.count}</td>
+          <td style="white-space:nowrap;">${esc(diagTimeFmt(g.last))}</td>
+          <td>${esc(Array.from(g.roles).join(", "))}</td>
+        </tr>`).join("") + `</table>`;
+    }
+    const clearBtn = $("#report-diag-persist-clear");
+    if (clearBtn) clearBtn.onclick = async () => {
+      try { await db.from("error_events").delete().gte("id", 0); } catch (_) {}   // .gte("id",0) matches all (delete needs a filter)
+      try { loadPersistedDiagnostics(); } catch (_) {}
+      try { toast("Persisted diagnostics cleared."); } catch (_) {}
+    };
+  } catch (_) {
+    try { box.innerHTML = '<div class="empty">Cross-session error log isn’t enabled on this database.</div>'; } catch (__) {}
+  }
 }
 /* Plain-text dump (health summary + error rows) → clipboard, so an owner can paste it to
    support. navigator.clipboard is wrapped: absent/denied → a toast, never an exception. */

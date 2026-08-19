@@ -503,6 +503,11 @@
           <h3>Session health<button type="button" class="btn btn-sm mi-csv-btn" id="report-diag-csv" title="Download the error log as CSV">⭳ CSV</button><button type="button" class="btn btn-sm" id="report-diag-copy" title="Copy the diagnostics to your clipboard">Copy diagnostics</button><button type="button" class="btn btn-sm" id="report-diag-clear" title="Clear this session's in-memory error log">Clear</button></h3>
           <div class="panel-sub" id="report-diag-health"></div>
           <div id="diag-error-table" style="margin-top:12px;"></div>
+          <!-- R30 — additive cross-session table. Sanitised fingerprints only (error type,
+               code location, base page route, staff role); no messages, names or client data. -->
+          <h3 style="margin-top:18px;">Across sessions (persisted)<button type="button" class="btn btn-sm" id="report-diag-persist-clear" title="Delete the persisted cross-session error log">Clear persisted</button></h3>
+          <p class="panel-sub">A sanitised, cross-session history — error type, code location, page and staff role only. No messages, names or client data are ever stored here.</p>
+          <div id="diag-persist-table" style="margin-top:8px;"></div>
         </div>
       </div>
       <div class="grid-2">

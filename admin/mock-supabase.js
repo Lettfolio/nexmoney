@@ -373,8 +373,17 @@
        letters kept as a record, etc.). */
     staff_absences: [], case_files: [],
     /* R14 — the company password safe. */
-    vault_entries: []
+    vault_entries: [],
+    /* R30 — persisted, SANITISED client-error fingerprints (owner/admin diagnostics).
+       Columns: id, created_at, error_type, location, page, role — NO message/stack/PII
+       column, by construction, exactly like production. */
+    error_events: []
   };
+  /* R30 — feature-gate toggle (default true). __setErrorEventsSupported(false) makes any
+     op on error_events answer with a PostgREST-shaped 42P01, so tests can exercise the
+     app's degrade path (errorEventsOff + the "isn't enabled" note). */
+  var errorEventsSupported = true;
+  var errorEventSeq = 0;   // serial-style incrementing id, assigned on insert
   var PK = { settings: "key" };
   function pkOf(t) { return PK[t] || "id"; }
 
@@ -1107,6 +1116,12 @@
   function applyInsertDefaults(table, row) {
     var r = clone(row);
     var pk = pkOf(table);
+    /* R30 — error_events: a numeric, incrementing id (serial parity) and the four
+       nullable fingerprint columns default to null so a select always returns the key. */
+    if (table === "error_events") {
+      if (r.id == null) r.id = ++errorEventSeq;
+      ["error_type", "location", "page", "role"].forEach(function (f) { if (r[f] === undefined) r[f] = null; });
+    }
     if (pk === "id" && !r.id) r.id = nid(PREFIX[table] || "row");
     if (!r.created_at && table !== "settings") r.created_at = iso(NOW);
     if (table === "cases" || table === "clients" || table === "vault_entries") { if (!r.updated_at) r.updated_at = iso(NOW); }
@@ -4219,7 +4234,10 @@
     return new Promise(function (resolve) {
       var res;
       try {
-        if ((!DB[self._table] && !VIEWS[self._table]) || tableIsMissing(self._table)) {
+        if (self._table === "error_events" && !errorEventsSupported) {
+          /* R30 feature-gate — a DB without the table answers every op with 42P01. */
+          res = { data: null, error: { message: 'relation "error_events" does not exist', code: "42P01", details: null, hint: null }, count: null, status: 404, statusText: "Not Found" };
+        } else if ((!DB[self._table] && !VIEWS[self._table]) || tableIsMissing(self._table)) {
           res = { data: null, error: pgError('relation "public.' + self._table + '" does not exist', "42P01"), count: null, status: 404, statusText: "Not Found" };
         } else if (self._op === "insert") res = self._runInsert(false);
         else if (self._op === "upsert") res = self._runInsert(true);
@@ -6194,6 +6212,11 @@
     };
     return client;
   }
+
+  /* R30 — test hook: toggle whether error_events exists on this "database". Default true;
+     set false to make every op on the table return a PostgREST 42P01, exercising the
+     app's feature-gate/degrade path (errorEventsOff + the "isn't enabled" note). */
+  window.__setErrorEventsSupported = function (b) { errorEventsSupported = !!b; return errorEventsSupported; };
 
   window.supabase = { createClient: createClient, SupabaseClient: function () { }, __isMock: true };
 })();

@@ -86,6 +86,7 @@ node tests/r25.js
 node tests/r26.js
 node tests/r27.js
 node tests/r29_scale.js
+node tests/r30.js
 ```
 
 Current green counts (end of round 23; r21/r22 were never committed to this
@@ -104,8 +105,12 @@ nothing else asserted the old shape of, and R19 is new owner-gated Reports
 content that no earlier suite reaches; R23 is the same story again — see the
 R23 notes below).
 
-**Full battery is 100% green (3,264/3,264), `tests/r9_docs.js` included
-(255/0).** R28 is a small, already-built,
+**Full battery is 100% green (3,301/3,301), `tests/r9_docs.js` included
+(255/0).** R30 added `tests/r30.js` (37 checks) — see the "R30 notes" section
+below — and every pre-existing suite (`smoke.js` through `tests/r29_scale.js`)
+re-ran unedited at its exact pre-R30 count; `admin/app.js`/`admin/mock-supabase.js`
+were not touched by this test-writing pass (R30's product code was already
+built/uncommitted before this session started). R28 is a small, already-built,
 uncommitted change to R26's per-adviser fee targets (`admin/app.js` only —
 see the "R28 notes" section below) that required updating `tests/r26.js`
 in place: its check count rose from 36 to 38 (two new assertions proving the
@@ -189,7 +194,106 @@ even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes belo
 | `tests/r26.js` | 38 (R28 updated the basis/scoping assertions and added 2 new checks — see the R28 notes) |
 | `tests/r27.js` | 43 |
 | `tests/r29_scale.js` | 106 |
-| **Total** | **3,264** |
+| `tests/r30.js` | 37 |
+| **Total** | **3,301** |
+
+R30 notes: a small, already-built, uncommitted round persisting a
+SANITISED client-error fingerprint to a new `error_events` table, plus a
+cross-session view in the owner/admin Diagnostics panel — no `index.html`
+markup change beyond the pre-existing R21 Part C panel gaining an
+"Across sessions (persisted)" sub-section (`#diag-persist-table`,
+`#report-diag-persist-clear`) inside the same `#report-diag-section`.
+
+  - **Table**: `error_events` — EXACTLY four sanitised columns beyond the
+    key: `error_type` (the JS error CLASS name, parsed off the stack, never
+    the message), `location` (code file:line/fn only), `page` (the base hash
+    route, ids stripped), `role` (the staff role). No `message`, `stack`,
+    `recordId`, `user`/`email` or `view` column exists on the table AT
+    ALL — by construction, not by filtering — mirroring the in-memory
+    `ERROR_LOG`'s richer shape (which keeps message/stack/recordId/user/view,
+    session-only, never persisted, exactly as R21 Part A documented).
+  - **Write path**: `logClientError` (app.js ~L42) fires the persist insert
+    ONLY on a genuinely-NEW `ERROR_LOG` entry — the existing R21 de-dupe
+    branch (identical message within `ERROR_DEDUPE_MS`=5s bumps `.count` and
+    returns early) sits BEFORE the R30 persist block, so a repeat within the
+    window adds zero new rows, not a second one. The insert is
+    fire-and-forget with both `.then` handlers present (so it can never
+    raise an `unhandledrejection` and recurse back into `logClientError`)
+    and gated by `errorEventsOff` — a session-local flag that latches TRUE
+    the first time the DB answers 42P01/42501/PGRST205/PGRST106, so an
+    unsupported/denied table degrades to "keep logging in-memory, stop
+    trying to persist" rather than a console-error storm on every
+    subsequent client error.
+  - **RLS (production intent, documented here since the mock doesn't model
+    row-level security beyond `duplicate_dismissals`/`case_documents`/etc.'s
+    explicit `writePolicy` blocks — `error_events` has none, so the mock
+    allows any signed-in persona to read/write it at the DB layer, same as
+    every other table with no bespoke policy)**: insert = any staff member
+    (any authenticated admin app session logs its own errors); read/delete
+    = owner/admin only. In this build that read/delete gate is enforced at
+    the UI layer — `#report-diag-section` (and therefore
+    `#diag-persist-table` inside it) is hidden for a plain adviser by the
+    same `isAdminOrOwner()` check that already gates R21 Part C's session
+    table and R19's Pipeline MI — exactly like every other owner/admin-only
+    Reports panel in this codebase; §E of `tests/r30.js` confirms adviser
+    (p2) never sees the section while admin (p1) and owner (p4) both do.
+  - **Read/aggregate path**: `loadPersistedDiagnostics()` reads
+    `error_type,location,page,role,created_at` (never more), groups by
+    `error_type|location|page` into ×count + last-seen + the set of roles
+    that hit it, and renders `#diag-persist-table`; any read failure
+    (including the feature-gate's 42P01) degrades to a plain "Cross-session
+    error log isn't enabled on this database." note — the function is
+    written to NEVER throw and NEVER call `logClientError` (either would
+    re-enter the error path). `#report-diag-persist-clear` deletes every row
+    (`.gte("id", 0)` — delete needs a filter, so this is the "match
+    everything" idiom) and re-renders.
+  - **Feature-gate test hook**: `window.__setErrorEventsSupported(false)`
+    (mock-supabase.js) makes every op on `error_events` answer with a
+    PostgREST-shaped 42P01, exercising `errorEventsOff` end to end without
+    faking a network failure.
+
+`tests/r30.js` (37 checks) proves this on fresh, isolated pages per section
+(each Playwright page load re-executes `mock-supabase.js` from scratch, so
+`error_events` starts empty every time — the same per-page-isolation fact
+R29's notes already establish). §A is the round's core: as owner (p4), with
+`location.hash` set to `#case/ca001` immediately before the call, one error
+is logged whose message AND stack deliberately contain an obviously-
+sensitive string ("SECRET-CLIENT-NAME") and the case id ("ca001"). The
+persisted row is read straight off `window.__mock.db.error_events` — the
+mock's live in-memory table, not a `select()`-shaped copy — and asserted:
+exactly one row; its keys are a SUBSET of
+`{id,created_at,error_type,location,page,role}`; `error_type==="TypeError"`
+(parsed off the stack, not the message); `location==="app.js:9"`;
+`page==="case"` (the id stripped off the hash route); `role==="owner"`; and,
+the crucial negative assertions, the row's `JSON.stringify`'d text contains
+NEITHER the secret client name NOR the original message text NOR the case
+id NOR the stack's own line:col — proving no client string reaches the
+table, not merely that the expected four fields look right. §B proves the
+de-dupe/persist interaction directly: two identical `logClientError` calls
+within the 5s window leave `ERROR_LOG` at exactly one entry (`.count`
+bumped to 2) and `error_events` at exactly one row, not two. §C seeds two
+DISTINCT messages sharing one `error_type`/`location`/`page` (so the
+in-memory de-dupe never fires — each persists its own row) and confirms
+`#diag-persist-table` renders one aggregated ×2 row naming the role, then
+that `#report-diag-persist-clear` empties both the DOM table and the
+underlying `error_events` store. §D flips `__setErrorEventsSupported(false)`
+and proves `logClientError` still doesn't throw, `window.__errorLog` still
+grows, `error_events` stays empty, and the panel shows the "isn't enabled"
+note — then restores the flag so it can't leak into a later suite sharing
+the browser. §E is the audience check described above. §F (no new console
+errors) is checked per-section throughout, the same `page.__err` convention
+every suite in this harness uses.
+
+No product bug found. `admin/app.js` and `admin/mock-supabase.js` were not
+modified for this pass — R30's product code (the persist block +
+`errorEventsOff` in `logClientError`, `loadPersistedDiagnostics`, the
+`error_events` table + `errorEventsSupported` feature-gate +
+`window.__setErrorEventsSupported`) was already built/uncommitted before
+this session started, and the sanitisation guarantee held on first run: no
+loosening, no masking, no test written around a gap. Ran the WHOLE
+regression battery (`smoke.js` through `tests/r29_scale.js`) alongside the
+new suite; every pre-existing suite passed unedited at its exact pre-R30
+count (see the table above). `node smoke.js` alone: 144/0.
 
 R29 notes: started as a VERIFICATION round (no product-code changes) and
 became a find-then-fix round within the same pass once the finding below was
