@@ -17,6 +17,12 @@
        `application_status` (lenderTrackSupported, no-migration-toggle column
        but still probed defensively).
      - `,clients!client_id(first_name,last_name)` always appended last.
+     - R37 · non-masking repair — R37's board duplicate-hint (W9) widened this embed to
+       `,clients!client_id(first_name,last_name,email)` (app.js loadPipeline(), the board's client
+       cards need the email to flag same-email duplicate clients). Still a NAMED embed, still
+       appended last, still no `select("*")` anywhere in it — the discipline this file's §D/§E were
+       written to prove is intact; only the exact string moved, and D4/D5/E4 below are updated to
+       the new truth rather than dropped.
      - `.order("updated_at",{ascending:false}).limit(OWNER_ROW_CAP)` (R23)
        unchanged.
 
@@ -368,8 +374,11 @@ async function readTableRow(page, fullName) {
       ok("D2 · the select argument is NOT \"*\"", cols !== "*", cols);
       const base = await pageA.evaluate(() => BOARD_CASE_COLS);
       ok("D3 · the select argument starts with BOARD_CASE_COLS verbatim", typeof cols === "string" && cols.indexOf(base) === 0, cols);
-      ok("D4 · …and includes the clients!client_id embed", cols.indexOf("clients!client_id(first_name,last_name)") !== -1, cols);
-      ok("D5 · …and ends with the clients embed (appended last, per app.js)", cols.slice(-"clients!client_id(first_name,last_name)".length) === "clients!client_id(first_name,last_name)", cols);
+      // R37 · non-masking repair — the board's clients embed now widens to include `email` (W9
+      // duplicate-client hint); the string this test checks for is updated to that new truth, not
+      // relaxed — it still asserts a named, non-"*" embed appended last.
+      ok("D4 · …and includes the clients!client_id embed (R37: widened to include email)", cols.indexOf("clients!client_id(first_name,last_name,email)") !== -1, cols);
+      ok("D5 · …and ends with the clients embed (appended last, per app.js)", cols.slice(-"clients!client_id(first_name,last_name,email)".length) === "clients!client_id(first_name,last_name,email)", cols);
       ok("D6 · …and (defaults ON) includes property_address", cols.indexOf(",property_address") !== -1, cols);
       ok("D7 · …and includes waiting_on,solicitor_firm", cols.indexOf(",waiting_on,solicitor_firm") !== -1, cols);
       ok("D8 · …and includes application_status", cols.indexOf(",application_status") !== -1, cols);
@@ -472,7 +481,7 @@ async function readTableRow(page, fullName) {
       ok("E2 · exactly one board cases select observed while forced-unsupported", calls.length === 1, JSON.stringify(calls));
       const cols = calls[0] && calls[0].cols;
       ok("E3 · the select still includes the base BOARD_CASE_COLS", typeof cols === "string" && cols.indexOf(await pageE.evaluate(() => BOARD_CASE_COLS)) === 0, cols);
-      ok("E4 · the select still includes the clients embed", cols && cols.indexOf("clients!client_id(first_name,last_name)") !== -1, cols);
+      ok("E4 · the select still includes the clients embed (R37: widened to include email)", cols && cols.indexOf("clients!client_id(first_name,last_name,email)") !== -1, cols);
       ok("E5 · property_address is OMITTED (not requested at all)", cols && cols.indexOf("property_address") === -1, cols);
       ok("E6 · waiting_on/solicitor_firm are OMITTED", cols && cols.indexOf("waiting_on") === -1 && cols.indexOf("solicitor_firm") === -1, cols);
       ok("E7 · application_status is OMITTED", cols && cols.indexOf("application_status") === -1, cols);

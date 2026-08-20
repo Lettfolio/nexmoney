@@ -4537,7 +4537,7 @@ async function renderSettings() {
   const dobStats = await clientDobStats();
   const visibleFields = owner ? SETTING_FIELDS : SETTING_FIELDS.filter(([k]) => !OWNER_ONLY_SETTING_KEYS.includes(k));
   const general = visibleFields.map(settingFieldHtml).join("") + `
-    <h3 style="grid-column:1/-1;margin:10px 0 0;">Protection &amp; GI</h3>
+    <h3 id="set-sec-protection" style="grid-column:1/-1;margin:10px 0 0;">Protection &amp; GI</h3>
     <label>Protection gate — block moves to Application+ until protection is recorded
       <select name="protection_gate">
         <option value="" ${(settings.protection_gate ?? "on") === "on" ? "" : "selected"}>Off</option>
@@ -4560,7 +4560,7 @@ async function renderSettings() {
       </select>
     </label>
     <p class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;">⚠️ The automated protection and GI emails are financial promotions — get principal approval for the templates before switching them on.</p>
-    <h3 style="grid-column:1/-1;margin:10px 0 0;">Owner digest</h3>
+    <h3 id="set-sec-digest" style="grid-column:1/-1;margin:10px 0 0;">Owner digest</h3>
     <label>Daily owner digest email (on/off)
       <select name="owner_digest">
         <option value="" ${(settings.owner_digest ?? "on") === "on" ? "" : "selected"}>Off</option>
@@ -4572,7 +4572,7 @@ async function renderSettings() {
     </label>
     <p class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;">Sent daily at ~07:30 UK time. Requires RESEND_API_KEY.</p>
     <div style="grid-column:1/-1;"><button type="button" class="btn btn-sm" id="send-digest-btn">Send digest now</button></div>
-    <h3 style="grid-column:1/-1;margin:10px 0 0;">Client comms &amp; sales</h3>
+    <h3 id="set-sec-comms" style="grid-column:1/-1;margin:10px 0 0;">Client comms &amp; sales</h3>
     ${owner ? `<h4 style="grid-column:1/-1;margin:0;">Regulated financial promotions</h4>
     <label>Financial promotions approved (master switch)
       <select name="financial_promotions_approved">
@@ -4627,7 +4627,7 @@ async function renderSettings() {
           rules the cron actually applies (which cases, how often, only-what-is-missing, and where
           it stops) plus the dependency that makes it work at all, because a firm switching this on
           with no Resend key would otherwise see a toggle saying On and nothing happening. */ ""}
-    <h4 style="grid-column:1/-1;margin:10px 0 0;">Documents</h4>
+    <h4 id="set-sec-documents" style="grid-column:1/-1;margin:10px 0 0;">Documents</h4>
     <label>Automatic document chasing
       <select name="doc_chase_enabled">
         <option value="off" ${(settings.doc_chase_enabled ?? "off") === "on" ? "" : "selected"}>Off</option>
@@ -4663,7 +4663,7 @@ async function renderSettings() {
       <input name="site_url" type="url" value="${esc(settings.site_url ?? "")}" placeholder="https://www.nexmoney.co.uk">
     </label>`;
   const advanced = `
-    <h3 style="grid-column:1/-1;margin:0;">Outlook &amp; AI</h3>
+    <h3 id="set-sec-outlook" style="grid-column:1/-1;margin:0;">Outlook &amp; AI</h3>
     <label>Outlook inbox sync (pulls client emails into My Day)
       <select name="outlook_enabled">
         <option value="0" ${settings.outlook_enabled === "1" ? "" : "selected"}>Off</option>
@@ -4674,7 +4674,7 @@ async function renderSettings() {
       <input name="outlook_mailboxes" value="${esc(settings.outlook_mailboxes ?? "")}" placeholder="daniel@nexmoney.co.uk, wayne@nexmoney.co.uk — blank = all staff">
     </label>
     <p class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;">Outlook sync and the AI assistant need Supabase secrets: ANTHROPIC_API_KEY, MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET — plus an Azure app registration with Graph <em>Application</em> permission Mail.Read and admin consent.</p>
-    <h3 style="grid-column:1/-1;margin:10px 0 0;">SMS provider</h3>
+    <h3 id="set-sec-sms" style="grid-column:1/-1;margin:10px 0 0;">SMS provider</h3>
     <label>SMS enabled
       <select name="sms_enabled">
         <option value="off" ${(settings.sms_enabled ?? "off") === "on" ? "" : "selected"}>Off</option>
@@ -4708,7 +4708,7 @@ async function renderSettings() {
       <summary>General</summary>
       <div class="settings-grid">${general}</div>
     </details>
-    <details class="case-details settings-details">
+    <details class="case-details settings-details" id="set-sec-advanced">
       <summary>Advanced — API keys &amp; integrations</summary>
       <div class="settings-grid">${advanced}</div>
     </details>`;
@@ -4762,6 +4762,140 @@ async function renderSettings() {
      and so appear on no other screen. Owner-only in the UI; the database is what actually
      withholds those rows from everyone else. */
   loadChangeHistory();
+  /* R37 · P-settings — the jump nav is built LAST, once every block above has decided whether it
+     exists for this role. loadChangeHistory() and renderDiagnostics() both set their panel's
+     .hidden synchronously before their first await, so the answer is already on the page. */
+  buildSettingsJumpNav();
+}
+/* ==========================================================================
+   R37 · P-settings — SETTINGS JUMP NAV
+
+   The same device Reports got in R11-4 (REPORT_JUMP_SECTIONS / buildReportsJumpNav), applied to
+   the other long flat page in the app. Same classes, same markup, same behaviour, so the two read
+   as one idea rather than two.
+
+   The role rule is copied verbatim and it is the point: the chip list is READ off the rendered
+   page, never declared. Every block on Settings already owns its own visibility gate (owner for
+   the export panel and the change history, isAdminOrOwner for Team and Diagnostics, the M1 column
+   check for My details), so re-testing the role here would be a second copy of a gate that could
+   drift from the first. An adviser's bar has no chip for a section an adviser has no section for,
+   because the section said so.
+
+   The one thing Reports does not have to do: two of these sections live inside a <details>. A
+   chip that scrolled to a collapsed <summary> would be a jump to nothing, so the click opens
+   every <details> the target sits inside first.
+   ========================================================================== */
+const SETTINGS_JUMP_SECTIONS = [
+  ["export", "Export data", "#firm-export-panel"],
+  ["protection", "Protection & GI", "#set-sec-protection"],
+  ["digest", "Owner digest", "#set-sec-digest"],
+  ["comms", "Client comms", "#set-sec-comms"],
+  ["documents", "Documents", "#set-sec-documents"],
+  ["outlook", "Outlook & AI", "#set-sec-outlook"],
+  ["sms", "SMS", "#set-sec-sms"],
+  ["advanced", "Advanced", "#set-sec-advanced"],
+  ["targets", "Adviser targets", "#adviser-targets-section"],
+  ["mydetails", "My details", "#my-details-panel"],
+  ["introducers", "Introducers", "#introducers-panel"],
+  ["team", "Team", "#team-logins-panel"],
+  ["history", "Change history", "#change-history-panel"],
+  ["diag", "Diagnostics", "#diag-details"],
+];
+let settingsJumpItems = [];
+let settingsJumpActive = "";
+let settingsJumpTick = false;
+let settingsJumpWired = false;
+/* Visible = on the page AND not inside anything .hidden — the same walk repJumpVisible does, with
+   #page-settings as the stop. A collapsed <details> is NOT hidden: its chip is offered and the
+   click opens it. */
+function settingsJumpVisible(el) {
+  let n = el;
+  while (n && n.id !== "page-settings") {
+    if (n.classList && n.classList.contains("hidden")) return false;
+    n = n.parentElement;
+  }
+  return !!n;
+}
+function buildSettingsJumpNav() {
+  const bar = $("#settings-jump"), wrap = $("#settings-jump-chips");
+  if (!bar || !wrap) return;
+  settingsJumpItems = SETTINGS_JUMP_SECTIONS
+    .map(([key, label, sel]) => ({ key, label, el: $(sel) }))
+    .filter((s) => s.el && settingsJumpVisible(s.el));
+  // One chip is not navigation, it is decoration — the same guard Reports uses.
+  if (settingsJumpItems.length < 2) { wrap.innerHTML = ""; bar.hidden = true; return; }
+  wrap.innerHTML = settingsJumpItems.map((s) =>
+    `<button type="button" class="seg-btn" id="settings-nav-${esc(s.key)}" role="tab" aria-selected="false" data-settings-jump="${esc(s.key)}" title="Jump to ${esc(s.label)}">${esc(s.label)}</button>`).join("");
+  wrap.querySelectorAll("[data-settings-jump]").forEach((b) => (b.onclick = () => {
+    const it = settingsJumpItems.find((s) => s.key === b.dataset.settingsJump);
+    if (!it || !it.el) return;
+    // Open every disclosure the target sits inside, outermost first, before scrolling to it.
+    for (let n = it.el; n && n.id !== "page-settings"; n = n.parentElement) {
+      if (n.tagName === "DETAILS") n.open = true;
+    }
+    if (it.el.tagName === "DETAILS") it.el.open = true;
+    it.el.scrollIntoView({ behavior: "smooth", block: "start" });
+    setSettingsJumpActive(it.key);
+  }));
+  bar.hidden = false;
+  settingsJumpActive = "";
+  measureSettingsJumpOffsets();
+  if (!settingsJumpWired) {
+    settingsJumpWired = true;
+    window.addEventListener("scroll", onSettingsJumpScroll, { passive: true });
+    window.addEventListener("resize", () => { measureSettingsJumpOffsets(); onSettingsJumpScroll(); }, { passive: true });
+  }
+  onSettingsJumpScroll();
+}
+/* Identical measurement to Reports': at =<760px .app-shell stacks and the sidebar becomes a sticky
+   top strip, so the bar's own `top` is read off the layout in force rather than a duplicated
+   breakpoint number. --settings-jump-scroll is the scroll-margin the sections are given. */
+function measureSettingsJumpOffsets() {
+  const bar = $("#settings-jump"), page = $("#page-settings");
+  if (!bar || bar.hidden || !page || page.classList.contains("hidden")) return;
+  const shell = document.querySelector(".app-shell");
+  const side = document.querySelector(".sidebar");
+  let off = 0;
+  try {
+    if (shell && side && getComputedStyle(shell).flexDirection === "column") off = Math.round(side.getBoundingClientRect().height);
+  } catch (_) { off = 0; }
+  bar.style.top = off + "px";
+  const h = Math.round(bar.getBoundingClientRect().height);
+  document.documentElement.style.setProperty("--settings-jump-scroll", (off + h + REP_JUMP_GAP) + "px");
+  const wrap = $("#settings-jump-chips");
+  bar.classList.toggle("is-scrollable", !!wrap && wrap.scrollWidth > wrap.clientWidth + 1);
+}
+function setSettingsJumpActive(key) {
+  if (key === settingsJumpActive) return;
+  settingsJumpActive = key;
+  document.querySelectorAll("#settings-jump-chips [data-settings-jump]").forEach((b) => {
+    const on = b.dataset.settingsJump === key;
+    b.classList.toggle("active", on);
+    b.setAttribute("aria-selected", on ? "true" : "false");
+  });
+  const act = key ? document.getElementById("settings-nav-" + key) : null;
+  const wrap = $("#settings-jump-chips");
+  if (act && wrap && wrap.scrollWidth > wrap.clientWidth) {
+    const l = act.offsetLeft, r = l + act.offsetWidth;
+    if (l < wrap.scrollLeft) wrap.scrollLeft = Math.max(0, l - 12);
+    else if (r > wrap.scrollLeft + wrap.clientWidth) wrap.scrollLeft = r - wrap.clientWidth + 12;
+  }
+}
+function onSettingsJumpScroll() {
+  if (settingsJumpTick) return;
+  settingsJumpTick = true;
+  requestAnimationFrame(() => {
+    settingsJumpTick = false;
+    const page = $("#page-settings"), bar = $("#settings-jump");
+    if (!page || page.classList.contains("hidden") || !bar || bar.hidden || !settingsJumpItems.length) return;
+    const line = bar.getBoundingClientRect().bottom + REP_JUMP_GAP + 2;
+    let cur = settingsJumpItems[0].key;
+    for (const s of settingsJumpItems) {
+      if (s.el && s.el.getBoundingClientRect().top <= line) cur = s.key; else break;
+    }
+    if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2) cur = settingsJumpItems[settingsJumpItems.length - 1].key;
+    setSettingsJumpActive(cur);
+  });
 }
 /* ==========================================================================
    R13 · M-42 — THE FIRM EXPORT ("would not go live without it")
@@ -5029,8 +5163,17 @@ if ($("#save-my-details-btn")) $("#save-my-details-btn").addEventListener("click
 function renderAdviserTargetsEditor(owner) {
   const existing = document.getElementById("adviser-targets-section");
   if (existing) existing.remove();
-  // A non-owner sees neither this editor nor the scoreboard column it feeds.
-  if (!owner) return;
+  /* R37 · P3 — ADMIN SEES THE TARGETS, READ-ONLY.
+     Admin already reads the adviser scoreboard these figures feed — the Target column, the
+     over/under, the whole comparison — and had no way to see what the targets WERE. "Luke is 40%
+     under" is not information until you know whether 40% under is £4,000 or £400, and the only
+     people who could look it up were the two who least needed to ask. So the same section renders
+     for an admin with every input disabled and no Save button: the numbers, and who owns them.
+     Nothing about the OWNER's view changes, and an adviser still sees nothing at all — their own
+     target reaches them through the scoreboard, and the rest of the roster's is not theirs to
+     read. */
+  const readOnly = !owner && MY_ROLE === "admin";
+  if (!owner && !readOnly) return;
   const anchor = $("#settings-saved");
   if (!anchor || !anchor.parentNode) return;
   const targets = adviserTargets();
@@ -5039,7 +5182,7 @@ function renderAdviserTargetsEditor(owner) {
   const rows = advisingStaff().map((p) => {
     const v = Number(targets[p.id] || 0);
     return `<label>${esc(staffName(p.id))}
-      <input class="adv-target-input" data-staff="${esc(p.id)}" type="number" min="0" step="100" inputmode="numeric" value="${v > 0 ? esc(String(v)) : ""}" placeholder="e.g. 12000">
+      <input class="adv-target-input" data-staff="${esc(p.id)}" type="number" min="0" step="100" inputmode="numeric" value="${v > 0 ? esc(String(v)) : ""}" placeholder="${readOnly ? "no target set" : "e.g. 12000"}"${readOnly ? " disabled" : ""}>
     </label>`;
   }).join("");
   const sec = document.createElement("div");
@@ -5047,9 +5190,10 @@ function renderAdviserTargetsEditor(owner) {
   sec.id = "adviser-targets-section";
   sec.style.marginTop = "24px";
   sec.innerHTML = `<h3>Per-adviser monthly fee targets</h3>
-    <p class="panel-sub">On the owner Reports scoreboard, each adviser's <strong>fees earned (procuration + broker + solicitor) on their completions this month</strong> (paid or not — the same basis as the firm "Fees earned vs target" bar, not the cash "Fees banked" column) is measured against the target you set here. <strong>Blank or 0 = no target</strong> for that adviser (their Target cell shows "—"). This complements — it does not replace — the firm-wide monthly fee target above.</p>
-    <div class="settings-grid">${rows || '<p class="panel-sub" style="grid-column:1/-1;">No active team advisers to set targets for.</p>'}</div>
-    <button type="button" class="btn btn-primary btn-sm" id="adviser-targets-save">Save targets</button>`;
+    <p class="panel-sub">On the owner Reports scoreboard, each adviser's <strong>fees earned (procuration + broker + solicitor) on their completions this month</strong> (paid or not — the same basis as the firm "Fees earned vs target" bar, not the cash "Fees banked" column) is measured against the target ${readOnly ? "shown here" : "you set here"}. <strong>Blank or 0 = no target</strong> for that adviser (their Target cell shows "—"). This complements — it does not replace — the firm-wide monthly fee target above.</p>
+    ${readOnly ? `<div class="dq-notice" id="adviser-targets-readonly">🔒 <strong>Read-only — targets are set by the Owner.</strong> They are shown here because the adviser scoreboard you can see on Reports is measured against them, and a percentage over or under target means nothing without the target. Ask an Owner to change one.</div>` : ""}
+    <div class="settings-grid">${rows || `<p class="panel-sub" style="grid-column:1/-1;">No active team advisers ${readOnly ? "have a target" : "to set targets for"}.</p>`}</div>
+    ${readOnly ? "" : `<button type="button" class="btn btn-primary btn-sm" id="adviser-targets-save">Save targets</button>`}`;
   anchor.parentNode.insertBefore(sec, anchor.nextSibling);
   const btn = $("#adviser-targets-save");
   if (btn) btn.onclick = saveAdviserTargets;
@@ -7731,7 +7875,68 @@ const BOARD_CASE_COLS = "id,client_id,stage,case_kind,lender,product_name,loan_a
    synced between browsers or users. ALL store access is wrapped so a disabled / quota-full /
    private-mode localStorage degrades to "no saved views" and can never throw. */
 const NX_VIEWS_KEY = "nx_views_v1";
+/* ---------- R37 · L7 — STARTER VIEWS -----------------------------------------------------------
+   R31 shipped the mechanism and an empty cupboard: both dropdowns read "Saved views…" and nothing
+   else until somebody worked out that the button beside them captures the CURRENT filters. A
+   feature nobody can see the point of is a feature nobody uses, so the store is seeded once with
+   two or three views that are worth having on day one — and, just as importantly, that show by
+   example what a view IS.
+
+   FOUR RULES:
+   · ONCE, AND ONLY ON A GENUINELY EMPTY STORE. The trigger is the ABSENCE OF THE KEY, not an empty
+     list. Somebody who deletes all three starters has a key holding empty arrays, and it stays
+     empty — re-seeding a store the user has just cleared is the app arguing with them.
+   · NOT UNTIL WE KNOW WHO IS ASKING. Two of the three pin an adviser, and pinning them to
+     `undefined` would produce a broken view with a confident name. With ME unknown the call is a
+     no-op and the next one (after sign-in) does the work — never a throw.
+   · THE EXACT SHAPES pipelineFilterState()/clientsFilterState() PRODUCE, every key present. A view
+     is applied by applyPipelineFilterState/applyClientsFilterState, which skip null keys — a
+     partial starter would silently inherit whatever was on screen and behave differently from a
+     view the user saved themselves.
+   · STORAGE-BLOCKED DEGRADES TO NOTHING. If getItem throws we never seed, exactly as R31 never
+     saves: a starter view that cannot be deleted (because the delete cannot persist) would be
+     worse than no starter view.
+
+   Role-appropriate means the ADVISER field and the NAME move together: an owner's "My live cases"
+   would be a lie about a board showing the whole firm, so their copy says so in its name. */
+let starterViewsSeeded = false;
+function starterViewSet() {
+  const meAdviser = isAdminOrOwner() ? "all" : ME.id;
+  const mine = !isAdminOrOwner();
+  // pipelineFilterState() shape: search, adviser, segment, stageTab, sortKey, sortDir, view.
+  const pipeDefaults = { search: "", stageTab: "all", sortKey: "updated_at", sortDir: -1, view: "board" };
+  return {
+    pipeline: [
+      { name: mine ? "My live cases" : "Live cases — everyone", filters: { ...pipeDefaults, adviser: meAdviser, segment: "current" } },
+      { name: "Unassigned leads", filters: { ...pipeDefaults, adviser: "unassigned", segment: "new" } },
+    ],
+    // clientsFilterState() shape: search, adviser, segment, sort.
+    clients: [
+      { name: mine ? `My cold clients (${CLIENT_SEG_CONTACT_MONTHS}mo+)` : `Cold clients (${CLIENT_SEG_CONTACT_MONTHS}mo+)`, filters: { search: "", adviser: meAdviser, segment: "cold", sort: "name" } },
+    ],
+  };
+}
+/* Seeds at most once per session, and REPAINTS BOTH <select>s when it does. Both, not just the one
+   whose page triggered it: R31 populates them once at module-eval time — before sign-in, when there
+   is no ME and so nothing to seed — and never again except after a save or a delete. Whichever of
+   the board and the client list is opened first is the one that seeds, and the other would then
+   carry a stale empty dropdown until something wrote to it. */
+function seedStarterViews() {
+  if (starterViewsSeeded) return;
+  if (!ME || !ME.id) return;                       // identity not resolved yet — try again next call
+  let raw;
+  try { raw = localStorage.getItem(NX_VIEWS_KEY); } catch (e) { return; }
+  if (raw != null) { starterViewsSeeded = true; return; }   // the user already owns this store
+  try {
+    localStorage.setItem(NX_VIEWS_KEY, JSON.stringify(starterViewSet()));
+  } catch (e) { return; }                          // quota / private mode — no starters, no throw
+  // Set BEFORE the repaints: they read savedViews(), which calls back in here.
+  starterViewsSeeded = true;
+  refreshPipelineViews();
+  refreshClientViews();
+}
 function savedViews(scope) {
+  seedStarterViews();
   try {
     const raw = localStorage.getItem(NX_VIEWS_KEY);
     if (!raw) return [];
@@ -7805,6 +8010,9 @@ function refreshPipelineViews() {
 }
 
 async function loadPipeline() {
+  // R37 · L7 — the starter views need an identity, which module-eval time did not have. Seeded on
+  // the first board load after sign-in; the seed repaints both view <select>s itself.
+  seedStarterViews();
   const propOn = (await propAddrSupported()) !== false;
   const docsOn = (await docsSupported()) !== false;
   const lenderOn = (await lenderTrackSupported()) !== false;
@@ -7812,7 +8020,7 @@ async function loadPipeline() {
     + (propOn ? ",property_address" : "")
     + (docsOn ? ",waiting_on,solicitor_firm" : "")
     + (lenderOn ? ",application_status" : "")
-    + ",clients!client_id(first_name,last_name)";
+    + ",clients!client_id(first_name,last_name,email)";
   const { data: cases, error } = await db.from("cases").select(boardSelect).order("updated_at", { ascending: false }).limit(OWNER_ROW_CAP);
   if (error) {
     $("#board").classList.remove("hidden");
@@ -7916,6 +8124,40 @@ async function loadPipeline() {
   // R6-FIX V2/V4 — the full book, per client: the property register's numbers and the
   // hollow-chip rule both need the client's WHOLE set, which this read already is.
   Object.keys(clientCases).forEach((cid) => registerClientProps(cid, clientCases[cid]));
+  /* R37 · W9 — TWO CLIENT RECORDS, ONE PERSON, TWO CARDS THAT SAY NOTHING ABOUT EACH OTHER.
+     Data health finds duplicate clients; the board, where an adviser actually works, gave no hint
+     at all, so a case was progressed on one record while the notes and the email history sat on
+     the other.
+
+     Keyed on the CANONICAL NAME KEY, not the email, and deliberately: the board's read
+     (BOARD_CASE_COLS + clients!client_id(first_name,last_name)) embeds the name and NOT the
+     address — flagging on email would mean widening the app's fattest read for a hint. The key is
+     clientNameKey(), the SAME normaliser findClientMatches() dedupes on at both doors into the
+     system (lead accept and bulk import), so the board flags exactly what the duplicate detector
+     would call an exact name match and nothing else. The title says "name" out loud rather than
+     implying a stronger match than was actually made.
+
+     Counted over the FULL read, not `filtered`: narrowing the board to one adviser or one search
+     must not make a duplicated client look like a single record. Distinct client_ids, so a client
+     with four cases is not their own duplicate. */
+  const dupeNameClients = (() => {
+    /* R37 follow-up — TWO independent duplicate signals, matching the importer's own dedupe rule
+       ("exact email OR exact sorted name key"). Email catches the fixture's real pair —
+       "Deborah"/"Debbie" Ashworth share one email under different forenames, invisible to any
+       name key — which is why the board embed now carries `email`. Name catches records where
+       one copy has no email. Two distinct client_ids colliding on EITHER key flag both. */
+    const byEmail = new Map(), byName = new Map();
+    (cases || []).forEach((c) => {
+      if (!c.client_id) return;
+      const em = String((c.clients && c.clients.email) || "").trim().toLowerCase();
+      if (em) { if (!byEmail.has(em)) byEmail.set(em, new Set()); byEmail.get(em).add(c.client_id); }
+      const nk = clientNameKey(clientFullName(c.clients || {}));
+      if (nk) { if (!byName.has(nk)) byName.set(nk, new Set()); byName.get(nk).add(c.client_id); }
+    });
+    const flagged = new Set();
+    [byEmail, byName].forEach((m) => m.forEach((ids) => { if (ids.size > 1) ids.forEach((id) => flagged.add(id)); }));
+    return flagged;
+  })();
   // Stalled deals surface first: red, then amber (worst days-in-stage on top),
   // then the rest in the existing updated_at order.
   const AGE_RANK = { red: 0, amber: 1 };
@@ -7972,8 +8214,15 @@ async function loadPipeline() {
         const twinTail = (cardChip && propAddress(c) && (twinCount.get(twinKey(c)) || 0) > 1)
           ? ` <span class="case-tag">${esc(STAGE_LABEL[c.stage] || String(c.stage).replace(/_/g, " "))}</span>`
           : "";
+        /* R37 · W9 — the duplicate-client hint. It sits in the card's RIGHT-HAND group beside the
+           assignee avatar rather than inside .cn-name, which is nowrap/ellipsis: a badge appended
+           to a long name would be the first thing the ellipsis ate, i.e. a warning that
+           disappears exactly on the cards most likely to carry it. */
+        const dupeHint = dupeNameClients.has(c.client_id)
+          ? `<span class="badge amber card-dupe-hint" title="Another CLIENT RECORD shares this client's email address or exact name — possible duplicate. Check it in Data health → duplicate review before adding anything to this case, so the note or task lands on the record the firm keeps.">dupe?</span>`
+          : "";
         return `<div class="card${age.level ? " age-" + age.level : ""}" draggable="true" data-id="${c.id}" onclick="openCase('${c.id}')">
-          <div class="cn" style="display:flex;justify-content:space-between;align-items:center;gap:6px;"><span class="cn-name" title="${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ") || "")}">${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ") || "—")}</span><span style="display:flex;align-items:center;gap:6px;flex:0 0 auto;">${c.assigned_to ? `<span class="chip" title="${esc(staffName(c.assigned_to))}">${initials(c.assigned_to)}</span>` : ""}${advanceBtn}</span></div>
+          <div class="cn" style="display:flex;justify-content:space-between;align-items:center;gap:6px;"><span class="cn-name" title="${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ") || "")}">${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ") || "—")}</span><span style="display:flex;align-items:center;gap:6px;flex:0 0 auto;">${dupeHint}${c.assigned_to ? `<span class="chip" title="${esc(staffName(c.assigned_to))}">${initials(c.assigned_to)}</span>` : ""}${advanceBtn}</span></div>
           ${/* R6 — the card's answer to "which one of his five is this?", directly under the name
                 and above the money. Address when there is one; the hollow kind · lender pill only
                 on a client who has more than one case (on a single-case client it would just
@@ -9821,11 +10070,19 @@ async function bulkSetProtStatus(status) {
   const label = (PROT_BULK_STATUS.find(([k]) => k === status) || [null, status])[1];
   let commission = null;
   if (status === "policy_taken") {
-    commission = askProtectionCommission(null, `This figure will be written to ALL ${ids.length} selected case${ids.length === 1 ? "" : "s"} — if their policies are worth different amounts, cancel and set them one at a time.`);
-    if (commission == null) return toast("Left unchanged — a policy needs a commission figure.");
+    /* R37 · W10 — the same overlay the single-case flow uses. null now means CANCEL (nothing is
+       written); a skip comes back as { commission: null }, which is exactly the "leave the figure
+       for the case" shape the loop below already handles by omitting the key. */
+    const res = await askProtectionCommission(null, `This figure will be written to ALL ${ids.length} selected case${ids.length === 1 ? "" : "s"} — if their policies are worth different amounts, cancel and set them one at a time.`);
+    if (!res) return toast("Left unchanged — nothing was written.");
+    commission = res.commission;
   }
   const msg = `Set protection status to "${label}" on ${ids.length} case${ids.length === 1 ? "" : "s"}?`
-    + (status === "policy_taken" ? `\n\nCommission ${fmtM(commission)} will be recorded on every one of them.` : "")
+    + (status === "policy_taken"
+      ? (commission != null
+        ? `\n\nCommission ${fmtM(commission)} will be recorded on every one of them.`
+        : "\n\nNo commission figure will be recorded — any figure already on a case is left as it is.")
+      : "")
     /* R12a·D9 — this used to promise "the quote clock starts today on every one of them", and
        that is exactly the sweep that used to reset a cold quote to fresh. It now says what
        protUpdateWithStamp actually does. */
@@ -9915,39 +10172,85 @@ async function protUpdateWithStamp(caseId, patch, wantStamp) {
   }
   return { error: error || null, stamped, kept };
 }
-/* The required-commission capture. Returns a number, or null when the operator cancelled — and
-   null MUST abort the status change, which is the whole point of it being required. */
+/* ==========================================================================
+   R37 · W10 — THE COMMISSION CAPTURE, AS AN OVERLAY
+
+   R7-3 made the figure required and implemented "required" as prompt() in a loop: three goes, a
+   toast between each, and on the third blank it abandoned the status change with a message that
+   looked like the same nagging toast as the two before it. Three failure modes in one control —
+   a native dialog that cannot be styled or read by the rest of the app, a re-nag that punishes a
+   slip of the keyboard, and no way at all to say the honest thing, which is "the policy IS taken
+   and I do not know the number yet". An adviser who does not know it has exactly two exits today:
+   invent a figure, or leave the status wrong. Both corrupt the same reports the requirement was
+   built to protect.
+
+   Now it is the app's own second-layer overlay (openOverlay — the same host the lost-reason and
+   fee-date captures use, so it can sit on top of an open case modal without destroying it), with
+   THREE exits and no fourth:
+     Save    — a number above zero, written exactly as before.
+     Skip    — the status is written and NO commission is touched. Not "written as zero", which
+               would be a lie the Reports money panels would then average; the column is simply
+               left out of the patch, so a figure already on file survives a skip.
+     Cancel  — nothing is written, status unchanged (Escape and the backdrop mean Cancel too).
+   Invalid input on Save does not re-prompt and does not consume an attempt: it says why, in the
+   overlay, next to the box, and waits.
+
+   Provider and premium capture would be genuinely useful here and are DELIBERATELY out of scope:
+   there are no columns for them and this round adds no schema.
+
+   Returns null for cancel, or { commission: <number> | null } — null meaning "skip", which every
+   caller already handles correctly by omitting the key from its patch. */
 function askProtectionCommission(existing, contextLine) {
   const avg = Number(settings.protection_avg_commission || 0);
-  let def = Number(existing || 0) > 0 ? String(Number(existing)) : (avg > 0 ? String(avg) : "");
-  /* Bounded, deliberately. "Required" must not mean "a modal you cannot leave except by Cancel":
-     three goes is plenty for a typo, and the fourth abandons the change and says why, which is the
-     same outcome as Cancel and never a policy written with no value on it. */
-  for (let tries = 0; tries < 3; tries++) {
-    const raw = prompt(
-      "Policy taken 🎉 — what is the commission worth?\n\n"
-      + (contextLine ? contextLine + "\n\n" : "")
-      + "A figure is required: \"policy taken\" is the only protection outcome that earns anything, and "
-      + "the attach-rate and commission figures on Reports are built from it. "
-      + (avg > 0 ? `The box is pre-filled with the firm average from Settings (${fmtM(avg)}) — change it to the real figure if you know it.` : "")
-      + "\n\nCancel leaves the status exactly as it is.",
-      def);
-    if (raw == null) return null;                       // cancelled — caller must abandon
-    const v = String(raw).trim().replace(/^£/, "").replace(/,/g, "");
-    if (v !== "" && !isNaN(Number(v)) && Number(v) > 0) return Number(v);
-    def = v;
-    toast(v === "" ? "A commission figure is required — enter one, or press Cancel to leave the status alone." : "That isn't a number above zero — try again, or press Cancel.");
-  }
-  return null;   // three goes, no usable figure — treated exactly as Cancel
+  const had = Number(existing || 0) > 0 ? Number(existing) : 0;
+  const def = had > 0 ? String(had) : (avg > 0 ? String(avg) : "");
+  const html = `
+    <div id="prot-comm-box">
+      <h3>Policy taken 🎉 — what is the commission worth?</h3>
+      ${contextLine ? `<p class="panel-sub" id="prot-comm-context">${esc(contextLine)}</p>` : ""}
+      <p class="panel-sub" id="prot-comm-why">“Policy taken” is the only protection outcome that earns anything, and the attach-rate and commission figures on Reports are built from this number.${
+        had > 0 ? ` This case already has <strong>${fmtM(had)}</strong> recorded — the box is pre-filled with it.`
+        : avg > 0 ? ` The box is pre-filled with the firm average from Settings (<strong>${fmtM(avg)}</strong>) — change it to the real figure if you know it.`
+        : ""}</p>
+      <label>Commission (£)
+        <input id="prot-comm-input" type="number" min="0" step="1" inputmode="decimal" value="${esc(def)}" placeholder="e.g. 450">
+      </label>
+      <div class="ovl-err" id="prot-comm-err"></div>
+      <p class="panel-sub" id="prot-comm-skip-note" style="margin-top:10px;">Don't know it yet? Record the outcome now and the figure later — the case will show on Reports as a policy with no commission against it${had > 0 ? ", and the figure already on file is left alone" : ""}.</p>
+      <div class="modal-actions">
+        <div class="right">
+          <button type="button" class="btn" id="prot-comm-cancel">Cancel</button>
+          <button type="button" class="btn" id="prot-comm-skip" title="Write the status without a commission figure. Nothing is guessed and nothing is overwritten.">Skip — record without commission</button>
+          <button type="button" class="btn btn-primary" id="prot-comm-save">Save</button>
+        </div>
+      </div>
+    </div>`;
+  return openOverlay(html, (finish, box) => {
+    const input = box.querySelector("#prot-comm-input");
+    const err = box.querySelector("#prot-comm-err");
+    const fail = (msg) => { if (err) err.textContent = msg; if (input) { input.focus(); input.select(); } };
+    const submit = () => {
+      const v = String(input ? input.value : "").trim().replace(/^£/, "").replace(/,/g, "");
+      if (v === "") return fail("Enter a figure, or press “Skip — record without commission”.");
+      if (isNaN(Number(v)) || Number(v) <= 0) return fail("That isn't a number above zero. Enter the commission, or skip it.");
+      finish({ commission: Number(v) });
+    };
+    box.querySelector("#prot-comm-save").onclick = submit;
+    box.querySelector("#prot-comm-skip").onclick = () => finish({ commission: null });
+    box.querySelector("#prot-comm-cancel").onclick = () => finish(null);
+    if (input) input.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); submit(); } };
+  });
 }
 window.setProtStatus = async function (caseId, status) {
   if (!status) return;
   const patch = { protection_status: status };
   if (status === "policy_taken") {
     const { data: cur } = await db.from("cases").select("protection_commission").eq("id", caseId).single();
-    const amt = askProtectionCommission(cur && cur.protection_commission, null);
-    if (amt == null) { loadProtectionPage(); return toast("Left unchanged — a policy needs a commission figure."); }
-    patch.protection_commission = amt;
+    const res = await askProtectionCommission(cur && cur.protection_commission, null);
+    if (!res) { loadProtectionPage(); return toast("Left unchanged — the protection status is as it was."); }
+    // null = skipped. The column is left out of the patch entirely rather than written as null:
+    // a figure already on file is data, and "I don't know it" is not a reason to destroy it.
+    if (res.commission != null) patch.protection_commission = res.commission;
   }
   const { error, stamped, kept } = await protUpdateWithStamp(caseId, patch, status === "quoted");
   if (error) return toast("Error: " + error.message);
@@ -9960,7 +10263,9 @@ window.setProtStatus = async function (caseId, status) {
         ? "Protection status: quoted — quote clock started today"
         : "Protection status: quoted — but this database has no quote-date column (migration M8), so the age badge will read \u201cunknown\u201d")
     : status === "policy_taken"
-      ? `Policy taken ✓ — commission ${fmtM(patch.protection_commission)} recorded`
+      ? (patch.protection_commission != null
+        ? `Policy taken ✓ — commission ${fmtM(patch.protection_commission)} recorded`
+        : "Policy taken ✓ — no commission figure recorded. Add it on the case when you know it.")
       : "Protection status: " + status.replace(/_/g, " "));
   if (!$("#page-protection").classList.contains("hidden")) loadProtectionPage();
 };
@@ -12314,6 +12619,19 @@ window.openCase = async function (id, opts = {}) {
       }
     }
   }
+  /* R37 · K2 — { scrollTo: "docs" }. A row that flagged DOCUMENTS (Data health's "Waiting on
+     documents" queue) used to open the case at the top, with the checklist it is ABOUT several
+     screens down. Purely additive and optional: openCase(id) with no second argument behaves
+     exactly as it always has, which matters because it is window-exposed and called from inline
+     handlers and tests. At completed/not_proceeding the Documents block is a <details>, so it is
+     expanded first — scrolling to a closed summary would be a scroll to nothing. */
+  if (id && opts.scrollTo === "docs") {
+    const docs = $("#modal #case-docs");
+    if (docs) {
+      if (docs.tagName === "DETAILS") docs.open = true;
+      docs.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }
 };
 
 /* ---------- R5-12 / B7 — mark fee paid, with the date the money actually arrived ----------
@@ -13035,12 +13353,19 @@ let clientSort = "name";
    are deliberately not counted: "next" means next, and a mortgage that matured in 2019 is a
    different conversation from one maturing in March. */
 function clientNextRateEnd(c, todayStr) {
-  let best = null;
+  let best = null, n = 0;
   (c.cases || []).forEach((x) => {
     const d = x.rate_end_date ? String(x.rate_end_date).slice(0, 10) : null;
     if (!d || d < todayStr) return;
+    /* R37 · L10 — count them, the same way clientRateEndInYear does. A four-property landlord read
+       "rate ends 14 Apr 2027 · Skipton" and nothing else, which is a true sentence that gives
+       exactly the wrong impression: it is ONE of their rates, and the row was silent about the
+       other three. The tail already existed inside the "Rate ends YYYY" segments; it was only the
+       SORT view that had no count to render, because this function always returned n: 0. */
+    n++;
     if (!best || d < best.date) best = { date: d, lender: x.lender || null, n: 0 };
   });
+  if (best) best.n = n;
   return best;
 }
 /* The rate end that put this client into the active "Rate ends YYYY" segment. That segment counts
@@ -13099,6 +13424,8 @@ const CLIENT_LIST_CAP = 100;
 // handler (R18-P2) can re-render the bulk bar against it without re-wiring per row.
 let clientRenderedList = [];
 async function loadClients(filter = "", opts = {}) {
+  // R37 · L7 — same one-shot seed as the board (see seedStarterViews): first load after sign-in.
+  seedStarterViews();
   if (opts.force || !clientCache) {
     const res = await loadClientData();
     if (res.error) { renderLoadError("#client-list", res.error, () => loadClients(filter, { force: true })); return; }
@@ -13160,8 +13487,17 @@ async function loadClients(filter = "", opts = {}) {
     const active = cases.filter((x) => CLIENT_LIVE(x.stage)).length;
     const lc = last.get(c.id);
     const re = (rateYear || showNextRate) ? clientRateKey(c, rateYear, todayStr) : null;
+    /* R37 · L10 — the "(+N more)" tail now renders in the rate-end SORT view too, not only inside a
+       "Rate ends YYYY" segment. Same tail, same shape, same count function; only the qualifier
+       changes, because the population being counted is different (this year's, vs everything still
+       ahead) and a tail that did not say which would be worse than no tail. */
+    const rateMore = re && re.n > 1
+      ? ` <span class="client-rateend-more" title="${esc(rateYear
+        ? `This client has ${re.n} cases with a rate ending in ${rateYear}. The row shows the earliest; open the record to see them all.`
+        : `This client has ${re.n} rate ends still ahead. The row shows the next one; open the record to see them all.`)}">(+${re.n - 1} more${rateYear ? ` in ${esc(rateYear)}` : ""})</span>`
+      : "";
     const rateBit = re
-      ? ` · <span class="client-rateend">rate ends ${esc(fmtD(re.date))} · ${re.lender ? esc(re.lender) : "lender not recorded"}${re.n > 1 ? ` (+${re.n - 1} more in ${esc(rateYear)})` : ""}</span>`
+      ? ` · <span class="client-rateend">rate ends ${esc(fmtD(re.date))} · ${re.lender ? esc(re.lender) : "lender not recorded"}${rateMore}</span>`
       : (showNextRate ? ` · <span class="client-rateend">no rate end ahead</span>` : "");
     /* R36-A · L9(a) — the property count, on the row, from the cases this list ALREADY holds
        (clientPropertyCount is the client record's own counter, shared). Silent at 0 or 1: a badge
@@ -17029,6 +17365,10 @@ window.openLeadInToday = async function (leadId) {
    outcome data says more about when the column shipped than about anybody's
    diary. The recording comes first; the counting is a later round's job.
    ====================================================================== */
+/* R37 · W11 — the five appointment titles this back office actually books, offered as chips above
+   the (still free-text) Title field. Presentation only: no column, no validation, no reporting
+   hangs off this list — it exists so that the same meeting is not filed under five spellings. */
+const APPT_TITLE_PICKS = ["Fact find call", "Protection review", "Review meeting", "Document collection", "Completion call"];
 const APPT_OUTCOMES = [
   ["attended", "Attended", "✓"],
   ["no_show", "No-show", "✗"],
@@ -17950,7 +18290,16 @@ window.openAppt = async function (id, presets = {}, openOpts = {}) {
           on screen rather than backing out of a dialog. Filled in by syncApptClash(). */ ""}
     <p class="dq-notice clash-notice hidden" id="appt-clash-note"></p>
     <form id="appt-form" class="form-grid">
-      <label class="full">Title<input name="title" required value="${esc(a.title || "")}" placeholder="e.g. Fact find call"></label>
+      <label class="full">Title<input name="title" id="appt-title" required value="${esc(a.title || "")}" placeholder="e.g. Fact find call"></label>
+      ${/* R37 · W11 — the five appointments this firm actually books, as one-click fills. The field
+           stays free text and the chip only WRITES to it: nothing here is a category, nothing is
+           stored, and an appointment called "Ring Deborah back re: the survey" is as valid as it
+           ever was. The value of them is consistency — five spellings of "Fact Find Call" in the
+           diary is what makes a diary unsearchable. */ ""}
+      <div class="full appt-title-chips" id="appt-title-chips">
+        <span class="due-chips-lbl">Common:</span>
+        ${APPT_TITLE_PICKS.map((t) => `<button type="button" class="btn btn-sm appt-title-chip" data-appt-title="${esc(t)}" title="Use “${esc(t)}” as the title — you can still edit it">${esc(t)}</button>`).join("")}
+      </div>
       <label>Date<input name="date" type="date" required value="${dateVal}"></label>
       <label>Time<input name="time" type="time" required value="${timeVal}"></label>
       <label>Duration (mins)<input name="mins" type="number" value="${mins}"></label>
@@ -17996,6 +18345,16 @@ window.openAppt = async function (id, presets = {}, openOpts = {}) {
      case modal's "View original case" link already uses — the history entry is replaced, not
      stacked). */
   const apptGoto = (fn, arg) => () => { if (!hasUnsavedModalEdits() || confirm("Leave this appointment? Unsaved changes will be lost.")) fn(arg); };
+  /* R37 · W11 — the title quick-picks. `input` is dispatched so the unsaved-changes guard and the
+     clash notice see the change exactly as they would see typing; focus lands back in the field so
+     a chip is a starting point, not a decision. */
+  document.querySelectorAll("#appt-title-chips [data-appt-title]").forEach((b) => (b.onclick = () => {
+    const el = $("#appt-title");
+    if (!el) return;
+    el.value = b.dataset.apptTitle;
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.focus();
+  }));
   const openClientBtn = $("#appt-open-client");
   /* R6FIX-1 — this is a genuine "arriving from a case context": the appointment we are leaving
      names the case, so the client record's note composer may pre-pick it (see openClient). */
@@ -19085,7 +19444,13 @@ function renderThreadedPanels(all, mv, repAdvisers) {
   // ---- Pipeline funnel: cases created in the selected month, by current stage (all 8 stages,
   // so a month's cohort that has already completed or dropped out still shows up). ----
   const monthCases = all.filter((c) => inMonth(c.created_at));
-  $("#report-funnel-scope").textContent = `${monthCases.length} case${monthCases.length === 1 ? "" : "s"} created in ${label}, by current stage.`;
+  /* R37 · P1-corrected — say the SCOPE loudly, because the page carries two funnels and they are
+     not duplicates: this one is a month COHORT (created in <label>, wherever they have got to),
+     the MI one is the live book right now. The pointer to the other is only offered when the
+     reader can actually see it — Pipeline MI is isAdminOrOwner-gated, and directing an adviser to
+     a section that is not on their page would be worse than saying nothing. */
+  $("#report-funnel-scope").innerHTML = `<strong>Cases CREATED in ${esc(label)}</strong> — how far they have got, by current stage. ${monthCases.length} case${monthCases.length === 1 ? "" : "s"}.`
+    + (isAdminOrOwner() ? ` <em>(The live snapshot — everything open right now, whenever it started — is “Funnel &amp; conversion” in Pipeline MI above.)</em>` : "");
   const maxF = Math.max(...STAGES.map(([s]) => monthCases.filter((c) => c.stage === s).length), 1);
   $("#report-funnel").innerHTML = monthCases.length ? STAGES.map(([s, l]) => {
     const n = monthCases.filter((c) => c.stage === s).length;
@@ -20070,7 +20435,17 @@ async function loadReports() {
   const moneyNote = $("#report-money-note");
   if (moneyNote) {
     moneyNote.classList.toggle("hidden", money);
-    moneyNote.textContent = money ? "" : "Firm-wide money figures — fees banked and outstanding, pipeline loan value, the adviser scoreboard, the forecast, introducer revenue and client lifetime value — are shown to the Owner only. Case counts, the funnel, completions and lead sources are below, your own numbers are in the My numbers card at the top, and the fees on your own cases are on each case.";
+    /* R37 · item 22 — STATE THE RULE, for the reader it is most confusing to. An admin's Reports
+       simply stops where the owner-only money panels begin: they get the Pipeline MI run-rate (an
+       aggregate, admin-visible) and then nothing, with no line anywhere saying that the £-detail
+       below it exists and is withheld deliberately. That reads as a page that failed to load. The
+       sentence is added for ADMIN ONLY — an adviser sees no run-rate at all, so telling them
+       "the aggregate run-rate above is the admin view" would be a pointer to a panel that is not
+       on their page. Owner sees no note at all, exactly as before. */
+    moneyNote.textContent = money ? "" : ("Firm-wide money figures — fees banked and outstanding, pipeline loan value, the adviser scoreboard, the forecast, introducer revenue and client lifetime value — are shown to the Owner only. Case counts, the funnel, completions and lead sources are below, your own numbers are in the My numbers card at the top, and the fees on your own cases are on each case."
+      + (MY_ROLE === "admin"
+        ? " As an Admin this page ENDS where that £-detail begins, and that is the rule rather than a page that failed to load: Money owed, the commission and completion forecasts, the rate-end book value, introducer revenue and client lifetime value are Owner-only. The aggregate run-rate in Pipeline MI above is the admin view of the firm's money."
+        : ""));
   }
   /* R5-F2 (Daniel-approved) — the HEADLINE fee figure for the year is now what the firm EARNED on
      the cases it completed (proc+broker+sols on completed_at), not what happened to arrive in the
@@ -21925,11 +22300,23 @@ async function loadDataHealth() {
     ${/* R13 · M-23 — this one IS a fault: a policy whose clawback window nobody can watch. */ ""}
     ${dhClawbackOn ? `<div class="kpi ${dhNoPolicyStart.length ? "warn" : ""} dq-clickable" id="dh-tile-nopolicystart" title="Policies recorded as taken with no start date — their clawback window cannot be watched. Click to open the Protection page's Clawback window panel."><div class="num">${dhNoPolicyStart.length}</div><div class="lbl">Policies with no start date →</div></div>` : ""}`;
 
+  /* R37 · K5 — ONE CANONICAL WARNING ABOUT THE QUEUE, NOT THREE.
+     The same fact was being argued three times: Today's heartbeat banner ("emails may be silently
+     stuck"), this one, and the Emails page itself, which IS the queue. Three phrasings of one
+     problem is how a real warning gets read as furniture.
+
+     Today keeps the full sentence — it is the most-seen screen and the first place anybody would
+     find out — and Emails keeps everything, because it is where the problem is actually fixed.
+     Data health keeps only a POINTER: the count, and the way through. The id, the container and
+     the click-through (wired below to dhGotoEmails(false), same as before) are unchanged, so
+     nothing that looked for #dh-stuck-notice has lost it — it just says less. */
   let stuckNotice = "";
-  if (dq.emails_stuck > 0 && dq.emails_sending_live) {
-    stuckNotice = `<div class="dq-notice bad dq-clickable" id="dh-stuck-notice" title="Click to open the Emails page">${dq.emails_stuck} email${dq.emails_stuck === 1 ? " is" : "s are"} stuck in the queue — the sender may be failing. →</div>`;
-  } else if (dq.emails_stuck > 0 && !dq.emails_sending_live) {
-    stuckNotice = `<div class="dq-notice dq-clickable" id="dh-stuck-notice" title="Click to open the Emails page">${dq.emails_stuck} email${dq.emails_stuck === 1 ? "" : "s"} queued and waiting — the Resend key isn't set yet, so nothing has sent. →</div>`;
+  if (dq.emails_stuck > 0) {
+    const live = !!dq.emails_sending_live;
+    const n = `${dq.emails_stuck} email${dq.emails_stuck === 1 ? "" : "s"}`;
+    stuckNotice = `<div class="dq-notice${live ? " bad" : ""} dq-clickable" id="dh-stuck-notice" title="${live
+      ? "Emails are queued and the sender is live, so they should have gone. Today's banner and the Emails page carry the detail."
+      : "Emails are queued and no sender is configured yet, so nothing has gone out. The Emails page carries the detail."}">${live ? "⚠ " : ""}${n} ${live ? "stuck" : "queued, not sent"} — <button type="button" class="dash-notice-link" id="dh-stuck-link" onclick="event.stopPropagation(); dhGotoEmails(false)">see Emails</button></div>`;
   }
 
   const mutedSub = "color:var(--muted);font-size:12px;margin-top:2px;";
@@ -22188,7 +22575,8 @@ async function loadDataHealth() {
              eligible" column two cells to the left is already showing it — so the button carries
              the amber state and the hourglass, and the full sentence lives in its title. */ ""}
         <td class="dh-wd-acts">
-          <button class="btn btn-sm" onclick="openCase('${jsArg(r.id)}')">Open case</button>
+          ${/* R37 · K2 — this row is ABOUT the checklist, so the case opens ON the checklist. */ ""}
+          <button class="btn btn-sm" onclick="openCase('${jsArg(r.id)}', { scrollTo: 'docs' })" title="Open this case with the Documents checklist in view">Open case</button>
           ${blocked
             ? `<span class="badge grey" title="${esc(spent ? `${r.chases} of ${DOC_CHASE_MAX} chases have already gone. The fourth email is not the one that works — the automation raises a call task instead, and so should you.` : "This client has no email address on file, so nothing can be sent to them. Open the case and add one.")}">${esc(blocked)}</span>`
             : `<button class="btn btn-sm${r.cool ? " btn-cooldown" : ""}" onclick="dhSendDocsChase('${jsArg(r.id)}', event)" title="${esc(r.cool ? `${r.cool.sentence} Sending now goes out anyway and restarts the window — you will be asked to confirm.` : "Queue the document-request email for this case. It lists only the items still outstanding. Nothing else in the queue is sent.")}">${r.cool ? "⏳" : "✉️"} Chase now</button>`}
@@ -25246,6 +25634,26 @@ function vaultFieldHtml(f) {
     ${btns}
   </div>`;
 }
+/* R37 · K4 — WHICH "Test Bank A" IS THIS?
+   Three entries share a name and differ only by a small owner pill, and the one fact that actually
+   tells them apart — the login they are FOR — was four lines further down inside the fields block,
+   below the fold on a grouped list. It is lifted into the card's title row as a muted token.
+
+   Two rules, both non-negotiable:
+   · NEVER A SECRET. The token is only taken from a field the entry itself marks non-secret. A
+     vault whose masking can be defeated by a list view is not a vault, so a login field somebody
+     ticked "secret" stays masked and this returns nothing at all rather than a partial value.
+   · IT IS ALREADY ON THE CARD. This prints no value that vaultFieldHtml would not print, in the
+     same plain form — it is a relocation, not a disclosure. */
+const VAULT_USER_LABEL_RE = /user\s*name|username|user\b|login|log-?in|e-?mail|account|agency|member(ship)?|client\s*id|broker\s*(id|no|number|ref)/i;
+function vaultUserToken(r) {
+  const fields = Array.isArray(r.fields) ? r.fields : [];
+  const f = fields.find((x) => x && !x.secret && x.value != null && String(x.value).trim() !== ""
+    && VAULT_USER_LABEL_RE.test(String(x.label || "")));
+  if (!f) return "";
+  const val = String(f.value).trim();
+  return `<span class="vault-user" title="${esc(String(f.label || "Login"))} on this entry — the field that tells two entries with the same name apart. Never a password.">${esc(val)}</span>`;
+}
 function vaultCardHtml(r) {
   const fields = Array.isArray(r.fields) ? r.fields : [];
   // "Copy password" shortcut: the first SECRET field whose label reads like a password.
@@ -25256,6 +25664,7 @@ function vaultCardHtml(r) {
     <div class="vault-card-head">
       <div class="vault-card-title">
         <span class="vault-name">${esc(r.name || "(no name)")}</span>
+        ${vaultUserToken(r)}
         ${vaultOwnerChip(r.owner_label)}
         ${vaultVisChip(r)}
       </div>

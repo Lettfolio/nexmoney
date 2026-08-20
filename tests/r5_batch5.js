@@ -278,21 +278,25 @@ const sendCalls = (page) => page.evaluate(() => window.__sendCalls || []);
       eq("S3c · the bulk bar appears with the count", await page.evaluate(() => ({ hidden: document.querySelector("#prot-bulk-bar").hidden, n: document.querySelector("#prot-bulk-n").textContent })), { hidden: false, n: "6" });
 
       page.__dialogs = [];
-      /* R7-3 UPDATE — "policy taken" now REQUIRES a commission figure (see
-         askProtectionCommission): the old bulk verb wrote the status and said out loud
-         that no money was captured, which is exactly the hole R7-3 closed, because
-         "policy taken" is the only outcome that earns anything and the attach-rate
-         figures on Reports are built from it. So the flow is now prompt-then-confirm,
-         and the two assertions that asserted the OLD honesty ("commission is not
-         recorded in bulk") are replaced by assertions on the new one. */
-      page.__dialogPlan = ["1250"];        // the commission prompt; the confirm that follows is accepted
+      /* R37 · non-masking repair — R7-3's requirement ("policy taken" needs a commission figure)
+         is unchanged; only its capture UI moved off prompt() onto R37's own second-layer overlay
+         (askProtectionCommission → #prot-comm-box, see admin/app.js). The two facts this block was
+         checking — the overlay/prompt names the count it will apply the figure to, and the confirm
+         that follows still names the status/count/commission — are both still true, just reached by
+         filling #prot-comm-input and clicking #prot-comm-save instead of answering a JS prompt. The
+         downstream confirm() dialog is untouched by R37 (bulkSetProtStatus still calls confirm()
+         after the overlay resolves), so page.__dialogPlan still drives THAT one. */
+      page.__dialogPlan = [];        // only the confirm() after the overlay remains a real dialog — default-accept it
       await page.selectOption("#prot-bulk-status", "policy_taken");
-      await page.waitForTimeout(1600);
-      const promptMsg = lastDialog(page, /what is the commission worth/);
+      await page.waitForTimeout(600);
+      const overlayCtx = await page.$eval("#prot-comm-box", (e) => e.textContent.replace(/\s+/g, " ").trim());
       ok("S3c · a bulk 'policy taken' asks for the commission before anything is written",
-        /Policy taken/.test(promptMsg), JSON.stringify(promptMsg));
+        /Policy taken/.test(overlayCtx), overlayCtx);
       ok("S3c · …and warns that ONE figure will be written to all six",
-        /written to ALL 6 selected cases/.test(promptMsg), JSON.stringify(promptMsg));
+        /written to ALL 6 selected cases/.test(overlayCtx), overlayCtx);
+      await page.fill("#prot-comm-input", "1250");
+      await page.click("#prot-comm-save");
+      await page.waitForTimeout(1000);
       const msg = lastDialog(page, /Set protection status/);
       ok("S3c · the confirm names the status and the count", /Set protection status to "Policy taken" on 6 cases\?/.test(msg), JSON.stringify(msg));
       ok("S3c · …and names the commission it is about to record on every one of them", /Commission £1,250 will be recorded on every one of them/.test(msg), JSON.stringify(msg));

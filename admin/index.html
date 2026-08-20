@@ -528,7 +528,11 @@
         <div class="grid-2">
           <div class="panel" id="report-mi-funnel-panel">
             <h3>Funnel &amp; conversion<button type="button" class="btn btn-sm mi-csv-btn" id="report-mi-csv-funnel" title="Download this panel as CSV">⭳ CSV</button></h3>
-            <p class="panel-sub">Live pipeline by stage; historical conversion from milestone dates.</p>
+            <!-- R37 · P1-corrected — this panel and "Pipeline funnel" further down read as
+                 duplicates and are not: this one is a LIVE snapshot of the whole book, that one is
+                 the selected month's cohort. They are not merged (both questions are real ones);
+                 the scope is simply made unmissable on each, with a pointer to the other. -->
+            <p class="panel-sub"><strong>Everything LIVE right now, by stage</strong> — regardless of when it was created, and unaffected by the month picker above. Historical conversion below is from milestone dates. <em>(The month-cohort view — cases created in the selected month — is “Pipeline funnel” further down this page.)</em></p>
             <div id="report-mi-funnel"></div>
             <div id="report-mi-conversion" style="margin-top:14px;"></div>
             <div id="report-mi-winrate" style="margin-top:12px;"></div>
@@ -834,6 +838,16 @@
     <!-- Settings -->
     <section id="page-settings" class="page hidden">
       <h2>Settings</h2>
+      <!-- R37 · P-settings — JUMP NAV, the same one Reports has had since R11-4 and for the same
+           reason: Settings is a flat five-screen scroll and "where is the document chase interval"
+           was a scroll-and-hope. Deliberately EMPTY and `hidden` in the markup — half these
+           sections are Owner-only or Admin-only and each one already owns its own gate, so the
+           chips are READ off the rendered page at the end of renderSettings() rather than
+           declared here, which is what stops an adviser being offered a chip for a panel they
+           have no panel for. -->
+      <div class="rep-nav" id="settings-jump" hidden>
+        <div class="pipe-segment rep-nav-chips" id="settings-jump-chips" role="tablist" aria-label="Jump to a section of Settings"></div>
+      </div>
       <!-- R13 · M-42 — FIRM EXPORT. Near the top of the Owner's Settings on purpose: it is the
            one control on this page that is about the firm's ability to walk away with its own
            data, and burying it under forty configuration fields would be a statement about how
@@ -876,7 +890,7 @@
         <span id="my-details-saved" class="saved-msg hidden">Saved ✓</span>
       </div>
 
-      <div class="panel" style="margin-top:24px;">
+      <div class="panel" style="margin-top:24px;" id="introducers-panel">
         <h3>Introducers</h3>
         <p class="panel-sub">Estate agents, accountants and other referrers. Give them a portal login and they can watch their referrals progress (and nothing else).</p>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">

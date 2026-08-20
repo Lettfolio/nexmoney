@@ -92,6 +92,7 @@ node tests/r33.js
 node tests/r34.js
 node tests/r35.js
 node tests/r36.js
+node tests/r37.js
 ```
 
 Current green counts (end of round 23; r21/r22 were never committed to this
@@ -110,8 +111,35 @@ nothing else asserted the old shape of, and R19 is new owner-gated Reports
 content that no earlier suite reaches; R23 is the same story again — see the
 R23 notes below).
 
-**Full battery is 100% green (3,604/3,604), `tests/r9_docs.js` included
-(255/0).** R36 added `tests/r36.js` (83 checks, §A–§D) — see the "R36 notes"
+**Full battery is 100% green (3,727/3,727), `tests/r9_docs.js` included
+(255/0).** R37 added `tests/r37.js` (123 checks, §1–§12) — see the "R37 notes"
+section below — and required three genuine, non-masking repairs to
+pre-existing suites whose own ground truth R37's product change moved out
+from under them (none of the three loosened what the suite was proving):
+`tests/r31.js` B1/B2 pre-seed `nx_views_v1` with a PRESENT-but-empty store
+before their "starts from nothing" assertions, because R37's starter-views
+feature now seeds 1-3 views into a genuinely ABSENT key and every `newPage()`
+call is a fresh, isolated browser context (so the key was always absent
+there, regardless of the suite's own `clearViews()`) — a present-but-empty
+key is the R31-era ground truth those blocks were written against, and
+seedStarterViews() treats "present" as "leave it alone" by design, so this
+restores the exact original assertions rather than relaxing them (55/0,
+count unchanged); `tests/r5_batch5.js` §S3c now fills `#prot-comm-input` and
+clicks `#prot-comm-save`/`-skip` instead of answering a `prompt()`, because
+R37 moved the required-commission capture onto its own overlay — the
+downstream `confirm()` and its wording are untouched, so only the STEPS
+between the bulk-status pick and the confirm changed (79/0, count unchanged);
+`tests/r24.js` D4/D5/E4 now assert the board's clients embed reads
+`clients!client_id(first_name,last_name,email)` rather than the pre-R37
+string, because R37's board duplicate-hint (W9) widened it to carry `email`
+— the assertion's PURPOSE (a named, non-`"*"` embed, appended last) is
+unchanged, only the new true string (89/0, count unchanged). `tests/r26.js`
+§F (`p2`, non-owner) still holds verbatim — R37's admin read-only targets
+section is additive for `MY_ROLE === "admin"` only, and p2 is an adviser —
+so it needed no edit at all; `tests/r37.js` itself adds the admin-side
+coverage §F never had (§11a-d). Every OTHER pre-existing suite (`smoke.js`
+through `tests/r36.js`) re-ran unedited at its exact pre-R37 count. R36 added
+`tests/r36.js` (83 checks, §A–§D) — see the "R36 notes"
 section below — and required one genuine, non-masking fix to a pre-existing
 suite whose own flow R36's product change now interrupts (`tests/r8_touch.js`
 R8-2's bulk-task block — see the R36 notes for exactly why: 151/0, count
@@ -204,7 +232,7 @@ even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes belo
 | Suite | Checks |
 |---|---|
 | `smoke.js` | 144 |
-| `tests/r5_batch1..9.js` (sum) | 559 (BATCH 9's day-collision fixed in R27 — see the R27 notes; R33 re-pointed a nav click in BATCH 1 and BATCH 8's `gotoSettings()` at the collapsed Firm group — see the R33 notes; R34 pre-seeded BATCH 9's Month/Day scenario with `nx_diary_staff="all"` so its Month-vs-Day memory check still guards what it always guarded — see the R34 notes; R35 added two assertions to BATCH 3's retention flow proving the live successor doesn't renag its own Rate & ERC row — see the R35 notes; sum 557 → 559) |
+| `tests/r5_batch1..9.js` (sum) | 559 (BATCH 9's day-collision fixed in R27 — see the R27 notes; R33 re-pointed a nav click in BATCH 1 and BATCH 8's `gotoSettings()` at the collapsed Firm group — see the R33 notes; R34 pre-seeded BATCH 9's Month/Day scenario with `nx_diary_staff="all"` so its Month-vs-Day memory check still guards what it always guarded — see the R34 notes; R35 added two assertions to BATCH 3's retention flow proving the live successor doesn't renag its own Rate & ERC row — see the R35 notes; R37 re-pointed BATCH 5 §S3c at the new `#prot-comm-box` overlay in place of the retired commission `prompt()` — see the R37 notes; sum 557 → 559, unchanged by R37) |
 | `tests/r64.js` | 91 |
 | `tests/r8_touch.js` | 151 (R36 resolved the new bulk-task case-picker overlay before its confirm-dialog assertions — see the R36 notes; count unchanged) |
 | `tests/r8_rev.js` | 176 |
@@ -223,18 +251,135 @@ even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes belo
 | `tests/r19.js` | 39 (unchanged count — R20 fixed HOW one row is queried, not what it asserts) |
 | `tests/r20.js` | 81 |
 | `tests/r23.js` | 76 |
-| `tests/r24.js` | 89 (R34 pinned `#board-adviser` to "all" before §C's p3-assigned kitchen-sink seed, viewed as p2 — see the R34 notes; count unchanged) |
+| `tests/r24.js` | 89 (R34 pinned `#board-adviser` to "all" before §C's p3-assigned kitchen-sink seed, viewed as p2 — see the R34 notes; R37 re-pointed D4/D5/E4 at the board's `email`-widened clients embed — see the R37 notes; count unchanged) |
 | `tests/r25.js` | 45 |
 | `tests/r26.js` | 38 (R28 updated the basis/scoping assertions and added 2 new checks — see the R28 notes) |
 | `tests/r27.js` | 43 |
 | `tests/r29_scale.js` | 106 |
 | `tests/r30.js` | 40 (R33 re-pointed §C/§D4/§E from Reports to Settings' `#diag-details` and added 3 assertions proving the wrapper itself gates correctly — see the R33 notes; count rose from 37) |
-| `tests/r31.js` | 55 |
+| `tests/r31.js` | 55 (R37 pre-seeds a present-but-empty `nx_views_v1` before B1/B2 so the new starter-views seeding doesn't fire ahead of their "starts from nothing" assertions — see the R37 notes; count unchanged) |
 | `tests/r33.js` | 55 |
 | `tests/r34.js` | 60 |
 | `tests/r35.js` | 43 |
 | `tests/r36.js` | 83 |
-| **Total** | **3,604** |
+| `tests/r37.js` | 123 (new — §1–§12, see the R37 notes) |
+| **Total** | **3,727** |
+
+R37 notes: 12 polish items off the R32 panel, plus one CTO follow-up, all
+already-built and uncommitted before this session started (`admin/app.js`/
+`admin/index.html`/`admin/admin.css` only — no schema, no
+`admin/mock-supabase.js` changes; `admin/mock.html` is smoke.js's own
+regenerated copy).
+
+  1. **K2 — doc deep-link.** `openCase(id, {scrollTo:"docs"})`: Data health's
+     "Waiting on documents" row's Open button now opens the case scrolled (and,
+     at completed/not_proceeding, expanded) onto `#modal #case-docs` — the
+     block the row is ABOUT. `openCase(id)` with no second argument is
+     unchanged, which matters because it is window-exposed and called from
+     inline handlers and tests all over the app.
+  2. **P-settings — Settings jump nav.** The same device Reports has had since
+     R11-4 (`REPORT_JUMP_SECTIONS`/`buildReportsJumpNav`), applied to
+     Settings: `#settings-jump` (built `hidden`) + `#settings-jump-chips` with
+     `#settings-nav-<key>` chips. The chip list is READ off the rendered page
+     at the end of `renderSettings()`, never declared, so a role only ever
+     sees a chip for a section it genuinely has — an adviser is never offered
+     a chip for a panel with no panel behind it. New anchors: `#set-sec-*` on
+     the General/Advanced headings, plus `#introducers-panel`. A chip whose
+     target sits inside a collapsed `<details>` opens every disclosure the
+     target sits inside, outermost first, before scrolling.
+  3. **P1-corrected — funnel scope labels.** Two funnels on Reports read as
+     duplicates and are not: Pipeline MI's "Funnel & conversion" is a LIVE
+     snapshot of the whole book by stage, unaffected by the month picker;
+     "Pipeline funnel" further down is the selected month's COHORT (cases
+     created that month). Both scopes are now said outright, with a pointer
+     from each to the other — the Pipeline-MI-ward pointer on
+     `#report-funnel-scope` only for admin/owner, since Pipeline MI is
+     `isAdminOrOwner()`-gated and pointing an adviser at a panel they cannot
+     see would be worse than saying nothing.
+  4. **L7 — starter saved views.** R31 shipped the saved-views MECHANISM and
+     an empty cupboard — both dropdowns read "Saved views…" and nothing else
+     until somebody worked out the Save button captures the current filters.
+     `seedStarterViews()` now seeds 1-3 views (role-appropriate names/adviser
+     pinning) the FIRST time it is called with a known identity (`ME`) against
+     a genuinely ABSENT `nx_views_v1` key — never against a present-but-empty
+     one, which is exactly what a user who deleted every starter would be
+     left holding, and re-seeding that would be the app arguing with them.
+     Storage-blocked (throwing `getItem`) degrades to no seeding, the same way
+     R31's save/delete already degrade to no-ops.
+  5. **W9 — board duplicate hint (`.card-dupe-hint`), + the CTO follow-up.**
+     Data health finds duplicate clients; the board — where an adviser
+     actually works — gave no hint at all. A card now carries an amber
+     "dupe?" badge when its client shares a normalised EMAIL or an exact
+     sorted-tokens NAME key with another `client_id`, computed over the
+     board's FULL read (never the filtered/searched one, so narrowing the
+     board never hides a real duplicate). The CTO follow-up: the fixture's
+     real duplicate pair (Debbie/Deborah Ashworth) share an EMAIL under
+     different forenames, invisible to any name key — so the board's clients
+     embed widened from `clients!client_id(first_name,last_name)` to
+     `...(first_name,last_name,email)` to make the email signal possible at
+     all. This is the one product change that reached across into another
+     round's suite (`tests/r24.js`, which asserts that embed string verbatim
+     — see the non-masking repair above).
+  6. **W10 — protection commission capture, as an overlay.** R7-3 made a
+     commission figure required for "policy taken" and implemented "required"
+     as a `prompt()` in a three-try loop with no honest way to say "the policy
+     IS taken and I don't know the number yet." It is now the app's own
+     second-layer overlay (`openOverlay` — the same host the lost-reason and
+     fee-date captures use): `#prot-comm-box`/`-input`/`-err`/`-save`/`-skip`/
+     `-cancel`, prefilled from the case's existing commission or
+     `settings.protection_avg_commission`. Save writes a number above zero;
+     Skip writes the status with the commission column OMITTED from the patch
+     (an existing figure survives — it is not overwritten with a guess or a
+     null); Cancel/Escape/backdrop write nothing. Invalid input shows
+     `#prot-comm-err` next to the box and the overlay stays open — no re-nag
+     toast, no lost attempt. Both `setProtStatus` and `bulkSetProtStatus` call
+     through it now (the bulk path's own confirm(), naming the count and
+     whether a commission will be written, is unchanged — see the non-masking
+     repair to `tests/r5_batch5.js` §S3c above).
+  7. **W11 — appointment title quick-picks.** `#appt-title-chips` (5 titles
+     this back office actually books) sit above the still-free-text `#appt-title`
+     field. A click only WRITES the field and dispatches a real `input` event
+     (so the unsaved-changes guard and the clash notice see it exactly as
+     typing) — nothing is stored as a category, and "Ring Deborah back re: the
+     survey" is exactly as valid a title as it always was.
+  8. **K4 — vault login token (`.vault-user`).** Three "Test Bank A" vault
+     entries share a name and differed only by a small owner pill; the one
+     fact that actually told them apart (the login the entry is FOR) was four
+     lines down inside the fields block. `vaultUserToken()` lifts it into the
+     card's title row — but ONLY from a field the entry itself marked
+     non-secret, and prints no value `vaultFieldHtml` would not already print
+     in plain form. The three rows now read daniel.p / luke.r / wayne.k.
+  9. **K5 — one canonical stuck-emails warning, not three.** Today's banner,
+     Data health, and the Emails page were all independently arguing the same
+     fact. Today (most-seen, first place anyone would find out) keeps the
+     full sentence; Emails (where it's actually fixed) keeps everything; Data
+     health now keeps only a POINTER — `#dh-stuck-notice` (one line, the
+     count + live/not-live verdict) + `#dh-stuck-link` → `dhGotoEmails(false)`.
+     The id, container and click-through are unchanged, so nothing that
+     looked for `#dh-stuck-notice` lost it — it just says less.
+ 10. **L10 — rate-end sort tail.** The "(+N more)" tail already existed
+     inside "Rate ends YYYY" segments; the plain "Next rate end" SORT view had
+     no count at all, because `clientNextRateEnd` always returned `n: 0`. It
+     now counts properly and the same `.client-rateend-more` tail renders
+     there too ("(+N more)", no year qualifier — the population being counted
+     is "rate ends still ahead", not "rate ends in this year").
+ 11. **P3 — admin sees per-adviser targets, read-only.** Admin already reads
+     the scoreboard these targets feed (the Target column, the over/under)
+     with no way to look up what a target actually WAS. `renderAdviserTargetsEditor`
+     now also renders for `MY_ROLE === "admin"`, every `.adv-target-input`
+     disabled, an `#adviser-targets-readonly` lock note in place of the Save
+     button. Owner's view is untouched (editable + Save); an adviser still
+     gets no section at all — `tests/r26.js` §F already proved that half and
+     needed no edit (see the non-masking note above); `tests/r37.js` §11
+     covers the admin half R26 never tested.
+ 12. **item 22 — admin money note.** `#report-money-note` already told an
+     adviser which money panels are Owner-only; an admin's page simply
+     stopped where those panels begin, with nothing saying the stop was
+     deliberate. The sentence now grows one admin-only clause naming exactly
+     which panels are Owner-only and pointing at the Pipeline MI run-rate as
+     "the admin view of the firm's money." Owner sees no note at all
+     (unchanged); adviser sees the pre-R37 base note with no admin clause
+     (unchanged) — the clause is appended only when `MY_ROLE === "admin"`.
 
 R36 notes: three parallel, already-built, uncommitted branches merged into one
 round (`admin/app.js`/`admin/admin.css` only — `admin/index.html` gained

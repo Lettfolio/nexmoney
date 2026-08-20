@@ -96,6 +96,17 @@ const goto = async (page, pageName, ms) => {
 };
 const noNewErr = (page, before) => (page.__err || []).length === before;
 const clearViews = (page) => page.evaluate(() => { try { localStorage.removeItem("nx_views_v1"); } catch (e) { /* ignore */ } });
+/* R37 · non-masking repair — R37's starter-views seeding (seedStarterViews) triggers on the ABSENCE
+   of nx_views_v1, which is exactly the state clearViews() above produces. Every newPage() call is
+   already a fresh browser context (isolated storage), so the key was always absent going into B1/B2
+   regardless of clearViews() — R37 now fills that absence with 1-3 starter views before this file's
+   own assertions ever run, which would corrupt "starts with only the placeholder option" (B1a) and
+   the exact-one-view counts (B1c/B2b) etc. A PRESENT but EMPTY store is the R31-era ground truth
+   these blocks were written against — present, so seedStarterViews' "raw != null" guard skips
+   seeding entirely; empty, so every original assertion (placeholder-only select, arrays of length 1
+   after one Save, empty arrays after one Delete) holds byte-for-byte. B3 (corrupt-but-present key)
+   already exercises the "no seeding" path a different way and needs no change. */
+const presetEmptyViews = (page) => page.evaluate(() => { try { localStorage.setItem("nx_views_v1", JSON.stringify({ clients: [], pipeline: [] })); } catch (e) { /* ignore */ } });
 const stubDialogs = (page) => page.evaluate(() => { window.prompt = () => "My view"; window.confirm = () => true; });
 
 /* Insert one client (+ optionally one case) straight into the mock's in-memory store — same
@@ -237,7 +248,7 @@ async function readinessItems(page) {
       console.log("\n— B1 · Pipeline saved views: save persists + populates select, restore applies filters, delete removes (p4)");
       const page = await newPage(browser, "p4");
       const errBefore = (page.__err || []).length;
-      await clearViews(page);
+      await presetEmptyViews(page);
       await goto(page, "pipeline");
       // Start from a known, empty select.
       const optsBefore = await page.$$eval("#board-views option", (os) => os.map((o) => o.value));
@@ -294,7 +305,7 @@ async function readinessItems(page) {
       console.log("\n— B2 · Clients saved views: save persists a clients view; delete removes it (p4)");
       const page = await newPage(browser, "p4");
       const errBefore = (page.__err || []).length;
-      await clearViews(page);
+      await presetEmptyViews(page);
       await goto(page, "clients");
 
       const SEARCH_2 = "r31-clients-probe-beta";

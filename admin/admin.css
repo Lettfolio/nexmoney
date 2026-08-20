@@ -759,6 +759,10 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
 /* A long client name ("Christopher Featherstonehaugh-Wallace") must ellipsise
    rather than wrap to three lines and shove the adviser chip out of the card. */
 .card .cn .cn-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* R37 · W9 — the duplicate-client hint. Card-badge sizing (the .flags rule below, which this one
+   does not inherit — it lives in the name row, not the flag row) and not bold, so it reads as a
+   footnote on the name rather than as a second heading. */
+.card .cn .card-dupe-hint { font-size: 10.5px; padding: 2px 7px; font-weight: 600; letter-spacing: 0; flex: 0 0 auto; }
 .card .cd { font-size: 12px; color: var(--muted); margin-top: 2px; }
 .card .flags { margin-top: 7px; display: flex; gap: 4px 4px; flex-wrap: wrap; }
 .card .flags .badge { font-size: 10.5px; padding: 2px 8px; letter-spacing: 0; }
@@ -1778,6 +1782,10 @@ select.task-reassign { width: auto; padding: 3px 6px; font-size: 12px; }
 /* In-case task due-date preset chips (QW10). */
 .due-chips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: -2px 0 10px; }
 .due-chips-lbl { font-size: 11.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+/* R37 · W11 — appointment title quick-picks. Same furniture as .due-chips (they do the same job on
+   the same kind of field), pulled up under the Title input it fills. */
+.appt-title-chips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: -6px 0 2px; }
+.appt-title-chips .appt-title-chip { font-size: 12px; padding: 3px 9px; }
 .due-chip, .fu-chip { padding: 3px 10px; font-size: 12px; border-radius: 999px; }
 
 /* ---------- R17 · §3 — inline task snooze controls (My Day + Tasks rows) ---------- */
@@ -2942,6 +2950,15 @@ tr.owed-hot > td { background: var(--red-bg); }
 @media (max-width: 760px) {
   .rep-nav { margin: 0 -12px 4px; padding: 8px 12px 2px; }
 }
+/* R37 · P-settings — the Settings jump nav reuses .rep-nav / .rep-nav-chips wholesale (it is the
+   same control, and two near-identical strips styled from two rule sets is how they drift apart).
+   Only the scroll-margin differs, because it is measured from a different bar: --settings-jump-scroll
+   is written by measureSettingsJumpOffsets(). The section targets inside #settings-form are the
+   h3/h4 headings themselves, hence the wider selector list. */
+#page-settings .panel,
+#page-settings .settings-details,
+#page-settings #settings-form h3,
+#page-settings #settings-form h4 { scroll-margin-top: var(--settings-jump-scroll, 96px); }
 
 /* ---- R11-5 · Email / SMS status chips ---- */
 .em-filters { margin-bottom: 10px; }
@@ -3221,7 +3238,11 @@ tr.owed-hot > td { background: var(--red-bg); }
   display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap;
 }
 .dash-notice.warn { background: var(--amber-bg); color: var(--amber); border-color: #f0d9ac; }
-.dash-notice a, .dash-notice .dash-notice-link {
+/* R37 · K5 — .dq-notice joins the selector: Data health's stuck-queue line is now a pointer with a
+   link in it, and it uses the same inline link the Today banners do rather than growing a second
+   one that would drift from this. */
+.dash-notice a, .dash-notice .dash-notice-link,
+.dq-notice a, .dq-notice .dash-notice-link {
   color: inherit; font-weight: 700; text-decoration: underline; cursor: pointer; background: none; border: 0; padding: 0; font-size: inherit; font-family: inherit;
 }
 
@@ -3340,6 +3361,10 @@ tr.owed-hot > td { background: var(--red-bg); }
 .vault-card-head { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; align-items: flex-start; }
 .vault-card-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
 .vault-name { font-weight: 700; color: var(--dark); font-size: 14px; overflow-wrap: anywhere; }
+/* R37 · K4 — the login token beside the entry name. Deliberately the quietest thing in the title
+   row: monospace so an account number reads as an identifier, muted, and NOT a pill — it is
+   context on the name, not another status chip competing with the owner and visibility ones. */
+.vault-user { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere; }
 .vault-card-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .vault-owner { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; letter-spacing: .01em; }
 .vault-owner-daniel { background: var(--blue-bg); color: var(--navy); }
