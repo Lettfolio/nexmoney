@@ -91,6 +91,7 @@ node tests/r31.js
 node tests/r33.js
 node tests/r34.js
 node tests/r35.js
+node tests/r36.js
 ```
 
 Current green counts (end of round 23; r21/r22 were never committed to this
@@ -109,8 +110,14 @@ nothing else asserted the old shape of, and R19 is new owner-gated Reports
 content that no earlier suite reaches; R23 is the same story again — see the
 R23 notes below).
 
-**Full battery is 100% green (3,521/3,521), `tests/r9_docs.js` included
-(255/0).** R35 added `tests/r35.js` (43 checks) — see the "R35 notes" section
+**Full battery is 100% green (3,604/3,604), `tests/r9_docs.js` included
+(255/0).** R36 added `tests/r36.js` (83 checks, §A–§D) — see the "R36 notes"
+section below — and required one genuine, non-masking fix to a pre-existing
+suite whose own flow R36's product change now interrupts (`tests/r8_touch.js`
+R8-2's bulk-task block — see the R36 notes for exactly why: 151/0, count
+unchanged, only the steps between the click and the confirm changed); every
+other pre-existing suite (`smoke.js` through `tests/r35.js`) re-ran unedited at
+its exact pre-R36 count. R35 added `tests/r35.js` (43 checks) — see the "R35 notes" section
 below — and required one genuine, non-masking fix to a pre-existing suite whose
 own assertion R35's product change directly inverted (`tests/r16.js` A4 — see
 the R35 notes for exactly why: 81 → 83), plus one deliberate strengthening of
@@ -199,7 +206,7 @@ even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes belo
 | `smoke.js` | 144 |
 | `tests/r5_batch1..9.js` (sum) | 559 (BATCH 9's day-collision fixed in R27 — see the R27 notes; R33 re-pointed a nav click in BATCH 1 and BATCH 8's `gotoSettings()` at the collapsed Firm group — see the R33 notes; R34 pre-seeded BATCH 9's Month/Day scenario with `nx_diary_staff="all"` so its Month-vs-Day memory check still guards what it always guarded — see the R34 notes; R35 added two assertions to BATCH 3's retention flow proving the live successor doesn't renag its own Rate & ERC row — see the R35 notes; sum 557 → 559) |
 | `tests/r64.js` | 91 |
-| `tests/r8_touch.js` | 151 |
+| `tests/r8_touch.js` | 151 (R36 resolved the new bulk-task case-picker overlay before its confirm-dialog assertions — see the R36 notes; count unchanged) |
 | `tests/r8_rev.js` | 176 |
 | `tests/r9_adv.js` | 169 (R33 re-scoped a `.case-details` reveal to `#modal .case-details` — see the R33 notes; count unchanged) |
 | `tests/r9_docs.js` | 255 (same R33 `#modal .case-details` re-scope; count unchanged) |
@@ -226,7 +233,113 @@ even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes belo
 | `tests/r33.js` | 55 |
 | `tests/r34.js` | 60 |
 | `tests/r35.js` | 43 |
-| **Total** | **3,521** |
+| `tests/r36.js` | 83 |
+| **Total** | **3,604** |
+
+R36 notes: three parallel, already-built, uncommitted branches merged into one
+round (`admin/app.js`/`admin/admin.css` only — `admin/index.html` gained
+exactly one input, `#prot-search`, for build A; no schema, no
+`admin/mock-supabase.js` changes anywhere in the round).
+
+  - **A — protection on the client record + client-row extras + protection
+    search.** Every case row on a client's drawer (grouped or not) now carries
+    a `.cl-prot-chip` (`data-prot="<status>"`, grey None/Declined, amber
+    Discussed/Quoted, green Policy) reading straight off `protection_status` —
+    nowhere on the client record answered "is any of this protected?" before.
+    The client LIST gained `.client-prop-n` (a grey "N properties" badge,
+    shown only when a client's cases sit on more than one distinct building,
+    fed by a `propAddrSupported()`-gated `,property_address` widening of the
+    clients embed) and `.client-lc-age` (a muted last-contact age on EVERY
+    row, from the existing 210-day comms window) — the Cold segment keeps its
+    own richer "last contact 12 Mar (note)" line instead, never both on one
+    row. The Protection page gained `#prot-search` (debounced 250ms, same
+    contract as `#board-search`): it composes scope → search → status, the
+    KPI tiles re-read against it, and the empty state names the term when a
+    search produced it.
+  - **B — searchable client/referrer/appointment pickers + a slim new-case
+    form.** `upgradeSelectToCombobox` progressively enhances
+    `#case-client-select`, `#case-referrer-select` and `#appt-client`: the
+    native `<select>` stays in the DOM (hidden, `.combo-native`) as the real
+    value carrier — every `.value` read, every `change` listener and FormData
+    itself are untouched — while a `.combo-input` + `.combo-list` sit beside
+    it, filtering by token-AND across the option's whole text (so a FIRST name
+    finds a "Last, First" option, which a native select's own type-ahead never
+    could), with pinned sentinels (`__new__` "+ New client…") that survive a
+    zero-match search. The NEW-case form is now a `.case-core-grid` (client,
+    property, kind, stage, assigned-to) above the fold, with the other ~39
+    fields folded into the SAME `<details class="case-details">` accordion the
+    EDIT form has always used — one `<form id="case-form">` throughout, so an
+    unopened accordion still writes its markup's defaults on save. The EDIT
+    form is byte-identical to before: no `.case-core-grid`, everything in the
+    accordion.
+  - **C — bulk-task property picker for multi-case clients.** `clientTaskTarget`'s
+    `many_live` refusal now carries the live cases it refused to choose between
+    (`{why:"many_live", choices}`) instead of only naming the refusal. The bulk
+    "＋ Add task…" flow resolves this BEFORE the confirm dialog: one
+    `.bulk-task-case-pick` select per ambiguous client in `#btaskc-pick-rows`
+    (their own live cases, property · lender · stage, plus "Skip this one"),
+    `#btaskc-pick-ok` disabled until every select has a value, and
+    `#btaskc-pick-cancel`/Escape aborts the WHOLE batch — nothing is written.
+    An unambiguous-only selection never sees the overlay. Chosen clients join
+    the SAME target list and write loop as single-case clients, and a new
+    title-dedupe (matched by `playbookTitleKey` against each target case's OPEN
+    tasks) means running the same batch twice adds nothing the second time —
+    "N already had that task open".
+
+`tests/r36.js` (83 checks, §A–§D) seeds every client/case it needs directly
+against `window.__mockDb`, exactly like `tests/r35.js`/`r34.js` before it —
+never relying on the fixture's current, shifting composition. §A1 forces the
+GROUPED drawer render path on purpose (two cases sharing one property among
+three) so the chip assertion covers `clientCaseRowHtml`'s `opts.grouped`
+branch, not just the flat one. §C mirrors real user gestures throughout
+(clicking the actual `.bulk-task-case-pick` select, the actual
+`#btaskc-pick-ok`/`#btaskc-pick-cancel` buttons, actual Escape) rather than
+writing to the mock db directly, because the thing under test IS the overlay
+sequencing.
+
+One genuine, NON-MASKING fix to a pre-existing suite: `tests/r8_touch.js`'s
+R8-2 bulk-task block (§3, the block that proves a many_live client is REFUSED
+a task rather than guessed at) selects, among others, two `many_live` clients
+and then goes straight from clicking `#client-bulk-task` to filling
+`#btaskc-title` — which R36-C's new case-resolution overlay now intercepts:
+that click no longer opens the confirm dialog directly when the selection
+holds an ambiguous client, it opens `#btaskc-pick-rows` first. The fix adds
+exactly one resolution step in between, driven the same way a real operator
+would drive it: if `#btaskc-pick-rows` is present, set every
+`.bulk-task-case-pick` to `"__skip"` (dispatching a real `change` so the
+picker's own Continue-gating logic runs) and click `#btaskc-pick-ok`, THEN
+continue into the confirm dialog exactly as before. `"__skip"` is not an
+arbitrary choice: this block's whole point is that a many_live client is
+skipped, not guessed at, and R36-C's picker offers precisely that as one of
+its two paths — choosing it for every many_live row here preserves the exact
+scenario the block was built to prove, so every downstream assertion (the
+skip-count in the confirm dialog, `/several live cases/i` still matching the
+picker's own — reworded but still true — "have several live cases and you
+skipped them" copy, nothing landing on a many_live client's cases, the toast,
+the "stays selected" check) holds unedited. No assertion was loosened,
+deleted or had its target changed; the fix is purely the one new UI step R36-C
+inserted into a flow the block already drove end-to-end. 151/0 → 151/0 (same
+count: nothing was added or removed, only the path between two existing steps
+changed).
+
+Ops note for whoever runs this battery next: `smoke.js` and every file in
+`tests/` hardcode `REPO = "/root/nx"` and `PORT = 8099` — they are not meant to
+be portable across checkouts, and this session's run confirmed that hardcoding
+is still exactly right for this environment (no `REPO`/`PORT` edits were
+needed anywhere in the R36 pass).
+
+One environment-clock note, unrelated to any R36 code: a first full-battery
+run landed squarely inside the 23:00–00:00 UTC hour, and `tests/r17.js`'s §D
+(snooze arithmetic / "today" in the briefing) went red — 2 failures, then a
+locator timeout crash on a re-run seconds later. This is the SAME pre-existing
+harness artefact `admin/mock-supabase.js` already documents at its own `TODAY`
+constant ("R12b flake fix" — `dateOnly()` reads the Node/browser process's own
+local timezone, which during BST disagrees with `app.js`'s Europe/London
+`localDateStr()` for exactly that one hour each day). Nothing in R36 touches
+task snoozing, briefing or any date arithmetic, and `tests/r17.js` itself is
+untouched. Re-run after 00:00 UTC: 112/0, clean — the count the table above
+already carries. No file was edited to produce this; it was purely waiting out
+the documented window.
 
 R35 notes: a small, already-built, uncommitted round shipping a CASE IDENTITY
 pack (`admin/app.js` only, no schema, no `admin/index.html`/`admin/mock-supabase.js`

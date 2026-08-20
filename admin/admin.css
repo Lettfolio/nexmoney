@@ -679,6 +679,10 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
 .cprop-group .row-item { padding-left: 8px; }
 .cl-case-chip { max-width: 100%; font-size: 11.5px; padding: 1px 8px 1px 7px; }
 .cl-case-chip .pc-dot { width: 7px; height: 7px; }
+/* R36-A · L6 — the protection pill on a client-record case row. Plain .badge in the existing
+   colours; only the wrap is pinned, because "🛡️ Policy" breaking across two lines in a row that
+   already carries an adviser chip and a stage badge looks like two separate pills. */
+.badge.cl-prot-chip { white-space: nowrap; }
 /* Appointment modal — "About: <chip> type · lender · stage" under the title. */
 .appt-case-line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 /* R6FIX-1 (R6B-02) — .hidden wins over the flex above, so an empty About line collapses rather
@@ -964,6 +968,18 @@ main input:focus, main select:focus, main textarea:focus,
 .ovl-fee-row input[type="date"] { width: 158px; margin: 0; }
 .ovl-fee-row.is-paid { background: var(--light); }
 .ovl-err { color: var(--red); font-size: 12px; font-weight: 600; margin-top: 8px; min-height: 15px; }
+/* R36-C — the bulk-task case picker (one row per client holding more than one live case). The
+   select carries the whole property · lender · stage label, so it takes the width it needs and
+   the row wraps under the name when it can't have it (the .row-item wrap rule, unchanged). A
+   batch with a dozen landlords in it scrolls INSIDE the overlay rather than pushing Continue
+   off the bottom of the screen. */
+#btaskc-pick-rows { max-height: 46vh; overflow-y: auto; margin: 6px 0 2px; }
+.btaskc-pick-row .bulk-task-case-pick { flex: 1 1 230px; min-width: 0; margin: 0; }
+#btaskc-pick-left { color: var(--muted); font-size: 12.5px; }
+/* A primary button that cannot be pressed has to LOOK it — the picker's Continue is disabled
+   until every client is resolved, and an identical-looking button that swallows clicks reads as
+   a broken app. Scoped to this flow's two buttons; nothing global changes. */
+#btaskc-pick-ok:disabled, #btaskc-ok:disabled { opacity: .5; cursor: default; }
 
 /* ---------- Help / glossary (R12b · L-1/L-5/L-18) ---------- */
 #help-btn { font-weight: 700; }
@@ -1848,6 +1864,31 @@ select.task-reassign { width: auto; padding: 3px 6px; font-size: 12px; }
 .case-details > summary::before { content: "\25B8"; font-size: 12px; color: var(--muted); transition: transform .15s ease; }
 .case-details[open] > summary::before { transform: rotate(90deg); }
 .case-details > .form-grid { margin-top: 12px; }
+/* R36-B · W7 — the slim new-case form: core fields above the fold, everything else behind the same
+   "Case details" accordion the edit view already uses. The core grid needs the accordion's own top
+   rule removed when it follows straight on, so the two read as one form and not two panels. */
+.case-core-grid { margin-bottom: 4px; }
+
+/* ---------- R36-B · W6 — searchable picker (upgradeSelectToCombobox) ----------
+   The native <select> is hidden, NOT removed: it is still the value carrier for FormData, for every
+   `.value` read and for the unsaved-changes snapshot. display:none also keeps it out of the modal's
+   focus trap (modalFocusable() filters on offsetParent). */
+select.combo-native { display: none !important; }
+.combo-wrap { position: relative; }
+.modal .combo-wrap .combo-input { width: 100%; margin-top: 4px; }
+.combo-list {
+  position: absolute; z-index: 60; left: 0; right: 0; top: calc(100% + 2px);
+  max-height: 262px; overflow-y: auto;
+  background: #fff; border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 10px 26px rgba(15, 32, 55, .16);
+  padding: 4px;
+}
+.combo-opt { padding: 6px 9px; border-radius: 6px; font-size: 13px; color: var(--dark); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.combo-opt.combo-pin { color: var(--muted); font-style: italic; }
+.combo-opt.combo-cur { font-weight: 700; }
+.combo-opt.combo-active { background: var(--navy); color: #fff; }
+.combo-opt.combo-active.combo-pin { color: #fff; }
+.combo-more { padding: 6px 9px; font-size: 11.5px; color: var(--muted); }
 
 /* Clickable KPI tiles (QW15). */
 .kpi-click { cursor: pointer; transition: border-color .15s ease, box-shadow .15s ease, transform .15s ease; }
@@ -2921,6 +2962,12 @@ tr.owed-hot > td { background: var(--red-bg); }
 /* The per-row detail the active segment/sort puts on a client. Same weight as the rest of the
    .s line — it is context, not a second title. */
 .client-rateend { font-variant-numeric: tabular-nums; }
+/* R36-A · L9 — the two row extras. The last-contact age is deliberately quieter than the rest of
+   the .s line: it is on EVERY row, so at full weight it would compete with the email and phone the
+   row exists to give. The property count is a plain .badge grey, sitting to the left of the case
+   badge that has always ended the row, so the row's shape is unchanged. */
+.client-lc-age { color: var(--muted); font-variant-numeric: tabular-nums; }
+.badge.client-prop-n { white-space: nowrap; }
 @media (max-width: 760px) {
   .client-sort select { flex: 1 1 auto; min-height: 40px; }
 }

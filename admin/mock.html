@@ -289,6 +289,11 @@
         <button class="btn btn-sm seg-btn seg-first scope-active" id="prot-scope-mine">Mine</button>
         <button class="btn btn-sm seg-btn" id="prot-scope-unassigned">Unassigned</button>
         <button class="btn btn-sm seg-btn seg-last" id="prot-scope-all">All</button>
+        <!-- R36-A · L6 — a client search on this table. The scope buttons and the status drop-down
+             both answer "which slice of the book", never "where is Mrs Okafor's row" — and on an
+             Owner's "All" view this table is the longest list in the app. Same control, class and
+             debounce as the pipeline's #board-search. -->
+        <input type="search" id="prot-search" class="search" placeholder="Search client…" aria-label="Search protection rows by client name">
         <select id="prot-filter" aria-label="Filter protection cases">
           <option value="all">All</option>
           <option value="live">Live cases</option>

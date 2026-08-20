@@ -332,6 +332,22 @@ function parseCsvLine(line) {
       const before = await page.evaluate(async () => (await window.__mockDb.from("case_tasks").select("id")).data.length);
       await page.click("#client-bulk-task");
       await page.waitForTimeout(400);
+      /* R36-C — a client with several LIVE cases now surfaces a case-resolution overlay BEFORE the
+         confirm dialog this block goes on to read. Resolve it first: this block's whole point is
+         that a many_live client is REFUSED (skipped, not guessed at), and R36-C's own picker offers
+         exactly that as one of its two paths ("choose a case" or "Skip this one") — "__skip" for
+         every many_live row here preserves that intent exactly, so every assertion below (the
+         skip-count, the skipped-client naming, "several live cases", nothing landing on a
+         many_live client's cases) still holds against the SAME clients for the SAME reason. */
+      const pickerUp = await page.$("#btaskc-pick-rows");
+      if (pickerUp) {
+        await page.$$eval("#btaskc-pick-rows .bulk-task-case-pick", (sels) => sels.forEach((s) => {
+          s.value = "__skip"; s.dispatchEvent(new Event("change", { bubbles: true }));
+        }));
+        await page.waitForTimeout(150);
+        await page.click("#btaskc-pick-ok");
+        await page.waitForTimeout(400);
+      }
       const dlg = await page.$eval("#overlay-modal", (e) => e.textContent.replace(/\s+/g, " ").trim()).catch(() => "");
       const expTargets = picked.filter((id) => !classify(id).why);
       const expSkipped = picked.filter((id) => !!classify(id).why);

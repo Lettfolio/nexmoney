@@ -9482,6 +9482,11 @@ $("#new-case-btn").addEventListener("click", () => openCase(null));
 
 /* ---------- Protection & GI page ---------- */
 let protScope = "mine", protFilter = "all";
+/* R36-A · L6 — the client search term for the protection table. Client-side over rows already in
+   hand (the RPC returns the whole book and the scope/status filters are applied here too), so a
+   keystroke costs no query. Module scope so a re-render from anywhere — setProtStatus, the bulk
+   bar, the Quoted tile — keeps the search the operator typed. */
+let protSearch = "";
 const PROT_BADGE = {
   not_discussed: ["grey", "NOT DISCUSSED"], discussed: ["blue", "DISCUSSED"], quoted: ["amber", "QUOTED"],
   policy_taken: ["green", "POLICY TAKEN"], declined: ["red", "DECLINED"],
@@ -9545,7 +9550,14 @@ async function loadProtectionPage() {
     if (protScope === "unassigned" && r.owner != null) return false;
     return true;
   });
+  /* R36-A · L6 — search sits INSIDE the same chain as the status drop-down, after the scope, so
+     the two compose the way an operator expects ("Mine · Quoted · okafor") and the KPI tiles above
+     re-read against the search — the same contract the pipeline's segment counts and the client
+     list's chips have had since BUILD 5a. The completed-with-no-outcome call list below still
+     answers only to the SCOPE, exactly as it did before search existed. */
+  const protQ = protSearch.trim().toLowerCase();
   const rows = scoped.filter((r) => {
+    if (protQ && !String(r.client_name || "").toLowerCase().includes(protQ)) return false;
     if (protFilter === "live") return r.live;
     if (protFilter === "completed") return !r.live;
     if (protFilter === "quoted") return r.protection_status === "quoted";
@@ -9646,7 +9658,11 @@ async function loadProtectionPage() {
     </table>
     </div>
     <button type="button" class="board-scroll-arrow" aria-label="Scroll right" title="Scroll right">›</button>
-  </div>` : '<div class="empty">No protection or GI opportunities in this view — nice clean book. 🛡️</div>';
+  </div>` : (protQ
+    /* R36-A · L6 — "nice clean book" is a compliment, and it must never be paid to a search that
+       simply found nobody. Name the term, and name the scope it was searched inside. */
+    ? `<div class="empty">No protection rows for “${esc(protSearch.trim())}” in this view — the search looks at client names inside the current scope and filter.</div>`
+    : '<div class="empty">No protection or GI opportunities in this view — nice clean book. 🛡️</div>');
   wireTableHScroll("prot-scroll");
   // S3c — bulk wiring. The bar updates imperatively (no re-render) so a long selection survives.
   document.querySelectorAll("#prot-list-table .prot-cb").forEach((cb) => (cb.onchange = () => {
@@ -10340,6 +10356,8 @@ $("#prot-scope-mine").addEventListener("click", () => setProtScope("mine"));
 $("#prot-scope-unassigned").addEventListener("click", () => setProtScope("unassigned"));
 $("#prot-scope-all").addEventListener("click", () => setProtScope("all"));
 $("#prot-filter").addEventListener("change", () => { protFilter = $("#prot-filter").value; loadProtectionPage(); });
+// R36-A · L6 — same 250ms debounce as #board-search, so a fast typist gets one render, not eight.
+$("#prot-search").addEventListener("input", debounce(() => { protSearch = $("#prot-search").value || ""; loadProtectionPage(); }, 250));
 // Clicking the "Quoted, awaiting decision" tile filters the table to those rows (QW15).
 $("#prot-tile-quoted").addEventListener("click", () => {
   protFilter = "quoted";
@@ -10360,6 +10378,168 @@ let openedUpdatedAt = null;
    importer's new-client insert. */
 let clientPickerCache = null;
 function invalidateClientPicker() { clientPickerCache = null; }
+/* ---------- R36-B · W6 — SEARCHABLE PICKER (upgradeSelectToCombobox) ----------
+   The R32 panel watched an adviser hunt for "Wetherby" in a six-hundred-name <select> by holding
+   the mouse against the scrollbar. A native select's type-ahead only matches from the START of the
+   option text, and every one of these lists is "Last, First" — so typing a FIRST name, or a surname
+   you are half sure of, finds nothing at all.
+
+   This is a PROGRESSIVE ENHANCEMENT, not a replacement. The <select> stays in the DOM as the value
+   carrier: it is display:none'd, never removed, so every `.value` read, every `change` listener,
+   every FormData round-trip and the unsaved-changes snapshot keep working untouched. All this adds
+   is a text input + a filtered list that writes back into the select and fires a REAL change event.
+
+   Sentinels ("— select client —", "+ New client…", "— nobody —") are PINNED: they are commands, not
+   search results, and a picker that hides "+ New client…" the moment you type is a picker that
+   makes you delete what you typed to get at it.
+
+   Anything that throws leaves the native select exactly as it was (visible, working) — an operator
+   with a plain select is inconvenienced; an operator with a hidden select and a broken input is
+   stuck. */
+function upgradeSelectToCombobox(selectEl, opts) {
+  if (!selectEl || selectEl.__combo) return null;
+  opts = opts || {};
+  const MAX = 12;               // beyond this the list is a scroll again — say "keep typing" instead
+  let wrap = null;
+  try {
+    const labelOf = (o) => (o.textContent || "").trim();
+    const isSentinel = (o) => !o.value || o.value === "__new__";
+    wrap = document.createElement("div");
+    wrap.className = "combo-wrap";
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "combo-input";
+    input.setAttribute("role", "combobox");
+    input.setAttribute("aria-expanded", "false");
+    input.setAttribute("aria-autocomplete", "list");
+    input.setAttribute("autocomplete", "off");
+    input.placeholder = opts.placeholder || "Type to search…";
+    const list = document.createElement("div");
+    list.className = "combo-list hidden";
+    list.setAttribute("role", "listbox");
+    if (selectEl.id) {
+      input.id = selectEl.id + "-combo";
+      list.id = selectEl.id + "-combo-list";
+      input.setAttribute("aria-controls", list.id);
+      /* The select sits inside a <label> with no `for`, so the label's implicit control is the
+         select we just hid — clicking the word "Client" would focus nothing. Point it at the input. */
+      const lab = selectEl.closest("label");
+      if (lab && !lab.getAttribute("for")) lab.setAttribute("for", input.id);
+    }
+    wrap.appendChild(input);
+    wrap.appendChild(list);
+    selectEl.classList.add("combo-native");     // display:none — still submitted, still readable
+    selectEl.parentNode.insertBefore(wrap, selectEl.nextSibling);
+
+    let items = [];       // the <option>s currently painted, in painted order
+    let active = -1;
+    const isOpen = () => !list.classList.contains("hidden");
+    const selectedOpt = () => selectEl.options[selectEl.selectedIndex] || null;
+    const sync = () => {  // input text ← whatever the select currently holds (incl. programmatic writes)
+      const o = selectedOpt();
+      input.value = o && o.value ? labelOf(o) : "";
+    };
+    const close = () => {
+      list.classList.add("hidden");
+      list.innerHTML = "";
+      items = []; active = -1;
+      input.setAttribute("aria-expanded", "false");
+    };
+    const paint = (q) => {
+      const terms = String(q || "").toLowerCase().split(/\s+/).filter(Boolean);
+      const all = [...selectEl.options].filter((o) => !o.hidden && !o.disabled);
+      const pinned = all.filter(isSentinel);
+      const matches = all.filter((o) => !isSentinel(o))
+        .filter((o) => { const t = labelOf(o).toLowerCase(); return terms.every((w) => t.includes(w)); });
+      const shown = matches.slice(0, MAX);
+      items = pinned.concat(shown);
+      const cur = selectEl.value;
+      list.innerHTML = items.map((o, i) =>
+        `<div class="combo-opt${isSentinel(o) ? " combo-pin" : ""}${o.value === cur && o.value ? " combo-cur" : ""}" role="option" data-i="${i}" aria-selected="false">${esc(labelOf(o))}</div>`
+      ).join("") + (matches.length > shown.length
+        ? `<div class="combo-more">${matches.length - shown.length} more — keep typing</div>` : "")
+        + (!matches.length && terms.length ? `<div class="combo-more">No match</div>` : "");
+      /* With something typed the operator means the NAMES, not the pinned commands: land the
+         highlight on the first real match so Enter picks who they were looking for. */
+      active = terms.length && shown.length ? pinned.length : (items.length ? 0 : -1);
+      markActive();
+      list.classList.remove("hidden");
+      input.setAttribute("aria-expanded", "true");
+    };
+    const markActive = () => {
+      [...list.querySelectorAll(".combo-opt")].forEach((el, i) => {
+        const on = i === active;
+        el.classList.toggle("combo-active", on);
+        el.setAttribute("aria-selected", on ? "true" : "false");
+        if (on && el.scrollIntoView) el.scrollIntoView({ block: "nearest" });
+      });
+    };
+    const choose = (o) => {
+      if (!o) return;
+      selectEl.value = o.value;
+      sync();
+      close();
+      selectEl.dispatchEvent(new Event("change", { bubbles: true }));
+    };
+    const clearToEmpty = () => {
+      const empty = [...selectEl.options].find((o) => !o.value);
+      if (!empty || selectEl.value === empty.value) return;
+      selectEl.value = empty.value;
+      selectEl.dispatchEvent(new Event("change", { bubbles: true }));
+    };
+
+    input.addEventListener("focus", () => paint(""));
+    input.addEventListener("mousedown", () => { if (!isOpen()) setTimeout(() => paint(input.value), 0); });
+    input.addEventListener("input", () => {
+      // Emptying the box means "nobody" — the same thing the empty option means.
+      if (!input.value.trim()) clearToEmpty();
+      paint(input.value);
+    });
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        if (!isOpen()) { paint(input.value); return; }
+        if (!items.length) return;
+        active = (active + (e.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+        markActive();
+      } else if (e.key === "Enter") {
+        if (!isOpen()) return;              // let the form do whatever it does with Enter
+        e.preventDefault();
+        if (active >= 0 && items[active]) choose(items[active]);
+      } else if (e.key === "Escape") {
+        if (!isOpen()) return;              // closed list → Escape belongs to the modal
+        e.preventDefault(); e.stopPropagation();
+        close(); sync();
+      } else if (e.key === "Tab") {
+        close();
+      }
+    });
+    // mousedown, not click: preventDefault keeps focus on the input so blur cannot beat the pick.
+    list.addEventListener("mousedown", (e) => {
+      const row = e.target.closest(".combo-opt");
+      if (!row) { e.preventDefault(); return; }
+      e.preventDefault();
+      choose(items[Number(row.dataset.i)]);
+      input.focus();
+    });
+    input.addEventListener("blur", () => { setTimeout(() => { close(); sync(); }, 120); });
+    /* Anything that writes the select behind our back (syncReferrerOptions clearing a self-referral,
+       a re-render) can call __combo.sync() to bring the visible text back in step. */
+    selectEl.addEventListener("change", sync);
+
+    sync();
+    selectEl.__combo = { input, list, sync, wrap };
+    return selectEl.__combo;
+  } catch (err) {
+    // Degrade to the native select, whole and visible.
+    try {
+      if (wrap && wrap.parentNode) wrap.parentNode.removeChild(wrap);
+      selectEl.classList.remove("combo-native");
+      delete selectEl.__combo;
+    } catch (e2) { /* nothing left to do — the select is still on screen */ }
+    return null;
+  }
+}
 async function refreshOpenedStamp(caseId) {
   if (!caseId) return null;
   const { data } = await db.from("cases").select("updated_at").eq("id", caseId).single();
@@ -10959,133 +11139,23 @@ window.openCase = async function (id, opts = {}) {
       </div>
     </div>` : "";
 
-  $("#modal").innerHTML = `
-    <h3>${id ? "Case" : "New case"}</h3>
-    ${/* R15 · §3 — the security card is a lender-call tool; it has nothing to hold before a lender
-         is involved, so it is HIDDEN at enquiry+fact_find and shown DIP→terminal. Wrapped, never
-         deleted: the node (and its toggle wiring) stays in the DOM, just hidden. */ ""}
-    ${id ? `<div id="case-sec-wrap"${caseSectionVisible("security", c.stage) ? "" : ' class="hidden"'}>${securityCardHtml(c, caseClient, secClient)}</div>` : ""}
-    ${summaryHeader}
-    ${c.retention_source_case_id ? `<p class="panel-sub" style="margin-top:-8px;">🔁 Retention opportunity — linked to a completed case. <span class="t" style="cursor:pointer;text-decoration:underline;" onclick="openCase('${c.retention_source_case_id}')">View original case</span></p>` : ""}
-    ${/* R15 · §6 — a not-proceeding case says WHY, prominently. Prefer the recorded lost_reason (a
-         select("*") carries it when the M2 columns exist); fall back to the last note; and offer a
-         one-click "record reason" that fires the same affordance the action bar carries. */ ""}
-    ${id && c.stage === "not_proceeding" ? `<p class="panel-sub case-lost-banner" style="margin-top:-8px;color:var(--red);">🚫 Not proceeding${
-        c.lost_reason ? ` — <strong>${esc(LOST_REASON_LABEL[c.lost_reason] || String(c.lost_reason).replace(/_/g, " "))}</strong>${c.lost_detail ? ": " + esc(c.lost_detail) : ""}`
-        : lastNote ? ` — <span class="cs-muted">last note:</span> ${esc(noteSnip(lastNote.body))}`
-        : " — <span class=\"cs-muted\">no reason recorded.</span>"} <a href="#" class="t" style="text-decoration:underline;" title="Record or correct why this case did not proceed" onclick="event.preventDefault();var b=document.getElementById('act-record-reason');if(b)b.click();">record reason</a></p>` : ""}
-    ${c.nps_score != null ? `<p class="panel-sub" style="margin-top:-8px;">Client review score: <strong style="color:${c.nps_score >= 9 ? "var(--green)" : c.nps_score >= 7 ? "var(--amber)" : "var(--red)"};">${c.nps_score}/10</strong></p>` : ""}
-    ${id ? `
-    <div style="margin-top:14px;">
-      <h3 style="font-size:14px;">Tasks</h3>
-      ${/* R12a·D10 — the DUE chips used to sit BELOW this row, i.e. after the Add button in both
-            reading and tab order, so the natural gesture (type the title, press Enter) submitted
-            before the operator had reached the thing that sets the date. They now sit between the
-            title box and the row that ends in Add, which is the order the task is actually
-            composed in. The dateless-submit default below is the belt to this braces. */ ""}
-      <div class="due-chips" style="margin:8px 0 6px;">
-        <span class="due-chips-lbl">Due:</span>
-        <button type="button" class="btn btn-sm due-chip" data-days="1">Tomorrow</button>
-        <button type="button" class="btn btn-sm due-chip" data-days="3">+3d</button>
-        <button type="button" class="btn btn-sm due-chip" data-days="7">+1wk</button>
-        <button type="button" class="btn btn-sm due-chip" data-months="1">+1mo</button>
-      </div>
-      <div style="display:flex;gap:8px;margin:0 0 8px;flex-wrap:wrap;">
-        <input id="new-task" placeholder="Add a task…" style="flex:1;min-width:140px;">
-        <select id="new-task-assignee" aria-label="Assign task to" style="width:auto;" title="Assign task to">${TEAM.map((p) => `<option value="${p.id}" ${p.id === defaultAssignee(c.assigned_to) ? "selected" : ""}>${esc(staffName(p.id))}</option>`).join("")}</select>
-        <input id="new-task-due" type="date" style="width:auto;" title="Leave this empty and the task is due tomorrow — a task with no date appears on no list anywhere.">
-        <button class="btn btn-sm" id="add-task-btn" title="Add task">Add task</button>
-      </div>
-      <div id="tasks-inline">${tasks.map((t) => `
-        <div class="row-item" style="padding:7px 4px;">
-          <div class="row-main">
-            <div style="${t.done_at ? "text-decoration:line-through;color:var(--muted);" : ""}">${esc(t.title)}</div>
-            <div class="s">${t.due_date ? "due " + fmtD(t.due_date) : ""}${t.done_at ? " · done" : ""}</div>
-          </div>
-          ${/* R12a·D12 — a done row used to be a dead end: struck through, no control, and the only
-                way back was the database. done_at is nullable and reopening is simply setting it
-                back to null, so the row that RECORDS the mistake is also the row that fixes it. */ ""}
-          ${t.done_at ? assigneeChipHtml(t.assigned_to) : taskAssigneeHtml(t.id, t.assigned_to, "")}${t.done_at
-            ? `<button class="btn btn-sm task-reopen" aria-label="Reopen this task" title="Put this task back on the list — it was marked done" onclick="reopenTaskInCase('${t.id}','${id}')">↺ Reopen</button>`
-            : `<button class="btn btn-sm" aria-label="Mark task done" title="Mark task done" onclick="doneTaskInCase('${t.id}','${id}')">✓</button>`}
-        </div>`).join("") || '<div class="empty">No tasks.</div>'}</div>
-    </div>
-    ${/* R17 · §1 — the Stage checklist sits directly under Tasks: the house steps for the current
-         stage, each a one-click add that writes a real case_tasks row and dedupes against what is
-         already open. Advisory; renders only where the stage has steps (never on not_proceeding). */ ""}
-    ${id ? caseStageChecklistHtml(c, tasks) : ""}
-    ${/* R9-5 · m10 — THE DOCUMENT CHECKLIST. Between Tasks and Notes because that is where it sits
-         in the day: it is work outstanding, not history. Absent entirely on a database without the
-         migration — see docsSupported(). Painted by renderCaseDocs() below. */ ""}
-    ${/* R15 · §3+§4 — Documents renders in full up to Exchange; at completed+not_proceeding it
-         collapses into a <details> (kept reachable, not front-and-centre). The static intro is CUT:
-         the section title and its outstanding/received counts already say what it is. #case-docs-body
-         exists in both variants, so renderCaseDocs paints the same either way. */ ""}
-    ${docsOn ? (caseSectionFull("documents", c.stage) ? `
-    <div style="margin-top:14px;" id="case-docs">
-      <h3 style="font-size:14px;">Documents <span class="cs-muted" style="font-weight:400;" title="What this client has been asked for and what has arrived. The document emails list only what is still outstanding.">?</span></h3>
-      <div id="case-docs-body"></div>
-    </div>` : `
-    <details style="margin-top:14px;" id="case-docs" class="case-docs-compact">
-      <summary style="font-size:14px;font-weight:600;cursor:pointer;">Documents <span class="cs-muted" style="font-weight:400;">(checklist — click to expand)</span></summary>
-      <div id="case-docs-body"></div>
-    </details>`) : ""}
-    ${/* R13 · M-2 — THE FIRM'S OWN PAPERS. Directly under Documents so the pair read as one idea
-         with two halves, and worded so nobody has to work out which is which: the sub-line names
-         the distinction outright. Absent entirely, with the absence STATED, on a database without
-         the table — see caseFilesSupported(). Painted by renderCaseFiles() below. */ ""}
-    ${/* R15 · §3+§4 — the firm's own case papers appear once a case is real (DIP onward) and are
-         HIDDEN at enquiry+fact_find. Wrapped/hidden, never deleted (#case-files-body stays for
-         renderCaseFiles). Intro shortened to one line + a title tooltip; the old "no case_files
-         table" migration paragraph is CUT to a single muted line. */ ""}
-    ${id ? `<div style="margin-top:14px;" id="case-files"${caseSectionVisible("files", c.stage) ? "" : ' class="hidden"'}>
-      <h3 style="font-size:14px;">Files</h3>
-      ${filesOn
-        ? `<p class="panel-sub" style="margin:2px 0 6px;" title="The illustration/ESIS, the research, the signed client agreement, the offer and suitability letters. Documents above are what we ask the client for; these are what we produce or receive. Nothing here is chased or sent to the client.">The firm's own case papers — what we produce or receive, not what we ask the client for. <span class="cs-muted">?</span></p>
-      <div id="case-files-body"></div>`
-        : '<p class="panel-sub cs-muted" style="margin:2px 0 6px;">No case-files table on this database yet.</p>'}
-    </div>` : ""}
-    <div style="margin-top:14px;">
-      <h3 style="font-size:14px;">Notes</h3>
-      <div style="display:flex;gap:8px;margin:8px 0 0;flex-wrap:wrap;">
-        ${/* R33 · W5 — a textarea, not a single-line input. The call logger six inches above this
-              (#cs-call-note) is a textarea, and a note is the same kind of writing: the R32 panel
-              watched people compose a three-line note in a box that showed them forty characters
-              of it. Enter still submits and Shift+Enter still makes a newline — the keydown
-              handler below was already written that way, it just had nowhere to put the line. */ ""}
-        <textarea id="new-note" rows="2" placeholder="Add a note…" style="flex:1;min-width:140px;"></textarea>
-        <button class="btn btn-sm" id="add-note-btn" title="Add note">Add note</button>
-      </div>
-      <div class="type-chips" id="note-type-chips">
-        <button type="button" class="tl-chip active" data-type="note">📝 Note</button>
-        <button type="button" class="tl-chip" data-type="call">📞 Call</button>
-        <button type="button" class="tl-chip" data-type="email">✉️ Email</button>
-        <button type="button" class="tl-chip" data-type="meeting">🤝 Meeting</button>
-      </div>
-      ${/* R6.4 H-01 — the markers are in this same list, so the set of notes that have
-            been re-filed away is read straight off it: no extra query, and the strike
-            and the marker can never disagree about which note they describe. */ ""}
-      <div id="notes-list">${(() => { const rf = refiledNoteIds(notes); return notes.map((n) => noteRowHtml(n.body, new Date(n.created_at).toLocaleString("en-GB"), n.created_by, { noteId: n.id, refiled: rf.has(String(n.id)) })).join(""); })() || '<div class="empty">No notes yet.</div>'}</div>
-    </div>
-    ${/* BACKEND-R4 §2/§3 — what the database recorded, as opposed to what anyone typed. */ ""}
-    <div style="margin-top:14px;" id="case-history">
-      ${/* R15 · §4 — History intro CUT. The heading and the timeline itself say what it is; the
-           detail lives in the tooltip. Change history sits directly below. */ ""}
-      <h3 style="font-size:14px;">History <span class="cs-muted" style="font-weight:400;" title="Written by the database as the case progresses — stage changes, fee status, offer uploads, rate-end dates, protection status and reassignment, each with who made the change. Other field edits are in Change history below.">?</span></h3>
-      <div class="tl-list" id="case-events-list">${eventTimelineHtml(events)}</div>
-      ${auditPanelHtml("case-audit", auditRows)}
-    </div>
-    ${/* R15 · §2 — the action bar is now stage- and type-reactive: only stage-relevant actions in
-         the primary row, the Advance button is the hero when not terminal, and EVERYTHING else
-         collapses into #case-more-actions. Every id + handler is preserved (see caseActionBarHtml
-         and CASE_ACTION_RULES); a non-primary action is reachable in the overflow, never removed. */ ""}
-    ${caseActionBarHtml(c, c.stage, c.case_kind, { heroesActive: !nextStage })}
-    ${/* R5-4 — where a parsed mortgage offer PROPOSES its readings (Current vs Incoming, ticked
-         field by field) instead of writing them behind the operator's back. Empty until a parse. */ ""}
-    <div id="offer-diff" class="offer-diff hidden"></div>` : ""}
-    <details class="case-details" ${id ? "" : "open"}>
-      <summary>Case details</summary>
-      <form id="case-form" class="form-grid" data-case-id="${id || ""}">
+  /* ---------- R36-B · W7 — THE SLIM NEW-CASE FORM ----------
+     Forty-nine fields, flat and all open, was what a brand-new case used to ask for before it would
+     accept the one fact anybody has at that moment: who it is for. R32 watched people scroll past
+     ERC amounts and clawback dates to reach Save. So the form is now built from three pieces —
+     the CORE (client, property, type, stage, owner), the REST, and the assignee that closes both —
+     and the two views arrange the same pieces differently:
+
+       EDIT (id): unchanged, byte for byte — one <form class="form-grid"> inside the collapsed
+                  "Case details" accordion, fields in exactly the order they have always been in.
+       NEW:       the core five above the fold, the REST folded into that SAME <details
+                  class="case-details"> accordion — the one every "reveal the field I am complaining
+                  about" path already opens ($("#modal .case-details").open = true).
+
+     Both arrangements live inside ONE <form id="case-form">, so nothing moved out of the POST:
+     FormData still sees every field, and a new case created without opening the accordion writes
+     exactly the defaults its markup carries — same as before. */
+  const caseCoreFieldsHtml = `
       <label class="full">Client
         <select name="client_id" id="case-client-select" required><option value="">— select client —</option>${clientOpts}<option value="__new__">+ New client…</option></select>
       </label>
@@ -11115,6 +11185,8 @@ window.openCase = async function (id, opts = {}) {
       </label>` : ""}
       <label>Type<select name="case_kind">${KINDS.map(([k, l]) => `<option value="${k}" ${k === c.case_kind ? "selected" : ""}>${l}</option>`).join("")}</select></label>
       <label>Stage<select name="stage">${STAGES.map(([k, l]) => `<option value="${k}" ${k === c.stage ? "selected" : ""}${k === "decision_in_principle" ? ` title="${TIP_DIP}"` : ""}>${l}</option>`).join("")}</select></label>
+`;
+  const caseRestFieldsHtml = `
       <label>Lender<input name="lender" value="${esc(c.lender)}"></label>
       ${/* R14 — the mortgage / account number, beside the lender it belongs to. It is what a lender
             asks for to pull the case up, and it feeds the security-check card at the top of this
@@ -11248,11 +11320,152 @@ window.openCase = async function (id, opts = {}) {
       <label id="case-referrer-field" title="The existing client who sent this one to you. Start typing a surname to jump down the list. When this case completes you will be offered a thank-you task on their case — nothing is emailed to anyone.">Referred by (client)
         <select name="referrer_client_id" id="case-referrer-select"><option value="">— nobody —</option>${referrerOrphanOpt}${referrerOpts}</select>
       </label>` : ""}
+`;
+  const caseAssignedFieldHtml = `
       ${/* R5-36 — a new case starts on ME, not on nobody: unassigned cases were being created by the
            dozen and only surfaced later in Data Health. An existing case keeps whatever it has. */ ""}
       <label>Assigned to<select name="assigned_to"><option value="">— unassigned —</option>${assigneeOptionsHtml(id ? c.assigned_to : defaultAssignee((ME && ME.id) || null))}</select></label>
+`;
+  const caseFormHtml = id ? `
+    <details class="case-details" >
+      <summary>Case details</summary>
+      <form id="case-form" class="form-grid" data-case-id="${id}">${caseCoreFieldsHtml}${caseRestFieldsHtml}${caseAssignedFieldHtml}
     </form>
-    </details>
+    </details>` : `
+    <form id="case-form" data-case-id="">
+      <div class="form-grid case-core-grid">${caseCoreFieldsHtml}${caseAssignedFieldHtml}
+      </div>
+      <details class="case-details">
+        <summary>Case details <span class="cs-muted" style="font-weight:400;">— the other forty-odd fields, all optional</span></summary>
+        <div class="form-grid">${caseRestFieldsHtml}
+        </div>
+      </details>
+    </form>`;
+  $("#modal").innerHTML = `
+    <h3>${id ? "Case" : "New case"}</h3>
+    ${/* R15 · §3 — the security card is a lender-call tool; it has nothing to hold before a lender
+         is involved, so it is HIDDEN at enquiry+fact_find and shown DIP→terminal. Wrapped, never
+         deleted: the node (and its toggle wiring) stays in the DOM, just hidden. */ ""}
+    ${id ? `<div id="case-sec-wrap"${caseSectionVisible("security", c.stage) ? "" : ' class="hidden"'}>${securityCardHtml(c, caseClient, secClient)}</div>` : ""}
+    ${summaryHeader}
+    ${c.retention_source_case_id ? `<p class="panel-sub" style="margin-top:-8px;">🔁 Retention opportunity — linked to a completed case. <span class="t" style="cursor:pointer;text-decoration:underline;" onclick="openCase('${c.retention_source_case_id}')">View original case</span></p>` : ""}
+    ${/* R15 · §6 — a not-proceeding case says WHY, prominently. Prefer the recorded lost_reason (a
+         select("*") carries it when the M2 columns exist); fall back to the last note; and offer a
+         one-click "record reason" that fires the same affordance the action bar carries. */ ""}
+    ${id && c.stage === "not_proceeding" ? `<p class="panel-sub case-lost-banner" style="margin-top:-8px;color:var(--red);">🚫 Not proceeding${
+        c.lost_reason ? ` — <strong>${esc(LOST_REASON_LABEL[c.lost_reason] || String(c.lost_reason).replace(/_/g, " "))}</strong>${c.lost_detail ? ": " + esc(c.lost_detail) : ""}`
+        : lastNote ? ` — <span class="cs-muted">last note:</span> ${esc(noteSnip(lastNote.body))}`
+        : " — <span class=\"cs-muted\">no reason recorded.</span>"} <a href="#" class="t" style="text-decoration:underline;" title="Record or correct why this case did not proceed" onclick="event.preventDefault();var b=document.getElementById('act-record-reason');if(b)b.click();">record reason</a></p>` : ""}
+    ${c.nps_score != null ? `<p class="panel-sub" style="margin-top:-8px;">Client review score: <strong style="color:${c.nps_score >= 9 ? "var(--green)" : c.nps_score >= 7 ? "var(--amber)" : "var(--red)"};">${c.nps_score}/10</strong></p>` : ""}
+    ${id ? `
+    <div style="margin-top:14px;">
+      <h3 style="font-size:14px;">Tasks</h3>
+      ${/* R12a·D10 — the DUE chips used to sit BELOW this row, i.e. after the Add button in both
+            reading and tab order, so the natural gesture (type the title, press Enter) submitted
+            before the operator had reached the thing that sets the date. They now sit between the
+            title box and the row that ends in Add, which is the order the task is actually
+            composed in. The dateless-submit default below is the belt to this braces. */ ""}
+      <div class="due-chips" style="margin:8px 0 6px;">
+        <span class="due-chips-lbl">Due:</span>
+        <button type="button" class="btn btn-sm due-chip" data-days="1">Tomorrow</button>
+        <button type="button" class="btn btn-sm due-chip" data-days="3">+3d</button>
+        <button type="button" class="btn btn-sm due-chip" data-days="7">+1wk</button>
+        <button type="button" class="btn btn-sm due-chip" data-months="1">+1mo</button>
+      </div>
+      <div style="display:flex;gap:8px;margin:0 0 8px;flex-wrap:wrap;">
+        <input id="new-task" placeholder="Add a task…" style="flex:1;min-width:140px;">
+        <select id="new-task-assignee" aria-label="Assign task to" style="width:auto;" title="Assign task to">${TEAM.map((p) => `<option value="${p.id}" ${p.id === defaultAssignee(c.assigned_to) ? "selected" : ""}>${esc(staffName(p.id))}</option>`).join("")}</select>
+        <input id="new-task-due" type="date" style="width:auto;" title="Leave this empty and the task is due tomorrow — a task with no date appears on no list anywhere.">
+        <button class="btn btn-sm" id="add-task-btn" title="Add task">Add task</button>
+      </div>
+      <div id="tasks-inline">${tasks.map((t) => `
+        <div class="row-item" style="padding:7px 4px;">
+          <div class="row-main">
+            <div style="${t.done_at ? "text-decoration:line-through;color:var(--muted);" : ""}">${esc(t.title)}</div>
+            <div class="s">${t.due_date ? "due " + fmtD(t.due_date) : ""}${t.done_at ? " · done" : ""}</div>
+          </div>
+          ${/* R12a·D12 — a done row used to be a dead end: struck through, no control, and the only
+                way back was the database. done_at is nullable and reopening is simply setting it
+                back to null, so the row that RECORDS the mistake is also the row that fixes it. */ ""}
+          ${t.done_at ? assigneeChipHtml(t.assigned_to) : taskAssigneeHtml(t.id, t.assigned_to, "")}${t.done_at
+            ? `<button class="btn btn-sm task-reopen" aria-label="Reopen this task" title="Put this task back on the list — it was marked done" onclick="reopenTaskInCase('${t.id}','${id}')">↺ Reopen</button>`
+            : `<button class="btn btn-sm" aria-label="Mark task done" title="Mark task done" onclick="doneTaskInCase('${t.id}','${id}')">✓</button>`}
+        </div>`).join("") || '<div class="empty">No tasks.</div>'}</div>
+    </div>
+    ${/* R17 · §1 — the Stage checklist sits directly under Tasks: the house steps for the current
+         stage, each a one-click add that writes a real case_tasks row and dedupes against what is
+         already open. Advisory; renders only where the stage has steps (never on not_proceeding). */ ""}
+    ${id ? caseStageChecklistHtml(c, tasks) : ""}
+    ${/* R9-5 · m10 — THE DOCUMENT CHECKLIST. Between Tasks and Notes because that is where it sits
+         in the day: it is work outstanding, not history. Absent entirely on a database without the
+         migration — see docsSupported(). Painted by renderCaseDocs() below. */ ""}
+    ${/* R15 · §3+§4 — Documents renders in full up to Exchange; at completed+not_proceeding it
+         collapses into a <details> (kept reachable, not front-and-centre). The static intro is CUT:
+         the section title and its outstanding/received counts already say what it is. #case-docs-body
+         exists in both variants, so renderCaseDocs paints the same either way. */ ""}
+    ${docsOn ? (caseSectionFull("documents", c.stage) ? `
+    <div style="margin-top:14px;" id="case-docs">
+      <h3 style="font-size:14px;">Documents <span class="cs-muted" style="font-weight:400;" title="What this client has been asked for and what has arrived. The document emails list only what is still outstanding.">?</span></h3>
+      <div id="case-docs-body"></div>
+    </div>` : `
+    <details style="margin-top:14px;" id="case-docs" class="case-docs-compact">
+      <summary style="font-size:14px;font-weight:600;cursor:pointer;">Documents <span class="cs-muted" style="font-weight:400;">(checklist — click to expand)</span></summary>
+      <div id="case-docs-body"></div>
+    </details>`) : ""}
+    ${/* R13 · M-2 — THE FIRM'S OWN PAPERS. Directly under Documents so the pair read as one idea
+         with two halves, and worded so nobody has to work out which is which: the sub-line names
+         the distinction outright. Absent entirely, with the absence STATED, on a database without
+         the table — see caseFilesSupported(). Painted by renderCaseFiles() below. */ ""}
+    ${/* R15 · §3+§4 — the firm's own case papers appear once a case is real (DIP onward) and are
+         HIDDEN at enquiry+fact_find. Wrapped/hidden, never deleted (#case-files-body stays for
+         renderCaseFiles). Intro shortened to one line + a title tooltip; the old "no case_files
+         table" migration paragraph is CUT to a single muted line. */ ""}
+    ${id ? `<div style="margin-top:14px;" id="case-files"${caseSectionVisible("files", c.stage) ? "" : ' class="hidden"'}>
+      <h3 style="font-size:14px;">Files</h3>
+      ${filesOn
+        ? `<p class="panel-sub" style="margin:2px 0 6px;" title="The illustration/ESIS, the research, the signed client agreement, the offer and suitability letters. Documents above are what we ask the client for; these are what we produce or receive. Nothing here is chased or sent to the client.">The firm's own case papers — what we produce or receive, not what we ask the client for. <span class="cs-muted">?</span></p>
+      <div id="case-files-body"></div>`
+        : '<p class="panel-sub cs-muted" style="margin:2px 0 6px;">No case-files table on this database yet.</p>'}
+    </div>` : ""}
+    <div style="margin-top:14px;">
+      <h3 style="font-size:14px;">Notes</h3>
+      <div style="display:flex;gap:8px;margin:8px 0 0;flex-wrap:wrap;">
+        ${/* R33 · W5 — a textarea, not a single-line input. The call logger six inches above this
+              (#cs-call-note) is a textarea, and a note is the same kind of writing: the R32 panel
+              watched people compose a three-line note in a box that showed them forty characters
+              of it. Enter still submits and Shift+Enter still makes a newline — the keydown
+              handler below was already written that way, it just had nowhere to put the line. */ ""}
+        <textarea id="new-note" rows="2" placeholder="Add a note…" style="flex:1;min-width:140px;"></textarea>
+        <button class="btn btn-sm" id="add-note-btn" title="Add note">Add note</button>
+      </div>
+      <div class="type-chips" id="note-type-chips">
+        <button type="button" class="tl-chip active" data-type="note">📝 Note</button>
+        <button type="button" class="tl-chip" data-type="call">📞 Call</button>
+        <button type="button" class="tl-chip" data-type="email">✉️ Email</button>
+        <button type="button" class="tl-chip" data-type="meeting">🤝 Meeting</button>
+      </div>
+      ${/* R6.4 H-01 — the markers are in this same list, so the set of notes that have
+            been re-filed away is read straight off it: no extra query, and the strike
+            and the marker can never disagree about which note they describe. */ ""}
+      <div id="notes-list">${(() => { const rf = refiledNoteIds(notes); return notes.map((n) => noteRowHtml(n.body, new Date(n.created_at).toLocaleString("en-GB"), n.created_by, { noteId: n.id, refiled: rf.has(String(n.id)) })).join(""); })() || '<div class="empty">No notes yet.</div>'}</div>
+    </div>
+    ${/* BACKEND-R4 §2/§3 — what the database recorded, as opposed to what anyone typed. */ ""}
+    <div style="margin-top:14px;" id="case-history">
+      ${/* R15 · §4 — History intro CUT. The heading and the timeline itself say what it is; the
+           detail lives in the tooltip. Change history sits directly below. */ ""}
+      <h3 style="font-size:14px;">History <span class="cs-muted" style="font-weight:400;" title="Written by the database as the case progresses — stage changes, fee status, offer uploads, rate-end dates, protection status and reassignment, each with who made the change. Other field edits are in Change history below.">?</span></h3>
+      <div class="tl-list" id="case-events-list">${eventTimelineHtml(events)}</div>
+      ${auditPanelHtml("case-audit", auditRows)}
+    </div>
+    ${/* R15 · §2 — the action bar is now stage- and type-reactive: only stage-relevant actions in
+         the primary row, the Advance button is the hero when not terminal, and EVERYTHING else
+         collapses into #case-more-actions. Every id + handler is preserved (see caseActionBarHtml
+         and CASE_ACTION_RULES); a non-primary action is reachable in the overflow, never removed. */ ""}
+    ${caseActionBarHtml(c, c.stage, c.case_kind, { heroesActive: !nextStage })}
+    ${/* R5-4 — where a parsed mortgage offer PROPOSES its readings (Current vs Incoming, ticked
+         field by field) instead of writing them behind the operator's back. Empty until a parse. */ ""}
+    <div id="offer-diff" class="offer-diff hidden"></div>` : ""}
+    ${caseFormHtml}
     <div class="modal-actions">
       ${/* BACKEND-R4 §1 — deleting a case is Owner/Administrator only and RLS enforces it; an
             adviser is simply never offered the button rather than shown a refusal. */ ""}
@@ -11367,8 +11580,17 @@ window.openCase = async function (id, opts = {}) {
     const cid = clientSel.value;
     if (cid && sel.value === cid) sel.value = "";
     [...sel.options].forEach((o) => { if (o.value) o.hidden = !!cid && o.value === cid; });
+    // R36-B — that `sel.value = ""` is a programmatic write and fires no change event, so the
+    // combobox's visible text has to be told about it or it would still read the cleared name.
+    if (sel.__combo) sel.__combo.sync();
   }
   syncReferrerOptions();
+  /* R36-B · W6 — both of this form's client lists become type-to-filter pickers. Applied AFTER the
+     options are painted and after every listener above is bound: the enhancement writes through the
+     select those listeners are on (a real `change` event), so "+ New client…" opens the inline
+     name fields exactly as picking it from the native list always did. */
+  upgradeSelectToCombobox($("#case-client-select"), { placeholder: "Type a client's name…" });
+  upgradeSelectToCombobox($("#case-referrer-select"), { placeholder: "Type a name, or leave blank…" });
   wireCasePropertyPicker(siblingCases, id); // R6 — no-op when the M7 field isn't rendered
   $("#modal-cancel").onclick = closeModalGuarded; // defect 2 — Cancel is a "leave" path: it must warn about unsaved edits too
   $("#modal-save").onclick = async () => {
@@ -11402,7 +11624,10 @@ window.openCase = async function (id, opts = {}) {
       }
       if (!row.client_id) {
         // R12b · L-7
-        const cs = $("#case-client-select"); if (cs) cs.classList.add("field-invalid");
+        // R36-B — the select itself is hidden behind the searchable picker, so the red ring has to
+        // go on the box the operator can actually see. Typing in it clears the mark, as everywhere.
+        const cs = $("#case-client-select");
+        if (cs) (cs.__combo ? cs.__combo.input : cs).classList.add("field-invalid");
         return toast("Please choose a client");
       }
       if (id && row.stage !== c.stage && protectionGateBlocks({ stage: c.stage, protection_status: row.protection_status }, row.stage)) {
@@ -12720,12 +12945,19 @@ async function loadClientData() {
      cold-segment membership is unchanged; only a client with no contact at all in 210 days shows a
      blank last-contact detail. The clients/cases embedded read stays unbounded. Index-served. */
   const commsSinceIso = new Date(Date.now() - 210 * 86400000).toISOString();
+  /* R36-A · L9 — ONE more column on the embed the page already reads, `property_address`, so the
+     list row can say how many BUILDINGS a client's cases sit on — the count the client record's
+     own "· 5 properties" label has given since R6 and the list's "5 cases (3 active)" badge never
+     could. Guarded by propAddrSupported() exactly as every other property-aware read is, so an
+     un-migrated (M7) database drops the column rather than 42703-ing the whole client list; the
+     badge simply doesn't appear there. Still one query. */
+  const clientPropOn = (await propAddrSupported()) !== false;
   const [clientsRes, notesRes, emailsRes, apptRes, tasksRes] = await Promise.all([
     /* R11-6 — widened by ONE existing base column, `lender`, so a row in a rate-end segment can
        say which lender the rate is with. It is an original-schema column (Reports has selected it
        since R7), so this cannot start 42703-ing on an older database, and it is a widening of the
        read this page already does rather than a second query. */
-    db.from("clients").select("*, cases!client_id(id,stage,rate_end_date,lender,protection_status,broker_fee,assigned_to,completed_at,updated_at,created_at)").order("last_name").limit(OWNER_ROW_CAP),
+    db.from("clients").select("*, cases!client_id(id,stage,rate_end_date,lender,protection_status,broker_fee,assigned_to,completed_at,updated_at,created_at" + (clientPropOn ? ",property_address" : "") + ")").order("last_name").limit(OWNER_ROW_CAP),
     db.from("case_notes").select("case_id,created_at").gte("created_at", commsSinceIso),
     db.from("email_queue").select("client_id,case_id,status,sent_at").gte("sent_at", commsSinceIso),
     db.from("appointments").select("client_id,case_id,starts_at").gte("starts_at", commsSinceIso),
@@ -12931,6 +13163,22 @@ async function loadClients(filter = "", opts = {}) {
     const rateBit = re
       ? ` · <span class="client-rateend">rate ends ${esc(fmtD(re.date))} · ${re.lender ? esc(re.lender) : "lender not recorded"}${re.n > 1 ? ` (+${re.n - 1} more in ${esc(rateYear)})` : ""}</span>`
       : (showNextRate ? ` · <span class="client-rateend">no rate end ahead</span>` : "");
+    /* R36-A · L9(a) — the property count, on the row, from the cases this list ALREADY holds
+       (clientPropertyCount is the client record's own counter, shared). Silent at 0 or 1: a badge
+       reading "1 property" beside "1 case" is noise. Absent on an un-migrated database, where the
+       embed carries no property_address and every key is null. */
+    const propN = clientPropertyCount(cases);
+    const propBadge = propN > 1
+      ? `<span class="badge grey client-prop-n" title="This client's cases sit on ${propN} different properties. Open the record to see them grouped by building.">${propN} properties</span>`
+      : "";
+    /* R36-A · L9(b) — last contact, in days, on EVERY row rather than only in the Cold segment.
+       Same source (loadClientData's `last` map) and same wording helper (lastContactAgeLabel) the
+       cold cutoff itself uses, so the label and the segment can never disagree. The four comms
+       reads behind it are already bounded to 210 days and already fetched for the whole list, so
+       this costs nothing — but it is also the limit: a client with no contact inside that window
+       reads "no contact in 210 days", which is all the data on hand can honestly say. The Cold
+       segment keeps its fuller "last contact 12 Mar (note)" line; this is the muted short form. */
+    const lcAge = clientSegment === "cold" ? "" : ` · <span class="client-lc-age" title="${lc ? `Last contact: ${esc(lc.what)} on ${esc(fmtD(String(lc.at).slice(0, 10)))}.` : "Nothing recorded in the last 210 days — the window this page reads. Older contact is on the client record."}">${lc ? `last contact ${esc(lastContactAgeLabel(lc.at))}` : "no contact in 210 days"}</span>`;
     return `<div class="row-item client-row${clientSel.has(c.id) ? " is-sel" : ""}" data-client="${esc(c.id)}">
       <input type="checkbox" class="bulk-cb client-cb" data-id="${esc(c.id)}" aria-label="Select ${esc([c.first_name, c.last_name].filter(Boolean).join(" "))}"${clientSel.has(c.id) ? " checked" : ""}>
       <div class="row-main">
@@ -12940,8 +13188,9 @@ async function loadClients(filter = "", opts = {}) {
              one-click way to put it right. Everywhere else it stays off the row: a list of birthdays
              is not what the other six segments are for. */
           showDob ? ` · <span class="client-dob-missing">DOB: —</span> <a href="javascript:void(0)" class="client-dob-add" onclick="event.stopPropagation();openClient('${c.id}','dob')">add</a>` : ""}${
-          clientSegment === "cold" ? ` · <span class="client-lastcontact">${lc ? `last contact ${fmtD(String(lc.at).slice(0, 10))} (${esc(lc.what)})` : "no contact on record"}</span>` : ""}${rateBit}</div>
+          clientSegment === "cold" ? ` · <span class="client-lastcontact">${lc ? `last contact ${fmtD(String(lc.at).slice(0, 10))} (${esc(lc.what)})` : "no contact on record"}</span>` : ""}${lcAge}${rateBit}</div>
       </div>
+      ${propBadge}
       <span class="badge ${active ? "blue" : "grey"}">${cases.length} case${cases.length === 1 ? "" : "s"}${active ? ` (${active} active)` : ""}</span>
     </div>`;
     } catch (err) {
@@ -13124,22 +13373,115 @@ function clientTaskTarget(c) {
   if (cases.length === 1) return { caseId: cases[0].id, assignedTo: cases[0].assigned_to || null };
   const live = cases.filter((x) => CLIENT_LIVE(x.stage));
   if (live.length === 1) return { caseId: live[0].id, assignedTo: live[0].assigned_to || null };
-  return { why: live.length > 1 ? "many_live" : "no_live" };
+  /* R36-C — "many_live" now carries the cases it refused to choose between, so the caller can ASK
+     instead of skipping (see promptClientBulkCasePick). The refusal itself is unchanged: this
+     function still never picks one. `no_live` genuinely has nothing live to attach to, and
+     `no_case` nothing at all, so neither gets a choice — they are skipped exactly as before. */
+  return live.length > 1 ? { why: "many_live", choices: live } : { why: "no_live" };
 }
 function clientDisplayName(c) {
   return [c.first_name, c.last_name].filter(Boolean).join(" ") || c.email || c.phone || "(no name)";
 }
 const namedList = (names) => names.slice(0, 4).join(", ") + (names.length > 4 ? ` and ${names.length - 4} more` : "");
+/* ---------- R36-C · ASK, DON'T GUESS AND DON'T SKIP (R32 · L8) -------------------------------
+   The refusal above is right — a task hangs off a case and guessing which one is wrong — but
+   "skipped, file it by hand" fell hardest on exactly the clients this firm most wants to touch:
+   the landlord with four live buy-to-lets was unreachable by the verb that exists to reach a
+   hundred clients at once. So the ambiguity is now RESOLVED rather than avoided: every client
+   with more than one live case is listed once, with their own live cases in a select, and the
+   batch cannot proceed until each one has been either chosen or explicitly skipped. Nothing is
+   pre-picked (the default option is empty, not the first case) — a default here is the guess
+   this whole flow exists to refuse.
+   The chosen case then flows into the SAME targets list as every unambiguous client, so the
+   title / due date / assignee / write path below is one path, not two. */
+function bulkTaskCaseLabel(cs, siblings) {
+  const addr = propAddress(cs);
+  const kind = caseTypeLabel(cs);
+  /* R6FIX-1's rule, verbatim: the property is the label where there is one — but where the same
+     client holds two live cases on that ONE property (Ruby's DIP and her buy-to-let on 8 Grand
+     Avenue), the address says nothing about which is which, so the kind comes with it. */
+  const head = addr
+    ? ((siblings || []).filter((x) => propAddress(x) === addr).length > 1 ? `${addr} · ${kind}` : addr)
+    : kind;
+  return [head, cs.lender || null, STAGE_LABEL[cs.stage] || String(cs.stage || "").replace(/_/g, " ")]
+    .filter(Boolean).join(" · ");
+}
+/* The case rows the Clients page caches carry stage, lender and adviser but not the KIND or the
+   PROPERTY — that embedded read is deliberately narrow and is not this flow's to widen. Those two
+   are exactly what tells a landlord's four live cases apart, so they are fetched once, for only
+   the cases about to be offered, with the same column-gating for property_address the pipeline's
+   own bulk task uses. A failure degrades to the label the cache can already make (kind unknown →
+   "Case · lender · stage") rather than blocking the picker. */
+async function hydrateBulkTaskCases(pending) {
+  const ids = pending.reduce((a, p) => a.concat(p.cases.map((c) => c.id)), []);
+  if (!ids.length) return;
+  try {
+    const cols = "id,case_kind,lender,stage" + ((await propAddrSupported()) ? ",property_address" : "");
+    const { data, error } = await db.from("cases").select(cols).in("id", ids);
+    if (error || !data) return;
+    const by = new Map(data.map((r) => [r.id, r]));
+    pending.forEach((p) => { p.cases = p.cases.map((c) => Object.assign({}, c, by.get(c.id) || {})); });
+  } catch (_) { /* keep the cached rows — a thinner label beats no picker */ }
+}
+function promptClientBulkCasePick(pending) {
+  const rows = pending.map((p) => `
+    <div class="row-item btaskc-pick-row">
+      <div class="row-main">
+        <div>${esc(p.name)}</div>
+        <div class="s">${p.cases.length} live cases</div>
+      </div>
+      <select class="bulk-task-case-pick" data-client="${esc(p.id)}" aria-label="Case for ${esc(p.name)}">
+        <option value="" selected>— choose case —</option>
+        ${p.cases.map((cs) => `<option value="${esc(cs.id)}">${esc(bulkTaskCaseLabel(cs, p.cases))}</option>`).join("")}
+        <option value="__skip">Skip this one</option>
+      </select>
+    </div>`).join("");
+  const html = `
+    <h3>Which case is this task about?</h3>
+    <p class="panel-sub">${pending.length === 1 ? "One of the selected clients has" : `${pending.length} of the selected clients have`} more than one live case, and a task hangs off a case — so nothing is picked for you. Choose the case for each, or skip that client and file it by hand. The task itself (title, date, who it goes to) comes next.</p>
+    <div id="btaskc-pick-rows">${rows}</div>
+    <div class="ovl-err" id="btaskc-pick-err"></div>
+    <div class="modal-actions">
+      <div class="s" id="btaskc-pick-left"></div>
+      <div class="right">
+        <button type="button" class="btn" id="btaskc-pick-cancel">Cancel</button>
+        <button type="button" class="btn btn-primary" id="btaskc-pick-ok" disabled>Continue</button>
+      </div>
+    </div>`;
+  return openOverlay(html, (finish, box) => {
+    const sels = [...box.querySelectorAll(".bulk-task-case-pick")];
+    const okBtn = box.querySelector("#btaskc-pick-ok");
+    const left = box.querySelector("#btaskc-pick-left");
+    const sync = () => {
+      const todo = sels.filter((s) => !s.value).length;
+      okBtn.disabled = todo > 0;                       // no half-answered batch reaches the confirm
+      okBtn.title = todo ? "Choose a case — or Skip this one — for every client above first" : "";
+      const skip = sels.filter((s) => s.value === "__skip").length;
+      left.textContent = todo
+        ? `${todo} still to choose`
+        : `${sels.length - skip} will get a task${skip ? ` · ${skip} skipped` : ""}`;
+    };
+    sels.forEach((s) => (s.onchange = sync));
+    sync();
+    box.querySelector("#btaskc-pick-cancel").onclick = () => finish(null);
+    okBtn.onclick = () => {
+      if (sels.some((s) => !s.value)) return;
+      const out = {};
+      sels.forEach((s) => { out[s.dataset.client] = s.value === "__skip" ? null : s.value; });
+      finish(out);
+    };
+  });
+}
 function promptClientBulkTask(plan) {
   const today = localDateStr(new Date());
   const n = plan.targets.length;
   const skipLine = (label, arr) => arr.length ? `<li><strong>${arr.length}</strong> ${label} — ${esc(namedList(arr.map((x) => x.name)))}</li>` : "";
   const html = `
     <h3>Add a task to ${n} client${n === 1 ? "" : "s"}</h3>
-    <p class="panel-sub">A task hangs off a case, so each one is filed on the client's case: their only case, or their only live case where they have several. Nothing is guessed — a client with more than one live case (or none) is listed below and left for you to file by hand.</p>
+    <p class="panel-sub">A task hangs off a case, so each one is filed on the client's case: their only case, their only live case where they have several, or — where there was more than one live case — the case you just chose. Nothing is guessed. A client with no live case is listed below and left for you to file by hand.</p>
     ${plan.skipped.length ? `<div class="dq-notice" id="btaskc-skip"><strong>${plan.skipped.length} of the ${plan.total} selected will be skipped:</strong>
       <ul style="margin:6px 0 0;padding-left:18px;">
-        ${skipLine("have several live cases — which one is this about?", plan.byWhy.many_live)}
+        ${skipLine("have several live cases and you skipped them", plan.byWhy.many_live)}
         ${skipLine("have several cases and none of them live", plan.byWhy.no_live)}
         ${skipLine("have no case at all to attach a task to", plan.byWhy.no_case)}
       </ul>
@@ -13201,27 +13543,63 @@ async function bulkClientAddTask() {
 async function bulkClientAddTaskRun(rows) {
   const byWhy = { many_live: [], no_live: [], no_case: [] };
   const targets = [];
+  const pending = [];                                  // R36-C — the ones to ASK about, not skip
   rows.forEach((c) => {
     const t = clientTaskTarget(c);
     const name = clientDisplayName(c);
-    if (t.why) byWhy[t.why].push({ id: c.id, name });
+    if (t.why === "many_live") pending.push({ id: c.id, name, cases: t.choices });
+    else if (t.why) byWhy[t.why].push({ id: c.id, name });
     else targets.push({ id: c.id, name, caseId: t.caseId, assignedTo: t.assignedTo });
   });
+  /* R36-C — the resolution step runs BEFORE the confirm, so the confirm's counts are already the
+     truth: whatever was chosen here is an ordinary target from this point on (same shape, same
+     list, same write below), and whatever was skipped here joins the skipped list unchanged.
+     Cancelling out of the picker cancels the whole batch — nothing is written. */
+  if (pending.length) {
+    await hydrateBulkTaskCases(pending);
+    const picks = await promptClientBulkCasePick(pending);
+    if (!picks) return;
+    pending.forEach((p) => {
+      const caseId = picks[p.id];
+      const cs = caseId && p.cases.find((x) => x.id === caseId);
+      if (!cs) { byWhy.many_live.push({ id: p.id, name: p.name }); return; }
+      targets.push({ id: p.id, name: p.name, caseId: cs.id, assignedTo: cs.assigned_to || null });
+    });
+  }
   const skipped = byWhy.many_live.concat(byWhy.no_live, byWhy.no_case);
   const picked = await promptClientBulkTask({ targets, skipped, byWhy, total: rows.length });
   if (!picked) return;
+  /* R36-C — dedupe by title against each target case's OPEN tasks, the same rule (and the same
+     playbookTitleKey) the case modal's stage checklist has used since it started writing tasks.
+     It matters more now: a client resolved through the picker can be resolved again on the next
+     run, so "press it twice" has to mean "one task", not two. ONE read over the cases about to be
+     written, never one per case; a failure degrades to writing, because a duplicate task is
+     visible and deletable while a silently-skipped one is neither. Applied to every target
+     alike — the picked-case clients go through this same loop, not a second one. */
+  const already = new Set();
+  if (targets.length) {
+    try {
+      const { data } = await db.from("case_tasks").select("case_id,title")
+        .in("case_id", targets.map((t) => t.caseId)).is("done_at", null);
+      const key = playbookTitleKey(picked.title);
+      (data || []).forEach((r) => { if (playbookTitleKey(r.title) === key) already.add(r.case_id); });
+    } catch (_) { /* no dedupe this run */ }
+  }
   let ok = 0;
+  const dup = [];
   const failed = [];
   for (const t of targets) {
+    if (already.has(t.caseId)) { dup.push(t); continue; }
     const { error } = await db.from("case_tasks").insert({
       case_id: t.caseId, title: picked.title, due_date: picked.due,
       assigned_to: picked.who || t.assignedTo || (ME && ME.id) || null,
       created_by: (ME && ME.id) || null,
     });
-    if (error) failed.push(t); else ok++;
+    if (error) failed.push(t); else { ok++; already.add(t.caseId); }
   }
   let msg = `${ok} task${ok === 1 ? "" : "s"} added (“${picked.title}”)${picked.due ? " · due " + fmtD(picked.due) : ""}`;
-  if (skipped.length) msg += ` · ${skipped.length} skipped (no single case to file on) — ${namedList(skipped.map((s) => s.name))}`;
+  if (dup.length) msg += ` · ${dup.length} already had that task open — ${namedList(dup.map((d) => d.name))}`;
+  if (skipped.length) msg += ` · ${skipped.length} skipped (no case chosen to file on) — ${namedList(skipped.map((s) => s.name))}`;
   if (failed.length) msg += ` · ${failed.length} error${failed.length === 1 ? "" : "s"} — no task for ${namedList(failed.map((f) => f.name))}`;
   toast(msg);
   // Everything that got a task is deselected; everything that did NOT stays selected, so pressing
@@ -13848,13 +14226,42 @@ function groupCasesByProperty(cases) {
   });
   return out;
 }
+/* How many DISTINCT buildings a set of cases sits on. R36-A · L9 split this out of
+   clientPropertyCountLabel so the client LIST row can count the same way the client RECORD does —
+   one definition of "a property", used by both, rather than two that can drift. */
+function clientPropertyCount(cases) {
+  return new Set((cases || []).map((x) => propKey(x)).filter(Boolean)).size;
+}
 /* "· 5 properties" next to the Cases heading — the count a landlord actually thinks in, which
    the client list's "5 cases (3 active)" badge has never been able to give. Only shown when it
    says something the case count doesn't. */
 function clientPropertyCountLabel(cases) {
-  const n = new Set((cases || []).map((x) => propKey(x)).filter(Boolean)).size;
+  const n = clientPropertyCount(cases);
   if (n < 2) return "";
   return ` <span class="cs-muted" style="font-weight:400;">· ${n} properties</span>`;
+}
+/* R36-A · L6 — PROTECTION ON THE CLIENT RECORD.
+   Protection status lived on the case modal (protStatChipHtml) and on the Protection page, and
+   nowhere on the client record — so the one screen that shows a client's whole book, the screen an
+   adviser opens before ringing them, could not answer "is any of this protected?". The drawer's
+   case rows already carry `protection_status`: openClient's cases read is `select("*")`, so this
+   needs no widening and no extra query.
+
+   The colours follow PROT_BADGE (quoted amber, policy green, not_discussed grey) rather than the
+   case header's stricter reading, because this is a LIST: an amber pill on every unstarted case
+   would drown the two rows that actually have an open quote. `declined` is grey for the reason the
+   case header gives — a client who was asked and said no is a finished conversation, not a gap. */
+const CL_PROT_CHIP = {
+  not_discussed: ["grey", "None", "No protection conversation recorded on this case."],
+  discussed: ["amber", "Discussed", "Protection was discussed but nothing came of it yet — no quote, no policy, no decline."],
+  quoted: ["amber", "Quoted", "Quoted — still an open outcome until a policy is taken or the client declines."],
+  policy_taken: ["green", "Policy", "A protection policy was taken on this case."],
+  declined: ["grey", "Declined", "The client was asked about protection and said no."],
+};
+function clientCaseProtChipHtml(x) {
+  const st = (x && x.protection_status) || "not_discussed";
+  const p = CL_PROT_CHIP[st] || ["grey", String(st).replace(/_/g, " "), "Protection status: " + String(st).replace(/_/g, " ")];
+  return `<span class="badge ${p[0]} cl-prot-chip" data-prot="${esc(st)}" title="${esc(p[2])}">🛡️ ${esc(p[1])}</span>`;
 }
 /* One case row. `opts.grouped` drops the chip (the group heading above already carries it) and
    `opts.previous` badges an earlier case on the same building. */
@@ -13868,7 +14275,7 @@ function clientCaseRowHtml(x, opts = {}) {
         <div class="s">${chip}${chip ? " " : ""}Started ${fmtD(x.created_at)}${x.rate_end_date ? " · rate ends " + fmtD(x.rate_end_date) : ""}</div></div>
         ${opts.previous ? `<span class="badge grey" title="An earlier case on this property — the most recent one is listed first">previous</span>` : ""}
         ${x.assigned_to ? assigneeChipHtml(x.assigned_to) : '<span class="chip" title="No adviser assigned">—</span>'}
-        ${stageBadge(x.stage)}</div>`;
+        ${stageBadge(x.stage)}${clientCaseProtChipHtml(x)}</div>`;
 }
 function clientCasesHtml(cases) {
   const list = cases || [];
@@ -17620,6 +18027,11 @@ window.openAppt = async function (id, presets = {}, openOpts = {}) {
       : "Optional — attaching one puts the property on this appointment in the diary.";
     syncApptAbout();
   });
+  /* R36-B · W6 — the diary's client list is the same six hundred names as the case form's, and it
+     gets the same type-to-filter treatment. Bound after the change listener above so re-pointing the
+     appointment at another client still rebuilds the case list: the picker writes through the select
+     and fires a real change. */
+  upgradeSelectToCombobox(apptClientSel, { placeholder: "Type a client's name, or leave blank…" });
   const openCaseBtn = $("#appt-open-case");
   if (openCaseBtn) openCaseBtn.onclick = apptGoto(window.openCase, a.case_id);
   /* R12a·D11 — LIVE CLASH NOTICE. Reads the form exactly as the save does (same local
