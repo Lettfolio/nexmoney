@@ -93,10 +93,17 @@ const openDrawer = async (page, panelId) => {
     {
       const page = await newPage(browser, "p1");
 
-      const copy = await page.evaluate(() => document.querySelector("#retention-stats").textContent);
+      /* R41 · F1 — the dashboard's Retention drawer (#retention-panel/#retention-stats) is gone;
+         retentionStatsLine() (the shared copy this checks) now renders into ONLY the Retention
+         PAGE's #ret-pipeline-stats (see loadRetentionPipelinePanel in app.js). Read it there. */
+      await page.evaluate(() => window.nav("retention"));
+      await page.waitForTimeout(1200);
+      const copy = await page.evaluate(() => document.querySelector("#ret-pipeline-stats").textContent);
       ok("R5-6 · the stats line no longer claims nothing creates these", !/Nothing creates these/i.test(copy), copy);
       ok("R5-6 · it says the backend creates them automatically", /Created automatically when a completed client's rate enters the reminder window/.test(copy), copy);
       ok("R5-6 · …and names the manual path for rates already past", /open the case and press Start retention case/.test(copy), copy);
+      await page.evaluate(() => window.nav("dashboard"));
+      await page.waitForTimeout(700);
 
       /* Fixture check — ca018 (Kwame Boateng) is completed, his rate ended months ago (so the
          nightly RPC will never pick it up) and he has no successor yet. */
@@ -166,7 +173,6 @@ const openDrawer = async (page, panelId) => {
           queued: q.map((e) => ({ type: e.email_type, status: e.status, sent: e.sent_at })),
           srcStamped: !!src.rate_reminder_queued_at,
           openRetention: cases.filter((c) => c.retention_source_case_id && !["completed", "not_proceeding"].includes(c.stage)).length,
-          statsLine: document.querySelector("#retention-stats").textContent,
           rowBtnGone: document.querySelector("#alerts-rateerc").innerHTML.indexOf("startRetentionCase('ca018'") < 0,
           sentDelta: all.filter((e) => e.status === "sent").length - sentBefore,
         };
@@ -187,8 +193,18 @@ const openDrawer = async (page, panelId) => {
       eq("R5-6 · nothing was sent (R5-1 discipline)", after.sentDelta, 0);
       ok("R5-6 · the source case stops nagging (rate_reminder_queued_at stamped)", after.srcStamped);
       eq("R5-6 · the retention KPI moved 2 open → 3 open", after.openRetention, 3);
-      ok("R5-6 · the stats line repainted", /^3 open/.test(after.statsLine), after.statsLine);
       ok("R5-6 · the button has gone from the Rate & ERC row", after.rowBtnGone);
+      /* R41 · F1 — no dashboard drawer left to repaint in place; startRetentionCase repaints
+         "whichever surface is open" (app.js's own R38/R41-era comment on the function), and the
+         dashboard was the surface open for this click. The Retention page's own #ret-pipeline-stats
+         is a SEPARATE surface — it shows fresh data the moment it is next opened, which is what is
+         actually checked here rather than an in-place repaint that has nothing to repaint into. */
+      await page.evaluate(() => window.nav("retention"));
+      await page.waitForTimeout(1200);
+      const statsLineAfter = await page.evaluate(() => document.querySelector("#ret-pipeline-stats").textContent);
+      ok("R5-6 · the Retention page reflects the new count on next visit", /^3 open/.test(statsLineAfter), statsLineAfter);
+      await page.evaluate(() => window.nav("dashboard"));
+      await page.waitForTimeout(700);
 
       /* R35 §4 — the retention flow must not renag the very drawer it was raised from: the
          successor just created inherits ca018's rate_end_date, so it would otherwise grow a
@@ -498,26 +514,37 @@ const openDrawer = async (page, panelId) => {
        =================================================================== */
     console.log("\n— R5-54 · handing a task back (p2 Wayne)");
     {
+      /* R41 · F1 — the Tasks-due drawer (#tasks-panel/#tasks-list) and its own Mine/Unassigned/All
+         scope buttons (setTasksScope/#tasks-scope-*) are gone. The reassign chip itself
+         (taskAssigneeHtml/openReassign, the ".chip-set" → "— unassigned —" flow this test drives)
+         is UNCHANGED — see app.js's own R41 comment directly above window.openReassign — but My
+         Day's task rows never rendered that chip (briefActions offers snooze + Done + Open, not
+         reassignment), so the only surface left carrying it is the case modal's own task list
+         (#tasks-inline). "Unassigned" as a slice of work now reads as the "· unassigned" suffix
+         My Day shows under the All scope (briefOwnerSuffix), not a scope button of its own. */
       const page = await newPage(browser, "p2");
-      await openDrawer(page, "#tasks-panel");
-      const target = await page.evaluate(() => {
-        const row = [...document.querySelectorAll("#tasks-list .row-item")].find((r) => r.querySelector(".chip-set"));
-        if (!row) return null;
-        const m = row.querySelector(".chip-set").getAttribute("onclick").match(/openReassign\(event,'([^']+)','([^']*)'/);
-        return { taskId: m[1], current: m[2] };
+      const target = await page.evaluate(async () => {
+        const today = localDateStr();
+        const { data: tasks } = await window.__mockDb.from("case_tasks").select("id,case_id,title,assigned_to,due_date").is("done_at", null);
+        return (tasks || []).find((t) => t.assigned_to === "p2" && t.case_id && t.due_date && t.due_date <= today) || null;
       });
-      ok("fixture · the Tasks panel has an assigned task with a reassign chip", !!target && !!target.current, JSON.stringify(target));
+      ok("fixture · p2 has an open, overdue/due-today, cased task (so it shows on My Day too)", !!target, JSON.stringify(target));
 
-      await page.click("#tasks-list .row-item .chip-set");
+      await page.evaluate((caseId) => window.openCase(caseId), target.case_id);
+      await page.waitForTimeout(700);
+      const chipSel = `#tasks-inline [onclick^="openReassign(event,'${target.id}'"]`;
+      ok("fixture · the case modal renders a reassign chip for the task", !!(await page.$(chipSel)));
+
+      await page.click(chipSel);
       await page.waitForTimeout(300);
       const optionText = await page.evaluate(() => {
-        const sel = document.querySelector("#tasks-list select.task-reassign");
+        const sel = document.querySelector("#tasks-inline select.task-reassign");
         return sel ? sel.options[0].textContent.trim() : null;
       });
       eq("R5-54 · the reassign menu offers unassigned first", optionText, "— unassigned —");
 
       await page.evaluate(() => {
-        const sel = document.querySelector("#tasks-list select.task-reassign");
+        const sel = document.querySelector("#tasks-inline select.task-reassign");
         sel.value = "";
         sel.dispatchEvent(new Event("change", { bubbles: true }));
       });
@@ -525,13 +552,20 @@ const openDrawer = async (page, panelId) => {
       const row = await page.evaluate(async (id) => {
         const { data } = await window.__mockDb.from("case_tasks").select("assigned_to").eq("id", id).single();
         return data;
-      }, target.taskId);
+      }, target.id);
       eq("R5-54 · the task really is unassigned now", row.assigned_to, null);
 
-      await page.click("#tasks-scope-unassigned");
+      await page.evaluate(() => window.closeModal());
+      await page.evaluate(() => window.nav("dashboard"));
+      await page.waitForTimeout(900);
+      await page.click("#brief-scope-all");
       await page.waitForTimeout(SETTLE);
-      const inUnassigned = await page.evaluate((id) => document.querySelector("#tasks-list").innerHTML.indexOf(id) >= 0, target.taskId);
-      ok("R5-54 · it now appears in the Tasks panel's Unassigned scope", inUnassigned);
+      const briefRowText = await page.evaluate((taskId) => {
+        const anchor = document.querySelector(`#snooze-1d-brief-${taskId}, [onclick^="briefDone('${taskId}'"]`);
+        const row = anchor && anchor.closest(".row-item");
+        return row ? row.textContent : null;
+      }, target.id);
+      ok("R5-54 · it now appears on My Day (All scope) labelled unassigned", !!briefRowText && /unassigned/.test(briefRowText), briefRowText);
       ok("no console errors", !page.__err, JSON.stringify(page.__err));
       await page.close();
     }

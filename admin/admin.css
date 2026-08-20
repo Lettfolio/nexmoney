@@ -365,6 +365,22 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
 .brief-row.hot::before { background: var(--red); }
 .brief-row.warm { background: rgba(154,107,0,.045); }
 .brief-row.warm::before { background: #cf9b1c; }
+/* R41 · F1 — THE WIDEST ROW IN THE APP, KEPT TO ONE LINE.
+   .row-item wraps its actions onto a second line once they stop fitting (R6-FIX V3). My Day is now
+   the ONLY list of website enquiries, so its lead row carries everything the removed drawer's did
+   — name + NEW LEAD + the age chip + the adviser select + the "(lightest load)" note + Accept + ✕
+   — and at 1280 that came out a few pixels over, wrapping every lead row.
+   The pixels come back from the SELECT rather than from the name beside it. Left to size itself it
+   reserves the full width of its longest option ("Daniel Potts (me) · lightest load", ~316px) on
+   every row forever; capped, it ellipsises that one option and gives the client's name the space
+   instead. Nothing is lost by the cap: what the trailing words say is repeated verbatim by the
+   "(lightest load)" note sitting immediately beside it, and the select's own title spells out both
+   load figures on hover. max-width, not width, so the inline style="width:auto" R7-5 writes still
+   governs how the control sizes below the cap. */
+#briefing-list select.lead-adviser { max-width: 240px; }
+/* …and when it DOES wrap, Accept and ✕ go over together: they are one decision about one enquiry,
+   and a lone ✕ on a second line reads as a stray rather than as the other half of Accept. */
+.brief-lead-actions { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; }
 /* BUILD 7d (defect 18) — the "+N more" toggle on a grouped My Day row, and the folded-out rows it reveals. */
 .brief-more {
   display: inline-block; margin-top: 4px; padding: 1px 0; border: none; background: none;
@@ -2646,10 +2662,9 @@ tr.owed-hot > td { background: var(--red-bg); }
 /* The round-robin suggestion note, beside the adviser select. Hidden by the
    .hidden utility the moment the selection moves off the suggestion. */
 .lead-rr { font-size: 12px; color: var(--muted); white-space: nowrap; margin-left: -4px; }
-/* The order line under the panel heading — plain until something is late. */
-#leads-order:empty { display: none; }
-#leads-order.lead-order-hot { color: var(--red); }
-/* Where a link from the Emails page (or a Watchtower alert) has just landed. */
+/* R41 · F1 — #leads-order's rules went with the New-website-leads drawer they styled; My Day is
+   one priority-ordered list and has no per-panel order line to explain. */
+/* Where a link from the Emails page (or a Watchtower alert) has just landed — now a My Day row. */
 @keyframes leadFlash { from { background: var(--amber-bg); } to { background: transparent; } }
 .row-item.lead-flash { animation: leadFlash 2.2s ease-out; }
 /* A lead_ack row on the Emails page is about an enquiry, not a client. */
@@ -3049,6 +3064,52 @@ tr.owed-hot > td { background: var(--red-bg); }
   .client-advfilter select { flex: 1 1 auto; min-height: 40px; }
   .client-adv-note { flex: 1 1 100%; }
 }
+
+/* ==========================================================================
+   R41 · F6 — THE CLIENTS PAGE CONTROL ROW.
+
+   Saved views, the adviser filter and the sort were three stacked one-control rows, each with its
+   own block margins: three lines of chrome carrying three controls, and with the page head, the
+   search box, the chips and the definition line above the list that came to ~397px before the
+   first client on a 1280px screen. The three ask three halves of one question — which saved
+   slice, whose book, in what order — so they share a row.
+
+   LAYOUT ONLY. The three inner divs, every id inside them, and every listener are untouched; this
+   rule set drops their own outer margins (a stacked-row margin inside a flex row is dead space)
+   and lays them out side by side. Measured on the mock book at 1280px: 397px of chrome before the
+   first client became 297px — and the two states where a note is showing came DOWN too (adviser
+   filter on: 415 → 377; the rate-end sort's caption: 423 → 341).
+   ========================================================================== */
+/* margin:0 rather than the ~10px the three rows carried: a flex container establishes its own
+   formatting context, so its margins do NOT collapse with the segment chips' 12px margin-top
+   underneath — anything set here would be added to that gap rather than absorbed by it. */
+.client-controls {
+  display: flex; flex-wrap: wrap; align-items: flex-start;
+  gap: 8px 20px; margin: 0;
+}
+.client-controls > .client-views,
+.client-controls > .client-advfilter,
+.client-controls > .client-sort { margin: 0; }
+/* .client-views had no rules of its own — as a block div its select and two buttons already sat on
+   one line. Inside a flex row it needs to say so itself. */
+.client-controls > .client-views { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+/* THE TWO NOTES. Both are empty in the default state (Everyone + Name A–Z) and the adviser one is
+   a whole paragraph when it appears, so they are what decides how tall this row can get.
+   Each takes its own line INSIDE its own group (flex-basis 100%) rather than sitting beside its
+   select: beside it, the paragraph is squeezed into whatever the other two controls leave and runs
+   to six lines. The adviser group is also allowed to GROW into the free space on the row, so when
+   its note is showing the paragraph gets a sensible measure instead of a 300px gutter. */
+.client-controls > .client-advfilter { flex: 1 1 300px; }
+.client-controls .client-adv-note,
+.client-controls .client-sort-note { flex: 1 1 100%; max-width: 88ch; }
+/* Under ~720px three controls abreast is worse than three rows: stack them back up, with the
+   spacing the standalone rows used to carry. */
+@media (max-width: 720px) {
+  .client-controls { display: block; }
+  .client-controls > .client-views { margin: 0 0 10px; }
+  .client-controls > .client-advfilter { margin: 0 0 8px; }
+  .client-controls > .client-sort { margin: 0 0 10px; }
+}
 /* W-14a — inside the case header the control sits ON the same baseline as the button it modifies,
    not floating above it: a bare "assign to me" with nothing beside it reads as a stray. */
 .cs-top-actions .ret-tome { align-self: center; margin: 0; }
@@ -3082,12 +3143,15 @@ tr.owed-hot > td { background: var(--red-bg); }
 .appt.outcome-struck, .appt-block.outcome-struck { opacity: .82; }
 .appt.has-outcome, .appt-block.has-outcome { border-left-style: double; border-left-width: 4px; }
 
-/* My Day's one-click ✓/✗ pair. Deliberately narrow and quiet until pressed: this sits on every
-   appointment row and must not out-shout the appointment itself. */
+/* The one-click ✓/✗ pair. Deliberately narrow and quiet: this sits on every past appointment row
+   and must not out-shout the appointment itself.
+   R41 · T1 — it moved from the Today's-appointments drawer onto the My Day row, and with it the
+   pressed state went: a recorded outcome renders as the .appt-outcome badge above instead of a
+   held-down button, because on a My Day row a second way to change a fact already stated is noise.
+   The two `.appt-quick-btn[data-outcome].is-set` rules went with that pressed state — nothing
+   renders the class any more, and a dead rule is a rule the next reader has to disprove. */
 .appt-quick { display: inline-flex; gap: 4px; flex: 0 0 auto; }
 .appt-quick-btn { min-width: 30px; padding: 3px 7px; font-weight: 700; line-height: 1.2; }
-.appt-quick-btn[data-outcome="attended"].is-set { background: var(--green-bg); border-color: #bfe3d0; color: var(--green); }
-.appt-quick-btn[data-outcome="no_show"].is-set { background: var(--red-bg); border-color: #f2c6c0; color: var(--red); }
 .appt-quick-btn:disabled { opacity: .5; cursor: default; }
 
 /* The editor's outcome radios, styled as chips so the three read as one choice rather than as a

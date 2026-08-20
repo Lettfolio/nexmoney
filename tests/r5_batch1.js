@@ -150,6 +150,9 @@ async function main() {
     /* ===================================================================
        1b · R5-1 — accepting a lead sends the welcome and nothing else
        (and a lead with NO email sends nothing at all)
+       R41 · F1 — the New-website-leads drawer (#leads-list) is gone; a lead's Accept/routing
+       select now lives once, on its My Day row (#briefing-list), which is where every selector
+       in this section (and in §2/§3 below) now reaches for it.
        =================================================================== */
     console.log("\n— R5-1 · accept a lead (p1 Kim): only the welcome goes");
     {
@@ -159,7 +162,7 @@ async function main() {
         return q.map((r) => r.id).sort();
       });
       await page.evaluate(() => {
-        const r = [...document.querySelectorAll("#leads-list .row-item")].find((x) => /Owen Trelawney/.test(x.textContent));
+        const r = [...document.querySelectorAll("#briefing-list .row-item")].find((x) => /Owen Trelawney/.test(x.textContent));
         r.querySelector("button.btn-primary").click();
       });
       await page.waitForTimeout(1400);
@@ -179,11 +182,11 @@ async function main() {
 
       // …and a lead with no email address must not trigger a send at all.
       const runBefore = await snapshot(page, () => window.__mock.lastEmailRun().at);
-      const hasNoEmailLead = await snapshot(page, () => [...document.querySelectorAll("#leads-list .row-item")].some((r) => /Colin Sharratt/.test(r.textContent)));
+      const hasNoEmailLead = await snapshot(page, () => [...document.querySelectorAll("#briefing-list .row-item")].some((r) => /Colin Sharratt/.test(r.textContent)));
       ok("fixture: the no-email lead (Colin Sharratt) is on screen", hasNoEmailLead === true);
       if (hasNoEmailLead) {
         await page.evaluate(() => {
-          const r = [...document.querySelectorAll("#leads-list .row-item")].find((x) => /Colin Sharratt/.test(x.textContent));
+          const r = [...document.querySelectorAll("#briefing-list .row-item")].find((x) => /Colin Sharratt/.test(x.textContent));
           r.querySelector("button.btn-primary").click();
         });
         await page.waitForTimeout(1400);
@@ -317,7 +320,7 @@ async function main() {
       });
 
       const gt0 = await leastLoadedGroundTruth();
-      const initial = await page.evaluate(() => [...document.querySelectorAll("#leads-list select.lead-adviser")].map((s) => ({ lead: s.dataset.lead, val: s.value, text: s.options[s.selectedIndex].text })));
+      const initial = await page.evaluate(() => [...document.querySelectorAll("#briefing-list select.lead-adviser")].map((s) => ({ lead: s.dataset.lead, val: s.value, text: s.options[s.selectedIndex].text })));
       ok("R5-5 · every lead select defaults to the lightest-loaded ADVISING adviser, never Kim (admin)",
         initial.length >= 3 && initial.every((s) => s.val === gt0.rr && s.val !== "p1" && /· lightest load/.test(s.text) && !/\(me\)/.test(s.text)),
         JSON.stringify({ initial, gt0 }));
@@ -327,7 +330,7 @@ async function main() {
       const others = initial.filter((s) => s.lead !== leadA && s.lead !== leadB).map((s) => s.lead);
 
       await page.evaluate(([a, b]) => {
-        const q = (id) => document.querySelector(`#leads-list select.lead-adviser[data-lead="${id}"]`);
+        const q = (id) => document.querySelector(`#briefing-list select.lead-adviser[data-lead="${id}"]`);
         q(a).value = "p2"; q(a).dispatchEvent(new Event("change", { bubbles: true }));
         q(b).value = "p3"; q(b).dispatchEvent(new Event("change", { bubbles: true }));
       }, [leadA, leadB]);
@@ -335,11 +338,11 @@ async function main() {
       const briefBefore = await page.evaluate((a) => (document.querySelector("#briefing-list").innerHTML.indexOf(`acceptLead('${a}'`) >= 0), leadA);
       ok("R5-21 · fixture: the lead also has a My Day row", briefBefore === true);
 
-      await page.click(`#leads-list .row-item:has(select[data-lead="${leadA}"]) button.btn-primary`);
+      await page.click(`#briefing-list .row-item:has(select[data-lead="${leadA}"]) button.btn-primary`);
       await page.waitForTimeout(1600);
 
       const post = await page.evaluate(async ([a, b, o]) => {
-        const sels = [...document.querySelectorAll("#leads-list select.lead-adviser")].map((s) => ({ lead: s.dataset.lead, val: s.value }));
+        const sels = [...document.querySelectorAll("#briefing-list select.lead-adviser")].map((s) => ({ lead: s.dataset.lead, val: s.value }));
         const { data: cases } = await window.__mockDb.from("cases").select("id,assigned_to,lead_source").order("created_at", { ascending: false }).limit(5);
         const { data: lead } = await window.__mockDb.from("leads").select("*").eq("id", a).single();
         return {
@@ -365,7 +368,7 @@ async function main() {
       await page.reload();
       await page.waitForTimeout(SETTLE);
       const gt1 = await leastLoadedGroundTruth();
-      const reloaded = await page.evaluate(() => [...document.querySelectorAll("#leads-list select.lead-adviser")].map((s) => s.value));
+      const reloaded = await page.evaluate(() => [...document.querySelectorAll("#briefing-list select.lead-adviser")].map((s) => s.value));
       ok("R5-5 · after a reload every lead defaults to the (recomputed) lightest-loaded adviser again — no sticky store, and never Kim", reloaded.length > 0 && reloaded.every((v) => v === gt1.rr && v !== "p1"), JSON.stringify({ reloaded, gt1 }));
       ok("R5-5 · the old localStorage routing key is gone", await page.evaluate(() => Object.keys(localStorage).every((k) => k.indexOf("nx_lead_adviser") !== 0)));
       ok("no console errors", !page.__err, JSON.stringify(page.__err));

@@ -193,12 +193,20 @@ async function mkClientCase(page, opts) {
       await page.evaluate(() => window.nav("dashboard"));
       await wait(page, 900);
 
+      /* R41 · F1 — the New-website-leads drawer (#leads-list) is gone, so a lead's
+         select.lead-adviser now renders EXACTLY ONCE, on its My Day row (#briefing-list). The
+         two-copies-in-sync premise D1 used to exercise no longer applies (there is only one copy
+         to go out of sync with), but the machinery it drove — LEAD_ADV_CHOICE, syncLeadRouting(),
+         applyLeadAdvChoices() — is explicitly kept (see app.js's own R41 · F1 comment above
+         leadRoutingHtml) because a repaint of My Day must still reconcile the row back to the
+         human's choice rather than resetting it to the suggestion, and Accept must still read the
+         LEAD's stored answer rather than a stale copy off the DOM. D1 now proves exactly that,
+         single-panel. */
       const selCount = (id) => page.$$eval(`select.lead-adviser[data-lead="${id}"]`, (els) => els.length);
-      eq("D1 · lead A's select appears in both panels", await selCount(leadIds.a), 2);
-      eq("D1 · lead B's select appears in both panels", await selCount(leadIds.b), 2);
+      eq("D1 · lead A's select now appears exactly ONCE (the leads drawer is gone)", await selCount(leadIds.a), 1);
+      eq("D1 · lead B's select now appears exactly ONCE", await selCount(leadIds.b), 1);
 
-      // K-1 — syncing in EITHER direction.
-      const selValues = (id) => page.$$eval(`select.lead-adviser[data-lead="${id}"]`, (els) => els.map((e) => e.value));
+      const selValue = (id) => page.$eval(`select.lead-adviser[data-lead="${id}"]`, (e) => e.value);
       const selOptions = (id) => page.$$eval(`select.lead-adviser[data-lead="${id}"]`, (els) => Array.prototype.map.call(els[0].options, (o) => o.value));
       const rrOf = (id) => page.$eval(`select.lead-adviser[data-lead="${id}"]`, (e) => e.dataset.rr || "");
 
@@ -206,35 +214,46 @@ async function mkClientCase(page, opts) {
       const rrA = await rrOf(leadIds.a);
       const notRr = optsA.find((v) => v !== rrA) || optsA[0];
 
-      // Change the FIRST copy in the DOM (leads drawer renders before My Day in dashboard markup —
-      // verified empirically below rather than assumed) to notRr; the other copy must follow.
-      await page.selectOption(`#leads-list select.lead-adviser[data-lead="${leadIds.a}"]`, notRr);
+      // Change the one copy away from the suggestion…
+      await page.selectOption(`#briefing-list select.lead-adviser[data-lead="${leadIds.a}"]`, notRr);
       await wait(page, 200);
-      eq("D1 · K-1 leads-drawer → My Day sync", await selValues(leadIds.a), [notRr, notRr]);
+      eq("D1 · the choice took on the row", await selValue(leadIds.a), notRr);
 
-      // K-2 — the "(lightest load)" note. Away from rr: hidden on both.
-      const rrHidden = (id) => page.$$eval(`.lead-rr[data-rr-for="${id}"]`, (els) => els.map((e) => e.classList.contains("hidden")));
-      eq("D1 · K-2 rr note hidden on both panels when away from the suggestion", await rrHidden(leadIds.a), [true, true]);
+      // K-2 — the "(lightest load)" note hides once the selection moves off the suggestion.
+      const rrHidden = (id) => page.$eval(`.lead-rr[data-rr-for="${id}"]`, (e) => e.classList.contains("hidden"));
+      eq("D1 · K-2 rr note hidden when away from the suggestion", await rrHidden(leadIds.a), true);
 
-      // Back to rr, changed from the OTHER panel (My Day) this time.
+      // …and REPAINT My Day (toggle the scope segment twice — All then back to Mine, each a fresh
+      // loadBriefing()/renderBriefing() — leads survive both scopes per R5-35's carve-out) without
+      // touching the select directly. applyLeadAdvChoices() must reconcile the freshly-rendered row
+      // back to LEAD_ADV_CHOICE, not the default suggestion — this is the one behaviour the K-1
+      // machinery exists to preserve now that there is nothing left to "sync" against.
+      await page.click("#brief-scope-all");
+      await wait(page, 500);
+      await page.click("#brief-scope-mine");
+      await wait(page, 500);
+      eq("D1 · K-1 the choice SURVIVES a My Day repaint (applyLeadAdvChoices reconciles to it)", await selValue(leadIds.a), notRr);
+      eq("D1 · K-2 the rr note stays hidden across the repaint too", await rrHidden(leadIds.a), true);
+
+      // Move it back onto the suggestion and confirm the note returns.
       await page.selectOption(`#briefing-list select.lead-adviser[data-lead="${leadIds.a}"]`, rrA);
       await wait(page, 200);
-      eq("D1 · K-1 My Day → leads-drawer sync", await selValues(leadIds.a), [rrA, rrA]);
-      eq("D1 · K-2 rr note visible on both panels once back on the suggestion", await rrHidden(leadIds.a), [false, false]);
+      eq("D1 · K-2 rr note reappears once back on the suggestion", await rrHidden(leadIds.a), false);
 
-      // Now move lead A's choice away again to a specific, known adviser and Accept it from the
-      // OPPOSITE panel's button — the shared choice must be what gets used, not that panel's own
-      // (already-synced) copy read independently.
+      // Now move lead A's choice to a specific, known adviser and Accept — Accept must read the
+      // LEAD's stored answer (leadAdviserValue), not merely whatever the clicked row's own <select>
+      // happens to show, which on a single-panel screen are the same DOM node but were historically
+      // two different reads (see K-1's header comment above leadAdviserValue in app.js).
       await page.selectOption(`#briefing-list select.lead-adviser[data-lead="${leadIds.a}"]`, notRr);
       await wait(page, 200);
       const nameOfA = await page.evaluate(async (id) => {
         const { data } = await window.__mockDb.from("profiles").select("full_name").eq("id", id).single();
         return data && data.full_name;
       }, notRr);
-      await page.click(`#leads-list [onclick^="acceptLead('${leadIds.a}'"]`);
+      await page.click(`#briefing-list [onclick^="acceptLead('${leadIds.a}'"]`);
       await wait(page, 1200);
       const toastA = await toastText(page);
-      ok("D1 · Accept clicked from the OTHER panel still uses the shared choice", toastA.includes(`Case created for Freddie Ashcombe`) && toastA.includes(`→ ${nameOfA}`), toastA);
+      ok("D1 · Accept uses the stored choice", toastA.includes(`Case created for Freddie Ashcombe`) && toastA.includes(`→ ${nameOfA}`), toastA);
       const caseAAssignedTo = await page.evaluate(async (leadId) => {
         const { data: lead } = await window.__mockDb.from("leads").select("converted_case_id").eq("id", leadId).single();
         const { data: cs } = await window.__mockDb.from("cases").select("assigned_to").eq("id", lead.converted_case_id).single();
@@ -242,7 +261,7 @@ async function mkClientCase(page, opts) {
       }, leadIds.a);
       eq("D1 · the case was actually created for that adviser", caseAAssignedTo, notRr);
 
-      // Lead B: choose in the LEADS-DRAWER panel, Accept from MY DAY's button (opposite direction).
+      // Lead B: choose an adviser, Accept — the ordinary single-panel path, for a second lead.
       const optsB = await selOptions(leadIds.b);
       const rrB = await rrOf(leadIds.b);
       const notRrB = optsB.find((v) => v !== rrB && v !== notRr) || optsB.find((v) => v !== rrB) || optsB[0];
@@ -250,18 +269,18 @@ async function mkClientCase(page, opts) {
         const { data } = await window.__mockDb.from("profiles").select("full_name").eq("id", id).single();
         return data && data.full_name;
       }, notRrB);
-      await page.selectOption(`#leads-list select.lead-adviser[data-lead="${leadIds.b}"]`, notRrB);
+      await page.selectOption(`#briefing-list select.lead-adviser[data-lead="${leadIds.b}"]`, notRrB);
       await wait(page, 200);
       await page.click(`#briefing-list [onclick^="acceptLead('${leadIds.b}'"]`);
       await wait(page, 1200);
       const toastB = await toastText(page);
-      ok("D1 · Accept clicked from the OTHER panel (reverse direction) also uses the shared choice", toastB.includes("Case created for Nadia Whitlock") && toastB.includes(`→ ${nameOfB}`), toastB);
+      ok("D1 · Accept for a second lead also uses its own stored choice", toastB.includes("Case created for Nadia Whitlock") && toastB.includes(`→ ${nameOfB}`), toastB);
       const caseBAssignedTo = await page.evaluate(async (leadId) => {
         const { data: lead } = await window.__mockDb.from("leads").select("converted_case_id").eq("id", leadId).single();
         const { data: cs } = await window.__mockDb.from("cases").select("assigned_to").eq("id", lead.converted_case_id).single();
         return cs.assigned_to;
       }, leadIds.b);
-      eq("D1 · the second case was created for the adviser chosen in the OTHER panel", caseBAssignedTo, notRrB);
+      eq("D1 · the second case was created for the chosen adviser", caseBAssignedTo, notRrB);
 
       /* -------------------------------------------------------------
          D2 · K-3 — the joint-enquiry name prompts
@@ -944,28 +963,34 @@ async function mkClientCase(page, opts) {
       const reopenToast = await toastText(page);
       eq("D12 · ...with its own confirmation toast", reopenToast, "Task reopened — it is back on the list");
 
-      // The Tasks-due panel path (doneTask / loadTasks repaint).
+      /* R41 · F1 — the Tasks-due drawer (#tasks-panel/#tasks-list) and window.doneTask are both
+         gone; My Day's own tick (window.briefDone, briefActions' "✓ Done") is now the ONLY drawer
+         path onto this task, and it repaints My Day alone (see snoozeRepaintAll/briefDone's own
+         R41 comment in app.js — the dual-repaint premise this block used to exercise no longer
+         applies because there is one list of tasks left, not two).
+         A FRESH case, deliberately: My Day (unlike the old, ungrouped Tasks-due drawer) groups
+         same-case rows into one, folding everything but the highest-priority item behind a
+         "+N more" toggle (BUILD 7d, groupBriefRows) — reusing `caseId` (which already carries
+         today's reopened "Chase ID docs" task) would fold this task's own row out of sight
+         entirely, which is not what this check is testing. */
+      const secondCase = await mkClientCase(page, { first: "Rufus", last: "SecondCase", assigned_to: "p2" });
       const taskId2 = await page.evaluate(async (o) => {
         const { data } = await window.__mockDb.from("case_tasks").insert({ case_id: o.caseId, title: "Confirm rate switch", due_date: o.today, assigned_to: "p2" }).select("id").single();
         return data.id;
-      }, { caseId, today });
+      }, { caseId: secondCase.caseId, today });
       await page.evaluate(() => closeModal());   // the case modal from above is still open
       await page.evaluate(() => window.nav("dashboard"));
       await wait(page, 900);
-      // The Tasks-due drawer starts collapsed; click near the h3's own text (not the Mine/Unassigned/All
-      // scope buttons it also contains — toggleDrawer() deliberately ignores clicks on those).
-      await page.click("#tasks-panel h3", { position: { x: 5, y: 5 } });
-      await wait(page, 300);
-      const before = await page.$eval("#tasks-list", (e) => e.textContent);
-      ok("D12 · the fresh task is on the Tasks-due panel before it is done", before.includes("Confirm rate switch"), before);
-      await page.click(`[onclick="doneTask('${taskId2}')"]`);
+      const before = await page.$eval("#briefing-list", (e) => e.textContent);
+      ok("D12 · the fresh task is on My Day before it is done", before.includes("Confirm rate switch"), before);
+      await page.click(`[onclick="briefDone('${taskId2}')"]`);
       await wait(page, 700);
-      const afterDone = await page.$eval("#tasks-list", (e) => e.textContent);
-      ok("D12 · marking it done from the Tasks-due panel removes it from that list", !afterDone.includes("Confirm rate switch"), afterDone);
+      const afterDone = await page.$eval("#briefing-list", (e) => e.textContent);
+      ok("D12 · marking it done from My Day removes it from that list", !afterDone.includes("Confirm rate switch"), afterDone);
       await page.click("#toast-action");
       await wait(page, 700);
-      const afterUndo = await page.$eval("#tasks-list", (e) => e.textContent);
-      ok("D12 · Undo puts it straight back on the Tasks-due panel", afterUndo.includes("Confirm rate switch"), afterUndo);
+      const afterUndo = await page.$eval("#briefing-list", (e) => e.textContent);
+      ok("D12 · Undo puts it straight back on My Day", afterUndo.includes("Confirm rate switch"), afterUndo);
 
       ok("D12 · no console errors", !page.__err, JSON.stringify(page.__err));
       await page.close();

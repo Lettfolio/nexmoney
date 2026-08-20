@@ -435,7 +435,18 @@ const hasFirmLevelGroup = (groups) => groups.some((k) => FIRM_RULES.some((r) => 
        D · DRAWER PERSISTENCE (p2)
        ======================================================================= */
     {
-      console.log("\n— D1 · closing the auto-opened Leads drawer survives a reload; opening the default-collapsed Rate & ERC drawer survives one too");
+      /* R41 · F1 — #leads-panel (and loadLeads' auto-open-because-leads-are-waiting behaviour) is
+         gone; a lead's own auto-open condition had no equivalent on a SURVIVING drawer (a case-
+         insert made mid-test does not survive page.reload() — the mock DB is reseeded from its
+         deterministic PRNG on every navigation, which is exactly why the original D1 leant on
+         fixture-guaranteed "leads waiting", not a test-inserted row). The persistence MECHANISM
+         under test (toggleDrawer writes nx_drawer_<key>; applyStoredDrawers reads it before any
+         autoDrawer call can run; clearing the key restores the markup default) is unchanged and is
+         proven here against the two collapsed-by-default drawers R41 left standing side by side:
+         #rate-erc-panel and #revenue-panel — neither carries an autoDrawer() call (see admin/app.js),
+         so both start collapsed on a clean load regardless of fixture data, same as Rate & ERC always
+         did in the original D1b. */
+      console.log("\n— D1 · opening #rate-erc-panel survives a reload; opening #revenue-panel survives one too");
       const page = await newPage(browser, "p2");
       const errBefore = (page.__err || []).length;
       await clearR34Keys(page);
@@ -443,44 +454,44 @@ const hasFirmLevelGroup = (groups) => groups.some((k) => FIRM_RULES.some((r) => 
       await wait(page, SETTLE);
 
       const initial = await page.evaluate(() => ({
-        leadsCollapsed: document.getElementById("leads-panel").classList.contains("collapsed"),
         rateErcCollapsed: document.getElementById("rate-erc-panel").classList.contains("collapsed"),
+        revenueCollapsed: document.getElementById("revenue-panel").classList.contains("collapsed"),
       }));
-      ok("D1a · the Leads drawer starts auto-opened (there are leads waiting in the fixture)", !initial.leadsCollapsed, JSON.stringify(initial));
-      ok("D1b · the Rate & ERC drawer starts collapsed (its markup default — no auto-open rule)", initial.rateErcCollapsed, JSON.stringify(initial));
-
-      await page.click("#leads-panel h3");
-      await wait(page, 300);
-      const closedLeads = await page.evaluate(() => document.getElementById("leads-panel").classList.contains("collapsed"));
-      ok("D1c · clicking the Leads header closes it", closedLeads);
-      eq("D1d · the choice is written to localStorage as \"closed\"", await lsGetPage(page, "nx_drawer_leads"), "closed");
+      ok("D1a · the Rate & ERC drawer starts collapsed (its markup default — no auto-open rule)", initial.rateErcCollapsed, JSON.stringify(initial));
+      ok("D1b · the Protection & fees drawer starts collapsed too (its markup default — no auto-open rule)", initial.revenueCollapsed, JSON.stringify(initial));
 
       await page.click("#rate-erc-panel h3");
       await wait(page, 300);
       const openedRate = await page.evaluate(() => document.getElementById("rate-erc-panel").classList.contains("collapsed"));
-      ok("D1e · clicking the Rate & ERC header opens it", !openedRate);
-      eq("D1f · the choice is written to localStorage as \"open\"", await lsGetPage(page, "nx_drawer_rateerc"), "open");
+      ok("D1c · clicking the Rate & ERC header opens it", !openedRate);
+      eq("D1d · the choice is written to localStorage as \"open\"", await lsGetPage(page, "nx_drawer_rateerc"), "open");
+
+      await page.click("#revenue-panel h3");
+      await wait(page, 300);
+      const openedRevenue = await page.evaluate(() => document.getElementById("revenue-panel").classList.contains("collapsed"));
+      ok("D1e · clicking the Protection & fees header opens it", !openedRevenue);
+      eq("D1f · the choice is written to localStorage as \"open\"", await lsGetPage(page, "nx_drawer_revenue"), "open");
 
       await page.reload();
       await wait(page, SETTLE);
       const afterReload = await page.evaluate(() => ({
-        leadsCollapsed: document.getElementById("leads-panel").classList.contains("collapsed"),
         rateErcCollapsed: document.getElementById("rate-erc-panel").classList.contains("collapsed"),
+        revenueCollapsed: document.getElementById("revenue-panel").classList.contains("collapsed"),
       }));
-      ok("D1g · the Leads drawer is STILL closed after a reload (stored choice beats auto-open)", afterReload.leadsCollapsed, JSON.stringify(afterReload));
-      ok("D1h · the Rate & ERC drawer is STILL open after a reload", !afterReload.rateErcCollapsed, JSON.stringify(afterReload));
+      ok("D1g · the Rate & ERC drawer is STILL open after a reload (stored choice beats the collapsed default)", !afterReload.rateErcCollapsed, JSON.stringify(afterReload));
+      ok("D1h · the Protection & fees drawer is STILL open after a reload too", !afterReload.revenueCollapsed, JSON.stringify(afterReload));
 
-      console.log("\n— D2 · clearing both keys restores first-run (auto) behaviour");
-      await clearKey(page, "nx_drawer_leads");
+      console.log("\n— D2 · clearing both keys restores first-run (collapsed) behaviour");
       await clearKey(page, "nx_drawer_rateerc");
+      await clearKey(page, "nx_drawer_revenue");
       await page.reload();
       await wait(page, SETTLE);
       const afterClear = await page.evaluate(() => ({
-        leadsCollapsed: document.getElementById("leads-panel").classList.contains("collapsed"),
         rateErcCollapsed: document.getElementById("rate-erc-panel").classList.contains("collapsed"),
+        revenueCollapsed: document.getElementById("revenue-panel").classList.contains("collapsed"),
       }));
-      ok("D2a · Leads is auto-opened again once nothing is stored", !afterClear.leadsCollapsed, JSON.stringify(afterClear));
-      ok("D2b · Rate & ERC is back to its collapsed markup default", afterClear.rateErcCollapsed, JSON.stringify(afterClear));
+      ok("D2a · Rate & ERC is back to its collapsed markup default once nothing is stored", afterClear.rateErcCollapsed, JSON.stringify(afterClear));
+      ok("D2b · Protection & fees is back to its collapsed markup default too", afterClear.revenueCollapsed, JSON.stringify(afterClear));
 
       ok("D · no console errors (p2)", noNewErr(page, errBefore), JSON.stringify(page.__err));
       await page.close();

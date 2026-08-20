@@ -48,8 +48,10 @@
            only the two interactive "Advance" call sites raise it —
            moveCaseToStage() called programmatically stays headless.
      First-run tour — fires once, only for tour_seen_at IS NULL (Luke, p3),
-           all six steps, Skip/Finish (and Escape) call mark_tour_seen(),
-           never again once set, __NEX_SKIP_TOUR respected.
+           all steps (4, since R41 · F1 deleted the #tasks-panel and
+           #today-appts-panel steps along with those drawers), Skip/Finish
+           (and Escape) call mark_tour_seen(), never again once set,
+           __NEX_SKIP_TOUR respected.
      L-1/L-5/L-18 HELP & GLOSSARY — ERC/GI entries, "Retake the tour".
      W-21  TIMELINE DEFAULT VIEW — "activity" (everything but system rows) by
            default; System is still one click away; the client header's
@@ -340,7 +342,7 @@ async function readRows(page, table, filters) {
         return data.id;
       });
       await goto(page, "dashboard", 1000);
-      const opt0 = await page.$eval(`#leads-list select.lead-adviser[data-lead="${leadId}"] option:first-child`,
+      const opt0 = await page.$eval(`#briefing-list select.lead-adviser[data-lead="${leadId}"] option:first-child`,
         (o) => ({ value: o.value, text: o.textContent }));
       ok("A4 · the advising viewer's own option is pinned FIRST", opt0.value === "p2", JSON.stringify(opt0));
       ok("A4 · …and labelled “(me)”", /\(me\)/.test(opt0.text), JSON.stringify(opt0));
@@ -368,7 +370,7 @@ async function readRows(page, table, filters) {
       });
       await goto(page, "dashboard", 1000);
 
-      await page.click(`#leads-list [onclick^="acceptLead('${leadA}'"]`);
+      await page.click(`#briefing-list [onclick^="acceptLead('${leadA}'"]`);
       await wait(page, 1200);
       const toastA = await toastText(page);
       const caseA = await page.evaluate(async (id) => {
@@ -381,7 +383,7 @@ async function readRows(page, table, filters) {
       ok("A4 · W-28 · the accept toast names the parsed figure", /property value/.test(toastA) && /£450,000/.test(toastA), toastA);
       ok("A4 · W-28 · no figures hint, so the case does NOT auto-open", !toastA.includes("worth capturing on the case now"), toastA);
 
-      await page.click(`#leads-list [onclick^="acceptLead('${leadB}'"]`);
+      await page.click(`#briefing-list [onclick^="acceptLead('${leadB}'"]`);
       await wait(page, 1200);
       const toastB = await toastText(page);
       const linkB = await page.evaluate(async (id) => {
@@ -626,14 +628,20 @@ async function readRows(page, table, filters) {
       }, gt.caseId);
       eq("B3 · re-saving the same no-show does not create a second task", taskRows2.length, 1);
 
-      // Quick ✓/✗ from My Day + Undo — today's appointment.
-      const todayStart = new Date(); todayStart.setHours(9, 0, 0, 0);
+      /* R41 · T1 — the "Today's appointments" drawer (#today-appts-panel/#today-appts) is gone, and
+         with it the old data-appt/data-outcome/is-set toggle markup (`.appt-quick-btn` used to
+         carry data-appt/data-outcome and an is-set aria-pressed toggle). The ✓/✗ pair now
+         lives on the My Day appt_today row itself (apptQuickOutcomeHtml), rendered inline with
+         onclick="quickApptOutcome('<id>','<outcome>',this)" and no drawer to open first — a started,
+         unjudged appointment shows the pair; nothing else does. */
+      // Quick ✓/✗ from My Day + Undo — today's appointment (past-started, since apptQuickOutcomeHtml
+      // only offers the pair once the slot has started).
+      const todayStart = new Date(Date.now() - 5 * 60000);   // 5 minutes ago — started, unjudged
       const todayId = await mkAppt(page, { client_id: gt.clientId, case_id: gt.caseId, title: "Today appt", starts_at: todayStart.toISOString(), ends_at: todayStart.toISOString(), staff_id: "p4" });
       await goto(page, "dashboard", 900);
-      await openDrawer(page, "#today-appts-panel");
-      const quickBtn = `.appt-quick-btn[data-appt="${todayId}"][data-outcome="attended"]`;
+      const quickBtn = `#briefing-list .appt-quick-btn[onclick^="quickApptOutcome('${todayId}','attended'"]`;
       const hasQuick = await page.$(quickBtn);
-      ok("B3 · My Day's today list offers the one-click ✓/✗ pair", !!hasQuick);
+      ok("B3 · My Day's row offers the one-click ✓/✗ pair for a started, unjudged appointment", !!hasQuick);
       if (hasQuick) {
         await page.click(quickBtn);
         await wait(page, 700);
@@ -938,22 +946,29 @@ async function readRows(page, table, filters) {
        C1 · FIRST-RUN TOUR
        ======================================================================= */
     {
-      console.log("\n— C1 · first-run tour fires ONLY for Luke (p3, tour_seen_at null), all 6 steps, Finish marks it seen");
+      console.log("\n— C1 · first-run tour fires ONLY for Luke (p3, tour_seen_at null), every step, Finish marks it seen");
       const page = await newPage(browser, "p3");
       await wait(page, 800);
       const bubbleVisible = await page.evaluate(() => !!document.querySelector("#tour-bubble"));
       ok("C1 · the tour fires on first sign-in for p3", bubbleVisible);
+      /* R41 · F1 — TOUR_STEPS shrank from 6 to 4 (the #tasks-panel and #today-appts-panel steps
+         were deleted along with those drawers, not re-pointed — see app.js's own R41 comment
+         directly above TOUR_STEPS). Read the step count LIVE off the app's own module state rather
+         than hardcoding 4, the same standing rule every other figure in this harness follows, so a
+         future round changing the step count again does not silently desync this loop from it. */
+      const stepCount = await page.evaluate(() => TOUR_STEPS.filter((s) => { try { return !!document.querySelector(s.target); } catch (e) { return false; } }).length);
+      ok("C1 · fixture · every current tour step has a live target on screen (none skipped)", stepCount === (await page.evaluate(() => TOUR_STEPS.length)), stepCount);
       let stepsSeen = 0;
-      for (let i = 0; i < 6; i++) {
+      for (let i = 0; i < stepCount; i++) {
         const stepN = await page.$eval(".tour-step-n", (e) => e.textContent).catch(() => "");
-        if (new RegExp(`${i + 1} of 6`).test(stepN)) stepsSeen++;
+        if (new RegExp(`${i + 1} of ${stepCount}`).test(stepN)) stepsSeen++;
         const btnTxt = await page.$eval("#tour-next", (e) => e.textContent).catch(() => "");
-        if (i < 5) eq(`C1 · step ${i + 1} of 6 advances with Next`, btnTxt, "Next");
+        if (i < stepCount - 1) eq(`C1 · step ${i + 1} of ${stepCount} advances with Next`, btnTxt, "Next");
         else eq("C1 · the last step's button reads Finish", btnTxt, "Finish");
         await page.click("#tour-next");
         await wait(page, 300);
       }
-      eq("C1 · all six steps were actually shown, in order", stepsSeen, 6);
+      eq("C1 · every step was actually shown, in order", stepsSeen, stepCount);
       await wait(page, 500);
       const gone = await page.evaluate(() => !document.querySelector("#tour-bubble"));
       ok("C1 · Finish closes the tour", gone);

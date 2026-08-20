@@ -33,12 +33,18 @@
       gotoClientSegment("cold", adviser) — R38's one addition to that
       function, so the hand-off keeps the page's own adviser scope instead
       of silently widening to the whole firm.
-    - Dashboard drawers (`#alerts-rateerc` ≤15, `#retention-list` ≤12) are
-      UNCHANGED in content/caps — same shared builders, same rows — but each
-      gained a link to the Retention page: the Rate & ERC drawer's header
-      grew `#rate-erc-open-retention` (`.ret-page-link`, nav('retention')),
-      and both drawers' "…and N more" overflow tails now read "…see the
-      Retention page" with a button that also calls nav('retention').
+    - Dashboard drawers, AS OF R38: `#alerts-rateerc` (≤15) UNCHANGED in
+      content/cap — same shared builder, same rows — but gained a link to the
+      Retention page: the Rate & ERC drawer's header grew
+      `#rate-erc-open-retention` (`.ret-page-link`, nav('retention')), and its
+      own "…and N more" overflow tail now reads "…see the Retention page"
+      with a button that also calls nav('retention'). `#retention-list` (≤12)
+      existed at R38 time with the same link/overflow treatment, but R41 · F1
+      REMOVED the whole Retention drawer outright (`#retention-panel`/
+      `#retention-list`/`#retention-stats`/`#retention-open-page`) — the
+      pipeline lives on the Retention page alone now. §F2 (repaired, R41
+      comment inline) proves the removal and that the page still carries
+      everything the drawer used to cap at 12.
     - startRetentionCase / markRateReminded now repaint whichever surface is
       open — the Retention page included — when they finish.
 
@@ -54,8 +60,10 @@
        against the mock db)
    §E  cold panel (cold clients + last-contact ages, #ret-cold-goto deep-link
        with the adviser filter carried over)
-   §F  dashboard drawers unchanged (#alerts-rateerc ≤15 + its Retention-page
-       link, #retention-list ≤12 + its own link)
+   §F  dashboard drawers (#alerts-rateerc ≤15 + its Retention-page link,
+       UNCHANGED; #retention-list REMOVED by R41 · F1 — §F2 now proves the
+       removal and that the Retention page's own pipeline list still carries
+       everything the drawer used to cap)
    §G  no console errors, all four personas
 
    EVERY figure this file asserts is either read straight back off the mock
@@ -656,28 +664,43 @@ async function groupHeadings(page, containerSel) {
     }
 
     {
-      console.log("\n— §F2 · #retention-list stays ≤12 with an overflow link once the pipeline exceeds that, and its ids stay intact (p4, All)");
+      /* R41 · F1 — the Retention DRAWER (#retention-panel/#retention-list/#retention-stats/
+         #retention-open-page) is gone outright; the Retention PAGE (#ret-pipeline-panel/
+         #ret-pipeline-list/#ret-pipeline-stats, shipped in R38 and untouched by R41) is the only
+         place the pipeline lives now. §F2 used to prove the drawer's 12-row cap + overflow link;
+         it now proves the drawer is actually gone (even with plenty of pipeline behind it — the
+         same 16-pair seed as before, so this isn't a small-fixture false negative) and that the
+         page still carries every one of those open retention cases, uncapped by the drawer's old
+         12. (§F2b used to read `document.getElementById("retention-list").innerHTML` unconditionally
+         — with the id gone that was a `null.innerHTML` TypeError that killed §G along with it; the
+         id's absence is now itself the assertion.) */
+      console.log("\n— §F2 · the Retention DRAWER is gone (ids absent, even with plenty of pipeline seeded); the Retention PAGE still carries all of it (p4, All)");
       const page = await newPage(browser, "p4");
       const errBefore = (page.__err || []).length;
       await clearNxKeys(page);
 
+      const openIds = [];
       for (let i = 0; i < 16; i++) {
         const src = await mkClientCase(page, { first: "R38F2", last: `Src${i}${tag()}`, case: { stage: "completed", assigned_to: i % 2 ? "p2" : "p3" } });
-        await mkClientCase(page, { first: "R38F2", last: `Open${i}${tag()}`, case: { stage: "application", assigned_to: i % 2 ? "p2" : "p3", retention_source_case_id: src.caseId } });
+        const open = await mkClientCase(page, { first: "R38F2", last: `Open${i}${tag()}`, case: { stage: "application", assigned_to: i % 2 ? "p2" : "p3", retention_source_case_id: src.caseId } });
+        openIds.push(open.caseId);
       }
 
       await goto(page, "dashboard", 1800);
-      const drawerIds = await rowIds(page, "#retention-list", "openCase");
-      ok("§F2a · #retention-list renders 12 rows or fewer", drawerIds.length <= 12, drawerIds.length);
-      const overflowTail = await page.evaluate(() => document.getElementById("retention-list").innerHTML.includes("see the Retention page"));
-      ok("§F2b · the overflow tail (\"…see the Retention page\") is present once the pipeline exceeds 12", overflowTail);
-
-      const idsAllPresent = await page.evaluate(() => !!(document.getElementById("alerts-rateerc") && document.getElementById("retention-list") && document.getElementById("retention-stats")));
-      ok("§F2c · #alerts-rateerc / #retention-list / #retention-stats ids are all still intact", idsAllPresent);
+      const drawerIdsGone = await page.evaluate(() => ({
+        panel: !document.getElementById("retention-panel"),
+        list: !document.getElementById("retention-list"),
+        stats: !document.getElementById("retention-stats"),
+        openPage: !document.getElementById("retention-open-page"),
+      }));
+      ok("§F2a · #retention-panel / #retention-list / #retention-stats / #retention-open-page are all absent from the dashboard", Object.values(drawerIdsGone).every(Boolean), JSON.stringify(drawerIdsGone));
+      const idsStillIntact = await page.evaluate(() => !!(document.getElementById("alerts-rateerc") && document.getElementById("rate-erc-panel")));
+      ok("§F2b · the surviving Rate & ERC drawer's ids are still intact alongside the removal", idsStillIntact);
 
       await goto(page, "retention", 1800);
       const pageIds = await rowIds(page, "#ret-pipeline-list", "openCase");
-      ok("§F2d · the (un-truncated) Retention page shows more open retention cases than the drawer's 12", pageIds.length > drawerIds.length, JSON.stringify({ page: pageIds.length, drawer: drawerIds.length }));
+      eq("§F2c · the Retention page's #ret-pipeline-list carries every one of the seeded open retention cases (uncapped — the old drawer's 12-row limit doesn't apply here)", openIds.filter((id) => pageIds.includes(id)).length, openIds.length);
+      ok("§F2d · …which is well past the drawer's old 12-row cap, so this is a real coverage gain, not a coincidence", pageIds.length > 12, pageIds.length);
 
       ok("§F2 · no console errors", noNewErr(page, errBefore), JSON.stringify(page.__err));
       await page.close();

@@ -492,78 +492,118 @@ const isoDaysAgo = (n) => new Date(Date.now() - n * DAY_MS).toISOString();
     /* =======================================================================
        D · TASK SNOOZE — +1d/+3d/+1wk move due_date forward from max(today,
            due); the date-pick sets an exact date; a future-dated task is
-           never pulled earlier; both My Day and Tasks-due repaint.
+           never pulled earlier; My Day repaints (snoozeRepaintAll).
+
+       R41 · F1 — the Tasks-due drawer (#tasks-panel/#tasks-list, ctx="tasks"
+       snooze ids) is gone; My Day (#briefing-list, ctx="brief" snooze ids) is
+       the only surface left, and there is one repaint, not two (see
+       snoozeRepaintAll's own R41 comment in app.js). My Day only ever shows a
+       task that is OVERDUE or due TODAY (task_overdue/task_today — that is
+       what get_briefing returns), so a task snoozed into the future has
+       nowhere left to render on My Day at all — unlike the old Tasks-due
+       drawer, which carried a 14-day look-ahead and could show D3's
+       already-future-dated fixture directly. D3 below therefore drives
+       window.snoozeTask itself — the exact function every snooze button
+       calls (see taskSnoozeControlsHtml's onclick in app.js) — and confirms
+       the write the same two ways D1/D2/D4/D5 do: the mock db directly, and
+       the case modal's own "due <date>" line, which lists every task on the
+       case regardless of whether it is due today. This keeps every snooze
+       semantic the original §D proved (the arithmetic, the exact-date
+       override, the never-earlier rule, and a row leaving/rejoining My Day
+       as its due date crosses today) without inventing a UI surface R41 does
+       not offer.
        ======================================================================= */
     {
-      console.log("\n— D · Snooze: +Nd arithmetic, date-pick, never-earlier rule, dual repaint (p2)");
+      console.log("\n— D · Snooze: +Nd arithmetic, date-pick, never-earlier rule, single repaint, case-modal cross-check (p2)");
       const errBefore = (page.__err || []).length;
 
       const todayStr = await page.evaluate(() => localDateStr());
       const addDays = (ymd, n) => { const d = new Date(ymd + "T00:00:00"); d.setDate(d.getDate() + n); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+      // "due <D MMM YYYY>" — the exact format the case modal's #tasks-inline row prints (fmtD).
+      const dueLineText = async (page, caseId, taskId) => {
+        await openCase(page, caseId);
+        return page.evaluate((tid) => {
+          const row = [...document.querySelectorAll("#tasks-inline .row-item")].find((r) => r.querySelector(`[onclick*="'${tid}'"]`));
+          return row ? row.querySelector(".s").textContent : null;
+        }, taskId);
+      };
 
-      // D1 — a task due TODAY, +3d on the Tasks-due panel -> due_date becomes today+3.
+      // D1 — a task due TODAY, +3d from My Day -> due_date becomes today+3, confirmed on the case too.
       const d1 = await mkClientCase(page, { first: "Snooze", last: "Plus3", case_kind: "purchase", stage: "application", assigned_to: "p2" });
       const d1task = await page.evaluate(({ caseId, due }) => window.__mockDb.from("case_tasks").insert({ case_id: caseId, title: "Chase docs", due_date: due, assigned_to: "p2" }).select("id").single().then((r) => r.data.id), { caseId: d1.caseId, due: todayStr });
       await goto(page, "dashboard", 1200);
-      await openDrawer(page, "#tasks-panel"); // Tasks due starts class="collapsed" — no autoDrawer() call opens it, unlike the radar
-      const btn3 = `#snooze-3d-tasks-${d1task}`;
-      ok("D1 · the +3d snooze control is on the Tasks-due panel", await page.evaluate((s) => !!document.querySelector(s), btn3));
+      const btn3 = `#snooze-3d-brief-${d1task}`;
+      ok("D1 · the +3d snooze control is on My Day (the task is due today)", await page.evaluate((s) => !!document.querySelector(s), btn3));
       await page.click(btn3);
       await wait(page, 500);
       let d1row = await page.evaluate((id) => window.__mockDb.from("case_tasks").select("due_date").eq("id", id).single().then((r) => r.data), d1task);
       eq("D1 · due_date moved to today + 3 days", d1row.due_date, addDays(todayStr, 3));
+      const d1CaseTxt = await dueLineText(page, d1.caseId, d1task);
+      await page.evaluate(() => window.closeModal());
+      ok("D1 · the case modal's own task row agrees on the new due date", d1CaseTxt && d1CaseTxt.includes(await page.evaluate((d) => fmtD(d), addDays(todayStr, 3))), d1CaseTxt);
 
       // D2 — the date-pick input sets an EXACT date, overriding whatever the +Nd math would give.
+      // The task is due today+3 after D1, so it no longer renders on My Day — driven directly via
+      // window.snoozeTaskTo, the exact function the (now-invisible) date-pick's onchange calls.
       const picked = addDays(todayStr, 20);
-      await page.fill(`#snooze-pick-tasks-${d1task}`, picked);
+      await page.evaluate(({ id, v }) => window.snoozeTaskTo(id, v), { id: d1task, v: picked });
       await wait(page, 500);
       d1row = await page.evaluate((id) => window.__mockDb.from("case_tasks").select("due_date").eq("id", id).single().then((r) => r.data), d1task);
       eq("D2 · the date-pick set the EXACT chosen date", d1row.due_date, picked);
 
       // D3 — a task already due in the FUTURE (today+5) is never pulled earlier: +1d bases off the
-      // task's own due date, not today, so the result is today+6, not today+1.
+      // task's own due date, not today, so the result is today+6, not today+1. Never on My Day at
+      // all (it is not overdue or due today), so driven via window.snoozeTask directly — the same
+      // function id="snooze-1d-brief-…" calls, see taskSnoozeControlsHtml in app.js.
       const d3 = await mkClientCase(page, { first: "Snooze", last: "NeverEarlier", case_kind: "purchase", stage: "application", assigned_to: "p2" });
       const futureDue = addDays(todayStr, 5);
       const d3task = await page.evaluate(({ caseId, due }) => window.__mockDb.from("case_tasks").insert({ case_id: caseId, title: "Future thing", due_date: due, assigned_to: "p2" }).select("id").single().then((r) => r.data.id), { caseId: d3.caseId, due: futureDue });
       await goto(page, "dashboard", 1200);
-      await openDrawer(page, "#tasks-panel");
-      await page.click(`#snooze-1d-tasks-${d3task}`);
+      const onBriefBeforeD3 = await page.evaluate((id) => !!document.querySelector(`#snooze-1d-brief-${id}`), d3task);
+      ok("D3 · fixture · a task due in 5 days does NOT render on My Day (only overdue/today do)", !onBriefBeforeD3);
+      await page.evaluate((id) => window.snoozeTask(id, 1), d3task);
       await wait(page, 500);
       const d3row = await page.evaluate((id) => window.__mockDb.from("case_tasks").select("due_date").eq("id", id).single().then((r) => r.data), d3task);
       eq("D3 · +1d on a future-dated task bases off its OWN due date (today+5 -> today+6), never today+1", d3row.due_date, addDays(todayStr, 6));
+      const d3CaseTxt = await dueLineText(page, d3.caseId, d3task);
+      await page.evaluate(() => window.closeModal());
+      ok("D3 · the case modal confirms the same never-earlier result", d3CaseTxt && d3CaseTxt.includes(await page.evaluate((d) => fmtD(d), addDays(todayStr, 6))), d3CaseTxt);
 
-      // D4 — +1wk (7 days) from an overdue/undated-to-today baseline.
+      // D4 — +1wk (7 days) from an overdue baseline (never earlier than today), driven from My Day
+      // (an overdue task DOES render there, as task_overdue).
       const d4 = await mkClientCase(page, { first: "Snooze", last: "Plus1wk", case_kind: "purchase", stage: "application", assigned_to: "p2" });
       const overdueStr = addDays(todayStr, -4);
       const d4task = await page.evaluate(({ caseId, due }) => window.__mockDb.from("case_tasks").insert({ case_id: caseId, title: "Overdue thing", due_date: due, assigned_to: "p2" }).select("id").single().then((r) => r.data.id), { caseId: d4.caseId, due: overdueStr });
       await goto(page, "dashboard", 1200);
-      await openDrawer(page, "#tasks-panel");
-      await page.click(`#snooze-1wk-tasks-${d4task}`);
+      const btn1wk = `#snooze-1wk-brief-${d4task}`;
+      ok("D4 · the +1wk snooze control is on My Day (the task is overdue)", await page.evaluate((s) => !!document.querySelector(s), btn1wk));
+      await page.click(btn1wk);
       await wait(page, 500);
       const d4row = await page.evaluate((id) => window.__mockDb.from("case_tasks").select("due_date").eq("id", id).single().then((r) => r.data), d4task);
       eq("D4 · +1wk on an OVERDUE task bases off TODAY (never earlier), landing on today+7", d4row.due_date, addDays(todayStr, 7));
 
-      // D5 — the same task shown on My Day (ctx=brief, due TODAY so get_briefing surfaces it) can be
-      // snoozed from there too, and the change is reflected back on the Tasks-due panel as well
-      // (snoozeRepaintAll repaints both).
+      // D5 — a task due TODAY on My Day, snoozed via My Day: it LEAVES My Day the moment its due
+      // date crosses past today (the row's own horizon — overdue/today — not a drawer's 14-day
+      // window), and REJOINS it once its due date is put back to today. "row disappears/reappears
+      // per horizon" — proved on My Day's real horizon end to end, no drawer involved.
       const d5 = await mkClientCase(page, { first: "Snooze", last: "FromBrief", case_kind: "purchase", stage: "application", assigned_to: "p2" });
       const d5task = await page.evaluate(({ caseId, due }) => window.__mockDb.from("case_tasks").insert({ case_id: caseId, title: "Today thing", due_date: due, assigned_to: "p2" }).select("id").single().then((r) => r.data.id), { caseId: d5.caseId, due: todayStr });
       await goto(page, "dashboard", 1200);
       const briefBtn = `#snooze-3d-brief-${d5task}`;
-      ok("D5 · the same task ALSO carries snooze controls on My Day (ctx=brief)", await page.evaluate((s) => !!document.querySelector(s), briefBtn));
+      ok("D5 · the task carries snooze controls on My Day while due today", await page.evaluate((s) => !!document.querySelector(s), briefBtn));
       await page.click(briefBtn);
       await wait(page, 700);
       const d5row = await page.evaluate((id) => window.__mockDb.from("case_tasks").select("due_date").eq("id", id).single().then((r) => r.data), d5task);
-      eq("D5 · snoozing from My Day wrote the same due_date change", d5row.due_date, addDays(todayStr, 3));
-      // Tasks-due panel was repainted too (dual repaint, snoozeRepaintAll = loadTasks() + loadBriefing()):
-      // the task is now due in 3 days, so it no longer qualifies for My Day's overdue/today section —
-      // its OLD "brief" snooze row (scoped to the id it had while due today) is gone post-repaint.
+      eq("D5 · snoozing from My Day wrote the due_date change", d5row.due_date, addDays(todayStr, 3));
+      // The single repaint (snoozeRepaintAll = loadBriefing() alone, R41 · F1): the task is now due
+      // in 3 days, so it no longer qualifies for My Day's overdue/today section at all.
       const stillOnBrief = await page.evaluate((s) => !!document.querySelector(s), briefBtn);
-      ok("D5 · the snoozed task's row is gone from My Day after the repaint (due date moved past today)", !stillOnBrief);
-      // …and it now shows up on the Tasks-due panel (still due within the 14-day horizon) with the
-      // updated date — read via $eval, which works regardless of the drawer's collapsed/open state.
-      const tasksListTxt = await page.$eval("#tasks-list", (e) => e.textContent);
-      ok("D5 · …and the Tasks-due panel (read regardless of its collapsed state) now shows the case", tasksListTxt.includes("Snooze FromBrief"), tasksListTxt.slice(0, 300));
+      ok("D5 · the snoozed task's row is gone from My Day after the repaint (due date moved past today) — disappears per horizon", !stillOnBrief);
+      // Put it back to due TODAY (the exact function the date-pick calls) and confirm it REAPPEARS.
+      await page.evaluate(({ id, v }) => window.snoozeTaskTo(id, v), { id: d5task, v: todayStr });
+      await wait(page, 700);
+      const backOnBrief = await page.evaluate((s) => !!document.querySelector(s), `[onclick^="briefDone('${d5task}'"]`);
+      ok("D5 · …and REAPPEARS on My Day once its due date is back to today — reappears per horizon", backOnBrief);
 
       ok("D · no console errors", noNewErr(errBefore), JSON.stringify(page.__err));
     }

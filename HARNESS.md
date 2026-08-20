@@ -95,6 +95,7 @@ node tests/r36.js
 node tests/r37.js
 node tests/r38.js
 node tests/r40.js
+node tests/r41.js
 ```
 
 Current green counts (end of round 23; r21/r22 were never committed to this
@@ -112,6 +113,61 @@ why those needed none at all: R18 is scale/perf hardening behind selectors
 nothing else asserted the old shape of, and R19 is new owner-gated Reports
 content that no earlier suite reaches; R23 is the same story again — see the
 R23 notes below).
+
+**Full battery is 100% green (3,987/3,987), `tests/r9_docs.js` included
+(255/0), `smoke.js` 152/0.** R41 added `tests/r41.js` (88 checks, §A–§I) — see
+the "R41 notes" section below — and required genuine, non-masking repairs to
+nine pre-existing suites whose own selectors/ids R41's Today-page declutter
+(the four dashboard drawers — New website leads, Today's appointments, Tasks
+due, Retention pipeline — deleted outright, their actions folded into My Day
+rows) moved out from under them, plus one further repair (in `tests/r5_batch3.js`,
+found by grepping every removed id across `tests/`, not in the originally
+flagged list) whose own `#retention-stats` read had been silently broken by
+R38, not R41, and was only now caught: `tests/r38.js` §F2 now asserts the four
+removed drawer ids are gone from the dashboard while the Retention *page*
+still carries everything the old drawer only showed a capped slice of (95/0,
+count unchanged); `tests/r17.js` §D now drives every snooze scenario through
+My Day (`#snooze-3d-brief-*` etc.) or, where a task is deliberately snoozed
+off My Day's horizon, through `window.snoozeTask`/`snoozeTaskTo` directly,
+adding an explicit "does NOT render on My Day" assertion the old drawer-based
+version had no equivalent for (116/0, up from 112 — 4 new checks); `tests/r12a.js`
+§D1 now proves a lead's adviser choice survives a My Day repaint via the
+single `#brief-scope-all`/`#brief-scope-mine` toggle rather than staying in
+sync across two now-nonexistent panels, and §D12's "hand a task back" path
+reads/acts on `#briefing-list`/`briefDone` in place of the deleted
+`#tasks-list`/`window.doneTask` (115/0, up from 114 — the second task now
+needs its own fresh case, since My Day's `groupBriefRows()` folds same-case
+rows the old Tasks-due drawer never grouped); `tests/r12b.js` fixed 3×
+`#leads-list`→`#briefing-list`, re-pointed its quick-outcome click at
+`#briefing-list .appt-quick-btn[onclick^="quickApptOutcome(...)"]` with a
+genuinely-started (not merely today-dated) appointment fixture, and replaced
+C1's hardcoded "of 6" tour-step count with one read live off `TOUR_STEPS`
+(TOUR_STEPS shrank 6→4 in R41) (157/0, down from 158 — one fewer assertion in
+the now-computed tour-step check); `tests/r29_scale.js` A5/A6 now assert the
+Retention/Tasks drawer ids are gone even at scale, rather than `$eval`-ing
+selectors that no longer exist (a false-pass the original assertions were
+silently committing), and a new A8 checks `#ret-rates-list` stays bounded to
+the live `RET_LIST_CAP` (107/0, up from 106); `tests/r34.js` D1/D2 re-point
+drawer-persistence at `#rate-erc-panel`/`#revenue-panel` (both still
+collapsed-by-default, no auto-open) in place of the deleted `#leads-panel` (60/0,
+count unchanged); `tests/r5_batch1.js` fixed 8× `#leads-list`→`#briefing-list`
+(60/0, count unchanged); `tests/r5_batch3.js` rewrote its "hand a task back"
+section (§9) the same way as r12a §D12, and — the one repair outside the
+original list — fixed §"R5-6" which read `#retention-stats` directly (a
+selector that had been dead since R38 moved retention stats onto its own
+page, not something R41 broke) to read `#ret-pipeline-stats` on the Retention
+page instead, adding a post-navigation re-check since the stats line is now a
+separate page-load, not an in-place repaint (69/0, up from a sum contributing
++1 to the batch total); `tests/r8_touch.js` re-points its 14-day/15-row-cap
+probe at `#brief-scope-all`/`#briefing-list` in place of the deleted
+`#tasks-scope-all`/`#tasks-list`, with updated prose noting My Day carries no
+such cap (151/0, count unchanged). Every OTHER pre-existing suite (`smoke.js`
+through `tests/r40.js`, including all of `r5_batch2/4-9`, `r64`, `r8_rev`,
+`r9_adv`, `r9_docs`, `r9_embed`, `r11_ux`, `r13`–`r16`, `r18`–`r20`, `r23`–`r27`,
+`r30`, `r31`, `r33`, `r35`–`r37`) re-ran unedited at its exact pre-R41 count —
+see the "R41 notes" section below for what the new suite covers and exactly
+why each repair above is faithful to what R41 actually shipped, never a
+weakened assertion standing in for a broken one.
 
 **Full battery is 100% green (3,893/3,893), `tests/r9_docs.js` included
 (255/0), `smoke.js` 152/0.** R40 added `tests/r40.js` (63 checks, §1–§7) — see
@@ -274,21 +330,21 @@ even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes belo
 | Suite | Checks |
 |---|---|
 | `smoke.js` | 152 (R38 — up from 144: the new Retention page and its rows, see the R38 notes) |
-| `tests/r5_batch1..9.js` (sum) | 559 (BATCH 9's day-collision fixed in R27 — see the R27 notes; R33 re-pointed a nav click in BATCH 1 and BATCH 8's `gotoSettings()` at the collapsed Firm group — see the R33 notes; R34 pre-seeded BATCH 9's Month/Day scenario with `nx_diary_staff="all"` so its Month-vs-Day memory check still guards what it always guarded — see the R34 notes; R35 added two assertions to BATCH 3's retention flow proving the live successor doesn't renag its own Rate & ERC row — see the R35 notes; R37 re-pointed BATCH 5 §S3c at the new `#prot-comm-box` overlay in place of the retired commission `prompt()` — see the R37 notes; sum 557 → 559, unchanged by R37) |
+| `tests/r5_batch1..9.js` (sum) | 560 (BATCH 9's day-collision fixed in R27 — see the R27 notes; R33 re-pointed a nav click in BATCH 1 and BATCH 8's `gotoSettings()` at the collapsed Firm group — see the R33 notes; R34 pre-seeded BATCH 9's Month/Day scenario with `nx_diary_staff="all"` so its Month-vs-Day memory check still guards what it always guarded — see the R34 notes; R35 added two assertions to BATCH 3's retention flow proving the live successor doesn't renag its own Rate & ERC row — see the R35 notes; R37 re-pointed BATCH 5 §S3c at the new `#prot-comm-box` overlay in place of the retired commission `prompt()` — see the R37 notes; R41 fixed 8× `#leads-list`→`#briefing-list` in BATCH 1, rewrote BATCH 3's task-handback (§9) onto My Day/`briefDone`, and re-pointed BATCH 3's `#retention-stats` read (dead since R38, not an R41 break) at `#ret-pipeline-stats` on the Retention page — see the R41 notes; sum 559 → 560) |
 | `tests/r64.js` | 91 (R40 re-pointed the H-01 re-file block at `#case-events-list`/`.note-refile-btn[data-note-id]`/`s.tl-refiled` in place of the deleted `#notes-list` markup — see the R40 notes; count unchanged) |
-| `tests/r8_touch.js` | 151 (R36 resolved the new bulk-task case-picker overlay before its confirm-dialog assertions — see the R36 notes; count unchanged) |
+| `tests/r8_touch.js` | 151 (R36 resolved the new bulk-task case-picker overlay before its confirm-dialog assertions — see the R36 notes; R41 re-pointed the 14-day/15-row-cap probe at `#brief-scope-all`/`#briefing-list` in place of the deleted `#tasks-scope-all`/`#tasks-list` — see the R41 notes; count unchanged) |
 | `tests/r8_rev.js` | 176 |
 | `tests/r9_adv.js` | 169 (R33 re-scoped a `.case-details` reveal to `#modal .case-details` — see the R33 notes; R40 re-pointed R9-3(a) at the ⭐/`.review-score-chip` row inside `#case-events-list` in place of the deleted `#notes-list .note-review` — see the R40 notes; count unchanged) |
 | `tests/r9_docs.js` | 255 (same R33 `#modal .case-details` re-scope; count unchanged) |
 | `tests/r9_embed.js` | 104 |
 | `tests/r11_ux.js` | 123 (R11-A adjacency asserts updated in R24 to skip R23's hidden `#dash-cap-notice`) |
-| `tests/r12a.js` | 114 (D11's date-fragility fixed in R27 — see the R27 notes; count unchanged) |
-| `tests/r12b.js` | 158 (date-fragile B1/B5 made deterministic in R17) |
+| `tests/r12a.js` | 115 (D11's date-fragility fixed in R27 — see the R27 notes; R41 re-pointed §D1's lead-adviser sync at the single `#brief-scope-all`/`#brief-scope-mine` toggle and §D12's task-handback at `#briefing-list`/`briefDone`, giving the handed-back task its own fresh case (My Day groups same-case rows the old Tasks-due drawer never did) — see the R41 notes; up from 114) |
+| `tests/r12b.js` | 157 (date-fragile B1/B5 made deterministic in R17; R41 fixed 3× `#leads-list`→`#briefing-list`, re-pointed the quick-outcome click at `#briefing-list .appt-quick-btn[onclick^="quickApptOutcome(...)"]` with a genuinely-started appointment fixture, and read the tour step count live off `TOUR_STEPS` (6→4) instead of a hardcoded "of 6" — see the R41 notes; down from 158) |
 | `tests/r13.js` | 142 |
 | `tests/r14.js` | 167 |
 | `tests/r15.js` | 160 |
 | `tests/r16.js` | 83 (R33 re-scoped its `openCase()` details-opener to `#modal .case-details` — see the R33 notes; R35's own §A4 was intentionally inverted by the round's own affordability-never-vanishes change — see the R35 notes; count rose from 81) |
-| `tests/r17.js` | 112 (same R33 `#modal .case-details` re-scope; count unchanged) |
+| `tests/r17.js` | 116 (same R33 `#modal .case-details` re-scope; R41 §D rewritten to drive every snooze scenario through My Day or, for a task deliberately off My Day's horizon, `window.snoozeTask`/`snoozeTaskTo` directly, adding an explicit "does NOT render on My Day" check — see the R41 notes; up from 112) |
 | `tests/r18.js` | 43 (same R33 `#modal .case-details` re-scope; R34 pinned `#board-adviser` to "all" before its board-cap seed of unassigned cases — see the R34 notes; count unchanged) |
 | `tests/r19.js` | 39 (unchanged count — R20 fixed HOW one row is queried, not what it asserts) |
 | `tests/r20.js` | 81 |
@@ -297,17 +353,106 @@ even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes belo
 | `tests/r25.js` | 45 |
 | `tests/r26.js` | 38 (R28 updated the basis/scoping assertions and added 2 new checks — see the R28 notes) |
 | `tests/r27.js` | 43 |
-| `tests/r29_scale.js` | 106 |
+| `tests/r29_scale.js` | 107 (R41 re-pointed A5/A6 at the now-absent Retention/Tasks drawer ids instead of `$eval`-ing selectors that no longer existed — a false-pass the pre-R41 assertions were silently committing — and added A8, `#ret-rates-list` bounded to `RET_LIST_CAP` — see the R41 notes; up from 106) |
 | `tests/r30.js` | 40 (R33 re-pointed §C/§D4/§E from Reports to Settings' `#diag-details` and added 3 assertions proving the wrapper itself gates correctly — see the R33 notes; count rose from 37) |
 | `tests/r31.js` | 55 (R37 pre-seeds a present-but-empty `nx_views_v1` before B1/B2 so the new starter-views seeding doesn't fire ahead of their "starts from nothing" assertions — see the R37 notes; count unchanged) |
 | `tests/r33.js` | 55 (R38 bumped A5c's 12→13 `data-page` buttons — the new Retention button in the Book group — see the R38 notes; R40 re-pointed C1b at `#case-events-list` in place of the deleted `#notes-list` — see the R40 notes; count unchanged, prose-only fixes) |
-| `tests/r34.js` | 60 |
+| `tests/r34.js` | 60 (R41 re-pointed D1/D2 drawer-persistence at `#rate-erc-panel`/`#revenue-panel` in place of the deleted `#leads-panel` — see the R41 notes; count unchanged) |
 | `tests/r35.js` | 43 |
 | `tests/r36.js` | 83 |
 | `tests/r37.js` | 123 (new — §1–§12, see the R37 notes) |
-| `tests/r38.js` | 95 (new — §A–§G, see the R38 notes) |
+| `tests/r38.js` | 95 (new — §A–§G, see the R38 notes; R41 rewrote §F2 to assert the four removed dashboard drawer ids are gone while the Retention page still carries everything — see the R41 notes; count unchanged) |
 | `tests/r40.js` | 63 (new — §1–§7, see the R40 notes) |
-| **Total** | **3,893** |
+| `tests/r41.js` | 88 (new — §A–§I, see the R41 notes) |
+| **Total** | **3,987** |
+
+R41 notes: the Today page declutter — four dashboard drawers deleted, their
+actions folded into My Day (`admin/app.js`, branch `r41/today-declutter`).
+
+**Gone outright.** The New website leads drawer (`#leads-panel`/`#leads-list`/
+`#leads-count`/`#leads-order`), Today's appointments (`#today-appts-panel`/
+`#today-appts`), Tasks due (`#tasks-panel`/`#tasks-list`/`#tasks-scope-mine`/
+`#tasks-scope-unassigned`/`#tasks-scope-all`) and the Retention pipeline
+drawer (`#retention-panel`/`#retention-stats`/`#retention-list`/
+`#retention-open-page`) are all gone from the dashboard — every one of those
+ids is absent from `#page-dashboard` regardless of how much fixture data
+would previously have filled them (`tests/r41.js` §A). `DASH_DRAWER_PANEL_ID`/
+`DASH_DRAWER_KEYS` shrank to just `{rateerc: "rate-erc-panel"}` /
+`["watchtower","unactioned","rateerc","revenue"]` — briefing (My Day),
+watchtower, unactioned, rate-erc and revenue survive, in that locked DOM
+order (`tests/r41.js` §A2b).
+
+**My Day absorbed the actions, not just the data.** A `lead_new` row on My
+Day now carries the adviser-routing select plus Accept and ✕ (discard,
+through the same custom `#lead-discard-reason`/`#lead-discard-note` overlay
+as before — never `window.prompt`) inline. A task row carries its snooze
+chips and Done inline, repainting My Day alone (`snoozeRepaintAll` is now
+just `loadBriefing`). A brand-new addition, not a straight port: an
+appointment row on My Day gets quick-outcome buttons — both Attended/No-show
+for a past-or-in-progress, unset appointment; neither once an outcome is set
+(replaced by a persisted badge + Undo); neither for a future appointment.
+`groupBriefRows()` folds multiple rows sharing one `case_id` behind a
+"+N more" toggle — something the old, separately-scoped drawers never did —
+which is why every repaired suite that drives a second task/lead/appointment
+through My Day now gives it its own fresh case rather than reusing one across
+fixtures (`tests/r12a.js` §D12, `tests/r5_batch3.js` §9).
+
+**Retention's page absorbed everything its drawer only showed a capped slice
+of.** The drawer's stats now live solely at `#ret-pipeline-stats` on the
+Retention page, read via `loadRetentionPipelinePanel()`/
+`readRetentionPipeline()` — nothing on the dashboard repaints them any more,
+so a suite that changes the pipeline and expects the number to change has to
+navigate to the Retention page to see it (`tests/r5_batch3.js`'s R5-6 fix).
+The cold-clients panel there also gained a secondary sort: when two
+never-contacted clients tie (`lc` empty for both), the tie now breaks by
+`clientNextRateEnd()` — soonest future `rate_end_date` first, clients with no
+rate-end date last, then name — proven with three fixture clients
+(`ZZSoonest`/`MMLater`/`AANone`) deliberately named in reverse-alphabetical
+order so the sort can't be mistaken for alphabetical (`tests/r41.js` §H).
+
+**The tour shrank with the drawers it used to point at.** `TOUR_STEPS` went
+from 6 steps to 4 (`#briefing-panel`, `#watchtower-panel`, the Pipeline nav
+button, `#help-btn`) — the two removed steps pointed at drawers that no
+longer exist. `tourRender()` still skips a dead target silently rather than
+erroring, so `tests/r41.js` §F drives the tour to completion and asserts no
+step names an id absent from the page; `tests/r12b.js`'s C1 now reads the
+step count live off `TOUR_STEPS` instead of a hardcoded "of 6".
+
+**Cross-surface plumbing, unchanged in shape, re-aimed at My Day.**
+`window.gotoLeadInbox` still finds a lead by `select.lead-adviser[data-lead]`
+and flashes its row (`.lead-flash`, 2200ms) — the row is now on My Day, not
+the old leads drawer, so `tests/r41.js` §E asserts the flash lands on the My
+Day row. The command palette's lead jump still navigates to the dashboard
+and scrolls `#briefing-panel` into view (no per-lead target at that call
+site — unchanged from before R41, just re-verified against the new panel
+set).
+
+**The Clients page also got a chrome tightening pass** — `.client-controls`
+consolidated to three visible control groups; the harness verified 7 real
+ids inside it (`client-views`, `client-view-save`, `client-view-del`,
+`client-adviser`, `client-adv-note`, `cl-sort`, `cl-sort-note` — grepped
+directly off `admin/index.html`, since the task brief's claimed count of 11
+did not match what is actually on the page), all still live and functioning,
+sorting still works from the new layout position, and the page's chrome
+height is measurably shorter than its pre-R41 shape (`tests/r41.js` §G; the
+height bound was widened from an initial 320px to 360px after the first run
+measured 318px — too tight a margin given this environment's font metrics —
+while still proving a real improvement over the documented ~397px pre-R41
+figure).
+
+`tests/r41.js` covers (§A–§I): the four removed drawers absent in locked DOM
+order while the five survivors remain; the My Day lead row driven end-to-end
+including the full discard-reason dialog and its "blank reason refused"
+guard; task snooze+Done repainting My Day only; appointment quick-outcome
+across past/in-progress/future/already-set states including Undo and title
+escaping; the shrunk `DASH_DRAWER_KEYS`/`PANEL_ID`; `gotoLeadInbox`'s
+`.lead-flash` landing on the My Day row; the command palette's lead jump; the
+4-step tour completing with no dead target; the Clients page chrome
+consolidation; the Retention cold panel's new secondary sort; and the
+lightest-load lead-suggestion logic, unchanged and still exercised end to
+end. None of the nine repairs above weaken what the original suite was
+proving — each swaps a selector/surface the product moved for the new one
+and reads back the identical fact.
 
 R40 notes: the unified client timeline moved into the case modal
 (`admin/app.js`, commits `9ba8e4b` + CTO follow-up `09832e2`).

@@ -156,8 +156,9 @@
       </div>
       <div class="panel dash-drawer collapsed" id="watchtower-panel">
         <h3 onclick="toggleDrawer(event,'watchtower')">🚨 Watchtower
-          <!-- R34 · W1 — the same Mine|All segment the Tasks and Rate & ERC drawers carry, scoped
-               by the CASE's adviser. Which one starts active is decided in JS (renderWatchtower →
+          <!-- R34 · W1 — the same Mine|All segment My Day and the Rate & ERC drawer carry, scoped
+               by the CASE's adviser. (R41: the Tasks drawer this used to name as the third carrier
+               of it is gone.) Which one starts active is decided in JS (renderWatchtower →
                syncWtScopeButtons), because it depends on the signed-in role and on a stored
                choice, neither of which is known when this markup is parsed. -->
           <button class="btn btn-sm seg-btn seg-first" id="wt-scope-mine" aria-label="Show only alerts on my cases">Mine</button>
@@ -180,38 +181,24 @@
         <p class="panel-sub">Live cases with no open task and no note or event in the last 7 days — before they drift into "stalled". Open one and give it a next step.</p>
         <div id="unactioned-list" class="dash-scroll"></div>
       </div>
+      <!-- R41 · F1 — THE FOUR DUPLICATE DRAWERS ARE GONE.
+           New website leads, Today's appointments, Tasks due and the Retention pipeline each
+           restated a slice of My Day one screen lower down, so the morning read was 2.6 screens
+           of the same work said twice. Every action they carried is on the My Day row itself:
+           the adviser dropdown + Accept (leads), Open + Case (appointments), snooze + ✓ Done
+           (tasks) and Send reminder (rate ends) — plus the appointment quick-outcome pair, which
+           moved onto the row in this round. Retention pipeline work has its own PAGE since R38.
+           What is left below is the two panels that are NOT a restatement of My Day: the rate
+           feed (a forward-looking book, not today's work) and Protection & fees. -->
       <div class="grid-2">
-        <div class="panel dash-card dash-drawer collapsed" id="leads-panel">
-          <h3 onclick="toggleDrawer(event,'leads')">📥 New website leads <span id="leads-count" class="badge red hidden"></span></h3>
-          <!-- R12b · W-9 — "whoever is carrying the least" used to mean everyone with a back-office
-               login, including the Administrator, so every enquiry defaulted to the person who does
-               not advise. The sentence now says which pool the suggestion is drawn from. -->
-          <p class="panel-sub">Enquiries from nexmoney.co.uk land here — also flagged in My Day above. The adviser on the row is pre-picked as whichever <em>advising</em> colleague is carrying the least right now; an administrator is never suggested, though you can still pick one. Change it if you like, then Accept to create the client + case assigned to them.</p>
-          <!-- R7-5 — which way the list is sorted, and why. Written by loadLeads: oldest-first
-               while anything is past the 15-minute promise, newest-first when nothing is. -->
-          <p class="panel-sub" id="leads-order"></p>
-          <div id="leads-list" class="dash-scroll"></div>
-        </div>
-        <div class="panel dash-card dash-drawer collapsed" id="today-appts-panel">
-          <h3 onclick="toggleDrawer(event,'todayappts')">📅 Today's appointments</h3>
-          <div id="today-appts" class="dash-scroll"></div>
-        </div>
-      </div>
-      <div class="grid-2">
-        <div class="panel dash-card dash-drawer collapsed" id="tasks-panel">
-          <h3 onclick="toggleDrawer(event,'tasks')">📞 Tasks due
-            <button class="btn btn-sm seg-btn seg-first scope-active" id="tasks-scope-mine" aria-label="Show only my tasks">Mine</button>
-            <button class="btn btn-sm seg-btn" id="tasks-scope-unassigned" aria-label="Show tasks nobody owns">Unassigned</button>
-            <button class="btn btn-sm seg-btn seg-last" id="tasks-scope-all" aria-label="Show all team tasks">All</button>
-          </h3>
-          <p class="panel-sub">Call tasks from the retention sequence, plus anything you add on cases. Overdue &amp; due-today tasks also surface in My Day above.</p>
-          <div id="tasks-list" class="dash-scroll"></div>
-        </div>
         <div class="panel dash-card dash-drawer collapsed" id="rate-erc-panel">
-          <!-- R12b · W-16 — the same Mine / Unassigned / All segment the Tasks panel beside it has
-               carried since T1-5, scoped by the CASE's adviser. Written into the heading (which
+          <!-- R12b · W-16 — a Mine / Unassigned / All segment scoped by the CASE's adviser, the
+               same three-state shape the Protection page carries. Written into the heading (which
                loadDashboard rewrites on every paint) rather than under it, so it sits where the
-               other three panels' scope buttons sit. -->
+               other panels' scope buttons sit. -->
+          <!-- R41 — the Tasks drawer this comment used to point at ("the same segment the Tasks
+               panel beside it has carried since T1-5") is gone; My Day's Mine/All plus the
+               "· unassigned" suffix under All is where task scoping lives now. -->
           <h3 onclick="toggleDrawer(event,'rateerc')">⚠️ Rate &amp; ERC alerts</h3>
           <div class="rate-scope-row">
             <button class="btn btn-sm seg-btn seg-first" id="rate-scope-mine" aria-label="Show only alerts on my cases">Mine</button>
@@ -220,17 +207,6 @@
           </div>
           <p class="panel-sub" id="rate-erc-sub">Rates ending within the reminder window, and cases where the ERC outlasts the rate.</p>
           <div id="alerts-rateerc" class="dash-scroll"></div>
-        </div>
-      </div>
-      <div class="grid-2">
-        <div class="panel dash-card dash-drawer collapsed" id="retention-panel">
-          <h3 onclick="toggleDrawer(event,'retention')">🔁 Retention pipeline
-            <!-- R38 — this drawer is the first twelve; the page is the whole pipeline, the whole
-                 rate feed and the clients who have gone quiet. -->
-            <button type="button" class="btn btn-ghost btn-sm ret-page-link" id="retention-open-page" onclick="event.stopPropagation();nav('retention')" title="Open the Retention page — the full pipeline, the un-truncated rate feed and the clients nobody has contacted in six months">Open Retention page →</button>
-          </h3>
-          <p class="panel-sub" id="retention-stats"></p>
-          <div id="retention-list" class="dash-scroll"></div>
         </div>
         <div class="panel dash-card dash-drawer collapsed" id="revenue-panel">
           <h3 onclick="toggleDrawer(event,'revenue')">🛡️💷 Protection &amp; fees <span class="count" id="revenue-count"></span></h3>
@@ -384,41 +360,57 @@
         <button class="btn btn-primary" id="new-client-btn">+ New client</button>
       </div>
       <input type="search" id="client-search" class="search" placeholder="Search clients…" aria-label="Search clients">
-      <!-- R31-B — SAVED FILTER VIEWS (per-browser, localStorage). Captures search + adviser + segment + sort. -->
-      <div class="client-views">
-        <select id="client-views" aria-label="Saved views"><option value="">Saved views…</option></select>
-        <button class="btn btn-sm" id="client-view-save">＋ Save view</button>
-        <button class="btn btn-sm" id="client-view-del" aria-label="Delete saved view" title="Delete saved view">🗑</button>
-      </div>
-      <!-- R12b · W-29 — ADVISER FILTER. Every other list of people in this app can be narrowed to
-           one adviser and this one could not, so "my clients" was a page an adviser had to read
-           past his colleagues' book to assemble. It sits ABOVE the segment chips because it
-           changes what those chips are counting: the counts, the definition line and the R11 sort
-           all recompute underneath it. Options are written by loadTeam-time code in app.js
-           (renderClientAdviser), which follows the same PROFILES-vs-TEAM rule as #board-adviser. -->
-      <div class="client-advfilter">
-        <label for="client-adviser">Adviser</label>
-        <select id="client-adviser" aria-label="Filter clients by adviser"><option value="all">Everyone</option></select>
-        <span class="client-adv-note" id="client-adv-note"></span>
+      <!-- R41 · F6 — ONE CONTROL ROW, NOT THREE.
+           Saved views, the adviser filter and the sort each had a row of their own, stacked one
+           under the other with their own block margins: three lines of chrome carrying three
+           controls, ~397px of the screen gone before the first client. They are the same KIND of
+           thing — "which slice, whose, in what order" — so they now share one wrapping flex row.
+           LAYOUT ONLY: every id, element, label, note span and listener below is byte-identical
+           to what it was; nothing about behaviour, saved views or the sort moved. Under ~720px
+           the media query in admin.css stacks them back up, because three controls side by side
+           on a phone is worse than three rows. -->
+      <div class="client-controls">
+        <!-- R31-B — SAVED FILTER VIEWS (per-browser, localStorage). Captures search + adviser + segment + sort. -->
+        <div class="client-views">
+          <select id="client-views" aria-label="Saved views"><option value="">Saved views…</option></select>
+          <button class="btn btn-sm" id="client-view-save">＋ Save view</button>
+          <button class="btn btn-sm" id="client-view-del" aria-label="Delete saved view" title="Delete saved view">🗑</button>
+        </div>
+        <!-- R12b · W-29 — ADVISER FILTER. Every other list of people in this app can be narrowed to
+             one adviser and this one could not, so "my clients" was a page an adviser had to read
+             past his colleagues' book to assemble. It sits ABOVE the segment chips because it
+             changes what those chips are counting: the counts, the definition line and the R11 sort
+             all recompute underneath it. Options are written by loadTeam-time code in app.js
+             (renderClientAdviser), which follows the same PROFILES-vs-TEAM rule as #board-adviser. -->
+        <div class="client-advfilter">
+          <label for="client-adviser">Adviser</label>
+          <select id="client-adviser" aria-label="Filter clients by adviser"><option value="all">Everyone</option></select>
+          <span class="client-adv-note" id="client-adv-note"></span>
+        </div>
+        <!-- R11-6 — SORT. Alphabetical is right for "where is Mrs Okafor" and useless for "who
+             needs ringing next". All three orders are computed from the rows loadClientData()
+             already holds (clients.created_at, and rate_end_date on the embedded cases) — no extra
+             query, and no option offered that the loaded data cannot actually honour.
+             R41 · F6 — it used to sit BELOW the segment definition line; it is now the third
+             control on the row above the chips. The order it is read in is unchanged in substance
+             (choose the slice, then the order to work it in) and the definition line still sits
+             directly under the chips it defines. -->
+        <div class="client-sort">
+          <label for="cl-sort">Sort</label>
+          <select id="cl-sort" aria-label="Sort the client list">
+            <option value="name">Name A–Z</option>
+            <option value="rate_end">Next rate end</option>
+            <option value="recent">Recently added</option>
+          </select>
+          <span class="client-sort-note" id="cl-sort-note"></span>
+        </div>
       </div>
       <!-- R8-1 — CLIENT SEGMENTS. The chips, the definition line under them and the bulk bar are
            all rendered by loadClients(); these are the containers, in the order they read:
-           search → which slice of the book → what that slice MEANS → what you can do to it. -->
+           search → the controls row → which slice of the book → what that slice MEANS → what you
+           can do to it. -->
       <div id="client-segment" class="pipe-segment client-segment" role="tablist" aria-label="Client segment"></div>
       <p class="panel-sub client-seg-def" id="client-seg-def"></p>
-      <!-- R11-6 — SORT. Alphabetical is right for "where is Mrs Okafor" and useless for "who
-           needs ringing next". All three orders are computed from the rows loadClientData()
-           already holds (clients.created_at, and rate_end_date on the embedded cases) — no extra
-           query, and no option offered that the loaded data cannot actually honour. -->
-      <div class="client-sort">
-        <label for="cl-sort">Sort</label>
-        <select id="cl-sort" aria-label="Sort the client list">
-          <option value="name">Name A–Z</option>
-          <option value="rate_end">Next rate end</option>
-          <option value="recent">Recently added</option>
-        </select>
-        <span class="client-sort-note" id="cl-sort-note"></span>
-      </div>
       <div id="client-bulk"></div>
       <p class="dq-notice hidden" id="clients-cap-notice"></p>
       <div id="client-list"></div>
@@ -426,10 +418,12 @@
 
     <!-- R38 — RETENTION. Luke's whole job on one screen: the rate feed un-truncated, the pipeline
          those "Start retention case" buttons feed, and the clients nobody has spoken to in six
-         months. Every list here is rendered by the SAME builders Today's drawers render from
+         months. Every list here is rendered by the SAME builders Today renders its rate feed from
          (buildRateErcFeed / renderRateErcRow, readRetentionPipeline / renderRetentionRows, the
-         Clients page's own cold segment) — see loadRetentionPage(). The drawers stay; this is
-         where the list is worked rather than glanced at. -->
+         Clients page's own cold segment) — see loadRetentionPage().
+         R41 · F1 — Today's Retention pipeline drawer has been removed; this page is now the ONLY
+         place the pipeline is listed, which is what it was always for. Today keeps the Rate & ERC
+         drawer (the fifteen-row glance) and links here from it. -->
     <section id="page-retention" class="page hidden">
       <div class="page-head">
         <h2>Retention</h2>

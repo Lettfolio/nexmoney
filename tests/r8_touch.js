@@ -629,12 +629,13 @@ function parseCsvLine(line) {
       const again = await page.evaluate(() => window.__mock.queueCommsExtras());
       eq("R8-4 · a second run writes no duplicate call", again.annual_review_tasks, 0);
 
-      /* …and it renders in My Day and in the case, like any other task */
-      /* My Day's task panel shows the first 15 of the fortnight, oldest due date
-         first, and the fixtures carry a wall of overdue work in front of a task
-         due today. Close that backlog so the new call is on screen rather than
-         behind an "…and N more due" line — the point of the check is the
-         RENDERING of the title, not the ordering, which is untouched this round. */
+      /* …and it renders in My Day and in the case, like any other task.
+         R41 · F1 — the Tasks-due drawer (#tasks-panel/#tasks-list, its own 14-day horizon, 15-row
+         cap and #tasks-scope-* buttons) is gone; #briefing-list is now the only place a task
+         renders. It carries no such cap (get_briefing simply returns every open overdue/due-today
+         task), so the backlog-clearing step below is no longer strictly needed to keep the new
+         call off a truncated tail — kept anyway so the row cannot land folded inside another
+         case's "+N more" group toggle, which would obscure the title this check actually reads. */
       await page.evaluate(async () => {
         const db = window.__mockDb;
         const today = localDateStr();
@@ -647,12 +648,13 @@ function parseCsvLine(line) {
       });
       await page.evaluate(() => window.nav("dashboard"));
       await page.waitForTimeout(1400);
-      /* the tasks are on the CASES' advisers, which is the point — so read the
-         panel in the scope that shows the team's work, exactly as an owner would */
-      await page.click("#tasks-scope-all");
+      /* the tasks are on the CASES' advisers, which is the point — p4 is the owner and My Day
+         already defaults to All for that role (loadTeam's own role-default rule), but the scope
+         is clicked explicitly anyway so this assertion never depends on that default silently. */
+      await page.click("#brief-scope-all");
       await page.waitForTimeout(1000);
-      const myDay = await page.$eval("#tasks-list", (e) => e.textContent.replace(/\s+/g, " ").trim());
-      ok("R8-4 · the annual-review task renders in My Day's task list, unmangled",
+      const myDay = await page.$eval("#briefing-list", (e) => e.textContent.replace(/\s+/g, " ").trim());
+      ok("R8-4 · the annual-review task renders on My Day, unmangled",
         /Annual review call/.test(myDay), myDay.slice(0, 300));
       ok("R8-4 · …with the em dash intact (nothing chokes on the title)", /Annual review call —/.test(myDay), myDay.slice(0, 300));
       const openCaseId = arTasks[0].case_id;

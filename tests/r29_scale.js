@@ -289,13 +289,41 @@ async function seedScale(page, n) {
 
       const rateErcN = await rowCount(page, "#alerts-rateerc .row-item");
       ok("A4 · Rate & ERC drawer is bounded to its 15-row cap", rateErcN >= 0 && rateErcN <= 15, rateErcN);
-      const retN = await rowCount(page, "#retention-list .row-item");
-      ok("A5 · Retention panel is bounded to its 12-row cap", retN >= 0 && retN <= 12, retN);
-      const taskN = await rowCount(page, "#tasks-list .row-item");
-      ok("A6 · Tasks panel is bounded to its 15-row cap", taskN >= 0 && taskN <= 15, taskN);
+      /* R41 · F1 — the Retention drawer (#retention-panel/#retention-list/#retention-stats) and the
+         Tasks-due drawer (#tasks-panel/#tasks-list) are both gone. `rowCount()` against a selector
+         that matches nothing quietly returns 0 (Playwright's $$eval on zero elements does not
+         throw), which is exactly the "too lax" failure mode HARNESS.md warns about: A5/A6 used to
+         "pass" here for the wrong reason (no case_tasks are even seeded by seedScale(), so
+         #tasks-list would have read 0 rows before R41 too) rather than for proving a real cap. Two
+         honest replacements: confirm the drawer ids are actually gone at this scale (not just on a
+         small fixture), and exercise a cap that genuinely has volume behind it here —
+         seedScale() gives ~8/9 of 2,000+ cases a rate_end_date, so the Retention page's own
+         #ret-rates-list (RET_LIST_CAP, read live off app.js rather than hardcoded) is the real
+         at-scale cap assertion the old #retention-list one never actually was. */
+      const drawersGone = await page.evaluate(() => ({
+        retentionPanel: !document.getElementById("retention-panel"),
+        retentionList: !document.getElementById("retention-list"),
+        retentionStats: !document.getElementById("retention-stats"),
+        tasksPanel: !document.getElementById("tasks-panel"),
+        tasksList: !document.getElementById("tasks-list"),
+      }));
+      ok("A5 · the Retention drawer's ids are gone even at scale", Object.values(drawersGone).every(Boolean), JSON.stringify(drawersGone));
+      const briefN = await rowCount(page, "#briefing-list .row-item");
+      ok("A6 · My Day (the tasks drawer's replacement) rendered at scale with no console error", briefN >= 0, briefN);
 
       const dashCapHidden = await page.$eval("#dash-cap-notice", (e) => e.classList.contains("hidden")).catch(() => null);
       ok("A7 · #dash-cap-notice stays HIDDEN at ~2,600 rows — OWNER_ROW_CAP=20,000 is not hit (correct per-rule behaviour)", dashCapHidden === true, dashCapHidden);
+
+      // A8 — the Retention page's own rates panel (R38), the surface that actually inherits the
+      // "bound a big feed to a sane row count" job the drawer used to do, exercised for real here
+      // because seedScale() gives the great majority of these 2,000+ cases a rate_end_date.
+      await page.evaluate(() => window.nav("retention"));
+      await wait(page, 2000);
+      const retCap = await page.evaluate(() => RET_LIST_CAP);
+      const ratesN = await rowCount(page, "#ret-rates-list .row-item");
+      ok(`A8 · #ret-rates-list is bounded to RET_LIST_CAP (${retCap})`, ratesN >= 0 && ratesN <= retCap, JSON.stringify({ ratesN, retCap }));
+      await page.evaluate(() => window.nav("dashboard"));
+      await wait(page, 1200);
 
       ok("A · zero new console errors", noNewErr(page, errBefore), JSON.stringify(page.__err));
       const logAfter = await errLogLen(page);

@@ -493,7 +493,7 @@ const fmtM = (n) => (n == null || n === "" || isNaN(Number(n)) ? "—" : Number(
 // Exact-pence money — for fee figures on the case detail / evidence pack only. Dashboards keep fmtM (whole pounds).
 const fmtM2 = (n) => (n == null || n === "" || isNaN(Number(n)) ? "—" : Number(n).toLocaleString("en-GB", { style: "currency", currency: "GBP", minimumFractionDigits: 2, maximumFractionDigits: 2 }));
 let settings = {};
-let ME = null, TEAM = [], tasksScope = "mine";
+let ME = null, TEAM = [];   // R41 · F1 — `tasksScope` went with the Tasks-due drawer it filtered
 /* ---------- BACKEND-R4 §1 — role awareness ----------
    MY_ROLE is resolved ONCE at sign-in from the my_role() RPC (never by reading profiles.role
    directly), so the UI's idea of the caller's role is literally the same value the RLS policies
@@ -635,18 +635,19 @@ function adviserOptionsHtml(placeholder) {
      exactly TEAM — the same STAFF_ROLES list the options are built from — so a
      leaver (role "none") can never be suggested, and neither can an introducer.
 
-   LOAD is open cases + open tasks, both taken from data the Today screen has
-   ALREADY fetched for its own panels (loadDashboard's cases read and
-   loadTasks' fetch), so the suggestion costs no extra round-trip. Both bases
-   are stated in the select's tooltip rather than left to be guessed at:
-   "open" cases means every stage except completed / not proceeding, and "open"
-   tasks means undone tasks inside the fortnight horizon the Tasks panel itself
-   works to. Where neither has loaded (the panel painted outside a dashboard
-   load, or both queries failed), there is no answer and the round-5 default —
-   me — is used unchanged.
+   LOAD is open cases + open tasks, both taken from reads the Today screen
+   already makes (loadDashboard's cases read and publishAdviserTaskLoad), so
+   the suggestion costs no extra round-trip. Both bases are stated in the
+   select's tooltip rather than left to be guessed at: "open" cases means every
+   stage except completed / not proceeding, and "open" tasks means undone tasks
+   inside a fortnight horizon (R41 · F1 — that horizon used to belong to the
+   Tasks-due drawer's own fetch; the drawer is gone, the horizon and the query
+   moved into publishAdviserTaskLoad unchanged). Where neither has loaded (the
+   list painted outside a dashboard load, or both queries failed), there is no
+   answer and the round-5 default — me — is used unchanged.
    ========================================================================== */
 let advLoadCases = null;   // adviser id → open cases   (published by loadDashboard)
-let advLoadTasks = null;   // adviser id → open tasks   (published by loadTasks)
+let advLoadTasks = null;   // adviser id → open tasks   (published by publishAdviserTaskLoad)
 function adviserLoadMap() {
   /* BOTH halves or none. A "lightest load" claim computed off a caseload with the tasks missing
      (or the other way round, when one of the two reads failed) is a ranking of half the work,
@@ -864,8 +865,14 @@ function leadRoutingHtml(leadId) {
 /* ==========================================================================
    R12a · K-1/K-2 — ONE LEAD, ONE ANSWER TO "WHO IS THIS GOING TO?"
 
-   The same lead is on screen TWICE — as a My Day `lead_new` row and as a row
-   in the New-website-leads drawer — and until now each copy carried its OWN
+   (R41 · F1 — HISTORICAL from here down: the drawer this describes has been
+   removed, so a lead now has exactly ONE select on screen. The machinery below
+   is kept in full because it is still what reconciles a select against the
+   session's stored choice across repaints, and because Accept must still read
+   the LEAD's answer rather than the clicked row's copy of it.)
+
+   The same lead was on screen TWICE — as a My Day `lead_new` row and as a row
+   in the New-website-leads drawer — and until then each copy carried its OWN
    `<select class="lead-adviser">`. The two never spoke to each other, so a
    reassignment made in one place was invisible in the other, and Accept read
    whichever select sat beside the button that happened to be clicked. Change
@@ -1006,9 +1013,11 @@ window.openReassign = function (ev, taskId, currentId, reloadKey) {
   const sel = document.createElement("select");
   sel.className = "task-reassign";
   /* R5-54 — reassigning was a one-way door: a task picked up by mistake, or handed back because it
-     belongs to whoever gets to it first, could not be returned to the Unassigned queue the Tasks
-     panel already has a scope for. Only this chip offers it (a case's own "Assigned to" select and
-     the appointment "Who" select have their own rules). */
+     belongs to whoever gets to it first, could not be returned to the Unassigned queue at all.
+     Only this chip offers it (a case's own "Assigned to" select and the appointment "Who" select
+     have their own rules). R41 · F1 — the Tasks-due drawer's Unassigned scope, named here as where
+     that queue was read, is gone; ownerless work is now labelled "· unassigned" on its My Day row
+     under the All scope. */
   sel.innerHTML = `<option value=""${currentId ? "" : " selected"}>— unassigned —</option>` + assigneeOptionsHtml(currentId);
   const restore = (id) => {
     if (!sel.parentNode) return;
@@ -1031,7 +1040,11 @@ window.reassignTask = async function (taskId, adviserId, reloadKey) {
   const { error } = await db.from("case_tasks").update({ assigned_to: adviserId || null }).eq("id", taskId);
   if (error) { toast("Error: " + error.message); return false; }
   toast(adviserId ? "Task assigned to " + staffName(adviserId) : "Task returned to Unassigned");
-  if (reloadKey === "tasks") loadTasks();
+  /* R41 · F1 — "tasks" used to mean the Today "Tasks due" drawer, which is gone; the Today surface
+     a reassignment can change under is now My Day. The hook stays keyed (rather than being folded
+     into an unconditional repaint) because the case modal passes "" and repaints itself — a blind
+     loadBriefing() from there would paint a list that is not on screen. */
+  if (reloadKey === "tasks") loadBriefing();
   return true;
 };
 // Compact inline variant for note/timeline meta lines (reuses .chip, shrunk inline — no new CSS).
@@ -3675,18 +3688,23 @@ function panelCount(listSel, n, hot = false) {
 
 /* ---------- Today drawers (BUILD 4b) ---------- */
 // Click on a drawer's <h3> collapses/expands it (clicks on buttons inside the header — e.g.
-// "Run checks", the Tasks "Mine/All" toggle — are left alone so they keep working as before).
+// "Run checks", the Rate & ERC sort toggle — are left alone so they keep working as before).
 // The open/closed state lives only on the DOM (the .collapsed class), so it survives the
 // panel's own re-renders (which only replace the inner list, never the drawer element) for the
 // rest of the session; dashDrawerTouched just remembers that the user has taken manual control
-// of a drawer that would otherwise be auto-opened/closed (Watchtower, New website leads).
+// of a drawer that would otherwise be auto-opened/closed (Watchtower, No next action).
 /* R34 · W3/L5 — AND NOW IT SURVIVES THE RELOAD.
-   Two drawer keys do not follow the "<key>-panel" convention their toggleDrawer call implies
-   ('todayappts' → #today-appts-panel, 'rateerc' → #rate-erc-panel). toggleDrawer never noticed
-   because it finds its panel from the clicked header; anything that has to find a drawer by key
-   alone (the stored-state pass below) does, so the exceptions are written down once here. */
-const DASH_DRAWER_PANEL_ID = { todayappts: "today-appts-panel", rateerc: "rate-erc-panel" };
-const DASH_DRAWER_KEYS = ["watchtower", "unactioned", "leads", "todayappts", "tasks", "rateerc", "retention", "revenue"];
+   One drawer key does not follow the "<key>-panel" convention its toggleDrawer call implies
+   ('rateerc' → #rate-erc-panel). toggleDrawer never noticed because it finds its panel from the
+   clicked header; anything that has to find a drawer by key alone (the stored-state pass below)
+   does, so the exception is written down once here.
+   R41 · F1 — the 'todayappts' → #today-appts-panel exception went with that drawer, as did the
+   'leads', 'tasks' and 'retention' keys below. The MECHANISM is untouched: any nx_drawer_leads /
+   _tasks / _todayappts / _retention left in a browser's localStorage is now an orphan that nothing
+   reads, which is harmless and deliberately not migrated — a one-off cleanup pass would be more
+   code, and more risk, than the four dead strings it deletes. */
+const DASH_DRAWER_PANEL_ID = { rateerc: "rate-erc-panel" };
+const DASH_DRAWER_KEYS = ["watchtower", "unactioned", "rateerc", "revenue"];
 const drawerPanelEl = (key) => document.getElementById(DASH_DRAWER_PANEL_ID[key] || key + "-panel");
 const drawerStoreKey = (key) => "nx_drawer_" + key;
 /* "open" | "closed" | null. Null means the user has never made a choice about this drawer, which
@@ -3965,9 +3983,10 @@ async function loadTeam(session) {
   // Safe degradation: if this login still isn't in TEAM (profile row missing/renamed role), a
   // "Mine" scope can only ever show an empty screen — start everything on "All" instead.
   if (!ME) {
-    briefingScope = "all"; tasksScope = "all"; protScope = "all";
-    ["#brief-scope-mine", "#tasks-scope-mine", "#prot-scope-mine"].forEach((s) => $(s).classList.remove("scope-active"));
-    ["#brief-scope-all", "#tasks-scope-all", "#prot-scope-all"].forEach((s) => $(s).classList.add("scope-active"));
+    // R41 · F1 — the Tasks-due drawer's scope went with the drawer; My Day and Protection remain.
+    briefingScope = "all"; protScope = "all";
+    ["#brief-scope-mine", "#prot-scope-mine"].forEach((s) => $(s).classList.remove("scope-active"));
+    ["#brief-scope-all", "#prot-scope-all"].forEach((s) => $(s).classList.add("scope-active"));
   } else if (isAdminOrOwner()) {
     /* R12b · W-7 — WHOSE DAY THIS SCREEN OPENS ON, decided by the job the reader actually does.
        The Today strip now follows this same Mine/All toggle (see loadDashboard), and an adviser
@@ -4290,12 +4309,20 @@ function openHelpPanel() {
         those call the RPC. A stray click while it's up just means it may
         offer itself again next time the flag is still null.
    ========================================================================== */
+/* R41 · F1 — TWO STEPS FEWER, BECAUSE TWO SCREENS FEWER.
+   The tour used to walk past My Day and then stop at the Tasks-due and Today's-appointments
+   drawers to explain them. Both drawers are gone, so both steps are deleted rather than
+   re-pointed: the My Day step no longer describes a summary of four screens below it, it
+   describes the four screens. The one genuinely useful sentence each carried — tasks are things
+   to DO vs the diary is where you are supposed to BE, and there is no "new appointment" button on
+   Today — moves into the My Day body, which is where a reader now needs it.
+   (tourRender already skips a step whose target has vanished — `if (!targetEl) { idx++; render }`
+   — so a stale step would have degraded quietly rather than breaking. Fixing the LIST is still
+   the fix: a tour that silently skips two of its six steps is a tour nobody edited.) */
 const TOUR_STEPS = [
-  { target: "#briefing-panel", title: "My Day", body: "This is the merged feed of everything today — tasks due, appointments, new leads and rate alerts, all in one list instead of four separate screens." },
-  { target: "#tasks-panel", title: "Tasks vs Diary", body: "Tasks are things to DO — chase a document, make a call — each with a due date. The Diary (its own page in the nav) is where you're supposed to BE: appointments with a time. Different questions, kept as different lists." },
+  { target: "#briefing-panel", title: "My Day", body: "Everything today in one list — tasks due, appointments, new leads and rate alerts — with the action on the row: tick a task off, snooze it, accept a lead, record who turned up. Tasks are things to DO, each with a due date; the Diary (its own page in the nav) is where you're supposed to BE. There's no “new appointment” button here — booking one lives INSIDE a case." },
   { target: "#watchtower-panel", title: "Watchtower", body: "Automatic checks across the whole book. “Resolves itself when fixed” means an alert isn't a task to tick off by hand — fix the thing it's complaining about (assign an adviser, record a rate end) and it clears itself next time checks run." },
   { target: "#topnav button[data-page=\"pipeline\"]", title: "Where cases are created", body: "New cases start on Pipeline, with the “+ New case” button there — not on Today." },
-  { target: "#today-appts-panel", title: "Booking an appointment", body: "There's no “new appointment” button on Today. Booking one lives INSIDE a case — open the case, then book it from there." },
   { target: "#help-btn", title: "Need a definition?", body: "ERC, GI, DIP, Watchtower and the rest are explained here — and you can replay this tour from the same button, any time." },
 ];
 let tourFired = false;   // this page session only — separate from the DB flag
@@ -5220,11 +5247,11 @@ window.toggleRateErcSort = function () {
 /* ==========================================================================
    R12b · W-16 — THE RATE & ERC DRAWER GETS THE SAME SCOPE AS ITS SIBLINGS.
 
-   My Day, Tasks due and the Protection page all carry a Mine / (Unassigned) /
-   All segment. This drawer carried none, so Wayne's "rates ending soon" was
+   My Day and the Protection page both carry a Mine / (Unassigned) / All
+   segment. This drawer carried none, so Wayne's "rates ending soon" was
    the whole firm's — thirty-odd rows, most of them Luke's, with a "Start
    retention case" button on each that would have created a case on somebody
-   else's client. Same three-state segment the Tasks panel uses, scoped by the
+   else's client. Same three-state segment the Protection page uses, scoped by the
    CASE's adviser (v_alerts has no owner column of its own — the map comes from
    the cases read loadDashboard already makes), same role-based default as the
    Today strip above.
@@ -6036,7 +6063,11 @@ async function loadDashboard() {
     renderLoadError("#kpi-row", casesErr || alertsErr, loadDashboard);
     renderLoadError("#alerts-rateerc", casesErr || alertsErr, loadDashboard);
     // The independent dashboard widgets self-report their own errors.
-    loadRetention(); loadTasks(); loadProtection(); loadLeads(); loadTodayAppts(); loadBriefing(); loadWatchtower(); loadUnactioned();
+    // R41 · F1 — four of the eight loaders that used to be listed here were the removed drawers;
+    // the work they showed is in loadBriefing, which is still fired (and still self-reports).
+    // publishAdviserTaskLoad is not a widget at all — it is the lead-routing load map, and this
+    // branch is exactly where a lead row is about to ask for it.
+    publishAdviserTaskLoad(); loadProtection(); loadBriefing(); loadWatchtower(); loadUnactioned();
     return;
   }
   renderOwnerCapNotice("#dash-cap-notice", ownerCapHit(cases)); // R23 — never silently truncate the KPI book
@@ -6112,15 +6143,15 @@ async function loadDashboard() {
       + rateErcDedupeNote(rateFeed.collapsed)
     : '<div class="empty">Nothing ending in the reminder window, and no ERC conflicts. 👍</div>';
 
-  loadRetention();
-  /* R7-5 — awaited, and the only one that is: loadTasks publishes the task half of the routing
-     load, and the two panels underneath it paint the lead-routing selects. Racing them would give
-     the first paint of the inbox a cases-only view of who is busiest, which would then differ from
-     the same select after any repaint. Everything else still runs unawaited, as before. */
-  await loadTasks();
+  /* R7-5 — awaited, and the only one that is: this publishes the task half of the routing load,
+     and the list underneath it paints the lead-routing selects. Racing them would give the first
+     paint of My Day a cases-only view of who is busiest, which would then differ from the same
+     select after any repaint. Everything else still runs unawaited, as before.
+     R41 · F1 — was `await loadTasks()`; the drawer went, the load map it published did not. */
+  await publishAdviserTaskLoad();
   loadProtection();
-  loadLeads();
-  loadTodayAppts();
+  // R41 · F1 — loadRetention / loadLeads / loadTodayAppts all painted a restatement of My Day one
+  // screen lower down. One paint now, not four.
   loadBriefing();
   // T1-11 — "resolves itself when fixed" is what #watchtower-sub promises, but the checker only ran
   // from the Run checks button, so a list the administrator was actively working never shrank.
@@ -6168,21 +6199,11 @@ async function loadDashboard() {
   updateRevenueDrawerCount();
 }
 
-async function loadRetention() {
-  const { data: rets, error } = await readRetentionPipeline();
-  if (error) { renderLoadError("#retention-list", error, loadRetention); return; }
-  /* R38 — the drawer's ONE opinion is the twelve-row slice; everything else (what open/won/lost
-     mean, the conversion figure, the row) comes from the shared builders the Retention page also
-     renders from. It stays unscoped: this drawer never had a scope control and Today is not where
-     that decision is made. */
-  const st = retentionPipelineStats(rets);
-  $("#retention-stats").textContent = retentionStatsLine(st);
-  $("#retention-list").innerHTML = st.open.length
-    ? (await renderRetentionRows(st.open, 12))
-      + (st.open.length > 12 ? `<div class="empty">…and ${st.open.length - 12} more in the pipeline — <button type="button" class="dash-notice-link" onclick="nav('retention')">see the Retention page</button>.</div>` : "")
-    : '<div class="empty">No open retention opportunities. One is created for you when a completed client\'s rate enters the reminder window; for a rate that has already ended, use Start retention case on the completed case (see Rate &amp; ERC alerts above).</div>';
-  panelCount("#retention-list", st.open.length);
-}
+/* R41 · F1 — loadRetention() (Today's "🔁 Retention pipeline" drawer, #retention-list /
+   #retention-stats) is gone. It was the first twelve rows of the list the R38 Retention page shows
+   in full, and the drawer's own heading already linked there. Nothing it rendered was unique: the
+   builders below (readRetentionPipeline / retentionPipelineStats / retentionStatsLine /
+   renderRetentionRows) are untouched and are what the page renders from. */
 
 /* =========================================================================
    R38 — THE RETENTION PAGE.
@@ -6342,9 +6363,33 @@ async function loadRetentionCold(scope) {
   const cold = coldClients(data, adviser);
   const todayStr = localDateStr();
   /* Longest silence first — a client with nothing on record in the 210-day comms window sorts
-     above one last spoken to in March, because that is the order the list is worked in. */
+     above one last spoken to in March, because that is the order the list is worked in.
+     R41 · L8 — AND WITHIN "NEVER SPOKEN TO", THE ONE WHOSE RATE ENDS SOONEST.
+     That first group is the top of the list and it is the biggest: everybody in it has an empty
+     lcAt, so they all compared equal and the stable sort left them in the `.order("last_name")`
+     the read arrived in. Alphabetical is not a work order — it put the client whose fix expires
+     next Tuesday behind a "Z" surname with nothing maturing for two years. So when BOTH sides are
+     empty, the tie is broken by the soonest rate end across the client's cases; a client with
+     none maturing ahead of them has no such claim and sorts after those who do, then by name so
+     the order is still stable and still looks deliberate. No new read — clientNextRateEnd() works
+     off the `cases.rate_end_date` the clients embed already carries, and it is the same date the
+     row itself prints ("next rate ends …") and the same "rate coming" badge, so what the list is
+     sorted by is visible ON the rows it sorted. */
   const lcAt = (c) => { const lc = data.last.get(c.id); return lc ? String(lc.at) : ""; };
-  const sorted = cold.slice().sort((a, b) => lcAt(a).localeCompare(lcAt(b)));
+  const nextRateKey = (c) => { const n = clientNextRateEnd(c, todayStr); return n ? n.date : ""; };
+  const nameKey = (c) => [c.last_name, c.first_name].filter(Boolean).join(" ").toLowerCase();
+  const sorted = cold.slice().sort((a, b) => {
+    const la = lcAt(a), lb = lcAt(b);
+    const primary = la.localeCompare(lb);
+    if (primary !== 0 || la !== "") return primary;   // unchanged for everyone with a last contact
+    const ra = nextRateKey(a), rb = nextRateKey(b);
+    if (ra !== rb) {
+      if (!ra) return 1;      // no future rate end — nothing to ring about first
+      if (!rb) return -1;
+      return ra < rb ? -1 : 1;
+    }
+    return nameKey(a).localeCompare(nameKey(b));
+  });
   const sub = $("#ret-cold-sub");
   if (sub) sub.textContent = clientColdDefinition(clientContactCutoff()) + ` Showing ${scope === "mine" ? "clients with at least one case assigned to you" : "every adviser's clients"}.`;
   /* The hand-off. The Clients page is where this list is actually worked (bulk task, export, the
@@ -6637,7 +6682,9 @@ window.startRetentionCase = async function (caseId, ev, opts) {
        where the case just created belongs. Repainting the dashboard's drawers instead would leave
        the operator looking at a screen that had not noticed what they just did. */
     else if (!$("#page-retention").classList.contains("hidden")) loadRetentionPage();
-    else { loadRetention(); loadBriefing(); }
+    // R41 · F1 — was `loadRetention(); loadBriefing();`. The retention drawer is gone; the new
+    // case's call task is a My Day row, which is the one Today surface left to repaint.
+    else loadBriefing();
     return { status: warn.length ? "created_with_warnings" : "created", message: outMsg, caseId, warn };
   } finally {
     RETENTION_INFLIGHT.delete(caseId);
@@ -6664,49 +6711,36 @@ window.markRateReminded = async function (caseId, ev) {
   }
 };
 
-async function loadTasks() {
+/* ==========================================================================
+   R41 · F1 — loadTasks() (Today's "📞 Tasks due" drawer, #tasks-list) is gone.
+
+   Every task it listed is already a My Day row — get_briefing returns overdue and due-today tasks
+   with the same snooze controls, the same ✓ Done and the same Open — and the drawer's own sub said
+   so ("Overdue & due-today tasks also surface in My Day above"). Its Mine / Unassigned / All
+   segment is replaced by My Day's Mine / All plus the "· unassigned" suffix every ownerless row
+   carries under All (R5-35), which is the accepted swap.
+
+   ONE thing that fetch did was NOT a duplicate, and it survives here: it published the TASK half
+   of the lead-routing load map (R7-5). Deleting it outright would have left adviserLoadMap()
+   returning null for the rest of the session, so every "(lightest load)" suggestion on every lead
+   row would silently fall back to "me" — the exact leak R7-5 exists to close, reintroduced as a
+   side effect of removing a list. So the count-only half of the query stays: same table, same
+   horizon (undone, due inside the fortnight — overdue included), no DOM, two columns instead of
+   five. Still awaited from loadDashboard, and for the same reason it always was: the lead rows
+   that read this map paint immediately afterwards.
+   ========================================================================== */
+async function publishAdviserTaskLoad() {
   const horizon = localDateStr(Date.now() + 14 * 86400000);
   const { data: raw, error } = await db.from("case_tasks")
-    .select("id,title,due_date,case_id,assigned_to,cases(clients!client_id(first_name,last_name))")
+    .select("id,assigned_to")
     .is("done_at", null)
     .lte("due_date", horizon)
-    .order("due_date")
-    .limit(200); // sane fetch cap; the "mine" scope filter is applied client-side below, so limit AFTER filtering (was .limit(40) which truncated busy advisers' lists/badges before scoping)
-  if (error) { renderLoadError("#tasks-list", error, loadTasks); return; }
-  /* R7-5 — the other half of the lead-routing load figure. Counted off `raw`, BEFORE the Mine/All
-     scope filter below: how busy a colleague is does not depend on which scope this panel happens
-     to be showing. The horizon is this fetch's own (undone, due within a fortnight — overdue
-     included), which is what "on their desk right now" means on this screen; the select's tooltip
-     says so rather than claiming every open task ever. */
+    .limit(200); // the same fetch cap the drawer used, so the figure cannot change meaning
+  /* BOTH halves or none (adviserLoadMap's own rule): a failed read is UNKNOWN, not zero. Leaving a
+     stale map from the previous paint would let the select claim a ranking it can no longer see. */
+  if (error) { advLoadTasks = null; return; }
   advLoadTasks = {};
   (raw || []).forEach((t) => { if (t.assigned_to) advLoadTasks[t.assigned_to] = (advLoadTasks[t.assigned_to] || 0) + 1; });
-  // T1-5: "Mine" means mine. Ownerless tasks are no longer silently everyone's — they live behind
-  // the explicit Unassigned scope so they get claimed deliberately.
-  const filtered = (raw || []).filter((t) => tasksScope === "all" || (tasksScope === "unassigned" ? !t.assigned_to : t.assigned_to === (ME && ME.id)));
-  const tasks = filtered.slice(0, 15);
-  /* R6 — "Ruby Sinclair · Review submitted fact-find" twice, one row per case, both on 8 Grand
-     Avenue and each with its own ✓ Done. The chip is the only thing on the row that can tell the
-     two apart. (W4 / SM-11.) */
-  const taskCtx = await loadPropContext(tasks.map((t) => t.case_id));
-  const todayStr = localDateStr();
-  $("#tasks-list").innerHTML = (tasks || []).length ? tasks.map((t) => {
-    const overdue = t.due_date && t.due_date < todayStr;
-    const who = t.cases?.clients ? [t.cases.clients.first_name, t.cases.clients.last_name].filter(Boolean).join(" ") : "";
-    return `<div class="row-item">
-      <div class="row-main">
-        <div class="t" onclick="openCase('${t.case_id}')">${esc(who)} ${propCtxChip(taskCtx, t.case_id, "row-prop")}</div>
-        <div class="s">${esc(t.title)} — due ${fmtD(t.due_date)}</div>
-      </div>
-      ${/* R9-3 — the Today panel's half of the detractor flag. Same badge, same reasoning as
-           briefBadge: an unhappy client is not one of a fortnight's chores. */ ""}
-      ${isReviewFeedbackTask(t.title) ? REVIEW_TASK_BADGE : ""}
-      ${overdue ? '<span class="badge red">overdue</span>' : ""}
-      ${taskAssigneeHtml(t.id, t.assigned_to, "tasks")}
-      ${taskSnoozeControlsHtml(t.id, "tasks")}
-      <button class="btn btn-sm" onclick="doneTask('${t.id}')">✓ Done</button>
-    </div>`;
-  }).join("") + (filtered.length > tasks.length ? `<div class="empty">…and ${filtered.length - tasks.length} more due.</div>` : "") : '<div class="empty">Nothing due in the next 14 days.</div>';
-  panelCount("#tasks-list", filtered.length, true);
 }
 /* ---------- R12a·D12 — DONE, AND UNDONE ----------
    "Done" was one unconfirmed click on a small ✓ next to another small ✓, the row disappeared, and
@@ -6716,9 +6750,9 @@ async function loadTasks() {
 
    Completion is modelled by a nullable done_at, so reopening is literally `done_at = null`: no
    status enum, no second row, nothing to reconcile. One helper does the write for all three places
-   a task can be ticked (My Day, Tasks due, the case modal) and each passes the repaint for the
-   list the click came FROM, so undoing puts the row back where it vanished from rather than
-   somewhere the operator has to go looking.
+   a task can be ticked (R41 · F1 — two now: My Day and the case modal, since the Tasks-due drawer
+   went) and each passes the repaint for the list the click came FROM, so undoing puts the row back
+   where it vanished from rather than somewhere the operator has to go looking.
 
    A failed write is now surfaced too: all three call sites used to ignore the error object
    entirely and repaint, so a refused update read on screen as a completed task. */
@@ -6735,19 +6769,24 @@ async function reopenTask(id, repaint) {
   toast("Task reopened — it is back on the list");
   if (repaint) repaint();
 }
-window.doneTask = function (id) { return markTaskDone(id, loadTasks); };
+/* R41 · F1 — window.doneTask was the ✓ Done on a "Tasks due" drawer row and repainted that drawer.
+   Both are gone; My Day's own tick (briefDone) and the case modal's (doneTaskInCase) are unchanged
+   and are now the only two ways a task is ticked. */
 window.doneTaskInCase = function (taskId, caseId) { return markTaskDone(taskId, () => openCase(caseId)); };
 window.reopenTaskInCase = function (taskId, caseId) { return reopenTask(taskId, () => openCase(caseId)); };
 
 /* ---------- R17 · §3 — INLINE TASK SNOOZE / DEFER ----------
    Rescheduling a task meant opening the case, finding the row, editing the date. These quick
-   controls PATCH case_tasks.due_date in place from My Day and Tasks due. My Day and Tasks show the
-   same tasks, so a snooze from either repaints BOTH (same discipline as briefDone's dual repaint).
+   controls PATCH case_tasks.due_date in place from My Day.
    The +Nd controls move the due date FORWARD without ever pulling a future task earlier: an overdue
    or undated task snoozes from today; a task already due in the future snoozes from its own date.
    The 📅 date input sets an exact date (its own value wins outright). Keyboard-accessible: real
    buttons + a labelled date input, each with an aria-label. */
-function snoozeRepaintAll() { loadTasks(); loadBriefing(); }
+/* R41 · F1 — the dual repaint ("My Day and Tasks due show the same tasks, so a snooze from either
+   repaints BOTH") had exactly one reason to exist: two lists of the same tasks. There is one list
+   now, so this is one paint. Kept as a named function rather than inlined — both snooze verbs call
+   it, and naming the repaint is what stopped them drifting apart in the first place. */
+function snoozeRepaintAll() { loadBriefing(); }
 window.snoozeTask = async function (taskId, days) {
   const { data: t, error: rerr } = await db.from("case_tasks").select("due_date").eq("id", taskId).single();
   if (rerr) return toast("Couldn't snooze that task — " + rerr.message);
@@ -6772,8 +6811,9 @@ window.snoozeTaskTo = async function (taskId, value) {
 // own aria-labels; the date input is the 📅 pick and applies on change.
 function taskSnoozeControlsHtml(taskId, ctx) {
   const t = localDateStr();
-  // A task can appear on BOTH My Day and Tasks due, so the DOM id carries the list context to stay
-  // unique across the two panels. Class hooks (.snooze-btn / .snooze-date) are shared for styling.
+  // The DOM id carries the list context so it stays unique wherever the cluster is rendered (it
+  // was on BOTH My Day and the Tasks-due drawer until R41 · F1 removed the drawer; `ctx` is kept
+  // because the case modal could grow one). Class hooks (.snooze-btn / .snooze-date) are shared.
   const p = (ctx || "task") + "-" + taskId;
   return `<span class="task-snooze" role="group" aria-label="Snooze task">
       <button type="button" class="btn btn-sm snooze-btn" id="snooze-1d-${p}" aria-label="Snooze task by 1 day" title="Push the due date on by 1 day" onclick="snoozeTask('${taskId}',1)">+1d</button>
@@ -6881,6 +6921,35 @@ function briefBadge(it) {
     default: return "";
   }
 }
+/* ==========================================================================
+   R41 · T1 — "DID THEY TURN UP?", ON THE MY DAY ROW.
+
+   The Today's-appointments drawer carried one action My Day did not: a ✓/✗ pair writing
+   `appointments.outcome` in place. The drawer is gone (F1), so the pair moved onto the row.
+
+   THE THREE STATES, and why each renders as it does:
+   · not started yet  → nothing. An outcome for a meeting that has not happened is a guess, and a
+     button that invites one on the busiest list in the app is worse than no button.
+   · started, unjudged → the two buttons. Rearranged is deliberately not offered as a one-click
+     here, exactly as it was not in the drawer: rearranging means a NEW booking exists, which is a
+     trip to the editor anyway.
+   · already recorded → the same small chip every other surface wears (the editor, the diary, the
+     case header). Correcting it is the editor's job.
+
+   `it.appt` is the row loadBriefing's enrichment attached; with no row (the fetch failed, or this
+   database predates the widened select) nothing is offered rather than something wrong.
+   ========================================================================== */
+function apptQuickOutcomeHtml(it) {
+  const ap = it && it.appt;
+  if (!ap || !it.appt_id) return "";
+  if (isApptOutcome(ap.outcome)) return apptOutcomeChipHtml(ap.outcome);
+  const started = ap.starts_at && !isNaN(new Date(ap.starts_at)) && new Date(ap.starts_at) <= new Date();
+  if (!started) return "";
+  return `<span class="appt-quick" role="group" aria-label="Record what happened at this appointment">`
+    + APPT_OUTCOMES.filter(([v]) => v !== "rearranged").map(([v, label, mark]) =>
+      `<button type="button" class="btn btn-sm btn-ghost appt-quick-btn" aria-label="Record this appointment as ${esc(label.toLowerCase())}" title="Record this appointment as ${esc(label.toLowerCase())} — no email or text is sent to anybody" onclick="quickApptOutcome('${it.appt_id}','${v}',this)">${mark} ${esc(label)}</button>`).join("")
+    + `</span>`;
+}
 function briefActions(it) {
   const open = it.case_id ? `<button class="btn btn-sm" onclick="openCase('${it.case_id}')">Open</button>` : "";
   switch (it.kind) {
@@ -6893,7 +6962,22 @@ function briefActions(it) {
     case "review_feedback":
       return `${it.case_id ? `<button class="btn btn-sm btn-primary" onclick="openCase('${it.case_id}')" title="Read the client's own words on the case timeline, then ring them">Open case</button>` : ""}<button class="btn btn-sm" onclick="briefDone('${it.task_id}')">✓ Done</button>`;
     case "lead_new":
-      return leadRoutingHtml(it.lead_id) + `<button class="btn btn-sm btn-primary" onclick="acceptLead('${it.lead_id}', event)">Accept</button>`;
+      /* R41 · F1 — Discard (✕) follows the leads drawer onto this row. It is the SECOND thing that
+         drawer could do that My Day could not, and unlike the appointment outcome it is not a
+         convenience: `discardLead` opens the reason dialog that feeds leads.discard_reason and
+         decides whether first_contact_at is stamped (R7-5 / R11-7), which is what the Lead-response
+         report's "answered vs binned" split is computed from. Deleting the drawer without it would
+         have left the verb with no button anywhere in the app and quietly turned every unwanted
+         enquiry into a lead that sits in the list forever. Same markup, same handler, unchanged. */
+      /* The two verbs share a wrapper so they wrap as a PAIR. A lead row is the widest row in the
+         app (name + two badges + the adviser select + its note + two buttons) and .row-item wraps
+         its actions once they stop fitting (R6-FIX V3); without the wrapper the ✕ drops onto a
+         line of its own and reads as a stray control rather than as the other half of Accept. */
+      return leadRoutingHtml(it.lead_id)
+        + `<span class="brief-lead-actions">`
+        + `<button class="btn btn-sm btn-primary" onclick="acceptLead('${it.lead_id}', event)">Accept</button>`
+        + `<button class="btn btn-sm btn-danger" aria-label="Discard lead" title="Discard this enquiry — you'll be asked why, and the reason is kept" onclick="discardLead('${it.lead_id}')">✕</button>`
+        + `</span>`;
     /* R12a K-5 — the same two verbs the Emails row offers, in the order that fixes it: the address
        is wrong, so correcting the client record comes first and re-sending second. `Fix contact`
        is the EXISTING route (openClient with the field to focus and the address that failed), not
@@ -6910,7 +6994,16 @@ function briefActions(it) {
       // Defect 27: the row title now opens the same destination (the appointment editor) as this
       // button — a small secondary "Case" link is offered too when a case is linked, rather than
       // the title and button silently disagreeing on where "Open" means.
-      return (it.appt_id ? `<button class="btn btn-sm" onclick="openAppt('${it.appt_id}')">Open</button>` : "")
+      /* R41 · T1 — the one thing the removed Today's-appointments drawer could do that My Day
+         could not: say what happened, without opening the form. Same column, same write
+         (writeApptOutcome via quickApptOutcome), same Undo. Offered ONLY on a slot that has
+         already started and that nobody has judged yet — a meeting at 3pm has no outcome at 9am,
+         and offering one would invite a click that is a guess. Once recorded it is a badge, not a
+         pair of buttons: the drawer showed the chip AND kept the buttons pressed, but on a row
+         this dense a second way to change it is noise — the appointment editor is where an
+         outcome is corrected (and it is the only surface that offers "rearranged" at all). */
+      return apptQuickOutcomeHtml(it)
+        + (it.appt_id ? `<button class="btn btn-sm" onclick="openAppt('${it.appt_id}')">Open</button>` : "")
         + (it.case_id ? `<button class="btn btn-sm btn-ghost" onclick="openCase('${it.case_id}')" title="Open the linked case">Case</button>` : "");
     case "rate_urgent":
       return `${(it.sub || "").includes("not contacted") ? `<button class="btn btn-sm" onclick="briefQueueEmail('${it.case_id}','rate_end_reminder', event)">Send reminder</button>` : ""}${open}`;
@@ -6945,8 +7038,8 @@ async function loadBriefing() {
   }
   /* R5-35 — get_briefing's "mine" scope hands back every OWNERLESS row as well as mine, so an
      unassigned task on Wayne's case sat in Luke's My Day looking like his job, and in Wayne's, and
-     in Kim's. Same post-filter the Tasks panel and get_protection_pipeline already apply: Mine
-     means owner === me, full stop. Ownerless work is visible under All, labelled "· unassigned".
+     in Kim's. Same post-filter get_protection_pipeline already applies: Mine means owner === me,
+     full stop. Ownerless work is visible under All, labelled "· unassigned".
      ONE exception, deliberate and narrow: a new website lead has no owner by nature — it is the
      firm's shared inbox, it is what the Accept dropdown on the row is for, and R5-21 (Batch 1)
      depends on it being in My Day. Leads are therefore kept in both scopes. */
@@ -7132,12 +7225,24 @@ async function loadBriefing() {
       const clientIds = [...new Set(apptItems.filter((it) => it.client_id).map((it) => it.client_id))];
       const [{ data: cls }, { data: aps }] = await Promise.all([
         clientIds.length ? db.from("clients").select("id,first_name,last_name").in("id", clientIds) : Promise.resolve({ data: [] }),
-        db.from("appointments").select("id,starts_at,ends_at,staff_id").in("id", apptItems.map((it) => it.appt_id)),
+        /* R41 · T1 — widened from the four named columns to "*" so this row can also carry
+           `outcome` (attended / no_show / rearranged), which the quick-outcome buttons on the row
+           need. Naming `outcome` explicitly would 42703 the WHOLE read on a database that predates
+           the column and take the clash flags and the client names down with it; "*" answers with
+           whatever the row actually has, which is the same tolerance rule loadLeads and
+           openLeadInToday already use. Still bounded by .in("id", …) on a handful of ids. */
+        db.from("appointments").select("*").in("id", apptItems.map((it) => it.appt_id)),
       ]);
       const nameById = {};
       (cls || []).forEach((cl) => { nameById[cl.id] = [cl.first_name, cl.last_name].filter(Boolean).join(" "); });
       const apById = {};
       (aps || []).forEach((ap) => { apById[ap.id] = ap; });
+      /* R41 · T1 — the appointment row itself, hung on the item, so briefActions can ask the two
+         questions the quick-outcome pair turns on (has it happened yet, and has anybody said what
+         happened) without a read of its own. Absent if this fetch failed, in which case the row
+         renders exactly as it did before — same graceful-degradation rule as every other
+         enrichment on this screen. */
+      apptItems.forEach((it) => { const ap = apById[it.appt_id]; if (ap) it.appt = ap; });
       // R5-9 — name the client, unless whoever booked it already typed the name into the title.
       apptItems.forEach((it) => {
         const nm = nameById[it.client_id];
@@ -7261,10 +7366,11 @@ window.toggleBriefGroup = function (caseId) {
   renderBriefing();
 };
 window.briefDone = function (id) {
-  /* R12a·D12 — My Day and the Tasks-due panel show the same task, so an undo from here has to
-     repaint BOTH; the old version chained doneTask (which repaints Tasks) and then reloaded the
-     briefing, which is the same pair spelled as a side effect. */
-  return markTaskDone(id, () => { loadBriefing(); loadTasks(); });
+  /* R12a·D12 — a tick and its Undo repaint the list the click came FROM, so an undone task goes
+     back where it vanished from.
+     R41 · F1 — that used to mean repainting My Day AND the Tasks-due panel, because the same task
+     was on both. The panel is gone; My Day is the list the click came from and the only one left. */
+  return markTaskDone(id, loadBriefing);
 };
 window.markEmailHandled = async function (id) {
   const { error } = await db.from("case_emails").update({ triage_status: "handled" }).eq("id", id);
@@ -7330,11 +7436,12 @@ const R7_ALERT_LINKS = {
                   title: "Open the full Money owed list on Reports — every unpaid fee, aged from its completion date." },
   protection_quote_stale: { when: () => true, go: "nav('protection')", label: "Protection →",
                   title: "Open the Protection page, where every quote carries its age." },
-  /* R7-5 — a slow lead is worked in one place: the inbox at the top of this same screen. The link
-     opens the drawer and scrolls to the row, because "lead_slow" alerts and the lead they are
-     about were two unconnected lists until now. */
+  /* R7-5 — a slow lead is worked in one place: My Day, at the top of this same screen. The link
+     scrolls to the enquiry's own row, because "lead_slow" alerts and the lead they are about were
+     two unconnected lists until now. (R41 · F1 — it used to open the New-website-leads drawer;
+     that drawer is gone and the row it duplicated is the destination.) */
   lead_slow: { when: () => true, go: (a) => `gotoLeadInbox('${jsArg((a && a.lead_id) || "")}')`, label: "Lead inbox →",
-                  title: "Open the New website leads drawer on Today, where this enquiry can be accepted or discarded." },
+                  title: "Open this enquiry's row in My Day on Today, where it can be accepted." },
 };
 /* R7-1e — THE ALERT TEXT IS A MONEY SURFACE TOO.
    The firm's money is Owner-only UI and has been since round 4: Monday money, the
@@ -7413,7 +7520,7 @@ let wtLast = null;
    R34 · W1 — WHOSE PROBLEMS THIS PANEL IS ABOUT.
    The Watchtower showed every open alert in the firm to everybody, so an adviser's most urgent
    compliance surface was mostly other people's cases — and the drawer auto-opened on somebody
-   else's critical. It now carries the same Mine|All segment the Tasks and Rate & ERC drawers
+   else's critical. It now carries the same Mine|All segment My Day and the Rate & ERC drawer
    have, scoped by the CASE's adviser, with the same role-shaped default (Mine for an adviser,
    All for the Owner/Administrator, whose number the firm-wide one genuinely is).
    ONE rule is not a matter of scope at all: an alert with NO case behind it (workload,
@@ -8768,7 +8875,7 @@ window.playbookAdd = async function (caseId, stage, kind, idx) {
   const { error } = await db.from("case_tasks").insert({ case_id: caseId, title: it.title, due_date: due, created_by: user && user.id, assigned_to: assignee });
   if (error) return toast("Couldn't add task — " + error.message);
   toast("Task added — due " + fmtD(due));
-  openCase(caseId); // repaints the Tasks list AND the checklist (the added step flips to ✓ added)
+  openCase(caseId); // repaints the case's own task list AND the checklist (the added step flips to ✓ added)
 };
 // "Add all" — every applicable step not already open, in one insert. Dedupe is the same title match.
 window.playbookAddAll = async function (caseId, stage, kind) {
@@ -12708,7 +12815,7 @@ window.openCase = async function (id, opts = {}) {
       taskBtn.disabled = true;
       try {
         /* R12a·D10 — A TASK WITH NO DATE IS ON NO LIST ANYWHERE.
-           Tasks due filters `lte(due_date, +14d)`, My Day works off due dates, the diary is dates:
+           My Day works off due dates, the diary is dates:
            a dateless row was written to the database, appeared once in this modal, and then
            existed nowhere a human would ever look at it again. So a submit with no date picked is
            defaulted to TOMORROW rather than refused — refusing would punish the fastest, most
@@ -15668,7 +15775,7 @@ async function loadEmails() {
     const titleClick = noContact
       ? ` onclick="openClient('${e.client_id}','email','${jsArg(e.to_email)}')" style="cursor:pointer;"`
       : (e.case_id ? ` onclick="openCase('${e.case_id}')" style="cursor:pointer;"` : "")
-        || (e.lead_id ? ` onclick="openLeadInToday('${jsArg(e.lead_id)}')" style="cursor:pointer;" title="Open this enquiry in the lead inbox on Today"` : "");
+        || (e.lead_id ? ` onclick="openLeadInToday('${jsArg(e.lead_id)}')" style="cursor:pointer;" title="Open this enquiry's row in My Day on Today"` : "");
     const whoTxt = e.clients ? e.clients.first_name + " " + e.clients.last_name : (leadRow && leadRow.name) || e.to_email || "";
     return `
     <div class="row-item"${e.lead_id ? ` data-lead-email="${esc(e.lead_id)}"` : ""}>
@@ -17299,58 +17406,25 @@ function noteLeadSlaFromStarRow(row) {
 }
 
 /* ---------- Website leads ---------- */
-async function loadLeads() {
-  const { data: leads, error } = await db.from("leads").select("*").eq("status", "new").order("created_at");
-  // T1-24 (bug 4) — the error used to be discarded, so an outage on the firm's revenue intake
-  // rendered the reassuring "No new leads" empty state. Say so, and offer the retry.
-  if (error) {
-    $("#leads-count").classList.add("hidden");
-    renderLoadError("#leads-list", error, loadLeads);
-    autoDrawer("leads", true); // a failed intake queue must not stay collapsed
-    return;
-  }
-  if ((leads || []).length) noteLeadSlaFromStarRow(leads[0]);
-  const n = (leads || []).length;
-  const badge = $("#leads-count");
-  badge.textContent = n;
-  badge.classList.toggle("hidden", !n);
-  /* R7-5 — THE ORDER. The fetch is oldest-first, which is right while anything is late: the
-     longest wait is the next call. It is NOT right on a quiet morning, where an inbox that puts
-     this minute's enquiry at the bottom of six read-and-parked ones reads as stale. So the order
-     is stated and it follows the clock: oldest-first the moment ANY lead is past the fifteen-minute
-     promise, newest-first when every one of them is inside it. Both orders are announced on the
-     panel, because a list that silently reorders itself is a list nobody trusts. */
-  const rows = (leads || []).slice();
-  const breaching = rows.filter((l) => { const m = leadAgeMins(l.created_at); return m != null && m >= LEAD_SLA_MIN; });
-  const oldestFirst = breaching.length > 0;
-  rows.sort((a, b) => {
-    const d = String(a.created_at || "").localeCompare(String(b.created_at || ""));
-    return oldestFirst ? d : -d;
-  });
-  const sub = $("#leads-order");
-  if (sub) {
-    sub.innerHTML = !n ? ""
-      : oldestFirst
-        ? `<strong>${breaching.length} past the ${LEAD_SLA_MIN}-minute promise</strong> — oldest first, longest wait at the top.`
-        : `Everything is inside the ${LEAD_SLA_MIN}-minute promise — newest first.`;
-    sub.classList.toggle("lead-order-hot", oldestFirst);
-  }
-  $("#leads-list").innerHTML = n ? rows.map((l) => `
-    <div class="row-item" data-lead-row="${esc(l.id)}">
-      <div class="row-main">
-        <div class="t">${esc(l.name)}${leadAckMark(l)}</div>
-        <div class="s">${l.email ? mailLink(l.email) : ""}${l.phone ? " · " + telLink(l.phone) : ""}${l.enquiry_type ? " · " + esc(l.enquiry_type) : ""} · ${new Date(l.created_at).toLocaleString("en-GB")}</div>
-        ${l.message ? `<div class="s">“${esc(l.message.slice(0, 140))}${l.message.length > 140 ? "…" : ""}”</div>` : ""}
-      </div>
-      ${leadAgeBadge(l)}
-      ${leadRoutingHtml(l.id)}
-      <button class="btn btn-sm btn-primary" onclick="acceptLead('${l.id}', event)">Accept</button>
-      <button class="btn btn-sm btn-danger" aria-label="Discard lead" title="Discard lead" onclick="discardLead('${l.id}')">✕</button>
-    </div>`).join("") : '<div class="empty">No new leads. Website enquiries appear here the moment they\'re sent.</div>';
-  panelCount("#leads-list", n, true);
-  applyLeadAdvChoices();   // R12a K-1 — this list and My Day show the same leads; keep them agreeing
-  autoDrawer("leads", n > 0); // auto-open whenever there's a lead waiting, else stay collapsed
-}
+/* ==========================================================================
+   R41 · F1 — loadLeads() (Today's "📥 New website leads" drawer, #leads-list / #leads-count /
+   #leads-order) is gone.
+
+   It was the SAME lead, twice on one screen. My Day has carried a `lead_new` row since round 5
+   with the whole flow on it — the adviser dropdown (leadRoutingHtml, still shared, still with its
+   "(lightest load)" note), Accept (acceptLead, untouched), the ✉ acknowledgement mark and the
+   age chip against the 15-minute promise (leadAckMark / leadAgeBadge) — and R12a K-1 existed
+   entirely to stop the two copies of that dropdown disagreeing with each other. With one copy left
+   they cannot.
+
+   Two of the drawer's own opinions go with it and are not reimplemented:
+   · the order line (#leads-order): My Day is one priority-ordered list, so a per-panel "oldest
+     first / newest first" caption would be describing an order it does not control. The lateness
+     it announced is still on every row, as the age chip that turns red at the promise.
+   · Discard (✕) is NOT one of the things dropped: it moved onto the My Day row beside Accept
+     (see briefActions), because it is the only button in the app that opens the reason dialog
+     behind leads.discard_reason and the Lead-response report's answered-vs-binned split.
+   ========================================================================== */
 window.acceptLead = async function (id, ev) {
   const btn = (ev && (ev.currentTarget || ev.target)) || null;
   if (btn) { if (btn.disabled) return; btn.disabled = true; } // guard against double-click
@@ -17565,10 +17639,10 @@ window.acceptLead = async function (id, ev) {
      ask which desk is lightest. Counted here rather than re-read: the case was created two writes
      ago and the next dashboard load re-derives the whole map from the database anyway. */
   if (assignTo && advLoadCases) advLoadCases[assignTo] = (advLoadCases[assignTo] || 0) + 1;
-  /* R5-21 — the same lead is listed TWICE on Today: in the Leads panel and as a My Day "lead_new"
-     row. Repainting only the panel left the My Day row advertising a lead that no longer exists,
-     and clicking its Accept produced "already been accepted". Repaint both. */
-  await loadLeads();
+  /* R5-21 — an accepted lead must leave the screen it was accepted on, or its row goes on
+     advertising an enquiry that no longer exists and its Accept answers "already been accepted".
+     R41 · F1 — that used to need two repaints (the Leads drawer AND the My Day row); the drawer is
+     gone, so the one list is the one paint. */
   await loadBriefing();
   restoreLeadAdvSel(otherLeadSel);   // R5-5 — put the other rows' routing choices back
 };
@@ -17706,22 +17780,23 @@ window.discardLead = async function (id) {
     + (why.contacted && !stamped ? " · contact time NOT stored (this database has no first_contact_at column)" : "")
     + (!why.contacted ? " · no contact recorded, so it counts as unanswered" : "")
     + (reasonSaved ? "" : " · reason NOT stored (this database has no discard_reason column)"));
-  await loadLeads();
-  await loadBriefing();
+  await loadBriefing();   // R41 · F1 — one list of leads on Today now, so one repaint
 };
 
-/* R7-5 — Today, with the lead inbox open. Used by the Emails page (a lead_ack row has nowhere else
-   to go) and by the Lead-response report's breach count. The drawer is opened explicitly rather
-   than left to autoDrawer, because a person who clicked "open this enquiry" has just taken manual
-   control of it, which is precisely the case autoDrawer refuses to touch. */
+/* R7-5 — Today, at the enquiry. Used by the Emails page (a lead_ack row has nowhere else to go),
+   by the Watchtower's lead_slow alert and by the Lead-response report's breach count.
+   R41 · F1 — the destination was the New-website-leads drawer, which is gone; it is now the lead's
+   own My Day row. My Day is not a drawer and is never collapsed, so there is nothing to open and
+   no dashDrawerTouched flag to set — the walk is straight to the row. The row is found by the one
+   thing on it that carries the lead id, its adviser select (the drawer's own `data-lead-row`
+   attribute went with the drawer), and gets the same amber flash it always did. */
 window.gotoLeadInbox = function (leadId) {
   nav("dashboard");
   setTimeout(() => {
-    const panel = document.getElementById("leads-panel");
+    const panel = document.getElementById("briefing-panel");
     if (!panel) return;
-    panel.classList.remove("collapsed");
-    dashDrawerTouched.leads = true;
-    const row = leadId ? panel.querySelector(`.row-item[data-lead-row="${CSS.escape(leadId)}"]`) : null;
+    const sel = leadId ? panel.querySelector(`select.lead-adviser[data-lead="${CSS.escape(leadId)}"]`) : null;
+    const row = sel && sel.closest ? sel.closest(".row-item") : null;
     (row || panel).scrollIntoView({ behavior: "smooth", block: row ? "center" : "start" });
     if (row) { row.classList.add("lead-flash"); setTimeout(() => row.classList.remove("lead-flash"), 2200); }
   }, 400);
@@ -17863,54 +17938,30 @@ async function writeApptOutcome(appt, outcome, clientName, opts = {}) {
 }
 
 /* ---------- Today's appointments ---------- */
-async function loadTodayAppts() {
-  const start = new Date(); start.setHours(0, 0, 0, 0);
-  const end = new Date(start.getTime() + 86400000);
-  const { data: appts } = await db.from("appointments")
-    .select("*, clients(first_name,last_name)")
-    .gte("starts_at", start.toISOString()).lt("starts_at", end.toISOString())
-    .order("starts_at");
-  /* R6 — appointments already store case_id; the row just never read it. Six "Ruby Sinclair"
-     entries across five flats is the shape this fixes. (W13 / D6-12.) */
-  const apptCtx = await loadPropContext((appts || []).map((a) => a.case_id));
-  $("#today-appts").innerHTML = (appts || []).length ? appts.map((a) => `
-    <div class="row-item">
-      <div class="row-main">
-        <div class="t" onclick="openAppt('${a.id}')">${new Date(a.starts_at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })} — ${esc(a.title)} ${propCtxChip(apptCtx, a.case_id, "row-prop")} ${apptOutcomeChipHtml(a.outcome)}</div>
-        <div class="s">${a.clients ? esc([a.clients.first_name, a.clients.last_name].filter(Boolean).join(" ")) + " · " : ""}${esc(a.location || "")}${a.staff_id ? " · " + esc(staffName(a.staff_id)) : ""}</div>
-      </div>
-      ${/* R12b · W-17 — recording that a client turned up should not cost opening a form. Two
-           buttons, on the one screen where today's appointments are already listed in the order
-           they happen, writing the same column the editor writes. Pressed state = already
-           recorded, and pressing it again clears it, so nothing here is a one-way door. The
-           REARRANGED outcome is deliberately not offered as a one-click: rearranging means a new
-           booking exists, which is a trip to the editor anyway. */ ""}
-      <span class="appt-quick" role="group" aria-label="Record what happened at this appointment">
-        ${APPT_OUTCOMES.filter(([v]) => v !== "rearranged").map(([v, label, mark]) => `<button type="button" class="btn btn-sm appt-quick-btn${a.outcome === v ? " is-set" : ""}" data-appt="${esc(a.id)}" data-outcome="${v}" aria-pressed="${a.outcome === v ? "true" : "false"}" title="${a.outcome === v ? `Recorded as ${label.toLowerCase()} — press again to clear it` : `Record this appointment as ${label.toLowerCase()}`}">${mark}</button>`).join("")}
-      </span>
-    </div>`).join("") : '<div class="empty">Nothing booked today. The Diary tab has the full week.</div>';
-  $("#today-appts").querySelectorAll(".appt-quick-btn").forEach((b) => (b.onclick = (e) => {
-    e.stopPropagation();
-    quickApptOutcome(b.dataset.appt, b.dataset.outcome, b);
-  }));
-  panelCount("#today-appts", (appts || []).length);
-}
-/* R12b · W-17 — My Day's one-click outcome. Reads the row back first (the panel may have been
-   painted a while ago and the appointment may be gone), writes through the same helper the editor
-   uses, and hands back an Undo for ten seconds — the R12a task-done pattern, for the same reason:
-   this is a fast gesture on a small target and the cheapest possible repair beats a confirm. */
-async function quickApptOutcome(apptId, outcome, btn) {
+/* R41 · F1 — loadTodayAppts() (Today's "📅 Today's appointments" drawer, #today-appts) is gone.
+   get_briefing has always returned an `appt_today` row per booking, with the time, the client's
+   name (loadBriefing's own enrichment), the ⚠ double-booking flag My Day added in R5-25 and an
+   Open that lands in the same editor. The drawer's ONE unique action — the ✓/✗ quick outcome —
+   is now on that row (see apptQuickOutcomeHtml), writing through the same helper below. */
+/* R12b · W-17 — the one-click outcome. Reads the row back first (the list may have been painted a
+   while ago and the appointment may be gone), writes through the same helper the editor uses, and
+   hands back an Undo for ten seconds — the R12a task-done pattern, for the same reason: this is a
+   fast gesture on a small target and the cheapest possible repair beats a confirm.
+   R41 · T1 — unchanged apart from where it is pressed from and what it repaints: the buttons now
+   sit on the My Day `appt_today` row (apptQuickOutcomeHtml) instead of the removed drawer, so it
+   is a window hook — briefActions writes inline handlers, which run in global scope. */
+window.quickApptOutcome = async function (apptId, outcome, btn) {
   if (!apptId) return;
   if (btn) btn.disabled = true;
   try {
     const { data: a } = await db.from("appointments").select("*, clients(first_name,last_name)").eq("id", apptId).single();
-    if (!a) { toast("That appointment no longer exists — it may have been deleted."); return loadTodayAppts(); }
+    if (!a) { toast("That appointment no longer exists — it may have been deleted."); return loadBriefing(); }
     const prev = a.outcome || null;
     const next = prev === outcome ? null : outcome;   // pressing the set one again clears it
     const who = a.clients ? [a.clients.first_name, a.clients.last_name].filter(Boolean).join(" ") : "";
     const res = await writeApptOutcome(a, next, who);
     if (!res.ok) return toast(res.msg);
-    loadTodayAppts();
+    loadBriefing();   // R41 · T1 — the row that was pressed; it flips from the pair to the badge
     refreshDiaryView();
     toast(res.msg, {
       label: "Undo",
@@ -17920,14 +17971,14 @@ async function quickApptOutcome(apptId, outcome, btn) {
            removing somebody's work is worse than leaving one they can tick off. */
         const r = await writeApptOutcome(a, prev, who, { skipTask: true });
         toast(r.ok ? (prev ? `Back to: ${APPT_OUTCOME_LABEL[prev].toLowerCase()}` : "Back to not recorded") : r.msg);
-        loadTodayAppts();
+        loadBriefing();
         refreshDiaryView();
       },
     });
   } finally {
     if (btn) btn.disabled = false;
   }
-}
+};
 
 /* ---------- Diary ---------- */
 let diaryMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
@@ -17969,8 +18020,8 @@ function apptClientLine(a, chip) {
    picture of the meetings in the week, which is a different and smaller thing.
 
    Kept deliberately cheap: ONE extra read per diary paint, narrowed to the
-   dates already on screen, reusing loadTasks' own query shape (undone only,
-   due-date ordered). Done tasks are omitted outright — a diary is what is
+   dates already on screen, with the same query shape the Today task reads use
+   (undone only, due-date ordered). Done tasks are omitted outright — a diary is what is
    left to do, and a tick that stays on the grid all month is clutter that
    teaches people to stop reading the grid.
 
@@ -18528,17 +18579,11 @@ $("#diary-grid").addEventListener("click", (e) => {
   if (!cell || !cell.dataset.date) return;
   openAppt(null, { starts_at: cell.dataset.date + "T10:00" });
 });
-// T1-5 — Mine | Unassigned | All (the old two-state toggle hid ownerless tasks inside "Mine").
-function setTasksScope(s) {
-  tasksScope = s;
-  $("#tasks-scope-mine").classList.toggle("scope-active", s === "mine");
-  $("#tasks-scope-unassigned").classList.toggle("scope-active", s === "unassigned");
-  $("#tasks-scope-all").classList.toggle("scope-active", s === "all");
-  loadTasks();
-}
-$("#tasks-scope-mine").addEventListener("click", () => setTasksScope("mine"));
-$("#tasks-scope-unassigned").addEventListener("click", () => setTasksScope("unassigned"));
-$("#tasks-scope-all").addEventListener("click", () => setTasksScope("all"));
+/* R41 · F1 — setTasksScope() and the #tasks-scope-mine / -unassigned / -all buttons went with the
+   Tasks-due drawer. The replacement is My Day's own Mine | All segment plus the "· unassigned"
+   suffix every ownerless row carries under All (R5-35, briefOwnerSuffix): the third state was a
+   FILTER for a pile nobody owns, and a labelled row inside All says the same thing without hiding
+   the rest of the list behind a click. */
 
 /* G1R-2 — the diary page renders in EITHER of two modes and `#page-diary` is visible in both, so
    "if the diary page is open, reload it" is not enough: after B9 added the Day view, a save or a
@@ -18625,7 +18670,9 @@ window.openAppt = async function (id, presets = {}, openOpts = {}) {
     if (!data) {
       toast("This appointment no longer exists — it may have been deleted.");
       refreshDiaryView();
-      if (!$("#page-dashboard").classList.contains("hidden")) loadTodayAppts();
+      // R41 · F1 — was loadTodayAppts(); the appointments drawer is gone and today's bookings are
+      // My Day `appt_today` rows, so that is what a deleted-out-from-under-you booking repaints.
+      if (!$("#page-dashboard").classList.contains("hidden")) loadBriefing();
       return;
     }
     a = data;
@@ -18920,7 +18967,7 @@ window.openAppt = async function (id, presets = {}, openOpts = {}) {
       + (outcomeColMissing ? " · the outcome could NOT be stored — this database has no appointments.outcome column yet" : "")
       + (caseUnlinked ? ` · the link to ${caseIdentityLabel(caseUnlinked) || "the previous case"} was removed — that case belongs to a different client` : "");
     refreshDiaryView();
-    if (!$("#page-dashboard").classList.contains("hidden")) loadTodayAppts();
+    if (!$("#page-dashboard").classList.contains("hidden")) loadBriefing();   // R41 · F1 — My Day carries today's bookings now
     /* R12b · W-10 — booked FROM a case: go back to it rather than closing everything. openCase
        replaces this modal (and its history entry) exactly as the "Open case" button above does. */
     if (returnCaseId) {
@@ -18939,7 +18986,7 @@ window.openAppt = async function (id, presets = {}, openOpts = {}) {
     const { error } = await db.from("appointments").delete().eq("id", id);
     if (error) return toast("Couldn't delete that appointment — " + error.message);
     refreshDiaryView();
-    if (!$("#page-dashboard").classList.contains("hidden")) loadTodayAppts();
+    if (!$("#page-dashboard").classList.contains("hidden")) loadBriefing();   // R41 · F1 — My Day carries today's bookings now
     if (returnCaseId) {
       toast("Appointment deleted · back on the case");
       await window.openCase(returnCaseId);
@@ -22114,13 +22161,13 @@ function renderLeadResponse(leads, cases) {
     + `<span class="money-basis">(leads · first_contact_at − created_at · last ${m.windowDays} days)</span>`;
 
   const nBreach = m.breaching.length;
-  $("#leadresp-tools").innerHTML = `<button type="button" class="btn btn-sm${nBreach ? " btn-danger" : ""}" id="leadresp-breach-btn" onclick="gotoLeadInbox()" title="${nBreach ? `${nBreach} enquir${nBreach === 1 ? "y is" : "ies are"} past the ${LEAD_SLA_MIN}-minute promise right now — open the inbox on Today.` : "Nothing is past the promise right now. Open the lead inbox on Today."}">${nBreach ? `⏱ ${nBreach} breaching now` : "⏱ none breaching"} →</button>`;
+  $("#leadresp-tools").innerHTML = `<button type="button" class="btn btn-sm${nBreach ? " btn-danger" : ""}" id="leadresp-breach-btn" onclick="gotoLeadInbox()" title="${nBreach ? `${nBreach} enquir${nBreach === 1 ? "y is" : "ies are"} past the ${LEAD_SLA_MIN}-minute promise right now — open My Day on Today.` : "Nothing is past the promise right now. Open My Day on Today."}">${nBreach ? `⏱ ${nBreach} breaching now` : "⏱ none breaching"} →</button>`;
 
   $("#report-leadresp-headline").innerHTML = [
     `<div class="kpi kpi-headline"><div class="num">${m.nResponded ? esc(fmtRespMins(m.median)) : "—"}</div><div class="lbl">Median response</div><div class="s">${m.nResponded} of ${m.nLeads} enquir${m.nLeads === 1 ? "y" : "ies"} answered</div></div>`,
     `<div class="kpi${m.p90 != null && m.p90 > LEAD_SLA_RED_MIN ? " bad" : ""}"><div class="num">${m.nResponded ? esc(fmtRespMins(m.p90)) : "—"}</div><div class="lbl">p90 response</div><div class="s">${m.nResponded ? `9 in 10 answered inside this` : "no answered enquiries yet"}</div></div>`,
     `<div class="kpi"><div class="num">${m.conv == null ? "—" : m.conv + "%"}</div><div class="lbl">Conversion</div><div class="s">${m.won} of ${m.nLeads} became a case</div></div>`,
-    `<div class="kpi${nBreach ? " bad" : ""}" style="cursor:pointer;" onclick="gotoLeadInbox()" title="Open the lead inbox on Today"><div class="num" id="leadresp-breach-n">${nBreach}</div><div class="lbl">Breaching now</div><div class="s">waiting over ${LEAD_SLA_MIN} min, nobody yet</div></div>`,
+    `<div class="kpi${nBreach ? " bad" : ""}" style="cursor:pointer;" onclick="gotoLeadInbox()" title="Open the waiting enquiries in My Day on Today"><div class="num" id="leadresp-breach-n">${nBreach}</div><div class="lbl">Breaching now</div><div class="s">waiting over ${LEAD_SLA_MIN} min, nobody yet</div></div>`,
   ].join("");
 
   const tableFor = (groups, headWord, emptyWord) => {
@@ -22151,7 +22198,7 @@ function renderLeadResponse(leads, cases) {
   }
   if (!m.nResponded) {
     $("#report-leadresp-source").innerHTML = `<div class="empty leadresp-empty">No data yet — none of the ${m.nLeads} enquir${m.nLeads === 1 ? "y" : "ies"} in the last ${m.windowDays} days carries a first-contact time.
-      ${slaOff ? "This database has no <code>first_contact_at</code> column yet." : `The stamp is written the first time somebody Accepts one from the inbox on Today, or discards one having made contact. Nothing here is estimated in the meantime.`}
+      ${slaOff ? "This database has no <code>first_contact_at</code> column yet." : `The stamp is written the first time somebody Accepts one from My Day on Today, or discards one having made contact. Nothing here is estimated in the meantime.`}
       ${nBreach ? `<br><strong>${nBreach} of them ${nBreach === 1 ? "is" : "are"} past the ${LEAD_SLA_MIN}-minute promise right now.</strong>` : ""}</div>`;
     $("#report-leadresp-adviser").innerHTML = "";
     return;
@@ -24366,13 +24413,16 @@ document.addEventListener("keydown", (e) => {
     else if (item.type === "lead") openLeadOnToday();
     else window.openCase(item.id);
   }
-  // A lead has no record modal — jump to Today with the leads drawer open so the enquiry can be
-  // Accepted/Discarded straight away (defect #2).
+  // A lead has no record modal — jump to Today, where the enquiry can be Accepted straight away
+  // (defect #2).
+  // R41 · F1 — that used to mean opening the New-website-leads drawer; the lead now lives on its
+  // My Day row, so this is a scroll to My Day and nothing else. Deliberately NOT gotoLeadInbox():
+  // the palette has the lead id but this hook is called without it, and a 400ms timed walk is the
+  // wrong shape for a palette selection that has just closed.
   function openLeadOnToday() {
     if (typeof nav === "function") nav("dashboard");
-    dashDrawerTouched.leads = true;              // stop autoDrawer from re-collapsing it
-    const panel = document.getElementById("leads-panel");
-    if (panel) { panel.classList.remove("collapsed"); setTimeout(() => { try { panel.scrollIntoView({ block: "nearest" }); } catch (e) {} }, 60); }
+    const panel = document.getElementById("briefing-panel");
+    if (panel) setTimeout(() => { try { panel.scrollIntoView({ block: "nearest" }); } catch (e) {} }, 60);
   }
 
   async function runSearch(raw) {
