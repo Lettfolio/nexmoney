@@ -2582,6 +2582,19 @@ tr.owed-hot > td { background: var(--red-bg); }
 .rate-erc-dedupe-note { text-align: left; font-size: 12px; }
 .wt-link-btn { white-space: nowrap; }
 
+/* ---- R38 · the Retention page --------------------------------------------
+   The drawers' one-line door to it, and the two group headings that split the
+   feed at the maturity date. Deliberately light: every row on that page is a
+   .row-item drawn by the same builder Today uses, so the page must not invent
+   a second visual language for the same content. */
+.ret-page-link { white-space: nowrap; font-weight: 500; margin-left: auto; }
+.ret-group-h {
+  margin: 14px 0 2px; font-size: 13px; text-transform: uppercase;
+  letter-spacing: .04em; color: var(--muted); display: flex; align-items: center; gap: 8px;
+}
+#ret-rates-list > .ret-group-h:first-child { margin-top: 0; }
+.ret-group-sub { margin: 0 0 6px; }
+
 /* ---- The protection quote clock ------------------------------------------ */
 /* Same .badge shape as every other pill on the row; only the number and the
    word inside it are new, so a quoted row gains information without gaining a

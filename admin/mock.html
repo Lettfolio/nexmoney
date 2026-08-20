@@ -84,6 +84,11 @@
       <div class="nav-group-head" aria-hidden="true">Book</div>
       <button data-page="clients"><span class="si">👥</span>Clients</button>
       <button data-page="protection"><span class="si">🛡️</span>Protection</button>
+      <!-- R38 — Retention. The Book group, because that is what it is about: the clients already
+           on the book whose rate is running out and the ones nobody has rung in six months. Every
+           back-office role sees it (an adviser opens on Mine, the Owner and the Administrator on
+           All — see retScopeResolved), so unlike Monday money it is not hidden in the markup. -->
+      <button data-page="retention"><span class="si">🔁</span>Retention</button>
       <div class="nav-group-head" aria-hidden="true">Money</div>
       <button data-page="reports"><span class="si">📊</span>Reports</button>
       <!-- R7 — Monday money. Every figure on the page is firm-wide money, so the nav item itself
@@ -219,7 +224,11 @@
       </div>
       <div class="grid-2">
         <div class="panel dash-card dash-drawer collapsed" id="retention-panel">
-          <h3 onclick="toggleDrawer(event,'retention')">🔁 Retention pipeline</h3>
+          <h3 onclick="toggleDrawer(event,'retention')">🔁 Retention pipeline
+            <!-- R38 — this drawer is the first twelve; the page is the whole pipeline, the whole
+                 rate feed and the clients who have gone quiet. -->
+            <button type="button" class="btn btn-ghost btn-sm ret-page-link" id="retention-open-page" onclick="event.stopPropagation();nav('retention')" title="Open the Retention page — the full pipeline, the un-truncated rate feed and the clients nobody has contacted in six months">Open Retention page →</button>
+          </h3>
           <p class="panel-sub" id="retention-stats"></p>
           <div id="retention-list" class="dash-scroll"></div>
         </div>
@@ -413,6 +422,45 @@
       <div id="client-bulk"></div>
       <p class="dq-notice hidden" id="clients-cap-notice"></p>
       <div id="client-list"></div>
+    </section>
+
+    <!-- R38 — RETENTION. Luke's whole job on one screen: the rate feed un-truncated, the pipeline
+         those "Start retention case" buttons feed, and the clients nobody has spoken to in six
+         months. Every list here is rendered by the SAME builders Today's drawers render from
+         (buildRateErcFeed / renderRateErcRow, readRetentionPipeline / renderRetentionRows, the
+         Clients page's own cold segment) — see loadRetentionPage(). The drawers stay; this is
+         where the list is worked rather than glanced at. -->
+    <section id="page-retention" class="page hidden">
+      <div class="page-head">
+        <h2>Retention</h2>
+        <div class="page-tools">
+          <!-- R34 pattern (#wt-scope-*). Which one starts active is decided in JS
+               (retScopeResolved), because it depends on the signed-in role and on a stored
+               choice, neither of which is known when this markup is parsed. ONE control: it
+               scopes all three panels below, because they are three views of one book. -->
+          <button class="btn btn-sm seg-btn seg-first" id="ret-scope-mine" aria-label="Show only my cases and clients">Mine</button>
+          <button class="btn btn-sm seg-btn seg-last" id="ret-scope-all" aria-label="Show every adviser's cases and clients">All</button>
+        </div>
+      </div>
+      <p class="panel-sub" id="ret-scope-note"></p>
+      <p class="dq-notice hidden" id="ret-cap-notice"></p>
+      <div class="panel" id="ret-rates-panel">
+        <h3 id="ret-rates-h3">⚠️ Rates ending &amp; ended</h3>
+        <p class="panel-sub" id="ret-rates-sub"></p>
+        <div id="ret-rates-list"></div>
+      </div>
+      <div class="panel" id="ret-pipeline-panel" style="margin-top:18px;">
+        <h3>🔁 Retention pipeline</h3>
+        <p class="panel-sub" id="ret-pipeline-stats"></p>
+        <div id="ret-pipeline-list"></div>
+      </div>
+      <div class="panel" id="ret-cold-panel" style="margin-top:18px;">
+        <h3>🌙 Gone quiet
+          <button type="button" class="btn btn-ghost btn-sm" id="ret-cold-goto" title="Open the Clients page on this same segment, with the same adviser filter — where you can bulk-task, export and open the records">Work this list on Clients →</button>
+        </h3>
+        <p class="panel-sub" id="ret-cold-sub"></p>
+        <div id="ret-cold-list"></div>
+      </div>
     </section>
 
     <!-- Import -->

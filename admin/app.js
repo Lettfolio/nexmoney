@@ -4068,7 +4068,7 @@ $("#forgot-btn").addEventListener("click", async () => {
    the PWA service worker. All history.* calls are wrapped — if the History API is unavailable or
    blocked (some file:// contexts), modal history is simply not tracked and the app still works.
    Segments/filters stay OUT of the hash (session/localStorage already persists those). */
-const PAGE_HASH = { dashboard: "today", pipeline: "pipeline", protection: "protection", diary: "diary", clients: "clients", import: "import", reports: "reports", money: "money", data: "data", emails: "emails", vault: "vault", settings: "settings" };
+const PAGE_HASH = { dashboard: "today", pipeline: "pipeline", protection: "protection", diary: "diary", clients: "clients", retention: "retention", import: "import", reports: "reports", money: "money", data: "data", emails: "emails", vault: "vault", settings: "settings" };
 /* R7-4 — pages only some roles may open. Monday money is entirely firm-wide money, so it is
    Owner-only: the nav button is revealed by showApp and nav() below redirects anyone else who
    reaches for it (a bookmarked #money, a hand-typed hash, an old link in an email). Same standing
@@ -4480,7 +4480,7 @@ function nav(page, push = true) {
   // B9 (R5-31) — the diary page can be showing either the month grid or the Day view; route to
   // whichever loader matches the persisted toggle so navigating back into #diary doesn't silently
   // flip it back to Month.
-  ({ dashboard: loadDashboard, pipeline: loadPipeline, protection: loadProtectionPage, diary: () => (diaryViewMode === "day" ? loadDiaryDay() : loadDiary()), clients: () => loadClients($("#client-search").value, { force: true }), import: () => renderRevLastSync(), reports: loadReports, money: loadMoneyPage, data: loadDataHealth, emails: loadEmails, vault: loadVault, settings: renderSettings }[page])();
+  ({ dashboard: loadDashboard, pipeline: loadPipeline, protection: loadProtectionPage, diary: () => (diaryViewMode === "day" ? loadDiaryDay() : loadDiary()), clients: () => loadClients($("#client-search").value, { force: true }), retention: loadRetentionPage, import: () => renderRevLastSync(), reports: loadReports, money: loadMoneyPage, data: loadDataHealth, emails: loadEmails, vault: loadVault, settings: renderSettings }[page])();
 }
 
 /* ---------- Settings ---------- */
@@ -5786,6 +5786,242 @@ function renderDashNotices() {
   }
   el.innerHTML = bits.join("");
 }
+
+/* ==========================================================================
+   R38 — THE RATE & ERC FEED, COMPUTED ONCE.
+
+   Round 38 gives the retention worklist a page of its own, and the page shows
+   the SAME feed the Today drawer has shown since round 6 — un-truncated, with
+   the same rows and the same buttons. Two renderers over one feed is only safe
+   if there is one feed: the moment the reasoning below (which alerts are
+   self-nag, whose cases are in scope, which two rows are one building) exists
+   twice, the drawer and the page start disagreeing about the same client, and
+   the adviser cannot tell which screen is lying. So it is extracted here, with
+   the reasoning stated once, and both callers render from it.
+
+   NOT extracted: the reads. The drawer's rows come out of loadDashboard's own
+   Promise.all (it needs the cases for six other panels anyway); the page does
+   its own two bounded reads. Coupling the page to loadDashboard's execution
+   would mean opening Retention re-painted Today.
+   ========================================================================== */
+/* R5-6 / R35 §4 — the two sets the feed derives from the cases read, together because they are the
+   same question asked twice: which completed cases already HAVE a retention successor (so the
+   "Start retention case" button can't offer to create a second one), and which of those successors
+   is still LIVE.
+   The second one is why the feed stopped nagging about its own answer. Starting a retention case
+   copies the source case's rate_end_date onto the new live case (see startRetentionCase), which is
+   right — that date is what the conversation is about. But the successor is then itself a case with
+   a rate end in the past, so the feed grew a SECOND "rate ended N days ago" alert for the same
+   client, the same building and the same mortgage: one for the completed case and one for the live
+   case that already IS the answer to it. The adviser who did the right thing got more alerts, not
+   fewer. A LIVE successor is therefore excluded. The SOURCE case's row stays exactly as it was — it
+   is the row that carries "Start retention case" / "retention started", and dropping it would hide
+   the conversation rather than de-duplicate it. A successor that has itself completed or fallen
+   through is handling nothing, so it is not suppressed. */
+function retentionSuccessorSets(cases) {
+  const rows = cases || [];
+  const withSource = rows.filter((c) => c.retention_source_case_id);
+  return {
+    sourceIds: new Set(withSource.map((c) => c.retention_source_case_id)),
+    liveSuccessorIds: new Set(withSource.filter((c) => !["completed", "not_proceeding"].includes(c.stage)).map((c) => c.id)),
+  };
+}
+/* R12b · W-7 — case id → the adviser carrying it. v_alerts is a view over cases and carries no
+   owner of its own in every deployment, so every scope test on this feed goes through this map.
+   Built from a cases read the caller has already made, so it costs nothing. */
+function caseAdviserMap(cases) {
+  const m = {};
+  (cases || []).forEach((c) => { m[c.id] = c.assigned_to || null; });
+  return m;
+}
+/* R12b · W-16 — the scope test for ONE alert. "mine" is the case's adviser, "unassigned" is the
+   pile nobody is carrying (the one that goes cold), "all" is the firm. The drawer offers all three;
+   the Retention page offers Mine/All, which is the same test with the middle state never asked for. */
+function rateAlertInScope(a, scope, caseAdviser) {
+  if (scope === "all") return true;
+  const who = caseAdviser[a.case_id] !== undefined ? caseAdviser[a.case_id] : (a.assigned_to || null);
+  if (scope === "unassigned") return !who;
+  return !!(ME && ME.id) && who === ME.id;
+}
+/* R7-2 — the button is suppressed beyond nine months out. Starting a retention case that far ahead
+   creates a live enquiry, a call task and a queued client email for a conversation that cannot
+   usefully happen yet — it clutters the pipeline for three quarters and the client gets rung about
+   a rate that has most of a year to run. Nine months is three months of runway ahead of the
+   six-month reminder window the nightly queue works to, so a case is never stranded: the window
+   reaches it before the button reappears. */
+const rateErcFarOut = (a) => a.days_to_rate_end != null && a.days_to_rate_end > 274;
+/* Which half of the page a row belongs on: a rate that has already matured is a different, hotter
+   conversation from one with four months to run. The drawer does not split; the page does. */
+const rateErcEnded = (a) => a.days_to_rate_end != null && a.days_to_rate_end < 0;
+/* The whole feed, from rows the caller has already read. `scope` is "mine" | "unassigned" | "all".
+   Returns everything both renderers need, including the firm-wide counts their headings put in
+   tooltips — a badge counting rows the list does not show is the W-16 defect. */
+async function buildRateErcFeed(cases, alerts, opts) {
+  const o = opts || {};
+  const reminderMonths = o.reminderMonths || 6;
+  const scope = o.scope || "all";
+  const caseAdviser = o.caseAdviser || caseAdviserMap(cases);
+  const sets = retentionSuccessorSets(cases);
+  retentionSourceIds = sets.sourceIds;         // what the row markup below reads for "already started"
+  const notSelfNag = (a) => !sets.liveSuccessorIds.has(a.case_id);
+  const ratesSoonAll = (alerts || []).filter((a) => a.days_to_rate_end != null && a.days_to_rate_end <= reminderMonths * 30).filter(notSelfNag);
+  const ercFlagsAll = (alerts || []).filter((a) => a.erc_outlasts_rate).filter(notSelfNag);
+  const ratesSoonScoped = ratesSoonAll.filter((a) => rateAlertInScope(a, scope, caseAdviser));
+  const ercFlagsScoped = ercFlagsAll.filter((a) => rateAlertInScope(a, scope, caseAdviser));
+  const ercIds = new Set(ercFlagsScoped.map((a) => a.case_id));
+  const rateErcAll = [...ratesSoonScoped];
+  ercFlagsScoped.forEach((a) => { if (!rateErcAll.some((x) => x.case_id === a.case_id)) rateErcAll.push(a); });
+  /* R7-2 — what each expiring rate is WORTH, keyed by case id, from the widened cases read.
+     `lastFee` is proc + broker + sols on the case: the fee the firm earned last time it did this
+     mortgage, which is the only fee figure the schema holds and therefore the only honest proxy
+     for what a renewal is worth. Labelled as a proxy everywhere it appears.
+     R12b · W-15b/c — the same loop keys the call-pack row by case id. Empty on a database without
+     those columns, which is why every consumer is null-safe rather than assuming the keys are there. */
+  const money = {}, callPack = {};
+  (cases || []).forEach((c) => { money[c.id] = { loan: Number(c.loan_amount || 0), lastFee: caseLastFee(c) }; callPack[c.id] = c; });
+  /* R6 — v_alerts carries the client's NAME and nothing about the building, so Duncan Armitage's
+     two Skipton cases on 4 Seafield Gardens (and any two of a landlord's five) render as the same
+     row twice, inflating the counters and offering two identical buttons. One batched lookup of the
+     cases behind the rows gives every row its property.
+     R7-2 — the lookup runs over the WHOLE merged list rather than the first fifteen, because
+     de-duplication has to happen before any slice: collapsing after cutting would drop real
+     maturities off the end of the list to make room for rows it was about to merge anyway. */
+  const ctx = await loadPropContext(rateErcAll.map((a) => a.case_id));
+  /* R7-2 — ONE BUILDING, ONE MATURITY DATE, ONE ROW. Two cases on the same property whose rates
+     end on the same day are one mortgage conversation, and until now they were two identical rows
+     with two identical buttons, each of which would create its own retention case. Collapsed on
+     propKey + rate_end_date (the same key the Reports ledger uses), badged with how many cases are
+     behind the row, and never guessed at: a case with no address collapses with nothing. */
+  const seen = new Map();
+  const rows = [];
+  rateErcAll.forEach((a) => {
+    const row = propCtxCase(ctx, a.case_id);
+    const pk = row ? propKey(row) : "";
+    const key = pk ? pk + "|" + (a.rate_end_date || "") : "";
+    if (!key) { a.__dupes = 1; rows.push(a); return; }
+    if (!seen.has(key)) { a.__dupes = 1; seen.set(key, a); rows.push(a); return; }
+    seen.get(key).__dupes++;
+  });
+  return {
+    scope, reminderMonths, caseAdviser, ctx, money, callPack, ercIds, rows,
+    ratesSoonAll, ercFlagsAll, ratesSoonScoped, ercFlagsScoped,
+    collapsed: rateErcAll.length - rows.length,
+  };
+}
+/* R7-2 — sorted by VALUE AT RISK by default (the loan on the case), because the question this feed
+   is scanned with is "which of these matters most", and a date sort answers a different one. The
+   date sort is one click away and the heading says which is in force. Owner only: the loan and fee
+   columns are firm money and an adviser keeps the round-6 order, by date, with no money on it. */
+function sortRateErcRows(feed, byValue) {
+  const list = feed.rows.slice();
+  if (byValue) {
+    list.sort((a, b) => {
+      const d = ((feed.money[b.case_id] || {}).loan || 0) - ((feed.money[a.case_id] || {}).loan || 0);
+      return d || ((a.rate_end_date || "") < (b.rate_end_date || "") ? -1 : 1);
+    });
+  } else {
+    list.sort((a, b) => (a.rate_end_date || "") < (b.rate_end_date || "") ? -1 : 1);
+  }
+  return list;
+}
+/* R12b · W-16 — the tooltip a scoped count carries. The firm-wide figure is not deleted, it is put
+   here, so switching scope never looks like work vanishing. */
+const rateCountTip = (n, all, what, scope) => `${n} ${what} on ${rateScopeWord(scope)}${scope === "all" ? "" : ` — ${all} across the whole firm`}.`;
+/* ONE ROW of the feed. Every branch below is the round-6-to-round-35 markup, moved rather than
+   rewritten, so the drawer and the page cannot render the same alert differently. */
+function renderRateErcRow(a, feed) {
+  const money = showMoney();
+  const mny = feed.money[a.case_id] || { loan: 0, lastFee: 0 };
+  const cp = feed.callPack[a.case_id] || null;
+  const farOut = rateErcFarOut(a);
+  return `
+    <div class="row-item">
+      <div class="row-main">
+        <div class="t" onclick="openCase('${a.case_id}')">${esc(a.client_name)} ${propCtxChip(feed.ctx, a.case_id, "row-prop")}${a.__dupes > 1 ? ` <span class="badge grey" title="${a.__dupes} cases share this property and this rate end date — shown once, because it is one mortgage conversation.">${a.__dupes} cases</span>` : ""}</div>
+        <div class="s">${lenderIcon(a.lender)}${esc(a.lender || "")} ${a.rate_percent ? a.rate_percent + "%" : ""} — ends ${fmtD(a.rate_end_date)}${a.days_to_rate_end != null ? ` (${a.days_to_rate_end < 0 ? Math.abs(a.days_to_rate_end) + (Math.abs(a.days_to_rate_end) === 1 ? " day" : " days") + " ago" : "in " + a.days_to_rate_end + (a.days_to_rate_end === 1 ? " day" : " days")})` : ""}${feed.ercIds.has(a.case_id) ? ` — ERC runs until ${fmtD(a.erc_end_date)}` : ""}</div>
+        ${money ? `<div class="s rate-money">Loan <strong>${mny.loan ? fmtM(mny.loan) : "—"}</strong> · last fee <strong>${mny.lastFee ? fmtM(mny.lastFee) : "none recorded"}</strong> <span class="money-basis">(value at risk · loan on the case · last fee as proxy)</span></div>` : ""}
+        ${/* R12b · W-15b — the call pack, on the row the call is made from. Client money, not firm
+             money, so it is NOT behind showMoney(): the balance and the payment are the client's
+             own figures and the adviser ringing them needs both. Only drawn when at least one is
+             recorded; each one absent renders "—", never 0. */ ""}
+        ${/* R12b · W-15c — the uplift is inline here, and ONLY on rows whose rate has actually
+             ENDED. A client still inside their fix is not paying anything extra yet, and a
+             "£X/mo more" over a rate with four months to run reads as a bill they already get. */ ""}
+        ${callPackLineHtml(cp, rateErcEnded(a))}
+      </div>
+      ${a.days_to_rate_end < 0 ? '<span class="badge red">OVERDUE</span>' : ""}
+      ${feed.ercIds.has(a.case_id) ? `<span class="badge red" title="${TIP_ERC}">ERC conflict</span>` : ""}
+      ${a.rate_end_estimated ? `<span class="badge ${EST_BADGE_CLS}" title="${TIP_APPROX}">≈ estimate</span>` : ""}
+      ${a.stage === "completed"
+        ? (a.rate_reminder_queued_at ? '<span class="badge green">Reminder sent</span>' : '<span class="badge amber">Reminder pending</span>')
+        : stageBadge(a.stage)}
+      ${/* R5-6 — the backend auto-creates a retention case only while the rate is still in FUTURE
+           reminder window; a rate that has already ended is never picked up, and these rows sat
+           here saying "reminder pending" forever. This is the manual path for exactly those. */ ""}
+      ${a.stage === "completed" && !a.rate_reminder_queued_at && a.rate_end_date && !retentionSourceIds.has(a.case_id)
+        ? (farOut
+          ? `<span class="badge grey rate-too-early" title="This rate has more than nine months to run. Starting a retention case now would create a live enquiry, a call task and a queued client email for a conversation that cannot usefully happen yet — the ${feed.reminderMonths}-month reminder window reaches this case long before it is too late.">too early — ${Math.round(a.days_to_rate_end / 30)}mo out</span>`
+          : retentionToMeHtml(a.case_id, cp) + `<button class="btn btn-sm btn-retention" onclick="event.stopPropagation();startRetentionCase('${a.case_id}', event)" title="Create the follow-on remortgage case, the call task and a queued reminder">🔁 Start retention case</button>`) : ""}
+      ${/* G1I-R5 — the recovery control. A retention case already exists for this one, so the
+           button above is (correctly) gone, but the source was never stamped: the row nags
+           "Reminder pending" forever and the nightly RPC will never pick it up either, because
+           the rate has ended and a successor exists. Without this the only way out was to send the
+           client a SECOND reminder email. */ ""}
+      ${a.stage === "completed" && !a.rate_reminder_queued_at && retentionSourceIds.has(a.case_id)
+        ? `<button class="btn btn-sm btn-retention" onclick="event.stopPropagation();markRateReminded('${a.case_id}', event)" title="This case already has a retention case, but it was never marked as reminded — clear the nag without emailing the client again">✓ Mark as reminded</button>` : ""}
+    </div>`;
+}
+/* R7-2 — the dedupe footnote. Said wherever the feed is drawn, because a count that does not match
+   the rows on screen is the thing this note exists to explain. */
+function rateErcDedupeNote(collapsed) {
+  return collapsed ? `<div class="empty rate-erc-dedupe-note">${collapsed} further case${collapsed === 1 ? " is" : "s are"} folded into the rows above — same property, same rate end date, one conversation.</div>` : "";
+}
+
+/* ==========================================================================
+   R38 — THE RETENTION PIPELINE, COMPUTED ONCE (drawer + page).
+   Same extraction, same reason: the Today drawer shows the first twelve, the
+   Retention page shows the lot, and "open" / "won" / "lost" / conversion must
+   mean one thing on both.
+   ========================================================================== */
+/* R38 — `assigned_to` is the one column added to the round-5 select, so the page's Mine/All scope
+   can answer whose pipeline this is. Base column since the original schema, so it cannot 42703. */
+const RETENTION_PIPE_COLS = "id,stage,lender,rate_end_date,rate_end_estimated,assigned_to,clients!client_id(first_name,last_name)";
+async function readRetentionPipeline() {
+  return db.from("cases").select(RETENTION_PIPE_COLS)
+    .not("retention_source_case_id", "is", null)
+    .order("rate_end_date").limit(OWNER_ROW_CAP);
+}
+function retentionPipelineStats(rows) {
+  const all = rows || [];
+  const open = all.filter((c) => !["completed", "not_proceeding"].includes(c.stage));
+  const won = all.filter((c) => c.stage === "completed").length;
+  const lost = all.filter((c) => c.stage === "not_proceeding").length;
+  return { all, open, won, lost, rate: won + lost ? Math.round((won / (won + lost)) * 100) : null };
+}
+/* R5-6 — the old copy here ("nothing creates these for you") was simply untrue: the nightly
+   queue_automated_emails() RPC creates a retention case, its note, its call task and a queued
+   reminder as soon as a completed client's rate enters the reminder window. What it genuinely
+   cannot do is reach back for a rate that has ALREADY ended — that is what the button is for. */
+function retentionStatsLine(s) {
+  return `${s.open.length} open · ${s.won} won · ${s.lost} lost${s.rate != null ? ` · ${s.rate}% conversion` : ""}. `
+    + "Created automatically when a completed client's rate enters the reminder window. For rates already past, open the case and press Start retention case.";
+}
+/* R6 — a retention row is by definition about one specific mortgage on one specific building;
+   naming it by client alone put a landlord's two expiring rates on the panel as one repeated
+   line. (LR-18.) */
+async function renderRetentionRows(open, cap) {
+  const shown = open.slice(0, cap);
+  const ctx = await loadPropContext(shown.map((c) => c.id));
+  return shown.map((c) => `
+    <div class="row-item">
+      <div class="row-main">
+        <div class="t" onclick="openCase('${c.id}')">${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" "))} ${propCtxChip(ctx, c.id, "row-prop")}</div>
+        <div class="s">${lenderIcon(c.lender)}${esc(c.lender || "")} — rate ends ${fmtD(c.rate_end_date)}${c.rate_end_estimated ? " " + APPROX : ""}</div>
+      </div>
+      ${stageBadge(c.stage)}
+    </div>`).join("");
+}
+
 async function loadDashboard() {
   /* R34 · W3 — restore every drawer the user has an opinion about BEFORE anything that could call
      autoDrawer (the loaders below, and the error branch's loaders too). */
@@ -5809,8 +6045,10 @@ async function loadDashboard() {
   ]);
   hasBankDetails = bank && !bank.error ? !!bank.data : null;
   /* R5-6 — which completed cases already have a retention successor, so the "Start retention case"
-     button can't offer to create a second one. Derived from the rows already fetched above. */
-  retentionSourceIds = new Set((cases || []).filter((c) => c.retention_source_case_id).map((c) => c.retention_source_case_id));
+     button can't offer to create a second one. Derived from the rows already fetched above.
+     R38 — set here as well as inside buildRateErcFeed(), because the error branch below returns
+     before the feed is ever built and the case modal's own button reads this set. */
+  retentionSourceIds = retentionSuccessorSets(cases).sourceIds;
   if (casesErr || alertsErr) {
     renderLoadError("#kpi-row", casesErr || alertsErr, loadDashboard);
     renderLoadError("#alerts-rateerc", casesErr || alertsErr, loadDashboard);
@@ -5828,37 +6066,10 @@ async function loadDashboard() {
      would make every desk but his look empty. */
   advLoadCases = {};
   activeAll.forEach((c) => { if (c.assigned_to) advLoadCases[c.assigned_to] = (advLoadCases[c.assigned_to] || 0) + 1; });
-  /* R12b · W-7 — case id → the adviser carrying it. Used to scope both the KPI strip and the
-     Rate & ERC drawer, because v_alerts is a view over cases and carries no owner of its own in
-     every deployment. Built from the cases read above, so it costs nothing. */
-  const caseAdviser = {};
-  (cases || []).forEach((c) => { caseAdviser[c.id] = c.assigned_to || null; });
+  // R12b · W-7 — case id → the adviser carrying it, used to scope both the KPI strip and the
+  // Rate & ERC drawer. R38 — see caseAdviserMap() for the whole rationale.
+  const caseAdviser = caseAdviserMap(cases);
 
-  /* ==========================================================================
-     R35 §4 — THE RETENTION FLOW STOPS NAGGING ABOUT ITS OWN SUCCESSOR.
-     Starting a retention case copies the source case's rate_end_date onto the new live case (see
-     startRetentionCase), which is right — that date is what the conversation is about. But the
-     successor is then itself a case with a rate end in the past, so the Rate & ERC feed grew a
-     SECOND "rate ended N days ago" alert for the same client, the same building and the same
-     mortgage: one for the completed case and one for the live case that already IS the answer to
-     it. The adviser who did the right thing got more alerts, not fewer.
-     A LIVE successor is therefore excluded from this feed. The SOURCE case's row stays exactly as
-     it was — it is the row that carries "Start retention case" / "retention started", and dropping
-     it would hide the conversation rather than de-duplicate it. A successor that has itself
-     completed or fallen through is handling nothing, so it is not suppressed.
-     Applied to the feed's own sets (below), which is everything this drawer draws — the list, the
-     scoped counts in the heading and the firm-wide figures in their tooltips all move together,
-     because a badge counting rows the list does not show is the W-16 defect. Built off the
-     dashboard cases already read (DASH_CASE_COLS carries retention_source_case_id), so it costs no
-     query; v_alerts carries no such column of its own. The KPI strip above is untouched — it
-     counts the book, not this worklist. */
-  const retentionSuccessorLive = new Set((cases || [])
-    .filter((c) => c.retention_source_case_id && !["completed", "not_proceeding"].includes(c.stage))
-    .map((c) => c.id));
-  const notSelfNag = (a) => !retentionSuccessorLive.has(a.case_id);
-  /* R12b · W-7 — the strip. See renderTodayKpis() above for the whole rationale. */
-  const ratesSoonAll = (alerts || []).filter((a) => a.days_to_rate_end != null && a.days_to_rate_end <= reminderMonths * 30).filter(notSelfNag);
-  const ercFlagsAll = (alerts || []).filter((a) => a.erc_outlasts_rate).filter(notSelfNag);
   /* R12b · W-7 — everything the tiles are computed from, kept so the Mine/All toggle can repaint
      them WITHOUT a second round-trip. The toggle changes which subset is counted, not which rows
      exist, so re-reading the table to answer it would be a query spent on nothing. */
@@ -5880,131 +6091,42 @@ async function loadDashboard() {
      is carrying, which is precisely the pile that goes cold. Stacking the two
      scopes would also mean the drawer silently narrowing when someone touched
      a control six inches away that says nothing about this panel.
+
+     R38 — the feed itself now lives in buildRateErcFeed(), shared with the
+     Retention page. This drawer keeps everything that is ITS opinion and not
+     the feed's: the three-state scope, the fifteen-row slice, the drawer
+     chrome. What the two surfaces must agree about — which alerts count, whose
+     they are, which two rows are one building, what a row looks like — is
+     computed and rendered in exactly one place.
      ========================================================================== */
-  const rateInScope = (a) => {
-    if (rateScope === "all") return true;
-    const who = caseAdviser[a.case_id] !== undefined ? caseAdviser[a.case_id] : (a.assigned_to || null);
-    if (rateScope === "unassigned") return !who;
-    return !!(ME && ME.id) && who === ME.id;
-  };
-  const ratesSoonScoped = ratesSoonAll.filter(rateInScope);
-  const ercFlagsScoped = ercFlagsAll.filter(rateInScope);
-  const ercIds = new Set(ercFlagsScoped.map((a) => a.case_id));
-  const rateErcAll = [...ratesSoonScoped];   // R35 §4 — live retention successors already excluded above
-  ercFlagsScoped.forEach((a) => { if (!rateErcAll.some((x) => x.case_id === a.case_id)) rateErcAll.push(a); });
-  /* R7-2 — what each expiring rate is WORTH, keyed by case id, from the widened cases read above.
-     `lastFee` is proc + broker + sols on the case: the fee the firm earned last time it did this
-     mortgage, which is the only fee figure the schema holds and therefore the only honest proxy
-     for what a renewal is worth. Labelled as a proxy everywhere it appears. */
-  const rateMoney = {};
-  (cases || []).forEach((c) => { rateMoney[c.id] = { loan: Number(c.loan_amount || 0), lastFee: caseLastFee(c) }; });
-  /* R12b · W-15b/c — the call-pack figures for the rows on this panel, keyed by case id from the
-     same widened read. Empty on a database without the columns, which is why every consumer below
-     is null-safe rather than assuming the keys are there. */
-  const rateCallPack = {};
-  (cases || []).forEach((c) => { rateCallPack[c.id] = c; });
-  /* R6 — v_alerts carries the client's NAME and nothing about the building, so Duncan Armitage's
-     two Skipton cases on 4 Seafield Gardens (and any two of a landlord's five) render as the same
-     row twice, inflating the counters above and offering two identical buttons. One batched
-     lookup of the cases behind the rows on screen gives every row its property.
-     R7-2 — the lookup now runs over the WHOLE merged list rather than the first fifteen, because
-     de-duplication has to happen before the slice: collapsing after cutting to fifteen would drop
-     real maturities off the end of the list to make room for rows it was about to merge anyway. */
-  const rateErcCtx = await loadPropContext(rateErcAll.map((a) => a.case_id));
-  /* R7-2 — ONE BUILDING, ONE MATURITY DATE, ONE ROW. Two cases on the same property whose rates
-     end on the same day are one mortgage conversation, and until now they were two identical rows
-     with two identical buttons, each of which would create its own retention case. Collapsed on
-     propKey + rate_end_date (the same key the Reports ledger uses), badged with how many cases are
-     behind the row, and never guessed at: a case with no address collapses with nothing. */
-  const rateErcSeen = new Map();
-  const rateErcMerged = [];
-  rateErcAll.forEach((a) => {
-    const row = propCtxCase(rateErcCtx, a.case_id);
-    const pk = row ? propKey(row) : "";
-    const key = pk ? pk + "|" + (a.rate_end_date || "") : "";
-    if (!key) { a.__dupes = 1; rateErcMerged.push(a); return; }
-    if (!rateErcSeen.has(key)) { a.__dupes = 1; rateErcSeen.set(key, a); rateErcMerged.push(a); return; }
-    rateErcSeen.get(key).__dupes++;
-  });
+  const rateFeed = await buildRateErcFeed(cases, alerts, { reminderMonths, scope: rateScope, caseAdviser });
   /* R7-2 — sorted by VALUE AT RISK by default (the loan on the case), because the question this
      panel is scanned with is "which of these matters most", and a date sort answers a different
      one. The date sort is one click away and the header says which is in force. Owner only: the
      loan and fee columns are firm money and an adviser keeps the round-6 panel exactly as it was,
      date-sorted, with no money on it. */
   const rateValueSort = showMoney() && rateErcSortMode === "value";
-  if (rateValueSort) {
-    rateErcMerged.sort((a, b) => {
-      const d = ((rateMoney[b.case_id] || {}).loan || 0) - ((rateMoney[a.case_id] || {}).loan || 0);
-      return d || ((a.rate_end_date || "") < (b.rate_end_date || "") ? -1 : 1);
-    });
-  } else {
-    rateErcMerged.sort((a, b) => (a.rate_end_date || "") < (b.rate_end_date || "") ? -1 : 1);
-  }
+  const rateErcMerged = sortRateErcRows(rateFeed, rateValueSort);
   const rateErcH3 = $("#rate-erc-panel h3");
-  const rateErcCollapsed = rateErcAll.length - rateErcMerged.length;
   /* R12b · W-16 — the counts in the heading COUNT WHAT THE LIST SHOWS, and say whose. A badge that
      kept reading "31 ending soon" over eight visible rows is the same class of lie the KPI strip
-     was telling one panel higher up. The firm-wide figure is not deleted, it is put in the
-     tooltip, so switching scope never looks like work vanishing. */
-  const rateCountTip = (n, all, what) => `${n} ${what} on ${rateScopeWord(rateScope)}${rateScope === "all" ? "" : ` — ${all} across the whole firm`}.`;
+     was telling one panel higher up. See rateCountTip() for where the firm-wide figure went. */
   rateErcH3.innerHTML = `⚠️ Rate &amp; ERC alerts
-    ${ratesSoonScoped.length ? `<span class="count hot" title="${esc(rateCountTip(ratesSoonScoped.length, ratesSoonAll.length, "ending soon"))}">${ratesSoonScoped.length} ending soon</span>` : ""}
-    ${ercFlagsScoped.length ? `<span class="count" style="background:#fbe9e7;color:var(--red);" title="${esc(rateCountTip(ercFlagsScoped.length, ercFlagsAll.length, "ERC conflicts"))}">${ercFlagsScoped.length} ERC conflict</span>` : ""}
-    ${showMoney() ? `<button type="button" class="btn btn-sm rate-sort-btn" id="rate-erc-sort" onclick="event.stopPropagation();toggleRateErcSort()" title="${rateValueSort ? "Sorted by loan size — the value at risk. Click to sort by date instead." : "Sorted by rate end date. Click to sort by loan size — the value at risk."}">${rateValueSort ? "↕ By value at risk" : "↕ By date"}</button>` : ""}`;
+    ${rateFeed.ratesSoonScoped.length ? `<span class="count hot" title="${esc(rateCountTip(rateFeed.ratesSoonScoped.length, rateFeed.ratesSoonAll.length, "ending soon", rateScope))}">${rateFeed.ratesSoonScoped.length} ending soon</span>` : ""}
+    ${rateFeed.ercFlagsScoped.length ? `<span class="count" style="background:#fbe9e7;color:var(--red);" title="${esc(rateCountTip(rateFeed.ercFlagsScoped.length, rateFeed.ercFlagsAll.length, "ERC conflicts", rateScope))}">${rateFeed.ercFlagsScoped.length} ERC conflict</span>` : ""}
+    ${showMoney() ? `<button type="button" class="btn btn-sm rate-sort-btn" id="rate-erc-sort" onclick="event.stopPropagation();toggleRateErcSort()" title="${rateValueSort ? "Sorted by loan size — the value at risk. Click to sort by date instead." : "Sorted by rate end date. Click to sort by loan size — the value at risk."}">${rateValueSort ? "↕ By value at risk" : "↕ By date"}</button>` : ""}
+    ${/* R38 — this drawer is the morning glance; the page is where the list is actually worked.
+         One link, so the fifteen-row slice is never mistaken for the whole feed. */ ""}
+    <button type="button" class="btn btn-ghost btn-sm ret-page-link" id="rate-erc-open-retention" onclick="event.stopPropagation();nav('retention')" title="The same feed, un-truncated, with the retention pipeline and the clients who have gone quiet">Open Retention page →</button>`;
   const rateSub = $("#rate-erc-sub");
   if (rateSub) {
     rateSub.textContent = `Rates ending within the reminder window, and cases where the ERC outlasts the rate. `
-      + `Showing ${rateScopeWord(rateScope)}${rateScope === "all" ? "" : ` — ${ratesSoonAll.length + ercFlagsAll.filter((a) => !ratesSoonAll.some((r) => r.case_id === a.case_id)).length} alerts firm-wide.`}`;
+      + `Showing ${rateScopeWord(rateScope)}${rateScope === "all" ? "" : ` — ${rateFeed.ratesSoonAll.length + rateFeed.ercFlagsAll.filter((a) => !rateFeed.ratesSoonAll.some((r) => r.case_id === a.case_id)).length} alerts firm-wide.`}`;
   }
-  $("#alerts-rateerc").innerHTML = rateErcMerged.length ? rateErcMerged.slice(0, 15).map((a) => {
-    const mny = rateMoney[a.case_id] || { loan: 0, lastFee: 0 };
-    const cp = rateCallPack[a.case_id] || null;
-    /* R7-2 — the button is suppressed beyond nine months out. Starting a retention case that far
-       ahead creates a live enquiry, a call task and a queued client email for a conversation that
-       cannot usefully happen yet — it clutters the pipeline for three quarters and the client gets
-       rung about a rate that has most of a year to run. Nine months is three months of runway
-       ahead of the six-month reminder window the nightly queue works to, so a case is never
-       stranded: the window reaches it before the button reappears. */
-    const farOut = a.days_to_rate_end != null && a.days_to_rate_end > 274;
-    return `
-    <div class="row-item">
-      <div class="row-main">
-        <div class="t" onclick="openCase('${a.case_id}')">${esc(a.client_name)} ${propCtxChip(rateErcCtx, a.case_id, "row-prop")}${a.__dupes > 1 ? ` <span class="badge grey" title="${a.__dupes} cases share this property and this rate end date — shown once, because it is one mortgage conversation.">${a.__dupes} cases</span>` : ""}</div>
-        <div class="s">${lenderIcon(a.lender)}${esc(a.lender || "")} ${a.rate_percent ? a.rate_percent + "%" : ""} — ends ${fmtD(a.rate_end_date)}${a.days_to_rate_end != null ? ` (${a.days_to_rate_end < 0 ? Math.abs(a.days_to_rate_end) + (Math.abs(a.days_to_rate_end) === 1 ? " day" : " days") + " ago" : "in " + a.days_to_rate_end + (a.days_to_rate_end === 1 ? " day" : " days")})` : ""}${ercIds.has(a.case_id) ? ` — ERC runs until ${fmtD(a.erc_end_date)}` : ""}</div>
-        ${money ? `<div class="s rate-money">Loan <strong>${mny.loan ? fmtM(mny.loan) : "—"}</strong> · last fee <strong>${mny.lastFee ? fmtM(mny.lastFee) : "none recorded"}</strong> <span class="money-basis">(value at risk · loan on the case · last fee as proxy)</span></div>` : ""}
-        ${/* R12b · W-15b — the call pack, on the row the call is made from. Client money, not firm
-             money, so it is NOT behind showMoney(): the balance and the payment are the client's
-             own figures and the adviser ringing them needs both. Only drawn when at least one is
-             recorded; each one absent renders "—", never 0. */ ""}
-        ${/* R12b · W-15c — the uplift is inline here, and ONLY on rows whose rate has actually
-             ENDED. A client still inside their fix is not paying anything extra yet, and a
-             "£X/mo more" over a rate with four months to run reads as a bill they already get. */ ""}
-        ${callPackLineHtml(cp, a.days_to_rate_end != null && a.days_to_rate_end < 0)}
-      </div>
-      ${a.days_to_rate_end < 0 ? '<span class="badge red">OVERDUE</span>' : ""}
-      ${ercIds.has(a.case_id) ? `<span class="badge red" title="${TIP_ERC}">ERC conflict</span>` : ""}
-      ${a.rate_end_estimated ? `<span class="badge ${EST_BADGE_CLS}" title="${TIP_APPROX}">≈ estimate</span>` : ""}
-      ${a.stage === "completed"
-        ? (a.rate_reminder_queued_at ? '<span class="badge green">Reminder sent</span>' : '<span class="badge amber">Reminder pending</span>')
-        : stageBadge(a.stage)}
-      ${/* R5-6 — the backend auto-creates a retention case only while the rate is still in FUTURE
-           reminder window; a rate that has already ended is never picked up, and these rows sat
-           here saying "reminder pending" forever. This is the manual path for exactly those. */ ""}
-      ${a.stage === "completed" && !a.rate_reminder_queued_at && a.rate_end_date && !retentionSourceIds.has(a.case_id)
-        ? (farOut
-          ? `<span class="badge grey rate-too-early" title="This rate has more than nine months to run. Starting a retention case now would create a live enquiry, a call task and a queued client email for a conversation that cannot usefully happen yet — the ${reminderMonths}-month reminder window reaches this case long before it is too late.">too early — ${Math.round(a.days_to_rate_end / 30)}mo out</span>`
-          : retentionToMeHtml(a.case_id, cp) + `<button class="btn btn-sm btn-retention" onclick="event.stopPropagation();startRetentionCase('${a.case_id}', event)" title="Create the follow-on remortgage case, the call task and a queued reminder">🔁 Start retention case</button>`) : ""}
-      ${/* G1I-R5 — the recovery control. A retention case already exists for this one, so the
-           button above is (correctly) gone, but the source was never stamped: the row nags
-           "Reminder pending" forever and the nightly RPC will never pick it up either, because
-           the rate has ended and a successor exists. Without this the only way out was to send the
-           client a SECOND reminder email. */ ""}
-      ${a.stage === "completed" && !a.rate_reminder_queued_at && retentionSourceIds.has(a.case_id)
-        ? `<button class="btn btn-sm btn-retention" onclick="event.stopPropagation();markRateReminded('${a.case_id}', event)" title="This case already has a retention case, but it was never marked as reminded — clear the nag without emailing the client again">✓ Mark as reminded</button>` : ""}
-    </div>`;
-  }).join("")
-    + (rateErcMerged.length > 15 ? `<div class="empty">…and ${rateErcMerged.length - 15} more — see Pipeline table view.</div>` : "")
-    + (rateErcCollapsed ? `<div class="empty rate-erc-dedupe-note">${rateErcCollapsed} further case${rateErcCollapsed === 1 ? " is" : "s are"} folded into the rows above — same property, same rate end date, one conversation.</div>` : "")
+  $("#alerts-rateerc").innerHTML = rateErcMerged.length
+    ? rateErcMerged.slice(0, 15).map((a) => renderRateErcRow(a, rateFeed)).join("")
+      + (rateErcMerged.length > 15 ? `<div class="empty">…and ${rateErcMerged.length - 15} more — <button type="button" class="dash-notice-link" onclick="nav('retention')">see the Retention page</button>.</div>` : "")
+      + rateErcDedupeNote(rateFeed.collapsed)
     : '<div class="empty">Nothing ending in the reminder window, and no ERC conflicts. 👍</div>';
 
   loadRetention();
@@ -6064,36 +6186,205 @@ async function loadDashboard() {
 }
 
 async function loadRetention() {
-  const { data: rets, error } = await db.from("cases")
-    .select("id,stage,lender,rate_end_date,rate_end_estimated,clients!client_id(first_name,last_name)")
-    .not("retention_source_case_id", "is", null)
-    .order("rate_end_date");
+  const { data: rets, error } = await readRetentionPipeline();
   if (error) { renderLoadError("#retention-list", error, loadRetention); return; }
-  const all = rets || [];
-  const open = all.filter((c) => !["completed", "not_proceeding"].includes(c.stage));
-  const won = all.filter((c) => c.stage === "completed").length;
-  const lost = all.filter((c) => c.stage === "not_proceeding").length;
-  const rate = won + lost ? Math.round((won / (won + lost)) * 100) : null;
-  /* R5-6 — the old copy here ("nothing creates these for you") was simply untrue: the nightly
-     queue_automated_emails() RPC creates a retention case, its note, its call task and a queued
-     reminder as soon as a completed client's rate enters the reminder window. What it genuinely
-     cannot do is reach back for a rate that has ALREADY ended — that is what the button is for. */
-  $("#retention-stats").textContent =
-    `${open.length} open · ${won} won · ${lost} lost${rate != null ? ` · ${rate}% conversion` : ""}. Created automatically when a completed client's rate enters the reminder window. For rates already past, open the case and press Start retention case.`;
-  /* R6 — a retention row is by definition about one specific mortgage on one specific building;
-     naming it by client alone put a landlord's two expiring rates on the panel as one repeated
-     line. (LR-18.) */
-  const retCtx = await loadPropContext(open.slice(0, 12).map((c) => c.id));
-  $("#retention-list").innerHTML = open.length ? open.slice(0, 12).map((c) => `
+  /* R38 — the drawer's ONE opinion is the twelve-row slice; everything else (what open/won/lost
+     mean, the conversion figure, the row) comes from the shared builders the Retention page also
+     renders from. It stays unscoped: this drawer never had a scope control and Today is not where
+     that decision is made. */
+  const st = retentionPipelineStats(rets);
+  $("#retention-stats").textContent = retentionStatsLine(st);
+  $("#retention-list").innerHTML = st.open.length
+    ? (await renderRetentionRows(st.open, 12))
+      + (st.open.length > 12 ? `<div class="empty">…and ${st.open.length - 12} more in the pipeline — <button type="button" class="dash-notice-link" onclick="nav('retention')">see the Retention page</button>.</div>` : "")
+    : '<div class="empty">No open retention opportunities. One is created for you when a completed client\'s rate enters the reminder window; for a rate that has already ended, use Start retention case on the completed case (see Rate &amp; ERC alerts above).</div>';
+  panelCount("#retention-list", st.open.length);
+}
+
+/* =========================================================================
+   R38 — THE RETENTION PAGE.
+
+   Luke's whole job, on one screen. Today's drawers are the morning glance —
+   fifteen rates and twelve retention cases, folded shut again by lunchtime.
+   What was missing was the place you sit down and WORK the list: the feed
+   un-truncated, the pipeline it feeds, and the clients who have quietly gone
+   six months without hearing from anybody.
+
+   NOTHING here is a second implementation. The rate feed comes from
+   buildRateErcFeed() / renderRateErcRow(), the pipeline from
+   readRetentionPipeline() / retentionPipelineStats() / renderRetentionRows(),
+   the cold set from the Clients page's own clientDataCached() + coldClients().
+   The page's own contribution is three things a drawer cannot have: its own
+   reads (so opening Retention never repaints Today), one scope control across
+   all three panels, and a render cap of a hundred rather than fifteen.
+   ========================================================================= */
+/* R18-P4 discipline — the DOM render is capped; every COUNT on the page is computed over the full
+   list, and a capped panel says how many it is not showing. */
+const RET_LIST_CAP = 100;
+/* R34 pattern (the Watchtower's #wt-scope-*): resolved on first render because it depends on the
+   signed-in role and on a stored choice, neither of which is known when the markup is parsed. An
+   adviser opens on their own book; the Owner and the Administrator run the firm, and All IS their
+   default (the same argument as every other scope default in the app). */
+let retScope = null;
+const RET_SCOPE_KEY = "nx_ret_scope";
+function retScopeResolved() {
+  if (retScope) return retScope;
+  const stored = lsGet(RET_SCOPE_KEY);
+  retScope = (stored === "mine" || stored === "all") ? stored : (ME && !isAdminOrOwner() ? "mine" : "all");
+  return retScope;
+}
+function syncRetScopeButtons() {
+  const m = $("#ret-scope-mine"), a = $("#ret-scope-all");
+  if (!m || !a) return;
+  const s = retScopeResolved();
+  m.classList.toggle("scope-active", s === "mine");
+  a.classList.toggle("scope-active", s === "all");
+  m.setAttribute("aria-pressed", String(s === "mine"));
+  a.setAttribute("aria-pressed", String(s === "all"));
+}
+window.retSetScope = function (s) {
+  retScope = s === "mine" ? "mine" : "all";
+  lsSet(RET_SCOPE_KEY, retScope);
+  syncRetScopeButtons();
+  loadRetentionPage();
+};
+if ($("#ret-scope-mine")) {
+  $("#ret-scope-mine").addEventListener("click", () => retSetScope("mine"));
+  $("#ret-scope-all").addEventListener("click", () => retSetScope("all"));
+}
+/* R7-2 semantics, page-local state: the drawer and the page are read in different postures and a
+   click on one must not silently re-order the other. Same default and same rule — value at risk
+   for whoever can see firm money, date order for everybody else. */
+let retSortMode = "value";
+window.toggleRetSort = function () {
+  retSortMode = retSortMode === "value" ? "date" : "value";
+  loadRetentionPage();
+};
+/* The whole page. The three panels are independent reads and are deliberately NOT awaited in
+   series: a slow client read must not hold the rate feed off the screen. */
+async function loadRetentionPage() {
+  const scope = retScopeResolved();
+  syncRetScopeButtons();
+  const note = $("#ret-scope-note");
+  if (note) {
+    note.textContent = scope === "mine"
+      ? "Showing your cases and your clients — the rates on cases assigned to you, the retention cases assigned to you, and the clients with at least one case of yours. Switch to All for the whole firm."
+      : "Showing every adviser's cases and clients. Switch to Mine for your own book.";
+  }
+  await Promise.all([
+    loadRetentionRates(scope),
+    loadRetentionPipelinePanel(scope),
+    loadRetentionCold(scope),
+  ]);
+}
+/* §1 — the rate & ERC feed, un-truncated and split at the maturity date. The page's OWN two reads:
+   the same widened cases select the dashboard uses (DASH_CASE_COLS carries everything the shared
+   builder needs — loan, fees, retention_source_case_id, assigned_to) and v_alerts, both bounded by
+   OWNER_ROW_CAP with the usual notice when the cap bites. */
+async function loadRetentionRates(scope) {
+  const reminderMonths = Number(settings.rate_reminder_months) || 6; // T1-10 — a stray non-numeric stored value can't render "≤ NaNmo"
+  const [{ data: cases, error: casesErr }, { data: alerts, error: alertsErr }] = await Promise.all([
+    readDashboardCases(),
+    db.from("v_alerts").select("*").order("rate_end_date").limit(OWNER_ROW_CAP),
+  ]);
+  if (casesErr || alertsErr) { renderLoadError("#ret-rates-list", casesErr || alertsErr, loadRetentionPage); return; }
+  renderOwnerCapNotice("#ret-cap-notice", ownerCapHit(cases) || ownerCapHit(alerts));
+  const feed = await buildRateErcFeed(cases, alerts, { reminderMonths, scope });
+  const valueSort = showMoney() && retSortMode === "value";
+  const sorted = sortRateErcRows(feed, valueSort);
+  /* ENDED FIRST. A rate that matured last month is a client already paying the reversion rate; one
+     with four months to run is a diary entry. Both belong on this page, in that order, and the
+     drawer's single undifferentiated list is exactly what made the ended ones easy to miss. */
+  const ended = sorted.filter(rateErcEnded);
+  const soon = sorted.filter((a) => !rateErcEnded(a));
+  const ordered = ended.concat(soon);
+  const shown = ordered.slice(0, RET_LIST_CAP);
+  const h3 = $("#ret-rates-h3");
+  if (h3) {
+    /* The two scoped badges are the DRAWER's two badges, from the same feed and with the same
+       firm-wide tooltip, so the page and Today can never disagree about how much work there is.
+       "Already ended" is the page's own, because the page is the only surface that splits them. */
+    h3.innerHTML = `⚠️ Rates ending &amp; ended
+      ${ended.length ? `<span class="count hot" title="Rates that have already matured — the client is on the reversion rate now.">${ended.length} already ended</span>` : ""}
+      ${feed.ratesSoonScoped.length ? `<span class="count" title="${esc(rateCountTip(feed.ratesSoonScoped.length, feed.ratesSoonAll.length, "ending soon", scope))}">${feed.ratesSoonScoped.length} in the ${reminderMonths}-month window</span>` : ""}
+      ${feed.ercFlagsScoped.length ? `<span class="count" style="background:#fbe9e7;color:var(--red);" title="${esc(rateCountTip(feed.ercFlagsScoped.length, feed.ercFlagsAll.length, "ERC conflicts", scope))}">${feed.ercFlagsScoped.length} ERC conflict</span>` : ""}
+      ${showMoney() ? `<button type="button" class="btn btn-sm rate-sort-btn" id="ret-rates-sort" onclick="toggleRetSort()" title="${valueSort ? "Sorted by loan size — the value at risk. Click to sort by date instead." : "Sorted by rate end date. Click to sort by loan size — the value at risk."}">${valueSort ? "↕ By value at risk" : "↕ By date"}</button>` : ""}`;
+  }
+  const sub = $("#ret-rates-sub");
+  if (sub) {
+    sub.textContent = `Rates ending within the ${reminderMonths}-month reminder window, and cases where the ERC outlasts the rate. `
+      + `Showing ${rateScopeWord(scope)}${scope === "all" ? "" : ` — ${feed.ratesSoonAll.length + feed.ercFlagsAll.filter((a) => !feed.ratesSoonAll.some((r) => r.case_id === a.case_id)).length} alerts firm-wide.`} `
+      + "The same feed as Today's Rate & ERC drawer, un-truncated.";
+  }
+  const group = (title, why, rows) => rows.length
+    ? `<h4 class="ret-group-h">${title} <span class="count">${rows.length}</span></h4><p class="panel-sub ret-group-sub">${why}</p>`
+      + rows.map((a) => renderRateErcRow(a, feed)).join("")
+    : "";
+  $("#ret-rates-list").innerHTML = ordered.length
+    ? group("Ended", "The rate has already matured — the client is paying the lender's reversion rate today.", shown.filter(rateErcEnded))
+      + group("Ending soon", "Still inside the fix. The conversation is booked ahead, not chased.", shown.filter((a) => !rateErcEnded(a)))
+      + (ordered.length > RET_LIST_CAP ? `<div class="empty">…and ${ordered.length - RET_LIST_CAP} more — narrow the list with the scope control above, or work it from the Pipeline table view.</div>` : "")
+      + rateErcDedupeNote(feed.collapsed)
+    : `<div class="empty">Nothing ending in the reminder window on ${rateScopeWord(scope)}, and no ERC conflicts. 👍</div>`;
+  // No panelCount() here on purpose: this heading already carries three counts of its own, and
+  // panelCount writes into the first .count it finds in the h3.
+}
+/* §2 — the pipeline those buttons feed. Same rows and same figures as Today's drawer; this one is
+   scoped, and capped at a hundred rather than twelve. */
+async function loadRetentionPipelinePanel(scope) {
+  const { data, error } = await readRetentionPipeline();
+  if (error) { renderLoadError("#ret-pipeline-list", error, loadRetentionPage); return; }
+  /* A retention case is a case, so "mine" is the case's own assigned_to — the same test the board
+     and the task lists use, not the source case's adviser. Round 12b · W-14a is why they can
+     differ: the successor inherits the source's adviser, but "assign to me" hands it over. */
+  const mine = scope === "mine" && !!(ME && ME.id);
+  const rows = (data || []).filter((c) => !mine || c.assigned_to === ME.id);
+  const st = retentionPipelineStats(rows);
+  const stats = $("#ret-pipeline-stats");
+  if (stats) stats.textContent = retentionStatsLine(st) + ` Showing ${rateScopeWord(scope)}.`;
+  $("#ret-pipeline-list").innerHTML = st.open.length
+    ? (await renderRetentionRows(st.open, RET_LIST_CAP))
+      + (st.open.length > RET_LIST_CAP ? `<div class="empty">…and ${st.open.length - RET_LIST_CAP} more open retention cases.</div>` : "")
+    : `<div class="empty">No open retention opportunities on ${rateScopeWord(scope)}. One is created for you when a completed client's rate enters the reminder window; for a rate that has already ended, use Start retention case on a row above.</div>`;
+  panelCount("#ret-pipeline-list", st.open.length);
+}
+/* §3 — the clients nobody has spoken to. Straight from the Clients page's own cold segment: same
+   five reads (shared cache), same last-contact definition, same predicate. Re-deriving "cold" here
+   with a different query would give this panel and that segment two different answers to one
+   question, which is the whole reason it is not done. */
+async function loadRetentionCold(scope) {
+  const data = await clientDataCached(true);
+  if (data.error) { renderLoadError("#ret-cold-list", data.error, loadRetentionPage); return; }
+  const adviser = scope === "mine" && ME && ME.id ? ME.id : "all";
+  const cold = coldClients(data, adviser);
+  const todayStr = localDateStr();
+  /* Longest silence first — a client with nothing on record in the 210-day comms window sorts
+     above one last spoken to in March, because that is the order the list is worked in. */
+  const lcAt = (c) => { const lc = data.last.get(c.id); return lc ? String(lc.at) : ""; };
+  const sorted = cold.slice().sort((a, b) => lcAt(a).localeCompare(lcAt(b)));
+  const sub = $("#ret-cold-sub");
+  if (sub) sub.textContent = clientColdDefinition(clientContactCutoff()) + ` Showing ${scope === "mine" ? "clients with at least one case assigned to you" : "every adviser's clients"}.`;
+  /* The hand-off. The Clients page is where this list is actually worked (bulk task, export, the
+     full record), and landing there on "All clients" would undo the scope the reader just chose —
+     hence the adviser argument (R38's one addition to gotoClientSegment). */
+  const link = $("#ret-cold-goto");
+  if (link) link.onclick = () => gotoClientSegment("cold", adviser);
+  $("#ret-cold-list").innerHTML = sorted.length
+    ? sorted.slice(0, RET_LIST_CAP).map((c) => {
+      const lc = data.last.get(c.id);
+      const next = clientNextRateEnd(c, todayStr);
+      return `
     <div class="row-item">
       <div class="row-main">
-        <div class="t" onclick="openCase('${c.id}')">${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" "))} ${propCtxChip(retCtx, c.id, "row-prop")}</div>
-        <div class="s">${lenderIcon(c.lender)}${esc(c.lender || "")} — rate ends ${fmtD(c.rate_end_date)}${c.rate_end_estimated ? " " + APPROX : ""}</div>
+        <div class="t" onclick="openClient('${c.id}')">${esc([c.first_name, c.last_name].filter(Boolean).join(" ") || "(no name)")}</div>
+        <div class="s"><span class="client-lastcontact">${lc ? `last contact ${esc(lastContactAgeLabel(lc.at))} — ${esc(lc.what)} on ${esc(fmtD(String(lc.at).slice(0, 10)))}` : "no contact of any kind in the last 210 days"}</span>${next ? ` · <span class="client-rate-bit">next rate ends ${esc(fmtD(next.date))}${next.lender ? ` · ${esc(next.lender)}` : ""}${next.n > 1 ? ` (of ${next.n})` : ""}</span>` : " · no future rate end on file"}</div>
       </div>
-      ${stageBadge(c.stage)}
-    </div>`).join("") + (open.length > 12 ? `<div class="empty">…and ${open.length - 12} more in the pipeline.</div>` : "")
-    : '<div class="empty">No open retention opportunities. One is created for you when a completed client\'s rate enters the reminder window; for a rate that has already ended, use Start retention case on the completed case (see Rate &amp; ERC alerts above).</div>';
-  panelCount("#retention-list", open.length);
+      ${next ? '<span class="badge amber" title="This client has a rate maturing — a reason to ring them.">rate coming</span>' : ""}
+    </div>`;
+    }).join("")
+      + (sorted.length > RET_LIST_CAP ? `<div class="empty">…and ${sorted.length - RET_LIST_CAP} more — work the rest from the Clients page.</div>` : "")
+    : `<div class="empty">Nobody has gone quiet on ${scope === "mine" ? "your book" : "the firm's book"}. 👍</div>`;
+  panelCount("#ret-cold-list", sorted.length);
 }
 
 /* R5-6 — the manual half of the retention loop.
@@ -6358,6 +6649,11 @@ window.startRetentionCase = async function (caseId, ev, opts) {
     toast(outMsg);
     if (currentModal && currentModal.type === "case" && currentModal.id === caseId) openCase(caseId);
     if (!$("#page-dashboard").classList.contains("hidden")) loadDashboard();
+    /* R38 — pressed from the Retention page, the repaint has to be that page: its rates panel is
+       the row the button was on (it must flip to "retention started") and its pipeline panel is
+       where the case just created belongs. Repainting the dashboard's drawers instead would leave
+       the operator looking at a screen that had not noticed what they just did. */
+    else if (!$("#page-retention").classList.contains("hidden")) loadRetentionPage();
     else { loadRetention(); loadBriefing(); }
     return { status: warn.length ? "created_with_warnings" : "created", message: outMsg, caseId, warn };
   } finally {
@@ -6378,6 +6674,8 @@ window.markRateReminded = async function (caseId, ev) {
     toast("Marked as reminded — no email was sent.");
     if (currentModal && currentModal.type === "case" && currentModal.id === caseId) openCase(caseId);
     if (!$("#page-dashboard").classList.contains("hidden")) loadDashboard();
+    // R38 — the same control is on the Retention page's rows; repaint whichever surface it was pressed from.
+    else if (!$("#page-retention").classList.contains("hidden")) loadRetentionPage();
   } finally {
     if (btn) btn.disabled = false;
   }
@@ -13257,6 +13555,23 @@ function renderClientAdviser(clients) {
 /* One fetch, cached for the life of the page visit. force:true re-reads (page navigation, a
    save, a completed bulk action); a keystroke in the search box does not. */
 let clientCache = null;
+/* R38 — the ONLY reader of that cache, so the Retention page's "Gone quiet" panel and the Clients
+   page share both the five reads and the answer they produce. Returns { error } untouched on a
+   failed read; the callers decide what to draw in its place. */
+async function clientDataCached(force) {
+  if (force || !clientCache) {
+    const res = await loadClientData();
+    if (res.error) return res;
+    clientCache = res;
+  }
+  return clientCache;
+}
+/* R38 — the cold set, from the shared data and the shared predicate. `adviser` is a staff id, or
+   "all" / "none" exactly as the Clients page's own filter uses them (see clientHasAdviser). */
+function coldClients(data, adviser) {
+  const ctx = { last: data.last, cutoffMs: clientContactCutoff().getTime() };
+  return (data.clients || []).filter((c) => clientHasAdviser(c, adviser) && clientInSegment(c, "cold", ctx));
+}
 async function loadClientData() {
   /* R18-P3 — bound the four comms reads to the last 210 days. These reads only feed the "last
      contact" detail and the cold segment. 210 days is wider than the ~183-day cold cutoff, so
@@ -13409,11 +13724,14 @@ function sortClientList(list, sort, todayStr, rateYear) {
   }
   return list;   // "name" — exactly the order the .order("last_name") query came back in
 }
-window.gotoClientSegment = function (seg) {
+/* R38 — `adviser` is optional and defaults to the round-12b behaviour (the whole firm's). The
+   Retention page passes an id when its scope is Mine, because "work this list on Clients" from a
+   panel showing YOUR cold clients must not land on everybody's. */
+window.gotoClientSegment = function (seg, adviser) {
   clientSegment = seg;
   const box = $("#client-search");
   if (box) box.value = "";                  // a segment reached from another page means the whole segment
-  clientAdviser = "all";                    // R12b · W-29 — …and the whole firm's, for the same reason
+  clientAdviser = adviser || "all";         // R12b · W-29 — …and the whole firm's, unless the caller says whose
   nav("clients");
 };
 /* R18-P4 — cap the number of client rows rendered. Segment/bulk counts are computed over the FULL
@@ -13426,12 +13744,9 @@ let clientRenderedList = [];
 async function loadClients(filter = "", opts = {}) {
   // R37 · L7 — same one-shot seed as the board (see seedStarterViews): first load after sign-in.
   seedStarterViews();
-  if (opts.force || !clientCache) {
-    const res = await loadClientData();
-    if (res.error) { renderLoadError("#client-list", res.error, () => loadClients(filter, { force: true })); return; }
-    clientCache = res;
-  }
-  const { clients, last } = clientCache;
+  const cached = await clientDataCached(opts.force);
+  if (cached.error) { renderLoadError("#client-list", cached.error, () => loadClients(filter, { force: true })); return; }
+  const { clients, last } = cached;
   const cutoff = clientContactCutoff();
   const ctx = { last, cutoffMs: cutoff.getTime() };
   const f = filter.trim().toLowerCase();

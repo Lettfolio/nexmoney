@@ -93,6 +93,7 @@ node tests/r34.js
 node tests/r35.js
 node tests/r36.js
 node tests/r37.js
+node tests/r38.js
 ```
 
 Current green counts (end of round 23; r21/r22 were never committed to this
@@ -111,8 +112,20 @@ nothing else asserted the old shape of, and R19 is new owner-gated Reports
 content that no earlier suite reaches; R23 is the same story again — see the
 R23 notes below).
 
-**Full battery is 100% green (3,727/3,727), `tests/r9_docs.js` included
-(255/0).** R37 added `tests/r37.js` (123 checks, §1–§12) — see the "R37 notes"
+**Full battery is 100% green (3,830/3,830), `tests/r9_docs.js` included
+(255/0), `smoke.js` 152/0.** R38 added `tests/r38.js` (95 checks, §A–§G) — see
+the "R38 notes" section below — and required one genuine, non-masking repair
+to a pre-existing suite whose own ground truth R38's product change moved
+out from under it: `tests/r33.js` A5c (plus its surrounding prose) now
+asserts 13 `button[data-page]`s, not 12, because R38 added the Retention
+button to the Book group — the assertion's PURPOSE (every nav destination
+still lives inside `#topnav`, none orphaned by the grouping) is unchanged,
+only the true count changed (55/0, count unchanged — this was a wording fix,
+not a new assertion). Every OTHER pre-existing suite (`smoke.js` through
+`tests/r37.js`) re-ran unedited at its exact pre-R38 count. `smoke.js` itself
+was already updated by the build agent before this session started (152
+checks, up from 144 — the new page and its rows) and needed no further
+change. R37 added `tests/r37.js` (123 checks, §1–§12) — see the "R37 notes"
 section below — and required three genuine, non-masking repairs to
 pre-existing suites whose own ground truth R37's product change moved out
 from under them (none of the three loosened what the suite was proving):
@@ -231,7 +244,7 @@ even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes belo
 
 | Suite | Checks |
 |---|---|
-| `smoke.js` | 144 |
+| `smoke.js` | 152 (R38 — up from 144: the new Retention page and its rows, see the R38 notes) |
 | `tests/r5_batch1..9.js` (sum) | 559 (BATCH 9's day-collision fixed in R27 — see the R27 notes; R33 re-pointed a nav click in BATCH 1 and BATCH 8's `gotoSettings()` at the collapsed Firm group — see the R33 notes; R34 pre-seeded BATCH 9's Month/Day scenario with `nx_diary_staff="all"` so its Month-vs-Day memory check still guards what it always guarded — see the R34 notes; R35 added two assertions to BATCH 3's retention flow proving the live successor doesn't renag its own Rate & ERC row — see the R35 notes; R37 re-pointed BATCH 5 §S3c at the new `#prot-comm-box` overlay in place of the retired commission `prompt()` — see the R37 notes; sum 557 → 559, unchanged by R37) |
 | `tests/r64.js` | 91 |
 | `tests/r8_touch.js` | 151 (R36 resolved the new bulk-task case-picker overlay before its confirm-dialog assertions — see the R36 notes; count unchanged) |
@@ -258,12 +271,110 @@ even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes belo
 | `tests/r29_scale.js` | 106 |
 | `tests/r30.js` | 40 (R33 re-pointed §C/§D4/§E from Reports to Settings' `#diag-details` and added 3 assertions proving the wrapper itself gates correctly — see the R33 notes; count rose from 37) |
 | `tests/r31.js` | 55 (R37 pre-seeds a present-but-empty `nx_views_v1` before B1/B2 so the new starter-views seeding doesn't fire ahead of their "starts from nothing" assertions — see the R37 notes; count unchanged) |
-| `tests/r33.js` | 55 |
+| `tests/r33.js` | 55 (R38 bumped A5c's 12→13 `data-page` buttons — the new Retention button in the Book group — see the R38 notes; count unchanged, prose-only fix) |
 | `tests/r34.js` | 60 |
 | `tests/r35.js` | 43 |
 | `tests/r36.js` | 83 |
 | `tests/r37.js` | 123 (new — §1–§12, see the R37 notes) |
-| **Total** | **3,727** |
+| `tests/r38.js` | 95 (new — §A–§G, see the R38 notes) |
+| **Total** | **3,830** |
+
+R38 notes: a new Retention page, already-built and uncommitted before this
+session started (`admin/app.js` + `admin/index.html` only — no schema, no
+`admin.css` change beyond what already existed for `.seg-btn`/`.panel`/
+`.row-item`).
+
+**The page.** A 13th nav destination, `data-page="retention"` (🔁), added to
+the BOOK group (Clients/Protection/Retention) rather than hidden inside the
+collapsible Firm group R33 introduced — every staff role sees it without
+opening anything, the same reasoning the Vault nav item already used. No
+`PAGE_ROLE_GATE` entry, so it is reachable by every role and by hash
+deep-link (`#retention`). `#page-retention` holds three panels behind ONE
+scope control, `#ret-scope-mine`/`#ret-scope-all` (persisted
+`localStorage.nx_ret_scope`), defaulting Mine for an adviser and All for
+admin/owner — `retScopeResolved()`, the same pattern `wtScope`/`rateScope`/
+`#board-adviser` already use.
+
+**Shared-builder extraction, not a second implementation.** The three panels
+are the SAME data the dashboard drawers already render, reached through
+builders now shared rather than duplicated:
+  - `#ret-rates-panel` reads `buildRateErcFeed()`/renders with
+    `renderRateErcRow()` — the exact functions `loadDashboard()`'s Rate & ERC
+    drawer now also calls (both were pulled out of what used to be
+    drawer-only code). The page groups the SAME rows into "Ended" and
+    "Ending soon" (`.ret-group-h`) and shows up to `RET_LIST_CAP` (100)
+    rather than the drawer's 15 — un-truncated is the whole reason the page
+    exists.
+  - `#ret-pipeline-panel` reads `readRetentionPipeline()`/
+    `retentionPipelineStats()`/`renderRetentionRows()` — again the same
+    functions the dashboard's Retention drawer now shares, scoped by the
+    retention CASE's own `assigned_to` (not the source case's — a hand-off
+    via "assign to me" moves the pipeline row's ownership, and Mine has to
+    follow that, not the client's original adviser).
+  - `#ret-cold-panel` reads the Clients page's own cold segment, factored out
+    as `coldClients()` = `clientHasAdviser()` + `clientInSegment(..,"cold")`
+    over the existing `clientDataCached()` read — re-deriving "cold" here
+    with a different query would give this panel and the Clients segment two
+    different answers to the same question, which is the whole reason it
+    isn't done that way. `#ret-cold-goto` hands off to Clients via
+    `gotoClientSegment("cold", adviser)` — R38's one addition to that
+    function (an optional `adviser` argument, defaulting to the pre-R38
+    firm-wide behaviour) — so "work this list on Clients" keeps the page's
+    own Mine/All choice instead of silently widening to the whole firm.
+
+**One source of truth, said out loud.** Before this round the drawer's
+15-row Rate & ERC slice and 12-row retention-pipeline slice were the ONLY
+view of either list — an adviser with 20 rates ending inside the window
+could not see the last 5 short of scrolling to the case list itself and
+re-deriving them by hand, and "won/lost/conversion" existed nowhere outside
+the drawer's own one-line summary. Pulling `buildRateErcFeed`/
+`renderRateErcRow`/`readRetentionPipeline`/`retentionPipelineStats`/
+`renderRetentionRows`/`coldClients` out from under the drawers and sharing
+them with the page means the drawer and the page can never quietly disagree
+about which alerts count, whose they are, or what a row looks like — the
+page's h3 badges and the drawer's report the SAME scoped count for the SAME
+scope, proven in `tests/r38.js` §C2. The drawers themselves are otherwise
+UNCHANGED (same 15/12 caps, same rows) — each only gained a link to the new
+page: the Rate & ERC drawer's header grew `#rate-erc-open-retention`
+(`.ret-page-link`), and both drawers' "…and N more" overflow tails now read
+"…see the Retention page" instead of dead-ending on a number with nowhere to
+go.
+
+**`smoke.js`.** Already updated by the build agent before this session
+started (144 → 152 checks — the new page, its default-scope render for each
+persona, and its row counts) and needed no further change from this pass.
+
+**The one non-masking repair.** `tests/r33.js` A5c ("owner: `#topnav` still
+has all 12 `data-page` buttons") and its surrounding prose (the §A summary
+and the A5 `console.log` header) now say 13, because R38 genuinely added a
+13th nav button to the group R33's own suite is proving the SHAPE of (every
+`data-page` button lives inside `#topnav`, none orphaned by the grouping
+machinery). The assertion's PURPOSE — that the sidebar regrouping never
+drops or duplicates a nav destination — is unchanged; only the true count
+of destinations changed under it, exactly the same class of fix R30/R31/R34/
+R37 each made to a pre-existing suite whose own ground truth a later round's
+product change moved out from under it (see those notes above). 55/0, count
+unchanged (a prose/expected-value fix, not a new assertion). No other
+pre-existing suite needed any repair — grepped for `12` alongside
+`data-page`/`button`/`nav` across the whole `tests/` tree and `r33.js` was
+the only hit; every other suite either doesn't count nav buttons at all or
+counts a different, unaffected set (e.g. `r5_batch1.js`'s/`r5_batch8.js`'s
+Firm-group-toggle clicks, already re-pointed for R33 itself and untouched by
+where Retention sits).
+
+**No product bug found.** `admin/app.js`/`admin/index.html` were not
+modified for this pass — R38's product code (the page, the shared-builder
+extraction, the drawers' links) was already built/uncommitted before this
+session started, and every behaviour `tests/r38.js` set out to prove held on
+first run: the scope default/persistence/clear-key-reverts cycle, the
+Ended-before-Ending-soon grouping, the page/drawer count parity, the sort
+toggle, `startRetentionCase()` repainting the page it was pressed from, the
+pipeline stats matching the mock db independently, the cold segment's
+last-contact ages matching `lastContactAgeLabel()` read live off the page,
+and `gotoClientSegment`'s new adviser argument. Ran the WHOLE regression
+battery (`smoke.js` through `tests/r37.js`) alongside the new suite; every
+pre-existing suite other than `tests/r33.js` passed unedited at its exact
+pre-R38 count (see the table above). `node smoke.js` alone: 152/0.
 
 R37 notes: 12 polish items off the R32 panel, plus one CTO follow-up, all
 already-built and uncommitted before this session started (`admin/app.js`/

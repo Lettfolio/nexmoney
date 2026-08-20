@@ -19,7 +19,11 @@
        reload while still ON that page's hash re-triggers the same auto-expand,
        which is why this suite navigates AWAY before reloading to prove the
        auto-expand itself was never persisted). All 12 `button[data-page]`s are
-       unchanged and still live inside `#topnav`.
+       unchanged and still live inside `#topnav` (R38 — this is now 13: the
+       Retention nav button landed in the Book group, between Protection and
+       the Money group heading; nothing about the grouping/collapse machinery
+       this suite proves changed shape, so the count below was simply bumped
+       by one — see the R38 non-masking repair note in HARNESS.md).
      - Diagnostics RELOCATED from Reports to Settings: `#report-diag-section`
        (and everything inside it — CSV/copy/clear/health, `#diag-error-table`,
        `#report-diag-persist-clear`, `#diag-persist-table`) now lives inside a
@@ -53,7 +57,9 @@
         role default; `window.nav('settings')` from collapsed auto-expands the
         group (settings tab gets .active + aria-current="page") WITHOUT
         persisting — proved by navigating away and reloading. Owner starts
-        expanded, with Monday money visible. All 12 nav buttons present.
+        expanded, with Monday money visible. All 13 nav buttons present
+        (R38 — was 12; the new Retention button in the Book group is the
+        13th; see tests/r38.js for its own dedicated coverage).
    §B — DIAGNOSTICS RELOCATION. Owner: `#diag-details` present+collapsed on
         Settings; opening it renders `#report-diag-section` + both tables;
         Reports no longer nests `#report-diag-section` at all. Adviser:
@@ -210,7 +216,7 @@ Duncan Armitage,duncan.armitage@example.com,07700 900102,offer,Halifax,4.29,495`
     }
 
     {
-      console.log("\n— A5 · owner (p4): Firm group expanded by default, Monday money visible, 12 nav buttons total");
+      console.log("\n— A5 · owner (p4): Firm group expanded by default, Monday money visible, 13 nav buttons total (R38 — was 12; +Retention)");
       const page = await newPage(browser, "p4");
       const errBefore = (page.__err || []).length;
       await clearNavFirm(page);
@@ -221,7 +227,7 @@ Duncan Armitage,duncan.armitage@example.com,07700 900102,offer,Halifax,4.29,495`
       const navMoneyVisible = await page.evaluate(() => document.getElementById("nav-money").offsetParent !== null);
       ok("A5b · #nav-money (Monday money) is visible for the owner", navMoneyVisible);
       const totalBtns = await page.evaluate(() => document.querySelectorAll("#topnav button[data-page]").length);
-      eq("A5c · #topnav still has all 12 data-page buttons", totalBtns, 12);
+      eq("A5c · #topnav still has all 13 data-page buttons (R38 added Retention to the Book group)", totalBtns, 13);
       const allInsideTopnav = await page.evaluate(() =>
         [...document.querySelectorAll("button[data-page]")].every((b) => document.getElementById("topnav").contains(b)));
       ok("A5d · every data-page button lives inside #topnav", allInsideTopnav);
