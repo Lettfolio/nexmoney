@@ -503,6 +503,18 @@
         <h2>Reports</h2>
         <input type="month" id="report-month" aria-label="Report month">
       </div>
+      <!-- R42 · F3 — SECTION NAV. Reports answers five questions and stacks seventeen panels to do
+           it; #rep-nav below is one chip PER PANEL (R11-4, untouched), which is the right tool once
+           you know where you are going and the wrong one for "take me to the money". Five buttons,
+           one per section, sitting above it.
+           Deliberately EMPTY and `hidden` here for exactly the reason #rep-nav is: half these
+           sections are Owner-only and each PANEL owns its own gate, so the buttons are built by
+           buildReportSectionNav() at the END of loadReports by asking the panels what they decided.
+           NOT sticky — #rep-nav is the sticky strip and two sticky bars would sit on top of each
+           other. -->
+      <div class="rep-sections-nav" id="reports-jump" hidden>
+        <div class="pipe-segment rep-nav-chips" id="reports-jump-chips" role="tablist" aria-label="Jump to a section of Reports"></div>
+      </div>
       <!-- R11-4 — JUMP NAV. Reports is ~7,700px of stacked panels and the only way to reach the
            bottom half was the scroll wheel. One chip per panel, sticky under the page header.
            Deliberately EMPTY in the markup and `hidden`: the panel list depends on the signed-in
@@ -530,6 +542,8 @@
            holding exactly the cap the figures below describe a subset of the book, and this line
            says so instead of letting the page truncate in silence. -->
       <p class="dq-notice hidden" id="report-cap-notice"></p>
+      <!-- R42 · F3 — §1. The adviser's own money, and nothing else -->
+      <h3 class="report-section-head" id="rsec-mine">My numbers</h3>
       <!-- R5-F1 (Daniel-approved policy change) — the adviser's own money, and only their own.
            Every figure on this card is scoped to cases assigned to the signed-in person; nothing
            firm-wide and nothing belonging to another adviser appears on it. Hidden for the Owner,
@@ -539,12 +553,18 @@
         <p class="panel-sub" id="report-mine-scope"></p>
         <div class="kpi-row" id="report-mine" style="margin:12px 0 0;"></div>
       </div>
+      <!-- R42 · F3 — §2. Everything scoped to the month picker in the page head -->
+      <h3 class="report-section-head" id="rsec-month">This month</h3>
       <div class="panel" id="report-month-panel">
         <h3 id="month-report-title">This month</h3>
         <div class="kpi-row" id="month-kpis" style="margin:12px 0 8px;"></div>
         <div id="month-fee-target"></div>
         <div id="month-advisers"></div>
-        <p class="panel-sub hidden" id="month-legend" style="margin:12px 0 0;">Proc £ = procuration fee (paid by the lender) · Broker £ = fee charged to the client · Sols £ = solicitor referral fee. Figures on this panel are scoped to the month selected above. "Completed £" is the fee value <strong>earned</strong> on cases completed this month, regardless of whether it's been paid yet — see "Fees banked (paid)" on the Adviser scoreboard below for cash actually collected.</p>
+        <!-- R42 · F7 — the tail ("Completed £" is the fee value earned … see "Fees banked (paid)"
+             below) said the earned-vs-banked thing #report-basis-legend says four panels higher up,
+             on the page that legend was written for. The Proc/Broker/Sols glossary is this line's own
+             job and stays; the basis question now has exactly one answer on this page. -->
+        <p class="panel-sub hidden" id="month-legend" style="margin:12px 0 0;">Proc £ = procuration fee (paid by the lender) · Broker £ = fee charged to the client · Sols £ = solicitor referral fee. Figures on this panel are scoped to the month selected above (bases: see legend above).</p>
       </div>
       <p class="report-month-note" id="report-month-note">Also scoped to the month selected above.</p>
       <div class="panel" id="report-scoreboard-panel">
@@ -552,6 +572,8 @@
         <p class="panel-sub" id="report-scoreboard-scope"></p>
         <div id="report-advisers"></div>
       </div>
+      <!-- R42 · F3 — §3. Where the work is and where it goes — counts, not money -->
+      <h3 class="report-section-head" id="rsec-mi">Pipeline MI</h3>
       <!-- ==================================================================
            R19 — PIPELINE MI. Owner/Admin-only management information: a
            pipeline funnel & conversion (from milestone DATES, not the ~36
@@ -626,6 +648,14 @@
         <p class="panel-sub" id="report-losses-scope"></p>
         <div id="report-losses"></div>
       </div>
+      <!-- R42 · F3 — §4. Live money: what is owed, what the book is worth, what is coming -->
+      <h3 class="report-section-head" id="rsec-money">Money &amp; book</h3>
+      <!-- R42 · F3 — the live-note MOVED here, under the §4 header, and its sentence is still
+           literally true: "the panels below" used to mean owed · rate-end · lead response · review
+           scores · advocacy · conveyancers · forecast · completions · introducers · LTV, and §4 + §5
+           are that same set, reordered — nothing month-scoped has been moved below it. The losses
+           panel, which is month-scoped by default and carries its own All time toggle, stays ABOVE
+           it in §3 where it always was. Re-check this sentence if a panel ever moves across it. -->
       <p class="report-live-note" id="report-live-note">Live snapshot — the panels below are not affected by the month selected above.</p>
       <div class="kpi-row" id="report-kpis"></div>
 
@@ -643,12 +673,16 @@
           <div class="owed-tools">
             <button type="button" class="btn btn-sm seg-btn seg-first scope-active" id="owed-group-lender">By lender</button>
             <button type="button" class="btn btn-sm seg-btn seg-last" id="owed-group-adviser">By adviser</button>
-            <button type="button" class="btn btn-sm" id="owed-csv-btn" title="Download every unpaid fee line, including the proc and sols columns">⬇ CSV</button>
+            <button type="button" class="btn btn-sm" id="owed-csv-btn" title="Download every unpaid fee line, including the proc and sols columns">⭳ CSV</button>
           </div>
         </div>
         <p class="panel-sub" id="report-owed-basis"></p>
         <div class="kpi-row" id="report-owed-buckets" style="margin:12px 0 4px;"></div>
-        <div id="report-owed-table"></div>
+        <!-- R42 · F3 — the four ageing buckets above ARE the answer for most reads; the per-lender / per-adviser ledger under them is the chase list, wanted on the day you chase. #owed-csv-btn sits in the panel head row and exports the same rows without opening this. -->
+        <details class="report-ledger">
+          <summary>Show every unpaid fee line<span class="ledger-n"></span></summary>
+          <div id="report-owed-table"></div>
+        </details>
       </div>
 
       <!-- ==================================================================
@@ -659,9 +693,45 @@
       <div class="panel hidden" id="report-rateend-panel">
         <h3>Rate-end book value — next 24 months</h3>
         <p class="panel-sub" id="report-rateend-basis"></p>
-        <div id="report-rateend-table"></div>
+        <!-- R42 · F3 — the 24-month maturity ledger with its per-case expanders. "Recover" below it stays open: uncovered maturities are the work, the table is the reference. -->
+        <details class="report-ledger">
+          <summary>Show the 24-month table<span class="ledger-n"></span></summary>
+          <div id="report-rateend-table"></div>
+        </details>
         <div id="report-rateend-recover" style="margin-top:18px;"></div>
       </div>
+
+      <div class="panel" id="report-forecast-panel">
+        <h3>Commission forecast — live pipeline</h3>
+        <div class="kpi-row" id="report-forecast-headline" style="margin:8px 0 12px;"></div>
+        <div id="report-forecast-buckets"></div>
+        <p class="panel-sub" id="report-forecast-hint" style="margin:10px 0 0;">Live cases from DIP to exchange, weighted by stage conversion, bucketed by how far off the expected completion date is.</p>
+      </div>
+      <div class="grid-2">
+        <div class="panel" id="report-months-panel">
+          <h3 id="report-months-title">Completions by month (this year)</h3>
+          <p class="panel-sub" id="report-months-legend"></p>
+          <div id="report-months"></div>
+        </div>
+        <div class="panel" id="report-introducers-panel">
+          <h3>Introducers</h3>
+          <!-- R42 · F3 — the per-introducer table, in a half-width column beside the completions chart. -->
+          <details class="report-ledger">
+            <summary>Show every introducer<span class="ledger-n"></span></summary>
+            <div id="report-introducers"></div>
+          </details>
+        </div>
+      </div>
+      <div class="panel" id="report-ltv-panel">
+        <h3>Client lifetime value (top 20)</h3>
+        <!-- R42 · F3 — a twenty-row reference table under a panel whose heading already says what it holds. -->
+        <details class="report-ledger">
+          <summary>Show the top 20<span class="ledger-n"></span></summary>
+          <div id="report-ltv"></div>
+        </details>
+      </div>
+      <!-- R42 · F3 — §5. How well the firm is serving the people it already has -->
+      <h3 class="report-section-head" id="rsec-quality">Service &amp; quality</h3>
       <!-- ==================================================================
            R7-5 — LEAD RESPONSE. How long the firm takes to answer a website
            enquiry, by source and by adviser, and what share of those enquiries
@@ -687,7 +757,11 @@
           <button type="button" class="btn btn-sm" onclick="toggleNpsList()">Hide</button>
         </div>
         <p class="panel-sub" id="report-nps-scope"></p>
-        <div id="report-nps-list"></div>
+        <!-- R42 · F3 — the respondent list. toggleNpsList() opens this drawer when it reveals the panel — the tile click IS the request to read the list, and making it a second click would be a disclosure inside a disclosure. -->
+        <details class="report-ledger">
+          <summary>Show every respondent<span class="ledger-n"></span></summary>
+          <div id="report-nps-list"></div>
+        </details>
       </div>
 
       <!-- ==================================================================
@@ -728,29 +802,11 @@
       <div class="panel hidden" id="report-conveyancer-panel">
         <h3>Conveyancer speed — how long each solicitor takes</h3>
         <p class="panel-sub" id="report-conveyancer-basis"></p>
-        <div id="report-conveyancer-body"></div>
-      </div>
-
-      <div class="panel" id="report-forecast-panel">
-        <h3>Commission forecast — live pipeline</h3>
-        <div class="kpi-row" id="report-forecast-headline" style="margin:8px 0 12px;"></div>
-        <div id="report-forecast-buckets"></div>
-        <p class="panel-sub" id="report-forecast-hint" style="margin:10px 0 0;">Live cases from DIP to exchange, weighted by stage conversion, bucketed by how far off the expected completion date is.</p>
-      </div>
-      <div class="grid-2">
-        <div class="panel" id="report-months-panel">
-          <h3 id="report-months-title">Completions by month (this year)</h3>
-          <p class="panel-sub" id="report-months-legend"></p>
-          <div id="report-months"></div>
-        </div>
-        <div class="panel" id="report-introducers-panel">
-          <h3>Introducers</h3>
-          <div id="report-introducers"></div>
-        </div>
-      </div>
-      <div class="panel" id="report-ltv-panel">
-        <h3>Client lifetime value (top 20)</h3>
-        <div id="report-ltv"></div>
+        <!-- R42 · F3 — the per-firm table. The basis line above it stays visible — it is the part that has to be read before the numbers are. -->
+        <details class="report-ledger">
+          <summary>Show every conveyancer<span class="ledger-n"></span></summary>
+          <div id="report-conveyancer-body"></div>
+        </details>
       </div>
     </section>
 
@@ -843,7 +899,15 @@
           <button class="btn" id="run-sms-btn" title="Sends any queued SMS immediately">▶ Send SMS now</button>
         </div>
       </div>
-      <p class="panel-sub">The 8am cron job sends whatever is sitting in the email queue. Nothing composes new emails for you: rate-end reminders, review requests and fee requests are queued by you from a case, and each one sends on its own — pressing an action on a case never releases anybody else's queue. Sending the whole firm's queue early is an Owner / Administrator action, and it confirms the count and recipients first.</p>
+      <!-- R42 · F4 — this page is opened to answer "is anything going out, and did it go", and it
+           opened onto ~2,000 characters of standing prose before the chips and the list. The two facts an
+           operator needs on arrival stay in the open; everything else — including the R8/R9/R12a copy-audit
+           paragraphs, whose wording is contractual and is reproduced here WORD FOR WORD, ids intact — folds
+           behind one line that says what is inside. Nothing is deleted and nothing is rewritten. -->
+      <p class="panel-sub">The 8am cron job sends whatever is sitting in the email queue. Sending the whole firm's queue early is an Owner / Administrator action.</p>
+      <details class="prose-fold" id="emails-explainer">
+        <summary>ⓘ How the queue, review requests and reminders behave</summary>
+        <p class="panel-sub">Nothing composes new emails for you: rate-end reminders, review requests and fee requests are queued by you from a case, and each one sends on its own — pressing an action on a case never releases anybody else's queue. Running the whole firm's queue early confirms the count and recipients first.</p>
       <!-- R8-5 — copy audit for the round-8 behaviours. Both sentences describe what the backend
            actually does, not what would be nice: the drip is a cap inside queue_comms_extras, and
            the annual review is a TASK, so it will never appear in the list below. -->
@@ -859,6 +923,7 @@
            the sentence names the button by its label rather than leaving "cancel the row"
            to be hunted for, and says what cancelling records. -->
       <p class="panel-sub" id="emails-r9-note"><strong>An unanswered review request is followed up once.</strong> About <strong>a week</strong> after a review request that was actually <em>sent</em> and never answered (the exact gap is the “Review reminder if unanswered” setting), one reminder is queued — shown below as <em>Review reminder (2nd ask)</em>. One per case ever, never a third, and it comes out of the same 5-a-run budget as the requests, taken only after them: a client who has never been asked always goes before one who is being asked twice. If somebody should not be asked again, cancel the row while it is still queued: press <strong>Cancel</strong> on it, confirm, and the email never sends — its status becomes <em>cancelled</em>, and where the row belongs to a case the cancellation is written onto that case's timeline with your name. · <strong>An unhappy answer creates work, not an email.</strong> A score of 6 or below raises a call-back task for the case's adviser and writes the client's own words onto the case timeline; nothing is sent back to the client automatically.</p>
+      </details>
       <!-- R11-5 — status chips + the one line that answers the question this page is actually
            opened to answer ("is anything going out in the morning, and how much"). Both are built
            in loadEmails() from the rows it already reads — no extra query — so the counts always

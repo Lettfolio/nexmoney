@@ -96,6 +96,7 @@ node tests/r37.js
 node tests/r38.js
 node tests/r40.js
 node tests/r41.js
+node tests/r42.js
 ```
 
 Current green counts (end of round 23; r21/r22 were never committed to this
@@ -113,6 +114,51 @@ why those needed none at all: R18 is scale/perf hardening behind selectors
 nothing else asserted the old shape of, and R19 is new owner-gated Reports
 content that no earlier suite reaches; R23 is the same story again — see the
 R23 notes below).
+
+**Full battery is 100% green (4,147/4,147), `tests/r9_docs.js` included
+(255/0), `smoke.js` 152/0.** R42 added `tests/r42.js` (155 checks, §A–§J) —
+see the "R42 notes" section below — and required exactly one genuine,
+non-masking repair to a pre-existing suite: `tests/r27.js` §A7 (later renamed
+§A6b–§A7) clicked `#dh-tile-deadbook` to reveal `#dh-deadbook-panel`, and on
+the base fixture that tile's own count is 0 — R42's clean-tile fold
+(`admin/app.js`'s `dhFault()`) now folds it behind `#dh-clean-toggle`
+(`display:none` via `.kpi.dh-clean`, revealed by `.dh-show-clean` on
+`#dh-kpi-row`), so a direct Playwright `.click()` on a genuinely
+non-visible element timed out and killed sections B–E outright (an
+unhandled promise rejection, not a soft failure). The fix reveals the tile
+through the toggle first — proving the toggle itself works (starts
+`aria-expanded=false`, flips to `true` on click, the tile becomes visible),
+which this suite would otherwise never have touched — then clicks the tile
+exactly as before; the assertion's PURPOSE (clicking the tile reveals its
+panel) is unchanged, only the ONE missing step (reveal it first) was added
+(48/0, up from 43 — five new toggle assertions, §A6b–§A6f). Every OTHER
+pre-existing suite (`smoke.js` through `tests/r41.js`) re-ran unedited at its
+exact pre-R42 count, including the suites the task brief specifically
+flagged as at-risk and grepped for: `tests/r25.js` (`#dh-tile-milestone`,
+count 41 on the base fixture — never clean, 45/0 unchanged), `tests/r31.js`
+§C (never clicks a `.kpi` tile directly — its `.dh-readiness-item` rows
+invoke a plain DOM `.click()` from an inline `onclick=`, which fires on a
+`display:none` element exactly as it always did, so R42 never touched it;
+55/0 unchanged), and `tests/r34.js` (grepped for `dh-tile`; zero hits — 60/0
+unchanged); `tests/r29_scale.js`'s own `#dh-tile-deadbook` probe seeds
+thousands of synthetic rows before ever reading a tile, so that tile is
+never clean there either (107/0 unchanged). The Reports DOM-order suite,
+`tests/r11_ux.js`, was already passing before this round started — R42's own
+`REPORT_JUMP_SECTIONS` reorder (the money panels/lead-response/advocacy/
+conveyancer block moving beneath the new section headers) was written to
+match what r11_ux already asserted, not the other way round (123/0
+unchanged). No suite anywhere in the tree asserted the old
+`#month-legend`/`#report-owed-basis` text, the ⬇ glyph, `#doc-chase-note`
+being a `<p>`, or the Emails explainer paragraphs' plain *visibility* (as
+opposed to their *content*, read via `textContent`, which traverses into a
+closed `<details>` unchanged) — grepped exhaustively, confirmed by a full
+unedited re-run of the whole pre-R42 battery. `admin/app.js`/
+`admin/index.html`/`admin/admin.css` were not touched by this test-writing
+pass — R42's product code (the five Reports sections + jump nav, the six
+ledger drawers, the basis-repeat trim, the CSV glyph unification, the
+doc-chase/Emails expanders, the Data-Health clean-tile fold) was already
+built/committed (`ef54ded`) before this session started, and every behaviour
+`tests/r42.js` set out to prove held on first run.
 
 **Full battery is 100% green (3,987/3,987), `tests/r9_docs.js` included
 (255/0), `smoke.js` 152/0.** R41 added `tests/r41.js` (88 checks, §A–§I) — see
@@ -352,7 +398,7 @@ even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes belo
 | `tests/r24.js` | 89 (R34 pinned `#board-adviser` to "all" before §C's p3-assigned kitchen-sink seed, viewed as p2 — see the R34 notes; R37 re-pointed D4/D5/E4 at the board's `email`-widened clients embed — see the R37 notes; count unchanged) |
 | `tests/r25.js` | 45 |
 | `tests/r26.js` | 38 (R28 updated the basis/scoping assertions and added 2 new checks — see the R28 notes) |
-| `tests/r27.js` | 43 |
+| `tests/r27.js` | 48 (R42 reveals `#dh-tile-deadbook` via `#dh-clean-toggle` before §A7's click — the tile is `dh-clean`/hidden on the base fixture — and asserts the toggle itself works while doing it — see the R42 notes; up from 43) |
 | `tests/r29_scale.js` | 107 (R41 re-pointed A5/A6 at the now-absent Retention/Tasks drawer ids instead of `$eval`-ing selectors that no longer existed — a false-pass the pre-R41 assertions were silently committing — and added A8, `#ret-rates-list` bounded to `RET_LIST_CAP` — see the R41 notes; up from 106) |
 | `tests/r30.js` | 40 (R33 re-pointed §C/§D4/§E from Reports to Settings' `#diag-details` and added 3 assertions proving the wrapper itself gates correctly — see the R33 notes; count rose from 37) |
 | `tests/r31.js` | 55 (R37 pre-seeds a present-but-empty `nx_views_v1` before B1/B2 so the new starter-views seeding doesn't fire ahead of their "starts from nothing" assertions — see the R37 notes; count unchanged) |
@@ -364,7 +410,123 @@ even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes belo
 | `tests/r38.js` | 95 (new — §A–§G, see the R38 notes; R41 rewrote §F2 to assert the four removed dashboard drawer ids are gone while the Retention page still carries everything — see the R41 notes; count unchanged) |
 | `tests/r40.js` | 63 (new — §1–§7, see the R40 notes) |
 | `tests/r41.js` | 88 (new — §A–§I, see the R41 notes) |
-| **Total** | **3,987** |
+| `tests/r42.js` | 155 (new — §A–§J, see the R42 notes) |
+| **Total** | **4,147** |
+
+R42 notes: Reports regrouped into five labelled sections with a jump-nav, six
+report ledgers folded behind `<details>` drawers, basis-repeat prose trimmed,
+the CSV glyph unified, the Settings doc-chase note and the Emails explainer
+folded behind ⓘ expanders, and Data-Health's zero-count fault tiles hidden
+behind a clean-toggle — all already-built and committed (`ef54ded`) before
+this session started (`admin/app.js` + `admin/index.html` + `admin/admin.css`
+only, no schema).
+
+**Reports DOM order + jump nav.** `#reports-jump` (new, `hidden` until built,
+NOT `position:sticky` — `#rep-nav`, R11-4, is the sticky strip on this page
+and a second one would stack on it) sits above the unchanged `#rep-nav`. Five
+`<h3 class="report-section-head" id="rsec-*">` headers now split the page —
+My numbers → This month → Pipeline MI → Money & book → Service & quality —
+with three whole blocks physically moved to match (forecast/completions+
+introducers/LTV up into §4; lead response/NPS/advocacy/conveyancers down into
+§5). `REPORT_SECTIONS` declares the five groups' member panels; exactly like
+`REPORT_JUMP_SECTIONS`/`buildReportsJumpNav()` before it, `buildReportSectionNav()`
+never re-tests `MY_ROLE` — it asks each section's own panels whether any of
+them is visible (`repJumpVisible()`, shared with `#rep-nav`), so a section
+with nothing visible loses BOTH its button and its header (`tests/r42.js` §A,
+§B: owner loses "My numbers", adviser loses "Service & quality", each proven
+on both the button and the header).
+
+**Six ledger drawers.** Each of the six Reports panels that leads with a
+figure and then a full row-listing table now wraps that listing in
+`<details class="report-ledger">`, closed by default: `#report-owed-table`
+(`.owed-case-row`), `#report-rateend-table` (`tr.rb-bucket-row`),
+`#report-nps-list` (`.nps-row`), `#report-ltv`, `#report-conveyancer-body`
+(`tr[data-firm]`), `#report-introducers` — `REPORT_LEDGERS` names all six,
+each with its own row selector and noun (a total-row or header is never
+counted as evidence). `buildReportLedgerCounts()` appends the live count to
+each `<summary>` via a trailing `span.ledger-n` — free, because the rows are
+already in the DOM by the time it runs. `#owed-csv-btn`/`#report-owed-buckets`/
+`#report-rateend-recover` all sit outside the drawer and stay fully usable
+with it closed (`tests/r42.js` §C, §D). One drawer behaves differently by
+design, not by bug: `#report-nps-list`'s panel (`#report-nps-panel`) is
+itself opt-in, reached only via the "Avg review score ▾" tile
+(`#report-nps-tile` → `toggleNpsList()`) — revealing THAT panel also opens
+its ledger drawer, because making a reader click twice to see the same list
+they just asked for would be a disclosure behind a disclosure (`tests/r42.js`
+§C4–§C7).
+
+**Basis-repeat prose trimmed, not rewritten.** `#report-basis-legend` (the
+one legend every money label on the page points back to) is byte-for-byte
+unchanged — it is the panel-specific repeats of ITS content that were cut.
+`#month-legend` no longer restates which figure is earned-vs-banked (that is
+`#report-basis-legend`'s own job, four panels up on the same page, to the
+same Owner-only reader); it now ends "…scoped to the month selected above
+(bases: see legend above)." `#report-owed-basis` no longer says "the same
+basis as 'Fees banked' above" nor recaps the definition of "outstanding" in a
+parenthetical; it now ends "— basis: outstanding (see legend above)". Neither
+change touches a calculation, a basis, or the panel-specific facts each line
+still states in full (`tests/r42.js` §E, §F).
+
+**One download glyph.** Every CSV control on the app now reads ⭳ — the glyph
+the MI panels, the diagnostics export and the drill-downs already used —
+rather than a second glyph (⬇) meaning the same thing on three controls:
+`#owed-csv-btn` ("⭳ CSV"), `#csv-btn` ("⭳ Download CSV"), `#client-bulk-csv`
+("⭳ Export CSV"). Ids, labels and behaviour are otherwise untouched; zero ⬇
+remain anywhere in the rendered app (`tests/r42.js` §G, checked via
+`page.evaluate` over the live DOM, not the source).
+
+**Settings doc-chase note.** `#doc-chase-note` moves from `<p>` to `<div>` —
+a `<details>` inside a `<p>` is parser-closed, which would have thrown the
+folded rules OUT of the element the copy tests read — and now holds one
+short, visible sentence (still interpolating `docChaseDays()`) plus
+`<details id="doc-chase-more"><summary>ⓘ Full rules</summary>` around the
+original ~1,020-character paragraph, both interpolations intact
+(`tests/r42.js` §H).
+
+**Emails explainer.** The page's opening prose — close to 2,000 characters
+before the status chips and the list — is cut to two sentences; everything
+else, including the R8/R9 copy-audit paragraphs (`#emails-r8-note`/
+`#emails-r9-note`, reproduced WORD FOR WORD, ids intact), now sits inside
+`<details id="emails-explainer">`, closed by default. `textContent` traverses
+into a closed `<details>` unchanged, so any suite reading these notes by
+content rather than by visibility was never at risk (`tests/r42.js` §I).
+
+**Data Health's clean-tile fold.** Thirteen fault tiles — the 11
+`dhReadinessChecks` tiles plus `#dh-tile-failed` and `#dh-tile-nopolicystart`
+— get class `dh-clean` (`display:none` via `.kpi-row:not(.dh-show-clean)
+.kpi.dh-clean`) the moment `dhFault()` sees their own count is 0; nothing is
+removed from the DOM, so every tile keeps its id, wiring and number.
+`#dh-clean-toggle` ("✓ N checks clean ▸" ⇄ "▾ hide", `aria-expanded`,
+Enter/Space via its own `onkeydown`) reveals them by adding `.dh-show-clean`
+to `#dh-kpi-row`; it renders only when `dhCleanN > 0`, so it is absent
+outright once nothing is clean. The four informational tiles — waiting on
+documents, shared property addresses, vulnerable clients, automation
+suppressed — and Clients-total are never wrapped in `dhFault()` at all, so
+they are never hidden at any count, proven at a genuine 0 by wiping every
+case and neutralising every client's `is_vulnerable`/`suppress_automation`
+flag rather than merely reading the fixture's current (non-zero) numbers
+(`tests/r42.js` §J3, `wipeToZeroInformational()`). `#dh-readiness` (R31,
+unchanged) already excludes every clean tile by construction — it only ever
+lists checks with count > 0 — so the two mechanisms can never disagree;
+`tests/r42.js` §J4 cross-checks all 11 shared tile ids directly rather than
+assuming it.
+
+**The one repair, and why it is the only one.** `tests/r27.js` §A7 clicked
+`#dh-tile-deadbook` on the base fixture, where its count is 0 — now `dh-clean`
+and `display:none`. A Playwright `.click()` on a non-visible element blocks
+until its 30s actionability timeout and then throws, which R27's own
+structure turns into an unhandled promise rejection that kills sections
+B–E outright (not a soft assertion failure — the process crashes). The whole
+`tests/` tree was grepped for every other direct `.click()`/visibility
+assertion on a `#dh-tile-*` id (per the task brief's own worked hypotheses):
+`tests/r25.js`'s `#dh-tile-milestone` (count 41 on the base fixture, never
+clean), `tests/r31.js`'s readiness-rollup click (a plain DOM `.click()` fired
+from an inline `onclick=`, which fires on a `display:none` element exactly as
+it always did — R31 was never at risk), and `tests/r34.js` (zero `dh-tile`
+hits at all) — none needed a repair. `tests/r29_scale.js`'s own
+`#dh-tile-deadbook` probe seeds thousands of synthetic overdue cases before
+ever reading the tile, so it is never clean there either. See the repair
+itself, and its five new toggle assertions, in the table above.
 
 R41 notes: the Today page declutter — four dashboard drawers deleted, their
 actions folded into My Day (`admin/app.js`, branch `r41/today-declutter`).

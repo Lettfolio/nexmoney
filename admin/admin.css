@@ -453,6 +453,26 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
    the label says where it goes; this says it goes somewhere at all. */
 .dq-clickable { cursor: pointer; transition: box-shadow .12s ease, border-color .12s ease, transform .12s ease; }
 .dq-clickable:hover { border-color: var(--navy); box-shadow: 0 2px 10px rgba(16, 42, 78, .12); transform: translateY(-1px); }
+/* ---- R42 · F5 · Data health: fault tiles that are clean fold away ----
+   Written as "hide unless the row is opened" rather than "show when opened", so revealing a tile
+   restores whatever display .kpi itself has instead of a guessed one. Only FAULT tiles ever carry
+   .dh-clean — the informational lists (waiting on documents, shared addresses, vulnerable clients,
+   automation suppressed) are never given it, in markup or here. */
+.kpi-row:not(.dh-show-clean) .kpi.dh-clean { display: none; }
+/* The toggle is a control, not a measurement: no accent bar, no big number, and it says so. */
+.dh-clean-toggle {
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; user-select: none;
+  background: transparent;
+  border-style: dashed;
+  box-shadow: none;
+  padding: 10px 14px;
+}
+.dh-clean-toggle::before { display: none; }
+.dh-clean-toggle .lbl { margin-top: 0; color: var(--muted); font-weight: 600; text-transform: none; letter-spacing: 0; font-size: 12.5px; text-align: center; }
+.dh-clean-toggle:hover { border-color: var(--navy); }
+.dh-clean-toggle:hover .lbl { color: var(--navy); }
+.dh-clean-toggle:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .kpi.warn::before { background: var(--orange); opacity: .8; }
 .kpi.warn .num { color: var(--orange-600); }
 .kpi.bad::before { background: var(--red); opacity: .8; }
@@ -2987,6 +3007,62 @@ tr.owed-hot > td { background: var(--red-bg); }
 #page-settings .settings-details,
 #page-settings #settings-form h3,
 #page-settings #settings-form h4 { scroll-margin-top: var(--settings-jump-scroll, 96px); }
+
+/* ---- R42 · F3 · Reports sections, section nav and ledger drawers ----
+   Reports is five questions, not seventeen panels. The headers are the grouping and the
+   #reports-jump buttons are the wayfinding; neither collapses anything, and role gating is still
+   done panel by panel, exactly as before. */
+.report-section-head {
+  margin: 28px 0 12px;
+  padding-top: 14px;
+  border-top: 2px solid var(--line, var(--light));
+  font-size: 18px;
+  /* the same measured offset every other Reports jump target gets, so a section header lands
+     BELOW the sticky #rep-nav strip rather than behind it */
+  scroll-margin-top: var(--rep-jump-scroll, 96px);
+}
+/* The first header opens the page — no rule above it. */
+#page-reports .report-section-head:first-of-type { margin-top: 8px; padding-top: 0; border-top: none; }
+/* Deliberately NOT sticky: #rep-nav (R11-4) is the sticky strip on this page and a second one
+   would stack on top of it. This is a row of buttons you use once on arrival. */
+.rep-sections-nav { margin: 0 0 6px; }
+.rep-sections-nav[hidden] { display: none; }
+.rep-sections-nav .rep-nav-chips { margin-bottom: 4px; }
+
+/* A ledger drawer's summary is a ghost button — it is an action ("show me the rows"), and the
+   things it sits under (CSV, By lender / By adviser) are buttons, so it should not read as a link
+   or as a heading. The marker is the app's own ▾ = "expands in place". */
+.report-ledger { margin-top: 12px; }
+.report-ledger > summary {
+  display: inline-flex; align-items: center; gap: 7px;
+  background: var(--white);
+  border: 1px solid var(--border-strong);
+  color: var(--dark);
+  padding: 4px 10px; border-radius: 7px;
+  font-size: 12.5px; font-weight: 500; line-height: 1.35;
+  cursor: pointer; user-select: none;
+  list-style: none;
+}
+.report-ledger > summary::-webkit-details-marker { display: none; }
+.report-ledger > summary::after { content: "\25BE"; font-size: 11px; color: var(--muted); }
+.report-ledger[open] > summary::after { content: "\25B4"; }
+.report-ledger > summary:hover { border-color: #b9c7d8; color: var(--navy); }
+.report-ledger > summary:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.report-ledger[open] > summary { margin-bottom: 12px; }
+/* The row count buildReportLedgerCounts() appends — a fact about the drawer, not part of its label. */
+.report-ledger .ledger-n { color: var(--muted); font-weight: 400; }
+
+/* ---- R42 · F4 · Prose folds (Settings document chase, Emails explainer) ----
+   Standing explanations that are contractual in their wording and read once a year. One visible
+   sentence, the rest behind a summary that says what is inside. */
+.prose-fold { margin: 4px 0 12px; }
+.prose-fold > summary {
+  cursor: pointer; user-select: none;
+  font-size: 12.5px; font-weight: 500; color: var(--navy);
+  padding: 3px 0;
+}
+.prose-fold > summary:hover { text-decoration: underline; }
+.prose-fold > p:last-child { margin-bottom: 0; }
 
 /* ---- R11-5 · Email / SMS status chips ---- */
 .em-filters { margin-bottom: 10px; }

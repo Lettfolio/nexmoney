@@ -221,6 +221,26 @@ async function panelRows(page) {
       });
       ok("A6 · placed immediately after #dh-tile-milestone", orderOk);
 
+      /* R42 · F5 — on the base fixture #dh-tile-deadbook's count is 0, so R42's clean-tile fold
+         (admin/app.js dhFault()) now hides it behind #dh-clean-toggle (display:none via
+         .kpi.dh-clean, revealed by .dh-show-clean on #dh-kpi-row). A hidden tile is not
+         Playwright-clickable — reveal it via the toggle first (proving the toggle itself works,
+         which this suite would otherwise never touch), THEN click the tile exactly as before. */
+      const cleanToggle = await page.$("#dh-clean-toggle");
+      ok("A6b · #dh-clean-toggle exists (the deadbook tile is clean on the base fixture)", !!cleanToggle);
+      if (cleanToggle) {
+        const ariaBefore = await page.$eval("#dh-clean-toggle", (e) => e.getAttribute("aria-expanded"));
+        eq("A6c · toggle starts collapsed (aria-expanded=false)", ariaBefore, "false");
+        const tileVisibleBefore = await page.$eval("#dh-tile-deadbook", (e) => e.offsetParent !== null);
+        ok("A6d · #dh-tile-deadbook starts hidden (dh-clean, folded away)", !tileVisibleBefore);
+        await page.click("#dh-clean-toggle");
+        await wait(page, 200);
+        const ariaAfter = await page.$eval("#dh-clean-toggle", (e) => e.getAttribute("aria-expanded"));
+        eq("A6e · clicking the toggle expands it (aria-expanded=true)", ariaAfter, "true");
+        const tileVisibleAfter = await page.$eval("#dh-tile-deadbook", (e) => e.offsetParent !== null);
+        ok("A6f · #dh-tile-deadbook is now visible", tileVisibleAfter);
+      }
+
       await page.click("#dh-tile-deadbook");
       await wait(page, 400);
       const hiddenAfter = await page.$eval("#dh-deadbook-panel", (e) => e.classList.contains("hidden"));

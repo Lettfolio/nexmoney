@@ -4651,7 +4651,22 @@ async function renderSettings() {
     <label title="How long to wait between document chase emails. Blank = the default, 3 days.">Document chase interval (days, blank = 3)
       <input name="doc_chase_days" type="number" min="1" value="${esc(settings.doc_chase_days ?? "")}" placeholder="3">
     </label>
-    <p class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;" id="doc-chase-note">Emails a client <strong>every ${esc(String(docChaseDays()))} days</strong> while documents are still outstanding on their case's checklist, listing <strong>only the items still missing</strong> — never the whole list again. After <strong>${DOC_CHASE_MAX} chases it stops emailing</strong> and puts a call task on the case's adviser instead; the fourth email is not the one that works. Every <strong>live stage is covered — Enquiry through Exchange</strong> (widened from Fact Find and Application only): a checklist can be opened as soon as ID is asked for, and the lender still wants the missing item right up to exchange. Completed and Not proceeding are never chased. Only cases <strong>with a checklist</strong> are chased at all: a case with no checklist is not “fully documented”, it is unknown, and it is skipped rather than guessed at. The ${esc(String(docChaseDays()))}-day gap counts any document email, request or chase, so a cron run and someone pressing “Send document request now” cannot become two emails in an evening. <strong>Requires email sending to be set up</strong> (a verified From address and a Resend key) — with no sender configured nothing goes out, whatever this says.</p>
+    ${/* R42 · F4 — ONE SENTENCE, THEN THE RULES. This was a single ~1,020-character paragraph
+          sitting under a two-option select: the four rules the cron applies are worth having
+          written down (R9-5), but they are read once, when the firm decides to switch this on,
+          and after that they are a wall between the toggle and the interval box beside it. The
+          sentence in the open is the whole behaviour in one line; every word of the original is
+          still here, one click away, unedited. #doc-chase-note keeps its id and moves from <p>
+          to <div> for one reason: a <details> inside a <p> is closed by the parser, which would
+          throw the rules OUT of the element the copy tests read. Both docChaseDays()
+          interpolations still run — one in the sentence, both in the folded body. */ ""}
+    <div class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;" id="doc-chase-note">
+      <p style="margin:0;">Emails a client <strong>every ${esc(String(docChaseDays()))} days</strong> while documents are outstanding, stops after ${DOC_CHASE_MAX} chases and tasks the adviser instead.</p>
+      <details class="prose-fold" id="doc-chase-more">
+        <summary>ⓘ Full rules</summary>
+        <p style="margin:0;">Emails a client <strong>every ${esc(String(docChaseDays()))} days</strong> while documents are still outstanding on their case's checklist, listing <strong>only the items still missing</strong> — never the whole list again. After <strong>${DOC_CHASE_MAX} chases it stops emailing</strong> and puts a call task on the case's adviser instead; the fourth email is not the one that works. Every <strong>live stage is covered — Enquiry through Exchange</strong> (widened from Fact Find and Application only): a checklist can be opened as soon as ID is asked for, and the lender still wants the missing item right up to exchange. Completed and Not proceeding are never chased. Only cases <strong>with a checklist</strong> are chased at all: a case with no checklist is not “fully documented”, it is unknown, and it is skipped rather than guessed at. The ${esc(String(docChaseDays()))}-day gap counts any document email, request or chase, so a cron run and someone pressing “Send document request now” cannot become two emails in an evening. <strong>Requires email sending to be set up</strong> (a verified From address and a Resend key) — with no sender configured nothing goes out, whatever this says.</p>
+      </details>
+    </div>
     <label>Review requests (NPS)
       <select name="nps_enabled">
         <option value="off" ${(settings.nps_enabled ?? "off") === "on" ? "" : "selected"}>Off</option>
@@ -9961,7 +9976,11 @@ function renderPipelineTable(filtered, stageEntry = {}, propOn = true) {
     </div>
     <div class="board-scroll-wrap board-scroll-wrap--table">
     <div class="panel" id="pipe-scroll" style="overflow-x:auto;">
-    <div style="display:flex;justify-content:flex-end;margin-bottom:8px;"><button class="btn btn-sm" id="csv-btn">⬇ Download CSV</button></div>
+    ${/* R42 · F7 — ⭳, not ⬇: one glyph for "this downloads a file". Every other CSV control on
+          the app (the MI panels, the diagnostics export, the drill-downs) already used ⭳, and
+          two glyphs for one action is a difference that has to be checked before it is
+          dismissed. Label, id and behaviour unchanged. */ ""}
+    <div style="display:flex;justify-content:flex-end;margin-bottom:8px;"><button class="btn btn-sm" id="csv-btn">⭳ Download CSV</button></div>
     ${rows.length ? `<table class="imp-table has-bulk" id="pipe-table">
       <tr><th class="bulk-col"><input type="checkbox" id="pipe-bulk-all" aria-label="Select all cases in this view"></th>${cols.map(([k, l]) => `<th data-k="${k}" class="${k === "client" ? "stick-col" : k === "updated_at" ? "pipe-col-updated" : ""}" style="cursor:pointer;"${k === "erc_end_date" ? ` title="${TIP_ERC}"` : ""}>${l}${sk === k ? (sd > 0 ? " ▲" : " ▼") : ""}</th>`).join("")}</tr>
       ${bodyRows}
@@ -14109,7 +14128,8 @@ function renderClientBulkBar(list) {
     <div class="bulk-bar" id="client-bulk-bar"${n ? "" : " hidden"}>
       <span class="bulk-bar-count"><strong id="client-bulk-n">${n}</strong> selected</span>
       <button type="button" class="btn btn-sm" id="client-bulk-task" title="One task per selected client, on that client's case. Says which clients it can and cannot place a task for before it writes anything.">＋ Add task…</button>
-      <button type="button" class="btn btn-sm" id="client-bulk-csv" title="Download the selected clients as a spreadsheet.">⬇ Export CSV</button>
+      ${/* R42 · F7 — ⭳, the app's one download glyph (was ⬇). Label and id unchanged. */ ""}
+      <button type="button" class="btn btn-sm" id="client-bulk-csv" title="Download the selected clients as a spreadsheet.">⭳ Export CSV</button>
       <button type="button" class="btn btn-sm" id="client-bulk-clear">Clear</button>
     </div>
     ${/* R8-2 — said where someone would look for the verb that isn't here, rather than only in a
@@ -21003,6 +21023,11 @@ async function loadReports() {
      re-deriving them: one gate, not seventeen copies of one, so a money panel and its chip can
      never disagree. */
   buildReportsJumpNav();
+  /* R42 · F3 — and on the same terms, for the same reason: the five section buttons ask the panels
+     that have just rendered whether anything under each header exists for this role, and the six
+     ledger drawers take their row counts off rows that are already on the page. */
+  buildReportSectionNav();
+  buildReportLedgerCounts();
 }
 
 /* ==========================================================================
@@ -21049,13 +21074,19 @@ const REPORT_JUMP_SECTIONS = [
   ["live", "Live snapshot", "#report-live-note"],
   ["owed", "Money owed", "#report-owed-panel"],
   ["rateend", "Rate-end book", "#report-rateend-panel"],
-  ["leadresp", "Lead response", "#report-leadresp-panel"],
-  ["advocacy", "Advocacy", "#report-advocacy-panel"],
-  ["conveyancer", "Conveyancers", "#report-conveyancer-panel"],
   ["forecast", "Forecast", "#report-forecast-panel"],
   ["months", "Completions", "#report-months-panel"],
   ["introducers", "Introducers", "#report-introducers-panel"],
   ["ltv", "Client LTV", "#report-ltv-panel"],
+  /* R42 · F3 — lead response, advocacy and conveyancers moved BELOW the money panels when Reports
+     was grouped into its five sections (they are §5 Service & quality; the money panels are §4).
+     This list is re-ordered to match, and that is not cosmetic: onRepJumpScroll() walks it in order
+     and BREAKS at the first section below the fold line, so a list in a different order from the
+     DOM stops highlighting at the first entry that has moved — every chip below it would have gone
+     dead. Keep this array in DOM order. Keys, labels and chip ids are unchanged. */
+  ["leadresp", "Lead response", "#report-leadresp-panel"],
+  ["advocacy", "Advocacy", "#report-advocacy-panel"],
+  ["conveyancer", "Conveyancers", "#report-conveyancer-panel"],
 ];
 /* Visible = on the page AND not inside anything hidden. The .grid-2 wrappers mean a panel's own
    class is not the whole answer, so walk up to the page section. */
@@ -21165,6 +21196,93 @@ function onRepJumpScroll() {
 }
 
 /* ==========================================================================
+   R42 · F3 — REPORTS SECTIONS.
+
+   Reports answers five questions — my numbers, this month, where the work is,
+   where the money is, how well we are serving people — and it had been
+   answering them in one flat 7,700px stack of seventeen panels. The panels have
+   MOVED into those five groups (ids, gates and render code all untouched); each
+   group carries a slim <h3 class="report-section-head" id="rsec-*"> and one
+   button in #reports-jump.
+
+   THE SECTIONS DO NOT COLLAPSE. This is grouping and wayfinding. Anything a
+   role can see, it still sees on arrival.
+
+   THE ROLE RULE IS THE ONE R11-4 ESTABLISHED AND IS NOT COPIED: every panel
+   already owns its own gate, so a section asks its PANELS whether any of them
+   is visible (repJumpVisible, the same walk the chip bar uses) rather than
+   re-testing MY_ROLE here — which is how a money button leaks to an adviser.
+   A section with nothing visible under it loses its button AND its header: an
+   empty "Money & book" heading is worse than no heading at all.
+
+   The membership list below is declared, unlike #rep-nav's chip list, because
+   the page is flat markup: a section is a header plus the panels that follow
+   it, and there is no wrapper element to ask. Keep it in DOM order — the nav
+   reads top to bottom.
+   ========================================================================== */
+const REPORT_SECTIONS = [
+  ["mine", "My numbers", "#rsec-mine", ["#report-mine-panel"]],
+  ["month", "This month", "#rsec-month", ["#report-month-panel", "#report-scoreboard-panel"]],
+  ["mi", "Pipeline MI", "#rsec-mi", ["#report-mi-section", "#report-funnel-panel", "#report-sources-panel", "#report-losses-panel"]],
+  ["money", "Money & book", "#rsec-money", ["#report-kpis", "#report-owed-panel", "#report-rateend-panel", "#report-forecast-panel", "#report-months-panel", "#report-introducers-panel", "#report-ltv-panel"]],
+  ["quality", "Service & quality", "#rsec-quality", ["#report-leadresp-panel", "#report-nps-panel", "#report-advocacy-panel", "#report-conveyancer-panel"]],
+];
+function buildReportSectionNav() {
+  const bar = $("#reports-jump"), wrap = $("#reports-jump-chips");
+  if (!bar || !wrap) return;
+  const live = REPORT_SECTIONS.map(([key, label, headSel, panels]) => {
+    const head = $(headSel);
+    const on = panels.some((sel) => { const el = $(sel); return el && repJumpVisible(el); });
+    // The header goes with the button — one decision, applied to both.
+    if (head) head.classList.toggle("hidden", !on);
+    return { key, label, head, on };
+  }).filter((s) => s.head && s.on);
+  // One button is not navigation, it is decoration — the same guard #rep-nav uses.
+  if (live.length < 2) { wrap.innerHTML = ""; bar.hidden = true; return; }
+  wrap.innerHTML = live.map((s) =>
+    `<button type="button" class="seg-btn" id="reports-nav-${esc(s.key)}" role="tab" aria-selected="false" data-reports-jump="${esc(s.key)}" title="Jump to ${esc(s.label)}">${esc(s.label)}</button>`).join("");
+  wrap.querySelectorAll("[data-reports-jump]").forEach((b) => (b.onclick = () => {
+    const it = live.find((s) => s.key === b.dataset.reportsJump);
+    // scroll-margin-top on .report-section-head (--rep-jump-scroll, measured) is what stops the
+    // sticky #rep-nav strip landing on top of the header this just took you to.
+    if (it && it.head) it.head.scrollIntoView({ behavior: "smooth", block: "start" });
+  }));
+  bar.hidden = false;
+}
+
+/* R42 · F3 — LEDGER DRAWERS. Six Reports panels lead with a figure and then print a table of
+   every row behind it. The figure is the answer; the table is the evidence, wanted on the day you
+   act on it. Each row-listing div is now inside a <details class="report-ledger"> (markup only —
+   the ids live on inside it and every render function still writes into them unchanged), closed
+   by default, with nothing persisted: a drawer that remembers is a drawer that surprises.
+
+   The count is appended here rather than baked into each renderer, because it is the same fact in
+   six places and it is FREE: the rows are already in the DOM by the time this runs. Per-panel row
+   selectors, not one generic "count the <tr>s", because "every unpaid fee line" and "the 24-month
+   table" are counting different things and a total-row or a header would be counted as evidence. */
+const REPORT_LEDGERS = [
+  ["#report-owed-table", ".owed-case-row", "line"],
+  ["#report-rateend-table", "tr.rb-bucket-row", "bucket"],
+  ["#report-nps-list", ".nps-row", "respondent"],
+  ["#report-ltv", "table tr + tr", "client"],
+  ["#report-conveyancer-body", "tr[data-firm]", "firm"],
+  ["#report-introducers", "table tr + tr", "introducer"],
+];
+function buildReportLedgerCounts() {
+  REPORT_LEDGERS.forEach(([sel, rowSel, noun]) => {
+    const box = $(sel);
+    if (!box) return;
+    const det = box.closest("details.report-ledger");
+    const out = det && det.querySelector(".ledger-n");
+    if (!out) return;
+    const n = box.querySelectorAll(rowSel).length;
+    // No count at all rather than "0 lines": the panel's own empty state is inside the drawer and
+    // says it better than a zero on the handle would.
+    out.textContent = n ? ` — ${n} ${noun}${n === 1 ? "" : "s"}` : "";
+  });
+}
+
+/* ==========================================================================
    S7 (cheap slice) / R5-47 — REVIEW SCORE DRILL-DOWN
    The Avg review score tile answered "how are we doing" and nothing else: a 7.2 with no way to
    reach the people behind it. This lists every case that returned a score, worst first, so the
@@ -21197,6 +21315,14 @@ window.toggleNpsList = function () {
   npsListOpen = !npsListOpen;
   const panel = $("#report-nps-panel");
   if (panel) panel.classList.toggle("hidden", !npsListOpen || !$("#report-nps-list").innerHTML);
+  /* R42 · F3 — the list is inside a .report-ledger drawer like every other Reports row-listing, and
+     that drawer ships closed. This panel is the one case where the drawer must not stay closed on
+     arrival: the whole panel is already opt-in — you get here by pressing "Avg review score ▾",
+     which IS the request to read the respondents — so revealing the panel and then making you open
+     a second disclosure inside it would be a drawer guarding a drawer. Opened here, not defaulted
+     open in the markup, so the "closed by default, nothing persisted" rule still holds. */
+  const det = $("#report-nps-list") && $("#report-nps-list").closest("details.report-ledger");
+  if (det) det.open = npsListOpen;
   if (npsListOpen && panel) panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
 };
 
@@ -21685,10 +21811,18 @@ function renderMoneyOwed(all) {
   panel.classList.remove("hidden");
   const m = moneyOwedModel(all);
   owedState.model = m;
+  /* R42 · F7 — BASIS REPEAT TRIMMED. Two clauses here were saying what #report-basis-legend says
+     four panels up the same page, to the same reader (this panel is Owner-only and the legend is
+     shown to exactly that reader): "the same basis as 'Fees banked' above" re-derived the cash
+     basis, and the tail label "(earned · not yet received · …)" is the legend's own definition of
+     OUTSTANDING, plus a second copy of "aged from completion date" one clause after the first. The
+     panel-specific facts — which column each fee type is counted on, what a waived fee does, what
+     it is aged from — are what this line is FOR and are untouched. BASIS_OWED itself is not
+     touched: Monday money (#money-owed-basis) still prints it and that page is out of scope. */
   $("#report-owed-basis").innerHTML =
-    `Every completed case carrying a fee amount with no paid date against it — proc, solicitor and broker fees counted separately, each on <code>coalesce(&lt;type&gt;_fee_paid_at, fee_paid_at)</code>, the same basis as "Fees banked" above. `
+    `Every completed case carrying a fee amount with no paid date against it — proc, solicitor and broker fees counted separately, each on <code>coalesce(&lt;type&gt;_fee_paid_at, fee_paid_at)</code>. `
     + `A broker fee marked <strong>waived</strong> is excluded (money you chose not to charge is not money you are owed); a waived status has no effect on proc or solicitor fees. `
-    + `Aged from <strong>completed_at</strong>. <span class="money-basis">${esc(BASIS_OWED)}</span>`;
+    + `Aged from <strong>completed_at</strong>. <span class="money-basis">— basis: outstanding (see legend above)</span>`;
 
   $("#report-owed-buckets").innerHTML = m.bucketList.map((b) => {
     const hot = b.key === "60-90" || b.key === "90+";
@@ -22729,23 +22863,49 @@ async function loadDataHealth() {
   });
   deadBook.sort((a, b) => b.overdueDays - a.overdueDays);
 
+  /* ==========================================================================
+     R42 · F5 — A CLEAN FAULT TILE HIDES ITSELF.
+
+     This row had grown to seventeen tiles, and on a tidy book most of them read zero. A zero on a
+     FAULT tile answers nothing: #dh-readiness above already lists every non-zero fault, worst
+     first, each row jumping to its own tile, so a tile at zero is neither the question nor the
+     answer — it is furniture between the owner and the faults that are real.
+
+     WHAT COUNTS AS CLEAN is the rollup's own count, not the tile's caption, so the two can never
+     disagree: if #dh-readiness would not list a check, that check's tile is clean. (The "N of M"
+     tiles therefore go clean when N — clients missing a contact detail WITH A LIVE CASE — is zero,
+     which is exactly the check the rollup applies. The M is not lost: one click on the toggle
+     brings every clean tile back.) The rate-end tile draws its caption from the RPC and its
+     rollup count from the case rows, so it stays only if BOTH are zero.
+
+     INFORMATIONAL TILES ARE NEVER HIDDEN, however quiet they are: waiting-on-documents,
+     shared property addresses, vulnerable clients and automation-suppressed clients are lists to
+     READ, not faults to clear. This page has been emphatic since R13 that a Consumer-Duty record
+     is not a problem to be cleared, and collapsing "Vulnerable clients: 0" with the faults would
+     say precisely that. They carry no dh-clean class and never will.
+
+     Nothing is removed from the DOM: every tile keeps its id, its title, its wiring and its
+     number, and #dh-clean-toggle reveals them all. No persistence — the row opens tidy every time.
+     ========================================================================== */
+  let dhCleanN = 0;
+  const dhFault = (n) => { if (!n) { dhCleanN++; return " dh-clean"; } return ""; };
   /* T1-26 — every number on this page is a door. `▾` = expands a list panel further down the page,
      `→` = leaves for the page that number lives on. Only "Clients total" (which isn't a fault
      count and has nothing to drill into) stays plain, so "clickable" reads consistently. */
   const kpis = `
     <div class="kpi"><div class="num">${dq.clients_total ?? 0}</div><div class="lbl">Clients total</div></div>
-    <div class="kpi ${missingEmail.length ? "warn" : ""} dq-clickable" id="dh-tile-email" title="${missingEmail.length} of ${dq.missing_email_count ?? 0} clients missing an email have a live case — click to jump to the list"><div class="num">${missingEmail.length} of ${dq.missing_email_count ?? 0}</div><div class="lbl">Missing email — with a live case ▾</div></div>
-    <div class="kpi ${dq.missing_phone_count ? "warn" : ""} dq-clickable" id="dh-tile-phone" title="${missingPhoneLive.length} of ${dq.missing_phone_count ?? 0} clients missing a phone have a live case — click to list them"><div class="num">${missingPhoneLive.length} of ${dq.missing_phone_count ?? 0}</div><div class="lbl">Missing phone — with a live case ▾</div></div>
-    <div class="kpi ${missingBoth.length ? "warn" : ""} dq-clickable" id="dh-tile-both" title="Clients with neither an email nor a phone number — click to list them"><div class="num">${missingBoth.length}</div><div class="lbl">Missing email &amp; phone ▾</div></div>
-    <div class="kpi ${invalidEmail.length ? "warn" : ""} dq-clickable" id="dh-tile-invalid-email" title="Clients whose email address can't be sent to — click to list them"><div class="num">${invalidEmail.length}</div><div class="lbl">Invalid email ▾</div></div>
-    <div class="kpi ${invalidPhone.length ? "warn" : ""} dq-clickable" id="dh-tile-invalid-phone" title="Clients whose phone number can't be texted — click to list them"><div class="num">${invalidPhone.length}</div><div class="lbl">Invalid phone ▾</div></div>
-    <div class="kpi ${unassigned.length ? "warn" : ""} dq-clickable" id="dh-tile-unassigned" title="Click to jump to the list"><div class="num">${unassigned.length}</div><div class="lbl">Live cases unassigned ▾</div></div>
-    <div class="kpi dq-clickable" id="dh-tile-nofee" title="Click to jump to the list"><div class="num">${noFee.length}</div><div class="lbl">Completed, no fee ▾</div></div>
-    <div class="kpi dq-clickable" id="dh-tile-rateend" title="Click to list these cases"><div class="num">${dq.completed_missing_rate_end ?? 0}</div><div class="lbl">Completed, no rate-end ▾</div></div>
-    <div class="kpi ${noCompletedAt.length ? "warn" : ""} dq-clickable" id="dh-tile-nocompleted" title="Completed cases with no completion date — invisible to Reports until it's set. Click to list them"><div class="num">${noCompletedAt.length}</div><div class="lbl">Completed, no completion date ▾</div></div>
-    <div class="kpi ${noMilestoneDate.length ? "warn" : ""} dq-clickable" id="dh-tile-milestone" title="Cases past application or offer with the milestone date (submitted_at / offer_issued_date) blank — they silently skew the Reports velocity & funnel until filled in. Click to list them."><div class="num">${noMilestoneDate.length}</div><div class="lbl">Missing application/offer date ▾</div></div>
-    <div class="kpi ${deadBook.length ? "warn" : ""} dq-clickable" id="dh-tile-deadbook" title="Live cases still open after their expected completion date — or their rate-end date — has already passed. Likely dead or stuck, and they inflate the live pipeline until closed or revived. Click to list them."><div class="num">${deadBook.length}</div><div class="lbl">Overdue — open past a key date ▾</div></div>
-    <div class="kpi ${dq.emails_failed ? "warn" : ""} dq-clickable" id="dh-tile-failed" title="Click to open the Emails page filtered to failed sends"><div class="num">${dq.emails_failed ?? 0}</div><div class="lbl">Failed emails →</div></div>
+    <div class="kpi ${missingEmail.length ? "warn" : ""}${dhFault(missingEmail.length)} dq-clickable" id="dh-tile-email" title="${missingEmail.length} of ${dq.missing_email_count ?? 0} clients missing an email have a live case — click to jump to the list"><div class="num">${missingEmail.length} of ${dq.missing_email_count ?? 0}</div><div class="lbl">Missing email — with a live case ▾</div></div>
+    <div class="kpi ${dq.missing_phone_count ? "warn" : ""}${dhFault(missingPhoneLive.length)} dq-clickable" id="dh-tile-phone" title="${missingPhoneLive.length} of ${dq.missing_phone_count ?? 0} clients missing a phone have a live case — click to list them"><div class="num">${missingPhoneLive.length} of ${dq.missing_phone_count ?? 0}</div><div class="lbl">Missing phone — with a live case ▾</div></div>
+    <div class="kpi ${missingBoth.length ? "warn" : ""}${dhFault(missingBoth.length)} dq-clickable" id="dh-tile-both" title="Clients with neither an email nor a phone number — click to list them"><div class="num">${missingBoth.length}</div><div class="lbl">Missing email &amp; phone ▾</div></div>
+    <div class="kpi ${invalidEmail.length ? "warn" : ""}${dhFault(invalidEmail.length)} dq-clickable" id="dh-tile-invalid-email" title="Clients whose email address can't be sent to — click to list them"><div class="num">${invalidEmail.length}</div><div class="lbl">Invalid email ▾</div></div>
+    <div class="kpi ${invalidPhone.length ? "warn" : ""}${dhFault(invalidPhone.length)} dq-clickable" id="dh-tile-invalid-phone" title="Clients whose phone number can't be texted — click to list them"><div class="num">${invalidPhone.length}</div><div class="lbl">Invalid phone ▾</div></div>
+    <div class="kpi ${unassigned.length ? "warn" : ""}${dhFault(unassigned.length)} dq-clickable" id="dh-tile-unassigned" title="Click to jump to the list"><div class="num">${unassigned.length}</div><div class="lbl">Live cases unassigned ▾</div></div>
+    <div class="kpi${dhFault(noFee.length)} dq-clickable" id="dh-tile-nofee" title="Click to jump to the list"><div class="num">${noFee.length}</div><div class="lbl">Completed, no fee ▾</div></div>
+    <div class="kpi${dhFault((dq.completed_missing_rate_end ?? 0) + noRateEnd.length)} dq-clickable" id="dh-tile-rateend" title="Click to list these cases"><div class="num">${dq.completed_missing_rate_end ?? 0}</div><div class="lbl">Completed, no rate-end ▾</div></div>
+    <div class="kpi ${noCompletedAt.length ? "warn" : ""}${dhFault(noCompletedAt.length)} dq-clickable" id="dh-tile-nocompleted" title="Completed cases with no completion date — invisible to Reports until it's set. Click to list them"><div class="num">${noCompletedAt.length}</div><div class="lbl">Completed, no completion date ▾</div></div>
+    <div class="kpi ${noMilestoneDate.length ? "warn" : ""}${dhFault(noMilestoneDate.length)} dq-clickable" id="dh-tile-milestone" title="Cases past application or offer with the milestone date (submitted_at / offer_issued_date) blank — they silently skew the Reports velocity & funnel until filled in. Click to list them."><div class="num">${noMilestoneDate.length}</div><div class="lbl">Missing application/offer date ▾</div></div>
+    <div class="kpi ${deadBook.length ? "warn" : ""}${dhFault(deadBook.length)} dq-clickable" id="dh-tile-deadbook" title="Live cases still open after their expected completion date — or their rate-end date — has already passed. Likely dead or stuck, and they inflate the live pipeline until closed or revived. Click to list them."><div class="num">${deadBook.length}</div><div class="lbl">Overdue — open past a key date ▾</div></div>
+    <div class="kpi ${dq.emails_failed ? "warn" : ""}${dhFault(dq.emails_failed)} dq-clickable" id="dh-tile-failed" title="Click to open the Emails page filtered to failed sends"><div class="num">${dq.emails_failed ?? 0}</div><div class="lbl">Failed emails →</div></div>
     ${/* R6-38 — deliberately NOT a "warn" tile: a shared address is something to read, not a fault to
           clear. Absent entirely on a database with no property column. */ ""}
     ${/* R12b · K-11 — a work queue, not a fault: no "warn" class, however big the number gets. */ ""}
@@ -22759,7 +22919,12 @@ async function loadDataHealth() {
     ${dhCareOn ? `<div class="kpi dq-clickable" id="dh-tile-vulnerable" title="Clients flagged as vulnerable. Information, not a fault — click to read the list and check each one carries a note explaining the care need."><div class="num">${dhVulnerable.length}</div><div class="lbl">Vulnerable clients ▾</div></div>` : ""}
     ${dhCareOn ? `<div class="kpi dq-clickable" id="dh-tile-suppressed" title="Clients the database refuses every automated email and SMS to. Click to list them — worth reading, because nothing automated will ever reach these people again until it is turned off."><div class="num">${dhSuppressed.length}</div><div class="lbl">Automation suppressed ▾</div></div>` : ""}
     ${/* R13 · M-23 — this one IS a fault: a policy whose clawback window nobody can watch. */ ""}
-    ${dhClawbackOn ? `<div class="kpi ${dhNoPolicyStart.length ? "warn" : ""} dq-clickable" id="dh-tile-nopolicystart" title="Policies recorded as taken with no start date — their clawback window cannot be watched. Click to open the Protection page's Clawback window panel."><div class="num">${dhNoPolicyStart.length}</div><div class="lbl">Policies with no start date →</div></div>` : ""}`;
+    ${dhClawbackOn ? `<div class="kpi ${dhNoPolicyStart.length ? "warn" : ""}${dhFault(dhNoPolicyStart.length)} dq-clickable" id="dh-tile-nopolicystart" title="Policies recorded as taken with no start date — their clawback window cannot be watched. Click to open the Protection page's Clawback window panel."><div class="num">${dhNoPolicyStart.length}</div><div class="lbl">Policies with no start date →</div></div>` : ""}`
+    /* R42 · F5 — the one control that puts them back. Appended AFTER the tiles because dhCleanN is
+       only final once every tile above has declared itself, and rendered at all only when there is
+       something to reveal: "0 checks clean" would be a tile about tiles. `✓` and `▸`/`▾` carry the
+       meanings they carry everywhere else on the page — done, and expands in place. */
+    + (dhCleanN ? `<div class="kpi dh-clean-toggle" id="dh-clean-toggle" role="button" tabindex="0" aria-expanded="false" data-n="${dhCleanN}" title="${dhCleanN} data-quality check${dhCleanN === 1 ? " has" : "s have"} nothing to fix, so ${dhCleanN === 1 ? "its tile is" : "their tiles are"} folded away. Click to show ${dhCleanN === 1 ? "it" : "them"} — the counts are unchanged, and the informational lists (documents, shared addresses, vulnerable, suppressed) are never folded."><div class="lbl" id="dh-clean-toggle-lbl">✓ ${dhCleanN} check${dhCleanN === 1 ? "" : "s"} clean ▸</div></div>` : "");
 
   /* R37 · K5 — ONE CANONICAL WARNING ABOUT THE QUEUE, NOT THREE.
      The same fact was being argued three times: Today's heartbeat banner ("emails may be silently
@@ -23048,7 +23213,7 @@ async function loadDataHealth() {
   </div>`;
 
   el.innerHTML = `
-    <div class="kpi-row">${kpis}</div>
+    <div class="kpi-row" id="dh-kpi-row">${kpis}</div>
     ${stuckNotice}
     ${dupPanel}
     ${sharedPropPanel}
@@ -23151,6 +23316,26 @@ async function loadDataHealth() {
   if (failedTile) { failedTile.style.cursor = "pointer"; failedTile.onclick = () => dhGotoEmails(true); }
   const stuckEl = $("#dh-stuck-notice");
   if (stuckEl) { stuckEl.style.cursor = "pointer"; stuckEl.onclick = () => dhGotoEmails(false); }
+
+  /* R42 · F5 — reveal / re-hide the fault tiles that are at zero. One class on the row does the
+     whole job (CSS: .kpi-row:not(.dh-show-clean) .kpi.dh-clean { display: none }), so the tiles are
+     never removed and never re-rendered — their ids, titles and wiring are exactly the ones every
+     other part of this page, and #dh-readiness above it, already point at. Nothing is remembered:
+     the next load opens tidy again. */
+  const cleanToggle = $("#dh-clean-toggle");
+  if (cleanToggle) {
+    const row = $("#dh-kpi-row"), lbl = $("#dh-clean-toggle-lbl");
+    const n = Number(cleanToggle.getAttribute("data-n") || 0);
+    const flip = () => {
+      if (!row) return;
+      const on = row.classList.toggle("dh-show-clean");
+      cleanToggle.setAttribute("aria-expanded", on ? "true" : "false");
+      if (lbl) lbl.textContent = on ? "▾ hide" : `✓ ${n} check${n === 1 ? "" : "s"} clean ▸`;
+    };
+    cleanToggle.onclick = flip;
+    // role="button" without a key handler is a button only for people with a mouse.
+    cleanToggle.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); flip(); } };
+  }
 
   // BUILD 7c — unassigned-cases bulk-assign wiring. Selection toggles update the action bar
   // imperatively; picking an adviser assigns the batch then refreshes Data Health.
