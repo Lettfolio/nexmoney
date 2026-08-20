@@ -307,8 +307,10 @@ Duncan Armitage,duncan.armitage@example.com,07700 900102,offer,Halifax,4.29,495`
       await page.fill("#new-note", NOTE_TEXT);
       await page.click("#add-note-btn");
       await wait(page, 600);
-      const submitted = await page.evaluate((t) => document.getElementById("notes-list").textContent.includes(t), NOTE_TEXT);
-      ok("C1b · the typed note appears in #notes-list after Add", submitted);
+      // R40 — #notes-list is gone; the note now lands in the unified History timeline at
+      // #case-events-list (as a .tl-row), so the presence check moves there.
+      const submitted = await page.evaluate((t) => document.getElementById("case-events-list").textContent.includes(t), NOTE_TEXT);
+      ok("C1b · the typed note appears in #case-events-list after Add", submitted);
       const cleared = await page.$eval("#new-note", (e) => e.value);
       eq("C1c · the textarea clears itself after a successful submit", cleared, "");
       ok("C1 · no console errors", noNewErr(page, errBefore), JSON.stringify(page.__err));

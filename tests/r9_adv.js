@@ -635,21 +635,28 @@ const tasksOnCase = (page, caseId) => page.evaluate(async (cid) =>
       // (a) the note on the case, with the score banded and out of the sentence
       await page.evaluate((id) => window.openCase(id), note.caseId);
       await page.waitForTimeout(900);
+      /* R40 — #notes-list and noteRowHtml's standalone .note/.note-review/.note-ic/.note-body
+         markup are gone; a review-feedback note is now a .tl-row[data-cat] inside
+         #case-events-list, distinguished by its ⭐ icon and the .review-score-chip embedded in
+         .tl-title (chip class + text unchanged — reviewScoreChipHtml wasn't touched by R40). */
       const rendered = await page.evaluate(() => {
-        const n = document.querySelector("#notes-list .note-review");
-        if (!n) return null;
-        const chip = n.querySelector(".review-score-chip");
+        const row = [...document.querySelectorAll("#case-events-list .tl-row")].find((r) => r.querySelector(".review-score-chip"));
+        if (!row) return null;
+        const chip = row.querySelector(".review-score-chip");
+        const title = row.querySelector(".tl-title");
+        const clone = title.cloneNode(true);
+        clone.querySelectorAll(".review-score-chip, .chip, .note-refile-btn").forEach((n) => n.remove());
         return {
-          cls: n.className,
+          cat: row.dataset.cat,
           chipCls: chip ? chip.className : "",
           chipTxt: chip ? chip.textContent.replace(/\s+/g, " ").trim() : "",
-          icon: (n.querySelector(".note-ic") || {}).textContent || "",
-          body: (n.querySelector(".note-body") || {}).textContent || "",
+          icon: (row.querySelector(".tl-ic") || {}).textContent || "",
+          body: clone.textContent.trim(),
           chipTitle: chip ? chip.getAttribute("title") || "" : "",
         };
       });
-      ok("R9-3 · a “Review feedback (n/10)” note renders as its own kind of note", !!rendered && /note-review/.test(rendered.cls), JSON.stringify(rendered));
-      ok("R9-3 · …banded by score (this one is a detractor)", /note-review-detractor/.test(rendered.cls) && /detractor/.test(rendered.chipCls), rendered.cls);
+      ok("R9-3 · a “Review feedback (n/10)” note renders as its own kind of row (⭐ icon, score chip)", !!rendered && rendered.icon === "⭐" && /review-score-chip/.test(rendered.chipCls), JSON.stringify(rendered));
+      ok("R9-3 · …banded by score (this one is a detractor)", /detractor/.test(rendered.chipCls), rendered.chipCls);
       eq("R9-3 · …with the score visible as a chip", rendered.chipTxt, `${note.score}/10 · detractor`);
       ok("R9-3 · …and the client's words kept verbatim beside it",
         note.body.endsWith(rendered.body) && rendered.body.length > 0, JSON.stringify({ body: rendered.body.slice(0, 60), src: note.body.slice(0, 80) }));

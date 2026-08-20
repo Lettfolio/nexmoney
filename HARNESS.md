@@ -94,6 +94,7 @@ node tests/r35.js
 node tests/r36.js
 node tests/r37.js
 node tests/r38.js
+node tests/r40.js
 ```
 
 Current green counts (end of round 23; r21/r22 were never committed to this
@@ -111,6 +112,34 @@ why those needed none at all: R18 is scale/perf hardening behind selectors
 nothing else asserted the old shape of, and R19 is new owner-gated Reports
 content that no earlier suite reaches; R23 is the same story again — see the
 R23 notes below).
+
+**Full battery is 100% green (3,893/3,893), `tests/r9_docs.js` included
+(255/0), `smoke.js` 152/0.** R40 added `tests/r40.js` (63 checks, §1–§7) — see
+the "R40 notes" section below — and required three genuine, non-masking
+repairs to pre-existing suites whose own selectors R40's product change
+(`#notes-list` deleted; the case modal's notes now render inside the SAME
+unified `#case-events-list` timeline the client record already used) moved
+out from under them, none of them loosening what the suite was proving —
+every repair swaps a stale selector/markup assumption for the new one and
+reads back exactly the same fact:
+`tests/r33.js` C1b now checks the typed note landed in `#case-events-list`
+rather than the deleted `#notes-list` (55/0, count unchanged);
+`tests/r64.js`'s H-01 re-file block (the happy path, the escaping check and
+the in-flight-failure retry check) now finds a note's row by its
+`.note-refile-btn[data-note-id]` / by its struck `<s class="tl-refiled">`
+text inside `#case-events-list`, in place of the deleted `#notes-list
+.note[data-note-id]`/`.note-body` markup — the same strike/badge/escaping
+facts, read off the new markup (91/0, count unchanged); `tests/r9_adv.js`
+R9-3(a) now finds the review-feedback row by its ⭐ icon and
+`.review-score-chip` inside `#case-events-list` rather than the deleted
+`#notes-list .note-review` class, and reads the comment text by cloning
+`.tl-title` and stripping the chip/author-chip/Re-file-button children
+rather than reading a separate `.note-body` element that no longer exists
+(169/0, count unchanged). Every OTHER pre-existing suite (`smoke.js` through
+`tests/r38.js`) re-ran unedited at its exact pre-R40 count — see the R40
+notes below for what the new suite covers and why the three repairs above
+are faithful to what R40 actually shipped (`admin/app.js`'s R40 commits,
+09832e2 included).
 
 **Full battery is 100% green (3,830/3,830), `tests/r9_docs.js` included
 (255/0), `smoke.js` 152/0.** R38 added `tests/r38.js` (95 checks, §A–§G) — see
@@ -246,10 +275,10 @@ even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes belo
 |---|---|
 | `smoke.js` | 152 (R38 — up from 144: the new Retention page and its rows, see the R38 notes) |
 | `tests/r5_batch1..9.js` (sum) | 559 (BATCH 9's day-collision fixed in R27 — see the R27 notes; R33 re-pointed a nav click in BATCH 1 and BATCH 8's `gotoSettings()` at the collapsed Firm group — see the R33 notes; R34 pre-seeded BATCH 9's Month/Day scenario with `nx_diary_staff="all"` so its Month-vs-Day memory check still guards what it always guarded — see the R34 notes; R35 added two assertions to BATCH 3's retention flow proving the live successor doesn't renag its own Rate & ERC row — see the R35 notes; R37 re-pointed BATCH 5 §S3c at the new `#prot-comm-box` overlay in place of the retired commission `prompt()` — see the R37 notes; sum 557 → 559, unchanged by R37) |
-| `tests/r64.js` | 91 |
+| `tests/r64.js` | 91 (R40 re-pointed the H-01 re-file block at `#case-events-list`/`.note-refile-btn[data-note-id]`/`s.tl-refiled` in place of the deleted `#notes-list` markup — see the R40 notes; count unchanged) |
 | `tests/r8_touch.js` | 151 (R36 resolved the new bulk-task case-picker overlay before its confirm-dialog assertions — see the R36 notes; count unchanged) |
 | `tests/r8_rev.js` | 176 |
-| `tests/r9_adv.js` | 169 (R33 re-scoped a `.case-details` reveal to `#modal .case-details` — see the R33 notes; count unchanged) |
+| `tests/r9_adv.js` | 169 (R33 re-scoped a `.case-details` reveal to `#modal .case-details` — see the R33 notes; R40 re-pointed R9-3(a) at the ⭐/`.review-score-chip` row inside `#case-events-list` in place of the deleted `#notes-list .note-review` — see the R40 notes; count unchanged) |
 | `tests/r9_docs.js` | 255 (same R33 `#modal .case-details` re-scope; count unchanged) |
 | `tests/r9_embed.js` | 104 |
 | `tests/r11_ux.js` | 123 (R11-A adjacency asserts updated in R24 to skip R23's hidden `#dash-cap-notice`) |
@@ -271,13 +300,77 @@ even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes belo
 | `tests/r29_scale.js` | 106 |
 | `tests/r30.js` | 40 (R33 re-pointed §C/§D4/§E from Reports to Settings' `#diag-details` and added 3 assertions proving the wrapper itself gates correctly — see the R33 notes; count rose from 37) |
 | `tests/r31.js` | 55 (R37 pre-seeds a present-but-empty `nx_views_v1` before B1/B2 so the new starter-views seeding doesn't fire ahead of their "starts from nothing" assertions — see the R37 notes; count unchanged) |
-| `tests/r33.js` | 55 (R38 bumped A5c's 12→13 `data-page` buttons — the new Retention button in the Book group — see the R38 notes; count unchanged, prose-only fix) |
+| `tests/r33.js` | 55 (R38 bumped A5c's 12→13 `data-page` buttons — the new Retention button in the Book group — see the R38 notes; R40 re-pointed C1b at `#case-events-list` in place of the deleted `#notes-list` — see the R40 notes; count unchanged, prose-only fixes) |
 | `tests/r34.js` | 60 |
 | `tests/r35.js` | 43 |
 | `tests/r36.js` | 83 |
 | `tests/r37.js` | 123 (new — §1–§12, see the R37 notes) |
 | `tests/r38.js` | 95 (new — §A–§G, see the R38 notes) |
-| **Total** | **3,830** |
+| `tests/r40.js` | 63 (new — §1–§7, see the R40 notes) |
+| **Total** | **3,893** |
+
+R40 notes: the unified client timeline moved into the case modal
+(`admin/app.js`, commits `9ba8e4b` + CTO follow-up `09832e2`).
+
+**`#notes-list` is gone.** The case modal's notes used to render in their own
+list, painted by a now-deleted `noteRowHtml()`. They now render inside the
+SAME shared timeline the client record has used since SP3b — `#case-events-list`,
+built by `buildClientTimeline()` and painted by `renderTimelineList()` /
+`timelineRowHtml()`, scoped to the one open case. `#tl-more`'s single
+hardcoded id is gone too (the case modal can be open over the client record,
+so two `.tl-more` buttons can exist on screen at once) — each caller now
+wires its own by class, through its own container: `#tl-list .tl-more` on
+the client record, `#case-events-list .tl-more` in the case modal.
+
+**Eight sources, one of them new.** `buildClientTimeline()` already read
+notes, sent/failed emails, sent/failed SMS, appointments (by `client_id`,
+so a client-level appointment with no `case_id` still lands on the right
+client), inbound client emails and fact-finds; R40 adds a ninth
+client-record filter chip and an eighth builder source for completed
+`case_tasks` (`done_at` truthy) → `cat:"task"`, icon ✅, title
+`"Task done: {title}"` (escaped, same as every other free-text source here).
+The client record's `#tl-filters` grew its 9th chip, `[data-cat="task"]`
+("Tasks done"), deliberately left OUT of `CONTACT_TL_CATS` — ticking a task
+off is work done ON the case, not a conversation, so it cannot freshen the
+"Last contact" line (`tests/r40.js` §7).
+
+**The case modal has its own, smaller filter set and cap.** `#case-tl-filters`
+carries just two chips — "All" (default) and "Activity" — because inside one
+case's own history the stage-change rows ARE the history, not cross-case
+noise the client record needs to default away from. `CASE_TL_CAP = 30` past
+rows before "Show more" (+100 from there), against the client record's 100.
+Every row (both surfaces) now carries `data-case` — the case it belongs to,
+or `""` for a client-level row — because the case modal has to answer
+"which case is this row on?" without re-parsing a chip (`tests/r40.js` §1/§2).
+
+**CTO fix (`09832e2`): the case modal strips the per-row case tag.** Every
+row `buildClientTimeline()` builds carries a `caseChip`/`caseLabel` (the
+`.tl-prop` property chip or the `.tl-case` kind·lender label); inside a
+single case's own modal every row already belongs to the case the header
+names, so `window.openCase()` maps the scoped `tlItems` to blank those two
+fields before render — no `.tl-prop`, no `.tl-case`, anywhere inside
+`#case-events-list`, address or no address. The client record's own
+`#tl-list` is a different call site and is untouched — the same case's
+property chip still renders there (`tests/r40.js` §1l/§1m/§1w).
+
+**`eventTimelineHtml()`/`noteRowHtml()` are deleted outright** — the former
+painted the case modal's old stage-only event list, the latter its old
+notes list; both jobs are now done by the one shared builder/renderer pair.
+Any `page.evaluate` calling either by name now throws — none of the
+repaired suites did.
+
+`tests/r40.js` covers: multi-source rendering (note/email/SMS/appointment/
+fact-find/system stage-change/task-done) inside the case modal, `data-case`
+population including the empty-string client-level case, another case's
+appointment excluded while a null-case one is included, the two-chip
+default/Activity toggle, the `CASE_TL_CAP=30`/Show-more cap, the composer's
+in-place insert (visible under both chips, call-prefix → `data-cat="call"`,
+no reopen needed), a re-file surviving a modal reopen (read back off the
+mock db, not just the optimistic repaint), XSS escaping of a task title and
+a note body (`0 <img>` nodes), the CTO chip/label strip vs. the client
+record's unchanged `.tl-prop`, the client record's 9 chips/Tasks-done
+filter/Upcoming block/100-row cap, and the completed-task-is-not-contact
+rule.
 
 R38 notes: a new Retention page, already-built and uncommitted before this
 session started (`admin/app.js` + `admin/index.html` only — no schema, no

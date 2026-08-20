@@ -96,7 +96,10 @@ const notesOn = (page, caseId) => page.evaluate(async (id) => {
 async function refileFromCaseModal(page, sourceCaseId, noteId, targetCaseId) {
   await page.evaluate((id) => window.openCase(id), sourceCaseId);
   await page.waitForTimeout(900);
-  await page.click(`#notes-list .note[data-note-id="${noteId}"] .note-refile-btn`);
+  /* R40 — #notes-list is gone; a note is now a .tl-row inside #case-events-list and carries no
+     note id itself, but refileBtnHtml still stamps data-note-id on the Re-file button, so that
+     stays the reliable way to find the right row's control. */
+  await page.click(`#case-events-list .note-refile-btn[data-note-id="${noteId}"]`);
   await page.waitForTimeout(500);
   const options = await page.$$eval("#refile-target option", (els) => els.map((e) => ({ value: e.value, label: e.textContent })));
   await page.selectOption("#refile-target", targetCaseId);
@@ -154,18 +157,32 @@ async function refileFromCaseModal(page, sourceCaseId, noteId, targetCaseId) {
       ok("H-01 · the original note itself is untouched (a correction, not an edit)",
         srcNotes.some((n) => n.id === noteId && n.body === "Call: chased the valuation today"));
 
-      /* The case modal, repainted by the action itself. */
+      /* The case modal, repainted by the action itself.
+         R40 — #notes-list, .note, .note-refiled and .note-body are gone. The struck original is
+         now a .tl-row whose .tl-title carries `<s class="tl-refiled">…</s>` + the badge; the
+         marker is a plain .tl-row whose title starts with the marker sentence. Neither .tl-row
+         carries the note's own id any more, so rows are found by their known text instead. */
       const rendered = await page.evaluate((nid) => {
-        const el = document.querySelector(`#notes-list .note[data-note-id="${nid}"]`);
-        const mk = document.querySelector("#notes-list .note-refile-marker");
+        const rows = [...document.querySelectorAll("#case-events-list .tl-row")];
+        const struck = rows.find((r) => r.querySelector("s.tl-refiled") && /chased the valuation today/.test(r.querySelector("s.tl-refiled").textContent));
+        const marker = rows.find((r) => {
+          const t = r.querySelector(".tl-title");
+          return t && /^Filed in error — see /.test(t.textContent.trim());
+        });
+        const plainTitle = (row) => {
+          const t = row.querySelector(".tl-title");
+          const clone = t.cloneNode(true);
+          clone.querySelectorAll(".chip, .note-refile-btn").forEach((n) => n.remove());
+          return clone.textContent.trim();
+        };
         return {
-          refiledClass: !!(el && el.classList.contains("note-refiled")),
-          badge: !!(el && el.querySelector(".note-refiled-badge")),
-          stillReadable: el ? el.querySelector(".note-body").textContent : null,
-          noControlOnRefiled: !!(el && !el.querySelector(".note-refile-btn")),
-          markerText: mk ? mk.querySelector(".note-body").textContent : null,
-          noControlOnMarker: !!(mk && !mk.querySelector(".note-refile-btn")),
-          controlsLeft: document.querySelectorAll("#notes-list .note-refile-btn").length,
+          refiledClass: !!struck,
+          badge: !!(struck && struck.querySelector(".note-refiled-badge")),
+          stillReadable: struck ? struck.querySelector("s.tl-refiled").textContent : null,
+          noControlOnRefiled: !!(struck && !struck.querySelector(".note-refile-btn")),
+          markerText: marker ? plainTitle(marker) : null,
+          noControlOnMarker: !!(marker && !marker.querySelector(".note-refile-btn")),
+          controlsLeft: document.querySelectorAll("#case-events-list .note-refile-btn").length,
         };
       }, noteId);
       ok("H-01 · case modal · the original renders struck/dimmed (.note-refiled)", rendered.refiledClass, JSON.stringify(rendered));
@@ -312,7 +329,9 @@ async function refileFromCaseModal(page, sourceCaseId, noteId, targetCaseId) {
       const tgtNotes = await notesOn(page, tgt.id);
       eq("H-01 · the copy really is on the target case", tgtNotes.filter((n) => /^Re-filed from /.test(n.body)).length, 1);
       eq("H-01 · …and no marker was left behind on the source", srcNotes.filter((n) => /^Filed in error/.test(n.body)).length, 0);
-      const stillOffered = await page.evaluate((nid) => !!document.querySelector(`#notes-list .note[data-note-id="${nid}"] .note-refile-btn`), noteId);
+      // R40 — #notes-list is gone; the Re-file button (still carrying data-note-id) now lives
+      // inside a .tl-row under #case-events-list.
+      const stillOffered = await page.evaluate((nid) => !!document.querySelector(`#case-events-list .note-refile-btn[data-note-id="${nid}"]`), noteId);
       ok("H-01 · the note is NOT shown as re-filed (no marker ⇒ no strike) and can be retried", stillOffered);
       await page.close();
     }
@@ -329,21 +348,31 @@ async function refileFromCaseModal(page, sourceCaseId, noteId, targetCaseId) {
       const noteId = await addNote(page, src.id, NASTY);
       await refileFromCaseModal(page, src.id, noteId, tgt.id);
 
-      const srcSafe = await page.evaluate((nid) => ({
-        pwned: !!window.__pwned,
-        imgs: document.querySelectorAll("#notes-list img").length,
-        text: (document.querySelector(`#notes-list .note[data-note-id="${nid}"] .note-body`) || {}).textContent,
-      }), noteId);
+      // R40 — #notes-list / .note-body are gone; the struck original is a .tl-row in
+      // #case-events-list, and its text now lives inside the <s class="tl-refiled"> element.
+      const srcSafe = await page.evaluate(() => {
+        const struck = [...document.querySelectorAll("#case-events-list s.tl-refiled")][0];
+        return {
+          pwned: !!window.__pwned,
+          imgs: document.querySelectorAll("#case-events-list img").length,
+          text: struck ? struck.textContent : null,
+        };
+      });
       ok("H-01 · the struck original renders its markup as text, not as an element",
         !srcSafe.pwned && srcSafe.imgs === 0 && srcSafe.text === NASTY, JSON.stringify(srcSafe));
 
       await page.evaluate((id) => window.openCase(id), tgt.id);
       await page.waitForTimeout(900);
-      const tgtSafe = await page.evaluate(() => ({
-        pwned: !!window.__pwned,
-        imgs: document.querySelectorAll("#notes-list img").length,
-        html: (document.querySelector("#notes-list .note .note-body") || {}).innerHTML,
-      }));
+      // R40 — the copy is an ordinary (unstruck) .tl-row whose title starts "Re-filed from …".
+      const tgtSafe = await page.evaluate(() => {
+        const titles = [...document.querySelectorAll("#case-events-list .tl-row .tl-title")];
+        const copy = titles.find((t) => /^Re-filed from /.test(t.textContent));
+        return {
+          pwned: !!window.__pwned,
+          imgs: document.querySelectorAll("#case-events-list img").length,
+          html: copy ? copy.innerHTML : "",
+        };
+      });
       ok("H-01 · the copy on the target case escapes the note text it carries",
         !tgtSafe.pwned && tgtSafe.imgs === 0 && /&lt;img/.test(tgtSafe.html || ""), JSON.stringify(tgtSafe));
 

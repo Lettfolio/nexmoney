@@ -1172,30 +1172,13 @@ const REFILE_BADGE = '<span class="badge grey note-refiled-badge" title="This no
 function refileBtnHtml(noteId) {
   return ` <button type="button" class="btn btn-sm note-refile-btn" data-note-id="${esc(noteId)}" onclick="refileNote('${jsArg(noteId)}', event)" title="This note is on the wrong case — move a copy to the right one and mark this one as filed in error">Re-file…</button>`;
 }
-// A single case-modal note row (icon + prefix-stripped body + timestamp). Shared by the initial
-// render and the in-place prepend paths so typed icons stay consistent everywhere notes render.
-/* opts.noteId — render the Re-file control (absent for the optimistic prepend,
-   which has no id yet); opts.refiled — this note has been re-filed away. */
-function noteRowHtml(body, whenStr, createdBy, opts = {}) {
-  const nt = noteType(refileDisplayBody(body));
-  const marker = isRefileMarker(body);
-  const refiled = !!opts.refiled;
-  /* R9-3 — a review-feedback note is the one note on a case that a reader must not have to
-     finish reading to grade. The score comes out of the sentence and onto a banded chip; what
-     the client actually SAID stays verbatim and escaped, exactly as every other note body does.
-     A note with a score but no comment renders the chip and an honest "(no comment left)"
-     rather than an empty row. */
-  const rev = reviewNoteParse(refileDisplayBody(body));
-  const cls = "note" + (refiled ? " note-refiled" : "") + (marker ? " note-refile-marker" : "") + (rev ? " note-review note-review-" + rev.band : "");
-  const act = opts.noteId && !refiled && !marker ? refileBtnHtml(opts.noteId) : "";
-  const icon = rev ? "⭐" : nt.icon;
-  const bodyHtml = rev
-    ? `${reviewScoreChipHtml(rev.score)} <span class="note-body">${rev.comment ? esc(rev.comment) : '<span class="cs-muted">(no comment left)</span>'}</span>`
-    : `<span class="note-body">${esc(nt.cleanBody)}</span>`;
-  return `<div class="${cls}"${opts.noteId ? ` data-note-id="${esc(opts.noteId)}"` : ""}>` +
-    `<span class="note-ic" title="${rev ? "review feedback" : nt.type}">${icon}</span>${bodyHtml}${refiled ? " " + REFILE_BADGE : ""}` +
-    `<div class="nd">${esc(whenStr)}${authorChipHtml(createdBy)}${act}</div></div>`;
-}
+/* R40 — noteRowHtml() DELETED, along with the case modal's #notes-list that was its only caller.
+   Every one of its jobs is done by buildClientTimeline's note source, which the case modal now
+   uses too: the typed icon, the prefix-stripped body, the R9-3 review-score chip, the R6.4 H-01
+   re-file strike + badge, the Re-file control and the author chip. Its .note / .note-body /
+   .note-ic / .note-refiled / .note-review-* markup went with it; .note-refile-btn and
+   .note-refiled survive because refileBtnHtml and REFILE_BADGE above still emit them into
+   timeline rows. */
 // Timeline day-divider label, e.g. "Mon 20 Jul" (Europe/London — matches localDateStr grouping).
 const tlDayLabel = (ts) => new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", weekday: "short", day: "numeric", month: "short" }).format(new Date(ts)).replace(",", "");
 // Relative age that reads correctly for FUTURE items (upcoming appointments show "in Nd").
@@ -7882,8 +7865,9 @@ function promptSnooze() {
 
 /* ==========================================================================
    R6.4 H-01 · RE-FILE A NOTE (the action)
-   See the primitives near noteRowHtml for what a re-file IS and why it writes
-   two rows rather than moving one.
+   See the primitives near refileBtnHtml / REFILE_BADGE for what a re-file IS and
+   why it writes two rows rather than moving one. (R40 — that pointer used to name
+   noteRowHtml, which was deleted with the case modal's separate notes list.)
    ========================================================================== */
 /* The target picker, on the shared second-layer overlay (openOverlay) so it can
    be raised from inside an open case or client modal without fighting it for
@@ -8004,7 +7988,10 @@ window.refileNote = async function (noteId, ev) {
 async function refreshAfterRefile(caseId, clientId) {
   const backdrop = $("#modal-backdrop");
   if (!backdrop || backdrop.classList.contains("hidden")) return;
-  if ($("#notes-list")) { await window.openCase(caseId); return; }
+  /* R40 — the case modal is now identified by its History timeline (#case-events-list): #notes-list
+     was deleted when notes moved into that timeline. Checked FIRST, as before, because the case
+     modal can be open over the client record and is the thing on top. */
+  if ($("#case-events-list")) { await window.openCase(caseId); return; }
   if ($("#tl-list") && clientId) { await window.openClient(clientId); }
 }
 window.snoozeAlert = async function (id, severity, caseId) {
@@ -11406,23 +11393,31 @@ function securityCardHtml(c, caseClient, secClient) {
 }
 /* opts: { revealProtection } opens the details drawer on a red-highlighted protection select
    (the protection gate's fix path, R5-34); { openDetails } just opens the drawer (offer apply). */
+/* R40 — how many past history rows the CASE modal paints before it offers Show more. Lower than
+   the client record's 100 on purpose: this list sits in the middle of a modal that already carries
+   tasks, documents, files and a forty-field form, and one case's history is a narrower thing than
+   a client's whole book. Show more adds 100 at a time from there. */
+const CASE_TL_CAP = 30;
 window.openCase = async function (id, opts = {}) {
   let c = { stage: "enquiry", case_kind: "remortgage", rate_type: "fixed" };
   let notes = [], tasks = [];
-  let events = [], auditRows = [];
+  let auditRows = [];
+  let tlItems = [];                      // R40 — the case's own unified timeline (see below)
   let hasRetentionSuccessor = false;
   let caseDocs = [], docMails = [];      // R9-5 · m10 — the checklist and its document emails
   let caseAppts = [];                    // R12b · W-11 — this case's diary, from the start of today
   openedUpdatedAt = null;
   pendingOffer = null; // a re-render replaces the diff panel — don't leave a stale proposal armed
   if (id) {
-    // BACKEND-R4 §2/§3 — the curated event log (log_case_event, with its actor) and the forensic
-    // audit_log underneath it. Both soft-fail: a blocked table must not stop the case opening.
-    const [{ data: cs }, { data: ns }, { data: ts }, evs, aud, succ, docs, dmail, appts] = await Promise.all([
+    /* BACKEND-R4 §3 — the forensic audit_log under the modal. Soft-fails: a blocked table must not
+       stop the case opening.
+       R40 — the separate case_events read that used to sit here is GONE. Those rows are now part of
+       the unified History timeline below, and buildClientTimeline reads case_events itself; keeping
+       a second read of the same table just to feed a list that no longer exists was pure cost. */
+    const [{ data: cs }, { data: ns }, { data: ts }, aud, succ, docs, dmail, appts] = await Promise.all([
       db.from("cases").select("*").eq("id", id).single(),
       db.from("case_notes").select("*").eq("case_id", id).order("created_at", { ascending: false }),
       db.from("case_tasks").select("*").eq("case_id", id).order("due_date"),
-      softRows(db.from("case_events").select("event,detail,created_at,actor").eq("case_id", id).order("created_at", { ascending: false })),
       loadAuditRows("case_id", id),
       // R5-6 — does this case already have a retention successor? Decides the header button.
       softRows(db.from("cases").select("id").eq("retention_source_case_id", id).limit(1)),
@@ -11442,7 +11437,7 @@ window.openCase = async function (id, opts = {}) {
         .order("starts_at").limit(5)),
     ]);
     if (!cs) return toast("Case not found — it may have been deleted or you don't have access");
-    c = cs; notes = ns || []; tasks = ts || []; events = evs; auditRows = aud;
+    c = cs; notes = ns || []; tasks = ts || []; auditRows = aud;
     caseDocs = docs || []; docMails = dmail || []; caseAppts = appts || [];
     notePropAddrFromStarRow(cs); // the select("*") above settles the M7 question definitively
     noteReferrerFromStarRow(cs); // …and the m11 one, at the same zero cost (R9-1)
@@ -11450,6 +11445,25 @@ window.openCase = async function (id, opts = {}) {
     noteCallPackFromStarRow(cs); // R12b · W-15b — …and the call-pack four, at the same zero cost
     hasRetentionSuccessor = (succ || []).length > 0;
     openedUpdatedAt = cs.updated_at; // exact string from the loaded row, for the stale-write guard
+    /* R40 — THE CASE'S HISTORY, built by the SAME builder the client record has used since SP3b
+       rather than a second, thinner one written alongside it. `cs` is a select("*") row, so it
+       carries the property_address / case_kind / lender / stage the builder's chip logic reads.
+       The builder fires its own eight reads in one Promise.all — deliberately not unpicked into
+       this one, because the whole point is that there is exactly one definition of "what happened
+       on a case" and both surfaces call it. */
+    tlItems = await buildClientTimeline(cs.client_id, [cs]);
+    /* R40 — and then scoped to THIS case. Appointments are the one source the builder reads by
+       client_id rather than case_id, so on a multi-case client another case's diary would
+       otherwise appear in this case's history. Rows with NO case_id are kept on purpose: a
+       client-level appointment has no other case to belong to, and the client sitting in
+       reception is sitting there for the case you have open. */
+    tlItems = tlItems.filter((it) => !it.caseId || String(it.caseId) === String(id));
+    /* R40 (CTO) — and stripped of the per-row case tag. The chip exists to say WHICH case a row
+       belongs to; inside a single case's modal every row belongs to the case the header already
+       names, so on an addressed case the same property chip repeated down the whole list. This is
+       a presentation choice at THIS call site only — the chip identity rules (R6/R6FIX-1/R35) and
+       the client page's rendering are untouched. */
+    tlItems = tlItems.map((it) => ({ ...it, caseChip: "", caseLabel: null }));
   }
   /* R18-P6 — the client-picker list was re-read whole (every client, ordered) on EVERY case open.
      Cache it for the session (clientPickerCache) and reuse it; invalidateClientPicker() drops the
@@ -12047,17 +12061,31 @@ window.openCase = async function (id, opts = {}) {
         <button type="button" class="tl-chip" data-type="email">✉️ Email</button>
         <button type="button" class="tl-chip" data-type="meeting">🤝 Meeting</button>
       </div>
-      ${/* R6.4 H-01 — the markers are in this same list, so the set of notes that have
-            been re-filed away is read straight off it: no extra query, and the strike
-            and the marker can never disagree about which note they describe. */ ""}
-      <div id="notes-list">${(() => { const rf = refiledNoteIds(notes); return notes.map((n) => noteRowHtml(n.body, new Date(n.created_at).toLocaleString("en-GB"), n.created_by, { noteId: n.id, refiled: rf.has(String(n.id)) })).join(""); })() || '<div class="empty">No notes yet.</div>'}</div>
+      ${/* R40 — the standalone #notes-list that used to sit here is GONE. A note now appears in
+            History directly below, where it sits in date order among the calls, emails,
+            appointments and stage changes it actually belongs with — and where the timeline
+            renders it RICHER than this list did (re-file strike + badge + Re-file button, review
+            score chips, author chips are all in the shared builder). The composer above is
+            untouched and is now immediately above History, so the gesture reads straight down:
+            write the note, watch it land in the file. */ ""}
     </div>
-    ${/* BACKEND-R4 §2/§3 — what the database recorded, as opposed to what anyone typed. */ ""}
+    ${/* BACKEND-R4 §2/§3 + R40 — ONE history per case: what anyone typed and what the database
+         recorded, merged and in date order, instead of a notes list and a stage list that had to
+         be read side by side and mentally interleaved. */ ""}
     <div style="margin-top:14px;" id="case-history">
       ${/* R15 · §4 — History intro CUT. The heading and the timeline itself say what it is; the
            detail lives in the tooltip. Change history sits directly below. */ ""}
-      <h3 style="font-size:14px;">History <span class="cs-muted" style="font-weight:400;" title="Written by the database as the case progresses — stage changes, fee status, offer uploads, rate-end dates, protection status and reassignment, each with who made the change. Other field edits are in Change history below.">?</span></h3>
-      <div class="tl-list" id="case-events-list">${eventTimelineHtml(events)}</div>
+      <h3 style="font-size:14px;">History <span class="cs-muted" style="font-weight:400;" title="Everything that has happened on this case, newest first: notes, calls, emails and SMS (sent and failed), emails in from the client, appointments, fact-finds, completed tasks, and the rows the database writes as the case progresses — stage changes, fee status, offer uploads, rate-end dates, protection status and reassignment, each with who did it. Other field edits are in Change history below.">?</span></h3>
+      ${/* R40 — TWO chips, not the client record's nine. On the client page "activity" is the
+            default because system rows there are cross-case stage noise; inside ONE case the stage
+            changes ARE the history, so the default is "all" and nothing the old stage-only list
+            showed has disappeared from view. Activity is one click away for "just the human bits".
+            The filter row is deliberately a different id from the client page's #tl-filters. */ ""}
+      <div class="tl-filters" id="case-tl-filters">
+        <button type="button" class="tl-chip tl-filter active" data-cat="all">All</button>
+        <button type="button" class="tl-chip tl-filter" data-cat="activity">Activity</button>
+      </div>
+      <div class="tl-list" id="case-events-list">${renderTimelineList(tlItems, "all", CASE_TL_CAP, false)}</div>
       ${auditPanelHtml("case-audit", auditRows)}
     </div>
     ${/* R15 · §2 — the action bar is now stage- and type-reactive: only stage-relevant actions in
@@ -12564,6 +12592,64 @@ window.openCase = async function (id, opts = {}) {
     } finally { saveBtn.disabled = false; }
   };
   if (id) {
+    /* ---- R40 · the case History timeline: filter chips, Show more, and the add-note hook ----
+       Every lookup below goes through `histBox` (#case-history) rather than the document. The
+       client record can be open UNDERNEATH this modal with its own timeline in the DOM, carrying
+       the same .tl-more, .tl-chip and .tl-filter classes — R33's lesson, applied on the way in
+       rather than after the bug report. Re-rendering reads the items already in memory; nothing
+       here refetches. */
+    const histBox = $("#case-history");
+    let caseTlFilter = "all";           // see the chip comment in the markup — "all", not "activity"
+    let caseTlCap = CASE_TL_CAP;
+    const wireCaseTlMore = () => {
+      const more = histBox && histBox.querySelector(".tl-more");
+      if (more) more.onclick = () => { caseTlCap += 100; rerenderCaseTl(); };
+    };
+    const rerenderCaseTl = () => {
+      const list = histBox && histBox.querySelector("#case-events-list");
+      if (!list) return;
+      list.innerHTML = renderTimelineList(tlItems, caseTlFilter, caseTlCap, false);
+      wireCaseTlMore();
+    };
+    wireCaseTlMore();
+    const caseTlChips = histBox && histBox.querySelector("#case-tl-filters");
+    if (caseTlChips) caseTlChips.querySelectorAll(".tl-filter").forEach((b) => b.onclick = () => {
+      const cur = caseTlChips.querySelector(".tl-filter.active"); if (cur) cur.classList.remove("active");
+      b.classList.add("active");
+      caseTlFilter = b.dataset.cat || "all";
+      caseTlCap = CASE_TL_CAP;   // a filter change is a new view, not a continuation of the old one
+      rerenderCaseTl();
+    });
+    /* R40 — the property chip the builder would have stamped on this case's rows, reproduced for
+       the optimistic inserts below. A single-case build can never have two cases on one building,
+       so the R6FIX-1 "shared address" tail never applies here — this IS the builder's answer for
+       a one-case call, not an approximation of it. */
+    const caseTlChip = propAddress(c) ? propChip(c, { cls: "tl-prop" }) : "";
+    /* R40 — a note used to be prepended to #notes-list; that list is gone, so it is prepended to
+       the timeline's items and the list is repainted. Inserted rather than rebuilt: rebuilding
+       means eight more reads and a repaint of a list the operator is looking at, to show them a
+       row whose every field we already hold. Shaped exactly like the builder's note items (same
+       category from the typed prefix, same review-score chip, same author chip) — with no Re-file
+       control, because the insert has no note id yet, which is the same thing the old in-place
+       prepend did. */
+    const prependCaseTlNote = (body, createdBy) => {
+      const nt = noteType(refileDisplayBody(body));
+      const rev = reviewNoteParse(refileDisplayBody(body));
+      const text = rev
+        ? reviewScoreChipHtml(rev.score, { cls: "tl-review-chip" }) + " " + (rev.comment ? esc(rev.comment) : '<span class="tl-muted">(no comment left)</span>')
+        : (esc(nt.cleanBody) || "(note)");
+      tlItems.unshift({
+        ts: new Date().toISOString(), cat: nt.type, icon: rev ? "⭐" : nt.icon,
+        title: text + authorChipHtml(createdBy),
+        /* R40 (CTO) — chip and label empty to match the loaded rows: the modal strips the per-row
+           case tag (see the tlItems.map above), so the optimistic insert must not be the one row
+           wearing one. caseTlChip is left computed above in case a future surface wants it. */
+        caseId: id, caseLabel: null, caseChip: "",
+      });
+      /* No filter reset: a note is not a system row, so it is visible under BOTH of this modal's
+         chips ("All" and "Activity") and the operator always sees the row they just wrote. */
+      rerenderCaseTl();
+    };
     const delCaseBtn = $("#del-case-btn"); // absent for an adviser — see the modal-actions block above
     if (delCaseBtn) delCaseBtn.onclick = async () => {
       const extra = c.stage === "completed" ? "⚠ This case is COMPLETED — deleting removes its fee/commission history from your records." : null;
@@ -12587,13 +12673,9 @@ window.openCase = async function (id, opts = {}) {
         const { data: { user } } = await db.auth.getUser();
         const { error } = await db.from("case_notes").insert({ case_id: id, body, created_by: user.id });
         if (error) return toast("Error: " + error.message);
-        // In-place append (no full modal re-render / scroll reset): prepend to match the newest-first load order.
-        const list = $("#notes-list");
-        const empty = list.querySelector(".empty");
-        if (empty) empty.remove();
-        const wrap = document.createElement("div");
-        wrap.innerHTML = noteRowHtml(body, new Date().toLocaleString("en-GB"), user.id);
-        list.insertBefore(wrap.firstChild, list.firstChild);
+        // R40 — in place, as before (no full modal re-render / scroll reset), but into the History
+        // timeline that replaced the notes list. Newest-first, so it lands at the top.
+        prependCaseTlNote(body, user.id);
         input.value = "";
         input.focus();
       } finally { noteBtn.disabled = false; }
@@ -12714,15 +12796,9 @@ window.openCase = async function (id, opts = {}) {
             snapshotModalState(); // the app made this change, not the operator — not an unsaved edit
           }
         }
-        // Prepend the note to the list in place (matches newest-first load order).
-        const nlist = $("#notes-list");
-        if (nlist) {
-          const emptyN = nlist.querySelector(".empty");
-          if (emptyN) emptyN.remove();
-          const wrap = document.createElement("div");
-          wrap.innerHTML = noteRowHtml(noteBody, new Date().toLocaleString("en-GB"), user.id);
-          nlist.insertBefore(wrap.firstChild, nlist.firstChild);
-        }
+        // R40 — the logged call lands at the top of the History timeline (it used to be prepended
+        // to #notes-list, which no longer exists). Same optimistic insert as the note composer.
+        prependCaseTlNote(noteBody, user.id);
         // Keep the summary "Last note" line current.
         const noteVal = $("#cs-note-val");
         if (noteVal) noteVal.innerHTML = `${esc(noteBody.length > 120 ? noteBody.slice(0, 120) + "…" : noteBody)} <span class="cs-muted">· just now</span>`;
@@ -14318,7 +14394,11 @@ function bulkClientExportCsv() {
    did or that happened TO them", i.e. every row except the system stage-change noise. It is the
    default view (see renderTimelineList / the modal's initial render below) — "All" is still one
    click away, and so is "System" itself; nothing is hidden that a click can't reach. */
-const TL_CATS = [["activity", "What happened"], ["all", "All"], ["call", "Calls"], ["email", "Emails"], ["meeting", "Meetings"], ["note", "Notes"], ["appointment", "Appointments"], ["system", "System"]];
+/* R40 — "Tasks done" joins the row as a ninth chip. Additive: it is a real category like the rest,
+   so "activity" (= everything that is not system) picks it up with no change, and the eight
+   existing chips keep filtering exactly what they filtered before. Deliberately NOT added to
+   CONTACT_TL_CATS below: ticking a task off is work done ON the case, not a conversation. */
+const TL_CATS = [["activity", "What happened"], ["all", "All"], ["call", "Calls"], ["email", "Emails"], ["meeting", "Meetings"], ["note", "Notes"], ["appointment", "Appointments"], ["task", "Tasks done"], ["system", "System"]];
 /* R12b · W-21 — the categories that count as an actual conversation with the client, for the
    client header's "Last contact" line. Appointments and system rows deliberately excluded: a
    booked meeting that hasn't happened yet isn't contact, and a stage change isn't a conversation. */
@@ -14365,9 +14445,9 @@ async function buildClientTimeline(clientId, cases) {
       + (shared && tail ? ` <span class="case-tag">${esc(tail)}</span>` : "");
   });
   const q = (p) => p.then((r) => (r && r.data) || []).catch(() => []);
-  let notes = [], events = [], appts = [], emails = [], sms = [], ffs = [], inbound = [];
+  let notes = [], events = [], appts = [], emails = [], sms = [], ffs = [], inbound = [], doneTasks = [];
   try {
-    [notes, events, appts, emails, sms, ffs, inbound] = await Promise.all([
+    [notes, events, appts, emails, sms, ffs, inbound, doneTasks] = await Promise.all([
       /* R6.4 H-01 — `id` joins the select so the timeline can offer Re-file and,
          reading the markers among these same rows, strike the notes that have
          already been re-filed away. */
@@ -14378,6 +14458,14 @@ async function buildClientTimeline(clientId, cases) {
       ids.length ? q(db.from("sms_queue").select("sms_type,status,sent_at,created_at,case_id").in("case_id", ids)) : [],
       ids.length ? q(db.from("fact_finds").select("status,submitted_at,created_at,case_id").in("case_id", ids)) : [],
       ids.length ? q(db.from("case_emails").select("subject,snippet,received_at,created_at,case_id").in("case_id", ids)) : [],
+      /* R40 — the eighth source: tasks that were actually COMPLETED. A case's history was silent
+         about the work done on it — "chase lender for offer, ticked off Tuesday" existed only in
+         the Tasks box, which shows the list as it stands now, not when anything happened. Only
+         `done_at` rows qualify (an open task is a to-do, not history) and the filter is applied
+         CLIENT-SIDE below rather than with .not("done_at","is",null): the whole task list for a
+         handful of cases is small, and one predicate fewer is one fewer thing that can behave
+         differently against a database, a mock or an older PostgREST. */
+      ids.length ? q(db.from("case_tasks").select("title,done_at,case_id").in("case_id", ids)) : [],
     ]);
   } catch (_) { /* keep whatever resolved */ }
   const items = [];
@@ -14414,6 +14502,9 @@ async function buildClientTimeline(clientId, cases) {
   appts.forEach((a) => { push(a.starts_at, "appointment", "📅", esc(a.title || "Appointment") + (a.location ? ` <span class="tl-muted">· ${esc(a.location)}</span>` : ""), a.case_id); });
   // Inbound client emails (Outlook sync) — Priya's handover gap: correspondence must show both directions.
   inbound.forEach((m) => { push(m.received_at || m.created_at, "email", "📥", esc(m.subject || m.snippet || "Email from client") + ' <span class="tl-muted">· from client</span>', m.case_id); });
+  /* R40 — completed tasks, timestamped by when they were ticked rather than when they were due.
+     `title` is operator-typed, so it goes through esc() like every other free-text source here. */
+  doneTasks.filter((t) => !!t.done_at).forEach((t) => { push(t.done_at, "task", "✅", "Task done: " + esc(t.title || "(untitled task)"), t.case_id); });
   ffs.filter((f) => f.status === "sent" || f.status === "submitted").forEach((f) => { push(f.submitted_at || f.created_at, "system", "📋", "Fact-find " + esc(f.status), f.case_id); });
   // BACKEND-R4 §2 — the trigger has always stamped who acted; the timeline just never selected it.
   events.forEach((ev) => { push(ev.created_at, "system", "⚙️", esc(ev.detail || ev.event || "Event") + eventActorHtml(ev.actor), ev.case_id); });
@@ -14426,7 +14517,11 @@ function timelineRowHtml(it, multiCase) {
      costs a pill. The kind · lender tag keeps its round-5 rule (multi-case clients only), because
      on a single-case client it genuinely was noise. */
   const caseTag = it.caseChip || (multiCase && it.caseLabel ? `<span class="tl-case">${esc(it.caseLabel)}</span>` : "");
-  return `<div class="tl-row" data-cat="${it.cat}" data-ts="${esc(it.ts)}">
+  /* R40 — the row now says WHICH case it belongs to in the markup, not just in the chip text.
+     The case modal renders this same list scoped to one case, and appointments are the one source
+     that is read by client_id, so "which case is this row on?" has to be answerable without
+     re-parsing a chip. Empty string for client-level rows that genuinely have no case. */
+  return `<div class="tl-row" data-cat="${it.cat}" data-ts="${esc(it.ts)}" data-case="${esc(it.caseId || "")}">
       <span class="tl-ic">${it.icon}</span>
       <div class="tl-main">
         <div class="tl-title">${it.title}</div>
@@ -14454,7 +14549,12 @@ function renderTimelineList(items, filter, cap, multiCase) {
     if (day !== lastDay) { html += `<div class="tl-day">${esc(tlDayLabel(it.ts))}</div>`; lastDay = day; }
     html += timelineRowHtml(it, multiCase);
   });
-  if (past.length > cap) html += `<button type="button" class="btn btn-sm tl-more" id="tl-more">Show more (${past.length - cap})</button>`;
+  /* R40 — the Show-more button no longer carries id="tl-more". Two timelines can now be on screen
+     at once (the case modal opens over the client record), and a hardcoded id would have produced
+     a duplicate id in the document with every global $("#tl-more") lookup resolving to whichever
+     came first — i.e. the client's button under the modal. Both callers wire it by class through
+     their OWN container element instead. */
+  if (past.length > cap) html += `<button type="button" class="btn btn-sm tl-more">Show more (${past.length - cap})</button>`;
   return html;
 }
 
@@ -14816,18 +14916,10 @@ async function refreshChangeHistory() {
   await renderChangeHistory();
 }
 
-/* The case modal's own event log: the curated human timeline log_case_event writes, with the actor
-   the trigger stamped on each row. The client modal shows the same rows merged into its Timeline. */
-function eventTimelineHtml(events) {
-  if (!events || !events.length) return '<div class="empty">No events recorded on this case yet.</div>';
-  return events.map((ev) => `<div class="tl-row" data-cat="system" data-ts="${esc(ev.created_at)}">
-      <span class="tl-ic">⚙️</span>
-      <div class="tl-main">
-        <div class="tl-title">${esc(ev.detail || ev.event || "Event")}${eventActorHtml(ev.actor)}</div>
-        <div class="tl-meta"><span class="tl-case">${esc(String(ev.event || "").replace(/_/g, " "))}</span><span class="tl-ago">${esc(tlWhen(ev.created_at))}</span></div>
-      </div>
-    </div>`).join("");
-}
+/* R40 — eventTimelineHtml() DELETED. It rendered the case modal's stage-only event list, and the
+   case modal now renders the same case_events rows through buildClientTimeline + renderTimelineList
+   like every other source, so it had no callers left. The rows themselves are unchanged and still
+   carry their actor (eventActorHtml lives on in the builder). */
 
 /* T1-2 — `focus` ("email" | "phone") and `attempted` come from a failed message's "Fix contact"
    link: the contact section is opened and the offending field focused, and the address the send
@@ -15287,14 +15379,21 @@ window.openClient = async function (id, focus, attempted, presetCaseId) {
   if (id) {
     // ---- Timeline interactions (SP3b) — filters, typed quick-add, show-more; all in place ----
     let tlFilter = "activity", tlCap = 100; // R12b · W-21 — default view is "what happened", not "all incl. system"
+    /* R40 — Show-more is found by class INSIDE #tl-list, not by the global id it used to carry.
+       The case modal renders the same list with the same button and can be open over this record,
+       so a document-wide lookup was one open modal away from wiring the wrong element. */
+    const wireTlMore = () => {
+      const list = $("#tl-list");
+      const more = list && list.querySelector(".tl-more");
+      if (more) more.onclick = () => { tlCap += 100; rerenderTl(); };
+    };
     const rerenderTl = () => {
       const list = $("#tl-list");
       if (!list) return;
       list.innerHTML = renderTimelineList(tlItems, tlFilter, tlCap, multiCase);
-      const more = $("#tl-more");
-      if (more) more.onclick = () => { tlCap += 100; rerenderTl(); };
+      wireTlMore();
     };
-    const more0 = $("#tl-more"); if (more0) more0.onclick = () => { tlCap += 100; rerenderTl(); };
+    wireTlMore();
     // Type chips (single-select, default Note) — shared class with the case modal. The Log call
     // chip (below) is excluded here: it's a one-shot action, not a typed-note type to select.
     const typeChips = $("#tl-type-chips");
