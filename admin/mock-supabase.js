@@ -8,7 +8,8 @@
               email_queue, sms_queue, case_emails, fact_finds, leads,
               introducers, profiles, settings, watch_alerts, audit_log,
               duplicate_dismissals (M4), case_documents (M10), staff_absences,
-              case_files (R13), vault_entries (R14)
+              case_files (R13), vault_entries (R14), error_events (R30),
+              saved_views (R43)
      view   : v_alerts
      rpcs   : my_role, get_briefing, get_reports, get_data_quality,
               get_protection_pipeline, run_watchtower, find_duplicate_clients,
@@ -377,15 +378,36 @@
     /* R30 — persisted, SANITISED client-error fingerprints (owner/admin diagnostics).
        Columns: id, created_at, error_type, location, page, role — NO message/stack/PII
        column, by construction, exactly like production. */
-    error_events: []
+    error_events: [],
+    /* R43 — the saved filter views R31 kept in localStorage, now a table.
+       Columns: user_id (defaults to the caller, PK part 1), scope ('pipeline' |
+       'clients' | '_meta'), name, filters jsonb, updated_at. PK is the TRIPLE
+       (user_id, scope, name) — the only composite key in this store, which is
+       why the upsert branch below grew a conflict-target registry. RLS is
+       per-user on all four ops (see readFilter/_matching + writePolicy), so a
+       persona only ever sees and writes their own rows. SEEDED EMPTY on
+       purpose: the app's first-run behaviour (starter seed on a virgin store,
+       one-time migration from an existing localStorage key) is the thing worth
+       exercising, and a fixture row would hide both. */
+    saved_views: []
   };
   /* R30 — feature-gate toggle (default true). __setErrorEventsSupported(false) makes any
      op on error_events answer with a PostgREST-shaped 42P01, so tests can exercise the
      app's degrade path (errorEventsOff + the "isn't enabled" note). */
   var errorEventsSupported = true;
   var errorEventSeq = 0;   // serial-style incrementing id, assigned on insert
-  var PK = { settings: "key" };
+  /* R43 — same feature-gate shape as errorEventsSupported above:
+     __setSavedViewsSupported(false) makes every op on saved_views answer with a PostgREST 42P01,
+     which is what an un-migrated deployment does and what the app's localStorage fallback exists
+     for. Default true. */
+  var savedViewsSupported = true;
+  /* R43 — a PK may now be a LIST of columns: saved_views' key is the triple
+     (user_id, scope, name). pkOf() keeps returning what is registered (the string call sites —
+     audit row_id, the embed resolver, the id default — are all single-key tables and never see
+     an array), and pkCols() is the always-an-array form the upsert conflict target uses. */
+  var PK = { settings: "key", saved_views: ["user_id", "scope", "name"] };
   function pkOf(t) { return PK[t] || "id"; }
+  function pkCols(t) { var p = pkOf(t); return Array.isArray(p) ? p : [p]; }
 
   /* R12a·D8 — storage object registry, moved up here (ahead of the STORAGE
      section below which merely defines the `storage.from()` surface) so the
@@ -850,6 +872,36 @@
       }
       return null;
     }
+    /* R43 — saved_views: per-user on all four ops, with is_staff() on the insert/update WITH CHECK.
+       The row's user_id has already been defaulted to the caller by the time an insert gets here
+       (applyInsertDefaults), so the only way to fail the identity half is to NAME somebody else —
+       which production's WITH CHECK refuses, and so does this. The two CHECK constraints are
+       mirrored as well: an unknown scope or an empty/over-long name is a 23514, not a silent row,
+       because the app's migration path deliberately drops names it knows the table would reject
+       and that decision is only worth anything if the table would in fact reject them.
+       Read/update/delete scoping is enforced one layer down, in _matching() — see the comment
+       there for why it is not in readFilter() with the rest of the SELECT-side redaction. */
+    if (table === "saved_views") {
+      if (!isStaff()) {
+        return pgError('new row violates row-level security policy for table "saved_views"', "42501");
+      }
+      if (op !== "delete") {
+        var vpay = payload || {};
+        if (vpay.user_id != null && vpay.user_id !== CURRENT_UID) {
+          return pgError('new row violates row-level security policy for table "saved_views"', "42501");
+        }
+        if (vpay.scope != null && ["pipeline", "clients", "_meta"].indexOf(vpay.scope) === -1) {
+          return pgError('new row for relation "saved_views" violates check constraint "saved_views_scope_chk"', "23514");
+        }
+        if (Object.prototype.hasOwnProperty.call(vpay, "name")) {
+          var vnm = vpay.name == null ? "" : String(vpay.name);
+          if (vnm.length < 1 || vnm.length > 120) {
+            return pgError('new row for relation "saved_views" violates check constraint "saved_views_name_chk"', "23514");
+          }
+        }
+      }
+      return null;
+    }
     if (table === "settings" && !isOwner()) {
       return pgError('new row violates row-level security policy for table "settings"', "42501");
     }
@@ -1122,8 +1174,16 @@
       if (r.id == null) r.id = ++errorEventSeq;
       ["error_type", "location", "page", "role"].forEach(function (f) { if (r[f] === undefined) r[f] = null; });
     }
+    /* R43 — saved_views: user_id DEFAULTS TO THE CALLER (production's `default auth.uid()`), which
+       is why the app never sends it; filters defaults to '{}'::jsonb and updated_at to now().
+       No id (the PK is the triple) and no created_at — the real table has neither column. */
+    if (table === "saved_views") {
+      if (r.user_id == null) r.user_id = CURRENT_UID;
+      if (r.filters == null) r.filters = {};
+      r.updated_at = iso(new Date());
+    }
     if (pk === "id" && !r.id) r.id = nid(PREFIX[table] || "row");
-    if (!r.created_at && table !== "settings") r.created_at = iso(NOW);
+    if (!r.created_at && table !== "settings" && table !== "saved_views") r.created_at = iso(NOW);
     if (table === "cases" || table === "clients" || table === "vault_entries") { if (!r.updated_at) r.updated_at = iso(NOW); }
     if (table === "cases") {
       if (!r.stage) r.stage = "enquiry";
@@ -4051,9 +4111,19 @@
 
   BP._matching = function () {
     var preds = this._preds;
-    return sourceRows(this._table).filter(function (row) {
+    var table = this._table;
+    var rows = sourceRows(table).filter(function (row) {
       return preds.every(function (p) { return p(row); });
     });
+    /* R43 — saved_views' RLS is per-user on SELECT, UPDATE and DELETE alike, so the scoping goes
+       HERE rather than in readFilter() (which only redacts the select path). It matters: the app
+       deletes with .match({scope,name}) and nothing else, and in production that statement can
+       only ever reach the caller's own row. Filtering here means it deletes exactly one person's
+       "Unassigned leads", the same way, instead of every persona's. */
+    if (table === "saved_views") {
+      rows = rows.filter(function (r) { return r.user_id === CURRENT_UID; });
+    }
+    return rows;
   };
   BP._sort = function (rows) {
     if (!this._orders.length) return rows;
@@ -4103,16 +4173,37 @@
     return this._finish(out, total);
   };
 
+  /* R43 — which columns an upsert resolves its conflict against. PostgREST uses the table's PRIMARY
+     KEY unless the caller names an `onConflict` list, and until this round every table in this mock
+     had a single-column key, so `raw[pk]` was the whole story. saved_views' key is the triple
+     (user_id, scope, name), and its user_id arrives DEFAULTED rather than sent — so the probe row
+     must carry that default too, or the second upsert of the same view would land as a duplicate
+     row instead of an update. Deliberately NOT applyInsertDefaults(): that one has side effects
+     (error_events' serial), and this is only ever a lookup. */
+  function conflictCols(table, opts) {
+    var oc = opts && opts.onConflict;
+    if (oc) return String(oc).split(",").map(function (s) { return s.trim(); }).filter(Boolean);
+    return pkCols(table);
+  }
+  function conflictProbe(table, raw) {
+    if (table === "saved_views" && raw && raw.user_id == null) {
+      var p = clone(raw); p.user_id = CURRENT_UID; return p;
+    }
+    return raw;
+  }
   BP._runInsert = function (isUpsert) {
     var table = this._table;
     var incoming = Array.isArray(this._payload) ? this._payload : [this._payload];
-    var pk = pkOf(table);
+    var keys = conflictCols(table, this._upsertOpts);
     var written = [];
     for (var i = 0; i < incoming.length; i++) {
       var raw = incoming[i] || {};
       var existing = null;
       if (isUpsert) {
-        existing = DB[table].filter(function (r) { return raw[pk] != null && r[pk] === raw[pk]; })[0] || null;
+        var probe = conflictProbe(table, raw);
+        existing = DB[table].filter(function (r) {
+          return keys.every(function (k) { return probe[k] != null && r[k] === probe[k]; });
+        })[0] || null;
       }
       var badCol = undefinedColumn(table, raw);
       if (badCol) {
@@ -4237,6 +4328,11 @@
         if (self._table === "error_events" && !errorEventsSupported) {
           /* R30 feature-gate — a DB without the table answers every op with 42P01. */
           res = { data: null, error: { message: 'relation "error_events" does not exist', code: "42P01", details: null, hint: null }, count: null, status: 404, statusText: "Not Found" };
+        } else if (self._table === "saved_views" && !savedViewsSupported) {
+          /* R43 feature-gate — the un-migrated deployment the app's localStorage fallback exists
+             for. Every op, not just the read: the fallback has to hold for a save and a delete
+             made in the same session as the failed read. */
+          res = { data: null, error: pgError('relation "public.saved_views" does not exist', "42P01"), count: null, status: 404, statusText: "Not Found" };
         } else if ((!DB[self._table] && !VIEWS[self._table]) || tableIsMissing(self._table)) {
           res = { data: null, error: pgError('relation "public.' + self._table + '" does not exist', "42P01"), count: null, status: 404, statusText: "Not Found" };
         } else if (self._op === "insert") res = self._runInsert(false);
@@ -4330,9 +4426,35 @@
       });
     });
 
+    /* R43 · T1 — RATE ALERTS AND THE CASE THAT IS ALREADY THE ANSWER TO THEM.
+       Production's rate_urgent block gained two rules this round (the reasoning is written out in
+       full above app.js's retentionSuccessorSets — R35 §4; this is the same question asked of the
+       briefing rather than of the feed, and it must answer the same way or the drawer and the
+       Today briefing disagree about the same client):
+         1. A SUCCESSOR case is silent while it is live. Starting a retention case copies the
+            source case's rate_end_date onto the new one, so the successor is itself a case with a
+            rate ending imminently — and nagging about it is nagging about the thing that is
+            already being done. Once it completes it is an ordinary book case again and its own
+            rate end alerts normally.
+         2. A SOURCE case is silent while it HAS a live successor, for the same reason from the
+            other end: the conversation is open, on a case, with an adviser.
+       Prod: `(c.retention_source_case_id is null or c.stage = 'completed')` and `not exists (…
+       rc.retention_source_case_id = c.id and rc.stage not in ('completed','not_proceeding'))`.
+       A successor that has completed or fallen through is handling nothing and suppresses nothing.
+       Also mirrored here: `stage <> 'not_proceeding'`. The mock never had it — a case the firm has
+       lost was still being chased about its rate end in the briefing, which production has never
+       done. */
+    var liveSuccessorSourceIds = {};
+    DB.cases.forEach(function (c) {
+      if (!c.retention_source_case_id) return;
+      if (["completed", "not_proceeding"].indexOf(c.stage) >= 0) return;
+      liveSuccessorSourceIds[c.retention_source_case_id] = true;
+    });
     DB.cases.forEach(function (c) {
       if (!mineOk(c.assigned_to)) return;
-      if (c.rate_end_date) {
+      if (c.rate_end_date && c.stage !== "not_proceeding"
+        && (!c.retention_source_case_id || c.stage === "completed")
+        && !liveSuccessorSourceIds[c.id]) {
         var days = Math.round((new Date(c.rate_end_date + "T12:00:00") - new Date(TODAY + "T12:00:00")) / DAY);
         if (days <= 60) {
           items.push({
@@ -6217,6 +6339,10 @@
      set false to make every op on the table return a PostgREST 42P01, exercising the
      app's feature-gate/degrade path (errorEventsOff + the "isn't enabled" note). */
   window.__setErrorEventsSupported = function (b) { errorEventsSupported = !!b; return errorEventsSupported; };
+
+  /* R43 — the same hook for saved_views: set false to make every op 42P01, which is the
+     un-migrated database the app's localStorage fallback (viewsMode "local") exists for. */
+  window.__setSavedViewsSupported = function (b) { savedViewsSupported = !!b; return savedViewsSupported; };
 
   window.supabase = { createClient: createClient, SupabaseClient: function () { }, __isMock: true };
 })();

@@ -1116,5 +1116,16 @@ const groundTruth = (page) => page.evaluate(async ({ CHASE_MAX }) => {
 
   await browser.close();
   console.log(`\nR9_DOCS: ${pass} checks, ${failures.length} failures`);
-  if (failures.length) { failures.forEach((f) => console.log("  ✗ " + f)); process.exit(1); }
+  if (failures.length) failures.forEach((f) => console.log("  ✗ " + f));
+  /* R43 teardown fix: the spawned server below is started detached and never
+     unref()'d (same as every sibling suite — r5_batch*.js, r9_adv.js, r9_embed.js,
+     r64.js — which all rely on it to persist across runs), which keeps node's
+     event loop alive forever once the checks finish. Every sibling suite works
+     around this the same way: an explicit process.exit() at the very end, which
+     terminates immediately regardless of the still-open child handle (the
+     process.on("exit", ...) cleanup registered above at spawn time still runs
+     synchronously as part of process.exit() and kills the server's process
+     group, exactly as it always has — this call was simply never reached
+     before). No check above this line changed. */
+  process.exit(failures.length ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });

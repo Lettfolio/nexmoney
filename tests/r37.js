@@ -418,18 +418,30 @@ const readCase = (page, caseId) => page.evaluate(async (id) => {
       eq("§4b · applying \"Unassigned leads\" restores #board-search to empty", restored.search, "");
       eq("§4b · …and #board-adviser to \"unassigned\"", restored.adviser, "unassigned");
 
-      // Deleting a starter view and reloading — it stays deleted (present-but-smaller key, no re-seed).
+      // Deleting a starter view — it stays deleted, no re-seed.
+      // R43 · non-masking repair — the starter store moved to `public.saved_views` (one row per
+      // user_id/scope/name); a page.reload() wipes the mock's WHOLE in-memory table (it is
+      // page-local JS memory, the same "no sticky store" fact tests/r5_batch1.js's R5-5 already
+      // documents for `leads`), which is not "the delete stuck", it is "the delete never happened
+      // because nothing survived to check" — a fresh reload lands on an EMPTY table with no local
+      // key either, which reseeds all three starters from scratch (Unassigned leads included),
+      // exactly the false-negative shape this repair removes. The ORIGINAL claim — a starter,
+      // once deleted, is not handed back by a later read in the SAME session — is instead proven
+      // by forcing a second, same-session read directly: reset loadSavedViews()'s own re-entry
+      // guard (`viewsLoadStarted`, a top-level `let` in app.js — readable/writable by bare
+      // identifier from page.evaluate, the same fact tests/r43.js's §7 leans on) and call it
+      // again, rather than reloading the page. The table still holds the ONE remaining starter +
+      // the `_meta` marker (2 rows, not zero), which is exactly why R43 never re-seeds it.
       await page.evaluate(() => { window.confirm = () => true; });
       await page.click("#board-view-del");
       await wait(page, 500);
       const afterDel = await page.$$eval("#board-views option", (os) => os.map((o) => o.value));
       ok("§4c · deleting the applied starter removes it from #board-views", !afterDel.includes("Unassigned leads"), JSON.stringify(afterDel));
-      await page.reload();
-      await wait(page, SETTLE);
-      await goto(page, "pipeline", 1200);
-      const afterReload = await page.$$eval("#board-views option", (os) => os.map((o) => o.value));
-      ok("§4d · …and it is STILL gone after a reload — the delete stuck, no re-seed", !afterReload.includes("Unassigned leads"), JSON.stringify(afterReload));
-      ok("§4d · …while the OTHER starter (never deleted) is still there", afterReload.includes("Live cases — everyone"), JSON.stringify(afterReload));
+      await page.evaluate(async () => { viewsLoadStarted = false; await window.loadSavedViews(); });
+      await wait(page, 500);
+      const afterReread = await page.$$eval("#board-views option", (os) => os.map((o) => o.value));
+      ok("§4d · …and it is STILL gone after a second same-session read — the delete stuck, no re-seed", !afterReread.includes("Unassigned leads"), JSON.stringify(afterReread));
+      ok("§4d · …while the OTHER starter (never deleted) is still there", afterReread.includes("Live cases — everyone"), JSON.stringify(afterReread));
 
       ok("§4 · no console errors (owner)", noNewErr(page, errBefore), JSON.stringify(page.__err));
       await page.close();
@@ -447,8 +459,15 @@ const readCase = (page, caseId) => page.evaluate(async (id) => {
         boardOpts.includes("My live cases") && !boardOpts.includes("Live cases — everyone"), JSON.stringify(boardOpts));
       ok("§4e · …and still has \"Unassigned leads\" (that one is role-neutral)", boardOpts.includes("Unassigned leads"), JSON.stringify(boardOpts));
 
-      const store = await page.evaluate(() => JSON.parse(localStorage.getItem("nx_views_v1") || "null"));
-      const mine = store && store.pipeline.find((v) => v.name === "My live cases");
+      // R43 · non-masking repair — the starter seed on a fresh, un-migrated persona lands in the
+      // saved_views TABLE (db mode), not localStorage — the ORIGINAL claim (the pipeline-view
+      // starter is pinned to the signed-in adviser's own id) is only provable against the store
+      // that seed actually wrote to.
+      const rows = await page.evaluate(async () => {
+        const { data } = await window.__mockDb.from("saved_views").select("scope,name,filters");
+        return data || [];
+      });
+      const mine = rows.find((v) => v.scope === "pipeline" && v.name === "My live cases");
       ok("§4f · …and it is pinned to the signed-in adviser (p2), not \"all\"", mine && mine.filters && mine.filters.adviser === "p2", JSON.stringify(mine));
 
       await goto(page, "clients", 1200);

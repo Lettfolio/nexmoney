@@ -8280,7 +8280,10 @@ const BOARD_CASE_COLS = "id,client_id,stage,case_kind,lender,product_name,loan_a
    { clients: [ {name, filters} ], pipeline: [ {name, filters} ] }. There is no server row and
    no schema for this on purpose — it is a per-device convenience, so it is deliberately NOT
    synced between browsers or users. ALL store access is wrapped so a disabled / quota-full /
-   private-mode localStorage degrades to "no saved views" and can never throw. */
+   private-mode localStorage degrades to "no saved views" and can never throw.
+   R43 — that last paragraph is now the FALLBACK, not the store: see the R43 block below. The key
+   itself is never deleted and never renamed, because a browser still running an older deploy (or
+   this one against an un-migrated database) reads it as the store. */
 const NX_VIEWS_KEY = "nx_views_v1";
 /* ---------- R37 · L7 — STARTER VIEWS -----------------------------------------------------------
    R31 shipped the mechanism and an empty cupboard: both dropdowns read "Saved views…" and nothing
@@ -8330,6 +8333,12 @@ function starterViewSet() {
    carry a stale empty dropdown until something wrote to it. */
 function seedStarterViews() {
   if (starterViewsSeeded) return;
+  /* R43 — the starters belong to whichever store owns this session. The server-side read is
+     fired before this call on both entry points; while it is in flight (viewsLoadStarted with no
+     mode yet) or once it has won ("db"), seeding localStorage would write a second, divergent
+     copy of the three starters that the user would then have to delete twice. Only the local
+     fallback — the un-migrated database, and the pre-R43 code path it keeps alive — seeds here. */
+  if (viewsLoadStarted && viewsMode !== "local") return;
   if (!ME || !ME.id) return;                       // identity not resolved yet — try again next call
   let raw;
   try { raw = localStorage.getItem(NX_VIEWS_KEY); } catch (e) { return; }
@@ -8342,7 +8351,161 @@ function seedStarterViews() {
   refreshPipelineViews();
   refreshClientViews();
 }
+/* ---------- R43 · THE SAVED-VIEW STORE MOVES TO THE SERVER ------------------------------------
+   R31 shipped saved views as a per-BROWSER convenience and said so out loud (the comment above
+   NX_VIEWS_KEY). Use answered the question that comment left open: the adviser who saves
+   "My cold clients" on the office desktop opens the laptop at home and it is not there, and R37's
+   starters are re-invented per device rather than being the firm's. So the store is now
+   `public.saved_views` — one row per (user_id, scope, name), RLS-scoped to whoever saved it — and
+   localStorage becomes the fallback.
+
+   THE SYNCHRONOUS SIGNATURE DOES NOT MOVE. savedViews(scope) is called from inside the template
+   literals that build both <select>s (refreshPipelineViews / refreshClientViews); making it async
+   would make those async, and every caller of those, for a list of at most a handful of names. So
+   this is a CACHE in front of the same sync function: one read per session fills it, both
+   dropdowns paint from it, and a save or a delete updates the cache first — in the same tick as
+   the click, so the repaint is instant — and hits the table afterwards.
+
+   THREE STATES, and the third is the point:
+     · "db"    — the table answered. It is the store.
+     · "local" — the table did NOT answer: an un-migrated deployment 42P01s (or 42703s), and any
+                 other error is treated identically. The ENTIRE R31/R37 localStorage
+                 implementation below stays the code path, starters and all, so that database
+                 gets exactly the app it had yesterday rather than a broken one.
+     · null    — nobody has asked yet. Reads still come off localStorage (someone who already has
+                 views on this device sees them without waiting), but NOTHING is seeded there,
+                 because the read in flight is about to decide which store owns the starters.
+
+   The localStorage key survives migration untouched: it is the fallback store, and another
+   browser may still be pointed at an older deploy that reads it. */
+let viewsCache = null;          // { pipeline: [{name,filters}], clients: [{name,filters}] } — "db" mode only
+let viewsMode = null;           // null (undecided) | "db" | "local"
+let viewsLoadStarted = false;   // re-entry guard — repaints call in here constantly and must not re-read
+let viewsWriteWarned = false;   // the "this device only" toast is said once a session, not once a view
+const VIEW_SCOPES = ["pipeline", "clients"];
+const VIEW_NAME_MAX = 120;      // saved_views' own CHECK (char_length between 1 and 120)
+
+// Rows → the shape the dropdowns want. `_meta` is the seeded-marker bookkeeping below, never a view.
+function viewSetsFromRows(rows) {
+  const out = { pipeline: [], clients: [] };
+  (rows || []).forEach((r) => {
+    if (!r || !VIEW_SCOPES.includes(r.scope)) return;
+    const nm = String(r.name == null ? "" : r.name).trim();
+    if (!nm) return;
+    out[r.scope].push({ name: nm, filters: r.filters || {} });
+  });
+  return out;
+}
+/* Whatever is in localStorage right now, in the same shape, with anything malformed dropped — the
+   migration reads through this, so a corrupt store migrates as "nothing" instead of throwing, and
+   an over-long name is dropped here rather than 23514-ing the whole batch at the table. */
+function localViewSets() {
+  const out = { pipeline: [], clients: [] };
+  let all = null;
+  try { all = JSON.parse(localStorage.getItem(NX_VIEWS_KEY)); } catch (e) { all = null; }
+  if (!all || typeof all !== "object") return out;
+  VIEW_SCOPES.forEach((s) => {
+    (Array.isArray(all[s]) ? all[s] : []).forEach((v) => {
+      if (!v || typeof v.name !== "string") return;
+      const nm = v.name.trim();
+      if (!nm || nm.length > VIEW_NAME_MAX) return;
+      out[s].push({ name: nm, filters: v.filters || {} });
+    });
+  });
+  return out;
+}
+function localViewsKeyPresent() {
+  // Storage blocked entirely reads as "no key": there is nothing here to migrate and nothing here
+  // to protect, so the server store is free to seed itself.
+  try { return localStorage.getItem(NX_VIEWS_KEY) != null; } catch (e) { return false; }
+}
+function viewRowsFor(sets) {
+  const rows = [];
+  VIEW_SCOPES.forEach((s) => (sets[s] || []).forEach((v) => rows.push({ scope: s, name: v.name, filters: v.filters || {} })));
+  /* THE MARKER, and it is why the seed writes a row even when it has nothing else to write.
+     R37's rule is "seed once, on the ABSENCE OF THE KEY, never on an empty list" — someone who
+     deletes all three starters must not be handed them back, because that is the app arguing with
+     them. On the server there is no key to be absent: zero rows means both "never seeded" and
+     "seeded, then emptied". This row is the difference between the two. */
+  rows.push({ scope: "_meta", name: "seeded", filters: {} });
+  return rows;
+}
+/* user_id is deliberately NOT sent: the column defaults to auth.uid() and RLS enforces that it
+   IS me, so naming it would only offer a value the database is going to overrule. Conflict target
+   is the primary key (user_id, scope, name), which is what PostgREST upserts against by default —
+   same shape as the settings upserts elsewhere in this file, which pass no onConflict either. */
+function writeSavedViewRows(rows) {
+  return db.from("saved_views").upsert(rows);
+}
+/* ONE read per session, fired (never awaited) from the two pages that own a view dropdown.
+   Everything that can be decided is decided here, so savedViews() stays a cache read. */
+async function loadSavedViews() {
+  if (viewsLoadStarted) return;
+  viewsLoadStarted = true;
+  const { data, error } = await db.from("saved_views").select("scope,name,filters");
+  if (error) {
+    // The un-migrated database. Not a toast and not a console error: from here on this is R31's
+    // app, which worked — degrade silently and completely.
+    viewsMode = "local";
+    refreshPipelineViews();
+    refreshClientViews();
+    return;
+  }
+  const rows = data || [];
+  if (rows.length) { finishViewsLoad(viewSetsFromRows(rows)); return; }
+  /* Zero rows — INCLUDING no `_meta`, so this is a store nobody has ever written to. */
+  if (localViewsKeyPresent()) {
+    // ONE-TIME MIGRATION. This device already has views (or an empty/corrupt store, which migrates
+    // as nothing plus the marker — a present-but-empty key is R37's "the user owns this store",
+    // and re-seeding starters over the top of it here would be the same argument in a new place).
+    const sets = localViewSets();
+    seedSavedViewRows(viewRowsFor(sets));
+    finishViewsLoad(sets);
+    return;
+  }
+  if (!(ME || {}).id) {
+    /* Identity not resolved yet — seedStarterViews' rule for seedStarterViews' reason (two of the
+       three starters pin an adviser, and pinning them to `undefined` produces a broken view with
+       a confident name). Nothing written, nothing cached, no mode: the guard is released so the
+       next loadPipeline/loadClients asks again. */
+    viewsLoadStarted = false;
+    return;
+  }
+  const starters = starterViewSet();
+  seedSavedViewRows(viewRowsFor(starters));
+  finishViewsLoad(starters);
+}
+/* The seed/migration write is fire-and-forget and deliberately silent on failure: nothing the user
+   asked for is at stake (starters regenerate; a migration that fails leaves the local copy exactly
+   where it was, which is why the key is never cleared), and a toast about a write nobody asked for
+   would be noise on first paint. */
+function seedSavedViewRows(rows) {
+  writeSavedViewRows(rows).then(() => { /* nothing to do either way */ }, () => { /* nor here */ });
+}
+function finishViewsLoad(sets) {
+  viewsMode = "db";
+  viewsCache = { pipeline: sets.pipeline || [], clients: sets.clients || [] };
+  /* BOTH dropdowns, not just the one whose page triggered the read — seedStarterViews' rule and
+     seedStarterViews' reason: the other one was painted empty before the read answered, and
+     nothing else would ever write to it. */
+  refreshPipelineViews();
+  refreshClientViews();
+}
+/* A write did not land, so the only copy of it is in a cache that dies with the tab. Mirror it into
+   the R31 store so nothing the user did is lost, and say so honestly — "saved" would be a lie about
+   the other browser. Once per session: a flapping connection would otherwise toast per view. */
+function savedViewWriteFailed(mirror) {
+  try { mirror(); } catch (e) { /* storage gone too — the cache is all there is */ }
+  if (viewsWriteWarned) return;
+  viewsWriteWarned = true;
+  toast("Couldn't reach the server — that saved view is on this device only.");
+}
 function savedViews(scope) {
+  if (viewsMode === "db") {
+    const list = viewsCache && viewsCache[scope];
+    if (!Array.isArray(list)) { loadSavedViews(); return []; }
+    return list.slice();
+  }
   seedStarterViews();
   try {
     const raw = localStorage.getItem(NX_VIEWS_KEY);
@@ -8355,6 +8518,37 @@ function savedViews(scope) {
 function saveView(scope, name, filters) {
   const nm = String(name == null ? "" : name).trim();
   if (!nm) return savedViews(scope);
+  if (viewsMode === "db") {
+    // Cache first (same validation as the local path: trimmed non-empty name, replace by name), so
+    // the list this returns and the repaint the caller triggers are both already right.
+    const list = (viewsCache && viewsCache[scope]) || [];
+    const view = { name: nm, filters: filters || {} };
+    const idx = list.findIndex((v) => v && v.name === nm);
+    if (idx >= 0) list[idx] = view; else list.push(view);
+    if (viewsCache) viewsCache[scope] = list;
+    writeSavedViewRows([{ scope, name: nm, filters: view.filters }])
+      .then(({ error }) => { if (error) savedViewWriteFailed(() => localSaveView(scope, nm, view.filters)); },
+        () => savedViewWriteFailed(() => localSaveView(scope, nm, view.filters)));
+    return savedViews(scope);
+  }
+  localSaveView(scope, nm, filters);
+  return savedViews(scope);
+}
+function deleteView(scope, name) {
+  if (viewsMode === "db") {
+    const list = (viewsCache && viewsCache[scope]) || [];
+    if (viewsCache) viewsCache[scope] = list.filter((v) => !(v && v.name === name));
+    db.from("saved_views").delete().match({ scope, name })
+      .then(({ error }) => { if (error) savedViewWriteFailed(() => localDeleteView(scope, name)); },
+        () => savedViewWriteFailed(() => localDeleteView(scope, name)));
+    return savedViews(scope);
+  }
+  localDeleteView(scope, name);
+  return savedViews(scope);
+}
+/* R31's two writers, unchanged in behaviour and now named: they are the local fallback's whole
+   implementation AND the mirror a failed server write falls back on. */
+function localSaveView(scope, nm, filters) {
   try {
     let all;
     try { all = JSON.parse(localStorage.getItem(NX_VIEWS_KEY)); } catch (e) { all = null; }
@@ -8368,17 +8562,15 @@ function saveView(scope, name, filters) {
     if (idx >= 0) list[idx] = view; else list.push(view);
     localStorage.setItem(NX_VIEWS_KEY, JSON.stringify(all));
   } catch (e) { /* storage unavailable — not persisted, but the UI still applied it this session */ }
-  return savedViews(scope);
 }
-function deleteView(scope, name) {
+function localDeleteView(scope, name) {
   try {
     let all;
     try { all = JSON.parse(localStorage.getItem(NX_VIEWS_KEY)); } catch (e) { all = null; }
-    if (!all || typeof all !== "object") return savedViews(scope);
+    if (!all || typeof all !== "object") return;
     if (Array.isArray(all[scope])) all[scope] = all[scope].filter((v) => !(v && v.name === name));
     localStorage.setItem(NX_VIEWS_KEY, JSON.stringify(all));
   } catch (e) { /* ignore */ }
-  return savedViews(scope);
 }
 
 // Pipeline board — capture / restore / repopulate the Views <select>.
@@ -8417,6 +8609,12 @@ function refreshPipelineViews() {
 }
 
 async function loadPipeline() {
+  /* R43 — the server-side store, read once a session, from the same place (and for the same
+     reason) R37 put the starter seed: this is the first moment ME is resolved AND a view dropdown
+     is about to be painted. Not awaited — the board must not wait on it; when it answers it
+     repaints both <select>s itself. It goes BEFORE seedStarterViews so the local seed knows a
+     probe is in flight and leaves the starters to whichever store wins. */
+  loadSavedViews();
   // R37 · L7 — the starter views need an identity, which module-eval time did not have. Seeded on
   // the first board load after sign-in; the seed repaints both view <select>s itself.
   seedStarterViews();
@@ -13944,7 +14142,9 @@ const CLIENT_LIST_CAP = 100;
 // handler (R18-P2) can re-render the bulk bar against it without re-wiring per row.
 let clientRenderedList = [];
 async function loadClients(filter = "", opts = {}) {
-  // R37 · L7 — same one-shot seed as the board (see seedStarterViews): first load after sign-in.
+  // R43 / R37 · L7 — same one-shot pair as the board, in the same order and for the same reasons
+  // (see loadPipeline): the server read first, then the local starter seed it may suppress.
+  loadSavedViews();
   seedStarterViews();
   const cached = await clientDataCached(opts.force);
   if (cached.error) { renderLoadError("#client-list", cached.error, () => loadClients(filter, { force: true })); return; }

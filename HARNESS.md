@@ -80,6 +80,7 @@ node tests/r17.js
 node tests/r18.js
 node tests/r19.js
 node tests/r20.js
+node tests/r21.js
 node tests/r23.js
 node tests/r24.js
 node tests/r25.js
@@ -97,6 +98,7 @@ node tests/r38.js
 node tests/r40.js
 node tests/r41.js
 node tests/r42.js
+node tests/r43.js
 ```
 
 Current green counts (end of round 23; r21/r22 were never committed to this
@@ -114,6 +116,44 @@ why those needed none at all: R18 is scale/perf hardening behind selectors
 nothing else asserted the old shape of, and R19 is new owner-gated Reports
 content that no earlier suite reaches; R23 is the same story again — see the
 R23 notes below).
+
+**Full battery is 100% green (4,277/4,277), `tests/r9_docs.js` included
+(255/0), `smoke.js` 152/0.** R43 added `tests/r43.js` (78 checks, §1–§12,
+covering both the mock `get_briefing` rate_urgent/retention-successor parity
+fix and the saved-views-move-to-the-server feature) and RECREATED
+`tests/r21.js` (52 checks, §A–§J, the in-session client-error-capture/
+skip-and-count-rendering/Diagnostics-panel suite that predates this
+checkout's history and was never committed until now) — see the "R43 notes"
+and "R21 notes" sections below. Also fixed a pre-existing, unrelated process
+hang in `tests/r9_docs.js` (spawns its own fallback static server
+`detached:true` without `.unref()`, and never called `process.exit()` on its
+own success path — every sibling suite that spawns the same kind of server
+calls `process.exit()` explicitly at the end for exactly this reason; the
+255 checks themselves are untouched — see the "R43 notes" section) — the
+suite already existed and already passed 255/0, it simply never returned
+control to the shell afterward. Required two genuine, non-masking repairs to
+pre-existing suites whose own ground truth moved out from under them when
+R43's saved views moved from `localStorage` alone to the server-backed
+`public.saved_views` table (localStorage kept as a fallback, never removed):
+`tests/r31.js` §B1c–f/§B2b–d (and, proactively, the now-vacuous §B1k/§B2g)
+now read the saved-view row straight off `window.__mockDb.from("saved_views")`
+instead of `localStorage.nx_views_v1`'s content, because a fresh pipeline/
+clients load settles into DB mode and every Save/Delete this file drives
+lands in the table, not local storage (55/0, count unchanged — see the "R43
+notes" section); `tests/r37.js` §4d no longer reloads the page to prove a
+deleted starter "stays deleted" (a reload wipes the mock's whole in-memory
+table, which used to re-seed all three starters from nothing and produced a
+false failure, not a proof of anything) and instead forces a second,
+same-session read by resetting `loadSavedViews()`'s own re-entry guard
+(`viewsLoadStarted`, a top-level `let` — readable/writable by bare
+identifier from `page.evaluate`); §4f now reads the adviser-pinned starter
+off the table instead of `localStorage` for the same DB-mode reason (123/0,
+count unchanged — see the "R43 notes" section). Every OTHER pre-existing
+suite (`smoke.js` through `tests/r42.js`) re-ran unedited at its exact
+pre-R43 count, and no other real product bug was found: `admin/app.js`'s
+saved-views/briefing changes and `admin/mock-supabase.js`'s mirrored table/
+predicate were already built/uncommitted before this session started, and
+every behaviour `tests/r43.js` set out to prove held on first run.
 
 **Full battery is 100% green (4,147/4,147), `tests/r9_docs.js` included
 (255/0), `smoke.js` 152/0.** R42 added `tests/r42.js` (155 checks, §A–§J) —
@@ -381,7 +421,7 @@ even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes belo
 | `tests/r8_touch.js` | 151 (R36 resolved the new bulk-task case-picker overlay before its confirm-dialog assertions — see the R36 notes; R41 re-pointed the 14-day/15-row-cap probe at `#brief-scope-all`/`#briefing-list` in place of the deleted `#tasks-scope-all`/`#tasks-list` — see the R41 notes; count unchanged) |
 | `tests/r8_rev.js` | 176 |
 | `tests/r9_adv.js` | 169 (R33 re-scoped a `.case-details` reveal to `#modal .case-details` — see the R33 notes; R40 re-pointed R9-3(a) at the ⭐/`.review-score-chip` row inside `#case-events-list` in place of the deleted `#notes-list .note-review` — see the R40 notes; count unchanged) |
-| `tests/r9_docs.js` | 255 (same R33 `#modal .case-details` re-scope; count unchanged) |
+| `tests/r9_docs.js` | 255 (same R33 `#modal .case-details` re-scope; R43 fixed the process never exiting on its own success path — its fallback server was spawned `detached:true` with no `.unref()`, and the missing `process.exit()` was the only thing standing between it and the same teardown every sibling batch-spawn suite already uses — see the R43 notes; the 255 checks themselves are untouched) |
 | `tests/r9_embed.js` | 104 |
 | `tests/r11_ux.js` | 123 (R11-A adjacency asserts updated in R24 to skip R23's hidden `#dash-cap-notice`) |
 | `tests/r12a.js` | 115 (D11's date-fragility fixed in R27 — see the R27 notes; R41 re-pointed §D1's lead-adviser sync at the single `#brief-scope-all`/`#brief-scope-mine` toggle and §D12's task-handback at `#briefing-list`/`briefDone`, giving the handed-back task its own fresh case (My Day groups same-case rows the old Tasks-due drawer never did) — see the R41 notes; up from 114) |
@@ -394,6 +434,7 @@ even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes belo
 | `tests/r18.js` | 43 (same R33 `#modal .case-details` re-scope; R34 pinned `#board-adviser` to "all" before its board-cap seed of unassigned cases — see the R34 notes; count unchanged) |
 | `tests/r19.js` | 39 (unchanged count — R20 fixed HOW one row is queried, not what it asserts) |
 | `tests/r20.js` | 81 |
+| `tests/r21.js` | 52 (RECREATED in R43 — §A–§J, never committed to this checkout before now, see the "R21 notes" section) |
 | `tests/r23.js` | 76 |
 | `tests/r24.js` | 89 (R34 pinned `#board-adviser` to "all" before §C's p3-assigned kitchen-sink seed, viewed as p2 — see the R34 notes; R37 re-pointed D4/D5/E4 at the board's `email`-widened clients embed — see the R37 notes; count unchanged) |
 | `tests/r25.js` | 45 |
@@ -401,17 +442,205 @@ even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes belo
 | `tests/r27.js` | 48 (R42 reveals `#dh-tile-deadbook` via `#dh-clean-toggle` before §A7's click — the tile is `dh-clean`/hidden on the base fixture — and asserts the toggle itself works while doing it — see the R42 notes; up from 43) |
 | `tests/r29_scale.js` | 107 (R41 re-pointed A5/A6 at the now-absent Retention/Tasks drawer ids instead of `$eval`-ing selectors that no longer existed — a false-pass the pre-R41 assertions were silently committing — and added A8, `#ret-rates-list` bounded to `RET_LIST_CAP` — see the R41 notes; up from 106) |
 | `tests/r30.js` | 40 (R33 re-pointed §C/§D4/§E from Reports to Settings' `#diag-details` and added 3 assertions proving the wrapper itself gates correctly — see the R33 notes; count rose from 37) |
-| `tests/r31.js` | 55 (R37 pre-seeds a present-but-empty `nx_views_v1` before B1/B2 so the new starter-views seeding doesn't fire ahead of their "starts from nothing" assertions — see the R37 notes; count unchanged) |
+| `tests/r31.js` | 55 (R37 pre-seeds a present-but-empty `nx_views_v1` before B1/B2 so the new starter-views seeding doesn't fire ahead of their "starts from nothing" assertions — see the R37 notes; R43 re-pointed §B1c–f/§B2b–d/§B1k/§B2g at `window.__mockDb.from("saved_views")` in place of `localStorage.nx_views_v1`'s content, because R43 moved the store to the server and a fresh load under presetEmptyViews() settles into DB mode — see the R43 notes; count unchanged) |
 | `tests/r33.js` | 55 (R38 bumped A5c's 12→13 `data-page` buttons — the new Retention button in the Book group — see the R38 notes; R40 re-pointed C1b at `#case-events-list` in place of the deleted `#notes-list` — see the R40 notes; count unchanged, prose-only fixes) |
 | `tests/r34.js` | 60 (R41 re-pointed D1/D2 drawer-persistence at `#rate-erc-panel`/`#revenue-panel` in place of the deleted `#leads-panel` — see the R41 notes; count unchanged) |
 | `tests/r35.js` | 43 |
 | `tests/r36.js` | 83 |
-| `tests/r37.js` | 123 (new — §1–§12, see the R37 notes) |
+| `tests/r37.js` | 123 (new — §1–§12, see the R37 notes; R43 re-pointed §4d at a forced same-session re-read in place of a `page.reload()` (which wipes the mock's whole in-memory table and would have re-seeded the starters it was proving deletion of) and §4f at the `saved_views` table in place of `localStorage` — see the R43 notes; count unchanged) |
 | `tests/r38.js` | 95 (new — §A–§G, see the R38 notes; R41 rewrote §F2 to assert the four removed dashboard drawer ids are gone while the Retention page still carries everything — see the R41 notes; count unchanged) |
 | `tests/r40.js` | 63 (new — §1–§7, see the R40 notes) |
 | `tests/r41.js` | 88 (new — §A–§I, see the R41 notes) |
 | `tests/r42.js` | 155 (new — §A–§J, see the R42 notes) |
-| **Total** | **4,147** |
+| `tests/r43.js` | 78 (new — §1–§12, see the R43 notes) |
+| **Total** | **4,277** |
+
+R43 notes: two independent, already-built, uncommitted features shipped
+together (`admin/app.js` ~L8278-8600 + `admin/mock-supabase.js` — no
+`index.html`/`admin.css` change), plus one unrelated harness fix bundled into
+the same pass.
+
+  - **T1 · briefing rate_urgent/retention-successor parity.** The mock's
+    `rpc_get_briefing` (`admin/mock-supabase.js` ~L4429) gained the same two
+    rules production's RPC already had and app.js's own client-side
+    `retentionSuccessorSets` (R35 §4) already enforced on the Rate & ERC
+    drawer: a case with a LIVE retention successor (`retention_source_case_id`
+    pointing at it, successor's own stage not `completed`/`not_proceeding`)
+    is silent in `rate_urgent`, and a live successor is silent about its OWN
+    (inherited) rate end too — both because the conversation is already open
+    on a case. A `not_proceeding` successor suppresses nothing and never
+    alerts itself; completing a successor returns the source's alert and
+    frees the successor to raise its own. Zero base-fixture rows change
+    under the new predicate.
+  - **T2 · saved views move to the server.** `public.saved_views` (PK
+    `user_id,scope,name` — the mock's `pkCols()` gained multi-column PK
+    support for this) is now the primary store for Clients/Pipeline saved
+    filter views; `localStorage.nx_views_v1` is DEMOTED to a fallback and is
+    never deleted, so a browser still pointed at an un-migrated database
+    keeps working exactly as R31/R37 shipped it. `viewsMode` ("db"/"local"/
+    null) decides which store `savedViews()`'s synchronous cache reads from;
+    `loadSavedViews()` fires once a session (from `loadPipeline`/
+    `loadClients`, before `seedStarterViews`), reads the table, and either:
+    finds rows (uses them), finds zero rows with a present local key (ONE-TIME
+    MIGRATION — writes the local views as rows plus a `{scope:'_meta',
+    name:'seeded'}` marker row, leaves the local key in place), or finds zero
+    rows with no local key and a resolved identity (seeds the three
+    role-appropriate starters plus the marker). The marker is the whole
+    reason deleting every named view never re-seeds the starters: the table
+    is never reporting genuinely zero rows again, because the marker row
+    survives every delete a user can drive (it is not offered in either
+    dropdown, so `deleteView()` can never reach it). A failed write mirrors
+    into the cache AND `localStorage` and fires exactly one "this device
+    only" toast a session (`viewsWriteWarned`), never a second one for a
+    second failure. RLS is per-user on select/update/delete, enforced in the
+    mock's `_matching()` (not `readFilter()`, which only redacts the SELECT
+    path) — a row seeded directly into `window.__mock.db.saved_views` under
+    a different `user_id` is invisible to this persona's own `select()` and
+    untouched by a same-named `delete()`. `window.__setSavedViewsSupported
+    (false)` makes every op on the table answer 42P01, exercising the local
+    fallback end to end (starter seed included) exactly as R30's
+    `__setErrorEventsSupported` does for `error_events`. The table's own
+    `saved_views_name_chk` CHECK (1–120 chars) is mirrored as a `23514` in
+    the mock's `writePolicy`; the app does not pre-truncate a saved name
+    before sending it, so an over-long name degrades exactly like any other
+    write failure — the cache and local mirror keep it for the rest of this
+    session, the table never does.
+  - **Unrelated harness fix bundled into this pass: `tests/r9_docs.js` never
+    exited on its own.** Pre-existing, not something this round's product
+    code touched. Its fallback server (started only when nothing already
+    answers on :8099) is spawned with `{stdio:"ignore", detached:true}` and
+    a `process.on("exit", …)` handler that kills the server's process group
+    — the exact pattern every sibling batch-spawn suite
+    (`tests/r5_batch1..9.js`, `tests/r9_adv.js`, `tests/r9_embed.js`,
+    `tests/r64.js`) also uses. The difference: every one of those siblings
+    ALSO calls `process.kill(-server.pid, …)` in their own `finally` block
+    AND ends with an explicit `process.exit(failures.length ? 1 : 0)`.
+    `r9_docs.js` had neither — it only called `process.exit(1)` on the
+    failure branch, never on success. A detached child process, unless
+    `.unref()`'d, keeps Node's event loop alive indefinitely waiting on it
+    (Node's own documented behaviour: "By default, the parent will wait for
+    the detached child to exit"), so once the 255 checks finished the
+    process simply never reached the end of the file — the `process.on
+    ("exit", …)` cleanup that WOULD have killed the server never got the
+    chance to fire, because `exit` never fires until something calls
+    `process.exit()` or the event loop drains, and the un-unref'd child kept
+    it from ever draining. Confirmed by direct comparison against
+    `tests/r42.js` (spawns the SAME kind of fallback server, non-detached,
+    and calls `server.kill()` + `process.exit()` explicitly — exits
+    cleanly). Fixed the same way every sibling suite already does it: added
+    an unconditional `process.exit(failures.length ? 1 : 0)` at the very end
+    of the success path (mirroring the existing `.catch(… process.exit(1))`
+    on the outer promise) — the `process.on("exit", …)` cleanup registered
+    at spawn time still runs synchronously as part of `process.exit()`
+    exactly as it always would have, it just needed the call to actually
+    happen. None of the 255 checks were touched. Verified: `node
+    tests/r9_docs.js; echo EXIT:$?` now prints `R9_DOCS: 255 checks, 0
+    failures` followed by `EXIT:0`, both standalone and as part of the full
+    battery.
+
+`tests/r43.js` (78 checks, §1–§12) covers T1 and T2 on fresh, isolated pages
+per section, the same convention every suite in this harness uses. §1/§2
+prove T1 by calling `get_briefing` directly (`p_scope:"all"`) against a
+seeded source+successor pair, never the rendered Today list — before/during/
+after-completing for the live-successor case, and the not_proceeding case
+separately; §3 is a light R35 spot-check confirming the CLIENT-SIDE Rate &
+ERC drawer (an entirely different code path from the mock RPC T1 touches)
+is unaffected. §4 proves the DB-mode starter seed (role-appropriate names,
+correct `user_id`, `localStorage` genuinely untouched) for both an adviser
+and an owner. §5/§6 drive the REAL UI (`#board-view-save`/`#board-view-del`
++ a stubbed `prompt()`/`confirm()`) to prove save-is-upsert (re-saving the
+same name updates the one row, never appends a second) and delete removes
+the row and the dropdown option. §7 proves the anti-reseed marker by
+deleting every named view through the app's own `deleteView()` and then
+forcing a second, same-session read (`viewsLoadStarted = false;
+await loadSavedViews()` — a top-level `let`, readable/writable by bare
+identifier from `page.evaluate`, the same fact `window.__errorLog`
+(tests/r30.js) and the `window.__mockDb.from` monkeypatch (tests/r13.js)
+already establish for this harness) rather than reloading the page, which
+would wipe the mock's whole in-memory table and prove nothing. §8 proves
+the one-time migration (a preset local store + an empty table migrates into
+rows, the local key survives, no starter double-seed). §9 proves the local
+fallback reproduces R31/R37 in full via `__setSavedViewsSupported(false)`.
+§10 proves the write-failure mirror + exactly-one-toast contract across two
+consecutive failed saves. §11 proves the over-120-char name is refused with
+`23514` and degrades like any other write failure, both through
+`saveView()` and via a direct `upsert()` against the table. §12 proves
+cross-persona isolation by seeding a foreign-owned row directly into the
+shared `window.__mock.db.saved_views` array (CURRENT_UID itself is not
+exposed for swapping mid-page — it lives inside `mock-supabase.js`'s own
+closure, and `window.__mock.readTableAs()` deliberately bypasses
+`saved_views`' own per-user filter, since that filter lives in
+`_matching()` rather than `readFilter()` — confirmed live before relying on
+either fact) and proving this persona's own `select()`/`delete()` never
+reach it.
+
+No product bug found. `admin/app.js` and `admin/mock-supabase.js` were not
+modified for this pass beyond what `tests/r9_docs.js`'s teardown fix
+required (a test file, not product code) — R43's product code (the
+`rate_urgent` predicate, the `saved_views` table + RLS + PK-list upsert
+support + feature-gate, `loadSavedViews`/`saveView`/`deleteView`/
+`seedStarterViews`'s R43 rewrite) was already built/uncommitted before this
+session started, and every behaviour `tests/r43.js` set out to prove held
+on first run. Ran the WHOLE regression battery (`smoke.js` through
+`tests/r42.js`, plus the recreated `tests/r21.js`) alongside the two new/
+repaired suites; every pre-existing suite passed at its exact pre-R43 count
+(see the table above) except the two documented, non-masking repairs to
+`tests/r31.js` and `tests/r37.js`. `node smoke.js` alone: 152/0. Full
+battery: 4,277/4,277.
+
+R21 notes: RECREATED, not new — `tests/r21.js` covers ROUND 21's
+resilience/observability work, which predates this checkout's committed
+history (`admin/app.js` still carries the "R21 Part A/B/C" comments the
+product code was written against; R30's and R33's own notes above already
+refer to "R21 Part A"/"R21 Part C" as prior art) but whose OWN acceptance
+suite was never committed. Recreated by reading `admin/app.js`'s R21
+comments directly (~L22 Part A, ~L8777/14200/20407 Part B, ~L20696 Part C)
+rather than reverse-engineering intent from a later round's notes about it.
+Three parts, all in-SESSION (the persisted-diagnostics half, `error_events`
+and everything downstream of it, is R30's own territory and is deliberately
+NOT re-proven here — see the file's own header comment for the exact
+boundary):
+
+  - **Part A — global capture.** `window` `error`/`unhandledrejection`
+    listeners feed `logClientError()`, which pushes onto `ERROR_LOG` (an
+    in-memory ring buffer, `ERROR_LOG_CAP`=100, session-only, never
+    persisted client-side — a reload starts it empty). A repeat of the
+    LAST entry's message within `ERROR_DEDUPE_MS`=5s bumps `.count` instead
+    of pushing a new row and raises no second toast; a genuinely new entry
+    raises exactly one. Messages are truncated to 500 characters.
+  - **Part B — skip-and-count resilient rendering.** Three render loops
+    (the pipeline board's cards, the client list's rows, Reports' Pipeline
+    MI aggregation) each wrap ONE record's work in try/catch: a genuine
+    exception calls `logClientError("caught", …, {recordId, where})` and
+    lets every OTHER record keep rendering, with a small "N record(s)
+    couldn't be displayed — logged" note in place of a white screen.
+  - **Part C — the Diagnostics panel**, relocated to Settings by R33
+    (`#diag-details` → `#report-diag-section`): `#diag-error-table` renders
+    `ERROR_LOG` newest-first; `#report-diag-csv`/`#report-diag-copy`/
+    `#report-diag-clear` export/copy/clear the SESSION log (never the
+    persisted one — that button is `#report-diag-persist-clear`, R30's own).
+
+`tests/r21.js` (52 checks, §A–§J) proves Part B with REAL, naturally
+occurring exceptions rather than simulated calls into `logClientError` —
+each of the three loops calls a `function`-declared (therefore
+`window`-overridable, confirmed live: a top-level `function` in this
+classic, non-module script becomes a `window` property, unlike a top-level
+`const`/`let`) helper that is invoked ONLY inside that loop's own per-record
+try/catch, never in any earlier, unguarded code path (this matters: `cardAge`
+is called both inside the board's per-card try AND in its earlier, unguarded
+sort comparator, so overriding it throws before a single card is
+skip-counted — `nextStageFor` is the one actually used here, called only
+inside the try). Reports' Pipeline MI is proven differently, and more
+strongly: `renderPipelineMI()` is called DIRECTLY with a landmine object (a
+`get completed_at()` that throws), proving the catch is genuinely
+unconditional rather than tolerant of one specific known-bad shape. §F
+proves the OLDER, sibling `renderLoadError()` safety net for a CONTROLLED
+`{error}` response — the key negative assertion is that a controlled query
+failure adds NOTHING to `ERROR_LOG`, which is Part A's territory alone.
+
+No product bug found. `admin/app.js` was not modified for this pass. Ran
+alongside the rest of the R43 battery; every check passed on first run,
+including the full battery (see the table above).
 
 R42 notes: Reports regrouped into five labelled sections with a jump-nav, six
 report ledgers folded behind `<details>` drawers, basis-repeat prose trimmed,

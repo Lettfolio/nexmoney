@@ -108,6 +108,23 @@ const clearViews = (page) => page.evaluate(() => { try { localStorage.removeItem
    already exercises the "no seeding" path a different way and needs no change. */
 const presetEmptyViews = (page) => page.evaluate(() => { try { localStorage.setItem("nx_views_v1", JSON.stringify({ clients: [], pipeline: [] })); } catch (e) { /* ignore */ } });
 const stubDialogs = (page) => page.evaluate(() => { window.prompt = () => "My view"; window.confirm = () => true; });
+/* R43 · non-masking repair — R43 moved the saved-view STORE to the server (`public.saved_views`,
+   one row per user_id/scope/name); localStorage.nx_views_v1 is now only the fallback a save/delete
+   ever touches while in "local" mode. presetEmptyViews() above still leaves a PRESENT-but-empty key,
+   which R43's own migration rule reads as "this device already owns a store" and migrates (writing
+   only the `_meta` marker, since there is nothing to migrate) — so a fresh pipeline/clients load
+   under it settles into DB mode exactly as it would on a real, un-migrated-nowhere deployment, and
+   every Save/Delete this file drives lands in the TABLE, never in localStorage (which is why B1k/B2g
+   below still pass — they are reading a value nothing in this run ever writes to, not proof of
+   anything). tableView() reads the same table tests/r43.js's own selectSavedViews() reads, via the
+   identical `window.__mockDb.from("saved_views")` handle. */
+async function tableView(page, scope, name) {
+  return page.evaluate(async ({ scope, name }) => {
+    const { data, error } = await window.__mockDb.from("saved_views").select("scope,name,filters");
+    if (error) throw new Error("saved_views select: " + error.message);
+    return (data || []).filter((r) => r.scope === scope && r.name === name);
+  }, { scope, name });
+}
 
 /* Insert one client (+ optionally one case) straight into the mock's in-memory store — same
    independent-of-fixture technique tests/r25.js/r27.js's insertCase uses, so these assertions
@@ -264,9 +281,12 @@ async function readinessItems(page) {
       const optsAfterSave = await page.$$eval("#board-views option", (os) => os.map((o) => ({ value: o.value, text: o.textContent })));
       ok("B1b · a new option 'My view' appears in #board-views after Save", optsAfterSave.some((o) => o.value === "My view"), JSON.stringify(optsAfterSave));
 
-      const storeAfterSave = await page.evaluate(() => JSON.parse(localStorage.getItem("nx_views_v1") || "null"));
-      ok("B1c · localStorage.nx_views_v1 exists and has a pipeline array with one view", storeAfterSave && Array.isArray(storeAfterSave.pipeline) && storeAfterSave.pipeline.length === 1, JSON.stringify(storeAfterSave));
-      const savedView = storeAfterSave && storeAfterSave.pipeline[0];
+      // R43 · non-masking repair — a fresh pipeline load under presetEmptyViews() settles into DB
+      // mode (see the comment on tableView() above), so the Save this file just drove landed in
+      // the saved_views TABLE, not localStorage; read the same store the save actually used.
+      const rowsAfterSave = await tableView(page, "pipeline", "My view");
+      ok("B1c · saved_views holds exactly one pipeline row named 'My view'", rowsAfterSave.length === 1, JSON.stringify(rowsAfterSave));
+      const savedView = rowsAfterSave[0];
       eq("B1d · saved view's name is 'My view' (the stubbed prompt answer)", savedView && savedView.name, "My view");
       eq("B1e · saved view captured the search box's live value", savedView && savedView.filters && savedView.filters.search, SEARCH_1);
       eq("B1f · saved view captured the adviser filter's live value", savedView && savedView.filters && savedView.filters.adviser, "unassigned");
@@ -291,8 +311,11 @@ async function readinessItems(page) {
       await wait(page, 400);
       const optsAfterDel = await page.$$eval("#board-views option", (os) => os.map((o) => o.value));
       eq("B1j · #board-views no longer offers 'My view' after Delete", optsAfterDel.indexOf("My view"), -1);
-      const storeAfterDel = await page.evaluate(() => JSON.parse(localStorage.getItem("nx_views_v1") || "null"));
-      eq("B1k · localStorage's pipeline array is empty after Delete", storeAfterDel && storeAfterDel.pipeline, []);
+      // R43 · non-masking repair — same reasoning as B1c above: Delete in DB mode never touches
+      // localStorage (it was only ever the fallback's own writer), so the ORIGINAL claim here
+      // ("Delete actually removed the row") is only provable against the table it actually used.
+      const rowsAfterDel = await tableView(page, "pipeline", "My view");
+      eq("B1k · saved_views no longer holds a pipeline row named 'My view' after Delete", rowsAfterDel.length, 0);
 
       ok("B1 · no console errors", noNewErr(page, errBefore), JSON.stringify(page.__err));
       await page.close();
@@ -317,9 +340,11 @@ async function readinessItems(page) {
       const optsAfterSave = await page.$$eval("#client-views option", (os) => os.map((o) => o.value));
       ok("B2a · a new option 'My view' appears in #client-views after Save", optsAfterSave.indexOf("My view") !== -1, JSON.stringify(optsAfterSave));
 
-      const store = await page.evaluate(() => JSON.parse(localStorage.getItem("nx_views_v1") || "null"));
-      ok("B2b · localStorage.nx_views_v1 has a clients array with one view", store && Array.isArray(store.clients) && store.clients.length === 1, JSON.stringify(store));
-      const savedView = store && store.clients[0];
+      // R43 · non-masking repair — same reasoning as B1c: a fresh clients load under
+      // presetEmptyViews() settles into DB mode, so this Save landed in the table.
+      const rowsAfterSave = await tableView(page, "clients", "My view");
+      ok("B2b · saved_views holds exactly one clients row named 'My view'", rowsAfterSave.length === 1, JSON.stringify(rowsAfterSave));
+      const savedView = rowsAfterSave[0];
       eq("B2c · saved view's name is 'My view'", savedView && savedView.name, "My view");
       eq("B2d · saved view captured the search box's live value", savedView && savedView.filters && savedView.filters.search, SEARCH_2);
 
@@ -334,8 +359,9 @@ async function readinessItems(page) {
       await wait(page, 400);
       const optsAfterDel = await page.$$eval("#client-views option", (os) => os.map((o) => o.value));
       eq("B2f · #client-views no longer offers 'My view' after Delete", optsAfterDel.indexOf("My view"), -1);
-      const storeAfterDel = await page.evaluate(() => JSON.parse(localStorage.getItem("nx_views_v1") || "null"));
-      eq("B2g · localStorage's clients array is empty after Delete", storeAfterDel && storeAfterDel.clients, []);
+      // R43 · non-masking repair — same reasoning as B1k.
+      const rowsAfterDel = await tableView(page, "clients", "My view");
+      eq("B2g · saved_views no longer holds a clients row named 'My view' after Delete", rowsAfterDel.length, 0);
 
       ok("B2 · no console errors", noNewErr(page, errBefore), JSON.stringify(page.__err));
       await page.close();
