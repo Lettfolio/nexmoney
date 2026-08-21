@@ -9,7 +9,8 @@
               introducers, profiles, settings, watch_alerts, audit_log,
               duplicate_dismissals (M4), case_documents (M10), staff_absences,
               case_files (R13), vault_entries (R14), error_events (R30),
-              saved_views (R43)
+              saved_views (R43), proc_rates / commission_statements /
+              commission_lines (R44)
      view   : v_alerts
      rpcs   : my_role, get_briefing, get_reports, get_data_quality,
               get_protection_pipeline, run_watchtower, find_duplicate_clients,
@@ -389,8 +390,30 @@
        purpose: the app's first-run behaviour (starter seed on a virgin store,
        one-time migration from an existing localStorage key) is the thing worth
        exercising, and a fixture row would hide both. */
-    saved_views: []
+    saved_views: [],
+    /* R44 — Stonebridge payment reconciliation (migration r44_reconciliation).
+       Three tables, all is_owner() on every operation, which is why they are
+       registered here and then never seeded: a non-owner persona must read
+       EMPTY (not "hidden but present"), and the owner's first-run state — no
+       rate card, no statement, both panels saying so in words — is the state
+       most worth exercising. A fixture row would hide both.
+         · proc_rates — the network's rate card, REPLACED WHOLESALE on each
+           upload (delete-all then chunked insert), rate is a 0-1 fraction.
+         · commission_statements — one row per weekly workbook. `ref` carries a
+           UNIQUE index WHERE ref <> '', which is the double-import guard; the
+           emulation of it lives in writePolicy() below.
+         · commission_lines — one row per statement line, statement_id cascades,
+           matched_case_id is ON DELETE SET NULL, match_status is CHECKed. */
+    proc_rates: [], commission_statements: [], commission_lines: []
   };
+  /* R44 — production makes all three `id bigint generated always as identity`.
+     Serial-style counters (the same shape R30 gave error_events) rather than
+     nid()'s zero-padded strings, so `.order("id")` sorts the way the real
+     table does at any row count and the app can never come to depend on an
+     id being a string. */
+  var procRateSeq = 0, commissionStatementSeq = 0, commissionLineSeq = 0;
+  var R44_TABLES = ["proc_rates", "commission_statements", "commission_lines"];
+  var R44_MATCH_STATUSES = ["unmatched", "suggested", "confirmed", "dismissed", "na"];
   /* R30 — feature-gate toggle (default true). __setErrorEventsSupported(false) makes any
      op on error_events answer with a PostgREST-shaped 42P01, so tests can exercise the
      app's degrade path (errorEventsOff + the "isn't enabled" note). */
@@ -902,6 +925,64 @@
       }
       return null;
     }
+    /* R44 — proc_rates / commission_statements / commission_lines: is_owner()
+       for EVERY operation, mirroring the migration exactly. There is no adviser
+       or administrator half to this feature; a non-owner's writes are blocked
+       here and their reads come back empty from readFilter(), which is what
+       makes "the UI simply does not render for them" a safe design rather than
+       a decoration over readable data. */
+    if (R44_TABLES.indexOf(table) >= 0) {
+      if (!isOwner()) {
+        return pgError('new row violates row-level security policy for table "' + table + '"', "42501");
+      }
+      var r44pay = payload || {};
+      if (table === "proc_rates" && op !== "delete" && r44pay.rate != null) {
+        var rateN = Number(r44pay.rate);
+        if (!isFinite(rateN) || rateN < 0 || rateN > 1) {
+          return pgError('new row for relation "proc_rates" violates check constraint "proc_rates_rate_chk"', "23514");
+        }
+      }
+      if (table === "commission_lines" && op !== "delete") {
+        if (r44pay.match_status != null && R44_MATCH_STATUSES.indexOf(r44pay.match_status) === -1) {
+          return pgError('new row for relation "commission_lines" violates check constraint "commission_lines_match_status_chk"', "23514");
+        }
+        /* FK depth: exactly what this mock already does elsewhere — check the
+           parent row exists and raise the real SQLSTATE. No new FK engine. */
+        if (op === "insert") {
+          if (r44pay.statement_id == null) {
+            return pgError('null value in column "statement_id" of relation "commission_lines" violates not-null constraint', "23502");
+          }
+          var parent = DB.commission_statements.filter(function (s) { return String(s.id) === String(r44pay.statement_id); })[0];
+          if (!parent) {
+            return pgError('insert or update on table "commission_lines" violates foreign key constraint "commission_lines_statement_id_fkey"', "23503");
+          }
+        }
+        if (r44pay.matched_case_id != null && r44pay.matched_case_id !== "") {
+          var pcase = DB.cases.filter(function (c) { return String(c.id) === String(r44pay.matched_case_id); })[0];
+          if (!pcase) {
+            return pgError('insert or update on table "commission_lines" violates foreign key constraint "commission_lines_matched_case_id_fkey"', "23503");
+          }
+        }
+      }
+      /* The UNIQUE index on commission_statements(ref) WHERE ref <> ''. This is
+         the double-upload guard the app's whole import flow is built around —
+         the statement row goes in FIRST precisely so a 23505 here costs nothing
+         — so it is emulated rather than left to chance. Blank refs are exempt,
+         same as the partial index. */
+      if (table === "commission_statements" && op !== "delete") {
+        var wantRef = r44pay.ref == null ? "" : String(r44pay.ref).trim();
+        if (wantRef !== "") {
+          var self = (targets || [])[0];
+          var clashes = DB.commission_statements.filter(function (s) {
+            return s !== self && String(s.ref || "").trim() === wantRef;
+          });
+          if (clashes.length) {
+            return pgError('duplicate key value violates unique constraint "commission_statements_ref_uniq"', "23505");
+          }
+        }
+      }
+      return null;
+    }
     if (table === "settings" && !isOwner()) {
       return pgError('new row violates row-level security policy for table "settings"', "42501");
     }
@@ -956,6 +1037,10 @@
        signed-in user's role = any(visible_to)). An introducer (never staff)
        sees nothing; every other staff role sees every row whose visible_to
        is unset, plus any row that names their own role. */
+    /* R44 — "is_owner() for select" on all three reconciliation tables. An
+       adviser or administrator gets an EMPTY read, not a filtered one: there is
+       no row on these tables that is theirs to see. */
+    if (R44_TABLES.indexOf(table) >= 0 && !isOwner()) return [];
     if (table === "vault_entries") {
       if (!isStaff()) return [];
       var myR = myRole();
@@ -1181,6 +1266,34 @@
       if (r.user_id == null) r.user_id = CURRENT_UID;
       if (r.filters == null) r.filters = {};
       r.updated_at = iso(new Date());
+    }
+    /* R44 — the three reconciliation tables. Identity ids, `created_by default
+       auth.uid()` on the statement, and — the part that matters for parity —
+       every text column defaults to '' rather than null, exactly as the
+       migration declares it. The app reads these columns straight into HTML
+       through esc(), and esc(null) and esc("") both render nothing, but a test
+       asserting "the addressee is empty" should see the empty string production
+       would give it, not null. */
+    if (table === "proc_rates") {
+      if (r.id == null) r.id = ++procRateSeq;
+      ["lender", "product", "lg_code", "notes", "effective_label"].forEach(function (f) { if (r[f] == null) r[f] = ""; });
+      if (!r.uploaded_at) r.uploaded_at = iso(new Date());
+      if (r.rate === undefined) r.rate = null;
+    }
+    if (table === "commission_statements") {
+      if (r.id == null) r.id = ++commissionStatementSeq;
+      ["ref", "statement_label", "filename"].forEach(function (f) { if (r[f] == null) r[f] = ""; });
+      if (r.created_by === undefined || r.created_by == null) r.created_by = CURRENT_UID;
+      if (r.line_count == null) r.line_count = 0;
+      ["statement_date", "gross_total", "net_total"].forEach(function (f) { if (r[f] === undefined) r[f] = null; });
+    }
+    if (table === "commission_lines") {
+      if (r.id == null) r.id = ++commissionLineSeq;
+      ["tran_type", "addressee", "provider", "account_number", "opp_id", "reason",
+        "policy_type", "policy_group", "adviser_name", "match_note"].forEach(function (f) { if (r[f] == null) r[f] = ""; });
+      if (r.match_status == null) r.match_status = "unmatched";
+      ["line_date", "premium", "banked_gross", "banked_net", "matched_case_id", "confirmed_at"]
+        .forEach(function (f) { if (r[f] === undefined) r[f] = null; });
     }
     if (pk === "id" && !r.id) r.id = nid(PREFIX[table] || "row");
     if (!r.created_at && table !== "settings" && table !== "saved_views") r.created_at = iso(NOW);
@@ -4307,6 +4420,12 @@
         });
       }
       if (table === "cases") cascadeCase(row.id);
+      /* R44 — commission_lines.statement_id is ON DELETE CASCADE. The import's
+         rollback depends on it: when a line-insert fails part way the app
+         deletes the statement row and expects whatever landed to go with it. */
+      if (table === "commission_statements") {
+        DB.commission_lines = DB.commission_lines.filter(function (l) { return String(l.statement_id) !== String(row.id); });
+      }
     });
     if (this._returning == null) return this._finish([], removed.length);
     var t = table, ret = this._returning;
@@ -4317,6 +4436,15 @@
   function cascadeCase(caseId) {
     ["case_tasks", "case_notes", "case_events", "email_queue", "sms_queue", "case_emails", "fact_finds", "watch_alerts", "appointments"].forEach(function (t) {
       DB[t] = DB[t].filter(function (r) { return r.case_id !== caseId; });
+    });
+    /* R44 — commission_lines.matched_case_id is ON DELETE SET NULL, not cascade:
+       a deleted case must not take the network's record of the payment with it.
+       The line survives, unmatched, which is the honest state. */
+    DB.commission_lines.forEach(function (l) {
+      if (String(l.matched_case_id) === String(caseId)) {
+        l.matched_case_id = null;
+        if (l.match_status === "confirmed" || l.match_status === "suggested") l.match_status = "unmatched";
+      }
     });
   }
 

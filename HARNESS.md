@@ -99,6 +99,7 @@ node tests/r40.js
 node tests/r41.js
 node tests/r42.js
 node tests/r43.js
+node tests/r44.js
 ```
 
 Current green counts (end of round 23; r21/r22 were never committed to this
@@ -116,6 +117,55 @@ why those needed none at all: R18 is scale/perf hardening behind selectors
 nothing else asserted the old shape of, and R19 is new owner-gated Reports
 content that no earlier suite reaches; R23 is the same story again — see the
 R23 notes below).
+
+**Full battery is 100% green (4,452/4,452), `tests/r9_docs.js` included
+(255/0), `smoke.js` 152/0.** R44 added `tests/r44.js` (175 checks, §A–§J,
+Stonebridge payment reconciliation — proc-rate card upload plus the weekly
+commission-statement importer/matcher/review/confirm flow) — see the "R44
+notes" section below — and required ZERO repairs to any pre-existing suite:
+every one of the other 46 files (`smoke.js` through `tests/r43.js`) re-ran
+unedited at its exact pre-R44 count. That is exactly what R44's shape
+predicts rather than a coincidence worth double-checking away — the whole
+feature lives inside two brand-new panels (`#money-recon-panel`,
+`#money-procrates-panel`) appended at the FOOT of `#money-body`, after
+`#money-advisers-panel`, and behind three brand-new, is_owner()-gated
+tables (`proc_rates`, `commission_statements`, `commission_lines`) that no
+earlier suite reads, writes, or even knows exist; nothing it touches
+(`loadMoneyPage()`'s own non-owner branch, `feePaidPatch()`, `FEE_TYPES`) had
+its EXTERNAL behaviour changed, only reused — `feePaidPatch()` was lifted out
+of `markFeePaid` verbatim (R13-M2 note, `admin/app.js` ~L13359) specifically
+so R44 could reuse the R13-M2 legacy-column rule rather than reimplement a
+second copy of it, and `tests/r5_batch2.js` (112/0) and `tests/r13.js`
+(142/0) — the fee-machinery and per-fee-type-date suites — were re-run
+UNEDITED and green to prove the extraction changed nothing about what a
+plain Mark-fee-paid click still does. `smoke.js` was deliberately left
+untouched: its `PAGES` list sweeps eleven pages reachable by ≥1 of the four
+personas on an ordinary nav, and `money` has never been one of them (it is
+Owner-gated and behind `#nav-money.hidden` for everyone else) — R38 added
+`retention` to that list because retention was ALREADY one of the pages
+smoke swept and stayed reachable; R44's panels live inside a page smoke has
+never visited, so there is no existing anchor to extend, unlike R38's case.
+Sandbox note for whoever writes the next XLSX-driving suite: `cdn.sheetjs.com`
+403s in here exactly like every other CDN this harness has hit before, and
+the fix is the same shape — `page.addScriptTag({ path: XLSX_PATH })` with a
+LOCAL copy of the `xlsx` package's UMD bundle
+(`/tmp/r44/node_modules/xlsx/dist/xlsx.full.min.js` — a real npm install
+already sitting in this sandbox; NOT the workbooks living alongside it,
+which are real client data this suite never opens) injected before anything
+calls `XLSX.*`, never a `<script src="https://cdn...">` tag and never
+relaxing the sandbox's proxy. `tests/r44.js`'s `bootXlsx()` helper is the
+reusable shape:
+inject the bundle, then define two tiny in-page functions (`__mkFile` builds
+a real `.xlsx` `File` from an array-of-arrays via `XLSX.utils.aoa_to_sheet`/
+`book_new`/`book_append_sheet`/`XLSX.write(...,{type:"array"})`; `__drop`
+puts that `File` on an `<input type=file>` via a `DataTransfer` and fires
+`change`) — copy both verbatim into any future suite that needs to drive a
+real spreadsheet upload. The two PARSER functions themselves
+(`parseProcRatesSheet`/`parseStatementSheet`) need no workbook at all for
+most of their own coverage — they take a plain array-of-arrays, so §A/§B of
+`tests/r44.js` call them directly with in-memory JS and only reach for
+`bootXlsx()`/a real `.xlsx` round-trip where the file-input flow itself is
+what's under test (§E onward).
 
 **Full battery is 100% green (4,277/4,277), `tests/r9_docs.js` included
 (255/0), `smoke.js` 152/0.** R43 added `tests/r43.js` (78 checks, §1–§12,
@@ -453,7 +503,115 @@ even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes belo
 | `tests/r41.js` | 88 (new — §A–§I, see the R41 notes) |
 | `tests/r42.js` | 155 (new — §A–§J, see the R42 notes) |
 | `tests/r43.js` | 78 (new — §1–§12, see the R43 notes) |
-| **Total** | **4,277** |
+| `tests/r44.js` | 175 (new — §A–§J, see the R44 notes) |
+| **Total** | **4,452** |
+
+R44 notes: Stonebridge payment reconciliation — two Owner-only panels at the
+foot of Monday money (`#money-recon-panel`, `#money-procrates-panel`),
+already built/uncommitted before this test-writing pass started
+(`admin/app.js` ~L22840-23915, `admin/index.html` #money-recon-panel/
+#money-procrates-panel, `admin/mock-supabase.js`'s three new R44_TABLES).
+No real product bug was found — every behaviour `tests/r44.js` set out to
+prove held on first run once the suite's OWN bugs (below) were fixed; this
+was a test-writing pass against already-correct code, not a bug hunt that
+came up empty by luck.
+
+  - **§A/§B — the two parsers, called directly with a plain array-of-arrays
+    (no spreadsheet needed at all).** `parseProcRatesSheet`/
+    `parseStatementSheet` are pure functions over an AoA, so §A proves the
+    header-name-driven column mapping (including the fallback preference
+    order — "Stonebridge" beats bare "Rate" beats "Proc Fee" when more than
+    one is present), the skip/keep/count rules for a blank, non-numeric, or
+    out-of-[0,1] rate cell, and that an EXPLICIT nought is kept in `rows` but
+    excluded from `usable` (an expected-fee check must never be invented out
+    of a rate the card never gave). §B proves the Ref: scan (rows 0-4, any
+    cell), the header row detected via newline-bearing header text collapsed
+    by `r44Head()`, firm-row-vs-adviser-row classification via the "Total for
+    X" trailer pre-scan, subtotal/total-row skip, £-and-comma and
+    accounting-format-negative money-cell parsing, and totals taken from the
+    "Total for this statement" row when present vs SUMMED from the lines when
+    it is absent.
+  - **§C — the matcher, called directly with synthetic case/line objects (no
+    DB, no spreadsheet).** `suggestStatementMatches` is deliberately pure for
+    exactly this reason (its own comment in `admin/app.js` says so); §C
+    exercises both admission rules (surname hit OR account-history hit —
+    proving account-history admits ALONE, the deliberate exception a takeback
+    needs since a takeback's addressee carries no useful surname), the
+    scoring breakdown (acctHist +10, lender +2, amount +2, unpaid +1),
+    confidence (high iff untied AND (acct OR surname+lender+amount)), a
+    genuine SCORE TIE forcing confidence to low even though a case was
+    picked, `r44ReversalPairs`'s tight tolerance (exact/near-exact same-
+    account opposite-sign pairs; a positive-gross "takeback" never initiates
+    a pair; a candidate partner that is itself a takeback is excluded),
+    `r44ExpectedFee`/`r44FeeVerdict` boundary math (±10% of the NEAREST
+    bound, delta measured from the RAW expected bound not the tolerant one),
+    and `r44Surnames` edge cases (hyphenated surnames kept whole, a bare
+    single-letter fragment or a title-only fragment dropped, comma/&/and
+    splitting, dotted-initial collapsing, cross-person de-duplication).
+  - **§D-§J — the real upload/import/review/confirm flow**, driven through
+    an actual `.xlsx` file input (see the CDN-403 note in the battery
+    paragraph above for the `bootXlsx()`/`addScriptTag` technique). Uses
+    deterministic, uniquely-tagged fixture cases inserted straight into the
+    mock (`mkFixtureCase()`, following the same `insertClient`/`insertCase`
+    pattern `tests/r38.js` uses) rather than picking arbitrary rows off the
+    base fixture, so every matcher/confirm assertion is checkable by
+    construction. Covers: owner-only gating on p1 AND p2 (panels hidden,
+    forced `loadMoneyPage()` self-gates, reads empty, write 42501); the rate
+    card's replace-wholesale semantics; a genuine duplicate-ref 23505 with no
+    half-import; a FORCED `commission_lines` insert failure (monkey-patching
+    `db.from` — see the gotcha below) proving the statement row is deleted
+    (FK cascade) rather than left half-imported; all five review groups
+    rendering, pre-ticked-only-when-confident checkboxes, the re-pick
+    `<select>`, the renewal per-adviser aggregate, and the takeback tint
+    class; every confirm variant — a plain mortgage receipt (dates + the
+    R13-M2 legacy-column rule + note), all FOUR fee-fix shapes (case with no
+    proc fee → always set regardless of the checkbox; a ≤£1 delta → no
+    checkbox rendered at all, amount untouched; a >£1 delta left UNticked →
+    checkbox shown, OFF by default, amount untouched; the same >£1 delta
+    TICKED → amount updated to the banked gross), a same-statement reversal
+    pair (one net-£0 note, no task, BOTH halves confirmed together), a real
+    unreversed clawback found by ACCOUNT HISTORY ALONE with a deliberately
+    mismatched addressee surname (CLAWBACK note + an owner `case_tasks` row
+    due `localDateStr()` today, paid date never touched), a protection
+    receipt (note only, no fee column touched), the bulk "Confirm ticked"
+    path, dismiss/un-dismiss, and a CONFIRMED line refusing dismiss; the
+    statement-list's confirmed/takeback counters; review re-rendering FROM
+    THE DB (recomputes suggestions fresh but reads matched_case_id/
+    match_status straight off the stored row) after a close+reopen; and a
+    hostile-spreadsheet-string (`<script>`/`<img onerror>`/`<svg onload>`)
+    spot-check proving `esc()` renders every cell inert.
+  - **Two bugs found and fixed IN THE TEST FILE itself, not the product**,
+    both worth a note for whoever writes the next suite in this style:
+    (1) A forced-write-failure monkey-patch of `db.from("commission_lines")`
+    that keys off the TABLE NAME alone is wrong the moment the code under
+    test reads that table before it writes to it — `r44LoadPriorLines()`
+    calls `db.from("commission_lines").select(...)` before
+    `r44ImportStatement()`'s own bulk `.insert(...)`, so a one-shot "fail the
+    next call to this table" flag gets silently consumed by the READ and the
+    real INSERT sails through untouched. The fix wraps `.insert` itself
+    (consuming the flag only when insert is actually called), never the
+    table lookup. (2) `reconState`/`FEE_TYPES`/`db`/every other top-level
+    `let`/`const` in `admin/app.js` is reachable from `page.evaluate` as a
+    BARE identifier (same JS realm, same lexical global scope) but NEVER as
+    `window.reconState` — only `var`/function declarations attach to
+    `window`; `let`/`const` do not. `window.reconState.picks[...]` threw
+    `Cannot read properties of undefined`; `reconState.picks[...]` (bare)
+    works. `tests/r38.js`/`tests/r43.js` already establish this pattern for
+    `window.__mockDb`/`window.__mock` (both deliberately `var`-attached test
+    hooks — see `admin/mock-supabase.js` ~L6335) but nothing previously
+    documented the bare-identifier route for the PRODUCT's own `let`/`const`
+    globals; worth remembering for any future suite that wants to peek at
+    `app.js` module state directly.
+  - **`smoke.js` deliberately left untouched** — see the battery paragraph
+    above for why (money has never been one of smoke's swept pages, unlike
+    R38's retention which already was).
+  - `tests/r5_batch2.js` (112/0) and `tests/r13.js` (142/0) were re-run
+    UNEDITED specifically to prove the `feePaidPatch()` extraction (lifted
+    verbatim out of `markFeePaid`, R13-M2 note at `admin/app.js` ~L13359, so
+    R44's mortgage-receipt confirm could reuse the exact same "paid only once
+    every fee with an amount is dated" rule rather than reimplement it) left
+    the Mark-fee-paid overlay itself byte-for-byte unchanged in behaviour —
+    both suites' counts are unmoved from their pre-R44 baseline.
 
 R43 notes: two independent, already-built, uncommitted features shipped
 together (`admin/app.js` ~L8278-8600 + `admin/mock-supabase.js` — no

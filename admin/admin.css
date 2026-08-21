@@ -3564,3 +3564,51 @@ tr.owed-hot > td { background: var(--red-bg); }
   .ve-row2 { grid-template-columns: 1fr; }
   .ve-field-row { flex-wrap: wrap; }
 }
+
+/* ==========================================================================
+   R44 — Stonebridge payment reconciliation (Monday money, Owner only).
+   A statement line is TWO things side by side: the facts the network sent
+   (which are not editable and must read as a record) and the decision being
+   made about them (which is). The grid keeps those apart at every width, and
+   collapses to stacked blocks on a phone rather than squeezing a <select>
+   into 90px.
+   ========================================================================== */
+#money-recon-panel .panel-head-row input[type="file"],
+#money-procrates-panel .panel-head-row input[type="file"] { font-size: 12.5px; max-width: 100%; }
+.recon-stmt .t { cursor: default; }
+.recon-line {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+  gap: 10px 16px; align-items: start;
+  padding: 10px 0; border-bottom: 1px solid var(--light);
+}
+.recon-line:last-child { border-bottom: none; }
+.recon-facts .t { font-weight: 600; color: var(--dark); }
+.recon-facts .s, .recon-match .s { font-size: 12.5px; color: var(--muted); }
+/* A takeback is money leaving. It is tinted, not merely labelled, because the
+   one thing that must never happen on this screen is a clawback being read as
+   a receipt at a glance. */
+.recon-line.recon-takeback { background: var(--red-bg); border-radius: 6px; padding-left: 10px; padding-right: 10px; }
+.recon-line.recon-takeback .recon-facts .t { color: var(--red); }
+.recon-line.is-confirmed { opacity: .72; }
+.recon-line.is-dismissed { opacity: .55; }
+.recon-line.recon-agg { grid-template-columns: 1fr; }
+.recon-suggest { font-size: 13px; color: var(--dark); }
+.recon-controls { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 6px; }
+.recon-controls .recon-pick { flex: 1 1 200px; min-width: 0; font-size: 12.5px; }
+.recon-tick-wrap { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); white-space: nowrap; }
+.recon-tick-wrap input { width: auto; margin: 0; }
+.recon-feefix { display: flex; align-items: flex-start; gap: 6px; margin-top: 6px; font-size: 12.5px; color: var(--amber); }
+.recon-feefix input { width: auto; margin: 2px 0 0; flex: none; }
+.recon-note { color: var(--muted); margin-top: 4px; }
+.recon-review-head { display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; align-items: flex-start;
+  margin-top: 16px; padding-top: 14px; border-top: 2px solid var(--border-strong); }
+.recon-review-head h4 { font-size: 15px; font-weight: 700; color: var(--dark); margin: 0 0 4px; }
+.recon-review-head .panel-sub { margin: 0; }
+.recon-review-tools { display: flex; gap: 6px; flex: none; }
+.recon-group { margin-top: 14px; }
+.recon-group h5 { font-size: 13px; font-weight: 700; color: var(--dark); text-transform: uppercase; letter-spacing: .05em; margin: 0 0 2px; }
+.recon-group .panel-sub { margin-bottom: 6px; }
+@media (max-width: 700px) {
+  .recon-line { grid-template-columns: 1fr; }
+  .recon-controls .recon-pick { flex-basis: 100%; }
+}

@@ -868,6 +868,37 @@
           <p class="panel-sub" id="money-advisers-basis"></p>
           <div id="money-advisers"></div>
         </div>
+
+        <!-- ================================================================
+             R44 — STONEBRIDGE PAYMENT RECONCILIATION. Two panels, both inside
+             #money-body so they inherit this page's Owner gate, and both also
+             hidden/emptied explicitly by loadMoneyPage()'s non-owner branch.
+
+             The statement panel sits ABOVE the rate card because that is the
+             weekly motion; the rate card is a monthly-ish one that only exists
+             to give the statement's expected-fee badges something to check
+             against. Neither writes anything to a case on import — the review
+             below the list is where a human confirms, one line at a time.
+             ============================================================== -->
+        <div class="panel" id="money-recon-panel">
+          <div class="panel-head-row">
+            <h3>Weekly commission statement</h3>
+            <input type="file" id="recon-file" accept=".xlsx,.xls" aria-label="Weekly commission statement workbook">
+          </div>
+          <p class="panel-sub">Import the network's weekly commission statement. Every line is matched against the book and shown for review — <strong>nothing is written to a case until you confirm it</strong>. A statement already imported (same Ref) is refused rather than duplicated.</p>
+          <p class="panel-sub" id="recon-status"></p>
+          <div id="recon-statements"></div>
+          <div id="recon-review" class="hidden"></div>
+        </div>
+
+        <div class="panel" id="money-procrates-panel">
+          <div class="panel-head-row">
+            <h3>Proc fee rates (Stonebridge)</h3>
+            <input type="file" id="procrates-file" accept=".xlsx,.xls" aria-label="Proc fee rate card workbook">
+          </div>
+          <p class="panel-sub">The network's rate card, used to work out what a procuration fee on a given lender and loan <em>should</em> be. Uploading replaces the stored card wholesale.</p>
+          <p class="panel-sub" id="procrates-status"></p>
+        </div>
       </div>
     </section>
 

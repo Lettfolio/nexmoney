@@ -13356,6 +13356,30 @@ function feePaidDatesHtml(c) {
 // A date-only capture stored as a timestamp at local midday, so no timezone shift can move the
 // money into the day before (which would move it into the previous month's figures).
 const feeDateToTs = (d) => new Date(String(d) + "T12:00:00").toISOString();
+/* R44 — the LEGACY-COLUMN RULE, lifted out of markFeePaid unchanged so there is exactly one copy
+   of it (R38's one-source rule). Two callers now stamp a fee paid date: the Mark-fee-paid overlay
+   below, and the Stonebridge statement reconciliation on Monday money, which writes a proc fee the
+   moment the operator confirms the bank actually paid it. The reasoning both need is the R13-M2
+   one: `fee_status`/`fee_paid_at` are the pre-M2 single-fee columns, and they may only flip to
+   "paid" once EVERY fee type that carries an amount has a date — otherwise a part-paid case would
+   read as settled. `fee_paid_at` keeps the LAST of those dates, because that is the day the case
+   finished being paid.
+   `c` is the case as it will be AFTER this write (the caller merges any amount it is setting in
+   the same patch — the reconciliation sets proc_fee from the banked gross when the case has none),
+   so completeness is judged against the amounts that will actually be stored, not the stale ones.
+   `picked` is [{ t: <FEE_TYPES entry>, date: "YYYY-MM-DD" }]. */
+function feePaidPatch(c, picked) {
+  const patch = {};
+  (picked || []).forEach((x) => { patch[x.t.dateCol] = feeDateToTs(x.date); });
+  const types = FEE_TYPES.filter((t) => Number((c || {})[t.amountCol] || 0) > 0);
+  const allDates = types.map((t) => patch[t.dateCol] || (c || {})[t.dateCol] || null);
+  const complete = types.length > 0 && allDates.every(Boolean);
+  if (complete) {
+    patch.fee_status = "paid";
+    patch.fee_paid_at = allDates.slice().sort()[allDates.length - 1]; // legacy column keeps the LAST payment
+  }
+  return { patch, complete };
+}
 async function markFeePaid(caseId, c) {
   const today = localDateStr();
   const types = FEE_TYPES.filter((t) => Number(c[t.amountCol] || 0) > 0);
@@ -13420,16 +13444,10 @@ async function markFeePaid(caseId, c) {
     };
   });
   if (!picked) return;
-  const patch = {};
-  picked.forEach((x) => { patch[x.t.dateCol] = feeDateToTs(x.date); });
   // "Paid" only when every fee type that HAS an amount now has a date — otherwise the case stays
   // as it is (requested / not_requested) and the per-type dates tell the part-paid story.
-  const allDates = types.map((t) => patch[t.dateCol] || c[t.dateCol] || null);
-  const complete = allDates.every(Boolean);
-  if (complete) {
-    patch.fee_status = "paid";
-    patch.fee_paid_at = allDates.slice().sort()[allDates.length - 1]; // legacy column keeps the LAST payment
-  }
+  // R44 — that rule now lives in feePaidPatch() above, shared with the statement reconciliation.
+  const { patch, complete } = feePaidPatch(c, picked);
   let { error } = await db.from("cases").update(patch).eq("id", caseId);
   if (error && isMissingColumnError(error)) {
     // Pre-M2 fallback: one date for the lot, and say so rather than pretending it was itemised.
@@ -22590,6 +22608,13 @@ async function loadMoneyPage() {
       denied.classList.remove("hidden");
       denied.textContent = "Monday money is the firm's whole book — fees banked, fees owed, book value and per-adviser figures — so it is shown to the Owner only. Your own numbers are on the Reports page, in the My numbers card.";
     }
+    /* R44 — belt and braces on top of #money-body's own .hidden: the two
+       reconciliation panels are emptied AND hidden for a non-owner, and the
+       cached rate card is dropped, so nothing about the firm's commission
+       statements is left in the page for anybody who should not have it. */
+    procRatesCache = null;
+    await renderProcRatesPanel();
+    await renderReconPanel();
     return;
   }
   if (denied) { denied.classList.add("hidden"); denied.textContent = ""; }
@@ -22756,6 +22781,13 @@ async function loadMoneyPage() {
       <td>${r.overdue ? `<span class="badge ${r.overdue > 5 ? "red" : "amber"}">${r.overdue}</span>` : '<span class="cs-muted">0</span>'}</td>
     </tr>`).join("")}
   </table></div>` : MONEY_EMPTY("No adviser has completions, retention cases, unpaid proc fees or overdue tasks.");
+
+  /* R44 — the two reconciliation panels. Last, because they are the only part
+     of this page that WRITES, and because a slow rate-card read must not hold
+     up the figures above it. Each carries its own owner gate as well. */
+  procRatesCache = null;
+  await renderProcRatesPanel();
+  await renderReconPanel();
 }
 
 /* R7 — wiring for the controls added to Reports, Monday money and Protection.
@@ -22769,6 +22801,1117 @@ async function loadMoneyPage() {
   on("#owed-csv-btn", () => exportOwedCsv());
   on("#money-refresh", () => loadMoneyPage());
   on("#money-owed-open", () => gotoMoneyOwed());
+})();
+
+/* ==========================================================================
+   R44 · STONEBRIDGE PAYMENT RECONCILIATION
+   Two panels at the foot of Monday money, both OWNER-ONLY (they live inside
+   #money-body, which loadMoneyPage() hides for anyone else, and both are
+   emptied and hidden explicitly in that branch as well — belt and braces, the
+   same shape renderLeadResponse() uses on Reports).
+
+   What it is for: every week the network sends a commission statement and,
+   separately, a proc-rate card. Until now the statement was reconciled by eye
+   against the board and the paid dates were typed in from memory, which is how
+   a completed case sat six weeks unpaid on the Money-owed list while the money
+   had in fact arrived — and how a CLAWBACK went unnoticed entirely.
+
+   Daniel's three binding decisions are the whole shape of this code:
+     · REVIEW THEN CONFIRM. The importer never writes to a case. It parses,
+       matches, and shows its work; a human ticks. Nothing on the case moves
+       until somebody presses Confirm.
+     · OWNER ONLY. Fee-level money for the whole firm, so the same gate the
+       rest of this page uses, and no adviser-facing surface at all.
+     · A REAL CLAWBACK FLAGS AND CREATES A TASK. It never silently un-pays a
+       case: the history of what was banked stays true, and the ACTION becomes
+       a task on the owner's list.
+
+   Spreadsheet content is UNTRUSTED INPUT — an addressee, a provider, a note, a
+   filename all arrive from a third party's workbook — so every one of them goes
+   through esc() on the way into HTML, attributes included.
+   ====================================================================== */
+
+/* ---------- shared: header normalisation, cells, numbers, dates ---------- */
+
+/* Both workbooks are mapped BY HEADER NAME, never by position. The statement in
+   particular interleaves EMPTY spacer columns between the ones that carry data
+   (there are 21 columns for 16 headings), and several headings contain a
+   literal newline mid-phrase — "Tran Type \nDesc", "Account \nnumber",
+   "Banked\n(Gross)", "Policy \nType". Collapsing every run of whitespace to a
+   single space and lowercasing turns all of those into one stable key, so a
+   column moving (or a spacer being added) costs nothing. */
+const r44Head = (s) => String(s == null ? "" : s).replace(/\s+/g, " ").trim().toLowerCase();
+
+/* A money cell. SheetJS hands back a number for a numeric cell, but a hand-typed
+   one can arrive as "£1,011.50" or "(914.54)" — accounting negatives — and an
+   empty cell as "" or null. Anything that is not a number is null, never 0:
+   "we could not read this" and "this was zero" are different facts. */
+function r44Num(v) {
+  if (v == null || v === "") return null;
+  if (typeof v === "number") return isFinite(v) ? v : null;
+  let s = String(v).trim();
+  if (!s) return null;
+  let neg = false;
+  if (/^\(.*\)$/.test(s)) { neg = true; s = s.slice(1, -1); }
+  s = s.replace(/[£$,\s]/g, "");
+  if (s === "" || !/^-?\d*\.?\d+$/.test(s)) return null;
+  const n = Number(s);
+  if (!isFinite(n)) return null;
+  return neg ? -n : n;
+}
+
+/* A date cell, STRICTLY. This is also the row classifier — "the first cell
+   parses as a date" is what separates a data row from an adviser group header —
+   so it must never say yes to a person's name. `new Date("Some Name")` is
+   Invalid Date in every engine we support, but `new Date("May 5")` is NOT, which
+   is exactly the kind of surname-shaped string a lenient parser would swallow.
+   Hence: JS Date (what {cellDates:true} gives us), Excel serial, ISO, or UK
+   d/m/y. Nothing else. */
+function r44CellDate(v) {
+  if (v == null || v === "") return null;
+  if (v instanceof Date) return isNaN(v.getTime()) ? null : v;
+  if (typeof v === "number") {
+    // Excel serial. Bounded to 1954-2119 so a stray Opp ID or an amount can
+    // never be read as a date.
+    if (v < 20000 || v > 80000) return null;
+    const d = new Date(Date.UTC(1899, 11, 30) + Math.round(v) * 86400000);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  const s = String(v).trim();
+  if (!s) return null;
+  let m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+  if (m) { const d = new Date(`${m[1]}-${m[2]}-${m[3]}T12:00:00`); return isNaN(d.getTime()) ? null : d; }
+  m = /^(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{2,4})$/.exec(s);   // UK day-first
+  if (m) {
+    let y = Number(m[3]); if (y < 100) y += 2000;
+    const d = new Date(y, Number(m[2]) - 1, Number(m[1]), 12);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  return null;
+}
+/* The calendar day a parsed cell means, read with LOCAL getters. SheetJS builds
+   its Date at local midnight; a serial we build lands at UTC midnight. In
+   Europe/London (UTC+0 or +1) both read back as the same calendar day through
+   local getters, which is the only timezone this firm operates in — and it is
+   the same reason feeDateToTs() stamps local midday rather than midnight. */
+function r44DateStr(d) {
+  if (!d) return "";
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+const r44Str = (v) => (v == null ? "" : String(v).trim());
+/* A sheet as an array of arrays, blank rows kept — the walk below is
+   positional within the sheet and a dropped blank row would shift it. */
+const r44Aoa = (ws) => XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null, blankrows: true });
+
+/* ---------- T1 · the proc-rate card ---------- */
+
+/* Header → column. Each entry is a list of accepted names in preference order;
+   the first that appears in the sheet wins. `rate` accepts the network's own
+   column heading first ("Stonebridge") and a generic "Rate" as a fallback,
+   because the day the card is re-badged is not the day expected-fee checks
+   should silently switch off. */
+const R44_RATE_HEADERS = {
+  lender: ["lender"],
+  product: ["product description", "product"],
+  lg_code: ["l&g code", "l & g code", "lg code", "l and g code"],
+  rate: ["stonebridge", "stonebridge rate", "rate", "proc fee"],
+  notes: ["notes", "note", "comments"],
+};
+/* Returns { rows, skipped, usable, headerRow, missing } — `rows` shaped for
+   proc_rates. A row with a blank or non-numeric rate is SKIPPED and counted:
+   the card saying nothing about a product is not the same claim as the card
+   saying nought, and storing the second when we were handed the first would
+   invent an expected fee of £0.
+   An EXPLICIT nought is a different matter and is kept — the card really does
+   carry 0 against some further-advance products, and dropping that would make
+   the card look as though it had never mentioned them. It cannot leak into an
+   expected fee either way: r44ExpectedFee() only counts rates above nought.
+   The rate is a DECIMAL FRACTION here (0.004 = 0.40%), which is what the
+   column's 0-1 check constraint enforces, so anything outside [0,1] is a
+   misread column rather than a rate and is skipped.
+   `usable` counts the rows that could actually drive an expected-fee check —
+   rate strictly inside (0,1] — and is what the upload gate tests. */
+function parseProcRatesSheet(aoa) {
+  const out = { rows: [], skipped: 0, usable: 0, headerRow: -1, missing: [] };
+  const rows = aoa || [];
+  for (let i = 0; i < Math.min(rows.length, 20); i++) {
+    const heads = (rows[i] || []).map(r44Head);
+    if (heads.indexOf("lender") >= 0) { out.headerRow = i; break; }
+  }
+  if (out.headerRow < 0) { out.missing = ["lender"]; return out; }
+  const heads = (rows[out.headerRow] || []).map(r44Head);
+  const col = {};
+  Object.keys(R44_RATE_HEADERS).forEach((k) => {
+    col[k] = -1;
+    R44_RATE_HEADERS[k].some((name) => { const at = heads.indexOf(name); if (at >= 0) { col[k] = at; return true; } return false; });
+  });
+  if (col.lender < 0) out.missing.push("Lender");
+  if (col.rate < 0) out.missing.push("Stonebridge");
+  if (out.missing.length) return out;
+  for (let i = out.headerRow + 1; i < rows.length; i++) {
+    const r = rows[i] || [];
+    const lender = r44Str(r[col.lender]);
+    const rateRaw = col.rate >= 0 ? r[col.rate] : null;
+    if (!lender && (rateRaw == null || rateRaw === "")) continue;   // a spacer row, not a fault
+    const rate = r44Num(rateRaw);
+    if (!lender || rate == null || rate < 0 || rate > 1) { out.skipped++; continue; }
+    if (rate > 0) out.usable++;
+    out.rows.push({
+      lender,
+      product: col.product >= 0 ? r44Str(r[col.product]) : "",
+      lg_code: col.lg_code >= 0 ? r44Str(r[col.lg_code]) : "",
+      rate,
+      notes: col.notes >= 0 ? r44Str(r[col.notes]) : "",
+    });
+  }
+  return out;
+}
+
+/* ---------- T2 · the weekly commission statement ---------- */
+
+const R44_LINE_HEADERS = {
+  line_date: ["date"],
+  tran_type: ["tran type desc", "tran type", "tran type description"],
+  addressee: ["addressee"],
+  provider: ["provider"],
+  account_number: ["account number", "account no", "account"],
+  opp_id: ["opp id", "opportunity id"],
+  reason: ["reason"],
+  policy_type: ["policy type"],
+  policy_group: ["policy group"],
+  premium: ["premium"],
+  banked_gross: ["banked (gross)", "banked gross"],
+  banked_net: ["banked (net)", "banked net"],
+};
+/* "File Review Client Name", "Deduction(Introducer)", "Deduction (Referrer)" and
+   "Clawback Reserve" are deliberately NOT mapped: there is no column on
+   commission_lines for any of them and we do not invent schema to hold a figure
+   nothing reads. */
+
+/* The statement walk. Everything about it is derived from the sheet rather than
+   assumed:
+     · REF — a free cell somewhere in the top five rows reading "Ref:BP1048".
+       Scanned across every cell of those rows because which column it lands in
+       is a spreadsheet layout accident.
+     · HEADER ROW — the first row whose FIRST cell is exactly "Date".
+     · GROUP HEADERS — below the header the sheet is a firm row, then one group
+       per adviser. A group header is a row whose first cell is text that does
+       not parse as a date and is not a subtotal or a total. Telling the FIRM
+       row apart from an ADVISER row is done from the sheet's own totals: the
+       trailer carries "Total for <firm>" (and "Total for this statement"), so
+       any group header whose text is one of those named firms is the firm row
+       and sets no adviser. Guessing "the first one is the firm" would put every
+       line under the wrong name the day a statement arrives without a firm row.
+     · SUBTOTALS — Policy Group reads "N item(s)".
+     · TOTALS — first cell starts "Total for"; "Total for this statement" is
+       where the statement's own gross/net come from when it is present.
+     · DATA — the first cell parses as a date. */
+function parseStatementSheet(aoa, sheetName) {
+  const rows = aoa || [];
+  const out = {
+    ref: "", label: r44Str(sheetName), statementDate: null, gross: null, net: null,
+    lines: [], advisers: [], headerRow: -1, missing: [], totalsFromRow: false,
+  };
+  for (let i = 0; i < Math.min(rows.length, 5); i++) {
+    (rows[i] || []).forEach((cell) => {
+      if (out.ref) return;
+      const m = /^Ref:\s*(.+)$/i.exec(r44Str(cell));
+      if (m) out.ref = m[1].trim();
+    });
+    if (out.ref) break;
+  }
+  for (let i = 0; i < rows.length; i++) {
+    if (r44Str((rows[i] || [])[0]).toLowerCase() === "date") { out.headerRow = i; break; }
+  }
+  if (out.headerRow < 0) { out.missing = ["Date"]; return out; }
+  const heads = (rows[out.headerRow] || []).map(r44Head);
+  const col = {};
+  Object.keys(R44_LINE_HEADERS).forEach((k) => {
+    col[k] = -1;
+    R44_LINE_HEADERS[k].some((name) => { const at = heads.indexOf(name); if (at >= 0) { col[k] = at; return true; } return false; });
+  });
+  ["line_date", "tran_type", "banked_gross", "policy_group"].forEach((k) => { if (col[k] < 0) out.missing.push(k); });
+  if (out.missing.length) return out;
+  const cell = (r, k) => (col[k] >= 0 ? r[col[k]] : null);
+
+  /* Pre-scan for the firm names the trailer totals name (see the comment above). */
+  const firmNames = {};
+  rows.forEach((r) => {
+    const m = /^Total for\s+(.+)$/i.exec(r44Str((r || [])[0]));
+    if (m && !/^this statement$/i.test(m[1].trim())) firmNames[m[1].trim().toLowerCase()] = true;
+  });
+
+  let adviser = "";
+  for (let i = out.headerRow + 1; i < rows.length; i++) {
+    const r = rows[i] || [];
+    const first = r44Str(r[0]);
+    const grp = r44Str(cell(r, "policy_group"));
+    if (/^Total for/i.test(first)) {
+      if (/^Total for\s+this statement$/i.test(first)) {
+        out.gross = r44Num(cell(r, "banked_gross"));
+        out.net = r44Num(cell(r, "banked_net"));
+        out.totalsFromRow = out.gross != null;
+      }
+      continue;
+    }
+    if (/^\d+ item\(s\)$/i.test(grp)) continue;                    // subtotal
+    const d = r44CellDate(cell(r, "line_date"));
+    if (!d) {
+      if (first) {
+        if (firmNames[first.toLowerCase()]) adviser = "";          // the firm row
+        else { adviser = first; if (out.advisers.indexOf(first) < 0) out.advisers.push(first); }
+      }
+      continue;                                                    // blank/spacer/group header
+    }
+    const ds = r44DateStr(d);
+    out.lines.push({
+      line_date: feeDateToTs(ds),
+      date_str: ds,
+      tran_type: r44Str(cell(r, "tran_type")),
+      addressee: r44Str(cell(r, "addressee")),
+      provider: r44Str(cell(r, "provider")),
+      account_number: r44Str(cell(r, "account_number")),
+      opp_id: r44Str(cell(r, "opp_id")),
+      reason: r44Str(cell(r, "reason")),
+      policy_type: r44Str(cell(r, "policy_type")),
+      policy_group: r44Str(cell(r, "policy_group")),
+      adviser_name: adviser,
+      premium: r44Num(cell(r, "premium")),
+      banked_gross: r44Num(cell(r, "banked_gross")),
+      banked_net: r44Num(cell(r, "banked_net")),
+    });
+  }
+  out.lines.forEach((l) => { if (!out.statementDate || l.date_str > out.statementDate) out.statementDate = l.date_str; });
+  if (!out.totalsFromRow) {
+    out.gross = out.lines.reduce((s, l) => s + Number(l.banked_gross || 0), 0);
+    out.net = out.lines.reduce((s, l) => s + Number(l.banked_net || 0), 0);
+  }
+  return out;
+}
+/* Whole-workbook entry points, using the SAME XLSX.read(arrayBuffer, {type:"array"})
+   pattern the client importer uses — the SheetJS bundle index.html already loads,
+   nothing added. {cellDates:true} on top, because the statement's row classifier
+   depends on a date cell arriving as a Date rather than a serial. */
+function parseProcRatesWorkbook(wb) {
+  const sn = (wb.SheetNames || [])[0];
+  const res = parseProcRatesSheet(sn ? r44Aoa(wb.Sheets[sn]) : []);
+  res.sheet = sn || "";
+  return res;
+}
+function parseStatementWorkbook(wb) {
+  const sn = (wb.SheetNames || [])[0];
+  return parseStatementSheet(sn ? r44Aoa(wb.Sheets[sn]) : [], sn || "");
+}
+
+/* ---------- T3 · matcher, lender normalisation, expected fee ---------- */
+
+/* One lender vocabulary, used for provider↔case.lender AND provider↔rate-card
+   lender. "Barclays Bank PLC", "Barclays for Intermediaries" and "Barclays" are
+   the same lender; "Skipton Building Society" and "Skipton BS" are the same
+   lender; and none of the words doing the differing carry any information. */
+const R44_LENDER_NOISE = /\b(building society|for intermediaries|home ?loans|solutions|mortgages|mortgage|bank|bs|plc|ltd|limited|the|uk)\b/g;
+function r44LenderKey(s) {
+  return String(s == null ? "" : s).toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9 ]+/g, " ")
+    .replace(R44_LENDER_NOISE, " ")
+    .replace(/\s+/g, " ").trim();
+}
+/* Prefix or containment, both ways round. Guarded on length: once the noise
+   words are gone a key can be two characters ("bm" for BM Solutions), and a
+   two-character containment test matches almost everything, so anything under
+   three characters has to be an exact match. */
+function r44LenderMatch(a, b) {
+  const x = r44LenderKey(a), y = r44LenderKey(b);
+  if (!x || !y) return false;
+  if (x === y) return true;
+  if (x.length < 3 || y.length < 3) return false;
+  return x.indexOf(y) === 0 || y.indexOf(x) === 0 || x.indexOf(y) >= 0 || y.indexOf(x) >= 0;
+}
+
+/* Surnames out of an addressee. "Mr Hawkins & Miss Haynes-Flood" is two people
+   and two surnames, and the hyphenated one is ONE surname — splitting it would
+   match "Haynes" against a different family. Titles are stripped, the last
+   remaining token of each person is the surname, lowercased. */
+const R44_TITLE_WORD = /^(mr|mrs|miss|ms|mx|dr|prof|professor|sir|lady|rev|revd)$/i;
+const R44_TITLE = /^(mr|mrs|miss|ms|mx|dr|prof|professor|sir|lady|rev|revd)\s+/i;
+function r44Surnames(addressee) {
+  const s = String(addressee == null ? "" : addressee).trim();
+  if (!s) return [];
+  const out = [];
+  s.split(/\s*(?:&|\band\b|,|\+)\s*/i).forEach((part) => {
+    let t = String(part).replace(/\./g, " ").replace(/\s+/g, " ").trim();
+    while (R44_TITLE.test(t)) t = t.replace(R44_TITLE, "").trim();
+    /* "Mr & Mrs Ashdown-Pryce" splits into "Mr" and "Mrs Ashdown-Pryce": the
+       first fragment is a bare title with no name behind it and must NOT become
+       the surname "mr", which would then match every case whose client happens
+       to be called Mr-anything. */
+    if (R44_TITLE_WORD.test(t)) return;
+    if (!t) return;
+    const toks = t.split(" ").filter(Boolean);
+    if (!toks.length) return;
+    const last = toks[toks.length - 1].toLowerCase();
+    if (last.length < 2) return;
+    if (out.indexOf(last) < 0) out.push(last);
+  });
+  return out;
+}
+
+/* What KIND of line this is — the four groups the review screen shows, in the
+   order they are tested. A takeback is a takeback whatever policy group it sits
+   in (the money has gone back either way). A renewal is the "VARIOUS" trailer
+   the network appends: no addressee, nothing to match to, imported as `na`
+   rather than left looking unreconciled forever. */
+function r44LineKind(l) {
+  const tt = String((l || {}).tran_type || "").toLowerCase();
+  const grp = String((l || {}).policy_group || "").toLowerCase();
+  const hasAddressee = !!String((l || {}).addressee || "").trim();
+  if (/takeback|claw ?back/.test(tt)) return "takeback";
+  if (/renewal/.test(tt) || (!hasAddressee && /^various$/i.test(String((l || {}).reason || "").trim()))) return "renewal";
+  if (grp === "mortgage") return "mortgage";
+  if (/life|protection/.test(grp) && hasAddressee) return "protection";
+  return "other";
+}
+const R44_MATCHABLE = { mortgage: true, takeback: true, protection: true };
+
+/* Expected proc fee from the rate card: every card row whose lender normalises
+   onto this provider gives a rate, and the range is [min, max] × the loan. Null
+   when there is no card, no matching lender, or no loan — an expected fee we
+   cannot compute is shown as nothing, never as zero. */
+function r44ExpectedFee(provider, loanAmount, procRates) {
+  const loan = Number(loanAmount || 0);
+  if (!loan || !(procRates || []).length) return null;
+  const rates = (procRates || [])
+    .filter((r) => r44LenderMatch(provider, r && r.lender))
+    .map((r) => Number(r && r.rate))
+    .filter((n) => isFinite(n) && n > 0 && n <= 1);
+  if (!rates.length) return null;
+  return { expectedLo: Math.min.apply(null, rates) * loan, expectedHi: Math.max.apply(null, rates) * loan, rateCount: rates.length };
+}
+/* ±10% on the NEAREST bound — a range that already spans several products
+   should not also be widened at both ends before anything counts as "over". */
+const R44_FEE_TOL = 0.1;
+function r44FeeVerdict(gross, exp) {
+  if (!exp) return null;
+  const g = Math.abs(Number(gross || 0));
+  const lo = exp.expectedLo * (1 - R44_FEE_TOL), hi = exp.expectedHi * (1 + R44_FEE_TOL);
+  if (g >= lo && g <= hi) return { expectedLo: exp.expectedLo, expectedHi: exp.expectedHi, verdict: "within", delta: 0, rateCount: exp.rateCount };
+  if (g > hi) return { expectedLo: exp.expectedLo, expectedHi: exp.expectedHi, verdict: "over", delta: g - exp.expectedHi, rateCount: exp.rateCount };
+  return { expectedLo: exp.expectedLo, expectedHi: exp.expectedHi, verdict: "under", delta: exp.expectedLo - g, rateCount: exp.rateCount };
+}
+
+/* An in-statement reversal: a takeback and a receipt on the SAME account number,
+   inside the SAME statement, equal and opposite. The network does this when it
+   re-books a case — the money never actually left. Both halves are flagged so
+   the review screen can say "reversed in-statement · net £0" instead of raising
+   a clawback task for a clawback that did not happen. Returns a map of index →
+   the index it pairs with. */
+const R44_PAIR_TOL = 0.02;
+function r44ReversalPairs(lines) {
+  const pairs = {};
+  const used = {};
+  const ls = lines || [];
+  for (let i = 0; i < ls.length; i++) {
+    if (used[i] || r44LineKind(ls[i]) !== "takeback") continue;
+    const acct = String(ls[i].account_number || "").trim();
+    const g = Number(ls[i].banked_gross || 0);
+    if (!acct || !(g < 0)) continue;
+    for (let j = 0; j < ls.length; j++) {
+      if (i === j || used[j] || pairs[j] != null) continue;
+      if (r44LineKind(ls[j]) === "takeback") continue;
+      if (String(ls[j].account_number || "").trim() !== acct) continue;
+      const h = Number(ls[j].banked_gross || 0);
+      if (!(h > 0)) continue;
+      if (Math.abs(h + g) > Math.max(R44_PAIR_TOL, Math.abs(g) * 0.001)) continue;
+      pairs[i] = j; pairs[j] = i; used[i] = used[j] = true;
+      break;
+    }
+  }
+  return pairs;
+}
+
+/* --------------------------------------------------------------------------
+   suggestStatementMatches(lines, cases, priorLines, procRates)
+   PURE. No I/O, no DOM — the whole point, because "which case is this payment"
+   is the one judgement in this feature that has to be testable without a
+   spreadsheet, a database and a browser.
+
+   ADMISSION. A case is a candidate only if the addressee's surname is one of
+   its client's, OR the account number has been confirmed against that case
+   before. The surname rule is what stops a £1,011 receipt landing on whichever
+   Halifax case happens to be worth £1,011; the account-history rule is the
+   exception it must have, because a TAKEBACK carries the same account number as
+   the receipt it reverses and nothing else reliable, and finding that original
+   is the entire reason priorLines is read.
+
+   SCORING (mortgage/takeback/protection lines; renewals are never scored):
+     +10  account history — this account number was confirmed onto this case
+     +2   lender: provider normalises onto case.lender
+     +2   amount: gross within 15% of case.proc_fee, or inside the expected-fee
+          range widened by 15%
+     +1   the case's proc fee is not yet dated (an unpaid case is a likelier
+          home for a payment than one already settled)
+   Highest score wins, one suggestion per line. CONFIDENT (pre-ticks the row) =
+   account history, or surname AND lender AND amount all three. A TIE on the top
+   score is never confident: two cases that score identically is precisely the
+   situation a human has to look at.
+   ------------------------------------------------------------------------ */
+const R44_AMOUNT_TOL = 0.15;
+function suggestStatementMatches(lines, cases, priorLines, procRates) {
+  const priorByAcct = {};
+  (priorLines || []).forEach((p) => {
+    const a = String((p && p.account_number) || "").trim();
+    if (a && p.matched_case_id) priorByAcct[a] = p.matched_case_id;
+  });
+  const pairs = r44ReversalPairs(lines);
+  return (lines || []).map((l, i) => {
+    const kind = r44LineKind(l);
+    const res = {
+      index: i, kind, suggested: null, confidence: null, score: 0, why: [],
+      candidates: [], expected: null, pairedWith: pairs[i] == null ? null : pairs[i],
+      note: "",
+    };
+    if (!R44_MATCHABLE[kind]) return res;
+    const acct = String(l.account_number || "").trim();
+    const priorId = acct ? priorByAcct[acct] || null : null;
+    const surnames = r44Surnames(l.addressee);
+    const gross = Math.abs(Number(l.banked_gross || 0));
+    const scored = [];
+    (cases || []).forEach((c) => {
+      if (!c || !c.id) return;
+      const cs = String(((c.clients || {}).last_name) || "").trim().toLowerCase();
+      const acctHit = !!priorId && priorId === c.id;
+      const surnameHit = !!cs && surnames.indexOf(cs) >= 0;
+      if (!surnameHit && !acctHit) return;
+      const exp = r44ExpectedFee(l.provider, c.loan_amount, procRates);
+      const near = (t) => Number(t) > 0 && Math.abs(gross - Number(t)) <= Number(t) * R44_AMOUNT_TOL;
+      const inExpected = !!exp && gross >= exp.expectedLo * (1 - R44_AMOUNT_TOL) && gross <= exp.expectedHi * (1 + R44_AMOUNT_TOL);
+      const lenderHit = r44LenderMatch(l.provider, c.lender);
+      const amountHit = near(c.proc_fee) || inExpected;
+      let score = 0; const why = [];
+      if (acctHit) { score += 10; why.push("account history"); }
+      if (surnameHit) why.push("surname");
+      if (lenderHit) { score += 2; why.push("lender"); }
+      if (amountHit) { score += 2; why.push("amount"); }
+      if (!c.proc_fee_paid_at) { score += 1; why.push("unpaid"); }
+      scored.push({ id: c.id, case: c, score, why, surnameHit, lenderHit, amountHit, acctHit, expected: exp });
+    });
+    scored.sort((a, b) => b.score - a.score || String(a.id).localeCompare(String(b.id)));
+    res.candidates = scored.slice(0, 10);
+    const top = scored[0] || null;
+    if (top) {
+      const tie = scored.length > 1 && scored[1].score === top.score;
+      res.suggested = top.id;
+      res.score = top.score;
+      res.why = top.why.slice();
+      res.confidence = (!tie && (top.acctHit || (top.surnameHit && top.lenderHit && top.amountHit))) ? "high" : "low";
+      res.note = top.why.join(" + ") + (tie ? " (tied)" : "");
+      res.expected = r44FeeVerdict(gross, top.expected);
+    }
+    return res;
+  });
+}
+
+/* ---------- state ---------- */
+
+/* Cached for the life of one Money-page load: the rate card is read once and
+   used by every expected-fee badge on the review screen. */
+let procRatesCache = null;
+let reconState = null;   // { statement, lines, cases, byLine, sugg, pairs, picks, ticks, feeFix }
+const R44_CHUNK = 200;
+const R44_STMT_LIST = 10;
+/* R24 — a NEW named select, not a widening of BOARD_CASE_COLS. The board's
+   columns are the board's; this read wants proc_fee/proc_fee_paid_at/
+   completed_at, which the board has no use for, and coupling them would make
+   every future change to one a change to the other. */
+const R44_CASE_COLS = "id,lender,stage,loan_amount,proc_fee,proc_fee_paid_at,completed_at,assigned_to,clients!client_id(first_name,last_name)";
+const R44_CANDIDATE_MONTHS = 18;
+
+async function loadProcRates(force) {
+  if (!showMoney()) return [];
+  if (procRatesCache && !force) return procRatesCache;
+  const { data, error } = await db.from("proc_rates")
+    .select("id,lender,product,lg_code,rate,notes,effective_label,uploaded_at")
+    .order("id").limit(OWNER_ROW_CAP);
+  if (error) { procRatesCache = null; return []; }
+  procRatesCache = data || [];
+  return procRatesCache;
+}
+/* ONE bounded read. Live cases at offer/exchange plus completions that could
+   still be waiting on money: completed inside ~18 months, or completed at any
+   time with no proc-fee date on them yet (an old case nobody was ever paid for
+   is exactly the case a statement might finally settle). The stage narrowing is
+   server-side; the completed-window narrowing is applied to the returned rows
+   rather than as an .or() with an ISO timestamp inside it, which PostgREST's
+   filter grammar makes fragile to quote. */
+async function r44LoadCandidateCases() {
+  const { data, error } = await db.from("cases").select(R44_CASE_COLS)
+    .in("stage", ["offer", "exchange", "completed"])
+    .order("id").limit(OWNER_ROW_CAP);
+  if (error) return [];
+  const cutoff = new Date(Date.now() - R44_CANDIDATE_MONTHS * 30.5 * 86400000).toISOString();
+  return (data || []).filter((c) => c.stage !== "completed" || !c.proc_fee_paid_at || !c.completed_at || c.completed_at >= cutoff);
+}
+async function r44LoadPriorLines() {
+  const { data, error } = await db.from("commission_lines")
+    .select("account_number,matched_case_id")
+    .eq("match_status", "confirmed").neq("account_number", "").limit(OWNER_ROW_CAP);
+  if (error) return [];
+  return (data || []).filter((r) => r && r.matched_case_id);
+}
+
+/* ---------- T1 · panel render + upload ---------- */
+
+function r44CaseLabel(c) {
+  if (!c) return "(unknown case)";
+  const nm = [((c.clients || {}).first_name), ((c.clients || {}).last_name)].filter(Boolean).join(" ");
+  return nm || "(no name)";
+}
+async function renderProcRatesPanel() {
+  const panel = $("#money-procrates-panel"), status = $("#procrates-status");
+  if (!panel || !status) return;
+  if (!showMoney()) { panel.classList.add("hidden"); status.textContent = ""; return; }
+  panel.classList.remove("hidden");
+  const rates = await loadProcRates(true);
+  if (!rates.length) {
+    status.innerHTML = `<strong>No rates uploaded yet — expected-fee checks are off.</strong> Upload the network's proc-rate card and every mortgage receipt on a statement gains an expected-fee badge.`;
+    return;
+  }
+  const at = rates.reduce((a, r) => (r.uploaded_at && (!a || r.uploaded_at > a) ? r.uploaded_at : a), null);
+  const label = (rates.find((r) => r.effective_label) || {}).effective_label || "";
+  status.innerHTML = `<strong>${rates.length} rate${rates.length === 1 ? "" : "s"}</strong> · uploaded ${at ? fmtD(at) : "—"} · ${esc(label) || '<span class="cs-muted">no file label</span>'}`;
+}
+async function r44UploadProcRates(file) {
+  if (!showMoney()) return toast("Proc rates are Owner-only.");
+  const status = $("#procrates-status");
+  if (typeof XLSX === "undefined") return toast("The spreadsheet reader did not load — reload the page and try again.");
+  let parsed;
+  try {
+    const wb = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true });
+    parsed = parseProcRatesWorkbook(wb);
+  } catch (e) { return toast("Could not read the rate card: " + e.message); }
+  if (parsed.missing && parsed.missing.length) {
+    return toast(`That workbook has no ${parsed.missing.join(" / ")} column — nothing was changed.`);
+  }
+  if (!parsed.rows.length || !parsed.usable) {
+    return toast(`No usable rates in that file${parsed.skipped ? ` — ${parsed.skipped} row(s) had a blank or out-of-range rate` : ""}. Nothing was changed.`);
+  }
+  const current = await loadProcRates(true);
+  if (!confirm(`Replace the ${current.length} stored rate${current.length === 1 ? "" : "s"} with ${parsed.rows.length} from this file?`
+    + (parsed.skipped ? `\n\n${parsed.skipped} row${parsed.skipped === 1 ? "" : "s"} had a blank or non-numeric rate and will be skipped.` : "")
+    + `\n\nThe stored card is replaced wholesale — anything not in this file stops being used for expected-fee checks.`)) return;
+  if (status) status.textContent = "Replacing the rate card…";
+  const { error: delErr } = await db.from("proc_rates").delete().gt("id", 0);
+  if (delErr) { procRatesCache = null; await renderProcRatesPanel(); return toast("Could not clear the old rates: " + delErr.message); }
+  const label = String(file.name || "").slice(0, 200);
+  const stamp = new Date().toISOString();
+  let written = 0;
+  for (let i = 0; i < parsed.rows.length; i += R44_CHUNK) {
+    const chunk = parsed.rows.slice(i, i + R44_CHUNK).map((r) => Object.assign({}, r, { effective_label: label, uploaded_at: stamp }));
+    const { error } = await db.from("proc_rates").insert(chunk);
+    if (error) { procRatesCache = null; await renderProcRatesPanel(); return toast(`Rate upload failed after ${written} row(s): ${error.message}`); }
+    written += chunk.length;
+  }
+  procRatesCache = null;
+  await renderProcRatesPanel();
+  toast(`${written} proc rate${written === 1 ? "" : "s"} stored${parsed.skipped ? ` · ${parsed.skipped} skipped` : ""}`);
+}
+
+/* ---------- T2 · statements list ---------- */
+
+async function renderReconPanel() {
+  const panel = $("#money-recon-panel"), list = $("#recon-statements"), review = $("#recon-review");
+  if (!panel || !list) return;
+  if (!showMoney()) {
+    panel.classList.add("hidden");
+    list.innerHTML = "";
+    if (review) { review.innerHTML = ""; review.classList.add("hidden"); }
+    reconState = null;
+    return;
+  }
+  panel.classList.remove("hidden");
+  const { data: stmts, error } = await db.from("commission_statements")
+    .select("id,ref,statement_label,statement_date,filename,gross_total,net_total,line_count,created_at")
+    .order("id", { ascending: false }).limit(R44_STMT_LIST);
+  if (error) {
+    list.innerHTML = `<div class="empty">The statements table could not be read — ${esc(error.message)}</div>`;
+    return;
+  }
+  const rows = stmts || [];
+  if (!rows.length) {
+    list.innerHTML = MONEY_EMPTY("No commission statement imported yet. Choose the weekly workbook above — nothing is written to a case until you review and confirm it.");
+    return;
+  }
+  /* The per-statement counters come from the lines themselves rather than being
+     denormalised onto the statement row: a confirm changes them, and a count
+     that only refreshes on import would be wrong the moment anybody worked. */
+  const ids = rows.map((s) => s.id);
+  const { data: lineRows } = await db.from("commission_lines")
+    .select("id,statement_id,tran_type,policy_group,addressee,reason,match_status,banked_gross")
+    .in("statement_id", ids).limit(OWNER_ROW_CAP);
+  const byStmt = {};
+  (lineRows || []).forEach((l) => { (byStmt[l.statement_id] = byStmt[l.statement_id] || []).push(l); });
+  list.innerHTML = rows.map((s) => {
+    const ls = byStmt[s.id] || [];
+    const mort = ls.filter((l) => r44LineKind(l) === "mortgage").length;
+    const conf = ls.filter((l) => l.match_status === "confirmed").length;
+    const tb = ls.filter((l) => r44LineKind(l) === "takeback").length;
+    return `<div class="recon-stmt row-item" data-stmt="${esc(s.id)}">
+      <div class="row-main">
+        <div class="t">${esc(s.ref) || '<span class="cs-muted">(no ref)</span>'} <span class="cs-muted">· ${s.statement_date ? fmtD(s.statement_date) : "no date"}</span></div>
+        <div class="s">${fmtM2(s.gross_total)} gross / ${fmtM2(s.net_total)} net · ${mort} mortgage receipt${mort === 1 ? "" : "s"} · ${conf} confirmed${tb ? ` · <span class="badge red">${tb} takeback${tb === 1 ? "" : "s"}</span>` : ""} · <span class="cs-muted">${esc(s.filename || s.statement_label || "")}</span></div>
+      </div>
+      <button type="button" class="btn btn-sm recon-review-btn" id="recon-review-btn-${esc(s.id)}" data-stmt="${esc(s.id)}">Review</button>
+    </div>`;
+  }).join("");
+}
+
+/* ---------- T2 · import ---------- */
+
+const R44_LINE_DB_COLS = ["line_date", "tran_type", "addressee", "provider", "account_number", "opp_id",
+  "reason", "policy_type", "policy_group", "adviser_name", "premium", "banked_gross", "banked_net"];
+function r44LineDbRow(l) {
+  const o = {};
+  R44_LINE_DB_COLS.forEach((k) => { o[k] = l[k] == null ? (k === "premium" || k === "banked_gross" || k === "banked_net" || k === "line_date" ? null : "") : l[k]; });
+  return o;
+}
+async function r44ImportStatement(file) {
+  if (!showMoney()) return toast("Statement import is Owner-only.");
+  if (typeof XLSX === "undefined") return toast("The spreadsheet reader did not load — reload the page and try again.");
+  const status = $("#recon-status");
+  if (status) status.textContent = `Reading ${file.name}…`;
+  let parsed;
+  try {
+    const wb = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true });
+    parsed = parseStatementWorkbook(wb);
+  } catch (e) { if (status) status.textContent = ""; return toast("Could not read the statement: " + e.message); }
+  if (status) status.textContent = "";
+  if (parsed.missing && parsed.missing.length) {
+    return toast("That workbook has no commission-statement header row (no “Date” column) — nothing was imported.");
+  }
+  if (!parsed.lines.length) return toast("No commission lines found in that workbook — nothing was imported.");
+
+  const { data: st, error: sErr } = await db.from("commission_statements").insert({
+    ref: parsed.ref || "",
+    statement_label: parsed.label || "",
+    statement_date: parsed.statementDate || null,
+    filename: String(file.name || "").slice(0, 300),
+    gross_total: parsed.gross,
+    net_total: parsed.net,
+    line_count: parsed.lines.length,
+  }).select("id,ref,statement_label,statement_date,filename,gross_total,net_total,line_count").single();
+  if (sErr) {
+    /* The unique index on ref is the double-upload guard, and it is the reason
+       the statement row goes in FIRST: nothing else is written until it lands. */
+    if (String(sErr.code) === "23505") return toast(`Statement ${parsed.ref || "(no ref)"} is already imported`);
+    return toast("Could not save the statement: " + sErr.message);
+  }
+  const [cases, priors, rates] = await Promise.all([r44LoadCandidateCases(), r44LoadPriorLines(), loadProcRates()]);
+  const sugg = suggestStatementMatches(parsed.lines, cases, priors, rates);
+  const payload = parsed.lines.map((l, i) => {
+    const s = sugg[i];
+    const row = r44LineDbRow(l);
+    row.statement_id = st.id;
+    row.matched_case_id = R44_MATCHABLE[s.kind] ? (s.suggested || null) : null;
+    row.match_status = !R44_MATCHABLE[s.kind] ? "na" : (s.suggested ? "suggested" : "unmatched");
+    row.match_note = s.suggested ? `${s.confidence === "high" ? "high" : "low"} · ${s.note}`.slice(0, 200) : "";
+    return row;
+  });
+  let ok = true, msg = "";
+  for (let i = 0; i < payload.length; i += R44_CHUNK) {
+    const { error } = await db.from("commission_lines").insert(payload.slice(i, i + R44_CHUNK));
+    if (error) { ok = false; msg = error.message; break; }
+  }
+  if (!ok) {
+    /* No half-import. The statement row goes, and the FK cascade takes whatever
+       lines did land with it. */
+    await db.from("commission_statements").delete().eq("id", st.id);
+    return toast("The statement lines could not be saved, so nothing was imported: " + msg);
+  }
+  await renderReconPanel();
+  await openReconReview(st.id);
+  const high = sugg.filter((s) => s.confidence === "high").length;
+  toast(`Imported ${payload.length} line${payload.length === 1 ? "" : "s"} · ${high} confident match${high === 1 ? "" : "es"} — nothing is written to a case until you confirm.`);
+}
+
+/* ---------- T2 · the review screen ---------- */
+
+const R44_GROUPS = [
+  { key: "mortgage", title: "Mortgage receipts", sub: "Confirming one stamps the proc fee paid on the case, dated the day the money arrived." },
+  { key: "takeback", title: "Takebacks", sub: "Money the network has taken back. A real clawback raises a task for you; one reversed inside this same statement does not." },
+  { key: "protection", title: "Protection receipts", sub: "Confirming one writes a case note only — there is no protection fee column to date, and we do not invent schema." },
+  { key: "renewal", title: "Renewal commissions", sub: "The “VARIOUS” trailer: no addressee, nothing to match. Imported as not-applicable and shown as one total." },
+  { key: "other", title: "Other lines", sub: "Imported, counted, and not matchable — shown so nothing on the statement is silently invisible." },
+];
+async function openReconReview(stmtId) {
+  const review = $("#recon-review");
+  if (!review) return;
+  if (!showMoney()) return;
+  review.classList.remove("hidden");
+  review.innerHTML = `<div class="empty">Loading the statement…</div>`;
+  const [{ data: st, error: sErr }, { data: lines, error: lErr }] = await Promise.all([
+    db.from("commission_statements").select("id,ref,statement_label,statement_date,filename,gross_total,net_total,line_count").eq("id", stmtId).maybeSingle(),
+    db.from("commission_lines").select("*").eq("statement_id", stmtId).order("id").limit(OWNER_ROW_CAP),
+  ]);
+  if (sErr || lErr || !st) {
+    review.innerHTML = `<div class="empty">That statement could not be read${sErr || lErr ? " — " + esc((sErr || lErr).message) : ""}.</div>`;
+    return;
+  }
+  const [cases, priors, rates] = await Promise.all([r44LoadCandidateCases(), r44LoadPriorLines(), loadProcRates()]);
+  const ls = lines || [];
+  /* The suggestions are recomputed from the stored lines on every open rather
+     than being read back off the row: the review has to survive a reload, and
+     the board moves between one import and the next. What IS read back off the
+     row is the human's decision — matched_case_id, match_status — which is the
+     only part a recompute must never overwrite. */
+  const sugg = suggestStatementMatches(ls, cases, priors, rates);
+  reconState = {
+    statement: st, lines: ls, cases, rates,
+    sugg, byIndex: {}, byLine: {},
+    picks: {}, ticks: {}, feeFix: {},
+  };
+  ls.forEach((l, i) => {
+    reconState.byIndex[l.id] = i;
+    reconState.byLine[l.id] = l;
+    const s = sugg[i];
+    reconState.picks[l.id] = l.matched_case_id || (l.match_status === "dismissed" ? "" : (s.suggested || ""));
+    reconState.ticks[l.id] = l.match_status !== "confirmed" && l.match_status !== "dismissed" && s.confidence === "high" && !!reconState.picks[l.id];
+    reconState.feeFix[l.id] = false;
+  });
+  renderReconReview();
+}
+function r44Chip(text, cls) { return `<span class="badge ${cls || "grey"}">${esc(text)}</span>`; }
+/* Only on a mortgage RECEIPT. A takeback measured against an expected proc fee
+   would read "£375 over" on money that has gone the other way, which is a
+   sentence nobody should have to decode at speed. */
+function r44ExpectedBadge(line, caseRow, rates) {
+  if (!caseRow || r44LineKind(line) !== "mortgage") return "";
+  const v = r44FeeVerdict(line.banked_gross, r44ExpectedFee(line.provider, caseRow.loan_amount, rates));
+  if (!v) return "";
+  if (v.verdict === "within") return r44Chip("≈ expected", "green");
+  return r44Chip(`${fmtM2(v.delta)} ${v.verdict}`, "amber");
+}
+function r44MatchCell(l) {
+  const st = reconState;
+  const i = st.byIndex[l.id];
+  const s = st.sugg[i] || { candidates: [], confidence: null };
+  const locked = l.match_status === "confirmed";
+  const picked = st.picks[l.id] || "";
+  const caseById = {};
+  st.cases.forEach((c) => { caseById[c.id] = c; });
+  /* The short-list is the scored candidates. When scoring found nobody the
+     select still has to be usable, so it falls back to the nearest cases by
+     unpaid proc fee — the operator can always pick, and "— none —" stays the
+     honest default. */
+  let opts = s.candidates.map((c) => c.case);
+  if (!opts.length) {
+    opts = st.cases.filter((c) => !c.proc_fee_paid_at)
+      .map((c) => ({ c, d: Math.abs(Math.abs(Number(l.banked_gross || 0)) - Number(c.proc_fee || 0)) }))
+      .sort((a, b) => a.d - b.d).slice(0, 10).map((x) => x.c);
+  }
+  if (picked && !opts.some((c) => c.id === picked) && caseById[picked]) opts.unshift(caseById[picked]);
+  const sel = caseById[picked] || null;
+  const conf = s.confidence === "high" ? r44Chip("confident", "green") : (s.suggested ? r44Chip("check this", "amber") : "");
+  const head = sel
+    ? `<div class="recon-suggest">→ <strong>${esc(r44CaseLabel(sel))}</strong> · ${esc(sel.lender || "no lender")} · ${esc(STAGE_LABEL[sel.stage] || sel.stage || "")} ${conf} ${r44ExpectedBadge(l, sel, st.rates)}</div>`
+    : `<div class="recon-suggest cs-muted">no case suggested — pick one, or leave it</div>`;
+  if (locked) {
+    return `${head}<div class="s cs-muted">Confirmed ${l.confirmed_at ? fmtD(l.confirmed_at) : ""}${l.match_note ? ` · ${esc(l.match_note)}` : ""}</div>`;
+  }
+  return `${head}
+    <div class="recon-controls">
+      <label class="recon-tick-wrap"><input type="checkbox" class="recon-tick" id="recon-tick-${esc(l.id)}" data-line="${esc(l.id)}" ${st.ticks[l.id] ? "checked" : ""} ${picked ? "" : "disabled"}> <span>tick</span></label>
+      <select class="recon-pick" id="recon-pick-${esc(l.id)}" data-line="${esc(l.id)}" aria-label="Case for this line">
+        <option value="">— none —</option>
+        ${opts.map((c) => `<option value="${esc(c.id)}"${c.id === picked ? " selected" : ""}>${esc(r44CaseLabel(c))} · ${esc(c.lender || "no lender")} · ${esc(fmtM(c.proc_fee))}${c.proc_fee_paid_at ? " · paid" : ""}</option>`).join("")}
+      </select>
+      <button type="button" class="btn btn-sm recon-confirm" id="recon-confirm-${esc(l.id)}" data-line="${esc(l.id)}">Confirm</button>
+      <button type="button" class="btn btn-sm recon-dismiss" id="recon-dismiss-${esc(l.id)}" data-line="${esc(l.id)}">${l.match_status === "dismissed" ? "Un-dismiss" : "Dismiss"}</button>
+    </div>
+    ${r44FeeDeltaHtml(l, sel)}
+    ${l.match_note ? `<div class="s cs-muted">${esc(l.match_note)}</div>` : ""}`;
+}
+/* The proc fee on the case and the gross actually banked disagreeing by more
+   than a pound is not a thing to fix silently — it is a thing to show. The
+   checkbox is OFF by default: the number on the case may well be the right one
+   and the network's the mistake. */
+const R44_FEE_DELTA_MIN = 1;
+function r44FeeDeltaHtml(l, sel) {
+  if (!sel || r44LineKind(l) !== "mortgage") return "";
+  const gross = Math.abs(Number(l.banked_gross || 0));
+  const have = Number(sel.proc_fee || 0);
+  if (!have) return `<div class="s recon-note">The case has no proc fee recorded — confirming sets it to ${fmtM2(gross)}.</div>`;
+  if (Math.abs(have - gross) <= R44_FEE_DELTA_MIN) return "";
+  return `<label class="recon-feefix"><input type="checkbox" class="recon-feefix-chk" id="recon-feefix-${esc(l.id)}" data-line="${esc(l.id)}" ${reconState.feeFix[l.id] ? "checked" : ""}>
+    <span>Case says ${fmtM2(have)}, statement banked ${fmtM2(gross)} — update case proc fee to ${fmtM2(gross)}</span></label>`;
+}
+function r44LineRow(l, kind) {
+  const paired = (() => { const s = reconState.sugg[reconState.byIndex[l.id]]; return s && s.pairedWith != null; })();
+  const cls = ["recon-line"];
+  if (kind === "takeback") cls.push("recon-takeback");
+  if (l.match_status === "confirmed") cls.push("is-confirmed");
+  if (l.match_status === "dismissed") cls.push("is-dismissed");
+  return `<div class="${cls.join(" ")}" data-line="${esc(l.id)}" data-kind="${esc(kind)}" data-status="${esc(l.match_status || "")}">
+    <div class="recon-facts">
+      <div class="t">${l.line_date ? fmtD(l.line_date) : "—"} · <strong>${esc(l.addressee) || '<span class="cs-muted">(no addressee)</span>'}</strong></div>
+      <div class="s">${esc(l.provider || "no provider")} · ${esc(l.account_number || "no account")} · ${fmtM2(l.banked_gross)} gross / ${fmtM2(l.banked_net)} net${l.adviser_name ? ` · ${esc(l.adviser_name)}` : ""}</div>
+      ${paired ? `<div class="s">${r44Chip("reversed in-statement · net £0", "grey")}</div>` : ""}
+    </div>
+    <div class="recon-match">${r44MatchCell(l)}</div>
+  </div>`;
+}
+function renderReconReview() {
+  const review = $("#recon-review");
+  const st = reconState;
+  if (!review || !st) return;
+  const s = st.statement;
+  const advisers = [];
+  st.lines.forEach((l) => { const a = String(l.adviser_name || "").trim(); if (a && advisers.indexOf(a) < 0) advisers.push(a); });
+  const byKind = {};
+  st.lines.forEach((l) => { const k = r44LineKind(l); (byKind[k] = byKind[k] || []).push(l); });
+  const pending = st.lines.filter((l) => R44_MATCHABLE[r44LineKind(l)] && l.match_status !== "confirmed").length;
+  let html = `<div class="recon-review-head" id="recon-review-head">
+    <div>
+      <h4>Statement ${esc(s.ref) || "(no ref)"} · ${s.statement_date ? fmtD(s.statement_date) : "no date"}</h4>
+      <p class="panel-sub">${st.lines.length} line${st.lines.length === 1 ? "" : "s"} · ${advisers.length} adviser${advisers.length === 1 ? "" : "s"} · ${fmtM2(s.gross_total)} gross / ${fmtM2(s.net_total)} net · <span class="cs-muted">${esc(s.filename || s.statement_label || "")}</span></p>
+    </div>
+    <div class="recon-review-tools">
+      <button type="button" class="btn btn-sm btn-primary" id="recon-confirm-ticked"${pending ? "" : " disabled"}>Confirm ticked</button>
+      <button type="button" class="btn btn-sm" id="recon-close">Close review</button>
+    </div>
+  </div>`;
+  R44_GROUPS.forEach((g) => {
+    const ls = byKind[g.key] || [];
+    if (!ls.length) return;
+    html += `<div class="recon-group" id="recon-group-${g.key}" data-count="${ls.length}">
+      <h5>${esc(g.title)} <span class="cs-muted">(${ls.length})</span></h5>
+      <p class="panel-sub">${g.sub}</p>`;
+    if (g.key === "renewal") {
+      /* One aggregate line per group, not 12 rows of nothing to decide. */
+      const groups = {};
+      ls.forEach((l) => { const k = String(l.adviser_name || "").trim() || "(no adviser)"; (groups[k] = groups[k] || []).push(l); });
+      html += Object.keys(groups).map((k) => {
+        const rows = groups[k];
+        const gr = rows.reduce((a, x) => a + Number(x.banked_gross || 0), 0);
+        const nt = rows.reduce((a, x) => a + Number(x.banked_net || 0), 0);
+        return `<div class="recon-line recon-agg" data-adviser="${esc(k)}"><div class="recon-facts"><div class="t">${esc(k)}</div><div class="s">Renewals: ${rows.length} line${rows.length === 1 ? "" : "s"} · ${fmtM2(gr)} gross / ${fmtM2(nt)} net</div></div></div>`;
+      }).join("");
+    } else if (g.key === "other") {
+      html += ls.map((l) => `<div class="recon-line recon-agg" data-line="${esc(l.id)}"><div class="recon-facts"><div class="t">${l.line_date ? fmtD(l.line_date) : "—"} · ${esc(l.tran_type || "")}</div><div class="s">${esc(l.provider || "")} · ${esc(l.account_number || "")} · ${fmtM2(l.banked_gross)} gross</div></div></div>`).join("");
+    } else {
+      html += ls.map((l) => r44LineRow(l, g.key)).join("");
+    }
+    html += `</div>`;
+  });
+  review.innerHTML = html;
+}
+
+/* ---------- T2 · confirm / dismiss ---------- */
+
+function r44NoteDate(l) { return String(l.line_date || "").slice(0, 10); }
+/* One line's confirm. Returns a short outcome string for the bulk runner, or
+   throws nothing — every failure is reported and the line is left alone. */
+async function r44ConfirmLine(lineId, opts) {
+  const st = reconState;
+  if (!st) return "no statement open";
+  const l = st.byLine[lineId];
+  if (!l) return "line not found";
+  if (l.match_status === "confirmed") return "already confirmed";
+  const kind = r44LineKind(l);
+  if (!R44_MATCHABLE[kind]) return "nothing to confirm on this line";
+  const caseId = st.picks[lineId] || "";
+  if (!caseId) return "pick a case first";
+  const sug = st.sugg[st.byIndex[lineId]] || {};
+  const ref = st.statement.ref || "(no ref)";
+  const gross = Math.abs(Number(l.banked_gross || 0));
+  const where = `${l.provider || "no provider"} ${l.account_number || "no account"}`.trim();
+
+  /* Read the case FRESH — the review may have been open for a while, and the
+     legacy-column rule has to be computed against what is stored now. */
+  const { data: c, error: cErr } = await db.from("cases")
+    .select("id,proc_fee,proc_fee_paid_at,sols_fee,sols_fee_paid_at,broker_fee,broker_fee_paid_at,fee_status,fee_paid_at,lender,assigned_to,clients!client_id(first_name,last_name)")
+    .eq("id", caseId).maybeSingle();
+  if (cErr || !c) return "the case could not be read" + (cErr ? ": " + cErr.message : "");
+  const who = r44CaseLabel(c);
+  const paired = sug.pairedWith != null;
+  const linePatch = { match_status: "confirmed", matched_case_id: caseId, confirmed_at: new Date().toISOString() };
+
+  if (kind === "takeback" && !paired) {
+    /* A REAL clawback. The paid date stays exactly where it is — what was
+       banked was banked, and rewriting that history would take the case off
+       the cash figures for a month it really did earn. The action is a task. */
+    const body = `CLAWBACK ${fmtM2(gross)} — ${where}, statement ${ref}`;
+    const { error: nErr } = await db.from("case_notes").insert({ case_id: caseId, body, created_by: (ME && ME.id) || null });
+    if (nErr) return "the clawback note could not be written: " + nErr.message;
+    const { error: tErr } = await db.from("case_tasks").insert({
+      case_id: caseId,
+      title: `Clawback: ${fmtM2(gross)} — ${who} (${l.provider || "no provider"})`,
+      due_date: localDateStr(),
+      created_by: (ME && ME.id) || null,
+      assigned_to: (ME && ME.id) || null,
+    });
+    linePatch.match_note = tErr ? `clawback flagged · task failed: ${tErr.message}`.slice(0, 200) : "clawback flagged · owner task raised";
+    const { error: lErr } = await db.from("commission_lines").update(linePatch).eq("id", lineId);
+    if (lErr) return "the line could not be marked confirmed: " + lErr.message;
+    Object.assign(l, linePatch);
+    return tErr ? `clawback noted, but the task failed: ${tErr.message}` : `clawback flagged on ${who} — task raised for today`;
+  }
+
+  if (kind === "takeback" && paired) {
+    /* Reversed inside this same statement: ONE note, no paid date, no task. */
+    const other = st.lines[sug.pairedWith];
+    const body = `Commission ${fmtM2(gross)} taken back and re-banked within the same statement ${ref} — net £0 (${where})`;
+    const { error: nErr } = await db.from("case_notes").insert({ case_id: caseId, body, created_by: (ME && ME.id) || null });
+    if (nErr) return "the reversal note could not be written: " + nErr.message;
+    linePatch.match_note = "reversed in-statement · net £0";
+    const { error: lErr } = await db.from("commission_lines").update(linePatch).eq("id", lineId);
+    if (lErr) return "the line could not be marked confirmed: " + lErr.message;
+    Object.assign(l, linePatch);
+    if (other && other.match_status !== "confirmed") {
+      const p2 = { match_status: "confirmed", matched_case_id: caseId, confirmed_at: linePatch.confirmed_at, match_note: "reversed in-statement · net £0" };
+      const { error: oErr } = await db.from("commission_lines").update(p2).eq("id", other.id);
+      if (!oErr) { Object.assign(other, p2); st.picks[other.id] = caseId; }
+    }
+    return `reversal pair confirmed on ${who} — one note, no paid date`;
+  }
+
+  if (kind === "protection") {
+    const body = `Protection commission ${fmtM2(gross)} banked ${fmtD(r44NoteDate(l))} — ${where}`;
+    const { error: nErr } = await db.from("case_notes").insert({ case_id: caseId, body, created_by: (ME && ME.id) || null });
+    if (nErr) return "the note could not be written: " + nErr.message;
+    linePatch.match_note = "protection commission — note only";
+    const { error: lErr } = await db.from("commission_lines").update(linePatch).eq("id", lineId);
+    if (lErr) return "the line could not be marked confirmed: " + lErr.message;
+    Object.assign(l, linePatch);
+    return `${who} — protection commission noted`;
+  }
+
+  /* MORTGAGE RECEIPT — the one path that writes money onto a case. */
+  const procType = FEE_TYPES.filter((t) => t.key === "proc")[0];
+  const wantFeeFix = !!(opts && opts.feeFix) || !!st.feeFix[lineId];
+  const have = Number(c.proc_fee || 0);
+  const setProcFee = !have || (wantFeeFix && Math.abs(have - gross) > R44_FEE_DELTA_MIN);
+  // The case AS IT WILL BE, so feePaidPatch judges "every fee that has an
+  // amount now has a date" against the amount this write is about to store.
+  const cAfter = Object.assign({}, c, setProcFee ? { proc_fee: gross } : {});
+  const { patch, complete } = feePaidPatch(cAfter, [{ t: procType, date: r44NoteDate(l) }]);
+  if (setProcFee) patch.proc_fee = gross;
+  let { error: uErr } = await db.from("cases").update(patch).eq("id", caseId);
+  let legacyOnly = false;
+  if (uErr && isMissingColumnError(uErr)) {
+    /* Pre-M2 database: no per-fee-type dates to write. Same fallback markFeePaid
+       takes, for the same reason — one date for the lot rather than nothing. */
+    const legacy = { fee_status: "paid", fee_paid_at: feeDateToTs(r44NoteDate(l)) };
+    if (setProcFee) legacy.proc_fee = gross;
+    ({ error: uErr } = await db.from("cases").update(legacy).eq("id", caseId));
+    legacyOnly = !uErr;
+  }
+  if (uErr) return "the case could not be updated: " + uErr.message;
+  const body = `Proc fee ${fmtM2(gross)} banked ${fmtD(r44NoteDate(l))} — Stonebridge statement ${ref} (${where})`;
+  const { error: nErr } = await db.from("case_notes").insert({ case_id: caseId, body, created_by: (ME && ME.id) || null });
+  linePatch.match_note = [
+    "proc fee dated " + r44NoteDate(l),
+    setProcFee ? (have ? "case proc fee updated" : "case proc fee set") : "",
+    complete ? "case now reads paid" : "",
+    legacyOnly ? "legacy fee columns only (pre-M2)" : "",
+    nErr ? "note failed" : "",
+  ].filter(Boolean).join(" · ").slice(0, 200);
+  const { error: lErr } = await db.from("commission_lines").update(linePatch).eq("id", lineId);
+  if (lErr) return "the case was updated but the line could not be marked confirmed: " + lErr.message;
+  Object.assign(l, linePatch);
+  Object.assign(c, patch);
+  const cached = st.cases.filter((x) => x.id === caseId)[0];
+  if (cached) { cached.proc_fee_paid_at = patch.proc_fee_paid_at || cached.proc_fee_paid_at; if (setProcFee) cached.proc_fee = gross; }
+  return `${who} — proc fee ${fmtM2(gross)} dated ${fmtD(r44NoteDate(l))}${complete ? ", case now reads paid" : ""}`;
+}
+async function r44DismissLine(lineId) {
+  const st = reconState;
+  if (!st) return;
+  const l = st.byLine[lineId];
+  if (!l) return;
+  if (l.match_status === "confirmed") return toast("That line is confirmed — it cannot be dismissed.");
+  const next = l.match_status === "dismissed"
+    ? { match_status: st.picks[lineId] ? "suggested" : "unmatched", match_note: "" }
+    : { match_status: "dismissed", match_note: "dismissed by hand" };
+  const { error } = await db.from("commission_lines").update(next).eq("id", lineId);
+  if (error) return toast("Error: " + error.message);
+  Object.assign(l, next);
+  if (next.match_status === "dismissed") st.ticks[lineId] = false;
+  renderReconReview();
+  toast(next.match_status === "dismissed" ? "Line dismissed" : "Line back in the queue");
+}
+async function r44ConfirmTicked() {
+  const st = reconState;
+  if (!st) return;
+  const ids = Object.keys(st.ticks).filter((k) => st.ticks[k] && st.byLine[k] && st.byLine[k].match_status !== "confirmed");
+  if (!ids.length) return toast("Nothing is ticked.");
+  if (!confirm(`Confirm ${ids.length} line${ids.length === 1 ? "" : "s"}?\n\nThis writes the payment onto each matched case — proc fees get a paid date, clawbacks raise a task for you, and every case gets a note. It cannot be undone from here.`)) return;
+  const results = [];
+  for (const id of ids) results.push(await r44ConfirmLine(id));
+  renderReconReview();
+  await renderReconPanel();
+  toast(`Confirmed ${ids.length} line${ids.length === 1 ? "" : "s"} — ${results[results.length - 1]}`);
+}
+
+/* ---------- wiring ----------
+   Bound ONCE, imperatively, on nodes that live in the shipped markup and are
+   never re-created by a render — the same rule the Monday-money controls above
+   follow. Everything inside #recon-review / #recon-statements is rewritten by
+   innerHTML on every render, so those two are delegated rather than bound. */
+(() => {
+  const pf = $("#procrates-file");
+  if (pf) pf.addEventListener("change", async () => {
+    const f = pf.files && pf.files[0];
+    pf.value = "";
+    if (f) await r44UploadProcRates(f);
+  });
+  const rf = $("#recon-file");
+  if (rf) rf.addEventListener("change", async () => {
+    const f = rf.files && rf.files[0];
+    rf.value = "";
+    if (f) await r44ImportStatement(f);
+  });
+  const list = $("#recon-statements");
+  if (list) list.addEventListener("click", (e) => {
+    const btn = e.target.closest(".recon-review-btn");
+    if (btn) openReconReview(btn.dataset.stmt);
+  });
+  const review = $("#recon-review");
+  if (review) {
+    review.addEventListener("click", async (e) => {
+      if (e.target.closest("#recon-close")) {
+        review.classList.add("hidden"); review.innerHTML = ""; reconState = null; return;
+      }
+      if (e.target.closest("#recon-confirm-ticked")) return r44ConfirmTicked();
+      const conf = e.target.closest(".recon-confirm");
+      if (conf) {
+        const id = conf.dataset.line;
+        conf.disabled = true;
+        const msg = await r44ConfirmLine(id);
+        renderReconReview();
+        await renderReconPanel();
+        return toast(msg);
+      }
+      const dis = e.target.closest(".recon-dismiss");
+      if (dis) return r44DismissLine(dis.dataset.line);
+    });
+    review.addEventListener("change", (e) => {
+      const st = reconState;
+      if (!st) return;
+      const sel = e.target.closest(".recon-pick");
+      if (sel) {
+        st.picks[sel.dataset.line] = sel.value || "";
+        if (!sel.value) st.ticks[sel.dataset.line] = false;
+        renderReconReview();
+        return;
+      }
+      const tick = e.target.closest(".recon-tick");
+      if (tick) { st.ticks[tick.dataset.line] = tick.checked; return; }
+      const fix = e.target.closest(".recon-feefix-chk");
+      if (fix) { st.feeFix[fix.dataset.line] = fix.checked; return; }
+    });
+  }
 })();
 
 /* ---------- Data health ---------- */
