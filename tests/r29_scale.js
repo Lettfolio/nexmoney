@@ -41,6 +41,16 @@
    with #dh-deadbook-panel pinned to exactly 200 rows + its note as the
    direct regression test.
 
+   R45 · non-masking repair — R45 (admin/app.js ~24173) added a 180-day
+   freshness guard to noMilestoneDate: a COMPLETED case whose completed_at
+   is more than 180 days old is now excluded outright. §G's `gt.noMilestone`
+   recompute reimplemented the pre-R45 predicate and, at this suite's ~2,500-
+   case scale seed, genuinely disagreed with the app's honest post-R45 count
+   (expected 207, got 195 — the fixture carries old completions this round
+   correctly stopped flagging). The recompute now carries the identical
+   guard (proven correct against app.js's own change in tests/r45.js §A7,
+   independently) — nothing else in §G moved.
+
    Run:  PLAYWRIGHT_BROWSERS_PATH=/root/pwb node /root/nx/tests/r29_scale.js
          (expects a static server on 8099; starts one itself if absent)
    ========================================================================== */
@@ -562,9 +572,16 @@ async function seedScale(page, n) {
         const unassigned = cases.filter((c) => isLive(c.stage) && !c.assigned_to).length;
         const noFee = cases.filter((c) => c.stage === "completed" && !(Number(c.broker_fee) > 0) && !(Number(c.proc_fee) > 0)).length;
         const noCompletedAt = cases.filter((c) => c.stage === "completed" && !c.completed_at).length;
+        // R45 · non-masking repair — noMilestoneDate (admin/app.js ~24173) gained a 180-day
+        // freshness guard: a COMPLETED case whose completed_at is more than 180 days old is now
+        // excluded outright (blank milestone dates on the back book are read as history, not a
+        // fault still worth chasing). At this suite's scale seed the fixture genuinely carries
+        // completed cases past that window, so this ground truth now applies the identical guard —
+        // proven correct against admin/app.js's own change in tests/r45.js §A7, independently.
         let noMilestone = 0;
         cases.forEach((c) => {
           if (c.stage === "not_proceeding") return;
+          if (c.stage === "completed" && c.completed_at && daysSince(c.completed_at) > 180) return;
           const rank = stageRank[c.stage];
           if (rank == null) return;
           if (rank >= appRank && !c.submitted_at) noMilestone++;

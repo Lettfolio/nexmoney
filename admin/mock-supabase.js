@@ -4667,7 +4667,28 @@
       missing_phone_count: DB.clients.filter(function (c) { return !c.phone; }).length,
       live_unassigned: liveUnassigned,
       completed_missing_fee: noFee,
-      completed_missing_rate_end: DB.cases.filter(function (c) { return c.stage === "completed" && !c.rate_end_date; }).length,
+      /* R45 — full parity with prod get_data_quality: tracker/variable deals have no fixed end;
+         a retention successor inherits its source's date question; a record with no loan and no
+         mortgage account number is not a mortgage; and a completed deal SUPERSEDED by a newer
+         completed deal on the same property (same client) has had its rate-end cleared on
+         purpose — the back-book import writes exactly that shape. */
+      completed_missing_rate_end: DB.cases.filter(function (c) {
+        if (c.stage !== "completed" || c.rate_end_date) return false;
+        var rt = String(c.rate_type || "");
+        if (rt === "tracker" || rt === "variable") return false;
+        if (c.retention_source_case_id) return false;
+        if (c.loan_amount == null && !c.mortgage_account_number) return false;
+        var key = String(c.property_address || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+        /* Prod's `n.completed_at > c.completed_at` is NULL (not true) when c has no date — an
+           undated completion is never treated as superseded. Guard it, or "" string-compares as
+           older than everything. */
+        if (key && c.completed_at && DB.cases.some(function (n) {
+          return n.id !== c.id && n.client_id === c.client_id && n.stage === "completed" &&
+            String(n.property_address || "").toLowerCase().replace(/[^a-z0-9]/g, "") === key &&
+            String(n.completed_at || "") > String(c.completed_at || "");
+        })) return false;
+        return true;
+      }).length,
       emails_failed: DB.email_queue.filter(function (e) { return e.status === "failed"; }).length,
       emails_stuck: stuck,
       emails_sending_live: sendingLive

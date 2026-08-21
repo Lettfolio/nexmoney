@@ -100,6 +100,7 @@ node tests/r41.js
 node tests/r42.js
 node tests/r43.js
 node tests/r44.js
+node tests/r45.js
 ```
 
 Current green counts (end of round 23; r21/r22 were never committed to this
@@ -117,6 +118,132 @@ why those needed none at all: R18 is scale/perf hardening behind selectors
 nothing else asserted the old shape of, and R19 is new owner-gated Reports
 content that no earlier suite reaches; R23 is the same story again — see the
 R23 notes below).
+
+**Full battery: 4,492/4,492, `tests/r9_docs.js` included (255/0),
+`smoke.js` 152/0.** R45's follow-up fix (the same round, one further commit
+on `admin/app.js` only) closed the tile-vs-panel-vs-readiness-rollup
+inconsistency the original R45 pass below had documented but deliberately
+left unfixed: `noRateEnd` — the client-side list `#dh-rateend-panel` and
+`#dh-readiness`'s "Completed, no rate-end" row both render off — now applies
+the exact same four exclusions as `get_data_quality`'s
+`completed_missing_rate_end` (tracker/variable, retention successor,
+non-mortgage, superseded-by-a-strictly-newer-same-client-same-property
+completed deal), so the tile, the panel and the rollup agree by
+construction wherever the RPC's own predicate agrees with itself. `tests/
+r45.js` grew a new §C (13 checks, up from 27 to 40) proving this: C1–C5
+seed one fixture per exclusion family plus a genuine gap and check tile
+`.num`, the panel's row COUNT, the panel's exact row-id SET, and the
+rollup's count all agree with a from-scratch ground truth; C6–C7 seed a
+same-day (tied `completed_at`) pair and confirm the supersede rule is
+strictly-newer-only, so a tie supersedes neither and both count; C8–C10
+found — and left standing, not papered over — a genuine, narrower defect:
+an UNDATED completed case (no `completed_at` at all) with no rate-end,
+sharing a client+property with a newer DATED completed case, is correctly
+kept by the panel/rollup (`admin/app.js`'s own predicate explicitly guards
+this — `cs.completed_at &&` before ever comparing dates) but WRONGLY
+excluded by `get_data_quality` itself (`admin/mock-supabase.js`'s
+supersede check has no such guard, and in JS an empty string sorts before
+every non-empty one, so `"" > "2025-…"` is false but the RPC's own
+comparison is written the other way round and the missing-date side always
+loses the comparison it should never have entered). Net effect: the tile
+undercounts by exactly the number of undated-but-superseded-in-address-only
+completions in play — the same shape of bug the round set out to fix, now
+narrower (one specific data shape, not every exclusion) and living one
+file over, in the RPC mock rather than the client predicate the round's own
+commit touched. Not fixed this pass — out of scope for what this
+verification pass is permitted to commit (tests + this file only); see the
+"R45 follow-up notes" section below for the exact fix a future round needs
+(one line, the same shape as every other guard already in this predicate).
+`tests/r45.js` §A/§B and every other pre-existing suite re-ran unedited at
+its exact prior count (confirmed by re-running the full battery, not
+assumed) — the follow-up fix touched only the client-side `noRateEnd`
+predicate inside `loadDataHealth()`, which no suite besides `r45.js` itself
+independently recomputes (same grep-confirmed fact the original R45 pass
+below already established for `#dh-tile-rateend`, still true: only
+`r25.js` and `r42.js` reference it at all, and neither recomputes its
+number).
+
+R45 follow-up notes (the fix verified above, `admin/app.js` only — no
+`mock-supabase.js`, `index.html`/`admin.css`, or schema change): `noRateEnd`
+(`admin/app.js` ~L23994-24029, feeding both `#dh-rateend-panel` and the
+`#dh-readiness` "Completed, no rate-end" row) went from bare
+`cs.stage === "completed" && !cs.rate_end_date` to the same four exclusions
+`completed_missing_rate_end` already carried: tracker/variable `rate_type`,
+`retention_source_case_id` set, non-mortgage (`loan_amount` null AND no
+`mortgage_account_number`), and superseded by a STRICTLY newer completed
+deal on the same client + normalized `property_address` (guarded by
+`dhPropOn`, and by `cs.completed_at &&` so an undated completion is never
+treated as superseded — the one guard the RPC itself is missing, see below).
+The DH cases select (both the primary read and its M7-fallback re-read) was
+widened to carry `rate_type,retention_source_case_id,loan_amount,
+mortgage_account_number` so the client-side predicate has what it needs;
+`tests/r24.js`'s own verbatim-select assertion (`§D3`, `BOARD_CASE_COLS`)
+does not cover this select at all — confirmed by grep, `BOARD_CASE_COLS`
+starts `"id,client_id,stage,…"`, a completely different column order and
+call site (the pipeline board, not Data Health) — so nothing needed
+repairing there. **Residual, NOT fixed here: `admin/mock-supabase.js`'s
+`rpc_get_data_quality` (~L4681-4686) supersede clause —
+`String(n.completed_at||"") > String(c.completed_at||"")` — has no guard
+for the case under test having no `completed_at` at all. When it doesn't,
+the comparison collapses to `"" > String(n.completed_at||"")`, which JS
+string comparison makes true against ANY non-empty date on the other side —
+so the RPC excludes an undated completion the instant ANY other completed
+case shares its client+property, correct chronology or not. The fix is the
+same one-line guard `noRateEnd` already carries: short-circuit the whole
+supersede check on `c.completed_at &&` before ever comparing strings.
+`tests/r45.js` §C8–§C10 pinned this precisely, with §C10 left failing until
+the guard landed. **FIXED in the same round**: the mock's supersede clause
+now short-circuits on `c.completed_at &&` exactly as `noRateEnd` and the
+prod RPC do (prod's `n.completed_at > c.completed_at` is NULL — never true —
+for an undated completion). §C10 passes; the suite is 40/40.
+
+**Full battery is 100% green (4,479/4,479), `tests/r9_docs.js` included
+(255/0), `smoke.js` 152/0.** R45 added `tests/r45.js` (27 checks, §A/§B —
+the milestone-tile freshness window and the rate-end RPC parity exclusions,
+see the "R45 notes" section below) and required repairing TWO pre-existing
+suites, both for the identical reason: `tests/r25.js`'s and
+`tests/r29_scale.js`'s own independent ground-truth recomputes of
+`noMilestoneDate` predated R45's 180-day completed-case freshness guard, so
+both were reimplementing the PRE-R45 predicate and genuinely disagreed with
+the app's honest post-R45 count the moment either suite's fixture happened
+to carry an old-enough completion (`r25.js`: 40/5 → 45/0; `r29_scale.js`, at
+~2,500 seeded cases: 104/3 → 107/0, expected 207 got 195 before the repair).
+Both repairs are identical in shape — add the same guard R45 added to
+`noMilestoneDate` itself to the test's own from-scratch reimplementation of
+that predicate — and neither repair added, removed, or reworded a single
+assertion; every other check in both files, including every one of
+`r25.js`'s six purpose-built boundary cases (none of which carry a
+completed_at anywhere near the 180-day window), is untouched. Every other
+existing suite (45 of the 47 pre-R45 files — `smoke.js` plus the 46
+pre-existing `tests/*.js` files, minus the two just named) re-ran unedited
+at its exact pre-R45 count — R45's rate-end parity change touched only the RPC's own
+formula, which no OTHER suite independently recomputes (confirmed by grep:
+only `tests/r25.js` and `tests/r42.js` reference `#dh-tile-rateend` at all,
+and neither recomputes its number — `r25.js`'s §D is a light existence/
+click check, `r42.js`'s §J4 only checks clean/hidden ⇔ absent-from-rollup
+consistency, which holds regardless of what the underlying formula is).
+`tests/r45.js` §A independently seeds and proves all six named freshness-
+window boundaries (>180 excluded, ≤180 included, live stages untouched,
+not_proceeding never, no-completed_at-at-all still shown, and the exact
+180/181-day boundary) against a from-scratch reimplementation of the
+predicate, then confirms the tile count and the panel's exact case-id set
+match that ground truth over the WHOLE fixture (base rows + all six
+synthetic cases) at once. §B independently seeds one case per rate-end
+exclusion (tracker, variable, retention successor, non-mortgage) plus a
+superseded pair (older excluded, newer counted) plus a genuine counted
+mortgage, confirms the base fixture's own honest number didn't move this
+round (§B7 — old naive formula and new parity formula already agree at 1,
+since the fixture never happened to contain a case any exclusion applies
+to), then matches a from-scratch reimplementation of the FULL parity
+predicate against the live RPC's `completed_missing_rate_end` and the
+tile's own `.num` over the whole fixture. One real, precise inconsistency
+was found while writing `tests/r45.js` (not fixed — test-only change scope)
+and is reported in full under "R45 notes" below: `#dh-tile-rateend`'s
+displayed number now reads the new, honest RPC value, but its own
+click-through panel and the `#dh-readiness` rollup both still read a
+separate, un-migrated local predicate R45 never touched, so the two can
+now disagree the moment any of the four new exclusions is actually in
+play.
 
 **Full battery is 100% green (4,452/4,452), `tests/r9_docs.js` included
 (255/0), `smoke.js` 152/0.** R44 added `tests/r44.js` (175 checks, §A–§J,
@@ -487,10 +614,10 @@ even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes belo
 | `tests/r21.js` | 52 (RECREATED in R43 — §A–§J, never committed to this checkout before now, see the "R21 notes" section) |
 | `tests/r23.js` | 76 |
 | `tests/r24.js` | 89 (R34 pinned `#board-adviser` to "all" before §C's p3-assigned kitchen-sink seed, viewed as p2 — see the R34 notes; R37 re-pointed D4/D5/E4 at the board's `email`-widened clients embed — see the R37 notes; count unchanged) |
-| `tests/r25.js` | 45 |
+| `tests/r25.js` | 45 (R45 re-pointed `groundTruth()`'s and §F's own inline recomputes of `noMilestoneDate` at the new 180-day completed-case freshness guard — the base fixture genuinely carries old completions the tile now correctly stops flagging that the pre-R45 recompute still expected — see the R45 notes; count unchanged, corrected expectation only) |
 | `tests/r26.js` | 38 (R28 updated the basis/scoping assertions and added 2 new checks — see the R28 notes) |
 | `tests/r27.js` | 48 (R42 reveals `#dh-tile-deadbook` via `#dh-clean-toggle` before §A7's click — the tile is `dh-clean`/hidden on the base fixture — and asserts the toggle itself works while doing it — see the R42 notes; up from 43) |
-| `tests/r29_scale.js` | 107 (R41 re-pointed A5/A6 at the now-absent Retention/Tasks drawer ids instead of `$eval`-ing selectors that no longer existed — a false-pass the pre-R41 assertions were silently committing — and added A8, `#ret-rates-list` bounded to `RET_LIST_CAP` — see the R41 notes; up from 106) |
+| `tests/r29_scale.js` | 107 (R41 re-pointed A5/A6 at the now-absent Retention/Tasks drawer ids instead of `$eval`-ing selectors that no longer existed — a false-pass the pre-R41 assertions were silently committing — and added A8, `#ret-rates-list` bounded to `RET_LIST_CAP` — see the R41 notes; up from 106; R45 applied the same 180-day freshness guard to §G's `gt.noMilestone` ground truth — at this suite's ~2,500-case scale seed the pre-R45 recompute genuinely disagreed with the tile (expected 207, got 195) — see the R45 notes; count unchanged, corrected expectation only) |
 | `tests/r30.js` | 40 (R33 re-pointed §C/§D4/§E from Reports to Settings' `#diag-details` and added 3 assertions proving the wrapper itself gates correctly — see the R33 notes; count rose from 37) |
 | `tests/r31.js` | 55 (R37 pre-seeds a present-but-empty `nx_views_v1` before B1/B2 so the new starter-views seeding doesn't fire ahead of their "starts from nothing" assertions — see the R37 notes; R43 re-pointed §B1c–f/§B2b–d/§B1k/§B2g at `window.__mockDb.from("saved_views")` in place of `localStorage.nx_views_v1`'s content, because R43 moved the store to the server and a fresh load under presetEmptyViews() settles into DB mode — see the R43 notes; count unchanged) |
 | `tests/r33.js` | 55 (R38 bumped A5c's 12→13 `data-page` buttons — the new Retention button in the Book group — see the R38 notes; R40 re-pointed C1b at `#case-events-list` in place of the deleted `#notes-list` — see the R40 notes; count unchanged, prose-only fixes) |
@@ -504,7 +631,8 @@ even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes belo
 | `tests/r42.js` | 155 (new — §A–§J, see the R42 notes) |
 | `tests/r43.js` | 78 (new — §1–§12, see the R43 notes) |
 | `tests/r44.js` | 175 (new — §A–§J, see the R44 notes) |
-| **Total** | **4,452** |
+| `tests/r45.js` | 40, 40/40 green (new — §A/§B, see the R45 notes; the follow-up fix added §C — tile/panel/readiness-rollup parity, up from 27 — see the "R45 follow-up notes" section: 1 check, §C10 initially pinned a mock supersede-guard defect, fixed the same round — suite 40/40) |
+| **Total** | **4,492, all green** |
 
 R44 notes: Stonebridge payment reconciliation — two Owner-only panels at the
 foot of Monday money (`#money-recon-panel`, `#money-procrates-panel`),
@@ -612,6 +740,57 @@ came up empty by luck.
     every fee with an amount is dated" rule rather than reimplement it) left
     the Mark-fee-paid overlay itself byte-for-byte unchanged in behaviour —
     both suites' counts are unmoved from their pre-R44 baseline.
+
+R45 notes: post-import Data Health honesty — two independent predicate
+tightenings shipped together (`admin/app.js` ~L24173 + `admin/mock-
+supabase.js` ~L4670 — no `index.html`/`admin.css` change, no schema).
+
+  - **1 · `noMilestoneDate` (#dh-tile-milestone / #dh-milestone-panel) gained
+    a 180-day completed-case freshness guard.** A COMPLETED case whose
+    `completed_at` is more than 180 days old is now excluded outright — the
+    back book will never get an application/offer date backfilled, and MI
+    velocity only counts cases carrying both dates anyway, so an old
+    completion's blank milestone reads as history, not a fault. Deliberately
+    narrow: live stages are untouched (guard only ever fires for
+    `stage === "completed"`); a completed case with NO `completed_at` at all
+    (`cs.completed_at &&` short-circuits) keeps showing — that's
+    `#dh-tile-nocompleted`'s fault to resolve first, and once a date lands
+    this rule takes over. Boundary is `daysSince(completed_at) > 180`:
+    exactly 180 days is still included, 181 is the first excluded day —
+    `tests/r45.js` §A6 pins both sides of that boundary with date-only ISO
+    strings (immune to time-of-day flake, same technique R27/R42's own
+    day-boundary seeding already uses).
+  - **2 · `completed_missing_rate_end` (mock-supabase.js's `get_data_quality`
+    RPC, which `#dh-tile-rateend`'s `.num` renders verbatim) brought to full
+    parity with the just-migrated prod RPC.** Four new exclusions: tracker/
+    variable rate_type (no fixed end to chase), retention successors
+    (`retention_source_case_id` set — the question belongs to the source
+    case), non-mortgage records (`loan_amount` null AND no
+    `mortgage_account_number` — not a mortgage at all), and a completed deal
+    SUPERSEDED by a newer completed deal on the same client + normalized
+    property address (the back-book import writes exactly this shape on a
+    remortgage-with-us). `tests/r45.js` §B1–§B6 seed one case per exclusion
+    (plus a genuine counted mortgage with no property address at all, so no
+    superseded-pair match is even possible) and prove each one lands on the
+    correct side; §B7 confirms the base fixture's own honest number didn't
+    move this round (old naive formula and new parity formula already agree
+    at 1) — the fixture simply never happened to contain a case any of the
+    four new exclusions apply to, which is exactly why the synthetic seeds
+    in §B1–§B6 exist.
+  - **FIXED — see "R45 follow-up notes" above.** (History: this was
+    originally a REAL, PRECISE inconsistency found while writing
+    `tests/r45.js` — `#dh-tile-rateend`'s `.num` read the new, honest
+    `dq.completed_missing_rate_end`, but its own click-through panel
+    (`#dh-rateend-panel`) and the `#dh-readiness` rollup both still read
+    `noRateEnd`, a separate, un-migrated local predicate carrying NONE of
+    the four new exclusions, so an operator could see "N" on the tile,
+    click it, and get MORE than N rows — left deliberately unfixed and
+    reported rather than papered over, test-only change scope at the time.
+    A same-round follow-up fix then pointed `noRateEnd` at the identical
+    four exclusions `completed_missing_rate_end` already applies, closing
+    the gap for every case except one narrower residual the follow-up's own
+    verification (`tests/r45.js` §C8–§C10) found in the RPC mock itself —
+    see "R45 follow-up notes" above for that one.)
 
 R43 notes: two independent, already-built, uncommitted features shipped
 together (`admin/app.js` ~L8278-8600 + `admin/mock-supabase.js` — no

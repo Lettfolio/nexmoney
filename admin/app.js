@@ -23939,7 +23939,7 @@ async function loadDataHealth() {
     // Defect 13: the RPC only ever returns bare counts for these two tiles. Rather than change the
     // RPC (frontend-only, existing columns), pull the offending rows client-side from cases+clients
     // so the tiles can expand into the same list-panel pattern as the other Data Health items.
-    db.from("cases").select("id,stage,rate_end_date,expected_completion_date,completed_at,created_at,submitted_at,case_kind,lender,client_id,clients!client_id(id,first_name,last_name,phone)" + (dhPropOn ? ",property_address" : "")).order("id").limit(OWNER_ROW_CAP),
+    db.from("cases").select("id,stage,rate_end_date,expected_completion_date,completed_at,created_at,submitted_at,case_kind,lender,rate_type,retention_source_case_id,loan_amount,mortgage_account_number,client_id,clients!client_id(id,first_name,last_name,phone)" + (dhPropOn ? ",property_address" : "")).order("id").limit(OWNER_ROW_CAP),
     // T1-9/T1-26: same trick for the client-shaped checks. The RPC returns counts for "missing
     // email & phone" and nothing at all for malformed values, so read the rows and judge them here.
     db.from("clients").select("id,first_name,last_name,email,phone").order("id").limit(OWNER_ROW_CAP),
@@ -23960,7 +23960,7 @@ async function loadDataHealth() {
   if (caseRows.error && dhPropOn && isMissingColumnError(caseRows.error)) {
     PROP_ADDR_SUPPORTED = false;
     dhPropOn = false;
-    caseRows = await db.from("cases").select("id,stage,rate_end_date,expected_completion_date,completed_at,created_at,submitted_at,case_kind,lender,client_id,clients!client_id(id,first_name,last_name,phone)").order("id").limit(OWNER_ROW_CAP);
+    caseRows = await db.from("cases").select("id,stage,rate_end_date,expected_completion_date,completed_at,created_at,submitted_at,case_kind,lender,rate_type,retention_source_case_id,loan_amount,mortgage_account_number,client_id,clients!client_id(id,first_name,last_name,phone)").order("id").limit(OWNER_ROW_CAP);
   }
   // …and the quieter shape of absence: the rows came back, without the column that was asked for.
   if (dhPropOn && Array.isArray(caseRows.data) && caseRows.data.length) {
@@ -23991,8 +23991,41 @@ async function loadDataHealth() {
   });
   const missingPhoneLive = [...missingPhoneMap.values()];
   const caseName = (cs) => (cs.clients ? [cs.clients.first_name, cs.clients.last_name].filter(Boolean).join(" ") || "(no name)" : "(no name)");
+  /* R45 — ONE predicate for tile, panel and readiness rollup, mirroring get_data_quality exactly:
+     tracker/variable deals carry no fixed end; a retention successor inherits its source's date
+     question; a record with no loan and no mortgage account number is not a mortgage; and a deal
+     SUPERSEDED by a newer completed deal on the same property (same client) had its rate-end
+     cleared on purpose — the back book imports exactly that shape. The supersede test needs
+     property_address, so on a database without M7 (dhPropOn false) it simply doesn't exclude —
+     a slightly higher count beats a wrong exclusion. */
+  const dhPropKeyOf = (cs) => String(cs.property_address || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const dhLatestCompletedByProp = {};
+  if (dhPropOn) {
+    allCases.forEach((cs) => {
+      if (cs.stage !== "completed") return;
+      const k = dhPropKeyOf(cs);
+      if (!k) return;
+      const kk = cs.client_id + "|" + k;
+      const cur = dhLatestCompletedByProp[kk];
+      if (!cur || String(cs.completed_at || "") > String(cur.completed_at || "")) dhLatestCompletedByProp[kk] = cs;
+    });
+  }
   const noRateEnd = allCases
-    .filter((cs) => cs.stage === "completed" && !cs.rate_end_date)
+    .filter((cs) => {
+      if (cs.stage !== "completed" || cs.rate_end_date) return false;
+      const rt = String(cs.rate_type || "");
+      if (rt === "tracker" || rt === "variable") return false;
+      if (cs.retention_source_case_id) return false;
+      if (cs.loan_amount == null && !cs.mortgage_account_number) return false;
+      if (dhPropOn) {
+        const k = dhPropKeyOf(cs);
+        const latest = k ? dhLatestCompletedByProp[cs.client_id + "|" + k] : null;
+        // Strictly-newer only, exactly as the RPC's `n.completed_at > c.completed_at`: a same-day
+        // pair counts twice there, and an undated completion is never treated as superseded.
+        if (latest && latest.id !== cs.id && cs.completed_at && String(latest.completed_at || "") > String(cs.completed_at || "")) return false;
+      }
+      return true;
+    })
     .map((cs) => ({ case_id: cs.id, name: caseName(cs) }));
   // T1-7 — completions stamped by nothing (every pre-fix UI completion, plus imports). They're
   // invisible to Reports, which counts by completed_at, so the pipeline and the report disagree
@@ -24172,6 +24205,14 @@ async function loadDataHealth() {
   const DH_APP_RANK = DH_STAGE_RANK["application"], DH_OFFER_RANK = DH_STAGE_RANK["offer"];
   const noMilestoneDate = allCases.reduce((acc, cs) => {
     if (cs.stage === "not_proceeding") return acc;
+    /* R45 — the back book. A case completed months or years ago will never get its application/
+       offer dates backfilled (nobody remembers them), and MI velocity only counts cases carrying
+       both dates anyway — so an old completion's blank milestone is history, not a fault to clear.
+       The dates are chased while the completion is FRESH (≤180 days), which is when someone can
+       still actually supply them. A completed case with NO completion date at all keeps showing —
+       that is the noCompletedAt tile's fault to resolve first, and once a date lands this rule
+       takes over. */
+    if (cs.stage === "completed" && cs.completed_at && daysSince(cs.completed_at) > 180) return acc;
     const rank = DH_STAGE_RANK[cs.stage];
     if (rank == null) return acc;
     // Earliest missing milestone per case: application before offer.

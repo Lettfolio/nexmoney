@@ -63,6 +63,25 @@
         predicate is skipped entirely (only application-date misses can
         appear), and the page loads with no console error and no 42703.
 
+   R45 · non-masking repair — R45 (admin/app.js ~24173) added a 180-day
+   freshness guard to noMilestoneDate: a COMPLETED case whose completed_at
+   is more than 180 days old is now excluded outright (blank milestone
+   dates on the back book are read as history, not a fault). This file's
+   two independent ground-truth recomputes (`groundTruth()` and §F's own
+   inline recompute) reimplemented the PRE-R45 predicate and so no longer
+   matched the app's honest post-R45 count on the base fixture (40 passed /
+   5 failed: B1/B2/C3/F3/F4 — the fixture genuinely has completed cases
+   older than 180 days with a blank milestone that the tile now correctly
+   omits and the old recompute wrongly still expected). Both recomputes now
+   carry the identical guard, proven correct by hand against app.js's own
+   change before being applied here (tests/r45.js §A7 hand-verifies the
+   same predicate against a purpose-built fixture, independently). Every
+   one of B4–B9's own synthetic cases carries completed_at: null, so the
+   new guard's own `cs.completed_at &&` short-circuit never touches them —
+   none of THEIR expectations moved; only the base-fixture noise the
+   recompute was silently over-counting did. 45 passed / 0 failed after
+   the repair.
+
    Run:  PLAYWRIGHT_BROWSERS_PATH=/root/pwb node /root/nx/tests/r25.js
          (expects a static server on 8099; starts one itself if absent)
    ========================================================================== */
@@ -131,7 +150,15 @@ async function insertCase(page, o) {
 /* Independently recompute the noMilestoneDate set straight off window.__mockDb. STAGES' canonical
    ORDER is read directly off the page (a fair-game shared ordering constant, same rule as
    STAGE_LABEL elsewhere in this harness) but the FILTERING LOGIC is reimplemented here from the
-   round's own spec, not borrowed from app.js. */
+   round's own spec, not borrowed from app.js.
+
+   R45 · non-masking repair — R45 added ONE new guard ahead of the stage-rank check: a COMPLETED
+   case whose completed_at is more than 180 days old is now excluded outright (its blank milestone
+   is read as back-book history, not a fault — see admin/app.js ~24173's own comment). This function
+   now carries that guard too, so it recomputes the CURRENT honest predicate rather than the
+   pre-R45 one; every boundary this file already asserts on (B4–B9) is a case built with
+   completed_at either null or recent, so none of them sit anywhere near the new 180-day window and
+   none had to change. */
 async function groundTruth(page) {
   return page.evaluate(async () => {
     const { data: cases } = await window.__mockDb.from("cases")
@@ -140,9 +167,11 @@ async function groundTruth(page) {
     const fwdOn = (await forwardDatesSupported()) === true;
     const rankOf = Object.fromEntries(STAGES.map((s, i) => [s[0], i]));
     const appRank = rankOf["application"], offerRank = rankOf["offer"];
+    const daysSince = (iso) => { if (!iso) return null; const t = new Date(iso).getTime(); if (isNaN(t)) return null; return Math.max(0, Math.floor((Date.now() - t) / 86400000)); };
     const expected = [];
     (cases || []).forEach((c) => {
       if (c.stage === "not_proceeding") return;
+      if (c.stage === "completed" && c.completed_at && daysSince(c.completed_at) > 180) return;
       const rank = rankOf[c.stage];
       if (rank == null) return;
       const name = (c.clients ? [c.clients.first_name, c.clients.last_name].filter(Boolean).join(" ") : "") || "(no name)";
@@ -391,14 +420,18 @@ async function panelRows(page) {
 
       await goto(pageF, "data");
 
+      // R45 · non-masking repair — same 180-day freshness guard as groundTruth() above, so this
+      // forward-dates-off recompute stays honest against the current predicate too.
       const gtOff = await pageF.evaluate(async () => {
         const { data: cases } = await window.__mockDb.from("cases")
-          .select("id,stage,submitted_at,offer_issued_date");
+          .select("id,stage,submitted_at,offer_issued_date,completed_at");
         const rankOf = Object.fromEntries(STAGES.map((s, i) => [s[0], i]));
         const appRank = rankOf["application"];
+        const daysSince = (iso) => { if (!iso) return null; const t = new Date(iso).getTime(); if (isNaN(t)) return null; return Math.max(0, Math.floor((Date.now() - t) / 86400000)); };
         const expected = [];
         (cases || []).forEach((c) => {
           if (c.stage === "not_proceeding") return;
+          if (c.stage === "completed" && c.completed_at && daysSince(c.completed_at) > 180) return;
           const rank = rankOf[c.stage];
           if (rank == null) return;
           if (rank >= appRank && !c.submitted_at) expected.push(c.id);
