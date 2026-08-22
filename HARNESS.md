@@ -101,7 +101,59 @@ node tests/r42.js
 node tests/r43.js
 node tests/r44.js
 node tests/r45.js
+node tests/r47.js
 ```
+
+**Full battery: 4,536 checks run, all green.** (The R47 test pass pinned a
+real one-line inconsistency in the `ercFlags` KPI tile — the tile above the
+rate tile was not floored while its drawer was; it was fixed in the same
+round, so §D3 now passes and the suite is 44/44.)
+`tests/r9_docs.js` included (255/0), `smoke.js` 152/0. R47 Gate 0 shipped two
+independent day-one fixes from the post-import red team, both `admin/app.js`
++ `admin/mock-supabase.js` only (the SQL floor was already migrated to prod;
+no `index.html`/`admin.css`/schema change here) — **Bug A**, a rate-recency
+floor (`RATE_ACTION_FLOOR_DAYS` ≈ -548 days / 18 months,
+`rateWithinActionFloor(a, on)`) on the "today" rate surfaces: My Day's `get_briefing`
+rate_urgent block (mirrored inline in the mock), the dashboard KPI strip's
+"Rates ending" tile, and `buildRateErcFeed`'s new `opts.recentOnly`, which
+the dashboard drawer (`#alerts-rateerc`) passes and the Retention page
+(`#ret-rates-list`) deliberately does NOT — the full lapsed recovery book is
+the Retention page's whole purpose and must stay un-floored; and **Bug B**,
+`isSystemProvenanceNote()` (`/^\s*SB-IMPORT-\d/`) teaching `loadClientData`'s
+"last contact" map to stop counting the back-book import's own provenance
+notes as client contact, which feeds both the Clients-page cold segment and
+the Retention-page cold panel from the one shared builder (`clientDataCached`/
+`coldClients`). `tests/r47.js` (44 checks, §A–§G — see the "R47 notes"
+section below) required repairing ZERO pre-existing suites: the full battery
+was re-run in full (not assumed, every one of the 47 files watched to
+completion) and all 47 pre-existing `tests/*.js` files plus `smoke.js` passed
+at their EXACT pre-R47 counts, unedited. That is exactly what the round's own
+shape predicts, confirmed by grep before a single test was written: the base
+fixture's oldest `rate_end_date` is only 132 days in the past (nowhere near
+the 548-day floor) and contains zero `case_notes` bodies matching the
+`SB-IMPORT-` prefix — so neither fix moves a single existing assertion; both
+bugs only ever mattered against the real back-book import (production) or a
+fixture a test deliberately seeds to be old/system-noted, which only
+`r47.js`'s own §A–§D/§F/§G now do. The R47 test pass found a real, precise
+inconsistency in the round's OWN diff — reported, then FIXED the same round
+(one line, so §D3 passes and the suite is 44/44) rather than papered over:
+`renderTodayKpis`' first R47 edit touched only its `ratesSoon` line
+(the "Rates ending" KPI tile); `ercFlags` (the "ERC outlasts rate" tile, fed
+by the SAME `alerts` array and linked to the SAME drawer via
+`kpiGoto('erc')` → `#alerts-rateerc`) never gained `rateWithinActionFloor`.
+So an ERC alert on a rate that ended years ago is correctly excluded from the
+drawer (`buildRateErcFeed`'s own `ercFlagsAll` IS floored under
+`recentOnly:true`) but is still counted by the tile sitting directly above
+it — click the tile, get one fewer row than promised, the exact "badge
+counts rows the list does not show" shape `app.js`'s own W-16 comment
+already names two lines above the very code this round touched. The other
+direction was checked and is clean: a LIVE (future-ending) ERC alert is
+never wrongly dropped by the floor, on either surface (`r47.js` §B3/§B4,
+§D4a/§D4b) — `rateWithinActionFloor` only ever excludes the past side. The
+Retention-page side of the split was also checked and is clean: the same
+old-ended case that the dashboard KPI/drawer correctly excludes is still
+shown on the Retention page (`r47.js` §C4), proving `recentOnly` did NOT
+leak onto the one surface it must never floor.
 
 Current green counts (end of round 23; r21/r22 were never committed to this
 checkout and are excluded from the run list and the count below). r8_touch/
@@ -632,7 +684,135 @@ even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes belo
 | `tests/r43.js` | 78 (new — §1–§12, see the R43 notes) |
 | `tests/r44.js` | 175 (new — §A–§J, see the R44 notes) |
 | `tests/r45.js` | 40, 40/40 green (new — §A/§B, see the R45 notes; the follow-up fix added §C — tile/panel/readiness-rollup parity, up from 27 — see the "R45 follow-up notes" section: 1 check, §C10 initially pinned a mock supersede-guard defect, fixed the same round — suite 40/40) |
-| **Total** | **4,492, all green** |
+| `tests/r47.js` | 44, 44/44 green (new — §A–§G; §D3 pinned an `ercFlags` KPI tile that wasn't floored while its drawer was — fixed same round, now green) |
+| **Total** | **4,536, all green** |
+
+R47 notes: Gate 0 of the post-import red team's two day-one bugs — both
+`admin/app.js` + `admin/mock-supabase.js` only; the SQL side of Bug A
+(`get_briefing`'s rate_urgent block gaining `and c.rate_end_date >=
+current_date - interval '18 months'`) was already migrated to prod, so this
+round's own commit is the app/mock mirror of it plus Bug B outright. No
+`index.html`/`admin.css`/schema change.
+
+  - **Bug A · rate-recency floor.** Rate feeds had no lower age bound, so a
+    back-book rate that ended years ago (oldest 2017 in production) flooded
+    My Day, the dashboard KPI strip and the dashboard Rate & ERC drawer
+    equally with a rate ending next month. Four call sites, one shared
+    constant/predicate:
+      - `RATE_ACTION_FLOOR_DAYS = -Math.round(18 * 30.44)` (≈ -548) and
+        `rateWithinActionFloor(a, on)` — `admin/app.js`, new module-level
+        consts, `!on || a.days_to_rate_end >= RATE_ACTION_FLOOR_DAYS`.
+      - `renderTodayKpis`' `ratesSoon` (the "Rates ending ≤Nmo" KPI tile)
+        gained `&& rateWithinActionFloor(a, true)`.
+      - `buildRateErcFeed` gained `opts.recentOnly`: when true, BOTH
+        `ratesSoonAll` and `ercFlagsAll` require the floor. `loadDashboard`'s
+        call (feeding `#alerts-rateerc`) passes `recentOnly:true`;
+        `loadRetentionRates`' call (feeding `#ret-rates-list`) does NOT —
+        deliberately, the full lapsed recovery book is the Retention page's
+        whole purpose.
+      - `mock-supabase.js`'s `rpc_get_briefing` rate_urgent block mirrors the
+        same floor inline: `days <= 60 && days >= -Math.round(18 * 30.44)`.
+    `tests/r47.js` §A pins the floor at the RPC directly (get_briefing,
+    bypassing every renderer): ~4y-ago excluded, 3mo-ago and a future 30-day
+    rate both present, the ~18mo boundary at both whole-month (17mo present/
+    19mo absent, the round brief's own framing) and single-day precision
+    (read live off `RATE_ACTION_FLOOR_DAYS` rather than a hardcoded -548, so
+    it can never silently drift from the app's own constant — §A6/§A7 prove
+    the exact floor day is included and the very next day is the first
+    excluded one). §B calls `buildRateErcFeed` directly with and without
+    `opts.recentOnly` (the exact two call shapes the dashboard and Retention
+    page use) and proves the SAME old-ended case is excluded under one and
+    present under the other, at the one function both surfaces share,
+    before ever touching a DOM. §C drives the real pages: the same old-
+    ended case is invisible to the dashboard KPI tile (a before/after seed
+    delta) and to `#alerts-rateerc`'s rendered rows, then — same case, same
+    page session — still shown on `#ret-rates-list` once navigated to
+    Retention. This dashboard-floored/retention-unfloored split is the
+    crux of Bug A and is tested explicitly, not merely implied by a passing
+    count.
+  - **Bug B · cold segment ignored import provenance.** The back-book import
+    wrote 2,854 notes dated import-day, one per imported policy/deal
+    (`"SB-IMPORT-1 · …"`); `loadClientData`'s "last contact" map counted ANY
+    note as contact, so ~1,133 of 1,162 imported clients read "contacted
+    today" and the cold segment collapsed to ~29 — the dangerous direction
+    of wrong, a real gap presenting as a clean book.
+      - `SYSTEM_NOTE_RE = /^\s*SB-IMPORT-\d/` and
+        `isSystemProvenanceNote(body)` — new module-level in `admin/app.js`.
+      - `loadClientData`'s `case_notes` read widened to
+        `select("case_id,created_at,body")`; its bump loop now skips a note
+        where `isSystemProvenanceNote(n.body)` is true, so a
+        provenance-only note leaves NO entry in the `last` map at all
+        (filtered before the bump, not merely down-ranked).
+      - ONE builder, both surfaces: `loadClientData` feeds `clientDataCached`/
+        `coldClients`, which is what BOTH the Clients-page cold segment and
+        the Retention-page cold panel read from — one fix, two surfaces
+        fixed together, by construction rather than by coincidence.
+      - The dashboard's "no-next-action radar" (`loadUnactioned`) is
+        unaffected — it never reads `case_notes` at all, only live cases.
+    `tests/r47.js` §E proves the pure predicate directly (page.evaluate
+    against the bare `isSystemProvenanceNote` function): the prefix matches
+    with and without leading whitespace, a mid-body mention of the same text
+    does NOT match (it is a prefix regex, not a substring search), no digit
+    after the dash does not match, null/undefined/empty all read false, and
+    (a defensive spot-check, not a promised behaviour) the match is
+    case-sensitive. §F proves it live at the module-state level
+    (`clientDataCached`'s own `last` map, `coldClients()`): a client whose
+    ONLY note is an SB-IMPORT provenance note has no `last` entry and reads
+    as cold; a client with a real human note dated today has a `last` entry
+    timestamped today and reads as NOT cold. §G proves the same thing on the
+    real Clients page (`#client-segment`'s Cold chip): the system-note-only
+    client's row is in the list with a "no contact" `.client-lastcontact`
+    line (not a phantom "contacted today"), the real-note client's row is
+    absent from it entirely.
+  - **Repairs to pre-existing suites: ZERO.** The full battery was re-run to
+    completion (not assumed) — all 47 pre-existing `tests/*.js` files plus
+    `smoke.js` passed at their exact pre-R47 counts, unedited. Confirmed
+    by grep before writing a single test, then confirmed again by the run
+    itself: the base fixture's oldest `rate_end_date` is `ca018` at -132
+    days (nowhere near the -548 floor — the nearest fixture case is roughly
+    a third of the way to it), and zero `case_notes` bodies in the base
+    fixture match `/^\s*SB-IMPORT-\d/`. Every test file that seeds its own
+    `rate_end_date` (`r12b.js`, `r35.js`, `r38.js`, `r43.js`, `r5_batch*`,
+    `r29_scale.js`'s ~2,500-case PAST/FUTURE arrays which DO reach as far
+    back as -900 days) was individually checked: none of them assert an
+    exact rate_urgent/ratesSoon/ercFlags COUNT that an old-ended synthetic
+    case would move (`r29_scale.js`'s own `#briefing-list` check is a bare
+    `>= 0` sanity, not a number; `r12b.js`'s two far-past `rate_end_date`
+    literals feed the case-modal's own `#cs-retention-btn`/`.ret-tome-cb`
+    widget, an unrelated code path buildRateErcFeed never touches). The
+    battery run confirms this held: r5_batch1–9 (560 combined), r64, r8_rev,
+    r8_touch (151 — unaffected, exactly as predicted: it recomputes "cold"
+    from `case_notes` with NO provenance filter, but the base fixture has
+    no provenance notes to disagree over, so its ground truth and the app's
+    honest one already agreed before this round), r9_adv, r9_docs (255/0),
+    r9_embed, r11_ux through r45 — every one unchanged.
+  - **A REAL DEFECT FOUND, NOT FIXED (test + HARNESS.md change scope only),
+    reported rather than papered over — `tests/r47.js` §D.** `renderTodayKpis`'
+    R47 edit touched exactly one line: `ratesSoon` (`admin/app.js` ~L5685)
+    gained `&& rateWithinActionFloor(a, true)`. The very next line,
+    `ercFlags` (~L5686, the "ERC outlasts rate" KPI tile) did NOT:
+    `const ercFlags = alerts.filter((a) => a.erc_outlasts_rate &&
+    alertMine(a));` — same source array (`dashKpiData.alerts`, i.e. the
+    live `v_alerts` read), same drawer both tiles open
+    (`kpiGoto('rates')`/`kpiGoto('erc')` both scroll to `#alerts-rateerc`),
+    but only one of the two tiles was floored. §D1 confirms the drawer
+    itself is correct — `buildRateErcFeed`'s `ercFlagsAll` IS floored under
+    the dashboard's `recentOnly:true`, so an ERC-outlasts-rate alert on a
+    rate that ended years ago never renders as a row. §D2 confirms the
+    mismatch is real, not a wording quibble — seeding exactly that case
+    moves the KPI tile's own number up by one. §D3 asserts the tile stays in sync with the drawer its own click opens.
+    It initially failed (click the tile, get one fewer row than promised —
+    precisely the "badge counts rows the list does not show"
+    shape `app.js`'s own W-16 comment already names two lines above the very
+    code this round edited. §D4a/§D4b confirm the OTHER direction is clean
+    on the same real page: a live, future-ending ERC alert is not wrongly
+    dropped by the floor either (`rateWithinActionFloor` only ever excludes
+    the past side — a case with `days_to_rate_end > 0` always clears it
+    regardless of `on`), matching the builder-level proof at §B3/§B4. Root
+    cause and fix, both one line, same shape as the round's own `ratesSoon`
+    edit: `admin/app.js` ~L5686 gained `&& rateWithinActionFloor(a, true)`
+    on the `ercFlags` filter, identical to what `ratesSoon` carries one line
+    above it. FIXED the same round — §D3 now passes, suite 44/44.
 
 R44 notes: Stonebridge payment reconciliation — two Owner-only panels at the
 foot of Monday money (`#money-recon-panel`, `#money-procrates-panel`),

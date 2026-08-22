@@ -5682,8 +5682,8 @@ function renderTodayKpis() {
      drawer below uses, so a tile and the panel it links to can never disagree about whose rate
      this is. */
   const alertMine = (a) => !mine || caseAdviser[a.case_id] === ME.id;
-  const ratesSoon = alerts.filter((a) => a.days_to_rate_end != null && a.days_to_rate_end <= reminderMonths * 30 && alertMine(a));
-  const ercFlags = alerts.filter((a) => a.erc_outlasts_rate && alertMine(a));
+  const ratesSoon = alerts.filter((a) => a.days_to_rate_end != null && a.days_to_rate_end <= reminderMonths * 30 && rateWithinActionFloor(a, true) && alertMine(a));
+  const ercFlags = alerts.filter((a) => a.erc_outlasts_rate && rateWithinActionFloor(a, true) && alertMine(a));
   // KPI cards clickable (defect 19) — each jumps to where that number can be worked, rather than
   // being a dead-end. The "Fees outstanding" card and the Protection & Fees drawer's "Fees due" tab
   // count different scopes (see loadProtection below) — captioned here so the gap reads as scope,
@@ -5878,6 +5878,22 @@ const rateErcFarOut = (a) => a.days_to_rate_end != null && a.days_to_rate_end > 
 /* Which half of the page a row belongs on: a rate that has already matured is a different, hotter
    conversation from one with four months to run. The drawer does not split; the page does. */
 const rateErcEnded = (a) => a.days_to_rate_end != null && a.days_to_rate_end < 0;
+/* R47 Gate 0 — the recency floor for the "today" rate surfaces (My Day KPI + the dashboard
+   Rate & ERC drawer). A rate that ended more than 18 months ago is history, not a today-action;
+   the back-book import surfaced deals that lapsed as far back as 2017. Mirrors the SQL briefing
+   feed and the email recovery lane, both of which stop at 18 months. `days_to_rate_end` is
+   negative once a rate has ended, so the floor is a negative number of days. The Retention page
+   deliberately passes NO floor — the full lapsed recovery book is its whole point. */
+const RATE_ACTION_FLOOR_DAYS = -Math.round(18 * 30.44);
+const rateWithinActionFloor = (a, on) => !on || (a.days_to_rate_end != null && a.days_to_rate_end >= RATE_ACTION_FLOOR_DAYS);
+/* R47 Gate 0 — a SYSTEM PROVENANCE note is one the app wrote to record where a record came from,
+   not a record of contact with the client. The back-book import stamped one per imported deal and
+   policy ("SB-IMPORT-1 · …"), all on the import day; counting them as contact broke the cold
+   segment. Matched by the import tag prefix so a real note that merely mentions the word is never
+   caught. Kept as its own predicate so any future bulk import using the same tag convention is
+   covered without touching the cold logic again. */
+const SYSTEM_NOTE_RE = /^\s*SB-IMPORT-\d/;
+function isSystemProvenanceNote(body) { return typeof body === "string" && SYSTEM_NOTE_RE.test(body); }
 /* The whole feed, from rows the caller has already read. `scope` is "mine" | "unassigned" | "all".
    Returns everything both renderers need, including the firm-wide counts their headings put in
    tooltips — a badge counting rows the list does not show is the W-16 defect. */
@@ -5889,8 +5905,13 @@ async function buildRateErcFeed(cases, alerts, opts) {
   const sets = retentionSuccessorSets(cases);
   retentionSourceIds = sets.sourceIds;         // what the row markup below reads for "already started"
   const notSelfNag = (a) => !sets.liveSuccessorIds.has(a.case_id);
-  const ratesSoonAll = (alerts || []).filter((a) => a.days_to_rate_end != null && a.days_to_rate_end <= reminderMonths * 30).filter(notSelfNag);
-  const ercFlagsAll = (alerts || []).filter((a) => a.erc_outlasts_rate).filter(notSelfNag);
+  /* R47 — opts.recentOnly floors the "today" surfaces (the dashboard drawer) to the last 18 months
+     so a rate that ended in 2017 is not on the morning glance. The Retention page passes it falsy,
+     keeping the full lapsed recovery book. ERC flags are floored the same way when recentOnly: an
+     ERC still running on a deal that ended years ago is equally stale on the dashboard. */
+  const recentOnly = !!o.recentOnly;
+  const ratesSoonAll = (alerts || []).filter((a) => a.days_to_rate_end != null && a.days_to_rate_end <= reminderMonths * 30 && rateWithinActionFloor(a, recentOnly)).filter(notSelfNag);
+  const ercFlagsAll = (alerts || []).filter((a) => a.erc_outlasts_rate && rateWithinActionFloor(a, recentOnly)).filter(notSelfNag);
   const ratesSoonScoped = ratesSoonAll.filter((a) => rateAlertInScope(a, scope, caseAdviser));
   const ercFlagsScoped = ercFlagsAll.filter((a) => rateAlertInScope(a, scope, caseAdviser));
   const ercIds = new Set(ercFlagsScoped.map((a) => a.case_id));
@@ -6128,7 +6149,7 @@ async function loadDashboard() {
      they are, which two rows are one building, what a row looks like — is
      computed and rendered in exactly one place.
      ========================================================================== */
-  const rateFeed = await buildRateErcFeed(cases, alerts, { reminderMonths, scope: rateScope, caseAdviser });
+  const rateFeed = await buildRateErcFeed(cases, alerts, { reminderMonths, scope: rateScope, caseAdviser, recentOnly: true });
   /* R7-2 — sorted by VALUE AT RISK by default (the loan on the case), because the question this
      panel is scanned with is "which of these matters most", and a date sort answers a different
      one. The date sort is one click away and the header says which is in force. Owner only: the
@@ -14009,7 +14030,11 @@ async function loadClientData() {
        since R7), so this cannot start 42703-ing on an older database, and it is a widening of the
        read this page already does rather than a second query. */
     db.from("clients").select("*, cases!client_id(id,stage,rate_end_date,lender,protection_status,broker_fee,assigned_to,completed_at,updated_at,created_at" + (clientPropOn ? ",property_address" : "") + ")").order("last_name").limit(OWNER_ROW_CAP),
-    db.from("case_notes").select("case_id,created_at").gte("created_at", commsSinceIso),
+    // R47 Gate 0 — `body` joins the select so a SYSTEM PROVENANCE note (the back-book import wrote
+    // one per policy/deal, all dated the import day) can be told apart from real contact. Counting
+    // them as "last contact" made every imported client read as spoken-to today and collapsed the
+    // cold list to nothing — the dangerous kind of wrong. Filtered out at the bump below.
+    db.from("case_notes").select("case_id,created_at,body").gte("created_at", commsSinceIso),
     db.from("email_queue").select("client_id,case_id,status,sent_at").gte("sent_at", commsSinceIso),
     db.from("appointments").select("client_id,case_id,starts_at").gte("starts_at", commsSinceIso),
     db.from("case_tasks").select("case_id,done_at").gte("done_at", commsSinceIso),
@@ -14027,7 +14052,7 @@ async function loadClientData() {
     const cur = last.get(clientId);
     if (!cur || String(at) > String(cur.at)) last.set(clientId, { at: String(at), what });
   };
-  (notesRes.data || []).forEach((n) => bump(caseOwner.get(n.case_id), n.created_at, "note"));
+  (notesRes.data || []).forEach((n) => { if (isSystemProvenanceNote(n.body)) return; bump(caseOwner.get(n.case_id), n.created_at, "note"); });
   // Only a row that actually WENT. queued/failed/cancelled are things we meant to say, not things
   // the client has heard, and counting them would let a bounced email hide a silent client.
   (emailsRes.data || []).forEach((e) => {

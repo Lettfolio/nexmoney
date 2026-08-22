@@ -4584,7 +4584,9 @@
         && (!c.retention_source_case_id || c.stage === "completed")
         && !liveSuccessorSourceIds[c.id]) {
         var days = Math.round((new Date(c.rate_end_date + "T12:00:00") - new Date(TODAY + "T12:00:00")) / DAY);
-        if (days <= 60) {
+        // R47 Gate 0 — parity with the prod briefing: a rate ended more than ~18 months ago is
+        // history, not a today-action, so it is not on My Day (the recovery book lives on Retention).
+        if (days <= 60 && days >= -Math.round(18 * 30.44)) {
           items.push({
             kind: "rate_urgent", pri: days < 0 ? 8 : 30, days: days,
             title: clientName(c.client_id) + " — rate " + (days < 0 ? "ended " + Math.abs(days) + " days ago" : "ends in " + days + " days"),
