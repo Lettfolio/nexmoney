@@ -25797,6 +25797,7 @@ const ASSISTANT_ACTION_LABEL = {
   get_briefing: "checked the briefing",
   create_task: "task added",
   add_note: "note added",
+  log_call: "call logged",
   queue_email: "email queued",
   create_client: "client created",
   create_case: "case created",
@@ -25818,7 +25819,7 @@ window.askAI = function (prefill) {
   if (!chatSeeded) {
     chatSeeded = true;
     const first = (((ME && ME.full_name) || (ME && ME.email)) || "there").split(/[\s@]/)[0];
-    addChatBubble("ai", `Hi ${first}! I can look up clients, set up new clients and cases, update case details and stages, add tasks and notes, queue template emails and draft replies. What do you need?`);
+    addChatBubble("ai", `Hi ${first}! I can look up clients, set up new clients and cases, update case details and stages, log calls, set reminders, add notes, queue template emails and draft replies. What do you need?`);
   }
   $("#chat-input").value = prefill || "";
   $("#chat-input").focus();
