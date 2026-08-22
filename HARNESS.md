@@ -102,9 +102,14 @@ node tests/r43.js
 node tests/r44.js
 node tests/r45.js
 node tests/r47.js
+node tests/r48.js
 ```
 
-**Full battery: 4,536 checks run, all green.** (The R47 test pass pinned a
+**Full battery: 4,655 checks run, all green.** (`tests/r48.js` — 119 checks,
+§A–§I, new this round — required ZERO repairs to any pre-existing suite: the
+full battery was re-run to completion, not assumed, and all 48 pre-existing
+`tests/*.js` files plus `smoke.js` passed at their exact pre-R48 counts,
+unedited — see the "R48 notes" section below. The R47 test pass pinned a
 real one-line inconsistency in the `ercFlags` KPI tile — the tile above the
 rate tile was not floored while its drawer was; it was fixed in the same
 round, so §D3 now passes and the suite is 44/44.)
@@ -685,7 +690,136 @@ even-day appointment seed at `mock-supabase.js:2001`) — see the R17 notes belo
 | `tests/r44.js` | 175 (new — §A–§J, see the R44 notes) |
 | `tests/r45.js` | 40, 40/40 green (new — §A/§B, see the R45 notes; the follow-up fix added §C — tile/panel/readiness-rollup parity, up from 27 — see the "R45 follow-up notes" section: 1 check, §C10 initially pinned a mock supersede-guard defect, fixed the same round — suite 40/40) |
 | `tests/r47.js` | 44, 44/44 green (new — §A–§G; §D3 pinned an `ercFlags` KPI tile that wasn't floored while its drawer was — fixed same round, now green) |
-| **Total** | **4,536, all green** |
+| `tests/r48.js` | 119, 119/119 green (new — §A–§I, see the R48 notes) |
+| **Total** | **4,655, all green** |
+
+R48 notes: independent regression suite + full battery for commission
+attribution, the "needs you" queue, and no case hard-delete
+(`admin/app.js` ~L9174/12440-13010/23200-24100, `admin/mock-supabase.js`
+`commission_lines.attributed_to`) — already built/uncommitted before this
+test-writing pass started, same as R44's own pass. `tests/r48.js` (119
+checks, §A–§I) found no defect in either half of the round; every behaviour
+it set out to prove held on the first run.
+
+  - **§A — no case hard-delete.** `#del-case-btn` was already confirmed absent
+    by grep across every existing test file before a single new test was
+    written (`grep -rn "del-case-btn\|delCaseBtn" tests/` — zero hits), so
+    zero pre-existing suites could possibly break here; §A independently
+    confirms the same thing live, in the DOM, for all four personas (owner,
+    admin, and the two advisers, who never had the button to begin with),
+    plus a text scan of every button in the modal for anything that reads
+    like a hard-delete. §A then drives `#case-mark-np` for real (through the
+    More-actions overflow, the confirm dialog, and the `promptLostReason`
+    overlay) on a case this file owns, and proves the row is not merely
+    "still closed" but still literally present in `window.__mock.db.cases`
+    afterwards — the thing a hard-delete would have removed. Each persona's
+    fixture case had to be created ON that persona's own page: this mock's
+    DB is per-browser-tab in-memory, so a case inserted via one page's
+    `__mockDb` does not exist on a different page's `?as=` load — the first
+    draft of this section got that wrong (readCase() returning `null`) and
+    was fixed before the file was considered done, not left as a known gap.
+  - **§B/§C — attribution never lands on null.** §B calls `r44AttributeLine`
+    directly (synthetic `matchedCase`/`nameToId`/`ownerId`, no DOM, no
+    import) to pin all six branches of Daniel's rule in isolation: a matched
+    case's `assigned_to` wins over whatever name is on the sheet (for both
+    mortgage AND takeback — the comment's "same rule" claim, not assumed);
+    an unmatched line falls to the sheet's named adviser only when that name
+    resolves through `r44NameKey` to a CURRENT profile; an ex-broker name or
+    no name at all falls to the owner; and misc insurance (protection/
+    renewal/other, or any line whose `policy_group` isn't literally
+    "Mortgage") goes to the owner unconditionally — proven by naming a
+    CURRENT adviser on a protection/renewal line and getting the owner back
+    anyway, not merely by never naming one. `r44NameKey`'s trim/lowercase/
+    whitespace-collapse and `r44IsMiscInsurance`'s group-overrides-kind rule
+    are each pinned directly too. §C repeats the matched-case-wins and
+    name-fallback proofs against a REAL 9-line `.xlsx` import (real
+    `parseStatementWorkbook` → `suggestStatementMatches` → `r44AttributeLine`
+    pipeline, not a synthetic call), including the exact "sheet names a
+    different current adviser than the matched case's owner" shape the pure
+    §B1 test only implies, and closes with a blanket sweep — not one of the
+    9 lines is null-attributed, which is the guarantee the whole "needs you"
+    queue design (§F) depends on holding at import time.
+  - **§D — confirm re-homes attribution, and the R44 fee-paid write survives
+    R48 untouched.** A line attributed to adviser X at import (via the name
+    fallback, no case matched) is confirmed against a DIFFERENT adviser Y's
+    case; §D proves `attributed_to` moves to Y — overriding the import-time
+    guess, exactly as the product comment for `r44ConfirmLine`'s
+    `linePatch.attributed_to = c.assigned_to || null` claims — and, in the
+    SAME assertion block, that `proc_fee_paid_at` still gets set and the
+    banked-fee case note still gets written. This is the one place R48
+    touches R44's own write path (one line, `admin/app.js` ~L23975), so it
+    is the one place a regression was most likely, and `tests/r44.js`'s own
+    175 checks (re-run in full below) cover the rest of that path
+    unmodified.
+  - **§E — manual attribution, and its refusal on a confirmed line.**
+    `r44AttributeLineTo` is proven both as a direct call (sets
+    `attributed_to`; the `noCase` variant additionally parks `match_status`
+    at `na`; a call against §D's now-confirmed line is refused with a toast
+    naming the reason, and `attributed_to` is left exactly as it was) and
+    through the actual `#recon-attr-<id>` select / `#recon-attr-nocase-<id>`
+    checkbox / `#recon-attr-set-<id>` button, driven with real DOM events —
+    proving the delegated `#recon-review` click handler's `.recon-attr-set`
+    branch reads the right sibling controls out of the right `.recon-attr`
+    wrapper, not merely that the underlying function works.
+  - **§F — the tally.** Every expected number is computed independently
+    inside the SAME `page.evaluate` call, straight off `reconState.lines`
+    (never imported from `r44TallyHtml` itself — the standing rule this file
+    inherits from `r44.js`/`r35.js`), for a statement built with one
+    dismissed line sharing an adviser with a kept line (so a leak into the
+    sum would silently overstate that adviser's total) and one line
+    deliberately null-attributed by hand after import (proving the
+    "Unassigned — needs you" bucket and its count independently of import
+    ever producing one). `#recon-needs-count` is cross-checked against an
+    independently-filtered `r44NeedsYou` count rather than a hardcoded
+    number, and the manually-nulled line's own `data-needs="1"` is checked
+    directly.
+  - **§G — owner-only.** p1 (admin) and p2 (adviser) get the same `nav()` +
+    forced-`loadMoneyPage()` self-gate proof R44's own §D established
+    (panel hidden, review left empty, zero leaked DOM), extended to check
+    specifically for zero `#recon-tally`/`.recon-needs-line` nodes anywhere
+    — the R48-specific surfaces R44's suite predates and cannot cover. The
+    "is the manual control writable by a non-owner" question in the task
+    brief is answered at the layer that actually enforces it: a direct
+    `commission_lines.attributed_to` write comes back 42501 for both
+    personas, same as every other R44/R48 write, which is what makes "the
+    UI simply doesn't render the control for them" a safe design rather
+    than a decoration over a writable table — `r44AttrControl` never even
+    gets a `reconState` to read on a non-owner page, so there is no DOM
+    control to click in the first place.
+  - **§H — XSS spot-check.** A hostile `adviser_name`
+    (`<script>window.__R48XSS=3</script>Adviser`), `provider`
+    (`"><svg onload="window.__R48XSS=2">`) and `addressee`
+    (`<img src=x onerror="window.__R48XSS=1">`) are imported for real; no
+    flag ever fires, no live `img`/`svg` element exists anywhere in
+    `#recon-review`, and the hostile line — unmatched, so it lands on the
+    owner and stays a pending matchable line — is confirmed to actually
+    render inside the needs-you queue (`data-needs="1"`) with the raw
+    markup present only as escaped, inert text.
+  - **Repairs to pre-existing suites: ZERO.** The full battery was re-run to
+    completion (not assumed) — all 48 pre-existing `tests/*.js` files plus
+    `smoke.js` passed at their exact pre-R48 counts (4,536 checks, confirmed
+    by summing every suite's own reported total after the run, not taken on
+    faith from the pre-R48 HARNESS.md figure). `tests/r44.js` in particular
+    — the suite most likely to catch an R48 regression in the one shared
+    write path §D exercises — passed at its full 175/175, unedited.
+    `tests/r34.js`/`tests/r35.js`/`tests/r38.js`, named in the task brief as
+    the suites whose case-close/case-modal behaviour R48 could plausibly
+    have disturbed, all passed unedited too — `r35.js`'s own §E already
+    drives `#case-mark-np` end-to-end (confirm → lost-reason overlay →
+    `not_proceeding` → button gone on reopen) and needed no change at all,
+    confirming R48 left that path exactly as R35 left it. r17 was re-run
+    outside the 23:00–00:00 UTC flake window (10:21 UTC) for a trustworthy
+    green.
+  - **No real defect found.** Both halves of the round — the hard-delete
+    removal and the attribution/tally/needs-you machinery — behaved exactly
+    as the task brief and the code's own comments describe on every
+    scenario this suite could construct, including the adversarial ones
+    (ex-broker names, non-current adviser names on misc-insurance lines,
+    hostile spreadsheet strings, a write attempted by a non-owner). This was
+    a regression-and-edge-case pass against already-correct code, not a bug
+    hunt that came up empty by luck — the fee-paid-write and
+    `#case-mark-np`-still-exists checks specifically targeted the two
+    places a real regression was most plausible, and both held.
 
 R47 notes: Gate 0 of the post-import red team's two day-one bugs — both
 `admin/app.js` + `admin/mock-supabase.js` only; the SQL side of Bug A

@@ -1292,7 +1292,12 @@
       ["tran_type", "addressee", "provider", "account_number", "opp_id", "reason",
         "policy_type", "policy_group", "adviser_name", "match_note"].forEach(function (f) { if (r[f] == null) r[f] = ""; });
       if (r.match_status == null) r.match_status = "unmatched";
-      ["line_date", "premium", "banked_gross", "banked_net", "matched_case_id", "confirmed_at"]
+      /* R48 — attributed_to (nullable uuid → profiles.id) rides alongside the
+         other nullable columns so .select("*") always returns the key and an
+         .update({attributed_to}) round-trips. The FK is left as loose as the
+         mock's other soft FKs (matched_case_id gets a depth check; this mirrors
+         production's `on delete set null` without a strict insert guard). */
+      ["line_date", "premium", "banked_gross", "banked_net", "matched_case_id", "confirmed_at", "attributed_to"]
         .forEach(function (f) { if (r[f] === undefined) r[f] = null; });
     }
     if (pk === "id" && !r.id) r.id = nid(PREFIX[table] || "row");

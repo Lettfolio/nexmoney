@@ -3604,11 +3604,28 @@ tr.owed-hot > td { background: var(--red-bg); }
   margin-top: 16px; padding-top: 14px; border-top: 2px solid var(--border-strong); }
 .recon-review-head h4 { font-size: 15px; font-weight: 700; color: var(--dark); margin: 0 0 4px; }
 .recon-review-head .panel-sub { margin: 0; }
-.recon-review-tools { display: flex; gap: 6px; flex: none; }
-.recon-group { margin-top: 14px; }
-.recon-group h5 { font-size: 13px; font-weight: 700; color: var(--dark); text-transform: uppercase; letter-spacing: .05em; margin: 0 0 2px; }
-.recon-group .panel-sub { margin-bottom: 6px; }
+.recon-review-tools { display: flex; gap: 6px; flex: none; align-items: center; }
+/* R48 — the "needs you" pill in the review head. Muted when the queue is clear,
+   amber and bold the moment anything is waiting on the owner. */
+.recon-needs { font-size: 12px; font-weight: 700; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; padding: 2px 8px; border-radius: 999px; background: var(--light); }
+.recon-needs.is-live { color: var(--amber); background: var(--amber-bg, var(--red-bg)); }
+/* R48 — the per-person "received this statement" tally, above the groups. */
+.recon-tally { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-tint, var(--light)); }
+.recon-tally h5 { font-size: 13px; font-weight: 700; color: var(--dark); text-transform: uppercase; letter-spacing: .05em; margin: 0 0 6px; }
+.recon-tally-row { display: flex; align-items: baseline; gap: 8px; padding: 2px 0; font-size: 13px; color: var(--dark); }
+.recon-tally-row .recon-tally-name { flex: 1 1 auto; }
+.recon-tally-row .recon-tally-net { flex: none; font-weight: 700; font-variant-numeric: tabular-nums; }
+.recon-tally-row.recon-tally-owner { font-weight: 600; }
+.recon-tally-row.recon-tally-unassigned .recon-tally-name { color: var(--amber); font-weight: 700; }
+/* R48 — the "attribute to a person" control on a matchable line. */
+.recon-attr { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 6px; font-size: 12px; color: var(--muted); }
+.recon-attr .recon-attr-lbl { white-space: nowrap; }
+.recon-attr .recon-attr-pick { flex: 1 1 160px; min-width: 0; font-size: 12.5px; }
+.recon-attr-nocase-wrap { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.recon-attr-nocase-wrap input { width: auto; margin: 0; }
+.recon-line.recon-needs-line { border-left: 3px solid var(--amber); padding-left: 8px; }
 @media (max-width: 700px) {
   .recon-line { grid-template-columns: 1fr; }
   .recon-controls .recon-pick { flex-basis: 100%; }
+  .recon-attr .recon-attr-pick { flex-basis: 100%; }
 }

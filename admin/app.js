@@ -12443,9 +12443,12 @@ window.openCase = async function (id, opts = {}) {
     <div id="offer-diff" class="offer-diff hidden"></div>` : ""}
     ${caseFormHtml}
     <div class="modal-actions">
-      ${/* BACKEND-R4 §1 — deleting a case is Owner/Administrator only and RLS enforces it; an
-            adviser is simply never offered the button rather than shown a refusal. */ ""}
-      <div>${id && isAdminOrOwner() ? '<button class="btn btn-ghost btn-danger" id="del-case-btn">Delete case</button>' : ""}</div>
+      ${/* R48 — case hard-delete removed (Daniel's binding decision). A case is only ever CLOSED via
+            the "🚫 Mark not proceeding" action (case-mark-np → moveCaseToStage + the R15 lost-reason
+            capture), never hard-deleted. The empty <div> is kept so .modal-actions holds its
+            space-between layout (Cancel/Save stay pinned right). confirmHardDelete lives on — it is
+            still used by the client delete and the merge flow. */ ""}
+      <div></div>
       <div class="right">
         <button class="btn" id="modal-cancel">Cancel</button>
         <button class="btn btn-primary" id="modal-save">Save</button>
@@ -12995,14 +12998,8 @@ window.openCase = async function (id, opts = {}) {
          chips ("All" and "Activity") and the operator always sees the row they just wrote. */
       rerenderCaseTl();
     };
-    const delCaseBtn = $("#del-case-btn"); // absent for an adviser — see the modal-actions block above
-    if (delCaseBtn) delCaseBtn.onclick = async () => {
-      const extra = c.stage === "completed" ? "⚠ This case is COMPLETED — deleting removes its fee/commission history from your records." : null;
-      if (!confirmHardDelete("Delete this case?", extra)) return;
-      const { error } = await db.from("cases").delete().eq("id", id);
-      if (error) return toast("Error: " + error.message);
-      closeModal(); toast("Case deleted"); loadPipeline(); loadDashboard();
-    };
+    /* R48 — the #del-case-btn handler is gone with the button. A case is closed only through
+       "🚫 Mark not proceeding" now; there is no hard-delete path from the case modal. */
     const submitNote = async () => {
       const input = $("#new-note");
       const raw = input.value.trim();
@@ -23200,6 +23197,70 @@ function r44LineKind(l) {
 }
 const R44_MATCHABLE = { mortgage: true, takeback: true, protection: true };
 
+/* ---------- R48 · commission attribution ----------
+   Who each line's money belongs to on the reconciliation screen. PURE and
+   testable, same discipline as suggestStatementMatches: no I/O, no DOM. */
+
+/* A person's name normalised the way the matcher already normalises text: trim,
+   collapse internal whitespace, lowercase. Used to map a sheet's adviser_name
+   onto a current profile — an ex-broker (Hannah/Nathan/Ciaran/Elizabeth) has no
+   profile, so their name never keys anything and the line falls through to the
+   owner, which is exactly Daniel's rule. */
+function r44NameKey(s) {
+  return String(s == null ? "" : s).trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+/* "Misc insurance" for attribution/tally purposes: all protection / GI /
+   renewal / trail — anything that is not a Mortgage-group receipt or its
+   takeback. This is the half of the money that ALWAYS sits under the owner
+   whatever name it carries on the sheet. */
+function r44IsMiscInsurance(l, kind) {
+  kind = kind || r44LineKind(l);
+  if (kind === "protection" || kind === "renewal" || kind === "other") return true;
+  return String((l || {}).policy_group || "").trim().toLowerCase() !== "mortgage";
+}
+
+/* R48 — a line "needs you" when EITHER it is a matchable (mortgage/takeback)
+   line still awaiting a case decision (unmatched/suggested — not confirmed,
+   dismissed, or parked at na), OR its attribution is null. Renewals/misc that
+   were attributed to the owner at import are placed and never in the queue. */
+function r44NeedsYou(l) {
+  if (!l || l.match_status === "dismissed") return false;
+  const k = r44LineKind(l);
+  const matchablePending = !!R44_MATCHABLE[k] && (l.match_status === "unmatched" || l.match_status === "suggested");
+  return matchablePending || !l.attributed_to;
+}
+
+/* r44AttributeLine(line, kind, matchedCase, nameToId, ownerId) → profile id (or
+   ownerId fallback). Daniel's decision, encoded:
+     · misc insurance (protection / renewal / other, OR any non-Mortgage group) →
+       the OWNER, whoever's name it sits under. This wins regardless of
+       adviser_name — it is the "all misc insurance → me" rule.
+     · mortgage / takeback → the matched case's adviser if we have a case (which
+       is the owner for the ex-broker cases the import already re-assigned to the
+       owner); else the sheet's named adviser IF they are a current profile; else
+       the owner. Never returns null — the tally is never blank at import. */
+function r44AttributeLine(line, kind, matchedCase, nameToId, ownerId) {
+  if (r44IsMiscInsurance(line, kind)) return ownerId || null;
+  if (matchedCase && matchedCase.assigned_to) return matchedCase.assigned_to;
+  const named = nameToId ? nameToId[r44NameKey(line && line.adviser_name)] : null;
+  return named || ownerId || null;
+}
+
+/* ownerId + a normalised-name → profile-id map, built from the staff list
+   already loaded at sign-in (TEAM = the STAFF_ROLES subset of PROFILES). No
+   extra DB read: R44 is owner-gated and TEAM is populated before the Money page
+   can be reached. Owner falls back to ME.id — in R44 the current user always is
+   the owner. nameToId is current staff only, so ex-broker names miss. */
+function r44StaffMaps() {
+  const staff = (typeof TEAM !== "undefined" && TEAM) ? TEAM : [];
+  const ownerRow = staff.filter((p) => p && p.role === "owner")[0];
+  const ownerId = (ownerRow && ownerRow.id) || (ME && ME.id) || null;
+  const nameToId = {};
+  staff.forEach((p) => { const k = r44NameKey(p && p.full_name); if (k) nameToId[k] = p.id; });
+  return { ownerId, nameToId, staff };
+}
+
 /* Expected proc fee from the rate card: every card row whose lender normalises
    onto this provider gives a rate, and the range is [min, max] × the loan. Null
    when there is no card, no matching lender, or no loan — an expected fee we
@@ -23534,6 +23595,12 @@ async function r44ImportStatement(file) {
   }
   const [cases, priors, rates] = await Promise.all([r44LoadCandidateCases(), r44LoadPriorLines(), loadProcRates()]);
   const sugg = suggestStatementMatches(parsed.lines, cases, priors, rates);
+  /* R48 — every line is attributed at import so the per-person tally is never
+     blank. The suggested case (when there is one) is the matchedCase, looked up
+     in the already-loaded candidate cases; a confirm later re-homes it (T3). */
+  const { ownerId, nameToId } = r44StaffMaps();
+  const caseById = {};
+  cases.forEach((c) => { if (c && c.id) caseById[c.id] = c; });
   const payload = parsed.lines.map((l, i) => {
     const s = sugg[i];
     const row = r44LineDbRow(l);
@@ -23541,6 +23608,7 @@ async function r44ImportStatement(file) {
     row.matched_case_id = R44_MATCHABLE[s.kind] ? (s.suggested || null) : null;
     row.match_status = !R44_MATCHABLE[s.kind] ? "na" : (s.suggested ? "suggested" : "unmatched");
     row.match_note = s.suggested ? `${s.confidence === "high" ? "high" : "low"} · ${s.note}`.slice(0, 200) : "";
+    row.attributed_to = r44AttributeLine(l, s.kind, s.suggested ? caseById[s.suggested] : null, nameToId, ownerId);
     return row;
   });
   let ok = true, msg = "";
@@ -23591,10 +23659,14 @@ async function openReconReview(stmtId) {
      row is the human's decision — matched_case_id, match_status — which is the
      only part a recompute must never overwrite. */
   const sugg = suggestStatementMatches(ls, cases, priors, rates);
+  /* R48 — staff maps for the per-person tally, the "attribute to …" select, and
+     the ownerId fallback the confirm/attribute paths need. */
+  const { ownerId, staff } = r44StaffMaps();
   reconState = {
     statement: st, lines: ls, cases, rates,
     sugg, byIndex: {}, byLine: {},
     picks: {}, ticks: {}, feeFix: {},
+    ownerId, staff,
   };
   ls.forEach((l, i) => {
     reconState.byIndex[l.id] = i;
@@ -23616,6 +23688,26 @@ function r44ExpectedBadge(line, caseRow, rates) {
   if (!v) return "";
   if (v.verdict === "within") return r44Chip("≈ expected", "green");
   return r44Chip(`${fmtM2(v.delta)} ${v.verdict}`, "amber");
+}
+/* R48 — the "attribute to a person" control: sets attributed_to directly,
+   WITHOUT requiring a case (income with no case in the system, or correcting the
+   import guess). The select defaults to the line's current attribution, or the
+   owner when it is null. "no case — just income" also parks match_status at `na`
+   so the line stops asking for a case decision. Only on non-locked matchable
+   lines; a confirmed line is already placed. */
+function r44AttrControl(l) {
+  const st = reconState;
+  if (l.match_status === "confirmed") return "";
+  const staff = st.staff || [];
+  if (!staff.length) return "";
+  const cur = l.attributed_to || st.ownerId || "";
+  const optsHtml = staff.map((p) => `<option value="${esc(p.id)}"${p.id === cur ? " selected" : ""}>${esc(p.full_name || p.email || p.id)}${p.role === "owner" ? " (owner)" : ""}</option>`).join("");
+  return `<div class="recon-attr" data-line="${esc(l.id)}">
+      <span class="recon-attr-lbl">Attribute to</span>
+      <select class="recon-attr-pick" id="recon-attr-${esc(l.id)}" data-line="${esc(l.id)}" aria-label="Attribute this income to a person">${optsHtml}</select>
+      <label class="recon-attr-nocase-wrap"><input type="checkbox" class="recon-attr-nocase" id="recon-attr-nocase-${esc(l.id)}" data-line="${esc(l.id)}"> <span>no case — just income</span></label>
+      <button type="button" class="btn btn-sm recon-attr-set" id="recon-attr-set-${esc(l.id)}" data-line="${esc(l.id)}">Set person</button>
+    </div>`;
 }
 function r44MatchCell(l) {
   const st = reconState;
@@ -23654,6 +23746,7 @@ function r44MatchCell(l) {
       <button type="button" class="btn btn-sm recon-confirm" id="recon-confirm-${esc(l.id)}" data-line="${esc(l.id)}">Confirm</button>
       <button type="button" class="btn btn-sm recon-dismiss" id="recon-dismiss-${esc(l.id)}" data-line="${esc(l.id)}">${l.match_status === "dismissed" ? "Un-dismiss" : "Dismiss"}</button>
     </div>
+    ${r44AttrControl(l)}
     ${r44FeeDeltaHtml(l, sel)}
     ${l.match_note ? `<div class="s cs-muted">${esc(l.match_note)}</div>` : ""}`;
 }
@@ -23677,13 +23770,49 @@ function r44LineRow(l, kind) {
   if (kind === "takeback") cls.push("recon-takeback");
   if (l.match_status === "confirmed") cls.push("is-confirmed");
   if (l.match_status === "dismissed") cls.push("is-dismissed");
-  return `<div class="${cls.join(" ")}" data-line="${esc(l.id)}" data-kind="${esc(kind)}" data-status="${esc(l.match_status || "")}">
+  if (r44NeedsYou(l)) cls.push("recon-needs-line");   // R48 — a queue line, styled + testable
+  return `<div class="${cls.join(" ")}" data-line="${esc(l.id)}" data-kind="${esc(kind)}" data-status="${esc(l.match_status || "")}" data-needs="${r44NeedsYou(l) ? "1" : "0"}" data-attr="${esc(l.attributed_to || "")}">
     <div class="recon-facts">
       <div class="t">${l.line_date ? fmtD(l.line_date) : "—"} · <strong>${esc(l.addressee) || '<span class="cs-muted">(no addressee)</span>'}</strong></div>
       <div class="s">${esc(l.provider || "no provider")} · ${esc(l.account_number || "no account")} · ${fmtM2(l.banked_gross)} gross / ${fmtM2(l.banked_net)} net${l.adviser_name ? ` · ${esc(l.adviser_name)}` : ""}</div>
       ${paired ? `<div class="s">${r44Chip("reversed in-statement · net £0", "grey")}</div>` : ""}
     </div>
     <div class="recon-match">${r44MatchCell(l)}</div>
+  </div>`;
+}
+/* R48 — the per-person "received this statement" tally: net banked grouped by
+   attributed_to, dismissed lines excluded. The owner's row is annotated with the
+   insurance slice (all the misc-insurance net that sits under them). A null
+   attribution rolls up into an "Unassigned — needs you" row. */
+function r44TallyHtml() {
+  const st = reconState;
+  const byPerson = {};
+  const ownerInsurance = {};
+  let unassignedNet = 0, unassignedCount = 0;
+  st.lines.forEach((l) => {
+    if (l.match_status === "dismissed") return;
+    const net = Number(l.banked_net || 0);
+    const att = l.attributed_to || null;
+    if (!att) { unassignedNet += net; unassignedCount++; return; }
+    byPerson[att] = (byPerson[att] || 0) + net;
+    if (att === st.ownerId && r44IsMiscInsurance(l)) ownerInsurance[att] = (ownerInsurance[att] || 0) + net;
+  });
+  const staff = st.staff || [];
+  const seen = {};
+  const order = [];
+  staff.forEach((p) => { if (p && byPerson[p.id] != null && !seen[p.id]) { order.push(p.id); seen[p.id] = true; } });
+  Object.keys(byPerson).forEach((id) => { if (!seen[id]) { order.push(id); seen[id] = true; } });
+  const rows = order.map((id) => {
+    const ins = (id === st.ownerId && ownerInsurance[id]) ? ` <span class="cs-muted">(incl. ${fmtM2(ownerInsurance[id])} insurance)</span>` : "";
+    return `<div class="recon-tally-row${id === st.ownerId ? " recon-tally-owner" : ""}" data-person="${esc(id)}"><span class="recon-tally-name">${esc(staffName(id))}</span><span class="recon-tally-net num">${fmtM2(byPerson[id])}</span>${ins}</div>`;
+  });
+  if (unassignedCount) {
+    rows.push(`<div class="recon-tally-row recon-tally-unassigned" data-person=""><span class="recon-tally-name">Unassigned — needs you (${unassignedCount})</span><span class="recon-tally-net num">${fmtM2(unassignedNet)}</span></div>`);
+  }
+  if (!rows.length) return "";
+  return `<div class="recon-tally" id="recon-tally">
+    <h5>Received this statement <span class="cs-muted">(net, by person)</span></h5>
+    ${rows.join("")}
   </div>`;
 }
 function renderReconReview() {
@@ -23696,16 +23825,19 @@ function renderReconReview() {
   const byKind = {};
   st.lines.forEach((l) => { const k = r44LineKind(l); (byKind[k] = byKind[k] || []).push(l); });
   const pending = st.lines.filter((l) => R44_MATCHABLE[r44LineKind(l)] && l.match_status !== "confirmed").length;
+  const needs = st.lines.filter(r44NeedsYou).length;   // R48 — the "needs you" queue count
   let html = `<div class="recon-review-head" id="recon-review-head">
     <div>
       <h4>Statement ${esc(s.ref) || "(no ref)"} · ${s.statement_date ? fmtD(s.statement_date) : "no date"}</h4>
       <p class="panel-sub">${st.lines.length} line${st.lines.length === 1 ? "" : "s"} · ${advisers.length} adviser${advisers.length === 1 ? "" : "s"} · ${fmtM2(s.gross_total)} gross / ${fmtM2(s.net_total)} net · <span class="cs-muted">${esc(s.filename || s.statement_label || "")}</span></p>
     </div>
     <div class="recon-review-tools">
+      <span class="recon-needs${needs ? " is-live" : ""}" id="recon-needs">Needs you (<span id="recon-needs-count">${needs}</span>)</span>
       <button type="button" class="btn btn-sm btn-primary" id="recon-confirm-ticked"${pending ? "" : " disabled"}>Confirm ticked</button>
       <button type="button" class="btn btn-sm" id="recon-close">Close review</button>
     </div>
-  </div>`;
+  </div>
+  ${r44TallyHtml()}`;
   R44_GROUPS.forEach((g) => {
     const ls = byKind[g.key] || [];
     if (!ls.length) return;
@@ -23835,6 +23967,12 @@ async function r44ConfirmLine(lineId, opts) {
   if (uErr) return "the case could not be updated: " + uErr.message;
   const body = `Proc fee ${fmtM2(gross)} banked ${fmtD(r44NoteDate(l))} — Stonebridge statement ${ref} (${where})`;
   const { error: nErr } = await db.from("case_notes").insert({ case_id: caseId, body, created_by: (ME && ME.id) || null });
+  /* R48 — confirming a mortgage receipt against a case re-homes the income onto
+     the case's TRUE adviser (the owner for the ex-broker cases the import
+     assigned to the owner), overriding any import-time name guess. Written in
+     the SAME line update as match_status/matched_case_id/confirmed_at. Misc
+     insurance never reaches here — its note-only confirm keeps owner attribution. */
+  linePatch.attributed_to = c.assigned_to || null;
   linePatch.match_note = [
     "proc fee dated " + r44NoteDate(l),
     setProcFee ? (have ? "case proc fee updated" : "case proc fee set") : "",
@@ -23865,6 +24003,27 @@ async function r44DismissLine(lineId) {
   if (next.match_status === "dismissed") st.ticks[lineId] = false;
   renderReconReview();
   toast(next.match_status === "dismissed" ? "Line dismissed" : "Line back in the queue");
+}
+/* R48 — set a line's attributed_to directly, no case required. This is the
+   manual half of the "needs you" queue: a receipt that is just income with no
+   case in the system, or a correction to the import's name guess. It writes
+   ONLY attribution (leaving match_status as-is), unless the owner ticks "no case
+   — just income", which also parks the line at `na` so it stops asking to be
+   matched. A later deliberate case-confirm is the only thing that overrides it. */
+async function r44AttributeLineTo(lineId, profileId, noCase) {
+  const st = reconState;
+  if (!st) return;
+  const l = st.byLine[lineId];
+  if (!l) return;
+  if (l.match_status === "confirmed") return toast("That line is confirmed — its attribution follows the case.");
+  const patch = { attributed_to: profileId || null };
+  if (noCase && l.match_status !== "na") patch.match_status = "na";
+  const { error } = await db.from("commission_lines").update(patch).eq("id", lineId);
+  if (error) return toast("Error: " + error.message);
+  Object.assign(l, patch);
+  if (patch.match_status === "na") st.ticks[lineId] = false;
+  renderReconReview();
+  toast(`Attributed to ${staffName(profileId)}${patch.match_status === "na" ? " · no case, just income" : ""}`);
 }
 async function r44ConfirmTicked() {
   const st = reconState;
@@ -23920,6 +24079,16 @@ async function r44ConfirmTicked() {
       }
       const dis = e.target.closest(".recon-dismiss");
       if (dis) return r44DismissLine(dis.dataset.line);
+      /* R48 — "attribute to a person": read the select + the no-case checkbox
+         from the same control block and write attribution directly. */
+      const attrSet = e.target.closest(".recon-attr-set");
+      if (attrSet) {
+        const wrap = attrSet.closest(".recon-attr");
+        const sel = wrap && wrap.querySelector(".recon-attr-pick");
+        const noCaseChk = wrap && wrap.querySelector(".recon-attr-nocase");
+        attrSet.disabled = true;
+        return r44AttributeLineTo(attrSet.dataset.line, sel ? sel.value : "", !!(noCaseChk && noCaseChk.checked));
+      }
     });
     review.addEventListener("change", (e) => {
       const st = reconState;
