@@ -25789,12 +25789,25 @@ document.addEventListener("click", (e) => {
 let chatHistory = [];
 let chatSeeded = false;
 
+/* R49 — friendly labels for the "what I did" chips under an assistant reply. Any kind not listed
+   falls back to its underscored name with spaces, so a new server-side action still reads sensibly. */
+const ASSISTANT_ACTION_LABEL = {
+  search_clients: "looked up clients",
+  get_case: "read a case",
+  get_briefing: "checked the briefing",
+  create_task: "task added",
+  add_note: "note added",
+  queue_email: "email queued",
+  create_client: "client created",
+  create_case: "case created",
+  update_case: "case updated",
+};
 function addChatBubble(kind, text, actions) {
   const log = $("#chat-log");
   const div = document.createElement("div");
   div.className = "chat-msg " + (kind === "me" ? "chat-me" : kind === "err" ? "chat-ai chat-err" : "chat-ai");
   let html = esc(text).replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>").replace(/\n/g, "<br>");
-  if (actions && actions.length) html += "<div>" + actions.map((a) => `<span class="chat-action-chip">✓ ${esc(a.kind)}</span>`).join("") + "</div>";
+  if (actions && actions.length) html += "<div>" + actions.map((a) => `<span class="chat-action-chip">✓ ${esc(ASSISTANT_ACTION_LABEL[a.kind] || String(a.kind).replace(/_/g, " "))}</span>`).join("") + "</div>";
   div.innerHTML = html;
   log.appendChild(div);
   log.scrollTop = log.scrollHeight;
@@ -25805,7 +25818,7 @@ window.askAI = function (prefill) {
   if (!chatSeeded) {
     chatSeeded = true;
     const first = (((ME && ME.full_name) || (ME && ME.email)) || "there").split(/[\s@]/)[0];
-    addChatBubble("ai", `Hi ${first}! I can look up clients, create tasks, add notes, queue template emails and draft replies. What do you need?`);
+    addChatBubble("ai", `Hi ${first}! I can look up clients, set up new clients and cases, update case details and stages, add tasks and notes, queue template emails and draft replies. What do you need?`);
   }
   $("#chat-input").value = prefill || "";
   $("#chat-input").focus();
