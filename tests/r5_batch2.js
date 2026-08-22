@@ -108,9 +108,7 @@ const notesFor = (page, id) => page.evaluate(async (cid) => {
 // localDateStr() does, so this test and the app can never read different clocks again.
 const dstr = (offsetDays) => new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/London" }).format(new Date(Date.now() + offsetDays * 86400000));
 // The case form lives inside a collapsed <details> drawer — open it before driving its fields.
-// R33 — scoped to #modal: Settings' new #diag-details shares the `.case-details` styling class
-// and, being static markup, is always in the DOM — an unscoped selector now matches it first.
-const openDetails = (page) => page.evaluate(() => { const d = document.querySelector("#modal .case-details"); if (d) d.open = true; });
+const openDetails = (page) => page.evaluate(() => { const d = document.querySelector(".case-details"); if (d) d.open = true; });
 const PDF = { name: "offer.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4\n% mock offer\n%%EOF\n") };
 
 async function main() {
@@ -231,22 +229,22 @@ async function main() {
         JSON.stringify({ lender: midParse.lender, doc: midParse.offer_doc_path, notes: notesMid.filter((n) => /offer/i.test(n)) }));
 
       /* Tick the lender conflict as well.
-         UPDATED (round 6.4) — this counted 3 because ca043 had two empty fields the
-         offer could fill (ERC end date, offer expiry). `parse-offer` was redeployed
-         this round and now returns the security address off the offer letter, which
-         ca043 also has empty, so there are three pre-ticked empties and the count is
-         4. Nothing about the rule changed — "fields that are empty today are
-         pre-ticked" is asserted above and still passes — so the expectation is
-         updated to the number of empty fields the parse can now fill, and the new
-         one is named rather than absorbed into a bare count. */
+         UPDATED (round 6.4) — this counted 3, then 4 once parse-offer began returning the
+         security address, because each is another field ca043 has empty for the offer to fill.
+         R52 — parse-offer now also reads Balance, Monthly payment, Offer date, Reversion rate,
+         Repayment method, Account number and Lender reference; ca043 has all seven empty, so the
+         pre-ticked count rises to 11. The rule is unchanged ("fields empty today are pre-ticked",
+         asserted above); the expectation tracks the number of empties the parse can now fill. */
       await page.click(`#${lenderRow.id}`);
       const expected = await page.evaluate(() => {
         const rows = [...document.querySelectorAll("#offer-diff tbody tr")].filter((tr) => tr.querySelector("input").checked);
         return rows.map((tr) => tr.children[0].textContent.trim());
       });
-      eq("R5-4 · four fields are selected for apply", expected.length, 4);
+      eq("R5-4 · eleven empty fields are selected for apply", expected.length, 11);
       ok("R5-4 · …and the property address the offer names is one of them",
         expected.indexOf("Property address") >= 0, JSON.stringify(expected));
+      ok("R52 · …and the new offer readings (Monthly payment, Repayment method, Account number) are among them",
+        ["Monthly payment", "Repayment method", "Account number"].every((l) => expected.indexOf(l) >= 0), JSON.stringify(expected));
 
       page.__dialogs = [];
       await page.click("#offer-apply");
@@ -256,14 +254,18 @@ async function main() {
       eq("R5-4 · the ticked lender persisted", after.lender, "Coventry Building Society");
       ok("R5-4 · the other two ticked fields persisted", !!after.erc_end_date && !!after.offer_expiry_date,
         JSON.stringify({ erc: after.erc_end_date, expiry: after.offer_expiry_date, applied: expected }));
+      ok("R52 · the fuller offer readings persisted (balance, monthly payment, reversion, repayment method, offer date, account + reference)",
+        Number(after.current_balance) === 241500 && Number(after.monthly_payment) === 1187 && Number(after.reversion_rate) === 8.49
+        && after.repayment_method === "repayment" && !!after.offer_issued_date
+        && after.mortgage_account_number === "COV-88451207" && after.lender_reference === "AP-2231190",
+        JSON.stringify({ bal: after.current_balance, mp: after.monthly_payment, rev: after.reversion_rate, rm: after.repayment_method, od: after.offer_issued_date, acc: after.mortgage_account_number, ref: after.lender_reference }));
       ok("R5-4 · unticked conflicts were NOT applied", Number(after.loan_amount) === Number(before.loan_amount) && Number(after.term_years) === Number(before.term_years),
         JSON.stringify({ loan: after.loan_amount, term: after.term_years }));
       ok("R5-4 · the document is attached in the same write", !!after.offer_doc_path, JSON.stringify(after.offer_doc_path));
       ok("R5-4 · the AI-read note was written on apply", notesAfter.some((n) => /^From mortgage offer \(AI-read\)/.test(n)), JSON.stringify(notesAfter.slice(0, 3)));
       ok("R5-4 · no conflict dialog was raised by the apply", !page.__dialogs.length, JSON.stringify(page.__dialogs));
       const drawer = await page.evaluate(() => {
-        // R33 — scoped to #modal (see openDetails above — the same collision applies here).
-        const d = document.querySelector("#modal .case-details");
+        const d = document.querySelector(".case-details");
         return { open: !!(d && d.open), panelGone: !!document.querySelector("#offer-diff") && document.querySelector("#offer-diff").classList.contains("hidden") };
       });
       eq("R5-4 · the case re-opens with the details drawer open and the proposal cleared", drawer, { open: true, panelGone: true });
@@ -537,8 +539,7 @@ async function main() {
       eq("R5-34 · the move is still blocked", res, "blocked");
       const state = await page.evaluate(() => {
         const sel = document.querySelector("#case-form select[name='protection_status']");
-        // R33 — scoped to #modal (see openDetails above — the same collision applies here).
-        const det = document.querySelector("#modal .case-details");
+        const det = document.querySelector(".case-details");
         return {
           modalOpen: !document.querySelector("#modal-backdrop").classList.contains("hidden"),
           caseId: (document.querySelector("#case-form") || {}).dataset ? document.querySelector("#case-form").dataset.caseId : null,

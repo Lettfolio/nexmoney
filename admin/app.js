@@ -4,7 +4,6 @@ const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 let db;
 try {
   db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
-  window.db = db;   // R30 — expose the client so logClientError's `window.db && db.from` guard can gate the best-effort persist (and stays undefined before init, covering very-early errors)
 } catch (e) {
   // Supabase SDK failed to load (CDN outage, ad-blocker, proxy, SRI mismatch).
   // Show a visible message instead of a silent blank page, then stop.
@@ -18,86 +17,6 @@ try {
 // (works on nexmoney-two.vercel.app now and www.nexmoney.co.uk later).
 // The origin(s) must be listed in Supabase Auth -> URL Configuration -> Redirect URLs.
 const ADMIN_URL = new URL("/admin/", window.location.origin).href;
-
-/* ==========================================================================
-   R21 Part A — global client-side error capture (the safety net BELOW
-   showFail()/renderLoadError()). Installed here, the earliest safe point after
-   `db` exists, so the two window listeners are registered before init() runs and
-   catch anything the per-view handlers and the bootstrap catch don't.
-
-   ERROR_LOG is an in-memory ring buffer (capped, session-only, NEVER persisted,
-   NEVER sent over the network). Each entry:
-     { t:<ISO>, kind:"error"|"promise"|"caught", msg, where, count, [stack],
-       [recordId], user:ME?.email, role:MY_ROLE, view:<hash/path> }
-   De-dupe: a repeat of the LAST entry's msg inside ERROR_DEDUPE_MS bumps its
-   `count` instead of pushing a new row (stops a render loop flooding the buffer)
-   and shows NO extra toast. Only a genuinely-new error raises ONE non-blocking
-   toast. logClientError() is itself fully try/caught — logging can never throw.
-   Privacy: we record message/stack/where only, never the Supabase key or vault
-   data, and the buffer is visible solely to owner/admin via the Diagnostics panel. */
-const ERROR_LOG = [];
-const ERROR_LOG_CAP = 100;
-const ERROR_DEDUPE_MS = 5000;
-let errorEventsOff = false;   // R30 — once error_events is proven absent/denied this session, stop trying to persist (no console-error storms)
-function logClientError(kind, message, detail) {
-  try {
-    detail = detail || {};
-    let msg = String((message && message.message) || message || "").trim();
-    if (!msg) msg = "(no message)";
-    if (msg.length > 500) msg = msg.slice(0, 500);
-    const now = Date.now();
-    const last = ERROR_LOG[ERROR_LOG.length - 1];
-    if (last && last.msg === msg && (now - (last._ms || 0)) <= ERROR_DEDUPE_MS) {
-      last.count = (last.count || 1) + 1;   // de-dupe: bump count, no new row, no new toast
-      last._ms = now;
-      return;
-    }
-    const entry = { t: new Date().toISOString(), _ms: now, kind: kind || "error", msg, where: detail.where || "", count: 1 };
-    if (detail.recordId != null) entry.recordId = String(detail.recordId);
-    if (detail.stack) entry.stack = String(detail.stack).slice(0, 2000);
-    try { entry.user = ME ? ME.email : undefined; } catch (_) {}
-    try { entry.role = MY_ROLE; } catch (_) {}
-    try { entry.view = (location.hash || location.pathname || ""); } catch (_) {}
-    ERROR_LOG.push(entry);
-    while (ERROR_LOG.length > ERROR_LOG_CAP) ERROR_LOG.shift();
-    try { toast("Something went wrong — a diagnostic was logged."); } catch (_) {}
-    /* R30 — best-effort, SANITISED cross-session fingerprint. Only on the NEW-entry
-       path (the de-dupe branch above early-returns, so a flood inserts at most one
-       row per genuinely-new error). The payload has EXACTLY four coarse fields and
-       is built ONLY from local vars — no way for message/stack/recordId/name/email
-       to reach it. error_type = the JS error CLASS name from the stack (never the
-       message after the colon) or the kind; location = code file:line/fn only;
-       page = the base route (ids stripped); role = the staff role already captured.
-       Fire-and-forget with BOTH .then handlers so it can never throw or raise an
-       unhandledrejection (which would re-enter logClientError → infinite loop). */
-    const m = String(detail.stack || "").match(/^\s*([A-Z][A-Za-z]*(?:Error|Exception))\b/);
-    const etype = m ? m[1] : (kind || "error");
-    const location_ = String(entry.where || "").slice(0, 120);
-    let page = "";
-    try { page = String(location.hash || "").replace(/^#/, "").split(/[/?]/)[0].slice(0, 40); } catch (_) {}
-    try {
-      if (!errorEventsOff && window.db && db.from) {
-        db.from("error_events").insert([{ error_type: etype, location: location_, page: page, role: entry.role || null }])
-          .then((res) => { const c = res && res.error && res.error.code;
-                           if (c === "42P01" || c === "42501" || c === "PGRST205" || c === "PGRST106") errorEventsOff = true; },
-                () => {});   // BOTH handlers present → no unhandledrejection → no recursion
-      }
-    } catch (_) {}
-  } catch (_) { /* logging must NEVER throw */ }
-}
-window.logClientError = logClientError;      // so caught-but-notable errors + tests can record one
-window.__errorLog = ERROR_LOG;               // stable reference; tests read .length (mutated in place)
-try {
-  window.addEventListener("error", (e) => {
-    logClientError("error", (e && (e.message || (e.error && e.error.message))) || "Uncaught error",
-      { where: e && e.filename ? (e.filename + ":" + (e.lineno || 0)) : "", stack: e && e.error && e.error.stack });
-  });
-  window.addEventListener("unhandledrejection", (e) => {
-    const r = e && e.reason;
-    logClientError("promise", (r && (r.message || r)) || "Unhandled promise rejection",
-      { where: "unhandledrejection", stack: r && r.stack });
-  });
-} catch (_) { /* addEventListener unavailable — nothing else we can safely do */ }
 
 const STAGES = [
   ["enquiry", "Enquiry"],
@@ -276,7 +195,7 @@ const SETTING_URL_FIELDS = { google_review_link: "Google review link", review_pl
    a bad number here corrupts a live metric (the rate-reminder KPI renders "≤ NaNmo" and the whole
    "ending soon" bucket vanishes), and a bad bank field is the one setting with direct
    misdirected-payment risk once queueEmail lets a fee-request email through on it. */
-const SETTING_NUMERIC_FIELDS = { rate_reminder_months: "Rate reminder lead time", review_delay_days: "Review request delay", review_reminder_days: "Review reminder delay", referral_delay_days: "Referral nudge delay", solicitor_chase_days: "Solicitor chase task delay", monthly_fee_target: "Monthly fee target", protection_avg_commission: "Average protection commission", doc_chase_days: "Document chase interval" };
+const SETTING_NUMERIC_FIELDS = { rate_reminder_months: "Rate reminder lead time", review_delay_days: "Review request delay", review_reminder_days: "Review reminder delay", referral_delay_days: "Referral nudge delay", solicitor_chase_days: "Solicitor chase task delay", monthly_fee_target: "Monthly fee target", protection_avg_commission: "Average protection commission" };
 const SETTING_BANK_FIELDS = { bank_sort_code: { label: "Sort code", re: /^\d{2}-?\d{2}-?\d{2}$/ }, bank_account_number: { label: "Account number", re: /^\d{8}$/ } };
 function isValidEmailLike(v) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v); }
 function isValidUrlLike(v) { return /^https?:\/\/[^\s]+\.[^\s]+/i.test(v); }
@@ -436,7 +355,7 @@ const postcodeOf = (s) => {
   return m ? (m[1] + (m[2] || "")) : "";
 };
 async function fetchMatchClients() {
-  const { data, error } = await db.from("clients").select("id,first_name,last_name,email,phone,address").order("id").limit(OWNER_ROW_CAP);
+  const { data, error } = await db.from("clients").select("id,first_name,last_name,email,phone,address");
   if (error) { console.error(error); return []; }
   return data || [];
 }
@@ -493,7 +412,7 @@ const fmtM = (n) => (n == null || n === "" || isNaN(Number(n)) ? "—" : Number(
 // Exact-pence money — for fee figures on the case detail / evidence pack only. Dashboards keep fmtM (whole pounds).
 const fmtM2 = (n) => (n == null || n === "" || isNaN(Number(n)) ? "—" : Number(n).toLocaleString("en-GB", { style: "currency", currency: "GBP", minimumFractionDigits: 2, maximumFractionDigits: 2 }));
 let settings = {};
-let ME = null, TEAM = [];   // R41 · F1 — `tasksScope` went with the Tasks-due drawer it filtered
+let ME = null, TEAM = [], tasksScope = "mine";
 /* ---------- BACKEND-R4 §1 — role awareness ----------
    MY_ROLE is resolved ONCE at sign-in from the my_role() RPC (never by reading profiles.role
    directly), so the UI's idea of the caller's role is literally the same value the RLS policies
@@ -635,19 +554,18 @@ function adviserOptionsHtml(placeholder) {
      exactly TEAM — the same STAFF_ROLES list the options are built from — so a
      leaver (role "none") can never be suggested, and neither can an introducer.
 
-   LOAD is open cases + open tasks, both taken from reads the Today screen
-   already makes (loadDashboard's cases read and publishAdviserTaskLoad), so
-   the suggestion costs no extra round-trip. Both bases are stated in the
-   select's tooltip rather than left to be guessed at: "open" cases means every
-   stage except completed / not proceeding, and "open" tasks means undone tasks
-   inside a fortnight horizon (R41 · F1 — that horizon used to belong to the
-   Tasks-due drawer's own fetch; the drawer is gone, the horizon and the query
-   moved into publishAdviserTaskLoad unchanged). Where neither has loaded (the
-   list painted outside a dashboard load, or both queries failed), there is no
-   answer and the round-5 default — me — is used unchanged.
+   LOAD is open cases + open tasks, both taken from data the Today screen has
+   ALREADY fetched for its own panels (loadDashboard's cases read and
+   loadTasks' fetch), so the suggestion costs no extra round-trip. Both bases
+   are stated in the select's tooltip rather than left to be guessed at:
+   "open" cases means every stage except completed / not proceeding, and "open"
+   tasks means undone tasks inside the fortnight horizon the Tasks panel itself
+   works to. Where neither has loaded (the panel painted outside a dashboard
+   load, or both queries failed), there is no answer and the round-5 default —
+   me — is used unchanged.
    ========================================================================== */
 let advLoadCases = null;   // adviser id → open cases   (published by loadDashboard)
-let advLoadTasks = null;   // adviser id → open tasks   (published by publishAdviserTaskLoad)
+let advLoadTasks = null;   // adviser id → open tasks   (published by loadTasks)
 function adviserLoadMap() {
   /* BOTH halves or none. A "lightest load" claim computed off a caseload with the tasks missing
      (or the other way round, when one of the two reads failed) is a ranking of half the work,
@@ -865,14 +783,8 @@ function leadRoutingHtml(leadId) {
 /* ==========================================================================
    R12a · K-1/K-2 — ONE LEAD, ONE ANSWER TO "WHO IS THIS GOING TO?"
 
-   (R41 · F1 — HISTORICAL from here down: the drawer this describes has been
-   removed, so a lead now has exactly ONE select on screen. The machinery below
-   is kept in full because it is still what reconciles a select against the
-   session's stored choice across repaints, and because Accept must still read
-   the LEAD's answer rather than the clicked row's copy of it.)
-
-   The same lead was on screen TWICE — as a My Day `lead_new` row and as a row
-   in the New-website-leads drawer — and until then each copy carried its OWN
+   The same lead is on screen TWICE — as a My Day `lead_new` row and as a row
+   in the New-website-leads drawer — and until now each copy carried its OWN
    `<select class="lead-adviser">`. The two never spoke to each other, so a
    reassignment made in one place was invisible in the other, and Accept read
    whichever select sat beside the button that happened to be clicked. Change
@@ -1013,11 +925,9 @@ window.openReassign = function (ev, taskId, currentId, reloadKey) {
   const sel = document.createElement("select");
   sel.className = "task-reassign";
   /* R5-54 — reassigning was a one-way door: a task picked up by mistake, or handed back because it
-     belongs to whoever gets to it first, could not be returned to the Unassigned queue at all.
-     Only this chip offers it (a case's own "Assigned to" select and the appointment "Who" select
-     have their own rules). R41 · F1 — the Tasks-due drawer's Unassigned scope, named here as where
-     that queue was read, is gone; ownerless work is now labelled "· unassigned" on its My Day row
-     under the All scope. */
+     belongs to whoever gets to it first, could not be returned to the Unassigned queue the Tasks
+     panel already has a scope for. Only this chip offers it (a case's own "Assigned to" select and
+     the appointment "Who" select have their own rules). */
   sel.innerHTML = `<option value=""${currentId ? "" : " selected"}>— unassigned —</option>` + assigneeOptionsHtml(currentId);
   const restore = (id) => {
     if (!sel.parentNode) return;
@@ -1040,11 +950,7 @@ window.reassignTask = async function (taskId, adviserId, reloadKey) {
   const { error } = await db.from("case_tasks").update({ assigned_to: adviserId || null }).eq("id", taskId);
   if (error) { toast("Error: " + error.message); return false; }
   toast(adviserId ? "Task assigned to " + staffName(adviserId) : "Task returned to Unassigned");
-  /* R41 · F1 — "tasks" used to mean the Today "Tasks due" drawer, which is gone; the Today surface
-     a reassignment can change under is now My Day. The hook stays keyed (rather than being folded
-     into an unconditional repaint) because the case modal passes "" and repaints itself — a blind
-     loadBriefing() from there would paint a list that is not on screen. */
-  if (reloadKey === "tasks") loadBriefing();
+  if (reloadKey === "tasks") loadTasks();
   return true;
 };
 // Compact inline variant for note/timeline meta lines (reuses .chip, shrunk inline — no new CSS).
@@ -1185,13 +1091,30 @@ const REFILE_BADGE = '<span class="badge grey note-refiled-badge" title="This no
 function refileBtnHtml(noteId) {
   return ` <button type="button" class="btn btn-sm note-refile-btn" data-note-id="${esc(noteId)}" onclick="refileNote('${jsArg(noteId)}', event)" title="This note is on the wrong case — move a copy to the right one and mark this one as filed in error">Re-file…</button>`;
 }
-/* R40 — noteRowHtml() DELETED, along with the case modal's #notes-list that was its only caller.
-   Every one of its jobs is done by buildClientTimeline's note source, which the case modal now
-   uses too: the typed icon, the prefix-stripped body, the R9-3 review-score chip, the R6.4 H-01
-   re-file strike + badge, the Re-file control and the author chip. Its .note / .note-body /
-   .note-ic / .note-refiled / .note-review-* markup went with it; .note-refile-btn and
-   .note-refiled survive because refileBtnHtml and REFILE_BADGE above still emit them into
-   timeline rows. */
+// A single case-modal note row (icon + prefix-stripped body + timestamp). Shared by the initial
+// render and the in-place prepend paths so typed icons stay consistent everywhere notes render.
+/* opts.noteId — render the Re-file control (absent for the optimistic prepend,
+   which has no id yet); opts.refiled — this note has been re-filed away. */
+function noteRowHtml(body, whenStr, createdBy, opts = {}) {
+  const nt = noteType(refileDisplayBody(body));
+  const marker = isRefileMarker(body);
+  const refiled = !!opts.refiled;
+  /* R9-3 — a review-feedback note is the one note on a case that a reader must not have to
+     finish reading to grade. The score comes out of the sentence and onto a banded chip; what
+     the client actually SAID stays verbatim and escaped, exactly as every other note body does.
+     A note with a score but no comment renders the chip and an honest "(no comment left)"
+     rather than an empty row. */
+  const rev = reviewNoteParse(refileDisplayBody(body));
+  const cls = "note" + (refiled ? " note-refiled" : "") + (marker ? " note-refile-marker" : "") + (rev ? " note-review note-review-" + rev.band : "");
+  const act = opts.noteId && !refiled && !marker ? refileBtnHtml(opts.noteId) : "";
+  const icon = rev ? "⭐" : nt.icon;
+  const bodyHtml = rev
+    ? `${reviewScoreChipHtml(rev.score)} <span class="note-body">${rev.comment ? esc(rev.comment) : '<span class="cs-muted">(no comment left)</span>'}</span>`
+    : `<span class="note-body">${esc(nt.cleanBody)}</span>`;
+  return `<div class="${cls}"${opts.noteId ? ` data-note-id="${esc(opts.noteId)}"` : ""}>` +
+    `<span class="note-ic" title="${rev ? "review feedback" : nt.type}">${icon}</span>${bodyHtml}${refiled ? " " + REFILE_BADGE : ""}` +
+    `<div class="nd">${esc(whenStr)}${authorChipHtml(createdBy)}${act}</div></div>`;
+}
 // Timeline day-divider label, e.g. "Mon 20 Jul" (Europe/London — matches localDateStr grouping).
 const tlDayLabel = (ts) => new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", weekday: "short", day: "numeric", month: "short" }).format(new Date(ts)).replace(",", "");
 // Relative age that reads correctly for FUTURE items (upcoming appointments show "in Nd").
@@ -3688,63 +3611,23 @@ function panelCount(listSel, n, hot = false) {
 
 /* ---------- Today drawers (BUILD 4b) ---------- */
 // Click on a drawer's <h3> collapses/expands it (clicks on buttons inside the header — e.g.
-// "Run checks", the Rate & ERC sort toggle — are left alone so they keep working as before).
+// "Run checks", the Tasks "Mine/All" toggle — are left alone so they keep working as before).
 // The open/closed state lives only on the DOM (the .collapsed class), so it survives the
 // panel's own re-renders (which only replace the inner list, never the drawer element) for the
 // rest of the session; dashDrawerTouched just remembers that the user has taken manual control
-// of a drawer that would otherwise be auto-opened/closed (Watchtower, No next action).
-/* R34 · W3/L5 — AND NOW IT SURVIVES THE RELOAD.
-   One drawer key does not follow the "<key>-panel" convention its toggleDrawer call implies
-   ('rateerc' → #rate-erc-panel). toggleDrawer never noticed because it finds its panel from the
-   clicked header; anything that has to find a drawer by key alone (the stored-state pass below)
-   does, so the exception is written down once here.
-   R41 · F1 — the 'todayappts' → #today-appts-panel exception went with that drawer, as did the
-   'leads', 'tasks' and 'retention' keys below. The MECHANISM is untouched: any nx_drawer_leads /
-   _tasks / _todayappts / _retention left in a browser's localStorage is now an orphan that nothing
-   reads, which is harmless and deliberately not migrated — a one-off cleanup pass would be more
-   code, and more risk, than the four dead strings it deletes. */
-const DASH_DRAWER_PANEL_ID = { rateerc: "rate-erc-panel" };
-const DASH_DRAWER_KEYS = ["watchtower", "unactioned", "rateerc", "revenue"];
-const drawerPanelEl = (key) => document.getElementById(DASH_DRAWER_PANEL_ID[key] || key + "-panel");
-const drawerStoreKey = (key) => "nx_drawer_" + key;
-/* "open" | "closed" | null. Null means the user has never made a choice about this drawer, which
-   is the ONLY state in which autoDrawer is allowed to decide for them. */
-function storedDrawerPref(key) {
-  const v = lsGet(drawerStoreKey(key));
-  return v === "open" || v === "closed" ? v : null;
-}
-/* Apply one drawer's remembered state. Returns whether a preference existed, so callers can tell
-   "restored" from "left at the markup default". */
-function applyStoredDrawer(key) {
-  const pref = storedDrawerPref(key);
-  if (!pref) return false;
-  const panel = drawerPanelEl(key);
-  if (!panel) return false;
-  panel.classList.toggle("collapsed", pref === "closed");
-  return true;
-}
-/* Called at the very top of the dashboard render, BEFORE any loader runs and therefore before any
-   autoDrawer call, so a restored drawer is never briefly re-collapsed on the way past. */
-function applyStoredDrawers() { DASH_DRAWER_KEYS.forEach(applyStoredDrawer); }
+// of a drawer that would otherwise be auto-opened/closed (Watchtower, New website leads).
 window.toggleDrawer = function (ev, key) {
   if (ev && ev.target.closest("button")) return;
-  const panel = (ev && ev.currentTarget && ev.currentTarget.closest(".panel")) || drawerPanelEl(key);
+  const panel = (ev && ev.currentTarget && ev.currentTarget.closest(".panel")) || document.getElementById(key + "-panel");
   if (!panel) return;
   panel.classList.toggle("collapsed");
   dashDrawerTouched[key] = true;
-  /* R34 · W3 — "2.6 screens of dashboard every morning": a drawer the user closes must STAY
-     closed, and Luke's retention drawer must stay open, across reloads and across sessions.
-     Session-only dashDrawerTouched is kept as-is — it still governs the within-session case. */
-  lsSet(drawerStoreKey(key), panel.classList.contains("collapsed") ? "closed" : "open");
 };
 // Auto-open/close a drawer based on whether it currently holds anything attention-worthy —
 // unless the user has already manually toggled it this session, in which case leave it alone.
 function autoDrawer(key, shouldOpen) {
   if (dashDrawerTouched[key]) return;
-  /* R34 · L5 — a stored choice outranks the automation permanently, not just for the session that
-     made it. With no stored choice the behaviour is exactly what it was. */
-  if (storedDrawerPref(key)) return;
-  const panel = drawerPanelEl(key);
+  const panel = document.getElementById(key + "-panel");
   if (!panel) return;
   panel.classList.toggle("collapsed", !shouldOpen);
 }
@@ -3907,55 +3790,11 @@ async function showApp(session) {
      for the frame between the shell being revealed and the role arriving. */
   const navMoney = $("#nav-money");
   if (navMoney) navMoney.classList.toggle("hidden", !isOwner());
-  /* R33 — and, for the same reason and in the same place, the Firm group's default state: the
-     role is known now and not a frame earlier. See applyNavRole(). */
-  applyNavRole();
   // BUILD 6d — restore this user's pipeline segment/view prefs now that their id is known.
   restoreUserPrefs(session.user.id);
   await loadSettings();
   await loadTeam(session);
   await routeFromHash(); // BUILD 7a — honour deep links (#reports, #case/<id>, …); no hash → dashboard
-}
-/* =========================================================================
-   R34 · W2 — THE BOARD AND THE DIARY OPEN ON THE PERSON READING THEM.
-   Both filters opened on "All advisers" for everybody, so an adviser's first sight of the
-   pipeline and of the diary was the whole firm's, and re-picking themselves was the first two
-   clicks of every day. Two rules, in this order:
-     1. a value this user chose before, IF it is still a real option (a colleague who has left
-        takes their option with them — the stored id then silently falls through to rule 2 rather
-        than leaving the select on a value nothing matches);
-     2. otherwise ME, but only for someone who advises — the Owner and the Administrator run the
-        whole firm and "all" IS their default (same reasoning as R12b · W-7's scope defaults).
-   Nothing is written to storage by the defaulting itself; only an actual choice persists, so
-   clearing the key genuinely restores the role default.
-   ========================================================================= */
-const BOARD_ADVISER_KEY = "nx_board_adviser";
-const DIARY_STAFF_KEY = "nx_diary_staff";
-function staffFilterDefault(sel, key) {
-  const el = $(sel);
-  if (!el) return null;
-  const has = (v) => !!v && [...el.options].some((o) => o.value === v);
-  const stored = lsGet(key);
-  if (has(stored)) return stored;
-  if (ME && !isAdminOrOwner() && has(ME.id)) return ME.id;
-  return "all";
-}
-// Applies the rule above to a freshly-rebuilt select and returns what it landed on (or null when
-// the select isn't there).
-function applyStoredStaffFilter(sel, key) {
-  const el = $(sel);
-  if (!el) return null;
-  const v = staffFilterDefault(sel, key);
-  el.value = v;
-  return v;
-}
-// The only writer. Called from the selects' own change events and from R31's saved-view apply —
-// a view that pins the board to one adviser is a choice like any other, and the next visit to the
-// board should still be showing what the user last left it showing.
-function persistStaffFilter(sel, key) {
-  const el = $(sel);
-  if (!el) return;
-  lsSet(key, el.value || "all");
 }
 async function loadTeam(session) {
   // T1-1: 'admin' is a first-class back-office role (the login gate at showApp already admits it),
@@ -3983,10 +3822,9 @@ async function loadTeam(session) {
   // Safe degradation: if this login still isn't in TEAM (profile row missing/renamed role), a
   // "Mine" scope can only ever show an empty screen — start everything on "All" instead.
   if (!ME) {
-    // R41 · F1 — the Tasks-due drawer's scope went with the drawer; My Day and Protection remain.
-    briefingScope = "all"; protScope = "all";
-    ["#brief-scope-mine", "#prot-scope-mine"].forEach((s) => $(s).classList.remove("scope-active"));
-    ["#brief-scope-all", "#prot-scope-all"].forEach((s) => $(s).classList.add("scope-active"));
+    briefingScope = "all"; tasksScope = "all"; protScope = "all";
+    ["#brief-scope-mine", "#tasks-scope-mine", "#prot-scope-mine"].forEach((s) => $(s).classList.remove("scope-active"));
+    ["#brief-scope-all", "#tasks-scope-all", "#prot-scope-all"].forEach((s) => $(s).classList.add("scope-active"));
   } else if (isAdminOrOwner()) {
     /* R12b · W-7 — WHOSE DAY THIS SCREEN OPENS ON, decided by the job the reader actually does.
        The Today strip now follows this same Mine/All toggle (see loadDashboard), and an adviser
@@ -4017,25 +3855,11 @@ async function loadTeam(session) {
     .map((p) => `<option value="${esc(p.id)}" title="${esc(NO_ACCESS_OPTION_TITLE)}">${esc(p.full_name || p.email || p.id)} — no access</option>`);
   $("#board-adviser").innerHTML = ['<option value="all">All advisers</option>', '<option value="unassigned">Unassigned</option>']
     .concat(TEAM.map((p) => `<option value="${p.id}">${esc(staffName(p.id))}</option>`)).concat(formerOpts).join("");
-  // R34 · W2 — the options exist now, so this is the one place the stored/role default can be
-  // applied (the select was just rebuilt from scratch; any prior selection is already gone).
-  applyStoredStaffFilter("#board-adviser", BOARD_ADVISER_KEY);
-  // R33 — "All advisers", matching #board-adviser above and #client-adviser. The VALUE is still
-  // "all"; only the word changed. Three filters that mean the same thing said it three ways.
-  $("#diary-staff").innerHTML = ['<option value="all">All advisers</option>']
+  $("#diary-staff").innerHTML = ['<option value="all">Everyone</option>']
     .concat(TEAM.map((p) => `<option value="${p.id}">${esc(staffName(p.id))}</option>`)).concat(formerOpts).join("");
   // B9 (R5-31) — #diary-staff was just rebuilt from scratch (any prior selection is gone), so this
   // is the one safe place to apply the restored Month/Day mode's own default selection.
   initDiaryViewFromPrefs();
-  /* R34 · W2 — and then, AFTER that sync (which re-points #diary-staff at the current view's own
-     remembered value), the stored/role default. The value is written back into whichever view's
-     slot is live, so switching Month↔Day and back does not throw it away; the other view keeps
-     the behaviour it already had. */
-  const diaryDefault = applyStoredStaffFilter("#diary-staff", DIARY_STAFF_KEY);
-  if (diaryDefault != null) {
-    if (diaryViewMode === "day") diaryStaffDayVal = diaryDefault;
-    else diaryStaffMonthVal = diaryDefault;
-  }
   /* R13 · M-31 — the rota, once, right after the team it is about. Awaited rather than fired and
      forgotten: the very first paint of My Day carries lead-routing selects, and a rota that
      arrives after them would leave the first screen of the day showing the one answer this
@@ -4070,7 +3894,7 @@ $("#forgot-btn").addEventListener("click", async () => {
    the PWA service worker. All history.* calls are wrapped — if the History API is unavailable or
    blocked (some file:// contexts), modal history is simply not tracked and the app still works.
    Segments/filters stay OUT of the hash (session/localStorage already persists those). */
-const PAGE_HASH = { dashboard: "today", pipeline: "pipeline", protection: "protection", diary: "diary", clients: "clients", retention: "retention", import: "import", reports: "reports", money: "money", data: "data", emails: "emails", vault: "vault", settings: "settings" };
+const PAGE_HASH = { dashboard: "today", pipeline: "pipeline", protection: "protection", diary: "diary", clients: "clients", import: "import", reports: "reports", money: "money", data: "data", emails: "emails", vault: "vault", settings: "settings" };
 /* R7-4 — pages only some roles may open. Monday money is entirely firm-wide money, so it is
    Owner-only: the nav button is revealed by showApp and nav() below redirects anyone else who
    reaches for it (a bookmarked #money, a hand-typed hash, an old link in an email). Same standing
@@ -4164,50 +3988,6 @@ window.addEventListener("popstate", (e) => {
 $("#topnav").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-page]");
   if (b) nav(b.dataset.page);
-});
-/* ==========================================================================
-   R33 — THE FIRM GROUP. Emails / Import / Data health / Settings are four
-   destinations an adviser opens roughly never and an Owner or Administrator
-   lives in. Rather than reorder the nav per role (a different DOM for every
-   seat is a maintenance and test liability, and the R32 panel agreed it was
-   overkill), there is ONE order for everybody and one group that starts
-   folded for the people who don't use it.
-
-   The default is a role judgement, not a preference: collapsed for an adviser,
-   expanded for admin/owner — the same argument that already hides Monday
-   money. The moment the operator touches the toggle, their choice wins and is
-   remembered (nx_nav_firm), because a default is a guess about somebody and
-   they have just told us the answer.
-   ========================================================================== */
-const NAV_FIRM_KEY = "nx_nav_firm";
-function setNavFirmOpen(open) {
-  const group = $("#nav-firm-group");
-  const toggle = $("#nav-firm-toggle");
-  if (group) group.classList.toggle("collapsed", !open);
-  if (toggle) toggle.setAttribute("aria-expanded", open ? "true" : "false");
-}
-function navFirmOpen() {
-  const group = $("#nav-firm-group");
-  return !!group && !group.classList.contains("collapsed");
-}
-function applyNavRole() {
-  const saved = lsGet(NAV_FIRM_KEY);
-  // A stored answer beats the role default in both directions — an adviser who opened the group
-  // keeps it open, an owner who folded it keeps it folded.
-  const open = saved === "open" ? true : saved === "closed" ? false : isAdminOrOwner();
-  setNavFirmOpen(open);
-}
-$("#nav-firm-toggle")?.addEventListener("click", () => {
-  const open = !navFirmOpen();
-  setNavFirmOpen(open);
-  lsSet(NAV_FIRM_KEY, open ? "open" : "closed");
-});
-// R31-A · a11y — the "Skip to main content" link moves keyboard focus into the
-// main content region so a keyboard/screen-reader user can jump past the nav.
-// Only fires on an explicit activation of the link — nav() never steals focus.
-document.querySelector(".skip-link")?.addEventListener("click", (e) => {
-  e.preventDefault();
-  document.getElementById("main")?.focus();
 });
 
 /* R12b · L-20 — the mobile nav strip's scroll-hint chevron (.sidebar::after, CSS) is a plain
@@ -4309,20 +4089,12 @@ function openHelpPanel() {
         those call the RPC. A stray click while it's up just means it may
         offer itself again next time the flag is still null.
    ========================================================================== */
-/* R41 · F1 — TWO STEPS FEWER, BECAUSE TWO SCREENS FEWER.
-   The tour used to walk past My Day and then stop at the Tasks-due and Today's-appointments
-   drawers to explain them. Both drawers are gone, so both steps are deleted rather than
-   re-pointed: the My Day step no longer describes a summary of four screens below it, it
-   describes the four screens. The one genuinely useful sentence each carried — tasks are things
-   to DO vs the diary is where you are supposed to BE, and there is no "new appointment" button on
-   Today — moves into the My Day body, which is where a reader now needs it.
-   (tourRender already skips a step whose target has vanished — `if (!targetEl) { idx++; render }`
-   — so a stale step would have degraded quietly rather than breaking. Fixing the LIST is still
-   the fix: a tour that silently skips two of its six steps is a tour nobody edited.) */
 const TOUR_STEPS = [
-  { target: "#briefing-panel", title: "My Day", body: "Everything today in one list — tasks due, appointments, new leads and rate alerts — with the action on the row: tick a task off, snooze it, accept a lead, record who turned up. Tasks are things to DO, each with a due date; the Diary (its own page in the nav) is where you're supposed to BE. There's no “new appointment” button here — booking one lives INSIDE a case." },
+  { target: "#briefing-panel", title: "My Day", body: "This is the merged feed of everything today — tasks due, appointments, new leads and rate alerts, all in one list instead of four separate screens." },
+  { target: "#tasks-panel", title: "Tasks vs Diary", body: "Tasks are things to DO — chase a document, make a call — each with a due date. The Diary (its own page in the nav) is where you're supposed to BE: appointments with a time. Different questions, kept as different lists." },
   { target: "#watchtower-panel", title: "Watchtower", body: "Automatic checks across the whole book. “Resolves itself when fixed” means an alert isn't a task to tick off by hand — fix the thing it's complaining about (assign an adviser, record a rate end) and it clears itself next time checks run." },
   { target: "#topnav button[data-page=\"pipeline\"]", title: "Where cases are created", body: "New cases start on Pipeline, with the “+ New case” button there — not on Today." },
+  { target: "#today-appts-panel", title: "Booking an appointment", body: "There's no “new appointment” button on Today. Booking one lives INSIDE a case — open the case, then book it from there." },
   { target: "#help-btn", title: "Need a definition?", body: "ERC, GI, DIP, Watchtower and the rest are explained here — and you can replay this tour from the same button, any time." },
 ];
 let tourFired = false;   // this page session only — separate from the DB flag
@@ -4463,22 +4235,7 @@ function nav(page, push = true) {
   }
   document.querySelectorAll(".page").forEach((p) => p.classList.add("hidden"));
   $("#page-" + page).classList.remove("hidden");
-  document.querySelectorAll("#topnav button").forEach((b) => {
-    const on = b.dataset.page === page;
-    b.classList.toggle("active", on);
-    // R31-A · a11y — expose the current page to assistive tech, not just visually.
-    if (on) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
-  });
-  /* R33 — the active tab must never be invisible. The command palette, a deep link and
-     gotoDataHealth() can all land an adviser on a page inside the folded Firm group, and a nav
-     whose highlight is hidden is a nav that lies about where you are. Opened for the visit only —
-     deliberately NOT persisted, because arriving somewhere is not the same as asking for the
-     group back, and nx_nav_firm is reserved for what the operator actually chose. */
-  const firmGroup = $("#nav-firm-group");
-  if (firmGroup && firmGroup.classList.contains("collapsed")
-      && [...firmGroup.querySelectorAll("button[data-page]")].some((b) => b.dataset.page === page)) {
-    setNavFirmOpen(true);
-  }
+  document.querySelectorAll("#topnav button").forEach((b) => b.classList.toggle("active", b.dataset.page === page));
   currentPage = page;
   currentModal = null; // switching pages dismisses any modal history ownership
   if (push) {
@@ -4490,21 +4247,13 @@ function nav(page, push = true) {
   // B9 (R5-31) — the diary page can be showing either the month grid or the Day view; route to
   // whichever loader matches the persisted toggle so navigating back into #diary doesn't silently
   // flip it back to Month.
-  ({ dashboard: loadDashboard, pipeline: loadPipeline, protection: loadProtectionPage, diary: () => (diaryViewMode === "day" ? loadDiaryDay() : loadDiary()), clients: () => loadClients($("#client-search").value, { force: true }), retention: loadRetentionPage, import: () => renderRevLastSync(), reports: loadReports, money: loadMoneyPage, data: loadDataHealth, emails: loadEmails, vault: loadVault, settings: renderSettings }[page])();
+  ({ dashboard: loadDashboard, pipeline: loadPipeline, protection: loadProtectionPage, diary: () => (diaryViewMode === "day" ? loadDiaryDay() : loadDiary()), clients: () => loadClients($("#client-search").value, { force: true }), import: () => renderRevLastSync(), reports: loadReports, money: loadMoneyPage, data: loadDataHealth, emails: loadEmails, vault: loadVault, settings: renderSettings }[page])();
 }
 
 /* ---------- Settings ---------- */
 async function loadSettings() {
   const { data } = await db.from("settings").select("*");
   settings = Object.fromEntries((data || []).map((r) => [r.key, r.value]));
-}
-/* R26 — per-adviser monthly fee targets live as ONE JSON value in the existing settings k/v table
-   (key adviser_fee_targets = {"<staffId>": <number£>}). NO schema. Parsed defensively everywhere
-   it's read: a corrupt, non-object or array value degrades to {} so a bad write can never throw on
-   the owner scoreboard. A missing/0/blank target for an adviser means "no target" (renders "—"). */
-function adviserTargets() {
-  try { const o = JSON.parse(settings.adviser_fee_targets || "{}"); return (o && typeof o === "object" && !Array.isArray(o)) ? o : {}; }
-  catch { return {}; }
 }
 /* B4 UI (R5-8) — profiles.phone / profiles.email_signoff live behind M1. Fetched in a SEPARATE
    small query (same discipline as loadCaseExtraColumns for M2) so an un-migrated database costs
@@ -4536,7 +4285,7 @@ const OWNER_ONLY_SETTING_KEYS = ["bank_account_name", "bank_sort_code", "bank_ac
    made-up number. */
 async function clientDobStats() {
   try {
-    const { data, error } = await db.from("clients").select("id,date_of_birth").order("id").limit(OWNER_ROW_CAP);
+    const { data, error } = await db.from("clients").select("id,date_of_birth");
     if (error) return null;
     const rows = data || [];
     return { total: rows.length, withDob: rows.filter((r) => r && r.date_of_birth).length };
@@ -4547,7 +4296,7 @@ async function renderSettings() {
   const dobStats = await clientDobStats();
   const visibleFields = owner ? SETTING_FIELDS : SETTING_FIELDS.filter(([k]) => !OWNER_ONLY_SETTING_KEYS.includes(k));
   const general = visibleFields.map(settingFieldHtml).join("") + `
-    <h3 id="set-sec-protection" style="grid-column:1/-1;margin:10px 0 0;">Protection &amp; GI</h3>
+    <h3 style="grid-column:1/-1;margin:10px 0 0;">Protection &amp; GI</h3>
     <label>Protection gate — block moves to Application+ until protection is recorded
       <select name="protection_gate">
         <option value="" ${(settings.protection_gate ?? "on") === "on" ? "" : "selected"}>Off</option>
@@ -4570,7 +4319,7 @@ async function renderSettings() {
       </select>
     </label>
     <p class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;">⚠️ The automated protection and GI emails are financial promotions — get principal approval for the templates before switching them on.</p>
-    <h3 id="set-sec-digest" style="grid-column:1/-1;margin:10px 0 0;">Owner digest</h3>
+    <h3 style="grid-column:1/-1;margin:10px 0 0;">Owner digest</h3>
     <label>Daily owner digest email (on/off)
       <select name="owner_digest">
         <option value="" ${(settings.owner_digest ?? "on") === "on" ? "" : "selected"}>Off</option>
@@ -4582,7 +4331,7 @@ async function renderSettings() {
     </label>
     <p class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;">Sent daily at ~07:30 UK time. Requires RESEND_API_KEY.</p>
     <div style="grid-column:1/-1;"><button type="button" class="btn btn-sm" id="send-digest-btn">Send digest now</button></div>
-    <h3 id="set-sec-comms" style="grid-column:1/-1;margin:10px 0 0;">Client comms &amp; sales</h3>
+    <h3 style="grid-column:1/-1;margin:10px 0 0;">Client comms &amp; sales</h3>
     ${owner ? `<h4 style="grid-column:1/-1;margin:0;">Regulated financial promotions</h4>
     <label>Financial promotions approved (master switch)
       <select name="financial_promotions_approved">
@@ -4637,36 +4386,14 @@ async function renderSettings() {
           rules the cron actually applies (which cases, how often, only-what-is-missing, and where
           it stops) plus the dependency that makes it work at all, because a firm switching this on
           with no Resend key would otherwise see a toggle saying On and nothing happening. */ ""}
-    <h4 id="set-sec-documents" style="grid-column:1/-1;margin:10px 0 0;">Documents</h4>
+    <h4 style="grid-column:1/-1;margin:10px 0 0;">Documents</h4>
     <label>Automatic document chasing
       <select name="doc_chase_enabled">
         <option value="off" ${(settings.doc_chase_enabled ?? "off") === "on" ? "" : "selected"}>Off</option>
         <option value="on" ${settings.doc_chase_enabled === "on" ? "selected" : ""}>On</option>
       </select>
     </label>
-    ${/* R33 — the interval was already the number the chaser and the paragraph below both run on
-          (docChaseDays() reads settings.doc_chase_days ?? 3); the only thing missing was a way to
-          set it. Blank is a legitimate answer and means the 3-day default, which is what the note
-          underneath will then say. */ ""}
-    <label title="How long to wait between document chase emails. Blank = the default, 3 days.">Document chase interval (days, blank = 3)
-      <input name="doc_chase_days" type="number" min="1" value="${esc(settings.doc_chase_days ?? "")}" placeholder="3">
-    </label>
-    ${/* R42 · F4 — ONE SENTENCE, THEN THE RULES. This was a single ~1,020-character paragraph
-          sitting under a two-option select: the four rules the cron applies are worth having
-          written down (R9-5), but they are read once, when the firm decides to switch this on,
-          and after that they are a wall between the toggle and the interval box beside it. The
-          sentence in the open is the whole behaviour in one line; every word of the original is
-          still here, one click away, unedited. #doc-chase-note keeps its id and moves from <p>
-          to <div> for one reason: a <details> inside a <p> is closed by the parser, which would
-          throw the rules OUT of the element the copy tests read. Both docChaseDays()
-          interpolations still run — one in the sentence, both in the folded body. */ ""}
-    <div class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;" id="doc-chase-note">
-      <p style="margin:0;">Emails a client <strong>every ${esc(String(docChaseDays()))} days</strong> while documents are outstanding, stops after ${DOC_CHASE_MAX} chases and tasks the adviser instead.</p>
-      <details class="prose-fold" id="doc-chase-more">
-        <summary>ⓘ Full rules</summary>
-        <p style="margin:0;">Emails a client <strong>every ${esc(String(docChaseDays()))} days</strong> while documents are still outstanding on their case's checklist, listing <strong>only the items still missing</strong> — never the whole list again. After <strong>${DOC_CHASE_MAX} chases it stops emailing</strong> and puts a call task on the case's adviser instead; the fourth email is not the one that works. Every <strong>live stage is covered — Enquiry through Exchange</strong> (widened from Fact Find and Application only): a checklist can be opened as soon as ID is asked for, and the lender still wants the missing item right up to exchange. Completed and Not proceeding are never chased. Only cases <strong>with a checklist</strong> are chased at all: a case with no checklist is not “fully documented”, it is unknown, and it is skipped rather than guessed at. The ${esc(String(docChaseDays()))}-day gap counts any document email, request or chase, so a cron run and someone pressing “Send document request now” cannot become two emails in an evening. <strong>Requires email sending to be set up</strong> (a verified From address and a Resend key) — with no sender configured nothing goes out, whatever this says.</p>
-      </details>
-    </div>
+    <p class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;" id="doc-chase-note">Emails a client <strong>every ${esc(String(settings.doc_chase_days ?? "3"))} days</strong> while documents are still outstanding on their case's checklist, listing <strong>only the items still missing</strong> — never the whole list again. After <strong>${DOC_CHASE_MAX} chases it stops emailing</strong> and puts a call task on the case's adviser instead; the fourth email is not the one that works. Every <strong>live stage is covered — Enquiry through Exchange</strong> (widened from Fact Find and Application only): a checklist can be opened as soon as ID is asked for, and the lender still wants the missing item right up to exchange. Completed and Not proceeding are never chased. Only cases <strong>with a checklist</strong> are chased at all: a case with no checklist is not “fully documented”, it is unknown, and it is skipped rather than guessed at. The ${esc(String(settings.doc_chase_days ?? "3"))}-day gap counts any document email, request or chase, so a cron run and someone pressing “Send document request now” cannot become two emails in an evening. <strong>Requires email sending to be set up</strong> (a verified From address and a Resend key) — with no sender configured nothing goes out, whatever this says.</p>
     <label>Review requests (NPS)
       <select name="nps_enabled">
         <option value="off" ${(settings.nps_enabled ?? "off") === "on" ? "" : "selected"}>Off</option>
@@ -4688,7 +4415,7 @@ async function renderSettings() {
       <input name="site_url" type="url" value="${esc(settings.site_url ?? "")}" placeholder="https://www.nexmoney.co.uk">
     </label>`;
   const advanced = `
-    <h3 id="set-sec-outlook" style="grid-column:1/-1;margin:0;">Outlook &amp; AI</h3>
+    <h3 style="grid-column:1/-1;margin:0;">Outlook &amp; AI</h3>
     <label>Outlook inbox sync (pulls client emails into My Day)
       <select name="outlook_enabled">
         <option value="0" ${settings.outlook_enabled === "1" ? "" : "selected"}>Off</option>
@@ -4699,7 +4426,7 @@ async function renderSettings() {
       <input name="outlook_mailboxes" value="${esc(settings.outlook_mailboxes ?? "")}" placeholder="daniel@nexmoney.co.uk, wayne@nexmoney.co.uk — blank = all staff">
     </label>
     <p class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;">Outlook sync and the AI assistant need Supabase secrets: ANTHROPIC_API_KEY, MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET — plus an Azure app registration with Graph <em>Application</em> permission Mail.Read and admin consent.</p>
-    <h3 id="set-sec-sms" style="grid-column:1/-1;margin:10px 0 0;">SMS provider</h3>
+    <h3 style="grid-column:1/-1;margin:10px 0 0;">SMS provider</h3>
     <label>SMS enabled
       <select name="sms_enabled">
         <option value="off" ${(settings.sms_enabled ?? "off") === "on" ? "" : "selected"}>Off</option>
@@ -4733,7 +4460,7 @@ async function renderSettings() {
       <summary>General</summary>
       <div class="settings-grid">${general}</div>
     </details>
-    <details class="case-details settings-details" id="set-sec-advanced">
+    <details class="case-details settings-details">
       <summary>Advanced — API keys &amp; integrations</summary>
       <div class="settings-grid">${advanced}</div>
     </details>`;
@@ -4774,153 +4501,11 @@ async function renderSettings() {
   // the "My details" card (everyone) already have what they need.
   renderTeamRoster();
   renderMyDetailsCard();
-  // R26 — owner-only per-adviser fee-target editor. `owner` is the SAME isOwner() gate this
-  // function already uses for every other owner-only block (SETTING fields, master switch, export).
-  renderAdviserTargetsEditor(owner);
   loadIntroducers();
-  /* R33 — the diagnostics block, moved here from Reports. `null` rather than a row set: there is
-     no Reports read behind this render, so the "Records loaded" line is omitted rather than
-     reported as zero. Gated inside on isAdminOrOwner(), exactly as it was on Reports — a plain
-     adviser gets no <details> at all. */
-  renderDiagnostics(null);
   /* The whole audit trail, including the settings and login entries that carry no case or client
      and so appear on no other screen. Owner-only in the UI; the database is what actually
      withholds those rows from everyone else. */
   loadChangeHistory();
-  /* R37 · P-settings — the jump nav is built LAST, once every block above has decided whether it
-     exists for this role. loadChangeHistory() and renderDiagnostics() both set their panel's
-     .hidden synchronously before their first await, so the answer is already on the page. */
-  buildSettingsJumpNav();
-}
-/* ==========================================================================
-   R37 · P-settings — SETTINGS JUMP NAV
-
-   The same device Reports got in R11-4 (REPORT_JUMP_SECTIONS / buildReportsJumpNav), applied to
-   the other long flat page in the app. Same classes, same markup, same behaviour, so the two read
-   as one idea rather than two.
-
-   The role rule is copied verbatim and it is the point: the chip list is READ off the rendered
-   page, never declared. Every block on Settings already owns its own visibility gate (owner for
-   the export panel and the change history, isAdminOrOwner for Team and Diagnostics, the M1 column
-   check for My details), so re-testing the role here would be a second copy of a gate that could
-   drift from the first. An adviser's bar has no chip for a section an adviser has no section for,
-   because the section said so.
-
-   The one thing Reports does not have to do: two of these sections live inside a <details>. A
-   chip that scrolled to a collapsed <summary> would be a jump to nothing, so the click opens
-   every <details> the target sits inside first.
-   ========================================================================== */
-const SETTINGS_JUMP_SECTIONS = [
-  ["export", "Export data", "#firm-export-panel"],
-  ["protection", "Protection & GI", "#set-sec-protection"],
-  ["digest", "Owner digest", "#set-sec-digest"],
-  ["comms", "Client comms", "#set-sec-comms"],
-  ["documents", "Documents", "#set-sec-documents"],
-  ["outlook", "Outlook & AI", "#set-sec-outlook"],
-  ["sms", "SMS", "#set-sec-sms"],
-  ["advanced", "Advanced", "#set-sec-advanced"],
-  ["targets", "Adviser targets", "#adviser-targets-section"],
-  ["mydetails", "My details", "#my-details-panel"],
-  ["introducers", "Introducers", "#introducers-panel"],
-  ["team", "Team", "#team-logins-panel"],
-  ["history", "Change history", "#change-history-panel"],
-  ["diag", "Diagnostics", "#diag-details"],
-];
-let settingsJumpItems = [];
-let settingsJumpActive = "";
-let settingsJumpTick = false;
-let settingsJumpWired = false;
-/* Visible = on the page AND not inside anything .hidden — the same walk repJumpVisible does, with
-   #page-settings as the stop. A collapsed <details> is NOT hidden: its chip is offered and the
-   click opens it. */
-function settingsJumpVisible(el) {
-  let n = el;
-  while (n && n.id !== "page-settings") {
-    if (n.classList && n.classList.contains("hidden")) return false;
-    n = n.parentElement;
-  }
-  return !!n;
-}
-function buildSettingsJumpNav() {
-  const bar = $("#settings-jump"), wrap = $("#settings-jump-chips");
-  if (!bar || !wrap) return;
-  settingsJumpItems = SETTINGS_JUMP_SECTIONS
-    .map(([key, label, sel]) => ({ key, label, el: $(sel) }))
-    .filter((s) => s.el && settingsJumpVisible(s.el));
-  // One chip is not navigation, it is decoration — the same guard Reports uses.
-  if (settingsJumpItems.length < 2) { wrap.innerHTML = ""; bar.hidden = true; return; }
-  wrap.innerHTML = settingsJumpItems.map((s) =>
-    `<button type="button" class="seg-btn" id="settings-nav-${esc(s.key)}" role="tab" aria-selected="false" data-settings-jump="${esc(s.key)}" title="Jump to ${esc(s.label)}">${esc(s.label)}</button>`).join("");
-  wrap.querySelectorAll("[data-settings-jump]").forEach((b) => (b.onclick = () => {
-    const it = settingsJumpItems.find((s) => s.key === b.dataset.settingsJump);
-    if (!it || !it.el) return;
-    // Open every disclosure the target sits inside, outermost first, before scrolling to it.
-    for (let n = it.el; n && n.id !== "page-settings"; n = n.parentElement) {
-      if (n.tagName === "DETAILS") n.open = true;
-    }
-    if (it.el.tagName === "DETAILS") it.el.open = true;
-    it.el.scrollIntoView({ behavior: "smooth", block: "start" });
-    setSettingsJumpActive(it.key);
-  }));
-  bar.hidden = false;
-  settingsJumpActive = "";
-  measureSettingsJumpOffsets();
-  if (!settingsJumpWired) {
-    settingsJumpWired = true;
-    window.addEventListener("scroll", onSettingsJumpScroll, { passive: true });
-    window.addEventListener("resize", () => { measureSettingsJumpOffsets(); onSettingsJumpScroll(); }, { passive: true });
-  }
-  onSettingsJumpScroll();
-}
-/* Identical measurement to Reports': at =<760px .app-shell stacks and the sidebar becomes a sticky
-   top strip, so the bar's own `top` is read off the layout in force rather than a duplicated
-   breakpoint number. --settings-jump-scroll is the scroll-margin the sections are given. */
-function measureSettingsJumpOffsets() {
-  const bar = $("#settings-jump"), page = $("#page-settings");
-  if (!bar || bar.hidden || !page || page.classList.contains("hidden")) return;
-  const shell = document.querySelector(".app-shell");
-  const side = document.querySelector(".sidebar");
-  let off = 0;
-  try {
-    if (shell && side && getComputedStyle(shell).flexDirection === "column") off = Math.round(side.getBoundingClientRect().height);
-  } catch (_) { off = 0; }
-  bar.style.top = off + "px";
-  const h = Math.round(bar.getBoundingClientRect().height);
-  document.documentElement.style.setProperty("--settings-jump-scroll", (off + h + REP_JUMP_GAP) + "px");
-  const wrap = $("#settings-jump-chips");
-  bar.classList.toggle("is-scrollable", !!wrap && wrap.scrollWidth > wrap.clientWidth + 1);
-}
-function setSettingsJumpActive(key) {
-  if (key === settingsJumpActive) return;
-  settingsJumpActive = key;
-  document.querySelectorAll("#settings-jump-chips [data-settings-jump]").forEach((b) => {
-    const on = b.dataset.settingsJump === key;
-    b.classList.toggle("active", on);
-    b.setAttribute("aria-selected", on ? "true" : "false");
-  });
-  const act = key ? document.getElementById("settings-nav-" + key) : null;
-  const wrap = $("#settings-jump-chips");
-  if (act && wrap && wrap.scrollWidth > wrap.clientWidth) {
-    const l = act.offsetLeft, r = l + act.offsetWidth;
-    if (l < wrap.scrollLeft) wrap.scrollLeft = Math.max(0, l - 12);
-    else if (r > wrap.scrollLeft + wrap.clientWidth) wrap.scrollLeft = r - wrap.clientWidth + 12;
-  }
-}
-function onSettingsJumpScroll() {
-  if (settingsJumpTick) return;
-  settingsJumpTick = true;
-  requestAnimationFrame(() => {
-    settingsJumpTick = false;
-    const page = $("#page-settings"), bar = $("#settings-jump");
-    if (!page || page.classList.contains("hidden") || !bar || bar.hidden || !settingsJumpItems.length) return;
-    const line = bar.getBoundingClientRect().bottom + REP_JUMP_GAP + 2;
-    let cur = settingsJumpItems[0].key;
-    for (const s of settingsJumpItems) {
-      if (s.el && s.el.getBoundingClientRect().top <= line) cur = s.key; else break;
-    }
-    if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2) cur = settingsJumpItems[settingsJumpItems.length - 1].key;
-    setSettingsJumpActive(cur);
-  });
 }
 /* ==========================================================================
    R13 · M-42 — THE FIRM EXPORT ("would not go live without it")
@@ -5179,73 +4764,6 @@ async function saveMyDetails() {
 }
 if ($("#save-my-details-btn")) $("#save-my-details-btn").addEventListener("click", saveMyDetails);
 
-/* R26 — the owner-only per-adviser fee-target editor. Built entirely in JS and injected next to the
-   settings form: NO index.html container is added (this round is app.js only), so the section is
-   created/replaced on each renderSettings run and removed outright for a non-owner. It is
-   DELIBERATELY outside #settings-form — those inputs must never be swept into the main Save button's
-   settings upsert (same discipline as the export panel). Storage is ONE JSON settings row
-   (adviser_fee_targets), no schema. */
-function renderAdviserTargetsEditor(owner) {
-  const existing = document.getElementById("adviser-targets-section");
-  if (existing) existing.remove();
-  /* R37 · P3 — ADMIN SEES THE TARGETS, READ-ONLY.
-     Admin already reads the adviser scoreboard these figures feed — the Target column, the
-     over/under, the whole comparison — and had no way to see what the targets WERE. "Luke is 40%
-     under" is not information until you know whether 40% under is £4,000 or £400, and the only
-     people who could look it up were the two who least needed to ask. So the same section renders
-     for an admin with every input disabled and no Save button: the numbers, and who owns them.
-     Nothing about the OWNER's view changes, and an adviser still sees nothing at all — their own
-     target reaches them through the scoreboard, and the rest of the roster's is not theirs to
-     read. */
-  const readOnly = !owner && MY_ROLE === "admin";
-  if (!owner && !readOnly) return;
-  const anchor = $("#settings-saved");
-  if (!anchor || !anchor.parentNode) return;
-  const targets = adviserTargets();
-  // R28 (Daniel-approved) — one row per ADVISING staff member only (advisingStaff() = TEAM filtered by
-  // isAdvisingStaff), not the whole team: an owner/admin who doesn't advise carries no fee target.
-  const rows = advisingStaff().map((p) => {
-    const v = Number(targets[p.id] || 0);
-    return `<label>${esc(staffName(p.id))}
-      <input class="adv-target-input" data-staff="${esc(p.id)}" type="number" min="0" step="100" inputmode="numeric" value="${v > 0 ? esc(String(v)) : ""}" placeholder="${readOnly ? "no target set" : "e.g. 12000"}"${readOnly ? " disabled" : ""}>
-    </label>`;
-  }).join("");
-  const sec = document.createElement("div");
-  sec.className = "panel";
-  sec.id = "adviser-targets-section";
-  sec.style.marginTop = "24px";
-  sec.innerHTML = `<h3>Per-adviser monthly fee targets</h3>
-    <p class="panel-sub">On the owner Reports scoreboard, each adviser's <strong>fees earned (procuration + broker + solicitor) on their completions this month</strong> (paid or not — the same basis as the firm "Fees earned vs target" bar, not the cash "Fees banked" column) is measured against the target ${readOnly ? "shown here" : "you set here"}. <strong>Blank or 0 = no target</strong> for that adviser (their Target cell shows "—"). This complements — it does not replace — the firm-wide monthly fee target above.</p>
-    ${readOnly ? `<div class="dq-notice" id="adviser-targets-readonly">🔒 <strong>Read-only — targets are set by the Owner.</strong> They are shown here because the adviser scoreboard you can see on Reports is measured against them, and a percentage over or under target means nothing without the target. Ask an Owner to change one.</div>` : ""}
-    <div class="settings-grid">${rows || `<p class="panel-sub" style="grid-column:1/-1;">No active team advisers ${readOnly ? "have a target" : "to set targets for"}.</p>`}</div>
-    ${readOnly ? "" : `<button type="button" class="btn btn-primary btn-sm" id="adviser-targets-save">Save targets</button>`}`;
-  anchor.parentNode.insertBefore(sec, anchor.nextSibling);
-  const btn = $("#adviser-targets-save");
-  if (btn) btn.onclick = saveAdviserTargets;
-}
-async function saveAdviserTargets() {
-  // Presentation guard only — the section is owner-only and RLS refuses the write regardless.
-  if (!isOwner()) return toast("Only the Owner can change settings.");
-  const btn = $("#adviser-targets-save");
-  if (!btn || btn.disabled) return;
-  // Build {staffId: number}, dropping blank / 0 / NaN — never write anything but numbers here.
-  const map = {};
-  [...document.querySelectorAll(".adv-target-input")].forEach((el) => {
-    const id = el.dataset.staff;
-    const n = Number(String(el.value).trim());
-    if (id && Number.isFinite(n) && n > 0) map[id] = n;
-  });
-  btn.disabled = true;
-  try {
-    const { error } = await db.from("settings").upsert([{ key: "adviser_fee_targets", value: JSON.stringify(map) }]);
-    if (error) return toast("Error: " + error.message);
-    await loadSettings();
-    toast("Per-adviser targets saved.");
-    // If the owner is looking at Reports, re-render so the Target column reflects the new figures.
-    if (currentPage === "reports") loadReports();
-  } finally { btn.disabled = false; }
-}
-
 /* ---------- Dashboard ---------- */
 /* R5-28 — has_bank_details() answered once per dashboard load. null = not asked / the RPC failed,
    in which case nothing is hidden (see briefActions). */
@@ -5262,11 +4780,11 @@ window.toggleRateErcSort = function () {
 /* ==========================================================================
    R12b · W-16 — THE RATE & ERC DRAWER GETS THE SAME SCOPE AS ITS SIBLINGS.
 
-   My Day and the Protection page both carry a Mine / (Unassigned) / All
-   segment. This drawer carried none, so Wayne's "rates ending soon" was
+   My Day, Tasks due and the Protection page all carry a Mine / (Unassigned) /
+   All segment. This drawer carried none, so Wayne's "rates ending soon" was
    the whole firm's — thirty-odd rows, most of them Luke's, with a "Start
    retention case" button on each that would have created a case on somebody
-   else's client. Same three-state segment the Protection page uses, scoped by the
+   else's client. Same three-state segment the Tasks panel uses, scoped by the
    CASE's adviser (v_alerts has no owner column of its own — the map comes from
    the cases read loadDashboard already makes), same role-based default as the
    Today strip above.
@@ -5630,11 +5148,11 @@ function upliftLineHtml(c, cls) {
    the same write-retry discipline the lead accept path uses for its post-original columns. */
 const DASH_CASE_COLS = "id,stage,fee_status,broker_fee,proc_fee,sols_fee,loan_amount,rate_percent,completed_at,retention_source_case_id,assigned_to";
 async function readDashboardCases() {
-  if (CALLPACK_SUPPORTED === false) return db.from("cases").select(DASH_CASE_COLS).order("id").limit(OWNER_ROW_CAP);
-  const res = await db.from("cases").select(DASH_CASE_COLS + "," + CALLPACK_SELECT).order("id").limit(OWNER_ROW_CAP);
+  if (CALLPACK_SUPPORTED === false) return db.from("cases").select(DASH_CASE_COLS);
+  const res = await db.from("cases").select(DASH_CASE_COLS + "," + CALLPACK_SELECT);
   if (res.error && isMissingColumnError(res.error)) {
     CALLPACK_SUPPORTED = false;
-    return db.from("cases").select(DASH_CASE_COLS).order("id").limit(OWNER_ROW_CAP);
+    return db.from("cases").select(DASH_CASE_COLS);
   }
   if (!res.error && res.data && res.data.length) noteCallPackFromStarRow(res.data[0]);
   return res;
@@ -5682,8 +5200,8 @@ function renderTodayKpis() {
      drawer below uses, so a tile and the panel it links to can never disagree about whose rate
      this is. */
   const alertMine = (a) => !mine || caseAdviser[a.case_id] === ME.id;
-  const ratesSoon = alerts.filter((a) => a.days_to_rate_end != null && a.days_to_rate_end <= reminderMonths * 30 && rateWithinActionFloor(a, true) && alertMine(a));
-  const ercFlags = alerts.filter((a) => a.erc_outlasts_rate && rateWithinActionFloor(a, true) && alertMine(a));
+  const ratesSoon = alerts.filter((a) => a.days_to_rate_end != null && a.days_to_rate_end <= reminderMonths * 30 && alertMine(a));
+  const ercFlags = alerts.filter((a) => a.erc_outlasts_rate && alertMine(a));
   // KPI cards clickable (defect 19) — each jumps to where that number can be worked, rather than
   // being a dead-end. The "Fees outstanding" card and the Protection & Fees drawer's "Fees due" tab
   // count different scopes (see loadProtection below) — captioned here so the gap reads as scope,
@@ -5811,267 +5329,7 @@ function renderDashNotices() {
   }
   el.innerHTML = bits.join("");
 }
-
-/* ==========================================================================
-   R38 — THE RATE & ERC FEED, COMPUTED ONCE.
-
-   Round 38 gives the retention worklist a page of its own, and the page shows
-   the SAME feed the Today drawer has shown since round 6 — un-truncated, with
-   the same rows and the same buttons. Two renderers over one feed is only safe
-   if there is one feed: the moment the reasoning below (which alerts are
-   self-nag, whose cases are in scope, which two rows are one building) exists
-   twice, the drawer and the page start disagreeing about the same client, and
-   the adviser cannot tell which screen is lying. So it is extracted here, with
-   the reasoning stated once, and both callers render from it.
-
-   NOT extracted: the reads. The drawer's rows come out of loadDashboard's own
-   Promise.all (it needs the cases for six other panels anyway); the page does
-   its own two bounded reads. Coupling the page to loadDashboard's execution
-   would mean opening Retention re-painted Today.
-   ========================================================================== */
-/* R5-6 / R35 §4 — the two sets the feed derives from the cases read, together because they are the
-   same question asked twice: which completed cases already HAVE a retention successor (so the
-   "Start retention case" button can't offer to create a second one), and which of those successors
-   is still LIVE.
-   The second one is why the feed stopped nagging about its own answer. Starting a retention case
-   copies the source case's rate_end_date onto the new live case (see startRetentionCase), which is
-   right — that date is what the conversation is about. But the successor is then itself a case with
-   a rate end in the past, so the feed grew a SECOND "rate ended N days ago" alert for the same
-   client, the same building and the same mortgage: one for the completed case and one for the live
-   case that already IS the answer to it. The adviser who did the right thing got more alerts, not
-   fewer. A LIVE successor is therefore excluded. The SOURCE case's row stays exactly as it was — it
-   is the row that carries "Start retention case" / "retention started", and dropping it would hide
-   the conversation rather than de-duplicate it. A successor that has itself completed or fallen
-   through is handling nothing, so it is not suppressed. */
-function retentionSuccessorSets(cases) {
-  const rows = cases || [];
-  const withSource = rows.filter((c) => c.retention_source_case_id);
-  return {
-    sourceIds: new Set(withSource.map((c) => c.retention_source_case_id)),
-    liveSuccessorIds: new Set(withSource.filter((c) => !["completed", "not_proceeding"].includes(c.stage)).map((c) => c.id)),
-  };
-}
-/* R12b · W-7 — case id → the adviser carrying it. v_alerts is a view over cases and carries no
-   owner of its own in every deployment, so every scope test on this feed goes through this map.
-   Built from a cases read the caller has already made, so it costs nothing. */
-function caseAdviserMap(cases) {
-  const m = {};
-  (cases || []).forEach((c) => { m[c.id] = c.assigned_to || null; });
-  return m;
-}
-/* R12b · W-16 — the scope test for ONE alert. "mine" is the case's adviser, "unassigned" is the
-   pile nobody is carrying (the one that goes cold), "all" is the firm. The drawer offers all three;
-   the Retention page offers Mine/All, which is the same test with the middle state never asked for. */
-function rateAlertInScope(a, scope, caseAdviser) {
-  if (scope === "all") return true;
-  const who = caseAdviser[a.case_id] !== undefined ? caseAdviser[a.case_id] : (a.assigned_to || null);
-  if (scope === "unassigned") return !who;
-  return !!(ME && ME.id) && who === ME.id;
-}
-/* R7-2 — the button is suppressed beyond nine months out. Starting a retention case that far ahead
-   creates a live enquiry, a call task and a queued client email for a conversation that cannot
-   usefully happen yet — it clutters the pipeline for three quarters and the client gets rung about
-   a rate that has most of a year to run. Nine months is three months of runway ahead of the
-   six-month reminder window the nightly queue works to, so a case is never stranded: the window
-   reaches it before the button reappears. */
-const rateErcFarOut = (a) => a.days_to_rate_end != null && a.days_to_rate_end > 274;
-/* Which half of the page a row belongs on: a rate that has already matured is a different, hotter
-   conversation from one with four months to run. The drawer does not split; the page does. */
-const rateErcEnded = (a) => a.days_to_rate_end != null && a.days_to_rate_end < 0;
-/* R47 Gate 0 — the recency floor for the "today" rate surfaces (My Day KPI + the dashboard
-   Rate & ERC drawer). A rate that ended more than 18 months ago is history, not a today-action;
-   the back-book import surfaced deals that lapsed as far back as 2017. Mirrors the SQL briefing
-   feed and the email recovery lane, both of which stop at 18 months. `days_to_rate_end` is
-   negative once a rate has ended, so the floor is a negative number of days. The Retention page
-   deliberately passes NO floor — the full lapsed recovery book is its whole point. */
-const RATE_ACTION_FLOOR_DAYS = -Math.round(18 * 30.44);
-const rateWithinActionFloor = (a, on) => !on || (a.days_to_rate_end != null && a.days_to_rate_end >= RATE_ACTION_FLOOR_DAYS);
-/* R47 Gate 0 — a SYSTEM PROVENANCE note is one the app wrote to record where a record came from,
-   not a record of contact with the client. The back-book import stamped one per imported deal and
-   policy ("SB-IMPORT-1 · …"), all on the import day; counting them as contact broke the cold
-   segment. Matched by the import tag prefix so a real note that merely mentions the word is never
-   caught. Kept as its own predicate so any future bulk import using the same tag convention is
-   covered without touching the cold logic again. */
-const SYSTEM_NOTE_RE = /^\s*SB-IMPORT-\d/;
-function isSystemProvenanceNote(body) { return typeof body === "string" && SYSTEM_NOTE_RE.test(body); }
-/* The whole feed, from rows the caller has already read. `scope` is "mine" | "unassigned" | "all".
-   Returns everything both renderers need, including the firm-wide counts their headings put in
-   tooltips — a badge counting rows the list does not show is the W-16 defect. */
-async function buildRateErcFeed(cases, alerts, opts) {
-  const o = opts || {};
-  const reminderMonths = o.reminderMonths || 6;
-  const scope = o.scope || "all";
-  const caseAdviser = o.caseAdviser || caseAdviserMap(cases);
-  const sets = retentionSuccessorSets(cases);
-  retentionSourceIds = sets.sourceIds;         // what the row markup below reads for "already started"
-  const notSelfNag = (a) => !sets.liveSuccessorIds.has(a.case_id);
-  /* R47 — opts.recentOnly floors the "today" surfaces (the dashboard drawer) to the last 18 months
-     so a rate that ended in 2017 is not on the morning glance. The Retention page passes it falsy,
-     keeping the full lapsed recovery book. ERC flags are floored the same way when recentOnly: an
-     ERC still running on a deal that ended years ago is equally stale on the dashboard. */
-  const recentOnly = !!o.recentOnly;
-  const ratesSoonAll = (alerts || []).filter((a) => a.days_to_rate_end != null && a.days_to_rate_end <= reminderMonths * 30 && rateWithinActionFloor(a, recentOnly)).filter(notSelfNag);
-  const ercFlagsAll = (alerts || []).filter((a) => a.erc_outlasts_rate && rateWithinActionFloor(a, recentOnly)).filter(notSelfNag);
-  const ratesSoonScoped = ratesSoonAll.filter((a) => rateAlertInScope(a, scope, caseAdviser));
-  const ercFlagsScoped = ercFlagsAll.filter((a) => rateAlertInScope(a, scope, caseAdviser));
-  const ercIds = new Set(ercFlagsScoped.map((a) => a.case_id));
-  const rateErcAll = [...ratesSoonScoped];
-  ercFlagsScoped.forEach((a) => { if (!rateErcAll.some((x) => x.case_id === a.case_id)) rateErcAll.push(a); });
-  /* R7-2 — what each expiring rate is WORTH, keyed by case id, from the widened cases read.
-     `lastFee` is proc + broker + sols on the case: the fee the firm earned last time it did this
-     mortgage, which is the only fee figure the schema holds and therefore the only honest proxy
-     for what a renewal is worth. Labelled as a proxy everywhere it appears.
-     R12b · W-15b/c — the same loop keys the call-pack row by case id. Empty on a database without
-     those columns, which is why every consumer is null-safe rather than assuming the keys are there. */
-  const money = {}, callPack = {};
-  (cases || []).forEach((c) => { money[c.id] = { loan: Number(c.loan_amount || 0), lastFee: caseLastFee(c) }; callPack[c.id] = c; });
-  /* R6 — v_alerts carries the client's NAME and nothing about the building, so Duncan Armitage's
-     two Skipton cases on 4 Seafield Gardens (and any two of a landlord's five) render as the same
-     row twice, inflating the counters and offering two identical buttons. One batched lookup of the
-     cases behind the rows gives every row its property.
-     R7-2 — the lookup runs over the WHOLE merged list rather than the first fifteen, because
-     de-duplication has to happen before any slice: collapsing after cutting would drop real
-     maturities off the end of the list to make room for rows it was about to merge anyway. */
-  const ctx = await loadPropContext(rateErcAll.map((a) => a.case_id));
-  /* R7-2 — ONE BUILDING, ONE MATURITY DATE, ONE ROW. Two cases on the same property whose rates
-     end on the same day are one mortgage conversation, and until now they were two identical rows
-     with two identical buttons, each of which would create its own retention case. Collapsed on
-     propKey + rate_end_date (the same key the Reports ledger uses), badged with how many cases are
-     behind the row, and never guessed at: a case with no address collapses with nothing. */
-  const seen = new Map();
-  const rows = [];
-  rateErcAll.forEach((a) => {
-    const row = propCtxCase(ctx, a.case_id);
-    const pk = row ? propKey(row) : "";
-    const key = pk ? pk + "|" + (a.rate_end_date || "") : "";
-    if (!key) { a.__dupes = 1; rows.push(a); return; }
-    if (!seen.has(key)) { a.__dupes = 1; seen.set(key, a); rows.push(a); return; }
-    seen.get(key).__dupes++;
-  });
-  return {
-    scope, reminderMonths, caseAdviser, ctx, money, callPack, ercIds, rows,
-    ratesSoonAll, ercFlagsAll, ratesSoonScoped, ercFlagsScoped,
-    collapsed: rateErcAll.length - rows.length,
-  };
-}
-/* R7-2 — sorted by VALUE AT RISK by default (the loan on the case), because the question this feed
-   is scanned with is "which of these matters most", and a date sort answers a different one. The
-   date sort is one click away and the heading says which is in force. Owner only: the loan and fee
-   columns are firm money and an adviser keeps the round-6 order, by date, with no money on it. */
-function sortRateErcRows(feed, byValue) {
-  const list = feed.rows.slice();
-  if (byValue) {
-    list.sort((a, b) => {
-      const d = ((feed.money[b.case_id] || {}).loan || 0) - ((feed.money[a.case_id] || {}).loan || 0);
-      return d || ((a.rate_end_date || "") < (b.rate_end_date || "") ? -1 : 1);
-    });
-  } else {
-    list.sort((a, b) => (a.rate_end_date || "") < (b.rate_end_date || "") ? -1 : 1);
-  }
-  return list;
-}
-/* R12b · W-16 — the tooltip a scoped count carries. The firm-wide figure is not deleted, it is put
-   here, so switching scope never looks like work vanishing. */
-const rateCountTip = (n, all, what, scope) => `${n} ${what} on ${rateScopeWord(scope)}${scope === "all" ? "" : ` — ${all} across the whole firm`}.`;
-/* ONE ROW of the feed. Every branch below is the round-6-to-round-35 markup, moved rather than
-   rewritten, so the drawer and the page cannot render the same alert differently. */
-function renderRateErcRow(a, feed) {
-  const money = showMoney();
-  const mny = feed.money[a.case_id] || { loan: 0, lastFee: 0 };
-  const cp = feed.callPack[a.case_id] || null;
-  const farOut = rateErcFarOut(a);
-  return `
-    <div class="row-item">
-      <div class="row-main">
-        <div class="t" onclick="openCase('${a.case_id}')">${esc(a.client_name)} ${propCtxChip(feed.ctx, a.case_id, "row-prop")}${a.__dupes > 1 ? ` <span class="badge grey" title="${a.__dupes} cases share this property and this rate end date — shown once, because it is one mortgage conversation.">${a.__dupes} cases</span>` : ""}</div>
-        <div class="s">${lenderIcon(a.lender)}${esc(a.lender || "")} ${a.rate_percent ? a.rate_percent + "%" : ""} — ends ${fmtD(a.rate_end_date)}${a.days_to_rate_end != null ? ` (${a.days_to_rate_end < 0 ? Math.abs(a.days_to_rate_end) + (Math.abs(a.days_to_rate_end) === 1 ? " day" : " days") + " ago" : "in " + a.days_to_rate_end + (a.days_to_rate_end === 1 ? " day" : " days")})` : ""}${feed.ercIds.has(a.case_id) ? ` — ERC runs until ${fmtD(a.erc_end_date)}` : ""}</div>
-        ${money ? `<div class="s rate-money">Loan <strong>${mny.loan ? fmtM(mny.loan) : "—"}</strong> · last fee <strong>${mny.lastFee ? fmtM(mny.lastFee) : "none recorded"}</strong> <span class="money-basis">(value at risk · loan on the case · last fee as proxy)</span></div>` : ""}
-        ${/* R12b · W-15b — the call pack, on the row the call is made from. Client money, not firm
-             money, so it is NOT behind showMoney(): the balance and the payment are the client's
-             own figures and the adviser ringing them needs both. Only drawn when at least one is
-             recorded; each one absent renders "—", never 0. */ ""}
-        ${/* R12b · W-15c — the uplift is inline here, and ONLY on rows whose rate has actually
-             ENDED. A client still inside their fix is not paying anything extra yet, and a
-             "£X/mo more" over a rate with four months to run reads as a bill they already get. */ ""}
-        ${callPackLineHtml(cp, rateErcEnded(a))}
-      </div>
-      ${a.days_to_rate_end < 0 ? '<span class="badge red">OVERDUE</span>' : ""}
-      ${feed.ercIds.has(a.case_id) ? `<span class="badge red" title="${TIP_ERC}">ERC conflict</span>` : ""}
-      ${a.rate_end_estimated ? `<span class="badge ${EST_BADGE_CLS}" title="${TIP_APPROX}">≈ estimate</span>` : ""}
-      ${a.stage === "completed"
-        ? (a.rate_reminder_queued_at ? '<span class="badge green">Reminder sent</span>' : '<span class="badge amber">Reminder pending</span>')
-        : stageBadge(a.stage)}
-      ${/* R5-6 — the backend auto-creates a retention case only while the rate is still in FUTURE
-           reminder window; a rate that has already ended is never picked up, and these rows sat
-           here saying "reminder pending" forever. This is the manual path for exactly those. */ ""}
-      ${a.stage === "completed" && !a.rate_reminder_queued_at && a.rate_end_date && !retentionSourceIds.has(a.case_id)
-        ? (farOut
-          ? `<span class="badge grey rate-too-early" title="This rate has more than nine months to run. Starting a retention case now would create a live enquiry, a call task and a queued client email for a conversation that cannot usefully happen yet — the ${feed.reminderMonths}-month reminder window reaches this case long before it is too late.">too early — ${Math.round(a.days_to_rate_end / 30)}mo out</span>`
-          : retentionToMeHtml(a.case_id, cp) + `<button class="btn btn-sm btn-retention" onclick="event.stopPropagation();startRetentionCase('${a.case_id}', event)" title="Create the follow-on remortgage case, the call task and a queued reminder">🔁 Start retention case</button>`) : ""}
-      ${/* G1I-R5 — the recovery control. A retention case already exists for this one, so the
-           button above is (correctly) gone, but the source was never stamped: the row nags
-           "Reminder pending" forever and the nightly RPC will never pick it up either, because
-           the rate has ended and a successor exists. Without this the only way out was to send the
-           client a SECOND reminder email. */ ""}
-      ${a.stage === "completed" && !a.rate_reminder_queued_at && retentionSourceIds.has(a.case_id)
-        ? `<button class="btn btn-sm btn-retention" onclick="event.stopPropagation();markRateReminded('${a.case_id}', event)" title="This case already has a retention case, but it was never marked as reminded — clear the nag without emailing the client again">✓ Mark as reminded</button>` : ""}
-    </div>`;
-}
-/* R7-2 — the dedupe footnote. Said wherever the feed is drawn, because a count that does not match
-   the rows on screen is the thing this note exists to explain. */
-function rateErcDedupeNote(collapsed) {
-  return collapsed ? `<div class="empty rate-erc-dedupe-note">${collapsed} further case${collapsed === 1 ? " is" : "s are"} folded into the rows above — same property, same rate end date, one conversation.</div>` : "";
-}
-
-/* ==========================================================================
-   R38 — THE RETENTION PIPELINE, COMPUTED ONCE (drawer + page).
-   Same extraction, same reason: the Today drawer shows the first twelve, the
-   Retention page shows the lot, and "open" / "won" / "lost" / conversion must
-   mean one thing on both.
-   ========================================================================== */
-/* R38 — `assigned_to` is the one column added to the round-5 select, so the page's Mine/All scope
-   can answer whose pipeline this is. Base column since the original schema, so it cannot 42703. */
-const RETENTION_PIPE_COLS = "id,stage,lender,rate_end_date,rate_end_estimated,assigned_to,clients!client_id(first_name,last_name)";
-async function readRetentionPipeline() {
-  return db.from("cases").select(RETENTION_PIPE_COLS)
-    .not("retention_source_case_id", "is", null)
-    .order("rate_end_date").limit(OWNER_ROW_CAP);
-}
-function retentionPipelineStats(rows) {
-  const all = rows || [];
-  const open = all.filter((c) => !["completed", "not_proceeding"].includes(c.stage));
-  const won = all.filter((c) => c.stage === "completed").length;
-  const lost = all.filter((c) => c.stage === "not_proceeding").length;
-  return { all, open, won, lost, rate: won + lost ? Math.round((won / (won + lost)) * 100) : null };
-}
-/* R5-6 — the old copy here ("nothing creates these for you") was simply untrue: the nightly
-   queue_automated_emails() RPC creates a retention case, its note, its call task and a queued
-   reminder as soon as a completed client's rate enters the reminder window. What it genuinely
-   cannot do is reach back for a rate that has ALREADY ended — that is what the button is for. */
-function retentionStatsLine(s) {
-  return `${s.open.length} open · ${s.won} won · ${s.lost} lost${s.rate != null ? ` · ${s.rate}% conversion` : ""}. `
-    + "Created automatically when a completed client's rate enters the reminder window. For rates already past, open the case and press Start retention case.";
-}
-/* R6 — a retention row is by definition about one specific mortgage on one specific building;
-   naming it by client alone put a landlord's two expiring rates on the panel as one repeated
-   line. (LR-18.) */
-async function renderRetentionRows(open, cap) {
-  const shown = open.slice(0, cap);
-  const ctx = await loadPropContext(shown.map((c) => c.id));
-  return shown.map((c) => `
-    <div class="row-item">
-      <div class="row-main">
-        <div class="t" onclick="openCase('${c.id}')">${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" "))} ${propCtxChip(ctx, c.id, "row-prop")}</div>
-        <div class="s">${lenderIcon(c.lender)}${esc(c.lender || "")} — rate ends ${fmtD(c.rate_end_date)}${c.rate_end_estimated ? " " + APPROX : ""}</div>
-      </div>
-      ${stageBadge(c.stage)}
-    </div>`).join("");
-}
-
 async function loadDashboard() {
-  /* R34 · W3 — restore every drawer the user has an opinion about BEFORE anything that could call
-     autoDrawer (the loaders below, and the error branch's loaders too). */
-  applyStoredDrawers();
   /* R13 · M-42/M-43 — the two health banners. Fire-and-forget: a slow settings read must never
      hold up the KPI row behind it, and a banner arriving 200ms late is still a banner. */
   refreshHeartbeatKeys().then(renderDashNotices);
@@ -6091,22 +5349,15 @@ async function loadDashboard() {
   ]);
   hasBankDetails = bank && !bank.error ? !!bank.data : null;
   /* R5-6 — which completed cases already have a retention successor, so the "Start retention case"
-     button can't offer to create a second one. Derived from the rows already fetched above.
-     R38 — set here as well as inside buildRateErcFeed(), because the error branch below returns
-     before the feed is ever built and the case modal's own button reads this set. */
-  retentionSourceIds = retentionSuccessorSets(cases).sourceIds;
+     button can't offer to create a second one. Derived from the rows already fetched above. */
+  retentionSourceIds = new Set((cases || []).filter((c) => c.retention_source_case_id).map((c) => c.retention_source_case_id));
   if (casesErr || alertsErr) {
     renderLoadError("#kpi-row", casesErr || alertsErr, loadDashboard);
     renderLoadError("#alerts-rateerc", casesErr || alertsErr, loadDashboard);
     // The independent dashboard widgets self-report their own errors.
-    // R41 · F1 — four of the eight loaders that used to be listed here were the removed drawers;
-    // the work they showed is in loadBriefing, which is still fired (and still self-reports).
-    // publishAdviserTaskLoad is not a widget at all — it is the lead-routing load map, and this
-    // branch is exactly where a lead row is about to ask for it.
-    publishAdviserTaskLoad(); loadProtection(); loadBriefing(); loadWatchtower(); loadUnactioned();
+    loadRetention(); loadTasks(); loadProtection(); loadLeads(); loadTodayAppts(); loadBriefing(); loadWatchtower(); loadUnactioned();
     return;
   }
-  renderOwnerCapNotice("#dash-cap-notice", ownerCapHit(cases)); // R23 — never silently truncate the KPI book
   const activeAll = (cases || []).filter((c) => !["completed", "not_proceeding"].includes(c.stage));
   /* R7-5 — half of the lead-routing load figure, from the rows this panel has already read. "Open"
      is every stage except completed and not proceeding — the same `active` set the KPI above counts,
@@ -6116,10 +5367,15 @@ async function loadDashboard() {
      would make every desk but his look empty. */
   advLoadCases = {};
   activeAll.forEach((c) => { if (c.assigned_to) advLoadCases[c.assigned_to] = (advLoadCases[c.assigned_to] || 0) + 1; });
-  // R12b · W-7 — case id → the adviser carrying it, used to scope both the KPI strip and the
-  // Rate & ERC drawer. R38 — see caseAdviserMap() for the whole rationale.
-  const caseAdviser = caseAdviserMap(cases);
+  /* R12b · W-7 — case id → the adviser carrying it. Used to scope both the KPI strip and the
+     Rate & ERC drawer, because v_alerts is a view over cases and carries no owner of its own in
+     every deployment. Built from the cases read above, so it costs nothing. */
+  const caseAdviser = {};
+  (cases || []).forEach((c) => { caseAdviser[c.id] = c.assigned_to || null; });
 
+  /* R12b · W-7 — the strip. See renderTodayKpis() above for the whole rationale. */
+  const ratesSoonAll = (alerts || []).filter((a) => a.days_to_rate_end != null && a.days_to_rate_end <= reminderMonths * 30);
+  const ercFlagsAll = (alerts || []).filter((a) => a.erc_outlasts_rate);
   /* R12b · W-7 — everything the tiles are computed from, kept so the Mine/All toggle can repaint
      them WITHOUT a second round-trip. The toggle changes which subset is counted, not which rows
      exist, so re-reading the table to answer it would be a query spent on nothing. */
@@ -6141,53 +5397,142 @@ async function loadDashboard() {
      is carrying, which is precisely the pile that goes cold. Stacking the two
      scopes would also mean the drawer silently narrowing when someone touched
      a control six inches away that says nothing about this panel.
-
-     R38 — the feed itself now lives in buildRateErcFeed(), shared with the
-     Retention page. This drawer keeps everything that is ITS opinion and not
-     the feed's: the three-state scope, the fifteen-row slice, the drawer
-     chrome. What the two surfaces must agree about — which alerts count, whose
-     they are, which two rows are one building, what a row looks like — is
-     computed and rendered in exactly one place.
      ========================================================================== */
-  const rateFeed = await buildRateErcFeed(cases, alerts, { reminderMonths, scope: rateScope, caseAdviser, recentOnly: true });
+  const rateInScope = (a) => {
+    if (rateScope === "all") return true;
+    const who = caseAdviser[a.case_id] !== undefined ? caseAdviser[a.case_id] : (a.assigned_to || null);
+    if (rateScope === "unassigned") return !who;
+    return !!(ME && ME.id) && who === ME.id;
+  };
+  const ratesSoonScoped = ratesSoonAll.filter(rateInScope);
+  const ercFlagsScoped = ercFlagsAll.filter(rateInScope);
+  const ercIds = new Set(ercFlagsScoped.map((a) => a.case_id));
+  const rateErcAll = [...ratesSoonScoped];
+  ercFlagsScoped.forEach((a) => { if (!rateErcAll.some((x) => x.case_id === a.case_id)) rateErcAll.push(a); });
+  /* R7-2 — what each expiring rate is WORTH, keyed by case id, from the widened cases read above.
+     `lastFee` is proc + broker + sols on the case: the fee the firm earned last time it did this
+     mortgage, which is the only fee figure the schema holds and therefore the only honest proxy
+     for what a renewal is worth. Labelled as a proxy everywhere it appears. */
+  const rateMoney = {};
+  (cases || []).forEach((c) => { rateMoney[c.id] = { loan: Number(c.loan_amount || 0), lastFee: caseLastFee(c) }; });
+  /* R12b · W-15b/c — the call-pack figures for the rows on this panel, keyed by case id from the
+     same widened read. Empty on a database without the columns, which is why every consumer below
+     is null-safe rather than assuming the keys are there. */
+  const rateCallPack = {};
+  (cases || []).forEach((c) => { rateCallPack[c.id] = c; });
+  /* R6 — v_alerts carries the client's NAME and nothing about the building, so Duncan Armitage's
+     two Skipton cases on 4 Seafield Gardens (and any two of a landlord's five) render as the same
+     row twice, inflating the counters above and offering two identical buttons. One batched
+     lookup of the cases behind the rows on screen gives every row its property.
+     R7-2 — the lookup now runs over the WHOLE merged list rather than the first fifteen, because
+     de-duplication has to happen before the slice: collapsing after cutting to fifteen would drop
+     real maturities off the end of the list to make room for rows it was about to merge anyway. */
+  const rateErcCtx = await loadPropContext(rateErcAll.map((a) => a.case_id));
+  /* R7-2 — ONE BUILDING, ONE MATURITY DATE, ONE ROW. Two cases on the same property whose rates
+     end on the same day are one mortgage conversation, and until now they were two identical rows
+     with two identical buttons, each of which would create its own retention case. Collapsed on
+     propKey + rate_end_date (the same key the Reports ledger uses), badged with how many cases are
+     behind the row, and never guessed at: a case with no address collapses with nothing. */
+  const rateErcSeen = new Map();
+  const rateErcMerged = [];
+  rateErcAll.forEach((a) => {
+    const row = propCtxCase(rateErcCtx, a.case_id);
+    const pk = row ? propKey(row) : "";
+    const key = pk ? pk + "|" + (a.rate_end_date || "") : "";
+    if (!key) { a.__dupes = 1; rateErcMerged.push(a); return; }
+    if (!rateErcSeen.has(key)) { a.__dupes = 1; rateErcSeen.set(key, a); rateErcMerged.push(a); return; }
+    rateErcSeen.get(key).__dupes++;
+  });
   /* R7-2 — sorted by VALUE AT RISK by default (the loan on the case), because the question this
      panel is scanned with is "which of these matters most", and a date sort answers a different
      one. The date sort is one click away and the header says which is in force. Owner only: the
      loan and fee columns are firm money and an adviser keeps the round-6 panel exactly as it was,
      date-sorted, with no money on it. */
   const rateValueSort = showMoney() && rateErcSortMode === "value";
-  const rateErcMerged = sortRateErcRows(rateFeed, rateValueSort);
+  if (rateValueSort) {
+    rateErcMerged.sort((a, b) => {
+      const d = ((rateMoney[b.case_id] || {}).loan || 0) - ((rateMoney[a.case_id] || {}).loan || 0);
+      return d || ((a.rate_end_date || "") < (b.rate_end_date || "") ? -1 : 1);
+    });
+  } else {
+    rateErcMerged.sort((a, b) => (a.rate_end_date || "") < (b.rate_end_date || "") ? -1 : 1);
+  }
   const rateErcH3 = $("#rate-erc-panel h3");
+  const rateErcCollapsed = rateErcAll.length - rateErcMerged.length;
   /* R12b · W-16 — the counts in the heading COUNT WHAT THE LIST SHOWS, and say whose. A badge that
      kept reading "31 ending soon" over eight visible rows is the same class of lie the KPI strip
-     was telling one panel higher up. See rateCountTip() for where the firm-wide figure went. */
+     was telling one panel higher up. The firm-wide figure is not deleted, it is put in the
+     tooltip, so switching scope never looks like work vanishing. */
+  const rateCountTip = (n, all, what) => `${n} ${what} on ${rateScopeWord(rateScope)}${rateScope === "all" ? "" : ` — ${all} across the whole firm`}.`;
   rateErcH3.innerHTML = `⚠️ Rate &amp; ERC alerts
-    ${rateFeed.ratesSoonScoped.length ? `<span class="count hot" title="${esc(rateCountTip(rateFeed.ratesSoonScoped.length, rateFeed.ratesSoonAll.length, "ending soon", rateScope))}">${rateFeed.ratesSoonScoped.length} ending soon</span>` : ""}
-    ${rateFeed.ercFlagsScoped.length ? `<span class="count" style="background:#fbe9e7;color:var(--red);" title="${esc(rateCountTip(rateFeed.ercFlagsScoped.length, rateFeed.ercFlagsAll.length, "ERC conflicts", rateScope))}">${rateFeed.ercFlagsScoped.length} ERC conflict</span>` : ""}
-    ${showMoney() ? `<button type="button" class="btn btn-sm rate-sort-btn" id="rate-erc-sort" onclick="event.stopPropagation();toggleRateErcSort()" title="${rateValueSort ? "Sorted by loan size — the value at risk. Click to sort by date instead." : "Sorted by rate end date. Click to sort by loan size — the value at risk."}">${rateValueSort ? "↕ By value at risk" : "↕ By date"}</button>` : ""}
-    ${/* R38 — this drawer is the morning glance; the page is where the list is actually worked.
-         One link, so the fifteen-row slice is never mistaken for the whole feed. */ ""}
-    <button type="button" class="btn btn-ghost btn-sm ret-page-link" id="rate-erc-open-retention" onclick="event.stopPropagation();nav('retention')" title="The same feed, un-truncated, with the retention pipeline and the clients who have gone quiet">Open Retention page →</button>`;
+    ${ratesSoonScoped.length ? `<span class="count hot" title="${esc(rateCountTip(ratesSoonScoped.length, ratesSoonAll.length, "ending soon"))}">${ratesSoonScoped.length} ending soon</span>` : ""}
+    ${ercFlagsScoped.length ? `<span class="count" style="background:#fbe9e7;color:var(--red);" title="${esc(rateCountTip(ercFlagsScoped.length, ercFlagsAll.length, "ERC conflicts"))}">${ercFlagsScoped.length} ERC conflict</span>` : ""}
+    ${showMoney() ? `<button type="button" class="btn btn-sm rate-sort-btn" id="rate-erc-sort" onclick="event.stopPropagation();toggleRateErcSort()" title="${rateValueSort ? "Sorted by loan size — the value at risk. Click to sort by date instead." : "Sorted by rate end date. Click to sort by loan size — the value at risk."}">${rateValueSort ? "↕ By value at risk" : "↕ By date"}</button>` : ""}`;
   const rateSub = $("#rate-erc-sub");
   if (rateSub) {
     rateSub.textContent = `Rates ending within the reminder window, and cases where the ERC outlasts the rate. `
-      + `Showing ${rateScopeWord(rateScope)}${rateScope === "all" ? "" : ` — ${rateFeed.ratesSoonAll.length + rateFeed.ercFlagsAll.filter((a) => !rateFeed.ratesSoonAll.some((r) => r.case_id === a.case_id)).length} alerts firm-wide.`}`;
+      + `Showing ${rateScopeWord(rateScope)}${rateScope === "all" ? "" : ` — ${ratesSoonAll.length + ercFlagsAll.filter((a) => !ratesSoonAll.some((r) => r.case_id === a.case_id)).length} alerts firm-wide.`}`;
   }
-  $("#alerts-rateerc").innerHTML = rateErcMerged.length
-    ? rateErcMerged.slice(0, 15).map((a) => renderRateErcRow(a, rateFeed)).join("")
-      + (rateErcMerged.length > 15 ? `<div class="empty">…and ${rateErcMerged.length - 15} more — <button type="button" class="dash-notice-link" onclick="nav('retention')">see the Retention page</button>.</div>` : "")
-      + rateErcDedupeNote(rateFeed.collapsed)
+  $("#alerts-rateerc").innerHTML = rateErcMerged.length ? rateErcMerged.slice(0, 15).map((a) => {
+    const mny = rateMoney[a.case_id] || { loan: 0, lastFee: 0 };
+    const cp = rateCallPack[a.case_id] || null;
+    /* R7-2 — the button is suppressed beyond nine months out. Starting a retention case that far
+       ahead creates a live enquiry, a call task and a queued client email for a conversation that
+       cannot usefully happen yet — it clutters the pipeline for three quarters and the client gets
+       rung about a rate that has most of a year to run. Nine months is three months of runway
+       ahead of the six-month reminder window the nightly queue works to, so a case is never
+       stranded: the window reaches it before the button reappears. */
+    const farOut = a.days_to_rate_end != null && a.days_to_rate_end > 274;
+    return `
+    <div class="row-item">
+      <div class="row-main">
+        <div class="t" onclick="openCase('${a.case_id}')">${esc(a.client_name)} ${propCtxChip(rateErcCtx, a.case_id, "row-prop")}${a.__dupes > 1 ? ` <span class="badge grey" title="${a.__dupes} cases share this property and this rate end date — shown once, because it is one mortgage conversation.">${a.__dupes} cases</span>` : ""}</div>
+        <div class="s">${lenderIcon(a.lender)}${esc(a.lender || "")} ${a.rate_percent ? a.rate_percent + "%" : ""} — ends ${fmtD(a.rate_end_date)}${a.days_to_rate_end != null ? ` (${a.days_to_rate_end < 0 ? Math.abs(a.days_to_rate_end) + (Math.abs(a.days_to_rate_end) === 1 ? " day" : " days") + " ago" : "in " + a.days_to_rate_end + (a.days_to_rate_end === 1 ? " day" : " days")})` : ""}${ercIds.has(a.case_id) ? ` — ERC runs until ${fmtD(a.erc_end_date)}` : ""}</div>
+        ${money ? `<div class="s rate-money">Loan <strong>${mny.loan ? fmtM(mny.loan) : "—"}</strong> · last fee <strong>${mny.lastFee ? fmtM(mny.lastFee) : "none recorded"}</strong> <span class="money-basis">(value at risk · loan on the case · last fee as proxy)</span></div>` : ""}
+        ${/* R12b · W-15b — the call pack, on the row the call is made from. Client money, not firm
+             money, so it is NOT behind showMoney(): the balance and the payment are the client's
+             own figures and the adviser ringing them needs both. Only drawn when at least one is
+             recorded; each one absent renders "—", never 0. */ ""}
+        ${/* R12b · W-15c — the uplift is inline here, and ONLY on rows whose rate has actually
+             ENDED. A client still inside their fix is not paying anything extra yet, and a
+             "£X/mo more" over a rate with four months to run reads as a bill they already get. */ ""}
+        ${callPackLineHtml(cp, a.days_to_rate_end != null && a.days_to_rate_end < 0)}
+      </div>
+      ${a.days_to_rate_end < 0 ? '<span class="badge red">OVERDUE</span>' : ""}
+      ${ercIds.has(a.case_id) ? `<span class="badge red" title="${TIP_ERC}">ERC conflict</span>` : ""}
+      ${a.rate_end_estimated ? `<span class="badge ${EST_BADGE_CLS}" title="${TIP_APPROX}">≈ estimate</span>` : ""}
+      ${a.stage === "completed"
+        ? (a.rate_reminder_queued_at ? '<span class="badge green">Reminder sent</span>' : '<span class="badge amber">Reminder pending</span>')
+        : stageBadge(a.stage)}
+      ${/* R5-6 — the backend auto-creates a retention case only while the rate is still in FUTURE
+           reminder window; a rate that has already ended is never picked up, and these rows sat
+           here saying "reminder pending" forever. This is the manual path for exactly those. */ ""}
+      ${a.stage === "completed" && !a.rate_reminder_queued_at && a.rate_end_date && !retentionSourceIds.has(a.case_id)
+        ? (farOut
+          ? `<span class="badge grey rate-too-early" title="This rate has more than nine months to run. Starting a retention case now would create a live enquiry, a call task and a queued client email for a conversation that cannot usefully happen yet — the ${reminderMonths}-month reminder window reaches this case long before it is too late.">too early — ${Math.round(a.days_to_rate_end / 30)}mo out</span>`
+          : retentionToMeHtml(a.case_id, cp) + `<button class="btn btn-sm btn-retention" onclick="event.stopPropagation();startRetentionCase('${a.case_id}', event)" title="Create the follow-on remortgage case, the call task and a queued reminder">🔁 Start retention case</button>`) : ""}
+      ${/* G1I-R5 — the recovery control. A retention case already exists for this one, so the
+           button above is (correctly) gone, but the source was never stamped: the row nags
+           "Reminder pending" forever and the nightly RPC will never pick it up either, because
+           the rate has ended and a successor exists. Without this the only way out was to send the
+           client a SECOND reminder email. */ ""}
+      ${a.stage === "completed" && !a.rate_reminder_queued_at && retentionSourceIds.has(a.case_id)
+        ? `<button class="btn btn-sm btn-retention" onclick="event.stopPropagation();markRateReminded('${a.case_id}', event)" title="This case already has a retention case, but it was never marked as reminded — clear the nag without emailing the client again">✓ Mark as reminded</button>` : ""}
+    </div>`;
+  }).join("")
+    + (rateErcMerged.length > 15 ? `<div class="empty">…and ${rateErcMerged.length - 15} more — see Pipeline table view.</div>` : "")
+    + (rateErcCollapsed ? `<div class="empty rate-erc-dedupe-note">${rateErcCollapsed} further case${rateErcCollapsed === 1 ? " is" : "s are"} folded into the rows above — same property, same rate end date, one conversation.</div>` : "")
     : '<div class="empty">Nothing ending in the reminder window, and no ERC conflicts. 👍</div>';
 
-  /* R7-5 — awaited, and the only one that is: this publishes the task half of the routing load,
-     and the list underneath it paints the lead-routing selects. Racing them would give the first
-     paint of My Day a cases-only view of who is busiest, which would then differ from the same
-     select after any repaint. Everything else still runs unawaited, as before.
-     R41 · F1 — was `await loadTasks()`; the drawer went, the load map it published did not. */
-  await publishAdviserTaskLoad();
+  loadRetention();
+  /* R7-5 — awaited, and the only one that is: loadTasks publishes the task half of the routing
+     load, and the two panels underneath it paint the lead-routing selects. Racing them would give
+     the first paint of the inbox a cases-only view of who is busiest, which would then differ from
+     the same select after any repaint. Everything else still runs unawaited, as before. */
+  await loadTasks();
   loadProtection();
-  // R41 · F1 — loadRetention / loadLeads / loadTodayAppts all painted a restatement of My Day one
-  // screen lower down. One paint now, not four.
+  loadLeads();
+  loadTodayAppts();
   loadBriefing();
   // T1-11 — "resolves itself when fixed" is what #watchtower-sub promises, but the checker only ran
   // from the Run checks button, so a list the administrator was actively working never shrank.
@@ -6235,220 +5580,37 @@ async function loadDashboard() {
   updateRevenueDrawerCount();
 }
 
-/* R41 · F1 — loadRetention() (Today's "🔁 Retention pipeline" drawer, #retention-list /
-   #retention-stats) is gone. It was the first twelve rows of the list the R38 Retention page shows
-   in full, and the drawer's own heading already linked there. Nothing it rendered was unique: the
-   builders below (readRetentionPipeline / retentionPipelineStats / retentionStatsLine /
-   renderRetentionRows) are untouched and are what the page renders from. */
-
-/* =========================================================================
-   R38 — THE RETENTION PAGE.
-
-   Luke's whole job, on one screen. Today's drawers are the morning glance —
-   fifteen rates and twelve retention cases, folded shut again by lunchtime.
-   What was missing was the place you sit down and WORK the list: the feed
-   un-truncated, the pipeline it feeds, and the clients who have quietly gone
-   six months without hearing from anybody.
-
-   NOTHING here is a second implementation. The rate feed comes from
-   buildRateErcFeed() / renderRateErcRow(), the pipeline from
-   readRetentionPipeline() / retentionPipelineStats() / renderRetentionRows(),
-   the cold set from the Clients page's own clientDataCached() + coldClients().
-   The page's own contribution is three things a drawer cannot have: its own
-   reads (so opening Retention never repaints Today), one scope control across
-   all three panels, and a render cap of a hundred rather than fifteen.
-   ========================================================================= */
-/* R18-P4 discipline — the DOM render is capped; every COUNT on the page is computed over the full
-   list, and a capped panel says how many it is not showing. */
-const RET_LIST_CAP = 100;
-/* R34 pattern (the Watchtower's #wt-scope-*): resolved on first render because it depends on the
-   signed-in role and on a stored choice, neither of which is known when the markup is parsed. An
-   adviser opens on their own book; the Owner and the Administrator run the firm, and All IS their
-   default (the same argument as every other scope default in the app). */
-let retScope = null;
-const RET_SCOPE_KEY = "nx_ret_scope";
-function retScopeResolved() {
-  if (retScope) return retScope;
-  const stored = lsGet(RET_SCOPE_KEY);
-  retScope = (stored === "mine" || stored === "all") ? stored : (ME && !isAdminOrOwner() ? "mine" : "all");
-  return retScope;
-}
-function syncRetScopeButtons() {
-  const m = $("#ret-scope-mine"), a = $("#ret-scope-all");
-  if (!m || !a) return;
-  const s = retScopeResolved();
-  m.classList.toggle("scope-active", s === "mine");
-  a.classList.toggle("scope-active", s === "all");
-  m.setAttribute("aria-pressed", String(s === "mine"));
-  a.setAttribute("aria-pressed", String(s === "all"));
-}
-window.retSetScope = function (s) {
-  retScope = s === "mine" ? "mine" : "all";
-  lsSet(RET_SCOPE_KEY, retScope);
-  syncRetScopeButtons();
-  loadRetentionPage();
-};
-if ($("#ret-scope-mine")) {
-  $("#ret-scope-mine").addEventListener("click", () => retSetScope("mine"));
-  $("#ret-scope-all").addEventListener("click", () => retSetScope("all"));
-}
-/* R7-2 semantics, page-local state: the drawer and the page are read in different postures and a
-   click on one must not silently re-order the other. Same default and same rule — value at risk
-   for whoever can see firm money, date order for everybody else. */
-let retSortMode = "value";
-window.toggleRetSort = function () {
-  retSortMode = retSortMode === "value" ? "date" : "value";
-  loadRetentionPage();
-};
-/* The whole page. The three panels are independent reads and are deliberately NOT awaited in
-   series: a slow client read must not hold the rate feed off the screen. */
-async function loadRetentionPage() {
-  const scope = retScopeResolved();
-  syncRetScopeButtons();
-  const note = $("#ret-scope-note");
-  if (note) {
-    note.textContent = scope === "mine"
-      ? "Showing your cases and your clients — the rates on cases assigned to you, the retention cases assigned to you, and the clients with at least one case of yours. Switch to All for the whole firm."
-      : "Showing every adviser's cases and clients. Switch to Mine for your own book.";
-  }
-  await Promise.all([
-    loadRetentionRates(scope),
-    loadRetentionPipelinePanel(scope),
-    loadRetentionCold(scope),
-  ]);
-}
-/* §1 — the rate & ERC feed, un-truncated and split at the maturity date. The page's OWN two reads:
-   the same widened cases select the dashboard uses (DASH_CASE_COLS carries everything the shared
-   builder needs — loan, fees, retention_source_case_id, assigned_to) and v_alerts, both bounded by
-   OWNER_ROW_CAP with the usual notice when the cap bites. */
-async function loadRetentionRates(scope) {
-  const reminderMonths = Number(settings.rate_reminder_months) || 6; // T1-10 — a stray non-numeric stored value can't render "≤ NaNmo"
-  const [{ data: cases, error: casesErr }, { data: alerts, error: alertsErr }] = await Promise.all([
-    readDashboardCases(),
-    db.from("v_alerts").select("*").order("rate_end_date").limit(OWNER_ROW_CAP),
-  ]);
-  if (casesErr || alertsErr) { renderLoadError("#ret-rates-list", casesErr || alertsErr, loadRetentionPage); return; }
-  renderOwnerCapNotice("#ret-cap-notice", ownerCapHit(cases) || ownerCapHit(alerts));
-  const feed = await buildRateErcFeed(cases, alerts, { reminderMonths, scope });
-  const valueSort = showMoney() && retSortMode === "value";
-  const sorted = sortRateErcRows(feed, valueSort);
-  /* ENDED FIRST. A rate that matured last month is a client already paying the reversion rate; one
-     with four months to run is a diary entry. Both belong on this page, in that order, and the
-     drawer's single undifferentiated list is exactly what made the ended ones easy to miss. */
-  const ended = sorted.filter(rateErcEnded);
-  const soon = sorted.filter((a) => !rateErcEnded(a));
-  const ordered = ended.concat(soon);
-  const shown = ordered.slice(0, RET_LIST_CAP);
-  const h3 = $("#ret-rates-h3");
-  if (h3) {
-    /* The two scoped badges are the DRAWER's two badges, from the same feed and with the same
-       firm-wide tooltip, so the page and Today can never disagree about how much work there is.
-       "Already ended" is the page's own, because the page is the only surface that splits them. */
-    h3.innerHTML = `⚠️ Rates ending &amp; ended
-      ${ended.length ? `<span class="count hot" title="Rates that have already matured — the client is on the reversion rate now.">${ended.length} already ended</span>` : ""}
-      ${feed.ratesSoonScoped.length ? `<span class="count" title="${esc(rateCountTip(feed.ratesSoonScoped.length, feed.ratesSoonAll.length, "ending soon", scope))}">${feed.ratesSoonScoped.length} in the ${reminderMonths}-month window</span>` : ""}
-      ${feed.ercFlagsScoped.length ? `<span class="count" style="background:#fbe9e7;color:var(--red);" title="${esc(rateCountTip(feed.ercFlagsScoped.length, feed.ercFlagsAll.length, "ERC conflicts", scope))}">${feed.ercFlagsScoped.length} ERC conflict</span>` : ""}
-      ${showMoney() ? `<button type="button" class="btn btn-sm rate-sort-btn" id="ret-rates-sort" onclick="toggleRetSort()" title="${valueSort ? "Sorted by loan size — the value at risk. Click to sort by date instead." : "Sorted by rate end date. Click to sort by loan size — the value at risk."}">${valueSort ? "↕ By value at risk" : "↕ By date"}</button>` : ""}`;
-  }
-  const sub = $("#ret-rates-sub");
-  if (sub) {
-    sub.textContent = `Rates ending within the ${reminderMonths}-month reminder window, and cases where the ERC outlasts the rate. `
-      + `Showing ${rateScopeWord(scope)}${scope === "all" ? "" : ` — ${feed.ratesSoonAll.length + feed.ercFlagsAll.filter((a) => !feed.ratesSoonAll.some((r) => r.case_id === a.case_id)).length} alerts firm-wide.`} `
-      + "The same feed as Today's Rate & ERC drawer, un-truncated.";
-  }
-  const group = (title, why, rows) => rows.length
-    ? `<h4 class="ret-group-h">${title} <span class="count">${rows.length}</span></h4><p class="panel-sub ret-group-sub">${why}</p>`
-      + rows.map((a) => renderRateErcRow(a, feed)).join("")
-    : "";
-  $("#ret-rates-list").innerHTML = ordered.length
-    ? group("Ended", "The rate has already matured — the client is paying the lender's reversion rate today.", shown.filter(rateErcEnded))
-      + group("Ending soon", "Still inside the fix. The conversation is booked ahead, not chased.", shown.filter((a) => !rateErcEnded(a)))
-      + (ordered.length > RET_LIST_CAP ? `<div class="empty">…and ${ordered.length - RET_LIST_CAP} more — narrow the list with the scope control above, or work it from the Pipeline table view.</div>` : "")
-      + rateErcDedupeNote(feed.collapsed)
-    : `<div class="empty">Nothing ending in the reminder window on ${rateScopeWord(scope)}, and no ERC conflicts. 👍</div>`;
-  // No panelCount() here on purpose: this heading already carries three counts of its own, and
-  // panelCount writes into the first .count it finds in the h3.
-}
-/* §2 — the pipeline those buttons feed. Same rows and same figures as Today's drawer; this one is
-   scoped, and capped at a hundred rather than twelve. */
-async function loadRetentionPipelinePanel(scope) {
-  const { data, error } = await readRetentionPipeline();
-  if (error) { renderLoadError("#ret-pipeline-list", error, loadRetentionPage); return; }
-  /* A retention case is a case, so "mine" is the case's own assigned_to — the same test the board
-     and the task lists use, not the source case's adviser. Round 12b · W-14a is why they can
-     differ: the successor inherits the source's adviser, but "assign to me" hands it over. */
-  const mine = scope === "mine" && !!(ME && ME.id);
-  const rows = (data || []).filter((c) => !mine || c.assigned_to === ME.id);
-  const st = retentionPipelineStats(rows);
-  const stats = $("#ret-pipeline-stats");
-  if (stats) stats.textContent = retentionStatsLine(st) + ` Showing ${rateScopeWord(scope)}.`;
-  $("#ret-pipeline-list").innerHTML = st.open.length
-    ? (await renderRetentionRows(st.open, RET_LIST_CAP))
-      + (st.open.length > RET_LIST_CAP ? `<div class="empty">…and ${st.open.length - RET_LIST_CAP} more open retention cases.</div>` : "")
-    : `<div class="empty">No open retention opportunities on ${rateScopeWord(scope)}. One is created for you when a completed client's rate enters the reminder window; for a rate that has already ended, use Start retention case on a row above.</div>`;
-  panelCount("#ret-pipeline-list", st.open.length);
-}
-/* §3 — the clients nobody has spoken to. Straight from the Clients page's own cold segment: same
-   five reads (shared cache), same last-contact definition, same predicate. Re-deriving "cold" here
-   with a different query would give this panel and that segment two different answers to one
-   question, which is the whole reason it is not done. */
-async function loadRetentionCold(scope) {
-  const data = await clientDataCached(true);
-  if (data.error) { renderLoadError("#ret-cold-list", data.error, loadRetentionPage); return; }
-  const adviser = scope === "mine" && ME && ME.id ? ME.id : "all";
-  const cold = coldClients(data, adviser);
-  const todayStr = localDateStr();
-  /* Longest silence first — a client with nothing on record in the 210-day comms window sorts
-     above one last spoken to in March, because that is the order the list is worked in.
-     R41 · L8 — AND WITHIN "NEVER SPOKEN TO", THE ONE WHOSE RATE ENDS SOONEST.
-     That first group is the top of the list and it is the biggest: everybody in it has an empty
-     lcAt, so they all compared equal and the stable sort left them in the `.order("last_name")`
-     the read arrived in. Alphabetical is not a work order — it put the client whose fix expires
-     next Tuesday behind a "Z" surname with nothing maturing for two years. So when BOTH sides are
-     empty, the tie is broken by the soonest rate end across the client's cases; a client with
-     none maturing ahead of them has no such claim and sorts after those who do, then by name so
-     the order is still stable and still looks deliberate. No new read — clientNextRateEnd() works
-     off the `cases.rate_end_date` the clients embed already carries, and it is the same date the
-     row itself prints ("next rate ends …") and the same "rate coming" badge, so what the list is
-     sorted by is visible ON the rows it sorted. */
-  const lcAt = (c) => { const lc = data.last.get(c.id); return lc ? String(lc.at) : ""; };
-  const nextRateKey = (c) => { const n = clientNextRateEnd(c, todayStr); return n ? n.date : ""; };
-  const nameKey = (c) => [c.last_name, c.first_name].filter(Boolean).join(" ").toLowerCase();
-  const sorted = cold.slice().sort((a, b) => {
-    const la = lcAt(a), lb = lcAt(b);
-    const primary = la.localeCompare(lb);
-    if (primary !== 0 || la !== "") return primary;   // unchanged for everyone with a last contact
-    const ra = nextRateKey(a), rb = nextRateKey(b);
-    if (ra !== rb) {
-      if (!ra) return 1;      // no future rate end — nothing to ring about first
-      if (!rb) return -1;
-      return ra < rb ? -1 : 1;
-    }
-    return nameKey(a).localeCompare(nameKey(b));
-  });
-  const sub = $("#ret-cold-sub");
-  if (sub) sub.textContent = clientColdDefinition(clientContactCutoff()) + ` Showing ${scope === "mine" ? "clients with at least one case assigned to you" : "every adviser's clients"}.`;
-  /* The hand-off. The Clients page is where this list is actually worked (bulk task, export, the
-     full record), and landing there on "All clients" would undo the scope the reader just chose —
-     hence the adviser argument (R38's one addition to gotoClientSegment). */
-  const link = $("#ret-cold-goto");
-  if (link) link.onclick = () => gotoClientSegment("cold", adviser);
-  $("#ret-cold-list").innerHTML = sorted.length
-    ? sorted.slice(0, RET_LIST_CAP).map((c) => {
-      const lc = data.last.get(c.id);
-      const next = clientNextRateEnd(c, todayStr);
-      return `
+async function loadRetention() {
+  const { data: rets, error } = await db.from("cases")
+    .select("id,stage,lender,rate_end_date,rate_end_estimated,clients!client_id(first_name,last_name)")
+    .not("retention_source_case_id", "is", null)
+    .order("rate_end_date");
+  if (error) { renderLoadError("#retention-list", error, loadRetention); return; }
+  const all = rets || [];
+  const open = all.filter((c) => !["completed", "not_proceeding"].includes(c.stage));
+  const won = all.filter((c) => c.stage === "completed").length;
+  const lost = all.filter((c) => c.stage === "not_proceeding").length;
+  const rate = won + lost ? Math.round((won / (won + lost)) * 100) : null;
+  /* R5-6 — the old copy here ("nothing creates these for you") was simply untrue: the nightly
+     queue_automated_emails() RPC creates a retention case, its note, its call task and a queued
+     reminder as soon as a completed client's rate enters the reminder window. What it genuinely
+     cannot do is reach back for a rate that has ALREADY ended — that is what the button is for. */
+  $("#retention-stats").textContent =
+    `${open.length} open · ${won} won · ${lost} lost${rate != null ? ` · ${rate}% conversion` : ""}. Created automatically when a completed client's rate enters the reminder window. For rates already past, open the case and press Start retention case.`;
+  /* R6 — a retention row is by definition about one specific mortgage on one specific building;
+     naming it by client alone put a landlord's two expiring rates on the panel as one repeated
+     line. (LR-18.) */
+  const retCtx = await loadPropContext(open.slice(0, 12).map((c) => c.id));
+  $("#retention-list").innerHTML = open.length ? open.slice(0, 12).map((c) => `
     <div class="row-item">
       <div class="row-main">
-        <div class="t" onclick="openClient('${c.id}')">${esc([c.first_name, c.last_name].filter(Boolean).join(" ") || "(no name)")}</div>
-        <div class="s"><span class="client-lastcontact">${lc ? `last contact ${esc(lastContactAgeLabel(lc.at))} — ${esc(lc.what)} on ${esc(fmtD(String(lc.at).slice(0, 10)))}` : "no contact of any kind in the last 210 days"}</span>${next ? ` · <span class="client-rate-bit">next rate ends ${esc(fmtD(next.date))}${next.lender ? ` · ${esc(next.lender)}` : ""}${next.n > 1 ? ` (of ${next.n})` : ""}</span>` : " · no future rate end on file"}</div>
+        <div class="t" onclick="openCase('${c.id}')">${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" "))} ${propCtxChip(retCtx, c.id, "row-prop")}</div>
+        <div class="s">${lenderIcon(c.lender)}${esc(c.lender || "")} — rate ends ${fmtD(c.rate_end_date)}${c.rate_end_estimated ? " " + APPROX : ""}</div>
       </div>
-      ${next ? '<span class="badge amber" title="This client has a rate maturing — a reason to ring them.">rate coming</span>' : ""}
-    </div>`;
-    }).join("")
-      + (sorted.length > RET_LIST_CAP ? `<div class="empty">…and ${sorted.length - RET_LIST_CAP} more — work the rest from the Clients page.</div>` : "")
-    : `<div class="empty">Nobody has gone quiet on ${scope === "mine" ? "your book" : "the firm's book"}. 👍</div>`;
-  panelCount("#ret-cold-list", sorted.length);
+      ${stageBadge(c.stage)}
+    </div>`).join("") + (open.length > 12 ? `<div class="empty">…and ${open.length - 12} more in the pipeline.</div>` : "")
+    : '<div class="empty">No open retention opportunities. One is created for you when a completed client\'s rate enters the reminder window; for a rate that has already ended, use Start retention case on the completed case (see Rate &amp; ERC alerts above).</div>';
+  panelCount("#retention-list", open.length);
 }
 
 /* R5-6 — the manual half of the retention loop.
@@ -6713,14 +5875,7 @@ window.startRetentionCase = async function (caseId, ev, opts) {
     toast(outMsg);
     if (currentModal && currentModal.type === "case" && currentModal.id === caseId) openCase(caseId);
     if (!$("#page-dashboard").classList.contains("hidden")) loadDashboard();
-    /* R38 — pressed from the Retention page, the repaint has to be that page: its rates panel is
-       the row the button was on (it must flip to "retention started") and its pipeline panel is
-       where the case just created belongs. Repainting the dashboard's drawers instead would leave
-       the operator looking at a screen that had not noticed what they just did. */
-    else if (!$("#page-retention").classList.contains("hidden")) loadRetentionPage();
-    // R41 · F1 — was `loadRetention(); loadBriefing();`. The retention drawer is gone; the new
-    // case's call task is a My Day row, which is the one Today surface left to repaint.
-    else loadBriefing();
+    else { loadRetention(); loadBriefing(); }
     return { status: warn.length ? "created_with_warnings" : "created", message: outMsg, caseId, warn };
   } finally {
     RETENTION_INFLIGHT.delete(caseId);
@@ -6740,43 +5895,54 @@ window.markRateReminded = async function (caseId, ev) {
     toast("Marked as reminded — no email was sent.");
     if (currentModal && currentModal.type === "case" && currentModal.id === caseId) openCase(caseId);
     if (!$("#page-dashboard").classList.contains("hidden")) loadDashboard();
-    // R38 — the same control is on the Retention page's rows; repaint whichever surface it was pressed from.
-    else if (!$("#page-retention").classList.contains("hidden")) loadRetentionPage();
   } finally {
     if (btn) btn.disabled = false;
   }
 };
 
-/* ==========================================================================
-   R41 · F1 — loadTasks() (Today's "📞 Tasks due" drawer, #tasks-list) is gone.
-
-   Every task it listed is already a My Day row — get_briefing returns overdue and due-today tasks
-   with the same snooze controls, the same ✓ Done and the same Open — and the drawer's own sub said
-   so ("Overdue & due-today tasks also surface in My Day above"). Its Mine / Unassigned / All
-   segment is replaced by My Day's Mine / All plus the "· unassigned" suffix every ownerless row
-   carries under All (R5-35), which is the accepted swap.
-
-   ONE thing that fetch did was NOT a duplicate, and it survives here: it published the TASK half
-   of the lead-routing load map (R7-5). Deleting it outright would have left adviserLoadMap()
-   returning null for the rest of the session, so every "(lightest load)" suggestion on every lead
-   row would silently fall back to "me" — the exact leak R7-5 exists to close, reintroduced as a
-   side effect of removing a list. So the count-only half of the query stays: same table, same
-   horizon (undone, due inside the fortnight — overdue included), no DOM, two columns instead of
-   five. Still awaited from loadDashboard, and for the same reason it always was: the lead rows
-   that read this map paint immediately afterwards.
-   ========================================================================== */
-async function publishAdviserTaskLoad() {
+async function loadTasks() {
   const horizon = localDateStr(Date.now() + 14 * 86400000);
   const { data: raw, error } = await db.from("case_tasks")
-    .select("id,assigned_to")
+    .select("id,title,due_date,case_id,assigned_to,cases(clients!client_id(first_name,last_name))")
     .is("done_at", null)
     .lte("due_date", horizon)
-    .limit(200); // the same fetch cap the drawer used, so the figure cannot change meaning
-  /* BOTH halves or none (adviserLoadMap's own rule): a failed read is UNKNOWN, not zero. Leaving a
-     stale map from the previous paint would let the select claim a ranking it can no longer see. */
-  if (error) { advLoadTasks = null; return; }
+    .order("due_date")
+    .limit(200); // sane fetch cap; the "mine" scope filter is applied client-side below, so limit AFTER filtering (was .limit(40) which truncated busy advisers' lists/badges before scoping)
+  if (error) { renderLoadError("#tasks-list", error, loadTasks); return; }
+  /* R7-5 — the other half of the lead-routing load figure. Counted off `raw`, BEFORE the Mine/All
+     scope filter below: how busy a colleague is does not depend on which scope this panel happens
+     to be showing. The horizon is this fetch's own (undone, due within a fortnight — overdue
+     included), which is what "on their desk right now" means on this screen; the select's tooltip
+     says so rather than claiming every open task ever. */
   advLoadTasks = {};
   (raw || []).forEach((t) => { if (t.assigned_to) advLoadTasks[t.assigned_to] = (advLoadTasks[t.assigned_to] || 0) + 1; });
+  // T1-5: "Mine" means mine. Ownerless tasks are no longer silently everyone's — they live behind
+  // the explicit Unassigned scope so they get claimed deliberately.
+  const filtered = (raw || []).filter((t) => tasksScope === "all" || (tasksScope === "unassigned" ? !t.assigned_to : t.assigned_to === (ME && ME.id)));
+  const tasks = filtered.slice(0, 15);
+  /* R6 — "Ruby Sinclair · Review submitted fact-find" twice, one row per case, both on 8 Grand
+     Avenue and each with its own ✓ Done. The chip is the only thing on the row that can tell the
+     two apart. (W4 / SM-11.) */
+  const taskCtx = await loadPropContext(tasks.map((t) => t.case_id));
+  const todayStr = localDateStr();
+  $("#tasks-list").innerHTML = (tasks || []).length ? tasks.map((t) => {
+    const overdue = t.due_date && t.due_date < todayStr;
+    const who = t.cases?.clients ? [t.cases.clients.first_name, t.cases.clients.last_name].filter(Boolean).join(" ") : "";
+    return `<div class="row-item">
+      <div class="row-main">
+        <div class="t" onclick="openCase('${t.case_id}')">${esc(who)} ${propCtxChip(taskCtx, t.case_id, "row-prop")}</div>
+        <div class="s">${esc(t.title)} — due ${fmtD(t.due_date)}</div>
+      </div>
+      ${/* R9-3 — the Today panel's half of the detractor flag. Same badge, same reasoning as
+           briefBadge: an unhappy client is not one of a fortnight's chores. */ ""}
+      ${isReviewFeedbackTask(t.title) ? REVIEW_TASK_BADGE : ""}
+      ${overdue ? '<span class="badge red">overdue</span>' : ""}
+      ${taskAssigneeHtml(t.id, t.assigned_to, "tasks")}
+      ${taskSnoozeControlsHtml(t.id, "tasks")}
+      <button class="btn btn-sm" onclick="doneTask('${t.id}')">✓ Done</button>
+    </div>`;
+  }).join("") + (filtered.length > tasks.length ? `<div class="empty">…and ${filtered.length - tasks.length} more due.</div>` : "") : '<div class="empty">Nothing due in the next 14 days.</div>';
+  panelCount("#tasks-list", filtered.length, true);
 }
 /* ---------- R12a·D12 — DONE, AND UNDONE ----------
    "Done" was one unconfirmed click on a small ✓ next to another small ✓, the row disappeared, and
@@ -6786,9 +5952,9 @@ async function publishAdviserTaskLoad() {
 
    Completion is modelled by a nullable done_at, so reopening is literally `done_at = null`: no
    status enum, no second row, nothing to reconcile. One helper does the write for all three places
-   a task can be ticked (R41 · F1 — two now: My Day and the case modal, since the Tasks-due drawer
-   went) and each passes the repaint for the list the click came FROM, so undoing puts the row back
-   where it vanished from rather than somewhere the operator has to go looking.
+   a task can be ticked (My Day, Tasks due, the case modal) and each passes the repaint for the
+   list the click came FROM, so undoing puts the row back where it vanished from rather than
+   somewhere the operator has to go looking.
 
    A failed write is now surfaced too: all three call sites used to ignore the error object
    entirely and repaint, so a refused update read on screen as a completed task. */
@@ -6805,24 +5971,19 @@ async function reopenTask(id, repaint) {
   toast("Task reopened — it is back on the list");
   if (repaint) repaint();
 }
-/* R41 · F1 — window.doneTask was the ✓ Done on a "Tasks due" drawer row and repainted that drawer.
-   Both are gone; My Day's own tick (briefDone) and the case modal's (doneTaskInCase) are unchanged
-   and are now the only two ways a task is ticked. */
+window.doneTask = function (id) { return markTaskDone(id, loadTasks); };
 window.doneTaskInCase = function (taskId, caseId) { return markTaskDone(taskId, () => openCase(caseId)); };
 window.reopenTaskInCase = function (taskId, caseId) { return reopenTask(taskId, () => openCase(caseId)); };
 
 /* ---------- R17 · §3 — INLINE TASK SNOOZE / DEFER ----------
    Rescheduling a task meant opening the case, finding the row, editing the date. These quick
-   controls PATCH case_tasks.due_date in place from My Day.
+   controls PATCH case_tasks.due_date in place from My Day and Tasks due. My Day and Tasks show the
+   same tasks, so a snooze from either repaints BOTH (same discipline as briefDone's dual repaint).
    The +Nd controls move the due date FORWARD without ever pulling a future task earlier: an overdue
    or undated task snoozes from today; a task already due in the future snoozes from its own date.
    The 📅 date input sets an exact date (its own value wins outright). Keyboard-accessible: real
    buttons + a labelled date input, each with an aria-label. */
-/* R41 · F1 — the dual repaint ("My Day and Tasks due show the same tasks, so a snooze from either
-   repaints BOTH") had exactly one reason to exist: two lists of the same tasks. There is one list
-   now, so this is one paint. Kept as a named function rather than inlined — both snooze verbs call
-   it, and naming the repaint is what stopped them drifting apart in the first place. */
-function snoozeRepaintAll() { loadBriefing(); }
+function snoozeRepaintAll() { loadTasks(); loadBriefing(); }
 window.snoozeTask = async function (taskId, days) {
   const { data: t, error: rerr } = await db.from("case_tasks").select("due_date").eq("id", taskId).single();
   if (rerr) return toast("Couldn't snooze that task — " + rerr.message);
@@ -6847,9 +6008,8 @@ window.snoozeTaskTo = async function (taskId, value) {
 // own aria-labels; the date input is the 📅 pick and applies on change.
 function taskSnoozeControlsHtml(taskId, ctx) {
   const t = localDateStr();
-  // The DOM id carries the list context so it stays unique wherever the cluster is rendered (it
-  // was on BOTH My Day and the Tasks-due drawer until R41 · F1 removed the drawer; `ctx` is kept
-  // because the case modal could grow one). Class hooks (.snooze-btn / .snooze-date) are shared.
+  // A task can appear on BOTH My Day and Tasks due, so the DOM id carries the list context to stay
+  // unique across the two panels. Class hooks (.snooze-btn / .snooze-date) are shared for styling.
   const p = (ctx || "task") + "-" + taskId;
   return `<span class="task-snooze" role="group" aria-label="Snooze task">
       <button type="button" class="btn btn-sm snooze-btn" id="snooze-1d-${p}" aria-label="Snooze task by 1 day" title="Push the due date on by 1 day" onclick="snoozeTask('${taskId}',1)">+1d</button>
@@ -6957,35 +6117,6 @@ function briefBadge(it) {
     default: return "";
   }
 }
-/* ==========================================================================
-   R41 · T1 — "DID THEY TURN UP?", ON THE MY DAY ROW.
-
-   The Today's-appointments drawer carried one action My Day did not: a ✓/✗ pair writing
-   `appointments.outcome` in place. The drawer is gone (F1), so the pair moved onto the row.
-
-   THE THREE STATES, and why each renders as it does:
-   · not started yet  → nothing. An outcome for a meeting that has not happened is a guess, and a
-     button that invites one on the busiest list in the app is worse than no button.
-   · started, unjudged → the two buttons. Rearranged is deliberately not offered as a one-click
-     here, exactly as it was not in the drawer: rearranging means a NEW booking exists, which is a
-     trip to the editor anyway.
-   · already recorded → the same small chip every other surface wears (the editor, the diary, the
-     case header). Correcting it is the editor's job.
-
-   `it.appt` is the row loadBriefing's enrichment attached; with no row (the fetch failed, or this
-   database predates the widened select) nothing is offered rather than something wrong.
-   ========================================================================== */
-function apptQuickOutcomeHtml(it) {
-  const ap = it && it.appt;
-  if (!ap || !it.appt_id) return "";
-  if (isApptOutcome(ap.outcome)) return apptOutcomeChipHtml(ap.outcome);
-  const started = ap.starts_at && !isNaN(new Date(ap.starts_at)) && new Date(ap.starts_at) <= new Date();
-  if (!started) return "";
-  return `<span class="appt-quick" role="group" aria-label="Record what happened at this appointment">`
-    + APPT_OUTCOMES.filter(([v]) => v !== "rearranged").map(([v, label, mark]) =>
-      `<button type="button" class="btn btn-sm btn-ghost appt-quick-btn" aria-label="Record this appointment as ${esc(label.toLowerCase())}" title="Record this appointment as ${esc(label.toLowerCase())} — no email or text is sent to anybody" onclick="quickApptOutcome('${it.appt_id}','${v}',this)">${mark} ${esc(label)}</button>`).join("")
-    + `</span>`;
-}
 function briefActions(it) {
   const open = it.case_id ? `<button class="btn btn-sm" onclick="openCase('${it.case_id}')">Open</button>` : "";
   switch (it.kind) {
@@ -6998,22 +6129,7 @@ function briefActions(it) {
     case "review_feedback":
       return `${it.case_id ? `<button class="btn btn-sm btn-primary" onclick="openCase('${it.case_id}')" title="Read the client's own words on the case timeline, then ring them">Open case</button>` : ""}<button class="btn btn-sm" onclick="briefDone('${it.task_id}')">✓ Done</button>`;
     case "lead_new":
-      /* R41 · F1 — Discard (✕) follows the leads drawer onto this row. It is the SECOND thing that
-         drawer could do that My Day could not, and unlike the appointment outcome it is not a
-         convenience: `discardLead` opens the reason dialog that feeds leads.discard_reason and
-         decides whether first_contact_at is stamped (R7-5 / R11-7), which is what the Lead-response
-         report's "answered vs binned" split is computed from. Deleting the drawer without it would
-         have left the verb with no button anywhere in the app and quietly turned every unwanted
-         enquiry into a lead that sits in the list forever. Same markup, same handler, unchanged. */
-      /* The two verbs share a wrapper so they wrap as a PAIR. A lead row is the widest row in the
-         app (name + two badges + the adviser select + its note + two buttons) and .row-item wraps
-         its actions once they stop fitting (R6-FIX V3); without the wrapper the ✕ drops onto a
-         line of its own and reads as a stray control rather than as the other half of Accept. */
-      return leadRoutingHtml(it.lead_id)
-        + `<span class="brief-lead-actions">`
-        + `<button class="btn btn-sm btn-primary" onclick="acceptLead('${it.lead_id}', event)">Accept</button>`
-        + `<button class="btn btn-sm btn-danger" aria-label="Discard lead" title="Discard this enquiry — you'll be asked why, and the reason is kept" onclick="discardLead('${it.lead_id}')">✕</button>`
-        + `</span>`;
+      return leadRoutingHtml(it.lead_id) + `<button class="btn btn-sm btn-primary" onclick="acceptLead('${it.lead_id}', event)">Accept</button>`;
     /* R12a K-5 — the same two verbs the Emails row offers, in the order that fixes it: the address
        is wrong, so correcting the client record comes first and re-sending second. `Fix contact`
        is the EXISTING route (openClient with the field to focus and the address that failed), not
@@ -7030,16 +6146,7 @@ function briefActions(it) {
       // Defect 27: the row title now opens the same destination (the appointment editor) as this
       // button — a small secondary "Case" link is offered too when a case is linked, rather than
       // the title and button silently disagreeing on where "Open" means.
-      /* R41 · T1 — the one thing the removed Today's-appointments drawer could do that My Day
-         could not: say what happened, without opening the form. Same column, same write
-         (writeApptOutcome via quickApptOutcome), same Undo. Offered ONLY on a slot that has
-         already started and that nobody has judged yet — a meeting at 3pm has no outcome at 9am,
-         and offering one would invite a click that is a guess. Once recorded it is a badge, not a
-         pair of buttons: the drawer showed the chip AND kept the buttons pressed, but on a row
-         this dense a second way to change it is noise — the appointment editor is where an
-         outcome is corrected (and it is the only surface that offers "rearranged" at all). */
-      return apptQuickOutcomeHtml(it)
-        + (it.appt_id ? `<button class="btn btn-sm" onclick="openAppt('${it.appt_id}')">Open</button>` : "")
+      return (it.appt_id ? `<button class="btn btn-sm" onclick="openAppt('${it.appt_id}')">Open</button>` : "")
         + (it.case_id ? `<button class="btn btn-sm btn-ghost" onclick="openCase('${it.case_id}')" title="Open the linked case">Case</button>` : "");
     case "rate_urgent":
       return `${(it.sub || "").includes("not contacted") ? `<button class="btn btn-sm" onclick="briefQueueEmail('${it.case_id}','rate_end_reminder', event)">Send reminder</button>` : ""}${open}`;
@@ -7074,8 +6181,8 @@ async function loadBriefing() {
   }
   /* R5-35 — get_briefing's "mine" scope hands back every OWNERLESS row as well as mine, so an
      unassigned task on Wayne's case sat in Luke's My Day looking like his job, and in Wayne's, and
-     in Kim's. Same post-filter get_protection_pipeline already applies: Mine means owner === me,
-     full stop. Ownerless work is visible under All, labelled "· unassigned".
+     in Kim's. Same post-filter the Tasks panel and get_protection_pipeline already apply: Mine
+     means owner === me, full stop. Ownerless work is visible under All, labelled "· unassigned".
      ONE exception, deliberate and narrow: a new website lead has no owner by nature — it is the
      firm's shared inbox, it is what the Accept dropdown on the row is for, and R5-21 (Batch 1)
      depends on it being in My Day. Leads are therefore kept in both scopes. */
@@ -7261,24 +6368,12 @@ async function loadBriefing() {
       const clientIds = [...new Set(apptItems.filter((it) => it.client_id).map((it) => it.client_id))];
       const [{ data: cls }, { data: aps }] = await Promise.all([
         clientIds.length ? db.from("clients").select("id,first_name,last_name").in("id", clientIds) : Promise.resolve({ data: [] }),
-        /* R41 · T1 — widened from the four named columns to "*" so this row can also carry
-           `outcome` (attended / no_show / rearranged), which the quick-outcome buttons on the row
-           need. Naming `outcome` explicitly would 42703 the WHOLE read on a database that predates
-           the column and take the clash flags and the client names down with it; "*" answers with
-           whatever the row actually has, which is the same tolerance rule loadLeads and
-           openLeadInToday already use. Still bounded by .in("id", …) on a handful of ids. */
-        db.from("appointments").select("*").in("id", apptItems.map((it) => it.appt_id)),
+        db.from("appointments").select("id,starts_at,ends_at,staff_id").in("id", apptItems.map((it) => it.appt_id)),
       ]);
       const nameById = {};
       (cls || []).forEach((cl) => { nameById[cl.id] = [cl.first_name, cl.last_name].filter(Boolean).join(" "); });
       const apById = {};
       (aps || []).forEach((ap) => { apById[ap.id] = ap; });
-      /* R41 · T1 — the appointment row itself, hung on the item, so briefActions can ask the two
-         questions the quick-outcome pair turns on (has it happened yet, and has anybody said what
-         happened) without a read of its own. Absent if this fetch failed, in which case the row
-         renders exactly as it did before — same graceful-degradation rule as every other
-         enrichment on this screen. */
-      apptItems.forEach((it) => { const ap = apById[it.appt_id]; if (ap) it.appt = ap; });
       // R5-9 — name the client, unless whoever booked it already typed the name into the title.
       apptItems.forEach((it) => {
         const nm = nameById[it.client_id];
@@ -7402,11 +6497,10 @@ window.toggleBriefGroup = function (caseId) {
   renderBriefing();
 };
 window.briefDone = function (id) {
-  /* R12a·D12 — a tick and its Undo repaint the list the click came FROM, so an undone task goes
-     back where it vanished from.
-     R41 · F1 — that used to mean repainting My Day AND the Tasks-due panel, because the same task
-     was on both. The panel is gone; My Day is the list the click came from and the only one left. */
-  return markTaskDone(id, loadBriefing);
+  /* R12a·D12 — My Day and the Tasks-due panel show the same task, so an undo from here has to
+     repaint BOTH; the old version chained doneTask (which repaints Tasks) and then reloaded the
+     briefing, which is the same pair spelled as a side effect. */
+  return markTaskDone(id, () => { loadBriefing(); loadTasks(); });
 };
 window.markEmailHandled = async function (id) {
   const { error } = await db.from("case_emails").update({ triage_status: "handled" }).eq("id", id);
@@ -7472,12 +6566,11 @@ const R7_ALERT_LINKS = {
                   title: "Open the full Money owed list on Reports — every unpaid fee, aged from its completion date." },
   protection_quote_stale: { when: () => true, go: "nav('protection')", label: "Protection →",
                   title: "Open the Protection page, where every quote carries its age." },
-  /* R7-5 — a slow lead is worked in one place: My Day, at the top of this same screen. The link
-     scrolls to the enquiry's own row, because "lead_slow" alerts and the lead they are about were
-     two unconnected lists until now. (R41 · F1 — it used to open the New-website-leads drawer;
-     that drawer is gone and the row it duplicated is the destination.) */
+  /* R7-5 — a slow lead is worked in one place: the inbox at the top of this same screen. The link
+     opens the drawer and scrolls to the row, because "lead_slow" alerts and the lead they are
+     about were two unconnected lists until now. */
   lead_slow: { when: () => true, go: (a) => `gotoLeadInbox('${jsArg((a && a.lead_id) || "")}')`, label: "Lead inbox →",
-                  title: "Open this enquiry's row in My Day on Today, where it can be accepted." },
+                  title: "Open the New website leads drawer on Today, where this enquiry can be accepted or discarded." },
 };
 /* R7-1e — THE ALERT TEXT IS A MONEY SURFACE TOO.
    The firm's money is Owner-only UI and has been since round 4: Monday money, the
@@ -7552,53 +6645,6 @@ const wtGroupOpen = Object.create(null);       // group key -> bool, ONLY for gr
 /* The rows the last fetch returned, so a chip click re-renders what is already in hand instead of
    going back to the database. Filtering is a presentation question; it should not cost a query. */
 let wtLast = null;
-/* =========================================================================
-   R34 · W1 — WHOSE PROBLEMS THIS PANEL IS ABOUT.
-   The Watchtower showed every open alert in the firm to everybody, so an adviser's most urgent
-   compliance surface was mostly other people's cases — and the drawer auto-opened on somebody
-   else's critical. It now carries the same Mine|All segment My Day and the Rate & ERC drawer
-   have, scoped by the CASE's adviser, with the same role-shaped default (Mine for an adviser,
-   All for the Owner/Administrator, whose number the firm-wide one genuinely is).
-   ONE rule is not a matter of scope at all: an alert with NO case behind it (workload,
-   retention_gap, fee_aging_60, a slow LEAD) is a firm-level fact addressed to whoever runs the
-   firm. Those rows are shown to the Owner and the Administrator in BOTH scopes, and to an adviser
-   in NEITHER — flipping to All must not hand an adviser a to-do list that is not theirs to work.
-   ========================================================================= */
-let wtScope = null;                            // "mine" | "all" — resolved on first render
-const WT_SCOPE_KEY = "nx_wt_scope";
-function wtScopeResolved() {
-  if (wtScope) return wtScope;
-  const stored = lsGet(WT_SCOPE_KEY);
-  wtScope = (stored === "mine" || stored === "all") ? stored : (ME && !isAdminOrOwner() ? "mine" : "all");
-  return wtScope;
-}
-function syncWtScopeButtons() {
-  const m = $("#wt-scope-mine"), a = $("#wt-scope-all");
-  if (!m || !a) return;
-  const s = wtScopeResolved();
-  m.classList.toggle("scope-active", s === "mine");
-  a.classList.toggle("scope-active", s === "all");
-  m.setAttribute("aria-pressed", String(s === "mine"));
-  a.setAttribute("aria-pressed", String(s === "all"));
-}
-/* Re-render only. Like the severity chips, this filters rows already in hand — it costs no query,
-   and it never touches the drawer's open/closed state. */
-window.wtSetScope = function (s) {
-  wtScope = s === "mine" ? "mine" : "all";
-  lsSet(WT_SCOPE_KEY, wtScope);
-  syncWtScopeButtons();
-  renderWatchtower();
-};
-/* The scope test for one row. `assignedBy` is the case id → adviser map built by the fetch; when
-   it is null the context read failed, and the panel shows everything rather than going blank on a
-   network hiccup — an alert nobody sees is worse than an alert shown to the wrong desk. */
-function wtInScope(a, scope, assignedBy) {
-  if (a && a.__synth) return true;              // computed FROM my book — mine by construction
-  if (!a || !a.case_id) return isAdminOrOwner(); // firm-level: owner/admin territory, both scopes
-  if (scope !== "mine") return true;
-  if (!assignedBy) return true;
-  return assignedBy[a.case_id] === (ME && ME.id);
-}
 const WT_SEV_CHIPS = [["all", "All"], ["crit", "Critical"], ["warn", "Warning"], ["info", "FYI"]];
 /* Anything that is not crit/warn is drawn with the FYI badge (see WATCH_BADGE's fallback), so the
    chips have to bucket it the same way or a row would be countable under no chip at all. */
@@ -7686,114 +6732,16 @@ async function loadWatchtower() {
      no SQL), so the ROW is qualified instead: the case's property chip plus type · lender · stage.
      Address alone is not enough for this pair — both cases are Skipton on 4 Seafield Gardens — so
      the case type is what finally separates them. */
-  /* R34 · W1 — WHO OWNS EACH ALERT'S CASE. watch_alerts carries a case_id and nothing about the
-     desk behind it, and v_alerts is no help here either, so the owner has to be looked up — ONE
-     bounded read, keyed on the case ids already in hand, kept in wtLast so flipping Mine↔All (or
-     a severity chip) re-filters what is in memory instead of going back to the database.
-     Best-effort by design: a failure leaves the map null, which wtInScope reads as "show
-     everything" rather than blanking a compliance panel. */
-  const wtCaseIds = [...new Set(alerts.map((a) => a.case_id).filter(Boolean))];
-  let wtAssignedBy = {};
-  if (wtCaseIds.length) {
-    try {
-      const { data: owners, error: ownErr } = await db.from("cases").select("id,assigned_to").in("id", wtCaseIds).limit(WATCH_FETCH_CAP);
-      if (ownErr) wtAssignedBy = null;
-      else (owners || []).forEach((c) => { wtAssignedBy[c.id] = c.assigned_to || null; });
-    } catch (e) { wtAssignedBy = null; }
-  }
-  // R34 · Part 4 — my own data-health rows, computed client-side. Additive, silent on failure.
-  const wtSynth = await loadMyDataHealthAlerts(all);
-  const wtCtx = await loadPropContext(alerts.concat(wtSynth).map((a) => a.case_id));
+  const wtCtx = await loadPropContext(alerts.map((a) => a.case_id));
   /* R11-2 — everything above this line is the fetch, and it is unchanged. Everything below is
      drawing, so it is now a separate function the severity chips can call on their own. */
-  wtLast = { alerts, snoozed, ctx: wtCtx, fetched: (data || []).length, openTotal, truncated, assignedBy: wtAssignedBy, synth: wtSynth };
+  wtLast = { alerts, snoozed, ctx: wtCtx, fetched: (data || []).length, openTotal, truncated };
   renderWatchtower();
-}
-
-/* =========================================================================
-   R34 · Part 4 — THE ADVISER'S OWN DATA HEALTH, ON THE PANEL THEY ALREADY READ.
-   Two facts about an adviser's own book that nothing tells them until it costs something: a LIVE
-   case whose client has no email address (every automated chase, rate reminder and document
-   request to that client is refused before it is sent), and a COMPLETED case with no rate-end
-   date (it will never appear in the retention window, so the client is remortgaged by somebody
-   else). Both are already on the firm-wide Data health page — which is exactly the page an
-   adviser does not open, because most of what is on it is not theirs.
-   Built the same way as My Day's completion-date chaser and review call-back (see loadBriefing):
-   purely additive, client-side, best-effort, and it changes NOTHING about run_watchtower. The
-   rows have no watch_alerts row behind them, so they cannot be snoozed or dismissed — there is
-   nothing to snooze; fixing the record makes the row disappear on the next load. They are
-   therefore rendered with the Open action alone.
-   Advising staff only: the Owner and the Administrator get the firm-wide Data health page, which
-   is the same information without a personal filter.
-   ========================================================================= */
-const WT_MY_DH_CAP = 8;
-async function loadMyDataHealthAlerts(existingAlerts) {
-  if (!ME || isAdminOrOwner()) return [];
-  try {
-    const { data, error } = await db.from("cases")
-      .select("id,stage,rate_end_date,client_id,assigned_to,clients!client_id(first_name,last_name,email)")
-      .eq("assigned_to", ME.id).order("id").limit(OWNER_ROW_CAP);
-    if (error) return [];
-    /* De-duplicated against whatever run_watchtower already returned, on the same rule+case
-       identity the RPC's own dedupe_key uses: the day one of these checks moves into the SQL
-       (where it belongs), its row wins and the client-side one stands down, with no second edit
-       here. Snoozed rows are in this set too — a row the user has explicitly parked must not
-       walk back in wearing a different hat. */
-    const already = new Set((existingAlerts || []).map((a) => `${a.rule}|${a.case_id || ""}`));
-    const rows = [];
-    (data || []).forEach((c) => {
-      const cl = c.clients || null;
-      const who = cl ? [cl.first_name, cl.last_name].filter(Boolean).join(" ").trim() : "";
-      const name = who || "A client";
-      const live = !["completed", "not_proceeding"].includes(c.stage);
-      const mk = (rule, severity, title, detail) => {
-        if (already.has(`${rule}|${c.id}`)) return;
-        rows.push({
-          __synth: true, id: `synth:${rule}:${c.id}`, rule, severity,
-          case_id: c.id, client_id: c.client_id || null, title, detail,
-          created_at: null, snoozed_until: null,
-        });
-      };
-      if (live && !(cl && String(cl.email || "").trim())) {
-        mk("my_missing_email", "warn", `${name} — no email on file (your case)`,
-          "Nothing can be emailed to this client — rate reminders, document requests and fee requests are all refused before they are sent. Open the case and add an address.");
-      } else if (c.stage === "completed" && !c.rate_end_date) {
-        mk("my_no_rateend", "info", `${name} — completed with no rate-end date (your case)`,
-          "Without a rate-end date this case never enters the retention window, so the reminder that wins the remortgage is never raised. Open the case and record the date from the offer.");
-      }
-    });
-    if (rows.length <= WT_MY_DH_CAP) return rows;
-    /* A wall of these would push the real alerts off the panel, which is the exact defect R11-2
-       was written to fix. Eight, then one honest row saying how many are left and where the whole
-       list lives. */
-    const extra = rows.length - WT_MY_DH_CAP;
-    const capped = rows.slice(0, WT_MY_DH_CAP);
-    capped.push({
-      __synth: true, __go: "nav('data')", id: "synth:my_data_health:more", rule: "my_data_health",
-      severity: "info", case_id: null, client_id: null,
-      title: `Your data health — …and ${extra} more to fix`,
-      detail: `${rows.length} of your cases have a missing email address or a missing rate-end date. The whole list, with the rest of the firm's, is on Data health.`,
-      created_at: null, snoozed_until: null,
-    });
-    return capped;
-  } catch (e) { return []; /* silent — the panel is exactly what it was without these rows */ }
 }
 
 function renderWatchtower() {
   if (!wtLast || !$("#watchtower-list")) return;
-  const { alerts: fetchedAlerts, snoozed, ctx: wtCtx, fetched, openTotal, truncated, assignedBy, synth } = wtLast;
-
-  /* R34 · W1/Part 4 — the working list this whole function draws: what run_watchtower returned,
-     plus my own client-side data-health rows, cut to the current scope. The sort is by severity
-     only and Array#sort is stable, so the RPC's own severity-then-newest order is preserved and
-     the synthetic rows land at the end of their own severity band rather than on top of a
-     critical. Every count below — the chips, the header count, the auto-open — is taken from
-     THIS list, so an adviser's drawer opens for THEIR criticals and nobody else's. */
-  const wtScopeNow = wtScopeResolved();
-  syncWtScopeButtons();
-  const alerts = fetchedAlerts.concat(synth || [])
-    .sort((a, b) => (WATCH_SEV[a.severity] ?? 3) - (WATCH_SEV[b.severity] ?? 3))
-    .filter((a) => wtInScope(a, wtScopeNow, assignedBy));
+  const { alerts, snoozed, ctx: wtCtx, fetched, openTotal, truncated } = wtLast;
 
   /* R11-2a — the chips. Counts are of the WHOLE working list (snoozed rows excluded, exactly as
      the list itself excludes them), not of the current filter, so the row of numbers always
@@ -7858,18 +6806,7 @@ function renderWatchtower() {
     // `go` may be a fixed expression or one built from the alert row (lead_slow needs its lead id).
     const wtGo = wtLink ? (typeof wtLink.go === "function" ? wtLink.go(a) : wtLink.go) : "";
     const wtLinkBtn = wtLink && wtLink.when() ? `<button class="btn btn-sm wt-link-btn" onclick="event.stopPropagation();${wtGo}" title="${esc(wtLink.title)}">${esc(wtLink.label)}</button>` : "";
-    /* R34 · Part 4 — a client-side row has no watch_alerts row behind it, so Snooze and Dismiss
-       would both be lies (there is nothing to update, and the row would be back on the next
-       paint). It carries the Open action alone — and, for the "…and N more" tail, a door to the
-       page that holds the whole list. Fixing the record is what clears it. */
-    const synthGoBtn = a.__synth && a.__go ? `<button class="btn btn-sm wt-link-btn" onclick="event.stopPropagation();${a.__go}" title="Open the firm's Data health page">Data health</button>` : "";
-    const rowActions = a.__synth ? synthGoBtn
-      : `<button class="btn btn-sm" onclick="snoozeAlert('${a.id}','${a.severity}','${a.case_id || ""}')">Snooze…</button>
-      <button class="btn btn-sm" onclick="resolveAlert('${a.id}','${a.severity}','${a.case_id || ""}')">Dismiss</button>`;
-    // A synthetic row is a statement about the record as it is RIGHT NOW, not an event with a
-    // date, so it shows no "created" date rather than a misleading one.
-    const wtWhen = a.__synth ? "" : `<span class="wt-when">${fmtD(a.created_at)}</span>`;
-    return `<div class="row-item wt-row ${sevCls}${a.__synth ? " wt-row-mine" : ""}"${a.__synth ? ` data-wt-synth="${esc(a.rule)}"` : ""}>
+    return `<div class="row-item wt-row ${sevCls}">
       <div class="row-main">
         <div class="t" ${openClick}>${esc(humanizeAlertDates(a.title))}</div>
         ${/* R6-FIX V11/R6B-11 — the detail sentence ends in a full stop, so the " · " that followed
@@ -7879,12 +6816,13 @@ function renderWatchtower() {
              the case has an address or not — the old layout changed shape depending on whether the
              property was known, which reads as a status difference when it is a width one. */ ""}
         <div class="s">${esc(humanizeAlertDates(watchDetailFor(a)))}</div>
-        <div class="s wt-meta">${wtTag}${wtTag ? " " : ""}${wtWhen}</div>
+        <div class="s wt-meta">${wtTag}${wtTag ? " " : ""}<span class="wt-when">${fmtD(a.created_at)}</span></div>
       </div>
       ${WATCH_BADGE[a.severity] || WATCH_BADGE.info}
       ${openBtn}
       ${wtLinkBtn}
-      ${rowActions}
+      <button class="btn btn-sm" onclick="snoozeAlert('${a.id}','${a.severity}','${a.case_id || ""}')">Snooze…</button>
+      <button class="btn btn-sm" onclick="resolveAlert('${a.id}','${a.severity}','${a.case_id || ""}')">Dismiss</button>
     </div>`;
   };
 
@@ -8008,9 +6946,8 @@ function promptSnooze() {
 
 /* ==========================================================================
    R6.4 H-01 · RE-FILE A NOTE (the action)
-   See the primitives near refileBtnHtml / REFILE_BADGE for what a re-file IS and
-   why it writes two rows rather than moving one. (R40 — that pointer used to name
-   noteRowHtml, which was deleted with the case modal's separate notes list.)
+   See the primitives near noteRowHtml for what a re-file IS and why it writes
+   two rows rather than moving one.
    ========================================================================== */
 /* The target picker, on the shared second-layer overlay (openOverlay) so it can
    be raised from inside an open case or client modal without fighting it for
@@ -8131,10 +7068,7 @@ window.refileNote = async function (noteId, ev) {
 async function refreshAfterRefile(caseId, clientId) {
   const backdrop = $("#modal-backdrop");
   if (!backdrop || backdrop.classList.contains("hidden")) return;
-  /* R40 — the case modal is now identified by its History timeline (#case-events-list): #notes-list
-     was deleted when notes moved into that timeline. Checked FIRST, as before, because the case
-     modal can be open over the client record and is the thing on top. */
-  if ($("#case-events-list")) { await window.openCase(caseId); return; }
+  if ($("#notes-list")) { await window.openCase(caseId); return; }
   if ($("#tl-list") && clientId) { await window.openClient(clientId); }
 }
 window.snoozeAlert = async function (id, severity, caseId) {
@@ -8169,11 +7103,6 @@ window.unsnoozeAlert = async function (id) {
   toast("Unsnoozed — back on the working list");
   loadWatchtower();
 };
-// R34 · W1 — the Mine|All segment. Wired here, beside the panel's other header controls; the
-// buttons live inside the drawer's <h3>, and toggleDrawer already leaves clicks on buttons alone,
-// so choosing a scope never opens or closes the drawer.
-if ($("#wt-scope-mine")) $("#wt-scope-mine").addEventListener("click", () => wtSetScope("mine"));
-if ($("#wt-scope-all")) $("#wt-scope-all").addEventListener("click", () => wtSetScope("all"));
 $("#watchtower-run").addEventListener("click", async () => {
   const btn = $("#watchtower-run");
   btn.disabled = true; btn.textContent = "Running…";
@@ -8285,369 +7214,8 @@ window.boardShowMore = function (stage) {
   boardExpandedStages.add(stage);
   loadPipeline();
 };
-/* R24 — the board is the app's fattest read (every column of up to OWNER_ROW_CAP cases, on the
-   screen brokers keep open all day). It is narrowed here from select("*") to exactly the columns the
-   cards, the table view, the search/filter/sort, the segment counts and the two star-row detectors
-   consume — nothing else. Migration-gated columns are appended ONLY where their feature detector says
-   the column is present, so an un-migrated database never 42703s and blanks the board:
-     property_address  → propAddrSupported()   (same convention as Money / Data health)
-     waiting_on, solicitor_firm → docsSupported() (m10, same gate as loadSolicitorColumn)
-     application_status → lenderTrackSupported() (R16 lender tracker)
-   Every column below is present in the original/prod schema (see the Reports and revFetchCases named
-   selects) and cannot 42703. Order/limit and the clients embed are preserved exactly (R23). */
-const BOARD_CASE_COLS = "id,client_id,stage,case_kind,lender,product_name,loan_amount,rate_percent,rate_end_date,rate_end_estimated,erc_end_date,broker_fee,fee_status,protection_status,submitted_at,completed_at,created_at,updated_at,expected_completion_date,retention_source_case_id,lead_source,introducer_id,assigned_to";
-/* ---------- R31-B · SAVED FILTER VIEWS (Clients + Pipeline) ----------------------------------
-   Per-BROWSER only. Every saved view lives in localStorage under one key, shaped
-   { clients: [ {name, filters} ], pipeline: [ {name, filters} ] }. There is no server row and
-   no schema for this on purpose — it is a per-device convenience, so it is deliberately NOT
-   synced between browsers or users. ALL store access is wrapped so a disabled / quota-full /
-   private-mode localStorage degrades to "no saved views" and can never throw.
-   R43 — that last paragraph is now the FALLBACK, not the store: see the R43 block below. The key
-   itself is never deleted and never renamed, because a browser still running an older deploy (or
-   this one against an un-migrated database) reads it as the store. */
-const NX_VIEWS_KEY = "nx_views_v1";
-/* ---------- R37 · L7 — STARTER VIEWS -----------------------------------------------------------
-   R31 shipped the mechanism and an empty cupboard: both dropdowns read "Saved views…" and nothing
-   else until somebody worked out that the button beside them captures the CURRENT filters. A
-   feature nobody can see the point of is a feature nobody uses, so the store is seeded once with
-   two or three views that are worth having on day one — and, just as importantly, that show by
-   example what a view IS.
-
-   FOUR RULES:
-   · ONCE, AND ONLY ON A GENUINELY EMPTY STORE. The trigger is the ABSENCE OF THE KEY, not an empty
-     list. Somebody who deletes all three starters has a key holding empty arrays, and it stays
-     empty — re-seeding a store the user has just cleared is the app arguing with them.
-   · NOT UNTIL WE KNOW WHO IS ASKING. Two of the three pin an adviser, and pinning them to
-     `undefined` would produce a broken view with a confident name. With ME unknown the call is a
-     no-op and the next one (after sign-in) does the work — never a throw.
-   · THE EXACT SHAPES pipelineFilterState()/clientsFilterState() PRODUCE, every key present. A view
-     is applied by applyPipelineFilterState/applyClientsFilterState, which skip null keys — a
-     partial starter would silently inherit whatever was on screen and behave differently from a
-     view the user saved themselves.
-   · STORAGE-BLOCKED DEGRADES TO NOTHING. If getItem throws we never seed, exactly as R31 never
-     saves: a starter view that cannot be deleted (because the delete cannot persist) would be
-     worse than no starter view.
-
-   Role-appropriate means the ADVISER field and the NAME move together: an owner's "My live cases"
-   would be a lie about a board showing the whole firm, so their copy says so in its name. */
-let starterViewsSeeded = false;
-function starterViewSet() {
-  const meAdviser = isAdminOrOwner() ? "all" : ME.id;
-  const mine = !isAdminOrOwner();
-  // pipelineFilterState() shape: search, adviser, segment, stageTab, sortKey, sortDir, view.
-  const pipeDefaults = { search: "", stageTab: "all", sortKey: "updated_at", sortDir: -1, view: "board" };
-  return {
-    pipeline: [
-      { name: mine ? "My live cases" : "Live cases — everyone", filters: { ...pipeDefaults, adviser: meAdviser, segment: "current" } },
-      { name: "Unassigned leads", filters: { ...pipeDefaults, adviser: "unassigned", segment: "new" } },
-    ],
-    // clientsFilterState() shape: search, adviser, segment, sort.
-    clients: [
-      { name: mine ? `My cold clients (${CLIENT_SEG_CONTACT_MONTHS}mo+)` : `Cold clients (${CLIENT_SEG_CONTACT_MONTHS}mo+)`, filters: { search: "", adviser: meAdviser, segment: "cold", sort: "name" } },
-    ],
-  };
-}
-/* Seeds at most once per session, and REPAINTS BOTH <select>s when it does. Both, not just the one
-   whose page triggered it: R31 populates them once at module-eval time — before sign-in, when there
-   is no ME and so nothing to seed — and never again except after a save or a delete. Whichever of
-   the board and the client list is opened first is the one that seeds, and the other would then
-   carry a stale empty dropdown until something wrote to it. */
-function seedStarterViews() {
-  if (starterViewsSeeded) return;
-  /* R43 — the starters belong to whichever store owns this session. The server-side read is
-     fired before this call on both entry points; while it is in flight (viewsLoadStarted with no
-     mode yet) or once it has won ("db"), seeding localStorage would write a second, divergent
-     copy of the three starters that the user would then have to delete twice. Only the local
-     fallback — the un-migrated database, and the pre-R43 code path it keeps alive — seeds here. */
-  if (viewsLoadStarted && viewsMode !== "local") return;
-  if (!ME || !ME.id) return;                       // identity not resolved yet — try again next call
-  let raw;
-  try { raw = localStorage.getItem(NX_VIEWS_KEY); } catch (e) { return; }
-  if (raw != null) { starterViewsSeeded = true; return; }   // the user already owns this store
-  try {
-    localStorage.setItem(NX_VIEWS_KEY, JSON.stringify(starterViewSet()));
-  } catch (e) { return; }                          // quota / private mode — no starters, no throw
-  // Set BEFORE the repaints: they read savedViews(), which calls back in here.
-  starterViewsSeeded = true;
-  refreshPipelineViews();
-  refreshClientViews();
-}
-/* ---------- R43 · THE SAVED-VIEW STORE MOVES TO THE SERVER ------------------------------------
-   R31 shipped saved views as a per-BROWSER convenience and said so out loud (the comment above
-   NX_VIEWS_KEY). Use answered the question that comment left open: the adviser who saves
-   "My cold clients" on the office desktop opens the laptop at home and it is not there, and R37's
-   starters are re-invented per device rather than being the firm's. So the store is now
-   `public.saved_views` — one row per (user_id, scope, name), RLS-scoped to whoever saved it — and
-   localStorage becomes the fallback.
-
-   THE SYNCHRONOUS SIGNATURE DOES NOT MOVE. savedViews(scope) is called from inside the template
-   literals that build both <select>s (refreshPipelineViews / refreshClientViews); making it async
-   would make those async, and every caller of those, for a list of at most a handful of names. So
-   this is a CACHE in front of the same sync function: one read per session fills it, both
-   dropdowns paint from it, and a save or a delete updates the cache first — in the same tick as
-   the click, so the repaint is instant — and hits the table afterwards.
-
-   THREE STATES, and the third is the point:
-     · "db"    — the table answered. It is the store.
-     · "local" — the table did NOT answer: an un-migrated deployment 42P01s (or 42703s), and any
-                 other error is treated identically. The ENTIRE R31/R37 localStorage
-                 implementation below stays the code path, starters and all, so that database
-                 gets exactly the app it had yesterday rather than a broken one.
-     · null    — nobody has asked yet. Reads still come off localStorage (someone who already has
-                 views on this device sees them without waiting), but NOTHING is seeded there,
-                 because the read in flight is about to decide which store owns the starters.
-
-   The localStorage key survives migration untouched: it is the fallback store, and another
-   browser may still be pointed at an older deploy that reads it. */
-let viewsCache = null;          // { pipeline: [{name,filters}], clients: [{name,filters}] } — "db" mode only
-let viewsMode = null;           // null (undecided) | "db" | "local"
-let viewsLoadStarted = false;   // re-entry guard — repaints call in here constantly and must not re-read
-let viewsWriteWarned = false;   // the "this device only" toast is said once a session, not once a view
-const VIEW_SCOPES = ["pipeline", "clients"];
-const VIEW_NAME_MAX = 120;      // saved_views' own CHECK (char_length between 1 and 120)
-
-// Rows → the shape the dropdowns want. `_meta` is the seeded-marker bookkeeping below, never a view.
-function viewSetsFromRows(rows) {
-  const out = { pipeline: [], clients: [] };
-  (rows || []).forEach((r) => {
-    if (!r || !VIEW_SCOPES.includes(r.scope)) return;
-    const nm = String(r.name == null ? "" : r.name).trim();
-    if (!nm) return;
-    out[r.scope].push({ name: nm, filters: r.filters || {} });
-  });
-  return out;
-}
-/* Whatever is in localStorage right now, in the same shape, with anything malformed dropped — the
-   migration reads through this, so a corrupt store migrates as "nothing" instead of throwing, and
-   an over-long name is dropped here rather than 23514-ing the whole batch at the table. */
-function localViewSets() {
-  const out = { pipeline: [], clients: [] };
-  let all = null;
-  try { all = JSON.parse(localStorage.getItem(NX_VIEWS_KEY)); } catch (e) { all = null; }
-  if (!all || typeof all !== "object") return out;
-  VIEW_SCOPES.forEach((s) => {
-    (Array.isArray(all[s]) ? all[s] : []).forEach((v) => {
-      if (!v || typeof v.name !== "string") return;
-      const nm = v.name.trim();
-      if (!nm || nm.length > VIEW_NAME_MAX) return;
-      out[s].push({ name: nm, filters: v.filters || {} });
-    });
-  });
-  return out;
-}
-function localViewsKeyPresent() {
-  // Storage blocked entirely reads as "no key": there is nothing here to migrate and nothing here
-  // to protect, so the server store is free to seed itself.
-  try { return localStorage.getItem(NX_VIEWS_KEY) != null; } catch (e) { return false; }
-}
-function viewRowsFor(sets) {
-  const rows = [];
-  VIEW_SCOPES.forEach((s) => (sets[s] || []).forEach((v) => rows.push({ scope: s, name: v.name, filters: v.filters || {} })));
-  /* THE MARKER, and it is why the seed writes a row even when it has nothing else to write.
-     R37's rule is "seed once, on the ABSENCE OF THE KEY, never on an empty list" — someone who
-     deletes all three starters must not be handed them back, because that is the app arguing with
-     them. On the server there is no key to be absent: zero rows means both "never seeded" and
-     "seeded, then emptied". This row is the difference between the two. */
-  rows.push({ scope: "_meta", name: "seeded", filters: {} });
-  return rows;
-}
-/* user_id is deliberately NOT sent: the column defaults to auth.uid() and RLS enforces that it
-   IS me, so naming it would only offer a value the database is going to overrule. Conflict target
-   is the primary key (user_id, scope, name), which is what PostgREST upserts against by default —
-   same shape as the settings upserts elsewhere in this file, which pass no onConflict either. */
-function writeSavedViewRows(rows) {
-  return db.from("saved_views").upsert(rows);
-}
-/* ONE read per session, fired (never awaited) from the two pages that own a view dropdown.
-   Everything that can be decided is decided here, so savedViews() stays a cache read. */
-async function loadSavedViews() {
-  if (viewsLoadStarted) return;
-  viewsLoadStarted = true;
-  const { data, error } = await db.from("saved_views").select("scope,name,filters");
-  if (error) {
-    // The un-migrated database. Not a toast and not a console error: from here on this is R31's
-    // app, which worked — degrade silently and completely.
-    viewsMode = "local";
-    refreshPipelineViews();
-    refreshClientViews();
-    return;
-  }
-  const rows = data || [];
-  if (rows.length) { finishViewsLoad(viewSetsFromRows(rows)); return; }
-  /* Zero rows — INCLUDING no `_meta`, so this is a store nobody has ever written to. */
-  if (localViewsKeyPresent()) {
-    // ONE-TIME MIGRATION. This device already has views (or an empty/corrupt store, which migrates
-    // as nothing plus the marker — a present-but-empty key is R37's "the user owns this store",
-    // and re-seeding starters over the top of it here would be the same argument in a new place).
-    const sets = localViewSets();
-    seedSavedViewRows(viewRowsFor(sets));
-    finishViewsLoad(sets);
-    return;
-  }
-  if (!(ME || {}).id) {
-    /* Identity not resolved yet — seedStarterViews' rule for seedStarterViews' reason (two of the
-       three starters pin an adviser, and pinning them to `undefined` produces a broken view with
-       a confident name). Nothing written, nothing cached, no mode: the guard is released so the
-       next loadPipeline/loadClients asks again. */
-    viewsLoadStarted = false;
-    return;
-  }
-  const starters = starterViewSet();
-  seedSavedViewRows(viewRowsFor(starters));
-  finishViewsLoad(starters);
-}
-/* The seed/migration write is fire-and-forget and deliberately silent on failure: nothing the user
-   asked for is at stake (starters regenerate; a migration that fails leaves the local copy exactly
-   where it was, which is why the key is never cleared), and a toast about a write nobody asked for
-   would be noise on first paint. */
-function seedSavedViewRows(rows) {
-  writeSavedViewRows(rows).then(() => { /* nothing to do either way */ }, () => { /* nor here */ });
-}
-function finishViewsLoad(sets) {
-  viewsMode = "db";
-  viewsCache = { pipeline: sets.pipeline || [], clients: sets.clients || [] };
-  /* BOTH dropdowns, not just the one whose page triggered the read — seedStarterViews' rule and
-     seedStarterViews' reason: the other one was painted empty before the read answered, and
-     nothing else would ever write to it. */
-  refreshPipelineViews();
-  refreshClientViews();
-}
-/* A write did not land, so the only copy of it is in a cache that dies with the tab. Mirror it into
-   the R31 store so nothing the user did is lost, and say so honestly — "saved" would be a lie about
-   the other browser. Once per session: a flapping connection would otherwise toast per view. */
-function savedViewWriteFailed(mirror) {
-  try { mirror(); } catch (e) { /* storage gone too — the cache is all there is */ }
-  if (viewsWriteWarned) return;
-  viewsWriteWarned = true;
-  toast("Couldn't reach the server — that saved view is on this device only.");
-}
-function savedViews(scope) {
-  if (viewsMode === "db") {
-    const list = viewsCache && viewsCache[scope];
-    if (!Array.isArray(list)) { loadSavedViews(); return []; }
-    return list.slice();
-  }
-  seedStarterViews();
-  try {
-    const raw = localStorage.getItem(NX_VIEWS_KEY);
-    if (!raw) return [];
-    const all = JSON.parse(raw);
-    const list = all && all[scope];
-    return Array.isArray(list) ? list.filter((v) => v && typeof v.name === "string") : [];
-  } catch (e) { return []; }
-}
-function saveView(scope, name, filters) {
-  const nm = String(name == null ? "" : name).trim();
-  if (!nm) return savedViews(scope);
-  if (viewsMode === "db") {
-    // Cache first (same validation as the local path: trimmed non-empty name, replace by name), so
-    // the list this returns and the repaint the caller triggers are both already right.
-    const list = (viewsCache && viewsCache[scope]) || [];
-    const view = { name: nm, filters: filters || {} };
-    const idx = list.findIndex((v) => v && v.name === nm);
-    if (idx >= 0) list[idx] = view; else list.push(view);
-    if (viewsCache) viewsCache[scope] = list;
-    writeSavedViewRows([{ scope, name: nm, filters: view.filters }])
-      .then(({ error }) => { if (error) savedViewWriteFailed(() => localSaveView(scope, nm, view.filters)); },
-        () => savedViewWriteFailed(() => localSaveView(scope, nm, view.filters)));
-    return savedViews(scope);
-  }
-  localSaveView(scope, nm, filters);
-  return savedViews(scope);
-}
-function deleteView(scope, name) {
-  if (viewsMode === "db") {
-    const list = (viewsCache && viewsCache[scope]) || [];
-    if (viewsCache) viewsCache[scope] = list.filter((v) => !(v && v.name === name));
-    db.from("saved_views").delete().match({ scope, name })
-      .then(({ error }) => { if (error) savedViewWriteFailed(() => localDeleteView(scope, name)); },
-        () => savedViewWriteFailed(() => localDeleteView(scope, name)));
-    return savedViews(scope);
-  }
-  localDeleteView(scope, name);
-  return savedViews(scope);
-}
-/* R31's two writers, unchanged in behaviour and now named: they are the local fallback's whole
-   implementation AND the mirror a failed server write falls back on. */
-function localSaveView(scope, nm, filters) {
-  try {
-    let all;
-    try { all = JSON.parse(localStorage.getItem(NX_VIEWS_KEY)); } catch (e) { all = null; }
-    if (!all || typeof all !== "object") all = {};
-    if (!Array.isArray(all.clients)) all.clients = [];
-    if (!Array.isArray(all.pipeline)) all.pipeline = [];
-    if (!Array.isArray(all[scope])) all[scope] = [];
-    const list = all[scope];
-    const view = { name: nm, filters: filters || {} };
-    const idx = list.findIndex((v) => v && v.name === nm);
-    if (idx >= 0) list[idx] = view; else list.push(view);
-    localStorage.setItem(NX_VIEWS_KEY, JSON.stringify(all));
-  } catch (e) { /* storage unavailable — not persisted, but the UI still applied it this session */ }
-}
-function localDeleteView(scope, name) {
-  try {
-    let all;
-    try { all = JSON.parse(localStorage.getItem(NX_VIEWS_KEY)); } catch (e) { all = null; }
-    if (!all || typeof all !== "object") return;
-    if (Array.isArray(all[scope])) all[scope] = all[scope].filter((v) => !(v && v.name === name));
-    localStorage.setItem(NX_VIEWS_KEY, JSON.stringify(all));
-  } catch (e) { /* ignore */ }
-}
-
-// Pipeline board — capture / restore / repopulate the Views <select>.
-function pipelineFilterState() {
-  const s = $("#board-search"), a = $("#board-adviser");
-  return {
-    search: s ? s.value : "",
-    adviser: a ? a.value : "",
-    segment: pipelineSegment,
-    stageTab: stageTab,
-    sortKey: sortKey,
-    sortDir: sortDir,
-    view: pipelineView,
-  };
-}
-function applyPipelineFilterState(f) {
-  if (!f) return;
-  const s = $("#board-search"); if (s) s.value = f.search || "";
-  // R34 · W2 — a saved view that pins the board to one adviser is a choice like any other: it is
-  // persisted here so applying a view and then coming back tomorrow shows what was left on screen,
-  // rather than the stored value from before the view was applied.
-  const a = $("#board-adviser"); if (a && f.adviser != null) { a.value = f.adviser; persistStaffFilter("#board-adviser", BOARD_ADVISER_KEY); }
-  if (f.segment != null) pipelineSegment = f.segment;
-  if (f.stageTab != null) stageTab = f.stageTab;
-  if (f.sortKey != null) sortKey = f.sortKey;
-  if (f.sortDir != null) sortDir = f.sortDir;
-  if (f.view != null) pipelineView = f.view;
-}
-function refreshPipelineViews() {
-  const sel = $("#board-views");
-  if (!sel) return;
-  const cur = sel.value;
-  sel.innerHTML = `<option value="">Saved views…</option>`
-    + savedViews("pipeline").map((v) => `<option value="${esc(v.name)}">${esc(v.name)}</option>`).join("");
-  if (cur && savedViews("pipeline").some((v) => v.name === cur)) sel.value = cur;
-}
-
 async function loadPipeline() {
-  /* R43 — the server-side store, read once a session, from the same place (and for the same
-     reason) R37 put the starter seed: this is the first moment ME is resolved AND a view dropdown
-     is about to be painted. Not awaited — the board must not wait on it; when it answers it
-     repaints both <select>s itself. It goes BEFORE seedStarterViews so the local seed knows a
-     probe is in flight and leaves the starters to whichever store wins. */
-  loadSavedViews();
-  // R37 · L7 — the starter views need an identity, which module-eval time did not have. Seeded on
-  // the first board load after sign-in; the seed repaints both view <select>s itself.
-  seedStarterViews();
-  const propOn = (await propAddrSupported()) !== false;
-  const docsOn = (await docsSupported()) !== false;
-  const lenderOn = (await lenderTrackSupported()) !== false;
-  const boardSelect = BOARD_CASE_COLS
-    + (propOn ? ",property_address" : "")
-    + (docsOn ? ",waiting_on,solicitor_firm" : "")
-    + (lenderOn ? ",application_status" : "")
-    + ",clients!client_id(first_name,last_name,email)";
-  const { data: cases, error } = await db.from("cases").select(boardSelect).order("updated_at", { ascending: false }).limit(OWNER_ROW_CAP);
+  const { data: cases, error } = await db.from("cases").select("*, clients!client_id(first_name,last_name)").order("updated_at", { ascending: false });
   if (error) {
     $("#board").classList.remove("hidden");
     $("#board-hint").classList.add("hidden");
@@ -8657,13 +7225,9 @@ async function loadPipeline() {
     renderLoadError("#board", error, loadPipeline);
     return;
   }
-  // R24 — the named select above carries property_address exactly when propOn was true, so the M7
-  // question is still settled for free off the first row (notePropAddrFromStarRow reads its presence).
-  // noteDocsFromStarRow only ever flips DOCS_SUPPORTED to false off a missing waiting_on, which the
-  // select omits precisely when docsOn was already false — so both detectors stay consistent with the
-  // columns actually requested (mirrors how loadDataHealth re-notes M7 after its own named select).
+  // The select("*") above returns every column cases actually has, so it settles the M7 question
+  // for the table's Property column before it is asked (see notePropAddrFromStarRow).
   if (cases && cases.length) { notePropAddrFromStarRow(cases[0]); noteDocsFromStarRow(cases[0]); }
-  renderOwnerCapNotice("#board-cap-notice", ownerCapHit(cases)); // R23 — never silently truncate the board
   const q = ($("#board-search").value || "").trim().toLowerCase();
   const who = $("#board-adviser").value || "all";
   const filtered = (cases || []).filter((c) => {
@@ -8678,23 +7242,6 @@ async function loadPipeline() {
       if (!hay.includes(q)) return false;
     }
     return true;
-  });
-  /* R35 §2 — TWO LIVE CASES ON THE SAME BUILDING FOR THE SAME CLIENT RENDER BYTE-IDENTICAL.
-     Duncan Armitage's two Skipton cases on 4 Seafield Gardens are the same name, the same chip,
-     the same lender and the same loan; nothing on either card said which was which, and the only
-     way to tell them apart was to open both. The board already holds every case it needs to
-     answer this, so the count is taken off the rows just read — no extra query.
-     The key is the client plus the CANONICAL property identity (propKey — the same normaliser
-     propChip and the Rate & ERC merge use; a second address normaliser is the R6 defect this
-     codebase exists not to repeat). Only LIVE cases count: a completed case on the same building
-     is history, not a twin, and would put a tag on a card that has no sibling on the board. */
-  const twinKey = (c) => (c.client_id || "") + "|" + (propKey(c) || "");
-  const twinCount = new Map();
-  filtered.forEach((c) => {
-    if (TERMINAL_STAGES.includes(c.stage)) return;
-    if (!propKey(c)) return;                       // no address identity — nothing to disambiguate
-    const k = twinKey(c);
-    twinCount.set(k, (twinCount.get(k) || 0) + 1);
   });
   renderSegmentControl(filtered);
   const stageEntry = await loadStageEntries(filtered);
@@ -8750,40 +7297,6 @@ async function loadPipeline() {
   // R6-FIX V2/V4 — the full book, per client: the property register's numbers and the
   // hollow-chip rule both need the client's WHOLE set, which this read already is.
   Object.keys(clientCases).forEach((cid) => registerClientProps(cid, clientCases[cid]));
-  /* R37 · W9 — TWO CLIENT RECORDS, ONE PERSON, TWO CARDS THAT SAY NOTHING ABOUT EACH OTHER.
-     Data health finds duplicate clients; the board, where an adviser actually works, gave no hint
-     at all, so a case was progressed on one record while the notes and the email history sat on
-     the other.
-
-     Keyed on the CANONICAL NAME KEY, not the email, and deliberately: the board's read
-     (BOARD_CASE_COLS + clients!client_id(first_name,last_name)) embeds the name and NOT the
-     address — flagging on email would mean widening the app's fattest read for a hint. The key is
-     clientNameKey(), the SAME normaliser findClientMatches() dedupes on at both doors into the
-     system (lead accept and bulk import), so the board flags exactly what the duplicate detector
-     would call an exact name match and nothing else. The title says "name" out loud rather than
-     implying a stronger match than was actually made.
-
-     Counted over the FULL read, not `filtered`: narrowing the board to one adviser or one search
-     must not make a duplicated client look like a single record. Distinct client_ids, so a client
-     with four cases is not their own duplicate. */
-  const dupeNameClients = (() => {
-    /* R37 follow-up — TWO independent duplicate signals, matching the importer's own dedupe rule
-       ("exact email OR exact sorted name key"). Email catches the fixture's real pair —
-       "Deborah"/"Debbie" Ashworth share one email under different forenames, invisible to any
-       name key — which is why the board embed now carries `email`. Name catches records where
-       one copy has no email. Two distinct client_ids colliding on EITHER key flag both. */
-    const byEmail = new Map(), byName = new Map();
-    (cases || []).forEach((c) => {
-      if (!c.client_id) return;
-      const em = String((c.clients && c.clients.email) || "").trim().toLowerCase();
-      if (em) { if (!byEmail.has(em)) byEmail.set(em, new Set()); byEmail.get(em).add(c.client_id); }
-      const nk = clientNameKey(clientFullName(c.clients || {}));
-      if (nk) { if (!byName.has(nk)) byName.set(nk, new Set()); byName.get(nk).add(c.client_id); }
-    });
-    const flagged = new Set();
-    [byEmail, byName].forEach((m) => m.forEach((ids) => { if (ids.size > 1) ids.forEach((id) => flagged.add(id)); }));
-    return flagged;
-  })();
   // Stalled deals surface first: red, then amber (worst days-in-stage on top),
   // then the rest in the existing updated_at order.
   const AGE_RANK = { red: 0, amber: 1 };
@@ -8795,8 +7308,7 @@ async function loadPipeline() {
     if (ra < 2) return (B.inStage ?? -1) - (A.inStage ?? -1);
     return 0;
   }));
-  let boardSkipped = 0;   // R21 Part B — skip-and-count: one malformed card must not white-screen the board
-  const boardHtml = stages.map(([k, label]) => {
+  $("#board").innerHTML = stages.map(([k, label]) => {
     const colCards = boardExpandedStages.has(k) ? byStage[k] : byStage[k].slice(0, BOARD_COL_CAP);
     const hiddenCount = byStage[k].length - colCards.length;
     return `
@@ -8804,7 +7316,6 @@ async function loadPipeline() {
       <h4${k === "decision_in_principle" ? ` title="${TIP_DIP}"` : ""}>${label} <span>${byStage[k].length}</span></h4>
       ${byStage[k].length === 0 ? '<div class="col-empty">No cases here</div>' : ""}
       ${colCards.map((c) => {
-        try {
         const erc = c.erc_end_date && c.rate_end_date && c.erc_end_date > c.rate_end_date;
         const age = cardAge(c, stageEntry[c.id]);
         const nextStage = nextStageFor(c.stage, c.case_kind);
@@ -8822,33 +7333,11 @@ async function loadPipeline() {
            rendered at all, the kind goes back into the card body. */
         const cardChip = propChip(c, { fallback: (clientCaseCount[c.client_id] || 0) > 1, cls: "pc-card", noLender: true });
         const cardKind = KINDS.find((x) => x[0] === c.case_kind)?.[1] || "";
-        /* R35 §1 — THE KIND IS ONLY OMITTED WHEN THE CHIP ITSELF SAYS IT. The old rule dropped the
-           kind whenever a chip was rendered at all, so an ADDRESSED case printed "Nationwide ·
-           £218,000" and never said whether it was a remortgage, a purchase or a buy-to-let — the
-           one fact that separates a landlord's home remortgage from the BTL next to it on the
-           board. The hollow no-address chip IS "type · lender" (propChip's fallback), and there
-           alone repeating the kind would say the same thing twice. */
-        const chipSaysKind = !!cardChip && !propAddress(c);
-        const cdText = chipSaysKind
-          ? (c.lender || cardKind)                       // the hollow chip already carries the kind
+        const cdText = cardChip
+          ? (c.lender || cardKind)                       // the chip already carries the address or the kind
           : [cardKind, c.lender].filter(Boolean).join(" · ");
-        /* R35 §2 — the twin tail. Only on a card whose chip shows a real ADDRESS (a hollow chip
-           carries no address, so there is nothing shared to disambiguate) and only where another
-           LIVE case of the same client sits on the same building. Kind and lender are printed
-           above by §1, so the stage is the remaining differentiator — the same tail propCtxChip
-           appends for a shared property elsewhere. Off single cases entirely: no noise. */
-        const twinTail = (cardChip && propAddress(c) && (twinCount.get(twinKey(c)) || 0) > 1)
-          ? ` <span class="case-tag">${esc(STAGE_LABEL[c.stage] || String(c.stage).replace(/_/g, " "))}</span>`
-          : "";
-        /* R37 · W9 — the duplicate-client hint. It sits in the card's RIGHT-HAND group beside the
-           assignee avatar rather than inside .cn-name, which is nowrap/ellipsis: a badge appended
-           to a long name would be the first thing the ellipsis ate, i.e. a warning that
-           disappears exactly on the cards most likely to carry it. */
-        const dupeHint = dupeNameClients.has(c.client_id)
-          ? `<span class="badge amber card-dupe-hint" title="Another CLIENT RECORD shares this client's email address or exact name — possible duplicate. Check it in Data health → duplicate review before adding anything to this case, so the note or task lands on the record the firm keeps.">dupe?</span>`
-          : "";
         return `<div class="card${age.level ? " age-" + age.level : ""}" draggable="true" data-id="${c.id}" onclick="openCase('${c.id}')">
-          <div class="cn" style="display:flex;justify-content:space-between;align-items:center;gap:6px;"><span class="cn-name" title="${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ") || "")}">${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ") || "—")}</span><span style="display:flex;align-items:center;gap:6px;flex:0 0 auto;">${dupeHint}${c.assigned_to ? `<span class="chip" title="${esc(staffName(c.assigned_to))}">${initials(c.assigned_to)}</span>` : ""}${advanceBtn}</span></div>
+          <div class="cn" style="display:flex;justify-content:space-between;align-items:center;gap:6px;"><span class="cn-name" title="${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ") || "")}">${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ") || "—")}</span><span style="display:flex;align-items:center;gap:6px;flex:0 0 auto;">${c.assigned_to ? `<span class="chip" title="${esc(staffName(c.assigned_to))}">${initials(c.assigned_to)}</span>` : ""}${advanceBtn}</span></div>
           ${/* R6 — the card's answer to "which one of his five is this?", directly under the name
                 and above the money. Address when there is one; the hollow kind · lender pill only
                 on a client who has more than one case (on a single-case client it would just
@@ -8856,7 +7345,7 @@ async function loadPipeline() {
           ${/* R6-FIX V4a — noLender: the hollow pill printed "Product Transfer · Nationwide"
                 directly above the card's own "Nationwide · £265,000". The lender once. */ ""}
           ${cardChip}
-          <div class="cd">${lenderIcon(c.lender)}${esc(cdText)}${c.loan_amount ? " · " + fmtM(c.loan_amount) : ""}${twinTail}</div>
+          <div class="cd">${lenderIcon(c.lender)}${esc(cdText)}${c.loan_amount ? " · " + fmtM(c.loan_amount) : ""}</div>
           <div class="flags">
             ${/* R9-5 · m10 — WHO THE CASE IS SITTING WITH. First in the flag row because it is the
                  one thing on a card that tells an adviser what to do next; deliberately quiet
@@ -8881,18 +7370,10 @@ async function loadPipeline() {
             ${STAGES.map(([k, l]) => `<option value="${k}" ${k === c.stage ? "selected" : ""}${k === "decision_in_principle" ? ` title="${TIP_DIP}"` : ""}>${l}</option>`).join("")}
           </select>
         </div>`;
-        } catch (err) {
-          boardSkipped++;
-          logClientError("caught", "board card render failed: " + ((err && err.message) || err), { recordId: c && c.id, where: "loadPipeline" });
-          return "";
-        }
       }).join("")}
       ${hiddenCount > 0 ? `<button type="button" class="board-show-more" onclick="window.boardShowMore('${k}')">Show ${hiddenCount} more</button>` : ""}
     </div>`;
   }).join("");
-  $("#board").innerHTML = boardHtml + (boardSkipped > 0
-    ? `<div class="client-list-cap-note board-skip-note">${boardSkipped} record(s) couldn't be displayed — logged</div>`
-    : "");
   wireBoardDnD();
   updateBoardScrollHint();
 }
@@ -9109,7 +7590,7 @@ window.playbookAdd = async function (caseId, stage, kind, idx) {
   const { error } = await db.from("case_tasks").insert({ case_id: caseId, title: it.title, due_date: due, created_by: user && user.id, assigned_to: assignee });
   if (error) return toast("Couldn't add task — " + error.message);
   toast("Task added — due " + fmtD(due));
-  openCase(caseId); // repaints the case's own task list AND the checklist (the added step flips to ✓ added)
+  openCase(caseId); // repaints the Tasks list AND the checklist (the added step flips to ✓ added)
 };
 // "Add all" — every applicable step not already open, in one insert. Dedupe is the same title match.
 window.playbookAddAll = async function (caseId, stage, kind) {
@@ -9159,19 +7640,13 @@ function caseActionBarHtml(c, stage, kind, opts) {
     { id: "act-paid",          label: "✓ Mark fee paid" },
     { id: "act-offer",         label: "📄 Read mortgage offer (AI)" },
     ...(c.offer_doc_path ? [{ id: "act-view-offer", label: "View offer doc" }] : []),
+    ...(c.offer_doc_path ? [{ id: "act-email-offer", label: "📧 Email offer to client" }] : []),
     { id: "act-evidence",      label: "🗂 Evidence pack" },
     { id: "act-appt",          label: "📅 Book appointment" },
     { id: "act-factfind",      label: "📋 Digital fact-find" },
     // Record-reason only ever exists at not_proceeding (it is meaningless elsewhere): primary
     // there, absent otherwise, so it never clutters the overflow of a live case.
     { id: "act-record-reason", label: "✏️ Record reason", onlyStage: "not_proceeding" },
-    /* R35 §5 — killing a case is an ordinary, frequent outcome with no affordance of its own on
-       this screen: it meant dragging the card to the last board column. It belongs in the
-       overflow, not the primary row — it is destructive and it is never the suggested next move —
-       and it has no CASE_ACTION_RULES entry precisely so it lands there at every stage. Absent on
-       a case that is already not_proceeding, where "Record reason" is the primary action instead.
-       The write goes through moveCaseToStage like every other stage change. */
-    ...(stage === "not_proceeding" ? [] : [{ id: "case-mark-np", label: "🚫 Mark not proceeding" }]),
   ];
   const primary = [], overflow = [];
   defs.forEach((d) => {
@@ -10195,11 +8670,7 @@ function renderPipelineTable(filtered, stageEntry = {}, propOn = true) {
     </div>
     <div class="board-scroll-wrap board-scroll-wrap--table">
     <div class="panel" id="pipe-scroll" style="overflow-x:auto;">
-    ${/* R42 · F7 — ⭳, not ⬇: one glyph for "this downloads a file". Every other CSV control on
-          the app (the MI panels, the diagnostics export, the drill-downs) already used ⭳, and
-          two glyphs for one action is a difference that has to be checked before it is
-          dismissed. Label, id and behaviour unchanged. */ ""}
-    <div style="display:flex;justify-content:flex-end;margin-bottom:8px;"><button class="btn btn-sm" id="csv-btn">⭳ Download CSV</button></div>
+    <div style="display:flex;justify-content:flex-end;margin-bottom:8px;"><button class="btn btn-sm" id="csv-btn">⬇ Download CSV</button></div>
     ${rows.length ? `<table class="imp-table has-bulk" id="pipe-table">
       <tr><th class="bulk-col"><input type="checkbox" id="pipe-bulk-all" aria-label="Select all cases in this view"></th>${cols.map(([k, l]) => `<th data-k="${k}" class="${k === "client" ? "stick-col" : k === "updated_at" ? "pipe-col-updated" : ""}" style="cursor:pointer;"${k === "erc_end_date" ? ` title="${TIP_ERC}"` : ""}>${l}${sk === k ? (sd > 0 ? " ▲" : " ▼") : ""}</th>`).join("")}</tr>
       ${bodyRows}
@@ -10315,40 +8786,6 @@ $("#view-toggle").addEventListener("click", () => {
 });
 $("#board-search").addEventListener("input", debounce(() => loadPipeline(), 250));
 $("#board-adviser").addEventListener("change", debounce(() => loadPipeline(), 250));
-// R34 · W2 — remembering the choice is not the same job as re-running the query, so it is not
-// behind the query's debounce: the value is stored the moment it is picked.
-$("#board-adviser").addEventListener("change", () => persistStaffFilter("#board-adviser", BOARD_ADVISER_KEY));
-// R31-B — saved filter views on the board. Selecting one applies its captured filter set and
-// re-renders; save prompts for a name and captures the live set; delete removes the picked view.
-(() => {
-  const sel = $("#board-views"), saveBtn = $("#board-view-save"), delBtn = $("#board-view-del");
-  if (!sel) return;
-  refreshPipelineViews();
-  sel.addEventListener("change", (e) => {
-    const v = savedViews("pipeline").find((x) => x.name === e.target.value);
-    if (!v) return;
-    applyPipelineFilterState(v.filters);
-    loadPipeline();
-  });
-  if (saveBtn) saveBtn.addEventListener("click", () => {
-    const name = prompt("Save current pipeline filters as…");
-    if (name == null) return;
-    const nm = String(name).trim();
-    if (!nm) return;
-    saveView("pipeline", nm, pipelineFilterState());
-    refreshPipelineViews();
-    sel.value = nm;
-    toast("View saved");
-  });
-  if (delBtn) delBtn.addEventListener("click", () => {
-    const name = sel.value;
-    if (!name) { toast("Pick a saved view to delete"); return; }
-    if (!confirm(`Delete saved view "${name}"?`)) return;
-    deleteView("pipeline", name);
-    refreshPipelineViews();
-    toast("View deleted");
-  });
-})();
 $("#new-case-btn").addEventListener("click", () => openCase(null));
 // Board horizontal-scroll affordance wiring (QW16).
 (() => {
@@ -10361,11 +8798,6 @@ $("#new-case-btn").addEventListener("click", () => openCase(null));
 
 /* ---------- Protection & GI page ---------- */
 let protScope = "mine", protFilter = "all";
-/* R36-A · L6 — the client search term for the protection table. Client-side over rows already in
-   hand (the RPC returns the whole book and the scope/status filters are applied here too), so a
-   keystroke costs no query. Module scope so a re-render from anywhere — setProtStatus, the bulk
-   bar, the Quoted tile — keeps the search the operator typed. */
-let protSearch = "";
 const PROT_BADGE = {
   not_discussed: ["grey", "NOT DISCUSSED"], discussed: ["blue", "DISCUSSED"], quoted: ["amber", "QUOTED"],
   policy_taken: ["green", "POLICY TAKEN"], declined: ["red", "DECLINED"],
@@ -10429,14 +8861,7 @@ async function loadProtectionPage() {
     if (protScope === "unassigned" && r.owner != null) return false;
     return true;
   });
-  /* R36-A · L6 — search sits INSIDE the same chain as the status drop-down, after the scope, so
-     the two compose the way an operator expects ("Mine · Quoted · okafor") and the KPI tiles above
-     re-read against the search — the same contract the pipeline's segment counts and the client
-     list's chips have had since BUILD 5a. The completed-with-no-outcome call list below still
-     answers only to the SCOPE, exactly as it did before search existed. */
-  const protQ = protSearch.trim().toLowerCase();
   const rows = scoped.filter((r) => {
-    if (protQ && !String(r.client_name || "").toLowerCase().includes(protQ)) return false;
     if (protFilter === "live") return r.live;
     if (protFilter === "completed") return !r.live;
     if (protFilter === "quoted") return r.protection_status === "quoted";
@@ -10537,11 +8962,7 @@ async function loadProtectionPage() {
     </table>
     </div>
     <button type="button" class="board-scroll-arrow" aria-label="Scroll right" title="Scroll right">›</button>
-  </div>` : (protQ
-    /* R36-A · L6 — "nice clean book" is a compliment, and it must never be paid to a search that
-       simply found nobody. Name the term, and name the scope it was searched inside. */
-    ? `<div class="empty">No protection rows for “${esc(protSearch.trim())}” in this view — the search looks at client names inside the current scope and filter.</div>`
-    : '<div class="empty">No protection or GI opportunities in this view — nice clean book. 🛡️</div>');
+  </div>` : '<div class="empty">No protection or GI opportunities in this view — nice clean book. 🛡️</div>';
   wireTableHScroll("prot-scroll");
   // S3c — bulk wiring. The bar updates imperatively (no re-render) so a long selection survives.
   document.querySelectorAll("#prot-list-table .prot-cb").forEach((cb) => (cb.onchange = () => {
@@ -10700,19 +9121,11 @@ async function bulkSetProtStatus(status) {
   const label = (PROT_BULK_STATUS.find(([k]) => k === status) || [null, status])[1];
   let commission = null;
   if (status === "policy_taken") {
-    /* R37 · W10 — the same overlay the single-case flow uses. null now means CANCEL (nothing is
-       written); a skip comes back as { commission: null }, which is exactly the "leave the figure
-       for the case" shape the loop below already handles by omitting the key. */
-    const res = await askProtectionCommission(null, `This figure will be written to ALL ${ids.length} selected case${ids.length === 1 ? "" : "s"} — if their policies are worth different amounts, cancel and set them one at a time.`);
-    if (!res) return toast("Left unchanged — nothing was written.");
-    commission = res.commission;
+    commission = askProtectionCommission(null, `This figure will be written to ALL ${ids.length} selected case${ids.length === 1 ? "" : "s"} — if their policies are worth different amounts, cancel and set them one at a time.`);
+    if (commission == null) return toast("Left unchanged — a policy needs a commission figure.");
   }
   const msg = `Set protection status to "${label}" on ${ids.length} case${ids.length === 1 ? "" : "s"}?`
-    + (status === "policy_taken"
-      ? (commission != null
-        ? `\n\nCommission ${fmtM(commission)} will be recorded on every one of them.`
-        : "\n\nNo commission figure will be recorded — any figure already on a case is left as it is.")
-      : "")
+    + (status === "policy_taken" ? `\n\nCommission ${fmtM(commission)} will be recorded on every one of them.` : "")
     /* R12a·D9 — this used to promise "the quote clock starts today on every one of them", and
        that is exactly the sweep that used to reset a cold quote to fresh. It now says what
        protUpdateWithStamp actually does. */
@@ -10802,85 +9215,39 @@ async function protUpdateWithStamp(caseId, patch, wantStamp) {
   }
   return { error: error || null, stamped, kept };
 }
-/* ==========================================================================
-   R37 · W10 — THE COMMISSION CAPTURE, AS AN OVERLAY
-
-   R7-3 made the figure required and implemented "required" as prompt() in a loop: three goes, a
-   toast between each, and on the third blank it abandoned the status change with a message that
-   looked like the same nagging toast as the two before it. Three failure modes in one control —
-   a native dialog that cannot be styled or read by the rest of the app, a re-nag that punishes a
-   slip of the keyboard, and no way at all to say the honest thing, which is "the policy IS taken
-   and I do not know the number yet". An adviser who does not know it has exactly two exits today:
-   invent a figure, or leave the status wrong. Both corrupt the same reports the requirement was
-   built to protect.
-
-   Now it is the app's own second-layer overlay (openOverlay — the same host the lost-reason and
-   fee-date captures use, so it can sit on top of an open case modal without destroying it), with
-   THREE exits and no fourth:
-     Save    — a number above zero, written exactly as before.
-     Skip    — the status is written and NO commission is touched. Not "written as zero", which
-               would be a lie the Reports money panels would then average; the column is simply
-               left out of the patch, so a figure already on file survives a skip.
-     Cancel  — nothing is written, status unchanged (Escape and the backdrop mean Cancel too).
-   Invalid input on Save does not re-prompt and does not consume an attempt: it says why, in the
-   overlay, next to the box, and waits.
-
-   Provider and premium capture would be genuinely useful here and are DELIBERATELY out of scope:
-   there are no columns for them and this round adds no schema.
-
-   Returns null for cancel, or { commission: <number> | null } — null meaning "skip", which every
-   caller already handles correctly by omitting the key from its patch. */
+/* The required-commission capture. Returns a number, or null when the operator cancelled — and
+   null MUST abort the status change, which is the whole point of it being required. */
 function askProtectionCommission(existing, contextLine) {
   const avg = Number(settings.protection_avg_commission || 0);
-  const had = Number(existing || 0) > 0 ? Number(existing) : 0;
-  const def = had > 0 ? String(had) : (avg > 0 ? String(avg) : "");
-  const html = `
-    <div id="prot-comm-box">
-      <h3>Policy taken 🎉 — what is the commission worth?</h3>
-      ${contextLine ? `<p class="panel-sub" id="prot-comm-context">${esc(contextLine)}</p>` : ""}
-      <p class="panel-sub" id="prot-comm-why">“Policy taken” is the only protection outcome that earns anything, and the attach-rate and commission figures on Reports are built from this number.${
-        had > 0 ? ` This case already has <strong>${fmtM(had)}</strong> recorded — the box is pre-filled with it.`
-        : avg > 0 ? ` The box is pre-filled with the firm average from Settings (<strong>${fmtM(avg)}</strong>) — change it to the real figure if you know it.`
-        : ""}</p>
-      <label>Commission (£)
-        <input id="prot-comm-input" type="number" min="0" step="1" inputmode="decimal" value="${esc(def)}" placeholder="e.g. 450">
-      </label>
-      <div class="ovl-err" id="prot-comm-err"></div>
-      <p class="panel-sub" id="prot-comm-skip-note" style="margin-top:10px;">Don't know it yet? Record the outcome now and the figure later — the case will show on Reports as a policy with no commission against it${had > 0 ? ", and the figure already on file is left alone" : ""}.</p>
-      <div class="modal-actions">
-        <div class="right">
-          <button type="button" class="btn" id="prot-comm-cancel">Cancel</button>
-          <button type="button" class="btn" id="prot-comm-skip" title="Write the status without a commission figure. Nothing is guessed and nothing is overwritten.">Skip — record without commission</button>
-          <button type="button" class="btn btn-primary" id="prot-comm-save">Save</button>
-        </div>
-      </div>
-    </div>`;
-  return openOverlay(html, (finish, box) => {
-    const input = box.querySelector("#prot-comm-input");
-    const err = box.querySelector("#prot-comm-err");
-    const fail = (msg) => { if (err) err.textContent = msg; if (input) { input.focus(); input.select(); } };
-    const submit = () => {
-      const v = String(input ? input.value : "").trim().replace(/^£/, "").replace(/,/g, "");
-      if (v === "") return fail("Enter a figure, or press “Skip — record without commission”.");
-      if (isNaN(Number(v)) || Number(v) <= 0) return fail("That isn't a number above zero. Enter the commission, or skip it.");
-      finish({ commission: Number(v) });
-    };
-    box.querySelector("#prot-comm-save").onclick = submit;
-    box.querySelector("#prot-comm-skip").onclick = () => finish({ commission: null });
-    box.querySelector("#prot-comm-cancel").onclick = () => finish(null);
-    if (input) input.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); submit(); } };
-  });
+  let def = Number(existing || 0) > 0 ? String(Number(existing)) : (avg > 0 ? String(avg) : "");
+  /* Bounded, deliberately. "Required" must not mean "a modal you cannot leave except by Cancel":
+     three goes is plenty for a typo, and the fourth abandons the change and says why, which is the
+     same outcome as Cancel and never a policy written with no value on it. */
+  for (let tries = 0; tries < 3; tries++) {
+    const raw = prompt(
+      "Policy taken 🎉 — what is the commission worth?\n\n"
+      + (contextLine ? contextLine + "\n\n" : "")
+      + "A figure is required: \"policy taken\" is the only protection outcome that earns anything, and "
+      + "the attach-rate and commission figures on Reports are built from it. "
+      + (avg > 0 ? `The box is pre-filled with the firm average from Settings (${fmtM(avg)}) — change it to the real figure if you know it.` : "")
+      + "\n\nCancel leaves the status exactly as it is.",
+      def);
+    if (raw == null) return null;                       // cancelled — caller must abandon
+    const v = String(raw).trim().replace(/^£/, "").replace(/,/g, "");
+    if (v !== "" && !isNaN(Number(v)) && Number(v) > 0) return Number(v);
+    def = v;
+    toast(v === "" ? "A commission figure is required — enter one, or press Cancel to leave the status alone." : "That isn't a number above zero — try again, or press Cancel.");
+  }
+  return null;   // three goes, no usable figure — treated exactly as Cancel
 }
 window.setProtStatus = async function (caseId, status) {
   if (!status) return;
   const patch = { protection_status: status };
   if (status === "policy_taken") {
     const { data: cur } = await db.from("cases").select("protection_commission").eq("id", caseId).single();
-    const res = await askProtectionCommission(cur && cur.protection_commission, null);
-    if (!res) { loadProtectionPage(); return toast("Left unchanged — the protection status is as it was."); }
-    // null = skipped. The column is left out of the patch entirely rather than written as null:
-    // a figure already on file is data, and "I don't know it" is not a reason to destroy it.
-    if (res.commission != null) patch.protection_commission = res.commission;
+    const amt = askProtectionCommission(cur && cur.protection_commission, null);
+    if (amt == null) { loadProtectionPage(); return toast("Left unchanged — a policy needs a commission figure."); }
+    patch.protection_commission = amt;
   }
   const { error, stamped, kept } = await protUpdateWithStamp(caseId, patch, status === "quoted");
   if (error) return toast("Error: " + error.message);
@@ -10893,9 +9260,7 @@ window.setProtStatus = async function (caseId, status) {
         ? "Protection status: quoted — quote clock started today"
         : "Protection status: quoted — but this database has no quote-date column (migration M8), so the age badge will read \u201cunknown\u201d")
     : status === "policy_taken"
-      ? (patch.protection_commission != null
-        ? `Policy taken ✓ — commission ${fmtM(patch.protection_commission)} recorded`
-        : "Policy taken ✓ — no commission figure recorded. Add it on the case when you know it.")
+      ? `Policy taken ✓ — commission ${fmtM(patch.protection_commission)} recorded`
       : "Protection status: " + status.replace(/_/g, " "));
   if (!$("#page-protection").classList.contains("hidden")) loadProtectionPage();
 };
@@ -11291,8 +9656,6 @@ $("#prot-scope-mine").addEventListener("click", () => setProtScope("mine"));
 $("#prot-scope-unassigned").addEventListener("click", () => setProtScope("unassigned"));
 $("#prot-scope-all").addEventListener("click", () => setProtScope("all"));
 $("#prot-filter").addEventListener("change", () => { protFilter = $("#prot-filter").value; loadProtectionPage(); });
-// R36-A · L6 — same 250ms debounce as #board-search, so a fast typist gets one render, not eight.
-$("#prot-search").addEventListener("input", debounce(() => { protSearch = $("#prot-search").value || ""; loadProtectionPage(); }, 250));
 // Clicking the "Quoted, awaiting decision" tile filters the table to those rows (QW15).
 $("#prot-tile-quoted").addEventListener("click", () => {
   protFilter = "quoted";
@@ -11313,168 +9676,6 @@ let openedUpdatedAt = null;
    importer's new-client insert. */
 let clientPickerCache = null;
 function invalidateClientPicker() { clientPickerCache = null; }
-/* ---------- R36-B · W6 — SEARCHABLE PICKER (upgradeSelectToCombobox) ----------
-   The R32 panel watched an adviser hunt for "Wetherby" in a six-hundred-name <select> by holding
-   the mouse against the scrollbar. A native select's type-ahead only matches from the START of the
-   option text, and every one of these lists is "Last, First" — so typing a FIRST name, or a surname
-   you are half sure of, finds nothing at all.
-
-   This is a PROGRESSIVE ENHANCEMENT, not a replacement. The <select> stays in the DOM as the value
-   carrier: it is display:none'd, never removed, so every `.value` read, every `change` listener,
-   every FormData round-trip and the unsaved-changes snapshot keep working untouched. All this adds
-   is a text input + a filtered list that writes back into the select and fires a REAL change event.
-
-   Sentinels ("— select client —", "+ New client…", "— nobody —") are PINNED: they are commands, not
-   search results, and a picker that hides "+ New client…" the moment you type is a picker that
-   makes you delete what you typed to get at it.
-
-   Anything that throws leaves the native select exactly as it was (visible, working) — an operator
-   with a plain select is inconvenienced; an operator with a hidden select and a broken input is
-   stuck. */
-function upgradeSelectToCombobox(selectEl, opts) {
-  if (!selectEl || selectEl.__combo) return null;
-  opts = opts || {};
-  const MAX = 12;               // beyond this the list is a scroll again — say "keep typing" instead
-  let wrap = null;
-  try {
-    const labelOf = (o) => (o.textContent || "").trim();
-    const isSentinel = (o) => !o.value || o.value === "__new__";
-    wrap = document.createElement("div");
-    wrap.className = "combo-wrap";
-    const input = document.createElement("input");
-    input.type = "text";
-    input.className = "combo-input";
-    input.setAttribute("role", "combobox");
-    input.setAttribute("aria-expanded", "false");
-    input.setAttribute("aria-autocomplete", "list");
-    input.setAttribute("autocomplete", "off");
-    input.placeholder = opts.placeholder || "Type to search…";
-    const list = document.createElement("div");
-    list.className = "combo-list hidden";
-    list.setAttribute("role", "listbox");
-    if (selectEl.id) {
-      input.id = selectEl.id + "-combo";
-      list.id = selectEl.id + "-combo-list";
-      input.setAttribute("aria-controls", list.id);
-      /* The select sits inside a <label> with no `for`, so the label's implicit control is the
-         select we just hid — clicking the word "Client" would focus nothing. Point it at the input. */
-      const lab = selectEl.closest("label");
-      if (lab && !lab.getAttribute("for")) lab.setAttribute("for", input.id);
-    }
-    wrap.appendChild(input);
-    wrap.appendChild(list);
-    selectEl.classList.add("combo-native");     // display:none — still submitted, still readable
-    selectEl.parentNode.insertBefore(wrap, selectEl.nextSibling);
-
-    let items = [];       // the <option>s currently painted, in painted order
-    let active = -1;
-    const isOpen = () => !list.classList.contains("hidden");
-    const selectedOpt = () => selectEl.options[selectEl.selectedIndex] || null;
-    const sync = () => {  // input text ← whatever the select currently holds (incl. programmatic writes)
-      const o = selectedOpt();
-      input.value = o && o.value ? labelOf(o) : "";
-    };
-    const close = () => {
-      list.classList.add("hidden");
-      list.innerHTML = "";
-      items = []; active = -1;
-      input.setAttribute("aria-expanded", "false");
-    };
-    const paint = (q) => {
-      const terms = String(q || "").toLowerCase().split(/\s+/).filter(Boolean);
-      const all = [...selectEl.options].filter((o) => !o.hidden && !o.disabled);
-      const pinned = all.filter(isSentinel);
-      const matches = all.filter((o) => !isSentinel(o))
-        .filter((o) => { const t = labelOf(o).toLowerCase(); return terms.every((w) => t.includes(w)); });
-      const shown = matches.slice(0, MAX);
-      items = pinned.concat(shown);
-      const cur = selectEl.value;
-      list.innerHTML = items.map((o, i) =>
-        `<div class="combo-opt${isSentinel(o) ? " combo-pin" : ""}${o.value === cur && o.value ? " combo-cur" : ""}" role="option" data-i="${i}" aria-selected="false">${esc(labelOf(o))}</div>`
-      ).join("") + (matches.length > shown.length
-        ? `<div class="combo-more">${matches.length - shown.length} more — keep typing</div>` : "")
-        + (!matches.length && terms.length ? `<div class="combo-more">No match</div>` : "");
-      /* With something typed the operator means the NAMES, not the pinned commands: land the
-         highlight on the first real match so Enter picks who they were looking for. */
-      active = terms.length && shown.length ? pinned.length : (items.length ? 0 : -1);
-      markActive();
-      list.classList.remove("hidden");
-      input.setAttribute("aria-expanded", "true");
-    };
-    const markActive = () => {
-      [...list.querySelectorAll(".combo-opt")].forEach((el, i) => {
-        const on = i === active;
-        el.classList.toggle("combo-active", on);
-        el.setAttribute("aria-selected", on ? "true" : "false");
-        if (on && el.scrollIntoView) el.scrollIntoView({ block: "nearest" });
-      });
-    };
-    const choose = (o) => {
-      if (!o) return;
-      selectEl.value = o.value;
-      sync();
-      close();
-      selectEl.dispatchEvent(new Event("change", { bubbles: true }));
-    };
-    const clearToEmpty = () => {
-      const empty = [...selectEl.options].find((o) => !o.value);
-      if (!empty || selectEl.value === empty.value) return;
-      selectEl.value = empty.value;
-      selectEl.dispatchEvent(new Event("change", { bubbles: true }));
-    };
-
-    input.addEventListener("focus", () => paint(""));
-    input.addEventListener("mousedown", () => { if (!isOpen()) setTimeout(() => paint(input.value), 0); });
-    input.addEventListener("input", () => {
-      // Emptying the box means "nobody" — the same thing the empty option means.
-      if (!input.value.trim()) clearToEmpty();
-      paint(input.value);
-    });
-    input.addEventListener("keydown", (e) => {
-      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-        e.preventDefault();
-        if (!isOpen()) { paint(input.value); return; }
-        if (!items.length) return;
-        active = (active + (e.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
-        markActive();
-      } else if (e.key === "Enter") {
-        if (!isOpen()) return;              // let the form do whatever it does with Enter
-        e.preventDefault();
-        if (active >= 0 && items[active]) choose(items[active]);
-      } else if (e.key === "Escape") {
-        if (!isOpen()) return;              // closed list → Escape belongs to the modal
-        e.preventDefault(); e.stopPropagation();
-        close(); sync();
-      } else if (e.key === "Tab") {
-        close();
-      }
-    });
-    // mousedown, not click: preventDefault keeps focus on the input so blur cannot beat the pick.
-    list.addEventListener("mousedown", (e) => {
-      const row = e.target.closest(".combo-opt");
-      if (!row) { e.preventDefault(); return; }
-      e.preventDefault();
-      choose(items[Number(row.dataset.i)]);
-      input.focus();
-    });
-    input.addEventListener("blur", () => { setTimeout(() => { close(); sync(); }, 120); });
-    /* Anything that writes the select behind our back (syncReferrerOptions clearing a self-referral,
-       a re-render) can call __combo.sync() to bring the visible text back in step. */
-    selectEl.addEventListener("change", sync);
-
-    sync();
-    selectEl.__combo = { input, list, sync, wrap };
-    return selectEl.__combo;
-  } catch (err) {
-    // Degrade to the native select, whole and visible.
-    try {
-      if (wrap && wrap.parentNode) wrap.parentNode.removeChild(wrap);
-      selectEl.classList.remove("combo-native");
-      delete selectEl.__combo;
-    } catch (e2) { /* nothing left to do — the select is still on screen */ }
-    return null;
-  }
-}
 async function refreshOpenedStamp(caseId) {
   if (!caseId) return null;
   const { data } = await db.from("cases").select("updated_at").eq("id", caseId).single();
@@ -11738,31 +9939,23 @@ function securityCardHtml(c, caseClient, secClient) {
 }
 /* opts: { revealProtection } opens the details drawer on a red-highlighted protection select
    (the protection gate's fix path, R5-34); { openDetails } just opens the drawer (offer apply). */
-/* R40 — how many past history rows the CASE modal paints before it offers Show more. Lower than
-   the client record's 100 on purpose: this list sits in the middle of a modal that already carries
-   tasks, documents, files and a forty-field form, and one case's history is a narrower thing than
-   a client's whole book. Show more adds 100 at a time from there. */
-const CASE_TL_CAP = 30;
 window.openCase = async function (id, opts = {}) {
   let c = { stage: "enquiry", case_kind: "remortgage", rate_type: "fixed" };
   let notes = [], tasks = [];
-  let auditRows = [];
-  let tlItems = [];                      // R40 — the case's own unified timeline (see below)
+  let events = [], auditRows = [];
   let hasRetentionSuccessor = false;
   let caseDocs = [], docMails = [];      // R9-5 · m10 — the checklist and its document emails
   let caseAppts = [];                    // R12b · W-11 — this case's diary, from the start of today
   openedUpdatedAt = null;
   pendingOffer = null; // a re-render replaces the diff panel — don't leave a stale proposal armed
   if (id) {
-    /* BACKEND-R4 §3 — the forensic audit_log under the modal. Soft-fails: a blocked table must not
-       stop the case opening.
-       R40 — the separate case_events read that used to sit here is GONE. Those rows are now part of
-       the unified History timeline below, and buildClientTimeline reads case_events itself; keeping
-       a second read of the same table just to feed a list that no longer exists was pure cost. */
-    const [{ data: cs }, { data: ns }, { data: ts }, aud, succ, docs, dmail, appts] = await Promise.all([
+    // BACKEND-R4 §2/§3 — the curated event log (log_case_event, with its actor) and the forensic
+    // audit_log underneath it. Both soft-fail: a blocked table must not stop the case opening.
+    const [{ data: cs }, { data: ns }, { data: ts }, evs, aud, succ, docs, dmail, appts] = await Promise.all([
       db.from("cases").select("*").eq("id", id).single(),
       db.from("case_notes").select("*").eq("case_id", id).order("created_at", { ascending: false }),
       db.from("case_tasks").select("*").eq("case_id", id).order("due_date"),
+      softRows(db.from("case_events").select("event,detail,created_at,actor").eq("case_id", id).order("created_at", { ascending: false })),
       loadAuditRows("case_id", id),
       // R5-6 — does this case already have a retention successor? Decides the header button.
       softRows(db.from("cases").select("id").eq("retention_source_case_id", id).limit(1)),
@@ -11782,7 +9975,7 @@ window.openCase = async function (id, opts = {}) {
         .order("starts_at").limit(5)),
     ]);
     if (!cs) return toast("Case not found — it may have been deleted or you don't have access");
-    c = cs; notes = ns || []; tasks = ts || []; auditRows = aud;
+    c = cs; notes = ns || []; tasks = ts || []; events = evs; auditRows = aud;
     caseDocs = docs || []; docMails = dmail || []; caseAppts = appts || [];
     notePropAddrFromStarRow(cs); // the select("*") above settles the M7 question definitively
     noteReferrerFromStarRow(cs); // …and the m11 one, at the same zero cost (R9-1)
@@ -11790,25 +9983,6 @@ window.openCase = async function (id, opts = {}) {
     noteCallPackFromStarRow(cs); // R12b · W-15b — …and the call-pack four, at the same zero cost
     hasRetentionSuccessor = (succ || []).length > 0;
     openedUpdatedAt = cs.updated_at; // exact string from the loaded row, for the stale-write guard
-    /* R40 — THE CASE'S HISTORY, built by the SAME builder the client record has used since SP3b
-       rather than a second, thinner one written alongside it. `cs` is a select("*") row, so it
-       carries the property_address / case_kind / lender / stage the builder's chip logic reads.
-       The builder fires its own eight reads in one Promise.all — deliberately not unpicked into
-       this one, because the whole point is that there is exactly one definition of "what happened
-       on a case" and both surfaces call it. */
-    tlItems = await buildClientTimeline(cs.client_id, [cs]);
-    /* R40 — and then scoped to THIS case. Appointments are the one source the builder reads by
-       client_id rather than case_id, so on a multi-case client another case's diary would
-       otherwise appear in this case's history. Rows with NO case_id are kept on purpose: a
-       client-level appointment has no other case to belong to, and the client sitting in
-       reception is sitting there for the case you have open. */
-    tlItems = tlItems.filter((it) => !it.caseId || String(it.caseId) === String(id));
-    /* R40 (CTO) — and stripped of the per-row case tag. The chip exists to say WHICH case a row
-       belongs to; inside a single case's modal every row belongs to the case the header already
-       names, so on an addressed case the same property chip repeated down the whole list. This is
-       a presentation choice at THIS call site only — the chip identity rules (R6/R6FIX-1/R35) and
-       the client page's rendering are untouched. */
-    tlItems = tlItems.map((it) => ({ ...it, caseChip: "", caseLabel: null }));
   }
   /* R18-P6 — the client-picker list was re-read whole (every client, ordered) on EVERY case open.
      Cache it for the session (clientPickerCache) and reuse it; invalidateClientPicker() drops the
@@ -11817,7 +9991,7 @@ window.openCase = async function (id, opts = {}) {
      stays per-open. */
   const introsPromise = db.from("introducers").select("id,name").order("name");
   const fetchClientPicker = async () => {
-    const { data } = await db.from("clients").select("id,first_name,last_name,email,phone").order("last_name").limit(OWNER_ROW_CAP);
+    const { data } = await db.from("clients").select("id,first_name,last_name,email,phone").order("last_name");
     clientPickerCache = data || [];
     return clientPickerCache;
   };
@@ -12000,16 +10174,6 @@ window.openCase = async function (id, opts = {}) {
       <div class="cs-stats">
         ${/* The stage moved up into the identity line above — this row is numbers. */ ""}
         ${nextStage ? `<button type="button" class="btn btn-sm cs-advance-btn" id="cs-advance-btn" title="Advance to ${esc(STAGE_LABEL[nextStage] || nextStage)}">Advance to ${esc(STAGE_LABEL[nextStage] || nextStage)} →</button>` : ""}
-        ${/* R35 §5 — MOVE TO ANY STAGE, FROM THE CASE ITSELF. Advance only ever offers the NEXT
-             stage, so every other move — back a stage after a lender declines, straight to Not
-             Proceeding, a jump the workflow does not model — meant closing the modal, finding the
-             card on the board and using the select that has been there all along. Same control,
-             same options, same single write path (moveCaseToStage), now beside the button it
-             complements. Options are built exactly as the board card's .card-stage-move builds
-             them, with the current stage selected. */ ""}
-        <select id="cs-stage-select" class="card-stage-move" aria-label="Move to stage" title="Move this case to any stage">
-          ${STAGES.map(([k, l]) => `<option value="${k}" ${k === c.stage ? "selected" : ""}${k === "decision_in_principle" ? ` title="${TIP_DIP}"` : ""}>${l}</option>`).join("")}
-        </select>
         <div class="cs-stat"><span class="cs-lbl">Adviser</span><span class="cs-val" id="cs-adviser-val">${c.assigned_to ? esc(staffName(c.assigned_to)) : '<span class="cs-muted">— unassigned —</span>'}</span></div>
         <div class="cs-stat"><span class="cs-lbl">Loan</span><span class="cs-val">${fmtM(c.loan_amount)}</span></div>
         ${/* R6 — was labelled "Property" and showed the property VALUE, which is the single most
@@ -12032,15 +10196,7 @@ window.openCase = async function (id, opts = {}) {
              stage-independent — a completed case that exchanged is still a case that exchanged. */ ""}
         ${c.exchange_date ? `<div class="cs-stat" id="cs-exchanged" title="Contracts exchanged on ${esc(fmtD(c.exchange_date))}. From this date the client is legally committed."><span class="cs-lbl">Exchanged</span><span class="cs-val">${fmtD(c.exchange_date)}</span></div>` : ""}
         ${/* R16 §A — the ICR verdict, echoed compactly here for a BTL case an adviser reads on the phone. */ ""}
-        ${/* R35 §3 — AFFORDABILITY NEVER SILENTLY VANISHES. The row used to require btlIcr(c),
-             which is null until a rent is captured — so the one BTL case where affordability is
-             unknown (the case most likely to be sent to a lender that will refuse it) showed
-             nothing at all, and the absence was indistinguishable from "not a BTL". The row is
-             now drawn for every BTL case: the chip when there is a rent, an amber "not captured"
-             with the way to fix it when there is not. Non-BTL cases are unchanged — no row. */ ""}
-        ${btlIcrOn && c.case_kind === "buy_to_let" ? `<div class="cs-stat" id="cs-btl-icr"><span class="cs-lbl">Affordability</span>${btlIcr(c)
-          ? `<span class="cs-val">${btlIcrChipHtml(c)}</span>`
-          : `<span class="cs-val"><span class="badge amber">Rent — not captured</span> <button type="button" class="linkish" id="cs-btl-add-rent">add</button></span>`}</div>` : ""}
+        ${btlIcrOn && c.case_kind === "buy_to_let" && btlIcr(c) ? `<div class="cs-stat" id="cs-btl-icr"><span class="cs-lbl">Affordability</span><span class="cs-val">${btlIcrChipHtml(c)}</span></div>` : ""}
         ${/* R16 §B — the submit-to-lender status, drawn only in the application window (DIP→exchange). */ ""}
         ${lenderTrackOn && lenderTrackVisible(c.stage) && c.application_status && APP_STATUS_LABEL[c.application_status] ? `<div class="cs-stat" id="cs-lender-status"${c.lender_reference ? ` title="Lender ref: ${esc(c.lender_reference)}"` : ""}><span class="cs-lbl">Application</span><span class="cs-val">${c.application_status === "offer_issued" ? "📄" : c.application_status === "submitted" ? "📤" : "🏦"} ${esc(APP_STATUS_LABEL[c.application_status])}${c.application_status === "submitted" && c.submitted_at ? " " + fmtD(c.submitted_at) : ""}</span></div>` : ""}
         ${/* R12b · W-15b — THE CALL PACK, on the header an adviser reads with the phone in their
@@ -12101,23 +10257,128 @@ window.openCase = async function (id, opts = {}) {
       </div>
     </div>` : "";
 
-  /* ---------- R36-B · W7 — THE SLIM NEW-CASE FORM ----------
-     Forty-nine fields, flat and all open, was what a brand-new case used to ask for before it would
-     accept the one fact anybody has at that moment: who it is for. R32 watched people scroll past
-     ERC amounts and clawback dates to reach Save. So the form is now built from three pieces —
-     the CORE (client, property, type, stage, owner), the REST, and the assignee that closes both —
-     and the two views arrange the same pieces differently:
-
-       EDIT (id): unchanged, byte for byte — one <form class="form-grid"> inside the collapsed
-                  "Case details" accordion, fields in exactly the order they have always been in.
-       NEW:       the core five above the fold, the REST folded into that SAME <details
-                  class="case-details"> accordion — the one every "reveal the field I am complaining
-                  about" path already opens ($("#modal .case-details").open = true).
-
-     Both arrangements live inside ONE <form id="case-form">, so nothing moved out of the POST:
-     FormData still sees every field, and a new case created without opening the accordion writes
-     exactly the defaults its markup carries — same as before. */
-  const caseCoreFieldsHtml = `
+  $("#modal").innerHTML = `
+    <h3>${id ? "Case" : "New case"}</h3>
+    ${/* R15 · §3 — the security card is a lender-call tool; it has nothing to hold before a lender
+         is involved, so it is HIDDEN at enquiry+fact_find and shown DIP→terminal. Wrapped, never
+         deleted: the node (and its toggle wiring) stays in the DOM, just hidden. */ ""}
+    ${id ? `<div id="case-sec-wrap"${caseSectionVisible("security", c.stage) ? "" : ' class="hidden"'}>${securityCardHtml(c, caseClient, secClient)}</div>` : ""}
+    ${summaryHeader}
+    ${c.retention_source_case_id ? `<p class="panel-sub" style="margin-top:-8px;">🔁 Retention opportunity — linked to a completed case. <span class="t" style="cursor:pointer;text-decoration:underline;" onclick="openCase('${c.retention_source_case_id}')">View original case</span></p>` : ""}
+    ${/* R15 · §6 — a not-proceeding case says WHY, prominently. Prefer the recorded lost_reason (a
+         select("*") carries it when the M2 columns exist); fall back to the last note; and offer a
+         one-click "record reason" that fires the same affordance the action bar carries. */ ""}
+    ${id && c.stage === "not_proceeding" ? `<p class="panel-sub case-lost-banner" style="margin-top:-8px;color:var(--red);">🚫 Not proceeding${
+        c.lost_reason ? ` — <strong>${esc(LOST_REASON_LABEL[c.lost_reason] || String(c.lost_reason).replace(/_/g, " "))}</strong>${c.lost_detail ? ": " + esc(c.lost_detail) : ""}`
+        : lastNote ? ` — <span class="cs-muted">last note:</span> ${esc(noteSnip(lastNote.body))}`
+        : " — <span class=\"cs-muted\">no reason recorded.</span>"} <a href="#" class="t" style="text-decoration:underline;" title="Record or correct why this case did not proceed" onclick="event.preventDefault();var b=document.getElementById('act-record-reason');if(b)b.click();">record reason</a></p>` : ""}
+    ${c.nps_score != null ? `<p class="panel-sub" style="margin-top:-8px;">Client review score: <strong style="color:${c.nps_score >= 9 ? "var(--green)" : c.nps_score >= 7 ? "var(--amber)" : "var(--red)"};">${c.nps_score}/10</strong></p>` : ""}
+    ${id ? `
+    <div style="margin-top:14px;">
+      <h3 style="font-size:14px;">Tasks</h3>
+      ${/* R12a·D10 — the DUE chips used to sit BELOW this row, i.e. after the Add button in both
+            reading and tab order, so the natural gesture (type the title, press Enter) submitted
+            before the operator had reached the thing that sets the date. They now sit between the
+            title box and the row that ends in Add, which is the order the task is actually
+            composed in. The dateless-submit default below is the belt to this braces. */ ""}
+      <div class="due-chips" style="margin:8px 0 6px;">
+        <span class="due-chips-lbl">Due:</span>
+        <button type="button" class="btn btn-sm due-chip" data-days="1">Tomorrow</button>
+        <button type="button" class="btn btn-sm due-chip" data-days="3">+3d</button>
+        <button type="button" class="btn btn-sm due-chip" data-days="7">+1wk</button>
+        <button type="button" class="btn btn-sm due-chip" data-months="1">+1mo</button>
+      </div>
+      <div style="display:flex;gap:8px;margin:0 0 8px;flex-wrap:wrap;">
+        <input id="new-task" placeholder="Add a task…" style="flex:1;min-width:140px;">
+        <select id="new-task-assignee" aria-label="Assign task to" style="width:auto;" title="Assign task to">${TEAM.map((p) => `<option value="${p.id}" ${p.id === defaultAssignee(c.assigned_to) ? "selected" : ""}>${esc(staffName(p.id))}</option>`).join("")}</select>
+        <input id="new-task-due" type="date" style="width:auto;" title="Leave this empty and the task is due tomorrow — a task with no date appears on no list anywhere.">
+        <button class="btn btn-sm" id="add-task-btn" title="Add task">Add task</button>
+      </div>
+      <div id="tasks-inline">${tasks.map((t) => `
+        <div class="row-item" style="padding:7px 4px;">
+          <div class="row-main">
+            <div style="${t.done_at ? "text-decoration:line-through;color:var(--muted);" : ""}">${esc(t.title)}</div>
+            <div class="s">${t.due_date ? "due " + fmtD(t.due_date) : ""}${t.done_at ? " · done" : ""}</div>
+          </div>
+          ${/* R12a·D12 — a done row used to be a dead end: struck through, no control, and the only
+                way back was the database. done_at is nullable and reopening is simply setting it
+                back to null, so the row that RECORDS the mistake is also the row that fixes it. */ ""}
+          ${t.done_at ? assigneeChipHtml(t.assigned_to) : taskAssigneeHtml(t.id, t.assigned_to, "")}${t.done_at
+            ? `<button class="btn btn-sm task-reopen" aria-label="Reopen this task" title="Put this task back on the list — it was marked done" onclick="reopenTaskInCase('${t.id}','${id}')">↺ Reopen</button>`
+            : `<button class="btn btn-sm" aria-label="Mark task done" title="Mark task done" onclick="doneTaskInCase('${t.id}','${id}')">✓</button>`}
+        </div>`).join("") || '<div class="empty">No tasks.</div>'}</div>
+    </div>
+    ${/* R17 · §1 — the Stage checklist sits directly under Tasks: the house steps for the current
+         stage, each a one-click add that writes a real case_tasks row and dedupes against what is
+         already open. Advisory; renders only where the stage has steps (never on not_proceeding). */ ""}
+    ${id ? caseStageChecklistHtml(c, tasks) : ""}
+    ${/* R9-5 · m10 — THE DOCUMENT CHECKLIST. Between Tasks and Notes because that is where it sits
+         in the day: it is work outstanding, not history. Absent entirely on a database without the
+         migration — see docsSupported(). Painted by renderCaseDocs() below. */ ""}
+    ${/* R15 · §3+§4 — Documents renders in full up to Exchange; at completed+not_proceeding it
+         collapses into a <details> (kept reachable, not front-and-centre). The static intro is CUT:
+         the section title and its outstanding/received counts already say what it is. #case-docs-body
+         exists in both variants, so renderCaseDocs paints the same either way. */ ""}
+    ${docsOn ? (caseSectionFull("documents", c.stage) ? `
+    <div style="margin-top:14px;" id="case-docs">
+      <h3 style="font-size:14px;">Documents <span class="cs-muted" style="font-weight:400;" title="What this client has been asked for and what has arrived. The document emails list only what is still outstanding.">?</span></h3>
+      <div id="case-docs-body"></div>
+    </div>` : `
+    <details style="margin-top:14px;" id="case-docs" class="case-docs-compact">
+      <summary style="font-size:14px;font-weight:600;cursor:pointer;">Documents <span class="cs-muted" style="font-weight:400;">(checklist — click to expand)</span></summary>
+      <div id="case-docs-body"></div>
+    </details>`) : ""}
+    ${/* R13 · M-2 — THE FIRM'S OWN PAPERS. Directly under Documents so the pair read as one idea
+         with two halves, and worded so nobody has to work out which is which: the sub-line names
+         the distinction outright. Absent entirely, with the absence STATED, on a database without
+         the table — see caseFilesSupported(). Painted by renderCaseFiles() below. */ ""}
+    ${/* R15 · §3+§4 — the firm's own case papers appear once a case is real (DIP onward) and are
+         HIDDEN at enquiry+fact_find. Wrapped/hidden, never deleted (#case-files-body stays for
+         renderCaseFiles). Intro shortened to one line + a title tooltip; the old "no case_files
+         table" migration paragraph is CUT to a single muted line. */ ""}
+    ${id ? `<div style="margin-top:14px;" id="case-files"${caseSectionVisible("files", c.stage) ? "" : ' class="hidden"'}>
+      <h3 style="font-size:14px;">Files</h3>
+      ${filesOn
+        ? `<p class="panel-sub" style="margin:2px 0 6px;" title="The illustration/ESIS, the research, the signed client agreement, the offer and suitability letters. Documents above are what we ask the client for; these are what we produce or receive. Nothing here is chased or sent to the client.">The firm's own case papers — what we produce or receive, not what we ask the client for. <span class="cs-muted">?</span></p>
+      <div id="case-files-body"></div>`
+        : '<p class="panel-sub cs-muted" style="margin:2px 0 6px;">No case-files table on this database yet.</p>'}
+    </div>` : ""}
+    <div style="margin-top:14px;">
+      <h3 style="font-size:14px;">Notes</h3>
+      <div style="display:flex;gap:8px;margin:8px 0 0;flex-wrap:wrap;">
+        <input id="new-note" placeholder="Add a note…" style="flex:1;min-width:140px;">
+        <button class="btn btn-sm" id="add-note-btn" title="Add note">Add note</button>
+      </div>
+      <div class="type-chips" id="note-type-chips">
+        <button type="button" class="tl-chip active" data-type="note">📝 Note</button>
+        <button type="button" class="tl-chip" data-type="call">📞 Call</button>
+        <button type="button" class="tl-chip" data-type="email">✉️ Email</button>
+        <button type="button" class="tl-chip" data-type="meeting">🤝 Meeting</button>
+      </div>
+      ${/* R6.4 H-01 — the markers are in this same list, so the set of notes that have
+            been re-filed away is read straight off it: no extra query, and the strike
+            and the marker can never disagree about which note they describe. */ ""}
+      <div id="notes-list">${(() => { const rf = refiledNoteIds(notes); return notes.map((n) => noteRowHtml(n.body, new Date(n.created_at).toLocaleString("en-GB"), n.created_by, { noteId: n.id, refiled: rf.has(String(n.id)) })).join(""); })() || '<div class="empty">No notes yet.</div>'}</div>
+    </div>
+    ${/* BACKEND-R4 §2/§3 — what the database recorded, as opposed to what anyone typed. */ ""}
+    <div style="margin-top:14px;" id="case-history">
+      ${/* R15 · §4 — History intro CUT. The heading and the timeline itself say what it is; the
+           detail lives in the tooltip. Change history sits directly below. */ ""}
+      <h3 style="font-size:14px;">History <span class="cs-muted" style="font-weight:400;" title="Written by the database as the case progresses — stage changes, fee status, offer uploads, rate-end dates, protection status and reassignment, each with who made the change. Other field edits are in Change history below.">?</span></h3>
+      <div class="tl-list" id="case-events-list">${eventTimelineHtml(events)}</div>
+      ${auditPanelHtml("case-audit", auditRows)}
+    </div>
+    ${/* R15 · §2 — the action bar is now stage- and type-reactive: only stage-relevant actions in
+         the primary row, the Advance button is the hero when not terminal, and EVERYTHING else
+         collapses into #case-more-actions. Every id + handler is preserved (see caseActionBarHtml
+         and CASE_ACTION_RULES); a non-primary action is reachable in the overflow, never removed. */ ""}
+    ${caseActionBarHtml(c, c.stage, c.case_kind, { heroesActive: !nextStage })}
+    ${/* R5-4 — where a parsed mortgage offer PROPOSES its readings (Current vs Incoming, ticked
+         field by field) instead of writing them behind the operator's back. Empty until a parse. */ ""}
+    <div id="offer-diff" class="offer-diff hidden"></div>` : ""}
+    <details class="case-details" ${id ? "" : "open"}>
+      <summary>Case details</summary>
+      <form id="case-form" class="form-grid" data-case-id="${id || ""}">
       <label class="full">Client
         <select name="client_id" id="case-client-select" required><option value="">— select client —</option>${clientOpts}<option value="__new__">+ New client…</option></select>
       </label>
@@ -12147,8 +10408,6 @@ window.openCase = async function (id, opts = {}) {
       </label>` : ""}
       <label>Type<select name="case_kind">${KINDS.map(([k, l]) => `<option value="${k}" ${k === c.case_kind ? "selected" : ""}>${l}</option>`).join("")}</select></label>
       <label>Stage<select name="stage">${STAGES.map(([k, l]) => `<option value="${k}" ${k === c.stage ? "selected" : ""}${k === "decision_in_principle" ? ` title="${TIP_DIP}"` : ""}>${l}</option>`).join("")}</select></label>
-`;
-  const caseRestFieldsHtml = `
       <label>Lender<input name="lender" value="${esc(c.lender)}"></label>
       ${/* R14 — the mortgage / account number, beside the lender it belongs to. It is what a lender
             asks for to pull the case up, and it feeds the security-check card at the top of this
@@ -12282,173 +10541,15 @@ window.openCase = async function (id, opts = {}) {
       <label id="case-referrer-field" title="The existing client who sent this one to you. Start typing a surname to jump down the list. When this case completes you will be offered a thank-you task on their case — nothing is emailed to anyone.">Referred by (client)
         <select name="referrer_client_id" id="case-referrer-select"><option value="">— nobody —</option>${referrerOrphanOpt}${referrerOpts}</select>
       </label>` : ""}
-`;
-  const caseAssignedFieldHtml = `
       ${/* R5-36 — a new case starts on ME, not on nobody: unassigned cases were being created by the
            dozen and only surfaced later in Data Health. An existing case keeps whatever it has. */ ""}
       <label>Assigned to<select name="assigned_to"><option value="">— unassigned —</option>${assigneeOptionsHtml(id ? c.assigned_to : defaultAssignee((ME && ME.id) || null))}</select></label>
-`;
-  const caseFormHtml = id ? `
-    <details class="case-details" >
-      <summary>Case details</summary>
-      <form id="case-form" class="form-grid" data-case-id="${id}">${caseCoreFieldsHtml}${caseRestFieldsHtml}${caseAssignedFieldHtml}
     </form>
-    </details>` : `
-    <form id="case-form" data-case-id="">
-      <div class="form-grid case-core-grid">${caseCoreFieldsHtml}${caseAssignedFieldHtml}
-      </div>
-      <details class="case-details">
-        <summary>Case details <span class="cs-muted" style="font-weight:400;">— the other forty-odd fields, all optional</span></summary>
-        <div class="form-grid">${caseRestFieldsHtml}
-        </div>
-      </details>
-    </form>`;
-  $("#modal").innerHTML = `
-    <h3>${id ? "Case" : "New case"}</h3>
-    ${/* R15 · §3 — the security card is a lender-call tool; it has nothing to hold before a lender
-         is involved, so it is HIDDEN at enquiry+fact_find and shown DIP→terminal. Wrapped, never
-         deleted: the node (and its toggle wiring) stays in the DOM, just hidden. */ ""}
-    ${id ? `<div id="case-sec-wrap"${caseSectionVisible("security", c.stage) ? "" : ' class="hidden"'}>${securityCardHtml(c, caseClient, secClient)}</div>` : ""}
-    ${summaryHeader}
-    ${c.retention_source_case_id ? `<p class="panel-sub" style="margin-top:-8px;">🔁 Retention opportunity — linked to a completed case. <span class="t" style="cursor:pointer;text-decoration:underline;" onclick="openCase('${c.retention_source_case_id}')">View original case</span></p>` : ""}
-    ${/* R15 · §6 — a not-proceeding case says WHY, prominently. Prefer the recorded lost_reason (a
-         select("*") carries it when the M2 columns exist); fall back to the last note; and offer a
-         one-click "record reason" that fires the same affordance the action bar carries. */ ""}
-    ${id && c.stage === "not_proceeding" ? `<p class="panel-sub case-lost-banner" style="margin-top:-8px;color:var(--red);">🚫 Not proceeding${
-        c.lost_reason ? ` — <strong>${esc(LOST_REASON_LABEL[c.lost_reason] || String(c.lost_reason).replace(/_/g, " "))}</strong>${c.lost_detail ? ": " + esc(c.lost_detail) : ""}`
-        : lastNote ? ` — <span class="cs-muted">last note:</span> ${esc(noteSnip(lastNote.body))}`
-        : " — <span class=\"cs-muted\">no reason recorded.</span>"} <a href="#" class="t" style="text-decoration:underline;" title="Record or correct why this case did not proceed" onclick="event.preventDefault();var b=document.getElementById('act-record-reason');if(b)b.click();">record reason</a></p>` : ""}
-    ${c.nps_score != null ? `<p class="panel-sub" style="margin-top:-8px;">Client review score: <strong style="color:${c.nps_score >= 9 ? "var(--green)" : c.nps_score >= 7 ? "var(--amber)" : "var(--red)"};">${c.nps_score}/10</strong></p>` : ""}
-    ${id ? `
-    <div style="margin-top:14px;">
-      <h3 style="font-size:14px;">Tasks</h3>
-      ${/* R12a·D10 — the DUE chips used to sit BELOW this row, i.e. after the Add button in both
-            reading and tab order, so the natural gesture (type the title, press Enter) submitted
-            before the operator had reached the thing that sets the date. They now sit between the
-            title box and the row that ends in Add, which is the order the task is actually
-            composed in. The dateless-submit default below is the belt to this braces. */ ""}
-      <div class="due-chips" style="margin:8px 0 6px;">
-        <span class="due-chips-lbl">Due:</span>
-        <button type="button" class="btn btn-sm due-chip" data-days="1">Tomorrow</button>
-        <button type="button" class="btn btn-sm due-chip" data-days="3">+3d</button>
-        <button type="button" class="btn btn-sm due-chip" data-days="7">+1wk</button>
-        <button type="button" class="btn btn-sm due-chip" data-months="1">+1mo</button>
-      </div>
-      <div style="display:flex;gap:8px;margin:0 0 8px;flex-wrap:wrap;">
-        <input id="new-task" placeholder="Add a task…" style="flex:1;min-width:140px;">
-        <select id="new-task-assignee" aria-label="Assign task to" style="width:auto;" title="Assign task to">${TEAM.map((p) => `<option value="${p.id}" ${p.id === defaultAssignee(c.assigned_to) ? "selected" : ""}>${esc(staffName(p.id))}</option>`).join("")}</select>
-        <input id="new-task-due" type="date" style="width:auto;" title="Leave this empty and the task is due tomorrow — a task with no date appears on no list anywhere.">
-        <button class="btn btn-sm" id="add-task-btn" title="Add task">Add task</button>
-      </div>
-      <div id="tasks-inline">${tasks.map((t) => `
-        <div class="row-item" style="padding:7px 4px;">
-          <div class="row-main">
-            <div style="${t.done_at ? "text-decoration:line-through;color:var(--muted);" : ""}">${esc(t.title)}</div>
-            <div class="s">${t.due_date ? "due " + fmtD(t.due_date) : ""}${t.done_at ? " · done" : ""}</div>
-          </div>
-          ${/* R12a·D12 — a done row used to be a dead end: struck through, no control, and the only
-                way back was the database. done_at is nullable and reopening is simply setting it
-                back to null, so the row that RECORDS the mistake is also the row that fixes it. */ ""}
-          ${t.done_at ? assigneeChipHtml(t.assigned_to) : taskAssigneeHtml(t.id, t.assigned_to, "")}${t.done_at
-            ? `<button class="btn btn-sm task-reopen" aria-label="Reopen this task" title="Put this task back on the list — it was marked done" onclick="reopenTaskInCase('${t.id}','${id}')">↺ Reopen</button>`
-            : `<button class="btn btn-sm" aria-label="Mark task done" title="Mark task done" onclick="doneTaskInCase('${t.id}','${id}')">✓</button>`}
-        </div>`).join("") || '<div class="empty">No tasks.</div>'}</div>
-    </div>
-    ${/* R17 · §1 — the Stage checklist sits directly under Tasks: the house steps for the current
-         stage, each a one-click add that writes a real case_tasks row and dedupes against what is
-         already open. Advisory; renders only where the stage has steps (never on not_proceeding). */ ""}
-    ${id ? caseStageChecklistHtml(c, tasks) : ""}
-    ${/* R9-5 · m10 — THE DOCUMENT CHECKLIST. Between Tasks and Notes because that is where it sits
-         in the day: it is work outstanding, not history. Absent entirely on a database without the
-         migration — see docsSupported(). Painted by renderCaseDocs() below. */ ""}
-    ${/* R15 · §3+§4 — Documents renders in full up to Exchange; at completed+not_proceeding it
-         collapses into a <details> (kept reachable, not front-and-centre). The static intro is CUT:
-         the section title and its outstanding/received counts already say what it is. #case-docs-body
-         exists in both variants, so renderCaseDocs paints the same either way. */ ""}
-    ${docsOn ? (caseSectionFull("documents", c.stage) ? `
-    <div style="margin-top:14px;" id="case-docs">
-      <h3 style="font-size:14px;">Documents <span class="cs-muted" style="font-weight:400;" title="What this client has been asked for and what has arrived. The document emails list only what is still outstanding.">?</span></h3>
-      <div id="case-docs-body"></div>
-    </div>` : `
-    <details style="margin-top:14px;" id="case-docs" class="case-docs-compact">
-      <summary style="font-size:14px;font-weight:600;cursor:pointer;">Documents <span class="cs-muted" style="font-weight:400;">(checklist — click to expand)</span></summary>
-      <div id="case-docs-body"></div>
-    </details>`) : ""}
-    ${/* R13 · M-2 — THE FIRM'S OWN PAPERS. Directly under Documents so the pair read as one idea
-         with two halves, and worded so nobody has to work out which is which: the sub-line names
-         the distinction outright. Absent entirely, with the absence STATED, on a database without
-         the table — see caseFilesSupported(). Painted by renderCaseFiles() below. */ ""}
-    ${/* R15 · §3+§4 — the firm's own case papers appear once a case is real (DIP onward) and are
-         HIDDEN at enquiry+fact_find. Wrapped/hidden, never deleted (#case-files-body stays for
-         renderCaseFiles). Intro shortened to one line + a title tooltip; the old "no case_files
-         table" migration paragraph is CUT to a single muted line. */ ""}
-    ${id ? `<div style="margin-top:14px;" id="case-files"${caseSectionVisible("files", c.stage) ? "" : ' class="hidden"'}>
-      <h3 style="font-size:14px;">Files</h3>
-      ${filesOn
-        ? `<p class="panel-sub" style="margin:2px 0 6px;" title="The illustration/ESIS, the research, the signed client agreement, the offer and suitability letters. Documents above are what we ask the client for; these are what we produce or receive. Nothing here is chased or sent to the client.">The firm's own case papers — what we produce or receive, not what we ask the client for. <span class="cs-muted">?</span></p>
-      <div id="case-files-body"></div>`
-        : '<p class="panel-sub cs-muted" style="margin:2px 0 6px;">No case-files table on this database yet.</p>'}
-    </div>` : ""}
-    <div style="margin-top:14px;">
-      <h3 style="font-size:14px;">Notes</h3>
-      <div style="display:flex;gap:8px;margin:8px 0 0;flex-wrap:wrap;">
-        ${/* R33 · W5 — a textarea, not a single-line input. The call logger six inches above this
-              (#cs-call-note) is a textarea, and a note is the same kind of writing: the R32 panel
-              watched people compose a three-line note in a box that showed them forty characters
-              of it. Enter still submits and Shift+Enter still makes a newline — the keydown
-              handler below was already written that way, it just had nowhere to put the line. */ ""}
-        <textarea id="new-note" rows="2" placeholder="Add a note…" style="flex:1;min-width:140px;"></textarea>
-        <button class="btn btn-sm" id="add-note-btn" title="Add note">Add note</button>
-      </div>
-      <div class="type-chips" id="note-type-chips">
-        <button type="button" class="tl-chip active" data-type="note">📝 Note</button>
-        <button type="button" class="tl-chip" data-type="call">📞 Call</button>
-        <button type="button" class="tl-chip" data-type="email">✉️ Email</button>
-        <button type="button" class="tl-chip" data-type="meeting">🤝 Meeting</button>
-      </div>
-      ${/* R40 — the standalone #notes-list that used to sit here is GONE. A note now appears in
-            History directly below, where it sits in date order among the calls, emails,
-            appointments and stage changes it actually belongs with — and where the timeline
-            renders it RICHER than this list did (re-file strike + badge + Re-file button, review
-            score chips, author chips are all in the shared builder). The composer above is
-            untouched and is now immediately above History, so the gesture reads straight down:
-            write the note, watch it land in the file. */ ""}
-    </div>
-    ${/* BACKEND-R4 §2/§3 + R40 — ONE history per case: what anyone typed and what the database
-         recorded, merged and in date order, instead of a notes list and a stage list that had to
-         be read side by side and mentally interleaved. */ ""}
-    <div style="margin-top:14px;" id="case-history">
-      ${/* R15 · §4 — History intro CUT. The heading and the timeline itself say what it is; the
-           detail lives in the tooltip. Change history sits directly below. */ ""}
-      <h3 style="font-size:14px;">History <span class="cs-muted" style="font-weight:400;" title="Everything that has happened on this case, newest first: notes, calls, emails and SMS (sent and failed), emails in from the client, appointments, fact-finds, completed tasks, and the rows the database writes as the case progresses — stage changes, fee status, offer uploads, rate-end dates, protection status and reassignment, each with who did it. Other field edits are in Change history below.">?</span></h3>
-      ${/* R40 — TWO chips, not the client record's nine. On the client page "activity" is the
-            default because system rows there are cross-case stage noise; inside ONE case the stage
-            changes ARE the history, so the default is "all" and nothing the old stage-only list
-            showed has disappeared from view. Activity is one click away for "just the human bits".
-            The filter row is deliberately a different id from the client page's #tl-filters. */ ""}
-      <div class="tl-filters" id="case-tl-filters">
-        <button type="button" class="tl-chip tl-filter active" data-cat="all">All</button>
-        <button type="button" class="tl-chip tl-filter" data-cat="activity">Activity</button>
-      </div>
-      <div class="tl-list" id="case-events-list">${renderTimelineList(tlItems, "all", CASE_TL_CAP, false)}</div>
-      ${auditPanelHtml("case-audit", auditRows)}
-    </div>
-    ${/* R15 · §2 — the action bar is now stage- and type-reactive: only stage-relevant actions in
-         the primary row, the Advance button is the hero when not terminal, and EVERYTHING else
-         collapses into #case-more-actions. Every id + handler is preserved (see caseActionBarHtml
-         and CASE_ACTION_RULES); a non-primary action is reachable in the overflow, never removed. */ ""}
-    ${caseActionBarHtml(c, c.stage, c.case_kind, { heroesActive: !nextStage })}
-    ${/* R5-4 — where a parsed mortgage offer PROPOSES its readings (Current vs Incoming, ticked
-         field by field) instead of writing them behind the operator's back. Empty until a parse. */ ""}
-    <div id="offer-diff" class="offer-diff hidden"></div>` : ""}
-    ${caseFormHtml}
+    </details>
     <div class="modal-actions">
-      ${/* R48 — case hard-delete removed (Daniel's binding decision). A case is only ever CLOSED via
-            the "🚫 Mark not proceeding" action (case-mark-np → moveCaseToStage + the R15 lost-reason
-            capture), never hard-deleted. The empty <div> is kept so .modal-actions holds its
-            space-between layout (Cancel/Save stay pinned right). confirmHardDelete lives on — it is
-            still used by the client delete and the merge flow. */ ""}
-      <div></div>
+      ${/* BACKEND-R4 §1 — deleting a case is Owner/Administrator only and RLS enforces it; an
+            adviser is simply never offered the button rather than shown a refusal. */ ""}
+      <div>${id && isAdminOrOwner() ? '<button class="btn btn-ghost btn-danger" id="del-case-btn">Delete case</button>' : ""}</div>
       <div class="right">
         <button class="btn" id="modal-cancel">Cancel</button>
         <button class="btn btn-primary" id="modal-save">Save</button>
@@ -12559,17 +10660,8 @@ window.openCase = async function (id, opts = {}) {
     const cid = clientSel.value;
     if (cid && sel.value === cid) sel.value = "";
     [...sel.options].forEach((o) => { if (o.value) o.hidden = !!cid && o.value === cid; });
-    // R36-B — that `sel.value = ""` is a programmatic write and fires no change event, so the
-    // combobox's visible text has to be told about it or it would still read the cleared name.
-    if (sel.__combo) sel.__combo.sync();
   }
   syncReferrerOptions();
-  /* R36-B · W6 — both of this form's client lists become type-to-filter pickers. Applied AFTER the
-     options are painted and after every listener above is bound: the enhancement writes through the
-     select those listeners are on (a real `change` event), so "+ New client…" opens the inline
-     name fields exactly as picking it from the native list always did. */
-  upgradeSelectToCombobox($("#case-client-select"), { placeholder: "Type a client's name…" });
-  upgradeSelectToCombobox($("#case-referrer-select"), { placeholder: "Type a name, or leave blank…" });
   wireCasePropertyPicker(siblingCases, id); // R6 — no-op when the M7 field isn't rendered
   $("#modal-cancel").onclick = closeModalGuarded; // defect 2 — Cancel is a "leave" path: it must warn about unsaved edits too
   $("#modal-save").onclick = async () => {
@@ -12603,15 +10695,12 @@ window.openCase = async function (id, opts = {}) {
       }
       if (!row.client_id) {
         // R12b · L-7
-        // R36-B — the select itself is hidden behind the searchable picker, so the red ring has to
-        // go on the box the operator can actually see. Typing in it clears the mark, as everywhere.
-        const cs = $("#case-client-select");
-        if (cs) (cs.__combo ? cs.__combo.input : cs).classList.add("field-invalid");
+        const cs = $("#case-client-select"); if (cs) cs.classList.add("field-invalid");
         return toast("Please choose a client");
       }
       if (id && row.stage !== c.stage && protectionGateBlocks({ stage: c.stage, protection_status: row.protection_status }, row.stage)) {
         toast("🛡️ Record the protection conversation before submitting — set a protection status");
-        const det = $("#modal .case-details"); if (det) det.open = true; // the field is inside the collapsible section — reveal it
+        const det = $(".case-details"); if (det) det.open = true; // the field is inside the collapsible section — reveal it
         const protSel = $("#case-form").elements.protection_status;
         if (protSel) { protSel.style.borderColor = "var(--red)"; protSel.style.boxShadow = "0 0 0 3px rgba(192,57,43,.18)"; protSel.focus(); }
         return;
@@ -12633,7 +10722,7 @@ window.openCase = async function (id, opts = {}) {
       const protNowTaken = row.protection_status === "policy_taken" && (!id || (c.protection_status || "not_discussed") !== "policy_taken");
       if (protNowTaken && !(Number(row.protection_commission) > 0)) {
         toast("A policy needs a commission figure — fill in \"Protection commission (£)\" before saving.");
-        const det = $("#modal .case-details"); if (det) det.open = true;
+        const det = $(".case-details"); if (det) det.open = true;
         const commEl = $("#case-form").elements.protection_commission;
         if (commEl) {
           commEl.style.borderColor = "var(--red)";
@@ -12940,66 +11029,14 @@ window.openCase = async function (id, opts = {}) {
     } finally { saveBtn.disabled = false; }
   };
   if (id) {
-    /* ---- R40 · the case History timeline: filter chips, Show more, and the add-note hook ----
-       Every lookup below goes through `histBox` (#case-history) rather than the document. The
-       client record can be open UNDERNEATH this modal with its own timeline in the DOM, carrying
-       the same .tl-more, .tl-chip and .tl-filter classes — R33's lesson, applied on the way in
-       rather than after the bug report. Re-rendering reads the items already in memory; nothing
-       here refetches. */
-    const histBox = $("#case-history");
-    let caseTlFilter = "all";           // see the chip comment in the markup — "all", not "activity"
-    let caseTlCap = CASE_TL_CAP;
-    const wireCaseTlMore = () => {
-      const more = histBox && histBox.querySelector(".tl-more");
-      if (more) more.onclick = () => { caseTlCap += 100; rerenderCaseTl(); };
+    const delCaseBtn = $("#del-case-btn"); // absent for an adviser — see the modal-actions block above
+    if (delCaseBtn) delCaseBtn.onclick = async () => {
+      const extra = c.stage === "completed" ? "⚠ This case is COMPLETED — deleting removes its fee/commission history from your records." : null;
+      if (!confirmHardDelete("Delete this case?", extra)) return;
+      const { error } = await db.from("cases").delete().eq("id", id);
+      if (error) return toast("Error: " + error.message);
+      closeModal(); toast("Case deleted"); loadPipeline(); loadDashboard();
     };
-    const rerenderCaseTl = () => {
-      const list = histBox && histBox.querySelector("#case-events-list");
-      if (!list) return;
-      list.innerHTML = renderTimelineList(tlItems, caseTlFilter, caseTlCap, false);
-      wireCaseTlMore();
-    };
-    wireCaseTlMore();
-    const caseTlChips = histBox && histBox.querySelector("#case-tl-filters");
-    if (caseTlChips) caseTlChips.querySelectorAll(".tl-filter").forEach((b) => b.onclick = () => {
-      const cur = caseTlChips.querySelector(".tl-filter.active"); if (cur) cur.classList.remove("active");
-      b.classList.add("active");
-      caseTlFilter = b.dataset.cat || "all";
-      caseTlCap = CASE_TL_CAP;   // a filter change is a new view, not a continuation of the old one
-      rerenderCaseTl();
-    });
-    /* R40 — the property chip the builder would have stamped on this case's rows, reproduced for
-       the optimistic inserts below. A single-case build can never have two cases on one building,
-       so the R6FIX-1 "shared address" tail never applies here — this IS the builder's answer for
-       a one-case call, not an approximation of it. */
-    const caseTlChip = propAddress(c) ? propChip(c, { cls: "tl-prop" }) : "";
-    /* R40 — a note used to be prepended to #notes-list; that list is gone, so it is prepended to
-       the timeline's items and the list is repainted. Inserted rather than rebuilt: rebuilding
-       means eight more reads and a repaint of a list the operator is looking at, to show them a
-       row whose every field we already hold. Shaped exactly like the builder's note items (same
-       category from the typed prefix, same review-score chip, same author chip) — with no Re-file
-       control, because the insert has no note id yet, which is the same thing the old in-place
-       prepend did. */
-    const prependCaseTlNote = (body, createdBy) => {
-      const nt = noteType(refileDisplayBody(body));
-      const rev = reviewNoteParse(refileDisplayBody(body));
-      const text = rev
-        ? reviewScoreChipHtml(rev.score, { cls: "tl-review-chip" }) + " " + (rev.comment ? esc(rev.comment) : '<span class="tl-muted">(no comment left)</span>')
-        : (esc(nt.cleanBody) || "(note)");
-      tlItems.unshift({
-        ts: new Date().toISOString(), cat: nt.type, icon: rev ? "⭐" : nt.icon,
-        title: text + authorChipHtml(createdBy),
-        /* R40 (CTO) — chip and label empty to match the loaded rows: the modal strips the per-row
-           case tag (see the tlItems.map above), so the optimistic insert must not be the one row
-           wearing one. caseTlChip is left computed above in case a future surface wants it. */
-        caseId: id, caseLabel: null, caseChip: "",
-      });
-      /* No filter reset: a note is not a system row, so it is visible under BOTH of this modal's
-         chips ("All" and "Activity") and the operator always sees the row they just wrote. */
-      rerenderCaseTl();
-    };
-    /* R48 — the #del-case-btn handler is gone with the button. A case is closed only through
-       "🚫 Mark not proceeding" now; there is no hard-delete path from the case modal. */
     const submitNote = async () => {
       const input = $("#new-note");
       const raw = input.value.trim();
@@ -13015,9 +11052,13 @@ window.openCase = async function (id, opts = {}) {
         const { data: { user } } = await db.auth.getUser();
         const { error } = await db.from("case_notes").insert({ case_id: id, body, created_by: user.id });
         if (error) return toast("Error: " + error.message);
-        // R40 — in place, as before (no full modal re-render / scroll reset), but into the History
-        // timeline that replaced the notes list. Newest-first, so it lands at the top.
-        prependCaseTlNote(body, user.id);
+        // In-place append (no full modal re-render / scroll reset): prepend to match the newest-first load order.
+        const list = $("#notes-list");
+        const empty = list.querySelector(".empty");
+        if (empty) empty.remove();
+        const wrap = document.createElement("div");
+        wrap.innerHTML = noteRowHtml(body, new Date().toLocaleString("en-GB"), user.id);
+        list.insertBefore(wrap.firstChild, list.firstChild);
         input.value = "";
         input.focus();
       } finally { noteBtn.disabled = false; }
@@ -13050,7 +11091,7 @@ window.openCase = async function (id, opts = {}) {
       taskBtn.disabled = true;
       try {
         /* R12a·D10 — A TASK WITH NO DATE IS ON NO LIST ANYWHERE.
-           My Day works off due dates, the diary is dates:
+           Tasks due filters `lte(due_date, +14d)`, My Day works off due dates, the diary is dates:
            a dateless row was written to the database, appeared once in this modal, and then
            existed nowhere a human would ever look at it again. So a submit with no date picked is
            defaulted to TOMORROW rather than refused — refusing would punish the fastest, most
@@ -13138,9 +11179,15 @@ window.openCase = async function (id, opts = {}) {
             snapshotModalState(); // the app made this change, not the operator — not an unsaved edit
           }
         }
-        // R40 — the logged call lands at the top of the History timeline (it used to be prepended
-        // to #notes-list, which no longer exists). Same optimistic insert as the note composer.
-        prependCaseTlNote(noteBody, user.id);
+        // Prepend the note to the list in place (matches newest-first load order).
+        const nlist = $("#notes-list");
+        if (nlist) {
+          const emptyN = nlist.querySelector(".empty");
+          if (emptyN) emptyN.remove();
+          const wrap = document.createElement("div");
+          wrap.innerHTML = noteRowHtml(noteBody, new Date().toLocaleString("en-GB"), user.id);
+          nlist.insertBefore(wrap.firstChild, nlist.firstChild);
+        }
         // Keep the summary "Last note" line current.
         const noteVal = $("#cs-note-val");
         if (noteVal) noteVal.innerHTML = `${esc(noteBody.length > 120 ? noteBody.slice(0, 120) + "…" : noteBody)} <span class="cs-muted">· just now</span>`;
@@ -13207,40 +11254,11 @@ window.openCase = async function (id, opts = {}) {
       try { res = await moveCaseToStage(id, nextStage, { promptStageEntry: true }); }
       finally { if (res === "blocked") advanceBtn.disabled = false; else openCase(id); }
     };
-    /* R35 §5 — the modal's move-to-any-stage select, beside Advance. Deliberately the SAME single
-       path as the advance button, the board card select and the board's drag: moveCaseToStage
-       carries the protection gate, the lost-reason capture, the reopen/complete confirms and the
-       missing-column fallbacks, and a second stage-write anywhere in this app would be a second
-       set of rules. Post-move handling mirrors the advance button exactly — reopen the case so
-       this modal's header, badges and action bar repaint at the new stage; a refusal or a
-       cancellation puts the select back to where the case actually is, because nothing moved. */
-    const stageSel = $("#cs-stage-select");
-    if (stageSel) stageSel.onchange = async () => {
-      const target = stageSel.value;
-      if (!target || target === c.stage) return;
-      stageSel.disabled = true;
-      let res;
-      try { res = await moveCaseToStage(id, target); }
-      finally {
-        if (res === "moved" || res === "reopened") openCase(id);
-        else { stageSel.value = c.stage; stageSel.disabled = false; }
-      }
-    };
     // "Set expected completion" nudge (BUILD 5c) — reveals Case details and focuses the field.
     const expNudge = $("#cs-expected-nudge");
     if (expNudge) expNudge.onclick = () => {
-      const det = $("#modal .case-details"); if (det) det.open = true;
+      const det = $(".case-details"); if (det) det.open = true;
       const inp = $("#case-expected-completion");
-      if (inp) { inp.scrollIntoView({ behavior: "smooth", block: "center" }); inp.focus(); }
-    };
-    /* R35 §3 — "add" beside the amber Rent — not captured badge. Same gesture as the
-       expected-completion nudge above: open Case details and land on the field that fixes it.
-       The selector is #modal-scoped (R33) — .case-details also exists on the client screen behind
-       the modal, and an unscoped $(".case-details") opens that one instead. */
-    const btlAddRent = $("#cs-btl-add-rent");
-    if (btlAddRent) btlAddRent.onclick = () => {
-      const det = $("#modal .case-details"); if (det) det.setAttribute("open", "");
-      const inp = $("#modal [name=monthly_rent]");
       if (inp) { inp.scrollIntoView({ behavior: "smooth", block: "center" }); inp.focus(); }
     };
     const retentionBtn = $("#cs-retention-btn"); // R5-6 — the manual retention path
@@ -13280,6 +11298,9 @@ window.openCase = async function (id, opts = {}) {
       if (error) return toast("Error: " + error.message);
       window.open(data.signedUrl, "_blank");
     };
+    // R52 — email the offer PDF to the client. Queues held (like the other client emails) until
+    // sending is switched on; the send then attaches the PDF from the offers bucket.
+    if (c.offer_doc_path) $("#act-email-offer").onclick = () => emailOfferToClient(id, c);
     /* R15 · §2 — the "More actions" overflow toggle. In-memory only, like the security card: the
        modal re-renders on every open so the menu is born closed and this just flips .hidden + the
        aria state. A click on the menu itself does not bubble up and re-close it. */
@@ -13295,26 +11316,12 @@ window.openCase = async function (id, opts = {}) {
     // R15 · §6 — record-reason exists only at not_proceeding (primary there). Reuses promptLostReason.
     const recordReasonBtn = $("#act-record-reason");
     if (recordReasonBtn) recordReasonBtn.onclick = () => window.recordLostReason(id, c);
-    /* R35 §5 — "Mark not proceeding", from the overflow. The confirm names the consequence before
-       moveCaseToStage's own lost-reason capture asks WHY; cancelling either one leaves the case
-       exactly where it was. No stage write of its own — the single path does all of it. */
-    const markNpBtn = $("#case-mark-np");
-    if (markNpBtn) markNpBtn.onclick = async () => {
-      if (!confirm("Mark this case as Not proceeding? It leaves the live pipeline — it stops appearing on the board's working stages and in the live figures. You will be asked to record why. It can be moved back later.")) return;
-      markNpBtn.disabled = true;
-      let res;
-      try { res = await moveCaseToStage(id, "not_proceeding"); }
-      finally {
-        if (res === "moved" || res === "reopened") openCase(id);
-        else markNpBtn.disabled = false;
-      }
-    };
     /* R15 · §6 — the OFFER/EXCHANGE "Discuss protection →" prompt chip. Reveals the protection
        field in Case details (same gesture as the expected-completion nudge), so the adviser records
        the conversation on the field the reports read. */
     const protPrompt = $("#cs-prot-warn.cs-prot-prompt") || (function () { const el = $("#cs-prot-warn"); return el && el.classList.contains("cs-prot-prompt") ? el : null; })();
     if (protPrompt) protPrompt.onclick = () => {
-      const det = $("#modal .case-details"); if (det) det.open = true;
+      const det = $(".case-details"); if (det) det.open = true;
       const sel = $("#case-form") && $("#case-form").elements.protection_status;
       if (sel) { sel.scrollIntoView({ behavior: "smooth", block: "center" }); sel.focus(); }
     };
@@ -13324,7 +11331,7 @@ window.openCase = async function (id, opts = {}) {
      unblocks it, highlighted, rather than leaving the operator to hunt for it.
      openDetails: an offer was just applied — show the values that changed. */
   if (id && (opts.revealProtection || opts.openDetails)) {
-    const det = $("#modal .case-details"); if (det) det.open = true;
+    const det = $(".case-details"); if (det) det.open = true;
     if (opts.revealProtection) {
       const protSel = $("#case-form") && $("#case-form").elements.protection_status;
       if (protSel) {
@@ -13333,19 +11340,6 @@ window.openCase = async function (id, opts = {}) {
         protSel.scrollIntoView({ behavior: "smooth", block: "center" });
         protSel.focus();
       }
-    }
-  }
-  /* R37 · K2 — { scrollTo: "docs" }. A row that flagged DOCUMENTS (Data health's "Waiting on
-     documents" queue) used to open the case at the top, with the checklist it is ABOUT several
-     screens down. Purely additive and optional: openCase(id) with no second argument behaves
-     exactly as it always has, which matters because it is window-exposed and called from inline
-     handlers and tests. At completed/not_proceeding the Documents block is a <details>, so it is
-     expanded first — scrolling to a closed summary would be a scroll to nothing. */
-  if (id && opts.scrollTo === "docs") {
-    const docs = $("#modal #case-docs");
-    if (docs) {
-      if (docs.tagName === "DETAILS") docs.open = true;
-      docs.scrollIntoView({ behavior: "smooth", block: "start" });
     }
   }
 };
@@ -13374,30 +11368,6 @@ function feePaidDatesHtml(c) {
 // A date-only capture stored as a timestamp at local midday, so no timezone shift can move the
 // money into the day before (which would move it into the previous month's figures).
 const feeDateToTs = (d) => new Date(String(d) + "T12:00:00").toISOString();
-/* R44 — the LEGACY-COLUMN RULE, lifted out of markFeePaid unchanged so there is exactly one copy
-   of it (R38's one-source rule). Two callers now stamp a fee paid date: the Mark-fee-paid overlay
-   below, and the Stonebridge statement reconciliation on Monday money, which writes a proc fee the
-   moment the operator confirms the bank actually paid it. The reasoning both need is the R13-M2
-   one: `fee_status`/`fee_paid_at` are the pre-M2 single-fee columns, and they may only flip to
-   "paid" once EVERY fee type that carries an amount has a date — otherwise a part-paid case would
-   read as settled. `fee_paid_at` keeps the LAST of those dates, because that is the day the case
-   finished being paid.
-   `c` is the case as it will be AFTER this write (the caller merges any amount it is setting in
-   the same patch — the reconciliation sets proc_fee from the banked gross when the case has none),
-   so completeness is judged against the amounts that will actually be stored, not the stale ones.
-   `picked` is [{ t: <FEE_TYPES entry>, date: "YYYY-MM-DD" }]. */
-function feePaidPatch(c, picked) {
-  const patch = {};
-  (picked || []).forEach((x) => { patch[x.t.dateCol] = feeDateToTs(x.date); });
-  const types = FEE_TYPES.filter((t) => Number((c || {})[t.amountCol] || 0) > 0);
-  const allDates = types.map((t) => patch[t.dateCol] || (c || {})[t.dateCol] || null);
-  const complete = types.length > 0 && allDates.every(Boolean);
-  if (complete) {
-    patch.fee_status = "paid";
-    patch.fee_paid_at = allDates.slice().sort()[allDates.length - 1]; // legacy column keeps the LAST payment
-  }
-  return { patch, complete };
-}
 async function markFeePaid(caseId, c) {
   const today = localDateStr();
   const types = FEE_TYPES.filter((t) => Number(c[t.amountCol] || 0) > 0);
@@ -13462,10 +11432,16 @@ async function markFeePaid(caseId, c) {
     };
   });
   if (!picked) return;
+  const patch = {};
+  picked.forEach((x) => { patch[x.t.dateCol] = feeDateToTs(x.date); });
   // "Paid" only when every fee type that HAS an amount now has a date — otherwise the case stays
   // as it is (requested / not_requested) and the per-type dates tell the part-paid story.
-  // R44 — that rule now lives in feePaidPatch() above, shared with the statement reconciliation.
-  const { patch, complete } = feePaidPatch(c, picked);
+  const allDates = types.map((t) => patch[t.dateCol] || c[t.dateCol] || null);
+  const complete = allDates.every(Boolean);
+  if (complete) {
+    patch.fee_status = "paid";
+    patch.fee_paid_at = allDates.slice().sort()[allDates.length - 1]; // legacy column keeps the LAST payment
+  }
   let { error } = await db.from("cases").update(patch).eq("id", caseId);
   if (error && isMissingColumnError(error)) {
     // Pre-M2 fallback: one date for the lot, and say so rather than pretending it was itemised.
@@ -13507,10 +11483,17 @@ const OFFER_FIELDS = [
   { col: "rate_type", label: "Rate type" },
   { col: "rate_end_date", label: "Rate end date", date: true },
   { col: "erc_end_date", label: "ERC end date", date: true },
+  { col: "offer_issued_date", label: "Offer date", date: true },
   { col: "offer_expiry_date", label: "Offer expiry date", date: true },
   { col: "loan_amount", label: "Loan amount", num: true, money: true },
+  { col: "current_balance", label: "Balance", num: true, money: true },
   { col: "property_value", label: "Property value", num: true, money: true },
+  { col: "monthly_payment", label: "Monthly payment", num: true, money: true },
+  { col: "reversion_rate", label: "Reversion rate %", num: true },
+  { col: "repayment_method", label: "Repayment method", fmt: repaymentMethodLabel },
   { col: "term_years", label: "Term (years)", num: true },
+  { col: "mortgage_account_number", label: "Account number" },
+  { col: "lender_reference", label: "Lender reference" },
 ];
 let pendingOffer = null; // { caseId, path, offer, rows } while a parsed offer awaits Apply/Discard
 
@@ -13533,7 +11516,7 @@ function offerDiffRows(offer, cRow, propOn) {
       : (f.num ? Number(cur) === Number(inc) : String(cur).trim() === String(inc).trim()));
     if (same) return;                                          // already matches — nothing to propose
     const disp = (v, empty) => (empty ? '<span class="cs-muted">— empty —</span>'
-      : f.money ? esc(fmtM(v)) : f.date ? esc(fmtD(v)) : esc(String(v)));
+      : f.money ? esc(fmtM(v)) : f.date ? esc(fmtD(v)) : f.fmt ? esc(f.fmt(v)) : esc(String(v)));
     rows.push({
       idx: i, col: f.col, label: f.label, incoming: inc,
       conflict: !curEmpty, checked: curEmpty,
@@ -13719,6 +11702,30 @@ async function discardOfferDiff() {
   const panel = $("#offer-diff");
   if (panel) { panel.innerHTML = ""; panel.classList.add("hidden"); }
   toast("Offer readings discarded — nothing was saved");
+}
+
+/* R52 — email the mortgage offer PDF to the client. This QUEUES an email carrying the offer
+   document's storage path; the sender attaches it from the offers bucket when it goes out. Client
+   email sending is still held (Resend not switched on), so the row is scheduled far ahead to sit
+   with the other parked client emails until sending is enabled and the queue is released. Nothing
+   leaves the building here — this only writes a queued row and a case note. */
+async function emailOfferToClient(caseId, c) {
+  if (!c || !c.offer_doc_path) return toast("Upload an offer document to the case first.");
+  const { data: cl, error: clErr } = await db.from("clients").select("email,first_name,last_name").eq("id", c.client_id).single();
+  if (clErr || !cl) return toast("Couldn't read the client record — try again.");
+  if (!cl.email) return toast("This client has no email address — add one first.");
+  const who = [cl.first_name, cl.last_name].filter(Boolean).join(" ") || "the client";
+  if (!confirm(`Email the mortgage offer PDF to ${who} at ${cl.email}?\n\nClient email is not switched on yet, so this will be QUEUED and held — it sends (with the offer attached) once email sending goes live.`)) return;
+  let uid = (ME && ME.id) || null;
+  try { const { data: { user } } = await db.auth.getUser(); if (user && user.id) uid = user.id; } catch (e) {}
+  const HELD_UNTIL = "2027-01-01T00:00:00Z"; // sit with the other parked client emails until sending is enabled
+  const { error } = await db.from("email_queue").insert({
+    case_id: caseId, client_id: c.client_id, email_type: "offer_update",
+    to_email: cl.email, attachment_path: c.offer_doc_path, scheduled_for: HELD_UNTIL,
+  });
+  if (error) return toast("Couldn't queue the offer email: " + error.message);
+  await db.from("case_notes").insert({ case_id: caseId, body: `📧 Offer queued to email to ${who} (${cl.email}) with the PDF attached — held until client email is switched on.`, created_by: uid });
+  toast(`Offer queued to email to ${who} — held until client email is switched on, then sent with the PDF attached.`);
 }
 
 async function queueEmail(caseId, clientId, type, c, ev) {
@@ -13969,9 +11976,7 @@ function renderClientAdviser(clients) {
   const strays = [...holders].filter((id) => !TEAM.some((p) => p.id === id))
     .map((id) => [id, (profileName(id) || `Not on the team (${id})`) + (profileName(id) ? " — no access" : ""), !!profileName(id)]);
   const noneN = (clients || []).filter((c) => clientAdviserIds(c).size === 0).length;
-  // R33 — label only ("All advisers", as #board-adviser and #diary-staff now say); the value is
-  // still "all" and every branch below still tests for it.
-  const opts = [["all", "All advisers"]].concat(teamOpts, strays, noneN ? [["none", "Nobody (unassigned cases only)"]] : []);
+  const opts = [["all", "Everyone"]].concat(teamOpts, strays, noneN ? [["none", "Nobody (unassigned cases only)"]] : []);
   if (!opts.some(([k]) => k === clientAdviser)) clientAdviser = "all";
   // R12b · K-15/K-17/L-16 — the third tuple element (present only on a "no access" stray) carries
   // the same explanation the other adviser filters give.
@@ -13991,47 +11996,19 @@ function renderClientAdviser(clients) {
 /* One fetch, cached for the life of the page visit. force:true re-reads (page navigation, a
    save, a completed bulk action); a keystroke in the search box does not. */
 let clientCache = null;
-/* R38 — the ONLY reader of that cache, so the Retention page's "Gone quiet" panel and the Clients
-   page share both the five reads and the answer they produce. Returns { error } untouched on a
-   failed read; the callers decide what to draw in its place. */
-async function clientDataCached(force) {
-  if (force || !clientCache) {
-    const res = await loadClientData();
-    if (res.error) return res;
-    clientCache = res;
-  }
-  return clientCache;
-}
-/* R38 — the cold set, from the shared data and the shared predicate. `adviser` is a staff id, or
-   "all" / "none" exactly as the Clients page's own filter uses them (see clientHasAdviser). */
-function coldClients(data, adviser) {
-  const ctx = { last: data.last, cutoffMs: clientContactCutoff().getTime() };
-  return (data.clients || []).filter((c) => clientHasAdviser(c, adviser) && clientInSegment(c, "cold", ctx));
-}
 async function loadClientData() {
   /* R18-P3 — bound the four comms reads to the last 210 days. These reads only feed the "last
      contact" detail and the cold segment. 210 days is wider than the ~183-day cold cutoff, so
      cold-segment membership is unchanged; only a client with no contact at all in 210 days shows a
      blank last-contact detail. The clients/cases embedded read stays unbounded. Index-served. */
   const commsSinceIso = new Date(Date.now() - 210 * 86400000).toISOString();
-  /* R36-A · L9 — ONE more column on the embed the page already reads, `property_address`, so the
-     list row can say how many BUILDINGS a client's cases sit on — the count the client record's
-     own "· 5 properties" label has given since R6 and the list's "5 cases (3 active)" badge never
-     could. Guarded by propAddrSupported() exactly as every other property-aware read is, so an
-     un-migrated (M7) database drops the column rather than 42703-ing the whole client list; the
-     badge simply doesn't appear there. Still one query. */
-  const clientPropOn = (await propAddrSupported()) !== false;
   const [clientsRes, notesRes, emailsRes, apptRes, tasksRes] = await Promise.all([
     /* R11-6 — widened by ONE existing base column, `lender`, so a row in a rate-end segment can
        say which lender the rate is with. It is an original-schema column (Reports has selected it
        since R7), so this cannot start 42703-ing on an older database, and it is a widening of the
        read this page already does rather than a second query. */
-    db.from("clients").select("*, cases!client_id(id,stage,rate_end_date,lender,protection_status,broker_fee,assigned_to,completed_at,updated_at,created_at" + (clientPropOn ? ",property_address" : "") + ")").order("last_name").limit(OWNER_ROW_CAP),
-    // R47 Gate 0 — `body` joins the select so a SYSTEM PROVENANCE note (the back-book import wrote
-    // one per policy/deal, all dated the import day) can be told apart from real contact. Counting
-    // them as "last contact" made every imported client read as spoken-to today and collapsed the
-    // cold list to nothing — the dangerous kind of wrong. Filtered out at the bump below.
-    db.from("case_notes").select("case_id,created_at,body").gte("created_at", commsSinceIso),
+    db.from("clients").select("*, cases!client_id(id,stage,rate_end_date,lender,protection_status,broker_fee,assigned_to,completed_at,updated_at,created_at)").order("last_name"),
+    db.from("case_notes").select("case_id,created_at").gte("created_at", commsSinceIso),
     db.from("email_queue").select("client_id,case_id,status,sent_at").gte("sent_at", commsSinceIso),
     db.from("appointments").select("client_id,case_id,starts_at").gte("starts_at", commsSinceIso),
     db.from("case_tasks").select("case_id,done_at").gte("done_at", commsSinceIso),
@@ -14049,7 +12026,7 @@ async function loadClientData() {
     const cur = last.get(clientId);
     if (!cur || String(at) > String(cur.at)) last.set(clientId, { at: String(at), what });
   };
-  (notesRes.data || []).forEach((n) => { if (isSystemProvenanceNote(n.body)) return; bump(caseOwner.get(n.case_id), n.created_at, "note"); });
+  (notesRes.data || []).forEach((n) => bump(caseOwner.get(n.case_id), n.created_at, "note"));
   // Only a row that actually WENT. queued/failed/cancelled are things we meant to say, not things
   // the client has heard, and counting them would let a bounced email hide a silent client.
   (emailsRes.data || []).forEach((e) => {
@@ -14108,19 +12085,12 @@ let clientSort = "name";
    are deliberately not counted: "next" means next, and a mortgage that matured in 2019 is a
    different conversation from one maturing in March. */
 function clientNextRateEnd(c, todayStr) {
-  let best = null, n = 0;
+  let best = null;
   (c.cases || []).forEach((x) => {
     const d = x.rate_end_date ? String(x.rate_end_date).slice(0, 10) : null;
     if (!d || d < todayStr) return;
-    /* R37 · L10 — count them, the same way clientRateEndInYear does. A four-property landlord read
-       "rate ends 14 Apr 2027 · Skipton" and nothing else, which is a true sentence that gives
-       exactly the wrong impression: it is ONE of their rates, and the row was silent about the
-       other three. The tail already existed inside the "Rate ends YYYY" segments; it was only the
-       SORT view that had no count to render, because this function always returned n: 0. */
-    n++;
     if (!best || d < best.date) best = { date: d, lender: x.lender || null, n: 0 };
   });
-  if (best) best.n = n;
   return best;
 }
 /* The rate end that put this client into the active "Rate ends YYYY" segment. That segment counts
@@ -14164,14 +12134,11 @@ function sortClientList(list, sort, todayStr, rateYear) {
   }
   return list;   // "name" — exactly the order the .order("last_name") query came back in
 }
-/* R38 — `adviser` is optional and defaults to the round-12b behaviour (the whole firm's). The
-   Retention page passes an id when its scope is Mine, because "work this list on Clients" from a
-   panel showing YOUR cold clients must not land on everybody's. */
-window.gotoClientSegment = function (seg, adviser) {
+window.gotoClientSegment = function (seg) {
   clientSegment = seg;
   const box = $("#client-search");
   if (box) box.value = "";                  // a segment reached from another page means the whole segment
-  clientAdviser = adviser || "all";         // R12b · W-29 — …and the whole firm's, unless the caller says whose
+  clientAdviser = "all";                    // R12b · W-29 — …and the whole firm's, for the same reason
   nav("clients");
 };
 /* R18-P4 — cap the number of client rows rendered. Segment/bulk counts are computed over the FULL
@@ -14182,13 +12149,12 @@ const CLIENT_LIST_CAP = 100;
 // handler (R18-P2) can re-render the bulk bar against it without re-wiring per row.
 let clientRenderedList = [];
 async function loadClients(filter = "", opts = {}) {
-  // R43 / R37 · L7 — same one-shot pair as the board, in the same order and for the same reasons
-  // (see loadPipeline): the server read first, then the local starter seed it may suppress.
-  loadSavedViews();
-  seedStarterViews();
-  const cached = await clientDataCached(opts.force);
-  if (cached.error) { renderLoadError("#client-list", cached.error, () => loadClients(filter, { force: true })); return; }
-  const { clients, last } = cached;
+  if (opts.force || !clientCache) {
+    const res = await loadClientData();
+    if (res.error) { renderLoadError("#client-list", res.error, () => loadClients(filter, { force: true })); return; }
+    clientCache = res;
+  }
+  const { clients, last } = clientCache;
   const cutoff = clientContactCutoff();
   const ctx = { last, cutoffMs: cutoff.getTime() };
   const f = filter.trim().toLowerCase();
@@ -14237,41 +12203,14 @@ async function loadClients(filter = "", opts = {}) {
   const capNote = list.length > CLIENT_LIST_CAP
     ? `<div class="client-list-cap-note">Showing ${CLIENT_LIST_CAP} of ${list.length} — refine your search to narrow the list.</div>`
     : "";
-  let clientSkipped = 0;   // R21 Part B — skip-and-count: one malformed row must not white-screen the list
-  const clientRowsHtml = (list.length ? capped.map((c) => {
-    try {
+  $("#client-list").innerHTML = `<div class="panel">` + (list.length ? capped.map((c) => {
     const cases = c.cases || [];
     const active = cases.filter((x) => CLIENT_LIVE(x.stage)).length;
     const lc = last.get(c.id);
     const re = (rateYear || showNextRate) ? clientRateKey(c, rateYear, todayStr) : null;
-    /* R37 · L10 — the "(+N more)" tail now renders in the rate-end SORT view too, not only inside a
-       "Rate ends YYYY" segment. Same tail, same shape, same count function; only the qualifier
-       changes, because the population being counted is different (this year's, vs everything still
-       ahead) and a tail that did not say which would be worse than no tail. */
-    const rateMore = re && re.n > 1
-      ? ` <span class="client-rateend-more" title="${esc(rateYear
-        ? `This client has ${re.n} cases with a rate ending in ${rateYear}. The row shows the earliest; open the record to see them all.`
-        : `This client has ${re.n} rate ends still ahead. The row shows the next one; open the record to see them all.`)}">(+${re.n - 1} more${rateYear ? ` in ${esc(rateYear)}` : ""})</span>`
-      : "";
     const rateBit = re
-      ? ` · <span class="client-rateend">rate ends ${esc(fmtD(re.date))} · ${re.lender ? esc(re.lender) : "lender not recorded"}${rateMore}</span>`
+      ? ` · <span class="client-rateend">rate ends ${esc(fmtD(re.date))} · ${re.lender ? esc(re.lender) : "lender not recorded"}${re.n > 1 ? ` (+${re.n - 1} more in ${esc(rateYear)})` : ""}</span>`
       : (showNextRate ? ` · <span class="client-rateend">no rate end ahead</span>` : "");
-    /* R36-A · L9(a) — the property count, on the row, from the cases this list ALREADY holds
-       (clientPropertyCount is the client record's own counter, shared). Silent at 0 or 1: a badge
-       reading "1 property" beside "1 case" is noise. Absent on an un-migrated database, where the
-       embed carries no property_address and every key is null. */
-    const propN = clientPropertyCount(cases);
-    const propBadge = propN > 1
-      ? `<span class="badge grey client-prop-n" title="This client's cases sit on ${propN} different properties. Open the record to see them grouped by building.">${propN} properties</span>`
-      : "";
-    /* R36-A · L9(b) — last contact, in days, on EVERY row rather than only in the Cold segment.
-       Same source (loadClientData's `last` map) and same wording helper (lastContactAgeLabel) the
-       cold cutoff itself uses, so the label and the segment can never disagree. The four comms
-       reads behind it are already bounded to 210 days and already fetched for the whole list, so
-       this costs nothing — but it is also the limit: a client with no contact inside that window
-       reads "no contact in 210 days", which is all the data on hand can honestly say. The Cold
-       segment keeps its fuller "last contact 12 Mar (note)" line; this is the muted short form. */
-    const lcAge = clientSegment === "cold" ? "" : ` · <span class="client-lc-age" title="${lc ? `Last contact: ${esc(lc.what)} on ${esc(fmtD(String(lc.at).slice(0, 10)))}.` : "Nothing recorded in the last 210 days — the window this page reads. Older contact is on the client record."}">${lc ? `last contact ${esc(lastContactAgeLabel(lc.at))}` : "no contact in 210 days"}</span>`;
     return `<div class="row-item client-row${clientSel.has(c.id) ? " is-sel" : ""}" data-client="${esc(c.id)}">
       <input type="checkbox" class="bulk-cb client-cb" data-id="${esc(c.id)}" aria-label="Select ${esc([c.first_name, c.last_name].filter(Boolean).join(" "))}"${clientSel.has(c.id) ? " checked" : ""}>
       <div class="row-main">
@@ -14281,22 +12220,11 @@ async function loadClients(filter = "", opts = {}) {
              one-click way to put it right. Everywhere else it stays off the row: a list of birthdays
              is not what the other six segments are for. */
           showDob ? ` · <span class="client-dob-missing">DOB: —</span> <a href="javascript:void(0)" class="client-dob-add" onclick="event.stopPropagation();openClient('${c.id}','dob')">add</a>` : ""}${
-          clientSegment === "cold" ? ` · <span class="client-lastcontact">${lc ? `last contact ${fmtD(String(lc.at).slice(0, 10))} (${esc(lc.what)})` : "no contact on record"}</span>` : ""}${lcAge}${rateBit}</div>
+          clientSegment === "cold" ? ` · <span class="client-lastcontact">${lc ? `last contact ${fmtD(String(lc.at).slice(0, 10))} (${esc(lc.what)})` : "no contact on record"}</span>` : ""}${rateBit}</div>
       </div>
-      ${propBadge}
       <span class="badge ${active ? "blue" : "grey"}">${cases.length} case${cases.length === 1 ? "" : "s"}${active ? ` (${active} active)` : ""}</span>
     </div>`;
-    } catch (err) {
-      clientSkipped++;
-      logClientError("caught", "client-list row render failed: " + ((err && err.message) || err), { recordId: c && c.id, where: "loadClients" });
-      return "";
-    }
-  }).join("") : "");
-  const clientSkipNote = clientSkipped > 0
-    ? `<div class="client-list-cap-note">${clientSkipped} record(s) couldn't be displayed — logged</div>`
-    : "";
-  $("#client-list").innerHTML = `<div class="panel">` + (list.length ? clientRowsHtml + clientSkipNote + capNote : `<div class="empty">${emptyMsg}</div>`) + `</div>`;
-  renderOwnerCapNotice("#clients-cap-notice", ownerCapHit(clients)); // R23 — the full clients read is the one most certain to exceed 1,000
+  }).join("") + capNote : `<div class="empty">${emptyMsg}</div>`) + `</div>`;
 }
 /* R18-P2 — ONE delegated change handler for the client-row checkboxes, wired once, instead of a
    fresh onchange per row on every render (which was O(rows) DOM work per keystroke). Class
@@ -14368,8 +12296,7 @@ function renderClientBulkBar(list) {
     <div class="bulk-bar" id="client-bulk-bar"${n ? "" : " hidden"}>
       <span class="bulk-bar-count"><strong id="client-bulk-n">${n}</strong> selected</span>
       <button type="button" class="btn btn-sm" id="client-bulk-task" title="One task per selected client, on that client's case. Says which clients it can and cannot place a task for before it writes anything.">＋ Add task…</button>
-      ${/* R42 · F7 — ⭳, the app's one download glyph (was ⬇). Label and id unchanged. */ ""}
-      <button type="button" class="btn btn-sm" id="client-bulk-csv" title="Download the selected clients as a spreadsheet.">⭳ Export CSV</button>
+      <button type="button" class="btn btn-sm" id="client-bulk-csv" title="Download the selected clients as a spreadsheet.">⬇ Export CSV</button>
       <button type="button" class="btn btn-sm" id="client-bulk-clear">Clear</button>
     </div>
     ${/* R8-2 — said where someone would look for the verb that isn't here, rather than only in a
@@ -14393,59 +12320,6 @@ function renderClientBulkBar(list) {
 $("#client-search").addEventListener("input", debounce(() => loadClients($("#client-search").value), 250)); // R18-P2 — read the live value at fire time
 $("#new-client-btn").addEventListener("click", () => openClient(null));
 
-// R31-B — saved filter views on the Clients page. Captured set is search + adviser + segment +
-// sort (the four filters the list actually reads). Same localStorage store as the board, under
-// the "clients" scope; applying one restores the vars and controls then re-renders the list.
-function clientsFilterState() {
-  const s = $("#client-search");
-  return { search: s ? s.value : "", adviser: clientAdviser, segment: clientSegment, sort: clientSort };
-}
-function applyClientsFilterState(f) {
-  if (!f) return;
-  const s = $("#client-search"); if (s) s.value = f.search || "";
-  if (f.adviser != null) clientAdviser = f.adviser;
-  if (f.segment != null) clientSegment = f.segment;
-  if (f.sort != null) { clientSort = f.sort; const cs = $("#cl-sort"); if (cs) cs.value = f.sort; }
-}
-function refreshClientViews() {
-  const sel = $("#client-views");
-  if (!sel) return;
-  const cur = sel.value;
-  sel.innerHTML = `<option value="">Saved views…</option>`
-    + savedViews("clients").map((v) => `<option value="${esc(v.name)}">${esc(v.name)}</option>`).join("");
-  if (cur && savedViews("clients").some((v) => v.name === cur)) sel.value = cur;
-}
-(() => {
-  const sel = $("#client-views"), saveBtn = $("#client-view-save"), delBtn = $("#client-view-del");
-  if (!sel) return;
-  refreshClientViews();
-  sel.addEventListener("change", (e) => {
-    const v = savedViews("clients").find((x) => x.name === e.target.value);
-    if (!v) return;
-    applyClientsFilterState(v.filters);
-    clientSel.clear();
-    loadClients($("#client-search").value);
-  });
-  if (saveBtn) saveBtn.addEventListener("click", () => {
-    const name = prompt("Save current client filters as…");
-    if (name == null) return;
-    const nm = String(name).trim();
-    if (!nm) return;
-    saveView("clients", nm, clientsFilterState());
-    refreshClientViews();
-    sel.value = nm;
-    toast("View saved");
-  });
-  if (delBtn) delBtn.addEventListener("click", () => {
-    const name = sel.value;
-    if (!name) { toast("Pick a saved view to delete"); return; }
-    if (!confirm(`Delete saved view "${name}"?`)) return;
-    deleteView("clients", name);
-    refreshClientViews();
-    toast("View deleted");
-  });
-})();
-
 /* ---------- R8-2 · BULK ACTIONS ON THE FILTERED SET ----------------------------------------
    TASK TARGETING, HONESTLY. case_tasks.case_id is NOT NULL — the schema has no client-level
    task row, exactly as R6FIX-1 found the schema has no client-level NOTE row. That fix ended
@@ -14467,115 +12341,22 @@ function clientTaskTarget(c) {
   if (cases.length === 1) return { caseId: cases[0].id, assignedTo: cases[0].assigned_to || null };
   const live = cases.filter((x) => CLIENT_LIVE(x.stage));
   if (live.length === 1) return { caseId: live[0].id, assignedTo: live[0].assigned_to || null };
-  /* R36-C — "many_live" now carries the cases it refused to choose between, so the caller can ASK
-     instead of skipping (see promptClientBulkCasePick). The refusal itself is unchanged: this
-     function still never picks one. `no_live` genuinely has nothing live to attach to, and
-     `no_case` nothing at all, so neither gets a choice — they are skipped exactly as before. */
-  return live.length > 1 ? { why: "many_live", choices: live } : { why: "no_live" };
+  return { why: live.length > 1 ? "many_live" : "no_live" };
 }
 function clientDisplayName(c) {
   return [c.first_name, c.last_name].filter(Boolean).join(" ") || c.email || c.phone || "(no name)";
 }
 const namedList = (names) => names.slice(0, 4).join(", ") + (names.length > 4 ? ` and ${names.length - 4} more` : "");
-/* ---------- R36-C · ASK, DON'T GUESS AND DON'T SKIP (R32 · L8) -------------------------------
-   The refusal above is right — a task hangs off a case and guessing which one is wrong — but
-   "skipped, file it by hand" fell hardest on exactly the clients this firm most wants to touch:
-   the landlord with four live buy-to-lets was unreachable by the verb that exists to reach a
-   hundred clients at once. So the ambiguity is now RESOLVED rather than avoided: every client
-   with more than one live case is listed once, with their own live cases in a select, and the
-   batch cannot proceed until each one has been either chosen or explicitly skipped. Nothing is
-   pre-picked (the default option is empty, not the first case) — a default here is the guess
-   this whole flow exists to refuse.
-   The chosen case then flows into the SAME targets list as every unambiguous client, so the
-   title / due date / assignee / write path below is one path, not two. */
-function bulkTaskCaseLabel(cs, siblings) {
-  const addr = propAddress(cs);
-  const kind = caseTypeLabel(cs);
-  /* R6FIX-1's rule, verbatim: the property is the label where there is one — but where the same
-     client holds two live cases on that ONE property (Ruby's DIP and her buy-to-let on 8 Grand
-     Avenue), the address says nothing about which is which, so the kind comes with it. */
-  const head = addr
-    ? ((siblings || []).filter((x) => propAddress(x) === addr).length > 1 ? `${addr} · ${kind}` : addr)
-    : kind;
-  return [head, cs.lender || null, STAGE_LABEL[cs.stage] || String(cs.stage || "").replace(/_/g, " ")]
-    .filter(Boolean).join(" · ");
-}
-/* The case rows the Clients page caches carry stage, lender and adviser but not the KIND or the
-   PROPERTY — that embedded read is deliberately narrow and is not this flow's to widen. Those two
-   are exactly what tells a landlord's four live cases apart, so they are fetched once, for only
-   the cases about to be offered, with the same column-gating for property_address the pipeline's
-   own bulk task uses. A failure degrades to the label the cache can already make (kind unknown →
-   "Case · lender · stage") rather than blocking the picker. */
-async function hydrateBulkTaskCases(pending) {
-  const ids = pending.reduce((a, p) => a.concat(p.cases.map((c) => c.id)), []);
-  if (!ids.length) return;
-  try {
-    const cols = "id,case_kind,lender,stage" + ((await propAddrSupported()) ? ",property_address" : "");
-    const { data, error } = await db.from("cases").select(cols).in("id", ids);
-    if (error || !data) return;
-    const by = new Map(data.map((r) => [r.id, r]));
-    pending.forEach((p) => { p.cases = p.cases.map((c) => Object.assign({}, c, by.get(c.id) || {})); });
-  } catch (_) { /* keep the cached rows — a thinner label beats no picker */ }
-}
-function promptClientBulkCasePick(pending) {
-  const rows = pending.map((p) => `
-    <div class="row-item btaskc-pick-row">
-      <div class="row-main">
-        <div>${esc(p.name)}</div>
-        <div class="s">${p.cases.length} live cases</div>
-      </div>
-      <select class="bulk-task-case-pick" data-client="${esc(p.id)}" aria-label="Case for ${esc(p.name)}">
-        <option value="" selected>— choose case —</option>
-        ${p.cases.map((cs) => `<option value="${esc(cs.id)}">${esc(bulkTaskCaseLabel(cs, p.cases))}</option>`).join("")}
-        <option value="__skip">Skip this one</option>
-      </select>
-    </div>`).join("");
-  const html = `
-    <h3>Which case is this task about?</h3>
-    <p class="panel-sub">${pending.length === 1 ? "One of the selected clients has" : `${pending.length} of the selected clients have`} more than one live case, and a task hangs off a case — so nothing is picked for you. Choose the case for each, or skip that client and file it by hand. The task itself (title, date, who it goes to) comes next.</p>
-    <div id="btaskc-pick-rows">${rows}</div>
-    <div class="ovl-err" id="btaskc-pick-err"></div>
-    <div class="modal-actions">
-      <div class="s" id="btaskc-pick-left"></div>
-      <div class="right">
-        <button type="button" class="btn" id="btaskc-pick-cancel">Cancel</button>
-        <button type="button" class="btn btn-primary" id="btaskc-pick-ok" disabled>Continue</button>
-      </div>
-    </div>`;
-  return openOverlay(html, (finish, box) => {
-    const sels = [...box.querySelectorAll(".bulk-task-case-pick")];
-    const okBtn = box.querySelector("#btaskc-pick-ok");
-    const left = box.querySelector("#btaskc-pick-left");
-    const sync = () => {
-      const todo = sels.filter((s) => !s.value).length;
-      okBtn.disabled = todo > 0;                       // no half-answered batch reaches the confirm
-      okBtn.title = todo ? "Choose a case — or Skip this one — for every client above first" : "";
-      const skip = sels.filter((s) => s.value === "__skip").length;
-      left.textContent = todo
-        ? `${todo} still to choose`
-        : `${sels.length - skip} will get a task${skip ? ` · ${skip} skipped` : ""}`;
-    };
-    sels.forEach((s) => (s.onchange = sync));
-    sync();
-    box.querySelector("#btaskc-pick-cancel").onclick = () => finish(null);
-    okBtn.onclick = () => {
-      if (sels.some((s) => !s.value)) return;
-      const out = {};
-      sels.forEach((s) => { out[s.dataset.client] = s.value === "__skip" ? null : s.value; });
-      finish(out);
-    };
-  });
-}
 function promptClientBulkTask(plan) {
   const today = localDateStr(new Date());
   const n = plan.targets.length;
   const skipLine = (label, arr) => arr.length ? `<li><strong>${arr.length}</strong> ${label} — ${esc(namedList(arr.map((x) => x.name)))}</li>` : "";
   const html = `
     <h3>Add a task to ${n} client${n === 1 ? "" : "s"}</h3>
-    <p class="panel-sub">A task hangs off a case, so each one is filed on the client's case: their only case, their only live case where they have several, or — where there was more than one live case — the case you just chose. Nothing is guessed. A client with no live case is listed below and left for you to file by hand.</p>
+    <p class="panel-sub">A task hangs off a case, so each one is filed on the client's case: their only case, or their only live case where they have several. Nothing is guessed — a client with more than one live case (or none) is listed below and left for you to file by hand.</p>
     ${plan.skipped.length ? `<div class="dq-notice" id="btaskc-skip"><strong>${plan.skipped.length} of the ${plan.total} selected will be skipped:</strong>
       <ul style="margin:6px 0 0;padding-left:18px;">
-        ${skipLine("have several live cases and you skipped them", plan.byWhy.many_live)}
+        ${skipLine("have several live cases — which one is this about?", plan.byWhy.many_live)}
         ${skipLine("have several cases and none of them live", plan.byWhy.no_live)}
         ${skipLine("have no case at all to attach a task to", plan.byWhy.no_case)}
       </ul>
@@ -14637,63 +12418,27 @@ async function bulkClientAddTask() {
 async function bulkClientAddTaskRun(rows) {
   const byWhy = { many_live: [], no_live: [], no_case: [] };
   const targets = [];
-  const pending = [];                                  // R36-C — the ones to ASK about, not skip
   rows.forEach((c) => {
     const t = clientTaskTarget(c);
     const name = clientDisplayName(c);
-    if (t.why === "many_live") pending.push({ id: c.id, name, cases: t.choices });
-    else if (t.why) byWhy[t.why].push({ id: c.id, name });
+    if (t.why) byWhy[t.why].push({ id: c.id, name });
     else targets.push({ id: c.id, name, caseId: t.caseId, assignedTo: t.assignedTo });
   });
-  /* R36-C — the resolution step runs BEFORE the confirm, so the confirm's counts are already the
-     truth: whatever was chosen here is an ordinary target from this point on (same shape, same
-     list, same write below), and whatever was skipped here joins the skipped list unchanged.
-     Cancelling out of the picker cancels the whole batch — nothing is written. */
-  if (pending.length) {
-    await hydrateBulkTaskCases(pending);
-    const picks = await promptClientBulkCasePick(pending);
-    if (!picks) return;
-    pending.forEach((p) => {
-      const caseId = picks[p.id];
-      const cs = caseId && p.cases.find((x) => x.id === caseId);
-      if (!cs) { byWhy.many_live.push({ id: p.id, name: p.name }); return; }
-      targets.push({ id: p.id, name: p.name, caseId: cs.id, assignedTo: cs.assigned_to || null });
-    });
-  }
   const skipped = byWhy.many_live.concat(byWhy.no_live, byWhy.no_case);
   const picked = await promptClientBulkTask({ targets, skipped, byWhy, total: rows.length });
   if (!picked) return;
-  /* R36-C — dedupe by title against each target case's OPEN tasks, the same rule (and the same
-     playbookTitleKey) the case modal's stage checklist has used since it started writing tasks.
-     It matters more now: a client resolved through the picker can be resolved again on the next
-     run, so "press it twice" has to mean "one task", not two. ONE read over the cases about to be
-     written, never one per case; a failure degrades to writing, because a duplicate task is
-     visible and deletable while a silently-skipped one is neither. Applied to every target
-     alike — the picked-case clients go through this same loop, not a second one. */
-  const already = new Set();
-  if (targets.length) {
-    try {
-      const { data } = await db.from("case_tasks").select("case_id,title")
-        .in("case_id", targets.map((t) => t.caseId)).is("done_at", null);
-      const key = playbookTitleKey(picked.title);
-      (data || []).forEach((r) => { if (playbookTitleKey(r.title) === key) already.add(r.case_id); });
-    } catch (_) { /* no dedupe this run */ }
-  }
   let ok = 0;
-  const dup = [];
   const failed = [];
   for (const t of targets) {
-    if (already.has(t.caseId)) { dup.push(t); continue; }
     const { error } = await db.from("case_tasks").insert({
       case_id: t.caseId, title: picked.title, due_date: picked.due,
       assigned_to: picked.who || t.assignedTo || (ME && ME.id) || null,
       created_by: (ME && ME.id) || null,
     });
-    if (error) failed.push(t); else { ok++; already.add(t.caseId); }
+    if (error) failed.push(t); else ok++;
   }
   let msg = `${ok} task${ok === 1 ? "" : "s"} added (“${picked.title}”)${picked.due ? " · due " + fmtD(picked.due) : ""}`;
-  if (dup.length) msg += ` · ${dup.length} already had that task open — ${namedList(dup.map((d) => d.name))}`;
-  if (skipped.length) msg += ` · ${skipped.length} skipped (no case chosen to file on) — ${namedList(skipped.map((s) => s.name))}`;
+  if (skipped.length) msg += ` · ${skipped.length} skipped (no single case to file on) — ${namedList(skipped.map((s) => s.name))}`;
   if (failed.length) msg += ` · ${failed.length} error${failed.length === 1 ? "" : "s"} — no task for ${namedList(failed.map((f) => f.name))}`;
   toast(msg);
   // Everything that got a task is deselected; everything that did NOT stays selected, so pressing
@@ -14761,11 +12506,7 @@ function bulkClientExportCsv() {
    did or that happened TO them", i.e. every row except the system stage-change noise. It is the
    default view (see renderTimelineList / the modal's initial render below) — "All" is still one
    click away, and so is "System" itself; nothing is hidden that a click can't reach. */
-/* R40 — "Tasks done" joins the row as a ninth chip. Additive: it is a real category like the rest,
-   so "activity" (= everything that is not system) picks it up with no change, and the eight
-   existing chips keep filtering exactly what they filtered before. Deliberately NOT added to
-   CONTACT_TL_CATS below: ticking a task off is work done ON the case, not a conversation. */
-const TL_CATS = [["activity", "What happened"], ["all", "All"], ["call", "Calls"], ["email", "Emails"], ["meeting", "Meetings"], ["note", "Notes"], ["appointment", "Appointments"], ["task", "Tasks done"], ["system", "System"]];
+const TL_CATS = [["activity", "What happened"], ["all", "All"], ["call", "Calls"], ["email", "Emails"], ["meeting", "Meetings"], ["note", "Notes"], ["appointment", "Appointments"], ["system", "System"]];
 /* R12b · W-21 — the categories that count as an actual conversation with the client, for the
    client header's "Last contact" line. Appointments and system rows deliberately excluded: a
    booked meeting that hasn't happened yet isn't contact, and a stage change isn't a conversation. */
@@ -14812,9 +12553,9 @@ async function buildClientTimeline(clientId, cases) {
       + (shared && tail ? ` <span class="case-tag">${esc(tail)}</span>` : "");
   });
   const q = (p) => p.then((r) => (r && r.data) || []).catch(() => []);
-  let notes = [], events = [], appts = [], emails = [], sms = [], ffs = [], inbound = [], doneTasks = [];
+  let notes = [], events = [], appts = [], emails = [], sms = [], ffs = [], inbound = [];
   try {
-    [notes, events, appts, emails, sms, ffs, inbound, doneTasks] = await Promise.all([
+    [notes, events, appts, emails, sms, ffs, inbound] = await Promise.all([
       /* R6.4 H-01 — `id` joins the select so the timeline can offer Re-file and,
          reading the markers among these same rows, strike the notes that have
          already been re-filed away. */
@@ -14825,14 +12566,6 @@ async function buildClientTimeline(clientId, cases) {
       ids.length ? q(db.from("sms_queue").select("sms_type,status,sent_at,created_at,case_id").in("case_id", ids)) : [],
       ids.length ? q(db.from("fact_finds").select("status,submitted_at,created_at,case_id").in("case_id", ids)) : [],
       ids.length ? q(db.from("case_emails").select("subject,snippet,received_at,created_at,case_id").in("case_id", ids)) : [],
-      /* R40 — the eighth source: tasks that were actually COMPLETED. A case's history was silent
-         about the work done on it — "chase lender for offer, ticked off Tuesday" existed only in
-         the Tasks box, which shows the list as it stands now, not when anything happened. Only
-         `done_at` rows qualify (an open task is a to-do, not history) and the filter is applied
-         CLIENT-SIDE below rather than with .not("done_at","is",null): the whole task list for a
-         handful of cases is small, and one predicate fewer is one fewer thing that can behave
-         differently against a database, a mock or an older PostgREST. */
-      ids.length ? q(db.from("case_tasks").select("title,done_at,case_id").in("case_id", ids)) : [],
     ]);
   } catch (_) { /* keep whatever resolved */ }
   const items = [];
@@ -14869,9 +12602,6 @@ async function buildClientTimeline(clientId, cases) {
   appts.forEach((a) => { push(a.starts_at, "appointment", "📅", esc(a.title || "Appointment") + (a.location ? ` <span class="tl-muted">· ${esc(a.location)}</span>` : ""), a.case_id); });
   // Inbound client emails (Outlook sync) — Priya's handover gap: correspondence must show both directions.
   inbound.forEach((m) => { push(m.received_at || m.created_at, "email", "📥", esc(m.subject || m.snippet || "Email from client") + ' <span class="tl-muted">· from client</span>', m.case_id); });
-  /* R40 — completed tasks, timestamped by when they were ticked rather than when they were due.
-     `title` is operator-typed, so it goes through esc() like every other free-text source here. */
-  doneTasks.filter((t) => !!t.done_at).forEach((t) => { push(t.done_at, "task", "✅", "Task done: " + esc(t.title || "(untitled task)"), t.case_id); });
   ffs.filter((f) => f.status === "sent" || f.status === "submitted").forEach((f) => { push(f.submitted_at || f.created_at, "system", "📋", "Fact-find " + esc(f.status), f.case_id); });
   // BACKEND-R4 §2 — the trigger has always stamped who acted; the timeline just never selected it.
   events.forEach((ev) => { push(ev.created_at, "system", "⚙️", esc(ev.detail || ev.event || "Event") + eventActorHtml(ev.actor), ev.case_id); });
@@ -14884,11 +12614,7 @@ function timelineRowHtml(it, multiCase) {
      costs a pill. The kind · lender tag keeps its round-5 rule (multi-case clients only), because
      on a single-case client it genuinely was noise. */
   const caseTag = it.caseChip || (multiCase && it.caseLabel ? `<span class="tl-case">${esc(it.caseLabel)}</span>` : "");
-  /* R40 — the row now says WHICH case it belongs to in the markup, not just in the chip text.
-     The case modal renders this same list scoped to one case, and appointments are the one source
-     that is read by client_id, so "which case is this row on?" has to be answerable without
-     re-parsing a chip. Empty string for client-level rows that genuinely have no case. */
-  return `<div class="tl-row" data-cat="${it.cat}" data-ts="${esc(it.ts)}" data-case="${esc(it.caseId || "")}">
+  return `<div class="tl-row" data-cat="${it.cat}" data-ts="${esc(it.ts)}">
       <span class="tl-ic">${it.icon}</span>
       <div class="tl-main">
         <div class="tl-title">${it.title}</div>
@@ -14916,12 +12642,7 @@ function renderTimelineList(items, filter, cap, multiCase) {
     if (day !== lastDay) { html += `<div class="tl-day">${esc(tlDayLabel(it.ts))}</div>`; lastDay = day; }
     html += timelineRowHtml(it, multiCase);
   });
-  /* R40 — the Show-more button no longer carries id="tl-more". Two timelines can now be on screen
-     at once (the case modal opens over the client record), and a hardcoded id would have produced
-     a duplicate id in the document with every global $("#tl-more") lookup resolving to whichever
-     came first — i.e. the client's button under the modal. Both callers wire it by class through
-     their OWN container element instead. */
-  if (past.length > cap) html += `<button type="button" class="btn btn-sm tl-more">Show more (${past.length - cap})</button>`;
+  if (past.length > cap) html += `<button type="button" class="btn btn-sm tl-more" id="tl-more">Show more (${past.length - cap})</button>`;
   return html;
 }
 
@@ -15283,10 +13004,18 @@ async function refreshChangeHistory() {
   await renderChangeHistory();
 }
 
-/* R40 — eventTimelineHtml() DELETED. It rendered the case modal's stage-only event list, and the
-   case modal now renders the same case_events rows through buildClientTimeline + renderTimelineList
-   like every other source, so it had no callers left. The rows themselves are unchanged and still
-   carry their actor (eventActorHtml lives on in the builder). */
+/* The case modal's own event log: the curated human timeline log_case_event writes, with the actor
+   the trigger stamped on each row. The client modal shows the same rows merged into its Timeline. */
+function eventTimelineHtml(events) {
+  if (!events || !events.length) return '<div class="empty">No events recorded on this case yet.</div>';
+  return events.map((ev) => `<div class="tl-row" data-cat="system" data-ts="${esc(ev.created_at)}">
+      <span class="tl-ic">⚙️</span>
+      <div class="tl-main">
+        <div class="tl-title">${esc(ev.detail || ev.event || "Event")}${eventActorHtml(ev.actor)}</div>
+        <div class="tl-meta"><span class="tl-case">${esc(String(ev.event || "").replace(/_/g, " "))}</span><span class="tl-ago">${esc(tlWhen(ev.created_at))}</span></div>
+      </div>
+    </div>`).join("");
+}
 
 /* T1-2 — `focus` ("email" | "phone") and `attempted` come from a failed message's "Fix contact"
    link: the contact section is opened and the offending field focused, and the address the send
@@ -15336,42 +13065,13 @@ function groupCasesByProperty(cases) {
   });
   return out;
 }
-/* How many DISTINCT buildings a set of cases sits on. R36-A · L9 split this out of
-   clientPropertyCountLabel so the client LIST row can count the same way the client RECORD does —
-   one definition of "a property", used by both, rather than two that can drift. */
-function clientPropertyCount(cases) {
-  return new Set((cases || []).map((x) => propKey(x)).filter(Boolean)).size;
-}
 /* "· 5 properties" next to the Cases heading — the count a landlord actually thinks in, which
    the client list's "5 cases (3 active)" badge has never been able to give. Only shown when it
    says something the case count doesn't. */
 function clientPropertyCountLabel(cases) {
-  const n = clientPropertyCount(cases);
+  const n = new Set((cases || []).map((x) => propKey(x)).filter(Boolean)).size;
   if (n < 2) return "";
   return ` <span class="cs-muted" style="font-weight:400;">· ${n} properties</span>`;
-}
-/* R36-A · L6 — PROTECTION ON THE CLIENT RECORD.
-   Protection status lived on the case modal (protStatChipHtml) and on the Protection page, and
-   nowhere on the client record — so the one screen that shows a client's whole book, the screen an
-   adviser opens before ringing them, could not answer "is any of this protected?". The drawer's
-   case rows already carry `protection_status`: openClient's cases read is `select("*")`, so this
-   needs no widening and no extra query.
-
-   The colours follow PROT_BADGE (quoted amber, policy green, not_discussed grey) rather than the
-   case header's stricter reading, because this is a LIST: an amber pill on every unstarted case
-   would drown the two rows that actually have an open quote. `declined` is grey for the reason the
-   case header gives — a client who was asked and said no is a finished conversation, not a gap. */
-const CL_PROT_CHIP = {
-  not_discussed: ["grey", "None", "No protection conversation recorded on this case."],
-  discussed: ["amber", "Discussed", "Protection was discussed but nothing came of it yet — no quote, no policy, no decline."],
-  quoted: ["amber", "Quoted", "Quoted — still an open outcome until a policy is taken or the client declines."],
-  policy_taken: ["green", "Policy", "A protection policy was taken on this case."],
-  declined: ["grey", "Declined", "The client was asked about protection and said no."],
-};
-function clientCaseProtChipHtml(x) {
-  const st = (x && x.protection_status) || "not_discussed";
-  const p = CL_PROT_CHIP[st] || ["grey", String(st).replace(/_/g, " "), "Protection status: " + String(st).replace(/_/g, " ")];
-  return `<span class="badge ${p[0]} cl-prot-chip" data-prot="${esc(st)}" title="${esc(p[2])}">🛡️ ${esc(p[1])}</span>`;
 }
 /* One case row. `opts.grouped` drops the chip (the group heading above already carries it) and
    `opts.previous` badges an earlier case on the same building. */
@@ -15385,7 +13085,7 @@ function clientCaseRowHtml(x, opts = {}) {
         <div class="s">${chip}${chip ? " " : ""}Started ${fmtD(x.created_at)}${x.rate_end_date ? " · rate ends " + fmtD(x.rate_end_date) : ""}</div></div>
         ${opts.previous ? `<span class="badge grey" title="An earlier case on this property — the most recent one is listed first">previous</span>` : ""}
         ${x.assigned_to ? assigneeChipHtml(x.assigned_to) : '<span class="chip" title="No adviser assigned">—</span>'}
-        ${stageBadge(x.stage)}${clientCaseProtChipHtml(x)}</div>`;
+        ${stageBadge(x.stage)}</div>`;
 }
 function clientCasesHtml(cases) {
   const list = cases || [];
@@ -15746,21 +13446,14 @@ window.openClient = async function (id, focus, attempted, presetCaseId) {
   if (id) {
     // ---- Timeline interactions (SP3b) — filters, typed quick-add, show-more; all in place ----
     let tlFilter = "activity", tlCap = 100; // R12b · W-21 — default view is "what happened", not "all incl. system"
-    /* R40 — Show-more is found by class INSIDE #tl-list, not by the global id it used to carry.
-       The case modal renders the same list with the same button and can be open over this record,
-       so a document-wide lookup was one open modal away from wiring the wrong element. */
-    const wireTlMore = () => {
-      const list = $("#tl-list");
-      const more = list && list.querySelector(".tl-more");
-      if (more) more.onclick = () => { tlCap += 100; rerenderTl(); };
-    };
     const rerenderTl = () => {
       const list = $("#tl-list");
       if (!list) return;
       list.innerHTML = renderTimelineList(tlItems, tlFilter, tlCap, multiCase);
-      wireTlMore();
+      const more = $("#tl-more");
+      if (more) more.onclick = () => { tlCap += 100; rerenderTl(); };
     };
-    wireTlMore();
+    const more0 = $("#tl-more"); if (more0) more0.onclick = () => { tlCap += 100; rerenderTl(); };
     // Type chips (single-select, default Note) — shared class with the case modal. The Log call
     // chip (below) is excluded here: it's a one-shot action, not a typed-note type to select.
     const typeChips = $("#tl-type-chips");
@@ -16035,7 +13728,7 @@ async function loadEmails() {
     const titleClick = noContact
       ? ` onclick="openClient('${e.client_id}','email','${jsArg(e.to_email)}')" style="cursor:pointer;"`
       : (e.case_id ? ` onclick="openCase('${e.case_id}')" style="cursor:pointer;"` : "")
-        || (e.lead_id ? ` onclick="openLeadInToday('${jsArg(e.lead_id)}')" style="cursor:pointer;" title="Open this enquiry's row in My Day on Today"` : "");
+        || (e.lead_id ? ` onclick="openLeadInToday('${jsArg(e.lead_id)}')" style="cursor:pointer;" title="Open this enquiry in the lead inbox on Today"` : "");
     const whoTxt = e.clients ? e.clients.first_name + " " + e.clients.last_name : (leadRow && leadRow.name) || e.to_email || "";
     return `
     <div class="row-item"${e.lead_id ? ` data-lead-email="${esc(e.lead_id)}"` : ""}>
@@ -17042,18 +14735,10 @@ function renderImportPreview() {
      "not yet known" behaves as present, exactly like every other M-detection in the app. */
   const propOn = PROP_ADDR_SUPPORTED !== false;
   const nCols = propOn ? 13 : 12;
-  /* R33 · K3 — THE RULES PARAGRAPH. It is four hundred words of genuinely load-bearing rules, and
-     it reprinted in full on every single Analyse: the R32 panel found operators who import weekly
-     scrolling past it every time to reach their own data. Read once, folded thereafter — and only
-     because the operator SAID so by pressing "Got it", never on a guess. Reopening it is one
-     click and does not clear the flag: wanting to re-read the rules is not the same as wanting
-     them shouted at you again next week. */
-  const blurbSeen = lsGet("nx_import_blurb") === "seen";
   $("#import-preview").innerHTML = `
     <div class="panel">
       <h3>Review before saving</h3>
-      <button type="button" class="btn btn-sm" id="imp-blurb-toggle" aria-expanded="${blurbSeen ? "false" : "true"}" aria-controls="imp-review-blurb" style="margin:0 0 8px;">${blurbSeen ? "Review rules ▸" : "Got it — collapse"}</button>
-      <p class="panel-sub${blurbSeen ? " hidden" : ""}" id="imp-review-blurb">Untick anything that shouldn't be imported. Click Client, Email, <strong>Property</strong>, Stage, Lender or Rate to fix a misread field before importing. Estimated rate-end dates are marked ≈ and stay flagged until you confirm them. Dates are read UK-first (dd/mm/yyyy) — anything that could also be read the American way is shown amber with the reading we'll use, and its row starts unticked until you press Confirm. A case marked Completed with no completion date is shown amber with a “no date” flag: no date is ever invented for it, so where the source itself said the case was completed the row starts unticked until you either press “Import with no date” or change its Stage. Any case that does import without a completion date is counted in the message at the end and listed on Data health. The <strong>Match</strong> column says who each row will land on before anything is written: green attaches to a client we already hold, amber is a possible match that needs your Attach / New client decision, and a blank cell creates a new client. Where an attaching row's email or phone disagrees with the record, the row expands so you choose which to keep — what you don't keep is named in the summary afterwards. A <strong>Property address</strong> column in the file (Property, Property address, Security address, Address, with an optional separate Postcode) is read onto the case, and the Match column then also says what the row means for that client: <span class="badge green">new property</span>, <span class="badge grey">another case on a property we hold</span>, or <span class="badge amber">likely duplicate case</span> — same client, same property and the same lender, which starts unticked until you press “Import anyway”.</p>
+      <p class="panel-sub">Untick anything that shouldn't be imported. Click Client, Email, <strong>Property</strong>, Stage, Lender or Rate to fix a misread field before importing. Estimated rate-end dates are marked ≈ and stay flagged until you confirm them. Dates are read UK-first (dd/mm/yyyy) — anything that could also be read the American way is shown amber with the reading we'll use, and its row starts unticked until you press Confirm. A case marked Completed with no completion date is shown amber with a “no date” flag: no date is ever invented for it, so where the source itself said the case was completed the row starts unticked until you either press “Import with no date” or change its Stage. Any case that does import without a completion date is counted in the message at the end and listed on Data health. The <strong>Match</strong> column says who each row will land on before anything is written: green attaches to a client we already hold, amber is a possible match that needs your Attach / New client decision, and a blank cell creates a new client. Where an attaching row's email or phone disagrees with the record, the row expands so you choose which to keep — what you don't keep is named in the summary afterwards. A <strong>Property address</strong> column in the file (Property, Property address, Security address, Address, with an optional separate Postcode) is read onto the case, and the Match column then also says what the row means for that client: <span class="badge green">new property</span>, <span class="badge grey">another case on a property we hold</span>, or <span class="badge amber">likely duplicate case</span> — same client, same property and the same lender, which starts unticked until you press “Import anyway”.</p>
       <label style="display:flex;gap:6px;align-items:center;font-weight:400;margin:4px 0 10px;">
         <input type="checkbox" id="imp-assign-me" style="width:auto;" ${importAssignToMe ? "checked" : ""}>
         Assign new cases to me — unticking leaves them unassigned (they'll appear in Data Health's unassigned list)
@@ -17097,18 +14782,6 @@ function renderImportPreview() {
   $("#imp-all").onchange = (e) => document.querySelectorAll(".imp-row").forEach((c) => (c.checked = e.target.checked));
   $("#imp-assign-me").onchange = (e) => { importAssignToMe = e.target.checked; };
   $("#import-save-btn").onclick = runImport;
-  /* R33 · K3 — fold/unfold the rules paragraph. The first fold is what records the preference;
-     re-opening it afterwards is a session act and deliberately leaves nx_import_blurb alone. */
-  const blurbBtn = $("#imp-blurb-toggle");
-  if (blurbBtn) blurbBtn.onclick = () => {
-    const p = $("#imp-review-blurb");
-    if (!p) return;
-    const nowOpen = p.classList.contains("hidden");
-    p.classList.toggle("hidden", !nowOpen);
-    blurbBtn.textContent = nowOpen ? "Got it — collapse" : "Review rules ▸";
-    blurbBtn.setAttribute("aria-expanded", nowOpen ? "true" : "false");
-    if (!nowOpen) lsSet("nx_import_blurb", "seen");
-  };
 
   /* R5-23a/b — match + conflict controls are wired by delegation on the preview container, because
      a row's match cell and its expander are repainted in place whenever the row's identity fields
@@ -17666,25 +15339,58 @@ function noteLeadSlaFromStarRow(row) {
 }
 
 /* ---------- Website leads ---------- */
-/* ==========================================================================
-   R41 · F1 — loadLeads() (Today's "📥 New website leads" drawer, #leads-list / #leads-count /
-   #leads-order) is gone.
-
-   It was the SAME lead, twice on one screen. My Day has carried a `lead_new` row since round 5
-   with the whole flow on it — the adviser dropdown (leadRoutingHtml, still shared, still with its
-   "(lightest load)" note), Accept (acceptLead, untouched), the ✉ acknowledgement mark and the
-   age chip against the 15-minute promise (leadAckMark / leadAgeBadge) — and R12a K-1 existed
-   entirely to stop the two copies of that dropdown disagreeing with each other. With one copy left
-   they cannot.
-
-   Two of the drawer's own opinions go with it and are not reimplemented:
-   · the order line (#leads-order): My Day is one priority-ordered list, so a per-panel "oldest
-     first / newest first" caption would be describing an order it does not control. The lateness
-     it announced is still on every row, as the age chip that turns red at the promise.
-   · Discard (✕) is NOT one of the things dropped: it moved onto the My Day row beside Accept
-     (see briefActions), because it is the only button in the app that opens the reason dialog
-     behind leads.discard_reason and the Lead-response report's answered-vs-binned split.
-   ========================================================================== */
+async function loadLeads() {
+  const { data: leads, error } = await db.from("leads").select("*").eq("status", "new").order("created_at");
+  // T1-24 (bug 4) — the error used to be discarded, so an outage on the firm's revenue intake
+  // rendered the reassuring "No new leads" empty state. Say so, and offer the retry.
+  if (error) {
+    $("#leads-count").classList.add("hidden");
+    renderLoadError("#leads-list", error, loadLeads);
+    autoDrawer("leads", true); // a failed intake queue must not stay collapsed
+    return;
+  }
+  if ((leads || []).length) noteLeadSlaFromStarRow(leads[0]);
+  const n = (leads || []).length;
+  const badge = $("#leads-count");
+  badge.textContent = n;
+  badge.classList.toggle("hidden", !n);
+  /* R7-5 — THE ORDER. The fetch is oldest-first, which is right while anything is late: the
+     longest wait is the next call. It is NOT right on a quiet morning, where an inbox that puts
+     this minute's enquiry at the bottom of six read-and-parked ones reads as stale. So the order
+     is stated and it follows the clock: oldest-first the moment ANY lead is past the fifteen-minute
+     promise, newest-first when every one of them is inside it. Both orders are announced on the
+     panel, because a list that silently reorders itself is a list nobody trusts. */
+  const rows = (leads || []).slice();
+  const breaching = rows.filter((l) => { const m = leadAgeMins(l.created_at); return m != null && m >= LEAD_SLA_MIN; });
+  const oldestFirst = breaching.length > 0;
+  rows.sort((a, b) => {
+    const d = String(a.created_at || "").localeCompare(String(b.created_at || ""));
+    return oldestFirst ? d : -d;
+  });
+  const sub = $("#leads-order");
+  if (sub) {
+    sub.innerHTML = !n ? ""
+      : oldestFirst
+        ? `<strong>${breaching.length} past the ${LEAD_SLA_MIN}-minute promise</strong> — oldest first, longest wait at the top.`
+        : `Everything is inside the ${LEAD_SLA_MIN}-minute promise — newest first.`;
+    sub.classList.toggle("lead-order-hot", oldestFirst);
+  }
+  $("#leads-list").innerHTML = n ? rows.map((l) => `
+    <div class="row-item" data-lead-row="${esc(l.id)}">
+      <div class="row-main">
+        <div class="t">${esc(l.name)}${leadAckMark(l)}</div>
+        <div class="s">${l.email ? mailLink(l.email) : ""}${l.phone ? " · " + telLink(l.phone) : ""}${l.enquiry_type ? " · " + esc(l.enquiry_type) : ""} · ${new Date(l.created_at).toLocaleString("en-GB")}</div>
+        ${l.message ? `<div class="s">“${esc(l.message.slice(0, 140))}${l.message.length > 140 ? "…" : ""}”</div>` : ""}
+      </div>
+      ${leadAgeBadge(l)}
+      ${leadRoutingHtml(l.id)}
+      <button class="btn btn-sm btn-primary" onclick="acceptLead('${l.id}', event)">Accept</button>
+      <button class="btn btn-sm btn-danger" aria-label="Discard lead" title="Discard lead" onclick="discardLead('${l.id}')">✕</button>
+    </div>`).join("") : '<div class="empty">No new leads. Website enquiries appear here the moment they\'re sent.</div>';
+  panelCount("#leads-list", n, true);
+  applyLeadAdvChoices();   // R12a K-1 — this list and My Day show the same leads; keep them agreeing
+  autoDrawer("leads", n > 0); // auto-open whenever there's a lead waiting, else stay collapsed
+}
 window.acceptLead = async function (id, ev) {
   const btn = (ev && (ev.currentTarget || ev.target)) || null;
   if (btn) { if (btn.disabled) return; btn.disabled = true; } // guard against double-click
@@ -17899,10 +15605,10 @@ window.acceptLead = async function (id, ev) {
      ask which desk is lightest. Counted here rather than re-read: the case was created two writes
      ago and the next dashboard load re-derives the whole map from the database anyway. */
   if (assignTo && advLoadCases) advLoadCases[assignTo] = (advLoadCases[assignTo] || 0) + 1;
-  /* R5-21 — an accepted lead must leave the screen it was accepted on, or its row goes on
-     advertising an enquiry that no longer exists and its Accept answers "already been accepted".
-     R41 · F1 — that used to need two repaints (the Leads drawer AND the My Day row); the drawer is
-     gone, so the one list is the one paint. */
+  /* R5-21 — the same lead is listed TWICE on Today: in the Leads panel and as a My Day "lead_new"
+     row. Repainting only the panel left the My Day row advertising a lead that no longer exists,
+     and clicking its Accept produced "already been accepted". Repaint both. */
+  await loadLeads();
   await loadBriefing();
   restoreLeadAdvSel(otherLeadSel);   // R5-5 — put the other rows' routing choices back
 };
@@ -18040,23 +15746,22 @@ window.discardLead = async function (id) {
     + (why.contacted && !stamped ? " · contact time NOT stored (this database has no first_contact_at column)" : "")
     + (!why.contacted ? " · no contact recorded, so it counts as unanswered" : "")
     + (reasonSaved ? "" : " · reason NOT stored (this database has no discard_reason column)"));
-  await loadBriefing();   // R41 · F1 — one list of leads on Today now, so one repaint
+  await loadLeads();
+  await loadBriefing();
 };
 
-/* R7-5 — Today, at the enquiry. Used by the Emails page (a lead_ack row has nowhere else to go),
-   by the Watchtower's lead_slow alert and by the Lead-response report's breach count.
-   R41 · F1 — the destination was the New-website-leads drawer, which is gone; it is now the lead's
-   own My Day row. My Day is not a drawer and is never collapsed, so there is nothing to open and
-   no dashDrawerTouched flag to set — the walk is straight to the row. The row is found by the one
-   thing on it that carries the lead id, its adviser select (the drawer's own `data-lead-row`
-   attribute went with the drawer), and gets the same amber flash it always did. */
+/* R7-5 — Today, with the lead inbox open. Used by the Emails page (a lead_ack row has nowhere else
+   to go) and by the Lead-response report's breach count. The drawer is opened explicitly rather
+   than left to autoDrawer, because a person who clicked "open this enquiry" has just taken manual
+   control of it, which is precisely the case autoDrawer refuses to touch. */
 window.gotoLeadInbox = function (leadId) {
   nav("dashboard");
   setTimeout(() => {
-    const panel = document.getElementById("briefing-panel");
+    const panel = document.getElementById("leads-panel");
     if (!panel) return;
-    const sel = leadId ? panel.querySelector(`select.lead-adviser[data-lead="${CSS.escape(leadId)}"]`) : null;
-    const row = sel && sel.closest ? sel.closest(".row-item") : null;
+    panel.classList.remove("collapsed");
+    dashDrawerTouched.leads = true;
+    const row = leadId ? panel.querySelector(`.row-item[data-lead-row="${CSS.escape(leadId)}"]`) : null;
     (row || panel).scrollIntoView({ behavior: "smooth", block: row ? "center" : "start" });
     if (row) { row.classList.add("lead-flash"); setTimeout(() => row.classList.remove("lead-flash"), 2200); }
   }, 400);
@@ -18114,10 +15819,6 @@ window.openLeadInToday = async function (leadId) {
    outcome data says more about when the column shipped than about anybody's
    diary. The recording comes first; the counting is a later round's job.
    ====================================================================== */
-/* R37 · W11 — the five appointment titles this back office actually books, offered as chips above
-   the (still free-text) Title field. Presentation only: no column, no validation, no reporting
-   hangs off this list — it exists so that the same meeting is not filed under five spellings. */
-const APPT_TITLE_PICKS = ["Fact find call", "Protection review", "Review meeting", "Document collection", "Completion call"];
 const APPT_OUTCOMES = [
   ["attended", "Attended", "✓"],
   ["no_show", "No-show", "✗"],
@@ -18198,30 +15899,54 @@ async function writeApptOutcome(appt, outcome, clientName, opts = {}) {
 }
 
 /* ---------- Today's appointments ---------- */
-/* R41 · F1 — loadTodayAppts() (Today's "📅 Today's appointments" drawer, #today-appts) is gone.
-   get_briefing has always returned an `appt_today` row per booking, with the time, the client's
-   name (loadBriefing's own enrichment), the ⚠ double-booking flag My Day added in R5-25 and an
-   Open that lands in the same editor. The drawer's ONE unique action — the ✓/✗ quick outcome —
-   is now on that row (see apptQuickOutcomeHtml), writing through the same helper below. */
-/* R12b · W-17 — the one-click outcome. Reads the row back first (the list may have been painted a
-   while ago and the appointment may be gone), writes through the same helper the editor uses, and
-   hands back an Undo for ten seconds — the R12a task-done pattern, for the same reason: this is a
-   fast gesture on a small target and the cheapest possible repair beats a confirm.
-   R41 · T1 — unchanged apart from where it is pressed from and what it repaints: the buttons now
-   sit on the My Day `appt_today` row (apptQuickOutcomeHtml) instead of the removed drawer, so it
-   is a window hook — briefActions writes inline handlers, which run in global scope. */
-window.quickApptOutcome = async function (apptId, outcome, btn) {
+async function loadTodayAppts() {
+  const start = new Date(); start.setHours(0, 0, 0, 0);
+  const end = new Date(start.getTime() + 86400000);
+  const { data: appts } = await db.from("appointments")
+    .select("*, clients(first_name,last_name)")
+    .gte("starts_at", start.toISOString()).lt("starts_at", end.toISOString())
+    .order("starts_at");
+  /* R6 — appointments already store case_id; the row just never read it. Six "Ruby Sinclair"
+     entries across five flats is the shape this fixes. (W13 / D6-12.) */
+  const apptCtx = await loadPropContext((appts || []).map((a) => a.case_id));
+  $("#today-appts").innerHTML = (appts || []).length ? appts.map((a) => `
+    <div class="row-item">
+      <div class="row-main">
+        <div class="t" onclick="openAppt('${a.id}')">${new Date(a.starts_at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })} — ${esc(a.title)} ${propCtxChip(apptCtx, a.case_id, "row-prop")} ${apptOutcomeChipHtml(a.outcome)}</div>
+        <div class="s">${a.clients ? esc([a.clients.first_name, a.clients.last_name].filter(Boolean).join(" ")) + " · " : ""}${esc(a.location || "")}${a.staff_id ? " · " + esc(staffName(a.staff_id)) : ""}</div>
+      </div>
+      ${/* R12b · W-17 — recording that a client turned up should not cost opening a form. Two
+           buttons, on the one screen where today's appointments are already listed in the order
+           they happen, writing the same column the editor writes. Pressed state = already
+           recorded, and pressing it again clears it, so nothing here is a one-way door. The
+           REARRANGED outcome is deliberately not offered as a one-click: rearranging means a new
+           booking exists, which is a trip to the editor anyway. */ ""}
+      <span class="appt-quick" role="group" aria-label="Record what happened at this appointment">
+        ${APPT_OUTCOMES.filter(([v]) => v !== "rearranged").map(([v, label, mark]) => `<button type="button" class="btn btn-sm appt-quick-btn${a.outcome === v ? " is-set" : ""}" data-appt="${esc(a.id)}" data-outcome="${v}" aria-pressed="${a.outcome === v ? "true" : "false"}" title="${a.outcome === v ? `Recorded as ${label.toLowerCase()} — press again to clear it` : `Record this appointment as ${label.toLowerCase()}`}">${mark}</button>`).join("")}
+      </span>
+    </div>`).join("") : '<div class="empty">Nothing booked today. The Diary tab has the full week.</div>';
+  $("#today-appts").querySelectorAll(".appt-quick-btn").forEach((b) => (b.onclick = (e) => {
+    e.stopPropagation();
+    quickApptOutcome(b.dataset.appt, b.dataset.outcome, b);
+  }));
+  panelCount("#today-appts", (appts || []).length);
+}
+/* R12b · W-17 — My Day's one-click outcome. Reads the row back first (the panel may have been
+   painted a while ago and the appointment may be gone), writes through the same helper the editor
+   uses, and hands back an Undo for ten seconds — the R12a task-done pattern, for the same reason:
+   this is a fast gesture on a small target and the cheapest possible repair beats a confirm. */
+async function quickApptOutcome(apptId, outcome, btn) {
   if (!apptId) return;
   if (btn) btn.disabled = true;
   try {
     const { data: a } = await db.from("appointments").select("*, clients(first_name,last_name)").eq("id", apptId).single();
-    if (!a) { toast("That appointment no longer exists — it may have been deleted."); return loadBriefing(); }
+    if (!a) { toast("That appointment no longer exists — it may have been deleted."); return loadTodayAppts(); }
     const prev = a.outcome || null;
     const next = prev === outcome ? null : outcome;   // pressing the set one again clears it
     const who = a.clients ? [a.clients.first_name, a.clients.last_name].filter(Boolean).join(" ") : "";
     const res = await writeApptOutcome(a, next, who);
     if (!res.ok) return toast(res.msg);
-    loadBriefing();   // R41 · T1 — the row that was pressed; it flips from the pair to the badge
+    loadTodayAppts();
     refreshDiaryView();
     toast(res.msg, {
       label: "Undo",
@@ -18231,14 +15956,14 @@ window.quickApptOutcome = async function (apptId, outcome, btn) {
            removing somebody's work is worse than leaving one they can tick off. */
         const r = await writeApptOutcome(a, prev, who, { skipTask: true });
         toast(r.ok ? (prev ? `Back to: ${APPT_OUTCOME_LABEL[prev].toLowerCase()}` : "Back to not recorded") : r.msg);
-        loadBriefing();
+        loadTodayAppts();
         refreshDiaryView();
       },
     });
   } finally {
     if (btn) btn.disabled = false;
   }
-};
+}
 
 /* ---------- Diary ---------- */
 let diaryMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
@@ -18280,8 +16005,8 @@ function apptClientLine(a, chip) {
    picture of the meetings in the week, which is a different and smaller thing.
 
    Kept deliberately cheap: ONE extra read per diary paint, narrowed to the
-   dates already on screen, with the same query shape the Today task reads use
-   (undone only, due-date ordered). Done tasks are omitted outright — a diary is what is
+   dates already on screen, reusing loadTasks' own query shape (undone only,
+   due-date ordered). Done tasks are omitted outright — a diary is what is
    left to do, and a tick that stays on the grid all month is clutter that
    teaches people to stop reading the grid.
 
@@ -18826,10 +16551,7 @@ $("#diary-today").addEventListener("click", () => {
   if (diaryViewMode === "day") { diaryDay = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()); loadDiaryDay(); }
   else { diaryMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1); loadDiary(); }
 });
-$("#diary-staff").addEventListener("change", () => {
-  persistStaffFilter("#diary-staff", DIARY_STAFF_KEY); // R34 · W2
-  if (diaryViewMode === "day") loadDiaryDay(); else loadDiary();
-});
+$("#diary-staff").addEventListener("change", () => { if (diaryViewMode === "day") loadDiaryDay(); else loadDiary(); });
 $("#new-appt-btn").addEventListener("click", () => openAppt(null));
 // Click an empty part of a day cell → New appointment pre-filled with that date (QW9).
 // Clicks on an appointment inside a cell are handled by the appointment's own onclick.
@@ -18839,11 +16561,17 @@ $("#diary-grid").addEventListener("click", (e) => {
   if (!cell || !cell.dataset.date) return;
   openAppt(null, { starts_at: cell.dataset.date + "T10:00" });
 });
-/* R41 · F1 — setTasksScope() and the #tasks-scope-mine / -unassigned / -all buttons went with the
-   Tasks-due drawer. The replacement is My Day's own Mine | All segment plus the "· unassigned"
-   suffix every ownerless row carries under All (R5-35, briefOwnerSuffix): the third state was a
-   FILTER for a pile nobody owns, and a labelled row inside All says the same thing without hiding
-   the rest of the list behind a click. */
+// T1-5 — Mine | Unassigned | All (the old two-state toggle hid ownerless tasks inside "Mine").
+function setTasksScope(s) {
+  tasksScope = s;
+  $("#tasks-scope-mine").classList.toggle("scope-active", s === "mine");
+  $("#tasks-scope-unassigned").classList.toggle("scope-active", s === "unassigned");
+  $("#tasks-scope-all").classList.toggle("scope-active", s === "all");
+  loadTasks();
+}
+$("#tasks-scope-mine").addEventListener("click", () => setTasksScope("mine"));
+$("#tasks-scope-unassigned").addEventListener("click", () => setTasksScope("unassigned"));
+$("#tasks-scope-all").addEventListener("click", () => setTasksScope("all"));
 
 /* G1R-2 — the diary page renders in EITHER of two modes and `#page-diary` is visible in both, so
    "if the diary page is open, reload it" is not enough: after B9 added the Day view, a save or a
@@ -18930,14 +16658,12 @@ window.openAppt = async function (id, presets = {}, openOpts = {}) {
     if (!data) {
       toast("This appointment no longer exists — it may have been deleted.");
       refreshDiaryView();
-      // R41 · F1 — was loadTodayAppts(); the appointments drawer is gone and today's bookings are
-      // My Day `appt_today` rows, so that is what a deleted-out-from-under-you booking repaints.
-      if (!$("#page-dashboard").classList.contains("hidden")) loadBriefing();
+      if (!$("#page-dashboard").classList.contains("hidden")) loadTodayAppts();
       return;
     }
     a = data;
   }
-  const { data: clients } = await db.from("clients").select("id,first_name,last_name").order("last_name").limit(OWNER_ROW_CAP);
+  const { data: clients } = await db.from("clients").select("id,first_name,last_name").order("last_name");
   /* R6 — the appointment already carries case_id and the modal showed nothing but an "Open case"
      button, so "which of the six flats is this valuation for?" needed a round trip through the
      case modal. The linked case's identity now sits on the form itself. */
@@ -19011,16 +16737,7 @@ window.openAppt = async function (id, presets = {}, openOpts = {}) {
           on screen rather than backing out of a dialog. Filled in by syncApptClash(). */ ""}
     <p class="dq-notice clash-notice hidden" id="appt-clash-note"></p>
     <form id="appt-form" class="form-grid">
-      <label class="full">Title<input name="title" id="appt-title" required value="${esc(a.title || "")}" placeholder="e.g. Fact find call"></label>
-      ${/* R37 · W11 — the five appointments this firm actually books, as one-click fills. The field
-           stays free text and the chip only WRITES to it: nothing here is a category, nothing is
-           stored, and an appointment called "Ring Deborah back re: the survey" is as valid as it
-           ever was. The value of them is consistency — five spellings of "Fact Find Call" in the
-           diary is what makes a diary unsearchable. */ ""}
-      <div class="full appt-title-chips" id="appt-title-chips">
-        <span class="due-chips-lbl">Common:</span>
-        ${APPT_TITLE_PICKS.map((t) => `<button type="button" class="btn btn-sm appt-title-chip" data-appt-title="${esc(t)}" title="Use “${esc(t)}” as the title — you can still edit it">${esc(t)}</button>`).join("")}
-      </div>
+      <label class="full">Title<input name="title" required value="${esc(a.title || "")}" placeholder="e.g. Fact find call"></label>
       <label>Date<input name="date" type="date" required value="${dateVal}"></label>
       <label>Time<input name="time" type="time" required value="${timeVal}"></label>
       <label>Duration (mins)<input name="mins" type="number" value="${mins}"></label>
@@ -19066,16 +16783,6 @@ window.openAppt = async function (id, presets = {}, openOpts = {}) {
      case modal's "View original case" link already uses — the history entry is replaced, not
      stacked). */
   const apptGoto = (fn, arg) => () => { if (!hasUnsavedModalEdits() || confirm("Leave this appointment? Unsaved changes will be lost.")) fn(arg); };
-  /* R37 · W11 — the title quick-picks. `input` is dispatched so the unsaved-changes guard and the
-     clash notice see the change exactly as they would see typing; focus lands back in the field so
-     a chip is a starting point, not a decision. */
-  document.querySelectorAll("#appt-title-chips [data-appt-title]").forEach((b) => (b.onclick = () => {
-    const el = $("#appt-title");
-    if (!el) return;
-    el.value = b.dataset.apptTitle;
-    el.dispatchEvent(new Event("input", { bubbles: true }));
-    el.focus();
-  }));
   const openClientBtn = $("#appt-open-client");
   /* R6FIX-1 — this is a genuine "arriving from a case context": the appointment we are leaving
      names the case, so the client record's note composer may pre-pick it (see openClient). */
@@ -19107,11 +16814,6 @@ window.openAppt = async function (id, presets = {}, openOpts = {}) {
       : "Optional — attaching one puts the property on this appointment in the diary.";
     syncApptAbout();
   });
-  /* R36-B · W6 — the diary's client list is the same six hundred names as the case form's, and it
-     gets the same type-to-filter treatment. Bound after the change listener above so re-pointing the
-     appointment at another client still rebuilds the case list: the picker writes through the select
-     and fires a real change. */
-  upgradeSelectToCombobox(apptClientSel, { placeholder: "Type a client's name, or leave blank…" });
   const openCaseBtn = $("#appt-open-case");
   if (openCaseBtn) openCaseBtn.onclick = apptGoto(window.openCase, a.case_id);
   /* R12a·D11 — LIVE CLASH NOTICE. Reads the form exactly as the save does (same local
@@ -19227,7 +16929,7 @@ window.openAppt = async function (id, presets = {}, openOpts = {}) {
       + (outcomeColMissing ? " · the outcome could NOT be stored — this database has no appointments.outcome column yet" : "")
       + (caseUnlinked ? ` · the link to ${caseIdentityLabel(caseUnlinked) || "the previous case"} was removed — that case belongs to a different client` : "");
     refreshDiaryView();
-    if (!$("#page-dashboard").classList.contains("hidden")) loadBriefing();   // R41 · F1 — My Day carries today's bookings now
+    if (!$("#page-dashboard").classList.contains("hidden")) loadTodayAppts();
     /* R12b · W-10 — booked FROM a case: go back to it rather than closing everything. openCase
        replaces this modal (and its history entry) exactly as the "Open case" button above does. */
     if (returnCaseId) {
@@ -19246,7 +16948,7 @@ window.openAppt = async function (id, presets = {}, openOpts = {}) {
     const { error } = await db.from("appointments").delete().eq("id", id);
     if (error) return toast("Couldn't delete that appointment — " + error.message);
     refreshDiaryView();
-    if (!$("#page-dashboard").classList.contains("hidden")) loadBriefing();   // R41 · F1 — My Day carries today's bookings now
+    if (!$("#page-dashboard").classList.contains("hidden")) loadTodayAppts();
     if (returnCaseId) {
       toast("Appointment deleted · back on the case");
       await window.openCase(returnCaseId);
@@ -20053,15 +17755,7 @@ function renderThreadedPanels(all, mv, repAdvisers) {
        renders as "—", never as 0%, because nobody attached nothing to nothing. */
     const protTaken = done.filter((c) => c.protection_status === "policy_taken").length;
     const attach = done.length ? Math.round((protTaken / done.length) * 100) : null;
-    /* R26 — broker fee EARNED on this adviser's completions in the selected month, paid or not.
-       The adviser-attributed analogue of the firm "Fees earned vs target" bar (broker only, because
-       proc/sols fees don't attribute cleanly to one adviser). This is the attainment basis for the
-       new per-adviser Target column — deliberately NOT the cash "Fees banked" figure beside it. */
-    // R28 (Daniel-approved) — target basis now folds procuration + solicitor fees in with the broker
-    // fee, so it matches the firm "Fees earned vs target" bar EXACTLY (earnedOnCompletion = proc+broker+
-    // sols on the month's completions). Each fee sits on the case, summed over the adviser's completions.
-    const feeEarnedTotal = done.reduce((s, c) => s + (Number(c.proc_fee) || 0) + (Number(c.broker_fee) || 0) + (Number(c.sols_fee) || 0), 0);
-    return { id, name, offTeam: !!offTeam, open, completions: done.length, feesBanked, overdue, avg, n: days.length, trend, trendTitle, protTaken, attach, feeEarnedTotal };
+    return { id, name, offTeam: !!offTeam, open, completions: done.length, feesBanked, overdue, avg, n: days.length, trend, trendTitle, protTaken, attach };
   };
   // T1-18 — TEAM.map() alone cannot represent work nobody owns, so the Open column silently came up
   // short against the Live cases KPI. Append the unassigned bucket, plus a row for anyone holding
@@ -20096,23 +17790,6 @@ function renderThreadedPanels(all, mv, repAdvisers) {
       ? `<span class="stat-weak" title="${esc(basis)} Fewer than 3 completions — not a ranking.">${a.avg} <span class="stat-n">(${a.n})</span></span>`
       : `<span title="${esc(basis)}">${a.avg} <span class="stat-n">(${a.n})</span></span>`;
   };
-  /* R26 — per-adviser monthly fee targets (owner-only, same JSON settings key everywhere). The cell
-     measures feeEarnedTotal (procuration + broker + solicitor fees EARNED on this month's completions,
-     paid or not) against this adviser's target — the SAME basis as the firm "Fees earned vs target" bar
-     above (earnedOnCompletion sums the same three fees), NOT the
-     cash "Fees banked" column beside it. Colour rule mirrors the firm bar: green>=100 / amber>=60 /
-     red<60. No target (or the Unassigned/off-team rows, id falsy) → "—", never 0%. */
-  const advTargets = adviserTargets();
-  const advTargetCell = (a) => {
-    const t = a.id ? Number(advTargets[a.id] || 0) : 0;
-    if (!(t > 0)) return `<td class="adv-target-cell" data-pct="">—</td>`;
-    const earned = Number(a.feeEarnedTotal) || 0;
-    const pct = Math.round((earned / t) * 100);
-    const color = pct >= 100 ? "var(--green)" : pct >= 60 ? "var(--amber)" : "var(--red)";
-    const fill = Math.max(0, Math.min(100, pct));
-    const title = `Fees earned (procuration + broker + solicitor) on ${a.name}'s completions in ${label} vs their monthly target — earned on completion, paid or not, so it matches the firm 'Fees earned vs target' bar above, not the cash 'Fees banked' column beside it.`;
-    return `<td class="adv-target-cell" data-pct="${pct}" title="${esc(title)}">${fmtM(earned)} / ${fmtM(t)} <span style="color:${color};font-weight:600;">${pct}%</span><div class="adv-target-bar" style="margin-top:3px;height:5px;border-radius:3px;background:var(--light);overflow:hidden;"><div style="width:${fill}%;height:100%;background:${color};"></div></div></td>`;
-  };
   if (!money) { $("#report-advisers").innerHTML = ""; $("#report-scoreboard-scope").textContent = ""; }
   else {
   const bankedFuture = cashInMonth(all, mv, ["broker"]).futureN;
@@ -20127,25 +17804,14 @@ function renderThreadedPanels(all, mv, repAdvisers) {
     return d && Number(localDateStr(d).slice(0, 4)) === ytdYear ? s + Number(c.broker_fee || 0) : s;
   }, 0);
   const ytdGap = ytdFirm - ytdRpcSum;
-  $("#report-scoreboard-scope").textContent = `Completions, fees banked, attach rate and avg days are for ${label}. Open cases and overdue tasks are as of now. Trend is completions over the last 6 calendar months, all rows drawn on one shared scale. "Fees banked" here is broker fees actually received this month, each counted on the date that fee was paid — a different scope from "Completed £ (earned)" on the Monthly business panel above, which is fee value earned on cases completed this month regardless of payment status.${bankedFuture ? ` Excludes future-dated payments (${bankedFuture}).` : ""} "Banked ${ytdYear}" is that adviser's broker cash for the calendar year, straight from get_reports.${ytdGap ? ` It covers people who still have a login, so it totals ${fmtM(ytdRpcSum)} against the ${fmtM(ytdFirm)} on the "Fees banked ${ytdYear}" tile below — the ${fmtM(ytdGap)} difference sits on completed cases still attributed to someone whose access has been removed.` : ""} "Attach rate" is the share of THIS MONTH's completions that ended with a protection policy, with the count in brackets — on a month's worth of completions a single case moves it a long way, so read the bracket before the percentage. "Target" is fees earned (procuration + broker + solicitor) on that adviser's ${label} completions (paid or not) against the per-adviser monthly target set in Settings — the same earned-on-completion basis as the firm "Fees earned vs target" bar above, and deliberately a different figure from the cash "Fees banked" column beside it; advisers with no target set show "—". ${ATTRIB_NOTE}`;
-  /* R26 — foot Target cell: apples-to-apples, summing ONLY advisers who HAVE a target on both
-     sides (their fees earned — proc+broker+sols — this month vs the sum of set targets). None set → "—". */
-  const footTargetCell = (() => {
-    let sumTargets = 0, sumEarned = 0;
-    advRows.forEach((a) => { const t = a.id ? Number(advTargets[a.id] || 0) : 0; if (t > 0) { sumTargets += t; sumEarned += Number(a.feeEarnedTotal) || 0; } });
-    if (!(sumTargets > 0)) return `<td class="adv-target-cell">—</td>`;
-    const p = Math.round((sumEarned / sumTargets) * 100);
-    const c = p >= 100 ? "var(--green)" : p >= 60 ? "var(--amber)" : "var(--red)";
-    return `<td class="adv-target-cell"><strong>${fmtM(sumEarned)} / ${fmtM(sumTargets)}</strong> <span style="color:${c};font-weight:600;">(${p}%)</span></td>`;
-  })();
+  $("#report-scoreboard-scope").textContent = `Completions, fees banked, attach rate and avg days are for ${label}. Open cases and overdue tasks are as of now. Trend is completions over the last 6 calendar months, all rows drawn on one shared scale. "Fees banked" here is broker fees actually received this month, each counted on the date that fee was paid — a different scope from "Completed £ (earned)" on the Monthly business panel above, which is fee value earned on cases completed this month regardless of payment status.${bankedFuture ? ` Excludes future-dated payments (${bankedFuture}).` : ""} "Banked ${ytdYear}" is that adviser's broker cash for the calendar year, straight from get_reports.${ytdGap ? ` It covers people who still have a login, so it totals ${fmtM(ytdRpcSum)} against the ${fmtM(ytdFirm)} on the "Fees banked ${ytdYear}" tile below — the ${fmtM(ytdGap)} difference sits on completed cases still attributed to someone whose access has been removed.` : ""} "Attach rate" is the share of THIS MONTH's completions that ended with a protection policy, with the count in brackets — on a month's worth of completions a single case moves it a long way, so read the bracket before the percentage. ${ATTRIB_NOTE}`;
   $("#report-advisers").innerHTML = advRows.length ? `<table class="imp-table">
-    <tr><th>Adviser</th><th>Open</th><th>Completions</th><th title="Broker fees actually received this month, counted on the broker fee's own paid date. Payments dated in the future are excluded.">Fees banked (paid)<span class="money-basis">${esc(BASIS_CASH_MONTH)}</span></th><th title="Fees earned (procuration + broker + solicitor) on each adviser's completions this month (paid or not) versus their monthly target set in Settings — the same earned-on-completion basis as the firm 'Fees earned vs target' bar above, NOT the cash 'Fees banked' column beside it. Blank target = no target (shows —).">Target<span class="money-basis">(fees earned ÷ target · this month)</span></th><th title="Broker fees this adviser has banked so far in ${ytdYear}, as reported by get_reports (M5) — the same coalesce(broker_fee_paid_at, fee_paid_at) basis as the column beside it, widened to the whole year.">Banked ${ytdYear}<span class="money-basis">(broker only · cash · YTD)</span></th><th title="Of the cases this adviser completed in the selected month, the share that ended with a protection policy (protection_status = policy taken). The count is in brackets — a month is a small sample and a single case can swing it.">Attach rate<span class="money-basis">(policy taken ÷ completions · this month)</span></th><th>Overdue</th><th title="Mean days from case created to completed, over completions in the selected month only. The sample size is in brackets; fewer than 3 completions is greyed and should not be read as a ranking.">Avg days</th><th title="Completions per month over the last 6 calendar months. Every row shares one vertical scale (peak ${sparkMax}); the number is this month's value.">6-mo trend</th></tr>
+    <tr><th>Adviser</th><th>Open</th><th>Completions</th><th title="Broker fees actually received this month, counted on the broker fee's own paid date. Payments dated in the future are excluded.">Fees banked (paid)<span class="money-basis">${esc(BASIS_CASH_MONTH)}</span></th><th title="Broker fees this adviser has banked so far in ${ytdYear}, as reported by get_reports (M5) — the same coalesce(broker_fee_paid_at, fee_paid_at) basis as the column beside it, widened to the whole year.">Banked ${ytdYear}<span class="money-basis">(broker only · cash · YTD)</span></th><th title="Of the cases this adviser completed in the selected month, the share that ended with a protection policy (protection_status = policy taken). The count is in brackets — a month is a small sample and a single case can swing it.">Attach rate<span class="money-basis">(policy taken ÷ completions · this month)</span></th><th>Overdue</th><th title="Mean days from case created to completed, over completions in the selected month only. The sample size is in brackets; fewer than 3 completions is greyed and should not be read as a ranking.">Avg days</th><th title="Completions per month over the last 6 calendar months. Every row shares one vertical scale (peak ${sparkMax}); the number is this month's value.">6-mo trend</th></tr>
     ${advRows.map((a) => `<tr${a.offTeam ? ' class="row-warn"' : ""}>
       <td>${advName(a)}</td>
       <td>${a.open}</td>
       <td>${a.completions}</td>
       <td>${fmtM(a.feesBanked)}</td>
-      ${advTargetCell(a)}
       <td${a.id && ytdById[a.id] == null ? ' class="stat-weak" title="Not covered by get_reports — this row has no active login."' : ""}>${a.id && ytdById[a.id] != null ? fmtM(ytdById[a.id]) : "—"}</td>
       <td${a.attach == null ? ' class="stat-weak" title="No completions in this month, so there is nothing to attach a policy to."' : (a.completions < 3 ? ' class="stat-weak" title="Fewer than 3 completions — too small a sample to read as a ranking."' : "")}>${a.attach == null ? "—" : `${a.attach}% <span class="cs-muted">(${a.protTaken}/${a.completions})</span>`}</td>
       <td>${a.overdue ? `<span class="badge red">${a.overdue}</span>` : (a.overdue == null ? "—" : "0")}</td>
@@ -20155,9 +17821,7 @@ function renderThreadedPanels(all, mv, repAdvisers) {
     <tr id="report-scoreboard-foot" class="scoreboard-foot">
       <td><strong>Total</strong></td>
       <td><strong>${openSum}</strong></td>
-      <td colspan="2">${openSum === liveTotal ? "reconciles with" : `<strong>does not reconcile with</strong>`} the ${liveTotal} live cases on the KPI row below${unassignedLive ? ` · ${unassignedLive} of them unassigned` : ""}.</td>
-      ${footTargetCell}
-      <td colspan="5"></td>
+      <td colspan="7">${openSum === liveTotal ? "reconciles with" : `<strong>does not reconcile with</strong>`} the ${liveTotal} live cases on the KPI row below${unassignedLive ? ` · ${unassignedLive} of them unassigned` : ""}.</td>
     </tr>
   </table>` : `<div class="empty">No adviser activity in ${label}.</div>`;
   }
@@ -20165,13 +17829,7 @@ function renderThreadedPanels(all, mv, repAdvisers) {
   // ---- Pipeline funnel: cases created in the selected month, by current stage (all 8 stages,
   // so a month's cohort that has already completed or dropped out still shows up). ----
   const monthCases = all.filter((c) => inMonth(c.created_at));
-  /* R37 · P1-corrected — say the SCOPE loudly, because the page carries two funnels and they are
-     not duplicates: this one is a month COHORT (created in <label>, wherever they have got to),
-     the MI one is the live book right now. The pointer to the other is only offered when the
-     reader can actually see it — Pipeline MI is isAdminOrOwner-gated, and directing an adviser to
-     a section that is not on their page would be worse than saying nothing. */
-  $("#report-funnel-scope").innerHTML = `<strong>Cases CREATED in ${esc(label)}</strong> — how far they have got, by current stage. ${monthCases.length} case${monthCases.length === 1 ? "" : "s"}.`
-    + (isAdminOrOwner() ? ` <em>(The live snapshot — everything open right now, whenever it started — is “Funnel &amp; conversion” in Pipeline MI above.)</em>` : "");
+  $("#report-funnel-scope").textContent = `${monthCases.length} case${monthCases.length === 1 ? "" : "s"} created in ${label}, by current stage.`;
   const maxF = Math.max(...STAGES.map(([s]) => monthCases.filter((c) => c.stage === s).length), 1);
   $("#report-funnel").innerHTML = monthCases.length ? STAGES.map(([s, l]) => {
     const n = monthCases.filter((c) => c.stage === s).length;
@@ -20444,9 +18102,7 @@ function renderPipelineMI(all, mv) {
   const vCreatedApp = [], vAppOffer = [], vOfferComp = [], vCreatedComp = [];
   const advMap = new Map(); // assigned_to || "__unassigned"
 
-  let miSkipped = 0;   // R21 Part B — one bad case must not abort the whole MI aggregation
   rows.forEach((c) => {
-    try {
     const live = MI_LIVE_STAGES.includes(c.stage);
     if (live) { funnel[c.stage]++; liveFeeByStage[c.stage] += fee(c); }
 
@@ -20477,28 +18133,20 @@ function renderPipelineMI(all, mv) {
     if (c.stage === "completed") { a.won++; if (c.created_at && hasComp) { const d = miDays(c.created_at, c.completed_at); if (d != null && d >= 0) a.cycles.push(d); } }
     else if (c.stage === "not_proceeding") a.lost++;
     if (hasComp && localMonthStr(c.completed_at) === mv) { a.completedPeriod++; a.feesPeriod += fee(c); }
-    } catch (err) {
-      miSkipped++;
-      logClientError("caught", "reports MI aggregation failed for a case: " + ((err && err.message) || err), { recordId: c && c.id, where: "renderPipelineMI" });
-    }
   });
 
   const label = monthLabel(mv);
   $("#report-mi-scope").textContent = "Owner management information, derived from the case book's milestone dates (created → submitted → offer issued → completed). Pre-launch the samples are small; every figure below states its own basis and sharpens as the book grows.";
-  if (miSkipped > 0) $("#report-mi-scope").insertAdjacentHTML("beforeend", ` <span class="client-list-cap-note">${miSkipped} record(s) couldn't be displayed — logged</span>`);
 
   // ---- Panel 1: funnel + conversion + win rate ----
   const liveTot = MI_LIVE_STAGES.reduce((s, st) => s + funnel[st], 0);
   const maxFun = Math.max(...MI_LIVE_STAGES.map((s) => funnel[s]), 1);
-  /* R20 — each stage bar is now a real <button> (keyboard-accessible, Enter/Space native) that
-     drills to the live cases at that stage. A zero-count bar is `disabled` so it is neither
-     focusable nor clickable — there is nothing to open behind it. Listeners wired below. */
   $("#report-mi-funnel").innerHTML = liveTot ? MI_LIVE_STAGES.map((s) => `
-    <button type="button" class="mi-bar-row mi-drill" data-mi-stage="${s}"${funnel[s] ? ` title="Click to see the cases"` : " disabled"} aria-label="${esc(STAGE_LABEL[s])}: ${funnel[s]} live case${funnel[s] === 1 ? "" : "s"}">
-      <span class="mi-bar-lbl">${STAGE_LABEL[s]}</span>
-      <span class="mi-bar-track"><span class="mi-bar-fill" style="width:${(funnel[s] / maxFun) * 100}%;"></span></span>
-      <span class="mi-bar-n">${funnel[s]}</span>
-    </button>`).join("") : '<div class="empty">No live cases in the pipeline.</div>';
+    <div style="display:flex;align-items:center;gap:8px;margin:3px 0;">
+      <span style="width:90px;font-size:12px;color:var(--muted);">${STAGE_LABEL[s]}</span>
+      <div style="flex:1;background:var(--light);border-radius:4px;"><div style="width:${(funnel[s] / maxFun) * 100}%;background:var(--orange);border-radius:4px;height:16px;"></div></div>
+      <span style="width:24px;font-size:12px;font-weight:600;">${funnel[s]}</span>
+    </div>`).join("") : '<div class="empty">No live cases in the pipeline.</div>';
 
   const total = rows.length;
   const stepPct = (num, den) => (den ? Math.round((num / den) * 100) + "%" : "—");
@@ -20515,7 +18163,7 @@ function renderPipelineMI(all, mv) {
   const terminal = completedN + notProceedingN;
   $("#report-mi-winrate").innerHTML = terminal < 5
     ? `<span class="stat-weak">Win rate: not enough completed cases yet for a reliable rate (${terminal} terminal case${terminal === 1 ? "" : "s"}).</span>`
-    : `<button type="button" class="linkish mi-drill" id="report-mi-winrate-link" title="Click to see the cases"><strong>Win rate ${Math.round((completedN / terminal) * 100)}%</strong> — ${completedN} completed of ${terminal} terminal (completed + not proceeding).</button>`;
+    : `<strong>Win rate ${Math.round((completedN / terminal) * 100)}%</strong> — ${completedN} completed of ${terminal} terminal (completed + not proceeding).`;
 
   // ---- Panel 2: velocity ----
   const vMetrics = [
@@ -20596,7 +18244,7 @@ function renderPipelineMI(all, mv) {
     .map((a) => {
       const term = a.won + a.lost;
       return {
-        id: a.id, key: a.id || "__unassigned", live: a.live, completedPeriod: a.completedPeriod, feesPeriod: a.feesPeriod,
+        id: a.id, live: a.live, completedPeriod: a.completedPeriod, feesPeriod: a.feesPeriod,
         term, winPct: term ? Math.round((a.won / term) * 100) : null, medCycle: miMedian(a.cycles),
         name: a.id ? staffName(a.id) : "Unassigned",
       };
@@ -20606,7 +18254,7 @@ function renderPipelineMI(all, mv) {
   $("#report-mi-scoreboard").innerHTML = boardRows.length ? `<table class="imp-table">
     <tr><th>Adviser</th><th>Live</th><th title="Completed in ${esc(label)}">Completed</th><th title="Broker + proc fee on cases completed in ${esc(label)}">Fees written</th><th title="All-time completed ÷ (completed + not proceeding)">Win rate</th><th title="All-time median days, created → completed">Median cycle</th></tr>
     ${boardRows.map((a) => `<tr>
-      <td><button type="button" class="linkish mi-drill mi-adv-link" data-mi-adv="${esc(a.key)}" title="Click to see the cases">${esc(a.name)}</button></td>
+      <td>${esc(a.name)}</td>
       <td>${a.live}</td>
       <td>${a.completedPeriod}</td>
       <td>${fmtM(a.feesPeriod)}</td>
@@ -20614,278 +18262,6 @@ function renderPipelineMI(all, mv) {
       <td>${a.medCycle == null ? '<span class="cs-muted">—</span>' : a.medCycle + "d"}</td>
     </tr>`).join("")}
   </table>` : '<div class="empty">No adviser activity yet.</div>';
-
-  /* ============================ R20 — ACTIONABLE MI ============================
-     Drill-downs and per-panel CSV, all off the in-scope `all`/`rows` set already read by
-     Reports (no new query) and inside this owner/admin-gated render (gate inherited). The
-     click targets rendered above are real <button>s, so Enter/Space work natively; each just
-     filters `rows` and hands the subset to miDrilldown(). CSV buttons live in the static panel
-     headers; their handlers reuse the aggregates computed above and emit via miCsv() (which
-     mirrors exportCsv's serialization — same injection guard, BOM, Blob, anchor download). */
-  const dstr = new Date().toISOString().slice(0, 10);
-
-  // Funnel stage bars → live cases at that stage.
-  $("#report-mi-funnel").querySelectorAll(".mi-bar-row[data-mi-stage]").forEach((btn) => {
-    const s = btn.getAttribute("data-mi-stage");
-    btn.addEventListener("click", () => miDrilldown(`Live cases · ${STAGE_LABEL[s] || s}`, rows.filter((c) => c.stage === s)));
-  });
-  // Scoreboard adviser rows → that adviser's cases (all of them, live + terminal).
-  $("#report-mi-scoreboard").querySelectorAll(".mi-adv-link[data-mi-adv]").forEach((btn) => {
-    const key = btn.getAttribute("data-mi-adv");
-    const nm = key === "__unassigned" ? "Unassigned" : staffName(key);
-    btn.addEventListener("click", () => miDrilldown(`${nm} · all cases`, rows.filter((c) => (c.assigned_to || "__unassigned") === key)));
-  });
-  // Win-rate figure → the terminal cases (completed + not proceeding) behind the rate.
-  const wrLink = $("#report-mi-winrate-link");
-  if (wrLink) wrLink.addEventListener("click", () => miDrilldown("Terminal cases · win rate", rows.filter((c) => c.stage === "completed" || c.stage === "not_proceeding")));
-
-  // ---- Per-panel CSV export ----
-  const csvFunnel = $("#report-mi-csv-funnel");
-  if (csvFunnel) csvFunnel.onclick = () => {
-    const r = [];
-    MI_LIVE_STAGES.forEach((s) => r.push(["Live funnel", STAGE_LABEL[s], funnel[s], ""]));
-    r.push(["Conversion", "Created", total, ""]);
-    r.push(["Conversion", "Reached application (submitted)", reachedApp, stepPct(reachedApp, total)]);
-    r.push(["Conversion", "Reached offer (offer issued)", reachedOffer, stepPct(reachedOffer, reachedApp)]);
-    r.push(["Conversion", "Completed", reachedCompleted, stepPct(reachedCompleted, reachedOffer)]);
-    r.push(["Win rate", `${completedN} completed of ${terminal} terminal`, terminal >= 5 ? Math.round((completedN / terminal) * 100) + "%" : "n/a (<5 terminal)", ""]);
-    miCsv(`nexmoney-mi-funnel-${dstr}.csv`, ["Section", "Item", "Count", "Step %"], r);
-  };
-  const csvVel = $("#report-mi-csv-velocity");
-  if (csvVel) csvVel.onclick = () => {
-    const r = vMetrics.map((m) => [m.label, miMedian(m.arr) ?? "", miMean(m.arr) ?? "", m.arr.length]);
-    miCsv(`nexmoney-mi-velocity-${dstr}.csv`, ["Transition", "Median days", "Mean days", "n"], r);
-  };
-  const csvRev = $("#report-mi-csv-revenue");
-  if (csvRev) csvRev.onclick = () => {
-    const r = [];
-    runMonths.forEach((m, i) => r.push(["Run-rate", m, runVals[i], "", ""]));
-    r.push(["Run-rate", "12-month total", runTotal, "", ""]);
-    MI_LIVE_STAGES.forEach((s) => r.push(["Forecast", STAGE_LABEL[s], liveFeeByStage[s], Math.round(weightOf[s] * 100) + "%", Math.round(liveFeeByStage[s] * weightOf[s])]));
-    r.push(["Forecast", "Live pipeline total", liveFeeTotal, "", Math.round(weightedTotal)]);
-    miCsv(`nexmoney-mi-revenue-${dstr}.csv`, ["Section", "Item", "£ / count", "Weight", "Weighted £"], r);
-  };
-  const csvBoard = $("#report-mi-csv-scoreboard");
-  if (csvBoard) csvBoard.onclick = () => {
-    const r = boardRows.map((a) => [a.name, a.live, a.completedPeriod, a.feesPeriod, a.winPct == null ? "" : a.winPct + "%", a.term, a.medCycle == null ? "" : a.medCycle]);
-    miCsv(`nexmoney-mi-scoreboard-${dstr}.csv`, ["Adviser", "Live", `Completed (${label})`, "Fees written £", "Win rate", "Terminal n", "Median cycle days"], r);
-  };
-}
-
-/* R20 — one thin CSV emitter for the MI panels and drill-downs. exportCsv() (~8735) is
-   case-book-shaped: fixed columns + a fixed `pipeline-…` filename, so it cannot serialize the
-   aggregate MI tables. Rather than a second CSV library, this reuses exportCsv's EXACT
-   serialization contract — the same formula-injection guard, the same UTF-8 BOM, the same
-   Blob + anchor download — parameterized by filename/header/rows. Owner/admin-gated by virtue
-   of only being reachable from inside #report-mi-section. */
-function miCsv(filename, header, rows) {
-  const q2 = (v) => {
-    let s = String(v ?? "");
-    if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;   // spreadsheet formula injection, same guard as exportCsv
-    return `"${s.replace(/"/g, '""')}"`;
-  };
-  const lines = [header.map(q2).join(",")].concat((rows || []).map((r) => r.map(q2).join(",")));
-  const blob = new Blob(["﻿" + lines.join("\n")], { type: "text/csv" });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = filename;
-  a.click();
-}
-
-/* R20 — the reusable drill-down modal. Reuses the existing #modal / openModal() infra (same
-   pattern as the merge/appointment modals: set #modal.innerHTML, then openModal()). Lists the
-   passed-in cases (already filtered from `all` by the caller — no query), each row client ·
-   stage · adviser · fee, with an Open button that routes through openCase(), a header count,
-   and its own CSV (client, stage, adviser, fee, key milestone dates). Empty → "No cases match." */
-function miDrilldown(title, cases) {
-  const list = (cases || []).slice();
-  const feeOf = (c) => Number(c.broker_fee || 0) + Number(c.proc_fee || 0);
-  const nameOf = (c) => [c.clients && c.clients.first_name, c.clients && c.clients.last_name].filter(Boolean).join(" ") || "—";
-  list.sort((a, b) => feeOf(b) - feeOf(a) || nameOf(a).localeCompare(nameOf(b)));
-  const body = list.length ? `<table class="imp-table mi-drill-table">
-    <tr><th>Client</th><th>Stage</th><th>Adviser</th><th>Fee</th><th></th></tr>
-    ${list.map((c) => `<tr>
-      <td>${esc(nameOf(c))}</td>
-      <td>${esc(STAGE_LABEL[c.stage] || c.stage)}</td>
-      <td>${c.assigned_to ? esc(staffName(c.assigned_to)) : '<span class="cs-muted">Unassigned</span>'}</td>
-      <td>${fmtM(feeOf(c))}</td>
-      <td><button type="button" class="btn btn-sm" onclick="closeModal(); openCase('${c.id}')">Open</button></td>
-    </tr>`).join("")}
-  </table>` : '<div class="empty">No cases match.</div>';
-  $("#modal").innerHTML = `<div id="mi-drilldown" class="mi-drilldown">
-    <h3>${esc(title)} <span class="mi-drill-count">${list.length}</span>${list.length ? `<button type="button" class="btn btn-sm mi-csv-btn" id="mi-drilldown-csv" title="Download these cases as CSV">⭳ CSV</button>` : ""}</h3>
-    ${body}
-    <div class="modal-actions"><div></div><div class="right"><button type="button" class="btn" id="mi-drilldown-close">Close</button></div></div>
-  </div>`;
-  openModal();
-  const closeBtn = $("#mi-drilldown-close");
-  if (closeBtn) closeBtn.onclick = closeModalGuarded;
-  const csvBtn = $("#mi-drilldown-csv");
-  if (csvBtn) csvBtn.onclick = () => {
-    const rowsOut = list.map((c) => [
-      nameOf(c), STAGE_LABEL[c.stage] || c.stage, c.assigned_to ? staffName(c.assigned_to) : "Unassigned", feeOf(c),
-      (c.created_at || "").slice(0, 10), (c.submitted_at || "").slice(0, 10), (c.offer_issued_date || "").slice(0, 10), (c.completed_at || "").slice(0, 10),
-    ]);
-    miCsv(`nexmoney-mi-drilldown-${new Date().toISOString().slice(0, 10)}.csv`,
-      ["Client", "Stage", "Adviser", "Fee £", "Created", "Submitted", "Offer issued", "Completed"], rowsOut);
-  };
-}
-window.miDrilldown = miDrilldown;
-
-/* ==========================================================================
-   R21 Part C — OWNER/ADMIN diagnostics panel (#report-diag-section).
-   Gated exactly like renderPipelineMI's #report-mi-section (isAdminOrOwner() +
-   classList.toggle('hidden')). Renders a health summary + a newest-first table of
-   the in-memory ERROR_LOG, and wires the CSV / copy / clear buttons. Reuses miCsv
-   (as the MI CSV buttons do), toast, esc — no new libraries, no network send. */
-function diagTimeFmt(iso) {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return String(iso);
-  // local, human — date + HH:MM:SS
-  const p = (n) => String(n).padStart(2, "0");
-  return `${fmtD(iso)} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
-}
-function diagErrorTotal() {
-  return ERROR_LOG.reduce((s, e) => s + (e.count || 1), 0);
-}
-function renderDiagnostics(all) {
-  const sec = $("#report-diag-section");
-  if (!sec) return;
-  const show = isAdminOrOwner();
-  sec.classList.toggle("hidden", !show);
-  /* R33 — the block now lives inside a <details> on Settings. The gate is unchanged; it just has
-     to reach the wrapper too, or an adviser would be offered a "Diagnostics" disclosure that
-     opens onto nothing. */
-  const det = $("#diag-details");
-  if (det) det.classList.toggle("hidden", !show);
-  if (!show) return;
-  /* R33 — `all` is the Reports read this used to be rendered from. Called from Settings there is
-     no such read and `all` is null: the record count is then OMITTED rather than reported as 0,
-     which would be a made-up number about a page the reader isn't on. */
-  const recCount = all == null ? null : all.length;
-  const total = diagErrorTotal();
-
-  const health = $("#report-diag-health");
-  if (health) health.innerHTML =
-    (recCount == null ? "" : `<span>Records loaded (last Reports read): <strong>${recCount}</strong></span> · `) +
-    `<span>User: <strong>${esc((ME && ME.email) || "—")}</strong> (${esc(MY_ROLE)})</span> · ` +
-    `<span>Origin: <strong>${esc(location.origin)}</strong></span> · ` +
-    `<span>Errors this session: <strong>${total}</strong></span>`;
-
-  const tbl = $("#diag-error-table");
-  if (tbl) {
-    if (!ERROR_LOG.length) {
-      tbl.innerHTML = `<div class="empty">No errors logged this session. ✅</div>`;
-    } else {
-      const rowsNewestFirst = ERROR_LOG.slice().reverse();
-      tbl.innerHTML = `<table class="imp-table"><tr><th>Time</th><th>Kind</th><th>Message</th><th title="Times this identical error repeated">×</th><th>Where</th></tr>` +
-        rowsNewestFirst.map((e) => `<tr>
-          <td style="white-space:nowrap;">${esc(diagTimeFmt(e.t))}</td>
-          <td>${esc(e.kind || "")}</td>
-          <td>${esc(e.msg || "")}</td>
-          <td>${e.count || 1}</td>
-          <td>${esc(e.where || "")}</td>
-        </tr>`).join("") + `</table>`;
-    }
-  }
-
-  const csvBtn = $("#report-diag-csv");
-  if (csvBtn) csvBtn.onclick = () => {
-    const rowsOut = ERROR_LOG.slice().reverse().map((e) =>
-      [e.t || "", e.kind || "", e.msg || "", e.count || 1, e.where || "", e.view || "", e.role || ""]);
-    miCsv(`nexmoney-diagnostics-${new Date().toISOString().slice(0, 10)}.csv`,
-      ["time", "kind", "message", "count", "where", "view", "role"], rowsOut);
-  };
-  const copyBtn = $("#report-diag-copy");
-  if (copyBtn) copyBtn.onclick = () => copyDiagnostics(recCount);
-  const clearBtn = $("#report-diag-clear");
-  if (clearBtn) clearBtn.onclick = () => { ERROR_LOG.length = 0; renderDiagnostics(all); toast("Diagnostics cleared for this session."); };
-  /* R30 — fill the additive cross-session table (async, self-contained). renderDiagnostics
-     stays sync; loadPersistedDiagnostics never throws and never calls logClientError. */
-  try { loadPersistedDiagnostics(); } catch (_) {}
-}
-/* R30 — the PERSISTED, cross-session error log (owner/admin), additive to the session
-   table above. Reads the sanitised error_events fingerprints, aggregates by
-   error_type|location|page → count + last-seen + roles, and renders it. Defensive by
-   design: it must NEVER throw and NEVER call logClientError (either would re-enter the
-   error path), so every branch swallows and an unsupported DB degrades to a plain note. */
-async function loadPersistedDiagnostics() {
-  const box = $("#diag-persist-table");
-  if (!box) return;
-  let res;
-  try {
-    res = await db.from("error_events").select("error_type,location,page,role,created_at").order("created_at", { ascending: false }).limit(OWNER_ROW_CAP);
-  } catch (e) { res = { error: e }; }
-  try {
-    if (!res || res.error || !Array.isArray(res.data)) {
-      box.innerHTML = '<div class="empty">Cross-session error log isn’t enabled on this database.</div>';
-      return;
-    }
-    const rows = res.data;
-    if (!rows.length) {
-      box.innerHTML = `<div class="empty">No cross-session errors recorded. ✅</div>`;
-    } else {
-      const groups = new Map();
-      rows.forEach((r) => {
-        const key = (r.error_type || "") + "|" + (r.location || "") + "|" + (r.page || "");
-        let g = groups.get(key);
-        if (!g) { g = { error_type: r.error_type || "", location: r.location || "", page: r.page || "", count: 0, last: "", roles: new Set() }; groups.set(key, g); }
-        g.count++;
-        if (r.created_at && r.created_at > g.last) g.last = r.created_at;
-        if (r.role) g.roles.add(r.role);
-      });
-      const list = Array.from(groups.values()).sort((a, b) => (b.count - a.count) || (a.last < b.last ? 1 : a.last > b.last ? -1 : 0));
-      box.innerHTML = `<table class="imp-table"><tr><th>Type</th><th>Where</th><th>Page</th><th title="Times seen">×</th><th>Last seen</th><th>Roles</th></tr>` +
-        list.map((g) => `<tr>
-          <td>${esc(g.error_type)}</td>
-          <td>${esc(g.location)}</td>
-          <td>${esc(g.page)}</td>
-          <td>${g.count}</td>
-          <td style="white-space:nowrap;">${esc(diagTimeFmt(g.last))}</td>
-          <td>${esc(Array.from(g.roles).join(", "))}</td>
-        </tr>`).join("") + `</table>`;
-    }
-    const clearBtn = $("#report-diag-persist-clear");
-    if (clearBtn) clearBtn.onclick = async () => {
-      try { await db.from("error_events").delete().gte("id", 0); } catch (_) {}   // .gte("id",0) matches all (delete needs a filter)
-      try { loadPersistedDiagnostics(); } catch (_) {}
-      try { toast("Persisted diagnostics cleared."); } catch (_) {}
-    };
-  } catch (_) {
-    try { box.innerHTML = '<div class="empty">Cross-session error log isn’t enabled on this database.</div>'; } catch (__) {}
-  }
-}
-/* Plain-text dump (health summary + error rows) → clipboard, so an owner can paste it to
-   support. navigator.clipboard is wrapped: absent/denied → a toast, never an exception. */
-function copyDiagnostics(recCount) {
-  try {
-    const lines = [];
-    lines.push("NexMoney diagnostics — " + new Date().toISOString());
-    lines.push("User: " + ((ME && ME.email) || "—") + " (" + MY_ROLE + ")");
-    lines.push("Origin: " + location.origin);
-    // R33 — omitted entirely when there is no Reports read behind this render (see renderDiagnostics).
-    if (recCount != null) lines.push("Records loaded (last Reports read): " + recCount);
-    lines.push("Errors this session: " + diagErrorTotal());
-    lines.push("");
-    if (!ERROR_LOG.length) {
-      lines.push("No errors logged this session.");
-    } else {
-      ERROR_LOG.slice().reverse().forEach((e) => {
-        lines.push([diagTimeFmt(e.t), e.kind, "x" + (e.count || 1), e.where || "-", String(e.msg || "").replace(/\s+/g, " ")].join(" | "));
-      });
-    }
-    const text = lines.join("\n");
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(text).then(
-        () => toast("Diagnostics copied to clipboard."),
-        () => toast("Couldn't copy — check clipboard permissions, or use ⭳ CSV."));
-    } else {
-      toast("Clipboard unavailable — use ⭳ CSV instead.");
-    }
-  } catch (_) {
-    toast("Couldn't copy diagnostics.");
-  }
 }
 
 /* Batch 6 feature-detection (M2). PostgREST answers a select naming a column that doesn't exist
@@ -20918,28 +18294,10 @@ function renderCapNotice() {
     ? `⚠ Showing the first ${REPORTS_ROW_CAP.toLocaleString("en-GB")} cases — figures describe this subset, not the whole book. (Reached on: ${[...new Set(reportsCapHits)].join(", ")}.)`
     : "";
 }
-/* R23 — the same silent-1000-cap fix, extended to the owner-facing full-table reads R18 left
-   unbounded (Dashboard, Pipeline, Clients, Data health, plus the client pickers and the Revolution
-   importer). ONE shared ceiling with Reports: below it (20,000 ≫ Daniel's ~2,000) every capped read
-   is byte-identical to today — it only lifts PostgREST's silent 1,000-row ceiling so a 2,000+ book is
-   read whole instead of an arbitrary first ~1,000. A read that comes back holding EXACTLY the cap is,
-   as far as the client can tell, truncated (same `=== cap` principle Reports uses above), so the page
-   surfaces one small notice. This effectively NEVER fires for Daniel — it is the safety net. */
-let OWNER_ROW_CAP = REPORTS_ROW_CAP;
-const ownerCapHit = (rows) => Array.isArray(rows) && rows.length === OWNER_ROW_CAP;
-function renderOwnerCapNotice(sel, hit) {
-  const el = $(sel);
-  if (!el) return;
-  el.classList.toggle("hidden", !hit);
-  el.textContent = hit
-    ? `⚠ Showing the first ${OWNER_ROW_CAP.toLocaleString("en-GB")} records — this view describes a subset, not the whole book.`
-    : "";
-}
 /* SANDBOX ONLY — the mock harness needs to make the cap bite on a 50-case fixture. Defined only
    when the mock supabase bundle is what loaded, so it cannot exist in the shipped app. */
 if (typeof window !== "undefined" && window.supabase && window.supabase.__isMock) {
   window.__setReportsRowCap = function (n) { REPORTS_ROW_CAP = Number(n) || 5000; return REPORTS_ROW_CAP; };
-  window.__setOwnerRowCap = function (n) { OWNER_ROW_CAP = Number(n) || 5000; return OWNER_ROW_CAP; };
 }
 /* G1N-9 — "…→ not_proceeding" (the move INTO the lost stage), never "not_proceeding → …" (a
    reopen). The bare-name alternative covers a writer that records only the new stage. */
@@ -21156,17 +18514,7 @@ async function loadReports() {
   const moneyNote = $("#report-money-note");
   if (moneyNote) {
     moneyNote.classList.toggle("hidden", money);
-    /* R37 · item 22 — STATE THE RULE, for the reader it is most confusing to. An admin's Reports
-       simply stops where the owner-only money panels begin: they get the Pipeline MI run-rate (an
-       aggregate, admin-visible) and then nothing, with no line anywhere saying that the £-detail
-       below it exists and is withheld deliberately. That reads as a page that failed to load. The
-       sentence is added for ADMIN ONLY — an adviser sees no run-rate at all, so telling them
-       "the aggregate run-rate above is the admin view" would be a pointer to a panel that is not
-       on their page. Owner sees no note at all, exactly as before. */
-    moneyNote.textContent = money ? "" : ("Firm-wide money figures — fees banked and outstanding, pipeline loan value, the adviser scoreboard, the forecast, introducer revenue and client lifetime value — are shown to the Owner only. Case counts, the funnel, completions and lead sources are below, your own numbers are in the My numbers card at the top, and the fees on your own cases are on each case."
-      + (MY_ROLE === "admin"
-        ? " As an Admin this page ENDS where that £-detail begins, and that is the rule rather than a page that failed to load: Money owed, the commission and completion forecasts, the rate-end book value, introducer revenue and client lifetime value are Owner-only. The aggregate run-rate in Pipeline MI above is the admin view of the firm's money."
-        : ""));
+    moneyNote.textContent = money ? "" : "Firm-wide money figures — fees banked and outstanding, pipeline loan value, the adviser scoreboard, the forecast, introducer revenue and client lifetime value — are shown to the Owner only. Case counts, the funnel, completions and lead sources are below, your own numbers are in the My numbers card at the top, and the fees on your own cases are on each case.";
   }
   /* R5-F2 (Daniel-approved) — the HEADLINE fee figure for the year is now what the firm EARNED on
      the cases it completed (proc+broker+sols on completed_at), not what happened to arrive in the
@@ -21250,10 +18598,6 @@ async function loadReports() {
   /* R19 — the OWNER/ADMIN Pipeline MI section, from the same `all` rows plus the two milestone
      dates in the select above. Gated inside (isAdminOrOwner); hidden for plain advisers. */
   renderPipelineMI(all, mv);
-  /* R21 Part C / R33 — the diagnostics panel used to render from here, off the `all` count in
-     scope. It now lives on Settings (renderSettings → renderDiagnostics(null)): it is a support
-     artefact, not management information, and it was costing every owner a scroll past it on
-     every Reports read. Nothing else about it changed. */
   renderForecastBuckets(all);
   // Client LTV is the one remaining RPC-only panel (needs client_id/name joins this page doesn't
   // otherwise fetch) — hide it gracefully if the RPC failed; everything else above still renders.
@@ -21263,11 +18607,6 @@ async function loadReports() {
      re-deriving them: one gate, not seventeen copies of one, so a money panel and its chip can
      never disagree. */
   buildReportsJumpNav();
-  /* R42 · F3 — and on the same terms, for the same reason: the five section buttons ask the panels
-     that have just rendered whether anything under each header exists for this role, and the six
-     ledger drawers take their row counts off rows that are already on the page. */
-  buildReportSectionNav();
-  buildReportLedgerCounts();
 }
 
 /* ==========================================================================
@@ -21314,19 +18653,13 @@ const REPORT_JUMP_SECTIONS = [
   ["live", "Live snapshot", "#report-live-note"],
   ["owed", "Money owed", "#report-owed-panel"],
   ["rateend", "Rate-end book", "#report-rateend-panel"],
+  ["leadresp", "Lead response", "#report-leadresp-panel"],
+  ["advocacy", "Advocacy", "#report-advocacy-panel"],
+  ["conveyancer", "Conveyancers", "#report-conveyancer-panel"],
   ["forecast", "Forecast", "#report-forecast-panel"],
   ["months", "Completions", "#report-months-panel"],
   ["introducers", "Introducers", "#report-introducers-panel"],
   ["ltv", "Client LTV", "#report-ltv-panel"],
-  /* R42 · F3 — lead response, advocacy and conveyancers moved BELOW the money panels when Reports
-     was grouped into its five sections (they are §5 Service & quality; the money panels are §4).
-     This list is re-ordered to match, and that is not cosmetic: onRepJumpScroll() walks it in order
-     and BREAKS at the first section below the fold line, so a list in a different order from the
-     DOM stops highlighting at the first entry that has moved — every chip below it would have gone
-     dead. Keep this array in DOM order. Keys, labels and chip ids are unchanged. */
-  ["leadresp", "Lead response", "#report-leadresp-panel"],
-  ["advocacy", "Advocacy", "#report-advocacy-panel"],
-  ["conveyancer", "Conveyancers", "#report-conveyancer-panel"],
 ];
 /* Visible = on the page AND not inside anything hidden. The .grid-2 wrappers mean a panel's own
    class is not the whole answer, so walk up to the page section. */
@@ -21436,93 +18769,6 @@ function onRepJumpScroll() {
 }
 
 /* ==========================================================================
-   R42 · F3 — REPORTS SECTIONS.
-
-   Reports answers five questions — my numbers, this month, where the work is,
-   where the money is, how well we are serving people — and it had been
-   answering them in one flat 7,700px stack of seventeen panels. The panels have
-   MOVED into those five groups (ids, gates and render code all untouched); each
-   group carries a slim <h3 class="report-section-head" id="rsec-*"> and one
-   button in #reports-jump.
-
-   THE SECTIONS DO NOT COLLAPSE. This is grouping and wayfinding. Anything a
-   role can see, it still sees on arrival.
-
-   THE ROLE RULE IS THE ONE R11-4 ESTABLISHED AND IS NOT COPIED: every panel
-   already owns its own gate, so a section asks its PANELS whether any of them
-   is visible (repJumpVisible, the same walk the chip bar uses) rather than
-   re-testing MY_ROLE here — which is how a money button leaks to an adviser.
-   A section with nothing visible under it loses its button AND its header: an
-   empty "Money & book" heading is worse than no heading at all.
-
-   The membership list below is declared, unlike #rep-nav's chip list, because
-   the page is flat markup: a section is a header plus the panels that follow
-   it, and there is no wrapper element to ask. Keep it in DOM order — the nav
-   reads top to bottom.
-   ========================================================================== */
-const REPORT_SECTIONS = [
-  ["mine", "My numbers", "#rsec-mine", ["#report-mine-panel"]],
-  ["month", "This month", "#rsec-month", ["#report-month-panel", "#report-scoreboard-panel"]],
-  ["mi", "Pipeline MI", "#rsec-mi", ["#report-mi-section", "#report-funnel-panel", "#report-sources-panel", "#report-losses-panel"]],
-  ["money", "Money & book", "#rsec-money", ["#report-kpis", "#report-owed-panel", "#report-rateend-panel", "#report-forecast-panel", "#report-months-panel", "#report-introducers-panel", "#report-ltv-panel"]],
-  ["quality", "Service & quality", "#rsec-quality", ["#report-leadresp-panel", "#report-nps-panel", "#report-advocacy-panel", "#report-conveyancer-panel"]],
-];
-function buildReportSectionNav() {
-  const bar = $("#reports-jump"), wrap = $("#reports-jump-chips");
-  if (!bar || !wrap) return;
-  const live = REPORT_SECTIONS.map(([key, label, headSel, panels]) => {
-    const head = $(headSel);
-    const on = panels.some((sel) => { const el = $(sel); return el && repJumpVisible(el); });
-    // The header goes with the button — one decision, applied to both.
-    if (head) head.classList.toggle("hidden", !on);
-    return { key, label, head, on };
-  }).filter((s) => s.head && s.on);
-  // One button is not navigation, it is decoration — the same guard #rep-nav uses.
-  if (live.length < 2) { wrap.innerHTML = ""; bar.hidden = true; return; }
-  wrap.innerHTML = live.map((s) =>
-    `<button type="button" class="seg-btn" id="reports-nav-${esc(s.key)}" role="tab" aria-selected="false" data-reports-jump="${esc(s.key)}" title="Jump to ${esc(s.label)}">${esc(s.label)}</button>`).join("");
-  wrap.querySelectorAll("[data-reports-jump]").forEach((b) => (b.onclick = () => {
-    const it = live.find((s) => s.key === b.dataset.reportsJump);
-    // scroll-margin-top on .report-section-head (--rep-jump-scroll, measured) is what stops the
-    // sticky #rep-nav strip landing on top of the header this just took you to.
-    if (it && it.head) it.head.scrollIntoView({ behavior: "smooth", block: "start" });
-  }));
-  bar.hidden = false;
-}
-
-/* R42 · F3 — LEDGER DRAWERS. Six Reports panels lead with a figure and then print a table of
-   every row behind it. The figure is the answer; the table is the evidence, wanted on the day you
-   act on it. Each row-listing div is now inside a <details class="report-ledger"> (markup only —
-   the ids live on inside it and every render function still writes into them unchanged), closed
-   by default, with nothing persisted: a drawer that remembers is a drawer that surprises.
-
-   The count is appended here rather than baked into each renderer, because it is the same fact in
-   six places and it is FREE: the rows are already in the DOM by the time this runs. Per-panel row
-   selectors, not one generic "count the <tr>s", because "every unpaid fee line" and "the 24-month
-   table" are counting different things and a total-row or a header would be counted as evidence. */
-const REPORT_LEDGERS = [
-  ["#report-owed-table", ".owed-case-row", "line"],
-  ["#report-rateend-table", "tr.rb-bucket-row", "bucket"],
-  ["#report-nps-list", ".nps-row", "respondent"],
-  ["#report-ltv", "table tr + tr", "client"],
-  ["#report-conveyancer-body", "tr[data-firm]", "firm"],
-  ["#report-introducers", "table tr + tr", "introducer"],
-];
-function buildReportLedgerCounts() {
-  REPORT_LEDGERS.forEach(([sel, rowSel, noun]) => {
-    const box = $(sel);
-    if (!box) return;
-    const det = box.closest("details.report-ledger");
-    const out = det && det.querySelector(".ledger-n");
-    if (!out) return;
-    const n = box.querySelectorAll(rowSel).length;
-    // No count at all rather than "0 lines": the panel's own empty state is inside the drawer and
-    // says it better than a zero on the handle would.
-    out.textContent = n ? ` — ${n} ${noun}${n === 1 ? "" : "s"}` : "";
-  });
-}
-
-/* ==========================================================================
    S7 (cheap slice) / R5-47 — REVIEW SCORE DRILL-DOWN
    The Avg review score tile answered "how are we doing" and nothing else: a 7.2 with no way to
    reach the people behind it. This lists every case that returned a score, worst first, so the
@@ -21555,14 +18801,6 @@ window.toggleNpsList = function () {
   npsListOpen = !npsListOpen;
   const panel = $("#report-nps-panel");
   if (panel) panel.classList.toggle("hidden", !npsListOpen || !$("#report-nps-list").innerHTML);
-  /* R42 · F3 — the list is inside a .report-ledger drawer like every other Reports row-listing, and
-     that drawer ships closed. This panel is the one case where the drawer must not stay closed on
-     arrival: the whole panel is already opt-in — you get here by pressing "Avg review score ▾",
-     which IS the request to read the respondents — so revealing the panel and then making you open
-     a second disclosure inside it would be a drawer guarding a drawer. Opened here, not defaulted
-     open in the markup, so the "closed by default, nothing persisted" rule still holds. */
-  const det = $("#report-nps-list") && $("#report-nps-list").closest("details.report-ledger");
-  if (det) det.open = npsListOpen;
   if (npsListOpen && panel) panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
 };
 
@@ -22051,18 +19289,10 @@ function renderMoneyOwed(all) {
   panel.classList.remove("hidden");
   const m = moneyOwedModel(all);
   owedState.model = m;
-  /* R42 · F7 — BASIS REPEAT TRIMMED. Two clauses here were saying what #report-basis-legend says
-     four panels up the same page, to the same reader (this panel is Owner-only and the legend is
-     shown to exactly that reader): "the same basis as 'Fees banked' above" re-derived the cash
-     basis, and the tail label "(earned · not yet received · …)" is the legend's own definition of
-     OUTSTANDING, plus a second copy of "aged from completion date" one clause after the first. The
-     panel-specific facts — which column each fee type is counted on, what a waived fee does, what
-     it is aged from — are what this line is FOR and are untouched. BASIS_OWED itself is not
-     touched: Monday money (#money-owed-basis) still prints it and that page is out of scope. */
   $("#report-owed-basis").innerHTML =
-    `Every completed case carrying a fee amount with no paid date against it — proc, solicitor and broker fees counted separately, each on <code>coalesce(&lt;type&gt;_fee_paid_at, fee_paid_at)</code>. `
+    `Every completed case carrying a fee amount with no paid date against it — proc, solicitor and broker fees counted separately, each on <code>coalesce(&lt;type&gt;_fee_paid_at, fee_paid_at)</code>, the same basis as "Fees banked" above. `
     + `A broker fee marked <strong>waived</strong> is excluded (money you chose not to charge is not money you are owed); a waived status has no effect on proc or solicitor fees. `
-    + `Aged from <strong>completed_at</strong>. <span class="money-basis">— basis: outstanding (see legend above)</span>`;
+    + `Aged from <strong>completed_at</strong>. <span class="money-basis">${esc(BASIS_OWED)}</span>`;
 
   $("#report-owed-buckets").innerHTML = m.bucketList.map((b) => {
     const hot = b.key === "60-90" || b.key === "90+";
@@ -22535,13 +19765,13 @@ function renderLeadResponse(leads, cases) {
     + `<span class="money-basis">(leads · first_contact_at − created_at · last ${m.windowDays} days)</span>`;
 
   const nBreach = m.breaching.length;
-  $("#leadresp-tools").innerHTML = `<button type="button" class="btn btn-sm${nBreach ? " btn-danger" : ""}" id="leadresp-breach-btn" onclick="gotoLeadInbox()" title="${nBreach ? `${nBreach} enquir${nBreach === 1 ? "y is" : "ies are"} past the ${LEAD_SLA_MIN}-minute promise right now — open My Day on Today.` : "Nothing is past the promise right now. Open My Day on Today."}">${nBreach ? `⏱ ${nBreach} breaching now` : "⏱ none breaching"} →</button>`;
+  $("#leadresp-tools").innerHTML = `<button type="button" class="btn btn-sm${nBreach ? " btn-danger" : ""}" id="leadresp-breach-btn" onclick="gotoLeadInbox()" title="${nBreach ? `${nBreach} enquir${nBreach === 1 ? "y is" : "ies are"} past the ${LEAD_SLA_MIN}-minute promise right now — open the inbox on Today.` : "Nothing is past the promise right now. Open the lead inbox on Today."}">${nBreach ? `⏱ ${nBreach} breaching now` : "⏱ none breaching"} →</button>`;
 
   $("#report-leadresp-headline").innerHTML = [
     `<div class="kpi kpi-headline"><div class="num">${m.nResponded ? esc(fmtRespMins(m.median)) : "—"}</div><div class="lbl">Median response</div><div class="s">${m.nResponded} of ${m.nLeads} enquir${m.nLeads === 1 ? "y" : "ies"} answered</div></div>`,
     `<div class="kpi${m.p90 != null && m.p90 > LEAD_SLA_RED_MIN ? " bad" : ""}"><div class="num">${m.nResponded ? esc(fmtRespMins(m.p90)) : "—"}</div><div class="lbl">p90 response</div><div class="s">${m.nResponded ? `9 in 10 answered inside this` : "no answered enquiries yet"}</div></div>`,
     `<div class="kpi"><div class="num">${m.conv == null ? "—" : m.conv + "%"}</div><div class="lbl">Conversion</div><div class="s">${m.won} of ${m.nLeads} became a case</div></div>`,
-    `<div class="kpi${nBreach ? " bad" : ""}" style="cursor:pointer;" onclick="gotoLeadInbox()" title="Open the waiting enquiries in My Day on Today"><div class="num" id="leadresp-breach-n">${nBreach}</div><div class="lbl">Breaching now</div><div class="s">waiting over ${LEAD_SLA_MIN} min, nobody yet</div></div>`,
+    `<div class="kpi${nBreach ? " bad" : ""}" style="cursor:pointer;" onclick="gotoLeadInbox()" title="Open the lead inbox on Today"><div class="num" id="leadresp-breach-n">${nBreach}</div><div class="lbl">Breaching now</div><div class="s">waiting over ${LEAD_SLA_MIN} min, nobody yet</div></div>`,
   ].join("");
 
   const tableFor = (groups, headWord, emptyWord) => {
@@ -22572,7 +19802,7 @@ function renderLeadResponse(leads, cases) {
   }
   if (!m.nResponded) {
     $("#report-leadresp-source").innerHTML = `<div class="empty leadresp-empty">No data yet — none of the ${m.nLeads} enquir${m.nLeads === 1 ? "y" : "ies"} in the last ${m.windowDays} days carries a first-contact time.
-      ${slaOff ? "This database has no <code>first_contact_at</code> column yet." : `The stamp is written the first time somebody Accepts one from My Day on Today, or discards one having made contact. Nothing here is estimated in the meantime.`}
+      ${slaOff ? "This database has no <code>first_contact_at</code> column yet." : `The stamp is written the first time somebody Accepts one from the inbox on Today, or discards one having made contact. Nothing here is estimated in the meantime.`}
       ${nBreach ? `<br><strong>${nBreach} of them ${nBreach === 1 ? "is" : "are"} past the ${LEAD_SLA_MIN}-minute promise right now.</strong>` : ""}</div>`;
     $("#report-leadresp-adviser").innerHTML = "";
     return;
@@ -22630,13 +19860,6 @@ async function loadMoneyPage() {
       denied.classList.remove("hidden");
       denied.textContent = "Monday money is the firm's whole book — fees banked, fees owed, book value and per-adviser figures — so it is shown to the Owner only. Your own numbers are on the Reports page, in the My numbers card.";
     }
-    /* R44 — belt and braces on top of #money-body's own .hidden: the two
-       reconciliation panels are emptied AND hidden for a non-owner, and the
-       cached rate card is dropped, so nothing about the firm's commission
-       statements is left in the page for anybody who should not have it. */
-    procRatesCache = null;
-    await renderProcRatesPanel();
-    await renderReconPanel();
     return;
   }
   if (denied) { denied.classList.add("hidden"); denied.textContent = ""; }
@@ -22803,13 +20026,6 @@ async function loadMoneyPage() {
       <td>${r.overdue ? `<span class="badge ${r.overdue > 5 ? "red" : "amber"}">${r.overdue}</span>` : '<span class="cs-muted">0</span>'}</td>
     </tr>`).join("")}
   </table></div>` : MONEY_EMPTY("No adviser has completions, retention cases, unpaid proc fees or overdue tasks.");
-
-  /* R44 — the two reconciliation panels. Last, because they are the only part
-     of this page that WRITES, and because a slow rate-card read must not hold
-     up the figures above it. Each carries its own owner gate as well. */
-  procRatesCache = null;
-  await renderProcRatesPanel();
-  await renderReconPanel();
 }
 
 /* R7 — wiring for the controls added to Reports, Monday money and Protection.
@@ -22823,1289 +20039,6 @@ async function loadMoneyPage() {
   on("#owed-csv-btn", () => exportOwedCsv());
   on("#money-refresh", () => loadMoneyPage());
   on("#money-owed-open", () => gotoMoneyOwed());
-})();
-
-/* ==========================================================================
-   R44 · STONEBRIDGE PAYMENT RECONCILIATION
-   Two panels at the foot of Monday money, both OWNER-ONLY (they live inside
-   #money-body, which loadMoneyPage() hides for anyone else, and both are
-   emptied and hidden explicitly in that branch as well — belt and braces, the
-   same shape renderLeadResponse() uses on Reports).
-
-   What it is for: every week the network sends a commission statement and,
-   separately, a proc-rate card. Until now the statement was reconciled by eye
-   against the board and the paid dates were typed in from memory, which is how
-   a completed case sat six weeks unpaid on the Money-owed list while the money
-   had in fact arrived — and how a CLAWBACK went unnoticed entirely.
-
-   Daniel's three binding decisions are the whole shape of this code:
-     · REVIEW THEN CONFIRM. The importer never writes to a case. It parses,
-       matches, and shows its work; a human ticks. Nothing on the case moves
-       until somebody presses Confirm.
-     · OWNER ONLY. Fee-level money for the whole firm, so the same gate the
-       rest of this page uses, and no adviser-facing surface at all.
-     · A REAL CLAWBACK FLAGS AND CREATES A TASK. It never silently un-pays a
-       case: the history of what was banked stays true, and the ACTION becomes
-       a task on the owner's list.
-
-   Spreadsheet content is UNTRUSTED INPUT — an addressee, a provider, a note, a
-   filename all arrive from a third party's workbook — so every one of them goes
-   through esc() on the way into HTML, attributes included.
-   ====================================================================== */
-
-/* ---------- shared: header normalisation, cells, numbers, dates ---------- */
-
-/* Both workbooks are mapped BY HEADER NAME, never by position. The statement in
-   particular interleaves EMPTY spacer columns between the ones that carry data
-   (there are 21 columns for 16 headings), and several headings contain a
-   literal newline mid-phrase — "Tran Type \nDesc", "Account \nnumber",
-   "Banked\n(Gross)", "Policy \nType". Collapsing every run of whitespace to a
-   single space and lowercasing turns all of those into one stable key, so a
-   column moving (or a spacer being added) costs nothing. */
-const r44Head = (s) => String(s == null ? "" : s).replace(/\s+/g, " ").trim().toLowerCase();
-
-/* A money cell. SheetJS hands back a number for a numeric cell, but a hand-typed
-   one can arrive as "£1,011.50" or "(914.54)" — accounting negatives — and an
-   empty cell as "" or null. Anything that is not a number is null, never 0:
-   "we could not read this" and "this was zero" are different facts. */
-function r44Num(v) {
-  if (v == null || v === "") return null;
-  if (typeof v === "number") return isFinite(v) ? v : null;
-  let s = String(v).trim();
-  if (!s) return null;
-  let neg = false;
-  if (/^\(.*\)$/.test(s)) { neg = true; s = s.slice(1, -1); }
-  s = s.replace(/[£$,\s]/g, "");
-  if (s === "" || !/^-?\d*\.?\d+$/.test(s)) return null;
-  const n = Number(s);
-  if (!isFinite(n)) return null;
-  return neg ? -n : n;
-}
-
-/* A date cell, STRICTLY. This is also the row classifier — "the first cell
-   parses as a date" is what separates a data row from an adviser group header —
-   so it must never say yes to a person's name. `new Date("Some Name")` is
-   Invalid Date in every engine we support, but `new Date("May 5")` is NOT, which
-   is exactly the kind of surname-shaped string a lenient parser would swallow.
-   Hence: JS Date (what {cellDates:true} gives us), Excel serial, ISO, or UK
-   d/m/y. Nothing else. */
-function r44CellDate(v) {
-  if (v == null || v === "") return null;
-  if (v instanceof Date) return isNaN(v.getTime()) ? null : v;
-  if (typeof v === "number") {
-    // Excel serial. Bounded to 1954-2119 so a stray Opp ID or an amount can
-    // never be read as a date.
-    if (v < 20000 || v > 80000) return null;
-    const d = new Date(Date.UTC(1899, 11, 30) + Math.round(v) * 86400000);
-    return isNaN(d.getTime()) ? null : d;
-  }
-  const s = String(v).trim();
-  if (!s) return null;
-  let m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
-  if (m) { const d = new Date(`${m[1]}-${m[2]}-${m[3]}T12:00:00`); return isNaN(d.getTime()) ? null : d; }
-  m = /^(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{2,4})$/.exec(s);   // UK day-first
-  if (m) {
-    let y = Number(m[3]); if (y < 100) y += 2000;
-    const d = new Date(y, Number(m[2]) - 1, Number(m[1]), 12);
-    return isNaN(d.getTime()) ? null : d;
-  }
-  return null;
-}
-/* The calendar day a parsed cell means, read with LOCAL getters. SheetJS builds
-   its Date at local midnight; a serial we build lands at UTC midnight. In
-   Europe/London (UTC+0 or +1) both read back as the same calendar day through
-   local getters, which is the only timezone this firm operates in — and it is
-   the same reason feeDateToTs() stamps local midday rather than midnight. */
-function r44DateStr(d) {
-  if (!d) return "";
-  const p = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-}
-const r44Str = (v) => (v == null ? "" : String(v).trim());
-/* A sheet as an array of arrays, blank rows kept — the walk below is
-   positional within the sheet and a dropped blank row would shift it. */
-const r44Aoa = (ws) => XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null, blankrows: true });
-
-/* ---------- T1 · the proc-rate card ---------- */
-
-/* Header → column. Each entry is a list of accepted names in preference order;
-   the first that appears in the sheet wins. `rate` accepts the network's own
-   column heading first ("Stonebridge") and a generic "Rate" as a fallback,
-   because the day the card is re-badged is not the day expected-fee checks
-   should silently switch off. */
-const R44_RATE_HEADERS = {
-  lender: ["lender"],
-  product: ["product description", "product"],
-  lg_code: ["l&g code", "l & g code", "lg code", "l and g code"],
-  rate: ["stonebridge", "stonebridge rate", "rate", "proc fee"],
-  notes: ["notes", "note", "comments"],
-};
-/* Returns { rows, skipped, usable, headerRow, missing } — `rows` shaped for
-   proc_rates. A row with a blank or non-numeric rate is SKIPPED and counted:
-   the card saying nothing about a product is not the same claim as the card
-   saying nought, and storing the second when we were handed the first would
-   invent an expected fee of £0.
-   An EXPLICIT nought is a different matter and is kept — the card really does
-   carry 0 against some further-advance products, and dropping that would make
-   the card look as though it had never mentioned them. It cannot leak into an
-   expected fee either way: r44ExpectedFee() only counts rates above nought.
-   The rate is a DECIMAL FRACTION here (0.004 = 0.40%), which is what the
-   column's 0-1 check constraint enforces, so anything outside [0,1] is a
-   misread column rather than a rate and is skipped.
-   `usable` counts the rows that could actually drive an expected-fee check —
-   rate strictly inside (0,1] — and is what the upload gate tests. */
-function parseProcRatesSheet(aoa) {
-  const out = { rows: [], skipped: 0, usable: 0, headerRow: -1, missing: [] };
-  const rows = aoa || [];
-  for (let i = 0; i < Math.min(rows.length, 20); i++) {
-    const heads = (rows[i] || []).map(r44Head);
-    if (heads.indexOf("lender") >= 0) { out.headerRow = i; break; }
-  }
-  if (out.headerRow < 0) { out.missing = ["lender"]; return out; }
-  const heads = (rows[out.headerRow] || []).map(r44Head);
-  const col = {};
-  Object.keys(R44_RATE_HEADERS).forEach((k) => {
-    col[k] = -1;
-    R44_RATE_HEADERS[k].some((name) => { const at = heads.indexOf(name); if (at >= 0) { col[k] = at; return true; } return false; });
-  });
-  if (col.lender < 0) out.missing.push("Lender");
-  if (col.rate < 0) out.missing.push("Stonebridge");
-  if (out.missing.length) return out;
-  for (let i = out.headerRow + 1; i < rows.length; i++) {
-    const r = rows[i] || [];
-    const lender = r44Str(r[col.lender]);
-    const rateRaw = col.rate >= 0 ? r[col.rate] : null;
-    if (!lender && (rateRaw == null || rateRaw === "")) continue;   // a spacer row, not a fault
-    const rate = r44Num(rateRaw);
-    if (!lender || rate == null || rate < 0 || rate > 1) { out.skipped++; continue; }
-    if (rate > 0) out.usable++;
-    out.rows.push({
-      lender,
-      product: col.product >= 0 ? r44Str(r[col.product]) : "",
-      lg_code: col.lg_code >= 0 ? r44Str(r[col.lg_code]) : "",
-      rate,
-      notes: col.notes >= 0 ? r44Str(r[col.notes]) : "",
-    });
-  }
-  return out;
-}
-
-/* ---------- T2 · the weekly commission statement ---------- */
-
-const R44_LINE_HEADERS = {
-  line_date: ["date"],
-  tran_type: ["tran type desc", "tran type", "tran type description"],
-  addressee: ["addressee"],
-  provider: ["provider"],
-  account_number: ["account number", "account no", "account"],
-  opp_id: ["opp id", "opportunity id"],
-  reason: ["reason"],
-  policy_type: ["policy type"],
-  policy_group: ["policy group"],
-  premium: ["premium"],
-  banked_gross: ["banked (gross)", "banked gross"],
-  banked_net: ["banked (net)", "banked net"],
-};
-/* "File Review Client Name", "Deduction(Introducer)", "Deduction (Referrer)" and
-   "Clawback Reserve" are deliberately NOT mapped: there is no column on
-   commission_lines for any of them and we do not invent schema to hold a figure
-   nothing reads. */
-
-/* The statement walk. Everything about it is derived from the sheet rather than
-   assumed:
-     · REF — a free cell somewhere in the top five rows reading "Ref:BP1048".
-       Scanned across every cell of those rows because which column it lands in
-       is a spreadsheet layout accident.
-     · HEADER ROW — the first row whose FIRST cell is exactly "Date".
-     · GROUP HEADERS — below the header the sheet is a firm row, then one group
-       per adviser. A group header is a row whose first cell is text that does
-       not parse as a date and is not a subtotal or a total. Telling the FIRM
-       row apart from an ADVISER row is done from the sheet's own totals: the
-       trailer carries "Total for <firm>" (and "Total for this statement"), so
-       any group header whose text is one of those named firms is the firm row
-       and sets no adviser. Guessing "the first one is the firm" would put every
-       line under the wrong name the day a statement arrives without a firm row.
-     · SUBTOTALS — Policy Group reads "N item(s)".
-     · TOTALS — first cell starts "Total for"; "Total for this statement" is
-       where the statement's own gross/net come from when it is present.
-     · DATA — the first cell parses as a date. */
-function parseStatementSheet(aoa, sheetName) {
-  const rows = aoa || [];
-  const out = {
-    ref: "", label: r44Str(sheetName), statementDate: null, gross: null, net: null,
-    lines: [], advisers: [], headerRow: -1, missing: [], totalsFromRow: false,
-  };
-  for (let i = 0; i < Math.min(rows.length, 5); i++) {
-    (rows[i] || []).forEach((cell) => {
-      if (out.ref) return;
-      const m = /^Ref:\s*(.+)$/i.exec(r44Str(cell));
-      if (m) out.ref = m[1].trim();
-    });
-    if (out.ref) break;
-  }
-  for (let i = 0; i < rows.length; i++) {
-    if (r44Str((rows[i] || [])[0]).toLowerCase() === "date") { out.headerRow = i; break; }
-  }
-  if (out.headerRow < 0) { out.missing = ["Date"]; return out; }
-  const heads = (rows[out.headerRow] || []).map(r44Head);
-  const col = {};
-  Object.keys(R44_LINE_HEADERS).forEach((k) => {
-    col[k] = -1;
-    R44_LINE_HEADERS[k].some((name) => { const at = heads.indexOf(name); if (at >= 0) { col[k] = at; return true; } return false; });
-  });
-  ["line_date", "tran_type", "banked_gross", "policy_group"].forEach((k) => { if (col[k] < 0) out.missing.push(k); });
-  if (out.missing.length) return out;
-  const cell = (r, k) => (col[k] >= 0 ? r[col[k]] : null);
-
-  /* Pre-scan for the firm names the trailer totals name (see the comment above). */
-  const firmNames = {};
-  rows.forEach((r) => {
-    const m = /^Total for\s+(.+)$/i.exec(r44Str((r || [])[0]));
-    if (m && !/^this statement$/i.test(m[1].trim())) firmNames[m[1].trim().toLowerCase()] = true;
-  });
-
-  let adviser = "";
-  for (let i = out.headerRow + 1; i < rows.length; i++) {
-    const r = rows[i] || [];
-    const first = r44Str(r[0]);
-    const grp = r44Str(cell(r, "policy_group"));
-    if (/^Total for/i.test(first)) {
-      if (/^Total for\s+this statement$/i.test(first)) {
-        out.gross = r44Num(cell(r, "banked_gross"));
-        out.net = r44Num(cell(r, "banked_net"));
-        out.totalsFromRow = out.gross != null;
-      }
-      continue;
-    }
-    if (/^\d+ item\(s\)$/i.test(grp)) continue;                    // subtotal
-    const d = r44CellDate(cell(r, "line_date"));
-    if (!d) {
-      if (first) {
-        if (firmNames[first.toLowerCase()]) adviser = "";          // the firm row
-        else { adviser = first; if (out.advisers.indexOf(first) < 0) out.advisers.push(first); }
-      }
-      continue;                                                    // blank/spacer/group header
-    }
-    const ds = r44DateStr(d);
-    out.lines.push({
-      line_date: feeDateToTs(ds),
-      date_str: ds,
-      tran_type: r44Str(cell(r, "tran_type")),
-      addressee: r44Str(cell(r, "addressee")),
-      provider: r44Str(cell(r, "provider")),
-      account_number: r44Str(cell(r, "account_number")),
-      opp_id: r44Str(cell(r, "opp_id")),
-      reason: r44Str(cell(r, "reason")),
-      policy_type: r44Str(cell(r, "policy_type")),
-      policy_group: r44Str(cell(r, "policy_group")),
-      adviser_name: adviser,
-      premium: r44Num(cell(r, "premium")),
-      banked_gross: r44Num(cell(r, "banked_gross")),
-      banked_net: r44Num(cell(r, "banked_net")),
-    });
-  }
-  out.lines.forEach((l) => { if (!out.statementDate || l.date_str > out.statementDate) out.statementDate = l.date_str; });
-  if (!out.totalsFromRow) {
-    out.gross = out.lines.reduce((s, l) => s + Number(l.banked_gross || 0), 0);
-    out.net = out.lines.reduce((s, l) => s + Number(l.banked_net || 0), 0);
-  }
-  return out;
-}
-/* Whole-workbook entry points, using the SAME XLSX.read(arrayBuffer, {type:"array"})
-   pattern the client importer uses — the SheetJS bundle index.html already loads,
-   nothing added. {cellDates:true} on top, because the statement's row classifier
-   depends on a date cell arriving as a Date rather than a serial. */
-function parseProcRatesWorkbook(wb) {
-  const sn = (wb.SheetNames || [])[0];
-  const res = parseProcRatesSheet(sn ? r44Aoa(wb.Sheets[sn]) : []);
-  res.sheet = sn || "";
-  return res;
-}
-function parseStatementWorkbook(wb) {
-  const sn = (wb.SheetNames || [])[0];
-  return parseStatementSheet(sn ? r44Aoa(wb.Sheets[sn]) : [], sn || "");
-}
-
-/* ---------- T3 · matcher, lender normalisation, expected fee ---------- */
-
-/* One lender vocabulary, used for provider↔case.lender AND provider↔rate-card
-   lender. "Barclays Bank PLC", "Barclays for Intermediaries" and "Barclays" are
-   the same lender; "Skipton Building Society" and "Skipton BS" are the same
-   lender; and none of the words doing the differing carry any information. */
-const R44_LENDER_NOISE = /\b(building society|for intermediaries|home ?loans|solutions|mortgages|mortgage|bank|bs|plc|ltd|limited|the|uk)\b/g;
-function r44LenderKey(s) {
-  return String(s == null ? "" : s).toLowerCase()
-    .replace(/&/g, " and ")
-    .replace(/[^a-z0-9 ]+/g, " ")
-    .replace(R44_LENDER_NOISE, " ")
-    .replace(/\s+/g, " ").trim();
-}
-/* Prefix or containment, both ways round. Guarded on length: once the noise
-   words are gone a key can be two characters ("bm" for BM Solutions), and a
-   two-character containment test matches almost everything, so anything under
-   three characters has to be an exact match. */
-function r44LenderMatch(a, b) {
-  const x = r44LenderKey(a), y = r44LenderKey(b);
-  if (!x || !y) return false;
-  if (x === y) return true;
-  if (x.length < 3 || y.length < 3) return false;
-  return x.indexOf(y) === 0 || y.indexOf(x) === 0 || x.indexOf(y) >= 0 || y.indexOf(x) >= 0;
-}
-
-/* Surnames out of an addressee. "Mr Hawkins & Miss Haynes-Flood" is two people
-   and two surnames, and the hyphenated one is ONE surname — splitting it would
-   match "Haynes" against a different family. Titles are stripped, the last
-   remaining token of each person is the surname, lowercased. */
-const R44_TITLE_WORD = /^(mr|mrs|miss|ms|mx|dr|prof|professor|sir|lady|rev|revd)$/i;
-const R44_TITLE = /^(mr|mrs|miss|ms|mx|dr|prof|professor|sir|lady|rev|revd)\s+/i;
-function r44Surnames(addressee) {
-  const s = String(addressee == null ? "" : addressee).trim();
-  if (!s) return [];
-  const out = [];
-  s.split(/\s*(?:&|\band\b|,|\+)\s*/i).forEach((part) => {
-    let t = String(part).replace(/\./g, " ").replace(/\s+/g, " ").trim();
-    while (R44_TITLE.test(t)) t = t.replace(R44_TITLE, "").trim();
-    /* "Mr & Mrs Ashdown-Pryce" splits into "Mr" and "Mrs Ashdown-Pryce": the
-       first fragment is a bare title with no name behind it and must NOT become
-       the surname "mr", which would then match every case whose client happens
-       to be called Mr-anything. */
-    if (R44_TITLE_WORD.test(t)) return;
-    if (!t) return;
-    const toks = t.split(" ").filter(Boolean);
-    if (!toks.length) return;
-    const last = toks[toks.length - 1].toLowerCase();
-    if (last.length < 2) return;
-    if (out.indexOf(last) < 0) out.push(last);
-  });
-  return out;
-}
-
-/* What KIND of line this is — the four groups the review screen shows, in the
-   order they are tested. A takeback is a takeback whatever policy group it sits
-   in (the money has gone back either way). A renewal is the "VARIOUS" trailer
-   the network appends: no addressee, nothing to match to, imported as `na`
-   rather than left looking unreconciled forever. */
-function r44LineKind(l) {
-  const tt = String((l || {}).tran_type || "").toLowerCase();
-  const grp = String((l || {}).policy_group || "").toLowerCase();
-  const hasAddressee = !!String((l || {}).addressee || "").trim();
-  if (/takeback|claw ?back/.test(tt)) return "takeback";
-  if (/renewal/.test(tt) || (!hasAddressee && /^various$/i.test(String((l || {}).reason || "").trim()))) return "renewal";
-  if (grp === "mortgage") return "mortgage";
-  if (/life|protection/.test(grp) && hasAddressee) return "protection";
-  return "other";
-}
-const R44_MATCHABLE = { mortgage: true, takeback: true, protection: true };
-
-/* ---------- R48 · commission attribution ----------
-   Who each line's money belongs to on the reconciliation screen. PURE and
-   testable, same discipline as suggestStatementMatches: no I/O, no DOM. */
-
-/* A person's name normalised the way the matcher already normalises text: trim,
-   collapse internal whitespace, lowercase. Used to map a sheet's adviser_name
-   onto a current profile — an ex-broker (Hannah/Nathan/Ciaran/Elizabeth) has no
-   profile, so their name never keys anything and the line falls through to the
-   owner, which is exactly Daniel's rule. */
-function r44NameKey(s) {
-  return String(s == null ? "" : s).trim().replace(/\s+/g, " ").toLowerCase();
-}
-
-/* "Misc insurance" for attribution/tally purposes: all protection / GI /
-   renewal / trail — anything that is not a Mortgage-group receipt or its
-   takeback. This is the half of the money that ALWAYS sits under the owner
-   whatever name it carries on the sheet. */
-function r44IsMiscInsurance(l, kind) {
-  kind = kind || r44LineKind(l);
-  if (kind === "protection" || kind === "renewal" || kind === "other") return true;
-  return String((l || {}).policy_group || "").trim().toLowerCase() !== "mortgage";
-}
-
-/* R48 — a line "needs you" when EITHER it is a matchable (mortgage/takeback)
-   line still awaiting a case decision (unmatched/suggested — not confirmed,
-   dismissed, or parked at na), OR its attribution is null. Renewals/misc that
-   were attributed to the owner at import are placed and never in the queue. */
-function r44NeedsYou(l) {
-  if (!l || l.match_status === "dismissed") return false;
-  const k = r44LineKind(l);
-  const matchablePending = !!R44_MATCHABLE[k] && (l.match_status === "unmatched" || l.match_status === "suggested");
-  return matchablePending || !l.attributed_to;
-}
-
-/* r44AttributeLine(line, kind, matchedCase, nameToId, ownerId) → profile id (or
-   ownerId fallback). Daniel's decision, encoded:
-     · misc insurance (protection / renewal / other, OR any non-Mortgage group) →
-       the OWNER, whoever's name it sits under. This wins regardless of
-       adviser_name — it is the "all misc insurance → me" rule.
-     · mortgage / takeback → the matched case's adviser if we have a case (which
-       is the owner for the ex-broker cases the import already re-assigned to the
-       owner); else the sheet's named adviser IF they are a current profile; else
-       the owner. Never returns null — the tally is never blank at import. */
-function r44AttributeLine(line, kind, matchedCase, nameToId, ownerId) {
-  if (r44IsMiscInsurance(line, kind)) return ownerId || null;
-  if (matchedCase && matchedCase.assigned_to) return matchedCase.assigned_to;
-  const named = nameToId ? nameToId[r44NameKey(line && line.adviser_name)] : null;
-  return named || ownerId || null;
-}
-
-/* ownerId + a normalised-name → profile-id map, built from the staff list
-   already loaded at sign-in (TEAM = the STAFF_ROLES subset of PROFILES). No
-   extra DB read: R44 is owner-gated and TEAM is populated before the Money page
-   can be reached. Owner falls back to ME.id — in R44 the current user always is
-   the owner. nameToId is current staff only, so ex-broker names miss. */
-function r44StaffMaps() {
-  const staff = (typeof TEAM !== "undefined" && TEAM) ? TEAM : [];
-  const ownerRow = staff.filter((p) => p && p.role === "owner")[0];
-  const ownerId = (ownerRow && ownerRow.id) || (ME && ME.id) || null;
-  const nameToId = {};
-  staff.forEach((p) => { const k = r44NameKey(p && p.full_name); if (k) nameToId[k] = p.id; });
-  return { ownerId, nameToId, staff };
-}
-
-/* Expected proc fee from the rate card: every card row whose lender normalises
-   onto this provider gives a rate, and the range is [min, max] × the loan. Null
-   when there is no card, no matching lender, or no loan — an expected fee we
-   cannot compute is shown as nothing, never as zero. */
-function r44ExpectedFee(provider, loanAmount, procRates) {
-  const loan = Number(loanAmount || 0);
-  if (!loan || !(procRates || []).length) return null;
-  const rates = (procRates || [])
-    .filter((r) => r44LenderMatch(provider, r && r.lender))
-    .map((r) => Number(r && r.rate))
-    .filter((n) => isFinite(n) && n > 0 && n <= 1);
-  if (!rates.length) return null;
-  return { expectedLo: Math.min.apply(null, rates) * loan, expectedHi: Math.max.apply(null, rates) * loan, rateCount: rates.length };
-}
-/* ±10% on the NEAREST bound — a range that already spans several products
-   should not also be widened at both ends before anything counts as "over". */
-const R44_FEE_TOL = 0.1;
-function r44FeeVerdict(gross, exp) {
-  if (!exp) return null;
-  const g = Math.abs(Number(gross || 0));
-  const lo = exp.expectedLo * (1 - R44_FEE_TOL), hi = exp.expectedHi * (1 + R44_FEE_TOL);
-  if (g >= lo && g <= hi) return { expectedLo: exp.expectedLo, expectedHi: exp.expectedHi, verdict: "within", delta: 0, rateCount: exp.rateCount };
-  if (g > hi) return { expectedLo: exp.expectedLo, expectedHi: exp.expectedHi, verdict: "over", delta: g - exp.expectedHi, rateCount: exp.rateCount };
-  return { expectedLo: exp.expectedLo, expectedHi: exp.expectedHi, verdict: "under", delta: exp.expectedLo - g, rateCount: exp.rateCount };
-}
-
-/* An in-statement reversal: a takeback and a receipt on the SAME account number,
-   inside the SAME statement, equal and opposite. The network does this when it
-   re-books a case — the money never actually left. Both halves are flagged so
-   the review screen can say "reversed in-statement · net £0" instead of raising
-   a clawback task for a clawback that did not happen. Returns a map of index →
-   the index it pairs with. */
-const R44_PAIR_TOL = 0.02;
-function r44ReversalPairs(lines) {
-  const pairs = {};
-  const used = {};
-  const ls = lines || [];
-  for (let i = 0; i < ls.length; i++) {
-    if (used[i] || r44LineKind(ls[i]) !== "takeback") continue;
-    const acct = String(ls[i].account_number || "").trim();
-    const g = Number(ls[i].banked_gross || 0);
-    if (!acct || !(g < 0)) continue;
-    for (let j = 0; j < ls.length; j++) {
-      if (i === j || used[j] || pairs[j] != null) continue;
-      if (r44LineKind(ls[j]) === "takeback") continue;
-      if (String(ls[j].account_number || "").trim() !== acct) continue;
-      const h = Number(ls[j].banked_gross || 0);
-      if (!(h > 0)) continue;
-      if (Math.abs(h + g) > Math.max(R44_PAIR_TOL, Math.abs(g) * 0.001)) continue;
-      pairs[i] = j; pairs[j] = i; used[i] = used[j] = true;
-      break;
-    }
-  }
-  return pairs;
-}
-
-/* --------------------------------------------------------------------------
-   suggestStatementMatches(lines, cases, priorLines, procRates)
-   PURE. No I/O, no DOM — the whole point, because "which case is this payment"
-   is the one judgement in this feature that has to be testable without a
-   spreadsheet, a database and a browser.
-
-   ADMISSION. A case is a candidate only if the addressee's surname is one of
-   its client's, OR the account number has been confirmed against that case
-   before. The surname rule is what stops a £1,011 receipt landing on whichever
-   Halifax case happens to be worth £1,011; the account-history rule is the
-   exception it must have, because a TAKEBACK carries the same account number as
-   the receipt it reverses and nothing else reliable, and finding that original
-   is the entire reason priorLines is read.
-
-   SCORING (mortgage/takeback/protection lines; renewals are never scored):
-     +10  account history — this account number was confirmed onto this case
-     +2   lender: provider normalises onto case.lender
-     +2   amount: gross within 15% of case.proc_fee, or inside the expected-fee
-          range widened by 15%
-     +1   the case's proc fee is not yet dated (an unpaid case is a likelier
-          home for a payment than one already settled)
-   Highest score wins, one suggestion per line. CONFIDENT (pre-ticks the row) =
-   account history, or surname AND lender AND amount all three. A TIE on the top
-   score is never confident: two cases that score identically is precisely the
-   situation a human has to look at.
-   ------------------------------------------------------------------------ */
-const R44_AMOUNT_TOL = 0.15;
-function suggestStatementMatches(lines, cases, priorLines, procRates) {
-  const priorByAcct = {};
-  (priorLines || []).forEach((p) => {
-    const a = String((p && p.account_number) || "").trim();
-    if (a && p.matched_case_id) priorByAcct[a] = p.matched_case_id;
-  });
-  const pairs = r44ReversalPairs(lines);
-  return (lines || []).map((l, i) => {
-    const kind = r44LineKind(l);
-    const res = {
-      index: i, kind, suggested: null, confidence: null, score: 0, why: [],
-      candidates: [], expected: null, pairedWith: pairs[i] == null ? null : pairs[i],
-      note: "",
-    };
-    if (!R44_MATCHABLE[kind]) return res;
-    const acct = String(l.account_number || "").trim();
-    const priorId = acct ? priorByAcct[acct] || null : null;
-    const surnames = r44Surnames(l.addressee);
-    const gross = Math.abs(Number(l.banked_gross || 0));
-    const scored = [];
-    (cases || []).forEach((c) => {
-      if (!c || !c.id) return;
-      const cs = String(((c.clients || {}).last_name) || "").trim().toLowerCase();
-      const acctHit = !!priorId && priorId === c.id;
-      const surnameHit = !!cs && surnames.indexOf(cs) >= 0;
-      if (!surnameHit && !acctHit) return;
-      const exp = r44ExpectedFee(l.provider, c.loan_amount, procRates);
-      const near = (t) => Number(t) > 0 && Math.abs(gross - Number(t)) <= Number(t) * R44_AMOUNT_TOL;
-      const inExpected = !!exp && gross >= exp.expectedLo * (1 - R44_AMOUNT_TOL) && gross <= exp.expectedHi * (1 + R44_AMOUNT_TOL);
-      const lenderHit = r44LenderMatch(l.provider, c.lender);
-      const amountHit = near(c.proc_fee) || inExpected;
-      let score = 0; const why = [];
-      if (acctHit) { score += 10; why.push("account history"); }
-      if (surnameHit) why.push("surname");
-      if (lenderHit) { score += 2; why.push("lender"); }
-      if (amountHit) { score += 2; why.push("amount"); }
-      if (!c.proc_fee_paid_at) { score += 1; why.push("unpaid"); }
-      scored.push({ id: c.id, case: c, score, why, surnameHit, lenderHit, amountHit, acctHit, expected: exp });
-    });
-    scored.sort((a, b) => b.score - a.score || String(a.id).localeCompare(String(b.id)));
-    res.candidates = scored.slice(0, 10);
-    const top = scored[0] || null;
-    if (top) {
-      const tie = scored.length > 1 && scored[1].score === top.score;
-      res.suggested = top.id;
-      res.score = top.score;
-      res.why = top.why.slice();
-      res.confidence = (!tie && (top.acctHit || (top.surnameHit && top.lenderHit && top.amountHit))) ? "high" : "low";
-      res.note = top.why.join(" + ") + (tie ? " (tied)" : "");
-      res.expected = r44FeeVerdict(gross, top.expected);
-    }
-    return res;
-  });
-}
-
-/* ---------- state ---------- */
-
-/* Cached for the life of one Money-page load: the rate card is read once and
-   used by every expected-fee badge on the review screen. */
-let procRatesCache = null;
-let reconState = null;   // { statement, lines, cases, byLine, sugg, pairs, picks, ticks, feeFix }
-const R44_CHUNK = 200;
-const R44_STMT_LIST = 10;
-/* R24 — a NEW named select, not a widening of BOARD_CASE_COLS. The board's
-   columns are the board's; this read wants proc_fee/proc_fee_paid_at/
-   completed_at, which the board has no use for, and coupling them would make
-   every future change to one a change to the other. */
-const R44_CASE_COLS = "id,lender,stage,loan_amount,proc_fee,proc_fee_paid_at,completed_at,assigned_to,clients!client_id(first_name,last_name)";
-const R44_CANDIDATE_MONTHS = 18;
-
-async function loadProcRates(force) {
-  if (!showMoney()) return [];
-  if (procRatesCache && !force) return procRatesCache;
-  const { data, error } = await db.from("proc_rates")
-    .select("id,lender,product,lg_code,rate,notes,effective_label,uploaded_at")
-    .order("id").limit(OWNER_ROW_CAP);
-  if (error) { procRatesCache = null; return []; }
-  procRatesCache = data || [];
-  return procRatesCache;
-}
-/* ONE bounded read. Live cases at offer/exchange plus completions that could
-   still be waiting on money: completed inside ~18 months, or completed at any
-   time with no proc-fee date on them yet (an old case nobody was ever paid for
-   is exactly the case a statement might finally settle). The stage narrowing is
-   server-side; the completed-window narrowing is applied to the returned rows
-   rather than as an .or() with an ISO timestamp inside it, which PostgREST's
-   filter grammar makes fragile to quote. */
-async function r44LoadCandidateCases() {
-  const { data, error } = await db.from("cases").select(R44_CASE_COLS)
-    .in("stage", ["offer", "exchange", "completed"])
-    .order("id").limit(OWNER_ROW_CAP);
-  if (error) return [];
-  const cutoff = new Date(Date.now() - R44_CANDIDATE_MONTHS * 30.5 * 86400000).toISOString();
-  return (data || []).filter((c) => c.stage !== "completed" || !c.proc_fee_paid_at || !c.completed_at || c.completed_at >= cutoff);
-}
-async function r44LoadPriorLines() {
-  const { data, error } = await db.from("commission_lines")
-    .select("account_number,matched_case_id")
-    .eq("match_status", "confirmed").neq("account_number", "").limit(OWNER_ROW_CAP);
-  if (error) return [];
-  return (data || []).filter((r) => r && r.matched_case_id);
-}
-
-/* ---------- T1 · panel render + upload ---------- */
-
-function r44CaseLabel(c) {
-  if (!c) return "(unknown case)";
-  const nm = [((c.clients || {}).first_name), ((c.clients || {}).last_name)].filter(Boolean).join(" ");
-  return nm || "(no name)";
-}
-async function renderProcRatesPanel() {
-  const panel = $("#money-procrates-panel"), status = $("#procrates-status");
-  if (!panel || !status) return;
-  if (!showMoney()) { panel.classList.add("hidden"); status.textContent = ""; return; }
-  panel.classList.remove("hidden");
-  const rates = await loadProcRates(true);
-  if (!rates.length) {
-    status.innerHTML = `<strong>No rates uploaded yet — expected-fee checks are off.</strong> Upload the network's proc-rate card and every mortgage receipt on a statement gains an expected-fee badge.`;
-    return;
-  }
-  const at = rates.reduce((a, r) => (r.uploaded_at && (!a || r.uploaded_at > a) ? r.uploaded_at : a), null);
-  const label = (rates.find((r) => r.effective_label) || {}).effective_label || "";
-  status.innerHTML = `<strong>${rates.length} rate${rates.length === 1 ? "" : "s"}</strong> · uploaded ${at ? fmtD(at) : "—"} · ${esc(label) || '<span class="cs-muted">no file label</span>'}`;
-}
-async function r44UploadProcRates(file) {
-  if (!showMoney()) return toast("Proc rates are Owner-only.");
-  const status = $("#procrates-status");
-  if (typeof XLSX === "undefined") return toast("The spreadsheet reader did not load — reload the page and try again.");
-  let parsed;
-  try {
-    const wb = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true });
-    parsed = parseProcRatesWorkbook(wb);
-  } catch (e) { return toast("Could not read the rate card: " + e.message); }
-  if (parsed.missing && parsed.missing.length) {
-    return toast(`That workbook has no ${parsed.missing.join(" / ")} column — nothing was changed.`);
-  }
-  if (!parsed.rows.length || !parsed.usable) {
-    return toast(`No usable rates in that file${parsed.skipped ? ` — ${parsed.skipped} row(s) had a blank or out-of-range rate` : ""}. Nothing was changed.`);
-  }
-  const current = await loadProcRates(true);
-  if (!confirm(`Replace the ${current.length} stored rate${current.length === 1 ? "" : "s"} with ${parsed.rows.length} from this file?`
-    + (parsed.skipped ? `\n\n${parsed.skipped} row${parsed.skipped === 1 ? "" : "s"} had a blank or non-numeric rate and will be skipped.` : "")
-    + `\n\nThe stored card is replaced wholesale — anything not in this file stops being used for expected-fee checks.`)) return;
-  if (status) status.textContent = "Replacing the rate card…";
-  const { error: delErr } = await db.from("proc_rates").delete().gt("id", 0);
-  if (delErr) { procRatesCache = null; await renderProcRatesPanel(); return toast("Could not clear the old rates: " + delErr.message); }
-  const label = String(file.name || "").slice(0, 200);
-  const stamp = new Date().toISOString();
-  let written = 0;
-  for (let i = 0; i < parsed.rows.length; i += R44_CHUNK) {
-    const chunk = parsed.rows.slice(i, i + R44_CHUNK).map((r) => Object.assign({}, r, { effective_label: label, uploaded_at: stamp }));
-    const { error } = await db.from("proc_rates").insert(chunk);
-    if (error) { procRatesCache = null; await renderProcRatesPanel(); return toast(`Rate upload failed after ${written} row(s): ${error.message}`); }
-    written += chunk.length;
-  }
-  procRatesCache = null;
-  await renderProcRatesPanel();
-  toast(`${written} proc rate${written === 1 ? "" : "s"} stored${parsed.skipped ? ` · ${parsed.skipped} skipped` : ""}`);
-}
-
-/* ---------- T2 · statements list ---------- */
-
-async function renderReconPanel() {
-  const panel = $("#money-recon-panel"), list = $("#recon-statements"), review = $("#recon-review");
-  if (!panel || !list) return;
-  if (!showMoney()) {
-    panel.classList.add("hidden");
-    list.innerHTML = "";
-    if (review) { review.innerHTML = ""; review.classList.add("hidden"); }
-    reconState = null;
-    return;
-  }
-  panel.classList.remove("hidden");
-  const { data: stmts, error } = await db.from("commission_statements")
-    .select("id,ref,statement_label,statement_date,filename,gross_total,net_total,line_count,created_at")
-    .order("id", { ascending: false }).limit(R44_STMT_LIST);
-  if (error) {
-    list.innerHTML = `<div class="empty">The statements table could not be read — ${esc(error.message)}</div>`;
-    return;
-  }
-  const rows = stmts || [];
-  if (!rows.length) {
-    list.innerHTML = MONEY_EMPTY("No commission statement imported yet. Choose the weekly workbook above — nothing is written to a case until you review and confirm it.");
-    return;
-  }
-  /* The per-statement counters come from the lines themselves rather than being
-     denormalised onto the statement row: a confirm changes them, and a count
-     that only refreshes on import would be wrong the moment anybody worked. */
-  const ids = rows.map((s) => s.id);
-  const { data: lineRows } = await db.from("commission_lines")
-    .select("id,statement_id,tran_type,policy_group,addressee,reason,match_status,banked_gross")
-    .in("statement_id", ids).limit(OWNER_ROW_CAP);
-  const byStmt = {};
-  (lineRows || []).forEach((l) => { (byStmt[l.statement_id] = byStmt[l.statement_id] || []).push(l); });
-  list.innerHTML = rows.map((s) => {
-    const ls = byStmt[s.id] || [];
-    const mort = ls.filter((l) => r44LineKind(l) === "mortgage").length;
-    const conf = ls.filter((l) => l.match_status === "confirmed").length;
-    const tb = ls.filter((l) => r44LineKind(l) === "takeback").length;
-    return `<div class="recon-stmt row-item" data-stmt="${esc(s.id)}">
-      <div class="row-main">
-        <div class="t">${esc(s.ref) || '<span class="cs-muted">(no ref)</span>'} <span class="cs-muted">· ${s.statement_date ? fmtD(s.statement_date) : "no date"}</span></div>
-        <div class="s">${fmtM2(s.gross_total)} gross / ${fmtM2(s.net_total)} net · ${mort} mortgage receipt${mort === 1 ? "" : "s"} · ${conf} confirmed${tb ? ` · <span class="badge red">${tb} takeback${tb === 1 ? "" : "s"}</span>` : ""} · <span class="cs-muted">${esc(s.filename || s.statement_label || "")}</span></div>
-      </div>
-      <button type="button" class="btn btn-sm recon-review-btn" id="recon-review-btn-${esc(s.id)}" data-stmt="${esc(s.id)}">Review</button>
-    </div>`;
-  }).join("");
-}
-
-/* ---------- T2 · import ---------- */
-
-const R44_LINE_DB_COLS = ["line_date", "tran_type", "addressee", "provider", "account_number", "opp_id",
-  "reason", "policy_type", "policy_group", "adviser_name", "premium", "banked_gross", "banked_net"];
-function r44LineDbRow(l) {
-  const o = {};
-  R44_LINE_DB_COLS.forEach((k) => { o[k] = l[k] == null ? (k === "premium" || k === "banked_gross" || k === "banked_net" || k === "line_date" ? null : "") : l[k]; });
-  return o;
-}
-async function r44ImportStatement(file) {
-  if (!showMoney()) return toast("Statement import is Owner-only.");
-  if (typeof XLSX === "undefined") return toast("The spreadsheet reader did not load — reload the page and try again.");
-  const status = $("#recon-status");
-  if (status) status.textContent = `Reading ${file.name}…`;
-  let parsed;
-  try {
-    const wb = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true });
-    parsed = parseStatementWorkbook(wb);
-  } catch (e) { if (status) status.textContent = ""; return toast("Could not read the statement: " + e.message); }
-  if (status) status.textContent = "";
-  if (parsed.missing && parsed.missing.length) {
-    return toast("That workbook has no commission-statement header row (no “Date” column) — nothing was imported.");
-  }
-  if (!parsed.lines.length) return toast("No commission lines found in that workbook — nothing was imported.");
-
-  const { data: st, error: sErr } = await db.from("commission_statements").insert({
-    ref: parsed.ref || "",
-    statement_label: parsed.label || "",
-    statement_date: parsed.statementDate || null,
-    filename: String(file.name || "").slice(0, 300),
-    gross_total: parsed.gross,
-    net_total: parsed.net,
-    line_count: parsed.lines.length,
-  }).select("id,ref,statement_label,statement_date,filename,gross_total,net_total,line_count").single();
-  if (sErr) {
-    /* The unique index on ref is the double-upload guard, and it is the reason
-       the statement row goes in FIRST: nothing else is written until it lands. */
-    if (String(sErr.code) === "23505") return toast(`Statement ${parsed.ref || "(no ref)"} is already imported`);
-    return toast("Could not save the statement: " + sErr.message);
-  }
-  const [cases, priors, rates] = await Promise.all([r44LoadCandidateCases(), r44LoadPriorLines(), loadProcRates()]);
-  const sugg = suggestStatementMatches(parsed.lines, cases, priors, rates);
-  /* R48 — every line is attributed at import so the per-person tally is never
-     blank. The suggested case (when there is one) is the matchedCase, looked up
-     in the already-loaded candidate cases; a confirm later re-homes it (T3). */
-  const { ownerId, nameToId } = r44StaffMaps();
-  const caseById = {};
-  cases.forEach((c) => { if (c && c.id) caseById[c.id] = c; });
-  const payload = parsed.lines.map((l, i) => {
-    const s = sugg[i];
-    const row = r44LineDbRow(l);
-    row.statement_id = st.id;
-    row.matched_case_id = R44_MATCHABLE[s.kind] ? (s.suggested || null) : null;
-    row.match_status = !R44_MATCHABLE[s.kind] ? "na" : (s.suggested ? "suggested" : "unmatched");
-    row.match_note = s.suggested ? `${s.confidence === "high" ? "high" : "low"} · ${s.note}`.slice(0, 200) : "";
-    row.attributed_to = r44AttributeLine(l, s.kind, s.suggested ? caseById[s.suggested] : null, nameToId, ownerId);
-    return row;
-  });
-  let ok = true, msg = "";
-  for (let i = 0; i < payload.length; i += R44_CHUNK) {
-    const { error } = await db.from("commission_lines").insert(payload.slice(i, i + R44_CHUNK));
-    if (error) { ok = false; msg = error.message; break; }
-  }
-  if (!ok) {
-    /* No half-import. The statement row goes, and the FK cascade takes whatever
-       lines did land with it. */
-    await db.from("commission_statements").delete().eq("id", st.id);
-    return toast("The statement lines could not be saved, so nothing was imported: " + msg);
-  }
-  await renderReconPanel();
-  await openReconReview(st.id);
-  const high = sugg.filter((s) => s.confidence === "high").length;
-  toast(`Imported ${payload.length} line${payload.length === 1 ? "" : "s"} · ${high} confident match${high === 1 ? "" : "es"} — nothing is written to a case until you confirm.`);
-}
-
-/* ---------- T2 · the review screen ---------- */
-
-const R44_GROUPS = [
-  { key: "mortgage", title: "Mortgage receipts", sub: "Confirming one stamps the proc fee paid on the case, dated the day the money arrived." },
-  { key: "takeback", title: "Takebacks", sub: "Money the network has taken back. A real clawback raises a task for you; one reversed inside this same statement does not." },
-  { key: "protection", title: "Protection receipts", sub: "Confirming one writes a case note only — there is no protection fee column to date, and we do not invent schema." },
-  { key: "renewal", title: "Renewal commissions", sub: "The “VARIOUS” trailer: no addressee, nothing to match. Imported as not-applicable and shown as one total." },
-  { key: "other", title: "Other lines", sub: "Imported, counted, and not matchable — shown so nothing on the statement is silently invisible." },
-];
-async function openReconReview(stmtId) {
-  const review = $("#recon-review");
-  if (!review) return;
-  if (!showMoney()) return;
-  review.classList.remove("hidden");
-  review.innerHTML = `<div class="empty">Loading the statement…</div>`;
-  const [{ data: st, error: sErr }, { data: lines, error: lErr }] = await Promise.all([
-    db.from("commission_statements").select("id,ref,statement_label,statement_date,filename,gross_total,net_total,line_count").eq("id", stmtId).maybeSingle(),
-    db.from("commission_lines").select("*").eq("statement_id", stmtId).order("id").limit(OWNER_ROW_CAP),
-  ]);
-  if (sErr || lErr || !st) {
-    review.innerHTML = `<div class="empty">That statement could not be read${sErr || lErr ? " — " + esc((sErr || lErr).message) : ""}.</div>`;
-    return;
-  }
-  const [cases, priors, rates] = await Promise.all([r44LoadCandidateCases(), r44LoadPriorLines(), loadProcRates()]);
-  const ls = lines || [];
-  /* The suggestions are recomputed from the stored lines on every open rather
-     than being read back off the row: the review has to survive a reload, and
-     the board moves between one import and the next. What IS read back off the
-     row is the human's decision — matched_case_id, match_status — which is the
-     only part a recompute must never overwrite. */
-  const sugg = suggestStatementMatches(ls, cases, priors, rates);
-  /* R48 — staff maps for the per-person tally, the "attribute to …" select, and
-     the ownerId fallback the confirm/attribute paths need. */
-  const { ownerId, staff } = r44StaffMaps();
-  reconState = {
-    statement: st, lines: ls, cases, rates,
-    sugg, byIndex: {}, byLine: {},
-    picks: {}, ticks: {}, feeFix: {},
-    ownerId, staff,
-  };
-  ls.forEach((l, i) => {
-    reconState.byIndex[l.id] = i;
-    reconState.byLine[l.id] = l;
-    const s = sugg[i];
-    reconState.picks[l.id] = l.matched_case_id || (l.match_status === "dismissed" ? "" : (s.suggested || ""));
-    reconState.ticks[l.id] = l.match_status !== "confirmed" && l.match_status !== "dismissed" && s.confidence === "high" && !!reconState.picks[l.id];
-    reconState.feeFix[l.id] = false;
-  });
-  renderReconReview();
-}
-function r44Chip(text, cls) { return `<span class="badge ${cls || "grey"}">${esc(text)}</span>`; }
-/* Only on a mortgage RECEIPT. A takeback measured against an expected proc fee
-   would read "£375 over" on money that has gone the other way, which is a
-   sentence nobody should have to decode at speed. */
-function r44ExpectedBadge(line, caseRow, rates) {
-  if (!caseRow || r44LineKind(line) !== "mortgage") return "";
-  const v = r44FeeVerdict(line.banked_gross, r44ExpectedFee(line.provider, caseRow.loan_amount, rates));
-  if (!v) return "";
-  if (v.verdict === "within") return r44Chip("≈ expected", "green");
-  return r44Chip(`${fmtM2(v.delta)} ${v.verdict}`, "amber");
-}
-/* R48 — the "attribute to a person" control: sets attributed_to directly,
-   WITHOUT requiring a case (income with no case in the system, or correcting the
-   import guess). The select defaults to the line's current attribution, or the
-   owner when it is null. "no case — just income" also parks match_status at `na`
-   so the line stops asking for a case decision. Only on non-locked matchable
-   lines; a confirmed line is already placed. */
-function r44AttrControl(l) {
-  const st = reconState;
-  if (l.match_status === "confirmed") return "";
-  const staff = st.staff || [];
-  if (!staff.length) return "";
-  const cur = l.attributed_to || st.ownerId || "";
-  const optsHtml = staff.map((p) => `<option value="${esc(p.id)}"${p.id === cur ? " selected" : ""}>${esc(p.full_name || p.email || p.id)}${p.role === "owner" ? " (owner)" : ""}</option>`).join("");
-  return `<div class="recon-attr" data-line="${esc(l.id)}">
-      <span class="recon-attr-lbl">Attribute to</span>
-      <select class="recon-attr-pick" id="recon-attr-${esc(l.id)}" data-line="${esc(l.id)}" aria-label="Attribute this income to a person">${optsHtml}</select>
-      <label class="recon-attr-nocase-wrap"><input type="checkbox" class="recon-attr-nocase" id="recon-attr-nocase-${esc(l.id)}" data-line="${esc(l.id)}"> <span>no case — just income</span></label>
-      <button type="button" class="btn btn-sm recon-attr-set" id="recon-attr-set-${esc(l.id)}" data-line="${esc(l.id)}">Set person</button>
-    </div>`;
-}
-function r44MatchCell(l) {
-  const st = reconState;
-  const i = st.byIndex[l.id];
-  const s = st.sugg[i] || { candidates: [], confidence: null };
-  const locked = l.match_status === "confirmed";
-  const picked = st.picks[l.id] || "";
-  const caseById = {};
-  st.cases.forEach((c) => { caseById[c.id] = c; });
-  /* The short-list is the scored candidates. When scoring found nobody the
-     select still has to be usable, so it falls back to the nearest cases by
-     unpaid proc fee — the operator can always pick, and "— none —" stays the
-     honest default. */
-  let opts = s.candidates.map((c) => c.case);
-  if (!opts.length) {
-    opts = st.cases.filter((c) => !c.proc_fee_paid_at)
-      .map((c) => ({ c, d: Math.abs(Math.abs(Number(l.banked_gross || 0)) - Number(c.proc_fee || 0)) }))
-      .sort((a, b) => a.d - b.d).slice(0, 10).map((x) => x.c);
-  }
-  if (picked && !opts.some((c) => c.id === picked) && caseById[picked]) opts.unshift(caseById[picked]);
-  const sel = caseById[picked] || null;
-  const conf = s.confidence === "high" ? r44Chip("confident", "green") : (s.suggested ? r44Chip("check this", "amber") : "");
-  const head = sel
-    ? `<div class="recon-suggest">→ <strong>${esc(r44CaseLabel(sel))}</strong> · ${esc(sel.lender || "no lender")} · ${esc(STAGE_LABEL[sel.stage] || sel.stage || "")} ${conf} ${r44ExpectedBadge(l, sel, st.rates)}</div>`
-    : `<div class="recon-suggest cs-muted">no case suggested — pick one, or leave it</div>`;
-  if (locked) {
-    return `${head}<div class="s cs-muted">Confirmed ${l.confirmed_at ? fmtD(l.confirmed_at) : ""}${l.match_note ? ` · ${esc(l.match_note)}` : ""}</div>`;
-  }
-  return `${head}
-    <div class="recon-controls">
-      <label class="recon-tick-wrap"><input type="checkbox" class="recon-tick" id="recon-tick-${esc(l.id)}" data-line="${esc(l.id)}" ${st.ticks[l.id] ? "checked" : ""} ${picked ? "" : "disabled"}> <span>tick</span></label>
-      <select class="recon-pick" id="recon-pick-${esc(l.id)}" data-line="${esc(l.id)}" aria-label="Case for this line">
-        <option value="">— none —</option>
-        ${opts.map((c) => `<option value="${esc(c.id)}"${c.id === picked ? " selected" : ""}>${esc(r44CaseLabel(c))} · ${esc(c.lender || "no lender")} · ${esc(fmtM(c.proc_fee))}${c.proc_fee_paid_at ? " · paid" : ""}</option>`).join("")}
-      </select>
-      <button type="button" class="btn btn-sm recon-confirm" id="recon-confirm-${esc(l.id)}" data-line="${esc(l.id)}">Confirm</button>
-      <button type="button" class="btn btn-sm recon-dismiss" id="recon-dismiss-${esc(l.id)}" data-line="${esc(l.id)}">${l.match_status === "dismissed" ? "Un-dismiss" : "Dismiss"}</button>
-    </div>
-    ${r44AttrControl(l)}
-    ${r44FeeDeltaHtml(l, sel)}
-    ${l.match_note ? `<div class="s cs-muted">${esc(l.match_note)}</div>` : ""}`;
-}
-/* The proc fee on the case and the gross actually banked disagreeing by more
-   than a pound is not a thing to fix silently — it is a thing to show. The
-   checkbox is OFF by default: the number on the case may well be the right one
-   and the network's the mistake. */
-const R44_FEE_DELTA_MIN = 1;
-function r44FeeDeltaHtml(l, sel) {
-  if (!sel || r44LineKind(l) !== "mortgage") return "";
-  const gross = Math.abs(Number(l.banked_gross || 0));
-  const have = Number(sel.proc_fee || 0);
-  if (!have) return `<div class="s recon-note">The case has no proc fee recorded — confirming sets it to ${fmtM2(gross)}.</div>`;
-  if (Math.abs(have - gross) <= R44_FEE_DELTA_MIN) return "";
-  return `<label class="recon-feefix"><input type="checkbox" class="recon-feefix-chk" id="recon-feefix-${esc(l.id)}" data-line="${esc(l.id)}" ${reconState.feeFix[l.id] ? "checked" : ""}>
-    <span>Case says ${fmtM2(have)}, statement banked ${fmtM2(gross)} — update case proc fee to ${fmtM2(gross)}</span></label>`;
-}
-function r44LineRow(l, kind) {
-  const paired = (() => { const s = reconState.sugg[reconState.byIndex[l.id]]; return s && s.pairedWith != null; })();
-  const cls = ["recon-line"];
-  if (kind === "takeback") cls.push("recon-takeback");
-  if (l.match_status === "confirmed") cls.push("is-confirmed");
-  if (l.match_status === "dismissed") cls.push("is-dismissed");
-  if (r44NeedsYou(l)) cls.push("recon-needs-line");   // R48 — a queue line, styled + testable
-  return `<div class="${cls.join(" ")}" data-line="${esc(l.id)}" data-kind="${esc(kind)}" data-status="${esc(l.match_status || "")}" data-needs="${r44NeedsYou(l) ? "1" : "0"}" data-attr="${esc(l.attributed_to || "")}">
-    <div class="recon-facts">
-      <div class="t">${l.line_date ? fmtD(l.line_date) : "—"} · <strong>${esc(l.addressee) || '<span class="cs-muted">(no addressee)</span>'}</strong></div>
-      <div class="s">${esc(l.provider || "no provider")} · ${esc(l.account_number || "no account")} · ${fmtM2(l.banked_gross)} gross / ${fmtM2(l.banked_net)} net${l.adviser_name ? ` · ${esc(l.adviser_name)}` : ""}</div>
-      ${paired ? `<div class="s">${r44Chip("reversed in-statement · net £0", "grey")}</div>` : ""}
-    </div>
-    <div class="recon-match">${r44MatchCell(l)}</div>
-  </div>`;
-}
-/* R48 — the per-person "received this statement" tally: net banked grouped by
-   attributed_to, dismissed lines excluded. The owner's row is annotated with the
-   insurance slice (all the misc-insurance net that sits under them). A null
-   attribution rolls up into an "Unassigned — needs you" row. */
-function r44TallyHtml() {
-  const st = reconState;
-  const byPerson = {};
-  const ownerInsurance = {};
-  let unassignedNet = 0, unassignedCount = 0;
-  st.lines.forEach((l) => {
-    if (l.match_status === "dismissed") return;
-    const net = Number(l.banked_net || 0);
-    const att = l.attributed_to || null;
-    if (!att) { unassignedNet += net; unassignedCount++; return; }
-    byPerson[att] = (byPerson[att] || 0) + net;
-    if (att === st.ownerId && r44IsMiscInsurance(l)) ownerInsurance[att] = (ownerInsurance[att] || 0) + net;
-  });
-  const staff = st.staff || [];
-  const seen = {};
-  const order = [];
-  staff.forEach((p) => { if (p && byPerson[p.id] != null && !seen[p.id]) { order.push(p.id); seen[p.id] = true; } });
-  Object.keys(byPerson).forEach((id) => { if (!seen[id]) { order.push(id); seen[id] = true; } });
-  const rows = order.map((id) => {
-    const ins = (id === st.ownerId && ownerInsurance[id]) ? ` <span class="cs-muted">(incl. ${fmtM2(ownerInsurance[id])} insurance)</span>` : "";
-    return `<div class="recon-tally-row${id === st.ownerId ? " recon-tally-owner" : ""}" data-person="${esc(id)}"><span class="recon-tally-name">${esc(staffName(id))}</span><span class="recon-tally-net num">${fmtM2(byPerson[id])}</span>${ins}</div>`;
-  });
-  if (unassignedCount) {
-    rows.push(`<div class="recon-tally-row recon-tally-unassigned" data-person=""><span class="recon-tally-name">Unassigned — needs you (${unassignedCount})</span><span class="recon-tally-net num">${fmtM2(unassignedNet)}</span></div>`);
-  }
-  if (!rows.length) return "";
-  return `<div class="recon-tally" id="recon-tally">
-    <h5>Received this statement <span class="cs-muted">(net, by person)</span></h5>
-    ${rows.join("")}
-  </div>`;
-}
-function renderReconReview() {
-  const review = $("#recon-review");
-  const st = reconState;
-  if (!review || !st) return;
-  const s = st.statement;
-  const advisers = [];
-  st.lines.forEach((l) => { const a = String(l.adviser_name || "").trim(); if (a && advisers.indexOf(a) < 0) advisers.push(a); });
-  const byKind = {};
-  st.lines.forEach((l) => { const k = r44LineKind(l); (byKind[k] = byKind[k] || []).push(l); });
-  const pending = st.lines.filter((l) => R44_MATCHABLE[r44LineKind(l)] && l.match_status !== "confirmed").length;
-  const needs = st.lines.filter(r44NeedsYou).length;   // R48 — the "needs you" queue count
-  let html = `<div class="recon-review-head" id="recon-review-head">
-    <div>
-      <h4>Statement ${esc(s.ref) || "(no ref)"} · ${s.statement_date ? fmtD(s.statement_date) : "no date"}</h4>
-      <p class="panel-sub">${st.lines.length} line${st.lines.length === 1 ? "" : "s"} · ${advisers.length} adviser${advisers.length === 1 ? "" : "s"} · ${fmtM2(s.gross_total)} gross / ${fmtM2(s.net_total)} net · <span class="cs-muted">${esc(s.filename || s.statement_label || "")}</span></p>
-    </div>
-    <div class="recon-review-tools">
-      <span class="recon-needs${needs ? " is-live" : ""}" id="recon-needs">Needs you (<span id="recon-needs-count">${needs}</span>)</span>
-      <button type="button" class="btn btn-sm btn-primary" id="recon-confirm-ticked"${pending ? "" : " disabled"}>Confirm ticked</button>
-      <button type="button" class="btn btn-sm" id="recon-close">Close review</button>
-    </div>
-  </div>
-  ${r44TallyHtml()}`;
-  R44_GROUPS.forEach((g) => {
-    const ls = byKind[g.key] || [];
-    if (!ls.length) return;
-    html += `<div class="recon-group" id="recon-group-${g.key}" data-count="${ls.length}">
-      <h5>${esc(g.title)} <span class="cs-muted">(${ls.length})</span></h5>
-      <p class="panel-sub">${g.sub}</p>`;
-    if (g.key === "renewal") {
-      /* One aggregate line per group, not 12 rows of nothing to decide. */
-      const groups = {};
-      ls.forEach((l) => { const k = String(l.adviser_name || "").trim() || "(no adviser)"; (groups[k] = groups[k] || []).push(l); });
-      html += Object.keys(groups).map((k) => {
-        const rows = groups[k];
-        const gr = rows.reduce((a, x) => a + Number(x.banked_gross || 0), 0);
-        const nt = rows.reduce((a, x) => a + Number(x.banked_net || 0), 0);
-        return `<div class="recon-line recon-agg" data-adviser="${esc(k)}"><div class="recon-facts"><div class="t">${esc(k)}</div><div class="s">Renewals: ${rows.length} line${rows.length === 1 ? "" : "s"} · ${fmtM2(gr)} gross / ${fmtM2(nt)} net</div></div></div>`;
-      }).join("");
-    } else if (g.key === "other") {
-      html += ls.map((l) => `<div class="recon-line recon-agg" data-line="${esc(l.id)}"><div class="recon-facts"><div class="t">${l.line_date ? fmtD(l.line_date) : "—"} · ${esc(l.tran_type || "")}</div><div class="s">${esc(l.provider || "")} · ${esc(l.account_number || "")} · ${fmtM2(l.banked_gross)} gross</div></div></div>`).join("");
-    } else {
-      html += ls.map((l) => r44LineRow(l, g.key)).join("");
-    }
-    html += `</div>`;
-  });
-  review.innerHTML = html;
-}
-
-/* ---------- T2 · confirm / dismiss ---------- */
-
-function r44NoteDate(l) { return String(l.line_date || "").slice(0, 10); }
-/* One line's confirm. Returns a short outcome string for the bulk runner, or
-   throws nothing — every failure is reported and the line is left alone. */
-async function r44ConfirmLine(lineId, opts) {
-  const st = reconState;
-  if (!st) return "no statement open";
-  const l = st.byLine[lineId];
-  if (!l) return "line not found";
-  if (l.match_status === "confirmed") return "already confirmed";
-  const kind = r44LineKind(l);
-  if (!R44_MATCHABLE[kind]) return "nothing to confirm on this line";
-  const caseId = st.picks[lineId] || "";
-  if (!caseId) return "pick a case first";
-  const sug = st.sugg[st.byIndex[lineId]] || {};
-  const ref = st.statement.ref || "(no ref)";
-  const gross = Math.abs(Number(l.banked_gross || 0));
-  const where = `${l.provider || "no provider"} ${l.account_number || "no account"}`.trim();
-
-  /* Read the case FRESH — the review may have been open for a while, and the
-     legacy-column rule has to be computed against what is stored now. */
-  const { data: c, error: cErr } = await db.from("cases")
-    .select("id,proc_fee,proc_fee_paid_at,sols_fee,sols_fee_paid_at,broker_fee,broker_fee_paid_at,fee_status,fee_paid_at,lender,assigned_to,clients!client_id(first_name,last_name)")
-    .eq("id", caseId).maybeSingle();
-  if (cErr || !c) return "the case could not be read" + (cErr ? ": " + cErr.message : "");
-  const who = r44CaseLabel(c);
-  const paired = sug.pairedWith != null;
-  const linePatch = { match_status: "confirmed", matched_case_id: caseId, confirmed_at: new Date().toISOString() };
-
-  if (kind === "takeback" && !paired) {
-    /* A REAL clawback. The paid date stays exactly where it is — what was
-       banked was banked, and rewriting that history would take the case off
-       the cash figures for a month it really did earn. The action is a task. */
-    const body = `CLAWBACK ${fmtM2(gross)} — ${where}, statement ${ref}`;
-    const { error: nErr } = await db.from("case_notes").insert({ case_id: caseId, body, created_by: (ME && ME.id) || null });
-    if (nErr) return "the clawback note could not be written: " + nErr.message;
-    const { error: tErr } = await db.from("case_tasks").insert({
-      case_id: caseId,
-      title: `Clawback: ${fmtM2(gross)} — ${who} (${l.provider || "no provider"})`,
-      due_date: localDateStr(),
-      created_by: (ME && ME.id) || null,
-      assigned_to: (ME && ME.id) || null,
-    });
-    linePatch.match_note = tErr ? `clawback flagged · task failed: ${tErr.message}`.slice(0, 200) : "clawback flagged · owner task raised";
-    const { error: lErr } = await db.from("commission_lines").update(linePatch).eq("id", lineId);
-    if (lErr) return "the line could not be marked confirmed: " + lErr.message;
-    Object.assign(l, linePatch);
-    return tErr ? `clawback noted, but the task failed: ${tErr.message}` : `clawback flagged on ${who} — task raised for today`;
-  }
-
-  if (kind === "takeback" && paired) {
-    /* Reversed inside this same statement: ONE note, no paid date, no task. */
-    const other = st.lines[sug.pairedWith];
-    const body = `Commission ${fmtM2(gross)} taken back and re-banked within the same statement ${ref} — net £0 (${where})`;
-    const { error: nErr } = await db.from("case_notes").insert({ case_id: caseId, body, created_by: (ME && ME.id) || null });
-    if (nErr) return "the reversal note could not be written: " + nErr.message;
-    linePatch.match_note = "reversed in-statement · net £0";
-    const { error: lErr } = await db.from("commission_lines").update(linePatch).eq("id", lineId);
-    if (lErr) return "the line could not be marked confirmed: " + lErr.message;
-    Object.assign(l, linePatch);
-    if (other && other.match_status !== "confirmed") {
-      const p2 = { match_status: "confirmed", matched_case_id: caseId, confirmed_at: linePatch.confirmed_at, match_note: "reversed in-statement · net £0" };
-      const { error: oErr } = await db.from("commission_lines").update(p2).eq("id", other.id);
-      if (!oErr) { Object.assign(other, p2); st.picks[other.id] = caseId; }
-    }
-    return `reversal pair confirmed on ${who} — one note, no paid date`;
-  }
-
-  if (kind === "protection") {
-    const body = `Protection commission ${fmtM2(gross)} banked ${fmtD(r44NoteDate(l))} — ${where}`;
-    const { error: nErr } = await db.from("case_notes").insert({ case_id: caseId, body, created_by: (ME && ME.id) || null });
-    if (nErr) return "the note could not be written: " + nErr.message;
-    linePatch.match_note = "protection commission — note only";
-    const { error: lErr } = await db.from("commission_lines").update(linePatch).eq("id", lineId);
-    if (lErr) return "the line could not be marked confirmed: " + lErr.message;
-    Object.assign(l, linePatch);
-    return `${who} — protection commission noted`;
-  }
-
-  /* MORTGAGE RECEIPT — the one path that writes money onto a case. */
-  const procType = FEE_TYPES.filter((t) => t.key === "proc")[0];
-  const wantFeeFix = !!(opts && opts.feeFix) || !!st.feeFix[lineId];
-  const have = Number(c.proc_fee || 0);
-  const setProcFee = !have || (wantFeeFix && Math.abs(have - gross) > R44_FEE_DELTA_MIN);
-  // The case AS IT WILL BE, so feePaidPatch judges "every fee that has an
-  // amount now has a date" against the amount this write is about to store.
-  const cAfter = Object.assign({}, c, setProcFee ? { proc_fee: gross } : {});
-  const { patch, complete } = feePaidPatch(cAfter, [{ t: procType, date: r44NoteDate(l) }]);
-  if (setProcFee) patch.proc_fee = gross;
-  let { error: uErr } = await db.from("cases").update(patch).eq("id", caseId);
-  let legacyOnly = false;
-  if (uErr && isMissingColumnError(uErr)) {
-    /* Pre-M2 database: no per-fee-type dates to write. Same fallback markFeePaid
-       takes, for the same reason — one date for the lot rather than nothing. */
-    const legacy = { fee_status: "paid", fee_paid_at: feeDateToTs(r44NoteDate(l)) };
-    if (setProcFee) legacy.proc_fee = gross;
-    ({ error: uErr } = await db.from("cases").update(legacy).eq("id", caseId));
-    legacyOnly = !uErr;
-  }
-  if (uErr) return "the case could not be updated: " + uErr.message;
-  const body = `Proc fee ${fmtM2(gross)} banked ${fmtD(r44NoteDate(l))} — Stonebridge statement ${ref} (${where})`;
-  const { error: nErr } = await db.from("case_notes").insert({ case_id: caseId, body, created_by: (ME && ME.id) || null });
-  /* R48 — confirming a mortgage receipt against a case re-homes the income onto
-     the case's TRUE adviser (the owner for the ex-broker cases the import
-     assigned to the owner), overriding any import-time name guess. Written in
-     the SAME line update as match_status/matched_case_id/confirmed_at. Misc
-     insurance never reaches here — its note-only confirm keeps owner attribution. */
-  linePatch.attributed_to = c.assigned_to || null;
-  linePatch.match_note = [
-    "proc fee dated " + r44NoteDate(l),
-    setProcFee ? (have ? "case proc fee updated" : "case proc fee set") : "",
-    complete ? "case now reads paid" : "",
-    legacyOnly ? "legacy fee columns only (pre-M2)" : "",
-    nErr ? "note failed" : "",
-  ].filter(Boolean).join(" · ").slice(0, 200);
-  const { error: lErr } = await db.from("commission_lines").update(linePatch).eq("id", lineId);
-  if (lErr) return "the case was updated but the line could not be marked confirmed: " + lErr.message;
-  Object.assign(l, linePatch);
-  Object.assign(c, patch);
-  const cached = st.cases.filter((x) => x.id === caseId)[0];
-  if (cached) { cached.proc_fee_paid_at = patch.proc_fee_paid_at || cached.proc_fee_paid_at; if (setProcFee) cached.proc_fee = gross; }
-  return `${who} — proc fee ${fmtM2(gross)} dated ${fmtD(r44NoteDate(l))}${complete ? ", case now reads paid" : ""}`;
-}
-async function r44DismissLine(lineId) {
-  const st = reconState;
-  if (!st) return;
-  const l = st.byLine[lineId];
-  if (!l) return;
-  if (l.match_status === "confirmed") return toast("That line is confirmed — it cannot be dismissed.");
-  const next = l.match_status === "dismissed"
-    ? { match_status: st.picks[lineId] ? "suggested" : "unmatched", match_note: "" }
-    : { match_status: "dismissed", match_note: "dismissed by hand" };
-  const { error } = await db.from("commission_lines").update(next).eq("id", lineId);
-  if (error) return toast("Error: " + error.message);
-  Object.assign(l, next);
-  if (next.match_status === "dismissed") st.ticks[lineId] = false;
-  renderReconReview();
-  toast(next.match_status === "dismissed" ? "Line dismissed" : "Line back in the queue");
-}
-/* R48 — set a line's attributed_to directly, no case required. This is the
-   manual half of the "needs you" queue: a receipt that is just income with no
-   case in the system, or a correction to the import's name guess. It writes
-   ONLY attribution (leaving match_status as-is), unless the owner ticks "no case
-   — just income", which also parks the line at `na` so it stops asking to be
-   matched. A later deliberate case-confirm is the only thing that overrides it. */
-async function r44AttributeLineTo(lineId, profileId, noCase) {
-  const st = reconState;
-  if (!st) return;
-  const l = st.byLine[lineId];
-  if (!l) return;
-  if (l.match_status === "confirmed") return toast("That line is confirmed — its attribution follows the case.");
-  const patch = { attributed_to: profileId || null };
-  if (noCase && l.match_status !== "na") patch.match_status = "na";
-  const { error } = await db.from("commission_lines").update(patch).eq("id", lineId);
-  if (error) return toast("Error: " + error.message);
-  Object.assign(l, patch);
-  if (patch.match_status === "na") st.ticks[lineId] = false;
-  renderReconReview();
-  toast(`Attributed to ${staffName(profileId)}${patch.match_status === "na" ? " · no case, just income" : ""}`);
-}
-async function r44ConfirmTicked() {
-  const st = reconState;
-  if (!st) return;
-  const ids = Object.keys(st.ticks).filter((k) => st.ticks[k] && st.byLine[k] && st.byLine[k].match_status !== "confirmed");
-  if (!ids.length) return toast("Nothing is ticked.");
-  if (!confirm(`Confirm ${ids.length} line${ids.length === 1 ? "" : "s"}?\n\nThis writes the payment onto each matched case — proc fees get a paid date, clawbacks raise a task for you, and every case gets a note. It cannot be undone from here.`)) return;
-  const results = [];
-  for (const id of ids) results.push(await r44ConfirmLine(id));
-  renderReconReview();
-  await renderReconPanel();
-  toast(`Confirmed ${ids.length} line${ids.length === 1 ? "" : "s"} — ${results[results.length - 1]}`);
-}
-
-/* ---------- wiring ----------
-   Bound ONCE, imperatively, on nodes that live in the shipped markup and are
-   never re-created by a render — the same rule the Monday-money controls above
-   follow. Everything inside #recon-review / #recon-statements is rewritten by
-   innerHTML on every render, so those two are delegated rather than bound. */
-(() => {
-  const pf = $("#procrates-file");
-  if (pf) pf.addEventListener("change", async () => {
-    const f = pf.files && pf.files[0];
-    pf.value = "";
-    if (f) await r44UploadProcRates(f);
-  });
-  const rf = $("#recon-file");
-  if (rf) rf.addEventListener("change", async () => {
-    const f = rf.files && rf.files[0];
-    rf.value = "";
-    if (f) await r44ImportStatement(f);
-  });
-  const list = $("#recon-statements");
-  if (list) list.addEventListener("click", (e) => {
-    const btn = e.target.closest(".recon-review-btn");
-    if (btn) openReconReview(btn.dataset.stmt);
-  });
-  const review = $("#recon-review");
-  if (review) {
-    review.addEventListener("click", async (e) => {
-      if (e.target.closest("#recon-close")) {
-        review.classList.add("hidden"); review.innerHTML = ""; reconState = null; return;
-      }
-      if (e.target.closest("#recon-confirm-ticked")) return r44ConfirmTicked();
-      const conf = e.target.closest(".recon-confirm");
-      if (conf) {
-        const id = conf.dataset.line;
-        conf.disabled = true;
-        const msg = await r44ConfirmLine(id);
-        renderReconReview();
-        await renderReconPanel();
-        return toast(msg);
-      }
-      const dis = e.target.closest(".recon-dismiss");
-      if (dis) return r44DismissLine(dis.dataset.line);
-      /* R48 — "attribute to a person": read the select + the no-case checkbox
-         from the same control block and write attribution directly. */
-      const attrSet = e.target.closest(".recon-attr-set");
-      if (attrSet) {
-        const wrap = attrSet.closest(".recon-attr");
-        const sel = wrap && wrap.querySelector(".recon-attr-pick");
-        const noCaseChk = wrap && wrap.querySelector(".recon-attr-nocase");
-        attrSet.disabled = true;
-        return r44AttributeLineTo(attrSet.dataset.line, sel ? sel.value : "", !!(noCaseChk && noCaseChk.checked));
-      }
-    });
-    review.addEventListener("change", (e) => {
-      const st = reconState;
-      if (!st) return;
-      const sel = e.target.closest(".recon-pick");
-      if (sel) {
-        st.picks[sel.dataset.line] = sel.value || "";
-        if (!sel.value) st.ticks[sel.dataset.line] = false;
-        renderReconReview();
-        return;
-      }
-      const tick = e.target.closest(".recon-tick");
-      if (tick) { st.ticks[tick.dataset.line] = tick.checked; return; }
-      const fix = e.target.closest(".recon-feefix-chk");
-      if (fix) { st.feeFix[fix.dataset.line] = fix.checked; return; }
-    });
-  }
 })();
 
 /* ---------- Data health ---------- */
@@ -24122,7 +20055,6 @@ function dhGotoEmails(failedOnly) {
 async function loadDataHealth() {
   const el = $("#data-content");
   el.innerHTML = '<div class="empty">Loading…</div>';
-  { const rEl = document.getElementById("dh-readiness"); if (rEl) rEl.innerHTML = ""; } // R31-C — clear the rollup while reloading
   /* R6-38 — the cases read gains the property column (and created_at, for "which case came last on
      this building") so the shared-address panel below costs no extra round trip. NAMED only where M7
      is present: on an un-migrated database the select would 42703 and blank the whole page. */
@@ -24133,10 +20065,10 @@ async function loadDataHealth() {
     // Defect 13: the RPC only ever returns bare counts for these two tiles. Rather than change the
     // RPC (frontend-only, existing columns), pull the offending rows client-side from cases+clients
     // so the tiles can expand into the same list-panel pattern as the other Data Health items.
-    db.from("cases").select("id,stage,rate_end_date,expected_completion_date,completed_at,created_at,submitted_at,case_kind,lender,rate_type,retention_source_case_id,loan_amount,mortgage_account_number,client_id,clients!client_id(id,first_name,last_name,phone)" + (dhPropOn ? ",property_address" : "")).order("id").limit(OWNER_ROW_CAP),
+    db.from("cases").select("id,stage,rate_end_date,completed_at,created_at,case_kind,lender,client_id,clients!client_id(id,first_name,last_name,phone)" + (dhPropOn ? ",property_address" : "")),
     // T1-9/T1-26: same trick for the client-shaped checks. The RPC returns counts for "missing
     // email & phone" and nothing at all for malformed values, so read the rows and judge them here.
-    db.from("clients").select("id,first_name,last_name,email,phone").order("id").limit(OWNER_ROW_CAP),
+    db.from("clients").select("id,first_name,last_name,email,phone"),
     // B6 / M4 — every dismissal is one select; find_duplicate_clients (the RPC) is never touched,
     // it just gets filtered client-side against this table (§Batch4 note: the RPC's own upsert
     // logic can't know about "not a duplicate" without a schema change it doesn't need).
@@ -24154,14 +20086,13 @@ async function loadDataHealth() {
   if (caseRows.error && dhPropOn && isMissingColumnError(caseRows.error)) {
     PROP_ADDR_SUPPORTED = false;
     dhPropOn = false;
-    caseRows = await db.from("cases").select("id,stage,rate_end_date,expected_completion_date,completed_at,created_at,submitted_at,case_kind,lender,rate_type,retention_source_case_id,loan_amount,mortgage_account_number,client_id,clients!client_id(id,first_name,last_name,phone)").order("id").limit(OWNER_ROW_CAP);
+    caseRows = await db.from("cases").select("id,stage,rate_end_date,completed_at,created_at,case_kind,lender,client_id,clients!client_id(id,first_name,last_name,phone)");
   }
   // …and the quieter shape of absence: the rows came back, without the column that was asked for.
   if (dhPropOn && Array.isArray(caseRows.data) && caseRows.data.length) {
     notePropAddrFromStarRow(caseRows.data[0]);
     if (PROP_ADDR_SUPPORTED === false) dhPropOn = false;
   }
-  renderOwnerCapNotice("#data-cap-notice", ownerCapHit(caseRows.data) || ownerCapHit(clientRows.data)); // R23 — data-health must see the whole book
   const dq = dqRes.data || {};
   // Feature-detect M4: an older database has no duplicate_dismissals table yet — the panel simply
   // shows every RPC-flagged pair (as before) and hides the "Not a duplicate" action.
@@ -24185,41 +20116,8 @@ async function loadDataHealth() {
   });
   const missingPhoneLive = [...missingPhoneMap.values()];
   const caseName = (cs) => (cs.clients ? [cs.clients.first_name, cs.clients.last_name].filter(Boolean).join(" ") || "(no name)" : "(no name)");
-  /* R45 — ONE predicate for tile, panel and readiness rollup, mirroring get_data_quality exactly:
-     tracker/variable deals carry no fixed end; a retention successor inherits its source's date
-     question; a record with no loan and no mortgage account number is not a mortgage; and a deal
-     SUPERSEDED by a newer completed deal on the same property (same client) had its rate-end
-     cleared on purpose — the back book imports exactly that shape. The supersede test needs
-     property_address, so on a database without M7 (dhPropOn false) it simply doesn't exclude —
-     a slightly higher count beats a wrong exclusion. */
-  const dhPropKeyOf = (cs) => String(cs.property_address || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-  const dhLatestCompletedByProp = {};
-  if (dhPropOn) {
-    allCases.forEach((cs) => {
-      if (cs.stage !== "completed") return;
-      const k = dhPropKeyOf(cs);
-      if (!k) return;
-      const kk = cs.client_id + "|" + k;
-      const cur = dhLatestCompletedByProp[kk];
-      if (!cur || String(cs.completed_at || "") > String(cur.completed_at || "")) dhLatestCompletedByProp[kk] = cs;
-    });
-  }
   const noRateEnd = allCases
-    .filter((cs) => {
-      if (cs.stage !== "completed" || cs.rate_end_date) return false;
-      const rt = String(cs.rate_type || "");
-      if (rt === "tracker" || rt === "variable") return false;
-      if (cs.retention_source_case_id) return false;
-      if (cs.loan_amount == null && !cs.mortgage_account_number) return false;
-      if (dhPropOn) {
-        const k = dhPropKeyOf(cs);
-        const latest = k ? dhLatestCompletedByProp[cs.client_id + "|" + k] : null;
-        // Strictly-newer only, exactly as the RPC's `n.completed_at > c.completed_at`: a same-day
-        // pair counts twice there, and an undated completion is never treated as superseded.
-        if (latest && latest.id !== cs.id && cs.completed_at && String(latest.completed_at || "") > String(cs.completed_at || "")) return false;
-      }
-      return true;
-    })
+    .filter((cs) => cs.stage === "completed" && !cs.rate_end_date)
     .map((cs) => ({ case_id: cs.id, name: caseName(cs) }));
   // T1-7 — completions stamped by nothing (every pre-fix UI completion, plus imports). They're
   // invisible to Reports, which counts by completed_at, so the pipeline and the report disagree
@@ -24306,9 +20204,9 @@ async function loadDataHealth() {
        are asked for SEPARATELY rather than added to the big cases select above — naming them
        there would 42703 on an un-migrated database and blank five existing panels. */
     const [dhDocRows, dhDocMails, dhWaitRows] = await Promise.all([
-      softRows(db.from("case_documents").select("case_id,status").order("case_id").limit(OWNER_ROW_CAP)),
-      softRows(db.from("email_queue").select("case_id,email_type,status,sent_at,created_at").in("email_type", DOC_MAIL_TYPES).order("created_at").limit(OWNER_ROW_CAP)),
-      softRows(db.from("cases").select("id,waiting_on,solicitor_firm,assigned_to").order("id").limit(OWNER_ROW_CAP)),
+      softRows(db.from("case_documents").select("case_id,status")),
+      softRows(db.from("email_queue").select("case_id,email_type,status,sent_at,created_at").in("email_type", DOC_MAIL_TYPES)),
+      softRows(db.from("cases").select("id,waiting_on,solicitor_firm,assigned_to")),
     ]);
     const outstandingBy = {}, docsBy = {};
     dhDocRows.forEach((d) => {
@@ -24323,7 +20221,7 @@ async function loadDataHealth() {
        and cost the panel its seven other facts to gain one. */
     const dhExchangeBy = {};
     if ((await forwardDatesSupported()) === true) {
-      (await softRows(db.from("cases").select("id,exchange_date").order("id").limit(OWNER_ROW_CAP))).forEach((r) => { if (r && r.id) dhExchangeBy[r.id] = r.exchange_date || null; });
+      (await softRows(db.from("cases").select("id,exchange_date"))).forEach((r) => { if (r && r.id) dhExchangeBy[r.id] = r.exchange_date || null; });
     }
     const extraBy = Object.fromEntries(dhWaitRows.map((r) => [r.id, r]));
     const emailBy = new Map(allClients.map((cl) => [cl.id, cl.email || ""]));
@@ -24360,7 +20258,7 @@ async function loadDataHealth() {
   const dhCareOn = (await careSupported()) === true;
   let dhVulnerable = [], dhSuppressed = [];
   if (dhCareOn) {
-    const { data: careRows, error: careErr } = await db.from("clients").select("id,first_name,last_name," + CARE_COLS.join(",")).order("id").limit(OWNER_ROW_CAP);
+    const { data: careRows, error: careErr } = await db.from("clients").select("id,first_name,last_name," + CARE_COLS.join(","));
     if (careErr) { if (isMissingColumnError(careErr)) CARE_SUPPORTED = false; }
     else {
       const cn = (r) => [r.first_name, r.last_name].filter(Boolean).join(" ") || "(no name)";
@@ -24378,112 +20276,21 @@ async function loadDataHealth() {
     else dhNoPolicyStart = (pol || []).map((r) => ({ id: r.id, name: [r.clients && r.clients.first_name, r.clients && r.clients.last_name].filter(Boolean).join(" ") || "(client not on file)" }));
   }
 
-  /* R25 · MI-1 — the two EARLIER milestone dates (submitted_at / offer_issued_date), the funnel &
-     velocity inputs Reports derives its medians from (created_at → submitted_at → offer_issued_date
-     → completed_at). A record that has reached application/offer with the date blank silently drops
-     out of those medians and the conversion funnel with nothing surfacing it — imported books arrive
-     full of exactly this gap. submitted_at rides the main cases select above (an original column, no
-     gate). offer_issued_date is a forward-dates column and MUST be read separately behind
-     forwardDatesSupported(), exactly like dhExchangeBy reads exchange_date — naming it in the big
-     select would 42703 the whole page (blanking five existing panels) on an un-migrated database. */
-  const dhForwardOn = (await forwardDatesSupported()) === true;
-  const dhOfferIssuedBy = {};
-  if (dhForwardOn) {
-    (await softRows(db.from("cases").select("id,offer_issued_date").order("id").limit(OWNER_ROW_CAP))).forEach((r) => { if (r && r.id) dhOfferIssuedBy[r.id] = r.offer_issued_date || null; });
-  }
-  // Stage rank via the canonical STAGES order. "Reached ≥ X" = the case's stage sits at or past X in
-  // pipeline order; completed (rank 6) has reached application AND offer, so it can legitimately show
-  // here for a missing EARLIER date (that's separate from the noCompletedAt tile). not_proceeding
-  // (rank 7) is excluded outright — a dropped case owes no milestone date.
-  const DH_STAGE_RANK = Object.fromEntries(STAGES.map(([k], i) => [k, i]));
-  const DH_APP_RANK = DH_STAGE_RANK["application"], DH_OFFER_RANK = DH_STAGE_RANK["offer"];
-  const noMilestoneDate = allCases.reduce((acc, cs) => {
-    if (cs.stage === "not_proceeding") return acc;
-    /* R45 — the back book. A case completed months or years ago will never get its application/
-       offer dates backfilled (nobody remembers them), and MI velocity only counts cases carrying
-       both dates anyway — so an old completion's blank milestone is history, not a fault to clear.
-       The dates are chased while the completion is FRESH (≤180 days), which is when someone can
-       still actually supply them. A completed case with NO completion date at all keeps showing —
-       that is the noCompletedAt tile's fault to resolve first, and once a date lands this rule
-       takes over. */
-    if (cs.stage === "completed" && cs.completed_at && daysSince(cs.completed_at) > 180) return acc;
-    const rank = DH_STAGE_RANK[cs.stage];
-    if (rank == null) return acc;
-    // Earliest missing milestone per case: application before offer.
-    if (rank >= DH_APP_RANK && !cs.submitted_at) {
-      acc.push({ case_id: cs.id, name: caseName(cs), stage: cs.stage, missing: "application date (submitted_at)" });
-    } else if (dhForwardOn && rank >= DH_OFFER_RANK && !dhOfferIssuedBy[cs.id]) {
-      acc.push({ case_id: cs.id, name: caseName(cs), stage: cs.stage, missing: "offer date (offer_issued_date)" });
-    }
-    return acc;
-  }, []);
-
-  /* R27 — dead-book hygiene: a LIVE (open) case whose own forward date has already elapsed. This is a
-     data-driven signal, not a time-since one: it works on freshly imported rows (which arrive with
-     created_at/updated_at ≈ now and no case_events) from the first minute, and it's distinct from
-     R17's 7-day activity radar and the 45-day days-in-stage card colour. Prefer the completion date
-     (a more direct "should have closed") over the rate-end date. completed/not_proceeding excluded:
-     a completed case legitimately has a past rate_end_date. */
-  const deadBook = [];
-  allCases.forEach((cs) => {
-    if (cs.stage === "completed" || cs.stage === "not_proceeding") return;
-    if (DH_STAGE_RANK[cs.stage] == null) return;
-    let overdueDays = null, reason = null;
-    if (cs.expected_completion_date && daysSince(cs.expected_completion_date) > 0) {
-      overdueDays = daysSince(cs.expected_completion_date);
-      reason = "expected completion " + overdueDays + " days ago";
-    } else if (cs.rate_end_date && daysSince(cs.rate_end_date) > 0) {
-      overdueDays = daysSince(cs.rate_end_date);
-      reason = "rate ended " + overdueDays + " days ago";
-    }
-    if (reason == null) return;
-    deadBook.push({ case_id: cs.id, name: caseName(cs), stage: cs.stage, reason, overdueDays });
-  });
-  deadBook.sort((a, b) => b.overdueDays - a.overdueDays);
-
-  /* ==========================================================================
-     R42 · F5 — A CLEAN FAULT TILE HIDES ITSELF.
-
-     This row had grown to seventeen tiles, and on a tidy book most of them read zero. A zero on a
-     FAULT tile answers nothing: #dh-readiness above already lists every non-zero fault, worst
-     first, each row jumping to its own tile, so a tile at zero is neither the question nor the
-     answer — it is furniture between the owner and the faults that are real.
-
-     WHAT COUNTS AS CLEAN is the rollup's own count, not the tile's caption, so the two can never
-     disagree: if #dh-readiness would not list a check, that check's tile is clean. (The "N of M"
-     tiles therefore go clean when N — clients missing a contact detail WITH A LIVE CASE — is zero,
-     which is exactly the check the rollup applies. The M is not lost: one click on the toggle
-     brings every clean tile back.) The rate-end tile draws its caption from the RPC and its
-     rollup count from the case rows, so it stays only if BOTH are zero.
-
-     INFORMATIONAL TILES ARE NEVER HIDDEN, however quiet they are: waiting-on-documents,
-     shared property addresses, vulnerable clients and automation-suppressed clients are lists to
-     READ, not faults to clear. This page has been emphatic since R13 that a Consumer-Duty record
-     is not a problem to be cleared, and collapsing "Vulnerable clients: 0" with the faults would
-     say precisely that. They carry no dh-clean class and never will.
-
-     Nothing is removed from the DOM: every tile keeps its id, its title, its wiring and its
-     number, and #dh-clean-toggle reveals them all. No persistence — the row opens tidy every time.
-     ========================================================================== */
-  let dhCleanN = 0;
-  const dhFault = (n) => { if (!n) { dhCleanN++; return " dh-clean"; } return ""; };
   /* T1-26 — every number on this page is a door. `▾` = expands a list panel further down the page,
      `→` = leaves for the page that number lives on. Only "Clients total" (which isn't a fault
      count and has nothing to drill into) stays plain, so "clickable" reads consistently. */
   const kpis = `
     <div class="kpi"><div class="num">${dq.clients_total ?? 0}</div><div class="lbl">Clients total</div></div>
-    <div class="kpi ${missingEmail.length ? "warn" : ""}${dhFault(missingEmail.length)} dq-clickable" id="dh-tile-email" title="${missingEmail.length} of ${dq.missing_email_count ?? 0} clients missing an email have a live case — click to jump to the list"><div class="num">${missingEmail.length} of ${dq.missing_email_count ?? 0}</div><div class="lbl">Missing email — with a live case ▾</div></div>
-    <div class="kpi ${dq.missing_phone_count ? "warn" : ""}${dhFault(missingPhoneLive.length)} dq-clickable" id="dh-tile-phone" title="${missingPhoneLive.length} of ${dq.missing_phone_count ?? 0} clients missing a phone have a live case — click to list them"><div class="num">${missingPhoneLive.length} of ${dq.missing_phone_count ?? 0}</div><div class="lbl">Missing phone — with a live case ▾</div></div>
-    <div class="kpi ${missingBoth.length ? "warn" : ""}${dhFault(missingBoth.length)} dq-clickable" id="dh-tile-both" title="Clients with neither an email nor a phone number — click to list them"><div class="num">${missingBoth.length}</div><div class="lbl">Missing email &amp; phone ▾</div></div>
-    <div class="kpi ${invalidEmail.length ? "warn" : ""}${dhFault(invalidEmail.length)} dq-clickable" id="dh-tile-invalid-email" title="Clients whose email address can't be sent to — click to list them"><div class="num">${invalidEmail.length}</div><div class="lbl">Invalid email ▾</div></div>
-    <div class="kpi ${invalidPhone.length ? "warn" : ""}${dhFault(invalidPhone.length)} dq-clickable" id="dh-tile-invalid-phone" title="Clients whose phone number can't be texted — click to list them"><div class="num">${invalidPhone.length}</div><div class="lbl">Invalid phone ▾</div></div>
-    <div class="kpi ${unassigned.length ? "warn" : ""}${dhFault(unassigned.length)} dq-clickable" id="dh-tile-unassigned" title="Click to jump to the list"><div class="num">${unassigned.length}</div><div class="lbl">Live cases unassigned ▾</div></div>
-    <div class="kpi${dhFault(noFee.length)} dq-clickable" id="dh-tile-nofee" title="Click to jump to the list"><div class="num">${noFee.length}</div><div class="lbl">Completed, no fee ▾</div></div>
-    <div class="kpi${dhFault((dq.completed_missing_rate_end ?? 0) + noRateEnd.length)} dq-clickable" id="dh-tile-rateend" title="Click to list these cases"><div class="num">${dq.completed_missing_rate_end ?? 0}</div><div class="lbl">Completed, no rate-end ▾</div></div>
-    <div class="kpi ${noCompletedAt.length ? "warn" : ""}${dhFault(noCompletedAt.length)} dq-clickable" id="dh-tile-nocompleted" title="Completed cases with no completion date — invisible to Reports until it's set. Click to list them"><div class="num">${noCompletedAt.length}</div><div class="lbl">Completed, no completion date ▾</div></div>
-    <div class="kpi ${noMilestoneDate.length ? "warn" : ""}${dhFault(noMilestoneDate.length)} dq-clickable" id="dh-tile-milestone" title="Cases past application or offer with the milestone date (submitted_at / offer_issued_date) blank — they silently skew the Reports velocity & funnel until filled in. Click to list them."><div class="num">${noMilestoneDate.length}</div><div class="lbl">Missing application/offer date ▾</div></div>
-    <div class="kpi ${deadBook.length ? "warn" : ""}${dhFault(deadBook.length)} dq-clickable" id="dh-tile-deadbook" title="Live cases still open after their expected completion date — or their rate-end date — has already passed. Likely dead or stuck, and they inflate the live pipeline until closed or revived. Click to list them."><div class="num">${deadBook.length}</div><div class="lbl">Overdue — open past a key date ▾</div></div>
-    <div class="kpi ${dq.emails_failed ? "warn" : ""}${dhFault(dq.emails_failed)} dq-clickable" id="dh-tile-failed" title="Click to open the Emails page filtered to failed sends"><div class="num">${dq.emails_failed ?? 0}</div><div class="lbl">Failed emails →</div></div>
+    <div class="kpi ${missingEmail.length ? "warn" : ""} dq-clickable" id="dh-tile-email" title="${missingEmail.length} of ${dq.missing_email_count ?? 0} clients missing an email have a live case — click to jump to the list"><div class="num">${missingEmail.length} of ${dq.missing_email_count ?? 0}</div><div class="lbl">Missing email — with a live case ▾</div></div>
+    <div class="kpi ${dq.missing_phone_count ? "warn" : ""} dq-clickable" id="dh-tile-phone" title="${missingPhoneLive.length} of ${dq.missing_phone_count ?? 0} clients missing a phone have a live case — click to list them"><div class="num">${missingPhoneLive.length} of ${dq.missing_phone_count ?? 0}</div><div class="lbl">Missing phone — with a live case ▾</div></div>
+    <div class="kpi ${missingBoth.length ? "warn" : ""} dq-clickable" id="dh-tile-both" title="Clients with neither an email nor a phone number — click to list them"><div class="num">${missingBoth.length}</div><div class="lbl">Missing email &amp; phone ▾</div></div>
+    <div class="kpi ${invalidEmail.length ? "warn" : ""} dq-clickable" id="dh-tile-invalid-email" title="Clients whose email address can't be sent to — click to list them"><div class="num">${invalidEmail.length}</div><div class="lbl">Invalid email ▾</div></div>
+    <div class="kpi ${invalidPhone.length ? "warn" : ""} dq-clickable" id="dh-tile-invalid-phone" title="Clients whose phone number can't be texted — click to list them"><div class="num">${invalidPhone.length}</div><div class="lbl">Invalid phone ▾</div></div>
+    <div class="kpi ${unassigned.length ? "warn" : ""} dq-clickable" id="dh-tile-unassigned" title="Click to jump to the list"><div class="num">${unassigned.length}</div><div class="lbl">Live cases unassigned ▾</div></div>
+    <div class="kpi dq-clickable" id="dh-tile-nofee" title="Click to jump to the list"><div class="num">${noFee.length}</div><div class="lbl">Completed, no fee ▾</div></div>
+    <div class="kpi dq-clickable" id="dh-tile-rateend" title="Click to list these cases"><div class="num">${dq.completed_missing_rate_end ?? 0}</div><div class="lbl">Completed, no rate-end ▾</div></div>
+    <div class="kpi ${noCompletedAt.length ? "warn" : ""} dq-clickable" id="dh-tile-nocompleted" title="Completed cases with no completion date — invisible to Reports until it's set. Click to list them"><div class="num">${noCompletedAt.length}</div><div class="lbl">Completed, no completion date ▾</div></div>
+    <div class="kpi ${dq.emails_failed ? "warn" : ""} dq-clickable" id="dh-tile-failed" title="Click to open the Emails page filtered to failed sends"><div class="num">${dq.emails_failed ?? 0}</div><div class="lbl">Failed emails →</div></div>
     ${/* R6-38 — deliberately NOT a "warn" tile: a shared address is something to read, not a fault to
           clear. Absent entirely on a database with no property column. */ ""}
     ${/* R12b · K-11 — a work queue, not a fault: no "warn" class, however big the number gets. */ ""}
@@ -24497,30 +20304,13 @@ async function loadDataHealth() {
     ${dhCareOn ? `<div class="kpi dq-clickable" id="dh-tile-vulnerable" title="Clients flagged as vulnerable. Information, not a fault — click to read the list and check each one carries a note explaining the care need."><div class="num">${dhVulnerable.length}</div><div class="lbl">Vulnerable clients ▾</div></div>` : ""}
     ${dhCareOn ? `<div class="kpi dq-clickable" id="dh-tile-suppressed" title="Clients the database refuses every automated email and SMS to. Click to list them — worth reading, because nothing automated will ever reach these people again until it is turned off."><div class="num">${dhSuppressed.length}</div><div class="lbl">Automation suppressed ▾</div></div>` : ""}
     ${/* R13 · M-23 — this one IS a fault: a policy whose clawback window nobody can watch. */ ""}
-    ${dhClawbackOn ? `<div class="kpi ${dhNoPolicyStart.length ? "warn" : ""}${dhFault(dhNoPolicyStart.length)} dq-clickable" id="dh-tile-nopolicystart" title="Policies recorded as taken with no start date — their clawback window cannot be watched. Click to open the Protection page's Clawback window panel."><div class="num">${dhNoPolicyStart.length}</div><div class="lbl">Policies with no start date →</div></div>` : ""}`
-    /* R42 · F5 — the one control that puts them back. Appended AFTER the tiles because dhCleanN is
-       only final once every tile above has declared itself, and rendered at all only when there is
-       something to reveal: "0 checks clean" would be a tile about tiles. `✓` and `▸`/`▾` carry the
-       meanings they carry everywhere else on the page — done, and expands in place. */
-    + (dhCleanN ? `<div class="kpi dh-clean-toggle" id="dh-clean-toggle" role="button" tabindex="0" aria-expanded="false" data-n="${dhCleanN}" title="${dhCleanN} data-quality check${dhCleanN === 1 ? " has" : "s have"} nothing to fix, so ${dhCleanN === 1 ? "its tile is" : "their tiles are"} folded away. Click to show ${dhCleanN === 1 ? "it" : "them"} — the counts are unchanged, and the informational lists (documents, shared addresses, vulnerable, suppressed) are never folded."><div class="lbl" id="dh-clean-toggle-lbl">✓ ${dhCleanN} check${dhCleanN === 1 ? "" : "s"} clean ▸</div></div>` : "");
+    ${dhClawbackOn ? `<div class="kpi ${dhNoPolicyStart.length ? "warn" : ""} dq-clickable" id="dh-tile-nopolicystart" title="Policies recorded as taken with no start date — their clawback window cannot be watched. Click to open the Protection page's Clawback window panel."><div class="num">${dhNoPolicyStart.length}</div><div class="lbl">Policies with no start date →</div></div>` : ""}`;
 
-  /* R37 · K5 — ONE CANONICAL WARNING ABOUT THE QUEUE, NOT THREE.
-     The same fact was being argued three times: Today's heartbeat banner ("emails may be silently
-     stuck"), this one, and the Emails page itself, which IS the queue. Three phrasings of one
-     problem is how a real warning gets read as furniture.
-
-     Today keeps the full sentence — it is the most-seen screen and the first place anybody would
-     find out — and Emails keeps everything, because it is where the problem is actually fixed.
-     Data health keeps only a POINTER: the count, and the way through. The id, the container and
-     the click-through (wired below to dhGotoEmails(false), same as before) are unchanged, so
-     nothing that looked for #dh-stuck-notice has lost it — it just says less. */
   let stuckNotice = "";
-  if (dq.emails_stuck > 0) {
-    const live = !!dq.emails_sending_live;
-    const n = `${dq.emails_stuck} email${dq.emails_stuck === 1 ? "" : "s"}`;
-    stuckNotice = `<div class="dq-notice${live ? " bad" : ""} dq-clickable" id="dh-stuck-notice" title="${live
-      ? "Emails are queued and the sender is live, so they should have gone. Today's banner and the Emails page carry the detail."
-      : "Emails are queued and no sender is configured yet, so nothing has gone out. The Emails page carries the detail."}">${live ? "⚠ " : ""}${n} ${live ? "stuck" : "queued, not sent"} — <button type="button" class="dash-notice-link" id="dh-stuck-link" onclick="event.stopPropagation(); dhGotoEmails(false)">see Emails</button></div>`;
+  if (dq.emails_stuck > 0 && dq.emails_sending_live) {
+    stuckNotice = `<div class="dq-notice bad dq-clickable" id="dh-stuck-notice" title="Click to open the Emails page">${dq.emails_stuck} email${dq.emails_stuck === 1 ? " is" : "s are"} stuck in the queue — the sender may be failing. →</div>`;
+  } else if (dq.emails_stuck > 0 && !dq.emails_sending_live) {
+    stuckNotice = `<div class="dq-notice dq-clickable" id="dh-stuck-notice" title="Click to open the Emails page">${dq.emails_stuck} email${dq.emails_stuck === 1 ? "" : "s"} queued and waiting — the Resend key isn't set yet, so nothing has sent. →</div>`;
   }
 
   const mutedSub = "color:var(--muted);font-size:12px;margin-top:2px;";
@@ -24582,19 +20372,14 @@ async function loadDataHealth() {
       </div>`).join("") : '<div class="empty">No address appears on more than one client\'s cases. 👍</div>'}
   </div>`;
 
-  // R29 — cap each issue panel's rendered rows so a bulk import that leaves hundreds of flagged
-  // cases can't balloon the DOM. Only the RENDER is bounded; every compute/selection stays as-is.
-  const DH_PANEL_CAP = 200;
-  const dhMoreNote = (n) => n > DH_PANEL_CAP ? `<div class="empty">…and ${n - DH_PANEL_CAP} more not shown — clear the ones above first, or use the firm export to work the whole list.</div>` : "";
-
   const missingPanel = `<div class="panel" id="dh-missing-panel">
     <h3>Clients missing email (with a live case)</h3>
     ${missingEmail.length === 300 ? '<p class="panel-sub">Showing the first 300 — there may be more.</p>' : ""}
     ${missingEmail.length ? `<table class="imp-table">
-      ${missingEmail.slice(0, DH_PANEL_CAP).map((c) => `<tr>
+      ${missingEmail.map((c) => `<tr>
         <td>${esc(c.name)}</td>
         <td style="text-align:right;white-space:nowrap;"><button class="btn btn-sm" onclick="openClient('${c.id}')">Open</button></td>
-      </tr>`).join("")}${missingEmail.length > DH_PANEL_CAP ? `<tr><td colspan="2">…and ${missingEmail.length - DH_PANEL_CAP} more not shown — use the firm export to work the whole list.</td></tr>` : ""}
+      </tr>`).join("")}
     </table>` : '<div class="empty">Every client with a live case has an email. 👍</div>'}
   </div>`;
 
@@ -24610,7 +20395,7 @@ async function loadDataHealth() {
   const unassignedPanel = `<div class="panel" id="dh-unassigned-panel">
     <h3>Live cases with no adviser</h3>
     ${unassigned.length ? dhBulkBar : ""}
-    ${unassigned.length ? unassigned.slice(0, DH_PANEL_CAP).map((c) => `
+    ${unassigned.length ? unassigned.map((c) => `
       <div class="row-item">
         <input type="checkbox" class="dh-cb" data-id="${c.case_id}" aria-label="Select this case"${dhSel.has(c.case_id) ? " checked" : ""} onclick="event.stopPropagation()">
         <div class="row-main">
@@ -24618,100 +20403,76 @@ async function loadDataHealth() {
           <div class="s">${esc(STAGE_LABEL[c.stage] || c.stage)}</div>
         </div>
         <button class="btn btn-sm" onclick="openCase('${c.case_id}')">Open</button>
-      </div>`).join("") + dhMoreNote(unassigned.length) : '<div class="empty">Every live case has an adviser. 👍</div>'}
+      </div>`).join("") : '<div class="empty">Every live case has an adviser. 👍</div>'}
   </div>`;
 
   const noFeePanel = `<div class="panel" id="dh-nofee-panel">
     <h3>Completed cases with no fee recorded</h3>
-    ${noFee.length ? noFee.slice(0, DH_PANEL_CAP).map((c) => `
+    ${noFee.length ? noFee.map((c) => `
       <div class="row-item">
         <div class="row-main"><div class="t" onclick="openCase('${c.case_id}')">${esc(c.name)}</div></div>
         <button class="btn btn-sm" onclick="openCase('${c.case_id}')">Open</button>
-      </div>`).join("") + dhMoreNote(noFee.length) : '<div class="empty">All completed cases have a fee recorded. 👍</div>'}
+      </div>`).join("") : '<div class="empty">All completed cases have a fee recorded. 👍</div>'}
   </div>`;
 
   // Defect 13: the two previously dead-end tiles, now expandable list panels — same row-item
   // pattern as missingPanel/unassignedPanel/noFeePanel above. Hidden until the tile is clicked.
   const phonePanel = `<div class="panel hidden" id="dh-phone-panel">
     <h3>Clients missing phone (with a live case)</h3>
-    ${missingPhoneLive.length ? missingPhoneLive.slice(0, DH_PANEL_CAP).map((c) => `
+    ${missingPhoneLive.length ? missingPhoneLive.map((c) => `
       <div class="row-item">
         <div class="row-main"><div class="t" onclick="openClient('${c.id}')">${esc(c.name)}</div></div>
         <button class="btn btn-sm" onclick="openClient('${c.id}')">Open</button>
-      </div>`).join("") + dhMoreNote(missingPhoneLive.length) : '<div class="empty">Every client with a live case has a phone number. 👍</div>'}
+      </div>`).join("") : '<div class="empty">Every client with a live case has a phone number. 👍</div>'}
   </div>`;
 
   const rateEndPanel = `<div class="panel hidden" id="dh-rateend-panel">
     <h3>Completed cases with no rate-end date</h3>
-    ${noRateEnd.length ? noRateEnd.slice(0, DH_PANEL_CAP).map((c) => `
+    ${noRateEnd.length ? noRateEnd.map((c) => `
       <div class="row-item">
         <div class="row-main"><div class="t" onclick="openCase('${c.case_id}')">${esc(c.name)}</div></div>
         <button class="btn btn-sm" onclick="openCase('${c.case_id}')">Open</button>
-      </div>`).join("") + dhMoreNote(noRateEnd.length) : '<div class="empty">Every completed case has a rate-end date. 👍</div>'}
+      </div>`).join("") : '<div class="empty">Every completed case has a rate-end date. 👍</div>'}
   </div>`;
 
   // T1-7 — same shape as rateEndPanel. Opening the case and saving it re-stamps completed_at.
   const noCompletedPanel = `<div class="panel hidden" id="dh-nocompleted-panel">
     <h3>Completed cases with no completion date</h3>
     <p class="panel-sub">Reports count completions by date — these are complete in the pipeline but missing from every month's figures. Open each one and save it to stamp the date.</p>
-    ${noCompletedAt.length ? noCompletedAt.slice(0, DH_PANEL_CAP).map((c) => `
+    ${noCompletedAt.length ? noCompletedAt.map((c) => `
       <div class="row-item">
         <div class="row-main"><div class="t" onclick="openCase('${c.case_id}')">${esc(c.name)}</div></div>
         <button class="btn btn-sm" onclick="openCase('${c.case_id}')">Open</button>
-      </div>`).join("") + dhMoreNote(noCompletedAt.length) : '<div class="empty">Every completed case has a completion date. 👍</div>'}
-  </div>`;
-
-  // R25 · MI-1 — same row-item shape as the other date panels. Each row names WHICH milestone date is
-  // missing (application before offer); opening the case and saving the date puts the record back into
-  // the Reports velocity medians and conversion funnel it was silently dropping out of.
-  const milestonePanel = `<div class="panel hidden" id="dh-milestone-panel">
-    <h3>Cases missing an application/offer date</h3>
-    <p class="panel-sub">Cases that have reached application or offer with the milestone date (<strong>submitted_at</strong> / <strong>offer_issued_date</strong>) blank. Reports derives its funnel conversion and velocity medians from these dates, so a gap here silently skews the MI. Open each one and set the date to fix it.</p>
-    ${noMilestoneDate.length ? noMilestoneDate.slice(0, DH_PANEL_CAP).map((c) => `
-      <div class="row-item">
-        <div class="row-main"><div class="t" onclick="openCase('${c.case_id}')">${esc(c.name)}</div><div class="s">${esc(STAGE_LABEL[c.stage] || c.stage)} · missing: ${esc(c.missing)}</div></div>
-        <button class="btn btn-sm" onclick="openCase('${c.case_id}')">Open</button>
-      </div>`).join("") + dhMoreNote(noMilestoneDate.length) : '<div class="empty">Every case past application or offer has its milestone date. 👍</div>'}
-  </div>`;
-
-  // R27 — live cases whose forward date has already passed. See the deadBook compute above.
-  const deadBookPanel = `<div class="panel hidden" id="dh-deadbook-panel">
-    <h3>Overdue — open cases past a key date</h3>
-    <p class="panel-sub">Live cases still open after their <strong>expected completion date</strong> — or, failing that, their <strong>rate-end date</strong> — has already passed. These are the classic dead-wood that silently inflates the live pipeline and pollutes MI. Open each one and either close it or push the date out. Sorted most-overdue first.</p>
-    ${deadBook.length ? deadBook.slice(0, DH_PANEL_CAP).map((c) => `
-      <div class="row-item">
-        <div class="row-main"><div class="t" onclick="openCase('${c.case_id}')">${esc(c.name)}</div><div class="s">${esc(STAGE_LABEL[c.stage] || c.stage)} · ${esc(c.reason)}</div></div>
-        <button class="btn btn-sm" onclick="openCase('${c.case_id}')">Open</button>
-      </div>`).join("") + dhMoreNote(deadBook.length) : '<div class="empty">No open cases are past a completion or rate-end date. 👍</div>'}
+      </div>`).join("") : '<div class="empty">Every completed case has a completion date. 👍</div>'}
   </div>`;
 
   // T1-26 — the least-reachable records in the database, which previously had no list anywhere.
   const bothPanel = `<div class="panel hidden" id="dh-both-panel">
     <h3>Clients with no email and no phone</h3>
-    ${missingBoth.length ? missingBoth.slice(0, DH_PANEL_CAP).map((c) => `
+    ${missingBoth.length ? missingBoth.map((c) => `
       <div class="row-item">
         <div class="row-main"><div class="t" onclick="openClient('${c.id}')">${esc(c.name)}</div></div>
         <button class="btn btn-sm" onclick="openClient('${c.id}')">Open</button>
-      </div>`).join("") + dhMoreNote(missingBoth.length) : '<div class="empty">Every client has at least one way to reach them. 👍</div>'}
+      </div>`).join("") : '<div class="empty">Every client has at least one way to reach them. 👍</div>'}
   </div>`;
 
   // T1-9 — present but unusable. The value is shown so the typo is visible without opening anything.
   const invalidEmailPanel = `<div class="panel hidden" id="dh-invalid-email-panel">
     <h3>Clients with an invalid email address</h3>
-    ${invalidEmail.length ? invalidEmail.slice(0, DH_PANEL_CAP).map((c) => `
+    ${invalidEmail.length ? invalidEmail.map((c) => `
       <div class="row-item">
         <div class="row-main"><div class="t" onclick="openClient('${c.id}','email')">${esc(c.name)}</div><div class="s">${esc(c.value)}</div></div>
         <button class="btn btn-sm" onclick="openClient('${c.id}','email')">Fix</button>
-      </div>`).join("") + dhMoreNote(invalidEmail.length) : '<div class="empty">Every email address on file looks sendable. 👍</div>'}
+      </div>`).join("") : '<div class="empty">Every email address on file looks sendable. 👍</div>'}
   </div>`;
 
   const invalidPhonePanel = `<div class="panel hidden" id="dh-invalid-phone-panel">
     <h3>Clients with an invalid phone number</h3>
-    ${invalidPhone.length ? invalidPhone.slice(0, DH_PANEL_CAP).map((c) => `
+    ${invalidPhone.length ? invalidPhone.map((c) => `
       <div class="row-item">
         <div class="row-main"><div class="t" onclick="openClient('${c.id}','phone')">${esc(c.name)}</div><div class="s">${esc(c.value)}</div></div>
         <button class="btn btn-sm" onclick="openClient('${c.id}','phone')">Fix</button>
-      </div>`).join("") + dhMoreNote(invalidPhone.length) : '<div class="empty">Every phone number on file looks textable. 👍</div>'}
+      </div>`).join("") : '<div class="empty">Every phone number on file looks textable. 👍</div>'}
   </div>`;
 
   /* R13 · M-4/M-30 — the two care lists. Neutral wording throughout: these are not faults, and the
@@ -24720,20 +20481,20 @@ async function loadDataHealth() {
   const vulnerablePanel = !dhCareOn ? "" : `<div class="panel hidden" id="dh-vulnerable-panel">
     <h3>Vulnerable clients</h3>
     <p class="panel-sub">Clients flagged as vulnerable on their record. This is <strong>information, not a problem list</strong> — nothing here needs clearing. What is worth checking is that each one carries a note: a flag with no explanation tells the next colleague to be careful without telling them how.</p>
-    ${dhVulnerable.length ? dhVulnerable.slice(0, DH_PANEL_CAP).map((c) => `
+    ${dhVulnerable.length ? dhVulnerable.map((c) => `
       <div class="row-item">
         <div class="row-main"><div class="t" onclick="openClient('${jsArg(c.id)}')">${esc(c.name)}</div><div class="s">${c.note ? esc(c.note) : '<span class="cs-muted">no note recorded — add one so a colleague knows what the care need is</span>'}</div></div>
         <button class="btn btn-sm" onclick="openClient('${jsArg(c.id)}')">Open</button>
-      </div>`).join("") + dhMoreNote(dhVulnerable.length) : '<div class="empty">No client is flagged as vulnerable. That may be right, or it may mean nobody has recorded one yet — the flag is on the client record, under “Care &amp; contact”.</div>'}
+      </div>`).join("") : '<div class="empty">No client is flagged as vulnerable. That may be right, or it may mean nobody has recorded one yet — the flag is on the client record, under “Care &amp; contact”.</div>'}
   </div>`;
   const suppressedPanel = !dhCareOn ? "" : `<div class="panel hidden" id="dh-suppressed-panel">
     <h3>Clients with automation suppressed</h3>
     <p class="panel-sub">The database refuses <strong>every automated email and SMS</strong> to these clients — rate-end reminders, review requests, document chases, birthday and anniversary messages. Nothing scheduled will reach them until the switch is turned off on their record. Sending by hand still works and asks you to confirm first. Worth reading occasionally: a suppression set for a good reason in March is easy to forget by September.</p>
-    ${dhSuppressed.length ? dhSuppressed.slice(0, DH_PANEL_CAP).map((c) => `
+    ${dhSuppressed.length ? dhSuppressed.map((c) => `
       <div class="row-item">
         <div class="row-main"><div class="t" onclick="openClient('${jsArg(c.id)}')">${esc(c.name)}</div><div class="s">${c.note ? esc(c.note) : '<span class="cs-muted">no note recorded</span>'}</div></div>
         <button class="btn btn-sm" onclick="openClient('${jsArg(c.id)}')">Open</button>
-      </div>`).join("") + dhMoreNote(dhSuppressed.length) : '<div class="empty">No client has automated contact suppressed.</div>'}
+      </div>`).join("") : '<div class="empty">No client has automated contact suppressed.</div>'}
   </div>`;
 
   /* R12b · K-11 / W-24 — THE PANEL. One row per live case with outstanding items: who, where the
@@ -24744,7 +20505,7 @@ async function loadDataHealth() {
   const waitingDocsPanel = !dhDocsOn ? "" : `<div class="panel" id="dh-waitingdocs-panel">
     <h3>Waiting on documents</h3>
     <p class="panel-sub">Every <strong>live</strong> case with at least one item still outstanding on its checklist — the paperwork queue, in the order it has gone quiet. ${chaseOnNow
-      ? `<strong>Automatic chasing is ON</strong>: these are chased by email every ${esc(String(docChaseDays()))} days, up to ${DOC_CHASE_MAX} times, and then a call task is raised instead.`
+      ? `<strong>Automatic chasing is ON</strong>: these are chased by email every ${esc(String(settings.doc_chase_days ?? "3"))} days, up to ${DOC_CHASE_MAX} times, and then a call task is raised instead.`
       : `<strong>Automatic chasing is OFF</strong>, so nothing on this list is being chased by anybody except by hand. Turn it on in Settings.`} It now covers <strong>every live stage — Enquiry through Exchange</strong> (it used to be Fact Find and Application only), so a checklist opened at Enquiry is chased from the day it is opened. Cases with no checklist at all are not on this list and are never chased — an unknown is not the same as complete.</p>
     <p class="panel-sub">There is deliberately <strong>no “send to all”</strong> here. A document request is a client-facing email, and one button that fires forty of them is not a time-saver, it is an incident. Each send below is its own decision, with the same confirmation the case screen asks for.</p>
     ${/* Eight columns is a lot for 1280, and this page already clips a table that overruns its
@@ -24779,8 +20540,7 @@ async function loadDataHealth() {
              eligible" column two cells to the left is already showing it — so the button carries
              the amber state and the hourglass, and the full sentence lives in its title. */ ""}
         <td class="dh-wd-acts">
-          ${/* R37 · K2 — this row is ABOUT the checklist, so the case opens ON the checklist. */ ""}
-          <button class="btn btn-sm" onclick="openCase('${jsArg(r.id)}', { scrollTo: 'docs' })" title="Open this case with the Documents checklist in view">Open case</button>
+          <button class="btn btn-sm" onclick="openCase('${jsArg(r.id)}')">Open case</button>
           ${blocked
             ? `<span class="badge grey" title="${esc(spent ? `${r.chases} of ${DOC_CHASE_MAX} chases have already gone. The fourth email is not the one that works — the automation raises a call task instead, and so should you.` : "This client has no email address on file, so nothing can be sent to them. Open the case and add one.")}">${esc(blocked)}</span>`
             : `<button class="btn btn-sm${r.cool ? " btn-cooldown" : ""}" onclick="dhSendDocsChase('${jsArg(r.id)}', event)" title="${esc(r.cool ? `${r.cool.sentence} Sending now goes out anyway and restarts the window — you will be asked to confirm.` : "Queue the document-request email for this case. It lists only the items still outstanding. Nothing else in the queue is sent.")}">${r.cool ? "⏳" : "✉️"} Chase now</button>`}
@@ -24791,7 +20551,7 @@ async function loadDataHealth() {
   </div>`;
 
   el.innerHTML = `
-    <div class="kpi-row" id="dh-kpi-row">${kpis}</div>
+    <div class="kpi-row">${kpis}</div>
     ${stuckNotice}
     ${dupPanel}
     ${sharedPropPanel}
@@ -24801,47 +20561,7 @@ async function loadDataHealth() {
     <div class="grid-2">${phonePanel}${rateEndPanel}</div>
     <div class="grid-2">${bothPanel}${noCompletedPanel}</div>
     <div class="grid-2">${invalidEmailPanel}${invalidPhonePanel}</div>
-    <div class="grid-2">${milestonePanel}${deadBookPanel}</div>
     ${dhCareOn ? `<div class="grid-2">${vulnerablePanel}${suppressedPanel}</div>` : ""}`;
-
-  /* R31-C — BOOK READINESS ROLLUP. The Data-health page grew to ~13 scattered tiles; before the
-     2,000-record import the owner needs one at-a-glance answer to "how clean is the book, and what
-     do I clear first?". This rolls up ONLY the genuine data-quality faults the page already
-     computed above (adds no data, no schema, no gating) into #dh-readiness, sorted worst-first,
-     each row jumping to — and expanding — its existing tile. Deliberately EXCLUDES the page's
-     informational / care lists (shared addresses, waiting-on-documents, vulnerable, automation-
-     suppressed): those are not faults "to clear", and this page is emphatic about never colouring
-     a Consumer-Duty record as a problem. Each label + tileId matches its existing tile 1:1. */
-  const dhReadinessChecks = [
-    { label: "Missing email — with a live case", count: missingEmail.length, tileId: "dh-tile-email" },
-    { label: "Missing phone — with a live case", count: missingPhoneLive.length, tileId: "dh-tile-phone" },
-    { label: "Missing email &amp; phone", count: missingBoth.length, tileId: "dh-tile-both" },
-    { label: "Invalid email", count: invalidEmail.length, tileId: "dh-tile-invalid-email" },
-    { label: "Invalid phone", count: invalidPhone.length, tileId: "dh-tile-invalid-phone" },
-    { label: "Live cases unassigned", count: unassigned.length, tileId: "dh-tile-unassigned" },
-    { label: "Completed, no fee", count: noFee.length, tileId: "dh-tile-nofee" },
-    { label: "Completed, no rate-end", count: noRateEnd.length, tileId: "dh-tile-rateend" },
-    { label: "Completed, no completion date", count: noCompletedAt.length, tileId: "dh-tile-nocompleted" },
-    { label: "Missing application/offer date", count: noMilestoneDate.length, tileId: "dh-tile-milestone" },
-    { label: "Overdue — open past a key date", count: deadBook.length, tileId: "dh-tile-deadbook" },
-  ].filter((c) => c.count > 0).sort((a, b) => b.count - a.count);
-  const dhReadinessTotal = dhReadinessChecks.reduce((n, c) => n + c.count, 0);
-  const dhReadinessEl = document.getElementById("dh-readiness");
-  if (dhReadinessEl) {
-    if (dhReadinessTotal === 0) {
-      dhReadinessEl.innerHTML = `<div class="panel" id="dh-readiness-panel"><p class="panel-sub" style="margin:0;">Your book looks clean — no data-quality issues flagged. ✅</p></div>`;
-    } else {
-      // The onclick jumps to the tile and clicks it — the tiles are already wired (above) to
-      // scroll to and expand their own list panel, so one line reuses that behaviour verbatim.
-      const jump = (id) => `document.getElementById('${id}')?.scrollIntoView({behavior:'smooth'}); document.getElementById('${id}')?.click();`;
-      dhReadinessEl.innerHTML = `<div class="panel" id="dh-readiness-panel">
-        <p class="panel-sub" id="dh-readiness-headline" style="margin:0 0 8px;"><strong>${dhReadinessTotal} data-quality issue${dhReadinessTotal === 1 ? "" : "s"}</strong> across ${dhReadinessChecks.length} check${dhReadinessChecks.length === 1 ? "" : "s"} to clear before importing.</p>
-        <div style="display:flex;flex-direction:column;gap:2px;">
-          ${dhReadinessChecks.map((c) => `<div class="dh-readiness-item" role="button" tabindex="0" title="Jump to “${c.label}”" style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:4px 8px;border-radius:4px;cursor:pointer;" onclick="${jump(c.tileId)}"><span class="dh-readiness-label">${c.label}</span> <strong class="dh-readiness-count">${c.count}</strong></div>`).join("")}
-        </div>
-      </div>`;
-    }
-  }
 
   // Tiles whose panel is hidden until asked for: toggle, and scroll to it when revealing so the
   // list isn't opened off-screen below the fold.
@@ -24864,8 +20584,6 @@ async function loadDataHealth() {
   wireTile("#dh-tile-phone", "#dh-phone-panel");
   wireTile("#dh-tile-rateend", "#dh-rateend-panel");
   wireTile("#dh-tile-nocompleted", "#dh-nocompleted-panel");
-  wireTile("#dh-tile-milestone", "#dh-milestone-panel");   // R25 · MI-1
-  wireTile("#dh-tile-deadbook", "#dh-deadbook-panel");   // R27
   wireTile("#dh-tile-both", "#dh-both-panel");
   wireTile("#dh-tile-invalid-email", "#dh-invalid-email-panel");
   wireTile("#dh-tile-invalid-phone", "#dh-invalid-phone-panel");
@@ -24894,26 +20612,6 @@ async function loadDataHealth() {
   if (failedTile) { failedTile.style.cursor = "pointer"; failedTile.onclick = () => dhGotoEmails(true); }
   const stuckEl = $("#dh-stuck-notice");
   if (stuckEl) { stuckEl.style.cursor = "pointer"; stuckEl.onclick = () => dhGotoEmails(false); }
-
-  /* R42 · F5 — reveal / re-hide the fault tiles that are at zero. One class on the row does the
-     whole job (CSS: .kpi-row:not(.dh-show-clean) .kpi.dh-clean { display: none }), so the tiles are
-     never removed and never re-rendered — their ids, titles and wiring are exactly the ones every
-     other part of this page, and #dh-readiness above it, already point at. Nothing is remembered:
-     the next load opens tidy again. */
-  const cleanToggle = $("#dh-clean-toggle");
-  if (cleanToggle) {
-    const row = $("#dh-kpi-row"), lbl = $("#dh-clean-toggle-lbl");
-    const n = Number(cleanToggle.getAttribute("data-n") || 0);
-    const flip = () => {
-      if (!row) return;
-      const on = row.classList.toggle("dh-show-clean");
-      cleanToggle.setAttribute("aria-expanded", on ? "true" : "false");
-      if (lbl) lbl.textContent = on ? "▾ hide" : `✓ ${n} check${n === 1 ? "" : "s"} clean ▸`;
-    };
-    cleanToggle.onclick = flip;
-    // role="button" without a key handler is a button only for people with a mouse.
-    cleanToggle.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); flip(); } };
-  }
 
   // BUILD 7c — unassigned-cases bulk-assign wiring. Selection toggles update the action bar
   // imperatively; picking an adviser assigns the batch then refreshes Data Health.
@@ -25789,26 +21487,12 @@ document.addEventListener("click", (e) => {
 let chatHistory = [];
 let chatSeeded = false;
 
-/* R49 — friendly labels for the "what I did" chips under an assistant reply. Any kind not listed
-   falls back to its underscored name with spaces, so a new server-side action still reads sensibly. */
-const ASSISTANT_ACTION_LABEL = {
-  search_clients: "looked up clients",
-  get_case: "read a case",
-  get_briefing: "checked the briefing",
-  create_task: "task added",
-  add_note: "note added",
-  log_call: "call logged",
-  queue_email: "email queued",
-  create_client: "client created",
-  create_case: "case created",
-  update_case: "case updated",
-};
 function addChatBubble(kind, text, actions) {
   const log = $("#chat-log");
   const div = document.createElement("div");
   div.className = "chat-msg " + (kind === "me" ? "chat-me" : kind === "err" ? "chat-ai chat-err" : "chat-ai");
   let html = esc(text).replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>").replace(/\n/g, "<br>");
-  if (actions && actions.length) html += "<div>" + actions.map((a) => `<span class="chat-action-chip">✓ ${esc(ASSISTANT_ACTION_LABEL[a.kind] || String(a.kind).replace(/_/g, " "))}</span>`).join("") + "</div>";
+  if (actions && actions.length) html += "<div>" + actions.map((a) => `<span class="chat-action-chip">✓ ${esc(a.kind)}</span>`).join("") + "</div>";
   div.innerHTML = html;
   log.appendChild(div);
   log.scrollTop = log.scrollHeight;
@@ -25819,7 +21503,7 @@ window.askAI = function (prefill) {
   if (!chatSeeded) {
     chatSeeded = true;
     const first = (((ME && ME.full_name) || (ME && ME.email)) || "there").split(/[\s@]/)[0];
-    addChatBubble("ai", `Hi ${first}! I can look up clients, set up new clients and cases, update case details and stages, log calls, set reminders, add notes, queue template emails and draft replies. What do you need?`);
+    addChatBubble("ai", `Hi ${first}! I can look up clients, create tasks, add notes, queue template emails and draft replies. What do you need?`);
   }
   $("#chat-input").value = prefill || "";
   $("#chat-input").focus();
@@ -26190,16 +21874,13 @@ document.addEventListener("keydown", (e) => {
     else if (item.type === "lead") openLeadOnToday();
     else window.openCase(item.id);
   }
-  // A lead has no record modal — jump to Today, where the enquiry can be Accepted straight away
-  // (defect #2).
-  // R41 · F1 — that used to mean opening the New-website-leads drawer; the lead now lives on its
-  // My Day row, so this is a scroll to My Day and nothing else. Deliberately NOT gotoLeadInbox():
-  // the palette has the lead id but this hook is called without it, and a 400ms timed walk is the
-  // wrong shape for a palette selection that has just closed.
+  // A lead has no record modal — jump to Today with the leads drawer open so the enquiry can be
+  // Accepted/Discarded straight away (defect #2).
   function openLeadOnToday() {
     if (typeof nav === "function") nav("dashboard");
-    const panel = document.getElementById("briefing-panel");
-    if (panel) setTimeout(() => { try { panel.scrollIntoView({ block: "nearest" }); } catch (e) {} }, 60);
+    dashDrawerTouched.leads = true;              // stop autoDrawer from re-collapsing it
+    const panel = document.getElementById("leads-panel");
+    if (panel) { panel.classList.remove("collapsed"); setTimeout(() => { try { panel.scrollIntoView({ block: "nearest" }); } catch (e) {} }, 60); }
   }
 
   async function runSearch(raw) {
@@ -27306,13 +22987,13 @@ async function revFetchClients() {
      case, so there is nothing here that needs them. */
   const careOn = (await careSupported()) === true;
   const cols = "id,first_name,last_name,email,phone,address,date_of_birth" + (careOn ? ",is_vulnerable,vulnerability_note" : "");
-  const { data, error } = await db.from("clients").select(cols).order("id").limit(OWNER_ROW_CAP);
+  const { data, error } = await db.from("clients").select(cols);
   if (error) { console.error(error); return []; }
   return data || [];
 }
 async function revFetchCases() {
   const { data, error } = await db.from("cases")
-    .select("id,client_id,stage,case_kind,lender,product_name,rate_type,rate_percent,rate_end_date,rate_end_estimated,erc_end_date,loan_amount,property_value,term_years,proc_fee,broker_fee,fee_status,protection_status,protection_commission,gi_status,lead_source,submitted_at,completed_at,assigned_to,updated_at").order("id").limit(OWNER_ROW_CAP);
+    .select("id,client_id,stage,case_kind,lender,product_name,rate_type,rate_percent,rate_end_date,rate_end_estimated,erc_end_date,loan_amount,property_value,term_years,proc_fee,broker_fee,fee_status,protection_status,protection_commission,gi_status,lead_source,submitted_at,completed_at,assigned_to,updated_at");
   if (error) { console.error(error); return []; }
   return data || [];
 }
@@ -27875,26 +23556,6 @@ function vaultFieldHtml(f) {
     ${btns}
   </div>`;
 }
-/* R37 · K4 — WHICH "Test Bank A" IS THIS?
-   Three entries share a name and differ only by a small owner pill, and the one fact that actually
-   tells them apart — the login they are FOR — was four lines further down inside the fields block,
-   below the fold on a grouped list. It is lifted into the card's title row as a muted token.
-
-   Two rules, both non-negotiable:
-   · NEVER A SECRET. The token is only taken from a field the entry itself marks non-secret. A
-     vault whose masking can be defeated by a list view is not a vault, so a login field somebody
-     ticked "secret" stays masked and this returns nothing at all rather than a partial value.
-   · IT IS ALREADY ON THE CARD. This prints no value that vaultFieldHtml would not print, in the
-     same plain form — it is a relocation, not a disclosure. */
-const VAULT_USER_LABEL_RE = /user\s*name|username|user\b|login|log-?in|e-?mail|account|agency|member(ship)?|client\s*id|broker\s*(id|no|number|ref)/i;
-function vaultUserToken(r) {
-  const fields = Array.isArray(r.fields) ? r.fields : [];
-  const f = fields.find((x) => x && !x.secret && x.value != null && String(x.value).trim() !== ""
-    && VAULT_USER_LABEL_RE.test(String(x.label || "")));
-  if (!f) return "";
-  const val = String(f.value).trim();
-  return `<span class="vault-user" title="${esc(String(f.label || "Login"))} on this entry — the field that tells two entries with the same name apart. Never a password.">${esc(val)}</span>`;
-}
 function vaultCardHtml(r) {
   const fields = Array.isArray(r.fields) ? r.fields : [];
   // "Copy password" shortcut: the first SECRET field whose label reads like a password.
@@ -27905,7 +23566,6 @@ function vaultCardHtml(r) {
     <div class="vault-card-head">
       <div class="vault-card-title">
         <span class="vault-name">${esc(r.name || "(no name)")}</span>
-        ${vaultUserToken(r)}
         ${vaultOwnerChip(r.owner_label)}
         ${vaultVisChip(r)}
       </div>
