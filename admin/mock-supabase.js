@@ -8,7 +8,9 @@
               email_queue, sms_queue, case_emails, fact_finds, leads,
               introducers, profiles, settings, watch_alerts, audit_log,
               duplicate_dismissals (M4), case_documents (M10), staff_absences,
-              case_files (R13), vault_entries (R14)
+              case_files (R13), vault_entries (R14), error_events (R30),
+              saved_views (R43), proc_rates / commission_statements /
+              commission_lines (R44)
      view   : v_alerts
      rpcs   : my_role, get_briefing, get_reports, get_data_quality,
               get_protection_pipeline, run_watchtower, find_duplicate_clients,
@@ -373,10 +375,62 @@
        letters kept as a record, etc.). */
     staff_absences: [], case_files: [],
     /* R14 — the company password safe. */
-    vault_entries: []
+    vault_entries: [],
+    /* R30 — persisted, SANITISED client-error fingerprints (owner/admin diagnostics).
+       Columns: id, created_at, error_type, location, page, role — NO message/stack/PII
+       column, by construction, exactly like production. */
+    error_events: [],
+    /* R43 — the saved filter views R31 kept in localStorage, now a table.
+       Columns: user_id (defaults to the caller, PK part 1), scope ('pipeline' |
+       'clients' | '_meta'), name, filters jsonb, updated_at. PK is the TRIPLE
+       (user_id, scope, name) — the only composite key in this store, which is
+       why the upsert branch below grew a conflict-target registry. RLS is
+       per-user on all four ops (see readFilter/_matching + writePolicy), so a
+       persona only ever sees and writes their own rows. SEEDED EMPTY on
+       purpose: the app's first-run behaviour (starter seed on a virgin store,
+       one-time migration from an existing localStorage key) is the thing worth
+       exercising, and a fixture row would hide both. */
+    saved_views: [],
+    /* R44 — Stonebridge payment reconciliation (migration r44_reconciliation).
+       Three tables, all is_owner() on every operation, which is why they are
+       registered here and then never seeded: a non-owner persona must read
+       EMPTY (not "hidden but present"), and the owner's first-run state — no
+       rate card, no statement, both panels saying so in words — is the state
+       most worth exercising. A fixture row would hide both.
+         · proc_rates — the network's rate card, REPLACED WHOLESALE on each
+           upload (delete-all then chunked insert), rate is a 0-1 fraction.
+         · commission_statements — one row per weekly workbook. `ref` carries a
+           UNIQUE index WHERE ref <> '', which is the double-import guard; the
+           emulation of it lives in writePolicy() below.
+         · commission_lines — one row per statement line, statement_id cascades,
+           matched_case_id is ON DELETE SET NULL, match_status is CHECKed. */
+    proc_rates: [], commission_statements: [], commission_lines: []
   };
-  var PK = { settings: "key" };
+  /* R44 — production makes all three `id bigint generated always as identity`.
+     Serial-style counters (the same shape R30 gave error_events) rather than
+     nid()'s zero-padded strings, so `.order("id")` sorts the way the real
+     table does at any row count and the app can never come to depend on an
+     id being a string. */
+  var procRateSeq = 0, commissionStatementSeq = 0, commissionLineSeq = 0;
+  var R44_TABLES = ["proc_rates", "commission_statements", "commission_lines"];
+  var R44_MATCH_STATUSES = ["unmatched", "suggested", "confirmed", "dismissed", "na"];
+  /* R30 — feature-gate toggle (default true). __setErrorEventsSupported(false) makes any
+     op on error_events answer with a PostgREST-shaped 42P01, so tests can exercise the
+     app's degrade path (errorEventsOff + the "isn't enabled" note). */
+  var errorEventsSupported = true;
+  var errorEventSeq = 0;   // serial-style incrementing id, assigned on insert
+  /* R43 — same feature-gate shape as errorEventsSupported above:
+     __setSavedViewsSupported(false) makes every op on saved_views answer with a PostgREST 42P01,
+     which is what an un-migrated deployment does and what the app's localStorage fallback exists
+     for. Default true. */
+  var savedViewsSupported = true;
+  /* R43 — a PK may now be a LIST of columns: saved_views' key is the triple
+     (user_id, scope, name). pkOf() keeps returning what is registered (the string call sites —
+     audit row_id, the embed resolver, the id default — are all single-key tables and never see
+     an array), and pkCols() is the always-an-array form the upsert conflict target uses. */
+  var PK = { settings: "key", saved_views: ["user_id", "scope", "name"] };
   function pkOf(t) { return PK[t] || "id"; }
+  function pkCols(t) { var p = pkOf(t); return Array.isArray(p) ? p : [p]; }
 
   /* R12a·D8 — storage object registry, moved up here (ahead of the STORAGE
      section below which merely defines the `storage.from()` surface) so the
@@ -841,6 +895,94 @@
       }
       return null;
     }
+    /* R43 — saved_views: per-user on all four ops, with is_staff() on the insert/update WITH CHECK.
+       The row's user_id has already been defaulted to the caller by the time an insert gets here
+       (applyInsertDefaults), so the only way to fail the identity half is to NAME somebody else —
+       which production's WITH CHECK refuses, and so does this. The two CHECK constraints are
+       mirrored as well: an unknown scope or an empty/over-long name is a 23514, not a silent row,
+       because the app's migration path deliberately drops names it knows the table would reject
+       and that decision is only worth anything if the table would in fact reject them.
+       Read/update/delete scoping is enforced one layer down, in _matching() — see the comment
+       there for why it is not in readFilter() with the rest of the SELECT-side redaction. */
+    if (table === "saved_views") {
+      if (!isStaff()) {
+        return pgError('new row violates row-level security policy for table "saved_views"', "42501");
+      }
+      if (op !== "delete") {
+        var vpay = payload || {};
+        if (vpay.user_id != null && vpay.user_id !== CURRENT_UID) {
+          return pgError('new row violates row-level security policy for table "saved_views"', "42501");
+        }
+        if (vpay.scope != null && ["pipeline", "clients", "_meta"].indexOf(vpay.scope) === -1) {
+          return pgError('new row for relation "saved_views" violates check constraint "saved_views_scope_chk"', "23514");
+        }
+        if (Object.prototype.hasOwnProperty.call(vpay, "name")) {
+          var vnm = vpay.name == null ? "" : String(vpay.name);
+          if (vnm.length < 1 || vnm.length > 120) {
+            return pgError('new row for relation "saved_views" violates check constraint "saved_views_name_chk"', "23514");
+          }
+        }
+      }
+      return null;
+    }
+    /* R44 — proc_rates / commission_statements / commission_lines: is_owner()
+       for EVERY operation, mirroring the migration exactly. There is no adviser
+       or administrator half to this feature; a non-owner's writes are blocked
+       here and their reads come back empty from readFilter(), which is what
+       makes "the UI simply does not render for them" a safe design rather than
+       a decoration over readable data. */
+    if (R44_TABLES.indexOf(table) >= 0) {
+      if (!isOwner()) {
+        return pgError('new row violates row-level security policy for table "' + table + '"', "42501");
+      }
+      var r44pay = payload || {};
+      if (table === "proc_rates" && op !== "delete" && r44pay.rate != null) {
+        var rateN = Number(r44pay.rate);
+        if (!isFinite(rateN) || rateN < 0 || rateN > 1) {
+          return pgError('new row for relation "proc_rates" violates check constraint "proc_rates_rate_chk"', "23514");
+        }
+      }
+      if (table === "commission_lines" && op !== "delete") {
+        if (r44pay.match_status != null && R44_MATCH_STATUSES.indexOf(r44pay.match_status) === -1) {
+          return pgError('new row for relation "commission_lines" violates check constraint "commission_lines_match_status_chk"', "23514");
+        }
+        /* FK depth: exactly what this mock already does elsewhere — check the
+           parent row exists and raise the real SQLSTATE. No new FK engine. */
+        if (op === "insert") {
+          if (r44pay.statement_id == null) {
+            return pgError('null value in column "statement_id" of relation "commission_lines" violates not-null constraint', "23502");
+          }
+          var parent = DB.commission_statements.filter(function (s) { return String(s.id) === String(r44pay.statement_id); })[0];
+          if (!parent) {
+            return pgError('insert or update on table "commission_lines" violates foreign key constraint "commission_lines_statement_id_fkey"', "23503");
+          }
+        }
+        if (r44pay.matched_case_id != null && r44pay.matched_case_id !== "") {
+          var pcase = DB.cases.filter(function (c) { return String(c.id) === String(r44pay.matched_case_id); })[0];
+          if (!pcase) {
+            return pgError('insert or update on table "commission_lines" violates foreign key constraint "commission_lines_matched_case_id_fkey"', "23503");
+          }
+        }
+      }
+      /* The UNIQUE index on commission_statements(ref) WHERE ref <> ''. This is
+         the double-upload guard the app's whole import flow is built around —
+         the statement row goes in FIRST precisely so a 23505 here costs nothing
+         — so it is emulated rather than left to chance. Blank refs are exempt,
+         same as the partial index. */
+      if (table === "commission_statements" && op !== "delete") {
+        var wantRef = r44pay.ref == null ? "" : String(r44pay.ref).trim();
+        if (wantRef !== "") {
+          var self = (targets || [])[0];
+          var clashes = DB.commission_statements.filter(function (s) {
+            return s !== self && String(s.ref || "").trim() === wantRef;
+          });
+          if (clashes.length) {
+            return pgError('duplicate key value violates unique constraint "commission_statements_ref_uniq"', "23505");
+          }
+        }
+      }
+      return null;
+    }
     if (table === "settings" && !isOwner()) {
       return pgError('new row violates row-level security policy for table "settings"', "42501");
     }
@@ -895,6 +1037,10 @@
        signed-in user's role = any(visible_to)). An introducer (never staff)
        sees nothing; every other staff role sees every row whose visible_to
        is unset, plus any row that names their own role. */
+    /* R44 — "is_owner() for select" on all three reconciliation tables. An
+       adviser or administrator gets an EMPTY read, not a filtered one: there is
+       no row on these tables that is theirs to see. */
+    if (R44_TABLES.indexOf(table) >= 0 && !isOwner()) return [];
     if (table === "vault_entries") {
       if (!isStaff()) return [];
       var myR = myRole();
@@ -1107,8 +1253,55 @@
   function applyInsertDefaults(table, row) {
     var r = clone(row);
     var pk = pkOf(table);
+    /* R30 — error_events: a numeric, incrementing id (serial parity) and the four
+       nullable fingerprint columns default to null so a select always returns the key. */
+    if (table === "error_events") {
+      if (r.id == null) r.id = ++errorEventSeq;
+      ["error_type", "location", "page", "role"].forEach(function (f) { if (r[f] === undefined) r[f] = null; });
+    }
+    /* R43 — saved_views: user_id DEFAULTS TO THE CALLER (production's `default auth.uid()`), which
+       is why the app never sends it; filters defaults to '{}'::jsonb and updated_at to now().
+       No id (the PK is the triple) and no created_at — the real table has neither column. */
+    if (table === "saved_views") {
+      if (r.user_id == null) r.user_id = CURRENT_UID;
+      if (r.filters == null) r.filters = {};
+      r.updated_at = iso(new Date());
+    }
+    /* R44 — the three reconciliation tables. Identity ids, `created_by default
+       auth.uid()` on the statement, and — the part that matters for parity —
+       every text column defaults to '' rather than null, exactly as the
+       migration declares it. The app reads these columns straight into HTML
+       through esc(), and esc(null) and esc("") both render nothing, but a test
+       asserting "the addressee is empty" should see the empty string production
+       would give it, not null. */
+    if (table === "proc_rates") {
+      if (r.id == null) r.id = ++procRateSeq;
+      ["lender", "product", "lg_code", "notes", "effective_label"].forEach(function (f) { if (r[f] == null) r[f] = ""; });
+      if (!r.uploaded_at) r.uploaded_at = iso(new Date());
+      if (r.rate === undefined) r.rate = null;
+    }
+    if (table === "commission_statements") {
+      if (r.id == null) r.id = ++commissionStatementSeq;
+      ["ref", "statement_label", "filename"].forEach(function (f) { if (r[f] == null) r[f] = ""; });
+      if (r.created_by === undefined || r.created_by == null) r.created_by = CURRENT_UID;
+      if (r.line_count == null) r.line_count = 0;
+      ["statement_date", "gross_total", "net_total"].forEach(function (f) { if (r[f] === undefined) r[f] = null; });
+    }
+    if (table === "commission_lines") {
+      if (r.id == null) r.id = ++commissionLineSeq;
+      ["tran_type", "addressee", "provider", "account_number", "opp_id", "reason",
+        "policy_type", "policy_group", "adviser_name", "match_note"].forEach(function (f) { if (r[f] == null) r[f] = ""; });
+      if (r.match_status == null) r.match_status = "unmatched";
+      /* R48 — attributed_to (nullable uuid → profiles.id) rides alongside the
+         other nullable columns so .select("*") always returns the key and an
+         .update({attributed_to}) round-trips. The FK is left as loose as the
+         mock's other soft FKs (matched_case_id gets a depth check; this mirrors
+         production's `on delete set null` without a strict insert guard). */
+      ["line_date", "premium", "banked_gross", "banked_net", "matched_case_id", "confirmed_at", "attributed_to"]
+        .forEach(function (f) { if (r[f] === undefined) r[f] = null; });
+    }
     if (pk === "id" && !r.id) r.id = nid(PREFIX[table] || "row");
-    if (!r.created_at && table !== "settings") r.created_at = iso(NOW);
+    if (!r.created_at && table !== "settings" && table !== "saved_views") r.created_at = iso(NOW);
     if (table === "cases" || table === "clients" || table === "vault_entries") { if (!r.updated_at) r.updated_at = iso(NOW); }
     if (table === "cases") {
       if (!r.stage) r.stage = "enquiry";
@@ -1998,7 +2191,14 @@
   /* --- appointments (incl. a deliberate same-slot clash for p2) ---------- */
   var APPT_TITLES = ["Fact find call", "Review meeting", "Protection review", "Document collection", "Completion call"];
   for (var a = 0; a < 16; a++) {
-    var when = new Date(NOW.getFullYear(), NOW.getMonth(), Math.min(28, 2 + a * 2), 9 + (a % 7), 0, 0, 0);
+    var apptDom = Math.min(28, 2 + a * 2);
+    /* Never let this spread land ON TODAY: the dedicated "today" appointments seeded right below
+       this loop (Ruby/Duncan's deliberate p2 clash + Marcus's plain-titled one) are the exact,
+       closed set several tests (tests/r5_batch9.js's Day-view §2) key off — "today has exactly
+       these 3". apptDom is always even (2 + a*2), so nudging it off today by 1 always lands on an
+       odd day this loop never otherwise uses, with no risk of colliding with another seeded day. */
+    if (apptDom === NOW.getDate()) apptDom = apptDom >= 28 ? apptDom - 1 : apptDom + 1;
+    var when = new Date(NOW.getFullYear(), NOW.getMonth(), apptDom, 9 + (a % 7), 0, 0, 0);
     var c2 = liveCases[a % liveCases.length];
     DB.appointments.push({
       id: nid("ap"), title: APPT_TITLES[a % APPT_TITLES.length],
@@ -4029,9 +4229,19 @@
 
   BP._matching = function () {
     var preds = this._preds;
-    return sourceRows(this._table).filter(function (row) {
+    var table = this._table;
+    var rows = sourceRows(table).filter(function (row) {
       return preds.every(function (p) { return p(row); });
     });
+    /* R43 — saved_views' RLS is per-user on SELECT, UPDATE and DELETE alike, so the scoping goes
+       HERE rather than in readFilter() (which only redacts the select path). It matters: the app
+       deletes with .match({scope,name}) and nothing else, and in production that statement can
+       only ever reach the caller's own row. Filtering here means it deletes exactly one person's
+       "Unassigned leads", the same way, instead of every persona's. */
+    if (table === "saved_views") {
+      rows = rows.filter(function (r) { return r.user_id === CURRENT_UID; });
+    }
+    return rows;
   };
   BP._sort = function (rows) {
     if (!this._orders.length) return rows;
@@ -4081,16 +4291,37 @@
     return this._finish(out, total);
   };
 
+  /* R43 — which columns an upsert resolves its conflict against. PostgREST uses the table's PRIMARY
+     KEY unless the caller names an `onConflict` list, and until this round every table in this mock
+     had a single-column key, so `raw[pk]` was the whole story. saved_views' key is the triple
+     (user_id, scope, name), and its user_id arrives DEFAULTED rather than sent — so the probe row
+     must carry that default too, or the second upsert of the same view would land as a duplicate
+     row instead of an update. Deliberately NOT applyInsertDefaults(): that one has side effects
+     (error_events' serial), and this is only ever a lookup. */
+  function conflictCols(table, opts) {
+    var oc = opts && opts.onConflict;
+    if (oc) return String(oc).split(",").map(function (s) { return s.trim(); }).filter(Boolean);
+    return pkCols(table);
+  }
+  function conflictProbe(table, raw) {
+    if (table === "saved_views" && raw && raw.user_id == null) {
+      var p = clone(raw); p.user_id = CURRENT_UID; return p;
+    }
+    return raw;
+  }
   BP._runInsert = function (isUpsert) {
     var table = this._table;
     var incoming = Array.isArray(this._payload) ? this._payload : [this._payload];
-    var pk = pkOf(table);
+    var keys = conflictCols(table, this._upsertOpts);
     var written = [];
     for (var i = 0; i < incoming.length; i++) {
       var raw = incoming[i] || {};
       var existing = null;
       if (isUpsert) {
-        existing = DB[table].filter(function (r) { return raw[pk] != null && r[pk] === raw[pk]; })[0] || null;
+        var probe = conflictProbe(table, raw);
+        existing = DB[table].filter(function (r) {
+          return keys.every(function (k) { return probe[k] != null && r[k] === probe[k]; });
+        })[0] || null;
       }
       var badCol = undefinedColumn(table, raw);
       if (badCol) {
@@ -4194,6 +4425,12 @@
         });
       }
       if (table === "cases") cascadeCase(row.id);
+      /* R44 — commission_lines.statement_id is ON DELETE CASCADE. The import's
+         rollback depends on it: when a line-insert fails part way the app
+         deletes the statement row and expects whatever landed to go with it. */
+      if (table === "commission_statements") {
+        DB.commission_lines = DB.commission_lines.filter(function (l) { return String(l.statement_id) !== String(row.id); });
+      }
     });
     if (this._returning == null) return this._finish([], removed.length);
     var t = table, ret = this._returning;
@@ -4205,6 +4442,15 @@
     ["case_tasks", "case_notes", "case_events", "email_queue", "sms_queue", "case_emails", "fact_finds", "watch_alerts", "appointments"].forEach(function (t) {
       DB[t] = DB[t].filter(function (r) { return r.case_id !== caseId; });
     });
+    /* R44 — commission_lines.matched_case_id is ON DELETE SET NULL, not cascade:
+       a deleted case must not take the network's record of the payment with it.
+       The line survives, unmatched, which is the honest state. */
+    DB.commission_lines.forEach(function (l) {
+      if (String(l.matched_case_id) === String(caseId)) {
+        l.matched_case_id = null;
+        if (l.match_status === "confirmed" || l.match_status === "suggested") l.match_status = "unmatched";
+      }
+    });
   }
 
   BP._run = function () {
@@ -4212,7 +4458,15 @@
     return new Promise(function (resolve) {
       var res;
       try {
-        if ((!DB[self._table] && !VIEWS[self._table]) || tableIsMissing(self._table)) {
+        if (self._table === "error_events" && !errorEventsSupported) {
+          /* R30 feature-gate — a DB without the table answers every op with 42P01. */
+          res = { data: null, error: { message: 'relation "error_events" does not exist', code: "42P01", details: null, hint: null }, count: null, status: 404, statusText: "Not Found" };
+        } else if (self._table === "saved_views" && !savedViewsSupported) {
+          /* R43 feature-gate — the un-migrated deployment the app's localStorage fallback exists
+             for. Every op, not just the read: the fallback has to hold for a save and a delete
+             made in the same session as the failed read. */
+          res = { data: null, error: pgError('relation "public.saved_views" does not exist', "42P01"), count: null, status: 404, statusText: "Not Found" };
+        } else if ((!DB[self._table] && !VIEWS[self._table]) || tableIsMissing(self._table)) {
           res = { data: null, error: pgError('relation "public.' + self._table + '" does not exist', "42P01"), count: null, status: 404, statusText: "Not Found" };
         } else if (self._op === "insert") res = self._runInsert(false);
         else if (self._op === "upsert") res = self._runInsert(true);
@@ -4305,11 +4559,39 @@
       });
     });
 
+    /* R43 · T1 — RATE ALERTS AND THE CASE THAT IS ALREADY THE ANSWER TO THEM.
+       Production's rate_urgent block gained two rules this round (the reasoning is written out in
+       full above app.js's retentionSuccessorSets — R35 §4; this is the same question asked of the
+       briefing rather than of the feed, and it must answer the same way or the drawer and the
+       Today briefing disagree about the same client):
+         1. A SUCCESSOR case is silent while it is live. Starting a retention case copies the
+            source case's rate_end_date onto the new one, so the successor is itself a case with a
+            rate ending imminently — and nagging about it is nagging about the thing that is
+            already being done. Once it completes it is an ordinary book case again and its own
+            rate end alerts normally.
+         2. A SOURCE case is silent while it HAS a live successor, for the same reason from the
+            other end: the conversation is open, on a case, with an adviser.
+       Prod: `(c.retention_source_case_id is null or c.stage = 'completed')` and `not exists (…
+       rc.retention_source_case_id = c.id and rc.stage not in ('completed','not_proceeding'))`.
+       A successor that has completed or fallen through is handling nothing and suppresses nothing.
+       Also mirrored here: `stage <> 'not_proceeding'`. The mock never had it — a case the firm has
+       lost was still being chased about its rate end in the briefing, which production has never
+       done. */
+    var liveSuccessorSourceIds = {};
+    DB.cases.forEach(function (c) {
+      if (!c.retention_source_case_id) return;
+      if (["completed", "not_proceeding"].indexOf(c.stage) >= 0) return;
+      liveSuccessorSourceIds[c.retention_source_case_id] = true;
+    });
     DB.cases.forEach(function (c) {
       if (!mineOk(c.assigned_to)) return;
-      if (c.rate_end_date) {
+      if (c.rate_end_date && c.stage !== "not_proceeding"
+        && (!c.retention_source_case_id || c.stage === "completed")
+        && !liveSuccessorSourceIds[c.id]) {
         var days = Math.round((new Date(c.rate_end_date + "T12:00:00") - new Date(TODAY + "T12:00:00")) / DAY);
-        if (days <= 60) {
+        // R47 Gate 0 — parity with the prod briefing: a rate ended more than ~18 months ago is
+        // history, not a today-action, so it is not on My Day (the recovery book lives on Retention).
+        if (days <= 60 && days >= -Math.round(18 * 30.44)) {
           items.push({
             kind: "rate_urgent", pri: days < 0 ? 8 : 30, days: days,
             title: clientName(c.client_id) + " — rate " + (days < 0 ? "ended " + Math.abs(days) + " days ago" : "ends in " + days + " days"),
@@ -4392,7 +4674,28 @@
       missing_phone_count: DB.clients.filter(function (c) { return !c.phone; }).length,
       live_unassigned: liveUnassigned,
       completed_missing_fee: noFee,
-      completed_missing_rate_end: DB.cases.filter(function (c) { return c.stage === "completed" && !c.rate_end_date; }).length,
+      /* R45 — full parity with prod get_data_quality: tracker/variable deals have no fixed end;
+         a retention successor inherits its source's date question; a record with no loan and no
+         mortgage account number is not a mortgage; and a completed deal SUPERSEDED by a newer
+         completed deal on the same property (same client) has had its rate-end cleared on
+         purpose — the back-book import writes exactly that shape. */
+      completed_missing_rate_end: DB.cases.filter(function (c) {
+        if (c.stage !== "completed" || c.rate_end_date) return false;
+        var rt = String(c.rate_type || "");
+        if (rt === "tracker" || rt === "variable") return false;
+        if (c.retention_source_case_id) return false;
+        if (c.loan_amount == null && !c.mortgage_account_number) return false;
+        var key = String(c.property_address || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+        /* Prod's `n.completed_at > c.completed_at` is NULL (not true) when c has no date — an
+           undated completion is never treated as superseded. Guard it, or "" string-compares as
+           older than everything. */
+        if (key && c.completed_at && DB.cases.some(function (n) {
+          return n.id !== c.id && n.client_id === c.client_id && n.stage === "completed" &&
+            String(n.property_address || "").toLowerCase().replace(/[^a-z0-9]/g, "") === key &&
+            String(n.completed_at || "") > String(c.completed_at || "");
+        })) return false;
+        return true;
+      }).length,
       emails_failed: DB.email_queue.filter(function (e) { return e.status === "failed"; }).length,
       emails_stuck: stuck,
       emails_sending_live: sendingLive
@@ -5661,12 +5964,8 @@
           lender: "Coventry Building Society", product_name: "5 Year Fixed 75% LTV",
           rate_percent: 4.24, rate_type: "fixed",
           rate_end_date: dateOnly(shift(1795)), erc_end_date: dateOnly(shift(1795)),
-          offer_issued_date: dateOnly(shift(-3)), offer_expiry_date: dateOnly(shift(150)),
-          loan_amount: 246000, current_balance: 241500, property_value: 328000, term_years: 27,
-          /* R52 — the fuller reading production now pulls off the offer: the money the client will
-             pay, the follow-on rate, how it is repaid, and the two references that identify it. */
-          monthly_payment: 1187, reversion_rate: 8.49, repayment_method: "repayment",
-          mortgage_account_number: "COV-88451207", lender_reference: "AP-2231190",
+          offer_expiry_date: dateOnly(shift(150)),
+          loan_amount: 246000, property_value: 328000, term_years: 27,
           erc_summary: "5%/4%/3%/2%/1% of the amount repaid, reducing annually",
           confidence_notes: "Property value read from the valuation section — check against the offer letter."
         }
@@ -6191,6 +6490,15 @@
     };
     return client;
   }
+
+  /* R30 — test hook: toggle whether error_events exists on this "database". Default true;
+     set false to make every op on the table return a PostgREST 42P01, exercising the
+     app's feature-gate/degrade path (errorEventsOff + the "isn't enabled" note). */
+  window.__setErrorEventsSupported = function (b) { errorEventsSupported = !!b; return errorEventsSupported; };
+
+  /* R43 — the same hook for saved_views: set false to make every op 42P01, which is the
+     un-migrated database the app's localStorage fallback (viewsMode "local") exists for. */
+  window.__setSavedViewsSupported = function (b) { savedViewsSupported = !!b; return savedViewsSupported; };
 
   window.supabase = { createClient: createClient, SupabaseClient: function () { }, __isMock: true };
 })();
