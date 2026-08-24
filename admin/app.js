@@ -8987,6 +8987,9 @@ const CASE_ACTION_RULES = {
   "act-appt":          { stages: ["enquiry", "fact_find", "decision_in_principle", "application"] },
   "act-offer":         { stages: ["offer", "exchange", "completed"], notKinds: ["product_transfer"] },
   "act-view-offer":    { stages: ["offer", "exchange", "completed"], notKinds: ["product_transfer"] },
+  // R54 — emailing the offer to the client belongs exactly where viewing it does: once there IS
+  // an offer document, at the offer/exchange/completed stages (a PT has no lender offer to send).
+  "act-email-offer":   { stages: ["offer", "exchange", "completed"], notKinds: ["product_transfer"] },
   "act-fee":           { stages: ["completed"], hero: true },
   "act-paid":          { stages: ["completed"], hero: true },
   "act-review":        { stages: ["completed"], hero: true },
@@ -9159,6 +9162,7 @@ function caseActionBarHtml(c, stage, kind, opts) {
     { id: "act-paid",          label: "✓ Mark fee paid" },
     { id: "act-offer",         label: "📄 Read mortgage offer (AI)" },
     ...(c.offer_doc_path ? [{ id: "act-view-offer", label: "View offer doc" }] : []),
+    ...(c.offer_doc_path ? [{ id: "act-email-offer", label: "📧 Email offer to client" }] : []),
     { id: "act-evidence",      label: "🗂 Evidence pack" },
     { id: "act-appt",          label: "📅 Book appointment" },
     { id: "act-factfind",      label: "📋 Digital fact-find" },
@@ -13280,6 +13284,9 @@ window.openCase = async function (id, opts = {}) {
       if (error) return toast("Error: " + error.message);
       window.open(data.signedUrl, "_blank");
     };
+    // R54 — email the offer PDF to the client. Queues held (like the other client emails) until
+    // sending is switched on; the send then attaches the PDF from the offers bucket.
+    if (c.offer_doc_path) $("#act-email-offer").onclick = () => emailOfferToClient(id, c);
     /* R15 · §2 — the "More actions" overflow toggle. In-memory only, like the security card: the
        modal re-renders on every open so the menu is born closed and this just flips .hidden + the
        aria state. A click on the menu itself does not bubble up and re-close it. */
@@ -13507,10 +13514,17 @@ const OFFER_FIELDS = [
   { col: "rate_type", label: "Rate type" },
   { col: "rate_end_date", label: "Rate end date", date: true },
   { col: "erc_end_date", label: "ERC end date", date: true },
+  { col: "offer_issued_date", label: "Offer date", date: true },
   { col: "offer_expiry_date", label: "Offer expiry date", date: true },
   { col: "loan_amount", label: "Loan amount", num: true, money: true },
+  { col: "current_balance", label: "Balance", num: true, money: true },
   { col: "property_value", label: "Property value", num: true, money: true },
+  { col: "monthly_payment", label: "Monthly payment", num: true, money: true },
+  { col: "reversion_rate", label: "Reversion rate %", num: true },
+  { col: "repayment_method", label: "Repayment method", fmt: repaymentMethodLabel },
   { col: "term_years", label: "Term (years)", num: true },
+  { col: "mortgage_account_number", label: "Account number" },
+  { col: "lender_reference", label: "Lender reference" },
 ];
 let pendingOffer = null; // { caseId, path, offer, rows } while a parsed offer awaits Apply/Discard
 
@@ -13533,7 +13547,7 @@ function offerDiffRows(offer, cRow, propOn) {
       : (f.num ? Number(cur) === Number(inc) : String(cur).trim() === String(inc).trim()));
     if (same) return;                                          // already matches — nothing to propose
     const disp = (v, empty) => (empty ? '<span class="cs-muted">— empty —</span>'
-      : f.money ? esc(fmtM(v)) : f.date ? esc(fmtD(v)) : esc(String(v)));
+      : f.money ? esc(fmtM(v)) : f.date ? esc(fmtD(v)) : f.fmt ? esc(f.fmt(v)) : esc(String(v)));
     rows.push({
       idx: i, col: f.col, label: f.label, incoming: inc,
       conflict: !curEmpty, checked: curEmpty,
@@ -13719,6 +13733,30 @@ async function discardOfferDiff() {
   const panel = $("#offer-diff");
   if (panel) { panel.innerHTML = ""; panel.classList.add("hidden"); }
   toast("Offer readings discarded — nothing was saved");
+}
+
+/* R54 — email the mortgage offer PDF to the client. This QUEUES an email carrying the offer
+   document's storage path; the sender attaches it from the offers bucket when it goes out. Client
+   email sending is still held (settings.email_hold), so the row is scheduled far ahead to sit
+   with the other parked client emails until sending is enabled and the queue is released. Nothing
+   leaves the building here — this only writes a queued row and a case note. */
+async function emailOfferToClient(caseId, c) {
+  if (!c || !c.offer_doc_path) return toast("Upload an offer document to the case first.");
+  const { data: cl, error: clErr } = await db.from("clients").select("email,first_name,last_name").eq("id", c.client_id).single();
+  if (clErr || !cl) return toast("Couldn't read the client record — try again.");
+  if (!cl.email) return toast("This client has no email address — add one first.");
+  const who = [cl.first_name, cl.last_name].filter(Boolean).join(" ") || "the client";
+  if (!confirm(`Email the mortgage offer PDF to ${who} at ${cl.email}?\n\nClient email is not switched on yet, so this will be QUEUED and held — it sends (with the offer attached) once email sending goes live.`)) return;
+  let uid = (ME && ME.id) || null;
+  try { const { data: { user } } = await db.auth.getUser(); if (user && user.id) uid = user.id; } catch (e) {}
+  const HELD_UNTIL = "2027-01-01T00:00:00Z"; // sit with the other parked client emails until sending is enabled
+  const { error } = await db.from("email_queue").insert({
+    case_id: caseId, client_id: c.client_id, email_type: "offer_update",
+    to_email: cl.email, attachment_path: c.offer_doc_path, scheduled_for: HELD_UNTIL,
+  });
+  if (error) return toast("Couldn't queue the offer email: " + error.message);
+  await db.from("case_notes").insert({ case_id: caseId, body: `📧 Offer queued to email to ${who} (${cl.email}) with the PDF attached — held until client email is switched on.`, created_by: uid });
+  toast(`Offer queued to email to ${who} — held until client email is switched on, then sent with the PDF attached.`);
 }
 
 async function queueEmail(caseId, clientId, type, c, ev) {

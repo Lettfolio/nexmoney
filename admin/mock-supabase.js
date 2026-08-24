@@ -5964,8 +5964,12 @@
           lender: "Coventry Building Society", product_name: "5 Year Fixed 75% LTV",
           rate_percent: 4.24, rate_type: "fixed",
           rate_end_date: dateOnly(shift(1795)), erc_end_date: dateOnly(shift(1795)),
-          offer_expiry_date: dateOnly(shift(150)),
-          loan_amount: 246000, property_value: 328000, term_years: 27,
+          offer_issued_date: dateOnly(shift(-3)), offer_expiry_date: dateOnly(shift(150)),
+          loan_amount: 246000, current_balance: 241500, property_value: 328000, term_years: 27,
+          /* R54 — the fuller reading production now pulls off the offer: the money the client will
+             pay, the follow-on rate, how it is repaid, and the two references that identify it. */
+          monthly_payment: 1187, reversion_rate: 8.49, repayment_method: "repayment",
+          mortgage_account_number: "COV-88451207", lender_reference: "AP-2231190",
           erc_summary: "5%/4%/3%/2%/1% of the amount repaid, reducing annually",
           confidence_notes: "Property value read from the valuation section — check against the offer letter."
         }
