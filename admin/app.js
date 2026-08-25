@@ -15922,15 +15922,87 @@ function clientProtGapCardHtml(cases) {
         <div class="s">No case on this record has a protection policy recorded — open the newest live case to record the conversation or start a quote.</div></div>
         <span class="badge amber" title="Shown while no case on this client carries a protection policy">gap</span></div>`;
 }
+/* R60 — WHICH CASE IS "THE MORTGAGE ON THIS PROPERTY NOW"? (danielpotts: "the current one
+   needs to be clear and the previous ones perhaps minimised"). Until now a property group
+   listed its cases newest-CREATED first — which on the imported back book is close to random
+   (everything was created the same day), so 47 Bryncelyn led with a dead untracked product
+   transfer while the mortgage actually being watched sat underneath wearing a "previous"
+   badge. The ranking below says what "current" means, in order: a case still in flight beats
+   everything; then the completed case whose rate is being WATCHED (that is the live mortgage);
+   then a recorded SOLD outcome (the property's terminal state — it should front the group,
+   not hide); then completed-with-nothing-tracked; not-proceeding last. Ties break by the
+   latest rate end, then completion date, then recency — so two watched deals lead with the
+   one that runs longest. */
+function currentCaseRank(x) {
+  const sold = Object.prototype.hasOwnProperty.call(x, "property_sold_at") && x.property_sold_at;
+  if (x.stage !== "completed" && x.stage !== "not_proceeding") return 0; // in flight — the deal being worked
+  if (x.stage === "completed" && !sold && x.rate_end_date) return 1;     // the live mortgage, watched
+  if (x.stage === "completed" && sold) return 2;                          // terminal: property sold
+  if (x.stage === "completed") return 3;                                  // completed, nothing tracked
+  return 4;                                                               // not proceeding
+}
+function sortRowsCurrentFirst(rows) {
+  return [...rows].sort((a, b) => {
+    const r = currentCaseRank(a) - currentCaseRank(b);
+    if (r) return r;
+    const ra = a.rate_end_date || "", rb = b.rate_end_date || "";
+    if (ra !== rb) return ra < rb ? 1 : -1;
+    const ca = a.completed_at || "", cb = b.completed_at || "";
+    if (ca !== cb) return ca < cb ? 1 : -1;
+    return caseRecency(a) < caseRecency(b) ? 1 : -1;
+  });
+}
+/* One MINIMISED previous case: a single quiet line — type · lender, the loan, and how it
+   ended — still one click from the full case. No address (the group heading above carries
+   it), no money headline, no stage/assignee badges: history, deliberately smaller than the
+   present. STRUCTURALLY it is still a `.row-item` with `.row-main > .t` carrying the openCase
+   onclick and the `.cl-prot-chip` at the end — the R6/R36/R56 DOM contract every suite scans
+   for holds for previous cases exactly as it does for the card. */
+function clientCaseMiniRowHtml(x) {
+  const sold = Object.prototype.hasOwnProperty.call(x, "property_sold_at") && x.property_sold_at;
+  const hint = sold ? `sold ${fmtD(x.property_sold_at)}`
+    : x.stage === "not_proceeding" ? "not proceeding"
+    : x.stage === "completed"
+      ? (x.rate_end_date ? `rate ${x.rate_end_date < localDateStr() ? "ended" : "ends"} ${fmtD(x.rate_end_date)}`
+        : (x.completed_at ? `completed ${fmtD(x.completed_at)}` : "completed"))
+    : (STAGE_LABEL[x.stage] || String(x.stage || "").replace(/_/g, " "));
+  const title = [caseTypeLabel(x), x.lender].filter(Boolean).join(" · ");
+  return `<div class="row-item cl-mini" title="An earlier case on this property — click to open it">
+      <span class="cl-mini-icon" aria-hidden="true">${KIND_ICON[x.case_kind] || KIND_ICON.other}</span>
+      <div class="row-main"><div class="t" onclick="closeModal();openCase('${x.id}')">${esc(title)}${x.loan_amount ? ` <span class="cl-mini-loan">· ${esc(fmtM(x.loan_amount))}</span>` : ""}</div></div>
+      <span class="cl-mini-hint">${esc(hint)}</span>${clientCaseProtChipHtml(x)}</div>`;
+}
+/* The rows of one property: the CURRENT case as the full card, everything older folded into a
+   "previous" disclosure of mini rows. A single-case property is just its card. */
+function clientGroupRowsHtml(rows, opts = {}) {
+  const sorted = sortRowsCurrentFirst(rows);
+  const head = sorted[0], prev = sorted.slice(1);
+  const headCard = `<div class="cl-book">${clientCaseRowHtml(head, opts)}</div>`;
+  if (!prev.length) return headCard;
+  return `${headCard}
+    <details class="cprop-prev"><summary>${prev.length} previous ${prev.length === 1 ? "case" : "cases"} on this property</summary>
+      <div class="cl-prev-list">${prev.map((x) => clientCaseMiniRowHtml(x)).join("")}</div>
+    </details>`;
+}
 function clientCasesHtml(cases) {
   const list = cases || [];
   if (!list.length) return '<div class="empty">No cases yet.</div>';
   const gap = clientProtGapCardHtml(list);
   const groups = groupCasesByProperty(list);
-  if (groups.length < 2) return `<div class="cl-book">${list.map((x) => clientCaseRowHtml(x)).join("")}${gap}</div>`;
+  if (groups.length < 2) {
+    /* R60 — a single-property client with several mortgages gets the same current-first fold
+       (no heading — one heading over one group is furniture). The no-address bucket stays the
+       flat list it has always been: with nothing tying those cases to one building, there is
+       no "current one" to promote. */
+    const g = groups[0];
+    if (g && g.key && g.rows.length > 1) return clientGroupRowsHtml(g.rows) + (gap ? `<div class="cl-book">${gap}</div>` : "");
+    return `<div class="cl-book">${list.map((x) => clientCaseRowHtml(x)).join("")}${gap}</div>`;
+  }
   return groups.map((g) => `<div class="cprop-group" data-prop-key="${esc(g.key)}">
       <div class="cprop-hd">${propChip(g.sample)}<span class="cprop-addr">${esc(g.heading)}</span>${g.rows.length > 1 ? `<span class="cprop-n">${g.rows.length} cases</span>` : ""}</div>
-      <div class="cl-book">${g.rows.map((x, i) => clientCaseRowHtml(x, { grouped: true, previous: g.key && i > 0 })).join("")}</div>
+      ${g.key
+        ? clientGroupRowsHtml(g.rows, { grouped: true })
+        : `<div class="cl-book">${g.rows.map((x) => clientCaseRowHtml(x, { grouped: true })).join("")}</div>`}
     </div>`).join("") + (gap ? `<div class="cl-book">${gap}</div>` : "");
 }
 
