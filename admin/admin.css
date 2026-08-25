@@ -3680,3 +3680,8 @@ tr.owed-hot > td { background: var(--red-bg); }
 .ms-row.lost .ms-tick { color: var(--red, #b91c1c); }
 .ms-row.current .ms-label { font-weight: 600; }
 .ms-row .ms-date { margin-left: auto; color: #6b7280; font-size: 12px; }
+
+/* R58 — rate-end outcome overlay. */
+.reo-choice { display: flex; gap: 10px; align-items: flex-start; font-size: 13.5px; cursor: pointer; }
+.reo-choice input { margin-top: 3px; width: auto; }
+#reo-renew-fields { transition: opacity 0.15s; }

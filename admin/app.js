@@ -6621,8 +6621,14 @@ window.startRetentionCase = async function (caseId, ev, opts) {
     notePropAddrFromStarRow(c); // a select("*") is the strongest M7 signal there is
     if (c.stage !== "completed") return done("skipped", "A retention case starts from a completed case.");
     if (!c.rate_end_date) return done("skipped", "Set the rate end date on this case first.");
-    const { data: already } = await db.from("cases").select("id").eq("retention_source_case_id", caseId).limit(1);
-    if (already && already.length) return done("skipped", "This case already has a retention case.");
+    /* R58 — cycle-aware, matching the engine's new gate: a successor from a PREVIOUS product
+       cycle (different rate_end_date — the client renewed and we are watching the next end)
+       must not block starting retention for the current one. A successor copies its source's
+       rate_end_date at creation, so same-date = same cycle. */
+    const { data: already } = await db.from("cases").select("id,rate_end_date").eq("retention_source_case_id", caseId).limit(50);
+    if ((already || []).some((rc) => (rc.rate_end_date || null) === (c.rate_end_date || null))) {
+      return done("skipped", "This case already has a retention case for this rate end.");
+    }
     const { data: cl } = await db.from("clients").select("id,first_name,last_name,email").eq("id", c.client_id).single();
     const clientName = [cl?.first_name, cl?.last_name].filter(Boolean).join(" ") || "this client";
     // Same due-date formula as the RPC: three months before the rate ends, never in the past.
@@ -9085,6 +9091,10 @@ const CASE_ACTION_RULES = {
      to a product transfer (same lender, no conveyancing — the R15 §5 rule). */
   "act-ref-survey":       { stages: ["decision_in_principle", "application", "offer"], notKinds: ["product_transfer", "remortgage", "other"] },
   "act-ref-conveyancing": { stages: ["decision_in_principle", "application", "offer", "exchange"], notKinds: ["product_transfer", "other"] },
+  /* R58 — the rate-end OUTCOME on a completed case with a tracked rate: the client renewed
+     elsewhere (watch the NEXT rate end) or the property was sold (stop tracking). Hero at
+     completed — on a book case surfacing in the rates feed, this IS the decision to record. */
+  "act-rate-outcome":  { stages: ["completed"], hero: true },
   "act-fee":           { stages: ["completed"], hero: true },
   "act-paid":          { stages: ["completed"], hero: true },
   "act-review":        { stages: ["completed"], hero: true },
@@ -9260,6 +9270,7 @@ function caseActionBarHtml(c, stage, kind, opts) {
     ...(c.offer_doc_path ? [{ id: "act-email-offer", label: "📧 Email offer to client" }] : []),
     { id: "act-ref-survey",       label: "🏡 Refer for survey" },
     { id: "act-ref-conveyancing", label: "🖋️ Refer for conveyancing" },
+    ...(c.stage === "completed" && c.rate_end_date ? [{ id: "act-rate-outcome", label: "📌 Rate-end outcome" }] : []),
     { id: "act-evidence",      label: "🗂 Evidence pack" },
     { id: "act-appt",          label: "📅 Book appointment" },
     { id: "act-factfind",      label: "📋 Digital fact-find" },
@@ -9523,6 +9534,113 @@ async function editCaseObjective(caseId, c) {
   const t = $("#cs-obj-text");
   if (t) { t.textContent = val || OBJ_PLACEHOLDER; t.classList.toggle("cs-muted", !val); }
   toast(val ? "Objective saved" : "Objective removed");
+}
+/* ==========================================================================
+   R58 — THE RATE-END OUTCOME. The rates feed keeps surfacing a completed case
+   until somebody records what actually HAPPENED at the end of the deal, and
+   until now the only recordable outcome was "start a retention case". The two
+   missing outcomes, straight from Daniel's Tina Kirkman question:
+     · RENEWED ELSEWHERE (went direct / new deal not through us) — the client is
+       still a client and their NEW product ends in 2/3/5 years: update the
+       mortgage details, clear the engine's one-shot marker, and the case
+       resurfaces (feed + auto-retention) when the new date enters the window.
+     · PROPERTY SOLD / REDEEMED — there is no mortgage left to watch: clear the
+       rate/ERC dates (the SB-IMPORT-1 house convention for a dead rate line)
+       and the case leaves the feed for good, with a note saying why.
+   Both outcomes close any OPEN retention successor for the old cycle as
+   not_proceeding (the DB's cases_cancel_retention trigger then cancels its
+   queued touches and tasks), writing the reason on it. */
+async function rateEndOutcome(caseId, c) {
+  const chips = [2, 3, 5].map((y) => `<button type="button" class="btn btn-sm reo-chip" data-years="${y}">+${y} yrs</button>`).join(" ");
+  const got = await openOverlay(`
+    <h3>📌 Rate-end outcome</h3>
+    <p class="panel-sub">What happened at the end of the ${esc(c.lender || "")} deal${c.rate_end_date ? ` (rate end ${fmtD(c.rate_end_date)})` : ""}? Recorded on the case with a note; any open retention case for this rate is closed with the reason.</p>
+    <label class="reo-choice"><input type="radio" name="reo-kind" value="renewed" checked>
+      <span><strong>Renewed — new deal taken (direct or elsewhere)</strong><br>
+      <span class="cs-muted">Update the mortgage details so this pops back up before the NEW rate ends.</span></span></label>
+    <div id="reo-renew-fields" style="margin:8px 0 4px 24px;">
+      <label>New rate end date <span style="display:inline-flex;gap:6px;margin-left:8px;">${chips}</span>
+        <input id="reo-date" type="date" style="margin-top:4px;">
+      </label>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px;">
+        <label style="flex:1;min-width:160px;">New lender (optional)<input id="reo-lender" type="text" value="${esc(c.lender || "")}" maxlength="80"></label>
+        <label style="width:120px;">Rate % (optional)<input id="reo-rate" type="number" step="0.01" min="0" max="30"></label>
+      </div>
+    </div>
+    <label class="reo-choice" style="margin-top:10px;"><input type="radio" name="reo-kind" value="sold">
+      <span><strong>Property sold / mortgage redeemed</strong><br>
+      <span class="cs-muted">Stop tracking this rate — the case leaves the rates feed for good.</span></span></label>
+    <div class="ovl-err" id="reo-err"></div>
+    <div class="modal-actions"><div></div><div class="right">
+      <button type="button" class="btn" id="reo-cancel">Cancel</button>
+      <button type="button" class="btn btn-primary" id="reo-ok">Record outcome</button>
+    </div></div>`, (finish, box) => {
+    let estimated = false;
+    box.querySelectorAll(".reo-chip").forEach((b) => { b.onclick = () => {
+      const d = new Date(); d.setFullYear(d.getFullYear() + Number(b.dataset.years));
+      box.querySelector("#reo-date").value = localDateStr(d);
+      estimated = true; // a chip is a guess at the term, not a read of the offer
+      box.querySelector('input[name="reo-kind"][value="renewed"]').checked = true;
+    }; });
+    box.querySelector("#reo-date").addEventListener("input", () => { estimated = false; });
+    const fields = box.querySelector("#reo-renew-fields");
+    box.querySelectorAll('input[name="reo-kind"]').forEach((r) => { r.onchange = () => { fields.style.opacity = r.value === "renewed" && r.checked ? "1" : "0.45"; }; });
+    box.querySelector("#reo-cancel").onclick = () => finish(null);
+    box.querySelector("#reo-ok").onclick = () => {
+      const kind = box.querySelector('input[name="reo-kind"]:checked').value;
+      if (kind === "renewed") {
+        const dt = box.querySelector("#reo-date").value;
+        if (!dt) { box.querySelector("#reo-err").textContent = "Set the new rate end date (or use a +years chip)."; return; }
+        if (dt <= localDateStr()) { box.querySelector("#reo-err").textContent = "The new rate end date should be in the future."; return; }
+        finish({ kind, date: dt, estimated, lender: (box.querySelector("#reo-lender").value || "").trim(), rate: box.querySelector("#reo-rate").value });
+      } else {
+        finish({ kind });
+      }
+    };
+  });
+  if (!got) return;
+  const uid = (ME && ME.id) || null;
+  // 1) Close any OPEN retention successor for the old cycle — the DB trigger cancels its
+  //    queued emails/SMS/tasks. lost columns are M2-gated, so they are a separate best-effort
+  //    write: an un-migrated database still gets the stage move and the note.
+  const { data: open } = await db.from("cases").select("id,stage").eq("retention_source_case_id", caseId)
+    .not("stage", "in", "(completed,not_proceeding)");
+  for (const rc of (open || [])) {
+    const { error: stErr } = await db.from("cases").update({ stage: "not_proceeding" }).eq("id", rc.id);
+    if (stErr) return toast("Couldn't close the open retention case: " + stErr.message);
+    const lost = got.kind === "renewed"
+      ? { lost_reason: "went_direct", lost_detail: "Recorded via rate-end outcome on the source case" }
+      : { lost_reason: "other", lost_detail: "Property sold / mortgage redeemed" };
+    const { error: lostErr } = await db.from("cases").update(lost).eq("id", rc.id);
+    if (lostErr && !isMissingColumnError(lostErr)) toast("Note: reason not recorded on the retention case: " + lostErr.message);
+    await db.from("case_notes").insert({ case_id: rc.id, body: got.kind === "renewed"
+      ? "Closed — client renewed elsewhere; the source case now watches the new rate end."
+      : "Closed — property sold / mortgage redeemed.", created_by: uid });
+  }
+  // 2) Record the outcome on the source case itself.
+  if (got.kind === "renewed") {
+    const patch = {
+      rate_end_date: got.date, erc_end_date: null,
+      rate_end_estimated: !!got.estimated,
+      rate_reminder_queued_at: null, // re-arm the one-shot engine for the new cycle
+    };
+    if (got.lender) patch.lender = got.lender;
+    if (got.rate !== "" && got.rate != null && isFinite(Number(got.rate))) patch.rate_percent = Number(got.rate);
+    const { error } = await db.from("cases").update(patch).eq("id", caseId);
+    if (error) return toast("Couldn't record the outcome: " + error.message);
+    await db.from("case_notes").insert({ case_id: caseId,
+      body: `📌 Rate-end outcome — renewed elsewhere${got.lender ? " with " + got.lender : ""}. Now watching the new rate end ${fmtD(got.date)}${got.estimated ? " (estimated from the term)" : ""}; retention will resurface it in the reminder window.`,
+      created_by: uid });
+    toast(`Outcome recorded — this case will pop back up before ${fmtD(got.date)}`);
+  } else {
+    const { error } = await db.from("cases").update({ rate_end_date: null, erc_end_date: null }).eq("id", caseId);
+    if (error) return toast("Couldn't record the outcome: " + error.message);
+    await db.from("case_notes").insert({ case_id: caseId,
+      body: "📌 Rate-end outcome — property sold / mortgage redeemed. Rate tracking closed; this case has left the rates feed.",
+      created_by: uid });
+    toast("Outcome recorded — rate tracking closed");
+  }
+  openCase(caseId); // re-render: header, milestones and the retention affordances all changed
 }
 /* The milestone checklist. Three states per row — done (✓, with the date where a column carries
    one), current (→, the stage the case is standing in), still-to-come (○) — plus ✕ rows on a
@@ -12043,7 +12161,9 @@ window.openCase = async function (id, opts = {}) {
       db.from("case_tasks").select("*").eq("case_id", id).order("due_date"),
       loadAuditRows("case_id", id),
       // R5-6 — does this case already have a retention successor? Decides the header button.
-      softRows(db.from("cases").select("id").eq("retention_source_case_id", id).limit(1)),
+      // R58 — cycle-aware: only a successor for the CURRENT rate_end_date counts (the filter is
+      // applied after the read, where the case row's own date is in hand).
+      softRows(db.from("cases").select("id,rate_end_date").eq("retention_source_case_id", id).limit(50)),
       /* R9-5 · m10 — the checklist and the document emails the chase line is derived from. Both
          soft: a database without the table answers 42P01 and the section simply never renders. */
       softRows(db.from("case_documents").select("*").eq("case_id", id).order("created_at")),
@@ -12066,7 +12186,7 @@ window.openCase = async function (id, opts = {}) {
     noteReferrerFromStarRow(cs); // …and the m11 one, at the same zero cost (R9-1)
     noteDocsFromStarRow(cs);     // …and m10's, which can only ever be answered "no" from here
     noteCallPackFromStarRow(cs); // R12b · W-15b — …and the call-pack four, at the same zero cost
-    hasRetentionSuccessor = (succ || []).length > 0;
+    hasRetentionSuccessor = (succ || []).some((rc) => (rc.rate_end_date || null) === ((cs && cs.rate_end_date) || null)); // R58 — same cycle only
     openedUpdatedAt = cs.updated_at; // exact string from the loaded row, for the stale-write guard
     /* R40 — THE CASE'S HISTORY, built by the SAME builder the client record has used since SP3b
        rather than a second, thinner one written alongside it. `cs` is a select("*") row, so it
@@ -13570,6 +13690,8 @@ window.openCase = async function (id, opts = {}) {
     if ($("#act-ref-survey")) $("#act-ref-survey").onclick = () => makeReferral(id, c, "survey");
     if ($("#act-ref-conveyancing")) $("#act-ref-conveyancing").onclick = () => makeReferral(id, c, "conveyancing");
     loadCaseReferrals(id); // async fill of #case-referrals; empty stays invisible
+    // R58 — the rate-end outcome (renewed elsewhere / property sold) on a completed tracked case.
+    if ($("#act-rate-outcome")) $("#act-rate-outcome").onclick = () => rateEndOutcome(id, c);
     // R57 — the pinned objective: click (or keyboard-activate) the line to edit it.
     const objEl = $("#cs-objective");
     if (objEl) {

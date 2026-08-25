@@ -5284,7 +5284,15 @@
     };
   }
   function hasRetentionSuccessor(caseId) {
-    return DB.cases.some(function (c) { return c.retention_source_case_id === caseId; });
+    /* R58 — CYCLE-AWARE, mirroring production's new gate: only a successor whose rate_end_date
+       matches the source's CURRENT rate_end_date blocks (a successor copies the date at creation,
+       so same date = same product cycle). A source that was "renewed elsewhere" gets a new date
+       and becomes eligible again even though an old-cycle successor exists. */
+    var src = DB.cases.filter(function (x) { return x.id === caseId; })[0];
+    var srcDate = src ? (src.rate_end_date || null) : null;
+    return DB.cases.some(function (c) {
+      return c.retention_source_case_id === caseId && (c.rate_end_date || null) === srcDate;
+    });
   }
   function queueRow(o) {
     var row = applyInsertDefaults("email_queue", o);
