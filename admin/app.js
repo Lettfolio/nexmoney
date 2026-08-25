@@ -4425,7 +4425,14 @@ function tourEnd(markSeen) {
   if (markSeen) {
     // Fire-and-forget: mark_tour_seen() is a no-op the second time it's ever called (mock and
     // prod both guard it), and a failure here must never re-show a dismissed tour — just toast.
-    db.rpc("mark_tour_seen").catch(() => { try { toast("Couldn't record that you've seen the tour — it may show again next time."); } catch (e) { /* toast unavailable — nothing else to do */ } });
+    /* R61-HF1 — db.rpc() returns a PostgrestBuilder, which is thenable but has NO .catch, so
+       dismissing the tour with Escape THREW ("db.rpc(...).catch is not a function"), the toast
+       said "Something went wrong", and the seen-flag never persisted — which is exactly why the
+       tour kept re-showing. Promise.resolve() wraps the thenable into a real promise; the rpc
+       reports errors via its resolved {error} rather than by rejecting, so handle both. */
+    Promise.resolve(db.rpc("mark_tour_seen")).then((r) => { if (r && r.error) throw r.error; }).catch(() => {
+      try { toast("Couldn't record that you've seen the tour — it may show again next time."); } catch (e) { /* toast unavailable — nothing else to do */ }
+    });
   }
 }
 function runFirstRunTour(opts) {
