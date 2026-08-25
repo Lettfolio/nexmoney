@@ -380,6 +380,8 @@
        Columns: id, created_at, error_type, location, page, role — NO message/stack/PII
        column, by construction, exactly like production. */
     error_events: [],
+    /* R56 — outbound referrals (survey / conveyancing) recorded per case. */
+    referrals: [],
     /* R43 — the saved filter views R31 kept in localStorage, now a table.
        Columns: user_id (defaults to the caller, PK part 1), scope ('pipeline' |
        'clients' | '_meta'), name, filters jsonb, updated_at. PK is the TRIPLE
@@ -1248,7 +1250,7 @@
     watch_alerts: "wa", audit_log: "au", duplicate_dismissals: "dd",
     case_documents: "cd",
     staff_absences: "sa", case_files: "cf",
-    vault_entries: "ve"
+    vault_entries: "ve", referrals: "rf"
   };
   function applyInsertDefaults(table, row) {
     var r = clone(row);
@@ -1299,6 +1301,13 @@
          production's `on delete set null` without a strict insert guard). */
       ["line_date", "premium", "banked_gross", "banked_net", "matched_case_id", "confirmed_at", "attributed_to"]
         .forEach(function (f) { if (r[f] === undefined) r[f] = null; });
+    }
+    /* R56 — referrals: production defaults `status 'made'` and stamps updated_at; the nullable
+       columns default so select("*") always returns the key (the standing parity rule). */
+    if (table === "referrals") {
+      if (r.status == null) r.status = "made";
+      if (!r.updated_at) r.updated_at = iso(NOW);
+      ["client_id", "referred_to", "notes", "created_by"].forEach(function (f) { if (r[f] === undefined) r[f] = null; });
     }
     if (pk === "id" && !r.id) r.id = nid(PREFIX[table] || "row");
     if (!r.created_at && table !== "settings" && table !== "saved_views") r.created_at = iso(NOW);

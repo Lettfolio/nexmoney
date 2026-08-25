@@ -9078,6 +9078,13 @@ const CASE_ACTION_RULES = {
   // R54 — emailing the offer to the client belongs exactly where viewing it does: once there IS
   // an offer document, at the offer/exchange/completed stages (a PT has no lender offer to send).
   "act-email-offer":   { stages: ["offer", "exchange", "completed"], notKinds: ["product_transfer"] },
+  /* R56 — outbound referral actions (the Revolution pattern: revenue referrals visible on the
+     case). Primary in the window where each actually happens; reachable from the overflow at
+     every other stage. A survey belongs to a purchase-shaped case between DIP and offer; the
+     conveyancing referral additionally applies to a remortgage (there is legal work) but never
+     to a product transfer (same lender, no conveyancing — the R15 §5 rule). */
+  "act-ref-survey":       { stages: ["decision_in_principle", "application", "offer"], notKinds: ["product_transfer", "remortgage", "other"] },
+  "act-ref-conveyancing": { stages: ["decision_in_principle", "application", "offer", "exchange"], notKinds: ["product_transfer", "other"] },
   "act-fee":           { stages: ["completed"], hero: true },
   "act-paid":          { stages: ["completed"], hero: true },
   "act-review":        { stages: ["completed"], hero: true },
@@ -9251,6 +9258,8 @@ function caseActionBarHtml(c, stage, kind, opts) {
     { id: "act-offer",         label: "📄 Read mortgage offer (AI)" },
     ...(c.offer_doc_path ? [{ id: "act-view-offer", label: "View offer doc" }] : []),
     ...(c.offer_doc_path ? [{ id: "act-email-offer", label: "📧 Email offer to client" }] : []),
+    { id: "act-ref-survey",       label: "🏡 Refer for survey" },
+    { id: "act-ref-conveyancing", label: "🖋️ Refer for conveyancing" },
     { id: "act-evidence",      label: "🗂 Evidence pack" },
     { id: "act-appt",          label: "📅 Book appointment" },
     { id: "act-factfind",      label: "📋 Digital fact-find" },
@@ -9377,6 +9386,94 @@ function promptLostReason(whatMoves) {
 function lostReasonNoteBody(lost) {
   return `Not proceeding — ${lost.label}${lost.note ? ": " + lost.note : ""}`;
 }
+/* ==========================================================================
+   R56 — OUTBOUND REFERRALS (survey / conveyancing), the Revolution pattern.
+   A referral the firm makes is revenue and service the system never recorded:
+   it lived in an adviser's sent-items. One small overlay captures who the
+   client was referred to; the row lands in `referrals` (RLS staff), writes a
+   case note so the timeline tells the story, and (default on) creates a chase
+   task a week out so the outcome is somebody's job. Status moves made →
+   completed / declined from the list rendered under the action bar.
+   ========================================================================== */
+const REFERRAL_META = {
+  survey:       { icon: "🏡", label: "Survey" },
+  conveyancing: { icon: "🖋️", label: "Conveyancing" },
+  other:        { icon: "🤝", label: "Referral" },
+};
+const REFERRAL_STATUS_BADGE = { made: ["blue", "Referred"], completed: ["green", "Completed"], declined: ["grey", "Declined"] };
+async function makeReferral(caseId, c, kind) {
+  const meta = REFERRAL_META[kind] || REFERRAL_META.other;
+  const got = await openOverlay(`
+    <h3>${meta.icon} Refer for ${esc(meta.label.toLowerCase())}</h3>
+    <p class="panel-sub">Recorded on the case with a note, so the referral (and whatever comes of it) is part of the file — nothing is sent to anybody from here.</p>
+    <label>Referred to
+      <input id="ref-to" type="text" placeholder="Firm or contact the client was referred to…" maxlength="120">
+    </label>
+    <label style="margin-top:10px;">Note (optional)
+      <textarea id="ref-note" rows="2" placeholder="Anything worth remembering about this referral…"></textarea>
+    </label>
+    <label class="ref-chase-row"><input id="ref-chase" type="checkbox" checked> Create a chase task in a week to record the outcome</label>
+    <div class="ovl-err" id="ref-err"></div>
+    <div class="modal-actions"><div></div><div class="right">
+      <button type="button" class="btn" id="ref-cancel">Cancel</button>
+      <button type="button" class="btn btn-primary" id="ref-ok">Record referral</button>
+    </div></div>`, (finish, box) => {
+    box.querySelector("#ref-cancel").onclick = () => finish(null);
+    box.querySelector("#ref-ok").onclick = () => {
+      const to = (box.querySelector("#ref-to").value || "").trim();
+      if (!to) { box.querySelector("#ref-err").textContent = "Say who the client was referred to."; box.querySelector("#ref-to").focus(); return; }
+      finish({ to, note: (box.querySelector("#ref-note").value || "").trim(), chase: box.querySelector("#ref-chase").checked });
+    };
+  });
+  if (!got) return;
+  const uid = (ME && ME.id) || null;
+  const { error } = await db.from("referrals").insert({
+    case_id: caseId, client_id: (c && c.client_id) || null, kind,
+    referred_to: got.to, notes: got.note || null, created_by: uid,
+  });
+  if (error) return toast("Couldn't record the referral: " + error.message);
+  await db.from("case_notes").insert({
+    case_id: caseId,
+    body: `${meta.icon} ${meta.label} referral — referred to ${got.to}${got.note ? ": " + got.note : ""}`,
+    created_by: uid,
+  });
+  if (got.chase) {
+    const due = new Date(Date.now() + 7 * 86400000);
+    await db.from("case_tasks").insert({
+      case_id: caseId, title: `Chase ${meta.label.toLowerCase()} referral outcome (${got.to})`,
+      due_date: localDateStr(due), assigned_to: (c && c.assigned_to) || uid, created_by: uid,
+    });
+  }
+  toast(`${meta.label} referral recorded${got.chase ? " — chase task set for next week" : ""}`);
+  loadCaseReferrals(caseId);
+}
+async function loadCaseReferrals(caseId) {
+  const el = $("#case-referrals");
+  if (!el) return;
+  const { data, error } = await db.from("referrals").select("*").eq("case_id", caseId).order("created_at", { ascending: false });
+  if (error || !data || !data.length) { el.innerHTML = ""; return; } // soft-fail: no list ≠ broken modal
+  el.innerHTML = data.map((r) => {
+    const meta = REFERRAL_META[r.kind] || REFERRAL_META.other;
+    const b = REFERRAL_STATUS_BADGE[r.status] || ["grey", esc(String(r.status))];
+    const acts = r.status === "made"
+      ? `<button type="button" class="btn btn-sm" onclick="window.refSetStatus('${r.id}','${caseId}','completed')">Mark completed</button>
+         <button type="button" class="btn btn-sm" onclick="window.refSetStatus('${r.id}','${caseId}','declined')">Declined</button>`
+      : "";
+    return `<div class="ref-row" data-ref-id="${r.id}" data-ref-status="${esc(r.status)}">
+      <span class="ref-ic" aria-hidden="true">${meta.icon}</span>
+      <span class="ref-t">${meta.label} — ${esc(r.referred_to || "unrecorded")}</span>
+      <span class="ref-when">${fmtD(r.created_at)}</span>
+      <span class="badge ${b[0]}">${b[1]}</span>${acts}</div>`;
+  }).join("");
+}
+window.refSetStatus = async function (refId, caseId, status) {
+  const { error } = await db.from("referrals").update({ status, updated_at: new Date().toISOString() }).eq("id", refId);
+  if (error) return toast("Couldn't update the referral: " + error.message);
+  const meta = { completed: "completed ✓", declined: "declined by the client" }[status] || status;
+  await db.from("case_notes").insert({ case_id: caseId, body: `Referral ${meta}.`, created_by: (ME && ME.id) || null });
+  toast("Referral updated");
+  loadCaseReferrals(caseId);
+};
 /* ==========================================================================
    R12b · W-30 — STAGE-ENTRY PROMPTS
    Two stages have a field that is effectively part of arriving at them, and
@@ -12530,6 +12627,9 @@ window.openCase = async function (id, opts = {}) {
          collapses into #case-more-actions. Every id + handler is preserved (see caseActionBarHtml
          and CASE_ACTION_RULES); a non-primary action is reachable in the overflow, never removed. */ ""}
     ${caseActionBarHtml(c, c.stage, c.case_kind, { heroesActive: !nextStage })}
+    ${/* R56 — outbound referrals recorded on this case (survey / conveyancing). Filled async by
+         loadCaseReferrals(); stays empty (and invisible via :empty) when there are none. */ ""}
+    <div id="case-referrals" class="case-referrals"></div>
     ${/* R5-4 — where a parsed mortgage offer PROPOSES its readings (Current vs Incoming, ticked
          field by field) instead of writing them behind the operator's back. Empty until a parse. */ ""}
     <div id="offer-diff" class="offer-diff hidden"></div>` : ""}
@@ -13375,6 +13475,10 @@ window.openCase = async function (id, opts = {}) {
     // R54 — email the offer PDF to the client. Queues held (like the other client emails) until
     // sending is switched on; the send then attaches the PDF from the offers bucket.
     if (c.offer_doc_path) $("#act-email-offer").onclick = () => emailOfferToClient(id, c);
+    // R56 — outbound referrals: open the small capture overlay, then refresh the list below.
+    if ($("#act-ref-survey")) $("#act-ref-survey").onclick = () => makeReferral(id, c, "survey");
+    if ($("#act-ref-conveyancing")) $("#act-ref-conveyancing").onclick = () => makeReferral(id, c, "conveyancing");
+    loadCaseReferrals(id); // async fill of #case-referrals; empty stays invisible
     /* R15 · §2 — the "More actions" overflow toggle. In-memory only, like the security card: the
        modal re-renders on every open so the menu is born closed and this just flips .hidden + the
        aria state. A click on the menu itself does not bubble up and re-close it. */
@@ -15499,29 +15603,66 @@ function clientCaseProtChipHtml(x) {
   const p = CL_PROT_CHIP[st] || ["grey", String(st).replace(/_/g, " "), "Protection status: " + String(st).replace(/_/g, " ")];
   return `<span class="badge ${p[0]} cl-prot-chip" data-prot="${esc(st)}" title="${esc(p[2])}">🛡️ ${esc(p[1])}</span>`;
 }
-/* One case row. `opts.grouped` drops the chip (the group heading above already carries it) and
+/* R56 — the case row is now a PRODUCT CARD (Revolution's Applications-and-policies pattern):
+   type icon, kind + lender title, the money as the card's headline figure, dates underneath,
+   stage/protection pills kept exactly where they were. The DOM contract the suites rely on is
+   deliberately unchanged — `.row-item` container, `.t` with the openCase onclick, `.s` line,
+   `.cl-prot-chip` — the card is additive markup (`.cl-card`, icon, money line) plus CSS. */
+const KIND_ICON = {
+  purchase: "🏠", first_time_buyer: "🔑", remortgage: "♻️",
+  product_transfer: "🔁", buy_to_let: "🏘️", other: "📄",
+};
+/* One case card. `opts.grouped` drops the chip (the group heading above already carries it) and
    `opts.previous` badges an earlier case on the same building. */
 function clientCaseRowHtml(x, opts = {}) {
   const chip = opts.grouped ? "" : propChip(x, { cls: "cl-case-chip" });
-  /* R6 — the row now leads with the case TYPE, which the client modal was showing in the timeline
-     tags immediately above and hiding here. Lender and loan follow, as before. */
-  const title = [caseTypeLabel(x), x.lender, x.loan_amount ? fmtM(x.loan_amount) : null].filter(Boolean).join(" · ");
-  return `<div class="row-item"><div class="row-main">
-        <div class="t" onclick="closeModal();openCase('${x.id}')">${esc(title)}</div>
+  /* R6 — the row leads with the case TYPE; lender follows. The loan moved out of the title and
+     into the card's own money line (R56), where a figure that size belongs. */
+  const title = [caseTypeLabel(x), x.lender].filter(Boolean).join(" · ");
+  const rateBit = x.rate_percent ? `${x.rate_percent}%${x.rate_type ? " " + esc(String(x.rate_type)) : ""}` : "";
+  const money = x.loan_amount
+    ? `<div class="cl-card-money">${esc(fmtM(x.loan_amount))}${rateBit ? ` <span class="cl-card-rate">· ${rateBit}</span>` : ""}</div>`
+    : "";
+  return `<div class="row-item cl-card"><span class="cl-card-icon" aria-hidden="true">${KIND_ICON[x.case_kind] || KIND_ICON.other}</span><div class="row-main">
+        <div class="t" onclick="closeModal();openCase('${x.id}')">${lenderIcon(x.lender)}${esc(title)}</div>
+        ${money}
         <div class="s">${chip}${chip ? " " : ""}Started ${fmtD(x.created_at)}${x.rate_end_date ? " · rate ends " + fmtD(x.rate_end_date) : ""}</div></div>
         ${opts.previous ? `<span class="badge grey" title="An earlier case on this property — the most recent one is listed first">previous</span>` : ""}
         ${x.assigned_to ? assigneeChipHtml(x.assigned_to) : '<span class="chip" title="No adviser assigned">—</span>'}
         ${stageBadge(x.stage)}${clientCaseProtChipHtml(x)}</div>`;
 }
+/* R56 — the protection GAP CARD. Revolution shows a client's mortgage and protection side by
+   side, which makes a missing policy visually loud; our equivalent: when the book has at least
+   one mortgage-shaped case and NO case with a protection policy recorded, say so as a card in
+   the same grid, linking to the newest live case (where the protection conversation lives).
+   `policy_taken` is the app's own definition of "protected" (R5 protection phase) — this invents
+   no new detection, so a client who declined still shows the gap card only if nothing was taken:
+   declined is a finished conversation on ONE case, not proof the book is covered — but to avoid
+   nagging on a book where every case was asked-and-declined, an all-declined book is exempt. */
+const MORTGAGE_KINDS = ["purchase", "first_time_buyer", "remortgage", "product_transfer", "buy_to_let"];
+function clientProtGapCardHtml(cases) {
+  const list = (cases || []).filter((x) => x.stage !== "not_proceeding");
+  const hasMortgage = list.some((x) => MORTGAGE_KINDS.includes(x.case_kind) || Number(x.loan_amount) > 0);
+  if (!hasMortgage) return "";
+  if (list.some((x) => x.protection_status === "policy_taken")) return "";
+  const undecided = list.filter((x) => x.protection_status !== "declined");
+  if (!undecided.length) return ""; // every case was asked and declined — a decision, not a gap
+  const target = undecided[0]; // caller passes cases newest-first
+  return `<div class="row-item cl-card cl-gap-card"><span class="cl-card-icon" aria-hidden="true">🛡️</span><div class="row-main">
+        <div class="t" onclick="closeModal();openCase('${target.id}')">No protection recorded on this book</div>
+        <div class="s">No case on this record has a protection policy recorded — open the newest live case to record the conversation or start a quote.</div></div>
+        <span class="badge amber" title="Shown while no case on this client carries a protection policy">gap</span></div>`;
+}
 function clientCasesHtml(cases) {
   const list = cases || [];
   if (!list.length) return '<div class="empty">No cases yet.</div>';
+  const gap = clientProtGapCardHtml(list);
   const groups = groupCasesByProperty(list);
-  if (groups.length < 2) return list.map((x) => clientCaseRowHtml(x)).join("");
+  if (groups.length < 2) return `<div class="cl-book">${list.map((x) => clientCaseRowHtml(x)).join("")}${gap}</div>`;
   return groups.map((g) => `<div class="cprop-group" data-prop-key="${esc(g.key)}">
       <div class="cprop-hd">${propChip(g.sample)}<span class="cprop-addr">${esc(g.heading)}</span>${g.rows.length > 1 ? `<span class="cprop-n">${g.rows.length} cases</span>` : ""}</div>
-      ${g.rows.map((x, i) => clientCaseRowHtml(x, { grouped: true, previous: g.key && i > 0 })).join("")}
-    </div>`).join("");
+      <div class="cl-book">${g.rows.map((x, i) => clientCaseRowHtml(x, { grouped: true, previous: g.key && i > 0 })).join("")}</div>
+    </div>`).join("") + (gap ? `<div class="cl-book">${gap}</div>` : "");
 }
 
 /* R6FIX-1 (R6B-01 / F1) — `presetCaseId` is "I arrived here from a case", the ONLY situation

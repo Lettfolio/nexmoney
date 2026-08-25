@@ -3629,3 +3629,33 @@ tr.owed-hot > td { background: var(--red-bg); }
   .recon-controls .recon-pick { flex-basis: 100%; }
   .recon-attr .recon-attr-pick { flex-basis: 100%; }
 }
+
+/* ==========================================================================
+   R56 — product cards on the client record + outbound referral rows.
+   Appended layer: no earlier rule is modified. The card keeps the .row-item
+   DOM contract; these rules only change its geometry.
+   ========================================================================== */
+.cl-book { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 10px; margin: 4px 0 10px; }
+.cl-book .row-item.cl-card {
+  display: flex; align-items: flex-start; gap: 10px;
+  background: #fff; border: 1px solid #e5eaf1; border-radius: 10px;
+  padding: 12px 14px; box-shadow: 0 1px 2px rgba(15, 42, 74, 0.05);
+}
+.cl-card .cl-card-icon { font-size: 22px; line-height: 1.2; flex: 0 0 auto; }
+.cl-card .row-main { min-width: 0; }
+.cl-card .cl-card-money { font-size: 17px; font-weight: 700; color: #0f2a4a; margin: 2px 0; }
+.cl-card .cl-card-rate { font-size: 12.5px; font-weight: 500; color: #64748b; }
+.cl-card .badge, .cl-card .chip { align-self: flex-start; }
+.row-item.cl-gap-card { background: #fff8ed; border-color: #f0d9ae; }
+.cl-gap-card .t { color: #8a5a00; }
+.cprop-group .cl-book { margin-top: 6px; }
+/* Referral rows under the case action bar. :empty keeps the block invisible until it has rows. */
+.case-referrals { display: flex; flex-direction: column; gap: 6px; margin: 8px 0 2px; }
+.case-referrals:empty { display: none; }
+.ref-row { display: flex; align-items: center; gap: 8px; background: #f8fafc; border: 1px solid #e5eaf1; border-radius: 8px; padding: 7px 10px; font-size: 13.5px; }
+.ref-row .ref-ic { flex: 0 0 auto; }
+.ref-row .ref-t { font-weight: 600; color: #1f2937; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ref-row .ref-when { color: #6b7280; font-size: 12.5px; margin-left: auto; }
+.ref-chase-row { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 13.5px; color: #374151; }
+.ref-chase-row input { width: auto; margin: 0; }
+@media (max-width: 700px) { .cl-book { grid-template-columns: 1fr; } }
