@@ -575,7 +575,9 @@ const isoDaysAgo = (n) => new Date(Date.now() - n * DAY_MS).toISOString();
       const overdueStr = addDays(todayStr, -4);
       const d4task = await page.evaluate(({ caseId, due }) => window.__mockDb.from("case_tasks").insert({ case_id: caseId, title: "Overdue thing", due_date: due, assigned_to: "p2" }).select("id").single().then((r) => r.data.id), { caseId: d4.caseId, due: overdueStr });
       await goto(page, "dashboard", 1200);
+      const openBriefFolds = () => page.evaluate(() => document.querySelectorAll("#briefing-list details.brief-fold").forEach((d) => { d.open = true; }));
       const btn1wk = `#snooze-1wk-brief-${d4task}`;
+      await openBriefFolds(); // R61 — long bands fold past 10 rows; open them so the click can land
       ok("D4 · the +1wk snooze control is on My Day (the task is overdue)", await page.evaluate((s) => !!document.querySelector(s), btn1wk));
       await page.click(btn1wk);
       await wait(page, 500);
@@ -590,6 +592,7 @@ const isoDaysAgo = (n) => new Date(Date.now() - n * DAY_MS).toISOString();
       const d5task = await page.evaluate(({ caseId, due }) => window.__mockDb.from("case_tasks").insert({ case_id: caseId, title: "Today thing", due_date: due, assigned_to: "p2" }).select("id").single().then((r) => r.data.id), { caseId: d5.caseId, due: todayStr });
       await goto(page, "dashboard", 1200);
       const briefBtn = `#snooze-3d-brief-${d5task}`;
+      await openBriefFolds(); // R61 — same fold-opening before clicking inside My Day
       ok("D5 · the task carries snooze controls on My Day while due today", await page.evaluate((s) => !!document.querySelector(s), briefBtn));
       await page.click(briefBtn);
       await wait(page, 700);

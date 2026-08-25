@@ -3706,3 +3706,37 @@ tr.owed-hot > td { background: var(--red-bg); }
 .cl-mini-loan { color: #66738a; font-weight: 400; }
 .cl-mini-hint { color: #7a8699; font-size: 12px; white-space: nowrap; }
 .row-item.cl-mini .cl-prot-chip { font-size: 10.5px; opacity: 0.9; }
+
+/* R61 — site-wide hierarchy pass: banded sections + current-first, quieter repetition. */
+/* A · My Day bands */
+.brief-sec { display: flex; align-items: baseline; gap: 8px; margin: 12px 0 4px; padding: 5px 10px; border-radius: 8px; font-size: 12px; font-weight: 800; letter-spacing: 0.05em; text-transform: uppercase; }
+.brief-sec:first-child { margin-top: 2px; }
+.brief-sec-ic { font-size: 13px; }
+.brief-sec-n { font-weight: 800; background: rgba(255,255,255,0.75); border-radius: 10px; padding: 0 8px; }
+.brief-sec-why { margin-left: auto; font-weight: 500; letter-spacing: 0; text-transform: none; font-size: 11.5px; opacity: 0.75; }
+.brief-sec-hot  { background: #fdecea; color: #b3261e; border-left: 4px solid #d93025; }
+.brief-sec-warm { background: #fef3e0; color: #9a6200; border-left: 4px solid #f5a623; }
+.brief-sec-rest { background: #eef1f5; color: #556275; border-left: 4px solid #aab4c3; }
+.brief-fold > summary { cursor: pointer; font-size: 12.5px; color: #66738a; padding: 6px 10px; user-select: none; }
+.brief-fold > summary:hover { color: #33415c; }
+.brief-fold[open] > summary { color: #33415c; }
+/* A · quiet the snooze cluster until the row is engaged (the buttons stay live throughout) */
+.brief-row .task-snooze { opacity: 0.3; transition: opacity 0.12s; }
+.brief-row:hover .task-snooze, .brief-row:focus-within .task-snooze { opacity: 1; }
+/* B · the client row's one current fact */
+.client-next { white-space: nowrap; }
+.client-next.cn-live { color: #1a5fb4; font-weight: 600; }
+.client-next.cn-watch { color: #1d7a3a; }
+.client-next.cn-overdue { color: #9a6200; font-weight: 600; }
+/* C · retention: coloured group heads + year sub-heads */
+.ret-group-h { padding: 5px 10px; border-radius: 8px; }
+.ret-group-h.ret-g-ended { background: #fdecea; border-left: 4px solid #d93025; }
+.ret-group-h.ret-g-soon { background: #fef3e0; border-left: 4px solid #f5a623; }
+.ret-year-h { margin: 10px 0 2px; font-size: 11.5px; font-weight: 800; letter-spacing: 0.06em; color: #8a93a5; border-bottom: 1px solid #e3e7ee; padding-bottom: 2px; }
+/* D · protection: band rows + quiet action cluster */
+#prot-list-table tr.prot-band td { padding: 6px 10px; font-size: 12px; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; border-left: 4px solid #aab4c3; background: #eef1f5; color: #556275; }
+#prot-list-table tr.prot-band-quoted td { background: #fef3e0; color: #9a6200; border-left-color: #f5a623; }
+#prot-list-table tr.prot-band-discussed td { background: #e8f0fe; color: #1a5fb4; border-left-color: #4285f4; }
+.prot-band-n { background: rgba(255,255,255,0.75); border-radius: 10px; padding: 0 8px; }
+.prot-actions > *:not(:first-child) { opacity: 0.35; transition: opacity 0.12s; }
+#prot-list-table tr:hover .prot-actions > *, .prot-actions:focus-within > * { opacity: 1; }

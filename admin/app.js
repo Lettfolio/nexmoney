@@ -6055,6 +6055,16 @@ function sortRateErcRows(feed, byValue) {
 /* R12b · W-16 — the tooltip a scoped count carries. The firm-wide figure is not deleted, it is put
    here, so switching scope never looks like work vanishing. */
 const rateCountTip = (n, all, what, scope) => `${n} ${what} on ${rateScopeWord(scope)}${scope === "all" ? "" : ` — ${all} across the whole firm`}.`;
+/* R61 — a duration a person can read. "(2308 days ago)" is arithmetic, not information; past
+   ~10 weeks the honest unit is months, and past ~2 years it is years. Used for both directions
+   of the rate-end distance on the feed rows. */
+function fmtDaysAway(n) {
+  const a = Math.abs(Number(n) || 0);
+  if (a < 75) return `${a} day${a === 1 ? "" : "s"}`;
+  if (a < 700) { const m = Math.round(a / 30.44); return `${m} month${m === 1 ? "" : "s"}`; }
+  const y = (a / 365.25).toFixed(1).replace(/\.0$/, "");
+  return `${y} year${y === "1" ? "" : "s"}`;
+}
 /* ONE ROW of the feed. Every branch below is the round-6-to-round-35 markup, moved rather than
    rewritten, so the drawer and the page cannot render the same alert differently. */
 function renderRateErcRow(a, feed) {
@@ -6066,8 +6076,12 @@ function renderRateErcRow(a, feed) {
     <div class="row-item">
       <div class="row-main">
         <div class="t" onclick="openCase('${a.case_id}')">${esc(a.client_name)} ${propCtxChip(feed.ctx, a.case_id, "row-prop")}${a.__dupes > 1 ? ` <span class="badge grey" title="${a.__dupes} cases share this property and this rate end date — shown once, because it is one mortgage conversation.">${a.__dupes} cases</span>` : ""}</div>
-        <div class="s">${lenderIcon(a.lender)}${esc(a.lender || "")} ${a.rate_percent ? a.rate_percent + "%" : ""} — ends ${fmtD(a.rate_end_date)}${a.days_to_rate_end != null ? ` (${a.days_to_rate_end < 0 ? Math.abs(a.days_to_rate_end) + (Math.abs(a.days_to_rate_end) === 1 ? " day" : " days") + " ago" : "in " + a.days_to_rate_end + (a.days_to_rate_end === 1 ? " day" : " days")})` : ""}${feed.ercIds.has(a.case_id) ? ` — ERC runs until ${fmtD(a.erc_end_date)}` : ""}</div>
-        ${money ? `<div class="s rate-money">Loan <strong>${mny.loan ? fmtM(mny.loan) : "—"}</strong> · last fee <strong>${mny.lastFee ? fmtM(mny.lastFee) : "none recorded"}</strong> <span class="money-basis">(value at risk · loan on the case · last fee as proxy)</span></div>` : ""}
+        <div class="s">${lenderIcon(a.lender)}${esc(a.lender || "")} ${a.rate_percent ? a.rate_percent + "%" : ""} — ends ${fmtD(a.rate_end_date)}${a.days_to_rate_end != null ? ` (${a.days_to_rate_end < 0 ? fmtDaysAway(a.days_to_rate_end) + " ago" : "in " + fmtDaysAway(a.days_to_rate_end)})` : ""}${feed.ercIds.has(a.case_id) ? ` — ERC runs until ${fmtD(a.erc_end_date)}` : ""}</div>
+        ${/* R61 — the "(value at risk · loan on the case · last fee as proxy)" basis used to print
+             on EVERY money line — a hundred identical parentheticals down the Retention page. The
+             basis is a fact about the FEED, not about any row, so it now says itself once, in the
+             panel subtitle (see loadRetentionRatesPanel and the Today drawer's sub). */ ""}
+        ${money ? `<div class="s rate-money">Loan <strong>${mny.loan ? fmtM(mny.loan) : "—"}</strong> · last fee <strong>${mny.lastFee ? fmtM(mny.lastFee) : "none recorded"}</strong></div>` : ""}
         ${/* R12b · W-15b — the call pack, on the row the call is made from. Client money, not firm
              money, so it is NOT behind showMoney(): the balance and the payment are the client's
              own figures and the adviser ringing them needs both. Only drawn when at least one is
@@ -6253,7 +6267,9 @@ async function loadDashboard() {
   const rateSub = $("#rate-erc-sub");
   if (rateSub) {
     rateSub.textContent = `Rates ending within the reminder window, and cases where the ERC outlasts the rate. `
-      + `Showing ${rateScopeWord(rateScope)}${rateScope === "all" ? "" : ` — ${rateFeed.ratesSoonAll.length + rateFeed.ercFlagsAll.filter((a) => !rateFeed.ratesSoonAll.some((r) => r.case_id === a.case_id)).length} alerts firm-wide.`}`;
+      + `Showing ${rateScopeWord(rateScope)}${rateScope === "all" ? "" : ` — ${rateFeed.ratesSoonAll.length + rateFeed.ercFlagsAll.filter((a) => !rateFeed.ratesSoonAll.some((r) => r.case_id === a.case_id)).length} alerts firm-wide.`}`
+      /* R61 — the money-line basis, once for the drawer (the rows no longer repeat it). */
+      + (showMoney() ? " Money lines read value at risk: the loan on the case, with the last fee as a proxy." : "");
   }
   $("#alerts-rateerc").innerHTML = rateErcMerged.length
     ? rateErcMerged.slice(0, 15).map((a) => renderRateErcRow(a, rateFeed)).join("")
@@ -6441,15 +6457,33 @@ async function loadRetentionRates(scope) {
   if (sub) {
     sub.textContent = `Rates ending within the ${reminderMonths}-month reminder window, and cases where the ERC outlasts the rate. `
       + `Showing ${rateScopeWord(scope)}${scope === "all" ? "" : ` — ${feed.ratesSoonAll.length + feed.ercFlagsAll.filter((a) => !feed.ratesSoonAll.some((r) => r.case_id === a.case_id)).length} alerts firm-wide.`} `
-      + "The same feed as Today's Rate & ERC drawer, un-truncated.";
+      + "The same feed as Today's Rate & ERC drawer, un-truncated."
+      /* R61 — the money-line basis, said ONCE for the whole feed instead of on every row. */
+      + (showMoney() ? " Money lines read value at risk: the loan on the case, with the last fee as a proxy for the fee at stake." : "");
   }
-  const group = (title, why, rows) => rows.length
-    ? `<h4 class="ret-group-h">${title} <span class="count">${rows.length}</span></h4><p class="panel-sub ret-group-sub">${why}</p>`
-      + rows.map((a) => renderRateErcRow(a, feed)).join("")
-    : "";
+  /* R61 — the two groups now carry their own colour (ended = red, soon = amber; CSS on the
+     class) and, inside Ended under the DATE sort, quiet year sub-heads: 594 ended rates as one
+     undifferentiated run gave 2020's lost causes the same visual claim as last month's. Value
+     sort keeps the flat list — a value ranking interleaves the years on purpose. */
+  const group = (title, why, rows, cls) => {
+    if (!rows.length) return "";
+    let body;
+    if (cls === "ended" && !valueSort && rows.length > 8) {
+      let yr = null;
+      body = rows.map((a) => {
+        const y = String(a.rate_end_date || "").slice(0, 4) || "—";
+        const head = y !== yr ? `<div class="ret-year-h">${esc(y)}</div>` : "";
+        yr = y;
+        return head + renderRateErcRow(a, feed);
+      }).join("");
+    } else {
+      body = rows.map((a) => renderRateErcRow(a, feed)).join("");
+    }
+    return `<h4 class="ret-group-h ret-g-${cls}">${title} <span class="count">${rows.length}</span></h4><p class="panel-sub ret-group-sub">${why}</p>` + body;
+  };
   $("#ret-rates-list").innerHTML = ordered.length
-    ? group("Ended", "The rate has already matured — the client is paying the lender's reversion rate today.", shown.filter(rateErcEnded))
-      + group("Ending soon", "Still inside the fix. The conversation is booked ahead, not chased.", shown.filter((a) => !rateErcEnded(a)))
+    ? group("Ended", "The rate has already matured — the client is paying the lender's reversion rate today.", shown.filter(rateErcEnded), "ended")
+      + group("Ending soon", "Still inside the fix. The conversation is booked ahead, not chased.", shown.filter((a) => !rateErcEnded(a)), "soon")
       + (ordered.length > RET_LIST_CAP ? `<div class="empty">…and ${ordered.length - RET_LIST_CAP} more — narrow the list with the scope control above, or work it from the Pipeline table view.</div>` : "")
       + rateErcDedupeNote(feed.collapsed)
     : `<div class="empty">Nothing ending in the reminder window on ${rateScopeWord(scope)}, and no ERC conflicts. 👍</div>`;
@@ -7483,10 +7517,52 @@ function briefRowHtml(row) {
 // Renders from the cached lastBriefItems (no refetch) — used both after a fresh load and when a
 // group's expand toggle changes. The count badge stays on the real item total (rows collapse
 // visually, but nothing is hidden from the honest workload count).
+/* R61 — MY DAY IN BANDS (danielpotts: "contrasting colours to split sections up · only showing
+   what is needed or current as a priority"). Before this, 42 items rendered as one flat run of
+   visually identical rows — every one with its own red bar and OVERDUE badge — so the urgent and
+   the routine carried exactly the same weight and the word OVERDUE stopped meaning anything.
+   The list already HAS a priority spine (pri: rate_ended 8 … no_completion_date 45); these bands
+   just say it out loud, using the same thresholds the hot/warm row classes have used since R5.
+   Each band shows its first BRIEF_BAND_CAP rows and folds the rest behind "show the other N" —
+   the fold's open state survives repaints (briefFoldOpen, kept per band per session) so ticking
+   a task inside an open fold does not slam it shut. The count badge on the panel is untouched:
+   it still reports the honest item total, folded or not. A short day (nothing folded, only one
+   band in play) renders exactly as it always did — furniture is for lists that need it. */
+window.briefFoldOpen = window.briefFoldOpen || {};
+const BRIEF_BAND_CAP = 10;
+const BRIEF_BANDS = [
+  { key: "hot",  test: (p) => p < 15, label: "Urgent", icon: "🔥", why: "ended rates · overdue tasks · failed sends · new leads" },
+  { key: "warm", test: (p) => p >= 15 && p < 35, label: "Today", icon: "📅", why: "appointments and tasks due today" },
+  { key: "rest", test: (p) => p >= 35, label: "Worth doing", icon: "🧹", why: "housekeeping — nothing on fire" },
+];
 function renderBriefing() {
   const items = lastBriefItems;
   const rows = groupBriefRows(items);
-  $("#briefing-list").innerHTML = rows.length ? rows.map(briefRowHtml).join("") : '<div class="empty">All clear — nothing needs you right now 🎉</div>';
+  const bands = BRIEF_BANDS.map((b) => ({ ...b, rows: rows.filter((r) => b.test(r.head.pri)) })).filter((b) => b.rows.length);
+  let html;
+  if (!rows.length) {
+    html = '<div class="empty">All clear — nothing needs you right now 🎉</div>';
+  } else if (bands.length > 1 || rows.length > BRIEF_BAND_CAP) {
+    html = bands.map((b) => {
+      /* A NEW LEAD IS NEVER FOLDED. Speed-to-lead (R7) is the one clock on this page measured in
+         minutes, and lead_new's priority (12) sorts it after a run of overdue tasks — exactly
+         where a dumb cap would hide it. Leads stay visible whatever the band's length; the cap
+         applies to everything else. */
+      const shown = [], folded = [];
+      b.rows.forEach((r) => {
+        if (r.head.kind === "lead_new" || shown.length < BRIEF_BAND_CAP) shown.push(r); else folded.push(r);
+      });
+      return `<div class="brief-sec brief-sec-${b.key}"><span class="brief-sec-ic" aria-hidden="true">${b.icon}</span>${b.label} <span class="brief-sec-n">${b.rows.length}</span><span class="brief-sec-why">${b.why}</span></div>`
+        + shown.map(briefRowHtml).join("")
+        + (folded.length ? `<details class="brief-fold"${briefFoldOpen[b.key] ? " open" : ""} ontoggle="briefFoldOpen['${b.key}']=this.open">
+            <summary>Show the other ${folded.length} ${b.label.toLowerCase()} item${folded.length === 1 ? "" : "s"}</summary>
+            ${folded.map(briefRowHtml).join("")}
+          </details>` : "");
+    }).join("");
+  } else {
+    html = rows.map(briefRowHtml).join("");
+  }
+  $("#briefing-list").innerHTML = html;
   panelCount("#briefing-list", items.length, items.some((it) => it.pri < 15));
   applyLeadAdvChoices();   // R12a K-1 — a lead_new row's select is the SAME control as the drawer's
 }
@@ -10895,6 +10971,22 @@ async function loadProtectionPage() {
      with no lender at all ("Enquiry Buy to Let"), which named none of his five buildings. Same
      chip, same rules, same batched lookup as Today's lists — the RPC carries no property column,
      so the cases behind the rows on screen are resolved in one read. */
+  /* R61 — CURRENT FIRST, IN BANDS. The table used to render in the RPC's own order, so a page of
+     dozens read as one undifferentiated run with NOT DISCUSSED stamped down the whole status
+     column. The rows are now grouped by where the conversation actually stands — quoted (the
+     client owes US a decision: chase these first), then discussed (follow up), then not-discussed
+     (start the conversation) — with a coloured band row introducing each group. The sort is
+     stable, so within a band the RPC's recency order is untouched, and every existing hook
+     (.prot-cb data-ids, .prot-client counts, bulk select) is anchored by id/class, never index. */
+  const PROT_BAND_ORDER = { quoted: 0, discussed: 1, not_discussed: 2 };
+  const PROT_BAND_LABEL = {
+    quoted: ["amber", "⏳ Quoted — awaiting the client's decision"],
+    discussed: ["blue", "💬 Discussed — follow up"],
+    not_discussed: ["grey", "🛡️ Not discussed yet — start the conversation"],
+  };
+  const bandOf = (r) => (PROT_BAND_ORDER[r.protection_status] != null ? r.protection_status : "not_discussed");
+  rows.sort((a, b) => (PROT_BAND_ORDER[bandOf(a)]) - (PROT_BAND_ORDER[bandOf(b)]));
+  const protBandsOn = new Set(rows.map(bandOf)).size > 1;
   const protPageCtx = await loadPropContext(rows.map((r) => r.case_id));
   /* R7-3 — the quote clock. get_protection_pipeline carries the status but not when it was set, so
      the stamps for the quoted rows on screen are read in one batched query; on a database without
@@ -10917,7 +11009,12 @@ async function loadProtectionPage() {
         const kind = (KINDS.find((x) => x[0] === r.case_kind) || [])[1] || "";
         const p = PROT_BADGE[r.protection_status] || PROT_BADGE.not_discussed;
         const gi = caseGiApplies(r.case_kind) ? (GI_BADGE[r.gi_status] || GI_BADGE.not_discussed) : null;
-        return `<tr>
+        /* R61 — the band header row, at each status change (only when >1 band is present). */
+        const band = bandOf(r);
+        const bandRow = protBandsOn && (i === 0 || bandOf(rows[i - 1]) !== band)
+          ? `<tr class="prot-band prot-band-${band}"><td colspan="${money ? 9 : 8}">${PROT_BAND_LABEL[band][1]} <span class="prot-band-n">${rows.filter((x) => bandOf(x) === band).length}</span></td></tr>`
+          : "";
+        return `${bandRow}<tr>
         ${protCb(r)}
         <td class="prot-col-n" style="color:var(--muted);">${i + 1}</td>
         <td class="stick-col"><span class="prot-client" onclick="openClient('${r.client_id}')">${esc(r.client_name)}</span><span class="prot-fold-info">Loan ${fmtM(r.loan_amount)}${money ? " · Est. " + fmtM(r.est_commission) : ""}</span></td>
@@ -14505,7 +14602,7 @@ async function loadClientData() {
        say which lender the rate is with. It is an original-schema column (Reports has selected it
        since R7), so this cannot start 42703-ing on an older database, and it is a widening of the
        read this page already does rather than a second query. */
-    db.from("clients").select("*, cases!client_id(id,stage,rate_end_date,lender,protection_status,broker_fee,assigned_to,completed_at,updated_at,created_at" + (clientPropOn ? ",property_address" : "") + ")").order("last_name").limit(OWNER_ROW_CAP),
+    db.from("clients").select("*, cases!client_id(id,stage,case_kind,rate_end_date,lender,protection_status,broker_fee,assigned_to,completed_at,updated_at,created_at" + (clientPropOn ? ",property_address" : "") + ")").order("last_name").limit(OWNER_ROW_CAP),
     // R47 Gate 0 — `body` joins the select so a SYSTEM PROVENANCE note (the back-book import wrote
     // one per policy/deal, all dated the import day) can be told apart from real contact. Counting
     // them as "last contact" made every imported client read as spoken-to today and collapsed the
@@ -14750,7 +14847,34 @@ async function loadClients(filter = "", opts = {}) {
        this costs nothing — but it is also the limit: a client with no contact inside that window
        reads "no contact in 210 days", which is all the data on hand can honestly say. The Cold
        segment keeps its fuller "last contact 12 Mar (note)" line; this is the muted short form. */
-    const lcAge = clientSegment === "cold" ? "" : ` · <span class="client-lc-age" title="${lc ? `Last contact: ${esc(lc.what)} on ${esc(fmtD(String(lc.at).slice(0, 10)))}.` : "Nothing recorded in the last 210 days — the window this page reads. Older contact is on the client record."}">${lc ? `last contact ${esc(lastContactAgeLabel(lc.at))}` : "no contact in 210 days"}</span>`;
+    /* R61 — SAY IT ONLY WHEN IT IS NEWS. On the imported back book "no contact in 210 days" was
+       true of nearly every one of the 1,000 rows, and a fact that is true of everybody carries no
+       information — it just greyed the whole page. A RECORDED contact still prints (that varies
+       row to row and is worth scanning for); the silent majority say nothing, and the "Not
+       contacted 6+ months" chip above remains the honest count of them. */
+    const lcAge = clientSegment === "cold" || !lc ? "" : ` · <span class="client-lc-age" title="Last contact: ${esc(lc.what)} on ${esc(fmtD(String(lc.at).slice(0, 10)))}.">last contact ${esc(lastContactAgeLabel(lc.at))}</span>`;
+    /* R61 — THE ROW'S ONE CURRENT FACT. What the row was missing was the thing an operator scans
+       a client list FOR: where is this client NOW? One span, chosen in priority order — a live
+       case (its kind and stage), else the next watched rate end, else a tracked rate that has
+       already ended with no outcome recorded (amber — a decision is owed, the same reading as the
+       client record's R59 badges). Suppressed wherever the row already carries a rate fact
+       (rate segments / rate sort) and in the special-purpose segments (cold, missing-DOB). */
+    let nextBit = "";
+    if (!re && !showNextRate && !showDob && clientSegment !== "cold") {
+      const liveC = cases.find((x) => CLIENT_LIVE(x.stage));
+      if (liveC) {
+        const kindL = (KINDS.find((k) => k[0] === liveC.case_kind) || [])[1] || "live case";
+        nextBit = ` · <span class="client-next cn-live" title="A case is in flight — this is the one to work.">${esc(kindL)} at ${esc(STAGE_LABEL[liveC.stage] || liveC.stage)}</span>`;
+      } else {
+        const nr = clientNextRateEnd(c, todayStr);
+        if (nr) nextBit = ` · <span class="client-next cn-watch" title="The next watched rate end on this client${nr.lender ? " — " + esc(nr.lender) : ""}. Retention resurfaces them before it.">rate ends ${esc(fmtD(nr.date))}</span>`;
+        else {
+          const past = cases.filter((x) => x.stage === "completed" && x.rate_end_date && String(x.rate_end_date).slice(0, 10) < todayStr)
+            .map((x) => String(x.rate_end_date).slice(0, 10)).sort().pop();
+          if (past) nextBit = ` · <span class="client-next cn-overdue" title="A tracked rate ended and no outcome is recorded — open the client and record one (renewed, or property sold).">rate ended ${esc(fmtD(past))}</span>`;
+        }
+      }
+    }
     return `<div class="row-item client-row${clientSel.has(c.id) ? " is-sel" : ""}" data-client="${esc(c.id)}">
       <input type="checkbox" class="bulk-cb client-cb" data-id="${esc(c.id)}" aria-label="Select ${esc([c.first_name, c.last_name].filter(Boolean).join(" "))}"${clientSel.has(c.id) ? " checked" : ""}>
       <div class="row-main">
@@ -14760,7 +14884,7 @@ async function loadClients(filter = "", opts = {}) {
              one-click way to put it right. Everywhere else it stays off the row: a list of birthdays
              is not what the other six segments are for. */
           showDob ? ` · <span class="client-dob-missing">DOB: —</span> <a href="javascript:void(0)" class="client-dob-add" onclick="event.stopPropagation();openClient('${c.id}','dob')">add</a>` : ""}${
-          clientSegment === "cold" ? ` · <span class="client-lastcontact">${lc ? `last contact ${fmtD(String(lc.at).slice(0, 10))} (${esc(lc.what)})` : "no contact on record"}</span>` : ""}${lcAge}${rateBit}</div>
+          clientSegment === "cold" ? ` · <span class="client-lastcontact">${lc ? `last contact ${fmtD(String(lc.at).slice(0, 10))} (${esc(lc.what)})` : "no contact on record"}</span>` : ""}${lcAge}${rateBit}${nextBit}</div>
       </div>
       ${propBadge}
       <span class="badge ${active ? "blue" : "grey"}">${cases.length} case${cases.length === 1 ? "" : "s"}${active ? ` (${active} active)` : ""}</span>

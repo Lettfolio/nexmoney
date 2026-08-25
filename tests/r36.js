@@ -195,9 +195,11 @@ const clientRow = (page, clientId) => page.evaluate((id) => {
   const propBadge = row.querySelector(".client-prop-n");
   const lcAge = row.querySelector(".client-lc-age");
   const lastContact = row.querySelector(".client-lastcontact");
+  const nextFact = row.querySelector(".client-next");
   return {
     propBadgeText: propBadge ? propBadge.textContent.trim() : null,
     lcAgeText: lcAge ? lcAge.textContent.trim() : null,
+    nextText: nextFact ? nextFact.textContent.trim() : null,
     lastContactText: lastContact ? lastContact.textContent.trim() : null,
   };
 }, clientId);
@@ -274,10 +276,14 @@ const clientRow = (page, clientId) => page.evaluate((id) => {
       const soloRow = await clientRow(page, soloId);
       eq("A2b · a 1-property client's row carries NO .client-prop-n badge (noise at n<2)", soloRow && soloRow.propBadgeText, null);
 
-      ok("A2c · the multi-property client's row also carries .client-lc-age (no comms → \"no contact in 210 days\")",
-        multiRow && multiRow.lcAgeText === "no contact in 210 days", JSON.stringify(multiRow));
-      ok("A2d · the solo client's row carries .client-lc-age too — every row, not just multi-property ones",
-        soloRow && soloRow.lcAgeText === "no contact in 210 days", JSON.stringify(soloRow));
+      /* R61 — CONTRACT CHANGE: "no contact in 210 days" was true of nearly the whole imported
+         book, so the row no longer prints it (a fact true of everybody is noise, not news). The
+         .client-lc-age span now renders ONLY when a contact IS recorded; the silent rows carry
+         the R61 .client-next current-fact instead (here: the live case's kind and stage). */
+      ok("A2c · a no-comms client's row carries NO .client-lc-age (R61 — silence is not news)",
+        multiRow && multiRow.lcAgeText === null, JSON.stringify(multiRow));
+      ok("A2d · …and instead carries the R61 current-fact span (live case → kind at stage)",
+        soloRow && soloRow.nextText != null && /at /.test(soloRow.nextText), JSON.stringify(soloRow));
 
       // Switch to the Cold segment — neither client has any comms in the fixture, so both qualify.
       await page.click('#client-segment [data-seg="cold"]');
