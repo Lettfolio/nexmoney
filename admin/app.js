@@ -10648,6 +10648,18 @@ function renderPipelineTable(filtered, stageEntry = {}, propOn = true) {
   [...pipeSel].forEach((id) => { if (!rowIds.has(id)) pipeSel.delete(id); });
   const cbCell = (c) => `<td class="bulk-col" onclick="event.stopPropagation()"><input type="checkbox" class="bulk-cb" data-id="${c.id}" aria-label="Select this case"${pipeSel.has(c.id) ? " checked" : ""}></td>`;
 
+/* R62 — the Fee-status column, weighted by what the word still means. "waived" and
+   "not requested" repeated down a 995-row completed table is grey wallpaper: the only states
+   worth a glance are money still owed (requested — amber) and money banked (paid — green).
+   The quiet states keep their text (r24 reads the cell's textContent) at wallpaper weight. */
+function feeStatusCellHtml(c) {
+  const v = c.fee_status || "";
+  if (!v) return "";
+  const label = esc(v.replace(/_/g, " "));
+  if (v === "paid") return `<span class="fee-st fee-st-paid">${label}</span>`;
+  if (v === "requested") return `<span class="fee-st fee-st-requested">${label}</span>`;
+  return `<span class="fee-st fee-st-quiet">${label}</span>`;
+}
   const bodyRows = completedMode
     ? rows.map((c) => `<tr onclick="openCase('${c.id}')" style="cursor:pointer;">
         ${cbCell(c)}
@@ -10658,7 +10670,7 @@ function renderPipelineTable(filtered, stageEntry = {}, propOn = true) {
         <td>${lenderIcon(c.lender)}${esc(c.lender || "")}</td>
         <td>${c.loan_amount ? fmtM(c.loan_amount) : ""}</td>
         <td>${c.broker_fee ? fmtM(c.broker_fee) : ""}</td>
-        <td>${esc((c.fee_status || "").replace(/_/g, " "))}</td>
+        <td>${feeStatusCellHtml(c)}</td>
         <td>${c.assigned_to ? esc(staffName(c.assigned_to)) : ""}</td>
       </tr>`).join("")
     : rows.map((c) => `<tr onclick="openCase('${c.id}')" style="cursor:pointer;">
@@ -10676,7 +10688,7 @@ function renderPipelineTable(filtered, stageEntry = {}, propOn = true) {
         <td>${c.rate_end_date ? fmtD(c.rate_end_date) + (c.rate_end_estimated ? " " + APPROX : "") : ""}</td>
         <td>${c.erc_end_date ? fmtD(c.erc_end_date) : ""}</td>
         <td>${c.broker_fee ? fmtM(c.broker_fee) : ""}</td>
-        <td>${esc((c.fee_status || "").replace(/_/g, " "))}</td>
+        <td>${feeStatusCellHtml(c)}</td>
         <td>${esc((c.protection_status || "").replace(/_/g, " "))}</td>
         <td>${c.assigned_to ? esc(staffName(c.assigned_to)) : ""}</td>
         <td class="pipe-col-updated">${fmtD(c.updated_at)}</td>
@@ -16714,7 +16726,16 @@ async function loadEmails() {
           : `The next 8am run will send <strong>${nQueued}</strong> queued email${nQueued === 1 ? "" : "s"} — all of them due now.${cappedTxt}${composes}`)
       : `Nothing is queued — the next 8am run has nothing waiting to send${capped ? `, at least in the newest ${EMAIL_ROW_LIMIT} rows listed here` : ""}. That is not the same as "nothing will go": the run composes its own sends first — rate-end reminders that have fallen due, review requests (up to 5 a run) and reminders for review requests nobody answered.`;
   }
-  const emailRows = emailStatusFilter === "all" ? allEmails : allEmails.filter((e) => e.status === emailStatusFilter);
+  /* R62 — CURRENT FIRST on the All view. The list interleaved cancelled rows among queued ones
+     by creation time, so the emails that will actually leave tomorrow sat scattered through a
+     page of dead rows. Stable sort by what the row still means — queued (will send) → failed
+     (needs a decision) → sent (history) → cancelled (noise, also dimmed by CSS) — with the
+     newest-first order preserved inside each group. A picked status chip is already one group,
+     so only "All" re-orders. */
+  const QUEUE_STATUS_RANK = { queued: 0, sending: 0, failed: 1, sent: 2, cancelled: 3 };
+  const emailRows = emailStatusFilter === "all"
+    ? allEmails.slice().sort((a, b) => (QUEUE_STATUS_RANK[a.status] ?? 2) - (QUEUE_STATUS_RANK[b.status] ?? 2))
+    : allEmails.filter((e) => e.status === emailStatusFilter);
   // Retry-all-failed (defect 28) — only surfaces once the Failed-only filter narrows the list down
   // to what it would act on, so it never fires against emails that are queued/sent/cancelled.
   const retryAllEmailBtn = failedOnly && emailRows.length
@@ -16777,7 +16798,7 @@ async function loadEmails() {
         || (e.lead_id ? ` onclick="openLeadInToday('${jsArg(e.lead_id)}')" style="cursor:pointer;" title="Open this enquiry's row in My Day on Today"` : "");
     const whoTxt = e.clients ? e.clients.first_name + " " + e.clients.last_name : (leadRow && leadRow.name) || e.to_email || "";
     return `
-    <div class="row-item"${e.lead_id ? ` data-lead-email="${esc(e.lead_id)}"` : ""}>
+    <div class="row-item qrow-${e.status}"${e.lead_id ? ` data-lead-email="${esc(e.lead_id)}"` : ""}>
       ${failed ? `<input type="checkbox" class="email-cb" data-id="${e.id}" aria-label="Select this failed email"${emailSel.has(e.id) ? " checked" : ""} onclick="event.stopPropagation()">` : ""}
       <div class="row-main">
         <div class="t"${titleClick}>${esc(emailTypeLabel(e.email_type))} — ${esc(whoTxt)}${leadRow ? ` <span class="badge grey lead-email-chip" title="This is a website enquiry, not a client — there is no case behind it yet.">enquiry</span>` : ""} ${propCtxChip(emailCtx, e.case_id, "row-prop")}</div>
@@ -16822,7 +16843,9 @@ async function loadEmails() {
       : `Nothing waiting to send.`;
   }
   const smsFailedOnly = smsStatusFilter === "failed";
-  const smsRows = smsStatusFilter === "all" ? allSms : allSms.filter((s) => s.status === smsStatusFilter);
+  const smsRows = smsStatusFilter === "all"
+    ? allSms.slice().sort((a, b) => (QUEUE_STATUS_RANK[a.status] ?? 2) - (QUEUE_STATUS_RANK[b.status] ?? 2))   // R62 — same current-first order as the email list
+    : allSms.filter((s) => s.status === smsStatusFilter);
   const smsCtx = await loadPropContext(smsRows.map((s) => s.case_id));   // R6 / F8 — same fix, same reason
   const retryAllSmsBtn = smsFailedOnly && smsRows.length
     ? `<div class="row-item" style="justify-content:flex-end;"><button class="btn btn-sm btn-primary" onclick="retryAllFailedSms()">Retry all failed (${smsRows.length})</button></div>` : "";
@@ -16832,7 +16855,7 @@ async function loadEmails() {
     const settled = s.status === "sent" || s.status === "cancelled";
     const errLine = s.error && !settled ? (failed ? " · " + esc(s.error) : " · re-queued — last error: " + esc(s.error)) : "";
     return `
-    <div class="row-item">
+    <div class="row-item qrow-${s.status}">
       <div class="row-main">
         <div class="t"${clickable ? ` onclick="openCase('${s.case_id}')" style="cursor:pointer;"` : ""}>${esc(smsTypeLabel(s.sms_type))} — ${esc(s.clients ? [s.clients.first_name, s.clients.last_name].filter(Boolean).join(" ") : s.to_phone || "")} ${propCtxChip(smsCtx, s.case_id, "row-prop")}</div>
         <div class="s">${esc(s.to_phone || "")} · ${s.sent_at ? "sent " + new Date(s.sent_at).toLocaleString("en-GB") : "created " + new Date(s.created_at).toLocaleString("en-GB")}${errLine}</div>

@@ -3740,3 +3740,13 @@ tr.owed-hot > td { background: var(--red-bg); }
 .prot-band-n { background: rgba(255,255,255,0.75); border-radius: 10px; padding: 0 8px; }
 .prot-actions > *:not(:first-child) { opacity: 0.35; transition: opacity 0.12s; }
 #prot-list-table tr:hover .prot-actions > *, .prot-actions:focus-within > * { opacity: 1; }
+
+/* R62 — the R61 leftovers: Emails current-first, fee-status weighting, Settings bands. */
+.row-item.qrow-cancelled { opacity: 0.55; }
+.row-item.qrow-cancelled:hover { opacity: 0.9; }
+.fee-st-paid { color: #1d7a3a; font-weight: 600; }
+.fee-st-requested { color: #9a6200; font-weight: 700; }
+.fee-st-quiet { color: #aab4c3; }
+.settings-details > summary { background: #eef1f5; border-left: 4px solid #1b2a4a; border-radius: 8px; padding: 7px 12px; font-size: 12.5px; font-weight: 800; letter-spacing: 0.05em; text-transform: uppercase; color: #33415c; cursor: pointer; user-select: none; }
+.settings-details { margin-bottom: 14px; }
+.settings-details[open] > summary { margin-bottom: 10px; }
