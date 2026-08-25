@@ -3659,3 +3659,24 @@ tr.owed-hot > td { background: var(--red-bg); }
 .ref-chase-row { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 13.5px; color: #374151; }
 .ref-chase-row input { width: auto; margin: 0; }
 @media (max-width: 700px) { .cl-book { grid-template-columns: 1fr; } }
+
+/* R57 — pinned objective line + milestone checklist (appended layer). */
+.cs-objective { display: flex; align-items: baseline; gap: 6px; margin-top: 6px; font-size: 13.5px; cursor: pointer; max-width: 640px; }
+.cs-objective:hover .cs-obj-text { text-decoration: underline; text-decoration-style: dotted; }
+.cs-obj-text { color: #1f2937; font-style: italic; min-width: 0; }
+.cs-obj-text.cs-muted { font-style: normal; }
+.cs-obj-edit { opacity: 0.45; font-size: 12px; flex: 0 0 auto; }
+.cs-objective:hover .cs-obj-edit { opacity: 1; }
+.case-milestones { margin: 6px 0 10px; border: 1px solid #e5eaf1; border-radius: 10px; background: #fff; padding: 8px 12px; }
+.case-milestones summary { cursor: pointer; font-weight: 600; font-size: 13.5px; color: #0f2a4a; }
+.case-milestones .ms-list { margin-top: 8px; display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 4px 18px; }
+.ms-row { display: flex; align-items: baseline; gap: 8px; font-size: 13px; padding: 2px 0; }
+.ms-row .ms-tick { width: 16px; text-align: center; flex: 0 0 auto; font-weight: 700; }
+.ms-row.done .ms-tick { color: var(--green, #1a7f4b); }
+.ms-row.current .ms-tick { color: var(--blue, #1d4ed8); }
+.ms-row.todo { color: #94a3b8; }
+.ms-row.todo .ms-tick { color: #cbd5e1; }
+.ms-row.lost { color: var(--red, #b91c1c); }
+.ms-row.lost .ms-tick { color: var(--red, #b91c1c); }
+.ms-row.current .ms-label { font-weight: 600; }
+.ms-row .ms-date { margin-left: auto; color: #6b7280; font-size: 12px; }

@@ -9475,6 +9475,95 @@ window.refSetStatus = async function (refId, caseId, status) {
   loadCaseReferrals(caseId);
 };
 /* ==========================================================================
+   R57 — THE PINNED OBJECTIVE + THE MILESTONE CHECKLIST (Revolution pointers).
+   The objective is the one-line "why" of the case — Revolution pins "Marcus is
+   a friend and he is looking to purchase his first property" on the summary,
+   and it is the single most useful sentence on that screen: whoever picks up
+   the phone knows the goal before the first ring. Ours lives on cases.objective
+   (nullable text, audit-logged like every case column) and renders in the
+   identity header. The milestones fold answers "where is this case and what
+   has actually been done" from columns the case row ALREADY carries — created,
+   submitted_at, offer_issued_date, exchange_date, completed_at, stage — so it
+   costs no extra read and can never disagree with the fields it summarises.
+   ========================================================================== */
+const OBJ_PLACEHOLDER = "Add the client's objective — one sentence on what this case is for";
+function objectiveLineHtml(c) {
+  // Un-migrated database: select("*") doesn't return the key, so the line simply doesn't render.
+  if (!c || !Object.prototype.hasOwnProperty.call(c, "objective")) return "";
+  const has = !!(c.objective && String(c.objective).trim());
+  return `<div class="cs-objective" id="cs-objective" role="button" tabindex="0" title="The one-line 'why' of this case — click to edit.">
+    <span class="cs-obj-ic" aria-hidden="true">🎯</span>
+    <span class="cs-obj-text${has ? "" : " cs-muted"}" id="cs-obj-text">${has ? esc(c.objective) : OBJ_PLACEHOLDER}</span>
+    <span class="cs-obj-edit" aria-hidden="true">✏️</span>
+  </div>`;
+}
+async function editCaseObjective(caseId, c) {
+  const got = await openOverlay(`
+    <h3>🎯 Client objective</h3>
+    <p class="panel-sub">One sentence on what this case is for — pinned at the top of the case so whoever opens it knows the goal. Stored on the case and audit-logged like any other case edit.</p>
+    <label>Objective
+      <textarea id="obj-text" rows="2" maxlength="240" placeholder='e.g. "First home purchase — friend of the Marcus family, hoping to complete before Christmas"'>${esc((c && c.objective) || "")}</textarea>
+    </label>
+    <div class="modal-actions"><div>${c && c.objective ? '<button type="button" class="btn" id="obj-clear">Remove</button>' : ""}</div><div class="right">
+      <button type="button" class="btn" id="obj-cancel">Cancel</button>
+      <button type="button" class="btn btn-primary" id="obj-ok">Save objective</button>
+    </div></div>`, (finish, box) => {
+    box.querySelector("#obj-cancel").onclick = () => finish(null);
+    const clr = box.querySelector("#obj-clear");
+    if (clr) clr.onclick = () => finish({ text: "" });
+    box.querySelector("#obj-ok").onclick = () => finish({ text: (box.querySelector("#obj-text").value || "").trim() });
+    setTimeout(() => box.querySelector("#obj-text")?.focus(), 50);
+  });
+  if (!got) return;
+  const val = got.text || null;
+  const { error } = await db.from("cases").update({ objective: val }).eq("id", caseId);
+  if (error) return toast(isMissingColumnError(error) ? "This database doesn't have the objective column yet — nothing was saved." : "Couldn't save the objective: " + error.message);
+  await refreshOpenedStamp(caseId); // our own write must not trip the form's stale-write guard (R18-D1)
+  if (c) c.objective = val;
+  const t = $("#cs-obj-text");
+  if (t) { t.textContent = val || OBJ_PLACEHOLDER; t.classList.toggle("cs-muted", !val); }
+  toast(val ? "Objective saved" : "Objective removed");
+}
+/* The milestone checklist. Three states per row — done (✓, with the date where a column carries
+   one), current (→, the stage the case is standing in), still-to-come (○) — plus ✕ rows on a
+   not-proceeding case. Milestones tick off the case's own recorded columns FIRST and the stage
+   position second, so an imported back-book case with no stage history still reads honestly:
+   its completion date ticks Completed even though no stage_change event was ever logged. A
+   product transfer skips the Exchange row (same lender, no conveyancing — the R15 §5 rule). */
+function caseMilestonesHtml(c) {
+  if (!c || !c.id) return "";
+  const idx = stageIdx(c.stage);
+  const lost = c.stage === "not_proceeding";
+  const has = (v) => v != null && String(v).trim() !== "";
+  const passed = (k) => !lost && idx > stageIdx(k);
+  const current = (k) => !lost && idx === stageIdx(k);
+  const rows = [];
+  const add = (label, k, dateIso, extraDone) => {
+    const done = !!extraDone || (dateIso ? has(dateIso) : false) || (k ? passed(k) : false);
+    const state = done ? "done" : (k && current(k)) ? "current" : "todo";
+    rows.push({ label, state, date: (dateIso && has(dateIso)) ? fmtD(dateIso) : "" });
+  };
+  add("Case created", null, c.created_at, true);
+  add("Fact find", "fact_find", null);
+  add("Decision in principle", "decision_in_principle", null);
+  add("Application submitted", "application", c.submitted_at);
+  add("Offer issued", "offer", c.offer_issued_date);
+  if (c.case_kind !== "product_transfer") add("Exchange", "exchange", c.exchange_date);
+  add("Completed", "completed", c.completed_at, c.stage === "completed");
+  const prot = c.protection_status && c.protection_status !== "not_discussed";
+  rows.push({ label: `Protection conversation${prot ? " — " + String(c.protection_status).replace(/_/g, " ") : ""}`, state: prot ? "done" : "todo", date: "" });
+  if (lost) rows.push({ label: `Closed — not proceeding${c.lost_reason ? " (" + (LOST_REASON_LABEL[c.lost_reason] || String(c.lost_reason).replace(/_/g, " ")) + ")" : ""}`, state: "lost", date: "" });
+  const done = rows.filter((r) => r.state === "done").length;
+  const cur = rows.find((r) => r.state === "current");
+  const TICK = { done: "✓", current: "→", todo: "○", lost: "✕" };
+  return `<details class="case-milestones" id="case-milestones">
+    <summary>Milestones <span class="cs-muted">— ${done} of ${rows.length} done${cur ? " · now: " + esc(cur.label) : lost ? " · closed" : ""}</span></summary>
+    <div class="ms-list">${rows.map((r) => `
+      <div class="ms-row ${r.state}"><span class="ms-tick" aria-hidden="true">${TICK[r.state]}</span><span class="ms-label">${esc(r.label)}</span><span class="ms-date">${r.date}</span></div>`).join("")}
+    </div>
+  </details>`;
+}
+/* ==========================================================================
    R12b · W-30 — STAGE-ENTRY PROMPTS
    Two stages have a field that is effectively part of arriving at them, and
    both were routinely left blank because nothing ever asked: a case at
@@ -12177,6 +12266,7 @@ window.openCase = async function (id, opts = {}) {
               ? `<span class="cs-referrer" id="cs-referrer" title="${esc(referrerName)} referred this client. Open their record to see everyone they have sent.">🤝 Referred by <a href="#" class="cs-referrer-link" data-client="${esc(c.referrer_client_id)}" onclick="event.preventDefault();openClient('${jsArg(c.referrer_client_id)}')">${esc(referrerName)}</a></span>` : ""}
           </div>
           ${caseClient && (caseClient.phone || caseClient.email) ? `<div class="cs-contact">${caseClient.phone ? "📞 " + telLink(caseClient.phone) : ""}${caseClient.email ? "✉️ " + mailLink(caseClient.email) : ""}</div>` : ""}
+          ${objectiveLineHtml(c)}
         </div>
         <div class="cs-top-actions">
           ${/* R5-6 — only on a completed case with a tracked rate and no successor yet. The nightly
@@ -12499,6 +12589,7 @@ window.openCase = async function (id, opts = {}) {
          deleted: the node (and its toggle wiring) stays in the DOM, just hidden. */ ""}
     ${id ? `<div id="case-sec-wrap"${caseSectionVisible("security", c.stage) ? "" : ' class="hidden"'}>${securityCardHtml(c, caseClient, secClient)}</div>` : ""}
     ${summaryHeader}
+    ${id ? caseMilestonesHtml(c) : ""}
     ${c.retention_source_case_id ? `<p class="panel-sub" style="margin-top:-8px;">🔁 Retention opportunity — linked to a completed case. <span class="t" style="cursor:pointer;text-decoration:underline;" onclick="openCase('${c.retention_source_case_id}')">View original case</span></p>` : ""}
     ${/* R15 · §6 — a not-proceeding case says WHY, prominently. Prefer the recorded lost_reason (a
          select("*") carries it when the M2 columns exist); fall back to the last note; and offer a
@@ -13479,6 +13570,12 @@ window.openCase = async function (id, opts = {}) {
     if ($("#act-ref-survey")) $("#act-ref-survey").onclick = () => makeReferral(id, c, "survey");
     if ($("#act-ref-conveyancing")) $("#act-ref-conveyancing").onclick = () => makeReferral(id, c, "conveyancing");
     loadCaseReferrals(id); // async fill of #case-referrals; empty stays invisible
+    // R57 — the pinned objective: click (or keyboard-activate) the line to edit it.
+    const objEl = $("#cs-objective");
+    if (objEl) {
+      objEl.onclick = () => editCaseObjective(id, c);
+      objEl.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); editCaseObjective(id, c); } };
+    }
     /* R15 · §2 — the "More actions" overflow toggle. In-memory only, like the security card: the
        modal re-renders on every open so the menu is born closed and this just flips .hidden + the
        aria state. A click on the menu itself does not bubble up and re-close it. */
