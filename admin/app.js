@@ -9569,7 +9569,12 @@ async function rateEndOutcome(caseId, c) {
     </div>
     <label class="reo-choice" style="margin-top:10px;"><input type="radio" name="reo-kind" value="sold">
       <span><strong>Property sold / mortgage redeemed</strong><br>
-      <span class="cs-muted">Stop tracking this rate — the case leaves the rates feed for good.</span></span></label>
+      <span class="cs-muted">Stop tracking this rate — the case leaves the rates feed for good, and the client's record shows the property as SOLD.</span></span></label>
+    <div id="reo-sold-fields" style="margin:8px 0 4px 24px;opacity:0.45;">
+      <label>Date sold / redeemed <span class="cs-muted">(defaults to today)</span>
+        <input id="reo-sold-date" type="date" style="margin-top:4px;max-width:180px;">
+      </label>
+    </div>
     <div class="ovl-err" id="reo-err"></div>
     <div class="modal-actions"><div></div><div class="right">
       <button type="button" class="btn" id="reo-cancel">Cancel</button>
@@ -9584,7 +9589,13 @@ async function rateEndOutcome(caseId, c) {
     }; });
     box.querySelector("#reo-date").addEventListener("input", () => { estimated = false; });
     const fields = box.querySelector("#reo-renew-fields");
-    box.querySelectorAll('input[name="reo-kind"]').forEach((r) => { r.onchange = () => { fields.style.opacity = r.value === "renewed" && r.checked ? "1" : "0.45"; }; });
+    const soldFields = box.querySelector("#reo-sold-fields");
+    box.querySelector("#reo-sold-date").value = localDateStr(); // R59 — today unless he says otherwise
+    box.querySelectorAll('input[name="reo-kind"]').forEach((r) => { r.onchange = () => {
+      const renewed = box.querySelector('input[name="reo-kind"]:checked').value === "renewed";
+      fields.style.opacity = renewed ? "1" : "0.45";
+      soldFields.style.opacity = renewed ? "0.45" : "1";
+    }; });
     box.querySelector("#reo-cancel").onclick = () => finish(null);
     box.querySelector("#reo-ok").onclick = () => {
       const kind = box.querySelector('input[name="reo-kind"]:checked').value;
@@ -9594,7 +9605,7 @@ async function rateEndOutcome(caseId, c) {
         if (dt <= localDateStr()) { box.querySelector("#reo-err").textContent = "The new rate end date should be in the future."; return; }
         finish({ kind, date: dt, estimated, lender: (box.querySelector("#reo-lender").value || "").trim(), rate: box.querySelector("#reo-rate").value });
       } else {
-        finish({ kind });
+        finish({ kind, soldDate: box.querySelector("#reo-sold-date").value || localDateStr() });
       }
     };
   });
@@ -9628,6 +9639,13 @@ async function rateEndOutcome(caseId, c) {
     if (got.rate !== "" && got.rate != null && isFinite(Number(got.rate))) patch.rate_percent = Number(got.rate);
     const { error } = await db.from("cases").update(patch).eq("id", caseId);
     if (error) return toast("Couldn't record the outcome: " + error.message);
+    /* R59 — a renewed outcome un-marks a stale SOLD flag (recording sold then correcting to
+       renewed must not leave the client's record shouting SOLD on a live mortgage). Separate
+       best-effort write, M-gated like the lost columns above. */
+    if (c.property_sold_at) {
+      const { error: unsoldErr } = await db.from("cases").update({ property_sold_at: null }).eq("id", caseId);
+      if (unsoldErr && !isMissingColumnError(unsoldErr)) toast("Note: the old SOLD marker wasn't cleared: " + unsoldErr.message);
+    }
     await db.from("case_notes").insert({ case_id: caseId,
       body: `📌 Rate-end outcome — renewed elsewhere${got.lender ? " with " + got.lender : ""}. Now watching the new rate end ${fmtD(got.date)}${got.estimated ? " (estimated from the term)" : ""}; retention will resurface it in the reminder window.`,
       created_by: uid });
@@ -9635,8 +9653,12 @@ async function rateEndOutcome(caseId, c) {
   } else {
     const { error } = await db.from("cases").update({ rate_end_date: null, erc_end_date: null }).eq("id", caseId);
     if (error) return toast("Couldn't record the outcome: " + error.message);
+    /* R59 — the visible SOLD marker (danielpotts: "this needs to be obvious" on the client
+       record). Separate best-effort write so an un-migrated database still gets the close. */
+    const { error: soldErr } = await db.from("cases").update({ property_sold_at: got.soldDate }).eq("id", caseId);
+    if (soldErr && !isMissingColumnError(soldErr)) toast("Note: the sold date wasn't recorded: " + soldErr.message);
     await db.from("case_notes").insert({ case_id: caseId,
-      body: "📌 Rate-end outcome — property sold / mortgage redeemed. Rate tracking closed; this case has left the rates feed.",
+      body: `📌 Rate-end outcome — property sold / mortgage redeemed${got.soldDate ? " on " + fmtD(got.soldDate) : ""}. Rate tracking closed; this case has left the rates feed.`,
       created_by: uid });
     toast("Outcome recorded — rate tracking closed");
   }
@@ -9670,6 +9692,9 @@ function caseMilestonesHtml(c) {
   add("Completed", "completed", c.completed_at, c.stage === "completed");
   const prot = c.protection_status && c.protection_status !== "not_discussed";
   rows.push({ label: `Protection conversation${prot ? " — " + String(c.protection_status).replace(/_/g, " ") : ""}`, state: prot ? "done" : "todo", date: "" });
+  /* R59 — a recorded sold outcome is part of this case's story: the last thing that happened. */
+  if (Object.prototype.hasOwnProperty.call(c, "property_sold_at") && c.property_sold_at)
+    rows.push({ label: "Property sold / mortgage redeemed", state: "done", date: fmtD(c.property_sold_at) });
   if (lost) rows.push({ label: `Closed — not proceeding${c.lost_reason ? " (" + (LOST_REASON_LABEL[c.lost_reason] || String(c.lost_reason).replace(/_/g, " ")) + ")" : ""}`, state: "lost", date: "" });
   const done = rows.filter((r) => r.state === "done").length;
   const cur = rows.find((r) => r.state === "current");
@@ -12376,6 +12401,11 @@ window.openCase = async function (id, opts = {}) {
             ${identityChipIsFallback ? "" : `<span class="cs-kind">${esc(caseTypeLabel(c))}</span>
             ${c.lender ? `<span class="cs-lender">${lenderIcon(c.lender, 14)}${esc(c.lender)}</span>` : ""}`}
             ${stageBadge(c.stage, { cls: "cs-stage-badge" })}
+            ${/* R59 — the SOLD flag on the case's own identity line, same read as the client
+                 book's badge: anyone opening this case sees at once that the property is gone
+                 and no retention conversation belongs here. */ ""}
+            ${Object.prototype.hasOwnProperty.call(c, "property_sold_at") && c.property_sold_at
+              ? `<span class="badge cl-badge-sold cs-sold-flag" title="Property sold / mortgage redeemed on ${esc(fmtD(c.property_sold_at))} — recorded via the rate-end outcome. Rate tracking is closed.">🏷️ SOLD · ${esc(fmtD(c.property_sold_at))}</span>` : ""}
             ${sharedHtml}
             ${/* R9-1 — WHO SENT THIS CLIENT. It belongs on the identity line and nowhere else: an
                  adviser picking up the phone on a referred client should not be able to miss that
@@ -15831,6 +15861,24 @@ const KIND_ICON = {
   purchase: "🏠", first_time_buyer: "🔑", remortgage: "♻️",
   product_transfer: "🔁", buy_to_let: "🏘️", other: "📄",
 };
+/* R59 — SOLD vs RETAINED, said out loud. On a portfolio client (Tina Kirkman: five properties,
+   four tracked rates) the book could not answer the one question the rate-end outcome creates:
+   WHICH property was sold and which is still on the books? Recording "property sold" only
+   CLEARED columns, so a sold case looked identical to any old completed case. This badge reads
+   the R59 `property_sold_at` stamp first (SOLD, with the date), then falls back to the tracked
+   rate: overdue = amber "rate ended" (an outcome is owed), future = green "retained". A completed
+   case with neither stamp nor tracked rate stays quiet — unknown is not a status. hasOwnProperty
+   gates the sold read so an un-migrated database renders exactly as R58 did. */
+function caseRateStatusHtml(x) {
+  if (Object.prototype.hasOwnProperty.call(x, "property_sold_at") && x.property_sold_at)
+    return `<span class="badge cl-badge-sold" title="Recorded via the rate-end outcome: property sold / mortgage redeemed on ${esc(fmtD(x.property_sold_at))}. Rate tracking is closed — this one never comes back to My Day.">🏷️ SOLD · ${esc(fmtD(x.property_sold_at))}</span>`;
+  if (x.stage === "completed" && x.rate_end_date) {
+    return x.rate_end_date < localDateStr()
+      ? `<span class="badge amber cl-badge-watch" title="The tracked rate ended ${esc(fmtD(x.rate_end_date))} and no outcome is recorded yet — open the case and record one (renewed, or property sold).">⏳ rate ended ${esc(fmtD(x.rate_end_date))}</span>`
+      : `<span class="badge green cl-badge-watch" title="Retained — this mortgage is live and watched. Retention resurfaces it before the rate ends ${esc(fmtD(x.rate_end_date))}.">✅ retained · ends ${esc(fmtD(x.rate_end_date))}</span>`;
+  }
+  return "";
+}
 /* One case card. `opts.grouped` drops the chip (the group heading above already carries it) and
    `opts.previous` badges an earlier case on the same building. */
 function clientCaseRowHtml(x, opts = {}) {
@@ -15842,10 +15890,12 @@ function clientCaseRowHtml(x, opts = {}) {
   const money = x.loan_amount
     ? `<div class="cl-card-money">${esc(fmtM(x.loan_amount))}${rateBit ? ` <span class="cl-card-rate">· ${rateBit}</span>` : ""}</div>`
     : "";
-  return `<div class="row-item cl-card"><span class="cl-card-icon" aria-hidden="true">${KIND_ICON[x.case_kind] || KIND_ICON.other}</span><div class="row-main">
+  const sold = Object.prototype.hasOwnProperty.call(x, "property_sold_at") && x.property_sold_at;
+  return `<div class="row-item cl-card${sold ? " cl-card-sold" : ""}"><span class="cl-card-icon" aria-hidden="true">${KIND_ICON[x.case_kind] || KIND_ICON.other}</span><div class="row-main">
         <div class="t" onclick="closeModal();openCase('${x.id}')">${lenderIcon(x.lender)}${esc(title)}</div>
         ${money}
         <div class="s">${chip}${chip ? " " : ""}Started ${fmtD(x.created_at)}${x.rate_end_date ? " · rate ends " + fmtD(x.rate_end_date) : ""}</div></div>
+        ${caseRateStatusHtml(x)}
         ${opts.previous ? `<span class="badge grey" title="An earlier case on this property — the most recent one is listed first">previous</span>` : ""}
         ${x.assigned_to ? assigneeChipHtml(x.assigned_to) : '<span class="chip" title="No adviser assigned">—</span>'}
         ${stageBadge(x.stage)}${clientCaseProtChipHtml(x)}</div>`;

@@ -3685,3 +3685,11 @@ tr.owed-hot > td { background: var(--red-bg); }
 .reo-choice { display: flex; gap: 10px; align-items: flex-start; font-size: 13.5px; cursor: pointer; }
 .reo-choice input { margin-top: 3px; width: auto; }
 #reo-renew-fields { transition: opacity 0.15s; }
+
+/* R59 — sold vs retained, obvious on the client's book and the case header. */
+.badge.cl-badge-sold { background: #3d4453; color: #fff; font-weight: 700; letter-spacing: 0.02em; white-space: nowrap; }
+.badge.cl-badge-watch { white-space: nowrap; }
+.cl-card.cl-card-sold { opacity: 0.78; border-left: 3px solid #3d4453; }
+.cl-card.cl-card-sold .cl-card-money { color: #556275; }
+.cs-sold-flag { font-size: 12px; }
+#reo-sold-fields { transition: opacity 0.15s; }

@@ -1340,7 +1340,7 @@
         "waiting_on", "solicitor_firm", "doc_token", "referrer_client_id",
         "current_balance", "reversion_rate", "monthly_payment", "erc_amount",
         "policy_start_date", "exchange_date", "offer_issued_date", "repayment_method",
-        "mortgage_account_number", "objective",
+        "mortgage_account_number", "objective", "property_sold_at",
         "monthly_rent", "icr_stress_rate", "icr_required_pct",
         "lender_reference", "application_status", "application_status_at"]
         .forEach(function (f) { if (r[f] === undefined) r[f] = null; });
@@ -1710,6 +1710,9 @@
       /* R57 — the pinned objective. Nullable text, no backfill, same rule as
          every plain-column addition above. */
       objective: o.objective || null,
+      /* R59 — property_sold_at, the visible SOLD stamp written by the rate-end
+         outcome's sold path. Nullable date, no backfill, same rule as above. */
+      property_sold_at: o.property_sold_at || null,
       /* R16 §A/§B — BTL rent/ICR trio (numerics, null = not recorded) and the
          submit-to-lender tracker (lender_reference text, application_status
          text, application_status_at timestamptz). No backfill — null on
