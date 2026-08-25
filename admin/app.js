@@ -309,6 +309,25 @@ function debounce(fn, wait) {
     t = setTimeout(() => fn.apply(this, args), wait);
   };
 }
+/* R55 · F7 — SheetJS on demand. The ~1MB xlsx.full.min.js used to be a blocking <script> on every
+   boot, paid by everyone for flows (Import, reconciliation, Revolution export) most sessions never
+   open. Loaded here on first use instead; memoised so concurrent callers share one fetch, and the
+   promise is cleared on failure so a flaky connection can retry rather than caching the outage.
+   The CDN URL and the CSP allowance for cdn.sheetjs.com are unchanged. */
+let xlsxLoadPromise = null;
+function ensureXlsx() {
+  if (typeof XLSX !== "undefined") return Promise.resolve();
+  if (!xlsxLoadPromise) {
+    xlsxLoadPromise = new Promise((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = "https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js";
+      s.onload = () => resolve();
+      s.onerror = () => { xlsxLoadPromise = null; reject(new Error("The spreadsheet reader could not load — check your connection and try again.")); };
+      document.head.appendChild(s);
+    });
+  }
+  return xlsxLoadPromise;
+}
 /* T1-21 — fmtD no longer hands a non-ISO string to new Date(). `new Date("01/02/2026")` is parsed
    by the engine as US month-first and silently renders "2 Jan 2026" for a UK 1 February, which is
    exactly how a mis-read import date survived review. Date objects, timestamps and ISO strings
@@ -2340,6 +2359,8 @@ function propChip(c, opts = {}) {
 let PROP_ADDR_SUPPORTED = null; // null = not yet known
 async function propAddrSupported() {
   if (PROP_ADDR_SUPPORTED !== null) return PROP_ADDR_SUPPORTED;
+  await runCombinedSupportProbe(); // R55 F2 - one shared probe seeds all eight caches
+  if (PROP_ADDR_SUPPORTED !== null) return PROP_ADDR_SUPPORTED;
   try {
     const { data, error } = await db.from("cases").select("id,property_address").limit(1);
     if (error) {
@@ -2378,6 +2399,8 @@ function notePropAddrFromStarRow(row) {
    ========================================================================== */
 let REFERRER_SUPPORTED = null;
 async function referrerSupported() {
+  if (REFERRER_SUPPORTED !== null) return REFERRER_SUPPORTED;
+  await runCombinedSupportProbe(); // R55 F2 - one shared probe seeds all eight caches
   if (REFERRER_SUPPORTED !== null) return REFERRER_SUPPORTED;
   try {
     const { data, error } = await db.from("cases").select("id,referrer_client_id").limit(1);
@@ -5351,6 +5374,8 @@ function noteCallPackFromStarRow(row) {
 }
 async function callPackSupported() {
   if (CALLPACK_SUPPORTED !== null) return CALLPACK_SUPPORTED;
+  await runCombinedSupportProbe(); // R55 F2 - one shared probe seeds all eight caches
+  if (CALLPACK_SUPPORTED !== null) return CALLPACK_SUPPORTED;
   try {
     const { data, error } = await db.from("cases").select("id," + CALLPACK_SELECT).limit(1);
     if (error) { if (isMissingColumnError(error)) { CALLPACK_SUPPORTED = false; return false; } return false; }
@@ -5383,6 +5408,8 @@ function notePolicyStartFromStarRow(row) {
 }
 async function policyStartSupported() {
   if (POLICY_START_SUPPORTED !== null) return POLICY_START_SUPPORTED;
+  await runCombinedSupportProbe(); // R55 F2 - one shared probe seeds all eight caches
+  if (POLICY_START_SUPPORTED !== null) return POLICY_START_SUPPORTED;
   try {
     const { data, error } = await db.from("cases").select("id,policy_start_date").limit(1);
     if (error) { if (isMissingColumnError(error)) { POLICY_START_SUPPORTED = false; return false; } return false; }
@@ -5405,6 +5432,8 @@ function noteMortgageAcctFromStarRow(row) {
   MORTGAGE_ACCT_SUPPORTED = Object.prototype.hasOwnProperty.call(row, "mortgage_account_number");
 }
 async function mortgageAcctSupported() {
+  if (MORTGAGE_ACCT_SUPPORTED !== null) return MORTGAGE_ACCT_SUPPORTED;
+  await runCombinedSupportProbe(); // R55 F2 - one shared probe seeds all eight caches
   if (MORTGAGE_ACCT_SUPPORTED !== null) return MORTGAGE_ACCT_SUPPORTED;
   try {
     const { data, error } = await db.from("cases").select("id,mortgage_account_number").limit(1);
@@ -5452,6 +5481,8 @@ function noteForwardFromStarRow(row) {
 }
 async function forwardDatesSupported() {
   if (FORWARD_SUPPORTED !== null) return FORWARD_SUPPORTED;
+  await runCombinedSupportProbe(); // R55 F2 - one shared probe seeds all eight caches
+  if (FORWARD_SUPPORTED !== null) return FORWARD_SUPPORTED;
   try {
     const { data, error } = await db.from("cases").select("id," + FORWARD_COLS.join(",")).limit(1);
     if (error) { if (isMissingColumnError(error)) { FORWARD_SUPPORTED = false; return false; } return false; }
@@ -5484,6 +5515,8 @@ function noteBtlIcrFromStarRow(row) {
 }
 async function btlIcrSupported() {
   if (BTL_ICR_SUPPORTED !== null) return BTL_ICR_SUPPORTED;
+  await runCombinedSupportProbe(); // R55 F2 - one shared probe seeds all eight caches
+  if (BTL_ICR_SUPPORTED !== null) return BTL_ICR_SUPPORTED;
   try {
     const { data, error } = await db.from("cases").select("id,monthly_rent").limit(1);
     if (error) { if (isMissingColumnError(error)) { BTL_ICR_SUPPORTED = false; return false; } return false; }
@@ -5499,6 +5532,8 @@ function noteLenderTrackFromStarRow(row) {
 }
 async function lenderTrackSupported() {
   if (LENDER_TRACK_SUPPORTED !== null) return LENDER_TRACK_SUPPORTED;
+  await runCombinedSupportProbe(); // R55 F2 - one shared probe seeds all eight caches
+  if (LENDER_TRACK_SUPPORTED !== null) return LENDER_TRACK_SUPPORTED;
   try {
     const { data, error } = await db.from("cases").select("id,application_status").limit(1);
     if (error) { if (isMissingColumnError(error)) { LENDER_TRACK_SUPPORTED = false; return false; } return false; }
@@ -5506,6 +5541,53 @@ async function lenderTrackSupported() {
     LENDER_TRACK_SUPPORTED = Object.prototype.hasOwnProperty.call(data[0], "application_status");
     return LENDER_TRACK_SUPPORTED;
   } catch (e) { return false; }
+}
+/* R55 · F2 — ONE support probe instead of eight. Every *Supported() above asks the database the
+   same shaped question with one column swapped, which cost eight separate limit-1 round-trips on a
+   cold boot. This asks about ALL the probed columns in a single read and seeds every still-unknown
+   cache from the one returned row (hasOwnProperty — the same verdict each probe reaches alone).
+   If the read errors (any ONE column missing 42703s the whole select — an un-migrated database) or
+   returns no rows, it proves nothing: it reports false and every probe falls back to its own
+   original single-column read, preserving the per-migration feature-detect semantics the mock's
+   migration toggles and the M2/M7 tests rely on. Memoised as a promise so the eight probes racing
+   at boot share one request; reset to null on failure is deliberately NOT done — a failed combined
+   probe means "use the per-column paths", and re-asking a broken question on every probe call
+   would just re-add the round-trips this exists to remove. */
+/* R55 · F3 — the Today-visit watchtower auto-run, throttled. run_watchtower() also runs on the
+   06:15 cron and after saves, so re-running it on EVERY Today visit (~0.4s of DB work, awaited,
+   holding up the Watchtower and radar paints below it) mostly re-derived what was already true.
+   At most one auto-run per 10 minutes per browser (localStorage — the same pattern as the Outlook
+   auto-sync). Save paths call wtMarkStale() so T1-11's promise — the list shrinks as you fix
+   things — still holds on the very next Today paint, and the Run-checks button remains an
+   unconditional immediate run. localStorage failures degrade to "always run", never to "never". */
+const WT_AUTORUN_MS = 10 * 60000;
+function wtAutoRunDue() { try { return Date.now() - Number(localStorage.getItem("nx_wt_lastrun") || 0) > WT_AUTORUN_MS; } catch (e) { return true; } }
+function wtStampRun() { try { localStorage.setItem("nx_wt_lastrun", String(Date.now())); } catch (e) {} }
+function wtMarkStale() { try { localStorage.removeItem("nx_wt_lastrun"); } catch (e) {} }
+let COMBINED_PROBE_PROMISE = null;
+function runCombinedSupportProbe() {
+  if (!COMBINED_PROBE_PROMISE) {
+    COMBINED_PROBE_PROMISE = (async () => {
+      try {
+        const cols = ["id", "property_address", "referrer_client_id", "policy_start_date", "mortgage_account_number"]
+          .concat(FORWARD_COLS, BTL_COLS, LENDER_COLS, CALLPACK_COLS).join(",");
+        const { data, error } = await db.from("cases").select(cols).limit(1);
+        if (error || !data || !data.length) return false;
+        const row = data[0];
+        const has = (c) => Object.prototype.hasOwnProperty.call(row, c);
+        if (PROP_ADDR_SUPPORTED === null) PROP_ADDR_SUPPORTED = has("property_address");
+        if (REFERRER_SUPPORTED === null) REFERRER_SUPPORTED = has("referrer_client_id");
+        if (POLICY_START_SUPPORTED === null) POLICY_START_SUPPORTED = has("policy_start_date");
+        if (MORTGAGE_ACCT_SUPPORTED === null) MORTGAGE_ACCT_SUPPORTED = has("mortgage_account_number");
+        if (FORWARD_SUPPORTED === null) FORWARD_SUPPORTED = has("exchange_date");
+        if (BTL_ICR_SUPPORTED === null) BTL_ICR_SUPPORTED = has("monthly_rent");
+        if (LENDER_TRACK_SUPPORTED === null) LENDER_TRACK_SUPPORTED = has("application_status");
+        if (CALLPACK_SUPPORTED === null) CALLPACK_SUPPORTED = has("current_balance");
+        return true;
+      } catch (e) { return false; }
+    })();
+  }
+  return COMBINED_PROBE_PROMISE;
 }
 /* CANONICAL ICR/yield calc (R16 SPEC §A). One helper, so the chip, the header echo
    and the tests all read the same numbers. Returns null when there is nothing to
@@ -6192,7 +6274,12 @@ async function loadDashboard() {
   // T1-11 — "resolves itself when fixed" is what #watchtower-sub promises, but the checker only ran
   // from the Run checks button, so a list the administrator was actively working never shrank.
   // Re-run it before reading the alerts; if the RPC fails, still render whatever rows exist.
-  try { await db.rpc("run_watchtower"); } catch (e) { /* degraded: show the last known alerts */ }
+  // R55 · F3 — throttled: see wtAutoRunDue(). A save busts the stamp, so a just-fixed alert
+  // still resolves on the next Today paint; otherwise the cron + the last run within 10 minutes
+  // are considered fresh enough and the ~0.4s awaited RPC is skipped.
+  if (wtAutoRunDue()) {
+    try { await db.rpc("run_watchtower"); wtStampRun(); } catch (e) { /* degraded: show the last known alerts */ }
+  }
   loadWatchtower();
   loadUnactioned(); // R17 · §2 — the no-next-action radar, its own reads, scoped like the strip
   if (settings.outlook_enabled === "1") {
@@ -8180,6 +8267,7 @@ $("#watchtower-run").addEventListener("click", async () => {
   const { data, error } = await db.rpc("run_watchtower");
   btn.disabled = false; btn.textContent = "Run checks";
   if (error) return toast("Error: " + error.message);
+  wtStampRun(); // R55 · F3 — a manual run is as fresh as an auto-run
   /* R11-3 — WHY THIS TOAST NO LONGER PROMISES "N new".
      The backlog item was "Run checks always says 0 new". It does, and the reason is not a bug in
      the reading: run_watchtower returns jsonb {"new":N,"open":N,"resolved":N} and `r.new` reads
@@ -12832,7 +12920,7 @@ window.openCase = async function (id, opts = {}) {
             "OK = reload the case (DISCARDS the edits you have on screen)\n" +
             "Cancel = keep editing (your values stay; Save again to overwrite the other change)"
           );
-          loadPipeline(); loadDashboard();
+          wtMarkStale(); loadPipeline(); loadDashboard(); // R55 · F3 — a case write must re-run the checker
           if (reload) { openCase(id); return; }
           // Kept editing: re-baseline on the current row so the next Save is a deliberate overwrite
           // rather than an unwinnable loop against the same conflict.
@@ -12863,7 +12951,7 @@ window.openCase = async function (id, opts = {}) {
         if (row.stage === "completed" && c.stage !== "completed") {
           await maybeQueueReferralThankYou(id, { ...c, ...row, id });
         }
-        loadPipeline(); loadDashboard();
+        wtMarkStale(); loadPipeline(); loadDashboard(); // R55 · F3 — a case write must re-run the checker
         // Same guard as the client-save path (2379): a case-level fix (assign adviser, add fee) is
         // exactly what Data Health flags, so refresh it if that page is the one behind the modal.
         if ($("#page-data") && !$("#page-data").classList.contains("hidden")) loadDataHealth();
@@ -12938,7 +13026,7 @@ window.openCase = async function (id, opts = {}) {
           + (mortgageAcctMissing ? " · mortgage / account number NOT saved (this database has no mortgage_account_number column)" : "")
           + (btlMissing ? " · rent / ICR NOT saved (this database has no BTL rental columns)" : "")
           + (lenderTrackMissing ? " · lender reference / application status NOT saved (this database has no lender-tracker columns)" : ""));
-        loadPipeline(); loadDashboard();
+        wtMarkStale(); loadPipeline(); loadDashboard(); // R55 · F3 — a case write must re-run the checker
         if ($("#page-data") && !$("#page-data").classList.contains("hidden")) loadDataHealth();
       }
     } finally { saveBtn.disabled = false; }
@@ -15771,7 +15859,7 @@ window.openClient = async function (id, focus, attempted, presetCaseId) {
     // T1-11 — a client save can resolve (or create) a watchtower alert, so re-run the checker here
     // as well; the case save path gets it via loadDashboard. Guarded: a failing RPC must not stop
     // the save being reported as done.
-    try { await db.rpc("run_watchtower"); } catch (e) { /* alerts just stay as they were */ }
+    try { await db.rpc("run_watchtower"); wtStampRun(); } catch (e) { /* alerts just stay as they were */ }
     closeModal(); toast("Client saved"); loadClients($("#client-search").value, { force: true });
     // If the client was opened from Data health (that page sits behind the modal), refresh its
     // lists/KPIs so a just-fixed row (e.g. missing email) doesn't linger stale until manual Refresh.
@@ -16499,6 +16587,7 @@ $("#import-file").addEventListener("change", async () => {
   const name = file.name.toLowerCase();
   try {
     if (name.endsWith(".xlsx") || name.endsWith(".xls")) {
+      await ensureXlsx(); // R55 · F7 — lazy-loaded; throws with a readable message on failure
       const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
       let text = "";
       wb.SheetNames.forEach((sn) => {
@@ -23509,7 +23598,7 @@ async function renderProcRatesPanel() {
 async function r44UploadProcRates(file) {
   if (!showMoney()) return toast("Proc rates are Owner-only.");
   const status = $("#procrates-status");
-  if (typeof XLSX === "undefined") return toast("The spreadsheet reader did not load — reload the page and try again.");
+  try { await ensureXlsx(); } catch (e) { return toast(e.message); } // R55 · F7 — lazy-loaded
   let parsed;
   try {
     const wb = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true });
@@ -23602,7 +23691,7 @@ function r44LineDbRow(l) {
 }
 async function r44ImportStatement(file) {
   if (!showMoney()) return toast("Statement import is Owner-only.");
-  if (typeof XLSX === "undefined") return toast("The spreadsheet reader did not load — reload the page and try again.");
+  try { await ensureXlsx(); } catch (e) { return toast(e.message); } // R55 · F7 — lazy-loaded
   const status = $("#recon-status");
   if (status) status.textContent = `Reading ${file.name}…`;
   let parsed;
@@ -27421,6 +27510,7 @@ if ($("#rev-file")) {
     try {
       if (/\.(xlsx|xls)$/i.test(file.name)) {
         // The same SheetJS path the bulk import uses — one sheet, flattened to CSV.
+        await ensureXlsx(); // R55 · F7 — lazy-loaded; the catch below reports a load failure
         const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
         const sn = wb.SheetNames[0];
         $("#rev-text").value = XLSX.utils.sheet_to_csv(wb.Sheets[sn]);
