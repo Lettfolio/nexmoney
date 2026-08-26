@@ -180,7 +180,7 @@ async function loadStageEntries(cases) {
   const ids = (cases || []).map((c) => c.id);
   if (!ids.length) return map;
   try {
-    const { data, error } = await db.from("case_events").select("case_id,event,created_at").in("case_id", ids).in("event", ["stage_changed", "stage_change", "case_created"]);
+    const { data, error } = await inChunks(ids, (sl) => db.from("case_events").select("case_id,event,created_at").in("case_id", sl).in("event", ["stage_changed", "stage_change", "case_created"]));
     if (error) return map;
     (data || []).forEach((e) => {
       if (!e || !e.case_id || !e.created_at) return;
@@ -517,6 +517,24 @@ function findClientMatches(q, rows) {
 // Inline-onclick-safe string argument: escape for the JS string literal first, then for the HTML
 // attribute (esc() turns ' into &#39;, which the parser hands back to JS as a bare quote).
 const jsArg = (v) => esc(String(v == null ? "" : v).replace(/\\/g, "\\\\").replace(/'/g, "\\'"));
+/* R64-HF1 — CHUNKED .in() READS. PostgREST puts an .in() list in the URL; above roughly 500 UUIDs
+   the request is a 400 Bad Request and the WHOLE read silently returns nothing. The 69-case mock
+   never gets near that; production does (the Retention feed is 725+ cases, v_alerts is 1,000 rows,
+   a select-all on the completed book is 1,871 ids) — which is how the property chips and R64's
+   tel: links on the Retention rows rendered as "nothing" without a single console error. Every
+   batch read that can be feed-sized goes through this: slices of IN_CHUNK ids run in parallel, the
+   rows are concatenated, and the first error (if any) is returned in the usual {data, error} shape.
+   `build(slice)` returns the query for one slice. Nothing here calls .catch on a builder. */
+const IN_CHUNK = 150;
+async function inChunks(ids, build) {
+  const list = [...new Set((ids || []).filter(Boolean))];
+  if (!list.length) return { data: [], error: null };
+  const slices = [];
+  for (let i = 0; i < list.length; i += IN_CHUNK) slices.push(list.slice(i, i + IN_CHUNK));
+  const results = await Promise.all(slices.map((sl) => Promise.resolve(build(sl))));
+  const bad = results.find((r) => r && r.error);
+  return { data: results.flatMap((r) => (r && r.data) || []), error: bad ? bad.error : null };
+}
 // Tap-to-call / tap-to-email links (M2). Displays the number/address verbatim; the tel: href is
 // space-stripped so the dialler gets a clean value. Returns "" for empty input so callers can guard.
 const telLink = (p) => { if (!p) return ""; const raw = String(p).trim(); const href = raw.replace(/[^\d+]/g, ""); return `<a class="contact-link" href="tel:${esc(href)}">${esc(raw)}</a>`; };
@@ -3644,11 +3662,11 @@ async function loadPropContext(caseIds) {
   try {
     const propOn = await propAddrSupported();
     const cols = "id,client_id,case_kind,lender,stage" + (propOn ? ",property_address" : "");
-    const { data: rows } = await db.from("cases").select(cols).in("id", ids);
+    const { data: rows } = await inChunks(ids, (sl) => db.from("cases").select(cols).in("id", sl));
     (rows || []).forEach((r) => { ctx.byId[r.id] = r; });
     const clientIds = [...new Set((rows || []).map((r) => r.client_id).filter(Boolean))];
     if (clientIds.length) {
-      const { data: sib } = await db.from("cases").select("id,client_id,created_at" + (propOn ? ",property_address" : "")).in("client_id", clientIds);
+      const { data: sib } = await inChunks(clientIds, (sl) => db.from("cases").select("id,client_id,created_at" + (propOn ? ",property_address" : "")).in("client_id", sl));
       const perProp = {}, perClient = {};
       (sib || []).forEach((r) => {
         ctx.caseCount[r.client_id] = (ctx.caseCount[r.client_id] || 0) + 1;
@@ -6925,7 +6943,7 @@ async function retRowPhones(feed, rows) {
   try {
     const ids = [...new Set((rows || []).map((a) => (propCtxCase(feed.ctx, a.case_id) || {}).client_id).filter(Boolean))];
     if (!ids.length) return out;
-    const { data } = await db.from("clients").select("id,phone").in("id", ids);
+    const { data } = await inChunks(ids, (sl) => db.from("clients").select("id,phone").in("id", sl));
     (data || []).forEach((r) => { if (r && r.phone) out[r.id] = r.phone; });
   } catch (_) { /* no numbers — the rows render exactly as they did before */ }
   return out;
@@ -7801,7 +7819,7 @@ async function loadBriefing() {
     const clientIds = [...new Set(items.filter((it) => it.client_id).map((it) => it.client_id))];
     if (clientIds.length) {
       const cols = "id,client_id,stage,case_kind,lender" + ((await propAddrSupported()) ? ",property_address" : "");
-      const { data: cs } = await db.from("cases").select(cols).in("client_id", clientIds);
+      const { data: cs } = await inChunks(clientIds, (sl) => db.from("cases").select(cols).in("client_id", sl));
       const live = (cs || []).filter((c) => c.stage !== "not_proceeding");
       const perClient = {};
       live.forEach((c) => { perClient[c.client_id] = (perClient[c.client_id] || 0) + 1; });
@@ -10782,9 +10800,9 @@ async function bulkMoveStage(targetStage) {
   if (!ids.length || !targetStage) return;
   const label = STAGE_LABEL[targetStage] || targetStage;
   const propOn = await propAddrSupported();
-  const { data: rows } = await db.from("cases")
+  const { data: rows } = await inChunks(ids, (sl) => db.from("cases")
     .select("id,stage,protection_status,completed_at,case_kind,lender" + (propOn ? ",property_address" : "") + ",clients!client_id(first_name,last_name)")
-    .in("id", ids);
+    .in("id", sl));
   const byId = {}; (rows || []).forEach((r) => (byId[r.id] = r));
   // Classify exactly the way moveCaseToStage will, so the confirm can't promise one thing and the
   // result report another.
@@ -10973,14 +10991,14 @@ async function bulkStartRetention() {
 }
 async function bulkStartRetentionRun(ids) {
   const propOn = await propAddrSupported();
-  const { data: rows, error } = await db.from("cases")
+  const { data: rows, error } = await inChunks(ids, (sl) => db.from("cases")
     .select("id,client_id,stage,rate_end_date,case_kind,lender,retention_source_case_id"
       + (propOn ? ",property_address" : "") + ",clients!client_id(first_name,last_name)")
-    .in("id", ids);
+    .in("id", sl));
   if (error) return toast("Error: " + error.message);
   const nameOf = bulkCaseLabel;
   // Which of these already have a successor — one query, not one per row.
-  const { data: succ } = await db.from("cases").select("retention_source_case_id").in("retention_source_case_id", ids);
+  const { data: succ } = await inChunks(ids, (sl) => db.from("cases").select("retention_source_case_id").in("retention_source_case_id", sl));
   const hasSuccessor = new Set((succ || []).map((r) => r.retention_source_case_id));
   const today = localDateStr();
   const eligible = [], skipped = [];
@@ -11045,10 +11063,10 @@ async function bulkQueueRateRemindersRun(ids) {
   // The identity needs the property column, which an un-migrated database does not have: name it
   // only where it exists, exactly as loadPropContext does, so the sweep cannot 42703 on M7.
   const propOn = await propAddrSupported();
-  const { data: rows, error } = await db.from("cases")
+  const { data: rows, error } = await inChunks(ids, (sl) => db.from("cases")
     .select("id,client_id,rate_end_date,assigned_to,rate_reminder_queued_at,case_kind,lender,stage"
       + (propOn ? ",property_address" : "") + ",clients!client_id(first_name,last_name,email)")
-    .in("id", ids);
+    .in("id", sl));
   if (error) return toast("Error: " + error.message);
   const nameOf = bulkCaseLabel;
   const today = localDateStr();
@@ -11194,9 +11212,9 @@ async function bulkAddTaskRun(ids) {
   // G6-10 — and the failure is named with the case's identity, not just the client's name: "no task
   // for Gareth Pollard" says nothing when three of the selected cases are his.
   const propOn = await propAddrSupported();
-  const { data: rows, error } = await db.from("cases")
+  const { data: rows, error } = await inChunks(ids, (sl) => db.from("cases")
     .select("id,assigned_to,case_kind,lender,stage" + (propOn ? ",property_address" : "") + ",clients!client_id(first_name,last_name)")
-    .in("id", ids);
+    .in("id", sl));
   if (error) return toast("Error: " + error.message);
   const nameOf = bulkCaseLabel;
   const picked = await promptBulkTask((rows || []).length || ids.length);
@@ -16042,7 +16060,7 @@ async function hydrateBulkTaskCases(pending) {
   if (!ids.length) return;
   try {
     const cols = "id,case_kind,lender,stage" + ((await propAddrSupported()) ? ",property_address" : "");
-    const { data, error } = await db.from("cases").select(cols).in("id", ids);
+    const { data, error } = await inChunks(ids, (sl) => db.from("cases").select(cols).in("id", sl));
     if (error || !data) return;
     const by = new Map(data.map((r) => [r.id, r]));
     pending.forEach((p) => { p.cases = p.cases.map((c) => Object.assign({}, c, by.get(c.id) || {})); });
@@ -24097,7 +24115,7 @@ async function loadQuoteStamps(caseIds) {
   if (!ids.length) return {};
   if (!(await protQuoteSupported())) return {};
   try {
-    const { data, error } = await db.from("cases").select("id,protection_quoted_at,protection_quoted_by").in("id", ids);
+    const { data, error } = await inChunks(ids, (sl) => db.from("cases").select("id,protection_quoted_at,protection_quoted_by").in("id", sl));
     if (error) return {};
     const map = {};
     (data || []).forEach((r) => { if (r && r.id) map[r.id] = r; });

@@ -107,6 +107,7 @@ node tests/r48.js
 node tests/r63_docs.js
 node tests/r63_tasks.js
 node tests/r64_retention.js
+node tests/r64_hf1.js
 ```
 
 **R64 notes (2026-08-26).** One new suite: `tests/r64_retention.js` (88 — §A the Retention
@@ -3681,3 +3682,14 @@ test scripts to reach into the mock without going through the UI:
 ephemeral — nothing here survives except what's pushed. As soon as the full
 battery above is green, deploy/push immediately. Do not sit on a green run;
 treat "battery passed" and "pushed to origin/main" as one atomic step.
+
+**R64-HF1 (2026-08-26) — chunked `.in()` reads.** PostgREST answers 400 when an `.in()` list
+runs past ~500 UUIDs (the list is in the URL). Production hit it silently on the Retention feed
+(725+ cases; v_alerts 1,000 rows): `loadPropContext` returned nothing, so property chips,
+shared-property flags and R64's tel: links all vanished with no console error — invisible on the
+69-case mock. `inChunks(ids, build)` (app.js, next to `telLink`) now wraps every feed-sized batch
+read (loadPropContext ×2, loadStageEntries, retRowPhones, the four bulk verbs' case reads, the
+successor read, the prot-quote read, the client-modal cases read) in 150-id slices run in parallel.
+**RULE: any new `.in(col, ids)` whose list can be feed-sized MUST go through `inChunks`.**
+`tests/r64_hf1.js` (12) pins the split, the error shape, loadPropContext at 469 ids, and the
+Retention page's tel:/chips.
