@@ -172,7 +172,19 @@ const groundTruth = (page) => page.evaluate(async ({ CHASE_MAX }) => {
   const perCase = {};
   cases.forEach((c) => {
     const mine = docs.filter((d) => d.case_id === c.id);
+    /* R63 · A5(a) — DELIBERATE CONTRACT CHANGE to this ground truth, for a parity fix.
+       Production has NO `docs_chase` email type: the chaser queues a FURTHER `docs_request` row,
+       so the first document email on a case is the request and every one after it is a chase.
+       app.js (docChaseCount) and mock-supabase.js (docChaseCountFor) were both moved onto that
+       rule in R63; this recomputation had the OLD rule ("count docs_chase rows"), which against a
+       production-shaped case returns 0 no matter how many chases have gone. It is changed here
+       rather than worked around, because a ground truth that encodes a rule the app deliberately
+       stopped having is not a ground truth. `docs_chase` is still counted — this file's own
+       fixtures seed it and a historic row could exist — and against those fixtures the two rules
+       give identical numbers (0 / 2 / 3 for Ellingham / Quirke / Amery), so every assertion below
+       is unchanged; the difference only appears once a chase is queued the production way. */
     const dm = mails.filter((m) => m.case_id === c.id && ["docs_request", "docs_chase"].includes(m.email_type));
+    const dmLive = dm.filter((m) => m.status !== "cancelled");
     perCase[c.id] = {
       items: mine.length,
       outstanding: mine.filter((d) => d.status === "requested").length,
@@ -181,7 +193,8 @@ const groundTruth = (page) => page.evaluate(async ({ CHASE_MAX }) => {
       /* what the deployed GET may show a client: waived is filtered server-side */
       visible: mine.filter((d) => d.status !== "waived").length,
       ids: mine.map((d) => ({ id: d.id, item: d.item, status: d.status })),
-      chases: dm.filter((m) => m.email_type === "docs_chase").length,
+      chases: dmLive.filter((m) => m.email_type === "docs_chase").length
+        + Math.max(0, dmLive.filter((m) => m.email_type === "docs_request").length - 1),
       docMails: dm.length,
       lastMail: dm.map((m) => m.sent_at || m.created_at).filter(Boolean).sort().slice(-1)[0] || null,
       token: c.doc_token || null,

@@ -429,11 +429,19 @@ const tasksOnCase = (page, caseId) => page.evaluate(async (cid) =>
       // (d) the referrer with several live cases — nothing is guessed, and it says why
       if (skip) {
         const page = await newPage(browser, "p4");
-        const beforeAll = await page.evaluate(async () => ((await window.__mockDb.from("case_tasks").select("id")).data || []).length);
+        /* R63 — this counted EVERY case_tasks row in the database before and after the move, which
+           was a fair proxy for "no thank-you task was written" only while a stage move wrote
+           nothing else. R63's H1b makes reaching a stage add that stage's playbook steps to the
+           case being moved (three of them at Completed), so the whole-table count now moves for a
+           reason that has nothing to do with referrals. The CLAIM is unchanged and is what is
+           measured instead: no THANK-YOU task exists anywhere, on any case. */
+        const thankCount = () => page.evaluate(async () => ((await window.__mockDb.from("case_tasks").select("id,title")).data || [])
+          .filter((t) => /^Thank .* for referring /.test(t.title || "")).length);
+        const beforeAll = await thankCount();
         await page.evaluate((id) => window.moveCaseToStage(id, "completed"), skip.caseId);
         await page.waitForTimeout(1600);
         eq("R9-1 · an ambiguous referrer is not offered a task at all", page.__dialogs.length, 1);
-        const afterAll = await page.evaluate(async () => ((await window.__mockDb.from("case_tasks").select("id")).data || []).length);
+        const afterAll = await thankCount();
         eq("R9-1 · …and no task is written anywhere", afterAll, beforeAll);
         const t = await toastText(page);
         ok("R9-1 · …but the toast names the referrer and says why nothing happened",

@@ -280,11 +280,18 @@ const SETTING_NUMERIC_FIELDS = { rate_reminder_months: "Rate reminder lead time"
 const SETTING_BANK_FIELDS = { bank_sort_code: { label: "Sort code", re: /^\d{2}-?\d{2}-?\d{2}$/ }, bank_account_number: { label: "Account number", re: /^\d{8}$/ } };
 function isValidEmailLike(v) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v); }
 function isValidUrlLike(v) { return /^https?:\/\/[^\s]+\.[^\s]+/i.test(v); }
+/* R63 · A3 — TWO SPELLINGS OF "ON", ONE ANSWER.
+   This form WRITES "1"/"0", but the rows production actually holds were seeded — and are read by
+   the SQL trigger — as 'on'/'off'. So every one of these five toggles has been ON in the database
+   and rendering as "Off" on this page ever since, which is the worst possible state for a switch:
+   the screen says the email is not going out, and it is. Read both spellings; keep writing "1"/"0"
+   (the trigger is being taught to accept both from the other side). */
+const isBool10On = (v) => v === "1" || v === "on";
 function settingFieldHtml([k, label, type]) {
   if (type === "bool10") return `<label>${esc(label)} (on/off)
       <select name="${k}">
-        <option value="0" ${settings[k] === "1" ? "" : "selected"}>Off</option>
-        <option value="1" ${settings[k] === "1" ? "selected" : ""}>On</option>
+        <option value="0" ${isBool10On(settings[k]) ? "" : "selected"}>Off</option>
+        <option value="1" ${isBool10On(settings[k]) ? "selected" : ""}>On</option>
       </select>
     </label>`;
   const inputType = type === "email" ? "email" : type === "url" ? "url" : SETTING_NUMERIC_FIELDS[k] ? "number" : "text";
@@ -826,7 +833,38 @@ function leastLoadedAdviser() {
   candidates.forEach((p) => { if (!best || map[p.id].total < map[best].total) best = p.id; });
   return best;
 }
+/* ==========================================================================
+   R63 · M1 — ON *MY* DAY, A LEAD DEFAULTS TO ME.
+
+   My Day carries a Mine / All toggle, and on Mine the whole screen is one
+   claim: this is your work. Every row on it is yours — except the enquiry
+   rows, which arrived pre-set to whichever colleague's desk was emptiest.
+   An adviser working their own feed then had to change the select on every
+   lead before pressing Accept, and the ones who didn't notice handed their
+   own enquiries to somebody else.
+
+   So the DEFAULT follows the scope the reader chose:
+     · scope Mine + I am advising staff → me. It is my feed; the lead I am
+       looking at is one I am choosing to take.
+     · scope All                        → the R7-5 round-robin, untouched.
+       "All" is the firm's inbox and the fair-share suggestion is exactly
+       right there.
+     · admin / owner who does not advise → the round-robin on BOTH scopes.
+       W-9's rule stands: a default that routes to the person who does not
+       advise is the defect that rule exists to prevent, and switching a
+       toggle does not make them an adviser.
+
+   IT IS STILL ONLY A DEFAULT. Every name is still in the list, the "(me)"
+   label and the "· lightest load" marker are both still on their options —
+   so nothing about WHOSE desk is emptiest is hidden by this — and one click
+   changes it. Nothing is remembered between paints (LEAD_ADV_CHOICE holds a
+   human's actual choice, as before).
+   ========================================================================== */
+function leadDefaultsToMe() {
+  return briefingScope !== "all" && !!(ME && ME.id) && isAdvisingStaff(ME) && TEAM.some((p) => p.id === ME.id);
+}
 function leadRoutingSuggestion() {
+  if (leadDefaultsToMe()) return ME.id;   // R63 · M1 — my feed, my lead
   const rr = leastLoadedAdviser();
   /* R12b · W-9 — the fallback order changed with it. "Me" is only a sane default when I am one of
      the people who advises; for Kim on the admin desk it was the same wrong answer by a different
@@ -839,6 +877,18 @@ function leadRoutingSuggestion() {
 function leadLoadTitle(id) {
   const map = adviserLoadMap();
   const l = map && map[id];
+  /* R63 · M1 — on Mine the sentence has to explain the default that is actually in force, and the
+     lightest desk is still named in it: pre-picking me must never disguise whose desk is emptiest.
+     On All this returns exactly what it always did. */
+  if (leadDefaultsToMe()) {
+    const rr = leastLoadedAdviser();
+    const rl = map && rr && map[rr];
+    return `Which adviser this lead's case is created for. This lead is defaulted to you — this is your feed (My Day is on “Mine”). `
+      + (rr && rr !== (ME && ME.id)
+        ? `${staffName(rr)} has the lightest desk right now${rl ? ` (${rl.total} open cases + tasks)` : ""} and is marked “lightest load” in the list, if you would rather pass it on. `
+        : "")
+      + `Switch My Day to “All” and the lead defaults to the lightest desk instead. It is a suggestion, not an assignment — change it and the lead goes where you say.`;
+  }
   if (!l) return "Which adviser this lead's case is created for";
   const pool = advisingStaff();
   return `Which adviser this lead's case is created for. ${staffName(id)} has the lightest desk right now: `
@@ -878,8 +928,15 @@ function leadAdviserOptionsHtml() {
 function leadRoutingHtml(leadId) {
   const rr = leastLoadedAdviser();
   const sel = leadRoutingSuggestion();
-  return `<select class="lead-adviser" data-lead="${esc(leadId || "")}" data-rr="${esc(rr || "")}" aria-label="Assign this lead to" title="${esc(leadLoadTitle(rr))}" style="width:auto;">${leadAdviserOptionsHtml()}</select>`
-    + (rr ? `<span class="lead-rr${sel === rr ? "" : " hidden"}" data-rr-for="${esc(leadId || "")}" data-rr="${esc(rr)}" title="${esc(leadLoadTitle(rr))}">(lightest load)</span>` : "");
+  /* R63 · M1 — the note beside the select describes WHY that name is pre-picked, so on Mine it has
+     to say the new reason rather than a "lightest load" claim that is no longer what happened.
+     Its data-rr is the id the note is a claim ABOUT, so syncLeadRrNotes hides it the moment the
+     operator picks somebody else — exactly as it always did for the round-robin note. */
+  const meDefault = leadDefaultsToMe();
+  const noteFor = meDefault ? (ME && ME.id) : rr;
+  const noteTxt = meDefault ? "(defaulted to you — this is your feed)" : "(lightest load)";
+  return `<select class="lead-adviser" data-lead="${esc(leadId || "")}" data-rr="${esc(noteFor || "")}" aria-label="Assign this lead to" title="${esc(leadLoadTitle(rr))}" style="width:auto;">${leadAdviserOptionsHtml()}</select>`
+    + (noteFor ? `<span class="lead-rr${meDefault ? " lead-rr-me" : ""}${sel === noteFor ? "" : " hidden"}" data-rr-for="${esc(leadId || "")}" data-rr="${esc(noteFor)}" title="${esc(leadLoadTitle(rr))}">${noteTxt}</span>` : "");
 }
 /* ==========================================================================
    R12a · K-1/K-2 — ONE LEAD, ONE ANSWER TO "WHO IS THIS GOING TO?"
@@ -2713,6 +2770,43 @@ const DOC_CHASE_MAX = 3;
 const DOC_CHASE_STAGES = ["enquiry", "fact_find", "decision_in_principle", "application", "offer", "exchange"];
 const docChaseDays = () => Number(settings.doc_chase_days ?? 3) || 3;
 const DOC_MAIL_TYPES = ["docs_request", "docs_chase"];
+/* R63 · A1 — HOW MANY CHASES HAVE ACTUALLY GONE OUT. One rule, one function, everywhere.
+   PRODUCTION HAS NO `docs_chase` EMAIL TYPE. The backend chaser (queue_comms_extras) queues a
+   FURTHER `docs_request` row each time it chases — the first document email on a case is the
+   request, and every one after it is a chase. This app counted `email_type === "docs_chase"`,
+   a type only this harness's own fixtures have ever written, so against the real database every
+   case read "0 of 3 chases sent" no matter how many had gone: the case status line, the Data
+   health queue's "chases exhausted" badge and the whole "stop emailing, raise a call task"
+   branch were all reading a chased client as an un-chased one.
+   The rule: chases = non-cancelled `docs_chase` rows (tolerated for back-compat — historic rows
+   and this harness's fixtures) + every non-cancelled `docs_request` row AFTER the first.
+   Cancelled is excluded on purpose: a row somebody stopped before the 8am run never reached the
+   client, so it never chased anybody. */
+function docChaseCount(mails) {
+  const live = (mails || []).filter((m) => m && m.status !== "cancelled");
+  const legacy = live.filter((m) => m.email_type === "docs_chase").length;
+  const requests = live.filter((m) => m.email_type === "docs_request").length;
+  return legacy + Math.max(0, requests - 1);
+}
+/* R63 · A1 — …and the reading half of the same fact. A second "Document request" on a case is a
+   chase, and a timeline that prints the identical label three times reads as three first asks.
+   Returns a Set of the ROW OBJECTS (not ids — the timeline's select does not carry one) that are
+   not the first document request on their own case, so the caller can suffix the label. */
+function docChaseMailSet(mails) {
+  const byCase = new Map();
+  (mails || []).forEach((m) => {
+    if (!m || m.email_type !== "docs_request" || m.status === "cancelled") return;
+    const k = String(m.case_id || "");
+    if (!byCase.has(k)) byCase.set(k, []);
+    byCase.get(k).push(m);
+  });
+  const out = new Set();
+  byCase.forEach((rows) => {
+    rows.slice().sort((a, b) => String(a.sent_at || a.created_at || "").localeCompare(String(b.sent_at || b.created_at || "")))
+      .slice(1).forEach((m) => out.add(m));
+  });
+  return out;
+}
 const DOC_OVERDUE_TITLE = (who) => `Documents overdue — call ${who}`;
 const DOC_STATUSES = ["requested", "received", "waived"];
 const DOC_STATUS_LABEL = { requested: "outstanding", received: "received", waived: "waived" };
@@ -2833,7 +2927,7 @@ function docSuggestionsFor(kind) {
    on, not a flag they have to interpret. */
 function docChaseState({ docs, mails, tasks, clientName, stage }) {
   const list = docs || [];
-  const chases = (mails || []).filter((m) => m.email_type === "docs_chase").length;
+  const chases = docChaseCount(mails);   // R63 · A1 — prod chases are further docs_request rows
   const outstanding = docOutstanding(list).length;
   const chaseOn = (settings.doc_chase_enabled ?? "off") === "on";
   const offNote = chaseOn ? "" : " Automatic chasing is off — turn it on in Settings.";
@@ -3329,12 +3423,23 @@ async function addDocItems(caseId, c) {
     };
   });
   if (!picked || !picked.length) return;
-  const now = new Date().toISOString();
-  const { error } = await db.from("case_documents")
-    .insert(picked.map((item) => ({ case_id: caseId, item, status: "requested", requested_at: now })));
+  const { error } = await insertDocItems(caseId, picked);
   if (error) return toast("Error: " + error.message);
   toast(`${picked.length} item${picked.length === 1 ? "" : "s"} added — nothing has been emailed`);
   await renderCaseDocs(caseId, c);
+}
+/* R63 · H2 — THE ONE INSERT PATH for checklist items, extracted from addDocItems above so the
+   Fact Find stage-entry prompt writes rows EXACTLY the way "Add items…" does — same columns, same
+   `requested` status, same requested_at stamp — instead of growing a second, subtly different
+   writer that would drift the first time either changed. Returns { error, count }; `error` is the
+   PostgREST error verbatim so each caller can word its own failure the way its screen needs. */
+async function insertDocItems(caseId, items) {
+  const list = (items || []).map((s) => String(s || "").trim()).filter(Boolean);
+  if (!caseId || !list.length) return { error: null, count: 0 };
+  const now = new Date().toISOString();
+  const { error } = await db.from("case_documents")
+    .insert(list.map((item) => ({ case_id: caseId, item, status: "requested", requested_at: now })));
+  return { error: error || null, count: error ? 0 : list.length };
 }
 /* COPY UPLOAD LINK. Generates the token on first use and saves it to the case, then shows the URL
    with the one sentence that matters said plainly: it is a bearer link. The URL is left on screen
@@ -4577,6 +4682,22 @@ async function renderSettings() {
   const dobStats = await clientDobStats();
   const visibleFields = owner ? SETTING_FIELDS : SETTING_FIELDS.filter(([k]) => !OWNER_ONLY_SETTING_KEYS.includes(k));
   const general = visibleFields.map(settingFieldHtml).join("") + `
+    ${/* R63 · H1a/H1b — the switch behind automatic stage tasks. It sits with the other automation
+          toggles above (the auto_* comms group) because it is the same kind of promise: something
+          the app does on its own when a case moves. Default ON when the row is absent — this round
+          exists because 127 of 134 live cases had no open task while the checklist sat there being
+          advisory, and a fix that ships switched off fixes nothing. The paragraph under it states
+          the four rules the code actually applies (which moments, which stage, the title dedupe,
+          and the one task it deliberately leaves to the database trigger), because a firm reading
+          "On" is entitled to know exactly what will start appearing on their task lists. */ ""}
+    <h3 id="set-sec-stage-tasks" style="grid-column:1/-1;margin:10px 0 0;">Stage tasks</h3>
+    <label>Automatic stage checklist tasks
+      <select name="playbook_auto_tasks">
+        <option value="off" ${playbookAutoTasksOn() ? "" : "selected"}>Off</option>
+        <option value="on" ${playbookAutoTasksOn() ? "selected" : ""}>On</option>
+      </select>
+    </label>
+    <p class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;" id="playbook-auto-note"><strong>${playbookAutoTasksOn() ? "ON" : "OFF"}.</strong> When this is on, the house <strong>Stage checklist</strong> for a stage is added to a case as real tasks at two moments, and no others: when a <strong>website lead is accepted</strong> (the Enquiry steps land on the new case) and when a <strong>case reaches a new stage</strong> — by drag, by the Advance button, by the stage dropdown or by a bulk move. Tasks are due today plus each step's own offset and are assigned to the <strong>case's adviser</strong>. Steps that do not apply to the case type are skipped (a product transfer gets no valuation or solicitor step), <strong>Not proceeding gets nothing</strong>, and a step is never added twice — a task with the same title already open on the case is left alone, whoever created it. The <strong>“Chase solicitors for completion date”</strong> task at Exchange is <em>not</em> written here: the database raises that one itself, on its own <em>Solicitor chase task after exchange</em> timing. Switch this off and the Stage checklist goes back to being advisory — every step is still there in the case, one click each.</p>
     <h3 id="set-sec-protection" style="grid-column:1/-1;margin:10px 0 0;">Protection &amp; GI</h3>
     <label>Protection gate — block moves to Application+ until protection is recorded
       <select name="protection_gate">
@@ -8408,7 +8529,12 @@ async function loadUnactioned() {
   const [casesRes, tasksRes, notesRes, eventRows] = await Promise.all([
     db.from("cases").select("id,stage,assigned_to,client_id,created_at,clients!client_id(first_name,last_name)")
       .not("stage", "in", "(completed,not_proceeding)"),
-    db.from("case_tasks").select("case_id").is("done_at", null),
+    /* R63 · H1c — the title and created_at come along now: "has an open task" is no longer the
+       whole test. A case whose ONLY open task is a step from an EARLIER stage has no next action
+       for the stage it is actually at, and that is precisely the case this radar exists to find —
+       it was the one shape the old membership test let through. Same columns, one predicate
+       (isStalePlaybookTask), shared with the case header and the case modal's task list. */
+    db.from("case_tasks").select("title,case_id,done_at,created_at").is("done_at", null),
     db.from("case_notes").select("case_id,created_at").gte("created_at", activitySinceIso),
     softRows(db.from("case_events").select("case_id,created_at").gte("created_at", activitySinceIso)),
   ]);
@@ -8421,11 +8547,23 @@ async function loadUnactioned() {
   const note = (cid, ts) => { if (cid && ts && (!lastActivity[cid] || ts > lastActivity[cid])) lastActivity[cid] = ts; };
   ((notesRes && notesRes.data) || []).forEach((r) => note(r.case_id, r.created_at));
   (eventRows || []).forEach((r) => note(r.case_id, r.created_at));
-  const openTaskCases = new Set(((tasksRes && tasksRes.data) || []).map((r) => r.case_id).filter(Boolean));
+  // case_id → its OPEN tasks (rows, not just a flag — the predicate needs each title).
+  const openTasksByCase = {};
+  ((tasksRes && tasksRes.data) || []).forEach((r) => {
+    if (!r || !r.case_id || r.done_at) return;
+    (openTasksByCase[r.case_id] || (openTasksByCase[r.case_id] = [])).push(r);
+  });
+  /* A case "has a next action" only if one of its open tasks belongs to where the case IS. A task
+     left over from an earlier stage does not stop the case being unactioned — it IS the reason
+     nobody noticed. */
+  const liveTasks = (c) => (openTasksByCase[c.id] || []).filter((t) => !isStalePlaybookTask(t, c.stage));
+  const staleOnly = (c) => !liveTasks(c).length && (openTasksByCase[c.id] || []).length > 0;
   const mine = !!(ME && ME.id) && !isAdminOrOwner();
+  /* ONLY the task half of the test changed. The 7-day activity window is exactly as R17 shipped
+     it — a case somebody rang yesterday is not on this list whatever its task list looks like. */
   const quiet = (casesRes.data || []).filter((c) =>
     (!mine || c.assigned_to === ME.id) &&
-    !openTaskCases.has(c.id) &&
+    !liveTasks(c).length &&
     !(lastActivity[c.id] && lastActivity[c.id] >= sinceIso)
   );
   const ctx = await loadPropContext(quiet.map((c) => c.id));
@@ -8437,12 +8575,16 @@ async function loadUnactioned() {
     const n = daysQuiet(c);
     const nLabel = n == null ? "no activity recorded" : `quiet ${n} ${n === 1 ? "day" : "days"}`;
     const stageLbl = STAGE_LABEL[c.stage] || String(c.stage || "").replace(/_/g, " ");
-    return `<div class="row-item">
+    /* R63 · H1c — a case that reached this list DESPITE having an open task is a different
+       finding, and saying "no next action" over a visible open task is how a panel loses its
+       reader. Name what is actually there instead. */
+    const stale = staleOnly(c);
+    return `<div class="row-item${stale ? " unactioned-stale" : ""}">
       <div class="row-main">
         <div class="t" onclick="openCase('${c.id}')">${esc(who) || "(no name)"} ${propCtxChip(ctx, c.id, "row-prop")}</div>
-        <div class="s">${esc(stageLbl)} · ${esc(staffName(c.assigned_to))} · ${nLabel}</div>
+        <div class="s">${esc(stageLbl)} · ${esc(staffName(c.assigned_to))} · ${nLabel}${stale ? ` · <span class="unactioned-stale-note" title="${esc(STALE_TASK_TIP)}">only an earlier-stage task is open</span>` : ""}</div>
       </div>
-      <span class="badge grey">NO NEXT ACTION</span>
+      <span class="badge grey"${stale ? ` title="${esc(STALE_TASK_TIP)}"` : ""}>${stale ? "STALE TASK ONLY" : "NO NEXT ACTION"}</span>
       <button class="btn btn-sm" onclick="openCase('${c.id}')">Open</button>
     </div>`;
   }).join("") : `<div class="empty">Every live case has a next action 🎉</div>`;
@@ -9250,6 +9392,131 @@ function stagePlaybookItems(stage, kind) {
     (!it.onlyKinds || it.onlyKinds.includes(kind)));
 }
 const playbookTitleKey = (t) => String(t == null ? "" : t).trim().toLowerCase();
+/* ==========================================================================
+   R63 · H1a/H1b — THE PLAYBOOK STOPS BEING ADVISORY.
+
+   R17 shipped the house checklist as an OFFER: a panel of "+ Add" buttons in
+   the case modal. Nobody presses them. In production 127 of 134 live cases
+   carry no open task at all, which means the No-next-action radar is the only
+   thing standing between a live case and six weeks of silence — and a radar
+   that lists 127 cases is a list nobody reads.
+
+   So the steps are now WRITTEN, at the two moments a case acquires a new
+   stage's worth of work and at no other:
+     · a website lead is accepted  → the Enquiry steps land on the new case
+       (acceptLead, R63 · H1a);
+     · a case reaches a new stage  → that stage's steps land on it
+       (moveCaseToStage, R63 · H1b — interactive AND bulk).
+
+   Four rules keep this from becoming litter:
+     · ONE SETTING GOVERNS IT (`playbook_auto_tasks`, default ON when the row
+       is absent so an un-migrated/never-configured firm still gets the
+       behaviour this round exists to ship). Off means the R17 behaviour back,
+       unchanged — the panel still offers every step by hand.
+     · IDEMPOTENT BY TITLE, the same `playbookTitleKey` match `playbookAddAll`
+       uses. Advancing twice, a bulk move over a case that already moved, or a
+       step somebody added by hand can never produce a second row.
+     · NOT_PROCEEDING GETS NOTHING. It has no playbook entry (a dead case has
+       no next step), and `stagePlaybookItems` already returns [] there.
+     · THE PROD TRIGGER OWNS ITS OWN TASK. `auto_stage_comms` inserts
+       "Chase solicitors for completion date" on entry to exchange, with its
+       own idempotency check and its own `solicitor_chase_days` due date. No
+       playbook step is titled that today, and this guard is here so that if
+       one is ever added the two writers cannot race to create it twice.
+   ========================================================================== */
+// The one title production's own trigger writes. Never written from here — see the block above.
+const PLAYBOOK_TRIGGER_OWNED_RE = /^chase solicitors/i;
+// Absent / blank ⇒ ON. Prod stores 'on'/'off'; "1"/"0" is tolerated because the Settings form's
+// bool10 fields write that shape and a firm should never be punished for which writer got there
+// first (see the deploy memo's settings-parity note).
+function playbookAutoTasksOn() {
+  const v = settings && settings.playbook_auto_tasks;
+  if (v == null || v === "") return true;
+  return v === "on" || v === "1" || v === "true";
+}
+/* The write itself, shared by acceptLead and moveCaseToStage so there is exactly ONE row shape for
+   an auto-added playbook task and it is the same one `playbookAddAll` writes by hand. Never throws:
+   a failure is reported back to the caller, which folds it into the message it was going to show
+   anyway rather than firing a second toast over the first. */
+async function autoAddStagePlaybookTasks(caseId, stage, kind, opts = {}) {
+  const out = { added: 0, titles: [], error: null, off: false };
+  if (!caseId || !stage) return out;
+  if (!playbookAutoTasksOn()) { out.off = true; return out; }
+  const items = stagePlaybookItems(stage, kind)
+    .filter((it) => !PLAYBOOK_TRIGGER_OWNED_RE.test(String(it.title || "")));
+  if (!items.length) return out;                       // not_proceeding, or every step filtered out
+  const open = await softRows(db.from("case_tasks").select("id,title,done_at").eq("case_id", caseId).is("done_at", null));
+  const have = new Set(open.filter((t) => t && !t.done_at).map((t) => playbookTitleKey(t.title)));
+  const toAdd = items.filter((it) => !have.has(playbookTitleKey(it.title)));
+  if (!toAdd.length) return out;
+  let createdBy = opts.createdBy;
+  if (createdBy === undefined) {
+    const gu = await db.auth.getUser();
+    createdBy = (gu && gu.data && gu.data.user && gu.data.user.id) || null;
+  }
+  const assignee = opts.assignee || createdBy || null;
+  const rows = toAdd.map((it) => ({
+    case_id: caseId, title: it.title,
+    due_date: localDateStr(Date.now() + it.dueOffsetDays * 86400000),
+    created_by: createdBy, assigned_to: assignee,
+  }));
+  const { error } = await db.from("case_tasks").insert(rows);
+  if (error) { out.error = error.message; return out; }
+  out.added = rows.length;
+  out.titles = rows.map((r) => r.title);
+  return out;
+}
+// "· 2 tasks added", or "" when nothing was written. One phrasing, so the lead toast, the stage
+// toast and the bulk summary all say it the same way.
+function playbookTaskTally(n) { return n ? `${n} task${n === 1 ? "" : "s"} added` : ""; }
+/* ==========================================================================
+   R63 · H1c — A STALE TASK IS NOT A NEXT ACTION.
+
+   The other half of the same defect. "Send DIP to client", still open on a
+   case that is now at Offer, does three wrong things at once: it is what the
+   case header shows as NEXT TASK, it is what `loadUnactioned` counts as the
+   case having a next action (so the case never reaches the radar), and it is
+   what an adviser sees on their list instead of the work the case actually
+   needs now.
+
+   THE PREDICATE, and it is deliberately the narrowest one that is defensible:
+   an OPEN task whose title matches — by the same `playbookTitleKey` used
+   everywhere else — a step belonging to a stage EARLIER than the case's
+   current stage. Nothing else is stale. A task somebody typed by hand is
+   never stale, however old: we have no idea what it is for, and guessing
+   would hide real work. A step of the CURRENT stage is never stale either,
+   however long it has been open — that is simply an overdue task, which the
+   header already colours red.
+
+   Terminal stages: `not_proceeding` returns false outright (a dead case has
+   no "earlier stage" reading worth making); `completed` measures against
+   Enquiry…Exchange, which is what a completion's leftovers actually are.
+
+   ONE FUNCTION, THREE READERS: the case header's NEXT TASK, the case modal's
+   task list chip, and the radar's membership test. They cannot disagree.
+   ========================================================================== */
+// STAGES in pipeline order, minus the dead-end. Index in this list IS "how far along".
+const PLAYBOOK_STAGE_ORDER = STAGES.map(([k]) => k).filter((k) => k !== "not_proceeding");
+// title key → the EARLIEST stage index that step belongs to.
+const PLAYBOOK_TITLE_STAGE_IDX = (() => {
+  const m = {};
+  PLAYBOOK_STAGE_ORDER.forEach((st, i) => {
+    (CASE_STAGE_PLAYBOOK[st] || []).forEach((it) => {
+      const k = playbookTitleKey(it.title);
+      if (!Object.prototype.hasOwnProperty.call(m, k)) m[k] = i;
+    });
+  });
+  return m;
+})();
+function isStalePlaybookTask(task, caseStage) {
+  if (!task || task.done_at) return false;             // a done task is history, not a next action
+  const cur = PLAYBOOK_STAGE_ORDER.indexOf(caseStage);
+  if (cur <= 0) return false;                          // enquiry, not_proceeding, or an unknown stage
+  const from = PLAYBOOK_TITLE_STAGE_IDX[playbookTitleKey(task.title)];
+  return from != null && from < cur;
+}
+// The muted chip the case modal puts on such a row, and the sentence that explains it.
+const STALE_TASK_TIP = "This is a step from an earlier stage of the case — it is still open, so it is what shows as the next task and it is what keeps this case off the No-next-action radar. Mark it done if it no longer needs doing.";
 /* The Stage checklist panel for the case modal. Rendered for the case's CURRENT stage; each step
    is deduped against the case's OPEN tasks (done_at null) by title — a matching open task shows
    "✓ added" (disabled) and is never offered again. Returns "" when the stage has no applicable
@@ -9276,7 +9543,15 @@ function caseStageChecklistHtml(c, tasks) {
   const anyToAdd = items.some((it) => !openTitles.has(playbookTitleKey(it.title)));
   return `<div style="margin-top:14px;" id="case-stage-checklist">
       <h3 style="font-size:14px;">Stage checklist <span class="cs-muted" style="font-weight:400;">— suggested for ${esc(stageLbl)}</span></h3>
-      <p class="panel-sub" style="margin:2px 0 6px;">One-click tasks for this stage. Advisory — nothing is added until you press Add.</p>
+      ${/* R63 · H1b — the copy had to change with the behaviour. It said "Advisory — nothing is
+           added until you press Add", and that is no longer true: these steps are written onto the
+           case automatically the moment it reaches this stage. What "+ Add" is FOR now is the
+           remainder — a step already ticked off, a case that reached this stage before the switch
+           was on, or a firm that has switched the automation off entirely. The sentence says which
+           of those you are looking at rather than leaving it to be worked out. */ ""}
+      <p class="panel-sub" style="margin:2px 0 6px;" id="stage-checklist-sub">${playbookAutoTasksOn()
+        ? `These steps were added to the task list automatically when this case reached ${esc(stageLbl)}. Anything still showing “+ Add” was not — it has been done and closed, or the case got here before automatic stage tasks were switched on — and one click puts it back on the list.`
+        : "Advisory — automatic stage tasks are switched <strong>off</strong> in Settings, so nothing is added until you press Add."}</p>
       <div id="stage-checklist-items">${rows.join("")}</div>
       ${anyToAdd ? `<button type="button" class="btn btn-sm" id="playbook-add-all" title="Add every suggested task not already on the list" onclick="playbookAddAll('${c.id}','${c.stage}','${c.case_kind}')">+ Add all</button>` : ""}
     </div>`;
@@ -9834,10 +10109,78 @@ async function knownLenders() {
   } catch (_) { return []; }
 }
 const DIP_CHASE_TASK_TITLE = "Chase DIP decision";
-/* Returns { patch, task } to apply, or null for "do not advance". `{}` means "advance, change
-   nothing" — which is both the Skip button and the case where nothing was missing in the first
-   place, so the caller has one shape to handle. */
+/* Returns { patch, task, docs } to apply, or null for "do not advance". `{}` means "advance,
+   change nothing" — which is both the Skip button and the case where nothing was missing in the
+   first place, so the caller has one shape to handle.
+   R63 · H2 — `docs` is the third member: a list of checklist items to create on the case AFTER
+   the stage move succeeds, exactly where and why `task` is created after it. */
 async function promptStageEntry(targetStage, cRow, caseName) {
+  /* =======================================================================
+     R63 · H2 — FACT FIND: SEED THE DOCUMENT CHECKLIST
+
+     A case with NO checklist is never chased. That is not an oversight, it is the documented
+     rule the chaser works to (see docChaseState: "a case with no checklist is not fully
+     documented, it is unknown — automatic chasing skips it entirely"), and it means the single
+     most expensive moment in a case's life is the one where somebody advances it to Fact Find
+     and does not open a checklist: the client is then never asked for anything automatically,
+     and nothing anywhere says so. Fact Find is where documents start being wanted, and it is
+     where a person is already looking at the case — so this is where the list is offered.
+
+     Same three-way exit as the DIP and Offer prompts, deliberately and word-for-word:
+     "Don't advance" cancels the move outright, "Skip — advance anyway" moves the case and
+     writes NOTHING (blank is skip, never a guessed value), "Save & advance" moves the case and
+     creates the ticked items. The suggestions are docSuggestionsFor(kind)'s, so a product
+     transfer gets its lean list and nobody is asked for a memorandum of sale on a remortgage —
+     the exact same narrowing the modal's "Add items…" applies, from the same function.
+
+     ASKED ONCE, EVER: a case that already has ANY case_documents row has been answered, and
+     answering again would offer a second copy of a list somebody has already curated.
+     Feature-detected: on a database without m10 there is no table to write to, so this returns
+     {} silently and the move behaves exactly as it did before this round. */
+  if (targetStage === "fact_find") {
+    if ((await docsSupported()) === false) return {};
+    const caseId = cRow && cRow.id;
+    if (!caseId) return {};
+    const already = await softRows(db.from("case_documents").select("id").eq("case_id", caseId).limit(1));
+    if (already.length) return {};                              // already answered — do not ask
+    const kind = (cRow && cRow.case_kind) || "other";
+    const kindLabel = (KINDS.find((k) => k[0] === kind) || [])[1] || "case";
+    const { suggested, dropped } = docSuggestionsFor(kind);
+    // Nothing to offer at all (the firm's list in Settings is empty and this kind adds nothing):
+    // an empty dialog is not a question, so advance without asking.
+    if (!suggested.length && !dropped.length) return {};
+    const line = (item, i, pre) =>
+      `<label class="doc-pick"><input type="checkbox" value="${esc(item)}" ${pre ? "checked" : ""} data-i="${pre ? "s" : "d"}${i}"> ${esc(item)}</label>`;
+    return openOverlay(`
+      <h3>Moving ${esc(caseName || "this case")} to Fact Find</h3>
+      <p class="panel-sub">This case has <strong>no document checklist</strong>, and <strong>a case with no checklist is never chased</strong> — the automation skips it entirely rather than guess that nothing is outstanding. Ticked items are added as <strong>outstanding</strong>, dated today; the list is your firm's from Settings, narrowed to what a <strong>${esc(kindLabel)}</strong> needs.</p>
+      <div class="doc-picks" id="se-doc-suggested">${suggested.length ? suggested.map((it, i) => line(it, i, true)).join("") : '<div class="empty">Your firm\'s document list in Settings is empty.</div>'}</div>
+      ${dropped.length ? `<details class="doc-dropped"><summary>The rest of the firm's list (${dropped.length} item${dropped.length === 1 ? "" : "s"} a ${esc(kindLabel.toLowerCase())} does not usually need)</summary><div class="doc-picks" id="se-doc-dropped">${dropped.map((it, i) => line(it, i, false)).join("")}</div></details>` : ""}
+      <p class="panel-sub" style="margin-top:8px;">Nothing is emailed by this — the items are just put on the case's list. <strong>Skip</strong> advances the case and creates no checklist at all; you can build one later from the case.</p>
+      <div class="modal-actions">
+        <div><button type="button" class="btn btn-ghost" id="se-cancel">Don't advance</button></div>
+        <div class="right">
+          <button type="button" class="btn" id="se-skip">Skip — advance anyway</button>
+          <button type="button" class="btn btn-primary" id="se-ok">Save &amp; advance</button>
+        </div>
+      </div>`, (finish, box) => {
+      box.querySelector("#se-cancel").onclick = () => finish(null);
+      box.querySelector("#se-skip").onclick = () => finish({});
+      box.querySelector("#se-ok").onclick = () => {
+        const seen = new Set();
+        const docs = [];
+        [...box.querySelectorAll(".doc-picks input:checked")].forEach((i) => {
+          const v = String(i.value || "").trim();
+          const k = v.toLowerCase();
+          if (!v || seen.has(k)) return;
+          seen.add(k);
+          docs.push(v);
+        });
+        // Everything unticked is the same answer as Skip: advance, write nothing.
+        finish(docs.length ? { docs } : {});
+      };
+    });
+  }
   if (targetStage === "decision_in_principle") {
     if (cRow && String(cRow.lender || "").trim()) return {};   // already answered — do not ask
     const lenders = await knownLenders();
@@ -10038,6 +10381,37 @@ window.moveCaseToStage = async function (caseId, targetStage, opts = {}) {
         : ` · “${stageEntry.task.title}” task added for ${fmtD(stageEntry.task.due_date)}`;
     }
   }
+  /* R63 · H2 — the Fact Find checklist, written in the SAME place and for the same reason the
+     DIP chase task is: AFTER the stage update has succeeded. A checklist seeded onto a case that
+     never moved is litter, and worse, it would make the case look chased-able when it is still
+     sitting a stage back. Only ever reachable from "Save & advance" — Skip returns {} and lands
+     here with nothing to write. Uses insertDocItems, the one writer the modal's "Add items…"
+     uses, so the rows are identical whichever door they came through. */
+  let stageEntryDocsNote = "";
+  if (stageEntry.docs && stageEntry.docs.length) {
+    const { error: dErr, count: dCount } = await insertDocItems(caseId, stageEntry.docs);
+    stageEntryDocsNote = dErr
+      ? ` · the checklist could not be created: ${dErr.message}`
+      : ` · ${dCount} checklist item${dCount === 1 ? "" : "s"} added`;
+  }
+  /* R63 · H1b — THE NEW STAGE'S WORK, WRITTEN. Deliberately here: after the stage update has
+     succeeded (tasks for a stage the case never reached are litter, the same reason the referral
+     thank-you and the DIP chase both wait), and after the stage-entry task above so the two cannot
+     both be reasoning about a task list one of them has just changed. It runs on EVERY path into
+     this function — drag/drop, the card select, the modal's Advance, the modal's stage select and
+     the bulk move — because "the case reached a new stage" is the event, not "somebody used a
+     particular control". Silent (bulk) writes exactly the same rows and simply says nothing per
+     case; the tally rides back on opts.tally so the batch's one summary can report it. */
+  let playbookAdded = 0, playbookErr = "";
+  {
+    const pb = await autoAddStagePlaybookTasks(caseId, targetStage, cRow && cRow.case_kind, {
+      assignee: (cRow && cRow.assigned_to) || (ME && ME.id) || null,
+      createdBy: (ME && ME.id) || null,
+    });
+    playbookAdded = pb.added;
+    playbookErr = pb.error || "";
+    if (opts.tally) opts.tally.playbookTasks = (opts.tally.playbookTasks || 0) + pb.added;
+  }
   let refResult = null;
   if (targetStage === "completed" && !silent && (!cRow || cRow.stage !== "completed")) {
     refResult = await maybeQueueReferralThankYou(caseId, cRow, { quiet: true });
@@ -10070,7 +10444,15 @@ window.moveCaseToStage = async function (caseId, targetStage, opts = {}) {
       + (stageEntry.patch && stageEntry.patch.offer_expiry_date ? ` · offer expiry ${fmtD(stageEntry.patch.offer_expiry_date)}` : "")
       // R13 · M-11 — the toast names everything the prompt actually wrote, or it is not a receipt.
       + (stageEntry.patch && stageEntry.patch.offer_issued_date ? ` · offer issued ${fmtD(stageEntry.patch.offer_issued_date)}` : "")
-      + stageEntryTaskNote);
+      + stageEntryTaskNote
+      // R63 · H2 — and the checklist, on the same receipt as everything else the prompt wrote.
+      + stageEntryDocsNote
+      /* R63 · H1b — a receipt for the rows this move just wrote. Silence here would mean tasks
+         appearing on somebody's list with no visible cause, which is exactly how automation stops
+         being trusted. A failure says so in the same sentence rather than in a second toast that
+         would overwrite this one. */
+      + (playbookAdded ? ` · ${playbookTaskTally(playbookAdded)} for ${STAGE_LABEL[targetStage] || targetStage}` : "")
+      + (playbookErr ? ` · the ${STAGE_LABEL[targetStage] || targetStage} checklist tasks could NOT be created (${playbookErr}) — add them from the case's Stage checklist` : ""));
     if (!skipReload) loadPipeline();
   }
   return reopening ? "reopened" : "moved";
@@ -10137,8 +10519,13 @@ async function bulkMoveStage(targetStage) {
   } else if (!confirm(head)) return;
   let moved = 0, reopened = 0, blocked = 0, noop = 0, err = 0;
   const movedIds = [];
+  /* R63 · H1b — the bulk path adds the new stage's playbook tasks exactly like the interactive one
+     (same function, same dedupe), but SILENTLY: fifty per-case toasts is not feedback. The count
+     rides back here so the batch's one summary reports it — a bulk move that quietly wrote 90 task
+     rows and said nothing would be the automation nobody can account for. */
+  const tally = { playbookTasks: 0 };
   for (const id of ids) {
-    const res = await moveCaseToStage(id, targetStage, { silent: true, skipReload: true, skipConfirm: true, cRow: byId[id], lost });
+    const res = await moveCaseToStage(id, targetStage, { silent: true, skipReload: true, skipConfirm: true, cRow: byId[id], lost, tally });
     if (res === "moved") { moved++; movedIds.push(id); }
     else if (res === "reopened") reopened++;
     else if (res === "blocked") blocked++;
@@ -10157,6 +10544,7 @@ async function bulkMoveStage(targetStage) {
   // All four buckets, always: the old summary dropped the no-ops entirely, so the numbers never
   // added up to what was selected.
   let msg = `${moved} moved · ${reopened} reopened · ${blocked} blocked (protection) · ${noop} already in ${label}`;
+  if (tally.playbookTasks) msg += ` · ${playbookTaskTally(tally.playbookTasks)} for ${label}`;
   if (tasksClosed) msg += ` · ${tasksClosed} open task${tasksClosed === 1 ? "" : "s"} closed`;
   if (err) msg += ` · ${err} error${err === 1 ? "" : "s"}`;
   toast(msg);
@@ -12477,7 +12865,16 @@ window.openCase = async function (id, opts = {}) {
   const identityChip = propChip(c, { fallback: siblingCases.length > 1 });
   const identityChipIsFallback = identityChip.includes("prop-chip-none");
   const todayStr = localDateStr();
-  const nextTask = tasks.find((t) => !t.done_at);           // tasks are due-date ordered → first open one
+  /* R63 · H1c — WHICH open task this header calls "next".
+     It used to be simply the first one, and on a case that has moved on that is routinely a step
+     left over from an earlier stage: "Send DIP to client" on a case sitting at Offer. The header
+     then told an adviser to do something the case is already past, which is worse than telling
+     them nothing. So a NON-stale task is preferred; a stale one is still shown when it is all
+     there is (an open task is a fact, and hiding it would leave the header claiming "none open"
+     over a task list that plainly has one) — labelled, so it reads as the leftover it is. */
+  const openTasks = tasks.filter((t) => !t.done_at);        // tasks are due-date ordered
+  const nextTask = openTasks.find((t) => !isStalePlaybookTask(t, c.stage)) || openTasks[0] || undefined;
+  const nextTaskStale = !!nextTask && isStalePlaybookTask(nextTask, c.stage);
   const hadOpenTask = !!nextTask;
   const taskOverdue = nextTask && nextTask.due_date && nextTask.due_date < todayStr;
   /* R12b · W-11 — WHAT IS IN THE DIARY FOR THIS CASE.
@@ -12605,7 +13002,7 @@ window.openCase = async function (id, opts = {}) {
            all recorded. */ ""}
       ${upliftLineHtml(c, "cs-uplift")}
       <div class="cs-lines">
-        <div class="cs-line"><span class="cs-lbl">Next task</span><span id="cs-task-val">${nextTask ? `<span class="${taskOverdue ? "cs-danger-txt" : ""}">${esc(nextTask.title)}${nextTask.due_date ? " · " + (taskOverdue ? "overdue " : "due ") + fmtD(nextTask.due_date) : ""}</span>` : '<span class="cs-muted">none open</span>'}</span></div>
+        <div class="cs-line"><span class="cs-lbl">Next task</span><span id="cs-task-val">${nextTask ? `<span class="${taskOverdue ? "cs-danger-txt" : ""}">${esc(nextTask.title)}${nextTask.due_date ? " · " + (taskOverdue ? "overdue " : "due ") + fmtD(nextTask.due_date) : ""}</span>${nextTaskStale ? ` <span class="cs-muted cs-task-stale" id="cs-task-stale" title="${esc(STALE_TASK_TIP)}">(from an earlier stage)</span>` : ""}` : '<span class="cs-muted">none open</span>'}</span></div>
         ${nextAppt ? `<div class="cs-line" id="cs-appt-line"><span class="cs-lbl">${nextApptIsAhead ? "Next appointment" : "Earlier today"}</span><span id="cs-appt-val"><a href="#" class="cs-appt-link" data-appt="${esc(nextAppt.id)}" title="${esc(`Open this appointment${nextAppt.staff_id ? ` — ${staffName(nextAppt.staff_id)}` : ""}${nextAppt.location ? ` · ${nextAppt.location}` : ""}`)}" onclick="event.preventDefault();openApptFromCase('${jsArg(nextAppt.id)}','${jsArg(id)}')">${esc(nextAppt.title || "Appointment")} · ${esc(apptWhenLabel(nextAppt))}${nextAppt.staff_id ? " · " + esc(staffName(nextAppt.staff_id)) : ""}</a>${apptOutcomeChipHtml(nextAppt.outcome)}</span></div>` : ""}
         <div class="cs-line"><span class="cs-lbl">Last note</span><span id="cs-note-val">${lastNote ? `${esc(noteSnip(lastNote.body))} <span class="cs-muted">· ${fmtAgo(lastNote.created_at)}</span>` : '<span class="cs-muted">no notes yet</span>'}</span></div>
       </div>
@@ -12886,19 +13283,24 @@ window.openCase = async function (id, opts = {}) {
         <input id="new-task-due" type="date" style="width:auto;" title="Leave this empty and the task is due tomorrow — a task with no date appears on no list anywhere.">
         <button class="btn btn-sm" id="add-task-btn" title="Add task">Add task</button>
       </div>
-      <div id="tasks-inline">${tasks.map((t) => `
-        <div class="row-item" style="padding:7px 4px;">
+      ${/* R63 · H1c — the chip that names a leftover. A step from an earlier stage of THIS case is
+            still open work as far as every list in the app is concerned, and it is the single
+            commonest reason a case that needs a call is not on the No-next-action radar. Marking it
+            done is the whole fix, so the row that carries the diagnosis also carries the button —
+            the same complete-task action every other row has, just labelled rather than a bare ✓. */ ""}
+      <div id="tasks-inline">${tasks.map((t) => { const stale = isStalePlaybookTask(t, c.stage); return `
+        <div class="row-item${stale ? " task-stale-row" : ""}" style="padding:7px 4px;">
           <div class="row-main">
-            <div style="${t.done_at ? "text-decoration:line-through;color:var(--muted);" : ""}">${esc(t.title)}</div>
-            <div class="s">${t.due_date ? "due " + fmtD(t.due_date) : ""}${t.done_at ? " · done" : ""}</div>
+            <div style="${t.done_at ? "text-decoration:line-through;color:var(--muted);" : ""}">${esc(t.title)}${stale ? ` <span class="badge grey task-stale-chip" title="${esc(STALE_TASK_TIP)}">earlier stage</span>` : ""}</div>
+            <div class="s">${t.due_date ? "due " + fmtD(t.due_date) : ""}${t.done_at ? " · done" : ""}${stale ? ` · a ${esc(STAGE_LABEL[PLAYBOOK_STAGE_ORDER[PLAYBOOK_TITLE_STAGE_IDX[playbookTitleKey(t.title)]]] || "earlier")} step — this case is at ${esc(STAGE_LABEL[c.stage] || c.stage)}` : ""}</div>
           </div>
           ${/* R12a·D12 — a done row used to be a dead end: struck through, no control, and the only
                 way back was the database. done_at is nullable and reopening is simply setting it
                 back to null, so the row that RECORDS the mistake is also the row that fixes it. */ ""}
           ${t.done_at ? assigneeChipHtml(t.assigned_to) : taskAssigneeHtml(t.id, t.assigned_to, "")}${t.done_at
             ? `<button class="btn btn-sm task-reopen" aria-label="Reopen this task" title="Put this task back on the list — it was marked done" onclick="reopenTaskInCase('${t.id}','${id}')">↺ Reopen</button>`
-            : `<button class="btn btn-sm" aria-label="Mark task done" title="Mark task done" onclick="doneTaskInCase('${t.id}','${id}')">✓</button>`}
-        </div>`).join("") || '<div class="empty">No tasks.</div>'}</div>
+            : `<button class="btn btn-sm${stale ? " task-stale-done" : ""}" aria-label="Mark task done" title="${stale ? esc("Mark this earlier-stage step done. It is what the case header is showing as the next task, and it is what is keeping this case off the No-next-action radar.") : "Mark task done"}" onclick="doneTaskInCase('${t.id}','${id}')">${stale ? "✓ Done" : "✓"}</button>`}
+        </div>`; }).join("") || '<div class="empty">No tasks.</div>'}</div>
     </div>
     ${/* R17 · §1 — the Stage checklist sits directly under Tasks: the house steps for the current
          stage, each a one-click add that writes a real case_tasks row and dedupes against what is
@@ -15481,8 +15883,11 @@ async function buildClientTimeline(clientId, cases) {
       + (n.id && !refiled && !marker ? refileBtnHtml(n.id) : "");
     push(n.created_at, nt.type, rev ? "⭐" : nt.icon, title, n.case_id);
   });
+  /* R63 · A1 — the second (and third) "Document request" on a case IS the chase; production has
+     no separate docs_chase type. Without this the history reads as the same first ask, repeated. */
+  const tlChaseMails = docChaseMailSet(emails);
   emails.filter((e) => e.status === "sent" || e.status === "failed").forEach((e) => {
-    const lbl = emailTypeLabel(e.email_type);
+    const lbl = emailTypeLabel(e.email_type) + (tlChaseMails.has(e) ? " (chase)" : "");
     push(e.sent_at || e.created_at, "email", "✉️", esc(lbl) + (e.status === "failed" ? ' <span class="tl-fail">failed</span>' : ""), e.case_id);
   });
   sms.filter((s) => s.status === "sent" || s.status === "failed").forEach((s) => {
@@ -16833,14 +17238,20 @@ async function loadEmails() {
   const smsBadge = { queued: "amber", sending: "blue", sent: "green", failed: "red", cancelled: "grey" };
   const allSms = sms || [];
   renderQueueChips("#sms-filters", SMS_STATUSES, allSms, smsStatusFilter, (k) => { smsStatusFilter = k; loadEmails(); });
-  /* R11-5 — SMS has no cron of its own: the queue sits there until somebody presses "Send SMS
-     now", so the honest summary is who is waiting, not when it goes. */
+  /* R63 · A3 — SMS DOES HAVE A CRON, AND THIS PAGE SAID IT DID NOT.
+     R11-5's copy ("SMS has no cron of its own: the queue sits there until somebody presses Send
+     SMS now") was true of the harness and has not been true of production since the
+     `nexmoney-send-sms` scheduled job went in: it runs daily at 08:05 UTC — 09:05 while British
+     Summer Time is in force — five minutes behind the email run. The old wording is the dangerous
+     direction to be wrong in: it tells an operator a queued text WILL NOT go out on its own, so
+     nobody cancels the one that should not send. Said the same way the email summary above says
+     it — when the run is, and what is waiting for it. */
   const nSmsQueued = allSms.filter((s) => s.status === "queued" || s.status === "sending").length;
   const smsSummary = $("#sms-summary");
   if (smsSummary) {
     smsSummary.innerHTML = nSmsQueued
-      ? `<strong>${nSmsQueued}</strong> SMS waiting — SMS is not on the 8am cron, so nothing goes until somebody presses “Send SMS now”.`
-      : `Nothing waiting to send.`;
+      ? `The next <strong>8:05am</strong> SMS run (09:05 in British Summer Time) will send <strong>${nSmsQueued}</strong> waiting SMS. “Send SMS now” sends ${nSmsQueued === 1 ? "it" : "them"} straight away instead of waiting for it.`
+      : `Nothing waiting to send — the 8:05am SMS run has nothing to pick up.`;
   }
   const smsFailedOnly = smsStatusFilter === "failed";
   const smsRows = smsStatusFilter === "all"
@@ -16863,7 +17274,7 @@ async function loadEmails() {
       <span class="badge ${smsBadge[s.status] || "grey"}">${esc(s.status)}</span>
       ${!settled && s.client_id && isBadContactError(s.error) ? `<button class="btn btn-sm btn-ghost" onclick="openClient('${s.client_id}','phone','${jsArg(s.to_phone)}')" title="This looks like a bad contact detail, not a one-off send failure">Fix contact</button>` : ""}
       ${failed ? `<button class="btn btn-sm" onclick="retrySms('${s.id}')">Retry</button>` : ""}
-      ${s.status === "queued" || failed ? `<button class="btn btn-sm btn-ghost sms-cancel" data-id="${esc(s.id)}" onclick="cancelQueuedSms('${s.id}')" title="${failed ? "Stop retrying this one — it is marked cancelled and never sends" : "Stop this SMS before anybody presses Send SMS now — it never sends"}">Cancel</button>` : ""}
+      ${s.status === "queued" || failed ? `<button class="btn btn-sm btn-ghost sms-cancel" data-id="${esc(s.id)}" onclick="cancelQueuedSms('${s.id}')" title="${failed ? "Stop retrying this one — it is marked cancelled and never sends" : "Stop this SMS before the 8:05am run picks it up — it never sends"}">Cancel</button>` : ""}
     </div>`;
   }).join("") : `<div class="empty">${smsStatusFilter !== "all" ? `No ${esc(smsStatusFilter)} SMS in the newest ${EMAIL_ROW_LIMIT} rows.` : "No SMS yet. They'll appear here once SMS automation runs or you send one."}</div>`);
 }
@@ -18590,6 +19001,27 @@ window.acceptLead = async function (id, ev) {
       + (l.message ? " · “" + l.message + "”" : ""),
   });
   if (noteErr) leadWarn.push(`the enquiry note did NOT save (${noteErr.message}) — the joint applicant and the client's own message are only on the lead now`);
+  /* R63 · H1a — THE NEW CASE STARTS WITH ITS ENQUIRY STEPS ON IT.
+     An accepted lead used to become a case at Enquiry with nothing open on it at all: no task, no
+     next action, and therefore nothing on anybody's list until somebody remembered it. The house
+     Enquiry checklist ("Qualify enquiry…", "Book fact-find appointment") is exactly the work that
+     follows an accepted enquiry, so it is written here rather than offered in a panel — the same
+     rows `playbookAddAll` writes by hand, due today + each step's offset, assigned to THE ADVISER
+     THE LEAD WAS ROUTED TO (not whoever pressed Accept) and created_by the actor.
+     Deliberately after the case insert has succeeded and beside the note/welcome writes: a failure
+     is best-effort like theirs and joins the SAME aggregated warning, because a second toast would
+     simply overwrite the first (G1I-R7). Idempotent by title, so a retried accept cannot double up.
+     Governed by the same `playbook_auto_tasks` switch as the stage-advance half — one setting for
+     "the app writes the checklist for me", and the Settings copy names both moments. */
+  let leadTasksAdded = 0;
+  {
+    const pb = await autoAddStagePlaybookTasks(nc.id, "enquiry", newCase.case_kind, {
+      assignee: assignTo || (ME && ME.id) || null,
+      createdBy: (ME && ME.id) || null,
+    });
+    leadTasksAdded = pb.added;
+    if (pb.error) leadWarn.push(`the Enquiry checklist tasks were NOT created (${pb.error}) — the case has no next action on it, so add them from the case's Stage checklist`);
+  }
   /* R5-1 — accepting a lead used to call runAutomation() unscoped, which flushed the FIRM's entire
      due queue (every colleague's reminders, review requests and fee chases) as a side effect of one
      click, and did so even when the lead had no email address and nothing at all was queued. The
@@ -18655,6 +19087,10 @@ window.acceptLead = async function (id, ev) {
   const figures = leadFiguresHint(l.message);
   const propTxt = leadPropValue != null ? ` · property value ${fmtM(leadPropValue)} captured on the case` : "";
   toast(`Case created for ${acceptedName}${assignTo ? " → " + staffName(assignTo) : ""}${respTxt}${propTxt} — find it in New business`
+    /* R63 · H1a — the tasks are named on the accept toast for the same reason the stage move names
+       them: work appearing on an adviser's list with no visible cause is how automation loses the
+       benefit of the doubt. */
+    + (leadTasksAdded ? ` · ${playbookTaskTally(leadTasksAdded)}` : "")
     + (figures ? " · the enquiry mentions figures — worth capturing on the case now" : "")
     + (leadWarn.length ? `, but ${leadWarn.join("; and ")}` : ""));
   if (figures) openCase(nc.id);

@@ -103,7 +103,28 @@ node tests/r44.js
 node tests/r45.js
 node tests/r47.js
 node tests/r48.js
+node tests/r63_docs.js
+node tests/r63_tasks.js
 ```
+
+**R63 notes (2026-08-26).** Two new suites: `tests/r63_docs.js` (74 — chase-count rule, the
+mock's `auto_stage_comms` mirror, bool10 "on", SMS-cron copy, the Fact Find checklist prompt)
+and `tests/r63_tasks.js` (99 — playbook tasks written on lead accept and on every stage move,
+the `playbook_auto_tasks` switch, the stale earlier-stage task rule in the header / task list /
+radar, the Mine-scope lead default). Two OLD suites carry deliberate contract patches, each
+commented in place: `tests/r9_docs.js` (chase ground truth = extra `docs_request` rows, because
+`docs_chase` is not a production email type) and `tests/r9_adv.js` (§R9-1(d) counts only
+thank-you tasks, because a move to Completed now legitimately writes the Completed playbook).
+**Mock-parity rules added this round:** (1) every `email_type` the mock writes MUST be a member
+of the production enum (`docs_chase` was not — chases are further `docs_request` rows); (2) the
+mock now mirrors production's `auto_stage_comms` trigger on every case update that changes
+`stage` (stage emails gated on their settings, accepting "1" OR "on"; the solicitor-chase task
+at Exchange), so a suite counting `email_queue` / `case_tasks` rows after a move sees those rows;
+(3) the `bool10` settings (`auto_*`) are "on" when the value is "1" OR "on" — production seeds
+'on', the Settings form writes "1". `tests/r44.js` / `tests/r48.js` need
+`/tmp/r44/node_modules/xlsx/dist/xlsx.full.min.js` (`cd /tmp/r44 && npm i xlsx@0.18.5`).
+Known date-dependent flakes not fixed here: r12a D11, r12b B5 (both around the fixture's
+"Protection review" appointment on the 27th), r25 F1 (pre-existing since the R55 boot probe).
 
 **Full battery: 4,655 checks run, all green.** (`tests/r48.js` — 119 checks,
 §A–§I, new this round — required ZERO repairs to any pre-existing suite: the

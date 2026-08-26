@@ -1474,6 +1474,14 @@
     review_delay_days: "14",
     referral_delay_days: "21",
     solicitor_chase_days: "7",
+    /* R63 · A2/A3 — THE FIVE bool10 KEYS, AND WHY THEY ARE SPELLED "1"/"0" HERE.
+       The Settings form in app.js writes these five as "1"/"0"; the rows production was seeded
+       with, and the SQL trigger that reads them, use 'on'/'off'. Both spellings are real, both
+       are in the field, and everything that READS one of these keys must accept either —
+       app.js's isBool10On() and this file's settingBool10On() are the two places that do.
+       The seeded VALUES below are unchanged (auto_offer_update and auto_referral stay off, so
+       "the setting is off, so nothing was queued" is a state the harness can still reach); only
+       the reading rule moved. */
     auto_docs_request: "1",
     auto_submitted_update: "1",
     auto_offer_update: "0",
@@ -1495,6 +1503,16 @@
        exercise it turn it on themselves, which is also the only way to prove
        the switch is really the gate. */
     annual_review_enabled: "off",
+    /* R63 · H1a/H1b — automatic stage-checklist tasks, seeded ON. Unlike the two
+       switches either side of it this one does not email anybody: it writes the
+       firm's OWN checklist onto their OWN cases, which is the work they had
+       already agreed was the work. It ships on because the defect it fixes is
+       that 127 of 134 live cases carried no open task at all while the checklist
+       sat in the case modal being advisory. The app treats an ABSENT row as ON
+       for the same reason (playbookAutoTasksOn), so this row is the mock stating
+       the prod default out loud rather than the thing that creates it — the
+       tests that prove the switch really is the gate set it to "off" themselves. */
+    playbook_auto_tasks: "on",
     /* r9_m10 — the nightly document chase, seeded OFF for the same reason the
        annual review touch is: chasing a client is a decision a firm makes, not
        something a deploy starts doing to their book on its own. The tests that
@@ -4356,6 +4374,9 @@
           if (table === "cases" || table === "clients" || table === "vault_entries") existing.updated_at = iso(new Date());
           auditRow(table, "update", existing, diff);
           if (table === "cases") caseEventsForUpdate(before, existing);
+          /* R63 · A2(b) — auto_stage_comms fires from BOTH write paths, because an upsert that
+             lands on an existing row is an UPDATE as far as the trigger is concerned. */
+          if (table === "cases") autoStageComms(before, existing);
           if (table === "fact_finds" && before.status !== "submitted" && existing.status === "submitted") {
             logFactFindSubmit(existing, existing.submitted_at || iso(new Date()));
           }
@@ -4403,6 +4424,7 @@
       if (Object.keys(diff).length) {
         auditRow(table, "update", row, diff);
         if (table === "cases") caseEventsForUpdate(before, row);
+        if (table === "cases") autoStageComms(before, row);   /* R63 · A2(b) — the stage-comms trigger */
         if (table === "fact_finds" && before.status !== "submitted" && row.status === "submitted") {
           logFactFindSubmit(row, row.submitted_at || iso(new Date()));
         }
@@ -5518,6 +5540,110 @@
       return e.case_id === caseId && (type ? e.email_type === type : DOC_TYPES.indexOf(e.email_type) >= 0);
     });
   }
+  /* R63 · A2(a) — HOW MANY CHASES THIS CASE HAS HAD, the production way.
+     There is NO `docs_chase` email type in production: queue_comms_extras chases by queuing a
+     FURTHER `docs_request` row, so the first document email on a case is the request and every
+     one after it is a chase. This mock queued a made-up `docs_chase` type and counted only those,
+     which meant the harness could never reproduce the bug the real chaser has (and app.js's own
+     counter had the same hole — see docChaseCount() there; the two must agree or the harness is
+     testing a rule production does not have).
+     Same rule both sides: legacy `docs_chase` rows are still counted (this file's own fixtures
+     seed them, and a historic production row could exist), plus every `docs_request` row after
+     the first. Cancelled rows never reached the client, so they never chased anybody. */
+  function docChaseCountFor(caseId) {
+    var live = docMailsFor(caseId).filter(function (e) { return e.status !== "cancelled"; });
+    var legacy = live.filter(function (e) { return e.email_type === "docs_chase"; }).length;
+    var requests = live.filter(function (e) { return e.email_type === "docs_request"; }).length;
+    return legacy + Math.max(0, requests - 1);
+  }
+  /* =========================================================================
+     R63 · A2(b) — TRIGGER PARITY: auto_stage_comms (prod) on cases.stage change
+
+     Production carries an AFTER UPDATE trigger on `cases` that fires the moment a case's stage
+     changes. This mock never had it — which is what the "honest gap" note further down used to
+     record — and the cost was not academic: four real settings with real Settings-page UI
+     (auto_docs_request / auto_submitted_update / auto_offer_update / auto_completion_email) and
+     the whole "advance a case and a client hears about it" behaviour were invisible to the
+     harness, so nothing could catch the app describing them wrongly.
+
+     WHAT THE TRIGGER DOES, mirrored exactly:
+
+     · ONE EMAIL PER ARRIVAL, keyed on the stage the case lands in:
+         fact_find   → docs_request        (auto_docs_request)
+         application → submitted_update    (auto_submitted_update)
+         offer       → offer_update        (auto_offer_update)
+         completed   → completion_congrats (auto_completion_email)
+       Each is gated on its OWN setting, read with settingBool10On below: '1' AND 'on' both mean
+       on, because the Settings form writes "1"/"0" while the seeded rows (and the production SQL)
+       say 'on'/'off'. A switch whose two spellings disagree is a switch nobody can trust.
+     · SKIPPED when the client has no email address (there is nothing to send to — Data health
+       owns that gap) and when the client is `suppress_automation` — the same rule, checked the
+       same way, as every other automated client email in this file.
+     · IDEMPOTENT PER CASE + EMAIL TYPE. The existence of the row IS the memory, so a case dragged
+       Offer → Application → Offer is not congratulated twice, and a case somebody advanced by
+       accident and moved straight back leaves exactly one row behind, not two. Cancelled rows
+       count as "already queued" for this purpose: somebody stopping the email is a decision, and
+       re-entering the stage must not quietly re-send what they stopped.
+     · THE SOLICITOR CHASE TASK at `exchange`: "Chase solicitors for completion date", due
+       TODAY + solicitor_chase_days (7 when unset), assigned to the case's own adviser. Written
+       only when the case has no OPEN task whose title starts "Chase solicitors" — the same
+       LIKE-prefix idempotency production uses, so a task somebody retitled slightly is still
+       recognised as the one that exists. NOT gated on suppression, and not on a client email
+       address: it is work for staff, not a message to a client, exactly like the doc-overdue
+       task below and the exchange alert in the watchtower fixtures.
+
+     Fires only on a genuine stage CHANGE (before.stage !== after.stage), from the two write paths
+     that can change one — the update builder and the upsert builder — so a save that touches
+     anything else on the case queues nothing.
+     ======================================================================= */
+  function settingBool10On(k) {
+    var v = String(setting(k, "off")).trim().toLowerCase();
+    return v === "1" || v === "on";
+  }
+  var STAGE_COMMS = {
+    fact_find: { setting: "auto_docs_request", type: "docs_request", subject: "Your document checklist" },
+    application: { setting: "auto_submitted_update", type: "submitted_update", subject: "Your application has gone to the lender" },
+    offer: { setting: "auto_offer_update", type: "offer_update", subject: "Your mortgage offer has come through" },
+    completed: { setting: "auto_completion_email", type: "completion_congrats", subject: "Congratulations on your completion" }
+  };
+  var SOLICITOR_CHASE_TITLE = "Chase solicitors for completion date";
+  function autoStageComms(before, after) {
+    if (!after || !after.id) return;
+    if (before && before.stage === after.stage) return;
+    var when = iso(new Date());
+    var spec = STAGE_COMMS[after.stage];
+    if (spec && settingBool10On(spec.setting)) {
+      var already = DB.email_queue.some(function (e) {
+        return e.case_id === after.id && e.email_type === spec.type;
+      });
+      if (!already) {
+        var cl = DB.clients.filter(function (x) { return x.id === after.client_id; })[0];
+        /* No address, or automation suppressed for this person → nothing queued, silently, which
+           is exactly what the production trigger's WHERE clause does. */
+        if (cl && cl.email && !cl.suppress_automation) {
+          queueRow({
+            case_id: after.id, client_id: after.client_id, email_type: spec.type,
+            to_email: cl.email, subject: spec.subject,
+            scheduled_for: when, created_at: when
+          });
+        }
+      }
+    }
+    if (after.stage === "exchange") {
+      var open = DB.case_tasks.some(function (t) {
+        return t.case_id === after.id && !t.done_at && /^Chase solicitors/.test(String(t.title || ""));
+      });
+      if (open) return;
+      var days = Number(setting("solicitor_chase_days", "7"));
+      if (!(days >= 0)) days = 7;
+      DB.case_tasks.push({
+        id: nid("tk"), case_id: after.id, title: SOLICITOR_CHASE_TITLE,
+        due_date: dateOnly(new Date(NOW.getTime() + days * DAY)), done_at: null,
+        created_by: null,                              /* SECURITY DEFINER — the system wrote it */
+        assigned_to: after.assigned_to || null, created_at: when
+      });
+    }
+  }
   function queueDocChases() {
     var out = { doc_chases_queued: 0, doc_overdue_tasks: 0 };
     if (setting("doc_chase_enabled", "off") !== "on") return out;
@@ -5526,9 +5652,9 @@
     DB.cases.filter(function (c) {
       return DOC_CHASE_STAGES.indexOf(c.stage) >= 0 && outstandingDocs(c.id).length > 0;
     }).slice().forEach(function (c) {
-      var chases = docMailsFor(c.id, "docs_chase");
+      var chases = docChaseCountFor(c.id);          /* R63 · A2(a) — the production rule */
       var when = iso(new Date());
-      if (chases.length >= DOC_CHASE_MAX) {
+      if (chases >= DOC_CHASE_MAX) {
         /* Out of chases. A task, not a fourth email — and deliberately NOT
            subject to the quiet window: the window governs how often we mail a
            client, and this is the point at which we stop mailing them. */
@@ -5556,8 +5682,13 @@
          exchange-chase task), consistent everywhere suppression is checked
          in this file. */
       if (cl.suppress_automation) return;
+      /* R63 · A2(a) — a chase IS a further `docs_request`. Production has no `docs_chase` type
+         to write, and a harness that invents one is a harness in which the app's chase counter
+         can never be wrong. The SUBJECT stays "Still waiting on your documents" — that is what
+         distinguishes a chase from the first ask in the queue an operator reads, and it is what
+         process-emails composes for a request that is not the first on its case. */
       queueRow({
-        case_id: c.id, client_id: c.client_id, email_type: "docs_chase",
+        case_id: c.id, client_id: c.client_id, email_type: "docs_request",
         to_email: cl.email, subject: "Still waiting on your documents",
         scheduled_for: when, created_at: when
       });
@@ -5638,9 +5769,16 @@
      it was before this round, and is named here rather than left for the
      next person to rediscover by grepping for nothing. Same absence, same
      reason, for auto_sms_appointment (the settings key exists; nothing ever
-     queues off it) and for the stage-comms trigger equivalent
-     (auto_docs_request / auto_submitted_update / auto_offer_update /
-     auto_completion_email — four settings, zero queueing code in this file). */
+     queues off it).
+     R63 · A2(b) — THE STAGE-COMMS HALF OF THIS NOTE IS NO LONGER TRUE, and is
+     corrected here rather than deleted, because the shape of the gap is worth
+     keeping: auto_docs_request / auto_submitted_update / auto_offer_update /
+     auto_completion_email were four settings with zero queueing code in this
+     file, and they are now mirrored by autoStageComms() (search "TRIGGER
+     PARITY: auto_stage_comms" above) — which is a TRIGGER on cases.stage, not
+     part of queueCommsExtras at all, so nothing below this line queues them and
+     nothing below this line should. The exchange solicitor-chase task lives
+     there too, for the same reason. */
   function queueCommsExtras() {
     var out = { review_requests_queued: 0, annual_review_tasks: 0, review_reminders_queued: 0, doc_chases_queued: 0, doc_overdue_tasks: 0 };
     /* The annual review touch is a task, not an email, so it is NOT gated on the
@@ -5930,6 +6068,13 @@
       };
       return { ok: true, sent: sent, failed: failed, scoped: !!ids, skipped_queueing: !!ids, queued: queued };
     },
+    /* R63 · A3 — PARITY NOTE, not a behaviour change. In production this function is ALSO on a
+       schedule of its own: the `nexmoney-send-sms` cron invokes it daily at 08:05 UTC (09:05 while
+       BST is in force), five minutes behind the email run. This mock has no clock, so — exactly
+       like process-emails above — it only ever runs when something invokes it. Written down here
+       because app.js's Emails page used to tell operators the opposite ("SMS is not on the 8am
+       cron, so nothing goes until somebody presses Send SMS now"), and the harness is where that
+       claim would otherwise keep looking true. */
     "send-sms": function () {
       var due = DB.sms_queue.filter(function (s) { return s.status === "queued" && s.to_phone; });
       due.forEach(function (s) { s.status = "sent"; s.sent_at = iso(new Date()); });
