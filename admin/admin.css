@@ -3750,3 +3750,36 @@ tr.owed-hot > td { background: var(--red-bg); }
 .settings-details > summary { background: #eef1f5; border-left: 4px solid #1b2a4a; border-radius: 8px; padding: 7px 12px; font-size: 12.5px; font-weight: 800; letter-spacing: 0.05em; text-transform: uppercase; color: #33415c; cursor: pointer; user-select: none; }
 .settings-details { margin-bottom: 14px; }
 .settings-details[open] > summary { margin-bottom: 10px; }
+
+/* ==========================================================================
+   R64 — THE RETENTION PAGE BECOMES WORKABLE.
+   Three additions, all confined to #ret-rates-panel: the month chip row, the
+   selection column + bulk bar, and the per-row call chips. The chips borrow
+   R61's card-advance manners (.hover-quiet) — quiet until the row is hovered
+   or something in it takes focus — because a hundred rows each wearing three
+   buttons is a wall, not a list.
+   ========================================================================== */
+.ret-month-chips { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
+.ret-month-chips .due-chips-lbl { margin-right: 2px; }
+.ret-month-chip .count { margin-left: 5px; background: rgba(16,42,78,.08); border-radius: 10px; padding: 0 6px; font-size: 11px; font-weight: 700; }
+.ret-month-chip.scope-active .count { background: rgba(255,255,255,.22); color: #fff; }
+.ret-selall { padding-top: 0; }
+.ret-selall .linkish { font-size: 12.5px; }
+.bulk-bar #ret-bulk-clear { margin-left: auto; }
+.ret-bulk-note { margin: -6px 0 12px; max-width: 78ch; font-size: 12px; line-height: 1.5; }
+#ret-rates-list .row-item > .ret-cb { align-self: center; margin-right: 2px; }
+#ret-rates-list .row-item.is-sel { background: var(--blue-bg); }
+/* The row's own call cluster. Kept inside .row-main so it reads as part of the row's text block
+   rather than competing with the stage badge and the Start-retention button on the right. */
+.ret-row-acts { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 5px; }
+.ret-row-acts .btn.btn-sm { padding: 2px 8px; font-size: 11.5px; }
+.ret-row-tel { font-size: 12.5px; color: var(--muted); }
+.hover-quiet { opacity: 0.28; transition: opacity 0.12s; }
+.row-item:hover .hover-quiet, .hover-quiet:focus-within { opacity: 1; }
+/* Touch has no hover: on a phone the chips are simply always legible. */
+@media (hover: none) {
+  .hover-quiet { opacity: 1; }
+}
+/* The shared log-call panel, when it is opened as an overlay from a Retention row rather than
+   inside the case modal (same markup, so only the box around it needs saying). */
+#ret-logcall-panel { margin-top: 4px; }

@@ -123,7 +123,7 @@ const goto = async (page, pageName, ms) => {
 /* R35's own R34-era localStorage keys this suite touches, cleared the same way tests/r34.js
    clears them: only a REAL stored choice may override the role default, so clearing them each
    time keeps every block's starting state honest. */
-const NX_KEYS = ["nx_wt_scope", "nx_board_adviser", "nx_diary_staff", "nx_views_v1",
+const NX_KEYS = ["nx_wt_scope", "nx_board_adviser", "nx_clients_adviser"/* R64 · M9 — the Clients adviser filter persists now */, "nx_diary_staff", "nx_views_v1",
   "nx_drawer_watchtower", "nx_drawer_unactioned", "nx_drawer_leads", "nx_drawer_todayappts",
   "nx_drawer_tasks", "nx_drawer_rateerc", "nx_drawer_retention", "nx_drawer_revenue", "nx_nav_firm"];
 const clearNxKeys = (page) => page.evaluate((keys) => { keys.forEach((k) => { try { localStorage.removeItem(k); } catch (e) { /* ignore */ } }); }, NX_KEYS);

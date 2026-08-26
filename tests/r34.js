@@ -106,7 +106,7 @@ const noNewErr = (page, before) => (page.__err || []).length === before;
    "clear these too if you touch those areas" — this suite touches nx_views_v1
    (saved-view apply) so it is cleared alongside the R34 keys. */
 const DRAWER_KEYS = ["watchtower", "unactioned", "leads", "todayappts", "tasks", "rateerc", "retention", "revenue"].map((k) => "nx_drawer_" + k);
-const R34_KEYS = ["nx_wt_scope", "nx_board_adviser", "nx_diary_staff", "nx_views_v1"].concat(DRAWER_KEYS);
+const R34_KEYS = ["nx_wt_scope", "nx_board_adviser", "nx_clients_adviser"/* R64 · M9 — the Clients adviser filter persists now */, "nx_diary_staff", "nx_views_v1"].concat(DRAWER_KEYS);
 const clearR34Keys = (page) => page.evaluate((keys) => { keys.forEach((k) => { try { localStorage.removeItem(k); } catch (e) { /* ignore */ } }); }, R34_KEYS);
 const clearKey = (page, key) => page.evaluate((k) => { try { localStorage.removeItem(k); } catch (e) { /* ignore */ } }, key);
 const lsGetPage = (page, key) => page.evaluate((k) => localStorage.getItem(k), key);

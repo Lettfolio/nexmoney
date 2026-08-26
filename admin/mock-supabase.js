@@ -1471,6 +1471,10 @@
     bank_account_number: "",
     monthly_fee_target: "9500",
     rate_reminder_months: "6",
+    /* R64 · L5 — the gone-quiet window, seeded at its default so the fixture reads exactly as the
+       hard-coded six months did before it became a setting. A suite that wants a different window
+       upserts this key and re-runs loadSettings(); blank/absent still means 6 in app.js. */
+    client_quiet_months: "6",
     review_delay_days: "14",
     referral_delay_days: "21",
     solicitor_chase_days: "7",

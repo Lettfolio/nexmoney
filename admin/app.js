@@ -253,6 +253,9 @@ const SETTING_FIELDS = [
   // same thing as the number being measured against it.
   ["monthly_fee_target", "Monthly fee target (£ earned on completions, blank = off)"],
   ["rate_reminder_months", "Rate reminder lead time (months)"],
+  /* R64 · L5 — the gone-quiet window, next to the other "how long before we act" numbers because
+     that is exactly what it is. Blank is a legitimate answer and means the six-month default. */
+  ["client_quiet_months", "Gone-quiet window (months, blank = 6)"],
   ["review_delay_days", "Review request delay after completion (days)"],
   /* R9-3 — the SECOND ask, and it was already happening. The backend has queued a review reminder
      a week after an unanswered request since this round's comms pass; the setting that governs it
@@ -276,7 +279,7 @@ const SETTING_URL_FIELDS = { google_review_link: "Google review link", review_pl
    a bad number here corrupts a live metric (the rate-reminder KPI renders "≤ NaNmo" and the whole
    "ending soon" bucket vanishes), and a bad bank field is the one setting with direct
    misdirected-payment risk once queueEmail lets a fee-request email through on it. */
-const SETTING_NUMERIC_FIELDS = { rate_reminder_months: "Rate reminder lead time", review_delay_days: "Review request delay", review_reminder_days: "Review reminder delay", referral_delay_days: "Referral nudge delay", solicitor_chase_days: "Solicitor chase task delay", monthly_fee_target: "Monthly fee target", protection_avg_commission: "Average protection commission", doc_chase_days: "Document chase interval" };
+const SETTING_NUMERIC_FIELDS = { rate_reminder_months: "Rate reminder lead time", client_quiet_months: "Gone-quiet window", review_delay_days: "Review request delay", review_reminder_days: "Review reminder delay", referral_delay_days: "Referral nudge delay", solicitor_chase_days: "Solicitor chase task delay", monthly_fee_target: "Monthly fee target", protection_avg_commission: "Average protection commission", doc_chase_days: "Document chase interval" };
 const SETTING_BANK_FIELDS = { bank_sort_code: { label: "Sort code", re: /^\d{2}-?\d{2}-?\d{2}$/ }, bank_account_number: { label: "Account number", re: /^\d{8}$/ } };
 function isValidEmailLike(v) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v); }
 function isValidUrlLike(v) { return /^https?:\/\/[^\s]+\.[^\s]+/i.test(v); }
@@ -302,6 +305,9 @@ function settingFieldHtml([k, label, type]) {
   return `<label>${esc(label)}<input name="${k}" type="${inputType}" value="${esc(settings[k] ?? "")}"></label>` + note;
 }
 const SETTING_NOTES = {
+  /* R64 · L5 — said next to the box, in the same words the Clients chip and the Retention panel
+     use, because this one number changes what four different screens claim about a client. */
+  client_quiet_months: `How long a client can go without contact before they count as <strong>gone quiet</strong>. It is the one window behind all of it: the Clients page's <strong>“Not contacted N+ months”</strong> chip and segment, the Retention page's <strong>Gone quiet</strong> panel, and the seeded <strong>“My cold clients (Nmo+)”</strong> saved view. Contact means the most recent of a case note, an email we actually <em>sent</em>, an appointment that has already started, or a task completed on one of their cases. <strong>Blank means 6 months</strong>, which is what it has always been; raise it for a book you touch yearly, lower it for one you work weekly.`,
   docs_list: `Your firm's standard list. It is used in two places: it is what a <strong>document request goes out with when the case has no checklist of its own</strong>, and it is the menu the case modal's “Add items…” offers when you build one (narrowed to what that kind of case needs). Once a case has a checklist, that checklist wins — the emails then list <strong>only what is still outstanding on that case</strong>, so nobody is asked twice for a document they have already sent. Editing this list does not change any checklist already built.`,
 };
 
@@ -6195,13 +6201,43 @@ function fmtDaysAway(n) {
 }
 /* ONE ROW of the feed. Every branch below is the round-6-to-round-35 markup, moved rather than
    rewritten, so the drawer and the page cannot render the same alert differently. */
-function renderRateErcRow(a, feed) {
+function renderRateErcRow(a, feed, opts) {
   const money = showMoney();
   const mny = feed.money[a.case_id] || { loan: 0, lastFee: 0 };
   const cp = feed.callPack[a.case_id] || null;
   const farOut = rateErcFarOut(a);
+  /* ==========================================================================
+     R64 · A1/A3 — THE ROW GAINS A CHECKBOX AND THREE CALL CHIPS, BUT ONLY ON
+     THE RETENTION PAGE.
+
+     Today's Rate & ERC drawer passes no options at all, so `page` is false and
+     every character below collapses to "" — the drawer's markup is byte-for-byte
+     what R38 §C proved it against. That is deliberate, not caution: the drawer is
+     a morning glance, folded shut by lunchtime, and a select-all column plus a
+     call form on every row is not a glance. The Retention page is where the list
+     is SAT DOWN AND WORKED, which is the whole reason it exists.
+     ========================================================================== */
+  const page = !!(opts && opts.page);
+  const sel = page && opts.sel ? opts.sel : null;
+  const picked = !!(sel && sel.has(a.case_id));
+  const ctxRow = page ? propCtxCase(feed.ctx, a.case_id) : null;
+  const phone = ctxRow && opts.phones ? opts.phones[ctxRow.client_id] : "";
+  const cb = page
+    ? `<input type="checkbox" class="bulk-cb ret-cb" data-id="${esc(a.case_id)}" aria-label="Select ${esc(a.client_name || "this case")}"${picked ? " checked" : ""}>`
+    : "";
+  /* R61's card-advance pattern: quiet until the row is hovered or the control is focused, so a
+     hundred rows read as a list rather than as a wall of buttons. Keyboard users never lose them
+     (:focus-within keeps the whole set visible). */
+  /* No leading newline on purpose: `acts` is appended to the last line of .row-main, so with
+     `page` false the row's markup is not merely equivalent to the drawer's, it is the same bytes —
+     and lifting the cluster back out of a page row leaves the drawer's row exactly (see §D2). */
+  const acts = page ? `<div class="ret-row-acts hover-quiet">`
+    + (phone ? `<span class="ret-row-tel" title="Ring the client — the number on their record.">📞 ${telLink(phone)}</span>` : "")
+    + `<button type="button" class="btn btn-sm ret-row-chip" onclick="event.stopPropagation();retLogCall('${jsArg(a.case_id)}')" title="Log a call against this case — the same form the case modal uses: outcome chip, note, protection tick and an optional follow-up task.">📞 Log call</button>`
+    + `<button type="button" class="btn btn-sm ret-row-chip" onclick="event.stopPropagation();retBookReview('${jsArg(a.case_id)}')" title="Book a rate-end review in the diary, prefilled with this client, this case and the adviser who owns it.">📅 Book review</button>`
+    + `</div>` : "";
   return `
-    <div class="row-item">
+    <div class="row-item${picked ? " is-sel" : ""}">${cb}
       <div class="row-main">
         <div class="t" onclick="openCase('${a.case_id}')">${esc(a.client_name)} ${propCtxChip(feed.ctx, a.case_id, "row-prop")}${a.__dupes > 1 ? ` <span class="badge grey" title="${a.__dupes} cases share this property and this rate end date — shown once, because it is one mortgage conversation.">${a.__dupes} cases</span>` : ""}</div>
         <div class="s">${lenderIcon(a.lender)}${esc(a.lender || "")} ${a.rate_percent ? a.rate_percent + "%" : ""} — ends ${fmtD(a.rate_end_date)}${a.days_to_rate_end != null ? ` (${a.days_to_rate_end < 0 ? fmtDaysAway(a.days_to_rate_end) + " ago" : "in " + fmtDaysAway(a.days_to_rate_end)})` : ""}${feed.ercIds.has(a.case_id) ? ` — ERC runs until ${fmtD(a.erc_end_date)}` : ""}</div>
@@ -6217,7 +6253,7 @@ function renderRateErcRow(a, feed) {
         ${/* R12b · W-15c — the uplift is inline here, and ONLY on rows whose rate has actually
              ENDED. A client still inside their fix is not paying anything extra yet, and a
              "£X/mo more" over a rate with four months to run reads as a bill they already get. */ ""}
-        ${callPackLineHtml(cp, rateErcEnded(a))}
+        ${callPackLineHtml(cp, rateErcEnded(a))}${acts}
       </div>
       ${a.days_to_rate_end < 0 ? '<span class="badge red">OVERDUE</span>' : ""}
       ${feed.ercIds.has(a.case_id) ? `<span class="badge red" title="${TIP_ERC}">ERC conflict</span>` : ""}
@@ -6531,6 +6567,222 @@ window.toggleRetSort = function () {
   retSortMode = retSortMode === "value" ? "date" : "value";
   loadRetentionPage();
 };
+/* ==========================================================================
+   R64 · A2 — THE MONTH WINDOW.
+
+   Luke works this page a MONTH at a time: the forty rate-ends maturing in
+   September are one sitting, and the six hundred that lapsed in 2019 are a
+   different job entirely. Until now the page had exactly one answer — the
+   whole six-month reminder window plus the entire lapsed back book — so the
+   month he was actually working had to be found by eye, every time.
+
+   This is NOT a second scope control. Mine/All above says WHOSE rates these
+   are; this says WHEN they mature. The two compose: "Mine · This month" is
+   the sentence the job is actually done in. Everything downstream — the h3
+   counts, the ended/soon split, the year sub-heads, the select-all — runs on
+   the FILTERED set, because a count that does not match the rows on screen is
+   the W-16 defect this app has already fixed once.
+
+   Months are Europe/London calendar months (localDateStr's zone), never
+   "30 days from now": a rate ending on the 29th is this month's work on the
+   1st and on the 28th alike, and rolling windows make that answer wobble.
+   ========================================================================== */
+const RET_MONTH_KEY = "nx_ret_month";
+const RET_MONTHS = [
+  ["ended", "Ended", "Only rates that have already matured — these clients are paying the lender's reversion rate today."],
+  ["this", "This month", "Only rates whose end date falls in this calendar month."],
+  ["next", "Next month", "Only rates whose end date falls in next calendar month."],
+  ["3mo", "3 months", "This calendar month and the two after it."],
+  ["all", "6 months (all)", "Everything the reminder window holds — every rate ending in it, plus every rate that has already ended. This is the page's original behaviour."],
+];
+const RET_MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+/* A month as one comparable integer, so "next month" needs no date arithmetic and cannot slip a
+   day at a year boundary. Null for anything that is not a readable YYYY-MM-DD. */
+function ymIndex(ymd) {
+  const s = String(ymd || "").slice(0, 7);
+  if (!/^\d{4}-\d{2}$/.test(s)) return null;
+  const [y, m] = s.split("-").map(Number);
+  if (!m || m > 12) return null;
+  return y * 12 + (m - 1);
+}
+const ymLabel = (idx) => `${RET_MONTH_NAMES[idx % 12]} ${Math.floor(idx / 12)}`;
+let retMonth = null;
+function retMonthResolved() {
+  if (retMonth) return retMonth;
+  const stored = lsGet(RET_MONTH_KEY);
+  retMonth = RET_MONTHS.some(([k]) => k === stored) ? stored : "all";
+  return retMonth;
+}
+/* One row against one window. "Ended" is the SAME rateErcEnded() the ended/soon grouping uses, so
+   the chip and the group head can never disagree about what "ended" means. A row with no readable
+   rate end date cannot be placed in a month at all and is only ever shown under "6 months (all)" —
+   said on screen (see the sub) rather than silently dropped. */
+function retMonthMatch(a, key, todayIdx) {
+  if (key === "all") return true;
+  if (key === "ended") return rateErcEnded(a);
+  const idx = ymIndex(a.rate_end_date);
+  if (idx == null || todayIdx == null) return false;
+  const d = idx - todayIdx;
+  if (key === "this") return d === 0;
+  if (key === "next") return d === 1;
+  if (key === "3mo") return d >= 0 && d <= 2;
+  return true;
+}
+/* The sentence the panel subtitle ends with. Names the actual months, because "3 months" on its
+   own leaves the reader to work out which three. */
+function retMonthWindowCopy(key, todayIdx) {
+  if (key === "ended") return "Showing only rates that have ALREADY ended — every client here is on the reversion rate now.";
+  if (todayIdx == null) return "";
+  if (key === "this") return `Showing only rates ending in ${ymLabel(todayIdx)}.`;
+  if (key === "next") return `Showing only rates ending in ${ymLabel(todayIdx + 1)}.`;
+  if (key === "3mo") return `Showing rates ending in ${ymLabel(todayIdx)}, ${ymLabel(todayIdx + 1)} and ${ymLabel(todayIdx + 2)}.`;
+  return "Showing the whole window — every rate ending in it and every rate that has already ended.";
+}
+window.retSetMonth = function (k) {
+  retMonth = RET_MONTHS.some(([x]) => x === k) ? k : "all";
+  lsSet(RET_MONTH_KEY, retMonth);
+  loadRetentionPage();
+};
+/* The chip row. Each chip carries how many rows it WOULD show, from the feed already in hand, so
+   picking a window is never a guess about whether it is empty. */
+function renderRetMonthChips(counts) {
+  const wrap = $("#ret-month-chips");
+  if (!wrap) return;
+  const cur = retMonthResolved();
+  wrap.innerHTML = `<span class="due-chips-lbl">Rate ends:</span>`
+    + RET_MONTHS.map(([k, label, tip]) =>
+      `<button type="button" class="btn btn-sm ret-month-chip${k === cur ? " scope-active" : ""}" data-month="${k}" aria-pressed="${k === cur}" title="${esc(tip)}">${esc(label)}${counts && counts[k] != null ? ` <span class="count">${counts[k]}</span>` : ""}</button>`
+    ).join("");
+  wrap.querySelectorAll(".ret-month-chip").forEach((b) => (b.onclick = () => retSetMonth(b.dataset.month)));
+}
+/* ==========================================================================
+   R64 · A1 — BULK VERBS ON THE PAGE NAMED AFTER THE JOB.
+
+   The Pipeline table has had ⏰ Queue rate-end reminders / 🔁 Start retention
+   cases / ＋ Add task since R5 and R7-2, and they are surface-agnostic: they
+   take a list of case ids and do the whole job, pre-flight, per-case confirms,
+   skips and tally included. The Retention page — the page a retention broker
+   opens FIRST — had none of them, so forty rate-ends a month were worked one
+   case modal at a time.
+
+   Nothing here is a second implementation. retSel is the same shape as pipeSel
+   and clientSel (a Set of case ids), the bar is the same .bulk-bar, and each
+   button calls the SAME *Run() function the pipeline's bar calls. What the page
+   adds is a selection that lives on THESE rows and a repaint of THIS page
+   afterwards.
+   ========================================================================== */
+let retSel = new Set();
+let retShownIds = [];        // the ids currently on screen — what "select all shown" means
+function renderRetBulkBar(shownIds) {
+  const wrap = $("#ret-bulk");
+  if (!wrap) return;
+  const list = shownIds || retShownIds || [];
+  const n = retSel.size;
+  // Nothing on screen: a "Select all 0 shown" line is furniture, not a control.
+  if (!list.length && !n) { wrap.innerHTML = ""; return; }
+  wrap.innerHTML = `
+    <div class="client-selall ret-selall">
+      <label><input type="checkbox" id="ret-bulk-all" aria-label="Select every rate row shown"${n && n >= list.length && list.length ? " checked" : ""}> Select all ${list.length} shown</label>
+      ${n ? `<button type="button" class="linkish" id="ret-selall-clear">clear</button>` : ""}
+    </div>
+    <div class="bulk-bar" id="ret-bulk-bar"${n ? "" : " hidden"}>
+      <span class="bulk-bar-count"><strong id="ret-bulk-n">${n}</strong> selected</span>
+      <button type="button" class="btn btn-sm" id="ret-bulk-rate" title="Queue a rate-end reminder for every selected case that has a client email and a rate end date. Nothing is sent now — they go with the next automation run, and each one leaves a follow-up task behind.">⏰ Queue rate-end reminders</button>
+      <button type="button" class="btn btn-sm" id="ret-bulk-retention" title="Start a retention case for every selected completed case whose rate is ending. Each one asks you to confirm, exactly as the row's own button does; ones that are too far out, or that already have a retention case, are named and skipped.">🔁 Start retention cases</button>
+      <button type="button" class="btn btn-sm" id="ret-bulk-task" title="One task per selected case, each landing on that case's own adviser.">＋ Add task…</button>
+      <button type="button" class="btn btn-sm" id="ret-bulk-clear">Clear</button>
+    </div>
+    ${n ? `<p class="panel-sub ret-bulk-note">These are the Pipeline table's own bulk verbs, working on the rows above. Each one tells you what it skipped and why before it writes anything, and the page repaints when it is done.</p>` : ""}`;
+  const all = $("#ret-bulk-all");
+  if (all) {
+    all.indeterminate = n > 0 && n < list.length;
+    all.onchange = () => {
+      if (all.checked) list.forEach((id) => retSel.add(id)); else retSel.clear();
+      loadRetentionRates(retScopeResolved());
+    };
+  }
+  const clearLink = $("#ret-selall-clear");
+  if (clearLink) clearLink.onclick = () => { retSel.clear(); loadRetentionRates(retScopeResolved()); };
+  const clearBtn = $("#ret-bulk-clear");
+  if (clearBtn) clearBtn.onclick = () => { retSel.clear(); loadRetentionRates(retScopeResolved()); };
+  const rateBtn = $("#ret-bulk-rate");
+  if (rateBtn) rateBtn.onclick = () => retBulkRun(bulkQueueRateRemindersRun);
+  const retBtn = $("#ret-bulk-retention");
+  if (retBtn) retBtn.onclick = () => retBulkRun(bulkStartRetentionRun);
+  const taskBtn = $("#ret-bulk-task");
+  if (taskBtn) taskBtn.onclick = () => retBulkRun(bulkAddTaskRun);
+}
+/* G1I-D7's in-flight guard, shared with the pipeline bar: a key-repeat on a focused bulk button
+   must not start two overlapping runs. The verbs themselves clear pipeSel and repaint the
+   pipeline; this page clears ITS selection and repaints ITSELF afterwards. */
+async function retBulkRun(fn) {
+  const ids = [...retSel];
+  if (!ids.length) return;
+  if (bulkBusy) return;
+  setBulkBusy(true);
+  try { await fn(ids); }
+  finally { setBulkBusy(false); }
+  retSel.clear();
+  await loadRetentionPage();
+}
+/* R18-P2 pattern (the Clients list) — ONE delegated change handler for the row checkboxes, wired
+   once, rather than a fresh onchange per row on every repaint of a hundred rows. */
+(() => {
+  const listEl = $("#ret-rates-list");
+  if (!listEl) return;
+  listEl.addEventListener("change", (e) => {
+    const cb = e.target;
+    if (!cb || !cb.classList || !cb.classList.contains("ret-cb")) return;
+    if (cb.checked) retSel.add(cb.dataset.id); else retSel.delete(cb.dataset.id);
+    const row = cb.closest(".row-item"); if (row) row.classList.toggle("is-sel", cb.checked);
+    renderRetBulkBar(retShownIds);
+  });
+})();
+/* R64 · A3 — the row's own "📞 Log call". The SAME panel the case modal carries (see
+   logCallPanelHtml / logCallSave), in an overlay, so a call can be recorded without the ten
+   clicks a case modal costs — and without a second call-logging form existing anywhere. */
+window.retLogCall = async function (caseId) {
+  const { data: c, error } = await db.from("cases")
+    .select("id,client_id,assigned_to,protection_status,stage,clients!client_id(first_name,last_name)")
+    .eq("id", caseId).single();
+  if (error || !c) return toast("Couldn't open that case — " + ((error && error.message) || "it may have been deleted"));
+  const who = [c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ") || "this client";
+  const saved = await openOverlay(`
+    <h3>📞 Log a call — ${esc(who)}</h3>
+    <p class="panel-sub">Exactly the panel on the case itself: the note is filed on this case, the protection tick writes the case's protection status, and a follow-up lands on that case's adviser. Nothing here emails the client.</p>
+    <div class="cs-logcall-panel" id="ret-logcall-panel">${logCallPanelHtml(c)}</div>`, (finish, box) => {
+    const panel = box.querySelector("#ret-logcall-panel");
+    wireLogCallPanel(panel, {
+      onCancel: () => finish(null),
+      onSave: async () => {
+        const btn = panel.querySelector("#cs-call-save");
+        if (btn) btn.disabled = true;
+        try {
+          const res = await logCallSave(panel, c, {});
+          if (!res) return;
+          toast((res.madeTask ? "Call logged + follow-up added ✓" : "Call logged ✓") + (res.protRecorded ? " · protection recorded as discussed" : ""));
+          finish(res);
+        } finally { if (btn) btn.disabled = false; }
+      },
+    });
+    const note = panel.querySelector("#cs-call-note"); if (note) note.focus();
+  });
+  if (saved) loadRetentionPage();
+  return saved;
+};
+/* R64 · A3 — "📅 Book review". The diary's OWN editor (openAppt), prefilled: this client, this
+   case, the adviser who owns the case, and the title the firm actually uses for this meeting.
+   Everything else — the clash notice, the case picker, the save — is the diary's, unchanged. */
+window.retBookReview = async function (caseId) {
+  const { data: c, error } = await db.from("cases").select("id,client_id,assigned_to").eq("id", caseId).single();
+  if (error || !c) return toast("Couldn't open that case — " + ((error && error.message) || "it may have been deleted"));
+  return window.openAppt(null, {
+    client_id: c.client_id || null,
+    case_id: c.id,
+    title: "Rate-end review",
+    staff_id: c.assigned_to || (ME && ME.id) || null,
+  });
+};
 /* The whole page. The three panels are independent reads and are deliberately NOT awaited in
    series: a slow client read must not hold the rate feed off the screen. */
 async function loadRetentionPage() {
@@ -6561,8 +6813,27 @@ async function loadRetentionRates(scope) {
   if (casesErr || alertsErr) { renderLoadError("#ret-rates-list", casesErr || alertsErr, loadRetentionPage); return; }
   renderOwnerCapNotice("#ret-cap-notice", ownerCapHit(cases) || ownerCapHit(alerts));
   const feed = await buildRateErcFeed(cases, alerts, { reminderMonths, scope });
+  /* R64 · A2 — the month window, applied to the SCOPED feed. The chip counts are computed first,
+     from the whole scoped feed, so every chip says what it would show before it is pressed. */
+  const monthKey = retMonthResolved();
+  const todayIdx = ymIndex(localDateStr());
+  const inWindow = (a) => retMonthMatch(a, monthKey, todayIdx);
+  const chipCounts = {};
+  RET_MONTHS.forEach(([k]) => { chipCounts[k] = feed.rows.filter((a) => retMonthMatch(a, k, todayIdx)).length; });
+  renderRetMonthChips(chipCounts);
   const valueSort = showMoney() && retSortMode === "value";
-  const sorted = sortRateErcRows(feed, valueSort);
+  const sorted = sortRateErcRows(feed, valueSort).filter(inWindow);
+  /* Rows the window cannot place at all: no readable rate end date, so there is no month to put
+     them in. Named on screen rather than quietly dropped. */
+  const undated = feed.rows.filter((a) => !inWindow(a) && ymIndex(a.rate_end_date) == null).length;
+  /* The two scoped badges follow the window as well — they are counts OF THE ROWS ON SCREEN, and
+     a badge that outruns its list is the W-16 defect. The firm-wide figure in each tooltip is
+     narrowed the same way, so "12 on your cases — 40 across the whole firm" always compares two
+     numbers measured over the same months. */
+  const ratesSoonScopedW = feed.ratesSoonScoped.filter(inWindow);
+  const ratesSoonAllW = feed.ratesSoonAll.filter(inWindow);
+  const ercScopedW = feed.ercFlagsScoped.filter(inWindow);
+  const ercAllW = feed.ercFlagsAll.filter(inWindow);
   /* ENDED FIRST. A rate that matured last month is a client already paying the reversion rate; one
      with four months to run is a diary entry. Both belong on this page, in that order, and the
      drawer's single undifferentiated list is exactly what made the ended ones easy to miss. */
@@ -6570,6 +6841,16 @@ async function loadRetentionRates(scope) {
   const soon = sorted.filter((a) => !rateErcEnded(a));
   const ordered = ended.concat(soon);
   const shown = ordered.slice(0, RET_LIST_CAP);
+  /* R64 · A1 — the selection is pruned to what is actually on screen (BUILD 7c's rule for the
+     pipeline table): flipping scope or month must never leave a verb pointed at a row the
+     operator can no longer see. */
+  retShownIds = shown.map((a) => a.case_id);
+  const shownSet = new Set(retShownIds);
+  [...retSel].forEach((id) => { if (!shownSet.has(id)) retSel.delete(id); });
+  /* R64 · A3 — one phone read for the rows on screen. The feed already reads `cases` for the
+     property context, and `clients` carries the number; without it the "📞" on a retention row
+     would be a link to nothing. Soft: no phones simply means no tel: links. */
+  const phones = await retRowPhones(feed, shown);
   const h3 = $("#ret-rates-h3");
   if (h3) {
     /* The two scoped badges are the DRAWER's two badges, from the same feed and with the same
@@ -6577,22 +6858,30 @@ async function loadRetentionRates(scope) {
        "Already ended" is the page's own, because the page is the only surface that splits them. */
     h3.innerHTML = `⚠️ Rates ending &amp; ended
       ${ended.length ? `<span class="count hot" title="Rates that have already matured — the client is on the reversion rate now.">${ended.length} already ended</span>` : ""}
-      ${feed.ratesSoonScoped.length ? `<span class="count" title="${esc(rateCountTip(feed.ratesSoonScoped.length, feed.ratesSoonAll.length, "ending soon", scope))}">${feed.ratesSoonScoped.length} in the ${reminderMonths}-month window</span>` : ""}
-      ${feed.ercFlagsScoped.length ? `<span class="count" style="background:#fbe9e7;color:var(--red);" title="${esc(rateCountTip(feed.ercFlagsScoped.length, feed.ercFlagsAll.length, "ERC conflicts", scope))}">${feed.ercFlagsScoped.length} ERC conflict</span>` : ""}
+      ${ratesSoonScopedW.length ? `<span class="count" title="${esc(rateCountTip(ratesSoonScopedW.length, ratesSoonAllW.length, "ending soon", scope))}">${ratesSoonScopedW.length} in the ${reminderMonths}-month window</span>` : ""}
+      ${ercScopedW.length ? `<span class="count" style="background:#fbe9e7;color:var(--red);" title="${esc(rateCountTip(ercScopedW.length, ercAllW.length, "ERC conflicts", scope))}">${ercScopedW.length} ERC conflict</span>` : ""}
       ${showMoney() ? `<button type="button" class="btn btn-sm rate-sort-btn" id="ret-rates-sort" onclick="toggleRetSort()" title="${valueSort ? "Sorted by loan size — the value at risk. Click to sort by date instead." : "Sorted by rate end date. Click to sort by loan size — the value at risk."}">${valueSort ? "↕ By value at risk" : "↕ By date"}</button>` : ""}`;
   }
   const sub = $("#ret-rates-sub");
   if (sub) {
     sub.textContent = `Rates ending within the ${reminderMonths}-month reminder window, and cases where the ERC outlasts the rate. `
-      + `Showing ${rateScopeWord(scope)}${scope === "all" ? "" : ` — ${feed.ratesSoonAll.length + feed.ercFlagsAll.filter((a) => !feed.ratesSoonAll.some((r) => r.case_id === a.case_id)).length} alerts firm-wide.`} `
+      + `Showing ${rateScopeWord(scope)}${scope === "all" ? "" : ` — ${ratesSoonAllW.length + ercAllW.filter((a) => !ratesSoonAllW.some((r) => r.case_id === a.case_id)).length} alerts firm-wide.`} `
       + "The same feed as Today's Rate & ERC drawer, un-truncated."
       /* R61 — the money-line basis, said ONCE for the whole feed instead of on every row. */
-      + (showMoney() ? " Money lines read value at risk: the loan on the case, with the last fee as a proxy for the fee at stake." : "");
+      + (showMoney() ? " Money lines read value at risk: the loan on the case, with the last fee as a proxy for the fee at stake." : "")
+      /* R64 · A2 — which month window is in force, in words, beside the scope it composes with. */
+      + " " + retMonthWindowCopy(monthKey, todayIdx)
+      + (undated ? ` ${undated} row${undated === 1 ? " has" : "s have"} no readable rate-end date and can only be shown under “6 months (all)”.` : "");
   }
+  renderRetBulkBar(retShownIds);
   /* R61 — the two groups now carry their own colour (ended = red, soon = amber; CSS on the
      class) and, inside Ended under the DATE sort, quiet year sub-heads: 594 ended rates as one
      undifferentiated run gave 2020's lost causes the same visual claim as last month's. Value
      sort keeps the flat list — a value ranking interleaves the years on purpose. */
+  /* R64 — the page's row options: the checkbox column, the selection it reflects, and the phone
+     numbers behind the tel: links. Today's drawer passes none of this and renders exactly as it
+     did before (see renderRateErcRow). */
+  const rowOpts = { page: true, sel: retSel, phones };
   const group = (title, why, rows, cls) => {
     if (!rows.length) return "";
     let body;
@@ -6602,10 +6891,10 @@ async function loadRetentionRates(scope) {
         const y = String(a.rate_end_date || "").slice(0, 4) || "—";
         const head = y !== yr ? `<div class="ret-year-h">${esc(y)}</div>` : "";
         yr = y;
-        return head + renderRateErcRow(a, feed);
+        return head + renderRateErcRow(a, feed, rowOpts);
       }).join("");
     } else {
-      body = rows.map((a) => renderRateErcRow(a, feed)).join("");
+      body = rows.map((a) => renderRateErcRow(a, feed, rowOpts)).join("");
     }
     return `<h4 class="ret-group-h ret-g-${cls}">${title} <span class="count">${rows.length}</span></h4><p class="panel-sub ret-group-sub">${why}</p>` + body;
   };
@@ -6613,10 +6902,33 @@ async function loadRetentionRates(scope) {
     ? group("Ended", "The rate has already matured — the client is paying the lender's reversion rate today.", shown.filter(rateErcEnded), "ended")
       + group("Ending soon", "Still inside the fix. The conversation is booked ahead, not chased.", shown.filter((a) => !rateErcEnded(a)), "soon")
       + (ordered.length > RET_LIST_CAP ? `<div class="empty">…and ${ordered.length - RET_LIST_CAP} more — narrow the list with the scope control above, or work it from the Pipeline table view.</div>` : "")
-      + rateErcDedupeNote(feed.collapsed)
-    : `<div class="empty">Nothing ending in the reminder window on ${rateScopeWord(scope)}, and no ERC conflicts. 👍</div>`;
+      /* R64 · A2 — the dedupe footnote counts the siblings folded into the rows THAT ARE ON
+         SCREEN, not the whole feed's: under a month window "3 further cases are folded into the
+         rows above" would be counting rows the reader cannot see. Each surviving row carries its
+         own __dupes, so under "6 months (all)" this is arithmetically identical to the old
+         feed.collapsed and nothing about that case changes. */
+      + rateErcDedupeNote(ordered.reduce((s, a) => s + Math.max(0, (a.__dupes || 1) - 1), 0))
+    : (monthKey === "all"
+      ? `<div class="empty">Nothing ending in the reminder window on ${rateScopeWord(scope)}, and no ERC conflicts. 👍</div>`
+      /* R64 · A2 — an empty MONTH is not an empty book, and saying "nothing ending" would be a
+         lie the operator would act on. Name the window and offer the way out of it. */
+      : `<div class="empty">Nothing in this window on ${rateScopeWord(scope)} — ${esc(retMonthWindowCopy(monthKey, todayIdx).replace(/^Showing /, "showing "))} There ${feed.rows.length === 1 ? "is" : "are"} ${feed.rows.length} row${feed.rows.length === 1 ? "" : "s"} under “6 months (all)”.</div>`);
   // No panelCount() here on purpose: this heading already carries three counts of its own, and
   // panelCount writes into the first .count it finds in the h3.
+}
+/* R64 · A3 — the phone numbers for the rows on screen, in ONE read. The feed already knows which
+   client each case belongs to (loadPropContext's byId), so this is a single `in` on clients and
+   nothing is asked for twice. Soft by design: a database or a client row without a number leaves
+   the row exactly as it was, with no dead "📞 —". */
+async function retRowPhones(feed, rows) {
+  const out = {};
+  try {
+    const ids = [...new Set((rows || []).map((a) => (propCtxCase(feed.ctx, a.case_id) || {}).client_id).filter(Boolean))];
+    if (!ids.length) return out;
+    const { data } = await db.from("clients").select("id,phone").in("id", ids);
+    (data || []).forEach((r) => { if (r && r.phone) out[r.id] = r.phone; });
+  } catch (_) { /* no numbers — the rows render exactly as they did before */ }
+  return out;
 }
 /* §2 — the pipeline those buttons feed. Same rows and same figures as Today's drawer; this one is
    scoped, and capped at a hundred rather than twelve. */
@@ -6647,7 +6959,7 @@ async function loadRetentionCold(scope) {
   const adviser = scope === "mine" && ME && ME.id ? ME.id : "all";
   const cold = coldClients(data, adviser);
   const todayStr = localDateStr();
-  /* Longest silence first — a client with nothing on record in the 210-day comms window sorts
+  /* Longest silence first — a client with nothing on record in the comms window sorts
      above one last spoken to in March, because that is the order the list is worked in.
      R41 · L8 — AND WITHIN "NEVER SPOKEN TO", THE ONE WHOSE RATE ENDS SOONEST.
      That first group is the top of the list and it is the biggest: everybody in it has an empty
@@ -6690,7 +7002,7 @@ async function loadRetentionCold(scope) {
     <div class="row-item">
       <div class="row-main">
         <div class="t" onclick="openClient('${c.id}')">${esc([c.first_name, c.last_name].filter(Boolean).join(" ") || "(no name)")}</div>
-        <div class="s"><span class="client-lastcontact">${lc ? `last contact ${esc(lastContactAgeLabel(lc.at))} — ${esc(lc.what)} on ${esc(fmtD(String(lc.at).slice(0, 10)))}` : "no contact of any kind in the last 210 days"}</span>${next ? ` · <span class="client-rate-bit">next rate ends ${esc(fmtD(next.date))}${next.lender ? ` · ${esc(next.lender)}` : ""}${next.n > 1 ? ` (of ${next.n})` : ""}</span>` : " · no future rate end on file"}</div>
+        <div class="s"><span class="client-lastcontact">${lc ? `last contact ${esc(lastContactAgeLabel(lc.at))} — ${esc(lc.what)} on ${esc(fmtD(String(lc.at).slice(0, 10)))}` : `no contact of any kind in the last ${clientCommsWindowDays()} days`}</span>${next ? ` · <span class="client-rate-bit">next rate ends ${esc(fmtD(next.date))}${next.lender ? ` · ${esc(next.lender)}` : ""}${next.n > 1 ? ` (of ${next.n})` : ""}</span>` : " · no future rate end on file"}</div>
       </div>
       ${next ? '<span class="badge amber" title="This client has a rate maturing — a reason to ring them.">rate coming</span>' : ""}
     </div>`;
@@ -8662,7 +8974,9 @@ function starterViewSet() {
     ],
     // clientsFilterState() shape: search, adviser, segment, sort.
     clients: [
-      { name: mine ? `My cold clients (${CLIENT_SEG_CONTACT_MONTHS}mo+)` : `Cold clients (${CLIENT_SEG_CONTACT_MONTHS}mo+)`, filters: { search: "", adviser: meAdviser, segment: "cold", sort: "name" } },
+      // R64 · L5 — the number in the name is the gone-quiet SETTING, not a constant, so a firm on a
+      // three-month rhythm seeds "My cold clients (3mo+)" rather than a view whose name lies.
+      { name: mine ? `My cold clients (${clientQuietMonths()}mo+)` : `Cold clients (${clientQuietMonths()}mo+)`, filters: { search: "", adviser: meAdviser, segment: "cold", sort: "name" } },
     ],
   };
 }
@@ -10590,7 +10904,9 @@ async function bulkAssignCases(adviserId, reloadFn) {
 let bulkBusy = false;
 function setBulkBusy(on) {
   bulkBusy = on;
-  ["#pipe-bulk-rate", "#pipe-bulk-retention", "#pipe-bulk-task", "#pipe-bulk-stage", "#pipe-bulk-adviser", "#pipe-bulk-clear"]
+  // R64 · A1 — the Retention page's bar runs the SAME verbs, so it takes the same in-flight guard.
+  ["#pipe-bulk-rate", "#pipe-bulk-retention", "#pipe-bulk-task", "#pipe-bulk-stage", "#pipe-bulk-adviser", "#pipe-bulk-clear",
+    "#ret-bulk-rate", "#ret-bulk-retention", "#ret-bulk-task", "#ret-bulk-clear"]
     .forEach((sel) => { const el = $(sel); if (el) el.disabled = on; });
 }
 async function bulkQueueRateReminders() {
@@ -10615,6 +10931,22 @@ function bulkCaseLabel(c) {
   const what = caseIdentityLabel(c);
   return what ? `${who} — ${what}` : who;
 }
+/* ==========================================================================
+   R64 · M5 — NINE MONTHS, WRITTEN ONCE FOR THE BULK VERBS.
+
+   274 days is the number the single-row Rate & ERC control has used since R7-2
+   (rateErcFarOut) and the number bulkStartRetentionRun applies to a sweep. The
+   bulk rate-end reminder never had it, and a select-all on the Completed
+   segment queued a client email about a rate with nineteen months to run —
+   a letter that reads as a mistake to the person receiving it, and that burns
+   the one conversation the retention window exists to have at the right time.
+   Same constant, same daysOut arithmetic, for both bulk verbs.
+   ========================================================================== */
+const RATE_FAR_OUT_DAYS = 274;
+const rateDaysOut = (rateEnd, today) =>
+  Math.round((new Date(rateEnd + "T12:00:00") - new Date((today || localDateStr()) + "T12:00:00")) / 86400000);
+// "in 19 months" — the same rounding the existing skip reason and the row badge both print.
+const rateMonthsOut = (rateEnd, today) => Math.round(rateDaysOut(rateEnd, today) / 30);
 /* ==========================================================================
    R7-2 — BULK "START RETENTION CASE" from the pipeline table.
 
@@ -10661,8 +10993,8 @@ async function bulkStartRetentionRun(ids) {
          retention case a year out creates a live enquiry, a call task and a queued client email
          for a conversation that cannot usefully happen yet; doing twelve of them at once is how a
          pipeline fills with work nobody can do. */
-      const daysOut = Math.round((new Date(c.rate_end_date + "T12:00:00") - new Date(today + "T12:00:00")) / 86400000);
-      if (daysOut > 274) skipped.push(`${nameOf(c)} (rate ends in ${Math.round(daysOut / 30)} months — too early)`);
+      const daysOut = rateDaysOut(c.rate_end_date, today);
+      if (daysOut > RATE_FAR_OUT_DAYS) skipped.push(`${nameOf(c)} (rate ends in ${Math.round(daysOut / 30)} months — too early)`);
       else eligible.push(c);
     }
   });
@@ -10719,16 +11051,29 @@ async function bulkQueueRateRemindersRun(ids) {
     .in("id", ids);
   if (error) return toast("Error: " + error.message);
   const nameOf = bulkCaseLabel;
-  const eligible = [], skipped = [];
+  const today = localDateStr();
+  const eligible = [], skipped = [], tooEarly = [];
   (rows || []).forEach((c) => {
     if (!(c.clients && c.clients.email)) skipped.push(`${nameOf(c)} (no email)`);
     else if (!c.rate_end_date) skipped.push(`${nameOf(c)} (no rate-end date)`);
+    /* R64 · M5 — the far-out guard this sweep never had. Deliberately NOT a silent skip and NOT
+       lumped in with "no email / no rate-end date": those are cases that CANNOT be reminded, and
+       this is a case that should not be reminded YET, which is a different sentence and a
+       different decision. It gets its own named ⚠ block in the confirm — the same shape the
+       "already been reminded once" warning below uses — so the operator sees exactly which client
+       and which rate the sweep is holding back, and why. */
+    else if (rateDaysOut(c.rate_end_date, today) > RATE_FAR_OUT_DAYS) tooEarly.push(c);
     else eligible.push(c);
   });
   if (!eligible.length) {
-    return toast(skipped.length
-      ? `Nothing to queue — ${skipped.length} selected case${skipped.length === 1 ? " has" : "s have"} no email or no rate-end date`
-      : "Nothing to queue");
+    /* Nothing to do is still three different sentences: nothing selected can be reminded, nothing
+       selected is due yet, or a mix. Saying "no email or no rate-end date" over a list that was
+       held back for being too early would send the operator hunting for a missing email address
+       that is not missing. */
+    const why = [];
+    if (skipped.length) why.push(`${skipped.length} ${skipped.length === 1 ? "has" : "have"} no email or no rate-end date`);
+    if (tooEarly.length) why.push(`${tooEarly.length} ${tooEarly.length === 1 ? "is" : "are"} too early — the rate ends more than nine months out (${tooEarly.slice(0, 3).map((c) => `${nameOf(c)}: in ${rateMonthsOut(c.rate_end_date, today)} months`).join("; ")}${tooEarly.length > 3 ? `; and ${tooEarly.length - 3} more` : ""})`);
+    return toast(why.length ? `Nothing to queue — ${why.join(" · ")}` : "Nothing to queue");
   }
   // Not a skip reason (the operator may deliberately be re-chasing), but they deserve to know
   // before they send a second reminder to the same client.
@@ -10740,6 +11085,9 @@ async function bulkQueueRateRemindersRun(ids) {
     + `\nEach one also gets a follow-up task due ${fmtD(chaseDue)}.`
     + (skipped.length ? `\n\nSkipped: ${skipped.slice(0, 5).join(", ")}${skipped.length > 5 ? ` and ${skipped.length - 5} more` : ""}` : "")
     + (already.length ? `\n\n⚠ ${already.length} of these ${already.length === 1 ? "has" : "have"} already been reminded once — they will be reminded again:\n${already.slice(0, 5).map((c) => "· " + nameOf(c)).join("\n")}${already.length > 5 ? `\n· and ${already.length - 5} more` : ""}` : "")
+    /* R64 · M5 — named, not silent. Same block shape as the "already reminded" warning above:
+       the count, the reason in one sentence, then the actual clients, capped at five. */
+    + (tooEarly.length ? `\n\n⚠ Too early — rate ends in more than nine months (not queued), ${tooEarly.length} of them. Nothing goes to these clients today; the ${Number(settings.rate_reminder_months) || 6}-month reminder window reaches them long before it is too late:\n${tooEarly.slice(0, 5).map((c) => `· ${nameOf(c)} — rate ends in ${rateMonthsOut(c.rate_end_date, today)} months (${fmtD(c.rate_end_date)})`).join("\n")}${tooEarly.length > 5 ? `\n· and ${tooEarly.length - 5} more` : ""}` : "")
     /* G6-10 — the batch has to say WHICH cases, not just how many. On a landlord with five
        properties "2 rate-end reminders" and "1 has already been reminded" name nothing at all. */
     + `\n\nQueueing for:\n${eligible.slice(0, 8).map((c) => "· " + nameOf(c)).join("\n")}${eligible.length > 8 ? `\n· and ${eligible.length - 8} more` : ""}`;
@@ -10780,6 +11128,7 @@ async function bulkQueueRateRemindersRun(ids) {
   if (failedStamp.length) detail.push(`${names(failedStamp)} could not be marked as reminded, so ${failedStamp.length === 1 ? "it still reads" : "they still read"} “Reminder pending” and will be offered again`);
   let msg = `${queued} reminder${queued === 1 ? "" : "s"} queued · ${tasks} follow-up task${tasks === 1 ? "" : "s"} · 0 sent`;
   if (skipped.length) msg += ` · ${skipped.length} skipped`;
+  if (tooEarly.length) msg += ` · ${tooEarly.length} too early (rate more than nine months out)`;   // R64 · M5
   if (raced) msg += ` · ${raced} already reminded by another run`;
   if (err) msg += ` · ${err} error${err === 1 ? "" : "s"}: ${detail.join("; ")}`;
   toast(msg);
@@ -11089,7 +11438,7 @@ function feeStatusCellHtml(c) {
         ${STAGES.map(([k, l]) => `<option value="${k}">${l}</option>`).join("")}
       </select>
       <select id="pipe-bulk-adviser" class="bulk-bar-select" aria-label="Assign selected cases to adviser">${adviserOptionsHtml("Assign to…")}</select>
-      <button type="button" class="btn btn-sm" id="pipe-bulk-rate" title="Queue a rate-end reminder for every selected case that has a client email and a rate end date. Nothing is sent now.">⏰ Queue rate-end reminders</button>
+      <button type="button" class="btn btn-sm" id="pipe-bulk-rate" title="Queue a rate-end reminder for every selected case that has a client email and a rate end date. A rate ending more than nine months out is listed in the confirmation and NOT queued — it is too early to be a useful conversation. Nothing is sent now.">⏰ Queue rate-end reminders</button>
       ${/* R7-2 — the bulk half of the retention sweep. A rate-end review is done a dozen rows at a
            time off this table, and the only route to it was one button on one row of one dashboard
            panel. It runs the SAME per-case flow, confirm by confirm, and tallies at the end. */ ""}
@@ -12668,6 +13017,145 @@ function securityCardHtml(c, caseClient, secClient) {
    tasks, documents, files and a forty-field form, and one case's history is a narrower thing than
    a client's whole book. Show more adds 100 at a time from there. */
 const CASE_TL_CAP = 30;
+/* ==========================================================================
+   R64 · A3 — THE LOG-CALL PANEL, EXTRACTED (not copied).
+
+   The Retention page's rows need the same "📞 Log call" form the case modal
+   has carried since BUILD 2a. A second form would be a second set of rules:
+   two places deciding what a call note is prefixed with, whether protection
+   gets recorded, and what a follow-up task is called. So the panel is now
+   THREE small shared pieces and nothing else moved:
+
+     logCallPanelHtml(c)      the markup — same ids, same chips, same copy, so
+                              the case modal's DOM contract is byte-identical
+                              and every test that types into #cs-call-note
+                              still finds it exactly where it was.
+     wireLogCallPanel(root,…) the outcome chips, the follow-up date chips and
+                              the two buttons, wired inside whatever element
+                              holds the panel (modal or overlay).
+     logCallSave(root, c, …)  the WRITES — the note, the protection tick and
+                              the optional follow-up task, in the same order
+                              they have always happened, with hooks so the
+                              case modal can still repaint its own timeline
+                              between the note and the task exactly as before.
+
+   Everything modal-specific (the timeline prepend, the "Last note" line, the
+   inline task list, the unsaved-changes snapshot) stays in the modal, where it
+   belongs — the shared half is only what a call IS.
+   ========================================================================== */
+function logCallPanelHtml(c) {
+  const prot = (c && c.protection_status) || "not_discussed";
+  return `
+        ${/* R5-49 — the four outcomes every call actually has, as chips that prefix the note (same
+             pattern as the note-type chips below), so "no answer" costs one click instead of a
+             sentence and the timeline reads consistently across advisers. */ ""}
+        <div class="type-chips" id="cs-call-outcome-chips">
+          <button type="button" class="tl-chip" data-outcome="No answer">No answer</button>
+          <button type="button" class="tl-chip" data-outcome="Left voicemail">Left voicemail</button>
+          <button type="button" class="tl-chip" data-outcome="Spoke — will call back">Spoke — will call back</button>
+          <button type="button" class="tl-chip" data-outcome="Spoke — actioned">Spoke — actioned</button>
+        </div>
+        <label>Call outcome<textarea id="cs-call-note" rows="3" placeholder="What was discussed / agreed…"></textarea></label>
+        ${/* R5-49 — protection gets discussed on the phone and then never recorded, which is what
+             blocks the case at Application later. One tick here writes protection_status. */ ""}
+        <label class="row-check" style="display:flex;gap:8px;align-items:center;font-size:13px;font-weight:600;color:var(--dark);margin-top:8px;">
+          <input type="checkbox" id="cs-call-prot" style="width:auto;margin:0;" ${prot === "not_discussed" ? "" : "checked disabled"}>
+          Protection discussed${prot === "not_discussed" ? "" : ` <span class="cs-muted" style="font-weight:400;">(already ${esc(String(prot).replace(/_/g, " "))})</span>`}
+        </label>
+        <label style="margin-top:8px;">Next follow-up (optional)</label>
+        <div style="display:flex;gap:8px;margin-top:4px;">
+          <input id="cs-call-fu-title" placeholder="Follow-up task…" style="flex:1;">
+          <select id="cs-call-fu-assignee" aria-label="Assign follow-up to" title="Assign follow-up to" style="width:auto;">${TEAM.map((p) => `<option value="${p.id}" ${p.id === defaultAssignee(c && c.assigned_to) ? "selected" : ""}>${esc(staffName(p.id))}</option>`).join("")}</select>
+          <input id="cs-call-fu-due" type="date" style="width:auto;">
+        </div>
+        <div class="due-chips" style="margin-top:8px;">
+          <span class="due-chips-lbl">Follow-up:</span>
+          <button type="button" class="btn btn-sm fu-chip" data-days="1">Tomorrow</button>
+          <button type="button" class="btn btn-sm fu-chip" data-days="3">+3d</button>
+          <button type="button" class="btn btn-sm fu-chip" data-days="7">+1wk</button>
+          <button type="button" class="btn btn-sm fu-chip" data-months="1">+1mo</button>
+        </div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px;">
+          <button type="button" class="btn btn-sm" id="cs-call-cancel">Cancel</button>
+          <button type="button" class="btn btn-sm btn-primary" id="cs-call-save">Save call</button>
+        </div>
+      `;
+}
+/* The interactive half. `root` is the element holding the panel, so the same wiring serves the
+   case modal (#cs-logcall-panel) and the Retention row's overlay without either reaching into
+   the other's DOM. */
+function wireLogCallPanel(root, handlers) {
+  if (!root) return;
+  const h = handlers || {};
+  // Outcome chips: single-select, and clicking the active one clears it (no outcome prefix).
+  const outcomeChips = root.querySelector("#cs-call-outcome-chips");
+  if (outcomeChips) outcomeChips.querySelectorAll(".tl-chip").forEach((b) => (b.onclick = () => {
+    const wasActive = b.classList.contains("active");
+    outcomeChips.querySelectorAll(".tl-chip").forEach((x) => x.classList.remove("active"));
+    if (!wasActive) b.classList.add("active");
+    const note = root.querySelector("#cs-call-note"); if (note) note.focus();
+  }));
+  // Follow-up preset chips fill the log-call date input (kept separate from the task due-chips).
+  root.querySelectorAll(".fu-chip").forEach((b) => (b.onclick = () => {
+    const d = new Date();
+    if (b.dataset.months) d.setMonth(d.getMonth() + Number(b.dataset.months));
+    else d.setDate(d.getDate() + Number(b.dataset.days || 0));
+    const due = root.querySelector("#cs-call-fu-due");
+    if (due) due.value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }));
+  const cancel = root.querySelector("#cs-call-cancel");
+  if (cancel && h.onCancel) cancel.onclick = h.onCancel;
+  const save = root.querySelector("#cs-call-save");
+  if (save && h.onSave) save.onclick = h.onSave;
+}
+/* The writes. Returns null when nothing was written (no note text, or a failed insert the caller
+   must not treat as a save); otherwise { noteBody, protRecorded, madeTask, task }.
+   `hooks.onProtection` / `hooks.onNote` fire at exactly the points the modal's original inline
+   version did its own repainting, so the order of operations is unchanged. */
+async function logCallSave(root, c, hooks) {
+  const h = hooks || {};
+  const q = (sel) => root.querySelector(sel);
+  const noteEl = q("#cs-call-note");
+  const body = ((noteEl && noteEl.value) || "").trim();
+  if (!body) { if (noteEl) noteEl.focus(); toast("Add a call outcome note"); return null; }
+  const { data: { user } } = await db.auth.getUser();
+  // R5-49 — the outcome chip (if one is picked) prefixes the note, exactly as the note-type
+  // chips do, so "Call: No answer — tried mobile" reads the same from every adviser.
+  const outcomeChip = q("#cs-call-outcome-chips .tl-chip.active");
+  const outcome = outcomeChip ? outcomeChip.dataset.outcome : "";
+  const noteBody = "Call: " + (outcome ? outcome + " — " : "") + body;
+  const { error: nErr } = await db.from("case_notes").insert({ case_id: c.id, body: noteBody, created_by: user.id });
+  if (nErr) { toast("Error: " + nErr.message); return null; }
+  /* R5-49 — protection is discussed on the call and recorded nowhere, and the case then jams
+     at the Application gate weeks later. One tick writes it (never downgrading a status that
+     is already further on). */
+  const protChk = q("#cs-call-prot");
+  let protRecorded = false;
+  if (protChk && protChk.checked && !protChk.disabled && (c.protection_status || "not_discussed") === "not_discussed") {
+    const { error: pErr } = await db.from("cases").update({ protection_status: "discussed" }).eq("id", c.id);
+    if (pErr) toast("Call logged, but the protection status could not be saved: " + pErr.message);
+    else { protRecorded = true; c.protection_status = "discussed"; if (h.onProtection) await h.onProtection(); }
+  }
+  if (h.onNote) h.onNote(noteBody, user.id);
+  // Optional follow-up task (created if a title and/or due date was given).
+  const fuTitleEl = q("#cs-call-fu-title"), fuDueEl = q("#cs-call-fu-due"), fuSel = q("#cs-call-fu-assignee");
+  const fuTitle = ((fuTitleEl && fuTitleEl.value) || "").trim();
+  const fuDue = (fuDueEl && fuDueEl.value) || null;
+  let task = null;
+  if (fuTitle || fuDue) {
+    const title = fuTitle || "Follow-up call";
+    // T1-6 — the follow-up lands on the case owner (or whoever the select names), not
+    // automatically on whoever happened to take the call.
+    const fuAssignee = (fuSel && fuSel.value) || c.assigned_to || user.id;
+    const { data: inserted, error: tErr } = await db.from("case_tasks")
+      .insert({ case_id: c.id, title, due_date: fuDue, created_by: user.id, assigned_to: fuAssignee })
+      .select().single();
+    if (tErr) { toast("Error: " + tErr.message); return null; }
+    task = { id: inserted ? inserted.id : "", title, due: fuDue, assignee: fuAssignee };
+    if (h.onTask) h.onTask(task);
+  }
+  return { noteBody, protRecorded, madeTask: !!task, task, userId: user.id };
+}
 window.openCase = async function (id, opts = {}) {
   let c = { stage: "enquiry", case_kind: "remortgage", rate_type: "fixed" };
   let notes = [], tasks = [];
@@ -13006,41 +13494,7 @@ window.openCase = async function (id, opts = {}) {
         ${nextAppt ? `<div class="cs-line" id="cs-appt-line"><span class="cs-lbl">${nextApptIsAhead ? "Next appointment" : "Earlier today"}</span><span id="cs-appt-val"><a href="#" class="cs-appt-link" data-appt="${esc(nextAppt.id)}" title="${esc(`Open this appointment${nextAppt.staff_id ? ` — ${staffName(nextAppt.staff_id)}` : ""}${nextAppt.location ? ` · ${nextAppt.location}` : ""}`)}" onclick="event.preventDefault();openApptFromCase('${jsArg(nextAppt.id)}','${jsArg(id)}')">${esc(nextAppt.title || "Appointment")} · ${esc(apptWhenLabel(nextAppt))}${nextAppt.staff_id ? " · " + esc(staffName(nextAppt.staff_id)) : ""}</a>${apptOutcomeChipHtml(nextAppt.outcome)}</span></div>` : ""}
         <div class="cs-line"><span class="cs-lbl">Last note</span><span id="cs-note-val">${lastNote ? `${esc(noteSnip(lastNote.body))} <span class="cs-muted">· ${fmtAgo(lastNote.created_at)}</span>` : '<span class="cs-muted">no notes yet</span>'}</span></div>
       </div>
-      <div class="cs-logcall-panel hidden" id="cs-logcall-panel">
-        ${/* R5-49 — the four outcomes every call actually has, as chips that prefix the note (same
-             pattern as the note-type chips below), so "no answer" costs one click instead of a
-             sentence and the timeline reads consistently across advisers. */ ""}
-        <div class="type-chips" id="cs-call-outcome-chips">
-          <button type="button" class="tl-chip" data-outcome="No answer">No answer</button>
-          <button type="button" class="tl-chip" data-outcome="Left voicemail">Left voicemail</button>
-          <button type="button" class="tl-chip" data-outcome="Spoke — will call back">Spoke — will call back</button>
-          <button type="button" class="tl-chip" data-outcome="Spoke — actioned">Spoke — actioned</button>
-        </div>
-        <label>Call outcome<textarea id="cs-call-note" rows="3" placeholder="What was discussed / agreed…"></textarea></label>
-        ${/* R5-49 — protection gets discussed on the phone and then never recorded, which is what
-             blocks the case at Application later. One tick here writes protection_status. */ ""}
-        <label class="row-check" style="display:flex;gap:8px;align-items:center;font-size:13px;font-weight:600;color:var(--dark);margin-top:8px;">
-          <input type="checkbox" id="cs-call-prot" style="width:auto;margin:0;" ${(c.protection_status || "not_discussed") === "not_discussed" ? "" : "checked disabled"}>
-          Protection discussed${(c.protection_status || "not_discussed") === "not_discussed" ? "" : ` <span class="cs-muted" style="font-weight:400;">(already ${esc(String(c.protection_status).replace(/_/g, " "))})</span>`}
-        </label>
-        <label style="margin-top:8px;">Next follow-up (optional)</label>
-        <div style="display:flex;gap:8px;margin-top:4px;">
-          <input id="cs-call-fu-title" placeholder="Follow-up task…" style="flex:1;">
-          <select id="cs-call-fu-assignee" aria-label="Assign follow-up to" title="Assign follow-up to" style="width:auto;">${TEAM.map((p) => `<option value="${p.id}" ${p.id === defaultAssignee(c.assigned_to) ? "selected" : ""}>${esc(staffName(p.id))}</option>`).join("")}</select>
-          <input id="cs-call-fu-due" type="date" style="width:auto;">
-        </div>
-        <div class="due-chips" style="margin-top:8px;">
-          <span class="due-chips-lbl">Follow-up:</span>
-          <button type="button" class="btn btn-sm fu-chip" data-days="1">Tomorrow</button>
-          <button type="button" class="btn btn-sm fu-chip" data-days="3">+3d</button>
-          <button type="button" class="btn btn-sm fu-chip" data-days="7">+1wk</button>
-          <button type="button" class="btn btn-sm fu-chip" data-months="1">+1mo</button>
-        </div>
-        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px;">
-          <button type="button" class="btn btn-sm" id="cs-call-cancel">Cancel</button>
-          <button type="button" class="btn btn-sm btn-primary" id="cs-call-save">Save call</button>
-        </div>
-      </div>
+      <div class="cs-logcall-panel hidden" id="cs-logcall-panel">${logCallPanelHtml(c)}</div>
     </div>` : "";
 
   /* ---------- R36-B · W7 — THE SLIM NEW-CASE FORM ----------
@@ -14049,33 +14503,18 @@ window.openCase = async function (id, opts = {}) {
       $("#new-task").focus();
     });
     // ---- Log call (BUILD 2a): one action writes a "Call: " note + optional follow-up task ----
+    /* R64 · A3 — the writes now live in logCallSave() (shared with the Retention page's row
+       chip); everything below is this MODAL's own repainting, fired from the same points in the
+       sequence it always ran at. Behaviour, order and copy are unchanged. */
     const submitCall = async () => {
-      const noteEl = $("#cs-call-note");
-      const body = noteEl.value.trim();
-      if (!body) { noteEl.focus(); return toast("Add a call outcome note"); }
+      const panel = $("#cs-logcall-panel");
       const saveBtn = $("#cs-call-save");
       if (saveBtn) saveBtn.disabled = true;
       try {
-        const { data: { user } } = await db.auth.getUser();
-        // R5-49 — the outcome chip (if one is picked) prefixes the note, exactly as the note-type
-        // chips do, so "Call: No answer — tried mobile" reads the same from every adviser.
-        const outcomeChip = $("#cs-call-outcome-chips .tl-chip.active");
-        const outcome = outcomeChip ? outcomeChip.dataset.outcome : "";
-        const noteBody = "Call: " + (outcome ? outcome + " — " : "") + body;
-        const { error: nErr } = await db.from("case_notes").insert({ case_id: id, body: noteBody, created_by: user.id });
-        if (nErr) return toast("Error: " + nErr.message);
-        /* R5-49 — protection is discussed on the call and recorded nowhere, and the case then jams
-           at the Application gate weeks later. One tick writes it (never downgrading a status that
-           is already further on), and the form select is moved with it so the next Save can't put
-           "not discussed" straight back. */
-        const protChk = $("#cs-call-prot");
-        let protRecorded = false;
-        if (protChk && protChk.checked && !protChk.disabled && (c.protection_status || "not_discussed") === "not_discussed") {
-          const { error: pErr } = await db.from("cases").update({ protection_status: "discussed" }).eq("id", id);
-          if (pErr) toast("Call logged, but the protection status could not be saved: " + pErr.message);
-          else {
-            protRecorded = true;
-            c.protection_status = "discussed";
+        const res = await logCallSave(panel, c, {
+          /* R5-49 — …and the form select is moved with it so the next Save can't put
+             "not discussed" straight back. */
+          onProtection: async () => {
             await refreshOpenedStamp(id); // R5-3 — this modal just wrote the case row
             const protSel = $("#case-form") && $("#case-form").elements.protection_status;
             if (protSel) protSel.value = "discussed";
@@ -14085,60 +14524,49 @@ window.openCase = async function (id, opts = {}) {
                new thing ("discussed — no outcome yet"). */
             const warn = $("#cs-prot-warn");
             if (warn) warn.outerHTML = protStatChipHtml({ ...c, protection_status: "discussed" }, c.stage);
-            protChk.checked = true; protChk.disabled = true;
+            const protChk = $("#cs-call-prot");
+            if (protChk) { protChk.checked = true; protChk.disabled = true; }
             snapshotModalState(); // the app made this change, not the operator — not an unsaved edit
-          }
-        }
-        // R40 — the logged call lands at the top of the History timeline (it used to be prepended
-        // to #notes-list, which no longer exists). Same optimistic insert as the note composer.
-        prependCaseTlNote(noteBody, user.id);
-        // Keep the summary "Last note" line current.
-        const noteVal = $("#cs-note-val");
-        if (noteVal) noteVal.innerHTML = `${esc(noteBody.length > 120 ? noteBody.slice(0, 120) + "…" : noteBody)} <span class="cs-muted">· just now</span>`;
-        // Optional follow-up task (created if a title and/or due date was given).
-        const fuTitle = ($("#cs-call-fu-title").value || "").trim();
-        const fuDue = $("#cs-call-fu-due").value || null;
-        let madeTask = false;
-        if (fuTitle || fuDue) {
-          const title = fuTitle || "Follow-up call";
-          // T1-6 — the follow-up lands on the case owner (or whoever the select names), not
-          // automatically on whoever happened to take the call.
-          const fuSel = $("#cs-call-fu-assignee");
-          const fuAssignee = (fuSel && fuSel.value) || c.assigned_to || user.id;
-          const { data: inserted, error: tErr } = await db.from("case_tasks")
-            .insert({ case_id: id, title, due_date: fuDue, created_by: user.id, assigned_to: fuAssignee })
-            .select().single();
-          if (tErr) return toast("Error: " + tErr.message);
-          madeTask = true;
-          const tlist = $("#tasks-inline");
-          if (tlist) {
-            const emptyT = tlist.querySelector(".empty");
-            if (emptyT) emptyT.remove();
-            const tid = inserted ? inserted.id : "";
-            const trow = document.createElement("div");
-            trow.className = "row-item";
-            trow.style.padding = "7px 4px";
-            trow.innerHTML = `<div class="row-main"><div>${esc(title)}</div><div class="s">${fuDue ? "due " + fmtD(fuDue) : ""}</div></div>`
-              + taskAssigneeHtml(tid, fuAssignee, "")
-              + `<button class="btn btn-sm" aria-label="Mark task done" title="Mark task done" onclick="doneTaskInCase('${tid}','${id}')">✓</button>`;
-            tlist.appendChild(trow);
-          }
-          // If there was no open task before, surface this one in the summary line.
-          const taskVal = $("#cs-task-val");
-          if (taskVal && !hadOpenTask) {
-            const tOverdue = fuDue && fuDue < todayStr;
-            taskVal.innerHTML = `<span class="${tOverdue ? "cs-danger-txt" : ""}">${esc(title)}${fuDue ? " · " + (tOverdue ? "overdue " : "due ") + fmtD(fuDue) : ""}</span>`;
-          }
-        }
+          },
+          onNote: (noteBody, userId) => {
+            // R40 — the logged call lands at the top of the History timeline (it used to be prepended
+            // to #notes-list, which no longer exists). Same optimistic insert as the note composer.
+            prependCaseTlNote(noteBody, userId);
+            // Keep the summary "Last note" line current.
+            const noteVal = $("#cs-note-val");
+            if (noteVal) noteVal.innerHTML = `${esc(noteBody.length > 120 ? noteBody.slice(0, 120) + "…" : noteBody)} <span class="cs-muted">· just now</span>`;
+          },
+          onTask: (task) => {
+            const tlist = $("#tasks-inline");
+            if (tlist) {
+              const emptyT = tlist.querySelector(".empty");
+              if (emptyT) emptyT.remove();
+              const tid = task.id;
+              const trow = document.createElement("div");
+              trow.className = "row-item";
+              trow.style.padding = "7px 4px";
+              trow.innerHTML = `<div class="row-main"><div>${esc(task.title)}</div><div class="s">${task.due ? "due " + fmtD(task.due) : ""}</div></div>`
+                + taskAssigneeHtml(tid, task.assignee, "")
+                + `<button class="btn btn-sm" aria-label="Mark task done" title="Mark task done" onclick="doneTaskInCase('${tid}','${id}')">✓</button>`;
+              tlist.appendChild(trow);
+            }
+            // If there was no open task before, surface this one in the summary line.
+            const taskVal = $("#cs-task-val");
+            if (taskVal && !hadOpenTask) {
+              const tOverdue = task.due && task.due < todayStr;
+              taskVal.innerHTML = `<span class="${tOverdue ? "cs-danger-txt" : ""}">${esc(task.title)}${task.due ? " · " + (tOverdue ? "overdue " : "due ") + fmtD(task.due) : ""}</span>`;
+            }
+          },
+        });
+        if (!res) return;
         // Reset + close the panel.
-        noteEl.value = "";
+        const noteEl = $("#cs-call-note"); if (noteEl) noteEl.value = "";
         $("#cs-call-fu-title").value = "";
         $("#cs-call-fu-due").value = "";
-        const panel = $("#cs-logcall-panel");
         if (panel) panel.classList.add("hidden");
         // Reset the outcome chip so the next call starts blank.
         const activeChip = $("#cs-call-outcome-chips .tl-chip.active"); if (activeChip) activeChip.classList.remove("active");
-        toast((madeTask ? "Call logged + follow-up added ✓" : "Call logged ✓") + (protRecorded ? " · protection recorded as discussed" : ""));
+        toast((res.madeTask ? "Call logged + follow-up added ✓" : "Call logged ✓") + (res.protRecorded ? " · protection recorded as discussed" : ""));
       } finally {
         if (saveBtn) saveBtn.disabled = false;
       }
@@ -14202,22 +14630,11 @@ window.openCase = async function (id, opts = {}) {
         const nowHidden = logcallPanel.classList.toggle("hidden");
         if (!nowHidden) $("#cs-call-note").focus();
       };
-      $("#cs-call-cancel").onclick = () => logcallPanel.classList.add("hidden");
-      $("#cs-call-save").onclick = submitCall;
-      // Outcome chips: single-select, and clicking the active one clears it (no outcome prefix).
-      const outcomeChips = $("#cs-call-outcome-chips");
-      if (outcomeChips) outcomeChips.querySelectorAll(".tl-chip").forEach((b) => b.onclick = () => {
-        const wasActive = b.classList.contains("active");
-        outcomeChips.querySelectorAll(".tl-chip").forEach((x) => x.classList.remove("active"));
-        if (!wasActive) b.classList.add("active");
-        const note = $("#cs-call-note"); if (note) note.focus();
-      });
-      // Follow-up preset chips fill the log-call date input (kept separate from the task due-chips).
-      $("#modal").querySelectorAll(".fu-chip").forEach((b) => b.onclick = () => {
-        const d = new Date();
-        if (b.dataset.months) d.setMonth(d.getMonth() + Number(b.dataset.months));
-        else d.setDate(d.getDate() + Number(b.dataset.days || 0));
-        $("#cs-call-fu-due").value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      /* R64 · A3 — the chips and the two buttons are wired by the SHARED wirer, scoped to this
+         panel, so the Retention page's overlay and this modal cannot drift apart. */
+      wireLogCallPanel(logcallPanel, {
+        onCancel: () => logcallPanel.classList.add("hidden"),
+        onSave: submitCall,
       });
     }
     $("#act-offer").onclick = () => $("#offer-file").click();
@@ -14805,13 +15222,27 @@ async function queueEmail(caseId, clientId, type, c, ev) {
        because this is the last thing shown before something leaves the firm. */
     const propFull = type === "rate_end_reminder" ? propAddress(c) : null;
     const propLine = propFull ? `\nProperty: ${propFull}` : "";
+    /* R64 · M5 — THE FAR-OUT LINE, ON THE SINGLE-CASE SEND TOO.
+       The bulk sweep now holds back a rate more than nine months out (RATE_FAR_OUT_DAYS, the same
+       number rateErcFarOut has used since R7-2) because a select-all queued a client email about a
+       rate with nineteen months left. This button is a different act — one case, chosen by name,
+       with a confirm in front of it — and an adviser who has just spoken to that client may have a
+       perfectly good reason to write early. So it WARNS and does not refuse: the months are named
+       in the dialog, in the same words the bulk block uses, and the decision stays with the person
+       pressing the button. `markRateReminded` is deliberately left alone — it sends nothing at all,
+       it only clears the nag on a case whose successor already exists (see its own comment). */
+    const farOutMonths = type === "rate_end_reminder" && c && c.rate_end_date && rateDaysOut(c.rate_end_date) > RATE_FAR_OUT_DAYS
+      ? rateMonthsOut(c.rate_end_date) : 0;
+    const farOutLine = farOutMonths
+      ? `\n\n⚠ Too early — this rate ends in ${farOutMonths} months (${fmtD(c.rate_end_date)}). The ${Number(settings.rate_reminder_months) || 6}-month reminder window will reach this case on its own; a bulk sweep would not queue it. Send anyway only if you have a reason to write now.`
+      : "";
     /* R13 · M-30 — the suppression pre-flight, ahead of the ordinary confirm and ahead of the
        insert. The database refuses this client every AUTOMATED email; a person pressing a button
        is the one route it cannot see, which is exactly why it is asked about here in words that
        name the suppression and quote the care note. It warns, it does not block: an adviser
        sending the one email a suppressed client genuinely needs is a legitimate act. */
     if (!(await confirmSuppressedSend(clientId, "email"))) return;
-    if (!confirm(`Send ${EMAIL_LABEL[type].toLowerCase()} email to ${cl.email}?\n\nSigned off by: ${signedBy}${propLine}${extraLine}${docsLine}`)) return;
+    if (!confirm(`Send ${EMAIL_LABEL[type].toLowerCase()} email to ${cl.email}?\n\nSigned off by: ${signedBy}${propLine}${extraLine}${docsLine}${farOutLine}`)) return;
     const { data: qRow, error } = await db.from("email_queue")
       .insert({ case_id: caseId, client_id: clientId, email_type: type, to_email: cl.email })
       .select("id").single();
@@ -14886,7 +15317,36 @@ async function queueEmail(caseId, clientId, type, c, ev) {
 
    The last-contact definition is the one that could quietly mean anything, so it is stated on
    screen, in the same words as the code below, whenever that segment is selected. */
-const CLIENT_SEG_CONTACT_MONTHS = 6;
+/* ==========================================================================
+   R64 · L5 — THE GONE-QUIET WINDOW IS A SETTING NOW (`client_quiet_months`).
+
+   Six months was a constant in this file, and every screen that talks about
+   going quiet — the Clients chip, the segment's own definition, the Retention
+   page's "Gone quiet" panel, the seeded "My cold clients (6mo+)" view — printed
+   it from here. A firm that works a book on a three-month rhythm, or a protection
+   book on a twelve-month one, had no way to say so and no way to tell that the
+   number was a choice at all.
+
+   ONE FUNCTION reads it (clientQuietMonths) and everything else reads that, so
+   the label, the cutoff, the panel copy and the saved view can never drift apart.
+   Absent, blank, zero or non-numeric ⇒ the six-month default — the same T1-10
+   discipline rate_reminder_months already applies, because a stray value here
+   would otherwise make the cold segment either everybody or nobody.
+   ========================================================================== */
+const CLIENT_SEG_CONTACT_MONTHS = 6;      // the DEFAULT; nothing reads it except clientQuietMonths()
+function clientQuietMonths() {
+  const n = Number(String(settings.client_quiet_months ?? "").trim());
+  return Number.isFinite(n) && n > 0 ? n : CLIENT_SEG_CONTACT_MONTHS;
+}
+/* R18-P3's comms read is bounded, and that bound has to stay WIDER than the cutoff or the bound
+   itself starts deciding who is cold: a client last spoken to 250 days ago would have no row in a
+   210-day window, read as "no contact at all", and be called cold under a twelve-month setting
+   they are not cold under. So the window follows the setting, never below the original 210 days.
+   ~27 days of headroom is one comms cycle beyond the cutoff, enough that the last contact before
+   the line is still visible on the row that prints it. */
+function clientCommsWindowDays() {
+  return Math.max(210, Math.round(clientQuietMonths() * 30.44) + 27);
+}
 /* The three rate-end years are generated, not hardcoded: "2026/2027/2028" is only right until
    January, and a segment that silently stops matching anything is worse than no segment. The
    window is this calendar year + the two after it, which is what a rate-end sweep looks at. */
@@ -14898,7 +15358,7 @@ function clientRateYears() {
    183 days, so the line the screen draws is the line a human would draw. */
 function clientContactCutoff(now) {
   const d = new Date(now || Date.now());
-  d.setMonth(d.getMonth() - CLIENT_SEG_CONTACT_MONTHS);
+  d.setMonth(d.getMonth() - clientQuietMonths());   // R64 · L5 — the window is a setting
   return d;
 }
 const CLIENT_LIVE = (s) => s !== "completed" && s !== "not_proceeding";
@@ -14912,11 +15372,13 @@ function clientSegments() {
     ["rate_" + y3, `Rate ends ${y3}`, `Clients with at least one case whose rate end date falls in ${y3}.`],
     ["no_protection", "No protection outcome", "Clients with at least one LIVE case whose protection status is still “not discussed” or “discussed” — i.e. the conversation has no outcome recorded either way. A blank status counts as not discussed, exactly as it does everywhere else in the app."],
     ["no_dob", "Missing DOB", "Clients with no date of birth on file. Birthday greetings can never reach them, and the age-based questions on a fact-find start blank."],
-    ["cold", `Not contacted ${CLIENT_SEG_CONTACT_MONTHS}+ months`, ""],  // definition filled in below — it moves with the date
+    ["cold", `Not contacted ${clientQuietMonths()}+ months`, ""],  // definition filled in below — it moves with the date and with the setting (R64 · L5)
   ];
 }
 function clientColdDefinition(cutoff) {
-  return `Last contact = the most recent of: a note on any of their cases · an email we SENT them (a queued or failed one has not reached them, so it does not count) · an appointment that has already started · a task completed on one of their cases. This segment is every client whose last contact is before ${fmtD(localDateStr(cutoff))}, plus every client with no contact of any kind on record.`;
+  /* R64 · L5 — the window says outright that it is a setting and where it lives, because a firm
+     reading "before 3 Mar" is entitled to know that the line is theirs to move, not the app's. */
+  return `Last contact = the most recent of: a note on any of their cases · an email we SENT them (a queued or failed one has not reached them, so it does not count) · an appointment that has already started · a task completed on one of their cases. This segment is every client whose last contact is before ${fmtD(localDateStr(cutoff))}, plus every client with no contact of any kind on record. The ${clientQuietMonths()}-month window is a setting — Settings › “Gone-quiet window”.`;
 }
 let clientSegment = "all";
 /* ==========================================================================
@@ -14941,7 +15403,42 @@ let clientSegment = "all";
    colleague's book — which is exactly what you do when you are redistributing
    it — is impossible, because no option carries their id.
    ========================================================================== */
-let clientAdviser = "all";
+/* ==========================================================================
+   R64 · M9 — WHOSE CLIENTS THIS PAGE OPENS ON.
+
+   The board and the diary have opened on the person reading them since R34 · W2
+   (staffFilterDefault / nx_board_adviser), and the Retention page has opened on
+   your own book since R38 (retScopeResolved / nx_ret_scope). The client list was
+   the last of the four still opening on the whole firm for everybody, and never
+   remembering the pick either — so an adviser's first two clicks on Clients,
+   every single day, were re-choosing themselves from a dropdown that had just
+   forgotten them.
+
+   Two rules, in this order, deliberately identical to staffFilterDefault's:
+     1. a value this user chose before, IF it is still a real option on the
+        rebuilt select (a colleague who has left takes their option with them,
+        and a stored id that matches nothing falls through to rule 2 rather than
+        leaving the page filtered to a ghost);
+     2. otherwise ME — but only for someone who is not the Owner or the
+        Administrator, who run the whole firm and for whom "All advisers" IS the
+        right default (the same role split as retScopeResolved and R12b · W-7).
+   Nothing is written by the defaulting itself; only an actual pick persists, so
+   clearing the key genuinely restores the role default.
+   ========================================================================== */
+const CLIENT_ADVISER_KEY = "nx_clients_adviser";
+let clientAdviser = null;          // null = not resolved yet; renderClientAdviser resolves it
+/* `opts` is the [key, label, …] list renderClientAdviser has just built, which IS the set of
+   options the select will carry — TEAM plus any case-holding stray plus "all"/"none". Validating
+   against it (rather than against TEAM alone) is what stops a stored id for a departed colleague,
+   or for a person who holds no clients at all, from filtering the page to nothing. */
+function clientAdviserResolve(opts) {
+  const has = (v) => !!v && opts.some(([k]) => k === v);
+  if (has(clientAdviser)) return clientAdviser;
+  const stored = lsGet(CLIENT_ADVISER_KEY);
+  if (has(stored)) return (clientAdviser = stored);
+  if (ME && !isAdminOrOwner() && has(ME.id)) return (clientAdviser = ME.id);
+  return (clientAdviser = "all");
+}
 function clientAdviserIds(c) {
   const ids = new Set();
   (c.cases || []).forEach((x) => { if (x.assigned_to) ids.add(x.assigned_to); });
@@ -14969,21 +15466,30 @@ function renderClientAdviser(clients) {
   // R33 — label only ("All advisers", as #board-adviser and #diary-staff now say); the value is
   // still "all" and every branch below still tests for it.
   const opts = [["all", "All advisers"]].concat(teamOpts, strays, noneN ? [["none", "Nobody (unassigned cases only)"]] : []);
-  if (!opts.some(([k]) => k === clientAdviser)) clientAdviser = "all";
+  /* R64 · M9 — was `if (!opts.some(...)) clientAdviser = "all"`. Same job (a selection the rebuilt
+     list can no longer honour must not stay selected) plus the two default rules; a selection that
+     IS still offered is returned untouched, exactly as before. */
+  clientAdviserResolve(opts);
   // R12b · K-15/K-17/L-16 — the third tuple element (present only on a "no access" stray) carries
   // the same explanation the other adviser filters give.
   sel.innerHTML = opts.map(([k, l, noAccess]) => `<option value="${esc(k)}"${k === clientAdviser ? " selected" : ""}${noAccess ? ` title="${esc(NO_ACCESS_OPTION_TITLE)}"` : ""}>${esc(l)}</option>`).join("");
   if (!sel.dataset.wired) {
     sel.dataset.wired = "1";
-    sel.onchange = () => { clientAdviser = sel.value; clientSel.clear(); loadClients($("#client-search").value); };
+    // R64 · M9 — the ONE writer. A pick is a choice, and the page opens on it next time.
+    sel.onchange = () => { clientAdviser = sel.value; lsSet(CLIENT_ADVISER_KEY, sel.value || "all"); clientSel.clear(); loadClients($("#client-search").value); };
   }
   const note = $("#client-adv-note");
   if (!note) return;
   if (clientAdviser === "all") { note.textContent = ""; note.classList.add("hidden"); return; }
   note.classList.remove("hidden");
+  /* R64 · M9 — the note now also says WHY the page opened here and how to leave, because a list
+     that has quietly narrowed itself to one person is the exact thing an operator must not have to
+     work out from the counts. */
+  const mineNow = !!(ME && ME.id && clientAdviser === ME.id);
   note.textContent = clientAdviser === "none"
     ? "Clients with no case assigned to anybody — including clients with no case at all."
-    : `Clients with at least one case assigned to ${staffName(clientAdviser)}. A client whose cases are split between two advisers appears under both — that is correct, they are both advisers' client. The segment counts and the sort below all follow this filter.`;
+    : `Clients with at least one case assigned to ${staffName(clientAdviser)}. A client whose cases are split between two advisers appears under both — that is correct, they are both advisers' client. The segment counts and the sort below all follow this filter.`
+      + (mineNow ? " This page opens on your own clients — pick “All advisers” for the whole firm's, and it will open on that next time." : " Your pick is remembered for next time.");
 }
 /* One fetch, cached for the life of the page visit. force:true re-reads (page navigation, a
    save, a completed bulk action); a keystroke in the search box does not. */
@@ -15006,11 +15512,12 @@ function coldClients(data, adviser) {
   return (data.clients || []).filter((c) => clientHasAdviser(c, adviser) && clientInSegment(c, "cold", ctx));
 }
 async function loadClientData() {
-  /* R18-P3 — bound the four comms reads to the last 210 days. These reads only feed the "last
-     contact" detail and the cold segment. 210 days is wider than the ~183-day cold cutoff, so
-     cold-segment membership is unchanged; only a client with no contact at all in 210 days shows a
+  /* R18-P3 — bound the four comms reads to a fixed recent window. These reads only feed the "last
+     contact" detail and the cold segment. The window is always WIDER than the cold cutoff (see
+     clientCommsWindowDays — 210 days at the six-month default, more once the setting is raised), so
+     cold-segment membership is unchanged; only a client with no contact at all inside it shows a
      blank last-contact detail. The clients/cases embedded read stays unbounded. Index-served. */
-  const commsSinceIso = new Date(Date.now() - 210 * 86400000).toISOString();
+  const commsSinceIso = new Date(Date.now() - clientCommsWindowDays() * 86400000).toISOString();   // R64 · L5 — follows the setting
   /* R36-A · L9 — ONE more column on the embed the page already reads, `property_address`, so the
      list row can say how many BUILDINGS a client's cases sit on — the count the client record's
      own "· 5 properties" label has given since R6 and the list's "5 cases (3 active)" badge never

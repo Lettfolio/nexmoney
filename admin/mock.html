@@ -444,6 +444,12 @@
       <div class="panel" id="ret-rates-panel">
         <h3 id="ret-rates-h3">⚠️ Rates ending &amp; ended</h3>
         <p class="panel-sub" id="ret-rates-sub"></p>
+        <!-- R64 · A2 — the month window. NOT a second scope control: it composes with
+             Mine/All above (that one says WHOSE, this one says WHEN). Filled in by
+             renderRetMonthChips(); the pick is remembered in localStorage nx_ret_month. -->
+        <div class="ret-month-chips" id="ret-month-chips" role="group" aria-label="Which rate-end month to show"></div>
+        <!-- R64 · A1 — select-all + the bulk action bar, rendered by renderRetBulkBar(). -->
+        <div id="ret-bulk"></div>
         <div id="ret-rates-list"></div>
       </div>
       <div class="panel" id="ret-pipeline-panel" style="margin-top:18px;">

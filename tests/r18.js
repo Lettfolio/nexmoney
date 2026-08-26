@@ -288,6 +288,11 @@ const openClient = async (page, id) => {
       for (let i = 0; i < NEEDLE_N; i++) await mkClient(page, { first: "CapNeedle", last: `Unique${i}` });
 
       await goto(page, "clients", 900);
+      /* R64 · M9 — the Clients page now opens on the signed-in adviser's OWN clients (persisted under
+         nx_clients_adviser). This section measures the firm-wide cap, so it widens the filter to
+         "All advisers" first — the same select an adviser would use. The cap contract is unchanged. */
+      await page.evaluate(() => { const s = document.querySelector("#client-adviser"); if (s && s.value !== "all") { s.value = "all"; s.onchange && s.onchange(); } });
+      await wait(page, 900);
       const total = baseline + FILL_N + NEEDLE_N;
 
       const rowCount = await page.$$eval("#client-list .client-row", (els) => els.length);

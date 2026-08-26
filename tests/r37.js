@@ -149,7 +149,7 @@ const goto = async (page, pageName, ms) => {
    every suite in this harness clears them — see the standing rule in HARNESS.md. Each newPage()
    call is already a fresh, isolated browser context (so these keys are absent by construction),
    but a test that explicitly sets one of them mid-block clears it again before moving on. */
-const NX_KEYS = ["nx_wt_scope", "nx_board_adviser", "nx_diary_staff", "nx_views_v1", "nx_nav_firm",
+const NX_KEYS = ["nx_wt_scope", "nx_board_adviser", "nx_clients_adviser"/* R64 · M9 — the Clients adviser filter persists now */, "nx_diary_staff", "nx_views_v1", "nx_nav_firm",
   "nx_import_blurb", "nx_drawer_watchtower", "nx_drawer_unactioned", "nx_drawer_leads",
   "nx_drawer_todayappts", "nx_drawer_tasks", "nx_drawer_rateerc", "nx_drawer_retention", "nx_drawer_revenue"];
 const clearNxKeys = (page) => page.evaluate((keys) => { keys.forEach((k) => { try { localStorage.removeItem(k); } catch (e) { /* ignore */ } }); }, NX_KEYS);
@@ -392,7 +392,7 @@ const readCase = (page, caseId) => page.evaluate(async (id) => {
       console.log("\n— §4a · owner, fresh (no nx_views_v1 key): starter pipeline + client views seeded, apply + persist-after-delete (p4)");
       const page = await newPage(browser, "p4");
       const errBefore = (page.__err || []).length;
-      const months = await page.evaluate(() => CLIENT_SEG_CONTACT_MONTHS);
+      const months = await page.evaluate(() => clientQuietMonths());   /* R64 · L5 — the starter view's name comes from the `client_quiet_months` SETTING now, not from the constant (which is only its default), so the expectation is read from the same function the label is built from. Same value (6) on the seeded fixture. */
 
       const keyAbsentAtStart = await page.evaluate(() => localStorage.getItem("nx_views_v1"));
       eq("fixture · nx_views_v1 is genuinely absent on a fresh context", keyAbsentAtStart, null);
@@ -451,7 +451,7 @@ const readCase = (page, caseId) => page.evaluate(async (id) => {
       console.log("\n— §4e · adviser, fresh: starter views get the role-appropriate \"My …\" names, pinned to the adviser (p2)");
       const page = await newPage(browser, "p2");
       const errBefore = (page.__err || []).length;
-      const months = await page.evaluate(() => CLIENT_SEG_CONTACT_MONTHS);
+      const months = await page.evaluate(() => clientQuietMonths());   /* R64 · L5 — the starter view's name comes from the `client_quiet_months` SETTING now, not from the constant (which is only its default), so the expectation is read from the same function the label is built from. Same value (6) on the seeded fixture. */
 
       await goto(page, "pipeline", 1400);
       const boardOpts = await page.$$eval("#board-views option", (os) => os.map((o) => o.value));

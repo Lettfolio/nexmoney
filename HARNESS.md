@@ -64,6 +64,7 @@ node tests/r5_batch7.js
 node tests/r5_batch8.js
 node tests/r5_batch9.js
 node tests/r64.js
+node tests/r64_small.js
 node tests/r8_touch.js
 node tests/r8_rev.js
 node tests/r9_adv.js
@@ -105,7 +106,55 @@ node tests/r47.js
 node tests/r48.js
 node tests/r63_docs.js
 node tests/r63_tasks.js
+node tests/r64_retention.js
 ```
+
+**R64 notes (2026-08-26).** One new suite: `tests/r64_retention.js` (88 — §A the Retention
+rates panel's bulk bar, §B the month chips, §C the workable row, §D drawer parity, §E every
+persona). It required ZERO repairs to any pre-existing suite. Three things a future session
+needs to know:
+
+  - **A NEW localStorage KEY: `nx_ret_month`** — the Retention page's month window
+    (`"ended" | "this" | "next" | "3mo" | "all"`, default `"all"` = the page's pre-R64
+    behaviour). Any suite that depends on the rates panel showing its whole feed must clear
+    it alongside `nx_ret_scope`; `tests/r38.js`'s `NX_KEYS` list and `tests/r64_retention.js`'s
+    own list are the two places it is cleared today. It is a WINDOW, not a scope — it composes
+    with Mine/All rather than replacing it.
+  - **`renderRateErcRow(a, feed, opts)` takes a third argument now.** With no `opts` (Today's
+    Rate & ERC drawer) the markup is byte-for-byte what R38 §C proved; `opts.page` adds the
+    `.ret-cb` checkbox, the `.ret-row-acts` chip cluster and the `tel:` link. `§D2` proves the
+    parity directly: it lifts `.ret-cb`/`.ret-row-acts` out of a page row and string-compares
+    the result against the drawer's row for the same case (normalising only the lender
+    favicon's runtime `style="display: none;"`).
+  - **The case modal's Log-call panel is now three shared functions**, not inline markup:
+    `logCallPanelHtml(c)` / `wireLogCallPanel(root, handlers)` / `logCallSave(root, c, hooks)`.
+    Same ids (`#cs-call-note`, `#cs-call-prot`, `#cs-call-fu-title`, `#cs-call-save`, …), same
+    order of writes, same copy — so `tests/r5_batch2.js` and `tests/r12b.js` are untouched. The
+    Retention row's "📞 Log call" opens that same panel inside an overlay whose wrapper id is
+    `#ret-logcall-panel` (deliberately NOT `#cs-logcall-panel`, so `hasUnsavedLogCall()` cannot
+    mistake an overlay for an open case modal).
+
+**R64 notes — the three small items (M5 / M9 / L5).** New suite `tests/r64_small.js`
+(93 checks, §A–§D). §A the far-out guard on the BULK rate-end reminder: a rate more than
+274 days out is now named in the confirm under its own ⚠ "Too early — rate ends in more
+than nine months (not queued)" block and is NOT queued (the single-case `#act-reminder`
+send WARNS in the same words and still sends if you accept; `markRateReminded` is
+untouched — it is not a send). §B `nx_clients_adviser`: the Clients page's adviser filter
+now defaults to `ME.id` for non-admin/owner staff, "all" for the Owner and the
+Administrator, and persists — **add this key to any suite's localStorage clear list**.
+§C `client_quiet_months`: the gone-quiet window is a numeric setting read through ONE
+function (`clientQuietMonths()`, default 6 when absent/blank/zero/rubbish); the comms
+read window (`clientCommsWindowDays()`) follows it and never drops below the original 210
+days. The mock seeds `client_quiet_months: "6"`, so every pre-R64 figure is unchanged.
+TWO deliberate patches to old files, both commented in place: `tests/r5_batch5.js` §S3a's
+FIXTURE picker now asks for four cases whose rate is within 274 days (two of the four it
+used to pick are Offer/Exchange rows carrying the NEW mortgage's five-year fix, 59 months
+out — exactly the emails M5 exists to stop; no assertion was weakened, the suite is still
+79/79), and `tests/r37.js` §4a/§4e read `clientQuietMonths()` instead of
+`CLIENT_SEG_CONTACT_MONTHS` because the starter view's name now comes from the setting
+(same value, 6). Nine other suites gained `"nx_clients_adviser"` in their key-clear array
+only. Merge-time patch: `tests/r18.js` §C widens the Clients adviser filter to "All advisers"
+before measuring the 100-row cap (the page now opens on the adviser's own clients).
 
 **R63 notes (2026-08-26).** Two new suites: `tests/r63_docs.js` (74 — chase-count rule, the
 mock's `auto_stage_comms` mirror, bool10 "on", SMS-cron copy, the Fact Find checklist prompt)
@@ -2086,7 +2135,11 @@ altogether, since both views would then trivially agree. 26/1 → 27/0 (same
 check count).
 
 LOCALSTORAGE KEYS a test must clear before exercising any of the above:
-`nx_wt_scope`, `nx_board_adviser`, `nx_diary_staff`, and one `nx_drawer_<key>`
+`nx_wt_scope`, `nx_board_adviser`, `nx_diary_staff`, `nx_ret_scope`,
+`nx_clients_adviser` (R64 · M9 — the Clients page's adviser filter now
+persists and defaults to the signed-in adviser, so a suite that expects the
+Clients list to open on the whole firm MUST clear this key first, exactly as
+it already clears `nx_board_adviser` for the board), and one `nx_drawer_<key>`
 per drawer key (watchtower/unactioned/leads/todayappts/tasks/rateerc/
 retention/revenue) — `tests/r34.js` clears all of them (plus `nx_views_v1`,
 since §C's saved-view test touches it) at the top of every block that needs a

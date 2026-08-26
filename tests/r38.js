@@ -127,8 +127,11 @@ const goto = async (page, pageName, ms) => {
 
 /* Every key the Retention page (and the surfaces it deep-links from/to) can touch, cleared the
    same defensive way every suite in this harness clears them before it depends on a default. */
-const NX_KEYS = ["nx_wt_scope", "nx_board_adviser", "nx_diary_staff", "nx_views_v1", "nx_nav_firm",
-  "nx_import_blurb", "nx_ret_scope", "nx_drawer_watchtower", "nx_drawer_unactioned", "nx_drawer_leads",
+/* R64 — nx_ret_month joins the list: the Retention page's month window defaults to "6 months
+   (all)" (this suite's assumption everywhere), and a stored pick from another scenario would
+   filter rows out from under §C. Additive only — no assertion in this file changed. */
+const NX_KEYS = ["nx_wt_scope", "nx_board_adviser", "nx_clients_adviser" /* R64 · M9 — the Clients adviser filter persists now */, "nx_diary_staff", "nx_views_v1", "nx_nav_firm",
+  "nx_import_blurb", "nx_ret_scope", "nx_ret_month", "nx_drawer_watchtower", "nx_drawer_unactioned", "nx_drawer_leads",
   "nx_drawer_todayappts", "nx_drawer_tasks", "nx_drawer_rateerc", "nx_drawer_retention", "nx_drawer_revenue"];
 const clearNxKeys = (page) => page.evaluate((keys) => { keys.forEach((k) => { try { localStorage.removeItem(k); } catch (e) { /* ignore */ } }); }, NX_KEYS);
 

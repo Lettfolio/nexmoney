@@ -109,12 +109,22 @@ const sendCalls = (page) => page.evaluate(() => window.__sendCalls || []);
       const page = await newPage(browser, "p4");
       await pipelineTable(page);
 
-      // Fixture: four live cases with a client email AND a rate end date, plus one with no email.
+      /* Fixture: four live cases with a client email AND a rate end date, plus one with no email.
+         R64 · M5 — CONTRACT CHANGE, and the fixture moved rather than the assertions. Eligibility
+         for this sweep is no longer "has an email and a rate-end date": a rate ending more than
+         274 days out is now named in the confirm under its own ⚠ block and deliberately NOT
+         queued, because a select-all on this table was queueing client emails about rates ending
+         in 2031 (two of the four cases this line used to pick are Offer/Exchange cases carrying
+         the NEW mortgage's five-year fix — 59 months out). So the picker asks for four cases that
+         are genuinely due, which is what every assertion below was always about; nothing here is
+         weakened, and the new behaviour has its own coverage in tests/r64_small.js §A. */
       const fix = await page.evaluate(async () => {
         const ids = [...document.querySelectorAll("#pipe-table .bulk-cb")].map((cb) => cb.dataset.id);
         const { data } = await window.__mockDb.from("cases").select("id,stage,rate_end_date,assigned_to,rate_reminder_queued_at,clients!client_id(first_name,email)").in("id", ids);
         const live = (data || []).filter((c) => ["completed", "not_proceeding"].indexOf(c.stage) === -1);
-        const good = live.filter((c) => c.clients && c.clients.email && c.rate_end_date && !c.rate_reminder_queued_at).slice(0, 4);
+        const today = new Date(new Date().toISOString().slice(0, 10) + "T12:00:00").getTime();
+        const dueSoon = (c) => Math.round((new Date(c.rate_end_date + "T12:00:00").getTime() - today) / 86400000) <= 274;
+        const good = live.filter((c) => c.clients && c.clients.email && c.rate_end_date && !c.rate_reminder_queued_at && dueSoon(c)).slice(0, 4);
         const noEmail = live.filter((c) => !(c.clients && c.clients.email))[0];
         return {
           good: good.map((c) => c.id), goodAdvisers: good.map((c) => c.assigned_to),
