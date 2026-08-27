@@ -111,7 +111,69 @@ node tests/r64_hf1.js
 node tests/r65_watchtower.js
 node tests/r66_book.js
 node tests/r66_comms.js
+node tests/r68_mi.js
+node tests/r68_admin.js
 ```
+
+**R68 notes — admin fast paths (agent B).** One new suite: `tests/r68_admin.js` (112 checks —
+§A accept-all leads, §B duplicate-merge fast path, §C protection-gate chips, §D palette verbs).
+No old test changed. Things a future session needs to know:
+
+  - **`acceptLead` is now a wrapper around `acceptLeadCore(lead, {assignTo, firstName, lastName,
+    jointNote, client})`** plus `claimLead(id)` / `releaseLead(id)`. The core does every write
+    after the decisions and RETURNS `{caseId, warnings[], welcomeId, …, error}` — it never toasts
+    and never calls `runAutomation`; the callers do (single accept: one scoped send; accept-all:
+    ONE scoped send for the whole batch). Single-accept behaviour is byte-for-byte what r5_batch7
+    / r12a expect.
+  - **Accept-all seeds its own leads.** `tests/r68_admin.js` parks the fixture's four `new` leads
+    as `discarded` and mints six of its own on the page under test, because adding new leads to
+    `mock-supabase.js` would move `lead_slow`, My Day and Lead-response counts in a dozen suites.
+    Round-robin order is asserted against the app's own "· lightest load" marker.
+  - **`#leads-accept-bar`** is its own element between `#briefing-date` and `#briefing-list`
+    (the briefing's row count is unchanged). Hidden below two new leads.
+  - **Merge fast path** (`openMergeClients`) applies ONLY when same email (case-insensitive) AND
+    the loser has zero cases AND the surnames do not differ — a household sharing an inbox
+    (the Merricks fixture) still gets the typed keyword.
+  - **The protection gate** now passes `{revealProtection:true, gateTo:targetStage}` to
+    `openCase`, which renders `#prot-gate-chips`; a chip writes `protection_status` and re-runs
+    the same stage move. The bulk-move blocked bucket is unchanged (still a native confirm).
+  - **Palette verbs** are `.palette-row.palette-verb` rows with `data-verb`; `>` at the start of
+    the query shows actions only. `PALETTE_VERBS` is a top-level const (15 rows, owner-gated
+    Monday money via `when`).
+
+**R68 notes — MI + settings (agent A).** One new suite: `tests/r68_mi.js` (126 checks, §A–§E —
+the adviser's own target on Reports › My numbers, the Change history CSV, the Email sending
+status strip, the Today ops strip, the protection referral partner setting). Four things a
+future session needs to know:
+
+  - **The mock now seeds `settings.email_hold = "on"`**, which is what production actually
+    holds. It is the first row in the harness that ever mattered to a screen (nothing read the
+    key before R68), so a suite that expects email to be releasable must write `"off"` itself.
+    `settings` therefore counts 49 rows rather than 48 — nothing asserts that number directly
+    (r13 compares the export against `__mock.counts()`, both derived from the same DB).
+  - **`process-emails` grew a SAFE-PROBE branch, and it is checked FIRST.** An invoke with
+    `{queue_ids: []}` names zero rows and returns `{held, pending, warning?}` without queueing,
+    sending, failing or stamping `last_cron_run_at` — and, deliberately, **without touching
+    `LAST_EMAIL_RUN`**, so opening Settings can never clobber what `__mock.lastEmailRun()` says
+    about the last real run. `warning` carries "RESEND_API_KEY not set"; app.js keys off that
+    substring.
+  - **A new harness flag: `MOCK_RESEND_KEY`, default FALSE** (production has no key), read only
+    by that probe. Flip it with `__mock.setResendKey(true)` / read it with `__mock.resendKey()`.
+    It is a server secret, not a settings row, which is why it is a flag and not a fixture.
+  - **A new SANDBOX-ONLY app hook: `window.__reloadSettings()`** (defined beside
+    `__setOwnerRowCap`, so it cannot exist in the shipped app). Production re-reads `settings`
+    at sign-in and after a Save; a test that nudges a row — an adviser fee target, the email
+    hold — needs that refresh without owning the Save button. Note that an ADVISER cannot write
+    to `settings` at all (the mock enforces the real owner-only policy), so seed targets by
+    mutating `__mock.db.settings` directly and then calling this.
+
+  Three deliberate patches to old files, all commented in place: `tests/r41.js` §A2b's locked
+  `#page-dashboard` child order gains `ops-strip` (one entry, between `dash-notices` and
+  `today-heading` — R11-1's heading → numbers → briefing adjacency is untouched, which is why
+  the strip went above the title); and `tests/r42.js` §H8 + `tests/r9_docs.js` follow the
+  document-chase caveat's new wording ("Requires email sending to be **working** — see the
+  Email sending status at the top of this page" instead of restating "a verified From address
+  and a Resend key"). No assertion was weakened in any of the three.
 
 **R65 notes — Watchtower: two new checks and one that now counts clients.** The mock's
 `run_watchtower` mirror goes from TEN rules to TWELVE, and rule 5 changes shape:

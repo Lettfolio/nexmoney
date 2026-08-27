@@ -3921,3 +3921,65 @@ tr.owed-hot > td { background: var(--red-bg); }
 .cust-noemail { margin: 4px 0 0; color: var(--muted); }
 #cust-count { margin: 4px 0 0; text-align: right; }
 #cust-body { min-height: 140px; resize: vertical; }
+
+/* R68 · M15 — the Email sending status strip (Settings, top of page). Two coloured states,
+   because the difference between them is the difference between "your clients are hearing
+   from you" and "they are not": amber whenever nothing can go out (no Resend key on the
+   server, or the hold is on), green when due mail actually sends on the daily run. Built on
+   .dq-notice so it inherits this app's one "read this sentence" surface rather than becoming
+   a new banner style nobody recognises. */
+.dq-notice.warn { background: var(--amber-bg); color: var(--amber); border-color: #f0d9ac; }
+.dq-notice.ok { background: var(--green-bg); color: var(--green); border-color: #bfe3c7; }
+#email-sending-status { margin-bottom: 16px; }
+#email-sending-status .dq-notice { margin-bottom: 6px; }
+#email-sending-status .panel-sub { margin: 0 0 4px; }
+#email-sending-status .btn { margin-left: 6px; vertical-align: baseline; }
+
+/* R68 · M16 — the admin ops strip on Today. A row of small chips, each a count and a way to
+   fix it. Grey at zero (nothing to do is the normal state and must not shout), amber above
+   it. Deliberately quiet: this sits above the page heading with the health banners, and it
+   is a glance, not a worklist. */
+.ops-strip { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 10px; }
+.ops-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 5px 10px;
+  border-radius: 999px; border: 1px solid #dbe3ec; background: var(--light); color: var(--muted);
+  cursor: pointer; font-family: inherit; }
+.ops-chip:hover { border-color: #b9c6d6; }
+.ops-chip .ops-n { font-weight: 700; }
+.ops-chip.hot { background: var(--amber-bg); color: var(--amber); border-color: #f0d9ac; }
+.ops-strip .ops-sub { flex-basis: 100%; margin: 2px 0 0; }
+/* ==========================================================================
+   R68 · B1/M12 — the "Accept all unambiguous leads" bar above My Day, and the
+   chip a skipped enquiry wears afterwards. The bar is a strip, not a panel: it
+   belongs to the list under it and must not read as a second card.
+   ========================================================================== */
+.leads-accept-bar { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin: 0 0 10px; }
+.leads-accept-bar .panel-sub { margin: 0; flex: 1 1 320px; min-width: 220px; }
+.lead-ambig { margin-right: 8px; white-space: nowrap; }
+.leads-accept-list { margin: 10px 0 0; padding-left: 20px; max-height: 240px; overflow-y: auto; }
+.leads-accept-list li { margin: 2px 0; }
+#leads-accept-left { margin-top: 10px; }
+
+/* ==========================================================================
+   R68 · B2/M13 — the duplicate-merge fast path. The summary is the whole
+   dialog for the one shape it applies to, so it reads first and the full radio
+   table folds away underneath it.
+   ========================================================================== */
+#merge-fast-summary { margin-bottom: 12px; }
+.merge-fast-fold > summary { cursor: pointer; margin: 10px 0; font-weight: 600; }
+.merge-fast-fold > summary .cs-muted { font-weight: 400; }
+
+/* ==========================================================================
+   R68 · B3/M2 — the protection-gate chip panel at the top of a case the gate
+   just refused a move on.
+   ========================================================================== */
+#prot-gate-chips { margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--red); border-radius: 8px; background: #fdecea; }
+#prot-gate-chips .pg-head { font-weight: 600; margin: 0 0 4px; }
+#prot-gate-chips .panel-sub { margin: 0 0 8px; }
+#prot-gate-chips .pg-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* ==========================================================================
+   R68 · B4/M3 — command-palette verbs. Same row shape as a search result, so
+   arrow keys cannot tell them apart; only the muted "action" tail differs.
+   ========================================================================== */
+.palette-row.palette-verb .pr-sub { color: var(--muted); }
+.palette-row.palette-verb-off { opacity: .55; }

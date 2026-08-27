@@ -254,8 +254,14 @@ const readRow = (page, table, id) => page.evaluate(async ({ table, id }) => {
           return el.tagName.toLowerCase();
         });
       });
+      /* R68 · M16 — ONE new child, and it is deliberately where it is. #ops-strip (the admin/owner
+         chip row: queued mail, failed sends, leads nobody picked up, cases nobody owns) sits with
+         the health banners ABOVE the page title, precisely so that R11-1's adjacency — heading →
+         numbers → briefing — is untouched: the three ids this lock exists to protect are still
+         consecutive below. It is hidden outright for an adviser. The lock is widened by exactly
+         that one entry rather than loosened. */
       eq("§A2b · #page-dashboard's own child order is the locked one",
-        order, ["dash-notices", "today-heading", "kpi-row", "dash-cap-notice", "briefing-panel", "watchtower-panel", "unactioned-panel", "grid-2:rate-erc-panel,revenue-panel"]);
+        order, ["dash-notices", "ops-strip", "today-heading", "kpi-row", "dash-cap-notice", "briefing-panel", "watchtower-panel", "unactioned-panel", "grid-2:rate-erc-panel,revenue-panel"]);
 
       ok("§A2 · no console errors", noNewErr(page, errBefore), JSON.stringify(page.__err));
       await page.close();

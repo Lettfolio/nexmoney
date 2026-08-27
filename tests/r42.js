@@ -526,7 +526,14 @@ const EMAILS_R9_NOTE_TEXT = "An unanswered review request is followed up once. A
       ok("§H6 · clicking it opens the full rules", moreOpenAfter);
       const fullTxt = await page.$eval("#doc-chase-more p", (e) => e.textContent);
       ok("§H7 · …carrying the SAME interpolation (\"every 9 days\")", /every 9 days/.test(fullTxt), fullTxt);
-      ok("§H8 · …and the original full rules (the live-stage widening, the checklist requirement, the sender requirement)", /Enquiry through Exchange/.test(fullTxt) && /Requires email sending to be set up/.test(fullTxt), fullTxt);
+      /* R68 · M15 — the sender requirement is still stated, and now POINTS at the live answer
+         instead of restating a precondition the paragraph cannot check. "Requires email sending
+         to be set up (a verified From address and a Resend key)" became "Requires email sending
+         to be working (see the Email sending status at the top of this page)" — the Settings page
+         now has a strip that probes the server and says which of the three states the firm is
+         actually in. The property under test is unchanged (the full rules name the dependency),
+         so the assertion reads the new sentence rather than the old one. */
+      ok("§H8 · …and the original full rules (the live-stage widening, the checklist requirement, the sender requirement)", /Enquiry through Exchange/.test(fullTxt) && /Requires email sending to be working/.test(fullTxt) && /Email sending status at the top of this page/.test(fullTxt), fullTxt);
       // #doc-chase-note keeps its id, and textContent traverses into a closed <details> too, so a
       // reader of the whole note (open or not) always sees both interpolations at once.
       const wholeNoteTxt = await page.$eval("#doc-chase-note", (e) => e.textContent);

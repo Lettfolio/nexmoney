@@ -605,8 +605,15 @@ const groundTruth = (page) => page.evaluate(async ({ CHASE_MAX }) => {
   // guess at its wording.
   ok("copy states which cases are chased (every live stage, widened from Fact Find/Application) and that a case with no checklist is skipped",
     /live stage.{0,20}covered/i.test(chaseCopy) && /Enquiry through Exchange/.test(chaseCopy) && /widened from Fact Find and Application only/.test(chaseCopy) && /skipped/.test(chaseCopy), chaseCopy);
+  /* R68 · M15 — same dependency, said the new way. The paragraph used to restate the precondition
+     ("a verified From address and a Resend key"), which is exactly what a reader cannot check from
+     here; Settings now carries an "Email sending" strip that PROBES the server and reports NOT
+     CONFIGURED / HELD / LIVE, so the caveat points at it instead of naming the secret again. The
+     property is unchanged — the copy still states that nothing goes out without email sending
+     working — so the assertion follows the new sentence. */
   ok("copy states the dependency — nothing sends without email sending configured",
-    /Requires email sending to be set up/i.test(chaseCopy) && /Resend/.test(chaseCopy), chaseCopy);
+    /Requires email sending to be working/i.test(chaseCopy) && /Email sending status at the top of this page/i.test(chaseCopy)
+    && /nothing goes out, whatever this says/i.test(chaseCopy), chaseCopy);
   const docsListCopy = await txt(owner, "#setting-note-docs_list");
   ok("the docs_list description now mentions per-case checklists and which one wins",
     /checklist/i.test(docsListCopy) && /that checklist wins/i.test(docsListCopy), docsListCopy);

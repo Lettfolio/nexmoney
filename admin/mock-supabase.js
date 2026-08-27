@@ -454,6 +454,12 @@
      selects stop returning them, an un-migrated TABLE comes back as 42P01 and an
      un-migrated FUNCTION comes back as 42883 (undefined_function). */
   var MIGRATIONS = { m1: true, m2: true, m3: true, m4: true, m5: true, m6: true, m7: true, m10: true, m11: true };
+  /* R68 · M15 — is RESEND_API_KEY set on the "server"? A secret, not a table, so it cannot be
+     a settings row: it lives here as a harness flag, DEFAULT FALSE because that is production's
+     actual state (no key is set, and nothing has ever been able to send). Flip it with
+     __mock.setResendKey(true) to exercise the configured states. Read only by the
+     process-emails safe probe. */
+  var MOCK_RESEND_KEY = false;
   var MIGRATION_COLUMNS = {
     m1: { profiles: ["phone", "email_signoff"] },
     m2: { cases: ["lost_reason", "lost_detail", "broker_fee_paid_at", "proc_fee_paid_at", "sols_fee_paid_at"] },
@@ -1583,7 +1589,16 @@
        FULL (unscoped) run — see the process-emails stub — so a battery that
        runs an unscoped send will move this value forward; nothing in the
        existing suites relies on it staying exactly 3 days stale. */
-    last_cron_run_at: iso(shiftNoon(-3))
+    last_cron_run_at: iso(shiftNoon(-3)),
+    /* R68 · M15 — THE EMAIL HOLD, seeded 'on' because that is what production
+       actually holds: `settings.email_hold = 'on'`, and nothing sends while it
+       is anything other than 'off'. app.js has referred to this key in a comment
+       since R60 and no screen has ever shown it; the Settings "Email sending"
+       strip is the first thing that reads it, so the harness has to hold the
+       real value or the strip's default state would be untestable. Tests that
+       want the released state write 'off' themselves — which is also the only
+       way to prove the switch really is the gate. */
+    email_hold: "on"
   };
   Object.keys(SETTINGS_SEED).forEach(function (k) {
     DB.settings.push({ key: k, value: SETTINGS_SEED[k], updated_at: iso(shift(-30)) });
@@ -6240,6 +6255,34 @@
          interactive caller. owner/admin/adviser/staff all pass now. */
       if (!isStaff()) return { __status: 403, error: "forbidden — staff only" };
       var ids = body && Array.isArray(body.queue_ids) ? body.queue_ids.filter(Boolean) : null;
+      /* ==================================================================
+         R68 · M15 — THE SAFE PROBE.  {queue_ids: []} names ZERO rows, so in
+         production v14 short-circuits before it queues, sends, fails or
+         stamps anything and answers three questions instead: is a Resend key
+         set on the server, is the hold on, and how many emails are due right
+         now. It is a question, not an action — which is the whole reason the
+         Settings "Email sending" strip may ask it on every page open.
+
+         Mirrored EXACTLY here, and deliberately ABOVE everything below: the
+         old code path would have fallen through to `due = []` and still
+         rewritten LAST_EMAIL_RUN, so merely opening Settings would have
+         clobbered what `__mock.lastEmailRun()` reports about the last real
+         run. A probe that leaves a footprint is not a probe.
+
+         `warning` carries the server's own words; app.js keys off the string
+         "RESEND_API_KEY". Key present AND hold off returns no warning at all.
+         ================================================================== */
+      if (ids && !ids.length) {
+        var nowProbe = iso(new Date());
+        var holdRow = DB.settings.filter(function (s) { return s.key === "email_hold"; })[0];
+        var holdVal = holdRow ? String(holdRow.value || "").trim().toLowerCase() : "on";
+        var pending = DB.email_queue.filter(function (e) {
+          return e.status === "queued" && (!e.scheduled_for || e.scheduled_for <= nowProbe);
+        }).length;
+        var out = { held: holdVal !== "off", pending: pending };
+        if (!MOCK_RESEND_KEY) out.warning = "RESEND_API_KEY not set — nothing can be sent from this server.";
+        return out;
+      }
       var queued = { rate_reminders_queued: 0, review_requests_queued: 0, retention_cases_created: 0,
         review_reminders_queued: 0, doc_chases_queued: 0, doc_overdue_tasks: 0 };
       if (!ids) {
@@ -6788,6 +6831,10 @@
       /* --- round-5 test hooks ------------------------------------------- */
       /* Migration state. All ON by default; turn one OFF to exercise the app's
          feature-detect fallback, e.g. __mock.setMigrations({m2:false}). */
+      /* R68 · M15 — the server's Resend key, as a flag (see MOCK_RESEND_KEY). Returns the
+         value it set, so a test can assert the flip took. */
+      resendKey: function () { return MOCK_RESEND_KEY; },
+      setResendKey: function (v) { MOCK_RESEND_KEY = !!v; return MOCK_RESEND_KEY; },
       migrations: MIGRATIONS,
       setMigrations: function (patch) {
         Object.keys(patch || {}).forEach(function (k) {

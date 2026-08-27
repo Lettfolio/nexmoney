@@ -136,6 +136,17 @@
            confirmed a run", "there is no firm backup" — and a banner above the title is where a
            reader expects one. Empty (and display:none) whenever there is nothing to say. -->
       <div id="dash-notices"></div>
+      <!-- R68 · M16 — ADMIN OPS STRIP. The half-dozen numbers that say whether the machinery
+           behind the book is keeping up — queued mail, leads nobody has picked up, cases nobody
+           owns, documents that have run out of chases, sends that failed. Each already exists on
+           some other page; none of them was ever in one place, so "is anything stuck this
+           morning" took five page loads to answer.
+           It sits HERE, above the heading with the health banners, and not between the heading
+           and the KPI row, because R11-1 put the five headline figures immediately after the
+           title and tests/r11_ux.js locks that adjacency: #today-heading → #kpi-row →
+           #briefing-panel. This is system health, which is exactly what lives above the title.
+           Admin and Owner only (renderOpsStrip); an adviser never sees it. -->
+      <div id="ops-strip" class="ops-strip hidden"></div>
       <h2 id="today-heading">Today</h2>
       <!-- R11-1 — THE NUMBERS COME FIRST. This row used to sit BELOW the Watchtower panel, which
            on a real book put the five headline figures roughly 1,500px down the page: on a phone
@@ -152,6 +163,12 @@
           <button class="btn btn-ghost btn-sm" id="sync-outlook-btn" aria-label="Sync Outlook inbox">⟳ Sync Outlook</button>
         </h3>
         <p class="panel-sub" id="briefing-date"></p>
+        <!-- R68 · B1/M12 — the "accept every unambiguous lead" bar. Deliberately its OWN element
+             rather than a row inside #briefing-list: that list is the briefing's rows and several
+             suites count them, and a control that is about the whole inbox is not one of its
+             items. Painted (and emptied) by renderLeadsAcceptBar; hidden until there are at least
+             two new enquiries, because "accept all" of one lead is just Accept. -->
+        <div id="leads-accept-bar" class="leads-accept-bar hidden"></div>
         <div id="briefing-list" class="dash-scroll"></div>
       </div>
       <div class="panel dash-drawer collapsed" id="watchtower-panel">
@@ -565,6 +582,11 @@
         <h3 id="report-mine-title">My numbers</h3>
         <p class="panel-sub" id="report-mine-scope"></p>
         <div class="kpi-row" id="report-mine" style="margin:12px 0 0;"></div>
+        <!-- R68 · M7 — the adviser's own "fees earned this month vs my target" bar. Its own
+             container BELOW the tiles, mirroring #month-fee-target's position under #month-kpis
+             on the firm card, so the two read the same way round. Empty when the reader is not
+             a My-numbers user; a plain sentence (no bar) when no target has been set for them. -->
+        <div id="report-mine-target"></div>
       </div>
       <!-- R42 · F3 — §2. Everything scoped to the month picker in the page head -->
       <h3 class="report-section-head" id="rsec-month">This month</h3>
@@ -1038,6 +1060,13 @@
       <div class="rep-nav" id="settings-jump" hidden>
         <div class="pipe-segment rep-nav-chips" id="settings-jump-chips" role="tablist" aria-label="Jump to a section of Settings"></div>
       </div>
+      <!-- R68 · M15 — EMAIL SENDING STATUS. First thing on the page, above even the export panel,
+           because it is the only line in this back office that answers "can we actually email a
+           client right now". Everything below it that says "requires a Resend key" or "requires
+           email sending to be set up" now points here instead of restating a precondition it has
+           no way to check. Rendered for Admin and Owner (renderEmailSendingStatus); the release
+           control inside it is the Owner's alone. -->
+      <div id="email-sending-status" class="hidden"></div>
       <!-- R13 · M-42 — FIRM EXPORT. Near the top of the Owner's Settings on purpose: it is the
            one control on this page that is about the firm's ability to walk away with its own
            data, and burying it under forty configuration fields would be a statement about how
@@ -1132,7 +1161,11 @@
           <label>From<input type="date" id="ch-from"></label>
           <label>To<input type="date" id="ch-to"></label>
           <button type="button" class="btn btn-sm" id="ch-clear">Clear filters</button>
+          <!-- R68 · M14 — exports THE FILTER, not the page: the same query the list just ran with
+               the 25-row page range taken off. Beside the filters because that is what it acts on. -->
+          <button type="button" class="btn btn-sm" id="ch-csv" title="Download every change matching the filters above — all pages, not just this one — as a CSV.">⭳ CSV</button>
         </div>
+        <p class="panel-sub" id="ch-csv-note" style="margin:4px 0 8px;">⭳ CSV downloads <strong>every change these filters match</strong>, not just the page on screen — when, who, what changed, the action, the record and the summary. Very large exports stop at the same record ceiling as the rest of this page and the file name says so.</p>
         <div id="ch-list" class="ch-list"></div>
         <div class="ch-pager" id="ch-pager"></div>
       </div>

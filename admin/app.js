@@ -4744,6 +4744,168 @@ async function clientDobStats() {
     return { total: rows.length, withDob: rows.filter((r) => r && r.date_of_birth).length };
   } catch (e) { return null; }
 }
+/* ==========================================================================
+   R68 · M15 — "EMAIL SENDING": ONE LINE THAT SAYS WHETHER EMAIL CAN ACTUALLY GO OUT.
+
+   Nothing anywhere in this back office answered that question. Settings carried five
+   paragraphs of caveats — "Requires RESEND_API_KEY", "Requires email sending to be set
+   up" — each of which describes a PRECONDITION without ever telling the reader whether it
+   is met. Meanwhile the queue fills, every row says "queued", and the firm's first symptom
+   is a client asking six weeks later why they never heard about their rate ending. Right
+   now, on the live system, there is no Resend key AND the hold is on: two independent
+   reasons nothing sends, and no screen states either.
+
+   So: ONE strip, at the top of the page, that PROBES rather than describes.
+   db.functions.invoke('process-emails', {queue_ids: []}) names zero rows, so it queues
+   nothing, sends nothing and stamps no heartbeat — it is a question, not an action — and it
+   answers with {held, pending, warning}. The three states below are the three real ones.
+   A probe that fails says so ("Could not check — …") instead of guessing, because a strip
+   that guesses "LIVE" is worse than no strip at all.
+
+   The caveat paragraphs further down the page keep their rules and lose their guesswork:
+   each now points here rather than restating a precondition it cannot check.
+
+   `Promise.resolve(...)` around the invoke is the house rule (PostgrestBuilder has no
+   .catch in production); the `.catch` is on the real promise that wraps it.
+   ========================================================================== */
+let emailSendingState = null;      // last probe result — the release overlay quotes its pending count
+const EMAIL_HOLD_KEYWORD = "SEND";
+const emailHoldOn = () => String(settings.email_hold ?? "on").trim().toLowerCase() !== "off";
+function emailSendingProbe() {
+  return Promise.resolve(db.functions.invoke("process-emails", { body: { queue_ids: [] } }))
+    .then((r) => {
+      if (r && r.error) return { error: (r.error && r.error.message) || String(r.error) };
+      const d = (r && r.data) || {};
+      if (d && d.error) return { error: String(d.error) };
+      return { ok: true, held: !!d.held, pending: Number(d.pending) || 0, warning: String(d.warning || "") };
+    })
+    .catch((e) => ({ error: (e && e.message) || String(e) }));
+}
+// The warning is the server's own words; "RESEND_API_KEY not set" is the one we act on.
+const emailKeyMissing = (p) => !!(p && p.ok && /RESEND_API_KEY/i.test(p.warning || ""));
+/* The heartbeat, in the strip's own words. Feature-detected on the KEY's presence exactly like the
+   Today banner: a database that never took the v13 stamp has no key and gets no claim about runs. */
+function emailCronLine() {
+  if (!Object.prototype.hasOwnProperty.call(settings, "last_cron_run_at")) return "";
+  const at = String(settings.last_cron_run_at || "").trim();
+  if (!at) return "The daily run has never confirmed it ran.";
+  const d = new Date(at);
+  if (isNaN(d.getTime())) return "";
+  const days = daysSinceLocal(at);
+  const time = d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+  const when = days === 0 ? "today" : days === 1 ? "yesterday" : `${days} days ago, ${fmtD(at)}`;
+  return `Last run ${time} ${when}.`;
+}
+async function renderEmailSendingStatus() {
+  const el = $("#email-sending-status");
+  if (!el) return;
+  /* Admin AND Owner: an administrator is the person who watches the queue, and "why has nothing
+     gone out" is their question before it is anybody else's. The RELEASE control below is the
+     owner's alone — an admin sees the state, not the switch. */
+  const show = isAdminOrOwner();
+  el.classList.toggle("hidden", !show);
+  if (!show) { el.innerHTML = ""; emailSendingState = null; return; }
+  el.innerHTML = `<div class="dq-notice" id="email-sending-line" data-state="checking">✉️ <strong>Email sending:</strong> checking…</div>`;
+  const p = await emailSendingProbe();
+  emailSendingState = p;
+  const cron = emailCronLine();
+  const owner = isOwner();
+  if (p.error) {
+    el.innerHTML = `<div class="dq-notice" id="email-sending-line" data-state="unknown">✉️ <strong>Email sending: could not check — ${esc(p.error)}</strong>
+      Nothing has been changed and nothing has been sent; this is a failed question, not a failed send.
+      ${cron ? esc(cron) + " " : ""}<button type="button" class="btn btn-sm" id="email-sending-retry">Check again</button></div>
+      <p class="panel-sub" id="email-sending-sub">This strip asks the server whether email can actually go out. The caveats further down this page describe what is required; this line is the only thing that says whether it is true right now.</p>`;
+    const again = $("#email-sending-retry");
+    if (again) again.onclick = renderEmailSendingStatus;
+    return;
+  }
+  const n = p.pending;
+  const emails = `${n} email${n === 1 ? "" : "s"}`;
+  let state, line, tone;
+  if (emailKeyMissing(p)) {
+    state = "no_key"; tone = "warn";
+    line = `✉️ <strong>Email sending: NOT CONFIGURED</strong> — no Resend key on the server. ${emails} ${n === 1 ? "is" : "are"} queued and will wait.`;
+  } else if (p.held) {
+    state = "held"; tone = "warn";
+    line = `✉️ <strong>Email sending: CONFIGURED but HELD</strong> — nothing sends until the hold is released. ${emails} due now would send when released.`;
+  } else {
+    state = "live"; tone = "ok";
+    line = `✉️ <strong>Email sending: LIVE</strong> — due emails send on the daily run.${n ? ` ${emails} due now.` : ""}`;
+  }
+  /* The owner's control. Releasing is the irreversible-feeling half — it can put dozens of real
+     emails in front of real clients on the next run — so it goes through a typed-keyword confirm
+     that names the count. Putting the hold BACK ON stops things happening and needs no ceremony. */
+  const btn = owner
+    ? (state === "live"
+      ? `<button type="button" class="btn btn-sm" id="email-hold-btn" data-action="hold">Put on hold</button>`
+      : `<button type="button" class="btn btn-primary btn-sm" id="email-hold-btn" data-action="release">Release hold</button>`)
+    : "";
+  el.innerHTML = `<div class="dq-notice ${tone === "warn" ? "warn" : "ok"}" id="email-sending-line" data-state="${state}">${line} ${cron ? esc(cron) : ""} ${btn}</div>
+    <p class="panel-sub" id="email-sending-sub">Asked of the server each time this page opens — it counts what is waiting and reports it, it never sends anything.
+      ${state === "no_key" ? "Until a Resend key is set on the server nothing goes out, whatever any switch on this page says." : ""}
+      ${state === "held" ? `The hold is a deliberate stop: mail queues up as normal and waits. ${owner ? "Releasing it is an Owner decision and asks you to type a word first." : "Only an Owner can release it."}` : ""}
+      ${state === "live" ? "The daily run is about 08:00 UK time; anything queued after it waits for the next one." : ""}</p>`;
+  const hb = $("#email-hold-btn");
+  if (hb) hb.onclick = () => (hb.dataset.action === "release" ? releaseEmailHold() : putEmailOnHold());
+}
+/* R68 · M15 — the typed-keyword confirm, built on openOverlay rather than confirmMerge: that one
+   is still a native prompt(), and no NEW flow in this app opens one. Same shape as every other
+   overlay capture — resolves true only when the exact word is typed. */
+function confirmTypedWord(title, bodyHtml, keyword, okLabel) {
+  const word = String(keyword || "").toUpperCase();
+  return openOverlay(`
+    <h3>${esc(title)}</h3>
+    ${bodyHtml}
+    <label style="margin-top:10px;">Type ${esc(word)} to confirm
+      <input id="typed-word" type="text" autocomplete="off" spellcheck="false" placeholder="${esc(word)}">
+    </label>
+    <div class="ovl-err" id="typed-word-err"></div>
+    <div class="modal-actions"><div></div><div class="right">
+      <button type="button" class="btn" id="typed-cancel">Cancel</button>
+      <button type="button" class="btn btn-primary" id="typed-ok">${esc(okLabel || "Confirm")}</button>
+    </div></div>`, (finish, box) => {
+    box.querySelector("#typed-cancel").onclick = () => finish(false);
+    box.querySelector("#typed-ok").onclick = () => {
+      const v = (box.querySelector("#typed-word").value || "").trim().toUpperCase();
+      if (v !== word) {
+        box.querySelector("#typed-word-err").textContent = `Type ${word} exactly to confirm — nothing has been changed.`;
+        box.querySelector("#typed-word").focus();
+        return;
+      }
+      finish(true);
+    };
+  });
+}
+async function writeEmailHold(value) {
+  const { error } = await db.from("settings").upsert([{ key: "email_hold", value }]);
+  if (error) { toast("Error: " + error.message); return false; }
+  await loadSettings();
+  return true;
+}
+async function releaseEmailHold() {
+  if (!isOwner()) return toast("Only the Owner can release the email hold.");
+  const p = emailSendingState;
+  /* REFUSED, not hidden. A button that quietly does nothing teaches an owner that the app is
+     broken; a sentence that says why teaches them what to fix. */
+  if (!p || p.error) return toast("Can't release the hold — the email sending status could not be checked. Try 'Check again' first.");
+  if (emailKeyMissing(p)) return toast("Nothing to release — the server has no Resend key. Releasing the hold would change nothing: set RESEND_API_KEY on the server first.");
+  const n = p.pending;
+  const okd = await confirmTypedWord("Release the email hold?",
+    `<p class="panel-sub">Every queued email that is <strong>due now — ${n} of them</strong> — goes out on the next automation run (daily, about <strong>08:00 UK time</strong>), to real clients. Anything queued after that goes on the run after it.</p>
+     <p class="panel-sub">Emails already sent cannot be recalled. If you are not sure what is in the queue, cancel and look at the <strong>Emails</strong> page first — this switch does not preview it.</p>`,
+    EMAIL_HOLD_KEYWORD, "Release the hold");
+  if (!okd) return;
+  if (!(await writeEmailHold("off"))) return;
+  toast(`Email hold released — ${n} email${n === 1 ? "" : "s"} due now will go out on the next run.`);
+  await renderEmailSendingStatus();
+}
+async function putEmailOnHold() {
+  if (!isOwner()) return toast("Only the Owner can change the email hold.");
+  if (!(await writeEmailHold("on"))) return;
+  toast("Email sending is on hold — nothing goes out until it is released. Mail keeps queueing.");
+  await renderEmailSendingStatus();
+}
+
 async function renderSettings() {
   const owner = isOwner();
   const dobStats = await clientDobStats();
@@ -4788,6 +4950,16 @@ async function renderSettings() {
       </select>
     </label>
     <p class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;">⚠️ The automated protection and GI emails are financial promotions — get principal approval for the templates before switching them on.</p>
+    ${/* R68 · A5 — THE SETTING EXISTED; THE BOX DID NOT. REFERRAL_META.protection.defaultTo has read
+          settings.protection_referral_partner since R66, and there has never been anywhere to type
+          it, so the pre-fill could only ever be blank and every protection referral was typed out
+          by hand, identically, for ever. It sits in Protection & GI because that is where the rest
+          of the protection decisions are; blank stays a legitimate answer (an empty box beats a
+          pre-filled guess about who somebody was referred to). */ ""}
+    <label title="Pre-fills the “Referred to” box when an adviser records a protection referral on a case. Blank = no pre-fill; the adviser types it each time.">Protection referral partner
+      <input name="protection_referral_partner" type="text" value="${esc(settings.protection_referral_partner ?? "")}" placeholder="e.g. Stonebridge Protect">
+    </label>
+    <p class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;" id="setting-note-protection_referral_partner">The firm or adviser a protection referral is addressed to by default — e.g. <strong>Stonebridge Protect</strong>. It pre-fills the <strong>“Referred to”</strong> box on the case's <strong>🛡️ Refer for protection advice</strong> overlay, which the adviser can still change if that one went elsewhere. <strong>Leave it blank</strong> if referrals go to a different place each time; nothing is pre-filled and nobody is sent anywhere from here.</p>
     <h3 id="set-sec-digest" style="grid-column:1/-1;margin:10px 0 0;">Owner digest</h3>
     <label>Daily owner digest email (on/off)
       <select name="owner_digest">
@@ -4798,7 +4970,10 @@ async function renderSettings() {
     <label>Owner digest email address
       <input name="owner_digest_email" type="email" value="${esc(settings.owner_digest_email ?? "")}" placeholder="you@nexmoney.co.uk">
     </label>
-    <p class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;">Sent daily at ~07:30 UK time. Requires RESEND_API_KEY.</p>
+    ${/* R68 · M15 — was "Requires RESEND_API_KEY", which states a precondition and cannot say
+          whether it is met. The strip at the top of this page can, so this line points at it
+          instead of repeating a caveat the reader has no way to check from here. */ ""}
+    <p class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;">Sent daily at ~07:30 UK time. Needs email sending to be working <em>(see the Email sending status at the top of this page)</em>.</p>
     <div style="grid-column:1/-1;"><button type="button" class="btn btn-sm" id="send-digest-btn">Send digest now</button></div>
     <h3 id="set-sec-comms" style="grid-column:1/-1;margin:10px 0 0;">Client comms &amp; sales</h3>
     ${owner ? `<h4 style="grid-column:1/-1;margin:0;">Regulated financial promotions</h4>
@@ -4882,7 +5057,7 @@ async function renderSettings() {
       <p style="margin:0;">Emails a client <strong>every ${esc(String(docChaseDays()))} days</strong> while documents are outstanding, stops after ${DOC_CHASE_MAX} chases and tasks the adviser instead.</p>
       <details class="prose-fold" id="doc-chase-more">
         <summary>ⓘ Full rules</summary>
-        <p style="margin:0;">Emails a client <strong>every ${esc(String(docChaseDays()))} days</strong> while documents are still outstanding on their case's checklist, listing <strong>only the items still missing</strong> — never the whole list again. After <strong>${DOC_CHASE_MAX} chases it stops emailing</strong> and puts a call task on the case's adviser instead; the fourth email is not the one that works. Every <strong>live stage is covered — Enquiry through Exchange</strong> (widened from Fact Find and Application only): a checklist can be opened as soon as ID is asked for, and the lender still wants the missing item right up to exchange. Completed and Not proceeding are never chased. Only cases <strong>with a checklist</strong> are chased at all: a case with no checklist is not “fully documented”, it is unknown, and it is skipped rather than guessed at. The ${esc(String(docChaseDays()))}-day gap counts any document email, request or chase, so a cron run and someone pressing “Send document request now” cannot become two emails in an evening. <strong>Requires email sending to be set up</strong> (a verified From address and a Resend key) — with no sender configured nothing goes out, whatever this says.</p>
+        <p style="margin:0;">Emails a client <strong>every ${esc(String(docChaseDays()))} days</strong> while documents are still outstanding on their case's checklist, listing <strong>only the items still missing</strong> — never the whole list again. After <strong>${DOC_CHASE_MAX} chases it stops emailing</strong> and puts a call task on the case's adviser instead; the fourth email is not the one that works. Every <strong>live stage is covered — Enquiry through Exchange</strong> (widened from Fact Find and Application only): a checklist can be opened as soon as ID is asked for, and the lender still wants the missing item right up to exchange. Completed and Not proceeding are never chased. Only cases <strong>with a checklist</strong> are chased at all: a case with no checklist is not “fully documented”, it is unknown, and it is skipped rather than guessed at. The ${esc(String(docChaseDays()))}-day gap counts any document email, request or chase, so a cron run and someone pressing “Send document request now” cannot become two emails in an evening. <strong>Requires email sending to be working</strong> <em>(see the Email sending status at the top of this page)</em> — with no sender configured nothing goes out, whatever this says.</p>
       </details>
     </div>
     <label>Review requests (NPS)
@@ -4973,7 +5148,9 @@ async function renderSettings() {
   const exportBtn = $("#firm-export-btn");
   if (exportBtn) exportBtn.onclick = exportFirmData;
   // Same re-read the Today banner does, for the same reason: "last export" is a claim about now.
-  refreshHeartbeatKeys().then(renderExportLastLine);
+  /* R68 · M15 — the heartbeat re-read now feeds TWO lines: the export nag and the "last run"
+     half of the email-sending strip. Chained rather than fired twice — one indexed read. */
+  refreshHeartbeatKeys().then(() => { renderExportLastLine(); return renderEmailSendingStatus(); });
   renderSecondOwnerNotice();
   // BACKEND-R4 §1 — inviting/editing OTHER logins is Owner-only, and invite-user v3 refuses a
   // non-Owner caller outright, so that block stays hidden. R5-24 — the panel itself now also opens
@@ -5433,8 +5610,14 @@ function renderAdviserTargetsEditor(owner) {
   sec.id = "adviser-targets-section";
   sec.style.marginTop = "24px";
   sec.innerHTML = `<h3>Per-adviser monthly fee targets</h3>
-    <p class="panel-sub">On the owner Reports scoreboard, each adviser's <strong>fees earned (procuration + broker + solicitor) on their completions this month</strong> (paid or not — the same basis as the firm "Fees earned vs target" bar, not the cash "Fees banked" column) is measured against the target ${readOnly ? "shown here" : "you set here"}. <strong>Blank or 0 = no target</strong> for that adviser (their Target cell shows "—"). This complements — it does not replace — the firm-wide monthly fee target above.</p>
-    ${readOnly ? `<div class="dq-notice" id="adviser-targets-readonly">🔒 <strong>Read-only — targets are set by the Owner.</strong> They are shown here because the adviser scoreboard you can see on Reports is measured against them, and a percentage over or under target means nothing without the target. Ask an Owner to change one.</div>` : ""}
+    <p class="panel-sub">On the owner Reports scoreboard, each adviser's <strong>fees earned (procuration + broker + solicitor) on their completions this month</strong> (paid or not — the same basis as the firm "Fees earned vs target" bar, not the cash "Fees banked" column) is measured against the target ${readOnly ? "shown here" : "you set here"}. <strong>Blank or 0 = no target</strong> for that adviser (their Target cell shows "—"). This complements — it does not replace — the firm-wide monthly fee target above. ${/* R68 · M7 — say where the target LANDS, because from this round it reaches the adviser too. */ ""}<strong>The adviser sees their own target</strong> on their Reports › My numbers card, as a “Fees earned this month vs my target” bar on the same basis; an adviser with no target set is told that in words there, not shown 0%.</p>
+    ${/* R68 · M7 (Priya F2) — THE COPY WAS NOT TRUE. It told an Administrator the targets mattered
+          because of "the adviser scoreboard you can see on Reports"; the scoreboard is gated on
+          showMoney() === isOwner() and an admin has never been able to see it. Being told to
+          reconcile against a panel that is not on your page is worse than being told nothing.
+          What IS true after this round: the scoreboard is Owner-only, and every adviser now sees
+          their OWN target on Reports › My numbers — which is who these numbers actually reach. */ ""}
+    ${readOnly ? `<div class="dq-notice" id="adviser-targets-readonly">🔒 <strong>Read-only — targets are set by the Owner.</strong> They are shown here so that a figure quoted as “40% under target” can be checked against the target itself. The <strong>adviser scoreboard on Reports is Owner-only</strong> — it is not on your Reports page — but <strong>every adviser now sees their own target</strong> on Reports › My numbers, measured on exactly the basis described above. Ask an Owner to change one.</div>` : ""}
     <div class="settings-grid">${rows || `<p class="panel-sub" style="grid-column:1/-1;">No active team advisers ${readOnly ? "have a target" : "to set targets for"}.</p>`}</div>
     ${readOnly ? "" : `<button type="button" class="btn btn-primary btn-sm" id="adviser-targets-save">Save targets</button>`}`;
   anchor.parentNode.insertBefore(sec, anchor.nextSibling);
@@ -6050,6 +6233,82 @@ async function refreshHeartbeatKeys() {
     });
   } catch (_) { /* leave the last known values alone */ }
 }
+/* ==========================================================================
+   R68 · M16 — THE ADMIN OPS STRIP.
+
+   Six numbers that describe the MACHINERY rather than the book: mail waiting to go, mail that
+   failed, leads nobody has picked up, live cases nobody owns, and document chases that have run
+   out of road. Every one of them already existed — on Emails, on Pipeline, on Data health, on a
+   case — and precisely because they were spread across five pages, "is anything stuck this
+   morning?" was a five-page-load question that in practice nobody asked. One row of chips, each
+   one a link to the page where it gets fixed.
+
+   COSTS: the unassigned-case count is derived from the case rows Today has ALREADY read (no
+   query at all). The other five are `head:true, count:'exact'` — PostgREST returns a count and
+   no rows, so this strip costs five counts and not a second copy of five tables.
+
+   Grey at zero, amber above it. A firm with nothing stuck should see a quiet row, not six
+   alarms; the colour is the signal and the number is the detail.
+
+   Admin + Owner only. An adviser has no lever for any of it, and a chip they cannot act on is
+   just noise on the page they start their day from.
+   ========================================================================== */
+const OPS_STRIP_ROLES = () => isAdminOrOwner();
+async function renderOpsStrip(cases) {
+  const el = $("#ops-strip");
+  if (!el) return;
+  if (!OPS_STRIP_ROLES()) { el.classList.add("hidden"); el.innerHTML = ""; return; }
+  const headCount = async (table, build) => {
+    try {
+      const { count, error } = await build(db.from(table).select("id", { count: "exact", head: true }));
+      return error ? null : (count || 0);
+    } catch (e) { return null; }   // one unreadable table costs one chip, never the strip
+  };
+  const [emailsQueued, emailsFailed, smsQueued, leadsNew, docsOverdue] = await Promise.all([
+    headCount("email_queue", (q) => q.eq("status", "queued")),
+    headCount("email_queue", (q) => q.eq("status", "failed")),
+    headCount("sms_queue", (q) => q.eq("status", "queued")),
+    headCount("leads", (q) => q.eq("status", "new")),
+    /* The doc-chase's terminal state: three emails sent, nothing arrived, so the automation
+       stopped emailing and put a call task on the adviser. Matched on the title the app itself
+       writes (DOC_OVERDUE_TITLE), still open. */
+    headCount("case_tasks", (q) => q.is("done_at", null).like("title", "Documents overdue — call %")),
+  ]);
+  // Free — these rows are already in memory from the dashboard's own read.
+  const liveStages = ["enquiry", "fact_find", "decision_in_principle", "application", "offer", "exchange"];
+  const noAdviser = (cases || []).filter((c) => !c.assigned_to && liveStages.includes(c.stage)).length;
+
+  const chip = (id, icon, label, n, onclick, tip) => {
+    // A count that could not be read says so rather than rendering a confident zero.
+    const unknown = n == null;
+    return `<button type="button" class="ops-chip${!unknown && n > 0 ? " hot" : ""}" id="${id}" data-n="${unknown ? "" : n}" onclick="${onclick}" title="${esc(tip)}">
+      <span aria-hidden="true">${icon}</span><span class="ops-n">${unknown ? "—" : n}</span> ${esc(label)}</button>`;
+  };
+  el.innerHTML = [
+    chip("ops-emails-queued", "✉️", "emails queued", emailsQueued, "nav('emails')",
+      "Emails waiting to go out on the daily automation run. Opens the Emails page. Whether they can actually send is on Settings › Email sending."),
+    chip("ops-emails-failed", "⚠️", "emails failed", emailsFailed, "nav('data')",
+      "Emails the sender rejected — a bad address, or a send that errored. They do not retry themselves. Opens Data health, where the failures are listed."),
+    chip("ops-sms-queued", "💬", "SMS queued", smsQueued, "nav('emails')",
+      "Text messages waiting on the SMS run (about 08:05 UK). Opens the Emails page, where the SMS queue sits beside the email one."),
+    chip("ops-leads-new", "🧲", "leads to assign", leadsNew, "opsGotoLeads()",
+      "Website leads nobody has accepted yet. Opens the New leads block on My Day, below."),
+    chip("ops-unassigned", "🗂️", "cases with no adviser", noAdviser, "reportGotoAdviser('unassigned')",
+      "Live cases nobody owns — nothing on them is anybody's job. Opens the Pipeline filtered to Unassigned."),
+    chip("ops-docs-overdue", "📄", "document chases exhausted", docsOverdue, "opsGotoLeads()",
+      "Cases where three document chase emails went unanswered, so the automation stopped emailing and raised a call task instead. Those tasks sit on the case's adviser — switch My Day to “All” to see everyone's."),
+    `<p class="panel-sub ops-sub" id="ops-strip-sub">The firm's plumbing, in one line: what is waiting to send, what failed, and what nobody has picked up. Each chip opens the page that fixes it. <strong>Grey means nothing to do</strong>; amber means there is. Administrator and Owner only — advisers see their own work on My Day below.</p>`,
+  ].join("");
+  el.classList.remove("hidden");
+}
+/* The leads and the document call-tasks both live in My Day, which is already on this page — so
+   this scrolls rather than navigates. nav() first for the case where a chip is somehow clicked
+   from elsewhere. */
+window.opsGotoLeads = function () {
+  if (currentPage !== "dashboard") nav("dashboard");
+  const el = $("#briefing-panel");
+  if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+};
 function renderDashNotices() {
   const el = $("#dash-notices");
   if (!el) return;
@@ -6446,6 +6705,10 @@ async function loadDashboard() {
      exist, so re-reading the table to answer it would be a query spent on nothing. */
   dashKpiData = { cases: cases || [], alerts: alerts || [], caseAdviser, reminderMonths };
   renderTodayKpis();
+  /* R68 · M16 — the ops strip, fired straight after the numbers and NOT awaited: five count
+     queries must never hold up the page behind them, and a chip row arriving 200ms late is
+     still a chip row (same discipline as the health banners above). */
+  renderOpsStrip(cases);
   // R12b — after the dashboard's own first paint (the KPI row above), and gated entirely inside
   // maybeStartTour(): the skip hatch, "already fired this session", "still on the dashboard", and
   // the DB read all have to say yes before anything shows. Fire-and-forget on purpose — a slow or
@@ -7637,7 +7900,14 @@ function briefActions(it) {
          app (name + two badges + the adviser select + its note + two buttons) and .row-item wraps
          its actions once they stop fitting (R6-FIX V3); without the wrapper the ✕ drops onto a
          line of its own and reads as a stray control rather than as the other half of Accept. */
-      return leadRoutingHtml(it.lead_id)
+      /* R68 · B1/M12 — the reason this enquiry was left behind by "Accept all unambiguous leads",
+         on the row itself. Without it the button silently does four of six and the operator is
+         left to work out which two and why. Set only by a run of the bulk accept (session-only,
+         like LEAD_ADV_CHOICE) — an inbox nobody has pressed the button on wears no chips. */
+      return (LEAD_AMBIG_REASON[it.lead_id]
+        ? `<span class="badge amber lead-ambig" data-lead="${esc(it.lead_id)}" title="Accept all skipped this one: ${esc(LEAD_AMBIG_REASON[it.lead_id])}. Accepting it needs a decision only you can make — press Accept on this row.">${esc(LEAD_AMBIG_REASON[it.lead_id])}</span>`
+        : "")
+        + leadRoutingHtml(it.lead_id)
         + `<span class="brief-lead-actions">`
         + `<button class="btn btn-sm btn-primary" onclick="acceptLead('${it.lead_id}', event)">Accept</button>`
         + `<button class="btn btn-sm btn-danger" aria-label="Discard lead" title="Discard this enquiry — you'll be asked why, and the reason is kept" onclick="discardLead('${it.lead_id}')">✕</button>`
@@ -8065,7 +8335,24 @@ function renderBriefing() {
   }
   $("#briefing-list").innerHTML = html;
   panelCount("#briefing-list", items.length, items.some((it) => it.pri < 15));
+  renderLeadsAcceptBar(items);   // R68 · B1 — the "accept all unambiguous leads" bar above the list
   applyLeadAdvChoices();   // R12a K-1 — a lead_new row's select is the SAME control as the drawer's
+}
+/* R68 · B1/M12 — the bar above My Day. Shown only from TWO new enquiries up: "accept all" of one
+   lead is the Accept button that is already on its row, and an extra control that does the same
+   thing as the one beside it is noise. Painted from the SAME items array the list is, so it can
+   never advertise a lead the list is not showing. Every persona who can see the leads gets it —
+   see acceptAllLeads' header for why there is no role gate here. */
+function renderLeadsAcceptBar(items) {
+  const bar = $("#leads-accept-bar");
+  if (!bar) return;
+  const n = (items || []).filter((it) => it.kind === "lead_new" && it.lead_id).length;
+  if (n < 2) { bar.innerHTML = ""; bar.classList.add("hidden"); return; }
+  bar.classList.remove("hidden");
+  bar.innerHTML = `<button type="button" class="btn btn-sm btn-primary" id="leads-accept-all" title="Accept every enquiry that needs no decision from you">📥 Accept all unambiguous leads (${n})</button>`
+    + `<span class="panel-sub" id="leads-accept-bar-sub">Creates the client, the case and its Enquiry checklist for every enquiry that is one named person we do not already hold, sharing them out from the lightest desk. A joint name, or anything that looks like a client we already have, is left here for you — it will say which.</span>`;
+  const b = $("#leads-accept-all");
+  if (b) b.onclick = (e) => window.acceptAllLeads(e);
 }
 window.toggleBriefGroup = function (caseId) {
   if (briefExpanded.has(caseId)) briefExpanded.delete(caseId); else briefExpanded.add(caseId);
@@ -9737,6 +10024,82 @@ function protectionGateBlocks(caseRow, newStage) {
      out loud here because a reader checking "does referred pass?" should not have to infer it. */
   return (caseRow.protection_status || "not_discussed") === "not_discussed";
 }
+/* ==========================================================================
+   R68 · B3/M2 — THE BLOCKED MOVE, ANSWERED WHERE IT WAS BLOCKED.
+
+   The gate is right: as an Appointed Representative, a protection conversation
+   has to be recorded on the file before a mortgage goes to a lender, even when
+   the answer was "no thanks". What was wrong was the shape of the refusal. It
+   toasted, snapped the card back, and (R5-34) opened the case with the
+   protection SELECT highlighted — which is a field, in a form, with a Save
+   button, inside a drawer. Recording "discussed" therefore cost: read the
+   toast, find the select, choose, save, close the modal, find the card again,
+   drag it again. Seven gestures to answer a yes/no question, and the seventh
+   is the one people forget, which is why cases sat one stage behind the work
+   that had actually happened.
+
+   So the block now offers the answer AS the answer: the same one-click status
+   chips the Protection page has carried since S3c (PROT_BULK_STATUS — one
+   list, so the two surfaces can never offer different states), at the top of
+   the case, and a click WRITES the status and then RESUMES the exact move that
+   was refused. Same targeted write and the same refreshOpenedStamp discipline
+   the case form itself uses (R18-D1: our own write must not trip the form's
+   stale-write guard), then moveCaseToStage with the original target stage and
+   skipConfirm false — so a move to Completed or a reopening still asks its own
+   question, exactly as it would have if the gate had never fired.
+
+   `not_discussed` is deliberately not offered: it is the state the case is
+   already in, and it is the one answer that cannot unblock anything.
+
+   BULK IS DELIBERATELY LEFT ALONE. bulkMoveStage's "blocked" bucket lives in a
+   native confirm() string — there is no DOM to hang a chip on — and giving it
+   one would mean rebuilding that whole confirm as an overlay, which is a
+   bigger change than this item is. The bucket still names every refused case,
+   and each one opens to this panel from the board.
+   ========================================================================== */
+function renderProtGatePanel(caseId, c, targetStage) {
+  const modal = $("#modal");
+  if (!modal || !caseId || !targetStage) return;
+  const old = modal.querySelector("#prot-gate-chips");
+  if (old) old.remove();
+  const label = STAGE_LABEL[targetStage] || targetStage;
+  const html = `<div id="prot-gate-chips" role="group" aria-label="Record the protection conversation">
+    <p class="pg-head">🛡️ Record the protection conversation to move to ${esc(label)}:</p>
+    <p class="panel-sub">This case cannot go to ${esc(label)} until somebody has written down what happened about protection — we are an Appointed Representative of Stonebridge and the conversation has to be on the file before a mortgage is submitted, even when the client said no. Pick what actually happened and this case moves to ${esc(label)} straight afterwards. Nothing is emailed to anybody.</p>
+    <div class="pg-chips">${PROT_BULK_STATUS.map(([k, l]) =>
+      `<button type="button" class="btn btn-sm prot-gate-chip" data-status="${esc(k)}" title="Record protection as “${esc(l)}” on this case, then move it to ${esc(label)}">${esc(l)}</button>`).join("")}</div>
+  </div>`;
+  const h3 = modal.querySelector("h3");
+  if (h3) h3.insertAdjacentHTML("afterend", html); else modal.insertAdjacentHTML("afterbegin", html);
+  modal.querySelectorAll("#prot-gate-chips .prot-gate-chip").forEach((b) => {
+    b.onclick = async () => {
+      const panel = modal.querySelector("#prot-gate-chips");
+      if (b.disabled) return;
+      if (panel) panel.querySelectorAll("button").forEach((x) => (x.disabled = true));
+      const status = b.dataset.status;
+      const statusLabel = (PROT_BULK_STATUS.find(([k]) => k === status) || [null, status])[1];
+      /* The same targeted single-column write the case form's own quick actions make — never a
+         whole-form save, which would push forty stale field values back over anything a colleague
+         changed while this modal was open. */
+      const { error } = await db.from("cases").update({ protection_status: status }).eq("id", caseId);
+      if (error) {
+        if (panel) panel.querySelectorAll("button").forEach((x) => (x.disabled = false));
+        return toast("Error: " + error.message);
+      }
+      await refreshOpenedStamp(caseId);   // R18-D1 — our own write must not trip the form's stale-write guard
+      // The header chip is now wrong; the panel has done its job. Both go before the move so the
+      // screen never shows a gate over a case that is no longer gated.
+      const warn = modal.querySelector("#cs-prot-warn");
+      if (warn) warn.outerHTML = protStatChipHtml({ ...(c || {}), protection_status: status }, (c && c.stage) || "");
+      if (panel) panel.remove();
+      toast(`Protection recorded as ${statusLabel} — moving to ${label}…`);
+      const res = await moveCaseToStage(caseId, targetStage, {});
+      // Cancelling the move's own confirm (Completed / a reopening) is a real answer: the
+      // protection status stays written — it is true either way — and the case simply stays put.
+      if (res === "moved" || res === "reopened") await openCase(caseId);
+    };
+  });
+}
 /* T1-8 — a move OUT of a terminal stage back into a live one is a REOPENING, not an ordinary move:
    it resurrects a case whose fee, completion date and retention setup were already settled. The
    protection gate can't see it (it only guards forward moves), so it needs its own classification
@@ -10979,8 +11342,12 @@ window.moveCaseToStage = async function (caseId, targetStage, opts = {}) {
       if (!skipReload) loadPipeline(); // put the card back
       /* R5-34 — the refusal used to be the end of it: a toast, the card snapped back, and the field
          that would unblock the move was three clicks away inside a collapsed drawer. Open the case
-         ON the protection select so the block routes straight to its own fix. */
-      await openCase(caseId, { revealProtection: true });
+         ON the protection select so the block routes straight to its own fix.
+         R68 · B3/M2 — and `gateTo` carries the move that was refused, so the case opens with the
+         one-click chips AND can finish the job: record the conversation, then go where you were
+         going. Without it the operator lands on a field, fills it in, saves, closes the modal,
+         finds the card again and repeats the drag. */
+      await openCase(caseId, { revealProtection: true, gateTo: targetStage });
     }
     return "blocked";
   }
@@ -15464,6 +15831,8 @@ window.openCase = async function (id, opts = {}) {
       }
     }
   }
+  /* R68 · B3/M2 — THE BLOCKED MOVE, ANSWERED WHERE IT WAS BLOCKED. See renderProtGatePanel. */
+  if (id && opts.gateTo) renderProtGatePanel(id, c, opts.gateTo);
   /* R37 · K2 — { scrollTo: "docs" }. A row that flagged DOCUMENTS (Data health's "Waiting on
      documents" queue) used to open the case at the top, with the checklist it is ABOUT several
      screens down. Purely additive and optional: openCase(id) with no second argument behaves
@@ -17629,6 +17998,78 @@ function chEntryHtml(r) {
     </details>`;
 }
 const chFiltered = () => chState.group !== CH_ALL || chState.actor !== CH_ALL || !!chState.from || !!chState.to;
+/* R68 · M14 — the four filters, applied in ONE place. The list and the CSV must select the same
+   rows or the export is a different document from the screen that produced it, which is the one
+   thing an export of an audit log may not be. The only difference between the two callers is the
+   page range: the list asks for 25 rows, the CSV asks for everything the filter matches. */
+function chApplyFilters(q) {
+  const grp = CH_GROUPS.find((g) => g[0] === chState.group);
+  if (grp && grp[2]) q = q.in("table_name", grp[2]);
+  if (chState.actor === CH_SYSTEM) q = q.is("actor", null);
+  else if (chState.actor !== CH_ALL) q = q.eq("actor", chState.actor);
+  if (chState.from) q = q.gte("happened_at", chState.from);
+  if (chState.to) q = q.lt("happened_at", chNextDay(chState.to));
+  return q.order("happened_at", { ascending: false }).order("id", { ascending: false });
+}
+/* R68 · M14 — a plain-English name for whatever the filters are currently set to, so the toast
+   and the filename can both say what the file actually contains rather than "your filters". */
+function chFilterLabel() {
+  const bits = [];
+  const grp = CH_GROUPS.find((g) => g[0] === chState.group);
+  if (grp && grp[0] !== CH_ALL) bits.push(grp[1]);
+  if (chState.actor === CH_SYSTEM) bits.push("System (automation)");
+  else if (chState.actor !== CH_ALL) bits.push(actorName(chState.actor) || chState.actor);
+  if (chState.from) bits.push("from " + fmtD(chState.from));
+  if (chState.to) bits.push("to " + fmtD(chState.to));
+  return bits.length ? bits.join(" · ") : "everything";
+}
+/* ==========================================================================
+   R68 · M14 — CHANGE HISTORY → CSV.
+
+   The panel pages 25 rows at a time, which is right for reading and useless for the two jobs an
+   audit log actually gets pulled out for: handing a compliance reviewer "every change to Logins &
+   roles in June", and answering "what did this person touch" over a period. Clicking through
+   fourteen pages copying rows by hand is how that was done until now.
+
+   It exports THE CURRENT FILTER, not the current page — the same query the list just ran, with the
+   page range removed — capped at OWNER_ROW_CAP for the same reason every other owner-facing read
+   here is. A capped export is a subset, so it SAYS SO in the filename and in a toast rather than
+   handing over a file that silently stops. Owner-only, like the panel it lives in.
+   ========================================================================== */
+async function exportChangeHistoryCsv() {
+  // Presentation guard only — the panel is owner-gated and RLS refuses the read regardless.
+  if (!isOwner()) return toast("The change history is Owner only.");
+  const btn = $("#ch-csv");
+  if (btn && btn.disabled) return;
+  if (btn) { btn.disabled = true; btn.textContent = "Exporting…"; }
+  try {
+    let rows = [];
+    try {
+      const { data, error } = await chApplyFilters(db.from("audit_log").select(AUDIT_COLS)).limit(OWNER_ROW_CAP);
+      if (error) throw error;
+      rows = auditVisibleRows(data || []);
+    } catch (e) {
+      return toast("Couldn't export the change history: " + ((e && e.message) || e));
+    }
+    if (!rows.length) return toast("Nothing to export — no changes match these filters.");
+    const capped = rows.length >= OWNER_ROW_CAP;
+    const dstr = localDateStr();
+    const name = `nexmoney-change-history-${dstr}${capped ? `-first-${OWNER_ROW_CAP}` : ""}.csv`;
+    miCsv(name, ["When", "Who", "What changed", "Action", "Record", "Summary"], rows.map((r) => [
+      r.happened_at ? new Date(r.happened_at).toLocaleString("en-GB") : "",
+      r.actor_label || actorName(r.actor) || "System (automation)",
+      auditTableLabel(r.table_name),
+      r.action,
+      r.row_id == null ? "" : String(r.row_id),
+      chSummaryText(r),
+    ]));
+    toast(capped
+      ? `⚠ ${rows.length} rows exported (${chFilterLabel()}) — that is the ${OWNER_ROW_CAP.toLocaleString("en-GB")}-row ceiling, so the file is a subset. Narrow the dates and export again for the whole period.`
+      : `${rows.length} change${rows.length === 1 ? "" : "s"} exported (${chFilterLabel()}).`);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "⭳ CSV"; }
+  }
+}
 async function renderChangeHistory() {
   const list = $("#ch-list"), pager = $("#ch-pager");
   if (!list) return;
@@ -17638,16 +18079,10 @@ async function renderChangeHistory() {
   /* Settings is a working page for the Owner; a log that cannot be read must cost them the panel,
      never the page. Anything the query throws is shown as a retryable error in this box. */
   try {
-    let q = db.from("audit_log").select(AUDIT_COLS, { count: "exact" });
-    const grp = CH_GROUPS.find((g) => g[0] === chState.group);
-    if (grp && grp[2]) q = q.in("table_name", grp[2]);
-    if (chState.actor === CH_SYSTEM) q = q.is("actor", null);
-    else if (chState.actor !== CH_ALL) q = q.eq("actor", chState.actor);
-    if (chState.from) q = q.gte("happened_at", chState.from);
-    if (chState.to) q = q.lt("happened_at", chNextDay(chState.to));
-    ({ data, count, error } = await q
-      .order("happened_at", { ascending: false }).order("id", { ascending: false })
-      .range(start, start + CH_PAGE - 1));
+    // R68 · M14 — the filters now come from chApplyFilters(), shared with the CSV export, so the
+    // file can never select a different set of rows from the list that produced it.
+    const q = chApplyFilters(db.from("audit_log").select(AUDIT_COLS, { count: "exact" }));
+    ({ data, count, error } = await q.range(start, start + CH_PAGE - 1));
   } catch (e) { error = e; }
   if (error) { renderLoadError("#ch-list", error, renderChangeHistory); return; }
   /* Belt and braces: the SELECT policy has already removed any settings/profiles row a non-Owner
@@ -17714,6 +18149,9 @@ async function loadChangeHistory() {
     if (to) to.value = "";
     renderChangeHistory();
   };
+  // R68 · M14 — the export button. Wired once, like the filters above it.
+  const csv = $("#ch-csv");
+  if (csv) csv.onclick = exportChangeHistoryCsv;
   await renderChangeHistory();
 }
 /* Every Owner-only action that writes an audit row — saving a setting, changing a role, creating a
@@ -20413,6 +20851,205 @@ function noteLeadSlaFromStarRow(row) {
      (see briefActions), because it is the only button in the app that opens the reason dialog
      behind leads.discard_reason and the Lead-response report's answered-vs-binned split.
    ========================================================================== */
+/* ==========================================================================
+   R68 · B1/M12 — ACCEPT, SPLIT INTO "THE DECISIONS" AND "THE WRITES".
+
+   acceptLead() was one 240-line function: it asked the questions (is this a
+   joint name? is this somebody we already hold?) AND performed every write
+   that follows the answers. There is now a second caller for the writes —
+   "Accept all unambiguous leads" on My Day — and a second copy of them would
+   be a second set of rules about what an accepted lead IS: which columns the
+   case is created with, whether the enquiry note carries the client's own
+   words, whether the Enquiry checklist is written, whether a welcome email is
+   queued, whether first contact is stamped. So the writes moved WHOLE into
+   acceptLeadCore() and nothing about them changed.
+
+   THE SPLIT LINE IS THE HUMAN DECISION. Everything above it — the two name
+   prompts, the "attach to the client we already have?" confirms — stays in
+   acceptLead(), because it is exactly what the bulk path is NOT allowed to do
+   (a bulk flow that asks eight questions is eight single accepts with extra
+   steps). The bulk path decides the same things by rule instead, and refuses
+   to decide the ones a rule cannot: see classifyLeadsForAccept().
+
+   The claim is above the line too, and is shared as claimLead(): it is the
+   atomic 'new' → 'converted' update that makes a double-click, or two people
+   accepting the same enquiry, impossible. Both paths must do it, and both must
+   do it FIRST.
+   ========================================================================== */
+/* Atomically take a lead out of the inbox. Returns {row} on success, {taken:true} when somebody
+   (or a second click) already had it, {error} when the update itself failed. */
+async function claimLead(id) {
+  const { data: claimed, error } = await db.from("leads")
+    .update({ status: "converted" }).eq("id", id).eq("status", "new").select();
+  if (error) return { error: error.message };
+  if (!claimed || !claimed.length) return { taken: true };
+  return { row: claimed[0] };
+}
+/* Undo a claim — the lead goes back in the inbox and can be retried. */
+const releaseLead = (id) => db.from("leads").update({ status: "new" }).eq("id", id);
+/* ==========================================================================
+   acceptLeadCore(lead, {assignTo, firstName, lastName, jointNote, client})
+
+   Every write that happens AFTER the decisions, in the order they have always
+   happened: the client (only when the caller has not attached an existing
+   one), the case, the enquiry note, the Enquiry playbook tasks, the welcome
+   email row, and the converted_case_id + first-contact stamp. The lead is
+   already claimed when this is called.
+
+   It returns rather than toasts: `warnings` is the same aggregated list the
+   single accept has always printed (G1I-L2/L3/L4 — a best-effort write that
+   fails must reach the operator inside the ONE message, because a second
+   toast() overwrites the first), and the bulk path merges the lists from every
+   lead it accepted into its own single summary. `welcomeId` comes back rather
+   than being sent here, so the bulk path can flush fifty welcome emails with
+   ONE runAutomation call instead of fifty (R5-1's scoped-send rule stands:
+   only the ids named are sent, never the firm's whole due queue).
+   ========================================================================== */
+async function acceptLeadCore(l, opts = {}) {
+  const assignTo = opts.assignTo || null;
+  const firstName = opts.firstName || "";
+  const lastName = opts.lastName || "";
+  const jointNote = opts.jointNote || "";
+  let client = opts.client || null;
+  let createdClient = false;
+  const leadWarn = [];
+  if (!client) {
+    const { data: newClient, error: cErr } = await db.from("clients")
+      .insert({ first_name: firstName, last_name: lastName, email: l.email, phone: l.phone })
+      .select().single();
+    if (cErr) {
+      // Roll the claim back so the lead reappears in the inbox and can be retried.
+      await releaseLead(l.id);
+      return { caseId: null, warnings: leadWarn, error: cErr.message, client: null };
+    }
+    client = newClient; createdClient = true;
+    invalidateClientPicker(); // R18-P6 — a lead-accepted new client must appear in the case-modal picker
+  }
+  /* R12b · W-28 — the structured fields land on the case's real columns, not only in the note.
+     `property_value` is an original-schema column (the case form has had a box for it since day
+     one) so naming it here cannot 42703 an older database. Written only when the client's answer
+     parses to a plain number: an unparseable one stays in the note, where it reads as words. */
+  const leadPropValue = parseLeadPropertyValue(l.property_value);
+  const newCase = {
+    client_id: client.id,
+    case_kind: LEAD_KIND_MAP[l.enquiry_type] || "other",
+    stage: "enquiry",
+    lead_source: "Website",
+    assigned_to: assignTo,
+  };
+  if (leadPropValue != null) newCase.property_value = leadPropValue;
+  const { data: nc, error } = await db.from("cases").insert(newCase).select("id").single();
+  if (error) {
+    // Undo the partial accept: remove the just-created client (never an existing one we attached to), then release the lead.
+    if (createdClient) await db.from("clients").delete().eq("id", client.id);
+    await releaseLead(l.id);
+    return { caseId: null, warnings: leadWarn, error: error.message, client, createdClient };
+  }
+  /* G1I-L2/L3/L4 — the three writes below are all "best effort" and every one of them used to
+     discard its error, under a toast that read like a clean success. Collect the failures and put
+     them in the SAME final message (a second toast() would simply overwrite the first — see
+     G1I-R7), so the operator learns that the client was never welcomed, or that the enquiry text
+     did not survive, at the moment they can still do something about it. */
+  // This note carries the joint-applicant name and the client's own words — the only place that
+  // text survives the lead being marked converted.
+  const { error: noteErr } = await db.from("case_notes").insert({
+    case_id: nc.id,
+    /* R12b · W-28 — the property value stays in the note as WELL as on the case, and says which
+       happened. The note is the compliance record of what the client actually typed; the column is
+       the working figure. Where the two would differ (an unparseable answer), the note is the only
+       place it exists, and it says so rather than leaving the empty box on the case unexplained. */
+    body: `Website enquiry (${l.enquiry_type || "general"})${jointNote}`
+      + (l.property_value
+        ? ` · property value “${l.property_value}”${leadPropValue != null ? ` (recorded on the case as ${fmtM(leadPropValue)})` : " — not a plain number, so it has NOT been written to the case's Property value field; check it and enter it by hand"}`
+        : "")
+      + (l.message ? " · “" + l.message + "”" : ""),
+  });
+  if (noteErr) leadWarn.push(`the enquiry note did NOT save (${noteErr.message}) — the joint applicant and the client's own message are only on the lead now`);
+  /* R63 · H1a — THE NEW CASE STARTS WITH ITS ENQUIRY STEPS ON IT.
+     An accepted lead used to become a case at Enquiry with nothing open on it at all: no task, no
+     next action, and therefore nothing on anybody's list until somebody remembered it. The house
+     Enquiry checklist ("Qualify enquiry…", "Book fact-find appointment") is exactly the work that
+     follows an accepted enquiry, so it is written here rather than offered in a panel — the same
+     rows `playbookAddAll` writes by hand, due today + each step's offset, assigned to THE ADVISER
+     THE LEAD WAS ROUTED TO (not whoever pressed Accept) and created_by the actor.
+     Deliberately after the case insert has succeeded and beside the note/welcome writes: a failure
+     is best-effort like theirs and joins the SAME aggregated warning, because a second toast would
+     simply overwrite the first (G1I-R7). Idempotent by title, so a retried accept cannot double up.
+     Governed by the same `playbook_auto_tasks` switch as the stage-advance half — one setting for
+     "the app writes the checklist for me", and the Settings copy names both moments. */
+  let leadTasksAdded = 0;
+  {
+    const pb = await autoAddStagePlaybookTasks(nc.id, "enquiry", newCase.case_kind, {
+      assignee: assignTo || (ME && ME.id) || null,
+      createdBy: (ME && ME.id) || null,
+    });
+    leadTasksAdded = pb.added;
+    if (pb.error) leadWarn.push(`the Enquiry checklist tasks were NOT created (${pb.error}) — the case has no next action on it, so add them from the case's Stage checklist`);
+  }
+  /* R5-1 — accepting a lead used to call runAutomation() unscoped, which flushed the FIRM's entire
+     due queue (every colleague's reminders, review requests and fee chases) as a side effect of one
+     click, and did so even when the lead had no email address and nothing at all was queued. The
+     welcome email now reports its own row id and only that row is sent (by the caller). */
+  let welcomeId = null;
+  if (l.email) {
+    const { data: wq, error: wErr } = await db.from("email_queue")
+      .insert({ case_id: nc.id, client_id: client.id, email_type: "welcome", to_email: l.email })
+      .select("id").single();
+    welcomeId = (wq && wq.id) || null;
+    if (wErr || !welcomeId) leadWarn.push(`the welcome email to ${l.email} was NOT queued (${(wErr && wErr.message) || "no row was written"}) — nothing will reach them until you queue it from the case`);
+  }
+  /* Without this the lead ends up status='converted' with converted_case_id null, so nothing joins
+     the lead to the case it became. Retry once before reporting: it is a single-column update.
+
+     R7-5 — FIRST CONTACT, stamped in the same write. Accepting a lead is the moment a human takes
+     it on, and it is the only moment the app can honestly record: `acknowledged_at` is the robot's
+     receipt and says nothing about whether anybody has picked up the phone. The stamp is what
+     retires the lead_slow alert and what the Lead-response report measures, so it is written here
+     rather than left to be typed in later (which is to say: never).
+
+     Feature-detected and write-retried, exactly like M2's lost-reason columns: an un-migrated
+     database answers 42703, the column is dropped from the payload, the link write happens anyway,
+     and the accept succeeds. A lead that already carries a first_contact_at is never overwritten —
+     the first contact is the first one. */
+  const slaOn = await leadSlaSupported();
+  const stampAt = new Date().toISOString();
+  const wantStamp = slaOn && !l.first_contact_at;
+  const leadPatch = { converted_case_id: nc.id };
+  if (wantStamp) leadPatch.first_contact_at = stampAt;
+  let stamped = wantStamp;
+  let link = await db.from("leads").update(leadPatch).eq("id", l.id);
+  if (link.error && wantStamp && isMissingColumnError(link.error)) {
+    LEAD_SLA_SUPPORTED = false;
+    stamped = false;
+    delete leadPatch.first_contact_at;
+    link = await db.from("leads").update(leadPatch).eq("id", l.id);
+  }
+  if (link.error) link = await db.from("leads").update(leadPatch).eq("id", l.id);
+  if (link.error) {
+    stamped = false;
+    leadWarn.push(`the lead could not be linked to the new case (${link.error.message}) — the enquiry will not show which case it became`);
+  }
+  /* R7-5 — the desk this lead just landed on is one case heavier, and the repaint that follows is
+     about to ask which desk is lightest. Counted here rather than re-read: the case was created two
+     writes ago and the next dashboard load re-derives the whole map from the database anyway. */
+  if (assignTo && advLoadCases) advLoadCases[assignTo] = (advLoadCases[assignTo] || 0) + 1;
+  /* How long the client actually waited, from the enquiry landing to this accept. Only stated when
+     there is a stamp behind it: a figure with nothing recorded under it is the reason nobody trusts
+     response reporting in the first place. */
+  const contactAt = stamped ? stampAt : (l.first_contact_at || null);
+  return {
+    caseId: nc.id,
+    warnings: leadWarn,
+    error: null,
+    client,
+    createdClient,
+    tasksAdded: leadTasksAdded,
+    welcomeId,
+    propValue: leadPropValue,
+    respMins: leadResponseMins(l.created_at, contactAt),
+    name: [client.first_name, client.last_name].filter(Boolean).join(" ") || "this lead",
+  };
+}
 window.acceptLead = async function (id, ev) {
   const btn = (ev && (ev.currentTarget || ev.target)) || null;
   if (btn) { if (btn.disabled) return; btn.disabled = true; } // guard against double-click
@@ -20431,12 +21068,10 @@ window.acceptLead = async function (id, ev) {
   delete LEAD_ADV_CHOICE[id];   // R12a K-1 — this lead is leaving the inbox; its answer goes with it
   // Atomically claim the lead: only converts if it's still 'new', so a fast double-click
   // or a second adviser accepting the same lead can't create duplicate clients/cases/emails.
-  const { data: claimed, error: claimErr } = await db.from("leads")
-    .update({ status: "converted" }).eq("id", id).eq("status", "new").select();
-  if (claimErr) { if (btn) btn.disabled = false; return toast("Error: " + claimErr.message); }
-  if (!claimed || !claimed.length) { if (btn) btn.disabled = false; return toast("This lead has already been accepted."); }
-  const l = claimed[0];
-  const kindMap = LEAD_KIND_MAP;
+  const claim = await claimLead(id);
+  if (claim.error) { if (btn) btn.disabled = false; return toast("Error: " + claim.error); }
+  if (claim.taken) { if (btn) btn.disabled = false; return toast("This lead has already been accepted."); }
+  const l = claim.row;
 
   /* T1-22 — split the lead's name through the shared splitName() helper, the same one bulk import
      uses. A joint enquiry ("Deborah & Michael Ashworth") used to be filed as
@@ -20500,136 +21135,19 @@ window.acceptLead = async function (id, ev) {
       client = n.client;
     }
   }
-  if (!client) {
-    const { data: newClient, error: cErr } = await db.from("clients")
-      .insert({ first_name: firstName, last_name: lastName, email: l.email, phone: l.phone })
-      .select().single();
-    if (cErr) {
-      // Roll the claim back so the lead reappears in the inbox and can be retried.
-      await db.from("leads").update({ status: "new" }).eq("id", id);
-      if (btn) btn.disabled = false;
-      return toast("Error: " + cErr.message);
-    }
-    client = newClient; createdClient = true;
-    invalidateClientPicker(); // R18-P6 — a lead-accepted new client must appear in the case-modal picker
-  }
-  /* R12b · W-28 — the structured fields land on the case's real columns, not only in the note.
-     `property_value` is an original-schema column (the case form has had a box for it since day
-     one) so naming it here cannot 42703 an older database. Written only when the client's answer
-     parses to a plain number: an unparseable one stays in the note, where it reads as words. */
-  const leadPropValue = parseLeadPropertyValue(l.property_value);
-  const newCase = {
-    client_id: client.id,
-    case_kind: kindMap[l.enquiry_type] || "other",
-    stage: "enquiry",
-    lead_source: "Website",
-    assigned_to: assignTo,
-  };
-  if (leadPropValue != null) newCase.property_value = leadPropValue;
-  const { data: nc, error } = await db.from("cases").insert(newCase).select("id").single();
-  if (error) {
-    // Undo the partial accept: remove the just-created client (never an existing one we attached to), then release the lead.
-    if (createdClient) await db.from("clients").delete().eq("id", client.id);
-    await db.from("leads").update({ status: "new" }).eq("id", id);
-    if (btn) btn.disabled = false;
-    return toast("Error: " + error.message);
-  }
-  /* G1I-L2/L3/L4 — the three writes below are all "best effort" and every one of them used to
-     discard its error, under a toast that read like a clean success. Collect the failures and put
-     them in the SAME final message (a second toast() would simply overwrite the first — see
-     G1I-R7), so the operator learns that the client was never welcomed, or that the enquiry text
-     did not survive, at the moment they can still do something about it. */
-  const leadWarn = [];
-  // This note carries the joint-applicant name and the client's own words — the only place that
-  // text survives the lead being marked converted.
-  const { error: noteErr } = await db.from("case_notes").insert({
-    case_id: nc.id,
-    /* R12b · W-28 — the property value stays in the note as WELL as on the case, and says which
-       happened. The note is the compliance record of what the client actually typed; the column is
-       the working figure. Where the two would differ (an unparseable answer), the note is the only
-       place it exists, and it says so rather than leaving the empty box on the case unexplained. */
-    body: `Website enquiry (${l.enquiry_type || "general"})${jointNote}`
-      + (l.property_value
-        ? ` · property value “${l.property_value}”${leadPropValue != null ? ` (recorded on the case as ${fmtM(leadPropValue)})` : " — not a plain number, so it has NOT been written to the case's Property value field; check it and enter it by hand"}`
-        : "")
-      + (l.message ? " · “" + l.message + "”" : ""),
-  });
-  if (noteErr) leadWarn.push(`the enquiry note did NOT save (${noteErr.message}) — the joint applicant and the client's own message are only on the lead now`);
-  /* R63 · H1a — THE NEW CASE STARTS WITH ITS ENQUIRY STEPS ON IT.
-     An accepted lead used to become a case at Enquiry with nothing open on it at all: no task, no
-     next action, and therefore nothing on anybody's list until somebody remembered it. The house
-     Enquiry checklist ("Qualify enquiry…", "Book fact-find appointment") is exactly the work that
-     follows an accepted enquiry, so it is written here rather than offered in a panel — the same
-     rows `playbookAddAll` writes by hand, due today + each step's offset, assigned to THE ADVISER
-     THE LEAD WAS ROUTED TO (not whoever pressed Accept) and created_by the actor.
-     Deliberately after the case insert has succeeded and beside the note/welcome writes: a failure
-     is best-effort like theirs and joins the SAME aggregated warning, because a second toast would
-     simply overwrite the first (G1I-R7). Idempotent by title, so a retried accept cannot double up.
-     Governed by the same `playbook_auto_tasks` switch as the stage-advance half — one setting for
-     "the app writes the checklist for me", and the Settings copy names both moments. */
-  let leadTasksAdded = 0;
-  {
-    const pb = await autoAddStagePlaybookTasks(nc.id, "enquiry", newCase.case_kind, {
-      assignee: assignTo || (ME && ME.id) || null,
-      createdBy: (ME && ME.id) || null,
-    });
-    leadTasksAdded = pb.added;
-    if (pb.error) leadWarn.push(`the Enquiry checklist tasks were NOT created (${pb.error}) — the case has no next action on it, so add them from the case's Stage checklist`);
-  }
-  /* R5-1 — accepting a lead used to call runAutomation() unscoped, which flushed the FIRM's entire
-     due queue (every colleague's reminders, review requests and fee chases) as a side effect of one
-     click, and did so even when the lead had no email address and nothing at all was queued. The
-     welcome email now reports its own row id and only that row is sent. */
-  let welcomeId = null;
-  if (l.email) {
-    const { data: wq, error: wErr } = await db.from("email_queue")
-      .insert({ case_id: nc.id, client_id: client.id, email_type: "welcome", to_email: l.email })
-      .select("id").single();
-    welcomeId = (wq && wq.id) || null;
-    if (wErr || !welcomeId) leadWarn.push(`the welcome email to ${l.email} was NOT queued (${(wErr && wErr.message) || "no row was written"}) — nothing will reach them until you queue it from the case`);
-  }
-  /* Without this the lead ends up status='converted' with converted_case_id null, so nothing joins
-     the lead to the case it became. Retry once before reporting: it is a single-column update.
-
-     R7-5 — FIRST CONTACT, stamped in the same write. Accepting a lead is the moment a human takes
-     it on, and it is the only moment the app can honestly record: `acknowledged_at` is the robot's
-     receipt and says nothing about whether anybody has picked up the phone. The stamp is what
-     retires the lead_slow alert and what the Lead-response report measures, so it is written here
-     rather than left to be typed in later (which is to say: never).
-
-     Feature-detected and write-retried, exactly like M2's lost-reason columns: an un-migrated
-     database answers 42703, the column is dropped from the payload, the link write happens anyway,
-     and the accept succeeds. A lead that already carries a first_contact_at is never overwritten —
-     the first contact is the first one. */
-  const slaOn = await leadSlaSupported();
-  const stampAt = new Date().toISOString();
-  const wantStamp = slaOn && !l.first_contact_at;
-  const leadPatch = { converted_case_id: nc.id };
-  if (wantStamp) leadPatch.first_contact_at = stampAt;
-  let stamped = wantStamp;
-  let link = await db.from("leads").update(leadPatch).eq("id", id);
-  if (link.error && wantStamp && isMissingColumnError(link.error)) {
-    LEAD_SLA_SUPPORTED = false;
-    stamped = false;
-    delete leadPatch.first_contact_at;
-    link = await db.from("leads").update(leadPatch).eq("id", id);
-  }
-  if (link.error) link = await db.from("leads").update(leadPatch).eq("id", id);
-  if (link.error) {
-    stamped = false;
-    leadWarn.push(`the lead could not be linked to the new case (${link.error.message}) — the enquiry will not show which case it became`);
-  }
-  /* How long the client actually waited, from the enquiry landing to this click. Only stated when
-     there is a stamp behind it: a figure with nothing recorded under it is the reason nobody trusts
-     response reporting in the first place. */
-  const contactAt = stamped ? stampAt : (l.first_contact_at || null);
-  const respMins = leadResponseMins(l.created_at, contactAt);
-  const respTxt = respMins == null ? "" : ` · responded in ${fmtWaitMins(respMins)}`;
-  if (welcomeId) runAutomation(true, { queueIds: [welcomeId] });
+  /* R68 · B1 — every write from here down is acceptLeadCore(), shared with "Accept all
+     unambiguous leads". The decisions above (the two joint-name prompts, the attach-to-existing
+     confirms) are what stays here, because they are the half a bulk flow must never do. */
+  const res = await acceptLeadCore(l, { assignTo, firstName, lastName, jointNote, client });
+  if (res.error) { if (btn) btn.disabled = false; return toast("Error: " + res.error); }
+  const leadWarn = res.warnings;
+  const leadTasksAdded = res.tasksAdded;
+  if (res.welcomeId) runAutomation(true, { queueIds: [res.welcomeId] });
   // Accept-lead stays on Today (defect 22) — a toast confirms the case, but doesn't force-open the
   // case modal, so running through a queue of leads is toast-and-move-on rather than a modal
   // open/close per lead. The case is right where the toast says: New business.
-  const acceptedName = [client.first_name, client.last_name].filter(Boolean).join(" ") || "this lead";
+  const acceptedName = res.name;
+  const respTxt = res.respMins == null ? "" : ` · responded in ${fmtWaitMins(res.respMins)}`;
   /* R12b · W-28 — the figures nobody can safely parse. The enquiry MESSAGE is free text: "my rate
      is 4.5 until March 2027" and "I could manage £450 a month" are the same digits to a regular
      expression, and a mis-read rate written onto a case is worse than an empty field, so nothing
@@ -20639,7 +21157,7 @@ window.acceptLead = async function (id, ev) {
      toast-and-move-on rule stands for the ordinary lead, and this opens only when the client has
      actually written numbers down. */
   const figures = leadFiguresHint(l.message);
-  const propTxt = leadPropValue != null ? ` · property value ${fmtM(leadPropValue)} captured on the case` : "";
+  const propTxt = res.propValue != null ? ` · property value ${fmtM(res.propValue)} captured on the case` : "";
   toast(`Case created for ${acceptedName}${assignTo ? " → " + staffName(assignTo) : ""}${respTxt}${propTxt} — find it in New business`
     /* R63 · H1a — the tasks are named on the accept toast for the same reason the stage move names
        them: work appearing on an adviser's list with no visible cause is how automation loses the
@@ -20647,17 +21165,180 @@ window.acceptLead = async function (id, ev) {
     + (leadTasksAdded ? ` · ${playbookTaskTally(leadTasksAdded)}` : "")
     + (figures ? " · the enquiry mentions figures — worth capturing on the case now" : "")
     + (leadWarn.length ? `, but ${leadWarn.join("; and ")}` : ""));
-  if (figures) openCase(nc.id);
-  /* R7-5 — the desk this lead just landed on is one case heavier, and the repaint below is about to
-     ask which desk is lightest. Counted here rather than re-read: the case was created two writes
-     ago and the next dashboard load re-derives the whole map from the database anyway. */
-  if (assignTo && advLoadCases) advLoadCases[assignTo] = (advLoadCases[assignTo] || 0) + 1;
+  if (figures) openCase(res.caseId);
   /* R5-21 — an accepted lead must leave the screen it was accepted on, or its row goes on
      advertising an enquiry that no longer exists and its Accept answers "already been accepted".
      R41 · F1 — that used to need two repaints (the Leads drawer AND the My Day row); the drawer is
      gone, so the one list is the one paint. */
   await loadBriefing();
   restoreLeadAdvSel(otherLeadSel);   // R5-5 — put the other rows' routing choices back
+};
+
+/* ==========================================================================
+   R68 · B1/M12 — ACCEPT ALL THE UNAMBIGUOUS LEADS.
+
+   Monday morning's inbox is five or six enquiries, and four of them are one
+   person with a name nobody has ever seen before. Each one costs the same five
+   gestures: read the routing, press Accept, wait, watch the list repaint, find
+   your place again. The two that ARE interesting — a joint enquiry, or
+   somebody whose email we already hold — are the ones that get rushed, because
+   they arrive in the middle of a rhythm.
+
+   So the boring ones go through in one press and the interesting ones are left
+   exactly where they were, each wearing the reason it was left.
+
+   WHAT "UNAMBIGUOUS" MEANS, and it is deliberately a narrow test:
+     · the name is ONE person (not isJointName) — a joint enquiry needs a human
+       to say which applicant the client record is filed under, and there is no
+       rule that can do it; and
+     · findClientMatches() returns NO exact match and NO possible match — if
+       there is any chance this is somebody we already hold, attaching the case
+       to the right record (or deciding it is a different person) is the whole
+       question, and answering it by rule is how a client ends up with two
+       records or, worse, somebody else's case on theirs.
+   Everything else stays in the inbox with a chip saying which of the two it
+   is, and its own Accept button — untouched, still 'new'.
+
+   WHO GETS THEM: round-robin across the advising staff, STARTING FROM THE
+   LIGHTEST DESK, using exactly the pool and the exclusions leadRoutingHtml's
+   "· lightest load" marker is computed from (advisers always; owner/staff
+   while they carry cases; never the administrator; anyone away today skipped
+   unless everybody is away). Round-robin rather than "all to the lightest",
+   because dropping four enquiries on one desk is not sharing them out.
+   A row where the operator has ALREADY picked an adviser is honoured and does
+   not consume a place in the rotation — an explicit human choice outranks the
+   rule, and it should not push the next lead onto a different desk either.
+
+   WHO CAN PRESS IT: anybody who can see the leads. A new website enquiry has
+   no owner — it is the firm's shared inbox (see loadBriefing's lead exception)
+   — so an adviser looking at it can already accept every one of these leads one
+   at a time. A gate here would only make the slow way the allowed way.
+   ========================================================================== */
+/* lead id → why it was left behind, this session only. Same lifetime rule as LEAD_ADV_CHOICE: a
+   reload forgets it, because it is a note about a decision just taken, not a stored fact. */
+const LEAD_AMBIG_REASON = {};
+const LEAD_AMBIG_JOINT = "joint name — accept by hand";
+const LEAD_AMBIG_MATCH = "possible existing client — accept by hand";
+/* The order round-robin deals in. Same pool and the same away-rule as leastLoadedAdviser(), sorted
+   lightest desk first; Array#sort is stable, so ties keep TEAM order (profiles by full_name) and
+   two colleagues carrying the same load cannot swap places between two runs. With no load figures
+   read yet, TEAM order is the only honest answer and is used unchanged. */
+function leadRoundRobinOrder() {
+  const pool = advisingStaff();
+  if (!pool.length) return [];
+  const here = pool.filter((p) => !isAwayToday(p.id));
+  const ids = (here.length ? here : pool).map((p) => p.id);
+  const map = adviserLoadMap();
+  if (!map) return ids;
+  return ids.slice().sort((a, b) => ((map[a] && map[a].total) || 0) - ((map[b] && map[b].total) || 0));
+}
+/* Split the inbox in two and say who each acceptable lead is for. Pure: it reads, it decides, it
+   writes nothing — so the confirm the operator sees is computed from exactly the same call that
+   then performs the accepts. */
+function classifyLeadsForAccept(leads, matchRows) {
+  const order = leadRoundRobinOrder();
+  const take = [], leave = [];
+  let rr = 0;
+  (leads || []).forEach((l) => {
+    const rawName = (l.name || "").trim().replace(/\s+/g, " ");
+    if (isJointName(rawName)) { leave.push({ lead: l, reason: LEAD_AMBIG_JOINT }); return; }
+    const nm = splitName(rawName);
+    const match = findClientMatches({ first: nm.first_name, last: nm.last_name, email: l.email, phone: l.phone }, matchRows);
+    if (match.exact || match.near.length) { leave.push({ lead: l, reason: LEAD_AMBIG_MATCH }); return; }
+    /* R12a K-1's rule again: the LEAD's answer, not a control's copy of it. Only a real human
+       choice counts here — the select's pre-picked suggestion is what round-robin is replacing. */
+    const picked = LEAD_ADV_CHOICE[l.id];
+    let assignTo, byHand = false;
+    if (picked && TEAM.some((p) => p.id === picked)) { assignTo = picked; byHand = true; }
+    else if (order.length) { assignTo = order[rr % order.length]; rr++; }
+    else assignTo = (ME && ME.id) || null;
+    take.push({ lead: l, assignTo, byHand, first: nm.first_name, last: nm.last_name });
+  });
+  return { take, leave };
+}
+/* The confirm. NOT a native confirm(): it names every lead and the desk it is going to, because
+   "accept 4 leads" with no list is a button nobody presses twice. Same overlay host as the lost
+   reason and the bulk-task capture (openOverlay), so Escape cancels the capture and nothing else. */
+function confirmAcceptAllLeads(take, leave) {
+  const nameOf = (l) => (l.name || "").trim() || l.email || l.phone || "this enquiry";
+  const pairs = take.map((t) => `${nameOf(t.lead)} → ${staffName(t.assignTo)}${t.byHand ? " (your pick)" : ""}`);
+  const summary = `Accept ${take.length} lead${take.length === 1 ? "" : "s"}: ${pairs.join(", ")}`
+    + (leave.length ? ` · ${leave.length} left for you to decide` : "");
+  const html = `
+    <h3>Accept ${take.length} lead${take.length === 1 ? "" : "s"}?</h3>
+    <p class="panel-sub">Each one becomes a client, a case at Enquiry with its checklist on it, and a queued welcome email — exactly what the Accept button on the row does. They are shared out round-robin from the lightest desk; a row where you had already chosen an adviser keeps your choice.</p>
+    <div class="dq-notice" id="leads-accept-summary">${esc(summary)}</div>
+    <ul class="leads-accept-list" id="leads-accept-list">
+      ${take.map((t) => `<li data-lead="${esc(t.lead.id)}">${esc(nameOf(t.lead))} → <strong>${esc(staffName(t.assignTo))}</strong>${t.byHand ? ' <span class="cs-muted">(your pick, kept)</span>' : ""}</li>`).join("")}
+    </ul>
+    ${leave.length ? `<p class="panel-sub" id="leads-accept-left">${leave.length} enquir${leave.length === 1 ? "y stays" : "ies stay"} in the list for you: ${esc(leave.map((x) => `${nameOf(x.lead)} (${x.reason})`).join(", "))}</p>` : ""}
+    <div class="modal-actions">
+      <div></div>
+      <div class="right">
+        <button type="button" class="btn" id="leads-accept-cancel">Cancel</button>
+        <button type="button" class="btn btn-primary" id="leads-accept-go">Accept ${take.length} lead${take.length === 1 ? "" : "s"}</button>
+      </div>
+    </div>`;
+  return openOverlay(html, (finish, box) => {
+    box.querySelector("#leads-accept-cancel").onclick = () => finish(null);
+    box.querySelector("#leads-accept-go").onclick = () => finish(true);
+  });
+}
+window.acceptAllLeads = async function (ev) {
+  const btn = (ev && (ev.currentTarget || ev.target)) || null;
+  if (btn) { if (btn.disabled) return; btn.disabled = true; }
+  try {
+    const ids = lastBriefItems.filter((it) => it.kind === "lead_new" && it.lead_id).map((it) => it.lead_id);
+    if (ids.length < 2) return toast("There is only one new enquiry — use Accept on the row.");
+    /* R64-HF1's rule: a read over a feed-sized id list goes through inChunks. The inbox is small
+       today; a firm that has not looked at it for a fortnight is exactly when this button is used. */
+    const { data: rows, error: rErr } = await inChunks(ids, (sl) =>
+      db.from("leads").select("*").in("id", sl).eq("status", "new"));
+    if (rErr) return toast("Could not read the enquiries: " + rErr.message);
+    const byId = {}; (rows || []).forEach((r) => { byId[r.id] = r; noteLeadSlaFromStarRow(r); });
+    // Keep My Day's own order — the list the operator is looking at is the order they are accepted in.
+    const leads = ids.map((i) => byId[i]).filter(Boolean);
+    if (!leads.length) return toast("These enquiries have already been accepted.");
+    const matchRows = await fetchMatchClients();
+    const { take, leave } = classifyLeadsForAccept(leads, matchRows);
+    // Whatever happens next, the reasons are on the rows: a lead left behind must say why.
+    leave.forEach((x) => { LEAD_AMBIG_REASON[x.lead.id] = x.reason; });
+    if (!take.length) {
+      renderBriefing();
+      return toast(`Nothing here can be accepted automatically — ${leave.length} enquir${leave.length === 1 ? "y needs" : "ies need"} a decision only you can make. Each row says which.`);
+    }
+    if (!(await confirmAcceptAllLeads(take, leave))) { renderBriefing(); return; }
+    const otherLeadSel = captureLeadAdvSel();
+    let done = 0, alreadyGone = 0, failed = 0;
+    const warnings = [], welcomeIds = [], byAdviser = {};
+    for (const t of take) {
+      const claim = await claimLead(t.lead.id);
+      if (claim.error) { failed++; warnings.push(`${t.lead.name || "an enquiry"} could not be claimed (${claim.error})`); continue; }
+      if (claim.taken) { alreadyGone++; continue; }
+      const res = await acceptLeadCore(claim.row, {
+        assignTo: t.assignTo, firstName: t.first, lastName: t.last, jointNote: "", client: null,
+      });
+      if (res.error) { failed++; warnings.push(`${t.lead.name || "an enquiry"} was NOT accepted (${res.error}) — it is back in the list`); continue; }
+      done++;
+      delete LEAD_ADV_CHOICE[t.lead.id];
+      delete otherLeadSel[t.lead.id];
+      byAdviser[t.assignTo] = (byAdviser[t.assignTo] || 0) + 1;
+      if (res.welcomeId) welcomeIds.push(res.welcomeId);
+      res.warnings.forEach((w) => warnings.push(`${res.name}: ${w}`));
+    }
+    // R5-1 — ONE scoped send for the whole batch. Never an unscoped runAutomation().
+    if (welcomeIds.length) runAutomation(true, { queueIds: welcomeIds });
+    const split = Object.keys(byAdviser).map((a) => `${staffName(a)} ${byAdviser[a]}`).join(" · ");
+    toast(`${done} lead${done === 1 ? "" : "s"} accepted${split ? " — " + split : ""}`
+      + (leave.length ? ` · ${leave.length} left in the list for you to decide` : "")
+      + (alreadyGone ? ` · ${alreadyGone} had already been accepted` : "")
+      + (failed ? ` · ${failed} failed` : "")
+      + (warnings.length ? `, but ${warnings.join("; and ")}` : ""));
+    await loadBriefing();
+    restoreLeadAdvSel(otherLeadSel);   // R5-5 — the rows still in the list keep their routing
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 };
 
 /* ==========================================================================
@@ -22559,6 +23240,82 @@ function monthKpiSet(all, mv) {
 }
 
 /* ==========================================================================
+   R68 · M7 — ONE IMPLEMENTATION OF EACH PER-ADVISER FIGURE.
+
+   Until now the owner-only Adviser scoreboard was the ONLY place that knew how
+   to compute "fees earned this month by this person", "what share of their
+   completions took a policy" and (firm-wide, one screen lower) "how many
+   retention cases converted". The adviser those numbers describe could not see
+   any of them, and the moment we put them on Reports › My numbers as well there
+   were two copies of each rule — which is how two screens in the same app end
+   up disagreeing about the same person in the same month, with no way to tell
+   which one is wrong.
+
+   So the arithmetic moves here, once, and BOTH surfaces call it. The scoreboard's
+   numbers are deliberately unchanged (r19/r20/r42 lock them): every helper below
+   is the scoreboard's own expression, lifted verbatim.
+
+   `adviserOwns` carries the scoreboard's one subtlety — a falsy adviser id means
+   the UNASSIGNED bucket (`!c.assigned_to`), not "nobody", because the scoreboard
+   builds that row with mkAdvRow(null, "Unassigned") and it has to keep totalling.
+   ========================================================================== */
+const adviserOwns = (c, adviserId) => (adviserId ? c.assigned_to === adviserId : !c.assigned_to);
+// The month's completions for one adviser, on the SAME UK-local month bucket every
+// other figure on Reports uses (localMonthStr — see monthKpiSet).
+function adviserMonthCompletions(cases, adviserId, mv) {
+  return (cases || []).filter((c) => adviserOwns(c, adviserId) && c.completed_at && localMonthStr(c.completed_at) === mv);
+}
+/* Fees EARNED on those completions — procuration + broker + solicitor, paid or not.
+   The same basis as the firm "Fees earned vs target" bar (earnedOnCompletion sums the
+   same three fees), and deliberately NOT the cash "Fees banked" figure beside it. */
+function adviserMonthEarned(cases, adviserId, mv) {
+  const done = adviserMonthCompletions(cases, adviserId, mv);
+  return { total: done.reduce((s, c) => s + (Number(c.proc_fee) || 0) + (Number(c.broker_fee) || 0) + (Number(c.sols_fee) || 0), 0), n: done.length };
+}
+/* R7-3's protection attach rate. `pct` is null — never 0 — when there were no
+   completions at all, because nobody attached nothing to nothing; the caller renders
+   that as "—". The count travels with the percentage: on a month's completions a
+   single case moves it a long way, so the bracket is read before the number. */
+function adviserAttachRate(cases, adviserId, mv) {
+  const done = adviserMonthCompletions(cases, adviserId, mv);
+  const taken = done.filter((c) => c.protection_status === "policy_taken").length;
+  return { pct: done.length ? Math.round((taken / done.length) * 100) : null, taken, n: done.length };
+}
+/* Retention conversion, exactly as the firm KPI tile on this page has always defined it:
+   of the cases that exist BECAUSE an earlier case's rate was ending (retention_source_case_id
+   set), how many completed against how many were lost. Cases still in flight are in neither
+   half — they have not converted or failed to yet. It is an ALL-TIME figure, not month-scoped:
+   a retention case started in March and completed in July belongs to both months and neither,
+   and the firm tile has always counted it whole. The scope line says so out loud. */
+function retentionConversion(cases) {
+  const rets = (cases || []).filter((c) => c.retention_source_case_id);
+  const won = rets.filter((c) => c.stage === "completed").length;
+  const lost = rets.filter((c) => c.stage === "not_proceeding").length;
+  return { pct: won + lost ? Math.round((won / (won + lost)) * 100) : null, won, lost, n: won + lost, open: rets.length - won - lost };
+}
+function adviserRetentionConversion(cases, adviserId) {
+  return retentionConversion((cases || []).filter((c) => adviserOwns(c, adviserId)));
+}
+/* R68 · M7 — the target BAR itself, lifted out of renderMonthReport unchanged so the adviser's
+   own bar on My numbers is the same object as the firm's, not a lookalike. R6-B4's rule is the
+   part worth keeping in one place: under target the track's right end IS target; over target the
+   track stretches 12% past what was achieved so there is visible track and a marker where target
+   sat — a fill clamped to 100% made 122% look identical to 100%. Colour matches the scoreboard's
+   Target cell: green ≥100 / amber ≥60 / red below. */
+function feeBarHtml(pct, target, ariaWhat) {
+  const color = pct >= 100 ? "var(--green)" : pct >= 60 ? "var(--amber)" : "var(--red)";
+  const over = pct > 100;
+  const scale = over ? Math.ceil(pct * 1.12) : 100;
+  const fillPct = Math.max(0, Math.min(100, (pct / scale) * 100));
+  const markPct = (100 / scale) * 100;
+  return `<div class="fee-bar" role="img" aria-label="${pct}% of the ${fmtM(target)} ${esc(ariaWhat || "monthly fee target")}">
+            <div class="fee-bar-fill" style="width:${fillPct}%;background:${color};"></div>
+            ${over ? `<div class="fee-bar-mark" style="left:${markPct}%;" title="Target — ${fmtM(target)}"></div>` : ""}
+          </div>
+          ${over ? `<span class="fee-bar-mark-lbl">The marker is the ${fmtM(target)} target; the bar runs to ${pct}% of it.</span>` : ""}`;
+}
+
+/* ==========================================================================
    R5-F1 — "MY NUMBERS" (Daniel-approved policy change, this round)
    ONE card, on Reports, for the person doing the work. Reports is its home because the page is
    already reachable by every staff role (only the figures on it were Owner-gated), so an adviser
@@ -22583,12 +23340,17 @@ function monthKpiSet(all, mv) {
                      tile, because the Owner's forecast beside it is probability-weighted and the
                      two would otherwise look like the same number disagreeing.
    ========================================================================== */
-function renderMyNumbers(all, yr) {
+function renderMyNumbers(all, yr, mv) {
   const panel = $("#report-mine-panel");
   if (!panel) return;
   const on = showMyNumbers();
   panel.classList.toggle("hidden", !on);
-  if (!on) { $("#report-mine").innerHTML = ""; const s0 = $("#report-mine-scope"); if (s0) s0.textContent = ""; return; }
+  const tgtEl = $("#report-mine-target");
+  if (!on) { $("#report-mine").innerHTML = ""; if (tgtEl) tgtEl.innerHTML = ""; const s0 = $("#report-mine-scope"); if (s0) s0.textContent = ""; return; }
+  // R68 · M7 — the month the picker is on. Defensive default so a caller that has not been
+  // taught to pass it still renders this month rather than NaN.
+  const mvNow = mv || localMonthStr();
+  const mLabel = monthLabel(mvNow);
 
   const mine = (all || []).filter((c) => c.assigned_to === ME.id);
   const banked = cashInYear(mine, yr, ["broker", "proc", "sols"]);
@@ -22611,15 +23373,57 @@ function renderMyNumbers(all, yr) {
   const offerPlus = mine.filter((c) => OFFER_PLUS.includes(c.stage));
   const pipeline = offerPlus.reduce((s, c) => s + Number(c.proc_fee || 0) + Number(c.broker_fee || 0), 0);
 
+  /* ==========================================================================
+     R68 · M7 — THE TARGET REACHES THE PERSON IT IS SET FOR.
+     A per-adviser monthly fee target has existed since R26 and lived entirely on the
+     owner-only scoreboard: the one person who could act on it was the one person who
+     could not see it. These three figures are the adviser's own row of that scoreboard,
+     computed by the SAME helpers it uses (adviserMonthEarned / adviserAttachRate /
+     adviserRetentionConversion), so "Luke is 40% under" reads identically on both screens.
+     No target set is a real and normal state — this firm has set none — so it says so in
+     words and never renders NaN or a 0% that would read as a failure.
+     ========================================================================== */
+  const myTarget = Number(adviserTargets()[ME.id] || 0);
+  const myEarned = adviserMonthEarned(all, ME.id, mvNow);
+  const myAttach = adviserAttachRate(all, ME.id, mvNow);
+  const myRet = adviserRetentionConversion(all, ME.id);
+
   const scope = $("#report-mine-scope");
   if (scope) {
     scope.textContent = `Your own figures only — every number on this card counts cases assigned to you (${mine.length} case${mine.length === 1 ? "" : "s"}). `
-      + `Nothing here is a firm total and no colleague's cases are in it. ${ATTRIB_NOTE}`;
+      + `Nothing here is a firm total and no colleague's cases are in it. `
+      /* R68 · M7 — three different windows on one card is exactly how two people end up
+         arguing about which number is wrong, so the card states each one. */
+      + `“My fees banked” is the calendar year ${yr}. “Fees earned this month vs my target” and “My attach rate” follow the month picker above and are showing ${mLabel}. `
+      + `“My retention conversion” is all-time — a retention case can be started in one month and completed in another, so the firm figure it matches has never been cut by month. `
+      + `${ATTRIB_NOTE}`;
   }
   $("#report-mine").innerHTML = `
     <div class="kpi"><div class="num" title="${esc(fmtM(banked.total))}">${fmtM(banked.total)}</div><div class="lbl">My fees banked ${yr}</div>${basisLine(BASIS_MY_CASH_YTD + (banked.futureN ? ` — ${fmtM(banked.futureTotal)} dated after today (${banked.futureN}) is excluded` : ""))}</div>
     <div class="kpi ${outstanding ? "warn" : ""}"><div class="num" title="${esc(fmtM(outstanding))}">${fmtM(outstanding)}</div><div class="lbl">My fees outstanding</div>${basisLine(BASIS_MY_OUTSTANDING + ` — ${outstandingN} fee${outstandingN === 1 ? "" : "s"} across ${outstandingCases.size} completed case${outstandingCases.size === 1 ? "" : "s"} with no paid date`)}</div>
-    <div class="kpi"><div class="num" title="${esc(fmtM(pipeline))}">${fmtM(pipeline)}</div><div class="lbl">My pipeline at Offer+</div>${basisLine(BASIS_MY_PIPELINE + ` — ${offerPlus.length} case${offerPlus.length === 1 ? "" : "s"} at Offer or Exchange, not weighted for fall-through`)}</div>`;
+    <div class="kpi"><div class="num" title="${esc(fmtM(pipeline))}">${fmtM(pipeline)}</div><div class="lbl">My pipeline at Offer+</div>${basisLine(BASIS_MY_PIPELINE + ` — ${offerPlus.length} case${offerPlus.length === 1 ? "" : "s"} at Offer or Exchange, not weighted for fall-through`)}</div>
+    ${/* R7-3's rule verbatim: no completions in the month means there was nothing to attach a
+         policy to, so it is "—" and never 0%. The bracket count is read before the percentage. */ ""}
+    <div class="kpi" id="report-mine-attach"><div class="num">${myAttach.pct == null ? "—" : `${myAttach.pct}%`}</div><div class="lbl">My attach rate (${esc(mLabel)})</div>${basisLine(myAttach.pct == null
+      ? `(policy taken ÷ my completions · ${esc(mLabel)}) — no completions in this month, so there is nothing to attach a policy to`
+      : `(policy taken ÷ my completions · ${esc(mLabel)}) — ${myAttach.taken} of ${myAttach.n} completion${myAttach.n === 1 ? "" : "s"}${myAttach.n < 3 ? ", too small a sample to read as a ranking" : ""}`)}</div>
+    <div class="kpi" id="report-mine-retention"><div class="num">${myRet.pct == null ? "—" : `${myRet.pct}%`}</div><div class="lbl">My retention conversion</div>${basisLine(myRet.pct == null
+      ? "(completed ÷ decided · my retention cases · all time) — none of your retention cases has been won or lost yet"
+      : `(completed ÷ decided · my retention cases · all time) — ${myRet.won} completed, ${myRet.lost} lost${myRet.open ? `, ${myRet.open} still in flight and in neither half` : ""}`)}</div>`;
+
+  if (tgtEl) {
+    if (!(myTarget > 0)) {
+      /* No target is the state this firm is actually in (adviser_fee_targets has never been
+         written), so it is the state this line is written for: say what is missing and who can
+         fix it. A 0% bar here would be a claim about performance, and it would be false. */
+      tgtEl.innerHTML = `<div class="panel-sub target-headline" id="report-mine-target-none" style="margin:12px 0 4px;">Fees earned this month vs my target — <strong>no monthly target set for you yet</strong> — ask the owner to set one in Settings › Adviser targets. `
+        + `You earned ${fmtM(myEarned.total)} in ${esc(mLabel)} <span class="money-basis">${esc(BASIS_TARGET_EARNED)} — ${myEarned.n} completion${myEarned.n === 1 ? "" : "s"} this month, paid or not</span></div>`;
+    } else {
+      const pct = Math.round((myEarned.total / myTarget) * 100);
+      tgtEl.innerHTML = `<div class="panel-sub target-headline" id="report-mine-target-line" style="margin:12px 0 4px;">Fees earned this month vs my target — ${fmtM(myEarned.total)} of ${fmtM(myTarget)} target · ${pct}% <span class="money-basis">${esc(BASIS_TARGET_EARNED)} — ${myEarned.n} completion${myEarned.n === 1 ? "" : "s"} this month, paid or not</span></div>`
+        + feeBarHtml(pct, myTarget, "monthly fee target");
+    }
+  }
 }
 
 function renderMonthReport(all, mv) {
@@ -22688,7 +23492,6 @@ function renderMonthReport(all, mv) {
       const banked = cash.total;
       const pct = Math.round((earned.total / target) * 100);
       const cashPct = Math.round((banked / target) * 100);
-      const color = pct >= 100 ? "var(--green)" : pct >= 60 ? "var(--amber)" : "var(--red)";
       targetEl.innerHTML = `
         <div class="panel-sub target-headline" style="margin:12px 0 4px;">Fees earned vs target — ${fmtM(earned.total)} of ${fmtM(target)} (${pct}%) <span class="money-basis">${esc(BASIS_TARGET_EARNED)} — ${earned.n} completion${earned.n === 1 ? "" : "s"} this month, paid or not</span></div>
         ${/* R6-B4 (D6-23) — the fill used to be min(pct,100)% of a track, so anything
@@ -22697,22 +23500,9 @@ function renderMonthReport(all, mv) {
              overshoot leaves visible track and a marker shows where target sat. Inline
              styles moved to .fee-bar-* classes, except the one that is genuinely data
              (the fill's width and its earned/target colour). */ ""}
-        ${(() => {
-          /* Under target the track's right end IS target, which is the conventional
-             reading and unchanged from round 5. Over target the track is stretched
-             12% past the achieved figure, so there is visible track to the right of
-             the fill and room for a marker at where target sat — the thing a solid
-             full-width slab could not say. */
-          const over = pct > 100;
-          const scale = over ? Math.ceil(pct * 1.12) : 100;
-          const fillPct = Math.max(0, Math.min(100, (pct / scale) * 100));
-          const markPct = (100 / scale) * 100;
-          return `<div class="fee-bar" role="img" aria-label="${pct}% of the ${fmtM(target)} monthly fee target">
-            <div class="fee-bar-fill" style="width:${fillPct}%;background:${color};"></div>
-            ${over ? `<div class="fee-bar-mark" style="left:${markPct}%;" title="Target — ${fmtM(target)}"></div>` : ""}
-          </div>
-          ${over ? `<span class="fee-bar-mark-lbl">The marker is the ${fmtM(target)} target; the bar runs to ${pct}% of it.</span>` : ""}`;
-        })()}
+        ${/* R68 · M7 — the bar's own markup moved to feeBarHtml(), unchanged, so the adviser's
+             "vs my target" bar on My numbers is literally the same bar and cannot drift. */ ""}
+        ${feeBarHtml(pct, target, "monthly fee target")}
         <div class="panel-sub target-secondary" style="margin:6px 0 0;">Also — total fees collected ${fmtM(banked)} of ${fmtM(target)} (${cashPct}%) <span class="money-basis">${esc(BASIS_TARGET)}${cash.futureN ? ` — excludes future-dated payments (${cash.futureN})` : ""}</span></div>`;
     } else {
       targetEl.innerHTML = "";
@@ -22787,9 +23577,11 @@ function renderThreadedPanels(all, mv, repAdvisers) {
   const months6 = last6Months();
   // `id === null` builds the Unassigned bucket. Everything else is per-owner.
   const mkAdvRow = (id, name, offTeam) => {
-    const mine = all.filter((c) => (id ? c.assigned_to === id : !c.assigned_to));
+    const mine = all.filter((c) => adviserOwns(c, id));
     const open = mine.filter((c) => activeStages.includes(c.stage)).length;
-    const done = mine.filter((c) => inMonth(c.completed_at));
+    // R68 · M7 — the month's completions now come from the shared helper (same expression,
+    // one copy), so Reports › My numbers cannot drift from this row.
+    const done = adviserMonthCompletions(all, id, mv);
     // B7 / Batch 6.4 — broker cash counted on the BROKER fee's own paid date (M2), falling back to
     // the legacy single date, and never counting a payment dated in the future.
     const feesBanked = cashInMonth(mine, mv, ["broker"]).total;
@@ -22804,8 +23596,11 @@ function renderThreadedPanels(all, mv, repAdvisers) {
        about which figure is wrong), and the sample size travels with the percentage because a
        month is a small denominator: 1 of 2 is 50% and means almost nothing. Zero completions
        renders as "—", never as 0%, because nobody attached nothing to nothing. */
-    const protTaken = done.filter((c) => c.protection_status === "policy_taken").length;
-    const attach = done.length ? Math.round((protTaken / done.length) * 100) : null;
+    // R68 · M7 — same rule, one copy (adviserAttachRate). The adviser sees this exact figure
+    // for themselves on Reports › My numbers.
+    const att = adviserAttachRate(all, id, mv);
+    const protTaken = att.taken;
+    const attach = att.pct;
     /* R26 — broker fee EARNED on this adviser's completions in the selected month, paid or not.
        The adviser-attributed analogue of the firm "Fees earned vs target" bar (broker only, because
        proc/sols fees don't attribute cleanly to one adviser). This is the attainment basis for the
@@ -22813,7 +23608,8 @@ function renderThreadedPanels(all, mv, repAdvisers) {
     // R28 (Daniel-approved) — target basis now folds procuration + solicitor fees in with the broker
     // fee, so it matches the firm "Fees earned vs target" bar EXACTLY (earnedOnCompletion = proc+broker+
     // sols on the month's completions). Each fee sits on the case, summed over the adviser's completions.
-    const feeEarnedTotal = done.reduce((s, c) => s + (Number(c.proc_fee) || 0) + (Number(c.broker_fee) || 0) + (Number(c.sols_fee) || 0), 0);
+    // R68 · M7 — same rule, one copy (adviserMonthEarned).
+    const feeEarnedTotal = adviserMonthEarned(all, id, mv).total;
     return { id, name, offTeam: !!offTeam, open, completions: done.length, feesBanked, overdue, avg, n: days.length, trend, trendTitle, protTaken, attach, feeEarnedTotal };
   };
   // T1-18 — TEAM.map() alone cannot represent work nobody owns, so the Open column silently came up
@@ -23693,6 +24489,11 @@ function renderOwnerCapNotice(sel, hit) {
 if (typeof window !== "undefined" && window.supabase && window.supabase.__isMock) {
   window.__setReportsRowCap = function (n) { REPORTS_ROW_CAP = Number(n) || 5000; return REPORTS_ROW_CAP; };
   window.__setOwnerRowCap = function (n) { OWNER_ROW_CAP = Number(n) || 5000; return OWNER_ROW_CAP; };
+  /* R68 · M7 — re-read the settings table into `settings`. Production re-reads it at sign-in and
+     after a save, which is the only time it changes; a harness that has just written a row (an
+     adviser fee target, the email hold) needs the same refresh WITHOUT owning the Save button
+     that normally performs it. Sandbox-only, for the same reason as the two caps above. */
+  window.__reloadSettings = function () { return loadSettings(); };
 }
 /* G1N-9 — "…→ not_proceeding" (the move INTO the lost stage), never "not_proceeding → …" (a
    reopen). The bare-name alternative covers a writer that records only the new stage. */
@@ -23838,7 +24639,9 @@ async function loadReports() {
   if (propCols) all.forEach((c) => { if (propCols[c.id] !== undefined) c.property_address = propCols[c.id]; });
   if (callPack) all.forEach((c) => { const x = callPack[c.id]; if (x) Object.assign(c, x); });
   lossState.lostAt = lostAt || {};
-  renderMyNumbers(all, yr);
+  // R68 · M7 — `mv` too: the target bar and attach rate on this card follow the month picker,
+  // while "My fees banked" stays the calendar year. Both scopes are named on the card.
+  renderMyNumbers(all, yr, mv);
   renderMonthReport(all, mv);
   /* R7-1 / R7-2 — the two new money panels, from the same rows the rest of the page uses. Both
      hide themselves for anyone but the Owner (see renderMoneyOwed / renderRateEndBook). */
@@ -23890,9 +24693,12 @@ async function loadReports() {
   const feesOutstanding = feesOutstandingRows.reduce((s, c) => s + Number(c.broker_fee || 0), 0);
   const feesInvoiced = feesOutstandingRows.filter((c) => c.fee_status === "requested").reduce((s, c) => s + Number(c.broker_fee || 0), 0);
   const feesNotInvoiced = feesOutstanding - feesInvoiced;
-  const rets = all.filter((c) => c.retention_source_case_id);
-  const rWon = rets.filter((c) => c.stage === "completed").length;
-  const rLost = rets.filter((c) => c.stage === "not_proceeding").length;
+  /* R68 · M7 — the firm tile now reads the shared primitive, so an adviser's own
+     "My retention conversion" is the same arithmetic scoped to their cases and the two
+     figures can be reconciled rather than argued about. Same numbers as before. */
+  const firmRet = retentionConversion(all);
+  const rWon = firmRet.won;
+  const rLost = firmRet.lost;
   const protDone = completedYr.filter((c) => c.protection_status === "policy_taken").length;
   const scored = all.filter((c) => c.nps_score != null);
   const avgNps = scored.length ? scored.reduce((s, c) => s + Number(c.nps_score), 0) / scored.length : null;
@@ -28048,6 +28854,51 @@ window.openMergeClients = async function (aId, bId, reason, score) {
   const defaultKeep = (counts[aId].cases !== counts[bId].cases)
     ? (counts[aId].cases > counts[bId].cases ? aId : bId)
     : (String(aC.created_at || "") <= String(bC.created_at || "") ? aId : bId);
+  /* ==========================================================================
+     R68 · B2/M13 — THE ONE SHAPE THAT DOES NOT NEED A TYPED KEYWORD.
+
+     Data Health's duplicate list is mostly the same accident: somebody typed
+     the client in twice, or an import created a second record, and one of the
+     two has never had a case on it. The merge screen treats that pair exactly
+     like a 72% phone-number guess between two different families — eight radio
+     rows to read, then a word to type — so the safe, obvious merges are the
+     ones that get abandoned half-done, which is how the list grows.
+
+     THE FAST SHAPE, and it is deliberately only one:
+       · both records carry the SAME email address (case-insensitive, and a
+         blank is not a match) — this is the one identifier the firm actually
+         uses to reach a client, and two records sharing it is not a
+         coincidence the way a shared landline is; AND
+       · the losing record has ZERO cases. Nothing of substance moves, so
+         there is nothing whose loss could go unnoticed.
+     The loser is the record with fewer cases, ties broken to the NEWER record
+     (the same rule, read the other way round, that picks the default
+     survivor) — so the fast path can never disagree with the pre-picked keep.
+
+     WHAT IT CHANGES: a one-line summary at the top saying what will happen, and
+     one primary "Merge now" button with no keyword. WHAT IT DOES NOT CHANGE:
+     the radios are pre-selected exactly as they always were (the survivor's
+     value, the loser's only where the survivor is blank, an opt-out always
+     kept), the full table is still there under a fold and still overridable,
+     and every other pair on this screen — different emails, or a loser holding
+     so much as one case — keeps the typed keyword, the weak-match banner and
+     the whole flow unchanged.
+     ========================================================================== */
+  const emailA = (aC.email || "").trim().toLowerCase();
+  const emailB = (bC.email || "").trim().toLowerCase();
+  const sameEmail = !!emailA && emailA === emailB;
+  const fastLoserId = (counts[aId].cases !== counts[bId].cases)
+    ? (counts[aId].cases < counts[bId].cases ? aId : bId)
+    : (String(aC.created_at || "") <= String(bC.created_at || "") ? bId : aId);
+  /* ONE ADDITION TO THE RULE ABOVE, and it is the reason the rule is not just "same email".
+     A household shares an email address. "j.smith@…" against "j.smith@…" with the surnames
+     Smith and Okonkwo on them is not one person typed in twice, it is two people who share an
+     inbox — and one click that permanently deletes one of them is exactly the accident the typed
+     keyword exists to prevent (T1-27's own reasoning, applied to email instead of a landline). A
+     differing SURNAME therefore drops straight back to the full flow, however empty the loser is.
+     A differing date of birth does NOT: one side being blank is the commonest shape here and is
+     precisely what the fast path exists to fill in. */
+  const fastShape = sameEmail && counts[fastLoserId].cases === 0 && !surnameDiffers;
 
   const render = (keepId) => {
     const keepSideA = keepId === aId;
@@ -28078,18 +28929,47 @@ window.openMergeClients = async function (aId, bId, reason, score) {
     const survName = keepId === aId ? fullClientName(aC) : fullClientName(bC);
     const survSurname = ((keepId === aId ? aC.last_name : bC.last_name) || "").trim();
     const keyword = weak && survSurname ? survSurname.toUpperCase() : "MERGE";
+    /* R68 · B2 — the fast path is a claim about THE DEFAULT PAIRING. Switching the survivor radio
+       is the operator saying "not that one", and answering that by keeping a one-click Merge now
+       over a different arrangement than the summary described would be the summary lying. So the
+       moment the keep moves off defaultKeep, this is the ordinary screen again, keyword and all. */
+    const fast = fastShape && keepId === defaultKeep;
+    const loserName0 = keepId === aId ? fullClientName(bC) : fullClientName(aC);
+    // What the loser is actually contributing: the fields it has filled in that the survivor lacks.
+    // The same test the radios above use for their default, so the sentence and the pre-selection
+    // can never describe different values.
+    const copiedFields = MERGE_FIELDS.filter(([f]) => {
+      const survVal = keepSideA ? aC[f] : bC[f];
+      const otherVal = keepSideA ? bC[f] : aC[f];
+      return mergeFieldEmpty(f, survVal) && !mergeFieldEmpty(f, otherVal);
+    }).map(([, label]) => label);
+    const fastSummaryHtml = fast
+      ? `<div class="dq-notice merge-match" id="merge-fast-summary">Same email · <strong>${esc(loserName0)}</strong> has no cases · keeping <strong>${esc(survName)}</strong>'s details, `
+        + (copiedFields.length
+          ? `${esc(loserName0)}'s ${copiedFields.length} filled-in field${copiedFields.length === 1 ? "" : "s"} that ${esc(survName)} lacks will be copied (${esc(copiedFields.join(", "))}).`
+          : `and there is nothing on ${esc(loserName0)} that ${esc(survName)} is missing, so no field is copied.`)
+        + ` <span class="cs-muted">Nothing else about a merge changes: the losing record's appointments, fact-finds and correspondence move across first, and it is then permanently deleted. Any other pair — different email addresses, a different surname, or a duplicate that holds even one case — still asks you to type a keyword to confirm.</span></div>`
+      : "";
     // T1-27 — what matched, how strongly, and what disagrees. Weak pairs get a red banner instead
     // of the neutral sub-heading, and the confirm button loses its primary styling.
     const matchHtml = reason || score != null || weak
       ? (weak
         ? `<div class="dq-notice bad merge-match weak" id="merge-match">⚠ Weak match — ${esc(reason || "flagged as a possible duplicate")}${score != null ? ` (${pct}% confidence)` : ""} · ${diffFields.length} of ${MERGE_FIELDS.length} fields differ${diffFields.length ? ` (${esc(diffFields.join(", "))})` : ""}.
-             Two records can share a phone number without being the same person — check before merging. You'll be asked to type <strong>${esc(keyword)}</strong> to confirm.</div>`
+             Two records can share a phone number without being the same person — check before merging. ${fast
+               /* R68 · B2 — the promise has to match the button underneath it. On the fast shape
+                  there is no keyword, and a banner still announcing one would be the screen lying
+                  about its own next step. Say what is actually true instead: what makes this pair
+                  safe enough to merge in one press, and where to disagree with it. */
+               ? "The two records share an email address, carry the same surname and the one being absorbed holds no cases, so this one merges on a single press — open “Change what is kept” below if any value looks wrong."
+               : `You'll be asked to type <strong>${esc(keyword)}</strong> to confirm.`}</div>`
         : `<div class="dq-notice merge-match" id="merge-match">Matched on: <strong>${esc(reason || "possible duplicate")}</strong>${score != null ? ` · ${pct}% confidence` : ""} · ${diffFields.length} of ${MERGE_FIELDS.length} fields differ${diffFields.length ? ` (${esc(diffFields.join(", "))})` : ""}.</div>`)
       : "";
     $("#modal").innerHTML = `
       <h3>Merge duplicate clients</h3>
       <p class="panel-sub">Pick which record survives, then choose which value wins for each field. Everything belonging to the other record moves across, then it's deleted.</p>
       ${matchHtml}
+      ${fastSummaryHtml}
+      ${fast ? `<details class="merge-fast-fold" id="merge-fast-fold"><summary>Change what is kept <span class="cs-muted">— the survivor, and which record's value wins for each field</span></summary>` : ""}
       <div class="merge-keep">
         <label><input type="radio" name="merge-keep" value="${aId}" ${keepId === aId ? "checked" : ""}> Keep <strong>${esc(fullClientName(aC))}</strong> as the survivor <span class="merge-keep-meta">(${plural(counts[aId].cases, "case")}, created ${fmtD(aC.created_at)})</span></label>
         <label><input type="radio" name="merge-keep" value="${bId}" ${keepId === bId ? "checked" : ""}> Keep <strong>${esc(fullClientName(bC))}</strong> as the survivor <span class="merge-keep-meta">(${plural(counts[bId].cases, "case")}, created ${fmtD(bC.created_at)})</span></label>
@@ -28098,12 +28978,15 @@ window.openMergeClients = async function (aId, bId, reason, score) {
         <tr><th>Field</th><th>Client A — ${esc(fullClientName(aC))}</th><th>Client B — ${esc(fullClientName(bC))}</th></tr>
         ${fieldRows}
       </table>
+      ${fast ? "</details>" : ""}
       <p class="panel-sub" style="margin-top:12px;">${plural(lc.cases, "case")}, ${plural(lc.appointments, "appointment")}, ${plural(lc.fact_finds, "fact-find")}, ${plural(lc.email_queue, "email")}, ${lc.sms_queue} SMS, ${plural(lc.case_emails, "inbound message")} and ${plural(lc.watch_alerts, "alert")} will move onto the surviving record.</p>
       <div class="modal-actions">
         <div>${dupTableMissing ? "" : '<button type="button" class="btn btn-sm" id="merge-not-dup">Not a duplicate</button>'}</div>
         <div class="right">
           <button class="btn" id="modal-cancel">Cancel</button>
-          <button class="btn ${weak ? "" : "btn-primary"}" id="merge-confirm">Merge…</button>
+          ${fast
+            ? '<button class="btn btn-primary" id="merge-now">Merge now</button>'
+            : `<button class="btn ${weak ? "" : "btn-primary"}" id="merge-confirm">Merge…</button>`}
         </div>
       </div>`;
     openModal();
@@ -28124,8 +29007,12 @@ window.openMergeClients = async function (aId, bId, reason, score) {
       toast("Marked as not a duplicate");
       loadDataHealth();
     };
-    $("#merge-confirm").onclick = async () => {
-      const btn = $("#merge-confirm");
+    /* R68 · B2 — ONE merge routine, two doors into it. The fast shape's "Merge now" and the
+       ordinary "Merge…" run the identical code; the only difference is whether confirmMerge's
+       typed keyword stands between the click and the first write. */
+    const confirmBtnId = fast ? "merge-now" : "merge-confirm";
+    $("#" + confirmBtnId).onclick = async () => {
+      const btn = $("#" + confirmBtnId);
       if (btn) { if (btn.disabled) return; btn.disabled = true; }
       try {
         const survivorId = keepId;
@@ -28142,7 +29029,12 @@ window.openMergeClients = async function (aId, bId, reason, score) {
         // destroyed before, and they're FCA file-review evidence.
         const extra = `Surviving record: ${survivorName}. Being merged away: ${loserName} (${plural(lc.cases, "case")}, ${plural(lc.appointments, "appointment")}, ${plural(lc.fact_finds, "fact-find")}, ${plural(lc.email_queue, "email")}, ${lc.sms_queue} SMS, ${plural(lc.case_emails, "inbound message")}, ${plural(lc.watch_alerts, "alert")}).`
           + (weak ? `\n\nWEAK MATCH: ${reason || "flagged as a possible duplicate"}${score != null ? ` (${pct}%)` : ""} — ${diffFields.length} of ${MERGE_FIELDS.length} fields differ.` : "");
-        if (!confirmMerge("Merge these two client records?", extra, keyword)) return;
+        /* R68 · B2 — the fast shape skips the typed keyword and nothing else. The keyword exists to
+           stop two DIFFERENT people being pushed together on autopilot; where the two records share
+           an email address and the one being absorbed has no cases, there is no second person to be
+           wrong about and no work to lose, and the summary above the button has already said in one
+           line exactly what is about to happen. */
+        if (!fast && !confirmMerge("Merge these two client records?", extra, keyword)) return;
 
         /* Sequential, awaited and checked at every step. Two ordering rules make a partial failure
            survivable: the loser is never deleted unless every step succeeded, and the SURVIVOR'S
@@ -28966,6 +29858,73 @@ document.addEventListener("keydown", (e) => {
    most two server-side ilike queries per keystroke (debounced) — never loads whole tables.
    Every read is wrapped so a missing column or network error degrades to the zero-result
    state instead of throwing. */
+/* ==========================================================================
+   R68 · B4/M3 — THE PALETTE LEARNS VERBS.
+
+   "/" opened a finder: it could take you to a person or a case, and nothing
+   else. Everything you might then want to DO was a hunt for a button on a
+   page — + New case is on Pipeline, + New client is on Clients, + Book
+   appointment is on Diary — so the fastest route to "start a new client" was
+   still nav, scan, click. A palette that knows where you want to go but not
+   what you want to do is half a palette.
+
+   So a short, STATIC list of verbs sits above the search results. Rules:
+
+   1. THEY ARE THE EXISTING BUTTONS. Every verb calls the same function the
+      on-page control does (openCase(null), openClient(null), openAppt(null),
+      nav(page)) — not a copy of its behaviour. A verb can therefore never
+      drift from the button it stands for.
+   2. THEY ARE ORDINARY .palette-row ELEMENTS, so arrow keys, Enter, the
+      highlight and the click handler all work on them without a second
+      keyboard implementation. `data-verb` is how a verb row is told from a
+      record row; `flat` carries the type, as it always has for clients,
+      cases and leads.
+   3. FILTERED BY WHAT YOU TYPE, like everything else here. Typing ">" first
+      says "actions only" and runs no queries at all.
+   4. ROLE-GATED THE WAY THE NAV IS. Monday money is Owner-only (#nav-money is
+      hidden for everybody else and PAGE_ROLE_GATE bounces the page), so the
+      verb is absent for everybody else too. Settings deliberately is NOT
+      gated: the nav offers it to every staff login, and a palette that hid it
+      would be inventing a restriction the app does not have.
+   5. A VERB THAT NEEDS A CASE OPEN SAYS SO RATHER THAN VANISHING. "Write to
+      client" and "Log a call" act on the case modal in front of you; with no
+      case open they are shown greyed with the reason, because an action that
+      disappears teaches nobody where it went.
+   ========================================================================== */
+/* The case the verbs that need one will act on: the case modal currently owning a history entry. */
+const paletteOpenCaseId = () => (currentModal && currentModal.type === "case" && currentModal.id) || null;
+/* Click a control that is already on screen — the verb is the button, not a reimplementation of it. */
+function paletteClick(sel) {
+  const el = document.querySelector(sel);
+  if (!el) return false;
+  el.click();
+  return true;
+}
+const PALETTE_VERBS = [
+  { id: "new-case", icon: "🗂️", title: "New case", sub: "Open a blank case — the same + New case as Pipeline", run: () => window.openCase(null) },
+  { id: "new-client", icon: "👤", title: "New client", sub: "Open a blank client record — the same + New client as Clients", run: () => window.openClient(null) },
+  { id: "book-appointment", icon: "📅", title: "Book appointment", sub: "Open a blank appointment — the same + New appointment as Diary", run: () => window.openAppt(null) },
+  {
+    id: "log-call", icon: "📞", title: "Log a call", sub: "Open the Log call panel on the case you have open",
+    needsCase: true, offHint: "Open a case first — a call is logged against the case it was about",
+    run: () => { if (!paletteClick("#cs-logcall-btn")) toast("The Log call button isn't on this case."); },
+  },
+  {
+    id: "write-client", icon: "✉️", title: "Write to client", sub: "Write the client an email from the case you have open",
+    needsCase: true, offHint: "Open a case first — a written email goes out against a case",
+    run: () => { if (!paletteClick("#act-write")) toast("Writing to the client isn't offered on this case."); },
+  },
+  { id: "accept-leads", icon: "📥", title: "Accept leads", sub: "Go to Today, where the new website enquiries are", run: () => window.paletteGotoLeads() },
+  { id: "goto-pipeline", icon: "🗂️", title: "Go to Pipeline", sub: "The board of live cases", run: () => nav("pipeline") },
+  { id: "goto-clients", icon: "👥", title: "Go to Clients", sub: "The client book", run: () => nav("clients") },
+  { id: "goto-retention", icon: "🔁", title: "Go to Retention", sub: "Rates ending and the ERC list", run: () => nav("retention") },
+  { id: "goto-protection", icon: "🛡️", title: "Go to Protection", sub: "The protection pipeline and call list", run: () => nav("protection") },
+  { id: "goto-diary", icon: "📅", title: "Go to Diary", sub: "Appointments, month or day", run: () => nav("diary") },
+  { id: "goto-reports", icon: "📊", title: "Go to Reports", sub: "The firm's numbers", run: () => nav("reports") },
+  { id: "goto-emails", icon: "✉️", title: "Go to Emails", sub: "The send queue and what has failed", run: () => nav("emails") },
+  { id: "goto-money", icon: "💷", title: "Go to Monday money", sub: "Owner only — fees, banked and forecast", when: () => isOwner(), run: () => nav("money") },
+  { id: "goto-settings", icon: "⚙️", title: "Go to Settings", sub: "Automation switches, templates, the team", run: () => nav("settings") },
+];
 (function () {
   const backdrop = $("#palette-backdrop");
   const input = $("#palette-input");
@@ -28998,9 +29957,37 @@ document.addEventListener("keydown", (e) => {
     flat = []; sel = -1;
     if (returnFocus && btn) btn.focus();
   }
+  /* R68 · B4 — the verbs that are offered right now, filtered by whatever has been typed. The match
+     is on the verb's own TITLE, which is what the reader is aiming at ("cli" finds New client, Go to
+     Clients — and Write to client, which does contain the word). Role-gated verbs are dropped
+     entirely, before filtering, so a persona can never see one greyed out and wonder. */
+  function verbsFor(text) {
+    const t = String(text || "").trim().toLowerCase();
+    return PALETTE_VERBS
+      .filter((v) => !v.when || v.when())
+      .filter((v) => !t || v.title.toLowerCase().includes(t));
+  }
+  /* Verb rows are .palette-row like every other row — same highlight, same arrow keys, same click
+     handler — and are pushed onto `flat` in render order so the keyboard cannot tell them apart. */
+  function verbRowsHtml(list) {
+    if (!list.length) return "";
+    let html = '<div class="palette-group-label">Actions</div>';
+    list.forEach((v) => {
+      const off = !!v.needsCase && !paletteOpenCaseId();
+      const idx = flat.length; flat.push({ type: "verb", verb: v, off });
+      html += `<div class="palette-row palette-verb${off ? " palette-verb-off" : ""}" role="option" data-idx="${idx}" data-verb="${esc(v.id)}"${off ? ' aria-disabled="true"' : ""}>`
+        + `<span class="pr-ic" aria-hidden="true">${v.icon}</span>`
+        + `<span class="pr-main"><span class="pr-title">${esc(v.title)}</span>`
+        + `<span class="pr-sub">${esc(off ? v.offHint : v.sub)}</span></span></div>`;
+    });
+    return html;
+  }
   function renderIdle() {
     flat = []; sel = -1;
-    resultsEl.innerHTML = '<div class="palette-empty">Search clients by name, email or phone — and cases by property address, client, lender or stage.</div>';
+    const html = verbRowsHtml(verbsFor(""))
+      + '<div class="palette-empty">Search clients by name, email or phone — and cases by property address, client, lender or stage. Or pick one of the actions above; type &gt; first to see only actions.</div>';
+    resultsEl.innerHTML = html;
+    if (flat.length) { sel = 0; updateSel(false); }
   }
   /* R12b · W-20/K-15 — "did you mean". Cheap on purpose: no new query (it scans whatever the
      Clients page has ALREADY loaded into clientCache this session — nothing if it hasn't been
@@ -29044,13 +30031,17 @@ document.addEventListener("keydown", (e) => {
   function renderEmpty(q) {
     flat = []; sel = -1;
     const suggestion = looksLikeNameQuery(q) ? findDidYouMean(q) : null;
-    resultsEl.innerHTML = `<div class="palette-empty">No matches for &ldquo;${esc(q)}&rdquo;` +
+    /* R68 · B4 — "no client of that name" is not the same as "nothing here": a verb matching what
+       was typed still stands, above the message, so a query that finds no records can still act. */
+    const verbHtml = verbRowsHtml(verbsFor(q));
+    resultsEl.innerHTML = verbHtml + `<div class="palette-empty">No matches for &ldquo;${esc(q)}&rdquo;` +
       (suggestion ? `<br><button type="button" class="btn btn-sm palette-didyoumean" id="palette-dym">No exact match — did you mean <strong>${esc(suggestion)}</strong>?</button>` : "") +
       `</div>`;
     if (suggestion) {
       const b = resultsEl.querySelector("#palette-dym");
       if (b) b.onclick = () => { input.value = suggestion; runSearch(suggestion); };
     }
+    if (flat.length) { sel = 0; updateSel(false); }
   }
   /* `subHtml` is trusted markup (only ever the property chip, built by propChip) and leads the
      sub-line; everything else stays escaped text. */
@@ -29062,7 +30053,10 @@ document.addEventListener("keydown", (e) => {
   }
   function render(clients, cases, leads, q) {
     flat = [];
-    let html = "";
+    // R68 · B4 — the verbs lead, then the records. Their count is remembered so the default
+    // highlight can still land on the first RECORD row (defect #20 / A3 below) rather than on a verb.
+    let html = verbRowsHtml(verbsFor(q));
+    const verbCount = flat.length;
     const caseIdxById = {};
     if (clients.length) {
       html += '<div class="palette-group-label">Clients</div>';
@@ -29096,12 +30090,12 @@ document.addEventListener("keydown", (e) => {
         html += rowHtml(idx, "📥", l.name || "(no name)", sub);
       });
     }
-    if (!flat.length) { renderEmpty(q); return; }
+    if (flat.length === verbCount) { renderEmpty(q); return; }
     resultsEl.innerHTML = html;
     // Default highlight (defect #20 / A3): if the top client hit has exactly ONE open case,
     // point Enter at that CASE modal (its one-tap Log-call / follow-up tools live there). The
     // client row is still one arrow-key away.
-    sel = 0;
+    sel = verbCount;
     if (clients.length) {
       const top = clients[0];
       const open = cases.filter((cs) => cs.client_id === top.id && cs.stage !== "completed" && cs.stage !== "not_proceeding");
@@ -29122,6 +30116,14 @@ document.addEventListener("keydown", (e) => {
   function openSel() {
     const item = flat[sel];
     if (!item) return;
+    /* R68 · B4 — a verb that cannot run says why and LEAVES THE PALETTE OPEN: closing it on a
+       refusal would look like the action had happened. */
+    if (item.type === "verb") {
+      if (item.off) { toast(item.verb.offHint); return; }
+      closePalette(false);
+      try { item.verb.run(); } catch (e) { toast("That action isn't available right now."); }
+      return;
+    }
     closePalette(false);   // don't grab focus back — the modal will manage its own
     if (item.type === "client") window.openClient(item.id);
     else if (item.type === "lead") openLeadOnToday();
@@ -29138,10 +30140,24 @@ document.addEventListener("keydown", (e) => {
     const panel = document.getElementById("briefing-panel");
     if (panel) setTimeout(() => { try { panel.scrollIntoView({ block: "nearest" }); } catch (e) {} }, 60);
   }
+  // R68 · B4 — the "Accept leads" verb is this same jump; exposed so the verb table (which is
+  // declared outside this closure, beside the other palette machinery) can reach it.
+  window.paletteGotoLeads = openLeadOnToday;
 
   async function runSearch(raw) {
     const q = sanitize(raw);
     const mySeq = ++seq;
+    /* R68 · B4 — ">" means ACTIONS ONLY: no client query, no case query, no lead query. It is the
+       one query shape that is answered entirely from memory, so it is answered before anything is
+       fetched rather than after. */
+    if (/^\s*>/.test(String(raw || ""))) {
+      const vq = String(raw).replace(/^\s*>/, "").trim();
+      flat = []; sel = -1;
+      const html = verbRowsHtml(verbsFor(vq));
+      resultsEl.innerHTML = html || `<div class="palette-empty">No action matches &ldquo;${esc(vq)}&rdquo;.</div>`;
+      if (flat.length) { sel = 0; updateSel(false); }
+      return;
+    }
     if (q.length < 2) { renderIdle(); return; }
     // Tokenisation (defect #1): split on whitespace so a multi-word / full-name query works.
     const tokens = q.split(" ").filter(Boolean);
