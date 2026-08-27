@@ -3783,3 +3783,79 @@ tr.owed-hot > td { background: var(--red-bg); }
 /* The shared log-call panel, when it is opened as an overlay from a Retention row rather than
    inside the case modal (same markup, so only the box around it needs saying). */
 #ret-logcall-panel { margin-top: 4px; }
+
+/* ==========================================================================
+   R65 · L1 — THE CASE MODAL'S STICKY ACTION ROW.
+
+   The modal's SCROLL CONTAINER is #modal-backdrop (`overflow-y: auto`), not
+   .modal — the box itself is as tall as its content and the backdrop scrolls
+   past it. So `position: sticky; top: 0` on a child of .modal pins to the top
+   of that scrollport, which is exactly what .modal-close has done since M3.
+   It carries the modal's own background (content must never bleed through a
+   pinned bar) and a hairline underneath so the join is a deliberate edge.
+
+   z-index sits BELOW .modal-close's 6 and the right padding clears its 40px
+   box, so the persistent ✕ is never covered by, and never covers, the actions.
+   ========================================================================== */
+.cs-sticky-actions {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  margin: 0 -28px 14px;                 /* bleed to the modal's own edges so nothing shows beside it */
+  padding: 10px 72px 10px 28px;         /* 72px right: 28px gutter + the 40px close button + 4px */
+  background: var(--white);
+  border-bottom: 1px solid var(--border);
+}
+/* The action bar inside it is no longer a section divider — the sticky bar's own hairline is. */
+.cs-sticky-actions .action-bar { margin: 0; padding-top: 0; border-top: none; flex: 1 1 auto; }
+.cs-sticky-actions .cs-top-actions { justify-content: flex-start; align-items: center; }
+/* The overflow menu opened UPWARD, which at the top of a scrollport is off the screen. */
+.cs-sticky-actions .more-actions-menu { bottom: auto; top: calc(100% + 6px); }
+@media (max-width: 760px) {
+  /* The modal's own padding drops to 18px at this width (see .modal), so the bleed must match. */
+  .cs-sticky-actions { margin: 0 -18px 12px; padding: 8px 62px 8px 18px; }
+  .cs-sticky-actions .cs-top-actions { width: auto; flex-direction: row; }
+  .cs-sticky-actions .cs-logcall-btn, .cs-sticky-actions .btn-retention { width: auto; }
+}
+
+/* ==========================================================================
+   R65 · H7b — the two new pipeline-table columns.
+   Both are narrow, factual cells; the waiting-on chip must not stretch the row
+   (it can carry a long firm name), and "Completing" is a date that must not wrap.
+   ========================================================================== */
+.pipe-col-waiting { max-width: 190px; overflow: hidden; text-overflow: ellipsis; }
+.pipe-col-waiting .wait-chip { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.pipe-col-completing { white-space: nowrap; }
+
+/* ==========================================================================
+   R65 · L9 — THE PIPELINE TABLE AS A CARD LIST, BELOW 700px.
+
+   Same .card markup the board paints (boardCardHtml), stacked one per row in
+   the table's sort order. The board's own card CSS does all the work; what is
+   needed here is only the container — a single column, full width, and NO
+   horizontal scroller of its own, because the whole point is that a phone
+   stops scrolling sideways to read a case.
+   ========================================================================== */
+.pipe-card-list { display: flex; flex-direction: column; gap: 10px; }
+.pipe-card-list .card { width: auto; max-width: 100%; margin-bottom: 0; }
+/* The sort control that replaces the column headers a card list does not have. */
+.pipe-mobile-sort { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.pipe-mobile-sort label { font-size: 12px; font-weight: 600; color: var(--muted); }
+.pipe-mobile-sort select {
+  flex: 1 1 140px; min-width: 0; min-height: 36px; padding: 6px 8px; font-size: 12.5px;
+  border: 1px solid var(--border-strong); border-radius: 8px; background: #fff; color: var(--dark);
+}
+@media (max-width: 699px) {
+  /* Nothing inside the pipeline card view may create a sideways scroll on a phone: the edge fade
+     and the › arrow are affordances FOR the table's horizontal scroller, which is not there.
+     (#pipe-scroll's own overflow-x is set to visible in the same branch that renders the cards —
+     it is an inline style, so it has to be decided where the markup is.) */
+  #table-wrap .board-scroll-wrap--table { padding-top: 0; }
+  #table-wrap .board-scroll-wrap--table::after,
+  #table-wrap .board-scroll-wrap--table .board-scroll-arrow { display: none; }
+}
+/* The one-line "this is the table, as cards" note. Compact: it is on the screen with the least
+   room, and a paragraph of explanation that pushes the first case below the fold is worse than
+   no explanation at all. */
+.pipe-mobile-note { margin: 0 0 10px; font-size: 12px; line-height: 1.5; }

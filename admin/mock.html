@@ -166,7 +166,7 @@
           <button class="btn btn-ghost btn-sm" id="watchtower-run">Run checks</button>
           <button class="btn btn-ghost btn-sm hidden" id="watchtower-snoozed-toggle" title="Show/hide snoozed alerts">0 snoozed</button>
         </h3>
-        <p class="panel-sub" id="watchtower-sub">Problems found automatically — resolves itself when fixed</p>
+        <p class="panel-sub" id="watchtower-sub">Problems found automatically — resolves itself when fixed. <strong>Two checks watch a pair of dates:</strong> <em>Offer expires before completion</em> catches an offer that dies before the completion it is meant to fund, so it has to be re-issued; <em>Completing inside old ERC</em> catches a retention case completing while the client's old deal is still inside its Early Repayment Charge, so they pay to leave early. <em>Client emails unanswered</em> is counted per client — one row per person waiting on a reply, not one per message.</p>
         <!-- R11-2a — severity filter chips, written by loadWatchtower so the counts are live.
              Client-side only: it filters the rows already fetched, it does not re-query. -->
         <div id="wt-filters" class="pipe-segment wt-filters"></div>

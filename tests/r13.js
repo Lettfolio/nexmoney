@@ -33,7 +33,8 @@
            routing excludes whoever is away today (forcing the scenario);
            the everyone-away fallback is labelled; the retention confirm's
            away line; an assignee select shows "(away until …)".
-     WATCHTOWER MIRROR — the ten production rule keys render/group correctly;
+     WATCHTOWER MIRROR — the production rule keys render/group correctly (ten
+           at R13, twelve since R65 added the two date rules);
            snooze and dismiss still work on the new rule set; the Run-checks
            toast honours the {open,new,resolved} shape.
 
@@ -980,24 +981,31 @@ const readBlobJson = (page) => page.evaluate(async () => (window.__blob ? JSON.p
        J · WATCHTOWER MIRROR SANITY
        ======================================================================= */
     {
-      console.log("\n— J1 · watchtower mirror · the ten production rules render/group correctly");
+      console.log("\n— J1 · watchtower mirror · the production rule set renders/groups correctly (R65: twelve)");
       const page = await newPage(browser, "p1", { skipTour: true });
       await goto(page, "dashboard");
       await openDrawer(page, "#watchtower-panel");
+      /* R65 — production's rule set is TWELVE now: offer_before_completion and
+         erc_before_completion were added to run_watchtower (and to the mock's mirror) this round.
+         J1's third assertion below is "every rendered group's rule is one of these, never one of
+         the retired seven", so leaving the two new names out of this list would fail it on rules
+         that are correct. Nothing else in J1/J2 changes — the retired-seven check is what this
+         block is actually guarding, and both new names are additions to the allowed set. */
       const PROD_RULES = ["offer_stale", "app_not_submitted", "exchange_no_chase", "lead_slow", "email_unanswered",
-        "fee_aging", "workload", "retention_gap", "fee_aging_60", "protection_quote_stale"];
+        "fee_aging", "workload", "retention_gap", "fee_aging_60", "protection_quote_stale",
+        "offer_before_completion", "erc_before_completion"];
       const gt = await page.evaluate(async () => {
         const { data } = await window.__mockDb.from("watch_alerts").select("*").is("resolved_at", null);
         const byRule = {};
         data.forEach((a) => { byRule[a.rule] = (byRule[a.rule] || 0) + 1; });
         return byRule;
       });
-      ok("J1 · at least the ten production rules are present among today's open alerts", PROD_RULES.some((r) => gt[r] > 0), JSON.stringify(gt));
+      ok("J1 · at least the production rules are present among today's open alerts", PROD_RULES.some((r) => gt[r] > 0), JSON.stringify(gt));
       const noRetired = Object.keys(gt).every((r) => !["erc_conflict", "protection_gap", "no_contact", "no_adviser", "stalled", "completed_no_date"].includes(r));
       ok("J1 · none of the retired seven rule names appear anywhere in the open alerts", noRetired, JSON.stringify(Object.keys(gt)));
       const groupKeys = await page.$$eval(".wt-group", (els) => els.map((e) => e.dataset.wtKey));
       const groupRules = groupKeys.map((k) => k.split("|")[0]);
-      ok("J1 · every rendered group's rule is one of the ten (or 'other', never retired)", groupRules.every((r) => PROD_RULES.includes(r) || r === "other"), JSON.stringify(groupRules));
+      ok("J1 · every rendered group's rule is one of the production set (or 'other', never retired)", groupRules.every((r) => PROD_RULES.includes(r) || r === "other"), JSON.stringify(groupRules));
 
       console.log("\n— J2 · watchtower mirror · snooze + dismiss on the new rules, and the run_watchtower shape");
       const oneAlert = await page.evaluate(async () => {

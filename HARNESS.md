@@ -108,7 +108,43 @@ node tests/r63_docs.js
 node tests/r63_tasks.js
 node tests/r64_retention.js
 node tests/r64_hf1.js
+node tests/r65_watchtower.js
 ```
+
+**R65 notes — Watchtower: two new checks and one that now counts clients.** The mock's
+`run_watchtower` mirror goes from TEN rules to TWELVE, and rule 5 changes shape:
+
+  - **`offer_before_completion`** (per case, dedupe `offer_before_completion:<case_id>`) — a case
+    at `offer` or `exchange` with BOTH `offer_expiry_date` and `expected_completion_date` set,
+    where the offer expires FIRST. `crit` once the offer itself is within 30 days, else `warn`.
+    Fixture: `ca058` (Gareth Pollard) already carried an offer expiring in 10 days against a
+    completion 27 days out, so it fires there and nowhere else — every other live offer in the
+    book expires after its expected completion, which is the right way round.
+  - **`erc_before_completion`** (per case, dedupe `erc_before_completion:<case_id>`) — a LIVE
+    case with a `retention_source_case_id` whose SOURCE has an `erc_end_date`, completing inside
+    it. Always `warn`. Fixture nudge (see the `(g) R65` block beside the other watchtower fixture
+    nudges): the first live retention successor's source gets `erc_end_date = rate_end_date`
+    (EQUAL, so `v_alerts.erc_outlasts_rate`'s strict `>` is untouched and no ERC-conflict list
+    anywhere gains a row) and the successor an expected completion 25 days before it.
+  - **`email_unanswered` is now PER CLIENT** — dedupe `email_unanswered:c:<client_id>`, title
+    `Client email unanswered: <sender>`, detail `N message(s) waiting · latest "<subject>"
+    received DD Mon HH:MI`, `case_id` = the LATEST message's case. An email with no `client_id`
+    keeps the old per-email key. In the stock fixtures this takes the open `email_unanswered`
+    count from 3 to 2 (Ruby Sinclair's two, across two cases, are one row now), so the whole
+    book's open alerts read 26 rather than 25.
+  - **Rules 11/12 print British dates, not ISO** — `DD Mon YYYY` (and `DD Mon HH:MI` for the
+    email timestamp), Europe/London, matching production's `to_char`. app.js's
+    `humanizeAlertDates()` only rewrites whole `YYYY-MM-DD` substrings, so these pass through it
+    unchanged; a test asserting alert copy must expect `05 Sep 2026`, not `2026-09-05`.
+  - **App side:** `WT_RULE_LABELS` (app.js, beside `wtGroupLabel`) is the first written label map
+    this panel has ever had — three entries only ("Offer expires before completion", "Completing
+    inside old ERC", "Client emails unanswered"), because those three titles use `"<what>: <who>"`
+    and the group-label heuristic has no `" — "` to split on. Every other rule still names itself
+    from the data. `WT_GROUP_UNIT` makes the email group's header tooltip count *clients waiting
+    on a reply* rather than *alerts*. Neither new rule is in `R7_ALERT_LINKS`: the case IS the
+    destination, and the row's own Open button already goes there.
+  - `tests/r13.js`'s `PROD_RULES` list was extended with the two new names — its J1 assertion
+    ("every rendered group's rule is one of the ten") would otherwise fail on the new groups.
 
 **R64 notes (2026-08-26).** One new suite: `tests/r64_retention.js` (88 — §A the Retention
 rates panel's bulk bar, §B the month chips, §C the workable row, §D drawer parity, §E every
@@ -3693,3 +3729,17 @@ successor read, the prot-quote read, the client-modal cases read) in 150-id slic
 **RULE: any new `.in(col, ids)` whose list can be feed-sized MUST go through `inChunks`.**
 `tests/r64_hf1.js` (12) pins the split, the error shape, loadPropContext at 469 ids, and the
 Retention page's tel:/chips.
+
+**R65 notes — pipeline triage (agent A, `tests/r65_pipeline.js`, 127).** Stage-entry prompt asks
+"waiting on whom?" at Application/Offer/Exchange when `waiting_on` is empty (Offer shares one
+dialog with the expiry question); `Waiting on` and `Completing` are sortable table columns (the
+⏳ chip MOVED out of the Stage cell — `td.pipe-col-waiting`); starter view "Waiting on solicitor";
+board columns sort by days-in-stage desc; the Current segment lands on the TABLE while no view
+preference is stored; `#pipe-bulk-chase` (task `Chase solicitors for completion date`, idempotent)
+and `#pipe-bulk-docs` (reviewed-batch document request, one named confirm); milestones `<details>`
+open at application/offer/exchange; `#cs-sticky-actions` sticky against `#modal-backdrop`; below
+700px the table renders `boardCardHtml()` cards with `#pipe-mobile-sort`. Old-suite patches
+(commented `PATCHED R65`): r24 B16 split, r9_docs chip-location inverted, r43 starter counts
+(4 + `_meta`), r5_batch6 S7 reads `.cs-name`. Harness midnight window: between 23:00 and 00:00
+UTC in BST the mock's `TODAY` (UTC) and the app's `localDateStr()` (Europe/London) disagree — a
+batch of due-date suites fails only in that hour; re-run after 00:00 UTC.

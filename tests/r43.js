@@ -321,10 +321,15 @@ const selectSavedViews = (page) => page.evaluate(async () => {
       eq("§4a · viewsMode settles to \"db\" on a fresh, un-migrated persona", mode, "db");
 
       const rows = await selectSavedViews(page);
-      eq("§4b · exactly four rows: the three starters + the _meta marker", rows.length, 4);
+      /* PATCHED R65 · H7b — starterViewSet() gained a THIRD pipeline starter, "Waiting on
+         solicitor" (Current segment, table view, sortKey waiting_on), so the seeded set is four
+         named views plus the marker. Nothing about the seeding CONTRACT this section tests has
+         changed — one write, role-appropriate adviser pinning, the _meta marker, no localStorage —
+         only the count and the name list, which are the fixture, not the rule. */
+      eq("§4b · exactly five rows: the four starters + the _meta marker", rows.length, 5);
       const names = rows.map((r) => r.name).sort();
-      eq("§4c · the three starter names + \"seeded\" — role-appropriate for an ADVISER (mine, not everyone's)",
-        names, ["My cold clients (6mo+)", "My live cases", "Unassigned leads", "seeded"].sort());
+      eq("§4c · the four starter names + \"seeded\" — role-appropriate for an ADVISER (mine, not everyone's)",
+        names, ["My cold clients (6mo+)", "My live cases", "Unassigned leads", "Waiting on solicitor", "seeded"].sort());
       ok("§4d · every row's user_id is this persona (p2)", rows.every((r) => r.user_id === "p2"), JSON.stringify(rows.map((r) => r.user_id)));
       const myLive = rows.find((r) => r.name === "My live cases");
       eq("§4e · the pipeline starter is pinned to the adviser's OWN id, not \"all\"", myLive && myLive.filters && myLive.filters.adviser, "p2");
@@ -438,7 +443,8 @@ const selectSavedViews = (page) => page.evaluate(async () => {
       await waitViewsMode(page);
 
       const starterNames = (await selectSavedViews(page)).filter((r) => r.scope !== "_meta").map((r) => r.name);
-      eq("§7a · fixture sanity — three named starters exist to delete", starterNames.length, 3);
+      // PATCHED R65 · H7b — four named starters now (the third pipeline one is "Waiting on solicitor").
+      eq("§7a · fixture sanity — four named starters exist to delete", starterNames.length, 4);
 
       // Delete every named view through the app's own deleteView() — the real per-view path a
       // user has, which can never target the _meta row (it is not offered in either dropdown).
@@ -531,7 +537,8 @@ const selectSavedViews = (page) => page.evaluate(async () => {
 
       const lsRaw = await page.evaluate(() => localStorage.getItem("nx_views_v1"));
       const ls = JSON.parse(lsRaw || "null");
-      ok("§9c · localStorage now holds the seeded starters — the R31/R37 store is genuinely in play", !!ls && Array.isArray(ls.pipeline) && ls.pipeline.length === 2 && Array.isArray(ls.clients) && ls.clients.length === 1, lsRaw);
+      // PATCHED R65 · H7b — three pipeline starters in the local fallback too, for the same reason.
+      ok("§9c · localStorage now holds the seeded starters — the R31/R37 store is genuinely in play", !!ls && Array.isArray(ls.pipeline) && ls.pipeline.length === 3 && Array.isArray(ls.clients) && ls.clients.length === 1, lsRaw);
       ok("§9d · the pipeline starters are the two role-appropriate names", ls.pipeline.map((v) => v.name).includes("My live cases") && ls.pipeline.map((v) => v.name).includes("Unassigned leads"), JSON.stringify(ls.pipeline));
 
       const opts = await page.$$eval("#board-views option", (els) => els.map((e) => e.value));

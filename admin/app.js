@@ -594,6 +594,30 @@ function lsGet(key) { try { return localStorage.getItem(key); } catch (e) { retu
 function lsSet(key, val) { try { localStorage.setItem(key, val); } catch (e) { /* storage unavailable — degrade to session-only */ } }
 const segStoreKey = (uid) => `nx_seg_${uid}`;
 const viewStoreKey = (uid) => `nx_view_${uid}`;
+/* ==========================================================================
+   R65 · H7c — WHAT "CURRENT" OPENS ON, WHEN NOBODY HAS SAID.
+
+   The board is the pipeline's default view and it earns that on New business,
+   where eight cards need triaging by eye. It does NOT earn it on Current: that
+   segment runs Application → Exchange, the board gives it no sort at all, and
+   at 1500px the Exchange column — the stage where a completion date is chased
+   and a solicitor is waited on — sits off the right-hand edge. The table sorts
+   on every column, including the two this round adds (Waiting on, Completing).
+
+   ONLY THE DEFAULT MOVES. The moment an operator presses the ⊞/☰ toggle their
+   choice is written to `nx_view_<uid>` and this function never speaks again —
+   for any segment, in either direction. An app that keeps re-deciding a view
+   the user has already decided is an app people stop trusting with a toggle. */
+function hasStoredPipelineViewPref() {
+  if (!authUid) return false;
+  const v = lsGet(viewStoreKey(authUid));
+  return v === "board" || v === "table";
+}
+function applySegmentDefaultView(seg) {
+  if (seg === "completed") return;              // already forced to table by its own rule
+  if (hasStoredPipelineViewPref()) return;      // the operator has chosen — never override
+  pipelineView = seg === "current" ? "table" : "board";
+}
 // B9 (R5-31) — Month/Day diary toggle, persisted per user the same way as the pipeline prefs above.
 const diaryViewStoreKey = (uid) => `nx_diaryview_${uid}`;
 /* R5-5 — a `nx_lead_adviser_<uid>` key used to live here holding "the adviser the last lead was
@@ -611,6 +635,9 @@ function restoreUserPrefs(uid) {
   if (seg && SEGMENTS.some(([k]) => k === seg)) pipelineSegment = seg;
   const view = lsGet(viewStoreKey(uid));
   if (view === "board" || view === "table") pipelineView = view;
+  // R65 · H7c — a restored segment with NO stored view lands on that segment's default (table for
+  // Current, board everywhere else). Runs after the stored view is read, so it can never win.
+  else applySegmentDefaultView(pipelineSegment);
   // B9 (R5-31) — just the mode string here; the toggle's DOM classes and the staff-filter select
   // (which doesn't exist populated yet — loadTeam runs after this) are synced by
   // initDiaryViewFromPrefs(), called once loadTeam has rebuilt #diary-staff.
@@ -2710,7 +2737,12 @@ async function loadClientCare(ids) {
   if (!want.length) return {};
   if ((await careSupported()) === false) return {};
   try {
-    const { data, error } = await db.from("clients").select(CARE_SELECT).in("id", want);
+    /* R65 — through inChunks. R64's rule: any `.in(col, ids)` whose list can be FEED-SIZED must be
+       chunked, because PostgREST 400s above ~500 ids and does it silently. This helper was written
+       for a handful of clients at a time; the R65 bulk document-request sweep can hand it a whole
+       select-all, and a silent 400 here would read as "nobody is suppressed", which is the one
+       wrong answer this function must never give. */
+    const { data, error } = await inChunks(want, (sl) => db.from("clients").select(CARE_SELECT).in("id", sl));
     if (error) { if (isMissingColumnError(error)) CARE_SUPPORTED = false; return {}; }
     const map = {};
     (data || []).forEach((r) => { if (r && r.id) map[r.id] = r; });
@@ -4401,7 +4433,7 @@ function helpGlossaryHtml() {
       ${row("DIP", esc(TIP_DIP) + ".")}
       ${row("Sols fee", "Solicitor referral fee — one of the three fee types a case can carry, alongside <strong>Proc £</strong> (paid by the lender) and <strong>Broker £</strong> (charged to the client).")}
       ${row("“sub” date", esc(TIP_SUB) + " — shown on a case's stage tag once it has one.")}
-      ${row("Watchtower", "Automatic checks run across the whole book — a case with no adviser, a rate that ended with nobody reminded, and so on. “Resolves itself when fixed” means an alert is not a task to tick off by hand: fix the actual thing it is complaining about (assign an adviser, record a rate end) and the alert clears itself the next time checks run. Dismissing an alert is for a false positive — something the checker got wrong, not something you have since fixed.")}
+      ${row("Watchtower", "Automatic checks run across the whole book — a case with no adviser, a rate that ended with nobody reminded, and so on. “Resolves itself when fixed” means an alert is not a task to tick off by hand: fix the actual thing it is complaining about (assign an adviser, record a rate end) and the alert clears itself the next time checks run. Dismissing an alert is for a false positive — something the checker got wrong, not something you have since fixed. <strong>Two of the checks compare a pair of dates nothing else on the case compares:</strong> <em>Offer expires before completion</em> flags an offer whose expiry date falls before the completion it is meant to pay for, so the offer would have to be re-issued; <em>Completing inside old ERC</em> flags a retention case due to complete while the client's previous deal is still inside its Early Repayment Charge window, so they would be charged for leaving early. <strong>And one check is counted per client, not per email:</strong> <em>Client emails unanswered</em> is one row per person waiting on a reply, however many messages they have sent across however many cases.")}
       ${row("Revolution", "The firm's own book of record. The Import page synchronises this app AGAINST it, one direction only — where the two disagree, Revolution is treated as correct, never the other way round.")}
       ${row("Numbered property circles", "Where a client holds more than one property, each gets its own colour and, on the client record, a small number in the dot (“property 2 of 3”) — so two mortgages on two different buildings are never mistaken for the same address.")}
       ${row("“— no access”", esc(NO_ACCESS_OPTION_TITLE) + ".")}
@@ -8105,6 +8137,14 @@ const R7_ALERT_LINKS = {
      that drawer is gone and the row it duplicated is the destination.) */
   lead_slow: { when: () => true, go: (a) => `gotoLeadInbox('${jsArg((a && a.lead_id) || "")}')`, label: "Lead inbox →",
                   title: "Open this enquiry's row in My Day on Today, where it can be accepted." },
+  /* R65 — THE TWO NEW DATE RULES GET NO ENTRY HERE, ON PURPOSE.
+     `offer_before_completion` and `erc_before_completion` are both fixed in ONE place: the case
+     itself, where the offer expiry and the expected completion date are edited. The row already
+     carries an Open button that opens exactly that case (every alert with a case_id does — see
+     rowHtml's openBtn), which is the same treatment `offer_stale` and `fee_aging` get. A second
+     button beside it, pointing at the same screen, would be a duplicate door dressed up as a
+     choice. This map is for rules whose work happens SOMEWHERE ELSE than the case — the owner's
+     Money owed list, the Protection page, the lead inbox — and neither of these is one. */
 };
 /* R7-1e — THE ALERT TEXT IS A MONEY SURFACE TOO.
    The firm's money is Owner-only UI and has been since round 4: Monday money, the
@@ -8240,8 +8280,31 @@ const WT_GROUP_FOLD_AT = 4;
    nobody wrote. Every title run_watchtower writes has the shape "<who> — <what is wrong>", so
    the half after the dash IS the group's subject, straight from the rows on screen. It is used
    only when every row in the group agrees on it; otherwise the rule token is prettified, which
-   is ugly but never a lie. */
+   is ugly but never a lie.
+   R65 — …AND THE THREE PLACES THAT HEURISTIC CANNOT REACH.
+   The rule above works because most of run_watchtower's titles are "<who> — <what is wrong>".
+   Three are not: they are "<what is wrong>: <who>", so there is no " — " to split on and the
+   fallback prints the machine token with its underscores knocked out — "Erc before completion",
+   "Offer before completion", "Email unanswered". The first is a lie about a real word (ERC), and
+   none of the three says what the check actually looked at. So those three, and ONLY those three,
+   carry a written label; every other rule still takes its name from the data, and a rule added to
+   the SQL tomorrow still renders under a header nobody had to write here first. */
+const WT_RULE_LABELS = {
+  offer_before_completion: "Offer expires before completion",
+  erc_before_completion: "Completing inside old ERC",
+  /* PLURAL, and about CLIENTS not messages: since R65 this rule emits one row per client, folding
+     everything that client has sent into a single alert with its own count. "3" under this header
+     means three people waiting on a reply, not three emails — the emails themselves are counted,
+     and answered, on My Day's inbound list. */
+  email_unanswered: "Client emails unanswered",
+};
+/* The noun the group header counts. Everything is "alerts" unless a rule's rows are one-per-
+   something-else — which, since R65's aggregation, email_unanswered's are. */
+const WT_GROUP_UNIT = {
+  email_unanswered: ["client waiting on a reply", "clients waiting on a reply"],
+};
 function wtGroupLabel(items, rule) {
+  if (WT_RULE_LABELS[rule]) return WT_RULE_LABELS[rule];
   const tally = new Map();
   (items || []).forEach((a) => {
     const t = String((a && a.title) || "");
@@ -8253,6 +8316,13 @@ function wtGroupLabel(items, rule) {
   tally.forEach((v, k) => { if (v > n) { n = v; best = k; } });
   const label = n === (items || []).length && best ? best : String(rule || "other").replace(/_/g, " ");
   return label.charAt(0).toUpperCase() + label.slice(1);
+}
+/* R65 — "the 3 alerts of this type" is wrong for a rule whose rows are one per CLIENT rather
+   than one per problem: three rows there are three people waiting, and the count the reader wants
+   is of people, not of alerts. Falls back to the old wording for every other rule. */
+function wtGroupUnit(rule, n) {
+  const u = WT_GROUP_UNIT[rule] || ["alert of this type", "alerts of this type"];
+  return n === 1 ? u[0] : u[1];
 }
 /* R12b · L-1/L-5/L-18 — the group's own title already explains Hide/Show; this appends a plain-
    English expansion for the one abbreviation that group label can carry (ERC), the same
@@ -8519,7 +8589,7 @@ function renderWatchtower() {
      announces its own open/closed state; the rows it owns stay in the list exactly as they were,
      with their existing Open / Snooze… / Dismiss buttons untouched. */
   const groupHtml = (g) => `<div class="wt-group wt-group-${g.sev}${g.open ? "" : " wt-folded"}" data-wt-key="${esc(g.key)}">
-      <button type="button" class="wt-group-head" aria-expanded="${g.open}" onclick="wtToggleGroup('${jsArg(g.key)}', this)" title="${g.open ? "Hide" : "Show"} the ${g.items.length} alert${g.items.length === 1 ? "" : "s"} of this type${esc(wtGroupTitleSuffix(g.label))}">
+      <button type="button" class="wt-group-head" aria-expanded="${g.open}" onclick="wtToggleGroup('${jsArg(g.key)}', this)" title="${g.open ? "Hide" : "Show"} the ${g.items.length} ${esc(wtGroupUnit(g.rule, g.items.length))}${esc(wtGroupTitleSuffix(g.label))}">
         <span class="wt-group-caret" aria-hidden="true"></span>
         <span class="wt-group-label">${esc(g.label)}</span>
         <span class="wt-group-n">${g.items.length}</span>
@@ -8989,6 +9059,13 @@ function starterViewSet() {
     pipeline: [
       { name: mine ? "My live cases" : "Live cases — everyone", filters: { ...pipeDefaults, adviser: meAdviser, segment: "current" } },
       { name: "Unassigned leads", filters: { ...pipeDefaults, adviser: "unassigned", segment: "new" } },
+      /* R65 · H7b — the third starter, and the one that shows what the round is FOR. The saved-view
+         mechanism already captures sortKey/sortDir/view (see pipelineFilterState), so a view can
+         pin a sort as well as a filter; nothing new was needed to seed this one.
+         ASCENDING, deliberately: waiting_on's sort value pushes the unanswered cases to "zz", so
+         ascending groups client → lender → solicitor → someone else and leaves the blanks at the
+         bottom. Descending would open the view on the rows that answer nothing. */
+      { name: "Waiting on solicitor", filters: { ...pipeDefaults, adviser: meAdviser, segment: "current", sortKey: "waiting_on", sortDir: 1, view: "table" } },
     ],
     // clientsFilterState() shape: search, adviser, segment, sort.
     clients: [
@@ -9280,182 +9357,26 @@ function refreshPipelineViews() {
   if (cur && savedViews("pipeline").some((v) => v.name === cur)) sel.value = cur;
 }
 
-async function loadPipeline() {
-  /* R43 — the server-side store, read once a session, from the same place (and for the same
-     reason) R37 put the starter seed: this is the first moment ME is resolved AND a view dropdown
-     is about to be painted. Not awaited — the board must not wait on it; when it answers it
-     repaints both <select>s itself. It goes BEFORE seedStarterViews so the local seed knows a
-     probe is in flight and leaves the starters to whichever store wins. */
-  loadSavedViews();
-  // R37 · L7 — the starter views need an identity, which module-eval time did not have. Seeded on
-  // the first board load after sign-in; the seed repaints both view <select>s itself.
-  seedStarterViews();
-  const propOn = (await propAddrSupported()) !== false;
-  const docsOn = (await docsSupported()) !== false;
-  const lenderOn = (await lenderTrackSupported()) !== false;
-  const boardSelect = BOARD_CASE_COLS
-    + (propOn ? ",property_address" : "")
-    + (docsOn ? ",waiting_on,solicitor_firm" : "")
-    + (lenderOn ? ",application_status" : "")
-    + ",clients!client_id(first_name,last_name,email)";
-  const { data: cases, error } = await db.from("cases").select(boardSelect).order("updated_at", { ascending: false }).limit(OWNER_ROW_CAP);
-  if (error) {
-    $("#board").classList.remove("hidden");
-    $("#board-hint").classList.add("hidden");
-    $("#board-legend").classList.add("hidden");
-    $("#stage-tabs").classList.add("hidden");
-    $("#table-wrap").classList.add("hidden");
-    renderLoadError("#board", error, loadPipeline);
-    return;
-  }
-  // R24 — the named select above carries property_address exactly when propOn was true, so the M7
-  // question is still settled for free off the first row (notePropAddrFromStarRow reads its presence).
-  // noteDocsFromStarRow only ever flips DOCS_SUPPORTED to false off a missing waiting_on, which the
-  // select omits precisely when docsOn was already false — so both detectors stay consistent with the
-  // columns actually requested (mirrors how loadDataHealth re-notes M7 after its own named select).
-  if (cases && cases.length) { notePropAddrFromStarRow(cases[0]); noteDocsFromStarRow(cases[0]); }
-  renderOwnerCapNotice("#board-cap-notice", ownerCapHit(cases)); // R23 — never silently truncate the board
-  const q = ($("#board-search").value || "").trim().toLowerCase();
-  const who = $("#board-adviser").value || "all";
-  const filtered = (cases || []).filter((c) => {
-    if (who === "unassigned" && c.assigned_to) return false;
-    if (who !== "all" && who !== "unassigned" && c.assigned_to !== who) return false;
-    if (q) {
-      // T1-19 — lead source and introducer name are searchable too, so the Reports tables can hand
-      // the board a filter the user can see in the box and clear.
-      // R6 — and the property. "Herbert Avenue" / "BH12" is how a landlord's cases are asked for on
-      // the phone; before this the board could only be filtered by the people and the money.
-      const hay = ((c.clients?.first_name || "") + " " + (c.clients?.last_name || "") + " " + (c.lender || "") + " " + (c.product_name || "") + " " + (c.lead_source || "") + " " + (introducerNames[c.introducer_id] || "") + " " + (c.property_address || "")).toLowerCase();
-      if (!hay.includes(q)) return false;
-    }
-    return true;
-  });
-  /* R35 §2 — TWO LIVE CASES ON THE SAME BUILDING FOR THE SAME CLIENT RENDER BYTE-IDENTICAL.
-     Duncan Armitage's two Skipton cases on 4 Seafield Gardens are the same name, the same chip,
-     the same lender and the same loan; nothing on either card said which was which, and the only
-     way to tell them apart was to open both. The board already holds every case it needs to
-     answer this, so the count is taken off the rows just read — no extra query.
-     The key is the client plus the CANONICAL property identity (propKey — the same normaliser
-     propChip and the Rate & ERC merge use; a second address normaliser is the R6 defect this
-     codebase exists not to repeat). Only LIVE cases count: a completed case on the same building
-     is history, not a twin, and would put a tag on a card that has no sibling on the board. */
-  const twinKey = (c) => (c.client_id || "") + "|" + (propKey(c) || "");
-  const twinCount = new Map();
-  filtered.forEach((c) => {
-    if (TERMINAL_STAGES.includes(c.stage)) return;
-    if (!propKey(c)) return;                       // no address identity — nothing to disambiguate
-    const k = twinKey(c);
-    twinCount.set(k, (twinCount.get(k) || 0) + 1);
-  });
-  renderSegmentControl(filtered);
-  const stageEntry = await loadStageEntries(filtered);
-  // Completed segment: the board makes little sense — force the completion-focused table.
-  if (pipelineSegment === "completed") pipelineView = "table";
-  if (pipelineView === "table") { renderPipelineTable(filtered, stageEntry, await propAddrSupported()); return; }
-  $("#board").classList.remove("hidden");
-  $("#board-hint").classList.remove("hidden");
-  /* R6-B4 — the legend explains card furniture (the aging left edge, the ≈ marker), so it
-     belongs to the board view only; the table view shows neither. */
-  $("#board-legend").classList.remove("hidden");
-  $("#stage-tabs").classList.add("hidden");
-  $("#table-wrap").classList.add("hidden");
-  // In a focused segment only that segment's stage columns render (wider, less scrolling).
-  const stages = segmentStageList(pipelineSegment);
-  const board = $("#board");
-  board.classList.toggle("is-focused", pipelineSegment !== "all");
-  board.style.setProperty("--ncols", stages.length);
-  const segCases = filtered.filter((c) => inSegment(c.stage, pipelineSegment));
-  if (!segCases.length) {
-    /* R6-B4 — the empty board was a centred grey sentence with 48px of padding
-       inside a grid that still reserved a full column row, which is how you get
-       "a handful of cards, one screen of content and several screens of nothing"
-       (W24). It is now an ordinary card of ordinary size that also says which of
-       the three filters is responsible for the emptiness, so the way out is on
-       screen rather than something to deduce. */
-    const segName = esc(SEGMENTS.find(([k]) => k === pipelineSegment)?.[1] || "this view");
-    const advOn = $("#board-adviser").value && $("#board-adviser").value !== "all";
-    const why = [advOn ? "the adviser filter" : "", q ? `the search “${esc(q)}”` : ""].filter(Boolean);
-    board.innerHTML = `<div class="board-empty">
-      <strong>Nothing in ${segName}${why.length ? " matching this filter" : ""}.</strong>
-      ${why.length
-        ? `Clear ${why.join(" or ")} to see the rest of the board.`
-        : `Cases appear here as soon as one reaches a stage in ${segName}.`}
-    </div>`;
-    updateBoardScrollHint();
-    return;
-  }
-  const byStage = {};
-  stages.forEach(([k]) => (byStage[k] = []));
-  segCases.forEach((c) => byStage[c.stage]?.push(c));
-  /* R6 — how many cases the client has IN THE BOOK (not in this filter), which is what decides
-     whether a case with no address still deserves the hollow type · lender chip. Counted off the
-     full `cases` read above, so narrowing the board to one adviser can't make a portfolio client
-     look like a single-case one. */
-  const clientCaseCount = {};
-  const clientCases = {};
-  (cases || []).forEach((c) => {
-    if (!c.client_id) return;
-    clientCaseCount[c.client_id] = (clientCaseCount[c.client_id] || 0) + 1;
-    (clientCases[c.client_id] = clientCases[c.client_id] || []).push(c);
-  });
-  // R6-FIX V2/V4 — the full book, per client: the property register's numbers and the
-  // hollow-chip rule both need the client's WHOLE set, which this read already is.
-  Object.keys(clientCases).forEach((cid) => registerClientProps(cid, clientCases[cid]));
-  /* R37 · W9 — TWO CLIENT RECORDS, ONE PERSON, TWO CARDS THAT SAY NOTHING ABOUT EACH OTHER.
-     Data health finds duplicate clients; the board, where an adviser actually works, gave no hint
-     at all, so a case was progressed on one record while the notes and the email history sat on
-     the other.
+/* ==========================================================================
+   R65 · L9 — ONE CARD BUILDER, TWO SURFACES.
 
-     Keyed on the CANONICAL NAME KEY, not the email, and deliberately: the board's read
-     (BOARD_CASE_COLS + clients!client_id(first_name,last_name)) embeds the name and NOT the
-     address — flagging on email would mean widening the app's fattest read for a hint. The key is
-     clientNameKey(), the SAME normaliser findClientMatches() dedupes on at both doors into the
-     system (lead accept and bulk import), so the board flags exactly what the duplicate detector
-     would call an exact name match and nothing else. The title says "name" out loud rather than
-     implying a stronger match than was actually made.
-
-     Counted over the FULL read, not `filtered`: narrowing the board to one adviser or one search
-     must not make a duplicated client look like a single record. Distinct client_ids, so a client
-     with four cases is not their own duplicate. */
-  const dupeNameClients = (() => {
-    /* R37 follow-up — TWO independent duplicate signals, matching the importer's own dedupe rule
-       ("exact email OR exact sorted name key"). Email catches the fixture's real pair —
-       "Deborah"/"Debbie" Ashworth share one email under different forenames, invisible to any
-       name key — which is why the board embed now carries `email`. Name catches records where
-       one copy has no email. Two distinct client_ids colliding on EITHER key flag both. */
-    const byEmail = new Map(), byName = new Map();
-    (cases || []).forEach((c) => {
-      if (!c.client_id) return;
-      const em = String((c.clients && c.clients.email) || "").trim().toLowerCase();
-      if (em) { if (!byEmail.has(em)) byEmail.set(em, new Set()); byEmail.get(em).add(c.client_id); }
-      const nk = clientNameKey(clientFullName(c.clients || {}));
-      if (nk) { if (!byName.has(nk)) byName.set(nk, new Set()); byName.get(nk).add(c.client_id); }
-    });
-    const flagged = new Set();
-    [byEmail, byName].forEach((m) => m.forEach((ids) => { if (ids.size > 1) ids.forEach((id) => flagged.add(id)); }));
-    return flagged;
-  })();
-  // Stalled deals surface first: red, then amber (worst days-in-stage on top),
-  // then the rest in the existing updated_at order.
-  const AGE_RANK = { red: 0, amber: 1 };
-  stages.forEach(([k]) => byStage[k].sort((a, b) => {
-    const A = cardAge(a, stageEntry[a.id]), B = cardAge(b, stageEntry[b.id]);
-    const ra = A.level in AGE_RANK ? AGE_RANK[A.level] : 2;
-    const rb = B.level in AGE_RANK ? AGE_RANK[B.level] : 2;
-    if (ra !== rb) return ra - rb;
-    if (ra < 2) return (B.inStage ?? -1) - (A.inStage ?? -1);
-    return 0;
-  }));
-  let boardSkipped = 0;   // R21 Part B — skip-and-count: one malformed card must not white-screen the board
-  const boardHtml = stages.map(([k, label]) => {
-    const colCards = boardExpandedStages.has(k) ? byStage[k] : byStage[k].slice(0, BOARD_COL_CAP);
-    const hiddenCount = byStage[k].length - colCards.length;
-    return `
-    <div class="col" data-stage="${k}">
-      <h4${k === "decision_in_principle" ? ` title="${TIP_DIP}"` : ""}>${label} <span>${byStage[k].length}</span></h4>
-      ${byStage[k].length === 0 ? '<div class="col-empty">No cases here</div>' : ""}
-      ${colCards.map((c) => {
-        try {
+   The board card was ~60 lines of template literal living inside loadPipeline's
+   column map, which meant the mobile card list this round adds to the TABLE
+   would have had to be a second, drifting copy of it. It is lifted out verbatim
+   — same markup, same classes, same handlers, same comments — and takes the four
+   pieces of board-wide context it reads as an argument bag:
+     stageEntry        · id → the ISO the case entered its stage (the aging edge)
+     clientCaseCount   · id → how many cases that client has IN THE BOOK
+     twinCount/twinKey · the R35 §2 "two live cases on one building" tag
+     dupeNameClients   · the R37 W9 duplicate-client hint
+   Nothing about the card changed in this round; only where the function lives.
+   ========================================================================== */
+function boardCardHtml(c, ctx) {
+  const stageEntry = (ctx && ctx.stageEntry) || {};
+  const clientCaseCount = (ctx && ctx.clientCaseCount) || {};
+  const twinCount = (ctx && ctx.twinCount) || new Map();
+  const twinKey = (ctx && ctx.twinKey) || (() => "");
+  const dupeNameClients = (ctx && ctx.dupeNameClients) || new Set();
         const erc = c.erc_end_date && c.rate_end_date && c.erc_end_date > c.rate_end_date;
         const age = cardAge(c, stageEntry[c.id]);
         const nextStage = nextStageFor(c.stage, c.case_kind);
@@ -9532,7 +9453,210 @@ async function loadPipeline() {
             ${STAGES.map(([k, l]) => `<option value="${k}" ${k === c.stage ? "selected" : ""}${k === "decision_in_principle" ? ` title="${TIP_DIP}"` : ""}>${l}</option>`).join("")}
           </select>
         </div>`;
-        } catch (err) {
+}
+/* R37 · W9 — TWO CLIENT RECORDS, ONE PERSON, TWO CARDS THAT SAY NOTHING ABOUT EACH OTHER.
+   Data health finds duplicate clients; the board, where an adviser actually works, gave no hint
+   at all, so a case was progressed on one record while the notes and the email history sat on
+   the other.
+
+   Keyed on the CANONICAL NAME KEY, not the email, and deliberately: the board's read
+   (BOARD_CASE_COLS + clients!client_id(first_name,last_name)) embeds the name and NOT the
+   address — flagging on email would mean widening the app's fattest read for a hint. The key is
+   clientNameKey(), the SAME normaliser findClientMatches() dedupes on at both doors into the
+   system (lead accept and bulk import), so the board flags exactly what the duplicate detector
+   would call an exact name match and nothing else. The title says "name" out loud rather than
+   implying a stronger match than was actually made.
+
+   Counted over the FULL read, not the filtered set: narrowing the board to one adviser or one
+   search must not make a duplicated client look like a single record. Distinct client_ids, so a
+   client with four cases is not their own duplicate.
+   R65 — lifted out of loadPipeline unchanged, so the table's mobile card list flags exactly what
+   the board flags rather than a second opinion. */
+function boardDupeClientIds(cases) {
+  /* R37 follow-up — TWO independent duplicate signals, matching the importer's own dedupe rule
+     ("exact email OR exact sorted name key"). Email catches the fixture's real pair —
+     "Deborah"/"Debbie" Ashworth share one email under different forenames, invisible to any
+     name key — which is why the board embed now carries `email`. Name catches records where
+     one copy has no email. Two distinct client_ids colliding on EITHER key flag both. */
+  const byEmail = new Map(), byName = new Map();
+  (cases || []).forEach((c) => {
+    if (!c.client_id) return;
+    const em = String((c.clients && c.clients.email) || "").trim().toLowerCase();
+    if (em) { if (!byEmail.has(em)) byEmail.set(em, new Set()); byEmail.get(em).add(c.client_id); }
+    const nk = clientNameKey(clientFullName(c.clients || {}));
+    if (nk) { if (!byName.has(nk)) byName.set(nk, new Set()); byName.get(nk).add(c.client_id); }
+  });
+  const flagged = new Set();
+  [byEmail, byName].forEach((m) => m.forEach((ids) => { if (ids.size > 1) ids.forEach((id) => flagged.add(id)); }));
+  return flagged;
+}
+
+async function loadPipeline() {
+  /* R43 — the server-side store, read once a session, from the same place (and for the same
+     reason) R37 put the starter seed: this is the first moment ME is resolved AND a view dropdown
+     is about to be painted. Not awaited — the board must not wait on it; when it answers it
+     repaints both <select>s itself. It goes BEFORE seedStarterViews so the local seed knows a
+     probe is in flight and leaves the starters to whichever store wins. */
+  loadSavedViews();
+  // R37 · L7 — the starter views need an identity, which module-eval time did not have. Seeded on
+  // the first board load after sign-in; the seed repaints both view <select>s itself.
+  seedStarterViews();
+  const propOn = (await propAddrSupported()) !== false;
+  const docsOn = (await docsSupported()) !== false;
+  const lenderOn = (await lenderTrackSupported()) !== false;
+  const boardSelect = BOARD_CASE_COLS
+    + (propOn ? ",property_address" : "")
+    + (docsOn ? ",waiting_on,solicitor_firm" : "")
+    + (lenderOn ? ",application_status" : "")
+    + ",clients!client_id(first_name,last_name,email)";
+  const { data: cases, error } = await db.from("cases").select(boardSelect).order("updated_at", { ascending: false }).limit(OWNER_ROW_CAP);
+  if (error) {
+    $("#board").classList.remove("hidden");
+    $("#board-hint").classList.add("hidden");
+    $("#board-legend").classList.add("hidden");
+    $("#stage-tabs").classList.add("hidden");
+    $("#table-wrap").classList.add("hidden");
+    renderLoadError("#board", error, loadPipeline);
+    return;
+  }
+  // R24 — the named select above carries property_address exactly when propOn was true, so the M7
+  // question is still settled for free off the first row (notePropAddrFromStarRow reads its presence).
+  // noteDocsFromStarRow only ever flips DOCS_SUPPORTED to false off a missing waiting_on, which the
+  // select omits precisely when docsOn was already false — so both detectors stay consistent with the
+  // columns actually requested (mirrors how loadDataHealth re-notes M7 after its own named select).
+  if (cases && cases.length) { notePropAddrFromStarRow(cases[0]); noteDocsFromStarRow(cases[0]); }
+  renderOwnerCapNotice("#board-cap-notice", ownerCapHit(cases)); // R23 — never silently truncate the board
+  const q = ($("#board-search").value || "").trim().toLowerCase();
+  const who = $("#board-adviser").value || "all";
+  const filtered = (cases || []).filter((c) => {
+    if (who === "unassigned" && c.assigned_to) return false;
+    if (who !== "all" && who !== "unassigned" && c.assigned_to !== who) return false;
+    if (q) {
+      // T1-19 — lead source and introducer name are searchable too, so the Reports tables can hand
+      // the board a filter the user can see in the box and clear.
+      // R6 — and the property. "Herbert Avenue" / "BH12" is how a landlord's cases are asked for on
+      // the phone; before this the board could only be filtered by the people and the money.
+      const hay = ((c.clients?.first_name || "") + " " + (c.clients?.last_name || "") + " " + (c.lender || "") + " " + (c.product_name || "") + " " + (c.lead_source || "") + " " + (introducerNames[c.introducer_id] || "") + " " + (c.property_address || "")).toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+  /* R35 §2 — TWO LIVE CASES ON THE SAME BUILDING FOR THE SAME CLIENT RENDER BYTE-IDENTICAL.
+     Duncan Armitage's two Skipton cases on 4 Seafield Gardens are the same name, the same chip,
+     the same lender and the same loan; nothing on either card said which was which, and the only
+     way to tell them apart was to open both. The board already holds every case it needs to
+     answer this, so the count is taken off the rows just read — no extra query.
+     The key is the client plus the CANONICAL property identity (propKey — the same normaliser
+     propChip and the Rate & ERC merge use; a second address normaliser is the R6 defect this
+     codebase exists not to repeat). Only LIVE cases count: a completed case on the same building
+     is history, not a twin, and would put a tag on a card that has no sibling on the board. */
+  const twinKey = (c) => (c.client_id || "") + "|" + (propKey(c) || "");
+  const twinCount = new Map();
+  filtered.forEach((c) => {
+    if (TERMINAL_STAGES.includes(c.stage)) return;
+    if (!propKey(c)) return;                       // no address identity — nothing to disambiguate
+    const k = twinKey(c);
+    twinCount.set(k, (twinCount.get(k) || 0) + 1);
+  });
+  renderSegmentControl(filtered);
+  const stageEntry = await loadStageEntries(filtered);
+  /* R6 — how many cases the client has IN THE BOOK (not in this filter), which is what decides
+     whether a case with no address still deserves the hollow type · lender chip. Counted off the
+     full `cases` read above, so narrowing the board to one adviser can't make a portfolio client
+     look like a single-case one.
+     R65 · L9 — computed BEFORE the table's early return (it used to live in the board branch),
+     because the table's mobile card list builds the same cards from the same builder and a chip
+     that differs between the two views is a chip nobody can trust. `clientCases` /
+     registerClientProps stay in the board branch: the property REGISTER is accumulating state
+     that other surfaces read, and quietly widening what feeds it is a different change. */
+  const clientCaseCount = {};
+  (cases || []).forEach((c) => { if (c.client_id) clientCaseCount[c.client_id] = (clientCaseCount[c.client_id] || 0) + 1; });
+  const dupeNameClients = boardDupeClientIds(cases);
+  const cardCtx = { stageEntry, clientCaseCount, twinCount, twinKey, dupeNameClients };
+  // Completed segment: the board makes little sense — force the completion-focused table.
+  if (pipelineSegment === "completed") pipelineView = "table";
+  if (pipelineView === "table") {
+    renderPipelineTable(filtered, stageEntry, await propAddrSupported(), { docsOn, cardCtx });
+    return;
+  }
+  $("#board").classList.remove("hidden");
+  $("#board-hint").classList.remove("hidden");
+  /* R6-B4 — the legend explains card furniture (the aging left edge, the ≈ marker), so it
+     belongs to the board view only; the table view shows neither. */
+  $("#board-legend").classList.remove("hidden");
+  $("#stage-tabs").classList.add("hidden");
+  $("#table-wrap").classList.add("hidden");
+  // In a focused segment only that segment's stage columns render (wider, less scrolling).
+  const stages = segmentStageList(pipelineSegment);
+  const board = $("#board");
+  board.classList.toggle("is-focused", pipelineSegment !== "all");
+  board.style.setProperty("--ncols", stages.length);
+  const segCases = filtered.filter((c) => inSegment(c.stage, pipelineSegment));
+  if (!segCases.length) {
+    /* R6-B4 — the empty board was a centred grey sentence with 48px of padding
+       inside a grid that still reserved a full column row, which is how you get
+       "a handful of cards, one screen of content and several screens of nothing"
+       (W24). It is now an ordinary card of ordinary size that also says which of
+       the three filters is responsible for the emptiness, so the way out is on
+       screen rather than something to deduce. */
+    const segName = esc(SEGMENTS.find(([k]) => k === pipelineSegment)?.[1] || "this view");
+    const advOn = $("#board-adviser").value && $("#board-adviser").value !== "all";
+    const why = [advOn ? "the adviser filter" : "", q ? `the search “${esc(q)}”` : ""].filter(Boolean);
+    board.innerHTML = `<div class="board-empty">
+      <strong>Nothing in ${segName}${why.length ? " matching this filter" : ""}.</strong>
+      ${why.length
+        ? `Clear ${why.join(" or ")} to see the rest of the board.`
+        : `Cases appear here as soon as one reaches a stage in ${segName}.`}
+    </div>`;
+    updateBoardScrollHint();
+    return;
+  }
+  const byStage = {};
+  stages.forEach(([k]) => (byStage[k] = []));
+  segCases.forEach((c) => byStage[c.stage]?.push(c));
+  const clientCases = {};
+  (cases || []).forEach((c) => { if (c.client_id) (clientCases[c.client_id] = clientCases[c.client_id] || []).push(c); });
+  // R6-FIX V2/V4 — the full book, per client: the property register's numbers and the
+  // hollow-chip rule both need the client's WHOLE set, which this read already is.
+  Object.keys(clientCases).forEach((cid) => registerClientProps(cid, clientCases[cid]));
+  /* ==========================================================================
+     R65 · H7c — THE BOARD HAS A SORT NOW, AND IT IS THE ONLY ONE THAT MATTERS.
+
+     Before this round the columns were sorted by AGE BAND — red, then amber,
+     then "the rest in the existing updated_at order" — so within the green band
+     (which on a healthy book is most of the board) a case that had sat 19 days
+     could be painted below one that arrived yesterday, purely because somebody
+     saved a note on the newer one. The board is the DEFAULT view and it had no
+     sort control at all, so there was no way to ask for anything else.
+
+     It is now DAYS IN STAGE, DESCENDING, across the whole column. This is not a
+     new opinion: every board column is ONE stage, and AGE_THRESHOLDS is per
+     stage, so days-descending reproduces red → amber → green exactly and then
+     keeps ordering INSIDE each band instead of giving up. A case with no stage
+     entry recorded (`inStage == null`) has no age to rank on and goes last —
+     absence is not "zero days".
+
+     Ties break on updated_at ASCENDING — the least recently touched first —
+     because two cases that have sat the same number of days are separated by
+     which one nobody has looked at. */
+  stages.forEach(([k]) => byStage[k].sort((a, b) => {
+    const A = cardAge(a, stageEntry[a.id]), B = cardAge(b, stageEntry[b.id]);
+    const ai = A.inStage == null ? -1 : A.inStage;
+    const bi = B.inStage == null ? -1 : B.inStage;
+    if (ai !== bi) return bi - ai;
+    return String(a.updated_at || "").localeCompare(String(b.updated_at || ""));
+  }));
+  let boardSkipped = 0;   // R21 Part B — skip-and-count: one malformed card must not white-screen the board
+  const boardHtml = stages.map(([k, label]) => {
+    const colCards = boardExpandedStages.has(k) ? byStage[k] : byStage[k].slice(0, BOARD_COL_CAP);
+    const hiddenCount = byStage[k].length - colCards.length;
+    return `
+    <div class="col" data-stage="${k}">
+      <h4${k === "decision_in_principle" ? ` title="${TIP_DIP}"` : ""}>${label} <span>${byStage[k].length}</span></h4>
+      ${byStage[k].length === 0 ? '<div class="col-empty">No cases here</div>' : ""}
+      ${colCards.map((c) => {
+        try { return boardCardHtml(c, cardCtx); }
+        catch (err) {
           boardSkipped++;
           logClientError("caught", "board card render failed: " + ((err && err.message) || err), { recordId: c && c.id, where: "loadPipeline" });
           return "";
@@ -10389,7 +10513,15 @@ function caseMilestonesHtml(c) {
   const done = rows.filter((r) => r.state === "done").length;
   const cur = rows.find((r) => r.state === "current");
   const TICK = { done: "✓", current: "→", todo: "○", lost: "✕" };
-  return `<details class="case-milestones" id="case-milestones">
+  /* R65 · L4 — OPEN WHERE IT IS THE THING BEING READ.
+     The milestone list is a closed <details> everywhere, which is right at Enquiry (nothing has
+     happened yet) and wrong in the application window: at Application, Offer and Exchange the
+     question on the phone is literally "where has this got to and what is outstanding" — submitted
+     when, offer issued when, exchanged when — and that is exactly this list. It opens for those
+     three stages and stays closed for every other, so it is never noise on a case that has no
+     story yet and never a click away on a case that is all story. */
+  const msOpen = ["application", "offer", "exchange"].includes(c.stage);
+  return `<details class="case-milestones" id="case-milestones"${msOpen ? " open" : ""}>
     <summary>Milestones <span class="cs-muted">— ${done} of ${rows.length} done${cur ? " · now: " + esc(cur.label) : lost ? " · closed" : ""}</span></summary>
     <div class="ms-list">${rows.map((r) => `
       <div class="ms-row ${r.state}"><span class="ms-tick" aria-hidden="true">${TICK[r.state]}</span><span class="ms-label">${esc(r.label)}</span><span class="ms-date">${r.date}</span></div>`).join("")}
@@ -10441,6 +10573,81 @@ async function knownLenders() {
   } catch (_) { return []; }
 }
 const DIP_CHASE_TASK_TITLE = "Chase DIP decision";
+/* ==========================================================================
+   R65 · H7a — "WHO IS THIS CASE WAITING ON NOW?" AT STAGE ENTRY.
+
+   `cases.waiting_on` is the single best triage fact this app holds — it is what
+   the ⏳ chip on every board card and (from this round) its own sortable column
+   on the pipeline table are made of, and it answers the question an adviser
+   actually opens the board with ("who do I have to ring"), which the stage
+   cannot. In production it is NULL on 100% of live cases, for one boring
+   reason: the only place it could be set is field 31-of-49 on the case form,
+   and nobody scrolls to field 31 to record something they already know.
+
+   So it is asked HERE, at the three moments it changes and where somebody is
+   already looking at the case: entering Application, Offer or Exchange. Same
+   rules as every other stage-entry prompt in this block, deliberately:
+     · ONLY WHEN IT IS UNKNOWN. A case that already names who it is waiting on
+       has been answered; asking again is the app arguing with a person who
+       already did the work.
+     · ONLY BEHIND docsSupported(). `waiting_on` / `solicitor_firm` are m10
+       columns (see the R9-5 block); on a database without m10 there is nothing
+       to write and the prompt does not exist.
+     · THE FORM'S OWN LIST AND THE FORM'S OWN RULES. WAITING_ON_OPTIONS, and the
+       solicitor-firm datalist input hidden for a product transfer exactly as
+       the case form hides it — two lists of "who a case can be with" would be
+       two reports nobody can reconcile.
+     · BLANK IS SKIP. Leaving the select on "—" writes nothing at all, and the
+       three-way exit (Don't advance / Skip / Save & advance) is untouched.
+   ========================================================================== */
+const WAITING_ON_STAGE_ENTRY_STAGES = ["application", "offer", "exchange"];
+/* The field, or "" when there is nothing to ask. Async because it reads the feature probe and the
+   firm's own solicitor list — the same read the case form's datalist uses, so a firm already on
+   file is offered rather than retyped into a second spelling. */
+async function stageEntryWaitingOnHtml(cRow) {
+  if ((await docsSupported()) === false) return "";
+  if (!cRow || typeof cRow !== "object") return "";
+  // A row that does not CARRY the column knows nothing about this case's answer — it must not be
+  // read as "empty" (the same discipline registerClientProps applies to property_address).
+  if (!Object.prototype.hasOwnProperty.call(cRow, "waiting_on")) return "";
+  if (String(cRow.waiting_on || "").trim()) return "";      // already answered — do not ask
+  const isPT = cRow.case_kind === "product_transfer";
+  const firms = await knownSolicitorFirms();
+  return `<label style="margin-top:10px;">Who is this case waiting on now?
+      <select id="se-waiting">
+        <option value="" selected>— not sure, leave it blank —</option>
+        ${WAITING_ON_OPTIONS.filter(([k]) => k !== "solicitor" || !isPT).map(([k, l]) => `<option value="${k}">${esc(l)}</option>`).join("")}
+      </select>
+      <span class="s cs-muted">This is what fills the ⏳ chip on the board card and the “Waiting on” column on the pipeline table — the one thing on a case that says who to ring next.</span>
+    </label>
+    <label id="se-waiting-firm-field" class="hidden" style="margin-top:8px;">Solicitor firm
+      <input id="se-waiting-firm" list="se-waiting-firms" placeholder="e.g. Harker &amp; Bligh LLP" autocomplete="off">
+      <datalist id="se-waiting-firms">${firms.map((f) => `<option value="${esc(f)}"></option>`).join("")}</datalist>
+      <span class="s cs-muted">Pick a firm you already use where you can — the conveyancer-speed report groups on this exact text.</span>
+    </label>`;
+}
+// Show the firm box only while "Solicitor" is picked — the case form's rule, in the dialog.
+function wireStageEntryWaitingOn(box) {
+  const sel = box.querySelector("#se-waiting");
+  if (!sel) return;
+  const field = box.querySelector("#se-waiting-firm-field");
+  const sync = () => { if (field) field.classList.toggle("hidden", sel.value !== "solicitor"); };
+  sel.addEventListener("change", sync);
+  sync();
+}
+/* What "Save & advance" should add to the patch, or null for "nothing was chosen". Never returns
+   solicitor_firm on its own and never writes an empty firm — a blank box is not an answer. */
+function stageEntryWaitingOnPatch(box) {
+  const sel = box.querySelector("#se-waiting");
+  if (!sel) return null;
+  const v = String(sel.value || "").trim();
+  if (!v) return null;
+  const patch = { waiting_on: v };
+  const firmEl = box.querySelector("#se-waiting-firm");
+  const firm = firmEl ? String(firmEl.value || "").trim() : "";
+  if (v === "solicitor" && firm) patch.solicitor_firm = firm;
+  return patch;
+}
 /* Returns { patch, task, docs } to apply, or null for "do not advance". `{}` means "advance,
    change nothing" — which is both the Skip button and the case where nothing was missing in the
    first place, so the caller has one shape to handle.
@@ -10549,23 +10756,31 @@ async function promptStageEntry(targetStage, cRow, caseName) {
     });
   }
   if (targetStage === "offer") {
-    if (cRow && cRow.offer_expiry_date) return {};
+    /* R65 · H7a — the waiting-on question JOINS this dialog rather than opening a second one.
+       ONE dialog per move is the contract this whole block is built on (a person advancing a case
+       answers once), so the expiry half and the waiting-on half are assembled here and either can
+       be absent: an offer whose expiry is already recorded but whose waiting_on is empty still
+       asks, and a case where both are already answered asks nothing at all and advances. */
+    const needExpiry = !(cRow && cRow.offer_expiry_date);
+    const waitHtml = await stageEntryWaitingOnHtml(cRow);
+    if (!needExpiry && !waitHtml) return {};
     /* R13 · M-11 — the SAME letter carries both dates, so both are asked for in the one dialog
        rather than in two prompts a fortnight apart. "Issued" is prefilled with today because in
        practice the offer is filed the day it lands and that is the answer nine times in ten; it is
        a PREFILL, not a write — clearing the box, or pressing Skip, leaves the column null. Skip
        still writes absolutely nothing, including this. */
     const issuedDefault = localDateStr();
-    const forwardOn = (await forwardDatesSupported()) === true;
+    const forwardOn = needExpiry && (await forwardDatesSupported()) === true;
     return openOverlay(`
       <h3>Moving ${esc(caseName || "this case")} to Offer</h3>
-      <p class="panel-sub">An offer runs out. The date is on the offer letter, and it is what every completion date after this has to beat — the case has no <strong>offer expiry date</strong> recorded.</p>
+      ${needExpiry ? `<p class="panel-sub">An offer runs out. The date is on the offer letter, and it is what every completion date after this has to beat — the case has no <strong>offer expiry date</strong> recorded.</p>
       <label>Offer expiry date<input type="date" id="se-expiry"></label>
       ${forwardOn ? `<label style="margin-top:8px;">When was the offer issued? (today)
         <input type="date" id="se-issued" value="${esc(issuedDefault)}">
         <span class="s cs-muted">The date printed on the offer letter. Today is filled in because that is usually right — change it or clear it if it is not.</span>
-      </label>` : ""}
-      <p class="panel-sub" style="margin-top:8px;">Leave it blank and nothing is written. <strong>Skip</strong> advances the case and changes nothing else; the field is on the case form whenever the letter turns up.</p>
+      </label>` : ""}` : ""}
+      ${waitHtml}
+      <p class="panel-sub" style="margin-top:8px;">Leave ${needExpiry && waitHtml ? "either of these" : "it"} blank and nothing is written for ${needExpiry && waitHtml ? "that one" : "it"}. <strong>Skip</strong> advances the case and changes nothing else; ${needExpiry ? "the expiry field is on the case form whenever the letter turns up" : "who the case is waiting on is on the case form too"}.</p>
       <div class="modal-actions">
         <div><button type="button" class="btn btn-ghost" id="se-cancel">Don't advance</button></div>
         <div class="right">
@@ -10573,16 +10788,50 @@ async function promptStageEntry(targetStage, cRow, caseName) {
           <button type="button" class="btn btn-primary" id="se-ok">Save &amp; advance</button>
         </div>
       </div>`, (finish, box) => {
+      wireStageEntryWaitingOn(box);
       box.querySelector("#se-cancel").onclick = () => finish(null);
       box.querySelector("#se-skip").onclick = () => finish({});
       box.querySelector("#se-ok").onclick = () => {
-        const v = String(box.querySelector("#se-expiry").value || "").trim();
+        const expEl = box.querySelector("#se-expiry");
+        const v = expEl ? String(expEl.value || "").trim() : "";
         const issuedEl = box.querySelector("#se-issued");
         const iv = issuedEl ? String(issuedEl.value || "").trim() : "";
         const patch = {};
         if (v) patch.offer_expiry_date = v;
         if (iv) patch.offer_issued_date = iv;
+        Object.assign(patch, stageEntryWaitingOnPatch(box) || {});
         finish({ patch: Object.keys(patch).length ? patch : null });
+      };
+    });
+  }
+  /* R65 · H7a — APPLICATION and EXCHANGE had no stage-entry prompt at all, and they are the two
+     stages where "who is it with" changes hands most often: a case arriving at Application is
+     almost always with the LENDER, one arriving at Exchange with the SOLICITOR, and neither fact
+     was ever recorded because nothing asked. The dialog exists ONLY when there is a question —
+     no m10, or a case that already names who it is waiting on, advances silently exactly as it
+     did before this round. */
+  if (WAITING_ON_STAGE_ENTRY_STAGES.includes(targetStage)) {
+    const waitHtml = await stageEntryWaitingOnHtml(cRow);
+    if (!waitHtml) return {};
+    const stageName = STAGE_LABEL[targetStage] || targetStage;
+    return openOverlay(`
+      <h3>Moving ${esc(caseName || "this case")} to ${esc(stageName)}</h3>
+      <p class="panel-sub">A case sits at ${esc(stageName)} for weeks, and the stage does not say <strong>who it is sitting with</strong> — the lender, the solicitor, or the client who still owes us something. Recording it here is what makes the board answer “who do I have to ring today”.</p>
+      ${waitHtml}
+      <p class="panel-sub" style="margin-top:8px;">Leave it blank and nothing is written — a guessed answer is worse than an empty one. <strong>Skip</strong> advances the case and changes nothing else; the field is on the case form and on the case screen whenever you know.</p>
+      <div class="modal-actions">
+        <div><button type="button" class="btn btn-ghost" id="se-cancel">Don't advance</button></div>
+        <div class="right">
+          <button type="button" class="btn" id="se-skip">Skip — advance anyway</button>
+          <button type="button" class="btn btn-primary" id="se-ok">Save &amp; advance</button>
+        </div>
+      </div>`, (finish, box) => {
+      wireStageEntryWaitingOn(box);
+      box.querySelector("#se-cancel").onclick = () => finish(null);
+      box.querySelector("#se-skip").onclick = () => finish({});
+      box.querySelector("#se-ok").onclick = () => {
+        const patch = stageEntryWaitingOnPatch(box);
+        finish({ patch: patch && Object.keys(patch).length ? patch : null });
       };
     });
   }
@@ -10608,11 +10857,16 @@ window.moveCaseToStage = async function (caseId, targetStage, opts = {}) {
        completion can offer the thank-you task without a second round-trip, and so the confirm
        below can say whether one will be offered at all. */
     const refOn = await referrerSupported();
+    /* R65 · H7a — waiting_on/solicitor_firm come along for the same reason offer_expiry_date does:
+       the stage-entry prompt has to tell "already recorded" from "never asked", and it must not
+       ask a question the case has already answered. m10 columns, so behind docsSupported() exactly
+       as the board's own select gates them — an un-migrated database never 42703s here. */
+    const seDocsOn = (await docsSupported()) !== false;
     cRow = (await db.from("cases")
       /* R12b · W-30 — offer_expiry_date comes along so the Offer stage-entry prompt can tell
          "already recorded" from "never asked". A base column (the case form has always written it
          unconditionally), so naming it costs no feature detection. */
-      .select("id,client_id,assigned_to,stage,protection_status,completed_at,case_kind,lender,offer_expiry_date" + (propOn ? ",property_address" : "") + (refOn ? ",referrer_client_id" : "") + ",clients!client_id(first_name,last_name)")
+      .select("id,client_id,assigned_to,stage,protection_status,completed_at,case_kind,lender,offer_expiry_date" + (propOn ? ",property_address" : "") + (refOn ? ",referrer_client_id" : "") + (seDocsOn ? ",waiting_on,solicitor_firm" : "") + ",clients!client_id(first_name,last_name)")
       .eq("id", caseId).single()).data;
   }
   if (cRow && cRow.stage === targetStage) return "noop"; // no-op (e.g. dropped back on the same column)
@@ -10776,6 +11030,11 @@ window.moveCaseToStage = async function (caseId, targetStage, opts = {}) {
       + (stageEntry.patch && stageEntry.patch.offer_expiry_date ? ` · offer expiry ${fmtD(stageEntry.patch.offer_expiry_date)}` : "")
       // R13 · M-11 — the toast names everything the prompt actually wrote, or it is not a receipt.
       + (stageEntry.patch && stageEntry.patch.offer_issued_date ? ` · offer issued ${fmtD(stageEntry.patch.offer_issued_date)}` : "")
+      /* R65 · H7a — the waiting-on answer on the same receipt as everything else the prompt wrote.
+         Named with the firm where one was given, because "waiting on solicitor" with no solicitor
+         named is the shrug waitingChipHtml's own comment complains about. */
+      + (stageEntry.patch && stageEntry.patch.waiting_on
+        ? ` · waiting on ${waitingOnLabel(stageEntry.patch.waiting_on).toLowerCase()}${stageEntry.patch.solicitor_firm ? " · " + stageEntry.patch.solicitor_firm : ""}` : "")
       + stageEntryTaskNote
       // R63 · H2 — and the checklist, on the same receipt as everything else the prompt wrote.
       + stageEntryDocsNote
@@ -11205,20 +11464,214 @@ async function bulkAddTask() {
   setBulkBusy(true);
   try { await bulkAddTaskRun(ids); } finally { setBulkBusy(false); }
 }
-async function bulkAddTaskRun(ids) {
+/* ==========================================================================
+   R65 · M11 — "CHASE SOLICITORS", THE PRESET.
+
+   THE TITLE IS A CONTRACT, NOT A LABEL. Production's `auto_stage_comms` trigger
+   writes exactly "Chase solicitors for completion date" when a case enters
+   Exchange, and both it and the Watchtower's `exchange_no_chase` rule match on
+   `Chase solicitors%`. A bulk verb that wrote "Chase the solicitor" instead
+   would create a task the trigger then duplicates and the rule still reports as
+   missing — two lists and one job. So the preset writes that string verbatim,
+   and the idempotency check is the trigger's own: skip when an OPEN task whose
+   title starts "Chase solicitors" already exists on the case.
+
+   It runs through bulkAddTaskRun rather than beside it — one writer, one failure
+   report, one retry-pruning rule — with the title/date supplied instead of asked
+   for, and its own pre-flight and confirm in place of promptBulkTask.
+   ========================================================================== */
+const SOLICITOR_CHASE_TASK_TITLE = "Chase solicitors for completion date";
+const SOLICITOR_CHASE_TASK_PREFIX = "chase solicitors";
+async function bulkChaseSolicitors() {
+  const ids = [...pipeSel];
+  if (!ids.length) return;
+  if (bulkBusy) return;
+  setBulkBusy(true);
+  try {
+    await bulkAddTaskRun(ids, {
+      title: SOLICITOR_CHASE_TASK_TITLE,
+      due: localDateStr(),                       // today: this is the chase, not a diary entry
+      openPrefix: SOLICITOR_CHASE_TASK_PREFIX,
+    });
+  } finally { setBulkBusy(false); }
+}
+/* ==========================================================================
+   R65 · M11 — THE REVIEWED BATCH: DOCUMENT REQUESTS FROM THE PIPELINE TABLE.
+
+   Data health has said since R12b that there is deliberately no "send to all"
+   on the Waiting-on-documents panel, and that stays true THERE: that panel is a
+   list the app built, forty rows nobody chose, and one button firing forty
+   client emails off it is an incident, not a time-saver.
+
+   This is the other thing — the shape that sentence always allowed and the app
+   never offered. The operator has ticked a handful of rows they were already
+   reading, one confirm names EVERY case that will be written to and every case
+   that will not, with the reason, and only then does anything queue. That is a
+   reviewed batch, and the Data-health copy now says so out loud rather than
+   implying the firm must send one at a time forever.
+
+   FIVE REASONS A SELECTED CASE IS SKIPPED, each named in the confirm:
+     · not live          — completed / not proceeding: the lender has what it needs
+     · no checklist      — the documented rule (docChaseState): an unknown is not
+                           an outstanding item, and the firm-wide list would ask a
+                           client for things they may already have handed over
+     · nothing outstanding — an email asking for nothing, which also restarts the
+                           quiet window for free (queueEmail refuses this anyway)
+     · no client email   — nothing to send to
+     · already queued    — an unsent docs_request is already sitting in the queue
+     · automation suppressed — the database refuses this client automated contact.
+                           The single-case button WARNS and lets a person override,
+                           because that is one deliberate email; a batch is not,
+                           so here it is a skip that names the case and points at
+                           the case screen.
+   ========================================================================== */
+async function bulkSendDocsRequests() {
+  const ids = [...pipeSel];
+  if (!ids.length) return;
+  if (bulkBusy) return;
+  setBulkBusy(true);
+  try { await bulkSendDocsRequestsRun(ids); } finally { setBulkBusy(false); }
+}
+async function bulkSendDocsRequestsRun(ids) {
+  if ((await docsSupported()) === false) {
+    return toast("This database has no document checklists yet (migration m10), so there is nothing to request.");
+  }
+  const propOn = await propAddrSupported();
+  const { data: rows, error } = await inChunks(ids, (sl) => db.from("cases")
+    .select("id,client_id,stage,assigned_to,case_kind,lender,broker_fee,fee_status" + (propOn ? ",property_address" : "") + ",clients!client_id(first_name,last_name,email)")
+    .in("id", sl));
+  if (error) return toast("Error: " + error.message);
+  const nameOf = bulkCaseLabel;
+  // Three batched reads for the whole selection — never one per case.
+  const [{ data: docRows }, { data: mailRows }] = await Promise.all([
+    inChunks(ids, (sl) => db.from("case_documents").select("case_id,status").in("case_id", sl)),
+    inChunks(ids, (sl) => db.from("email_queue").select("case_id,email_type,status,sent_at").in("case_id", sl)),
+  ]);
+  const care = await loadClientCare([...new Set((rows || []).map((c) => c.client_id).filter(Boolean))]);
+  const total = {}, outstanding = {};
+  (docRows || []).forEach((d) => {
+    if (!d || !d.case_id) return;
+    total[d.case_id] = (total[d.case_id] || 0) + 1;
+    if (d.status === "requested") outstanding[d.case_id] = (outstanding[d.case_id] || 0) + 1;
+  });
+  /* "Already queued" means a docs_request row that has NOT gone out yet — a sent one is history
+     and re-asking is the whole point of a chase. `status` is not guaranteed on every deploy, so
+     an unsent row is one with no sent_at and no cancelled/failed status. */
+  const queued = new Set();
+  (mailRows || []).forEach((m) => {
+    if (!m || m.case_id == null || m.email_type !== "docs_request") return;
+    if (m.sent_at) return;
+    if (m.status === "cancelled" || m.status === "failed") return;
+    queued.add(m.case_id);
+  });
+  const eligible = [], skipped = [];
+  (rows || []).forEach((c) => {
+    if (TERMINAL_STAGES.includes(c.stage)) skipped.push(`${nameOf(c)} (not a live case)`);
+    else if (!(total[c.id] || 0)) skipped.push(`${nameOf(c)} (no document checklist — build one on the case first; a case with no checklist is never chased)`);
+    else if (!(outstanding[c.id] || 0)) skipped.push(`${nameOf(c)} (nothing outstanding — everything is in or waived)`);
+    else if (!(c.clients && c.clients.email)) skipped.push(`${nameOf(c)} (no email address on file)`);
+    else if (queued.has(c.id)) skipped.push(`${nameOf(c)} (a document request is already queued and unsent)`);
+    else if (care[c.client_id] && care[c.client_id].suppress_automation) skipped.push(`${nameOf(c)} (automation suppressed for this client — send it by hand from the case if it is genuinely needed)`);
+    else eligible.push(c);
+  });
+  if (!eligible.length) {
+    return toast(skipped.length
+      ? `Nothing to send — all ${skipped.length} selected case${skipped.length === 1 ? " is" : "s are"} skipped (${skipped.slice(0, 3).join("; ")}${skipped.length > 3 ? `; and ${skipped.length - 3} more` : ""})`
+      : "Nothing to send");
+  }
+  if (!confirm([
+    `Queue a document request for ${eligible.length} of the ${ids.length} selected case${ids.length === 1 ? "" : "s"}?`,
+    "",
+    "Each email lists ONLY what is still outstanding on that case's own checklist. Sending also restarts the quiet window before the next automatic chase.",
+    "",
+    "Sending to:",
+    ...eligible.slice(0, 8).map((c) => `· ${nameOf(c)} — ${c.clients.email} (${outstanding[c.id]} item${outstanding[c.id] === 1 ? "" : "s"} outstanding)`),
+    ...(eligible.length > 8 ? [`· and ${eligible.length - 8} more`] : []),
+    ...(skipped.length ? ["", `Skipped (${skipped.length}) — nothing is sent to these:`,
+      ...skipped.slice(0, 6).map((s) => "· " + s),
+      ...(skipped.length > 6 ? [`· and ${skipped.length - 6} more`] : [])] : []),
+  ].join("\n"))) return;
+  const queuedIds = [], failed = [];
+  for (const c of eligible) {
+    let res = null;
+    try { res = await queueEmail(c.id, c.client_id, "docs_request", c, null, { bulk: true }); }
+    catch (e) { res = { ok: false, error: (e && e.message) || String(e) }; }
+    if (res && res.ok) { if (res.id) queuedIds.push(res.id); }
+    else failed.push({ id: c.id, label: nameOf(c), why: (res && res.error) || "unknown error" });
+  }
+  // ONE send for the whole batch, and one result line — the G1I-R7 rule (six toasts means five
+  // were never seen). Nothing is re-queued here; this only releases the rows just written.
+  const res = queuedIds.length ? await runAutomation(true, { queueIds: queuedIds }) : null;
+  let msg = `${queuedIds.length} document request${queuedIds.length === 1 ? "" : "s"} queued`;
+  if (skipped.length) msg += ` · ${skipped.length} skipped`;
+  if (failed.length) msg += ` · ${failed.length} failed: ${failed.slice(0, 2).map((f) => `${f.label} — ${f.why}`).join("; ")}${failed.length > 2 ? ` and ${failed.length - 2} more` : ""}`;
+  /* The send outcome rides on THIS sentence rather than firing a second toast that would overwrite
+     it — sendResultToast's four cases, said as a clause. "Queued" and "sent" are different claims
+     and the operator is owed whichever one is true. */
+  if (res) {
+    if (res.sent > 0) msg += ` · ${res.sent} sent ✓`;
+    else if (res.unreachable) msg += ` · the send service could not be reached (${res.error}) — they stay in the queue; check the Emails tab`;
+    else if (res.error) msg += ` · sending FAILED: ${res.error} — nothing has reached the clients; see the Emails tab`;
+    else if (res.failed > 0) msg += ` · the send service reported them as failed — nothing has reached the clients; see the Emails tab`;
+  }
+  toast(msg);
+  // Anything that failed stays selected, so the retry is targeted rather than a re-run that would
+  // double every request that DID work. Same rule as the rate-end sweep.
+  pipeSel.clear();
+  failed.forEach((f) => pipeSel.add(f.id));
+  loadPipeline();
+}
+async function bulkAddTaskRun(ids, preset = null) {
   // G1I-B5 — the client's name is fetched so a failure can be NAMED. Reporting "1 error" over a
   // selection that is then cleared left the operator with no way to tell which of five clients
   // missed its task; the only recovery was to re-run over all five and create four duplicates.
   // G6-10 — and the failure is named with the case's identity, not just the client's name: "no task
   // for Gareth Pollard" says nothing when three of the selected cases are his.
   const propOn = await propAddrSupported();
-  const { data: rows, error } = await inChunks(ids, (sl) => db.from("cases")
+  const { data: allRows, error } = await inChunks(ids, (sl) => db.from("cases")
     .select("id,assigned_to,case_kind,lender,stage" + (propOn ? ",property_address" : "") + ",clients!client_id(first_name,last_name)")
     .in("id", sl));
   if (error) return toast("Error: " + error.message);
   const nameOf = bulkCaseLabel;
-  const picked = await promptBulkTask((rows || []).length || ids.length);
-  if (!picked) return;
+  let rows = allRows || [];
+  let picked;
+  if (preset) {
+    /* ONE query for the whole batch's open tasks — never one per case. A case already carrying an
+       open chase is SKIPPED and NAMED: silently adding a second identical task is how a task list
+       becomes something people stop opening. */
+    const { data: taskRows, error: tErr } = await inChunks(ids, (sl) => db.from("case_tasks")
+      .select("case_id,title,done_at").in("case_id", sl));
+    if (tErr) return toast("Error reading existing tasks: " + tErr.message);
+    const already = new Set();
+    (taskRows || []).forEach((t) => {
+      if (!t || t.done_at) return;
+      if (String(t.title || "").trim().toLowerCase().startsWith(preset.openPrefix)) already.add(t.case_id);
+    });
+    const eligible = rows.filter((c) => !already.has(c.id));
+    const skipped = rows.filter((c) => already.has(c.id));
+    if (!eligible.length) {
+      return toast(skipped.length
+        ? `Nothing to add — all ${skipped.length} selected case${skipped.length === 1 ? "" : "s"} already ${skipped.length === 1 ? "has" : "have"} an open “${preset.title}” task`
+        : "Nothing to add");
+    }
+    if (!confirm([
+      `Add “${preset.title}” to ${eligible.length} of the ${ids.length} selected case${ids.length === 1 ? "" : "s"}?`,
+      "",
+      `Due today (${fmtD(preset.due)}), on each case's OWN adviser — not on you. Nothing is emailed to anybody.`,
+      "",
+      "Adding to:",
+      ...eligible.slice(0, 8).map((c) => `· ${nameOf(c)}`),
+      ...(eligible.length > 8 ? [`· and ${eligible.length - 8} more`] : []),
+      ...(skipped.length ? ["", `Skipped — already has an open “${preset.title}” task (${skipped.length}):`,
+        ...skipped.slice(0, 5).map((c) => `· ${nameOf(c)}`),
+        ...(skipped.length > 5 ? [`· and ${skipped.length - 5} more`] : [])] : []),
+    ].join("\n"))) return;
+    rows = eligible;
+    picked = { title: preset.title, due: preset.due };
+  } else {
+    picked = await promptBulkTask(rows.length || ids.length);
+    if (!picked) return;
+  }
   let ok = 0;
   const failed = [];
   for (const c of rows || []) {
@@ -11230,6 +11683,8 @@ async function bulkAddTaskRun(ids) {
     if (tErr) failed.push({ id: c.id, name: nameOf(c) }); else ok++;
   }
   let msg = `${ok} task${ok === 1 ? "" : "s"} added (“${picked.title}”)${picked.due ? " · due " + fmtD(picked.due) : ""}`;
+  // R65 · M11 — the preset path tallies what it deliberately did NOT do, in the same sentence.
+  if (preset && ids.length > rows.length) msg += ` · ${ids.length - rows.length} skipped (already had an open “${preset.title}” task)`;
   if (failed.length) {
     const names = failed.slice(0, 4).map((f) => f.name).join(", ") + (failed.length > 4 ? ` and ${failed.length - 4} more` : "");
     msg += ` · ${failed.length} error${failed.length === 1 ? "" : "s"} — no task for ${names}; ${failed.length === 1 ? "that case is" : "those cases are"} still selected, so pressing Add task again retries only ${failed.length === 1 ? "it" : "them"}`;
@@ -11262,6 +11717,8 @@ function setSegment(seg) {
   else if (leavingCompleted && viewBeforeCompleted) { pipelineView = viewBeforeCompleted; viewBeforeCompleted = null; }
   pipelineSegment = seg;
   stageTab = "all";
+  // R65 · H7c — the segment's default view, applied only while the operator has never toggled.
+  applySegmentDefaultView(seg);
   if (authUid) lsSet(segStoreKey(authUid), seg);
   loadPipeline();
 }
@@ -11272,6 +11729,7 @@ window.gotoPipelineSegment = function (seg) {
   if (leavingCompleted && viewBeforeCompleted) { pipelineView = viewBeforeCompleted; viewBeforeCompleted = null; }
   pipelineSegment = seg;
   stageTab = "all";
+  applySegmentDefaultView(seg);   // R65 · H7c — same default rule as the segment buttons
   if (authUid) lsSet(segStoreKey(authUid), seg);
   nav("pipeline");
 };
@@ -11332,7 +11790,12 @@ function syncViewToggle() {
   btn.style.display = pipelineSegment === "completed" ? "none" : "";
   btn.textContent = pipelineView === "board" ? "☰ Table view" : "⊞ Board view";
 }
-function renderPipelineTable(filtered, stageEntry = {}, propOn = true) {
+function renderPipelineTable(filtered, stageEntry = {}, propOn = true, opts = {}) {
+  /* R65 · H7b — `waiting_on` / `solicitor_firm` are m10 columns: the board's named select carries
+     them exactly when docsSupported() said yes, so the column is offered on the same terms the
+     case form's field is. `expected_completion_date` is in BOARD_CASE_COLS and needs no gate. */
+  const docsOn = opts.docsOn !== false;
+  const cardCtx = opts.cardCtx || { stageEntry };
   $("#board").classList.add("hidden");
   $("#board-hint").classList.add("hidden");
   $("#board-legend").classList.add("hidden");
@@ -11368,6 +11831,16 @@ function renderPipelineTable(filtered, stageEntry = {}, propOn = true) {
       case "loan_amount": return c.loan_amount ?? -1;
       case "assigned": return staffName(c.assigned_to).toLowerCase();
       case "days_in_stage": return daysSince(stageEntry[c.id]) ?? -1;
+      /* R65 · H7b — WAITING ON sorts as "who, then which firm", with the unanswered cases LAST in
+         an ascending sort. "zz" is the sentinel (the same trick the property sort uses for its
+         address-less rows): a null waiting_on is not "before client", it is UNKNOWN, and a quarter
+         of the table reading blank above the first real answer is the R6-FIX T4 defect again.
+         The firm is the tiebreaker so every case with Harker & Bligh lands together — that is what
+         makes "ring this solicitor once about four cases" a thing you can see. */
+      case "waiting_on": return (c.waiting_on || "zz") + "|" + (c.solicitor_firm || "");
+      /* R65 · H7b — same discipline for the completion date: no date sorts last ascending rather
+         than clumping at the top under an empty string. */
+      case "expected_completion_date": return c.expected_completion_date || "9999-12-31";
       default: return c[k] ?? "";
     }
   };
@@ -11378,9 +11851,19 @@ function renderPipelineTable(filtered, stageEntry = {}, propOn = true) {
      first two columns. Omitted entirely (not rendered empty) on a database that has not taken
      migration M7 — same discipline as the case form's field. */
   const propCol = propOn ? [["property", "Property"]] : [];
+  /* R65 · H7b — TWO COLUMNS THE TRIAGE QUESTION ACTUALLY NEEDS.
+     "Waiting on" was already the best fact on the card and it was rendered INSIDE the Stage cell,
+     where it could not be sorted on and could not be scanned down. It gets its own column, next to
+     "In stage", because the pair — how long, and with whom — is the whole of "what do I chase
+     today". It is MOVED, not copied: two chips saying the same thing in adjacent cells is how a
+     table stops being read.
+     "Completing" is expected_completion_date, which the board has fetched since R24 and shown
+     nowhere but as a ⚠ badge on two stages. It is the date the whole back half of a case is
+     organised around and the one an operator is asked for on the phone. */
+  const waitCol = docsOn ? [["waiting_on", "Waiting on"]] : [];
   const cols = completedMode
     ? [["client", "Client"], ...propCol, ["stage", "Status"], ["completed_at", "Completed"], ["lender", "Lender"], ["loan_amount", "Loan"], ["broker_fee", "Broker fee"], ["fee_status", "Fee status"], ["assigned", "Adviser"]]
-    : [["client", "Client"], ...propCol, ["stage", "Stage"], ["days_in_stage", "In stage"], ["case_kind", "Type"], ["lender", "Lender"], ["rate_percent", "Rate"], ["rate_end_date", "Rate ends"], ["erc_end_date", "ERC ends"], ["broker_fee", "Fee"], ["fee_status", "Fee status"], ["protection_status", "Protection"], ["assigned", "Adviser"], ["updated_at", "Updated"]];
+    : [["client", "Client"], ...propCol, ["stage", "Stage"], ["days_in_stage", "In stage"], ...waitCol, ["case_kind", "Type"], ["lender", "Lender"], ["rate_percent", "Rate"], ["rate_end_date", "Rate ends"], ["erc_end_date", "ERC ends"], ["expected_completion_date", "Completing"], ["broker_fee", "Fee"], ["fee_status", "Fee status"], ["protection_status", "Protection"], ["assigned", "Adviser"], ["updated_at", "Updated"]];
   let sk = sortKey, sd = sortDir;
   if (completedMode && !cols.some(([k]) => k === sortKey)) { sk = "completed_at"; sd = -1; }
   rows = rows.slice().sort((a, b) => {
@@ -11432,23 +11915,55 @@ function feeStatusCellHtml(c) {
         ${cbCell(c)}
         <td class="stick-col"><strong>${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" "))}</strong></td>
         ${propOn ? `<td class="pipe-col-prop">${propChip(c) || '<span class="cs-muted">—</span>'}</td>` : ""}
-        ${/* R9-5 — the waiting-on chip rides in the Stage cell rather than taking a column of its
-             own: the table is already fourteen columns wide on a live segment, and "who is it
-             with" is a qualifier on the stage, not a separate axis. */ ""}
-        <td>${stageBadge(c.stage)}${waitingChipHtml(c)}</td>
+        ${/* R9-5 — the waiting-on chip rode in the Stage cell rather than taking a column of its
+             own, on the grounds that "who is it with" is a qualifier on the stage.
+             R65 · H7b — that was wrong in one specific, expensive way: a chip inside another
+             column cannot be SORTED on, and "show me everything sitting with a solicitor" is the
+             single most useful question this table can answer. It has its own column now; the
+             Stage cell is the stage badge and nothing else. */ ""}
+        <td>${stageBadge(c.stage)}</td>
         <td>${(() => { const a = cardAge(c, stageEntry[c.id]); return a.inStage == null ? "" : `<span class="age-cell${a.level ? " age-" + a.level : ""}" title="${esc(a.basis)}">${a.inStage}d</span>`; })()}</td>
+        ${docsOn ? `<td class="pipe-col-waiting">${waitingChipHtml(c) || '<span class="cs-muted" title="Nobody has recorded who this case is sitting with. You are asked when a case moves to Application, Offer or Exchange; it is also on the case form.">—</span>'}</td>` : ""}
         <td>${esc((KINDS.find((x) => x[0] === c.case_kind) || [])[1] || "")}</td>
         <td>${lenderIcon(c.lender)}${esc(c.lender || "")}</td>
         <td>${c.rate_percent != null ? c.rate_percent + "%" : ""}</td>
         <td>${c.rate_end_date ? fmtD(c.rate_end_date) + (c.rate_end_estimated ? " " + APPROX : "") : ""}</td>
         <td>${c.erc_end_date ? fmtD(c.erc_end_date) : ""}</td>
+        ${/* R65 · H7b — the Completing cell. Where the date is missing it wears the board card's
+             OWN amber "📅 no date" badge, in the board's own words and on the board's own rule
+             (offer/exchange only): before an offer exists there is no completion date to be
+             missing, and an amber badge on every Enquiry row would be wallpaper within a day. */ ""}
+        <td class="pipe-col-completing">${c.expected_completion_date
+          ? fmtD(c.expected_completion_date)
+          : ["offer", "exchange"].includes(c.stage)
+            ? `<span class="badge amber" title="No expected completion date set — chase the adviser">📅 no date</span>`
+            : '<span class="cs-muted">—</span>'}</td>
         <td>${c.broker_fee ? fmtM(c.broker_fee) : ""}</td>
         <td>${feeStatusCellHtml(c)}</td>
         <td>${esc((c.protection_status || "").replace(/_/g, " "))}</td>
         <td>${c.assigned_to ? esc(staffName(c.assigned_to)) : ""}</td>
         <td class="pipe-col-updated">${fmtD(c.updated_at)}</td>
       </tr>`).join("");
+  /* ==========================================================================
+     R65 · L9 — BELOW 700px THE TABLE IS A CARD LIST.
+
+     Sixteen columns inside a horizontal scroller on a 390px phone is a table you
+     can see one and a half columns of; every other column is behind a gesture
+     nobody makes. The board already solved this shape — the card IS the mobile
+     row — so the table renders the SAME cards, from the SAME builder
+     (boardCardHtml), one per row, in the table's current sort order. Nothing is
+     lost: the segment, adviser, search and (new here, because there are no
+     column headers to click) an explicit sort control all stay above the list.
+     The BOARD on mobile is untouched — it already has its per-card stage select.
+     ====================================================================== */
+  const mobileCards = typeof window.matchMedia === "function" && window.matchMedia("(max-width: 699px)").matches;
+  /* R65 · H7c — why this segment opened as a table. The firm reads the copy; a view that changed
+     under somebody without saying why is a view they will toggle back out of spite. */
+  const currentWhy = pipelineSegment === "current"
+    ? `<p class="panel-sub" id="pipe-current-why">Current opens as a <strong>table</strong>, not the board: these are the live cases between Application and Exchange, and the question here is “what do I chase today”. The table sorts on every column — <strong>In stage</strong>, <strong>Waiting on</strong> and <strong>Completing</strong> are the three that answer it — while the board has no sort at all and pushes Exchange off the right-hand edge on a laptop screen. Press <strong>⊞ Board view</strong> whenever you want it; whichever you pick is remembered from then on.</p>`
+    : "";
   $("#table-wrap").innerHTML = `
+    ${currentWhy}
     <div class="bulk-bar" id="pipe-bulk-bar"${pipeSel.size ? "" : " hidden"}>
       <span class="bulk-bar-count"><strong id="pipe-bulk-n">${pipeSel.size}</strong> selected</span>
       <select id="pipe-bulk-stage" class="bulk-bar-select" aria-label="Move selected cases to stage">
@@ -11461,20 +11976,42 @@ function feeStatusCellHtml(c) {
            time off this table, and the only route to it was one button on one row of one dashboard
            panel. It runs the SAME per-case flow, confirm by confirm, and tallies at the end. */ ""}
       <button type="button" class="btn btn-sm" id="pipe-bulk-retention" title="Start a retention case for every selected completed case whose rate is ending. Each one asks you to confirm, exactly as the single-case button does.">🔁 Start retention cases</button>
+      ${/* R65 · M11 — THE TWO CHASE VERBS. The bulk bar could move a batch and assign a batch, i.e.
+           everything except the thing an operator actually does with a list of twelve cases: chase
+           them. Both are pre-flighted, both name every skip in one confirm, and both are
+           idempotent — pressing either twice does not double anything. */ ""}
+      <button type="button" class="btn btn-sm" id="pipe-bulk-chase" title="Add a “Chase solicitors for completion date” task, due today, on every selected case — assigned to that case's own adviser. A case that already has an open “Chase solicitors…” task is named in the confirmation and skipped, so pressing this twice never doubles anybody's list. No email is sent.">⚖️ Chase solicitors</button>
+      <button type="button" class="btn btn-sm" id="pipe-bulk-docs" title="Queue the document-request email for every selected LIVE case that has outstanding checklist items and a client email. It lists only what is still missing on each case. You get one confirmation naming exactly who is written to and who is skipped, and why.">📄 Send document request</button>
       <button type="button" class="btn btn-sm" id="pipe-bulk-task">＋ Add task…</button>
       <button type="button" class="btn btn-sm" id="pipe-bulk-clear">Clear</button>
     </div>
     <div class="board-scroll-wrap board-scroll-wrap--table">
-    <div class="panel" id="pipe-scroll" style="overflow-x:auto;">
+    ${/* R65 · L9 — the horizontal scroller is the TABLE's affordance. A card list has nothing to
+         scroll sideways, and an overflow-x:auto box also promotes overflow-y to auto, which is how
+         a card list ends up inside a second vertical scrollbar on a phone. */ ""}
+    <div class="panel" id="pipe-scroll" style="overflow-x:${mobileCards ? "visible" : "auto"};">
     ${/* R42 · F7 — ⭳, not ⬇: one glyph for "this downloads a file". Every other CSV control on
           the app (the MI panels, the diagnostics export, the drill-downs) already used ⭳, and
           two glyphs for one action is a difference that has to be checked before it is
           dismissed. Label, id and behaviour unchanged. */ ""}
+    ${mobileCards ? `<p class="panel-sub pipe-mobile-note" id="pipe-mobile-note">On a phone this list is shown as <strong>cards</strong> — the same cards as the board — because ${cols.length} columns on a 390px screen is a table you can read one column of. Everything is here; pick what to order it by below, and tap a card to open the case.</p>
+    <div class="pipe-mobile-sort" id="pipe-mobile-sort-row">
+      <label for="pipe-mobile-sort">Sort by</label>
+      <select id="pipe-mobile-sort" aria-label="Sort the case list">
+        ${cols.map(([k, l]) => `<option value="${k}"${sk === k ? " selected" : ""}>${esc(l)}</option>`).join("")}
+      </select>
+      <button type="button" class="btn btn-sm" id="pipe-mobile-sortdir" title="${sd > 0 ? "Sorted A→Z / low to high — press to reverse" : "Sorted Z→A / high to low — press to reverse"}" aria-label="Reverse the sort order">${sd > 0 ? "▲ A→Z" : "▼ Z→A"}</button>
+    </div>` : ""}
     <div style="display:flex;justify-content:flex-end;margin-bottom:8px;"><button class="btn btn-sm" id="csv-btn">⭳ Download CSV</button></div>
-    ${rows.length ? `<table class="imp-table has-bulk" id="pipe-table">
+    ${!rows.length ? `<div class="empty" style="padding:40px 16px;text-align:center;">No cases in this view.</div>`
+      : mobileCards ? `<div class="pipe-card-list" id="pipe-card-list">${rows.map((c) => {
+          try { return boardCardHtml(c, cardCtx); }
+          catch (err) { logClientError("caught", "pipeline card render failed: " + ((err && err.message) || err), { recordId: c && c.id, where: "renderPipelineTable" }); return ""; }
+        }).join("")}</div>`
+      : `<table class="imp-table has-bulk" id="pipe-table">
       <tr><th class="bulk-col"><input type="checkbox" id="pipe-bulk-all" aria-label="Select all cases in this view"></th>${cols.map(([k, l]) => `<th data-k="${k}" class="${k === "client" ? "stick-col" : k === "updated_at" ? "pipe-col-updated" : ""}" style="cursor:pointer;"${k === "erc_end_date" ? ` title="${TIP_ERC}"` : ""}>${l}${sk === k ? (sd > 0 ? " ▲" : " ▼") : ""}</th>`).join("")}</tr>
       ${bodyRows}
-    </table>` : `<div class="empty" style="padding:40px 16px;text-align:center;">No cases in this view.</div>`}</div>
+    </table>`}</div>
     <button type="button" class="board-scroll-arrow" aria-label="Scroll right" title="Scroll right">›</button>
     </div>`;
   wireTableHScroll("pipe-scroll");
@@ -11514,9 +12051,36 @@ function feeStatusCellHtml(c) {
   if (retBtn) retBtn.onclick = () => bulkStartRetention();
   const taskBtn = $("#pipe-bulk-task");
   if (taskBtn) taskBtn.onclick = () => bulkAddTask();
+  // R65 · M11 — the two chase verbs.
+  const chaseBtn = $("#pipe-bulk-chase");
+  if (chaseBtn) chaseBtn.onclick = () => bulkChaseSolicitors();
+  const docsBtn = $("#pipe-bulk-docs");
+  if (docsBtn) docsBtn.onclick = () => bulkSendDocsRequests();
+  /* R65 · L9 — the mobile sort control. It writes the SAME sortKey/sortDir the column headers
+     write, so a phone and a laptop are looking at one sort, not two. */
+  const msort = $("#pipe-mobile-sort");
+  if (msort) msort.onchange = () => { if (sortKey === msort.value) return; sortKey = msort.value; sortDir = 1; loadPipeline(); };
+  const msortDir = $("#pipe-mobile-sortdir");
+  if (msortDir) msortDir.onclick = () => { sortDir *= -1; loadPipeline(); };
   updatePipeBulkBar();
   $("#csv-btn").onclick = () => exportCsv(rows, completedMode, propOn);
 }
+/* R65 · L9 — crossing the 700px line has to REPAINT: the card list is decided at render time (a
+   1,000-row table rendered twice, once hidden, is the cost this avoids), so a rotate or a resize
+   would otherwise leave a phone looking at a sixteen-column table. Fires only on an actual
+   crossing, and only while the pipeline is the page on screen. */
+(() => {
+  if (typeof window.matchMedia !== "function") return;
+  const mq = window.matchMedia("(max-width: 699px)");
+  const onChange = () => {
+    const page = document.getElementById("page-pipeline");
+    if (!page || page.classList.contains("hidden")) return;
+    if (pipelineView !== "table") return;
+    loadPipeline();
+  };
+  if (typeof mq.addEventListener === "function") mq.addEventListener("change", onChange);
+  else if (typeof mq.addListener === "function") mq.addListener(onChange);
+})();
 // BUILD 7c — reflect the current pipeline selection into the action bar (visibility + count) and the
 // select-all checkbox's checked/indeterminate state, without re-rendering the table.
 function updatePipeBulkBar() {
@@ -13437,27 +14001,13 @@ window.openCase = async function (id, opts = {}) {
           ${caseClient && (caseClient.phone || caseClient.email) ? `<div class="cs-contact">${caseClient.phone ? "📞 " + telLink(caseClient.phone) : ""}${caseClient.email ? "✉️ " + mailLink(caseClient.email) : ""}</div>` : ""}
           ${objectiveLineHtml(c)}
         </div>
-        <div class="cs-top-actions">
-          ${/* R5-6 — only on a completed case with a tracked rate and no successor yet. The nightly
-               RPC covers rates still ahead of us; this covers the ones that already ended. */ ""}
-          ${c.stage === "completed" && c.rate_end_date && !hasRetentionSuccessor
-            ? retentionToMeHtml(id, c) + `<button type="button" class="btn btn-retention" id="cs-retention-btn" title="Create the follow-on case, the call task and a queued rate-end reminder">🔁 Start retention case</button>` : ""}
-          <button type="button" class="btn btn-primary cs-logcall-btn" id="cs-logcall-btn">📞 Log call</button>
-        </div>
+        ${/* R65 · L1 — the header's action group MOVED into #cs-sticky-actions at the top of the
+             modal (Log call · Advance · stage select · Book appointment · More actions, one row
+             that stays on screen). Nothing was deleted; every id and handler is unchanged, they
+             are simply all in one place now. */ ""}
       </div>
       <div class="cs-stats">
         ${/* The stage moved up into the identity line above — this row is numbers. */ ""}
-        ${nextStage ? `<button type="button" class="btn btn-sm cs-advance-btn" id="cs-advance-btn" title="Advance to ${esc(STAGE_LABEL[nextStage] || nextStage)}">Advance to ${esc(STAGE_LABEL[nextStage] || nextStage)} →</button>` : ""}
-        ${/* R35 §5 — MOVE TO ANY STAGE, FROM THE CASE ITSELF. Advance only ever offers the NEXT
-             stage, so every other move — back a stage after a lender declines, straight to Not
-             Proceeding, a jump the workflow does not model — meant closing the modal, finding the
-             card on the board and using the select that has been there all along. Same control,
-             same options, same single write path (moveCaseToStage), now beside the button it
-             complements. Options are built exactly as the board card's .card-stage-move builds
-             them, with the current stage selected. */ ""}
-        <select id="cs-stage-select" class="card-stage-move" aria-label="Move to stage" title="Move this case to any stage">
-          ${STAGES.map(([k, l]) => `<option value="${k}" ${k === c.stage ? "selected" : ""}${k === "decision_in_principle" ? ` title="${TIP_DIP}"` : ""}>${l}</option>`).join("")}
-        </select>
         <div class="cs-stat"><span class="cs-lbl">Adviser</span><span class="cs-val" id="cs-adviser-val">${c.assigned_to ? esc(staffName(c.assigned_to)) : '<span class="cs-muted">— unassigned —</span>'}</span></div>
         <div class="cs-stat"><span class="cs-lbl">Loan</span><span class="cs-val">${fmtM(c.loan_amount)}</span></div>
         ${/* R6 — was labelled "Property" and showed the property VALUE, which is the single most
@@ -13719,6 +14269,53 @@ window.openCase = async function (id, opts = {}) {
     </form>`;
   $("#modal").innerHTML = `
     <h3>${id ? "Case" : "New case"}</h3>
+    ${/* ==================================================================
+         R65 · L1 — ONE ACTION ROW, AT THE TOP, THAT STAYS THERE.
+
+         Every verb on this screen used to be in one of three places: Log call
+         and Start retention in the header's right-hand group, Advance and the
+         stage select buried in the middle of the twelve-value stats strip, and
+         the whole action bar — Book appointment, the emails, the offer reader,
+         Mark not proceeding — at the BOTTOM, under the entire case history.
+         On a case with forty timeline rows that is two screens of scrolling to
+         reach "book an appointment", and then two screens back to read the note
+         that made you want to. So they are one row now, and it is STICKY: the
+         modal's scroll container is #modal-backdrop (overflow-y:auto — the
+         .modal itself does not scroll), so `position: sticky; top: 0` on a child
+         of .modal pins to the top of that scrollport, exactly as .modal-close
+         has since M3. It carries the modal's own background and a hairline so
+         the content scrolling under it never bleeds through.
+
+         NOTHING WAS REMOVED OR RENAMED. #cs-logcall-btn, #cs-retention-btn,
+         #cs-advance-btn, #cs-stage-select, #case-action-bar and every act-* id
+         are the same elements with the same handlers, wired downstream by id
+         exactly as before; only their parent changed.
+         ================================================================== */ ""}
+    ${id ? `<div class="cs-sticky-actions" id="cs-sticky-actions">
+      ${nextStage ? `<button type="button" class="btn btn-sm cs-advance-btn" id="cs-advance-btn" title="Advance to ${esc(STAGE_LABEL[nextStage] || nextStage)}">Advance to ${esc(STAGE_LABEL[nextStage] || nextStage)} →</button>` : ""}
+      ${/* R35 §5 — MOVE TO ANY STAGE, FROM THE CASE ITSELF. Advance only ever offers the NEXT
+           stage, so every other move — back a stage after a lender declines, straight to Not
+           Proceeding, a jump the workflow does not model — meant closing the modal, finding the
+           card on the board and using the select that has been there all along. Same control,
+           same options, same single write path (moveCaseToStage), beside the button it
+           complements. Options are built exactly as the board card's .card-stage-move builds
+           them, with the current stage selected. */ ""}
+      <select id="cs-stage-select" class="card-stage-move" aria-label="Move to stage" title="Move this case to any stage">
+        ${STAGES.map(([k, l]) => `<option value="${k}" ${k === c.stage ? "selected" : ""}${k === "decision_in_principle" ? ` title="${TIP_DIP}"` : ""}>${l}</option>`).join("")}
+      </select>
+      <div class="cs-top-actions">
+        ${/* R5-6 — only on a completed case with a tracked rate and no successor yet. The nightly
+             RPC covers rates still ahead of us; this covers the ones that already ended. */ ""}
+        ${c.stage === "completed" && c.rate_end_date && !hasRetentionSuccessor
+          ? retentionToMeHtml(id, c) + `<button type="button" class="btn btn-retention" id="cs-retention-btn" title="Create the follow-on case, the call task and a queued rate-end reminder">🔁 Start retention case</button>` : ""}
+        <button type="button" class="btn btn-primary cs-logcall-btn" id="cs-logcall-btn">📞 Log call</button>
+      </div>
+      ${/* R15 · §2 — the action bar is stage- and type-reactive: only stage-relevant actions in the
+           primary row, the Advance button is the hero when not terminal, and EVERYTHING else
+           collapses into #case-more-actions. Every id + handler is preserved (see caseActionBarHtml
+           and CASE_ACTION_RULES); a non-primary action is reachable in the overflow, never removed. */ ""}
+      ${caseActionBarHtml(c, c.stage, c.case_kind, { heroesActive: !nextStage })}
+    </div>` : ""}
     ${/* R15 · §3 — the security card is a lender-call tool; it has nothing to hold before a lender
          is involved, so it is HIDDEN at enquiry+fact_find and shown DIP→terminal. Wrapped, never
          deleted: the node (and its toggle wiring) stays in the DOM, just hidden. */ ""}
@@ -13853,11 +14450,8 @@ window.openCase = async function (id, opts = {}) {
       <div class="tl-list" id="case-events-list">${renderTimelineList(tlItems, "all", CASE_TL_CAP, false)}</div>
       ${auditPanelHtml("case-audit", auditRows)}
     </div>
-    ${/* R15 · §2 — the action bar is now stage- and type-reactive: only stage-relevant actions in
-         the primary row, the Advance button is the hero when not terminal, and EVERYTHING else
-         collapses into #case-more-actions. Every id + handler is preserved (see caseActionBarHtml
-         and CASE_ACTION_RULES); a non-primary action is reachable in the overflow, never removed. */ ""}
-    ${caseActionBarHtml(c, c.stage, c.case_kind, { heroesActive: !nextStage })}
+    ${/* R65 · L1 — the action bar now lives inside #cs-sticky-actions at the TOP of the modal (see
+         its block comment there). It was built here, at the bottom, below the whole history. */ ""}
     ${/* R56 — outbound referrals recorded on this case (survey / conveyancing). Filled async by
          loadCaseReferrals(); stays empty (and invisible via :empty) when there are none. */ ""}
     <div id="case-referrals" class="case-referrals"></div>
@@ -15153,7 +15747,15 @@ async function emailOfferToClient(caseId, c) {
   toast(`Offer queued to email to ${who} — held until client email is switched on, then sent with the PDF attached.`);
 }
 
-async function queueEmail(caseId, clientId, type, c, ev) {
+async function queueEmail(caseId, clientId, type, c, ev, opts = {}) {
+  /* R65 · M11 — `opts.bulk` is the reviewed-batch mode, and it is deliberately narrow: it skips
+     THIS function's per-case confirm (the batch showed one confirm naming every recipient and
+     every skip, which is the same information asked once instead of forty times) and it does not
+     fire runAutomation per row — the caller sends the whole batch in one call and reports once.
+     Everything else is identical, including the insert itself, because the point of routing the
+     batch through here is that there is exactly ONE writer of a docs_request. It returns
+     { ok, id } / { ok:false, error } instead of a toast, so the caller can tally by name. */
+  const bulk = !!opts.bulk;
   // Disable the clicked button while in flight so a double-click can't double-insert.
   // The event is passed explicitly by callers (no reliance on the deprecated global window.event).
   // When called programmatically by briefQueueEmail no ev is passed — that caller manages its own button.
@@ -15259,12 +15861,14 @@ async function queueEmail(caseId, clientId, type, c, ev) {
        is the one route it cannot see, which is exactly why it is asked about here in words that
        name the suppression and quote the care note. It warns, it does not block: an adviser
        sending the one email a suppressed client genuinely needs is a legitimate act. */
-    if (!(await confirmSuppressedSend(clientId, "email"))) return;
-    if (!confirm(`Send ${EMAIL_LABEL[type].toLowerCase()} email to ${cl.email}?\n\nSigned off by: ${signedBy}${propLine}${extraLine}${docsLine}${farOutLine}`)) return;
+    if (!bulk) {
+      if (!(await confirmSuppressedSend(clientId, "email"))) return;
+      if (!confirm(`Send ${EMAIL_LABEL[type].toLowerCase()} email to ${cl.email}?\n\nSigned off by: ${signedBy}${propLine}${extraLine}${docsLine}${farOutLine}`)) return;
+    }
     const { data: qRow, error } = await db.from("email_queue")
       .insert({ case_id: caseId, client_id: clientId, email_type: type, to_email: cl.email })
       .select("id").single();
-    if (error) return toast("Error: " + error.message);
+    if (error) { if (bulk) return { ok: false, error: error.message }; return toast("Error: " + error.message); }
     if (type === "rate_end_reminder") {
       await db.from("cases").update({ rate_reminder_queued_at: new Date().toISOString() }).eq("id", caseId);
       /* R5-13 — sending the reminder used to be the whole "loop": the My Day row cleared itself and
@@ -15310,6 +15914,9 @@ async function queueEmail(caseId, clientId, type, c, ev) {
       const { error: feeErr } = await db.from("cases").update(patch).eq("id", caseId);
       if (feeErr) toast("Email queued, but the fee status could not be updated: " + feeErr.message);
     }
+    // R65 · M11 — the batch sends ONCE, for every row it queued, and reports once. Returning the
+    // row id here is what lets it do that with the same runAutomation call shape as below.
+    if (bulk) return { ok: true, id: qRow && qRow.id ? qRow.id : null };
     // R5-1 — send THIS row and nothing else. Without the id there is nothing safe to send, so the
     // email simply waits for the next automation run rather than triggering a firm-wide flush.
     const res = qRow && qRow.id ? await runAutomation(true, { queueIds: [qRow.id] }) : null;
@@ -26470,7 +27077,13 @@ async function loadDataHealth() {
     <p class="panel-sub">Every <strong>live</strong> case with at least one item still outstanding on its checklist — the paperwork queue, in the order it has gone quiet. ${chaseOnNow
       ? `<strong>Automatic chasing is ON</strong>: these are chased by email every ${esc(String(docChaseDays()))} days, up to ${DOC_CHASE_MAX} times, and then a call task is raised instead.`
       : `<strong>Automatic chasing is OFF</strong>, so nothing on this list is being chased by anybody except by hand. Turn it on in Settings.`} It now covers <strong>every live stage — Enquiry through Exchange</strong> (it used to be Fact Find and Application only), so a checklist opened at Enquiry is chased from the day it is opened. Cases with no checklist at all are not on this list and are never chased — an unknown is not the same as complete.</p>
-    <p class="panel-sub">There is deliberately <strong>no “send to all”</strong> here. A document request is a client-facing email, and one button that fires forty of them is not a time-saver, it is an incident. Each send below is its own decision, with the same confirmation the case screen asks for.</p>
+    ${/* R65 · M11 — the copy kept honest. The "no send-to-all HERE" half is unchanged and still
+         true: this list is forty rows the app chose, and a single button firing forty client
+         emails off it is an incident. What changed is that the reviewed batch — rows a person
+         ticked themselves, with one confirmation naming every recipient and every skip — now
+         exists, on the Pipeline table's bulk bar. A sentence that says a thing is impossible
+         when it is one page away is a sentence that stops being believed. */ ""}
+    <p class="panel-sub">There is deliberately <strong>no “send to all”</strong> here. A document request is a client-facing email, and one button that fires forty of them off a list the app built is not a time-saver, it is an incident. Each send below is its own decision, with the same confirmation the case screen asks for. For a batch you have <em>actually read</em>, tick the rows on the <strong>Pipeline table</strong> and use <strong>📄 Send document request</strong> on its bulk bar: one confirmation, naming every case that gets one and every case that does not, and why.</p>
     ${/* Eight columns is a lot for 1280, and this page already clips a table that overruns its
          panel (nothing on it scrolls horizontally). Short headers, and a scroller round the table
          as the backstop, so the action column can always be REACHED rather than merely existing. */ ""}

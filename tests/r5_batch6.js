@@ -596,11 +596,21 @@ const shiftMv = (mv, n) => {
       // …and the name opens that case.
       await page.click("#report-nps-list .nps-row .linkish");
       await page.waitForTimeout(900);
+      /* PATCHED R65 · L1 — the case modal's action row moved to the TOP of the modal and is
+         sticky there, so the first 200 characters of innerText are now the action buttons rather
+         than the client's name. The assertion is not weakened: it still proves the modal opened
+         on THIS respondent's case — read off the header's own name element (.cs-name), which is
+         a stronger check than a prefix-of-innerText heuristic ever was. */
       const opened = await page.evaluate(() => {
         const m = document.querySelector("#case-modal") || document.querySelector(".modal:not(.hidden)");
-        return { open: !!m && !m.classList.contains("hidden"), text: m ? m.innerText.slice(0, 200) : "" };
+        const nm = m ? m.querySelector(".cs-name") : null;
+        return {
+          open: !!m && !m.classList.contains("hidden"),
+          name: nm ? nm.textContent.trim() : "",
+          text: m ? m.innerText.slice(0, 200) : "",
+        };
       });
-      ok("S7 · clicking a respondent opens their case", opened.open && opened.text.includes(topName.split(" ")[0]),
+      ok("S7 · clicking a respondent opens their case", opened.open && opened.name.includes(topName.split(" ")[0]),
         JSON.stringify(opened).slice(0, 220));
       eq("S7 · no console errors", page.__err || [], []);
       await page.close();

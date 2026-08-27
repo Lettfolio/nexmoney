@@ -3606,6 +3606,48 @@
     if (pollard058) pollard058.offer_expiry_date = dateOnly(shift(10));
     var app061 = DB.cases.filter(function (c) { return c.id === "ca061"; })[0];
     if (app061) app061.submitted_at = null;
+
+    /* ---- (g) R65 — the same treatment for the two new rules (11
+       offer_before_completion, 12 erc_before_completion). Adjusted on rows
+       that already exist, never added, so no case count anywhere in the
+       battery moves (same discipline as the "DELIBERATE DIRT" block above).
+
+       · offer_before_completion needs NO nudge and deliberately gets none.
+         ca058 above already carries an offer expiring in 10 days AND an
+         expected completion 27 days out, so the offer dies 17 days before the
+         completion it is meant to fund — one CRITICAL row, and the only one:
+         every other live offer in the book expires AFTER its expected
+         completion (ca046 04 Nov / 21 Oct, ca048 04 Nov / 29 Oct, ca063
+         23 Oct / 14 Sep), which is the right way round and is what keeps this
+         rule at exactly one row rather than lighting up the whole pipeline.
+         Asserted in tests/r65_watchtower.js §A, so if a future fixture edit
+         moves those dates the suite says so instead of silently drifting.
+
+       · erc_before_completion has nothing to fire on: the mock's four
+         retention successors all point at sources with NO erc_end_date, so
+         the rule read zero across the book. The FIRST LIVE successor (the
+         Sarah Ellingham fact-find that came out of her own completed case)
+         gets the pair of dates the rule is about:
+           — the SOURCE's ERC is set to run to the very end of its fixed rate,
+             which is what a lender's ERC normally does. Deliberately EQUAL to
+             rate_end_date, not later, so v_alerts.erc_outlasts_rate (a strict
+             `>`) is untouched and no ERC-conflict list anywhere gains a row;
+           — the SUCCESSOR is given an expected completion 25 days before that
+             date, which is the mistake the rule exists to catch: remortgage
+             away 25 days early and the client pays an Early Repayment Charge
+             for three and a half weeks of nothing.
+         Derived from the source's own date rather than a fixed shift() so the
+         gap is exactly 25 days whatever NOW is. */
+    var r65Succ = DB.cases.filter(function (c) {
+      return c.retention_source_case_id && ["completed", "not_proceeding"].indexOf(c.stage) === -1;
+    })[0];
+    if (r65Succ) {
+      var r65Src = DB.cases.filter(function (c) { return c.id === r65Succ.retention_source_case_id; })[0];
+      if (r65Src && r65Src.rate_end_date) {
+        r65Src.erc_end_date = r65Src.rate_end_date;
+        r65Succ.expected_completion_date = dateOnly(new Date(new Date(r65Src.erc_end_date + "T12:00:00").getTime() - 25 * DAY));
+      }
+    }
   })();
 
   /* --- R14b — cases.mortgage_account_number ------------------------------
@@ -3864,22 +3906,58 @@
      /root/fleet/run_watchtower_prod_rules.md. This replaces the mock's old,
      different seven-rule set (rate_ended, erc_conflict, no_adviser,
      protection_gap, stalled, completed_no_date, no_contact — none of which
-     production actually has) with production's real ten:
+     production actually has) with production's real ten — R65 makes it twelve:
        1. offer_stale            — per-case, dedupe offer_stale:<case_id>
        2. app_not_submitted      — per-case, dedupe app_not_submitted:<case_id>
        3. exchange_no_chase      — per-case, dedupe exchange_no_chase:<case_id>
        4. lead_slow              — per-lead, dedupe lead_slow:<lead_id>
-       5. email_unanswered       — per-email, dedupe email_unanswered:<email_id>
+       5. email_unanswered       — per-CLIENT (R65), dedupe email_unanswered:c:<client_id>
+                                   · an email with NO client_id stays per-email,
+                                     dedupe email_unanswered:<email_id> (the old key)
        6. fee_aging              — per-case, dedupe fee_aging:<case_id>
        7. workload               — per-staff, dedupe workload:<profile_id>
        8. retention_gap          — AGGREGATE, one row, dedupe retention_gap:global
        9. fee_aging_60           — AGGREGATE, one row, dedupe fee_aging_60
       10. protection_quote_stale — per-case, dedupe protection_quote_stale:<case_id>
+      11. offer_before_completion (R65) — per-case, dedupe offer_before_completion:<case_id>
+      12. erc_before_completion   (R65) — per-case, dedupe erc_before_completion:<case_id>
 
      `email_unanswered` reads `case_emails` — the mock already models an
      inbound-email table under that exact name (triage_status/received_at,
      seeded a few rows up — search "case_emails (inbound, Outlook sync)"),
      so this rule is real, not modelled against a substitute or skipped.
+
+     R65 · WHY RULE 5 IS NOW PER CLIENT. The rule fired once per unanswered
+     message, so a client who sent three emails across two of their cases
+     produced three byte-identical-looking WARNING rows on the Watchtower and
+     three separate Dismiss buttons for what is, to the person doing the work,
+     ONE conversation to answer. Production's function now aggregates them:
+     one row per client, carrying the count, the latest subject and the latest
+     message's case_id (so Open still lands on the case the conversation is
+     actually about). An email with no client_id has no client to aggregate
+     ON, so it keeps the old per-email key — those rows are the exception, not
+     a second shape of the same thing.
+
+     R65 · THE TWO NEW DATE RULES. Both are about a date pair the firm records
+     but nothing ever compared:
+       · offer_before_completion — an offer that expires BEFORE the completion
+         it is supposed to fund. The lender's offer has a hard expiry; if the
+         chain is not going to complete until after it, the offer has to be
+         re-issued (or extended) and nobody finds out until the week it dies.
+       · erc_before_completion — a retention case (a successor whose
+         retention_source_case_id points at the client's earlier case) whose
+         expected completion falls INSIDE the old rate's ERC window, i.e. the
+         client is charged an Early Repayment Charge for leaving a deal they
+         were about to leave for free a few weeks later.
+     Both read only columns that already exist on `cases`, so there is no
+     migration toggle and no applyInsertDefaults change to make.
+
+     R65 · DATE TEXT. Rules 11/12 (and rule 5's timestamp) print DATES THE WAY
+     PRODUCTION'S to_char DOES — `DD Mon YYYY` / `DD Mon HH24:MI`, evaluated
+     AT TIME ZONE 'Europe/London' — not the raw ISO the older rules emit. That
+     is deliberate parity with the SQL, not a house-style drift: app.js's
+     humanizeAlertDates() only rewrites whole YYYY-MM-DD substrings, so an
+     already-British date passes through it untouched and reads identically.
 
      `lead_slow`'s production detail branch on `leads.acknowledged_at` is NOT
      mirrored: this mock's `leads` table has never carried that column (only
@@ -3906,6 +3984,42 @@
     var today = TODAY;
     var nowMs = NOW.getTime();
     var GBP = function (n) { return "£" + Math.round(n).toLocaleString("en-GB"); };
+    /* R65 — production prints these with to_char(… AT TIME ZONE 'Europe/London', 'DD Mon YYYY')
+       and 'DD Mon HH24:MI'. Both are zero-padded on the day and 24-hour on the clock, which is
+       what to_char does and what fmtD() in app.js (day:"numeric") does NOT — so they are built
+       here rather than left to the app, exactly like every other word run_watchtower composes.
+       A date-only column is read at midday UTC so the London calendar day can never slide across
+       a midnight the way `new Date("2026-08-26")` at 00:00Z does under BST. */
+    var LDN = "Europe/London";
+    /* to_char's 'Mon' is a fixed three-letter English abbreviation. Intl's month:"short" is NOT
+       (en-GB renders September as "Sept", en-AU as "Sep."), so the month name comes from this
+       table and only the CALENDAR FIELDS come from Intl — via en-CA, which is ISO-ordered and
+       therefore trivially parseable. */
+    var WT_MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    var londonParts = function (t) {
+      var ymd = new Intl.DateTimeFormat("en-CA", { timeZone: LDN, year: "numeric", month: "2-digit", day: "2-digit" }).format(t).split("-");
+      var hm = new Intl.DateTimeFormat("en-GB", { timeZone: LDN, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(t);
+      return { y: ymd[0], m: Number(ymd[1]), d: ymd[2], hm: hm };
+    };
+    var wtDate = function (d) {
+      if (!d) return "";
+      var t = /^\d{4}-\d{2}-\d{2}$/.test(String(d)) ? new Date(String(d) + "T12:00:00Z") : new Date(d);
+      if (isNaN(t.getTime())) return String(d);
+      var p = londonParts(t);
+      return p.d + " " + WT_MON[p.m - 1] + " " + p.y;
+    };
+    var wtStamp = function (ts) {
+      if (!ts) return "";
+      var t = new Date(ts);
+      if (isNaN(t.getTime())) return String(ts);
+      var p = londonParts(t);
+      return p.d + " " + WT_MON[p.m - 1] + " " + p.hm;
+    };
+    /* whole days between two date-only strings, both read at midday so DST never rounds one out */
+    var wtDayGap = function (from, to) {
+      return Math.round((new Date(String(to) + "T12:00:00Z").getTime() - new Date(String(from) + "T12:00:00Z").getTime()) / DAY);
+    };
+    var plural = function (n, one, many) { return n + " " + (n === 1 ? one : many); };
 
     /* 1 · offer_stale — stage 'offer', expiry within 30 days (crit ≤14) OR no
        expiry recorded and untouched for 30+ days (warn). */
@@ -3980,18 +4094,43 @@
       });
     });
 
-    /* 5 · email_unanswered — case_emails, triage_status 'new', received 24h+ ago. */
-    DB.case_emails.forEach(function (e) {
-      if (e.triage_status !== "new") return;
-      if ((nowMs - new Date(e.received_at).getTime()) / DAY <= 1) return;
-      var cs = DB.cases.filter(function (x) { return x.id === e.case_id; })[0];
-      out.push({
+    /* 5 · email_unanswered — case_emails, triage_status 'new', received 24h+ ago.
+       R65 — ONE ROW PER CLIENT, not per message. The waiting set is partitioned on client_id:
+       every message that HAS one is folded into that client's single alert (count, latest
+       subject, latest message's case_id); a message with NO client_id has nothing to fold into
+       and keeps the original per-email dedupe key, so an unmatched inbox row is still visible
+       and still individually dismissible. The alert's case_id is the LATEST message's case —
+       across two cases the newest conversation is the one Open should land on. */
+    var waiting = DB.case_emails.filter(function (e) {
+      if (e.triage_status !== "new") return false;
+      return (nowMs - new Date(e.received_at).getTime()) / DAY > 1;
+    });
+    var senderOf = function (e) { return e.from_name || e.from_email || "(unknown sender)"; };
+    var emailAlert = function (rows, key, clientId) {
+      /* newest first — the "latest" message supplies the sender, subject and case */
+      var sorted = rows.slice().sort(function (a, b) { return String(a.received_at) < String(b.received_at) ? 1 : -1; });
+      var latest = sorted[0];
+      return {
         rule: "email_unanswered", severity: "warn",
-        case_id: e.case_id, client_id: e.client_id || (cs ? cs.client_id : null),
-        title: "Unanswered email: " + (e.from_email || "(unknown sender)"),
-        detail: "\"" + (e.subject || "(no subject)") + "\" received " + String(e.received_at).slice(0, 10) + " and still marked new.",
-        dedupe_key: "email_unanswered:" + e.id
-      });
+        case_id: latest.case_id || null, client_id: clientId,
+        title: "Client email unanswered: " + senderOf(latest),
+        detail: plural(sorted.length, "message", "messages") + " waiting · latest \"" +
+          (latest.subject || "(no subject)") + "\" received " + wtStamp(latest.received_at),
+        dedupe_key: key
+      };
+    };
+    var byClient = {}, clientOrder = [];
+    waiting.forEach(function (e) {
+      if (!e.client_id) {
+        /* no client to aggregate on — the old per-email row, unchanged in shape and key */
+        out.push(emailAlert([e], "email_unanswered:" + e.id, null));
+        return;
+      }
+      if (!byClient[e.client_id]) { byClient[e.client_id] = []; clientOrder.push(e.client_id); }
+      byClient[e.client_id].push(e);
+    });
+    clientOrder.forEach(function (cid) {
+      out.push(emailAlert(byClient[cid], "email_unanswered:c:" + cid, cid));
     });
 
     /* 6 · fee_aging — fee_status 'requested', fee_requested_at 14+ days ago
@@ -4090,6 +4229,58 @@
         title: "Protection quote stale: " + clientName(c.client_id),
         detail: detail,
         dedupe_key: "protection_quote_stale:" + c.id
+      });
+    });
+
+    /* 11 · offer_before_completion (R65) — a case at 'offer' or 'exchange' that has BOTH an
+       offer expiry and an expected completion date recorded, where the OFFER DIES FIRST.
+       Nothing on the case screen compares those two fields, so the mismatch only surfaces in
+       the week the offer expires — by which point re-issuing it is a rush job on the lender's
+       timetable, not ours. CRITICAL once the offer itself is inside 30 days (the point at which
+       there is no longer time to re-broke it calmly), a WARNING before that: the same date pair,
+       but one is a fire and the other is a diary note.
+       Exchange is included on purpose — an exchanged case still completes against the same
+       offer, and that is exactly when a slipped completion date starts to bite. */
+    DB.cases.forEach(function (c) {
+      if (c.stage !== "offer" && c.stage !== "exchange") return;
+      if (!c.offer_expiry_date || !c.expected_completion_date) return;
+      if (!(c.offer_expiry_date < c.expected_completion_date)) return;
+      var toExpiry = wtDayGap(today, c.offer_expiry_date);          /* days until the offer dies */
+      var short = wtDayGap(c.offer_expiry_date, c.expected_completion_date);
+      out.push({
+        rule: "offer_before_completion", severity: toExpiry <= 30 ? "crit" : "warn",
+        case_id: c.id, client_id: c.client_id,
+        title: "Offer expires before completion: " + clientName(c.client_id),
+        detail: "Offer expires " + wtDate(c.offer_expiry_date) + " · completion expected " +
+          wtDate(c.expected_completion_date) + " — " + plural(short, "day", "days") + " short",
+        dedupe_key: "offer_before_completion:" + c.id
+      });
+    });
+
+    /* 12 · erc_before_completion (R65) — a LIVE retention case whose expected completion falls
+       INSIDE the ERC window of the case it came from. The client is leaving the old deal early
+       and paying the lender's Early Repayment Charge for the privilege, when waiting a few weeks
+       would have cost nothing; the two dates live on two DIFFERENT case rows, which is precisely
+       why nobody ever put them side by side. Always a WARNING: it is a conversation to have (a
+       completion date to move, or a charge to explain and justify in writing), not an emergency.
+       Completed / not_proceeding successors are excluded — the money is either already spent or
+       the case is dead, and an alert about neither is noise. */
+    var caseById = {};
+    DB.cases.forEach(function (c) { caseById[c.id] = c; });
+    DB.cases.forEach(function (c) {
+      if (c.stage === "completed" || c.stage === "not_proceeding") return;
+      if (!c.retention_source_case_id || !c.expected_completion_date) return;
+      var src = caseById[c.retention_source_case_id];
+      if (!src || !src.erc_end_date) return;
+      if (!(c.expected_completion_date < src.erc_end_date)) return;
+      var early = wtDayGap(c.expected_completion_date, src.erc_end_date);
+      out.push({
+        rule: "erc_before_completion", severity: "warn",
+        case_id: c.id, client_id: c.client_id,
+        title: "Completing inside the old rate's ERC: " + clientName(c.client_id),
+        detail: "Old rate's ERC runs until " + wtDate(src.erc_end_date) + " · completion expected " +
+          wtDate(c.expected_completion_date) + " — " + plural(early, "day", "days") + " early",
+        dedupe_key: "erc_before_completion:" + c.id
       });
     });
 

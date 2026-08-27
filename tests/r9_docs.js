@@ -517,10 +517,19 @@ const groundTruth = (page) => page.evaluate(async ({ CHASE_MAX }) => {
   await owner.click("#view-toggle");
   await owner.waitForTimeout(1400);
   const tableChips = await owner.$$eval("#pipe-table .wait-chip", (e) => e.length).catch(() => 0);
-  eq("the pipeline table shows the same chips, inside the Stage cell", tableChips, G.waitingLive);
-  eq("no column was added to the table (the chip rides in Stage)",
+  /* PATCHED R65 · H7b — the chip MOVED from inside the Stage cell to its own sortable column.
+     The R9 contract these two lines encoded ("one chip per live case that has one, on the table
+     as well as the board") is unchanged and still asserted; what changed is WHICH cell it lives
+     in, and the column it now has is the whole point — a chip nested in the Stage cell could not
+     be sorted on, and "everything sitting with a solicitor" is the question the table is read
+     with. The old expectation is inverted, not deleted, so a regression back into the Stage cell
+     would fail here. */
+  eq("the pipeline table shows the same chips, in their own Waiting-on column", tableChips, G.waitingLive);
+  eq("R65 · the table now HAS a Waiting-on column (the chip is sortable)",
     await owner.$$eval("#pipe-table th", (e) => e.map((x) => x.textContent.replace(/[▲▼]/g, "").trim()).filter(Boolean).includes("Waiting on")),
-    false);
+    true);
+  eq("R65 · …and the chips are in that column, not in the Stage cell",
+    await owner.$$eval("#pipe-table td.pipe-col-waiting .wait-chip", (e) => e.length), G.waitingLive);
 
   console.log("\n=== R9-6 · CONVEYANCER SPEED (Reports, Owner-only) ===");
   await gotoReports(owner);

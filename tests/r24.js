@@ -327,7 +327,15 @@ async function readTableRow(page, fullName) {
       ok("B14 · the kitchen-sink row is present in the table view", !!row, kbFullName);
       if (row) {
         ok("B15 · table Property cell shows the address label", row.property && row.property.indexOf(kbExpected.propLabelText) !== -1, row.property);
-        ok("B16 · table Stage cell shows the stage label (+ carries the waiting chip)", row.stage.indexOf(kbExpected.stageLabelText) !== -1 && row.stage.indexOf("solicitor") !== -1, row.stage);
+        /* PATCHED R65 · H7b — the waiting-on chip MOVED out of the Stage cell into its own
+           sortable "Waiting on" column (a chip nested inside another column can be neither sorted
+           on nor scanned down, and "show me everything sitting with a solicitor" is the question
+           this table exists to answer). The assertion is not weakened: the Stage cell must still
+           show the stage label, the chip must still be on the row, and B16c pins that it is NOT
+           in both places. */
+        ok("B16 · table Stage cell shows the stage label", row.stage.indexOf(kbExpected.stageLabelText) !== -1, row.stage);
+        ok("B16b · the waiting chip is in its own Waiting-on column", (row.waiting_on || "").indexOf("solicitor") !== -1, row.waiting_on);
+        ok("B16c · …and NOT also in the Stage cell (moved, not duplicated)", row.stage.indexOf("solicitor") === -1, row.stage);
         eq("B17 · table Type cell shows the case kind", row.case_kind, "Purchase");
         ok("B18 · table Lender cell shows the lender", row.lender.indexOf(seed.lender) !== -1, row.lender);
         eq("B19 · table Rate cell shows rate_percent", row.rate_percent, seed.rate_percent + "%");

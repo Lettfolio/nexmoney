@@ -134,7 +134,13 @@ const openDrawer = async (page, panelId) => {
       await page.click("#snooze-ok");
       await page.waitForTimeout(400);
       ok("R5-22 · snoozing closes the overlay", await page.evaluate(() => document.querySelector("#overlay-backdrop").classList.contains("hidden")));
-      ok("R5-22 · the alert is gone from the working list", await page.evaluate((cid) => !document.querySelector("#watchtower-list").innerHTML.includes(`openCase('${cid}')`), fixture.critCase));
+      /* R65 — IDENTIFIED BY ALERT, NOT BY CASE. This used to look for the snoozed alert's CASE
+         disappearing from the list, which only worked while every case carried at most one open
+         alert. R65's offer_before_completion fires on the same Offer-stage case offer_stale
+         already flags, so that case is legitimately still on the list under the OTHER rule after
+         one of its two alerts is snoozed. The row's own Snooze… handler carries the alert id, so
+         that is what is looked for now — a tighter test of exactly the same behaviour. */
+      ok("R5-22 · the alert is gone from the working list", await page.evaluate((id) => !document.querySelector("#watchtower-list").innerHTML.includes(`snoozeAlert('${id}'`), fixture.critId));
       eq("R5-22 · the 'N snoozed' toggle now reads 2", await page.evaluate(() => document.querySelector("#watchtower-snoozed-toggle").textContent.trim()), "2 snoozed");
 
       const row = await page.evaluate(async (id) => {
@@ -153,7 +159,7 @@ const openDrawer = async (page, panelId) => {
       // Snooze survives "Run checks" — run_watchtower's ON CONFLICT upsert never touches M3 columns.
       await page.click("#watchtower-run");
       await page.waitForTimeout(500);
-      ok("R5-22 · still gone after Run checks (survives run_watchtower's upsert)", await page.evaluate((cid) => !document.querySelector("#watchtower-list").innerHTML.includes(`openCase('${cid}')`), fixture.critCase));
+      ok("R5-22 · still gone after Run checks (survives run_watchtower's upsert)", await page.evaluate((id) => !document.querySelector("#watchtower-list").innerHTML.includes(`snoozeAlert('${id}'`), fixture.critId));  /* R65 — by alert id, see above */
       const rowAfterRun = await page.evaluate(async (id) => {
         const { data } = await window.__mockDb.from("watch_alerts").select("snoozed_until,snooze_note").eq("id", id).single();
         return data;
@@ -164,7 +170,7 @@ const openDrawer = async (page, panelId) => {
       await page.evaluate((id) => window.__mock.expireSnooze(id), fixture.critId);
       await page.evaluate(() => window.loadWatchtower());
       await page.waitForTimeout(300);
-      ok("R5-22 · reappears once snoozed_until is in the past", await page.evaluate((cid) => document.querySelector("#watchtower-list").innerHTML.includes(`openCase('${cid}')`), fixture.critCase));
+      ok("R5-22 · reappears once snoozed_until is in the past", await page.evaluate((id) => document.querySelector("#watchtower-list").innerHTML.includes(`snoozeAlert('${id}'`), fixture.critId));  /* R65 — by alert id, see above */
       eq("R5-22 · the 'N snoozed' toggle drops back to 1", await page.evaluate(() => document.querySelector("#watchtower-snoozed-toggle").textContent.trim()), "1 snoozed");
 
       // Unsnooze from the header list.
