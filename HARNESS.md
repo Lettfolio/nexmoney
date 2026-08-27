@@ -115,7 +115,29 @@ node tests/r68_mi.js
 node tests/r68_admin.js
 node tests/r69_today.js
 node tests/r69_polish.js
+node tests/r69_hf1.js
 ```
+
+**R69-HF1 notes — the mock now enforces PostgREST's 1,000-row ceiling.** Production finding (27 Aug,
+Daniel's browser): `.limit(20000)` returns **1,000** rows — Supabase's `max-rows` is a hard server
+ceiling that `.limit()` can only lower. Every `OWNER_ROW_CAP` / `REPORTS_ROW_CAP` read had been
+silently truncated since the back-book import (1,161 clients / 2,015 cases). Three things a future
+session needs to know:
+
+  - **`readAll(q, opts)`** (app.js, beside `inChunks`) is now the ONLY way to read a big table: pass an
+    already-built, already-ORDERED builder with no limit/range and it walks `.range()` pages of
+    `READ_PAGE` (1,000) up to `opts.cap` (default `OWNER_ROW_CAP`), returning `{data, error, count}`.
+    Every paged read needs a UNIQUE order — add `.order("id")` after a non-unique sort (`last_name`,
+    `updated_at`…); `v_alerts` has no id, so it sorts by `case_id` (one row per case in prod).
+    Never pass `.single()` / `.maybeSingle()` / `head:true` builders. postgrest-js 2.110.7 lets one
+    builder be re-awaited after re-setting `.range()` (`set`, not append), which is what readAll does.
+  - **`MOCK_MAX_ROWS = 1000`** in `mock-supabase.js` `_runSelect`: `.limit(n)` → `min(n, 1000)`,
+    `.range(a,b)` clamped to 1,000 from `a`, no limit → first 1,000, `count:'exact'` stays the true
+    total. `__mock.setMaxRows(n)` / `__mock.maxRows()` (0 disables). A NEW read that forgets `readAll`
+    now fails `tests/r29_scale.js` (the 2,500-row canary) the way production would.
+  - Tests that read ground truth from `__mockDb` over >1,000 rows must page themselves —
+    `tests/r29_scale.js` has `window.__readAllRaw(table, cols)` for exactly that; `tests/r23.js`'s
+    read recorder wraps `.limit`/`.range`/`.then` and asserts "is PAGED to the cap".
 
 **R69 notes — polish pack.** Two new suites: `tests/r69_today.js` (71 — My Day case folds, Today on
 a phone, ▶ Run now on the stuck-cron banner, bounded radar) and `tests/r69_polish.js` (103 — lender

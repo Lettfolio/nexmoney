@@ -4431,6 +4431,35 @@
     return DB[table];
   }
 
+  /* R69-HF1 — POSTGREST'S max-rows CEILING, ENFORCED HERE.
+
+     Production finding (27 Aug, Daniel's browser): Supabase runs PostgREST with `max-rows = 1000`.
+     That is a HARD SERVER ceiling. `.limit(20000)` does not raise it — a `limit` larger than
+     max-rows is simply clamped, so the read comes back holding 1,000 rows and NOTHING says so:
+       db.from('clients').select('id',{count:'exact'}).order('last_name').limit(20000)
+         → data.length 1000, count 1161      (cases: 1000 of 2015)
+       db.from('clients').select('id').order('last_name').range(1000,1999)
+         → 161 rows                          (so PAGING past the ceiling is how you get the rest)
+     Until now this mock happily returned 2,500 rows to a `.limit(20000)`, which is precisely why
+     no suite — not even the 2,500-row scale suite — ever caught the truncation the whole book has
+     been suffering since the back-book import. The mock now behaves the way the server does:
+
+       · `.range(a, b)`  → at most MOCK_MAX_ROWS rows starting at `a` (the requested window is
+                           clamped to the ceiling, the OFFSET is honoured in full — that is exactly
+                           how paging past 1,000 works in production).
+       · `.limit(n)`     → min(n, MOCK_MAX_ROWS).
+       · no limit/range  → the first MOCK_MAX_ROWS rows.
+       · `count:'exact'` → still the TRUE total (PostgREST reports the real count in content-range
+                           regardless of how few rows the window returned; that asymmetry is the
+                           only signal a truncated caller ever gets).
+
+     The ceiling applies to SELECTs only, never to an insert/update/delete's `returning` rows —
+     PostgREST's max-rows governs read windows, and a bulk insert's representation comes back
+     whole (which the scale suites rely on to collect the ids they just minted).
+
+     setMaxRows(0) removes the ceiling entirely, for a test that wants the old unbounded mock. */
+  var MOCK_MAX_ROWS = 1000;
+
   function Builder(table) {
     this._table = table;
     this._op = null;
@@ -4559,8 +4588,16 @@
     var rows = readFilter(this._table, this._matching());
     var total = rows.length;
     rows = this._sort(rows);
-    if (this._range) rows = rows.slice(this._range[0], this._range[1] + 1);
-    else if (this._limit != null) rows = rows.slice(0, this._limit);
+    /* R69-HF1 — the server's max-rows ceiling (see MOCK_MAX_ROWS above). Applied AFTER the sort,
+       exactly where PostgREST applies it: the window is chosen from the ordered set, and `total`
+       (captured before any of this) is what count:'exact' keeps reporting. */
+    var ceiling = MOCK_MAX_ROWS > 0 ? MOCK_MAX_ROWS : Infinity;
+    if (this._range) {
+      var rFrom = this._range[0], rTo = this._range[1];
+      var window_ = Math.max(0, Math.min(rTo - rFrom + 1, ceiling));
+      rows = rows.slice(rFrom, rFrom + window_);
+    } else if (this._limit != null) rows = rows.slice(0, Math.min(this._limit, ceiling));
+    else if (ceiling !== Infinity) rows = rows.slice(0, ceiling);
     var table = this._table, cols = this._columns;
     var out = projectRows(table, rows, cols);
     return this._finish(out, total);
@@ -6835,6 +6872,15 @@
          value it set, so a test can assert the flip took. */
       resendKey: function () { return MOCK_RESEND_KEY; },
       setResendKey: function (v) { MOCK_RESEND_KEY = !!v; return MOCK_RESEND_KEY; },
+      /* R69-HF1 — PostgREST's max-rows ceiling (see the MOCK_MAX_ROWS block above). Default 1000,
+         the value Supabase ships. setMaxRows(0) removes the ceiling for a test that deliberately
+         wants the old unbounded mock; anything else is coerced to a positive integer. */
+      maxRows: function () { return MOCK_MAX_ROWS; },
+      setMaxRows: function (n) {
+        var v = Number(n);
+        MOCK_MAX_ROWS = isFinite(v) && v > 0 ? Math.floor(v) : 0;
+        return MOCK_MAX_ROWS;
+      },
       migrations: MIGRATIONS,
       setMigrations: function (patch) {
         Object.keys(patch || {}).forEach(function (k) {

@@ -479,7 +479,7 @@ const postcodeOf = (s) => {
   return m ? (m[1] + (m[2] || "")) : "";
 };
 async function fetchMatchClients() {
-  const { data, error } = await db.from("clients").select("id,first_name,last_name,email,phone,address").order("id").limit(OWNER_ROW_CAP);
+  const { data, error } = await readAll(db.from("clients").select("id,first_name,last_name,email,phone,address").order("id"));
   if (error) { console.error(error); return []; }
   return data || [];
 }
@@ -545,6 +545,78 @@ async function inChunks(ids, build) {
   const results = await Promise.all(slices.map((sl) => Promise.resolve(build(sl))));
   const bad = results.find((r) => r && r.error);
   return { data: results.flatMap((r) => (r && r.data) || []), error: bad ? bad.error : null };
+}
+/* R69-HF1 — PAGED FULL-TABLE READS. THE 1,000-ROW CEILING IS REAL AND `.limit()` CANNOT LIFT IT.
+
+   R18/R23 raised REPORTS_ROW_CAP/OWNER_ROW_CAP to 20,000 and hung `.limit(OWNER_ROW_CAP)` on every
+   owner-facing whole-table read, believing that lifted PostgREST's default `max-rows`. It does not.
+   `max-rows` is a HARD SERVER ceiling: `.limit(n)` can only ever ask for FEWER rows than the server
+   is willing to send, never more. Proven in Daniel's browser on 27 Aug, against the live database:
+
+     db.from('clients').select('id',{count:'exact'}).order('last_name').limit(20000)
+       → data.length 1000, count 1161          ← 161 clients simply absent, no error, no warning
+     db.from('cases').select('id',{count:'exact'}).limit(20000)
+       → data.length 1000, count 2015
+     db.from('clients').select('id').order('last_name').range(1000, 1999)
+       → 161 rows                              ← paging PAST the ceiling is the only way through
+
+   So since the back-book import (1,161 clients / 2,015 cases) every one of those reads has silently
+   returned the first 1,000 rows in its order: the case modal's client picker is ordered by surname,
+   so "Whitcombe" onwards vanished — and a case whose client is not in the picker cannot be saved at
+   all. The 69-case mock never reaches 1,000 rows, which is exactly why no suite ever noticed (the
+   mock now enforces the same ceiling — see MOCK_MAX_ROWS in mock-supabase.js).
+
+   readAll() takes an ALREADY-BUILT query (filters and ORDER applied, NO .limit()/.range() of its
+   own) and walks it in PAGE-sized windows via `.range(from, from + PAGE - 1)` until a short page
+   (the end of the table) or `cap` rows. It returns the SAME `{data, error}` shape every caller
+   already handles, so a call site converts by wrapping the builder and deleting its `.limit(...)`.
+
+   Notes that matter:
+   · ORDER IS NOT OPTIONAL. Paging an unordered read can repeat or skip rows between requests, so
+     every converted site keeps its ORDER clause, and where that order is not unique it gained a
+     secondary `.order("id")` (e.g. `.order("last_name")` → `.order("last_name").order("id")`).
+   · RE-AWAITING THE SAME BUILDER IS CORRECT in supabase-js v2 (verified against postgrest-js
+     2.110.7, the version index.html pins). `.range(from, to)` does
+     `url.searchParams.set('offset', from)` and `url.searchParams.set('limit', to - from + 1)` —
+     `set`, not append, so calling `.range()` again overwrites the previous window (and would
+     overwrite an earlier `.limit()` too). PostgrestBuilder is a thenable, not a promise: its
+     `then()` builds and fires a FRESH fetch every time it is awaited and caches nothing. So one
+     builder, re-ranged and re-awaited per page, is a correct pager and no builder FUNCTION is
+     needed. (The mock's Builder behaves the same way: `_run()` per `then()`, `_range` overwritten.)
+   · `Promise.resolve(...)` around every await, per the house rule — a PostgrestBuilder has no
+     `.catch`, so it must never be treated as a real promise.
+   · `count:'exact'` is preserved from the FIRST page (PostgREST reports the true total in
+     content-range on every page regardless of the window, so the first one is enough).
+   · An error on any page returns `{data: rowsSoFar, error}` — the rows already in hand, plus the
+     error, so a tolerant caller (softRows) degrades exactly as it did before.
+   · The cap still BITES at `cap` rows, so `ownerCapHit(rows)` / `noteRowCap(label, rows)`
+     (`rows.length === CAP`) keep working unchanged — readAll stops AT the cap, never past it.
+   · NEVER pass a `.single()`, `.maybeSingle()` or `head:true` builder to readAll: those are not
+     row-window reads and `.range()` on them is meaningless. */
+const READ_PAGE = 1000;   // PostgREST's default max-rows — asking for more per page just gets this
+async function readAll(q, opts) {
+  const o = opts || {};
+  const cap = Number(o.cap) > 0 ? Number(o.cap) : OWNER_ROW_CAP;
+  const pageSize = Number(o.page) > 0 ? Number(o.page) : READ_PAGE;
+  const rows = [];
+  let count = null, from = 0;
+  for (;;) {
+    const want = Math.min(pageSize, cap - rows.length);
+    if (want <= 0) break;                                  // reached the cap — stop AT it, not past it
+    let res;
+    try {
+      res = await Promise.resolve(q.range(from, from + want - 1));
+    } catch (e) {
+      return { data: rows, error: { message: String((e && e.message) || e), code: "READALL" }, count };
+    }
+    if (!res || res.error) return { data: rows, error: (res && res.error) || { message: "read failed" }, count };
+    if (count == null && res.count != null) count = res.count;
+    const got = Array.isArray(res.data) ? res.data : [];
+    for (let i = 0; i < got.length; i++) rows.push(got[i]);
+    if (got.length < want) break;                          // short page = end of the table
+    from += got.length;
+  }
+  return { data: rows, error: null, count };
 }
 // Tap-to-call / tap-to-email links (M2). Displays the number/address verbatim; the tel: href is
 // space-stripped so the dialler gets a clean value. Returns "" for empty input so callers can guard.
@@ -4800,7 +4872,7 @@ const OWNER_ONLY_SETTING_KEYS = ["bank_account_name", "bank_sort_code", "bank_ac
    made-up number. */
 async function clientDobStats() {
   try {
-    const { data, error } = await db.from("clients").select("id,date_of_birth").order("id").limit(OWNER_ROW_CAP);
+    const { data, error } = await readAll(db.from("clients").select("id,date_of_birth").order("id"));
     if (error) return null;
     const rows = data || [];
     return { total: rows.length, withDob: rows.filter((r) => r && r.date_of_birth).length };
@@ -6152,11 +6224,11 @@ function upliftLineHtml(c, cls) {
    the same write-retry discipline the lead accept path uses for its post-original columns. */
 const DASH_CASE_COLS = "id,stage,fee_status,broker_fee,proc_fee,sols_fee,loan_amount,rate_percent,completed_at,retention_source_case_id,assigned_to";
 async function readDashboardCases() {
-  if (CALLPACK_SUPPORTED === false) return db.from("cases").select(DASH_CASE_COLS).order("id").limit(OWNER_ROW_CAP);
-  const res = await db.from("cases").select(DASH_CASE_COLS + "," + CALLPACK_SELECT).order("id").limit(OWNER_ROW_CAP);
+  if (CALLPACK_SUPPORTED === false) return readAll(db.from("cases").select(DASH_CASE_COLS).order("id"));
+  const res = await readAll(db.from("cases").select(DASH_CASE_COLS + "," + CALLPACK_SELECT).order("id"));
   if (res.error && isMissingColumnError(res.error)) {
     CALLPACK_SUPPORTED = false;
-    return db.from("cases").select(DASH_CASE_COLS).order("id").limit(OWNER_ROW_CAP);
+    return readAll(db.from("cases").select(DASH_CASE_COLS).order("id"));
   }
   if (!res.error && res.data && res.data.length) noteCallPackFromStarRow(res.data[0]);
   return res;
@@ -6734,9 +6806,9 @@ function rateErcDedupeNote(collapsed) {
    can answer whose pipeline this is. Base column since the original schema, so it cannot 42703. */
 const RETENTION_PIPE_COLS = "id,stage,lender,rate_end_date,rate_end_estimated,assigned_to,clients!client_id(first_name,last_name)";
 async function readRetentionPipeline() {
-  return db.from("cases").select(RETENTION_PIPE_COLS)
+  return readAll(db.from("cases").select(RETENTION_PIPE_COLS)
     .not("retention_source_case_id", "is", null)
-    .order("rate_end_date").limit(OWNER_ROW_CAP);
+    .order("rate_end_date").order("id"));
 }
 function retentionPipelineStats(rows) {
   const all = rows || [];
@@ -7253,7 +7325,7 @@ async function loadRetentionRates(scope) {
   const reminderMonths = Number(settings.rate_reminder_months) || 6; // T1-10 — a stray non-numeric stored value can't render "≤ NaNmo"
   const [{ data: cases, error: casesErr }, { data: alerts, error: alertsErr }] = await Promise.all([
     readDashboardCases(),
-    db.from("v_alerts").select("*").order("rate_end_date").limit(OWNER_ROW_CAP),
+    readAll(db.from("v_alerts").select("*").order("rate_end_date").order("case_id")),
   ]);
   if (casesErr || alertsErr) { renderLoadError("#ret-rates-list", casesErr || alertsErr, loadRetentionPage); return; }
   renderOwnerCapNotice("#ret-cap-notice", ownerCapHit(cases) || ownerCapHit(alerts));
@@ -8917,9 +8989,9 @@ const WT_MY_DH_CAP = 8;
 async function loadMyDataHealthAlerts(existingAlerts) {
   if (!ME || isAdminOrOwner()) return [];
   try {
-    const { data, error } = await db.from("cases")
+    const { data, error } = await readAll(db.from("cases")
       .select("id,stage,rate_end_date,client_id,assigned_to,clients!client_id(first_name,last_name,email)")
-      .eq("assigned_to", ME.id).order("id").limit(OWNER_ROW_CAP);
+      .eq("assigned_to", ME.id).order("id"));
     if (error) return [];
     /* De-duplicated against whatever run_watchtower already returned, on the same rule+case
        identity the RPC's own dedupe_key uses: the day one of these checks moves into the SQL
@@ -9424,19 +9496,24 @@ async function loadUnactioned() {
        whatever order the server felt like — and the panel said nothing about it.
        `.order("updated_at")` ASCENDING is the whole point of the bound: this radar exists to find
        the cases nobody has touched, so if only part of the book can be read, the part worth
-       reading is the OLDEST-touched end. The tasks read is capped too but deliberately NOT
-       reordered — it is a membership lookup, not a list, and any subset of it can only ever make
-       the radar over-report (a case whose only open task fell outside the cap looks unactioned),
-       which is exactly what the notice below warns about. */
-    db.from("cases").select("id,stage,assigned_to,client_id,created_at,clients!client_id(first_name,last_name)")
+       reading is the OLDEST-touched end. The tasks read is capped too but is deliberately NOT
+       ordered for MEANING — it is a membership lookup, not a list, and any subset of it can only
+       ever make the radar over-report (a case whose only open task fell outside the cap looks
+       unactioned), which is exactly what the notice below warns about.
+       R69-HF1 — both reads now PAGE (readAll) rather than trusting `.limit()` to lift PostgREST's
+       1,000-row ceiling, which it never did. The secondary `.order("id")` on the cases read and the
+       bare `.order("id")` on the tasks read exist only to make the paging deterministic: without a
+       unique sort key, two pages of an equal-`updated_at` run can repeat or skip rows. Neither
+       changes what the radar means — the cases read is still oldest-touched-first. */
+    readAll(db.from("cases").select("id,stage,assigned_to,client_id,created_at,clients!client_id(first_name,last_name)")
       .not("stage", "in", "(completed,not_proceeding)")
-      .order("updated_at", { ascending: true }).limit(OWNER_ROW_CAP),
+      .order("updated_at", { ascending: true }).order("id")),
     /* R63 · H1c — the title and created_at come along now: "has an open task" is no longer the
        whole test. A case whose ONLY open task is a step from an EARLIER stage has no next action
        for the stage it is actually at, and that is precisely the case this radar exists to find —
        it was the one shape the old membership test let through. Same columns, one predicate
        (isStalePlaybookTask), shared with the case header and the case modal's task list. */
-    db.from("case_tasks").select("title,case_id,done_at,created_at").is("done_at", null).limit(OWNER_ROW_CAP),
+    readAll(db.from("case_tasks").select("title,case_id,done_at,created_at").is("done_at", null).order("id")),
     db.from("case_notes").select("case_id,created_at").gte("created_at", activitySinceIso),
     softRows(db.from("case_events").select("case_id,created_at").gte("created_at", activitySinceIso)),
   ]);
@@ -10028,7 +10105,7 @@ async function loadPipeline() {
     + (docsOn ? ",waiting_on,solicitor_firm" : "")
     + (lenderOn ? ",application_status" : "")
     + ",clients!client_id(first_name,last_name,email)";
-  const { data: cases, error } = await db.from("cases").select(boardSelect).order("updated_at", { ascending: false }).limit(OWNER_ROW_CAP);
+  const { data: cases, error } = await readAll(db.from("cases").select(boardSelect).order("updated_at", { ascending: false }).order("id"));
   if (error) {
     $("#board").classList.remove("hidden");
     $("#board-hint").classList.add("hidden");
@@ -14525,7 +14602,7 @@ window.openCase = async function (id, opts = {}) {
      stays per-open. */
   const introsPromise = db.from("introducers").select("id,name").order("name");
   const fetchClientPicker = async () => {
-    const { data } = await db.from("clients").select("id,first_name,last_name,email,phone").order("last_name").limit(OWNER_ROW_CAP);
+    const { data } = await readAll(db.from("clients").select("id,first_name,last_name,email,phone").order("last_name").order("id"));
     clientPickerCache = data || [];
     return clientPickerCache;
   };
@@ -17000,7 +17077,7 @@ async function loadClientData() {
        say which lender the rate is with. It is an original-schema column (Reports has selected it
        since R7), so this cannot start 42703-ing on an older database, and it is a widening of the
        read this page already does rather than a second query. */
-    db.from("clients").select("*, cases!client_id(id,stage,case_kind,rate_end_date,lender,protection_status,broker_fee,assigned_to,completed_at,updated_at,created_at" + (clientPropOn ? ",property_address" : "") + ")").order("last_name").limit(OWNER_ROW_CAP),
+    readAll(db.from("clients").select("*, cases!client_id(id,stage,case_kind,rate_end_date,lender,protection_status,broker_fee,assigned_to,completed_at,updated_at,created_at" + (clientPropOn ? ",property_address" : "") + ")").order("last_name").order("id")),
     // R47 Gate 0 — `body` joins the select so a SYSTEM PROVENANCE note (the back-book import wrote
     // one per policy/deal, all dated the import day) can be told apart from real contact. Counting
     // them as "last contact" made every imported client read as spoken-to today and collapsed the
@@ -18266,7 +18343,7 @@ async function exportChangeHistoryCsv() {
   try {
     let rows = [];
     try {
-      const { data, error } = await chApplyFilters(db.from("audit_log").select(AUDIT_COLS)).limit(OWNER_ROW_CAP);
+      const { data, error } = await readAll(chApplyFilters(db.from("audit_log").select(AUDIT_COLS)));
       if (error) throw error;
       rows = auditVisibleRows(data || []);
     } catch (e) {
@@ -22605,7 +22682,7 @@ window.openAppt = async function (id, presets = {}, openOpts = {}) {
     }
     a = data;
   }
-  const { data: clients } = await db.from("clients").select("id,first_name,last_name").order("last_name").limit(OWNER_ROW_CAP);
+  const { data: clients } = await readAll(db.from("clients").select("id,first_name,last_name").order("last_name").order("id"));
   /* R6 — the appointment already carries case_id and the modal showed nothing but an "Open case"
      button, so "which of the six flats is this valuation for?" needed a round trip through the
      case modal. The linked case's identity now sits on the form itself. */
@@ -24598,7 +24675,7 @@ async function loadPersistedDiagnostics() {
   if (!box) return;
   let res;
   try {
-    res = await db.from("error_events").select("error_type,location,page,role,created_at").order("created_at", { ascending: false }).limit(OWNER_ROW_CAP);
+    res = await readAll(db.from("error_events").select("error_type,location,page,role,created_at").order("created_at", { ascending: false }).order("id"));
   } catch (e) { res = { error: e }; }
   try {
     if (!res || res.error || !Array.isArray(res.data)) {
@@ -24680,7 +24757,13 @@ function copyDiagnostics(recCount) {
    missing rows silently revert to the legacy single fee_paid_at and to the "(not recorded)" loss
    bucket — no error, nothing on screen, exactly the failure mode M2/M5 were built to end. Past
    PostgREST's max-rows cap (1000 by default) an unordered, unbounded select is free to do that.
-   Ordering both by id and asking for the same explicit ceiling keeps them walking the same set. */
+   Ordering both by id and asking for the same explicit ceiling keeps them walking the same set.
+   R69-HF1 — the ceiling below is now an APPLICATION cap, applied by readAll() as it pages, not a
+   `.limit()` handed to the server. `.limit(20000)` never lifted PostgREST's max-rows: the server
+   clamped it to 1,000 and said nothing, so "the same explicit ceiling" above was in truth "the
+   first 1,000 rows" on both selects since the back-book import. readAll() walks the whole ordered
+   set in 1,000-row `.range()` pages and stops AT this cap, which is what the notice below has
+   always claimed. See the readAll block comment (~line 549) for the proof. */
 let REPORTS_ROW_CAP = 20000; // R18-P7 — raised 5000→20000: stage_changed case_events already exceed 5000 at current scale, so 5000 silently truncated MI. Truncation-disclosure note below still fires at the new ceiling.
 /* R5-F4 — the cap above is honest about being a cap only if the page says when it BITES. A select
    that comes back holding exactly REPORTS_ROW_CAP rows is, as far as the client can tell, truncated:
@@ -24707,7 +24790,14 @@ function renderCapNotice() {
    is byte-identical to today — it only lifts PostgREST's silent 1,000-row ceiling so a 2,000+ book is
    read whole instead of an arbitrary first ~1,000. A read that comes back holding EXACTLY the cap is,
    as far as the client can tell, truncated (same `=== cap` principle Reports uses above), so the page
-   surfaces one small notice. This effectively NEVER fires for Daniel — it is the safety net. */
+   surfaces one small notice. This effectively NEVER fires for Daniel — it is the safety net.
+
+   R69-HF1 — THE SENTENCE ABOVE WAS WRONG ABOUT HOW, AND THE COST WAS REAL. `.limit(20000)` does not
+   lift PostgREST's 1,000-row ceiling; nothing sent from the client can. From the back-book import
+   (1,161 clients / 2,015 cases) until this fix, every one of these reads returned the first 1,000
+   rows of its order and no notice ever fired, because 1,000 ≠ 20,000. The ceiling is now reached the
+   only way it can be — readAll() pages the ordered query with `.range()` until the table runs out or
+   this cap is hit — so `ownerCapHit` (`rows.length === OWNER_ROW_CAP`) means what it always said. */
 let OWNER_ROW_CAP = REPORTS_ROW_CAP;
 const ownerCapHit = (rows) => Array.isArray(rows) && rows.length === OWNER_ROW_CAP;
 function renderOwnerCapNotice(sel, hit) {
@@ -24734,8 +24824,8 @@ if (typeof window !== "undefined" && window.supabase && window.supabase.__isMock
 const LOST_EVENT_RE = /(?:→|->)\s*not_proceeding\s*$|^\s*not_proceeding\s*$/;
 async function loadCaseExtraColumns() {
   try {
-    const { data, error } = await db.from("cases").select("id,lost_reason,broker_fee_paid_at,proc_fee_paid_at,sols_fee_paid_at")
-      .order("id").limit(REPORTS_ROW_CAP);
+    const { data, error } = await readAll(db.from("cases").select("id,lost_reason,broker_fee_paid_at,proc_fee_paid_at,sols_fee_paid_at")
+      .order("id"), { cap: REPORTS_ROW_CAP });
     if (error) return null;
     noteRowCap("case fee dates", data);
     const map = {};
@@ -24750,7 +24840,7 @@ async function loadCaseExtraColumns() {
 async function loadCasePropColumn() {
   try {
     if ((await propAddrSupported()) === false) return null;
-    const { data, error } = await db.from("cases").select("id,property_address").order("id").limit(REPORTS_ROW_CAP);
+    const { data, error } = await readAll(db.from("cases").select("id,property_address").order("id"), { cap: REPORTS_ROW_CAP });
     if (error) { if (isMissingColumnError(error)) PROP_ADDR_SUPPORTED = false; return null; }
     noteRowCap("case property addresses", data);
     const map = {};
@@ -24765,7 +24855,7 @@ async function loadCasePropColumn() {
 async function loadCaseCallPack() {
   try {
     if ((await callPackSupported()) === false) return null;
-    const { data, error } = await db.from("cases").select("id," + CALLPACK_SELECT).order("id").limit(REPORTS_ROW_CAP);
+    const { data, error } = await readAll(db.from("cases").select("id," + CALLPACK_SELECT).order("id"), { cap: REPORTS_ROW_CAP });
     if (error) { if (isMissingColumnError(error)) CALLPACK_SUPPORTED = false; return null; }
     noteRowCap("case call-pack figures", data);
     const map = {};
@@ -24781,8 +24871,8 @@ async function loadLostDates() {
     // G1N-4 — case_events is the fastest-growing table in the schema (278 rows on a 54-case
     // fixture); truncated silently, the losses panel starts dating cases by updated_at while its
     // own scope line still claims it dated them by the stage change. Ordered and capped.
-    const { data, error } = await db.from("case_events").select("case_id,event,detail,created_at")
-      .eq("event", "stage_changed").order("created_at").limit(REPORTS_ROW_CAP);
+    const { data, error } = await readAll(db.from("case_events").select("case_id,event,detail,created_at")
+      .eq("event", "stage_changed").order("created_at").order("id"), { cap: REPORTS_ROW_CAP });
     if (error) return {};
     noteRowCap("stage-change history", data);
     const map = {};
@@ -24832,8 +24922,8 @@ async function loadReports() {
        and velocity. It is an R13 date column, present in prod (like submitted_at beside it), so it
        cannot 42703 this select on the current database; on an older one it simply comes back
        undefined and the MI conversion/velocity fall back to the milestones that ARE populated. */
-    db.from("cases").select("id,client_id,stage,case_kind,lender,loan_amount,broker_fee,proc_fee,sols_fee,submitted_at,offer_issued_date,fee_status,fee_paid_at,completed_at,created_at,updated_at,rate_percent,rate_end_date,rate_end_estimated,lead_source,introducer_id,protection_status,retention_source_case_id,assigned_to,nps_score,review_requested_at,expected_completion_date,clients!client_id(first_name,last_name)")
-      .order("id").limit(REPORTS_ROW_CAP),
+    readAll(db.from("cases").select("id,client_id,stage,case_kind,lender,loan_amount,broker_fee,proc_fee,sols_fee,submitted_at,offer_issued_date,fee_status,fee_paid_at,completed_at,created_at,updated_at,rate_percent,rate_end_date,rate_end_estimated,lead_source,introducer_id,protection_status,retention_source_case_id,assigned_to,nps_score,review_requested_at,expected_completion_date,clients!client_id(first_name,last_name)")
+      .order("id"), { cap: REPORTS_ROW_CAP }),
     db.from("introducers").select("id,name"),
     db.rpc("get_reports"),
     // M2 columns in their OWN query, so an un-migrated database (42703 on the whole select) costs
@@ -25913,9 +26003,9 @@ async function renderReferralsOut(all, mv) {
    R9-3 block comment for why. Best-effort: on error the block renders its empty state. */
 async function loadDetractorTasks() {
   try {
-    const { data, error } = await db.from("case_tasks")
+    const { data, error } = await readAll(db.from("case_tasks")
       .select("id,title,due_date,case_id,assigned_to,done_at,cases(client_id,clients!client_id(first_name,last_name))")
-      .is("done_at", null).order("due_date").limit(REPORTS_ROW_CAP);
+      .is("done_at", null).order("due_date").order("id"), { cap: REPORTS_ROW_CAP });
     if (error) return [];
     return (data || []).filter((t) => t && isReviewFeedbackTask(t.title));
   } catch (_) { return []; }
@@ -26670,11 +26760,11 @@ async function loadMoneyPage() {
 
   const propOn = (await propAddrSupported()) !== false;
   const [casesRes, tasksRes, leadsRes, eventsRes] = await Promise.all([
-    db.from("cases").select("id,client_id,stage,case_kind,lender,loan_amount,proc_fee,broker_fee,sols_fee,fee_status,fee_paid_at,completed_at,created_at,updated_at,rate_end_date,rate_end_estimated,protection_status,retention_source_case_id,assigned_to,lead_source" + (propOn ? ",property_address" : "") + ",clients!client_id(first_name,last_name)")
-      .order("id").limit(REPORTS_ROW_CAP),
-    db.from("case_tasks").select("id,assigned_to,due_date,done_at").is("done_at", null).limit(REPORTS_ROW_CAP),
-    db.from("leads").select("*").limit(REPORTS_ROW_CAP),
-    db.from("case_events").select("case_id,event,created_at").eq("event", "stage_changed").order("created_at").limit(REPORTS_ROW_CAP),
+    readAll(db.from("cases").select("id,client_id,stage,case_kind,lender,loan_amount,proc_fee,broker_fee,sols_fee,fee_status,fee_paid_at,completed_at,created_at,updated_at,rate_end_date,rate_end_estimated,protection_status,retention_source_case_id,assigned_to,lead_source" + (propOn ? ",property_address" : "") + ",clients!client_id(first_name,last_name)")
+      .order("id"), { cap: REPORTS_ROW_CAP }),
+    readAll(db.from("case_tasks").select("id,assigned_to,due_date,done_at").is("done_at", null).order("id"), { cap: REPORTS_ROW_CAP }),
+    readAll(db.from("leads").select("*").order("id"), { cap: REPORTS_ROW_CAP }),
+    readAll(db.from("case_events").select("case_id,event,created_at").eq("event", "stage_changed").order("created_at").order("id"), { cap: REPORTS_ROW_CAP }),
   ]);
   if (casesRes.error) { renderLoadError("#money-owed", casesRes.error, loadMoneyPage); return; }
   const all = casesRes.data || [];
@@ -27441,9 +27531,9 @@ const R44_CANDIDATE_MONTHS = 18;
 async function loadProcRates(force) {
   if (!showMoney()) return [];
   if (procRatesCache && !force) return procRatesCache;
-  const { data, error } = await db.from("proc_rates")
+  const { data, error } = await readAll(db.from("proc_rates")
     .select("id,lender,product,lg_code,rate,notes,effective_label,uploaded_at")
-    .order("id").limit(OWNER_ROW_CAP);
+    .order("id"));
   if (error) { procRatesCache = null; return []; }
   procRatesCache = data || [];
   return procRatesCache;
@@ -27456,17 +27546,17 @@ async function loadProcRates(force) {
    rather than as an .or() with an ISO timestamp inside it, which PostgREST's
    filter grammar makes fragile to quote. */
 async function r44LoadCandidateCases() {
-  const { data, error } = await db.from("cases").select(R44_CASE_COLS)
+  const { data, error } = await readAll(db.from("cases").select(R44_CASE_COLS)
     .in("stage", ["offer", "exchange", "completed"])
-    .order("id").limit(OWNER_ROW_CAP);
+    .order("id"));
   if (error) return [];
   const cutoff = new Date(Date.now() - R44_CANDIDATE_MONTHS * 30.5 * 86400000).toISOString();
   return (data || []).filter((c) => c.stage !== "completed" || !c.proc_fee_paid_at || !c.completed_at || c.completed_at >= cutoff);
 }
 async function r44LoadPriorLines() {
-  const { data, error } = await db.from("commission_lines")
+  const { data, error } = await readAll(db.from("commission_lines")
     .select("account_number,matched_case_id")
-    .eq("match_status", "confirmed").neq("account_number", "").limit(OWNER_ROW_CAP);
+    .eq("match_status", "confirmed").neq("account_number", "").order("id"));
   if (error) return [];
   return (data || []).filter((r) => r && r.matched_case_id);
 }
@@ -27557,9 +27647,9 @@ async function renderReconPanel() {
      denormalised onto the statement row: a confirm changes them, and a count
      that only refreshes on import would be wrong the moment anybody worked. */
   const ids = rows.map((s) => s.id);
-  const { data: lineRows } = await db.from("commission_lines")
+  const { data: lineRows } = await readAll(db.from("commission_lines")
     .select("id,statement_id,tran_type,policy_group,addressee,reason,match_status,banked_gross")
-    .in("statement_id", ids).limit(OWNER_ROW_CAP);
+    .in("statement_id", ids).order("id"));
   const byStmt = {};
   (lineRows || []).forEach((l) => { (byStmt[l.statement_id] = byStmt[l.statement_id] || []).push(l); });
   list.innerHTML = rows.map((s) => {
@@ -27669,7 +27759,7 @@ async function openReconReview(stmtId) {
   review.innerHTML = `<div class="empty">Loading the statement…</div>`;
   const [{ data: st, error: sErr }, { data: lines, error: lErr }] = await Promise.all([
     db.from("commission_statements").select("id,ref,statement_label,statement_date,filename,gross_total,net_total,line_count").eq("id", stmtId).maybeSingle(),
-    db.from("commission_lines").select("*").eq("statement_id", stmtId).order("id").limit(OWNER_ROW_CAP),
+    readAll(db.from("commission_lines").select("*").eq("statement_id", stmtId).order("id")),
   ]);
   if (sErr || lErr || !st) {
     review.innerHTML = `<div class="empty">That statement could not be read${sErr || lErr ? " — " + esc((sErr || lErr).message) : ""}.</div>`;
@@ -28157,10 +28247,10 @@ async function loadDataHealth() {
     // Defect 13: the RPC only ever returns bare counts for these two tiles. Rather than change the
     // RPC (frontend-only, existing columns), pull the offending rows client-side from cases+clients
     // so the tiles can expand into the same list-panel pattern as the other Data Health items.
-    db.from("cases").select("id,stage,rate_end_date,expected_completion_date,completed_at,created_at,submitted_at,case_kind,lender,rate_type,retention_source_case_id,loan_amount,property_value,mortgage_account_number,client_id,clients!client_id(id,first_name,last_name,phone)" + (dhPropOn ? ",property_address" : "")).order("id").limit(OWNER_ROW_CAP),
+    readAll(db.from("cases").select("id,stage,rate_end_date,expected_completion_date,completed_at,created_at,submitted_at,case_kind,lender,rate_type,retention_source_case_id,loan_amount,property_value,mortgage_account_number,client_id,clients!client_id(id,first_name,last_name,phone)" + (dhPropOn ? ",property_address" : "")).order("id")),
     // T1-9/T1-26: same trick for the client-shaped checks. The RPC returns counts for "missing
     // email & phone" and nothing at all for malformed values, so read the rows and judge them here.
-    db.from("clients").select("id,first_name,last_name,email,phone").order("id").limit(OWNER_ROW_CAP),
+    readAll(db.from("clients").select("id,first_name,last_name,email,phone").order("id")),
     // B6 / M4 — every dismissal is one select; find_duplicate_clients (the RPC) is never touched,
     // it just gets filtered client-side against this table (§Batch4 note: the RPC's own upsert
     // logic can't know about "not a duplicate" without a schema change it doesn't need).
@@ -28178,7 +28268,7 @@ async function loadDataHealth() {
   if (caseRows.error && dhPropOn && isMissingColumnError(caseRows.error)) {
     PROP_ADDR_SUPPORTED = false;
     dhPropOn = false;
-    caseRows = await db.from("cases").select("id,stage,rate_end_date,expected_completion_date,completed_at,created_at,submitted_at,case_kind,lender,rate_type,retention_source_case_id,loan_amount,property_value,mortgage_account_number,client_id,clients!client_id(id,first_name,last_name,phone)").order("id").limit(OWNER_ROW_CAP);
+    caseRows = await readAll(db.from("cases").select("id,stage,rate_end_date,expected_completion_date,completed_at,created_at,submitted_at,case_kind,lender,rate_type,retention_source_case_id,loan_amount,property_value,mortgage_account_number,client_id,clients!client_id(id,first_name,last_name,phone)").order("id"));
   }
   // …and the quieter shape of absence: the rows came back, without the column that was asked for.
   if (dhPropOn && Array.isArray(caseRows.data) && caseRows.data.length) {
@@ -28330,9 +28420,9 @@ async function loadDataHealth() {
        are asked for SEPARATELY rather than added to the big cases select above — naming them
        there would 42703 on an un-migrated database and blank five existing panels. */
     const [dhDocRows, dhDocMails, dhWaitRows] = await Promise.all([
-      softRows(db.from("case_documents").select("case_id,status").order("case_id").limit(OWNER_ROW_CAP)),
-      softRows(db.from("email_queue").select("case_id,email_type,status,sent_at,created_at").in("email_type", DOC_MAIL_TYPES).order("created_at").limit(OWNER_ROW_CAP)),
-      softRows(db.from("cases").select("id,waiting_on,solicitor_firm,assigned_to").order("id").limit(OWNER_ROW_CAP)),
+      softRows(readAll(db.from("case_documents").select("case_id,status").order("case_id").order("id"))),
+      softRows(readAll(db.from("email_queue").select("case_id,email_type,status,sent_at,created_at").in("email_type", DOC_MAIL_TYPES).order("created_at").order("id"))),
+      softRows(readAll(db.from("cases").select("id,waiting_on,solicitor_firm,assigned_to").order("id"))),
     ]);
     const outstandingBy = {}, docsBy = {};
     dhDocRows.forEach((d) => {
@@ -28347,7 +28437,7 @@ async function loadDataHealth() {
        and cost the panel its seven other facts to gain one. */
     const dhExchangeBy = {};
     if ((await forwardDatesSupported()) === true) {
-      (await softRows(db.from("cases").select("id,exchange_date").order("id").limit(OWNER_ROW_CAP))).forEach((r) => { if (r && r.id) dhExchangeBy[r.id] = r.exchange_date || null; });
+      (await softRows(readAll(db.from("cases").select("id,exchange_date").order("id")))).forEach((r) => { if (r && r.id) dhExchangeBy[r.id] = r.exchange_date || null; });
     }
     const extraBy = Object.fromEntries(dhWaitRows.map((r) => [r.id, r]));
     const emailBy = new Map(allClients.map((cl) => [cl.id, cl.email || ""]));
@@ -28384,7 +28474,7 @@ async function loadDataHealth() {
   const dhCareOn = (await careSupported()) === true;
   let dhVulnerable = [], dhSuppressed = [];
   if (dhCareOn) {
-    const { data: careRows, error: careErr } = await db.from("clients").select("id,first_name,last_name," + CARE_COLS.join(",")).order("id").limit(OWNER_ROW_CAP);
+    const { data: careRows, error: careErr } = await readAll(db.from("clients").select("id,first_name,last_name," + CARE_COLS.join(",")).order("id"));
     if (careErr) { if (isMissingColumnError(careErr)) CARE_SUPPORTED = false; }
     else {
       const cn = (r) => [r.first_name, r.last_name].filter(Boolean).join(" ") || "(no name)";
@@ -28413,7 +28503,7 @@ async function loadDataHealth() {
   const dhForwardOn = (await forwardDatesSupported()) === true;
   const dhOfferIssuedBy = {};
   if (dhForwardOn) {
-    (await softRows(db.from("cases").select("id,offer_issued_date").order("id").limit(OWNER_ROW_CAP))).forEach((r) => { if (r && r.id) dhOfferIssuedBy[r.id] = r.offer_issued_date || null; });
+    (await softRows(readAll(db.from("cases").select("id,offer_issued_date").order("id")))).forEach((r) => { if (r && r.id) dhOfferIssuedBy[r.id] = r.offer_issued_date || null; });
   }
   // Stage rank via the canonical STAGES order. "Reached ≥ X" = the case's stage sits at or past X in
   // pipeline order; completed (rank 6) has reached application AND offer, so it can legitimately show
@@ -31598,13 +31688,13 @@ async function revFetchClients() {
      case, so there is nothing here that needs them. */
   const careOn = (await careSupported()) === true;
   const cols = "id,first_name,last_name,email,phone,address,date_of_birth" + (careOn ? ",is_vulnerable,vulnerability_note" : "");
-  const { data, error } = await db.from("clients").select(cols).order("id").limit(OWNER_ROW_CAP);
+  const { data, error } = await readAll(db.from("clients").select(cols).order("id"));
   if (error) { console.error(error); return []; }
   return data || [];
 }
 async function revFetchCases() {
-  const { data, error } = await db.from("cases")
-    .select("id,client_id,stage,case_kind,lender,product_name,rate_type,rate_percent,rate_end_date,rate_end_estimated,erc_end_date,loan_amount,property_value,term_years,proc_fee,broker_fee,fee_status,protection_status,protection_commission,gi_status,lead_source,submitted_at,completed_at,assigned_to,updated_at").order("id").limit(OWNER_ROW_CAP);
+  const { data, error } = await readAll(db.from("cases")
+    .select("id,client_id,stage,case_kind,lender,product_name,rate_type,rate_percent,rate_end_date,rate_end_estimated,erc_end_date,loan_amount,property_value,term_years,proc_fee,broker_fee,fee_status,protection_status,protection_commission,gi_status,lead_source,submitted_at,completed_at,assigned_to,updated_at").order("id"));
   if (error) { console.error(error); return []; }
   return data || [];
 }

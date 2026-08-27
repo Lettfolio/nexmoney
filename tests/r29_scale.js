@@ -86,6 +86,31 @@ async function newPage(browser, persona) {
   page.on("console", (m) => { if (m.type() === "error" && !/40[0-9]|net::ERR/.test(m.text())) page.__err = (page.__err || []).concat(m.text()); });
   page.on("pageerror", (e) => { page.__err = (page.__err || []).concat("pageerror: " + e.message); });
   page.on("dialog", (d) => d.accept().catch(() => {}));
+  /* R69-HF1 — DELIBERATE CONTRACT CHANGE, and the whole reason this suite exists.
+     admin/mock-supabase.js now enforces PostgREST's real `max-rows = 1000` server ceiling (see
+     MOCK_MAX_ROWS there): a plain `.select()` returns at most 1,000 rows no matter what `.limit()`
+     asked for, exactly as Supabase does in production. That is what silently truncated ~32 owner-
+     facing reads for the whole live book, and this suite (2,500 clients + 2,500 cases) is the
+     canary that proves it: with the ceiling in and app.js unpatched, it failed with truncated
+     counts the way Daniel's browser does.
+     app.js now pages every such read (readAll). This suite's OWN ground-truth reads — three
+     `window.__mockDb.from(...).select(...)` calls that deliberately take no limit at all, so they
+     can be an INDEPENDENT check on what the app computed — hit the very same ceiling and were
+     returning 1,000 rows as "the truth". They page too now. Nothing about what they assert has
+     changed; only how the rows are fetched. Deliberately hand-rolled here rather than calling
+     app.js's readAll, so the check stays independent of the code under test. */
+  await page.addInitScript(() => {
+    window.__readAllRaw = async function (table, cols) {
+      const PAGE = 1000, out = [];
+      for (let from = 0; from < 500000; from += PAGE) {
+        const res = await window.__mockDb.from(table).select(cols || "*").order("id").range(from, from + PAGE - 1);
+        const rows = (res && res.data) || [];
+        for (let i = 0; i < rows.length; i++) out.push(rows[i]);
+        if (rows.length < PAGE) break;
+      }
+      return out;
+    };
+  });
   await page.goto(`${BASE}?as=${persona}`);
   await page.waitForTimeout(1500);
   return page;
@@ -273,10 +298,12 @@ async function seedScale(page, n) {
 
     // Confirm the store the app itself reads from (window.__mockDb) is the SAME store §0.2/§0.3
     // just grew — not a copy the seed wrote into and the app reads from somewhere else.
+    // R69-HF1 — paged (see __readAllRaw in newPage): a bare .select() now stops at the mock's
+    // 1,000-row PostgREST ceiling, which would make this read 1,000/1,000 rather than the truth.
     const liveCount = await page.evaluate(async () => {
-      const c = await window.__mockDb.from("clients").select("id");
-      const k = await window.__mockDb.from("cases").select("id");
-      return { clients: c.data.length, cases: k.data.length };
+      const c = await window.__readAllRaw("clients", "id");
+      const k = await window.__readAllRaw("cases", "id");
+      return { clients: c.length, cases: k.length };
     });
     eq("0.5 · window.__mockDb reads back the same grown counts (not a stale/copied store)", liveCount, { clients: after.clients, cases: after.cases });
 
@@ -366,10 +393,8 @@ async function seedScale(page, n) {
       const headerCounts = await page.$$eval("#board .col h4 span", (els) => els.map((e) => Number(e.textContent)));
       ok("B6 · every column HEADER count (the full, uncapped count) is a finite non-negative number", headerCounts.every((n) => Number.isFinite(n) && n >= 0), JSON.stringify(headerCounts));
       const headerSum = headerCounts.reduce((a, b) => a + b, 0);
-      const groundTruthStages = await page.evaluate(async () => {
-        const { data } = await window.__mockDb.from("cases").select("stage");
-        return data.length;
-      });
+      // R69-HF1 — paged, per __readAllRaw in newPage.
+      const groundTruthStages = await page.evaluate(async () => (await window.__readAllRaw("cases", "id,stage")).length);
       eq("B7 · sum of column header counts equals the true total case count (headers are never themselves capped)", headerSum, groundTruthStages);
 
       const boardCapHidden = await page.$eval("#board-cap-notice", (e) => e.classList.contains("hidden")).catch(() => null);
@@ -561,9 +586,12 @@ async function seedScale(page, n) {
       // STAGE_LABEL are read off the page (a fair-game shared ordering constant per the HARNESS
       // standing rule); the FILTER logic itself is written fresh here, not borrowed from app.js.
       const gt = await page.evaluate(async () => {
-        const { data: cases } = await window.__mockDb.from("cases")
-          .select("id,stage,assigned_to,proc_fee,broker_fee,completed_at,submitted_at,offer_issued_date,expected_completion_date,rate_end_date");
-        const { data: clients } = await window.__mockDb.from("clients").select("id,email,phone");
+        // R69-HF1 — paged, per __readAllRaw in newPage: these two reads ARE the independent
+        // ground truth every §G assertion below is measured against, so they must see the whole
+        // book, not the first 1,000 rows the mock's PostgREST ceiling would otherwise hand back.
+        const cases = await window.__readAllRaw("cases",
+          "id,stage,assigned_to,proc_fee,broker_fee,completed_at,submitted_at,offer_issued_date,expected_completion_date,rate_end_date");
+        const clients = await window.__readAllRaw("clients", "id,email,phone");
         const isLive = (s) => s !== "completed" && s !== "not_proceeding";
         const stageRank = Object.fromEntries(STAGES.map(([k], i) => [k, i]));
         const appRank = stageRank["application"], offerRank = stageRank["offer"];

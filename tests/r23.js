@@ -23,6 +23,16 @@
      - `window.__setOwnerRowCap(n)` — mock-only test hook mirroring the
        pre-existing `window.__setReportsRowCap(n)`.
 
+   R69-HF1 UPDATE — `.limit(OWNER_ROW_CAP)` never lifted PostgREST's `max-rows`
+   (a hard 1,000-row SERVER ceiling that clamps any larger limit silently), so
+   from the back-book import onward every read listed above returned the first
+   1,000 rows. app.js now reaches the ceiling the only way a client can: readAll()
+   PAGES each of those queries with `.range()` until the table runs out or
+   OWNER_ROW_CAP is hit. Nothing this file asserts about the cap or the four
+   notices changed — only the recorder below, which now watches `.range()` as
+   well as `.limit()`, and the §B/§C wording that names the mechanism. See
+   tests/r69_hf1.js for the ceiling itself.
+
    Below the cap (20,000 vs. this fixture's 69 cases / 50 clients) every
    capped read is asserted to be byte-identical to an unbounded one — the
    headline claim of the round is "zero regression below the cap" — so §B
@@ -85,11 +95,21 @@ const goto = async (page, pageName, ms) => {
 };
 const noNewErr = (page, before) => (page.__err || []).length === before;
 
-/* Monkeypatch window.__mockDb.from ONCE (idempotent — see the guard) so every `.limit(n)` call on
-   any table records {table, limit, len} — `len` being the row count the read ACTUALLY resolved
+/* Monkeypatch window.__mockDb.from ONCE (idempotent — see the guard) so every BOUNDED read on any
+   table records {table, limit, range, len} — `len` being the row count the read ACTUALLY resolved
    with, i.e. proof of truncation, not just proof the call was made. `db` inside app.js IS
    window.__mockDb (mock-supabase.js's createClient() both returns and stashes the same object), so
-   this is observing app.js's real reads, not a copy. */
+   this is observing app.js's real reads, not a copy.
+
+   R69-HF1 — DELIBERATE CONTRACT CHANGE, recorded here because this suite is the one that asserts
+   the mechanism. R18/R23 bounded these reads with `.limit(OWNER_ROW_CAP)` believing that lifted
+   PostgREST's `max-rows`; it does not — max-rows is a hard SERVER ceiling and a bigger `.limit()`
+   is silently clamped to it, so from the back-book import onward every one of these reads returned
+   the first 1,000 rows. app.js now PAGES them (readAll → repeated `.range(from, from + 999)` on one
+   re-awaited builder) and no longer calls `.limit()` on them at all. A recorder that only watched
+   `.limit()` therefore saw nothing. It watches `.range()` too now, and the §B/§C assertions below
+   look for the paged window instead of the limit. What each of them PROVES is unchanged: the read
+   is bounded, and it resolves with the whole book below the cap / exactly the cap above it. */
 async function installLimitRecorder(page) {
   await page.evaluate(() => {
     if (window.__r23Installed) { window.__r23Reads = []; return; }
@@ -98,22 +118,32 @@ async function installLimitRecorder(page) {
     const orig = window.__mockDb.from.bind(window.__mockDb);
     window.__mockDb.from = function (table) {
       const b = orig(table);
+      let lastLimit = null, lastRange = null;
       const origLimit = b.limit.bind(b);
-      b.limit = function (n) {
-        origLimit(n);
-        const origThen = b.then.bind(b);
-        b.then = function (resolve, reject) {
-          return origThen(function (result) {
-            window.__r23Reads.push({ table: table, limit: n, len: (result && Array.isArray(result.data)) ? result.data.length : null });
-            return resolve ? resolve(result) : result;
-          }, reject);
-        };
-        return b;
+      const origRange = b.range.bind(b);
+      const origThen = b.then.bind(b);
+      b.limit = function (n) { lastLimit = n; origLimit(n); return b; };
+      b.range = function (from, to) { lastRange = [from, to]; origRange(from, to); return b; };
+      /* Wrapped ONCE, at from() time, rather than from inside .limit(): readAll re-ranges and
+         re-awaits the SAME builder once per page, so each page has to be recorded separately. */
+      b.then = function (resolve, reject) {
+        return origThen(function (result) {
+          if (lastLimit !== null || lastRange !== null) {
+            window.__r23Reads.push({
+              table: table, limit: lastLimit, range: lastRange,
+              len: (result && Array.isArray(result.data)) ? result.data.length : null,
+            });
+          }
+          return resolve ? resolve(result) : result;
+        }, reject);
       };
       return b;
     };
   });
 }
+/* R69-HF1 — "this read is one of readAll's pages": a `.range()` window that starts at row 0 and is
+   READ_PAGE (1000) wide, or narrower when the cap itself is below the page size (§D sets it to 10). */
+const isPagedRead = (r, cap) => !!r.range && r.range[0] === 0 && r.range[1] === Math.min(1000, cap) - 1;
 const clearReads = (page) => page.evaluate(() => { window.__r23Reads = []; });
 const readsFor = (page, table) => page.evaluate((t) => window.__r23Reads.filter((r) => r.table === t), table);
 
@@ -176,7 +206,7 @@ const readsFor = (page, table) => page.evaluate((t) => window.__r23Reads.filter(
       await clearReads(page);
       await goto(page, "dashboard", 1200);
       const dashCasesReads = await readsFor(page, "cases");
-      ok("B1 · Dashboard's cases read carries .limit(OWNER_ROW_CAP=20000)", dashCasesReads.some((r) => r.limit === 20000), JSON.stringify(dashCasesReads));
+      ok("B1 · Dashboard's cases read is PAGED to OWNER_ROW_CAP=20000 (readAll's first .range(0,999) window)", dashCasesReads.some((r) => isPagedRead(r, 20000)), JSON.stringify(dashCasesReads));
       ok("B1 · …and resolves with the FULL book (len === ground truth), not truncated", dashCasesReads.some((r) => r.len === gt.cases), JSON.stringify({ dashCasesReads, gt }));
       const kpiChildren = await page.$$eval("#kpi-row > *", (els) => els.length);
       ok("B1 · #kpi-row rendered normally (has tiles)", kpiChildren > 0, kpiChildren);
@@ -187,7 +217,7 @@ const readsFor = (page, table) => page.evaluate((t) => window.__r23Reads.filter(
       await clearReads(page);
       await goto(page, "pipeline", 1200);
       const pipeCasesReads = await readsFor(page, "cases");
-      ok("B2 · Pipeline's cases read carries .limit(OWNER_ROW_CAP=20000)", pipeCasesReads.some((r) => r.limit === 20000), JSON.stringify(pipeCasesReads));
+      ok("B2 · Pipeline's cases read is PAGED to OWNER_ROW_CAP=20000", pipeCasesReads.some((r) => isPagedRead(r, 20000)), JSON.stringify(pipeCasesReads));
       ok("B2 · …and resolves with the FULL book", pipeCasesReads.some((r) => r.len === gt.cases), JSON.stringify({ pipeCasesReads, gt }));
       const boardCards = await page.$$eval("#board .col .card", (els) => els.length);
       // Header counts across every rendered column sum to the TRUE total the board segment holds —
@@ -203,7 +233,7 @@ const readsFor = (page, table) => page.evaluate((t) => window.__r23Reads.filter(
       await clearReads(page);
       await goto(page, "clients", 900);
       const clientsReads = await readsFor(page, "clients");
-      ok("B3 · Clients' loadClientData read carries .limit(OWNER_ROW_CAP=20000)", clientsReads.some((r) => r.limit === 20000), JSON.stringify(clientsReads));
+      ok("B3 · Clients' loadClientData read is PAGED to OWNER_ROW_CAP=20000", clientsReads.some((r) => isPagedRead(r, 20000)), JSON.stringify(clientsReads));
       ok("B3 · …and resolves with the FULL book", clientsReads.some((r) => r.len === gt.clients), JSON.stringify({ clientsReads, gt }));
       const clientRowCount = await page.$$eval("#client-list .client-row", (els) => els.length);
       eq("B3 · every client in the fixture renders a row (50 < CLIENT_LIST_CAP=100, so nothing is R18-capped either)", clientRowCount, gt.clients);
@@ -215,9 +245,9 @@ const readsFor = (page, table) => page.evaluate((t) => window.__r23Reads.filter(
       await goto(page, "data", 1200);
       const dhCasesReads = await readsFor(page, "cases");
       const dhClientsReads = await readsFor(page, "clients");
-      ok("B4 · Data health's primary cases read carries .limit(OWNER_ROW_CAP=20000)", dhCasesReads.some((r) => r.limit === 20000), JSON.stringify(dhCasesReads));
+      ok("B4 · Data health's primary cases read is PAGED to OWNER_ROW_CAP=20000", dhCasesReads.some((r) => isPagedRead(r, 20000)), JSON.stringify(dhCasesReads));
       ok("B4 · …and resolves with the FULL book", dhCasesReads.some((r) => r.len === gt.cases), JSON.stringify({ dhCasesReads, gt }));
-      ok("B4 · Data health's clients read carries .limit(OWNER_ROW_CAP=20000)", dhClientsReads.some((r) => r.limit === 20000), JSON.stringify(dhClientsReads));
+      ok("B4 · Data health's clients read is PAGED to OWNER_ROW_CAP=20000", dhClientsReads.some((r) => isPagedRead(r, 20000)), JSON.stringify(dhClientsReads));
       ok("B4 · …and resolves with the FULL book", dhClientsReads.some((r) => r.len === gt.clients), JSON.stringify({ dhClientsReads, gt }));
       const dataContent = await page.$eval("#data-content", (e) => e.textContent.trim());
       ok("B4 · #data-content rendered normally (not stuck on \"Loading…\", not empty)", dataContent.length > 0 && !/^Loading/.test(dataContent), dataContent.slice(0, 60));
@@ -238,8 +268,8 @@ const readsFor = (page, table) => page.evaluate((t) => window.__r23Reads.filter(
       const errBefore = (page.__err || []).length;
       const docReads = await readsFor(page, "case_documents");
       const mailReads = await readsFor(page, "email_queue");
-      ok("C1 · case_documents read carries .limit(OWNER_ROW_CAP=20000)", docReads.some((r) => r.limit === 20000), JSON.stringify(docReads));
-      ok("C2 · email_queue (doc-chase) read carries .limit(OWNER_ROW_CAP=20000)", mailReads.some((r) => r.limit === 20000), JSON.stringify(mailReads));
+      ok("C1 · case_documents read is PAGED to OWNER_ROW_CAP=20000", docReads.some((r) => isPagedRead(r, 20000)), JSON.stringify(docReads));
+      ok("C2 · email_queue (doc-chase) read is PAGED to OWNER_ROW_CAP=20000", mailReads.some((r) => isPagedRead(r, 20000)), JSON.stringify(mailReads));
       ok("C · no console errors", noNewErr(page, errBefore), JSON.stringify(page.__err));
     }
 
