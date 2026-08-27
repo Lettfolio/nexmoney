@@ -465,6 +465,11 @@ const openDrawer = async (page, panelId) => {
 
       await page.evaluate((id) => window.openClient(id), ruby.id);
       await page.waitForTimeout(1200);
+      /* R66 — Ruby has six cases, and the client record now folds its timeline shut from three
+         cases up (H5), with the case cards first. The timeline itself is unchanged — same ids,
+         same composer, same rows — so the fold is opened here and every assertion below is the
+         one this test always made. */
+      await page.evaluate(() => { const d = document.querySelector("#client-timeline-fold"); if (d) d.open = true; });
       /* UPDATED (round 6) — R5-16 asked for one thing: a timeline row must say WHICH
          of Ruby's cases it belongs to. It was written when the only answer available
          was the kind · lender tag (`.tl-case`), so it asserted that tag directly.

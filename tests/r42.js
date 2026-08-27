@@ -245,11 +245,15 @@ const EMAILS_R9_NOTE_TEXT = "An unanswered review request is followed up once. A
       await clearNxKeys(page);
       await goto(page, "reports", 2200);
 
+      /* R66 · M6b — Reports gained a SIXTH section, "Referrals out" (#rsec-referrals), at the
+         bottom of the page. The three assertions in this block that pinned the count at five were
+         encoding the R42 contract, not a rule about Reports never growing, so they are widened to
+         six rather than deleted: the ORDER and the first five names are still asserted exactly. */
       const headIds = await page.$$eval("h3.report-section-head", (els) => els.map((e) => e.id));
-      eq("§A1 · exactly the five rsec ids, in DOM order", headIds, ["rsec-mine", "rsec-month", "rsec-mi", "rsec-money", "rsec-quality"]);
+      eq("§A1 · exactly the six rsec ids, in DOM order", headIds, ["rsec-mine", "rsec-month", "rsec-mi", "rsec-money", "rsec-quality", "rsec-referrals"]);
 
       const sections = await page.evaluate(() => REPORT_SECTIONS.map((s) => s[0]));
-      eq("§A2 · REPORT_SECTIONS declares the same five keys in the same order", sections, ["mine", "month", "mi", "money", "quality"]);
+      eq("§A2 · REPORT_SECTIONS declares the same six keys in the same order", sections, ["mine", "month", "mi", "money", "quality", "referrals"]);
 
       const posInfo = await page.evaluate(() => ({
         jumpPos: getComputedStyle(document.getElementById("reports-jump")).position,
@@ -261,7 +265,9 @@ const EMAILS_R9_NOTE_TEXT = "An unanswered review request is followed up once. A
       // Owner sees month/mi/money/quality (mine is theirs to lose — see §B) — click every one of
       // them and prove the page actually moves and the target header lands in view.
       const keys = await page.evaluate(() => [...document.querySelectorAll("#reports-jump-chips [data-reports-jump]")].map((b) => b.dataset.reportsJump));
-      eq("§A5 · owner's visible chip set is exactly month/mi/money/quality", keys, ["month", "mi", "money", "quality"]);
+      // R66 · M6b — "referrals" joins the owner's chip set: the section is visible to every staff
+      // role (no money on it), so it is on the bar for the owner too.
+      eq("§A5 · owner's visible chip set is exactly month/mi/money/quality/referrals", keys, ["month", "mi", "money", "quality", "referrals"]);
 
       for (const key of keys) {
         await page.evaluate(() => window.scrollTo(0, 0));
@@ -328,9 +334,12 @@ const EMAILS_R9_NOTE_TEXT = "An unanswered review request is followed up once. A
       const errBefore = (page.__err || []).length;
       await goto(page, "reports", 2200);
 
+      /* R66 · M6b — a SEVENTH ledger drawer, the referrals-out list, built on the identical
+         pattern (details.report-ledger + .ledger-n). The list below still walks every entry, so
+         the new drawer is held to exactly the same contract as the six that came before it. */
       const ledgers = await page.evaluate(() => REPORT_LEDGERS);
-      eq("§C0 · REPORT_LEDGERS names exactly the six known drawers", ledgers.map((l) => l[0]),
-        ["#report-owed-table", "#report-rateend-table", "#report-nps-list", "#report-ltv", "#report-conveyancer-body", "#report-introducers"]);
+      eq("§C0 · REPORT_LEDGERS names exactly the seven known drawers", ledgers.map((l) => l[0]),
+        ["#report-owed-table", "#report-rateend-table", "#report-nps-list", "#report-ltv", "#report-conveyancer-body", "#report-introducers", "#report-ref-list"]);
 
       for (const [sel, rowSel, noun] of ledgers) {
         const before = await page.evaluate(({ sel }) => {

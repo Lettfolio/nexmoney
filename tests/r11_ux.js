@@ -441,11 +441,17 @@ const noErr = (page, label) => ok(`no console errors (${label})`, !page.__err, J
       });
       ok("R11-C · adviser: the bar is built", !advNav.barHidden);
       const MONEY_KEYS = ["owed", "rateend", "leadresp", "advocacy", "conveyancer", "forecast", "ltv", "advisers", "losses"];
-      eq("R11-C · adviser: exactly mine/month/funnel/sources/live/months/introducers, no money", advNav.chips, ["mine", "month", "funnel", "sources", "live", "months", "introducers"]);
+      /* R66 · M6b — "referralsout" joins the adviser's chip list. It is deliberately NOT a money
+         chip and does not belong in MONEY_KEYS below: the Referrals-out panel carries counts only
+         (no fee, no commission, no £ anywhere on it), so every staff role sees it — which is why
+         the money-leak assertions underneath are untouched and still have to pass. */
+      eq("R11-C · adviser: exactly mine/month/funnel/sources/live/months/introducers/referralsout, no money", advNav.chips, ["mine", "month", "funnel", "sources", "live", "months", "introducers", "referralsout"]);
       ok("R11-C · adviser: no money panel is visible in the DOM either", advNav.leaked.length === 0, advNav.leaked);
       ok("R11-C · adviser: no money chip present", !advNav.chips.some((k) => MONEY_KEYS.includes(k)), advNav.chips);
       const wired = await page.evaluate(() => {
-        const SEL = { mine: "#report-mine-panel", month: "#report-month-panel", funnel: "#report-funnel-panel", sources: "#report-sources-panel", live: "#report-live-note", months: "#report-months-panel", introducers: "#report-introducers-panel" };
+        // R66 · M6b — the map has to know the new chip's panel or the "genuinely visible" walk
+        // below reads `undefined` for it and fails on a chip that is in fact perfectly wired.
+        const SEL = { mine: "#report-mine-panel", month: "#report-month-panel", funnel: "#report-funnel-panel", sources: "#report-sources-panel", live: "#report-live-note", months: "#report-months-panel", introducers: "#report-introducers-panel", referralsout: "#report-referrals-panel" };
         return [...document.querySelectorAll("#rep-nav-chips [data-rep-jump]")].every((b) => {
           const el = document.querySelector(SEL[b.dataset.repJump]);
           return el && el.offsetParent !== null;

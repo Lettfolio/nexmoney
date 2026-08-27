@@ -3859,3 +3859,65 @@ tr.owed-hot > td { background: var(--red-bg); }
    room, and a paragraph of explanation that pushes the first case below the fold is worse than
    no explanation at all. */
 .pipe-mobile-note { margin: 0 0 10px; font-size: 12px; line-height: 1.5; }
+
+/* ==========================================================================
+   R66 · H5 — THE CLIENT PORTFOLIO STRIP, and the folded timeline that lets it
+   be the first thing on a landlord's record.
+
+   The strip is one line of facts, not a dashboard: six small figures reading
+   left to right, wrapping on narrow screens, with the numbers themselves
+   given the weight and everything else muted. Deliberately quiet furniture —
+   it sits above cards that are already colourful, and a boxed KPI row here
+   would shout over the properties it is describing.
+   ========================================================================== */
+.client-portfolio {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px;
+  margin: 2px 0 6px; padding: 8px 12px;
+  border: 1px solid var(--border-strong); border-left: 3px solid #4f6bed;
+  border-radius: 10px; background: #f7f9fd;
+  font-size: 13px; color: #445066; line-height: 1.6;
+}
+.client-portfolio .cpf-seg { white-space: nowrap; }
+.client-portfolio .cpf-seg strong { font-weight: 700; color: var(--dark); font-variant-numeric: tabular-nums; }
+.client-portfolio .cpf-props { font-weight: 700; color: var(--dark); }
+.client-portfolio .cpf-dot { color: #9aa5b8; }
+/* The two "this figure is incomplete" notes. Amber, small, and never inside the
+   <strong> — a caveat that looks like a number gets read as one. */
+.client-portfolio .cpf-excl,
+.client-portfolio .cpf-miss { font-size: 11.5px; color: #8a6d1f; font-weight: 600; }
+.client-portfolio-sub { margin: 0 0 10px; font-size: 12px; line-height: 1.55; }
+@media (max-width: 699px) {
+  /* On a phone the segments stack rather than wrap mid-figure: "total lending"
+     on one line and "£412,000" on the next is not a fact, it is two halves. */
+  .client-portfolio { gap: 2px 8px; font-size: 12.5px; padding: 8px 10px; }
+  .client-portfolio .cpf-dot { display: none; }
+  .client-portfolio .cpf-seg { flex: 1 0 100%; }
+}
+/* The timeline fold (3+ cases). Styled like the .cprop-prev fold below it so
+   the record has ONE visual language for "there is more here, folded". */
+.tl-fold { margin: 6px 0 10px; }
+.tl-fold > summary {
+  cursor: pointer; font-size: 14px; font-weight: 700; color: var(--dark);
+  padding: 4px 2px; user-select: none; width: fit-content;
+}
+.tl-fold > summary:hover { color: #33415c; }
+.tl-fold > summary .cs-muted { font-weight: 400; font-size: 12.5px; }
+.tl-fold-sub { margin: 0 0 8px; font-size: 12px; line-height: 1.55; }
+
+/* ==========================================================================
+   R66 · M6b — REFERRALS OUT (Reports §6).
+   Two tables, both ordinary .imp-tables. The only thing they need that the
+   shared table styling does not already give them is a right-aligned count
+   column and a total row that reads as a total rather than as one more group.
+   ========================================================================== */
+.imp-table .num-col { text-align: right; white-space: nowrap; }
+#report-ref-group-table .refout-total-row td { border-top: 2px solid var(--border-strong); background: #f6f7f9; }
+#report-ref-list-table { width: 100%; }
+/* The panel head carries the Mine/All segment on the right, like Money owed's does its button. */
+#report-referrals-panel .panel-head-row { align-items: center; gap: 10px; flex-wrap: wrap; }
+#report-ref-csv { margin-top: 10px; }
+/* R66 · M8 — the write-to-client overlay. The character counter is a quiet line, and the
+   no-email explanation has to read as a reason rather than as an error. */
+.cust-noemail { margin: 4px 0 0; color: var(--muted); }
+#cust-count { margin: 4px 0 0; text-align: right; }
+#cust-body { min-height: 140px; resize: vertical; }

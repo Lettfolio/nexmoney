@@ -84,7 +84,10 @@ const groundTruth = (page) => page.evaluate(async () => {
   const db = window.__mockDb;
   const [cl, cs, nt, eqR, ap, tk] = await Promise.all([
     db.from("clients").select("id,first_name,last_name,email,phone,date_of_birth"),
-    db.from("cases").select("id,client_id,stage,rate_end_date,protection_status,broker_fee,assigned_to,completed_at,review_requested_at"),
+    // R66 — lender + property_address join the ground truth because the Clients search now matches
+    // them (H4). Nothing else in this file reads them; they exist so the search predicate below
+    // can be recomputed the way the page actually computes it.
+    db.from("cases").select("id,client_id,stage,rate_end_date,protection_status,broker_fee,assigned_to,completed_at,review_requested_at,lender,property_address"),
     db.from("case_notes").select("case_id,created_at"),
     db.from("email_queue").select("client_id,case_id,status,sent_at"),
     db.from("appointments").select("client_id,case_id,starts_at"),
@@ -128,7 +131,7 @@ const groundTruth = (page) => page.evaluate(async () => {
   return {
     years: [yr, yr + 1, yr + 2],
     clients: clients.map((c) => ({ id: c.id, first: c.first_name, last: c.last_name, email: c.email, phone: c.phone, dob: c.date_of_birth })),
-    cases: cases.map((c) => ({ id: c.id, client_id: c.client_id, stage: c.stage, assigned_to: c.assigned_to, broker_fee: c.broker_fee, completed_at: c.completed_at, review_requested_at: c.review_requested_at, rate_end_date: c.rate_end_date, protection_status: c.protection_status })),
+    cases: cases.map((c) => ({ id: c.id, client_id: c.client_id, stage: c.stage, assigned_to: c.assigned_to, broker_fee: c.broker_fee, completed_at: c.completed_at, review_requested_at: c.review_requested_at, rate_end_date: c.rate_end_date, protection_status: c.protection_status, lender: c.lender, property_address: c.property_address })),
     tasks: tk.data || [],
     segIds, lastContact: last, cutoff: cut.toISOString(),
     dobWith: clients.filter((c) => !!c.date_of_birth).length,
@@ -260,7 +263,19 @@ function parseCsvLine(line) {
       /* a term that matches several clients but not all of them */
       const term = "ar";
       const norm = (p) => String(p || "").replace(/[\s()\-.]/g, "").replace(/^\+44/, "0").replace(/^0044/, "0");
-      const matches = gt.clients.filter((c) => ((c.first || "") + " " + (c.last || "") + " " + (c.email || "")).toLowerCase().includes(term)).map((c) => c.id);
+      /* R66 · H4 — the Clients search now ALSO matches any of the client's cases' lender and
+         property address (the postcode/lender complaint: "BH6" and "Skipton" found nothing here
+         while the / palette found both). The requirement this block asserts is unchanged — search
+         and segment compose, and the chip counts re-read against the search — so only the ground
+         truth moves, to the predicate the page now actually applies. */
+      const caseBits = {};
+      gt.cases.forEach((x) => {
+        (caseBits[x.client_id] = caseBits[x.client_id] || []).push(x.lender || "", x.property_address || "");
+      });
+      const matches = gt.clients.filter((c) =>
+        ((c.first || "") + " " + (c.last || "") + " " + (c.email || "")).toLowerCase().includes(term)
+        || (caseBits[c.id] || []).some((s) => s && s.toLowerCase().includes(term))
+      ).map((c) => c.id);
       ok("fixture · the search term is a real partial match", matches.length > 1 && matches.length < gt.clients.length, `${matches.length}/${gt.clients.length}`);
 
       await page.fill("#client-search", term);

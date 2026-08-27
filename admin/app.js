@@ -213,6 +213,17 @@ const EMAIL_LABEL = {
      of the dialog's old bare mailto:. Without an entry here the Emails page — the one screen that
      answers "did that actually go?" — would render the row as "Factfind" or worse. */
   factfind: "Fact-find link",
+  /* R66 · M8 — THE ONE EMAIL THIS APP DID NOT HAVE: the one somebody writes.
+     Every other entry in this map is a TEMPLATE composed server-side from a case; the adviser
+     picks a type and the words are the firm's. "Sarah, quick one before your October rate — are
+     you still keeping number 12?" had no home anywhere in the product, so it was sent from
+     Outlook and the file never knew it happened. A `custom` row carries the adviser's own subject
+     and body (escaped HTML paragraphs) in email_queue.subject / email_queue.body_html, and
+     process-emails wraps them in the house template with the usual sign-off at send time — so the
+     firm's letterhead and signatory rules still apply to words the adviser chose.
+     The label says WHO WROTE IT, because on the Emails page and the case timeline that is the one
+     fact that separates this row from the fifteen above it. */
+  custom: "Email (written by adviser)",
 };
 /* R7 — and the one place a missing type could still print "undefined": the Emails list heading.
    Every other consumer already falls back to the raw type; this one did not. A type this map has
@@ -9719,6 +9730,11 @@ function protectionGateBlocks(caseRow, newStage) {
   if (newStage === "not_proceeding") return false;
   const from = stageIdx(caseRow.stage), to = stageIdx(newStage);
   if (to < stageIdx("application") || to <= from) return false;
+  /* R66 · M6a — the gate asks ONE question and it is the right one: has anybody recorded a
+     protection conversation on this case at all? `referred` is a recorded conversation (it is the
+     record of handing it on), so it passes the gate exactly as quoted / policy_taken / declined
+     do, and it does so without a line of new code because the test is "still not_discussed". Said
+     out loud here because a reader checking "does referred pass?" should not have to infer it. */
   return (caseRow.protection_status || "not_discussed") === "not_discussed";
 }
 /* T1-8 — a move OUT of a terminal stage back into a live one is a REOPENING, not an ordinary move:
@@ -9753,6 +9769,14 @@ function nextStageFor(stage, kind) {
    reachable in the overflow when it is not primary. Nothing is removed from the
    DOM; a hidden section is wrapped, never deleted.
    ========================================================================== */
+// GI / buildings insurance applies to a purchase-shaped or owner-occupier case;
+// never to a product transfer (same lender, cover already in place). R15 · §5.
+/* R66 · M6a — MOVED UP, not changed: CASE_ACTION_RULES below now names GI_KINDS (the GI referral
+   answers to the same kinds the gi_exchange email always has), and a `const` read from inside an
+   object literal declared above it is a temporal-dead-zone ReferenceError at load. Same list, same
+   two consumers; only the position moved. */
+const GI_KINDS = ["purchase", "first_time_buyer", "buy_to_let", "remortgage"];
+function caseGiApplies(kind) { return GI_KINDS.includes(kind); }
 // Each action id → the stages where it belongs in the PRIMARY row. `notKinds`
 // drops it to the overflow for those case kinds (a product transfer has no
 // lender offer to read). `hero` marks the actions that become the visual heroes
@@ -9772,9 +9796,24 @@ const CASE_ACTION_RULES = {
      to a product transfer (same lender, no conveyancing — the R15 §5 rule). */
   "act-ref-survey":       { stages: ["decision_in_principle", "application", "offer"], notKinds: ["product_transfer", "remortgage", "other"] },
   "act-ref-conveyancing": { stages: ["decision_in_principle", "application", "offer", "exchange"], notKinds: ["product_transfer", "other"] },
+  /* R66 · M6a — the two revenue referrals. Protection belongs from the fact-find on (that is
+     where the need is established) and stays primary right through to a completed case, because
+     a completion with no protection outcome is precisely the case somebody should be handing on.
+     GI is the exchange-shaped one — the same window and the same kinds `gi_exchange` has used
+     since round 5 (GI_KINDS), so a product transfer never offers it in the primary row. */
+  "act-ref-protection":   { stages: ["fact_find", "decision_in_principle", "application", "offer", "exchange", "completed"] },
+  "act-ref-gi":           { stages: ["offer", "exchange", "completed"], kinds: GI_KINDS },
   /* R58 — the rate-end OUTCOME on a completed case with a tracked rate: the client renewed
      elsewhere (watch the NEXT rate end) or the property was sold (stop tracking). Hero at
      completed — on a book case surfacing in the rates feed, this IS the decision to record. */
+  /* R66 · M8 — "Write to client" is primary wherever there is a live conversation to have: every
+     working stage, plus a COMPLETED case that still has a tracked rate (that is the retention
+     book — the client whose rate ends in October is exactly who somebody wants to write to, and
+     until now the only buttons on that case were three templates and a fee). A completed case
+     with nothing tracked, and a dead case, keep the button in the overflow like everything else:
+     nothing is ever removed, only demoted. `when` is the same shape as `notKinds`/`kinds` — a
+     declared condition read off the case row, not a second copy of the rule somewhere else. */
+  "act-write":         { stages: ["enquiry", "fact_find", "decision_in_principle", "application", "offer", "exchange", "completed"], when: (c) => c.stage !== "completed" || !!c.rate_end_date },
   "act-rate-outcome":  { stages: ["completed"], hero: true },
   "act-fee":           { stages: ["completed"], hero: true },
   "act-paid":          { stages: ["completed"], hero: true },
@@ -9792,10 +9831,6 @@ const CASE_SECTION_RULES = {
   files:     { showStages: ["decision_in_principle", "application", "offer", "exchange", "completed", "not_proceeding"] },
   documents: { fullStages: ["enquiry", "fact_find", "decision_in_principle", "application", "offer", "exchange"] },
 };
-// GI / buildings insurance applies to a purchase-shaped or owner-occupier case;
-// never to a product transfer (same lender, cover already in place). R15 · §5.
-const GI_KINDS = ["purchase", "first_time_buyer", "buy_to_let", "remortgage"];
-function caseGiApplies(kind) { return GI_KINDS.includes(kind); }
 /* ==========================================================================
    R17 · §1 — STAGE PLAYBOOKS. Advancing a stage creates zero work today, so
    advisers re-invent "what do I do at DIP/Application" from memory and drop
@@ -10049,11 +10084,15 @@ window.playbookAddAll = async function (caseId, stage, kind) {
   toast(`Added ${rows.length} task${rows.length === 1 ? "" : "s"}`);
   openCase(caseId);
 };
-function caseActionIsPrimary(actionId, stage, kind) {
+function caseActionIsPrimary(actionId, stage, kind, c) {
   const rule = CASE_ACTION_RULES[actionId];
   if (!rule) return false;
   if (rule.notKinds && rule.notKinds.includes(kind)) return false;
   if (rule.kinds && !rule.kinds.includes(kind)) return false;
+  /* R66 · M8 — an optional per-CASE condition, evaluated against the row the bar is being built
+     for. Only used where the stage alone is not the whole answer ("completed AND still tracking a
+     rate"). Never throws the bar over: a caller with no row in hand simply skips the condition. */
+  if (rule.when && c && !rule.when({ ...c, stage, case_kind: kind })) return false;
   return rule.stages.includes(stage);
 }
 function caseSectionVisible(section, stage) {
@@ -10075,6 +10114,9 @@ function caseSectionFull(section, stage) {
 function caseActionBarHtml(c, stage, kind, opts) {
   const heroesActive = !!(opts && opts.heroesActive); // no Advance button on screen (terminal stage)
   const defs = [
+    /* R66 · M8 — first in the list because on a live case it is the most ordinary thing anyone
+       does: write to the client. The fifteen template sends below it are the exceptions. */
+    { id: "act-write",         label: "✉️ Write to client", notStages: ["not_proceeding"] },
     { id: "act-fee",           label: "💷 Email fee request" },
     { id: "act-review",        label: "⭐ Email review request" },
     { id: "act-reminder",      label: "📅 Email rate-end reminder" },
@@ -10084,6 +10126,10 @@ function caseActionBarHtml(c, stage, kind, opts) {
     ...(c.offer_doc_path ? [{ id: "act-email-offer", label: "📧 Email offer to client" }] : []),
     { id: "act-ref-survey",       label: "🏡 Refer for survey" },
     { id: "act-ref-conveyancing", label: "🖋️ Refer for conveyancing" },
+    // R66 · M6a — the two revenue referrals, built like the other two: always present, promoted
+    // to the primary row where CASE_ACTION_RULES says they belong, in the overflow everywhere else.
+    { id: "act-ref-protection",   label: "🛡️ Refer for protection" },
+    { id: "act-ref-gi",           label: "🏠 Refer for buildings/contents" },
     ...(c.stage === "completed" && c.rate_end_date ? [{ id: "act-rate-outcome", label: "📌 Rate-end outcome" }] : []),
     { id: "act-evidence",      label: "🗂 Evidence pack" },
     { id: "act-appt",          label: "📅 Book appointment" },
@@ -10102,7 +10148,15 @@ function caseActionBarHtml(c, stage, kind, opts) {
   const primary = [], overflow = [];
   defs.forEach((d) => {
     if (d.onlyStage && stage !== d.onlyStage) return;
-    (caseActionIsPrimary(d.id, stage, kind) ? primary : overflow).push(d);
+    /* R66 · M8 — the mirror of onlyStage, and used by exactly one action so far. Demoting to the
+       overflow is the house rule and it is right for anything an operator might still want; ABSENT
+       is right for an action that would be actively wrong to offer. Writing to a client about a
+       case that is not proceeding is that: the case is dead, there is nothing to say about it, and
+       whatever you do want to say to that person belongs on a live case of theirs (or is a
+       retention conversation, which starts from Retention). One id, named in the definition, so
+       the absence is declared rather than being an accident of the rules map. */
+    if (d.notStages && d.notStages.includes(stage)) return;
+    (caseActionIsPrimary(d.id, stage, kind, c) ? primary : overflow).push(d);
   });
   const btn = (d, isPrimary) => {
     const rule = CASE_ACTION_RULES[d.id] || {};
@@ -10220,24 +10274,60 @@ function lostReasonNoteBody(lost) {
    task a week out so the outcome is somebody's job. Status moves made →
    completed / declined from the list rendered under the action bar.
    ========================================================================== */
+/* ==========================================================================
+   R66 · M6a — THE TWO REFERRAL KINDS THE FIRM ACTUALLY MAKES MONEY ON.
+
+   R56 shipped survey and conveyancing, which are the two an adviser sends OUT
+   of a purchase. The two missing ones are the firm's own revenue lines:
+     · PROTECTION — the network has a protection team, and the roadmap outcome
+       "referred to the network's protection team" had nowhere to live. An
+       adviser who hands protection over had exactly two options on the case:
+       leave it "discussed" for ever (an open gap on every report) or lie and
+       mark it declined. Neither is true, so this round adds the referral AND
+       the matching `referred` protection status, and they are written together
+       (see makeReferral's `setProtReferred`).
+     · GI — buildings & contents. gi_exchange has been an email type since
+       round 5; the act of handing it to somebody was never recorded.
+
+   `defaultTo` is the pre-filled "Referred to". Protection reads the setting
+   `protection_referral_partner` when the firm has named one, because that is a
+   value typed identically on every single referral otherwise. Blank when it is
+   not set — a pre-filled guess would be worse than an empty box.
+   ========================================================================== */
 const REFERRAL_META = {
   survey:       { icon: "🏡", label: "Survey" },
   conveyancing: { icon: "🖋️", label: "Conveyancing" },
+  /* `verb` overrides the overlay's heading where "Refer for protection" reads better than
+     "Refer for protection advice"'s lower-cased label would on its own. */
+  protection:   { icon: "🛡️", label: "Protection", verb: "Refer for protection advice", defaultTo: () => String((settings && settings.protection_referral_partner) || "").trim() },
+  gi:           { icon: "🏠", label: "GI", verb: "Refer for buildings/contents insurance" },
   other:        { icon: "🤝", label: "Referral" },
 };
 const REFERRAL_STATUS_BADGE = { made: ["blue", "Referred"], completed: ["green", "Completed"], declined: ["grey", "Declined"] };
 async function makeReferral(caseId, c, kind) {
   const meta = REFERRAL_META[kind] || REFERRAL_META.other;
+  const heading = meta.verb || `Refer for ${meta.label.toLowerCase()}`;
+  const defTo = typeof meta.defaultTo === "function" ? (meta.defaultTo() || "") : "";
+  /* R66 · M6a — the protection referral is the one that also MOVES the case. A case sitting at
+     not_discussed / discussed whose protection has just been handed to somebody is neither of
+     those any more; leaving it is what makes the Protection page and every "no protection
+     outcome" figure count work that has already left the building. Offered (ticked), never
+     forced — and never offered at all on a case that is already quoted / policy_taken / declined,
+     because walking one of those back to `referred` would lose a real outcome. */
+  const curProt = (c && c.protection_status) || "not_discussed";
+  const offerProt = kind === "protection" && ["not_discussed", "discussed"].includes(curProt);
   const got = await openOverlay(`
-    <h3>${meta.icon} Refer for ${esc(meta.label.toLowerCase())}</h3>
+    <h3>${meta.icon} ${esc(heading)}</h3>
     <p class="panel-sub">Recorded on the case with a note, so the referral (and whatever comes of it) is part of the file — nothing is sent to anybody from here.</p>
     <label>Referred to
-      <input id="ref-to" type="text" placeholder="Firm or contact the client was referred to…" maxlength="120">
+      <input id="ref-to" type="text" placeholder="Firm or contact the client was referred to…" maxlength="120" value="${esc(defTo)}">
     </label>
+    ${defTo ? '<p class="panel-sub ref-default-note">Pre-filled from the protection referral partner named in Settings — change it if this one went elsewhere.</p>' : ""}
     <label style="margin-top:10px;">Note (optional)
       <textarea id="ref-note" rows="2" placeholder="Anything worth remembering about this referral…"></textarea>
     </label>
     <label class="ref-chase-row"><input id="ref-chase" type="checkbox" checked> Create a chase task in a week to record the outcome</label>
+    ${offerProt ? `<label class="ref-chase-row"><input id="ref-set-prot" type="checkbox" checked> Also set this case's protection status to <strong>Referred to protection adviser</strong> (it is “${esc(String(curProt).replace(/_/g, " "))}” now)</label>` : ""}
     <div class="ovl-err" id="ref-err"></div>
     <div class="modal-actions"><div></div><div class="right">
       <button type="button" class="btn" id="ref-cancel">Cancel</button>
@@ -10247,7 +10337,8 @@ async function makeReferral(caseId, c, kind) {
     box.querySelector("#ref-ok").onclick = () => {
       const to = (box.querySelector("#ref-to").value || "").trim();
       if (!to) { box.querySelector("#ref-err").textContent = "Say who the client was referred to."; box.querySelector("#ref-to").focus(); return; }
-      finish({ to, note: (box.querySelector("#ref-note").value || "").trim(), chase: box.querySelector("#ref-chase").checked });
+      const protChk = box.querySelector("#ref-set-prot");
+      finish({ to, note: (box.querySelector("#ref-note").value || "").trim(), chase: box.querySelector("#ref-chase").checked, setProt: !!(protChk && protChk.checked) });
     };
   });
   if (!got) return;
@@ -10257,6 +10348,15 @@ async function makeReferral(caseId, c, kind) {
     referred_to: got.to, notes: got.note || null, created_by: uid,
   });
   if (error) return toast("Couldn't record the referral: " + error.message);
+  /* R66 · M6a — "in the same write" as far as the operator is concerned: one gesture, one toast.
+     Best effort against the referral itself, which IS recorded — a failed status update must not
+     make a referral that landed look like it did not. */
+  let protMoved = false;
+  if (offerProt && got.setProt) {
+    const { error: pErr } = await db.from("cases").update({ protection_status: "referred" }).eq("id", caseId);
+    if (pErr) toast("Referral recorded, but the protection status could not be updated: " + pErr.message);
+    else { protMoved = true; if (c) c.protection_status = "referred"; }
+  }
   await db.from("case_notes").insert({
     case_id: caseId,
     body: `${meta.icon} ${meta.label} referral — referred to ${got.to}${got.note ? ": " + got.note : ""}`,
@@ -10269,8 +10369,11 @@ async function makeReferral(caseId, c, kind) {
       due_date: localDateStr(due), assigned_to: (c && c.assigned_to) || uid, created_by: uid,
     });
   }
-  toast(`${meta.label} referral recorded${got.chase ? " — chase task set for next week" : ""}`);
+  toast(`${meta.label} referral recorded${got.chase ? " — chase task set for next week" : ""}${protMoved ? " · protection status set to Referred" : ""}`);
   loadCaseReferrals(caseId);
+  // R66 · M6a — the header chip, the form select and the gate all read protection_status, so a
+  // case whose status just moved has to be repainted rather than left showing the old word.
+  if (protMoved) openCase(caseId);
 }
 async function loadCaseReferrals(caseId) {
   const el = $("#case-referrals");
@@ -12203,6 +12306,12 @@ let protScope = "mine", protFilter = "all";
 let protSearch = "";
 const PROT_BADGE = {
   not_discussed: ["grey", "NOT DISCUSSED"], discussed: ["blue", "DISCUSSED"], quoted: ["amber", "QUOTED"],
+  /* R66 · M6a — REFERRED. The conversation happened and it has been handed to somebody else (the
+     network's protection team, or whoever Settings names). Amber, like quoted, because it is still
+     an OPEN outcome for this firm — no policy has been taken and nobody has said no — but it is
+     not work sitting on this adviser's desk, which is why it gets its own word rather than being
+     filed under "discussed" for ever. */
+  referred: ["amber", "REFERRED"],
   policy_taken: ["green", "POLICY TAKEN"], declined: ["red", "DECLINED"],
 };
 const GI_BADGE = {
@@ -12211,7 +12320,10 @@ const GI_BADGE = {
 };
 // The settable protection statuses, shared by the per-row select and S3c's bulk bar so the two can
 // never drift apart. (not_discussed is deliberately absent — nothing moves a case backwards here.)
-const PROT_BULK_STATUS = [["discussed", "Discussed"], ["quoted", "Quoted"], ["policy_taken", "Policy taken"], ["declined", "Declined"]];
+/* R66 · M6a — `referred` joins the settable list (and therefore the per-row select AND the bulk
+   bar, which is the whole point of the list being shared). It sits after `quoted` because that is
+   the order the conversation actually runs in: discussed → quoted or referred → taken / declined. */
+const PROT_BULK_STATUS = [["discussed", "Discussed"], ["quoted", "Quoted"], ["referred", "Referred to protection adviser"], ["policy_taken", "Policy taken"], ["declined", "Declined"]];
 /* ---------- R12a·D4 — THE CASE-HEADER PROTECTION CHIP, ALWAYS ----------
    It used to render ONLY for `not_discussed`, so the act of recording the conversation DELETED the
    indicator: the header went from "not discussed" to saying nothing at all, while Reports went on
@@ -12241,6 +12353,10 @@ function protStatChipHtml(c, stage) {
     not_discussed: ["cs-warn", "not discussed", "Nobody has recorded a protection conversation on this case. It counts as an open gap on Reports and Data health."],
     discussed: ["cs-warn", "discussed — no outcome yet", "The conversation happened but nothing came of it yet — no quote, no policy, no decline. Reports still count this case under “No protection outcome”."],
     quoted: ["cs-warn", quotedAt ? "quoted " + fmtD(quotedAt) : "quoted", quotedAt ? `Quoted ${fmtD(quotedAt)}. Still an open outcome until a policy is taken or the client declines.` : "Quoted, but no quote date is recorded — the “quotes gone cold” report cannot age this one."],
+    /* R66 · M6a — handed on. Neutral rather than amber: this adviser has done the thing the gap
+       card was nagging about, and the open half now belongs to whoever it was referred to. It is
+       still not a policy, so it is not green either. */
+    referred: ["", "referred to protection adviser", "The protection conversation has been handed to a protection adviser (see the referrals list on this case). No policy is recorded yet — the outcome comes back from them."],
     policy_taken: ["cs-good", "policy taken", "A policy was taken. This is the only protection outcome that earns anything."],
     declined: ["", "declined", "The client was asked and said no. A finished conversation, not an open gap."],
   }[st] || ["cs-warn", String(st).replace(/_/g, " "), ""];
@@ -12316,9 +12432,14 @@ async function loadProtectionPage() {
      (start the conversation) — with a coloured band row introducing each group. The sort is
      stable, so within a band the RPC's recency order is untouched, and every existing hook
      (.prot-cb data-ids, .prot-client counts, bulk select) is anchored by id/class, never index. */
-  const PROT_BAND_ORDER = { quoted: 0, discussed: 1, not_discussed: 2 };
+  /* R66 · M6a — `referred` sits BETWEEN quoted and discussed. Both bands above it are waiting on
+     somebody outside this firm (the client, then the protection adviser), and both are ahead of
+     "discussed", which is waiting on us. It is deliberately not top: a quote the client is sitting
+     on goes cold on a clock this firm can watch; a referral is somebody else's clock. */
+  const PROT_BAND_ORDER = { quoted: 0, referred: 1, discussed: 2, not_discussed: 3 };
   const PROT_BAND_LABEL = {
     quoted: ["amber", "⏳ Quoted — awaiting the client's decision"],
+    referred: ["amber", "🛡️ Referred — with the protection adviser"],
     discussed: ["blue", "💬 Discussed — follow up"],
     not_discussed: ["grey", "🛡️ Not discussed yet — start the conversation"],
   };
@@ -12505,12 +12626,14 @@ function renderProtCallList(scoped, quoteCtx) {
   const list = (scoped || []).filter((r) => !r.live);
   panel.classList.remove("hidden");
   const scopeWord = protScope === "mine" ? "your cases" : protScope === "unassigned" ? "unassigned cases" : "every adviser's cases";
-  const byStatus = { not_discussed: 0, discussed: 0, quoted: 0 };
+  // R66 · M6a — `referred` is a fourth open state the pipeline now returns; counted here so the
+  // basis line's arithmetic still adds up to the count in the badge.
+  const byStatus = { not_discussed: 0, discussed: 0, quoted: 0, referred: 0 };
   list.forEach((r) => { if (byStatus[r.protection_status] != null) byStatus[r.protection_status]++; });
   $("#prot-calllist-count").textContent = list.length;
   $("#prot-calllist-count").className = "badge " + (list.length ? "amber" : "green");
   $("#prot-calllist-basis").innerHTML =
-    `Completed cases whose protection conversation is still open — ${byStatus.not_discussed} never discussed, ${byStatus.discussed} discussed, ${byStatus.quoted} quoted and waiting. `
+    `Completed cases whose protection conversation is still open — ${byStatus.not_discussed} never discussed, ${byStatus.discussed} discussed, ${byStatus.quoted} quoted and waiting, ${byStatus.referred} referred to a protection adviser. `
     + `A client who has just completed is the warmest call the firm has. Scoped to <strong>${esc(scopeWord)}</strong> (the buttons above); the status drop-down does not narrow this list. `
     + `<span class="money-basis">(completed · protection_status not policy_taken and not declined)</span>`;
   $("#prot-calllist").innerHTML = list.length ? list.slice(0, 25).map((r) => {
@@ -14199,7 +14322,11 @@ window.openCase = async function (id, opts = {}) {
            "Mark fee paid" (which validates them) rather than typed into a form that never checked.
            Absent entirely on a pre-M2 database, where the columns don't exist. */ ""}
       ${feePaidDatesHtml(c)}
-      <label>Protection<select name="protection_status">${[["not_discussed","Not discussed"],["discussed","Discussed"],["quoted","Quoted"],["policy_taken","Policy taken"],["declined","Client declined"]].map(([k,l]) => `<option value="${k}" ${k === (c.protection_status || "not_discussed") ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+      ${/* R66 · M6a — "Referred to protection adviser" joins the list, between quoted and policy
+           taken. It is the outcome the firm actually has when protection is handed to the
+           network's team: not still-to-do, not a policy, and emphatically not "declined", which is
+           what advisers were reaching for instead. */ ""}
+      <label>Protection<select name="protection_status">${[["not_discussed","Not discussed"],["discussed","Discussed"],["quoted","Quoted"],["referred","Referred to protection adviser"],["policy_taken","Policy taken"],["declined","Client declined"]].map(([k,l]) => `<option value="${k}" ${k === (c.protection_status || "not_discussed") ? "selected" : ""}>${l}</option>`).join("")}</select></label>
       <label>Protection commission (£)<input name="protection_commission" type="number" step="any" value="${c.protection_commission ?? ""}"></label>
       ${/* R13 · M-23/M-25 — POLICY START DATE. Rendered only where it MEANS something: this box is
            a clawback clock, and a clawback clock on a case where no policy was taken is a field
@@ -15057,6 +15184,9 @@ window.openCase = async function (id, opts = {}) {
     $("#act-review").onclick = async (e) => { if (await queueEmail(id, c.client_id, "review_request", c, e)) await refreshOpenedStamp(id); };
     $("#act-reminder").onclick = async (e) => { if (await queueEmail(id, c.client_id, "rate_end_reminder", c, e)) await refreshOpenedStamp(id); };
     $("#act-paid").onclick = () => markFeePaid(id, c);
+    /* R66 · M8 — the adviser's own email. Re-opens on success so the case timeline below picks up
+       the row that was just written (the same reason act-review / act-reminder refresh). */
+    if ($("#act-write")) $("#act-write").onclick = async (e) => { if (await queueCustomEmail(id, c, e)) openCase(id); };
     const submitTask = async () => {
       const input = $("#new-task");
       const title = input.value.trim();
@@ -15266,6 +15396,10 @@ window.openCase = async function (id, opts = {}) {
     // R56 — outbound referrals: open the small capture overlay, then refresh the list below.
     if ($("#act-ref-survey")) $("#act-ref-survey").onclick = () => makeReferral(id, c, "survey");
     if ($("#act-ref-conveyancing")) $("#act-ref-conveyancing").onclick = () => makeReferral(id, c, "conveyancing");
+    // R66 · M6a — protection / GI, same overlay and the same chase task; the protection one also
+    // offers to move the case's protection_status to `referred` (see makeReferral).
+    if ($("#act-ref-protection")) $("#act-ref-protection").onclick = () => makeReferral(id, c, "protection");
+    if ($("#act-ref-gi")) $("#act-ref-gi").onclick = () => makeReferral(id, c, "gi");
     loadCaseReferrals(id); // async fill of #case-referrals; empty stays invisible
     // R58 — the rate-end outcome (renewed elsewhere / property sold) on a completed tracked case.
     if ($("#act-rate-outcome")) $("#act-rate-outcome").onclick = () => rateEndOutcome(id, c);
@@ -15927,6 +16061,127 @@ async function queueEmail(caseId, clientId, type, c, ev, opts = {}) {
   }
 }
 
+/* ==========================================================================
+   R66 · M8 — THE EMAIL SOMEBODY WRITES.
+
+   Sixteen email types, every one of them composed server-side from a case, and
+   not one of them is "the thing I actually want to say to this client". The
+   retention conversation is the plainest example — "Sarah, quick one before
+   your October rate: are you still keeping number 12?" — and it has no home in
+   this product at all, so it happens in Outlook and the case file never learns
+   it happened. Everything the firm knows about a client's contact history is
+   therefore missing the half that matters most.
+
+   THE DESIGN, and each choice is deliberate:
+
+   · THE WORDS ARE THE ADVISER'S; THE LETTERHEAD IS THE FIRM'S. The subject and
+     body go into `email_queue.subject` / `email_queue.body_html`, which already
+     exist. process-emails wraps them in the house template and appends the
+     usual adviser sign-off (caseSignOffName's rule, the same one every other
+     send obeys) — so nobody can accidentally send a naked email in the firm's
+     name, and nobody can sign one in a colleague's.
+
+   · BODY IS PLAIN TEXT IN, ESCAPED HTML OUT. The adviser types into a textarea;
+     `customEmailBodyHtml` escapes it and then, and only then, turns blank lines
+     into <p> and single newlines into <br>. An adviser typing "<b>" gets the
+     characters <b> in the client's inbox, not bold and not an injection —
+     which is the only defensible behaviour for text that reaches a third
+     party through the firm's own template.
+
+   · IT IS STILL ONE CASE'S EMAIL. Written FROM a case, addressed to that case's
+     client, filed on that case's timeline. There is deliberately no bulk
+     version this round (the Clients bulk bar says so in as many words):
+     forty individually-written emails is not a feature, and one written once
+     and sent to forty is a template — which needs approving, not inventing
+     here.
+   ========================================================================== */
+const CUSTOM_EMAIL_MAX = 4000;   // characters of plain text; the textarea enforces it too
+/* Plain text → the `body_html` production stores. ESCAPE FIRST, then add markup: doing it the
+   other way round is how a client's own "<" ends up eating the rest of the paragraph. A blank
+   line (one or more) starts a new <p>; a single newline inside a paragraph is a <br>, because
+   that is what an adviser typing an address block or a short list means by pressing Enter once. */
+function customEmailBodyHtml(text) {
+  const t = String(text == null ? "" : text).replace(/\r\n?/g, "\n").trim();
+  if (!t) return "";
+  return t.split(/\n{2,}/)
+    .map((para) => para.trim())
+    .filter(Boolean)
+    .map((para) => `<p>${esc(para).replace(/\n/g, "<br>")}</p>`)
+    .join("");
+}
+/* The sibling of queueEmail, not a branch inside it. queueEmail is a ladder of per-type gates over
+   ONE fixed insert shape ({case_id, client_id, email_type, to_email}); this one carries a payload
+   and asks its question in an overlay rather than a confirm(). What it deliberately KEEPS from
+   queueEmail is everything that is a house convention rather than a template detail: the
+   suppression pre-flight, the sign-off name, the scoped runAutomation on the row it just wrote,
+   and sendResultToast's exact wording. Returns true only when a row was actually queued. */
+async function queueCustomEmail(caseId, c, ev) {
+  const btn = (ev && (ev.currentTarget || ev.target)) || null;
+  if (btn) btn.disabled = true;
+  try {
+    const clientId = c && c.client_id;
+    if (!clientId) return toast("This case has no client record — nothing to write to.");
+    const { data: cl } = await db.from("clients").select("email,first_name,last_name").eq("id", clientId).single();
+    const to = (cl && cl.email && String(cl.email).trim()) || "";
+    const who = [cl && cl.first_name, cl && cl.last_name].filter(Boolean).join(" ").trim() || "this client";
+    const signedBy = caseSignOffName(c);
+    const got = await openOverlay(`
+      <h3>✉️ Write to ${esc(who)}</h3>
+      <p class="panel-sub">Your own words, sent on the firm's template. Everything else this app emails is a fixed type composed from the case — this one is not, so it is the place for the conversation that has no template: a retention nudge, a chase, a thank-you.</p>
+      <label>To
+        <input id="cust-to" type="text" value="${esc(to)}" readonly aria-readonly="true"${to ? "" : ' disabled placeholder="No email address on this client record"'}>
+      </label>
+      ${to ? "" : '<p class="panel-sub cust-noemail">This client has no email address on file, so there is nothing to send to. Add one on the client record first — open the client and fill in the Email field.</p>'}
+      <label style="margin-top:10px;">Subject
+        <input id="cust-subject" type="text" maxlength="200" placeholder="What the client sees in their inbox…"${to ? "" : " disabled"}>
+      </label>
+      <label style="margin-top:10px;">Message
+        <textarea id="cust-body" rows="9" maxlength="${CUSTOM_EMAIL_MAX}" placeholder="Write it as you would in an email. Leave a blank line between paragraphs."${to ? "" : " disabled"}></textarea>
+      </label>
+      <p class="panel-sub" id="cust-count">0 / ${CUSTOM_EMAIL_MAX} characters</p>
+      ${/* The two sentences an adviser needs BEFORE typing: whose name goes on the bottom, and the
+           fact that pressing the button does not put anything in front of a client today. The
+           second is the standing hold this whole app is under (see emailOfferToClient, R54) and it
+           is said here in the same words. */ ""}
+      <p class="panel-sub" id="cust-preview">Sent as <strong>${esc(signedBy)}</strong> with your usual sign-off — the house template wraps it.</p>
+      <p class="panel-sub" id="cust-held">Client email is not switched on yet, so this will be QUEUED and held — it sends once email sending goes live. Nothing reaches ${esc(who)} today.</p>
+      <div class="ovl-err" id="cust-err"></div>
+      <div class="modal-actions"><div></div><div class="right">
+        <button type="button" class="btn" id="cust-cancel">Cancel</button>
+        <button type="button" class="btn btn-primary" id="cust-ok"${to ? "" : " disabled"}>Queue email</button>
+      </div></div>`, (finish, box) => {
+      const bodyEl = box.querySelector("#cust-body"), countEl = box.querySelector("#cust-count");
+      const paint = () => { countEl.textContent = `${bodyEl.value.length} / ${CUSTOM_EMAIL_MAX} characters`; };
+      bodyEl.addEventListener("input", paint);
+      box.querySelector("#cust-cancel").onclick = () => finish(null);
+      box.querySelector("#cust-ok").onclick = () => {
+        const err = box.querySelector("#cust-err");
+        const subject = (box.querySelector("#cust-subject").value || "").trim();
+        const body = bodyEl.value || "";
+        if (!subject) { err.textContent = "Give the email a subject — it is the first thing the client reads."; box.querySelector("#cust-subject").focus(); return; }
+        if (!body.trim()) { err.textContent = "Write something in the message before queueing it."; bodyEl.focus(); return; }
+        if (body.length > CUSTOM_EMAIL_MAX) { err.textContent = `That is ${body.length} characters — the limit is ${CUSTOM_EMAIL_MAX}.`; bodyEl.focus(); return; }
+        finish({ subject, body });
+      };
+    });
+    if (!got) return;
+    // R13 · M-30's suppression pre-flight, unchanged: a suppressed client is warned about, never
+    // silently blocked — a person writing one email by hand is the route the database cannot see.
+    if (!(await confirmSuppressedSend(clientId, "email"))) return;
+    const body_html = customEmailBodyHtml(got.body);
+    const { data: qRow, error } = await db.from("email_queue")
+      .insert({ case_id: caseId, client_id: clientId, email_type: "custom", to_email: to, subject: got.subject, body_html })
+      .select("id").single();
+    if (error) return toast("Couldn't queue the email: " + error.message);
+    const res = qRow && qRow.id ? await runAutomation(true, { queueIds: [qRow.id] }) : null;
+    sendResultToast(res, "Email queued — check Emails tab (is your Resend key set up?)");
+    return true;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+window.queueCustomEmail = queueCustomEmail;
+
 /* ---------- Clients ----------
    R8-1 — THE CLIENT TOUCH PROGRAMME. Round 7 gave the firm a money book; this gives it a
    people book. The Clients page was a flat alphabetical list with a name search: fine for
@@ -16209,9 +16464,33 @@ function clientInSegment(c, seg, ctx) {
   }
   return true;
 }
+/* R66 · H4 — THE CLIENT SEARCH LOOKS AT THE PROPERTY AND THE LENDER TOO.
+   Luke's complaint, verbatim: typing "BH6" into the Clients search returned nothing, and so did
+   "Skipton" — while the `/` command palette found both, because it searches CASES. That split is
+   indefensible: a retention adviser thinks in postcodes ("who have I got in Southbourne?") and in
+   lenders ("Skipton are repricing — who is with them?"), and the page whose whole job is the client
+   book could answer neither.
+
+   No new read. The client list embed has carried `lender` since R11-6 and `property_address` since
+   R36-A (gated on propAddrSupported — on an un-migrated database the address half simply never
+   matches, rather than throwing), so this is a pure widening of the CLIENT-SIDE predicate: one pass
+   over the cases already in hand, `some()`-style with an early return, so a 1,000-client book with
+   ~2 cases each is still ~2,000 lowercased substring tests per keystroke behind the 250ms debounce.
+
+   Plain substring, lower-cased, on the raw address — which is exactly what makes an outcode work:
+   "bh6" is a substring of "12 grand ave, southbourne, bh6 3ab". No postcode parsing, no propKey
+   normalisation: the operator is typing what they can see on the case, and any cleverness here
+   would create matches they cannot predict. */
 function clientTextMatch(c, f, fPhone, phoneSearch) {
   if (!f) return true;
   if (((c.first_name || "") + " " + (c.last_name || "") + " " + (c.email || "")).toLowerCase().includes(f)) return true;
+  const cases = c.cases || [];
+  for (let i = 0; i < cases.length; i++) {
+    const x = cases[i];
+    if (!x) continue;
+    if (x.lender && String(x.lender).toLowerCase().includes(f)) return true;
+    if (x.property_address && String(x.property_address).toLowerCase().includes(f)) return true;
+  }
   return phoneSearch && c.phone && normPhone(c.phone).includes(fPhone);
 }
 /* ==========================================================================
@@ -16530,7 +16809,12 @@ function renderClientBulkBar(list) {
     </div>
     ${/* R8-2 — said where someone would look for the verb that isn't here, rather than only in a
           code comment: the absence is a decision, and an unexplained absence reads as an oversight. */ ""}
-    ${n ? `<p class="panel-sub client-bulk-note" id="client-bulk-note">No bulk email yet: every email this app sends is composed from a <em>case</em> (that is where the template, the subject and the adviser sign-off come from), and a client-level message has none of those. It needs a template decision first.</p>` : ""}`;
+    ${/* R66 · M8 — the note had to change with the behaviour it was explaining. "There is no way to
+         write to a client" is no longer true: ✉️ Write to client, on the case, sends the adviser's
+         own subject and body on the firm's template. What is still true — and is the whole reason
+         this stays a case-level action — is that FORTY of them at once is a template, and a
+         template the firm sends to its whole book needs approving before it exists. */ ""}
+    ${n ? `<p class="panel-sub client-bulk-note" id="client-bulk-note">No bulk email yet. You <em>can</em> write to a client one at a time — open any of their cases and use <strong>✉️ Write to client</strong>, which sends your own subject and message on the firm's template with your sign-off. Sending the same message to a whole selection is a different thing: that is a template going to the firm's book, and it needs a template decision (and sign-off) first.</p>` : ""}`;
   const all = $("#client-bulk-all");
   if (all) {
     all.indeterminate = n > 0 && n < list.length;
@@ -17019,7 +17303,12 @@ async function buildClientTimeline(clientId, cases) {
      no separate docs_chase type. Without this the history reads as the same first ask, repeated. */
   const tlChaseMails = docChaseMailSet(emails);
   emails.filter((e) => e.status === "sent" || e.status === "failed").forEach((e) => {
-    const lbl = emailTypeLabel(e.email_type) + (tlChaseMails.has(e) ? " (chase)" : "");
+    /* R66 · M8 — a custom email's TYPE says nothing about it ("Email (written by adviser)" is true
+       of every one of them), so the subject the adviser wrote is the label. Without it a case with
+       four written emails on its history reads as the same row four times. Every other type keeps
+       its template name, which IS the content. */
+    const lbl = emailTypeLabel(e.email_type) + (tlChaseMails.has(e) ? " (chase)" : "")
+      + (e.email_type === "custom" && e.subject ? " — " + e.subject : "");
     push(e.sent_at || e.created_at, "email", "✉️", esc(lbl) + (e.status === "failed" ? ' <span class="tl-fail">failed</span>' : ""), e.case_id);
   });
   sms.filter((s) => s.status === "sent" || s.status === "failed").forEach((s) => {
@@ -17134,7 +17423,7 @@ const PACK_ENUM = {
   stage: STAGE_LABEL,
   case_kind: Object.fromEntries(KINDS),
   fee_status: { not_requested: "Not requested", requested: "Requested", paid: "Paid", waived: "Waived" },
-  protection_status: { not_discussed: "Not discussed", discussed: "Discussed", quoted: "Quoted", policy_taken: "Policy taken", declined: "Declined" },
+  protection_status: { not_discussed: "Not discussed", discussed: "Discussed", quoted: "Quoted", referred: "Referred to protection adviser", policy_taken: "Policy taken", declined: "Declined" },
   gi_status: { not_discussed: "Not discussed", quoted: "Quoted", policy_taken: "Policy taken", declined: "Declined", not_applicable: "Not applicable" },
   email_type: EMAIL_LABEL,
   role: ROLE_LABEL,
@@ -17524,6 +17813,10 @@ const CL_PROT_CHIP = {
   not_discussed: ["grey", "None", "No protection conversation recorded on this case."],
   discussed: ["amber", "Discussed", "Protection was discussed but nothing came of it yet — no quote, no policy, no decline."],
   quoted: ["amber", "Quoted", "Quoted — still an open outcome until a policy is taken or the client declines."],
+  /* R66 · M6a — grey, for the same reason `declined` is grey on this list: from the client
+     record's point of view somebody has dealt with it. The outcome is owed by the protection
+     adviser, not by whoever is about to ring this client. */
+  referred: ["grey", "Referred", "Protection was referred to a protection adviser. The outcome comes back from them — it is not an open gap on this book."],
   policy_taken: ["green", "Policy", "A protection policy was taken on this case."],
   declined: ["grey", "Declined", "The client was asked about protection and said no."],
 };
@@ -17594,8 +17887,12 @@ function clientProtGapCardHtml(cases) {
   const hasMortgage = list.some((x) => MORTGAGE_KINDS.includes(x.case_kind) || Number(x.loan_amount) > 0);
   if (!hasMortgage) return "";
   if (list.some((x) => x.protection_status === "policy_taken")) return "";
-  const undecided = list.filter((x) => x.protection_status !== "declined");
-  if (!undecided.length) return ""; // every case was asked and declined — a decision, not a gap
+  /* R66 · M6a — `referred` counts as DEALT WITH here, exactly like `declined`. The card exists to
+     say "nobody has done anything about protection on this book"; a case handed to a protection
+     adviser is the opposite of that, and nagging about it would be nagging about work already
+     done by somebody who cannot answer the nag. */
+  const undecided = list.filter((x) => !["declined", "referred"].includes(x.protection_status));
+  if (!undecided.length) return ""; // every case was asked and declined, or referred on — a decision, not a gap
   const target = undecided[0]; // caller passes cases newest-first
   return `<div class="row-item cl-card cl-gap-card"><span class="cl-card-icon" aria-hidden="true">🛡️</span><div class="row-main">
         <div class="t" onclick="closeModal();openCase('${target.id}')">No protection recorded on this book</div>
@@ -17647,22 +17944,129 @@ function clientCaseMiniRowHtml(x) {
         : (x.completed_at ? `completed ${fmtD(x.completed_at)}` : "completed"))
     : (STAGE_LABEL[x.stage] || String(x.stage || "").replace(/_/g, " "));
   const title = [caseTypeLabel(x), x.lender].filter(Boolean).join(" · ");
-  return `<div class="row-item cl-mini" title="An earlier case on this property — click to open it">
+  /* R66 · L6 — the tooltip follows the same terminal/in-flight reading as the fold summary above
+     it, for the same reason: on a building with two live cases, "an earlier case" was a false
+     statement about the very row it labelled. */
+  const stillLive = x.stage !== "completed" && x.stage !== "not_proceeding";
+  return `<div class="row-item cl-mini" title="${stillLive ? "Another LIVE case on this property — click to open it" : "An earlier case on this property — click to open it"}">
       <span class="cl-mini-icon" aria-hidden="true">${KIND_ICON[x.case_kind] || KIND_ICON.other}</span>
       <div class="row-main"><div class="t" onclick="closeModal();openCase('${x.id}')">${esc(title)}${x.loan_amount ? ` <span class="cl-mini-loan">· ${esc(fmtM(x.loan_amount))}</span>` : ""}</div></div>
       <span class="cl-mini-hint">${esc(hint)}</span>${clientCaseProtChipHtml(x)}</div>`;
 }
 /* The rows of one property: the CURRENT case as the full card, everything older folded into a
    "previous" disclosure of mini rows. A single-case property is just its card. */
+/* R66 · L6 — WHAT THE FOLD SAYS IT IS HIDING.
+   The fold summary was hard-wired to "N previous case(s) on this property", which is a statement
+   about TIME. But the fold holds whatever sortRowsCurrentFirst ranked below the current card, and
+   on a client with two LIVE cases on one building (a further advance alongside the purchase, a
+   product transfer opened while the remortgage is still running) the second one is not previous —
+   it is happening right now, and calling it "previous" tells the adviser they have one deal on
+   that property when they have two. Terminal means completed or not proceeding; anything else is
+   still in flight and gets counted and named as such. The all-terminal wording is untouched, so
+   the ordinary case still reads exactly as it did in R60. */
+function cpropPrevSummary(prev) {
+  const live = prev.filter((x) => x && x.stage !== "completed" && x.stage !== "not_proceeding").length;
+  const term = prev.length - live;
+  const liveWord = `${live} other live case${live === 1 ? "" : "s"}`;
+  if (!live) return `${term} previous ${term === 1 ? "case" : "cases"} on this property`;
+  if (!term) return `${liveWord} on this property`;
+  return `${liveWord} · ${term} previous on this property`;
+}
 function clientGroupRowsHtml(rows, opts = {}) {
   const sorted = sortRowsCurrentFirst(rows);
   const head = sorted[0], prev = sorted.slice(1);
   const headCard = `<div class="cl-book">${clientCaseRowHtml(head, opts)}</div>`;
   if (!prev.length) return headCard;
   return `${headCard}
-    <details class="cprop-prev"><summary>${prev.length} previous ${prev.length === 1 ? "case" : "cases"} on this property</summary>
+    <details class="cprop-prev"><summary>${esc(cpropPrevSummary(prev))}</summary>
       <div class="cl-prev-list">${prev.map((x) => clientCaseMiniRowHtml(x)).join("")}</div>
     </details>`;
+}
+/* ==========================================================================
+   R66 · H5 — THE PORTFOLIO STRIP.
+
+   121 real clients in this book hold two or more properties and there was no portfolio view of any
+   kind. Every "reduce" figure the app owns is firm-wide and owner-gated (Monday money, Reports);
+   LTV existed only inside one case's "Show details" panel; `monthly_rent` was never summed
+   anywhere. So the one screen an adviser opens before ringing a landlord could not answer the three
+   questions that ring is about: how much do they owe us in total, what is the book worth, and does
+   the rent still cover it.
+
+   WHAT IT COUNTS. One figure per PROPERTY, not per case — using the same grouping the cards below
+   use (groupCasesByProperty → propKey) and the same "which one is current" ranking R60 introduced
+   (sortRowsCurrentFirst: the case in flight, else the watched completed mortgage, else…). Summing
+   every case would double-count a remortgaged property twice over. Two exclusions, both stated on
+   the strip rather than buried here:
+     · `not_proceeding` cases are dropped before ranking — a deal that died was never lending.
+     · a property whose current case carries a SOLD outcome (R59 `property_sold_at`) is dropped
+       whole and counted in "(excl. N sold)": it is not part of the portfolio any more, and
+       silently including it would overstate the book by a house.
+
+   WHY IT IS NOT BEHIND showMoney(). Loan, property value and rent are the CLIENT's own figures —
+   the same reasoning the R12b call pack used for balance and payment. showMoney() hides FIRM
+   income (fees, proc fees, forecasts) from advisers; hiding a landlord's own mortgage balance from
+   the adviser who is about to ring him about it would be absurd.
+
+   DEGRADING HONESTLY. A missing property value does not get quietly treated as zero and it does
+   not get averaged away: any property with no value makes the portfolio LTV "—" and the strip says
+   "value missing on N", because lending ÷ a partial value is a smaller-looking LTV than the truth
+   and this firm would act on it. No rent recorded → cover "—". A database with no BTL columns at
+   all drops the rent/cover pair entirely rather than printing two dashes forever.
+   ========================================================================== */
+const PORTFOLIO_STRESS_DEFAULT = 5.5;   // same default btlIcr() uses when a case records none
+const PORTFOLIO_COVER_REQUIRED = 145;   // the usual lender requirement, for the tooltip only
+function clientPortfolioFigures(cases) {
+  const groups = groupCasesByProperty(cases || []).filter((g) => g.key);
+  if (groups.length < 2) return null;   // one building is not a portfolio — the cards say it all
+  let soldN = 0;
+  const counted = [];
+  groups.forEach((g) => {
+    const rows = g.rows.filter((x) => x.stage !== "not_proceeding");
+    if (!rows.length) return;                       // the whole property is dead deals
+    const cur = sortRowsCurrentFirst(rows)[0];
+    if (Object.prototype.hasOwnProperty.call(cur, "property_sold_at") && cur.property_sold_at) { soldN++; return; }
+    counted.push(cur);
+  });
+  if (!counted.length) return null;
+  let lending = 0, value = 0, rent = 0, stressed = 0, valueMissing = 0, rentOn = false;
+  counted.forEach((x) => {
+    const loan = Number(x.loan_amount) > 0 ? Number(x.loan_amount) : 0;
+    lending += loan;
+    const v = Number(x.property_value) > 0 ? Number(x.property_value) : 0;
+    if (v) value += v; else valueMissing++;
+    if (Object.prototype.hasOwnProperty.call(x, "monthly_rent")) rentOn = true;
+    const r = Number(x.monthly_rent) > 0 ? Number(x.monthly_rent) : 0;
+    rent += r;
+    const st = Number(x.icr_stress_rate) > 0 ? Number(x.icr_stress_rate) : PORTFOLIO_STRESS_DEFAULT;
+    stressed += loan * (st / 100);
+  });
+  return {
+    n: counted.length, soldN, lending, value, rent, valueMissing, rentOn,
+    // 1dp, the same rounding the case modal's LTV uses. Null the moment a value is missing.
+    ltvPct: (!valueMissing && value > 0 && lending > 0) ? Math.round((lending / value) * 1000) / 10 : null,
+    // whole %, the same shape btlIcr's icrPct has
+    coverPct: (rent > 0 && stressed > 0) ? Math.round(((rent * 12) / stressed) * 100) : null,
+  };
+}
+function clientPortfolioHtml(cases) {
+  const p = clientPortfolioFigures(cases);
+  if (!p) return "";
+  const dot = `<span class="cpf-dot" aria-hidden="true">·</span>`;
+  const seg = [];
+  seg.push(`<span class="cpf-seg cpf-props" title="Distinct buildings counted, one current case each.">${p.n} propert${p.n === 1 ? "y" : "ies"}${
+    p.soldN ? ` <span class="cpf-excl" title="A property whose current case records a sold outcome is no longer part of the portfolio, so it is left out of every figure on this line.">(excl. ${p.soldN} sold)</span>` : ""}</span>`);
+  seg.push(`<span class="cpf-seg cpf-lending" title="The loan amounts on the current case of each property, added up. Client borrowing — not firm income.">total lending <strong>${esc(fmtM(p.lending))}</strong></span>`);
+  seg.push(`<span class="cpf-seg cpf-value" title="The recorded property values on those same cases, added up.">total value <strong>${p.value > 0 ? esc(fmtM(p.value)) : "—"}</strong></span>`);
+  seg.push(`<span class="cpf-seg cpf-ltv" title="Total lending ÷ total value. Shown only when every counted property has a value recorded — lending over a partial value reads lower than the truth.">portfolio LTV <strong>${p.ltvPct != null ? esc(p.ltvPct + "%") : "—"}</strong>${
+    p.valueMissing ? ` <span class="cpf-miss" title="No property value recorded on the current case of ${p.valueMissing} of these properties, so a portfolio LTV cannot be worked out. Add the values on those cases.">value missing on ${p.valueMissing}</span>` : ""}</span>`);
+  if (p.rentOn) {
+    seg.push(`<span class="cpf-seg cpf-rent" title="Monthly rent recorded on the current case of each property, added up.">rent <strong>${p.rent > 0 ? esc(fmtM(p.rent)) + "/mo" : "—"}</strong></span>`);
+    seg.push(`<span class="cpf-seg cpf-cover" title="Rental cover = total annual rent ÷ stressed annual interest, where the interest is each case's own ICR stress rate and ${PORTFOLIO_STRESS_DEFAULT}% where none is recorded — the same default the case's BTL block uses. Lenders normally want ${PORTFOLIO_COVER_REQUIRED}%.">rental cover <strong>${p.coverPct != null ? esc(p.coverPct + "%") : "—"}</strong></span>`);
+  }
+  return `<div id="client-portfolio" class="client-portfolio">${seg.join(dot)}</div>
+    <p class="panel-sub client-portfolio-sub" id="client-portfolio-sub">Added up from the <strong>current case on each property</strong> — the one in flight, or the most recent completed. Cases marked not proceeding${p.soldN ? ", and properties recorded as sold," : ""} are left out. These are the client's own figures (loan, value, rent), not firm income, so everyone who can open this record can see them.${
+    p.valueMissing ? ` No property value is recorded on ${p.valueMissing} of them, so the portfolio LTV is left blank rather than worked out over a part of the book.` : ""}${
+    p.rentOn && p.coverPct == null ? " No monthly rent is recorded, so rental cover cannot be worked out." : ""}</p>`;
 }
 function clientCasesHtml(cases) {
   const list = cases || [];
@@ -17848,9 +18252,22 @@ window.openClient = async function (id, focus, attempted, presetCaseId) {
       + (closedCases.length ? `<optgroup label="Completed / closed">${closedCases.map(tlOpt).join("")}</optgroup>` : "")
       + `</select>`
     : "";
+  /* R66 · H5 — WHAT THE RECORD OPENS ON.
+     The client modal opened on a Timeline: an add-a-note box, four type chips, nine filter chips
+     and up to a hundred history rows, all above the case cards. On a single-case client that is
+     fine — the history IS the record. On a portfolio landlord it meant the adviser scrolled past a
+     screen and a half of note rows to reach the five properties they came to look at, and the
+     R66 portfolio strip would have been below the fold on arrival.
+     So from THREE cases up the timeline folds into a closed `<details>` and moves BELOW the case
+     cards. It is the same markup with the same ids (#tl-note, #tl-case, #tl-add-btn, #tl-filters,
+     #tl-list, #client-audit) and the same wiring — nothing is removed, and one click restores it
+     exactly as it was. Three is the threshold because two cards plus a timeline still fits. */
+  const foldTimeline = id && cases.length >= 3;
   const timelineHtml = id ? `
+    ${foldTimeline ? `<details class="tl-fold" id="client-timeline-fold"><summary title="Folded because this client has ${cases.length} cases — the properties above are what the record is for. Click to open the full history; nothing has been removed.">Timeline <span class="cs-muted">· ${tlItems.length} item${tlItems.length === 1 ? "" : "s"}</span></summary>
+      <p class="panel-sub tl-fold-sub">Folded by default on a client with 3 or more cases so the properties come first. Everything is still here — notes, calls, emails, appointments, tasks and the audit trail.</p>` : ""}
     <div class="tl-section">
-      <h3 style="font-size:14px;margin:0 0 2px;">Timeline</h3>
+      ${foldTimeline ? "" : `<h3 style="font-size:14px;margin:0 0 2px;">Timeline</h3>`}
       <div class="tl-add">
         <input id="tl-note" placeholder="Add a note…" autocomplete="off">
         ${caseSelHtml}
@@ -17867,6 +18284,13 @@ window.openClient = async function (id, focus, attempted, presetCaseId) {
       <div class="tl-filters" id="tl-filters">${TL_CATS.map(([k, l]) => `<button type="button" class="tl-chip tl-filter ${k === "activity" ? "active" : ""}" data-cat="${k}">${esc(l)}</button>`).join("")}</div>
       <div class="tl-list" id="tl-list">${renderTimelineList(tlItems, "activity", 100, multiCase)}</div>
       ${auditPanelHtml("client-audit", auditRows)}
+    </div>${foldTimeline ? "</details>" : ""}` : "";
+  /* R66 · H5 — the Cases block is a variable now purely so the fold above can put it FIRST. Its
+     markup, heading and property-count label are byte-identical to what they were; the one
+     addition is the portfolio strip, which renders above the cards and only on ≥2 properties. */
+  const casesBlockHtml = id ? `<div style="margin-top:14px;"><h3 style="font-size:14px;">Cases${clientPropertyCountLabel(cases)}</h3>
+      ${clientPortfolioHtml(cases)}
+      ${clientCasesHtml(cases)}
     </div>` : "";
   $("#modal").innerHTML = `
     ${/* R6-FIX V9 — the record is opened from a list rendered "Last, First" and the header said
@@ -17883,7 +18307,7 @@ window.openClient = async function (id, focus, attempted, presetCaseId) {
     ${dupOf ? (isAdminOrOwner()
       ? `<p class="dup-hint">Possible duplicate of <strong>${esc(dupOf.name)}</strong> — <a href="javascript:void(0)" onclick="openMergeClients('${esc(id)}','${esc(dupOf.id)}','${jsArg(dupOf.reason)}',${Number(dupOf.score) || 0})">Review &amp; merge</a></p>`
       : `<p class="dup-hint">Possible duplicate of <strong>${esc(dupOf.name)}</strong> — ask an Administrator or the Owner to merge them.</p>`) : ""}
-    ${timelineHtml}
+    ${foldTimeline ? casesBlockHtml + timelineHtml : timelineHtml}
     <details class="case-details client-details" ${id && !focus ? "" : "open"}>
       <summary>Client details</summary>
       ${attempted ? `<p class="dq-notice bad" id="client-attempted">Last send attempted: <strong>${esc(attempted)}</strong> — that ${focus === "phone" ? "number" : "address"} failed. Correct the ${focus === "phone" ? "phone" : "email"} below, then retry the message.</p>` : ""}
@@ -17916,9 +18340,7 @@ window.openClient = async function (id, focus, attempted, presetCaseId) {
       ${careBlockHtml(c, careOn)}
       </form>
     </details>
-    ${id ? `<div style="margin-top:14px;"><h3 style="font-size:14px;">Cases${clientPropertyCountLabel(cases)}</h3>
-      ${clientCasesHtml(cases)}
-    </div>` : ""}
+    ${foldTimeline ? "" : casesBlockHtml}
     <div class="modal-actions">
       ${/* BACKEND-R4 §1 — deleting a client is Owner/Administrator only, enforced by RLS. */ ""}
       <div>${id && isAdminOrOwner() ? '<button class="btn btn-ghost btn-danger" id="del-client-btn">Delete client</button>' : ""}</div>
@@ -23589,6 +24011,11 @@ async function loadReports() {
   // Client LTV is the one remaining RPC-only panel (needs client_id/name joins this page doesn't
   // otherwise fetch) — hide it gracefully if the RPC failed; everything else above still renders.
   renderReportExtras(rep);
+  /* R66 · M6b — §6, the referrals-out ledger. AWAITED, unlike every renderer above it, because it
+     owns two reads of its own (the month's referrals and one inChunks resolve of the cases they
+     point at) and the two nav builders below have to see the panel it produces. `all` is passed so
+     a case already on this page — property column merged and client embedded — is never re-read. */
+  await renderReferralsOut(all, mv);
   /* R11-4 — LAST, deliberately. Every panel above has just decided whether it exists for this
      role and this data, and the jump bar is built by READING those decisions rather than by
      re-deriving them: one gate, not seventeen copies of one, so a money panel and its chip can
@@ -23658,6 +24085,8 @@ const REPORT_JUMP_SECTIONS = [
   ["leadresp", "Lead response", "#report-leadresp-panel"],
   ["advocacy", "Advocacy", "#report-advocacy-panel"],
   ["conveyancer", "Conveyancers", "#report-conveyancer-panel"],
+  // R66 · M6b — last in the DOM, therefore last here (see the DOM-order note above).
+  ["referralsout", "Referrals out", "#report-referrals-panel"],
 ];
 /* Visible = on the page AND not inside anything hidden. The .grid-2 wrappers mean a panel's own
    class is not the whole answer, so walk up to the page section. */
@@ -23797,6 +24226,11 @@ const REPORT_SECTIONS = [
   ["mi", "Pipeline MI", "#rsec-mi", ["#report-mi-section", "#report-funnel-panel", "#report-sources-panel", "#report-losses-panel"]],
   ["money", "Money & book", "#rsec-money", ["#report-kpis", "#report-owed-panel", "#report-rateend-panel", "#report-forecast-panel", "#report-months-panel", "#report-introducers-panel", "#report-ltv-panel"]],
   ["quality", "Service & quality", "#rsec-quality", ["#report-leadresp-panel", "#report-nps-panel", "#report-advocacy-panel", "#report-conveyancer-panel"]],
+  /* R66 · M6b — §6. The sixth question this page answers: what did we send OUT, and to whom. One
+     panel, visible to every staff role (no money on it), so unlike §4 and §5 this section is never
+     empty for anybody — but it still goes through the same repJumpVisible walk as the other five
+     rather than being special-cased, because that walk is the ONE gate. */
+  ["referrals", "Referrals out", "#rsec-referrals", ["#report-referrals-panel"]],
 ];
 function buildReportSectionNav() {
   const bar = $("#reports-jump"), wrap = $("#reports-jump-chips");
@@ -23838,6 +24272,8 @@ const REPORT_LEDGERS = [
   ["#report-ltv", "table tr + tr", "client"],
   ["#report-conveyancer-body", "tr[data-firm]", "firm"],
   ["#report-introducers", "table tr + tr", "introducer"],
+  // R66 · M6b — the referral rows only; the header and the "…and N more" line are not evidence.
+  ["#report-ref-list", "tr.refout-row", "referral"],
 ];
 function buildReportLedgerCounts() {
   REPORT_LEDGERS.forEach(([sel, rowSel, noun]) => {
@@ -24213,6 +24649,170 @@ function renderConveyancerSpeed(all, firmMap) {
     + `${thin ? ` · ${thin} marked (n&lt;${CONV_MIN_N})` : ""}`
     + `${spread != null ? ` · ${spread.toFixed(1)} days between your fastest and slowest firm` : ""}`
     + `${unnamed ? ` · ${unnamed} completion${unnamed === 1 ? "" : "s"} name no solicitor and ${unnamed === 1 ? "is" : "are"} left out entirely — a product transfer has no conveyancer, so blank is often correct` : ""}.</p>`;
+}
+
+/* ==========================================================================
+   R66 · M6b — REFERRALS OUT, THE READ.
+
+   `referrals` has been WRITE-ONLY since R56: one insert from the case modal,
+   and exactly one reader — loadCaseReferrals, which is `.eq("case_id")`. So the
+   firm can see every referral on a case it already has open, and cannot see a
+   single one any other way. "Who did I refer this quarter, and did any of it
+   come back?" had no answer at all.
+
+   THE READS, and there are two, both bounded:
+     · ONE `referrals` select for the selected month. No `.eq("case_id")` —
+       that is the whole point — and no join, because PostgREST cannot embed
+       `cases` from here without an FK hint the table does not carry a policy
+       for. Ordered newest-first, capped.
+     · ONE `inChunks` read of the cases those referrals point at, for the
+       client name, the property and the case adviser. inChunks because a busy
+       quarter's referral list is feed-sized and `.in()` 400s above ~500 ids
+       (R64 · rule 14). The Reports page's own `all` array is used FIRST where
+       it already holds the case — it carries the property column this select
+       deliberately does not name (m7 is feature-detected on the page and a
+       42703 here would take the panel down over an optional column).
+
+   WHOSE REFERRAL IS IT? `created_by` — the person who pressed the button —
+   falling back to the case's adviser where the row predates that column being
+   populated. Said on the panel, because "mine" has to mean something exact.
+
+   NOT OWNER-GATED. A referral count is not money and no £ appears here; see
+   the markup's own block comment.
+   ========================================================================== */
+const REFOUT_ROW_CAP = 500;      // referrals read for one month — bounded like every Reports select
+const REFOUT_LIST_CAP = 100;     // rows drawn in the ledger drawer; the CSV carries the lot
+let refOutScope = null;          // "mine" | "all"; null = not yet defaulted for this role
+let refOutRows = [];             // the period's rows, resolved — kept so the CSV needs no re-read
+/* Adviser default: an adviser opens on their own referrals (the question they ask is "who did I
+   refer"), an owner/admin on the firm's (the question they ask is "what is the network getting").
+   Sticky for the session once the operator picks, exactly like the Protection page's scope. */
+function refOutDefaultScope() { return isAdminOrOwner() ? "all" : "mine"; }
+function refOutAdviser(r) { return r.created_by || r.case_assigned_to || null; }
+async function renderReferralsOut(all, mv) {
+  const panel = $("#report-referrals-panel");
+  if (!panel) return;
+  panel.classList.remove("hidden");
+  if (refOutScope === null) refOutScope = refOutDefaultScope();
+  const groupsEl = $("#report-ref-groups"), listEl = $("#report-ref-list"), basisEl = $("#report-ref-basis");
+  const label = monthLabel(mv);
+  // The month, as a half-open [start, next) range on created_at — the same shape every other
+  // month-scoped read on this page uses, so a referral made at 23:59 on the 31st is in the month
+  // it was made in and not the one after.
+  const start = mv + "-01T00:00:00.000Z";
+  const endM = monthAdd(mv, 1);
+  const end = endM + "-01T00:00:00.000Z";
+  const refs = await softRows(db.from("referrals").select("*")
+    .gte("created_at", start).lt("created_at", end)
+    .order("created_at", { ascending: false }).limit(REFOUT_ROW_CAP));
+  const allById = {};
+  (all || []).forEach((c) => { if (c && c.id) allById[c.id] = c; });
+  const missing = [...new Set(refs.map((r) => r.case_id).filter((id) => id && !allById[id]))];
+  if (missing.length) {
+    /* Deliberately NOT naming property_address: it is the one optional column on this table
+       (m7, feature-detected elsewhere on this page) and a 42703 would lose the whole panel over
+       an address. Cases already in `all` bring their address with them. */
+    const { data: extra } = await inChunks(missing, (sl) =>
+      db.from("cases").select("id,client_id,case_kind,stage,assigned_to,clients!client_id(first_name,last_name)").in("id", sl));
+    (extra || []).forEach((c) => { if (c && c.id && !allById[c.id]) allById[c.id] = c; });
+  }
+  refOutRows = refs.map((r) => {
+    const cs = allById[r.case_id] || null;
+    const cl = cs && cs.clients ? cs.clients : null;
+    return {
+      ...r,
+      case_assigned_to: cs ? cs.assigned_to : null,
+      client_name: [cl && cl.first_name, cl && cl.last_name].filter(Boolean).join(" ").trim() || "(client not on file)",
+      property: (cs && propAddress(cs)) || "",
+    };
+  });
+  const scoped = refOutScope === "mine"
+    ? refOutRows.filter((r) => ME && refOutAdviser(r) === ME.id)
+    : refOutRows;
+  // The scope buttons: painted from the current state every render, so a role change or a reload
+  // can never leave both lit (or neither).
+  ["mine", "all"].forEach((k) => {
+    const b = $("#report-ref-scope-" + k);
+    if (!b) return;
+    b.classList.toggle("active", refOutScope === k);
+    b.setAttribute("aria-selected", refOutScope === k ? "true" : "false");
+    b.onclick = () => { refOutScope = k; renderReferralsOut(all, mv); };
+  });
+  if (basisEl) {
+    basisEl.innerHTML = `Referrals this firm made OUT to somebody else, counted on the date they were recorded, scoped to <strong>${esc(label)}</strong> (the month picker at the top of this page). `
+      + `Showing <strong>${refOutScope === "mine" ? "your own referrals" : "every adviser's referrals"}</strong> — a referral belongs to the person who recorded it, falling back to the case's adviser where nobody is stamped on the row. `
+      + `Status is what somebody set on the case afterwards: <em>Referred</em> means nobody has come back yet. `
+      + `No money on this panel — the firm's share of a referral is not held anywhere in this system — so it is visible to everyone.`
+      + (refs.length >= REFOUT_ROW_CAP ? ` <span class="client-list-cap-note">Showing the newest ${REFOUT_ROW_CAP} of this month's referrals.</span>` : "");
+  }
+  if (!scoped.length) {
+    groupsEl.innerHTML = `<div class="empty">No referrals recorded in ${esc(label)}${refOutScope === "mine" ? " against your name" : ""}. Referrals are recorded from a case — the “Refer for …” actions on the case screen.</div>`;
+    listEl.innerHTML = "";
+    buildReportLedgerCounts();
+    return;
+  }
+  /* THE GROUPING. kind × status × adviser, counted. One pass, a plain key join, and the key is
+     split back out for rendering — no nested maps, because the table is flat and a reader
+     checking the arithmetic should be able to see the same rows this loop saw. */
+  const groups = new Map();
+  scoped.forEach((r) => {
+    const kind = r.kind || "other";
+    const status = r.status || "made";
+    const adv = refOutAdviser(r);
+    const key = [kind, status, adv || ""].join(" ");
+    if (!groups.has(key)) groups.set(key, { kind, status, adviser: adv, n: 0 });
+    groups.get(key).n++;
+  });
+  const rows = [...groups.values()].sort((a, b) =>
+    (a.kind < b.kind ? -1 : a.kind > b.kind ? 1 : 0)
+    || (a.status < b.status ? -1 : a.status > b.status ? 1 : 0)
+    || b.n - a.n);
+  const advName = (id) => (id ? (profileName(id) || staffName(id)) : "— unassigned —");
+  const kindLabel = (k) => { const m = REFERRAL_META[k] || REFERRAL_META.other; return `${m.icon} ${m.label}`; };
+  const statusLabel = (s) => (REFERRAL_STATUS_BADGE[s] || ["grey", String(s)])[1];
+  groupsEl.innerHTML = `<div class="board-scroll-wrap board-scroll-wrap--table"><div class="panel" style="padding:0;">
+    <table class="imp-table" id="report-ref-group-table">
+      <tr><th>Kind</th><th>Status</th><th>Adviser</th><th class="num-col">Referrals</th></tr>
+      ${rows.map((g) => {
+        const b = REFERRAL_STATUS_BADGE[g.status] || ["grey", String(g.status)];
+        return `<tr class="refout-group-row" data-kind="${esc(g.kind)}" data-status="${esc(g.status)}" data-adviser="${esc(g.adviser || "")}">
+          <td>${esc(kindLabel(g.kind))}</td>
+          <td><span class="badge ${b[0]}">${esc(b[1])}</span></td>
+          <td>${esc(advName(g.adviser))}</td>
+          <td class="num-col"><strong class="refout-n">${g.n}</strong></td>
+        </tr>`;
+      }).join("")}
+      <tr class="refout-total-row"><td colspan="3"><strong>Total</strong></td><td class="num-col"><strong id="report-ref-total">${scoped.length}</strong></td></tr>
+    </table>
+  </div></div>`;
+  const shown = scoped.slice(0, REFOUT_LIST_CAP);
+  listEl.innerHTML = `<table class="imp-table" id="report-ref-list-table">
+      <tr><th>Date</th><th>Client</th><th>Property</th><th>Kind</th><th>Referred to</th><th>Status</th><th>Adviser</th></tr>
+      ${shown.map((r) => {
+        const b = REFERRAL_STATUS_BADGE[r.status] || ["grey", String(r.status)];
+        return `<tr class="refout-row" data-ref-id="${esc(r.id)}">
+          <td>${esc(fmtD(r.created_at))}</td>
+          <td>${r.case_id ? `<button type="button" class="linkish" onclick="openCase('${esc(r.case_id)}')" title="Open the case this referral was made from">${esc(r.client_name)}</button>` : esc(r.client_name)}</td>
+          <td>${esc(r.property || "—")}</td>
+          <td>${esc(kindLabel(r.kind))}</td>
+          <td>${esc(r.referred_to || "(not recorded)")}</td>
+          <td><span class="badge ${b[0]}">${esc(b[1])}</span></td>
+          <td>${esc(advName(refOutAdviser(r)))}</td>
+        </tr>`;
+      }).join("")}
+    </table>${scoped.length > REFOUT_LIST_CAP
+      ? `<div class="empty">…and ${scoped.length - REFOUT_LIST_CAP} more in ${esc(label)} — the CSV below carries every one of them.</div>` : ""}`;
+  const csvBtn = $("#report-ref-csv");
+  if (csvBtn) csvBtn.onclick = () => {
+    miCsv(`nexmoney-referrals-out-${mv}.csv`,
+      ["Date", "Client", "Property", "Kind", "Referred to", "Status", "Adviser"],
+      scoped.map((r) => [
+        localDateStr(r.created_at), r.client_name, r.property,
+        (REFERRAL_META[r.kind] || REFERRAL_META.other).label,
+        r.referred_to || "", statusLabel(r.status), advName(refOutAdviser(r)),
+      ]));
+  };
+  buildReportLedgerCounts();
 }
 
 /* The open "review feedback" call-backs behind block 5. Its own small read (the Reports page does

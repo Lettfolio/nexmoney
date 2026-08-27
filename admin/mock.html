@@ -362,7 +362,11 @@
         <h2>Clients</h2>
         <button class="btn btn-primary" id="new-client-btn">+ New client</button>
       </div>
-      <input type="search" id="client-search" class="search" placeholder="Search clients…" aria-label="Search clients">
+      <!-- R66 · H4 — the box says what it looks at. It matches the client's own name, email and
+           phone AND any of their cases' postcode/address and lender, so the placeholder names all
+           five: a search box that silently ignores what you typed is worse than one that finds
+           nothing, because you cannot tell the difference. -->
+      <input type="search" id="client-search" class="search" placeholder="Search name, email, phone, postcode or lender…" aria-label="Search clients by name, email, phone, postcode or lender">
       <!-- R41 · F6 — ONE CONTROL ROW, NOT THREE.
            Saved views, the adviser filter and the sort each had a row of their own, stacked one
            under the other with their own block margins: three lines of chrome carrying three
@@ -816,6 +820,43 @@
           <summary>Show every conveyancer<span class="ledger-n"></span></summary>
           <div id="report-conveyancer-body"></div>
         </details>
+      </div>
+      <!-- ====================================================================
+           R66 · M6b — §6. REFERRALS OUT.
+
+           Outbound referrals have been recorded per case since R56 and read
+           back in exactly ONE place: the list under that case's action bar.
+           The firm therefore had no way at all to answer "who did we refer,
+           where to, and what came of it" — the question a network asks, the
+           question a partner firm asks when the arrangement is reviewed, and
+           the question an adviser asks before chasing an outcome that is six
+           weeks old. It was a write-only table.
+
+           This is the read. Grouped kind × status × adviser for the selected
+           month, then every row underneath it in the ledger drawer every other
+           Reports listing uses, then a CSV.
+
+           NOT OWNER-ONLY, and that is deliberate rather than an oversight: a
+           referral count is not money. No commission, no fee, no £ appears on
+           this panel — an adviser can see the whole firm's referrals here, and
+           the "Mine" default simply opens on their own.
+           ==================================================================== -->
+      <h3 class="report-section-head" id="rsec-referrals">Referrals out</h3>
+      <div class="panel" id="report-referrals-panel">
+        <div class="panel-head-row">
+          <h3>Referrals out — who we sent where</h3>
+          <div class="pipe-segment" id="report-ref-scope" role="tablist" aria-label="Scope the referrals report">
+            <button type="button" class="seg-btn" id="report-ref-scope-mine" data-refout-scope="mine" role="tab" aria-selected="false" title="Only referrals you made">Mine</button>
+            <button type="button" class="seg-btn" id="report-ref-scope-all" data-refout-scope="all" role="tab" aria-selected="false" title="Every adviser's referrals">All</button>
+          </div>
+        </div>
+        <p class="panel-sub" id="report-ref-basis"></p>
+        <div id="report-ref-groups"></div>
+        <details class="report-ledger">
+          <summary>Show every referral in this period<span class="ledger-n"></span></summary>
+          <div id="report-ref-list"></div>
+        </details>
+        <button type="button" class="btn btn-sm" id="report-ref-csv" title="Download this period's referrals as a CSV">⭳ CSV</button>
       </div>
     </section>
 

@@ -1067,6 +1067,12 @@ async function readRows(page, table, filters) {
       });
       await page.evaluate((id) => window.openClient(id), client);
       await wait(page, 700);
+      /* R66 — Ruby has six cases, and from three up the client record now folds its timeline into a
+         closed <details> with the case cards first (H5: the portfolio, not the note history, is
+         what a landlord's record is opened for). Nothing about the timeline changed — same ids,
+         same chips, same rows — so this test opens the fold and then asserts exactly what it always
+         did. Only the click below needed it; the $eval reads work on hidden elements either way. */
+      await page.evaluate(() => { const d = document.querySelector("#client-timeline-fold"); if (d) d.open = true; });
       const activeChip = await page.$eval('.tl-filter.active', (e) => e.dataset.cat).catch(() => "");
       eq("C4 · “What happened” (activity) is the default filter", activeChip, "activity");
       const anySystemVisible = await page.$$eval('#tl-list .tl-row[data-cat="system"]', (els) => els.length);

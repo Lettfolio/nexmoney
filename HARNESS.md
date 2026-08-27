@@ -109,6 +109,8 @@ node tests/r63_tasks.js
 node tests/r64_retention.js
 node tests/r64_hf1.js
 node tests/r65_watchtower.js
+node tests/r66_book.js
+node tests/r66_comms.js
 ```
 
 **R65 notes — Watchtower: two new checks and one that now counts clients.** The mock's
@@ -3743,3 +3745,20 @@ open at application/offer/exchange; `#cs-sticky-actions` sticky against `#modal-
 (4 + `_meta`), r5_batch6 S7 reads `.cs-name`. Harness midnight window: between 23:00 and 00:00
 UTC in BST the mock's `TODAY` (UTC) and the app's `localDateStr()` (Europe/London) disagree — a
 batch of due-date suites fails only in that hour; re-run after 00:00 UTC.
+
+**R66 notes — client book + comms (`tests/r66_book.js` 45, `tests/r66_comms.js` 81).** Clients search
+matches embedded cases' `lender` and `property_address` (outcode "BH6" works); `#client-portfolio`
+strip on clients with ≥2 properties (current case per property via R60 ranking; SOLD excluded and
+noted; LTV blanked when any counted property has no value; cover = rent×12 ÷ Σ(loan×stress 5.5%));
+client modal timeline folded (`#client-timeline-fold`) from 3 cases; `.cprop-prev` summary reads
+"N other live case(s)" / "N previous" / mixed. Email type `custom` ("Email (written by adviser)") via
+`#act-write` → `queueCustomEmail` (row: case_id, client_id, email_type 'custom', to_email, subject,
+body_html = escaped `<p>`/`<br>` paragraphs; process-emails **v17** wraps it, never re-escapes);
+mock `EMAIL_TYPES_ENUM` mirror (unknown type → 22P02). `REFERRAL_META` + mock CHECK gain
+`protection`/`gi`; `protection_status` `referred` (form, chips, bulk, bands, gap card, pipeline
+RPC weight 10 in prod / 0.5 in mock scoring); Reports §6 "Referrals out" (`#report-referrals-panel`,
+`REPORT_SECTIONS` six, `REPORT_LEDGERS` seven, `⭳ CSV`). Old-suite patches (commented R66):
+r8_touch search ground truth, r12b C4 + r5_batch3 R5-53 open the timeline fold first, r42 §A1/A2/A5/C0
+counts, r11_ux R11-C chip list. Prod: `referrals_kind_check` widened, `email_type` has 'custom',
+`get_protection_pipeline` keeps 'referred'. `protection_referral_partner` is read for the protection
+referral's default "referred to" but has NO Settings field yet.

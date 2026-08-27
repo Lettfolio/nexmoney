@@ -794,6 +794,22 @@
      the case, and dropping the row would leave the checklist looking as though
      it was never asked for. */
   var DOC_STATUSES = ["requested", "received", "waived"];
+  /* R66 · M8 — the `email_type` ENUM, mirrored. Production's column is a real Postgres enum, so an
+     unknown value is a 22P02 at insert time, not a row that quietly sits in the queue until
+     process-emails has to decide what to do with it. This list is EMAIL_LABEL's sixteen types plus
+     the legacy `docs_chase` (rows of that type still exist on the deployed queue — see
+     docChaseCount — even though nothing writes new ones) and R66's new `custom`. Adding a type to
+     app.js without adding it here is exactly the drift this mirror exists to catch. */
+  var EMAIL_TYPES_ENUM = ["welcome", "docs_request", "docs_chase", "submitted_update", "offer_update",
+    "completion_congrats", "rate_end_reminder", "rate_end_chase", "review_request", "review_reminder",
+    "fee_request", "referral_request", "protection_offer", "gi_exchange", "birthday_greeting",
+    "completion_anniversary", "lead_ack", "factfind", "custom"];
+  /* R66 · M6a — referrals_kind_chk, widened in production this round from
+     ('survey','conveyancing','other') to include the two the firm actually makes money on:
+     `protection` (the network's protection team) and `gi` (buildings & contents). Mirrored here
+     because the app now writes both, and a mock that accepts anything cannot tell a typo from a
+     migration that has not run. */
+  var REFERRAL_KINDS = ["survey", "conveyancing", "protection", "gi", "other"];
   function isStaff() { return ["owner", "admin", "adviser", "staff"].indexOf(myRole()) >= 0; }
   function writePolicy(table, op, payload, targets) {
     if (table === "audit_log") {
@@ -802,6 +818,17 @@
     /* M2 — cases_lost_reason_chk */
     if (table === "cases" && payload && payload.lost_reason != null && LOST_REASONS.indexOf(payload.lost_reason) === -1) {
       return pgError('new row for relation "cases" violates check constraint "cases_lost_reason_chk"', "23514");
+    }
+    /* R66 · M8 — email_queue.email_type is an enum in production; an unknown value fails the INSERT
+       with 22P02 rather than landing in the queue. `custom` is in the list from this round. */
+    if (table === "email_queue" && op !== "delete" && payload && payload.email_type != null
+        && EMAIL_TYPES_ENUM.indexOf(payload.email_type) === -1) {
+      return pgError('invalid input value for enum email_type: "' + payload.email_type + '"', "22P02");
+    }
+    /* R66 · M6a — referrals_kind_chk, the widened five. */
+    if (table === "referrals" && op !== "delete" && payload && payload.kind != null
+        && REFERRAL_KINDS.indexOf(payload.kind) === -1) {
+      return pgError('new row for relation "referrals" violates check constraint "referrals_kind_chk"', "23514");
     }
     /* M4 — duplicate_dismissals: select/insert staff, delete admin+owner, NO update policy */
     if (table === "duplicate_dismissals") {
@@ -1378,6 +1405,11 @@
       if (r.scheduled_for === undefined || r.scheduled_for === null) r.scheduled_for = r.created_at;
       if (r.error === undefined) r.error = null;
       if (r.sent_at === undefined) r.sent_at = null;
+      /* R66 · M8 — subject / body_html / attachment_path exist on every row, null until something
+         writes them, so select("*") always returns the keys (the standing parity rule). A `custom`
+         row is the only one the APP fills both text columns on; every other type leaves them for
+         process-emails to compose. */
+      ["subject", "body_html", "attachment_path"].forEach(function (f) { if (r[f] === undefined) r[f] = null; });
     }
     if (table === "sms_queue" && !r.status) r.status = "queued";
     /* r12b — appointments.outcome: null = not recorded. Exists on every row,
@@ -4939,11 +4971,19 @@
     return DB.cases.filter(function (c) {
       if (c.stage === "not_proceeding") return false;
       var p = c.protection_status || "not_discussed";
-      return ["not_discussed", "discussed", "quoted"].indexOf(p) >= 0;
+      /* R66 · M6a — `referred` is the fourth OPEN protection state (the case has been handed to a
+         protection adviser; no policy, no decline), so the pipeline returns it alongside the other
+         three. Production's get_protection_pipeline needs the identical one-value widening —
+         without it a referred case would drop off the Protection page entirely the moment the
+         status is set, which is the opposite of what recording the referral is for. */
+      return ["not_discussed", "discussed", "quoted", "referred"].indexOf(p) >= 0;
     }).map(function (c) {
       var cl = DB.clients.filter(function (x) { return x.id === c.client_id; })[0] || {};
       var p = c.protection_status || "not_discussed";
-      var weight = p === "quoted" ? 0.7 : p === "discussed" ? 0.4 : 0.2;
+      /* Weighted between discussed and quoted: a referral is more likely to end in a policy than a
+         conversation nobody has quoted, and less likely than a quote already in the client's hands
+         — and the commission, if it lands, is not wholly this firm's anyway. */
+      var weight = p === "quoted" ? 0.7 : p === "referred" ? 0.5 : p === "discussed" ? 0.4 : 0.2;
       return {
         case_id: c.id, client_id: c.client_id, client_name: clientName(c.client_id),
         case_kind: c.case_kind, stage: c.stage, lender: c.lender,
@@ -5467,7 +5507,15 @@
       /* Null on every type except factfind: those are display-only via the
          row's own `subject` column, set once at queue time — v12 is the only
          type where compose() itself decides the subject. */
-      subject: ffCompose ? ffCompose.subject : null,
+      /* R66 · M8 — a `custom` row's subject is the ADVISER's, written at queue time and carried on
+         the row's own column; v17 does not compose one. (factfind is the other exception, for the
+         opposite reason: there compose() is the only thing that knows the subject.) */
+      subject: ffCompose ? ffCompose.subject : (t === "custom" ? (row.subject || null) : null),
+      /* R66 · M8 — and the body. v17 wraps this HTML in the house template and appends the sign-off
+         below; it is passed through verbatim, never re-escaped and never reworded — the escaping
+         happened once, in the app, before the row was written. Null on every other type, whose
+         body is composed from body_lines above. */
+      body_html: t === "custom" ? (row.body_html || null) : null,
       from: name + " <" + setting("from_email", "hello@nexmoney.co.uk") + ">",
       reply_to: (adv && adv.email) || setting("reply_to_email", "hello@nexmoney.co.uk"),
       adviser_id: adv ? adv.id : null,
