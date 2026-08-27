@@ -336,11 +336,16 @@ const openDrawer = async (page, panelId) => {
       const restored = await page.evaluate(() => {
         const allRows = [...document.querySelectorAll("#briefing-list .brief-row")];
         const rows = allRows.filter((r) => /\bFEE\b/.test(r.innerText));
-        // groupBriefRows folds a case's other items behind "+N more: <kind> · <kind>" when a
-        // higher-priority item (e.g. an overdue task) on the SAME case wins the row — so a
+        // groupBriefRows folds a case's other items behind a "+N more …: <kind> · <kind>" summary
+        // when a higher-priority item (e.g. an overdue task) on the SAME case wins the row — so a
         // fee_chase item can be present but not carry its own top-level FEE badge. Count those
-        // collapsed mentions too ("+1 more: fee") so the total is checked against the RPC count.
-        const collapsedFeeMentions = allRows.filter((r) => !/\bFEE\b/.test(r.innerText) && /\bmore:.*\bfee\b/i.test(r.innerText)).length;
+        // collapsed mentions too so the total is checked against the RPC count.
+        // R69 · A1 — the fold's wording changed ("+1 more: fee" → "+1 more on this case: 💷 fee")
+        // and its markup went from a <button> to a <details>/<summary>; the arithmetic this line
+        // exists for is unchanged, so only the pattern between "more" and the colon is loosened.
+        // (innerText still stops at a closed <details>, so a folded row's own FEE badge is not
+        // double-counted — the summary is what is visible, exactly as before.)
+        const collapsedFeeMentions = allRows.filter((r) => !/\bFEE\b/.test(r.innerText) && /\bmore\b[^:]*:.*\bfee\b/i.test(r.innerText)).length;
         return { feeRows: rows.length, collapsedFeeMentions, chase: rows.filter((r) => /Chase fee/.test(r.innerText)).length, badges: rows.filter((r) => /blocked/.test(r.innerText)).length };
       });
       eq("R5-28 · with bank details set, every fee-chase row from the RPC is accounted for (own row or folded into a +N more)", restored.feeRows + restored.collapsedFeeMentions, state.rawFeeChaseCount);
@@ -355,7 +360,12 @@ const openDrawer = async (page, panelId) => {
       });
       ok("R5-28 · the Owner — the one person who can fix it — is offered Settings",
         ownerState.rows > 0 && ownerState.links === ownerState.rows, JSON.stringify(ownerState));
-      await owner.click("#briefing-list .brief-row button:has-text('Open Settings')");
+      /* R69 · A1 — :not(.brief-subrow). A case's other rows now live in the page all the time,
+         inside a closed <details class="brief-more">, instead of being absent until expanded — so
+         the FIRST ".brief-row button" in document order can be one that is folded away and
+         therefore not clickable. The assertion is about the Owner's row offering the link, which
+         is a PRIMARY row; say so in the selector. */
+      await owner.click("#briefing-list .brief-row:not(.brief-subrow) > button:has-text('Open Settings')");
       await owner.waitForTimeout(900);
       ok("R5-28 · …and the link goes there", await owner.evaluate(() => !document.querySelector("#page-settings").classList.contains("hidden")));
       ok("no console errors", !owner.__err, JSON.stringify(owner.__err));

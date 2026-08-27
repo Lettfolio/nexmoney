@@ -694,14 +694,19 @@ const EMAILS_R9_NOTE_TEXT = "An unanswered review request is followed up once. A
     }
 
     {
-      console.log("\n— §J4 · #dh-readiness's item list agrees exactly with which of the 11 dhReadinessChecks tiles are (and are not) folded away (p4)");
+      console.log("\n— §J4 · #dh-readiness's item list agrees exactly with which of the 12 dhReadinessChecks tiles are (and are not) folded away (p4)");
       const page = await newPage(browser, "p4");
       const errBefore = (page.__err || []).length;
       await goto(page, "data", 2200);
 
+      /* R69 · B5/L12 — a TWELFTH readiness tile, dh-tile-ltv ("Loan above property value"), one
+         entry appended here. This list is the round-42 contract's ground truth for "which tiles
+         are fault tiles", not a claim that the page may never gain another; the clean⇔absent rule
+         it exists to test is applied to the new tile exactly as to the other eleven, and no
+         assertion below is weakened or removed. */
       const READINESS_TILE_IDS = ["dh-tile-email", "dh-tile-phone", "dh-tile-both", "dh-tile-invalid-email",
         "dh-tile-invalid-phone", "dh-tile-unassigned", "dh-tile-nofee", "dh-tile-rateend",
-        "dh-tile-nocompleted", "dh-tile-milestone", "dh-tile-deadbook"];
+        "dh-tile-nocompleted", "dh-tile-milestone", "dh-tile-deadbook", "dh-tile-ltv"];
       const cleanStates = await page.evaluate((ids) => Object.fromEntries(ids.map((id) => [id, document.getElementById(id).classList.contains("dh-clean")])), READINESS_TILE_IDS);
       const items = await readinessItems(page);
       const listedIds = new Set(items.map((it) => it.tileId));

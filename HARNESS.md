@@ -113,7 +113,37 @@ node tests/r66_book.js
 node tests/r66_comms.js
 node tests/r68_mi.js
 node tests/r68_admin.js
+node tests/r69_today.js
+node tests/r69_polish.js
 ```
+
+**R69 notes — polish pack.** Two new suites: `tests/r69_today.js` (71 — My Day case folds, Today on
+a phone, ▶ Run now on the stuck-cron banner, bounded radar) and `tests/r69_polish.js` (103 — lender
+favicons, Protection column clip, Reports table scroll, process-emails v18 probe parity, loan-above-
+value Data health tile). Things a future session needs to know:
+
+  - **My Day folded rows are now permanently in the DOM** (`<details class="brief-more">` under the
+    primary row, closed by default, holding the case's other rows in full as `.brief-row.brief-subrow`).
+    A broad `#briefing-list .brief-row …` selector can land on a hidden sub-row: use
+    `.brief-row:not(.brief-subrow)` for "a primary row". `innerText` stops at a closed `<details>`, so
+    text-count assertions still see only the primary rows. Band header = bare number in
+    `.brief-sec-n` (r61 sums it) + `.brief-sec-unit` "rows · N items". Leads are never grouped.
+  - **`runQueueNow(btn, after)`** is the ONE run-automation path (Emails `#run-now-btn` and the Today
+    banner's `▶ Run now` both call it). It queues before it asks — inherited behaviour.
+  - **`loadUnactioned`** reads are capped at `OWNER_ROW_CAP` (cases ordered oldest-touched first);
+    `#unactioned-cap-notice` says when the cap is hit.
+  - **Favicons:** `lenderDomain()` memoises one canonical domain per lender name; `LFAV_DEAD` (module
+    scope) remembers domains whose image errored and later paints emit no `<img>` at all. Two surfaces
+    painted at different times can therefore differ by a whole `<img class="lfav">` — r64_retention §D2
+    strips the tag on both sides for that reason.
+  - **Protection table**: rows are `.prot-row`; the two sentence columns (`.prot-col-case`,
+    `.prot-col-status`) wrap instead of the table sticky-scrolling, so rows are taller at 1280.
+  - **Reports tables** are wrapped in `.table-scroll` by `wrapReportTables()` off a MutationObserver on
+    `#page-reports` (debounced, idempotent).
+  - **Data health** gained `#dh-tile-ltv` (loan above property value) + `#dh-ltv-panel`; it is in
+    `READINESS_TILE_IDS` (r42 §J4, 12 tiles). Fixtures: ca015 (127%) and ca004 (102%).
+  - Old-test patches, all commented: r5_batch3 (fold summary wording + primary-row selector), r42 §J4
+    (12th readiness tile), r64_retention §D2 (favicon normalisation).
 
 **R68 notes — admin fast paths (agent B).** One new suite: `tests/r68_admin.js` (112 checks —
 §A accept-all leads, §B duplicate-merge fast path, §C protection-gate chips, §D palette verbs).

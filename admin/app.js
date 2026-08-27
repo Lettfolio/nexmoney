@@ -1353,11 +1353,73 @@ const LENDER_DOMAINS = {
   "foundation": "foundationhomeloans.co.uk", "vida": "vidahomeloans.co.uk",
   "bank of ireland": "bankofireland.co.uk", "clydesdale": "cbonline.co.uk",
 };
+/* ==========================================================================
+   R69 · B1/L3 — ONE REQUEST PER LENDER, AND NEVER A SECOND GO AT A DEAD ONE.
+
+   Every lender favicon is a live cross-origin request to Google's s2 service,
+   emitted once per lender per PAINT. Two things were wrong with the old helper:
+
+     · THE DOMAIN WAS DECIDED BY OBJECT KEY ORDER. `for (k in LENDER_DOMAINS)`
+       took the FIRST key the lender name happened to contain and stopped, so
+       the answer for a name containing two keys depended on which line of this
+       file they were typed on. "Yorkshire Building Society trading as Accord"
+       resolved to Accord's domain purely because "accord" is typed twelve lines
+       above "yorkshire"; move either line and the same lender NAME starts
+       fetching a different favicon — two requests, two different little squares
+       for one lender. The winner is now the key that matches EARLIEST in the
+       lender name, ties going to the longer key: both are properties of the
+       name being read rather than of this table's line order, and naming the
+       lender first is what every book row actually does. The answer is memoised
+       per name, so the table is walked once per distinct lender per session.
+       (Checked against the whole fixture book: no lender in it matches two keys
+       at all, so not one icon on screen changes today — this closes the door
+       rather than repainting anything.)
+
+     · A FAILED LOOKUP WAS RETRIED ON EVERY PAINT. `onerror` hid the image and
+       nothing remembered it, so a lender Google has no icon for cost one 404
+       per row per re-render, for ever, plus a broken-image flash. A domain
+       whose image has errored once goes into LFAV_DEAD and is not requested
+       again this session: later paints emit NO <img> at all for it — no
+       request, no flash, no empty box. It is a session memory, not a stored
+       one: a reload asks again, which is right for a third-party service that
+       may simply have been having a bad minute.
+
+   NOT inlined as data: URIs — the images are cross-origin, so we cannot read
+   their bytes, and a same-origin proxy is a server this firm does not run.
+   `loading="lazy"` (only fetch the rows the reader actually scrolls to) and
+   `decoding="async"` (never let a favicon block a paint) are both set here.
+   ========================================================================== */
+const LENDER_DOM_MEMO = new Map();   // lowercased lender name → its ONE domain ("" = no match)
+const LFAV_DEAD = new Set();         // domains whose favicon has already failed, this session
+/* The one canonical domain for a lender name: earliest match in the NAME wins, longer key breaks
+   a tie. Nothing here reads the table's key order, so adding a key can never re-point a lender
+   that already had an icon. */
+function lenderDomain(lender) {
+  const l = String(lender == null ? "" : lender).toLowerCase().trim();
+  if (!l) return "";
+  if (LENDER_DOM_MEMO.has(l)) return LENDER_DOM_MEMO.get(l);
+  let dom = "", at = Infinity, len = 0;
+  for (const k in LENDER_DOMAINS) {
+    const i = l.indexOf(k);
+    if (i < 0) continue;
+    if (i < at || (i === at && k.length > len)) { at = i; len = k.length; dom = LENDER_DOMAINS[k]; }
+  }
+  LENDER_DOM_MEMO.set(l, dom);
+  return dom;
+}
+/* The img's own onerror. Remembers the domain, then removes the element rather than hiding it:
+   a hidden <img> is still a fetched <img>, and leaving it in the row invites the next reader of
+   this code to "fix" the empty box by making it visible again. */
+function lfavFail(img) {
+  if (!img) return;
+  const dom = (img.dataset && img.dataset.dom) || "";
+  if (dom) LFAV_DEAD.add(dom);
+  if (img.parentNode) img.parentNode.removeChild(img);
+}
 function lenderIcon(lender, size = 16) {
-  const l = (lender || "").toLowerCase();
-  let dom = null;
-  for (const k in LENDER_DOMAINS) { if (l.includes(k)) { dom = LENDER_DOMAINS[k]; break; } }
-  return dom ? `<img class="lfav" src="https://www.google.com/s2/favicons?domain=${dom}&sz=32" width="${size}" height="${size}" alt="" loading="lazy" onerror="this.style.display='none'">` : "";
+  const dom = lenderDomain(lender);
+  if (!dom || LFAV_DEAD.has(dom)) return "";
+  return `<img class="lfav" data-dom="${dom}" src="https://www.google.com/s2/favicons?domain=${dom}&sz=32" width="${size}" height="${size}" alt="" loading="lazy" decoding="async" onerror="lfavFail(this)">`;
 }
 
 /* ==========================================================================
@@ -6284,7 +6346,12 @@ async function renderOpsStrip(cases) {
     return `<button type="button" class="ops-chip${!unknown && n > 0 ? " hot" : ""}" id="${id}" data-n="${unknown ? "" : n}" onclick="${onclick}" title="${esc(tip)}">
       <span aria-hidden="true">${icon}</span><span class="ops-n">${unknown ? "—" : n}</span> ${esc(label)}</button>`;
   };
+  /* R69 · A2 — the six chips are wrapped in one .ops-chips element so a phone can turn THEM into
+     a horizontally scrolling line without dragging the explanatory paragraph onto it. On every
+     other width the wrapper is `display: contents`, so the strip's layout is byte-identical to
+     what R68 shipped and every existing `#ops-strip .ops-chip` selector still reaches them. */
   el.innerHTML = [
+    `<div class="ops-chips">`,
     chip("ops-emails-queued", "✉️", "emails queued", emailsQueued, "nav('emails')",
       "Emails waiting to go out on the daily automation run. Opens the Emails page. Whether they can actually send is on Settings › Email sending."),
     chip("ops-emails-failed", "⚠️", "emails failed", emailsFailed, "nav('data')",
@@ -6297,6 +6364,7 @@ async function renderOpsStrip(cases) {
       "Live cases nobody owns — nothing on them is anybody's job. Opens the Pipeline filtered to Unassigned."),
     chip("ops-docs-overdue", "📄", "document chases exhausted", docsOverdue, "opsGotoLeads()",
       "Cases where three document chase emails went unanswered, so the automation stopped emailing and raised a call task instead. Those tasks sit on the case's adviser — switch My Day to “All” to see everyone's."),
+    `</div>`,
     `<p class="panel-sub ops-sub" id="ops-strip-sub">The firm's plumbing, in one line: what is waiting to send, what failed, and what nobody has picked up. Each chip opens the page that fixes it. <strong>Grey means nothing to do</strong>; amber means there is. Administrator and Owner only — advisers see their own work on My Day below.</p>`,
   ].join("");
   el.classList.remove("hidden");
@@ -6309,10 +6377,40 @@ window.opsGotoLeads = function () {
   const el = $("#briefing-panel");
   if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
 };
+/* R69 · A3/L11 — "▶ Run now" on the stuck-automation banner.
+   The banner has always been able to say the 8am run has stopped and then send the reader to
+   another page to do something about it. For an Administrator or an Owner the thing to do is one
+   button, and it is the SAME button the Emails page carries (runQueueNow — same confirm, same
+   recipient list, same flush), so the fix happens where the problem was noticed.
+
+   The title spells out the two things somebody is entitled to know before pressing it: an
+   unscoped run also QUEUES (it runs the nightly queueing RPCs first, which is why the confirm can
+   promise an accurate number), and it stamps the cron heartbeat — so while
+   `settings.email_hold` is anything other than 'off', the run queues and stamps and sends
+   NOTHING. Pressing it on a held system is safe, and the banner clearing afterwards is the
+   heartbeat moving, not mail going out.
+   An adviser never sees it: they cannot flush the firm's queue (runQueueNow refuses them anyway),
+   and a button that only ever produces a refusal toast is worse than no button. */
+const CRON_RUN_NOW_TITLE = "Runs the 8am automation now: it queues whatever is due and stamps the heartbeat, then sends the queue. "
+  + "You are shown exactly how many emails that is, and who the first few go to, before anything is sent — and while sending is held in Settings › Email sending, it queues and stamps but sends nothing.";
+function cronRunNowBtnHtml() {
+  return isAdminOrOwner()
+    ? `<button type="button" class="dash-notice-run" id="dash-cron-run-btn" title="${esc(CRON_RUN_NOW_TITLE)}" onclick="dashRunCronNow(this)">▶ Run now</button>`
+    : "";
+}
+window.dashRunCronNow = function (btn) {
+  /* Re-read the settings table after the run and repaint the strip: this banner is drawn from
+     settings.last_cron_run_at, which an unscoped run has just moved forward. Without the re-read
+     the page would keep insisting the automation last ran three days ago immediately after
+     watching it run. */
+  return runQueueNow(btn, async () => { await refreshHeartbeatKeys(); renderDashNotices(); });
+};
 function renderDashNotices() {
   const el = $("#dash-notices");
   if (!el) return;
   const bits = [];
+  // R69 · A2 — the three-or-four-word version of each banner, for the collapsed strip's summary.
+  const heads = [];
   /* Feature-detected on PRESENCE of the key, not on its truthiness: `settings` is built from the
      rows the database returned, so a deployment that has never taken the v13 stamp simply has no
      key here and gets no notice at all. */
@@ -6320,14 +6418,20 @@ function renderDashNotices() {
   const cronAt = String(settings.last_cron_run_at || "").trim();
   if (cronKnown && !cronAt) {
     bits.push(`<div class="dash-notice" id="dash-cron-notice" data-state="never">⏱ The 8am automation has never confirmed a run.
-      <button type="button" class="dash-notice-link" onclick="nav('emails')">Open Emails</button></div>`);
+      <button type="button" class="dash-notice-link" onclick="nav('emails')">Open Emails</button>${cronRunNowBtnHtml()}</div>`);
+    heads.push("the 8am automation has never run");
   } else if (cronAt) {
     const ms = Date.now() - new Date(cronAt).getTime();
     if (!isNaN(ms) && ms > CRON_STALE_HOURS * 3600000) {
       const days = daysSinceLocal(cronAt);
+      /* R69 · A2 — the second sentence is wrapped in .dash-notice-why so a 390px screen can clamp
+         it to one line: the headline (what happened, how long ago) and the two buttons are what
+         a phone needs; the paragraph explaining WHY that matters is what pushes My Day off the
+         screen. Same words, same element, still read out in full by a screen reader. */
       bits.push(`<div class="dash-notice warn" id="dash-cron-notice" data-state="stale">⏱ <strong>The 8am automation last ran ${esc(fmtD(cronAt))} — ${days} day${days === 1 ? "" : "s"} ago.</strong>
-        Emails may be silently stuck: the queue fills up and nothing on this page changes when the sender stops.
-        <button type="button" class="dash-notice-link" onclick="nav('emails')">Check the queue</button></div>`);
+        <span class="dash-notice-why">Emails may be silently stuck: the queue fills up and nothing on this page changes when the sender stops.</span>
+        <button type="button" class="dash-notice-link" onclick="nav('emails')">Check the queue</button>${cronRunNowBtnHtml()}</div>`);
+      heads.push(`the 8am automation last ran ${days} day${days === 1 ? "" : "s"} ago`);
     }
   }
   /* R13 · M-42 — the backup nag. Same key the Settings panel stamps. Owner-only, quiet, and it
@@ -6340,12 +6444,29 @@ function renderDashNotices() {
     if (!expAt) {
       bits.push(`<div class="dash-notice" id="dash-export-notice" data-state="never">💾 No firm backup has ever been taken${expKnown ? "" : ""} — export from Settings.
         <button type="button" class="dash-notice-link" onclick="nav('settings')">Go to Settings</button></div>`);
+      heads.push("no firm backup has ever been taken");
     } else if (days != null && !isNaN(days) && days > EXPORT_NAG_DAYS) {
       bits.push(`<div class="dash-notice" id="dash-export-notice" data-state="stale">💾 No firm backup in ${days} days — export from Settings.
         <button type="button" class="dash-notice-link" onclick="nav('settings')">Go to Settings</button></div>`);
+      heads.push(`no firm backup in ${days} days`);
     }
   }
-  el.innerHTML = bits.join("");
+  /* R69 · A2/L2 — TWO BANNERS ARE A WALL, ONE IS A SENTENCE.
+     These strips sit above the page title, so every line they take is a line of Today the reader
+     has to scroll past before reaching anything they can act on — and on a 390px phone the
+     Owner's two banners (stuck automation + no backup) were 182px of it before the heading even
+     started. From the SECOND notice, they collapse into a one-line strip naming each one, with
+     the banners themselves — full copy, full buttons, nothing rewritten — inside the expander.
+     A single notice is left exactly as it was: folding one banner behind a summary that says the
+     same thing is not a saving, it is an extra click. */
+  if (bits.length > 1) {
+    el.innerHTML = `<details class="dash-notice-fold">`
+      + `<summary>⚠ ${bits.length} things to look at: ${heads.map(esc).join(" · ")}</summary>`
+      + bits.join("")
+      + `</details>`;
+  } else {
+    el.innerHTML = bits.join("");
+  }
 }
 
 /* ==========================================================================
@@ -7782,9 +7903,10 @@ let briefingScope = "mine";
 // BUILD 7d (defect 18) — the last-fetched briefing items, kept so toggling a group's expand state
 // can re-render instantly without re-hitting the RPC. Session-only.
 let lastBriefItems = [];
-// Case ids the user has manually expanded to see every item behind a grouped row. Pruned to only
-// cases still present in the briefing on every reload, so a stale key can't linger.
-let briefExpanded = new Set();
+/* R69 · A1 — the module Set of "case ids the user expanded" is GONE, and with it toggleBriefGroup.
+   A case's other rows are now inside a native <details> that is closed on every paint (see
+   groupBriefRows' header): the state does not have to survive anything, so it is not stored
+   anywhere and there is no stale key to prune. */
 // T1-23 — case_id → "Product Transfer · DIP", populated only for clients with >1 open case.
 let briefCaseMeta = {};
 // R6 — case_id → the property chip, populated for EVERY case that has an address. Takes
@@ -8218,10 +8340,6 @@ async function loadBriefing() {
     }
   } catch (e) { /* graceful degradation — lead rows render without the clock */ }
   lastBriefItems = items;
-  // Prune expand-state to cases still present, so a stale key from a since-resolved case can't
-  // silently keep a future unrelated case pre-expanded.
-  const liveCaseIds = new Set(items.filter((it) => it.case_id).map((it) => it.case_id));
-  [...briefExpanded].forEach((k) => { if (!liveCaseIds.has(k)) briefExpanded.delete(k); });
   renderBriefing();
 }
 // BUILD 7d (defect 18) — one case (e.g. Ruby Sinclair: overdue task + rate-end + protection, all
@@ -8230,17 +8348,70 @@ async function loadBriefing() {
 // title/badge/actions), with the rest folded behind a "+N more" toggle. Items has already been
 // sorted by priority (RPC + the client-side merge above), so the first occurrence of a case_id is
 // always its highest-priority item — no extra sort needed here.
+/* ==========================================================================
+   R69 · A1/M4 — THE GROUP IS A FOLD, NOT A TOGGLE.
+
+   The panel finding was "28 rows for 11 live cases, one case four times". That
+   is not quite what the code did: grouping by case has existed since BUILD 7d
+   and it does collapse a case to one row (p1's fixture My Day is 34 rows with
+   nine grouped folds, not one row per item). What it did NOT do is show the
+   folded work: "+N more: fee" was a *button* whose other rows were not in the
+   page at all until you clicked it, the expanded state was remembered in a
+   module Set, and the band header counted rows without ever saying whether a
+   row meant a case or an item. So a case with four things on it advertised
+   three of them as a comma list and hid the ✓ Done / Send reminder / Chase fee
+   buttons that would clear them.
+
+   Now: one PRIMARY row per case (unchanged — the highest-priority item, its
+   badge, its actions), followed by a `<details class="brief-more">` that is
+   closed by default and holds the case's other rows IN FULL — same title, same
+   badge, same action buttons (briefSubRowHtml calls the very same briefActions
+   the primary row does). No rule is dropped and no action is lost; opening the
+   fold is one click and needs no repaint, so nothing has to be remembered
+   between renders (persist nothing — a repaint closes it again, which is the
+   honest default for a working list).
+
+   THE TWO RULES THAT ARE NOT NEGOTIABLE:
+   · A NEW LEAD IS NEVER GROUPED AND NEVER FOLDED. R61 already exempted leads
+     from the band cap for speed-to-lead reasons; the same reasoning applies
+     twice over here, so a lead_new item is always its own top-level row and is
+     never swallowed as somebody else's "+N more" — even in the (currently
+     impossible) case of a lead that carries a case_id.
+   · ROWS ONLY EVER MOVE UP. `items` is priority-sorted before it gets here, so
+     the first item seen for a case is its highest-priority one and the whole
+     group therefore renders in the band that item belongs to. A case with an
+     ended rate (pri 8) and a housekeeping row (pri 45) appears ONCE, in Urgent
+     — never in Worth doing, and never in both.
+   ========================================================================== */
 function groupBriefRows(items) {
   const seen = new Set();
   const rows = [];
-  items.forEach((it) => {
-    if (!it.case_id) { rows.push({ key: null, head: it, extra: [] }); return; }
+  (items || []).forEach((it) => {
+    // No case (a lead, a client-level reminder, the aggregate completion-date row) — untouched.
+    if (!it.case_id || it.kind === "lead_new") { rows.push({ key: null, head: it, extra: [] }); return; }
     if (seen.has(it.case_id)) return;
     seen.add(it.case_id);
-    const group = items.filter((x) => x.case_id === it.case_id);
+    const group = items.filter((x) => x.case_id === it.case_id && x.kind !== "lead_new");
     rows.push({ key: it.case_id, head: it, extra: group.filter((x) => x !== it) });
   });
   return rows;
+}
+/* The fold's summary names what is behind it in the reader's own words rather than in kind ids —
+   "📄 docs overdue · 📅 appointment today" tells somebody whether it is worth opening; "+3 more"
+   on its own does not. The icons come from the same vocabulary the rest of Today uses. */
+const BRIEF_KIND_ICON = {
+  task_overdue: "✅", task_today: "✅", review_feedback: "⭐", email_new: "✉️", appt_today: "📅",
+  rate_urgent: "📉", stalled: "🐌", fee_chase: "💷", protection_hot: "🛡️", no_completion_date: "📆",
+  comms_failed: "⚠️", lead_new: "🧲",
+};
+function briefMoreHtml(row) {
+  if (!row || !row.extra.length) return "";
+  const bits = row.extra.map((x) => `${BRIEF_KIND_ICON[x.kind] || "•"} ${esc(briefKindShort(x.kind))}`).join(" · ");
+  /* The click must not also open the case: the summary sits inside .row-main, whose .t is a
+     click-through to the case, and a fold that navigated away would be unusable. */
+  return `<details class="brief-more"><summary onclick="event.stopPropagation()">+${row.extra.length} more on this case: ${bits}</summary>`
+    + row.extra.map(briefSubRowHtml).join("")
+    + `</details>`;
 }
 function briefTitleClickAttr(it) {
   if (it.kind === "appt_today" && it.appt_id) return `onclick="openAppt('${it.appt_id}')"`;
@@ -8271,19 +8442,20 @@ function briefSubRowHtml(it) {
 }
 function briefRowHtml(row) {
   const it = row.head;
-  const expanded = row.key && briefExpanded.has(row.key);
-  const moreHtml = row.extra.length
-    ? `<button type="button" class="brief-more" onclick="event.stopPropagation();toggleBriefGroup('${row.key}')">${expanded ? "▾ " : "▸ "}+${row.extra.length} more: ${row.extra.map((x) => briefKindShort(x.kind)).join(" · ")}</button>`
-    : "";
+  /* The fold lives INSIDE the primary row's .row-main, beneath the two lines of text. That is
+     deliberate and load-bearing for more than looks: a closed <details> is not rendered, so the
+     primary row's innerText still reads as exactly one row's worth of text (the summary line
+     aside) and every suite that counts My Day rows by their visible text keeps counting what it
+     always counted. `.brief-row:not(.brief-subrow)` remains the selector for "a primary row". */
   return `<div class="row-item brief-row ${it.pri < 15 ? "hot" : it.pri < 35 ? "warm" : ""}">
       <div class="row-main">
         <div class="t" ${briefTitleAttrs(it)}>${esc(it.title)}${briefCaseDisc(it)}</div>
         <div class="s">${esc(it.sub || "")}${briefOwnerSuffix(it)}</div>
-        ${moreHtml}
+        ${briefMoreHtml(row)}
       </div>
       ${briefBadge(it)}
       ${briefActions(it)}
-    </div>${expanded ? row.extra.map(briefSubRowHtml).join("") : ""}`;
+    </div>`;
 }
 // Renders from the cached lastBriefItems (no refetch) — used both after a fresh load and when a
 // group's expand toggle changes. The count badge stays on the real item total (rows collapse
@@ -8306,9 +8478,33 @@ const BRIEF_BANDS = [
   { key: "warm", test: (p) => p >= 15 && p < 35, label: "Today", icon: "📅", why: "appointments and tasks due today" },
   { key: "rest", test: (p) => p >= 35, label: "Worth doing", icon: "🧹", why: "housekeeping — nothing on fire" },
 ];
+/* R69 · A1 — the band header's number, and what it is a number OF.
+   Before this it was a bare count that meant "grouped rows" and read as "items", so a band
+   headed 7 could hold 11 things to do. The number itself is unchanged (it is still the row
+   count, which is what the list below it contains, and what r61 §A2 checks adds up); what is
+   new is that the header now says out loud which unit it is counting, and names the item total
+   beside it whenever the two differ. `.brief-sec-n` stays a bare number on purpose — it is the
+   count chip, and putting words inside it would make it unreadable as a figure. */
+function briefBandCountHtml(bandRows) {
+  const n = bandRows.length;
+  const itemN = bandRows.reduce((s, r) => s + 1 + r.extra.length, 0);
+  return `<span class="brief-sec-n">${n}</span>`
+    + `<span class="brief-sec-unit">${n === 1 ? "row" : "rows"}${itemN > n ? ` · ${itemN} items` : ""}</span>`;
+}
 function renderBriefing() {
   const items = lastBriefItems;
   const rows = groupBriefRows(items);
+  /* The subtitle only claims grouping when grouping actually happened. A short day where every
+     case has one thing on it must not be told about a fold it cannot see — that is how a panel
+     subtitle stops being read. */
+  const groupedCases = rows.filter((r) => r.extra.length).length;
+  const sub = $("#briefing-group-sub");
+  if (sub) {
+    sub.classList.toggle("hidden", !groupedCases);
+    sub.innerHTML = groupedCases
+      ? `<strong>Rows for the same case are grouped</strong> — ${groupedCases} case${groupedCases === 1 ? " here has" : "s here have"} more than one thing on ${groupedCases === 1 ? "it" : "them"}. Open “+N more” to see the rest; every button is still on those rows. New enquiries are never folded.`
+      : "";
+  }
   const bands = BRIEF_BANDS.map((b) => ({ ...b, rows: rows.filter((r) => b.test(r.head.pri)) })).filter((b) => b.rows.length);
   let html;
   if (!rows.length) {
@@ -8323,7 +8519,7 @@ function renderBriefing() {
       b.rows.forEach((r) => {
         if (r.head.kind === "lead_new" || shown.length < BRIEF_BAND_CAP) shown.push(r); else folded.push(r);
       });
-      return `<div class="brief-sec brief-sec-${b.key}"><span class="brief-sec-ic" aria-hidden="true">${b.icon}</span>${b.label} <span class="brief-sec-n">${b.rows.length}</span><span class="brief-sec-why">${b.why}</span></div>`
+      return `<div class="brief-sec brief-sec-${b.key}"><span class="brief-sec-ic" aria-hidden="true">${b.icon}</span>${b.label} ${briefBandCountHtml(b.rows)}<span class="brief-sec-why">${b.why}</span></div>`
         + shown.map(briefRowHtml).join("")
         + (folded.length ? `<details class="brief-fold"${briefFoldOpen[b.key] ? " open" : ""} ontoggle="briefFoldOpen['${b.key}']=this.open">
             <summary>Show the other ${folded.length} ${b.label.toLowerCase()} item${folded.length === 1 ? "" : "s"}</summary>
@@ -8354,10 +8550,6 @@ function renderLeadsAcceptBar(items) {
   const b = $("#leads-accept-all");
   if (b) b.onclick = (e) => window.acceptAllLeads(e);
 }
-window.toggleBriefGroup = function (caseId) {
-  if (briefExpanded.has(caseId)) briefExpanded.delete(caseId); else briefExpanded.add(caseId);
-  renderBriefing();
-};
 window.briefDone = function (id) {
   /* R12a·D12 — a tick and its Undo repaint the list the click came FROM, so an undone task goes
      back where it vanished from.
@@ -9225,14 +9417,26 @@ async function loadUnactioned() {
      in 90 days falls back to created_at exactly as before. Bounded + index-served. */
   const activitySinceIso = new Date(Date.now() - 90 * 86400000).toISOString();
   const [casesRes, tasksRes, notesRes, eventRows] = await Promise.all([
+    /* R69 · A4/L10 — BOTH READS ARE BOUNDED, AND THE CASES READ IS ORDERED SO THE BOUND KEEPS THE
+       RIGHT END. This was the last pair of unbounded full-table reads on Today: every live case
+       in the firm, and EVERY open task in the firm, on every dashboard paint. PostgREST's silent
+       1,000-row ceiling meant a big enough book was already being truncated — arbitrarily, at
+       whatever order the server felt like — and the panel said nothing about it.
+       `.order("updated_at")` ASCENDING is the whole point of the bound: this radar exists to find
+       the cases nobody has touched, so if only part of the book can be read, the part worth
+       reading is the OLDEST-touched end. The tasks read is capped too but deliberately NOT
+       reordered — it is a membership lookup, not a list, and any subset of it can only ever make
+       the radar over-report (a case whose only open task fell outside the cap looks unactioned),
+       which is exactly what the notice below warns about. */
     db.from("cases").select("id,stage,assigned_to,client_id,created_at,clients!client_id(first_name,last_name)")
-      .not("stage", "in", "(completed,not_proceeding)"),
+      .not("stage", "in", "(completed,not_proceeding)")
+      .order("updated_at", { ascending: true }).limit(OWNER_ROW_CAP),
     /* R63 · H1c — the title and created_at come along now: "has an open task" is no longer the
        whole test. A case whose ONLY open task is a step from an EARLIER stage has no next action
        for the stage it is actually at, and that is precisely the case this radar exists to find —
        it was the one shape the old membership test let through. Same columns, one predicate
        (isStalePlaybookTask), shared with the case header and the case modal's task list. */
-    db.from("case_tasks").select("title,case_id,done_at,created_at").is("done_at", null),
+    db.from("case_tasks").select("title,case_id,done_at,created_at").is("done_at", null).limit(OWNER_ROW_CAP),
     db.from("case_notes").select("case_id,created_at").gte("created_at", activitySinceIso),
     softRows(db.from("case_events").select("case_id,created_at").gte("created_at", activitySinceIso)),
   ]);
@@ -9286,6 +9490,23 @@ async function loadUnactioned() {
       <button class="btn btn-sm" onclick="openCase('${c.id}')">Open</button>
     </div>`;
   }).join("") : `<div class="empty">Every live case has a next action 🎉</div>`;
+  /* R69 · A4 — say it when the bound bites. Same `=== cap` test the R23 owner-read notices use
+     (ownerCapHit): a read that comes back holding EXACTLY the ceiling is, as far as the client can
+     tell, truncated. Either cap firing makes the radar unreliable in a different direction — a
+     truncated case read means cases are MISSING from it, a truncated task read means cases may be
+     on it that have a next action after all — so the notice names both rather than pretending one
+     number covers it. Hidden (and silent) in every normal firm; this is the safety net, not a
+     feature. */
+  const capNote = $("#unactioned-cap-notice");
+  if (capNote) {
+    const casesCapped = ownerCapHit(casesRes.data);
+    const tasksCapped = ownerCapHit(tasksRes && tasksRes.data);
+    const hit = casesCapped || tasksCapped;
+    capNote.classList.toggle("hidden", !hit);
+    capNote.textContent = hit
+      ? `⚠ Showing the first ${OWNER_ROW_CAP.toLocaleString("en-GB")} ${casesCapped ? "live cases (oldest-touched first)" : "open tasks"} — the radar may be incomplete.`
+      : "";
+  }
   panelCount("#unactioned-list", quiet.length, quiet.length > 0);
   autoDrawer("unactioned", quiet.length > 0);
 }
@@ -12830,7 +13051,7 @@ async function loadProtectionPage() {
     <div class="board-scroll-wrap board-scroll-wrap--table">
     <div class="panel prot-table-wrap" id="prot-scroll">
     <table class="imp-table has-bulk" id="prot-list-table">
-      <tr><th class="bulk-col"><input type="checkbox" id="prot-bulk-all" aria-label="Select all cases in this view"></th><th class="prot-col-n">#</th><th class="stick-col">Client</th><th>Case</th><th class="prot-col-loan">Loan</th><th>Status</th>${money ? '<th class="prot-col-est">Est. £</th>' : ""}<th>Adviser</th><th class="stick-col-right">Actions</th></tr>
+      <tr><th class="bulk-col"><input type="checkbox" id="prot-bulk-all" aria-label="Select all cases in this view"></th><th class="prot-col-n">#</th><th class="stick-col">Client</th><th class="prot-col-case">Case</th><th class="prot-col-loan">Loan</th><th class="prot-col-status">Status</th>${money ? '<th class="prot-col-est">Est. £</th>' : ""}<th>Adviser</th><th class="stick-col-right">Actions</th></tr>
       ${rows.map((r, i) => {
         const kind = (KINDS.find((x) => x[0] === r.case_kind) || [])[1] || "";
         const p = PROT_BADGE[r.protection_status] || PROT_BADGE.not_discussed;
@@ -12840,7 +13061,7 @@ async function loadProtectionPage() {
         const bandRow = protBandsOn && (i === 0 || bandOf(rows[i - 1]) !== band)
           ? `<tr class="prot-band prot-band-${band}"><td colspan="${money ? 9 : 8}">${PROT_BAND_LABEL[band][1]} <span class="prot-band-n">${rows.filter((x) => bandOf(x) === band).length}</span></td></tr>`
           : "";
-        return `${bandRow}<tr>
+        return `${bandRow}<tr class="prot-row">
         ${protCb(r)}
         <td class="prot-col-n" style="color:var(--muted);">${i + 1}</td>
         <td class="stick-col"><span class="prot-client" onclick="openClient('${r.client_id}')">${esc(r.client_name)}</span><span class="prot-fold-info">Loan ${fmtM(r.loan_amount)}${money ? " · Est. " + fmtM(r.est_commission) : ""}</span></td>
@@ -12849,7 +13070,7 @@ async function loadProtectionPage() {
           return `${stageBadge(r.stage)} ${esc(kind)}${r.lender ? " · " : " "}${lenderIcon(r.lender)}${esc(r.lender || "")}${chip ? `<div class="prot-case-prop">${chip}</div>` : ""}`;
         })()}</td>
         <td class="prot-col-loan">${fmtM(r.loan_amount)}</td>
-        <td><span class="badge ${p[0]}">${p[1]}</span>${r.protection_status === "quoted" ? " " + quoteAgeBadge((protQuoteCtx[r.case_id] || {}).protection_quoted_at) : ""}${gi ? ` <span class="badge ${gi[0]}" title="${TIP_GI}">${gi[1]}</span>` : ""}</td>
+        <td class="prot-col-status"><span class="badge ${p[0]}">${p[1]}</span>${r.protection_status === "quoted" ? " " + quoteAgeBadge((protQuoteCtx[r.case_id] || {}).protection_quoted_at) : ""}${gi ? ` <span class="badge ${gi[0]}" title="${TIP_GI}">${gi[1]}</span>` : ""}</td>
         ${money ? `<td class="prot-est prot-col-est">${fmtM(r.est_commission)}</td>` : ""}
         ${/* R6-FIX V14 — a case owned by a staff id that is not on the roster (a leaver) produced
               initials(""), i.e. an avatar with no letters in it: a solid navy circle, which now
@@ -19565,9 +19786,20 @@ function sendResultToast(res, queuedMsg) {
 /* R5-1 — the firm-wide flush is now deliberate: Owner/Administrator only, and it says out loud how
    many emails it is about to put in front of clients and who the first few are. Nothing is sent
    when the queue is empty (the old button cheerfully reported "0 sent" after a round trip). */
-$("#run-now-btn").addEventListener("click", async () => {
+/* R69 · A3/L11 — ONE run-the-queue path, two buttons.
+   The Emails page's #run-now-btn has always owned this flow: run the queueing RPCs first so the
+   number in the confirm is the number that will actually land in inboxes, name the first five
+   recipients, then flush. R69 puts a "▶ Run now" beside "Check the queue" on Today's stuck-cron
+   banner — the one place somebody actually notices the automation has stopped — and the only
+   honest way to do that is to call THIS function, with THIS confirm, rather than write a second,
+   shorter version of the same consent. The button element is passed in purely so whichever one
+   was pressed is the one that greys out while the run is in flight.
+   `after` is the caller's own repaint: the Emails page repaints itself inside runAutomation
+   (loadEmails), but Today's banner is drawn from `settings.last_cron_run_at`, which the run has
+   just moved — so the notice has to be re-rendered from a re-read or it keeps claiming the
+   automation is days stale seconds after it ran. */
+async function runQueueNow(btn, after) {
   if (!isAdminOrOwner()) return toast("Sending the whole queue is Owner / Administrator only — use the action on the case instead.");
-  const btn = $("#run-now-btn");
   if (btn) btn.disabled = true;
   try {
     /* G1I-Q1 — the confirmation used to count only the rows ALREADY in the queue, then call
@@ -19611,10 +19843,12 @@ $("#run-now-btn").addEventListener("click", async () => {
     // Unscoped = the cron's own behaviour (the queueing RPCs re-run harmlessly: everything they
     // would create has just been created and stamped). Scoped only where they could not be run.
     await runAutomation(false, queueingRan ? undefined : { queueIds: due.map((e) => e.id) });
+    if (typeof after === "function") await after();
   } finally {
     if (btn) btn.disabled = false;
   }
-});
+}
+$("#run-now-btn").addEventListener("click", () => runQueueNow($("#run-now-btn")));
 
 /* ---------- Bulk import (AI) ---------- */
 let importRows = [];
@@ -24832,6 +25066,59 @@ async function loadReports() {
      ledger drawers take their row counts off rows that are already on the page. */
   buildReportSectionNav();
   buildReportLedgerCounts();
+  /* R69 · B3/L8 — and LAST of all, once every panel above has put its table on the page. */
+  watchReportTables();
+}
+
+/* ==========================================================================
+   R69 · B3/L8 — EVERY TABLE ON REPORTS SCROLLS INSIDE ITS OWN BOX.
+
+   Measured at 390×844 as p4: eighteen tables on this page, twelve of them wider
+   than the 332px column they sit in — the adviser table 1284px, Money owed
+   1166px, the rate-end book 806px, the MI scoreboard 565px. Their panels are
+   plain <div>s with overflow visible, and `html, body { overflow-x: clip }` (the
+   M1 viewport containment) then CLIPS the overflow rather than scrolling it. So
+   the last four columns of the scoreboard did not exist on a phone: no scrollbar,
+   no cut-off cue, no way to reach them at all. That is worse than a wide page —
+   a wide page at least tells you it is wide.
+
+   Every <table> under #page-reports is put inside a .table-scroll (overflow-x:
+   auto, touch momentum, and a right-edge fade that is painted by the container's
+   own background and therefore disappears by itself once you reach the end —
+   see admin.css). Done in the DOM rather than in eighteen template strings
+   because half of these panels re-render on their own (the month picker, the
+   adviser drill-down, the ledger drawers) and a wrapper written into one
+   template would be wiped by the next innerHTML: a MutationObserver on the page
+   re-wraps whatever appears, so a panel added in a later round is covered on the
+   day it is written. The observer is installed once, does one pass per tick, and
+   its own wrapping is a no-op on the second pass, so it cannot loop.
+   ========================================================================== */
+let reportTablesObs = null;
+function wrapReportTables() {
+  const pg = document.getElementById("page-reports");
+  if (!pg) return;
+  pg.querySelectorAll("table").forEach((t) => {
+    const p = t.parentNode;
+    if (!p || !p.classList || p.classList.contains("table-scroll")) return;
+    const box = document.createElement("div");
+    box.className = "table-scroll";
+    p.insertBefore(box, t);
+    box.appendChild(t);
+  });
+}
+function watchReportTables() {
+  const pg = document.getElementById("page-reports");
+  if (!pg) return;
+  if (!reportTablesObs && typeof MutationObserver === "function") {
+    let queued = false;
+    reportTablesObs = new MutationObserver(() => {
+      if (queued) return;
+      queued = true;
+      setTimeout(() => { queued = false; wrapReportTables(); }, 0);
+    });
+    reportTablesObs.observe(pg, { childList: true, subtree: true });
+  }
+  wrapReportTables();
 }
 
 /* ==========================================================================
@@ -27870,7 +28157,7 @@ async function loadDataHealth() {
     // Defect 13: the RPC only ever returns bare counts for these two tiles. Rather than change the
     // RPC (frontend-only, existing columns), pull the offending rows client-side from cases+clients
     // so the tiles can expand into the same list-panel pattern as the other Data Health items.
-    db.from("cases").select("id,stage,rate_end_date,expected_completion_date,completed_at,created_at,submitted_at,case_kind,lender,rate_type,retention_source_case_id,loan_amount,mortgage_account_number,client_id,clients!client_id(id,first_name,last_name,phone)" + (dhPropOn ? ",property_address" : "")).order("id").limit(OWNER_ROW_CAP),
+    db.from("cases").select("id,stage,rate_end_date,expected_completion_date,completed_at,created_at,submitted_at,case_kind,lender,rate_type,retention_source_case_id,loan_amount,property_value,mortgage_account_number,client_id,clients!client_id(id,first_name,last_name,phone)" + (dhPropOn ? ",property_address" : "")).order("id").limit(OWNER_ROW_CAP),
     // T1-9/T1-26: same trick for the client-shaped checks. The RPC returns counts for "missing
     // email & phone" and nothing at all for malformed values, so read the rows and judge them here.
     db.from("clients").select("id,first_name,last_name,email,phone").order("id").limit(OWNER_ROW_CAP),
@@ -27891,7 +28178,7 @@ async function loadDataHealth() {
   if (caseRows.error && dhPropOn && isMissingColumnError(caseRows.error)) {
     PROP_ADDR_SUPPORTED = false;
     dhPropOn = false;
-    caseRows = await db.from("cases").select("id,stage,rate_end_date,expected_completion_date,completed_at,created_at,submitted_at,case_kind,lender,rate_type,retention_source_case_id,loan_amount,mortgage_account_number,client_id,clients!client_id(id,first_name,last_name,phone)").order("id").limit(OWNER_ROW_CAP);
+    caseRows = await db.from("cases").select("id,stage,rate_end_date,expected_completion_date,completed_at,created_at,submitted_at,case_kind,lender,rate_type,retention_source_case_id,loan_amount,property_value,mortgage_account_number,client_id,clients!client_id(id,first_name,last_name,phone)").order("id").limit(OWNER_ROW_CAP);
   }
   // …and the quieter shape of absence: the rows came back, without the column that was asked for.
   if (dhPropOn && Array.isArray(caseRows.data) && caseRows.data.length) {
@@ -28179,6 +28466,38 @@ async function loadDataHealth() {
   deadBook.sort((a, b) => b.overdueDays - a.overdueDays);
 
   /* ==========================================================================
+     R69 · B5/L12 — A LOAN BIGGER THAN THE PROPERTY IT IS SECURED ON.
+
+     Nothing in the app compared the two numbers, and the book already holds a
+     case at 127% (a £235k loan against a £185k value). It is nearly always a
+     typo — a value keyed in thousands, a loan pasted into the wrong box, an
+     import that mapped the columns the wrong way round — and until it is fixed
+     it quietly poisons everything downstream: the case card's LTV line, the
+     lender/product sense-check an adviser makes at a glance, and any MI that
+     ever divides one by the other. A genuine 100%+ deal (a guarantor product, a
+     let-to-buy with fees added) is rare and still worth an owner's eye, which is
+     why the tile lists rather than judges.
+
+     `property_value` is an original-schema column (see the lead-conversion note
+     beside parseLeadPropertyValue), so no feature detection is needed and it
+     rides the cases read this function already makes — the tile costs no extra
+     round trip, which is the rule for everything on this page.
+
+     not_proceeding is excluded: a dead case's numbers are not worth anybody's
+     afternoon. Completed cases are NOT excluded — a completed case with a
+     wrong value is the one that stays wrong in the back book for years. */
+  const ltvOver = allCases
+    .filter((cs) => cs.stage !== "not_proceeding"
+      && cs.loan_amount != null && cs.property_value != null
+      && Number(cs.property_value) > 0 && Number(cs.loan_amount) > Number(cs.property_value))
+    .map((cs) => ({
+      case_id: cs.id, name: caseName(cs), stage: cs.stage,
+      loan: Number(cs.loan_amount), value: Number(cs.property_value),
+      pct: Math.round((Number(cs.loan_amount) / Number(cs.property_value)) * 100),
+    }))
+    .sort((a, b) => b.pct - a.pct);
+
+  /* ==========================================================================
      R42 · F5 — A CLEAN FAULT TILE HIDES ITSELF.
 
      This row had grown to seventeen tiles, and on a tidy book most of them read zero. A zero on a
@@ -28220,6 +28539,9 @@ async function loadDataHealth() {
     <div class="kpi ${noCompletedAt.length ? "warn" : ""}${dhFault(noCompletedAt.length)} dq-clickable" id="dh-tile-nocompleted" title="Completed cases with no completion date — invisible to Reports until it's set. Click to list them"><div class="num">${noCompletedAt.length}</div><div class="lbl">Completed, no completion date ▾</div></div>
     <div class="kpi ${noMilestoneDate.length ? "warn" : ""}${dhFault(noMilestoneDate.length)} dq-clickable" id="dh-tile-milestone" title="Cases past application or offer with the milestone date (submitted_at / offer_issued_date) blank — they silently skew the Reports velocity & funnel until filled in. Click to list them."><div class="num">${noMilestoneDate.length}</div><div class="lbl">Missing application/offer date ▾</div></div>
     <div class="kpi ${deadBook.length ? "warn" : ""}${dhFault(deadBook.length)} dq-clickable" id="dh-tile-deadbook" title="Live cases still open after their expected completion date — or their rate-end date — has already passed. Likely dead or stuck, and they inflate the live pipeline until closed or revived. Click to list them."><div class="num">${deadBook.length}</div><div class="lbl">Overdue — open past a key date ▾</div></div>
+    ${/* R69 · B5/L12 — a fault tile like the ones above it: warn when it is not zero, folded
+          away by dhFault when it is, and a `▾` because it expands its list on this page. */ ""}
+    <div class="kpi ${ltvOver.length ? "warn" : ""}${dhFault(ltvOver.length)} dq-clickable" id="dh-tile-ltv" title="Cases where the loan amount is larger than the property value — almost always a typo in one of the two boxes. Click to list them."><div class="num">${ltvOver.length}</div><div class="lbl">Loan above property value ▾</div></div>
     <div class="kpi ${dq.emails_failed ? "warn" : ""}${dhFault(dq.emails_failed)} dq-clickable" id="dh-tile-failed" title="Click to open the Emails page filtered to failed sends"><div class="num">${dq.emails_failed ?? 0}</div><div class="lbl">Failed emails →</div></div>
     ${/* R6-38 — deliberately NOT a "warn" tile: a shared address is something to read, not a fault to
           clear. Absent entirely on a database with no property column. */ ""}
@@ -28422,6 +28744,20 @@ async function loadDataHealth() {
       </div>`).join("") + dhMoreNote(deadBook.length) : '<div class="empty">No open cases are past a completion or rate-end date. 👍</div>'}
   </div>`;
 
+  /* R69 · B5/L12 — the list behind the "Loan above property value" tile. Both numbers are shown
+     side by side with the percentage, because the fix is almost always obvious once you can see
+     the pair: £235,000 against £185,000 is a value keyed short, £2,350,000 against £235,000 is a
+     loan keyed long. Open the case and correct whichever one is wrong. */
+  const ltvPanel = `<div class="panel hidden" id="dh-ltv-panel">
+    <h3>Loan above property value</h3>
+    <p class="panel-sub">Cases where <strong>loan amount</strong> is bigger than <strong>property value</strong>. Nothing is wrong with the case itself — this is a sense-check on the two numbers on it, and a loan above the value is nearly always one of them mistyped or mis-imported. Cases that are not proceeding are left out. If a deal really is above 100% (a guarantor product, fees added to the loan), nothing needs changing — the row is here to be read, not cleared.</p>
+    ${ltvOver.length ? ltvOver.slice(0, DH_PANEL_CAP).map((c) => `
+      <div class="row-item">
+        <div class="row-main"><div class="t" onclick="openCase('${c.case_id}')">${esc(c.name)}</div><div class="s">${esc(STAGE_LABEL[c.stage] || c.stage)} · loan ${fmtM(c.loan)} against a value of ${fmtM(c.value)} — <strong>${c.pct}%</strong></div></div>
+        <button class="btn btn-sm" onclick="openCase('${c.case_id}')">Open</button>
+      </div>`).join("") + dhMoreNote(ltvOver.length) : '<div class="empty">Every case with both numbers on it has a loan at or below the property value. 👍</div>'}
+  </div>`;
+
   // T1-26 — the least-reachable records in the database, which previously had no list anywhere.
   const bothPanel = `<div class="panel hidden" id="dh-both-panel">
     <h3>Clients with no email and no phone</h3>
@@ -28545,6 +28881,7 @@ async function loadDataHealth() {
     <div class="grid-2">${bothPanel}${noCompletedPanel}</div>
     <div class="grid-2">${invalidEmailPanel}${invalidPhonePanel}</div>
     <div class="grid-2">${milestonePanel}${deadBookPanel}</div>
+    ${ltvPanel}
     ${dhCareOn ? `<div class="grid-2">${vulnerablePanel}${suppressedPanel}</div>` : ""}`;
 
   /* R31-C — BOOK READINESS ROLLUP. The Data-health page grew to ~13 scattered tiles; before the
@@ -28567,6 +28904,7 @@ async function loadDataHealth() {
     { label: "Completed, no completion date", count: noCompletedAt.length, tileId: "dh-tile-nocompleted" },
     { label: "Missing application/offer date", count: noMilestoneDate.length, tileId: "dh-tile-milestone" },
     { label: "Overdue — open past a key date", count: deadBook.length, tileId: "dh-tile-deadbook" },
+    { label: "Loan above property value", count: ltvOver.length, tileId: "dh-tile-ltv" },   // R69 · B5/L12
   ].filter((c) => c.count > 0).sort((a, b) => b.count - a.count);
   const dhReadinessTotal = dhReadinessChecks.reduce((n, c) => n + c.count, 0);
   const dhReadinessEl = document.getElementById("dh-readiness");
@@ -28609,6 +28947,7 @@ async function loadDataHealth() {
   wireTile("#dh-tile-nocompleted", "#dh-nocompleted-panel");
   wireTile("#dh-tile-milestone", "#dh-milestone-panel");   // R25 · MI-1
   wireTile("#dh-tile-deadbook", "#dh-deadbook-panel");   // R27
+  wireTile("#dh-tile-ltv", "#dh-ltv-panel");   // R69 · B5/L12
   wireTile("#dh-tile-both", "#dh-both-panel");
   wireTile("#dh-tile-invalid-email", "#dh-invalid-email-panel");
   wireTile("#dh-tile-invalid-phone", "#dh-invalid-phone-panel");

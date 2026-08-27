@@ -525,8 +525,19 @@ async function selectRows(page, ids) {
       return { main: clone.querySelector(".row-main").innerHTML, html: clone.outerHTML };
     }, both.caseId);
     /* The lender favicon's onerror handler writes style="display:none" at runtime, on whichever
-       surface has been on screen longest — normalised out so this compares MARKUP, not timing. */
-    const norm = (s) => String(s || "").replace(/ style="display: none;"/g, "");
+       surface has been on screen longest — normalised out so this compares MARKUP, not timing.
+
+       R69 · B1/L3 — that handler now REMOVES the failed <img> instead of hiding it, and remembers
+       the domain so later paints emit none at all. The timing skew this line has always existed to
+       absorb is therefore structural rather than an attribute: whichever of the two surfaces was
+       painted before the favicon failed still carries the whole <img class="lfav">, and the one
+       painted after carries nothing. So the tag itself is normalised out of BOTH sides — the same
+       normalisation this line already performed, one level up. Nothing else is relaxed: every
+       other byte of both rows is still compared, and a row that differs anywhere else still
+       fails. */
+    const norm = (s) => String(s || "")
+      .replace(/ style="display: none;"/g, "")
+      .replace(/<img class="lfav"[^>]*>/g, "");
     ok("§D2a · with the R64 additions removed, the page row's body is byte-identical to the drawer's",
       !!pageRow && !!drawer && norm(pageRow.main) === norm(drawer.main),
       JSON.stringify({ page: norm(pageRow && pageRow.main).slice(0, 220), drawer: norm(drawer && drawer.main).slice(0, 220) }));

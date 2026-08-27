@@ -381,18 +381,35 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
 /* …and when it DOES wrap, Accept and ✕ go over together: they are one decision about one enquiry,
    and a lone ✕ on a second line reads as a stray rather than as the other half of Accept. */
 .brief-lead-actions { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; }
-/* BUILD 7d (defect 18) — the "+N more" toggle on a grouped My Day row, and the folded-out rows it reveals. */
-.brief-more {
-  display: inline-block; margin-top: 4px; padding: 1px 0; border: none; background: none;
+/* BUILD 7d (defect 18) / R69 · A1 — the "+N more on this case" fold on a grouped My Day row, and
+   the folded rows it holds. The toggle used to be a <button> that re-rendered the whole list;
+   it is now a native <details>, so opening it costs no repaint and the marker/keyboard/AT
+   behaviour is the browser's rather than ours. The summary keeps the old link-ish weight so the
+   row still reads as one row with a quiet second line under it. */
+.brief-more { display: block; margin-top: 4px; }
+.brief-more > summary {
+  display: inline-block; padding: 1px 0; list-style: none;
   color: var(--muted); font-size: 11.5px; font-weight: 600; cursor: pointer;
 }
-.brief-more:hover { color: var(--navy); text-decoration: underline; }
+.brief-more > summary::-webkit-details-marker { display: none; }
+.brief-more > summary::before { content: "▸ "; }
+.brief-more[open] > summary::before { content: "▾ "; }
+.brief-more > summary:hover { color: var(--navy); text-decoration: underline; }
+/* The folded rows sit inside the primary row's text block, so they are pulled back out to the
+   row's own left edge and indented from it — the same stepped-in look the toggle produced when
+   its rows were siblings, without depending on them being siblings. */
+.brief-more > .brief-subrow { margin: 0 -6px 0 -8px; }
+.brief-more > .brief-subrow:first-of-type { border-top: 1px solid #eef2f6; margin-top: 4px; }
 .brief-subrow { padding-left: 26px; background: #fafbfc; }
 .brief-subrow::before { background: var(--border); opacity: .6; }
 
 /* B5 / R5-22 — the Watchtower "N snoozed" list sits below the working list, visually set apart so
    it never reads as more open problems. */
 #watchtower-snoozed { border-top: 1px dashed var(--border); margin-top: 8px; padding-top: 8px; }
+
+/* R69 · A4 — the No-next-action radar's read-bound notice. Amber, because it is not describing
+   the book: it is saying this panel cannot see all of it. */
+.unactioned-cap { color: var(--amber); font-weight: 600; }
 
 /* ---------- Dashboard cards & tabs ---------- */
 .dash-card { display: flex; flex-direction: column; height: 300px; }
@@ -1743,11 +1760,31 @@ select.task-reassign { width: auto; padding: 3px 6px; font-size: 12px; }
    slot, because the row's identity is what must never leave the screen. Nothing
    is hidden; Open / Set status / Task / Email are one horizontal scroll away and
    the scroll affordance above the table says so. */
-@media (max-width: 1560px) {
-  #prot-list-table .stick-col-right { position: static; box-shadow: none; }
-  #prot-list-table td.stick-col { z-index: 3; }
-  #prot-list-table th.stick-col { z-index: 4; }
-}
+/* R69 · B2/L7 — …and the answer above turned out to be "sticky is never legitimate here".
+   Measured on the fixtures at p4/All: the table's max-content width is 1373px (CASE 364 +
+   STATUS 374 alone are 54% of it) against a 998px scrollport at 1280 and 1218 at 1500, so
+   the Actions column was OFF-SCREEN at every width the office actually uses, reachable only
+   by a horizontal scroll nobody was told about; and at 1920 the table still wants 1540px in
+   1334, so `right:0` was back to painting the Actions cell over the ADVISER column exactly
+   as R6-B4 describes. The two text columns are now allowed to WRAP (see .prot-col-case /
+   .prot-col-status below), which brings the whole table inside its scrollport from 1280 up —
+   at which point sticky has nothing left to do and is dropped at every width rather than
+   left armed for the next time a column grows. Below 1280 the table scrolls inside
+   #prot-scroll (.prot-table-wrap, overflow-x:auto), never the page body. */
+#prot-list-table .stick-col-right { position: static; box-shadow: none; }
+#prot-list-table td.stick-col { z-index: 3; }
+#prot-list-table th.stick-col { z-index: 4; }
+/* THE TWO COLUMNS THAT ARE ALLOWED TO WRAP. .imp-table sets white-space:nowrap on every cell,
+   which is right for dates, money and the action cluster and wrong for the two that hold
+   sentences: CASE ("PRE-APPROVAL Remortgage · Halifax" plus a property chip) and STATUS (a
+   status pill, a quote-age pill and a GI pill in a row). Wrapping is not the same as
+   shrinking: at 1920, where there is room, they still render on one line. The cost is
+   measured and deliberate — a row at 1280 goes from 69px to 96px — and it buys every action
+   button being on screen without a scroll. The CLIENT cell keeps nowrap: it is the sticky
+   identity column and ellipsises at 210px (see .stick-col above), and the ACTIONS cell keeps
+   nowrap because wrapping five controls is the density trade R6-B4 already refused. */
+#prot-list-table td.prot-col-case, #prot-list-table th.prot-col-case,
+#prot-list-table td.prot-col-status, #prot-list-table th.prot-col-status { white-space: normal; }
 /* Below 1500px, fold the low-value LOAN / EST. £ columns into the Client cell on Protection,
    and drop the Updated column from the pipeline table — both stay reachable by opening the row. */
 /* white-space:normal (overriding the table's default nowrap) so this wraps onto its own line
@@ -2375,7 +2412,38 @@ th .money-basis {
 #page-reports .grid-2 { align-items: stretch; }
 #page-reports .grid-2 > .panel { display: flex; flex-direction: column; }
 #page-reports .grid-2 > .panel > .dash-scroll,
+#page-reports .grid-2 > .panel > .table-scroll:last-child,
 #page-reports .grid-2 > .panel > table:last-child { flex: 1 1 auto; }
+
+/* ---- R69 · B3/L8 — the scroll box every Reports table now sits in ---------
+   `html, body { overflow-x: clip }` means an over-wide table on this page was
+   CLIPPED, not scrolled: at 390px the MI scoreboard's last four columns simply
+   did not exist. Each table is wrapped in one of these (see wrapReportTables()
+   in app.js), which scrolls itself and leaves the page body alone.
+
+   THE FADE IS THE BACKGROUND, not a pseudo-element. An ::after inside a
+   scrolling box scrolls away with the content, and an ::after outside it needs
+   a second wrapper on every panel. The four-layer background below is the
+   standard scroll-shadow: two `local` covers painted in the panel's own white
+   travel WITH the content and hide the shadow when that edge is at its limit,
+   two `scroll` shadows stay pinned to the box. The result is a soft edge that
+   appears only while there is more table in that direction — the affordance the
+   page had none of — and costs no markup and no JavaScript.
+
+   Not scoped to #page-reports in case another page wants the same box, but only
+   Reports uses it today. */
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  background:
+    linear-gradient(to right, var(--white) 40%, rgba(255, 255, 255, 0)) 0 0 / 28px 100% no-repeat local,
+    linear-gradient(to left, var(--white) 40%, rgba(255, 255, 255, 0)) 100% 0 / 28px 100% no-repeat local,
+    linear-gradient(to right, rgba(16, 24, 40, .14), rgba(16, 24, 40, 0)) 0 0 / 14px 100% no-repeat scroll,
+    linear-gradient(to left, rgba(16, 24, 40, .14), rgba(16, 24, 40, 0)) 100% 0 / 14px 100% no-repeat scroll;
+}
+/* The table must be allowed to be wider than the box — that is the whole point — so nothing
+   here may set width:100% on it; .imp-table's own width:100% already means "at least the box". */
+.table-scroll > table { max-width: none; }
 
 /* ---- The only underlined links in the app (D6-23) -----------------------
    Every other clickable in the app is unstyled or a button; .linkish (report
@@ -3399,6 +3467,27 @@ tr.owed-hot > td { background: var(--red-bg); }
   color: inherit; font-weight: 700; text-decoration: underline; cursor: pointer; background: none; border: 0; padding: 0; font-size: inherit; font-family: inherit;
 }
 
+/* R69 · A3 — "▶ Run now" on the stuck-automation banner. A real button rather than the inline
+   link beside it, because the link navigates and this one ACTS: pressing it queues, stamps the
+   heartbeat and (unless sending is held) puts email in front of clients, and a control with that
+   much behind it should not look like a word in a sentence. */
+.dash-notice-run {
+  font: inherit; font-size: 12.5px; font-weight: 700; cursor: pointer;
+  padding: 3px 10px; border-radius: 7px; border: 1px solid currentColor;
+  background: rgba(255,255,255,0.55); color: inherit;
+}
+.dash-notice-run:hover { background: #fff; }
+.dash-notice-run:disabled { opacity: .55; cursor: default; }
+/* R69 · A2 — the collapsed banner strip (two or more notices). The summary is one line at any
+   width: on a phone this row is the whole reason the first actionable item was 1,500px down. */
+.dash-notice-fold > summary {
+  cursor: pointer; font-size: 13px; padding: 9px 14px; border-radius: 8px;
+  background: var(--amber-bg); color: var(--amber); border: 1px solid #f0d9ac;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.dash-notice-fold[open] > summary { margin-bottom: 8px; }
+.dash-notice-fold > .dash-notice + .dash-notice { margin-top: 8px; }
+
 /* R13 · M-42 — the export panel. */
 #firm-export-panel .export-warn { color: var(--amber); font-weight: 600; }
 #firm-export-result { margin-top: 10px; font-size: 12.5px; white-space: pre-wrap; }
@@ -3713,6 +3802,9 @@ tr.owed-hot > td { background: var(--red-bg); }
 .brief-sec:first-child { margin-top: 2px; }
 .brief-sec-ic { font-size: 13px; }
 .brief-sec-n { font-weight: 800; background: rgba(255,255,255,0.75); border-radius: 10px; padding: 0 8px; }
+/* R69 · A1 — the unit beside the count chip ("rows · 6 items"). Deliberately outside .brief-sec-n
+   so that chip stays a bare figure. */
+.brief-sec-unit { margin-left: 5px; font-weight: 600; letter-spacing: 0; text-transform: none; font-size: 11.5px; opacity: .8; }
 .brief-sec-why { margin-left: auto; font-weight: 500; letter-spacing: 0; text-transform: none; font-size: 11.5px; opacity: 0.75; }
 .brief-sec-hot  { background: #fdecea; color: #b3261e; border-left: 4px solid #d93025; }
 .brief-sec-warm { background: #fef3e0; color: #9a6200; border-left: 4px solid #f5a623; }
@@ -3947,6 +4039,9 @@ tr.owed-hot > td { background: var(--red-bg); }
 .ops-chip .ops-n { font-weight: 700; }
 .ops-chip.hot { background: var(--amber-bg); color: var(--amber); border-color: #f0d9ac; }
 .ops-strip .ops-sub { flex-basis: 100%; margin: 2px 0 0; }
+/* R69 · A2 — the chips' wrapper is invisible to layout at every width except the phone
+   breakpoint (see the R69 block at the end of this file), so R68's strip is unchanged here. */
+.ops-strip .ops-chips { display: contents; }
 /* ==========================================================================
    R68 · B1/M12 — the "Accept all unambiguous leads" bar above My Day, and the
    chip a skipped enquiry wears afterwards. The bar is a strip, not a panel: it
@@ -3983,3 +4078,73 @@ tr.owed-hot > td { background: var(--red-bg); }
    ========================================================================== */
 .palette-row.palette-verb .pr-sub { color: var(--muted); }
 .palette-row.palette-verb-off { opacity: .55; }
+
+/* ==========================================================================
+   R69 · A2/L2 — TODAY ON A PHONE: GET TO SOMETHING YOU CAN DO.
+
+   At 390px the first row on Today that an adviser could actually act on sat
+   ~1,170px down for an admin (~900px for an adviser): a health banner, six ops
+   chips and a paragraph about them, the page title, then five KPI tiles stacked
+   two-up — 780px of preamble before "My Day" even began. Nothing there is
+   wrong; it is simply all trying to be a headline at once on a screen that has
+   room for one.
+
+   Three changes, none of which removes a fact from the page:
+   · #kpi-row becomes ONE horizontally scrolling row of compact tiles instead
+     of a 2-column grid three rows deep. Every tile stays reachable (the strip
+     scrolls, snaps and shows a sliver of the next tile so it is obvious there
+     is more), and the row costs one tile's height instead of three.
+   · #ops-strip's chips shrink so six of them wrap onto two lines rather than
+     three, and the paragraph explaining them clamps to its first three lines —
+     the sentence that says what the strip IS survives; the sentence repeating
+     what the colours mean (which the colours already say) is what gets cut.
+     Nothing is removed from the DOM, so a screen reader still gets all of it.
+   · The banner strip's own saving is in renderDashNotices (two-or-more notices
+     collapse to one line) rather than here, because it is a fact about how many
+     banners there are, not about the width of the screen.
+
+   Everything is scoped to #page-dashboard so no other page's .kpi-row (Reports
+   has six of them) is touched, and nothing here changes the DOM order that
+   tests/r11_ux.js and tests/r41.js lock.
+   ========================================================================== */
+@media (max-width: 767px) {
+  #page-dashboard #kpi-row {
+    display: flex; flex-wrap: nowrap; gap: 8px;
+    overflow-x: auto; -webkit-overflow-scrolling: touch;
+    scroll-snap-type: x proximity;
+    max-width: 100%; margin-bottom: 12px; padding-bottom: 4px;
+  }
+  /* 44% (not 50%) on purpose: the next tile's edge is always visible, which is the only
+     honest way a scrolling strip says "there is more here" without a scrollbar. */
+  #page-dashboard #kpi-row > .kpi {
+    flex: 0 0 44%; min-width: 0; scroll-snap-align: start;
+    padding: 9px 11px 8px;
+  }
+  #page-dashboard #kpi-row > .kpi .num { font-size: 19px; }
+  #page-dashboard #kpi-row > .kpi .lbl { font-size: 10.5px; }
+  #page-dashboard #kpi-row > .kpi .kpi-delta { font-size: 10px; }
+  #ops-strip { gap: 6px; margin-bottom: 8px; }
+  /* Six chips whose labels are sentences ("document chases exhausted") wrapped onto FOUR lines
+     at 390px. One scrolling line instead: every chip is still reachable and still says the same
+     words, and the strip costs one line plus its explanation rather than five. */
+  #ops-strip .ops-chips {
+    display: flex; flex-wrap: nowrap; gap: 6px; width: 100%;
+    overflow-x: auto; -webkit-overflow-scrolling: touch; padding-bottom: 3px;
+  }
+  #ops-strip .ops-chip { flex: 0 0 auto; font-size: 11px; padding: 4px 8px; gap: 4px; white-space: nowrap; }
+  #ops-strip .ops-sub {
+    display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+    overflow: hidden; font-size: 11.5px; line-height: 1.45;
+  }
+  /* The banner's "why" sentence and My Day's two explanatory subtitles clamp rather than
+     disappear: the first line of each is the fact, the rest is the reasoning, and on a phone the
+     reasoning is what stands between the reader and their first job of the day. Nothing leaves
+     the DOM, so assistive tech and every test that reads .textContent still get all of it. */
+  .dash-notice .dash-notice-why { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  #briefing-group-sub {
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  #leads-accept-bar-sub {
+    display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+  }
+}

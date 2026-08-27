@@ -163,6 +163,12 @@
           <button class="btn btn-ghost btn-sm" id="sync-outlook-btn" aria-label="Sync Outlook inbox">⟳ Sync Outlook</button>
         </h3>
         <p class="panel-sub" id="briefing-date"></p>
+        <!-- R69 · A1/M4 — the grouping sentence. Written by renderBriefing and HIDDEN whenever
+             nothing is grouped, because a subtitle that explains a fold nobody can see is how a
+             panel subtitle stops being read. Its own element rather than more words on
+             #briefing-date: that line is the date, several suites read it as the date, and the
+             two facts change on different clocks. -->
+        <p class="panel-sub hidden" id="briefing-group-sub"></p>
         <!-- R68 · B1/M12 — the "accept every unambiguous lead" bar. Deliberately its OWN element
              rather than a row inside #briefing-list: that list is the briefing's rows and several
              suites count them, and a control that is about the whole inbox is not one of its
@@ -198,6 +204,10 @@
         <!-- R63 · H1c — the membership rule changed and the sentence had to change with it: a case
              whose only open task is a step from an EARLIER stage has no next action for where it
              actually is, and that case used to be invisible here purely because the task existed. -->
+        <!-- R69 · A4/L10 — the read-bound notice. Normally hidden; written by loadUnactioned when
+             a read comes back holding exactly OWNER_ROW_CAP rows, i.e. when it may have been
+             truncated and the radar can no longer claim to describe the whole book. -->
+        <p class="panel-sub unactioned-cap hidden" id="unactioned-cap-notice"></p>
         <p class="panel-sub">Live cases with nothing open for the stage they are actually at, and no note or event in the last 7 days — before they drift into "stalled". A case whose only open task is a leftover from an earlier stage counts too, and says so. Open one and give it a next step.</p>
         <div id="unactioned-list" class="dash-scroll"></div>
       </div>
