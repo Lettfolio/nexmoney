@@ -173,6 +173,33 @@ const boxes = (page, sel) => page.evaluate((s) => [...document.querySelectorAll(
     ok("A1f · pressing it opens the list in full", opened.maxH === "none" && opened.full === true, JSON.stringify(opened));
     ok("A1g · …and offers the way back", /Show less/.test(opened.foot), opened.foot);
 
+    /* R73-HF1 — production regression: measured mid-boot the CSS cap read 0px, and applyDashCage
+       wrote that zero back as an inline max-height nothing re-measured — My Day rendered as a
+       footer and no rows. Reproduce the failed measurement by zeroing the CSS cap for one call:
+       the function must refuse to write a sub-160px inline cap and must recover by itself once
+       the cap measures honestly again. */
+    const hf1 = await page.evaluate(async () => {
+      window.dashCageOpen["briefing-list"] = false;
+      const style = document.createElement("style");
+      style.id = "hf1-zero-cap";
+      style.textContent = "#briefing-list { max-height: 0px !important; }";
+      document.head.appendChild(style);
+      applyDashCage("briefing-list", null);
+      const during = {
+        inline: document.getElementById("briefing-list").style.maxHeight,
+        foot: !!document.getElementById("briefing-list-cage"),
+      };
+      style.remove();
+      // the deferred re-measure runs on a double rAF; give it a few frames
+      await new Promise((r) => setTimeout(r, 250));
+      const l = document.getElementById("briefing-list");
+      return { during, after: { inline: l.style.maxHeight, clientH: l.clientHeight, foot: !!document.getElementById("briefing-list-cage") } };
+    });
+    ok("A1h (R73-HF1) · a failed 0px measurement never becomes an inline cap",
+      hf1.during.inline === "" && hf1.during.foot === false, JSON.stringify(hf1.during));
+    ok("A1i (R73-HF1) · …and the cage re-measures itself once the cap is honest again",
+      parseInt(hf1.after.inline, 10) >= 160 && hf1.after.clientH >= 160 && hf1.after.foot === true, JSON.stringify(hf1.after));
+
     const radar = await page.evaluate(() => {
       const l = document.getElementById("unactioned-list");
       const foot = document.getElementById("unactioned-list-cage");

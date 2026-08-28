@@ -10004,6 +10004,7 @@ const DASH_CAGE_COUNT_SEL = {
   "unactioned-list": ".row-item",
 };
 const DASH_CAGE_LAST = {};
+const DASH_CAGE_RETRY = {};   // R73-HF1 — per-list count of deferred re-measures (see below)
 function applyDashCage(listId, total, unit) {
   const list = document.getElementById(listId);
   if (!list) return;
@@ -10025,6 +10026,22 @@ function applyDashCage(listId, total, unit) {
   list.style.maxHeight = "";
   const capH = list.clientHeight;
   const fullH = list.scrollHeight;
+  /* R73-HF1 — live-verify caught My Day locked at an inline max-height:0 on production: measured
+     mid-boot (fonts and the page's own paint still settling) the cap can read 0, and both the
+     row walk and the single-row rescue below then faithfully wrote that zero back as an inline
+     cap that nothing ever re-measured — the firm's primary work list rendered as a footer and no
+     rows. A cap under 160px is not a measurement, it is a failed one: leave the CSS cap in
+     charge, take the furniture down, and try again next frame (three times at most — a genuinely
+     hidden list is already caught by the offsetParent guard above, so a persistent tiny reading
+     means the viewport really is that small and the CSS cap is the right answer anyway). */
+  if (capH < 160) {
+    if (foot) { foot.remove(); foot = null; }
+    DASH_CAGE_RETRY[listId] = (DASH_CAGE_RETRY[listId] || 0) + 1;
+    if (DASH_CAGE_RETRY[listId] <= 3)
+      requestAnimationFrame(() => requestAnimationFrame(() => applyDashCage(listId, null)));
+    return;
+  }
+  DASH_CAGE_RETRY[listId] = 0;
   /* Nothing to cage: no fade, no button, no inline height. A short day renders exactly as it
      always did — furniture is for lists that need it (R61's rule, still the rule). */
   if (fullH <= capH + 2) {
@@ -10056,7 +10073,9 @@ function applyDashCage(listId, total, unit) {
   // A single row taller than the whole cap must still show: never cut above the first row.
   if (!fits && rows.length) { fits = rows.filter((el) => el.matches(countSel)).length ? 1 : 0; cut = capH; }
   const more = Math.max(0, (total || 0) - fits);
-  list.style.maxHeight = open ? "none" : cut + "px";
+  /* R73-HF1 belt-and-braces: whatever the walk concluded, an inline cap below one visible row is
+     never a defensible answer for a list we already know overflows. */
+  list.style.maxHeight = open ? "none" : Math.max(cut, 160) + "px";
   if (!foot) {
     foot = document.createElement("div");
     foot.id = footId;
