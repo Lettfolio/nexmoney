@@ -190,8 +190,16 @@ const openDrawer = async (page, panelId) => {
    ------------------------------------------------------------------------- */
 const CASE_STAGE_PLAYBOOK = {
   enquiry: [
-    { title: "Qualify enquiry — budget, timeline, goal", dueOffsetDays: 0 },
-    { title: "Book fact-find appointment", dueOffsetDays: 2 },
+    /* R71: kind-gated now — a product transfer at Enquiry gets its own three steps instead (the
+       dated "Ring client — rate ends <date>" call and its follow-ups; tests/r71_backfill.js §C).
+       §A's stage x kind matrix does not pair Enquiry with a product transfer, so nothing here
+       reads the PT set; it is spelled out anyway so this map stays a true statement of the spec.
+       (Its dueOffsetDays are the no-rate-end fallbacks — the real dating is r71_backfill.js §C's.) */
+    { title: "Qualify enquiry — budget, timeline, goal", dueOffsetDays: 0, notKinds: ["product_transfer"] },
+    { title: "Book fact-find appointment", dueOffsetDays: 2, notKinds: ["product_transfer"] },
+    { title: "Ring client — rate ends soon", dueOffsetDays: 3, onlyKinds: ["product_transfer"] },
+    { title: "Confirm current lender + balance", dueOffsetDays: 4, onlyKinds: ["product_transfer"] },
+    { title: "Issue recommendation", dueOffsetDays: 7, onlyKinds: ["product_transfer"] },
   ],
   fact_find: [
     { title: "Complete fact-find", dueOffsetDays: 1 },
@@ -207,6 +215,11 @@ const CASE_STAGE_PLAYBOOK = {
     { title: "Chase outstanding documents", dueOffsetDays: 3 },
     { title: "Instruct valuation", dueOffsetDays: 2, notKinds: ["product_transfer"] },
     { title: "Confirm ICR / rental income", dueOffsetDays: 1, onlyKinds: ["buy_to_let"] },
+    /* R71: the three file artefacts (panel M1), every kind. Deliberate contract change — the
+       assertions below still recompute from THIS map. */
+    { title: "Save the illustration/ESIS to the case file", dueOffsetDays: 1 },
+    { title: "Save the research/sourcing evidence", dueOffsetDays: 2 },
+    { title: "Draft + save the suitability letter", dueOffsetDays: 5 },
   ],
   offer: [
     { title: "Check mortgage offer terms", dueOffsetDays: 0 },
@@ -383,7 +396,8 @@ const isoDaysAgo = (n) => new Date(Date.now() - n * DAY_MS).toISOString();
       const anyAddBtnLeft = await page.evaluate(() => !!document.querySelector(".playbook-add"));
       ok("B4 · no \"+ Add\" buttons remain — every step shows ✓ added", !anyAddBtnLeft);
 
-      // B5 — Add all on a fresh multi-step stage (application x buy_to_let, 4 steps) in one go.
+      // B5 — Add all on a fresh multi-step stage (application x buy_to_let — R71: 7 steps now, was
+      // 4 before the three file-artefact steps) in one go. The count is recomputed, not hardcoded.
       const b5 = await mkClientCase(page, { first: "Add", last: "AllFresh", case_kind: "buy_to_let", stage: "application", assigned_to: "p2" });
       await openCase(page, b5.caseId);
       await page.click("#playbook-add-all");

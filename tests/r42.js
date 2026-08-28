@@ -187,6 +187,31 @@ async function insertDeadbookCase(page, daysAgo) {
     return cs.id;
   }, daysAgo);
 }
+/* R71: the companion to insertDeadbookCase, for R71's #dh-tile-loan ("Completed — no loan
+   amount"). The base fixture has NO completed case with a blank loan amount, so that tile is
+   genuinely clean at rest — which is why §J1a/§J5a below now expect TWO clean tiles. §J5's whole
+   claim is "the toggle disappears once nothing is left clean", so it has to be able to clear this
+   one too. Mortgage-shaped on purpose (a purchase with a mortgage account number): the tile
+   deliberately leaves protection-only records out, so a kind-"other" case with no account number
+   would not count and this seed would prove nothing. */
+async function insertNoLoanCase(page) {
+  return page.evaluate(async () => {
+    const db = window.__mockDb;
+    const email = `r42.noloan.${Math.random().toString(36).slice(2, 9)}@example.com`;
+    const { data: cl, error: clErr } = await db.from("clients")
+      .insert({ first_name: "R42NoLoan", last_name: "Seed" + Date.now(), email, phone: "07700900001" })
+      .select("id").single();
+    if (clErr) throw new Error("client insert: " + clErr.message);
+    const past = new Date(Date.now() - 40 * 86400000).toISOString().slice(0, 10);
+    const { data: cs, error: csErr } = await db.from("cases")
+      .insert({ client_id: cl.id, case_kind: "purchase", stage: "completed", loan_amount: null,
+        mortgage_account_number: "MA-R42-" + Date.now(), property_address: "7 Seed Road, Poole BH12 7AA",
+        completed_at: past, rate_end_date: past })
+      .select("id").single();
+    if (csErr) throw new Error("case insert: " + csErr.message);
+    return cs.id;
+  });
+}
 /* Wipes every case (waitingdocs/sharedprop both fall to 0 with no live cases to compute them
    over) and neutralises every client's is_vulnerable/suppress_automation flag (vulnerable/
    suppressed both fall to 0 too) WITHOUT deleting a single client row — a straight port of
@@ -601,7 +626,11 @@ const EMAILS_R9_NOTE_TEXT = "An unanswered review request is followed up once. A
       // deliberately shaped so #dh-tile-deadbook is the ONE fault tile sitting at zero (see the
       // R42 known-broken repair to tests/r27.js §A, which hits this exact tile the exact same way).
       const cleanIds = await page.$$eval("#dh-kpi-row .kpi.dh-clean", (els) => els.map((e) => e.id));
-      eq("§J1a · fixture sanity — exactly one clean fault tile, #dh-tile-deadbook", cleanIds, ["dh-tile-deadbook"]);
+      /* R71: TWO clean fault tiles now, not one. R71 added #dh-tile-loan ("Completed — no loan
+         amount") and the base fixture contains no completed case with a blank loan amount, so it
+         sits at a genuine zero exactly the way #dh-tile-deadbook does. The assertion this section
+         actually makes — a zero-count fault tile folds itself away — is unchanged. */
+      eq("§J1a · fixture sanity — exactly two clean fault tiles, #dh-tile-deadbook and #dh-tile-loan", cleanIds, ["dh-tile-deadbook", "dh-tile-loan"]);
 
       const tileVisBefore = await page.$eval("#dh-tile-deadbook", (e) => e.offsetParent !== null);
       ok("§J1b · #dh-tile-deadbook starts hidden (display:none via .dh-clean)", !tileVisBefore);
@@ -611,7 +640,7 @@ const EMAILS_R9_NOTE_TEXT = "An unanswered review request is followed up once. A
       const ariaBefore = await page.$eval("#dh-clean-toggle", (e) => e.getAttribute("aria-expanded"));
       eq("§J1d · …starts aria-expanded=false", ariaBefore, "false");
       const lblBefore = await page.$eval("#dh-clean-toggle-lbl", (e) => e.textContent);
-      eq("§J1e · …labelled \"✓ 1 check clean ▸\"", lblBefore, "✓ 1 check clean ▸");
+      eq("§J1e · …labelled \"✓ 2 checks clean ▸\"", lblBefore, "✓ 2 checks clean ▸");   // R71: two clean tiles, see §J1a
 
       await page.click("#dh-clean-toggle");
       await wait(page, 250);
@@ -631,7 +660,7 @@ const EMAILS_R9_NOTE_TEXT = "An unanswered review request is followed up once. A
       const ariaCollapsed = await page.$eval("#dh-clean-toggle", (e) => e.getAttribute("aria-expanded"));
       eq("§J1j · Enter on the focused toggle collapses it again (aria-expanded=false)", ariaCollapsed, "false");
       const lblCollapsed = await page.$eval("#dh-clean-toggle-lbl", (e) => e.textContent);
-      eq("§J1k · …and the label reverts to \"✓ 1 check clean ▸\"", lblCollapsed, "✓ 1 check clean ▸");
+      eq("§J1k · …and the label reverts to \"✓ 2 checks clean ▸\"", lblCollapsed, "✓ 2 checks clean ▸");   // R71: two clean tiles, see §J1a
       const tileVisCollapsed = await page.$eval("#dh-tile-deadbook", (e) => e.offsetParent !== null);
       ok("§J1l · #dh-tile-deadbook is hidden again", !tileVisCollapsed);
 
@@ -704,9 +733,14 @@ const EMAILS_R9_NOTE_TEXT = "An unanswered review request is followed up once. A
          are fault tiles", not a claim that the page may never gain another; the clean⇔absent rule
          it exists to test is applied to the new tile exactly as to the other eleven, and no
          assertion below is weakened or removed. */
+      /* R71: three tiles added to the ground truth — #dh-tile-address and #dh-tile-loan (B2:
+         completed cases with no property address / no loan amount) and #dh-tile-completeness
+         (B4: live cases with file gaps). All three are FAULT tiles that appear in #dh-readiness,
+         so all three belong in this list; the informational tiles are still deliberately absent. */
       const READINESS_TILE_IDS = ["dh-tile-email", "dh-tile-phone", "dh-tile-both", "dh-tile-invalid-email",
         "dh-tile-invalid-phone", "dh-tile-unassigned", "dh-tile-nofee", "dh-tile-rateend",
-        "dh-tile-nocompleted", "dh-tile-milestone", "dh-tile-deadbook", "dh-tile-ltv"];
+        "dh-tile-nocompleted", "dh-tile-milestone", "dh-tile-deadbook", "dh-tile-ltv",
+        "dh-tile-address", "dh-tile-loan", "dh-tile-completeness"];
       const cleanStates = await page.evaluate((ids) => Object.fromEntries(ids.map((id) => [id, document.getElementById(id).classList.contains("dh-clean")])), READINESS_TILE_IDS);
       const items = await readinessItems(page);
       const listedIds = new Set(items.map((it) => it.tileId));
@@ -730,12 +764,13 @@ const EMAILS_R9_NOTE_TEXT = "An unanswered review request is followed up once. A
       await goto(page, "data", 2200);
 
       const cleanBefore = await page.$$eval("#dh-kpi-row .kpi.dh-clean", (els) => els.map((e) => e.id));
-      eq("§J5a · fixture sanity — the one clean tile is #dh-tile-deadbook, same as §J1", cleanBefore, ["dh-tile-deadbook"]);
+      eq("§J5a · fixture sanity — the two clean tiles are #dh-tile-deadbook and #dh-tile-loan, same as §J1", cleanBefore, ["dh-tile-deadbook", "dh-tile-loan"]);   // R71: see §J1a
       ok("§J5b · fixture sanity — the toggle exists while something is clean", !!(await page.$("#dh-clean-toggle")));
 
-      // Seed exactly one deadBook-matching case — turns the sole clean tile non-clean, leaving
-      // dhCleanN at 0.
+      // Seed exactly one case per clean tile — turns each of them non-clean, leaving dhCleanN at 0.
+      // R71: a second seed is needed now that #dh-tile-loan is clean at rest too (see §J1a).
       await insertDeadbookCase(page, 90);
+      await insertNoLoanCase(page);
       await goto(page, "data", 2200);
 
       const cleanAfter = await page.$$eval("#dh-kpi-row .kpi.dh-clean", (els) => els.map((e) => e.id));

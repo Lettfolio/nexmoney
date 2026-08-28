@@ -11104,10 +11104,49 @@ const CASE_SECTION_RULES = {
    those. Product transfers skip valuation / solicitor / purchase-side steps and
    stay lean. Stage tokens match STAGES; not_proceeding has no entry (nothing to
    suggest), so the panel simply does not render there. */
+/* ==========================================================================
+   R71 · A2 — A PRODUCT TRANSFER IS NOT A WEBSITE ENQUIRY.
+
+   Every Enquiry-stage case got the website-lead script: "Qualify enquiry —
+   budget, timeline, goal" and "Book fact-find appointment". For 105 of the 134
+   live cases in production that is the wrong script entirely: they are Daniel's
+   product-transfer pipeline, imported from a spreadsheet in July. There is
+   nothing to qualify (the client already has the mortgage, with a lender and a
+   balance on file) and nothing to fact-find (the fact find was done when the
+   mortgage was written). The one thing that decides what happens — and WHEN —
+   is the rate-end date, and no step mentioned it.
+
+   So Enquiry now carries TWO sets. The website steps keep every kind except
+   product transfer (`notKinds`), and product transfers get their own three
+   (`onlyKinds`), in the order the call actually goes:
+     · ring the client, dated off the rate end (see playbookRateEndCallDue);
+     · confirm what they are on today, the day after that call;
+     · issue the recommendation a week out.
+   Nothing else about the playbook machinery changes: they are matched, deduped,
+   written and aged exactly like any other step (see playbookStepMatchesTitle and
+   PLAYBOOK_TITLE_PREFIX_IDX for the one wrinkle a dated TITLE introduces).
+   ========================================================================== */
+// The dated call step's title is built, not fixed — "Ring client — rate ends 14 Mar 2027" is a
+// task an adviser can act on from the list alone, which "…rate ends soon" is not. `titlePrefix` is
+// what every title match uses instead of the whole string; `title` is the fallback wording for a
+// case whose rate end is not on file (which is what a product transfer with no date IS: unknown).
+const PT_RATE_CALL_PREFIX = "Ring client — rate ends";
+// How far BEFORE the rate end the call should happen at the latest: six weeks. A product transfer
+// offer is typically available three months out and the paperwork takes days, so six weeks is late
+// enough to be a real conversation and early enough that nothing is lost if the client wants to
+// think. Only ever pulls the call FORWARD — see playbookRateEndCallDue.
+const PT_RATE_CALL_LEAD_DAYS = 42;
+// …and how long the call may wait when the rate end is far away or unknown.
+const PT_RATE_CALL_MAX_WAIT_DAYS = 3;
 const CASE_STAGE_PLAYBOOK = {
   enquiry: [
-    { title: "Qualify enquiry — budget, timeline, goal", dueOffsetDays: 0 },
-    { title: "Book fact-find appointment", dueOffsetDays: 2 },
+    { title: "Qualify enquiry — budget, timeline, goal", dueOffsetDays: 0, notKinds: ["product_transfer"] },
+    { title: "Book fact-find appointment", dueOffsetDays: 2, notKinds: ["product_transfer"] },
+    /* R71 · A2 — the product-transfer set. `dueRule` is resolved by playbookStepPlan; the
+       dueOffsetDays on each is the plain-offset fallback used when there is no rate end at all. */
+    { title: PT_RATE_CALL_PREFIX + " soon", titlePrefix: PT_RATE_CALL_PREFIX, dueOffsetDays: PT_RATE_CALL_MAX_WAIT_DAYS, dueRule: "rate_end_call", onlyKinds: ["product_transfer"] },
+    { title: "Confirm current lender + balance", dueOffsetDays: PT_RATE_CALL_MAX_WAIT_DAYS + 1, dueRule: "after_rate_end_call", dueAfterDays: 1, onlyKinds: ["product_transfer"] },
+    { title: "Issue recommendation", dueOffsetDays: 7, onlyKinds: ["product_transfer"] },
   ],
   fact_find: [
     { title: "Complete fact-find", dueOffsetDays: 1 },
@@ -11123,6 +11162,29 @@ const CASE_STAGE_PLAYBOOK = {
     { title: "Chase outstanding documents", dueOffsetDays: 3 },
     { title: "Instruct valuation", dueOffsetDays: 2, notKinds: ["product_transfer"] },
     { title: "Confirm ICR / rental income", dueOffsetDays: 1, onlyKinds: ["buy_to_let"] },
+    /* ======================================================================
+       R71 · A3 (panel M1) — THE THREE FILE ARTEFACTS BECOME STEPS.
+
+       The case Files empty state has always named "an illustration, the
+       research, the suitability letter" as the three things a file check asks
+       for first — and in production there are ZERO files on ZERO cases, because
+       naming them in an empty state is not the same as asking anybody for them.
+       A case could reach Exchange with none of the three on file and nothing in
+       the app ever mentioned it.
+
+       These are STEPS, NOT A GATE, deliberately: the protection gate exists
+       because a missed protection conversation is a regulatory failure with a
+       named client behind it, whereas a suitability letter written on the
+       Tuesday instead of the Monday is late paperwork. A gate here would stop
+       real cases moving for a filing job; a task says the same thing without
+       blocking anybody, appears on the adviser's own list, and rides the bulk
+       back-fill verb (R71 · A1) onto every live case at Application already.
+       Application, not Offer: the illustration and the research are what the
+       application was BUILT from, so by the time an offer lands they are late.
+       ====================================================================== */
+    { title: "Save the illustration/ESIS to the case file", dueOffsetDays: 1 },
+    { title: "Save the research/sourcing evidence", dueOffsetDays: 2 },
+    { title: "Draft + save the suitability letter", dueOffsetDays: 5 },
   ],
   offer: [
     { title: "Check mortgage offer terms", dueOffsetDays: 0 },
@@ -11146,6 +11208,77 @@ function stagePlaybookItems(stage, kind) {
     (!it.onlyKinds || it.onlyKinds.includes(kind)));
 }
 const playbookTitleKey = (t) => String(t == null ? "" : t).trim().toLowerCase();
+/* ==========================================================================
+   R71 · A2 — RESOLVING A STEP AGAINST ONE CASE.
+
+   Until this round every step was a constant: one title, one offset from today,
+   and title equality was the whole of the dedupe rule. The product-transfer
+   call step is neither — its title carries the rate-end date and its due date is
+   computed from that date — so the two readings a step needs (what is it CALLED
+   on this case, and when is it DUE on this case) are pulled out here, once, and
+   every writer and renderer goes through them. Nothing else changes: a step with
+   no `titlePrefix` and no `dueRule` resolves to exactly the title and exactly the
+   `localDateStr(now + offset days)` it always did, byte for byte.
+   ========================================================================== */
+/* A YYYY-MM-DD N days from another YYYY-MM-DD. Built the way tomorrowDateStr builds tomorrow —
+   noon on the base date, walk the day, format the fields — so it is a Europe/London calendar walk
+   and never a UTC one (the 23:00–00:00 trap every dated suite in this harness documents). */
+function playbookDateShift(baseStr, days) {
+  const d = new Date((baseStr || localDateStr()) + "T12:00:00");
+  d.setDate(d.getDate() + (Number(days) || 0));
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+/* WHEN THE PRODUCT-TRANSFER CALL IS DUE, and the reasoning is the whole point of the step:
+     · at the LATEST three days from now — this is a call, not a diary entry, and a back-filled
+       book of 105 of them still has to be worked this week;
+     · but SIX WEEKS BEFORE THE RATE ENDS at the latest of all, whichever of the two is sooner —
+       a rate ending in nine days does not wait three more;
+     · and NEVER IN THE PAST. A rate that ended last March would otherwise produce a task dated
+       2026-02-… on the day it is written, which reads as an app bug rather than an urgent call.
+       Clamped to today, which is the honest answer: ring them today.
+   With no rate end on file there is nothing to pull the date forward, so it is simply today + 3. */
+function playbookRateEndCallDue(rateEnd, today) {
+  const base = today || localDateStr();
+  const latest = playbookDateShift(base, PT_RATE_CALL_MAX_WAIT_DAYS);
+  if (!rateEnd) return latest;
+  const lead = playbookDateShift(String(rateEnd).slice(0, 10), -PT_RATE_CALL_LEAD_DAYS);
+  const pick = lead < latest ? lead : latest;              // ISO date strings compare correctly
+  return pick < base ? base : pick;                        // never in the past
+}
+// What this step is CALLED on this case. Dated where the case has a date, honestly vague where not.
+function playbookStepTitle(item, rateEnd) {
+  if (!item) return "";
+  if (item.titlePrefix && rateEnd) return `${item.titlePrefix} ${fmtD(String(rateEnd).slice(0, 10))}`;
+  return item.title;
+}
+/* Does an existing task title BELONG to this step? Exact key match for every ordinary step (R63's
+   rule, untouched); prefix match for a step whose title carries a date, because "Ring client — rate
+   ends 14 Mar 2027" and "…12 Apr 2027" are the same step on a case whose rate end was corrected,
+   and writing both would be exactly the duplication the idempotency rule exists to stop. Same
+   shape as the R65 solicitor-chase preset's `openPrefix`. */
+function playbookStepMatchesTitle(item, title) {
+  if (!item) return false;
+  const k = playbookTitleKey(title);
+  if (item.titlePrefix) return k.startsWith(playbookTitleKey(item.titlePrefix));
+  return k === playbookTitleKey(item.title);
+}
+/* The applicable steps for one stage × kind RESOLVED against one case: [{ item, title, due }].
+   `ctx.rateEnd` is the case's rate_end_date (null/absent is fine); `ctx.today` exists so a caller
+   with a date already in hand does not re-derive it mid-loop and straddle midnight. */
+function playbookStepPlan(stage, kind, ctx) {
+  const o = ctx || {};
+  const today = o.today || localDateStr();
+  const rateEnd = o.rateEnd ? String(o.rateEnd).slice(0, 10) : null;
+  let callDue = null;
+  return stagePlaybookItems(stage, kind).map((it) => {
+    let due;
+    if (it.dueRule === "rate_end_call") { due = playbookRateEndCallDue(rateEnd, today); callDue = due; }
+    else if (it.dueRule === "after_rate_end_call") {
+      due = playbookDateShift(callDue || playbookRateEndCallDue(rateEnd, today), it.dueAfterDays || 1);
+    } else due = localDateStr(Date.now() + it.dueOffsetDays * 86400000);
+    return { item: it, title: playbookStepTitle(it, rateEnd), due };
+  });
+}
 /* ==========================================================================
    R63 · H1a/H1b — THE PLAYBOOK STOPS BEING ADVISORY.
 
@@ -11196,12 +11329,27 @@ async function autoAddStagePlaybookTasks(caseId, stage, kind, opts = {}) {
   const out = { added: 0, titles: [], error: null, off: false };
   if (!caseId || !stage) return out;
   if (!playbookAutoTasksOn()) { out.off = true; return out; }
-  const items = stagePlaybookItems(stage, kind)
+  const applicable = stagePlaybookItems(stage, kind)
     .filter((it) => !PLAYBOOK_TRIGGER_OWNED_RE.test(String(it.title || "")));
-  if (!items.length) return out;                       // not_proceeding, or every step filtered out
+  if (!applicable.length) return out;                  // not_proceeding, or every step filtered out
+  /* R71 · A2 — HOW THE WRITER GETS THE RATE END. The product-transfer call step is dated off the
+     case's own rate_end_date, and this writer's callers hold that fact in three different states:
+     moveCaseToStage already has the case row (pass it), acceptLead is creating a case that cannot
+     have one yet (pass null), and the bulk back-fill has read the whole selection in one go (pass
+     it). So `opts.rateEndDate` is ACCEPTED where the caller knows, and FETCHED — one narrow read,
+     and only when a step of this stage×kind actually needs it — where it does not. A caller that
+     passes null is stating "there is none", which is not the same as not knowing. */
+  let rateEnd = opts.rateEndDate;
+  const needsRateEnd = applicable.some((it) => it.titlePrefix || it.dueRule);
+  if (needsRateEnd && rateEnd === undefined) {
+    const { data: cr } = await db.from("cases").select("rate_end_date").eq("id", caseId).maybeSingle();
+    rateEnd = (cr && cr.rate_end_date) || null;
+  }
+  const plan = playbookStepPlan(stage, kind, { rateEnd: rateEnd || null })
+    .filter((p) => !PLAYBOOK_TRIGGER_OWNED_RE.test(String(p.title || "")));
   const open = await softRows(db.from("case_tasks").select("id,title,done_at").eq("case_id", caseId).is("done_at", null));
-  const have = new Set(open.filter((t) => t && !t.done_at).map((t) => playbookTitleKey(t.title)));
-  const toAdd = items.filter((it) => !have.has(playbookTitleKey(it.title)));
+  const openTitles = open.filter((t) => t && !t.done_at).map((t) => t.title);
+  const toAdd = plan.filter((p) => !openTitles.some((t) => playbookStepMatchesTitle(p.item, t)));
   if (!toAdd.length) return out;
   let createdBy = opts.createdBy;
   if (createdBy === undefined) {
@@ -11209,9 +11357,8 @@ async function autoAddStagePlaybookTasks(caseId, stage, kind, opts = {}) {
     createdBy = (gu && gu.data && gu.data.user && gu.data.user.id) || null;
   }
   const assignee = opts.assignee || createdBy || null;
-  const rows = toAdd.map((it) => ({
-    case_id: caseId, title: it.title,
-    due_date: localDateStr(Date.now() + it.dueOffsetDays * 86400000),
+  const rows = toAdd.map((p) => ({
+    case_id: caseId, title: p.title, due_date: p.due,
     created_by: createdBy, assigned_to: assignee,
   }));
   const { error } = await db.from("case_tasks").insert(rows);
@@ -11262,11 +11409,35 @@ const PLAYBOOK_TITLE_STAGE_IDX = (() => {
   });
   return m;
 })();
+/* R71 · A2 — and the same index for the steps whose TITLE carries a date. "Ring client — rate ends
+   14 Mar 2027" cannot be looked up by equality, but it is a playbook step like any other and the
+   stale rule has to see it: a product transfer that reached Application with that call still open
+   is holding an Enquiry step, which is exactly what this predicate exists to catch. Prefix keys,
+   checked only when the exact lookup misses, so no ordinary title's reading changes. */
+const PLAYBOOK_TITLE_PREFIX_IDX = (() => {
+  const out = [];
+  PLAYBOOK_STAGE_ORDER.forEach((st, i) => {
+    (CASE_STAGE_PLAYBOOK[st] || []).forEach((it) => {
+      if (!it.titlePrefix) return;
+      const k = playbookTitleKey(it.titlePrefix);
+      if (!out.some((e) => e[0] === k)) out.push([k, i]);
+    });
+  });
+  return out;
+})();
+// The stage index a task title belongs to, or null. Exact first, then the dated-title prefixes.
+function playbookTitleStageIdx(title) {
+  const k = playbookTitleKey(title);
+  const exact = PLAYBOOK_TITLE_STAGE_IDX[k];
+  if (exact != null) return exact;
+  const pre = PLAYBOOK_TITLE_PREFIX_IDX.find((e) => k.startsWith(e[0]));
+  return pre ? pre[1] : null;
+}
 function isStalePlaybookTask(task, caseStage) {
   if (!task || task.done_at) return false;             // a done task is history, not a next action
   const cur = PLAYBOOK_STAGE_ORDER.indexOf(caseStage);
   if (cur <= 0) return false;                          // enquiry, not_proceeding, or an unknown stage
-  const from = PLAYBOOK_TITLE_STAGE_IDX[playbookTitleKey(task.title)];
+  const from = playbookTitleStageIdx(task.title);
   return from != null && from < cur;
 }
 // The muted chip the case modal puts on such a row, and the sentence that explains it.
@@ -11277,24 +11448,27 @@ const STALE_TASK_TIP = "This is a step from an earlier stage of the case — it 
    steps (e.g. not_proceeding), which is how it stays out of the way where it would be noise. */
 function caseStageChecklistHtml(c, tasks) {
   if (!c || !c.id) return "";
-  const items = stagePlaybookItems(c.stage, c.case_kind);
-  if (!items.length) return "";
-  const openTitles = new Set((tasks || []).filter((t) => !t.done_at).map((t) => playbookTitleKey(t.title)));
+  // R71 · A2 — resolved against THIS case (the product-transfer call step's title and due date are
+  // built from its rate_end_date), so the panel shows the same words the writer would write.
+  const plan = playbookStepPlan(c.stage, c.case_kind, { rateEnd: c.rate_end_date || null });
+  if (!plan.length) return "";
+  const openTitles = (tasks || []).filter((t) => !t.done_at).map((t) => t.title);
+  const isOn = (p) => openTitles.some((t) => playbookStepMatchesTitle(p.item, t));
   const stageLbl = STAGE_LABEL[c.stage] || String(c.stage || "").replace(/_/g, " ");
-  const rows = items.map((it, i) => {
-    const added = openTitles.has(playbookTitleKey(it.title));
-    const due = localDateStr(Date.now() + it.dueOffsetDays * 86400000);
+  const rows = plan.map((p, i) => {
+    const added = isOn(p);
+    const due = p.due;
     return `<div class="row-item playbook-item" style="padding:6px 4px;">
       <div class="row-main">
-        <div${added ? ' style="color:var(--muted);"' : ""}>${esc(it.title)}</div>
+        <div${added ? ' style="color:var(--muted);"' : ""}>${esc(p.title)}</div>
         <div class="s">${added ? "already on the task list" : "suggested due " + fmtD(due)}</div>
       </div>
       ${added
         ? '<span class="badge green playbook-done" title="A matching open task already exists on this case">✓ added</span>'
-        : `<button type="button" class="btn btn-sm playbook-add" aria-label="Add task: ${esc(it.title)}" title="Add this task — due ${fmtD(due)}, assigned to the case adviser" onclick="playbookAdd('${c.id}','${c.stage}','${c.case_kind}',${i})">+ Add</button>`}
+        : `<button type="button" class="btn btn-sm playbook-add" aria-label="Add task: ${esc(p.title)}" title="Add this task — due ${fmtD(due)}, assigned to the case adviser" onclick="playbookAdd('${c.id}','${c.stage}','${c.case_kind}',${i})">+ Add</button>`}
     </div>`;
   });
-  const anyToAdd = items.some((it) => !openTitles.has(playbookTitleKey(it.title)));
+  const anyToAdd = plan.some((p) => !isOn(p));
   return `<div style="margin-top:14px;" id="case-stage-checklist">
       <h3 style="font-size:14px;">Stage checklist <span class="cs-muted" style="font-weight:400;">— suggested for ${esc(stageLbl)}</span></h3>
       ${/* R63 · H1b — the copy had to change with the behaviour. It said "Advisory — nothing is
@@ -11315,33 +11489,36 @@ function caseStageChecklistHtml(c, tasks) {
    repaints. due_date = today + the step's offset; assigned to the case's adviser (falling back to
    the actor), created_by the actor — the exact shape the modal's own Add-task uses. */
 window.playbookAdd = async function (caseId, stage, kind, idx) {
-  const it = stagePlaybookItems(stage, kind)[idx];
-  if (!it) return;
+  // R71 · A2 — the case row is read FIRST because the step's own title and due date can depend on
+  // it (the product-transfer call step is dated off rate_end_date). `idx` still indexes the same
+  // applicable-steps list caseStageChecklistHtml rendered from.
+  const { data: caseRow } = await db.from("cases").select("assigned_to,rate_end_date").eq("id", caseId).single();
+  const p = playbookStepPlan(stage, kind, { rateEnd: (caseRow && caseRow.rate_end_date) || null })[idx];
+  if (!p) return;
   const { data: openT } = await db.from("case_tasks").select("id,title").eq("case_id", caseId).is("done_at", null);
-  if ((openT || []).some((t) => playbookTitleKey(t.title) === playbookTitleKey(it.title))) {
+  if ((openT || []).some((t) => playbookStepMatchesTitle(p.item, t.title))) {
     toast("Already on the task list");
     return openCase(caseId);
   }
   const { data: { user } } = await db.auth.getUser();
-  const { data: caseRow } = await db.from("cases").select("assigned_to").eq("id", caseId).single();
   const assignee = (caseRow && caseRow.assigned_to) || (user && user.id);
-  const due = localDateStr(Date.now() + it.dueOffsetDays * 86400000);
-  const { error } = await db.from("case_tasks").insert({ case_id: caseId, title: it.title, due_date: due, created_by: user && user.id, assigned_to: assignee });
+  const due = p.due;
+  const { error } = await db.from("case_tasks").insert({ case_id: caseId, title: p.title, due_date: due, created_by: user && user.id, assigned_to: assignee });
   if (error) return toast("Couldn't add task — " + error.message);
   toast("Task added — due " + fmtD(due));
   openCase(caseId); // repaints the case's own task list AND the checklist (the added step flips to ✓ added)
 };
 // "Add all" — every applicable step not already open, in one insert. Dedupe is the same title match.
 window.playbookAddAll = async function (caseId, stage, kind) {
-  const items = stagePlaybookItems(stage, kind);
+  const { data: caseRow } = await db.from("cases").select("assigned_to,rate_end_date").eq("id", caseId).single();
+  const plan = playbookStepPlan(stage, kind, { rateEnd: (caseRow && caseRow.rate_end_date) || null });
   const { data: openT } = await db.from("case_tasks").select("id,title").eq("case_id", caseId).is("done_at", null);
-  const have = new Set((openT || []).map((t) => playbookTitleKey(t.title)));
-  const toAdd = items.filter((it) => !have.has(playbookTitleKey(it.title)));
+  const openTitles = (openT || []).map((t) => t.title);
+  const toAdd = plan.filter((p) => !openTitles.some((t) => playbookStepMatchesTitle(p.item, t)));
   if (!toAdd.length) { toast("All suggested tasks are already on the list"); return openCase(caseId); }
   const { data: { user } } = await db.auth.getUser();
-  const { data: caseRow } = await db.from("cases").select("assigned_to").eq("id", caseId).single();
   const assignee = (caseRow && caseRow.assigned_to) || (user && user.id);
-  const rows = toAdd.map((it) => ({ case_id: caseId, title: it.title, due_date: localDateStr(Date.now() + it.dueOffsetDays * 86400000), created_by: user && user.id, assigned_to: assignee }));
+  const rows = toAdd.map((p) => ({ case_id: caseId, title: p.title, due_date: p.due, created_by: user && user.id, assigned_to: assignee }));
   const { error } = await db.from("case_tasks").insert(rows);
   if (error) return toast("Couldn't add tasks — " + error.message);
   toast(`Added ${rows.length} task${rows.length === 1 ? "" : "s"}`);
@@ -11680,6 +11857,80 @@ window.refSetStatus = async function (refId, caseId, status) {
    submitted_at, offer_issued_date, exchange_date, completed_at, stage — so it
    costs no extra read and can never disagree with the fields it summarises.
    ========================================================================== */
+/* ==========================================================================
+   R71 · B4/M2 — ONE FILE-COMPLETENESS MEASURE.
+
+   The R70 panel's finding: nothing in the app answered "is this case's file
+   actually complete?". Six artefacts decide it, and each of them already exists
+   — they were just never counted together:
+
+     1. the pinned objective          (cases.objective — R57)
+     2. a document checklist at all   (case_documents rows — m10)
+     3. at least one case file        (case_files rows — R13 · M-2)
+     4. a fact find                   (fact_finds rows)
+     5. waiting_on set                (m10 — Application onwards)
+     6. expected completion date      (Offer onwards)
+
+   THE DENOMINATOR MOVES WITH THE STAGE, and that is the whole design. A case at
+   Enquiry cannot have a waiting-on state or an expected completion date, and the
+   modal itself HIDES the Files section until DIP (CASE_SECTION_RULES.files), so
+   scoring an enquiry 2/6 would be reporting the stage as a fault. Each artefact
+   declares the earliest stage at which it is fair to ask for it, and anything
+   earlier simply is not in the denominator — so "3 of 3" at Enquiry and "5 of 6"
+   at Offer both mean what they say.
+
+   A section the DATABASE does not support (no m10, no case_files table, no
+   objective column) drops out of the denominator silently for the same reason:
+   counting a case as incomplete for a column that cannot exist is a fault the
+   firm can never clear.
+
+   Inputs are passed in, never read here: the case modal hands it the rows it
+   already loaded, and Data health hands it counts derived from its own bounded
+   reads. One definition, two surfaces, no second opinion.
+   ========================================================================== */
+const CASE_COMPLETENESS_ITEMS = [
+  { key: "objective", label: "client objective", from: "enquiry", gate: "objectiveOn" },
+  { key: "checklist", label: "document checklist", from: "enquiry", gate: "docsOn" },
+  { key: "factfind", label: "fact find", from: "fact_find", gate: "factFindOn" },
+  // The modal hides the Files section before DIP (CASE_SECTION_RULES.files) — so does this.
+  { key: "files", label: "case papers on file", from: "decision_in_principle", gate: "filesOn" },
+  { key: "waiting", label: "waiting-on set", from: "application", gate: "waitingOn" },
+  { key: "expected", label: "expected completion date", from: "offer", gate: null },
+];
+function caseCompleteness(c, extras) {
+  const x = extras || {};
+  const rank = (s) => STAGES.findIndex(([k]) => k === s);
+  const stageRank = rank((c && c.stage) || "enquiry");
+  const has = {
+    objective: !!(c && c.objective && String(c.objective).trim()),
+    checklist: Number(x.docCount) > 0,
+    factfind: Number(x.factFindCount) > 0,
+    files: Number(x.fileCount) > 0,
+    waiting: !!(c && c.waiting_on),
+    expected: !!(c && c.expected_completion_date),
+  };
+  let have = 0, of = 0;
+  const missing = [];
+  CASE_COMPLETENESS_ITEMS.forEach((it) => {
+    if (it.gate && x[it.gate] === false) return;            // the database cannot hold it — not asked for
+    if (stageRank < rank(it.from)) return;                   // too early to be a gap
+    of++;
+    if (has[it.key]) have++; else missing.push(it.label);
+  });
+  return { have, of, missing };
+}
+/* The header chip. Green at full marks, amber otherwise, and the TITLE names exactly what is
+   missing — a bare "3/5" that does not say which two is a number, not an instruction. Renders
+   nothing at all where the stage/database leave no artefacts to ask for (of === 0). */
+function caseCompletenessChipHtml(c, extras) {
+  const s = caseCompleteness(c, extras);
+  if (!s.of) return "";
+  const full = s.have >= s.of;
+  const title = full
+    ? `Case file: all ${s.of} artefacts this stage asks for are on the case — objective, checklist, papers, fact find and dates as they apply.`
+    : `Case file: ${s.have} of ${s.of} artefacts this stage asks for. Missing: ${s.missing.join(", ")}. Earlier stages are not asked for artefacts they cannot have yet.`;
+  return `<span class="badge ${full ? "green" : "amber"} cs-file-chip" id="cs-file-chip" title="${esc(title)}">📁 File ${s.have}/${s.of}</span>`;
+}
 const OBJ_PLACEHOLDER = "Add the client's objective — one sentence on what this case is for";
 function objectiveLineHtml(c) {
   // Un-migrated database: select("*") doesn't return the key, so the line simply doesn't render.
@@ -12266,7 +12517,7 @@ window.moveCaseToStage = async function (caseId, targetStage, opts = {}) {
       /* R12b · W-30 — offer_expiry_date comes along so the Offer stage-entry prompt can tell
          "already recorded" from "never asked". A base column (the case form has always written it
          unconditionally), so naming it costs no feature detection. */
-      .select("id,client_id,assigned_to,stage,protection_status,completed_at,case_kind,lender,offer_expiry_date" + (propOn ? ",property_address" : "") + (refOn ? ",referrer_client_id" : "") + (seDocsOn ? ",waiting_on,solicitor_firm" : "") + ",clients!client_id(first_name,last_name)")
+      .select("id,client_id,assigned_to,stage,protection_status,completed_at,case_kind,lender,offer_expiry_date,rate_end_date" + (propOn ? ",property_address" : "") + (refOn ? ",referrer_client_id" : "") + (seDocsOn ? ",waiting_on,solicitor_firm" : "") + ",clients!client_id(first_name,last_name)")
       .eq("id", caseId).single()).data;
   }
   if (cRow && cRow.stage === targetStage) return "noop"; // no-op (e.g. dropped back on the same column)
@@ -12397,6 +12648,10 @@ window.moveCaseToStage = async function (caseId, targetStage, opts = {}) {
     const pb = await autoAddStagePlaybookTasks(caseId, targetStage, cRow && cRow.case_kind, {
       assignee: (cRow && cRow.assigned_to) || (ME && ME.id) || null,
       createdBy: (ME && ME.id) || null,
+      /* R71 · A2 — hand over the rate end where THIS row actually carries the column, and leave it
+         undefined where it does not, so the writer reads it itself rather than treating a column
+         this caller never selected as "there is no rate end" (registerClientProps's discipline). */
+      rateEndDate: cRow && Object.prototype.hasOwnProperty.call(cRow, "rate_end_date") ? (cRow.rate_end_date || null) : undefined,
     });
     playbookAdded = pb.added;
     playbookErr = pb.error || "";
@@ -12464,7 +12719,9 @@ async function bulkMoveStage(targetStage) {
   const label = STAGE_LABEL[targetStage] || targetStage;
   const propOn = await propAddrSupported();
   const { data: rows } = await inChunks(ids, (sl) => db.from("cases")
-    .select("id,stage,protection_status,completed_at,case_kind,lender" + (propOn ? ",property_address" : "") + ",clients!client_id(first_name,last_name)")
+    /* R71 · A2 — rate_end_date rides along so the playbook writer the move calls does not have to
+       go back for it once per case (the product-transfer Enquiry call step is dated off it). */
+    .select("id,stage,protection_status,completed_at,case_kind,lender,rate_end_date" + (propOn ? ",property_address" : "") + ",clients!client_id(first_name,last_name)")
     .in("id", sl));
   const byId = {}; (rows || []).forEach((r) => (byId[r.id] = r));
   // Classify exactly the way moveCaseToStage will, so the confirm can't promise one thing and the
@@ -12587,6 +12844,9 @@ function setBulkBusy(on) {
   bulkBusy = on;
   // R64 · A1 — the Retention page's bar runs the SAME verbs, so it takes the same in-flight guard.
   ["#pipe-bulk-rate", "#pipe-bulk-retention", "#pipe-bulk-task", "#pipe-bulk-stage", "#pipe-bulk-adviser", "#pipe-bulk-clear",
+    // R71 · A1 — the back-fill verbs take the same in-flight guard: a key-repeat on the focused
+    // button would otherwise start two runs that both read the task list before either wrote.
+    "#pipe-bulk-playbook", "#pipe-bulk-checklists",
     "#ret-bulk-rate", "#ret-bulk-retention", "#ret-bulk-task", "#ret-bulk-clear"]
     .forEach((sel) => { const el = $(sel); if (el) el.disabled = on; });
 }
@@ -13102,6 +13362,263 @@ async function bulkSendDocsRequestsRun(ids) {
   failed.forEach((f) => pipeSel.add(f.id));
   loadPipeline();
 }
+/* ==========================================================================
+   R71 · A1 (panel H3) — BACK-FILLING A BOOK THAT ARRIVED WITH NO WORK ON IT.
+
+   Playbook tasks are written at exactly two moments (R63: a lead is accepted, a
+   case reaches a new stage) and document checklists at exactly one (the Fact
+   Find stage-entry prompt, R63 · H2). Every one of those is a moment a case
+   PASSES THROUGH. The 2,015 cases in this database did not pass through
+   anything — they were imported from a spreadsheet in July — so 127 of the 134
+   live ones carry no open task, none carries a checklist, and the whole
+   document machine (the chase, the upload link, the waiting-on-documents queue,
+   #pipe-bulk-docs itself) points at an empty set: the reviewed batch would have
+   written to 0 of 134.
+
+   Nothing in the app could fix that, because there was no verb for "apply the
+   thing you already do, to the cases that never got it". These two are that
+   verb, twice, and both are deliberately the DUMBEST possible loop over a
+   writer that already exists and is already idempotent:
+
+     ＋ Apply stage playbooks → autoAddStagePlaybookTasks, per case, at ITS
+       current stage and ITS kind, assigned to ITS adviser (never the presser).
+     🗂 Build checklists      → insertDocItems, the same writer the Fact Find
+       prompt uses, with docSuggestionsFor(kind)'s list.
+
+   Neither invents a rule the single-case path does not already have, and
+   neither can double anything: the playbook writer dedupes by title and the
+   checklist verb refuses any case that already has one row.
+
+   L2 (the panel's own low finding) is the rule both obey: ONE overlay confirm
+   per batch, naming every skip and why. Not a native confirm — no new flow in
+   this app opens one (house rule since R68) and a fifty-name list inside
+   window.confirm cannot be read or scrolled. Same shape as R70's
+   confirmBulkRetentionStart, down to the button ids.
+   ========================================================================== */
+/* WHY TERMINAL CASES ARE NOT OFFERED THE PLAYBOOK. `completed` HAS a playbook (fee request, review
+   request, rate-end reminder) and it is a perfectly good one — for a case completing today. Run
+   over the Completed segment it would write three tasks onto each of 1,871 historic cases, most of
+   them settled years ago: 5,600 rows of work nobody is going to do, on top of a firm that today
+   has twelve open tasks in total. Back-filling is for the LIVE book; a completion's own steps are
+   written when it completes. not_proceeding has no playbook at all. */
+async function bulkApplyPlaybooks() {
+  const ids = [...pipeSel];
+  if (!ids.length) return;
+  if (bulkBusy) return;                       // G1I-D7 — same in-flight guard as every other verb
+  setBulkBusy(true);
+  try { await bulkApplyPlaybooksRun(ids); } finally { setBulkBusy(false); }
+}
+async function bulkApplyPlaybooksRun(ids) {
+  /* The switch governs this too, and that is a decision rather than an oversight: writing the
+     stage checklist onto a hundred cases is the LARGEST possible instance of "the app writes the
+     checklist for me", so a firm that has turned that off must not get it in bulk. The case
+     modal's own "+ Add all" is still there for one case at a time, which is where an exception
+     belongs, and the message says so instead of failing silently. */
+  if (!playbookAutoTasksOn()) {
+    return toast("Automatic stage tasks are switched OFF in Settings, so this writes nothing. Turn them on (Settings › Cases), or add the steps case by case from a case's Stage checklist.");
+  }
+  const propOn = await propAddrSupported();
+  const { data: rows, error } = await inChunks(ids, (sl) => db.from("cases")
+    /* rate_end_date is named here for the same reason the bulk stage move names it: the
+       product-transfer Enquiry call step is dated off it, and reading it once for the whole
+       selection is one request instead of one per case. */
+    .select("id,stage,case_kind,assigned_to,lender,rate_end_date" + (propOn ? ",property_address" : "") + ",clients!client_id(first_name,last_name)")
+    .in("id", sl));
+  if (error) return toast("Error: " + error.message);
+  // ONE read for the whole selection's open tasks — never one per case (R65 · M11's rule).
+  const { data: taskRows, error: tErr } = await inChunks(ids, (sl) => readAll(
+    db.from("case_tasks").select("case_id,title,done_at").in("case_id", sl).is("done_at", null).order("id"), { cap: 5000 }));
+  if (tErr) return toast("Error reading existing tasks: " + tErr.message);
+  const openByCase = {};
+  (taskRows || []).forEach((t) => {
+    if (!t || !t.case_id || t.done_at) return;
+    (openByCase[t.case_id] = openByCase[t.case_id] || []).push(t.title);
+  });
+  const nameOf = bulkCaseLabel;
+  const today = localDateStr();
+  const eligible = [], already = [], skipped = [];
+  (rows || []).forEach((c) => {
+    if (TERMINAL_STAGES.includes(c.stage)) {
+      skipped.push(`${nameOf(c)} (${c.stage === "completed" ? "completed" : "not proceeding"} — a settled case gets no new steps)`);
+      return;
+    }
+    const plan = playbookStepPlan(c.stage, c.case_kind, { today, rateEnd: c.rate_end_date || null })
+      .filter((p) => !PLAYBOOK_TRIGGER_OWNED_RE.test(String(p.title || "")));
+    if (!plan.length) {
+      skipped.push(`${nameOf(c)} (no playbook steps at ${STAGE_LABEL[c.stage] || c.stage} for a ${caseTypeLabel(c) || "case"})`);
+      return;
+    }
+    const open = openByCase[c.id] || [];
+    const toAdd = plan.filter((p) => !open.some((t) => playbookStepMatchesTitle(p.item, t)));
+    if (!toAdd.length) already.push(c);
+    else eligible.push({ c, plan, toAdd });
+  });
+  if (!eligible.length) {
+    return toast(already.length
+      ? `Nothing to write — ${already.length} of the ${ids.length} selected already ${already.length === 1 ? "has" : "have"} every step of ${already.length === 1 ? "its" : "their"} current stage${skipped.length ? ` · ${skipped.length} skipped (${skipped.slice(0, 2).join("; ")}${skipped.length > 2 ? `; and ${skipped.length - 2} more` : ""})` : ""}`
+      : skipped.length
+        ? `Nothing to write — all ${skipped.length} selected case${skipped.length === 1 ? " is" : "s are"} skipped (${skipped.slice(0, 3).join("; ")}${skipped.length > 3 ? `; and ${skipped.length - 3} more` : ""})`
+        : "Nothing to write");
+  }
+  const okd = await confirmBulkPlaybooks(eligible, already, skipped, ids.length, nameOf);
+  if (!okd) return;
+  let written = 0, cases = 0;
+  const failures = [];
+  for (const e of eligible) {
+    const pb = await autoAddStagePlaybookTasks(e.c.id, e.c.stage, e.c.case_kind, {
+      // THE CASE'S OWN ADVISER, not whoever pressed the button — the same rule the R65 chase preset
+      // and the interactive stage move both apply. A back-fill that put 105 tasks on the presser's
+      // own list would be worse than no back-fill.
+      assignee: e.c.assigned_to || null,
+      createdBy: (ME && ME.id) || null,
+      rateEndDate: e.c.rate_end_date || null,
+    });
+    if (pb.error) failures.push(`${nameOf(e.c)} — ${pb.error}`);
+    else if (pb.added) { written += pb.added; cases++; }
+  }
+  let msg = `${written} task${written === 1 ? "" : "s"} written across ${cases} case${cases === 1 ? "" : "s"}`;
+  if (already.length) msg += ` · ${already.length} case${already.length === 1 ? "" : "s"} already had their steps`;
+  if (skipped.length) msg += ` · ${skipped.length} skipped (${skipped.slice(0, 2).join("; ")}${skipped.length > 2 ? `; and ${skipped.length - 2} more` : ""})`;
+  if (failures.length) msg += ` · ${failures.length} failed: ${failures.slice(0, 2).join("; ")}${failures.length > 2 ? ` and ${failures.length - 2} more` : ""}`;
+  toast(msg);
+  /* R65 bulk-bar convention — THE SELECTION SURVIVES. Unlike the sending verbs (where a second
+     press would email somebody twice, so the set is cleared and only failures stay ticked), both
+     back-fill verbs are idempotent and are meant to be used one after the other on the SAME rows:
+     apply the playbooks, then build the checklists, over the batch you just reviewed. Re-rendering
+     re-ticks the boxes from pipeSel, so the repaint below costs nothing. */
+  loadPipeline();
+}
+/* The batch confirm. Same overlay, same two buttons, same "name every skip" rule as R70's
+   retention confirm — including the count of rows each case will actually gain, because "apply the
+   playbook to 40 cases" and "write 118 tasks" are different facts and the second is the one that
+   lands on somebody's list tomorrow. */
+function confirmBulkPlaybooks(eligible, already, skipped, selectedN, nameOf) {
+  const total = eligible.reduce((n, e) => n + e.toAdd.length, 0);
+  const list = (rows, render) => rows.slice(0, 12).map(render).join("")
+    + (rows.length > 12 ? `<li class="cs-muted">…and ${rows.length - 12} more</li>` : "");
+  return openOverlay(`
+    <h3>＋ Apply the stage playbook to ${eligible.length} case${eligible.length === 1 ? "" : "s"}</h3>
+    <p class="panel-sub">Each case gets the house steps for <strong>its own current stage</strong> and case type, due today plus each step's offset, assigned to <strong>that case's own adviser</strong> — not to you. <strong>${total} task${total === 1 ? "" : "s"}</strong> in total. Nothing is emailed to anybody. A step that is already open on a case is never written twice, so pressing this again tomorrow adds only what is genuinely missing.</p>
+    <div class="bulk-confirm-list">
+      <h4>Writing to</h4>
+      <ul class="bulk-confirm-ul">${list(eligible, (e) => `<li>${esc(nameOf(e.c))} — ${e.toAdd.length} step${e.toAdd.length === 1 ? "" : "s"} for ${esc(STAGE_LABEL[e.c.stage] || e.c.stage)}${e.c.assigned_to ? ` · ${esc(staffName(e.c.assigned_to))}` : " · <span class=\"cs-muted\">no adviser on the case — it will land on you</span>"}</li>`)}</ul>
+      ${already.length ? `<h4>Already have their steps (${already.length}) — nothing is written to these</h4>
+        <ul class="bulk-confirm-ul">${list(already, (c) => `<li>${esc(nameOf(c))} — every ${esc(STAGE_LABEL[c.stage] || c.stage)} step is already open</li>`)}</ul>` : ""}
+      ${skipped.length ? `<h4>Skipped (${skipped.length})</h4>
+        <ul class="bulk-confirm-ul">${list(skipped, (s) => `<li>${esc(s)}</li>`)}</ul>` : ""}
+    </div>
+    <p class="panel-sub">${esc(eligible.length === selectedN ? "Every case you selected will be written to." : `${eligible.length} of the ${selectedN} you selected — the rest are listed above.`)}</p>
+    <div class="modal-actions"><div></div><div class="right">
+      <button type="button" class="btn" id="bulkpb-cancel">Cancel</button>
+      <button type="button" class="btn btn-primary" id="bulkpb-ok">Write ${total} task${total === 1 ? "" : "s"}</button>
+    </div></div>`, (finish, box) => {
+    box.querySelector("#bulkpb-cancel").onclick = () => finish(false);
+    box.querySelector("#bulkpb-ok").onclick = () => finish(true);
+  });
+}
+/* ==========================================================================
+   R71 · A1b — BUILD CHECKLISTS.
+
+   This verb CREATES a checklist and does nothing else. It queues no email, and
+   the confirm says so in as many words, because the moment a checklist exists
+   the machinery that DOES email — the automatic doc chase, the upload link, the
+   Waiting-on-documents panel and #pipe-bulk-docs beside this button — starts
+   working on the case by itself. Building the list is the enabling act; sending
+   is a separate, deliberate one, and putting both behind one press would mean a
+   single click could write to a hundred clients.
+
+   WHERE IT APPLIES, and why not everywhere:
+     · Fact Find → Exchange. Fact Find is where documents start being wanted
+       (the R63 stage-entry prompt exists there for exactly that reason), and a
+       case at Offer or Exchange that never got one is precisely the gap this
+       round is here to close.
+     · NOT Enquiry, and NOT Decision in Principle. A checklist there is a list of
+       things nobody has agreed to ask for yet — the case may not proceed, the
+       lender is not settled, and a product transfer at Enquiry needs a phone
+       call, not a passport. Those cases are named in the confirm with that
+       reason rather than silently dropped.
+     · NOT a case that already has ANY case_documents row. Somebody has curated
+       that list; a second helping of the firm's default list is not a back-fill,
+       it is vandalism. Same "asked once, ever" rule as the Fact Find prompt.
+   ========================================================================== */
+const CHECKLIST_BACKFILL_STAGES = ["fact_find", "application", "offer", "exchange"];
+async function bulkBuildChecklists() {
+  const ids = [...pipeSel];
+  if (!ids.length) return;
+  if (bulkBusy) return;
+  setBulkBusy(true);
+  try { await bulkBuildChecklistsRun(ids); } finally { setBulkBusy(false); }
+}
+async function bulkBuildChecklistsRun(ids) {
+  if ((await docsSupported()) === false) {
+    return toast("This database has no document checklists yet (migration m10), so there is nothing to build.");
+  }
+  const propOn = await propAddrSupported();
+  const { data: rows, error } = await inChunks(ids, (sl) => db.from("cases")
+    .select("id,stage,case_kind,assigned_to,lender" + (propOn ? ",property_address" : "") + ",clients!client_id(first_name,last_name)")
+    .in("id", sl));
+  if (error) return toast("Error: " + error.message);
+  // One read for the whole selection: does this case have ANY checklist row at all?
+  const { data: docRows, error: dErr } = await inChunks(ids, (sl) => readAll(
+    db.from("case_documents").select("case_id").in("case_id", sl).order("id"), { cap: 5000 }));
+  if (dErr) return toast("Error reading existing checklists: " + dErr.message);
+  const haveDocs = {};
+  (docRows || []).forEach((d) => { if (d && d.case_id) haveDocs[d.case_id] = (haveDocs[d.case_id] || 0) + 1; });
+  const nameOf = bulkCaseLabel;
+  const eligible = [], skipped = [];
+  (rows || []).forEach((c) => {
+    if (TERMINAL_STAGES.includes(c.stage)) { skipped.push(`${nameOf(c)} (not a live case)`); return; }
+    if (!CHECKLIST_BACKFILL_STAGES.includes(c.stage)) {
+      skipped.push(`${nameOf(c)} (at ${STAGE_LABEL[c.stage] || c.stage} — a checklist here is premature; the list is offered when the case reaches Fact Find)`);
+      return;
+    }
+    if (haveDocs[c.id]) { skipped.push(`${nameOf(c)} (already has a checklist — ${haveDocs[c.id]} item${haveDocs[c.id] === 1 ? "" : "s"})`); return; }
+    const { suggested } = docSuggestionsFor(c.case_kind || "other");
+    if (!suggested.length) { skipped.push(`${nameOf(c)} (your firm's document list in Settings has nothing a ${(caseTypeLabel(c) || "case").toLowerCase()} needs)`); return; }
+    eligible.push({ c, items: suggested });
+  });
+  if (!eligible.length) {
+    return toast(skipped.length
+      ? `Nothing to build — all ${skipped.length} selected case${skipped.length === 1 ? " is" : "s are"} skipped (${skipped.slice(0, 3).join("; ")}${skipped.length > 3 ? `; and ${skipped.length - 3} more` : ""})`
+      : "Nothing to build");
+  }
+  const okd = await confirmBulkChecklists(eligible, skipped, ids.length, nameOf);
+  if (!okd) return;
+  let built = 0, items = 0;
+  const failures = [];
+  for (const e of eligible) {
+    const { error: iErr, count } = await insertDocItems(e.c.id, e.items);
+    if (iErr) failures.push(`${nameOf(e.c)} — ${iErr.message}`);
+    else if (count) { built++; items += count; }
+  }
+  let msg = `${built} checklist${built === 1 ? "" : "s"} built · ${items} item${items === 1 ? "" : "s"} · nothing emailed`;
+  if (skipped.length) msg += ` · ${skipped.length} skipped (${skipped.slice(0, 2).join("; ")}${skipped.length > 2 ? `; and ${skipped.length - 2} more` : ""})`;
+  if (failures.length) msg += ` · ${failures.length} failed: ${failures.slice(0, 2).join("; ")}${failures.length > 2 ? ` and ${failures.length - 2} more` : ""}`;
+  toast(msg);
+  loadPipeline();       // selection survives (see the note on the playbook verb)
+}
+function confirmBulkChecklists(eligible, skipped, selectedN, nameOf) {
+  const total = eligible.reduce((n, e) => n + e.items.length, 0);
+  const list = (rows, render) => rows.slice(0, 12).map(render).join("")
+    + (rows.length > 12 ? `<li class="cs-muted">…and ${rows.length - 12} more</li>` : "");
+  return openOverlay(`
+    <h3>🗂 Build a document checklist on ${eligible.length} case${eligible.length === 1 ? "" : "s"}</h3>
+    <p class="panel-sub">Each case gets your firm's document list from Settings, narrowed to what its case type needs, added as <strong>outstanding</strong> and dated today — <strong>${total} item${total === 1 ? "" : "s"}</strong> in total. <strong>Nothing is emailed by this.</strong> What it does is switch the document machine ON for these cases: a case with no checklist is never chased, and once items exist the automatic chase, the upload link and <strong>📄 Send document request</strong> beside this button all start working on them. Items are added, never removed — edit or waive anything that does not apply on the case itself.</p>
+    <div class="bulk-confirm-list">
+      <h4>Building on</h4>
+      <ul class="bulk-confirm-ul">${list(eligible, (e) => `<li>${esc(nameOf(e.c))} — ${e.items.length} item${e.items.length === 1 ? "" : "s"} for a ${esc((caseTypeLabel(e.c) || "case").toLowerCase())} at ${esc(STAGE_LABEL[e.c.stage] || e.c.stage)}</li>`)}</ul>
+      ${skipped.length ? `<h4>Skipped (${skipped.length}) — nothing is created on these</h4>
+        <ul class="bulk-confirm-ul">${list(skipped, (s) => `<li>${esc(s)}</li>`)}</ul>` : ""}
+    </div>
+    <p class="panel-sub">${esc(eligible.length === selectedN ? "Every case you selected will get one." : `${eligible.length} of the ${selectedN} you selected — the rest are listed above.`)}</p>
+    <div class="modal-actions"><div></div><div class="right">
+      <button type="button" class="btn" id="bulkdocs-cancel">Cancel</button>
+      <button type="button" class="btn btn-primary" id="bulkdocs-ok">Build ${eligible.length} checklist${eligible.length === 1 ? "" : "s"}</button>
+    </div></div>`, (finish, box) => {
+    box.querySelector("#bulkdocs-cancel").onclick = () => finish(false);
+    box.querySelector("#bulkdocs-ok").onclick = () => finish(true);
+  });
+}
 async function bulkAddTaskRun(ids, preset = null) {
   // G1I-B5 — the client's name is fetched so a failure can be NAMED. Reporting "1 error" over a
   // selection that is then cleared left the operator with no way to tell which of five clients
@@ -13464,9 +13981,20 @@ function feeStatusCellHtml(c) {
            idempotent — pressing either twice does not double anything. */ ""}
       <button type="button" class="btn btn-sm" id="pipe-bulk-chase" title="Add a “Chase solicitors for completion date” task, due today, on every selected case — assigned to that case's own adviser. A case that already has an open “Chase solicitors…” task is named in the confirmation and skipped, so pressing this twice never doubles anybody's list. No email is sent.">⚖️ Chase solicitors</button>
       <button type="button" class="btn btn-sm" id="pipe-bulk-docs" title="Queue the document-request email for every selected LIVE case that has outstanding checklist items and a client email. It lists only what is still missing on each case. You get one confirmation naming exactly who is written to and who is skipped, and why.">📄 Send document request</button>
+      ${/* R71 · A1 — THE TWO BACK-FILL VERBS. Every other button on this bar acts on a case that
+           already has work attached; these two are what puts the work there in the first place, for
+           the cases that were imported rather than worked. Both loop an existing idempotent writer,
+           both name every skip in one overlay confirm, and neither sends anything. */ ""}
+      <button type="button" class="btn btn-sm" id="pipe-bulk-playbook" title="Write the house stage checklist onto every selected LIVE case — its own current stage's steps, for its own case type, assigned to its own adviser and due today plus each step's offset. A step already open on a case is never written twice, so pressing this again only fills in what is missing. Terminal cases and cases that already have every step are named in the confirmation and skipped. No email is sent.">＋ Apply stage playbooks</button>
+      <button type="button" class="btn btn-sm" id="pipe-bulk-checklists" title="Create a document checklist on every selected case at Fact Find, Application, Offer or Exchange that has none — your firm's list from Settings, narrowed to the case type, added as outstanding. A case that already has a checklist, or is still at Enquiry or DIP, is named in the confirmation and skipped. This only builds the list; nothing is emailed.">🗂 Build checklists</button>
       <button type="button" class="btn btn-sm" id="pipe-bulk-task">＋ Add task…</button>
       <button type="button" class="btn btn-sm" id="pipe-bulk-clear">Clear</button>
     </div>
+    ${/* R71 · A1 — the bar's own sentence. This firm reads the copy, and two of these buttons now
+         WRITE onto cases rather than emailing about them; the difference between "puts work on the
+         case" and "writes to the client" is the one thing somebody pressing a bulk verb for the
+         first time needs to be sure of before they press it. */ ""}
+    <p class="panel-sub" id="pipe-bulk-sub"${pipeSel.size ? "" : " hidden"}>Everything on this bar acts on the ticked rows only, and every verb shows you one confirmation naming exactly what it will do and what it is skipping, with the reason. <strong>＋ Apply stage playbooks</strong> and <strong>🗂 Build checklists</strong> put work on the cases themselves and send nothing — they are what an imported case never got. <strong>⏰</strong>, <strong>🔁</strong> and <strong>📄</strong> queue emails. Your selection survives, so you can run the two back-fill verbs one after the other over the same batch.</p>
     <div class="board-scroll-wrap board-scroll-wrap--table">
     ${/* R65 · L9 — the horizontal scroller is the TABLE's affordance. A card list has nothing to
          scroll sideways, and an overflow-x:auto box also promotes overflow-y to auto, which is how
@@ -13538,6 +14066,11 @@ function feeStatusCellHtml(c) {
   if (chaseBtn) chaseBtn.onclick = () => bulkChaseSolicitors();
   const docsBtn = $("#pipe-bulk-docs");
   if (docsBtn) docsBtn.onclick = () => bulkSendDocsRequests();
+  // R71 · A1 — the two back-fill verbs.
+  const pbBtn = $("#pipe-bulk-playbook");
+  if (pbBtn) pbBtn.onclick = () => bulkApplyPlaybooks();
+  const clBtn = $("#pipe-bulk-checklists");
+  if (clBtn) clBtn.onclick = () => bulkBuildChecklists();
   /* R65 · L9 — the mobile sort control. It writes the SAME sortKey/sortDir the column headers
      write, so a phone and a laptop are looking at one sort, not two. */
   const msort = $("#pipe-mobile-sort");
@@ -13570,6 +14103,8 @@ function updatePipeBulkBar() {
   if (!bar) return;
   const n = pipeSel.size;
   bar.hidden = n === 0;
+  // R71 · A1 — the bar's explaining sentence appears and disappears WITH the bar, never on its own.
+  const sub = $("#pipe-bulk-sub"); if (sub) sub.hidden = n === 0;
   const nEl = $("#pipe-bulk-n"); if (nEl) nEl.textContent = n;
   const all = $("#pipe-bulk-all");
   if (all) {
@@ -15310,6 +15845,9 @@ window.openCase = async function (id, opts = {}) {
   let hasRetentionSuccessor = false;
   let caseDocs = [], docMails = [];      // R9-5 · m10 — the checklist and its document emails
   let caseAppts = [];                    // R12b · W-11 — this case's diary, from the start of today
+  // R71 · B4 — existence counts behind the file-completeness chip, and whether each read WORKED:
+  // a failed read is "unknown", which drops the artefact from the chip's denominator, not "missing".
+  let caseFileN = 0, caseFactFindN = 0, caseFilesReadOk = false, caseFactFindReadOk = false;
   openedUpdatedAt = null;
   pendingOffer = null; // a re-render replaces the diff panel — don't leave a stale proposal armed
   if (id) {
@@ -15318,7 +15856,7 @@ window.openCase = async function (id, opts = {}) {
        R40 — the separate case_events read that used to sit here is GONE. Those rows are now part of
        the unified History timeline below, and buildClientTimeline reads case_events itself; keeping
        a second read of the same table just to feed a list that no longer exists was pure cost. */
-    const [{ data: cs }, { data: ns }, { data: ts }, aud, succ, docs, dmail, appts] = await Promise.all([
+    const [{ data: cs }, { data: ns }, { data: ts }, aud, succ, docs, dmail, appts, cfiles, ffinds] = await Promise.all([
       db.from("cases").select("*").eq("id", id).single(),
       db.from("case_notes").select("*").eq("case_id", id).order("created_at", { ascending: false }),
       db.from("case_tasks").select("*").eq("case_id", id).order("due_date"),
@@ -15341,10 +15879,21 @@ window.openCase = async function (id, opts = {}) {
       softRows(db.from("appointments").select("*").eq("case_id", id)
         .gte("starts_at", new Date(new Date().setHours(0, 0, 0, 0)).toISOString())
         .order("starts_at").limit(5)),
+      /* R71 · B4/M2 — the two artefacts the file-completeness chip needs and this modal did not
+         already have in hand: a case file and a fact find. Both are `limit(1)` existence checks on
+         one case id — the chip asks "is there one at all?", not "which ones" — and both are soft,
+         so a database without either table simply drops that artefact from the chip's denominator.
+         They ride the modal's existing parallel group, so they cost no extra wait. The Files
+         SECTION still makes its own read below (renderCaseFiles); this is not that list, and
+         reading a whole file list to draw one number would be the more expensive mistake. */
+      Promise.resolve(db.from("case_files").select("id").eq("case_id", id).limit(1)),
+      Promise.resolve(db.from("fact_finds").select("id").eq("case_id", id).limit(1)),
     ]);
     if (!cs) return toast("Case not found — it may have been deleted or you don't have access");
     c = cs; notes = ns || []; tasks = ts || []; auditRows = aud;
     caseDocs = docs || []; docMails = dmail || []; caseAppts = appts || [];
+    caseFilesReadOk = !!(cfiles && !cfiles.error); caseFactFindReadOk = !!(ffinds && !ffinds.error);   // R71 · B4
+    caseFileN = ((cfiles && cfiles.data) || []).length; caseFactFindN = ((ffinds && ffinds.data) || []).length;
     notePropAddrFromStarRow(cs); // the select("*") above settles the M7 question definitively
     noteReferrerFromStarRow(cs); // …and the m11 one, at the same zero cost (R9-1)
     noteDocsFromStarRow(cs);     // …and m10's, which can only ever be answered "no" from here
@@ -15548,6 +16097,18 @@ window.openCase = async function (id, opts = {}) {
             ${identityChipIsFallback ? "" : `<span class="cs-kind">${esc(caseTypeLabel(c))}</span>
             ${c.lender ? `<span class="cs-lender">${lenderIcon(c.lender, 14)}${esc(c.lender)}</span>` : ""}`}
             ${stageBadge(c.stage, { cls: "cs-stage-badge" })}
+            ${/* R71 · B4/M2 — HOW COMPLETE IS THIS FILE, on the line that says what the case IS.
+                 Every input is already in hand (the checklist rows, the two existence checks in the
+                 opening read, the case row's own objective / waiting-on / expected date), so the
+                 chip costs nothing and cannot disagree with the Data health tile — both call
+                 caseCompleteness. Live cases only: a completed case's file is finished, and a
+                 permanent amber chip on the back book would be noise nobody can clear. */ ""}
+            ${!["completed", "not_proceeding"].includes(c.stage) ? caseCompletenessChipHtml(c, {
+              docCount: caseDocs.length, fileCount: caseFileN, factFindCount: caseFactFindN,
+              docsOn, waitingOn: docsOn,
+              filesOn: filesOn && caseFilesReadOk, factFindOn: caseFactFindReadOk,
+              objectiveOn: Object.prototype.hasOwnProperty.call(c, "objective"),
+            }) : ""}
             ${/* R59 — the SOLD flag on the case's own identity line, same read as the client
                  book's badge: anyone opening this case sees at once that the property is gone
                  and no retention conversation belongs here. */ ""}
@@ -15929,7 +16490,7 @@ window.openCase = async function (id, opts = {}) {
         <div class="row-item${stale ? " task-stale-row" : ""}" style="padding:7px 4px;">
           <div class="row-main">
             <div style="${t.done_at ? "text-decoration:line-through;color:var(--muted);" : ""}">${esc(t.title)}${stale ? ` <span class="badge grey task-stale-chip" title="${esc(STALE_TASK_TIP)}">earlier stage</span>` : ""}</div>
-            <div class="s">${t.due_date ? "due " + fmtD(t.due_date) : ""}${t.done_at ? " · done" : ""}${stale ? ` · a ${esc(STAGE_LABEL[PLAYBOOK_STAGE_ORDER[PLAYBOOK_TITLE_STAGE_IDX[playbookTitleKey(t.title)]]] || "earlier")} step — this case is at ${esc(STAGE_LABEL[c.stage] || c.stage)}` : ""}</div>
+            <div class="s">${t.due_date ? "due " + fmtD(t.due_date) : ""}${t.done_at ? " · done" : ""}${stale ? ` · a ${esc(STAGE_LABEL[PLAYBOOK_STAGE_ORDER[playbookTitleStageIdx(t.title)]] || "earlier")} step — this case is at ${esc(STAGE_LABEL[c.stage] || c.stage)}` : ""}</div>
           </div>
           ${/* R12a·D12 — a done row used to be a dead end: struck through, no control, and the only
                 way back was the database. done_at is nullable and reopening is simply setting it
@@ -22077,6 +22638,9 @@ async function acceptLeadCore(l, opts = {}) {
     const pb = await autoAddStagePlaybookTasks(nc.id, "enquiry", newCase.case_kind, {
       assignee: assignTo || (ME && ME.id) || null,
       createdBy: (ME && ME.id) || null,
+      // R71 · A2 — a case born from a website lead has no rate end; stated, not guessed, so the
+      // writer does not spend a read discovering it.
+      rateEndDate: null,
     });
     leadTasksAdded = pb.added;
     if (pb.error) leadWarn.push(`the Enquiry checklist tasks were NOT created (${pb.error}) — the case has no next action on it, so add them from the case's Stage checklist`);
@@ -29021,11 +29585,46 @@ async function loadDataHealth() {
   const el = $("#data-content");
   el.innerHTML = '<div class="empty">Loading…</div>';
   { const rEl = document.getElementById("dh-readiness"); if (rEl) rEl.innerHTML = ""; } // R31-C — clear the rollup while reloading
+  /* ==========================================================================
+     R71 · B1/H6 — THIS PAGE OPENS IN ONE ROUND TRIP, NOT SIX.
+
+     Data health used to read the book in SIX SEQUENTIAL waves: the opening
+     Promise.all, then the m10 document group, then exchange_date, then the care
+     columns, then policy_start_date, then offer_issued_date — each one waiting
+     for the wave before it to come back before it was even issued. Every wave is
+     a full-table scan, so at the real book size (2,000+ cases) the page took
+     ~10s to first paint while every other screen took 1–3s. Nothing about the
+     waves depended on each other: they were sequential only because they were
+     written in the order the rounds that added them ran.
+
+     So: resolve the six feature gates together (they share ONE probe —
+     runCombinedSupportProbe — so this costs a single round trip at most, and
+     nothing at all once the caches are warm), then issue EVERY read in one
+     Promise.all. Wall time becomes the slowest read, not the sum of six.
+
+     WHAT DID NOT CHANGE, and must not: each optional column keeps its OWN
+     read. It is tempting to fold exchange_date / offer_issued_date / objective
+     into the big cases select now that they all fire together, but naming a
+     column an un-migrated database does not have 42703s the WHOLE statement and
+     would blank five panels that have nothing to do with it. Separate parallel
+     reads cost nothing extra now that they are parallel — that is the whole
+     point — and a "no" still costs exactly its own tile.
+     ========================================================================== */
+  const [dhPropGate, dhDocsGate, dhCareGate, dhClawbackGate, dhForwardGate, dhFilesGate] = await Promise.all([
+    propAddrSupported(), docsSupported(), careSupported(), policyStartSupported(), forwardDatesSupported(), caseFilesSupported(),
+  ]);
   /* R6-38 — the cases read gains the property column (and created_at, for "which case came last on
      this building") so the shared-address panel below costs no extra round trip. NAMED only where M7
      is present: on an un-migrated database the select would 42703 and blank the whole page. */
-  let dhPropOn = (await propAddrSupported()) !== false;
-  const [dqRes, dupRes, caseRowsFirst, clientRows, dismissRes] = await Promise.all([
+  let dhPropOn = dhPropGate !== false;
+  const dhDocsOn = dhDocsGate !== false;
+  const dhCareOn = dhCareGate === true;
+  const dhClawbackOn = dhClawbackGate === true;
+  const dhForwardOn = dhForwardGate === true;
+  const dhFilesOn = dhFilesGate === true;   // R71 · B4 — case_files, for the completeness measure
+  const [dqRes, dupRes, caseRowsFirst, clientRows, dismissRes,
+    dhDocRowsRaw, dhDocMailsRaw, dhWaitRowsRaw, dhExchangeRaw,
+    careRes, polRes, dhOfferRaw, dhFactFindRaw, dhCaseFileRaw, dhObjectiveRaw] = await Promise.all([
     db.rpc("get_data_quality"),
     db.rpc("find_duplicate_clients"),
     // Defect 13: the RPC only ever returns bare counts for these two tiles. Rather than change the
@@ -29039,6 +29638,34 @@ async function loadDataHealth() {
     // it just gets filtered client-side against this table (§Batch4 note: the RPC's own upsert
     // logic can't know about "not a duplicate" without a schema change it doesn't need).
     db.from("duplicate_dismissals").select("*"),
+    /* R12b · K-11 — the document group. Three small reads, all soft. `waiting_on`/`solicitor_firm`
+       are m10 columns and are asked for SEPARATELY rather than added to the big cases select above
+       — naming them there would 42703 on an un-migrated database and blank five existing panels. */
+    dhDocsOn ? softRows(readAll(db.from("case_documents").select("case_id,status").order("case_id").order("id"))) : Promise.resolve([]),
+    dhDocsOn ? softRows(readAll(db.from("email_queue").select("case_id,email_type,status,sent_at,created_at").in("email_type", DOC_MAIL_TYPES).order("created_at").order("id"))) : Promise.resolve([]),
+    dhDocsOn ? softRows(readAll(db.from("cases").select("id,waiting_on,solicitor_firm,assigned_to").order("id"))) : Promise.resolve([]),
+    /* R13 · M-13 — the exchange date, in its OWN feature-detected read (see the R71 note above for
+       why it stays its own read now that it is parallel rather than sequential). */
+    (dhDocsOn && dhForwardOn) ? softRows(readAll(db.from("cases").select("id,exchange_date").order("id"))) : Promise.resolve([]),
+    // R13 · M-4/M-30 — the care columns, their own read for the same 42703 reason.
+    dhCareOn ? readAll(db.from("clients").select("id,first_name,last_name," + CARE_COLS.join(",")).order("id")) : Promise.resolve({ data: [], error: null }),
+    // R13 · M-23 — policies taken with no start date. A narrow filtered read, not a table scan.
+    dhClawbackOn ? Promise.resolve(db.from("cases").select("id,policy_start_date,clients!client_id(first_name,last_name)").eq("protection_status", "policy_taken").is("policy_start_date", null)) : Promise.resolve({ data: [], error: null }),
+    // R25 · MI-1 — offer_issued_date, a forward-dates column, read separately for the same reason.
+    dhForwardOn ? softRows(readAll(db.from("cases").select("id,offer_issued_date").order("id"))) : Promise.resolve([]),
+    /* R71 · B4/M2 — the two artefact tables behind the file-completeness measure. Ids only (the
+       question is "does this case have one at all?"), and bounded by readAll like everything else.
+       The ERROR is kept rather than swallowed by softRows, because the two failure modes need
+       opposite answers: no rows means nobody has one (a real gap), while a read that FAILED —
+       table absent, RLS, network — means we do not know, and "we do not know" must drop the
+       artefact out of the denominator rather than report the whole book as incomplete. */
+    readAll(db.from("fact_finds").select("case_id").order("case_id")),
+    dhFilesOn ? readAll(db.from("case_files").select("case_id").order("case_id")) : Promise.resolve({ data: [], error: { message: "case_files unsupported" } }),
+    /* R71 · B4 — the pinned objective (R57). `objective` has no feature-detect helper of its own —
+       the case modal settles it from its select("*") row — so this is a soft, separate read: rows
+       back means the column is there, a 42703 means it is not and the objective silently leaves
+       the completeness denominator. Never named in the big select above, same rule as the rest. */
+    softRows(readAll(db.from("cases").select("id,objective").order("id"))),
   ]);
   if (dqRes.error || dupRes.error) {
     renderLoadError("#data-content", dqRes.error || dupRes.error, loadDataHealth);
@@ -29197,32 +29824,27 @@ async function loadDataHealth() {
      the panel does not exist at all, rather than rendering an empty
      "nothing outstanding 👍" that would be a lie.
      ====================================================================== */
-  const dhDocsOn = (await docsSupported()) !== false;
+  /* R71 · B1 — the three document reads, the exchange-date read and the gate itself all moved up
+     into the page's ONE parallel read group. The derivation below is unchanged; it just works from
+     rows that are already in hand instead of issuing four more waves of queries. */
+  const dhDocRows = dhDocRowsRaw, dhDocMails = dhDocMailsRaw, dhWaitRows = dhWaitRowsRaw;
+  const outstandingBy = {}, docsBy = {};
   let waitingDocs = [];
-  if (dhDocsOn) {
-    /* Three small reads, in parallel, all soft. `waiting_on`/`solicitor_firm` are m10 columns and
-       are asked for SEPARATELY rather than added to the big cases select above — naming them
-       there would 42703 on an un-migrated database and blank five existing panels. */
-    const [dhDocRows, dhDocMails, dhWaitRows] = await Promise.all([
-      softRows(readAll(db.from("case_documents").select("case_id,status").order("case_id").order("id"))),
-      softRows(readAll(db.from("email_queue").select("case_id,email_type,status,sent_at,created_at").in("email_type", DOC_MAIL_TYPES).order("created_at").order("id"))),
-      softRows(readAll(db.from("cases").select("id,waiting_on,solicitor_firm,assigned_to").order("id"))),
-    ]);
-    const outstandingBy = {}, docsBy = {};
+  {
     dhDocRows.forEach((d) => {
       if (!d.case_id) return;
       docsBy[d.case_id] = (docsBy[d.case_id] || 0) + 1;
       if (d.status === "requested") outstandingBy[d.case_id] = (outstandingBy[d.case_id] || 0) + 1;
     });
+  }
+  if (dhDocsOn) {
     const mailsBy = {};
     dhDocMails.forEach((m) => { if (m.case_id) (mailsBy[m.case_id] = mailsBy[m.case_id] || []).push(m); });
-    /* R13 · M-13 — the exchange date, in its OWN feature-detected read. Naming it in the m10 select
-       above would 42703 the whole thing on a database that took m10 but not this round's columns,
+    /* R13 · M-13 — the exchange date, from its OWN feature-detected read. Naming it in the m10
+       select would 42703 the whole thing on a database that took m10 but not this round's columns,
        and cost the panel its seven other facts to gain one. */
     const dhExchangeBy = {};
-    if ((await forwardDatesSupported()) === true) {
-      (await softRows(readAll(db.from("cases").select("id,exchange_date").order("id")))).forEach((r) => { if (r && r.id) dhExchangeBy[r.id] = r.exchange_date || null; });
-    }
+    dhExchangeRaw.forEach((r) => { if (r && r.id) dhExchangeBy[r.id] = r.exchange_date || null; });
     const extraBy = Object.fromEntries(dhWaitRows.map((r) => [r.id, r]));
     const emailBy = new Map(allClients.map((cl) => [cl.id, cl.email || ""]));
     waitingDocs = allCases
@@ -29255,10 +29877,9 @@ async function loadDataHealth() {
      feature-detected reads: the page's main clients/cases selects name their columns, and widening
      either would 42703 the whole page on a database that has not taken the migrations. A "no"
      costs exactly the three tiles below and nothing else. */
-  const dhCareOn = (await careSupported()) === true;
   let dhVulnerable = [], dhSuppressed = [];
   if (dhCareOn) {
-    const { data: careRows, error: careErr } = await readAll(db.from("clients").select("id,first_name,last_name," + CARE_COLS.join(",")).order("id"));
+    const { data: careRows, error: careErr } = careRes;   // R71 · B1 — read in the page's one parallel group
     if (careErr) { if (isMissingColumnError(careErr)) CARE_SUPPORTED = false; }
     else {
       const cn = (r) => [r.first_name, r.last_name].filter(Boolean).join(" ") || "(no name)";
@@ -29266,12 +29887,9 @@ async function loadDataHealth() {
       dhSuppressed = (careRows || []).filter((r) => r.suppress_automation).map((r) => ({ id: r.id, name: cn(r), note: r.vulnerability_note || "" }));
     }
   }
-  const dhClawbackOn = (await policyStartSupported()) === true;
   let dhNoPolicyStart = [];
   if (dhClawbackOn) {
-    const { data: pol, error: polErr } = await db.from("cases")
-      .select("id,policy_start_date,clients!client_id(first_name,last_name)")
-      .eq("protection_status", "policy_taken").is("policy_start_date", null);
+    const { data: pol, error: polErr } = polRes;   // R71 · B1 — read in the page's one parallel group
     if (polErr) { if (isMissingColumnError(polErr)) POLICY_START_SUPPORTED = false; }
     else dhNoPolicyStart = (pol || []).map((r) => ({ id: r.id, name: [r.clients && r.clients.first_name, r.clients && r.clients.last_name].filter(Boolean).join(" ") || "(client not on file)" }));
   }
@@ -29284,11 +29902,8 @@ async function loadDataHealth() {
      gate). offer_issued_date is a forward-dates column and MUST be read separately behind
      forwardDatesSupported(), exactly like dhExchangeBy reads exchange_date — naming it in the big
      select would 42703 the whole page (blanking five existing panels) on an un-migrated database. */
-  const dhForwardOn = (await forwardDatesSupported()) === true;
   const dhOfferIssuedBy = {};
-  if (dhForwardOn) {
-    (await softRows(readAll(db.from("cases").select("id,offer_issued_date").order("id")))).forEach((r) => { if (r && r.id) dhOfferIssuedBy[r.id] = r.offer_issued_date || null; });
-  }
+  dhOfferRaw.forEach((r) => { if (r && r.id) dhOfferIssuedBy[r.id] = r.offer_issued_date || null; });   // R71 · B1 — same read, issued in parallel
   // Stage rank via the canonical STAGES order. "Reached ≥ X" = the case's stage sits at or past X in
   // pipeline order; completed (rank 6) has reached application AND offer, so it can legitimately show
   // here for a missing EARLIER date (that's separate from the noCompletedAt tile). not_proceeding
@@ -29372,6 +29987,93 @@ async function loadDataHealth() {
     .sort((a, b) => b.pct - a.pct);
 
   /* ==========================================================================
+     R71 · B2/H6 — THE TWO BIGGEST GAPS IN THE BACK BOOK, WHICH HAD NO TILE.
+
+     291 completed cases carry no property address and 292 no loan amount. Both
+     columns already ride the cases read above, so these two tiles cost no extra
+     round trip — the rule for everything on this page.
+
+     WHY THE PROTECTION-ONLY EXCLUSION, AND WHY IT IS NOT WORDED THE WAY THE
+     RATE-END TILE WORDS IT. R45 settled, for the rate-end tile, what "a record
+     with no loan amount AND no mortgage account number" is: not a mortgage. The
+     back-book import carries protection-only records in exactly that shape — a
+     life or income-protection policy, completed, with no lending on it at all —
+     and counting those as gaps makes a list nobody can ever clear, because
+     there is no number to put in and no building to key.
+
+     That is the right EXCLUSION. But R45's literal test cannot be reused here
+     verbatim: half of it ("no loan amount") is this tile's own criterion, so
+     applying it as written would reduce the tile to "completed cases with a
+     mortgage account number and no loan" — a handful of rows, and Priya's 292
+     would go on being invisible, which is the finding this tile exists to
+     answer. So the same idea is asked NON-CIRCULARLY: is this record
+     mortgage-shaped at all? Two definitions the app already owns settle it —
+     R45's mortgage account number, and R56's MORTGAGE_KINDS (the list
+     clientProtGapCardHtml uses to decide a client "has a mortgage"). A case of
+     kind "other" with no account number is the protection-only shape, and it is
+     out of both tiles. Everything left is a real mortgage record with a real
+     gap — the ones somebody can actually fix.
+
+     not_proceeding is excluded by construction (both tiles are COMPLETED-only).
+     A completed case is precisely where these gaps matter: the address is what
+     the retention flow, the shared-address check and every property chip work
+     from, and the loan is what LTV, MI and any lending figure divide by.
+     ========================================================================== */
+  const dhIsMortgageCase = (cs) => !!cs.mortgage_account_number || MORTGAGE_KINDS.includes(cs.case_kind);
+  const noPropAddress = !dhPropOn ? [] : allCases
+    .filter((cs) => cs.stage === "completed" && !String(cs.property_address || "").trim() && dhIsMortgageCase(cs))
+    .map((cs) => ({ case_id: cs.id, name: caseName(cs), lender: cs.lender || null, completedAt: cs.completed_at || null }));
+  const noLoanAmount = allCases
+    .filter((cs) => cs.stage === "completed" && cs.loan_amount == null && dhIsMortgageCase(cs))
+    .map((cs) => ({ case_id: cs.id, name: caseName(cs), lender: cs.lender || null, completedAt: cs.completed_at || null }));
+
+  /* ==========================================================================
+     R71 · B4/M2 — ONE FILE-COMPLETENESS MEASURE, NOT SIX SCATTERED CHECKS.
+
+     "Is this case's file complete?" had no answer anywhere: the objective, the
+     checklist, the firm's own papers, the fact find, who we are waiting on and
+     the expected completion date each lived in their own section, and the only
+     way to know what was missing was to open a case and scroll. caseCompleteness
+     (defined next to the case modal) is the single definition; this is the same
+     function, applied to every LIVE case, so the tile and the modal chip can
+     never disagree.
+
+     Only LIVE cases: a completed case's file is finished, and chasing a fact
+     find onto a case that closed in 2023 is not work anybody should be sent.
+     ========================================================================== */
+  const dhFactFindOn = !dhFactFindRaw.error;   // a FAILED read is "unknown", not "nobody has one"
+  const dhCaseFilesOn = dhFilesOn && !dhCaseFileRaw.error;
+  const dhFactFindCases = new Set((dhFactFindRaw.data || []).map((r) => r && r.case_id).filter(Boolean));
+  const dhCaseFileCases = new Set((dhCaseFileRaw.data || []).map((r) => r && r.case_id).filter(Boolean));
+  const dhObjectiveOn = dhObjectiveRaw.length > 0 && Object.prototype.hasOwnProperty.call(dhObjectiveRaw[0], "objective");
+  const dhObjectiveBy = {};
+  dhObjectiveRaw.forEach((r) => { if (r && r.id) dhObjectiveBy[r.id] = r.objective || null; });
+  const dhWaitingBy = Object.fromEntries(dhWaitRows.map((r) => [r.id, r]));
+  const dhCompletenessExtras = {
+    docsOn: dhDocsOn, filesOn: dhCaseFilesOn, factFindOn: dhFactFindOn, objectiveOn: dhObjectiveOn,
+    // m10's waiting_on rides the same migration as the checklist, so it shares the docs gate.
+    waitingOn: dhDocsOn,
+  };
+  const fileGaps = allCases
+    .filter((cs) => isLiveStage(cs.stage))
+    .map((cs) => {
+      const score = caseCompleteness({
+        stage: cs.stage,
+        objective: dhObjectiveBy[cs.id] || null,
+        waiting_on: (dhWaitingBy[cs.id] || {}).waiting_on || null,
+        expected_completion_date: cs.expected_completion_date || null,
+      }, Object.assign({
+        docCount: docsBy[cs.id] || 0,
+        fileCount: dhCaseFileCases.has(cs.id) ? 1 : 0,
+        factFindCount: dhFactFindCases.has(cs.id) ? 1 : 0,
+      }, dhCompletenessExtras));
+      return { case_id: cs.id, name: caseName(cs), stage: cs.stage, have: score.have, of: score.of, missing: score.missing };
+    })
+    .filter((r) => r.of > 0 && r.have < r.of)
+    // Worst first: the biggest hole, then the emptiest file, then a stable name order.
+    .sort((a, b) => (b.of - b.have) - (a.of - a.have) || (a.have / a.of) - (b.have / b.of) || String(a.name).localeCompare(String(b.name)));
+
+  /* ==========================================================================
      R42 · F5 — A CLEAN FAULT TILE HIDES ITSELF.
 
      This row had grown to seventeen tiles, and on a tidy book most of them read zero. A zero on a
@@ -29416,6 +30118,14 @@ async function loadDataHealth() {
     ${/* R69 · B5/L12 — a fault tile like the ones above it: warn when it is not zero, folded
           away by dhFault when it is, and a `▾` because it expands its list on this page. */ ""}
     <div class="kpi ${ltvOver.length ? "warn" : ""}${dhFault(ltvOver.length)} dq-clickable" id="dh-tile-ltv" title="Cases where the loan amount is larger than the property value — almost always a typo in one of the two boxes. Click to list them."><div class="num">${ltvOver.length}</div><div class="lbl">Loan above property value ▾</div></div>
+    ${/* R71 · B2/H6 — the two back-book gaps, same fault-tile shape as everything above them.
+          The address tile is absent outright on a database with no property column: a count of
+          "cases missing a column that does not exist" is not a fault, it is a migration. */ ""}
+    ${dhPropOn ? `<div class="kpi ${noPropAddress.length ? "warn" : ""}${dhFault(noPropAddress.length)} dq-clickable" id="dh-tile-address" title="Completed cases with no property address on them. The address is what the retention flow, the shared-address check and every property chip work from, so a blank one quietly costs all three. Protection-only records are left out (a case that is not mortgage-shaped — no mortgage account number and not a mortgage case kind) — there is no building to key. Click to list them, and fix them in place."><div class="num">${noPropAddress.length}</div><div class="lbl">Completed — no property address ▾</div></div>` : ""}
+    <div class="kpi ${noLoanAmount.length ? "warn" : ""}${dhFault(noLoanAmount.length)} dq-clickable" id="dh-tile-loan" title="Completed cases with no loan amount. Every LTV, lending figure and piece of MI that divides by the loan silently skips these. Protection-only records are left out (a case that is not mortgage-shaped — no mortgage account number and not a mortgage case kind) — so this counts real mortgages with a real gap. Click to list them, and fix them in place."><div class="num">${noLoanAmount.length}</div><div class="lbl">Completed — no loan amount ▾</div></div>
+    ${/* R71 · B4/M2 — a fault tile, but a gentle one: a live case with an incomplete file is
+          normal work in progress, not a mistake. It is here because nothing else counts it. */ ""}
+    <div class="kpi ${fileGaps.length ? "warn" : ""}${dhFault(fileGaps.length)} dq-clickable" id="dh-tile-completeness" title="Live cases missing at least one of the file artefacts their stage asks for — objective, document checklist, case papers, fact find, waiting-on, expected completion date. Each stage is only asked for what it can have. Click to list them worst-first."><div class="num">${fileGaps.length}</div><div class="lbl">Live cases with file gaps ▾</div></div>
     <div class="kpi ${dq.emails_failed ? "warn" : ""}${dhFault(dq.emails_failed)} dq-clickable" id="dh-tile-failed" title="Click to open the Emails page filtered to failed sends"><div class="num">${dq.emails_failed ?? 0}</div><div class="lbl">Failed emails →</div></div>
     ${/* R6-38 — deliberately NOT a "warn" tile: a shared address is something to read, not a fault to
           clear. Absent entirely on a database with no property column. */ ""}
@@ -29520,6 +30230,36 @@ async function loadDataHealth() {
   const DH_PANEL_CAP = 200;
   const dhMoreNote = (n) => n > DH_PANEL_CAP ? `<div class="empty">…and ${n - DH_PANEL_CAP} more not shown — clear the ones above first, or use the firm export to work the whole list.</div>` : "";
 
+  /* ==========================================================================
+     R71 · B3/H6+M8 — FIX THE GAP HERE, NOT THROUGH THE 51-FIELD MODAL.
+
+     Every fix panel on this page listed rows with one verb: "Open". Filling in
+     one missing date therefore cost six clicks and a round trip through a case
+     form carrying fifty other fields — for a value the panel had already told
+     you was blank. Luke's rate-end repair (M8) is 12 genuine cases; Priya's
+     address and loan gaps are hundreds. At that volume the modal is the reason
+     the gap never gets closed.
+
+     So each of those four panels now carries an INPUT and its own Save. One
+     targeted write — db.from("cases").update({col: value}).eq("id", id) — of
+     the single column the row is about; no other field on the case is read,
+     sent or touched, so an inline fix can never clobber somebody else's edit to
+     a different field the way a whole-form save can. "Open" stays beside it for
+     everything the input cannot do.
+
+     These are BASE columns (rate_end_date, completed_at, property_address,
+     loan_amount), so there is deliberately no feature detection here — the
+     inputs cannot 42703.
+     ========================================================================== */
+  const dhFixCell = (r, col, type, opts) => {
+    const o = opts || {};
+    return `<div class="dh-fix" data-case="${esc(r.case_id)}" data-col="${esc(col)}">
+      <input class="dh-fix-input" type="${type}"${o.step ? ` step="${o.step}"` : ""}${o.min ? ` min="${o.min}"` : ""}${o.max ? ` max="${esc(o.max)}"` : ""}${o.placeholder ? ` placeholder="${esc(o.placeholder)}"` : ""} aria-label="${esc(o.label || col)} for ${esc(r.name)}">
+      <button type="button" class="btn btn-sm dh-fix-save" data-name="${esc(r.name)}" title="${esc(o.saveTitle || "Save this value onto the case. Nothing else on the case is touched.")}">Save</button>
+      <button class="btn btn-sm" onclick="openCase('${jsArg(r.case_id)}')">Open</button>
+    </div>`;
+  };
+
   const missingPanel = `<div class="panel" id="dh-missing-panel">
     <h3>Clients missing email (with a live case)</h3>
     ${missingEmail.length === 300 ? '<p class="panel-sub">Showing the first 300 — there may be more.</p>' : ""}
@@ -29576,21 +30316,25 @@ async function loadDataHealth() {
 
   const rateEndPanel = `<div class="panel hidden" id="dh-rateend-panel">
     <h3>Completed cases with no rate-end date</h3>
+    ${/* R71 · B3 · M8 — the inline repair, and the one consequence it has that nobody should have
+          to discover. Setting a rate-end date on a completed case is not a bookkeeping tidy-up: it
+          is what puts the case into the retention feed at the right moment. The panel says so. */ ""}
+    <p class="panel-sub">Set the date here and it saves straight onto the case — nothing else on the case is touched. <strong>This is what puts the case into retention:</strong> a completed case with a rate-end date joins the Retention feed on its own, at the usual lead time, with no re-arming and nothing else to switch on. Deals on a tracker or variable rate, retention successors and protection-only records are already left out of this list — they have no fixed end to record.</p>
     ${noRateEnd.length ? noRateEnd.slice(0, DH_PANEL_CAP).map((c) => `
-      <div class="row-item">
+      <div class="row-item" data-fix-row="${esc(c.case_id)}">
         <div class="row-main"><div class="t" onclick="openCase('${c.case_id}')">${esc(c.name)}</div></div>
-        <button class="btn btn-sm" onclick="openCase('${c.case_id}')">Open</button>
+        ${dhFixCell(c, "rate_end_date", "date", { label: "Rate-end date", saveTitle: "Save this rate-end date onto the case. It joins the Retention feed from here on." })}
       </div>`).join("") + dhMoreNote(noRateEnd.length) : '<div class="empty">Every completed case has a rate-end date. 👍</div>'}
   </div>`;
 
   // T1-7 — same shape as rateEndPanel. Opening the case and saving it re-stamps completed_at.
   const noCompletedPanel = `<div class="panel hidden" id="dh-nocompleted-panel">
     <h3>Completed cases with no completion date</h3>
-    <p class="panel-sub">Reports count completions by date — these are complete in the pipeline but missing from every month's figures. Open each one and save it to stamp the date.</p>
+    <p class="panel-sub">Reports count completions by date — these are complete in the pipeline but missing from every month's figures. Type the date here and it saves straight onto the case; nothing else on the case is touched. A date in the future is refused, because a case cannot have completed on a day that has not happened.</p>
     ${noCompletedAt.length ? noCompletedAt.slice(0, DH_PANEL_CAP).map((c) => `
-      <div class="row-item">
+      <div class="row-item" data-fix-row="${esc(c.case_id)}">
         <div class="row-main"><div class="t" onclick="openCase('${c.case_id}')">${esc(c.name)}</div></div>
-        <button class="btn btn-sm" onclick="openCase('${c.case_id}')">Open</button>
+        ${dhFixCell(c, "completed_at", "date", { label: "Completion date", max: localDateStr(), saveTitle: "Save this completion date onto the case. It appears in the month's completion figures from here on." })}
       </div>`).join("") + dhMoreNote(noCompletedAt.length) : '<div class="empty">Every completed case has a completion date. 👍</div>'}
   </div>`;
 
@@ -29630,6 +30374,44 @@ async function loadDataHealth() {
         <div class="row-main"><div class="t" onclick="openCase('${c.case_id}')">${esc(c.name)}</div><div class="s">${esc(STAGE_LABEL[c.stage] || c.stage)} · loan ${fmtM(c.loan)} against a value of ${fmtM(c.value)} — <strong>${c.pct}%</strong></div></div>
         <button class="btn btn-sm" onclick="openCase('${c.case_id}')">Open</button>
       </div>`).join("") + dhMoreNote(ltvOver.length) : '<div class="empty">Every case with both numbers on it has a loan at or below the property value. 👍</div>'}
+  </div>`;
+
+  /* R71 · B2/B3 — the two new gap panels. Both fix in place: a text box for the address, a number
+     box for the loan. `fmtD` on the completion date because "which of these is oldest" is how
+     somebody decides what to backfill first, and the lender is shown because on a back-book row it
+     is often the only other thing that identifies the deal. */
+  const addressPanel = !dhPropOn ? "" : `<div class="panel hidden" id="dh-address-panel">
+    <h3>Completed cases with no property address</h3>
+    <p class="panel-sub">The property address is what the retention flow, the shared-address check, the property chips and the client's property list all work from, so a completed case without one is invisible to every one of them. Type the address here and it saves straight onto the case — nothing else on the case is touched. <strong>Protection-only records are not on this list</strong>: a case that is not mortgage-shaped — no mortgage account number and not one of the mortgage case kinds — is not secured on a building, so there is no address to key. That is the R45 “this is not a mortgage” idea the rate-end tile already applies, asked in a way that does not depend on the very field the tile is about.</p>
+    ${noPropAddress.length ? noPropAddress.slice(0, DH_PANEL_CAP).map((c) => `
+      <div class="row-item" data-fix-row="${esc(c.case_id)}">
+        <div class="row-main"><div class="t" onclick="openCase('${c.case_id}')">${esc(c.name)}</div><div class="s">${esc([c.lender, c.completedAt ? "completed " + fmtD(c.completedAt) : "no completion date"].filter(Boolean).join(" · "))}</div></div>
+        ${dhFixCell(c, "property_address", "text", { label: "Property address", placeholder: "e.g. 9 Bryanstone Road, Bournemouth BH3 7EQ", saveTitle: "Save this property address onto the case. Nothing else on the case is touched." })}
+      </div>`).join("") + dhMoreNote(noPropAddress.length) : '<div class="empty">Every completed mortgage case has a property address. 👍</div>'}
+  </div>`;
+
+  const loanPanel = `<div class="panel hidden" id="dh-loan-panel">
+    <h3>Completed cases with no loan amount</h3>
+    <p class="panel-sub">Anything that divides by the loan — LTV, average loan size, total lending, the loan-above-value sense-check — silently skips a case with no loan amount on it. Type the amount in pounds here and it saves straight onto the case; nothing else on the case is touched. <strong>Protection-only records are not on this list</strong>: a case that is not mortgage-shaped — no mortgage account number and not one of the mortgage case kinds — has no lending on it, so there is no number to fill in and the row would never leave the list. That is R45’s “this is not a mortgage” rule, asked without using the blank loan amount as half its own answer.</p>
+    ${noLoanAmount.length ? noLoanAmount.slice(0, DH_PANEL_CAP).map((c) => `
+      <div class="row-item" data-fix-row="${esc(c.case_id)}">
+        <div class="row-main"><div class="t" onclick="openCase('${c.case_id}')">${esc(c.name)}</div><div class="s">${esc([c.lender, c.completedAt ? "completed " + fmtD(c.completedAt) : "no completion date"].filter(Boolean).join(" · "))}</div></div>
+        ${dhFixCell(c, "loan_amount", "number", { label: "Loan amount", step: "1", min: "0", placeholder: "£", saveTitle: "Save this loan amount onto the case. Nothing else on the case is touched." })}
+      </div>`).join("") + dhMoreNote(noLoanAmount.length) : '<div class="empty">Every completed mortgage case has a loan amount. 👍</div>'}
+  </div>`;
+
+  /* R71 · B4/M2 — the completeness list. No inline fix here on purpose: what is missing is a
+     checklist, a fact find or an uploaded document, and none of those is a value you can type into
+     a box — each one is a real piece of work that happens on the case. So this panel names what is
+     missing, worst-first, and sends you to the place it gets done. */
+  const completenessPanel = `<div class="panel hidden" id="dh-completeness-panel">
+    <h3>Live cases with file gaps</h3>
+    <p class="panel-sub">One measure of whether a case's file is actually complete: the pinned objective, a document checklist, the firm's own papers, a fact find, who we are waiting on, and the expected completion date. <strong>Each stage is only asked for what it can have</strong> — an enquiry is not marked down for having no expected completion date — so the denominator moves as the case moves, and the same figure appears as the “📁 File” chip at the top of the case. Worst gaps first. There is nothing to type here: every missing item is a piece of work on the case itself, so each row opens where that work happens.</p>
+    ${fileGaps.length ? fileGaps.slice(0, DH_PANEL_CAP).map((c) => `
+      <div class="row-item">
+        <div class="row-main"><div class="t" onclick="openCase('${c.case_id}')">${esc(c.name)}</div><div class="s">${esc(STAGE_LABEL[c.stage] || c.stage)} · <strong>${c.have}/${c.of}</strong> · missing: ${esc(c.missing.join(", "))}</div></div>
+        <button class="btn btn-sm" onclick="openCase('${jsArg(c.case_id)}')">Open</button>
+      </div>`).join("") + dhMoreNote(fileGaps.length) : '<div class="empty">Every live case carries the file artefacts its stage asks for. 👍</div>'}
   </div>`;
 
   // T1-26 — the least-reachable records in the database, which previously had no list anywhere.
@@ -29756,6 +30538,11 @@ async function loadDataHealth() {
     <div class="grid-2">${invalidEmailPanel}${invalidPhonePanel}</div>
     <div class="grid-2">${milestonePanel}${deadBookPanel}</div>
     ${ltvPanel}
+    ${/* R71 · B2/B4 — full width, not in a grid-2 pair: each row carries an input and its Save,
+          and a half-width panel is where that wraps into two lines on a laptop. */ ""}
+    ${addressPanel}
+    ${loanPanel}
+    ${completenessPanel}
     ${dhCareOn ? `<div class="grid-2">${vulnerablePanel}${suppressedPanel}</div>` : ""}`;
 
   /* R31-C — BOOK READINESS ROLLUP. The Data-health page grew to ~13 scattered tiles; before the
@@ -29779,6 +30566,9 @@ async function loadDataHealth() {
     { label: "Missing application/offer date", count: noMilestoneDate.length, tileId: "dh-tile-milestone" },
     { label: "Overdue — open past a key date", count: deadBook.length, tileId: "dh-tile-deadbook" },
     { label: "Loan above property value", count: ltvOver.length, tileId: "dh-tile-ltv" },   // R69 · B5/L12
+    { label: "Completed — no property address", count: noPropAddress.length, tileId: "dh-tile-address" },   // R71 · B2
+    { label: "Completed — no loan amount", count: noLoanAmount.length, tileId: "dh-tile-loan" },   // R71 · B2
+    { label: "Live cases with file gaps", count: fileGaps.length, tileId: "dh-tile-completeness" },   // R71 · B4
   ].filter((c) => c.count > 0).sort((a, b) => b.count - a.count);
   const dhReadinessTotal = dhReadinessChecks.reduce((n, c) => n + c.count, 0);
   const dhReadinessEl = document.getElementById("dh-readiness");
@@ -29822,6 +30612,9 @@ async function loadDataHealth() {
   wireTile("#dh-tile-milestone", "#dh-milestone-panel");   // R25 · MI-1
   wireTile("#dh-tile-deadbook", "#dh-deadbook-panel");   // R27
   wireTile("#dh-tile-ltv", "#dh-ltv-panel");   // R69 · B5/L12
+  wireTile("#dh-tile-address", "#dh-address-panel");   // R71 · B2
+  wireTile("#dh-tile-loan", "#dh-loan-panel");   // R71 · B2
+  wireTile("#dh-tile-completeness", "#dh-completeness-panel");   // R71 · B4
   wireTile("#dh-tile-both", "#dh-both-panel");
   wireTile("#dh-tile-invalid-email", "#dh-invalid-email-panel");
   wireTile("#dh-tile-invalid-phone", "#dh-invalid-phone-panel");
@@ -29891,6 +30684,133 @@ async function loadDataHealth() {
   };
   const dhAdv = $("#dh-bulk-adviser");
   if (dhAdv) dhAdv.onchange = () => { const v = dhAdv.value; dhAdv.value = ""; if (v) bulkAssignDataHealth(v); };
+
+  /* R71 · B3 — the inline fixes, wired once by delegation on #data-content rather than per row:
+     four panels can carry two hundred rows each, and four hundred individual handlers is DOM the
+     page does not need. Enter in the box saves, because typing a date and reaching for the mouse
+     is the thing that makes an inline edit no faster than the modal. */
+  const dhContent = $("#data-content");
+  if (dhContent) {
+    dhContent.addEventListener("click", (e) => {
+      const btn = e.target.closest(".dh-fix-save");
+      if (btn) dhInlineFixSave(btn);
+    });
+    dhContent.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter") return;
+      const input = e.target.closest(".dh-fix-input");
+      if (!input) return;
+      e.preventDefault();
+      const btn = input.parentElement && input.parentElement.querySelector(".dh-fix-save");
+      if (btn) dhInlineFixSave(btn);
+    });
+  }
+}
+/* ==========================================================================
+   R71 · B3/H6+M8 — ONE INLINE FIX, WRITTEN ONCE.
+
+   Four panels, four columns, one function. It validates what the column can
+   actually hold, writes THAT COLUMN ALONE, and then repairs the page in place:
+   the row leaves the list, the tile's number comes down, the readiness rollup
+   row comes down with it (and disappears at zero), and the toast names the case
+   so there is no doubt which row was just changed.
+
+   WHY NOT JUST RE-RUN loadDataHealth(). Because a full reload throws away the
+   scroll position and every other panel the operator has open, and this is a
+   screen somebody works down a list on. The page is repaired, not repainted.
+   The next real load recomputes everything from the database anyway, so nothing
+   here can drift into a lie — at worst a tile is one behind until then, and the
+   number it shows is the number of rows actually left in front of you.
+
+   No confirm: setting a blank field is not destructive and there is nothing to
+   undo except typing again. A refused value is refused with a toast that says
+   WHY, never a silent no-op.
+   ========================================================================== */
+async function dhInlineFixSave(btn) {
+  const wrap = btn.closest(".dh-fix");
+  if (!wrap) return;
+  const caseId = wrap.dataset.case, col = wrap.dataset.col;
+  const input = wrap.querySelector(".dh-fix-input");
+  const name = btn.dataset.name || "this case";
+  if (!caseId || !col || !input) return;
+  const raw = String(input.value || "").trim();
+  if (!raw) return toast("Nothing to save — type a value first.");
+  let value = raw, said = raw;
+  if (col === "loan_amount") {
+    const n = Number(raw.replace(/[£,\s]/g, ""));
+    if (!isFinite(n) || n <= 0) return toast("A loan amount has to be a number above zero.");
+    value = n; said = fmtM(n);
+  } else if (col === "property_address") {
+    if (raw.length < 4) return toast("That is too short to be an address — type the full address.");
+    value = raw;
+  } else {
+    // The two date columns. An invalid date never reaches the database; a completion date in the
+    // future is refused outright, because a case cannot have completed on a day that has not
+    // happened. A rate-end date in the future is normal and is NOT refused.
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(raw) || isNaN(new Date(raw).getTime())) return toast("That is not a date the app can read — use the date box.");
+    if (col === "completed_at" && raw > localDateStr()) return toast("A completion date can't be in the future — this case would vanish from every month's figures until that day arrives.");
+    said = fmtD(raw);
+  }
+  btn.disabled = true;
+  const { error } = await db.from("cases").update({ [col]: value }).eq("id", caseId);
+  if (error) {
+    btn.disabled = false;
+    return toast("Couldn't save: " + (error.message || error));
+  }
+  /* R18-D1's rule, scoped: our own write must not trip the case form's stale-write guard — but
+     only re-baseline it when the modal is actually holding THIS case, or the guard would end up
+     carrying a stamp from a case nobody has open. */
+  if (typeof currentModal !== "undefined" && currentModal && currentModal.type === "case" && currentModal.id === caseId) {
+    await refreshOpenedStamp(caseId);
+  }
+  const panel = btn.closest(".panel");
+  const row = btn.closest(".row-item");
+  if (row) row.remove();
+  dhDecrementTile(panel);
+  toast(`Saved — ${name}: ${DH_FIX_LABEL[col] || col} set to ${said}`);
+}
+const DH_FIX_LABEL = {
+  rate_end_date: "rate-end date", completed_at: "completion date",
+  property_address: "property address", loan_amount: "loan amount",
+};
+/* The page repair. Finds the tile this panel belongs to from the wiring table below (one place,
+   so a new fix panel cannot forget to say which tile it feeds), takes one off its count and off
+   the matching readiness row, and drops the "warn" colour when the count reaches zero. The tile
+   is NOT folded away at zero — dhFault decides that at render time and re-deciding it here would
+   be a second, thinner copy of that rule. */
+const DH_FIX_PANEL_TILE = {
+  "dh-rateend-panel": "dh-tile-rateend",
+  "dh-nocompleted-panel": "dh-tile-nocompleted",
+  "dh-address-panel": "dh-tile-address",
+  "dh-loan-panel": "dh-tile-loan",
+};
+function dhDecrementTile(panel) {
+  if (!panel) return;
+  const tileId = DH_FIX_PANEL_TILE[panel.id];
+  const tile = tileId ? document.getElementById(tileId) : null;
+  if (tile) {
+    const numEl = tile.querySelector(".num");
+    const n = Number(String((numEl && numEl.textContent) || "").trim());
+    if (numEl && isFinite(n)) {
+      const left = Math.max(0, n - 1);
+      numEl.textContent = String(left);
+      if (!left) tile.classList.remove("warn");
+    }
+  }
+  const items = document.querySelectorAll("#dh-readiness .dh-readiness-item");
+  items.forEach((it) => {
+    const onclick = it.getAttribute("onclick") || "";
+    if (tileId && onclick.indexOf("'" + tileId + "'") === -1) return;
+    if (!tileId) return;
+    const cEl = it.querySelector(".dh-readiness-count");
+    const n = Number(String((cEl && cEl.textContent) || "").trim());
+    if (!cEl || !isFinite(n)) return;
+    const left = Math.max(0, n - 1);
+    if (!left) it.remove(); else cEl.textContent = String(left);
+  });
+  // The panel emptied out under the operator's hands — say so rather than leaving a bare heading.
+  if (!panel.querySelector(".row-item") && !panel.querySelector(".empty")) {
+    panel.insertAdjacentHTML("beforeend", '<div class="empty">Nothing left on this list. 👍</div>');
+  }
 }
 /* R12b · K-11 — SEND FROM THE QUEUE, THROUGH THE SAME DOOR AS THE CASE.
    Deliberately the same function the case screen's button calls (sendDocsRequestNow), with a

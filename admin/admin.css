@@ -4193,3 +4193,20 @@ tr.owed-hot > td { background: var(--red-bg); }
    marked / none) so the row's story is inspectable without parsing its words. The colour still
    comes from the shared .badge classes; nothing here overrides them. */
 .ret-rem-badge { white-space: nowrap; }
+
+/* R71 · B3 — THE INLINE FIX CELL on Data health's four repair panels. An input, its Save and the
+   "Open" that was always there, on one line at the right of the row. It wraps under the name on a
+   narrow screen for the same reason every other .row-item action group does (R6-FIX V3): the box
+   has to be REACHABLE, not merely present. The input is deliberately modest — a date box is a date
+   box, and an address needs room to read back what was typed. */
+.dh-fix { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.dh-fix-input { padding: 4px 6px; font-size: 13px; border: 1px solid var(--border); border-radius: 6px; min-width: 130px; }
+.dh-fix-input[type="text"] { min-width: 220px; flex: 1 1 220px; }
+.dh-fix-input:focus { outline: none; border-color: var(--navy); box-shadow: var(--focus-ring); }
+@media (max-width: 700px) {
+  .dh-fix { justify-content: flex-start; width: 100%; }
+  .dh-fix-input, .dh-fix-input[type="text"] { flex: 1 1 100%; min-width: 0; }
+}
+/* R71 · B4 — the case header's file-completeness chip. Colour comes from the shared .badge
+   classes; this only keeps it from being broken across two lines. */
+.cs-file-chip { white-space: nowrap; }

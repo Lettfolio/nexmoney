@@ -118,7 +118,47 @@ node tests/r69_polish.js
 node tests/r69_hf1.js
 node tests/r70_retention.js
 node tests/r70_calls.js
+node tests/r71_backfill.js
+node tests/r71_health.js
 ```
+
+**R71 notes — back-fill the book + data health (`tests/r71_backfill.js` 95, `tests/r71_health.js` 78).**
+Pipeline bulk bar gains `#pipe-bulk-playbook` "＋ Apply stage playbooks" (loops the idempotent
+`autoAddStagePlaybookTasks` per case at ITS stage/kind, assignee = the case's `assigned_to`; honours
+the `playbook_auto_tasks` setting; pre-flight names terminal / no-steps / already-done skips in ONE
+`openOverlay` confirm) and `#pipe-bulk-checklists` 🗂 "Build checklists" (`insertDocItems` +
+`docSuggestionsFor(kind).suggested` — the Fact Find prompt's writer — for Fact Find→Exchange cases
+with no `case_documents` rows; Enquiry/DIP named as premature; creates rows only, queues NO email).
+Playbook steps are now resolved through `playbookStepPlan(stage, kind, {rateEndDate})` and titles
+matched through `playbookStepMatchesTitle` (steps may carry `titlePrefix` — the PT Enquiry call step
+"Ring client — rate ends <date>" is prefix-matched so the R63 stale rule and idempotency survive the
+embedded date). **RULE: never compare a playbook step's `title` with `===` — go through
+`playbookStepMatchesTitle`/`playbookStepPlan`.** PT Enquiry set (kind `product_transfer`): Ring client
+(due = min(today+3, rate_end−42d) clamped to today, Europe/London), Confirm current lender + balance
+(call+1d), Issue recommendation (+7d); website steps gained `notKinds:["product_transfer"]`. Three
+Application file steps for every kind: illustration/ESIS +1d, research +2d, suitability letter +5d
+(steps, not a gate). `autoAddStagePlaybookTasks` takes `opts.rateEndDate` (undefined = "not looked",
+null = "none") and only fetches it when a step needs it; `moveCaseToStage`/`bulkMoveStage` selects
+gained `rate_end_date`. — `loadDataHealth()` (~29120) resolves feature gates then issues ALL reads in
+ONE `Promise.all` (optional columns stay separate parallel reads, never widened into the main select
+— 42703-safety per column). New tiles `#dh-tile-address` / `#dh-tile-loan` (completed, not_proceeding
+excluded, protection-only shape excluded via `dhIsMortgageCase` = account number OR `MORTGAGE_KINDS`
+— deliberately NOT R45's literal predicate, which is circular for the loan tile) and
+`#dh-tile-completeness` "Live cases with file gaps". Fix panels (rate-end, completion date, address,
+loan) have inline per-row inputs + Save (`dhFixCell`/`dhInlineFixSave` — single-column update,
+`refreshOpenedStamp` only when that case's modal is open, row leaves list, `dhDecrementTile`, named
+toast). `caseCompleteness(c, extras)` counts 6 artefacts with a per-stage denominator (objective+
+checklist → Enquiry, fact find → Fact Find, files → DIP per `CASE_SECTION_RULES.files`, waiting_on →
+Application, expected_completion_date → Offer; unreadable table drops from `of`, never "missing");
+modal header chip `📁 File n/m` via two `limit(1)` existence reads added to `openCase`'s existing
+opening `Promise.all`. NO pipeline column (r24 `BOARD_CASE_COLS` untouched). Old-suite patches
+(commented `R71:`): r42 §J `READINESS_TILE_IDS` + two-clean-tiles-at-rest + `insertNoLoanCase()`
+(162→165), r63_tasks/r17 playbook maps gain the file steps + PT gating (counts recomputed, no
+assertion weakened), r31 C11 (every seeded live case also has file gaps, so `#dh-tile-completeness`
+grows in lockstep and stays on top — C11 now asserts the seeded tile outranks every smaller tile;
+C11b still pins the full worst-first ordering). Note: `isAdminOrOwner()` does not exist — bulk verbs are ungated, matching the
+existing bulk bar. r25 F1 confirmed failing at base 6a60ed9 (pre-existing, not a date artefact of
+this round).
 
 **R70 notes — work the back book.** Two suites: `tests/r70_retention.js` (118 — ended chips, sort
 direction, the five reminder-badge states, guard eligibility/clearing, repaint after outcome, ONE

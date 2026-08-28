@@ -183,8 +183,14 @@ const goto = async (page, pageName, ms) => {
    ------------------------------------------------------------------------- */
 const PLAYBOOK = {
   enquiry: [
-    { title: "Qualify enquiry — budget, timeline, goal", dueOffsetDays: 0 },
-    { title: "Book fact-find appointment", dueOffsetDays: 2 },
+    /* R71: the two website-enquiry steps are now `notKinds: ["product_transfer"]` — a product
+       transfer at Enquiry gets its own three steps instead (tests/r71_backfill.js §C owns them,
+       including the dated "Ring client — rate ends <date>" title and its clamp). Nothing in THIS
+       file exercises a product transfer at Enquiry (no fixture lead has enquiry_type
+       "product_transfer", and every case §A/§B seeds at Enquiry is a purchase), so the gating is
+       recorded here for accuracy and the PT set is deliberately not duplicated. */
+    { title: "Qualify enquiry — budget, timeline, goal", dueOffsetDays: 0, notKinds: ["product_transfer"] },
+    { title: "Book fact-find appointment", dueOffsetDays: 2, notKinds: ["product_transfer"] },
   ],
   fact_find: [
     { title: "Complete fact-find", dueOffsetDays: 1 },
@@ -200,6 +206,13 @@ const PLAYBOOK = {
     { title: "Chase outstanding documents", dueOffsetDays: 3 },
     { title: "Instruct valuation", dueOffsetDays: 2, notKinds: ["product_transfer"] },
     { title: "Confirm ICR / rental income", dueOffsetDays: 1, onlyKinds: ["buy_to_let"] },
+    /* R71: three new Application steps for EVERY kind — the file artefacts the case Files empty
+       state has always named and no playbook ever asked for (panel M1). A deliberate contract
+       change to this suite's ground truth, not a repair: the assertions below still recompute
+       from THIS map, so they measure the writer rather than restating it. */
+    { title: "Save the illustration/ESIS to the case file", dueOffsetDays: 1 },
+    { title: "Save the research/sourcing evidence", dueOffsetDays: 2 },
+    { title: "Draft + save the suitability letter", dueOffsetDays: 5 },
   ],
   offer: [
     { title: "Check mortgage offer terms", dueOffsetDays: 0 },
@@ -400,13 +413,15 @@ const dueFor = (offset, now) => dstr(now + offset * DAY_MS);
       const b4 = await mkClientCase(page, { first: "PT", last: "NoValuation", case_kind: "product_transfer", stage: "decision_in_principle", assigned_to: "p2" });
       await move(page, b4.caseId, "application");
       const b4Titles = await openTitlesOf(page, b4.caseId);
-      eq("B4 · product_transfer at Application gets exactly its two applicable steps",
+      // R71: "two" became five — the three file-artefact steps apply to every kind (see the map).
+      eq("B4 · product_transfer at Application gets exactly its five applicable steps",
         b4Titles, pbTitles("application", "product_transfer"));
       ok("B4 · …and nothing titled “Instruct valuation”", !b4Titles.includes("Instruct valuation"), JSON.stringify(b4Titles));
       // …while a buy-to-let at the same stage gets all four, ICR included.
       const b4b = await mkClientCase(page, { first: "BTL", last: "WithIcr", case_kind: "buy_to_let", stage: "decision_in_principle", assigned_to: "p2" });
       await move(page, b4b.caseId, "application");
-      eq("B4 · buy_to_let at Application gets all four, ICR included",
+      // R71: "all four" became all seven — ICR plus the three file-artefact steps.
+      eq("B4 · buy_to_let at Application gets all seven, ICR included",
         await openTitlesOf(page, b4b.caseId), pbTitles("application", "buy_to_let"));
 
       // B5 — Exchange: the two exchange steps and NOTHING titled "Chase solicitors…". That task is

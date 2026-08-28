@@ -453,7 +453,16 @@ async function readinessItems(page) {
       ok("C9 · 'Live cases unassigned' item is present after seeding", after.some((c) => c.tileId === "dh-tile-unassigned"));
       const unassignedItem = after.find((c) => c.tileId === "dh-tile-unassigned");
       ok("C10 · its count grew to at least the number just seeded", unassignedItem && unassignedItem.count >= N_UNASSIGNED, JSON.stringify(unassignedItem));
-      eq("C11 · it now sorts to the TOP of the rollup (largest count first)", after[0] && after[0].tileId, "dh-tile-unassigned");
+      /* R71: #dh-tile-completeness ("Live cases with file gaps") joined the rollup, and every case
+         this block seeds is ALSO a live case with file gaps (no objective, checklist, fact find…),
+         so that tile grows in lockstep with the seed and legitimately stays ≥ the unassigned count —
+         "strictly larger than anything on the board" is unachievable by seeding live cases. The
+         claim kept: the seeded tile outranks every tile it outnumbers (C11b still pins the full
+         worst-first ordering). */
+      const unassignedIdx = after.findIndex((c) => c.tileId === "dh-tile-unassigned");
+      ok("C11 · it now sorts above every smaller tile (largest count first)",
+        unassignedIdx >= 0 && after.slice(0, unassignedIdx).every((c) => c.count >= (unassignedItem ? unassignedItem.count : Infinity)),
+        JSON.stringify(after.slice(0, unassignedIdx + 1)));
       ok("C11b · still sorted worst-first after seeding", after.every((c, i) => i === 0 || after[i - 1].count >= c.count), JSON.stringify(after));
 
       // C12 — clicking an item scrolls to AND expands its tile's panel. Use the invalid-email row
