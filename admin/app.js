@@ -5262,7 +5262,10 @@ window.goliveJump = function (sel) {
   target.classList.add("golive-flash");
   setTimeout(() => target.classList.remove("golive-flash"), 1600);
 };
-const GOLIVE_SANDBOX_RE = /@resend\.dev\s*$/i;   // the sandbox sender every Resend account starts on
+/* R72-HF1 — prod's from_email is the display-name form `NexMoney <onboarding@resend.dev>`, whose
+   trailing ">" defeated an end-anchored /@resend\.dev$/ (the mock seeded the bare address, so the
+   suite never saw it). Allow an optional closing bracket; live-verify caught it, 28 Aug. */
+const GOLIVE_SANDBOX_RE = /@resend\.dev\s*>?\s*$/i;   // the sandbox sender every Resend account starts on
 /* One row per thing that has to be true before this firm can go live. `blocked` is computed, never
    stored; `blocks` is what it costs in plain English, which is the half the ten paragraphs on this
    page never put in one place. */

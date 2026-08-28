@@ -467,6 +467,23 @@ const pickChip = async (page, k) => {
     eq("§C4c · all eight collapse into the ready fold", clear.readyN, 8);
     ok("§C4d · and the subtitle says nothing is outstanding", /Nothing is outstanding/.test(clear.sub), clear.sub);
 
+    /* R72-HF1 — prod writes from_email in the display-name form `NexMoney <onboarding@resend.dev>`,
+       whose trailing ">" defeated the end-anchored sandbox regex; the mock's bare address never
+       exercised it and the live rollup called the sandbox sender "ready". Pin the real shape. */
+    const hf1 = await page.evaluate(async () => {
+      await window.__mockDb.from("settings").upsert([{ key: "from_email", value: "NexMoney <onboarding@resend.dev>" }]);
+      await loadSettings();
+      window.renderSettingsGolive();
+      const row = document.getElementById("golive-from");
+      return { state: row && row.dataset.state, detail: (row.querySelector(".golive-detail") || {}).textContent || "" };
+    });
+    eq("§C4e (R72-HF1) · a display-name resend.dev sender still counts as the sandbox", hf1.state, "blocked");
+    ok("§C4e2 · and the detail names it", /sandbox/i.test(hf1.detail), hf1.detail);
+    await page.evaluate(async () => { // put it back so later sections see the §C4 all-clear state
+      await window.__mockDb.from("settings").upsert([{ key: "from_email", value: "hello@nexmoney.co.uk" }]);
+      await loadSettings(); window.renderSettingsGolive();
+    });
+
     eq("§C5 · no console errors (owner)", realErrs(page), []);
     await page.__ctx.close();
   }
