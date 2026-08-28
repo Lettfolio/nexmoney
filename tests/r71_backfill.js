@@ -456,8 +456,13 @@ function docSuggested(docsListRaw, kind) {
         /Gus/.test(ov.text) && /already has a checklist/i.test(ov.text), ov.text.slice(0, 700));
       ok("B2c · …names the Enquiry case and says a checklist there is premature",
         /Hal/.test(ov.text) && /premature/i.test(ov.text), ov.text.slice(0, 900));
-      ok("B2d · …names the DIP case for the same reason",
-        /Ivy/.test(ov.text), ov.text.slice(0, 900));
+      /* R72: DIP included per owner decision (28 Aug). This assertion used to read "…names the DIP
+         case for the same reason" — R71 skipped Decision in Principle as premature alongside
+         Enquiry. Daniel overruled that: a DIP has a lender and a client who has agreed to proceed,
+         so the lender's paperwork is already wanted. Ivy is now BUILT ON, not skipped, and the
+         confirm states the new boundary. Enquiry (B2c) is unchanged. */
+      ok("B2d · R72: …and the DIP case is BUILT on, not skipped — the verb applies from DIP onwards",
+        /Ivy/.test(ov.text) && /from Decision in Principle onwards/i.test(ov.text), ov.text.slice(0, 900));
       ok("B2e · …names the completed case as not live", /Jon/.test(ov.text) && /not a live case/i.test(ov.text), ov.text.slice(0, 900));
       ok("B3 · the confirm states that NOTHING is emailed by this verb",
         /Nothing is emailed by this/i.test(ov.text), ov.text.slice(0, 500));
@@ -479,7 +484,9 @@ function docSuggested(docsListRaw, kind) {
       eq("B6 · the case that already had a checklist still has exactly its one curated item",
         (await docsOf(page, b3.caseId)).map((d) => d.item), ["Passport"]);
       eq("B6b · the Enquiry case got nothing", (await docsOf(page, b4.caseId)).length, 0);
-      eq("B6c · the DIP case got nothing", (await docsOf(page, b5.caseId)).length, 0);
+      // R72: DIP included per owner decision — Ivy is a purchase, so she gets the purchase list.
+      eq("B6c · R72: the DIP case now gets the same list a purchase gets",
+        (await docsOf(page, b5.caseId)).map((d) => d.item).sort(), [...expB1].sort());
       eq("B6d · the completed case got nothing", (await docsOf(page, b6.caseId)).length, 0);
 
       // The claim "nothing is emailed" measured against the queue, not against the copy.
@@ -488,11 +495,14 @@ function docSuggested(docsListRaw, kind) {
       eq("B7 · NOT ONE email row was written for any of the six cases", mails, [0, 0, 0, 0, 0, 0]);
 
       const tB = await toastText(page);
-      ok("B8 · the toast tallies checklists, items and that nothing was emailed",
-        /2 checklists built/i.test(tB) && new RegExp(`${expB1.length + expB2.length} items`).test(tB) && /nothing emailed/i.test(tB), tB);
-      ok("B8b · …and names the four skips", /4 skipped/i.test(tB), tB);
+      /* R72: DIP included per owner decision — three checklists now, not two (Eve at Application,
+         Fay at Offer, Ivy at DIP), and three skips, not four (Gus already has one, Hal is at
+         Enquiry, Jon is completed). The item total gains Ivy's purchase list. */
+      ok("B8 · R72: the toast tallies checklists, items and that nothing was emailed",
+        /3 checklists built/i.test(tB) && new RegExp(`${expB1.length * 2 + expB2.length} items`).test(tB) && /nothing emailed/i.test(tB), tB);
+      ok("B8b · R72: …and names the three skips", /3 skipped/i.test(tB), tB);
 
-      // B9 — idempotent: the two cases it just built on are now "already has a checklist".
+      // B9 — idempotent: the three cases it just built on are now "already has a checklist".
       page.__dialogs.length = 0;
       await page.click("#pipe-bulk-checklists");
       await wait(page, 2400);

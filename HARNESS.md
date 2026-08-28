@@ -120,7 +120,47 @@ node tests/r70_retention.js
 node tests/r70_calls.js
 node tests/r71_backfill.js
 node tests/r71_health.js
+node tests/r72_owner.js
+node tests/r72_admin.js
 ```
+
+**R72 notes — owner + admin (`tests/r72_owner.js` 83, `tests/r72_admin.js` 145).**
+Owner side: adoption strip `#report-adoption` on the Reports scoreboard panel (rides its
+`showMoney()` gate; roster = TEAM incl. the administrator, NOT `advisingStaff()`): Last active =
+max audit_log.happened_at per human actor (90-day window, `.in("actor", staffIds)` — automation
+rows carry `actor IS NULL` so the filter excludes them at the database), Cases touched 30d,
+Overdue tasks (case_tasks done_at null + due < today, one readAll grouped in JS). Rate-end
+outcomes: `rateEndOutcomeOf(caseRow, extras)` → retained (a `retention_source_case_id` successor
+reached completed — beats a note) / renewed_elsewhere / sold (both from the 📌 case-note prefix,
+matched by `rateEndOutcomeNoteKind()`, never `===`; `property_sold_at` deliberately NOT the sold
+source) / none; ONE extra bounded readAll (`readRateEndOutcomeNotes()`) joined into
+`loadRetentionRates`' existing Promise.all; funnel `#ret-outcome-funnel` (window = last 366 days,
+both feed rows and note-dated departures, Mine/All aware) + row clause `.ret-row-outcome` on
+ended rows. Settings `#settings-golive` (8 ordered blocker rows, r42 §J manners, reuses R68's
+`emailSendingState` — never probes twice; owner + admin read-only; no jump-nav chip so r37's
+pinned chip sets stay); tour steps per role via `TOUR_STEPS_BY_ROLE`/`tourStepsFor(MY_ROLE)` —
+`TOUR_STEPS` is a let reassigned by `runFirstRunTour`, machinery untouched, every role ends on
+Retention; `#whatsnew-band` on Today (static `WHATSNEW_LINE`, key `nx_whatsnew_r72`, returning
+users only, hidden ≤640px by media query — NOT dismissed — to keep r69_today §B's phone budget).
+Admin side: `defaultAssignee(c.assigned_to)` on BOTH case-scoped booking paths (`#act-appt`,
+`retBookReview`); `#appt-staff` + `#appt-whose-note` + `syncApptWhose()`, save toast names whose
+diary. New case: `newCaseSelfAssigns()` — ADVISER defaults to self, admin/owner default UNASSIGNED
+(`#case-assign-sub` explains; keyed off MY_ROLE exactly). Watchtower bulk triage: `.wt-cb` per
+row, `.wt-group-all` per rule (sibling of the head button in `.wt-group-headrow` — the head is a
+<button>, can't nest), `#wt-bulk-bar` Snooze 7d/30d/Dismiss, ONE overlay confirm with one optional
+reason (REQUIRED when the batch holds a critical — matches the per-row compliance rule), batched
+`.in()` writes via inChunks to snoozed_until/note/by/resolved_at only, ONE repaint. Emails page:
+`.email-cb` + preview fold on queued AND failed rows; `emailBodyPreviewHtml()` renders body_html
+INERTLY (DOMParser into a detached doc, allow-list rebuild copying ZERO attributes; `<a>` becomes
+text + the URL as text — R13's no-live-links rule); `#email-bulk-cancel` (one guarded `.in()`
+update + one confirm); Retry scoped to the failed subset (`Retry failed (k)`). DIP joined
+`CHECKLIST_BACKFILL_STAGES` (owner decision 28 Aug). Test hook: `window.__wtPaints()` (next to
+`renderWatchtower`) counts Watchtower paints. CORRECTION to the R71 note below: `isAdminOrOwner()`
+DOES exist (app.js ~645) — the new bulk verbs simply stay ungated like the existing bars.
+Old-suite patches (commented R72:): r41 §A2b child-order lock gains `whatsnew-band` (+ §F2 note);
+r70_retention §D4b harness fix (await the settle, not the promise — any extra read in the
+retention Promise.all wave destroyed the in-page execution context; reproduced at base);
+r71_backfill §B DIP expectations; r5_batch2 §7 re-pointed (p1 asserts unassigned, p2 still self).
 
 **R71 notes — back-fill the book + data health (`tests/r71_backfill.js` 95, `tests/r71_health.js` 78).**
 Pipeline bulk bar gains `#pipe-bulk-playbook` "＋ Apply stage playbooks" (loops the idempotent

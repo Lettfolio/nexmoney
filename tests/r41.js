@@ -260,8 +260,15 @@ const readRow = (page, table, id) => page.evaluate(async ({ table, id }) => {
          numbers → briefing — is untouched: the three ids this lock exists to protect are still
          consecutive below. It is hidden outright for an adviser. The lock is widened by exactly
          that one entry rather than loosened. */
+      /* R72 · A4 — ONE more child, on exactly the R68 argument above it and in exactly the same
+         place: #whatsnew-band (the dismissible "since you were last here" line for a returning
+         user) joins the strips ABOVE the page title — specifically beside #dash-notices, so that
+         BOTH standing locks hold: R11-1's adjacency (#today-heading → #kpi-row →
+         #briefing-panel) is still literally consecutive below, and R68's #ops-strip is still the
+         element immediately above the title (r68_mi D2b). The lock is widened by that one entry,
+         deliberately, rather than loosened. */
       eq("§A2b · #page-dashboard's own child order is the locked one",
-        order, ["dash-notices", "ops-strip", "today-heading", "kpi-row", "dash-cap-notice", "briefing-panel", "watchtower-panel", "unactioned-panel", "grid-2:rate-erc-panel,revenue-panel"]);
+        order, ["dash-notices", "whatsnew-band", "ops-strip", "today-heading", "kpi-row", "dash-cap-notice", "briefing-panel", "watchtower-panel", "unactioned-panel", "grid-2:rate-erc-panel,revenue-panel"]);
 
       ok("§A2 · no console errors", noNewErr(page, errBefore), JSON.stringify(page.__err));
       await page.close();
@@ -582,7 +589,12 @@ const readRow = (page, table, id) => page.evaluate(async ({ table, id }) => {
 
       const liveCount = await page.evaluate(() => TOUR_STEPS.filter((s) => { try { return !!document.querySelector(s.target); } catch (e) { return false; } }).length);
       const totalCount = await page.evaluate(() => TOUR_STEPS.length);
-      eq("§F2 · TOUR_STEPS is 4 long (the #tasks-panel/#today-appts-panel steps were deleted, not re-pointed)", totalCount, 4);
+      /* R72 · A4 — TOUR_STEPS is now the list for MY_ROLE (tourStepsFor), reassigned by
+         runFirstRunTour as the tour starts. p3 is an ADVISER, and the adviser list is still four
+         steps: My Day, Pipeline, Help, and — new this round — Retention. What R41 deleted stayed
+         deleted; the Watchtower step moved to the OWNER and ADMIN lists, where the triage
+         actually is. So this assertion still means what it meant, for the list p3 is shown. */
+      eq("§F2 · TOUR_STEPS (p3 = adviser) is 4 long (the #tasks-panel/#today-appts-panel steps were deleted, not re-pointed)", totalCount, 4);
       eq("§F3 · every step in the list has a live target — none silently skipped", liveCount, totalCount);
 
       let seen = 0;

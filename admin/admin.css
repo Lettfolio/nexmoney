@@ -3894,6 +3894,22 @@ tr.owed-hot > td { background: var(--red-bg); }
 .ret-row-never { color: var(--red); font-weight: 600; }
 /* The three outcome chips sit with Log call / Book review and read as one cluster. */
 .ret-out-chip { border-style: dashed; }
+/* R72 · A2 — the STATE clause ("· outcome: sold"), quiet grey beside the last-contact line: it is
+   a fact about the row, not an action on it, so it must never compete with the chips above. */
+.ret-row-outcome { color: var(--muted); font-variant-numeric: tabular-nums; }
+/* R72 · A2 — the rate-end outcome funnel, in the same chip language as the month row above it. */
+.ret-outcome-funnel:empty { display: none; }
+.ret-outcome-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; margin: 0 0 6px; }
+.ret-outcome-title { font-weight: 600; font-size: 13px; }
+.ret-outcome-chip { border: 1px solid var(--border); border-radius: 12px; padding: 1px 9px; font-size: 12px; background: var(--light); }
+.ret-outcome-chip strong { font-variant-numeric: tabular-nums; }
+.ret-outcome-chip.hot { background: var(--amber-bg); border-color: var(--amber); color: var(--amber); }
+#ret-outcome-sub { margin: 0 0 10px; max-width: 88ch; }
+/* R72 · A1 — the adoption strip under the owner scoreboard. */
+.adopt-h { margin: 18px 0 4px; font-size: 14px; }
+.adopt-h .count { margin-left: 6px; }
+#report-adoption-table .adopt-never { color: var(--red); font-weight: 600; }
+#report-adoption-table td { font-variant-numeric: tabular-nums; }
 /* The "Never contacted first" toggle, in the same chip language as the month row above it. */
 .ret-untouched-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; margin: 0 0 10px; }
 .ret-untouched-chip .count { margin-left: 5px; background: rgba(16,42,78,.08); border-radius: 10px; padding: 0 6px; font-size: 11px; font-weight: 700; }
@@ -4210,3 +4226,105 @@ tr.owed-hot > td { background: var(--red-bg); }
 /* R71 · B4 — the case header's file-completeness chip. Colour comes from the shared .badge
    classes; this only keeps it from being broken across two lines. */
 .cs-file-chip { white-space: nowrap; }
+
+/* ==========================================================================
+   R72 · A3 — "Before go-live" on Settings. The Data-health readiness rollup's
+   manners in this page's language: an ordered list of what is outstanding,
+   each row a click through to the control that changes it.
+   ========================================================================== */
+#settings-golive { margin-bottom: 20px; }
+.golive-list { display: flex; flex-direction: column; gap: 6px; }
+.golive-item {
+  border: 1px solid var(--border); border-left: 3px solid var(--red); border-radius: 6px;
+  padding: 7px 10px; cursor: pointer; background: var(--white);
+}
+.golive-item:hover, .golive-item:focus { border-color: var(--border-strong); background: var(--canvas); outline: none; }
+.golive-item[data-state="ready"] { border-left-color: var(--green); }
+.golive-item[data-state="unknown"] { border-left-color: var(--muted); }
+.golive-item-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.golive-label { font-weight: 600; font-size: 13.5px; }
+.golive-detail { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+.golive-blocks { font-size: 12.5px; margin-top: 4px; max-width: 88ch; }
+.golive-ready { margin-top: 10px; }
+.golive-ready > summary { font-size: 12.5px; }
+/* The flash the jump leaves on the control it lands on, so a scroll into a wall of forty fields
+   ends somewhere the eye can find. */
+.golive-flash { outline: 2px solid var(--amber); outline-offset: 3px; border-radius: 4px; }
+
+/* ==========================================================================
+   R72 · A4 — the "since you were last here" line on Today. One row, above the
+   heading with the other system strips, quiet enough to be read once and
+   dismissed rather than argued with.
+   ========================================================================== */
+#whatsnew-band { margin: 0 0 8px; }
+.whatsnew-band {
+  display: flex; align-items: baseline; gap: 6px;
+  background: var(--blue-bg); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 5px 9px; font-size: 12px; line-height: 1.4; color: var(--text);
+}
+.whatsnew-text { flex: 1; max-width: 96ch; }
+.whatsnew-band .btn { flex: none; padding: 1px 8px; font-size: 11.5px; }
+/* NOT ON A PHONE. R69 · A2/L2 spent a round pushing Today's first actionable row back up the
+   screen at 390px (it started ~1,170px down), and tests/r69_today.js §B holds that line. A
+   release note is the least urgent thing on this page and it cannot be one line at this width —
+   four wrapped lines of "what changed" between a phone and the first job of the day would be
+   exactly the regression that round fixed. It is not dismissed, only not shown: the key is
+   untouched, so it is still waiting on the desktop where a changelog is actually read. */
+@media (max-width: 640px) {
+  #whatsnew-band { display: none; }
+}
+
+/* ==========================================================================
+   R72 · B1/B2/B3 — default assignees, Watchtower bulk triage, email preview.
+   ========================================================================== */
+/* B1 — the "new cases start unassigned / on you" sentence, inside the new-case core grid. It is a
+   .panel-sub in a .form-grid, so it needs the grid's own rhythm rather than the panel's. */
+.case-assign-sub { margin: -4px 0 0; font-size: 11.5px; line-height: 1.45; }
+/* B1 — "this goes in Wayne's diary, not yours", under the appointment form's Who select. Same
+   shape as .appt-case-note, which it reuses; nothing to add beyond letting it wrap. */
+
+/* B2 — the Watchtower's per-row tick and its per-rule Select all. The head row exists only so the
+   group's <button> heading and the select-all button can sit side by side: the heading is itself a
+   button and cannot contain one. */
+.wt-cb { width: 18px; height: 18px; cursor: pointer; accent-color: var(--navy); margin: 0; flex: 0 0 auto; align-self: center; }
+.wt-group-headrow { display: flex; align-items: stretch; gap: 6px; }
+.wt-group-headrow > .wt-group-head { flex: 1 1 auto; }
+.wt-group-all {
+  flex: 0 0 auto; align-self: center; margin-bottom: 2px;
+  font-size: 11.5px; white-space: nowrap;
+}
+.wt-group-all[aria-pressed="true"] { border-color: var(--navy); font-weight: 600; }
+#wt-bulk-bar { margin-bottom: 8px; }
+.bulk-bar #wt-bulk-clear { margin-left: auto; }
+
+/* B3 — the email preview fold. Modelled on .brief-more (the R69 My Day folds): a quiet summary
+   line, the caret as the only ornament, and nothing drawn at all while it is closed. */
+.em-fold { display: block; margin-top: 4px; }
+.em-fold > summary {
+  cursor: pointer; list-style: none; font-size: 12px; color: var(--muted);
+  padding: 2px 0; user-select: none;
+}
+.em-fold > summary::-webkit-details-marker { display: none; }
+.em-fold > summary::before { content: "\25B8\00a0"; }
+.em-fold[open] > summary::before { content: "\25BE\00a0"; }
+.em-fold > summary:hover { color: var(--navy); text-decoration: underline; }
+.em-prev {
+  margin: 6px 0 2px; padding: 10px 12px;
+  border: 1px solid #e4e9f0; border-radius: 8px; background: #fbfcfe;
+}
+.em-prev-subject { font-size: 12.5px; font-weight: 600; color: var(--dark); }
+.em-prev-lbl { font-weight: 500; color: var(--muted); margin-right: 4px; }
+.em-prev-body {
+  margin-top: 8px; padding-top: 8px; border-top: 1px solid #eef2f6;
+  font-size: 12.5px; line-height: 1.5; color: var(--dark);
+  max-height: 320px; overflow-y: auto; overflow-wrap: anywhere;
+}
+.em-prev-body p { margin: 0 0 8px; }
+.em-prev-body p:last-child { margin-bottom: 0; }
+/* A link in a preview is TEXT, never a link — the URL is shown so it can be read and judged. */
+.em-prev-link { text-decoration: underline; text-decoration-style: dotted; }
+.em-prev-note { margin-top: 8px; font-size: 11.5px; color: var(--muted); line-height: 1.45; }
+@media (max-width: 760px) {
+  .wt-cb { width: 24px; height: 24px; }
+  .wt-group-headrow { flex-wrap: wrap; }
+}

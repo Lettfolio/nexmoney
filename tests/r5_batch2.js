@@ -560,10 +560,22 @@ async function main() {
 
     /* ===================================================================
        7 · R5-36 — a new case starts on me
+
+       R72: AMENDED FOR H4 — "me" is now only right when "me" is an ADVISER.
+       R5-36 made every new case default to the signed-in user, to stop a drift
+       of unassigned cases. That is still right for an adviser typing in their
+       own case list. It is wrong for an ADMINISTRATOR or the OWNER doing intake
+       on somebody else's behalf: the case silently lands on a desk that does not
+       advise, and the Watchtower's unassigned rules — the net that is supposed
+       to catch a case nobody is working — cannot see it, because it IS assigned.
+       So: p2 (adviser) still defaults to himself; p1 (admin) now defaults to
+       "— unassigned —", with the assignee dropdown right there and the rule
+       stated in the form's own .panel-sub. The assertion is not weakened, it is
+       re-pointed: each persona is checked against the value it should now hold.
        =================================================================== */
-    console.log("\n— R5-36 · + New case pre-selects the signed-in adviser");
+    console.log("\n— R5-36 (R72-amended) · + New case pre-selects the adviser, or nobody");
     {
-      for (const persona of ["p2", "p1"]) {
+      for (const [persona, expectSelf] of [["p2", true], ["p1", false]]) {
         const page = await newPage(browser, persona);
         await page.click('[data-page="pipeline"]');
         await page.waitForTimeout(700);
@@ -573,8 +585,14 @@ async function main() {
           value: (document.querySelector("#case-form select[name='assigned_to']") || {}).value,
           me: window.__mock.personas[window.__mock.persona].id,
           label: (() => { const s = document.querySelector("#case-form select[name='assigned_to']"); return s ? s.options[s.selectedIndex].textContent : null; })(),
+          sub: (() => { const p = document.querySelector("#case-assign-sub"); return p ? p.textContent.replace(/\s+/g, " ").trim() : null; })(),
         }));
-        ok(`R5-36 · ${persona}: Assigned to defaults to the signed-in user (${got.label})`, got.value === got.me, JSON.stringify(got));
+        if (expectSelf) {
+          ok(`R5-36 · ${persona} (adviser): Assigned to defaults to the signed-in user (${got.label})`, got.value === got.me, JSON.stringify(got));
+        } else {
+          ok(`R5-36/R72 · ${persona} (not an adviser): Assigned to defaults to UNASSIGNED (${got.label})`, got.value === "", JSON.stringify(got));
+        }
+        ok(`R5-36/R72 · ${persona}: the form states the rule in its own .panel-sub`, !!got.sub, String(got.sub));
         ok("no console errors", !page.__err, JSON.stringify(page.__err));
         await page.close();
       }

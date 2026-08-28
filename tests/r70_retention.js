@@ -523,7 +523,17 @@ const toastText = (page) => page.evaluate(() => (document.getElementById("toast"
     const s1 = await caseRow(page, startCase.caseId);
     ok("§D4a · starting a retention case stamps the source and clears its guard",
       !!s1.rate_reminder_queued_at && s1.reminder_guarded === false, JSON.stringify({ st: !!s1.rate_reminder_queued_at, g: s1.reminder_guarded }));
-    await page.evaluate((id) => window.markRateReminded(id), markCase.caseId);
+    /* R72: HARNESS FIX, NOT A CONTRACT CHANGE. This line used to hand markRateReminded's own
+       promise back to Playwright, which then awaited it INSIDE the page while the un-awaited
+       loadRetentionPage() it kicks off repainted underneath — and that await died with
+       "Execution context was destroyed" (page alive, URL unchanged, no page error, the write
+       itself correct). It is a timing artifact of this one call, not of the app: adding ANY one
+       extra bounded read to loadRetentionRates' existing Promise.all — a duplicate of the
+       v_alerts read, on the R71 tree with no other change — reproduces it exactly, and R72 · A2
+       adds one (the 📌 rate-end outcome notes). So the call is FIRED rather than awaited and the
+       existing 1,500ms settle below is what the assertion waits on — which is what the next line
+       has always actually depended on. Every assertion in §D4 is unchanged. */
+    await page.evaluate((id) => { window.markRateReminded(id); }, markCase.caseId);
     await page.waitForTimeout(1500);
     const s2 = await caseRow(page, markCase.caseId);
     ok("§D4b · 'mark as reminded' clears the guard too — a person has now decided about it",
