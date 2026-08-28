@@ -108,7 +108,7 @@ const openDrawer = async (page, panelId) => {
       /* Fixture check — ca018 (Kwame Boateng) is completed, his rate ended months ago (so the
          nightly RPC will never pick it up) and he has no successor yet. */
       const fixture = await page.evaluate(async () => {
-        const { data } = await window.__mockDb.from("cases").select("id,stage,lender,rate_end_date,rate_reminder_queued_at,client_id,assigned_to,retention_source_case_id");
+        const { data } = await window.__mockDb.from("cases").select("id,stage,lender,rate_end_date,rate_reminder_queued_at,reminder_guarded,client_id,assigned_to,retention_source_case_id");
         const src = data.find((c) => c.id === "ca018");
         const sources = new Set(data.filter((c) => c.retention_source_case_id).map((c) => c.retention_source_case_id));
         const alreadyLinked = data.find((c) => c.stage === "completed" && sources.has(c.id));
@@ -120,12 +120,25 @@ const openDrawer = async (page, panelId) => {
           rateEnd: src.rate_end_date,
           lender: src.lender,
           queued: src.rate_reminder_queued_at, adviser: src.assigned_to,
+          guarded: src.reminder_guarded === true,          // R70 — the import guard, not a send
+          reminderRows: (await window.__mockDb.from("email_queue").select("case_id,email_type")).data
+            .filter((e) => e.case_id === "ca018" && e.email_type === "rate_end_reminder").length,
           openRetention: data.filter((c) => c.retention_source_case_id && !["completed", "not_proceeding"].includes(c.stage)).length,
           alreadyLinkedId: alreadyLinked ? alreadyLinked.id : null,
           sentBefore: null,
         };
       });
-      ok("fixture · ca018 is completed with a rate that has already ended and no reminder", fixture.stage === "completed" && fixture.ended && fixture.queued === null, JSON.stringify(fixture));
+      /* R70 PATCH — ca018 is now one of the mock's IMPORT-GUARDED back-book cases (R45's guard
+         stamped rate_reminder_queued_at on 1,711 completed cases without ever queuing or sending
+         anything; cases.reminder_guarded records that). "No reminder" is therefore still exactly
+         true of it — nothing was ever written to this client — but the stamp is no longer null, so
+         the fixture is asserted on the fact rather than on the column: no rate_end_reminder row
+         exists for it, and any stamp it does carry is the guard. Everything below is unchanged,
+         and the Start-retention button it clicks is still offered precisely because the app now
+         treats a guarded stamp as unworked. */
+      ok("fixture · ca018 is completed with a rate that has already ended and no reminder",
+        fixture.stage === "completed" && fixture.ended && (fixture.queued === null || fixture.guarded === true) && fixture.reminderRows === 0,
+        JSON.stringify(fixture));
       eq("fixture · the retention KPI starts at 2 open", fixture.openRetention, 2);
 
       /* the button is offered in the case modal … */

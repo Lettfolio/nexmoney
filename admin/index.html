@@ -481,6 +481,10 @@
         <div class="ret-month-chips" id="ret-month-chips" role="group" aria-label="Which rate-end month to show"></div>
         <!-- R64 · A1 — select-all + the bulk action bar, rendered by renderRetBulkBar(). -->
         <div id="ret-bulk"></div>
+        <!-- R70 · B2 — "Never contacted first". A TOGGLE, not a filter: it re-orders the rows
+             below and never hides one. Rendered by renderRetUntouchedChip(); the pick is
+             remembered in localStorage nx_ret_untouched. -->
+        <div class="ret-untouched-row" id="ret-untouched"></div>
         <div id="ret-rates-list"></div>
       </div>
       <div class="panel" id="ret-pipeline-panel" style="margin-top:18px;">

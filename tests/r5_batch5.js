@@ -154,7 +154,13 @@ const sendCalls = (page) => page.evaluate(() => window.__sendCalls || []);
       const msg = lastDialog(page, /Queue \d+ rate-end reminder/);
       ok("S3a · the confirm counts the reminders it will queue", /Queue 4 rate-end reminders\?/.test(msg), JSON.stringify(msg));
       ok("S3a · …names the skipped rows and why", /1 skipped: no email\/no rate-end date/.test(msg) && /Skipped: .*\(no email\)/.test(msg), JSON.stringify(msg));
-      ok("S3a · …says plainly that nothing is sent now", /send with the next automation run — nothing is sent now/.test(msg), JSON.stringify(msg));
+      /* R70 · L4 PATCH — the sentence is now driven from emailHoldOn() (settings.email_hold) rather
+         than written flat: while the hold is on, "they send with the next automation run" is a
+         promise the app cannot keep, so it says the hold instead. Either wording is accepted here;
+         "nothing is sent now" — the part that matters — is asserted in both. */
+      ok("S3a · …says plainly that nothing is sent now",
+        /(send with the next automation run|ON HOLD \(Settings › Email sending\))/.test(msg) && /nothing is sent now/.test(msg),
+        JSON.stringify(msg));
       ok("S3a · …warns that each one leaves a follow-up task behind", /follow-up task due /.test(msg), JSON.stringify(msg));
 
       const after = await page.evaluate(async (arg) => {

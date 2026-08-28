@@ -1350,6 +1350,10 @@
       if (r.protection_status == null) r.protection_status = "not_discussed";
       if (r.fee_status == null) r.fee_status = "not_requested";
       if (r.rate_end_estimated == null) r.rate_end_estimated = false;
+      /* R70 — reminder_guarded is NOT NULL DEFAULT false in production, so it is
+         defaulted here rather than joining the nullable list below: a case the app
+         creates has the column, set false, exactly as the migration leaves it. */
+      if (r.reminder_guarded == null) r.reminder_guarded = false;
       /* M2 / M7 / M10 / M11 columns exist on every row, null until something
          records them. waiting_on, solicitor_firm, doc_token and
          referrer_client_id join the list for round 9 — a case created by the app
@@ -1753,6 +1757,13 @@
       nps_score: o.nps_score == null ? null : o.nps_score,
       review_requested_at: o.review_requested_at || null,
       rate_reminder_queued_at: o.rate_reminder_queued_at || null,
+      /* R70 — cases.reminder_guarded, boolean NOT NULL DEFAULT false. Unlike every
+         nullable column above this one is never null: the R45 import guard stamped
+         rate_reminder_queued_at on 1,711 back-book cases WITHOUT ever queuing an
+         email, and this flag is the record of that — "the stamp is a guard, not a
+         send". The app reads it off v_alerts (see vAlerts below) to draw an honest
+         badge and to let the bulk verbs treat those cases as never reminded. */
+      reminder_guarded: !!o.reminder_guarded,
       /* r12b — the retention call-pack columns (W-15). Four nullable numerics,
          NULL on nearly every row on purpose: they landed with no backfill, so
          the book the app has to cope with is mostly blank exactly like M7/M10
@@ -2397,6 +2408,41 @@
       email_type: "docs_request", to_email: stale,
       subject: "Your document checklist", status: "queued", error: null,
       sent_at: null, scheduled_for: iso(shift(-2)), created_at: iso(shift(-2))
+    });
+  })();
+
+  /* =========================================================================
+     R70 · A2 — THE IMPORT-GUARDED BACK BOOK (cases.reminder_guarded).
+
+     Production fact, 27 Aug: the R45 import guard stamped rate_reminder_queued_at
+     on 1,711 completed cases so the nightly engine would not machine-gun the whole
+     back book the day it was imported. NOTHING was ever queued or sent for any of
+     them, and until R70 the app read that stamp as "Reminder sent" (green) and the
+     bulk reminder read it as "already reminded" — the entire imported book both
+     looked nudged and was excluded from the one verb that could nudge it.
+
+     The fixture reproduces exactly that state on the completed cases whose rates
+     have ALREADY ENDED (the recovery book — the rows this matters on): the stamp
+     is set, reminder_guarded is true, and there is no email_queue row of type
+     rate_end_reminder anywhere against them. Seeded AFTER the email_queue block on
+     purpose, so a case that genuinely has a reminder row (Andrew Pemberton's, which
+     actually sent) can be excluded by looking rather than by assumption — he stays
+     the un-guarded "Reminder sent" control the badge test needs.
+     ======================================================================== */
+  (function importGuardedBackBook() {
+    var reminded = {};
+    DB.email_queue.forEach(function (e) {
+      if (e.email_type === "rate_end_reminder" && e.case_id) reminded[e.case_id] = true;
+    });
+    var ended = DB.cases.filter(function (c) {
+      return c.stage === "completed" && c.rate_end_date && c.rate_end_date < TODAY && !reminded[c.id];
+    });
+    /* Three of them, oldest-ended first, so the "Ended · last 3 months" chip and the
+       "last 12 months" chip each hold at least one guarded row to work. */
+    ended.sort(function (a, b) { return a.rate_end_date < b.rate_end_date ? -1 : 1; });
+    ended.slice(0, 3).forEach(function (c, i) {
+      c.rate_reminder_queued_at = iso(shift(-(400 + i))); /* stamped on import day, long before now */
+      c.reminder_guarded = true;
     });
   })();
 
@@ -4416,6 +4462,10 @@
         fee_status: c.fee_status,
         broker_fee: c.broker_fee,
         rate_reminder_queued_at: c.rate_reminder_queued_at,
+        /* R70 — the guard rides on the view, exactly as production exposes it: the
+           Retention feed reads v_alerts and nothing else, so a badge that has to
+           tell "imported guard" from "we actually wrote to them" needs it here. */
+        reminder_guarded: !!c.reminder_guarded,
         assigned_to: c.assigned_to
       };
     });

@@ -3877,6 +3877,35 @@ tr.owed-hot > td { background: var(--red-bg); }
 #ret-logcall-panel { margin-top: 4px; }
 
 /* ==========================================================================
+   R70 — WORKING THE BACK BOOK: THE CALL AFFORDANCES.
+
+   Four small things, all on rows that already exist: the tap-to-call/tap-to-
+   text pair (every surface that knows a number), the "last contact" clause,
+   the three rate-end outcome chips, and the "Never contacted first" toggle.
+   The pair is NOT hover-quiet — a phone number you have to hover to find is
+   not an affordance — while the chips keep R61's card-advance manners.
+   ========================================================================== */
+.ret-row-tel + .row-sms-link { margin-left: 8px; }
+.row-sms-link { font-size: 12.5px; white-space: nowrap; }
+#briefing-list .ret-row-tel, #unactioned-list .ret-row-tel { display: inline-block; margin-top: 3px; }
+/* The grey "who has already rung this client" clause. Tabular figures so a column of
+   "3 days ago" / "27 days ago" lines up down the list. */
+.ret-row-lastc { font-variant-numeric: tabular-nums; }
+.ret-row-never { color: var(--red); font-weight: 600; }
+/* The three outcome chips sit with Log call / Book review and read as one cluster. */
+.ret-out-chip { border-style: dashed; }
+/* The "Never contacted first" toggle, in the same chip language as the month row above it. */
+.ret-untouched-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; margin: 0 0 10px; }
+.ret-untouched-chip .count { margin-left: 5px; background: rgba(16,42,78,.08); border-radius: 10px; padding: 0 6px; font-size: 11px; font-weight: 700; }
+.ret-untouched-chip.scope-active .count { background: rgba(255,255,255,.22); color: #fff; }
+.ret-untouched-note { font-size: 12px; color: var(--muted); max-width: 70ch; line-height: 1.5; }
+/* The radar's rate line — the fact that decides who to ring, so it is not muted away. */
+.unactioned-rate { font-variant-numeric: tabular-nums; }
+.unactioned-more { margin-top: 4px; }
+/* The log-call panel's own explanation of the two R70 rules. */
+.cs-call-help { margin: 6px 0 8px; font-size: 12px; line-height: 1.5; }
+
+/* ==========================================================================
    R65 · L1 — THE CASE MODAL'S STICKY ACTION ROW.
 
    The modal's SCROLL CONTAINER is #modal-backdrop (`overflow-y: auto`), not
@@ -4148,3 +4177,19 @@ tr.owed-hot > td { background: var(--red-bg); }
     display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
   }
 }
+
+/* R70 · A3 — the ONE batch confirm for "Start retention cases" (openOverlay, replacing the native
+   confirm that fired once PER CASE). The lists are the whole point of moving it here: fifty names,
+   plus the cases held back because the property looks sold, have to be readable and scrollable —
+   which is exactly what window.confirm cannot do. Kept deliberately plain: this is a dialog, not a
+   panel, and it borrows the overlay's own type scale. */
+.bulk-confirm-list { margin: 10px 0 2px; max-height: 46vh; overflow-y: auto; }
+.bulk-confirm-list h4 { margin: 10px 0 4px; font-size: 13px; }
+.bulk-confirm-list h4:first-child { margin-top: 0; }
+.bulk-confirm-list h4.bulk-confirm-warn { color: var(--red); }
+.bulk-confirm-ul { margin: 0 0 4px; padding-left: 18px; font-size: 13px; line-height: 1.5; }
+.bulk-confirm-ul li { margin: 0 0 2px; }
+/* R70 · A2 — the reminder badge carries its state in data-rem (sent / queued / failed / guarded /
+   marked / none) so the row's story is inspectable without parsing its words. The colour still
+   comes from the shared .badge classes; nothing here overrides them. */
+.ret-rem-badge { white-space: nowrap; }

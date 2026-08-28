@@ -116,7 +116,34 @@ node tests/r68_admin.js
 node tests/r69_today.js
 node tests/r69_polish.js
 node tests/r69_hf1.js
+node tests/r70_retention.js
+node tests/r70_calls.js
 ```
+
+**R70 notes — work the back book.** Two suites: `tests/r70_retention.js` (118 — ended chips, sort
+direction, the five reminder-badge states, guard eligibility/clearing, repaint after outcome, ONE
+bulk overlay, GI partner) and `tests/r70_calls.js` (94 — chip-only call save + auto call-back,
+last-contact clause + "Never contacted first" toggle, outcome chips, tel:/sms:, radar sort+cap).
+Things a future session needs to know:
+
+  - **`cases.reminder_guarded boolean` is a REAL prod column** (migration `r70_reminder_guard_flag`;
+    1,710 true; exposed on `v_alerts`). It marks R45's import-guard stamps (stamp set, no reminder
+    email ever). The mock mirrors it (mkCase + applyInsertDefaults + v_alerts builder) and seeds
+    ca017/ca018/ca051 as guarded — **ca018 is no longer a plain stamped case** (r5_batch3 was
+    patched for this). Every path that queues a reminder / starts retention / marks reminded clears
+    the guard in the same write; the CRON still honours `rate_reminder_queued_at` untouched.
+  - **`reminderState(a, feed)`** is the ONE reading of a row's reminder truth (sent / queued-held /
+    failed / guarded / marked / pending) and its `workable` gates the Start-retention affordances —
+    including `rowOutcomeChipsHtml`'s third chip (merge fix: an entry point to startRetentionCase
+    obeys the same rule as the badge-area button; the two OUTCOME chips render regardless).
+  - **Default Retention sort is NEWEST-ended first** (`nx_ret_sortdir`, `#ret-sort-dir`; ended3/
+    ended12 chips under the existing `nx_ret_month`). Tests seeding row pairs for order assertions
+    must make the "upper" row the more recently ended (r70_calls B3d was re-dated for this).
+  - New localStorage keys for clear-lists: `nx_ret_sortdir`, `nx_ret_untouched`.
+  - `logCallSave` now saves on an outcome chip alone; No answer / Left voicemail pre-fill a
+    "Call again" tomorrow follow-up unless the adviser touches the fields.
+  - `bulkStartRetentionRun` opens ONE `openOverlay` confirm (`#bulkret-ok`) and passes
+    `assumeConfirmed` — no native per-case confirms (r64_retention §A3 patched to assert this).
 
 **R69-HF1 notes — the mock now enforces PostgREST's 1,000-row ceiling.** Production finding (27 Aug,
 Daniel's browser): `.limit(20000)` returns **1,000** rows — Supabase's `max-rows` is a hard server

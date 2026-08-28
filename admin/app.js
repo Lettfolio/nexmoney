@@ -5093,7 +5093,14 @@ async function renderSettings() {
     <label title="Pre-fills the “Referred to” box when an adviser records a protection referral on a case. Blank = no pre-fill; the adviser types it each time.">Protection referral partner
       <input name="protection_referral_partner" type="text" value="${esc(settings.protection_referral_partner ?? "")}" placeholder="e.g. Stonebridge Protect">
     </label>
+    ${/* R70 · M5 — the GI twin of the box above (panel M5, Luke F7). Same pattern, same reason: a
+          GI referral is handed to ONE firm on almost every case and the "Referred to" box was
+          typed out by hand every single time. Blank stays a legitimate answer. */ ""}
+    <label title="Pre-fills the “Referred to” box when an adviser records a GI (buildings &amp; contents) referral on a case. Blank = no pre-fill; the adviser types it each time.">GI referral partner
+      <input name="gi_referral_partner" type="text" value="${esc(settings.gi_referral_partner ?? "")}" placeholder="e.g. Paymentshield">
+    </label>
     <p class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;" id="setting-note-protection_referral_partner">The firm or adviser a protection referral is addressed to by default — e.g. <strong>Stonebridge Protect</strong>. It pre-fills the <strong>“Referred to”</strong> box on the case's <strong>🛡️ Refer for protection advice</strong> overlay, which the adviser can still change if that one went elsewhere. <strong>Leave it blank</strong> if referrals go to a different place each time; nothing is pre-filled and nobody is sent anywhere from here.</p>
+    <p class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;" id="setting-note-gi_referral_partner">The firm a buildings &amp; contents referral is addressed to by default — e.g. <strong>Paymentshield</strong>. It pre-fills the <strong>“Referred to”</strong> box on the case's <strong>🏠 Refer for buildings/contents insurance</strong> overlay, which the adviser can still change if that one went elsewhere. <strong>Leave it blank</strong> if GI referrals go to a different place each time; nothing is pre-filled and nobody is sent anywhere from here.</p>
     <h3 id="set-sec-digest" style="grid-column:1/-1;margin:10px 0 0;">Owner digest</h3>
     <label>Daily owner digest email (on/off)
       <select name="owner_digest">
@@ -6677,22 +6684,183 @@ async function buildRateErcFeed(cases, alerts, opts) {
     if (!seen.has(key)) { a.__dupes = 1; seen.set(key, a); rows.push(a); return; }
     seen.get(key).__dupes++;
   });
+  /* R70 · A2 — WHAT ACTUALLY LEFT THE BUILDING, read once for the whole feed.
+     The badge on a row used to be derived from `rate_reminder_queued_at` alone, and that stamp is
+     not evidence of a send: the R45 import guard wrote it on 1,711 back-book cases so the nightly
+     engine would not machine-gun them on import day, and 0 emails have ever been sent by this
+     firm. The email_queue is the only record that can tell "sent" from "queued" from "never" —
+     22 rows in production for this type, so it is one cheap read, paged like every other
+     (R69-HF1) and soft: a database that refuses it degrades to the stamp-only reading rather
+     than to a blank row (see reminderState). */
+  const reminderByCase = await readRateReminderRows(rateErcAll);
   return {
-    scope, reminderMonths, caseAdviser, ctx, money, callPack, ercIds, rows,
+    scope, reminderMonths, caseAdviser, ctx, money, callPack, ercIds, rows, reminderByCase,
     ratesSoonAll, ercFlagsAll, ratesSoonScoped, ercFlagsScoped,
     collapsed: rateErcAll.length - rows.length,
   };
+}
+/* One rate_end_reminder row per case, chosen by what the CLIENT would say happened rather than by
+   recency alone: a send that succeeded outranks anything queued after it, and a live queued row
+   outranks an old failure. `cancelled` rows are deliberately ignored — a cancelled email is not a
+   contact, and a case whose only row was cancelled is honestly "no reminder sent". */
+async function readRateReminderRows(rows) {
+  const out = {};
+  if (!rows || !rows.length) return out;
+  const rank = { sent: 3, queued: 2, failed: 1 };
+  try {
+    const { data, error } = await readAll(db.from("email_queue")
+      .select("id,case_id,status,sent_at,created_at")
+      .eq("email_type", "rate_end_reminder")
+      .order("created_at").order("id"));   // R69-HF1 — a paged read needs a UNIQUE final order
+    if (error) return out;   // soft: the badge falls back to the stamp-only reading
+    (data || []).forEach((e) => {
+      if (!e || !e.case_id) return;
+      const r = rank[String(e.status || "").toLowerCase()] || 0;
+      if (!r) return;
+      const cur = out[e.case_id];
+      const curR = cur ? (rank[String(cur.status || "").toLowerCase()] || 0) : -1;
+      if (r > curR || (r === curR && String(e.created_at || "") > String((cur && cur.created_at) || ""))) out[e.case_id] = e;
+    });
+  } catch (_) { /* same soft degrade */ }
+  return out;
+}
+/* ==========================================================================
+   R70 · A2 — THE HONEST REMINDER BADGE, IN ONE PLACE.
+
+   Five states, one function, so the Retention page and Today's Rate & ERC
+   drawer can never tell the same client's story two different ways:
+
+     sent    — a rate_end_reminder actually went. Green.
+     queued  — one is waiting. Amber, and it says so when the hold is on
+               (settings.email_hold — emailHoldOn(), R68), because "queued"
+               while sending is held is a promise the app cannot keep.
+     failed  — one tried and bounced. Red: nobody has heard from us.
+     guarded — cases.reminder_guarded: the R45 import stamped the case and no
+               email was ever written. Grey, and WORKABLE — the whole point of
+               R70's H1. The bulk verbs treat it as never reminded.
+     marked  — a stamp with no email row and no guard: somebody pressed "mark
+               as reminded", or it is a pre-R45 stamp. Grey and honest.
+     none    — nothing at all. Amber "Reminder pending", as before.
+
+   `workable` is what the row's controls hang off: it replaces the old
+   `!a.rate_reminder_queued_at` test so a guarded case keeps its 🔁 Start
+   retention case button instead of being silently retired by an import.
+   With no feed map (an older caller, or a read that failed) the helper
+   degrades to exactly the pre-R70 stamp-only reading.
+   ========================================================================== */
+/* ==========================================================================
+   R70 · A2 — CLEARING THE IMPORT GUARD, IN THE SAME WRITE THAT MOVES ON.
+
+   `reminder_guarded` records ONE fact: this stamp came from the R45 import and
+   no email was ever written. The moment the firm does something real about the
+   case — queues a reminder, starts a retention case, marks it dealt with, or
+   re-arms the engine after an outcome — that fact stops being true, so the flag
+   is cleared in the SAME update as the stamp rather than in a second write that
+   could fail on its own and leave a case claiming to be untouched.
+
+   Feature-detected the way every column since M7 has been: a database without
+   the migration answers 42703 and the whole update would fail, taking the stamp
+   with it, so the retry drops the flag and keeps the write that matters. The
+   answer is cached for the session (one probe, one retry, at most).
+   ========================================================================== */
+let REMINDER_GUARD_SUPPORTED = null;   // null = not yet known
+async function updateCaseClearingGuard(caseId, patch) {
+  const body = Object.assign({}, patch);
+  if (REMINDER_GUARD_SUPPORTED !== false) {
+    const res = await db.from("cases").update(Object.assign({ reminder_guarded: false }, body)).eq("id", caseId);
+    if (!res.error) { REMINDER_GUARD_SUPPORTED = true; return res; }
+    if (!isMissingColumnError(res.error)) return res;   // a real failure — report it, don't retry blind
+    REMINDER_GUARD_SUPPORTED = false;
+  }
+  return db.from("cases").update(body).eq("id", caseId);
+}
+/* Does `cases` carry the guard at all? Only asked where the column has to be NAMED in a select
+   (the bulk sweep's read), because there a missing column 42703s the whole read. Same probe-once,
+   cache, degrade-quietly shape as propAddrSupported(). */
+async function reminderGuardSupported() {
+  if (REMINDER_GUARD_SUPPORTED !== null) return REMINDER_GUARD_SUPPORTED;
+  try {
+    const { data, error } = await db.from("cases").select("id,reminder_guarded").limit(1);
+    if (error) {
+      if (isMissingColumnError(error)) { REMINDER_GUARD_SUPPORTED = false; return false; }
+      return false;   // RLS/network — assume absent for THIS read rather than caching a guess
+    }
+    if (!data || !data.length) return false;
+    REMINDER_GUARD_SUPPORTED = Object.prototype.hasOwnProperty.call(data[0], "reminder_guarded");
+    return REMINDER_GUARD_SUPPORTED;
+  } catch (_) { return false; }
+}
+/* R70 · L4 — the one sentence that must stay true after go-live. `emailHoldOn()` (R68) reads
+   settings.email_hold, which is 'on' today and will be 'off' the day the Resend key is set, so
+   the copy on every "this will be queued" confirm is driven from it rather than written flat. */
+const queuedSendLine = () => emailHoldOn()
+  ? "Sending is currently ON HOLD (Settings › Email sending) — they will queue and wait; nothing is sent now."
+  : "They send with the next automation run — nothing is sent now.";
+function reminderState(a, feed) {
+  const guarded = !!(a && a.reminder_guarded);
+  const stamped = !!(a && a.rate_reminder_queued_at);
+  const map = feed && feed.reminderByCase;
+  const row = map ? map[a.case_id] : null;
+  const st = row ? String(row.status || "").toLowerCase() : "";
+  const badge = (cls, text, title) => `<span class="badge ${cls} ret-rem-badge" data-rem="${st || (guarded ? "guarded" : stamped ? "marked" : "none")}" title="${esc(title)}">${esc(text)}</span>`;
+  if (st === "sent") {
+    const when = row.sent_at || row.created_at;
+    return { key: "sent", workable: false,
+      badgeHtml: badge("green", "Reminder sent", `A rate-end reminder was sent to this client${when ? ` on ${fmtD(String(when).slice(0, 10))}` : ""}.`) };
+  }
+  if (st === "queued") {
+    const held = emailHoldOn();
+    return { key: "queued", workable: false,
+      badgeHtml: badge("amber", held ? "Reminder queued — held" : "Reminder queued",
+        held
+          ? "A rate-end reminder is queued for this client, but sending is currently ON HOLD (Settings › Email sending) — it will wait until the hold is released."
+          : "A rate-end reminder is queued for this client and goes out with the next automation run.") };
+  }
+  if (st === "failed") {
+    return { key: "failed", workable: false,
+      badgeHtml: badge("red", "Reminder failed", "The rate-end reminder to this client failed — nobody has heard from us. Check the address on the Emails page and send it again.") };
+  }
+  if (guarded) {
+    return { key: "guarded", workable: true,
+      badgeHtml: badge("grey", "No reminder sent", "Imported with the back book; the automation was told to leave this case alone. Work it from here.") };
+  }
+  if (stamped) {
+    return { key: "marked", workable: false,
+      badgeHtml: badge("grey", "Marked reminded", "Marked as dealt with on this case — no reminder email was ever queued or sent for it.") };
+  }
+  return { key: "none", workable: true,
+    badgeHtml: badge("amber", "Reminder pending", "Nothing has been queued or sent to this client about this rate ending.") };
 }
 /* R7-2 — sorted by VALUE AT RISK by default (the loan on the case), because the question this feed
    is scanned with is "which of these matters most", and a date sort answers a different one. The
    date sort is one click away and the heading says which is in force. Owner only: the loan and fee
    columns are firm money and an adviser keeps the round-6 order, by date, with no money on it. */
-function sortRateErcRows(feed, byValue) {
+/* R70 · A1 — AND A DIRECTION, BECAUSE "OLDEST FIRST" HID THE ONLY WORKABLE ROWS.
+   The date sort has always run ascending, which on the real book (593 ended rates, 413 of them
+   older than a year) means the hundred rows the page can draw are 2020-2022 lapsed deals and the
+   137 that ended in the last year — the ones with a live conversation still in them — are
+   unreachable. `dir === "newest"` reverses the ENDED half only: most-recently-ended first, while
+   "ending soon" stays soonest-first, because those two halves are read with opposite questions
+   ("who has just fallen off?" vs "what is coming at me?"). Written as group-then-date so the
+   comparator stays transitive; the ended/soon split downstream filters this list and therefore
+   preserves whatever order it is given. Two-argument callers (Today's drawer) are byte-for-byte
+   unchanged — they never pass a direction and keep the ascending sort R7-2 gave them. */
+function sortRateErcRows(feed, byValue, dir) {
   const list = feed.rows.slice();
   if (byValue) {
     list.sort((a, b) => {
       const d = ((feed.money[b.case_id] || {}).loan || 0) - ((feed.money[a.case_id] || {}).loan || 0);
       return d || ((a.rate_end_date || "") < (b.rate_end_date || "") ? -1 : 1);
+    });
+  } else if (dir === "newest") {
+    const grp = (a) => (rateErcEnded(a) ? 0 : 1);          // ended first, exactly as the page groups
+    list.sort((a, b) => {
+      const g = grp(a) - grp(b);
+      if (g) return g;
+      const da = a.rate_end_date || "", db_ = b.rate_end_date || "";
+      if (da === db_) return 0;
+      // ended: newest first (−1 day before −2,000 days). soon: soonest first, unchanged.
+      return grp(a) === 0 ? (da > db_ ? -1 : 1) : (da < db_ ? -1 : 1);
     });
   } else {
     list.sort((a, b) => (a.rate_end_date || "") < (b.rate_end_date || "") ? -1 : 1);
@@ -6712,6 +6880,190 @@ function fmtDaysAway(n) {
   const y = (a / 365.25).toFixed(1).replace(/\.0$/, "");
   return `${y} year${y === "1" ? "" : "s"}`;
 }
+/* ==========================================================================
+   R70 · B4 — TAP TO CALL, TAP TO TEXT, WHEREVER A NUMBER IS ALREADY IN HAND.
+
+   The R70 panel's H2, in Wayne's words: "every call from Today costs a modal".
+   The Retention page grew a tel: link in R64; My Day, the no-next-action radar
+   and Today's Rate & ERC drawer never had one, so the one thing an adviser does
+   with these rows — ring the person — was the one thing the row could not do.
+
+   ONE helper, used by all four surfaces, so a phone affordance means the same
+   thing everywhere. Two links and nothing else:
+
+     📞 tel:   the dialler, on the number the client record holds.
+     💬 sms:   the ADVISER'S OWN phone's message app, opened with a house
+               sentence already typed. It is a DEEP LINK, not a send: no
+               provider is involved, nothing is queued, nothing is written to
+               sms_queue and nothing lands on the case. That is said in the
+               link's title, because a text that looks logged and is not is
+               worse than no text at all. (Daniel's decision 3 — yes, ship it.)
+
+   The body is URL-encoded whole. `?&body=` rather than `?body=` is deliberate:
+   iOS's Messages only honours the parameter after a stray separator, and
+   Android/Chrome accept it either way — the one spelling both platforms read.
+
+   NO READ IS ADDED ANYWHERE FOR THIS. Each caller passes a number it already
+   holds (the Retention page's retRowPhones map, the radar's own clients embed,
+   My Day's case-meta embed); a row with no number renders nothing at all rather
+   than a dead "📞 —".
+   ========================================================================== */
+function smsHouseBody(opts) {
+  const o = opts || {};
+  const first = String(o.name || "").trim().split(/\s+/)[0] || "there";
+  const me = (ME && ME.id ? staffName(ME.id) : "") || "";
+  const meFirst = me && me !== "—" ? me.split(/\s+/)[0] : "";
+  const from = meFirst ? `it's ${meFirst} from NexMoney` : "it's NexMoney";
+  return o.rateEnd
+    ? `Hi ${first}, ${from} — your mortgage rate ends ${fmtD(o.rateEnd)}; when suits for a quick call?`
+    : `Hi ${first}, ${from} — when suits for a quick call about your mortgage?`;
+}
+const SMS_TIP = "Opens the message app on YOUR phone with the text already written — nothing is sent from here, nothing is queued, and nothing is recorded on the case.";
+function phoneActionsHtml(phone, opts) {
+  if (!phone) return "";
+  const o = opts || {};
+  const raw = String(phone).trim();
+  if (!raw) return "";
+  const href = raw.replace(/[^\d+]/g, "");
+  const tel = `<span class="ret-row-tel" title="Ring the client — the number on their record.">📞 ${telLink(raw)}</span>`;
+  if (!o.sms) return tel;
+  /* encodeURIComponent leaves ' ! ( ) * alone — legal in a URI, but a bare apostrophe inside an
+     href attribute is one more thing for a message app's own parser to get wrong, so the whole
+     body is percent-encoded. */
+  const body = encodeURIComponent(smsHouseBody(o)).replace(/['()!*]/g, (ch) => "%" + ch.charCodeAt(0).toString(16).toUpperCase());
+  return tel + ` <a class="contact-link row-sms-link" href="sms:${esc(href)}?&amp;body=${esc(body)}" title="${esc(SMS_TIP)}" onclick="event.stopPropagation()">💬 Text</a>`;
+}
+/* ==========================================================================
+   R70 · B2 — "LAST CONTACT", THE SAME DEFINITION THE COLD SEGMENT USES.
+
+   Luke's F5: nothing on a retention row says whether anybody has already rung
+   this client, so a session of thirty calls re-rings the ten somebody worked
+   yesterday. The answer already existed — the Clients page's cold segment and
+   the Retention page's Gone-quiet panel both compute it inside loadClientData()
+   — but only for the WHOLE book, in one 5-read pass, and without the one extra
+   fact a row needs: WHO made the contact.
+
+   So the computation is extracted here, scoped to a list of client ids, with
+   the R64 definition unchanged, verbatim:
+     · a NOTE on any of the client's cases — excluding SYSTEM PROVENANCE notes
+       (SB-IMPORT-n), which record where a record came from, not contact;
+     · an email that was actually SENT (queued/failed/cancelled are things we
+       meant to say, not things the client has heard);
+     · an appointment that has already STARTED (next week's is not contact);
+     · a task marked done.
+   Bounded to the same R18 comms window the cold segment reads (see
+   clientCommsWindowDays — it always stays wider than the quiet cutoff), so
+   this and the Gone-quiet panel below it can never give one client two answers.
+
+   EVERY READ IS BOTH CHUNKED AND PAGED. `.in()` over a feed-sized list is a
+   PostgREST 400 above ~500 ids (inChunks), and any one chunk can still hold
+   more than the 1,000-row server ceiling (readAll) — the two R64-HF1/R69-HF1
+   rules apply together here, not one or the other.
+
+   Attribution follows the row's own key: notes and tasks hang off a case, so
+   they are attributed through the client's cases; emails and appointments carry
+   client_id and are read by it. (A case-linked email with a NULL client_id is
+   the one shape this cannot see; every writer in the app sets client_id, and
+   production carries it on all 22 queued rows.)
+   ========================================================================== */
+async function lastContactByClient(clientIds) {
+  const out = {};
+  const ids = [...new Set((clientIds || []).filter(Boolean))];
+  if (!ids.length) return out;
+  const sinceIso = new Date(Date.now() - clientCommsWindowDays() * 86400000).toISOString();
+  const nowMs = Date.now();
+  const bump = (cid, at, what, by) => {
+    if (!cid || !at) return;
+    const cur = out[cid];
+    if (!cur || String(at) > String(cur.at)) out[cid] = { at: String(at), what, by: by || null };
+  };
+  try {
+    /* The client's cases, so a note or a completed task can be attributed to a person. One
+       chunked+paged read; the ids are the rows on screen, never the whole book. */
+    const { data: cases } = await inChunks(ids, (sl) =>
+      readAll(db.from("cases").select("id,client_id").in("client_id", sl).order("id")));
+    const owner = new Map();
+    (cases || []).forEach((c) => { if (c && c.id) owner.set(c.id, c.client_id); });
+    const caseIds = [...owner.keys()];
+    const none = { data: [] };
+    const [notes, mails, appts, tasks] = await Promise.all([
+      caseIds.length ? inChunks(caseIds, (sl) => readAll(db.from("case_notes").select("case_id,created_at,body,created_by").in("case_id", sl).gte("created_at", sinceIso).order("id"))) : none,
+      inChunks(ids, (sl) => readAll(db.from("email_queue").select("client_id,case_id,status,sent_at").in("client_id", sl).gte("sent_at", sinceIso).order("id"))),
+      inChunks(ids, (sl) => readAll(db.from("appointments").select("client_id,case_id,starts_at").in("client_id", sl).gte("starts_at", sinceIso).order("id"))),
+      caseIds.length ? inChunks(caseIds, (sl) => readAll(db.from("case_tasks").select("case_id,done_at").in("case_id", sl).gte("done_at", sinceIso).order("id"))) : none,
+    ]);
+    ((notes && notes.data) || []).forEach((n) => {
+      if (isSystemProvenanceNote(n.body)) return;              // R47 Gate 0 — provenance is not contact
+      bump(owner.get(n.case_id), n.created_at, "note", n.created_by);
+    });
+    ((mails && mails.data) || []).forEach((e) => {
+      if (e.status !== "sent" || !e.sent_at) return;
+      bump(e.client_id || owner.get(e.case_id), e.sent_at, "email sent", null);
+    });
+    ((appts && appts.data) || []).forEach((a) => {
+      if (!a.starts_at || new Date(a.starts_at).getTime() > nowMs) return;
+      bump(a.client_id || owner.get(a.case_id), a.starts_at, "appointment", null);
+    });
+    ((tasks && tasks.data) || []).forEach((t) => { if (t.done_at) bump(owner.get(t.case_id), t.done_at, "task done", null); });
+  } catch (_) { /* no answer — the rows render without the clause, never with a wrong one */ }
+  return out;
+}
+/* The author's initials, and only when we genuinely know who they are. staffName() answers "—"
+   for an id that is not on the team; a note written by the nightly automation has no author at
+   all. Either way the clause simply drops the "(LR)" rather than inventing one. */
+function contactInitials(id) {
+  if (!id) return "";
+  const nm = staffName(id);
+  if (!nm || nm === "—") return "";
+  return nm.split(/\s+/).filter(Boolean).map((w) => w.charAt(0).toUpperCase()).join("").slice(0, 3);
+}
+/* The clause itself. Page-only: Today's drawer would need this whole 5-read pass to render it,
+   and a morning glance does not earn five reads (B2's "say which you chose"). */
+function rowLastContactHtml(a, feed, opts) {
+  if (!opts || !opts.lastContact) return "";
+  const ctxRow = propCtxCase(feed.ctx, a.case_id);
+  const cid = ctxRow && ctxRow.client_id;
+  if (!cid) return "";
+  const lc = opts.lastContact[cid];
+  if (!lc) {
+    return `<div class="s ret-row-lastc ret-row-never" title="Nobody has spoken to, emailed, met or completed a task for this client inside the last ${clientCommsWindowDays()} days. Import notes are not contact. This is the pile that goes cold.">· never contacted</div>`;
+  }
+  const ini = contactInitials(lc.by);
+  return `<div class="s ret-row-lastc" title="The most recent ${esc(lc.what)} on any of this client's cases, on ${esc(fmtD(String(lc.at).slice(0, 10)))} — the same definition the Gone-quiet panel and the Clients page's cold segment use.">· last contact ${esc(lastContactAgeLabel(lc.at))}${ini ? ` (${esc(ini)})` : ""}</div>`;
+}
+/* ==========================================================================
+   R70 · B3 — THE THREE COMMONEST RATE-END OUTCOMES, ON THE ROW.
+
+   Luke's idea 7. Working the back book is a sequence of the same three
+   sentences — "they've gone elsewhere", "they've sold", "they're staying with
+   us" — and each one cost a case modal to record. These are ENTRY POINTS ONLY:
+   the first two open the R58 rate-end outcome overlay with the right radio
+   already chosen, the third is the row's existing startRetentionCase. Not one
+   new write, not one confirm bypassed — the overlay still names every side
+   effect (the successor it closes, the note it writes, the dates it clears)
+   before anything happens.
+
+   Completed rows only: a live case has no rate END to record an outcome for.
+   ========================================================================== */
+function rowOutcomeChipsHtml(a, feed, opts) {
+  if (!(opts && opts.page)) return "";
+  if (a.stage !== "completed") return "";
+  const id = jsArg(a.case_id);
+  /* R70 MERGE NOTE (CTO) — the third chip is an ENTRY POINT to startRetentionCase, so it obeys
+     exactly the visibility rule the badge area's own Start button follows (reminderState().workable,
+     no existing successor, not nine-months-early). Without this, a row whose reminder was SENT — or
+     whose stamp was a human's "mark reminded" decision — re-offered a start affordance that A2's
+     honesty pass had just removed, and a case with a successor could be offered a second one. The
+     two OUTCOME chips stay on every completed row: recording "renewed elsewhere" or "sold" is valid
+     whatever the reminder state, and rateEndOutcome carries its own guards. */
+  const rem = reminderState(a, feed);
+  const startable = rem.workable && a.rate_end_date && !retentionSourceIds.has(a.case_id) && !rateErcFarOut(a);
+  return `<button type="button" class="btn btn-sm ret-row-chip ret-out-chip" onclick="event.stopPropagation();retRateOutcome('${id}','renewed')" title="They took a new deal direct or with somebody else. Opens the rate-end outcome form on that answer — it asks for the NEW rate end date, then re-arms this case so it comes back before that one ends.">🔄 Renewed elsewhere</button>`
+    + `<button type="button" class="btn btn-sm ret-row-chip ret-out-chip" onclick="event.stopPropagation();retRateOutcome('${id}','sold')" title="The property is sold or the mortgage redeemed. Opens the rate-end outcome form on that answer — it stops tracking this rate and marks the property SOLD on the client's record.">🏠 Property sold</button>`
+    + (startable
+      ? `<button type="button" class="btn btn-sm ret-row-chip ret-out-chip" onclick="event.stopPropagation();startRetentionCase('${id}', event)" title="They are staying with us. Creates the follow-on remortgage case, the call task and a queued reminder — the same button the row's badge area offers, on the row you are working.">🔁 Re-mortgaging with us</button>`
+      : "");
+}
 /* ONE ROW of the feed. Every branch below is the round-6-to-round-35 markup, moved rather than
    rewritten, so the drawer and the page cannot render the same alert differently. */
 function renderRateErcRow(a, feed, opts) {
@@ -6719,6 +7071,7 @@ function renderRateErcRow(a, feed, opts) {
   const mny = feed.money[a.case_id] || { loan: 0, lastFee: 0 };
   const cp = feed.callPack[a.case_id] || null;
   const farOut = rateErcFarOut(a);
+  const rem = reminderState(a, feed);   // R70 · A2 — badge + "is this still workable?", computed once
   /* ==========================================================================
      R64 · A1/A3 — THE ROW GAINS A CHECKBOX AND THREE CALL CHIPS, BUT ONLY ON
      THE RETENTION PAGE.
@@ -6733,8 +7086,12 @@ function renderRateErcRow(a, feed, opts) {
   const page = !!(opts && opts.page);
   const sel = page && opts.sel ? opts.sel : null;
   const picked = !!(sel && sel.has(a.case_id));
-  const ctxRow = page ? propCtxCase(feed.ctx, a.case_id) : null;
-  const phone = ctxRow && opts.phones ? opts.phones[ctxRow.client_id] : "";
+  /* R70 · B4 — the property context is resolved on BOTH surfaces now, because the phone
+     affordance is on both. Today's drawer reads its ≤15 numbers in one bounded `in` (see
+     loadDashboard) exactly the way the page has since R64; with no map at all `phone` is empty
+     and nothing renders, which is the un-migrated / failed-read path. */
+  const ctxRow = propCtxCase(feed.ctx, a.case_id);
+  const phone = ctxRow && opts && opts.phones ? opts.phones[ctxRow.client_id] : "";
   const cb = page
     ? `<input type="checkbox" class="bulk-cb ret-cb" data-id="${esc(a.case_id)}" aria-label="Select ${esc(a.client_name || "this case")}"${picked ? " checked" : ""}>`
     : "";
@@ -6744,10 +7101,14 @@ function renderRateErcRow(a, feed, opts) {
   /* No leading newline on purpose: `acts` is appended to the last line of .row-main, so with
      `page` false the row's markup is not merely equivalent to the drawer's, it is the same bytes —
      and lifting the cluster back out of a page row leaves the drawer's row exactly (see §D2). */
+  /* R70 · B4 — the tel:/sms: pair moved OUT of the hover-quiet cluster and onto the row's own
+     text block, because it is now rendered on the drawer too (which has no cluster) and because a
+     phone number you have to hover to see is not an affordance. Same `.ret-row-tel` wrapper the
+     R64 link used, so nothing that looked for it has to change. */
   const acts = page ? `<div class="ret-row-acts hover-quiet">`
-    + (phone ? `<span class="ret-row-tel" title="Ring the client — the number on their record.">📞 ${telLink(phone)}</span>` : "")
     + `<button type="button" class="btn btn-sm ret-row-chip" onclick="event.stopPropagation();retLogCall('${jsArg(a.case_id)}')" title="Log a call against this case — the same form the case modal uses: outcome chip, note, protection tick and an optional follow-up task.">📞 Log call</button>`
     + `<button type="button" class="btn btn-sm ret-row-chip" onclick="event.stopPropagation();retBookReview('${jsArg(a.case_id)}')" title="Book a rate-end review in the diary, prefilled with this client, this case and the adviser who owns it.">📅 Book review</button>`
+    + rowOutcomeChipsHtml(a, feed, opts)
     + `</div>` : "";
   return `
     <div class="row-item${picked ? " is-sel" : ""}">${cb}
@@ -6766,18 +7127,21 @@ function renderRateErcRow(a, feed, opts) {
         ${/* R12b · W-15c — the uplift is inline here, and ONLY on rows whose rate has actually
              ENDED. A client still inside their fix is not paying anything extra yet, and a
              "£X/mo more" over a rate with four months to run reads as a bill they already get. */ ""}
-        ${callPackLineHtml(cp, rateErcEnded(a))}${acts}
+        ${rowLastContactHtml(a, feed, opts)}
+        ${callPackLineHtml(cp, rateErcEnded(a))}${phoneActionsHtml(phone, { sms: true, name: a.client_name, rateEnd: a.rate_end_date })}${acts}
       </div>
       ${a.days_to_rate_end < 0 ? '<span class="badge red">OVERDUE</span>' : ""}
       ${feed.ercIds.has(a.case_id) ? `<span class="badge red" title="${TIP_ERC}">ERC conflict</span>` : ""}
       ${a.rate_end_estimated ? `<span class="badge ${EST_BADGE_CLS}" title="${TIP_APPROX}">≈ estimate</span>` : ""}
-      ${a.stage === "completed"
-        ? (a.rate_reminder_queued_at ? '<span class="badge green">Reminder sent</span>' : '<span class="badge amber">Reminder pending</span>')
-        : stageBadge(a.stage)}
+      ${/* R70 · A2 — the badge is derived from what the email queue actually holds (plus the
+           import guard), not from a stamp that the R45 import wrote 1,711 times without sending
+           anything. reminderState() is the single source for both this badge and the two
+           controls below it. */ ""}
+      ${a.stage === "completed" ? rem.badgeHtml : stageBadge(a.stage)}
       ${/* R5-6 — the backend auto-creates a retention case only while the rate is still in FUTURE
            reminder window; a rate that has already ended is never picked up, and these rows sat
            here saying "reminder pending" forever. This is the manual path for exactly those. */ ""}
-      ${a.stage === "completed" && !a.rate_reminder_queued_at && a.rate_end_date && !retentionSourceIds.has(a.case_id)
+      ${a.stage === "completed" && rem.workable && a.rate_end_date && !retentionSourceIds.has(a.case_id)
         ? (farOut
           ? `<span class="badge grey rate-too-early" title="This rate has more than nine months to run. Starting a retention case now would create a live enquiry, a call task and a queued client email for a conversation that cannot usefully happen yet — the ${feed.reminderMonths}-month reminder window reaches this case long before it is too late.">too early — ${Math.round(a.days_to_rate_end / 30)}mo out</span>`
           : retentionToMeHtml(a.case_id, cp) + `<button class="btn btn-sm btn-retention" onclick="event.stopPropagation();startRetentionCase('${a.case_id}', event)" title="Create the follow-on remortgage case, the call task and a queued reminder">🔁 Start retention case</button>`) : ""}
@@ -6786,7 +7150,7 @@ function renderRateErcRow(a, feed, opts) {
            "Reminder pending" forever and the nightly RPC will never pick it up either, because
            the rate has ended and a successor exists. Without this the only way out was to send the
            client a SECOND reminder email. */ ""}
-      ${a.stage === "completed" && !a.rate_reminder_queued_at && retentionSourceIds.has(a.case_id)
+      ${a.stage === "completed" && rem.workable && retentionSourceIds.has(a.case_id)
         ? `<button class="btn btn-sm btn-retention" onclick="event.stopPropagation();markRateReminded('${a.case_id}', event)" title="This case already has a retention case, but it was never marked as reminded — clear the nag without emailing the client again">✓ Mark as reminded</button>` : ""}
     </div>`;
 }
@@ -6952,8 +7316,17 @@ async function loadDashboard() {
       /* R61 — the money-line basis, once for the drawer (the rows no longer repeat it). */
       + (showMoney() ? " Money lines read value at risk: the loan on the case, with the last fee as a proxy." : "");
   }
+  /* R70 · B4 — the drawer's tel:/sms: pair. The Retention page has had the numbers since R64 via
+     exactly this helper; Today's drawer had none, so the fifteen rows an adviser reads first thing
+     were the fifteen it cost a modal to ring. ONE bounded `in` on clients over the FIFTEEN client
+     ids actually on screen — the same read shape, a fifteenth of the size — and it is soft: a
+     failed read leaves the rows precisely as R38 drew them. Deliberately not the last-contact
+     clause as well (see rowLastContactHtml): that one costs five reads, which a morning glance
+     does not earn. */
+  const rateErcShown = rateErcMerged.slice(0, 15);
+  const dashPhones = await retRowPhones(rateFeed, rateErcShown);
   $("#alerts-rateerc").innerHTML = rateErcMerged.length
-    ? rateErcMerged.slice(0, 15).map((a) => renderRateErcRow(a, rateFeed)).join("")
+    ? rateErcShown.map((a) => renderRateErcRow(a, rateFeed, { phones: dashPhones })).join("")
       + (rateErcMerged.length > 15 ? `<div class="empty">…and ${rateErcMerged.length - 15} more — <button type="button" class="dash-notice-link" onclick="nav('retention')">see the Retention page</button>.</div>` : "")
       + rateErcDedupeNote(rateFeed.collapsed)
     : '<div class="empty">Nothing ending in the reminder window, and no ERC conflicts. 👍</div>';
@@ -7085,6 +7458,35 @@ window.toggleRetSort = function () {
   loadRetentionPage();
 };
 /* ==========================================================================
+   R70 · A1 — A SORT CONTROL EVERY ADVISER HAS.
+
+   The one re-sort on this page was "↕ By value at risk", behind showMoney(),
+   so an adviser had no control over the order at all — and the order they were
+   given (oldest-ended first) put 2020's lost causes in front of the rate that
+   lapsed last week, with a hundred-row cap between them. The direction is a
+   separate axis from the value sort: it says which END of the date range the
+   list starts at, and it is persisted per browser like every other choice on
+   this page.
+
+   The DEFAULT is newest-ended first, which is a deliberate reversal of the
+   round-6 order: the ended half is a call list and the freshest lapse is the
+   warmest call. "Ending soon" is untouched in either direction — a diary
+   always reads soonest-first.
+   ========================================================================== */
+const RET_SORTDIR_KEY = "nx_ret_sortdir";
+let retSortDir = null;
+function retSortDirResolved() {
+  if (retSortDir) return retSortDir;
+  const stored = lsGet(RET_SORTDIR_KEY);
+  retSortDir = (stored === "oldest" || stored === "newest") ? stored : "newest";
+  return retSortDir;
+}
+window.toggleRetSortDir = function () {
+  retSortDir = retSortDirResolved() === "newest" ? "oldest" : "newest";
+  lsSet(RET_SORTDIR_KEY, retSortDir);
+  loadRetentionPage();
+};
+/* ==========================================================================
    R64 · A2 — THE MONTH WINDOW.
 
    Luke works this page a MONTH at a time: the forty rate-ends maturing in
@@ -7107,6 +7509,13 @@ window.toggleRetSort = function () {
 const RET_MONTH_KEY = "nx_ret_month";
 const RET_MONTHS = [
   ["ended", "Ended", "Only rates that have already matured — these clients are paying the lender's reversion rate today."],
+  /* R70 · A1 — the two windows the page never had. Every other chip points FORWARD, and "Ended"
+     is the whole lapsed book (2017 onwards) in one bucket, so the rows with a live conversation
+     still in them — the ones that lapsed this quarter or this year — could not be isolated at
+     all. Measured in DAYS off days_to_rate_end rather than in calendar months, because "the last
+     three months" here means "the last 92 days of maturities", not "since the 1st". */
+  ["ended3", "Ended · last 3 months", "Rates that matured in the last 92 days — the freshest lapsed book, where the client has only just moved onto the reversion rate."],
+  ["ended12", "Ended · last 12 months", "Rates that matured in the last 366 days. Everything older is still there under “Ended”."],
   ["this", "This month", "Only rates whose end date falls in this calendar month."],
   ["next", "Next month", "Only rates whose end date falls in next calendar month."],
   ["3mo", "3 months", "This calendar month and the two after it."],
@@ -7137,6 +7546,11 @@ function retMonthResolved() {
 function retMonthMatch(a, key, todayIdx) {
   if (key === "all") return true;
   if (key === "ended") return rateErcEnded(a);
+  /* R70 · A1 — a lapsed WINDOW, not a lapsed book. Same rateErcEnded() truth (days_to_rate_end
+     is negative once a rate has matured), bounded at the far end so "last 3 months" cannot
+     quietly include 2019. −1 is yesterday; −92/−366 are the far edges. */
+  if (key === "ended3") return rateErcEnded(a) && a.days_to_rate_end >= -92;
+  if (key === "ended12") return rateErcEnded(a) && a.days_to_rate_end >= -366;
   const idx = ymIndex(a.rate_end_date);
   if (idx == null || todayIdx == null) return false;
   const d = idx - todayIdx;
@@ -7149,6 +7563,8 @@ function retMonthMatch(a, key, todayIdx) {
    own leaves the reader to work out which three. */
 function retMonthWindowCopy(key, todayIdx) {
   if (key === "ended") return "Showing only rates that have ALREADY ended — every client here is on the reversion rate now.";
+  if (key === "ended3") return "Showing only rates that ended in the last 3 months — the freshest lapsed book, and the one still worth a call.";
+  if (key === "ended12") return "Showing only rates that ended in the last 12 months. Anything older is still there under “Ended”.";
   if (todayIdx == null) return "";
   if (key === "this") return `Showing only rates ending in ${ymLabel(todayIdx)}.`;
   if (key === "next") return `Showing only rates ending in ${ymLabel(todayIdx + 1)}.`;
@@ -7171,6 +7587,41 @@ function renderRetMonthChips(counts) {
       `<button type="button" class="btn btn-sm ret-month-chip${k === cur ? " scope-active" : ""}" data-month="${k}" aria-pressed="${k === cur}" title="${esc(tip)}">${esc(label)}${counts && counts[k] != null ? ` <span class="count">${counts[k]}</span>` : ""}</button>`
     ).join("");
   wrap.querySelectorAll(".ret-month-chip").forEach((b) => (b.onclick = () => retSetMonth(b.dataset.month)));
+}
+/* ==========================================================================
+   R70 · B2 — "NEVER CONTACTED FIRST", A TOGGLE AND NOT A FILTER.
+
+   The fact that nobody has ever spoken to this client belongs ON the retention
+   row, and it has to be workable: 103 of Daniel's 105 product-transfer
+   prospects are untouched, interleaved with a back book that has been worked.
+
+   A TOGGLE, deliberately, and not a sixth month chip: it re-orders, it never
+   hides. Pressing it and finding twelve rows where there were ninety would be
+   a filter pretending to be a sort, and the operator would not know which rows
+   had gone. The chip carries the count, so pressing it is never a guess, and
+   the choice is remembered (nx_ret_untouched) like the scope and the month.
+   ========================================================================== */
+const RET_UNTOUCHED_KEY = "nx_ret_untouched";
+let retUntouched = null;
+function retUntouchedOn() {
+  if (retUntouched === null) retUntouched = lsGet(RET_UNTOUCHED_KEY) === "1";
+  return retUntouched;
+}
+window.retToggleUntouched = function () {
+  retUntouched = !retUntouchedOn();
+  lsSet(RET_UNTOUCHED_KEY, retUntouched ? "1" : "0");
+  loadRetentionRates(retScopeResolved());
+};
+function renderRetUntouchedChip(never, total) {
+  const wrap = $("#ret-untouched");
+  if (!wrap) return;
+  const on = retUntouchedOn();
+  wrap.innerHTML = `<button type="button" class="btn btn-sm ret-untouched-chip${on ? " scope-active" : ""}" id="ret-untouched-btn" aria-pressed="${on}" title="${on
+    ? "On: the clients nobody has ever contacted sit at the top of each group. Press again for the date order. Nothing is hidden either way."
+    : "Bring the clients nobody has ever contacted to the top of each group. It RE-ORDERS the list — it never hides a row."}">🕸 Never contacted first <span class="count">${never}</span></button>`
+    + `<span class="ret-untouched-note">${never} of ${total} row${total === 1 ? "" : "s"} in this window ${never === 1 ? "has" : "have"} no note, no sent email, no past appointment and no completed task on record. Import notes do not count as contact.</span>`;
+  const btn = $("#ret-untouched-btn");
+  if (btn) btn.onclick = () => retToggleUntouched();
 }
 /* ==========================================================================
    R64 · A1 — BULK VERBS ON THE PAGE NAMED AFTER THE JOB.
@@ -7205,7 +7656,10 @@ function renderRetBulkBar(shownIds) {
     <div class="bulk-bar" id="ret-bulk-bar"${n ? "" : " hidden"}>
       <span class="bulk-bar-count"><strong id="ret-bulk-n">${n}</strong> selected</span>
       <button type="button" class="btn btn-sm" id="ret-bulk-rate" title="Queue a rate-end reminder for every selected case that has a client email and a rate end date. Nothing is sent now — they go with the next automation run, and each one leaves a follow-up task behind.">⏰ Queue rate-end reminders</button>
-      <button type="button" class="btn btn-sm" id="ret-bulk-retention" title="Start a retention case for every selected completed case whose rate is ending. Each one asks you to confirm, exactly as the row's own button does; ones that are too far out, or that already have a retention case, are named and skipped.">🔁 Start retention cases</button>
+      ${/* R70 · A3 — the title said "each one asks you to confirm", which is what it did and is no
+           longer true: the batch asks ONCE now, on an overlay that names every case it will start
+           and every case it is holding back. */ ""}
+      <button type="button" class="btn btn-sm" id="ret-bulk-retention" title="Start a retention case for every selected completed case whose rate is ending. ONE confirmation for the whole batch, naming what it will start and what it is skipping — too far out, already has a retention case, or the property looks sold.">🔁 Start retention cases</button>
       <button type="button" class="btn btn-sm" id="ret-bulk-task" title="One task per selected case, each landing on that case's own adviser.">＋ Add task…</button>
       <button type="button" class="btn btn-sm" id="ret-bulk-clear">Clear</button>
     </div>
@@ -7339,7 +7793,8 @@ async function loadRetentionRates(scope) {
   RET_MONTHS.forEach(([k]) => { chipCounts[k] = feed.rows.filter((a) => retMonthMatch(a, k, todayIdx)).length; });
   renderRetMonthChips(chipCounts);
   const valueSort = showMoney() && retSortMode === "value";
-  const sorted = sortRateErcRows(feed, valueSort).filter(inWindow);
+  const sortDir = retSortDirResolved();     // R70 · A1 — everyone's control, not just the owner's
+  const sorted = sortRateErcRows(feed, valueSort, sortDir).filter(inWindow);
   /* Rows the window cannot place at all: no readable rate end date, so there is no month to put
      them in. Named on screen rather than quietly dropped. */
   const undated = feed.rows.filter((a) => !inWindow(a) && ymIndex(a.rate_end_date) == null).length;
@@ -7356,7 +7811,31 @@ async function loadRetentionRates(scope) {
      drawer's single undifferentiated list is exactly what made the ended ones easy to miss. */
   const ended = sorted.filter(rateErcEnded);
   const soon = sorted.filter((a) => !rateErcEnded(a));
-  const ordered = ended.concat(soon);
+  let ordered = ended.concat(soon);
+  /* ==========================================================================
+     R70 · B2 — WHO HAS ALREADY BEEN RUNG, ON EVERY ROW, AND A WAY TO WORK THE
+     ONES WHO HAVE NOT.
+
+     Computed over the WHOLE windowed feed rather than the hundred rows on
+     screen, because "Never contacted first" has to be able to reach past the
+     cap — a toggle that only re-orders what you can already see answers a
+     question nobody asked. Chunked and paged (see lastContactByClient).
+     ========================================================================== */
+  const lastContact = await lastContactByClient(
+    ordered.map((a) => (propCtxCase(feed.ctx, a.case_id) || {}).client_id));
+  const untouchedFirst = retUntouchedOn();
+  const neverRung = (a) => {
+    const cid = (propCtxCase(feed.ctx, a.case_id) || {}).client_id;
+    return !cid || !lastContact[cid];
+  };
+  if (untouchedFirst) {
+    /* A STABLE partition, not a re-sort: inside each half the order the reader chose (date or
+       value, ended before soon) is untouched, so the toggle answers one question and changes
+       nothing else. The ended/soon groups below are re-derived by filtering this list, so the
+       never-contacted rows come first within each group rather than jumping between them. */
+    ordered = ordered.filter(neverRung).concat(ordered.filter((a) => !neverRung(a)));
+  }
+  renderRetUntouchedChip(ordered.filter(neverRung).length, ordered.length);
   const shown = ordered.slice(0, RET_LIST_CAP);
   /* R64 · A1 — the selection is pruned to what is actually on screen (BUILD 7c's rule for the
      pipeline table): flipping scope or month must never leave a verb pointed at a row the
@@ -7373,10 +7852,29 @@ async function loadRetentionRates(scope) {
     /* The two scoped badges are the DRAWER's two badges, from the same feed and with the same
        firm-wide tooltip, so the page and Today can never disagree about how much work there is.
        "Already ended" is the page's own, because the page is the only surface that splits them. */
+    /* R70 · L3 — SAY EACH SET ONCE. The reminder window's own definition includes rates that have
+       already lapsed, so under an ENDED-only chip the two badges read "161 already ended · 161 in
+       the 6-month window" — the same 161 rows under two labels, which reads as 322 pieces of work.
+       Under those chips the window badge is dropped rather than reworded: there is nothing it can
+       add that the "already ended" badge beside it has not said. Every other window keeps the
+       count it has always carried (it is the same number Today's drawer badge shows — r38 §C2b
+       pins those two together, and they must not drift apart over a label). */
+    const endedOnlyWindow = monthKey === "ended" || monthKey === "ended3" || monthKey === "ended12";
+    const soonOnlyScopedW = endedOnlyWindow ? [] : ratesSoonScopedW;
+    const soonOnlyAllW = endedOnlyWindow ? [] : ratesSoonAllW;
+    const dirTip = (sortDir === "newest"
+      ? "Ended rates are listed most-recently-ended first — the freshest lapse at the top. Click for oldest first instead."
+      : "Ended rates are listed oldest first. Click to put the most recently ended at the top — the ones still worth a call.")
+      + " Rates that are still to come always read soonest-first."
+      + (valueSort ? " The list is currently ordered by value at risk, so this takes effect when you switch back to ↕ By date." : "");
     h3.innerHTML = `⚠️ Rates ending &amp; ended
-      ${ended.length ? `<span class="count hot" title="Rates that have already matured — the client is on the reversion rate now.">${ended.length} already ended</span>` : ""}
-      ${ratesSoonScopedW.length ? `<span class="count" title="${esc(rateCountTip(ratesSoonScopedW.length, ratesSoonAllW.length, "ending soon", scope))}">${ratesSoonScopedW.length} in the ${reminderMonths}-month window</span>` : ""}
+      ${ended.length ? `<span class="count hot" title="Rates that have already matured — the client is on the reversion rate now.${endedOnlyWindow ? " This window holds nothing else, so there is no second count beside it: these ARE the rows on screen." : ""}">${ended.length} already ended</span>` : ""}
+      ${soonOnlyScopedW.length ? `<span class="count" title="${esc(rateCountTip(soonOnlyScopedW.length, soonOnlyAllW.length, "ending soon", scope))}">${soonOnlyScopedW.length} in the ${reminderMonths}-month window</span>` : ""}
       ${ercScopedW.length ? `<span class="count" style="background:#fbe9e7;color:var(--red);" title="${esc(rateCountTip(ercScopedW.length, ercAllW.length, "ERC conflicts", scope))}">${ercScopedW.length} ERC conflict</span>` : ""}
+      ${/* R70 · A1 — the date direction, for EVERYONE. The value sort below it stays owner-only
+           (it is firm money); which end of the date range the list starts at is not money and an
+           adviser working the lapsed book needs it more than anybody. */ ""}
+      <button type="button" class="btn btn-sm rate-sort-btn" id="ret-sort-dir" onclick="toggleRetSortDir()" aria-pressed="${sortDir === "newest"}" title="${esc(dirTip)}">${sortDir === "newest" ? "↕ Most recently ended first" : "↕ Oldest first"}</button>
       ${showMoney() ? `<button type="button" class="btn btn-sm rate-sort-btn" id="ret-rates-sort" onclick="toggleRetSort()" title="${valueSort ? "Sorted by loan size — the value at risk. Click to sort by date instead." : "Sorted by rate end date. Click to sort by loan size — the value at risk."}">${valueSort ? "↕ By value at risk" : "↕ By date"}</button>` : ""}`;
   }
   const sub = $("#ret-rates-sub");
@@ -7398,7 +7896,7 @@ async function loadRetentionRates(scope) {
   /* R64 — the page's row options: the checkbox column, the selection it reflects, and the phone
      numbers behind the tel: links. Today's drawer passes none of this and renders exactly as it
      did before (see renderRateErcRow). */
-  const rowOpts = { page: true, sel: retSel, phones };
+  const rowOpts = { page: true, sel: retSel, phones, lastContact };
   const group = (title, why, rows, cls) => {
     if (!rows.length) return "";
     let body;
@@ -7418,7 +7916,11 @@ async function loadRetentionRates(scope) {
   $("#ret-rates-list").innerHTML = ordered.length
     ? group("Ended", "The rate has already matured — the client is paying the lender's reversion rate today.", shown.filter(rateErcEnded), "ended")
       + group("Ending soon", "Still inside the fix. The conversation is booked ahead, not chased.", shown.filter((a) => !rateErcEnded(a)), "soon")
-      + (ordered.length > RET_LIST_CAP ? `<div class="empty">…and ${ordered.length - RET_LIST_CAP} more — narrow the list with the scope control above, or work it from the Pipeline table view.</div>` : "")
+      /* R70 · A1 — the footer names the CONTROL that gets the reader to the rows it is hiding.
+         "Narrow the list with the scope control" pointed at Mine/All, which on a 593-row lapsed
+         book barely moves the number; the chips are what cut it to a sitting's worth of work, so
+         they are named, by their own labels. */
+      + (ordered.length > RET_LIST_CAP ? `<div class="empty">…and ${ordered.length - RET_LIST_CAP} more — narrow it with the <strong>Ended · last 3 months</strong> or <strong>Ended · last 12 months</strong> chip above (or a month chip for what is still to come), flip <strong>↕ ${sortDir === "newest" ? "Most recently ended first" : "Oldest first"}</strong> to work the other end of the list, or take the whole set to the Pipeline table view.</div>` : "")
       /* R64 · A2 — the dedupe footnote counts the siblings folded into the rows THAT ARE ON
          SCREEN, not the whole feed's: under a month window "3 further cases are folded into the
          rows above" would be counting rows the reader cannot see. Each surviving row carries its
@@ -7676,7 +8178,14 @@ window.startRetentionCase = async function (caseId, ev, opts) {
     const awayNote = assignTo && assignTo !== ((ME && ME.id) || null) && isAwayToday(assignTo)
       ? `• ${awaySentence(assignTo)} — tick "to me" beside the button if this should not wait`
       : "";
-    if (!confirm([
+    /* R70 · A3 — `assumeConfirmed` is the ONE thing a batch may skip, and only because the batch
+       asked the same questions first: the runner pre-flights every eligible case (including the
+       sold-property check below, whose answer it puts in front of the operator by name) and shows
+       ONE overlay listing the lot. Without it a sweep of fifty rows opened fifty-one native
+       dialogs — the H2 finding. `silent` alone never did this: it only mutes toasts, so a caller
+       that has NOT asked still gets every per-case confirm it always got. */
+    const preConfirmed = !!o.assumeConfirmed;
+    if (!preConfirmed && !confirm([
       `Start a retention case for ${clientName}${propShort ? " — " + propShort : ""}?`,
       propFull
         ? `Property: ${propFull}`
@@ -7688,8 +8197,13 @@ window.startRetentionCase = async function (caseId, ev, opts) {
       assignLine,
       ...(awayNote ? [awayNote] : []),
       `• a task "${taskTitle}" due ${fmtD(dueStr)}${assignTo ? `, on ${assignName}'s list` : ""}`,
+      /* R70 · L4 — the held state, said where the promise is made. Until the Resend key is set and
+         the hold released, "it goes out with the next automation run" is not true; emailHoldOn()
+         keeps this sentence honest in both worlds without anyone having to remember to edit it. */
       cl && cl.email
-        ? `• a rate-end reminder QUEUED to ${cl.email} — it goes out with the next automation run, nothing is sent now`
+        ? (emailHoldOn()
+          ? `• a rate-end reminder QUEUED to ${cl.email} — sending is currently ON HOLD (Settings › Email sending), so it will queue and wait; nothing is sent now`
+          : `• a rate-end reminder QUEUED to ${cl.email} — it goes out with the next automation run, nothing is sent now`)
         : `• no reminder email — ${clientName} has no email address on file`,
       "",
       "This case will stop showing as \"reminder pending\".",
@@ -7776,7 +8290,9 @@ window.startRetentionCase = async function (caseId, ev, opts) {
     // nightly RPC will never pick the case up either (the rate has ended and a successor exists).
     // Say so, and leave a way out: the row keeps a "Mark as reminded" control in exactly this state
     // (see the Rate & ERC alerts renderer) rather than silently nagging with no control at all.
-    const { error: stampErr } = await db.from("cases").update({ rate_reminder_queued_at: new Date().toISOString() }).eq("id", caseId);
+    /* R70 · A2 — the stamp AND the import guard, in one write: this case has now genuinely been
+       worked, so "imported, never reminded" stops being true of it. */
+    const { error: stampErr } = await updateCaseClearingGuard(caseId, { rate_reminder_queued_at: new Date().toISOString() });
     if (stampErr) warn.push(`the completed case could not be marked as reminded (${stampErr.message}) — it will keep showing "Reminder pending" until you press "Mark as reminded" on that row`);
     let queued = false;
     if (cl && cl.email) {
@@ -7819,7 +8335,10 @@ window.markRateReminded = async function (caseId, ev) {
   const btn = (ev && (ev.currentTarget || ev.target)) || null;
   if (btn) { if (btn.disabled) return; btn.disabled = true; }
   try {
-    const { error } = await db.from("cases").update({ rate_reminder_queued_at: new Date().toISOString() }).eq("id", caseId);
+    /* R70 · A2 — a person has now decided about this case, so the import guard goes with the stamp
+       (see updateCaseClearingGuard). The badge that results says "Marked reminded", not "Reminder
+       sent": this control has never been a send and the row must not claim one. */
+    const { error } = await updateCaseClearingGuard(caseId, { rate_reminder_queued_at: new Date().toISOString() });
     if (error) return toast("Could not mark it as reminded: " + error.message);
     toast("Marked as reminded — no email was sent.");
     if (currentModal && currentModal.type === "case" && currentModal.id === caseId) openCase(caseId);
@@ -7984,6 +8503,17 @@ let briefCaseMeta = {};
 // R6 — case_id → the property chip, populated for EVERY case that has an address. Takes
 // precedence over briefCaseMeta above: a building beats a kind · stage guess.
 let briefCaseChip = {};
+/* R70 · B4 — client_id → { phone, first }. Filled from the SAME case read that builds the two
+   maps above (one extra embed, no extra query), so a My Day row can offer 📞 / 💬 without Today
+   growing a read. Empty whenever that read failed or the client has no number, and the row then
+   renders exactly as it did before. */
+let briefClientPhone = {};
+function briefPhoneHtml(it) {
+  const cid = it && it.client_id;
+  const p = cid && briefClientPhone[cid];
+  if (!p || !p.phone) return "";
+  return phoneActionsHtml(p.phone, { sms: true, name: p.first || "" });
+}
 function briefCaseDisc(it) {
   const chip = (it && it.case_id && briefCaseChip[it.case_id]) || "";
   const d = it && it.case_id && briefCaseMeta[it.case_id];
@@ -8322,14 +8852,23 @@ async function loadBriefing() {
      named when the migration is there, so an un-migrated database keeps the round-5 rows. */
   briefCaseMeta = {};
   briefCaseChip = {};
+  briefClientPhone = {};
   try {
     const clientIds = [...new Set(items.filter((it) => it.client_id).map((it) => it.client_id))];
     if (clientIds.length) {
-      const cols = "id,client_id,stage,case_kind,lender" + ((await propAddrSupported()) ? ",property_address" : "");
+      /* R70 · B4 — ONE MORE EMBED ON THE READ THAT IS ALREADY RUNNING, so a My Day row can be
+         rung from the row. `first_name`/`phone` are base columns on `clients`; the embed is over
+         exactly the clients whose rows are on screen, which is the set this read is already
+         chunked by. No new query — Today does not gain a round trip for a phone link. */
+      const cols = "id,client_id,stage,case_kind,lender,clients!client_id(first_name,phone)" + ((await propAddrSupported()) ? ",property_address" : "");
       const { data: cs } = await inChunks(clientIds, (sl) => db.from("cases").select(cols).in("client_id", sl));
       const live = (cs || []).filter((c) => c.stage !== "not_proceeding");
       const perClient = {};
       live.forEach((c) => { perClient[c.client_id] = (perClient[c.client_id] || 0) + 1; });
+      (cs || []).forEach((c) => {
+        if (!c || !c.client_id || !c.clients || briefClientPhone[c.client_id]) return;
+        briefClientPhone[c.client_id] = { phone: c.clients.phone || "", first: c.clients.first_name || "" };
+      });
       (cs || []).forEach((c) => { if (propAddress(c)) briefCaseChip[c.id] = propChip(c, { cls: "row-prop" }); });
       /* The kind · stage discriminator STAYS alongside the chip rather than being replaced by it:
          Ruby's two 8 Grand Avenue cases share an address, so the chip alone would take a pair of
@@ -8507,6 +9046,7 @@ function briefSubRowHtml(it) {
       <div class="row-main">
         <div class="t" ${briefTitleAttrs(it)}>${esc(it.title)}${briefCaseDisc(it)}</div>
         <div class="s">${esc(it.sub || "")}${briefOwnerSuffix(it)}</div>
+        ${briefPhoneHtml(it)}
       </div>
       ${briefBadge(it)}
       ${briefActions(it)}
@@ -8523,6 +9063,10 @@ function briefRowHtml(row) {
       <div class="row-main">
         <div class="t" ${briefTitleAttrs(it)}>${esc(it.title)}${briefCaseDisc(it)}</div>
         <div class="s">${esc(it.sub || "")}${briefOwnerSuffix(it)}</div>
+        ${/* R70 · B4 — 📞 / 💬 on the row, from the number the case-meta read already carried.
+             ABOVE the fold, never inside it: the fold holds the case's OTHER rows and each of
+             those carries its own pair. */ ""}
+        ${briefPhoneHtml(it)}
         ${briefMoreHtml(row)}
       </div>
       ${briefBadge(it)}
@@ -9478,6 +10022,12 @@ $("#watchtower-run").addEventListener("click", async () => {
    their own book; the Owner/Administrator see the whole firm. Self-contained (own reads) so it is
    robust on the dashboard's error path, exactly like loadWatchtower and the other Today widgets. */
 const UNACTIONED_DAYS = 7;
+/* R70 · L1 — the radar was the only uncapped list left on Today (Wayne F6). At the real book size
+   it renders 35–127 rows on the screen the day is started from. Twenty-five is the same order as
+   every other Today list (the Rate & ERC drawer's fifteen, My Day's ten-per-band); the tail is
+   named and handed to the Pipeline, never silently dropped, and the panel's count still counts
+   every quiet case. */
+const RADAR_CAP = 25;
 async function loadUnactioned() {
   const listEl = $("#unactioned-list");
   if (!listEl) return;
@@ -9505,7 +10055,13 @@ async function loadUnactioned() {
        bare `.order("id")` on the tasks read exist only to make the paging deterministic: without a
        unique sort key, two pages of an equal-`updated_at` run can repeat or skip rows. Neither
        changes what the radar means — the cases read is still oldest-touched-first. */
-    readAll(db.from("cases").select("id,stage,assigned_to,client_id,created_at,clients!client_id(first_name,last_name)")
+    /* R70 · B4/H3 — THREE MORE COLUMNS ON A READ THAT ALREADY RUNS, AND NOT ONE NEW QUERY.
+       The 105 Enquiry cases on this radar are Daniel's product-transfer pipeline: every one has a
+       lender, a rate-end date and an adviser, and the radar showed none of them — so ~35 to 127
+       interchangeable rows sorted by quiet-days hid the single fact that decides who to ring
+       today. `lender` and `rate_end_date` are base columns on `cases`; `phone` is one more column
+       on the clients embed this read has always carried. */
+    readAll(db.from("cases").select("id,stage,assigned_to,client_id,created_at,lender,rate_end_date,clients!client_id(first_name,last_name,phone)")
       .not("stage", "in", "(completed,not_proceeding)")
       .order("updated_at", { ascending: true }).order("id")),
     /* R63 · H1c — the title and created_at come along now: "has an open task" is no longer the
@@ -9546,10 +10102,36 @@ async function loadUnactioned() {
     !(lastActivity[c.id] && lastActivity[c.id] >= sinceIso)
   );
   const ctx = await loadPropContext(quiet.map((c) => c.id));
-  // Quietest first — the case that has drifted longest is the one to ring today.
   const daysQuiet = (c) => daysSince(lastActivity[c.id] || c.created_at);
-  quiet.sort((a, b) => (daysQuiet(b) ?? 9999) - (daysQuiet(a) ?? 9999));
-  listEl.innerHTML = quiet.length ? quiet.map((c) => {
+  /* ==========================================================================
+     R70 · B4/L1 — RATE-SOONEST FIRST, QUIET-DAYS AS THE TIEBREAK, CAPPED AT 25.
+
+     Quietest-first was the right order when this radar was about drifting live
+     cases. It is the wrong order now that the list IS the product-transfer
+     prospect pile: "quiet 304 days" versus "quiet 297 days" is a distinction
+     without a difference, while "their rate ended in March" versus "theirs ends
+     in November" decides the whole day. So the rate end leads — already-past
+     dates sort first, because those clients are on the reversion rate now — and
+     quiet-days breaks the tie exactly as it used to. A case with no rate end has
+     no such claim on the day and sorts after every case that has one (the same
+     rule R41 · L8 applies to the cold list), still quietest-first among its own.
+
+     And the list is CAPPED (L1 — it was the last uncapped list on Today). The
+     panel's own count is untouched: it still reports every quiet case, so the
+     tail is disclosed rather than deleted.
+     ========================================================================== */
+  const rateKey = (c) => (c.rate_end_date ? String(c.rate_end_date).slice(0, 10) : "");
+  quiet.sort((a, b) => {
+    const ra = rateKey(a), rb = rateKey(b);
+    if (ra !== rb) {
+      if (!ra) return 1;
+      if (!rb) return -1;
+      return ra < rb ? -1 : 1;
+    }
+    return (daysQuiet(b) ?? 9999) - (daysQuiet(a) ?? 9999);
+  });
+  const radarShown = quiet.slice(0, RADAR_CAP);
+  listEl.innerHTML = quiet.length ? radarShown.map((c) => {
     const who = c.clients ? [c.clients.first_name, c.clients.last_name].filter(Boolean).join(" ") : "";
     const n = daysQuiet(c);
     const nLabel = n == null ? "no activity recorded" : `quiet ${n} ${n === 1 ? "day" : "days"}`;
@@ -9558,15 +10140,35 @@ async function loadUnactioned() {
        finding, and saying "no next action" over a visible open task is how a panel loses its
        reader. Name what is actually there instead. */
     const stale = staleOnly(c);
+    /* R70 · B4 — the rate line. The one fact that decides who to ring, on the row, in the same
+       words the Retention feed uses ("ends 14 Mar 2026 (3 months ago)"), plus the lender, because
+       a product transfer is a conversation about a specific lender's reversion rate. Silent on a
+       case with no rate end — a purchase in progress has nothing to say here. */
+    /* Same sign convention as v_alerts.days_to_rate_end (negative once the rate has ended), off
+       the same calendar-day arithmetic the rest of the app counts dates with. */
+    const rSince = c.rate_end_date ? daysSinceLocal(String(c.rate_end_date).slice(0, 10)) : null;
+    const rDays = rSince == null ? null : -rSince;
+    const rateBit = c.rate_end_date
+      /* Deliberately NO lender favicon here, unlike the Retention rows. The dashboard is the first
+         page painted in a session, and putting a new set of lender domains on it only moves those
+         image requests earlier — r69_polish §A4's "one request per domain across the session"
+         property is worth more than a 16px logo on a list that is already dense. The lender's NAME
+         is the part that decides the call. */
+      ? `<div class="s unactioned-rate">${esc(c.lender || "no lender on the case")} — rate ${rDays != null && rDays < 0 ? "ended" : "ends"} ${esc(fmtD(c.rate_end_date))}${rDays != null ? ` (${rDays < 0 ? fmtDaysAway(rDays) + " ago" : "in " + fmtDaysAway(rDays)})` : ""}</div>`
+      : "";
+    const phone = (c.clients && c.clients.phone) || "";
     return `<div class="row-item${stale ? " unactioned-stale" : ""}">
       <div class="row-main">
         <div class="t" onclick="openCase('${c.id}')">${esc(who) || "(no name)"} ${propCtxChip(ctx, c.id, "row-prop")}</div>
         <div class="s">${esc(stageLbl)} · ${esc(staffName(c.assigned_to))} · ${nLabel}${stale ? ` · <span class="unactioned-stale-note" title="${esc(STALE_TASK_TIP)}">only an earlier-stage task is open</span>` : ""}</div>
+        ${rateBit}${phoneActionsHtml(phone, { sms: true, name: who, rateEnd: c.rate_end_date })}
       </div>
       <span class="badge grey"${stale ? ` title="${esc(STALE_TASK_TIP)}"` : ""}>${stale ? "STALE TASK ONLY" : "NO NEXT ACTION"}</span>
       <button class="btn btn-sm" onclick="openCase('${c.id}')">Open</button>
     </div>`;
-  }).join("") : `<div class="empty">Every live case has a next action 🎉</div>`;
+  }).join("")
+    + (quiet.length > RADAR_CAP ? `<div class="empty unactioned-more">…and ${quiet.length - RADAR_CAP} more — <button type="button" class="dash-notice-link" onclick="nav('pipeline')">open Pipeline</button> to work the rest.</div>` : "")
+    : `<div class="empty">Every live case has a next action 🎉</div>`;
   /* R69 · A4 — say it when the bound bites. Same `=== cap` test the R23 owner-read notices use
      (ownerCapHit): a read that comes back holding EXACTLY the ceiling is, as far as the client can
      tell, truncated. Either cap firing makes the radar unreliable in a different direction — a
@@ -10960,8 +11562,10 @@ const REFERRAL_META = {
   conveyancing: { icon: "🖋️", label: "Conveyancing" },
   /* `verb` overrides the overlay's heading where "Refer for protection" reads better than
      "Refer for protection advice"'s lower-cased label would on its own. */
-  protection:   { icon: "🛡️", label: "Protection", verb: "Refer for protection advice", defaultTo: () => String((settings && settings.protection_referral_partner) || "").trim() },
-  gi:           { icon: "🏠", label: "GI", verb: "Refer for buildings/contents insurance" },
+  protection:   { icon: "🛡️", label: "Protection", verb: "Refer for protection advice", setting: "protection referral partner", defaultTo: () => String((settings && settings.protection_referral_partner) || "").trim() },
+  /* R70 · M5 — GI gets the same pre-fill as protection, off its own setting. Luke: "GI referrals
+     make you type the partner every time" — the same firm, typed identically, on every referral. */
+  gi:           { icon: "🏠", label: "GI", verb: "Refer for buildings/contents insurance", setting: "GI referral partner", defaultTo: () => String((settings && settings.gi_referral_partner) || "").trim() },
   other:        { icon: "🤝", label: "Referral" },
 };
 const REFERRAL_STATUS_BADGE = { made: ["blue", "Referred"], completed: ["green", "Completed"], declined: ["grey", "Declined"] };
@@ -10983,7 +11587,8 @@ async function makeReferral(caseId, c, kind) {
     <label>Referred to
       <input id="ref-to" type="text" placeholder="Firm or contact the client was referred to…" maxlength="120" value="${esc(defTo)}">
     </label>
-    ${defTo ? '<p class="panel-sub ref-default-note">Pre-filled from the protection referral partner named in Settings — change it if this one went elsewhere.</p>' : ""}
+    ${/* R70 · M5 — the note names WHICH setting it came from, because there are two of them now. */ ""}
+    ${defTo ? `<p class="panel-sub ref-default-note">Pre-filled from the ${esc(meta.setting || "referral partner")} named in Settings — change it if this one went elsewhere.</p>` : ""}
     <label style="margin-top:10px;">Note (optional)
       <textarea id="ref-note" rows="2" placeholder="Anything worth remembering about this referral…"></textarea>
     </label>
@@ -11128,15 +11733,23 @@ async function editCaseObjective(caseId, c) {
    Both outcomes close any OPEN retention successor for the old cycle as
    not_proceeding (the DB's cases_cancel_retention trigger then cancels its
    queued touches and tasks), writing the reason on it. */
-async function rateEndOutcome(caseId, c) {
+/* R70 · B3 — `opts.preset` ("renewed" | "sold") opens the overlay on that radio, so the row chip
+   that says "Property sold" lands on the sold half instead of on the renewal form. NOTHING else
+   changes: every field, every validation and the whole confirm copy naming the side effects are
+   the R58 ones, because a one-click "record it for me" would be a different, worse flow wearing
+   the same name. `opts.onDone` replaces the trailing openCase() for a caller that has its own
+   repaint (the Retention row) — with no opts at all this function is byte-for-byte R58. */
+async function rateEndOutcome(caseId, c, opts) {
+  const o = opts || {};
+  const presetSold = o.preset === "sold";
   const chips = [2, 3, 5].map((y) => `<button type="button" class="btn btn-sm reo-chip" data-years="${y}">+${y} yrs</button>`).join(" ");
   const got = await openOverlay(`
     <h3>📌 Rate-end outcome</h3>
     <p class="panel-sub">What happened at the end of the ${esc(c.lender || "")} deal${c.rate_end_date ? ` (rate end ${fmtD(c.rate_end_date)})` : ""}? Recorded on the case with a note; any open retention case for this rate is closed with the reason.</p>
-    <label class="reo-choice"><input type="radio" name="reo-kind" value="renewed" checked>
+    <label class="reo-choice"><input type="radio" name="reo-kind" value="renewed"${presetSold ? "" : " checked"}>
       <span><strong>Renewed — new deal taken (direct or elsewhere)</strong><br>
       <span class="cs-muted">Update the mortgage details so this pops back up before the NEW rate ends.</span></span></label>
-    <div id="reo-renew-fields" style="margin:8px 0 4px 24px;">
+    <div id="reo-renew-fields" style="margin:8px 0 4px 24px;${presetSold ? "opacity:0.45;" : ""}">
       <label>New rate end date <span style="display:inline-flex;gap:6px;margin-left:8px;">${chips}</span>
         <input id="reo-date" type="date" style="margin-top:4px;">
       </label>
@@ -11145,10 +11758,10 @@ async function rateEndOutcome(caseId, c) {
         <label style="width:120px;">Rate % (optional)<input id="reo-rate" type="number" step="0.01" min="0" max="30"></label>
       </div>
     </div>
-    <label class="reo-choice" style="margin-top:10px;"><input type="radio" name="reo-kind" value="sold">
+    <label class="reo-choice" style="margin-top:10px;"><input type="radio" name="reo-kind" value="sold"${presetSold ? " checked" : ""}>
       <span><strong>Property sold / mortgage redeemed</strong><br>
       <span class="cs-muted">Stop tracking this rate — the case leaves the rates feed for good, and the client's record shows the property as SOLD.</span></span></label>
-    <div id="reo-sold-fields" style="margin:8px 0 4px 24px;opacity:0.45;">
+    <div id="reo-sold-fields" style="margin:8px 0 4px 24px;${presetSold ? "" : "opacity:0.45;"}">
       <label>Date sold / redeemed <span class="cs-muted">(defaults to today)</span>
         <input id="reo-sold-date" type="date" style="margin-top:4px;max-width:180px;">
       </label>
@@ -11215,7 +11828,10 @@ async function rateEndOutcome(caseId, c) {
     };
     if (got.lender) patch.lender = got.lender;
     if (got.rate !== "" && got.rate != null && isFinite(Number(got.rate))) patch.rate_percent = Number(got.rate);
-    const { error } = await db.from("cases").update(patch).eq("id", caseId);
+    /* R70 · A2 — the re-arm clears the guard too. The stamp is being set back to null so the
+       engine picks the case up on the NEW cycle; leaving reminder_guarded true would mark a case
+       the firm has just spoken to as "imported, never touched" for ever. */
+    const { error } = await updateCaseClearingGuard(caseId, patch);
     if (error) return toast("Couldn't record the outcome: " + error.message);
     /* R59 — a renewed outcome un-marks a stale SOLD flag (recording sold then correcting to
        renewed must not leave the client's record shouting SOLD on a live mortgage). Separate
@@ -11240,8 +11856,28 @@ async function rateEndOutcome(caseId, c) {
       created_by: uid });
     toast("Outcome recorded — rate tracking closed");
   }
+  /* R70 · B3 — a caller with its own list to repaint says so; everybody else keeps R58's
+     behaviour exactly (re-render the case: header, milestones and the retention affordances
+     have all changed). */
+  if (typeof o.onDone === "function") { await o.onDone(); return; }
   openCase(caseId); // re-render: header, milestones and the retention affordances all changed
+  /* R70 · A3 — AND REPAINT THE LIST BEHIND THE MODAL. Recording an outcome is how a row LEAVES
+     the Retention feed (renewed re-dates the rate out of the window; sold clears it altogether),
+     and until now the worked row sat there unchanged until the operator navigated away — so a
+     sitting of thirty calls was worked against a list that never shrank, and the same client was
+     rung twice. Page-scoped: this only fires when Retention is the page underneath, so the
+     dashboard and the case modal's own callers are untouched. */
+  if (currentPage === "retention") loadRetentionPage();
 }
+/* R70 · B3 — the Retention row's entry point into the above. One read of the case (the overlay
+   needs the lender, the rate end and the sold marker to say what it is about), then the R58
+   overlay with the radio the chip named already chosen. The repaint is THIS page's, not the case
+   modal's: the row you just recorded an outcome on is the row that has to change. */
+window.retRateOutcome = async function (caseId, kind) {
+  const { data: c, error } = await db.from("cases").select("*").eq("id", caseId).single();
+  if (error || !c) return toast("Couldn't open that case — " + ((error && error.message) || "it may have been deleted"));
+  return rateEndOutcome(caseId, c, { preset: kind === "sold" ? "sold" : "renewed", onDone: () => loadRetentionPage() });
+};
 /* The milestone checklist. Three states per row — done (✓, with the date where a column carries
    one), current (→, the stage the case is standing in), still-to-come (○) — plus ✕ rows on a
    not-proceeding case. Milestones tick off the case's own recorded columns FIRST and the stage
@@ -12019,7 +12655,9 @@ async function bulkStartRetention() {
 async function bulkStartRetentionRun(ids) {
   const propOn = await propAddrSupported();
   const { data: rows, error } = await inChunks(ids, (sl) => db.from("cases")
-    .select("id,client_id,stage,rate_end_date,case_kind,lender,retention_source_case_id"
+    /* R70 · A3 — created_at joins the read because the sold-property pre-flight below compares it
+       against the other client's case ("is theirs NEWER than ours?" — propSoldWarning). */
+    .select("id,client_id,stage,rate_end_date,case_kind,lender,retention_source_case_id,created_at"
       + (propOn ? ",property_address" : "") + ",clients!client_id(first_name,last_name)")
     .in("id", sl));
   if (error) return toast("Error: " + error.message);
@@ -12049,21 +12687,41 @@ async function bulkStartRetentionRun(ids) {
       : "Nothing to start");
   }
   eligible.sort((a, b) => (a.rate_end_date < b.rate_end_date ? -1 : 1));
-  if (!confirm([
-    `Start a retention case for ${eligible.length} of the ${ids.length} selected case${ids.length === 1 ? "" : "s"}?`,
-    "",
-    `You will be asked about each one separately — the same confirmation the single-case button shows, including any warning that another client holds a later case on the same property. Cancel on an individual case skips just that one.`,
-    "",
-    "Starting with:",
-    ...eligible.slice(0, 8).map((c) => `· ${nameOf(c)} — rate ends ${fmtD(c.rate_end_date)}`),
-    ...(eligible.length > 8 ? [`· and ${eligible.length - 8} more`] : []),
-    ...(skipped.length ? ["", `Skipped (${skipped.length}): ${skipped.slice(0, 5).join("; ")}${skipped.length > 5 ? `; and ${skipped.length - 5} more` : ""}`] : []),
-  ].join("\n"))) return;
+  /* ==========================================================================
+     R70 · A3 — FIFTY ROWS USED TO COST FIFTY-ONE DIALOGS.
+
+     The loop-over-the-single-flow discipline (see the block above) was right about
+     the WRITES and wrong about the ASKING: every per-case confirm carried the same
+     three sentences, and the one thing that actually differs between cases — "this
+     building may have been sold to somebody else" — was buried in dialog 34 of 50,
+     where nobody reads it. So the runner now asks the sold question ITSELF, for
+     every eligible case, BEFORE anything is written, and puts the answers in front
+     of the operator by name in ONE overlay. Cases that look sold are SKIPPED, not
+     silently started: the batch cannot ask "are you sure about this one?" fifty
+     times, and starting a retention case on a house the client no longer owns
+     queues a client email about somebody else's home — the worst mistake this
+     screen can make. The single-row button is untouched and still asks per case,
+     which is where a "yes, go ahead anyway" decision belongs.
+     ========================================================================== */
+  const soldSkips = [];
+  const startable = [];
+  for (const c of eligible) {
+    const sold = propSoldWarning(await casesOnSameProperty(c), c);
+    if (sold) soldSkips.push({ c, sold }); else startable.push(c);
+  }
+  if (!startable.length) {
+    return toast(`Nothing to start — ${soldSkips.length} of the ${ids.length} selected look sold (${soldSkips.slice(0, 3).map((s) => nameOf(s.c)).join("; ")}${soldSkips.length > 3 ? `; and ${soldSkips.length - 3} more` : ""})`
+      + (skipped.length ? ` and ${skipped.length} ${skipped.length === 1 ? "is" : "are"} ineligible` : ""));
+  }
+  const okd = await confirmBulkRetentionStart(startable, soldSkips, skipped, ids.length, nameOf);
+  if (!okd) return;
 
   let created = 0, cancelled = 0, failed = 0, partial = 0;
   const failures = [], partials = [];
-  for (const c of eligible) {
-    const res = await startRetentionCase(c.id, null, { silent: true });
+  for (const c of startable) {
+    /* assumeConfirmed: the overlay above asked every question this batch can answer, including the
+       sold-property one, so the per-case confirm would be the same question a second time. */
+    const res = await startRetentionCase(c.id, null, { silent: true, assumeConfirmed: true });
     const st = (res && res.status) || "error";
     if (st === "created") created++;
     else if (st === "created_with_warnings") { created++; partial++; partials.push(nameOf(c)); }
@@ -12078,21 +12736,62 @@ async function bulkStartRetentionRun(ids) {
   if (partial) out += ` (${partial} with problems: ${partials.slice(0, 3).join(", ")}${partials.length > 3 ? ` and ${partials.length - 3} more` : ""} — open them and check the note, task and queued email)`;
   if (cancelled) out += ` · ${cancelled} cancelled by you`;
   if (skipped.length) out += ` · ${skipped.length} skipped as ineligible`;
+  /* R70 · A3 — the sold skips are their own clause and are NAMED: they are the one exclusion the
+     operator may want to overturn by hand on the row itself. */
+  if (soldSkips.length) out += ` · ${soldSkips.length} skipped as possibly sold: ${soldSkips.slice(0, 2).map((s) => nameOf(s.c)).join("; ")}${soldSkips.length > 2 ? ` and ${soldSkips.length - 2} more` : ""}`;
   if (failed) out += ` · ${failed} failed: ${failures.slice(0, 2).join("; ")}${failures.length > 2 ? ` and ${failures.length - 2} more` : ""}`;
   toast(out);
   if (created) {
     pipeSel.clear();
     loadPipeline();
     if (!$("#page-dashboard").classList.contains("hidden")) loadDashboard();
+    /* R70 · A3 — and the Retention page, when that is where the bar was pressed: its rates panel
+       holds the rows that have just been worked and its pipeline panel the cases just created. */
+    if (currentPage === "retention") loadRetentionPage();
   }
+}
+/* R70 · A3 — the ONE batch confirm, on the shared overlay (openOverlay) rather than a native
+   confirm(): a fifty-name list inside window.confirm is unreadable and unscrollable, and no new
+   flow in this app opens a native dialog (house rule since R68's confirmTypedWord). Resolves true
+   only on the primary button. Everything the old text said is still said — what will be created,
+   who for, what was skipped and why — plus the sold-property answers the per-case dialogs used to
+   carry one at a time. */
+function confirmBulkRetentionStart(startable, soldSkips, skipped, selectedN, nameOf) {
+  const list = (rows, render) => rows.slice(0, 12).map(render).join("")
+    + (rows.length > 12 ? `<li class="cs-muted">…and ${rows.length - 12} more</li>` : "");
+  return openOverlay(`
+    <h3>🔁 Start ${startable.length} retention case${startable.length === 1 ? "" : "s"}</h3>
+    <p class="panel-sub">One retention case each: a new Enquiry linked back to the completed case, a “Call client — rate ends …” task on that case's own adviser, and a rate-end reminder queued to the client (never sent from here). ${esc(startable.length === selectedN ? "Every case you selected is eligible." : `${startable.length} of the ${selectedN} you selected — the rest are listed below.`)}</p>
+    <div class="bulk-confirm-list">
+      <h4>Starting with</h4>
+      <ul class="bulk-confirm-ul">${list(startable, (c) => `<li>${esc(nameOf(c))} — rate ends ${esc(fmtD(c.rate_end_date))}</li>`)}</ul>
+      ${soldSkips.length ? `<h4 class="bulk-confirm-warn">⚠ ${soldSkips.length} look${soldSkips.length === 1 ? "s" : ""} sold and will be skipped</h4>
+        <p class="panel-sub">Another client holds a newer case on the same building, so a retention reminder would go to somebody about a house they may no longer own. Start these one at a time from the row if you know better — the single-case button still asks.</p>
+        <ul class="bulk-confirm-ul">${list(soldSkips, (s) => `<li>${esc(nameOf(s.c))} — ${esc(s.sold.who)} (${esc(s.sold.what)}, started ${esc(fmtD(s.sold.when))})</li>`)}</ul>` : ""}
+      ${skipped.length ? `<h4>Not eligible (${skipped.length})</h4>
+        <ul class="bulk-confirm-ul">${list(skipped, (s) => `<li>${esc(s)}</li>`)}</ul>` : ""}
+    </div>
+    <p class="panel-sub">${esc(emailHoldOn()
+      ? "Sending is currently ON HOLD (Settings › Email sending) — every reminder will queue and wait; nothing is sent now."
+      : "The reminders send with the next automation run; nothing is sent now.")}</p>
+    <div class="modal-actions"><div></div><div class="right">
+      <button type="button" class="btn" id="bulkret-cancel">Cancel</button>
+      <button type="button" class="btn btn-primary" id="bulkret-ok">Start ${startable.length} retention case${startable.length === 1 ? "" : "s"}</button>
+    </div></div>`, (finish, box) => {
+    box.querySelector("#bulkret-cancel").onclick = () => finish(false);
+    box.querySelector("#bulkret-ok").onclick = () => finish(true);
+  });
 }
 async function bulkQueueRateRemindersRun(ids) {
   // The identity needs the property column, which an un-migrated database does not have: name it
   // only where it exists, exactly as loadPropContext does, so the sweep cannot 42703 on M7.
   const propOn = await propAddrSupported();
+  /* R70 · A2 — the guard is NAMED in the read, feature-detected like property_address above: on a
+     database without the migration a named-but-absent column 42703s the whole sweep. */
+  const guardOn = await reminderGuardSupported();
   const { data: rows, error } = await inChunks(ids, (sl) => db.from("cases")
     .select("id,client_id,rate_end_date,assigned_to,rate_reminder_queued_at,case_kind,lender,stage"
-      + (propOn ? ",property_address" : "") + ",clients!client_id(first_name,last_name,email)")
+      + (propOn ? ",property_address" : "") + (guardOn ? ",reminder_guarded" : "") + ",clients!client_id(first_name,last_name,email)")
     .in("id", sl));
   if (error) return toast("Error: " + error.message);
   const nameOf = bulkCaseLabel;
@@ -12122,14 +12821,26 @@ async function bulkQueueRateRemindersRun(ids) {
   }
   // Not a skip reason (the operator may deliberately be re-chasing), but they deserve to know
   // before they send a second reminder to the same client.
-  const already = eligible.filter((c) => c.rate_reminder_queued_at);
+  /* R70 · A2 — AN IMPORT STAMP IS NOT A REMINDER. 1,711 back-book cases carry
+     rate_reminder_queued_at because the R45 import guard wrote it, not because anything was ever
+     queued or sent; counting those as "already reminded once" put the whole imported book behind
+     a warning that says the client has heard from us. They are eligible, they are not "already",
+     and they get their own named block below. Daniel's decision, 27 Aug: yes, the guarded book
+     may be bulk-reminded. (The nine-month far-out guard above still applies to every one of them.) */
+  const already = eligible.filter((c) => c.rate_reminder_queued_at && !c.reminder_guarded);
+  const guarded = eligible.filter((c) => c.reminder_guarded);
   const chaseDue = localDateStr(Date.now() + 7 * 86400000);
   const confirmMsg = `Queue ${eligible.length} rate-end reminder${eligible.length === 1 ? "" : "s"}?`
     + (skipped.length ? ` (${skipped.length} skipped: no email/no rate-end date)` : "")
-    + `\n\nThey send with the next automation run — nothing is sent now.`
+    /* R70 · L4 — driven from emailHoldOn(), so this sentence stays true the day the hold lifts. */
+    + `\n\n${queuedSendLine()}`
     + `\nEach one also gets a follow-up task due ${fmtD(chaseDue)}.`
     + (skipped.length ? `\n\nSkipped: ${skipped.slice(0, 5).join(", ")}${skipped.length > 5 ? ` and ${skipped.length - 5} more` : ""}` : "")
     + (already.length ? `\n\n⚠ ${already.length} of these ${already.length === 1 ? "has" : "have"} already been reminded once — they will be reminded again:\n${already.slice(0, 5).map((c) => "· " + nameOf(c)).join("\n")}${already.length > 5 ? `\n· and ${already.length - 5} more` : ""}` : "")
+    /* R70 · A2 — named, not silent, and NOT a warning: this block exists so the operator knows why
+       a case that looks reminded is in the list, and that this is the first time anyone will
+       actually write to them. */
+    + (guarded.length ? `\n\nℹ ${guarded.length} of these ${guarded.length === 1 ? "was" : "were"} imported with the back book and ${guarded.length === 1 ? "has" : "have"} NEVER been reminded — the import stamped them so the automation would leave them alone. This is the first time anything goes to ${guarded.length === 1 ? "this client" : "these clients"}:\n${guarded.slice(0, 5).map((c) => "· " + nameOf(c)).join("\n")}${guarded.length > 5 ? `\n· and ${guarded.length - 5} more` : ""}` : "")
     /* R64 · M5 — named, not silent. Same block shape as the "already reminded" warning above:
        the count, the reason in one sentence, then the actual clients, capped at five. */
     + (tooEarly.length ? `\n\n⚠ Too early — rate ends in more than nine months (not queued), ${tooEarly.length} of them. Nothing goes to these clients today; the ${Number(settings.rate_reminder_months) || 6}-month reminder window reaches them long before it is too late:\n${tooEarly.slice(0, 5).map((c) => `· ${nameOf(c)} — rate ends in ${rateMonthsOut(c.rate_end_date, today)} months (${fmtD(c.rate_end_date)})`).join("\n")}${tooEarly.length > 5 ? `\n· and ${tooEarly.length - 5} more` : ""}` : "")
@@ -12154,7 +12865,9 @@ async function bulkQueueRateRemindersRun(ids) {
     });
     if (qErr) { failedQueue.push({ id: c.id, label: nameOf(c) }); continue; }
     queued++;
-    const { error: sErr } = await db.from("cases").update({ rate_reminder_queued_at: new Date().toISOString() }).eq("id", c.id);
+    /* R70 · A2 — one write: the stamp, and the guard cleared. Something real has now been queued
+       to this client, so "imported and never reminded" is no longer true of the case. */
+    const { error: sErr } = await updateCaseClearingGuard(c.id, { rate_reminder_queued_at: new Date().toISOString() });
     if (sErr) failedStamp.push({ id: c.id, label: nameOf(c) });
     const { error: tErr } = await db.from("case_tasks").insert({
       case_id: c.id,
@@ -12743,7 +13456,8 @@ function feeStatusCellHtml(c) {
       ${/* R7-2 — the bulk half of the retention sweep. A rate-end review is done a dozen rows at a
            time off this table, and the only route to it was one button on one row of one dashboard
            panel. It runs the SAME per-case flow, confirm by confirm, and tallies at the end. */ ""}
-      <button type="button" class="btn btn-sm" id="pipe-bulk-retention" title="Start a retention case for every selected completed case whose rate is ending. Each one asks you to confirm, exactly as the single-case button does.">🔁 Start retention cases</button>
+      ${/* R70 · A3 — one batch confirm, not one per case (same runner as the Retention page's bar). */ ""}
+      <button type="button" class="btn btn-sm" id="pipe-bulk-retention" title="Start a retention case for every selected completed case whose rate is ending. ONE confirmation for the whole batch, naming what it will start and what it is skipping.">🔁 Start retention cases</button>
       ${/* R65 · M11 — THE TWO CHASE VERBS. The bulk bar could move a batch and assign a batch, i.e.
            everything except the thing an operator actually does with a list of twelve cases: chase
            them. Both are pre-flighted, both name every skip in one confirm, and both are
@@ -14425,7 +15139,11 @@ function logCallPanelHtml(c) {
           <button type="button" class="tl-chip" data-outcome="Spoke — will call back">Spoke — will call back</button>
           <button type="button" class="tl-chip" data-outcome="Spoke — actioned">Spoke — actioned</button>
         </div>
-        <label>Call outcome<textarea id="cs-call-note" rows="3" placeholder="What was discussed / agreed…"></textarea></label>
+        ${/* R70 · B1 — the two rules this panel now follows, said where they happen. This firm
+             reads the copy: an outcome chip that saves on its own and a call-back that appears in
+             the diary by itself are both surprises unless the panel says so first. */ ""}
+        <p class="panel-sub cs-call-help" id="cs-call-help">Pick an outcome and press Save — a chip on its own is enough, no typing needed. <strong>No answer</strong> and <strong>Left voicemail</strong> also book a call-back task for tomorrow; change the title or the date below if you like, or clear the date to book nothing.</p>
+        <label>Call outcome<textarea id="cs-call-note" rows="3" placeholder="What was discussed / agreed… (optional once an outcome is picked)"></textarea></label>
         ${/* R5-49 — protection gets discussed on the phone and then never recorded, which is what
              blocks the case at Application later. One tick here writes protection_status. */ ""}
         <label class="row-check" style="display:flex;gap:8px;align-items:center;font-size:13px;font-weight:600;color:var(--dark);margin-top:8px;">
@@ -14454,19 +15172,72 @@ function logCallPanelHtml(c) {
 /* The interactive half. `root` is the element holding the panel, so the same wiring serves the
    case modal (#cs-logcall-panel) and the Retention row's overlay without either reaching into
    the other's DOM. */
+/* ==========================================================================
+   R70 · B1 — "NO ANSWER" BOOKS THE CALL-BACK BY ITSELF.
+
+   Luke's F2, verbatim: a session of thirty calls is mostly no-answers, and
+   every one of them cost a typed sentence to file and a second decision to
+   book the retry. The two outcomes that ARE a retry — No answer and Left
+   voicemail — now pre-fill the panel's own follow-up (the R64 fields, not new
+   ones) with "Call again" tomorrow.
+
+   PRE-FILL, NOT FORCE. The moment the adviser types a title, picks a date or
+   presses one of the Tomorrow/+3d/+1wk/+1mo chips, this stops touching either
+   field for the rest of the panel's life — including if they then change their
+   mind about the outcome. And because it only ever writes into fields it put
+   the values in itself, clearing the date and saving books nothing, which is
+   how "unless the user changes it" has to work to be trustworthy. Every
+   connected-call outcome behaves exactly as it did before.
+   ========================================================================== */
+const CALLBACK_OUTCOMES = new Set(["No answer", "Left voicemail"]);
+const CALLBACK_TASK_TITLE = "Call again";
+function tomorrowDateStr() {
+  /* R70 (CTO merge fix) — "tomorrow" is a EUROPE/LONDON tomorrow, derived from localDateStr like
+     every other due date in this file, not from the environment's own timezone. In a London browser
+     the two agree; in any environment running UTC (this harness, a cron) a plain new Date() walk
+     gives the UTC tomorrow, which between 11pm and midnight BST is TODAY's date — a call-back task
+     born already due. Same 23:00–00:00 window every dated suite documents; this removes the app's
+     half of it for the one date this round added. */
+  const d = new Date(localDateStr() + "T12:00:00");
+  d.setDate(d.getDate() + 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 function wireLogCallPanel(root, handlers) {
   if (!root) return;
   const h = handlers || {};
+  /* R70 · B1 — "has a human touched the follow-up?". Set by a keystroke, a date pick or a
+     follow-up chip; once true the auto call-back never writes again. */
+  let fuTouched = false;
+  let fuAuto = false;                       // are the current values OURS, and therefore ours to clear?
+  const fuTitleEl = root.querySelector("#cs-call-fu-title");
+  const fuDueEl = root.querySelector("#cs-call-fu-due");
+  [fuTitleEl, fuDueEl].forEach((el) => { if (el) el.addEventListener("input", () => { fuTouched = true; fuAuto = false; }); });
+  const applyCallbackPrefill = (outcome) => {
+    if (fuTouched || !fuTitleEl || !fuDueEl) return;
+    if (CALLBACK_OUTCOMES.has(outcome)) {
+      fuTitleEl.value = CALLBACK_TASK_TITLE;
+      fuDueEl.value = tomorrowDateStr();
+      fuAuto = true;
+    } else if (fuAuto) {
+      // The outcome moved to a connected call: withdraw the call-back we put there, not one
+      // the adviser typed (fuTouched would already have stopped us).
+      fuTitleEl.value = "";
+      fuDueEl.value = "";
+      fuAuto = false;
+    }
+  };
   // Outcome chips: single-select, and clicking the active one clears it (no outcome prefix).
   const outcomeChips = root.querySelector("#cs-call-outcome-chips");
   if (outcomeChips) outcomeChips.querySelectorAll(".tl-chip").forEach((b) => (b.onclick = () => {
     const wasActive = b.classList.contains("active");
     outcomeChips.querySelectorAll(".tl-chip").forEach((x) => x.classList.remove("active"));
     if (!wasActive) b.classList.add("active");
+    applyCallbackPrefill(wasActive ? "" : b.dataset.outcome);
     const note = root.querySelector("#cs-call-note"); if (note) note.focus();
   }));
   // Follow-up preset chips fill the log-call date input (kept separate from the task due-chips).
   root.querySelectorAll(".fu-chip").forEach((b) => (b.onclick = () => {
+    fuTouched = true; fuAuto = false;       // R70 · B1 — an explicit date is the adviser's, not ours
     const d = new Date();
     if (b.dataset.months) d.setMonth(d.getMonth() + Number(b.dataset.months));
     else d.setDate(d.getDate() + Number(b.dataset.days || 0));
@@ -14487,13 +15258,18 @@ async function logCallSave(root, c, hooks) {
   const q = (sel) => root.querySelector(sel);
   const noteEl = q("#cs-call-note");
   const body = ((noteEl && noteEl.value) || "").trim();
-  if (!body) { if (noteEl) noteEl.focus(); toast("Add a call outcome note"); return null; }
-  const { data: { user } } = await db.auth.getUser();
   // R5-49 — the outcome chip (if one is picked) prefixes the note, exactly as the note-type
   // chips do, so "Call: No answer — tried mobile" reads the same from every adviser.
+  /* R70 · B1 — AND THE CHIP IS READ FIRST, because it can now BE the whole record. "No answer" is
+     a complete account of what happened; demanding a sentence to go with it was thirty typed
+     sentences a session that all said the same thing (Luke F2), and the panel's copy now says a
+     chip alone is enough. The guard is not removed, it is narrowed to what it was actually
+     protecting against: a Save that says nothing at all. */
   const outcomeChip = q("#cs-call-outcome-chips .tl-chip.active");
   const outcome = outcomeChip ? outcomeChip.dataset.outcome : "";
-  const noteBody = "Call: " + (outcome ? outcome + " — " : "") + body;
+  if (!body && !outcome) { if (noteEl) noteEl.focus(); toast("Pick an outcome chip, or type what happened"); return null; }
+  const { data: { user } } = await db.auth.getUser();
+  const noteBody = body ? "Call: " + (outcome ? outcome + " — " : "") + body : "Call: " + outcome;
   const { error: nErr } = await db.from("case_notes").insert({ case_id: c.id, body: noteBody, created_by: user.id });
   if (nErr) { toast("Error: " + nErr.message); return null; }
   /* R5-49 — protection is discussed on the call and recorded nowhere, and the case then jams
@@ -16628,6 +17404,11 @@ async function queueEmail(caseId, clientId, type, c, ev, opts = {}) {
        task is never a surprise in somebody's list. */
     const ffChaseDue = localDateStr(Date.now() + 3 * 86400000);
     const ffChaseTitle = `Chase fact-find — ${(cl.first_name || "client").trim()}`;
+    /* R70 · L4 — the hold, said on the single send too. The confirm below has always ended with
+       what happens next; while settings.email_hold is on, what happens next is "it waits". */
+    const holdLine = type === "rate_end_reminder" && emailHoldOn()
+      ? `\n\nSending is currently ON HOLD (Settings › Email sending) — this will queue and wait; nothing is sent now.`
+      : "";
     const extraLine = type === "rate_end_reminder"
       ? `\n\nA follow-up task ("${chaseTitle}") will be added for ${fmtD(chaseDue)}.`
       : type === "factfind"
@@ -16664,14 +17445,17 @@ async function queueEmail(caseId, clientId, type, c, ev, opts = {}) {
        sending the one email a suppressed client genuinely needs is a legitimate act. */
     if (!bulk) {
       if (!(await confirmSuppressedSend(clientId, "email"))) return;
-      if (!confirm(`Send ${EMAIL_LABEL[type].toLowerCase()} email to ${cl.email}?\n\nSigned off by: ${signedBy}${propLine}${extraLine}${docsLine}${farOutLine}`)) return;
+      if (!confirm(`Send ${EMAIL_LABEL[type].toLowerCase()} email to ${cl.email}?\n\nSigned off by: ${signedBy}${propLine}${extraLine}${docsLine}${farOutLine}${holdLine}`)) return;
     }
     const { data: qRow, error } = await db.from("email_queue")
       .insert({ case_id: caseId, client_id: clientId, email_type: type, to_email: cl.email })
       .select("id").single();
     if (error) { if (bulk) return { ok: false, error: error.message }; return toast("Error: " + error.message); }
     if (type === "rate_end_reminder") {
-      await db.from("cases").update({ rate_reminder_queued_at: new Date().toISOString() }).eq("id", caseId);
+      /* R70 · A2 — the stamp and the import guard together (updateCaseClearingGuard): a reminder
+         has now genuinely been queued for this case, so the "imported, never written to" flag the
+         R45 guard left behind stops being true and the row's badge must stop saying it. */
+      await updateCaseClearingGuard(caseId, { rate_reminder_queued_at: new Date().toISOString() });
       /* R5-13 — sending the reminder used to be the whole "loop": the My Day row cleared itself and
          nothing anywhere held the next step, so a client who didn't reply was never chased. Best
          effort — a failed task insert must not make the (already queued) email look like a failure. */

@@ -222,6 +222,12 @@ async function selectRows(page, ids) {
     await goRetention(page, 2400);
     await selectRows(page, [fresh.caseId, farOut.caseId, hasSucc.caseId]);
     await page.click("#ret-bulk-retention");
+    /* R70 · A3 PATCH — the batch's ONE confirm is now the shared overlay (#bulkret-ok), not a
+       native confirm(), and the per-case dialogs are gone with it: 50 rows used to open 51
+       dialogs. The verbs, the skips and the writes below are unchanged, so everything §A3a-c
+       asserts still holds — only the act of agreeing moved. See §A3d. */
+    await page.waitForTimeout(1500);
+    await page.click("#bulkret-ok");
     await page.waitForTimeout(4000);
     const succ = await page.evaluate(async (o) => {
       const { data } = await window.__mockDb.from("cases").select("*");
@@ -231,8 +237,11 @@ async function selectRows(page, ids) {
     eq("§A3a · a retention successor is created for the eligible selected case", succ.fresh, 1);
     eq("§A3b · the far-out case (rate 300 days away) is still skipped as too early", succ.farOut, 0);
     eq("§A3c · the case that already had a successor does not get a second one", succ.hasSucc, 1);
-    ok("§A3d · the operator was asked to confirm, exactly as the single-case button does",
-      (page.__dialogs || []).some((d) => d.type === "confirm" && /retention case/i.test(d.message)),
+    /* R70 · A3 PATCH — was "the operator was asked to confirm, exactly as the single-case button
+       does" (one native confirm per case). The batch asks ONCE, on the overlay, and asks no native
+       dialog at all; the single-case button is untouched and still asks per case. */
+    ok("§A3d · the operator was asked once, on the batch overlay, and never in a native dialog",
+      !(page.__dialogs || []).some((d) => d.type === "confirm" && /retention case/i.test(d.message)),
       JSON.stringify((page.__dialogs || []).slice(-3)));
 
     /* --- ＋ Add task… --- */
@@ -275,9 +284,14 @@ async function selectRows(page, ids) {
 
     await goRetention(page, 2400);
     const chips = await page.evaluate(() => [...document.querySelectorAll("#ret-month-chips .ret-month-chip")].map((b) => ({ k: b.dataset.month, label: b.textContent.replace(/\s+/g, " ").trim(), on: b.classList.contains("scope-active") })));
-    eq("§B1a · five chips, in the order the brief names them", chips.map((c) => c.k).join(","), "ended,this,next,3mo,all");
+    /* R70 · A1 PATCH — was five chips ("ended,this,next,3mo,all"). Two lapsed WINDOWS were added
+       between "Ended" and "This month" ("Ended · last 3 months" / "Ended · last 12 months"),
+       because "Ended" on the real book is 593 rows back to 2017 and the 137 that lapsed in the
+       last year are the only ones with a live conversation in them. Order and the rest of the
+       row are unchanged. */
+    eq("§B1a · seven chips, in the order the brief names them", chips.map((c) => c.k).join(","), "ended,ended3,ended12,this,next,3mo,all");
     ok("§B1b · the last chip ('6 months (all)') is the default — the page's original behaviour",
-      chips[4] && chips[4].on && !chips.slice(0, 4).some((c) => c.on), JSON.stringify(chips));
+      chips[6] && chips[6].on && !chips.slice(0, 6).some((c) => c.on), JSON.stringify(chips));
 
     const pick = async (k) => { await page.click(`#ret-month-chips .ret-month-chip[data-month="${k}"]`); await page.waitForTimeout(2200); return pageRowIds(page); };
     const all = await pageRowIds(page);
@@ -520,7 +534,14 @@ async function selectRows(page, ids) {
         .find((r) => (r.querySelector(".t[onclick]") || {}).getAttribute && r.querySelector(".t[onclick]").getAttribute("onclick").includes(`'${id}'`));
       if (!row) return null;
       const clone = row.cloneNode(true);
-      clone.querySelectorAll(".ret-cb, .ret-row-acts").forEach((n) => n.remove());
+      /* R70 · B2 (merge-time patch, one selector) — `.ret-row-lastc` joins the two R64 page-only
+         elements this parity check has always lifted out. The "last contact 3 days ago (LR)" /
+         "never contacted" clause is deliberately PAGE-ONLY: rendering it needs the five scoped
+         comms reads in lastContactByClient(), which a fifteen-row morning glance does not earn.
+         The tel:/sms: pair, by contrast, is on BOTH surfaces from R70 on, so it is NOT stripped —
+         it is compared, byte for byte, like everything else. No assertion is weakened: the whole
+         row is still compared, and a row that differs anywhere else still fails. */
+      clone.querySelectorAll(".ret-cb, .ret-row-acts, .ret-row-lastc").forEach((n) => n.remove());
       clone.classList.remove("is-sel");
       return { main: clone.querySelector(".row-main").innerHTML, html: clone.outerHTML };
     }, both.caseId);
@@ -561,7 +582,7 @@ async function selectRows(page, ids) {
       barHidden: document.getElementById("ret-bulk-bar") ? document.getElementById("ret-bulk-bar").hidden : null,
       selall: !!document.getElementById("ret-bulk-all"),
     }));
-    eq(`§E · ${persona} sees the five month chips`, seen.chips, 5);
+    eq(`§E · ${persona} sees the seven month chips`, seen.chips, 7);   // R70 · A1 — five + the two lapsed windows
     ok(`§E · ${persona} sees a hidden bulk bar and a select-all`, seen.bar && seen.barHidden === true && seen.selall, JSON.stringify(seen));
     ok(`§E · ${persona} opens Retention with no console errors`, realErrs(page).length === 0, realErrs(page).slice(0, 3).join(" | "));
     await page.close();

@@ -688,8 +688,19 @@ async function readRows(page, table, filters) {
         taskIds.push(id);
       }
       await goto(page, "diary", 900);
-      await page.evaluate((d) => { window.diaryMonth = new Date(d.getFullYear(), d.getMonth(), 1); window.loadDiary(); }, due);
-      await wait(page, 900);
+      /* R70 (CTO) — CALENDAR BUG IN THE TEST, not the app: `window.diaryMonth = …` writes a plain
+         window property, but app.js's diaryMonth is a top-level `let` (a lexical global), so the
+         assignment never reached loadDiary and the grid always drew the CURRENT month. That passed
+         for weeks because today+10 sat inside the current month's grid — until 28–31 Aug, when
+         today+10 falls past the grid's final Sunday and the cell simply doesn't exist. Navigate the
+         way a person does instead: click ‹/› until the grid's month contains the due date. */
+      await page.evaluate(() => { const b = document.querySelector("#diary-view-month"); if (b) b.click(); });
+      for (let hop = 0; hop < 3; hop++) {
+        const has = await page.$(`.diary-day[data-date="${dueYmd}"]`);
+        if (has) break;
+        await page.click("#diary-next");
+        await wait(page, 700);
+      }
       const cellSel = `.diary-day[data-date="${dueYmd}"]`;
       const chipCount = await page.$$eval(`${cellSel} .diary-task`, (els) => els.length);
       const moreTxt = await page.$eval(`${cellSel} .diary-more-tasks`, (e) => e.textContent).catch(() => "");
