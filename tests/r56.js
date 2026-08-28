@@ -16,6 +16,25 @@
    ========================================================================== */
 "use strict";
 
+/* R73 · A3 — THE CASE ACTION BAR IS CAPPED NOW, so a stage action may be one press away.
+   The bar was 135px of a 900px desktop viewport and 445px of an 844px phone because every action
+   CASE_ACTION_RULES calls primary at a stage sat on it — twelve buttons on a completed case.
+   R73 keeps the two or three the stage is actually about on the bar and moves the rest into the
+   Actions ▾ menu, under a heading naming the stage; every act-* id is built exactly once, with
+   the same label and the same handler, and every one is reachable in at most one extra press.
+   Same shape r13 and r5_batch1 have used since R15: find out where the action currently is, open
+   the overflow only if that is where it is, then click it exactly as before. */
+async function r73OpenAction(page, id) {
+  const visible = await page.evaluate((sel) => {
+    const el = document.querySelector(sel);
+    if (!el) return true;                       // absent: let the click fail as it always would
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  }, `#${id}`);
+  if (!visible) await page.click("#case-more-actions-toggle");
+}
+
+
 const { chromium } = require("playwright");
 const { spawn } = require("child_process");
 const http = require("http");
@@ -157,7 +176,7 @@ const mock = (page, fn, arg) => page.evaluate(fn, arg);
   ok("C2 · the referral list starts empty (and therefore invisible)", tiles.listEmpty);
 
   const tasksBefore = await mock(page, async (id) => (await window.__mockDb.from("case_tasks").select("id").eq("case_id", id)).data.length, fx.refCaseId);
-  await page.click("#act-ref-survey");
+  await r73OpenAction(page, "act-ref-survey"); await page.click("#act-ref-survey");
   await page.waitForTimeout(400);
   ok("C3 · the capture overlay opens", await page.evaluate(() => !!document.querySelector("#overlay-modal #ref-to")));
   await page.fill("#overlay-modal #ref-to", "Harrison & Co Surveyors");

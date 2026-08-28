@@ -48,6 +48,25 @@
    ========================================================================== */
 "use strict";
 
+/* R73 · A3 — THE CASE ACTION BAR IS CAPPED NOW, so a stage action may be one press away.
+   The bar was 135px of a 900px desktop viewport and 445px of an 844px phone because every action
+   CASE_ACTION_RULES calls primary at a stage sat on it — twelve buttons on a completed case.
+   R73 keeps the two or three the stage is actually about on the bar and moves the rest into the
+   Actions ▾ menu, under a heading naming the stage; every act-* id is built exactly once, with
+   the same label and the same handler, and every one is reachable in at most one extra press.
+   Same shape r13 and r5_batch1 have used since R15: find out where the action currently is, open
+   the overflow only if that is where it is, then click it exactly as before. */
+async function r73OpenAction(page, id) {
+  const visible = await page.evaluate((sel) => {
+    const el = document.querySelector(sel);
+    if (!el) return true;                       // absent: let the click fail as it always would
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  }, `#${id}`);
+  if (!visible) await page.click("#case-more-actions-toggle");
+}
+
+
 const { chromium } = require("playwright");
 const { spawn } = require("child_process");
 const http = require("http");
@@ -275,7 +294,7 @@ async function setSettingLive(page, key, value) {
       await page.evaluate((id) => window.openCase(id), farOut);
       await wait(page, 1000);
       page.__dialogs = [];
-      await page.click("#act-reminder");
+      await r73OpenAction(page, "act-reminder"); await page.click("#act-reminder");
       await wait(page, 800);
       const farMsg = lastDialog(page, /Send rate-end reminder/);
       ok("§A4a · the single-case confirm carries the same ⚠ Too early line, with the months named",
@@ -293,7 +312,7 @@ async function setSettingLive(page, key, value) {
       await page.evaluate((id) => window.openCase(id), mid);
       await wait(page, 1000);
       page.__dialogs = [];
-      await page.click("#act-reminder");
+      await r73OpenAction(page, "act-reminder"); await page.click("#act-reminder");
       await wait(page, 800);
       const midMsg = lastDialog(page, /Send rate-end reminder/);
       ok("§A4e · a 200-day rate gets NO too-early line", !/Too early/.test(midMsg) && /Signed off by: /.test(midMsg), JSON.stringify(midMsg));
@@ -305,7 +324,7 @@ async function setSettingLive(page, key, value) {
       page.__dialogPlan = [];
       await page.evaluate((id) => window.openCase(id), farOut);
       await wait(page, 1000);
-      await page.click("#act-reminder");
+      await r73OpenAction(page, "act-reminder"); await page.click("#act-reminder");
       await wait(page, 1200);
       const afterAccept = await reminderRows(page);
       ok("§A4f · accepting the warning DOES queue it — one deliberate case is not a sweep",

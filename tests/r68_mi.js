@@ -748,6 +748,13 @@ const money = (n) => "£" + Math.round(Number(n) || 0).toLocaleString("en-GB");
       const hasBtn = await has(page, "#act-ref-protection");
       ok("E3b · the case offers “Refer for protection advice”", hasBtn);
       if (hasBtn) {
+        /* R73 · A3 capped the case action bar at the two or three actions a stage is actually
+           about; a stage action that is not one of them now opens from Actions ▾ instead of
+           sitting on the bar. Same id, same handler, one extra press — the r13/r5_batch1 helper
+           shape, inline because this file needs it exactly once. */
+        if (!(await page.evaluate(() => { const e = document.querySelector("#act-ref-protection"); const r = e && e.getBoundingClientRect(); return !!r && r.width > 0; }))) {
+          await page.click("#case-more-actions-toggle");
+        }
         await page.click("#act-ref-protection");
         await wait(page, 700);
         eq("E4 · the referral overlay pre-fills “Referred to” from the setting",

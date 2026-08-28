@@ -150,9 +150,17 @@ const noErr = (page, label) => ok(`no console errors (${label})`, !page.__err, J
       noErr(page, "owner KPI");
 
       /* R11-REGRESSION — the dashboard was ~3,249px before R11 moved the strip up; a generous
-         ceiling that still catches a regression back to the old shape (~2,000px now). */
+         ceiling that still catches a regression back to the old shape (~2,000px now).
+         R73: the ceiling moves 2600 → 2900, deliberately and once. R73 · A1 un-caged the two
+         fixed-height lists this page is mostly made of — #briefing-list went from a 340px window
+         on 2,800px of content to min(62vh, 720px), and the No-next-action radar from a 181px
+         list inside a 300px card to the same cap — which is the whole point of the round: this
+         page was showing four of Kim's forty-eight items. The owner dashboard measures ~2,659px
+         here as a result. The assertion is NOT weakened: what it exists to catch is a regression
+         to the pre-R11 shape where the five headline figures sat 1,500px down the page, and
+         2,900 is still 349px clear of that 3,249px baseline. */
       const height = await page.evaluate(() => document.documentElement.scrollHeight);
-      ok("R11-REGRESSION · owner dashboard height stays well under the pre-R11 ~3249px", height < 2600, height);
+      ok("R11-REGRESSION · owner dashboard height stays well under the pre-R11 ~3249px", height < 2900, height);
 
       const overflow1440 = await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
       ok("R11-REGRESSION · no horizontal overflow on the owner dashboard at 1440", overflow1440);

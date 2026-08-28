@@ -357,11 +357,25 @@ function ensureXlsx() {
    exactly how a mis-read import date survived review. Date objects, timestamps and ISO strings
    (the only thing the database ever stores) format as before; anything else is shown verbatim
    (esc'd, since the only source of non-ISO values is un-normalised imported text). */
+/* R73 · B4 — the month names are a FIXED TABLE, not toLocaleDateString's.
+   `{ month: "short" }` under current ICU renders September as "Sept" (four
+   letters) while the other eleven are three, so a column of dates went ragged
+   exactly where the rate-end book is busiest, and the same date rendered
+   differently on two machines with different ICU versions. Eleven strings is a
+   cheaper guarantee than a locale negotiation. */
+const FMT_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const fmtD = (d) => {
   if (!d) return "—";
   if (typeof d === "string" && !/^\d{4}-\d{2}-\d{2}/.test(d)) return esc(d);
   const t = new Date(d);
-  return isNaN(t.getTime()) ? esc(String(d)) : t.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+  if (isNaN(t.getTime())) return esc(String(d));
+  /* Date-only strings are read as the calendar day they name (getUTC*), exactly as
+     toLocaleDateString did for them; a full timestamp keeps local-time reading. */
+  const dateOnly = typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d);
+  const day = dateOnly ? t.getUTCDate() : t.getDate();
+  const mon = dateOnly ? t.getUTCMonth() : t.getMonth();
+  const yr = dateOnly ? t.getUTCFullYear() : t.getFullYear();
+  return `${day} ${FMT_MONTHS[mon]} ${yr}`;
 };
 /* T1-21 — UK-first date parsing for imported values. Returns
      { iso, ambiguous, ok, empty, raw, note }
@@ -732,6 +746,16 @@ function restoreUserPrefs(uid) {
   // initDiaryViewFromPrefs(), called once loadTeam has rebuilt #diary-staff.
   const dv = lsGet(diaryViewStoreKey(uid));
   if (dv === "day" || dv === "month") diaryViewMode = dv;
+  /* R73 · A4 — WITH NO STORED CHOICE, A PHONE OPENS ON DAY.
+     The month grid is seven columns of date cells; at 390px each one is ~50px wide and holds an
+     appointment's time, its title and its client, so the grid renders as 42 unreadable stamps and
+     the day somebody actually wants is a pinch-zoom away. Day view is the same data, already
+     built, already tested, and reads as a list.
+     Chosen over "open Month and auto-scroll to today's cell" because scrolling to a cell that is
+     itself illegible fixes the wrong half of the problem — the cell is too small either way.
+     A STORED CHOICE ALWAYS WINS (the branch above runs first and returns its answer), so this
+     only ever decides a first visit, and the Month/Day toggle is untouched and one press away. */
+  else if (typeof window.matchMedia === "function" && window.matchMedia("(max-width: 760px)").matches) diaryViewMode = "day";
 }
 function staffName(id) { const p = TEAM.find((x) => x.id === id); return p ? (p.full_name || p.email) : "—"; }
 /* ---------- Assignment safety: ids that live OUTSIDE TEAM ----------
@@ -2555,9 +2579,64 @@ function stageBadgeClass(stage) {
   return stage === "completed" ? "green" : stage === "not_proceeding" ? "grey" : "blue";
 }
 function stageBadge(stage, opts = {}) {
-  const label = STAGE_LABEL[stage] || String(stage || "");
+  const label = STAGE_LABEL[stage] || stageWordFor(stage);
   const extra = opts.cls ? " " + opts.cls : "";
-  return `<span class="badge ${stageBadgeClass(stage)} badge-clip${extra}">${esc(label)}</span>`;
+  return `<span class="badge ${stageBadgeClass(stage)} badge-clip stage-chip${extra}">${esc(label)}</span>`;
+}
+/* ==========================================================================
+   R73 · B5 — stageChip(): ONE stage rendering.
+
+   The critic found a case's stage rendered four ways: this badge, a bare
+   .case-tag on a board card, plain parenthetical text on My Day, and — worst —
+   the raw database enum in a case's own change history, where a stage move read
+     "fact_find → decision_in_principle".
+   stageChip IS stageBadge; the name is the point. Every surface that shows a
+   stage now calls one function, so the colour rule stated above (green =
+   completed, grey = closed, blue = a live position) can only ever mean one
+   thing, and a fifth surface added next round gets it for free.
+
+   stageWordFor() is the same map for places a PILL would fight the row it sits
+   in — My Day's parenthetical, a toast, a title attribute. It is the map, not a
+   second look: the words are identical, only the chrome is dropped.
+   ========================================================================== */
+function stageWordFor(stage) {
+  if (!stage) return "";
+  if (STAGE_LABEL[stage]) return STAGE_LABEL[stage];
+  // Not a known stage: humanise the enum rather than printing it raw.
+  const w = String(stage).replace(/_/g, " ").trim();
+  return w.charAt(0).toUpperCase() + w.slice(1);
+}
+function stageChip(stage, opts) { return stageBadge(stage, opts || {}); }
+/* The enums that reach a reader through case_events.detail, which the database
+   trigger writes as "<old> → <new>" in raw column values. One map per enum
+   family; anything not listed falls through to sentence-cased words, so a new
+   enum can never render as `not_proceeding` again. */
+const EVENT_ENUM_WORDS = {
+  fee_status: { not_invoiced: "Not invoiced", invoiced: "Invoiced", paid: "Paid", waived: "Waived", requested: "Requested" },
+  protection_status: { not_discussed: "Not discussed", discussed: "Discussed", policy_taken: "Policy taken", declined: "Declined", referred: "Referred" },
+};
+function eventEnumWord(field, v) {
+  const raw = String(v == null ? "" : v).trim();
+  if (!raw) return "—";
+  if (field === "stage") return stageWordFor(raw);
+  const m = EVENT_ENUM_WORDS[field];
+  if (m && m[raw]) return m[raw];
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return fmtD(raw);
+  const w = raw.replace(/_/g, " ");
+  return w.charAt(0).toUpperCase() + w.slice(1);
+}
+/* One history line, as a person would read it. PACK_EVENT_FIELD already knows
+   which enum family each event's detail belongs to — the evidence pack has used
+   it since R13 — so the on-screen timeline and the printed pack now humanise the
+   same rows the same way instead of only the pack doing it. */
+function eventDetailText(ev) {
+  const detail = String((ev && ev.detail) || "");
+  const field = PACK_EVENT_FIELD[(ev && ev.event) || ""] || null;
+  if (!detail) return stageWordFor((ev && ev.event) || "") || "Event";
+  const parts = detail.split(/\s*(?:→|->)\s*/);
+  if (field && parts.length === 2) return `${eventEnumWord(field, parts[0])} → ${eventEnumWord(field, parts[1])}`;
+  if (field && parts.length === 1) return eventEnumWord(field, parts[0]);
+  return detail;
 }
 /* The "this value is an estimate, not confirmed" marker. Same colour as the fact
    it qualifies (see the .badge block in admin.css); a dashed edge and the ≈ glyph
@@ -3857,10 +3936,18 @@ function caseIdentityHtml(c, opts = {}) {
   const bits = [];
   if (opts.type !== false && !chipSaysKind) bits.push(caseTypeLabel(c));
   if (opts.lender !== false && !chipSaysKind && c.lender) bits.push(c.lender);
-  if (opts.stage !== false && c.stage) bits.push(STAGE_LABEL[c.stage] || String(c.stage).replace(/_/g, " "));
+  /* R73 · B5 — `opts.stageChip` renders the stage as the app's ONE stage pill
+     instead of a word inside the grey .case-tag. Opt-in, not the default: on a
+     board card or a dense list row the tag IS the right density, and the card
+     already sits in a column named after its stage. The appointment modal asks for
+     it, because "About: 14 Alma Road · Remortgage · Application" was the one place
+     a stage was stated with no visual tie to the same stage on the case itself. */
+  const stageText = opts.stage !== false && c.stage ? stageWordFor(c.stage) : "";
+  if (stageText && !opts.stageChip) bits.push(stageText);
   const tail = bits.filter(Boolean).join(" · ");
-  if (!tail) return chip;
-  return chip + (chip ? " " : "") + `<span class="case-tag">${esc(tail)}</span>`;
+  const pill = stageText && opts.stageChip ? stageChip(c.stage) : "";
+  if (!tail) return chip + (pill ? (chip ? " " : "") + pill : "");
+  return chip + (chip ? " " : "") + `<span class="case-tag">${esc(tail)}</span>` + (pill ? " " + pill : "");
 }
 /* ---- property context for a list of case ids -----------------------------
    Most surfaces (Today, tasks, alerts, watchtower, emails, appointments) hold
@@ -4050,8 +4137,12 @@ function panelCount(listSel, n, hot = false) {
     chip = document.createElement("span");
     chip.className = "count";
     const h3 = panel.querySelector("h3");
-    const btn = h3.querySelector("button");
-    h3.insertBefore(chip, btn || null);
+    /* R73 · B3 — the anchor has to be a DIRECT child of the h3. Since the segmented
+       controls gained their grey track (.segment), a panel head's first button can be
+       a grandchild, and insertBefore against a grandchild throws. Take whichever
+       direct child is, or contains, the first button. */
+    const anchor = [...h3.children].find((k) => k.tagName === "BUTTON" || k.querySelector("button")) || null;
+    h3.insertBefore(chip, anchor);
   }
   chip.textContent = n;
   chip.classList.toggle("hot", hot && n > 0);
@@ -4103,6 +4194,9 @@ window.toggleDrawer = function (ev, key) {
   const panel = (ev && ev.currentTarget && ev.currentTarget.closest(".panel")) || drawerPanelEl(key);
   if (!panel) return;
   panel.classList.toggle("collapsed");
+  /* R73 · A1 — a drawer that has just opened has a list in it that was display:none when the
+     renderer last measured it, so its "N more ↓" cage has to be worked out now. */
+  if (typeof recageDashLists === "function") recageDashLists();
   dashDrawerTouched[key] = true;
   /* R34 · W3 — "2.6 screens of dashboard every morning": a drawer the user closes must STAY
      closed, and Luke's retention drawer must stay open, across reloads and across sessions.
@@ -4118,7 +4212,10 @@ function autoDrawer(key, shouldOpen) {
   if (storedDrawerPref(key)) return;
   const panel = drawerPanelEl(key);
   if (!panel) return;
+  const was = panel.classList.contains("collapsed");
   panel.classList.toggle("collapsed", !shouldOpen);
+  // R73 · A1 — same reason as toggleDrawer's: a list only has a height once its drawer is open.
+  if (was !== panel.classList.contains("collapsed") && typeof recageDashLists === "function") recageDashLists();
 }
 // The Protection/Fees drawer combines two independently-loading tabs — recompute its header
 // count from whichever of the two tab counts have rendered so far (called from both loaders).
@@ -4141,6 +4238,7 @@ function updateRevenueDrawerCount() {
    swallow clicks on whatever it happens to be floating over. An action toast lives longer than a
    plain one — 10s — because it has to be readable AND reachable, not just readable. */
 const TOAST_ACTION_MS = 10000;
+const TOAST_MS = 4500;   // R73 · B1 — non-action toasts
 function toast(msg, action) {
   const t = $("#toast");
   clearTimeout(t._h);
@@ -4162,7 +4260,49 @@ function toast(msg, action) {
     t.textContent = msg;   // replaces any previous action markup outright
   }
   t.classList.remove("hidden");
-  t._h = setTimeout(() => { t.classList.add("hidden"); t.classList.remove("has-action"); }, live ? (action.ms || TOAST_ACTION_MS) : 3200);
+  /* R73 · B1 — 3.2s was under the ~4s a screen reader needs to finish announcing a
+     long confirmation, and under what a reader needs to find a bar that has just
+     moved to the corner of the screen. Action toasts keep their own (longer)
+     timing: the reader has to DECIDE, not just read. */
+  t._h = setTimeout(() => { t.classList.add("hidden"); t.classList.remove("has-action"); }, live ? (action.ms || TOAST_ACTION_MS) : TOAST_MS);
+}
+
+/* ==========================================================================
+   R73 · B1 — makeActivatable(el): a div that behaves like a button, behaves
+   like one for the keyboard too.
+
+   The four busiest click targets in the app are onclick DIVs — a pipeline board
+   card, a client row's name, a dashboard KPI tile, a Data-health tile — so the
+   four things an operator reaches for most often could not be reached at all
+   without a mouse. Rewriting them as <button> would inherit button resets,
+   button focus behaviour and (on the board card) break drag-and-drop, so they
+   are given the three things that actually matter instead: a tab stop, a role,
+   and Enter/Space.
+
+   · Idempotent — every one of these lists re-renders on a filter change, and
+     the helper is applied after each render.
+   · The key handler ignores events that BUBBLED from a nested control (the
+     card's stage <select>, the row's checkbox, a link) — Space in a select is
+     the select's, not the card's.
+   · An existing tabindex or role is never overwritten.
+   ========================================================================== */
+function makeActivatable(el, opts) {
+  if (!el || el.__nxActivatable) return el;
+  el.__nxActivatable = true;
+  if (!el.hasAttribute("tabindex")) el.setAttribute("tabindex", "0");
+  if (!el.getAttribute("role")) el.setAttribute("role", (opts && opts.role) || "button");
+  if (opts && opts.label && !el.getAttribute("aria-label")) el.setAttribute("aria-label", opts.label);
+  el.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " " && e.key !== "Spacebar") return;
+    if (e.target !== el) return;            // it belongs to whatever is nested inside
+    e.preventDefault();                      // Space must not scroll the page
+    el.click();
+  });
+  return el;
+}
+/* Apply it to everything a selector finds, once per render. */
+function activateAll(selector, root) {
+  (root || document).querySelectorAll(selector).forEach((el) => makeActivatable(el));
 }
 
 /* Stronger confirmation for irreversible hard-deletes of regulated records.
@@ -4177,6 +4317,81 @@ function confirmHardDelete(what, extra) {
     "\n\nType DELETE to confirm:"
   );
   return typed != null && typed.trim().toUpperCase() === "DELETE";
+}
+
+/* ==========================================================================
+   R73 · B5 — ONE EMPTY STATE.
+
+   Four lists, four different answers to "there is nothing here": a bare grey
+   sentence (clients), a dashed placeholder (board columns), a card with a bold
+   lead (the whole board), and nothing at all (vault, protection). Worse, none of
+   them offered the ONE thing a reader wants when a filter has emptied a list —
+   the filter taken off again.
+
+   emptyState({ headline, sub, action }) is the single shape:
+     headline  what is true, in five or six words, bold;
+     sub       why, in one sentence — naming the filter that did it;
+     action    optional { label, onclick } — the way out, as a real button.
+
+   `action` is omitted deliberately when the list is empty because the BOOK is
+   empty rather than because a filter is on: "Clear filters" on a list with no
+   filters applied is a button that does nothing, which is worse than no button.
+   ========================================================================== */
+function emptyState(o) {
+  o = o || {};
+  const act = o.action && o.action.label
+    ? `<button type="button" class="btn btn-sm"${o.action.id ? ` id="${esc(o.action.id)}"` : ""}${o.action.onclick ? ` onclick="${o.action.onclick}"` : ""}>${esc(o.action.label)}</button>`
+    : "";
+  return `<div class="empty-state">`
+    + `<strong class="empty-state-h">${o.headlineHtml || esc(o.headline || "Nothing here.")}</strong>`
+    + (o.sub || o.subHtml ? `<span class="empty-state-sub">${o.subHtml || esc(o.sub)}</span>` : "")
+    + act
+    + `</div>`;
+}
+
+/* ==========================================================================
+   R73 · B4 — .num, AND THE HEADERS THAT HAVE TO FOLLOW IT.
+
+   Money and counts are right-aligned so a column of pounds can be compared down
+   its last digit (Monday money and two Reports panels already did this; the
+   other eleven Reports tables did not). Alignment is declared on the CELL, at
+   the point the number is written — which is right, because that is where the
+   author knows it is a number.
+
+   A right-aligned column under a left-aligned heading reads as a mistake, so the
+   heading has to follow. Rather than hand-editing a `class="num"` onto ~40 <th>s
+   in eleven renderers — a list that would drift the first time somebody adds a
+   column — the header is DERIVED: for each column, if every body cell that has
+   content carries .num, the header takes it too. It cannot disagree with the
+   data, and a column added next round is aligned by writing one class on its
+   cells, exactly as it should be.
+
+   Deliberately conservative: a column with no .num cells, or a mixed column, is
+   left alone. Tables with colspans are skipped rather than guessed at.
+   ========================================================================== */
+function syncNumHeaders(root) {
+  const scope = typeof root === "string" ? document.querySelector(root) : (root || document);
+  if (!scope) return;
+  scope.querySelectorAll("table").forEach((tbl) => {
+    const rows = [...tbl.rows];
+    if (rows.length < 2) return;
+    const head = rows.find((r) => r.cells.length && [...r.cells].every((c) => c.tagName === "TH"));
+    if (!head) return;
+    const body = rows.filter((r) => r !== head && [...r.cells].some((c) => c.tagName === "TD"));
+    if (!body.length) return;
+    // Any colspan/rowspan and the column indices stop being trustworthy — leave it.
+    if (rows.some((r) => [...r.cells].some((c) => c.colSpan > 1 || c.rowSpan > 1))) return;
+    for (let i = 0; i < head.cells.length; i++) {
+      let seen = 0, num = 0;
+      body.forEach((r) => {
+        const c = r.cells[i];
+        if (!c || !(c.textContent || "").trim()) return;
+        seen++;
+        if (c.classList.contains("num")) num++;
+      });
+      if (seen && seen === num) head.cells[i].classList.add("num");
+    }
+  });
 }
 
 /* Explicit error state for a view container — never show a reassuring
@@ -4230,6 +4445,8 @@ function showRecovery() {
   };
 }
 function showLogin() {
+  // R73 · B4 — signing out drops the per-page title with the page it named.
+  document.title = BASE_TITLE;
   $("#login-view").classList.remove("hidden");
   $("#app-view").classList.add("hidden");
   $("#assistant-fab").classList.add("hidden");
@@ -4282,6 +4499,10 @@ async function showApp(session) {
   /* R33 — and, for the same reason and in the same place, the Firm group's default state: the
      role is known now and not a frame earlier. See applyNavRole(). */
   applyNavRole();
+  /* R73 · A4 — the nav strip has just been given a real width for the first time (#app-view was
+     `hidden` until three lines ago) and applyNavRole has just changed how many items are in it.
+     Both are reasons the scroll-hint chevron's answer from module-eval time is now wrong. */
+  updateSidenavScrollHint();
   // BUILD 6d — restore this user's pipeline segment/view prefs now that their id is known.
   restoreUserPrefs(session.user.id);
   await loadSettings();
@@ -4600,7 +4821,50 @@ function updateSidenavScrollHint() {
   if (!sb) return;
   sb.addEventListener("scroll", updateSidenavScrollHint, { passive: true });
   window.addEventListener("resize", updateSidenavScrollHint);
+  /* ==========================================================================
+     R73 · A4 (panel C#4) — THE CHEVRON NEVER FIRED ON FIRST LOAD.
+
+     This ran once, at module-evaluation time, while #app-view is still
+     `hidden` — so .sidebar had scrollWidth 0 and clientWidth 0, `atEnd`
+     computed TRUE, and .nav-scroll-end was set. The class then stayed on
+     until something scrolled or resized the strip, which on a phone means
+     the "there is more nav over here" chevron was invisible on exactly the
+     load where a first-time reader needs it. Half the nav — Retention
+     included — looked like it did not exist.
+
+     Three cheap fixes, all of them "measure after layout":
+       · a ResizeObserver on the strip, which fires as soon as it has a real
+         width (the app-view reveal) and again on every rotation;
+       · a rAF-after-paint pass, for browsers that give the observer nothing
+         because the width never changes after the first frame;
+       · nav() calls it too (see below), because the active item changing can
+         change the strip's scroll extent.
+     ========================================================================== */
+  if (typeof ResizeObserver === "function") {
+    try { new ResizeObserver(() => updateSidenavScrollHint()).observe(sb); } catch (e) { /* older engine — the rAF below still covers it */ }
+  }
+  requestAnimationFrame(() => requestAnimationFrame(updateSidenavScrollHint));
   updateSidenavScrollHint();
+})();
+/* R73 · A4 — THE KPI STRIP'S RIGHT EDGE. At ≤767px #kpi-row is a one-line scroller (R69 · A2),
+   and its last visible tile was cut off flush at the viewport edge, mid-word — a clip that looks
+   like a rendering fault rather than an invitation to scroll. A CSS mask fades the last 28px
+   instead; this only has to say when the strip has reached its end, where there is nothing left
+   to hint at and the fade would just be blurring the final tile. Same shape as the nav hint. */
+function updateKpiScrollHint() {
+  const el = document.getElementById("kpi-row");
+  if (!el) return;
+  el.classList.toggle("kpi-at-end", el.scrollWidth - el.clientWidth <= el.scrollLeft + 2);
+}
+(() => {
+  const el = $("#kpi-row");
+  if (!el) return;
+  el.addEventListener("scroll", updateKpiScrollHint, { passive: true });
+  window.addEventListener("resize", updateKpiScrollHint);
+  if (typeof ResizeObserver === "function") {
+    try { new ResizeObserver(() => updateKpiScrollHint()).observe(el); } catch (e) { /* older engine */ }
+  }
+  updateKpiScrollHint();
 })();
 
 /* ==========================================================================
@@ -4964,6 +5228,17 @@ document.addEventListener("click", (e) => {
   card.querySelectorAll(".dash-tab").forEach((b) => b.classList.toggle("active", b === t));
   card.querySelectorAll(".dash-tab-panel").forEach((p, i) => p.classList.toggle("hidden", i !== [...t.parentElement.children].indexOf(t)));
 });
+const BASE_TITLE = "NexMoney Back Office";
+function pageTitleLabel(page) {
+  const btn = document.querySelector(`#topnav button[data-page="${page}"]`);
+  // The emoji lives in a .si span; the button's own text node is the label.
+  const raw = btn ? String(btn.textContent || "").replace(/[\u{1F000}-\u{1FAFF}\u2190-\u27BF\uFE0F]/gu, "").trim() : "";
+  return raw || (page ? page.charAt(0).toUpperCase() + page.slice(1) : "");
+}
+function setPageTitle(page) {
+  const lbl = pageTitleLabel(page);
+  document.title = lbl ? `${lbl} · ${BASE_TITLE}` : BASE_TITLE;
+}
 function nav(page, push = true) {
   // R12b — the first-run tour is dashboard-only; navigating anywhere (including a test/automation
   // calling nav() directly, not just a click — see the tour's own safety notes) ends it quietly.
@@ -4995,6 +5270,17 @@ function nav(page, push = true) {
     setNavFirmOpen(true);
   }
   currentPage = page;
+  /* R73 · A4 — the nav's own scroll-hint, re-measured on every nav. The active item and the Firm
+     group's open state both change the strip's scroll extent, and on the FIRST nav this is the
+     earliest moment the strip has ever had a real width (see the module-eval note above). */
+  updateSidenavScrollHint();
+  /* R73 · B4 — the browser tab said "NexMoney — Back Office" on all thirteen
+     pages, so two tabs of this app were indistinguishable, browser history was a
+     column of identical rows, and a bookmark said nothing about what it opened.
+     The label is read off the nav button that owns the page, so it can never
+     drift from what the sidebar calls it; the page's own name comes FIRST because
+     that is the half a truncated tab shows. */
+  setPageTitle(page);
   currentModal = null; // switching pages dismisses any modal history ownership
   if (push) {
     const hash = pageHash(page);
@@ -5741,8 +6027,7 @@ function measureSettingsJumpOffsets() {
   bar.style.top = off + "px";
   const h = Math.round(bar.getBoundingClientRect().height);
   document.documentElement.style.setProperty("--settings-jump-scroll", (off + h + REP_JUMP_GAP) + "px");
-  const wrap = $("#settings-jump-chips");
-  bar.classList.toggle("is-scrollable", !!wrap && wrap.scrollWidth > wrap.clientWidth + 1);
+  wireChipStripOverflow("settings-jump", "settings-jump-chips");   // R73 · A5
 }
 function setSettingsJumpActive(key) {
   if (key === settingsJumpActive) return;
@@ -6620,15 +6905,20 @@ function renderTodayKpis() {
      title says so rather than leaving an unexplained gap. */
   const money = showMoney();
   row.innerHTML = `
-    <div class="kpi" style="cursor:pointer;" onclick="kpiGoto('active')" title="View the pipeline"><div class="num">${active.length}</div><div class="lbl">Active cases</div>${scopeTag}</div>
-    <div class="kpi" style="cursor:pointer;" onclick="kpiGoto('completions')" title="View Reports"><div class="num">${completedThisYear.length}</div><div class="lbl">Completions in ${yr}</div>${scopeTag}</div>
-    <div class="kpi ${ratesSoon.length ? "warn" : ""}" style="cursor:pointer;" onclick="kpiGoto('rates')" title="View Rate &amp; ERC alerts"><div class="num">${ratesSoon.length}</div><div class="lbl">Rates ending ≤ ${reminderMonths}mo (or overdue)</div>${scopeTag}</div>
-    <div class="kpi ${ercFlags.length ? "bad" : ""}" style="cursor:pointer;" onclick="kpiGoto('erc')" title="View Rate &amp; ERC alerts. ERC = Early Repayment Charge, the fee for leaving a deal early — &quot;outlasts the rate&quot; means it is still running after the client's discounted rate has already finished, so they are locked in past the deal that locked them in."><div class="num">${ercFlags.length}</div><div class="lbl">ERC outlasts rate</div>${scopeTag}</div>
-    ${money ? `<div class="kpi ${feesDue.length ? "warn" : ""}" style="cursor:pointer;" onclick="kpiGoto('fees')" title="View the Protection &amp; Fees drawer — Fees due tab"><div class="num">${fmtM(feesDueTotal)}</div><div class="lbl">Fees outstanding (${feesDue.length}) <span style="font-weight:400;opacity:.7;">· all stages</span></div>${scopeTag}</div>` : ""}`;
+    <div class="kpi dq-clickable" onclick="kpiGoto('active')" title="View the pipeline"><div class="num">${active.length}</div><div class="lbl">Active cases</div>${scopeTag}</div>
+    <div class="kpi dq-clickable" onclick="kpiGoto('completions')" title="View Reports"><div class="num">${completedThisYear.length}</div><div class="lbl">Completions in ${yr}</div>${scopeTag}</div>
+    <div class="kpi dq-clickable ${ratesSoon.length ? "warn" : ""}" onclick="kpiGoto('rates')" title="View Rate &amp; ERC alerts"><div class="num">${ratesSoon.length}</div><div class="lbl">Rates ending ≤ ${reminderMonths}mo (or overdue)</div>${scopeTag}</div>
+    <div class="kpi dq-clickable ${ercFlags.length ? "bad" : ""}" onclick="kpiGoto('erc')" title="View Rate &amp; ERC alerts. ERC = Early Repayment Charge, the fee for leaving a deal early — &quot;outlasts the rate&quot; means it is still running after the client's discounted rate has already finished, so they are locked in past the deal that locked them in."><div class="num">${ercFlags.length}</div><div class="lbl">ERC outlasts rate</div>${scopeTag}</div>
+    ${money ? `<div class="kpi dq-clickable ${feesDue.length ? "warn" : ""}" onclick="kpiGoto('fees')" title="View the Protection &amp; Fees drawer — Fees due tab"><div class="num">${fmtM(feesDueTotal)}</div><div class="lbl">Fees outstanding (${feesDue.length}) <span style="font-weight:400;opacity:.7;">· all stages</span></div>${scopeTag}</div>` : ""}`;
   /* The fee tile's absence, explained where someone would look for it. No placeholder tile: an
      empty fifth card on every adviser's home screen would be four-fifths of a strip, and a
      permanent "—" is worse than a clean four. */
   row.title = money ? "" : "Fee totals on this strip are the firm's money and are shown to the Owner only. Your own fees banked and outstanding are on the Reports page, in the \"My numbers\" card.";
+  // R73 · A4 — four tiles or five changes whether the strip scrolls at all; re-answer it here.
+  updateKpiScrollHint();
+  /* R73 · B1 — call site 3 of 4. Every tile on this strip navigates somewhere; none
+     of them could be reached from the keyboard. */
+  activateAll("#kpi-row .kpi.dq-clickable", row);
 }
 /* ==========================================================================
    R13 · M-43 — THE CRON HEARTBEAT, and M-42's backup nag.
@@ -6814,7 +7104,7 @@ function renderDashNotices() {
   const cronKnown = Object.prototype.hasOwnProperty.call(settings, "last_cron_run_at");
   const cronAt = String(settings.last_cron_run_at || "").trim();
   if (cronKnown && !cronAt) {
-    bits.push(`<div class="dash-notice" id="dash-cron-notice" data-state="never">⏱ The 8am automation has never confirmed a run.
+    bits.push(`<div class="dash-notice" id="dash-cron-notice" data-state="never"><span class="dash-notice-msg">⏱ The 8am automation has never confirmed a run.</span>
       <button type="button" class="dash-notice-link" onclick="nav('emails')">Open Emails</button>${cronRunNowBtnHtml()}</div>`);
     heads.push("the 8am automation has never run");
   } else if (cronAt) {
@@ -6825,8 +7115,8 @@ function renderDashNotices() {
          it to one line: the headline (what happened, how long ago) and the two buttons are what
          a phone needs; the paragraph explaining WHY that matters is what pushes My Day off the
          screen. Same words, same element, still read out in full by a screen reader. */
-      bits.push(`<div class="dash-notice warn" id="dash-cron-notice" data-state="stale">⏱ <strong>The 8am automation last ran ${esc(fmtD(cronAt))} — ${days} day${days === 1 ? "" : "s"} ago.</strong>
-        <span class="dash-notice-why">Emails may be silently stuck: the queue fills up and nothing on this page changes when the sender stops.</span>
+      bits.push(`<div class="dash-notice warn" id="dash-cron-notice" data-state="stale"><span class="dash-notice-msg" title="The 8am automation last ran ${esc(fmtD(cronAt))}. Emails may be silently stuck: the queue fills up and nothing on this page changes when the sender stops.">⏱ <strong>The 8am automation last ran ${esc(fmtD(cronAt))} — ${days} day${days === 1 ? "" : "s"} ago.</strong>
+        <span class="dash-notice-why">Emails may be silently stuck: the queue fills up and nothing on this page changes when the sender stops.</span></span>
         <button type="button" class="dash-notice-link" onclick="nav('emails')">Check the queue</button>${cronRunNowBtnHtml()}</div>`);
       heads.push(`the 8am automation last ran ${days} day${days === 1 ? "" : "s"} ago`);
     }
@@ -6839,11 +7129,11 @@ function renderDashNotices() {
     const expAt = String(settings.last_full_export_at || "").trim();
     const days = expAt ? daysSinceLocal(expAt) : null;
     if (!expAt) {
-      bits.push(`<div class="dash-notice" id="dash-export-notice" data-state="never">💾 No firm backup has ever been taken${expKnown ? "" : ""} — export from Settings.
+      bits.push(`<div class="dash-notice" id="dash-export-notice" data-state="never"><span class="dash-notice-msg">💾 No firm backup has ever been taken${expKnown ? "" : ""} — export from Settings.</span>
         <button type="button" class="dash-notice-link" onclick="nav('settings')">Go to Settings</button></div>`);
       heads.push("no firm backup has ever been taken");
     } else if (days != null && !isNaN(days) && days > EXPORT_NAG_DAYS) {
-      bits.push(`<div class="dash-notice" id="dash-export-notice" data-state="stale">💾 No firm backup in ${days} days — export from Settings.
+      bits.push(`<div class="dash-notice" id="dash-export-notice" data-state="stale"><span class="dash-notice-msg">💾 No firm backup in ${days} days — export from Settings.</span>
         <button type="button" class="dash-notice-link" onclick="nav('settings')">Go to Settings</button></div>`);
       heads.push(`no firm backup in ${days} days`);
     }
@@ -7599,9 +7889,14 @@ function renderRateErcRow(a, feed, opts) {
      text block, because it is now rendered on the drawer too (which has no cluster) and because a
      phone number you have to hover to see is not an affordance. Same `.ret-row-tel` wrapper the
      R64 link used, so nothing that looked for it has to change. */
-  const acts = page ? `<div class="ret-row-acts hover-quiet">`
-    + `<button type="button" class="btn btn-sm ret-row-chip" onclick="event.stopPropagation();retLogCall('${jsArg(a.case_id)}')" title="Log a call against this case — the same form the case modal uses: outcome chip, note, protection tick and an optional follow-up task.">📞 Log call</button>`
-    + `<button type="button" class="btn btn-sm ret-row-chip" onclick="event.stopPropagation();retBookReview('${jsArg(a.case_id)}')" title="Book a rate-end review in the diary, prefilled with this client, this case and the adviser who owns it.">📅 Book review</button>`
+  /* R73 · B3 — the quiet treatment moves OFF the container and onto the one verb it
+     was ever meant for. "Log call" is what the whole page is asking for, and the
+     three outcome chips are what the funnel copy points at; both are full weight.
+     Only "Book review" — a second-choice action on a row you may not be working —
+     keeps the quiet manners. Same classes, same handlers, same order. */
+  const acts = page ? `<div class="ret-row-acts">`
+    + `<button type="button" class="btn btn-sm ret-row-chip ret-logcall-chip" onclick="event.stopPropagation();retLogCall('${jsArg(a.case_id)}')" title="Log a call against this case — the same form the case modal uses: outcome chip, note, protection tick and an optional follow-up task.">📞 Log call</button>`
+    + `<button type="button" class="btn btn-sm ret-row-chip hover-quiet" onclick="event.stopPropagation();retBookReview('${jsArg(a.case_id)}')" title="Book a rate-end review in the diary, prefilled with this client, this case and the adviser who owns it.">📅 Book review</button>`
     + rowOutcomeChipsHtml(a, feed, opts)
     + `</div>` : "";
   return `
@@ -8084,10 +8379,16 @@ function renderRetMonthChips(counts) {
   const wrap = $("#ret-month-chips");
   if (!wrap) return;
   const cur = retMonthResolved();
+  /* R73 · B3 — one window is chosen at a time, which is the definition of a
+     segmented control, so the chips sit in the same grey track every other one in
+     the app now uses. The LABEL stays outside the track: it names the control, it
+     is not one of the options. */
   wrap.innerHTML = `<span class="due-chips-lbl">Rate ends:</span>`
+    + `<span class="segment">`
     + RET_MONTHS.map(([k, label, tip]) =>
       `<button type="button" class="btn btn-sm ret-month-chip${k === cur ? " scope-active" : ""}" data-month="${k}" aria-pressed="${k === cur}" title="${esc(tip)}">${esc(label)}${counts && counts[k] != null ? ` <span class="count">${counts[k]}</span>` : ""}</button>`
-    ).join("");
+    ).join("")
+    + `</span>`;
   wrap.querySelectorAll(".ret-month-chip").forEach((b) => (b.onclick = () => retSetMonth(b.dataset.month)));
 }
 /* ==========================================================================
@@ -9118,8 +9419,12 @@ function apptQuickOutcomeHtml(it) {
   const started = ap.starts_at && !isNaN(new Date(ap.starts_at)) && new Date(ap.starts_at) <= new Date();
   if (!started) return "";
   return `<span class="appt-quick" role="group" aria-label="Record what happened at this appointment">`
+    /* R73 · B3 (panel B#9) — .btn-ghost dropped: these are the one-tap outcome on a
+       timed appointment, and a borderless muted control under a heading reads as a
+       caption rather than the verb it is. Bordered .btn-sm, same size as every other
+       row verb. */
     + APPT_OUTCOMES.filter(([v]) => v !== "rearranged").map(([v, label, mark]) =>
-      `<button type="button" class="btn btn-sm btn-ghost appt-quick-btn" aria-label="Record this appointment as ${esc(label.toLowerCase())}" title="Record this appointment as ${esc(label.toLowerCase())} — no email or text is sent to anybody" onclick="quickApptOutcome('${it.appt_id}','${v}',this)">${mark} ${esc(label)}</button>`).join("")
+      `<button type="button" class="btn btn-sm appt-quick-btn" aria-label="Record this appointment as ${esc(label.toLowerCase())}" title="Record this appointment as ${esc(label.toLowerCase())} — no email or text is sent to anybody" onclick="quickApptOutcome('${it.appt_id}','${v}',this)">${mark} ${esc(label)}</button>`).join("")
     + `</span>`;
 }
 function briefActions(it) {
@@ -9397,7 +9702,12 @@ async function loadBriefing() {
       live.forEach((c) => {
         if (perClient[c.client_id] < 2) return;
         const kind = (KINDS.find((k) => k[0] === c.case_kind) || [])[1] || "";
-        briefCaseMeta[c.id] = [kind, STAGE_LABEL[c.stage] || c.stage].filter(Boolean).join(" · ");
+        /* R73 · B5 — the words come from stageWordFor (the one stage map), but this stays
+       TEXT, not a pill. My Day's row budget is a hard contract (r69_today §B: the first
+       actionable row must not be pushed down the phone screen), and a pill on every
+       primary row costs ~8px each on a list that can run to 48 rows. Same vocabulary,
+       no pill: the surface decides the chrome, the map decides the words. */
+    briefCaseMeta[c.id] = [kind, stageWordFor(c.stage)].filter(Boolean).join(" · ");
       });
     }
   } catch (e) { /* graceful degradation — rows just render without the discriminator */ }
@@ -9610,9 +9920,18 @@ function briefRowHtml(row) {
    band in play) renders exactly as it always did — furniture is for lists that need it. */
 window.briefFoldOpen = window.briefFoldOpen || {};
 const BRIEF_BAND_CAP = 10;
+/* R73 · A1 — TODAY FIRST (Daniel's decision, 28 Aug 2026).
+   The bands used to render Urgent → Today → Worth doing, i.e. in priority-number order, which
+   put a run of seventeen months-old ended rates above the 10 o'clock appointment that is the one
+   thing on this screen with a clock attached. Urgent is a backlog: it is urgent in the sense that
+   it should have been done, not in the sense that it must be done before 10 o'clock. Today's
+   timed appointments and today-dated tasks go first; the backlog is directly underneath, in the
+   same red band, unchanged in size and in membership.
+   ONLY THE ORDER OF THIS ARRAY CHANGED. The tests, the thresholds, the hot/warm row classes and
+   the per-band counts are all untouched — a row is in exactly the band it was in before. */
 const BRIEF_BANDS = [
-  { key: "hot",  test: (p) => p < 15, label: "Urgent", icon: "🔥", why: "ended rates · overdue tasks · failed sends · new leads" },
   { key: "warm", test: (p) => p >= 15 && p < 35, label: "Today", icon: "📅", why: "appointments and tasks due today" },
+  { key: "hot",  test: (p) => p < 15, label: "Urgent", icon: "🔥", why: "ended rates · overdue tasks · failed sends · new leads" },
   { key: "rest", test: (p) => p >= 35, label: "Worth doing", icon: "🧹", why: "housekeeping — nothing on fire" },
 ];
 /* R69 · A1 — the band header's number, and what it is a number OF.
@@ -9622,12 +9941,152 @@ const BRIEF_BANDS = [
    new is that the header now says out loud which unit it is counting, and names the item total
    beside it whenever the two differ. `.brief-sec-n` stays a bare number on purpose — it is the
    count chip, and putting words inside it would make it unreadable as a figure. */
+/* R73 · A1 / panel C-14 — "Why? ▸". The house rule is that every new behaviour is explained in
+   plain English in the UI, and it is a good rule; what it produced on Today was two 40–60 word
+   paragraphs above the first row of work, clamped to an ellipsis on a phone so the explanation
+   was neither readable NOR skippable. This is the same copy, one press away, with the fact it
+   explains left in the open. `body` is trusted HTML written at the call site (the callers already
+   esc() every value they interpolate) — same contract as every other *Html() helper here. */
+function whyFoldHtml(body) {
+  return ` <details class="why-fold"><summary><span class="why-caret" aria-hidden="true">▸</span>Why?</summary><span class="why-fold-body">${body}</span></details>`;
+}
 function briefBandCountHtml(bandRows) {
   const n = bandRows.length;
   const itemN = bandRows.reduce((s, r) => s + 1 + r.extra.length, 0);
   return `<span class="brief-sec-n">${n}</span>`
     + `<span class="brief-sec-unit">${n === 1 ? "row" : "rows"}${itemN > n ? ` · ${itemN} items` : ""}</span>`;
 }
+/* ==========================================================================
+   R73 · A1 — THE CAGE, MADE HONEST (panel finding #1).
+
+   Two of Today's lists are fixed-height scrollers: #briefing-list (340px, over
+   1,200–2,800px of content) and #unactioned-list (181px inside a 300px card).
+   The CSS caps are now min(62vh, 720px), which is the whole of the fix on a
+   short day. On a long one three things were still wrong and none of them is
+   a height:
+
+     · the cut landed mid-row, so the bottom of the panel was half a client's
+       name and no reader could tell whether that was the end of the list;
+     · nothing said the box scrolled at all — no fade, no edge, no count;
+     · there was no way to see the whole list without dragging inside a box.
+
+   applyDashCage() fixes all three, for any list, from OUTSIDE it:
+     1. measures the list against its CSS cap;
+     2. if it overflows, pulls the cap DOWN to the bottom edge of the last row
+        that fits whole, so the cut is always a row boundary;
+     3. paints .dash-cage-foot after the list — a fade over the join and a real
+        button — and opens the list in full when it is pressed.
+
+   THE NUMBER ON THE BUTTON COMES FROM THE DATA. `total` is passed in by the
+   caller from the array it just rendered (grouped rows for My Day, quiet cases
+   for the radar), never counted off the DOM: the DOM holds band headings,
+   folds and sub-rows, and counting nodes would advertise "19 more" over a list
+   of 12 cases. Only how many of them FIT is a layout question, and that is the
+   one thing measured here.
+
+   The open/closed state is per list and survives repaints (the lists repaint
+   on every tick, snooze and Undo), so expanding My Day and then ticking a task
+   inside it does not slam the panel shut under the cursor.
+   ========================================================================== */
+window.dashCageOpen = window.dashCageOpen || {};
+/* Two selectors per list, and the difference matters. WALK is every child the cut may land
+   BETWEEN — band headings and the "show the other N" fold are boundaries too, and a cut through
+   a heading looks exactly as broken as a cut through a row. COUNT is what "N more" is a number
+   OF: primary rows, the same unit the band headings count in and the same unit the caller's
+   `total` is in. Counting headings as rows is how a footer ends up offering 27 more over a list
+   of 25. */
+const DASH_CAGE_ROW_SEL = {
+  "briefing-list": ".brief-row:not(.brief-subrow), .brief-sec, details.brief-fold",
+  "unactioned-list": ".row-item",
+};
+const DASH_CAGE_COUNT_SEL = {
+  "briefing-list": ".brief-row:not(.brief-subrow)",
+  "unactioned-list": ".row-item",
+};
+const DASH_CAGE_LAST = {};
+function applyDashCage(listId, total, unit) {
+  const list = document.getElementById(listId);
+  if (!list) return;
+  const host = list.parentElement;
+  if (!host) return;
+  // Remember the last honest figures so a drawer toggle or a resize can re-measure without a
+  // repaint — neither of those events has the render's arrays in hand.
+  if (total != null) DASH_CAGE_LAST[listId] = { total, unit };
+  const last = DASH_CAGE_LAST[listId] || {};
+  if (total == null) { total = last.total; unit = last.unit; }
+  /* The radar lives inside a collapsible drawer, and a collapsed drawer sets display:none on
+     every child but its <h3> — so there is nothing to measure and the footer is folded away with
+     the list it belongs to. Leave both alone; toggleDrawer re-runs this on the way back open. */
+  if (list.offsetParent === null) return;
+  const footId = listId + "-cage";
+  let foot = document.getElementById(footId);
+  const open = !!window.dashCageOpen[listId];
+  // Always measure from the CSS cap, never from whatever a previous pass left inline.
+  list.style.maxHeight = "";
+  const capH = list.clientHeight;
+  const fullH = list.scrollHeight;
+  /* Nothing to cage: no fade, no button, no inline height. A short day renders exactly as it
+     always did — furniture is for lists that need it (R61's rule, still the rule). */
+  if (fullH <= capH + 2) {
+    if (foot) foot.remove();
+    return;
+  }
+  /* WHOLE ROWS, ROUNDED TO THE NEAREST BOUNDARY. Walking down to the last row that fits ENTIRELY
+     inside the cap throws away up to a full row of height — on the radar that was 91px of a 403px
+     box, i.e. a quarter of the panel spent on making the cut tidy, which is the opposite of
+     un-caging it. So the row straddling the cap decides: more than half of it showing rounds the
+     cap UP to include it (a few pixels taller than 62vh, and one more case on the screen), less
+     than half rounds DOWN and drops it. Either way the edge is a row boundary. */
+  const walkSel = DASH_CAGE_ROW_SEL[listId] || ".row-item";
+  const countSel = DASH_CAGE_COUNT_SEL[listId] || walkSel;
+  const rows = [...list.children].filter((el) => el.matches(walkSel));
+  const top0 = list.offsetTop;
+  let fits = 0, cut = capH;
+  for (const el of rows) {
+    const elTop = el.offsetTop - top0;
+    const bottom = elTop + el.offsetHeight;
+    const counts = el.matches(countSel) ? 1 : 0;
+    if (bottom > capH) {
+      const shown = capH - elTop;
+      if (el.offsetHeight > 0 && shown > el.offsetHeight / 2) { fits += counts; cut = bottom; }
+      break;
+    }
+    fits += counts; cut = bottom;
+  }
+  // A single row taller than the whole cap must still show: never cut above the first row.
+  if (!fits && rows.length) { fits = rows.filter((el) => el.matches(countSel)).length ? 1 : 0; cut = capH; }
+  const more = Math.max(0, (total || 0) - fits);
+  list.style.maxHeight = open ? "none" : cut + "px";
+  if (!foot) {
+    foot = document.createElement("div");
+    foot.id = footId;
+    foot.className = "dash-cage-foot";
+    host.insertBefore(foot, list.nextSibling);
+  }
+  foot.classList.toggle("is-open", open);
+  const word = unit || "more";
+  /* `more` can legitimately be zero on a list that still overflows: every ROW fits, and what is
+     left below the cut is a band heading or a "show the other N" summary. Promising "0 more rows"
+     would be worse than saying nothing, so the label drops the count rather than printing a lie. */
+  foot.innerHTML = open
+    ? `<button type="button" class="btn btn-sm dash-cage-more" data-cage="${esc(listId)}" title="Fold this list back to the top of the page">Show less ↑</button>`
+    : `<button type="button" class="btn btn-sm dash-cage-more" data-cage="${esc(listId)}" title="Open the whole list — nothing is filtered out, it is only folded">${more ? `${more} ${esc(word)}` : "Show the rest"} ↓</button>`;
+  foot.querySelector(".dash-cage-more").onclick = () => {
+    window.dashCageOpen[listId] = !window.dashCageOpen[listId];
+    applyDashCage(listId, total, unit);
+  };
+}
+/* Re-measure every caged list without repainting it. Two things change the answer without
+   changing the data: opening a drawer (the list had display:none and no height at paint time),
+   and resizing the window (the cap is 62vh). */
+function recageDashLists() {
+  Object.keys(DASH_CAGE_LAST).forEach((id) => applyDashCage(id, null));
+}
+let recageTimer = null;
+window.addEventListener("resize", () => {
+  clearTimeout(recageTimer);
+  recageTimer = setTimeout(recageDashLists, 120);
+});
 function renderBriefing() {
   const items = lastBriefItems;
   const rows = groupBriefRows(items);
@@ -9638,12 +10097,26 @@ function renderBriefing() {
   const sub = $("#briefing-group-sub");
   if (sub) {
     sub.classList.toggle("hidden", !groupedCases);
+    /* R73 · A1 (panel C-14) — the fact stays on the line; the reasoning goes behind "Why? ▸".
+       Both of Today's explanatory subtitles were three-line paragraphs clamped with
+       -webkit-line-clamp on a phone, which is a dead ellipsis: the words are gone and there is
+       nothing to press to get them back. A disclosure is the same saving with a way in — and it
+       keeps every word in the DOM, so assistive tech and the suites that read .textContent still
+       get the whole sentence whether it is open or closed. */
     sub.innerHTML = groupedCases
-      ? `<strong>Rows for the same case are grouped</strong> — ${groupedCases} case${groupedCases === 1 ? " here has" : "s here have"} more than one thing on ${groupedCases === 1 ? "it" : "them"}. Open “+N more” to see the rest; every button is still on those rows. New enquiries are never folded.`
+      ? `<strong>Rows for the same case are grouped</strong> — ${groupedCases} case${groupedCases === 1 ? " here has" : "s here have"} more than one thing on ${groupedCases === 1 ? "it" : "them"}.`
+        + whyFoldHtml(`Open “+N more” to see the rest; every button is still on those rows. New enquiries are never folded.`)
       : "";
   }
   const bands = BRIEF_BANDS.map((b) => ({ ...b, rows: rows.filter((r) => b.test(r.head.pri)) })).filter((b) => b.rows.length);
   let html;
+  /* R73 · A1 — how many rows the cage's "N more ↓" is counting. NOT rows.length: a band longer
+     than BRIEF_BAND_CAP already folds its tail behind "show the other N", and those rows are not
+     revealed by opening the cage — they are behind a second, older disclosure that is still
+     there. Offering "27 more" and then showing 24 is exactly the kind of small lie this round is
+     about. So it is the rows the renderer places OUTSIDE the band folds, accumulated from the
+     same arrays that build the HTML. */
+  let unfoldedRows = 0;
   if (!rows.length) {
     html = '<div class="empty">All clear — nothing needs you right now 🎉</div>';
   } else if (bands.length > 1 || rows.length > BRIEF_BAND_CAP) {
@@ -9656,6 +10129,7 @@ function renderBriefing() {
       b.rows.forEach((r) => {
         if (r.head.kind === "lead_new" || shown.length < BRIEF_BAND_CAP) shown.push(r); else folded.push(r);
       });
+      unfoldedRows += shown.length;
       return `<div class="brief-sec brief-sec-${b.key}"><span class="brief-sec-ic" aria-hidden="true">${b.icon}</span>${b.label} ${briefBandCountHtml(b.rows)}<span class="brief-sec-why">${b.why}</span></div>`
         + shown.map(briefRowHtml).join("")
         + (folded.length ? `<details class="brief-fold"${briefFoldOpen[b.key] ? " open" : ""} ontoggle="briefFoldOpen['${b.key}']=this.open">
@@ -9665,9 +10139,14 @@ function renderBriefing() {
     }).join("");
   } else {
     html = rows.map(briefRowHtml).join("");
+    unfoldedRows = rows.length;
   }
   $("#briefing-list").innerHTML = html;
   panelCount("#briefing-list", items.length, items.some((it) => it.pri < 15));
+  /* R73 · A1 — the cut lands on a whole row and the rest is one press away. `unfoldedRows` is the
+     grouped-row count this paint just placed OUTSIDE the band folds (see its note above), which
+     is the same unit the band headings count in and the only honest unit for "N more". */
+  applyDashCage("briefing-list", unfoldedRows, "more rows");
   renderLeadsAcceptBar(items);   // R68 · B1 — the "accept all unambiguous leads" bar above the list
   applyLeadAdvChoices();   // R12a K-1 — a lead_new row's select is the SAME control as the drawer's
 }
@@ -9676,16 +10155,76 @@ function renderBriefing() {
    thing as the one beside it is noise. Painted from the SAME items array the list is, so it can
    never advertise a lead the list is not showing. Every persona who can see the leads gets it —
    see acceptAllLeads' header for why there is no role gate here. */
+/* ==========================================================================
+   R73 · A1 — THE BAR COUNTS WHAT IT WILL ACTUALLY DO.
+
+   "Accept all unambiguous leads (4)" over an inbox of four, one of which is a
+   joint name, promised four accepts and delivered three — and the shortfall
+   only appeared in the confirm. The word "unambiguous" was in the label all
+   along; the number beside it was the total.
+
+   It now counts the SET, using the same two rules classifyLeadsForAccept()
+   uses — a joint name is left for you, and so is anything that looks like a
+   client we already hold — and names the remainder: "Accept 3 unambiguous
+   leads (1 needs you)".
+
+   The joint-name half is a pure function of the name and is answered on the
+   spot. The client-match half needs the client list, which is a whole-table
+   read this panel has no business issuing on every repaint, so it is warmed
+   ONCE, lazily, after the bar has already painted, and the label refines
+   itself when it lands. Until then the count can only be optimistic, never
+   dangerous: pressing the button runs the real classification and shows the
+   confirm that names every skip, exactly as before. Nothing about the verb,
+   the confirm or the writes changed in this round.
+   ========================================================================== */
+let LEAD_MATCH_ROWS = null;        // clients cache for the bar's own arithmetic
+let leadMatchWarming = false;
+function leadsAcceptSplit(items) {
+  const leads = (items || []).filter((it) => it.kind === "lead_new" && it.lead_id);
+  let needsYou = 0;
+  leads.forEach((it) => {
+    const l = it.lead || {};
+    const rawName = String(l.name || "").trim().replace(/\s+/g, " ");
+    // A reason already recorded by a previous "accept all" run is the most authoritative answer.
+    if (LEAD_AMBIG_REASON[it.lead_id]) { needsYou++; return; }
+    if (rawName && isJointName(rawName)) { needsYou++; return; }
+    if (LEAD_MATCH_ROWS && rawName) {
+      const nm = splitName(rawName);
+      const m = findClientMatches({ first: nm.first_name, last: nm.last_name, email: l.email, phone: l.phone }, LEAD_MATCH_ROWS);
+      if (m.exact || m.near.length) { needsYou++; return; }
+    }
+  });
+  return { total: leads.length, needsYou, clean: leads.length - needsYou };
+}
+function warmLeadMatchRows() {
+  if (LEAD_MATCH_ROWS || leadMatchWarming) return;
+  leadMatchWarming = true;
+  Promise.resolve(fetchMatchClients()).then((rows) => {
+    LEAD_MATCH_ROWS = rows || [];
+    leadMatchWarming = false;
+    // Repaint the label only — never the list, which somebody may be working down.
+    if ($("#leads-accept-all")) renderLeadsAcceptBar(lastBriefItems);
+  }).catch(() => { leadMatchWarming = false; });
+}
 function renderLeadsAcceptBar(items) {
   const bar = $("#leads-accept-bar");
   if (!bar) return;
-  const n = (items || []).filter((it) => it.kind === "lead_new" && it.lead_id).length;
-  if (n < 2) { bar.innerHTML = ""; bar.classList.add("hidden"); return; }
+  const split = leadsAcceptSplit(items);
+  if (split.total < 2) { bar.innerHTML = ""; bar.classList.add("hidden"); return; }
   bar.classList.remove("hidden");
-  bar.innerHTML = `<button type="button" class="btn btn-sm btn-primary" id="leads-accept-all" title="Accept every enquiry that needs no decision from you">📥 Accept all unambiguous leads (${n})</button>`
-    + `<span class="panel-sub" id="leads-accept-bar-sub">Creates the client, the case and its Enquiry checklist for every enquiry that is one named person we do not already hold, sharing them out from the lightest desk. A joint name, or anything that looks like a client we already have, is left here for you — it will say which.</span>`;
+  /* Nothing to accept automatically: say that, rather than offering a button that can only
+     answer "nothing here can be accepted automatically" after it is pressed. */
+  const label = split.clean
+    ? `📥 Accept ${split.clean} unambiguous lead${split.clean === 1 ? "" : "s"}${split.needsYou ? ` (${split.needsYou} need${split.needsYou === 1 ? "s" : ""} you)` : ""}`
+    : `📥 Accept all unambiguous leads (0)`;
+  bar.innerHTML = `<button type="button" class="btn btn-sm btn-primary" id="leads-accept-all"${split.clean ? "" : " disabled"} title="${split.clean ? "Accept every enquiry that needs no decision from you" : "Every enquiry here needs a decision only you can make — use Accept on the row"}">${label}</button>`
+    /* R73 · A1 — a <div>, not a <span>: it now carries a <details> (flow content). Same id, same
+       class, same flex behaviour inside .leads-accept-bar. */
+    + `<div class="panel-sub" id="leads-accept-bar-sub">Creates the client, the case and its Enquiry checklist for every enquiry that is one named person we do not already hold.${
+      whyFoldHtml("They are shared out from the lightest desk. A joint name, or anything that looks like a client we already have, is left here for you — it will say which.")}</div>`;
   const b = $("#leads-accept-all");
   if (b) b.onclick = (e) => window.acceptAllLeads(e);
+  warmLeadMatchRows();
 }
 window.briefDone = function (id) {
   /* R12a·D12 — a tick and its Undo repaint the list the click came FROM, so an undone task goes
@@ -9916,9 +10455,29 @@ const WT_GROUP_FOLD_AT = 4;
    none of the three says what the check actually looked at. So those three, and ONLY those three,
    carry a written label; every other rule still takes its name from the data, and a rule added to
    the SQL tomorrow still renders under a header nobody had to write here first. */
+/* R73 · B5 (panel A#15) — ALL TWELVE rules carry a written label now, not three.
+   The fallback below is good engineering — it derives a header from whatever the
+   rows say, so a rule added to the SQL tomorrow still renders — but on live data
+   it produced headers like "Protection quote stale" and "Fee aging 60": the
+   database's column name with the underscores taken out, which tells a reader
+   what the CHECK is called, not what it FOUND. Each label below names the
+   finding in the firm's own words. The fallback stays exactly where it was, for
+   exactly the case it was written for: a rule nobody has named yet.
+   (Links for retention_gap / workload are R74's — this is labels only.) */
 const WT_RULE_LABELS = {
   offer_before_completion: "Offer expires before completion",
   erc_before_completion: "Completing inside old ERC",
+  fee_aging_60: "Fee unpaid over 60 days",
+  lead_slow: "Enquiry not picked up",
+  app_not_submitted: "Application not submitted",
+  offer_stale: "Offer issued, nothing since",
+  exchange_no_chase: "Exchange with no chase",
+  workload: "Adviser overloaded",
+  retention_gap: "Rate ending, no retention case started",
+  protection_quote_stale: "Protection quote going cold",
+  /* The un-suffixed variant the older watchtower run still emits alongside the
+     60-day one. Same finding, so the same words. */
+  fee_aging: "Fee unpaid, ageing",
   /* PLURAL, and about CLIENTS not messages: since R65 this rule emits one row per client, folding
      everything that client has sent into a single alert with its own count. "3" under this header
      means three people waiting on a reply, not three emails — the emails themselves are counted,
@@ -10260,6 +10819,10 @@ function renderWatchtower() {
         <span class="wt-group-caret" aria-hidden="true"></span>
         <span class="wt-group-label">${esc(g.label)}</span>
         <span class="wt-group-n">${g.items.length}</span>
+        ${/* R73 · A2 — the group says how much of itself is ticked. "Select all 23" on a check
+             whose rows are FOLDED used to change nothing a reader could see: the bar's count went
+             up and the heading it came from looked exactly as it had. */ ""}
+        <span class="wt-group-sel" hidden></span>
       </button>
       ${selBtn}
       </div>
@@ -10272,7 +10835,16 @@ function renderWatchtower() {
      header because the header already carries the scope segment, the severity chips and Run
      checks, and because a bar that scrolls with the rows it acts on is a bar you can still see
      when you have ticked something forty rows down. */
-  const wtBulkBar = `<div class="bulk-bar" id="wt-bulk-bar"${wtSel.size ? "" : " hidden"}>
+  /* R73 · A2 (panel #3) — THE BAR STAYS WITH YOU, AND STOPS SHOVING THE LIST.
+     Two defects, one element. It was `hidden` at zero selection, so the first tick inserted a
+     53px box at the top of the list and every row under the cursor jumped down by it — on a list
+     you tick by aiming at checkboxes, that is a mis-click generator. And it scrolled away with
+     the rows: with a 2,000px list and a selection made forty rows down, the verbs were off the
+     top of the screen.
+     So the height is RESERVED (visibility, not display — see .bulk-bar.is-empty), and the bar is
+     `position: sticky; top: 0` inside #watchtower-list's own scroller, above the rows. Nothing
+     about the verbs, the confirm, the writes or the ids changed. */
+  const wtBulkBar = `<div class="bulk-bar wt-bulk-sticky${wtSel.size ? "" : " is-empty"}" id="wt-bulk-bar">
       <span class="bulk-bar-count"><strong id="wt-bulk-n">${wtSel.size}</strong> selected</span>
       <button type="button" class="btn btn-sm" id="wt-bulk-snooze7" title="Hide the ticked alerts for a week. They come back by themselves once the date passes — this fixes nothing, it buys time.">⏰ Snooze 7 days</button>
       <button type="button" class="btn btn-sm" id="wt-bulk-snooze30" title="Hide the ticked alerts for a month. They come back by themselves once the date passes — this fixes nothing, it buys time.">⏰ Snooze 30 days</button>
@@ -10345,7 +10917,10 @@ function wtWireBulk(groups) {
     const bar = $("#wt-bulk-bar");
     if (!bar) return;
     const n = wtSel.size;
-    bar.hidden = n === 0;
+    /* R73 · A2 — RESERVED, not removed. `visibility: hidden` keeps the box (so the rows below it
+       never move when the first tick lands) while taking the bar out of the tab order and off
+       every screen reader, which display:none also did and opacity:0 would not have. */
+    bar.classList.toggle("is-empty", n === 0);
     const nEl = $("#wt-bulk-n"); if (nEl) nEl.textContent = n;
     // The per-rule buttons flip between Select all / Clear all as their own group fills up.
     list.querySelectorAll(".wt-group-all").forEach((b) => {
@@ -10354,6 +10929,16 @@ function wtWireBulk(groups) {
       const allOn = pick.length > 0 && pick.every((a) => wtSel.has(a.id));
       b.setAttribute("aria-pressed", String(allOn));
       b.textContent = `${allOn ? "Clear" : "Select"} all ${pick.length}`;
+      /* R73 · A2 — and the group's own heading carries the state: "· 5 selected" beside the
+         count, and a tint on the whole band while any of its rows are ticked. Without it, a
+         selection made inside a folded group was invisible everywhere except a number on a bar
+         that does not say which check it came from. */
+      const grp = b.closest(".wt-group");
+      if (!grp) return;
+      const selN = pick.filter((a) => wtSel.has(a.id)).length;
+      grp.classList.toggle("wt-group-has-sel", selN > 0);
+      const badge = grp.querySelector(".wt-group-sel");
+      if (badge) { badge.hidden = selN === 0; badge.textContent = `· ${selN} selected`; }
     });
   };
   list.querySelectorAll(".wt-cb").forEach((cb) => (cb.onchange = () => {
@@ -10366,6 +10951,15 @@ function wtWireBulk(groups) {
     if (!g) return;
     const pick = g.items.filter((a) => !a.__synth);
     const allOn = pick.length > 0 && pick.every((a) => wtSel.has(a.id));
+    /* R73 · A2 — SELECTING A FOLDED GROUP OPENS IT. "Select all 5" on a folded check ticked five
+       alerts the operator had never seen, and then offered Dismiss. The rows come into view
+       first, so the batch about to be judged is on screen while it is judged. Clearing does NOT
+       expand — nothing is being taken on trust on the way out. */
+    const grp = b.closest(".wt-group");
+    if (!allOn && grp && grp.classList.contains("wt-folded")) {
+      const head = grp.querySelector(".wt-group-head");
+      if (head) window.wtToggleGroup(b.dataset.wtGroup, head);
+    }
     pick.forEach((a) => { if (allOn) wtSel.delete(a.id); else wtSel.add(a.id); });
     list.querySelectorAll(".wt-cb").forEach((cb) => { cb.checked = wtSel.has(cb.dataset.id); });
     syncBar();
@@ -10982,6 +11576,10 @@ async function loadUnactioned() {
       : "";
   }
   panelCount("#unactioned-list", quiet.length, quiet.length > 0);
+  /* R73 · A1 — the radar's own cage. `radarShown.length` and not `quiet.length`: the RADAR_CAP
+     tail is already disclosed by its own "…and N more — open Pipeline" line, so the button here
+     must only ever offer what this list actually holds. */
+  applyDashCage("unactioned-list", radarShown.length, "more cases");
   autoDrawer("unactioned", quiet.length > 0);
 }
 
@@ -11595,12 +12193,14 @@ async function loadPipeline() {
     const segName = esc(SEGMENTS.find(([k]) => k === pipelineSegment)?.[1] || "this view");
     const advOn = $("#board-adviser").value && $("#board-adviser").value !== "all";
     const why = [advOn ? "the adviser filter" : "", q ? `the search “${esc(q)}”` : ""].filter(Boolean);
-    board.innerHTML = `<div class="board-empty">
-      <strong>Nothing in ${segName}${why.length ? " matching this filter" : ""}.</strong>
-      ${why.length
+    // R73 · B5 — the house empty state, with the filter it names now removable in one press.
+    board.innerHTML = emptyState({
+      headlineHtml: `Nothing in ${segName}${why.length ? " matching this filter" : ""}`,
+      subHtml: why.length
         ? `Clear ${why.join(" or ")} to see the rest of the board.`
-        : `Cases appear here as soon as one reaches a stage in ${segName}.`}
-    </div>`;
+        : `Cases appear here as soon as one reaches a stage in ${segName}.`,
+      action: why.length ? { label: "Clear filters", id: "board-empty-clear", onclick: "clearBoardFilters()" } : null,
+    });
     updateBoardScrollHint();
     return;
   }
@@ -11645,7 +12245,11 @@ async function loadPipeline() {
     const hiddenCount = byStage[k].length - colCards.length;
     return `
     <div class="col" data-stage="${k}">
-      <h4${k === "decision_in_principle" ? ` title="${TIP_DIP}"` : ""}>${label} <span>${byStage[k].length}</span></h4>
+      ${/* R73 · B1 — H3, not H4. The page heading is the H2 above; an H4 under an H2
+           skips a level, and a screen-reader user navigating the board by heading
+           lands nowhere. Styled by .col h4/.col h3 together (admin.css) so nothing
+           moves a pixel. */ ""}
+      <h3 class="col-h"${k === "decision_in_principle" ? ` title="${TIP_DIP}"` : ""}>${label} <span>${byStage[k].length}</span></h3>
       ${byStage[k].length === 0 ? '<div class="col-empty">No cases here</div>' : ""}
       ${colCards.map((c) => {
         try { return boardCardHtml(c, cardCtx); }
@@ -11662,6 +12266,9 @@ async function loadPipeline() {
     ? `<div class="client-list-cap-note board-skip-note">${boardSkipped} record(s) couldn't be displayed — logged</div>`
     : "");
   wireBoardDnD();
+  /* R73 · B1 — call site 1 of 4. A board card is an onclick div; without this the
+     pipeline is mouse-only, and the board is the page advisers live on. */
+  activateAll("#board .card");
   updateBoardScrollHint();
 }
 /* Horizontal-scroll affordance for the 8-stage board (QW16): edge fade + arrow appear
@@ -11673,6 +12280,98 @@ function updateBoardScrollHint() {
   const max = board.scrollWidth - board.clientWidth;
   wrap.classList.toggle("can-scroll-right", board.scrollLeft < max - 4);
   wrap.classList.toggle("can-scroll-left", board.scrollLeft > 4);
+}
+/* ==========================================================================
+   R73 · A5 (panel D#6) — THE TAB STRIPS SAY THEY SCROLL.
+
+   Reports has 22 jump chips and Settings 14, in a strip that is a horizontal
+   scroller with `scrollbar-width: thin` — which on a trackpad is no scrollbar
+   at all. A chip sliced flat by the container edge reads as a rendering fault,
+   not as "there is more this way", and at 1440 the Advocacy end of the strip
+   simply does not exist as far as the reader is concerned.
+
+   Half the answer was already here: measureRepJumpOffsets() adds
+   `is-scrollable` to the bar and CSS fades its right edge. What was missing is
+   something to PRESS — a discoverable control, not a gesture — and any signal
+   at all once you are at the end, where the fade was still on and still
+   implying more.
+
+   This is the board's own affordance (.board-scroll-arrow, admin.css:1838),
+   generalised: one arrow per strip, injected once, shown only while there is
+   somewhere to go and hidden at each end. The board keeps its own arrow; what
+   is shared is the shape and the rule, which is what makes an affordance
+   learnable.
+
+   Idempotent: the strips are rebuilt wholesale on every render, so this wires
+   by property assignment and re-uses the arrow it already made.
+   ========================================================================== */
+function wireChipStripOverflow(barId, wrapId) {
+  const bar = document.getElementById(barId), wrap = document.getElementById(wrapId);
+  if (!bar || !wrap) return;
+  let arrow = bar.querySelector(".chip-scroll-arrow");
+  if (!arrow) {
+    arrow = document.createElement("button");
+    arrow.type = "button";
+    arrow.className = "board-scroll-arrow chip-scroll-arrow";
+    arrow.setAttribute("aria-label", "Scroll these tabs to the right");
+    arrow.title = "More tabs this way";
+    arrow.textContent = "›";
+    bar.appendChild(arrow);
+  }
+  const sync = () => {
+    const over = wrap.scrollWidth > wrap.clientWidth + 1;
+    const atEnd = wrap.scrollWidth - wrap.clientWidth <= wrap.scrollLeft + 2;
+    bar.classList.toggle("is-scrollable", over);
+    bar.classList.toggle("chip-at-end", over && atEnd);
+  };
+  arrow.onclick = () => wrap.scrollBy({ left: Math.round(wrap.clientWidth * 0.7), behavior: "smooth" });
+  wrap.onscroll = sync;
+  if (!wrap.__chipRo && typeof ResizeObserver === "function") {
+    try { (wrap.__chipRo = new ResizeObserver(sync)).observe(wrap); } catch (e) { /* older engine */ }
+  }
+  if (!bar.__chipResize) { bar.__chipResize = true; window.addEventListener("resize", sync, { passive: true }); }
+  sync();
+}
+/* ==========================================================================
+   R73 · A4 (panel #8 / C#3) — WIDE TABLES BECOME CARDS ON A PHONE.
+
+   R65 · L9 gave the Pipeline table a mobile card list: below 700px it renders
+   boardCardHtml per row instead of 16 columns inside a 364px sideways
+   scroller. The pattern was never propagated, so Protection & GI (877px of
+   table) and three Data health tables (982px duplicates, 855px waiting-on-
+   documents, 655px shared addresses) still shipped a desktop table into a
+   390px screen — reading one of them meant scrolling sideways column by
+   column, which on a list you are meant to SCAN is not reading at all.
+
+   THIS IS NOT boardCardHtml. Reuse was the first thing tried and it is the
+   wrong tool here: boardCardHtml renders a CASE from the board's own column
+   set, and not one of these four lists is a list of board-shaped cases — one
+   is protection statuses off an RPC, one is pairs of possibly-duplicate
+   clients, one is a document-chase queue and one is addresses. Four bespoke
+   card renderers would be four more places for a column to be forgotten.
+
+   So the card is made from the table the page already builds: each body cell
+   is stamped with its own column heading (data-lbl, read off the header row),
+   and a media rule at ≤767px turns every row into a stacked card with the
+   heading as each line's label. One helper, no duplicated markup, and a
+   column added to any of these tables gets a card line for free — which is
+   exactly the failure mode a hand-written second renderer has.
+
+   Mark a table with class `mob-cards` and call this after rendering it.
+   ========================================================================== */
+function cardifyTables(root) {
+  const host = (typeof root === "string" ? document.getElementById(root) : root) || document;
+  host.querySelectorAll("table.mob-cards").forEach((t) => {
+    const head = t.rows[0];
+    if (!head) return;
+    const labels = [...head.cells].map((c) => (c.textContent || "").replace(/\s+/g, " ").trim());
+    for (let i = 1; i < t.rows.length; i++) {
+      const cells = t.rows[i].cells;
+      for (let j = 0; j < cells.length; j++) {
+        if (!cells[j].hasAttribute("data-lbl")) cells[j].setAttribute("data-lbl", labels[j] || "");
+      }
+    }
+  });
 }
 /* T1-13 — the same edge-fade + arrow affordance as the pipeline board above, generalised for any
    other wide table (protection, pipeline table view, import review). The scroll element is
@@ -11879,6 +12578,33 @@ const CASE_ACTION_RULES = {
   "act-reminder":      { stages: ["completed"] },
   "act-evidence":      { stages: ["completed", "not_proceeding"] },
   "act-record-reason": { stages: ["not_proceeding"], hero: true },
+};
+/* R73 · A3 — THE FEW THAT STAY ON THE BAR, per stage. Read with CASE_ACTION_RULES above: that map
+   says which actions BELONG at a stage, this one says which of them are worth a permanent seat
+   next to Advance, the stage select and Log call. Everything omitted here is still a stage action
+   and is still one press away — it is the first thing in the Actions ▾ menu, under a heading
+   naming the stage. Deliberately short: the bar has to be one row at 640px, and at 390px it has a
+   96px budget for the whole thing.
+     · A LIVE case already spends its row on "Advance to <next> →", the stage select and Log call,
+       so it gets ONE more — the thing that stage is for. Enquiry and Fact Find are about getting
+       the facts (the fact-find), DIP about getting the client in (an appointment), and from
+       Application on the job is telling the client where it has got to (Write to client).
+     · A TERMINAL case has no Advance button, so there is room for two.
+   Not a new source of truth for what an action means — every gate is still CASE_ACTION_RULES's;
+   an id here that its rule does not make primary at that stage simply never appears. */
+const CASE_ACTION_TOP = {
+  /* A LIVE case's row is already full and already right: "Advance to <next> →", the stage select
+     and 📞 Log call. Measured at the modal's real width (640px, of which the bar can use 540
+     after its bleed and the 40px close button's gutter) that is 460px — a fifth action of any
+     realistic label length wraps it onto a second line, and a second line is the defect. */
+  enquiry: [], fact_find: [], decision_in_principle: [], application: [], offer: [], exchange: [],
+  /* A COMPLETED case has no Advance button, so one stage action fits. On a case still tracking a
+     rate it is 📌 Rate-end outcome — the decision the retention book is waiting on — EXCEPT where
+     🔁 Start retention case is already on the bar beside it, because that is the same decision
+     with a shorter route and two of them will not fit on one row (see the filter below). */
+  completed: ["act-rate-outcome"],
+  // A dead case has one job: say why. ✏️ Record reason is the hero here and there is room for it.
+  not_proceeding: ["act-record-reason"],
 };
 // Each toggleable section → the stages where it is shown. Sections not listed
 // (header, tasks, notes, history, change-history, case-details) are stage-
@@ -12380,7 +13106,7 @@ function caseActionBarHtml(c, stage, kind, opts) {
        The write goes through moveCaseToStage like every other stage change. */
     ...(stage === "not_proceeding" ? [] : [{ id: "case-mark-np", label: "🚫 Mark not proceeding" }]),
   ];
-  const primary = [], overflow = [];
+  const primaryAll = [], overflow = [];
   defs.forEach((d) => {
     if (d.onlyStage && stage !== d.onlyStage) return;
     /* R66 · M8 — the mirror of onlyStage, and used by exactly one action so far. Demoting to the
@@ -12391,20 +13117,52 @@ function caseActionBarHtml(c, stage, kind, opts) {
        retention conversation, which starts from Retention). One id, named in the definition, so
        the absence is declared rather than being an accident of the rules map. */
     if (d.notStages && d.notStages.includes(stage)) return;
-    (caseActionIsPrimary(d.id, stage, kind, c) ? primary : overflow).push(d);
+    (caseActionIsPrimary(d.id, stage, kind, c) ? primaryAll : overflow).push(d);
   });
-  const btn = (d, isPrimary) => {
+  /* ==========================================================================
+     R73 · A3 (panel #4) — THREE TIERS, NOT TWO, SO THE BAR IS ONE ROW.
+
+     CASE_ACTION_RULES already split the actions into "belongs at this stage"
+     and "everything else". At a completed case that first half is TWELVE
+     buttons, so the sticky bar — which pins over the top of the modal — was
+     135px of a 900px desktop viewport and 393px (47%) of a phone.
+
+     What was missing was a third answer: an action can belong at this stage
+     AND not be one of the two or three things somebody opens this case to do.
+     CASE_ACTION_TOP names those few per stage; the rest of the stage's
+     actions keep their meaning and move into the overflow under a heading of
+     their own, ABOVE the never-primary ones.
+
+     NOTHING IS REMOVED, RENAMED OR REWIRED. Every act-* id is built exactly
+     once, with the same label and the same handler, and every one of them is
+     reachable in at most one press. The tier is declared on the element
+     (data-act-tier="top|stage|rest") so the split is inspectable rather than
+     inferred from which box a button happens to be sitting in — which is what
+     r15 §A and r66_comms now read.
+     ========================================================================== */
+  /* The one context-sensitive exception, declared rather than hidden in a width calculation:
+     🔁 Start retention case is built by the modal itself (it is not an act-* action) and lands on
+     this same row. Where it is there, it and 📌 Rate-end outcome are two doors onto one decision
+     — what happened to this client's rate — and the pair does not fit on one line. The button
+     with the shorter route keeps the seat; the outcome chip is the first thing in Actions ▾. */
+  const top = (CASE_ACTION_TOP[stage] || []).filter((id) => !(id === "act-rate-outcome" && opts && opts.retentionOnBar));
+  const primary = primaryAll.filter((d) => top.includes(d.id)).sort((a, b) => top.indexOf(a.id) - top.indexOf(b.id));
+  const demoted = primaryAll.filter((d) => !top.includes(d.id));
+  const btn = (d, tier) => {
     const rule = CASE_ACTION_RULES[d.id] || {};
-    const heroCls = isPrimary && heroesActive && rule.hero ? " btn-primary" : "";
-    return `<button class="btn btn-sm${heroCls}" id="${d.id}">${d.label}</button>`;
+    const heroCls = tier === "top" && heroesActive && rule.hero ? " btn-primary" : "";
+    return `<button class="btn btn-sm${heroCls}" id="${d.id}" data-act-tier="${tier}">${d.label}</button>`;
   };
-  const primaryHtml = primary.map((d) => btn(d, true)).join("");
-  const overflowHtml = overflow.map((d) => btn(d, false)).join("");
+  const primaryHtml = primary.map((d) => btn(d, "top")).join("");
+  const overflowHtml = (demoted.length ? `<div class="more-actions-group">For a case at ${esc(STAGE_LABEL[stage] || String(stage).replace(/_/g, " "))}</div>` : "")
+    + demoted.map((d) => btn(d, "stage")).join("")
+    + (overflow.length ? `<div class="more-actions-group">Everything else</div>` : "")
+    + overflow.map((d) => btn(d, "rest")).join("");
   return `<div class="action-bar" id="case-action-bar">
       ${primaryHtml}
       <input type="file" id="offer-file" accept="application/pdf" class="hidden">
       <div class="more-actions" id="case-more-actions-wrap">
-        <button type="button" class="btn btn-sm more-actions-toggle" id="case-more-actions-toggle" aria-expanded="false" aria-haspopup="true" title="Every other action for this case — always here, whatever the stage">More actions ▾</button>
+        <button type="button" class="btn btn-sm more-actions-toggle" id="case-more-actions-toggle" aria-expanded="false" aria-haspopup="true" title="Every other action for this case — always here, whatever the stage. The ones this stage is about are listed first.">Actions ▾</button>
         <div class="more-actions-menu hidden" id="case-more-actions">${overflowHtml || '<span class="more-actions-empty">No other actions at this stage.</span>'}</div>
       </div>
     </div>`;
@@ -14712,8 +15470,8 @@ function feeStatusCellHtml(c) {
         <td>${stageBadge(c.stage)}</td>
         <td>${c.completed_at ? fmtD(c.completed_at) : "—"}</td>
         <td>${lenderIcon(c.lender)}${esc(c.lender || "")}</td>
-        <td>${c.loan_amount ? fmtM(c.loan_amount) : ""}</td>
-        <td>${c.broker_fee ? fmtM(c.broker_fee) : ""}</td>
+        <td class="num">${c.loan_amount ? fmtM(c.loan_amount) : ""}</td>
+        <td class="num">${c.broker_fee ? fmtM(c.broker_fee) : ""}</td>
         <td>${feeStatusCellHtml(c)}</td>
         <td>${c.assigned_to ? esc(staffName(c.assigned_to)) : ""}</td>
       </tr>`).join("")
@@ -14744,7 +15502,7 @@ function feeStatusCellHtml(c) {
           : ["offer", "exchange"].includes(c.stage)
             ? `<span class="badge amber" title="No expected completion date set — chase the adviser">📅 no date</span>`
             : '<span class="cs-muted">—</span>'}</td>
-        <td>${c.broker_fee ? fmtM(c.broker_fee) : ""}</td>
+        <td class="num">${c.broker_fee ? fmtM(c.broker_fee) : ""}</td>
         <td>${feeStatusCellHtml(c)}</td>
         <td>${esc((c.protection_status || "").replace(/_/g, " "))}</td>
         <td>${c.assigned_to ? esc(staffName(c.assigned_to)) : ""}</td>
@@ -14768,8 +15526,27 @@ function feeStatusCellHtml(c) {
   const currentWhy = pipelineSegment === "current"
     ? `<p class="panel-sub" id="pipe-current-why">Current opens as a <strong>table</strong>, not the board: these are the live cases between Application and Exchange, and the question here is “what do I chase today”. The table sorts on every column — <strong>In stage</strong>, <strong>Waiting on</strong> and <strong>Completing</strong> are the three that answer it — while the board has no sort at all and pushes Exchange off the right-hand edge on a laptop screen. Press <strong>⊞ Board view</strong> whenever you want it; whichever you pick is remembered from then on.</p>`
     : "";
-  $("#table-wrap").innerHTML = `
-    ${currentWhy}
+  /* ==========================================================================
+     R73 · A2 (panel #3) — THE BULK BAR STOPPED SHOVING THE TABLE.
+
+     The bar and its 60-word paragraph sat ABOVE the table, both `hidden` at
+     zero selection. Ticking one row therefore inserted ~170px between the
+     toolbar and the first table row and pushed the whole table down — while
+     the operator was looking at row 14. And the paragraph, which is the same
+     60 words every time, was re-printed on every selection.
+
+     Both are now DOCKED UNDER THE TABLE and the dock is `position: sticky;
+     bottom: 0` (the pattern already in use for .bulk-bar at ≤760px,
+     admin.css:2147). Nothing above it moves when a selection appears — the
+     bar rises over the last rows instead — and it stays on screen however far
+     down the table you scroll. The paragraph goes behind a ⓘ, closed by
+     default, so the words are one press away rather than a wall.
+
+     EVERY VERB, ID, TITLE, CONFIRM AND WRITE IS UNCHANGED. The bar still
+     carries the `hidden` attribute at zero selection (r5_batch5 §S3 and
+     r71_backfill §A10b both read it) — only where it sits changed.
+     ========================================================================== */
+  const pipeBulkDock = `<div class="pipe-bulk-dock" id="pipe-bulk-dock">
     <div class="bulk-bar" id="pipe-bulk-bar"${pipeSel.size ? "" : " hidden"}>
       <span class="bulk-bar-count"><strong id="pipe-bulk-n">${pipeSel.size}</strong> selected</span>
       <select id="pipe-bulk-stage" class="bulk-bar-select" aria-label="Move selected cases to stage">
@@ -14797,13 +15574,20 @@ function feeStatusCellHtml(c) {
       ${/* R72 · B4 — Decision in Principle joined the eligible stages (owner decision, 28 Aug). */ ""}
       <button type="button" class="btn btn-sm" id="pipe-bulk-checklists" title="Create a document checklist on every selected case at Decision in Principle, Fact Find, Application, Offer or Exchange that has none — your firm's list from Settings, narrowed to the case type, added as outstanding. A case that already has a checklist, or is still at Enquiry, is named in the confirmation and skipped. This only builds the list; nothing is emailed.">🗂 Build checklists</button>
       <button type="button" class="btn btn-sm" id="pipe-bulk-task">＋ Add task…</button>
+      <button type="button" class="btn btn-sm" id="pipe-bulk-info" aria-expanded="false" aria-controls="pipe-bulk-sub" title="What every button on this bar does, and which of them send anything">ⓘ What these do</button>
       <button type="button" class="btn btn-sm" id="pipe-bulk-clear">Clear</button>
     </div>
     ${/* R71 · A1 — the bar's own sentence. This firm reads the copy, and two of these buttons now
          WRITE onto cases rather than emailing about them; the difference between "puts work on the
          case" and "writes to the client" is the one thing somebody pressing a bulk verb for the
-         first time needs to be sure of before they press it. */ ""}
-    <p class="panel-sub" id="pipe-bulk-sub"${pipeSel.size ? "" : " hidden"}>Everything on this bar acts on the ticked rows only, and every verb shows you one confirmation naming exactly what it will do and what it is skipping, with the reason. <strong>＋ Apply stage playbooks</strong> and <strong>🗂 Build checklists</strong> put work on the cases themselves and send nothing — they are what an imported case never got. <strong>⏰</strong>, <strong>🔁</strong> and <strong>📄</strong> queue emails. Your selection survives, so you can run the two back-fill verbs one after the other over the same batch.</p>
+         first time needs to be sure of before they press it.
+         R73 · A2 — it is still here, word for word, behind the ⓘ. The reason it is closed by
+         default is that it is the SAME sixty words every time and it was re-printed on every
+         selection; it is worth reading once, not on every tick. */ ""}
+    <p class="panel-sub" id="pipe-bulk-sub" hidden>Everything on this bar acts on the ticked rows only, and every verb shows you one confirmation naming exactly what it will do and what it is skipping, with the reason. <strong>＋ Apply stage playbooks</strong> and <strong>🗂 Build checklists</strong> put work on the cases themselves and send nothing — they are what an imported case never got. <strong>⏰</strong>, <strong>🔁</strong> and <strong>📄</strong> queue emails. Your selection survives, so you can run the two back-fill verbs one after the other over the same batch.</p>
+  </div>`;
+  $("#table-wrap").innerHTML = `
+    ${currentWhy}
     <div class="board-scroll-wrap board-scroll-wrap--table">
     ${/* R65 · L9 — the horizontal scroller is the TABLE's affordance. A card list has nothing to
          scroll sideways, and an overflow-x:auto box also promotes overflow-y to auto, which is how
@@ -14832,8 +15616,18 @@ function feeStatusCellHtml(c) {
       ${bodyRows}
     </table>`}</div>
     <button type="button" class="board-scroll-arrow" aria-label="Scroll right" title="Scroll right">›</button>
-    </div>`;
+    </div>
+    ${pipeBulkDock}`;
   wireTableHScroll("pipe-scroll");
+  /* R73 · A2 — the ⓘ. A plain disclosure: it shows and hides the paragraph that was always
+     there, and says which state it is in for anybody not looking at the screen. */
+  const bulkInfo = $("#pipe-bulk-info");
+  if (bulkInfo) bulkInfo.onclick = () => {
+    const sub = $("#pipe-bulk-sub");
+    if (!sub) return;
+    sub.hidden = !sub.hidden;
+    bulkInfo.setAttribute("aria-expanded", String(!sub.hidden));
+  };
   document.querySelectorAll("#pipe-table th[data-k]").forEach((th) => (th.onclick = () => {
     const k = th.dataset.k;
     if (sortKey === k) sortDir *= -1; else { sortKey = k; sortDir = 1; }
@@ -14912,8 +15706,14 @@ function updatePipeBulkBar() {
   if (!bar) return;
   const n = pipeSel.size;
   bar.hidden = n === 0;
-  // R71 · A1 — the bar's explaining sentence appears and disappears WITH the bar, never on its own.
-  const sub = $("#pipe-bulk-sub"); if (sub) sub.hidden = n === 0;
+  /* R71 · A1 — the bar's explaining sentence appears and disappears WITH the bar, never on its own.
+     R73 · A2 — and it is now behind the bar's ⓘ, so the rule is one-directional: an empty
+     selection always closes it, a selection never re-opens it by itself. */
+  const sub = $("#pipe-bulk-sub");
+  if (sub && n === 0) {
+    sub.hidden = true;
+    const info = $("#pipe-bulk-info"); if (info) info.setAttribute("aria-expanded", "false");
+  }
   const nEl = $("#pipe-bulk-n"); if (nEl) nEl.textContent = n;
   const all = $("#pipe-bulk-all");
   if (all) {
@@ -14974,6 +15774,15 @@ $("#view-toggle").addEventListener("click", () => {
   syncViewToggle();
   loadPipeline();
 });
+/* R73 · B5 — the pipeline's empty state names the adviser filter and the search;
+   this is the button that takes both off. The segment is left alone on purpose: it
+   is a VIEW ("Current", "Completed & closed"), not a filter hiding rows from the
+   view you chose, and the empty state never blames it. */
+window.clearBoardFilters = function () {
+  const a = $("#board-adviser"); if (a) { a.value = "all"; persistStaffFilter("#board-adviser", BOARD_ADVISER_KEY); }
+  const q = $("#board-search"); if (q) q.value = "";
+  loadPipeline();
+};
 $("#board-search").addEventListener("input", debounce(() => loadPipeline(), 250));
 $("#board-adviser").addEventListener("change", debounce(() => loadPipeline(), 250));
 // R34 · W2 — remembering the choice is not the same job as re-running the query, so it is not
@@ -15017,6 +15826,9 @@ $("#new-case-btn").addEventListener("click", () => openCase(null));
   if (board) board.addEventListener("scroll", updateBoardScrollHint, { passive: true });
   const arrow = document.querySelector(".board-scroll-arrow");
   if (arrow) arrow.addEventListener("click", () => $("#board").scrollBy({ left: 320, behavior: "smooth" }));
+  // R73 · A5 — its pair. Same step, the other way; the class that shows it has existed since QW16.
+  const arrowL = $("#board-scroll-left");
+  if (arrowL) arrowL.addEventListener("click", () => $("#board").scrollBy({ left: -320, behavior: "smooth" }));
   window.addEventListener("resize", updateBoardScrollHint);
 })();
 
@@ -15185,7 +15997,7 @@ async function loadProtectionPage() {
     </div>
     <div class="board-scroll-wrap board-scroll-wrap--table">
     <div class="panel prot-table-wrap" id="prot-scroll">
-    <table class="imp-table has-bulk" id="prot-list-table">
+    <table class="imp-table has-bulk mob-cards" id="prot-list-table">
       <tr><th class="bulk-col"><input type="checkbox" id="prot-bulk-all" aria-label="Select all cases in this view"></th><th class="prot-col-n">#</th><th class="stick-col">Client</th><th class="prot-col-case">Case</th><th class="prot-col-loan">Loan</th><th class="prot-col-status">Status</th>${money ? '<th class="prot-col-est">Est. £</th>' : ""}<th>Adviser</th><th class="stick-col-right">Actions</th></tr>
       ${rows.map((r, i) => {
         const kind = (KINDS.find((x) => x[0] === r.case_kind) || [])[1] || "";
@@ -15239,10 +16051,19 @@ async function loadProtectionPage() {
     <button type="button" class="board-scroll-arrow" aria-label="Scroll right" title="Scroll right">›</button>
   </div>` : (protQ
     /* R36-A · L6 — "nice clean book" is a compliment, and it must never be paid to a search that
-       simply found nobody. Name the term, and name the scope it was searched inside. */
-    ? `<div class="empty">No protection rows for “${esc(protSearch.trim())}” in this view — the search looks at client names inside the current scope and filter.</div>`
-    : '<div class="empty">No protection or GI opportunities in this view — nice clean book. 🛡️</div>');
+       simply found nobody. Name the term, and name the scope it was searched inside.
+       R73 · B5 — same two sentences, house empty state, way out attached. */
+    ? emptyState({
+        headline: `No protection rows for “${protSearch.trim()}”`,
+        sub: "The search looks at client names inside the current scope and status filter, so one of those three is hiding the row you want.",
+        action: { label: "Clear the search", id: "prot-empty-clear", onclick: "clearProtSearch()" },
+      })
+    : emptyState({
+        headline: "No protection or GI opportunities in this view",
+        sub: "Nice clean book. 🛡️ Every case in this scope has its protection conversation recorded one way or the other.",
+      }));
   wireTableHScroll("prot-scroll");
+  cardifyTables("prot-table");   // R73 · A4 — the 877px table becomes a card list at ≤767px
   // S3c — bulk wiring. The bar updates imperatively (no re-render) so a long selection survives.
   document.querySelectorAll("#prot-list-table .prot-cb").forEach((cb) => (cb.onchange = () => {
     if (cb.checked) protBulkSel.add(cb.dataset.id); else protBulkSel.delete(cb.dataset.id);
@@ -15267,6 +16088,7 @@ async function loadProtectionPage() {
   updateProtBulkBar();
   renderProtCallList(scoped, protQuoteCtx);
   renderClawbackWindow();
+  syncNumHeaders("#page-protection");   // R73 · B4
 }
 /* ---------- R13 · M-23/M-25 — THE CLAWBACK WINDOW ----------
    get_protection_pipeline deliberately returns only the OPEN protection statuses, so this panel
@@ -15318,7 +16140,7 @@ async function renderClawbackWindow() {
       <td>${fmtD(r.policy_start_date)}</td>
       <td class="clawback-months">${r.months} of ${CLAWBACK_MONTHS}</td>
       <td class="clawback-months${CLAWBACK_MONTHS - r.months <= 3 ? " clawback-left-hot" : ""}">${CLAWBACK_MONTHS - r.months}</td>
-      ${money ? `<td>${r.protection_commission > 0 ? fmtM(r.protection_commission) : '<span class="cs-muted">none recorded</span>'}</td>` : ""}
+      ${money ? `<td class="num">${r.protection_commission > 0 ? fmtM(r.protection_commission) : '<span class="cs-muted">none recorded</span>'}</td>` : ""}
       <td>${r.assigned_to ? esc(staffName(r.assigned_to)) : '<span class="cs-muted">— unassigned —</span>'}</td>
       <td style="text-align:right;"><button class="btn btn-sm" onclick="openCase('${jsArg(r.id)}')">Open</button></td>
     </tr>`;
@@ -15994,6 +16816,12 @@ $("#prot-scope-unassigned").addEventListener("click", () => setProtScope("unassi
 $("#prot-scope-all").addEventListener("click", () => setProtScope("all"));
 $("#prot-filter").addEventListener("change", () => { protFilter = $("#prot-filter").value; loadProtectionPage(); });
 // R36-A · L6 — same 250ms debounce as #board-search, so a fast typist gets one render, not eight.
+// R73 · B5 — the way out of the protection page's empty state.
+window.clearProtSearch = function () {
+  protSearch = "";
+  const box = $("#prot-search"); if (box) box.value = "";
+  loadProtectionPage();
+};
 $("#prot-search").addEventListener("input", debounce(() => { protSearch = $("#prot-search").value || ""; loadProtectionPage(); }, 250));
 // Clicking the "Quoted, awaiting decision" tile filters the table to those rows (QW15).
 $("#prot-tile-quoted").addEventListener("click", () => {
@@ -16494,11 +17322,18 @@ function logCallPanelHtml(c) {
           <input type="checkbox" id="cs-call-prot" style="width:auto;margin:0;" ${prot === "not_discussed" ? "" : "checked disabled"}>
           Protection discussed${prot === "not_discussed" ? "" : ` <span class="cs-muted" style="font-weight:400;">(already ${esc(String(prot).replace(/_/g, " "))})</span>`}
         </label>
-        <label style="margin-top:8px;">Next follow-up (optional)</label>
-        <div style="display:flex;gap:8px;margin-top:4px;">
-          <input id="cs-call-fu-title" placeholder="Follow-up task…" style="flex:1;">
-          <select id="cs-call-fu-assignee" aria-label="Assign follow-up to" title="Assign follow-up to" style="width:auto;">${TEAM.map((p) => `<option value="${p.id}" ${p.id === defaultAssignee(c && c.assigned_to) ? "selected" : ""}>${esc(staffName(p.id))}</option>`).join("")}</select>
-          <input id="cs-call-fu-due" type="date" style="width:auto;">
+        ${/* R73 · A4 (panel C-2) — THE FOLLOW-UP ROW, WHICH DID NOT SURVIVE A PHONE.
+             Three controls on one inline-styled flex line: a date input and an adviser select,
+             both sized to their content, and a text box on `flex:1` taking whatever was left. At
+             390px what was left was 26px — a text input the width of a checkbox, with no label
+             on it, in the middle of a form full of checkboxes. Luke read it as one (C-2).
+             Now a named row with a named field each, so a media rule can stack it on a phone and
+             every box says what it is. Same three ids, same three handlers, same order. */ ""}
+        <label style="margin-top:8px;" for="cs-call-fu-title">Next follow-up (optional)</label>
+        <div class="cs-call-fu-row">
+          <span class="cs-call-fu-f cs-call-fu-f-title"><span class="cs-call-fu-lbl">Task</span><input id="cs-call-fu-title" placeholder="Follow-up task…"></span>
+          <span class="cs-call-fu-f"><span class="cs-call-fu-lbl">Assign to</span><select id="cs-call-fu-assignee" aria-label="Assign follow-up to" title="Assign follow-up to">${TEAM.map((p) => `<option value="${p.id}" ${p.id === defaultAssignee(c && c.assigned_to) ? "selected" : ""}>${esc(staffName(p.id))}</option>`).join("")}</select></span>
+          <span class="cs-call-fu-f"><span class="cs-call-fu-lbl">Due</span><input id="cs-call-fu-due" type="date"></span>
         </div>
         <div class="due-chips" style="margin-top:8px;">
           <span class="due-chips-lbl">Follow-up:</span>
@@ -17256,7 +18091,7 @@ window.openCase = async function (id, opts = {}) {
            primary row, the Advance button is the hero when not terminal, and EVERYTHING else
            collapses into #case-more-actions. Every id + handler is preserved (see caseActionBarHtml
            and CASE_ACTION_RULES); a non-primary action is reachable in the overflow, never removed. */ ""}
-      ${caseActionBarHtml(c, c.stage, c.case_kind, { heroesActive: !nextStage })}
+      ${caseActionBarHtml(c, c.stage, c.case_kind, { heroesActive: !nextStage, retentionOnBar: c.stage === "completed" && !!c.rate_end_date && !hasRetentionSuccessor })}
     </div>` : ""}
     ${/* R15 · §3 — the security card is a lender-call tool; it has nothing to hold before a lender
          is involved, so it is HIDDEN at enquiry+fact_find and shown DIP→terminal. Wrapped, never
@@ -19409,6 +20244,19 @@ function sortClientList(list, sort, todayStr, rateYear) {
 /* R38 — `adviser` is optional and defaults to the round-12b behaviour (the whole firm's). The
    Retention page passes an id when its scope is Mine, because "work this list on Clients" from a
    panel showing YOUR cold clients must not land on everybody's. */
+/* R73 · B5 — the way out, as a real control. Takes off all three narrowing
+   filters at once (search, segment, adviser) because the empty state only offers
+   it when at least one of them is on, and a reader who has just been told "the
+   whole book is still there" wants the whole book, not one filter fewer. */
+window.clearClientFilters = function () {
+  clientSegment = "all";
+  clientAdviser = "all";
+  lsSet(CLIENT_ADVISER_KEY, "all");
+  const box = $("#client-search");
+  if (box) box.value = "";
+  clientSel.clear();
+  loadClients("", { force: true });
+};
 window.gotoClientSegment = function (seg, adviser) {
   clientSegment = seg;
   const box = $("#client-search");
@@ -19463,12 +20311,21 @@ async function loadClients(filter = "", opts = {}) {
   /* R12b · W-29 — the empty state names EVERY filter in force, so "no clients" can never be read
      as "no clients exist" when it means "none of this adviser's". */
   const advWord = clientAdviser === "all" ? "" : clientAdviser === "none" ? " with no adviser on any case" : ` assigned to ${staffName(clientAdviser)}`;
-  const emptyMsg = f && clientSegment !== "all"
-    ? `No clients${advWord} match “${esc(filter.trim())}” in this segment.`
-    : f ? `No matches for “${esc(filter.trim())}”${advWord}.`
-    : clientSegment !== "all" ? `No clients${advWord} in this segment — nothing to do here.`
-    : advWord ? `No clients${advWord}.`
-    : "No clients yet — add your first one.";
+  /* R73 · B5 — the same four sentences, in the house empty state, with the way out
+     attached. `filtered` is true whenever ANY of the three filters (search, segment,
+     adviser) is narrowing the book — which is exactly when "Clear filters" is a real
+     offer and not a decoration. */
+  const clientFiltered = !!(f || clientSegment !== "all" || advWord);
+  const emptyMsg = emptyState({
+    headline: f ? `No matches for “${filter.trim()}”` : clientFiltered ? "No clients in this view" : "No clients yet",
+    subHtml: f && clientSegment !== "all"
+      ? `Nothing${esc(advWord)} matches that in this segment. The whole book is still there — the search and the segment are both narrowing it.`
+      : f ? `Nothing${esc(advWord)} on the book matches that name, email or phone.`
+      : clientSegment !== "all" ? `No clients${esc(advWord)} fall in this segment — nothing to do here.`
+      : advWord ? `Nobody on the book is${esc(advWord)}.`
+      : "Add your first client with the button above, or bring a spreadsheet in through Import.",
+    action: clientFiltered ? { label: "Clear filters", id: "client-empty-clear", onclick: "clearClientFilters()" } : null,
+  });
   const showDob = clientSegment === "no_dob";
   /* R11-6 — which extra fact the row carries. A rate-end segment names the rate it selected the
      client for; sorting by rate end names the key it sorted on. The other segments add nothing —
@@ -19565,6 +20422,8 @@ async function loadClients(filter = "", opts = {}) {
     ? `<div class="client-list-cap-note">${clientSkipped} record(s) couldn't be displayed — logged</div>`
     : "";
   $("#client-list").innerHTML = `<div class="panel">` + (list.length ? clientRowsHtml + clientSkipNote + capNote : `<div class="empty">${emptyMsg}</div>`) + `</div>`;
+  // R73 · B1 — call site 2 of 4: the client name is an onclick div inside the row.
+  activateAll("#client-list .client-row .t");
   renderOwnerCapNotice("#clients-cap-notice", ownerCapHit(clients)); // R23 — the full clients read is the one most certain to exceed 1,000
 }
 /* R18-P2 — ONE delegated change handler for the client-row checkboxes, wired once, instead of a
@@ -19597,8 +20456,14 @@ function renderClientSegments(searched, ctx, segs, cutoff) {
   if (def) {
     const row = segs.find(([k]) => k === clientSegment);
     const text = clientSegment === "cold" ? clientColdDefinition(cutoff) : (row ? row[2] : "");
-    def.innerHTML = text ? esc(text) : "";
-    def.classList.toggle("hidden", !text);
+    /* R73 · B5 — "Every client on the book." over a list showing NO clients is the
+       segment's definition read as a statement about what is on screen, and it
+       contradicts the empty state two lines below it. The definition explains a
+       list; with no list it explains nothing, so it goes. */
+    const shownN = searched.filter((c) => clientInSegment(c, clientSegment, ctx)).length;
+    const showDef = !!text && shownN > 0;
+    def.innerHTML = showDef ? esc(text) : "";
+    def.classList.toggle("hidden", !showDef);
   }
 }
 /* R11-6 — the sort control, plus the one line that says what the chosen order is measuring.
@@ -19631,9 +20496,11 @@ function renderClientBulkBar(list) {
   if (!wrap) return;
   const n = clientSel.size;
   wrap.innerHTML = `
-    <div class="client-selall">
+    ${/* R73 · B5 — the retention page settled this in R64: "a 'Select all 0 shown' line
+         is furniture, not a control". The clients page kept printing it. Same rule here. */ ""}
+    ${list.length ? `<div class="client-selall">
       <label><input type="checkbox" id="client-bulk-all" aria-label="Select every client in this view"${n && n === list.length ? " checked" : ""}> Select all ${list.length} shown</label>
-    </div>
+    </div>` : ""}
     <div class="bulk-bar" id="client-bulk-bar"${n ? "" : " hidden"}>
       <span class="bulk-bar-count"><strong id="client-bulk-n">${n}</strong> selected</span>
       <button type="button" class="btn btn-sm" id="client-bulk-task" title="One task per selected client, on that client's case. Says which clients it can and cannot place a task for before it writes anything.">＋ Add task…</button>
@@ -20156,7 +21023,10 @@ async function buildClientTimeline(clientId, cases) {
   doneTasks.filter((t) => !!t.done_at).forEach((t) => { push(t.done_at, "task", "✅", "Task done: " + esc(t.title || "(untitled task)"), t.case_id); });
   ffs.filter((f) => f.status === "sent" || f.status === "submitted").forEach((f) => { push(f.submitted_at || f.created_at, "system", "📋", "Fact-find " + esc(f.status), f.case_id); });
   // BACKEND-R4 §2 — the trigger has always stamped who acted; the timeline just never selected it.
-  events.forEach((ev) => { push(ev.created_at, "system", "⚙️", esc(ev.detail || ev.event || "Event") + eventActorHtml(ev.actor), ev.case_id); });
+  /* R73 · B5 — was `esc(ev.detail)`: the trigger writes raw enums, so a stage move
+     read "fact_find → decision_in_principle" on the one screen a compliance
+     reviewer reads a case's story from. */
+  events.forEach((ev) => { push(ev.created_at, "system", "⚙️", esc(eventDetailText(ev)) + eventActorHtml(ev.actor), ev.case_id); });
   items.sort((a, b) => new Date(b.ts) - new Date(a.ts)); // newest first, robust across date-only + full ISO
   return items;
 }
@@ -20311,6 +21181,14 @@ function auditIdText(kind, id, ctx) {
   if (kind === "secret") return AUDIT_SECRET_HIDDEN;
   return AUDIT_REF_HIDDEN;
 }
+/* R73 · B4 — the columns whose values are POUNDS. Listed rather than sniffed: a
+   number is not money because it is large, and `rate_percent` and `id` must never
+   be rendered with a £ in front of them. */
+const AUDIT_MONEY_FIELDS = new Set([
+  "loan_amount", "property_value", "broker_fee", "proc_fee", "sols_fee",
+  "protection_commission", "gi_commission", "fee_amount", "amount",
+  "monthly_payment", "new_monthly_payment", "target", "balance",
+]);
 // One value, as a person would read it: names for ids, words for enums, dates the way the rest of
 // the app writes them, and nothing raw left over.
 function auditValueText(field, v, ctx) {
@@ -20321,6 +21199,11 @@ function auditValueText(field, v, ctx) {
   if (kind) return auditIdText(kind, v, ctx);
   const map = PACK_ENUM[field];
   if (map && map[v]) return map[v];
+  /* R73 · B4 — a money column printed its raw stored number: "loan amount: 265000",
+     in a change history that sits beside "£265,000" everywhere else in the app and
+     is the record a compliance reviewer reads. The app has one currency formatter;
+     these fields go through it, same as every other surface. */
+  if (AUDIT_MONEY_FIELDS.has(field) && v !== "" && v != null && !isNaN(Number(v))) return fmtM(Number(v));
   const s = String(v);
   if (/^\d{4}-\d{2}-\d{2}T/.test(s)) return new Date(s).toLocaleString("en-GB");
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return fmtD(s);
@@ -21766,7 +22649,12 @@ async function loadEmails() {
     const whoTxt = e.clients ? e.clients.first_name + " " + e.clients.last_name : (leadRow && leadRow.name) || e.to_email || "";
     return `
     <div class="row-item qrow-${e.status}"${e.lead_id ? ` data-lead-email="${esc(e.lead_id)}"` : ""}>
-      ${EMAIL_SELECTABLE.includes(e.status) ? `<input type="checkbox" class="email-cb" data-id="${e.id}" data-status="${esc(e.status)}" aria-label="Select this ${esc(e.status)} email"${emailSel.has(e.id) ? " checked" : ""} onclick="event.stopPropagation()">` : ""}
+      ${/* R73 · B3 (E-22) — a sent or cancelled row keeps the checkbox's GUTTER even
+           though it has no checkbox, so every subject in the queue starts on the same
+           left edge instead of jumping 26px per row. */ ""}
+      ${EMAIL_SELECTABLE.includes(e.status)
+        ? `<input type="checkbox" class="email-cb" data-id="${e.id}" data-status="${esc(e.status)}" aria-label="Select this ${esc(e.status)} email"${emailSel.has(e.id) ? " checked" : ""} onclick="event.stopPropagation()">`
+        : `<span class="email-cb-gap" aria-hidden="true"></span>`}
       <div class="row-main">
         <div class="t"${titleClick}>${esc(emailTypeLabel(e.email_type))} — ${esc(whoTxt)}${leadRow ? ` <span class="badge grey lead-email-chip" title="This is a website enquiry, not a client — there is no case behind it yet.">enquiry</span>` : ""} ${propCtxChip(emailCtx, e.case_id, "row-prop")}</div>
         <div class="s">${esc(e.to_email || (noContact ? "no address on file" : ""))} · ${e.sent_at ? "sent " + new Date(e.sent_at).toLocaleString("en-GB") : "created " + new Date(e.created_at).toLocaleString("en-GB")}${errLine}${staleAddr ? ` · now <strong>${esc(curEmail)}</strong>` : ""}${emDeferred ? ` · <strong>deferred to ${fmtD(e.scheduled_for)}</strong> — the 8am run leaves it until then` : ""}</div>
@@ -21780,7 +22668,10 @@ async function loadEmails() {
       ${staleAddr ? `<button class="btn btn-sm btn-primary" onclick="useCurrentEmailAddress('${e.id}','${e.client_id}')" title="Re-address this queued email to ${esc(curEmail)}">Use current address</button>` : ""}
       ${fixContact ? `<button class="btn btn-sm btn-ghost" onclick="openClient('${e.client_id}','email','${jsArg(e.to_email)}')" title="${noContact ? "This client has no email address on file — add one, then retry" : "This looks like a bad contact detail, not a one-off send failure"}">Fix contact</button>` : ""}
       ${failed ? `<button class="btn btn-sm" onclick="retryEmail('${e.id}')">Retry</button>` : ""}
-      ${e.status === "queued" || failed ? `<button class="btn btn-sm btn-ghost em-cancel" data-id="${esc(e.id)}" onclick="cancelQueuedEmail('${e.id}')" title="${failed ? "Stop retrying this one — it is marked cancelled and never sends" : "Stop this email before the 8am run picks it up — it never sends"}">Cancel</button>` : ""}
+      ${/* R73 · B3 — Cancel was the only ghost DESTRUCTIVE verb in the app, sitting
+           beside a bordered Retry that does the opposite. Same weight as Retry now:
+           two choices about the same email should look like two choices. */ ""}
+      ${e.status === "queued" || failed ? `<button class="btn btn-sm em-cancel" data-id="${esc(e.id)}" onclick="cancelQueuedEmail('${e.id}')" title="${failed ? "Stop retrying this one — it is marked cancelled and never sends" : "Stop this email before the 8am run picks it up — it never sends"}">Cancel</button>` : ""}
     </div>`;
   }).join("") : `<div class="empty">${emailStatusFilter !== "all" ? `No ${esc(emailStatusFilter)} emails in the newest ${EMAIL_ROW_LIMIT} rows.` : "No emails yet. They'll appear here once automation runs or you trigger one from a case."}</div>`) + `</div>`;
   // Wire the failed-email bulk-select controls (imperative, no reload on toggle).
@@ -22964,7 +23855,7 @@ function renderImportPreview() {
           ${impDateCell(r, i, "rate_end_date", r.rate_end_estimated ? ` <span class="badge ${EST_BADGE_CLS}" title="${TIP_APPROX}">≈</span>` : "")}
           ${impDateCell(r, i, "erc_end_date")}
           ${impDateCell(r, i, "completed_date")}
-          <td>${r.broker_fee ? fmtM(r.broker_fee) : ""}</td>
+          <td class="num">${r.broker_fee ? fmtM(r.broker_fee) : ""}</td>
         </tr>
         <tr class="imp-conf-tr${impConflictRowHtml(r, i) ? "" : " hidden"}"><td class="imp-conf-cell" colspan="${nCols}" data-i="${i}">${impConflictRowHtml(r, i)}</td></tr>`).join("")}
       </table>
@@ -23980,13 +24871,19 @@ function classifyLeadsForAccept(leads, matchRows) {
    reason and the bulk-task capture (openOverlay), so Escape cancels the capture and nothing else. */
 function confirmAcceptAllLeads(take, leave) {
   const nameOf = (l) => (l.name || "").trim() || l.email || l.phone || "this enquiry";
-  const pairs = take.map((t) => `${nameOf(t.lead)} → ${staffName(t.assignTo)}${t.byHand ? " (your pick)" : ""}`);
-  const summary = `Accept ${take.length} lead${take.length === 1 ? "" : "s"}: ${pairs.join(", ")}`
+  const summaryLine = `Accept ${take.length} lead${take.length === 1 ? "" : "s"}, one per line below`
     + (leave.length ? ` · ${leave.length} left for you to decide` : "");
   const html = `
     <h3>Accept ${take.length} lead${take.length === 1 ? "" : "s"}?</h3>
     <p class="panel-sub">Each one becomes a client, a case at Enquiry with its checklist on it, and a queued welcome email — exactly what the Accept button on the row does. They are shared out round-robin from the lightest desk; a row where you had already chosen an adviser keeps your choice.</p>
-    <div class="dq-notice" id="leads-accept-summary">${esc(summary)}</div>
+    ${/* R73 · A1 — the grey summary strip said, in one run-on line, exactly what the list below it
+         says one lead per line: "Accept 4 leads: A → Kim, B → Wayne … · 2 left for you to decide".
+         Two renderings of one fact, the worse one first, is how somebody stops reading either. The
+         list is the readable form and it stays; the strip keeps the SENTENCE (how many, and how
+         many are left behind) and drops the re-print of the pairs. Nothing is lost — the pairs are
+         directly underneath — and #leads-accept-summary is still the element that carries the
+         count, which is what r68_admin §A3c reads. */ ""}
+    <div class="dq-notice" id="leads-accept-summary">${esc(summaryLine)}</div>
     <ul class="leads-accept-list" id="leads-accept-list">
       ${take.map((t) => `<li data-lead="${esc(t.lead.id)}">${esc(nameOf(t.lead))} → <strong>${esc(staffName(t.assignTo))}</strong>${t.byHand ? ' <span class="cs-muted">(your pick, kept)</span>' : ""}</li>`).join("")}
     </ul>
@@ -24019,6 +24916,7 @@ window.acceptAllLeads = async function (ev) {
     const leads = ids.map((i) => byId[i]).filter(Boolean);
     if (!leads.length) return toast("These enquiries have already been accepted.");
     const matchRows = await fetchMatchClients();
+    LEAD_MATCH_ROWS = matchRows;   // R73 · A1 — the bar's label counts off the same rows this run does
     const { take, leave } = classifyLeadsForAccept(leads, matchRows);
     // Whatever happens next, the reasons are on the rows: a lead left behind must say why.
     leave.forEach((x) => { LEAD_AMBIG_REASON[x.lead.id] = x.reason; });
@@ -24551,7 +25449,7 @@ async function renderAbsencePanel() {
           <div class="t">${esc(nm)}${live ? ' <span class="badge amber" title="Away today">away now</span>' : ""}</div>
           <div class="s">${esc(spanText(a))}${a.note ? " · " + esc(a.note) : ""}</div>
         </div>
-        ${mine ? `<button type="button" class="btn btn-sm btn-ghost btn-danger abs-del" data-absence="${esc(a.id)}" title="Remove this absence">🗑</button>`
+        ${mine ? `<button type="button" class="btn btn-sm btn-ghost btn-danger abs-del" data-absence="${esc(a.id)}" aria-label="Remove this absence" title="Remove this absence">🗑</button>`
           : `<span class="cs-muted" title="Only ${esc(nm)}, an Administrator or the Owner can remove this — the database enforces it.">—</span>`}
       </div>`;
     }).join("") : '<div class="empty" id="abs-empty">Nobody is recorded as away today or in the future. That may be right, or it may mean nothing has been entered yet — this list is only as good as what people put in it.</div>'}</div>
@@ -24662,7 +25560,9 @@ async function loadDiary() {
     const shownTasks = dayTasks.slice(0, DIARY_TASK_CHIP_CAP);
     const hiddenTaskCount = dayTasks.length - shownTasks.length;
     return `<div class="diary-day ${day.toDateString() === todayStr ? "today" : ""}${dayAppts.length ? " has-appts" : ""}${dayHasClash ? " has-clash" : ""}" data-date="${dstr}" title="Add an appointment on this day" style="${dim ? "opacity:.45;" : ""}min-height:110px;">
-      <h5>${day.toLocaleDateString("en-GB", { weekday: "short", day: "numeric" })}</h5>
+      ${/* R73 · B1 — H3, not H5: the month grid's day cells sat two levels below the
+           page's H2 with nothing in between. */ ""}
+      <h3 class="diary-day-h">${day.toLocaleDateString("en-GB", { weekday: "short", day: "numeric" })}</h3>
       ${/* R13 · M-31 — the Away band, ABOVE everything else in the cell: it is a fact about the
            whole day, and reading it after three appointments is reading it too late. It respects
            the person filter for the same reason the appointments do — "Everyone" is the view where
@@ -25156,7 +26056,10 @@ window.openAppt = async function (id, presets = {}, openOpts = {}) {
     .map((cl) => [cl.first_name, cl.last_name].filter(Boolean).join(" "))[0] || "";
   $("#modal").innerHTML = `
     <h3>${id ? "Appointment" : "New appointment"}</h3>
-    <p class="panel-sub appt-case-line${apptSelCaseId ? "" : " hidden"}" id="appt-about" style="margin-top:-8px;">${apptSelCaseId ? `About: ${caseIdentityHtml(findApptCase(apptSelCaseId) || apptCase, { fallback: true, cls: "row-prop" })}` : ""}</p>
+    ${/* R73 · B5 — the stage on this line is now the app's one stage pill (stageChip),
+         so an appointment about a case at Application looks like that case does on the
+         pipeline table and in the case modal. */ ""}
+    <p class="panel-sub appt-case-line${apptSelCaseId ? "" : " hidden"}" id="appt-about" style="margin-top:-8px;">${apptSelCaseId ? `About: ${caseIdentityHtml(findApptCase(apptSelCaseId) || apptCase, { fallback: true, cls: "row-prop", stageChip: true })}` : ""}</p>
     ${apptStaleLink ? `<p class="dq-notice bad" id="appt-stale-case">The case this appointment was linked to (${esc(caseIdentityLabel(apptCase))}) belongs to a different client, so it is not offered below. Pick one of this client's cases, or leave it as none.</p>` : ""}
     ${/* R12a·D11 — the clash was only ever discovered at the moment of saving (a confirm) and then
           again, afterwards, as a ⚠ on a diary tile. This line says it while the appointment is
@@ -26280,7 +27183,7 @@ function renderMonthReport(all, mv) {
   const prevHead = `<th title="Completions recorded by this adviser in ${esc(monthLabel(prevMv))} — the month before the one selected.">Completed (${esc(prevLbl)})</th>${money ? `<th title="Fee value earned on those ${esc(monthLabel(prevMv))} completions.">Completed £ (${esc(prevLbl)})</th>` : ""}`;
   $("#month-advisers").innerHTML = rows.length ? `<div style="overflow-x:auto;"><table class="imp-table">
     <tr><th>Adviser</th><th>Submitted</th>${money ? "<th>Proc £</th><th>Broker £</th><th>Sols £</th>" : ""}<th>Completed</th>${money ? '<th title="Value of fees earned on cases completed this month — whether or not those fees have been paid yet">Completed £ (earned)</th>' : ""}${prevHead}</tr>
-    ${rows.map((r) => `<tr${r.nSub || r.nDone ? "" : ' class="stat-weak" title="No activity in this month — listed so the previous-month comparison column still totals that month\'s own report."'}><td><strong>${esc(r.name)}</strong></td><td>${r.nSub}</td>${money ? `<td>${fmtM(r.sProc)}</td><td>${fmtM(r.sBrk)}</td><td>${fmtM(r.sSol)}</td>` : ""}<td>${r.nDone}</td>${money ? `<td>${fmtM(r.dTot)}</td>` : ""}<td class="stat-weak">${r.pDone}</td>${money ? `<td class="stat-weak">${fmtM(r.pTot)}</td>` : ""}</tr>`).join("")}
+    ${rows.map((r) => `<tr${r.nSub || r.nDone ? "" : ' class="stat-weak" title="No activity in this month — listed so the previous-month comparison column still totals that month\'s own report."'}><td><strong>${esc(r.name)}</strong></td><td class="num">${r.nSub}</td>${money ? `<td class="num">${fmtM(r.sProc)}</td><td class="num">${fmtM(r.sBrk)}</td><td class="num">${fmtM(r.sSol)}</td>` : ""}<td class="num">${r.nDone}</td>${money ? `<td class="num">${fmtM(r.dTot)}</td>` : ""}<td class="stat-weak num">${r.pDone}</td>${money ? `<td class="stat-weak num">${fmtM(r.pTot)}</td>` : ""}</tr>`).join("")}
   </table></div>
   <p class="panel-sub month-attrib" id="month-advisers-attrib" style="margin:8px 0 0;">${esc(ATTRIB_NOTE)} The previous-month columns list every adviser who completed anything in ${esc(monthLabel(prevMv))}, including advisers with no activity in ${esc(monthLabel(mv))}, so they total that month's own report.</p>` : '<div class="empty">No submissions or completions recorded for this month.</div>';
 }
@@ -26407,8 +27310,15 @@ async function renderAdoptionStrip() {
         <td><strong>${esc(r.name)}</strong></td>
         <td>${esc(ROLE_LABEL[r.role] || r.role || "")}</td>
         ${cell(r)}
-        <td class="adopt-touched" data-n="${r.casesTouched}">${r.casesTouched || "—"}</td>
-        <td class="adopt-overdue" data-n="${r.overdue}">${r.overdue ? `<span class="badge red">${r.overdue}</span>` : "0"}</td>
+        <td class="num adopt-touched" data-n="${r.casesTouched}">${r.casesTouched || '<span class="cs-muted">—</span>'}</td>
+        ${/* R73 · B2 — AMBER, and an em dash. The identical metric ("open tasks whose
+             due date has passed") was RED here and on the scoreboard below, and AMBER
+             on Monday money, so the same three numbers changed severity depending on
+             which page Daniel opened. Amber wins: overdue tasks are a nudge, not a
+             breach, and red is reserved on this app for things that have failed. A
+             bare 0 in a column of counts reads as a measured zero the eye still has to
+             stop on; — says "nothing here" and gets out of the way. */ ""}
+        <td class="num adopt-overdue" data-n="${r.overdue}">${r.overdue ? `<span class="badge amber">${r.overdue}</span>` : '<span class="cs-muted">—</span>'}</td>
       </tr>`).join("")}
     </table></div>
     <p class="panel-sub" id="report-adoption-sub"><strong>“Last active” means the last change this person recorded</strong> — a case edited, a task ticked, a note or an appointment written — as logged in the <strong>change history</strong> at the bottom of Settings. <strong>It is not a sign-in.</strong> This app cannot see sign-ins: that lives in the authentication service and is not readable from here, so somebody who signs in and only reads leaves no trace on this table. Read over the last ${ADOPTION_WINDOW_DAYS} days; “never” means nothing recorded in that window. <strong>The nightly automation is excluded</strong> — its rows are logged with no person against them (they show as “System (automation)” in the change history), so they can never make a colleague look busy. Everyone with a back-office login is listed, not only advisers.${tasksErr ? " Overdue tasks could not be read just now and are shown as 0." : ""}</p>`;
@@ -26564,13 +27474,16 @@ function renderThreadedPanels(all, mv, repAdvisers) {
     <tr><th>Adviser</th><th>Open</th><th>Completions</th><th title="Broker fees actually received this month, counted on the broker fee's own paid date. Payments dated in the future are excluded.">Fees banked (paid)<span class="money-basis">${esc(BASIS_CASH_MONTH)}</span></th><th title="Fees earned (procuration + broker + solicitor) on each adviser's completions this month (paid or not) versus their monthly target set in Settings — the same earned-on-completion basis as the firm 'Fees earned vs target' bar above, NOT the cash 'Fees banked' column beside it. Blank target = no target (shows —).">Target<span class="money-basis">(fees earned ÷ target · this month)</span></th><th title="Broker fees this adviser has banked so far in ${ytdYear}, as reported by get_reports (M5) — the same coalesce(broker_fee_paid_at, fee_paid_at) basis as the column beside it, widened to the whole year.">Banked ${ytdYear}<span class="money-basis">(broker only · cash · YTD)</span></th><th title="Of the cases this adviser completed in the selected month, the share that ended with a protection policy (protection_status = policy taken). The count is in brackets — a month is a small sample and a single case can swing it.">Attach rate<span class="money-basis">(policy taken ÷ completions · this month)</span></th><th>Overdue</th><th title="Mean days from case created to completed, over completions in the selected month only. The sample size is in brackets; fewer than 3 completions is greyed and should not be read as a ranking.">Avg days</th><th title="Completions per month over the last 6 calendar months. Every row shares one vertical scale (peak ${sparkMax}); the number is this month's value.">6-mo trend</th></tr>
     ${advRows.map((a) => `<tr${a.offTeam ? ' class="row-warn"' : ""}>
       <td>${advName(a)}</td>
-      <td>${a.open}</td>
-      <td>${a.completions}</td>
-      <td>${fmtM(a.feesBanked)}</td>
+      <td class="num">${a.open}</td>
+      <td class="num">${a.completions}</td>
+      <td class="num">${fmtM(a.feesBanked)}</td>
       ${advTargetCell(a)}
       <td${a.id && ytdById[a.id] == null ? ' class="stat-weak" title="Not covered by get_reports — this row has no active login."' : ""}>${a.id && ytdById[a.id] != null ? fmtM(ytdById[a.id]) : "—"}</td>
       <td${a.attach == null ? ' class="stat-weak" title="No completions in this month, so there is nothing to attach a policy to."' : (a.completions < 3 ? ' class="stat-weak" title="Fewer than 3 completions — too small a sample to read as a ranking."' : "")}>${a.attach == null ? "—" : `${a.attach}% <span class="cs-muted">(${a.protTaken}/${a.completions})</span>`}</td>
-      <td>${a.overdue ? `<span class="badge red">${a.overdue}</span>` : (a.overdue == null ? "—" : "0")}</td>
+      ${/* R73 · B2 — amber, matching the adoption strip above and Monday money, and a
+           class on the cell so "the overdue column" is nameable rather than counted
+           in from the end of a ten-column table. */ ""}
+      <td class="num adv-overdue" data-n="${a.overdue || 0}">${a.overdue ? `<span class="badge amber">${a.overdue}</span>` : '<span class="cs-muted">—</span>'}</td>
       <td>${advAvg(a)}</td>
       <td title="${esc(a.trendTitle)}">${sparklineSvg(a.trend, sparkMax)} <span class="spark-now">${a.trend[a.trend.length - 1]}</span></td>
     </tr>`).join("")}
@@ -26628,7 +27541,7 @@ function renderThreadedPanels(all, mv, repAdvisers) {
       <td>${v.completed}</td>
       <td>${convCell(v.completed, v.lost)}</td>
       <td>${fmtD(v.last)}</td>
-      ${money ? `<td>${fmtM(v.revenue)}</td>` : ""}
+      ${money ? `<td class="num">${fmtM(v.revenue)}</td>` : ""}
     </tr>`).join("")}
   </table>` : `<div class="empty">No leads created in ${label}.</div>`;
 
@@ -26697,11 +27610,11 @@ function renderLossesPanel(all, mv) {
     ${list.map((b) => `<tr${b.key ? "" : ' class="loss-unrecorded"'}>
       <td>${esc(b.label)}</td>
       <td>${b.n}</td>
-      <td>${fmtM(b.loan)}</td>
-      <td>${fmtM(b.fees)}</td>
+      <td class="num">${fmtM(b.loan)}</td>
+      <td class="num">${fmtM(b.fees)}</td>
       <td class="loss-advisers">${advBits(b)}</td>
     </tr>`).join("")}
-    <tr class="scoreboard-foot"><td><strong>Total</strong></td><td><strong>${tot.n}</strong></td><td><strong>${fmtM(tot.loan)}</strong></td><td><strong>${fmtM(tot.fees)}</strong></td><td></td></tr>
+    <tr class="scoreboard-foot"><td><strong>Total</strong></td><td><strong>${tot.n}</strong></td><td class="num"><strong>${fmtM(tot.loan)}</strong></td><td class="num"><strong>${fmtM(tot.fees)}</strong></td><td></td></tr>
   </table>`;
 }
 window.toggleLossesScope = function () {
@@ -27006,9 +27919,9 @@ function renderPipelineMI(all, mv) {
       <tr><th>Stage</th><th>Live £</th><th title="Completion likelihood">Weight</th><th>Expected £</th></tr>
       ${MI_LIVE_STAGES.map((s) => `<tr>
         <td>${STAGE_LABEL[s]}</td>
-        <td>${fmtM(liveFeeByStage[s])}</td>
+        <td class="num">${fmtM(liveFeeByStage[s])}</td>
         <td>${Math.round(weightOf[s] * 100)}%</td>
-        <td>${fmtM(liveFeeByStage[s] * weightOf[s])}</td>
+        <td class="num">${fmtM(liveFeeByStage[s] * weightOf[s])}</td>
       </tr>`).join("")}
     </table>`;
 
@@ -27031,7 +27944,7 @@ function renderPipelineMI(all, mv) {
       <td><button type="button" class="linkish mi-drill mi-adv-link" data-mi-adv="${esc(a.key)}" title="Click to see the cases">${esc(a.name)}</button></td>
       <td>${a.live}</td>
       <td>${a.completedPeriod}</td>
-      <td>${fmtM(a.feesPeriod)}</td>
+      <td class="num">${fmtM(a.feesPeriod)}</td>
       <td>${a.winPct == null ? '<span class="cs-muted">—</span>' : (a.term < 5 ? `<span class="stat-weak" title="Fewer than 5 terminal cases — not a reliable rate">${a.winPct}% <span class="stat-n">(${a.term})</span></span>` : `${a.winPct}% <span class="cs-muted">(${a.term})</span>`)}</td>
       <td>${a.medCycle == null ? '<span class="cs-muted">—</span>' : a.medCycle + "d"}</td>
     </tr>`).join("")}
@@ -27130,7 +28043,7 @@ function miDrilldown(title, cases) {
       <td>${esc(nameOf(c))}</td>
       <td>${esc(STAGE_LABEL[c.stage] || c.stage)}</td>
       <td>${c.assigned_to ? esc(staffName(c.assigned_to)) : '<span class="cs-muted">Unassigned</span>'}</td>
-      <td>${fmtM(feeOf(c))}</td>
+      <td class="num">${fmtM(feeOf(c))}</td>
       <td><button type="button" class="btn btn-sm" onclick="closeModal(); openCase('${c.id}')">Open</button></td>
     </tr>`).join("")}
   </table>` : '<div class="empty">No cases match.</div>';
@@ -27619,15 +28532,16 @@ async function loadReports() {
      basis label and its future-dated footnote, one place further along and marked secondary. */
   const earnedYr = earnedOnCompletion(all, String(yr));
   $("#report-kpis").innerHTML = `
-    <div class="kpi kpi-click" onclick="kpiGoto('completed')" title="View completed cases in the pipeline"><div class="num">${completedYr.length}</div><div class="lbl">Completions ${yr}</div></div>
-    <div class="kpi kpi-click" onclick="kpiGoto('active')" title="View the pipeline"><div class="num">${active.length}</div><div class="lbl">Live cases</div></div>
-    ${money ? `<div class="kpi kpi-click" onclick="kpiGoto('active')" title="View the pipeline — loan value of the ${active.length} live cases"><div class="num" title="${esc(fmtM(pipelineValue))}">${fmtM(pipelineValue)}</div><div class="lbl">Pipeline loan value</div></div>` : ""}
+    <div class="kpi dq-clickable" onclick="kpiGoto('completed')" title="View completed cases in the pipeline"><div class="num">${completedYr.length}</div><div class="lbl">Completions ${yr}</div></div>
+    <div class="kpi dq-clickable" onclick="kpiGoto('active')" title="View the pipeline"><div class="num">${active.length}</div><div class="lbl">Live cases</div></div>
+    ${money ? `<div class="kpi dq-clickable" onclick="kpiGoto('active')" title="View the pipeline — loan value of the ${active.length} live cases"><div class="num" title="${esc(fmtM(pipelineValue))}">${fmtM(pipelineValue)}</div><div class="lbl">Pipeline loan value</div></div>` : ""}
     ${money ? `<div class="kpi kpi-headline"><div class="num" title="${esc(fmtM(earnedYr.total))}">${fmtM(earnedYr.total)}</div><div class="lbl">Fees earned ${yr}</div>${basisLine(BASIS_EARNED_YTD + ` — ${earnedYr.n} completion${earnedYr.n === 1 ? "" : "s"}, paid or not`)}</div>
     <div class="kpi kpi-secondary"><div class="num" title="${esc(fmtM(feesPaidYr))}">${fmtM(feesPaidYr)}</div><div class="lbl">Fees banked ${yr}</div>${basisLine(BASIS_CASH_YTD + (feesPaidYrFutureN ? ` — includes ${fmtM(feesPaidYrFuture)} dated after today (${feesPaidYrFutureN}); ${fmtM(feesPaidYr - feesPaidYrFuture)} actually received` : ""))}</div>
-    <div class="kpi kpi-click ${feesOutstanding ? "warn" : ""}" onclick="kpiGoto('fees')" title="View the Protection &amp; Fees drawer — Fees due tab"><div class="num" title="${esc(fmtM(feesOutstanding))}">${fmtM(feesOutstanding)}</div><div class="lbl">Fees outstanding</div>${basisLine(`(broker only · not yet received · ${fmtM(feesInvoiced)} invoiced + ${fmtM(feesNotInvoiced)} not yet invoiced)`)}</div>` : ""}
+    <div class="kpi dq-clickable ${feesOutstanding ? "warn" : ""}" onclick="kpiGoto('fees')" title="View the Protection &amp; Fees drawer — Fees due tab"><div class="num" title="${esc(fmtM(feesOutstanding))}">${fmtM(feesOutstanding)}</div><div class="lbl">Fees outstanding</div>${basisLine(`(broker only · not yet received · ${fmtM(feesInvoiced)} invoiced + ${fmtM(feesNotInvoiced)} not yet invoiced)`)}</div>` : ""}
     <div class="kpi"><div class="num">${rWon + rLost ? Math.round((rWon / (rWon + rLost)) * 100) + "%" : "—"}</div><div class="lbl">Retention conversion</div></div>
     <div class="kpi"><div class="num">${completedYr.length ? Math.round((protDone / completedYr.length) * 100) + "%" : "—"}</div><div class="lbl">Protection uptake ${yr}</div></div>
-    <div class="kpi ${scored.length ? "kpi-click" : ""}" ${scored.length ? `id="report-nps-tile" onclick="toggleNpsList()" title="List every case that returned a review score"` : ""}><div class="num">${scored.length ? avgNps.toFixed(1) : "—"}</div><div class="lbl">Avg review score (${scored.length})${promoterPct != null ? ` · ${promoterPct}% promoters` : ""}${scored.length ? " ▾" : ""}</div></div>`;
+    <div class="kpi ${scored.length ? "dq-clickable" : ""}" ${scored.length ? `id="report-nps-tile" onclick="toggleNpsList()" title="List every case that returned a review score"` : ""}><div class="num">${scored.length ? avgNps.toFixed(1) : "—"}</div><div class="lbl">Avg review score (${scored.length})${promoterPct != null ? ` · ${promoterPct}% promoters` : ""}${scored.length ? " ▾" : ""}</div></div>`;
+  activateAll("#report-kpis .kpi.dq-clickable");   // R73 · B1 — same gesture as the other three
   renderNpsList(scored);
 
   // S8 / R5-19 — the completions chart carries the previous calendar year as a second, muted bar
@@ -27683,7 +28597,7 @@ async function loadReports() {
   $("#report-introducers").innerHTML = Object.keys(iMap).length
     ? `<table class="imp-table"><tr><th>Introducer</th><th>Cases</th><th title="Still in the live pipeline — neither won nor lost, and excluded from Conversion">Live</th><th>Completed</th><th title="${esc(CONV_TH_TITLE)}">Conversion</th><th>Last referral</th>${money ? `<th title="Fee value earned on this introducer's completed cases, all time. Not scoped to the month picker, and not cash — some of it may still be unpaid.">Revenue</th>` : ""}</tr>` +
       Object.entries(iMap).sort((a, b) => b[1].total - a[1].total)
-        .map(([k, v]) => `<tr><td><button type="button" class="linkish" onclick="reportGotoSearch('${jsArg(k)}')" title="Open the pipeline filtered to ${esc(k)}">${esc(k)}</button></td><td>${v.total}</td><td>${v.live}</td><td>${v.done}</td><td>${convCell(v.done, v.lost)}</td><td>${fmtD(v.last)}</td>${money ? `<td>${fmtM(v.revenue)}</td>` : ""}</tr>`).join("") + `</table>`
+        .map(([k, v]) => `<tr><td><button type="button" class="linkish" onclick="reportGotoSearch('${jsArg(k)}')" title="Open the pipeline filtered to ${esc(k)}">${esc(k)}</button></td><td>${v.total}</td><td>${v.live}</td><td>${v.done}</td><td>${convCell(v.done, v.lost)}</td><td>${fmtD(v.last)}</td>${money ? `<td class="num">${fmtM(v.revenue)}</td>` : ""}</tr>`).join("") + `</table>`
       // R5-17 — the Revenue basis sits UNDER the table rather than in the column head: this panel
       // shares a two-column grid with the completions chart, and a long unwrapping heading sets
       // the table's min-content width, which squeezes the chart beside it to a sliver.
@@ -27725,6 +28639,7 @@ async function loadReports() {
   buildReportLedgerCounts();
   /* R69 · B3/L8 — and LAST of all, once every panel above has put its table on the page. */
   watchReportTables();
+  syncNumHeaders("#page-reports");      // R73 · B4 — after every panel has rendered
 }
 
 /* ==========================================================================
@@ -27904,8 +28819,9 @@ function measureRepJumpOffsets() {
   const h = Math.round(bar.getBoundingClientRect().height);
   document.documentElement.style.setProperty("--rep-jump-scroll", (off + h + REP_JUMP_GAP) + "px");
   // Only fade the right edge when there is genuinely more strip out there to scroll to.
-  const wrap = $("#rep-nav-chips");
-  bar.classList.toggle("is-scrollable", !!wrap && wrap.scrollWidth > wrap.clientWidth + 1);
+  // R73 · A5 — the fade AND the chevron, both decided by the same measurement, and both switched
+  // off once the strip is at its right-hand end.
+  wireChipStripOverflow("rep-nav", "rep-nav-chips");
 }
 function setRepJumpActive(key) {
   if (key === repJumpActive) return;
@@ -28003,6 +28919,10 @@ function buildReportSectionNav() {
     if (it && it.head) it.head.scrollIntoView({ behavior: "smooth", block: "start" });
   }));
   bar.hidden = false;
+  /* R73 · A5 — this strip had NO overflow affordance at all, not even the fade #rep-nav has:
+     five section buttons fit a laptop and do not fit a phone, and the ones off the edge were
+     invisible and un-guessable. Same control as the other two strips. */
+  wireChipStripOverflow("reports-jump", "reports-jump-chips");
 }
 
 /* R42 · F3 — LEDGER DRAWERS. Six Reports panels lead with a figure and then print a table of
@@ -28591,7 +29511,7 @@ function renderReportExtras(rep) {
     ${ltv.map((c) => `<tr>
       <td><button class="btn btn-sm" onclick="openClient('${c.client_id}')">${esc(c.name)}</button></td>
       <td>${c.cases ?? 0}</td>
-      <td>${fmtM(c.ltv)}</td>
+      <td class="num">${fmtM(c.ltv)}</td>
     </tr>`).join("")}
   </table>` : '<div class="empty">No completed revenue yet.</div>';
 }
@@ -28986,9 +29906,9 @@ function renderRateEndBook(all) {
     const head = `<tr class="rb-bucket-row${open ? " is-open" : ""}" onclick="toggleRateBucket('${b.key}')" title="${b.n ? "Show the cases behind this bucket" : "No maturities in this bucket"}">
       <td><span class="rb-caret">${b.n ? (open ? "▾" : "▸") : "·"}</span> <strong>${esc(b.label)}</strong> <span class="cs-muted">${esc(fmtD(b.from))} – ${esc(fmtD(b.to))}</span></td>
       <td>${b.n}</td>
-      <td>${fmtM(b.loan)}</td>
-      <td>${fmtM(b.fee)}</td>
-      <td>${fmtM(b.fee)} <span class="cs-muted rb-proxy" title="Last fee earned on the same mortgage, used as a proxy — not a forecast.">proxy</span>${b.noFee ? `<div class="s">${b.noFee} with no fee recorded</div>` : ""}</td>
+      <td class="num">${fmtM(b.loan)}</td>
+      <td class="num">${fmtM(b.fee)}</td>
+      <td class="num">${fmtM(b.fee)} <span class="cs-muted rb-proxy" title="Last fee earned on the same mortgage, used as a proxy — not a forecast.">proxy</span>${b.noFee ? `<div class="s">${b.noFee} with no fee recorded</div>` : ""}</td>
     </tr>`;
     if (!open || !b.n) return head;
     return head + b.entries.map((e) => {
@@ -28999,8 +29919,8 @@ function renderRateEndBook(all) {
           ${e.dupes > 1 ? `<span class="badge grey" title="${e.dupes} cases share this property and this rate end date — counted once. The most recently completed one is shown.">${e.dupes} cases</span>` : ""}
           <div class="s">${lenderIcon(c.lender)}${esc(c.lender || "no lender")} · rate ends ${fmtD(c.rate_end_date)}${c.rate_end_estimated ? " " + APPROX : ""}</div></td>
         <td></td>
-        <td>${c.loan_amount ? fmtM(c.loan_amount) : '<span class="cs-muted">—</span>'}</td>
-        <td>${caseLastFee(c) ? fmtM(caseLastFee(c)) : '<span class="cs-muted">none recorded</span>'}</td>
+        <td class="num">${c.loan_amount ? fmtM(c.loan_amount) : '<span class="cs-muted">—</span>'}</td>
+        <td class="num">${caseLastFee(c) ? fmtM(caseLastFee(c)) : '<span class="cs-muted">none recorded</span>'}</td>
         <td></td>
       </tr>`;
     }).join("");
@@ -29008,7 +29928,7 @@ function renderRateEndBook(all) {
   $("#report-rateend-table").innerHTML = `<div style="overflow-x:auto;"><table class="imp-table rb-table" id="rateend-table">
     <tr><th>Maturing in</th><th>Cases</th><th>Loan balance</th><th>Last fee earned</th><th title="The last fee earned on the same mortgage, used as a proxy for what a renewal would earn.">Expected fee (proxy)</th></tr>
     ${rows}
-    <tr class="rb-total-row"><td><strong>Next 24 months</strong></td><td><strong>${m.n}</strong></td><td><strong>${fmtM(m.loan)}</strong></td><td><strong>${fmtM(m.fee)}</strong></td><td><strong>${fmtM(m.fee)}</strong></td></tr>
+    <tr class="rb-total-row"><td><strong>Next 24 months</strong></td><td><strong>${m.n}</strong></td><td class="num"><strong>${fmtM(m.loan)}</strong></td><td class="num"><strong>${fmtM(m.fee)}</strong></td><td class="num"><strong>${fmtM(m.fee)}</strong></td></tr>
   </table></div>`;
 
   const rec = rateEndRecoverModel(all);
@@ -29222,7 +30142,7 @@ function renderLeadResponse(leads, cases) {
     `<div class="kpi kpi-headline"><div class="num">${m.nResponded ? esc(fmtRespMins(m.median)) : "—"}</div><div class="lbl">Median response</div><div class="s">${m.nResponded} of ${m.nLeads} enquir${m.nLeads === 1 ? "y" : "ies"} answered</div></div>`,
     `<div class="kpi${m.p90 != null && m.p90 > LEAD_SLA_RED_MIN ? " bad" : ""}"><div class="num">${m.nResponded ? esc(fmtRespMins(m.p90)) : "—"}</div><div class="lbl">p90 response</div><div class="s">${m.nResponded ? `9 in 10 answered inside this` : "no answered enquiries yet"}</div></div>`,
     `<div class="kpi"><div class="num">${m.conv == null ? "—" : m.conv + "%"}</div><div class="lbl">Conversion</div><div class="s">${m.won} of ${m.nLeads} became a case</div></div>`,
-    `<div class="kpi${nBreach ? " bad" : ""}" style="cursor:pointer;" onclick="gotoLeadInbox()" title="Open the waiting enquiries in My Day on Today"><div class="num" id="leadresp-breach-n">${nBreach}</div><div class="lbl">Breaching now</div><div class="s">waiting over ${LEAD_SLA_MIN} min, nobody yet</div></div>`,
+    `<div class="kpi dq-clickable${nBreach ? " bad" : ""}" onclick="gotoLeadInbox()" title="Open the waiting enquiries in My Day on Today"><div class="num" id="leadresp-breach-n">${nBreach}</div><div class="lbl">Breaching now</div><div class="s">waiting over ${LEAD_SLA_MIN} min, nobody yet</div></div>`,
   ].join("");
 
   const tableFor = (groups, headWord, emptyWord) => {
@@ -29361,8 +30281,8 @@ async function loadMoneyPage() {
   $("#money-owed-basis").innerHTML = `Unpaid proc, solicitor and broker fees on completed cases, aged from the completion date. Identical arithmetic to the Money owed panel on Reports — same rows, same total. <span class="money-basis">${esc(BASIS_OWED)}</span>`;
   $("#money-owed").innerHTML = owed.n ? `<table class="imp-table">
     <tr><th>Age</th><th>Cases</th><th>Owed</th></tr>
-    ${owed.bucketList.map((b) => `<tr${b.key === "90+" && b.total ? ' class="owed-hot"' : ""}><td>${esc(OWED_BUCKET_LABEL[b.key])}</td><td>${b.n}</td><td>${b.total ? fmtM(b.total) : '<span class="cs-muted">—</span>'}</td></tr>`).join("")}
-    <tr class="owed-total-row"><td><strong>Total</strong></td><td><strong>${owed.n}</strong></td><td><strong>${fmtM(owed.grand)}</strong></td></tr>
+    ${owed.bucketList.map((b) => `<tr${b.key === "90+" && b.total ? ' class="owed-hot"' : ""}><td>${esc(OWED_BUCKET_LABEL[b.key])}</td><td class="num">${b.n}</td><td class="num">${b.total ? fmtM(b.total) : '<span class="cs-muted">—</span>'}</td></tr>`).join("")}
+    <tr class="owed-total-row"><td><strong>Total</strong></td><td class="num"><strong>${owed.n}</strong></td><td class="num"><strong>${fmtM(owed.grand)}</strong></td></tr>
   </table>` : MONEY_EMPTY("Nothing outstanding — every completed case with a fee on it has a date against the money.");
 
   /* ---- top 5 rate-ends by value in the next 60 days ---- */
@@ -29381,8 +30301,8 @@ async function loadMoneyPage() {
         <td><strong>${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ")) || "(no name)"}</strong> ${propChip(c, { cls: "row-prop" }) || ""}${e.dupes > 1 ? ` <span class="badge grey">${e.dupes} cases</span>` : ""}</td>
         <td>${lenderIcon(c.lender)}${esc(c.lender || "")}</td>
         <td>${fmtD(c.rate_end_date)}${c.rate_end_estimated ? " " + APPROX : ""} <span class="cs-muted">(${Math.max(0, Math.round((new Date(c.rate_end_date + "T12:00:00") - new Date(today + "T12:00:00")) / R7_DAY))}d)</span></td>
-        <td>${c.loan_amount ? fmtM(c.loan_amount) : '<span class="cs-muted">—</span>'}</td>
-        <td>${caseLastFee(c) ? fmtM(caseLastFee(c)) : '<span class="cs-muted">none recorded</span>'}</td>
+        <td class="num">${c.loan_amount ? fmtM(c.loan_amount) : '<span class="cs-muted">—</span>'}</td>
+        <td class="num">${caseLastFee(c) ? fmtM(caseLastFee(c)) : '<span class="cs-muted">none recorded</span>'}</td>
       </tr>`;
     }).join("")}
   </table>` : MONEY_EMPTY("No completed rate ends in the next 60 days.");
@@ -29431,8 +30351,8 @@ async function loadMoneyPage() {
   $("#money-movement-basis").innerHTML = `<strong>Moved</strong> counts live cases with at least one recorded stage change between ${fmtD(wk.start)} and ${fmtD(wk.end)}. <strong>Stuck</strong> counts live cases whose last recorded stage change (or, where there is none, their creation date) is more than 30 days ago. <span class="money-basis">(case_events · stage_changed · live stages only)</span>`;
   $("#money-movement").innerHTML = `<table class="imp-table">
     <tr><th>&nbsp;</th><th>Cases</th><th>Loan value</th></tr>
-    <tr><td>Moved last week</td><td><strong id="money-moved-n">${movedActive.length}</strong></td><td>${fmtM(movedActive.reduce((s, c) => s + Number(c.loan_amount || 0), 0))}</td></tr>
-    <tr${stuck.length ? ' class="owed-hot"' : ""}><td>Stuck more than 30 days</td><td><strong id="money-stuck-n">${stuck.length}</strong></td><td>${fmtM(stuck.reduce((s, c) => s + Number(c.loan_amount || 0), 0))}</td></tr>
+    <tr><td>Moved last week</td><td class="num"><strong id="money-moved-n">${movedActive.length}</strong></td><td class="num">${fmtM(movedActive.reduce((s, c) => s + Number(c.loan_amount || 0), 0))}</td></tr>
+    <tr${stuck.length ? ' class="owed-hot"' : ""}><td>Stuck more than 30 days</td><td class="num"><strong id="money-stuck-n">${stuck.length}</strong></td><td class="num">${fmtM(stuck.reduce((s, c) => s + Number(c.loan_amount || 0), 0))}</td></tr>
     <tr><td class="cs-muted">Live cases in total</td><td class="cs-muted">${activeCases.length}</td><td class="cs-muted">${fmtM(activeCases.reduce((s, c) => s + Number(c.loan_amount || 0), 0))}</td></tr>
   </table>${stuck.length ? `<p class="panel-sub" style="margin:10px 0 0;">A case can be both — moved last week and still older than 30 days in its stage.</p>` : ""}`;
 
@@ -29480,8 +30400,11 @@ async function loadMoneyPage() {
       <td><strong>${esc(r.name)}</strong></td>
       <td>${r.attach == null ? '<span class="cs-muted">no completions</span>' : `${r.attach}% <span class="cs-muted">(${r.taken}/${r.nDone})</span>`}</td>
       <td>${r.conv == null ? '<span class="cs-muted">none decided</span>' : `${r.conv}% <span class="cs-muted">(${r.rWon}/${r.rWon + r.rLost})</span>`}</td>
-      <td>${r.unpaidProc ? fmtM(r.unpaidProc) : '<span class="cs-muted">—</span>'}</td>
-      <td>${r.overdue ? `<span class="badge ${r.overdue > 5 ? "red" : "amber"}">${r.overdue}</span>` : '<span class="cs-muted">0</span>'}</td>
+      <td class="num">${r.unpaidProc ? fmtM(r.unpaidProc) : '<span class="cs-muted">—</span>'}</td>
+      ${/* R73 · B2 — one colour, not a threshold. "Amber under six, red at six" was a
+           severity rule stated nowhere on the page, and it made Luke's 5 and Wayne's 6
+           look like different KINDS of problem. */ ""}
+      <td class="num">${r.overdue ? `<span class="badge amber">${r.overdue}</span>` : '<span class="cs-muted">—</span>'}</td>
     </tr>`).join("")}
   </table></div>` : MONEY_EMPTY("No adviser has completions, retention cases, unpaid proc fees or overdue tasks.");
 
@@ -29491,6 +30414,7 @@ async function loadMoneyPage() {
   procRatesCache = null;
   await renderProcRatesPanel();
   await renderReconPanel();
+  syncNumHeaders("#page-money");        // R73 · B4
 }
 
 /* R7 — wiring for the controls added to Reports, Monday money and Protection.
@@ -31409,7 +32333,7 @@ async function loadDataHealth() {
   const dupPanel = `<div class="panel">
     <h3>Possible duplicate clients</h3>
     <p class="panel-sub">Flagged for human review — never merged automatically. Open each side to compare before merging by hand.</p>
-    ${dups.length ? `<table class="imp-table">
+    ${dups.length ? `<table class="imp-table mob-cards">
       <tr><th>Client A</th><th>Client B</th><th>Reason</th><th>Score</th><th></th></tr>
       ${dups.map((d) => `<tr>
         <td>${esc(d.a_name)}<div style="${mutedSub}">${esc(d.a_email || "no email")}</div></td>
@@ -31432,7 +32356,7 @@ async function loadDataHealth() {
     ${sharedProps.length ? sharedProps.map((g) => `
       <div class="dh-sharedprop" data-prop-key="${esc(g.key)}">
         <div class="dh-sharedprop-head">${propChip(g.address)} <strong>${esc(g.address)}</strong> <span class="s">${g.clients} clients · ${g.cases.length} cases</span></div>
-        <table class="imp-table">
+        <table class="imp-table mob-cards">
           <tr><th>Client</th><th>Case</th><th>Started</th><th></th></tr>
           ${g.cases.map((cs, i) => `<tr>
             <td>${esc(caseName(cs))}</td>
@@ -31704,7 +32628,7 @@ async function loadDataHealth() {
     ${/* Eight columns is a lot for 1280, and this page already clips a table that overruns its
          panel (nothing on it scrolls horizontally). Short headers, and a scroller round the table
          as the backstop, so the action column can always be REACHED rather than merely existing. */ ""}
-    ${waitingDocs.length ? `<div class="dh-wd-scroll"><table class="imp-table">
+    ${waitingDocs.length ? `<div class="dh-wd-scroll"><table class="imp-table mob-cards">
       <tr><th>Client</th><th>Stage</th><th title="Checklist items still outstanding">Missing</th><th title="Chase emails already sent, of the maximum">Chases</th><th title="How long since any document email — request or chase — went to this client">Last email</th><th title="When the next automatic chase becomes eligible — the quiet window between document emails">Next eligible</th><th>Waiting on</th><th></th></tr>
       ${waitingDocs.map((r) => {
         /* The two reasons the button cannot be offered, each said in the button's place rather
@@ -31745,6 +32669,7 @@ async function loadDataHealth() {
   </div>`;
 
   el.innerHTML = `
+    ${/* R73 · B1 — call site 4 of 4: see the activateAll below this template. */ ""}
     <div class="kpi-row" id="dh-kpi-row">${kpis}</div>
     ${stuckNotice}
     ${dupPanel}
@@ -31818,6 +32743,10 @@ async function loadDataHealth() {
       if (!panel.classList.contains("hidden")) panel.scrollIntoView({ behavior: "smooth", block: "start" });
     };
   };
+  /* R73 · A4 — stamp each body cell with its column heading, so the three wide tables on this
+     page (duplicates, shared addresses, waiting-on-documents) render as stacked cards at ≤767px
+     instead of shipping 655–982px of table into a 390px screen. */
+  cardifyTables(el);
   // T1-26 — tiles whose panel is always rendered: just take me to it.
   const wireTileScroll = (tileId, panelId) => {
     const tile = $(tileId), panel = $(panelId);
@@ -31868,6 +32797,10 @@ async function loadDataHealth() {
      never removed and never re-rendered — their ids, titles and wiring are exactly the ones every
      other part of this page, and #dh-readiness above it, already point at. Nothing is remembered:
      the next load opens tidy again. */
+  // R73 · B1 — call site 4 of 4. Outside the toggle's own gate: every Data-health
+  // tile is clickable whether or not the clean-tile toggle happens to be rendered.
+  activateAll("#dh-kpi-row .kpi.dq-clickable");
+  syncNumHeaders("#page-data");         // R73 · B4
   const cleanToggle = $("#dh-clean-toggle");
   if (cleanToggle) {
     const row = $("#dh-kpi-row"), lbl = $("#dh-clean-toggle-lbl");
@@ -35102,6 +36035,13 @@ const VAULT_OWNER_CLASS = { Daniel: "vault-owner-daniel", Luke: "vault-owner-luk
 let VAULT_ROWS = [];
 let vaultCategory = "all";
 let vaultSearch = "";
+// R73 · B5 — the vault's empty state names the term and offers to drop it.
+function vaultSearchTerm() { return String(vaultSearch || "").trim(); }
+window.clearVaultSearch = function () {
+  vaultSearch = "";
+  const box = $("#vault-search"); if (box) box.value = "";
+  renderVault();
+};
 let vaultLoaded = false;
 
 function vaultMatch(r, q) {
@@ -35241,9 +36181,18 @@ function renderVault() {
     return String(a.name || "").localeCompare(String(b.name || ""));
   });
   if (!rows.length) {
+    // R73 · B5 — was a bare grey sentence for the searched case and a different card
+    // shape for the truly-empty one. One component, both cases.
     list.innerHTML = VAULT_ROWS.length
-      ? `<div class="empty">No entries match your search.</div>`
-      : `<div class="board-empty"><strong>The vault is empty.</strong>Add the first company login with the “+ New entry” button above.</div>`;
+      ? emptyState({
+          headline: "No entries match your search",
+          sub: `Nothing in the vault matches “${vaultSearchTerm()}”. It searches the name, the owner and the username — not the secrets themselves.`,
+          action: { label: "Clear the search", id: "vault-empty-clear", onclick: "clearVaultSearch()" },
+        })
+      : emptyState({
+          headline: "The vault is empty",
+          sub: "Add the first company login with the “+ New entry” button above.",
+        });
     return;
   }
   const byCat = {};

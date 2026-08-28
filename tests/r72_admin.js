@@ -183,7 +183,16 @@ const londonDates = (page, days) => page.evaluate((n) => {
   const fmt = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/London", year: "numeric", month: "2-digit", day: "2-digit" });
   const ds = fmt.format(new Date(Date.now() + n * 86400000));
   const iso = new Date(ds + "T23:59:59").toISOString();
-  const british = new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+  /* R73: the expected string comes from a FIXED month table, not Intl's
+     month:"short". Under current ICU en-GB renders September as "Sept" — four
+     letters where the other eleven months get three — so this oracle and the app
+     disagreed for one month of the year, on a snooze whose whole point is naming
+     the date. R73's fmtD stopped using Intl for the month name for exactly that
+     reason; the oracle follows, written out separately (the r65_watchtower
+     precedent) so a change to one is not silently a change to both. */
+  const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const parts = ds.split("-");
+  const british = `${Number(parts[2])} ${MON[Number(parts[1]) - 1]} ${parts[0]}`;
   return { ds, iso, british };
 }, days);
 
@@ -222,7 +231,14 @@ const wtState = (page) => page.evaluate(() => {
   return {
     groups,
     barPresent: !!bar,
-    barHidden: !!bar && bar.hidden,
+    /* R73 · A2: the bar no longer uses the `hidden` attribute at zero selection — it RESERVES
+       its box and hides it with `visibility`. The first tick used to insert a 53px element at the
+       top of the list and shift every row under the cursor down by it, on a panel you work by
+       aiming at checkboxes. `visibility: hidden` keeps the box while still taking the bar out of
+       the tab order and out of the accessibility tree, which is all the attribute was doing for
+       us. Same question, read off the property that now answers it. */
+    barHidden: !!bar && getComputedStyle(bar).visibility === "hidden",
+    barBoxKept: !!bar && Math.round(bar.getBoundingClientRect().height) > 0,
     barN: Number((document.querySelector("#wt-bulk-n") || {}).textContent || "-1"),
     checked: [...document.querySelectorAll("#watchtower-list .wt-cb")].filter((c) => c.checked).map((c) => c.dataset.id),
   };
@@ -596,6 +612,8 @@ function docSuggested(docsListRaw, kind) {
       ok("C1c · the per-row Snooze… and Dismiss buttons are still on every real row",
         s0.groups.every((g) => g.rows.every((r) => r.synth || (r.hasSnooze && r.hasDismiss))));
       ok("C2 · the bulk bar exists and is hidden with nothing ticked", s0.barPresent && s0.barHidden, JSON.stringify({ p: s0.barPresent, h: s0.barHidden }));
+      // R73 · A2 — …and keeps its height while it is, so the first tick moves nothing.
+      ok("C2a · …while keeping its box, so ticking a row shifts no rows", s0.barBoxKept, JSON.stringify({ kept: s0.barBoxKept }));
       ok("C2b · each group header carries its own “Select all N”", /Select all 5/.test(alpha.allBtn) && /Select all 2/.test(beta.allBtn),
         JSON.stringify([alpha.allBtn, beta.allBtn]));
 

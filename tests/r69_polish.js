@@ -363,7 +363,22 @@ const favImgs = (page, names) => page.evaluate((ns) => {
         await page.setViewportSize({ width: w, height: 844 });
         await wait(page, 600);
         const m = await measure();
-        ok(`B6·${w} · the table scrolls inside #prot-scroll`, m && m.overflowX === "auto", JSON.stringify(m && m.overflowX));
+        /* R73 · A4: below 768px this table is not a table any more. R73 propagated the R65 · L9
+           mobile-card treatment to Protection & GI — an 877px table inside a 364px box meant
+           reading the list one column at a time — so at 390px the rows render as stacked cards,
+           #prot-scroll has nothing left to scroll sideways, and its overflow-x is `visible` on
+           purpose (an overflow-x box also promotes overflow-y to auto, which is how a card list
+           ends up inside a second vertical scrollbar). The 1024 deal is unchanged: still a table,
+           still scrolling inside its own container.
+           NOT WEAKENED — the question B6/B8 exist to answer is "can every action control be
+           reached without the page scrolling sideways", and at 390 the answer is now stronger:
+           there is nothing to scroll at all and every control is already inside the box. */
+        if (w >= 768) {
+          ok(`B6·${w} · the table scrolls inside #prot-scroll`, m && m.overflowX === "auto", JSON.stringify(m && m.overflowX));
+        } else {
+          ok(`B6·${w} · R73 — the table is a CARD LIST here, so there is no sideways scroller`,
+            m && m.overflowX === "visible" && !m.needsScroll, JSON.stringify(m && { ox: m.overflowX, needs: m.needsScroll }));
+        }
         ok(`B7·${w} · the page body still does not scroll sideways`, m && m.docSW <= w, JSON.stringify(m && m.docSW));
         const reach = await page.evaluate(() => {
           const sc = document.querySelector("#prot-scroll");
@@ -373,7 +388,8 @@ const favImgs = (page, names) => page.evaluate((ns) => {
           const last = btns[btns.length - 1].getBoundingClientRect();
           return { inside: last.right <= box.right + 0.5 && last.left >= box.left - 0.5, scrolled: sc.scrollLeft > 0 };
         });
-        ok(`B8·${w} · …and scrolling it brings the last action button into view`, reach.inside && (reach.scrolled || w >= 1024), JSON.stringify(reach));
+        ok(`B8·${w} · …and every action button is reachable inside the box`,
+          reach.inside && (reach.scrolled || w >= 1024 || w < 768), JSON.stringify(reach));
       }
       eq("B9 · no console errors on Protection", realErr(page), []);
       await page.close();

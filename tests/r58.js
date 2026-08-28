@@ -18,6 +18,25 @@
    ========================================================================== */
 "use strict";
 
+/* R73 · A3 — THE CASE ACTION BAR IS CAPPED NOW, so a stage action may be one press away.
+   The bar was 135px of a 900px desktop viewport and 445px of an 844px phone because every action
+   CASE_ACTION_RULES calls primary at a stage sat on it — twelve buttons on a completed case.
+   R73 keeps the two or three the stage is actually about on the bar and moves the rest into the
+   Actions ▾ menu, under a heading naming the stage; every act-* id is built exactly once, with
+   the same label and the same handler, and every one is reachable in at most one extra press.
+   Same shape r13 and r5_batch1 have used since R15: find out where the action currently is, open
+   the overflow only if that is where it is, then click it exactly as before. */
+async function r73OpenAction(page, id) {
+  const visible = await page.evaluate((sel) => {
+    const el = document.querySelector(sel);
+    if (!el) return true;                       // absent: let the click fail as it always would
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  }, `#${id}`);
+  if (!visible) await page.click("#case-more-actions-toggle");
+}
+
+
 const { chromium } = require("playwright");
 const { spawn } = require("child_process");
 const http = require("http");
@@ -75,7 +94,7 @@ async function ensureServer() {
   await page.evaluate((id) => window.openCase(id), fx.srcId);
   await page.waitForTimeout(900);
   ok("A1 · the Rate-end outcome action renders on a completed tracked case", await page.evaluate(() => !!document.querySelector("#act-rate-outcome")));
-  await page.click("#act-rate-outcome");
+  await r73OpenAction(page, "act-rate-outcome"); await page.click("#act-rate-outcome");
   await page.waitForTimeout(400);
   ok("A2 · the outcome overlay opens with the renewed option selected", await page.evaluate(() =>
     !!document.querySelector("#overlay-modal #reo-date") && document.querySelector('#overlay-modal input[name="reo-kind"]:checked')?.value === "renewed"));
@@ -129,7 +148,7 @@ async function ensureServer() {
   console.log("\n— §C · property sold / mortgage redeemed");
   await page.evaluate((id) => window.openCase(id), fx.soldId);
   await page.waitForTimeout(900);
-  await page.click("#act-rate-outcome");
+  await r73OpenAction(page, "act-rate-outcome"); await page.click("#act-rate-outcome");
   await page.waitForTimeout(400);
   await page.check('#overlay-modal input[name="reo-kind"][value="sold"]');
   await page.click("#overlay-modal #reo-ok");

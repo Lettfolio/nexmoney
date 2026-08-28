@@ -122,7 +122,59 @@ node tests/r71_backfill.js
 node tests/r71_health.js
 node tests/r72_owner.js
 node tests/r72_admin.js
+node tests/r73_visible.js
+node tests/r73_system.js
 ```
+
+**R73 notes — UI/UX round (`tests/r73_visible.js` 86, `tests/r73_system.js` 73).** Spec was the
+R73 UI/UX panel report (5 personas + design critic; `R73-ui-ux-panel-findings.md` in Daniel's
+folder). Layout half: `#briefing-list`/`#unactioned-list` cages → `min(62vh,720px)` via
+`applyDashCage(listId,total,unit)` (whole-row cuts, `.dash-cage-foot` "N more ↓" from the
+renderer's own counts, `recageDashLists()` on drawer/resize); **My Day bands now TODAY → URGENT →
+WORTH DOING** (owner decision — order-sensitive suites updated); `#briefing-group-sub`/
+`#leads-accept-bar-sub` behind `Why? ▸` folds (clamps deleted; both are `<div>` now); leads bar
+counts the unambiguous set ("Accept 3 unambiguous leads (1 needs you)" via `leadsAcceptSplit()`);
+`#wt-bulk-bar` sticky top-0 + height RESERVED (`.is-empty` visibility, NOT hidden — r72_admin
+reads visibility now) + Select-all auto-expands folded groups + `.wt-group-sel` "· N selected";
+pipeline bulk bar in `#pipe-bulk-dock` sticky bottom AFTER the scroller (keeps its `hidden`
+attr — r5_batch5/r71_backfill read it) + paragraph behind `ⓘ`; case modal: `CASE_ACTION_TOP` +
+`data-act-tier="top|stage|rest"` + `Actions ▾` overflow (id unchanged) — bar is ONE row 65px
+desktop / ≤96px phone; backdrop padding moved onto `.modal`, `scroll-margin-top` on headings/
+fields/`#new-note`. **RULE: suites that click a demoted stage action must open `Actions ▾` first
+(`r73OpenAction` helper pattern); `actionLocation()`-style checks read `data-act-tier`.** Phone:
+44px targets (`.contact-link`/`.row-sms-link` render as Call/Text chips via font-size:0 +
+::after — the NUMBER stays in textContent for r70_calls/r64_retention), `cardifyTables(root)` +
+`table.mob-cards` (data-lbl per cell) on protection/duplicates/shared-address/waiting-docs
+tables; `updateSidenavScrollHint()` re-run from showApp/nav/ResizeObserver; Diary defaults DAY
+≤760px when no stored choice; `.ret-month-chips` one-line scroller; KPI fade mask +
+`updateKpiScrollHint()`. `wireChipStripOverflow()` chevrons on rep-nav/settings-jump/
+reports-jump; Advocacy grid `minmax(min(340px,100%),1fr)` + detractors span 2; board gets
+paired ‹/› arrows + scroll-snap. System half: `--focus-ring` double ring + `--focus-ring-dark`
+(sidebar) + `.btn-ghost:focus-visible`; `makeActivatable`/`activateAll` on board cards, client
+rows, dashboard/DH/Reports KPI tiles (tabindex+role+Enter/Space); `#toast` role=status
+aria-live=polite bottom-RIGHT, `TOAST_MS` 4500; **`--muted` = #5b6a7e** (contrast ≥4.9 on all
+grounds), `.rate-uplift` literal #b35309 (the `var(--orange-600, fallback)` trap), one amber
+overdue badge on Reports+Money, `.adopt-h .count.hot` amber pill; **three button sizes only**
+(btn 13.5 / btn-sm 12.5 / btn-xs 11.5 — `.ret-row-chip`/`.appt-quick-btn` are btn-sm;
+`.snooze-btn`/`.wt-group-all`/`.vf-*`/`.adv-open-btn` are btn-xs; `.seg-btn` 12.5);
+`.btn.scope-active` KEPT as a class but never paints navy — segments sit in `.segment` grey
+tracks (index.html wrappers ×6), active = lifted white pill; `.hover-quiet` = 0.75 and sits on
+Book review ALONE (Log call is a full button; `.ret-out-chip` full opacity + solid border);
+`.prot-actions` 0.75 + `.prot-gi-set` 96px; `.kpi-click` DELETED → `.dq-clickable` everywhere;
+emails Cancel is bordered + `.email-cb-gap` reserves the gutter; `.panel-sub { max-width:78ch }`;
+`.panel h3:not([class])` (board col heads = `.col-h` H3, diary day cells = `.diary-day-h` H3 —
+tag selectors on those no longer match); `td.num/th.num` right-aligned + `syncNumHeaders()`;
+**`fmtD` uses a fixed month table — "Sep" never "Sept"; test oracles must NOT use Intl short
+months** (r72_admin's was patched); `lang="en-GB"`; `document.title` per page via
+`setPageTitle()`; `stageChip()` (= stageBadge canonical) + `stageWordFor()` (My Day keeps
+compact text — phone budget); case history enums humanised via `eventEnumWord()`; dashed pill =
+ESTIMATE only (vault Shared solid amber, Today purple solid); `emptyState()` component on
+clients/pipeline/vault/protection with real Clear-filters; `WT_RULE_LABELS` all 12 filled
+(R7_ALERT_LINKS untouched — that's R74). Old-suite patches all commented `R73:` — the big ones:
+r11_ux height ceiling 2900; r15/r66_comms read tiers; r64_retention §C1e (quiet = Book review
+only, stronger); r68_admin A2c/A3c label re-points; r69_polish B6/B8 (protection cards don't
+scroll sideways); r72_admin visibility + Intl-month oracle; r18/r23 `.col-h span`; r36 A3e
+`.empty-state`.
 
 **R72 notes — owner + admin (`tests/r72_owner.js` 83, `tests/r72_admin.js` 145).**
 Owner side: adoption strip `#report-adoption` on the Reports scoreboard panel (rides its

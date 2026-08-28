@@ -41,6 +41,25 @@
    ========================================================================== */
 "use strict";
 
+/* R73 · A3 — THE CASE ACTION BAR IS CAPPED NOW, so a stage action may be one press away.
+   The bar was 135px of a 900px desktop viewport and 445px of an 844px phone because every action
+   CASE_ACTION_RULES calls primary at a stage sat on it — twelve buttons on a completed case.
+   R73 keeps the two or three the stage is actually about on the bar and moves the rest into the
+   Actions ▾ menu, under a heading naming the stage; every act-* id is built exactly once, with
+   the same label and the same handler, and every one is reachable in at most one extra press.
+   Same shape r13 and r5_batch1 have used since R15: find out where the action currently is, open
+   the overflow only if that is where it is, then click it exactly as before. */
+async function r73OpenAction(page, id) {
+  const visible = await page.evaluate((sel) => {
+    const el = document.querySelector(sel);
+    if (!el) return true;                       // absent: let the click fail as it always would
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  }, `#${id}`);
+  if (!visible) await page.click("#case-more-actions-toggle");
+}
+
+
 const { chromium } = require("playwright");
 const { spawn } = require("child_process");
 const http = require("http");
@@ -562,7 +581,7 @@ const toastText = (page) => page.evaluate(() => (document.getElementById("toast"
     await page.waitForTimeout(1500);
     ok("§E1b · the completed, rate-tracked case offers 📌 Rate-end outcome",
       await page.evaluate(() => !!document.querySelector("#act-rate-outcome")));
-    await page.click("#act-rate-outcome");
+    await r73OpenAction(page, "act-rate-outcome"); await page.click("#act-rate-outcome");
     await page.waitForTimeout(900);
     await page.evaluate(() => { document.querySelector('#overlay-modal input[name="reo-kind"][value="sold"]').click(); });
     await page.click("#overlay-modal #reo-ok");
@@ -716,7 +735,7 @@ const toastText = (page) => page.evaluate(() => (document.getElementById("toast"
     const hasGi = await page.evaluate(() => !!document.querySelector("#act-ref-gi"));
     ok("§G3b · the case offers 🏠 Refer for buildings/contents", hasGi);
     if (hasGi) {
-      await page.click("#act-ref-gi");
+      await r73OpenAction(page, "act-ref-gi"); await page.click("#act-ref-gi");
       await page.waitForTimeout(800);
       eq("§G4a · the GI referral overlay pre-fills 'Referred to' from the setting",
         await page.evaluate(() => (document.querySelector("#ref-to") || {}).value), "Paymentshield");

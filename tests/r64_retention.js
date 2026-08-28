@@ -394,14 +394,24 @@ async function selectRows(page, ids) {
         noTel: r2 ? !r2.querySelector(".ret-row-tel") : null,
         logcall: !!(r1 && r1.querySelector("button[onclick*='retLogCall']")),
         book: !!(r1 && r1.querySelector("button[onclick*='retBookReview']")),
-        quiet: !!(r1 && r1.querySelector(".ret-row-acts.hover-quiet")),
+        /* R73: the quiet treatment moved OFF the cluster and onto the ONE verb it was
+           meant for. R64 put Log call, Book review and the three outcome chips together
+           in a .hover-quiet container at opacity 0.28 — which the R73 panel found is what
+           a browser paints a DISABLED control at, on the page whose own funnel copy tells
+           people to use those chips. So: Log call is full weight (it is what the page is
+           asking for), the outcome chips are full weight (the funnel points at them), and
+           only Book review keeps the card-advance manners. Same classes, same handlers,
+           same order — the assertion re-points at where quiet now lives. */
+        quietOnBookReview: !!(r1 && r1.querySelector("button[onclick*='retBookReview'].hover-quiet")),
+        logcallLoud: !!(r1 && r1.querySelector("button[onclick*='retLogCall']:not(.hover-quiet)")),
       };
     }, { a: withPhone.caseId, b: noPhone.caseId });
     eq("§C1a · a client with a number gets a real tel: link on the row", rowBits.tel, "tel:07700900321");
     eq("§C1b · …printed as the number the record holds", rowBits.telText, "07700 900 321");
     ok("§C1c · a client with no number gets no dead phone affordance", rowBits.noTel === true);
     ok("§C1d · the row carries both chips", rowBits.logcall && rowBits.book, JSON.stringify(rowBits));
-    ok("§C1e · …in a hover-quiet cluster (R61's card-advance manners)", rowBits.quiet);
+    ok("§C1e · Book review keeps R61's card-advance manners, Log call does not (R73)",
+      rowBits.quietOnBookReview && rowBits.logcallLoud, JSON.stringify(rowBits));
 
     /* --- Log call, from the row --- */
     await page.click(`#ret-rates-list button[onclick*="retLogCall('${withPhone.caseId}')"]`);

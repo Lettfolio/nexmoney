@@ -121,6 +121,24 @@ const closeModal = async (page) => { await page.evaluate(() => window.closeModal
     };
   });
 
+  /* R73: the case action bar was capped at the two or three actions a stage is actually about
+     (R73 · A3 — it was 135px of a 900px desktop viewport and 445px of a phone). Every act-* id is
+     still built exactly once with the same handler, and every one is still reachable in one
+     press; what changed is that a stage action which is not one of the few on the bar now opens
+     from Actions ▾ instead of sitting on it. Same helper r13 and r5_batch1 have used since R15 —
+     find out where the action currently lives, open the overflow if that is where it is, click
+     it exactly as before. */
+  const clickAction = async (id) => {
+    const visible = await page.evaluate((sel) => {
+      const el = document.querySelector(sel);
+      if (!el) return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 0 && r.height > 0;
+    }, `#${id}`);
+    if (!visible) await page.click("#case-more-actions-toggle");
+    await page.click(`#${id}`);
+  };
+
   /* =================== §A · the email somebody writes =================== */
   console.log("— §A · custom email from the case");
 
@@ -128,8 +146,12 @@ const closeModal = async (page) => { await page.evaluate(() => window.closeModal
     await openCase(page, id);
     return page.evaluate(() => ({
       present: !!document.querySelector("#act-write"),
-      primary: !!document.querySelector("#case-action-bar > #act-write"),
-      overflow: !!document.querySelector("#case-more-actions #act-write"),
+      /* R73: "primary" is now read off the action's own data-act-tier, not off which box it
+         happens to sit in. Tier "top" is on the bar, "stage" is the first group of Actions ▾ —
+         both mean CASE_ACTION_RULES says this action belongs at this stage, which is what this
+         assertion has always been about. Tier "rest" is the overflow it used to call `overflow`. */
+      primary: (() => { const e = document.querySelector("#act-write"); return !!e && ["top", "stage"].includes(e.getAttribute("data-act-tier")); })(),
+      overflow: (() => { const e = document.querySelector("#act-write"); return !!e && e.getAttribute("data-act-tier") === "rest"; })(),   // R73: same re-pointing
     }));
   };
   const aLive = await barAt(fx.live);
@@ -144,7 +166,7 @@ const closeModal = async (page) => { await page.evaluate(() => window.closeModal
 
   // The overlay, on a client with no email at all.
   await openCase(page, fx.noEmail);
-  await page.click("#act-write");
+  await clickAction("act-write");
   await page.waitForTimeout(400);
   const aNoEmail = await page.evaluate(() => ({
     open: !!document.querySelector("#overlay-modal #cust-to"),
@@ -160,7 +182,7 @@ const closeModal = async (page) => { await page.evaluate(() => window.closeModal
 
   // The overlay proper.
   await openCase(page, fx.live);
-  await page.click("#act-write");
+  await clickAction("act-write");
   await page.waitForTimeout(400);
   const aOv = await page.evaluate(() => ({
     to: (document.querySelector("#cust-to") || {}).value,
@@ -255,14 +277,14 @@ const closeModal = async (page) => { await page.evaluate(() => window.closeModal
   await openCase(page, fx.protDiscussed);
   const bTiles = await page.evaluate(() => ({
     prot: !!document.querySelector("#act-ref-protection"),
-    protPrimary: !!document.querySelector("#case-action-bar > #act-ref-protection"),
+    protPrimary: (() => { const e = document.querySelector("#act-ref-protection"); return !!e && ["top", "stage"].includes(e.getAttribute("data-act-tier")); })(),   // R73: see §A
     gi: !!document.querySelector("#act-ref-gi"),
     survey: !!document.querySelector("#act-ref-survey"),
   }));
   ok("B1 · the protection and GI referral actions exist on the case", bTiles.prot && bTiles.gi, JSON.stringify(bTiles));
   ok("B2 · protection is primary at offer", bTiles.protPrimary, JSON.stringify(bTiles));
 
-  await page.click("#act-ref-protection");
+  await clickAction("act-ref-protection");
   await page.waitForTimeout(400);
   const bOv = await page.evaluate(() => ({
     open: !!document.querySelector("#overlay-modal #ref-to"),
@@ -291,7 +313,7 @@ const closeModal = async (page) => { await page.evaluate(() => window.closeModal
 
   // Unticked: the referral lands, the status does not move.
   await openCase(page, fx.protNotDiscussed);
-  await page.click("#act-ref-protection");
+  await clickAction("act-ref-protection");
   await page.waitForTimeout(400);
   await page.fill("#overlay-modal #ref-to", "Network Protection Team");
   await page.uncheck("#overlay-modal #ref-set-prot");
@@ -309,7 +331,7 @@ const closeModal = async (page) => { await page.evaluate(() => window.closeModal
 
   // A case already quoted is never offered the downgrade.
   await openCase(page, fx.protQuoted);
-  await page.click("#act-ref-protection");
+  await clickAction("act-ref-protection");
   await page.waitForTimeout(400);
   ok("B10 · a case already quoted is not offered the status change (no outcome is ever walked back)",
     !(await page.evaluate(() => !!document.querySelector("#overlay-modal #ref-set-prot"))));
@@ -319,7 +341,7 @@ const closeModal = async (page) => { await page.evaluate(() => window.closeModal
 
   // GI.
   await openCase(page, fx.giCase);
-  await page.click("#act-ref-gi");
+  await clickAction("act-ref-gi");
   await page.waitForTimeout(400);
   ok("B11 · the GI overlay opens", await page.evaluate(() => !!document.querySelector("#overlay-modal #ref-to")));
   await page.fill("#overlay-modal #ref-to", "Paymentshield");

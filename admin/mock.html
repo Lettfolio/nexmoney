@@ -1,5 +1,8 @@
 <!DOCTYPE html>
-<html lang="en">
+<!-- R73 · B4 — en-GB, not en: `lang` is what a browser reads to decide a date
+     input's order and a time input's clock. "en" gave UK brokers mm/dd/yyyy pickers
+     and a 12-hour clock over an app that DISPLAYS everything en-GB. -->
+<html lang="en-GB">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -167,8 +170,10 @@
       <p class="dq-notice hidden" id="dash-cap-notice"></p>
       <div class="panel" id="briefing-panel">
         <h3>☀️ My Day
-          <button class="btn btn-sm seg-btn seg-first scope-active" id="brief-scope-mine" aria-label="Show only my items">Mine</button>
-          <button class="btn btn-sm seg-btn seg-last" id="brief-scope-all" aria-label="Show all team items">All</button>
+          <span class="segment" role="group" aria-label="Whose items to show">
+            <button class="btn btn-sm seg-btn seg-first scope-active" id="brief-scope-mine" aria-pressed="true" aria-label="Show only my items">Mine</button>
+            <button class="btn btn-sm seg-btn seg-last" id="brief-scope-all" aria-pressed="false" aria-label="Show all team items">All</button>
+          </span>
           <button class="btn btn-ghost btn-sm" id="sync-outlook-btn" aria-label="Sync Outlook inbox">⟳ Sync Outlook</button>
         </h3>
         <p class="panel-sub" id="briefing-date"></p>
@@ -177,7 +182,11 @@
              panel subtitle stops being read. Its own element rather than more words on
              #briefing-date: that line is the date, several suites read it as the date, and the
              two facts change on different clocks. -->
-        <p class="panel-sub hidden" id="briefing-group-sub"></p>
+        <!-- R73 · A1 — a <div>, not a <p>: renderBriefing now writes a "Why? ▸" <details> into it
+             (flow content, which a <p> may not legally contain — the parser would silently close
+             the paragraph and reparent the disclosure). Same id, same .panel-sub styling, same
+             hidden-when-nothing-is-grouped rule. -->
+        <div class="panel-sub hidden" id="briefing-group-sub"></div>
         <!-- R68 · B1/M12 — the "accept every unambiguous lead" bar. Deliberately its OWN element
              rather than a row inside #briefing-list: that list is the briefing's rows and several
              suites count them, and a control that is about the whole inbox is not one of its
@@ -193,8 +202,10 @@
                of it is gone.) Which one starts active is decided in JS (renderWatchtower →
                syncWtScopeButtons), because it depends on the signed-in role and on a stored
                choice, neither of which is known when this markup is parsed. -->
-          <button class="btn btn-sm seg-btn seg-first" id="wt-scope-mine" aria-label="Show only alerts on my cases">Mine</button>
-          <button class="btn btn-sm seg-btn seg-last" id="wt-scope-all" aria-label="Show every alert, including firm-wide ones">All</button>
+          <span class="segment" role="group" aria-label="Which alerts to show">
+            <button class="btn btn-sm seg-btn seg-first" id="wt-scope-mine" aria-label="Show only alerts on my cases">Mine</button>
+            <button class="btn btn-sm seg-btn seg-last" id="wt-scope-all" aria-label="Show every alert, including firm-wide ones">All</button>
+          </span>
           <button class="btn btn-ghost btn-sm" id="watchtower-run">Run checks</button>
           <button class="btn btn-ghost btn-sm hidden" id="watchtower-snoozed-toggle" title="Show/hide snoozed alerts">0 snoozed</button>
         </h3>
@@ -243,9 +254,11 @@
                "· unassigned" suffix under All is where task scoping lives now. -->
           <h3 onclick="toggleDrawer(event,'rateerc')">⚠️ Rate &amp; ERC alerts</h3>
           <div class="rate-scope-row">
-            <button class="btn btn-sm seg-btn seg-first" id="rate-scope-mine" aria-label="Show only alerts on my cases">Mine</button>
-            <button class="btn btn-sm seg-btn" id="rate-scope-unassigned" aria-label="Show alerts on cases nobody owns">Unassigned</button>
-            <button class="btn btn-sm seg-btn seg-last scope-active" id="rate-scope-all" aria-label="Show every adviser's alerts">All</button>
+            <span class="segment" role="group" aria-label="Whose rate alerts to show">
+              <button class="btn btn-sm seg-btn seg-first" id="rate-scope-mine" aria-label="Show only alerts on my cases">Mine</button>
+              <button class="btn btn-sm seg-btn" id="rate-scope-unassigned" aria-label="Show alerts on cases nobody owns">Unassigned</button>
+              <button class="btn btn-sm seg-btn seg-last scope-active" id="rate-scope-all" aria-label="Show every adviser's alerts">All</button>
+            </span>
           </div>
           <p class="panel-sub" id="rate-erc-sub">Rates ending within the reminder window, and cases where the ERC outlasts the rate.</p>
           <div id="alerts-rateerc" class="dash-scroll"></div>
@@ -293,6 +306,11 @@
       <p class="dq-notice hidden" id="board-cap-notice"></p>
       <div class="board-scroll-wrap">
         <div class="board" id="board"></div>
+        <!-- R73 · A5 — the PAIR. updateBoardScrollHint() has toggled can-scroll-left since QW16
+             and nothing ever drew it, so getting back to Enquiry from Exchange meant a shove.
+             Both are anchored to the board card's own edges and each shows only while there is
+             board in that direction. -->
+        <button type="button" class="board-scroll-arrow-left" id="board-scroll-left" aria-label="Scroll to earlier stages" title="Scroll to earlier stages">‹</button>
         <button type="button" class="board-scroll-arrow" aria-label="Scroll to later stages" title="Scroll to later stages">›</button>
       </div>
     </section>
@@ -309,13 +327,15 @@
         <!-- R5-17 (label half) — this figure is a probability-weighted average of typical protection
              commission, NOT a percentage of the loan. Saying so stops it being read as banked money. -->
         <div class="kpi"><div class="num" id="prot-kpi-comm">—</div><div class="lbl">Est. commission</div><div class="s">(probability-weighted average, not loan-based)</div></div>
-        <div class="kpi kpi-click" id="prot-tile-quoted" title="Click to filter the table to quoted cases awaiting a decision"><div class="num" id="prot-kpi-quoted">—</div><div class="lbl">Quoted, awaiting decision</div></div>
+        <div class="kpi dq-clickable" id="prot-tile-quoted" title="Click to filter the table to quoted cases awaiting a decision"><div class="num" id="prot-kpi-quoted">—</div><div class="lbl">Quoted, awaiting decision</div></div>
       </div>
       <p class="panel-sub hidden" id="prot-money-note"></p>
       <div class="page-tools" style="margin-bottom:14px;">
-        <button class="btn btn-sm seg-btn seg-first scope-active" id="prot-scope-mine">Mine</button>
-        <button class="btn btn-sm seg-btn" id="prot-scope-unassigned">Unassigned</button>
-        <button class="btn btn-sm seg-btn seg-last" id="prot-scope-all">All</button>
+        <span class="segment" role="group" aria-label="Whose protection cases to show">
+          <button class="btn btn-sm seg-btn seg-first scope-active" id="prot-scope-mine" aria-pressed="true">Mine</button>
+          <button class="btn btn-sm seg-btn" id="prot-scope-unassigned" aria-pressed="false">Unassigned</button>
+          <button class="btn btn-sm seg-btn seg-last" id="prot-scope-all" aria-pressed="false">All</button>
+        </span>
         <!-- R36-A · L6 — a client search on this table. The scope buttons and the status drop-down
              both answer "which slice of the book", never "where is Mrs Okafor's row" — and on an
              Owner's "All" view this table is the longest list in the app. Same control, class and
@@ -363,11 +383,11 @@
         <div class="page-tools">
           <!-- B9 (R5-31) — Month/Day toggle. Same seg-btn/scope-active pattern as the Mine|All
                scopes elsewhere, so it reads as "this page's current view" not a new widget type. -->
-          <div class="pipe-segment" id="diary-view-toggle" role="tablist" aria-label="Diary view">
+          <div class="pipe-segment segment" id="diary-view-toggle" role="tablist" aria-label="Diary view">
             <button type="button" class="btn btn-sm seg-btn seg-first scope-active" id="diary-view-month" role="tab" aria-selected="true">Month</button>
             <button type="button" class="btn btn-sm seg-btn seg-last" id="diary-view-day" role="tab" aria-selected="false">Day</button>
           </div>
-          <select id="diary-staff"></select>
+          <select id="diary-staff" aria-label="Show whose diary"></select>
           <button class="btn" id="diary-prev">‹ Prev</button>
           <button class="btn" id="diary-today">Today</button>
           <button class="btn" id="diary-next">Next ›</button>
@@ -478,8 +498,10 @@
                (retScopeResolved), because it depends on the signed-in role and on a stored
                choice, neither of which is known when this markup is parsed. ONE control: it
                scopes all three panels below, because they are three views of one book. -->
-          <button class="btn btn-sm seg-btn seg-first" id="ret-scope-mine" aria-label="Show only my cases and clients">Mine</button>
-          <button class="btn btn-sm seg-btn seg-last" id="ret-scope-all" aria-label="Show every adviser's cases and clients">All</button>
+          <span class="segment" role="group" aria-label="Whose retention book to show">
+            <button class="btn btn-sm seg-btn seg-first" id="ret-scope-mine" aria-label="Show only my cases and clients">Mine</button>
+            <button class="btn btn-sm seg-btn seg-last" id="ret-scope-all" aria-label="Show every adviser's cases and clients">All</button>
+          </span>
         </div>
       </div>
       <p class="panel-sub" id="ret-scope-note"></p>
@@ -524,8 +546,8 @@
       <h2>Bulk import</h2>
       <p class="panel-sub">Drop in existing-client data from anywhere — a spreadsheet, an email, rough notes. AI sorts it into clients and cases, and nothing is saved until you review and confirm.</p>
       <div class="panel">
-        <input type="file" id="import-file" accept=".csv,.tsv,.txt,.xlsx,.xls">
-        <textarea id="import-text" rows="9" placeholder="…or paste rows / text here"></textarea>
+        <input type="file" id="import-file" aria-label="Spreadsheet or text file to import" accept=".csv,.tsv,.txt,.xlsx,.xls">
+        <textarea id="import-text" rows="9" aria-label="Paste rows or text to import" placeholder="…or paste rows / text here"></textarea>
         <div style="margin-top:10px;display:flex;align-items:center;gap:12px;">
           <button class="btn btn-primary" id="analyse-btn">✨ Analyse with AI</button>
           <span id="import-status" class="panel-sub" style="margin:0;"></span>
@@ -546,8 +568,8 @@
       <p class="panel-sub">The weekly <code>client_data_export_V2</code> from Stonebridge. Everything is keyed into Revolution first, so this reads <em>from</em> it: it matches each row to a client and a case you already hold, shows the field-by-field difference, and writes only what you tick. It never queues an email, and it never moves a case stage on its own.</p>
       <div class="panel" id="rev-input-panel">
         <div class="rev-lastsync" id="rev-lastsync">Last import: checking…</div>
-        <input type="file" id="rev-file" accept=".csv,.tsv,.txt,.xlsx,.xls">
-        <textarea id="rev-text" rows="6" placeholder="…or paste the export here — the first row must be the column headings"></textarea>
+        <input type="file" id="rev-file" aria-label="Revolution client_data_export_V2 file" accept=".csv,.tsv,.txt,.xlsx,.xls">
+        <textarea id="rev-text" rows="6" aria-label="Paste the Revolution export" placeholder="…or paste the export here — the first row must be the column headings"></textarea>
         <div class="rev-actions">
           <button class="btn btn-primary" id="rev-read-btn">Read the export</button>
           <button class="btn" id="rev-reset-btn" hidden>Start again</button>
@@ -744,8 +766,10 @@
         <div class="panel-head-row">
           <h3>Money owed — unpaid fees on completed cases</h3>
           <div class="owed-tools">
-            <button type="button" class="btn btn-sm seg-btn seg-first scope-active" id="owed-group-lender">By lender</button>
-            <button type="button" class="btn btn-sm seg-btn seg-last" id="owed-group-adviser">By adviser</button>
+            <span class="segment" role="group" aria-label="How to group the unpaid fees">
+              <button type="button" class="btn btn-sm seg-btn seg-first scope-active" id="owed-group-lender" aria-pressed="true">By lender</button>
+              <button type="button" class="btn btn-sm seg-btn seg-last" id="owed-group-adviser" aria-pressed="false">By adviser</button>
+            </span>
             <button type="button" class="btn btn-sm" id="owed-csv-btn" title="Download every unpaid fee line, including the proc and sols columns">⭳ CSV</button>
           </div>
         </div>
@@ -1161,8 +1185,8 @@
         <h3>Introducers</h3>
         <p class="panel-sub">Estate agents, accountants and other referrers. Give them a portal login and they can watch their referrals progress (and nothing else).</p>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
-          <input id="intro-name" placeholder="Name / firm" style="flex:2;min-width:160px;">
-          <input id="intro-email" type="email" placeholder="Email" style="flex:2;min-width:160px;">
+          <input id="intro-name" aria-label="Introducer name or firm" placeholder="Name / firm" style="flex:2;min-width:160px;">
+          <input id="intro-email" type="email" aria-label="Introducer email" placeholder="Email" style="flex:2;min-width:160px;">
           <button class="btn btn-primary" id="add-intro-btn">Add introducer</button>
         </div>
         <div id="intro-list"></div>
@@ -1181,14 +1205,14 @@
         <div id="team-invite-block">
           <p class="panel-sub">Owner only. Choose the tier before you send the invite — it decides what the new login may do, and the database enforces it.</p>
           <div style="display:flex;gap:8px;flex-wrap:wrap;">
-            <input id="staff-name" placeholder="Full name" style="flex:2;min-width:160px;">
-            <input id="staff-email" type="email" placeholder="Email" style="flex:2;min-width:160px;">
-            <select id="staff-role" style="flex:1;min-width:150px;">
+            <input id="staff-name" aria-label="New colleague’s full name" placeholder="Full name" style="flex:2;min-width:160px;">
+            <input id="staff-email" type="email" aria-label="New colleague’s email" placeholder="Email" style="flex:2;min-width:160px;">
+            <select id="staff-role" aria-label="Access tier for the new login" style="flex:1;min-width:150px;">
               <option value="adviser">Adviser</option>
               <option value="admin">Administrator</option>
               <option value="introducer">Introducer</option>
             </select>
-            <select id="staff-introducer" class="hidden" style="flex:2;min-width:160px;"></select>
+            <select id="staff-introducer" class="hidden" aria-label="Which introducer this login belongs to" style="flex:2;min-width:160px;"></select>
             <button class="btn btn-primary" id="invite-staff-btn">Create login</button>
           </div>
           <p id="staff-role-hint" class="panel-sub" style="margin-top:8px;"></p>
@@ -1253,7 +1277,7 @@
         <button class="btn btn-primary" id="new-vault-btn">+ New entry</button>
       </div>
       <p class="panel-sub" id="vault-intro">Company password safe — all staff can see every entry. Individual entries can be restricted using “Who can see this”. Passwords are hidden until you reveal them, and are never included in the firm data export.</p>
-      <input type="search" id="vault-search" class="search" placeholder="Search the vault — name, owner, username, anything…">
+      <input type="search" id="vault-search" class="search" aria-label="Search the vault" placeholder="Search the vault — name, owner, username, anything…">
       <div id="vault-segment" class="pipe-segment" role="tablist" aria-label="Vault category"></div>
       <div id="vault-list"></div>
     </section>
@@ -1295,7 +1319,12 @@
   </form>
 </aside>
 
-<div id="toast" class="toast hidden"></div>
+<!-- R73 · B1 — the app had no aria-live region anywhere: every confirmation it
+     has ever given ("Saved", "Moved to Offer", "3 emails cancelled") was silent
+     to a screen reader. role=status + aria-live=polite announces it after the
+     current utterance rather than interrupting; aria-atomic re-reads the whole
+     bar so an Undo toast is announced with its button. -->
+<div id="toast" class="toast hidden" role="status" aria-live="polite" aria-atomic="true"></div>
 
 <script src="mock-supabase.js"></script>
 <!-- R55 · F7 — SheetJS (~1MB) is only needed by the Import / reconciliation / offer-export flows,

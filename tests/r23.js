@@ -223,7 +223,8 @@ const readsFor = (page, table) => page.evaluate((t) => window.__r23Reads.filter(
       // Header counts across every rendered column sum to the TRUE total the board segment holds —
       // an independent, DOM-level cross-check that nothing was silently dropped, without assuming
       // which segment is default (BOARD_COL_CAP's OWN 50-per-column cap is orthogonal to this round).
-      const headerSum = await page.$$eval("#board .col h4 span", (els) => els.reduce((s, e) => s + (Number(e.textContent.trim()) || 0), 0));
+      // R73: the board's column heads are H3 now (.col-h) — an H4 under an H2 skipped a level.
+      const headerSum = await page.$$eval("#board .col .col-h span", (els) => els.reduce((s, e) => s + (Number(e.textContent.trim()) || 0), 0));
       ok("B2 · the board rendered cards (not empty)", boardCards > 0, boardCards);
       ok("B2 · every column header count sums to at least as many cards as rendered (BOARD_COL_CAP may hide some, R23 must not)", headerSum >= boardCards, JSON.stringify({ headerSum, boardCards }));
       const boardHidden = await page.$eval("#board-cap-notice", (e) => e.classList.contains("hidden"));

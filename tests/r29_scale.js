@@ -390,7 +390,9 @@ async function seedScale(page, n) {
       const showMoreN = await rowCount(page, "#board .board-show-more");
       ok("B5 · at least one column is over its cap and shows a 'Show N more' control", showMoreN > 0, showMoreN);
 
-      const headerCounts = await page.$$eval("#board .col h4 span", (els) => els.map((e) => Number(e.textContent)));
+      /* R73: board column heads were demoted H4 → H3 (heading-order fix) and carry .col-h now —
+         same element, same count span, addressed by class. r18/r23 got the same re-point. */
+      const headerCounts = await page.$$eval("#board .col .col-h span", (els) => els.map((e) => Number(e.textContent)));
       ok("B6 · every column HEADER count (the full, uncapped count) is a finite non-negative number", headerCounts.every((n) => Number.isFinite(n) && n >= 0), JSON.stringify(headerCounts));
       const headerSum = headerCounts.reduce((a, b) => a + b, 0);
       // R69-HF1 — paged, per __readAllRaw in newPage.

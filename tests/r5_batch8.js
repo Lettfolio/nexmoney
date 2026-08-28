@@ -27,6 +27,25 @@
    ========================================================================== */
 "use strict";
 
+/* R73 · A3 — THE CASE ACTION BAR IS CAPPED NOW, so a stage action may be one press away.
+   The bar was 135px of a 900px desktop viewport and 445px of an 844px phone because every action
+   CASE_ACTION_RULES calls primary at a stage sat on it — twelve buttons on a completed case.
+   R73 keeps the two or three the stage is actually about on the bar and moves the rest into the
+   Actions ▾ menu, under a heading naming the stage; every act-* id is built exactly once, with
+   the same label and the same handler, and every one is reachable in at most one extra press.
+   Same shape r13 and r5_batch1 have used since R15: find out where the action currently is, open
+   the overflow only if that is where it is, then click it exactly as before. */
+async function r73OpenAction(page, id) {
+  const visible = await page.evaluate((sel) => {
+    const el = document.querySelector(sel);
+    if (!el) return true;                       // absent: let the click fail as it always would
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  }, `#${id}`);
+  if (!visible) await page.click("#case-more-actions-toggle");
+}
+
+
 const { chromium } = require("playwright");
 const { spawn } = require("child_process");
 const http = require("http");
@@ -137,7 +156,7 @@ const readProfile = (page, id) => page.evaluate((pid) =>
       await page.waitForTimeout(600);
       const hasReminderBtn = await page.evaluate(() => !!document.querySelector("#act-reminder") && !document.querySelector("#act-reminder").classList.contains("hidden"));
       if (hasReminderBtn) {
-        await page.click("#act-reminder");
+        await r73OpenAction(page, "act-reminder"); await page.click("#act-reminder");
         await page.waitForTimeout(1200);
         const composed = await page.evaluate(() => (window.__mock.lastEmailRun().composed || [])[0] || null);
         ok("B4 UI (prod parity) · the composed email signs off with the new name/phone",

@@ -217,7 +217,15 @@ const advisingPool = (page) => page.evaluate(async () => {
       });
       eq("A2a · six enquiries now on My Day", barState.rows, 6);
       ok("A2b · #leads-accept-all is offered", barState.present, JSON.stringify(barState));
-      ok("A2c · …labelled with the count it is about", /\(6\)/.test(barState.label), barState.label);
+      /* R73: the label counts the SET it will accept, not the inbox total. "Accept all
+         unambiguous leads (6)" over six enquiries — one a joint name, one a possible existing
+         client — promised six accepts and delivered four, and the shortfall only appeared in the
+         confirm. The word "unambiguous" was already in the label; the number beside it was the
+         total. Re-pointed at the new contract and STRENGTHENED: it now pins both halves of the
+         split this fixture deliberately builds (four clean, two for a person), which the old
+         `(6)` did not distinguish at all. */
+      ok("A2c · …labelled with the count it will actually accept, and the remainder it leaves",
+        /Accept 4 unambiguous leads/.test(barState.label) && /\(2 need you\)/.test(barState.label), barState.label);
       ok("A2d · …and NOT inside #briefing-list (the list is rows; this is about the inbox)", !barState.insideList);
       ok("A2e · the bar explains in plain English what it will and will not do",
         /joint name/i.test(barState.sub) && /lightest desk/i.test(barState.sub) && /left here for you/i.test(barState.sub), barState.sub);
@@ -242,8 +250,16 @@ const advisingPool = (page) => page.evaluate(async () => {
       }));
       ok("A3b · it is the app's own overlay, not a native confirm()", confirm.up && page.__dialogs.length === dialogsBefore,
         JSON.stringify({ up: confirm.up, newDialogs: page.__dialogs.slice(dialogsBefore) }));
-      ok("A3c · the summary reads “Accept 4 leads: <who> → <adviser>, … · 2 left for you to decide”",
-        /^Accept 4 leads: .+→.+ · 2 left for you to decide$/.test(confirm.summary), confirm.summary);
+      /* R73: the grey summary strip said, in one run-on line, exactly what the list under it says
+         one lead per line — two renderings of one fact, the worse one first. The strip keeps the
+         SENTENCE (how many, and how many are left behind); the pairs are read off the list, which
+         A3d already counts and which this now also checks carries the arrows the strip used to
+         re-print. Nothing is lost and nothing is weakened — the same two facts are asserted, on
+         the element that actually shows them. */
+      ok("A3c · the summary reads “Accept 4 leads, one per line below · 2 left for you to decide”",
+        /^Accept 4 leads, one per line below · 2 left for you to decide$/.test(confirm.summary), confirm.summary);
+      ok("A3c2 · …and the who → adviser pairs are on the list beneath it",
+        confirm.rows.length === 4 && confirm.rows.every((r) => /→/.test(r)), JSON.stringify(confirm.rows));
       eq("A3d · one line per lead being accepted", confirm.rows.length, 4);
       ok("A3e · the two it will not decide are named with their reason",
         /joint name/.test(confirm.left) && /possible existing client/.test(confirm.left), confirm.left);
@@ -361,8 +377,11 @@ const advisingPool = (page) => page.evaluate(async () => {
       await wait(p2, 300);
       await p2.click("#leads-accept-all");
       await wait(p2, 900);
-      const pickSummary = await p2.evaluate(() => (document.querySelector("#leads-accept-summary") || {}).textContent || "");
-      ok("A10a · the confirm marks the row you had already routed as your pick", /\(your pick\)/.test(pickSummary), pickSummary);
+      /* R73: "(your pick, kept)" lives on the lead's own LINE in #leads-accept-list, where it
+         always did; the grey summary strip above it no longer re-prints the pairs (see A3c).
+         Read where the fact is shown. */
+      const pickSummary = await p2.evaluate(() => (document.querySelector("#leads-accept-list") || {}).textContent || "");
+      ok("A10a · the confirm marks the row you had already routed as your pick", /your pick/.test(pickSummary), pickSummary);
       await p2.click("#leads-accept-go");
       await wait(p2, 2000);
       const rAssign = {};

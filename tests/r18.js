@@ -214,7 +214,12 @@ const openClient = async (page, id) => {
       await wait(page, 300);
       // Baseline: however many 'application'-stage cases the fixture book already has, read straight
       // off the app's OWN rendered header — never assumed from fixture composition.
-      const baselineTxt = await page.$eval(`.col[data-stage="${STAGE}"] h4 span`, (e) => e.textContent.trim()).catch(() => "0");
+      /* R73: the board's column heads are H3, not H4 — an H4 directly under the page's
+     H2 skipped a heading level, which is the one thing a screen-reader user
+     navigating by heading cannot recover from. The heading now carries .col-h, so
+     the count is addressed by the class rather than by the tag it happens to use
+     this round. Same element, same text, same contract. */
+      const baselineTxt = await page.$eval(`.col[data-stage="${STAGE}"] .col-h span`, (e) => e.textContent.trim()).catch(() => "0");
       const baseline = Number(baselineTxt) || 0;
 
       const SEED_N = 55; // > BOARD_COL_CAP (50), well above fixture volume too
@@ -224,7 +229,7 @@ const openClient = async (page, id) => {
       await goto(page, "pipeline", 1200);
 
       const total = baseline + SEED_N;
-      const headerTxt = await page.$eval(`.col[data-stage="${STAGE}"] h4 span`, (e) => e.textContent.trim());
+      const headerTxt = await page.$eval(`.col[data-stage="${STAGE}"] .col-h span`, (e) => e.textContent.trim());
       eq("B · the column HEADER count is the TRUE total (baseline + seeded)", Number(headerTxt), total);
 
       const cardCount1 = await page.$$eval(`.col[data-stage="${STAGE}"] .card`, (els) => els.length);
@@ -255,7 +260,7 @@ const openClient = async (page, id) => {
       const otherCap = await page.evaluate(() => {
         const col = document.querySelector('.col[data-stage="offer"]');
         if (!col) return null;
-        const trueTotal = Number((col.querySelector("h4 span") || {}).textContent || 0);
+        const trueTotal = Number((col.querySelector(".col-h span") || {}).textContent || 0);   // R73: column heads are H3 (.col-h)
         const rendered = col.querySelectorAll(".card").length;
         const hasShowMore = !!col.querySelector(".board-show-more");
         return { trueTotal, rendered, hasShowMore };

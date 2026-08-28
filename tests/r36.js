@@ -339,8 +339,20 @@ const clientRow = (page, clientId) => page.evaluate((id) => {
       const nonsense = "zzzz-nobody-r36-" + Date.now();
       await page.fill("#prot-search", nonsense);
       await wait(page, 450);
-      const emptyMsg = await page.$eval("#prot-table .empty", (e) => e.textContent).catch(() => "");
-      ok("A3e · a nonsense term empties the table and NAMES the term in the empty state", emptyMsg.includes(nonsense), emptyMsg);
+      /* R73: the protection page's empty state is the house .empty-state component
+         now (one shape across clients, pipeline, vault and protection, with the way
+         out attached) rather than a bare grey .empty sentence. The contract this
+         line exists for is unchanged and is asserted harder: the term is still
+         named, and there is now a real control that takes the search off again. */
+      const emptyState = await page.evaluate(() => {
+        const es = document.querySelector("#prot-table .empty-state");
+        if (!es) return null;
+        return { text: es.textContent || "", hasButton: !!es.querySelector(".btn") };
+      });
+      ok("A3e · a nonsense term empties the table and NAMES the term in the empty state",
+        !!emptyState && emptyState.text.includes(nonsense), JSON.stringify(emptyState));
+      ok("A3e2 · …in the house empty state, with a control that clears the search (R73)",
+        !!emptyState && emptyState.hasButton, JSON.stringify(emptyState));
 
       // Composes with the status filter: search for our client while the drop-down is on "quoted"
       // (matches) and then re-set it to "completed" (our seeded case is live, so it should vanish).

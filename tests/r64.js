@@ -24,6 +24,25 @@
    ========================================================================== */
 "use strict";
 
+/* R73 · A3 — THE CASE ACTION BAR IS CAPPED NOW, so a stage action may be one press away.
+   The bar was 135px of a 900px desktop viewport and 445px of an 844px phone because every action
+   CASE_ACTION_RULES calls primary at a stage sat on it — twelve buttons on a completed case.
+   R73 keeps the two or three the stage is actually about on the bar and moves the rest into the
+   Actions ▾ menu, under a heading naming the stage; every act-* id is built exactly once, with
+   the same label and the same handler, and every one is reachable in at most one extra press.
+   Same shape r13 and r5_batch1 have used since R15: find out where the action currently is, open
+   the overflow only if that is where it is, then click it exactly as before. */
+async function r73OpenAction(page, id) {
+  const visible = await page.evaluate((sel) => {
+    const el = document.querySelector(sel);
+    if (!el) return true;                       // absent: let the click fail as it always would
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  }, `#${id}`);
+  if (!visible) await page.click("#case-more-actions-toggle");
+}
+
+
 const { chromium } = require("playwright");
 const { spawn } = require("child_process");
 const http = require("http");
@@ -422,7 +441,7 @@ async function refileFromCaseModal(page, sourceCaseId, noteId, targetCaseId) {
       page.__dialogAnswer = "dismiss"; // read the wording; send nothing
       await page.evaluate((id) => window.openCase(id), withProp.id);
       await page.waitForTimeout(900);
-      await page.click("#act-reminder");
+      await r73OpenAction(page, "act-reminder"); await page.click("#act-reminder");
       await page.waitForTimeout(700);
       const msg = lastDialog(page);
       ok("H-02 · the confirm carries a `Property:` line with the FULL address",
@@ -447,7 +466,7 @@ async function refileFromCaseModal(page, sourceCaseId, noteId, targetCaseId) {
       await page.waitForTimeout(300);
       await page.evaluate((id) => window.openCase(id), bare);
       await page.waitForTimeout(900);
-      await page.click("#act-reminder");
+      await r73OpenAction(page, "act-reminder"); await page.click("#act-reminder");
       await page.waitForTimeout(700);
       const bareMsg = lastDialog(page);
       ok("H-02 · a case with no property address gets no Property line at all",

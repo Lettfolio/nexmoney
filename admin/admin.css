@@ -26,7 +26,13 @@
   /* Text */
   --dark: #10243c;
   --text: #364358;
-  --muted: #64748b;
+  /* R73 · B2 — --muted was #64748b: 4.76:1 on white but 4.20:1 on --light and
+     4.07:1 on the red/amber row tints, so the app's second-most-used text colour
+     missed AA on every tinted surface (.panel-sub in a tinted panel, .seg-btn on
+     its track, .ops-chip, .wait-chip, .ret-group-h). #5b6a7e measures 5.66:1 on
+     white and 5.00:1 on --light — one token edit, AA everywhere it lands, and
+     the hue is unchanged so nothing reads as a different colour. */
+  --muted: #5b6a7e;
 
   /* Status.
      R6-B4 — amber was #9a6b00, which measures 4.17:1 on --amber-bg: below AA for
@@ -49,7 +55,14 @@
   --shadow-card: 0 1px 2px rgba(16,24,40,.06), 0 4px 16px rgba(16,24,40,.04);
   --shadow-lift: 0 2px 6px rgba(16,24,40,.08), 0 8px 24px rgba(16,24,40,.07);
   --shadow-pop: 0 4px 16px rgba(9,20,38,.12), 0 24px 64px rgba(9,20,38,.24);
-  --focus-ring: 0 0 0 3px rgba(0,72,140,.18);
+  /* R73 · B1 — the old ring was a 3px navy wash at 18% alpha: it computes to
+     ≈1.3:1 against white, which is to say invisible, and WCAG 2.4.11 asks for
+     3:1. Two rings instead: a 2px white spacer that lifts the ring off whatever
+     the control's own fill is, then 2px of solid --navy (8.6:1 on white). */
+  --focus-ring: 0 0 0 2px #fff, 0 0 0 4px var(--navy);
+  /* The same ring for controls sitting ON the navy sidebar, where a navy ring
+     would be invisible for the opposite reason. */
+  --focus-ring-dark: 0 0 0 2px var(--side-top), 0 0 0 4px #cfe2fb;
 
   --font: "Inter", -apple-system, "Segoe UI", system-ui, Roboto, Arial, sans-serif;
   --shadow: var(--shadow-card); /* legacy alias */
@@ -101,8 +114,24 @@ h2 { color: var(--dark); font-size: 20px; font-weight: 700; letter-spacing: -0.0
   color: #5b6b7e;
   margin-bottom: 8px;
 }
-.panel > h3 .btn { text-transform: none; letter-spacing: 0; }
+.panel > h3 .btn, .panel h3:not([class]) .btn { text-transform: none; letter-spacing: 0; }
 .panel > h3 .btn:first-of-type { margin-left: auto; }
+/* R73 · B3 — when the panel head's first control is a SEGMENT, the track is what
+   gets pushed to the right edge, not the first button inside it. */
+.panel > h3 > .segment { margin-left: auto; }
+.panel > h3 .segment > .btn:first-of-type { margin-left: 0; }
+/* R73 · B4 — sixteen headings inside panels are not DIRECT children of .panel
+   (they sit in a wrapper div), so `.panel > h3` never reached them and they fell
+   back to the browser's default h3: 18.7px bold serif-metric black, louder than
+   the panel title above them. A bare h3 inside a panel is the same kind of thing
+   as a bare h3 directly in one, so it gets the same look. `:not([class])` keeps
+   every DELIBERATELY styled h3 (.adopt-h, .ret-group-h, the overlay headings)
+   exactly as it was. */
+.panel h3:not([class]) {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  font-size: 11.5px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .07em; color: #5b6b7e; margin-bottom: 8px;
+}
 
 /* ---------- Login ---------- */
 .login-wrap {
@@ -177,6 +206,12 @@ h2 { color: var(--dark); font-size: 20px; font-weight: 700; letter-spacing: -0.0
   transition: opacity .15s ease, filter .15s ease;
 }
 .sidenav button:hover { background: rgba(255,255,255,.06); color: #e8f0fa; }
+/* R73 · B1 — the UA's default focus ring on a dark navy panel is a thin dark
+   outline nobody can see. Light-on-navy variant, same two-ring geometry as the
+   light one so tabbing reads as one behaviour across the whole app. */
+.sidenav button:focus-visible, .nav-group-head:focus-visible {
+  outline: none; box-shadow: var(--focus-ring-dark);
+}
 .sidenav button.active {
   background: rgba(255,255,255,.09);
   border-left-color: var(--orange);
@@ -254,8 +289,40 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
 .btn-primary:hover { background: var(--navy-600); border-color: var(--navy-600); color: #fff; }
 .btn-ghost { border: none; background: none; box-shadow: none; color: var(--muted); }
 .btn-ghost:hover { color: var(--navy); background: var(--light); box-shadow: none; }
+/* R73 · B1 — .btn-ghost sets box-shadow:none, which silently cancelled the ring
+   .btn:focus-visible had just set: every ghost button in the app was keyboard-
+   invisible. Stated after the hover rule so it wins on order, as .btn's does. */
+.btn-ghost:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.sidebar-foot .btn-ghost:focus-visible { box-shadow: var(--focus-ring-dark); }
 .btn-block { width: 100%; padding: 11px; font-size: 14px; }
-.btn-sm { padding: 4px 10px; font-size: 12.5px; border-radius: 7px; }
+
+/* ==========================================================================
+   R73 · B3 — THE BUTTON SCALE. Three sizes, each defined ONCE.
+
+   The design critic counted 21 visual variants of .btn across the app: six type
+   sizes and five paddings, because a dozen component rules each set their own
+   padding/font-size on top of .btn-sm. A button's size is meant to encode how
+   important the action is; at six sizes it encodes nothing.
+
+     .btn      13.5px  — a page's own verbs
+     .btn-sm   12.5px  — verbs that live on a row, in a table cell or a panel head
+     .btn-xs   11.5px  — verbs attached to a single field or a group header
+
+   The converted classes JOIN the size selector rather than being renamed, so
+   every test, handler and querySelector that names them still finds them: what
+   changed is which of the three scales they land on. Each one's own rule keeps
+   only what is genuinely its own (a pill radius, a min-width, nowrap).
+   ========================================================================== */
+.btn-sm,
+.ret-row-chip,          /* retention row verbs — R73 · B3 */
+.appt-quick-btn         /* My Day ✓ Attended / ✗ No-show — R73 · B3 (panel B#9) */
+  { padding: 4px 10px; font-size: 12.5px; border-radius: 7px; }
+.btn-xs,
+.snooze-btn,            /* +1d / +3d / +1wk on a task */
+.wt-group-all,          /* "Select all 5" on a Watchtower rule header */
+.sec-copy, .vf-copy, .vf-reveal,   /* the copy/reveal pair on one vault field */
+#report-advocacy-panel .adv-open-btn
+  { padding: 3px 8px; font-size: 11.5px; border-radius: 6px; line-height: 1.35; }
 .btn-danger { color: var(--red); }
 .btn-danger:hover { color: var(--red); background: var(--red-bg); border-color: #eec3bb; }
 .btn-ghost.btn-danger:hover { border-color: transparent; }
@@ -263,8 +330,47 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
 /* Segmented control (My Day scope toggle) */
 .seg-first { border-radius: 8px 0 0 8px; }
 .seg-last { border-radius: 0 8px 8px 0; margin-left: -7px; }
-.btn.scope-active { background: var(--navy); border-color: var(--navy); color: #fff; font-weight: 600; position: relative; z-index: 1; }
-.btn.scope-active:hover { color: #fff; background: var(--navy-600); }
+/* ==========================================================================
+   R73 · B3 — ONE SELECTED-SEGMENT TREATMENT.
+
+   Navy fill meant two different things: "this is the primary action on the
+   screen" (.btn-primary) and "this filter is the one currently applied"
+   (.scope-active). A filter that shouts louder than the verb beside it is a
+   filter that gets pressed by mistake — and it did, on six pages.
+
+   The house already had a good answer: the pipeline's segmented control
+   (.pipe-segment / .seg-btn.active) — a grey track with the chosen option
+   lifted out of it in white. That is now the ONE treatment, and .segment is the
+   track the other five controls were missing.
+
+   The CLASS NAME .scope-active is kept deliberately. Twenty JS call sites and
+   several suites name it; renaming would be a 34,000-line search-and-replace
+   that buys nothing a rule change does not. What is retired is the LOOK.
+   Outside a track (a control this round did not reach, or a two-state toggle
+   like "Never contacted first") it falls back to a tinted, navy-bordered
+   pressed state — still unmistakably "on", still not shouting "press me".
+   ========================================================================== */
+.segment {
+  display: inline-flex; flex-wrap: wrap; gap: 2px; vertical-align: middle;
+  background: #eef2f7; padding: 3px; border-radius: 999px; max-width: 100%;
+}
+.segment > .btn {
+  border: 1px solid transparent; background: transparent; box-shadow: none;
+  border-radius: 999px; color: var(--muted); font-weight: 500; margin-left: 0;
+}
+.segment > .btn:hover { background: rgba(255,255,255,.6); color: var(--navy); border-color: transparent; box-shadow: none; transform: none; }
+.segment > .btn.scope-active, .segment > .btn.active {
+  background: var(--white); color: var(--navy); font-weight: 600;
+  border-color: transparent; box-shadow: 0 1px 2px rgba(16,24,40,.14);
+}
+.segment > .btn.scope-active:hover, .segment > .btn.active:hover { background: var(--white); color: var(--navy); }
+/* The count pill inside a chosen segment. Was white-on-navy; on a white pill it
+   takes the same navy fill .seg-btn.active .seg-count already uses. */
+.segment > .btn .count { background: rgba(16,24,40,.07); color: var(--muted-on-tint); }
+.segment > .btn.scope-active .count { background: var(--navy); color: #fff; }
+/* Fallback: pressed, but not primary. */
+.btn.scope-active { background: var(--blue-bg); border-color: var(--navy); color: var(--navy); font-weight: 600; box-shadow: none; position: relative; z-index: 1; }
+.btn.scope-active:hover { color: var(--navy); background: var(--blue-bg); border-color: var(--navy); }
 
 /* ---------- Panels ---------- */
 .panel {
@@ -275,7 +381,11 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
   margin-bottom: 20px;
   box-shadow: var(--shadow-card);
 }
-.panel-sub { font-size: 13px; color: var(--muted); margin-bottom: 12px; }
+/* R73 · B4 — a 78-character measure. These paragraphs explain a rule in plain
+   English and are the copy this firm actually reads; at 1,400px of panel width
+   some ran to 190 characters a line, which is roughly twice the point at which
+   the eye loses its place returning to the left edge. */
+.panel-sub { font-size: 13px; color: var(--muted); margin-bottom: 12px; max-width: 78ch; }
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
 /* R6-FIX V3 — `1fr` is not "half the width": a grid track's default minimum is
    min-content, so a panel whose widest row cannot shrink pushes the track past
@@ -323,6 +433,22 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
   font-variant-numeric: tabular-nums;
 }
 .panel h3 .count.hot { background: var(--amber-bg); color: var(--amber); }
+/* R73 · B2 — the adoption strip's headline count is inside an <h4>, so the two
+   rules above (scoped `.panel h3 .count`) never matched it and "2 of 4 active"
+   rendered as plain body text — the one alarm on the strip, unstyled. The strip
+   joins the same pill vocabulary rather than growing a second one. */
+.adopt-h .count {
+  display: inline-block; min-width: 20px; text-align: center;
+  padding: 1px 8px; border-radius: 20px;
+  background: var(--light); color: var(--muted-on-tint);
+  font-size: 11px; font-weight: 700; letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+.adopt-h .count.hot { background: var(--amber-bg); color: var(--amber); }
+/* A person who has changed nothing in the window gets the same amber row tint the
+   adviser scoreboard gives an off-team row — one treatment for "read this row". */
+#report-adoption tr.row-warn td { background: var(--amber-50, #fff7ec); }
+#report-adoption tr.row-warn td:first-child { color: var(--orange-600); }
 .panel.slim { padding: 12px 22px; opacity: .72; box-shadow: none; }
 .panel.slim > *:not(h3) { display: none; }
 .panel.slim h3 { margin: 0; }
@@ -352,7 +478,37 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
   position: absolute; top: 0; left: 0; right: 0; height: 3px;
   background: linear-gradient(90deg, var(--orange), #f9a56a 35%, var(--navy));
 }
-#briefing-list { max-height: 340px; overflow-y: auto; }
+/* ==========================================================================
+   R73 · A1 — THE DAY IS NOT A 340px WINDOW ANY MORE.
+
+   340px is four rows. Kim's My Day is 48 items over ~2,800px of content and
+   Wayne's is 14, so the panel that is supposed to BE the morning showed 8% of
+   it and every band heading below the first was invisible until somebody
+   thought to scroll a box that gives no sign it can be scrolled. Watchtower,
+   directly underneath, has had 60vh since round 11.
+
+   min(62vh, 720px): 62% of the viewport on a laptop (~560px at 900px tall, so
+   the fold now lands 6–7 rows down instead of 4), capped at 720px so a tall
+   monitor does not turn the panel into the whole page and push Watchtower and
+   the radar off the bottom. It is still a scroller — the point is not to
+   render 2,800px inline, it is that the cut is honest: applyDashCage() trims
+   the cap DOWN to the last whole row so no row is ever sliced in half, paints
+   a fade over the join, and puts a real "N more ↓" button under it that opens
+   the list in full. The N is the DATA's count of rows the list holds, not a
+   count of DOM nodes below the fold.
+   ========================================================================== */
+#briefing-list { max-height: min(62vh, 720px); overflow-y: auto; }
+/* The footer that ends a caged list: the fade sits on the FOOTER, not inside the
+   scroller — a ::after on a scrolling box scrolls away with its content. */
+.dash-cage-foot { position: relative; margin-top: -30px; padding-top: 32px; display: flex; justify-content: center; }
+.dash-cage-foot::before {
+  content: ""; position: absolute; left: 0; right: 0; top: 0; height: 30px;
+  background: linear-gradient(180deg, rgba(255,255,255,0), var(--white) 82%, var(--white));
+  pointer-events: none;
+}
+.dash-cage-foot.is-open { margin-top: 6px; padding-top: 0; }
+.dash-cage-foot.is-open::before { display: none; }
+.dash-cage-more { min-height: 34px; }
 
 /* Briefing rows: refined left accent + subtle tint */
 .brief-row { position: relative; padding-left: 14px; border-radius: 8px; }
@@ -414,6 +570,17 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
 /* ---------- Dashboard cards & tabs ---------- */
 .dash-card { display: flex; flex-direction: column; height: 300px; }
 .dash-card.slim { height: auto; }
+/* R73 · A1 — the radar's cage, treated like My Day's. 300px of card is a 181px list, i.e. two
+   rows of "here is a live case nobody has given a next step". It is the same panel-sized fix:
+   grow to the content, stop at the same min(62vh, 720px) ceiling the briefing uses, and let
+   applyDashCage() land the cut on a whole row and offer the rest. Scoped to this panel by id —
+   the two drawers in the .grid-2 below share .dash-card and share a grid row, and equal heights
+   are what makes that pair read as a pair. The cap goes on the LIST, not the card, for the same
+   reason My Day's does: a cap on the card is a budget the heading and the two explanatory
+   paragraphs spend first, so the list ends up with whatever is left over and the number in the
+   stylesheet stops describing anything. */
+#unactioned-panel.dash-card { height: auto; }
+#unactioned-list { max-height: min(62vh, 720px); }
 .dash-scroll { flex: 1; overflow-y: auto; min-height: 0; }
 .dash-tabs { display: flex; gap: 18px; border-bottom: 1px solid var(--border); margin-bottom: 10px; padding-bottom: 8px; flex-shrink: 0; }
 .dash-tab {
@@ -522,6 +689,26 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
 .row-main .t:hover { color: var(--navy); text-decoration: underline; }
 .row-main .s { font-size: 12.5px; color: var(--muted); margin-top: 1px; font-variant-numeric: tabular-nums; }
 .empty { color: var(--muted); font-size: 13px; padding: 10px 0; }
+
+/* ==========================================================================
+   R73 · B5 — ONE EMPTY STATE.
+
+   The critic counted four: a bare grey sentence (clients), a dashed placeholder
+   (board columns), a full-width card (the board), and nothing at all (vault). A
+   list that has gone empty because of a FILTER is the only interesting case —
+   the reader's next move is always "undo what I just did" — so the component
+   carries that move as a real button rather than leaving them to find the
+   filter again.
+
+   Deliberately quiet: this is a state, not an error. No icon, no colour, no box
+   shadow — it sits inside whatever panel already surrounds the list.
+   ========================================================================== */
+.empty-state {
+  padding: 34px 20px; text-align: center; max-width: 46ch; margin: 0 auto;
+}
+.empty-state-h { display: block; font-size: 15px; font-weight: 700; color: var(--dark); margin-bottom: 5px; }
+.empty-state-sub { display: block; font-size: 13px; color: var(--muted); line-height: 1.55; margin-bottom: 14px; }
+.empty-state .btn { margin: 0 auto; }
 /* BUILD 7d (defect 31) — subtle possible-duplicate hint in the client modal. */
 .dup-hint {
   margin: -6px 0 10px; padding: 6px 10px; font-size: 12.5px;
@@ -566,7 +753,10 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
 .badge.amber  { background: var(--amber-bg); color: var(--amber); }
 .badge.blue   { background: var(--blue-bg); color: var(--navy); }
 .badge.grey   { background: #eef1f5; color: #556275; }
-.badge.purple { background: #f3ecfc; color: #6b21a8; border: 1px dashed #c4a2e8; }
+/* R73 · B5 — a dashed edge means ESTIMATE and nothing else (see .badge.is-est
+   below). This one marks a real, booked appointment on My Day: a fact, not a
+   guess. Solid. */
+.badge.purple { background: #f3ecfc; color: #6b21a8; border: 1px solid #ddc9f2; }
 /* "Not confirmed" — same colour, dashed edge. Works on any of the five. */
 .badge.is-est { border-style: dashed; border-color: currentColor; opacity: .95; }
 /* Long values (a lender, a lost reason, a stage label on a narrow column) must
@@ -753,7 +943,9 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
 /* ---------- Pipeline board ---------- */
 .board { display: grid; grid-auto-flow: column; grid-auto-columns: 244px; gap: 14px; overflow-x: auto; padding-bottom: 16px; align-items: start; }
 .col { background: #edf1f7; border-radius: var(--radius); padding: 10px; }
-.col h4 {
+/* R73 · B1 — the column heads are H3 now (H4 under an H2 skipped a level). Both
+   selectors kept so the rule is identical either way. */
+.col h4, .col .col-h {
   font-size: 11px; font-weight: 700;
   text-transform: uppercase; letter-spacing: .07em;
   color: var(--muted-on-tint); padding: 4px 6px 10px;
@@ -777,7 +969,7 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
    content and a nested vertical scroller there fights the page scroll. */
 @media (min-width: 761px) {
   .col { max-height: calc(100vh - 200px); overflow-y: auto; overscroll-behavior-y: contain; }
-  .col > h4 {
+  .col > h4, .col > .col-h {
     /* top:-10px, not 0: sticky offsets are measured from the scrollport's PADDING
        box, so top:0 parked the heading 10px down and let cards scroll through the
        gap above it. -10px pins it flush to the column's border box, where the
@@ -884,7 +1076,10 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
 }
 .seg-btn {
   border: none; background: transparent; border-radius: 999px;
-  padding: 7px 15px; font-size: 13px; font-weight: 500; color: var(--muted);
+  /* R73 · B3 — 12.5px, the .btn-sm rung. At 13px this was a FOURTH size, half a
+     pixel away from btn-sm and reachable only by the segment family: exactly the
+     kind of near-miss that turns three sizes into six. */
+  padding: 7px 15px; font-size: 12.5px; font-weight: 500; color: var(--muted);
   cursor: pointer; display: inline-flex; align-items: center; gap: 7px;
   white-space: nowrap; transition: background .15s ease, color .15s ease, box-shadow .15s ease;
 }
@@ -953,10 +1148,23 @@ main input:focus, main select:focus, main textarea:focus,
   backdrop-filter: blur(4px);
   z-index: 50;
   display: flex; align-items: flex-start; justify-content: center;
-  padding: 40px 16px; overflow-y: auto;
+  /* R73 · A3 (panel #4) — THE 40px PINNING GAP.
+     This backdrop is the modal's scroll container, so `position: sticky; top: 0` on .modal-close
+     and .cs-sticky-actions pins to the top of its PADDING BOX — 40px below the top of the screen.
+     Content therefore slid through a 40px band of visible page above a bar that was supposed to
+     be covering it, and every section heading scrolled to by a jump link landed underneath.
+     The 40px is now the modal's own margin, so the scrollport starts at the top of the viewport
+     and a pinned bar pins to it. Identical geometry at rest; the difference is only ever visible
+     while the modal is scrolled, which is exactly where the defect was. */
+  padding: 0 16px; overflow-y: auto;
+  /* Anything scrolled to inside the modal clears the pinned action bar (~62px) rather than
+     landing behind it — the browser's own answer to the same problem scroll-margin-top solves
+     per element, applied once at the scrollport. */
+  scroll-padding-top: 70px;
 }
 .modal {
   position: relative;
+  margin: 40px 0;
   background: var(--white);
   border-radius: 16px;
   width: 640px; max-width: 100%;
@@ -1258,7 +1466,8 @@ details.imp-conflict .s { color: var(--muted); font-size: 11.5px; }
   min-height: 160px; padding: 10px;
   box-shadow: var(--shadow-card);
 }
-.diary-day h5 { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-bottom: 8px; }
+/* R73 · B1 — day cells are H3 now. */
+.diary-day h5, .diary-day .diary-day-h { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-bottom: 8px; }
 .diary-day.today { border-color: var(--orange); box-shadow: 0 0 0 1px var(--orange), 0 4px 16px rgba(243,111,35,.12); }
 .appt {
   background: var(--blue-bg);
@@ -1393,7 +1602,10 @@ select.task-reassign { width: auto; padding: 3px 6px; font-size: 12px; }
 
 /* ---------- Toast ---------- */
 .toast {
-  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+  /* R73 · B1 — bottom-RIGHT, not bottom-centre. Centred, the bar landed on top
+     of whatever the operator had just been reading in the middle of the page —
+     and on a phone it covered the row that had just changed. */
+  position: fixed; bottom: 24px; right: 24px; left: auto; transform: none;
   background: var(--side-top); color: #fff;
   padding: 11px 22px; border-radius: 999px;
   font-size: 13.5px; font-weight: 500;
@@ -1417,8 +1629,12 @@ select.task-reassign { width: auto; padding: 3px 6px; font-size: 12px; }
 }
 .toast .toast-action:hover, .toast .toast-action:focus-visible { color: #fff; }
 @keyframes toast-in {
-  from { opacity: 0; transform: translate(-50%, 12px); }
-  to   { opacity: 1; transform: translate(-50%, 0); }
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+/* On a phone it spans the width it has rather than hugging one corner. */
+@media (max-width: 560px) {
+  .toast { right: 12px; left: 12px; max-width: none; text-align: center; }
 }
 
 /* ---------- AI assistant ----------
@@ -1641,7 +1857,10 @@ select.task-reassign { width: auto; padding: 3px 6px; font-size: 12px; }
   .pipe-segment { display: flex; width: 100%; overflow-x: auto; flex-wrap: nowrap; -webkit-overflow-scrolling: touch; border-radius: 12px; }
   .seg-btn { flex: 0 0 auto; }
   .modal { padding: 18px; width: 100%; border-radius: 14px; }
-  .modal-backdrop { padding: 12px 6px; }
+  /* R73 · A3 — same move as the desktop rule: the vertical gap becomes the modal's margin so the
+     scrollport starts at the top of the screen and the sticky bar pins to it. */
+  .modal-backdrop { padding: 0 6px; scroll-padding-top: 104px; }
+  .modal { margin: 12px 0; }
   .form-grid { grid-template-columns: 1fr; gap: 10px; }
   .cs-top { flex-direction: column; }
   .cs-top-actions { width: 100%; flex-direction: column; }
@@ -1729,7 +1948,10 @@ select.task-reassign { width: auto; padding: 3px 6px; font-size: 12px; }
 #prot-list-table .prot-actions { white-space: nowrap; }
 #prot-list-table .prot-actions > * { vertical-align: middle; }
 .prot-status-set { width: 96px; max-width: 96px; }
-.prot-status-set.prot-gi-set { width: 74px; max-width: 74px; }
+/* R73 · B3 — 74px clipped "GI taken" to "GI...", which is the one word on the row
+   that says the job is done. 96px fits the longest option; the column has the room
+   (the table's own width rules are unchanged). */
+.prot-status-set.prot-gi-set { width: 96px; max-width: 96px; }
 @media (max-width: 1560px) {
   /* The row index is decoration; it is the first thing to go when width is scarce. */
   #prot-list-table .prot-col-n { display: none; }
@@ -1863,7 +2085,8 @@ select.task-reassign { width: auto; padding: 3px 6px; font-size: 12px; }
 
 /* ---------- R17 · §3 — inline task snooze controls (My Day + Tasks rows) ---------- */
 .task-snooze { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; }
-.snooze-btn { padding: 3px 8px; font-size: 11.5px; border-radius: 999px; }
+/* R73 · B3 — size now comes from the .btn-xs scale above; the pill radius is its own. */
+.snooze-btn { border-radius: 999px; }
 .snooze-date { width: auto; max-width: 140px; padding: 3px 6px; font-size: 12px; cursor: pointer; }
 .snooze-date::-webkit-calendar-picker-indicator { cursor: pointer; }
 
@@ -1972,8 +2195,11 @@ select.combo-native { display: none !important; }
 .combo-more { padding: 6px 9px; font-size: 11.5px; color: var(--muted); }
 
 /* Clickable KPI tiles (QW15). */
-.kpi-click { cursor: pointer; transition: border-color .15s ease, box-shadow .15s ease, transform .15s ease; }
-.kpi-click:hover { border-color: #b7cbe2; box-shadow: var(--shadow-lift); transform: translateY(-1px); }
+/* R73 · B3 — .kpi-click is retired. Two hover treatments for one gesture ("this
+   tile takes you somewhere") is one too many, and the Data-health one is the
+   better of the pair: it names the destination with the navy border rather than
+   a grey lift. Every clickable tile — dashboard, Reports, Data health — now
+   carries .dq-clickable (see the rule beside the KPI block above). */
 
 /* T1-19 — a report table cell that navigates. A link, not another button in a table full of them. */
 .linkish {
@@ -2035,7 +2261,8 @@ select.combo-native { display: none !important; }
   transition: background .15s ease, border-color .15s ease, color .15s ease;
 }
 .global-search:hover { background: rgba(255,255,255,.10); border-color: rgba(255,255,255,.18); color: #cddcef; }
-.global-search:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+/* R73 · B1 — the global search sits ON the navy sidebar: dark ring variant. */
+.global-search:focus-visible { outline: none; box-shadow: var(--focus-ring-dark); }
 .global-search .gs-ic { font-size: 13px; opacity: .85; line-height: 1; }
 .global-search .gs-txt { flex: 1; text-align: left; }
 .global-search .gs-kbd {
@@ -2138,6 +2365,12 @@ select.combo-native { display: none !important; }
   width: 18px; height: 18px; cursor: pointer; accent-color: var(--navy); margin: 0; flex: 0 0 auto;
 }
 .email-cb, .dh-cb { align-self: center; }
+/* R73 · B3 (E-22) — a sent or cancelled email cannot be selected, so it had no
+   checkbox and its title started 26px to the left of every selectable row above
+   it. The gutter is RESERVED instead of removed, so the queue reads as one
+   column of subjects. Inert: no tab stop, nothing for a screen reader. */
+.email-cb-gap { width: 18px; flex: 0 0 auto; align-self: center; }
+@media (max-width: 760px) { .email-cb-gap { width: 24px; } }
 
 /* Mobile: larger touch targets + sticky bottom action bar */
 @media (max-width: 760px) {
@@ -2223,7 +2456,10 @@ th .money-basis {
 .kpi-delta .delta.down { color: var(--red); }
 .kpi-delta .delta.flat { color: var(--muted); }
 .kpi-delta .delta.none { color: var(--muted); font-weight: 500; font-style: italic; }
-.kpi-delta .delta-sep { color: var(--border-strong); }
+/* R73 · B2 — the separator was painted in --border-strong, a LINE colour used as
+   TEXT: 1.35:1 on white. It is a glyph a reader has to parse, so it takes a text
+   colour. */
+.kpi-delta .delta-sep { color: var(--muted); }
 
 /* S8 — the prior-year series on the completions chart: same bar, muted, drawn under the current
    year's so the two read as one month rather than two rows. */
@@ -2927,6 +3163,12 @@ tr.owed-hot > td { background: var(--red-bg); }
   white-space: normal; }
 #report-advocacy-panel td { padding: 6px; border-bottom: 1px solid #eef2f6; vertical-align: middle; }
 #report-advocacy-panel tr:last-child td { border-bottom: none; }
+/* R73 · B4 — .num goes global on table cells. Money and counts were right-aligned
+   in Monday money and two Reports panels and left-aligned in the other eleven, so
+   a column of pounds could not be scanned for its biggest number. Scoped to TABLE
+   CELLS on purpose: `.num` is also the class on a KPI tile's big figure, which is
+   centred and must stay centred. */
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 #report-advocacy-panel td.num, #report-advocacy-panel th.num { text-align: right; font-variant-numeric: tabular-nums; }
 #report-advocacy-panel .adv-empty { font-size: 12.5px; color: var(--muted); background: var(--light);
   border: 1px dashed var(--border-strong); border-radius: var(--radius-sm); padding: 10px 12px; line-height: 1.5; }
@@ -2937,7 +3179,8 @@ tr.owed-hot > td { background: var(--red-bg); }
 #report-advocacy-panel .adv-mon .adv-mn { font-size: 11px; font-weight: 700; color: var(--dark); font-variant-numeric: tabular-nums; }
 #report-advocacy-panel .adv-headline { display: flex; gap: 18px; flex-wrap: wrap; align-items: baseline; margin: 2px 0 6px; }
 #report-advocacy-panel .adv-big { font-size: 22px; font-weight: 800; color: var(--dark); font-variant-numeric: tabular-nums; }
-#report-advocacy-panel .adv-open-btn { padding: 1px 8px; font-size: 11px; line-height: 1.6; }
+/* R73 · B3 — size from the .btn-xs scale above (was a seventh size, 11px). */
+#report-advocacy-panel .adv-open-btn { white-space: nowrap; }
 @media (max-width: 640px) {
   #report-advocacy-panel .adv-grid { grid-template-columns: 1fr; }
   #report-advocacy-panel table { font-size: 12.5px; }
@@ -3183,7 +3426,13 @@ tr.owed-hot > td { background: var(--red-bg); }
 .rate-callpack { font-variant-numeric: tabular-nums; }
 /* W-15c — the "£X/mo more" estimate. Amber-ish so it reads as the reason to ring, never green
    (which would look like money earned) and never red (it is an estimate, not an alert). */
-.rate-uplift { color: var(--orange-600, #b35309); font-variant-numeric: tabular-nums; }
+/* R73 · B2 — the var-with-fallback trap. --orange-600 IS defined (#d95e15), so the
+   fallback never applied; #d95e15 measures 3.78:1 on white, under AA for the
+   retention page's single most important number (the payment uplift). The literal
+   the fallback already named passes at 4.87:1, so the value the author intended is
+   simply stated. Not a token: --orange-600 is a brand fill used behind white text
+   elsewhere, and darkening it there would change the brand. */
+.rate-uplift { color: #b35309; font-variant-numeric: tabular-nums; }
 .cs-uplift { margin: 6px 0 0; font-size: 13px; }
 
 /* W-14a — "assign to me instead", beside the Start-retention button it modifies. */
@@ -3295,7 +3544,11 @@ tr.owed-hot > td { background: var(--red-bg); }
    The two `.appt-quick-btn[data-outcome].is-set` rules went with that pressed state — nothing
    renders the class any more, and a dead rule is a rule the next reader has to disprove. */
 .appt-quick { display: inline-flex; gap: 4px; flex: 0 0 auto; }
-.appt-quick-btn { min-width: 30px; padding: 3px 7px; font-weight: 700; line-height: 1.2; }
+/* R73 · B3 (panel B#9) — these were .btn-ghost: borderless, muted, and sitting
+   directly under a timed appointment, so "✓ Attended" read as a caption rather
+   than the one-tap outcome it is. Bordered .btn-sm now (the class is dropped in
+   app.js); size comes from the scale above. */
+.appt-quick-btn { min-width: 34px; font-weight: 700; }
 .appt-quick-btn:disabled { opacity: .5; cursor: default; }
 
 /* The editor's outcome radios, styled as chips so the three read as one choice rather than as a
@@ -3587,7 +3840,8 @@ tr.owed-hot > td { background: var(--red-bg); }
 .sec-val { font-size: 13.5px; color: var(--dark); font-weight: 600; min-width: 0; overflow-wrap: anywhere; display: flex; align-items: center; gap: 6px; }
 .sec-empty { color: var(--muted); font-weight: 400; }
 .sec-dob-add { font-size: 12px; font-weight: 600; }
-.sec-copy, .vf-copy, .vf-reveal { padding: 2px 7px; line-height: 1.2; }
+/* R73 · B3 — size from the .btn-xs scale above. */
+.sec-copy, .vf-copy, .vf-reveal { line-height: 1.2; }
 .sec-copy { opacity: .8; }
 .sec-copy:hover { opacity: 1; }
 
@@ -3612,7 +3866,8 @@ tr.owed-hot > td { background: var(--red-bg); }
 .vault-owner-daniel { background: var(--blue-bg); color: var(--navy); }
 .vault-owner-luke   { background: var(--green-bg); color: var(--green); }
 .vault-owner-wayne  { background: #f3ecfc; color: #6b21a8; }
-.vault-owner-shared { background: var(--amber-bg); color: var(--amber); border: 1px dashed currentColor; }
+/* R73 · B5 — likewise: a credential IS shared or it isn't. Solid amber. */
+.vault-owner-shared { background: var(--amber-bg); color: var(--amber); border: 1px solid var(--amber); }
 .vault-owner-other  { background: #eef1f5; color: #556275; }
 .vault-vis { font-size: 10.5px; font-weight: 600; padding: 2px 7px; border-radius: 999px; }
 .vault-vis-all { background: #eef1f5; color: #59677a; }
@@ -3809,6 +4064,28 @@ tr.owed-hot > td { background: var(--red-bg); }
 .brief-sec-hot  { background: #fdecea; color: #b3261e; border-left: 4px solid #d93025; }
 .brief-sec-warm { background: #fef3e0; color: #9a6200; border-left: 4px solid #f5a623; }
 .brief-sec-rest { background: #eef1f5; color: #556275; border-left: 4px solid #aab4c3; }
+/* ==========================================================================
+   R73 · A1 — "Why? ▸", the house disclosure for a paragraph of reasoning.
+   Inline so it ends the sentence it belongs to rather than starting a new
+   block under it; the body is a block once opened, so the prose reads as
+   prose. The caret rotates rather than swapping glyph — one element, no
+   text substitution, and it still points the way it opens.
+   ========================================================================== */
+.why-fold { display: inline; }
+.why-fold > summary {
+  display: inline; list-style: none; cursor: pointer;
+  font-weight: 600; color: var(--navy); user-select: none;
+  padding: 2px 4px; border-radius: 5px;
+}
+.why-fold > summary::-webkit-details-marker { display: none; }
+.why-fold > summary:hover { background: var(--blue-bg); }
+.why-caret { display: inline-block; margin-right: 3px; transition: transform .15s ease; }
+.why-fold[open] > summary .why-caret { transform: rotate(90deg); }
+.why-fold-body { display: block; margin-top: 4px; }
+@media (max-width: 767px) {
+  /* The one place it needs a real tap target: on a phone this is the only way back to the words. */
+  .why-fold > summary { display: inline-block; min-height: 32px; line-height: 28px; padding: 2px 8px; }
+}
 .brief-fold > summary { cursor: pointer; font-size: 12.5px; color: #66738a; padding: 6px 10px; user-select: none; }
 .brief-fold > summary:hover { color: #33415c; }
 .brief-fold[open] > summary { color: #33415c; }
@@ -3830,7 +4107,10 @@ tr.owed-hot > td { background: var(--red-bg); }
 #prot-list-table tr.prot-band-quoted td { background: #fef3e0; color: #9a6200; border-left-color: #f5a623; }
 #prot-list-table tr.prot-band-discussed td { background: #e8f0fe; color: #1a5fb4; border-left-color: #4285f4; }
 .prot-band-n { background: rgba(255,255,255,0.75); border-radius: 10px; padding: 0 8px; }
-.prot-actions > *:not(:first-child) { opacity: 0.35; transition: opacity 0.12s; }
+/* R73 · B3 (panel E#3) — same disease as .hover-quiet, at 0.35: Status, GI, Task
+   and Email on every protection row looked disabled until the mouse arrived, and
+   on a phone the mouse never arrives. Same 0.75 floor. */
+.prot-actions > *:not(:first-child) { opacity: 0.75; transition: opacity 0.12s; }
 #prot-list-table tr:hover .prot-actions > *, .prot-actions:focus-within > * { opacity: 1; }
 
 /* R62 — the R61 leftovers: Emails current-first, fee-status weighting, Settings bands. */
@@ -3854,7 +4134,9 @@ tr.owed-hot > td { background: var(--red-bg); }
 .ret-month-chips { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
 .ret-month-chips .due-chips-lbl { margin-right: 2px; }
 .ret-month-chip .count { margin-left: 5px; background: rgba(16,42,78,.08); border-radius: 10px; padding: 0 6px; font-size: 11px; font-weight: 700; }
-.ret-month-chip.scope-active .count { background: rgba(255,255,255,.22); color: #fff; }
+/* R73 · B3 — the chosen chip is a WHITE pill now, so a white-on-white count would
+   vanish. Same navy fill .seg-btn.active .seg-count uses. */
+.ret-month-chip.scope-active .count { background: var(--navy); color: #fff; }
 .ret-selall { padding-top: 0; }
 .ret-selall .linkish { font-size: 12.5px; }
 .bulk-bar #ret-bulk-clear { margin-left: auto; }
@@ -3864,10 +4146,28 @@ tr.owed-hot > td { background: var(--red-bg); }
 /* The row's own call cluster. Kept inside .row-main so it reads as part of the row's text block
    rather than competing with the stage badge and the Start-retention button on the right. */
 .ret-row-acts { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 5px; }
-.ret-row-acts .btn.btn-sm { padding: 2px 8px; font-size: 11.5px; }
+/* R73 · B3 — this shrank every retention row verb to a seventh size (11.5px at
+   2px padding, ~21px tall — the phone tap-target complaint too). They are ordinary
+   .btn-sm now, which is what they always meant. */
 .ret-row-tel { font-size: 12.5px; color: var(--muted); }
-.hover-quiet { opacity: 0.28; transition: opacity 0.12s; }
+/* ==========================================================================
+   R73 · B3 — THE OPACITY FLOOR.
+
+   0.28 was chosen so a hundred rows of three chips each would not read as a
+   wall. What it actually produced was the app's PRIMARY VERBS rendered at the
+   opacity browsers use for a DISABLED control, on the page whose own funnel
+   copy says "155 rates with no outcome recorded — work them from the rows
+   below". Four of the five panel agents raised it independently.
+
+   Two floors instead of one:
+     · the three rate-end OUTCOME chips (.ret-out-chip) are the sentence's
+       object — they render at full opacity always, hover or no hover;
+     · everything else quiet floors at 0.75, which still recedes against a
+       hovered row (1.0) but is legible standing still.
+   ========================================================================== */
+.hover-quiet { opacity: 0.75; transition: opacity 0.12s; }
 .row-item:hover .hover-quiet, .hover-quiet:focus-within { opacity: 1; }
+.ret-out-chip, .hover-quiet .ret-out-chip { opacity: 1; }
 /* Touch has no hover: on a phone the chips are simply always legible. */
 @media (hover: none) {
   .hover-quiet { opacity: 1; }
@@ -3893,7 +4193,10 @@ tr.owed-hot > td { background: var(--red-bg); }
 .ret-row-lastc { font-variant-numeric: tabular-nums; }
 .ret-row-never { color: var(--red); font-weight: 600; }
 /* The three outcome chips sit with Log call / Book review and read as one cluster. */
-.ret-out-chip { border-style: dashed; }
+/* R73 · B5 — these three are BUTTONS that write an outcome, not estimated values;
+   dashed made them read as placeholders, which is the last thing the page wants.
+   Solid, and they keep the ordinary .btn border. */
+.ret-out-chip { border-style: solid; }
 /* R72 · A2 — the STATE clause ("· outcome: sold"), quiet grey beside the last-contact line: it is
    a fact about the row, not an action on it, so it must never compete with the chips above. */
 .ret-row-outcome { color: var(--muted); font-variant-numeric: tabular-nums; }
@@ -3913,7 +4216,9 @@ tr.owed-hot > td { background: var(--red-bg); }
 /* The "Never contacted first" toggle, in the same chip language as the month row above it. */
 .ret-untouched-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; margin: 0 0 10px; }
 .ret-untouched-chip .count { margin-left: 5px; background: rgba(16,42,78,.08); border-radius: 10px; padding: 0 6px; font-size: 11px; font-weight: 700; }
-.ret-untouched-chip.scope-active .count { background: rgba(255,255,255,.22); color: #fff; }
+/* R73 · B3 — a two-state toggle, not a segment: it keeps the tinted pressed state,
+   so the count keeps a tinted pill rather than a white-on-navy one. */
+.ret-untouched-chip.scope-active .count { background: var(--navy); color: #fff; }
 .ret-untouched-note { font-size: 12px; color: var(--muted); max-width: 70ch; line-height: 1.5; }
 /* The radar's rate line — the fact that decides who to ring, so it is not muted away. */
 .unactioned-rate { font-variant-numeric: tabular-nums; }
@@ -4186,12 +4491,11 @@ tr.owed-hot > td { background: var(--red-bg); }
      reasoning is what stands between the reader and their first job of the day. Nothing leaves
      the DOM, so assistive tech and every test that reads .textContent still get all of it. */
   .dash-notice .dash-notice-why { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-  #briefing-group-sub {
-    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
-  }
-  #leads-accept-bar-sub {
-    display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
-  }
+  /* R73 · A1 (panel C-14) — the two -webkit-line-clamp rules that used to live here are gone.
+     A clamp on a phone is a dead ellipsis: the reasoning is cut off and there is no way to ask
+     for it back. Both paragraphs now end in a "Why? ▸" disclosure written by the renderer
+     (whyFoldHtml), so on a phone the line is SHORTER than the clamp was and the words are one
+     press away instead of nowhere. */
 }
 
 /* R70 · A3 — the ONE batch confirm for "Start retention cases" (openOverlay, replacing the native
@@ -4290,8 +4594,8 @@ tr.owed-hot > td { background: var(--red-bg); }
 .wt-group-headrow { display: flex; align-items: stretch; gap: 6px; }
 .wt-group-headrow > .wt-group-head { flex: 1 1 auto; }
 .wt-group-all {
-  flex: 0 0 auto; align-self: center; margin-bottom: 2px;
-  font-size: 11.5px; white-space: nowrap;
+  /* R73 · B3 — size from the .btn-xs scale above; layout is its own. */
+  flex: 0 0 auto; align-self: center; margin-bottom: 2px; white-space: nowrap;
 }
 .wt-group-all[aria-pressed="true"] { border-color: var(--navy); font-weight: 600; }
 #wt-bulk-bar { margin-bottom: 8px; }
@@ -4327,4 +4631,382 @@ tr.owed-hot > td { background: var(--red-bg); }
 @media (max-width: 760px) {
   .wt-cb { width: 24px; height: 24px; }
   .wt-group-headrow { flex-wrap: wrap; }
+}
+
+/* ==========================================================================
+   ==========================================================================
+   R73 · BUILD A — LAYOUT, OVERFLOW AND THE PHONE PASS.
+
+   Everything below is chrome: heights, wrapping, tap targets and edge
+   affordances. Not one rule in this block changes what a control does, only
+   whether a person can see it and hit it. The panel's phone measurements are
+   quoted where they justify a number, so the next round can tell a considered
+   value from a copied one.
+   ==========================================================================
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   A1 · THE URGENT BAND'S COLLIDING COLUMNS (≤767px).
+   .brief-sec is one flex line: icon · label · count chip · "17 rows · 28 items"
+   · and then .brief-sec-why pushed to the far right by margin-left:auto. At
+   390px the why-list ("ended rates · overdue tasks · failed sends · new leads")
+   has ~90px to live in, so it wrapped into a four-line column that overlapped
+   the count chip beside it. One clean line, and the type list underneath it as
+   its own full-width row.
+   -------------------------------------------------------------------------- */
+@media (max-width: 767px) {
+  .brief-sec { flex-wrap: wrap; row-gap: 2px; align-items: center; }
+  .brief-sec-why { flex: 1 0 100%; margin-left: 0; text-align: left; opacity: .8; }
+}
+
+/* --------------------------------------------------------------------------
+   A2 · BULK BARS THAT STAY WITH YOU (panel #3).
+   -------------------------------------------------------------------------- */
+/* Watchtower: pinned to the top of the list's OWN scroller (#watchtower-list is
+   the .dash-scroll), above the rows it acts on. The margin-bottom that used to
+   separate it from the first group now belongs to the sticky box, so the rows
+   do not slide under a transparent gap. */
+#wt-bulk-bar.wt-bulk-sticky {
+  position: sticky; top: 0; z-index: 8;
+  margin-bottom: 8px;
+  /* The rows scroll UNDER it, so it cannot be translucent. */
+  background: var(--blue-bg);
+  box-shadow: 0 2px 8px rgba(16,24,40,.10);
+}
+/* RESERVED, NOT REMOVED. The first tick used to insert a 53px box and shift every row under the
+   cursor down by it. visibility keeps the box and still takes the bar out of the tab order and
+   out of the accessibility tree, which is the whole of what `hidden` was doing for us. */
+.bulk-bar.is-empty { visibility: hidden; }
+/* The group heading's own selection state. */
+.wt-group-sel { margin-left: 6px; font-weight: 700; color: var(--navy-600, #1a3f6f); }
+.wt-group-sel[hidden] { display: none; }
+/* The tint composites OVER the severity colour rather than replacing it — a selected critical
+   band must still read as critical. box-shadow inset, so the group's own background (red, amber
+   or grey) shows through the navy wash and the ring says which band the selection is in. */
+.wt-group.wt-group-has-sel > .wt-group-headrow .wt-group-head {
+  box-shadow: inset 0 0 0 2px var(--navy), inset 0 0 0 999px rgba(16,42,78,.07);
+  font-weight: 700;
+}
+
+/* Pipeline: the bar is docked BELOW the table and rises over it. Sticky to the bottom of its own
+   containing block (#table-wrap), which is the whole table — so it is on screen for every row of
+   it, and it displaces nothing above it when a selection appears. */
+.pipe-bulk-dock { position: sticky; bottom: 0; z-index: 20; }
+.pipe-bulk-dock .bulk-bar {
+  margin-bottom: 0;
+  box-shadow: 0 -2px 12px rgba(16,24,40,.14);
+}
+.pipe-bulk-dock #pipe-bulk-sub {
+  margin: 0; padding: 10px 12px; max-width: 78ch;
+  background: var(--white); border: 1px solid #cfe0f4; border-top: none;
+  border-radius: 0 0 8px 8px;
+}
+.pipe-bulk-dock #pipe-bulk-sub[hidden] { display: none; }
+#pipe-bulk-info { margin-left: 0; }
+
+/* --------------------------------------------------------------------------
+   A3 · THE CASE MODAL'S ACTION BAR, IN ONE ROW (panel #4).
+
+   Measured at the modal's real geometry: 640px wide, 28px padding each side,
+   and the bar bleeds to the edges with a 72px right gutter for the persistent
+   ✕ — so the row has 540px to spend. The old bar spent 605px at a live case
+   and 731px at a completed one and wrapped to two, three or (at 390px) eight
+   lines, pinned over the top of the content it was supposed to sit above.
+
+   Two rules do the work here; the third is CASE_ACTION_TOP in app.js.
+   -------------------------------------------------------------------------- */
+/* .action-bar was `flex: 1 1 auto` — it claimed the whole line whatever it held, so it ALWAYS
+   started a second row however few buttons were in it. It now takes the width it needs. */
+.cs-sticky-actions .action-bar { flex: 0 1 auto; }
+.cs-sticky-actions { gap: 6px; }
+/* The stage select sizes itself to its longest option ("Decision in Principle"), which costs 134px
+   for a control whose job on this row is to show the CURRENT stage. Capped: the options open at
+   full width, and the current stage is short in every one of the eight cases. */
+.cs-sticky-actions #cs-stage-select { max-width: 118px; }
+/* Nothing scrolled to inside the modal may land under the pinned bar. scroll-padding-top on the
+   scrollport (.modal-backdrop) is the general answer; these are the elements the app scrolls to
+   by name, given their own margin so they clear it even when something else scrolls them. */
+.modal h3, .modal h4, #case-form label, #case-form input, #case-form select, #case-form textarea,
+#new-note, #cs-logcall-panel, #case-tasks, .cs-section-head { scroll-margin-top: 74px; }
+
+/* --- and the same bar at ≤767px, where the budget is 96px of an 844px screen ---------------
+   Panel C-2 measured the old bar at 445px — 53% of the phone — because eight controls at
+   full desktop width wrap to eight lines inside a 298px content box (390px screen − the modal's
+   own 18px padding − the 62px gutter the persistent ✕ needs).
+
+   The rule is two lines, never more, and the FIRST of them is always the same three things: what
+   stage this is, 📞 Log call, and Actions ▾. `order` puts them there whatever the case's state,
+   and `display: contents` on .cs-top-actions lets Log call pack against the select instead of
+   dragging the whole group onto a line of its own. Advance / Start retention — one long button,
+   never both — take the second line. Measured: 88 + 110 + 78 + two 6px gaps = 288 of 298.
+   -------------------------------------------------------------------------------------------- */
+@media (max-width: 767px) {
+  /* 5px, not the desktop 10: two 40px rows plus a 5px gutter and 5px top and bottom is 95px, and
+     the budget for this bar on a phone is 96. The buttons themselves keep their height. */
+  .cs-sticky-actions { gap: 5px; padding-top: 5px; padding-bottom: 5px; align-items: center; }
+  .cs-sticky-actions .cs-top-actions { display: contents; }
+  .cs-sticky-actions #cs-stage-select { max-width: 88px; order: 1; }
+  .cs-sticky-actions #cs-logcall-btn { order: 2; }
+  .cs-sticky-actions .ret-tome { order: 2; }
+  .cs-sticky-actions .action-bar { order: 3; }
+  .cs-sticky-actions #cs-advance-btn { order: 4; }
+  .cs-sticky-actions #cs-retention-btn { order: 5; }
+  /* The overflow menu is the only route to most of a case's actions on a phone, so it gets the
+     width it needs rather than the width of the button that opens it. */
+  .cs-sticky-actions .more-actions-menu { min-width: 240px; max-width: min(320px, 86vw); right: 0; left: auto; }
+}
+
+/* --------------------------------------------------------------------------
+   A4 · THE PHONE PASS (panel #8). Everything here is inside ≤767px.
+
+   The panel measured, at 390×844: tel:/sms: links 15px tall, retention verbs
+   21.5px, the log-call follow-up title 26px WIDE, and the nav's scroll
+   chevron never drawn at all. 44px is the floor for anything a thumb has to
+   hit; where a control could not reach 44px without eating the row, it is
+   turned into a chip instead of being padded into a blur.
+   -------------------------------------------------------------------------- */
+@media (max-width: 767px) {
+
+  /* --- the call / text pair, promoted to Retention's own chip shape -----------------------
+     `📞 07700 900123` and `💬 Text` were two 15px text links sitting on one line of grey
+     sub-copy. As chips they are two 44px targets and they say what they DO rather than what
+     they are: on a phone the number itself is not information, it is a button.
+     The number stays in the DOM and in the anchor's textContent (several suites read it, and
+     so does copy-and-paste) — it is the RENDERED text that becomes the word "Call". */
+  .ret-row-tel, .row-sms-link {
+    display: inline-flex; align-items: center; gap: 4px;
+    min-height: 44px; padding: 0 12px; margin: 6px 8px 0 0;
+    border: 1px solid var(--border-strong); border-radius: 999px;
+    background: var(--white); font-size: 13px; font-weight: 600; color: var(--navy);
+    text-decoration: none;
+  }
+  /* min-width as well as min-height: the tappable thing is the ANCHOR, and "Call" on its own is
+     27px of text. 44 × 44 is the target, not 27 × 44. */
+  .ret-row-tel .contact-link { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; font-size: 0; }
+  .ret-row-tel .contact-link::after { content: "Call"; font-size: 13px; font-weight: 600; }
+  .ret-row-tel + .row-sms-link { margin-left: 0; }
+  #briefing-list .ret-row-tel, #unactioned-list .ret-row-tel { display: inline-flex; margin-top: 6px; }
+
+  /* --- the rest of the 44px pass -------------------------------------------------------- */
+  /* Task snooze chips (+1d / +3d / +1wk) measured 42×24. */
+  .snooze-btn { min-height: 44px; padding: 3px 12px; font-size: 12.5px; }
+  /* A lead's Accept and its ✕ — the two most consequential buttons on My Day. */
+  .brief-lead-actions .btn { min-height: 44px; }
+  .brief-lead-actions .btn-danger { min-width: 44px; }
+  /* The log-call panel's own footer, in the case modal and in the Retention overlay alike —
+     and every other modal footer with it. A dialog's Save and Cancel are the last two things a
+     person touches before something is written; they are the worst place in the app to make
+     somebody aim. (Media rule only: the button SCALE itself is build B's.) */
+  #cs-call-save, #cs-call-cancel,
+  .modal .modal-actions .btn, #overlay-modal .modal-actions .btn { min-height: 44px; }
+  /* R73 · A4 seam with build B: B owns the .ret-row-chip BASE class (it is part of the button
+     scale). This is the media rule only — the height a thumb needs, at this width, nothing else. */
+  .ret-row-chip { min-height: 44px; }
+
+  /* --- the log-call follow-up row, which collapsed to a 26px box (panel C-2) -------------- */
+  .cs-call-fu-row { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
+  .cs-call-fu-f { display: flex; flex-direction: column; gap: 2px; }
+  .cs-call-fu-f input, .cs-call-fu-f select { width: 100%; min-height: 44px; }
+
+  /* --- the health banner: one line, and the thing to press is a real target -------------- */
+  /* Panel C: 813px of banner and prose before the first tappable control on Today. The second
+     sentence of a banner is the reasoning; it is in the element's title and read out in full by
+     a screen reader, and on a 390px screen it is what stands between a reader and their work. */
+  /* The headline takes the whole first line and the buttons the second. Measured: with both on
+     one line the two controls ("Check the queue", "▶ Run now") take 250px of a 358px content box
+     and the sentence ellipsises to "The 8am …", which is not a headline, it is a stub. Two short
+     lines is ~76px against the 145px this banner cost at e1a2490, and the first of them is a
+     sentence somebody can act on. */
+  .dash-notice { flex-wrap: wrap; align-items: center; gap: 6px; }
+  .dash-notice-msg {
+    flex: 1 1 100%; min-width: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .dash-notice .dash-notice-msg .dash-notice-why { display: none; }
+  .dash-notice .dash-notice-link, .dash-notice .dash-notice-run { flex: 0 0 auto; min-height: 44px; }
+
+  /* --- Retention's month chips: one scrolling line, the #ops-strip shape (admin.css:4174) --- */
+  /* Twelve month chips plus the untouched filter wrapped onto five lines — 158px of filter above
+     a list. One line that scrolls: every chip is still reachable and still says the same word. */
+  .ret-month-chips {
+    flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch;
+    padding-bottom: 4px; gap: 6px;
+  }
+  .ret-month-chips > * { flex: 0 0 auto; }
+  /* R73 merge seam — B3 wrapped the chips in a .segment track AFTER this scroller was written,
+     so the track (not the chips) became the wrapping element and the five-line pile came back.
+     The track must ride the scroller as one rigid oversize child; the container scrolls. */
+  .ret-month-chips .segment { flex-wrap: nowrap; flex: 0 0 auto; }
+  .ret-month-chips .ret-month-chip { min-height: 40px; white-space: nowrap; }
+  /* The "never contacted first" toggle is its own row beside the month chips and has the same
+     problem: a chip and a 40-word explanation wrapping to five lines above the list. Same shape —
+     the chip on the line, the sentence under it as the quiet second line it always was. */
+  .ret-untouched-row { display: flex; flex-direction: column; gap: 4px; }
+  /* Not clamped — see the A1 note about dead ellipses. It is two lines at 390px and it is the
+     sentence that stops the toggle being a mystery. */
+  .ret-untouched-chip { min-height: 44px; white-space: nowrap; align-self: flex-start; }
+}
+
+/* --- the KPI strip's right edge: a fade, not a cut through the middle of a word ------------
+   #kpi-row is a one-line scroller at ≤767px (R69 · A2). Its last visible tile was sliced at the
+   viewport edge — "RATES ENDING ≤ 6M…" with the cut landing mid-word and nothing to say the
+   strip scrolls. The mask fades the last 28px instead, which reads as "there is more this way".
+   mask-image only: no layout, no extra element, and a browser without it simply gets today's
+   behaviour back. -------------------------------------------------------------------------- */
+@media (max-width: 767px) {
+  #page-dashboard #kpi-row {
+    -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent 100%);
+    mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent 100%);
+  }
+  /* …and no mask once it is scrolled to the end, where there is nothing left to hint at. */
+  #page-dashboard #kpi-row.kpi-at-end { -webkit-mask-image: none; mask-image: none; }
+}
+
+/* --------------------------------------------------------------------------
+   A4 · WIDE TABLES AS CARDS (see cardifyTables in app.js).
+   The header row supplies each cell's label; the rows become cards. One rule
+   set for Protection & GI and the three Data health tables.
+   -------------------------------------------------------------------------- */
+@media (max-width: 767px) {
+  table.mob-cards { display: block; width: 100% !important; max-width: 100%; border-collapse: separate; }
+  table.mob-cards > tbody { display: block; }
+  /* The header row is the source of the labels, not a row to draw. */
+  table.mob-cards > tbody > tr:first-child { display: none; }
+  table.mob-cards > tbody > tr {
+    display: block; margin: 0 0 10px; padding: 10px 12px;
+    border: 1px solid var(--border); border-radius: 10px; background: var(--white);
+    box-shadow: var(--shadow-card, 0 1px 2px rgba(16,24,40,.06));
+    cursor: auto;
+  }
+  /* display:block, not flex or grid, and the label is an inline-block ::before. Both of the other
+     two blockify every element child into its own item, which would put a status cell's two
+     badges — or an actions cell's four controls — into their own columns and take the card back
+     past the width of the screen. Block flow is the one layout in which a cell's contents simply
+     wrap. */
+  table.mob-cards > tbody > tr > td {
+    display: block;
+    width: auto !important; max-width: none !important;
+    padding: 3px 0; border: none; white-space: normal !important; overflow: visible; text-overflow: clip;
+    /* Sticky columns are an affordance for a sideways scroller that no longer exists here. */
+    position: static !important; box-shadow: none !important;
+  }
+  table.mob-cards > tbody > tr > td::before {
+    content: attr(data-lbl);
+    display: inline-block; min-width: 84px; padding-right: 8px; vertical-align: baseline;
+    font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--muted); line-height: 1.6;
+  }
+  /* Nothing to say and no label to hang on it — a blank cell is a line of card wasted. */
+  table.mob-cards > tbody > tr > td:empty { display: none; }
+  /* An unlabelled column is the actions cell: no label, its own line, and 44px controls. */
+  table.mob-cards > tbody > tr > td[data-lbl=""] { padding-top: 8px; }
+  table.mob-cards > tbody > tr > td[data-lbl=""]::before { display: none; }
+  table.mob-cards > tbody > tr > td .btn,
+  table.mob-cards > tbody > tr > td select { min-height: 44px; margin: 2px 4px 2px 0; }
+  /* A full-width band row (Protection's status bands) is a heading, not a card. */
+  table.mob-cards > tbody > tr.prot-band { padding: 0; border: none; background: none; box-shadow: none; }
+  table.mob-cards > tbody > tr.prot-band > td { display: block; }
+  table.mob-cards > tbody > tr.prot-band > td::before { display: none; }
+  /* The bulk checkbox keeps its own line at the top of the card. */
+  table.mob-cards > tbody > tr > td.bulk-col { text-align: left; padding-bottom: 6px; }
+  table.mob-cards > tbody > tr > td.bulk-col::before { display: none; }
+  /* And the scrollers around them stop scrolling: a card list has nothing to scroll sideways,
+     and an overflow-x box promotes overflow-y to auto — which is how a card list ends up inside
+     a second vertical scrollbar (the R65 · L9 lesson, applied to the other three). */
+  .prot-table-wrap, #dh-waitingdocs-panel .dh-wd-scroll, .dh-sharedprop { overflow-x: visible; }
+  .board-scroll-wrap--table:has(table.mob-cards)::after,
+  .board-scroll-wrap--table:has(table.mob-cards) .board-scroll-arrow { display: none; }
+}
+
+/* --------------------------------------------------------------------------
+   A5 · OVERFLOW YOU CAN SEE, AND A GRID THAT FITS (panel D#6, D#11, E#4).
+   -------------------------------------------------------------------------- */
+/* The chip strip's chevron. Same disc as the board's (.board-scroll-arrow — it inherits the whole
+   of that rule set), positioned against the strip rather than floating in the panel's whitespace,
+   and gated on the same measurement as the fade. */
+.chip-scroll-arrow { top: 50%; right: 4px; transform: translateY(-50%); width: 28px; height: 28px; font-size: 17px; }
+.chip-scroll-arrow:hover { transform: translateY(-50%) scale(1.08); }
+.rep-nav.is-scrollable .chip-scroll-arrow,
+.rep-sections-nav.is-scrollable .chip-scroll-arrow { opacity: 1; pointer-events: auto; }
+/* The Reports SECTION strip had neither fade nor arrow; it gets the same pair as #rep-nav. */
+.rep-sections-nav { position: relative; }
+.rep-sections-nav.is-scrollable::after {
+  content: "";
+  position: absolute; top: 0; right: 0; bottom: 6px; width: 44px;
+  pointer-events: none; opacity: 1; transition: opacity .2s ease;
+  background: linear-gradient(90deg, rgba(246,248,251,0), var(--canvas) 72%);
+}
+/* At the right-hand end there is nothing left to hint at: both the fade and the arrow go, which
+   is the signal that the strip has ended. (The board arrow has behaved this way since QW16.) */
+.rep-nav.is-scrollable::after { opacity: 1; transition: opacity .2s ease; }
+.rep-nav.chip-at-end::after, .rep-sections-nav.chip-at-end::after { opacity: 0; }
+.rep-nav.chip-at-end .chip-scroll-arrow,
+.rep-sections-nav.chip-at-end .chip-scroll-arrow { opacity: 0; pointer-events: none; }
+
+/* --- Advocacy: five blocks, and one of them is a five-column table (panel D#11) -------------
+   The grid was `repeat(auto-fit, minmax(min(280px, 100%), 1fr))`, which at 1440 makes three
+   360px tracks. Four of the five blocks are fine in 360px; the fifth is the detractor table,
+   which is `table-layout: fixed` with a 12% action column — 42px, into which "Open" renders as
+   O / p / e / n, one letter per line. 340px as the floor, and the detractor block spans two
+   tracks so its five columns have ~700px, which is what they need.
+   min() kept on the floor: a hard 340px minimum overflows a 326px phone content box, and
+   `body { overflow-x: clip }` would hide the overflow rather than let it scroll — silent. */
+#report-advocacy-panel .adv-grid { grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr)); }
+@media (min-width: 760px) {
+  /* Only where there IS a second track to span. Below this the grid is one column and a span-2
+     would be a no-op at best and a blown-out track at worst. */
+  #report-advocacy-panel #adv-block-detractors { grid-column: span 2; }
+}
+
+/* --- the pipeline board's paired arrows -----------------------------------------------------
+   updateBoardScrollHint() has toggled `can-scroll-left` since QW16 and nothing has ever drawn it:
+   there was one arrow, on the right, and once you had scrolled to Exchange there was no way back
+   but a shove. Both arrows are anchored to the board card's own edges (they were floating in the
+   panel's whitespace above it), each shown only while there is board in that direction. */
+.board-scroll-wrap { position: relative; }
+.board-scroll-arrow-left {
+  position: absolute; top: 2px; left: 6px; z-index: 12;
+  width: 32px; height: 32px; border-radius: 50%;
+  border: 1px solid var(--border-strong); background: var(--white); color: var(--navy);
+  font-size: 19px; font-weight: 700; line-height: 1; cursor: pointer;
+  box-shadow: var(--shadow-card);
+  opacity: 0; pointer-events: none; transition: opacity .2s ease, transform .15s ease;
+}
+.board-scroll-wrap.can-scroll-left .board-scroll-arrow-left { opacity: 1; pointer-events: auto; }
+.board-scroll-arrow-left:hover { transform: scale(1.08); color: var(--navy-600); }
+/* The left-hand fade, the mirror of the one that has always been on the right. */
+.board-scroll-wrap::before {
+  content: ""; position: absolute; top: 38px; left: 0; bottom: 16px; width: 64px;
+  pointer-events: none; opacity: 0; transition: opacity .2s ease; z-index: 1;
+  background: linear-gradient(270deg, rgba(246,248,251,0), var(--canvas) 62%, var(--canvas));
+  border-radius: var(--radius) 0 0 var(--radius);
+}
+.board-scroll-wrap.can-scroll-left::before { opacity: 1; }
+/* ANCHORED TO THE BOARD, not floating above it. .board-scroll-wrap reserves a 38px strip above
+   its content for the arrow — right for a TABLE, whose header row must not be covered, and wrong
+   for the board, where it left the ‹ / › pair hovering 36px clear of the card they belong to,
+   reading as page furniture rather than as this board's controls. On the board they sit on its
+   vertical centre line, at its two edges, which is where a horizontally scrolling card list has
+   put them since carousels were invented. */
+.board-scroll-wrap:not(.board-scroll-wrap--table) .board-scroll-arrow,
+.board-scroll-wrap:not(.board-scroll-wrap--table) .board-scroll-arrow-left {
+  top: 50%; transform: translateY(-50%);
+}
+.board-scroll-wrap:not(.board-scroll-wrap--table) .board-scroll-arrow:hover,
+.board-scroll-wrap:not(.board-scroll-wrap--table) .board-scroll-arrow-left:hover {
+  transform: translateY(-50%) scale(1.08);
+}
+.board-scroll-wrap--table::before {
+  bottom: 0;
+  background: linear-gradient(270deg, rgba(255,255,255,0), var(--white) 62%, var(--white));
+}
+/* Column-boundary snapping, so a shove lands on a stage rather than half of two. */
+#board { scroll-snap-type: x proximity; }
+#board > .col { scroll-snap-align: start; }
+@media (max-width: 767px) {
+  /* A card list has no sideways scroller, so neither arrow nor fade belongs on it. */
+  #table-wrap .board-scroll-wrap--table::before,
+  #table-wrap .board-scroll-wrap--table .board-scroll-arrow-left { display: none; }
+  .board-scroll-wrap--table:has(table.mob-cards)::before,
+  .board-scroll-wrap--table:has(table.mob-cards) .board-scroll-arrow-left { display: none; }
 }

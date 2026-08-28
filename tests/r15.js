@@ -115,11 +115,32 @@ async function mkClientCase(page, opts) {
 /* Where does action #id currently live in the case modal — inside the
    #case-more-actions overflow menu, directly in the primary row, or not in
    the DOM at all? Structural (closest()), not layout-geometry, so it does
-   not care whether the menu happens to be open when this is called. */
+   not care whether the menu happens to be open when this is called.
+
+   R73: the split this file tests is now THREE tiers, not two, and the answer
+   is read off the button's own data-act-tier rather than off which box it
+   sits in. R73 · A3 capped the visible row at the two or three actions a
+   stage is actually about (the bar was 135px of a 900px viewport and 445px of
+   a phone); the rest of a stage's actions moved into the overflow menu, under
+   a heading naming the stage and ABOVE the actions that were never primary
+   anywhere. So "primary" here means what it has always meant — CASE_ACTION_
+   RULES says this action belongs at this stage — which is tier "top" (on the
+   bar) or tier "stage" (first group of the menu). Tier "rest" is the overflow
+   this file's PRIMARY_STAGES map calls "overflow". The assertion is unchanged
+   in strength: every row below still distinguishes the stages an action
+   belongs to from the ones it does not. */
 const actionLocation = (page, id) => page.evaluate((sel) => {
   const el = document.querySelector(sel);
   if (!el) return "absent";
+  const tier = el.getAttribute("data-act-tier");
+  if (tier) return tier === "rest" ? "overflow" : "primary";
   return el.closest("#case-more-actions") ? "overflow" : "primary";
+}, `#${id}`);
+/* R73 · A3 — and the new, narrower question this round introduced: is the action on the BAR
+   itself (tier "top"), or one press away in Actions ▾? Used by §A's new checks below. */
+const actionTier = (page, id) => page.evaluate((sel) => {
+  const el = document.querySelector(sel);
+  return el ? (el.getAttribute("data-act-tier") || "untiered") : "absent";
 }, `#${id}`);
 
 const hasClass = (page, sel, cls) => page.evaluate(({ sel, cls }) => {
@@ -197,6 +218,16 @@ const ALL_STAGES = ["enquiry", "fact_find", "decision_in_principle", "applicatio
       eq("A · at completed, act-paid is PRIMARY", await actionLocation(page, "act-paid"), "primary");
       eq("A · at completed, act-review is PRIMARY", await actionLocation(page, "act-review"), "primary");
       eq("A · at completed, act-factfind is in the OVERFLOW (reverse of enquiry)", await actionLocation(page, "act-factfind"), "overflow");
+
+      /* R73 · A3 — the third tier, asserted directly so the new contract is pinned rather than
+         merely tolerated by the widened helper above. A stage action that is not one of the two
+         or three the bar shows must be tier "stage": in the menu, but named as belonging here,
+         and never demoted all the way to "rest". */
+      eq("A · R73 · at completed, act-fee is a STAGE action in Actions ▾ (not on the bar)", await actionTier(page, "act-fee"), "stage");
+      eq("A · R73 · …and act-factfind, which belongs to no completed case, is tier rest", await actionTier(page, "act-factfind"), "rest");
+      await openCase(page, stageCaseId.enquiry);
+      eq("A · R73 · at enquiry, act-factfind is a STAGE action and act-fee is tier rest",
+        [await actionTier(page, "act-factfind"), await actionTier(page, "act-fee")], ["stage", "rest"]);
 
       ok("A · no console errors", noNewErr(errBefore), JSON.stringify(page.__err));
     }
