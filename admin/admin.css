@@ -609,6 +609,12 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
 /* R5-F2 — the Owner's row is 9 tiles since "Fees earned" joined "Fees banked" as the headline; 3
    columns divides evenly, so there is no orphan row. */
 #report-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+/* R74 · A2 — the strip is 10 tiles now ("Owed on completed cases" joined "Broker fees
+   outstanding"), and 10 does not divide by 3. Rather than an orphan, "Fees banked" spans two
+   columns: the two debtor tiles then begin a row together, which is the reconciliation this round
+   is for. Collapses to one column with the rest of the grid on a phone. */
+#report-kpis .kpi-wide { grid-column: span 2; }
+@media (max-width: 900px) { #report-kpis .kpi-wide { grid-column: auto; } }
 .kpi {
   background: var(--white);
   border: 1px solid var(--border);
@@ -3334,8 +3340,11 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 }
 /* The first header opens the page — no rule above it. */
 #page-reports .report-section-head:first-of-type { margin-top: 8px; padding-top: 0; border-top: none; }
-/* Deliberately NOT sticky: #rep-nav (R11-4) is the sticky strip on this page and a second one
-   would stack on top of it. This is a row of buttons you use once on arrival. */
+/* R74 · A4c — NOW STICKY, ON PURPOSE, ABOVE #rep-nav. R42's note said two sticky bars "would
+   stack on top of each other", and it was right while the second one held twenty chips. It holds
+   four to six now (scoped to the selected section), so the pair is ~70px and they stack cleanly
+   instead of fighting — and a level-1 control that scrolls out of reach the instant you use it is
+   exactly the complaint. `top` on both is written by measureRepJumpOffsets(), never guessed. */
 .rep-sections-nav { margin: 0 0 6px; }
 .rep-sections-nav[hidden] { display: none; }
 .rep-sections-nav .rep-nav-chips { margin-bottom: 4px; }
@@ -4101,6 +4110,10 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .ret-group-h { padding: 5px 10px; border-radius: 8px; }
 .ret-group-h.ret-g-ended { background: #fdecea; border-left: 4px solid #d93025; }
 .ret-group-h.ret-g-soon { background: #fef3e0; border-left: 4px solid #f5a623; }
+/* R74 · A1 — the third group the list always contained and never headed: rows carried by an ERC
+   conflict alone, whose rate ends beyond the reminder window. Its own quiet blue-grey, because it
+   is neither "act now" red nor "coming up" amber — it is a different reason to be on the list. */
+.ret-group-h.ret-g-erc { background: #eef1f7; border-left: 4px solid #6b7c99; }
 .ret-year-h { margin: 10px 0 2px; font-size: 11.5px; font-weight: 800; letter-spacing: 0.06em; color: #8a93a5; border-bottom: 1px solid #e3e7ee; padding-bottom: 2px; }
 /* D · protection: band rows + quiet action cluster */
 #prot-list-table tr.prot-band td { padding: 6px 10px; font-size: 12px; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; border-left: 4px solid #aab4c3; background: #eef1f5; color: #556275; }
@@ -5009,4 +5022,256 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   #table-wrap .board-scroll-wrap--table .board-scroll-arrow-left { display: none; }
   .board-scroll-wrap--table:has(table.mob-cards)::before,
   .board-scroll-wrap--table:has(table.mob-cards) .board-scroll-arrow-left { display: none; }
+}
+
+/* ==========================================================================
+   R74 — "The numbers reconcile". Everything in this block is presentation for
+   a figure that already existed; no new data, no new gate.
+   ========================================================================== */
+
+/* A3 — the clock time beside "the next 8am run", quiet the way the SMS line's is. */
+.em-summary-clock { color: var(--muted); font-weight: 400; white-space: nowrap; }
+
+/* A4a — the Reports hero. ONE number, the one Daniel is judged on, at the top of
+   the page instead of fourth in a strip. Not a new component: it borrows the
+   .kpi surface tokens so it sits in the same system as everything under it. */
+.rep-hero {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 18px;
+  background: var(--white); border: 1px solid var(--line); border-radius: 12px;
+  padding: 16px 20px; margin: 12px 0 10px;
+}
+.rep-hero-num { font-size: 34px; font-weight: 800; letter-spacing: -0.02em; line-height: 1.05; font-variant-numeric: tabular-nums; }
+.rep-hero-pct { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.rep-hero-lbl { font-size: 13px; color: var(--muted); }
+.rep-hero-basis { flex-basis: 100%; font-size: 11.5px; color: var(--muted); }
+/* The other three month figures, one quiet line under the hero. Deliberately NOT a
+   second row of .kpi tiles: the tiles with their month-on-month deltas live in the
+   Monthly business panel below, and printing the same four numbers twice within one
+   screen is precisely the disease this round is treating. */
+.rep-hero-sec { display: flex; flex-wrap: wrap; gap: 4px 20px; margin: -4px 0 12px; font-size: 13px; color: var(--muted); }
+.rep-hero-sec[hidden], .rep-hero-sec.hidden { display: none; }
+.rep-hero-sec-i strong { color: var(--ink, var(--navy)); font-variant-numeric: tabular-nums; }
+
+/* A4a/A4b — "▸ How these are counted". The Settings disclosure pattern, reused so
+   an essay can stay on the page without standing between the reader and the table
+   it describes. */
+.rep-howcounted { margin: 6px 0 0; }
+.rep-howcounted > summary {
+  cursor: pointer; font-size: 12.5px; font-weight: 600; color: var(--navy);
+  list-style: none; display: inline-flex; align-items: center; gap: 5px; padding: 2px 0;
+}
+.rep-howcounted > summary::-webkit-details-marker { display: none; }
+.rep-howcounted > summary::before { content: "▸"; font-size: 11px; }
+.rep-howcounted[open] > summary::before { content: "▾"; }
+.rep-howcounted > summary:focus-visible { outline: none; box-shadow: var(--focus-ring); border-radius: 4px; }
+.rep-howcounted-body { margin-top: 6px; max-width: 78ch; }
+.rep-howcounted-body p { margin: 0 0 7px; font-size: 12.5px; color: var(--muted); line-height: 1.5; }
+.rep-howcounted-body p:last-child { margin-bottom: 0; }
+
+/* A4c — the two Reports strips now stack: level-1 sections above level-2 panels,
+   both sticky, so jumping never scrolls the section pills out of reach. The `top`
+   of each is set from measurement (measureRepJumpOffsets), not from a duplicated
+   breakpoint number — see the HF1 rule about unguarded layout measurements. */
+.rep-sections-nav {
+  position: sticky; top: 0; z-index: 13;         /* above .rep-nav's 12 — level 1 sits over level 2 */
+  margin: 0 -32px 0; padding: 8px 32px 0;
+  background: var(--canvas);
+}
+.rep-sections-nav .rep-nav-chips { margin-bottom: 4px; }
+@media (max-width: 760px) { .rep-sections-nav { margin: 0 -12px 0; padding: 6px 12px 0; } }
+
+/* A5c — the key above the Data health tile wall, and the two band headings the
+   wall is now sorted inside. */
+/* `.kpi-row { grid-auto-rows: 1fr }` makes every implicit row as tall as the tallest, which
+   turned a one-line band heading into a full tile's worth of white space. This wall is banded now,
+   so its rows are allowed to differ; tiles WITHIN a row still stretch to match each other, which
+   is the part that mattered. */
+#dh-kpi-row { grid-auto-rows: auto; }
+.dh-band-h {
+  grid-column: 1 / -1; margin: 10px 0 0; font-size: 11.5px; font-weight: 800;
+  letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted);
+  display: flex; align-items: baseline; gap: 8px;
+}
+.dh-band-h .dh-band-why { font-weight: 400; letter-spacing: 0; text-transform: none; font-size: 11.5px; }
+.dh-key { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; font-size: 12px; color: var(--muted); margin: 0 0 8px; }
+.dh-key-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px; vertical-align: -1px; margin-right: 5px; }
+.dh-key-swatch.is-warn { background: #f5a623; }
+.dh-key-swatch.is-plain { background: var(--navy); }
+/* A5a — the live "N left in this list" counter on a fix panel's own heading. */
+.dh-left-n { font-size: 12px; font-weight: 600; color: var(--muted); margin-left: 8px; }
+
+/* A2/A4b — the adviser scoreboard fits its panel again. Dropping the Overdue column (it renders
+   twice more on this page) and moving the reconciliation sentence out of a colspan="2" cell took
+   most of the overflow out; this takes the rest, by letting the nine remaining headers wrap onto
+   two lines instead of each reserving a full word's width on one. Body cells stay nowrap — a
+   wrapped £ figure is worse than a narrow column. */
+#report-advisers .imp-table th { white-space: normal; line-height: 1.25; vertical-align: bottom; }
+#report-advisers .imp-table th,
+#report-advisers .imp-table td { padding-left: 7px; padding-right: 7px; }
+#report-advisers .spark-svg, #report-advisers svg { max-width: 74px; }
+
+/* ==========================================================================
+   R74 — TRUST ROUND, BUILD B: "forms keep your work"
+   Presentation for: the Settings unsaved-changes bar, boolean switches, the two
+   bordered setting groups and the per-field explainer column (B1); the modal
+   sticky header strip and sticky footer, the required marks and the inline
+   field errors (B2); the destructive-overlay button (B3); the stage-move
+   backward-tidy list (B4).
+   ========================================================================== */
+
+/* --- B3 · the one new button class -----------------------------------------
+   `.btn-danger` ALREADY EXISTED (red TEXT on a bordered/ghost button — the case
+   file 🗑, the absence 🗑, the client Delete). It is untouched. What the house
+   had no word for is the CONFIRMING button of a destructive dialog: the one
+   that does the thing, where a navy primary would say "this is the safe
+   default" about the one action that is not. Solid red, and only ever inside an
+   overlay's .modal-actions. */
+.btn-danger-solid {
+  background: var(--red); border-color: var(--red); color: var(--white);
+}
+.btn-danger-solid:hover { background: #a5301f; border-color: #a5301f; color: var(--white); }
+.btn-danger-solid:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+#overlay-modal .modal-actions { margin-top: 18px; }
+/* The list of tasks a backward stage move is offering to take off. */
+.stage-back-list { margin: 8px 0 0; padding-left: 18px; }
+.stage-back-list li { margin: 2px 0; }
+
+/* --- B2 · the modal's sticky header strip ---------------------------------
+   The × was `position: sticky; float: right` with a --light tint, so on a
+   scrolled client modal it sat ON the Email field. It now owns a strip that
+   spans the modal's full width and carries the modal's own opaque background,
+   so content passes behind it; at rest nothing is under it at all.
+   --modal-topbar-h is what .cs-sticky-actions pins BELOW, so the two sticky
+   bars stack instead of overlapping. */
+:root { --modal-topbar-h: 52px; }
+#modal .modal-topbar {
+  position: sticky; top: 0; z-index: 8;
+  display: flex; align-items: center; justify-content: flex-end;
+  height: var(--modal-topbar-h);
+  margin: -28px -28px 6px; padding: 0 20px 0 28px;
+  background: var(--white);
+  border-bottom: 1px solid var(--border);
+  border-radius: 16px 16px 0 0;
+}
+#modal .modal-topbar .modal-close {
+  position: static; float: none; margin: 0; z-index: auto;
+}
+/* The case bar pins UNDER the strip rather than sharing the top edge with it —
+   which is also what frees the 72px gutter it used to reserve for the floating ×. */
+#modal .cs-sticky-actions { top: var(--modal-topbar-h); padding-right: 28px; }
+#modal-backdrop { scroll-padding-top: 122px; scroll-padding-bottom: 96px; }
+
+/* --- B2 · the sticky footer -----------------------------------------------
+   Cancel and Save were below the fold of a 900px viewport before a character
+   had been typed on the create forms. Direct children of #modal only: an
+   overlay's own .modal-actions is a short dialog's last line and stays put. */
+#modal > .modal-actions {
+  position: sticky; bottom: 0; z-index: 7;
+  margin: 22px -28px -28px; padding: 12px 28px 16px;
+  background: var(--white);
+  border-top: 1px solid var(--border);
+  border-radius: 0 0 16px 16px;
+}
+
+/* --- B2 · required marks and field-anchored errors ------------------------ */
+.req-mark {
+  display: inline-block; margin-left: 6px;
+  font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+  color: var(--muted); background: var(--light);
+  border-radius: 4px; padding: 1px 5px; vertical-align: 1px;
+}
+.field-err {
+  margin: 4px 0 0; font-size: 12px; line-height: 1.4; font-weight: 500;
+  color: var(--red);
+}
+.field-err::before { content: "⚠ "; }
+
+/* --- B1 · the unsaved-changes bar -----------------------------------------
+   Sticky to the bottom of the viewport while the Settings page is scrolled, and
+   inside #page-settings so it leaves with the page. */
+.settings-dirty-bar {
+  position: sticky; bottom: 0; z-index: 9;
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin: 18px 0 0; padding: 12px 16px;
+  background: var(--white);
+  border: 1px solid var(--border-strong);
+  border-left: 4px solid var(--orange);
+  border-radius: 10px;
+  box-shadow: var(--shadow-pop);
+}
+.settings-dirty-bar .sdb-msg { flex: 1 1 260px; font-size: 13px; color: var(--text); }
+.settings-dirty-bar .sdb-where { color: var(--muted); }
+.settings-dirty-bar.hidden { display: none; }
+/* The mark on a field that has been edited and not yet saved. On the .set-field
+   wrapper where there is one, so the field AND its explainer carry it. */
+#settings-form .is-dirty, #my-details-panel .is-dirty, #adviser-targets-section .is-dirty {
+  border-left: 3px solid var(--orange);
+  padding-left: 9px; margin-left: -12px;
+}
+
+/* --- B1 · a field and its explainer are one grid cell (D#16) -------------- */
+.settings-grid .set-field { display: block; min-width: 0; }
+.settings-grid .set-field.full { grid-column: 1 / -1; }
+.settings-grid .set-field .set-note { margin: 4px 0 0; }
+
+/* --- B1 · the two bordered groups ----------------------------------------- */
+.settings-grid .set-group {
+  grid-column: 1 / -1;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  padding: 14px 16px 16px;
+  margin: 4px 0 8px;
+  background: var(--canvas);
+}
+.set-group .set-group-h {
+  margin: 0 0 4px; font-size: 13px; font-weight: 700; letter-spacing: -0.01em; color: var(--dark);
+}
+.set-group .set-group-sub { margin: 0 0 12px; }
+.set-group .set-group-grid { margin: 0; }
+
+/* --- B1 · boolean switches ------------------------------------------------
+   The <select> keeps its box and its value (it is still what the save sweeps and
+   what every suite drives); it is made transparent and sits UNDER the switch,
+   which is what a mouse and the keyboard meet. */
+.set-switch-wrap { position: relative; display: inline-flex; align-items: center; gap: 9px; margin-top: 4px; }
+.set-switch-wrap .set-switch-native {
+  position: absolute; left: 0; top: 0; width: 100%; height: 100%;
+  opacity: 0; margin: 0; z-index: 1;
+}
+.set-switch {
+  position: relative; z-index: 2;
+  display: inline-flex; align-items: center; gap: 9px;
+  background: none; border: none; padding: 2px; margin: 0; cursor: pointer;
+  font: inherit; font-size: 13px; font-weight: 600; color: var(--muted);
+}
+.set-switch .set-switch-track {
+  display: inline-block; position: relative;
+  width: 42px; height: 24px; border-radius: 999px;
+  background: #c3cddb; transition: background .15s ease;
+}
+.set-switch .set-switch-knob {
+  position: absolute; top: 3px; left: 3px; width: 18px; height: 18px;
+  border-radius: 50%; background: var(--white);
+  box-shadow: 0 1px 2px rgba(9,20,38,.35);
+  transition: left .15s ease;
+}
+.set-switch.on .set-switch-track { background: var(--navy); }
+.set-switch.on .set-switch-knob { left: 21px; }
+.set-switch.on { color: var(--dark); }
+.set-switch:disabled { cursor: default; opacity: .55; }
+.set-switch:focus-visible { outline: none; box-shadow: var(--focus-ring); border-radius: 8px; }
+
+/* --- B5 · the composed house-template preview ----------------------------- */
+.em-prev-body[data-em-composed] p { margin: 0 0 6px; }
+
+@media (max-width: 760px) {
+  /* The modal's own padding drops to 18px at this width (see .modal), so both
+     bleeds must match it, and the strip loses 12px it does not need on a phone. */
+  :root { --modal-topbar-h: 44px; }
+  #modal .modal-topbar { margin: -18px -18px 6px; padding: 0 12px 0 18px; border-radius: 14px 14px 0 0; }
+  #modal > .modal-actions { margin: 18px -18px -18px; padding: 10px 18px 14px; border-radius: 0 0 14px 14px; }
+  #modal .cs-sticky-actions { padding-right: 18px; }
+  #modal-backdrop { scroll-padding-top: 104px; scroll-padding-bottom: 92px; }
+  .settings-dirty-bar { padding: 10px 12px; }
+  .settings-dirty-bar .btn { min-height: 44px; }
 }

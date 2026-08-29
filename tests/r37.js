@@ -432,8 +432,13 @@ const readCase = (page, caseId) => page.evaluate(async (id) => {
       // identifier from page.evaluate, the same fact tests/r43.js's §7 leans on) and call it
       // again, rather than reloading the page. The table still holds the ONE remaining starter +
       // the `_meta` marker (2 rows, not zero), which is exactly why R43 never re-seeds it.
-      await page.evaluate(() => { window.confirm = () => true; });
+      /* R74 · B3: deleting a saved view is a destructive verb and asks in the HOUSE overlay now,
+         not window.confirm — so stubbing window.confirm no longer answers anything. Answered the
+         way a person would, on the dialog's own danger button. */
       await page.click("#board-view-del");
+      await wait(page, 400);
+      ok("R74 · §4 · the saved-view delete asks in the house overlay", !!(await page.$("#ovl-confirm-ok")));
+      await page.click("#ovl-confirm-ok");
       await wait(page, 500);
       const afterDel = await page.$$eval("#board-views option", (os) => os.map((o) => o.value));
       ok("§4c · deleting the applied starter removes it from #board-views", !afterDel.includes("Unassigned leads"), JSON.stringify(afterDel));
@@ -751,8 +756,18 @@ const readCase = (page, caseId) => page.evaluate(async (id) => {
       });
       ok("§9a · #dh-stuck-notice is present", !!notice, JSON.stringify(notice));
       ok("§9b · it names the exact stuck-email count", notice && notice.text.includes(String(dq.emails_stuck)), JSON.stringify({ notice, dq }));
-      const expectedVerb = dq.emails_sending_live ? "stuck" : "queued, not sent";
-      ok("§9c · …and the right one-line verdict for whether the sender is live", notice && notice.text.includes(expectedVerb), JSON.stringify({ notice, dq }));
+      /* R74: THE HOLD OUTRANKS THE SENDER (panel D-25). Mail that cannot leave was "queued" on
+         Emails, "queued" in Settings and "stuck" here — three words for one deliberate, reversible
+         state, and "5 emails stuck" reads as a fault to go and find. While `email_hold` is on the
+         verdict is "held" on all four surfaces; "stuck" survives only where it is true, which is a
+         queue that is NOT held with a live sender. Three readings now, not two — the assertion is
+         wider, not weaker. */
+      const holdOn = await page.evaluate(async () => {
+        const { data } = await window.__mockDb.from("settings").select("value").eq("key", "email_hold");
+        return String((data && data[0] && data[0].value) || "on").toLowerCase() !== "off";
+      });
+      const expectedVerb = holdOn ? "held" : (dq.emails_sending_live ? "stuck" : "queued, not sent");
+      ok("§9c · …and the right one-line verdict for the hold and the sender", notice && notice.text.includes(expectedVerb), JSON.stringify({ notice, dq, holdOn }));
       ok("§9d · #dh-stuck-link is present and reads \"see Emails\"", notice && notice.hasLink, JSON.stringify(notice));
       ok("§9e · it is genuinely ONE line — no second sentence of detail (that now lives on Today/Emails only)",
         notice && notice.text.split(" — ").length <= 2, JSON.stringify(notice));

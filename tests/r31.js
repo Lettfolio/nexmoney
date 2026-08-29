@@ -309,6 +309,9 @@ async function readinessItems(page) {
       // Delete it.
       await page.click("#board-view-del");
       await wait(page, 400);
+      /* R74: deleting a saved view is a destructive verb and asks in the HOUSE overlay now, not
+         window.confirm — answer it (same re-point as r43 §6). */
+      if (await page.$("#ovl-confirm-ok")) { await page.click("#ovl-confirm-ok"); await wait(page, 500); }
       const optsAfterDel = await page.$$eval("#board-views option", (os) => os.map((o) => o.value));
       eq("B1j · #board-views no longer offers 'My view' after Delete", optsAfterDel.indexOf("My view"), -1);
       // R43 · non-masking repair — same reasoning as B1c above: Delete in DB mode never touches
@@ -357,6 +360,8 @@ async function readinessItems(page) {
 
       await page.click("#client-view-del");
       await wait(page, 400);
+      /* R74: same house-overlay answer as the pipeline delete above. */
+      if (await page.$("#ovl-confirm-ok")) { await page.click("#ovl-confirm-ok"); await wait(page, 500); }
       const optsAfterDel = await page.$$eval("#client-views option", (os) => os.map((o) => o.value));
       eq("B2f · #client-views no longer offers 'My view' after Delete", optsAfterDel.indexOf("My view"), -1);
       // R43 · non-masking repair — same reasoning as B1k.

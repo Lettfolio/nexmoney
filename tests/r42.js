@@ -280,11 +280,25 @@ const EMAILS_R9_NOTE_TEXT = "An unanswered review request is followed up once. A
       const sections = await page.evaluate(() => REPORT_SECTIONS.map((s) => s[0]));
       eq("§A2 · REPORT_SECTIONS declares the same six keys in the same order", sections, ["mine", "month", "mi", "money", "quality", "referrals"]);
 
-      const posInfo = await page.evaluate(() => ({
-        jumpPos: getComputedStyle(document.getElementById("reports-jump")).position,
-        repNavPos: getComputedStyle(document.getElementById("rep-nav")).position,
-      }));
-      ok("§A3 · #reports-jump is NOT position:sticky", posInfo.jumpPos !== "sticky", posInfo.jumpPos);
+      const posInfo = await page.evaluate(() => {
+        const j = document.getElementById("reports-jump"), n = document.getElementById("rep-nav");
+        return {
+          jumpPos: getComputedStyle(j).position,
+          repNavPos: getComputedStyle(n).position,
+          jumpTop: parseFloat(getComputedStyle(j).top) || 0,
+          repNavTop: parseFloat(getComputedStyle(n).top) || 0,
+        };
+      });
+      /* R74: #reports-jump IS sticky now, and deliberately. R42's reasoning — "two sticky bars
+         would sit on top of each other" — held while the strip below it carried all twenty panel
+         chips and was three rows tall. R74 · A4c scopes that strip to the SELECTED section (four
+         to six chips, one row), so the pair fits, and a level-1 control that scrolls out of reach
+         the instant you use it was the D#6 complaint. What R42's check was protecting is that the
+         two never overlap; that is now asserted directly, off the measured offsets both bars are
+         given by measureRepJumpOffsets(). */
+      eq("§A3 · #reports-jump is sticky (R74 · A4c) …", posInfo.jumpPos, "sticky");
+      ok("§A3b · …and the panel strip is stacked BELOW it, never on top of it",
+        posInfo.repNavTop > posInfo.jumpTop, JSON.stringify(posInfo));
       eq("§A4 · #rep-nav IS still position:sticky (R11-4, unchanged)", posInfo.repNavPos, "sticky");
 
       // Owner sees month/mi/money/quality (mine is theirs to lose — see §B) — click every one of

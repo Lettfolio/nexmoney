@@ -494,6 +494,15 @@ const closeModal = async (page) => { await page.evaluate(() => window.closeModal
     chipLabels: [...document.querySelectorAll("#reports-jump-chips .seg-btn")].map((b) => b.textContent),
     panelChip: !!document.querySelector("#rep-nav-referralsout"),
   }));
+  /* R74 · A4c: the per-panel strip is now SCOPED to the selected level-1 section (panel D#6 — it
+     used to list all twenty panels at once, fourteen of them off the right-hand edge). The
+     Referrals-out panel chip therefore lives under its own section pill, which is the control a
+     reader presses to get to it. Same chip, same id, one click earlier. */
+  cSec.panelChip = await page.evaluate(async () => {
+    const pill = document.getElementById("reports-nav-referrals");
+    if (pill) { pill.click(); await new Promise((r) => setTimeout(r, 700)); }
+    return !!document.querySelector("#rep-nav-referralsout");
+  });
   ok("C1 · Reports has a sixth section with its own header and panel", cSec.head && cSec.panel && cSec.headHidden === false, JSON.stringify(cSec));
   ok("C2 · …and its jump chip", cSec.chip && cSec.chipLabels.includes("Referrals out"), JSON.stringify(cSec.chipLabels));
   ok("C2b · …plus the per-panel chip on the sticky strip", cSec.panelChip);

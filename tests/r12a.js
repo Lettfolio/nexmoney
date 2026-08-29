@@ -616,6 +616,21 @@ async function mkClientCase(page, opts) {
       const page = await newPage(browser, "p1");
       const cc = await mkClientCase(page, { first: "Ivo", last: "Sandringham" });
 
+      /* R74: #em-summary now reads the hold and the cron heartbeat before it promises anything —
+         while `email_hold` is on it says the mail is HELD and does not talk about the next run at
+         all (panel D-25/A#9). This block is about the RUN'S OWN ARITHMETIC — which queued rows are
+         due and which are deferred — so it sets the state in which a run can actually happen. The
+         assertions below are untouched. The held and cron-stale wordings are covered by
+         tests/r74_numbers.js §C. */
+      await page.evaluate(async () => {
+        const rows = window.__mock.db.settings;
+        const row = rows.filter((r) => r.key === "email_hold")[0];
+        if (row) row.value = "off"; else rows.push({ key: "email_hold", value: "off" });
+        const cron = rows.filter((r) => r.key === "last_cron_run_at")[0];
+        if (cron) cron.value = new Date().toISOString(); else rows.push({ key: "last_cron_run_at", value: new Date().toISOString() });
+        await window.__reloadSettings();
+      });
+
       const groundTruth = () => page.evaluate(async () => {
         const { data } = await window.__mockDb.from("email_queue").select("status,scheduled_for").order("created_at", { ascending: false }).limit(100);
         const nowIso = new Date().toISOString();

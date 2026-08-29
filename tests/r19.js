@@ -261,7 +261,14 @@ function monthIso(t0, deltaMonths, day, hour = 12) {
         return ids.every((s) => !!document.querySelector(s));
       });
       ok("A · owner: all four MI panel containers exist", ownerPanelsVisible);
-      const ownerChips = await pageOwner.evaluate(() => ["mi", "mivelocity", "mirevenue", "miboard"].map((k) => !!document.querySelector(`#rep-nav-${k}`)));
+      /* R74: the level-2 chip strip is scoped to the SELECTED level-1 section (D#6 — it used to
+         list all twenty panels at once). The MI chips live under the "Pipeline MI" pill, so the
+         reader picks that section first. Same assertion, same four chips, one control earlier. */
+      const ownerChips = await pageOwner.evaluate(async () => {
+        const pill = document.getElementById("reports-nav-mi");
+        if (pill) { pill.click(); await new Promise((r) => setTimeout(r, 500)); }
+        return ["mi", "mivelocity", "mirevenue", "miboard"].map((k) => !!document.querySelector(`#rep-nav-${k}`));
+      });
       eq("A · owner: all four MI jump chips are present", ownerChips, [true, true, true, true]);
       ok("A · owner: no console errors", (pageOwner.__err || []).length === errBeforeOwner, JSON.stringify(pageOwner.__err));
       await pageOwner.close();
@@ -271,7 +278,17 @@ function monthIso(t0, deltaMonths, day, hour = 12) {
       await goto(pageAdv, "reports", 1200);
       const advHidden = await pageAdv.evaluate(() => document.querySelector("#report-mi-section").classList.contains("hidden"));
       ok("A · adviser (p2): #report-mi-section IS hidden", advHidden);
-      const advChips = await pageAdv.evaluate(() => ["mi", "mivelocity", "mirevenue", "miboard"].map((k) => !!document.querySelector(`#rep-nav-${k}`)));
+      /* R74: an adviser has no MI section at all, so there is no pill to press — the chips must be
+         absent whichever section is selected. Walk them all rather than trusting one. */
+      const advChips = await pageAdv.evaluate(async () => {
+        const found = { mi: false, mivelocity: false, mirevenue: false, miboard: false };
+        const pills = [...document.querySelectorAll("#reports-jump-chips [data-reports-jump]")];
+        for (const p of (pills.length ? pills : [null])) {
+          if (p) { p.click(); await new Promise((r) => setTimeout(r, 300)); }
+          Object.keys(found).forEach((k) => { if (document.querySelector(`#rep-nav-${k}`)) found[k] = true; });
+        }
+        return ["mi", "mivelocity", "mirevenue", "miboard"].map((k) => found[k]);
+      });
       eq("A · adviser: none of the four MI jump chips are present", advChips, [false, false, false, false]);
       ok("A · adviser: no console errors", (pageAdv.__err || []).length === errBeforeAdv, JSON.stringify(pageAdv.__err));
       await pageAdv.close();

@@ -124,7 +124,66 @@ node tests/r72_owner.js
 node tests/r72_admin.js
 node tests/r73_visible.js
 node tests/r73_system.js
+node tests/r74_numbers.js
+node tests/r74_forms.js
 ```
+
+**R74 notes — trust round (`tests/r74_numbers.js` 125, `tests/r74_forms.js` 110).**
+Numbers half: **ONE rate-book predicate** — `rateBookSelect()`/`rateBookCounts(feed, rows)` →
+{ended, ending, ercOnly, inWindow, ercAll, total}; the definition: in-window (incl. lapsed) OR
+erc_outlasts_rate, minus live-retention-successor suppression (`notSelfNag`), scope-filtered,
+Today additionally floored at −18mo (R47), all POST-collapse (R7-2). Surfaces: Today KPI
+("Rates in the 6-month window"), `#rate-erc-panel h3`, Retention h3 + THREE headed groups
+(`.ret-g-ended/-soon/-erc`) whose badges ARE the group counts; chip "6 months + ERC conflicts".
+**RULE: any new rate-book count goes through rateBookCounts — never an inline filter** (Today's
+KPI was two inline filters missing notSelfNag; that WAS the 13-vs-11 bug). Reports: KPI renamed
+"Broker fees outstanding (all stages)" + sibling "Owed on completed cases" (`#report-kpi-owed`,
+from moneyOwedModel — never re-derive); attach headers carry basis ("Attach (Aug)" / "Attach
+(2026)"); `naDash(why)`/`zeroMoney(n)` — "—" only for not-applicable, £0 for real zeros.
+"HELD" wording: `heldWord()`/`cronHealth()` — while email_hold is on every surface says held;
+"stuck" survives ONLY when hold off + cron stale; `#em-summary` has three readings (held /
+waiting-on-stale-cron / healthy + clock); DH stuck-notice: hold outranks sender. Reports hero
+`#report-hero` ("£X earned · N% of target") + money-bases legend inside a closed
+`.rep-howcounted` details (suites read it via textContent — innerText is "" in closed details);
+scoreboard essay behind `#report-scoreboard-how`; **OVERDUE column dropped from the scoreboard**
+(adoption strip + Money still carry it); level-2 report chips are SECTION-SCOPED
+(`repSetSection`; membership derived by `repSectionOfEl` walking live section heads; deep links
+via `window.repRevealPanel(sel)` — switch section then scroll; both bars sticky with measured
+offsets). Data health: headline decrements (`dhDecrementHeadline`) + per-panel "N left"
+(`dhSyncPanelLeft`); tile wall = two bands sorted count-DESC — "Counts toward the N" (the
+READINESS_TILE_IDS) and "Watchlist — context, not counted"; CLIENTS TOTAL moved to the page sub;
+`#dh-key` colour key. Forms half: Settings dirty bar `#settings-dirty-bar` (per-handler dirty
+keys; Save routes to the three EXISTING writers; nav-while-dirty asks via `confirmDiscard()`,
+bounded to push===true); boolean selects wear `role="switch"` buttons that write THROUGH the
+select (selectOption still works); groups `#set-group-blockers`/`#set-group-bank`; export
+demoted under Data & backup with an overlay confirm; scroll-spy measures real positions (the
+old bug: 0×0 sections inside the collapsed Advanced details); `setFieldHtml()` pairs each field
+with its own explainer. Modals: sticky `.modal-topbar` (×) + sticky footer `.modal-actions`;
+`markRequiredFields`/`showFieldError` inline errors on client/case/appt forms; DOB badge
+suppressed on blank create; `.cs-sticky-actions` pins under the topbar (r65_pipeline E7 reads
+the measured strip height). House guards: `confirmDiscard()`/`confirmDestructive()`/
+`confirmTyped()` (openOverlay); 10 destructive confirms + the 2 destructive prompts
+(hard-delete/merge) converted; **`.btn-danger-solid`** is the ONE addition to the R73 button
+system (filled red, destructive dialog confirm); 36 non-destructive confirms deliberately left
+native (list in the R74 memo); bulkMoveStage's confirm+REOPEN prompt pair left for R75.
+Stage-move UNDO: `autoAddStagePlaybookTasks` returns inserted `ids`; `moveCaseToStage` snapshots
+{fromStage, completedAt touch, taskIds}; Undo on the toast ONLY when the footprint is fully
+reversible; `undoStageMove` deletes captured ids (NEVER title matches); backward moves offer
+"remove the N tasks the earlier move added" (`#stage-back-*` overlay; reopening Completed is
+excluded — it has its own confirm). Emails: `previewComposeEmail(type,row,ctx)` renders the
+composed house wording for template emails (client-side replica of process-emails' composition —
+**if the edge function's wording changes, update the replica**; the fold SAYS it is a preview);
+default view = "Needs you" (queued+failed; `EMAIL_QUEUE_VIEWS`, `renderQueueChips` takes
+[key,label,test] triples now); `R7_ALERT_LINKS` gained retention_gap + workload
+(`gotoStaffOverdue` → My Day All scoped, `data-brief-owner` rows). Old-suite patches (commented
+R74:): r11_ux (tile-3 oracle = shared predicate; section-walk chip collection; em-summary
+hold-aware; email chips 5→7 + needs-you default), r12a D7 (hold off for run arithmetic), r19 §A
+(press the MI pill), r25/r27 A6 (banded wall, no adjacency), r26 E1 (colspan 9), r37 §9c (three
+verdicts) + §4 (overlay), r42 §A3 (sticky strips), r5_batch6 R5-17 (domText for closed details),
+r63_docs D4, r66_comms C2b, r69_polish D8b ("held and will wait"), r72_admin D7b (preview
+renders wording), r62 §A (press All first), r13/r14/r43/r9_docs (overlay dialogs +
+`#ovl-confirm-body`), r63_tasks §B2 (answer the residue question), r65_pipeline E7/E7b/E10
+(topbar-relative pin).
 
 **R73 notes — UI/UX round (`tests/r73_visible.js` 86, `tests/r73_system.js` 73).** Spec was the
 R73 UI/UX panel report (5 personas + design critic; `R73-ui-ux-panel-findings.md` in Daniel's

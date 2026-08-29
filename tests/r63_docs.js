@@ -414,7 +414,19 @@ function suggestionsGT(docsList, kind) {
       ok("D3 · it names WHEN queued SMS go, the way the email summary names its run",
         /8:05\s*am/i.test(smsSummary), smsSummary);
       const emSummary = await txt(page, "#em-summary");
-      ok("D4 · the email summary still names its own 8am run (unchanged)", /8am/i.test(emSummary), emSummary);
+      /* R74 · A3 (panel D-25/A#9): the email summary now reads `email_hold` and the cron heartbeat
+         before it promises a run. This block's point is the SYMMETRY — the SMS line names when its
+         queue goes, and the email line beside it names what its own queue is waiting for. On this
+         fixture the hold is ON, so what the email queue is waiting for is a decision, not the 8am
+         run, and saying "the next 8am run will send these" would be the untrue half of the pair.
+         Re-pointed at the state the fixture is in; the hold-off wording (which does name the run,
+         now with its clock time) is pinned in tests/r74_numbers.js §C3. */
+      const holdOn = await page.evaluate(async () => {
+        const { data } = await window.__mockDb.from("settings").select("value").eq("key", "email_hold");
+        return String((data && data[0] && data[0].value) || "on").toLowerCase() !== "off";
+      });
+      ok("D4 · the email summary still names what its own queue is waiting for",
+        holdOn ? /held/i.test(emSummary) && /on hold/i.test(emSummary) : /8am/i.test(emSummary), emSummary);
       const anySms = await page.evaluate(() =>
         [...document.querySelectorAll("#sms-list .row-item")].length);
       ok("D5 · the SMS list still renders its rows", anySms > 0, String(anySms));

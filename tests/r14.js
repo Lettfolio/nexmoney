@@ -479,7 +479,18 @@ const fmtMGT = (n) => (n == null || n === "" ? "—" : Number(n).toLocaleString(
       await wait(page, 300);
       const delSel = `#vault-list .vault-card[data-id="${created.id}"] .vault-del`;
       ok("F6 · the new card renders with a delete button for the Owner", !!(await page.$(delSel)));
+      /* R74 · B3: the vault delete is guarded by the house overlay now, not a native confirm —
+         the dialog names the entry and its confirming button carries the danger treatment. */
       await page.click(delSel);
+      await wait(page, 400);
+      const delDlg = await page.evaluate(() => {
+        const ok = document.querySelector("#ovl-confirm-ok");
+        return ok ? { label: ok.textContent.trim(), danger: ok.classList.contains("btn-danger-solid"),
+                      body: (document.querySelector("#ovl-confirm-body") || {}).textContent || "" } : null;
+      });
+      ok("R74 · deleting a vault entry asks in the house overlay, not window.confirm", !!delDlg, JSON.stringify(delDlg));
+      ok("R74 · …its confirming button is the danger one and names the verb", delDlg && delDlg.danger && /delete/i.test(delDlg.label), JSON.stringify(delDlg));
+      await page.click("#ovl-confirm-ok");
       await wait(page, 500);
       const gone = await readRow(page, "vault_entries", { id: created.id });
       ok("F7 · the row is gone from the DB after the Owner deletes it", !gone);

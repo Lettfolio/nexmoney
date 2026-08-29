@@ -608,7 +608,24 @@
       <div class="rep-nav" id="rep-nav" hidden>
         <div class="pipe-segment rep-nav-chips" id="rep-nav-chips" role="tablist" aria-label="Jump to a section of this report"></div>
       </div>
+      <!-- R74 · A4a (panel D#12) — THE HERO. This page opened on a 5-line paragraph about three
+           money bases; the number the owner is actually judged on — fee value earned on the
+           month's completions, against the monthly target — was the fourth tile of a strip inside
+           the second panel down. It leads now. Nothing is computed here that was not already
+           computed for #month-kpis and #month-fee-target: renderMonthCard fills all three from the
+           same figures, so the hero and the Monthly business panel cannot drift.
+           EMPTY and `hidden` in the markup for the same reason every other block on this page is:
+           it is money, and money on this page is Owner-only. -->
+      <div class="rep-hero hidden" id="report-hero"></div>
+      <div class="rep-hero-sec hidden" id="report-hero-strip"></div>
       <p class="panel-sub hidden" id="report-money-note"></p>
+      <!-- R74 · A4a — the three-money-bases paragraph moves behind a closed disclosure. It is not
+           deleted and not shortened (r42 §E pins it verbatim): it is the reference you read once
+           and then never again, and it was standing between the reader and the page. Same fold
+           pattern Settings uses. -->
+      <details class="rep-howcounted" id="report-basis-fold" hidden>
+        <summary>How these are counted</summary>
+        <div class="rep-howcounted-body">
       <!-- R5-17 — the one legend that links every money label on this page to the basis it is
            counted on. Nothing here changes a calculation; it names the three bases so two figures
            that legitimately disagree can be read as different questions rather than a bug. -->
@@ -622,6 +639,8 @@
            re-ranked to match, so the three bases still reconcile but in the order the page now
            leads with. No figure was removed. -->
       <p class="panel-sub hidden" id="report-basis-legend">Three money bases on this page, headline first — <strong>earned</strong> (the headline): proc + broker + sols fee value on a case, counted in the month it <em>completed</em>, paid or not · <strong>outstanding</strong>: earned but not yet received — whether it has been invoiced or is still to be invoiced · <strong>cash (banked)</strong> (secondary): money actually received, counted in the month it was paid. Every figure below says which one it is.</p>
+        </div>
+      </details>
       <!-- R5-F4 — REPORTS_ROW_CAP. Every Reports select is explicitly bounded; when one comes back
            holding exactly the cap the figures below describe a subset of the book, and this line
            says so instead of letting the page truncate in silence. -->
@@ -1042,7 +1061,10 @@
         <h2>Data health</h2>
         <button class="btn" id="data-refresh">↻ Refresh</button>
       </div>
-      <p class="panel-sub">Automatic data-quality checks — fix these to keep automations and reporting accurate.</p>
+      <!-- R74 · A5b — "Clients total" left the tile wall and lives here. It is not a fault, it has
+           nothing to drill into, and as the FIRST tile of a wall of faults it was reading as one.
+           Filled by loadDataHealth so the number stays live. -->
+      <p class="panel-sub" id="dh-page-sub">Automatic data-quality checks — fix these to keep automations and reporting accurate.</p>
       <p class="dq-notice hidden" id="data-cap-notice"></p>
       <!-- R31-C — book-readiness rollup: one at-a-glance summary of the data-quality faults below,
            populated by loadDataHealth. Sits above the tile row (#dh-tile-* live inside #data-content). -->
@@ -1139,14 +1161,23 @@
            two rows are about exactly that — they point at it. Painted by renderSettingsGolive();
            Owner and Administrator only, like the strip. -->
       <div id="settings-golive" class="hidden"></div>
-      <!-- R13 · M-42 — FIRM EXPORT. Near the top of the Owner's Settings on purpose: it is the
-           one control on this page that is about the firm's ability to walk away with its own
-           data, and burying it under forty configuration fields would be a statement about how
-           much it matters. Hidden for everyone but the Owner (renderSettings toggles it); the
+      <form id="settings-form" class="panel"></form>
+      <button class="btn btn-primary" id="save-settings-btn">Save settings</button>
+      <span id="settings-saved" class="saved-msg hidden">Saved ✓</span>
+
+      <!-- R13 · M-42 — FIRM EXPORT.
+           R74 · B1 (panel D#15) — MOVED, AND DEMOTED. It sat at the TOP of Settings in a navy
+           primary button, which made the loudest control on the page one an Owner presses perhaps
+           twice a year — above every switch the firm actually changes, and above the go-live
+           rollup that tells them what is still broken. It keeps every word of its own copy and its
+           own id; what changes is where it sits (with the rest of the firm's housekeeping, under
+           its own "Data & backup" heading), that the button is a secondary one, and that it asks
+           before it writes an unencrypted file full of clients' dates of birth to somebody's
+           Downloads folder. Hidden for everyone but the Owner (renderSettings toggles it); the
            reads it makes are RLS'd anyway, so a non-Owner's export would be a partial file
            labelled as a backup, which is worse than no button. -->
-      <div class="panel hidden" id="firm-export-panel" style="margin-bottom:20px;">
-        <h3>Export the firm's data</h3>
+      <div class="panel hidden" id="firm-export-panel" style="margin-top:24px;">
+        <h3>Data &amp; backup</h3>
         <p class="panel-sub">One file containing every row this back office holds — clients, cases, tasks, notes, documents, appointments, leads, the email and SMS queues, fact-finds, introducers, settings, logins, alerts, absences and the audit log. It is a <strong>backup you control</strong>: keep it somewhere safe outside this system, so the firm's record of itself does not depend on this application or its hosting continuing to exist.</p>
         <p class="panel-sub"><strong class="export-warn">It is not encrypted.</strong> It is a plain JSON file with your clients' names, contact details, dates of birth and financial figures in it. Treat the file exactly as you would treat the database: somewhere access-controlled, not a shared drive and not an email attachment.</p>
         <p class="panel-sub">This is a copy, not a migration: nothing here restores it, and no other system reads this format. It is what you would hand a developer, an auditor or a successor firm.</p>
@@ -1155,14 +1186,10 @@
              is exactly the file you would least want to leak. Vault entries are not in EXPORT_TABLES,
              and this line says so out loud so nobody assumes the backup covers them. -->
         <p class="panel-sub"><strong>The password vault is not in this file.</strong> Company logins and passwords are deliberately excluded — an unencrypted backup is the last place they belong. Manage them on the Vault page instead.</p>
-        <button type="button" class="btn btn-primary" id="firm-export-btn">Export the firm's data</button>
+        <button type="button" class="btn" id="firm-export-btn">Export the firm's data</button>
         <span id="firm-export-last" class="panel-sub" style="margin-left:10px;"></span>
         <div id="firm-export-result"></div>
       </div>
-      <form id="settings-form" class="panel"></form>
-      <button class="btn btn-primary" id="save-settings-btn">Save settings</button>
-      <span id="settings-saved" class="saved-msg hidden">Saved ✓</span>
-
       <!-- B4 UI (R5-8) — every signed-in staff member's own contact/sign-off, independent of the
            Owner-only form above (M1's self-update RLS policy covers exactly this row). Hidden
            outright when the database predates M1 — there is no column to write to. -->
@@ -1265,6 +1292,18 @@
           </div>
         </div>
       </details>
+      <!-- R74 · B1 (panel D#9) — THE UNSAVED-CHANGES BAR. Settings is five screens of fields with
+           THREE save buttons on it (the settings form's, My details', Adviser targets') and no
+           statement anywhere that anything is unsaved: navigating away discarded the edit without
+           a word (reproduced). One bar, pinned to the bottom of the page while ANY of those three
+           groups is dirty, counting the fields and routing Save to the handler that owns each one
+           — the three writers are unchanged, this only presses them. Last in the section so it is
+           after everything it can be about, and inside it so it disappears with the page. -->
+      <div class="settings-dirty-bar hidden" id="settings-dirty-bar" role="status" aria-live="polite">
+        <span class="sdb-msg"><strong id="settings-dirty-n">0 unsaved changes</strong><span class="sdb-where" id="settings-dirty-where"></span></span>
+        <button type="button" class="btn btn-sm" id="settings-discard-btn">Discard</button>
+        <button type="button" class="btn btn-sm btn-primary" id="settings-dirty-save">Save</button>
+      </div>
     </section>
 
     <!-- Vault (R14) — the company password safe. All staff can see every entry; a single entry can be

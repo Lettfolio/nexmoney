@@ -119,7 +119,8 @@ const noErr = (page, label) => ok(`no console errors (${label})`, !page.__err, J
       const gt = await page.evaluate(async () => {
         const db = window.__mockDb;
         const [{ data: cases }, { data: alerts }, { data: settingsRows }] = await Promise.all([
-          db.from("cases").select("id,stage,fee_status,broker_fee,completed_at"),
+          // R74: the oracle above needs the successor link, and the address the collapse keys on.
+          db.from("cases").select("id,stage,fee_status,broker_fee,completed_at,retention_source_case_id,property_address"),
           db.from("v_alerts").select("*"),
           db.from("settings").select("*"),
         ]);
@@ -130,8 +131,32 @@ const noErr = (page, label) => ok(`no console errors (${label})`, !page.__err, J
         const completed = (cases || []).filter((c) => c.completed_at && new Date(c.completed_at).getFullYear() === yr);
         const feesDue = (cases || []).filter((c) => ["not_requested", "requested"].includes(c.fee_status) && c.broker_fee > 0 && c.stage !== "not_proceeding");
         const feesDueTotal = feesDue.reduce((s, c) => s + Number(c.broker_fee || 0), 0);
-        const ratesSoon = (alerts || []).filter((a) => a.days_to_rate_end != null && a.days_to_rate_end <= reminderMonths * 30);
-        const ercFlags = (alerts || []).filter((a) => a.erc_outlasts_rate);
+        /* R74: the KPI tiles now ask rateBookSelect() the same question the Rate & ERC panel below
+           them asks, so this oracle models the SHARED predicate rather than the tile's old private
+           one. Three clauses were missing here because they were missing from the tile: the
+           live-successor suppression (a completed case whose retention successor is already open
+           is one piece of work, not two — this is the whole of the panel's 13-vs-11 finding), the
+           R47 18-month recency floor the drawer has always applied, and R7-2's one-building
+           collapse. NOT weakened: the oracle is strictly more exact than it was. */
+        const withSource = (cases || []).filter((c) => c.retention_source_case_id);
+        const liveSuccessors = new Set(withSource
+          .filter((c) => ["completed", "not_proceeding"].indexOf(c.stage) === -1).map((c) => c.id));
+        const FLOOR = -Math.round(18 * 30.44);
+        const inBook = (a) => !liveSuccessors.has(a.case_id) && a.days_to_rate_end != null && a.days_to_rate_end >= FLOOR;
+        const byCase = {};
+        (cases || []).forEach((c) => { byCase[c.id] = c; });
+        const collapseKey = (a) => {
+          const c = byCase[a.case_id] || {};
+          const addr = String(c.property_address || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+          return addr ? addr + "|" + (a.rate_end_date || "") : "";
+        };
+        const collapse = (rows) => {
+          const seen = new Set(), out = [];
+          rows.forEach((a) => { const k = collapseKey(a); if (!k) { out.push(a); return; } if (seen.has(k)) return; seen.add(k); out.push(a); });
+          return out;
+        };
+        const ratesSoon = collapse((alerts || []).filter((a) => inBook(a) && a.days_to_rate_end <= reminderMonths * 30));
+        const ercFlags = collapse((alerts || []).filter((a) => inBook(a) && a.erc_outlasts_rate));
         const fmtM = (n) => Number(n).toLocaleString("en-GB", { style: "currency", currency: "GBP", maximumFractionDigits: 0 });
         return {
           active: active.length, completed: completed.length, yr, reminderMonths,
@@ -144,7 +169,10 @@ const noErr = (page, label) => ok(`no console errors (${label})`, !page.__err, J
       eq("R11-A · owner sees 5 KPI tiles", owner.length, 5);
       ok("R11-A · tile 1 — Active cases, right number, right order", owner[0].includes("Active cases") && owner[0].startsWith(String(gt.active)), owner[0]);
       ok("R11-A · tile 2 — Completions this year", owner[1].includes(`Completions in ${gt.yr}`) && owner[1].startsWith(String(gt.completed)), owner[1]);
-      ok("R11-A · tile 3 — Rates ending soon, using the real reminder window", owner[2].includes(`Rates ending ≤ ${gt.reminderMonths}mo`) && owner[2].startsWith(String(gt.ratesSoon)), owner[2]);
+      // R74: the label is the phrase the Rate & ERC panel badge and the Retention page now share.
+      // "Rates ending ≤ 6mo (or overdue)" said in five words what "in the 6-month window" says in
+      // four, and said it differently from the two surfaces showing the same number.
+      ok("R11-A · tile 3 — Rates in the reminder window, using the real reminder window", owner[2].includes(`Rates in the ${gt.reminderMonths}-month window`) && owner[2].startsWith(String(gt.ratesSoon)), owner[2]);
       ok("R11-A · tile 4 — ERC outlasts rate", owner[3].includes("ERC outlasts rate") && owner[3].startsWith(String(gt.ercFlags)), owner[3]);
       ok("R11-A · tile 5 (owner only) — Fees outstanding, money figure matches", owner[4].includes(gt.feesDueMoney) && owner[4].includes(`Fees outstanding (${gt.feesDueN})`), owner[4]);
       noErr(page, "owner KPI");
@@ -173,7 +201,8 @@ const noErr = (page, label) => ok(`no console errors (${label})`, !page.__err, J
       const page = await newPage(browser, "p2");
       const adv = await page.evaluate(() => [...document.querySelectorAll("#kpi-row .kpi")].map((k) => k.textContent.replace(/\s+/g, " ").trim()));
       eq("R11-A · adviser sees 4 KPI tiles", adv.length, 4);
-      ok("R11-A · adviser's 4 tiles are the non-money four, in the same order", adv[0].includes("Active cases") && adv[1].includes("Completions in") && adv[2].includes("Rates ending") && adv[3].includes("ERC outlasts rate"), adv);
+      // R74: same re-point as tile 3 above.
+      ok("R11-A · adviser's 4 tiles are the non-money four, in the same order", adv[0].includes("Active cases") && adv[1].includes("Completions in") && adv[2].includes("Rates in the") && adv[3].includes("ERC outlasts rate"), adv);
       ok("R11-A · no tile mentions money at all for an adviser", !adv.some((t) => /Fees outstanding|£/.test(t)), adv);
       const advOrder = await page.evaluate(() => {
         const h = document.getElementById("today-heading");
@@ -388,12 +417,25 @@ const noErr = (page, label) => ok(`no console errors (${label})`, !page.__err, J
       console.log("\n— R11-C · Reports jump nav (p4 Daniel, owner)");
       const page = await newPage(browser, "p4");
       await gotoPage(page, "reports");
-      const ownerNav = await page.evaluate(() => {
+      /* R74: the level-2 strip is now SCOPED to the level-1 section that is selected — twenty
+         chips at once was the D#6 finding (fourteen of them lived off the right edge behind a
+         chevron). Reaching "every money chip" therefore means walking the section pills, which is
+         what a reader does. The assertion below is unchanged in what it demands: the same complete
+         set must still be reachable, and no chip may be stranded. */
+      const ownerNav = await page.evaluate(async () => {
         const bar = document.querySelector("#rep-nav");
+        const chips = [];
+        const pills = [...document.querySelectorAll("#reports-jump-chips [data-reports-jump]")];
+        for (const p of pills) {
+          p.click();
+          await new Promise((r) => setTimeout(r, 700));
+          [...document.querySelectorAll("#rep-nav-chips [data-rep-jump]")]
+            .forEach((b) => { if (!chips.some((c) => c.key === b.dataset.repJump)) chips.push({ id: b.id, key: b.dataset.repJump }); });
+        }
         return {
           hidden: !bar || bar.hidden,
           sticky: bar ? getComputedStyle(bar).position : null,
-          chips: [...document.querySelectorAll("#rep-nav-chips [data-rep-jump]")].map((b) => ({ id: b.id, key: b.dataset.repJump })),
+          chips,
         };
       });
       ok("R11-C · owner: the jump bar is visible", !ownerNav.hidden, ownerNav);
@@ -406,6 +448,9 @@ const noErr = (page, label) => ok(`no console errors (${label})`, !page.__err, J
 
       /* clicking a deep chip scrolls, and scroll-margin keeps the heading clear of the sticky bar */
       const jump = await page.evaluate(async () => {
+        // R74: pick the section that holds Client LTV first — that is the control the reader uses.
+        document.getElementById("reports-nav-money").click();
+        await new Promise((r) => setTimeout(r, 400));
         document.getElementById("rep-nav-ltv").click();
         await new Promise((r) => setTimeout(r, 1400));
         const bar = document.querySelector("#rep-nav").getBoundingClientRect();
@@ -417,17 +462,23 @@ const noErr = (page, label) => ok(`no console errors (${label})`, !page.__err, J
       ok("R11-C · the heading lands clear of the sticky bar (scroll-margin-top works)", jump.headTop >= jump.barBottom, jump);
       eq("R11-C · the clicked chip becomes the sole active one", jump.active, ["rep-nav-ltv"]);
 
+      /* R74: scrolling now re-picks the SECTION as well as the chip, so the top of the page lands
+         back in "This month" and lights its first chip. Same behaviour, one level deeper. */
       const topActive = await page.evaluate(async () => {
         window.scrollTo(0, 0);
-        await new Promise((r) => setTimeout(r, 400));
-        return [...document.querySelectorAll("#rep-nav-chips .seg-btn.active")].map((b) => b.id);
+        await new Promise((r) => setTimeout(r, 900));
+        return {
+          chips: [...document.querySelectorAll("#rep-nav-chips .seg-btn.active")].map((b) => b.id),
+          section: (document.querySelector("#reports-jump-chips .seg-btn.active") || {}).id,
+        };
       });
-      eq("R11-C · scrolling back to the top re-highlights the first chip", topActive, ["rep-nav-month"]);
+      eq("R11-C · scrolling back to the top re-highlights the first chip", topActive.chips, ["rep-nav-month"]);
+      eq("R11-C · …and the section pill above it follows", topActive.section, "reports-nav-month");
 
       const midActive = await page.evaluate(async () => {
         const el = document.querySelector("#report-advocacy-panel");
         window.scrollTo(0, el.getBoundingClientRect().top + window.scrollY - 40);
-        await new Promise((r) => setTimeout(r, 400));
+        await new Promise((r) => setTimeout(r, 900));   // R74: the section re-scope repaints the strip
         return [...document.querySelectorAll("#rep-nav-chips .seg-btn.active")].map((b) => b.id);
       });
       eq("R11-C · scrolling to a section highlights that section's own chip", midActive, ["rep-nav-advocacy"]);
@@ -439,10 +490,21 @@ const noErr = (page, label) => ok(`no console errors (${label})`, !page.__err, J
       console.log("\n— R11-C · Reports jump nav money gate (p2 Wayne, adviser)");
       const page = await newPage(browser, "p2");
       await gotoPage(page, "reports");
-      const advNav = await page.evaluate(() => {
+      /* R74: same section walk as the owner block above — the chip strip is scoped to the selected
+         level-1 section now, so "the adviser's complete chip list" is collected by pressing each
+         section pill in turn. The money-leak assertions underneath are untouched and still have to
+         pass over the WHOLE collected set, which is the point of collecting it this way. */
+      const advNav = await page.evaluate(async () => {
         const MONEY_PANELS = ["#report-owed-panel", "#report-rateend-panel", "#report-leadresp-panel", "#report-advocacy-panel", "#report-conveyancer-panel", "#report-forecast-panel", "#report-ltv-panel", "#report-scoreboard-panel", "#report-losses-panel"];
+        const chips = [];
+        const pills = [...document.querySelectorAll("#reports-jump-chips [data-reports-jump]")];
+        for (const p of (pills.length ? pills : [null])) {
+          if (p) { p.click(); await new Promise((r) => setTimeout(r, 700)); }
+          [...document.querySelectorAll("#rep-nav-chips [data-rep-jump]")]
+            .forEach((b) => { if (chips.indexOf(b.dataset.repJump) === -1) chips.push(b.dataset.repJump); });
+        }
         return {
-          chips: [...document.querySelectorAll("#rep-nav-chips [data-rep-jump]")].map((b) => b.dataset.repJump),
+          chips,
           leaked: MONEY_PANELS.filter((s) => { const el = document.querySelector(s); return el && !el.classList.contains("hidden"); }),
           barHidden: (document.querySelector("#rep-nav") || {}).hidden,
         };
@@ -490,7 +552,14 @@ const noErr = (page, label) => ok(`no console errors (${label})`, !page.__err, J
           return c;
         };
         return {
-          email: bucket(emails || [], ["queued", "sent", "failed", "cancelled"]),
+          /* R74: the email queue gained two multi-status VIEWS beside the per-status chips —
+             "Needs you" (queued + failed, the set the tick boxes and Cancel have always acted on)
+             and "History" (sent + cancelled). Ground truth for both is computed here from the same
+             rows, so the chips are still checked against the fixture and not against themselves. */
+          email: Object.assign(bucket(emails || [], ["queued", "sent", "failed", "cancelled"]), {
+            needs: (emails || []).filter((e) => e.status === "queued" || e.status === "failed").length,
+            history: (emails || []).filter((e) => e.status === "sent" || e.status === "cancelled").length,
+          }),
           sms: bucket(sms || [], ["queued", "sending", "sent", "failed", "cancelled"]),
           nQueued: (emails || []).filter((e) => e.status === "queued").length,
           nSmsWaiting: (sms || []).filter((s) => s.status === "queued" || s.status === "sending").length,
@@ -499,9 +568,14 @@ const noErr = (page, label) => ok(`no console errors (${label})`, !page.__err, J
 
       ok("R11-D · the old Failed-only checkbox is gone", await page.evaluate(() => !document.querySelector("#email-failed-only")));
       const emChips = await page.evaluate(() => [...document.querySelectorAll("#em-filters [data-em-status]")].map((b) => ({ id: b.id, k: b.dataset.emStatus, n: Number((b.querySelector(".seg-count") || {}).textContent || "-1"), active: b.classList.contains("active") })));
-      eq("R11-D · five email chips: All/Queued/Sent/Failed/Cancelled", emChips.map((c) => c.k), ["all", "queued", "sent", "failed", "cancelled"]);
+      // R74: seven email chips — the five statuses (unchanged ids and counts) plus Needs you and History.
+      eq("R11-D · seven email chips: Needs you/All/History + the four statuses", emChips.map((c) => c.k), ["needs", "all", "history", "queued", "sent", "failed", "cancelled"]);
       ok("R11-D · email chip ids are em-chip-*", emChips.every((c) => c.id === `em-chip-${c.k}`), emChips);
-      ok("R11-D · All is active by default", emChips[0].active);
+      /* R74 (panel A#8): the page now OPENS on "Needs you", not on All — the default view is the
+         rows that still need a decision. Re-pointed at the new contract, not weakened: it still
+         asserts exactly one chip is active on load and names which. */
+      eq("R74 · Needs you is the active chip on load, not All",
+        emChips.filter((c) => c.active).map((c) => c.k), ["needs"]);
       emChips.forEach((c) => eq(`R11-D · email chip count matches ground truth · ${c.k}`, c.n, truth.email[c.k]));
 
       const smsChips = await page.evaluate(() => [...document.querySelectorAll("#sms-filters [data-em-status]")].map((b) => ({ id: b.id, k: b.dataset.emStatus, n: Number((b.querySelector(".seg-count") || {}).textContent || "-1") })));
@@ -510,7 +584,18 @@ const noErr = (page, label) => ok(`no console errors (${label})`, !page.__err, J
       smsChips.forEach((c) => eq(`R11-D · sms chip count matches ground truth · ${c.k}`, c.n, truth.sms[c.k]));
 
       const emSummary = await page.$eval("#em-summary", (e) => e.textContent).catch(() => "");
-      ok("R11-D · the email summary states the queued count and mentions 8am", emSummary.includes(String(truth.nQueued)) && /8am/.test(emSummary), emSummary);
+      /* R74: the summary reads `email_hold` and the cron heartbeat before it promises a run (panel
+         D-25/A#9). This fixture's hold is ON, so the honest sentence names the count and the HOLD
+         rather than the 8am run — the run is not what these are waiting for. Re-pointed at the
+         state the fixture is actually in; the count assertion is unchanged, and the hold-off
+         wording (which does mention the run, with its clock time) is pinned in
+         tests/r74_numbers.js §C3. */
+      const holdOn = await page.evaluate(async () => {
+        const { data } = await window.__mockDb.from("settings").select("value").eq("key", "email_hold");
+        return String((data && data[0] && data[0].value) || "on").toLowerCase() !== "off";
+      });
+      ok("R11-D · the email summary states the queued count and says what it is waiting for",
+        emSummary.includes(String(truth.nQueued)) && (holdOn ? /held/.test(emSummary) && /on hold/.test(emSummary) : /8am/.test(emSummary)), emSummary);
       const smsSummary = await page.$eval("#sms-summary", (e) => e.textContent).catch(() => "");
       ok("R11-D · the SMS summary states how many are waiting, with no 8am claim", smsSummary.includes(String(truth.nSmsWaiting)), smsSummary);
 

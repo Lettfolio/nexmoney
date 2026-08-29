@@ -383,8 +383,19 @@ const dueFor = (offset, now) => dstr(now + offset * DAY_MS);
       ok("B1 · the move toast reports the tasks it wrote",
         /3 tasks added for Fact Find/i.test(await toastText(page)), await toastText(page));
 
-      // B2 — no duplicates when the case comes back to a stage it has already been at.
-      await move(page, b1.caseId, "enquiry");
+      /* B2 — no duplicates when the case comes back to a stage it has already been at.
+         R74 (panel B#2): a move BACKWARDS through the live stages now ASKS whether the later
+         stage's still-open steps should come off with it, because leaving them is how a case at
+         DIP ends up holding Application work. This section is about DUPLICATES, so it answers
+         "Move and keep them" — the case comes back carrying exactly what it carried, which is the
+         state B2 measures. */
+      const b2back = page.evaluate(({ id, s }) => window.moveCaseToStage(id, s, {}), { id: b1.caseId, s: "enquiry" });
+      await wait(page, 900);
+      ok("R74 · B2 · moving back a stage asks about the later stage's still-open steps",
+        await page.evaluate(() => !!document.querySelector("#stage-back-keep")));
+      await page.click("#stage-back-keep");
+      await b2back;
+      await wait(page, 1200);
       await move(page, b1.caseId, "fact_find");
       const b2Rows = await tasksOf(page, b1.caseId);
       const dupes = pbTitles("fact_find", "purchase").filter((t) => b2Rows.filter((r) => r.title === t).length !== 1);

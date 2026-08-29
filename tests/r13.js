@@ -205,7 +205,13 @@ const readBlobJson = (page) => page.evaluate(async () => (window.__blob ? JSON.p
       });
       // Ground truth per-table counts, read straight off __mock.counts() (its own small, honest read).
       const countsGT = await page.evaluate(() => window.__mock.counts());
+      /* R74: the export now asks first (panel D#15) — it writes an unencrypted file holding every
+         client's date of birth, and the button was the loudest control on the page. The question is
+         the house overlay, not a native confirm, so the test confirms it the way a person would. */
       await page.click("#firm-export-btn");
+      await wait(page, 400);
+      ok("R74 · the export asks before it writes the file", !!(await page.$("#ovl-confirm-ok")));
+      await page.click("#ovl-confirm-ok");
       await wait(page, 900);
       const file = await readBlobJson(page);
       ok("A1 · exporting produced exactly one JSON file", !!file, JSON.stringify(Object.keys(file || {})));
@@ -242,7 +248,9 @@ const readBlobJson = (page) => page.evaluate(async () => (window.__blob ? JSON.p
           return orig(t);
         };
       });
-      await page.click("#firm-export-btn");
+      await page.click("#firm-export-btn");   // R74: same overlay confirm on the failure path
+      await wait(page, 400);
+      await page.click("#ovl-confirm-ok");
       await wait(page, 900);
       const file2 = await readBlobJson(page);
       ok("A1 · a table that fails to read is named under failed{} rather than aborting the export", file2 && file2.failed && Object.prototype.hasOwnProperty.call(file2.failed, "leads"), JSON.stringify(file2 && file2.failed));
@@ -603,18 +611,23 @@ const readBlobJson = (page) => page.evaluate(async () => (window.__blob ? JSON.p
       ok("F1 · Open mints a signed URL against exactly this stored path", popupUrl.includes(encodeURIComponent(openTarget.storage_path)), JSON.stringify({ popupUrl, path: openTarget.storage_path }));
 
       // Delete — removes row + object, writes a note
+      // R74 · B3: removing a file from a case is a destructive verb and now asks in the house
+      // overlay rather than window.confirm. Same question, same words, one more click to confirm.
       page.__dialogAnswer = "accept";
       const beforeDeleteCount = afterUpload.length;
       const delBtn = await page.$(`.cf-del[data-file="${newRow.id}"]`);
       await delBtn.click();
+      await wait(page, 400);
+      const cfDlgBody = await page.$eval("#ovl-confirm-body", (e) => e.textContent).catch(() => "");
+      await page.click("#ovl-confirm-ok");
       await wait(page, 700);
       const afterDelete = await readRows(page, "case_files", { case_id: tomCase.id });
       eq("F1 · delete removed exactly the one row", afterDelete.length, beforeDeleteCount - 1);
       ok("F1 · the deleted row's id is really gone", !afterDelete.some((r) => r.id === newRow.id));
       const delNote = (await readRows(page, "case_notes", { case_id: tomCase.id })).filter((n) => /File removed/.test(n.body)).slice(-1)[0];
       ok("F1 · a case note records the removal", !!delNote && delNote.body.includes("Suitability letter.pdf"), JSON.stringify(delNote));
-      const dialogMsg = lastDialog(page, /Remove/);
-      ok("F1 · the confirm named the file being removed", dialogMsg.includes("Suitability letter.pdf"), dialogMsg);
+      // R74: re-pointed at the overlay's own body — the assertion is unchanged, the dialog is not.
+      ok("F1 · the confirm named the file being removed", cfDlgBody.includes("Suitability letter.pdf"), cfDlgBody);
 
       ok("F1 · no console errors", !page.__err, JSON.stringify(page.__err));
       await page.close();
@@ -834,7 +847,11 @@ const readBlobJson = (page) => page.evaluate(async () => (window.__blob ? JSON.p
       const own = wayneAbs.find((a) => a.note === "Wedding — out of office");
       const delBtn = await adviser.$(`.abs-del[data-absence="${own.id}"]`);
       ok("I1 · a delete button is offered on the adviser's own row", !!delBtn);
+      // R74 · B3: removing an absence asks in the house overlay now, not window.confirm.
       await delBtn.click();
+      await wait(adviser, 400);
+      ok("R74 · removing an absence asks in the house overlay", !!(await adviser.$("#ovl-confirm-ok")));
+      await adviser.click("#ovl-confirm-ok");
       await wait(adviser, 600);
       const afterDel = await readRows(adviser, "staff_absences", { profile_id: "p2" });
       ok("I1 · deleting it removed the row", !afterDel.some((a) => a.id === own.id));

@@ -64,6 +64,12 @@ async function ensureServer() {
   });
   await page.evaluate(() => { location.hash = "#emails"; });
   await page.waitForTimeout(1500);
+  /* R74 (panel A#8): the Emails page now OPENS on "Needs you" (queued + failed), so the sent and
+     cancelled history this section is about is one chip away rather than on screen. §A is a
+     statement about the ALL view's ordering, so it asks for the All view first — the assertion
+     itself is unchanged. */
+  await page.click("#em-chip-all");
+  await page.waitForTimeout(900);
   const a = await page.evaluate(() => {
     const rows = [...document.querySelectorAll("#email-list .row-item")].filter((r) => r.querySelector(".badge"));
     const statuses = rows.map((r) => {

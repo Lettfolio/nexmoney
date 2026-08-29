@@ -834,7 +834,13 @@ function docSuggested(docsListRaw, kind) {
         };
       }, qPlain);
       ok("D7 · a row whose wording is not written yet shows its subject", /Your document checklist/.test(prevPlain.subject), prevPlain.subject);
-      ok("D7b · …and says honestly that there is nothing to show, and why", !prevPlain.hasBody && /not written yet/i.test(prevPlain.note), prevPlain.note);
+      /* R74 (panel A#7): R72's honest "there is nothing here to show until it goes" was true of
+         the body_html COLUMN and useless to the administrator, for whom every automated type is
+         exactly the kind they want to check. The fold now COMPOSES the house wording client-side
+         and labels it as a reading of the template rather than a stored draft. Re-pointed, not
+         weakened: it still asserts the fold explains what it is showing and where it came from. */
+      ok("D7b · …and renders the standard wording, saying plainly that it is a preview of the template",
+        prevPlain.hasBody && /preview of the standard/i.test(prevPlain.note), prevPlain.note);
 
       /* ---- THE BULK BAR ---- */
       await page.check(`#email-list .email-cb[data-id="${qNasty}"]`);

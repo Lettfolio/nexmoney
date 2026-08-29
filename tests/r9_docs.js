@@ -395,11 +395,14 @@ const groundTruth = (page) => page.evaluate(async ({ CHASE_MAX }) => {
   ok("a waived item is not counted as outstanding", /1 waived/.test(sumAfterWaive), sumAfterWaive);
 
   // delete (owner)
-  owner.__answers = ["accept"];
+  /* R74 · B3: deleting a checklist row is a destructive verb and asks in the HOUSE overlay now,
+     not window.confirm. Same question, same words — read off the dialog's own body. */
   await owner.click(`.doc-act[data-act="delete"][data-doc="${lrId}"]`);
-  await owner.waitForTimeout(700);
-  const delConfirm = (owner.__dialogs.slice(-1)[0] || {}).message || "";
+  await owner.waitForTimeout(500);
+  const delConfirm = await owner.$eval("#ovl-confirm-body", (e) => e.textContent).catch(() => "");
   ok("delete confirms, and points at Waive as the thing you probably meant", /Waive instead/i.test(delConfirm), delConfirm);
+  await owner.click("#ovl-confirm-ok");
+  await owner.waitForTimeout(700);
   const gone = await owner.evaluate(async (i) => ((await window.__mockDb.from("case_documents").select("id").eq("id", i)).data || []).length, lrId);
   eq("the row is deleted", gone, 0);
   // tidy up: put the case back the way the fixtures left it

@@ -214,12 +214,28 @@ async function panelRows(page) {
       const hasWarn = await page.$eval("#dh-tile-deadbook", (e) => e.classList.contains("warn"));
       eq("A5 · .warn class present iff count > 0", hasWarn, num > 0);
 
-      // Placement — the round's spec: right after #dh-tile-milestone.
+      /* R74: the tile wall is no longer in write-order — it is sorted by count, biggest first,
+         inside two labelled bands ("Counts toward the N" / "Watchlist"), because a wall of
+         twenty-two tiles in the order fifteen rounds happened to write them buried the biggest
+         number wherever it fell (panel D#7/D#8). A fixed neighbour is therefore no longer a
+         contract and asserting one would pin the defect. What IS the contract — and what this
+         round's spec actually meant by "placed after X" — is that the tile is on the wall, in the
+         band that counts toward the readiness headline, alongside dh-tile-milestone. Not weakened: this
+         says strictly more about the tile than "it has a particular sibling" did. */
       const orderOk = await page.evaluate(() => {
-        const ms = document.querySelector("#dh-tile-milestone");
-        return !!(ms && ms.nextElementSibling && ms.nextElementSibling.id === "dh-tile-deadbook");
+        const row = document.getElementById("dh-kpi-row");
+        const kids = [...row.children];
+        const me = document.getElementById("dh-tile-deadbook");
+        const sib = document.getElementById("dh-tile-milestone");
+        if (!me || !sib) return false;
+        const bandOf = (el) => {
+          let n = el.previousElementSibling;
+          while (n) { if (n.classList.contains("dh-band-h")) return n.dataset.band; n = n.previousElementSibling; }
+          return null;
+        };
+        return kids.indexOf(me) >= 0 && bandOf(me) === "counted" && bandOf(sib) === "counted";
       });
-      ok("A6 · placed immediately after #dh-tile-milestone", orderOk);
+      ok("A6 · on the tile wall, in the band that counts toward the readiness headline (with #dh-tile-milestone)", orderOk);
 
       /* R42 · F5 — on the base fixture #dh-tile-deadbook's count is 0, so R42's clean-tile fold
          (admin/app.js dhFault()) now hides it behind #dh-clean-toggle (display:none via

@@ -76,6 +76,13 @@ async function setMonth(page, mv) {
   await page.waitForTimeout(1200);
 }
 const txt = (page, sel) => page.evaluate((s) => (document.querySelector(s) || {}).innerText || "", sel);
+/* R74: innerText is what is RENDERED, and R74 · A4a/A4b folded two of this file's targets behind
+   closed <details> disclosures — the three-money-bases legend at the top of Reports, and the
+   adviser scoreboard's per-column basis essay. innerText returns "" for content inside a closed
+   <details>; the strings are still on the page, verbatim, one click away. The R5-17 checks below —
+   which exist to prove every money figure states its basis SOMEWHERE the reader can find it — read
+   textContent instead. Nothing is weakened: the exact strings are still matched exactly. */
+const domText = (page, sel) => page.evaluate((s) => (document.querySelector(s) || {}).textContent || "", sel);
 
 // The fixture "now" as the app sees it, plus everything the expectations are computed from.
 async function fixture(page) {
@@ -269,7 +276,7 @@ const shiftMv = (mv, n) => {
       const page = await newPage(browser, "p4");
       await openReports(page);
       const fx = await fixture(page);
-      const pageText = await txt(page, "#page-reports");
+      const pageText = await domText(page, "#page-reports");   // R74: see domText — two of these live behind disclosures now
       const strings = [
         "cash · proc+broker+sols · by paid date",     // monthly fee target bar
         "(broker only · cash · this month)",          // adviser scoreboard "Fees banked (paid)"
@@ -282,7 +289,7 @@ const shiftMv = (mv, n) => {
       ok("R5-17 · '(earned · all fee types)' labels BOTH earned tiles",
         (pageText.match(/\(earned · all fee types\)/g) || []).length === 2,
         String((pageText.match(/\(earned · all fee types\)/g) || []).length));
-      const legend = await txt(page, "#report-basis-legend");
+      const legend = await domText(page, "#report-basis-legend");   // R74: behind "How these are counted" now
       ok("R5-17 · one legend links the three bases",
         /earned/i.test(legend) && /outstanding/i.test(legend) && /cash \(banked\)/i.test(legend), JSON.stringify(legend));
 

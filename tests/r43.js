@@ -416,8 +416,12 @@ const selectSavedViews = (page) => page.evaluate(async () => {
       ok("§6b · …and its option is in the dropdown", optsBefore.includes("R43 Delete Probe"), JSON.stringify(optsBefore));
 
       await page.selectOption("#board-views", "R43 Delete Probe");
-      page.__answers.push(true);   // confirm()
+      /* R74 · B3: deleting a saved view is a destructive verb and asks in the HOUSE overlay now,
+         not window.confirm — so the answer is a click on the dialog's danger button. */
       await page.click("#board-view-del");
+      await wait(page, 400);
+      ok("R74 · §6 · deleting a saved view asks in the house overlay", !!(await page.$("#ovl-confirm-ok")));
+      await page.click("#ovl-confirm-ok");
       await wait(page, 600);
       const toastDel = await toastText(page);
       ok("§6c · the delete toast confirms", /View deleted/.test(toastDel), toastDel);

@@ -781,12 +781,16 @@ const columnCells = (page, key) => page.evaluate((k) => {
         const sc = getComputedStyle(scroller);
         return {
           position: cs.position, top: cs.top,
+          // R74: the height of the modal's new sticky × strip, which is what the bar pins below.
+          topbarH: Math.round((document.querySelector("#modal .modal-topbar") || { getBoundingClientRect: () => ({ height: 0 }) }).getBoundingClientRect().height),
           bg: cs.backgroundColor, border: cs.borderBottomWidth,
           scrollerOverflow: sc.overflowY,
           modalScrolls: getComputedStyle(document.querySelector("#modal")).overflowY,
           firstInModalBody: (() => {
             const modal = document.querySelector("#modal");
-            const kids = [...modal.children].filter((k) => !k.classList.contains("modal-close"));
+            // R74: the × now lives in a sticky header STRIP of its own (panel A#11), so the strip
+            // is chrome to be skipped here exactly as the bare button was.
+            const kids = [...modal.children].filter((k) => !k.classList.contains("modal-close") && !k.classList.contains("modal-topbar"));
             return kids.findIndex((k) => k.id === "cs-sticky-actions") <= 1;
           })(),
           ids: {
@@ -800,7 +804,12 @@ const columnCells = (page, key) => page.evaluate((k) => {
         };
       });
       ok("E6 · the action row exists", !!sticky, "no #cs-sticky-actions");
-      eq("E7 · it is position:sticky, pinned to the top", [sticky.position, sticky.top], ["sticky", "0px"]);
+      /* R74 (panel A#11): the bar still pins to the top of the scrollport, but BELOW the modal's
+         new close-button strip rather than sharing the top edge with a floating × (which is what
+         its 72px right-hand gutter used to exist for). Re-pointed at the measured strip height, so
+         this still asserts "immediately under the top chrome, with nothing above it but the strip". */
+      eq("E7 · it is position:sticky, pinned under the modal's header strip", [sticky.position, sticky.top], ["sticky", sticky.topbarH + "px"]);
+      ok("E7b · …and that strip is the only thing above it", sticky.topbarH > 0 && sticky.topbarH <= 60, String(sticky.topbarH));
       ok("E8 · …of the element that ACTUALLY scrolls (#modal-backdrop, not .modal)",
         sticky.scrollerOverflow === "auto" && sticky.modalScrolls === "visible", JSON.stringify(sticky));
       ok("E9 · …carrying the modal's own background and a hairline",

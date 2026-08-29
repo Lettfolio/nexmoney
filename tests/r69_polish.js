@@ -532,8 +532,12 @@ const favImgs = (page, names) => page.evaluate((ns) => {
       });
       const expect = await probe();
       eq("D8 · the Settings strip is in the no-key state", strip.state, "no_key");
+      /* R74 · A3 (panel D-25): "queued" became "held". Mail that cannot leave was called "queued"
+         here, "queued" on the Emails page and "stuck" on Data health — three words for one state,
+         which is how a deliberate hold reads as a fault. One word now, on all four surfaces. The
+         count, the plural and the verb agreement this line exists to check are unchanged. */
       ok("D8b · …and its copy names the probe's own count, plural, with a verb that agrees",
-        strip.text.includes(`${expect.pending} emails are queued and will wait`),
+        strip.text.includes(`${expect.pending} emails are held and will wait`),
         JSON.stringify({ n: expect.pending, text: strip.text.slice(0, 220) }));
 
       /* A NON-EMPTY scope is not a probe — it counts (and acts on) its own ids, nothing else.

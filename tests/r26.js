@@ -398,7 +398,12 @@ async function setTargetsViaEditor(page, map) {
       });
       ok("E0 · #report-advisers table is present with rows to check", !!counts && counts.body.length > 0, JSON.stringify(counts));
       if (counts) {
-        eq("E1 · header <th> colspan-sum is 10", counts.header, 10);
+        /* R74: NINE columns now — the Overdue column left this table. It rendered twice more on
+           the same page (the adoption strip immediately below it, and Monday money's adviser
+           table), and as the tenth column of ten it was the one being clipped off the right-hand
+           edge of the panel. Deliberate contract change; the header/body/foot agreement this
+           block exists to protect is unchanged and still asserted below. */
+        eq("E1 · header <th> colspan-sum is 9", counts.header, 9);
         ok("E2 · every body row's <td> colspan-sum equals the header's", counts.body.every((n) => n === counts.header), JSON.stringify(counts));
         eq("E3 · foot row's <td> colspan-sum equals the header's", counts.foot, counts.header);
       }
