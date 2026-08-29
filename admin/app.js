@@ -755,7 +755,9 @@ function restoreUserPrefs(uid) {
   // (which doesn't exist populated yet — loadTeam runs after this) are synced by
   // initDiaryViewFromPrefs(), called once loadTeam has rebuilt #diary-staff.
   const dv = lsGet(diaryViewStoreKey(uid));
-  if (dv === "day" || dv === "month") diaryViewMode = dv;
+  /* R75 · A1 — "week" is a third stored value. A STORED CHOICE ALWAYS WINS, whichever of the
+     three it is: the two defaults below only ever decide a first visit. */
+  if (dv === "day" || dv === "month" || dv === "week") diaryViewMode = dv;
   /* R73 · A4 — WITH NO STORED CHOICE, A PHONE OPENS ON DAY.
      The month grid is seven columns of date cells; at 390px each one is ~50px wide and holds an
      appointment's time, its title and its client, so the grid renders as 42 unreadable stamps and
@@ -766,6 +768,13 @@ function restoreUserPrefs(uid) {
      A STORED CHOICE ALWAYS WINS (the branch above runs first and returns its answer), so this
      only ever decides a first visit, and the Month/Day toggle is untouched and one press away. */
   else if (typeof window.matchMedia === "function" && window.matchMedia("(max-width: 760px)").matches) diaryViewMode = "day";
+  /* R75 · A1 — AND ON A DESKTOP, WITH NO STORED CHOICE, IT OPENS ON WEEK (owner decision,
+     28 Aug 2026). The month grid is what you check a date against; the week is what you WORK.
+     Daniel's words: "I never book from the month view — I look at the week and find the gap."
+     A month cell holds three appointments before it starts counting the rest into "+N more",
+     which is the right compromise for context and the wrong one for finding Thursday afternoon.
+     Month stays one press away and, once pressed, is remembered for good (the branch above). */
+  else diaryViewMode = "week";
 }
 function staffName(id) { const p = TEAM.find((x) => x.id === id); return p ? (p.full_name || p.email) : "—"; }
 /* ---------- Assignment safety: ids that live OUTSIDE TEAM ----------
@@ -4650,11 +4659,11 @@ async function loadTeam(session) {
      remembered value), the stored/role default. The value is written back into whichever view's
      slot is live, so switching Month↔Day and back does not throw it away; the other view keeps
      the behaviour it already had. */
+  /* R75 · A3 — one remembered value, whichever view is live: the stored/role default lands in the
+     select and in the single slot the three views share (see diaryStaffVal). Nothing swaps on a
+     view toggle any more, so the value written here is the value every view opens on. */
   const diaryDefault = applyStoredStaffFilter("#diary-staff", DIARY_STAFF_KEY);
-  if (diaryDefault != null) {
-    if (diaryViewMode === "day") diaryStaffDayVal = diaryDefault;
-    else diaryStaffMonthVal = diaryDefault;
-  }
+  if (diaryDefault != null) diaryStaffVal = diaryDefault;
   /* R13 · M-31 — the rota, once, right after the team it is about. Awaited rather than fired and
      forgotten: the very first paint of My Day carries lead-routing selects, and a rota that
      arrives after them would leave the first screen of the day showing the one answer this
@@ -5341,7 +5350,7 @@ function nav(page, push = true) {
   // B9 (R5-31) — the diary page can be showing either the month grid or the Day view; route to
   // whichever loader matches the persisted toggle so navigating back into #diary doesn't silently
   // flip it back to Month.
-  ({ dashboard: loadDashboard, pipeline: loadPipeline, protection: loadProtectionPage, diary: () => (diaryViewMode === "day" ? loadDiaryDay() : loadDiary()), clients: () => loadClients($("#client-search").value, { force: true }), retention: loadRetentionPage, import: () => renderRevLastSync(), reports: loadReports, money: loadMoneyPage, data: loadDataHealth, emails: loadEmails, vault: loadVault, settings: renderSettings }[page])();
+  ({ dashboard: loadDashboard, pipeline: loadPipeline, protection: loadProtectionPage, diary: () => loadDiaryForMode(), clients: () => loadClients($("#client-search").value, { force: true }), retention: loadRetentionPage, import: () => renderRevLastSync(), reports: loadReports, money: loadMoneyPage, data: loadDataHealth, emails: loadEmails, vault: loadVault, settings: renderSettings }[page])();
 }
 
 /* ---------- Settings ---------- */
@@ -8206,6 +8215,11 @@ function rowOutcomeChipsHtml(a, feed, opts) {
 const RATE_OUTCOME_NOTE_PREFIX = "📌 Rate-end outcome — ";
 const RATE_OUTCOME_WINDOW_DAYS = 366;   // the "Ended · last 12 months" chip's own window (ended12)
 const RATE_OUTCOME_LABEL = { retained: "retained", renewed_elsewhere: "renewed elsewhere", sold: "sold", none: "no outcome" };
+/* R75 · B2 — which funnel chip is pressed, "" for none. Deliberately NOT persisted:
+   a filter that survives a reload is a list somebody comes back to tomorrow and
+   reads as the whole book. Cleared by the chip itself, the "show everything" link
+   on the notice, and any scope/month change that re-enters the page. */
+let retOutcomeFilter = "";
 /* Which outcome a 📌 note records. Prefix-matched on the words rateEndOutcome actually writes
    ("renewed elsewhere with Halifax…", "property sold / mortgage redeemed on…"), never on the
    whole sentence: both bodies carry a lender or a date after the phrase. Anything else that
@@ -8315,15 +8329,65 @@ function renderRateEndOutcomeFunnel(feed, extras, o) {
   });
   const total = counts.retained + counts.renewed_elsewhere + counts.sold + counts.none;
   if (!total) { el.innerHTML = ""; return; }
-  const chip = (key, label, n, tip) => `<span class="ret-outcome-chip${key === "none" && n ? " hot" : ""}" data-outcome="${key}" data-n="${n}" title="${esc(tip)}">${esc(label)} <strong>${n}</strong></span>`;
+  /* ==========================================================================
+     R75 · B2 (panel D#19) — THE FUNNEL BECOMES A CONTROL, AND SAYS WHAT IS AT
+     STAKE.
+
+     The strip said "155 with no outcome" and then left the reader to find those
+     155 rows in a list of 593 by eye. The chips already carried `data-outcome`
+     and were inert `<span>`s; they are BUTTONS now and pressing one filters the
+     ended list below to exactly that outcome (press again to clear). "No
+     outcome" is the money click and is the one the copy points at.
+
+     THE NUMBERS ARE NOT REDEFINED. Every count above is the R72 derivation,
+     untouched, and the group counts below still come from rateBookCounts — this
+     wires clicks onto figures that were already right.
+
+     £ AT RISK is the sum of the LOAN on the no-outcome cases, from the money the
+     feed already carries (feed.money — the same figure each row prints as
+     "Loan £X"), and it is behind showMoney() like every other firm-money line.
+     It is deliberately the loan and not the fee: what is at risk when nobody
+     knows where a client went is the mortgage, and the fee is a fraction of it
+     that we would be guessing at.
+     ========================================================================== */
+  const money = showMoney();
+  let atRisk = 0, atRiskRows = 0, atRiskUnpriced = 0;
+  if (money) {
+    (feed.rows || []).forEach((a) => {
+      if (!rateErcEnded(a) || a.days_to_rate_end < -RATE_OUTCOME_WINDOW_DAYS) return;
+      if (rateEndOutcomeOf(a, extras).key !== "none") return;
+      const loan = ((feed.money && feed.money[a.case_id]) || {}).loan || 0;
+      atRiskRows++;
+      if (loan) atRisk += loan; else atRiskUnpriced++;
+    });
+  }
+  const active = retOutcomeFilter;
+  const chip = (key, label, n, tip) => {
+    const on = active === key;
+    return `<button type="button" class="btn btn-xs ret-outcome-chip${key === "none" && n ? " hot" : ""}${on ? " scope-active" : ""}" data-outcome="${key}" data-n="${n}" aria-pressed="${on}" title="${esc(tip + " " + (n === 0 ? "Nothing to show under this one." : on ? "Pressed — the list below is filtered to these. Press again to show the whole list." : `Press to show only these ${n} in the list below.`))}">${esc(label)} <strong>${n}</strong></button>`;
+  };
   el.innerHTML = `<div class="ret-outcome-row" id="ret-outcome-chips">
       <span class="ret-outcome-title">Rate-end outcomes <span class="cs-muted">· last 12 months</span></span>
       ${chip("retained", "retained", counts.retained, "A retention case linked to that rate reached Completed — the client re-mortgaged with us.")}
       ${chip("renewed_elsewhere", "renewed elsewhere", counts.renewed_elsewhere, "Recorded on the case as a rate-end outcome: a new deal taken direct or with somebody else.")}
       ${chip("sold", "sold", counts.sold, "Recorded on the case as a rate-end outcome: property sold or mortgage redeemed.")}
       ${chip("none", "no outcome", counts.none, "The rate ended and nothing has been recorded about what happened. This is the pile to work.")}
+      ${money && counts.none ? `<span class="ret-outcome-atrisk" id="ret-outcome-atrisk" title="${esc(`The loan on each of the ${atRiskRows} case${atRiskRows === 1 ? "" : "s"} with no outcome recorded, added up.` + (atRiskUnpriced ? ` ${atRiskUnpriced} of them carry no loan amount and contribute nothing to this total.` : "") + " It is the borrowing this firm no longer knows the fate of, not a fee forecast.")}"><strong>${fmtM(atRisk)}</strong> at risk</span>` : ""}
     </div>
-    <p class="panel-sub" id="ret-outcome-sub">${counts.none ? `<strong>${counts.none} of ${total}</strong> rates that ended in the last 12 months have <strong>no outcome recorded</strong> — nobody knows whether those clients stayed, went, or sold. Work them from the rows below: the <strong>🔄 Renewed elsewhere</strong>, <strong>🏠 Property sold</strong> and <strong>🔁 Re-mortgaging with us</strong> chips on a row each record one, in a click and a confirm.` : `Every rate that ended in the last 12 months has an outcome recorded against it. ✅`} Counted over rates that <strong>matured in the last 12 months</strong>${counts.renewed_elsewhere + counts.sold ? ", plus outcomes recorded in the same 12 months on rates that have since left this list — recording “sold” clears the rate-end date and recording “renewed” moves it to the new deal, so those cases can only be counted on the date the outcome was written" : ""}. “Retained” is read from the linked retention case reaching Completed; the other two are read from the 📌 note the outcome form writes on the case. ${scope === "mine" ? "Your cases only — switch to All above for the firm." : "Every adviser's cases."}</p>`;
+    <p class="panel-sub" id="ret-outcome-sub">${counts.none ? `<strong>${counts.none} of ${total}</strong> rates that ended in the last 12 months have <strong>no outcome recorded</strong> — nobody knows whether those clients stayed, went, or sold. Press <strong>no outcome</strong> above to bring exactly those rows up in the list below; the <strong>🔄 Renewed elsewhere</strong>, <strong>🏠 Property sold</strong> and <strong>🔁 Re-mortgaging with us</strong> chips on a row each record one, in a click and a confirm.` : `Every rate that ended in the last 12 months has an outcome recorded against it. ✅`} Counted over rates that <strong>matured in the last 12 months</strong>${counts.renewed_elsewhere + counts.sold ? ", plus outcomes recorded in the same 12 months on rates that have since left this list — recording “sold” clears the rate-end date and recording “renewed” moves it to the new deal, so those cases can only be counted on the date the outcome was written" : ""}. “Retained” is read from the linked retention case reaching Completed; the other two are read from the 📌 note the outcome form writes on the case.${money && counts.none ? ` <strong>${fmtM(atRisk)} at risk</strong> is the loan on those ${atRiskRows} case${atRiskRows === 1 ? "" : "s"} added up — the borrowing whose fate nobody here knows${atRiskUnpriced ? `, over the ${atRiskRows - atRiskUnpriced} that carry a loan amount (${atRiskUnpriced} do not and count as nothing)` : ""}. It is not a fee forecast.` : ""} ${scope === "mine" ? "Your cases only — switch to All above for the firm." : "Every adviser's cases."}</p>`;
+  /* One delegated handler, re-bound with the strip it belongs to. Toggling is the
+     whole interaction: pressing the pressed chip clears the filter. */
+  el.onclick = (e) => {
+    const btn = e.target.closest(".ret-outcome-chip");
+    if (!btn) return;
+    const key = btn.dataset.outcome || "";
+    if (!key) return;
+    if (retOutcomeFilter !== key && !Number(btn.dataset.n)) {
+      return toast("Nothing has been recorded under that outcome in the last 12 months — there is nothing to show.");
+    }
+    retOutcomeFilter = retOutcomeFilter === key ? "" : key;
+    loadRetentionRates(retScopeResolved());
+  };
 }
 
 /* ONE ROW of the feed. Every branch below is the round-6-to-round-35 markup, moved rather than
@@ -9005,27 +9069,48 @@ async function retBulkRun(fn) {
     renderRetBulkBar(retShownIds);
   });
 })();
-/* R64 · A3 — the row's own "📞 Log call". The SAME panel the case modal carries (see
-   logCallPanelHtml / logCallSave), in an overlay, so a call can be recorded without the ten
-   clicks a case modal costs — and without a second call-logging form existing anywhere. */
-window.retLogCall = async function (caseId) {
-  const { data: c, error } = await db.from("cases")
-    .select("id,client_id,assigned_to,protection_status,stage,clients!client_id(first_name,last_name)")
-    .eq("id", caseId).single();
-  if (error || !c) return toast("Couldn't open that case — " + ((error && error.message) || "it may have been deleted"));
-  const who = [c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ") || "this client";
-  const saved = await openOverlay(`
+/* ==========================================================================
+   R75 · A4 (panel B#13) — ONE LOG-CALL PRESENTATION, TWO ENTRY POINTS.
+
+   R64 already made the two paths share their MARKUP, their WIRING and their
+   WRITES (logCallPanelHtml / wireLogCallPanel / logCallSave). What they did
+   not share was how the thing appeared. From Retention it was a titled modal
+   that named the client, with Cancel and Save call in front of you. From the
+   case modal it was an inline drawer that unfolded somewhere below the header
+   — its buttons off the bottom of a modal that was already scrolled, no name
+   on it (you were expected to remember whose case you had open), and copy that
+   said "press Save" while the button under it said "Save call" and the OTHER
+   Save two inches away saved the case form. Kim logged calls from Retention
+   and Wayne from the case; they were describing two different features.
+
+   So the case modal now opens the SAME overlay Retention opens. Same title
+   ("📞 Log a call — <name>"), same visible Cancel / Save call, same panel.
+   Everything that was behaviour stays behaviour: the chip-only save, the
+   No-answer auto call-back, the protection tick, the follow-up row and its
+   R73 phone stacking, and the case modal's own repainting (timeline, Last
+   note, the inline task list, the protection chip) which rides along as hooks
+   exactly where it always ran.
+
+   `panelId` differs per entry point on purpose: each caller's own suites reach
+   into #ret-logcall-panel / #cs-logcall-panel, and those ids are contracts.
+   ========================================================================== */
+const LOGCALL_INTRO = "The note is filed on this case, the protection tick writes the case's protection status, and a follow-up lands on that case's adviser. Nothing here emails the client.";
+function openLogCallModal(c, opts) {
+  const o = opts || {};
+  const panelId = o.panelId || "ret-logcall-panel";
+  const who = o.whoName || "this client";
+  return openOverlay(`
     <h3>📞 Log a call — ${esc(who)}</h3>
-    <p class="panel-sub">Exactly the panel on the case itself: the note is filed on this case, the protection tick writes the case's protection status, and a follow-up lands on that case's adviser. Nothing here emails the client.</p>
-    <div class="cs-logcall-panel" id="ret-logcall-panel">${logCallPanelHtml(c)}</div>`, (finish, box) => {
-    const panel = box.querySelector("#ret-logcall-panel");
+    <p class="panel-sub">${esc(o.intro || LOGCALL_INTRO)}</p>
+    <div class="cs-logcall-panel" id="${esc(panelId)}">${logCallPanelHtml(c)}</div>`, (finish, box) => {
+    const panel = box.querySelector("#" + panelId);
     wireLogCallPanel(panel, {
       onCancel: () => finish(null),
       onSave: async () => {
         const btn = panel.querySelector("#cs-call-save");
         if (btn) btn.disabled = true;
         try {
-          const res = await logCallSave(panel, c, {});
+          const res = await logCallSave(panel, c, o.hooks || {});
           if (!res) return;
           toast((res.madeTask ? "Call logged + follow-up added ✓" : "Call logged ✓") + (res.protRecorded ? " · protection recorded as discussed" : ""));
           finish(res);
@@ -9034,6 +9119,17 @@ window.retLogCall = async function (caseId) {
     });
     const note = panel.querySelector("#cs-call-note"); if (note) note.focus();
   });
+}
+/* R64 · A3 — the row's own "📞 Log call". The SAME panel the case modal carries, in an overlay,
+   so a call can be recorded without the ten clicks a case modal costs — and without a second
+   call-logging form existing anywhere. R75 · A4 — and now the case modal opens this very one. */
+window.retLogCall = async function (caseId) {
+  const { data: c, error } = await db.from("cases")
+    .select("id,client_id,assigned_to,protection_status,stage,clients!client_id(first_name,last_name)")
+    .eq("id", caseId).single();
+  if (error || !c) return toast("Couldn't open that case — " + ((error && error.message) || "it may have been deleted"));
+  const who = [c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ") || "this client";
+  const saved = await openLogCallModal(c, { panelId: "ret-logcall-panel", whoName: who });
   if (saved) loadRetentionPage();
   return saved;
 };
@@ -9130,7 +9226,17 @@ async function loadRetentionRates(scope) {
   const ended = book.rows.ended;
   const soon = book.rows.ending;
   const ercOnly = book.rows.ercOnly;
-  let ordered = ended.concat(soon, ercOnly);
+  /* R75 · B2 — the funnel chip, applied. An outcome is a thing that happens at the
+     END of a rate, so a filter can only ever narrow the ENDED group: the other two
+     groups are dropped while it is on rather than left sitting underneath a list
+     the reader has just asked to be narrowed. The book counts above (badges, h3,
+     the funnel itself) are NOT re-derived from this — they describe the book, and
+     a filter is a view of it. The notice below the h3 says which is which. */
+  const outFiltered = !!retOutcomeFilter;
+  const endedShown = outFiltered
+    ? ended.filter((a) => rateEndOutcomeOf(a, outcomeExtras).key === retOutcomeFilter)
+    : ended;
+  let ordered = outFiltered ? endedShown.slice() : ended.concat(soon, ercOnly);
   /* ==========================================================================
      R70 · B2 — WHO HAS ALREADY BEEN RUNG, ON EVERY ROW, AND A WAY TO WORK THE
      ONES WHO HAVE NOT.
@@ -9220,6 +9326,19 @@ async function loadRetentionRates(scope) {
       + " " + retMonthWindowCopy(monthKey, todayIdx)
       + (undated ? ` ${undated} row${undated === 1 ? " has" : "s have"} no readable rate-end date and can only be shown under “6 months + ERC conflicts”.` : "");
   }
+  /* R75 · B2 — the filter says itself, above the list it narrowed, with the way
+     out named. Without this a reader who pressed a chip five minutes ago has a
+     Retention page that is quietly lying about the size of the book. */
+  const fnote = $("#ret-outcome-filter-note");
+  if (fnote) {
+    fnote.hidden = !outFiltered;
+    fnote.innerHTML = outFiltered
+      ? `Filtered to <strong>${esc(RATE_OUTCOME_LABEL[retOutcomeFilter] || retOutcomeFilter)}</strong> — ${endedShown.length} of the ${ended.length} ended row${ended.length === 1 ? "" : "s"} in this window. Rates still to end, and ERC-only rows, are hidden while this is on.
+        <button type="button" class="btn btn-sm" id="ret-outcome-clear" title="Clear the outcome filter and show the whole list again">Show everything</button>`
+      : "";
+    const clearBtn = $("#ret-outcome-clear");
+    if (clearBtn) clearBtn.onclick = () => { retOutcomeFilter = ""; loadRetentionRates(retScopeResolved()); };
+  }
   renderRetBulkBar(retShownIds);
   /* R61 — the two groups now carry their own colour (ended = red, soon = amber; CSS on the
      class) and, inside Ended under the DATE sort, quiet year sub-heads: 594 ended rates as one
@@ -9261,7 +9380,12 @@ async function loadRetentionRates(scope) {
          own __dupes, so under "6 months (all)" this is arithmetically identical to the old
          feed.collapsed and nothing about that case changes. */
       + rateErcDedupeNote(ordered.reduce((s, a) => s + Math.max(0, (a.__dupes || 1) - 1), 0))
-    : (monthKey === "all"
+    /* R75 · B2 — an empty list under an outcome filter is not an empty book, and
+       saying "nothing ending in the reminder window" would be a lie the operator
+       would act on. Same discipline as R64's empty-month message below it. */
+    : (outFiltered
+      ? `<div class="empty">No ended rate in this window is recorded as “${esc(RATE_OUTCOME_LABEL[retOutcomeFilter] || retOutcomeFilter)}” on ${rateScopeWord(scope)}. Press <strong>Show everything</strong> above, or another chip in the strip, to widen it again.</div>`
+      : monthKey === "all"
       ? `<div class="empty">Nothing ending in the reminder window on ${rateScopeWord(scope)}, and no ERC conflicts. 👍</div>`
       /* R64 · A2 — an empty MONTH is not an empty book, and saying "nothing ending" would be a
          lie the operator would act on. Name the window and offer the way out of it. */
@@ -9328,20 +9452,44 @@ async function loadRetentionCold(scope) {
   const lcAt = (c) => { const lc = data.last.get(c.id); return lc ? String(lc.at) : ""; };
   const nextRateKey = (c) => { const n = clientNextRateEnd(c, todayStr); return n ? n.date : ""; };
   const nameKey = (c) => [c.last_name, c.first_name].filter(Boolean).join(" ").toLowerCase();
+  /* ==========================================================================
+     R75 · B3 (panel D#22) — THE SORT IS NOW THE REASON TO RING, FOR EVERYONE.
+
+     R41 · L8 made "soonest rate end" the tie-break INSIDE the never-contacted
+     group, which is where every row on this firm's list happens to sit — so the
+     order looked right and was, for the wrong reason: a client last spoken to in
+     March with a rate maturing next Tuesday still sorted behind eleven people
+     whose silence was two days longer and whose fixes have three years to run.
+     Length of silence is what puts somebody ON this list; what orders it is the
+     deadline. So: soonest future rate end FIRST, clients with none last (nothing
+     to ring them about first), then the longest silence, then the name so the
+     order is stable and still looks deliberate. Both keys are printed on the row
+     that they sorted — no new read, and nothing changes about who is on the list.
+     ========================================================================== */
   const sorted = cold.slice().sort((a, b) => {
-    const la = lcAt(a), lb = lcAt(b);
-    const primary = la.localeCompare(lb);
-    if (primary !== 0 || la !== "") return primary;   // unchanged for everyone with a last contact
     const ra = nextRateKey(a), rb = nextRateKey(b);
     if (ra !== rb) {
-      if (!ra) return 1;      // no future rate end — nothing to ring about first
+      if (!ra) return 1;
       if (!rb) return -1;
       return ra < rb ? -1 : 1;
     }
+    const primary = lcAt(a).localeCompare(lcAt(b));
+    if (primary !== 0) return primary;
     return nameKey(a).localeCompare(nameKey(b));
   });
+  /* R75 · B3 — the SHARED fact, said once. Every row on this firm's list read
+     "no contact of any kind in the last 210 days"; nine identical sentences is
+     not nine pieces of information, it is the panel definition printed nine
+     times. It belongs in the sub; a row that DOES have a last contact still
+     carries its own date, because that one differs per row. */
+  const silent = sorted.filter((c) => !data.last.get(c.id)).length;
   const sub = $("#ret-cold-sub");
-  if (sub) sub.textContent = clientColdDefinition(clientContactCutoff()) + ` Showing ${scope === "mine" ? "clients with at least one case assigned to you" : "every adviser's clients"}.`;
+  if (sub) {
+    sub.textContent = clientColdDefinition(clientContactCutoff())
+      + ` Showing ${scope === "mine" ? "clients with at least one case assigned to you" : "every adviser's clients"}.`
+      + (silent ? ` ${silent === sorted.length ? "Every client here has" : `${silent} of these have`} no contact of any kind on record in the last ${clientCommsWindowDays()} days — the rows say so only where there IS a last contact to name.` : "")
+      + " Ordered by the next rate end, soonest first: that is the deadline, and it is what makes one of these calls worth making today.";
+  }
   /* The hand-off. The Clients page is where this list is actually worked (bulk task, export, the
      full record), and landing there on "All clients" would undo the scope the reader just chose —
      hence the adviser argument (R38's one addition to gotoClientSegment). */
@@ -9351,11 +9499,27 @@ async function loadRetentionCold(scope) {
     ? sorted.slice(0, RET_LIST_CAP).map((c) => {
       const lc = data.last.get(c.id);
       const next = clientNextRateEnd(c, todayStr);
+      /* R75 · B3 — WHAT THIS CLIENT IS WORTH, AND THE TWO VERBS.
+         The loan is the sum of the loans on their LIVE and completed cases (the
+         cases embed already carries it — see loadClientData), behind showMoney()
+         like every other firm-money line; the phone pair is the SAME
+         phoneActionsHtml() the Retention rows above use, so a call started from
+         here is started exactly as it is started from there. "Log call" opens the
+         same form the case modal does, on this client's soonest-maturing case —
+         which is the case the row is about and the one the conversation is for. */
+      const money = showMoney();
+      const loanTotal = (c.cases || []).reduce((s, x) => s + (x && x.stage !== "not_proceeding" && x.loan_amount ? Number(x.loan_amount) : 0), 0);
+      const nextCase = clientNextRateCase(c, todayStr);
+      const acts = `<div class="ret-row-acts ret-cold-acts">`
+        + (nextCase ? `<button type="button" class="btn btn-sm ret-row-chip ret-logcall-chip" onclick="event.stopPropagation();retLogCall('${jsArg(nextCase.id)}')" title="Log a call against the case whose rate matures next — the same form the case modal uses: outcome chip, note, protection tick and an optional follow-up task.">📞 Log call</button>` : "")
+        + `</div>`;
       return `
     <div class="row-item">
       <div class="row-main">
         <div class="t" onclick="openClient('${c.id}')">${esc([c.first_name, c.last_name].filter(Boolean).join(" ") || "(no name)")}</div>
-        <div class="s"><span class="client-lastcontact">${lc ? `last contact ${esc(lastContactAgeLabel(lc.at))} — ${esc(lc.what)} on ${esc(fmtD(String(lc.at).slice(0, 10)))}` : `no contact of any kind in the last ${clientCommsWindowDays()} days`}</span>${next ? ` · <span class="client-rate-bit">next rate ends ${esc(fmtD(next.date))}${next.lender ? ` · ${esc(next.lender)}` : ""}${next.n > 1 ? ` (of ${next.n})` : ""}</span>` : " · no future rate end on file"}</div>
+        <div class="s">${lc ? `<span class="client-lastcontact">last contact ${esc(lastContactAgeLabel(lc.at))} — ${esc(lc.what)} on ${esc(fmtD(String(lc.at).slice(0, 10)))}</span>` : ""}${next ? `${lc ? " · " : ""}<span class="client-rate-bit">next rate ends ${esc(fmtD(next.date))}${next.lender ? ` · ${esc(next.lender)}` : ""}${next.n > 1 ? ` (of ${next.n})` : ""}</span>` : `${lc ? " · " : ""}no future rate end on file`}</div>
+        ${money && loanTotal ? `<div class="s rate-money ret-cold-money">Loan <strong>${fmtM(loanTotal)}</strong>${(c.cases || []).length > 1 ? ` <span class="cs-muted">· across ${(c.cases || []).filter((x) => x && x.stage !== "not_proceeding" && x.loan_amount).length} case${(c.cases || []).filter((x) => x && x.stage !== "not_proceeding" && x.loan_amount).length === 1 ? "" : "s"}</span>` : ""}</div>` : ""}
+        ${phoneActionsHtml(c.phone, { sms: true, name: c.first_name || "", rateEnd: next ? next.date : null })}${acts}
       </div>
       ${next ? '<span class="badge amber" title="This client has a rate maturing — a reason to ring them.">rate coming</span>' : ""}
     </div>`;
@@ -15025,14 +15189,45 @@ async function bulkMoveStage(targetStage) {
     namedBucket("move", "Moving") + namedBucket("reopen", "REOPENING") +
     namedBucket("blocked", "Blocked (no protection status)") + namedBucket("already", `Already in ${label}`) +
     (lost ? `\n\nReason recorded on every case moved: ${lost.label}${lost.note ? " — " + lost.note : ""}\nTheir open tasks will be closed.` : "");
+  /* ==========================================================================
+     R75 · B5b — THE LAST DESTRUCTIVE NATIVE PAIR, IN THE HOUSE'S OWN CLOTHES.
+
+     R74 converted ten `confirm()`s and the two destructive `prompt()`s and left
+     exactly this pair for this round: a bulk stage move guarded by a native
+     confirm, and a bulk REOPEN guarded by a native `prompt("…Type REOPEN")`.
+     Both are now the house overlays — `confirmTyped()` for the reopen branch
+     (which is where the typed word belongs: it is the strongest gate this app
+     has) and `confirmDestructive()` for the plain one, non-danger because moving
+     a case on is not a deletion.
+
+     THE BATCH SEMANTICS ARE UNTOUCHED, deliberately and to the letter: `head` is
+     the same string, built the same way from the same four buckets in the same
+     order; backing out still returns before a single write; the reopen branch
+     still admits nothing but the exact word REOPEN. What changed is that the
+     warning can now be read — the bucket lists are paragraphs instead of one
+     unformatted block, and the button that reopens settled cases is the red one.
+     ========================================================================== */
+  // The dialog's own h3 asks the question `head`'s first line asked, so that line
+  // is not printed twice — every other character of `head` is used verbatim.
+  const headBody = String(head).replace(/^[^\n]*\n+/, "");
+  const headHtml = headBody.split(/\n{1,}/).map((l) => l.trim()).filter(Boolean)
+    .map((l) => `<p style="margin:0 0 6px;">${esc(l)}</p>`).join("");
   if (plan.reopen) {
-    const typed = prompt(
-      `${head}\n\n` +
-      "Reopening puts settled cases — completion dates, fees and retention — back into the live " +
-      "pipeline, and there is no undo.\n\nType REOPEN to confirm:"
-    );
-    if (typed == null || typed.trim().toUpperCase() !== "REOPEN") return;
-  } else if (!confirm(head)) return;
+    const okTyped = await confirmTyped({
+      title: `Move ${ids.length} case${ids.length === 1 ? "" : "s"} to ${label}?`,
+      body: headBody,
+      extra: "Reopening puts settled cases — completion dates, fees and retention — back into the live pipeline, and there is no undo.",
+      keyword: "REOPEN",
+      okLabel: `Reopen ${plan.reopen} case${plan.reopen === 1 ? "" : "s"}`,
+    });
+    if (!okTyped) return;
+  } else if (!(await confirmDestructive({
+    title: `Move ${ids.length} case${ids.length === 1 ? "" : "s"} to ${label}?`,
+    body: headHtml,
+    danger: false,
+    cancelLabel: "Cancel",
+    okLabel: `Move ${plan.move} case${plan.move === 1 ? "" : "s"}`,
+  }))) return;
   let moved = 0, reopened = 0, blocked = 0, noop = 0, err = 0;
   const movedIds = [];
   /* R63 · H1b — the bulk path adds the new stage's playbook tasks exactly like the interactive one
@@ -16065,6 +16260,36 @@ function syncViewToggle() {
   btn.style.display = pipelineSegment === "completed" ? "none" : "";
   btn.textContent = pipelineView === "board" ? "☰ Table view" : "⊞ Board view";
 }
+/* ==========================================================================
+   R75 · B4 — the column rules, in one function so the table, the "why" line and
+   the tests all read the same decision. `all` is the full documented set for the
+   mode; `rows` is what is on screen. Returns the subset to paint.
+   ====================================================================== */
+const PIPE_COLS_KEY = "nx_pipe_cols";
+/* The nine that stay. Client first (identity), then where and what stage, then
+   the three chase answers (how long / with whom / completing), then the money
+   state and who owns it. Completed & closed already ships nine and keeps its own. */
+const PIPE_DEFAULT_COLS = ["client", "property", "stage", "days_in_stage", "waiting_on",
+  "expected_completion_date", "lender", "fee_status", "assigned"];
+const pipeColsMode = () => (lsGet(PIPE_COLS_KEY) === "all" ? "all" : "key");
+function pipeVisibleCols(all, rows, o) {
+  const opts = o || {};
+  if (pipeColsMode() === "all") return all;
+  const list = rows || [];
+  // Rule 2 — Property earns its width only while more than half the rows can fill it.
+  const noAddr = opts.propOn === false ? list.length : list.filter((c) => !propLabel(c)).length;
+  const dropProperty = list.length > 0 && noAddr * 2 > list.length;
+  // Rule 3 — an adviser filter makes the Adviser column one repeated name.
+  const advSel = $("#board-adviser");
+  const dropAdviser = !!(advSel && advSel.value && advSel.value !== "all");
+  return all.filter(([k]) => {
+    if (k === sortKey) return true;                       // rule 4 — never hide what we are sorted on
+    if (k === "property" && dropProperty) return false;
+    if (k === "assigned" && dropAdviser) return false;
+    if (opts.completedMode) return true;                  // the completed table is already nine
+    return PIPE_DEFAULT_COLS.includes(k);
+  });
+}
 function renderPipelineTable(filtered, stageEntry = {}, propOn = true, opts = {}) {
   /* R65 · H7b — `waiting_on` / `solicitor_firm` are m10 columns: the board's named select carries
      them exactly when docsSupported() said yes, so the column is offered on the same terms the
@@ -16136,11 +16361,42 @@ function renderPipelineTable(filtered, stageEntry = {}, propOn = true, opts = {}
      nowhere but as a ⚠ badge on two stages. It is the date the whole back half of a case is
      organised around and the one an operator is asked for on the phone. */
   const waitCol = docsOn ? [["waiting_on", "Waiting on"]] : [];
-  const cols = completedMode
+  const allCols = completedMode
     ? [["client", "Client"], ...propCol, ["stage", "Status"], ["completed_at", "Completed"], ["lender", "Lender"], ["loan_amount", "Loan"], ["broker_fee", "Broker fee"], ["fee_status", "Fee status"], ["assigned", "Adviser"]]
     : [["client", "Client"], ...propCol, ["stage", "Stage"], ["days_in_stage", "In stage"], ...waitCol, ["case_kind", "Type"], ["lender", "Lender"], ["rate_percent", "Rate"], ["rate_end_date", "Rate ends"], ["erc_end_date", "ERC ends"], ["expected_completion_date", "Completing"], ["broker_fee", "Fee"], ["fee_status", "Fee status"], ["protection_status", "Protection"], ["assigned", "Adviser"], ["updated_at", "Updated"]];
+  /* ==========================================================================
+     R75 · B4 (panel B#10) — THE TABLE EARNS ITS COLUMNS.
+
+     Sixteen columns on the live table means a 1,900px table inside a 1,050px
+     scrollport: half of it is behind a horizontal gesture, and the half that is
+     behind it includes "Completing" and "Fee status" — two of the three answers
+     to "what do I chase today". So there is now a DEFAULT SET of nine, chosen by
+     rules rather than by a picker, and a one-press escape hatch to the full set
+     for the times a column you want is not in it.
+
+     THE RULES, in the order they apply (and stated on the page, in
+     #pipe-cols-why, because this firm reads the copy):
+       1. Nine columns are the default: the ones "what do I chase today" and
+          "who is this and where is it" are actually answered from.
+       2. Property is dropped when MORE THAN HALF the rows on screen have no
+          address — a column that is a dash on 45 of 69 rows is costing more
+          width than it returns.
+       3. Adviser is dropped when an adviser filter is active: every row would
+          say the same name, and the filter chip above already says it.
+       4. Nothing is dropped that the current sort is ON. Sorting by a column
+          you cannot see is the one thing worse than not having it.
+     Press "⊞ All columns" for the full set; the choice is remembered
+     (nx_pipe_cols) exactly like the board/table view preference.
+
+     BOARD_CASE_COLS (r24) is untouched: this changes which columns are PAINTED,
+     not which are selected. Every dropped column's data is still on the row, in
+     the CSV, on the card and in the case modal.
+     ========================================================================== */
+  const cols = pipeVisibleCols(allCols, rows, { completedMode, propOn });
   let sk = sortKey, sd = sortDir;
-  if (completedMode && !cols.some(([k]) => k === sortKey)) { sk = "completed_at"; sd = -1; }
+  // R75 · B4 — tested against the FULL set: a key that exists but is currently
+  // hidden is not a missing key, and rule 4 un-hides it anyway.
+  if (completedMode && !allCols.some(([k]) => k === sortKey)) { sk = "completed_at"; sd = -1; }
   rows = rows.slice().sort((a, b) => {
     /* R6-FIX T4 — a case with no address is not "last alphabetically", it is ABSENT, and absence
        has no place at either end of a deliberate sort. Ascending already pushed the ~45 legacy
@@ -16173,51 +16429,50 @@ function feeStatusCellHtml(c) {
   if (v === "requested") return `<span class="fee-st fee-st-requested">${label}</span>`;
   return `<span class="fee-st fee-st-quiet">${label}</span>`;
 }
-  const bodyRows = completedMode
-    ? rows.map((c) => `<tr onclick="openCase('${c.id}')" style="cursor:pointer;">
-        ${cbCell(c)}
-        <td class="stick-col"><strong>${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" "))}</strong></td>
-        ${propOn ? `<td class="pipe-col-prop">${propChip(c) || '<span class="cs-muted">—</span>'}</td>` : ""}
-        <td>${stageBadge(c.stage)}</td>
-        <td>${c.completed_at ? fmtD(c.completed_at) : "—"}</td>
-        <td>${lenderIcon(c.lender)}${esc(c.lender || "")}</td>
-        <td class="num">${c.loan_amount ? fmtM(c.loan_amount) : ""}</td>
-        <td class="num">${c.broker_fee ? fmtM(c.broker_fee) : ""}</td>
-        <td>${feeStatusCellHtml(c)}</td>
-        <td>${c.assigned_to ? esc(staffName(c.assigned_to)) : ""}</td>
-      </tr>`).join("")
-    : rows.map((c) => `<tr onclick="openCase('${c.id}')" style="cursor:pointer;">
-        ${cbCell(c)}
-        <td class="stick-col"><strong>${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" "))}</strong></td>
-        ${propOn ? `<td class="pipe-col-prop">${propChip(c) || '<span class="cs-muted">—</span>'}</td>` : ""}
-        ${/* R9-5 — the waiting-on chip rode in the Stage cell rather than taking a column of its
-             own, on the grounds that "who is it with" is a qualifier on the stage.
-             R65 · H7b — that was wrong in one specific, expensive way: a chip inside another
-             column cannot be SORTED on, and "show me everything sitting with a solicitor" is the
-             single most useful question this table can answer. It has its own column now; the
-             Stage cell is the stage badge and nothing else. */ ""}
-        <td>${stageBadge(c.stage)}</td>
-        <td>${(() => { const a = cardAge(c, stageEntry[c.id]); return a.inStage == null ? "" : `<span class="age-cell${a.level ? " age-" + a.level : ""}" title="${esc(a.basis)}">${a.inStage}d</span>`; })()}</td>
-        ${docsOn ? `<td class="pipe-col-waiting">${waitingChipHtml(c) || '<span class="cs-muted" title="Nobody has recorded who this case is sitting with. You are asked when a case moves to Application, Offer or Exchange; it is also on the case form.">—</span>'}</td>` : ""}
-        <td>${esc((KINDS.find((x) => x[0] === c.case_kind) || [])[1] || "")}</td>
-        <td>${lenderIcon(c.lender)}${esc(c.lender || "")}</td>
-        <td>${c.rate_percent != null ? c.rate_percent + "%" : ""}</td>
-        <td>${c.rate_end_date ? fmtD(c.rate_end_date) + (c.rate_end_estimated ? " " + APPROX : "") : ""}</td>
-        <td>${c.erc_end_date ? fmtD(c.erc_end_date) : ""}</td>
-        ${/* R65 · H7b — the Completing cell. Where the date is missing it wears the board card's
-             OWN amber "📅 no date" badge, in the board's own words and on the board's own rule
-             (offer/exchange only): before an offer exists there is no completion date to be
-             missing, and an amber badge on every Enquiry row would be wallpaper within a day. */ ""}
-        <td class="pipe-col-completing">${c.expected_completion_date
-          ? fmtD(c.expected_completion_date)
-          : ["offer", "exchange"].includes(c.stage)
-            ? `<span class="badge amber" title="No expected completion date set — chase the adviser">📅 no date</span>`
-            : '<span class="cs-muted">—</span>'}</td>
-        <td class="num">${c.broker_fee ? fmtM(c.broker_fee) : ""}</td>
-        <td>${feeStatusCellHtml(c)}</td>
-        <td>${esc((c.protection_status || "").replace(/_/g, " "))}</td>
-        <td>${c.assigned_to ? esc(staffName(c.assigned_to)) : ""}</td>
-        <td class="pipe-col-updated">${fmtD(c.updated_at)}</td>
+  /* R75 · B4 — ONE CELL BUILDER PER COLUMN KEY, so the body is rendered FROM the
+     column list rather than beside it. Every branch below is the R65 markup moved,
+     not rewritten — same classes, same titles, same words — and the two feature
+     gates (`propOn`, `docsOn`) now express themselves once, by leaving the column
+     out of the list, instead of twice (header and cell). A header and a cell can
+     no longer come apart. */
+  const pipeCellHtml = (c, k) => {
+    switch (k) {
+      case "client": return `<td class="stick-col"><strong>${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" "))}</strong></td>`;
+      case "property": return `<td class="pipe-col-prop">${propChip(c) || '<span class="cs-muted">—</span>'}</td>`;
+      case "stage": return `<td>${stageBadge(c.stage)}</td>`;
+      case "completed_at": return `<td>${c.completed_at ? fmtD(c.completed_at) : "—"}</td>`;
+      case "days_in_stage": {
+        const a = cardAge(c, stageEntry[c.id]);
+        return `<td>${a.inStage == null ? "" : `<span class="age-cell${a.level ? " age-" + a.level : ""}" title="${esc(a.basis)}">${a.inStage}d</span>`}</td>`;
+      }
+      /* R9-5 / R65 · H7b — the waiting-on chip has its own column (a chip nested inside the
+         Stage cell could be neither sorted on nor scanned down, and "show me everything sitting
+         with a solicitor" is the single most useful question this table answers). */
+      case "waiting_on": return `<td class="pipe-col-waiting">${waitingChipHtml(c) || '<span class="cs-muted" title="Nobody has recorded who this case is sitting with. You are asked when a case moves to Application, Offer or Exchange; it is also on the case form.">—</span>'}</td>`;
+      case "case_kind": return `<td>${esc((KINDS.find((x) => x[0] === c.case_kind) || [])[1] || "")}</td>`;
+      case "lender": return `<td>${lenderIcon(c.lender)}${esc(c.lender || "")}</td>`;
+      case "rate_percent": return `<td>${c.rate_percent != null ? c.rate_percent + "%" : ""}</td>`;
+      case "rate_end_date": return `<td>${c.rate_end_date ? fmtD(c.rate_end_date) + (c.rate_end_estimated ? " " + APPROX : "") : ""}</td>`;
+      case "erc_end_date": return `<td>${c.erc_end_date ? fmtD(c.erc_end_date) : ""}</td>`;
+      /* R65 · H7b — where the completion date is missing the cell wears the board card's OWN
+         amber "📅 no date" badge, on the board's own rule (offer/exchange only): before an offer
+         exists there is no completion date to be missing. */
+      case "expected_completion_date": return `<td class="pipe-col-completing">${c.expected_completion_date
+        ? fmtD(c.expected_completion_date)
+        : ["offer", "exchange"].includes(c.stage)
+          ? `<span class="badge amber" title="No expected completion date set — chase the adviser">📅 no date</span>`
+          : '<span class="cs-muted">—</span>'}</td>`;
+      case "loan_amount": return `<td class="num">${c.loan_amount ? fmtM(c.loan_amount) : ""}</td>`;
+      case "broker_fee": return `<td class="num">${c.broker_fee ? fmtM(c.broker_fee) : ""}</td>`;
+      case "fee_status": return `<td>${feeStatusCellHtml(c)}</td>`;
+      case "protection_status": return `<td>${esc((c.protection_status || "").replace(/_/g, " "))}</td>`;
+      case "assigned": return `<td>${c.assigned_to ? esc(staffName(c.assigned_to)) : ""}</td>`;
+      case "updated_at": return `<td class="pipe-col-updated">${fmtD(c.updated_at)}</td>`;
+      default: return "<td></td>";
+    }
+  };
+  const bodyRows = rows.map((c) => `<tr onclick="openCase('${c.id}')" style="cursor:pointer;">
+        ${cbCell(c)}${cols.map(([k]) => pipeCellHtml(c, k)).join("")}
       </tr>`).join("");
   /* ==========================================================================
      R65 · L9 — BELOW 700px THE TABLE IS A CARD LIST.
@@ -16297,8 +16552,42 @@ function feeStatusCellHtml(c) {
          selection; it is worth reading once, not on every tick. */ ""}
     <p class="panel-sub" id="pipe-bulk-sub" hidden>Everything on this bar acts on the ticked rows only, and every verb shows you one confirmation naming exactly what it will do and what it is skipping, with the reason. <strong>＋ Apply stage playbooks</strong> and <strong>🗂 Build checklists</strong> put work on the cases themselves and send nothing — they are what an imported case never got. <strong>⏰</strong>, <strong>🔁</strong> and <strong>📄</strong> queue emails. Your selection survives, so you can run the two back-fill verbs one after the other over the same batch.</p>
   </div>`;
+  /* R75 · B4b — SORT AFFORDANCES. Every sortable head now shows a quiet ↕ so it
+     reads as a control before you hover it, and the active one keeps the ▲/▼ it
+     has always had. The ↕ is drawn by CSS (`#pipe-table th[data-k]` with
+     aria-sort="none", admin.css) rather than written into the markup, ON PURPOSE:
+     header text is a contract half a dozen suites read, and they strip exactly
+     ▲ and ▼. `aria-sort` is what carries the state to a screen reader and is
+     what the CSS keys off, so the affordance and the announcement are one fact. */
+  const sortMark = (k) => (sk === k ? (sd > 0 ? " ▲" : " ▼") : "");
+  const sortedByLabel = (allCols.find(([k]) => k === sk) || [null, sk])[1];
+  const hidden = allCols.filter(([k]) => !cols.some(([c]) => c === k));
+  const colsMode = pipeColsMode();
+  /* R75 · B4a — the rules, said on the page. */
+  const colsWhy = mobileCards ? "" : `<p class="panel-sub" id="pipe-cols-why">Showing <strong>${cols.length} of ${allCols.length}</strong> columns.
+      ${colsMode === "all"
+        ? "You have asked for every column — press <strong>◧ Key columns</strong> to go back to the nine this view is worked from."
+        : `The default set is the nine this view is actually worked from. ${hidden.length ? `Hidden here: ${hidden.map(([, l]) => esc(l)).join(", ")}. ` : ""}Property is dropped when more than half the rows on screen have no address; Adviser is dropped while an adviser filter is on (every row would say the same name); nothing is ever dropped that the list is sorted by. Nothing is lost — every column is on the card, in the case and in the CSV.`}</p>`;
   $("#table-wrap").innerHTML = `
     ${currentWhy}
+    ${/* R75 · B4d/B4e — THE PANEL HEADER. Download CSV used to sit INSIDE the
+         horizontal scroller, so on any view wide enough to need scrolling it slid
+         off to the right with the columns; and the board's colour legend was
+         hidden outright in table view although the table paints the same amber and
+         red day-colours in its "In stage" cell. Both live here now, above the
+         scrollport, where they stay put. The legend's markup is READ FROM
+         #board-legend rather than re-written, so the two can never drift. */ ""}
+    <div class="pipe-table-head" id="pipe-table-head">
+      <div class="pipe-table-head-l">
+        <span class="pipe-sorted-by" id="pipe-sorted-by">Sorted by <strong>${esc(sortedByLabel || "—")}</strong> ${sd > 0 ? "(A→Z / low to high)" : "(Z→A / high to low)"}${mobileCards ? "" : " — click any column heading to change it"}</span>
+      </div>
+      <div class="pipe-table-head-r">
+        ${mobileCards ? "" : `<button type="button" class="btn btn-sm" id="pipe-cols-toggle" aria-pressed="${colsMode === "all"}" title="${colsMode === "all" ? "Go back to the nine columns this view is worked from." : `Show all ${allCols.length} columns, including the ${hidden.length} not in the default set. Remembered for next time.`}">${colsMode === "all" ? "◧ Key columns" : "⊞ All columns"}</button>`}
+        <button class="btn btn-sm" id="csv-btn">⭳ Download CSV</button>
+      </div>
+    </div>
+    ${colsWhy}
+    <p class="board-legend pipe-table-legend" id="pipe-legend"></p>
     <div class="board-scroll-wrap board-scroll-wrap--table">
     ${/* R65 · L9 — the horizontal scroller is the TABLE's affordance. A card list has nothing to
          scroll sideways, and an overflow-x:auto box also promotes overflow-y to auto, which is how
@@ -16307,28 +16596,40 @@ function feeStatusCellHtml(c) {
     ${/* R42 · F7 — ⭳, not ⬇: one glyph for "this downloads a file". Every other CSV control on
           the app (the MI panels, the diagnostics export, the drill-downs) already used ⭳, and
           two glyphs for one action is a difference that has to be checked before it is
-          dismissed. Label, id and behaviour unchanged. */ ""}
-    ${mobileCards ? `<p class="panel-sub pipe-mobile-note" id="pipe-mobile-note">On a phone this list is shown as <strong>cards</strong> — the same cards as the board — because ${cols.length} columns on a 390px screen is a table you can read one column of. Everything is here; pick what to order it by below, and tap a card to open the case.</p>
+          dismissed. Label, id and behaviour unchanged. R75 · B4d moved it into the header
+          strip above; the id, the glyph, the label and the handler are untouched. */ ""}
+    ${mobileCards ? `<p class="panel-sub pipe-mobile-note" id="pipe-mobile-note">On a phone this list is shown as <strong>cards</strong> — the same cards as the board — because ${allCols.length} columns on a 390px screen is a table you can read one column of. Everything is here; pick what to order it by below, and tap a card to open the case.</p>
     <div class="pipe-mobile-sort" id="pipe-mobile-sort-row">
       <label for="pipe-mobile-sort">Sort by</label>
       <select id="pipe-mobile-sort" aria-label="Sort the case list">
-        ${cols.map(([k, l]) => `<option value="${k}"${sk === k ? " selected" : ""}>${esc(l)}</option>`).join("")}
+        ${allCols.map(([k, l]) => `<option value="${k}"${sk === k ? " selected" : ""}>${esc(l)}</option>`).join("")}
       </select>
       <button type="button" class="btn btn-sm" id="pipe-mobile-sortdir" title="${sd > 0 ? "Sorted A→Z / low to high — press to reverse" : "Sorted Z→A / high to low — press to reverse"}" aria-label="Reverse the sort order">${sd > 0 ? "▲ A→Z" : "▼ Z→A"}</button>
     </div>` : ""}
-    <div style="display:flex;justify-content:flex-end;margin-bottom:8px;"><button class="btn btn-sm" id="csv-btn">⭳ Download CSV</button></div>
     ${!rows.length ? `<div class="empty" style="padding:40px 16px;text-align:center;">No cases in this view.</div>`
       : mobileCards ? `<div class="pipe-card-list" id="pipe-card-list">${rows.map((c) => {
           try { return boardCardHtml(c, cardCtx); }
           catch (err) { logClientError("caught", "pipeline card render failed: " + ((err && err.message) || err), { recordId: c && c.id, where: "renderPipelineTable" }); return ""; }
         }).join("")}</div>`
       : `<table class="imp-table has-bulk" id="pipe-table">
-      <tr><th class="bulk-col"><input type="checkbox" id="pipe-bulk-all" aria-label="Select all cases in this view"></th>${cols.map(([k, l]) => `<th data-k="${k}" class="${k === "client" ? "stick-col" : k === "updated_at" ? "pipe-col-updated" : ""}" style="cursor:pointer;"${k === "erc_end_date" ? ` title="${TIP_ERC}"` : ""}>${l}${sk === k ? (sd > 0 ? " ▲" : " ▼") : ""}</th>`).join("")}</tr>
+      <tr><th class="bulk-col"><input type="checkbox" id="pipe-bulk-all" aria-label="Select all cases in this view"></th>${cols.map(([k, l]) => `<th data-k="${k}" class="${k === "client" ? "stick-col" : k === "updated_at" ? "pipe-col-updated" : ""}" style="cursor:pointer;" aria-sort="${sk === k ? (sd > 0 ? "ascending" : "descending") : "none"}" title="${esc((sk === k ? `Sorted by ${l} — click to reverse it.` : `Click to sort by ${l}.`) + (k === "erc_end_date" ? " " + TIP_ERC : ""))}">${l}${sortMark(k)}</th>`).join("")}</tr>
       ${bodyRows}
     </table>`}</div>
     <button type="button" class="board-scroll-arrow" aria-label="Scroll right" title="Scroll right">›</button>
     </div>
     ${pipeBulkDock}`;
+  /* R75 · B4e — one legend, two places. Copied from the board's own element so a
+     wording change there lands here in the same breath. */
+  const legendSrc = $("#board-legend"), legendCopy = $("#pipe-legend");
+  if (legendCopy) {
+    if (legendSrc) legendCopy.innerHTML = legendSrc.innerHTML;
+    legendCopy.classList.toggle("hidden", !!mobileCards || !legendSrc);
+  }
+  const colsBtn = $("#pipe-cols-toggle");
+  if (colsBtn) colsBtn.onclick = () => {
+    lsSet(PIPE_COLS_KEY, pipeColsMode() === "all" ? "key" : "all");
+    loadPipeline();
+  };
   wireTableHScroll("pipe-scroll");
   /* R73 · A2 — the ⓘ. A plain disclosure: it shows and hides the paragraph that was always
      there, and says which state it is in for anybody not looking at the screen. */
@@ -17937,6 +18238,18 @@ function secRow(label, value, opts) {
   const shown = opts.rawHtml != null ? opts.rawHtml : (has ? esc(String(value)) : '<span class="sec-empty">—</span>');
   return `<div class="sec-item"><span class="sec-lbl">${esc(label)}</span><span class="sec-val">${shown}${copyBtn}</span></div>`;
 }
+/* R75 · A5 (panel A#25 / B#14) — ONE LTV, COMPUTED IN ONE PLACE.
+   Loan ÷ value, to one decimal, and only where BOTH figures are real and positive — a zero or
+   missing value would divide to nonsense, and "0%" on a case with no valuation yet is a lie the
+   header would be telling on every enquiry. Returns null, and every caller renders that as "—".
+   Lifted out of securityCardHtml so the identity card and the security fold can never disagree
+   about a number they both used to work out separately. */
+function caseLtvPct(c) {
+  if (!c) return null;
+  const loan = Number(c.loan_amount), val = Number(c.property_value);
+  if (!(loan > 0) || !(val > 0)) return null;
+  return Math.round((loan / val) * 1000) / 10;
+}
 function securityCardHtml(c, caseClient, secClient) {
   const fn = (secClient && [secClient.first_name, secClient.last_name].filter(Boolean).join(" "))
     || (caseClient && [caseClient.first_name, caseClient.last_name].filter(Boolean).join(" ")) || "";
@@ -17948,12 +18261,6 @@ function securityCardHtml(c, caseClient, secClient) {
     : secRow("Date of birth", null, { noCopy: true, rawHtml: `<span class="sec-empty">—</span>${c.client_id ? ` <a href="#" class="sec-dob-add" onclick="event.preventDefault();openClient('${jsArg(c.client_id)}','dob')" title="Add this client's date of birth">(add DOB)</a>` : ""}` });
   const propAddr = c.property_address || null;
   const homeAddr = secClient && secClient.address ? secClient.address : null;
-  const loan = c.loan_amount != null && c.loan_amount !== "" ? fmtM(c.loan_amount) : null;
-  const rate = c.rate_percent != null && c.rate_percent !== ""
-    ? c.rate_percent + "%" + (c.rate_type ? " " + c.rate_type : "") : null;
-  // LTV only where BOTH figures are real and positive — a zero value would divide to nonsense.
-  const ltv = (Number(c.loan_amount) > 0 && Number(c.property_value) > 0)
-    ? (Math.round((Number(c.loan_amount) / Number(c.property_value)) * 1000) / 10) + "%" : null;
   /* R14b — the mortgage / account number. Reads c.mortgage_account_number directly: on a database
      without the column that is simply undefined → "—", so no feature-detect is needed to render it
      safely (the input in the case form IS gated — see mortgageAcctOn). Placed with loan/lender
@@ -17969,16 +18276,23 @@ function securityCardHtml(c, caseClient, secClient) {
     </div>
     <div class="sec-grid" id="sec-grid">
       <div class="sec-grid-note">What a lender asks on the phone · one-click copy on every value.</div>
+      ${/* R75 · A5 (panel B#14) — THE FOLD IS A PHONE-VERIFICATION AID AGAIN.
+           It carried Loan amount, Lender, Rate and LTV as well — four numbers that are ALSO on
+           the identity card six inches below it, so the case modal stated the same four facts
+           twice, in two layouts, and the panel flagged the pair as the clearest "two totals for
+           one book" left in the app after R74. They are dropped from HERE, not from the case: the
+           identity card is where a case's numbers live (and LTV has just joined them, which is
+           what makes this a move rather than a deletion). What is left is exactly what a lender
+           reads back at you to prove you are who you say you are — who, when they were born,
+           where the property is, where they live, and the account number that pulls the case up.
+           Product stays: it is not on the identity card, and "which product" is the other thing
+           the lender's own screen asks for. */ ""}
       ${secRow("Name", fn || null)}
       ${dobRow}
       ${secRow("Property", propAddr)}
       ${secRow("Home address", homeAddr)}
-      ${secRow("Loan amount", loan)}
-      ${secRow("Lender", c.lender || null)}
       ${secRow("Mortgage / account no.", mortgageNo)}
       ${secRow("Product", c.product_name || null)}
-      ${secRow("Rate", rate)}
-      ${secRow("LTV", ltv)}
     </div>
   </div>`;
 }
@@ -18030,7 +18344,10 @@ function logCallPanelHtml(c) {
         ${/* R70 · B1 — the two rules this panel now follows, said where they happen. This firm
              reads the copy: an outcome chip that saves on its own and a call-back that appears in
              the diary by itself are both surprises unless the panel says so first. */ ""}
-        <p class="panel-sub cs-call-help" id="cs-call-help">Pick an outcome and press Save — a chip on its own is enough, no typing needed. <strong>No answer</strong> and <strong>Left voicemail</strong> also book a call-back task for tomorrow; change the title or the date below if you like, or clear the date to book nothing.</p>
+        ${/* R75 · A4 — "press Save" named the wrong button. There are two Saves within two inches
+             of each other on the case modal (this panel's, and the case form's), and the one this
+             sentence meant is the one labelled "Save call". It now says that. */ ""}
+        <p class="panel-sub cs-call-help" id="cs-call-help">Pick an outcome and press <strong>Save call</strong> — a chip on its own is enough, no typing needed. <strong>No answer</strong> and <strong>Left voicemail</strong> also book a call-back task for tomorrow; change the title or the date below if you like, or clear the date to book nothing.</p>
         <label>Call outcome<textarea id="cs-call-note" rows="3" placeholder="What was discussed / agreed… (optional once an outcome is picked)"></textarea></label>
         ${/* R5-49 — protection gets discussed on the phone and then never recorded, which is what
              blocks the case at Application later. One tick here writes protection_status. */ ""}
@@ -18344,6 +18661,12 @@ window.openCase = async function (id, opts = {}) {
   // and chips are only drawn where the columns exist; a Save that can only 42703 is worse than none.
   if (id) noteBtlIcrFromStarRow(c);
   const btlIcrOn = id ? Object.prototype.hasOwnProperty.call(c, "monthly_rent") : ((await btlIcrSupported()) === true);
+  /* R75 · A5 — is the Buy-to-let group SHOWN? Kind = BTL, or any of its three fields already
+     holds a value. The second half is the "never orphan a stored value" rule the exchange date
+     and the policy start date already follow: a case mis-typed as a remortgage must not hide a
+     rent somebody took the trouble to capture, because the hidden field is still saved. */
+  const btlBlockOn = c.case_kind === "buy_to_let"
+    || c.monthly_rent != null || c.icr_stress_rate != null || c.icr_required_pct != null;
   if (id) noteLenderTrackFromStarRow(c);
   const lenderTrackOn = id ? Object.prototype.hasOwnProperty.call(c, "application_status") : ((await lenderTrackSupported()) === true);
   const solicitorFirms = docsOn ? await knownSolicitorFirms() : [];
@@ -18499,6 +18822,15 @@ window.openCase = async function (id, opts = {}) {
              misread token in the modal: the one field named after the property is a price. The
              word "Property" now belongs to the address (the chip above); this is "Value". */ ""}
         <div class="cs-stat"><span class="cs-lbl">Value</span><span class="cs-val">${fmtM(c.property_value)}</span></div>
+        ${/* R75 · A5 (panel A#25) — LTV, BESIDE THE TWO NUMBERS IT IS MADE OF.
+             It is the first thing a lender's criteria turn on and the first thing an adviser is
+             asked on the phone, and it lived in ONE place: inside a collapsed security fold, four
+             rows down, under a heading about identity checks. Loan and Value are already here and
+             already read together; the third number is the one they are read FOR. Derived, never
+             stored (caseLtvPct) — so it cannot go stale against the two boxes above it — and
+             silent rather than "0%" when either figure is missing, which is the same rule the
+             call-pack stats follow. */ ""}
+        ${caseLtvPct(c) != null ? `<div class="cs-stat" id="cs-ltv" title="Loan ÷ property value, worked out from the two figures on this case. Shown only when both are recorded."><span class="cs-lbl">LTV</span><span class="cs-val">${caseLtvPct(c)}%</span></div>` : ""}
         ${/* R15 · §6 — a completed case says WHEN it completed, right here in the header stats.
              Drawn only from the recorded completed_at, so there is no nudge and no empty state. */ ""}
         ${c.stage === "completed" && c.completed_at ? `<div class="cs-stat" id="cs-completed-stat" title="This case completed on ${esc(fmtD(c.completed_at))}."><span class="cs-lbl">Completed</span><span class="cs-val">${fmtD(c.completed_at)}</span></div>` : ""}
@@ -18547,7 +18879,10 @@ window.openCase = async function (id, opts = {}) {
         ${nextAppt ? `<div class="cs-line" id="cs-appt-line"><span class="cs-lbl">${nextApptIsAhead ? "Next appointment" : "Earlier today"}</span><span id="cs-appt-val"><a href="#" class="cs-appt-link" data-appt="${esc(nextAppt.id)}" title="${esc(`Open this appointment${nextAppt.staff_id ? ` — ${staffName(nextAppt.staff_id)}` : ""}${nextAppt.location ? ` · ${nextAppt.location}` : ""}`)}" onclick="event.preventDefault();openApptFromCase('${jsArg(nextAppt.id)}','${jsArg(id)}')">${esc(nextAppt.title || "Appointment")} · ${esc(apptWhenLabel(nextAppt))}${nextAppt.staff_id ? " · " + esc(staffName(nextAppt.staff_id)) : ""}</a>${apptOutcomeChipHtml(nextAppt.outcome)}</span></div>` : ""}
         <div class="cs-line"><span class="cs-lbl">Last note</span><span id="cs-note-val">${lastNote ? `${esc(noteSnip(lastNote.body))} <span class="cs-muted">· ${fmtAgo(lastNote.created_at)}</span>` : '<span class="cs-muted">no notes yet</span>'}</span></div>
       </div>
-      <div class="cs-logcall-panel hidden" id="cs-logcall-panel">${logCallPanelHtml(c)}</div>
+      ${/* R75 · A4 — the inline log-call drawer that used to sit here is gone: "📞 Log call" now
+           opens the SAME titled overlay the Retention row opens (openLogCallModal), so there is
+           one presentation of a call, not two. The panel's markup, ids, wiring and writes are
+           unchanged — only where it appears changed. */ ""}
     </div>` : "";
 
   /* ---------- R36-B · W7 — THE SLIM NEW-CASE FORM ----------
@@ -18598,6 +18933,24 @@ window.openCase = async function (id, opts = {}) {
       <label>Stage<select name="stage">${STAGES.map(([k, l]) => `<option value="${k}" ${k === c.stage ? "selected" : ""}${k === "decision_in_principle" ? ` title="${TIP_DIP}"` : ""}>${l}</option>`).join("")}</select></label>
 `;
   const caseRestFieldsHtml = `
+      ${/* ==================================================================
+           R75 · A5 (panel A#25) — SIX GROUP HEADINGS, SO THE CASE READS LIKE A FILE.
+
+           "Case details" was forty-odd inputs in one uninterrupted two-column run: Lender, then
+           twelve boxes later a completion date, then four fees, then a protection status, then
+           where the lead came from — every one of them the same size, the same weight, with
+           nothing between them. Wayne's word for it was "the wall". Finding the ERC end date
+           meant reading every label on the way past it.
+
+           So the run is broken into the six things a case actually IS, in the order a case is
+           worked: the mortgage, the buy-to-let arithmetic (when there is any), the dates it moves
+           through, what the firm earns, what was protected, and where it came from. Headings
+           only — not <details>, because folding these would hide the very fields Data Health
+           spends its life asking people to fill in, and not a reorder for its own sake: the field
+           order is the one that was already there, with exactly two blocks moved into the group
+           they belong to (the BTL fields, and Waiting on / Solicitor firm, which are progress).
+           ================================================================== */ ""}
+      <h4 class="cs-sub-h full">The mortgage</h4>
       <label>Lender<input name="lender" value="${esc(c.lender)}"></label>
       ${/* R14 — the mortgage / account number, beside the lender it belongs to. It is what a lender
             asks for to pull the case up, and it feeds the security-check card at the top of this
@@ -18607,17 +18960,6 @@ window.openCase = async function (id, opts = {}) {
       <label>Product<input name="product_name" value="${esc(c.product_name)}"></label>
       <label>Loan amount (£)<input name="loan_amount" type="number" step="any" value="${c.loan_amount ?? ""}"></label>
       <label>Property value (£)<input name="property_value" type="number" step="any" value="${c.property_value ?? ""}"></label>
-      ${/* R16 §A — BTL rental + ICR affordability. Kind-gated to buy_to_let (like the solicitor and
-           GI fields) AND hidden outright without the migration (btlIcrOn), the same rule the fields
-           above follow. Re-gates live in kindSel.onchange; the chip recomputes on any input via the
-           form-level listener below. Placed with loan/value because those are the ICR's inputs. */ ""}
-      ${btlIcrOn ? `
-      <div class="full btl-block${c.case_kind === "buy_to_let" ? "" : " hidden"}" id="case-btl-block">
-        <label>Monthly rent (£)<input name="monthly_rent" type="number" step="any" value="${c.monthly_rent ?? ""}" placeholder="e.g. 1200"></label>
-        <label title="Interest rate the rent is stress-tested at. Leave blank to use 5.5%.">ICR stress rate (%)<input name="icr_stress_rate" type="number" step="any" placeholder="5.5" value="${c.icr_stress_rate ?? ""}"></label>
-        <label title="Rent must cover this % of stressed interest. Typically 125% (basic-rate/Ltd Co) or 145% (higher-rate).">ICR required (%)<input name="icr_required_pct" type="number" step="any" placeholder="145" value="${c.icr_required_pct ?? ""}"></label>
-        <div class="btl-chip-wrap" id="btl-icr-chip">${btlIcrChipHtml(c)}</div>
-      </div>` : ""}
       <label>Rate %<input name="rate_percent" type="number" step="any" value="${c.rate_percent ?? ""}"></label>
       <label>Rate type<select name="rate_type">${["fixed", "tracker", "variable", "discount"].map((t) => `<option ${t === c.rate_type ? "selected" : ""}>${t}</option>`).join("")}</select></label>
       <label>Rate end date<input name="rate_end_date" type="date" value="${c.rate_end_date ?? ""}">
@@ -18648,6 +18990,26 @@ window.openCase = async function (id, opts = {}) {
           ${REPAYMENT_METHODS.map(([k, l]) => `<option value="${k}"${k === c.repayment_method ? " selected" : ""}>${esc(l)}</option>`).join("")}
         </select>
       </label>` : ""}
+      ${/* ---- Buy-to-let ---- */ ""}
+      ${btlIcrOn ? `<h4 class="cs-sub-h full${btlBlockOn ? "" : " hidden"}" id="cs-sub-h-btl">Buy-to-let</h4>` : ""}
+      ${/* R16 §A — BTL rental + ICR affordability. Hidden outright without the migration
+           (btlIcrOn), the same rule the fields above follow; re-gated live in kindSel.onchange,
+           and the chip recomputes on any input via the form-level listener below.
+           R75 · A5 — it has its OWN group now, after the mortgage rather than wedged between the
+           loan and the rate: three fields that only exist for one kind of case were breaking the
+           run of fields every case has. And the gate is wider — kind = BTL *or* any of the three
+           already holds a value — so a case mis-typed as a remortgage can never hide a rent
+           somebody captured (the same "never orphan a stored value" rule the exchange date, the
+           policy start date and the solicitor field all follow). */ ""}
+      ${btlIcrOn ? `
+      <div class="full btl-block${btlBlockOn ? "" : " hidden"}" id="case-btl-block">
+        <label>Monthly rent (£)<input name="monthly_rent" type="number" step="any" value="${c.monthly_rent ?? ""}" placeholder="e.g. 1200"></label>
+        <label title="Interest rate the rent is stress-tested at. Leave blank to use 5.5%.">ICR stress rate (%)<input name="icr_stress_rate" type="number" step="any" placeholder="5.5" value="${c.icr_stress_rate ?? ""}"></label>
+        <label title="Rent must cover this % of stressed interest. Typically 125% (basic-rate/Ltd Co) or 145% (higher-rate).">ICR required (%)<input name="icr_required_pct" type="number" step="any" placeholder="145" value="${c.icr_required_pct ?? ""}"></label>
+        <div class="btl-chip-wrap" id="btl-icr-chip">${btlIcrChipHtml(c)}</div>
+      </div>` : ""}
+      ${/* ---- Dates & progress ---- */ ""}
+      <h4 class="cs-sub-h full">Dates &amp; progress</h4>
       ${/* R13 · M-11 — OFFER ISSUED, beside the expiry it is so easily confused with. Two dates off
            one letter: the day the lender made the offer, and the day it runs out. */ ""}
       ${forwardOn ? `<label id="case-offer-issued-field" title="The date on the offer letter itself, not the day it was filed here.">Offer issued<input name="offer_issued_date" type="date" value="${c.offer_issued_date ?? ""}"></label>` : ""}
@@ -18676,6 +19038,24 @@ window.openCase = async function (id, opts = {}) {
           ${["submitted", "underwriting", "valuation", "offer_issued"].map((k) => `<option value="${k}"${k === c.application_status ? " selected" : ""}>${esc(APP_STATUS_LABEL[k])}</option>`).join("")}
         </select>
       </label>` : ""}
+      ${/* R9-5 · m10 / R15 · §5 — WHO IS THIS CASE SITTING WITH, and which conveyancer. Moved here
+           by R75 · A5: "waiting on the solicitor" is a statement about PROGRESS, and it used to
+           sit between the GI status and the lead source, where nobody looking for it would think
+           to look. The gate is unchanged — a product transfer has no conveyancer, so the field is
+           hidden (never deleted) for PT unless a firm is already recorded on the case. */ ""}
+      ${docsOn ? `
+      <label id="case-waiting-field">Waiting on
+        <select name="waiting_on" id="case-waiting-select">
+          <option value="">— nobody / not waiting —</option>
+          ${WAITING_ON_OPTIONS.filter(([k]) => k !== "solicitor" || c.case_kind !== "product_transfer" || c.waiting_on === "solicitor").map(([k, l]) => `<option value="${k}" ${k === c.waiting_on ? "selected" : ""}>${esc(l)}</option>`).join("")}
+        </select>
+      </label>
+      <label id="case-solicitor-field"${c.case_kind === "product_transfer" && !c.solicitor_firm ? ' class="hidden"' : ""} title="Pick from the firms you already use where you can — the conveyancer-speed report groups on this exact text.">Solicitor firm
+        <input name="solicitor_firm" id="case-solicitor-input" list="case-solicitor-firms" value="${esc(c.solicitor_firm)}" placeholder="e.g. Harker &amp; Bligh LLP" autocomplete="off">
+        <datalist id="case-solicitor-firms">${solicitorFirms.map((f) => `<option value="${esc(f)}"></option>`).join("")}</datalist>
+      </label>` : ""}
+      ${/* ---- Fees ---- */ ""}
+      <h4 class="cs-sub-h full">Fees</h4>
       <label>Proc fee (£)<input name="proc_fee" type="number" step="any" value="${c.proc_fee ?? ""}"></label>
       <label>Sols fee (£)<input name="sols_fee" type="number" step="any" value="${c.sols_fee ?? ""}"></label>
       <label>Broker fee (£)<input name="broker_fee" type="number" step="any" value="${c.broker_fee ?? ""}"></label>
@@ -18684,6 +19064,8 @@ window.openCase = async function (id, opts = {}) {
            "Mark fee paid" (which validates them) rather than typed into a form that never checked.
            Absent entirely on a pre-M2 database, where the columns don't exist. */ ""}
       ${feePaidDatesHtml(c)}
+      ${/* ---- Protection & GI ---- */ ""}
+      <h4 class="cs-sub-h full">Protection &amp; GI</h4>
       ${/* R66 · M6a — "Referred to protection adviser" joins the list, between quoted and policy
            taken. It is the outcome the firm actually has when protection is handed to the
            network's team: not still-to-do, not a policy, and emphatically not "declined", which is
@@ -18713,17 +19095,8 @@ window.openCase = async function (id, opts = {}) {
            the Solicitor-firm field are dropped for PT (the field is hidden, not deleted; a firm
            already on the case keeps the option so a stored value never orphans). §4 — solicitor hint
            moved to a title tooltip. */ ""}
-      ${docsOn ? `
-      <label id="case-waiting-field">Waiting on
-        <select name="waiting_on" id="case-waiting-select">
-          <option value="">— nobody / not waiting —</option>
-          ${WAITING_ON_OPTIONS.filter(([k]) => k !== "solicitor" || c.case_kind !== "product_transfer" || c.waiting_on === "solicitor").map(([k, l]) => `<option value="${k}" ${k === c.waiting_on ? "selected" : ""}>${esc(l)}</option>`).join("")}
-        </select>
-      </label>
-      <label id="case-solicitor-field"${c.case_kind === "product_transfer" && !c.solicitor_firm ? ' class="hidden"' : ""} title="Pick from the firms you already use where you can — the conveyancer-speed report groups on this exact text.">Solicitor firm
-        <input name="solicitor_firm" id="case-solicitor-input" list="case-solicitor-firms" value="${esc(c.solicitor_firm)}" placeholder="e.g. Harker &amp; Bligh LLP" autocomplete="off">
-        <datalist id="case-solicitor-firms">${solicitorFirms.map((f) => `<option value="${esc(f)}"></option>`).join("")}</datalist>
-      </label>` : ""}
+      ${/* ---- Where it came from ---- */ ""}
+      <h4 class="cs-sub-h full">Where it came from</h4>
       <label>Lead source<input name="lead_source" value="${esc(c.lead_source)}" placeholder="e.g. Google, referral, repeat"></label>
       <label>Introducer<select name="introducer_id"><option value="">— none —</option>${introOpts}</select></label>
       ${/* R9-1 · m11 — REFERRED BY. Next to Lead source and Introducer because it answers the same
@@ -19016,7 +19389,15 @@ window.openCase = async function (id, opts = {}) {
     }
     // R16 §A — the BTL rental/ICR block follows the kind live: shown only for buy_to_let.
     const btlBlock = $("#case-btl-block");
-    if (btlBlock) btlBlock.classList.toggle("hidden", kindSel.value !== "buy_to_let");
+    /* R75 · A5 — the group's heading follows its fields. Same widened gate as the first paint:
+       a kind changed away from BTL still shows the block when one of the three boxes has a value
+       in it, because hiding a field that is about to be SAVED is how values get orphaned. */
+    const btlHasValues = ["monthly_rent", "icr_stress_rate", "icr_required_pct"]
+      .some((n) => { const el = $("#case-form").elements[n]; return el && String(el.value || "").trim() !== ""; });
+    const btlOn = kindSel.value === "buy_to_let" || btlHasValues;
+    if (btlBlock) btlBlock.classList.toggle("hidden", !btlOn);
+    const btlHead = $("#cs-sub-h-btl");
+    if (btlHead) btlHead.classList.toggle("hidden", !btlOn);
   };
   /* R16 §A — the ICR chip recomputes on any input that feeds it (rent, loan, stress, required,
      value). One form-level listener, reading the live field values into the shared btlIcr helper. */
@@ -19616,12 +19997,11 @@ window.openCase = async function (id, opts = {}) {
     /* R64 · A3 — the writes now live in logCallSave() (shared with the Retention page's row
        chip); everything below is this MODAL's own repainting, fired from the same points in the
        sequence it always ran at. Behaviour, order and copy are unchanged. */
-    const submitCall = async () => {
-      const panel = $("#cs-logcall-panel");
-      const saveBtn = $("#cs-call-save");
-      if (saveBtn) saveBtn.disabled = true;
-      try {
-        const res = await logCallSave(panel, c, {
+    /* R75 · A4 — what was submitCall() is now just its HOOKS. The disable-the-button, the
+       logCallSave() call, the toast and the close all moved into openLogCallModal, which is
+       shared with Retention; what stays here is the only part that was ever modal-specific —
+       this modal repainting itself, at exactly the points in the sequence it always ran at. */
+    const caseLogCallHooks = {
           /* R5-49 — …and the form select is moved with it so the next Save can't put
              "not discussed" straight back. */
           onProtection: async () => {
@@ -19667,19 +20047,6 @@ window.openCase = async function (id, opts = {}) {
               taskVal.innerHTML = `<span class="${tOverdue ? "cs-danger-txt" : ""}">${esc(task.title)}${task.due ? " · " + (tOverdue ? "overdue " : "due ") + fmtD(task.due) : ""}</span>`;
             }
           },
-        });
-        if (!res) return;
-        // Reset + close the panel.
-        const noteEl = $("#cs-call-note"); if (noteEl) noteEl.value = "";
-        $("#cs-call-fu-title").value = "";
-        $("#cs-call-fu-due").value = "";
-        if (panel) panel.classList.add("hidden");
-        // Reset the outcome chip so the next call starts blank.
-        const activeChip = $("#cs-call-outcome-chips .tl-chip.active"); if (activeChip) activeChip.classList.remove("active");
-        toast((res.madeTask ? "Call logged + follow-up added ✓" : "Call logged ✓") + (res.protRecorded ? " · protection recorded as discussed" : ""));
-      } finally {
-        if (saveBtn) saveBtn.disabled = false;
-      }
     };
     // "Advance to <next stage>" (BUILD 7b, defect 17) — same single path (moveCaseToStage) as the
     // board's drag/select/hover affordances, so the protection gate, completed/not_proceeding
@@ -19734,19 +20101,15 @@ window.openCase = async function (id, opts = {}) {
     };
     const retentionBtn = $("#cs-retention-btn"); // R5-6 — the manual retention path
     if (retentionBtn) retentionBtn.onclick = (e) => window.startRetentionCase(id, e);
-    const logcallBtn = $("#cs-logcall-btn"), logcallPanel = $("#cs-logcall-panel");
-    if (logcallBtn && logcallPanel) {
-      logcallBtn.onclick = () => {
-        const nowHidden = logcallPanel.classList.toggle("hidden");
-        if (!nowHidden) $("#cs-call-note").focus();
-      };
-      /* R64 · A3 — the chips and the two buttons are wired by the SHARED wirer, scoped to this
-         panel, so the Retention page's overlay and this modal cannot drift apart. */
-      wireLogCallPanel(logcallPanel, {
-        onCancel: () => logcallPanel.classList.add("hidden"),
-        onSave: submitCall,
-      });
-    }
+    /* R75 · A4 — one press, one overlay, the same one Retention opens. The case modal stays open
+       underneath (openOverlay is the second-layer host built for exactly this), so a call logged
+       from here still lands back on the case that was being read. */
+    const logcallBtn = $("#cs-logcall-btn");
+    if (logcallBtn) logcallBtn.onclick = () => openLogCallModal(c, {
+      panelId: "cs-logcall-panel",
+      whoName: (caseClient && [caseClient.first_name, caseClient.last_name].filter(Boolean).join(" ")) || "this client",
+      hooks: caseLogCallHooks,
+    });
     $("#act-offer").onclick = () => $("#offer-file").click();
     $("#offer-file").onchange = () => handleOfferUpload(id);
     $("#act-evidence").onclick = () => buildEvidencePack(id);
@@ -20797,7 +21160,14 @@ async function loadClientData() {
        say which lender the rate is with. It is an original-schema column (Reports has selected it
        since R7), so this cannot start 42703-ing on an older database, and it is a widening of the
        read this page already does rather than a second query. */
-    readAll(db.from("clients").select("*, cases!client_id(id,stage,case_kind,rate_end_date,lender,protection_status,broker_fee,assigned_to,completed_at,updated_at,created_at" + (clientPropOn ? ",property_address" : "") + ")").order("last_name").order("id")),
+    /* R75 · B3 — widened by ONE more existing base column, `loan_amount`, so the
+       Retention page's "Gone quiet" rows can say what each silent client is worth
+       (the panel's D#22: nine rows, nine identical sentences, no value, no verb).
+       Same discipline as R11-6's `lender` above: an original-schema column the
+       board and Reports have selected since R7, so it cannot start 42703-ing on an
+       older database, and it is a widening of the read this page already does
+       rather than a second query. NO new read was added for B3. */
+    readAll(db.from("clients").select("*, cases!client_id(id,stage,case_kind,rate_end_date,lender,loan_amount,protection_status,broker_fee,assigned_to,completed_at,updated_at,created_at" + (clientPropOn ? ",property_address" : "") + ")").order("last_name").order("id")),
     // R47 Gate 0 — `body` joins the select so a SYSTEM PROVENANCE note (the back-book import wrote
     // one per policy/deal, all dated the import day) can be told apart from real contact. Counting
     // them as "last contact" made every imported client read as spoken-to today and collapsed the
@@ -20916,6 +21286,18 @@ function clientNextRateEnd(c, todayStr) {
     if (!best || d < best.date) best = { date: d, lender: x.lender || null, n: 0 };
   });
   if (best) best.n = n;
+  return best;
+}
+/* R75 · B3 — the CASE behind clientNextRateEnd's date. Same walk, same "not
+   already passed" rule, so the verb on a Gone-quiet row can only ever point at
+   the case whose date that row is printing. Null where there is none. */
+function clientNextRateCase(c, todayStr) {
+  let best = null;
+  (c.cases || []).forEach((x) => {
+    const d = x && x.rate_end_date ? String(x.rate_end_date).slice(0, 10) : null;
+    if (!d || d < todayStr) return;
+    if (!best || d < String(best.rate_end_date).slice(0, 10)) best = x;
+  });
   return best;
 }
 /* The rate end that put this client into the active "Rate ends YYYY" segment. That segment counts
@@ -23255,7 +23637,46 @@ const HOUSE_TPL_OPENING = {
   docs_request: "Before we can get your application moving we need a few documents from you.",
   docs_chase: "Just a quick reminder — we are still waiting on some documents before your application can move on.",
   review_reminder: "A little while ago I asked how we did. If you have a spare minute, a short review really does help us.",
+  /* ==========================================================================
+     R75 · B5a — THE SIX TYPES THE MAP DID NOT KNOW.
+
+     R74 shipped the replica against the eleven openings the harness's model of
+     v17 carried; the enum has nineteen. The one that mattered most is
+     `review_request` — 23 of the 36 rows in the live queue are review requests,
+     and every one of them opened a fold that said "there is nothing here to show
+     until it goes", which is precisely the mail Kim wants to read before it goes.
+     `welcome`, `lead_ack`, `referral_request`, `birthday_greeting` and
+     `completion_anniversary` are the rest of the composed set.
+
+     These SIX strings are also added, word for word, to the mock's own
+     EMAIL_OPENING (admin/mock-supabase.js), because that file is the written-down
+     contract for the deployed function and a replica that composes wording the
+     contract does not carry would be an invention. The two lists are now the
+     same list, which is the only way they stay the same list.
+
+     Still deliberately ABSENT: `custom` (a hand-written email IS its stored body,
+     so the stored text always wins before this map is reached) and `docs_chase`'s
+     sibling types that compose nothing at all. `factfind` is handled separately
+     below — its body is real, but half of it is a token this back office cannot
+     mint, and inventing a link would be worse than saying so.
+     ========================================================================== */
+  review_request: "Thank you for letting us look after {M}. If you have two minutes, a short review of how we did would help us more than you would think.",
+  welcome: "Thank you for getting in touch — I am glad to be helping with {M}, and this is just to say hello and tell you what happens next.",
+  lead_ack: "Thank you for your enquiry — it has reached us and somebody will be in touch shortly.",
+  referral_request: "If you know somebody who could do with the same help, I would be glad to hear from them — a personal introduction is how most of our work arrives.",
+  birthday_greeting: "Just a quick note to wish you a very happy birthday from all of us.",
+  completion_anniversary: "It is a year today since {M} completed — I hope it has all settled in well.",
 };
+/* R75 · B5a — `factfind` composes from a fact_finds token minted by the SENDING
+   RUN (mock-supabase's composeFactfind / production v12), which this page cannot
+   read and must not invent. The three sentences it sends are real and are shown;
+   the link is named as what it is and left unresolved, so the preview is honest
+   about the one part of it that only the run can produce. */
+const HOUSE_TPL_FACTFIND_LINES = [
+  "Before we speak, please could you complete this short, secure fact-find? It takes about 5–10 minutes.",
+  "Start your fact-find → (a secure link, built for this client at the moment the email goes)",
+  "You can save as you go and come back to finish it later.",
+];
 /* Who the mail is signed by. The adviser's own sign-off wins where they have written one (M1's
    profiles.email_signoff, already loaded by loadTeam — no read); otherwise the firm's settings,
    exactly as the sending run falls back. */
@@ -23272,13 +23693,18 @@ function previewSignoffLines(adviserId) {
    settings key reads it. */
 function previewComposeEmail(type, row, ctx) {
   const opening = HOUSE_TPL_OPENING[type];
-  if (!opening) return null;                            // a type the house template does not compose here
+  if (!opening && type !== "factfind") return null;     // a type the house template does not compose here
   const c = (ctx && ctx.caseRow) || null;
   const addr = (c && c.property_address) ? String(c.property_address).trim() : "";
   const mention = !addr ? "" : HOUSE_TPL_SENTENCE_TYPES.includes(type) ? "sentence"
     : HOUSE_TPL_REGARDING_TYPES.includes(type) ? "regarding" : "";
   const lines = [];
   if (mention === "regarding") lines.push("Regarding: " + addr);
+  // R75 · B5a — factfind's body is the run's own three sentences, link named not invented.
+  if (type === "factfind") {
+    HOUSE_TPL_FACTFIND_LINES.forEach((l) => lines.push(l));
+    return { lines, signoff: previewSignoffLines(c && c.assigned_to) };
+  }
   lines.push(opening.replace("{M}", mention === "sentence" ? "your mortgage on " + addr : "your mortgage"));
   if (HOUSE_TPL_DOC_TYPES.includes(type)) {
     const onCase = (ctx && ctx.outstanding) || null;    // null = no checklist on this case
@@ -24154,9 +24580,109 @@ async function runQueueNow(btn, after) {
 }
 $("#run-now-btn").addEventListener("click", () => runQueueNow($("#run-now-btn")));
 
+/* ==========================================================================
+   R75 · B1 (panel E-13 + D#20) — ONE DROP ZONE, FOR EVERY FILE THIS APP EATS.
+
+   Four doors took a file and all four were a bare `<input type=file>`: the
+   browser's own 26px "Choose File" button, no drop target, no statement of what
+   it accepts, and — after a pick — a filename readout that is the widget's own
+   grey text, which the two Money uploaders then WIPE (they clear `.value` so the
+   same workbook can be re-chosen), leaving no evidence anything was chosen at
+   all. Meanwhile the biggest single motion in the firm's week — dropping the
+   Stonebridge statement in — had the smallest control on the page.
+
+   `dropZoneHtml(id, accept, label)` is the one component: house border and
+   radius, a real drag target, the accepted formats written out in words, and a
+   filename readout that is OURS (so clearing the input cannot erase it). The
+   INPUT ITSELF is unchanged — same id, same `accept`, same `aria-label`, same
+   `change` event — because every existing handler, and the harness's own
+   `__drop()` helper, drive it directly. A drop is routed INTO that input and
+   re-dispatched as `change`, so there is exactly one code path: a dropped file
+   and a chosen file cannot behave differently.
+   ========================================================================== */
+const DROP_ZONE_FORMAT_WORDS = {
+  ".csv": "CSV", ".tsv": "tab-separated", ".txt": "plain text",
+  ".xlsx": "Excel .xlsx", ".xls": "Excel .xls", ".pdf": "PDF",
+};
+function dropZoneFormatLine(accept) {
+  const words = String(accept || "").split(",").map((s) => s.trim()).filter(Boolean)
+    .map((p) => DROP_ZONE_FORMAT_WORDS[p.toLowerCase()] || p);
+  if (!words.length) return "Any file.";
+  return "Accepts " + (words.length === 1 ? words[0] : words.slice(0, -1).join(", ") + " or " + words[words.length - 1]) + ".";
+}
+function dropZoneHtml(id, accept, label, opts) {
+  const o = opts || {};
+  return `<div class="drop-zone" id="${esc(id)}-zone" data-dz="${esc(id)}">
+      <input type="file" id="${esc(id)}" class="dz-input" accept="${esc(accept)}" aria-label="${esc(label)}">
+      <span class="dz-face" aria-hidden="true">
+        <span class="dz-verb"><strong>${esc(o.verb || "Drop a file here")}</strong> — or click to choose one</span>
+        <span class="dz-formats">${esc(dropZoneFormatLine(accept))}</span>
+      </span>
+      <p class="dz-file" id="${esc(id)}-name" aria-live="polite">${esc(o.empty || "No file chosen yet.")}</p>
+    </div>`;
+}
+function wireDropZone(id, opts) {
+  const o = opts || {};
+  const zone = document.getElementById(id + "-zone");
+  const input = document.getElementById(id);
+  const readout = document.getElementById(id + "-name");
+  if (!zone || !input) return;
+  /* The readout is bound FIRST, on purpose: the two Money handlers clear
+     `input.value` as soon as they have read the workbook, and a listener
+     registered after them would find `.files` already empty. */
+  input.addEventListener("change", () => {
+    const f = input.files && input.files[0];
+    if (!readout) return;
+    readout.textContent = f ? `Chosen: ${f.name}` : (o.empty || "No file chosen yet.");
+    readout.classList.toggle("has-file", !!f);
+  });
+  ["dragenter", "dragover"].forEach((ev) => zone.addEventListener(ev, (e) => {
+    e.preventDefault(); e.stopPropagation(); zone.classList.add("is-over");
+  }));
+  ["dragleave", "dragend"].forEach((ev) => zone.addEventListener(ev, () => zone.classList.remove("is-over")));
+  zone.addEventListener("drop", (e) => {
+    e.preventDefault(); e.stopPropagation();
+    zone.classList.remove("is-over");
+    const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if (!f) return;
+    try {
+      const dt = new DataTransfer(); dt.items.add(f);
+      input.files = dt.files;
+    } catch (_) { /* a runtime without DataTransfer: the change below still fires */ }
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+}
+function mountDropZone(slotId, id, accept, label, opts) {
+  const slot = document.getElementById(slotId);
+  if (!slot) return;
+  slot.innerHTML = dropZoneHtml(id, accept, label, opts);
+  wireDropZone(id, opts);
+}
+/* All four zones are mounted HERE, above the handlers that bind to their inputs
+   (bulk import below, Money at r44's wiring block, Revolution at the foot of the
+   file) — this file is a classic script and runs top to bottom, so mounting
+   first is what guarantees every `$("#…-file")` below finds a real element. */
+mountDropZone("import-file-slot", "import-file", ".csv,.tsv,.txt,.xlsx,.xls",
+  "Spreadsheet or text file to import", { verb: "Drop a spreadsheet or export here" });
+mountDropZone("rev-file-slot", "rev-file", ".csv,.tsv,.txt,.xlsx,.xls",
+  "Revolution client_data_export_V2 file", { verb: "Drop the weekly client_data_export_V2 here" });
+mountDropZone("recon-file-slot", "recon-file", ".xlsx,.xls",
+  "Weekly commission statement workbook", { verb: "Drop this week's commission statement here" });
+mountDropZone("procrates-file-slot", "procrates-file", ".xlsx,.xls",
+  "Proc fee rate card workbook", { verb: "Drop the network's rate card here" });
+
 /* ---------- Bulk import (AI) ---------- */
 let importRows = [];
-let importAssignToMe = true; // defect 10: default new cases to the current user instead of unassigned
+/* R75 · B1 (panel finding 10) — "Assign new cases to me" no longer defaults ON
+   for everybody. It is the SAME question R72's new-case form answers with
+   `newCaseSelfAssigns()`: an adviser is importing their own book, so ON; an
+   administrator or the owner is importing the FIRM's book on somebody else's
+   behalf, and pre-ticking it silently hands 400 cases to the person doing the
+   typing. Null = "nobody has touched the checkbox this session", so the role
+   rule decides; a click pins it either way for the rest of the session. The
+   checkbox itself is unchanged — this is which way up it starts. */
+let importAssignToMe = null;
+const importAssignToMeOn = () => (importAssignToMe == null ? newCaseSelfAssigns() : importAssignToMe);
 
 $("#import-file").addEventListener("change", async () => {
   const file = $("#import-file").files[0];
@@ -24178,7 +24704,24 @@ $("#import-file").addEventListener("change", async () => {
   } catch (e) {
     toast("Could not read file: " + e.message);
   }
+  impSyncAnalyseBtn();   // R75 · B1 — the file just filled the box; the button follows it
 });
+/* R75 · B1 — ✨ Analyse with AI is DISABLED until there is something to analyse,
+   and says why in its own title rather than answering a press with a toast at the
+   bottom of the screen. Re-derived at every moment the box can change: typing,
+   a file landing in the zone above it, and the end of a run. */
+function impSyncAnalyseBtn() {
+  const btn = $("#analyse-btn");
+  if (!btn) return;
+  const box = $("#import-text");
+  const has = !!(box && box.value.trim());
+  btn.disabled = !has;
+  btn.title = has
+    ? "Send what is in the box to the AI reader. Nothing is saved — every row it finds comes back below for you to check and tick."
+    : "Nothing to analyse yet — drop a file into the zone above, or paste rows into the box.";
+}
+if ($("#import-text")) $("#import-text").addEventListener("input", impSyncAnalyseBtn);
+impSyncAnalyseBtn();
 
 /* ==========================================================================
    R6 BATCH 3 · THE IMPORT NO LONGER THROWS THE ADDRESS AWAY
@@ -24357,7 +24900,10 @@ $("#analyse-btn").addEventListener("click", async () => {
     // R6-34 — and the cases those clients already hold, so a row can be judged "another case on a
     // property we already have for this person" vs "a new property" BEFORE it is written.
     importCases = await fetchMatchCases(importClients);
-    $("#import-status").textContent = `${importRows.length} records found.`
+    /* R75 · B1 — "1 records found." was the app telling somebody who had just
+       pasted one row that it cannot count. Every other tally in this file is
+       pluralised; this one now is too. */
+    $("#import-status").textContent = `${importRows.length} record${importRows.length === 1 ? "" : "s"} found.`
       + (nProp
         ? ` ${nProp} property address${nProp === 1 ? "" : "es"} read from the file.`
           + (PROP_ADDR_SUPPORTED === false ? " ⚠ This database has no property column yet, so they cannot be stored — the cases will import without them." : "")
@@ -24367,7 +24913,8 @@ $("#analyse-btn").addEventListener("click", async () => {
     $("#import-status").textContent = "";
     toast("Error: " + e.message);
   } finally {
-    $("#analyse-btn").disabled = false;
+    // R75 · B1 — back to whatever the box justifies, not unconditionally enabled.
+    impSyncAnalyseBtn();
   }
 });
 
@@ -24415,10 +24962,38 @@ function impDateFlags(r) {
   out.flagged = flagged;
   return out;
 }
-/* Whether a row starts UNticked. Two independent reasons now: a date nobody has resolved (T1-21 /
-   defect 3) and a likely-duplicate case (R6-34). Both are "a human has to look at this", both have a
-   per-row way to accept, and neither hides the row. */
-function impRowFlagged(r) { return impDateFlags(r).flagged || impDupUnresolved(r); }
+/* ==========================================================================
+   R75 · B1 (panel finding 10) — THE PERSON CHECK, SHARED WITH THE REVOLUTION
+   PATH.
+
+   "The AI importer pre-ticks gibberish rows the Revolution importer correctly
+   refuses." Both doors read the same kind of file and the Revolution one has
+   asked the right question since R8 (revMatchClient's `quarantine` verdict):
+   a row with no name, no email and no phone has no PERSON in it — it is the
+   trailing "TOTAL" line every report tool leaves behind — and a row with
+   contact details but no name cannot be written to a client record at all.
+
+   The check is lifted out here, WORD FOR WORD including its reasons, and
+   revMatchClient() now calls it, so the two doors cannot drift apart. On the
+   import it is a flag, not a refusal, exactly like the date and duplicate
+   flags beside it: the row is shown, the reason is stated on it, and it starts
+   UNTICKED. The way back is the same one those flags have — type the missing
+   name into the Client cell and the row re-ticks itself.
+   ========================================================================== */
+function rowPersonCheck(name, email, phone) {
+  const n = String(name == null ? "" : name).trim();
+  const e = String(email == null ? "" : email).trim();
+  const p = String(phone == null ? "" : phone).trim();
+  if (!n && !e && !p) return { ok: false, reason: "the row has no name, email or phone — there is no person in it" };
+  if (!n) return { ok: false, reason: "the row has contact details but no name" };
+  return { ok: true, reason: "" };
+}
+const impPersonCheck = (r) => rowPersonCheck(r && r.client_name, r && r.email, r && r.phone);
+const impNoPerson = (r) => !impPersonCheck(r).ok;
+/* Whether a row starts UNticked. Three independent reasons now: a date nobody has resolved (T1-21 /
+   defect 3), a likely-duplicate case (R6-34), and (R75) a row with no person in it. All three are
+   "a human has to look at this", all three have a per-row way back, and none of them hides the row. */
+function impRowFlagged(r) { return impDateFlags(r).flagged || impDupUnresolved(r) || impNoPerson(r); }
 // One preview cell for a date: amber with the interpretation + a Confirm button when it needs a human.
 function impDateCell(r, i, field, extraHtml) {
   const p = parseUkDate(r[field]);
@@ -24675,6 +25250,15 @@ function impConflicts(r, client) {
   return out;
 }
 function impMatchCellHtml(r, i) {
+  /* R75 · B1 — the junk row's verdict comes FIRST and on its own: there is no
+     client to match it to, so the match cell would otherwise be blank and the
+     row would read as "creates a new client" — which is exactly the pre-tick
+     the panel objected to. The reason is the Revolution path's own words. */
+  const pc = impPersonCheck(r);
+  if (!pc.ok) {
+    return `<div class="imp-noperson"><span class="badge red" title="${esc("Nothing is refused — but this row starts unticked because " + pc.reason + ". Fill the Client cell in (or leave the row unticked) before importing.")}">no person in this row</span>
+      <span class="s">${esc(pc.reason)}</span></div>`;
+  }
   return impMatchCellPersonHtml(r, i) + impPropVerdictHtml(r, i);
 }
 function impMatchCellPersonHtml(r, i) {
@@ -24753,22 +25337,42 @@ function renderImportPreview() {
      click and does not clear the flag: wanting to re-read the rules is not the same as wanting
      them shouted at you again next week. */
   const blurbSeen = lsGet("nx_import_blurb") === "seen";
+  /* R75 · B1 — which way the assign checkbox starts, and the sentence saying why.
+     Same rule and same argument as R72's new-case form (newCaseSelfAssigns). */
+  const assignMeOn = importAssignToMeOn();
+  const assignMeWhy = newCaseSelfAssigns()
+    ? "You are an adviser, so this starts ticked: an import of your own book should land on you. Untick it to leave the cases unassigned."
+    : "This starts UNTICKED for administrators and the owner: an import is usually the firm's book being brought in on somebody else's behalf, and quietly assigning every case to whoever ran the import is how a whole back book ends up on one person's list. Tick it if these really are your cases.";
   $("#import-preview").innerHTML = `
     <div class="panel">
       <h3>Review before saving</h3>
+      ${/* R75 · B1 — SENTENCE ONE STAYS OUT. The rules paragraph is four hundred
+           words and the fold (R33 · K3) hid ALL of it, including the one line that
+           tells a first-time reader what this screen is for. The instruction is
+           now always on screen; the seven rules that explain the badges sit behind
+           the same "▸ Review rules" fold, with the same id, the same button label
+           and the same localStorage key, so nothing about the fold's own contract
+           moved. */ ""}
+      <p class="panel-sub" id="imp-review-lede">Untick anything that shouldn't be imported. Click Client, Email, <strong>Property</strong>, Stage, Lender or Rate to fix a misread field before importing — <strong>nothing is saved until you press Import selected</strong>.</p>
       <button type="button" class="btn btn-sm" id="imp-blurb-toggle" aria-expanded="${blurbSeen ? "false" : "true"}" aria-controls="imp-review-blurb" style="margin:0 0 8px;">${blurbSeen ? "Review rules ▸" : "Got it — collapse"}</button>
-      <p class="panel-sub${blurbSeen ? " hidden" : ""}" id="imp-review-blurb">Untick anything that shouldn't be imported. Click Client, Email, <strong>Property</strong>, Stage, Lender or Rate to fix a misread field before importing. Estimated rate-end dates are marked ≈ and stay flagged until you confirm them. Dates are read UK-first (dd/mm/yyyy) — anything that could also be read the American way is shown amber with the reading we'll use, and its row starts unticked until you press Confirm. A case marked Completed with no completion date is shown amber with a “no date” flag: no date is ever invented for it, so where the source itself said the case was completed the row starts unticked until you either press “Import with no date” or change its Stage. Any case that does import without a completion date is counted in the message at the end and listed on Data health. The <strong>Match</strong> column says who each row will land on before anything is written: green attaches to a client we already hold, amber is a possible match that needs your Attach / New client decision, and a blank cell creates a new client. Where an attaching row's email or phone disagrees with the record, the row expands so you choose which to keep — what you don't keep is named in the summary afterwards. A <strong>Property address</strong> column in the file (Property, Property address, Security address, Address, with an optional separate Postcode) is read onto the case, and the Match column then also says what the row means for that client: <span class="badge green">new property</span>, <span class="badge grey">another case on a property we hold</span>, or <span class="badge amber">likely duplicate case</span> — same client, same property and the same lender, which starts unticked until you press “Import anyway”.</p>
-      <label style="display:flex;gap:6px;align-items:center;font-weight:400;margin:4px 0 10px;">
-        <input type="checkbox" id="imp-assign-me" style="width:auto;" ${importAssignToMe ? "checked" : ""}>
+      <p class="panel-sub${blurbSeen ? " hidden" : ""}" id="imp-review-blurb">Estimated rate-end dates are marked <span class="badge ${EST_BADGE_CLS}" title="${TIP_APPROX}">≈</span> and stay flagged until you confirm them. Dates are read UK-first (dd/mm/yyyy) — anything that could also be read the American way is shown amber with the reading we'll use, and its row starts unticked until you press Confirm. A case marked Completed with no completion date is shown <span class="badge amber" title="The source marks the case completed but gives no completion date. No date is ever invented: where the source itself said the case was completed, the row starts unticked until you press “Import with no date” or change its Stage.">no date</span>: no date is ever invented for it, so where the source itself said the case was completed the row starts unticked until you either press “Import with no date” or change its Stage. Any case that does import without a completion date is counted in the message at the end and listed on Data health. A row with <span class="badge red" title="No name, and no email or phone either — the trailing “TOTAL” line every report tool leaves behind. It starts unticked; type a name into its Client cell and it re-ticks itself. This is the same check the Revolution sync has always applied.">no person in this row</span> starts unticked — the same check the Revolution sync applies. The <strong>Match</strong> column says who each row will land on before anything is written: <span class="badge green" title="An exact match on email, phone, or a name with nothing contradicting it — this row updates that client instead of creating a second one.">→ attaches to</span> a client we already hold, <span class="badge amber" title="A possible existing client. Nothing is attached until you press Attach or New client.">possible</span> needs your Attach / New client decision, and a blank cell creates a new client. Where an attaching row's email or phone disagrees with the record, the row expands so you choose which to keep — what you don't keep is named in the summary afterwards. A <strong>Property address</strong> column in the file (Property, Property address, Security address, Address, with an optional separate Postcode) is read onto the case, and the Match column then also says what the row means for that client: <span class="badge green" title="No case on this address exists for this client — it imports as a new property.">new property</span>, <span class="badge grey" title="This client already has a case on this property, but with a different lender — it imports as another case on that property.">another case on a property we hold</span>, or <span class="badge amber" title="Same client, same property and the same lender. That can be right — a product transfer and a remortgage are two cases — so nothing is refused; the row starts unticked until you press “Import anyway”.">likely duplicate case</span> — same client, same property and the same lender, which starts unticked until you press “Import anyway”.</p>
+      <label style="display:flex;gap:6px;align-items:center;font-weight:400;margin:4px 0 10px;" title="${esc(assignMeWhy)}">
+        <input type="checkbox" id="imp-assign-me" style="width:auto;" ${assignMeOn ? "checked" : ""}>
         Assign new cases to me — unticking leaves them unassigned (they'll appear in Data Health's unassigned list)
       </label>
+      <p class="panel-sub" id="imp-assign-why">${esc(assignMeWhy)}</p>
+      ${/* R75 · B1 — the scroll affordance is now SAID as well as drawn. The ›
+           arrow above the table appears only when there is something to scroll to,
+           which is the right passive cue and no help at all to somebody who has
+           not noticed that Client stays put while the rest moves. */ ""}
+      <p class="panel-sub" id="imp-scroll-hint">This table scrolls sideways — the tick box and the <strong>Client</strong> column stay put while the rest moves, so you can always see whose row you are reading.</p>
       <div class="board-scroll-wrap board-scroll-wrap--table">
       <div id="imp-scroll" style="overflow-x:auto;">
-      <table class="imp-table">
-        <tr><th><input type="checkbox" id="imp-all" checked></th><th class="stick-col">Client</th><th>Email</th><th>Phone</th>${propOn ? "<th>Property</th>" : ""}<th>Match</th><th>Stage</th><th>Lender</th><th>Rate</th><th>Rate ends</th><th>ERC ends</th><th>Completed</th><th>Fee</th></tr>
+      <table class="imp-table has-bulk imp-review-table" id="imp-review-table">
+        <tr><th class="bulk-col"><input type="checkbox" id="imp-all" checked aria-label="Tick or untick every row"></th><th class="stick-col">Client</th><th>Email</th><th>Phone</th>${propOn ? "<th>Property</th>" : ""}<th>Match</th><th>Stage</th><th>Lender</th><th>Rate</th><th>Rate ends</th><th>ERC ends</th><th>Completed</th><th>Fee</th></tr>
         ${importRows.map((r, i) => `
         <tr>
-          <td><input type="checkbox" class="imp-row" data-i="${i}" ${impRowFlagged(r) ? "" : "checked"}></td>
+          <td class="bulk-col"><input type="checkbox" class="imp-row" data-i="${i}" ${impRowFlagged(r) ? "" : "checked"}></td>
           <td class="imp-edit stick-col" contenteditable="true" spellcheck="false" data-i="${i}" data-field="client_name" title="Click to edit">${esc(r.client_name || "")}</td>
           <td class="imp-edit" contenteditable="true" spellcheck="false" data-i="${i}" data-field="email" title="Click to edit">${esc(r.email || "")}</td>
           <td class="imp-edit" contenteditable="true" spellcheck="false" data-i="${i}" data-field="phone" title="Click to edit">${esc(r.phone || "")}</td>
@@ -24880,6 +25484,10 @@ function renderImportPreview() {
     const commit = () => {
       const i = Number(td.dataset.i), field = td.dataset.field;
       if (!importRows[i]) return; // late blur after the preview was cleared post-import
+      /* R75 · B1 — the row's flagged state BEFORE the edit lands. It used to be
+         read after the write, which made the was/now comparison below compare a
+         value with itself and meant an edit could never re-tick a row. */
+      const wasFlagged0 = impRowFlagged(importRows[i]);
       let val = td.textContent.trim();
       if (field === "rate_percent") {
         val = val.replace("%", "").trim();
@@ -24891,22 +25499,29 @@ function renderImportPreview() {
          match. Any earlier Attach/New-client choice was made about a DIFFERENT set of details and
          is dropped rather than carried silently onto the new ones. */
       if (field === "client_name" || field === "email" || field === "phone") {
+        /* R75 · B1 — these are also the three fields the person check reads, so
+           filling the missing one in is the way back off the "no person in this
+           row" flag. Same was/now discipline the property edit below uses: a row
+           the operator unticked by hand is never re-ticked for them. */
         importRows[i]._match_client_id = null;
         importRows[i]._force_new = false;
         importRows[i]._conflict_choice = null;
         impRepaintMatch(i);
+        const nowId = impRowFlagged(importRows[i]);
+        const cbId = document.querySelector(`.imp-row[data-i="${i}"]`);
+        if (cbId && wasFlagged0 !== nowId) cbId.checked = !nowId;
       }
       /* R6-34 — correcting the property (or the lender) changes what the row MEANS for that client:
          a typo'd address reads as a sixth property when it is really a duplicate of the fifth. Both
          re-derive the verdict, and the accepted-duplicate decision is dropped with the value it was
          made about. Re-tick / untick to match, unless the operator has already unticked by hand. */
       if (field === "property_address" || field === "lender") {
-        const was = impRowFlagged(importRows[i]);
+        // R75 · B1 — wasFlagged0 is read at the TOP of commit(), before the write.
         importRows[i]._dup_ok = false;
         impRepaintMatch(i);
         const now = impRowFlagged(importRows[i]);
         const cb = document.querySelector(`.imp-row[data-i="${i}"]`);
-        if (cb && was !== now) cb.checked = !now;
+        if (cb && wasFlagged0 !== now) cb.checked = !now;
       }
     };
     td.addEventListener("blur", commit);
@@ -25113,7 +25728,7 @@ async function runImport() {
           property_value: r.property_value ?? null,
           broker_fee: r.broker_fee ?? null,
           completed_at: dates.completed_date ? new Date(dates.completed_date).toISOString() : null,
-          assigned_to: importAssignToMe ? ((ME && ME.id) || null) : null,
+          assigned_to: importAssignToMeOn() ? ((ME && ME.id) || null) : null,   // R75 · B1 — the role rule until the box is touched
         };
         // Only NAMED where M7 is present; an un-migrated database would 42703 the whole insert.
         if (propAddrOk && propAddress(r.property_address)) caseRow.property_address = propAddress(r.property_address);
@@ -26436,7 +27051,7 @@ async function addAbsence() {
   await renderAbsencePanel();
   /* The diary above it has to agree with the list below it, and the band is drawn from ABSENCES —
      so the grid is repainted rather than left showing the state before the write. */
-  if (diaryViewMode === "day") await loadDiaryDay(); else await loadDiary();
+  await loadDiaryForMode();   // R75 · A1 — whichever of the three views is live
   toast(`${staffName(who)} is recorded as away ${fmtD(from)}${from === to ? "" : " – " + fmtD(to)}`);
 }
 async function deleteAbsence(id) {
@@ -26454,7 +27069,7 @@ async function deleteAbsence(id) {
   if (error) return toast("It could not be removed: " + error.message);
   await loadAbsences();
   await renderAbsencePanel();
-  if (diaryViewMode === "day") await loadDiaryDay(); else await loadDiary();
+  await loadDiaryForMode();   // R75 · A1 — whichever of the three views is live
   toast("Absence removed");
 }
 
@@ -26521,7 +27136,7 @@ async function loadDiary() {
     const dayTasks = tasksByDay[dstr] || [];
     const shownTasks = dayTasks.slice(0, DIARY_TASK_CHIP_CAP);
     const hiddenTaskCount = dayTasks.length - shownTasks.length;
-    return `<div class="diary-day ${day.toDateString() === todayStr ? "today" : ""}${dayAppts.length ? " has-appts" : ""}${dayHasClash ? " has-clash" : ""}" data-date="${dstr}" title="Add an appointment on this day" style="${dim ? "opacity:.45;" : ""}min-height:110px;">
+    return `<div class="diary-day ${day.toDateString() === todayStr ? "today" : ""}${dayAppts.length ? " has-appts" : ""}${dayHasClash ? " has-clash" : ""}" data-date="${dstr}" title="${esc("Click an empty part of this day to book an appointment. " + DIARY_DRAG_HINT)}" style="${dim ? "opacity:.45;" : ""}min-height:110px;">
       ${/* R73 · B1 — H3, not H5: the month grid's day cells sat two levels below the
            page's H2 with nothing in between. */ ""}
       <h3 class="diary-day-h">${day.toLocaleDateString("en-GB", { weekday: "short", day: "numeric" })}</h3>
@@ -26553,7 +27168,7 @@ async function loadDiary() {
            the thing this round exists to fix. An ATTENDED one is not struck — it happened. */
         const outcomeSet = isApptOutcome(a.outcome);
         const outcomeStruck = a.outcome === "no_show" || a.outcome === "rearranged";
-        return `<div class="appt${partner ? " clash" : ""}${outcomeSet ? " has-outcome outcome-" + a.outcome : ""}${outcomeStruck ? " outcome-struck" : ""}" onclick="openAppt('${a.id}')"${colorStyle}${clashTitle}>
+        return `<div class="appt${partner ? " clash" : ""}${outcomeSet ? " has-outcome outcome-" + a.outcome : ""}${outcomeStruck ? " outcome-struck" : ""}" draggable="true" data-appt="${esc(a.id)}" onclick="openAppt('${a.id}')"${colorStyle}${clashTitle}>
         ${partner ? `<span class="clash-tag" title="${esc(clashWords)}" aria-label="${esc(clashWords)}">⚠</span> ` : ""}<span class="at">${new Date(a.starts_at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}–${new Date(a.ends_at || a.starts_at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</span> ${esc(a.title)}
         ${outcomeSet ? `<div>${apptOutcomeChipHtml(a.outcome)}</div>` : ""}
         ${chip ? `<div>${chip}</div>` : ""}
@@ -26574,7 +27189,8 @@ async function loadDiary() {
     const [y, m, d] = String(el.dataset.date || "").split("-").map(Number);
     if (!y) return;
     diaryDay = new Date(y, m - 1, d);
-    diaryStaffDayVal = $("#diary-staff") ? ($("#diary-staff").value || "all") : "all";  // keep the filter you were reading under
+    // R75 · A3 — no filter hand-off needed any more: the select is never re-pointed by a view
+    // change, so the Day view opens under exactly the filter the month grid was read under.
     setDiaryViewMode("day");
   }));
   // Legend row (defect 26) — only meaningful once cards are colour-coded, i.e. the "Everyone" view.
@@ -26584,6 +27200,9 @@ async function loadDiary() {
       ? TEAM.map((p) => { const c = adviserColor(p.id); return `<span class="diary-legend-item"><span class="diary-legend-dot" style="background:${c.border};"></span>${esc(staffName(p.id))}</span>`; }).join("")
       : "";
   }
+  /* R75 · A2 — the month grid's tiles become drag sources and its day cells drop targets, wired
+     after the paint that created them (the board's own pattern). */
+  wireDiaryDnD();
   await renderAbsencePanel();   // R13 · M-31 — the rota lives under the month it describes
 }
 
@@ -26592,14 +27211,41 @@ async function loadDiary() {
    openAppt/adviserColor with the month grid above, but never calls loadDiary's own renderer and
    never writes to #diary-grid/#diary-legend's month markup. Toggling between the two is just
    showing/hiding two sibling containers — see setDiaryViewMode. */
-let diaryViewMode = "month"; // "month" | "day" — overwritten from localStorage by restoreUserPrefs
+let diaryViewMode = "month"; // "month" | "week" | "day" — overwritten from localStorage by restoreUserPrefs
 let diaryDay = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate());
-// The staff-filter <select> is shared by both views; these remember each view's own last choice
-// so flipping Month → Day → Month restores the exact selection Month had (R5-31 AT: "month grid
-// pixel-identical when toggled back") while Day gets its own default of "me" (R5-31 AT: "day view
-// defaults to signed-in adviser") without that default ever touching Month's.
-let diaryStaffMonthVal = "all";
-let diaryStaffDayVal = null;
+/* R75 · A1 — the Monday the Week view is showing. Kept separate from diaryMonth/diaryDay for the
+   same reason those two are separate from each other: switching views must never move the OTHER
+   view's position. Initialised to this week's Monday; ‹ / › walk it by seven days. */
+let diaryWeek = mondayOf(new Date());
+/* ==========================================================================
+   R75 · A3 (panel A#4) — THE STAFF FILTER FOLLOWS YOU.
+
+   There used to be two remembered values here — diaryStaffMonthVal and
+   diaryStaffDayVal — and setDiaryViewMode swapped the shared #diary-staff
+   select between them on every toggle. The stated intent (R5-31) was "Day
+   defaults to the signed-in adviser"; what it actually did was this: read
+   Wayne's month, press Day, and you are reading YOUR OWN day. The person you
+   deliberately selected was silently replaced, with nothing on screen saying
+   so, and pressing Month put them back — so the filter appeared to flicker
+   between two people depending on which view you were in. Four of the five
+   panel agents raised it independently (finding A#4, and #10's list).
+
+   ONE remembered value now, carried across all three views, because that is
+   what a filter is: a question you asked, not a property of a layout.
+
+   The "Day defaults to mine" half is DELETED rather than narrowed. R34's
+   staffFilterDefault already opens the whole diary on ME for anybody who
+   advises (a stored pick first, then their own id, then "all"), so the only
+   people the old Day rule ever changed were the administrator and the owner —
+   and for those two "all" is the right default on every view, which is the
+   reasoning R34 itself used. Keeping a "only when nothing was picked this
+   visit" variant would have left the one behaviour nobody could predict:
+   the filter moving on its own, sometimes.
+
+   R34's initial default-to-me contract (tests/r34.js §C) is untouched — that
+   is about what the select opens on, and it still runs in loadTeam().
+   ========================================================================== */
+let diaryStaffVal = "all";
 const DIARY_DAY_START_HOUR = 8, DIARY_DAY_END_HOUR = 19; // 08:00–19:00
 const DIARY_DAY_PX_PER_HOUR = 60;
 
@@ -26685,20 +27331,35 @@ function renderDiaryDayTasks(tasks, dayYmd, who) {
       : "");
 }
 
-function renderDiaryDay(appts, who, apptCtx) {
+/* ==========================================================================
+   R75 · A1 — THE LANE BUILDER, EXTRACTED (not copied).
+
+   The Week view is seven of the Day view's lanes side by side, so it needs the
+   Day view's block renderer — the height-budget line spending, the ⚠, the
+   outcome treatment, the property chip, the side-by-side column layout. A
+   second copy of that would be a second set of rules about what an appointment
+   looks like, which is exactly the mistake R64 refused to make with the
+   log-call panel. So renderDiaryDay's own block loop is now this function, and
+   renderDiaryDay is what is left of it: the hour axis and one call.
+
+   Returns the HTML for ONE day's blocks. Nothing about it knows or cares which
+   container it is going into.
+   ========================================================================== */
+function diaryHourList() {
+  const hours = [];
+  for (let h = DIARY_DAY_START_HOUR; h <= DIARY_DAY_END_HOUR; h++) hours.push(h);
+  return hours;
+}
+function diaryHourLinesHtml() {
+  return diaryHourList().map((h) => `<div class="diary-hour-line" style="top:${(h - DIARY_DAY_START_HOUR) * DIARY_DAY_PX_PER_HOUR}px;"></div>`).join("");
+}
+function diaryLaneBlocksHtml(appts, who, apptCtx) {
   const ctx = apptCtx || { byId: {}, caseCount: {}, sharedProp: {} };
   const startHour = DIARY_DAY_START_HOUR, endHour = DIARY_DAY_END_HOUR;
   const pxPerHour = DIARY_DAY_PX_PER_HOUR;
-  const totalHeight = (endHour - startHour) * pxPerHour;
-  const pad2 = (n) => String(n).padStart(2, "0");
   const timeLabel = (d) => d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
-  const hours = [];
-  for (let h = startHour; h <= endHour; h++) hours.push(h);
-  $("#diary-hour-labels").style.height = totalHeight + "px";
-  $("#diary-hour-labels").innerHTML = hours.map((h) => `<div class="diary-hour-label" style="top:${(h - startHour) * pxPerHour}px;">${pad2(h)}:00</div>`).join("");
   const layout = computeDayLayout(appts);
-  const lines = hours.map((h) => `<div class="diary-hour-line" style="top:${(h - startHour) * pxPerHour}px;"></div>`).join("");
-  const blocks = layout.map(({ appt: a, start, end, col, cols }) => {
+  return layout.map(({ appt: a, start, end, col, cols }) => {
     // Clamp to the visible axis rather than hide — an appointment starting before 08:00 or running
     // past 19:00 still needs to be findable, it just sits pinned to the edge of the lane.
     const minsFromStart = Math.min(Math.max(0, (start.getHours() * 60 + start.getMinutes()) - startHour * 60), (endHour - startHour) * 60);
@@ -26733,7 +27394,11 @@ function renderDiaryDay(appts, who, apptCtx) {
     const clashWords = isClash ? `Clashes with ${clashers.map(apptClashPhrase).join(", ")}` : "";
     const clashTitle = isClash ? ` title="${esc(clashWords)}"` : "";
     const chip = propCtxChip(ctx, a.case_id, "row-prop");
-    const box = `style="top:${top}px;height:${height}px;left:calc(${leftPct}% + 2px);width:calc(${widthPct}% - 4px);${colorStyle}" onclick="openAppt('${a.id}')"`;
+    /* R75 · A2 — DRAG TO MOVE. `draggable` + the id on the element is the whole contract, exactly
+       as the pipeline board's cards carry it (wireBoardDnD): the handlers are delegated and wired
+       per paint, never inline. Dragging is pointer-only by nature, so the block also SAYS that
+       opening it is the way to move it without a mouse — see DIARY_DRAG_HINT. */
+    const box = `style="top:${top}px;height:${height}px;left:calc(${leftPct}% + 2px);width:calc(${widthPct}% - 4px);${colorStyle}" draggable="true" data-appt="${esc(a.id)}" onclick="openAppt('${a.id}')"`;
     const warn = isClash ? `<span class="clash-tag" title="${esc(clashWords)}" aria-label="${esc(clashWords)}">⚠</span> ` : "";
     const whoName = a.clients ? [a.clients.first_name, a.clients.last_name].filter(Boolean).join(" ") : "";
     const staffLine = a.staff_id && who === "all" ? staffName(a.staff_id) : "";
@@ -26763,10 +27428,302 @@ function renderDiaryDay(appts, who, apptCtx) {
       ${showClient ? clientLine : ""}
       ${showStaff ? `<div style="color:var(--muted);">${esc(staffLine)}</div>` : ""}</div>`;
   }).join("");
+}
+function renderDiaryDay(appts, who, apptCtx) {
+  const startHour = DIARY_DAY_START_HOUR, endHour = DIARY_DAY_END_HOUR;
+  const pxPerHour = DIARY_DAY_PX_PER_HOUR;
+  const totalHeight = (endHour - startHour) * pxPerHour;
+  const pad2 = (n) => String(n).padStart(2, "0");
+  $("#diary-hour-labels").style.height = totalHeight + "px";
+  $("#diary-hour-labels").innerHTML = diaryHourList().map((h) => `<div class="diary-hour-label" style="top:${(h - startHour) * pxPerHour}px;">${pad2(h)}:00</div>`).join("");
   const lane = $("#diary-day-lane");
   lane.style.height = totalHeight + "px";
-  lane.innerHTML = lines + blocks;
+  lane.innerHTML = diaryHourLinesHtml() + diaryLaneBlocksHtml(appts, who, apptCtx);
+  /* R75 · A2 — the blocks this lane just drew are drag sources, and the lane is a drop target
+     (a drag inside the day is a time change). Re-wired on every paint, exactly as the board's
+     wireBoardDnD() is re-wired after every loadPipeline. */
+  wireDiaryDnD();
+  /* R75 · A3 — A DAY WITH NOTHING IN IT SHOULD SAY SO, AND SAY WHOSE.
+     An empty lane was eleven hours of ruled white space: indistinguishable from a lane that had
+     not loaded, and silent about which person's day you were looking at — the one fact that makes
+     "nothing booked" mean anything. */
+  renderDiaryDayEmpty(appts, who);
 }
+
+/* ==========================================================================
+   R75 · A1 / A2 / A3 — THE WEEK VIEW, CLICK-A-SLOT AND DRAG-TO-MOVE.
+
+   Owner decision, 28 Aug 2026: "the diary gets a Week view and it becomes the
+   desktop default". Everything below serves that one sentence.
+
+   WHY A WEEK. A month cell is the width of a seventh of the page and caps at
+   three appointments before the rest roll into "+N more" (R12b · W-26) — right
+   for checking a date, useless for finding a gap on Thursday afternoon, which
+   is the question a broker's diary is actually asked. The Day view can answer
+   it but only one day at a time. The week is the working horizon: seven of the
+   Day view's own lanes, on one hour axis, so "where can I put a fact find?" is
+   a glance rather than seven clicks.
+
+   IT IS NOT A NEW RENDERER. The blocks are diaryLaneBlocksHtml() — the Day
+   view's own — so an appointment looks, tooltips, struck-throughs, clashes and
+   colours identically in both. The reads are loadDiary/loadDiaryDay's reads
+   bounded to seven days. The away bands are diaryAbsenceBandsHtml(), the task
+   chips diaryTaskChipHtml(). What is new here is the LAYOUT and the drag.
+   ========================================================================== */
+
+/* The Monday of whatever week a date falls in. Deliberately local-midnight (not a UTC walk):
+   every other date in this file is Europe/London by way of localDateStr, and a week that starts
+   on the wrong Monday for one hour a night is the sort of bug nobody reproduces. */
+function mondayOf(d) {
+  const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  x.setDate(x.getDate() - ((x.getDay() + 6) % 7));
+  return x;
+}
+function diaryYmd(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+/* R75 · A2 — said on every surface a drag is offered from. Drag-and-drop is pointer-only and this
+   round is not inventing a keyboard drag protocol nobody would discover; what it CAN do is name
+   the accessible route, which already exists and is the one the whole app uses: open the
+   appointment and change its date. */
+const DIARY_DRAG_HINT = "Drag an appointment to another day or time to move it — or open it and change the date, which is the way to do it from the keyboard.";
+
+async function loadDiaryWeek() {
+  const weekStart = mondayOf(diaryWeek);
+  diaryWeek = weekStart;                          // normalise, so ‹/› always step whole weeks
+  const weekEnd = new Date(weekStart); weekEnd.setDate(weekEnd.getDate() + 7);
+  const who = $("#diary-staff").value || "all";
+  /* The SAME read the month grid makes, bounded to seven days instead of six weeks — one query,
+     one order, one optional staff filter. */
+  let q = db.from("appointments")
+    .select("*, clients(first_name,last_name)")
+    .gte("starts_at", weekStart.toISOString()).lt("starts_at", weekEnd.toISOString())
+    .order("starts_at");
+  if (who !== "all") q = q.eq("staff_id", who);
+  const { data: appts } = await q;
+  const apptCtx = await loadPropContext((appts || []).map((a) => a.case_id));
+  const tasksByDay = diaryTasksByDay(await loadDiaryTasks(diaryYmd(weekStart), diaryYmd(weekEnd), who));
+  const lastDay = new Date(weekStart); lastDay.setDate(lastDay.getDate() + 6);
+  /* "Diary — week of 1 September 2026" reads as a period; "1–7 September" reads as a range and is
+     what a person says out loud. Both months are named when the week straddles two. */
+  const sameMonth = lastDay.getMonth() === weekStart.getMonth();
+  const label = sameMonth
+    ? `${weekStart.getDate()}–${lastDay.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })}`
+    : `${weekStart.toLocaleDateString("en-GB", { day: "numeric", month: "long" })} – ${lastDay.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })}`;
+  $("#diary-title").textContent = "Diary — " + label;
+  renderDiaryWeek(weekStart, appts || [], who, apptCtx, tasksByDay);
+  /* R13 · M-31 — the same rota panel, under whichever view is showing. */
+  await renderAbsencePanel();
+  // Defect 26's legend means the same thing here as on the month grid: colours only in "Everyone".
+  const legendEl = $("#diary-legend");
+  if (legendEl) {
+    legendEl.innerHTML = who === "all"
+      ? TEAM.map((p) => { const c = adviserColor(p.id); return `<span class="diary-legend-item"><span class="diary-legend-dot" style="background:${c.border};"></span>${esc(staffName(p.id))}</span>`; }).join("")
+      : "";
+  }
+}
+
+function renderDiaryWeek(weekStart, appts, who, apptCtx, tasksByDay) {
+  const host = $("#diary-week-view");
+  if (!host) return;
+  const totalHeight = (DIARY_DAY_END_HOUR - DIARY_DAY_START_HOUR) * DIARY_DAY_PX_PER_HOUR;
+  const pad2 = (n) => String(n).padStart(2, "0");
+  const todayYmd = localDateStr();                // R70 — Europe/London, never a bare Date walk
+  const todayStrYmd = todayYmd;                   // the overdue test for the task chips
+  const days = [];
+  for (let i = 0; i < 7; i++) { const d = new Date(weekStart); d.setDate(d.getDate() + i); days.push(d); }
+  const hourCol = diaryHourList()
+    .map((h) => `<div class="diary-hour-label" style="top:${(h - DIARY_DAY_START_HOUR) * DIARY_DAY_PX_PER_HOUR}px;">${pad2(h)}:00</div>`).join("");
+  /* Two grid rows — heads, then lanes — so every head cell is as tall as the tallest (a day with
+     an away band and three due tasks) and the seven lanes still start on the same pixel. Doing
+     this with separate flex rows is what makes week grids drift by a few pixels per column. */
+  const heads = days.map((day) => {
+    const dstr = diaryYmd(day);
+    const isToday = dstr === todayYmd;
+    const dayTasks = (tasksByDay || {})[dstr] || [];
+    return `<div class="dw-head${isToday ? " today" : ""}" data-date="${dstr}">
+      <h3 class="diary-day-h">${day.toLocaleDateString("en-GB", { weekday: "short", day: "numeric" })}${isToday ? ' <span class="dw-today-tag">today</span>' : ""}</h3>
+      ${diaryAbsenceBandsHtml(dstr, who)}
+      ${dayTasks.map((t) => diaryTaskChipHtml(t, todayStrYmd)).join("")}
+    </div>`;
+  }).join("");
+  const lanes = days.map((day) => {
+    const dstr = diaryYmd(day);
+    const isToday = dstr === todayYmd;
+    const dayAppts = (appts || []).filter((a) => new Date(a.starts_at).toDateString() === day.toDateString());
+    return `<div class="dw-lane${isToday ? " today" : ""}" data-date="${dstr}" style="height:${totalHeight}px;" title="${esc("Click an empty slot to book an appointment at that time. " + DIARY_DRAG_HINT)}">`
+      + diaryHourLinesHtml()
+      + diaryLaneBlocksHtml(dayAppts, who, apptCtx)
+      + `</div>`;
+  }).join("");
+  host.innerHTML = `<div class="diary-week-grid">
+    <div class="dw-corner"></div>
+    ${heads}
+    <div class="dw-hours" style="height:${totalHeight}px;">${hourCol}</div>
+    ${lanes}
+  </div>`;
+  wireDiaryDnD();
+}
+
+/* R75 · A2(b) — CLICK A LANE AT A TIME. One delegated handler for the seven week lanes, doing
+   exactly what the Day lane's own click handler has always done: round the pointer to the nearest
+   half hour, prefill the modal with that date and time. The staff filter comes along for free —
+   openAppt() already defaults "Who" to the diary's filter when it names a person (T1-14), which
+   is the behaviour R72 · B1 then built the whose-diary note on top of. Nothing here passes a
+   staff_id, so that one rule stays the only rule. */
+function diaryLaneClickTime(lane, clientY) {
+  const rect = lane.getBoundingClientRect();
+  const totalMinutes = (DIARY_DAY_END_HOUR - DIARY_DAY_START_HOUR) * 60;
+  let mins = ((clientY - rect.top) / DIARY_DAY_PX_PER_HOUR) * 60;
+  mins = Math.min(Math.max(0, mins), totalMinutes);
+  mins = Math.round(mins / 30) * 30;
+  const pad2 = (n) => String(n).padStart(2, "0");
+  return `${pad2(DIARY_DAY_START_HOUR + Math.floor(mins / 60))}:${pad2(mins % 60)}`;
+}
+if ($("#diary-week-view")) $("#diary-week-view").addEventListener("click", (e) => {
+  if (e.target.closest(".appt-block")) return;    // a block's own onclick opens it
+  const lane = e.target.closest(".dw-lane");
+  if (!lane || !lane.dataset.date) return;
+  openAppt(null, { starts_at: `${lane.dataset.date}T${diaryLaneClickTime(lane, e.clientY)}` });
+});
+
+/* R75 · A3 — the Day view's empty state. Whose diary, which date, and the one button that fixes
+   it (prefilled with that date, at the hour the month grid's own empty-cell click uses). */
+function renderDiaryDayEmpty(appts, who) {
+  const lane = $("#diary-day-lane");
+  if (!lane) return;
+  const existing = $("#diary-day-empty");
+  if (existing) existing.remove();
+  if ((appts || []).length) return;
+  const whose = who && who !== "all" ? `${staffName(who)}’s diary` : "The team’s diary";
+  const when = diaryDay.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+  const wrap = document.createElement("div");
+  wrap.id = "diary-day-empty";
+  wrap.className = "diary-day-empty";
+  wrap.innerHTML = emptyState({
+    headline: `${whose} — nothing booked on ${when}.`,
+    sub: "The whole day is free. Click any slot on the left to book at that time, or use the button.",
+    action: { label: "+ Appointment", id: "diary-day-empty-add" },
+  });
+  lane.appendChild(wrap);
+  const btn = wrap.querySelector("#diary-day-empty-add");
+  if (btn) btn.onclick = (e) => {
+    e.stopPropagation();                          // the lane itself books from the click position
+    openAppt(null, { starts_at: `${diaryYmd(diaryDay)}T10:00` });
+  };
+}
+
+/* ==========================================================================
+   R75 · A2(c) — DRAG TO MOVE, WITH A CLASH THAT ASKS AND AN UNDO THAT WORKS.
+
+   Same shape as the pipeline board's wireBoardDnD (R65): `draggable` elements
+   carry the id, drop targets take dragover/dragleave/drop, and the write goes
+   through ONE function so there is never a second set of rules. Re-wired after
+   every paint, because every paint replaces the nodes.
+
+   THREE KINDS OF DROP, one rule each:
+     • a MONTH cell   → the day changes, the TIME OF DAY IS PRESERVED. Nobody
+       dragging across a month grid is choosing an hour; inventing one (10:00,
+       say) would silently rebook a 15:30 valuation to the morning.
+     • a WEEK lane    → the day AND the time change, snapped to the half hour
+       the block was dropped on. In a week view the vertical axis IS the time,
+       so ignoring it would be ignoring half the gesture.
+     • the DAY lane   → same day, new time, same snapping.
+   The duration always survives — a 45-minute appointment stays 45 minutes.
+
+   A DROP THAT CLASHES ASKS. The save path has warned about double-booking
+   since defect 5, and a drag that silently created one would be the one place
+   in the app where the warning did not apply. Same predicate (apptClashFor),
+   same words (apptClashPhrase), asked in the house overlay rather than a
+   native confirm (R74 · B3).
+
+   AND IT UNDOES EXACTLY. The toast carries an Undo that writes the ORIGINAL
+   starts_at/ends_at back — the captured values, not a recomputed "minus one
+   day", which is the same discipline R74's stage-move Undo follows with its
+   captured task ids.
+   ========================================================================== */
+let diaryDragId = null;   // the appointment currently being dragged (dataTransfer is unreadable during dragover)
+
+function wireDiaryDnD() {
+  document.querySelectorAll("#page-diary [data-appt][draggable='true']").forEach((el) => {
+    el.addEventListener("dragstart", (e) => {
+      diaryDragId = el.dataset.appt;
+      try { e.dataTransfer.setData("text/plain", el.dataset.appt); e.dataTransfer.effectAllowed = "move"; } catch (err) { /* older browser */ }
+      el.classList.add("dragging");
+    });
+    el.addEventListener("dragend", () => { el.classList.remove("dragging"); diaryDragId = null; });
+  });
+  document.querySelectorAll("#diary-grid .diary-day, #diary-week-view .dw-lane, #diary-day-lane").forEach((target) => {
+    target.addEventListener("dragover", (e) => { e.preventDefault(); target.classList.add("dragover"); });
+    target.addEventListener("dragleave", () => target.classList.remove("dragover"));
+    target.addEventListener("drop", (e) => {
+      e.preventDefault();
+      target.classList.remove("dragover");
+      let id = "";
+      try { id = e.dataTransfer.getData("text/plain"); } catch (err) { /* ignore */ }
+      id = id || diaryDragId;
+      if (!id) return;
+      if (target.classList.contains("dw-lane")) {
+        diaryMoveAppt(id, { date: target.dataset.date, time: diaryLaneClickTime(target, e.clientY) });
+      } else if (target.id === "diary-day-lane") {
+        diaryMoveAppt(id, { date: diaryYmd(diaryDay), time: diaryLaneClickTime(target, e.clientY) });
+      } else if (target.dataset.date) {
+        diaryMoveAppt(id, { date: target.dataset.date });   // day changes, time of day preserved
+      }
+    });
+  });
+}
+
+/* The words a person reads for "it was here, it is now there". One phrase, so the toast, the
+   Undo toast and the clash question all name a slot the same way. */
+function apptSlotPhrase(startIso, endIso) {
+  const st = new Date(startIso);
+  const en = new Date(endIso || startIso);
+  const t = (d) => d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+  return `${fmtD(localDateStr(st))} ${t(st)}–${t(en)}`;
+}
+
+async function diaryMoveAppt(id, to) {
+  const { data: a, error } = await db.from("appointments").select("id,title,starts_at,ends_at,staff_id").eq("id", id).single();
+  if (error || !a) return toast("That appointment could not be moved — it may have been deleted.");
+  const oldStart = new Date(a.starts_at);
+  const oldEnd = a.ends_at ? new Date(a.ends_at) : new Date(oldStart.getTime() + 60 * 60000);
+  const durMs = Math.max(15 * 60000, oldEnd - oldStart);   // the duration always survives the move
+  /* The time is either the slot dropped on (week/day lane) or the one it already had (month
+     cell). Parsed the same browser-local `date + "T" + time` way openAppt's save parses it, so a
+     dragged appointment and a typed one land on the identical instant. */
+  const timeStr = to.time || `${String(oldStart.getHours()).padStart(2, "0")}:${String(oldStart.getMinutes()).padStart(2, "0")}`;
+  const newStart = new Date(`${to.date}T${timeStr}`);
+  if (isNaN(newStart)) return toast("That slot could not be read — nothing was moved.");
+  const newEnd = new Date(newStart.getTime() + durMs);
+  if (newStart.getTime() === oldStart.getTime()) return;   // dropped where it already was
+  /* Defect 5 / R12a·D11 — the clash rule, asked before the write and never after it. */
+  const clash = await apptClashFor(a.staff_id, newStart, newEnd, id);
+  if (clash) {
+    const okToClash = await confirmDestructive({
+      title: "That slot is already booked",
+      danger: false,
+      okLabel: "Move it anyway",
+      cancelLabel: "Leave it where it is",
+      body: `<strong>${esc(staffName(a.staff_id))}</strong> already has ${esc(apptClashPhrase(clash))} then. Moving <strong>${esc(a.title || "this appointment")}</strong> to ${esc(apptSlotPhrase(newStart.toISOString(), newEnd.toISOString()))} double-books them — the diary will show both, flagged.`,
+    });
+    if (!okToClash) return;
+  }
+  const { error: upErr } = await db.from("appointments")
+    .update({ starts_at: newStart.toISOString(), ends_at: newEnd.toISOString() }).eq("id", id);
+  if (upErr) return toast("It could not be moved: " + upErr.message);
+  const wasStart = a.starts_at, wasEnd = a.ends_at;   // captured, so Undo restores exactly
+  await loadDiaryForMode();
+  toast(`Moved “${a.title || "appointment"}” · ${apptSlotPhrase(wasStart, wasEnd)} → ${apptSlotPhrase(newStart.toISOString(), newEnd.toISOString())}`,
+    { label: "Undo", onClick: () => undoDiaryMove(id, wasStart, wasEnd) });
+}
+async function undoDiaryMove(id, startIso, endIso) {
+  const { error } = await db.from("appointments").update({ starts_at: startIso, ends_at: endIso }).eq("id", id);
+  if (error) return toast("It could not be put back: " + error.message);
+  await loadDiaryForMode();
+  toast(`Put back to ${apptSlotPhrase(startIso, endIso)}`);
+}
+window.diaryMoveAppt = diaryMoveAppt;   // the drag is pointer-only; tests and the console are not
 
 // Click an empty part of the lane → new appointment prefilled with the clicked time (rounded to
 // the nearest half hour); clicks on an appointment block are handled by the block's own onclick.
@@ -26785,65 +27742,72 @@ $("#diary-day-lane").addEventListener("click", (e) => {
   openAppt(null, { starts_at: `${dstr}T${pad2(hour)}:${pad2(minute)}` });
 });
 
-// Flips the two sibling containers and re-points the shared #diary-staff select at whichever
-// view's own remembered value, without ever mutating diaryMonth or re-rendering the month grid
-// (see the "pixel-identical when toggled back" AT). `opts.skipLoad`/`skipPersist` are used only by
-// initDiaryViewFromPrefs (a page-not-open startup sync — no query, no localStorage re-write).
+/* R75 · A1 — ONE ROUTER FOR THREE VIEWS.
+   Every "the diary has to repaint" caller (nav, the absence writes, refreshDiaryView, the staff
+   filter, the toggle) used to carry its own `mode === "day" ? … : …` ternary, which is exactly the
+   shape that breaks the moment a third view exists. One function decides now. */
+function loadDiaryForMode() {
+  if (diaryViewMode === "day") return loadDiaryDay();
+  if (diaryViewMode === "week") return loadDiaryWeek();
+  return loadDiary();
+}
+// Flips the three sibling containers, without ever mutating diaryMonth/diaryWeek/diaryDay or
+// re-rendering a view it is leaving (see the "pixel-identical when toggled back" AT).
+// `opts.skipLoad`/`skipPersist` are used only by initDiaryViewFromPrefs (a page-not-open startup
+// sync — no query, no localStorage re-write).
 function setDiaryViewMode(mode, opts = {}) {
-  const prevMode = diaryViewMode;
   diaryViewMode = mode;
-  $("#diary-view-month").classList.toggle("scope-active", mode === "month");
-  $("#diary-view-day").classList.toggle("scope-active", mode === "day");
+  const segs = [["#diary-view-month", "month"], ["#diary-view-week", "week"], ["#diary-view-day", "day"]];
+  segs.forEach(([sel, m]) => {
+    const b = $(sel);
+    if (!b) return;
+    b.classList.toggle("scope-active", mode === m);
+    b.setAttribute("aria-selected", mode === m ? "true" : "false");
+  });
   $("#diary-grid").classList.toggle("hidden", mode !== "month");
-  $("#diary-legend").classList.toggle("hidden", mode !== "month");
+  /* The adviser-colour legend belongs to any view that colours its blocks by adviser, which is
+     both the month grid and the week lanes — not the day view, which is one person's day even
+     under "All advisers" and names the staff on the block itself. */
+  $("#diary-legend").classList.toggle("hidden", mode === "day");
+  if ($("#diary-week-view")) $("#diary-week-view").classList.toggle("hidden", mode !== "week");
   $("#diary-day-view").classList.toggle("hidden", mode !== "day");
-  const sel = $("#diary-staff");
-  if (sel) {
-    // Only capture the OUTGOING view's current selection on a genuine mode change. The startup
-    // sync (initDiaryViewFromPrefs) calls this with the mode unchanged right after #diary-staff
-    // was rebuilt from scratch — its "all" is the fresh select's default, not a real choice made
-    // in that view, so it must never poison diaryStaffDayVal/diaryStaffMonthVal before the user
-    // has switched views even once (that was bug: it made the Day default look for ME.id, found
-    // the slot already filled with "all", and never touched it again).
-    if (prevMode !== mode) {
-      if (prevMode === "day") diaryStaffDayVal = sel.value || diaryStaffDayVal;
-      else diaryStaffMonthVal = sel.value || "all";
-    }
-    if (mode === "day") {
-      if (diaryStaffDayVal == null) diaryStaffDayVal = (ME && ME.id) || "all";
-      sel.value = diaryStaffDayVal;
-    } else {
-      sel.value = diaryStaffMonthVal || "all";
-    }
-  }
+  /* R75 · A3 — #diary-staff is deliberately NOT touched here. The filter is a question the
+     operator asked; a view toggle is not an answer to it. */
   if (!opts.skipPersist && authUid) lsSet(diaryViewStoreKey(authUid), mode);
-  if (!opts.skipLoad) { if (mode === "day") loadDiaryDay(); else loadDiary(); }
+  if (!opts.skipLoad) loadDiaryForMode();
 }
 // Called once from loadTeam(), right after #diary-staff is rebuilt from the fresh team list (so
-// any prior selection is gone anyway) — syncs the toggle's classes/hidden state and the day
-// filter's default to whatever restoreUserPrefs read from localStorage, with no query fired
-// (the diary page may not even be open yet) and no localStorage re-write.
+// any prior selection is gone anyway) — syncs the toggle's classes/hidden state to whatever
+// restoreUserPrefs read from localStorage, with no query fired (the diary page may not even be
+// open yet) and no localStorage re-write.
 function initDiaryViewFromPrefs() {
   setDiaryViewMode(diaryViewMode, { skipPersist: true, skipLoad: true });
 }
 $("#diary-view-month").addEventListener("click", () => setDiaryViewMode("month"));
+if ($("#diary-view-week")) $("#diary-view-week").addEventListener("click", () => setDiaryViewMode("week"));
 $("#diary-view-day").addEventListener("click", () => setDiaryViewMode("day"));
 
+/* R75 · A1 — ‹ / Today / › move by whatever the view is ABOUT: a month, a week, a day. A Week
+   view whose arrows stepped a month would be a week view in name only. */
 $("#diary-prev").addEventListener("click", () => {
   if (diaryViewMode === "day") { diaryDay.setDate(diaryDay.getDate() - 1); loadDiaryDay(); }
+  else if (diaryViewMode === "week") { diaryWeek.setDate(diaryWeek.getDate() - 7); loadDiaryWeek(); }
   else { diaryMonth = new Date(diaryMonth.getFullYear(), diaryMonth.getMonth() - 1, 1); loadDiary(); }
 });
 $("#diary-next").addEventListener("click", () => {
   if (diaryViewMode === "day") { diaryDay.setDate(diaryDay.getDate() + 1); loadDiaryDay(); }
+  else if (diaryViewMode === "week") { diaryWeek.setDate(diaryWeek.getDate() + 7); loadDiaryWeek(); }
   else { diaryMonth = new Date(diaryMonth.getFullYear(), diaryMonth.getMonth() + 1, 1); loadDiary(); }
 });
 $("#diary-today").addEventListener("click", () => {
   if (diaryViewMode === "day") { diaryDay = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()); loadDiaryDay(); }
+  else if (diaryViewMode === "week") { diaryWeek = mondayOf(new Date()); loadDiaryWeek(); }
   else { diaryMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1); loadDiary(); }
 });
 $("#diary-staff").addEventListener("change", () => {
   persistStaffFilter("#diary-staff", DIARY_STAFF_KEY); // R34 · W2
-  if (diaryViewMode === "day") loadDiaryDay(); else loadDiary();
+  diaryStaffVal = $("#diary-staff").value || "all";    // R75 · A3 — the one value all three views read
+  loadDiaryForMode();
 });
 $("#new-appt-btn").addEventListener("click", () => openAppt(null));
 // Click an empty part of a day cell → New appointment pre-filled with that date (QW9).
@@ -26867,7 +27831,7 @@ $("#diary-grid").addEventListener("click", (e) => {
    stayed clickable). Route to whichever loader matches the mode, exactly as nav() does. */
 function refreshDiaryView() {
   if ($("#page-diary").classList.contains("hidden")) return;
-  if (diaryViewMode === "day") loadDiaryDay(); else loadDiary();
+  loadDiaryForMode();   // R75 · A1 — whichever of the three views is live
 }
 /* ---------- R12a·D11 — ONE DEFINITION OF "CLASH" ----------
    Two people cannot be in two places at once; two appointments for DIFFERENT people at the same
@@ -36632,12 +37596,11 @@ function revMatchClient(r) {
   const name = [r.g.first_name, r.g.last_name].filter(Boolean).join(" ").trim();
   const email = (r.g.email || "").trim();
   const phone = (r.g.phone || "").trim();
-  if (!name && !email && !phone) {
-    return { verdict: "quarantine", reason: "the row has no name, email or phone — there is no person in it" };
-  }
-  if (!name) {
-    return { verdict: "quarantine", reason: "the row has contact details but no name" };
-  }
+  /* R75 · B1 — the two quarantine branches moved into rowPersonCheck() so the
+     bulk AI import can ask the identical question with the identical words.
+     Same verdicts, same reasons, same order — this is a lift, not a rewrite. */
+  const pc = rowPersonCheck(name, email, phone);
+  if (!pc.ok) return { verdict: "quarantine", reason: pc.reason };
   const q = { name, email, phone, address: r.address, postcode: r.g.addr_postcode || "" };
   const m = findClientMatches(q, revClients);
   const dobIn = r.v.date_of_birth || null;
@@ -37129,6 +38092,7 @@ function revReset(keepText) {
   renderRevMapping(); renderRevPreview();
   const res = $("#rev-result"); if (res) res.innerHTML = "";
   const rb = $("#rev-reset-btn"); if (rb) rb.hidden = true;
+  revSyncReadBtn();   // R75 · B1 — "Start again" empties the box, so the button follows it back
 }
 async function revRead() {
   const text = ($("#rev-text") && $("#rev-text").value || "").trim();
@@ -37152,6 +38116,9 @@ async function revRead() {
   const rb = $("#rev-reset-btn"); if (rb) rb.hidden = false;
   renderRevMapping();
   renderRevPreview();
+  // R75 · B1 — the box was filled programmatically (a file, or window.__rev.read),
+  // which fires no `input` event; re-derive the button from what is now in it.
+  revSyncReadBtn();
 }
 if ($("#rev-file")) {
   $("#rev-file").addEventListener("change", async () => {
@@ -37172,8 +38139,25 @@ if ($("#rev-file")) {
     } catch (e) {
       toast("Could not read that file: " + e.message);
     }
+    revSyncReadBtn();   // R75 · B1 — the file just filled the box; the button follows it
   });
 }
+/* R75 · B1 — "Read the export" is DISABLED until there is an export to read, with
+   the reason in its own title. Same rule as ✨ Analyse with AI on the panel above:
+   a primary button whose only answer to a press is a toast at the bottom of the
+   screen should not have been pressable. */
+function revSyncReadBtn() {
+  const btn = $("#rev-read-btn");
+  if (!btn) return;
+  const box = $("#rev-text");
+  const has = !!(box && box.value.trim());
+  btn.disabled = !has;
+  btn.title = has
+    ? "Read the export and show, field by field, what it would change here. Nothing is written until you tick it."
+    : "Nothing to read yet — drop the weekly client_data_export_V2 into the zone above, or paste it into the box.";
+}
+if ($("#rev-text")) $("#rev-text").addEventListener("input", revSyncReadBtn);
+revSyncReadBtn();
 if ($("#rev-read-btn")) $("#rev-read-btn").addEventListener("click", async () => {
   const btn = $("#rev-read-btn");
   btn.disabled = true;

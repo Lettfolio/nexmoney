@@ -293,10 +293,24 @@ function chaseExpected(status, days) {
       eq("B · live · reopened buy_to_let case starts visible", await hasClass(page, "#case-btl-block", "hidden"), false);
       await page.selectOption('#case-form [name="case_kind"]', "remortgage");
       await wait(page, 150);
-      eq("B · live · switching Type to remortgage hides the block WITHOUT reopening the modal", await hasClass(page, "#case-btl-block", "hidden"), true);
+      /* R75: the gate widened — a case whose BTL fields HOLD VALUES keeps the block whatever the
+         Type says, so stored rent/ICR data can never go invisible ("never orphan a stored value").
+         This fixture carries rent + ICR, so switching away now KEEPS the block; the hide-on-switch
+         behaviour is asserted just below on a value-less BTL case instead. */
+      eq("B · live (R75) · switching Type away KEEPS the block while its fields hold values", await hasClass(page, "#case-btl-block", "hidden"), false);
       await page.selectOption('#case-form [name="case_kind"]', "buy_to_let");
       await wait(page, 150);
       eq("B · live · switching Type back to buy_to_let shows the block again", await hasClass(page, "#case-btl-block", "hidden"), false);
+      /* R75: the original claim, on the case it is still true of — no held BTL values. */
+      const bare = await mkClientCase(page, { first: "Bare", last: "Btl", case_kind: "buy_to_let", stage: "application" });
+      await openCase(page, bare.caseId);
+      eq("B · live (R75) · a value-less BTL case starts visible", await hasClass(page, "#case-btl-block", "hidden"), false);
+      await page.selectOption('#case-form [name="case_kind"]', "remortgage");
+      await wait(page, 150);
+      eq("B · live (R75) · switching Type away HIDES the block when its fields are empty", await hasClass(page, "#case-btl-block", "hidden"), true);
+      // R75: put the Type back so the block is visible for the chip check below.
+      await page.selectOption('#case-form [name="case_kind"]', "buy_to_let");
+      await wait(page, 150);
 
       // The live chip recomputes on input alone, no Save involved.
       await page.fill('#case-form [name="monthly_rent"]', "1200");

@@ -657,6 +657,11 @@ async function readRows(page, table, filters) {
 
       // Badge on the diary tile.
       await goto(page, "diary", 900);
+      /* R75 · A1 — the diary opens on WEEK on a desktop now, so the month grid is hidden (and, on
+         a first paint, empty). This block is about the MONTH tile, so it presses Month first —
+         the same fix R70 made here for a different reason: navigate the way a person does. */
+      await page.evaluate(() => { const b = document.querySelector("#diary-view-month"); if (b) b.click(); });
+      await wait(page, 700);
       await page.evaluate((d) => { window.diaryMonth = new Date(d.getFullYear(), d.getMonth(), 1); window.loadDiary(); }, new Date());
       await wait(page, 900);
       const hasOutcomeBadge = await page.evaluate((apptId) => {
@@ -760,6 +765,9 @@ async function readRows(page, table, filters) {
       await mkAppt(page, { client_id: gt.clientId, case_id: gt.caseId, title: "Slot D clash", starts_at: mk(13, 30), ends_at: mk(14, 30), staff_id: "p4" });
 
       await goto(page, "diary", 900);
+      // R75 · A1 — Week is the desktop default; this block reads (and CLICKS INTO) the month grid.
+      await page.evaluate(() => { const b = document.querySelector("#diary-view-month"); if (b) b.click(); });
+      await wait(page, 700);
       await page.evaluate((d) => { window.diaryMonth = new Date(d.getFullYear(), d.getMonth(), 1); window.loadDiary(); }, day);
       await wait(page, 900);
       const cellSel = `.diary-day[data-date="${dayYmd}"]`;

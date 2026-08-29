@@ -720,13 +720,18 @@ const fmtMGT = (n) => (n == null || n === "" ? "—" : Number(n).toLocaleString(
       const dobRow = rowsGot.find((r) => r.label === "Date of birth");
       eq("J3 · DOB is formatted the same way independently (fmtD)", dobRow && dobRow.val, fmtDGT(found.withDob.client.date_of_birth));
 
+      /* R75 · A5: Loan amount and Lender were deliberately REMOVED from the security fold — they
+         duplicated the identity card 200px above (the fold is a phone-verification aid: name,
+         DOB, addresses, account number, product). The claim kept: the fold never shows them, and
+         the identity card still carries both values the fold used to. */
       const loanRow = rowsGot.find((r) => r.label === "Loan amount");
-      eq("J4 · Loan amount is formatted as GBP currency", loanRow && loanRow.val, fmtMGT(found.withDob.kase.loan_amount));
-      ok("J4 · Loan amount has a matching copy control", loanRow && loanRow.hasCopy && loanRow.copyTarget === loanRow.val);
-
+      ok("J4 (R75) · Loan amount is NOT duplicated in the security fold", !loanRow, JSON.stringify(rowsGot.map((r) => r.label)));
       const lenderRow = rowsGot.find((r) => r.label === "Lender");
-      eq("J5 · Lender shows the case's lender", lenderRow && lenderRow.val, found.withDob.kase.lender);
-      ok("J5 · Lender has a matching copy control", lenderRow && lenderRow.hasCopy && lenderRow.copyTarget === lenderRow.val);
+      ok("J5 (R75) · Lender is NOT duplicated in the security fold", !lenderRow);
+      const identityText = await page.$eval(".cs-stats", (e) => e.textContent.replace(/\s+/g, " ")).catch(() => "");
+      ok("J4b (R75) · the identity card carries the loan the fold used to show",
+        identityText.includes(fmtMGT(found.withDob.kase.loan_amount)), identityText.slice(0, 160));
+      ok("J5b (R75) · …and the lender", identityText.includes(found.withDob.kase.lender), identityText.slice(0, 160));
 
       const homeRow = rowsGot.find((r) => r.label === "Home address");
       const expectedHome = found.withDob.client.address || "—";

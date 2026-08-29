@@ -90,14 +90,28 @@ const gotoDiary = async (page) => {
       await page.waitForTimeout(SETTLE);
       await gotoDiary(page);
 
+      /* R75 · A1 — THE DESKTOP DEFAULT IS WEEK NOW (owner decision, 28 Aug 2026: "the diary gets
+         a Week view and it becomes the desktop default"). This block's original point — that a
+         first load lands on a KNOWN view and shows exactly that one container — is unchanged and
+         asserted just as strictly; only which view that is has changed, deliberately. The phone
+         default (Day, R73 · A4) and "a stored choice always wins" are covered in tests/r75_diary
+         §A2, so nothing this check used to prove has been dropped. */
       const initial = await page.evaluate(() => ({
         monthActive: document.querySelector("#diary-view-month").classList.contains("scope-active"),
+        weekActive: document.querySelector("#diary-view-week").classList.contains("scope-active"),
         dayActive: document.querySelector("#diary-view-day").classList.contains("scope-active"),
         gridHidden: document.querySelector("#diary-grid").classList.contains("hidden"),
+        weekViewHidden: document.querySelector("#diary-week-view").classList.contains("hidden"),
         dayViewHidden: document.querySelector("#diary-day-view").classList.contains("hidden"),
       }));
-      eq("defaults to Month on first load", initial, { monthActive: true, dayActive: false, gridHidden: false, dayViewHidden: true });
+      eq("defaults to Week on first load (R75 — desktop default)", initial,
+        { monthActive: false, weekActive: true, dayActive: false, gridHidden: true, weekViewHidden: false, dayViewHidden: true });
 
+      /* R75 · A1 — the month grid has not been PAINTED yet on a load that opens on Week, so the
+         "pixel-identical when toggled back" comparison below has to start from a real month
+         render. Press Month first, then capture. */
+      await page.click("#diary-view-month");
+      await page.waitForTimeout(900);
       const monthHtmlBefore = await page.evaluate(() => document.querySelector("#diary-grid").innerHTML);
 
       await page.click("#diary-view-day");
@@ -111,10 +125,16 @@ const gotoDiary = async (page) => {
       eq("switches the visible container to Day", afterToggle, { monthActive: false, dayActive: true, gridHidden: true, dayViewHidden: false });
 
       /* =================================================================
-         3 (part) · Day view's adviser filter defaults to signed-in adviser
+         3 (part) · R75 · A3 — THE FILTER FOLLOWS YOU ACROSS THE TOGGLE.
+         The original rule here was "Day view defaults to the signed-in adviser", implemented as a
+         silent swap of #diary-staff on every view change. Panel finding A#4: reading Wayne's month
+         and pressing Day showed you YOUR day, with nothing saying so. R34 already opens the whole
+         diary on the signed-in adviser for anybody who advises, so the swap only ever overrode a
+         choice somebody had just made. It is deleted; the filter now carries. Same strength, the
+         opposite expectation — this is the contract change, not a weakened check.
          ================================================================= */
       const staffSel = await page.evaluate(() => document.querySelector("#diary-staff").value);
-      eq("Day view's adviser filter defaults to the signed-in adviser (p2)", staffSel, "p2");
+      eq("Day view KEEPS the person Month was being read under (R75 · A3)", staffSel, "all");
 
       /* =================================================================
          3 (part) · toggle back to Month → pixel-identical grid, and the
@@ -127,7 +147,8 @@ const gotoDiary = async (page) => {
         gridHidden: document.querySelector("#diary-grid").classList.contains("hidden"),
         dayViewHidden: document.querySelector("#diary-day-view").classList.contains("hidden"),
       }));
-      eq("Month's own adviser selection ('all'/Everyone) is restored, untouched by Day's default", backToMonth.staffSel, "all");
+      // R75 · A3 — same value, for the new reason: nothing ever re-points the select on a toggle.
+      eq("Month is still on 'all'/Everyone — the toggle never re-points the filter", backToMonth.staffSel, "all");
       ok("Month grid is visible again, Day view hidden", !backToMonth.gridHidden && backToMonth.dayViewHidden);
       const monthHtmlAfter = await page.evaluate(() => document.querySelector("#diary-grid").innerHTML);
       eq("month grid is pixel-identical after toggling to Day and back", monthHtmlAfter, monthHtmlBefore);
@@ -245,25 +266,33 @@ const gotoDiary = async (page) => {
       await page.close();
       const page2 = await newPage(browser, "p3");
       await gotoDiary(page2);
-      const p3MonthActive = await page2.evaluate(() => document.querySelector("#diary-view-month").classList.contains("scope-active"));
-      ok("a different persona is unaffected — still defaults to Month", p3MonthActive);
+      // R75 · A1 — the key is still namespaced per user; the untouched default is Week now.
+      const p3WeekActive = await page2.evaluate(() => document.querySelector("#diary-view-week").classList.contains("scope-active"));
+      ok("a different persona is unaffected by p2's stored choice — still on the Week default", p3WeekActive);
       ok("no console errors", !page2.__err, JSON.stringify(page2.__err));
       await page2.close();
     }
 
     /* ===================================================================
-       6 · No week view was added this round
+       6 · R75 · A1 — THE WEEK VIEW EXISTS NOW.
+       This block used to assert the opposite ("no week view was added this round"), which was a
+       true statement about batch 9 and a scope fence, not a design decision. Daniel took that
+       decision on 28 Aug 2026 and R75 built it, so the fence is re-pointed at the shipped shape
+       rather than deleted — the Diary page must still have exactly ONE view toggle with exactly
+       the views the app actually has. Full week-view coverage lives in tests/r75_diary.js §A.
        =================================================================== */
-    console.log("\n— No week view added this round (p2 Wayne, adviser)");
+    console.log("\n— The Week view is part of the toggle now (p2 Wayne, adviser)");
     {
       const page = await newPage(browser, "p2");
       await gotoDiary(page);
-      const weekAffordance = await page.evaluate(() =>
-        !!document.querySelector('[id*="week" i]') ||
-        [...document.querySelectorAll("#page-diary button")].some((b) => /\bweek\b/i.test(b.textContent)));
-      ok("no Week button/id anywhere on the Diary page", !weekAffordance);
       const toggleButtons = await page.evaluate(() => [...document.querySelectorAll("#diary-view-toggle button")].map((b) => b.textContent.trim()));
-      eq("the toggle is exactly Month | Day (no Week option)", toggleButtons, ["Month", "Day"]);
+      eq("the toggle is exactly Month | Week | Day", toggleButtons, ["Month", "Week", "Day"]);
+      const week = await page.evaluate(() => ({
+        container: !!document.querySelector("#diary-week-view"),
+        lanes: document.querySelectorAll("#diary-week-view .dw-lane").length,
+        heads: document.querySelectorAll("#diary-week-view .dw-head").length,
+      }));
+      eq("the Week view draws seven lanes and seven heads", [week.container, week.lanes, week.heads], [true, 7, 7]);
       ok("no console errors", !page.__err, JSON.stringify(page.__err));
       await page.close();
     }

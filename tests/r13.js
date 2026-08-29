@@ -878,7 +878,11 @@ const readBlobJson = (page) => page.evaluate(async () => (window.__blob ? JSON.p
       console.log("\n— I2 · M-31 · diary month band + day row, and the 'away now' badge");
       const page = await newPage(browser, "p4", { skipTour: true });
       await goto(page, "diary");
-      await wait(page, 700);
+      // R75 · A1 — the desktop default is the Week view now, so the MONTH grid this check reads
+      // has not been painted. Press Month, exactly as a person would. (The week view carries the
+      // same band in its day head — see tests/r75_diary.js §A, A6.)
+      await page.evaluate(() => { const b = document.querySelector("#diary-view-month"); if (b) b.click(); });
+      await wait(page, 900);
       const todayStr = await page.evaluate(() => new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/London" }).format(new Date()));
       const band = await page.$(`.diary-day[data-date="${todayStr}"] .diary-away`);
       ok("I2 · Luke's fixture absence (spanning today) shows an Away band on today's cell", !!band);

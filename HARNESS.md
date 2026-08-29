@@ -126,7 +126,64 @@ node tests/r73_visible.js
 node tests/r73_system.js
 node tests/r74_numbers.js
 node tests/r74_forms.js
+node tests/r75_diary.js
+node tests/r75_queues.js
 ```
+
+**R75 notes — speed round (`tests/r75_diary.js` 102, `tests/r75_queues.js` 153).**
+Diary half: **WEEK is the desktop default** (owner decision; storage key `nx_diaryview_<uid>` —
+stored choice wins; phone keeps Day). `loadDiaryWeek()`/`renderDiaryWeek()` → `#diary-week-view`
+(7 lanes, blocks via `diaryLaneBlocksHtml` EXTRACTED from the Day view — one implementation);
+toggle Month | Week | Day; prev/next step ±7 in week mode; legend shows month+week. Today =
+NAVY (`.diary-day.today`, `.dw-head.today`; `.has-clash` red still wins). Click-a-slot: month
+cell → date-prefilled modal; week/day lane → date + half-hour (openAppt already defaults Who to
+the diary filter — T1-14; R72 defaultAssignee paths re-asserted). DRAG: `wireDiaryDnD()` (R65
+shape) on `.appt`/`.appt-block` → day cells / week lanes / day lane; month drop preserves
+time-of-day, lane drops snap to the half hour; clash → house overlay ("Move it anyway"), never
+silent; toast old→new + Undo writes back CAPTURED ISO strings. **Staff filter carries across
+views** — `diaryStaffMonthVal`/`diaryStaffDayVal` deleted for ONE `diaryStaffVal`
+(day-defaults-to-mine dropped entirely; r34's INITIAL default-to-me contract intact). Day empty
+state = `emptyState()` overlay (click-through except the button). **One log-call presentation:**
+`openLogCallModal(c, {panelId,…})` — Retention AND the case modal both open the titled overlay
+(panelIds `ret-logcall-panel`/`cs-logcall-panel` are suite contracts); the case's inline drawer
+is GONE (typing a call note no longer trips the case unsaved guard — by design). Case details:
+six `<h4 class="cs-sub-h">` groups (BTL gated on kind OR held values; Waiting on/Solicitor moved
+into Dates & progress); `caseLtvPct(c)` + `#cs-ltv` on the identity card; security fold keeps
+Name/DOB/Property/Home/Mortgage no./Product ONLY. Queues half: `dropZoneHtml/wireDropZone/
+mountDropZone` styled zones over the four file inputs (SAME ids — `#import-file`, `#rev-file`,
+`#recon-file`, `#procrates-file`; drop re-dispatches `change`; filename in `#<id>-name`);
+`rowPersonCheck()` shared by the Revolution AND AI import paths (person-less rows start UNTICKED
+with the reason; edits re-check BEFORE the write); `importAssignToMe` defaults by
+`newCaseSelfAssigns()` (advisers ON, admin/owner OFF; `#imp-assign-why`); review lede one
+sentence + badges titled in the `#imp-review-blurb` fold; review table sticky bulk-col +
+`#imp-scroll-hint`; disabled-empty import buttons with reasons; Revolution panel
+`.panel-secondary`. Funnel chips are BUTTONS filtering the ended group by `rateEndOutcomeOf`
+(`retOutcomeFilter`; other groups drop out while filtered; `#ret-outcome-filter-note` + "Show
+everything"; counts still `rateBookCounts` — untouched); **£ at risk** = sum of loan over
+no-outcome rows, same window/scope, behind showMoney(), "not a fee forecast". Gone quiet
+(`#ret-cold-*`, renderer `loadRetentionCold`): rows carry loan (showMoney-gated), next rate end,
+`phoneActionsHtml` + Log call (calls `retLogCall` → the shared modal); **sort = next-rate-end
+ascending** (was silence-length); shared silence sentence once in `#ret-cold-sub`; the clients
+embed in loadClientData gained `loan_amount` (original-schema column, no new read). Pipeline
+table: `pipeVisibleCols()` — default NINE columns (client, property, stage, days_in_stage,
+waiting_on, expected_completion_date, lender, fee_status, assigned); rules: property dropped
+when >½ visible rows lack an address, assigned dropped under an adviser filter, the SORTED
+column never dropped; `#pipe-cols-toggle` "All/Key columns" (`nx_pipe_cols`) — **suites reading
+non-default cells press it first (r24 pattern)**; body renders FROM the column list
+(`pipeCellHtml`); `aria-sort` + CSS `↕/▲/▼` (header TEXT unchanged); `#pipe-sorted-by`;
+`.bulk-col` sticky left:0 + `.stick-col` left:38px; CSV in `#pipe-table-head`; `#pipe-legend` in
+table view. BOARD_CASE_COLS untouched. `previewComposeEmail` map now covers review_request,
+welcome, lead_ack, referral_request, birthday_greeting, completion_anniversary + factfind (link
+NAMED, not minted; wording mirrored word-for-word into the mock's EMAIL_OPENING — still the
+written-down v17 contract); `custom` deliberately absent (stored body wins). `bulkMoveStage`:
+the native confirm + "type REOPEN" prompt are now ONE house overlay (`confirmTyped` /
+`confirmDestructive`); batch semantics unchanged — suites press `#ovl-confirm-ok`. Mock:
+`finishImportRow` keeps data-carrying person-less rows (drops only truly-empty rows). Old-suite
+patches (commented R75:): r5_batch9 §1/§3/§5/§6 (Week default; filter carries; the §6 scope
+fence re-pointed at the SHIPPED week view), r12b B3/B5 + r13 I2 (press `#diary-view-month`
+before reading the month grid — it is unpainted under the week default), r24 B14/C14 (press
+`#pipe-cols-toggle` before reading non-default cells), r5_batch2 R5-20 + r63_tasks B7 (bulk-move
+overlay: read `#ovl-confirm-body`, press `#ovl-confirm-ok`).
 
 **R74 notes — trust round (`tests/r74_numbers.js` 125, `tests/r74_forms.js` 110).**
 Numbers half: **ONE rate-book predicate** — `rateBookSelect()`/`rateBookCounts(feed, rows)` →

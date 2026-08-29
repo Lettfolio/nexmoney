@@ -382,9 +382,13 @@
         <h2 id="diary-title">Diary</h2>
         <div class="page-tools">
           <!-- B9 (R5-31) — Month/Day toggle. Same seg-btn/scope-active pattern as the Mine|All
-               scopes elsewhere, so it reads as "this page's current view" not a new widget type. -->
+               scopes elsewhere, so it reads as "this page's current view" not a new widget type.
+               R75 · A1 — WEEK joins them, in the middle, because that is where it sits in scale
+               (a month is context, a week is the working horizon, a day is the detail). It is the
+               DESKTOP DEFAULT now (owner decision, 28 Aug) — see restoreUserPrefs. -->
           <div class="pipe-segment segment" id="diary-view-toggle" role="tablist" aria-label="Diary view">
             <button type="button" class="btn btn-sm seg-btn seg-first scope-active" id="diary-view-month" role="tab" aria-selected="true">Month</button>
+            <button type="button" class="btn btn-sm seg-btn" id="diary-view-week" role="tab" aria-selected="false">Week</button>
             <button type="button" class="btn btn-sm seg-btn seg-last" id="diary-view-day" role="tab" aria-selected="false">Day</button>
           </div>
           <select id="diary-staff" aria-label="Show whose diary"></select>
@@ -396,6 +400,11 @@
       </div>
       <div class="diary-legend" id="diary-legend"></div>
       <div class="diary-grid" id="diary-grid"></div>
+      <!-- R75 · A1 — Week view: seven time-axis lanes sharing one hour column, Mon–Sun. Built
+           entirely by loadDiaryWeek() into this one container (a CSS grid of head cells + lane
+           cells), so the month grid and the day lane above/below are never touched by it — the
+           three views are siblings toggled by .hidden, exactly as Month/Day already were. -->
+      <div class="diary-week-view hidden" id="diary-week-view"></div>
       <!-- B9 (R5-31) — Day view: a single time-axis column, hidden while Month is active. The month
            grid above is left completely alone so toggling never touches its markup. -->
       <div class="diary-day-view hidden" id="diary-day-view">
@@ -405,7 +414,9 @@
         <div class="diary-day-tasks hidden" id="diary-day-tasks"></div>
         <div class="diary-timeline-wrap">
           <div class="diary-hour-labels" id="diary-hour-labels"></div>
-          <div class="diary-day-lane" id="diary-day-lane" title="Click an empty slot to book an appointment"></div>
+          <!-- R75 · A2 — the lane says both of its gestures now: click to book, drag to move,
+               and (because dragging is pointer-only) the keyboard route to the same result. -->
+          <div class="diary-day-lane" id="diary-day-lane" title="Click an empty slot to book an appointment at that time. Drag an appointment to another time to move it — or open it and change the date, which is the way to do it from the keyboard."></div>
         </div>
       </div>
       <!-- R13 · M-31 — Holidays & absence. On the Diary because that is where "who is in this
@@ -525,6 +536,11 @@
              below and never hides one. Rendered by renderRetUntouchedChip(); the pick is
              remembered in localStorage nx_ret_untouched. -->
         <div class="ret-untouched-row" id="ret-untouched"></div>
+        <!-- R75 · B2 — the funnel chips are buttons now and they FILTER the list below.
+             A filter that is on and does not say so is a list that lies about the size
+             of the book, so this notice sits directly above the rows, carries the count
+             it narrowed to, and names the way out. Hidden while no chip is pressed. -->
+        <p class="dq-notice" id="ret-outcome-filter-note" hidden></p>
         <div id="ret-rates-list"></div>
       </div>
       <div class="panel" id="ret-pipeline-panel" style="margin-top:18px;">
@@ -546,7 +562,10 @@
       <h2>Bulk import</h2>
       <p class="panel-sub">Drop in existing-client data from anywhere — a spreadsheet, an email, rough notes. AI sorts it into clients and cases, and nothing is saved until you review and confirm.</p>
       <div class="panel">
-        <input type="file" id="import-file" aria-label="Spreadsheet or text file to import" accept=".csv,.tsv,.txt,.xlsx,.xls">
+        <!-- R75 · B1 — the raw <input type=file> is gone; mountDropZone() builds the
+             styled zone (and the input, with the SAME id/accept/aria-label) into this
+             slot at boot. One component, four doors. -->
+        <div class="drop-zone-slot" id="import-file-slot"></div>
         <textarea id="import-text" rows="9" aria-label="Paste rows or text to import" placeholder="…or paste rows / text here"></textarea>
         <div style="margin-top:10px;display:flex;align-items:center;gap:12px;">
           <button class="btn btn-primary" id="analyse-btn">✨ Analyse with AI</button>
@@ -566,9 +585,12 @@
            =============================================================== -->
       <h2 id="rev-heading">Revolution sync</h2>
       <p class="panel-sub">The weekly <code>client_data_export_V2</code> from Stonebridge. Everything is keyed into Revolution first, so this reads <em>from</em> it: it matches each row to a client and a case you already hold, shows the field-by-field difference, and writes only what you tick. It never queues an email, and it never moves a case stage on its own.</p>
-      <div class="panel" id="rev-input-panel">
+      <!-- R75 · B1 — .panel-secondary: the Revolution door is the WEEKLY, second-choice
+             one (the bulk AI import is the front door), so it reads as the quieter of the
+             two panels rather than as its identical twin. Presentation only. -->
+      <div class="panel panel-secondary" id="rev-input-panel">
         <div class="rev-lastsync" id="rev-lastsync">Last import: checking…</div>
-        <input type="file" id="rev-file" aria-label="Revolution client_data_export_V2 file" accept=".csv,.tsv,.txt,.xlsx,.xls">
+        <div class="drop-zone-slot" id="rev-file-slot"></div>
         <textarea id="rev-text" rows="6" aria-label="Paste the Revolution export" placeholder="…or paste the export here — the first row must be the column headings"></textarea>
         <div class="rev-actions">
           <button class="btn btn-primary" id="rev-read-btn">Read the export</button>
@@ -1036,9 +1058,12 @@
         <div class="panel" id="money-recon-panel">
           <div class="panel-head-row">
             <h3>Weekly commission statement</h3>
-            <input type="file" id="recon-file" accept=".xlsx,.xls" aria-label="Weekly commission statement workbook">
           </div>
           <p class="panel-sub">Import the network's weekly commission statement. Every line is matched against the book and shown for review — <strong>nothing is written to a case until you confirm it</strong>. A statement already imported (same Ref) is refused rather than duplicated.</p>
+          <!-- R75 · B1 — the same drop zone the two import doors use. It moved out of the
+               panel head: a bare "Choose File" button beside an h3 was the smallest,
+               least explained control on the page for the biggest weekly motion. -->
+          <div class="drop-zone-slot" id="recon-file-slot"></div>
           <p class="panel-sub" id="recon-status"></p>
           <div id="recon-statements"></div>
           <div id="recon-review" class="hidden"></div>
@@ -1047,9 +1072,9 @@
         <div class="panel" id="money-procrates-panel">
           <div class="panel-head-row">
             <h3>Proc fee rates (Stonebridge)</h3>
-            <input type="file" id="procrates-file" accept=".xlsx,.xls" aria-label="Proc fee rate card workbook">
           </div>
           <p class="panel-sub">The network's rate card, used to work out what a procuration fee on a given lender and loan <em>should</em> be. Uploading replaces the stored card wholesale.</p>
+          <div class="drop-zone-slot" id="procrates-file-slot"></div>
           <p class="panel-sub" id="procrates-status"></p>
         </div>
       </div>

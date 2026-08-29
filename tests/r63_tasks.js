@@ -479,6 +479,13 @@ const dueFor = (offset, now) => dstr(now + offset * DAY_MS);
       for (const id of bulkIds) await page.check(`#pipe-table .bulk-cb[data-id="${id}"]`);
       page.__dialogs = [];
       await page.selectOption("#pipe-bulk-stage", "fact_find");
+      /* PATCHED R75 · B5b — bulkMoveStage's native confirm() is now the house overlay
+         (confirmDestructive; the reopen branch is confirmTyped). The batch semantics are
+         unchanged — the same `head` string, the same four buckets, the same writes — so
+         this is one extra press of the dialog's OK, not a weakened assertion. The tallies
+         below are read exactly as before. */
+      await wait(page, 1200);
+      await page.click("#ovl-confirm-ok");
       await wait(page, 2600);
       for (const id of bulkIds) {
         eq(`B7 · bulk-moved case ${id === bulkIds[0] ? "1" : "2"} carries the Fact Find steps`,

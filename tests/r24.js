@@ -323,6 +323,15 @@ async function readTableRow(page, fullName) {
       // — Table view —
       await pageA.click("#view-toggle");
       await wait(pageA, 900);
+      /* PATCHED R75 · B4 — the live table now paints a RULE-BASED DEFAULT SET of nine
+         columns instead of all sixteen (Property is dropped when more than half the rows
+         on screen have no address; Adviser is dropped under an adviser filter; the sort
+         column is never dropped). BOARD_CASE_COLS and the select are untouched — this is
+         which columns are painted. The cell assertions below are not weakened by one
+         character: they press the "⊞ All columns" affordance first and then read exactly
+         the same cells, by the same data-k keys, for the same expected values. */
+      await pageA.click("#pipe-cols-toggle");
+      await wait(pageA, 1400);
       const row = await readTableRow(pageA, kbFullName);
       ok("B14 · the kitchen-sink row is present in the table view", !!row, kbFullName);
       if (row) {
@@ -445,6 +454,9 @@ async function readTableRow(page, fullName) {
 
       await pageC.click("#view-toggle");
       await wait(pageC, 900);
+      // PATCHED R75 · B4 — same as B14 above: show every column, then read the same cells.
+      await pageC.click("#pipe-cols-toggle");
+      await wait(pageC, 1400);
       const row = await readTableRow(pageC, ins.fullName);
       ok("C14 · the kitchen-sink row is present in the table view for an adviser", !!row, ins.fullName);
       if (row) {

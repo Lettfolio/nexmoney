@@ -1474,7 +1474,14 @@ details.imp-conflict .s { color: var(--muted); font-size: 11.5px; }
 }
 /* R73 · B1 — day cells are H3 now. */
 .diary-day h5, .diary-day .diary-day-h { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-bottom: 8px; }
-.diary-day.today { border-color: var(--orange); box-shadow: 0 0 0 1px var(--orange), 0 4px 16px rgba(243,111,35,.12); }
+/* R75 · A1 (panel B#16 / E-19) — TODAY IS NAVY, NOT ALARM-COLOURED.
+   The month grid marked today in the brand ORANGE and sat two rules below `.diary-day.has-clash`,
+   which marks a double-booking in RED — so the two most saturated cells on the screen were "the
+   day you are in" and "something is wrong here", and at a glance they read the same. Everywhere
+   else in this app a warm border means attention is required. Today requires nothing; it is
+   orientation, and orientation is what navy means here (the sidebar, the selected segment, the
+   focus ring). Red/amber are left to mean what they mean. */
+.diary-day.today { border-color: var(--navy); box-shadow: 0 0 0 1px var(--navy), 0 4px 16px rgba(0,72,140,.14); }
 .appt {
   background: var(--blue-bg);
   border-left: 3px solid var(--navy);
@@ -1522,6 +1529,79 @@ details.imp-conflict .s { color: var(--muted); font-size: 11.5px; }
   font-variant-numeric: tabular-nums;
 }
 .diary-day-lane { position: relative; flex: 1; min-height: 200px; cursor: pointer; }
+
+/* ==========================================================================
+   R75 · A1 — THE WEEK VIEW.
+
+   Seven of the Day view's lanes on one hour axis, laid out as a single CSS
+   grid with TWO rows: a head row (weekday, away band, dated tasks) and a lane
+   row. One grid rather than two flex rows, because grid makes every head cell
+   as tall as the tallest and still starts all seven lanes on the same pixel —
+   a week grid that drifts a few pixels per column is the classic bug here.
+
+   The blocks inside a lane are `.appt-block`, exactly the Day view's, so every
+   rule already written for those applies unchanged.
+   ========================================================================== */
+.diary-week-view { margin-top: 4px; }
+.diary-week-grid {
+  display: grid;
+  grid-template-columns: 52px repeat(7, minmax(0, 1fr));
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+.dw-corner { border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.dw-head {
+  padding: 8px 8px 6px;
+  border-bottom: 1px solid var(--border);
+  border-left: 1px solid var(--border);
+  min-width: 0;
+}
+.dw-head .diary-day-h {
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--muted); margin: 0 0 6px;
+}
+/* Today's column: a navy header strip and a navy hairline down the lane. Never red or orange —
+   see the .diary-day.today note above; today is orientation, not an alarm. */
+.dw-head.today { background: var(--blue-bg); box-shadow: inset 0 3px 0 var(--navy); }
+.dw-head.today .diary-day-h { color: var(--navy); }
+.dw-today-tag {
+  display: inline-block; margin-left: 5px; padding: 0 6px;
+  background: var(--navy); color: #fff; border-radius: 999px;
+  font-size: 9.5px; letter-spacing: .04em; vertical-align: 1px;
+}
+.dw-hours { position: relative; border-right: 1px solid var(--border); }
+.dw-hours .diary-hour-label { position: absolute; left: 0; right: 0; transform: translateY(-50%); font-size: 11px; color: var(--muted); padding: 0 8px; box-sizing: border-box; font-variant-numeric: tabular-nums; }
+.dw-lane { position: relative; border-left: 1px solid var(--border); cursor: pointer; min-width: 0; }
+.dw-lane.today { background: rgba(0,72,140,.035); }
+/* The away band and the task chips sit in the head, where a fact about the WHOLE day belongs —
+   the same judgement the month cell and the Day view's "Due this day" row already make. */
+.dw-head .diary-away, .dw-head .diary-task { font-size: 10.5px; }
+
+/* R75 · A2 — drag-and-drop feedback, borrowed from the pipeline board so the gesture reads the
+   same in both places: the thing you picked up goes translucent, the thing you are over lifts. */
+.appt.dragging, .appt-block.dragging { opacity: .45; }
+.diary-day.dragover { border-color: var(--navy); box-shadow: 0 0 0 2px var(--navy); }
+.dw-lane.dragover, .diary-day-lane.dragover { background: var(--blue-bg); box-shadow: inset 0 0 0 2px var(--navy); }
+
+/* R75 · A3 — the Day view's empty state. Laid over the ruled lane, and deliberately transparent
+   to the pointer so the click-a-slot gesture still works straight through it; only the button
+   inside it takes clicks. */
+.diary-day-empty {
+  position: absolute; left: 0; right: 0; top: 0;
+  display: flex; align-items: flex-start; justify-content: center;
+  padding-top: 48px; pointer-events: none;
+}
+.diary-day-empty .empty-state { pointer-events: none; background: rgba(255,255,255,.92); }
+.diary-day-empty .empty-state .btn { pointer-events: auto; }
+@media (max-width: 900px) {
+  /* Seven time lanes do not fit a narrow screen, and squeezing them produces seven columns of
+     ellipsis. The grid scrolls sideways instead, with the hour column staying legible. */
+  .diary-week-view { overflow-x: auto; }
+  .diary-week-grid { min-width: 780px; }
+}
 .diary-hour-line { position: absolute; left: 0; right: 0; border-top: 1px solid var(--border); pointer-events: none; }
 .appt-block {
   position: absolute;
@@ -2174,6 +2254,25 @@ select.task-reassign { width: auto; padding: 3px 6px; font-size: 12px; }
 .case-details > summary::before { content: "\25B8"; font-size: 12px; color: var(--muted); transition: transform .15s ease; }
 .case-details[open] > summary::before { transform: rotate(90deg); }
 .case-details > .form-grid { margin-top: 12px; }
+/* ==========================================================================
+   R75 · A5 (panel A#25) — THE CASE-DETAILS GROUP HEADINGS.
+
+   Quiet on purpose: a small-caps rule with a hairline over it, the same weight
+   the diary's day headings and the security card's labels already use. These
+   are signposts inside a form, not section titles competing with the modal's
+   own H3 — the moment they shout, the form reads as six forms.
+   The first one takes no top rule: there is already a summary line above it.
+   ========================================================================== */
+.cs-sub-h {
+  grid-column: 1 / -1;
+  margin: 14px 0 -2px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--muted);
+}
+.cs-sub-h:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+.cs-sub-h.hidden { display: none !important; }
 /* R36-B · W7 — the slim new-case form: core fields above the fold, everything else behind the same
    "Case details" accordion the edit view already uses. The core grid needs the accordion's own top
    rule removed when it follows straight on, so the two read as one form and not two panels. */
@@ -3926,8 +4025,9 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
    collapses to stacked blocks on a phone rather than squeezing a <select>
    into 90px.
    ========================================================================== */
-#money-recon-panel .panel-head-row input[type="file"],
-#money-procrates-panel .panel-head-row input[type="file"] { font-size: 12.5px; max-width: 100%; }
+/* R75 · B1 — the two raw file inputs that used to sit in these panel heads are
+   gone; both panels now carry the shared .drop-zone below their explainer. */
+#money-recon-panel .drop-zone, #money-procrates-panel .drop-zone { margin-top: 4px; }
 .recon-stmt .t { cursor: default; }
 .recon-line {
   display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
@@ -4217,7 +4317,10 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .ret-outcome-funnel:empty { display: none; }
 .ret-outcome-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; margin: 0 0 6px; }
 .ret-outcome-title { font-weight: 600; font-size: 13px; }
-.ret-outcome-chip { border: 1px solid var(--border); border-radius: 12px; padding: 1px 9px; font-size: 12px; background: var(--light); }
+/* R75 · B2 — the chips are BUTTONS now (they filter the list below), so they join
+   the R73 three-rung button scale as btn-xs and no longer set a font-size of
+   their own. Border, radius, padding and ground are unchanged. */
+.ret-outcome-chip { border: 1px solid var(--border); border-radius: 12px; padding: 1px 9px; background: var(--light); }
 .ret-outcome-chip strong { font-variant-numeric: tabular-nums; }
 .ret-outcome-chip.hot { background: var(--amber-bg); border-color: var(--amber); color: var(--amber); }
 #ret-outcome-sub { margin: 0 0 10px; max-width: 88ch; }
@@ -5275,3 +5378,129 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   .settings-dirty-bar { padding: 10px 12px; }
   .settings-dirty-bar .btn { min-height: 44px; }
 }
+
+/* ==========================================================================
+   R75 · B — QUEUES WITHOUT FRICTION
+   ========================================================================== */
+
+/* --- B1 · the drop zone (import ×2, Money ×2) -----------------------------
+   The input is still a real <input type=file> with its own id, accept and
+   aria-label — it is laid over the whole zone at zero opacity, so a click
+   anywhere in the box opens the file picker and the keyboard reaches it as it
+   always did. The visible face is inert (aria-hidden) and the filename readout
+   is OURS, so the two Money handlers clearing `.value` cannot erase it. */
+.drop-zone {
+  position: relative; display: block;
+  border: 1.5px dashed var(--border-strong); border-radius: var(--radius);
+  background: var(--light); padding: 18px 16px 12px; margin: 0 0 12px;
+  transition: border-color .15s ease, background .15s ease;
+}
+.drop-zone .dz-input {
+  position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; padding: 0;
+  opacity: 0; cursor: pointer; z-index: 2;
+}
+.drop-zone .dz-face { display: block; text-align: center; pointer-events: none; }
+.drop-zone .dz-verb { display: block; font-size: 13.5px; color: var(--text); }
+.drop-zone .dz-verb strong { color: var(--navy); }
+.drop-zone .dz-formats { display: block; margin-top: 3px; font-size: 12px; color: var(--muted); }
+.drop-zone .dz-file {
+  margin: 10px 0 0; text-align: center; font-size: 12.5px; color: var(--muted);
+  pointer-events: none;
+}
+.drop-zone .dz-file.has-file { color: var(--navy); font-weight: 600; }
+.drop-zone:hover, .drop-zone:focus-within { border-color: var(--navy); background: var(--blue-bg); }
+.drop-zone:focus-within { box-shadow: var(--focus-ring); }
+.drop-zone.is-over { border-color: var(--navy); border-style: solid; background: var(--blue-bg); }
+@media (max-width: 760px) { .drop-zone { padding: 22px 12px 14px; } }
+
+/* The Revolution panel is the second-choice door, and reads like it. Quieter
+   ground, no shadow — same padding rhythm as every other panel (E-9's contract). */
+.panel.panel-secondary { background: var(--light); box-shadow: none; }
+.panel.panel-secondary .drop-zone { background: var(--white); }
+
+/* --- B1 · the import review table ----------------------------------------
+   The tick column is sticky at left:0 with its own ground, and Client is sticky
+   just to the right of it — before this, Client was pinned at left:0 and the
+   tick column scrolled underneath it. Same fix on the pipeline table (B4c). */
+#imp-review-table th.bulk-col, #imp-review-table td.bulk-col,
+#pipe-table th.bulk-col, #pipe-table td.bulk-col {
+  position: sticky; left: 0; z-index: 3; background: var(--white);
+}
+#imp-review-table th.bulk-col, #pipe-table th.bulk-col { background: var(--light); z-index: 4; }
+#imp-review-table tr:hover td.bulk-col, #pipe-table tr:hover td.bulk-col { background: #f8fafc; }
+/* …and Client clears it. 38px is the bulk cell's own width (width:1% + the
+   10px/4px padding around an 18px box); at ≤760px the box grows to 24px. */
+#imp-review-table .stick-col, #pipe-table .stick-col { left: 38px; }
+@media (max-width: 760px) {
+  #imp-review-table .stick-col, #pipe-table .stick-col { left: 40px; }
+}
+#imp-scroll-hint { margin-bottom: 6px; }
+/* .imp-table sets white-space:nowrap on every cell, which is right for dates and
+   money and wrong for a sentence — the reason is a sentence. */
+.imp-noperson { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; white-space: normal; max-width: 34ch; }
+.imp-noperson .s { color: var(--muted); }
+#imp-assign-why { margin: -6px 0 10px; }
+
+/* --- B2 · the funnel chips are controls -----------------------------------
+   `.ret-outcome-chip` is a .btn now (btn-xs — the 11.5px rung), so its own
+   font-size is gone rather than fighting the button scale R73 fixed at three. */
+.ret-outcome-chip { cursor: pointer; }
+.ret-outcome-chip.hot { background: var(--amber-bg); border-color: var(--amber); color: var(--amber); }
+.ret-outcome-chip.hot:hover { background: var(--amber-bg); color: var(--amber); }
+/* The pressed state has to beat `.hot` — the "no outcome" chip is the amber one
+   AND the one people press. Same look as the house's .btn.scope-active fallback
+   (tinted, navy-bordered, never a navy fill: R73's rule that navy means "primary
+   action", not "selected filter"), with an inset ring so it also reads as pressed
+   on the amber ground. */
+.ret-outcome-chip.scope-active, .ret-outcome-chip.hot.scope-active,
+.ret-outcome-chip.hot.scope-active:hover {
+  background: var(--blue-bg); border-color: var(--navy); color: var(--navy);
+  font-weight: 700; box-shadow: inset 0 0 0 1px var(--navy);
+}
+.ret-outcome-atrisk {
+  /* Literal #b35309, not var(--orange-600, …) — the R73 trap: the DEFINED token
+     fails contrast and the fallback would have passed. */
+  font-size: 12px; color: #b35309; font-weight: 600;
+  padding-left: 4px; border-left: 1px solid var(--border); margin-left: 2px;
+}
+.ret-outcome-atrisk strong { font-variant-numeric: tabular-nums; }
+#ret-outcome-filter-note { margin: 0 0 10px; }
+#ret-outcome-filter-note .btn { margin-left: 10px; vertical-align: baseline; }
+#ret-outcome-filter-note[hidden] { display: none; }
+
+/* --- B3 · gone quiet gets verbs ------------------------------------------- */
+.ret-cold-money { margin-top: 2px; }
+.ret-cold-acts { margin-top: 4px; }
+
+/* --- B4 · the pipeline table --------------------------------------------- */
+.pipe-table-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap; margin: 0 0 6px;
+}
+.pipe-table-head-r { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.pipe-sorted-by { font-size: 12.5px; color: var(--muted); }
+.pipe-sorted-by strong { color: var(--dark); }
+#pipe-cols-why { margin: 0 0 8px; }
+.pipe-table-legend { margin: 0 0 8px; }
+.pipe-table-legend.hidden { display: none; }
+/* The quiet ↕ on every sortable head. Drawn, never written into the markup:
+   header TEXT is a contract half a dozen suites read and they strip exactly
+   ▲ and ▼. aria-sort carries the state to a screen reader and to this rule. */
+#pipe-table th[data-k][aria-sort="none"]::after {
+  content: " ↕"; color: var(--border-strong); font-weight: 400;
+}
+#pipe-table th[data-k]:hover::after { color: var(--navy); }
+@media (max-width: 760px) {
+  .pipe-table-head { gap: 8px; }
+  .pipe-table-head-r .btn { min-height: 44px; }
+}
+
+/* R75 · B1 — a disabled .btn must LOOK disabled. Two primary buttons now start
+   disabled (✨ Analyse with AI, Read the export) and the app had no global rule
+   for the state at all, so a navy-filled button that could not be pressed
+   rendered identically to one that could — the same "primary verb rendered
+   wrong" family the R73 panel spent finding #2 on. Opacity only: the size, the
+   colour and the label are the button's own, so nothing about the three-rung
+   scale or the focus ring changes. */
+.btn:disabled, .btn[disabled] { opacity: .5; cursor: default; box-shadow: none; transform: none; }
+.btn:disabled:hover, .btn[disabled]:hover { opacity: .5; transform: none; }

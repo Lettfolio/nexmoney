@@ -5405,7 +5405,19 @@
        did before this round, and only the list underneath it changes. */
     docs_request: "Before we can get your application moving we need a few documents from you.",
     docs_chase: "Just a quick reminder — we are still waiting on some documents before your application can move on.",
-    review_reminder: "A little while ago I asked how we did. If you have a spare minute, a short review really does help us."
+    review_reminder: "A little while ago I asked how we did. If you have a spare minute, a short review really does help us.",
+    /* R75 · B5a — the six openings v17 composes that this model never carried.
+       `review_request` is 23 of the 36 rows in the live queue and had NO wording
+       here at all, so `emailBodyLines` returned null for it and the app's preview
+       replica (app.js HOUSE_TPL_OPENING, which mirrors this list) had nothing to
+       show for the one email the administrator most wants to read before it goes.
+       Byte-identical to the app's copy — that is the whole point of the mirror. */
+    review_request: "Thank you for letting us look after {M}. If you have two minutes, a short review of how we did would help us more than you would think.",
+    welcome: "Thank you for getting in touch — I am glad to be helping with {M}, and this is just to say hello and tell you what happens next.",
+    lead_ack: "Thank you for your enquiry — it has reached us and somebody will be in touch shortly.",
+    referral_request: "If you know somebody who could do with the same help, I would be glad to hear from them — a personal introduction is how most of our work arrives.",
+    birthday_greeting: "Just a quick note to wish you a very happy birthday from all of us.",
+    completion_anniversary: "It is a year today since {M} completed — I hope it has all settled in well."
   };
   /* R9 — the document checklist as the email templates see it. Empty whenever
      the migration is not there, which is what makes "checklist-aware" degrade to
@@ -6254,7 +6266,19 @@
       if (r[f] !== null && r[f] !== undefined && r[f] !== "") r[f] = impNum(r[f]);
       else if (r[f] === "") r[f] = null;
     });
-    if (!r.client_name && !r.email && !r.phone) return null;
+    /* R75 · B1 MOCK PARITY — production's `ai-import` is a language model reading a
+       spreadsheet, and it hands back the trailing "TOTAL / 1,234,000" line as a row
+       like any other; that is the whole of the R73 panel's finding 10 ("the AI
+       importer pre-ticks gibberish rows the Revolution importer correctly refuses").
+       This stub dropped every person-less row on the floor, which meant the app's
+       new junk guard had nothing to guard against and the bug was untestable.
+       A row that carries NOTHING is still dropped (it is a blank line, not a row);
+       a row that carries data but no person now comes back, exactly as production's
+       does, and the app decides what to do with it. */
+    var carriesSomething = Object.keys(r).some(function (k) {
+      return r[k] !== null && r[k] !== undefined && r[k] !== "" && r[k] !== false;
+    });
+    if (!r.client_name && !r.email && !r.phone && !carriesSomething) return null;
     return r;
   }
   function aiImportRows(content) {

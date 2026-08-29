@@ -467,10 +467,21 @@ async function main() {
       await page.click("#lost-ok");
       await page.waitForTimeout(1600);
 
-      const confirmMsg = lastDialog(page, /Move 3 case/);
+      /* PATCHED R75 · B5b — the batch confirm is the house overlay now (confirmDestructive;
+         the reopen branch is confirmTyped). `head` is built from the same four buckets, in
+         the same order, with the same words, so the two assertions below read the SAME
+         sentence — from #ovl-confirm-body instead of from a native dialog message — and
+         then press the dialog's OK, which is what the auto-accept used to do. Nothing is
+         weakened: the reason and the open-tasks warning must still both be in it. */
+      const confirmMsg = await page.evaluate(() => {
+        const b = document.getElementById("ovl-confirm-body");
+        return b ? b.textContent.replace(/\s+/g, " ").trim() : "";
+      });
       ok("R5-20 · the confirm names the reason it is about to stamp on all three",
         /Used another broker/.test(confirmMsg) && /Undercut on fee/.test(confirmMsg), JSON.stringify(confirmMsg));
       ok("R5-20 · …and warns that their open tasks will close", /open tasks will be closed/i.test(confirmMsg), JSON.stringify(confirmMsg));
+      await page.click("#ovl-confirm-ok");
+      await page.waitForTimeout(2600);
 
       const result = await page.evaluate(async (ids) => {
         const { data: cases } = await window.__mockDb.from("cases").select("id,stage,lost_reason,lost_detail").in("id", ids);
