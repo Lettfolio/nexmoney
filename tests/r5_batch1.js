@@ -226,6 +226,19 @@ async function main() {
       });
       ok("R5-1 · the Owner is offered it", ownerVisible === true);
 
+      /* R76 · B1 — the classic named-recipient consent flow this section pins is now, honestly,
+         the HOLD-OFF flow: while settings.email_hold is on (the fixture's seed, production's real
+         state), run-now raises a house overlay instead and v18's mock sends nothing — that path
+         is pinned by tests/r76_intake.js §A. This section's contract (count + names + whole-firm
+         + number-consented-is-number-sent) is unchanged, so it now states its own precondition:
+         hold off, server key present. */
+      await snapshot(p4, async () => {
+        const rows = window.__mock.db.settings;
+        const row = rows.filter((r) => r.key === "email_hold")[0];
+        if (row) row.value = "off"; else rows.push({ key: "email_hold", value: "off" });
+        window.__mock.setResendKey(true);
+        await window.__reloadSettings();
+      });
       const queuedBefore = await snapshot(p4, async () => {
         const { data } = await window.__mockDb.from("email_queue").select("id,to_email,client_id").eq("status", "queued");
         return data.length;
@@ -387,7 +400,10 @@ async function main() {
         const r = [...document.querySelectorAll("#email-list .row-item")].find((x) => /no email on file|no address on file/i.test(x.textContent));
         if (!r) return null;
         const fix = [...r.querySelectorAll("button")].find((b) => /Fix contact/i.test(b.textContent));
-        return { hasFix: !!fix, titleOpensClient: /openClient\(/.test((r.querySelector(".t") || {}).outerHTML || ""), text: r.textContent.replace(/\s+/g, " ").trim().slice(0, 90) };
+        /* R76 · B5 — the title's fix route goes through fixContactOpen() now (it records the
+           failed queue row so the save can offer the retry), which itself opens the CLIENT via
+           openClient — the fact under test is unchanged. */
+        return { hasFix: !!fix, titleOpensClient: /fixContactOpen\('email'|openClient\(/.test((r.querySelector(".t") || {}).outerHTML || ""), text: r.textContent.replace(/\s+/g, " ").trim().slice(0, 90) };
       });
       ok("R5-43 · the no-address failure is on screen", !!row, "row not found");
       if (row) {

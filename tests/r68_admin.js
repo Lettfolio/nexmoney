@@ -329,15 +329,28 @@ const advisingPool = (page) => page.evaluate(async () => {
       const stillAccept = await page.evaluate((i) => !!document.querySelector(`#briefing-list .brief-lead-actions [onclick^="acceptLead('${i}'"]`), ids.joint);
       ok("A8d · a refused enquiry keeps its own Accept button — nothing is taken away", stillAccept);
 
-      console.log("\n— §A5 · the single accept is exactly what it was (prompts, confirms, writes)");
-      /* R12a K-3's shape: both name prompts answered by the harness's auto-accept dialog handler
-         (which returns the DEFAULT for a prompt), then the joint applicant lands on the note. */
+      console.log("\n— §A5 · the single accept still asks the joint question (now the R76 overlay), then writes");
+      /* R76 · B3 — the two native name prompts are ONE #lead-joint-overlay now (prefilled with the
+         parsed guess — accepting the defaults accepts the guess, R12a K-3's rule with the K-3
+         machine itself removed). The WRITES under test — one name, joint note, Enquiry checklist
+         via acceptLeadCore — are unchanged. */
       const dlgBefore = page.__dialogs.length;
-      await page.evaluate((i) => window.acceptLead(i, null), ids.joint);
+      /* Fire-and-forget (PLAYWRIGHT-AWAIT): acceptLead's promise now resolves only after the
+         overlay is answered, so awaiting it here would deadlock against our own next step. */
+      await page.evaluate((i) => { window.acceptLead(i, null); }, ids.joint);
+      await wait(page, 1400);
+      const jointOvl = await page.evaluate(() => ({
+        open: !!document.querySelector("#lead-joint-overlay"),
+        first: (document.querySelector("#ljo-first") || {}).value,
+        last: (document.querySelector("#ljo-last") || {}).value,
+      }));
+      ok("A9a · the single accept asks the joint question in the house overlay, prefilled with the guess",
+        jointOvl.open === true && jointOvl.first === "Hester" && jointOvl.last === "Ollernshaw", JSON.stringify(jointOvl));
+      await page.click("#ljo-ok");
       await wait(page, 2200);
       const jointAfter = await leadRow(page, ids.joint);
       const jointDialogs = page.__dialogs.slice(dlgBefore);
-      ok("A9a · the single accept still asks its two native name prompts", jointDialogs.filter((d) => d.type === "prompt").length === 2, JSON.stringify(jointDialogs));
+      eq("A9a2 · …and fires no native prompt at all", jointDialogs.filter((d) => d.type === "prompt").length, 0);
       ok("A9b · …and converts the lead", jointAfter.status === "converted" && !!jointAfter.converted_case_id, JSON.stringify(jointAfter.status));
       const jointCase = await page.evaluate(async (id) => {
         const db = window.__mockDb;

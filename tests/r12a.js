@@ -283,21 +283,38 @@ async function mkClientCase(page, opts) {
       eq("D1 · the second case was created for the chosen adviser", caseBAssignedTo, notRrB);
 
       /* -------------------------------------------------------------
-         D2 · K-3 — the joint-enquiry name prompts
+         D2 · K-3 — the joint-enquiry name capture
+         R76 · B3: the two native prompts are ONE #lead-joint-overlay now,
+         prefilled with the parsed guess. K-3's property survives with the
+         machine that caused it gone: accepting the defaults (the reflex
+         input) accepts the GUESS, never the doubled raw name; an emptied
+         field still falls back to the guess per field. Cancel is a real
+         abort now (the enquiry goes back in the inbox) — the old "cancel
+         proceeds with the guess" only ever existed because a native prompt
+         cannot host a real Cancel; the abort contract is pinned in
+         tests/r76_intake.js §C5, and (b) below pins it here too.
          ------------------------------------------------------------- */
-      // (a) Enter, Enter — both prompts answered empty. The parsed guess must stand, not the
-      //     doubled raw name.
+      // (a) OK with everything untouched — the reflex input. The parsed guess must stand,
+      //     not the doubled raw name, and no native prompt may fire.
       const lead1 = await page.evaluate(async () => {
         const { data } = await window.__mockDb.from("leads")
           .insert({ name: "Priscilla & Quentin Marchbank", email: "marchbank@example.com", phone: null, enquiry_type: "purchase", status: "new" })
           .select("id").single();
         return data.id;
       });
-      page.__dialogPlan = ["", ""]; // Enter, Enter — playwright's accept() with no text = ""
-      await page.evaluate(async (id) => { await window.acceptLead(id, null); }, lead1);
+      const promptsBefore1 = page.__dialogs.filter((d) => d.type === "prompt").length;
+      await page.evaluate((id) => { window.acceptLead(id, null); }, lead1);
       await wait(page, 1200);
-      const dialogsSeen1 = page.__dialogs.slice(-2).map((d) => d.type);
-      eq("D2 · K-3 Enter/Enter fires both name prompts", dialogsSeen1, ["prompt", "prompt"]);
+      const ovl1 = await page.evaluate(() => ({
+        open: !!document.querySelector("#lead-joint-overlay"),
+        first: (document.querySelector("#ljo-first") || {}).value,
+        last: (document.querySelector("#ljo-last") || {}).value,
+      }));
+      ok("D2 · K-3 the joint question is ONE overlay, prefilled with the guess — no prompts",
+        ovl1.open === true && ovl1.first === "Priscilla" && ovl1.last === "Marchbank"
+        && page.__dialogs.filter((d) => d.type === "prompt").length === promptsBefore1, JSON.stringify(ovl1));
+      await page.click("#ljo-ok");
+      await wait(page, 1600);
       const client1 = await page.evaluate(async (id) => {
         const { data: lead } = await window.__mockDb.from("leads").select("converted_case_id").eq("id", id).single();
         const { data: cs } = await window.__mockDb.from("cases").select("client_id").eq("id", lead.converted_case_id).single();
@@ -305,28 +322,27 @@ async function mkClientCase(page, opts) {
         const { data: notes } = await window.__mockDb.from("case_notes").select("body").eq("case_id", lead.converted_case_id);
         return { cl, notes: (notes || []).map((n) => n.body) };
       }, lead1);
-      eq("D2 · Enter/Enter files the PARSED GUESS, not the doubled raw name", client1.cl, { first_name: "Priscilla", last_name: "Marchbank" });
+      eq("D2 · the reflex OK files the PARSED GUESS, not the doubled raw name", client1.cl, { first_name: "Priscilla", last_name: "Marchbank" });
       ok("D2 · the case note records the second applicant", client1.notes.some((b) => b.includes("Joint applicant: Quentin Marchbank")), JSON.stringify(client1.notes));
 
-      // (b) Cancel on the FIRST prompt — the second prompt must never fire, and the guess still stands.
+      // (b) Cancel — R76: a real abort. Nothing is filed and the enquiry goes back in the inbox.
       const lead2 = await page.evaluate(async () => {
         const { data } = await window.__mockDb.from("leads")
           .insert({ name: "Rowena & Simon Etchingham", email: "etchingham@example.com", phone: null, enquiry_type: "remortgage", status: "new" })
           .select("id").single();
         return data.id;
       });
-      const beforeCount = page.__dialogs.length;
-      page.__dialogPlan = [{ type: "dismiss" }];
-      await page.evaluate(async (id) => { await window.acceptLead(id, null); }, lead2);
+      await page.evaluate((id) => { window.acceptLead(id, null); }, lead2);
       await wait(page, 1200);
-      eq("D2 · Cancel on the first prompt fires only ONE dialog", page.__dialogs.length - beforeCount, 1);
+      await page.click("#ljo-cancel");
+      await wait(page, 1400);
       const client2 = await page.evaluate(async (id) => {
-        const { data: lead } = await window.__mockDb.from("leads").select("converted_case_id").eq("id", id).single();
-        const { data: cs } = await window.__mockDb.from("cases").select("client_id").eq("id", lead.converted_case_id).single();
-        const { data: cl } = await window.__mockDb.from("clients").select("first_name,last_name").eq("id", cs.client_id).single();
-        return cl;
+        const { data: lead } = await window.__mockDb.from("leads").select("status,converted_case_id").eq("id", id).single();
+        const { data: cl } = await window.__mockDb.from("clients").select("id").eq("last_name", "Etchingham");
+        return { lead, made: (cl || []).length };
       }, lead2);
-      eq("D2 · Cancelling the first prompt still keeps the parsed guess", client2, { first_name: "Rowena", last_name: "Etchingham" });
+      eq("D2 · Cancel aborts: the enquiry is back in the inbox and nothing was filed",
+        [client2.lead.status, client2.lead.converted_case_id, client2.made], ["new", null, 0]);
 
       // (c) Genuinely unparseable name — no guess to fall back to.
       const lead3 = await page.evaluate(async () => {
@@ -335,9 +351,10 @@ async function mkClientCase(page, opts) {
           .select("id").single();
         return data.id;
       });
-      page.__dialogPlan = ["", ""];
-      await page.evaluate(async (id) => { await window.acceptLead(id, null); }, lead3);
+      await page.evaluate((id) => { window.acceptLead(id, null); }, lead3);
       await wait(page, 1200);
+      await page.click("#ljo-ok");
+      await wait(page, 1600);
       const client3 = await page.evaluate(async (id) => {
         const { data: lead } = await window.__mockDb.from("leads").select("converted_case_id").eq("id", id).single();
         const { data: cs } = await window.__mockDb.from("cases").select("client_id").eq("id", lead.converted_case_id).single();

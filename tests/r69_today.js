@@ -468,6 +468,18 @@ function readGroup(page, caseId) {
       /queues/i.test(before.title || "") && /heartbeat/i.test(before.title || "") && /held/i.test(before.title || "") && /sends nothing/i.test(before.title || ""),
       before.title);
 
+    /* R76 · B1 — the same-consent contract this block pins (C2: the Emails page's own confirm,
+       word for word) is the HOLD-OFF flow now: while email_hold is on — the fixture's seed —
+       runQueueNow raises the honest held overlay instead and the v18-parity mock sends nothing
+       (both pinned by tests/r76_intake.js §A). State the precondition this block always silently
+       relied on: hold off, server key present, so the run can actually send. */
+    await page.evaluate(async () => {
+      const rows = window.__mock.db.settings;
+      const row = rows.filter((r) => r.key === "email_hold")[0];
+      if (row) row.value = "off"; else rows.push({ key: "email_hold", value: "off" });
+      window.__mock.setResendKey(true);
+      await window.__reloadSettings();
+    });
     const cronBefore = await page.evaluate(async () => {
       const { data } = await window.__mockDb.from("settings").select("value").eq("key", "last_cron_run_at").single();
       return data ? data.value : null;

@@ -6422,6 +6422,41 @@
         if (ids) return ids.indexOf(e.id) >= 0;           /* scoped: ONLY these rows */
         return !e.scheduled_for || e.scheduled_for <= nowIso;
       });
+      /* ==================================================================
+         R76 · B1 — THE FULL RUN HONOURS THE HOLD, exactly like v18. The
+         probe above always knew about email_hold; the full-run path below
+         it sent regardless, so the one state production actually lives in
+         (hold on, no Resend key) was untestable — the mock cheerfully
+         reported "Done — 14 sent" on a held system. v18's real order is:
+         run the queueing RPCs, stamp last_cron_run_at (both already done
+         above — queueing IS allowed while held; it is sending that is not),
+         then, when settings.email_hold is anything but 'off' OR the server
+         has no RESEND_API_KEY, send NOTHING and answer {warning, held,
+         pending} like the probe does. Rows stay 'queued', untouched.
+         The SCOPED path (queue_ids named) below is deliberately unchanged —
+         it keeps pretending a key exists, as this mock always has, because
+         every per-case send suite drives it (r69_polish §D9 pins it with
+         the hold ON). LAST_EMAIL_RUN is still written (sent:0, held:true)
+         so __mock.lastEmailRun() can testify the run happened and sent
+         nothing. */
+      if (!ids) {
+        var holdRowRun = DB.settings.filter(function (s) { return s.key === "email_hold"; })[0];
+        var holdValRun = holdRowRun ? String(holdRowRun.value || "").trim().toLowerCase() : "on";
+        var heldRun = holdValRun !== "off";
+        if (heldRun || !MOCK_RESEND_KEY) {
+          LAST_EMAIL_RUN = {
+            at: nowIso, scoped: false, queue_ids: null, considered: due.length,
+            sent: 0, failed: 0, held: heldRun, queued: queued, composed: []
+          };
+          return {
+            held: heldRun,
+            pending: due.length,
+            warning: heldRun
+              ? "email_hold is on — nothing was sent; " + due.length + " due email" + (due.length === 1 ? "" : "s") + " stay held in the queue."
+              : "RESEND_API_KEY not set — nothing can be sent from this server."
+          };
+        }
+      }
       var sent = 0, failed = 0, composed = [];
       due.forEach(function (e) {
         if (!e.to_email) {

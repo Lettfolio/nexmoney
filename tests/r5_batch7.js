@@ -260,19 +260,41 @@ Bartholomew Quill,bartholomew.quill@example.com,07700 911222,enquiry,,,`;
        4 · R5-10 — near-match at lead accept
        =================================================================== */
     console.log("\n— R5-10 · accepting a lead asks about the client we already hold (p1 Kim)");
+    /* R76 · B3 — joint accept now goes through ONE house overlay (#lead-joint-overlay), not the
+       prompt/confirm chain: the Ashworths are a JOINT enquiry, so the did-you-mean question this
+       section pins is asked as a radio candidate list inside that overlay ("Attach to Deborah
+       Ashworth — same name, different contact details" vs "Create a new client"). The FACTS under
+       test are unchanged — the different email no longer hides the client we hold, what matched
+       is stated, attaching creates no client, declining creates exactly one and Data Health still
+       flags the pair. Non-joint accepts keep the native confirms (section 4b below, untouched). */
     for (const attach of [true, false]) {
       const page = await newPage(browser, "p1");
-      page.__decide = (msg) => (/Did you mean/.test(msg) ? attach : true);
       const beforeCount = await page.evaluate(async () => (await window.__mockDb.from("clients").select("id")).data.length);
       const leadId = await page.evaluate(async () => {
         const { data } = await window.__mockDb.from("leads").select("id,name").eq("status", "new");
         return (data.find((l) => /Ashworth/.test(l.name)) || {}).id;
       });
       ok("fixture · the Ashworth lead is waiting", !!leadId);
-      await page.evaluate((id) => window.acceptLead(id), leadId);
+      await page.evaluate((id) => { window.acceptLead(id); }, leadId);
       await page.waitForTimeout(1500);
 
-      const asked = page.__dialogs.filter((d) => d.type === "confirm").map((d) => d.message);
+      const overlay = await page.evaluate(() => ({
+        open: !!document.querySelector("#lead-joint-overlay"),
+        candText: (document.querySelector("#ljo-candidates") || {}).textContent || "",
+        values: [...document.querySelectorAll('#lead-joint-overlay input[name="ljo-pick"]')].map((r) => r.value),
+      }));
+      ok("R5-10 · the lead's DIFFERENT email no longer hides the client we hold — it asks",
+        overlay.open && overlay.values.includes("cl003"), JSON.stringify(overlay.values));
+      ok("R5-10 · it says what matched and what each answer will do",
+        /Attach to Deborah Ashworth — same name, different contact details/.test(overlay.candText)
+        && /deborah\.ashworth@example\.com/.test(overlay.candText)
+        && /Create a new client/.test(overlay.candText), overlay.candText);
+      await page.evaluate((pick) => {
+        document.querySelector(`#lead-joint-overlay input[name="ljo-pick"][value="${pick}"]`).checked = true;
+      }, attach ? "cl003" : "__new__");
+      await page.click("#ljo-ok");
+      await page.waitForTimeout(1800);
+
       const landed = await page.evaluate(async (id) => {
         const { data: leads } = await window.__mockDb.from("leads").select("*").eq("id", id);
         const { data: cs } = await window.__mockDb.from("cases").select("id,client_id").eq("id", leads[0].converted_case_id);
@@ -282,10 +304,6 @@ Bartholomew Quill,bartholomew.quill@example.com,07700 911222,enquiry,,,`;
       const afterCount = await page.evaluate(async () => (await window.__mockDb.from("clients").select("id")).data.length);
 
       if (attach) {
-        ok("R5-10 · the lead's DIFFERENT email no longer hides the client we hold — it asks",
-          asked.some((m) => /Did you mean Deborah Ashworth \(deborah\.ashworth@example\.com\)/.test(m)), JSON.stringify(asked));
-        ok("R5-10 · it says what matched and what OK/Cancel will do",
-          asked.some((m) => /same name, different contact details/.test(m) && /OK = attach the case to them/.test(m)), JSON.stringify(asked));
         eq("R5-10 · accepting attaches the case to cl003", landed.client.id, "cl003");
         eq("R5-10 · and creates no new client", afterCount - beforeCount, 0);
       } else {

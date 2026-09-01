@@ -549,6 +549,77 @@ function findClientMatches(q, rows) {
   return { exact, reason, near: near.slice(0, 5) };
 }
 
+/* ==========================================================================
+   R76 · B2 — THE MATCHER GUARDS THE HAND-TYPED DOORS TOO.
+
+   findClientMatches() above is "one rule for both doors" — except it never
+   covered the two doors a person actually types through: the New-client
+   modal's Save and the New-case modal's inline "+ New client…" both inserted
+   with NO check at all, so a second client with an existing client's EXACT
+   email could be created silently (there are three real duplicate-email
+   pairs in production today). Import preview and acceptLead already ask;
+   these two now ask the same question, through this ONE shared helper.
+
+   dupClientGate(q, opts) runs the shared matcher over the typed
+   name/email/phone and, on a hit, raises a house overlay
+   (`#dup-client-overlay`, data-match="exact"|"near"):
+     · exact email/phone/name match — "This looks like an existing client —
+       <name> (<why it matched>)";
+     · name-similar — the same did-you-mean sentence acceptLead asks.
+   Three answers, all explicit: use/open the existing client
+   (#dup-client-existing — the caller decides what that means: the New-client
+   modal OPENS the record, the inline case path ATTACHES the case to it),
+   Create anyway (#dup-client-create), Cancel (#dup-client-cancel; Escape and
+   a backdrop click are Cancel too, per openOverlay's house rule).
+
+   It NEVER fires on an edit of an existing client (both callers gate on the
+   create branch only), never writes anything itself, and runs at most ONCE
+   per Save click — the inline path calls it exactly once, before its insert,
+   so it cannot double-fire however the rest of that save proceeds. A clean,
+   unique create returns {action:"create"} without ever painting an overlay. */
+async function dupClientGate(q, opts) {
+  const o = opts || {};
+  const email = String(q.email || "").trim();
+  const phone = String(q.phone || "").trim();
+  const name = [q.first, q.last].filter(Boolean).join(" ").trim();
+  if (!name && !email && !phone) return { action: "create" };
+  let rows = [];
+  try { rows = await fetchMatchClients(); } catch (e) { rows = []; }
+  const match = findClientMatches({ first: q.first || "", last: q.last || "", email, phone }, rows);
+  const hit = match.exact
+    ? { client: match.exact, reason: match.reason, exact: true }
+    : (match.near.length ? { client: match.near[0].client, reason: match.near[0].reason, exact: false } : null);
+  if (!hit) return { action: "create" };
+  const c = hit.client;
+  const who = clientFullName(c) || c.email || c.phone || "this client";
+  const contact = [c.email, c.phone].filter(Boolean).join(" · ");
+  const others = !hit.exact && match.near.length > 1
+    ? `<p>${match.near.length} possible matches — this is the closest: ${esc(match.near.slice(1).map((x) => clientFullName(x.client) || x.client.email || "another client").join(", "))} also look similar.</p>`
+    : "";
+  const lede = hit.exact
+    ? `<p>This looks like an existing client — <strong>${esc(who)}</strong> (${esc(hit.reason)}${contact ? " · " + esc(contact) : ""}).</p>`
+    : `<p>Did you mean <strong>${esc(who)}</strong>${c.email ? ` (${esc(c.email)})` : ""}? This client has ${esc(hit.reason)} — but the details aren't identical, so it may be a different person.</p>`;
+  const picked = await openOverlay(`
+    <div id="dup-client-overlay" data-match="${hit.exact ? "exact" : "near"}">
+      <h3 id="dup-client-title">${hit.exact ? "This client may already exist" : "Did you mean an existing client?"}</h3>
+      <div class="panel-sub" id="dup-client-body">${lede}${others}</div>
+      <div class="modal-actions">
+        <div><button type="button" class="btn" id="dup-client-cancel">Cancel</button></div>
+        <div class="right">
+          <button type="button" class="btn" id="dup-client-create">Create anyway</button>
+          <button type="button" class="btn btn-primary" id="dup-client-existing">${esc(o.existingLabel || "Open the existing client")}</button>
+        </div>
+      </div>
+    </div>`, (finish, box) => {
+    box.querySelector("#dup-client-cancel").onclick = () => finish("cancel");
+    box.querySelector("#dup-client-create").onclick = () => finish("create");
+    box.querySelector("#dup-client-existing").onclick = () => finish("existing");
+  });
+  if (picked === "create") return { action: "create" };
+  if (picked === "existing") return { action: "existing", client: c };
+  return { action: "cancel" };
+}
+
 // Inline-onclick-safe string argument: escape for the JS string literal first, then for the HTML
 // attribute (esc() turns ' into &#39;, which the parser hands back to JS as a bare quote).
 const jsArg = (v) => esc(String(v == null ? "" : v).replace(/\\/g, "\\\\").replace(/'/g, "\\'"));
@@ -2910,10 +2981,22 @@ async function maybeQueueReferralThankYou(caseId, cRow, opts = {}) {
     if ((existing || []).some((t) => t && String(t.title || "").trim() === title)) return { skipped: "already", referrerId, title, caseId: target.caseId };
     const adviser = row.assigned_to || null;   // the COMPLETING case's adviser — they made the relationship
     const adviserTxt = adviser ? staffName(adviser) : "nobody (unassigned)";
-    if (!confirm(`${clientName}'s case has completed, and ${referrerName} referred them.\n\n`
-      + `Create a thank-you task on ${referrerName}'s case?\n\n`
-      + `“${title}” — due today, assigned to ${adviserTxt}.\n\n`
-      + `No email is sent to anybody. OK = create the task, Cancel = nothing happens.`)) {
+    /* R76 · B7c — the last native confirm on the completion path, and the one that could pop
+       BEHIND the move's own toast: now the house overlay (openOverlay via confirmDestructive,
+       non-danger — creating a courtesy task destroys nothing). Same question, same words, same
+       two answers; backing out (Escape, backdrop, Cancel) still writes nothing on anybody's
+       file. Suites press #ovl-confirm-ok / #ovl-confirm-cancel exactly as they do on every other
+       house dialog. */
+    if (!(await confirmDestructive({
+      title: "Referred client completed — say thank you?",
+      danger: false,
+      body: `<p style="margin:0 0 8px;">${esc(clientName)}'s case has completed, and <strong>${esc(referrerName)}</strong> referred them.</p>`
+        + `<p style="margin:0 0 8px;">Create a thank-you task on ${esc(referrerName)}'s case?</p>`
+        + `<p style="margin:0 0 8px;">“${esc(title)}” — due today, assigned to ${esc(adviserTxt)}.</p>`
+        + `<p style="margin:0;">No email is sent to anybody either way.</p>`,
+      okLabel: "Create the task",
+      cancelLabel: "No thank-you task",
+    }))) {
       return { skipped: "declined", referrerId, title, caseId: target.caseId };
     }
     const { error } = await db.from("case_tasks").insert({
@@ -4272,21 +4355,34 @@ function updateRevenueDrawerCount() {
    plain one — 10s — because it has to be readable AND reachable, not just readable. */
 const TOAST_ACTION_MS = 10000;
 const TOAST_MS = 4500;   // R73 · B1 — non-action toasts
-function toast(msg, action) {
+/* R76 · A4 — `action2`, a SECOND optional action on the same toast. The R12a·D12 "one action"
+   rule stands for everything that existed before this round: nothing old passes it, and the one
+   new caller (an appointment recorded as ATTENDED offering "Log what was discussed" beside its
+   Undo) exists precisely because the two verbs belong to the same ten seconds. `#toast-action`
+   stays the FIRST button in the DOM and stays the primary action (Undo, where there is one), so
+   every suite that presses `#toast-action` keeps pressing what it always pressed; the second
+   button is `#toast-action-2` and is ignored when no `action` came with it. */
+function toast(msg, action, action2) {
   const t = $("#toast");
   clearTimeout(t._h);
   const live = action && action.label && typeof action.onClick === "function";
+  const live2 = live && action2 && action2.label && typeof action2.onClick === "function";
   if (live) {
-    t.innerHTML = '<span class="toast-msg"></span><button type="button" class="toast-action" id="toast-action"></button>';
+    t.innerHTML = '<span class="toast-msg"></span><button type="button" class="toast-action" id="toast-action"></button>'
+      + (live2 ? '<button type="button" class="toast-action toast-action-2" id="toast-action-2"></button>' : "");
     t.querySelector(".toast-msg").textContent = msg;
-    const b = t.querySelector("#toast-action");
-    b.textContent = action.label;
-    b.onclick = () => {
-      clearTimeout(t._h);
-      t.classList.add("hidden");
-      t.classList.remove("has-action");
-      action.onClick();
+    const wireA = (sel, act) => {
+      const b = t.querySelector(sel);
+      b.textContent = act.label;
+      b.onclick = () => {
+        clearTimeout(t._h);
+        t.classList.add("hidden");
+        t.classList.remove("has-action");
+        act.onClick();
+      };
     };
+    wireA("#toast-action", action);
+    if (live2) wireA("#toast-action-2", action2);
     t.classList.add("has-action");
   } else {
     t.classList.remove("has-action");
@@ -4479,6 +4575,40 @@ function showRecovery() {
     location.reload();
   };
 }
+/* ==========================================================================
+   R76 · B4 — SESSION LOSS OVER OPEN WORK. showLogin() hides #app-view, but
+   #modal-backdrop lives OUTSIDE it (index.html), so a token expiring — or a
+   sign-out in another tab — under an open case modal left that modal fully
+   interactive over the login screen: typed notes stranded, Save wired to a
+   database that will refuse it, and nothing on screen saying why. When the
+   !session event lands while a modal or overlay is open, the non-dismissable
+   #signedout-strip is revealed OVER it and the modal's save/submit buttons
+   are disabled. The modal itself is NEVER closed — the unsaved typing is
+   exactly the thing worth preserving; the strip says to copy it out first.
+   Signing back in (showApp) clears the strip and re-enables the buttons.
+   ========================================================================== */
+const SIGNEDOUT_DISABLE_SEL = "#modal-save, #modal .modal-actions .btn-primary, #modal button[type=\"submit\"], #overlay-modal .btn-primary, #overlay-modal .btn-danger-solid, #ovl-confirm-ok, #ovl-typed-ok";
+function signedOutOverOpenWork() {
+  const strip = $("#signedout-strip");
+  if (!strip) return;
+  const modalOpen = ["#modal-backdrop", "#overlay-backdrop"].some((s) => {
+    const el = $(s); return el && !el.classList.contains("hidden");
+  });
+  if (!modalOpen) return;
+  strip.classList.remove("hidden");
+  document.querySelectorAll(SIGNEDOUT_DISABLE_SEL).forEach((b) => {
+    b.disabled = true;
+    b.dataset.signedoutDisabled = "1";
+  });
+}
+function clearSignedOutStrip() {
+  const strip = $("#signedout-strip");
+  if (strip) strip.classList.add("hidden");
+  document.querySelectorAll("[data-signedout-disabled]").forEach((b) => {
+    b.disabled = false;
+    delete b.dataset.signedoutDisabled;
+  });
+}
 function showLogin() {
   // R73 · B4 — signing out drops the per-page title with the page it named.
   document.title = BASE_TITLE;
@@ -4486,6 +4616,7 @@ function showLogin() {
   $("#app-view").classList.add("hidden");
   $("#assistant-fab").classList.add("hidden");
   $("#assistant-drawer").classList.add("hidden");
+  signedOutOverOpenWork(); // R76 · B4 — no-op unless a modal/overlay is open over this login
 }
 /* BACKEND-R4 §1 — resolve the caller's role from the my_role() RPC, which is the same expression
    the RLS policies evaluate. Falls back to profiles.role only if the RPC is unavailable (an older
@@ -4519,6 +4650,7 @@ async function showApp(session) {
   }
   $("#login-view").classList.add("hidden");
   $("#app-view").classList.remove("hidden");
+  clearSignedOutStrip(); // R76 · B4 — signed back in: the strip's claim is no longer true
   $("#assistant-fab").classList.remove("hidden");
   /* R6-B4 (LR-20) — the sidebar identity ellipsises at 216px ("luke.richards@nexmo…")
      and there was no way to read the rest. This is WHICH SEAT you are signed in as,
@@ -9133,6 +9265,22 @@ window.retLogCall = async function (caseId) {
   if (saved) loadRetentionPage();
   return saved;
 };
+/* R76 · A4 — "Log what was discussed", from the toast of an appointment just recorded as
+   ATTENDED. The THIRD entry point into the ONE log-call presentation (openLogCallModal overlays
+   anywhere, which is the whole point of it); the Retention row's and the case modal's own
+   entry points are untouched, panelIds and all. Its own panelId is a contract like theirs. */
+window.apptLogDiscussed = async function (caseId) {
+  const { data: c, error } = await db.from("cases")
+    .select("id,client_id,assigned_to,protection_status,stage,clients!client_id(first_name,last_name)")
+    .eq("id", caseId).single();
+  if (error || !c) return toast("Couldn't open that case — " + ((error && error.message) || "it may have been deleted"));
+  const who = [c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ") || "this client";
+  return openLogCallModal(c, {
+    panelId: "appt-logcall-panel",
+    whoName: who,
+    intro: "What was discussed at the appointment goes on the case, exactly like a logged call: the note files on this case, the protection tick writes its protection status, and a follow-up lands on its adviser. Nothing here emails the client.",
+  });
+};
 /* R64 · A3 — "📅 Book review". The diary's OWN editor (openAppt), prefilled: this client, this
    case, the adviser who owns the case, and the title the firm actually uses for this meeting.
    Everything else — the clash notice, the case picker, the save — is the diary's, unchanged. */
@@ -10145,7 +10293,7 @@ function briefActions(it) {
        which is the same destination the Data-health tiles use. */
     case "comms_failed":
       return (it.client_id
-        ? `<button class="btn btn-sm btn-primary" onclick="openClient('${it.client_id}','${it.fix_focus || "email"}','${jsArg(it.fix_value || "")}')" title="Open the client record with the ${it.fix_focus === "phone" ? "phone number" : "email address"} that failed, so it can be corrected">Fix contact</button>`
+        ? `<button class="btn btn-sm btn-primary" onclick="fixContactOpen('${it.fix_kind || "email"}','${jsArg(it.fix_row || "")}','${it.client_id}','${jsArg(it.fix_value || "")}')" title="Open the client record with the ${it.fix_focus === "phone" ? "phone number" : "email address"} that failed, so it can be corrected">Fix contact</button>`
         : `<button class="btn btn-sm btn-primary" onclick="dhGotoEmails(true)" title="Open the Emails page filtered to failed messages">Fix contact</button>`)
         + (it.case_id ? `<button class="btn btn-sm" onclick="openCase('${it.case_id}')">Open case</button>` : "");
     case "email_new":
@@ -10335,6 +10483,9 @@ async function loadBriefing() {
             owner: c.assigned_to || null,
             fix_focus: r.__sms ? "phone" : "email",
             fix_value: (r.__sms ? r.to_phone : r.to_email) || "",
+            /* R76 · B5 — the queue row behind this line, so Fix contact can offer the retry. */
+            fix_row: r.id || null,
+            fix_kind: r.__sms ? "sms" : "email",
             bounced: verb === "bounced",
           });
         });
@@ -10933,11 +11084,28 @@ window.briefDone = function (id) {
      was on both. The panel is gone; My Day is the list the click came from and the only one left. */
   return markTaskDone(id, loadBriefing);
 };
+/* R76 · A5 — THE ONE WRITE "handled" EVER MEANS, extracted so the case timeline's new chip and My
+   Day's button cannot drift into two definitions of the same verb. */
+function markEmailHandledWrite(id) {
+  return db.from("case_emails").update({ triage_status: "handled" }).eq("id", id);
+}
 window.markEmailHandled = async function (id) {
-  const { error } = await db.from("case_emails").update({ triage_status: "handled" }).eq("id", id);
+  const { error } = await markEmailHandledWrite(id);
   if (error) return toast("Error: " + error.message);
   toast("Email marked handled");
   loadBriefing();
+};
+/* R76 · A5 — the case-timeline chip. Same write; what repaints is the ROW the chip sits on (the
+   chip becomes "handled ✓" in place) rather than a whole-modal reload that would scroll the
+   reader away from the correspondence they were triaging. My Day's unhandled count reads
+   triage_status fresh on its next load, so the two screens agree without a live sync. */
+window.tlMarkEmailHandled = async function (emailId, btn) {
+  if (!emailId) return;
+  if (btn) btn.disabled = true;
+  const { error } = await markEmailHandledWrite(emailId);
+  if (error) { if (btn) btn.disabled = false; return toast("Error: " + error.message); }
+  toast("Email marked handled");
+  if (btn) btn.outerHTML = '<span class="tl-muted tl-handled-done">handled ✓</span>';
 };
 window.queueEmail = queueEmail;
 window.briefQueueEmail = async function (caseId, type, ev) {
@@ -12691,7 +12859,7 @@ function boardCardHtml(c, ctx) {
         const age = cardAge(c, stageEntry[c.id]);
         const nextStage = nextStageFor(c.stage, c.case_kind);
         const advanceBtn = nextStage
-          ? `<button type="button" class="card-advance" onclick="event.stopPropagation(); moveCaseToStage('${c.id}', '${nextStage}', {promptStageEntry:true})" title="Advance to ${esc(STAGE_LABEL[nextStage] || nextStage)}" aria-label="Advance to ${esc(STAGE_LABEL[nextStage] || nextStage)}">→</button>`
+          ? `<button type="button" class="card-advance" onclick="event.stopPropagation(); moveCaseToStage('${c.id}', '${nextStage}', {promptStageEntry:true, expectedStage:'${c.stage}'})" title="Advance to ${esc(STAGE_LABEL[nextStage] || nextStage)}" aria-label="Advance to ${esc(STAGE_LABEL[nextStage] || nextStage)}">→</button>`
           : "";
         /* R6-FIX G63-03 — the pill and the .cd line have to be decided TOGETHER.
            The board's chip is rendered with noLender, i.e. on an address-less
@@ -12729,7 +12897,7 @@ function boardCardHtml(c, ctx) {
         const dupeHint = dupeNameClients.has(c.client_id)
           ? `<span class="badge amber card-dupe-hint" title="Another CLIENT RECORD shares this client's email address or exact name — possible duplicate. Check it in Data health → duplicate review before adding anything to this case, so the note or task lands on the record the firm keeps.">dupe?</span>`
           : "";
-        return `<div class="card${age.level ? " age-" + age.level : ""}" draggable="true" data-id="${c.id}" onclick="openCase('${c.id}')">
+        return `<div class="card${age.level ? " age-" + age.level : ""}" draggable="true" data-id="${c.id}" data-stage="${c.stage}" onclick="openCase('${c.id}')">
           <div class="cn" style="display:flex;justify-content:space-between;align-items:center;gap:6px;"><span class="cn-name" title="${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ") || "")}">${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ") || "—")}</span><span style="display:flex;align-items:center;gap:6px;flex:0 0 auto;">${dupeHint}${c.assigned_to ? `<span class="chip" title="${esc(staffName(c.assigned_to))}">${initials(c.assigned_to)}</span>` : ""}${advanceBtn}</span></div>
           ${/* R6 — the card's answer to "which one of his five is this?", directly under the name
                 and above the money. Address when there is one; the hollow kind · lender pill only
@@ -12759,7 +12927,7 @@ function boardCardHtml(c, ctx) {
             ${c.fee_status === "paid" ? '<span class="badge green">Fee paid</span>' : c.fee_status === "requested" ? '<span class="badge amber">Fee requested</span>' : ""}
           </div>
           ${age.text ? `<div class="age-line" title="${esc(age.basis)}">${age.text}</div>` : ""}
-          <select class="card-stage-move" aria-label="Move to stage" title="Move to stage" onclick="event.stopPropagation()" onchange="moveCaseToStage('${c.id}', this.value)">
+          <select class="card-stage-move" aria-label="Move to stage" title="Move to stage" onclick="event.stopPropagation()" onchange="moveCaseToStage('${c.id}', this.value, {expectedStage:'${c.stage}'})">
             ${STAGES.map(([k, l]) => `<option value="${k}" ${k === c.stage ? "selected" : ""}${k === "decision_in_principle" ? ` title="${TIP_DIP}"` : ""}>${l}</option>`).join("")}
           </select>
         </div>`;
@@ -13989,10 +14157,14 @@ window.recordLostReason = async function (caseId, c) {
   toast("Reason recorded.");
   openCase(caseId);
 };
+/* R76 · A2 — the stage the dragged card was RENDERED at, captured at dragstart (dataTransfer only
+   carries the id, and re-reading it at drop from the DOM would race a repaint). Cleared on
+   dragend so a stale value can never outlive its drag. */
+let boardDragFromStage = "";
 function wireBoardDnD() {
   document.querySelectorAll("#board .card").forEach((el) => {
-    el.addEventListener("dragstart", (e) => { e.dataTransfer.setData("text/plain", el.dataset.id); el.classList.add("dragging"); });
-    el.addEventListener("dragend", () => el.classList.remove("dragging"));
+    el.addEventListener("dragstart", (e) => { e.dataTransfer.setData("text/plain", el.dataset.id); boardDragFromStage = el.dataset.stage || ""; el.classList.add("dragging"); });
+    el.addEventListener("dragend", () => { boardDragFromStage = ""; el.classList.remove("dragging"); });
   });
   document.querySelectorAll("#board .col").forEach((col) => {
     col.addEventListener("dragover", (e) => { e.preventDefault(); col.classList.add("dragover"); });
@@ -14001,7 +14173,8 @@ function wireBoardDnD() {
       e.preventDefault();
       col.classList.remove("dragover");
       const caseId = e.dataTransfer.getData("text/plain");
-      if (caseId) moveCaseToStage(caseId, col.dataset.stage);
+      // R76 · A2 — the drop passes the stage the card showed when the drag began.
+      if (caseId) moveCaseToStage(caseId, col.dataset.stage, boardDragFromStage ? { expectedStage: boardDragFromStage } : {});
     });
   });
 }
@@ -14848,6 +15021,118 @@ async function promptStageEntry(targetStage, cRow, caseName) {
   return {};
 }
 
+/* ==========================================================================
+   R76 · A1 — THE COMPLETED STAGE-ENTRY OVERLAY: CLOSE THE LOOP, DON'T DESCRIBE IT.
+
+   The old completed confirm was a native dialog whose whole message was an
+   apology: "Nothing is sent or set up automatically — email the fee request,
+   review request and rate-end reminder yourself". Honest, and useless — the
+   moment a case completes is exactly the moment those three things should be
+   a tick, not a to-do list recited into a browser alert.
+
+   THE DESIGN, each choice deliberate:
+
+   · "COMPLETED ON" IS A DATE FIELD, DEFAULTING TO TODAY (#stage-completed-date).
+     completed_at was always stamped `now()`, which made every case completed
+     "the day somebody got round to moving the card" — the monthly fee figures
+     and the completion reports count on this column. The timestamp is
+     constructed at LOCAL MIDDAY from the chosen date so no timezone walk can
+     shift the day (the same T12:00:00 anchor rateDaysOut uses).
+   · THE TWO EMAILS ARE PRE-TICKED (Daniel's decision) and each goes through
+     queueEmail(..., {bulk:true}) — the SAME single writer the case modal's
+     Actions ▾ "Request fee" / "Ask for review" buttons use, so the fee stamp
+     (fee_status/fee_requested_at), the review stamp (review_requested_at) and
+     the email_queue row are identical whichever door they came through, and no
+     second queue path exists. QUEUED ONLY, never sent from here: the rows wait
+     for the next run, and the toast says held/queued via heldWord().
+   · A BOX THAT CANNOT WORK IS NEVER TICKED. Each checkbox is disabled, unticked
+     and carries its stated reason when it does not apply: no broker fee / fee
+     already requested or paid; review already requested; no client email; no
+     review link; no bank details. The reason is on the dialog, not discovered
+     as a failure toast after OK.
+   · THE RATE END IS STATED, READ-ONLY (#stage-completed-rate): the date when
+     one is recorded, or the warning "no rate end date — retention won't chase
+     this case; add it on the case" when not — completion is the moment the
+     retention loop starts, or silently doesn't.
+   · CANCEL ABORTS THE MOVE ENTIRELY, exactly as cancelling the old confirm did.
+   · UNDO: the R74 rule stands — stage Undo is offered only when the move's
+     whole footprint is stage + completed_at + captured task ids. Ticking either
+     email writes email_queue rows (and fee/review stamps) this function holds
+     no ids for, so a completed move that queued anything offers NO Undo.
+
+   Interactive single-case paths only: the bulk flow (skipConfirm) keeps its own
+   one-confirm-per-batch contract and stamps now(), unchanged.
+   ========================================================================== */
+async function promptCompletedEntry(cRow, caseName) {
+  const cid = cRow && cRow.id;
+  if (!cid) return {};   // nothing to ask about — behave as the old silent path did
+  // What CAN be queued, checked here so the dialog states reasons instead of failing later.
+  let clientEmail = "";
+  if (cRow.client_id) {
+    const { data: cl } = await db.from("clients").select("email").eq("id", cRow.client_id).single();
+    clientEmail = (cl && cl.email) || "";
+  }
+  let hasBank = false;
+  {
+    const { data: hb, error: hbErr } = await db.rpc("has_bank_details");
+    hasBank = !hbErr && !!hb;
+  }
+  const reviewLink = !!(settings.google_review_link || settings.review_platform_link);
+  // The stated reason each box starts dead, or "" for a live pre-ticked box.
+  const feeWhy = !clientEmail ? "the client has no email address"
+    : !(cRow.broker_fee > 0) ? "no broker fee is recorded on this case"
+    : cRow.fee_status === "paid" ? "the fee is already paid"
+    : (cRow.fee_status === "requested" || cRow.fee_requested_at) ? "the fee has already been requested"
+    : !hasBank ? "the firm's bank details aren't set up in Settings"
+    : "";
+  const revWhy = !clientEmail ? "the client has no email address"
+    : cRow.review_requested_at ? "a review has already been requested"
+    : !reviewLink ? "no review link is set in Settings"
+    : "";
+  const dateDefault = cRow.completed_at ? localDateStr(new Date(cRow.completed_at)) : localDateStr();
+  const box = (id, label, why) => `
+    <label class="row-check" style="display:flex;gap:8px;align-items:flex-start;font-size:13px;font-weight:600;color:var(--dark);margin-top:8px;">
+      <input type="checkbox" id="${id}" ${why ? "disabled" : "checked"} style="width:auto;margin-top:2px;">
+      <span>${label}${why ? ` <span class="s cs-muted" style="font-weight:400;">— not ticked: ${esc(why)}.</span>` : ""}</span>
+    </label>`;
+  const rateLine = cRow.rate_end_date
+    ? `<p class="panel-sub" id="stage-completed-rate" style="margin-top:10px;">Rate end date on this case: <strong>${esc(fmtD(cRow.rate_end_date))}</strong>${cRow.rate_end_estimated ? " (estimate)" : ""} — the retention window will pick it up from there.</p>`
+    : `<p class="dq-notice bad" id="stage-completed-rate" style="margin-top:10px;">⚠ No rate end date — retention won't chase this case; add it on the case.</p>`;
+  const holdNote = emailHoldOn()
+    ? " Sending is currently ON HOLD (Settings › Email sending), so anything ticked is queued and waits — nothing goes out now."
+    : " Anything ticked is queued and goes out on the next send run — nothing is sent this instant.";
+  return openOverlay(`
+    <h3>Moving ${esc(caseName || "this case")} to Completed</h3>
+    <p class="panel-sub">A completion is the one stage move with a loop to close: the fee, the review, and the rate-end that starts the next conversation. Tick what should be queued;${esc(holdNote)}</p>
+    <label style="margin-top:6px;">Completed on
+      <input type="date" id="stage-completed-date" value="${esc(dateDefault)}">
+      <span class="s cs-muted">This writes the case's completion date — the date every completion and fee report counts on. Today is usually right; change it when the case actually completed earlier.</span>
+    </label>
+    ${box("stage-completed-fee", "Queue the fee request email", feeWhy)}
+    ${box("stage-completed-review", "Queue the review request email", revWhy)}
+    ${rateLine}
+    ${cRow.referrer_client_id ? `<p class="panel-sub" style="margin-top:8px;">This client was referred — you will be asked next whether to add a thank-you task on the referrer's case. No email is sent to anybody either way.</p>` : ""}
+    <div class="modal-actions">
+      <div><button type="button" class="btn btn-ghost" id="stage-completed-cancel">Don't move</button></div>
+      <div class="right">
+        <button type="button" class="btn btn-primary" id="stage-completed-ok">Complete case</button>
+      </div>
+    </div>`, (finish, boxEl) => {
+    boxEl.querySelector("#stage-completed-cancel").onclick = () => finish(null);
+    boxEl.querySelector("#stage-completed-ok").onclick = () => {
+      const dEl = boxEl.querySelector("#stage-completed-date");
+      const d = dEl ? String(dEl.value || "").trim() : "";
+      const feeEl = boxEl.querySelector("#stage-completed-fee");
+      const revEl = boxEl.querySelector("#stage-completed-review");
+      finish({
+        completedDate: d || localDateStr(),   // a cleared box is not "no completion date" — today
+        queueFee: !!(feeEl && !feeEl.disabled && feeEl.checked),
+        queueReview: !!(revEl && !revEl.disabled && revEl.checked),
+      });
+    };
+  });
+}
+
 /* Move a case to a new stage. Shared by desktop drag-and-drop (the drop handler above)
    and the per-card "Move to stage" dropdown, which gives touch/mobile users — for whom
    HTML5 drag-and-drop does not fire — a working way to progress a case from the board. */
@@ -14876,8 +15161,33 @@ window.moveCaseToStage = async function (caseId, targetStage, opts = {}) {
       /* R12b · W-30 — offer_expiry_date comes along so the Offer stage-entry prompt can tell
          "already recorded" from "never asked". A base column (the case form has always written it
          unconditionally), so naming it costs no feature detection. */
-      .select("id,client_id,assigned_to,stage,protection_status,completed_at,case_kind,lender,offer_expiry_date,rate_end_date" + (propOn ? ",property_address" : "") + (refOn ? ",referrer_client_id" : "") + (seDocsOn ? ",waiting_on,solicitor_firm" : "") + ",clients!client_id(first_name,last_name)")
+      /* R76 · A1 — broker_fee/fee_status/fee_requested_at/review_requested_at (all original-schema
+         columns) ride along so the Completed overlay can say WHY a box is dead — and so queueEmail
+         gets the same row shape the Actions ▾ buttons hand it. */
+      .select("id,client_id,assigned_to,stage,protection_status,completed_at,case_kind,lender,offer_expiry_date,rate_end_date,rate_end_estimated,broker_fee,fee_status,fee_requested_at,review_requested_at" + (propOn ? ",property_address" : "") + (refOn ? ",referrer_client_id" : "") + (seDocsOn ? ",waiting_on,solicitor_firm" : "") + ",clients!client_id(first_name,last_name)")
       .eq("id", caseId).single()).data;
+  }
+  /* =======================================================================
+     R76 · A2 — THE STALE-BOARD GUARD.
+
+     A board card's "Advance →" and its stage <select> bake their onclick from
+     the stage the card was RENDERED at. On a board left open while a colleague
+     advanced the case, that button silently dragged the case BACKWARDS — the
+     only staleness check here was the no-op `stage === targetStage`, while the
+     case form's Save has had a proper `.eq("updated_at", openedUpdatedAt)`
+     guard since R18. So: every single-case entry point that renders a stage
+     passes it as `opts.expectedStage`; after the fresh read, a mismatch means
+     the control pressed no longer describes the case, and the move is refused
+     with a toast naming where the case actually is — then the board repaints
+     so the next press is against the truth. The bulk path never passes it
+     (its pre-classified buckets are its own freshness contract).
+     ==================================================================== */
+  if (opts.expectedStage && cRow && cRow.stage !== opts.expectedStage) {
+    if (!silent) {
+      toast(`This case moved to ${STAGE_LABEL[cRow.stage] || cRow.stage} since this board loaded — refreshing the board`);
+      if (!skipReload) loadPipeline();
+    }
+    return "stale";
   }
   if (cRow && cRow.stage === targetStage) return "noop"; // no-op (e.g. dropped back on the same column)
   if (cRow && protectionGateBlocks(cRow, targetStage)) {
@@ -14905,25 +15215,28 @@ window.moveCaseToStage = async function (caseId, targetStage, opts = {}) {
     lost = await promptLostReason(`Moving ${caseName} to Not Proceeding`);
     if (!lost) { if (!skipReload) loadPipeline(); return "cancelled"; }
   }
-  if (!skipConfirm && (targetStage === "completed" || reopening)) {
+  /* R76 · B7a — the interactive REOPEN was the last stage-guard still wearing a native confirm,
+     while the bulk path has gated the IDENTICAL outcome behind confirmTyped REOPEN since R75.
+     Same words, same strongest-gate treatment: the word must be typed. Cancelling still snaps
+     the card back exactly as cancelling the old confirm did. */
+  let completedEntry = null;   // R76 · A1 — what the Completed overlay answered, null = not asked
+  if (!skipConfirm && reopening) {
     const nm = caseName;
-    const msg = reopening
-      // T1-8 — reopening a settled case had no confirm at all: dragging a Completed card back to a
-      // live column silently undid its completion. Name what is being undone.
-      ? `REOPEN ${nm}? It is currently ${STAGE_LABEL[cRow.stage] || cRow.stage} — moving it to ${STAGE_LABEL[targetStage] || targetStage} clears its completion date and puts it back in the live pipeline.`
-      : targetStage === "completed"
-      // T1-honestfix (defect 8) — nothing queues automatically on this move: no email_queue row,
-      // no case_events note, no retention case. Checked against app.js and mock-supabase.js — the
-      // only completion-related emails are the ones an adviser sends by hand from the case (fee
-      // request, review request, rate-end reminder), and there is no code path anywhere that
-      // creates a retention case. Say what actually happens, not what would be nice.
-      /* R9-1 — and the one thing that IS now offered, named before it happens rather than
-         appearing as a surprise second dialog. Still nothing automatic: the next prompt asks,
-         and Cancel there leaves the referrer's file untouched. */
-      ? `Move ${nm} to Completed? Nothing is sent or set up automatically — email the fee request, review request and rate-end reminder from the case yourself, and set a reminder for retention when the rate ends.`
-        + (cRow && cRow.referrer_client_id ? `\n\nThis client was referred, so you will be asked next whether to add a thank-you task on the referrer's case. No email is sent to anybody either way.` : "")
-      : "";
-    if (msg && !confirm(msg)) { if (!skipReload) loadPipeline(); return "cancelled"; } // abort — snap the card back
+    const msg = `REOPEN ${nm}? It is currently ${STAGE_LABEL[cRow.stage] || cRow.stage} — moving it to ${STAGE_LABEL[targetStage] || targetStage} clears its completion date and puts it back in the live pipeline.`;
+    const okReopen = await confirmTyped({
+      title: `Reopen ${nm}?`,
+      body: msg,
+      keyword: "REOPEN",
+      okLabel: "Reopen this case",
+    });
+    if (!okReopen) { if (!skipReload) loadPipeline(); return "cancelled"; } // abort — snap the card back
+  } else if (!skipConfirm && targetStage === "completed") {
+    /* R76 · A1 — the Completed stage-entry overlay replaces the old native confirm on EVERY
+       interactive path into Completed (drag, card select, modal select, gate panel — not just the
+       two promptStageEntry call sites), because the old confirm ran on all of them too and a drag
+       to Completed without it would have lost its only pause. Cancel aborts the move entirely. */
+    completedEntry = await promptCompletedEntry(cRow, caseName);
+    if (!completedEntry) { if (!skipReload) loadPipeline(); return "cancelled"; } // abort — snap the card back
   }
   /* R74 · B4 — A MOVE BACKWARDS ASKS ABOUT THE WORK THE FORWARD MOVE LEFT.
      Interactive paths only (skipConfirm is the bulk flow's "ask once for the batch" contract, and
@@ -14974,7 +15287,14 @@ window.moveCaseToStage = async function (caseId, targetStage, opts = {}) {
   // importer ever wrote it. Stamp it on the way in, clear it on the way out.
   const patch = { stage: targetStage };
   if (stageEntry.patch) Object.assign(patch, stageEntry.patch);   // R12b · W-30 — blank stays blank
-  if (targetStage === "completed") { if (!cRow || !cRow.completed_at) patch.completed_at = new Date().toISOString(); }
+  /* R76 · A1 — the overlay's "Completed on" date wins where it was asked: the timestamp is
+     anchored at LOCAL MIDDAY so no timezone can walk it onto the neighbouring day. The silent
+     paths (bulk, skipConfirm) keep the old rule to the letter: stamp now() only where nothing is
+     already stamped, clear it on the way out. */
+  if (targetStage === "completed") {
+    if (completedEntry && completedEntry.completedDate) patch.completed_at = new Date(completedEntry.completedDate + "T12:00:00").toISOString();
+    else if (!cRow || !cRow.completed_at) patch.completed_at = new Date().toISOString();
+  }
   else if (cRow && cRow.stage === "completed") patch.completed_at = null;
   if (lost && targetStage === "not_proceeding") { patch.lost_reason = lost.reason; patch.lost_detail = lost.note || null; }
   let { error } = await db.from("cases").update(patch).eq("id", caseId);
@@ -15065,15 +15385,39 @@ window.moveCaseToStage = async function (caseId, targetStage, opts = {}) {
   if (targetStage === "completed" && !silent && (!cRow || cRow.stage !== "completed")) {
     refResult = await maybeQueueReferralThankYou(caseId, cRow, { quiet: true });
   }
+  /* R76 · A1 — the ticked completion emails, queued AFTER the stage update has succeeded (a fee
+     request for a completion that did not happen is worse than none — the same reason every other
+     write here waits) and through queueEmail's {bulk:true} mode: the SAME single writer the
+     Actions ▾ buttons use, minus its per-send confirm (the overlay WAS the confirm) and minus the
+     per-row send (queued only — the toast says held/queued via heldWord()). A gate the overlay's
+     pre-checks could not see (a race, a colleague's simultaneous request) surfaces on the same
+     receipt as a could-NOT line, never silently. */
+  let ceNote = "";
+  const ceTouched = !!(completedEntry && (completedEntry.queueFee || completedEntry.queueReview));
+  if (ceTouched && cRow && cRow.client_id) {
+    const wanted = [];
+    if (completedEntry.queueFee) wanted.push(["fee_request", "fee request"]);
+    if (completedEntry.queueReview) wanted.push(["review_request", "review request"]);
+    for (const [type, label] of wanted) {
+      const r = await queueEmail(caseId, cRow.client_id, type, cRow, null, { bulk: true });
+      if (r && r.ok) ceNote += ` · ${label} email ${heldWord()}`;
+      else ceNote += ` · the ${label} email could NOT be queued${r && r.error ? " (" + r.error + ")" : ""}`;
+    }
+  }
   /* R74 · B4 — IS THIS MOVE REVERSIBLE IN FULL? Undo is offered only when the move's whole
      footprint is the stage column, completed_at, and task rows whose ids we hold. Every other
      write this function can make — a lost-reason note, the stage-entry prompt's field values, the
      DIP chase task, a seeded checklist, a referral thank-you on somebody else's case, tasks
      REMOVED at the operator's request — is either not ours to un-write or had its own confirm on
      the way in, and a one-word Undo that quietly left them behind would be worse than no Undo. */
+  /* R76 · A1 — `!ceTouched` joins the list: a completed move that queued (or even tried to queue)
+     either completion email has a footprint in email_queue and on the case's fee/review stamps
+     that this function holds no ids for. The R74 rule stands and is now written down in
+     HARNESS.md: stage Undo is disabled whenever an entry prompt wrote data. */
   const undoable = !silent && !lost && !backRemoved && !backErr
     && !stageEntry.task && !(stageEntry.docs && stageEntry.docs.length)
     && !(stageEntry.patch && Object.keys(stageEntry.patch).length)
+    && !ceTouched
     && !(refResult && refResult.message) && !playbookErr
     && !!(cRow && cRow.stage) && (!playbookAdded || playbookIds.length === playbookAdded);
   const undoSnap = undoable ? {
@@ -15118,6 +15462,9 @@ window.moveCaseToStage = async function (caseId, targetStage, opts = {}) {
       + stageEntryTaskNote
       // R63 · H2 — and the checklist, on the same receipt as everything else the prompt wrote.
       + stageEntryDocsNote
+      /* R76 · A1 — what the Completed overlay actually queued (or could not), in heldWord()'s
+         honest tense, on the move's own receipt. */
+      + ceNote
       /* R63 · H1b — a receipt for the rows this move just wrote. Silence here would mean tasks
          appearing on somebody's list with no visible cause, which is exactly how automation stops
          being trusted. A failure says so in the same sentence rather than in a second toast that
@@ -15267,7 +15614,16 @@ async function bulkAssignCases(adviserId, reloadFn) {
   const ids = [...pipeSel];
   if (!ids.length || !adviserId) return;
   const name = adviserId === authUid ? "you" : staffName(adviserId);
-  if (!confirm(`Assign ${ids.length} case${ids.length === 1 ? "" : "s"} to ${adviserId === authUid ? "yourself" : name}?`)) return;
+  /* R76 · B7b — the house dialog, same question. Non-danger: assigning destroys nothing, but a
+     bulk write over somebody's whole selection still earns the pause. Suites press
+     #ovl-confirm-ok exactly as on every other house confirm. */
+  if (!(await confirmDestructive({
+    title: `Assign ${ids.length} case${ids.length === 1 ? "" : "s"} to ${adviserId === authUid ? "yourself" : name}?`,
+    body: `Every selected case's <strong>Assigned</strong> column is rewritten to ${adviserId === authUid ? "you" : esc(name)} — including any that already name somebody else.`,
+    danger: false,
+    okLabel: `Assign ${ids.length} case${ids.length === 1 ? "" : "s"}`,
+    cancelLabel: "Cancel",
+  }))) return;
   let ok = 0, err = 0;
   for (const id of ids) {
     const { error } = await db.from("cases").update({ assigned_to: adviserId }).eq("id", id);
@@ -17794,7 +18150,45 @@ window.ffApplyDiff = async function (caseId, clientId, data) {
         }
       }
       await db.from("case_notes").insert({ case_id: caseId, body, created_by: uid });
-      toast(`Applied ${n} field${n === 1 ? "" : "s"}${protTaskNote}`);
+      /* =====================================================================
+         R76 · A3 — APPLYING THE FACT-FIND IS DOING THE REVIEW.
+
+         The database trigger (fact_finds_log_submit) puts a "Review submitted
+         fact-find" task on the case the moment the client submits; this
+         handler IS that review being done, and it never told the task — so
+         NEXT TASK kept nagging about work already finished. On a successful
+         apply, the case's OPEN task with that exact trigger title is
+         completed. Tolerant match (trim + case) because the comparison is
+         against operator-visible text, but it is a fixed string the trigger
+         writes — never a pattern, never a playbookStepMatchesTitle-style
+         fuzz, so a hand-typed task about a fact-find is never swallowed.
+         If no such open task exists, nothing changes. Best-effort: a failed
+         task write must not make an apply that DID land look like a failure.
+         The toast says what happened and its Undo reopens the task — the
+         apply itself (field writes, note, protection task) is deliberately
+         NOT unwound by that Undo; it un-does exactly the one thing it names.
+         ================================================================== */
+      let ffTaskNote = "", ffTaskUndo = null;
+      {
+        const wantTitle = "Review submitted fact-find".toLowerCase();
+        const { data: ffOpen } = await db.from("case_tasks").select("id,title,done_at").eq("case_id", caseId).is("done_at", null);
+        const rev = (ffOpen || []).find((t) => String(t.title || "").trim().toLowerCase() === wantTitle);
+        if (rev) {
+          const { error: doneErr } = await db.from("case_tasks").update({ done_at: new Date().toISOString() }).eq("id", rev.id);
+          if (!doneErr) {
+            ffTaskNote = " · closed the review task";
+            ffTaskUndo = {
+              label: "Undo",
+              onClick: async () => {
+                const { error: reErr } = await db.from("case_tasks").update({ done_at: null }).eq("id", rev.id);
+                toast(reErr ? "The review task could not be reopened: " + reErr.message : "Review task reopened — it is back on the list");
+                if (!reErr) openCase(caseId);
+              },
+            };
+          }
+        }
+      }
+      toast(`Applied ${n} field${n === 1 ? "" : "s"}${protTaskNote}${ffTaskNote}`, ffTaskUndo || undefined);
       openCase(caseId); // re-renders the case modal summary with the updated values, note & task
     } catch (e) {
       toast("Error applying fact-find: " + (e && e.message ? e.message : e));
@@ -19487,12 +19881,28 @@ window.openCase = async function (id, opts = {}) {
           if (nl) nl.classList.add("field-invalid");
           return toast("Enter the new client's name");
         }
-        const { data: newClient, error: ncErr } = await db.from("clients")
-          .insert({ first_name: ncFirst || "", last_name: ncLast || "", email: ncEmail || null, phone: ncPhone || null })
-          .select().single();
-        if (ncErr) return toast("Error creating client: " + ncErr.message);
-        invalidateClientPicker(); // R18-P6 — new client must appear in the picker on the next open
-        row.client_id = newClient.id;
+        /* R76 · B2 — the inline door runs the SAME shared gate, exactly once per Save click and
+           before anything is written, so it cannot double-fire however the rest of this save
+           proceeds. "Use the existing client" here ATTACHES this case to the record we already
+           hold (the acceptLead shape) rather than opening it — throwing away a half-filled case
+           form to show a client record would punish the operator for answering honestly. It also
+           closes a pre-existing trap: if a later validation refused the save AFTER the old code
+           had already inserted the client, pressing Save again silently inserted a SECOND copy —
+           now the gate catches the just-created record as an exact match and offers to use it. */
+        const ncDup = await dupClientGate(
+          { first: ncFirst, last: ncLast, email: ncEmail, phone: ncPhone },
+          { existingLabel: "Use the existing client" });
+        if (ncDup.action === "cancel") return;
+        if (ncDup.action === "existing") {
+          row.client_id = ncDup.client.id;
+        } else {
+          const { data: newClient, error: ncErr } = await db.from("clients")
+            .insert({ first_name: ncFirst || "", last_name: ncLast || "", email: ncEmail || null, phone: ncPhone || null })
+            .select().single();
+          if (ncErr) return toast("Error creating client: " + ncErr.message);
+          invalidateClientPicker(); // R18-P6 — new client must appear in the picker on the next open
+          row.client_id = newClient.id;
+        }
       }
       if (!row.client_id) {
         // R12b · L-7
@@ -20060,7 +20470,7 @@ window.openCase = async function (id, opts = {}) {
       // it again here would throw that away and leave the operator back where they started.
       // R12b · W-30 — an interactive, single-case advance: this is one of exactly two call sites
       // allowed to raise the stage-entry prompt.
-      try { res = await moveCaseToStage(id, nextStage, { promptStageEntry: true }); }
+      try { res = await moveCaseToStage(id, nextStage, { promptStageEntry: true, expectedStage: c.stage }); }
       finally { if (res === "blocked") advanceBtn.disabled = false; else openCase(id); }
     };
     /* R35 §5 — the modal's move-to-any-stage select, beside Advance. Deliberately the SAME single
@@ -20076,7 +20486,7 @@ window.openCase = async function (id, opts = {}) {
       if (!target || target === c.stage) return;
       stageSel.disabled = true;
       let res;
-      try { res = await moveCaseToStage(id, target); }
+      try { res = await moveCaseToStage(id, target, { expectedStage: c.stage }); }
       finally {
         if (res === "moved" || res === "reopened") openCase(id);
         else { stageSel.value = c.stage; stageSel.disabled = false; }
@@ -22070,7 +22480,9 @@ async function buildClientTimeline(clientId, cases) {
       ids.length ? q(db.from("email_queue").select("email_type,status,subject,sent_at,created_at,case_id").in("case_id", ids)) : [],
       ids.length ? q(db.from("sms_queue").select("sms_type,status,sent_at,created_at,case_id").in("case_id", ids)) : [],
       ids.length ? q(db.from("fact_finds").select("status,submitted_at,created_at,case_id").in("case_id", ids)) : [],
-      ids.length ? q(db.from("case_emails").select("subject,snippet,received_at,created_at,case_id").in("case_id", ids)) : [],
+      ids.length ? /* R76 · A5 — id + triage_status join the read so the row can offer "Mark handled" on the
+         one screen Watchtower actually sends people to. */
+      q(db.from("case_emails").select("id,subject,snippet,received_at,created_at,case_id,triage_status").in("case_id", ids)) : [],
       /* R40 — the eighth source: tasks that were actually COMPLETED. A case's history was silent
          about the work done on it — "chase lender for offer, ticked off Tuesday" existed only in
          the Tasks box, which shows the list as it stands now, not when anything happened. Only
@@ -22122,7 +22534,22 @@ async function buildClientTimeline(clientId, cases) {
   });
   appts.forEach((a) => { push(a.starts_at, "appointment", "📅", esc(a.title || "Appointment") + (a.location ? ` <span class="tl-muted">· ${esc(a.location)}</span>` : ""), a.case_id); });
   // Inbound client emails (Outlook sync) — Priya's handover gap: correspondence must show both directions.
-  inbound.forEach((m) => { push(m.received_at || m.created_at, "email", "📥", esc(m.subject || m.snippet || "Email from client") + ' <span class="tl-muted">· from client</span>', m.case_id); });
+  /* R76 · A5 — the inbound row grows the two things Watchtower's "open the case" hand-off was
+     missing: the stored SNIPPET (esc'd, muted, clamped to two lines by .tl-snippet) so the row
+     says what the client actually wrote, and — while the row's triage_status is still 'new' — a
+     "Mark handled" chip performing the SAME write My Day's own Mark handled performs
+     (markEmailHandledWrite), then repainting itself in place. My Day's unhandled count reads the
+     same column, so it agrees on its next load; no cross-page live sync is attempted. */
+  inbound.forEach((m) => {
+    const snippet = String(m.snippet || "").trim();
+    const handleChip = m.id && m.triage_status === "new"
+      ? ` <button type="button" class="btn btn-xs tl-mark-handled" onclick="event.stopPropagation(); tlMarkEmailHandled('${m.id}', this)">Mark handled</button>`
+      : "";
+    push(m.received_at || m.created_at, "email", "\ud83d\udce5",
+      esc(m.subject || snippet || "Email from client") + ' <span class="tl-muted">\u00b7 from client</span>' + handleChip
+      + (snippet && m.subject ? `<div class="tl-snippet">${esc(snippet)}</div>` : ""),
+      m.case_id);
+  });
   /* R40 — completed tasks, timestamped by when they were ticked rather than when they were due.
      `title` is operator-typed, so it goes through esc() like every other free-text source here. */
   doneTasks.filter((t) => !!t.done_at).forEach((t) => { push(t.done_at, "task", "✅", "Task done: " + esc(t.title || "(untitled task)"), t.case_id); });
@@ -22987,6 +23414,11 @@ function clientCasesHtml(cases) {
    appointment modal's Open client, Data Health's per-case Client button). Everything else opens
    the record with no target chosen, because on a multi-case client there is nothing to infer. */
 window.openClient = async function (id, focus, attempted, presetCaseId) {
+  /* R76 · B5 — consume the Fix-contact retry context exactly once, and only when it belongs to
+     THIS open (same client, fix-focused). Always cleared, so a plain open of the same client
+     later can never inherit a stale queue row. */
+  const fixRetryCtx = (FIX_RETRY_CTX && FIX_RETRY_CTX.clientId === id && focus) ? FIX_RETRY_CTX : null;
+  FIX_RETRY_CTX = null;
   let c = {};
   let cases = [];
   let tlItems = [];
@@ -23340,6 +23772,14 @@ window.openClient = async function (id, focus, attempted, presetCaseId) {
         return;
       }
     } else {
+      /* R76 · B2 — before the insert, ask the same "do we already hold this person?" question
+         acceptLead and the import preview ask, through the one shared gate. CREATE branch only:
+         an edit of an existing client (the `id` branch above) must never trip this. "Open the
+         existing client" abandons this blank-form create in favour of the record we already
+         hold — a deliberate choice the operator just made, so no discard guard re-asks. */
+      const dup = await dupClientGate({ first: row.first_name, last: row.last_name, email: row.email, phone: row.phone });
+      if (dup.action === "cancel") return;
+      if (dup.action === "existing") { closeModal(); openClient(dup.client.id); return; }
       const { error } = await db.from("clients").insert(row);
       if (error) return toast("Error: " + error.message);
       invalidateClientPicker(); // R18-P6 — new client must appear in the case-modal picker
@@ -23348,7 +23788,25 @@ window.openClient = async function (id, focus, attempted, presetCaseId) {
     // as well; the case save path gets it via loadDashboard. Guarded: a failing RPC must not stop
     // the save being reported as done.
     try { await db.rpc("run_watchtower"); wtStampRun(); } catch (e) { /* alerts just stay as they were */ }
-    closeModal(); toast("Client saved"); loadClients($("#client-search").value, { force: true });
+    closeModal();
+    /* R76 · B5 — this save was reached from a failed message's "Fix contact" link AND the field
+       that failed has actually changed: offer the retry right here, on the toast, instead of
+       leaving the failed row for the operator to hunt down. The action calls the EXISTING
+       retryEmail/retrySms, which re-read the client's current address before re-queueing — so a
+       further edit between toast and click is picked up, never raced. A fix-focused save that did
+       NOT change the field (or any ordinary save) keeps the plain "Client saved". */
+    const fixedField = fixRetryCtx ? (fixRetryCtx.kind === "sms" ? "phone" : "email") : null;
+    const fixedNow = fixedField ? String(row[fixedField] || "").trim() : "";
+    const fixedWas = fixedField ? String(c[fixedField] || "").trim() : "";
+    if (fixRetryCtx && fixedNow && fixedNow !== fixedWas) {
+      toast(`Client saved — retry the failed ${fixRetryCtx.kind === "sms" ? "SMS" : "email"} to ${fixedNow} now?`, {
+        label: "Retry now",
+        onClick: () => (fixRetryCtx.kind === "sms" ? retrySms(fixRetryCtx.rowId) : retryEmail(fixRetryCtx.rowId)),
+      });
+    } else {
+      toast("Client saved");
+    }
+    loadClients($("#client-search").value, { force: true });
     // If the client was opened from Data health (that page sits behind the modal), refresh its
     // lists/KPIs so a just-fixed row (e.g. missing email) doesn't linger stale until manual Refresh.
     if ($("#page-data") && !$("#page-data").classList.contains("hidden")) loadDataHealth();
@@ -24000,7 +24458,7 @@ async function loadEmails() {
        rather than navigating to an inbox that no longer holds it. */
     const leadRow = e.lead_id ? emailLeads[e.lead_id] : null;
     const titleClick = noContact
-      ? ` onclick="openClient('${e.client_id}','email','${jsArg(e.to_email)}')" style="cursor:pointer;"`
+      ? ` onclick="fixContactOpen('email','${jsArg(e.id)}','${e.client_id}','${jsArg(e.to_email)}')" style="cursor:pointer;"`
       : (e.case_id ? ` onclick="openCase('${e.case_id}')" style="cursor:pointer;"` : "")
         || (e.lead_id ? ` onclick="openLeadInToday('${jsArg(e.lead_id)}')" style="cursor:pointer;" title="Open this enquiry's row in My Day on Today"` : "");
     const whoTxt = e.clients ? e.clients.first_name + " " + e.clients.last_name : (leadRow && leadRow.name) || e.to_email || "";
@@ -24023,7 +24481,7 @@ async function loadEmails() {
       ${staleAddr ? `<span class="badge amber" title="Queued to ${esc(e.to_email)}, but this client's email is now ${esc(curEmail)}">address changed since queued</span>` : ""}
       <span class="badge ${badge[e.status]}">${e.status}</span>
       ${staleAddr ? `<button class="btn btn-sm btn-primary" onclick="useCurrentEmailAddress('${e.id}','${e.client_id}')" title="Re-address this queued email to ${esc(curEmail)}">Use current address</button>` : ""}
-      ${fixContact ? `<button class="btn btn-sm btn-ghost" onclick="openClient('${e.client_id}','email','${jsArg(e.to_email)}')" title="${noContact ? "This client has no email address on file — add one, then retry" : "This looks like a bad contact detail, not a one-off send failure"}">Fix contact</button>` : ""}
+      ${fixContact ? `<button class="btn btn-sm btn-ghost" onclick="fixContactOpen('email','${jsArg(e.id)}','${e.client_id}','${jsArg(e.to_email)}')" title="${noContact ? "This client has no email address on file — add one, then retry" : "This looks like a bad contact detail, not a one-off send failure"}">Fix contact</button>` : ""}
       ${failed ? `<button class="btn btn-sm" onclick="retryEmail('${e.id}')">Retry</button>` : ""}
       ${/* R73 · B3 — Cancel was the only ghost DESTRUCTIVE verb in the app, sitting
            beside a bordered Retry that does the opposite. Same weight as Retry now:
@@ -24089,7 +24547,7 @@ async function loadEmails() {
         <div class="s">${esc(s.to_phone || "")} · ${s.sent_at ? "sent " + new Date(s.sent_at).toLocaleString("en-GB") : "created " + new Date(s.created_at).toLocaleString("en-GB")}${errLine}</div>
       </div>
       <span class="badge ${smsBadge[s.status] || "grey"}">${esc(s.status)}</span>
-      ${!settled && s.client_id && isBadContactError(s.error) ? `<button class="btn btn-sm btn-ghost" onclick="openClient('${s.client_id}','phone','${jsArg(s.to_phone)}')" title="This looks like a bad contact detail, not a one-off send failure">Fix contact</button>` : ""}
+      ${!settled && s.client_id && isBadContactError(s.error) ? `<button class="btn btn-sm btn-ghost" onclick="fixContactOpen('sms','${jsArg(s.id)}','${s.client_id}','${jsArg(s.to_phone)}')" title="This looks like a bad contact detail, not a one-off send failure">Fix contact</button>` : ""}
       ${failed ? `<button class="btn btn-sm" onclick="retrySms('${s.id}')">Retry</button>` : ""}
       ${s.status === "queued" || failed ? `<button class="btn btn-sm btn-ghost sms-cancel" data-id="${esc(s.id)}" onclick="cancelQueuedSms('${s.id}')" title="${failed ? "Stop retrying this one — it is marked cancelled and never sends" : "Stop this SMS before the 8:05am run picks it up — it never sends"}">Cancel</button>` : ""}
     </div>`;
@@ -24127,6 +24585,26 @@ function retryReport(ok, blocked) {
   }
   return msg;
 }
+/* ==========================================================================
+   R76 · B5 — FIX THE CONTACT, THEN BE OFFERED THE RETRY.
+   Every "Fix contact" on a failed send opened the client modal fix-focused;
+   after Kim corrected the address and saved, the toast said only "Client
+   saved" and the failed row sat waiting for her to find it again and press
+   Retry by hand. The retry IS safe by construction — retryEmail/retrySms
+   re-read the client's CURRENT address before re-queueing — so the only
+   missing piece was carrying the originating queue row's id through the
+   modal. fixContactOpen() is now the one entry point for every Fix-contact
+   link: it records {kind, rowId} and opens the client exactly as before.
+   openClient() consumes the context at open (and only when the ids agree and
+   a fix focus is set, so a stale context can never attach to an unrelated
+   open), and the save path offers "Retry the failed <email/SMS> to <new
+   address> now?" as a toast ACTION — only when the save was fix-focused AND
+   the fixed field actually changed. */
+let FIX_RETRY_CTX = null; // {kind:"email"|"sms", rowId} — set by fixContactOpen, consumed by openClient
+window.fixContactOpen = function (kind, rowId, clientId, attempted) {
+  FIX_RETRY_CTX = rowId ? { kind: kind === "sms" ? "sms" : "email", rowId, clientId } : null;
+  openClient(clientId, kind === "sms" ? "phone" : "email", attempted);
+};
 /* T1-2 — `error` is deliberately NOT cleared here: it's the bounce diagnostic, and it's what makes
    the row's "Fix contact" link appear at all (isBadContactError). Clearing it on retry threw away
    the only evidence of what was wrong the moment someone tried to act on it. */
@@ -24555,6 +25033,33 @@ async function runQueueNow(btn, after) {
     // cron won't touch it yet and neither does this count, so the number matches what will go out.
     const due = (rows || []).filter((e) => !e.scheduled_for || e.scheduled_for <= nowIso);
     if (!due.length) return toast("Nothing is waiting to be sent — the queue is empty.");
+    /* R76 · B1 — RUN-NOW HONESTY UNDER THE HOLD. process-emails v18 enforces the global hold
+       SERVER-SIDE: while settings.email_hold is anything but 'off', a full run queues whatever is
+       due and stamps the heartbeat and then sends NOTHING ({warning, held, pending} comes back).
+       This function used to stage the named-recipient consent dialog anyway — "Send ALL 14 queued
+       emails now? Recipients: …" — asking the Owner to consent to sends the server was always
+       going to refuse, which is exactly the badge-counts-what-the-list-won't-show shape in a new
+       place. So: while held, the consent dialog is replaced by an honest house overlay that says
+       what the run WILL do (queue + stamp) and what it will not (send), with no recipient list —
+       naming people who will not be written to is the lie this branch exists to remove. OK still
+       calls runAutomation, because the queueing and the heartbeat are the point of pressing this
+       on a held system (the stuck-cron banner clears because the heartbeat moved, not because
+       mail went out); the server's own held warning is surfaced by runAutomation's toast exactly
+       as before. When the hold is OFF, the confirm below is a pinned contract (r5_batch1 R5-1 /
+       r69_today §C) and is byte-for-byte untouched. */
+    if (emailHoldOn()) {
+      const goAhead = await confirmDestructive({
+        title: "Email sending is on hold",
+        body: `<p id="runnow-held-body">Email sending is on hold — this run queues new automation emails and stamps the heartbeat; the ${due.length} waiting email${due.length === 1 ? "" : "s"} stay held. Only an Owner can release the hold (Settings › Email sending).</p>`,
+        okLabel: "Run — nothing sends",
+        cancelLabel: "Cancel",
+        danger: false,
+      });
+      if (!goAhead) return;
+      await runAutomation(false, queueingRan ? undefined : { queueIds: due.map((e) => e.id) });
+      if (typeof after === "function") await after();
+      return;
+    }
     const who = due.slice(0, 5).map((e) => (e.clients ? [e.clients.first_name, e.clients.last_name].filter(Boolean).join(" ") : "") || e.to_email || "unknown recipient");
     const more = due.length > who.length ? ` …and ${due.length - who.length} more` : "";
     /* R9-3 — review REMINDERS count too. They are emails a client receives, queued by the same run,
@@ -26237,35 +26742,85 @@ window.acceptLead = async function (id, ev) {
      case note rather than into last_name. */
   const rawName = (l.name || "").trim().replace(/\s+/g, " ");
   let firstName = "", lastName = rawName, jointNote = "";
-  if (rawName) {
-    if (isJointName(rawName)) {
-      const guess = splitJointName(rawName);
-      const askedFirst = prompt(`This looks like a joint enquiry: “${rawName}”.\n\nFile the client record under one name — the second applicant is recorded on the case note.\n\nFirst name:`, guess.first_name);
-      const askedLast = askedFirst === null ? null : prompt(`Joint enquiry: “${rawName}”.\n\nSurname:`, guess.last_name);
-      /* Cancelling either prompt keeps the best guess — the lead is already claimed, and a record
-         named "Deborah Ashworth" is editable; a doubled name is what we're here to stop.
-
-         R12a K-3 — AND SO DOES CLEARING IT. Cancel was guarded and an EMPTY answer was not, so the
-         one input everybody actually gives these prompts — Enter, Enter, because the defaults look
-         right — produced "" for both fields, fell through to `if (!firstName && !lastName)` and
-         filed the client as the whole doubled string: precisely the record the prompt exists to
-         prevent, followed by "Hi there," on every template that greets by first name. Empty and
-         whitespace-only are now treated exactly like Cancel, PER FIELD: the parsed guess stands.
-         The rawName backstop below is kept for the genuinely unparseable name (no guess, nothing
-         typed) — something on the record beats an unnamed client. */
-      const keptOr = (asked, fallback) => {
-        const typed = asked === null ? "" : String(asked).trim();
-        return typed || String(fallback || "").trim();
+  let client = null, createdClient = false;
+  if (rawName && isJointName(rawName)) {
+    /* ======================================================================
+       R76 · B3 — THE JOINT ACCEPT IS ONE OVERLAY, NOT A CHAIN.
+       The old flow was prompt("First name:") → prompt("Surname:") → a confirm
+       that could only ever offer the scorer's TOP match — Kim literally could
+       not pick candidate #2 of three, and the two-prompt chain was the K-3
+       machine (Enter, Enter used to file the doubled name; R12a K-3 patched
+       the symptom, this kills the class: the overlay's inputs are PREFILLED
+       with the parsed guess, so accepting the defaults accepts the guess, and
+       an emptied field still falls back to the guess per K-3's rule).
+       ONE openOverlay (#lead-joint-overlay): the joint-name note, editable
+       First/Surname, and — when the shared matcher has candidates — a radio
+       per candidate ("Attach to <name> — <evidence>") plus "Create a new
+       client", so EVERY match is pickable, not just the closest. OK proceeds
+       down the exact accept logic below (attach vs create via acceptLeadCore,
+       unchanged); Cancel ABORTS: the claim is undone (releaseLead) and the
+       enquiry goes back in the inbox — the old "cancel proceeds anyway"
+       behaviour existed only because a native prompt cannot host a real
+       Cancel. The NON-joint flow keeps its native confirms below, untouched —
+       it never shared the prompt chain, only the matcher. */
+    const guess = splitJointName(rawName);
+    const matchRows = await fetchMatchClients();
+    const match = findClientMatches({ first: guess.first_name, last: guess.last_name, email: l.email, phone: l.phone }, matchRows);
+    const cands = (match.exact ? [{ client: match.exact, reason: match.reason }] : []).concat(match.near);
+    const candWho = (c) => clientFullName(c) || c.email || c.phone || "this client";
+    const candRow = (n, i) => `
+      <label class="ljo-cand"><input type="radio" name="ljo-pick" value="${esc(n.client.id)}" ${match.exact && i === 0 ? "checked" : ""}>
+        Attach to <strong>${esc(candWho(n.client))}</strong> — ${esc(n.reason)}${n.client.email ? ` · ${esc(n.client.email)}` : ""}${n.client.phone ? ` · ${esc(n.client.phone)}` : ""}</label>`;
+    const res = await openOverlay(`
+      <div id="lead-joint-overlay">
+        <h3 id="ljo-title">Joint enquiry</h3>
+        <div class="panel-sub" id="ljo-note"><p>This looks like a joint enquiry: “${esc(rawName)}”. File the client record under <strong>one</strong> name — the second applicant is recorded on the case note.</p></div>
+        <div class="form-grid">
+          <label>First name<input id="ljo-first" value="${esc(guess.first_name)}"></label>
+          <label>Surname<input id="ljo-last" value="${esc(guess.last_name)}"></label>
+        </div>
+        ${cands.length ? `
+        <div id="ljo-candidates">
+          <p class="panel-sub" id="ljo-cand-lede">We may already hold ${cands.length === 1 ? "this client" : "this client — " + cands.length + " possible matches"}. Choose what happens:</p>
+          ${cands.map(candRow).join("")}
+          <label class="ljo-cand"><input type="radio" name="ljo-pick" value="__new__" ${match.exact ? "" : "checked"}> Create a new client</label>
+        </div>` : ""}
+        <div class="modal-actions">
+          <div><button type="button" class="btn" id="ljo-cancel">Cancel — leave the lead in the inbox</button></div>
+          <div class="right"><button type="button" class="btn btn-primary" id="ljo-ok">Accept lead</button></div>
+        </div>
+      </div>`, (finish, box) => {
+      box.querySelector("#ljo-cancel").onclick = () => finish(null);
+      box.querySelector("#ljo-ok").onclick = () => {
+        const pick = box.querySelector('input[name="ljo-pick"]:checked');
+        finish({
+          first: box.querySelector("#ljo-first").value.trim(),
+          last: box.querySelector("#ljo-last").value.trim(),
+          pick: pick ? pick.value : "__new__",
+        });
       };
-      firstName = keptOr(askedFirst, guess.first_name);
-      lastName = keptOr(askedLast, guess.last_name);
-      if (!firstName && !lastName) lastName = rawName;
-      if (guess.second) jointNote = ` · Joint applicant: ${guess.second}`;
-      else jointNote = ` · Joint enquiry as submitted: ${rawName}`;
-    } else {
-      const nm = splitName(rawName);
-      firstName = nm.first_name; lastName = nm.last_name;
+    });
+    if (!res) {
+      // Cancelled (button, Escape or backdrop) — undo the claim so the enquiry can be retried.
+      await releaseLead(id);
+      if (btn) btn.disabled = false;
+      await loadBriefing();
+      restoreLeadAdvSel(otherLeadSel);
+      return toast("Nothing was created — the enquiry stays in the inbox.");
     }
+    // K-3's rule survives the overlay: an emptied field means "keep the guess", per field.
+    firstName = res.first || String(guess.first_name || "").trim();
+    lastName = res.last || String(guess.last_name || "").trim();
+    if (!firstName && !lastName) lastName = rawName;  // genuinely unparseable — raw beats unnamed
+    if (guess.second) jointNote = ` · Joint applicant: ${guess.second}`;
+    else jointNote = ` · Joint enquiry as submitted: ${rawName}`;
+    if (res.pick && res.pick !== "__new__") {
+      const chosen = cands.find((n) => n.client.id === res.pick);
+      if (chosen) client = chosen.client;
+    }
+  } else if (rawName) {
+    const nm = splitName(rawName);
+    firstName = nm.first_name; lastName = nm.last_name;
   }
 
   /* R5-10 — before inserting, look for the client we may already have. The old lookup was email-only
@@ -26274,21 +26829,25 @@ window.acceptLead = async function (id, ev) {
      "deborah.ashworth@…" we hold — became a third record with the same surname, same house and the
      same phone, and Data Health picked it up days later. It now runs the shared matcher: name and
      phone count even when there IS an email, and a near match ASKS rather than either attaching
-     silently or ignoring the person we already have. */
-  let client = null, createdClient = false;
-  const matchRows = await fetchMatchClients();
-  const match = findClientMatches({ first: firstName, last: lastName, email: l.email, phone: l.phone }, matchRows);
-  const whoOf = (c) => [c.first_name, c.last_name].filter(Boolean).join(" ") || c.email || c.phone || "this client";
-  if (match.exact) {
-    const e = match.exact;
-    if (confirm(`A client already exists: ${whoOf(e)}${e.email ? " (" + e.email + ")" : ""} — matched on ${match.reason}.\n\nAttach this new case to the existing client instead of creating a duplicate?`)) {
-      client = e;
-    }
-  } else if (match.near.length) {
-    const n = match.near[0];
-    const others = match.near.length > 1 ? `\n\n(${match.near.length} possible matches — this is the closest: ${match.near.slice(1).map((x) => whoOf(x.client)).join(", ")} also look similar.)` : "";
-    if (confirm(`Did you mean ${whoOf(n.client)}${n.client.email ? " (" + n.client.email + ")" : ""}?\n\nThis lead has ${n.reason} — but the details aren't identical, so it may be a different person.${others}\n\nOK = attach the case to them · Cancel = create a new client.`)) {
-      client = n.client;
+     silently or ignoring the person we already have.
+     R76 · B3 — for a JOINT lead this question has already been asked (and answered candidate by
+     candidate) inside #lead-joint-overlay above, so this block runs for non-joint leads only —
+     asking twice would be the double-fire the overlay exists to remove. */
+  if (!(rawName && isJointName(rawName))) {
+    const matchRows = await fetchMatchClients();
+    const match = findClientMatches({ first: firstName, last: lastName, email: l.email, phone: l.phone }, matchRows);
+    const whoOf = (c) => [c.first_name, c.last_name].filter(Boolean).join(" ") || c.email || c.phone || "this client";
+    if (match.exact) {
+      const e = match.exact;
+      if (confirm(`A client already exists: ${whoOf(e)}${e.email ? " (" + e.email + ")" : ""} — matched on ${match.reason}.\n\nAttach this new case to the existing client instead of creating a duplicate?`)) {
+        client = e;
+      }
+    } else if (match.near.length) {
+      const n = match.near[0];
+      const others = match.near.length > 1 ? `\n\n(${match.near.length} possible matches — this is the closest: ${match.near.slice(1).map((x) => whoOf(x.client)).join(", ")} also look similar.)` : "";
+      if (confirm(`Did you mean ${whoOf(n.client)}${n.client.email ? " (" + n.client.email + ")" : ""}?\n\nThis lead has ${n.reason} — but the details aren't identical, so it may be a different person.${others}\n\nOK = attach the case to them · Cancel = create a new client.`)) {
+        client = n.client;
+      }
     }
   }
   /* R68 · B1 — every write from here down is acceptLeadCore(), shared with "Accept all
@@ -26857,7 +27416,13 @@ window.quickApptOutcome = async function (apptId, outcome, btn) {
         loadBriefing();
         refreshDiaryView();
       },
-    });
+    },
+    /* R76 · A4 — a no-show offers a call-back; ATTENDED was a dead end, and "attended" is the one
+       outcome whose next step is always the same: write down what was discussed. Only on a
+       CASE-LINKED appointment (the log-call modal files onto a case) and only when the outcome
+       FLIPPED TO attended (clearing it back off is not a meeting that just happened). The second
+       button rides beside Undo on the same toast — the two verbs belong to the same ten seconds. */
+    next === "attended" && a.case_id ? { label: "Log what was discussed", onClick: () => window.apptLogDiscussed(a.case_id) } : undefined);
   } finally {
     if (btn) btn.disabled = false;
   }
@@ -27714,7 +28279,12 @@ async function diaryMoveAppt(id, to) {
   if (upErr) return toast("It could not be moved: " + upErr.message);
   const wasStart = a.starts_at, wasEnd = a.ends_at;   // captured, so Undo restores exactly
   await loadDiaryForMode();
-  toast(`Moved “${a.title || "appointment"}” · ${apptSlotPhrase(wasStart, wasEnd)} → ${apptSlotPhrase(newStart.toISOString(), newEnd.toISOString())}`,
+  /* R76 · A6 — a drag onto a day already behind today gets the same clause the booking form
+     shows, on the move's existing Undo toast (which is also the cheapest repair for a mis-drop).
+     Warn, never block. */
+  const draggedPast = localDateStr(newStart) < localDateStr();
+  toast(`Moved “${a.title || "appointment"}” · ${apptSlotPhrase(wasStart, wasEnd)} → ${apptSlotPhrase(newStart.toISOString(), newEnd.toISOString())}`
+    + (draggedPast ? " · This books into the past — recording something that already happened?" : ""),
     { label: "Undo", onClick: () => undoDiaryMove(id, wasStart, wasEnd) });
 }
 async function undoDiaryMove(id, startIso, endIso) {
@@ -28006,6 +28576,12 @@ window.openAppt = async function (id, presets = {}, openOpts = {}) {
       <label>Date<input name="date" type="date" required value="${dateVal}"></label>
       <label>Time<input name="time" type="time" required value="${timeVal}"></label>
       <label>Duration (mins)<input name="mins" type="number" value="${mins}"></label>
+      ${/* R76 · A6 — the past-date notice. Warn, never block: recording a meeting that already
+           happened is a legitimate act (it is how a diary catches up after a busy morning), but a
+           booking quietly landing last Tuesday is also exactly what a mistyped date looks like.
+           Kept in sync by syncApptPast() as the date field changes, same pattern as the clash
+           notice above. */ ""}
+      <p class="dq-notice full hidden" id="appt-past-note">This books into the past — recording something that already happened?</p>
       ${/* R72 · B1 (H4) — WHOSE DIARY. Booked from a case, "Who" now defaults to the CASE's adviser
            (see #act-appt / retBookReview), which is the right default and a silent one: the person
            booking reads their own name nowhere and assumes it is theirs. The line below says it
@@ -28051,7 +28627,18 @@ window.openAppt = async function (id, presets = {}, openOpts = {}) {
   // R74 · B2 — required marks up front, inline errors cleared on the edit that fixes them.
   markRequiredFields("#appt-form");
   const apptFormEl = $("#appt-form");
-  if (apptFormEl) apptFormEl.addEventListener("input", (e) => clearOneFieldError(e.target));
+  /* R76 · A6 — the notice line follows the date field live, so it appears while the wrong year is
+     still on screen (and disappears the moment it is fixed) rather than only in the save toast.
+     Europe/London date part on both sides (localDateStr), per the house date-walk rule. */
+  const syncApptPast = () => {
+    const note = $("#appt-past-note");
+    const dEl = apptFormEl && apptFormEl.elements.date;
+    if (!note || !dEl) return;
+    const v = String(dEl.value || "").trim();
+    note.classList.toggle("hidden", !(v && v < localDateStr()));
+  };
+  if (apptFormEl) apptFormEl.addEventListener("input", (e) => { clearOneFieldError(e.target); if (e.target && e.target.name === "date") syncApptPast(); });
+  syncApptPast();
   pushModalHistory("appt", id); // BUILD 7a — Back closes this modal
   $("#modal-cancel").onclick = closeModalGuarded; // defect 2 — Cancel is a "leave" path: it must warn about unsaved edits too
   /* R5-48 — leaving via these is still a "leave" path: unsaved edits are guarded exactly as Cancel
@@ -28243,23 +28830,34 @@ window.openAppt = async function (id, presets = {}, openOpts = {}) {
        told her nothing about where any of them went. Silent for a booking in your own diary,
        because a clause that is always there stops being read. */
     const otherDiary = row.staff_id && (!ME || row.staff_id !== ME.id) ? ` · in ${staffName(row.staff_id)}'s diary` : "";
+    /* R76 · A6 — a booking whose start date is already behind today (Europe/London date part) is
+       almost always somebody RECORDING a meeting that already happened — legitimate, so it is
+       never blocked — but occasionally it is a mistyped year, so the save toast carries the same
+       clause the form's own notice line showed. Warn, never block. */
+    const pastBooked = localDateStr(startAt) < localDateStr();
     const savedMsg = "Appointment saved"
       + otherDiary
       + (savedOverClash ? ` · double-booked over ${apptClashPhrase(savedOverClash)}` : "")
       + outcomeExtra
+      + (pastBooked ? " · This books into the past — recording something that already happened?" : "")
       + (outcomeColMissing ? " · the outcome could NOT be stored — this database has no appointments.outcome column yet" : "")
       + (caseUnlinked ? ` · the link to ${caseIdentityLabel(caseUnlinked) || "the previous case"} was removed — that case belongs to a different client` : "");
+    /* R76 · A4 — the editor is the other place an outcome flips to ATTENDED, and the same next
+       step is offered on its toast. Case-linked only, and only on a genuine change — a re-save
+       of an already-recorded attendance is not a meeting that just happened. */
+    const attendedAction = outcomeChanged && row.outcome === "attended" && row.case_id
+      ? { label: "Log what was discussed", onClick: () => window.apptLogDiscussed(row.case_id) } : undefined;
     refreshDiaryView();
     if (!$("#page-dashboard").classList.contains("hidden")) loadBriefing();   // R41 · F1 — My Day carries today's bookings now
     /* R12b · W-10 — booked FROM a case: go back to it rather than closing everything. openCase
        replaces this modal (and its history entry) exactly as the "Open case" button above does. */
     if (returnCaseId) {
-      toast(savedMsg + " · back on the case");
+      toast(savedMsg + " · back on the case", attendedAction);
       await window.openCase(returnCaseId);
       return;
     }
     closeModal();
-    toast(savedMsg);
+    toast(savedMsg, attendedAction);
   };
   if (id) $("#del-appt-btn").onclick = async () => {
     /* R12b · W-17 — Delete and "record an outcome" are different verbs and the copy now says so.

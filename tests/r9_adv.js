@@ -81,6 +81,26 @@ async function newPage(browser, persona, viewport) {
   return page;
 }
 const toastText = (page) => page.$eval("#toast", (e) => e.textContent).catch(() => "");
+/* R76: completing a case interactively now opens the house Completed stage-entry overlay
+   (#stage-completed-*) instead of a native confirm, and the referral thank-you offer is a house
+   overlay too (#ovl-confirm-ok / #ovl-confirm-cancel). PLAYWRIGHT-AWAIT: the move promise must
+   NOT be awaited inside page.evaluate while an overlay is up — fire it, drive the DOM, then read
+   the stored promise. `referral` = "accept" | "decline" | null (no referral overlay expected). */
+async function completeCase76(page, caseId, referral) {
+  await page.evaluate((id) => { window.__r76mv = window.moveCaseToStage(id, "completed"); }, caseId);
+  await page.waitForSelector("#stage-completed-ok", { timeout: 8000 });
+  const completedBody = await page.$eval("#overlay-modal", (e) => e.textContent);
+  await page.click("#stage-completed-ok");
+  let referralBody = null;
+  if (referral) {
+    await page.waitForSelector("#ovl-confirm-ok", { timeout: 8000 });
+    referralBody = await page.$eval("#overlay-modal", (e) => e.textContent);
+    await page.click(referral === "accept" ? "#ovl-confirm-ok" : "#ovl-confirm-cancel");
+  }
+  const result = await page.evaluate(() => window.__r76mv);
+  await page.waitForTimeout(1300);
+  return { completedBody, referralBody, result };
+}
 const gotoReports = async (page) => { await page.evaluate(() => window.nav("reports")); await page.waitForTimeout(2200); };
 const gotoToday = async (page) => { await page.evaluate(() => window.nav("dashboard")); await page.waitForTimeout(1400); };
 
@@ -358,18 +378,20 @@ const tasksOnCase = (page, caseId) => page.evaluate(async (cid) =>
       const skip = GT.referrals.find((r) => !!r.target.why);
 
       // (a) accept both prompts → exactly one task, on the right case, right title, right adviser, due today
+      /* R76: both prompts are house overlays now — the Completed stage-entry overlay first, then
+         the referral offer. The claims are unchanged; only where the words live moved. */
       {
         const page = await newPage(browser, "p4");
         const before = await tasksOnCase(page, ref.target.caseId);
-        await page.evaluate((id) => window.moveCaseToStage(id, "completed"), ref.caseId);
-        await page.waitForTimeout(1600);
-        const msgs = page.__dialogs.map((d) => d.message);
-        ok("R9-1 · the completion confirm warns that a thank-you will be offered",
-          msgs.length >= 1 && /referred/i.test(msgs[0]) && /thank-you task/i.test(msgs[0]), (msgs[0] || "").slice(0, 200));
-        ok("R9-1 · …and states that no email is sent either way", /no email/i.test(msgs[0] || ""), (msgs[0] || "").slice(-90));
-        ok("R9-1 · a second prompt ASKS before writing on the referrer's file",
-          msgs.length === 2 && msgs[1].includes(ref.referrer) && msgs[1].includes(ref.client), (msgs[1] || "").slice(0, 200));
+        const flow = await completeCase76(page, ref.caseId, "accept");
+        const msgs = [flow.completedBody || "", flow.referralBody || ""];
+        ok("R9-1 · the completion overlay warns that a thank-you will be offered",
+          /referred/i.test(msgs[0]) && /thank-you task/i.test(msgs[0]), (msgs[0] || "").slice(0, 200));
+        ok("R9-1 · …and states that no email is sent either way", /No email is sent to anybody either way/i.test(msgs[0] || ""), (msgs[0] || "").slice(-120));
+        ok("R9-1 · a second (house) dialog ASKS before writing on the referrer's file",
+          !!flow.referralBody && msgs[1].includes(ref.referrer) && msgs[1].includes(ref.client), (msgs[1] || "").slice(0, 200));
         ok("R9-1 · …naming the exact task, its due date and its assignee", /due today/i.test(msgs[1] || "") && /assigned to/i.test(msgs[1] || ""), (msgs[1] || "").slice(0, 220));
+        eq("R9-1 · R76 — no native dialog anywhere in the flow", page.__dialogs.length, 0);
         const after = await tasksOnCase(page, ref.target.caseId);
         const made = after.filter((t) => !before.some((b) => b.title === t.title));
         eq("R9-1 · exactly one task is created", made.length, 1);
@@ -388,12 +410,11 @@ const tasksOnCase = (page, caseId) => page.evaluate(async (cid) =>
       }
 
       // (b) decline the offer → the completion still happens, the referrer's file is untouched
+      // R76: "decline" is now #ovl-confirm-cancel on the referral overlay.
       {
         const page = await newPage(browser, "p4");
-        page.__answers = ["accept", "dismiss"];   // yes to completing, no to the thank-you
         const before = await tasksOnCase(page, ref.target.caseId);
-        await page.evaluate((id) => window.moveCaseToStage(id, "completed"), ref.caseId);
-        await page.waitForTimeout(1600);
+        await completeCase76(page, ref.caseId, "decline");
         eq("R9-1 · declining the offer writes no task", await tasksOnCase(page, ref.target.caseId), before);
         const stage = await page.evaluate(async (id) => (await window.__mockDb.from("cases").select("stage").eq("id", id)).data[0].stage, ref.caseId);
         eq("R9-1 · …and the case still completed", stage, "completed");
@@ -416,11 +437,14 @@ const tasksOnCase = (page, caseId) => page.evaluate(async (cid) =>
         }, GT.referredCaseIds);
         if (plain) {
           page.__dialogs = [];
-          await page.evaluate((id) => window.moveCaseToStage(id, "completed"), plain);
-          await page.waitForTimeout(1500);
-          const asked = page.__dialogs.map((d) => d.message);
-          eq("R9-1 · completing a case with no referrer asks only the ordinary completion confirm", asked.length, 1);
-          ok("R9-1 · …with no mention of a referral", !/referred|thank-you/i.test(asked[0] || ""), (asked[0] || "").slice(0, 120));
+          /* R76: the ordinary completion pause is the house Completed overlay now — no native
+             dialog at all, and no referral overlay follows for a case with no referrer. */
+          const flow = await completeCase76(page, plain, null);
+          eq("R9-1 · completing a case with no referrer raises no native dialog", page.__dialogs.length, 0);
+          ok("R9-1 · …the Completed overlay appeared with no mention of a referral",
+            !!flow.completedBody && !/referred|thank-you/i.test(flow.completedBody), (flow.completedBody || "").slice(0, 160));
+          eq("R9-1 · …and no referral overlay followed",
+            await page.evaluate(() => !!document.querySelector("#ovl-confirm-ok")), false);
         }
         ok("no console errors (non-completion)", !page.__err, JSON.stringify(page.__err));
         await page.close();
@@ -438,9 +462,11 @@ const tasksOnCase = (page, caseId) => page.evaluate(async (cid) =>
         const thankCount = () => page.evaluate(async () => ((await window.__mockDb.from("case_tasks").select("id,title")).data || [])
           .filter((t) => /^Thank .* for referring /.test(t.title || "")).length);
         const beforeAll = await thankCount();
-        await page.evaluate((id) => window.moveCaseToStage(id, "completed"), skip.caseId);
-        await page.waitForTimeout(1600);
-        eq("R9-1 · an ambiguous referrer is not offered a task at all", page.__dialogs.length, 1);
+        /* R76: the completion pause is the house overlay; the ambiguous referrer still gets NO
+           ask of its own (maybeQueueReferralThankYou explains in the toast instead). */
+        await completeCase76(page, skip.caseId, null);
+        eq("R9-1 · an ambiguous referrer is not offered a task at all (no referral overlay, no native dialog)",
+          (await page.evaluate(() => !!document.querySelector("#ovl-confirm-ok"))) || page.__dialogs.length > 0, false);
         const afterAll = await thankCount();
         eq("R9-1 · …and no task is written anywhere", afterAll, beforeAll);
         const t = await toastText(page);
@@ -453,17 +479,24 @@ const tasksOnCase = (page, caseId) => page.evaluate(async (cid) =>
       // (e) idempotency — reopen and re-complete, still one task
       {
         const page = await newPage(browser, "p4");
-        await page.evaluate((id) => window.moveCaseToStage(id, "completed"), ref.caseId);
-        await page.waitForTimeout(1400);
-        await page.evaluate((id) => window.moveCaseToStage(id, "offer"), ref.caseId);
+        await completeCase76(page, ref.caseId, "accept");
+        /* R76: reopening a settled case interactively is confirmTyped REOPEN now — the same gate
+           the bulk path has had since R75. Fire unawaited, type the word, press the danger OK. */
+        await page.evaluate((id) => { window.__r76re = window.moveCaseToStage(id, "offer"); }, ref.caseId);
+        await page.waitForSelector("#ovl-typed-input", { timeout: 8000 });
+        ok("R9-1 · R76 — reopening asks for the typed word REOPEN",
+          await page.evaluate(() => /REOPEN/.test(document.querySelector("#ovl-typed-label").textContent)));
+        await page.fill("#ovl-typed-input", "REOPEN");
+        await page.click("#ovl-typed-ok");
+        eq("R9-1 · R76 — the typed gate reopens the case", await page.evaluate(() => window.__r76re), "reopened");
         await page.waitForTimeout(1100);
         page.__dialogs = [];
-        await page.evaluate((id) => window.moveCaseToStage(id, "completed"), ref.caseId);
-        await page.waitForTimeout(1500);
+        await completeCase76(page, ref.caseId, null);
         const t = await tasksOnCase(page, ref.target.caseId);
         eq("R9-1 · re-completing a reopened case does not stack a second thank-you",
           t.filter((x) => x.title === ref.expectTitle).length, 1);
-        eq("R9-1 · …and does not re-ask", page.__dialogs.filter((d) => /Create a thank-you task/.test(d.message)).length, 0);
+        eq("R9-1 · …and does not re-ask (no referral overlay on the second completion)",
+          await page.evaluate(() => !!document.querySelector("#ovl-confirm-ok")), false);
         await page.close();
       }
 
@@ -478,6 +511,9 @@ const tasksOnCase = (page, caseId) => page.evaluate(async (cid) =>
         // it first, leaving the actual modal's drawer (and the stage select inside it) collapsed.
         await page.evaluate(() => { document.querySelector("#modal .case-details").open = true; document.querySelector("#case-form").elements.stage.value = "completed"; });
         await page.click("#modal-save");
+        // R76: the thank-you offer is a house overlay now — accept it as the old auto-accepted confirm did.
+        await page.waitForSelector("#ovl-confirm-ok", { timeout: 8000 });
+        await page.click("#ovl-confirm-ok");
         await page.waitForTimeout(1600);
         const after = await tasksOnCase(page, ref.target.caseId);
         const made = after.filter((t) => !before.some((b) => b.title === t.title));

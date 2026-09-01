@@ -279,10 +279,19 @@ const dueFor = (offset, now) => dstr(now + offset * DAY_MS);
       const errBefore = (page.__err || []).length;
       await goto(page, "dashboard", 1500);
 
-      // The first enquiry row on My Day, and the lead behind it.
-      const leadId = await page.evaluate(() => {
-        const s = document.querySelector("#briefing-list select.lead-adviser[data-lead]");
-        return s ? s.dataset.lead : null;
+      // The first NON-JOINT enquiry row on My Day, and the lead behind it.
+      /* R76 · B3 — a joint-name lead ("Deborah & Michael Ashworth", the fixture's newest) now
+         opens the #lead-joint-overlay instead of converting straight through, and this section
+         is about the ENQUIRY PLAYBOOK write, not the joint flow (tests/r76_intake.js §C owns
+         that). Accept a single-name lead so the write happens on a plain click as before. */
+      const leadId = await page.evaluate(async () => {
+        const sels = [...document.querySelectorAll("#briefing-list select.lead-adviser[data-lead]")];
+        for (const s of sels) {
+          const { data } = await window.__mockDb.from("leads").select("name").eq("id", s.dataset.lead).single();
+          const nm = (data && data.name) || "";
+          if (!/&/.test(nm) && !/\s\band\b\s/i.test(nm)) return s.dataset.lead;
+        }
+        return null;
       });
       ok("A0 · fixture — My Day carries at least one acceptable website enquiry", !!leadId, String(leadId));
 

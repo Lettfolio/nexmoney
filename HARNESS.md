@@ -128,7 +128,147 @@ node tests/r74_numbers.js
 node tests/r74_forms.js
 node tests/r75_diary.js
 node tests/r75_queues.js
+node tests/r76_case.js
+node tests/r76_intake.js
 ```
+
+**R76 · A notes — "close the loop" (`tests/r76_case.js`).**
+Seven items, all on the case/board/diary loop. **A1 · Completed stage-entry overlay** —
+`promptCompletedEntry()` replaces the native completed confirm on EVERY interactive single-case
+path into Completed (drag, card select/arrow, modal advance/select, gate panel); bulk
+(`skipConfirm`) untouched and still stamps now(). Ids are contracts: `#stage-completed-date`
+("Completed on", defaults today via localDateStr; `completed_at` is written from it anchored at
+LOCAL MIDDAY — `new Date(d+"T12:00:00")` — so no TZ walk shifts the day), `#stage-completed-fee`
+/ `#stage-completed-review` (PRE-TICKED — Daniel's decision; each disabled-unticked with its
+stated reason when it can't work: no client email, no broker fee, fee already requested/paid,
+review already requested, no review link, no bank details — the bank check is the
+`has_bank_details` RPC, so on the mock the fee box is live only after the OWNER seeds the three
+bank settings; they are owner-RLS'd, seed them as p4), `#stage-completed-rate` (read-only rate-end
+line, or the "no rate end date — retention won't chase this case; add it on the case" warning),
+`#stage-completed-ok` / `#stage-completed-cancel` (Cancel aborts the move entirely). Ticked boxes
+queue through **queueEmail(..., {bulk:true})** — the SAME writer the Actions ▾ buttons use (same
+fee/review stamps, same email_queue row; queued only, never sent from here) — and the move toast
+names each one in `heldWord()` tense ("fee request email held/queued"); a failure reads "could
+NOT be queued (reason)". **RULE (now written down): stage Undo is disabled whenever an entry
+prompt wrote data** — ticking either email counts (email_queue + fee/review stamps carry no ids
+the undo holds), so a completed move that queued anything offers NO Undo; an untouched overlay
+(both boxes dead/unticked) keeps the R74 Undo, and the chosen completed_at is inside its
+snapshot. The mock's completion trigger still queues its own `completion_congrats` row — suites
+counting email_queue rows on a completion must expect it. **A2 · stale-board guard** — every
+single-case move entry that renders a stage passes `opts.expectedStage` (card arrow + card select
+bake `c.stage`; board drag captures `dataset.stage` at dragstart via `boardDragFromStage`; the
+modal advance/stage-select pass the opened row's stage); after moveCaseToStage's fresh read, a
+mismatch aborts with toast "This case moved to <stage word> since this board loaded — refreshing
+the board", repaints the board, and returns the new status string **"stale"**. Bulk never passes
+it. Board cards now carry `data-stage`. **A3 · fact-find Apply closes its task** — on a
+successful `#ff-apply-confirm`, the case's OPEN task titled exactly "Review submitted fact-find"
+(trim/case-tolerant match on the fixed trigger string — deliberately NOT
+playbookStepMatchesTitle) is completed; toast gains "· closed the review task" and its Undo
+reopens exactly that task (never the applied fields). No such open task → nothing changes. **A4 ·
+attended → log it** — `toast()` accepts an optional THIRD arg `action2` (`#toast-action-2`,
+rendered only when a primary action exists; `#toast-action` stays first-in-DOM and primary, so
+old suites keep pressing it for Undo). An outcome flipping to `attended` on a CASE-LINKED
+appointment (quick ✓ on My Day, or the editor's radios on save) offers "Log what was discussed" →
+`window.apptLogDiscussed(caseId)` → the ONE log-call overlay with panelId **`appt-logcall-panel`**
+(third entry point; `ret-logcall-panel`/`cs-logcall-panel` untouched). **A5 · inbound email on
+the case** — the timeline's case_emails read now selects `id,triage_status`; an inbound row
+renders its snippet under the subject in `.tl-snippet` (esc'd, muted, 2-line clamp) and, while
+`triage_status === 'new'`, a `.tl-mark-handled` chip calling `tlMarkEmailHandled(id, this)` — the
+same write My Day's Mark handled makes (`markEmailHandledWrite()`, one writer) — which swaps the
+chip for "handled ✓" in place; My Day's count agrees on next load, no live sync. **A6 ·
+past-booking warning (warn, never block)** — clause text, verbatim in all three places: "This
+books into the past — recording something that already happened?". In the booking form it is
+`#appt-past-note` (hidden/shown live off the date field vs localDateStr()); on save it joins the
+"Appointment saved" toast; a drag onto a past day appends it to the existing Undo toast.
+**A7 · natives → house** — (a) the interactive REOPEN of a settled case is now
+`confirmTyped({keyword:"REOPEN"})` (same msg text; `#ovl-typed-input` + `#ovl-typed-ok`) —
+matching the bulk path's gate; (b) `bulkAssignCases` confirms via `confirmDestructive`
+(non-danger, `#ovl-confirm-ok`); (c) the referral thank-you offer is a house overlay
+(`confirmDestructive`, non-danger, `#ovl-confirm-ok`/`#ovl-confirm-cancel` — OK creates the task,
+Cancel declines) so it can no longer pop behind toasts. Old-suite patches (commented R76:):
+r9_adv §3 (a)–(f) — completing now opens the Completed overlay (fire the move UNAWAITED, wait for
+`#stage-completed-ok`, press it; the referral question is `#ovl-confirm-body`/`#ovl-confirm-ok`
+after the move; the reopen leg types REOPEN into `#ovl-typed-input`; the dialog-message
+assertions now read overlay bodies).
+**R76 · B notes — "close the loop", agent B (`tests/r76_intake.js` 96).** Five items, every
+contract written down:
+
+  - **B1 — run-now honesty + mock hold parity.** Prod's process-emails **v18** enforces the
+    global hold SERVER-SIDE: while `settings.email_hold` ≠ `'off'`, a FULL (unscoped) run does
+    the queueing RPCs, stamps `last_cron_run_at`, then sends NOTHING and answers
+    `{warning, held, pending}`. The client's `runQueueNow` now reads `emailHoldOn()` after the
+    queueing step: **while held** it raises a house dialog via `confirmDestructive({danger:false})`
+    — ids `#ovl-confirm-title/-body/-ok/-cancel`, body element `#runnow-held-body` — whose
+    WORDING RULE is: says the run *queues new automation emails and stamps the heartbeat*, that
+    the *N waiting emails stay held*, that *only an Owner can release the hold (Settings › Email
+    sending)*, and it must carry **no recipient list**. OK still calls `runAutomation` (queueing +
+    heartbeat are the point; the stuck-cron banner clears because the heartbeat moved) and the
+    server's held warning surfaces through runAutomation's ordinary warning toast. **While NOT
+    held, the classic native confirm ("Send ALL N… Recipients: …") is a pinned contract and is
+    byte-for-byte untouched.** MOCK: the full-run path of `process-emails` now matches v18 —
+    after queueing + stamping, `email_hold ≠ 'off'` OR no `MOCK_RESEND_KEY` ⇒ nothing sends,
+    rows stay `queued`, response is `{held, pending, warning}` (held warning starts
+    "email_hold is on — nothing was sent"; key warning is the existing "RESEND_API_KEY not set"
+    sentence). `LAST_EMAIL_RUN` is still written ({scoped:false, sent:0, held:true}) so
+    `__mock.lastEmailRun()` can testify. The SCOPED path (named queue_ids) deliberately still
+    sends key-or-no-key — every per-case send suite drives it and r69_polish §D9 pins it with
+    the hold ON. **RULE: a suite that wants the classic consent-and-send flow must set
+    `email_hold` "off" AND `__mock.setResendKey(true)` first** (r5_batch1 R5-1 and r69_today §C
+    now do exactly that, commented R76).
+  - **B2 — the duplicate matcher guards the hand-typed doors.** `dupClientGate(q, opts)`
+    (app.js, directly under `findClientMatches`) is ONE shared helper with TWO call sites: the
+    New-client modal's Save (create branch ONLY — an edit never trips it) and the New-case
+    modal's inline "+ New client…" (exactly once per Save click, before any insert). Trigger
+    conditions: it runs the shared matcher over the typed name/email/phone; `match.exact`
+    (email/phone/name) ⇒ overlay `#dup-client-overlay[data-match="exact"]` "This looks like an
+    existing client — <name> (<why>)"; otherwise the first near match ⇒ `[data-match="near"]`
+    with acceptLead's did-you-mean sentence. Buttons: `#dup-client-existing` (modal path OPENS
+    the record; inline path ATTACHES the case — label "Use the existing client"),
+    `#dup-client-create`, `#dup-client-cancel` (Escape/backdrop = cancel). A clean unique create
+    paints NO overlay. Side effect worth knowing: the inline path's old shape could insert a
+    SECOND client when a later validation refused the save and Save was pressed again — the gate
+    now catches the just-created record as an exact match.
+  - **B3 — joint-lead accept is ONE overlay.** `acceptLead` on a joint name (`isJointName`) no
+    longer prompts: `#lead-joint-overlay` carries the joint note (`#ljo-note`), prefilled
+    `#ljo-first`/`#ljo-last` (K-3's rule kept: an emptied field falls back to the parsed guess,
+    per field; a wholly unparseable name still files the raw string), and — when the shared
+    matcher has candidates — one radio per candidate (`input[name="ljo-pick"]`, "Attach to
+    <name> — <evidence>", exact match pre-checked) plus a "Create a new client" radio
+    (pre-checked when there is no exact match); no candidates ⇒ no `#ljo-candidates` block at
+    all. `#ljo-ok` proceeds down the EXACT existing accept logic (attach vs create via
+    acceptLeadCore); `#ljo-cancel`/Escape/backdrop ABORT: `releaseLead(id)` puts the enquiry
+    back in the inbox (contract change — the old prompts couldn't host a real Cancel; r12a §D2b
+    now pins the abort). **Non-joint accepts do NOT share the chain — their native
+    exact/did-you-mean confirms are untouched** (r5_batch7 §4b pins the wording). PLAYWRIGHT
+    note: `window.acceptLead` on a joint lead now resolves only after the overlay is answered —
+    suites must fire-and-forget (`{ window.acceptLead(id); }`) and drive the overlay, never
+    await the call.
+  - **B4 — the signed-out strip.** New element `#signedout-strip` in `admin/index.html` (after
+    `#overlay-backdrop`; z-index 120, above modal 50 / overlay 70 / tour 90). On the `!session`
+    auth event, `showLogin()` calls `signedOutOverOpenWork()`: when `#modal-backdrop` or
+    `#overlay-backdrop` is open it reveals the strip ("You've been signed out — copy anything
+    unsaved, then sign in again.") and disables the modal's save/submit buttons
+    (`SIGNEDOUT_DISABLE_SEL`, each marked `data-signedout-disabled`). The modal is NEVER closed.
+    Non-dismissable; `showApp()` (the real sign-in path) clears the strip and re-enables. With
+    no modal open the strip stays hidden. Note the login form sits UNDER the preserved modal —
+    a suite signs back in by filling `#login-email`/`#login-password` and `requestSubmit()` on
+    `#login-form` (pointer clicks are intercepted by the modal, by design).
+  - **B5 — Fix contact offers the retry.** `fixContactOpen(kind, rowId, clientId, attempted)` is
+    now the ONE entry point for every Fix-contact link (Emails failed rows, SMS rows, My Day's
+    comms_failed items — which now carry `fix_row`/`fix_kind`); it records the originating queue
+    row and calls `openClient` fix-focused exactly as before. `openClient` consumes the context
+    once (same client + focus set, else discarded). After a successful save, IF the flow was
+    fix-focused AND the fixed field (email/phone by kind) changed, the toast is
+    `Client saved — retry the failed <email|SMS> to <new address> now?` with a
+    **"Retry now"** action (`#toast-action`) invoking the existing `retryEmail`/`retrySms`
+    (safe: both re-read the current address). Any other save keeps the plain "Client saved".
+  Old-suite patches (commented R76): r5_batch1 R5-1 (hold off + key before the classic flow;
+  R5-43 title matches `fixContactOpen(`), r69_today §C (same hold-off precondition), r5_batch7
+  §4 (joint did-you-mean now read off the overlay's candidate list; facts unchanged), r12a §D2
+  (overlay instead of prompts; Cancel now pins the abort; 115 → 114 — the "cancel keeps the
+  guess" fact no longer exists), r68_admin §A5/A9 (overlay + no-prompt assertion; 112-ish → 114),
+  r63_tasks §A (accepts the first NON-joint lead — the playbook write is the thing under test,
+  the joint flow lives in r76_intake §C).
 
 **R75 notes — speed round (`tests/r75_diary.js` 102, `tests/r75_queues.js` 153).**
 Diary half: **WEEK is the desktop default** (owner decision; storage key `nx_diaryview_<uid>` —

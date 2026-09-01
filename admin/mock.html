@@ -1373,6 +1373,17 @@
   <div class="modal overlay-modal" id="overlay-modal" role="dialog" aria-modal="true"></div>
 </div>
 
+<!-- ===== Signed-out strip (R76 · B4) =====
+     #modal-backdrop lives OUTSIDE #app-view, so losing the session (token expiry, sign-out in
+     another tab) used to leave an open record modal fully interactive over the login screen with
+     nothing saying why its saves would fail. When the !session event lands while a modal/overlay
+     is open, app.js reveals this strip OVER everything and disables the modal's save/submit
+     buttons — and deliberately NEVER closes the modal: the typed, unsaved text is the thing worth
+     preserving. Non-dismissable by design; signing back in is what clears it. -->
+<div id="signedout-strip" class="signedout-strip hidden" role="alert">
+  ⚠ You've been signed out — copy anything unsaved, then sign in again.
+</div>
+
 <!-- #assistant-fab moved into the sidebar (R6-B4) — see the .sidebar-ask block above. -->
 <aside id="assistant-drawer" class="hidden">
   <div class="ad-head"><strong>NexMoney Assistant</strong><button id="assistant-close" class="btn btn-ghost btn-sm">✕</button></div>
