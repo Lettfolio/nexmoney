@@ -106,6 +106,16 @@ const localYmd = (offsetDays) => {
   const d = new Date(Date.now() + (offsetDays || 0) * 86400000);
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/London", year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
 };
+/* R78: the call-back prefill is a RELATIVE verb, so "tomorrow" now skips the weekend (B4's roll —
+   a Friday "No answer" books Monday). Computed independently of app.js, as localYmd itself is. */
+const rollWeekend = (s) => {
+  const d = new Date(s + "T12:00:00");
+  const dow = d.getDay();
+  if (dow !== 6 && dow !== 0) return s;
+  d.setDate(d.getDate() + (dow === 6 ? 2 : 1));
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+const workingTomorrow = () => rollWeekend(localYmd(1));   // R78: what the prefill now writes
 
 async function mkClientCase(page, opts) {
   return page.evaluate(async (o) => {
@@ -205,7 +215,7 @@ const caseRow = (page, caseId) => page.evaluate(async (id) => {
       due: document.querySelector("#cs-call-fu-due").value,
     }));
     eq("A2 · 'No answer' pre-fills the follow-up title with 'Call again'", prefill.title, "Call again");
-    eq("A2 · …dated tomorrow (Europe/London), computed in the test", prefill.due, localYmd(1));
+    eq("A2 · …dated the working tomorrow (Europe/London; R78 weekend roll), computed in the test", prefill.due, workingTomorrow());
 
     // A3 — and Save with NO typed note at all now works: the chip IS the record.
     await page.click("#cs-call-save");
@@ -215,7 +225,7 @@ const caseRow = (page, caseId) => page.evaluate(async (id) => {
       noAnsNotes.filter((b) => /^Call: /.test(b)), ["Call: No answer"]);
     const noAnsTasks = await tasksFor(page, noAns.caseId);
     eq("A3 · …and the call-back task is written with the pre-filled title and date",
-      noAnsTasks.filter((x) => x.title === "Call again").map((x) => x.due), [localYmd(1)]);
+      noAnsTasks.filter((x) => x.title === "Call again").map((x) => x.due), [workingTomorrow()]);   // R78: weekend roll
     eq("A3 · …on the case's own adviser, not on whoever took the call",
       (noAnsTasks.find((x) => x.title === "Call again") || {}).assigned_to, "p2");
 
@@ -302,7 +312,7 @@ const caseRow = (page, caseId) => page.evaluate(async (id) => {
       help: !!document.querySelector("#ret-logcall-panel #cs-call-help"),
     }));
     ok("A2a · the row overlay carries the same panel, copy and prefill",
-      overlayPrefill.panel && overlayPrefill.help && overlayPrefill.title === "Call again" && overlayPrefill.due === localYmd(1),
+      overlayPrefill.panel && overlayPrefill.help && overlayPrefill.title === "Call again" && overlayPrefill.due === workingTomorrow(),   // R78: weekend roll
       JSON.stringify(overlayPrefill));
     await page.click("#ret-logcall-panel #cs-call-save");
     await page.waitForTimeout(2800);
@@ -310,7 +320,7 @@ const caseRow = (page, caseId) => page.evaluate(async (id) => {
       (await notesFor(page, c.caseId)).filter((b) => /^Call: /.test(b)), ["Call: No answer"]);
     eq("A2c · …and the identical call-back task",
       (await tasksFor(page, c.caseId)).map((x) => ({ title: x.title, due: x.due, assigned_to: x.assigned_to })),
-      [{ title: "Call again", due: localYmd(1), assigned_to: "p2" }]);
+      [{ title: "Call again", due: workingTomorrow(), assigned_to: "p2" }]);   // R78: weekend roll
     ok("§A2 · no console errors", realErrs(page).length === 0, realErrs(page).slice(0, 3).join(" | "));
     await page.close();
   }

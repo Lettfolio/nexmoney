@@ -833,11 +833,20 @@ async function mkClientCase(page, opts) {
       await page.fill("#new-task", "Chase ID verification");
       await page.press("#new-task", "Enter");
       await wait(page, 700);
-      const expectTomorrow = await page.evaluate(() => localDateStr(Date.now() + 86400000));
+      /* R78: the dateless default is a relative verb, so a weekend "tomorrow" rolls to Monday
+         (B4) — expected date and toast both branch on today's weekday, computed in the test. */
+      const rawTomorrow = await page.evaluate(() => localDateStr(Date.now() + 86400000));
+      const expectTomorrow = (() => {
+        const d = new Date(rawTomorrow + "T12:00:00"), dow = d.getDay();
+        if (dow !== 6 && dow !== 0) return rawTomorrow;
+        d.setDate(d.getDate() + (dow === 6 ? 2 : 1));
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      })();
       const toastNoDate = await toastText(page);
-      eq("D10 · a task submitted with no date picked defaults its toast", toastNoDate, "Task added — due tomorrow (no date was picked)");
+      eq("D10 · a task submitted with no date picked defaults its toast", toastNoDate,
+        expectTomorrow === rawTomorrow ? "Task added — due tomorrow (no date was picked)" : "Task added — due Monday (no date was picked — skipped the weekend)");
       const t1 = await page.evaluate(async (o) => (await window.__mockDb.from("case_tasks").select("due_date").eq("case_id", o).eq("title", "Chase ID verification").single()).data, caseId);
-      eq("D10 · ...and its due_date is genuinely tomorrow", t1.due_date, expectTomorrow);
+      eq("D10 · ...and its due_date is genuinely the working tomorrow", t1.due_date, expectTomorrow);
 
       // A due-chip pick always wins, and the toast names it.
       await page.click('.due-chip[data-days="3"]');

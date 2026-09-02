@@ -5,6 +5,31 @@ let db;
 try {
   db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
   window.db = db;   // R30 — expose the client so logClientError's `window.db && db.from` guard can gate the best-effort persist (and stays undefined before init, covering very-early errors)
+  /* R78 · A5 — THE ONE CHOKE POINT FOR BOARD-CACHE BUSTING. Every write path that touches
+     `cases` or `case_events` (moveCaseToStage, bulkMoveStage, undoStageMove, the case form's
+     save, both imports, acceptLead, startRetentionCase, the DH inline fixes, deletes — and any
+     path a future round adds) goes through db.from(table).insert/update/upsert/delete, so the
+     bust is applied where they ALL pass rather than as a per-site sweep one new site could miss.
+     Reads are untouched; the wrap is two tables' four write methods, nothing else. Busting is
+     eager and unconditional — see the boardCache note by loadPipeline. */
+  {
+    const _dbFrom = db.from.bind(db);
+    db.from = function (table) {
+      const b = _dbFrom(table);
+      if (table === "cases" || table === "case_events") {
+        ["insert", "upsert", "update", "delete"].forEach((mth) => {
+          const orig = b[mth];
+          if (typeof orig === "function") {
+            b[mth] = function (...args) {
+              try { bustBoardCache(); } catch (_) { /* cache module not evaluated yet — nothing to bust */ }
+              return orig.apply(this, args);
+            };
+          }
+        });
+      }
+      return b;
+    };
+  }
 } catch (e) {
   // Supabase SDK failed to load (CDN outage, ad-blocker, proxy, SRI mismatch).
   // Show a visible message instead of a silent blank page, then stop.
@@ -19,85 +44,7 @@ try {
 // The origin(s) must be listed in Supabase Auth -> URL Configuration -> Redirect URLs.
 const ADMIN_URL = new URL("/admin/", window.location.origin).href;
 
-/* ==========================================================================
-   R21 Part A — global client-side error capture (the safety net BELOW
-   showFail()/renderLoadError()). Installed here, the earliest safe point after
-   `db` exists, so the two window listeners are registered before init() runs and
-   catch anything the per-view handlers and the bootstrap catch don't.
-
-   ERROR_LOG is an in-memory ring buffer (capped, session-only, NEVER persisted,
-   NEVER sent over the network). Each entry:
-     { t:<ISO>, kind:"error"|"promise"|"caught", msg, where, count, [stack],
-       [recordId], user:ME?.email, role:MY_ROLE, view:<hash/path> }
-   De-dupe: a repeat of the LAST entry's msg inside ERROR_DEDUPE_MS bumps its
-   `count` instead of pushing a new row (stops a render loop flooding the buffer)
-   and shows NO extra toast. Only a genuinely-new error raises ONE non-blocking
-   toast. logClientError() is itself fully try/caught — logging can never throw.
-   Privacy: we record message/stack/where only, never the Supabase key or vault
-   data, and the buffer is visible solely to owner/admin via the Diagnostics panel. */
-const ERROR_LOG = [];
-const ERROR_LOG_CAP = 100;
-const ERROR_DEDUPE_MS = 5000;
-let errorEventsOff = false;   // R30 — once error_events is proven absent/denied this session, stop trying to persist (no console-error storms)
-function logClientError(kind, message, detail) {
-  try {
-    detail = detail || {};
-    let msg = String((message && message.message) || message || "").trim();
-    if (!msg) msg = "(no message)";
-    if (msg.length > 500) msg = msg.slice(0, 500);
-    const now = Date.now();
-    const last = ERROR_LOG[ERROR_LOG.length - 1];
-    if (last && last.msg === msg && (now - (last._ms || 0)) <= ERROR_DEDUPE_MS) {
-      last.count = (last.count || 1) + 1;   // de-dupe: bump count, no new row, no new toast
-      last._ms = now;
-      return;
-    }
-    const entry = { t: new Date().toISOString(), _ms: now, kind: kind || "error", msg, where: detail.where || "", count: 1 };
-    if (detail.recordId != null) entry.recordId = String(detail.recordId);
-    if (detail.stack) entry.stack = String(detail.stack).slice(0, 2000);
-    try { entry.user = ME ? ME.email : undefined; } catch (_) {}
-    try { entry.role = MY_ROLE; } catch (_) {}
-    try { entry.view = (location.hash || location.pathname || ""); } catch (_) {}
-    ERROR_LOG.push(entry);
-    while (ERROR_LOG.length > ERROR_LOG_CAP) ERROR_LOG.shift();
-    try { toast("Something went wrong — a diagnostic was logged."); } catch (_) {}
-    /* R30 — best-effort, SANITISED cross-session fingerprint. Only on the NEW-entry
-       path (the de-dupe branch above early-returns, so a flood inserts at most one
-       row per genuinely-new error). The payload has EXACTLY four coarse fields and
-       is built ONLY from local vars — no way for message/stack/recordId/name/email
-       to reach it. error_type = the JS error CLASS name from the stack (never the
-       message after the colon) or the kind; location = code file:line/fn only;
-       page = the base route (ids stripped); role = the staff role already captured.
-       Fire-and-forget with BOTH .then handlers so it can never throw or raise an
-       unhandledrejection (which would re-enter logClientError → infinite loop). */
-    const m = String(detail.stack || "").match(/^\s*([A-Z][A-Za-z]*(?:Error|Exception))\b/);
-    const etype = m ? m[1] : (kind || "error");
-    const location_ = String(entry.where || "").slice(0, 120);
-    let page = "";
-    try { page = String(location.hash || "").replace(/^#/, "").split(/[/?]/)[0].slice(0, 40); } catch (_) {}
-    try {
-      if (!errorEventsOff && window.db && db.from) {
-        db.from("error_events").insert([{ error_type: etype, location: location_, page: page, role: entry.role || null }])
-          .then((res) => { const c = res && res.error && res.error.code;
-                           if (c === "42P01" || c === "42501" || c === "PGRST205" || c === "PGRST106") errorEventsOff = true; },
-                () => {});   // BOTH handlers present → no unhandledrejection → no recursion
-      }
-    } catch (_) {}
-  } catch (_) { /* logging must NEVER throw */ }
-}
-window.logClientError = logClientError;      // so caught-but-notable errors + tests can record one
-window.__errorLog = ERROR_LOG;               // stable reference; tests read .length (mutated in place)
-try {
-  window.addEventListener("error", (e) => {
-    logClientError("error", (e && (e.message || (e.error && e.error.message))) || "Uncaught error",
-      { where: e && e.filename ? (e.filename + ":" + (e.lineno || 0)) : "", stack: e && e.error && e.error.stack });
-  });
-  window.addEventListener("unhandledrejection", (e) => {
-    const r = e && e.reason;
-    logClientError("promise", (r && (r.message || r)) || "Unhandled promise rejection",
-      { where: "unhandledrejection", stack: r && r.stack });
-  });
-} catch (_) { /* addEventListener unavailable — nothing else we can safely do */ }
+/* R21/R30 error capture (ERROR_LOG, logClientError, global handlers) — MOVED to admin/core.js (R78 · A7), so the handlers install before this script runs a line. */
 
 const STAGES = [
   ["enquiry", "Enquiry"],
@@ -332,17 +279,7 @@ const SETTING_NOTES = {
   docs_list: `Your firm's standard list. It is used in two places: it is what a <strong>document request goes out with when the case has no checklist of its own</strong>, and it is the menu the case modal's “Add items…” offers when you build one (narrowed to what that kind of case needs). Once a case has a checklist, that checklist wins — the emails then list <strong>only what is still outstanding on that case</strong>, so nobody is asked twice for a document they have already sent. Editing this list does not change any checklist already built.`,
 };
 
-const $ = (s) => document.querySelector(s);
-const esc = (s) => (s == null ? "" : String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])));
-// R18-P2 — trailing-edge debounce for high-frequency search/filter inputs. The wrapped fn reads the
-// live input value at fire time, so the delayed call always sees the latest keystroke.
-function debounce(fn, wait) {
-  let t;
-  return function (...args) {
-    clearTimeout(t);
-    t = setTimeout(() => fn.apply(this, args), wait);
-  };
-}
+/* $, esc, debounce — MOVED to admin/core.js (R78 · A7). */
 /* R55 · F7 — SheetJS on demand. The ~1MB xlsx.full.min.js used to be a blocking <script> on every
    boot, paid by everyone for flows (Import, reconciliation, Revolution export) most sessions never
    open. Loaded here on first use instead; memoised so concurrent callers share one fetch, and the
@@ -362,31 +299,7 @@ function ensureXlsx() {
   }
   return xlsxLoadPromise;
 }
-/* T1-21 — fmtD no longer hands a non-ISO string to new Date(). `new Date("01/02/2026")` is parsed
-   by the engine as US month-first and silently renders "2 Jan 2026" for a UK 1 February, which is
-   exactly how a mis-read import date survived review. Date objects, timestamps and ISO strings
-   (the only thing the database ever stores) format as before; anything else is shown verbatim
-   (esc'd, since the only source of non-ISO values is un-normalised imported text). */
-/* R73 · B4 — the month names are a FIXED TABLE, not toLocaleDateString's.
-   `{ month: "short" }` under current ICU renders September as "Sept" (four
-   letters) while the other eleven are three, so a column of dates went ragged
-   exactly where the rate-end book is busiest, and the same date rendered
-   differently on two machines with different ICU versions. Eleven strings is a
-   cheaper guarantee than a locale negotiation. */
-const FMT_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const fmtD = (d) => {
-  if (!d) return "—";
-  if (typeof d === "string" && !/^\d{4}-\d{2}-\d{2}/.test(d)) return esc(d);
-  const t = new Date(d);
-  if (isNaN(t.getTime())) return esc(String(d));
-  /* Date-only strings are read as the calendar day they name (getUTC*), exactly as
-     toLocaleDateString did for them; a full timestamp keeps local-time reading. */
-  const dateOnly = typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d);
-  const day = dateOnly ? t.getUTCDate() : t.getDate();
-  const mon = dateOnly ? t.getUTCMonth() : t.getMonth();
-  const yr = dateOnly ? t.getUTCFullYear() : t.getFullYear();
-  return `${day} ${FMT_MONTHS[mon]} ${yr}`;
-};
+/* FMT_MONTHS + fmtD — MOVED to admin/core.js (R78 · A7). */
 /* T1-21 — UK-first date parsing for imported values. Returns
      { iso, ambiguous, ok, empty, raw, note }
    iso is always YYYY-MM-DD (never a raw string), so nothing but a real date reaches the cases
@@ -426,14 +339,7 @@ function parseUkDate(s) {
   }
   return bad("unrecognised date format");
 }
-// UK-local (Europe/London) date-only string YYYY-MM-DD. en-CA gives ISO-style ordering.
-// Used for "today"/overdue/horizon comparisons so they don't drift to the UTC calendar date after midnight BST.
-// R18-P1: ONE module-level Intl.DateTimeFormat singleton — building a new formatter per call cost
-// ~100k allocations on a Reports render (12.9s). Same locale/options, so output is byte-identical.
-const _localDateFmt = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/London", year: "numeric", month: "2-digit", day: "2-digit" });
-const localDateStr = (d) => _localDateFmt.format(d ? new Date(d) : new Date());
-// UK-local YYYY-MM month bucket for report grouping.
-const localMonthStr = (d) => localDateStr(d).slice(0, 7);
+/* _localDateFmt / localDateStr / localMonthStr — MOVED to admin/core.js (R78 · A7). */
 // Normalise a UK phone number for comparison/search: strip spaces/punctuation and map +44/0044 → 0.
 const normPhone = (p) => (p == null ? "" : String(p).replace(/[\s()\-.]/g, "").replace(/^\+44/, "0").replace(/^0044/, "0"));
 /* T1-9 — "could we actually text this?", built on normPhone rather than a second phone rule.
@@ -623,103 +529,12 @@ async function dupClientGate(q, opts) {
 // Inline-onclick-safe string argument: escape for the JS string literal first, then for the HTML
 // attribute (esc() turns ' into &#39;, which the parser hands back to JS as a bare quote).
 const jsArg = (v) => esc(String(v == null ? "" : v).replace(/\\/g, "\\\\").replace(/'/g, "\\'"));
-/* R64-HF1 — CHUNKED .in() READS. PostgREST puts an .in() list in the URL; above roughly 500 UUIDs
-   the request is a 400 Bad Request and the WHOLE read silently returns nothing. The 69-case mock
-   never gets near that; production does (the Retention feed is 725+ cases, v_alerts is 1,000 rows,
-   a select-all on the completed book is 1,871 ids) — which is how the property chips and R64's
-   tel: links on the Retention rows rendered as "nothing" without a single console error. Every
-   batch read that can be feed-sized goes through this: slices of IN_CHUNK ids run in parallel, the
-   rows are concatenated, and the first error (if any) is returned in the usual {data, error} shape.
-   `build(slice)` returns the query for one slice. Nothing here calls .catch on a builder. */
-const IN_CHUNK = 150;
-async function inChunks(ids, build) {
-  const list = [...new Set((ids || []).filter(Boolean))];
-  if (!list.length) return { data: [], error: null };
-  const slices = [];
-  for (let i = 0; i < list.length; i += IN_CHUNK) slices.push(list.slice(i, i + IN_CHUNK));
-  const results = await Promise.all(slices.map((sl) => Promise.resolve(build(sl))));
-  const bad = results.find((r) => r && r.error);
-  return { data: results.flatMap((r) => (r && r.data) || []), error: bad ? bad.error : null };
-}
-/* R69-HF1 — PAGED FULL-TABLE READS. THE 1,000-ROW CEILING IS REAL AND `.limit()` CANNOT LIFT IT.
-
-   R18/R23 raised REPORTS_ROW_CAP/OWNER_ROW_CAP to 20,000 and hung `.limit(OWNER_ROW_CAP)` on every
-   owner-facing whole-table read, believing that lifted PostgREST's default `max-rows`. It does not.
-   `max-rows` is a HARD SERVER ceiling: `.limit(n)` can only ever ask for FEWER rows than the server
-   is willing to send, never more. Proven in Daniel's browser on 27 Aug, against the live database:
-
-     db.from('clients').select('id',{count:'exact'}).order('last_name').limit(20000)
-       → data.length 1000, count 1161          ← 161 clients simply absent, no error, no warning
-     db.from('cases').select('id',{count:'exact'}).limit(20000)
-       → data.length 1000, count 2015
-     db.from('clients').select('id').order('last_name').range(1000, 1999)
-       → 161 rows                              ← paging PAST the ceiling is the only way through
-
-   So since the back-book import (1,161 clients / 2,015 cases) every one of those reads has silently
-   returned the first 1,000 rows in its order: the case modal's client picker is ordered by surname,
-   so "Whitcombe" onwards vanished — and a case whose client is not in the picker cannot be saved at
-   all. The 69-case mock never reaches 1,000 rows, which is exactly why no suite ever noticed (the
-   mock now enforces the same ceiling — see MOCK_MAX_ROWS in mock-supabase.js).
-
-   readAll() takes an ALREADY-BUILT query (filters and ORDER applied, NO .limit()/.range() of its
-   own) and walks it in PAGE-sized windows via `.range(from, from + PAGE - 1)` until a short page
-   (the end of the table) or `cap` rows. It returns the SAME `{data, error}` shape every caller
-   already handles, so a call site converts by wrapping the builder and deleting its `.limit(...)`.
-
-   Notes that matter:
-   · ORDER IS NOT OPTIONAL. Paging an unordered read can repeat or skip rows between requests, so
-     every converted site keeps its ORDER clause, and where that order is not unique it gained a
-     secondary `.order("id")` (e.g. `.order("last_name")` → `.order("last_name").order("id")`).
-   · RE-AWAITING THE SAME BUILDER IS CORRECT in supabase-js v2 (verified against postgrest-js
-     2.110.7, the version index.html pins). `.range(from, to)` does
-     `url.searchParams.set('offset', from)` and `url.searchParams.set('limit', to - from + 1)` —
-     `set`, not append, so calling `.range()` again overwrites the previous window (and would
-     overwrite an earlier `.limit()` too). PostgrestBuilder is a thenable, not a promise: its
-     `then()` builds and fires a FRESH fetch every time it is awaited and caches nothing. So one
-     builder, re-ranged and re-awaited per page, is a correct pager and no builder FUNCTION is
-     needed. (The mock's Builder behaves the same way: `_run()` per `then()`, `_range` overwritten.)
-   · `Promise.resolve(...)` around every await, per the house rule — a PostgrestBuilder has no
-     `.catch`, so it must never be treated as a real promise.
-   · `count:'exact'` is preserved from the FIRST page (PostgREST reports the true total in
-     content-range on every page regardless of the window, so the first one is enough).
-   · An error on any page returns `{data: rowsSoFar, error}` — the rows already in hand, plus the
-     error, so a tolerant caller (softRows) degrades exactly as it did before.
-   · The cap still BITES at `cap` rows, so `ownerCapHit(rows)` / `noteRowCap(label, rows)`
-     (`rows.length === CAP`) keep working unchanged — readAll stops AT the cap, never past it.
-   · NEVER pass a `.single()`, `.maybeSingle()` or `head:true` builder to readAll: those are not
-     row-window reads and `.range()` on them is meaningless. */
-const READ_PAGE = 1000;   // PostgREST's default max-rows — asking for more per page just gets this
-async function readAll(q, opts) {
-  const o = opts || {};
-  const cap = Number(o.cap) > 0 ? Number(o.cap) : OWNER_ROW_CAP;
-  const pageSize = Number(o.page) > 0 ? Number(o.page) : READ_PAGE;
-  const rows = [];
-  let count = null, from = 0;
-  for (;;) {
-    const want = Math.min(pageSize, cap - rows.length);
-    if (want <= 0) break;                                  // reached the cap — stop AT it, not past it
-    let res;
-    try {
-      res = await Promise.resolve(q.range(from, from + want - 1));
-    } catch (e) {
-      return { data: rows, error: { message: String((e && e.message) || e), code: "READALL" }, count };
-    }
-    if (!res || res.error) return { data: rows, error: (res && res.error) || { message: "read failed" }, count };
-    if (count == null && res.count != null) count = res.count;
-    const got = Array.isArray(res.data) ? res.data : [];
-    for (let i = 0; i < got.length; i++) rows.push(got[i]);
-    if (got.length < want) break;                          // short page = end of the table
-    from += got.length;
-  }
-  return { data: rows, error: null, count };
-}
+/* IN_CHUNK/inChunks (R64-HF1) + READ_PAGE/readAll (R69-HF1) — MOVED to admin/core.js (R78 · A7). The rules stand: any feed-sized .in() goes through inChunks; any big-table read through readAll. */
 // Tap-to-call / tap-to-email links (M2). Displays the number/address verbatim; the tel: href is
 // space-stripped so the dialler gets a clean value. Returns "" for empty input so callers can guard.
 const telLink = (p) => { if (!p) return ""; const raw = String(p).trim(); const href = raw.replace(/[^\d+]/g, ""); return `<a class="contact-link" href="tel:${esc(href)}">${esc(raw)}</a>`; };
 const mailLink = (e) => { if (!e) return ""; const raw = String(e).trim(); return `<a class="contact-link" href="mailto:${encodeURIComponent(raw).replace(/%40/g, "@")}">${esc(raw)}</a>`; };
-const fmtM = (n) => (n == null || n === "" || isNaN(Number(n)) ? "—" : Number(n).toLocaleString("en-GB", { style: "currency", currency: "GBP", maximumFractionDigits: 0 }));
-// Exact-pence money — for fee figures on the case detail / evidence pack only. Dashboards keep fmtM (whole pounds).
-const fmtM2 = (n) => (n == null || n === "" || isNaN(Number(n)) ? "—" : Number(n).toLocaleString("en-GB", { style: "currency", currency: "GBP", minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+/* fmtM / fmtM2 — MOVED to admin/core.js (R78 · A7). */
 let settings = {};
 let ME = null, TEAM = [];   // R41 · F1 — `tasksScope` went with the Tasks-due drawer it filtered
 /* ---------- BACKEND-R4 §1 — role awareness ----------
@@ -1405,7 +1220,7 @@ window.openReassign = function (ev, taskId, currentId, reloadKey) {
 window.reassignTask = async function (taskId, adviserId, reloadKey) {
   // R5-54 — "" is now a real choice (put it back in the Unassigned queue), not a no-op.
   const { error } = await db.from("case_tasks").update({ assigned_to: adviserId || null }).eq("id", taskId);
-  if (error) { toast("Error: " + error.message); return false; }
+  if (error) { dbFail("reassignTask", error); return false; }
   toast(adviserId ? "Task assigned to " + staffName(adviserId) : "Task returned to Unassigned");
   /* R41 · F1 — "tasks" used to mean the Today "Tasks due" drawer, which is gone; the Today surface
      a reassignment can change under is now My Day. The hook stays keyed (rather than being folded
@@ -1937,7 +1752,7 @@ function propLabel(c) {
      source every one of those surfaces already reads, so they all gain it at
      once. Skipped when the first line already ENDS with the whole locality run
      (a comma-less "12 Oak Road Bournemouth" is its own suffix — see
-     propLineHoldsRun for why "ends with the whole run" and not "contains a
+     propRunTailAt for why "ends with the whole run" and not "contains a
      token"). R6-FIX RV-03: the suffix is the WHOLE run, not its last token. */
   const town = p && p.locs && p.locs.length ? propLocPretty(addr, p) : "";
   if (!town || runAt >= 0) return line;
@@ -2048,9 +1863,7 @@ function propRunTailAt(line, p) {
   for (let j = 0; j < run.length; j++) if (hits[start + j].t !== run[j]) return -1;
   return hits[start].at;
 }
-function propLineHoldsRun(line, p) {
-  return propRunTailAt(line, p) >= 0;
-}
+/* propLineHoldsRun — DELETED R78 · A7 (verified dead: no caller since the R6-FIX RV-03 rework; propRunTailAt is the live surface). */
 /* Same-property identity. Case, spacing and punctuation are operator noise:
    "8 Grand Avenue, Southbourne, Bournemouth BH6 3SY" and
    "8 grand avenue southbourne bournemouth bh63sy" are one flat.
@@ -3526,7 +3339,7 @@ async function docAction(act, docId, caseId, c) {
       okLabel: "Delete row", cancelLabel: "Keep it",
     }))) return;
     const { error } = await db.from("case_documents").delete().eq("id", docId);
-    if (error) return toast("Error: " + error.message);
+    if (error) return dbFail("docAction", error);
     toast("Checklist row deleted");
     return renderCaseDocs(caseId, c);
   }
@@ -3535,7 +3348,7 @@ async function docAction(act, docId, caseId, c) {
     if (why === null) return;                       // cancelled — nothing written
     const { error } = await db.from("case_documents")
       .update({ status: "waived", note: why || null, received_at: null }).eq("id", docId);
-    if (error) return toast("Error: " + error.message);
+    if (error) return dbFail("docAction", error);
     toast("Waived — it stays on the list so nobody asks for it again");
     return renderCaseDocs(caseId, c);
   }
@@ -3545,7 +3358,7 @@ async function docAction(act, docId, caseId, c) {
        date, and no waiver reason left behind to contradict the status beside it. */
     : { status: "requested", received_at: null, note: null };
   const { error } = await db.from("case_documents").update(patch).eq("id", docId);
-  if (error) return toast("Error: " + error.message);
+  if (error) return dbFail("docAction", error);
   toast(act === "received" ? "Marked received" : "Back to outstanding");
   return renderCaseDocs(caseId, c);
 }
@@ -3859,7 +3672,7 @@ async function addDocItems(caseId, c) {
   });
   if (!picked || !picked.length) return;
   const { error } = await insertDocItems(caseId, picked);
-  if (error) return toast("Error: " + error.message);
+  if (error) return dbFail("addDocItems", error);
   toast(`${picked.length} item${picked.length === 1 ? "" : "s"} added — nothing has been emailed`);
   await renderCaseDocs(caseId, c);
 }
@@ -4074,7 +3887,7 @@ function caseIdentityHtml(c, opts = {}) {
    M7-aware: the property column is only NAMED when the migration is present,
    so an un-migrated database gets the round-5 behaviour rather than a 42703
    that would blank the whole panel. Every failure degrades to "no chips". */
-async function loadPropContext(caseIds) {
+async function loadPropContext(caseIds, opts) {
   const ctx = { byId: {}, caseCount: {}, sharedProp: {} };
   const ids = [...new Set((caseIds || []).filter(Boolean))];
   if (!ids.length) return ctx;
@@ -4085,11 +3898,44 @@ async function loadPropContext(caseIds) {
        house-template email off with the case's own adviser instead of the firm default. Nothing
        else reads it off this context, and no existing caller changes shape. */
     const cols = "id,client_id,case_kind,lender,stage,assigned_to" + (propOn ? ",property_address" : "");
-    const { data: rows } = await inChunks(ids, (sl) => db.from("cases").select(cols).in("id", sl));
+    const sibCols = "id,client_id,created_at" + (propOn ? ",property_address" : "");
+    /* ======================================================================
+       R78 · A2 — THE SIBLING READ NO LONGER WAITS FOR THE CASE READ.
+
+       This function has always cost TWO serial waves — cases by id, then every
+       case of those cases' clients — and it is called on nearly every list in
+       the app, so the tax was paid everywhere. A caller that already HOLDS the
+       client ids (v_alerts rows, queue rows and appointments all carry
+       client_id) can pass them as `opts.clientIds` — a HINT, never trusted:
+       both reads are fired together, and the sibling rows are then FILTERED to
+       the client ids the case read actually proves, with a top-up read for any
+       client the hint missed (normally none — that second wave only exists
+       when a hint was stale, so honesty costs nothing on the common path).
+       Every derived fact below is therefore computed over EXACTLY the same
+       row set as before — the contract, and every no-hint caller, is
+       unchanged: no hint means the same two-wave read it has always been.
+       ====================================================================== */
+    const hint = [...new Set((opts && opts.clientIds || []).filter(Boolean))];
+    const caseReadP = inChunks(ids, (sl) => db.from("cases").select(cols).in("id", sl));
+    const sibHintP = hint.length ? inChunks(hint, (sl) => db.from("cases").select(sibCols).in("client_id", sl)) : null;
+    const { data: rows } = await caseReadP;
     (rows || []).forEach((r) => { ctx.byId[r.id] = r; });
     const clientIds = [...new Set((rows || []).map((r) => r.client_id).filter(Boolean))];
     if (clientIds.length) {
-      const { data: sib } = await inChunks(clientIds, (sl) => db.from("cases").select("id,client_id,created_at" + (propOn ? ",property_address" : "")).in("client_id", sl));
+      let sib = [];
+      if (sibHintP) {
+        const hintSet = new Set(hint);
+        const missing = clientIds.filter((cid) => !hintSet.has(cid));
+        const [hres, mres] = await Promise.all([
+          sibHintP,
+          missing.length ? inChunks(missing, (sl) => db.from("cases").select(sibCols).in("client_id", sl)) : Promise.resolve({ data: [] }),
+        ]);
+        const wanted = new Set(clientIds);
+        sib = ((hres && hres.data) || []).filter((r) => wanted.has(r.client_id)).concat((mres && mres.data) || []);
+      } else {
+        const sres = await inChunks(clientIds, (sl) => db.from("cases").select(sibCols).in("client_id", sl));
+        sib = (sres && sres.data) || [];
+      }
       const perProp = {}, perClient = {};
       (sib || []).forEach((r) => {
         ctx.caseCount[r.client_id] = (ctx.caseCount[r.client_id] || 0) + 1;
@@ -4342,59 +4188,7 @@ function updateRevenueDrawerCount() {
   if (el) el.textContent = p + f;
 }
 
-/* R12a·D12 — THE TOAST CAN NOW CARRY ONE ACTION.
-   It was text-only, which is why "Task done" was a one-way door: the row vanished from every list
-   and the only route back was the database. `action` is deliberately generic — {label, onClick,
-   ms} — and deliberately singular: a toast is a passing sentence, not a menu, and a second button
-   on it would be a dialog wearing the wrong clothes. Other flows (delete, waive, dismiss) can use
-   the same hook without touching this function again.
-
-   The toast element itself stays pointer-events:none (M7 — it must never intercept a tap on a
-   field beneath it); only the action button turns pointer events back on, so an undo link cannot
-   swallow clicks on whatever it happens to be floating over. An action toast lives longer than a
-   plain one — 10s — because it has to be readable AND reachable, not just readable. */
-const TOAST_ACTION_MS = 10000;
-const TOAST_MS = 4500;   // R73 · B1 — non-action toasts
-/* R76 · A4 — `action2`, a SECOND optional action on the same toast. The R12a·D12 "one action"
-   rule stands for everything that existed before this round: nothing old passes it, and the one
-   new caller (an appointment recorded as ATTENDED offering "Log what was discussed" beside its
-   Undo) exists precisely because the two verbs belong to the same ten seconds. `#toast-action`
-   stays the FIRST button in the DOM and stays the primary action (Undo, where there is one), so
-   every suite that presses `#toast-action` keeps pressing what it always pressed; the second
-   button is `#toast-action-2` and is ignored when no `action` came with it. */
-function toast(msg, action, action2) {
-  const t = $("#toast");
-  clearTimeout(t._h);
-  const live = action && action.label && typeof action.onClick === "function";
-  const live2 = live && action2 && action2.label && typeof action2.onClick === "function";
-  if (live) {
-    t.innerHTML = '<span class="toast-msg"></span><button type="button" class="toast-action" id="toast-action"></button>'
-      + (live2 ? '<button type="button" class="toast-action toast-action-2" id="toast-action-2"></button>' : "");
-    t.querySelector(".toast-msg").textContent = msg;
-    const wireA = (sel, act) => {
-      const b = t.querySelector(sel);
-      b.textContent = act.label;
-      b.onclick = () => {
-        clearTimeout(t._h);
-        t.classList.add("hidden");
-        t.classList.remove("has-action");
-        act.onClick();
-      };
-    };
-    wireA("#toast-action", action);
-    if (live2) wireA("#toast-action-2", action2);
-    t.classList.add("has-action");
-  } else {
-    t.classList.remove("has-action");
-    t.textContent = msg;   // replaces any previous action markup outright
-  }
-  t.classList.remove("hidden");
-  /* R73 · B1 — 3.2s was under the ~4s a screen reader needs to finish announcing a
-     long confirmation, and under what a reader needs to find a bar that has just
-     moved to the corner of the screen. Action toasts keep their own (longer)
-     timing: the reader has to DECIDE, not just read. */
-  t._h = setTimeout(() => { t.classList.add("hidden"); t.classList.remove("has-action"); }, live ? (action.ms || TOAST_ACTION_MS) : TOAST_MS);
-}
+/* TOAST_MS / TOAST_ACTION_MS / toast() — MOVED to admin/core.js (R78 · A7). */
 
 /* ==========================================================================
    R73 · B1 — makeActivatable(el): a div that behaves like a button, behaves
@@ -5671,7 +5465,7 @@ function confirmTypedWord(title, bodyHtml, keyword, okLabel) {
 }
 async function writeEmailHold(value) {
   const { error } = await db.from("settings").upsert([{ key: "email_hold", value }]);
-  if (error) { toast("Error: " + error.message); return false; }
+  if (error) { dbFail("writeEmailHold", error); return false; }
   await loadSettings();
   return true;
 }
@@ -6413,28 +6207,82 @@ function settingsJumpVisible(el) {
   }
   return !!n;
 }
-function buildSettingsJumpNav() {
-  const bar = $("#settings-jump"), wrap = $("#settings-jump-chips");
-  if (!bar || !wrap) return;
-  settingsJumpItems = SETTINGS_JUMP_SECTIONS
+/* ==========================================================================
+   R78 · A4 — ONE BUILDER FOR THE TWO CHIP JUMP NAVS.
+
+   buildSettingsJumpNav and buildReportsJumpNav were structural twins: resolve
+   [key,label,selector] triples against the live page, drop the invisible,
+   hide the whole bar when there is under two of anything to navigate, paint
+   one seg-btn chip per section, jump + mark active on click. That shape now
+   lives here ONCE; each caller keeps only what is genuinely its own — the
+   Settings bar opens ancestor <details> before it scrolls, the Reports bar
+   scopes its chips to the active SECTION (R74 · A4c) and stands its scroll-spy
+   aside while a jump is in flight. Behaviour on both pages is byte-identical
+   to the twins this replaces, including:
+     · the <2-items-hide guard (Settings guards on its own items; Reports
+       guards on the PAGE's items — `guardOn:"all"` — so a one-panel section
+       keeps its single chip and the sticky bar keeps its height, R74 · A4c)
+     · chip markup (seg-btn, role=tab, aria-selected, "Jump to <label>")
+     · the click = beforeJump hook → smooth scrollIntoView → setActive(key).
+   Returns {items, allItems}, or null when the bar hid itself. */
+function buildJumpNav(barId, wrapId, sections, visibleFn, opts) {
+  const o = opts || {};
+  const bar = document.getElementById(barId), wrap = document.getElementById(wrapId);
+  if (!bar || !wrap) return null;
+  const allItems = sections
     .map(([key, label, sel]) => ({ key, label, el: $(sel) }))
-    .filter((s) => s.el && settingsJumpVisible(s.el));
-  // One chip is not navigation, it is decoration — the same guard Reports uses.
-  if (settingsJumpItems.length < 2) { wrap.innerHTML = ""; bar.hidden = true; return; }
-  wrap.innerHTML = settingsJumpItems.map((s) =>
-    `<button type="button" class="seg-btn" id="settings-nav-${esc(s.key)}" role="tab" aria-selected="false" data-settings-jump="${esc(s.key)}" title="Jump to ${esc(s.label)}">${esc(s.label)}</button>`).join("");
-  wrap.querySelectorAll("[data-settings-jump]").forEach((b) => (b.onclick = () => {
-    const it = settingsJumpItems.find((s) => s.key === b.dataset.settingsJump);
+    .filter((s) => s.el && visibleFn(s.el));
+  let items = o.filterItems ? o.filterItems(allItems) : allItems;
+  /* Belt and braces (Reports' rule, a no-op for Settings): a scope whose panels somehow map
+     elsewhere must not leave an empty strip. */
+  if (!items.length) items = allItems;
+  // One chip is not navigation, it is decoration — the guard both twins carried.
+  if ((o.guardOn === "all" ? allItems : items).length < 2) { wrap.innerHTML = ""; bar.hidden = true; return null; }
+  wrap.innerHTML = items.map((s) =>
+    `<button type="button" class="seg-btn" id="${o.chipIdPrefix}${esc(s.key)}" role="tab" aria-selected="false" ${o.attr}="${esc(s.key)}" title="Jump to ${esc(s.label)}">${esc(s.label)}</button>`).join("");
+  wrap.querySelectorAll(`[${o.attr}]`).forEach((b) => (b.onclick = () => {
+    const it = items.find((s) => s.key === b.getAttribute(o.attr));
     if (!it || !it.el) return;
-    // Open every disclosure the target sits inside, outermost first, before scrolling to it.
-    for (let n = it.el; n && n.id !== "page-settings"; n = n.parentElement) {
-      if (n.tagName === "DETAILS") n.open = true;
-    }
-    if (it.el.tagName === "DETAILS") it.el.open = true;
+    if (o.beforeJump) o.beforeJump(it);
     it.el.scrollIntoView({ behavior: "smooth", block: "start" });
-    setSettingsJumpActive(it.key);
+    o.setActive(it.key);
   }));
   bar.hidden = false;
+  return { items, allItems };
+}
+/* The active-chip paint + keep-it-inside-the-scroller nudge, shared the same way (the twins'
+   setActive bodies, minus each one's own early-return state var, which stays with its caller). */
+function jumpNavActivePaint(wrapId, attr, chipIdPrefix, key) {
+  document.querySelectorAll(`#${wrapId} [${attr}]`).forEach((b) => {
+    const on = b.getAttribute(attr) === key;
+    b.classList.toggle("active", on);
+    b.setAttribute("aria-selected", on ? "true" : "false");
+  });
+  /* Keep the active chip inside the horizontal scroller by hand. scrollIntoView() on the chip
+     would also scroll the PAGE, which would fight the scroll that just triggered this. */
+  const act = key ? document.getElementById(chipIdPrefix + key) : null;
+  const wrap = document.getElementById(wrapId);
+  if (act && wrap && wrap.scrollWidth > wrap.clientWidth) {
+    const l = act.offsetLeft, r = l + act.offsetWidth;
+    if (l < wrap.scrollLeft) wrap.scrollLeft = Math.max(0, l - 12);
+    else if (r > wrap.scrollLeft + wrap.clientWidth) wrap.scrollLeft = r - wrap.clientWidth + 12;
+  }
+}
+function buildSettingsJumpNav() {
+  // R78 · A4 — through the shared builder; what stays here is only what is Settings' own.
+  const built = buildJumpNav("settings-jump", "settings-jump-chips", SETTINGS_JUMP_SECTIONS, settingsJumpVisible, {
+    attr: "data-settings-jump", chipIdPrefix: "settings-nav-",
+    // Open every disclosure the target sits inside, outermost first, before scrolling to it.
+    beforeJump: (it) => {
+      for (let n = it.el; n && n.id !== "page-settings"; n = n.parentElement) {
+        if (n.tagName === "DETAILS") n.open = true;
+      }
+      if (it.el.tagName === "DETAILS") it.el.open = true;
+    },
+    setActive: setSettingsJumpActive,
+  });
+  settingsJumpItems = built ? built.items : [];
+  if (!built) return;
   settingsJumpActive = "";
   measureSettingsJumpOffsets();
   if (!settingsJumpWired) {
@@ -6464,18 +6312,7 @@ function measureSettingsJumpOffsets() {
 function setSettingsJumpActive(key) {
   if (key === settingsJumpActive) return;
   settingsJumpActive = key;
-  document.querySelectorAll("#settings-jump-chips [data-settings-jump]").forEach((b) => {
-    const on = b.dataset.settingsJump === key;
-    b.classList.toggle("active", on);
-    b.setAttribute("aria-selected", on ? "true" : "false");
-  });
-  const act = key ? document.getElementById("settings-nav-" + key) : null;
-  const wrap = $("#settings-jump-chips");
-  if (act && wrap && wrap.scrollWidth > wrap.clientWidth) {
-    const l = act.offsetLeft, r = l + act.offsetWidth;
-    if (l < wrap.scrollLeft) wrap.scrollLeft = Math.max(0, l - 12);
-    else if (r > wrap.scrollLeft + wrap.clientWidth) wrap.scrollLeft = r - wrap.clientWidth + 12;
-  }
+  jumpNavActivePaint("settings-jump-chips", "data-settings-jump", "settings-nav-", key);   // R78 · A4
 }
 function onSettingsJumpScroll() {
   if (settingsJumpTick) return;
@@ -6686,9 +6523,9 @@ async function sendDigestNow() {
     else if (j.skipped === "no_resend_key") toast("RESEND_API_KEY missing — digest not sent");
     else if (j.skipped === "disabled") toast("Digest is disabled in settings");
     else if (j.skipped) toast("Digest skipped: " + j.skipped);
-    else toast("Error: " + (j.error || r.status));
+    else dbFail("sendDigestNow", (j.error || r.status));
   } catch (e) {
-    toast("Error: " + e.message);
+    dbFail("sendDigestNow", e);
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = "Send digest now"; }
   }
@@ -6734,7 +6571,7 @@ async function saveSettingsForm() {
   btn.disabled = true;
   try {
     const { error } = await db.from("settings").upsert(rows);
-    if (error) return toast("Error: " + error.message);
+    if (error) return dbFail("saveSettingsForm", error);
     await loadSettings();
     $("#settings-saved").classList.remove("hidden");
     setTimeout(() => $("#settings-saved").classList.add("hidden"), 2500);
@@ -6775,7 +6612,7 @@ async function saveMyDetails() {
         toast("Your details need migration M1 — ask an Owner to run it.");
         PROFILE_CONTACT_SUPPORTED = false;
         $("#my-details-panel").classList.add("hidden");
-      } else toast("Error: " + error.message);
+      } else dbFail("saveMyDetails", error);
       return;
     }
     const mine = PROFILES.find((p) => p.id === ME.id);
@@ -6852,7 +6689,7 @@ async function saveAdviserTargets() {
   btn.disabled = true;
   try {
     const { error } = await db.from("settings").upsert([{ key: "adviser_fee_targets", value: JSON.stringify(map) }]);
-    if (error) return toast("Error: " + error.message);
+    if (error) return dbFail("saveAdviserTargets", error);
     await loadSettings();
     settingsDirtyReset();   // R74 · B1 — see saveSettingsForm
     toast("Per-adviser targets saved.");
@@ -7335,6 +7172,12 @@ async function readDashboardCases() {
    which subset is COUNTED, not which rows exist.
    ========================================================================== */
 let dashKpiData = null;
+/* R78 · A5 — the module-wide STALE-RESPONSE idiom, applied here: a per-page load sequence token,
+   bumped at the top of the loader and re-checked after every await BEFORE anything is painted.
+   Navigating away and back (or any second call) makes the older in-flight load's writes no-ops
+   instead of a late repaint over fresher data. Same shape on loadPipeline, loadEmails and the
+   diary loaders. */
+let dashLoadSeq = 0;
 const kpiScopeMine = () => briefingScope !== "all" && !!(ME && ME.id);
 function renderTodayKpis() {
   const row = $("#kpi-row");
@@ -7383,7 +7226,7 @@ function renderTodayKpis() {
      it is. The adviser's own figure stays where Daniel approved it — on Reports — and the strip's
      title says so rather than leaving an unexplained gap. */
   const money = showMoney();
-  row.innerHTML = `
+  const kpiHtml = `
     <div class="kpi dq-clickable" onclick="kpiGoto('active')" title="View the pipeline"><div class="num">${active.length}</div><div class="lbl">Active cases</div>${scopeTag}</div>
     <div class="kpi dq-clickable" onclick="kpiGoto('completions')" title="View Reports"><div class="num">${completedThisYear.length}</div><div class="lbl">Completions in ${yr}</div>${scopeTag}</div>
     ${/* R74 · A1 — one label, one number, three surfaces. "in the 6-month window" is the phrase the
@@ -7393,6 +7236,22 @@ function renderTodayKpis() {
     <div class="kpi dq-clickable ${kpiCounts.inWindow ? "warn" : ""}" onclick="kpiGoto('rates')" title="${esc(`Rates ${rateBookWindowWord(reminderMonths)} — ${kpiCounts.ended} already ended (the client is on the reversion rate now) and ${kpiCounts.ending} still to end. A rate that has already lapsed is INSIDE the window, not past it. View Rate & ERC alerts.`)}"><div class="num">${kpiCounts.inWindow}</div><div class="lbl">Rates ${rateBookWindowWord(reminderMonths)}</div>${scopeTag}</div>
     <div class="kpi dq-clickable ${kpiCounts.ercAll ? "bad" : ""}" onclick="kpiGoto('erc')" title="View Rate &amp; ERC alerts. ERC = Early Repayment Charge, the fee for leaving a deal early — &quot;outlasts the rate&quot; means it is still running after the client's discounted rate has already finished, so they are locked in past the deal that locked them in."><div class="num">${kpiCounts.ercAll}</div><div class="lbl">ERC outlasts rate</div>${scopeTag}</div>
     ${money ? `<div class="kpi dq-clickable ${feesDue.length ? "warn" : ""}" onclick="kpiGoto('fees')" title="View the Protection &amp; Fees drawer — Fees due tab"><div class="num">${fmtM(feesDueTotal)}</div><div class="lbl">Fees outstanding (${feesDue.length}) <span style="font-weight:400;opacity:.7;">· all stages</span></div>${scopeTag}</div>` : ""}`;
+  /* ========================================================================
+     R78 · A1c — THE FLICKER GUARD. loadDashboard calls this twice per load
+     (once off the raw rows, once after buildRateErcFeed hands the collapse
+     keys over), and from the second session paint onwards the two calls build
+     BYTE-IDENTICAL markup — so the second innerHTML write repainted five
+     tiles with themselves, which is the KPI flicker. The last markup actually
+     written is remembered ON THE ELEMENT (not in a module var, so anything
+     that replaces the row's content — renderLoadError — naturally fails the
+     `.kpi` DOM check below and the guard stands aside). Identical markup on a
+     row that still holds KPI tiles = skip the write; the handlers, the title
+     and activateAll's stops are already on those exact nodes. Different
+     markup (a scope flip, the first-load collapse, new data) writes as ever.
+     ======================================================================== */
+  if (row._nxKpiHtml === kpiHtml && row.querySelector(".kpi")) return;
+  row.innerHTML = kpiHtml;
+  row._nxKpiHtml = kpiHtml;
   /* The fee tile's absence, explained where someone would look for it. No placeholder tile: an
      empty fifth card on every adviser's home screen would be four-fifths of a strip, and a
      permanent "—" is worse than a clean four. */
@@ -7728,6 +7587,42 @@ function renderDashNotices() {
   } else {
     el.innerHTML = bits.join("");
   }
+  renderLocaleNotice();   // R78 · B7c — its own host, so the fold rule above never counts it
+}
+/* ==========================================================================
+   R78 · B7c — THE DATE-LOCALE NOTE. Chromium renders <input type="date"> in
+   the BROWSER's locale whatever the page's lang says, so a US-locale browser
+   shows mm/dd/yyyy pickers under an app that prints every date as "2 Sep
+   2026" — and 03/04 in a picker silently means the wrong month. Nothing here
+   can change the picker; what the app CAN do is say so, once, quietly.
+   Gate (localeNoticeNeeded, exposed for suites): Intl's RESOLVED locale is
+   not en-GB, and localStorage nx_locale_note has not recorded a dismissal.
+   Dismissing writes nx_locale_note and the note never returns on this
+   browser. Storage reads/writes are try/caught — a browser that blocks
+   localStorage gets the note each visit rather than an error.
+   ========================================================================== */
+window.localeNoticeNeeded = function () {
+  try {
+    if (localStorage.getItem("nx_locale_note")) return false;
+  } catch (e) { /* blocked storage — fall through to the locale test */ }
+  try {
+    const loc = String((Intl.DateTimeFormat().resolvedOptions() || {}).locale || "").toLowerCase();
+    return loc !== "" && loc !== "en-gb";
+  } catch (e) { return false; }
+};
+function renderLocaleNotice() {
+  const host = $("#locale-note-host");
+  if (!host) return;
+  if (!window.localeNoticeNeeded()) { host.innerHTML = ""; return; }
+  host.innerHTML = `<div class="locale-note" id="locale-note">
+    <span>Your browser shows dates month-first (m/d/y) in date pickers — this app displays them as ${esc(fmtD(localDateStr()))}.</span>
+    <button type="button" class="btn btn-sm" id="locale-note-dismiss" aria-label="Dismiss this note — it will not be shown again">Got it</button>
+  </div>`;
+  const btn = $("#locale-note-dismiss");
+  if (btn) btn.onclick = () => {
+    try { localStorage.setItem("nx_locale_note", new Date().toISOString()); } catch (e) { /* best-effort */ }
+    host.innerHTML = "";
+  };
 }
 
 /* ==========================================================================
@@ -7942,7 +7837,14 @@ async function buildRateErcFeed(cases, alerts, opts) {
      R7-2 — the lookup runs over the WHOLE merged list rather than the first fifteen, because
      de-duplication has to happen before any slice: collapsing after cutting would drop real
      maturities off the end of the list to make room for rows it was about to merge anyway. */
-  const ctx = await loadPropContext(rateErcAll.map((a) => a.case_id));
+  /* R78 · A1/A2 — the property context and the reminder read never depended on each other, and
+     v_alerts rows carry client_id, so the sibling read inside loadPropContext can start at once
+     (the hint contract is A2's: verified against the case read, topped up if ever stale). What
+     was three serial waves through this function is one. */
+  const [ctx, reminderByCase] = await Promise.all([
+    loadPropContext(rateErcAll.map((a) => a.case_id), { clientIds: rateErcAll.map((a) => a.client_id) }),
+    readRateReminderRows(rateErcAll),
+  ]);
   /* R7-2 — ONE BUILDING, ONE MATURITY DATE, ONE ROW. Two cases on the same property whose rates
      end on the same day are one mortgage conversation, and until now they were two identical rows
      with two identical buttons, each of which would create its own retention case. Collapsed on
@@ -7970,8 +7872,8 @@ async function buildRateErcFeed(cases, alerts, opts) {
      firm. The email_queue is the only record that can tell "sent" from "queued" from "never" —
      22 rows in production for this type, so it is one cheap read, paged like every other
      (R69-HF1) and soft: a database that refuses it degrades to the stamp-only reading rather
-     than to a blank row (see reminderState). */
-  const reminderByCase = await readRateReminderRows(rateErcAll);
+     than to a blank row (see reminderState). R78 · A1 — read in the Promise.all above, beside
+     the property context, because neither needs the other. */
   return {
     scope, reminderMonths, caseAdviser, ctx, money, callPack, ercIds, rows, reminderByCase,
     ratesSoonAll, ercFlagsAll, ratesSoonScoped, ercFlagsScoped,
@@ -8725,6 +8627,7 @@ async function renderRetentionRows(open, cap) {
 }
 
 async function loadDashboard() {
+  const seq = ++dashLoadSeq;   // R78 · A5 — stale-response guard: checked after every await below
   /* R34 · W3 — restore every drawer the user has an opinion about BEFORE anything that could call
      autoDrawer (the loaders below, and the error branch's loaders too). */
   applyStoredDrawers();
@@ -8745,6 +8648,7 @@ async function loadDashboard() {
        renders the buttons as before rather than blanking a working action on a network hiccup. */
     db.rpc("has_bank_details").then((r) => r).catch(() => ({ data: null, error: true })),
   ]);
+  if (seq !== dashLoadSeq) return;   // R78 · A5 — a newer dashboard load owns the page now
   hasBankDetails = bank && !bank.error ? !!bank.data : null;
   /* R5-6 — which completed cases already have a retention successor, so the "Start retention case"
      button can't offer to create a second one. Derived from the rows already fetched above.
@@ -8797,6 +8701,35 @@ async function loadDashboard() {
   const money = showMoney();
 
   /* ==========================================================================
+     R78 · A1a — THE INDEPENDENT PANELS NO LONGER QUEUE BEHIND THE RATE FEED.
+
+     Until now loadProtection / loadBriefing / loadWatchtower / loadUnactioned
+     were fired only after the whole awaited rate-feed chain AND
+     publishAdviserTaskLoad had finished — four panels that read NOTHING from
+     the feed (verified: none of the four touches rateFeed, rateBookCollapseKeys
+     or anything derived below this line; loadBriefing reads hasBankDetails and
+     retentionSourceIds is set above, both already resolved) paying ~4 waves of
+     someone else's latency. They start HERE, straight off the first wave.
+
+     Two orderings that DO matter are kept, without the serial cost:
+       · publishAdviserTaskLoad before My Day's paint (R7-5 — the lead-routing
+         selects must see the task half of the load map): loadBriefing is
+         CHAINED on it rather than the whole dashboard waiting between them.
+       · run_watchtower before loadWatchtower (T1-11/R55 · F3): the same
+         sequence, inside its own unawaited chain.
+     ========================================================================== */
+  const taskLoadP = publishAdviserTaskLoad();
+  taskLoadP.then(() => loadBriefing(), () => loadBriefing());
+  loadProtection();
+  (async () => {
+    if (wtAutoRunDue()) {
+      try { await db.rpc("run_watchtower"); wtStampRun(); } catch (e) { /* degraded: show the last known alerts */ }
+    }
+    loadWatchtower();
+  })();
+  loadUnactioned(); // R17 · §2 — the no-next-action radar, its own reads, scoped like the strip
+
+  /* ==========================================================================
      R12b · W-16 — THE DRAWER'S OWN SCOPE, INDEPENDENT OF THE STRIP'S.
 
      Deliberately NOT built off the KPI-scoped sets above. The tiles answer
@@ -8814,6 +8747,7 @@ async function loadDashboard() {
      computed and rendered in exactly one place.
      ========================================================================== */
   const rateFeed = await buildRateErcFeed(cases, alerts, { reminderMonths, scope: rateScope, caseAdviser, recentOnly: true });
+  if (seq !== dashLoadSeq) return;   // R78 · A5
   /* R7-2 — sorted by VALUE AT RISK by default (the loan on the case), because the question this
      panel is scanned with is "which of these matters most", and a date sort answers a different
      one. The date sort is one click away and the header says which is in force. Owner only: the
@@ -8860,33 +8794,17 @@ async function loadDashboard() {
      does not earn. */
   const rateErcShown = rateErcMerged.slice(0, 15);
   const dashPhones = await retRowPhones(rateFeed, rateErcShown);
+  if (seq !== dashLoadSeq) return;   // R78 · A5
   $("#alerts-rateerc").innerHTML = rateErcMerged.length
     ? rateErcShown.map((a) => renderRateErcRow(a, rateFeed, { phones: dashPhones })).join("")
       + (rateErcMerged.length > 15 ? `<div class="empty">…and ${rateErcMerged.length - 15} more — <button type="button" class="dash-notice-link" onclick="nav('retention')">see the Retention page</button>.</div>` : "")
       + rateErcDedupeNote(rateFeed.collapsed)
     : '<div class="empty">Nothing ending in the reminder window, and no ERC conflicts. 👍</div>';
 
-  /* R7-5 — awaited, and the only one that is: this publishes the task half of the routing load,
-     and the list underneath it paints the lead-routing selects. Racing them would give the first
-     paint of My Day a cases-only view of who is busiest, which would then differ from the same
-     select after any repaint. Everything else still runs unawaited, as before.
-     R41 · F1 — was `await loadTasks()`; the drawer went, the load map it published did not. */
-  await publishAdviserTaskLoad();
-  loadProtection();
-  // R41 · F1 — loadRetention / loadLeads / loadTodayAppts all painted a restatement of My Day one
-  // screen lower down. One paint now, not four.
-  loadBriefing();
-  // T1-11 — "resolves itself when fixed" is what #watchtower-sub promises, but the checker only ran
-  // from the Run checks button, so a list the administrator was actively working never shrank.
-  // Re-run it before reading the alerts; if the RPC fails, still render whatever rows exist.
-  // R55 · F3 — throttled: see wtAutoRunDue(). A save busts the stamp, so a just-fixed alert
-  // still resolves on the next Today paint; otherwise the cron + the last run within 10 minutes
-  // are considered fresh enough and the ~0.4s awaited RPC is skipped.
-  if (wtAutoRunDue()) {
-    try { await db.rpc("run_watchtower"); wtStampRun(); } catch (e) { /* degraded: show the last known alerts */ }
-  }
-  loadWatchtower();
-  loadUnactioned(); // R17 · §2 — the no-next-action radar, its own reads, scoped like the strip
+  /* R7-5 / R41 · F1 / T1-11 / R55 · F3 — publishAdviserTaskLoad → loadBriefing, and
+     run_watchtower → loadWatchtower, both MOVED above the rate-feed chain (R78 · A1a): the
+     orderings those notes pinned are kept inside their own chains, they just no longer make
+     four independent panels wait for this drawer's reads. */
   if (settings.outlook_enabled === "1") {
     const last = Number(localStorage.getItem("nm_last_outlook_sync") || 0);
     if (Date.now() - last > 10 * 60000) {
@@ -9636,6 +9554,18 @@ async function loadRetentionCold(scope) {
   const adviser = scope === "mine" && ME && ME.id ? ME.id : "all";
   const cold = coldClients(data, adviser);
   const todayStr = localDateStr();
+  /* R78 · B7b — the "rate coming" BADGE is bounded to the same forward window the rest of
+     Retention works (rate_reminder_months × 30 days — rateBookSelect's own arithmetic): a rate
+     end recorded as 2099-12-31 is a data placeholder, not "a reason to ring them", and badging it
+     amber told the operator to make a call twenty years early. The row's OWN "next rate ends …"
+     line and the sort are deliberately untouched — the date is still true and still ordering the
+     list; only the amber urgency claim is bounded. */
+  const coldReminderMonths = Number(settings.rate_reminder_months) || 6;
+  const coldRateEdge = (() => {
+    const d = new Date(todayStr + "T12:00:00");
+    d.setDate(d.getDate() + coldReminderMonths * 30);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  })();
   /* Longest silence first — a client with nothing on record in the comms window sorts
      above one last spoken to in March, because that is the order the list is worked in.
      R41 · L8 — AND WITHIN "NEVER SPOKEN TO", THE ONE WHOSE RATE ENDS SOONEST.
@@ -9721,7 +9651,7 @@ async function loadRetentionCold(scope) {
         ${money && loanTotal ? `<div class="s rate-money ret-cold-money">Loan <strong>${fmtM(loanTotal)}</strong>${(c.cases || []).length > 1 ? ` <span class="cs-muted">· across ${(c.cases || []).filter((x) => x && x.stage !== "not_proceeding" && x.loan_amount).length} case${(c.cases || []).filter((x) => x && x.stage !== "not_proceeding" && x.loan_amount).length === 1 ? "" : "s"}</span>` : ""}</div>` : ""}
         ${phoneActionsHtml(c.phone, { sms: true, name: c.first_name || "", rateEnd: next ? next.date : null })}${acts}
       </div>
-      ${next ? '<span class="badge amber" title="This client has a rate maturing — a reason to ring them.">rate coming</span>' : ""}
+      ${next && next.date <= coldRateEdge ? '<span class="badge amber" title="This client has a rate maturing — a reason to ring them.">rate coming</span>' : ""}
     </div>`;
     }).join("")
       + (sorted.length > RET_LIST_CAP ? `<div class="empty">…and ${sorted.length - RET_LIST_CAP} more — work the rest from the Clients page.</div>` : "")
@@ -10124,6 +10054,44 @@ window.reopenTaskInCase = function (taskId, caseId) { return reopenTask(taskId, 
    now, so this is one paint. Kept as a named function rather than inlined — both snooze verbs call
    it, and naming the repaint is what stopped them drifting apart in the first place. */
 function snoozeRepaintAll() { loadBriefing(); }
+/* ==========================================================================
+   R78 · B4 — WEEKEND-AWARE RELATIVE DUE DATES (owner decision: SKIP WEEKENDS).
+
+   A Friday "+1d" snooze landed the task on Saturday, where My Day showed it to
+   nobody: the office is not open, so the task was born overdue-by-Monday. The
+   RULE, applied to every RELATIVE due-date verb in the app:
+
+     · the verb keeps its stated length first (+1d is +1 day, +1wk is +7), and
+       ONLY IF the landing date is a Saturday or Sunday does it roll forward to
+       the following Monday;
+     · an EXPLICIT date typed or picked in a date field is NEVER touched — a
+       human who chose Saturday meant Saturday (snoozeTaskTo, the 📅 pick, the
+       bulk-task date box, every plain date input);
+     · verbs covered: task snooze +1d/+3d/+1wk, the case modal's Due chips
+       (Tomorrow/+3d/+1wk/+1mo — they FILL the date field with the rolled date,
+       so the operator sees Monday and can still overtype it), the log-call
+       follow-up chips, the call-back prefill (tomorrowDateStr), the dateless
+       task submit's "due tomorrow" default, and protCallTask's tomorrow;
+     · NOT covered, deliberately: playbook step offsets (a computed schedule,
+       not a verb somebody pressed — playbookDateShift is untouched) and
+       Watchtower alert snoozes (snoozed_until is a reappearance gate, not a
+       due date — an alert coming back on Saturday costs nothing).
+
+   The walk is the house calendar walk (noon-anchored, Europe/London by way of
+   localDateStr's callers), never bare Date-ms drift; the day-of-week read at
+   noon local cannot be shifted by a DST hour. Toast wording where the roll
+   fired is a contract: "Snoozed to Monday — skipped the weekend".
+   ========================================================================== */
+function weekendRollYmd(ymd) {
+  const s = String(ymd || "").slice(0, 10);
+  const d = new Date(s + "T12:00:00");
+  if (isNaN(d.getTime())) return { date: s, rolled: false };
+  const dow = d.getDay();
+  if (dow !== 6 && dow !== 0) return { date: s, rolled: false };
+  d.setDate(d.getDate() + (dow === 6 ? 2 : 1));
+  return { date: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`, rolled: true };
+}
+window.weekendRollYmd = weekendRollYmd; // suites compute the expected roll independently and compare
 window.snoozeTask = async function (taskId, days) {
   const { data: t, error: rerr } = await db.from("case_tasks").select("due_date").eq("id", taskId).single();
   if (rerr) return toast("Couldn't snooze that task — " + rerr.message);
@@ -10131,10 +10099,12 @@ window.snoozeTask = async function (taskId, days) {
   const base = t && t.due_date && t.due_date > today ? t.due_date : today;
   const d = new Date(base + "T00:00:00");
   d.setDate(d.getDate() + Number(days || 0));
-  const newDue = localDateStr(d.getTime());
+  // R78 · B4 — keep the verb's length, then roll a weekend landing to Monday (rule above).
+  const roll = weekendRollYmd(localDateStr(d.getTime()));
+  const newDue = roll.date;
   const { error } = await db.from("case_tasks").update({ due_date: newDue }).eq("id", taskId);
   if (error) return toast("Couldn't snooze that task — " + error.message);
-  toast("Snoozed — now due " + fmtD(newDue));
+  toast(roll.rolled ? `Snoozed to Monday — skipped the weekend · now due ${fmtD(newDue)}` : "Snoozed — now due " + fmtD(newDue));
   snoozeRepaintAll();
 };
 window.snoozeTaskTo = async function (taskId, value) {
@@ -10163,7 +10133,7 @@ function taskSnoozeControlsHtml(taskId, ctx) {
 async function loadProtection() {
   const cutoff = new Date(Date.now() - 30 * 86400000).toISOString();
   const { data: opps, error } = await db.from("cases")
-    .select("id,stage,lender,completed_at,clients!client_id(first_name,last_name)")
+    .select("id,client_id,stage,lender,completed_at,clients!client_id(first_name,last_name)")
     .eq("protection_status", "not_discussed")
     .or(`stage.in.(application,offer),and(stage.eq.completed,completed_at.gte.${cutoff})`)
     .order("updated_at", { ascending: false })
@@ -10174,7 +10144,9 @@ async function loadProtection() {
      twice, and three of a landlord's five buy-to-lets were indistinguishable. Same chip, same
      rules, same batched lookup as every other case list. The separator is a middot here too — this
      was the one surface still using an em dash. */
-  const protCtx = await loadPropContext((opps || []).map((c) => c.id));
+  /* R78 · A1a — client_id joined the select (base column, free) purely so the context's
+     sibling read can start in the same wave — the A2 hint contract. */
+  const protCtx = await loadPropContext((opps || []).map((c) => c.id), { clientIds: (opps || []).map((c) => c.client_id) });
   $("#protection-list").innerHTML = (opps || []).length ? opps.map((c) => `
     <div class="row-item">
       <div class="row-main">
@@ -10391,7 +10363,39 @@ function briefActions(it) {
 window.gotoSettings = function () { nav("settings"); };
 async function loadBriefing() {
   $("#briefing-date").textContent = new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
-  const { data, error } = await db.rpc("get_briefing", { p_scope: briefingScope });
+  /* ========================================================================
+     R78 · A1b — MY DAY'S ENRICHMENT READS RUN IN WAVES, NOT IN A QUEUE.
+
+     This function used to chain EIGHT serial awaits, of which only the RPC's
+     ids were ever a real dependency: the completion-date read, the review-task
+     read and the two failed-queue reads depend on NOTHING the RPC returns
+     (verified: each filters the whole table by its own predicate), so they
+     ride in ONE Promise.all beside the RPC. The reads that DO need wave-1
+     output — the failed rows' cases, the appointment/client/lead lookups —
+     form a second Promise.all; only the briefCaseMeta cases read stays behind
+     them, because its client-id set includes the comms rows' cases' clients,
+     which the second wave is what proves. Every merge below then runs in the
+     ORIGINAL order with the ORIGINAL intermediate sorts, so item order (ties
+     included — Array.sort is stable) is exactly what the serial chain built.
+     Each read keeps its own soft-degrade: one failure blanks one enrichment,
+     never the briefing.
+     ======================================================================== */
+  const briefSoft = async (q) => { try { return await q; } catch (e) { return { data: null, error: e }; } };
+  const [rpcRes, ocRes, rtRes, emFailRes, smsFailRes] = await Promise.all([
+    Promise.resolve(db.rpc("get_briefing", { p_scope: briefingScope })),
+    briefSoft(db.from("cases")
+      .select("id,stage,assigned_to")
+      .in("stage", ["offer", "exchange"])
+      .is("expected_completion_date", null)),
+    briefSoft(db.from("case_tasks")
+      .select("id,title,due_date,case_id,assigned_to,cases(client_id,clients!client_id(first_name,last_name))")
+      .is("done_at", null).order("due_date").limit(200)),
+    briefSoft(db.from("email_queue").select("id,case_id,client_id,email_type,to_email,error,created_at,clients(first_name,last_name)")
+      .eq("status", "failed").order("created_at", { ascending: false }).limit(BRIEF_FAILED_READ)),
+    briefSoft(db.from("sms_queue").select("id,case_id,client_id,sms_type,to_phone,error,created_at,clients(first_name,last_name)")
+      .eq("status", "failed").order("created_at", { ascending: false }).limit(BRIEF_FAILED_READ)),
+  ]);
+  const { data, error } = rpcRes;
   if (error) {
     $("#briefing-list").innerHTML = `<div class="empty">Briefing unavailable — ${esc(error.message)}</div>`;
     return;
@@ -10423,10 +10427,9 @@ async function loadBriefing() {
   // purely additive, doesn't touch/duplicate anything the RPC itself returns. Degrades silently:
   // if this query errors, the rest of the briefing still renders untouched.
   try {
-    const { data: openCases } = await db.from("cases")
-      .select("id,stage,assigned_to")
-      .in("stage", ["offer", "exchange"])
-      .is("expected_completion_date", null);
+    // R78 · A1b — read in wave 1 above (never depended on the RPC); merged here, in the
+    // original order, so the sorted list is byte-identical to the serial chain's.
+    const { data: openCases } = ocRes;
     // R5-35 — the same strict rule: under Mine this counts MY offer/exchange cases, not the
     // ownerless ones as well. The row itself is an aggregate, so it carries no owner suffix.
     const mine = (owner) => briefingScope === "all" || owner === (ME && ME.id);
@@ -10457,9 +10460,7 @@ async function loadBriefing() {
      referrals they would have made. It is not put above the rate-ended row because that one is
      losing money this minute. */
   try {
-    const { data: revTasks } = await db.from("case_tasks")
-      .select("id,title,due_date,case_id,assigned_to,cases(client_id,clients!client_id(first_name,last_name))")
-      .is("done_at", null).order("due_date").limit(200);
+    const { data: revTasks } = rtRes;   // R78 · A1b — read in wave 1 above
     const already = new Set(items.map((it) => it.task_id).filter(Boolean).map(String));
     const todayStr = localDateStr();
     (revTasks || []).filter((t) => t && isReviewFeedbackTask(t.title) && !already.has(String(t.id)))
@@ -10497,19 +10498,28 @@ async function loadBriefing() {
          grouping in groupBriefRows keeps them to one visible row with the rest behind "+N more".
      Priority 11: below an overdue task (10) because the task is a commitment already broken,
      above a new lead (12) because this one is a commitment we think we have KEPT. */
+  /* R78 · A1b — WAVE 2: the reads that needed wave 1's ids and nothing else — the failed rows'
+     cases, and the appointment/client/lead lookups the enrichment blocks below consume. The
+     appt_today and lead_new items are RPC-only kinds (no merge above adds either), so their id
+     sets are already final here. Each read keeps its old soft-degrade shape. */
+  const failedRows = [];
+  ((emFailRes && emFailRes.data) || []).forEach((e) => failedRows.push({ ...e, __sms: false }));
+  ((smsFailRes && smsFailRes.data) || []).forEach((s) => failedRows.push({ ...s, __sms: true }));
+  const failCaseIds = [...new Set(failedRows.map((r) => r.case_id).filter(Boolean))];
+  const apptItems = items.filter((it) => it.kind === "appt_today" && it.appt_id);
+  const apptClientIds = [...new Set(apptItems.filter((it) => it.client_id).map((it) => it.client_id))];
+  const leadItems = items.filter((it) => it.kind === "lead_new" && it.lead_id);
+  const [fcsRes, apptClsRes, apsRes, ldsRes] = await Promise.all([
+    failCaseIds.length ? briefSoft(db.from("cases").select("id,stage,assigned_to,client_id").in("id", failCaseIds)) : Promise.resolve({ data: [] }),
+    apptItems.length && apptClientIds.length ? briefSoft(db.from("clients").select("id,first_name,last_name").in("id", apptClientIds)) : Promise.resolve({ data: [] }),
+    /* R41 · T1 — "*" so the row can carry `outcome` without 42703-ing an older database; see the
+       appointment-enrichment block below, whose note this read still belongs to. */
+    apptItems.length ? briefSoft(db.from("appointments").select("*").in("id", apptItems.map((it) => it.appt_id))) : Promise.resolve({ data: [] }),
+    leadItems.length ? briefSoft(db.from("leads").select("*").in("id", leadItems.map((it) => it.lead_id))) : Promise.resolve({ data: [] }),
+  ]);
   try {
-    const failedRows = [];
-    const [emFail, smsFail] = await Promise.all([
-      db.from("email_queue").select("id,case_id,client_id,email_type,to_email,error,created_at,clients(first_name,last_name)")
-        .eq("status", "failed").order("created_at", { ascending: false }).limit(BRIEF_FAILED_READ),
-      db.from("sms_queue").select("id,case_id,client_id,sms_type,to_phone,error,created_at,clients(first_name,last_name)")
-        .eq("status", "failed").order("created_at", { ascending: false }).limit(BRIEF_FAILED_READ),
-    ]);
-    (emFail.data || []).forEach((e) => failedRows.push({ ...e, __sms: false }));
-    (smsFail.data || []).forEach((s) => failedRows.push({ ...s, __sms: true }));
-    const failCaseIds = [...new Set(failedRows.map((r) => r.case_id).filter(Boolean))];
     if (failCaseIds.length) {
-      const { data: fcs } = await db.from("cases").select("id,stage,assigned_to,client_id").in("id", failCaseIds);
+      const { data: fcs } = fcsRes;
       const caseById = {};
       (fcs || []).forEach((c) => { caseById[c.id] = c; });
       // One row per failed MESSAGE: the queue id is the identity, so the same row read twice
@@ -10597,19 +10607,10 @@ async function loadBriefing() {
      (real start/end times) answers both. Best-effort throughout: on error the rows render as they
      did before. */
   try {
-    const apptItems = items.filter((it) => it.kind === "appt_today" && it.appt_id);
     if (apptItems.length) {
-      const clientIds = [...new Set(apptItems.filter((it) => it.client_id).map((it) => it.client_id))];
-      const [{ data: cls }, { data: aps }] = await Promise.all([
-        clientIds.length ? db.from("clients").select("id,first_name,last_name").in("id", clientIds) : Promise.resolve({ data: [] }),
-        /* R41 · T1 — widened from the four named columns to "*" so this row can also carry
-           `outcome` (attended / no_show / rearranged), which the quick-outcome buttons on the row
-           need. Naming `outcome` explicitly would 42703 the WHOLE read on a database that predates
-           the column and take the clash flags and the client names down with it; "*" answers with
-           whatever the row actually has, which is the same tolerance rule loadLeads and
-           openLeadInToday already use. Still bounded by .in("id", …) on a handful of ids. */
-        db.from("appointments").select("*").in("id", apptItems.map((it) => it.appt_id)),
-      ]);
+      /* R41 · T1 note (the "*" tolerance rule) lives on the wave-2 read above (R78 · A1b);
+         everything from here down is the same processing over the same rows. */
+      const { data: cls } = apptClsRes, { data: aps } = apsRes;
       const nameById = {};
       (cls || []).forEach((cl) => { nameById[cl.id] = [cl.first_name, cl.last_name].filter(Boolean).join(" "); });
       const apById = {};
@@ -10651,9 +10652,8 @@ async function loadBriefing() {
      inbox has. Best-effort, like every other enrichment on this screen: on error the rows render
      exactly as round 5 left them. */
   try {
-    const leadItems = items.filter((it) => it.kind === "lead_new" && it.lead_id);
     if (leadItems.length) {
-      const { data: lds } = await db.from("leads").select("*").in("id", leadItems.map((it) => it.lead_id));
+      const { data: lds } = ldsRes;   // R78 · A1b — read in wave 2 above
       if ((lds || []).length) noteLeadSlaFromStarRow(lds[0]);
       const byId = {};
       (lds || []).forEach((l) => { byId[l.id] = l; });
@@ -11143,7 +11143,7 @@ function markEmailHandledWrite(id) {
 }
 window.markEmailHandled = async function (id) {
   const { error } = await markEmailHandledWrite(id);
-  if (error) return toast("Error: " + error.message);
+  if (error) return dbFail("markEmailHandled", error);
   toast("Email marked handled");
   loadBriefing();
 };
@@ -11155,7 +11155,7 @@ window.tlMarkEmailHandled = async function (emailId, btn) {
   if (!emailId) return;
   if (btn) btn.disabled = true;
   const { error } = await markEmailHandledWrite(emailId);
-  if (error) { if (btn) btn.disabled = false; return toast("Error: " + error.message); }
+  if (error) { if (btn) btn.disabled = false; return dbFail("tlMarkEmailHandled", error); }
   toast("Email marked handled");
   if (btn) btn.outerHTML = '<span class="tl-muted tl-handled-done">handled ✓</span>';
 };
@@ -11516,16 +11516,31 @@ async function loadWatchtower() {
      everything" rather than blanking a compliance panel. */
   const wtCaseIds = [...new Set(alerts.map((a) => a.case_id).filter(Boolean))];
   let wtAssignedBy = {};
-  if (wtCaseIds.length) {
-    try {
-      const { data: owners, error: ownErr } = await db.from("cases").select("id,assigned_to").in("id", wtCaseIds).limit(WATCH_FETCH_CAP);
-      if (ownErr) wtAssignedBy = null;
-      else (owners || []).forEach((c) => { wtAssignedBy[c.id] = c.assigned_to || null; });
-    } catch (e) { wtAssignedBy = null; }
-  }
-  // R34 · Part 4 — my own data-health rows, computed client-side. Additive, silent on failure.
-  const wtSynth = await loadMyDataHealthAlerts(all);
-  const wtCtx = await loadPropContext(alerts.concat(wtSynth).map((a) => a.case_id));
+  /* R78 · A1a — the owner lookup and the R34 · Part 4 synthetic rows never depended on each
+     other, so they run side by side; `client_id` joins the owner read (base column, free) so
+     the property context can then resolve in ONE wave via the A2 hint. Failure semantics per
+     read are exactly the pre-R78 ones. */
+  const [wtOwnersOut, wtSynth] = await Promise.all([
+    (async () => {
+      if (!wtCaseIds.length) return {};
+      try {
+        const { data: owners, error: ownErr } = await db.from("cases").select("id,client_id,assigned_to").in("id", wtCaseIds).limit(WATCH_FETCH_CAP);
+        if (ownErr) return null;
+        const by = {};
+        (owners || []).forEach((c) => { by[c.id] = c.assigned_to || null; by["cl:" + c.id] = c.client_id || null; });
+        return by;
+      } catch (e) { return null; }
+    })(),
+    // R34 · Part 4 — my own data-health rows, computed client-side. Additive, silent on failure.
+    loadMyDataHealthAlerts(all),
+  ]);
+  const wtCtxRows = alerts.concat(wtSynth);
+  const wtCtxClientHint = wtCtxRows
+    .map((a) => (a.client_id || (wtOwnersOut && wtOwnersOut["cl:" + a.case_id]) || null))
+    .filter(Boolean);
+  const wtCtx = await loadPropContext(wtCtxRows.map((a) => a.case_id), { clientIds: wtCtxClientHint });
+  if (wtOwnersOut === null) wtAssignedBy = null;
+  else Object.keys(wtOwnersOut).forEach((k) => { if (k.indexOf("cl:") !== 0) wtAssignedBy[k] = wtOwnersOut[k]; });
   /* R11-2 — everything above this line is the fetch, and it is unchanged. Everything below is
      drawing, so it is now a separate function the severity chips can call on their own. */
   wtLast = { alerts, snoozed, ctx: wtCtx, fetched: (data || []).length, openTotal, truncated, assignedBy: wtAssignedBy, synth: wtSynth };
@@ -12018,7 +12033,7 @@ async function bulkTriageAlertsRun(verb, ids) {
   const { error: wErr } = await inChunks(targets, (sl) => db.from("watch_alerts").update(patch).in("id", sl).select("id"));
   if (wErr) {
     if (isMissingColumnError(wErr)) return toast("Bulk snooze needs migration M3 (watch_alerts.snoozed_until)");
-    return toast("Error: " + wErr.message);
+    return dbFail("bulkTriageAlertsRun", wErr);
   }
   /* The compliance note, for criticals only, mirroring the per-row paths word for word. ONE insert
      for the whole batch rather than one per row. Best-effort and DISCLOSED: the alerts are already
@@ -12061,7 +12076,7 @@ window.resolveAlert = async function (id, severity, caseId) {
     if (!reason) { toast("A reason is required to dismiss a critical alert."); return; }
   }
   const { error } = await db.from("watch_alerts").update({ resolved_at: new Date().toISOString() }).eq("id", id);
-  if (error) return toast("Error: " + error.message);
+  if (error) return dbFail("resolveAlert", error);
   // Audit trail: record who dismissed a critical alert and why, in the case timeline. Written as a
   // case_note (no schema change needed) so it works whether or not watch_alerts has resolver columns.
   if (reason && caseId) {
@@ -12277,7 +12292,7 @@ window.snoozeAlert = async function (id, severity, caseId) {
     .eq("id", id);
   if (error) {
     if (isMissingColumnError(error)) return toast("Snooze needs migration M3");
-    return toast("Error: " + error.message);
+    return dbFail("snoozeAlert", error);
   }
   // Mirror the dismiss pattern above: a CRITICAL alert's reason also lands on the case timeline.
   // RES-2 — a failed timeline-note write used to vanish into an empty catch under an unconditional
@@ -12296,7 +12311,7 @@ window.snoozeAlert = async function (id, severity, caseId) {
 };
 window.unsnoozeAlert = async function (id) {
   const { error } = await db.from("watch_alerts").update({ snoozed_until: null, snooze_note: null, snoozed_by: null }).eq("id", id);
-  if (error) return toast("Error: " + error.message);
+  if (error) return dbFail("unsnoozeAlert", error);
   toast("Unsnoozed — back on the working list");
   loadWatchtower();
 };
@@ -12310,7 +12325,7 @@ $("#watchtower-run").addEventListener("click", async () => {
   btn.disabled = true; btn.textContent = "Running…";
   const { data, error } = await db.rpc("run_watchtower");
   btn.disabled = false; btn.textContent = "Run checks";
-  if (error) return toast("Error: " + error.message);
+  if (error) return dbFail("runWatchtowerBtn", error);
   wtStampRun(); // R55 · F3 — a manual run is as fresh as an auto-run
   /* R11-3 — WHY THIS TOAST NO LONGER PROMISES "N new".
      The backlog item was "Run checks always says 0 new". It does, and the reason is not a bug in
@@ -13021,7 +13036,30 @@ function boardDupeClientIds(cases) {
   return flagged;
 }
 
+/* ==========================================================================
+   R78 · A5 — THE BOARD GETS THE CLIENTS-PAGE TREATMENT.
+
+   #board-search / #board-adviser re-ran a FULL cases refetch (plus the
+   stage-entries read) on every typing pause, while the Clients page has
+   answered its search from clientDataCached() since R8 with zero network.
+   boardCache is that idiom here: ONE {cases, stageEntry} snapshot per
+   session, filtered in memory by loadPipeline exactly as the fresh rows
+   were — the filter/search/segment logic below is untouched.
+
+   THE BUST RULE: any write to `cases` or `case_events` clears it — enforced
+   at ONE choke point (the db.from write-method wrap installed beside the
+   client's creation, top of this file) rather than a per-call-site sweep, so
+   a write path added next round cannot forget to bust. Busting is eager (at
+   call time, even if the write then fails): a spare refetch is cheap, a stale
+   board is the R76 stale-board bug back again. The stage-entry map is cached
+   over the FULL read (a superset of any filter — same values per case), so a
+   filter flip needs no read either. ownerCapHit still reads the cached rows'
+   length, so the R23 1,000-row cap notice survives caching verbatim. */
+let boardCache = null;      // { cases, stageEntry } — last successful board read this session
+let boardLoadSeq = 0;       // R78 · A5 — stale-response guard (the dashLoadSeq idiom)
+function bustBoardCache() { boardCache = null; }
 async function loadPipeline() {
+  const seq = ++boardLoadSeq;
   /* R43 — the server-side store, read once a session, from the same place (and for the same
      reason) R37 put the starter seed: this is the first moment ME is resolved AND a view dropdown
      is about to be painted. Not awaited — the board must not wait on it; when it answers it
@@ -13034,27 +13072,39 @@ async function loadPipeline() {
   const propOn = (await propAddrSupported()) !== false;
   const docsOn = (await docsSupported()) !== false;
   const lenderOn = (await lenderTrackSupported()) !== false;
-  const boardSelect = BOARD_CASE_COLS
-    + (propOn ? ",property_address" : "")
-    + (docsOn ? ",waiting_on,solicitor_firm" : "")
-    + (lenderOn ? ",application_status" : "")
-    + ",clients!client_id(first_name,last_name,email)";
-  const { data: cases, error } = await readAll(db.from("cases").select(boardSelect).order("updated_at", { ascending: false }).order("id"));
-  if (error) {
-    $("#board").classList.remove("hidden");
-    $("#board-hint").classList.add("hidden");
-    $("#board-legend").classList.add("hidden");
-    $("#stage-tabs").classList.add("hidden");
-    $("#table-wrap").classList.add("hidden");
-    renderLoadError("#board", error, loadPipeline);
-    return;
+  let cases, stageEntry;
+  if (boardCache) {
+    ({ cases, stageEntry } = boardCache);   // R78 · A5 — a search keystroke costs no network
+  } else {
+    const boardSelect = BOARD_CASE_COLS
+      + (propOn ? ",property_address" : "")
+      + (docsOn ? ",waiting_on,solicitor_firm" : "")
+      + (lenderOn ? ",application_status" : "")
+      + ",clients!client_id(first_name,last_name,email)";
+    const res = await readAll(db.from("cases").select(boardSelect).order("updated_at", { ascending: false }).order("id"));
+    if (seq !== boardLoadSeq) return;   // R78 · A5 — a newer load owns the board
+    if (res.error) {
+      $("#board").classList.remove("hidden");
+      $("#board-hint").classList.add("hidden");
+      $("#board-legend").classList.add("hidden");
+      $("#stage-tabs").classList.add("hidden");
+      $("#table-wrap").classList.add("hidden");
+      renderLoadError("#board", res.error, loadPipeline);
+      return;
+    }
+    cases = res.data;
+    // R24 — the named select above carries property_address exactly when propOn was true, so the M7
+    // question is still settled for free off the first row (notePropAddrFromStarRow reads its presence).
+    // noteDocsFromStarRow only ever flips DOCS_SUPPORTED to false off a missing waiting_on, which the
+    // select omits precisely when docsOn was already false — so both detectors stay consistent with the
+    // columns actually requested (mirrors how loadDataHealth re-notes M7 after its own named select).
+    if (cases && cases.length) { notePropAddrFromStarRow(cases[0]); noteDocsFromStarRow(cases[0]); }
+    /* R78 · A5 — read over the FULL book (not the filtered subset) so the cache serves every
+       later filter; the per-case values are identical either way. */
+    stageEntry = await loadStageEntries(cases || []);
+    if (seq !== boardLoadSeq) return;   // R78 · A5
+    boardCache = { cases, stageEntry };
   }
-  // R24 — the named select above carries property_address exactly when propOn was true, so the M7
-  // question is still settled for free off the first row (notePropAddrFromStarRow reads its presence).
-  // noteDocsFromStarRow only ever flips DOCS_SUPPORTED to false off a missing waiting_on, which the
-  // select omits precisely when docsOn was already false — so both detectors stay consistent with the
-  // columns actually requested (mirrors how loadDataHealth re-notes M7 after its own named select).
-  if (cases && cases.length) { notePropAddrFromStarRow(cases[0]); noteDocsFromStarRow(cases[0]); }
   renderOwnerCapNotice("#board-cap-notice", ownerCapHit(cases)); // R23 — never silently truncate the board
   const q = ($("#board-search").value || "").trim().toLowerCase();
   const who = $("#board-adviser").value || "all";
@@ -13089,7 +13139,7 @@ async function loadPipeline() {
     twinCount.set(k, (twinCount.get(k) || 0) + 1);
   });
   renderSegmentControl(filtered);
-  const stageEntry = await loadStageEntries(filtered);
+  // R78 · A5 — stageEntry now comes from the session cache above (read over the full book).
   /* R6 — how many cases the client has IN THE BOOK (not in this filter), which is what decides
      whether a case with no address still deserves the hollow type · lender chip. Counted off the
      full `cases` read above, so narrowing the board to one adviser can't make a portfolio client
@@ -13417,7 +13467,7 @@ function renderProtGatePanel(caseId, c, targetStage) {
       const { error } = await db.from("cases").update({ protection_status: status }).eq("id", caseId);
       if (error) {
         if (panel) panel.querySelectorAll("button").forEach((x) => (x.disabled = false));
-        return toast("Error: " + error.message);
+        return dbFail("renderProtGatePanel", error);
       }
       await refreshOpenedStamp(caseId);   // R18-D1 — our own write must not trip the form's stale-write guard
       // The header chip is now wrong; the panel has done its job. Both go before the move so the
@@ -14203,7 +14253,7 @@ window.recordLostReason = async function (caseId, c) {
   if (!lost) return;
   let { error } = await db.from("cases").update({ lost_reason: lost.reason, lost_detail: lost.note || null }).eq("id", caseId);
   if (error && isMissingColumnError(error)) error = null; // pre-M2 db has no columns — the note below still lands
-  if (error) return toast("Error: " + error.message);
+  if (error) return dbFail("recordLostReason", error);
   const { error: nErr } = await db.from("case_notes").insert({ case_id: caseId, body: lostReasonNoteBody(lost), created_by: (ME && ME.id) || null });
   if (nErr) return toast("Reason saved, but the note could not be written: " + nErr.message);
   toast("Reason recorded.");
@@ -15449,7 +15499,7 @@ window.moveCaseToStage = async function (caseId, targetStage, opts = {}) {
     delete patch.lost_reason; delete patch.lost_detail;
     ({ error } = await db.from("cases").update(patch).eq("id", caseId));
   }
-  if (error) { if (!silent) toast("Error: " + error.message); return "error"; }
+  if (error) { if (!silent) dbFail("moveCaseToStage", error); return "error"; }
   /* R74 · B4 — the residue the operator asked to have taken off, deleted by the ids read before the
      move. AFTER the stage update has succeeded, for the same reason every other write in this
      function waits: tasks removed from a case that did not move would be a silent loss. */
@@ -15880,7 +15930,7 @@ async function bulkStartRetentionRun(ids) {
     .select("id,client_id,stage,rate_end_date,case_kind,lender,retention_source_case_id,created_at"
       + (propOn ? ",property_address" : "") + ",clients!client_id(first_name,last_name)")
     .in("id", sl));
-  if (error) return toast("Error: " + error.message);
+  if (error) return dbFail("bulkStartRetentionRun", error);
   const nameOf = bulkCaseLabel;
   // Which of these already have a successor — one query, not one per row.
   const { data: succ } = await inChunks(ids, (sl) => db.from("cases").select("retention_source_case_id").in("retention_source_case_id", sl));
@@ -16013,7 +16063,7 @@ async function bulkQueueRateRemindersRun(ids) {
     .select("id,client_id,rate_end_date,assigned_to,rate_reminder_queued_at,case_kind,lender,stage"
       + (propOn ? ",property_address" : "") + (guardOn ? ",reminder_guarded" : "") + ",clients!client_id(first_name,last_name,email)")
     .in("id", sl));
-  if (error) return toast("Error: " + error.message);
+  if (error) return dbFail("bulkQueueRateRemindersRun", error);
   const nameOf = bulkCaseLabel;
   const today = localDateStr();
   const eligible = [], skipped = [], tooEarly = [];
@@ -16145,10 +16195,14 @@ function promptBulkTask(n) {
     </div>`;
   return openOverlay(html, (finish, box) => {
     const dateInput = box.querySelector("#btask-due");
+    /* R78 · B4 — the +3d/+1wk chips roll a weekend landing to Monday (weekendRollYmd) before
+       filling the visible date box; "Today" (0) is today whatever day it is — rolling it would
+       move work someone is doing NOW. A date typed straight into the box is never touched. */
     box.querySelectorAll(".btask-chip").forEach((b) => b.onclick = () => {
+      const n = Number(b.dataset.days || 0);
       const d = new Date();
-      d.setDate(d.getDate() + Number(b.dataset.days || 0));
-      dateInput.value = localDateStr(d);
+      d.setDate(d.getDate() + n);
+      dateInput.value = n > 0 ? weekendRollYmd(localDateStr(d)).date : localDateStr(d);
     });
     box.querySelector("#btask-cancel").onclick = () => finish(null);
     box.querySelector("#btask-ok").onclick = () => {
@@ -16241,7 +16295,7 @@ async function bulkSendDocsRequestsRun(ids) {
   const { data: rows, error } = await inChunks(ids, (sl) => db.from("cases")
     .select("id,client_id,stage,assigned_to,case_kind,lender,broker_fee,fee_status" + (propOn ? ",property_address" : "") + ",clients!client_id(first_name,last_name,email)")
     .in("id", sl));
-  if (error) return toast("Error: " + error.message);
+  if (error) return dbFail("bulkSendDocsRequestsRun", error);
   const nameOf = bulkCaseLabel;
   // Three batched reads for the whole selection — never one per case.
   const [{ data: docRows }, { data: mailRows }] = await Promise.all([
@@ -16384,11 +16438,11 @@ async function bulkApplyPlaybooksRun(ids) {
        selection is one request instead of one per case. */
     .select("id,stage,case_kind,assigned_to,lender,rate_end_date" + (propOn ? ",property_address" : "") + ",clients!client_id(first_name,last_name)")
     .in("id", sl));
-  if (error) return toast("Error: " + error.message);
+  if (error) return dbFail("bulkApplyPlaybooksRun", error);
   // ONE read for the whole selection's open tasks — never one per case (R65 · M11's rule).
   const { data: taskRows, error: tErr } = await inChunks(ids, (sl) => readAll(
     db.from("case_tasks").select("case_id,title,done_at").in("case_id", sl).is("done_at", null).order("id"), { cap: 5000 }));
-  if (tErr) return toast("Error reading existing tasks: " + tErr.message);
+  if (tErr) return dbFail("bulkApplyPlaybooksRun", tErr, "Error reading existing tasks: " + tErr.message);
   const openByCase = {};
   (taskRows || []).forEach((t) => {
     if (!t || !t.case_id || t.done_at) return;
@@ -16526,11 +16580,11 @@ async function bulkBuildChecklistsRun(ids) {
   const { data: rows, error } = await inChunks(ids, (sl) => db.from("cases")
     .select("id,stage,case_kind,assigned_to,lender" + (propOn ? ",property_address" : "") + ",clients!client_id(first_name,last_name)")
     .in("id", sl));
-  if (error) return toast("Error: " + error.message);
+  if (error) return dbFail("bulkBuildChecklistsRun", error);
   // One read for the whole selection: does this case have ANY checklist row at all?
   const { data: docRows, error: dErr } = await inChunks(ids, (sl) => readAll(
     db.from("case_documents").select("case_id").in("case_id", sl).order("id"), { cap: 5000 }));
-  if (dErr) return toast("Error reading existing checklists: " + dErr.message);
+  if (dErr) return dbFail("bulkBuildChecklistsRun", dErr, "Error reading existing checklists: " + dErr.message);
   const haveDocs = {};
   (docRows || []).forEach((d) => { if (d && d.case_id) haveDocs[d.case_id] = (haveDocs[d.case_id] || 0) + 1; });
   const nameOf = bulkCaseLabel;
@@ -16602,7 +16656,7 @@ async function bulkAddTaskRun(ids, preset = null) {
   const { data: allRows, error } = await inChunks(ids, (sl) => db.from("cases")
     .select("id,assigned_to,case_kind,lender,stage" + (propOn ? ",property_address" : "") + ",clients!client_id(first_name,last_name)")
     .in("id", sl));
-  if (error) return toast("Error: " + error.message);
+  if (error) return dbFail("bulkAddTaskRun", error);
   const nameOf = bulkCaseLabel;
   let rows = allRows || [];
   let picked;
@@ -16612,7 +16666,7 @@ async function bulkAddTaskRun(ids, preset = null) {
        becomes something people stop opening. */
     const { data: taskRows, error: tErr } = await inChunks(ids, (sl) => db.from("case_tasks")
       .select("case_id,title,done_at").in("case_id", sl));
-    if (tErr) return toast("Error reading existing tasks: " + tErr.message);
+    if (tErr) return dbFail("bulkAddTaskRun", tErr, "Error reading existing tasks: " + tErr.message);
     const already = new Set();
     (taskRows || []).forEach((t) => {
       if (!t || t.done_at) return;
@@ -17925,7 +17979,7 @@ window.setProtStatus = async function (caseId, status) {
     if (res.commission != null) patch.protection_commission = res.commission;
   }
   const { error, stamped, kept } = await protUpdateWithStamp(caseId, patch, status === "quoted");
-  if (error) return toast("Error: " + error.message);
+  if (error) return dbFail("setProtStatus", error);
   toast(status === "quoted"
     /* R12a·D9 — three outcomes, three sentences. "kept" is the one that used to be a silent lie:
        the clock was reset and the toast congratulated the adviser on starting it. */
@@ -17944,19 +17998,21 @@ window.setProtStatus = async function (caseId, status) {
 window.setGiStatus = async function (caseId, status) {
   if (!status) return;
   const { error } = await db.from("cases").update({ gi_status: status }).eq("id", caseId);
-  if (error) return toast("Error: " + error.message);
+  if (error) return dbFail("setGiStatus", error);
   toast("GI status: " + status.replace(/_/g, " "));
   if (!$("#page-protection").classList.contains("hidden")) loadProtectionPage();
 };
 window.protCallTask = async function (caseId) {
   const { data: c } = await db.from("cases").select("assigned_to").eq("id", caseId).single();
-  const due = localDateStr(Date.now() + 86400000);
+  // R78 · B4 — "tomorrow" here is a relative verb, so a Friday press books Monday (weekendRollYmd).
+  const roll = weekendRollYmd(localDateStr(Date.now() + 86400000));
+  const due = roll.date;
   const { error } = await db.from("case_tasks").insert({
     case_id: caseId, title: "Protection call", due_date: due,
     created_by: (ME && ME.id) || null, assigned_to: (c && c.assigned_to) || (ME && ME.id) || null,
   });
-  if (error) return toast("Error: " + error.message);
-  toast("Protection call task added for tomorrow");
+  if (error) return dbFail("protCallTask", error);   // R78 · A6 + B4 merged: log the failure, keep the weekend-roll wording
+  toast(roll.rolled ? "Protection call task added for Monday — skipped the weekend" : "Protection call task added for tomorrow");
 };
 // T1-15 — takes `ev` explicitly (matching queueEmail/briefQueueEmail). The old version read the
 // deprecated global `event`, so the double-click guard silently did nothing outside sloppy mode.
@@ -17972,7 +18028,7 @@ window.protQueueEmail = async function (caseId, ev) {
     const { data: qRow, error } = await db.from("email_queue")
       .insert({ case_id: caseId, client_id: c.client_id, email_type: "protection_offer", to_email: cl.email })
       .select("id").single();
-    if (error) return toast("Error: " + error.message);
+    if (error) return dbFail("protQueueEmail", error);
     // R5-1 — scoped to the row just inserted; this button can no longer flush the firm's queue.
     const res = qRow && qRow.id ? await runAutomation(true, { queueIds: [qRow.id] }) : null;
     sendResultToast(res, "Email queued — check Emails tab");
@@ -18026,7 +18082,7 @@ window.factFind = async function (caseId, clientId) {
     /* R12a·D3 — status is EXPLICIT. The column default is 'sent' (it predates there being any
        send path at all), so omitting it here is what made opening this dialog a lie. */
     const ins = await db.from("fact_finds").insert({ case_id: caseId, client_id: clientId, status: "created", created_by: (ME && ME.id) || null, token: ffToken() }).select("*").single();
-    if (ins.error) return toast("Error: " + ins.error.message);
+    if (ins.error) return dbFail("factFind", ins.error);
     ff = ins.data;
   } else if (!ff.token) {
     // Legacy row created before tokens were set client-side — back-fill so the link works.
@@ -18083,7 +18139,10 @@ window.factFind = async function (caseId, clientId) {
   $("#ff-new").onclick = async () => {
     if (!confirm("Start a fresh blank fact-find? The current link stops being the active one.")) return;
     // R12a·D3 — same explicit 'created': a brand-new blank fact-find has not been sent either.
-    await db.from("fact_finds").insert({ case_id: caseId, client_id: clientId, status: "created", created_by: (ME && ME.id) || null, token: ffToken() });
+    /* R78 · A6 — this insert ignored its result entirely: a refused write (RLS, network) left the
+       OLD link on screen while the toast history said nothing. Checked now, through dbFail. */
+    const { error: ffNewErr } = await db.from("fact_finds").insert({ case_id: caseId, client_id: clientId, status: "created", created_by: (ME && ME.id) || null, token: ffToken() });
+    if (ffNewErr) return dbFail("factFind", ffNewErr);
     factFind(caseId, clientId);
   };
   /* THE REAL SEND. queueEmail does the confirm (naming the signatory), the single email_queue
@@ -18265,11 +18324,11 @@ window.ffApplyDiff = async function (caseId, clientId, data) {
       if (!n && !doProt) { toast("Nothing ticked to apply"); return; }
       if (Object.keys(clientUpd).length) {
         const { error } = await db.from("clients").update(clientUpd).eq("id", clientId);
-        if (error) { toast("Error: " + error.message); return; }
+        if (error) { dbFail("ffApplyDiff", error); return; }
       }
       if (Object.keys(caseUpd).length) {
         const { error } = await db.from("cases").update(caseUpd).eq("id", caseId);
-        if (error) { toast("Error: " + error.message); return; }
+        if (error) { dbFail("disp", error); return; }
       }
       let uid = (ME && ME.id) || null;
       try { const { data: { user } } = await db.auth.getUser(); if (user && user.id) uid = user.id; } catch (e) {}
@@ -18336,7 +18395,7 @@ window.ffApplyDiff = async function (caseId, clientId, data) {
       toast(`Applied ${n} field${n === 1 ? "" : "s"}${protTaskNote}${ffTaskNote}`, ffTaskUndo || undefined);
       openCase(caseId); // re-renders the case modal summary with the updated values, note & task
     } catch (e) {
-      toast("Error applying fact-find: " + (e && e.message ? e.message : e));
+      dbFail("ffApplyDiff", e, "Error applying fact-find: " + (e && e.message ? e.message : e));
     } finally {
       if (btn) btn.disabled = false;
     }
@@ -18949,9 +19008,12 @@ function tomorrowDateStr() {
      gives the UTC tomorrow, which between 11pm and midnight BST is TODAY's date — a call-back task
      born already due. Same 23:00–00:00 window every dated suite documents; this removes the app's
      half of it for the one date this round added. */
+  /* R78 · B4 — "tomorrow" is a working tomorrow: a call-back booked on Friday is for Monday, not
+     for a Saturday nobody is at a desk (the weekend-roll rule by snoozeTask). The value lands in
+     a visible date field the adviser can still overtype — only the PREFILL rolls. */
   const d = new Date(localDateStr() + "T12:00:00");
   d.setDate(d.getDate() + 1);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  return weekendRollYmd(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`).date;
 }
 function wireLogCallPanel(root, handlers) {
   if (!root) return;
@@ -18987,13 +19049,15 @@ function wireLogCallPanel(root, handlers) {
     const note = root.querySelector("#cs-call-note"); if (note) note.focus();
   }));
   // Follow-up preset chips fill the log-call date input (kept separate from the task due-chips).
+  /* R78 · B4 — a chip is a RELATIVE verb, so its landing rolls off a weekend (weekendRollYmd);
+     the rolled date is what fills the field, and a date the adviser then types over is theirs. */
   root.querySelectorAll(".fu-chip").forEach((b) => (b.onclick = () => {
     fuTouched = true; fuAuto = false;       // R70 · B1 — an explicit date is the adviser's, not ours
-    const d = new Date();
+    const d = new Date(localDateStr() + "T12:00:00");
     if (b.dataset.months) d.setMonth(d.getMonth() + Number(b.dataset.months));
     else d.setDate(d.getDate() + Number(b.dataset.days || 0));
     const due = root.querySelector("#cs-call-fu-due");
-    if (due) due.value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    if (due) due.value = weekendRollYmd(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`).date;
   }));
   const cancel = root.querySelector("#cs-call-cancel");
   if (cancel && h.onCancel) cancel.onclick = h.onCancel;
@@ -19022,7 +19086,7 @@ async function logCallSave(root, c, hooks) {
   const { data: { user } } = await db.auth.getUser();
   const noteBody = body ? "Call: " + (outcome ? outcome + " — " : "") + body : "Call: " + outcome;
   const { error: nErr } = await db.from("case_notes").insert({ case_id: c.id, body: noteBody, created_by: user.id });
-  if (nErr) { toast("Error: " + nErr.message); return null; }
+  if (nErr) { dbFail("logCallSave", nErr); return null; }
   /* R5-49 — protection is discussed on the call and recorded nowhere, and the case then jams
      at the Application gate weeks later. One tick writes it (never downgrading a status that
      is already further on). */
@@ -19047,7 +19111,7 @@ async function logCallSave(root, c, hooks) {
     const { data: inserted, error: tErr } = await db.from("case_tasks")
       .insert({ case_id: c.id, title, due_date: fuDue, created_by: user.id, assigned_to: fuAssignee })
       .select().single();
-    if (tErr) { toast("Error: " + tErr.message); return null; }
+    if (tErr) { dbFail("logCallSave", tErr); return null; }
     task = { id: inserted ? inserted.id : "", title, due: fuDue, assignee: fuAssignee };
     if (h.onTask) h.onTask(task);
   }
@@ -19357,7 +19421,11 @@ window.openCase = async function (id, opts = {}) {
       <div class="cs-stats">
         ${/* The stage moved up into the identity line above — this row is numbers. */ ""}
         <div class="cs-stat"><span class="cs-lbl">Adviser</span><span class="cs-val" id="cs-adviser-val">${c.assigned_to ? esc(staffName(c.assigned_to)) : '<span class="cs-muted">— unassigned —</span>'}</span></div>
-        <div class="cs-stat"><span class="cs-lbl">Loan</span><span class="cs-val">${fmtM(c.loan_amount)}</span></div>
+        ${/* R78 · B7a — a stored loan_amount of 0 renders as not-recorded ("—", fmtM's own null
+             word), matching the board card and the pipeline table, which both drop a zero. Only
+             HERE, because only here does null already render "—": anywhere a real £0 could be
+             meaningful it still says £0 (zeroMoney's rule). */ ""}
+        <div class="cs-stat"><span class="cs-lbl">Loan</span><span class="cs-val">${fmtM(Number(c.loan_amount) ? c.loan_amount : null)}</span></div>
         ${/* R6 — was labelled "Property" and showed the property VALUE, which is the single most
              misread token in the modal: the one field named after the property is a price. The
              word "Property" now belongs to the address (the chip above); this is "Value". */ ""}
@@ -20049,7 +20117,7 @@ window.openCase = async function (id, opts = {}) {
           const { data: newClient, error: ncErr } = await db.from("clients")
             .insert({ first_name: ncFirst || "", last_name: ncLast || "", email: ncEmail || null, phone: ncPhone || null })
             .select().single();
-          if (ncErr) return toast("Error creating client: " + ncErr.message);
+          if (ncErr) return dbFail("openCase", ncErr, "Error creating client: " + ncErr.message);
           invalidateClientPicker(); // R18-P6 — new client must appear in the picker on the next open
           row.client_id = newClient.id;
         }
@@ -20271,7 +20339,7 @@ window.openCase = async function (id, opts = {}) {
           LENDER_COLS.forEach((k) => delete row[k]);
           ({ data: updated, error } = await db.from("cases").update(row).eq("id", id).eq("updated_at", openedUpdatedAt).select());
         }
-        if (error) return toast("Error: " + error.message);
+        if (error) return dbFail("openCase", error);
         if (!updated || updated.length === 0) {
           /* R5-3 — this used to reload the case over the operator's typing: minutes of work gone,
              and usually to a "conflict" the modal itself had caused. Nothing is discarded without
@@ -20377,7 +20445,7 @@ window.openCase = async function (id, opts = {}) {
           LENDER_COLS.forEach((k) => delete row[k]);
           ({ error } = await db.from("cases").insert(row));
         }
-        if (error) return toast("Error: " + error.message);
+        if (error) return dbFail("openCase", error);
         closeModal(); toast("Case saved" + (propColMissing ? " · property address NOT saved (run migration M7)" : "")
           + (refColMissing ? " · referrer NOT saved (run migration m11)" : "")
           + (docColsMissing ? " · waiting-on / solicitor NOT saved (run migration m10)" : "")
@@ -20467,7 +20535,7 @@ window.openCase = async function (id, opts = {}) {
         const body = (NOTE_PREFIX[(typeBtn && typeBtn.dataset.type) || "note"] || "") + raw;
         const { data: { user } } = await db.auth.getUser();
         const { error } = await db.from("case_notes").insert({ case_id: id, body, created_by: user.id });
-        if (error) return toast("Error: " + error.message);
+        if (error) return dbFail("openCase", error);
         // R40 — in place, as before (no full modal re-render / scroll reset), but into the History
         // timeline that replaced the notes list. Newest-first, so it lands at the top.
         prependCaseTlNote(body, user.id);
@@ -20515,8 +20583,11 @@ window.openCase = async function (id, opts = {}) {
            minutes, and tomorrow is what the first DUE chip offers anyway.
            A chosen date always wins, and the toast SAYS which of the two happened — a silent
            default is just a different surprise. */
+        /* R78 · B4 — the DEFAULT is a relative verb (nobody picked it), so it skips the weekend;
+           a date sitting in the box — typed, picked, or chip-filled — is written exactly as is. */
         const pickedDue = $("#new-task-due").value || null;
-        const due = pickedDue || localDateStr(Date.now() + 86400000);
+        const dueRoll = pickedDue ? { date: pickedDue, rolled: false } : weekendRollYmd(localDateStr(Date.now() + 86400000));
+        const due = dueRoll.date;
         const { data: { user } } = await db.auth.getUser();
         // Assignee from the quick-add select (defaults to the case adviser); falls back to me.
         const asgSel = $("#new-task-assignee");
@@ -20524,7 +20595,7 @@ window.openCase = async function (id, opts = {}) {
         const { data: inserted, error } = await db.from("case_tasks")
           .insert({ case_id: id, title, due_date: due, created_by: user.id, assigned_to: assignee })
           .select().single();
-        if (error) return toast("Error: " + error.message);
+        if (error) return dbFail("openCase", error);
         // In-place append (no full modal re-render / scroll reset). Task list is due-date ordered; new row goes at the end.
         const list = $("#tasks-inline");
         const empty = list.querySelector(".empty");
@@ -20537,7 +20608,11 @@ window.openCase = async function (id, opts = {}) {
           + taskAssigneeHtml(tid, assignee, "")
           + `<button class="btn btn-sm" aria-label="Mark task done" title="Mark task done" onclick="doneTaskInCase('${tid}','${id}')">✓</button>`;
         list.appendChild(row);
-        toast(pickedDue ? `Task added — due ${fmtD(due)}` : "Task added — due tomorrow (no date was picked)");
+        toast(pickedDue
+          ? `Task added — due ${fmtD(due)}`
+          : dueRoll.rolled
+            ? "Task added — due Monday (no date was picked — skipped the weekend)"
+            : "Task added — due tomorrow (no date was picked)");
         input.value = "";
         $("#new-task-due").value = "";
         input.focus();
@@ -20546,11 +20621,14 @@ window.openCase = async function (id, opts = {}) {
     $("#add-task-btn").onclick = submitTask;
     $("#new-task").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submitTask(); } });
     // Due-date preset chips fill the date input (QW10) — no manual calendar clicking for common horizons.
+    /* R78 · B4 — the chips are relative verbs, so a weekend landing rolls to Monday
+       (weekendRollYmd). The ROLLED date is what appears in the date box, where the operator can
+       see it and overtype it — an overtyped date is explicit and is written as typed. */
     $("#modal").querySelectorAll(".due-chip").forEach((b) => b.onclick = () => {
-      const d = new Date();
+      const d = new Date(localDateStr() + "T12:00:00");
       if (b.dataset.months) d.setMonth(d.getMonth() + Number(b.dataset.months));
       else d.setDate(d.getDate() + Number(b.dataset.days || 0));
-      $("#new-task-due").value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      $("#new-task-due").value = weekendRollYmd(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`).date;
       $("#new-task").focus();
     });
     // ---- Log call (BUILD 2a): one action writes a "Call: " note + optional follow-up task ----
@@ -20687,7 +20765,7 @@ window.openCase = async function (id, opts = {}) {
     $("#act-factfind").onclick = () => factFind(id, c.client_id);
     if (c.offer_doc_path) $("#act-view-offer").onclick = async () => {
       const { data, error } = await db.storage.from("offers").createSignedUrl(c.offer_doc_path, 300);
-      if (error) return toast("Error: " + error.message);
+      if (error) return dbFail("openCase", error);
       window.open(data.signedUrl, "_blank");
     };
     // R54 — email the offer PDF to the client. Queues held (like the other client emails) until
@@ -20839,7 +20917,7 @@ async function markFeePaid(caseId, c) {
       ? "Your database doesn't have the per-fee-type dates yet (migration M2). Mark the whole fee paid today?"
       : "No fee amounts are set on this case. Mark the fee status paid today anyway?")) return;
     const { error } = await db.from("cases").update({ fee_status: "paid", fee_paid_at: new Date().toISOString() }).eq("id", caseId);
-    if (error) return toast("Error: " + error.message);
+    if (error) return dbFail("markFeePaid", error);
     toast("Fee marked as paid");
     return openCase(caseId);
   }
@@ -20908,7 +20986,7 @@ async function markFeePaid(caseId, c) {
       ? `Fee paid ✓ — ${picked.map((x) => x.t.label.toLowerCase()).join(", ")} dated, case now reads paid`
       : `${picked.map((x) => x.t.label).join(" + ")} dated ✓ — fee status unchanged until every fee is paid`);
   }
-  if (error) return toast("Error: " + error.message);
+  if (error) return dbFail("markFeePaid", error);
   openCase(caseId);
 }
 
@@ -21015,9 +21093,9 @@ async function handleOfferUpload(caseId) {
       body: JSON.stringify({ pdf_base64: b64 }),
     });
     const j = await r.json();
-    if (!r.ok || j.error) return toast("Error: " + (j.error || r.status));
+    if (!r.ok || j.error) return dbFail("handleOfferUpload", (j.error || r.status));
     offer = j.offer;
-  } catch (e) { return toast("Error reading offer: " + e.message); }
+  } catch (e) { return dbFail("handleOfferUpload", e, "Error reading offer: " + e.message); }
 
   // Store the document — but do NOT link it to the case yet. offer_doc_path is written by Apply,
   // with the fields, in one update; Discard removes the object again so nothing is orphaned.
@@ -21127,7 +21205,7 @@ async function applyOfferDiff() {
       toast("This database has no property column yet — the address from the offer could NOT be saved; the other readings were applied.");
       ({ data: updated, error } = await db.from("cases").update(patch).eq("id", caseId).eq("updated_at", openedUpdatedAt).select());
     }
-    if (error) { toast("Error: " + error.message); return; }
+    if (error) { dbFail("applyOfferDiff", error); return; }
     if (!updated || !updated.length) {
       toast("This case changed while the offer was being read — reopen it and apply again (nothing was written).");
       return;
@@ -21309,7 +21387,7 @@ async function queueEmail(caseId, clientId, type, c, ev, opts = {}) {
     const { data: qRow, error } = await db.from("email_queue")
       .insert({ case_id: caseId, client_id: clientId, email_type: type, to_email: cl.email })
       .select("id").single();
-    if (error) { if (bulk) return { ok: false, error: error.message }; return toast("Error: " + error.message); }
+    if (error) { if (bulk) return { ok: false, error: error.message }; return dbFail("queueEmail", error); }
     if (type === "rate_end_reminder") {
       /* R70 · A2 — the stamp and the import guard together (updateCaseClearingGuard): a reminder
          has now genuinely been queued for this case, so the "imported, never written to" flag the
@@ -23908,7 +23986,7 @@ window.openClient = async function (id, focus, attempted, presetCaseId) {
          not changed since we opened it; zero rows back means someone else saved first, so ask rather
          than silently overwrite (or reload over) the operator's edits. */
       const { data: updated, error } = await db.from("clients").update(row).eq("id", id).eq("updated_at", openedClientUpdatedAt).select();
-      if (error) return toast("Error: " + error.message);
+      if (error) return dbFail("openClient", error);
       if (!updated || updated.length === 0) {
         const reload = confirm(
           "This client was changed elsewhere since you opened it.\n\n" +
@@ -23931,7 +24009,7 @@ window.openClient = async function (id, focus, attempted, presetCaseId) {
       if (dup.action === "cancel") return;
       if (dup.action === "existing") { closeModal(); openClient(dup.client.id); return; }
       const { error } = await db.from("clients").insert(row);
-      if (error) return toast("Error: " + error.message);
+      if (error) return dbFail("openClient", error);
       invalidateClientPicker(); // R18-P6 — new client must appear in the case-modal picker
     }
     // T1-11 — a client save can resolve (or create) a watchtower alert, so re-run the checker here
@@ -24052,7 +24130,7 @@ window.openClient = async function (id, focus, attempted, presetCaseId) {
       try {
         const { data: { user } } = await db.auth.getUser();
         const { error } = await db.from("case_notes").insert({ case_id: targetCase, body, created_by: (user && user.id) || null });
-        if (error) return toast("Error: " + error.message);
+        if (error) return dbFail("openClient", error);
         const nt = noteType(body);
         // Insert in place, then re-sort so the newest-first invariant holds even when future-dated
         // appointments sit above "now" (no DB refetch, no full modal re-render).
@@ -24083,7 +24161,7 @@ window.openClient = async function (id, focus, attempted, presetCaseId) {
         : null;
       if (!(await confirmHardDelete("Delete this client and all their cases?", extra))) return;
       const { error } = await db.from("clients").delete().eq("id", id);
-      if (error) return toast("Error: " + error.message);
+      if (error) return dbFail("body", error);
       closeModal(); toast("Client deleted"); loadClients($("#client-search").value, { force: true });
     };
   }
@@ -24403,7 +24481,9 @@ function renderQueueChips(sel, defs, rows, current, onPick) {
     onPick(b.dataset.emStatus);
   }));
 }
+let emailsLoadSeq = 0;   // R78 · A5 — stale-response guard (the dashLoadSeq idiom)
 async function loadEmails() {
+  const seq = ++emailsLoadSeq;
   // R5-1 — an adviser has no business flushing the firm's queue; the button is Owner/Admin only
   // (the click handler refuses too — this just stops it looking available).
   const runBtn = $("#run-now-btn");
@@ -24412,9 +24492,23 @@ async function loadEmails() {
   // R5-51 — the client's CURRENT email comes back with each row so a queued row addressed to an
   // address the client has since changed can be spotted before it sends to the old one.
   const EMAIL_ROW_LIMIT = 100;
-  const { data: emails, error } = await db.from("email_queue")
-    .select("*, clients(first_name,last_name,email)")
-    .order("created_at", { ascending: false }).limit(EMAIL_ROW_LIMIT);
+  /* ========================================================================
+     R78 · A2 — TWO WAVES, NOT EIGHT. Wave 1 is the two queue reads together
+     (the SMS list never depended on the email list — it just queued behind
+     it); wave 2, further down, is ONE merged property context over both
+     queues' case ids plus the checklist and lead lookups, side by side. The
+     page paints in the same order it always did — email chips, summary, list,
+     then SMS — only the waiting is shared.
+     ======================================================================== */
+  const [{ data: emails, error }, { data: sms, error: smsErr }] = await Promise.all([
+    db.from("email_queue")
+      .select("*, clients(first_name,last_name,email)")
+      .order("created_at", { ascending: false }).limit(EMAIL_ROW_LIMIT),
+    db.from("sms_queue")
+      .select("*, cases(*), clients(*)")
+      .order("created_at", { ascending: false }).limit(EMAIL_ROW_LIMIT),
+  ]);
+  if (seq !== emailsLoadSeq) return;   // R78 · A5 — a newer load owns this page
   if (error) { renderLoadError("#email-list", error, loadEmails); return; }
   const badge = { queued: "amber", sent: "green", failed: "red", cancelled: "grey" };
   const allEmails = emails || [];
@@ -24526,7 +24620,15 @@ async function loadEmails() {
   // for a row that has not tried yet. Rather than disabling the whole bar on a mixed selection it
   // is SCOPED to the failed subset, and both the label and the sub-line below say so.
   const emailSelFailed = () => [...emailSel].filter((id) => failedIds.has(id));
-  const emailCtx = await loadPropContext(emailRows.map((e) => e.case_id));
+  /* R78 · A2 — WAVE 2: one merged property context over BOTH queues' visible rows (the union of
+     the two sets the old back-to-back calls covered — exactly, so registerClientProps feeds on
+     the same clients as before), beside the checklist read and the lead lookup. The SMS row set
+     is computed here (it depends only on wave 1 + the filter state) so the union is precise. */
+  const allSms = sms || [];
+  const smsFailedOnly = smsStatusFilter === "failed";
+  const smsRows = smsStatusFilter === "all"
+    ? allSms.slice().sort((a, b) => (QUEUE_STATUS_RANK[a.status] ?? 2) - (QUEUE_STATUS_RANK[b.status] ?? 2))   // R62 — same current-first order as the email list
+    : allSms.filter((x) => x.status === smsStatusFilter);
   /* R74 · B5 — ONE extra bounded read, and only when the list actually holds a document email.
      A docs_request/docs_chase preview is worth nothing without the list of items in it, and the
      list is per case: the template sends what is still OUTSTANDING on that case, falling back to
@@ -24534,9 +24636,25 @@ async function loadEmails() {
      every other .in() over a feed-sized list, and gated on docsSupported() so an un-migrated
      database shows the firm list (which is exactly what it would be sent). */
   const emDocCaseIds = [...new Set(emailRows.filter((e) => HOUSE_TPL_DOC_TYPES.includes(e.email_type)).map((e) => e.case_id).filter(Boolean))];
+  const emLeadIds = [...new Set(emailRows.map((e) => e.lead_id).filter(Boolean))];
+  const [qCtx, emDocsRes, emLeadsRes] = await Promise.all([
+    loadPropContext(
+      [...emailRows.map((e) => e.case_id), ...smsRows.map((x) => x.case_id)],
+      { clientIds: [...emailRows.map((e) => e.client_id), ...smsRows.map((x) => x.client_id)] }),
+    (async () => {
+      if (!emDocCaseIds.length || (await docsSupported()) === false) return { data: [] };
+      return inChunks(emDocCaseIds, (sl) => db.from("case_documents").select("case_id,item,status").in("case_id", sl));
+    })(),
+    (async () => {
+      if (!emLeadIds.length) return { data: [] };
+      try { return await db.from("leads").select("id,name,status,created_at").in("id", emLeadIds); } catch (_) { return { data: [] }; }   // named by address, exactly as before
+    })(),
+  ]);
+  if (seq !== emailsLoadSeq) return;   // R78 · A5
+  const emailCtx = qCtx;
   const emOutstanding = {};
-  if (emDocCaseIds.length && (await docsSupported()) !== false) {
-    const { data: dRows } = await inChunks(emDocCaseIds, (sl) => db.from("case_documents").select("case_id,item,status").in("case_id", sl));
+  {
+    const { data: dRows } = emDocsRes;
     (dRows || []).forEach((d) => {
       if (!d || !d.case_id) return;
       (emOutstanding[d.case_id] = emOutstanding[d.case_id] || { any: false, items: [] });
@@ -24562,14 +24680,8 @@ async function loadEmails() {
      the one row on the page that is about a person nobody has met, identified by an email address.
      One batched read of the leads behind those rows gives them the enquirer's name and a way back
      to the enquiry itself. Best-effort: on error the rows fall back to the address, as before. */
-  const leadIds = [...new Set(emailRows.map((e) => e.lead_id).filter(Boolean))];
   const emailLeads = {};
-  if (leadIds.length) {
-    try {
-      const { data: lrows } = await db.from("leads").select("id,name,status,created_at").in("id", leadIds);
-      (lrows || []).forEach((l) => { if (l && l.id) emailLeads[l.id] = l; });
-    } catch (_) { /* named by address, exactly as before */ }
-  }
+  ((emLeadsRes && emLeadsRes.data) || []).forEach((l) => { if (l && l.id) emailLeads[l.id] = l; });   // R78 · A2 — read in wave 2
   /* R72 · B3 — the bar EXTENDS, it is not rebuilt: #email-bulk-bar, #email-bulk-n,
      #email-bulk-retry and #email-bulk-clear are the same elements with the same handlers. What is
      new is "Cancel selected" and the honest scoping of Retry. */
@@ -24656,12 +24768,9 @@ async function loadEmails() {
   const emCancel = $("#email-bulk-cancel");
   if (emCancel) emCancel.onclick = () => bulkCancelEmails();
 
-  const { data: sms, error: smsErr } = await db.from("sms_queue")
-    .select("*, cases(*), clients(*)")
-    .order("created_at", { ascending: false }).limit(EMAIL_ROW_LIMIT);
+  // R78 · A2 — the SMS read happened in wave 1 beside the email read; same error contract.
   if (smsErr) { renderLoadError("#sms-list", smsErr, loadEmails); return; }
   const smsBadge = { queued: "amber", sending: "blue", sent: "green", failed: "red", cancelled: "grey" };
-  const allSms = sms || [];
   renderQueueChips("#sms-filters", SMS_STATUSES, allSms, smsStatusFilter, (k) => { smsStatusFilter = k; loadEmails(); });
   /* R63 · A3 — SMS DOES HAVE A CRON, AND THIS PAGE SAID IT DID NOT.
      R11-5's copy ("SMS has no cron of its own: the queue sits there until somebody presses Send
@@ -24678,20 +24787,50 @@ async function loadEmails() {
       ? `The next <strong>8:05am</strong> SMS run (09:05 in British Summer Time) will send <strong>${nSmsQueued}</strong> waiting SMS. “Send SMS now” sends ${nSmsQueued === 1 ? "it" : "them"} straight away instead of waiting for it.`
       : `Nothing waiting to send — the 8:05am SMS run has nothing to pick up.`;
   }
-  const smsFailedOnly = smsStatusFilter === "failed";
-  const smsRows = smsStatusFilter === "all"
-    ? allSms.slice().sort((a, b) => (QUEUE_STATUS_RANK[a.status] ?? 2) - (QUEUE_STATUS_RANK[b.status] ?? 2))   // R62 — same current-first order as the email list
-    : allSms.filter((s) => s.status === smsStatusFilter);
-  const smsCtx = await loadPropContext(smsRows.map((s) => s.case_id));   // R6 / F8 — same fix, same reason
+  // R78 · A2 — smsFailedOnly/smsRows were computed above (wave 2 needed them); the property
+  // context is the merged wave-2 read. R6 / F8's fix, same rows, same chips.
+  const smsCtx = qCtx;
   const retryAllSmsBtn = smsFailedOnly && smsRows.length
     ? `<div class="row-item" style="justify-content:flex-end;"><button class="btn btn-sm btn-primary" onclick="retryAllFailedSms()">Retry all failed (${smsRows.length})</button></div>` : "";
-  $("#sms-list").innerHTML = retryAllSmsBtn + (smsRows.length ? smsRows.map((s) => {
+  /* ========================================================================
+     R78 · B5 — SMS SELECTION PARITY. The email queue grew checkboxes and a
+     bulk bar over three rounds (BUILD 7c → R72 · B3 → R73 · B3) and the SMS
+     queue — same page, same statuses, same per-row Cancel since R12a — got
+     none of it: cancelling nine queued texts was nine confirms. Same
+     machinery, namespaced ids so the two queues can never cross-wire:
+       · .sms-cb on queued/failed rows (SMS_SELECTABLE — the SAME two
+         statuses the email list selects; `sending` is with the sender and
+         stays untickable exactly as the per-row Cancel has always refused it),
+         .sms-cb-gap keeps the gutter on history rows (R73 · B3's rule);
+       · #sms-bulk-bar / #sms-bulk-n / #sms-bulk-cancel / #sms-bulk-retry /
+         #sms-bulk-clear — the email bar's shape, verb for verb;
+       · bulk cancel confirms through the HOUSE overlay (#smscancel-ok /
+         #smscancel-cancel, openOverlay — never a native confirm), writes
+         status guarded .in(["queued","failed"]), case-notes the batch, one
+         repaint; Retry is scoped to the FAILED subset via the existing
+         silent retrySms, which re-reads the current phone number.
+     ======================================================================== */
+  const SMS_SELECTABLE = ["queued", "failed"];
+  const smsFailedIds = new Set(smsRows.filter((s) => s.status === "failed").map((s) => s.id));
+  const smsSelectableIds = new Set(smsRows.filter((s) => SMS_SELECTABLE.includes(s.status)).map((s) => s.id));
+  [...smsSel].forEach((id) => { if (!smsSelectableIds.has(id)) smsSel.delete(id); });
+  const smsSelFailedN = [...smsSel].filter((id) => smsFailedIds.has(id)).length;
+  const smsBulkBar = `<div class="bulk-bar" id="sms-bulk-bar"${smsSel.size ? "" : " hidden"}>
+      <span class="bulk-bar-count"><strong id="sms-bulk-n">${smsSel.size}</strong> selected</span>
+      <button type="button" class="btn btn-sm" id="sms-bulk-cancel" title="Mark the selected queued or failed SMS cancelled. A cancelled SMS never sends and is never retried — this is the way to stop one before the 8:05am run picks it up.">Cancel selected (${smsSel.size})</button>
+      <button type="button" class="btn btn-sm btn-primary" id="sms-bulk-retry"${smsSelFailedN ? "" : " disabled"} title="${smsSelFailedN === smsSel.size ? "Re-queue the selected failed SMS to the client's current phone number." : `Retry only ever applies to SMS that have already FAILED. ${smsSelFailedN} of the ${smsSel.size} selected ${smsSelFailedN === 1 ? "is" : "are"} failed; the queued ones have not tried yet and are left alone.`}">Retry failed (${smsSelFailedN})</button>
+      <button type="button" class="btn btn-sm" id="sms-bulk-clear">Clear</button>
+    </div>`;
+  $("#sms-list").innerHTML = smsBulkBar + retryAllSmsBtn + (smsRows.length ? smsRows.map((s) => {
     const failed = s.status === "failed";
     const clickable = !!s.case_id;
     const settled = s.status === "sent" || s.status === "cancelled";
     const errLine = s.error && !settled ? (failed ? " · " + esc(s.error) : " · re-queued — last error: " + esc(s.error)) : "";
     return `
     <div class="row-item qrow-${s.status}">
+      ${SMS_SELECTABLE.includes(s.status)
+        ? `<input type="checkbox" class="sms-cb" data-id="${esc(s.id)}" data-status="${esc(s.status)}" aria-label="Select this ${esc(s.status)} SMS"${smsSel.has(s.id) ? " checked" : ""} onclick="event.stopPropagation()">`
+        : `<span class="sms-cb-gap" aria-hidden="true"></span>`}
       <div class="row-main">
         <div class="t"${clickable ? ` onclick="openCase('${s.case_id}')" style="cursor:pointer;"` : ""}>${esc(smsTypeLabel(s.sms_type))} — ${esc(s.clients ? [s.clients.first_name, s.clients.last_name].filter(Boolean).join(" ") : s.to_phone || "")} ${propCtxChip(smsCtx, s.case_id, "row-prop")}</div>
         <div class="s">${esc(s.to_phone || "")} · ${s.sent_at ? "sent " + new Date(s.sent_at).toLocaleString("en-GB") : "created " + new Date(s.created_at).toLocaleString("en-GB")}${errLine}</div>
@@ -24702,6 +24841,21 @@ async function loadEmails() {
       ${s.status === "queued" || failed ? `<button class="btn btn-sm btn-ghost sms-cancel" data-id="${esc(s.id)}" onclick="cancelQueuedSms('${s.id}')" title="${failed ? "Stop retrying this one — it is marked cancelled and never sends" : "Stop this SMS before the 8:05am run picks it up — it never sends"}">Cancel</button>` : ""}
     </div>`;
   }).join("") : `<div class="empty">${smsStatusFilter !== "all" ? `No ${esc(smsStatusFilter)} SMS in the newest ${EMAIL_ROW_LIMIT} rows.` : "No SMS yet. They'll appear here once SMS automation runs or you send one."}</div>`);
+  // R78 · B5 — wire the SMS selection controls, the email list's exact shape (imperative, no reload).
+  document.querySelectorAll("#sms-list .sms-cb").forEach((cb) => (cb.onchange = () => {
+    if (cb.checked) smsSel.add(cb.dataset.id); else smsSel.delete(cb.dataset.id);
+    updateSmsBulkBar();
+  }));
+  const smsClear = $("#sms-bulk-clear");
+  if (smsClear) smsClear.onclick = () => {
+    smsSel.clear();
+    document.querySelectorAll("#sms-list .sms-cb").forEach((cb) => (cb.checked = false));
+    updateSmsBulkBar();
+  };
+  const smsRetryBtn = $("#sms-bulk-retry");
+  if (smsRetryBtn) smsRetryBtn.onclick = () => bulkRetrySms();
+  const smsCancelBtn = $("#sms-bulk-cancel");
+  if (smsCancelBtn) smsCancelBtn.onclick = () => bulkCancelSms();
 }
 /* T1-2 — a retry is only honest if it goes somewhere new. The queue row holds a SNAPSHOT of the
    address taken when the message was created, so re-queueing it unchanged re-sends to exactly the
@@ -24769,13 +24923,13 @@ async function retryEmail(id, silent) {
        silent=true and are gated once, by their own caller, rather than asking forty times. */
     if (!silent && !(await confirmSuppressedSend(row.client_id, "email"))) return { ok: false, reason: "the send was cancelled — this client's automation is suppressed" };
     const { error } = await db.from("email_queue").update({ status: "queued", sent_at: null, to_email: fresh.value }).eq("id", id);
-    if (error) { if (!silent) toast("Error: " + error.message); return { ok: false, reason: error.message }; }
+    if (error) { if (!silent) dbFail("retryEmail", error); return { ok: false, reason: error.message }; }
     if (!silent) {
       toast(fresh.value === row.to_email ? "Email re-queued for sending" : `Email re-queued to ${fresh.value}`);
       loadEmails();
     }
     return { ok: true, value: fresh.value };
-  } catch (e) { if (!silent) toast("Error: " + e.message); return { ok: false, reason: e.message }; }
+  } catch (e) { if (!silent) dbFail("retryEmail", e); return { ok: false, reason: e.message }; }
 }
 /* R5-51 — re-address a STILL-QUEUED row to the client's current email. Deliberately narrow: the
    `.eq("status","queued")` guard means a row that sent between render and click is left alone (no
@@ -24787,7 +24941,7 @@ window.useCurrentEmailAddress = async function (id, clientId) {
   if (!fresh) return toast("That client has no email address on file — add one first.");
   const { data: upd, error } = await db.from("email_queue")
     .update({ to_email: fresh }).eq("id", id).eq("status", "queued").select("id");
-  if (error) return toast("Error: " + error.message);
+  if (error) return dbFail("useCurrentEmailAddress", error);
   if (!upd || !upd.length) { toast("That email is no longer queued — nothing changed."); return loadEmails(); }
   toast("This email will now go to " + fresh);
   loadEmails();
@@ -24800,13 +24954,13 @@ async function retrySms(id, silent) {
     if (!fresh.ok) { if (!silent) toast("Not re-queued — " + fresh.reason); return fresh; }
     if (!silent && !(await confirmSuppressedSend(row.client_id, "SMS"))) return { ok: false, reason: "the send was cancelled — this client's automation is suppressed" };
     const { error } = await db.from("sms_queue").update({ status: "queued", sent_at: null, to_phone: fresh.value }).eq("id", id);
-    if (error) { if (!silent) toast("Error: " + error.message); return { ok: false, reason: error.message }; }
+    if (error) { if (!silent) dbFail("retrySms", error); return { ok: false, reason: error.message }; }
     if (!silent) {
       toast(fresh.value === row.to_phone ? "SMS re-queued for sending" : `SMS re-queued to ${fresh.value}`);
       loadEmails();
     }
     return { ok: true, value: fresh.value };
-  } catch (e) { if (!silent) toast("Error: " + e.message); return { ok: false, reason: e.message }; }
+  } catch (e) { if (!silent) dbFail("retrySms", e); return { ok: false, reason: e.message }; }
 }
 /* ==========================================================================
    R12a · K-6 — CANCELLING A QUEUED MESSAGE, WHICH THE PAGE ALREADY PROMISED
@@ -24857,7 +25011,7 @@ async function cancelQueuedRow(kind, id) {
   if (!confirm(ask)) return;
   const { data: upd, error } = await db.from(table)
     .update({ status: "cancelled" }).eq("id", id).eq("status", row.status).select("id");
-  if (error) return toast("Error: " + error.message);
+  if (error) return dbFail("cancelQueuedRow", error);
   if (!upd || !upd.length) {
     toast(`That ${noun} is no longer ${row.status} — nothing was cancelled.`);
     return loadEmails();
@@ -24975,7 +25129,7 @@ async function bulkCancelEmailsRun(ids) {
   const targets = eligible.map((r) => r.id);
   const { data: upd, error: wErr } = await inChunks(targets, (sl) => db.from("email_queue")
     .update({ status: "cancelled" }).in("id", sl).in("status", ["queued", "failed"]).select("id"));
-  if (wErr) return toast("Error: " + wErr.message);
+  if (wErr) return dbFail("bulkCancelEmailsRun", wErr);
   const wrote = new Set((upd || []).map((r) => r.id));
   const raced = targets.filter((id) => !wrote.has(id)).length;
   const noteRows = eligible.filter((r) => r.case_id && wrote.has(r.id)).map((r) => {
@@ -25022,6 +25176,134 @@ function confirmBulkCancelEmails(eligible, skipped, selectedN) {
     </div></div>`, (finish, box) => {
     box.querySelector("#emcancel-cancel").onclick = () => finish(false);
     box.querySelector("#emcancel-ok").onclick = () => finish(true);
+  });
+}
+/* ==========================================================================
+   R78 · B5 — THE SMS HALF OF THE SAME MACHINERY. Deliberately a mirror of the
+   email functions above rather than a shared abstraction: the email confirm's
+   wording and ids (#emcancel-ok, "8am run") are pinned by suites and this
+   dialog has to say SMS things ("8:05am SMS run", phone numbers) — one
+   template serving both is exactly how a pinned sentence gets broken from the
+   other side. Anything already shared (retryReport, inChunks,
+   cancelActorName, the silent retrySms) is reused, not copied.
+   ========================================================================== */
+let smsSel = new Set();
+function updateSmsBulkBar() {
+  const bar = $("#sms-bulk-bar");
+  if (!bar) return;
+  const n = smsSel.size;
+  bar.hidden = n === 0;
+  const nEl = $("#sms-bulk-n"); if (nEl) nEl.textContent = n;
+  const failedSelected = [...document.querySelectorAll("#sms-list .sms-cb")]
+    .filter((cb) => cb.checked && cb.dataset.status === "failed").length;
+  const cbtn = $("#sms-bulk-cancel"); if (cbtn) cbtn.textContent = `Cancel selected (${n})`;
+  const btn = $("#sms-bulk-retry");
+  if (btn) {
+    btn.textContent = `Retry failed (${failedSelected})`;
+    btn.disabled = failedSelected === 0;
+    btn.title = failedSelected === n
+      ? "Re-queue the selected failed SMS to the client's current phone number."
+      : `Retry only ever applies to SMS that have already FAILED. ${failedSelected} of the ${n} selected ${failedSelected === 1 ? "is" : "are"} failed; the queued ones have not tried yet and are left alone.`;
+  }
+}
+async function bulkRetrySms() {
+  // Scoped to the failed subset — a queued SMS has not tried yet, so "retry" is meaningless on it.
+  const ids = [...smsSel].filter((id) => {
+    const cb = document.querySelector(`#sms-list .sms-cb[data-id="${CSS.escape(id)}"]`);
+    return !cb || cb.dataset.status === "failed";
+  });
+  if (!ids.length) return toast("Nothing to retry — Retry only applies to SMS that have already failed.");
+  let ok = 0; const blocked = [];
+  for (const id of ids) {
+    const r = await retrySms(id, true);
+    if (r && r.ok) ok++; else blocked.push((r && r.reason) || "it couldn't be re-queued");
+  }
+  toast(retryReport(ok, blocked));
+  smsSel.clear();
+  loadEmails();
+}
+let smsBulkBusy = false;   // a double-press must not write the batch twice (emBulkBusy's rule)
+async function bulkCancelSms() {
+  const ids = [...smsSel];
+  if (!ids.length) return;
+  if (smsBulkBusy) return;
+  smsBulkBusy = true;
+  try { await bulkCancelSmsRun(ids); } finally { smsBulkBusy = false; }
+}
+async function bulkCancelSmsRun(ids) {
+  const { data: rows, error } = await inChunks(ids, (sl) => db.from("sms_queue")
+    .select("id,status,sms_type,to_phone,case_id,client_id,clients(first_name,last_name)").in("id", sl));
+  if (error) return toast("Couldn't read those SMS just now — " + error.message);
+  const byId = {};
+  (rows || []).forEach((r) => { byId[r.id] = r; });
+  const eligible = [], skipped = [];
+  ids.forEach((id) => {
+    const r = byId[id];
+    if (!r) { skipped.push("one row has gone from the queue"); return; }
+    const who = (r.clients ? [r.clients.first_name, r.clients.last_name].filter(Boolean).join(" ") : "") || r.to_phone || "this recipient";
+    if (r.status !== "queued" && r.status !== "failed") {
+      skipped.push(`${smsTypeLabel(r.sms_type)} to ${who} (already ${r.status} — only a queued or failed SMS can be cancelled)`);
+      return;
+    }
+    eligible.push(r);
+  });
+  if (!eligible.length) {
+    return toast(skipped.length
+      ? `Nothing to cancel — all ${skipped.length} selected row${skipped.length === 1 ? " is" : "s are"} skipped (${skipped.slice(0, 2).join("; ")}${skipped.length > 2 ? `; and ${skipped.length - 2} more` : ""})`
+      : "Nothing to cancel");
+  }
+  const okd = await confirmBulkCancelSms(eligible, skipped, ids.length);
+  if (!okd) return;
+  const targets = eligible.map((r) => r.id);
+  const { data: upd, error: wErr } = await inChunks(targets, (sl) => db.from("sms_queue")
+    .update({ status: "cancelled" }).in("id", sl).in("status", ["queued", "failed"]).select("id"));
+  if (wErr) return toast("Error: " + wErr.message);
+  const wrote = new Set((upd || []).map((r) => r.id));
+  const raced = targets.filter((id) => !wrote.has(id)).length;
+  const noteRows = eligible.filter((r) => r.case_id && wrote.has(r.id)).map((r) => {
+    const who = (r.clients ? [r.clients.first_name, r.clients.last_name].filter(Boolean).join(" ") : "") || r.to_phone || "this recipient";
+    return {
+      case_id: r.case_id,
+      body: `${r.status === "queued" ? "Queued" : "Failed"} ${smsTypeLabel(r.sms_type)} SMS to ${who} cancelled by ${cancelActorName()} (bulk)`
+        + (r.status === "queued" ? " — it will not send." : " — it will not be retried."),
+    };
+  });
+  let noteWarn = "";
+  if (noteRows.length) {
+    const { error: nErr } = await db.from("case_notes").insert(noteRows);
+    if (nErr) noteWarn = ` · the case note${noteRows.length === 1 ? "" : "s"} did NOT save (${nErr.message})`;
+  }
+  const n = wrote.size;
+  let msg = `${n} SMS cancelled — ${n === 1 ? "it" : "they"} will never send`;
+  if (raced) msg += ` · ${raced} changed status before the write and ${raced === 1 ? "was" : "were"} left alone`;
+  if (skipped.length) msg += ` · ${skipped.length} skipped (${skipped.slice(0, 2).join("; ")}${skipped.length > 2 ? `; and ${skipped.length - 2} more` : ""})`;
+  msg += noteWarn;
+  smsSel.clear();
+  await loadEmails();          // ONE repaint for the whole batch
+  toast(msg);
+}
+function confirmBulkCancelSms(eligible, skipped, selectedN) {
+  const nQueued = eligible.filter((r) => r.status === "queued").length;
+  const nFailed = eligible.length - nQueued;
+  const list = (rows, render) => rows.slice(0, 12).map(render).join("")
+    + (rows.length > 12 ? `<li class="cs-muted">…and ${rows.length - 12} more</li>` : "");
+  const nameOf = (r) => `${smsTypeLabel(r.sms_type)} — ${(r.clients ? [r.clients.first_name, r.clients.last_name].filter(Boolean).join(" ") : "") || r.to_phone || "no number"}`;
+  return openOverlay(`
+    <h3>Cancel ${eligible.length} SMS</h3>
+    <p class="panel-sub"><strong>A cancelled SMS never sends.</strong> ${nQueued ? `${nQueued} of these ${nQueued === 1 ? "is" : "are"} still queued — ${nQueued === 1 ? "it" : "they"} will not be picked up by the 8:05am SMS run or by “Send SMS now”, now or ever. ` : ""}${nFailed ? `${nFailed} ${nFailed === 1 ? "has" : "have"} already failed — cancelling ${nFailed === 1 ? "it" : "them"} stops ${nFailed === 1 ? "it" : "them"} being retried. ` : ""}Nothing is deleted: the rows stay on this page badged <em>cancelled</em>, and each one that belongs to a case is recorded on that case's timeline. This cannot be undone from here — a fresh SMS would have to be queued.</p>
+    <div class="bulk-confirm-list">
+      <h4>Cancelling</h4>
+      <ul class="bulk-confirm-ul">${list(eligible, (r) => `<li>${esc(nameOf(r))}${r.status === "failed" ? " <span class=\"cs-muted\">(failed)</span>" : ""}</li>`)}</ul>
+      ${skipped.length ? `<h4>Skipped (${skipped.length}) — nothing is written to these</h4>
+        <ul class="bulk-confirm-ul">${list(skipped, (s) => `<li>${esc(s)}</li>`)}</ul>` : ""}
+    </div>
+    <p class="panel-sub">${esc(eligible.length === selectedN ? "Every SMS you selected will be cancelled." : `${eligible.length} of the ${selectedN} you selected — the rest are listed above.`)}</p>
+    <div class="modal-actions"><div></div><div class="right">
+      <button type="button" class="btn" id="smscancel-cancel">Keep them queued</button>
+      <button type="button" class="btn btn-primary" id="smscancel-ok">Cancel ${eligible.length} SMS</button>
+    </div></div>`, (finish, box) => {
+    box.querySelector("#smscancel-cancel").onclick = () => finish(false);
+    box.querySelector("#smscancel-ok").onclick = () => finish(true);
   });
 }
 // Retry-all-failed (defect 28) — loops the existing per-row retry (silently, to avoid a toast per
@@ -25545,7 +25827,7 @@ $("#analyse-btn").addEventListener("click", async () => {
       body: JSON.stringify({ content }),
     });
     const j = await r.json();
-    if (!r.ok || j.error) { $("#import-status").textContent = ""; return toast("Error: " + (j.error || r.status)); }
+    if (!r.ok || j.error) { $("#import-status").textContent = ""; return dbFail("impParsePaste", (j.error || r.status)); }
     importRows = j.rows || [];
     // R6-33 — recover the property column the analyser has no pattern for (see impAttachProperties).
     const nProp = impAttachProperties(content, importRows);
@@ -25566,7 +25848,7 @@ $("#analyse-btn").addEventListener("click", async () => {
     renderImportPreview();
   } catch (e) {
     $("#import-status").textContent = "";
-    toast("Error: " + e.message);
+    dbFail("norm", e);
   } finally {
     // R75 · B1 — back to whatever the box justifies, not unconditionally enabled.
     impSyncAnalyseBtn();
@@ -26880,7 +27162,7 @@ window.acceptLead = async function (id, ev) {
   // Atomically claim the lead: only converts if it's still 'new', so a fast double-click
   // or a second adviser accepting the same lead can't create duplicate clients/cases/emails.
   const claim = await claimLead(id);
-  if (claim.error) { if (btn) btn.disabled = false; return toast("Error: " + claim.error); }
+  if (claim.error) { if (btn) btn.disabled = false; return dbFail("acceptLead", claim.error); }
   if (claim.taken) { if (btn) btn.disabled = false; return toast("This lead has already been accepted."); }
   const l = claim.row;
 
@@ -27004,7 +27286,7 @@ window.acceptLead = async function (id, ev) {
      unambiguous leads". The decisions above (the two joint-name prompts, the attach-to-existing
      confirms) are what stays here, because they are the half a bulk flow must never do. */
   const res = await acceptLeadCore(l, { assignTo, firstName, lastName, jointNote, client });
-  if (res.error) { if (btn) btn.disabled = false; return toast("Error: " + res.error); }
+  if (res.error) { if (btn) btn.disabled = false; return dbFail("acceptLead", res.error); }
   const leadWarn = res.warnings;
   const leadTasksAdded = res.tasksAdded;
   if (res.welcomeId) runAutomation(true, { queueIds: [res.welcomeId] });
@@ -27338,7 +27620,7 @@ window.discardLead = async function (id) {
     delete patch.first_contact_at;
     res = await db.from("leads").update(patch).eq("id", id);
   }
-  if (res.error) return toast("Error: " + res.error.message);
+  if (res.error) return dbFail("discardLead", res.error);
   if (reasonSaved) LEAD_DISCARD_REASON_SUPPORTED = true;
   const respMins = leadResponseMins(lead && lead.created_at, stamped ? stampAt : (lead && lead.first_contact_at));
   toast(`Lead discarded — ${why.label}`
@@ -27649,6 +27931,34 @@ async function loadDiaryTasks(fromYmd, toYmd, who) {
     .limit(400));
   return who && who !== "all" ? rows.filter((t) => t.assigned_to === who) : rows;
 }
+/* ==========================================================================
+   R78 · A3 — ONE DATA-FETCH LAYER FOR ALL THREE DIARY VIEWS.
+
+   loadDiary / loadDiaryDay / loadDiaryWeek each repeated the same ~10 lines —
+   the bounded appointments read, the property context, the dated-task read —
+   and paid them as FOUR serial waves. loadDiaryRange(start, end, who) is that
+   block, once: the appointments read, then the context (client_id rides on
+   every appointment row, so the A2 hint puts its two reads in one wave) and
+   the task read side by side. Two waves, three callers, zero rendering — the
+   render functions are untouched and still receive exactly the shapes they
+   always did ({appts, ctx, tasks}; tasks raw, callers bucket them).
+   `who` is the diary staff filter value ("all" or a staff id), applied to the
+   appointments read and passed through to loadDiaryTasks unchanged. */
+let diaryLoadSeq = 0;   // R78 · A5 — one token across the three views: the newest load wins
+async function loadDiaryRange(start, end, who) {
+  let q = db.from("appointments")
+    .select("*, clients(first_name,last_name)")
+    .gte("starts_at", start.toISOString()).lt("starts_at", end.toISOString())
+    .order("starts_at");
+  if (who !== "all") q = q.eq("staff_id", who);
+  const { data: appts } = await q;
+  const rows = appts || [];
+  const [ctx, tasks] = await Promise.all([
+    loadPropContext(rows.map((a) => a.case_id), { clientIds: rows.map((a) => a.client_id) }),
+    loadDiaryTasks(diaryYmd(start), diaryYmd(end), who),
+  ]);
+  return { appts: rows, ctx, tasks };
+}
 function diaryTasksByDay(rows) {
   const by = {};
   (rows || []).forEach((t) => { if (t.due_date) (by[t.due_date] = by[t.due_date] || []).push(t); });
@@ -27801,21 +28111,13 @@ async function loadDiary() {
   const gridEnd = new Date(monthEnd);
   gridEnd.setDate(gridEnd.getDate() + ((8 - gridEnd.getDay()) % 7)); // forward to Monday
   const who = $("#diary-staff").value || "all";
-  let q = db.from("appointments")
-    .select("*, clients(first_name,last_name)")
-    .gte("starts_at", gridStart.toISOString()).lt("starts_at", gridEnd.toISOString())
-    .order("starts_at");
-  if (who !== "all") q = q.eq("staff_id", who);
-  const { data: appts } = await q;
-  /* G6B-03 — the Diary is the screen an adviser reads their day off, and round 6 gave the property
-     to the dashboard panel and the appointment modal but not to this. Appointments already carry
-     case_id, so the chip comes from data we are already entitled to read — same call the dashboard
-     panel makes (loadPropContext → propCtxChip). Without it a portfolio landlord's six tiles say
-     "Ruby Sinclair" six times and cannot say which flat. */
-  const apptCtx = await loadPropContext((appts || []).map((a) => a.case_id));
-  /* R12b · W-18 — the one extra read, over exactly the dates the grid is about to draw. */
-  const gridYmd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  const tasksByDay = diaryTasksByDay(await loadDiaryTasks(gridYmd(gridStart), gridYmd(gridEnd), who));
+  /* R78 · A3 — the shared two-wave fetch (appointments, then context + tasks side by side).
+     G6B-03's property chip and R12b · W-18's dated tasks both still come from exactly these
+     reads — they just no longer queue behind each other. */
+  const seq = ++diaryLoadSeq;
+  const { appts, ctx: apptCtx, tasks: diaryRangeTasks } = await loadDiaryRange(gridStart, gridEnd, who);
+  if (seq !== diaryLoadSeq) return;   // R78 · A5 — a newer diary load (any view) owns the page
+  const tasksByDay = diaryTasksByDay(diaryRangeTasks);
   $("#diary-title").textContent = "Diary — " + monthStart.toLocaleDateString("en-GB", { month: "long", year: "numeric" });
   // T1-14 — compute per-staff clashes in one pass over the appointments already in memory. Keyed by
   // appt id → the (first) other same-staff appointment its time range overlaps, so both cards in a
@@ -27888,7 +28190,7 @@ async function loadDiary() {
            the thing this round exists to fix. An ATTENDED one is not struck — it happened. */
         const outcomeSet = isApptOutcome(a.outcome);
         const outcomeStruck = a.outcome === "no_show" || a.outcome === "rearranged";
-        return `<div class="appt${partner ? " clash" : ""}${outcomeSet ? " has-outcome outcome-" + a.outcome : ""}${outcomeStruck ? " outcome-struck" : ""}" draggable="true" data-appt="${esc(a.id)}" onclick="openAppt('${a.id}')"${colorStyle}${clashTitle}>
+        return `<div class="appt${partner ? " clash" : ""}${outcomeSet ? " has-outcome outcome-" + a.outcome : ""}${outcomeStruck ? " outcome-struck" : ""}" draggable="true" data-appt="${esc(a.id)}" data-title="${esc(a.title)}" onclick="openAppt('${a.id}')"${colorStyle}${clashTitle}>
         ${partner ? `<span class="clash-tag" title="${esc(clashWords)}" aria-label="${esc(clashWords)}">⚠</span> ` : ""}<span class="at">${new Date(a.starts_at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}–${new Date(a.ends_at || a.starts_at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</span> ${esc(a.title)}
         ${outcomeSet ? `<div>${apptOutcomeChipHtml(a.outcome)}</div>` : ""}
         ${chip ? `<div>${chip}</div>` : ""}
@@ -27923,6 +28225,7 @@ async function loadDiary() {
   /* R75 · A2 — the month grid's tiles become drag sources and its day cells drop targets, wired
      after the paint that created them (the board's own pattern). */
   wireDiaryDnD();
+  activateDiaryAppts("#diary-grid .appt");   // R78 · B2 — Month view, keyboard-openable
   await renderAbsencePanel();   // R13 · M-31 — the rota lives under the month it describes
 }
 
@@ -28012,21 +28315,13 @@ async function loadDiaryDay() {
   const dayStart = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 0, 0, 0, 0);
   const dayEnd = new Date(dayStart); dayEnd.setDate(dayEnd.getDate() + 1);
   const who = $("#diary-staff").value || "all";
-  let q = db.from("appointments")
-    .select("*, clients(first_name,last_name)")
-    .gte("starts_at", dayStart.toISOString()).lt("starts_at", dayEnd.toISOString())
-    .order("starts_at");
-  if (who !== "all") q = q.eq("staff_id", who);
-  const { data: appts } = await q;
+  /* R78 · A3 — the shared fetch; G6B-03's context and R12b · W-18's uncapped day tasks are the
+     same reads as ever, now two waves instead of three. */
+  const seq = ++diaryLoadSeq;
+  const { appts, ctx: apptCtx, tasks: dayTasks } = await loadDiaryRange(dayStart, dayEnd, who);
+  if (seq !== diaryLoadSeq) return;   // R78 · A5
   $("#diary-title").textContent = "Diary — " + dayStart.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
-  // G6B-03 — the same property context the month grid and the dashboard panel carry.
-  const apptCtx = await loadPropContext((appts || []).map((a) => a.case_id));
-  /* R12b · W-18 — the same one read the month grid makes, narrowed to one day. The Day view is
-     where the month grid's "+N more" sends people, so it is the view that must have room for the
-     WHOLE day: no cap here. */
-  const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  const dayTasks = await loadDiaryTasks(ymd(dayStart), ymd(dayEnd), who);
-  renderDiaryDayTasks(dayTasks, ymd(dayStart), who);
+  renderDiaryDayTasks(dayTasks, diaryYmd(dayStart), who);
   renderDiaryDay(appts || [], who, apptCtx);
   await renderAbsencePanel();   // R13 · M-31 — the same panel, under either view
 }
@@ -28118,7 +28413,9 @@ function diaryLaneBlocksHtml(appts, who, apptCtx) {
        as the pipeline board's cards carry it (wireBoardDnD): the handlers are delegated and wired
        per paint, never inline. Dragging is pointer-only by nature, so the block also SAYS that
        opening it is the way to move it without a mouse — see DIARY_DRAG_HINT. */
-    const box = `style="top:${top}px;height:${height}px;left:calc(${leftPct}% + 2px);width:calc(${widthPct}% - 4px);${colorStyle}" draggable="true" data-appt="${esc(a.id)}" onclick="openAppt('${a.id}')"`;
+    /* R78 · B2 — data-title carries the accessible name for makeActivatable (activateDiaryAppts):
+       the block's visible text starts with the time range, the label should start with what it IS. */
+    const box = `style="top:${top}px;height:${height}px;left:calc(${leftPct}% + 2px);width:calc(${widthPct}% - 4px);${colorStyle}" draggable="true" data-appt="${esc(a.id)}" data-title="${esc(a.title)}" onclick="openAppt('${a.id}')"`;
     const warn = isClash ? `<span class="clash-tag" title="${esc(clashWords)}" aria-label="${esc(clashWords)}">⚠</span> ` : "";
     const whoName = a.clients ? [a.clients.first_name, a.clients.last_name].filter(Boolean).join(" ") : "";
     const staffLine = a.staff_id && who === "all" ? staffName(a.staff_id) : "";
@@ -28149,6 +28446,27 @@ function diaryLaneBlocksHtml(appts, who, apptCtx) {
       ${showStaff ? `<div style="color:var(--muted);">${esc(staffLine)}</div>` : ""}</div>`;
   }).join("");
 }
+/* ==========================================================================
+   R78 · B2 — THE DIARY GETS A KEYBOARD.
+
+   Every appointment block in all three views is an onclick <div> — 0 of them
+   focusable, so a diary could be READ without a mouse but nothing in it could
+   be OPENED. R73 built makeActivatable() for exactly this shape (the board
+   card, the client row) and the diary was never given it. Applied after each
+   of the three paints (the blocks are innerHTML-fresh every time): tab stop,
+   role="button", Enter/Space → the block's own click → openAppt — whose form
+   already re-times and re-dates the appointment, which is the stated keyboard
+   substitute for the pointer-only drag (DIARY_DRAG_HINT has said so since
+   R75). Blocks are reachable in DOM order, which is start-time order. The
+   aria-label is the appointment's title (data-title, stamped at render) —
+   the visible text leads with the time range, the NAME should lead with what
+   the thing is.
+   ========================================================================== */
+function activateDiaryAppts(scopeSel) {
+  document.querySelectorAll(scopeSel).forEach((el) => {
+    makeActivatable(el, { label: el.dataset.title ? "Open appointment: " + el.dataset.title : "Open appointment" });
+  });
+}
 function renderDiaryDay(appts, who, apptCtx) {
   const startHour = DIARY_DAY_START_HOUR, endHour = DIARY_DAY_END_HOUR;
   const pxPerHour = DIARY_DAY_PX_PER_HOUR;
@@ -28163,6 +28481,7 @@ function renderDiaryDay(appts, who, apptCtx) {
      (a drag inside the day is a time change). Re-wired on every paint, exactly as the board's
      wireBoardDnD() is re-wired after every loadPipeline. */
   wireDiaryDnD();
+  activateDiaryAppts("#diary-day-lane .appt-block");   // R78 · B2 — Day view, keyboard-openable
   /* R75 · A3 — A DAY WITH NOTHING IN IT SHOULD SAY SO, AND SAY WHOSE.
      An empty lane was eleven hours of ruled white space: indistinguishable from a lane that had
      not loaded, and silent about which person's day you were looking at — the one fact that makes
@@ -28213,16 +28532,11 @@ async function loadDiaryWeek() {
   diaryWeek = weekStart;                          // normalise, so ‹/› always step whole weeks
   const weekEnd = new Date(weekStart); weekEnd.setDate(weekEnd.getDate() + 7);
   const who = $("#diary-staff").value || "all";
-  /* The SAME read the month grid makes, bounded to seven days instead of six weeks — one query,
-     one order, one optional staff filter. */
-  let q = db.from("appointments")
-    .select("*, clients(first_name,last_name)")
-    .gte("starts_at", weekStart.toISOString()).lt("starts_at", weekEnd.toISOString())
-    .order("starts_at");
-  if (who !== "all") q = q.eq("staff_id", who);
-  const { data: appts } = await q;
-  const apptCtx = await loadPropContext((appts || []).map((a) => a.case_id));
-  const tasksByDay = diaryTasksByDay(await loadDiaryTasks(diaryYmd(weekStart), diaryYmd(weekEnd), who));
+  /* R78 · A3 — the shared fetch: the SAME read the month grid makes, bounded to seven days. */
+  const seq = ++diaryLoadSeq;
+  const { appts, ctx: apptCtx, tasks: weekTasks } = await loadDiaryRange(weekStart, weekEnd, who);
+  if (seq !== diaryLoadSeq) return;   // R78 · A5
+  const tasksByDay = diaryTasksByDay(weekTasks);
   const lastDay = new Date(weekStart); lastDay.setDate(lastDay.getDate() + 6);
   /* "Diary — week of 1 September 2026" reads as a period; "1–7 September" reads as a range and is
      what a person says out loud. Both months are named when the week straddles two. */
@@ -28283,6 +28597,66 @@ function renderDiaryWeek(weekStart, appts, who, apptCtx, tasksByDay) {
     ${lanes}
   </div>`;
   wireDiaryDnD();
+  activateDiaryAppts("#diary-week-view .appt-block");   // R78 · B2 — Week view, keyboard-openable
+  syncDiaryWeekScroll(true);                            // R78 · B3 — phone: today in view + chevrons
+}
+/* ==========================================================================
+   R78 · B3 — WEEK-ON-A-PHONE: OPEN ON TODAY, AND SAY THERE IS MORE SIDEWAYS.
+
+   Below 900px the week grid keeps its 780px min-width and the view scrolls
+   sideways (admin.css) — but it opened at scrollLeft 0, i.e. Monday, so on a
+   Thursday "today" sat two screens to the right with no affordance saying so.
+   Two fixes, both riding the board's existing pattern:
+
+     · AFTER each week paint, when the grid genuinely overflows AND today's
+       lane is in the rendered week, scrollLeft is set to that lane's content
+       offset minus the hour column's width — today's lane lands beside the
+       hours, exactly where the Day view puts it. A week you paged ‹/› away
+       from has no today lane and keeps whatever scroll you gave it.
+     · The wrapper (#diary-week-wrap, index.html) is a .board-scroll-wrap: the
+       same edge fades and the same ‹ › discs as the pipeline board, shown by
+       the same can-scroll-left/right classes, stepping by most of a viewport.
+
+   MEASURE-GUARD (the house rule): every number here is measured off the live
+   DOM, and a paint that has not laid out yet measures 0. A zero/absurd
+   measurement writes NOTHING — the sync retries once on a double
+   requestAnimationFrame and then stays silent, leaving scrollLeft alone
+   rather than junk-scrolling the diary.
+   ========================================================================== */
+function syncDiaryWeekScroll(scrollToToday, isRetry) {
+  const host = $("#diary-week-view"), wrap = $("#diary-week-wrap");
+  if (!host || !wrap) return;
+  const retry = () => {
+    if (isRetry) return; // one retry only — after that, silence (MEASURE-GUARD)
+    requestAnimationFrame(() => requestAnimationFrame(() => syncDiaryWeekScroll(scrollToToday, true)));
+  };
+  // Hidden (another view is up) or unpainted: clientWidth is 0 — don't write, maybe retry.
+  if (!host.clientWidth) { if (scrollToToday) retry(); return; }
+  const over = host.scrollWidth > host.clientWidth + 1;
+  const syncClasses = () => {
+    const max = host.scrollWidth - host.clientWidth;
+    wrap.classList.toggle("can-scroll-right", over && host.scrollLeft < max - 4);
+    wrap.classList.toggle("can-scroll-left", over && host.scrollLeft > 4);
+  };
+  if (scrollToToday && over) {
+    const lane = host.querySelector(".dw-lane.today");
+    if (lane) {
+      const hours = host.querySelector(".dw-hours");
+      const hostRect = host.getBoundingClientRect(), laneRect = lane.getBoundingClientRect();
+      // Content offset of the lane inside the scroller, independent of the current scroll.
+      const laneLeft = laneRect.left - hostRect.left + host.scrollLeft;
+      const target = laneLeft - ((hours && hours.offsetWidth) || 0);
+      if (laneRect.width > 0 && isFinite(target) && target > 0) host.scrollLeft = target; // clamps itself
+      else if (laneRect.width <= 0) { retry(); return; }   // measured before layout — try once more
+    }
+  }
+  host.onscroll = syncClasses;
+  const aR = wrap.querySelector(".board-scroll-arrow"), aL = wrap.querySelector(".board-scroll-arrow-left");
+  const step = () => Math.max(160, Math.round(host.clientWidth * 0.7));
+  if (aR) aR.onclick = () => host.scrollBy({ left: step(), behavior: "smooth" });
+  if (aL) aL.onclick = () => host.scrollBy({ left: -step(), behavior: "smooth" });
+  if (!wrap.__dwResize) { wrap.__dwResize = true; window.addEventListener("resize", () => syncDiaryWeekScroll(false), { passive: true }); }
+  syncClasses();
 }
 
 /* R75 · A2(b) — CLICK A LANE AT A TIME. One delegated handler for the seven week lanes, doing
@@ -28495,6 +28869,9 @@ function setDiaryViewMode(mode, opts = {}) {
      under "All advisers" and names the staff on the block itself. */
   $("#diary-legend").classList.toggle("hidden", mode === "day");
   if ($("#diary-week-view")) $("#diary-week-view").classList.toggle("hidden", mode !== "week");
+  /* R78 · B3 — leaving the week view must take its chevrons with it: the wrap's can-scroll-*
+     classes are what show the discs, and a stale pair would float over the month grid. */
+  if (mode !== "week" && $("#diary-week-wrap")) $("#diary-week-wrap").classList.remove("can-scroll-left", "can-scroll-right");
   $("#diary-day-view").classList.toggle("hidden", mode !== "day");
   /* R75 · A3 — #diary-staff is deliberately NOT touched here. The filter is a question the
      operator asked; a view toggle is not an answer to it. */
@@ -28968,7 +29345,7 @@ window.openAppt = async function (id, presets = {}, openOpts = {}) {
       outcomeChanged = false;
       ({ error } = await runSave());
     }
-    if (error) return toast("Error: " + error.message);
+    if (error) return dbFail("openAppt", error);
     /* R12b · W-17 — the no-show call-back, offered AFTER the write has succeeded (a task chasing
        a no-show that was never recorded is worse than no task) and only on a genuine CHANGE to
        no_show, so re-saving an already-recorded no-show does not ask again. */
@@ -31289,7 +31666,13 @@ function renderOwnerCapNotice(sel, hit) {
    when the mock supabase bundle is what loaded, so it cannot exist in the shipped app. */
 if (typeof window !== "undefined" && window.supabase && window.supabase.__isMock) {
   window.__setReportsRowCap = function (n) { REPORTS_ROW_CAP = Number(n) || 5000; return REPORTS_ROW_CAP; };
-  window.__setOwnerRowCap = function (n) { OWNER_ROW_CAP = Number(n) || 5000; return OWNER_ROW_CAP; };
+  /* R78 · A5 — a cap change invalidates the board cache too: the cached snapshot was taken
+     under the OLD cap, so serving it under the new one would show rows the cap now excludes
+     (this is also what keeps r23 §D honest — every post-cap-change board load re-reads). */
+  window.__setOwnerRowCap = function (n) { OWNER_ROW_CAP = Number(n) || 5000; bustBoardCache(); return OWNER_ROW_CAP; };
+  /* R78 · A5 — sandbox hook so a suite can force the next board load to refetch (r24 §D reads
+     the SELECT string off a fresh load; the cache would otherwise serve it silently). */
+  window.__bustBoardCache = function () { bustBoardCache(); };
   /* R68 · M7 — re-read the settings table into `settings`. Production re-reads it at sign-in and
      after a save, which is the only time it changes; a harness that has just written a row (an
      adviser fee target, the email hold) needs the same refresh WITHOUT owning the Save button
@@ -31850,36 +32233,26 @@ function repSectionOfEl(el) {
   return cur || (repSectionItems[0] && repSectionItems[0].key) || "";
 }
 function buildReportsJumpNav() {
-  const bar = $("#rep-nav"), wrap = $("#rep-nav-chips");
-  if (!bar || !wrap) return;
-  const allItems = REPORT_JUMP_SECTIONS
-    .map(([key, label, sel]) => ({ key, label, el: $(sel) }))
-    .filter((s) => s.el && repJumpVisible(s.el));
-  allItems.forEach((s) => { s.section = repSectionOfEl(s.el); });
-  /* A section the reader picked that no longer exists (role change, a panel that went hidden)
-     falls back to the first live one rather than emptying the strip. */
-  if (!repSectionItems.some((x) => x.key === repSectionActive)) repSectionActive = (repSectionItems[0] || {}).key || "";
-  repJumpItems = allItems.filter((s) => !repSectionActive || s.section === repSectionActive);
-  /* Belt and braces: a section whose panels somehow map elsewhere must not leave an empty strip. */
-  if (!repJumpItems.length) repJumpItems = allItems;
-  /* One chip is not navigation, it is decoration — but that rule was written when this strip held
-     every panel on the page. R74 · A4c: a SECTION with one panel (Referrals out) is a normal state,
-     and hiding the whole strip for it makes a sticky bar appear and disappear as the reader
-     scrolls. So the guard now asks whether the PAGE has anything to navigate; a one-panel section
-     renders its single chip and the strip keeps its height. */
-  if (allItems.length < 2) { wrap.innerHTML = ""; bar.hidden = true; return; }
-  wrap.innerHTML = repJumpItems.map((s) =>
-    `<button type="button" class="seg-btn" id="rep-nav-${esc(s.key)}" role="tab" aria-selected="false" data-rep-jump="${esc(s.key)}" title="Jump to ${esc(s.label)}">${esc(s.label)}</button>`).join("");
-  wrap.querySelectorAll("[data-rep-jump]").forEach((b) => (b.onclick = () => {
-    const it = repJumpItems.find((s) => s.key === b.dataset.repJump);
-    if (!it || !it.el) return;
-    // scroll-margin-top (set from the measured bar height below) is what stops the sticky bar
-    // landing on top of the heading it just took you to.
-    repJumpUntil = Date.now() + REP_JUMP_SETTLE_MS;   // R74 · A4c — see onRepJumpScroll
-    it.el.scrollIntoView({ behavior: "smooth", block: "start" });
-    setRepJumpActive(it.key);
-  }));
-  bar.hidden = false;
+  /* R78 · A4 — through the shared builder. What stays here is Reports' own: the R74 · A4c
+     section scoping (filterItems), the guard on the PAGE's items rather than the scoped strip
+     (guardOn:"all" — a one-panel section keeps its single chip and the sticky bar its height),
+     and the jump-settle stamp the scroll-spy respects. scroll-margin-top (set from the measured
+     bar height below) is still what stops the sticky bar landing on the heading it just took
+     you to. */
+  const built = buildJumpNav("rep-nav", "rep-nav-chips", REPORT_JUMP_SECTIONS, repJumpVisible, {
+    attr: "data-rep-jump", chipIdPrefix: "rep-nav-", guardOn: "all",
+    filterItems: (allItems) => {
+      allItems.forEach((s) => { s.section = repSectionOfEl(s.el); });
+      /* A section the reader picked that no longer exists (role change, a panel that went hidden)
+         falls back to the first live one rather than emptying the strip. */
+      if (!repSectionItems.some((x) => x.key === repSectionActive)) repSectionActive = (repSectionItems[0] || {}).key || "";
+      return allItems.filter((s) => !repSectionActive || s.section === repSectionActive);
+    },
+    beforeJump: () => { repJumpUntil = Date.now() + REP_JUMP_SETTLE_MS; },   // R74 · A4c — see onRepJumpScroll
+    setActive: setRepJumpActive,
+  });
+  repJumpItems = built ? built.items : [];
+  if (!built) return;
   repJumpActive = "";                 // the chips are new elements — nothing is active yet
   measureRepJumpOffsets();
   if (!repJumpWired) {
@@ -31924,20 +32297,7 @@ function measureRepJumpOffsets() {
 function setRepJumpActive(key) {
   if (key === repJumpActive) return;
   repJumpActive = key;
-  document.querySelectorAll("#rep-nav-chips [data-rep-jump]").forEach((b) => {
-    const on = b.dataset.repJump === key;
-    b.classList.toggle("active", on);
-    b.setAttribute("aria-selected", on ? "true" : "false");
-  });
-  /* Keep the active chip inside the horizontal scroller by hand. scrollIntoView() on the chip
-     would also scroll the PAGE, which would fight the scroll that just triggered this. */
-  const act = key ? document.getElementById("rep-nav-" + key) : null;
-  const wrap = $("#rep-nav-chips");
-  if (act && wrap && wrap.scrollWidth > wrap.clientWidth) {
-    const l = act.offsetLeft, r = l + act.offsetWidth;
-    if (l < wrap.scrollLeft) wrap.scrollLeft = Math.max(0, l - 12);
-    else if (r > wrap.scrollLeft + wrap.clientWidth) wrap.scrollLeft = r - wrap.clientWidth + 12;
-  }
+  jumpNavActivePaint("rep-nav-chips", "data-rep-jump", "rep-nav-", key);   // R78 · A4
 }
 function onRepJumpScroll() {
   if (repJumpTick) return;
@@ -34928,7 +35288,7 @@ async function r44DismissLine(lineId) {
     ? { match_status: st.picks[lineId] ? "suggested" : "unmatched", match_note: "" }
     : { match_status: "dismissed", match_note: "dismissed by hand" };
   const { error } = await db.from("commission_lines").update(next).eq("id", lineId);
-  if (error) return toast("Error: " + error.message);
+  if (error) return dbFail("r44DismissLine", error);
   Object.assign(l, next);
   if (next.match_status === "dismissed") st.ticks[lineId] = false;
   renderReconReview();
@@ -34949,7 +35309,7 @@ async function r44AttributeLineTo(lineId, profileId, noCase) {
   const patch = { attributed_to: profileId || null };
   if (noCase && l.match_status !== "na") patch.match_status = "na";
   const { error } = await db.from("commission_lines").update(patch).eq("id", lineId);
-  if (error) return toast("Error: " + error.message);
+  if (error) return dbFail("r44AttributeLineTo", error);
   Object.assign(l, patch);
   if (patch.match_status === "na") st.ticks[lineId] = false;
   renderReconReview();
@@ -36608,7 +36968,7 @@ window.dismissDuplicate = async function (aId, bId, aName, bName) {
   const { error } = await db.from("duplicate_dismissals").insert({ a_id: a, b_id: b, reason: reason.trim() || null });
   if (error) {
     if (isMissingTableError(error)) return toast("Not-a-duplicate needs migration M4");
-    return toast("Error: " + error.message);
+    return dbFail("dismissDuplicate", error);
   }
   toast("Marked as not a duplicate");
   loadDataHealth();
@@ -36616,7 +36976,7 @@ window.dismissDuplicate = async function (aId, bId, aName, bName) {
 window.undoDismissDuplicate = async function (id) {
   if (!isAdminOrOwner()) return toast("Undo is Owner / Administrator only.");
   const { error } = await db.from("duplicate_dismissals").delete().eq("id", id);
-  if (error) return toast("Error: " + error.message);
+  if (error) return dbFail("undoDismissDuplicate", error);
   toast("Restored — this pair will show as a possible duplicate again");
   loadDataHealth();
 };
@@ -37039,7 +37399,7 @@ $("#add-intro-btn").addEventListener("click", async () => {
   btn.disabled = true;
   try {
     const { error } = await db.from("introducers").insert({ name, email: $("#intro-email").value.trim() || null });
-    if (error) return toast("Error: " + error.message);
+    if (error) return dbFail("loadIntroducers", error);
     $("#intro-name").value = ""; $("#intro-email").value = "";
     toast("Introducer added");
     loadIntroducers();
@@ -37052,7 +37412,10 @@ window.inviteIntroducer = async function (introducerId) {
   if (!confirm(`Create a portal login for ${i.name} (${i.email})? They will only see their own referrals.`)) return;
   const res = await inviteUser({ email: i.email, full_name: i.name, role: "introducer", introducer_id: introducerId });
   if (res) {
-    $("#invite-result").innerHTML = `Portal login created for <strong>${esc(i.email)}</strong> — temporary password: <strong>${esc(res.temp_password)}</strong><br>Send them this with the back office address (they use the introducer page). They can change it via "Forgot password".`;
+    /* R78 · B6 — honest directions: introducers sign in on the INTRODUCER page (not the back
+       office address, which bounces them at the staff gate), and "Forgot password?" now actually
+       exists there (introducer.html grew it this round), so the promise is finally true. */
+    $("#invite-result").innerHTML = `Portal login created for <strong>${esc(i.email)}</strong> — temporary password: <strong>${esc(res.temp_password)}</strong><br>Send them this with the introducer page address (<strong>/admin/introducer.html</strong> — they sign in there, not on the back office login). They can change the password via “Forgot password?” on that page.`;
     loadIntroducers();
     refreshChangeHistory(); // invite-user writes an audit row recording who granted access to whom
   }
@@ -37210,12 +37573,12 @@ async function saveTeamContact(id, field, value) {
     const { error } = await db.from("profiles").update({ [field]: value || null }).eq("id", id);
     if (error) {
       if (isMissingColumnError(error)) { toast("Phone / sign-off need migration M1 — not saved."); PROFILE_CONTACT_SUPPORTED = false; renderTeamRoster(); }
-      else toast("Error: " + error.message);
+      else dbFail("saveTeamContact", error);
       return;
     }
     const p = PROFILES.find((x) => x.id === id);
     if (p) p[field] = value || null;
-  } catch (e) { toast("Error: " + e.message); }
+  } catch (e) { dbFail("saveTeamContact", e); }
 }
 /* What a colleague still holds. Counted before their access is removed so the Owner is told what
    is about to be left behind, rather than finding out when a colleague's ordinary save clears it. */
@@ -37464,9 +37827,9 @@ async function inviteUser(payload) {
       body: JSON.stringify(payload),
     });
     const j = await r.json();
-    if (!r.ok || j.error) { toast("Error: " + (j.error || r.status)); return null; }
+    if (!r.ok || j.error) { dbFail("inviteUser", (j.error || r.status)); return null; }
     return j;
-  } catch (e) { toast("Error: " + e.message); return null; }
+  } catch (e) { dbFail("inviteUser", e); return null; }
 }
 
 /* ---------- Password show/hide ---------- */
@@ -37590,14 +37953,50 @@ function openOverlay(html, wire) {
       backdrop.removeEventListener("mousedown", onBackdrop);
       backdrop.classList.add("hidden");
       box.innerHTML = "";
-      if (prevFocus && typeof prevFocus.focus === "function") prevFocus.focus();
+      /* R78 · B1 — CLOSE-RESTORE THAT SURVIVES A REPAINT. prevFocus is the element that had focus
+         when the overlay opened; if the modal underneath re-rendered while the overlay was up
+         (innerHTML repaints are how every modal here paints), that element is no longer in the
+         document and .focus() on it is a silent no-op — focus fell to <body> and the next Tab
+         started from the top of the page. Fall back, in order: the element that now holds the
+         opener's id (the repainted twin), the open record modal's first real focusable, then body
+         (tabindex -1, so it is programmatically focusable but never a tab stop). */
+      let refocus = prevFocus && typeof prevFocus.focus === "function" && document.contains(prevFocus) ? prevFocus : null;
+      if (!refocus && prevFocus && prevFocus.id) refocus = document.getElementById(prevFocus.id);
+      if (!refocus) {
+        const mb = $("#modal-backdrop");
+        if (mb && !mb.classList.contains("hidden")) {
+          refocus = modalFocusable().filter((el) => !el.classList.contains("modal-close"))[0] || null;
+        }
+      }
+      if (!refocus && document.body) { document.body.tabIndex = -1; refocus = document.body; }
+      if (refocus && typeof refocus.focus === "function") { try { refocus.focus(); } catch (e) { /* nothing to restore to */ } }
       resolve(val);
     };
+    /* R78 · B1 — the overlay's OWN focusables, the record modal's wrap-around rule (see the
+       document-level Tab handler by closeModalGuarded — same selector, same offsetParent test). */
+    const overlayFocusable = () => [...box.querySelectorAll('a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')]
+      .filter((el) => el.offsetParent !== null);
     // Capture phase: the case modal's own Escape/Tab handlers are on document (bubble), and they
     // would close the modal underneath or steal focus back into it while this overlay is up.
+    /* R78 · B1 — Tab used to only stopPropagation, which kept the MODAL's trap off but trapped
+       nothing itself: focus walked straight out of "Type DELETE to confirm" into the page (the
+       sidebar, the board) while the dialog still swallowed Escape. Every house dialog built on
+       openOverlay — confirmTyped, confirmDestructive, confirmDiscard, the lost-reason capture,
+       bulkMoveStage, stage-back, hold-release — now wraps: Tab from the last control goes to the
+       first, Shift+Tab from the first goes to the last, and focus that somehow left the box is
+       pulled back to its first control. */
     const onKey = (e) => {
       if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); finish(null); }
-      else if (e.key === "Tab") e.stopPropagation();
+      else if (e.key === "Tab") {
+        e.stopPropagation();
+        const f = overlayFocusable();
+        if (!f.length) { e.preventDefault(); return; }
+        const first = f[0], last = f[f.length - 1];
+        const cur = document.activeElement;
+        if (!box.contains(cur)) { e.preventDefault(); first.focus(); }
+        else if (e.shiftKey && cur === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && cur === last) { e.preventDefault(); first.focus(); }
+      }
     };
     const onBackdrop = (e) => { if (e.target === backdrop) finish(null); };
     anchor.finish = finish;
@@ -39444,7 +39843,7 @@ revSyncReadBtn();
 if ($("#rev-read-btn")) $("#rev-read-btn").addEventListener("click", async () => {
   const btn = $("#rev-read-btn");
   btn.disabled = true;
-  try { await revRead(); } catch (e) { console.error(e); toast("Error: " + e.message); $("#rev-status").textContent = ""; }
+  try { await revRead(); } catch (e) { console.error(e); dbFail("revSyncReadBtn", e); $("#rev-status").textContent = ""; }
   finally { btn.disabled = false; }
 });
 if ($("#rev-reset-btn")) $("#rev-reset-btn").addEventListener("click", () => { revReset(false); $("#rev-status").textContent = ""; });

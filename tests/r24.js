@@ -384,6 +384,9 @@ async function readTableRow(page, fullName) {
       await installSelectRecorder(pageA);
       await clearSelects(pageA);
       await goto(pageA, "clients", 500);   // navigate away and back so loadPipeline() runs again under the recorder
+      // R78: the board now caches its cases read for the session (A5); bust it so this walk
+      // OBSERVES a fresh select — the assertion is about the select string, not the cache.
+      await pageA.evaluate(() => window.__bustBoardCache());
       await goto(pageA, "pipeline", 1200);
       const calls = await boardSelectCalls(pageA);
       ok("D1 · exactly one board cases select observed", calls.length === 1, JSON.stringify(calls));

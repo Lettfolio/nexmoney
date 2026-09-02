@@ -24,6 +24,12 @@
       </span>
     </label>
     <button type="submit" class="btn btn-primary btn-block">Sign in</button>
+    <!-- R78 · B6 — the reset the invite email has promised since round 5 ("They can change it via
+         Forgot password") finally exists on the page introducers actually sign in on. Same
+         resetPasswordForEmail pattern as the admin app; redirectTo is THIS page, so the recovery
+         link lands where an introducer account can complete it (the admin page would bounce them
+         at the staff gate). -->
+    <button type="button" id="forgot-btn" class="btn btn-ghost btn-block">Forgot password?</button>
     <p id="login-error" class="error hidden"></p>
   </form>
 </div>
@@ -38,8 +44,9 @@
     </div>
   </header>
   <main>
+    <!-- R78 · B6 — honest copy: this page fetches once at sign-in, it does not stream updates. -->
     <h2 id="intro-title">Your referrals</h2>
-    <p class="panel-sub">Live progress of the clients you've referred to NexMoney. Updated in real time — no need to call for updates.</p>
+    <p class="panel-sub">Live progress of the clients you've referred to NexMoney. Refreshed each time you sign in — no need to call for updates.</p>
     <div class="panel">
       <h3>In progress</h3>
       <div id="live-list"></div>
@@ -65,9 +72,45 @@ const STAGE_LABEL = { enquiry: "Enquiry received", fact_find: "Fact find", decis
 
 function toast(m){ const t=$("#toast"); t.textContent=m; t.classList.remove("hidden"); setTimeout(()=>t.classList.add("hidden"),3000); }
 
+/* R78 · B6 — password recovery, the admin app's exact pattern (see init/showRecovery in app.js):
+   a recovery link lands with type=recovery in the hash; wait for the PASSWORD_RECOVERY auth event
+   rather than treating the recovery session as a sign-in, swap the login card for a new-password
+   form, and reload clean once the password is saved. */
+const INTRODUCER_URL = new URL(window.location.pathname, window.location.origin).href;
 async function init() {
+  const isRecovery = location.hash.includes("type=recovery");
+  db.auth.onAuthStateChange((event) => {
+    if (event === "PASSWORD_RECOVERY") return showRecovery();
+  });
+  if (isRecovery) { showLogin(); return; } // wait for PASSWORD_RECOVERY event
   const { data: { session } } = await db.auth.getSession();
   if (session) showApp(session); else showLogin();
+}
+function showRecovery() {
+  $("#login-view").classList.remove("hidden");
+  $("#app-view").classList.add("hidden");
+  const card = $("#login-form");
+  card.innerHTML = `
+    <div class="login-logo">Nex<span>Money</span></div>
+    <h1>Choose a new password</h1>
+    <label>New password
+      <span class="pw-wrap">
+        <input type="password" id="new-pass" required minlength="8" autocomplete="new-password">
+      </span>
+    </label>
+    <button type="submit" class="btn btn-primary btn-block">Save password</button>
+    <p id="login-error" class="error hidden"></p>`;
+  card.onsubmit = async (e) => {
+    e.preventDefault();
+    const { error } = await db.auth.updateUser({ password: $("#new-pass").value });
+    if (error) {
+      $("#login-error").textContent = error.message;
+      $("#login-error").classList.remove("hidden");
+      return;
+    }
+    history.replaceState(null, "", location.pathname);
+    location.reload();
+  };
 }
 function showLogin() {
   $("#login-view").classList.remove("hidden");
@@ -108,6 +151,7 @@ async function showApp(session) {
 }
 $("#login-form").addEventListener("submit", async (e) => {
   e.preventDefault();
+  if (!$("#login-email")) return; // R78 · B6 — recovery form has taken over (same guard as app.js)
   $("#login-error").classList.add("hidden");
   const { data, error } = await db.auth.signInWithPassword({
     email: $("#login-email").value.trim(),
@@ -117,6 +161,14 @@ $("#login-form").addEventListener("submit", async (e) => {
   showApp(data.session);
 });
 $("#logout-btn").addEventListener("click", async () => { await db.auth.signOut(); showLogin(); });
+// R78 · B6 — send the recovery email. Uses the address already typed in the box where there is
+// one; the redirect comes BACK to this page, whose recovery handler (above) can finish the job.
+$("#forgot-btn").addEventListener("click", async () => {
+  const email = ($("#login-email") && $("#login-email").value.trim()) || prompt("Your account email:");
+  if (!email) return;
+  const { error } = await db.auth.resetPasswordForEmail(email, { redirectTo: INTRODUCER_URL });
+  toast(error ? "Error: " + error.message : "Password reset link sent — check your inbox.");
+});
 $("#pw-btn").addEventListener("click", () => {
   const i = $("#login-password");
   i.type = i.type === "password" ? "text" : "password";

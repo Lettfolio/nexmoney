@@ -187,7 +187,11 @@ const noErr = (page, label) => ok(`no console errors (${label})`, !page.__err, J
          here as a result. The assertion is NOT weakened: what it exists to catch is a regression
          to the pre-R11 shape where the five headline figures sat 1,500px down the page, and
          2,900 is still 349px clear of that 3,249px baseline. */
-      const height = await page.evaluate(() => document.documentElement.scrollHeight);
+      /* R78: the one-time date-locale note (#locale-note, B7c) is on this page under Playwright's
+         default en-US context — a ~30px dismissible strip a real en-GB office never sees. Its own
+         measured height is deducted so this stays a pin on the PAGE's shape, not on the note. */
+      const height = await page.evaluate(() => document.documentElement.scrollHeight
+        - ((document.getElementById("locale-note") || {}).offsetHeight || 0));
       ok("R11-REGRESSION · owner dashboard height stays well under the pre-R11 ~3249px", height < 2900, height);
 
       const overflow1440 = await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);

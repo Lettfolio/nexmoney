@@ -533,6 +533,10 @@ const isoDaysAgo = (n) => new Date(Date.now() - n * DAY_MS).toISOString();
 
       const todayStr = await page.evaluate(() => localDateStr());
       const addDays = (ymd, n) => { const d = new Date(ymd + "T00:00:00"); d.setDate(d.getDate() + n); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+      /* R78: snoozes are weekend-aware now (B4's owner decision) — a +Nd landing on Sat/Sun is
+         written as the following Monday. Every expected landing below runs through this roll,
+         computed here independently of app.js, so §D passes on every day of the week. */
+      const roll = (ymd) => { const d = new Date(ymd + "T12:00:00"); const w = d.getDay(); if (w !== 6 && w !== 0) return ymd; d.setDate(d.getDate() + (w === 6 ? 2 : 1)); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
       // "due <D MMM YYYY>" — the exact format the case modal's #tasks-inline row prints (fmtD).
       const dueLineText = async (page, caseId, taskId) => {
         await openCase(page, caseId);
@@ -551,10 +555,10 @@ const isoDaysAgo = (n) => new Date(Date.now() - n * DAY_MS).toISOString();
       await page.click(btn3);
       await wait(page, 500);
       let d1row = await page.evaluate((id) => window.__mockDb.from("case_tasks").select("due_date").eq("id", id).single().then((r) => r.data), d1task);
-      eq("D1 · due_date moved to today + 3 days", d1row.due_date, addDays(todayStr, 3));
+      eq("D1 · due_date moved to today + 3 days (R78: weekend-rolled)", d1row.due_date, roll(addDays(todayStr, 3)));
       const d1CaseTxt = await dueLineText(page, d1.caseId, d1task);
       await page.evaluate(() => window.closeModal());
-      ok("D1 · the case modal's own task row agrees on the new due date", d1CaseTxt && d1CaseTxt.includes(await page.evaluate((d) => fmtD(d), addDays(todayStr, 3))), d1CaseTxt);
+      ok("D1 · the case modal's own task row agrees on the new due date", d1CaseTxt && d1CaseTxt.includes(await page.evaluate((d) => fmtD(d), roll(addDays(todayStr, 3)))), d1CaseTxt);   // R78: weekend roll
 
       // D2 — the date-pick input sets an EXACT date, overriding whatever the +Nd math would give.
       // The task is due today+3 after D1, so it no longer renders on My Day — driven directly via
@@ -578,10 +582,10 @@ const isoDaysAgo = (n) => new Date(Date.now() - n * DAY_MS).toISOString();
       await page.evaluate((id) => window.snoozeTask(id, 1), d3task);
       await wait(page, 500);
       const d3row = await page.evaluate((id) => window.__mockDb.from("case_tasks").select("due_date").eq("id", id).single().then((r) => r.data), d3task);
-      eq("D3 · +1d on a future-dated task bases off its OWN due date (today+5 -> today+6), never today+1", d3row.due_date, addDays(todayStr, 6));
+      eq("D3 · +1d on a future-dated task bases off its OWN due date (today+5 -> today+6), never today+1 (R78: weekend-rolled)", d3row.due_date, roll(addDays(todayStr, 6)));
       const d3CaseTxt = await dueLineText(page, d3.caseId, d3task);
       await page.evaluate(() => window.closeModal());
-      ok("D3 · the case modal confirms the same never-earlier result", d3CaseTxt && d3CaseTxt.includes(await page.evaluate((d) => fmtD(d), addDays(todayStr, 6))), d3CaseTxt);
+      ok("D3 · the case modal confirms the same never-earlier result", d3CaseTxt && d3CaseTxt.includes(await page.evaluate((d) => fmtD(d), roll(addDays(todayStr, 6)))), d3CaseTxt);   // R78: weekend roll
 
       // D4 — +1wk (7 days) from an overdue baseline (never earlier than today), driven from My Day
       // (an overdue task DOES render there, as task_overdue).
@@ -596,7 +600,7 @@ const isoDaysAgo = (n) => new Date(Date.now() - n * DAY_MS).toISOString();
       await page.click(btn1wk);
       await wait(page, 500);
       const d4row = await page.evaluate((id) => window.__mockDb.from("case_tasks").select("due_date").eq("id", id).single().then((r) => r.data), d4task);
-      eq("D4 · +1wk on an OVERDUE task bases off TODAY (never earlier), landing on today+7", d4row.due_date, addDays(todayStr, 7));
+      eq("D4 · +1wk on an OVERDUE task bases off TODAY (never earlier), landing on today+7 (R78: weekend-rolled)", d4row.due_date, roll(addDays(todayStr, 7)));
 
       // D5 — a task due TODAY on My Day, snoozed via My Day: it LEAVES My Day the moment its due
       // date crosses past today (the row's own horizon — overdue/today — not a drawer's 14-day
@@ -611,7 +615,7 @@ const isoDaysAgo = (n) => new Date(Date.now() - n * DAY_MS).toISOString();
       await page.click(briefBtn);
       await wait(page, 700);
       const d5row = await page.evaluate((id) => window.__mockDb.from("case_tasks").select("due_date").eq("id", id).single().then((r) => r.data), d5task);
-      eq("D5 · snoozing from My Day wrote the due_date change", d5row.due_date, addDays(todayStr, 3));
+      eq("D5 · snoozing from My Day wrote the due_date change (R78: weekend-rolled)", d5row.due_date, roll(addDays(todayStr, 3)));
       // The single repaint (snoozeRepaintAll = loadBriefing() alone, R41 · F1): the task is now due
       // in 3 days, so it no longer qualifies for My Day's overdue/today section at all.
       const stillOnBrief = await page.evaluate((s) => !!document.querySelector(s), briefBtn);

@@ -132,7 +132,191 @@ node tests/r76_case.js
 node tests/r76_intake.js
 node tests/r77_owner.js
 node tests/r77_health.js
+node tests/r78_hands.js
+node tests/r78_fast.js
 ```
+
+**R78 · B notes — "fast and solid", agent B (`tests/r78_hands.js`).** Seven items, every
+contract written down:
+
+  - **B1 — every house overlay traps focus.** openOverlay's capture-phase Tab handler now WRAPS
+    (it used to only stopPropagation, so focus walked out of "Type DELETE to confirm" into the
+    page): the record modal's exact rule — same focusable selector, same `offsetParent !== null`
+    visibility test — scoped to `#overlay-modal`'s own controls; Shift+Tab from the first goes to
+    the last, Tab from the last to the first, and focus found OUTSIDE the box is pulled to its
+    first control. One handler fixes confirmTyped / confirmDestructive / confirmDiscard /
+    lost-reason / bulkMoveStage / stage-back / hold-release / promptBulkTask at once. Escape
+    still cancels (unchanged). CLOSE-RESTORE RULE: finish() re-focuses prevFocus only while it is
+    still `document.contains`-ed; otherwise, in order: the element now holding prevFocus's ID
+    (the repainted twin), the open record modal's first focusable (never `.modal-close`), then
+    `document.body` (given `tabindex="-1"` — programmatically focusable, never a tab stop).
+  - **B2 — the diary gets a keyboard.** `activateDiaryAppts(scopeSel)` runs after each of the
+    three diary paints (month `#diary-grid .appt`, week `#diary-week-view .appt-block`, day
+    `#diary-day-lane .appt-block`) applying R73's makeActivatable: tabindex 0, role="button",
+    Enter/Space → the block's own click → openAppt, whose form re-times/re-dates — the stated
+    keyboard substitute for pointer-only drag (DIARY_DRAG_HINT, unchanged). Blocks now carry
+    `data-title` (the appointment title, esc'd) and aria-label `Open appointment: <title>`.
+    Tab order is DOM order = start-time order. RENDER-side only; no fetch code touched.
+  - **B3 — week-on-phone opens on today, with chevrons.** `#diary-week-view` sits inside
+    **`#diary-week-wrap`** (index.html), a `.board-scroll-wrap` carrying the board's own ‹ ›
+    discs and edge fades via the same `can-scroll-left/right` classes (CSS override
+    `.diary-week-wrap` drops the 38px reserved strip; the discs centre on the grid's midline via
+    the existing `:not(--table)` rule). `syncDiaryWeekScroll(scrollToToday)` runs after every
+    week paint: when the grid genuinely overflows AND `.dw-lane.today` is in the rendered week,
+    `scrollLeft` = the lane's content offset minus `.dw-hours`' width. **MEASURE-GUARD:** a
+    hidden/unpainted view (clientWidth 0) or a zero-width lane writes NOTHING — one retry on a
+    double requestAnimationFrame, then silence. Leaving the week view strips the wrap's
+    can-scroll classes (setDiaryViewMode) so no disc floats over the month grid. Arrows step
+    `max(160, 70% of viewport)`.
+  - **B4 — weekend-aware relative dues (owner decision: SKIP WEEKENDS).**
+    `weekendRollYmd(ymd)` → `{date, rolled}` (noon-anchored calendar walk; Sat→+2, Sun→+1;
+    exposed as `window.weekendRollYmd` for suites). RULE: a RELATIVE verb keeps its stated
+    length, then rolls a Sat/Sun LANDING to Monday; an EXPLICIT date typed/picked in any date
+    field is never touched (snoozeTaskTo, the 📅 pick, plain date inputs — and a chip-filled
+    date the operator overtypes is theirs). Covered verbs: `snoozeTask` +1d/+3d/+1wk (TOAST
+    CONTRACT when rolled: starts `Snoozed to Monday — skipped the weekend`), the case modal's
+    Due chips and the log-call `.fu-chip`s (they FILL the visible date box with the rolled
+    date), `tomorrowDateStr()` (the No-answer/voicemail call-back prefill), the dateless task
+    submit default (toast when rolled: `Task added — due Monday (no date was picked — skipped
+    the weekend)`), `protCallTask` ("…added for Monday — skipped the weekend"), and
+    promptBulkTask's +3d/+1wk chips ("Today" never rolls). NOT covered, deliberately: playbook
+    step offsets (computed schedule, not a pressed verb — playbookDateShift untouched) and
+    Watchtower alert snoozes (`snoozed_until` is a reappearance gate, not a due date).
+    Old-suite patches (commented R78): r17 §D (expected snooze landings run through the roll),
+    r70_calls (call-back due = rolled tomorrow), r75_diary §E3b (same), r12a §D10 (dateless
+    default toast/due branch on whether tomorrow is a weekend).
+  - **B5 — SMS queue selection parity.** Same selectable statuses as email (`queued`/`failed` —
+    `sending` is with the sender and stays untickable, as its per-row Cancel always refused).
+    Namespaced contracts: **`.sms-cb`** (data-id, data-status) / **`.sms-cb-gap`** (gutter on
+    history rows), bar **`#sms-bulk-bar`** with `#sms-bulk-n`, `#sms-bulk-cancel`,
+    `#sms-bulk-retry` (scoped to the FAILED subset, disabled at zero, count in the label),
+    `#sms-bulk-clear`. Bulk cancel confirms through the HOUSE overlay — **`#smscancel-ok` /
+    `#smscancel-cancel`** (openOverlay; wording says a cancelled SMS never sends, names the
+    8:05am run) — writes `status: cancelled` guarded `.in(["queued","failed"])` in chunks,
+    case-notes the batch (one insert, "(bulk)" suffix, best-effort and disclosed), one repaint.
+    Bulk retry loops the existing silent `retrySms` (re-reads the client's current number).
+    Deliberately a MIRROR of the email functions, not a shared template — the email dialog's
+    pinned wording must not be one refactor away from an SMS sentence.
+  - **B6 — introducer portal reset + honest copy.** `admin/introducer.html` gains
+    `#forgot-btn` ("Forgot password?") → `resetPasswordForEmail(email, { redirectTo:
+    INTRODUCER_URL })` where INTRODUCER_URL is the introducer page itself (NOT the admin page —
+    its staff gate bounces introducers); `init()` now watches for the `PASSWORD_RECOVERY` auth
+    event (`type=recovery` hash → wait, exactly app.js's pattern) and `showRecovery()` swaps the
+    login card for a new-password form (`updateUser({password})`, then replaceState + reload).
+    The login submit handler guards `if (!$("#login-email")) return` — the recovery form has
+    taken over (app.js's own guard). Lede corrected: "Refreshed each time you sign in" (it
+    fetches once; it never streamed). The invite result copy (app.js) now sends people to
+    `/admin/introducer.html` and points at that page's "Forgot password?". UNTESTABLE in this
+    harness: the live reset email round-trip and the PASSWORD_RECOVERY event itself
+    (introducer.html runs against real Supabase, not the mock) — r78_hands pins the page's
+    STATIC contracts (elements, redirect target, recovery handler, copy) only.
+  - **B7 — nits.** (a) The case identity card's Loan stat renders a stored `loan_amount` of 0 as
+    "—" (fmtM's not-recorded word — the same thing null renders), matching the board card and
+    pipeline table which both drop a zero; nowhere that a genuine £0 renders as £0 changed.
+    (b) The Gone-quiet "rate coming" badge is bounded to the SAME forward window the rest of
+    Retention uses (`rate_reminder_months` × 30 days, rateBookSelect's arithmetic) — a 2099 rate
+    end keeps its "next rate ends …" line and its sort position but gets NO amber badge.
+    (c) `#locale-note-host` (index.html, with the Today notices) paints `#locale-note` via
+    `renderLocaleNotice()` when `window.localeNoticeNeeded()` — Intl's RESOLVED locale ≠ en-GB
+    AND localStorage **`nx_locale_note`** unset; "Got it" (`#locale-note-dismiss`) writes the
+    key and the note never returns on that browser. NOTE FOR SUITE AUTHORS: Playwright's default
+    context locale is en-US, so the note IS present on Today unless the context passes
+    `locale: "en-GB"` or the localStorage key is seeded.
+
+**R78 · A notes — "fast and solid", agent A (`tests/r78_fast.js` 71).** Seven items, all
+performance/robustness — NO on-screen fact changed anywhere. The binding rules, then the map:
+
+  - **THE core.js / app.js SPLIT (A7).** `admin/core.js` is loaded by a classic `<script>` tag
+    DIRECTLY BEFORE `/admin/app.js` in `index.html` (and therefore `mock.html` — smoke.js copies
+    the tag through). Classic scripts share the global lexical scope, so the moved declarations
+    are visible to app.js exactly as before. **WHAT LIVES IN core.js: strictly pure,
+    dependency-free leaf utilities** — the R21/R30 error capture (`ERROR_LOG`, `logClientError`,
+    the two global handlers, `window.__errorLog`), R78's `dbFail`, `$`, `esc`, `debounce`,
+    `FMT_MONTHS`/`fmtD`, `_localDateFmt`/`localDateStr`/`localMonthStr`, `fmtM`/`fmtM2`, the
+    toast machinery (`TOAST_MS`/`TOAST_ACTION_MS`/`toast`), `IN_CHUNK`/`inChunks`,
+    `READ_PAGE`/`readAll`. **RULE: a declaration may move to core.js only if it references
+    nothing that stays in app.js at DEFINITION time** (call-time references to late globals — ME,
+    MY_ROLE, db, OWNER_ROW_CAP — are fine); overlay/modal/dialog code, the prop engine and
+    anything page-specific stay in app.js. A duplicate top-level `const` across the two scripts
+    is a SyntaxError that kills the whole second script — moving something means DELETING it from
+    app.js in the same commit. sw.js untouched (network-first, no precache — nothing to
+    invalidate).
+  - **dbFail (A6).** `dbFail(where, error[, msg])` (core.js) = the user toast PLUS a
+    `logClientError("caught", …, {where, quiet:true})` entry and R30's error_events fingerprint
+    (`detail.quiet` suppresses only logClientError's generic toast so the user sees ONE toast —
+    the specific one). Default message is byte-identical to the old idiom (`"Error: " + m`,
+    including "Error: undefined" for a message-less object); `msg` overrides for the custom-worded
+    sites ("Error reading offer: …"). All 79 `toast("Error…")` DB-failure sites were swept.
+    **RULE: every NEW DB-failure toast goes through dbFail.** The R76 fact-find "New blank
+    fact-find" insert now checks its error (it used to ignore the result entirely).
+  - **WAVE BUDGETS (A1/A2/A3), pinned by `tests/r78_fast.js` §B** with in-page db.from/rpc
+    instrumentation (40ms added latency; a "wave" = a request starting while nothing is in
+    flight): **dashboard ≤ 6** (measured 2; was 14 with ~1,005ms of pure latency at 75ms RTT),
+    **emails ≤ 3** (measured 2; was 8), **each diary view ≤ 3** (measured 2; was 3–4). How:
+    · `loadDashboard` fires loadProtection / loadBriefing / loadWatchtower / loadUnactioned
+      straight off wave 1 instead of after the awaited rate-feed chain (none reads the feed —
+      verified). Two orderings survive as CHAINS, not awaits: publishAdviserTaskLoad →
+      loadBriefing (R7-5's lead-routing map), run_watchtower → loadWatchtower (T1-11/R55 · F3).
+    · `loadBriefing` = wave 1 (RPC + the four never-dependent reads) → wave 2 (failed-rows'
+      cases + appt/client/lead lookups) → the briefCaseMeta cases read; merges still run in the
+      ORIGINAL order with the ORIGINAL intermediate sorts, so item order (stable-sort ties
+      included) is unchanged.
+    · **`loadPropContext(caseIds, opts)` gained `opts.clientIds` — a HINT, never trusted**: the
+      sibling read fires beside the case read, is FILTERED to the client ids the case read
+      proves, topped up if the hint missed any (normally zero extra waves). v_alerts rows, queue
+      rows and appointments all carry client_id; no-hint callers keep the exact old two-wave
+      behaviour. **RULE: pass the hint where the caller already holds client ids; never
+      hand-derive context facts from the hint itself.**
+    · `loadEmails`: wave 1 = email_queue + sms_queue together; wave 2 = ONE merged
+      loadPropContext over BOTH queues' visible rows (the exact union the two old calls covered,
+      so registerClientProps feeds on the same clients) + case_documents + the lead lookup.
+    · `loadDiaryRange(start, end, who)` → `{appts, ctx, tasks}` (2 waves) is the ONE fetch layer
+      for loadDiary / loadDiaryDay / loadDiaryWeek; the render functions were deliberately not
+      touched (agent B owns their internals this round).
+  - **THE KPI FLICKER (A1c).** `renderTodayKpis` remembers the last markup it wrote ON THE
+    ELEMENT (`row._nxKpiHtml`) and skips the innerHTML write when the rebuilt markup is identical
+    AND the row still holds `.kpi` tiles (so renderLoadError's takeover disarms the guard). A
+    repeat load over unchanged data writes ZERO times; changed data writes exactly ONCE
+    (r78_fast §D pins both). renderTodayKpis is still called twice per dashboard load — the
+    second call is what applies the R74 collapse keys on the FIRST load of a session.
+  - **BOARD CACHE + THE SEQ-GUARD IDIOM (A5).** `boardCache` = ONE `{cases, stageEntry}`
+    snapshot per session (stage entries read over the FULL book so every filter is served);
+    `#board-search`/`#board-adviser` re-filter in memory with ZERO network (the Clients-page
+    treatment). **THE BUST RULE: any write to `cases` or `case_events` busts it — enforced at
+    ONE choke point**, a wrap of db.from's insert/update/upsert/delete for those two tables
+    installed beside createClient (top of app.js), so no call-site sweep and no forgettable new
+    write path; busting is eager (at call time, even if the write then fails). The R23
+    `ownerCapNotice` still reads the cached rows' length — r29_scale's canary passes unchanged.
+    **THE SEQ-GUARD IDIOM: a per-page `let <page>LoadSeq` token, `const seq = ++…` at the top of
+    the loader, `if (seq !== …) return;` after EVERY await before anything paints.** Applied to
+    loadPipeline, loadDashboard, loadEmails and the three diary loaders (one shared
+    `diaryLoadSeq` — the newest load of ANY view wins). Use it on any new loader with a
+    user-repeatable trigger.
+  - **buildJumpNav (A4).** `buildJumpNav(barId, wrapId, sections, visibleFn, opts)` +
+    `jumpNavActivePaint(wrapId, attr, chipIdPrefix, key)` are the ONE implementation behind
+    buildSettingsJumpNav and buildReportsJumpNav (chip markup, <2-items guard, click = beforeJump
+    → smooth scroll → setActive, active-chip scroller nudge). Each page keeps only its own:
+    Settings opens ancestor `<details>` in beforeJump; Reports passes `guardOn:"all"` (R74 · A4c —
+    a one-panel SECTION keeps its chip) and its section scoping via `filterItems`. Chip ids,
+    data attributes, aria and behaviour are byte-identical to the twins this replaced; the
+    scroll-spies and offset measurement stay per-page (they genuinely differ).
+  - **Watchtower micro-fold (A1a):** the owner lookup + loadMyDataHealthAlerts now run in one
+    Promise.all; the owner read carries `client_id` so wtCtx resolves in one hinted wave.
+    loadProtection's select gained `client_id` for the same reason. Failure semantics unchanged.
+  - **VERIFIED DEAD CODE DELETED (A7):** CSS `.note .nd`, `.note-refile-marker`, `.note-review`,
+    `.note-review-detractor`, `.note-review-passive`, `.nowrap-date`, `.sec-sub`,
+    `.cs-section-head` + `#case-tasks` (both only lived in the scroll-margin group),
+    `.spark-svg` (its `#report-advisers svg` twin stays); `propLineHoldsRun()` (no caller since
+    RV-03); 12 orphaned id attributes stripped from index.html (em-bulk-note, the six dead
+    money-*-panel ids, report-diag-panel, report-mine-title, report-ref-scope, rev-heading,
+    wt-bulk-note — each verified unreferenced in app.js/mock/css/tests before removal; the
+    ELEMENTS stay, only the ids went).
+  Old-suite patches (commented R78): r24 §D calls `window.__bustBoardCache()` before its
+  navigate-away-and-back walk (it OBSERVES the board's select string, which the cache would
+  otherwise serve silently); `window.__setOwnerRowCap` itself now busts the board cache (a cached
+  snapshot taken under the old cap must not be served under a new one — which is also what keeps
+  r23 §D green unpatched). Everything else in the battery passes unchanged — every other change
+  is behaviour-preserving by construction, and the full battery was re-run to prove it.
 
 **R77 · B notes — "the owner decides", agent B (`tests/r77_health.js` 75).** Four items, every
 contract written down:

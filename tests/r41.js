@@ -267,8 +267,12 @@ const readRow = (page, table, id) => page.evaluate(async ({ table, id }) => {
          #briefing-panel) is still literally consecutive below, and R68's #ops-strip is still the
          element immediately above the title (r68_mi D2b). The lock is widened by that one entry,
          deliberately, rather than loosened. */
+      /* R78: one more notice-family child — #locale-note-host (the one-time date-locale note,
+         B7c) joins #dash-notices/#whatsnew-band above the title, on exactly the same argument
+         both of them used. The lock is widened by that one entry, deliberately, as it was for
+         each of them; the R11-1 adjacency below the title is untouched. */
       eq("§A2b · #page-dashboard's own child order is the locked one",
-        order, ["dash-notices", "whatsnew-band", "ops-strip", "today-heading", "kpi-row", "dash-cap-notice", "briefing-panel", "watchtower-panel", "unactioned-panel", "grid-2:rate-erc-panel,revenue-panel"]);
+        order, ["dash-notices", "whatsnew-band", "locale-note-host", "ops-strip", "today-heading", "kpi-row", "dash-cap-notice", "briefing-panel", "watchtower-panel", "unactioned-panel", "grid-2:rate-erc-panel,revenue-panel"]);
 
       ok("§A2 · no console errors", noNewErr(page, errBefore), JSON.stringify(page.__err));
       await page.close();
@@ -391,7 +395,9 @@ const readRow = (page, table, id) => page.evaluate(async ({ table, id }) => {
       await wait(page, 600);
       const afterSnooze = await readRow(page, "case_tasks", taskId);
       const addDays = (ymd, n) => { const d = new Date(ymd + "T00:00:00"); d.setDate(d.getDate() + n); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
-      eq("§C2 · +3d moved the due date", afterSnooze.due_date, addDays(todayStr, 3));
+      /* R78: snoozes are weekend-aware (B4) — a +3d landing on Sat/Sun is written as Monday. */
+      const rollR78 = (ymd) => { const d = new Date(ymd + "T12:00:00"); const w = d.getDay(); if (w !== 6 && w !== 0) return ymd; d.setDate(d.getDate() + (w === 6 ? 2 : 1)); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+      eq("§C2 · +3d moved the due date (R78: weekend-rolled)", afterSnooze.due_date, rollR78(addDays(todayStr, 3)));
       const rowGoneAfterSnooze = await page.evaluate((id) => !document.getElementById(`snooze-3d-brief-${id}`), taskId);
       ok("§C3 · the row leaves My Day once its due date is past today — repainted", rowGoneAfterSnooze);
 

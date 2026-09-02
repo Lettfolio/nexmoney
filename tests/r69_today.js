@@ -369,8 +369,13 @@ function readGroup(page, caseId) {
         const kpi = document.querySelector("#kpi-row");
         const tiles = [...document.querySelectorAll("#kpi-row .kpi")];
         const tops = [...new Set(tiles.map((t) => Math.round(t.getBoundingClientRect().top)))];
+        /* R78: the one-time date-locale note (#locale-note, B7c) paints on this page under
+           Playwright's default en-US context — a dismissible strip an en-GB office never sees.
+           Its measured height is deducted so this stays a pin on the page's OWN shape. */
+        const localeNote = document.getElementById("locale-note");
+        const localeNoteH = localeNote ? localeNote.getBoundingClientRect().height : 0;
         return {
-          firstRowTop: first ? Math.round(first.getBoundingClientRect().top + window.scrollY) : null,
+          firstRowTop: first ? Math.round(first.getBoundingClientRect().top + window.scrollY - localeNoteH) : null,
           scrollWidth: document.documentElement.scrollWidth,
           bodyScrollWidth: document.body.scrollWidth,
           tiles: tiles.length,

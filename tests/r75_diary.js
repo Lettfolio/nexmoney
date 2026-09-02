@@ -620,8 +620,15 @@ const apptRow = (page, id) => page.evaluate(async (i) => {
       assignee: document.querySelector("#cs-call-fu-assignee").value,
     }));
     eq("E3 · “No answer” still pre-fills the call-back (R70 · B1)", prefill.title, "Call again");
-    const wantDue = londonYmd(new Date(Date.now() + 86400000));
-    eq("E3b · …dated tomorrow, Europe/London", prefill.due, wantDue);
+    /* R78: the prefill is a relative verb, so a Fri/Sat "tomorrow" rolls to Monday (B4). */
+    const wantDue = (() => {
+      const s = londonYmd(new Date(Date.now() + 86400000));
+      const d = new Date(s + "T12:00:00"), dow = d.getDay();
+      if (dow !== 6 && dow !== 0) return s;
+      d.setDate(d.getDate() + (dow === 6 ? 2 : 1));
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    })();
+    eq("E3b · …dated the working tomorrow, Europe/London (R78 weekend roll)", prefill.due, wantDue);
     eq("E3c · …assigned to the case's own adviser (R72 defaultAssignee)", prefill.assignee, "p2");
     await page.click("#overlay-modal #cs-call-save");
     await page.waitForTimeout(2200);

@@ -148,6 +148,13 @@
            renderWhatsNewBand(); dismissal is a browser preference (nx_whatsnew_r72), never a
            server write. -->
       <div id="whatsnew-band" class="hidden"></div>
+      <!-- R78 · B7c — one-time date-locale note. Chromium formats <input type="date"> by the
+           BROWSER's locale, not the page's lang="en-GB", so a user on a US-locale browser sees
+           mm/dd/yyyy pickers under an app that renders every date British. One quiet dismissible
+           line (localStorage nx_locale_note), painted by renderLocaleNotice() only while
+           Intl's resolved locale is not en-GB. Sits with the notices, above the pinned
+           #today-heading → #kpi-row → #briefing-panel adjacency (r11_ux). -->
+      <div id="locale-note-host"></div>
       <!-- R68 · M16 — ADMIN OPS STRIP. The half-dozen numbers that say whether the machinery
            behind the book is keeping up — queued mail, leads nobody has picked up, cases nobody
            owns, documents that have run out of chases, sends that failed. Each already exists on
@@ -212,7 +219,7 @@
         <p class="panel-sub" id="watchtower-sub">Problems found automatically — resolves itself when fixed. <strong>Two checks watch a pair of dates:</strong> <em>Offer expires before completion</em> catches an offer that dies before the completion it is meant to fund, so it has to be re-issued; <em>Completing inside old ERC</em> catches a retention case completing while the client's old deal is still inside its Early Repayment Charge, so they pay to leave early. <em>Client emails unanswered</em> is counted per client — one row per person waiting on a reply, not one per message.</p>
         <!-- R72 · B2 (H5b) — bulk triage. Its own paragraph rather than a clause on the one above:
              that paragraph is about what the CHECKS mean, this is about what you can do to them. -->
-        <p class="panel-sub" id="wt-bulk-note"><strong>Clear a whole run of them at once.</strong> Tick the alerts you have judged — or use <em>Select all</em> on a check's own heading to take every row of that one check — then <em>Snooze 7 days</em>, <em>Snooze 30 days</em> or <em>Dismiss</em> on the bar. One confirmation for the batch, one optional reason applied to all of them, and the list repaints once at the end. Neither verb fixes anything: a snooze hides an alert until the date passes, and a dismissal closes it — either way, a problem that is still there is raised again the next time the checks run. A reason is required when the batch includes a <strong>critical</strong> alert, and it is written onto that alert's case, exactly as it is when you snooze or dismiss one on its own.</p>
+        <p class="panel-sub"><strong>Clear a whole run of them at once.</strong> Tick the alerts you have judged — or use <em>Select all</em> on a check's own heading to take every row of that one check — then <em>Snooze 7 days</em>, <em>Snooze 30 days</em> or <em>Dismiss</em> on the bar. One confirmation for the batch, one optional reason applied to all of them, and the list repaints once at the end. Neither verb fixes anything: a snooze hides an alert until the date passes, and a dismissal closes it — either way, a problem that is still there is raised again the next time the checks run. A reason is required when the batch includes a <strong>critical</strong> alert, and it is written onto that alert's case, exactly as it is when you snooze or dismiss one on its own.</p>
         <!-- R11-2a — severity filter chips, written by loadWatchtower so the counts are live.
              Client-side only: it filters the rows already fetched, it does not re-query. -->
         <div id="wt-filters" class="pipe-segment wt-filters"></div>
@@ -404,7 +411,17 @@
            entirely by loadDiaryWeek() into this one container (a CSS grid of head cells + lane
            cells), so the month grid and the day lane above/below are never touched by it — the
            three views are siblings toggled by .hidden, exactly as Month/Day already were. -->
-      <div class="diary-week-view hidden" id="diary-week-view"></div>
+      <!-- R78 · B3 — the week view rides the board's own scroll affordance: the wrap carries the
+           can-scroll-left/right edge fades and the two ‹ › discs (same classes, same CSS), shown
+           only while the 780px grid genuinely overflows (a phone). syncDiaryWeekScroll() also
+           opens the scrolled week ON TODAY's lane when today is in the rendered week. The wrap is
+           display:contents-free and unhidden; the week VIEW keeps its own .hidden toggle exactly
+           as before, so setDiaryViewMode and every suite reading #diary-week-view are untouched. -->
+      <div class="board-scroll-wrap diary-week-wrap" id="diary-week-wrap">
+        <div class="diary-week-view hidden" id="diary-week-view"></div>
+        <button type="button" class="board-scroll-arrow-left" aria-label="Scroll to earlier days" title="Scroll to earlier days">‹</button>
+        <button type="button" class="board-scroll-arrow" aria-label="Scroll to later days" title="Scroll to later days">›</button>
+      </div>
       <!-- B9 (R5-31) — Day view: a single time-axis column, hidden while Month is active. The month
            grid above is left completely alone so toggling never touches its markup. -->
       <div class="diary-day-view hidden" id="diary-day-view">
@@ -583,7 +600,7 @@
              · nothing is written until a human confirms it, per field
              · nothing is emailed, and no stage moves, as a side effect
            =============================================================== -->
-      <h2 id="rev-heading">Revolution sync</h2>
+      <h2>Revolution sync</h2>
       <p class="panel-sub">The weekly <code>client_data_export_V2</code> from Stonebridge. Everything is keyed into Revolution first, so this reads <em>from</em> it: it matches each row to a client and a case you already hold, shows the field-by-field difference, and writes only what you tick. It never queues an email, and it never moves a case stage on its own.</p>
       <!-- R75 · B1 — .panel-secondary: the Revolution door is the WEEKLY, second-choice
              one (the bulk AI import is the front door), so it reads as the quieter of the
@@ -674,7 +691,7 @@
            firm-wide and nothing belonging to another adviser appears on it. Hidden for the Owner,
            whose fuller figures are below. -->
       <div class="panel hidden" id="report-mine-panel">
-        <h3 id="report-mine-title">My numbers</h3>
+        <h3>My numbers</h3>
         <p class="panel-sub" id="report-mine-scope"></p>
         <div class="kpi-row" id="report-mine" style="margin:12px 0 0;"></div>
         <!-- R68 · M7 — the adviser's own "fees earned this month vs my target" bar. Its own
@@ -1014,7 +1031,7 @@
       <div class="panel" id="report-referrals-panel">
         <div class="panel-head-row">
           <h3>Referrals out — who we sent where</h3>
-          <div class="pipe-segment" id="report-ref-scope" role="tablist" aria-label="Scope the referrals report">
+          <div class="pipe-segment" role="tablist" aria-label="Scope the referrals report">
             <button type="button" class="seg-btn" id="report-ref-scope-mine" data-refout-scope="mine" role="tab" aria-selected="false" title="Only referrals you made">Mine</button>
             <button type="button" class="seg-btn" id="report-ref-scope-all" data-refout-scope="all" role="tab" aria-selected="false" title="Every adviser's referrals">All</button>
           </div>
@@ -1046,11 +1063,11 @@
       <p class="panel-sub" id="money-scope"></p>
       <div id="money-denied" class="dq-notice hidden"></div>
       <div id="money-body">
-        <div class="panel" id="money-banked-panel">
+        <div class="panel">
           <h3>Banked last week</h3>
           <div class="kpi-row" id="money-banked" style="margin:12px 0 0;"></div>
         </div>
-        <div class="panel" id="money-owed-panel">
+        <div class="panel">
           <div class="panel-head-row">
             <h3>Owed to you, by age</h3>
             <button type="button" class="btn btn-sm" id="money-owed-open" title="Open the full Money owed list on Reports">Open the full list →</button>
@@ -1059,24 +1076,24 @@
           <div id="money-owed"></div>
         </div>
         <div class="grid-2">
-          <div class="panel" id="money-rateends-panel">
+          <div class="panel">
             <h3>Top rate-ends in the next 60 days</h3>
             <p class="panel-sub" id="money-rateends-basis"></p>
             <div id="money-rateends"></div>
           </div>
-          <div class="panel" id="money-cold-panel">
+          <div class="panel">
             <h3>Protection quotes gone cold</h3>
             <p class="panel-sub" id="money-cold-basis"></p>
             <div id="money-cold"></div>
           </div>
         </div>
         <div class="grid-2">
-          <div class="panel" id="money-movement-panel">
+          <div class="panel">
             <h3>Movement</h3>
             <p class="panel-sub" id="money-movement-basis"></p>
             <div id="money-movement"></div>
           </div>
-          <div class="panel" id="money-leads-panel">
+          <div class="panel">
             <h3>New leads last week, by source</h3>
             <p class="panel-sub" id="money-leads-basis"></p>
             <div id="money-leads"></div>
@@ -1190,7 +1207,7 @@
       <p class="panel-sub em-summary" id="em-summary"></p>
       <!-- R72 · B3 (M3) — the queue can now be READ and stopped in bulk. Stated once, above the
            list, because both affordances are new and neither is obvious from a checkbox. -->
-      <p class="panel-sub" id="em-bulk-note"><strong>Read one before it goes.</strong> Every queued or failed row has a <em>Preview this email</em> fold showing the subject and, where the wording is already written, the text itself — shown as plain formatting only, with no links, images or styling loaded from it. <strong>Stop several at once.</strong> Tick the queued or failed rows you do not want sent and use <em>Cancel selected</em> on the bar: one confirmation for the whole batch, and a cancelled email never sends and is never retried. <em>Retry</em> stays what it always was — it only ever acts on rows that have already failed, and says how many of your selection that is.</p>
+      <p class="panel-sub"><strong>Read one before it goes.</strong> Every queued or failed row has a <em>Preview this email</em> fold showing the subject and, where the wording is already written, the text itself — shown as plain formatting only, with no links, images or styling loaded from it. <strong>Stop several at once.</strong> Tick the queued or failed rows you do not want sent and use <em>Cancel selected</em> on the bar: one confirmation for the whole batch, and a cancelled email never sends and is never retried. <em>Retry</em> stays what it always was — it only ever acts on rows that have already failed, and says how many of your selection that is.</p>
       <div id="email-list"></div>
       <div class="panel" style="margin-top:20px;">
         <h3>SMS activity</h3>
@@ -1349,7 +1366,7 @@
         <div class="mi-section hidden" id="report-diag-section">
           <h3 class="mi-section-head">Diagnostics</h3>
           <p class="panel-sub">Client-side error capture for this session — visible to Owners / Administrators only and never sent anywhere. Export or copy it to share with support.</p>
-          <div class="panel" id="report-diag-panel">
+          <div class="panel">
             <h3>Session health<button type="button" class="btn btn-sm mi-csv-btn" id="report-diag-csv" title="Download the error log as CSV">⭳ CSV</button><button type="button" class="btn btn-sm" id="report-diag-copy" title="Copy the diagnostics to your clipboard">Copy diagnostics</button><button type="button" class="btn btn-sm" id="report-diag-clear" title="Clear this session's in-memory error log">Clear</button></h3>
             <div class="panel-sub" id="report-diag-health"></div>
             <div id="diag-error-table" style="margin-top:12px;"></div>
@@ -1448,6 +1465,10 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.110.7/dist/umd/supabase.js" integrity="sha384-hazsLVND17GNLVdtV19te6qbFT2YuLgl8SamcF+QR5eIOC+W4dGKrUNMxU1jH1zD" crossorigin="anonymous"></script>
 <!-- R55 · F7 — SheetJS (~1MB) is only needed by the Import / reconciliation / offer-export flows,
      so it no longer blocks every boot: app.js lazy-loads it on first use (ensureXlsx()). -->
+<!-- R78 · A7 — core.js FIRST: pure leaf utilities ($, esc, toast, fmt*, localDateStr, readAll,
+     inChunks) plus the R21/R30 error capture and R78's dbFail, shared into app.js via the
+     classic-script global scope. Load order is a contract: core.js, then app.js. -->
+<script src="/admin/core.js"></script>
 <script src="/admin/app.js"></script>
 <script>
   // PWA install support. Register only over https (never file:// or the sandbox http harness).
