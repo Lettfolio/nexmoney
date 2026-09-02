@@ -550,7 +550,12 @@ const favImgs = (page, names) => page.evaluate((ns) => {
         const { data: after } = await db.from("email_queue").select("id,status").eq("status", "queued");
         return { res: data, id, stillQueued: after.length };
       });
-      eq("D9 · a scoped run touches exactly the ids it was given", scoped.res.sent + scoped.res.failed, 1);
+      /* R79: the scoped path honours the hold like prod v18/v19 now (r79_send §F pins the shape) —
+         under the seeded hold a NON-EMPTY scope answers {held, pending-for-its-own-ids} and
+         touches NOTHING. The old pin (sent+failed === 1 with the hold ON) was exactly the
+         mock-only gap R79 · A5 closed. */
+      eq("D9 · a scoped run under the hold sends nothing and counts only its own ids",
+        [scoped.res.held === true, scoped.res.pending], [true, 1]);
       ok("D9b · …and leaves every other queued row alone", scoped.stillQueued === (await dueNow()).queued, JSON.stringify(scoped));
       eq("D10 · no console errors around the probe", realErr(page), []);
       await page.close();

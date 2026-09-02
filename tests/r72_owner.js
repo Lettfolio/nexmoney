@@ -627,12 +627,16 @@ const pickChip = async (page, k) => {
 
     await page.click("#whatsnew-dismiss");
     await page.waitForTimeout(300);
+    /* PATCHED R79: dismissal now writes the per-user LAST-SEEN RELEASE marker
+       (nx_whatsnew_last_<uid> = the current release number) instead of the old per-release
+       "seen" flag — same browser-preference contract, one key for all future releases. The old
+       nx_whatsnew_r72 key is still honoured on read (r79_locks §E6 pins that). */
     const afterClick = await page.evaluate(() => ({
       hidden: document.getElementById("whatsnew-band").classList.contains("hidden"),
-      key: localStorage.getItem("nx_whatsnew_r72"),
+      key: localStorage.getItem("nx_whatsnew_last_p4"),
     }));
     eq("§D7a · dismissing hides it", afterClick.hidden, true);
-    eq("§D7b · …and records the choice under the release's own key", afterClick.key, "seen");
+    eq("§D7b · …and records the choice under the last-seen-release key (R79)", afterClick.key, String(await page.evaluate(() => WHATSNEW_RELEASE)));
 
     await page.reload({ waitUntil: "networkidle" });
     await page.waitForTimeout(2000);

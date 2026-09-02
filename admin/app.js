@@ -591,6 +591,7 @@ let introducerNames = {};
 let authUid = null;
 function lsGet(key) { try { return localStorage.getItem(key); } catch (e) { return null; } }
 function lsSet(key, val) { try { localStorage.setItem(key, val); } catch (e) { /* storage unavailable — degrade to session-only */ } }
+function lsDel(key) { try { localStorage.removeItem(key); } catch (e) { /* storage unavailable — nothing to remove */ } }
 const segStoreKey = (uid) => `nx_seg_${uid}`;
 const viewStoreKey = (uid) => `nx_view_${uid}`;
 /* ==========================================================================
@@ -3226,6 +3227,22 @@ function docsUploadUrl(token) {
   const base = String(settings.site_url || location.origin || "").replace(/\/+$/, "");
   return `${base}/docs?token=${encodeURIComponent(token || "")}`;
 }
+/* R79 · B2 — 30-DAY LINKS (owner decision). A minted bearer link (docs upload, fact-find) now
+   carries an expiry stamped at mint time: now() + 30 days, stored as ISO
+   (cases.doc_token_expires_at / fact_finds.expires_at — both timestamptz). The date is DISPLAYED
+   through fmtD like every other date; localDateStr walking is presentation only, never storage.
+   linkExpiryLine() is the one wording for the honest state both link areas show — "valid until"
+   / "expired — regenerate" — so the two screens can never phrase the same fact differently. A
+   row with NO expiry is a link minted before this shipped: said plainly rather than pretended
+   either way. */
+const LINK_TOKEN_DAYS = 30;
+function linkExpiryIso() { return new Date(Date.now() + LINK_TOKEN_DAYS * 86400000).toISOString(); }
+function linkExpiryLine(expIso) {
+  if (!expIso) return { expired: false, legacy: true, text: "This link has no expiry date — it predates 30-day links and never stops working on its own. Regenerate it to issue one that does." };
+  return new Date(expIso).getTime() < Date.now()
+    ? { expired: true, legacy: false, text: `Link expired ${fmtD(expIso)} — regenerate to send a fresh one.` }
+    : { expired: false, legacy: false, text: `Link valid until ${fmtD(expIso)}.` };
+}
 /* A token, generated here rather than server-side because the case row is the only thing that has
    to hold it and the app is already writing that row. crypto.randomUUID where it exists; the
    fallback is getRandomValues, never Math.random — this is a bearer credential, and a predictable
@@ -3270,6 +3287,9 @@ async function renderCaseDocs(caseId, c, state) {
   const out = docOutstanding(docs);
   const canDelete = isAdminOrOwner();
   const token = c && c.doc_token;
+  /* R79 · B2 — the honest state of the existing upload link, said where the Copy button lives.
+     Only meaningful once a token exists; a case with no link yet has nothing to be honest about. */
+  const linkState = token ? linkExpiryLine(c.doc_token_expires_at) : null;
   const rowsHtml = docs.length
     ? docs.map((d) => {
       const s = DOC_STATUSES.includes(d.status) ? d.status : "requested";
@@ -3317,12 +3337,17 @@ async function renderCaseDocs(caseId, c, state) {
            nobody has to read one sentence to understand the other control. Still enabled: warning,
            not blocking. */ ""}
       <button type="button" class="btn btn-sm${cool ? " btn-cooldown" : ""}" id="docs-send-btn" title="${esc(cool ? `${cool.sentence} Sending now goes out anyway and restarts the window — you will be asked to confirm. Nothing else in the queue is sent.` : "Queue the document-request email for this case only. Nothing else in the queue is sent.")}">✉️ Send document request now${cool ? ` <span class="doc-cool-tag">· quiet until ${esc(cool.dateText)}</span>` : ""}</button>
+      ${/* R79 · B2 — the regenerate verb, only where a link already exists to invalidate. */ ""}
+      ${token ? `<button type="button" class="btn btn-sm" id="docs-link-regen" title="Make a new upload link with a fresh 30-day expiry. The current link stops working the moment the new one is made.">↻ Regenerate link</button>` : ""}
     </div>
+    ${linkState ? `<p class="panel-sub" id="docs-link-state"${linkState.expired ? ' style="color:var(--red);font-weight:600;"' : ""}>🔗 ${esc(linkState.text)}</p>` : ""}
     <div class="doc-link-out hidden" id="docs-link-out"></div>`;
   body.querySelectorAll(".doc-act").forEach((b) => (b.onclick = () => docAction(b.dataset.act, b.dataset.doc, caseId, c)));
   body.querySelectorAll(".doc-open").forEach((b) => (b.onclick = () => openDocFile(b.dataset.path, b)));
   $("#docs-add-btn").onclick = () => addDocItems(caseId, c);
   $("#docs-link-btn").onclick = () => copyDocUploadLink(caseId, c);
+  const regenBtn = $("#docs-link-regen");
+  if (regenBtn) regenBtn.onclick = () => regenDocLink(caseId, c);
   $("#docs-send-btn").onclick = (e) => sendDocsRequestNow(caseId, c, e, chase);
 }
 /* One handler for the four row actions. Every write is a single UPDATE (or DELETE) on the row's
@@ -3700,9 +3725,11 @@ async function copyDocUploadLink(caseId, c) {
     if ((await docsSupported()) === false) return toast("This database has no upload-link column yet (run migration m10).");
     token = newDocToken();
     if (!token) return toast("This browser cannot generate a secure link — open the case in a current browser.");
-    const { error } = await db.from("cases").update({ doc_token: token }).eq("id", caseId);
+    /* R79 · B2 — a minted link carries its 30-day expiry from birth (owner decision). */
+    const mintedExpiry = linkExpiryIso();
+    const { error } = await db.from("cases").update({ doc_token: token, doc_token_expires_at: mintedExpiry }).eq("id", caseId);
     if (error) { if (isMissingColumnError(error)) DOCS_SUPPORTED = false; return toast("The link could not be saved: " + error.message); }
-    if (c) c.doc_token = token;
+    if (c) { c.doc_token = token; c.doc_token_expires_at = mintedExpiry; }
     /* The case row's version just moved — re-baseline, or the operator's very next Save on this
        modal is refused as "somebody else changed this". Same reason the review/reminder actions do. */
     await refreshOpenedStamp(caseId);
@@ -3713,7 +3740,13 @@ async function copyDocUploadLink(caseId, c) {
     out.innerHTML = `<label>Upload link
         <div style="display:flex;gap:8px;"><input id="docs-link-input" readonly value="${esc(url)}" style="flex:1;"><button type="button" class="btn btn-sm" id="docs-link-copy">Copy</button></div>
       </label>
-      <p class="panel-sub" id="docs-link-warn"><strong>Anyone with this link can upload documents to this case.</strong> It does not ask for a login and it does not expire on its own. The page shows the client's first name and the list of items — nothing else about them or the case. Send it to the client, not to a group.</p>`;
+      <p class="panel-sub" id="docs-link-warn"><strong>Anyone with this link can upload documents to this case.</strong> It does not ask for a login${(() => {
+        /* R79 · B2 — the warning tells the truth about expiry per link: a stamped link names its
+           end date; a pre-expiry link keeps the old sentence, because for that link it is true. */
+        const ls = linkExpiryLine(c && c.doc_token_expires_at);
+        if (ls.legacy) return " and it does not expire on its own";
+        return ls.expired ? `. It expired ${fmtD(c.doc_token_expires_at)} — regenerate it before sending` : `. It stops working on ${fmtD(c.doc_token_expires_at)} (30 days from when it was made)`;
+      })()}. The page shows the client's first name and the list of items — nothing else about them or the case. Send it to the client, not to a group.</p>`;
     const copy = () => {
       const el = $("#docs-link-input");
       el.select();
@@ -3726,6 +3759,28 @@ async function copyDocUploadLink(caseId, c) {
   }
   const btn = $("#docs-link-btn");
   if (btn) btn.textContent = "🔗 Copy upload link";
+}
+/* R79 · B2 — REGENERATE THE UPLOAD LINK. A new token replaces the old one on the case row, so the
+   old link is invalidated BY VALUE — the address itself stops resolving, whoever holds it. The
+   confirm says exactly that, because "regenerate" sounds free and this half of it is not: a link
+   already sent to the client dies with the old value. New expiry = now() + 30 days, same as a
+   fresh mint. Goes through db.from("cases") so R78's write-wrap busts the board cache for free. */
+async function regenDocLink(caseId, c) {
+  const token = newDocToken();
+  if (!token) return toast("This browser cannot generate a secure link — open the case in a current browser.");
+  if (!(await confirmDestructive({
+    title: "Regenerate the upload link?",
+    body: "A new link is made and <strong>the current link stops working immediately</strong> — the old address itself becomes invalid, so anyone still holding it (including the client, if it was already sent) can no longer use it. The new link is valid for 30 days. Documents already uploaded stay on the case.",
+    okLabel: "Regenerate the link", cancelLabel: "Cancel", danger: false,
+  }))) return;
+  const exp = linkExpiryIso();
+  const { error } = await db.from("cases").update({ doc_token: token, doc_token_expires_at: exp }).eq("id", caseId);
+  if (error) return dbFail("regenDocLink", error, "The link could not be regenerated: " + error.message);
+  if (c) { c.doc_token = token; c.doc_token_expires_at = exp; }
+  /* Same reason copyDocUploadLink does it: the case row's version just moved. */
+  await refreshOpenedStamp(caseId);
+  toast("New upload link made — the old link no longer works");
+  await renderCaseDocs(caseId, c);
 }
 /* SEND DOCUMENT REQUEST NOW. Goes through queueEmail, which queues ONE row and sends exactly that
    row by id — it never flushes the queue. The refusal below is the honest half: a checklist with
@@ -3897,7 +3952,12 @@ async function loadPropContext(caseIds, opts) {
        needed, unlike property_address), and it is what lets the email queue's preview sign a
        house-template email off with the case's own adviser instead of the firm default. Nothing
        else reads it off this context, and no existing caller changes shape. */
-    const cols = "id,client_id,case_kind,lender,stage,assigned_to" + (propOn ? ",property_address" : "");
+    /* R79 · A2 — `opts.extraCols`: extra BASE columns a caller needs off the same read (the email
+       queue's preview replica reads the rate/fee/token columns to compose v19's real sentences).
+       Base columns only — anything feature-gated (property_address) keeps its own probe. Callers
+       that pass nothing get the byte-identical select they always had. */
+    const cols = "id,client_id,case_kind,lender,stage,assigned_to" + (propOn ? ",property_address" : "")
+      + (opts && opts.extraCols ? "," + opts.extraCols : "");
     const sibCols = "id,client_id,created_at" + (propOn ? ",property_address" : "");
     /* ======================================================================
        R78 · A2 — THE SIBLING READ NO LONGER WAITS FOR THE CASE READ.
@@ -4607,7 +4667,19 @@ $("#login-form").addEventListener("submit", async (e) => {
   if (error) { $("#login-error").textContent = error.message; $("#login-error").classList.remove("hidden"); return; }
   showApp(data.session);
 });
-$("#logout-btn").addEventListener("click", () => db.auth.signOut());
+/* R79 · B6 — EXPLICIT SIGN-OUT RELOADS THE PAGE. showLogin() only hides #app-view: the previous
+   user's whole book — rendered lists, boardCache, TEAM, settings, every closure — stayed live in
+   the DOM and the JS heap on a shared machine, one devtools (or one showApp bug) from being read
+   by whoever sits down next. A reload after the auth sign-out completes tears all of it down and
+   brings the login screen up on a genuinely clean page. ONLY this deliberate button reloads: the
+   INVOLUNTARY !session path (token expiry, sign-out in another tab) keeps R76 · B4's signed-out
+   strip, because reloading over an open modal would destroy exactly the half-typed work the
+   strip exists to preserve. The reload runs even if signOut() itself errors — a dead token still
+   deserves a clean screen, and the reloaded page re-checks the session for itself. */
+$("#logout-btn").addEventListener("click", async () => {
+  try { await db.auth.signOut(); } catch (e) { /* session already invalid — the reload sorts it out */ }
+  location.reload();
+});
 $("#forgot-btn").addEventListener("click", async () => {
   const email = $("#login-email").value.trim() || prompt("Your account email:");
   if (!email) return;
@@ -4904,12 +4976,15 @@ function openHelpPanel() {
         PROGRAMMATICALLY (page.evaluate(() => window.nav(...)), a test/
         automation calling openCase/openClient directly) rather than by a
         real click the pointer-events design would otherwise have to catch.
-     5. Ending the tour this way — by navigating, or by any click outside the
-        bubble — is a quiet interruption, not a dismissal: it does NOT call
-        mark_tour_seen(). Only Skip tour, the last step's Next/Finish, and
-        Escape count as the operator actually being done with it, and only
-        those call the RPC. A stray click while it's up just means it may
-        offer itself again next time the flag is still null.
+     5. Ending the tour this way — by navigating or opening a modal — is a
+        quiet interruption, not a dismissal: it does NOT call
+        mark_tour_seen(). Only Skip tour, the last step's Next/Finish (or a
+        click on the LAST step's own spotlighted target), and Escape count as
+        the operator actually being done with it, and only those call the
+        RPC. R79 · B4: a stray click outside the bubble no longer ends the
+        tour at all (a click on the spotlighted target advances it — see
+        tourClickHandler), and a quiet interruption resumes at the same step
+        next time (nx_tour_step_<uid>, cleared only by the deliberate exits).
    ========================================================================== */
 /* R41 · F1 — TWO STEPS FEWER, BECAUSE TWO SCREENS FEWER.
    The tour used to walk past My Day and then stop at the Tasks-due and Today's-appointments
@@ -5011,15 +5086,40 @@ function tourKeyHandler(e) {
   if (e.key === "Escape") { e.preventDefault(); tourEnd(true); }
 }
 function tourClickHandler(e) {
+  /* R79 · B4 — AN OUTSIDE CLICK NO LONGER KILLS THE TOUR. It used to tourEnd(false), which meant
+     one stray click anywhere silently ended the walk-through, and (before progress was
+     remembered) the tour then restarted from step 1 on every visit until somebody happened to
+     press Finish or Skip — repro'd at base. Now:
+       · a click ON THE SPOTLIGHTED TARGET counts as doing the step — the tour advances (or, on
+         the last step, finishes: they did the thing the last bubble asked for). The click still
+         reaches the real element (capture phase, no preventDefault), so if the target is a nav
+         button the navigation happens too — and nav()'s own tourEnd(false) then closes the tour
+         with progress saved, which is the least-surprising outcome for "I clicked Pipeline while
+         the tour was pointing at Pipeline".
+       · any OTHER outside click does nothing — the bubble stays. Escape, Skip and Finish remain
+         the deliberate exits; nav() and openModal() remain the quiet ones (safety note 4). */
   if (!tourState) return;
   const bubble = $("#tour-bubble");
   if (bubble && bubble.contains(e.target)) return; // the bubble's own Next/Skip handle themselves
-  tourEnd(false); // a real interaction with the app underneath — step aside quietly, do not mark seen
+  const step = tourState.steps[tourState.idx];
+  let targetEl = null;
+  try { targetEl = step && document.querySelector(step.target); } catch (err) { targetEl = null; }
+  if (targetEl && e.target instanceof Node && targetEl.contains(e.target)) {
+    if (tourState.idx >= tourState.steps.length - 1) { tourEnd(true); return; }
+    tourState.idx++;
+    tourRender();
+  }
 }
+/* R79 · B4 — WHERE THE TOUR IS UP TO, per signed-in user, in the same localStorage the app's
+   other browser preferences use. Written on every render, cleared only by a DELIBERATE finish
+   (Finish / Skip / Escape — the same three that call mark_tour_seen), so a quiet interruption
+   (stray navigation, modal, reload) resumes at the same step next time instead of step 1. */
+const tourStepKey = () => "nx_tour_step_" + ((ME && ME.id) || "anon");
 function tourRender() {
   if (!tourState) return;
   const step = tourState.steps[tourState.idx];
   if (!step) { tourEnd(true); return; }
+  lsSet(tourStepKey(), String(tourState.idx));   // R79 · B4 — remember progress as it happens
   const targetEl = document.querySelector(step.target);
   if (!targetEl) { tourState.idx++; tourRender(); return; } // target vanished since the tour started — skip it
   document.querySelectorAll(".tour-spotlight").forEach((el) => el.classList.remove("tour-spotlight"));
@@ -5068,6 +5168,8 @@ function tourEnd(markSeen) {
   document.removeEventListener("click", tourClickHandler, true);
   window.removeEventListener("resize", tourReposition);
   if (markSeen) {
+    lsDel(tourStepKey());   // R79 · B4 — deliberately done with it: nothing to resume
+    // (a NON-markSeen end keeps the key, holding the last rendered step for next time)
     // Fire-and-forget: mark_tour_seen() is a no-op the second time it's ever called (mock and
     // prod both guard it), and a failure here must never re-show a dismissed tour — just toast.
     /* R61-HF1 — db.rpc() returns a PostgrestBuilder, which is thenable but has NO .catch, so
@@ -5089,11 +5191,20 @@ function runFirstRunTour(opts) {
   TOUR_STEPS = tourStepsFor(MY_ROLE || (ME && ME.role));
   const steps = TOUR_STEPS.filter((s) => { try { return !!document.querySelector(s.target); } catch (e) { return false; } });
   if (!steps.length) return;            // nothing on screen to point at — say nothing rather than guess
+  /* R79 · B4 — RESUME where an interrupted tour left off. Only for the automatic first-run start:
+     an explicit Retake (force) is a request to see the whole thing again, so it starts at 0 (and
+     its own renders re-save from there). An out-of-range saved step (the list shrank, a garbage
+     value) falls back to 0 rather than guessing. */
+  let startIdx = 0;
+  if (!o.force) {
+    const saved = parseInt(lsGet(tourStepKey()), 10);
+    if (Number.isInteger(saved) && saved > 0 && saved < steps.length) startIdx = saved;
+  }
   const overlay = document.createElement("div");
   overlay.id = "tour-overlay";
   overlay.innerHTML = '<div id="tour-bubble" role="dialog" aria-label="Guided tour"></div>';
   document.body.appendChild(overlay);
-  tourState = { steps, idx: 0 };
+  tourState = { steps, idx: startIdx };
   document.addEventListener("keydown", tourKeyHandler, true);
   // R12b: capture phase, see matching comment on the removeEventListener call in tourEnd().
   document.addEventListener("click", tourClickHandler, true);
@@ -5129,14 +5240,41 @@ function runFirstRunTour(opts) {
    straight back. It is hidden, not dismissed — the key is untouched, so it is
    still waiting on the desktop where a changelog is actually read.
    ========================================================================== */
-const WHATSNEW_KEY = "nx_whatsnew_r72";
-/* ONE line, and it has to stay one line: Today is read on a phone, where every extra sentence
-   here is a sentence between the reader and the first thing they have to do (r69_today §B pins
-   how far down the page My Day's first row may start at 390×844). Four things, named in the
-   words the screens themselves use. */
-const WHATSNEW_LINE = "New since you were last here: bulk playbooks on Pipeline, faster Data health with inline fixes, call and outcome chips on Retention, and a go-live list on Settings.";
+/* R79 · B5 — THE BAND KNOWS WHO IT IS TALKING TO, twice over.
+
+   1. A BRAND-NEW USER IS NEVER GREETED WITH HISTORY. The band used to key off tour_seen_at
+      alone, so somebody's SECOND day opened with "new since you were last here" describing
+      changes that predate their first sign-in — none of it was new to them, all of it was
+      homework. Now the first-ever sign-in (no last-seen marker in this browser) shows NOTHING
+      and silently stamps the CURRENT release as seen; from then on the band only ever describes
+      releases newer than that stamp.
+
+   2. ENTRIES CARRY A ROLE TAG. An adviser was being told about the go-live list on Settings —
+      an owner/admin read-only screen — which is the tour's Watchtower lesson all over again:
+      naming somebody else's screen teaches the reader the app is somebody else's problem.
+      `roles: null` = everybody (the default posture for new entries); a roles array limits the
+      sentence to those roles. The legacy 'staff' alias reads as adviser, same as tourStepsFor.
+
+   MECHANICS: the marker is `nx_whatsnew_last_<uid>` holding the newest release NUMBER this
+   browser has seen/dismissed (localStorage, a browser preference exactly as before — same
+   clear-the-key rule for suites). Entries carry the release they shipped in; the band shows the
+   role-visible entries with rel > marker, and dismissing (or the first-sign-in stamp) writes the
+   current release. The old `nx_whatsnew_r72` "seen" key is honoured as "has seen up to 72", so
+   nobody who dismissed the r72 line gets it back. */
+const WHATSNEW_RELEASE = 79;
+const WHATSNEW_LEGACY_KEY = "nx_whatsnew_r72";
+const whatsNewKey = () => "nx_whatsnew_last_" + ((ME && ME.id) || "anon");
+/* Short clauses, in the words the screens themselves use — the band must stay ONE line on a
+   desktop (r69_today §B pins the phone budget; the media query hides it there regardless). */
+const WHATSNEW_ENTRIES = [
+  { rel: 72, roles: null, text: "bulk playbooks on Pipeline, faster Data health with inline fixes, call and outcome chips on Retention" },
+  { rel: 72, roles: ["owner", "admin"], text: "a go-live list on Settings" },
+  { rel: 79, roles: null, text: "document and fact-find links now expire after 30 days, with a Regenerate button on the case" },
+  { rel: 79, roles: ["owner"], text: "firm exports withhold client link tokens" },
+];
+function whatsNewStamp() { lsSet(whatsNewKey(), String(WHATSNEW_RELEASE)); }
 function dismissWhatsNew() {
-  lsSet(WHATSNEW_KEY, "seen");
+  whatsNewStamp();
   const el = $("#whatsnew-band");
   if (el) { el.innerHTML = ""; el.classList.add("hidden"); }
 }
@@ -5144,7 +5282,6 @@ async function renderWhatsNewBand() {
   const el = $("#whatsnew-band");
   if (!el) return;
   const hide = () => { el.innerHTML = ""; el.classList.add("hidden"); };
-  if (lsGet(WHATSNEW_KEY) === "seen") return hide();
   if (!ME || !ME.id) return hide();
   /* The same one-row read maybeStartTour() makes, and deliberately NOT shared with it: that read
      must stay uncached so the DB flag itself refuses a second tour (r12b pins exactly that), and a
@@ -5155,12 +5292,30 @@ async function renderWhatsNewBand() {
     if (error || !data) return hide();      // unknown ⇒ say nothing, exactly like the tour's own gate
     seenAt = data.tour_seen_at;
   } catch (e) { return hide(); }
-  // Never for a first-time user: they are about to get the tour, and two welcomes at once is one
-  // too many. The band is for the people the tour will never fire for again.
-  if (seenAt == null) return hide();
+  /* Never for a first-time user: they are about to get the tour, and two welcomes at once is one
+     too many. R79 · B5 — AND their arrival stamps the current release, so tomorrow (tour done,
+     tour_seen_at set) stays quiet until something genuinely newer than them ships. */
+  if (seenAt == null) { whatsNewStamp(); return hide(); }
+  let lastSeen = parseInt(lsGet(whatsNewKey()), 10);
+  if (!Number.isInteger(lastSeen)) {
+    /* No marker: either they dismissed the old r72 line under the legacy key (seen up to 72), or
+       they are a returning user from before markers existed (seen nothing — show everything their
+       role gets, exactly what the old band did). */
+    lastSeen = lsGet(WHATSNEW_LEGACY_KEY) === "seen" ? 72 : 0;
+  }
+  const role = String(MY_ROLE || (ME && ME.role) || "").toLowerCase() === "staff" ? "adviser" : String(MY_ROLE || (ME && ME.role) || "").toLowerCase();
+  const eligible = WHATSNEW_ENTRIES.filter((e) => e.rel > lastSeen && (!e.roles || e.roles.includes(role)));
+  if (!eligible.length) return hide();
+  /* ONE release's worth, always: the band is a greeting, not a changelog, and it has to stay one
+     line (r11's dashboard height budget; r69_today §B's phone budget). Someone who missed several
+     releases gets the NEWEST one's entries — dismissing stamps current regardless, so the older
+     lines are gone either way, exactly as they were under the old single-line const. */
+  const maxRel = eligible.reduce((m, e) => Math.max(m, e.rel), 0);
+  const items = eligible.filter((e) => e.rel === maxRel);
+  const line = "New since you were last here: " + items.map((i) => i.text).join("; ") + ".";
   el.innerHTML = `<div class="whatsnew-band" id="whatsnew-line">
       <span class="whatsnew-icon" aria-hidden="true">✨</span>
-      <span class="whatsnew-text">${esc(WHATSNEW_LINE)}</span>
+      <span class="whatsnew-text">${esc(line)}</span>
       <button type="button" class="btn btn-sm btn-ghost" id="whatsnew-dismiss" title="Hide this — it will not come back until there is something new to say">Got it</button>
     </div>`;
   el.classList.remove("hidden");
@@ -6388,6 +6543,36 @@ const EXPORT_TABLES = [
   "settings", "profiles", "watch_alerts", "staff_absences", "duplicate_dismissals", "audit_log",
 ];
 const EXPORT_PAGE = 1000;
+/* R79 · B1 — LINK TOKENS NEVER LEAVE IN THE FILE. cases.doc_token, cases.nps_token,
+   fact_finds.token and clients.comms_token are bearer credentials: anyone holding one can act as
+   the client (upload documents, open the fact-find, answer the NPS ask). The export is an
+   unencrypted file that outlives every access control this app has, so a token in it is a live
+   key on a shared drive. RULE: any column whose NAME ends in "token", in any exported table, has
+   its VALUE replaced with "(withheld)" — the column and the row both stay, so per-table counts
+   still match the database exactly (r13 pins that), and the file says plainly that the tokens
+   were withheld. Columns that merely CONTAIN "token" (doc_token_expires_at) are dates about a
+   token, not the token, and are kept. audit_log rows get the same rule applied INSIDE their
+   `changes` diff, because a token write is audited with its old/new values. The vault was never
+   exported and still isn't. Restoring a withheld token is deliberately impossible — regenerate
+   the link from the case instead. */
+const EXPORT_TOKEN_WITHHELD = "(withheld)";
+const isTokenCol = (k) => /token$/i.test(k);
+function exportScrubTokens(rows) {
+  let n = 0;
+  for (const row of rows || []) {
+    if (!row || typeof row !== "object") continue;
+    for (const k of Object.keys(row)) {
+      if (isTokenCol(k) && row[k] != null && row[k] !== "") { row[k] = EXPORT_TOKEN_WITHHELD; n++; }
+      if (k === "changes" && row[k] && typeof row[k] === "object") {
+        const ch = row[k];
+        for (const f of Object.keys(ch)) {
+          if (isTokenCol(f) && ch[f] != null) { ch[f] = EXPORT_TOKEN_WITHHELD; n++; }
+        }
+      }
+    }
+  }
+  return n;
+}
 /* One table, paged. Returns { rows } or { error } — never throws, because one bad table must not
    take the file down with it. The order-by is `id` where the table has one so the pages cannot
    overlap or skip under concurrent writes; `settings` is keyed on `key` and has no id column,
@@ -6442,9 +6627,11 @@ async function exportFirmData() {
     const counts = {};
     const failed = {};
     const notes = {};
+    let tokensWithheld = 0;
     for (const t of EXPORT_TABLES) {
       const r = await exportReadTable(t);
       if (r.error) { failed[t] = r.error; continue; }
+      tokensWithheld += exportScrubTokens(r.rows);   // R79 · B1 — before the rows touch the payload
       tables[t] = r.rows;
       counts[t] = r.rows.length;
       if (r.unordered) notes[t] = "read without an ordering column; if this table holds more than " + EXPORT_PAGE + " rows the file may be incomplete";
@@ -6459,6 +6646,9 @@ async function exportFirmData() {
       /* Said INSIDE the file as well as on screen: a file outlives the page that made it, and the
          person who opens it in two years is not the person who read the panel. */
       about: "A complete copy of this firm's back-office data, exported by the firm. It is NOT encrypted — treat it as you would the database itself. Nothing restores this file automatically; it is a record, not a migration.",
+      /* R79 · B1 — the manifest names the withholding so the person opening the file in two years
+         is not left wondering why every token column reads the same word. */
+      tokens_withheld: `link tokens withheld — ${tokensWithheld} live link token value${tokensWithheld === 1 ? "" : "s"} (upload, fact-find, review and comms links) replaced with "${EXPORT_TOKEN_WITHHELD}". Row counts are unaffected. They cannot be restored from this file; regenerate a link from the case if one is needed.`,
       tables,
       counts,
       /* Always present, even when empty, so "did anything fail?" is answered by reading a key
@@ -6483,6 +6673,7 @@ async function exportFirmData() {
     else { settings.last_full_export_at = nowIso; renderExportLastLine(); }
     const okTables = Object.keys(counts).length;
     const summary = `Exported ${total.toLocaleString()} rows from ${okTables} table${okTables === 1 ? "" : "s"}`
+      + " · link tokens withheld"   /* R79 · B1 — said on screen as well as in the file */
       + (failedNames.length ? ` · ${failedNames.length} table${failedNames.length === 1 ? "" : "s"} FAILED and ${failedNames.length === 1 ? "is" : "are"} named in the file: ${failedNames.join(", ")}` : "")
       + stampWarn;
     if (out) {
@@ -18024,7 +18215,10 @@ window.protQueueEmail = async function (caseId, ev) {
     if (!c) return toast("Could not load case");
     const { data: cl } = await db.from("clients").select("email").eq("id", c.client_id).single();
     if (!cl?.email) return toast("This client has no email address — add one first.");
-    if (!confirm("Queue the protection intro email? Ensure the template has principal approval.")) return;
+    /* R79 · A4 — the protection intro has its own confirm (it never passes through queueEmail),
+       so it carries the same held line, word for word. */
+    if (!confirm("Queue the protection intro email? Ensure the template has principal approval."
+      + (emailHoldOn() ? "\n\nSending is currently ON HOLD (Settings › Email sending) — this will queue and wait; nothing is sent now." : ""))) return;
     const { data: qRow, error } = await db.from("email_queue")
       .insert({ case_id: caseId, client_id: c.client_id, email_type: "protection_offer", to_email: cl.email })
       .select("id").single();
@@ -18081,14 +18275,18 @@ window.factFind = async function (caseId, clientId) {
   if (!ff) {
     /* R12a·D3 — status is EXPLICIT. The column default is 'sent' (it predates there being any
        send path at all), so omitting it here is what made opening this dialog a lie. */
-    const ins = await db.from("fact_finds").insert({ case_id: caseId, client_id: clientId, status: "created", created_by: (ME && ME.id) || null, token: ffToken() }).select("*").single();
+    /* R79 · B2 — a fact-find link is born with its 30-day expiry, exactly like the docs link. */
+    const ins = await db.from("fact_finds").insert({ case_id: caseId, client_id: clientId, status: "created", created_by: (ME && ME.id) || null, token: ffToken(), expires_at: linkExpiryIso() }).select("*").single();
     if (ins.error) return dbFail("factFind", ins.error);
     ff = ins.data;
   } else if (!ff.token) {
     // Legacy row created before tokens were set client-side — back-fill so the link works.
+    // R79 · B2 — a back-filled token is a freshly minted link, so it gets the 30-day stamp too.
     const tok = ffToken();
-    await db.from("fact_finds").update({ token: tok }).eq("id", ff.id);
+    const exp = linkExpiryIso();
+    await db.from("fact_finds").update({ token: tok, expires_at: exp }).eq("id", ff.id);
     ff.token = tok;
+    ff.expires_at = exp;
   }
   const siteUrl = String(settings.site_url || "").trim();
   const base = (siteUrl || "https://nexmoney.co.uk").replace(/\/$/, "");
@@ -18111,6 +18309,9 @@ window.factFind = async function (caseId, clientId) {
      answer. started/submitted keep exactly the line they always had. */
   const badgeWord = ff.status === "sent" && sentOn ? `sent ${fmtD(sentOn)}` : badgeBase;
   const hasData = ff.status === "submitted" && ff.data && Object.keys(ff.data).length;
+  /* R79 · B2 — the link's honest state. Meaningless once the client has submitted (the link has
+     done its job), so it is only shown while the link still matters. */
+  const ffLinkState = ff.status === "submitted" ? null : linkExpiryLine(ff.expires_at);
   $("#modal").innerHTML = `
     <h3>Digital fact-find</h3>
     <p class="panel-sub">Send this secure link to the client. They fill it in on any device, can save as they go, and you get a task the moment they submit.</p>
@@ -18121,10 +18322,12 @@ window.factFind = async function (caseId, clientId) {
         <button class="btn btn-sm" id="ff-copy">Copy</button>
       </div>
     </label>
+    ${ffLinkState ? `<p class="panel-sub" id="ff-link-state"${ffLinkState.expired ? ' style="color:var(--red);font-weight:600;"' : ""}>🔗 ${esc(ffLinkState.text)}</p>` : ""}
     ${siteUrl ? "" : '<p class="dq-notice bad" id="ff-no-site-url" style="margin-top:10px;">No <strong>Site URL</strong> is set in Settings, so there is no address to build the client\'s link from. The link above is a guess and the email cannot be sent until somebody fills that setting in.</p>'}
     <div class="action-bar" style="margin-top:10px;">
       <button class="btn btn-sm btn-primary" id="ff-send">✉️ Send fact-find email</button>
       <button class="btn btn-sm" id="ff-mail" title="Opens a draft in your own email program. Nothing is recorded as sent, because the system cannot see what you do in there.">Open in your email app instead</button>
+      ${ffLinkState ? `<button class="btn btn-sm" id="ff-regen" title="Make a new link with a fresh 30-day expiry. The current link stops working the moment the new one is made; anything the client already saved stays on this fact-find.">↻ Regenerate link</button>` : ""}
       <button class="btn btn-sm" id="ff-refresh">↻ Refresh status</button>
       <button class="btn btn-sm" id="ff-new">New blank fact-find</button>
     </div>
@@ -18136,12 +18339,29 @@ window.factFind = async function (caseId, clientId) {
   $("#ff-back").onclick = () => openCase(caseId);
   if ($("#ff-apply")) $("#ff-apply").onclick = () => ffApplyDiff(caseId, clientId, ff.data);
   $("#ff-refresh").onclick = () => factFind(caseId, clientId);
+  /* R79 · B2 — REGENERATE THE FACT-FIND LINK. Same row, new token + fresh 30-day expiry: the old
+     link is invalidated BY VALUE (the address itself stops working), which is what the confirm
+     says. The client's saved answers live on the ROW, not the token, so they survive — this is
+     "new key, same form", where #ff-new below is "new form entirely". */
+  const ffRegenBtn = $("#ff-regen");
+  if (ffRegenBtn) ffRegenBtn.onclick = async () => {
+    if (!(await confirmDestructive({
+      title: "Regenerate the fact-find link?",
+      body: "A new link is made and <strong>the current link stops working immediately</strong> — the old address itself becomes invalid, so anyone still holding it (including the client, if it was already sent) can no longer open it. The new link is valid for 30 days, and anything the client has already saved on the form is kept.",
+      okLabel: "Regenerate the link", cancelLabel: "Cancel", danger: false,
+    }))) return;
+    const { error: regenErr } = await db.from("fact_finds").update({ token: ffToken(), expires_at: linkExpiryIso() }).eq("id", ff.id);
+    if (regenErr) return dbFail("factFind", regenErr, "The link could not be regenerated: " + regenErr.message);
+    toast("New fact-find link made — the old link no longer works");
+    factFind(caseId, clientId);
+  };
   $("#ff-new").onclick = async () => {
     if (!confirm("Start a fresh blank fact-find? The current link stops being the active one.")) return;
     // R12a·D3 — same explicit 'created': a brand-new blank fact-find has not been sent either.
     /* R78 · A6 — this insert ignored its result entirely: a refused write (RLS, network) left the
        OLD link on screen while the toast history said nothing. Checked now, through dbFail. */
-    const { error: ffNewErr } = await db.from("fact_finds").insert({ case_id: caseId, client_id: clientId, status: "created", created_by: (ME && ME.id) || null, token: ffToken() });
+    /* R79 · B2 — a blank fact-find's link gets the same 30-day stamp a first one does. */
+    const { error: ffNewErr } = await db.from("fact_finds").insert({ case_id: caseId, client_id: clientId, status: "created", created_by: (ME && ME.id) || null, token: ffToken(), expires_at: linkExpiryIso() });
     if (ffNewErr) return dbFail("factFind", ffNewErr);
     factFind(caseId, clientId);
   };
@@ -19976,7 +20196,9 @@ window.openCase = async function (id, opts = {}) {
   if (id && docsOn) {
     const docCase = {
       id, stage: c.stage, case_kind: c.case_kind, client_id: c.client_id,
-      assigned_to: c.assigned_to, doc_token: c.doc_token, __clientName: clientName,
+      assigned_to: c.assigned_to, doc_token: c.doc_token,
+      doc_token_expires_at: c.doc_token_expires_at,   /* R79 · B2 — the honest-state line reads it */
+      __clientName: clientName,
     };
     renderCaseDocs(id, docCase, { docs: caseDocs, mails: docMails, tasks });
   }
@@ -21248,7 +21470,13 @@ async function emailOfferToClient(caseId, c) {
   if (clErr || !cl) return toast("Couldn't read the client record — try again.");
   if (!cl.email) return toast("This client has no email address — add one first.");
   const who = [cl.first_name, cl.last_name].filter(Boolean).join(" ") || "the client";
-  if (!confirm(`Email the mortgage offer PDF to ${who} at ${cl.email}?\n\nClient email is not switched on yet, so this will be QUEUED and held — it sends (with the offer attached) once email sending goes live.`)) return;
+  /* R79 · A4 — hold-aware, same holdLine as every other per-case send. The old sentence hardcoded
+     "Client email is not switched on yet", which stops being true the day the hold lifts; the row's
+     own far-ahead scheduled_for (R54's parking, below) keeps it from sending in either state and
+     both branches say so. */
+  if (!confirm(`Email the mortgage offer PDF to ${who} at ${cl.email}?\n\n` + (emailHoldOn()
+    ? `Sending is currently ON HOLD (Settings › Email sending) — this will queue and wait; nothing is sent now.`
+    : `This queues the email (with the offer attached) dated far ahead — the R54 hold-back — so nothing is sent now; cancel it from the Emails page if it should not go.`))) return;
   let uid = (ME && ME.id) || null;
   try { const { data: { user } } = await db.auth.getUser(); if (user && user.id) uid = user.id; } catch (e) {}
   const HELD_UNTIL = "2027-01-01T00:00:00Z"; // sit with the other parked client emails until sending is enabled
@@ -21343,13 +21571,26 @@ async function queueEmail(caseId, clientId, type, c, ev, opts = {}) {
     const ffChaseTitle = `Chase fact-find — ${(cl.first_name || "client").trim()}`;
     /* R70 · L4 — the hold, said on the single send too. The confirm below has always ended with
        what happens next; while settings.email_hold is on, what happens next is "it waits". */
-    const holdLine = type === "rate_end_reminder" && emailHoldOn()
+    /* R79 · A4 — …and said on EVERY per-case send, not just the rate-end reminder: fee request,
+       review request, docs request, fact-find and the reminder all pass through this one confirm,
+       and each of them was still promising a send the server was always going to refuse. Same
+       sentence, word for word, on all of them. */
+    const held = emailHoldOn();
+    const holdLine = held
       ? `\n\nSending is currently ON HOLD (Settings › Email sending) — this will queue and wait; nothing is sent now.`
       : "";
+    /* R79 · A4 — NO CHASE TASK WHILE HELD. The follow-up/chase task exists to chase a client who
+       GOT an email and went quiet; while the hold is on the client gets nothing, so creating the
+       task books a chase for a conversation that never started. Skipped while held — and the
+       confirm says so here, before anything is queued, so the missing task is never a surprise. */
     const extraLine = type === "rate_end_reminder"
-      ? `\n\nA follow-up task ("${chaseTitle}") will be added for ${fmtD(chaseDue)}.`
+      ? (held
+        ? `\n\nNo follow-up task will be created while sending is held — the client is not getting this email yet, so there is nothing to chase.`
+        : `\n\nA follow-up task ("${chaseTitle}") will be added for ${fmtD(chaseDue)}.`)
       : type === "factfind"
-        ? `\n\nA chase task ("${ffChaseTitle}") will be added for ${fmtD(ffChaseDue)}.`
+        ? (held
+          ? `\n\nNo chase task will be created while sending is held — the client is not getting this email yet, so there is nothing to chase.`
+          : `\n\nA chase task ("${ffChaseTitle}") will be added for ${fmtD(ffChaseDue)}.`)
         : "";
     /* R6.4 H-02 — the rate-end reminder is the one send that is ABOUT a building:
        it says "your rate is ending, shall we look at it?", and on a portfolio
@@ -21396,12 +21637,15 @@ async function queueEmail(caseId, clientId, type, c, ev, opts = {}) {
       /* R5-13 — sending the reminder used to be the whole "loop": the My Day row cleared itself and
          nothing anywhere held the next step, so a client who didn't reply was never chased. Best
          effort — a failed task insert must not make the (already queued) email look like a failure. */
-      const { error: taskErr } = await db.from("case_tasks").insert({
-        case_id: caseId, title: chaseTitle, due_date: chaseDue,
-        assigned_to: (c && c.assigned_to) || (ME && ME.id) || null,
-        created_by: (ME && ME.id) || null,
-      });
-      if (taskErr) toast("Email queued, but the follow-up task could not be created: " + taskErr.message);
+      /* R79 · A4 — skipped while held: the chase presumes the client received something. */
+      if (!held) {
+        const { error: taskErr } = await db.from("case_tasks").insert({
+          case_id: caseId, title: chaseTitle, due_date: chaseDue,
+          assigned_to: (c && c.assigned_to) || (ME && ME.id) || null,
+          created_by: (ME && ME.id) || null,
+        });
+        if (taskErr) toast("Email queued, but the follow-up task could not be created: " + taskErr.message);
+      }
     }
     /* R12a·D3 — the fact-find send's own trail. The fact_finds row itself is advanced to 'sent' by
        process-emails v12 AFTER the send succeeds (never here — the app must not claim a send it
@@ -21415,12 +21659,15 @@ async function queueEmail(caseId, clientId, type, c, ev, opts = {}) {
         created_by: (ME && ME.id) || null,
       });
       if (nErr) toast("Email queued, but the case note could not be written: " + nErr.message);
-      const { error: ffTaskErr } = await db.from("case_tasks").insert({
-        case_id: caseId, title: ffChaseTitle, due_date: ffChaseDue,
-        assigned_to: (c && c.assigned_to) || (ME && ME.id) || null,
-        created_by: (ME && ME.id) || null,
-      });
-      if (ffTaskErr) toast("Email queued, but the chase task could not be created: " + ffTaskErr.message);
+      /* R79 · A4 — skipped while held: the 3-day chase presumes the client received the link. */
+      if (!held) {
+        const { error: ffTaskErr } = await db.from("case_tasks").insert({
+          case_id: caseId, title: ffChaseTitle, due_date: ffChaseDue,
+          assigned_to: (c && c.assigned_to) || (ME && ME.id) || null,
+          created_by: (ME && ME.id) || null,
+        });
+        if (ffTaskErr) toast("Email queued, but the chase task could not be created: " + ffTaskErr.message);
+      }
     }
     if (type === "review_request") await db.from("cases").update({ review_requested_at: new Date().toISOString() }).eq("id", caseId);
     /* The fee request was the one type that sent and left no trace on the case: no fee_status, no
@@ -21442,7 +21689,10 @@ async function queueEmail(caseId, clientId, type, c, ev, opts = {}) {
     // R5-1 — send THIS row and nothing else. Without the id there is nothing safe to send, so the
     // email simply waits for the next automation run rather than triggering a firm-wide flush.
     const res = qRow && qRow.id ? await runAutomation(true, { queueIds: [qRow.id] }) : null;
-    sendResultToast(res, "Email queued — check Emails tab (is your Resend key set up?)");
+    /* R79 · A4 — while held, the toast also owns the missing chase task (see the confirm above). */
+    sendResultToast(res, "Email queued — check Emails tab (is your Resend key set up?)",
+      held && (type === "rate_end_reminder" || type === "factfind")
+        ? { heldNote: "No chase task was created while the hold is on." } : undefined);
     return true;
   } finally {
     if (btn) btn.disabled = false;
@@ -24281,127 +24531,281 @@ function emailBodyPreviewHtml(raw) {
   return out.innerHTML;
 }
 /* ==========================================================================
-   R74 · B5 (panel A#7) — THE PREVIEW OF A HOUSE-TEMPLATE EMAIL.
+   R79 · A2 — THE PREVIEW IS THE SEND'S OWN WORDING NOW.
 
-   R72 shipped the fold; for 36 of the 36 rows in the live queue it said
-   "there is nothing here to show until it goes". That is true of the
-   body_html COLUMN and useless to the person reading it: the one thing Kim
-   opens this page to do is check what is about to go out to a client, and
-   every automated type composes its words at send time inside the
-   `process-emails` edge function.
+   R74 · B5 shipped a preview built from the harness's model of v17 — one
+   opening sentence per type plus a sign-off — and the fold said honestly that
+   it was "a reading of the template". R79 is the round the firm signs the
+   wording off from this screen, so a summary is no longer good enough:
+   previewComposeEmail below is a faithful client-side replica of
+   process-emails v19's compose() — the ACTUAL sentences, the ACTUAL subject,
+   built from the same row/case/client/settings inputs the edge function uses:
 
-   WHICH APPROACH THIS IS, stated plainly because it matters: the composition
-   lives ONLY in that edge function — there is no template table, no template
-   column and no copy of it in this repository. So this is a REPLICA, built
-   from the same rules, and the preview says so in words on every render
-   ("the standard <type> wording"). The rules replicated here are exactly the
-   ones the harness's model of v17 applies (admin/mock-supabase.js:
-   EMAIL_OPENING / PROP_SENTENCE_TYPES / PROP_REGARDING_TYPES / DOC_TYPES /
-   emailBodyLines / the sign-off block), which is the written-down contract for
-   the deployed function. A type this map does not know composes nothing and
-   the fold says so rather than guessing — an invented preview would be worse
-   than none.
+     · the per-adviser rules: adviser name/phone from the case's assigned_to
+       profile falling back to the firm settings; the sign-off is the
+       adviser's own email_signoff block where one is written, else v19's
+       exact "Best regards, / <adviser> / <company>".
+     · the property rules: v19's in-sentence fragments (on/for/of <address>)
+       on the types that weave the address into the line, and the standalone
+       "Regarding: <address>" line on the adjacent types.
+     · the variant rules: docs_request switches to the chase wording when the
+       case already had one go out; review_request switches to the reminder
+       wording when a review request already went (and the queue's
+       review_reminder rows ARE that reminder, so they render it too).
+     · the four marketing-adjacent types carry v19's unsubscribe footer.
 
-   The result goes through emailBodyPreviewHtml() like every other preview, so
-   the R72 inert-render pipeline (detached DOMParser, allow-list rebuild, zero
-   attributes, no live links) is what puts it on the page. Nothing composed
-   here is ever written to a row: this is a reading of the template, not a
-   draft.
+   WHAT THE REPLICA CANNOT MINT, said in its own lines rather than papered
+   over: the fact-find/doc-upload links are built by the send from tokens (the
+   fact-find link is NAMED, not invented — R75 · B5a's rule kept), and the
+   fee request's bank details are Owner-only at the database, so a non-owner's
+   preview names the fields and says the send fills them in.
+
+   RULE (unchanged from R74, now with real teeth): if the edge function's
+   wording changes, update this replica — the fold claims "the exact wording
+   the send composes" and every word here is load-bearing.
+
+   R74 rule kept: a STORED body (custom emails) still wins — the replica is
+   only consulted where body_html is empty.
    ========================================================================== */
-const HOUSE_TPL_SENTENCE_TYPES = ["rate_end_reminder", "rate_end_chase", "submitted_update", "offer_update", "completion_congrats"];
-const HOUSE_TPL_REGARDING_TYPES = ["protection_offer", "fee_request", "gi_exchange", "factfind"];
 const HOUSE_TPL_DOC_TYPES = ["docs_request", "docs_chase"];
-const HOUSE_TPL_OPENING = {
-  rate_end_reminder: "I'm getting in touch because the rate on {M} is coming to an end.",
-  rate_end_chase: "Following up on my last message about {M} — the rate is still due to end shortly.",
-  submitted_update: "A quick update: the application for {M} has now gone to the lender.",
-  offer_update: "Good news — the mortgage offer for {M} has come through.",
-  completion_congrats: "Congratulations — {M} has completed today.",
-  protection_offer: "While we were arranging your mortgage we talked about protecting the payments.",
-  fee_request: "Please find below the details for our advice fee.",
-  gi_exchange: "Now that you are exchanging, this is the point at which buildings insurance needs to be in place.",
-  docs_request: "Before we can get your application moving we need a few documents from you.",
-  docs_chase: "Just a quick reminder — we are still waiting on some documents before your application can move on.",
-  review_reminder: "A little while ago I asked how we did. If you have a spare minute, a short review really does help us.",
-  /* ==========================================================================
-     R75 · B5a — THE SIX TYPES THE MAP DID NOT KNOW.
-
-     R74 shipped the replica against the eleven openings the harness's model of
-     v17 carried; the enum has nineteen. The one that mattered most is
-     `review_request` — 23 of the 36 rows in the live queue are review requests,
-     and every one of them opened a fold that said "there is nothing here to show
-     until it goes", which is precisely the mail Kim wants to read before it goes.
-     `welcome`, `lead_ack`, `referral_request`, `birthday_greeting` and
-     `completion_anniversary` are the rest of the composed set.
-
-     These SIX strings are also added, word for word, to the mock's own
-     EMAIL_OPENING (admin/mock-supabase.js), because that file is the written-down
-     contract for the deployed function and a replica that composes wording the
-     contract does not carry would be an invention. The two lists are now the
-     same list, which is the only way they stay the same list.
-
-     Still deliberately ABSENT: `custom` (a hand-written email IS its stored body,
-     so the stored text always wins before this map is reached) and `docs_chase`'s
-     sibling types that compose nothing at all. `factfind` is handled separately
-     below — its body is real, but half of it is a token this back office cannot
-     mint, and inventing a link would be worse than saying so.
-     ========================================================================== */
-  review_request: "Thank you for letting us look after {M}. If you have two minutes, a short review of how we did would help us more than you would think.",
-  welcome: "Thank you for getting in touch — I am glad to be helping with {M}, and this is just to say hello and tell you what happens next.",
-  lead_ack: "Thank you for your enquiry — it has reached us and somebody will be in touch shortly.",
-  referral_request: "If you know somebody who could do with the same help, I would be glad to hear from them — a personal introduction is how most of our work arrives.",
-  birthday_greeting: "Just a quick note to wish you a very happy birthday from all of us.",
-  completion_anniversary: "It is a year today since {M} completed — I hope it has all settled in well.",
-};
-/* R75 · B5a — `factfind` composes from a fact_finds token minted by the SENDING
-   RUN (mock-supabase's composeFactfind / production v12), which this page cannot
-   read and must not invent. The three sentences it sends are real and are shown;
-   the link is named as what it is and left unresolved, so the preview is honest
-   about the one part of it that only the run can produce. */
-const HOUSE_TPL_FACTFIND_LINES = [
-  "Before we speak, please could you complete this short, secure fact-find? It takes about 5–10 minutes.",
-  "Start your fact-find → (a secure link, built for this client at the moment the email goes)",
-  "You can save as you go and come back to finish it later.",
-];
-/* Who the mail is signed by. The adviser's own sign-off wins where they have written one (M1's
-   profiles.email_signoff, already loaded by loadTeam — no read); otherwise the firm's settings,
-   exactly as the sending run falls back. */
+// v19's own MARKETING_TYPES, verbatim — the four types that carry the unsubscribe footer.
+const EDGE_MARKETING_TYPES = ["birthday_greeting", "completion_anniversary", "referral_request", "review_request"];
+const EDGE_UNSUB_LINE = "Prefer not to get emails like this? Unsubscribe.";
+/* v19's own date/money formats — deliberately NOT fmtD/fmtM: this replica's one job is the words
+   the send composes, and the edge renders "4 September 2026" (long month) and Intl GBP currency. */
+const edgeFmtDate = (d) => d ? new Date(d).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }) : "";
+const edgeMoney = (n) => n == null ? "" : new Intl.NumberFormat("en-GB", { style: "currency", currency: "GBP" }).format(n);
+/* Who signs the mail — v19's exact ladder: the adviser's own multi-line email_signoff where one is
+   written, else "Best regards," + adviser + company (adviser = the case profile's full_name,
+   falling back to settings.adviser_name, then the company default — the same ladder v19's
+   compose() opens with). */
 function previewSignoffLines(adviserId) {
   const p = (PROFILES || []).find((x) => x && x.id === adviserId);
-  if (p && p.email_signoff) return String(p.email_signoff).split("\n").map((s) => s.trim()).filter(Boolean);
-  const name = (p && p.full_name) || settings.adviser_name || "";
-  const phone = (p && p.phone) || settings.adviser_phone || "";
-  return [name, settings.company_name || "NexMoney"].concat(phone ? [phone] : []).filter(Boolean);
+  if (p && p.email_signoff) return String(p.email_signoff).split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+  const adviser = (p && p.full_name) || settings.adviser_name || "NexMoney";
+  return ["Best regards,", adviser, settings.company_name || "NexMoney"];
 }
-/* type + row + what this page already knows about the case → {lines, signoff} or null.
-   `ctx` carries the case row (loadPropContext's), the case's outstanding checklist items and the
-   firm's docs_list; `settings` is read from module state, which is where every other reader of a
-   settings key reads it. */
+/* type + row + what this page already knows → {subject, lines, signoff, unsub} or null.
+   `ctx` carries the case row (loadPropContext's, now with the rate/fee/token columns), the case's
+   outstanding checklist items, the firm's docs_list, the chase/reminder flags derived from the
+   rows this page already lists, and the lead row for a lead_ack; `settings` is module state, where
+   every other reader of a settings key reads it. */
 function previewComposeEmail(type, row, ctx) {
-  const opening = HOUSE_TPL_OPENING[type];
-  if (!opening && type !== "factfind") return null;     // a type the house template does not compose here
-  const c = (ctx && ctx.caseRow) || null;
-  const addr = (c && c.property_address) ? String(c.property_address).trim() : "";
-  const mention = !addr ? "" : HOUSE_TPL_SENTENCE_TYPES.includes(type) ? "sentence"
-    : HOUSE_TPL_REGARDING_TYPES.includes(type) ? "regarding" : "";
-  const lines = [];
-  if (mention === "regarding") lines.push("Regarding: " + addr);
-  // R75 · B5a — factfind's body is the run's own three sentences, link named not invented.
+  const c = (ctx && ctx.caseRow) || {};                    // v19 calls compose(type, c ?? {}, …)
+  const s = settings || {};
+  const company = s.company_name || "NexMoney";
+  const p = (PROFILES || []).find((x) => x && x.id === c.assigned_to);
+  const adviser = (p && p.full_name) || s.adviser_name || "NexMoney";
+  const advPhone = (p && p.phone) || s.adviser_phone || "";
+  const phone = advPhone ? ` or call ${advPhone}` : "";
+  const lead = (ctx && ctx.lead) || null;
+  const cl = (row && row.clients) || (lead ? { first_name: String(lead.name || "").trim().split(/\s+/)[0] || "", last_name: "" } : {});
+  const first = (cl.first_name || "").trim() || (cl.last_name || "").trim();
+  const signoff = previewSignoffLines(c.assigned_to);
+  const unsub = EDGE_MARKETING_TYPES.includes(type) || type === "review_reminder";
+  const prop = String(c.property_address || "").trim();
+  const regarding = prop ? `Regarding: ${prop}` : null;    // its own line, exactly as v19 places it
+  const onProp = prop ? ` on ${prop}` : "";
+  const forProp = prop ? ` for ${prop}` : "";
+  const ofProp = prop ? ` of ${prop}` : "";
+  const done = (subject, lines) => ({ subject, lines: lines.filter((l) => l != null), signoff, unsub });
+
+  if (type === "lead_ack") {
+    const greet = first || "there";
+    return done(`Thank you for your enquiry – ${company}`, [
+      `Hi ${greet},`,
+      `Thank you for getting in touch with ${company}. Your enquiry has reached us and it is in hand.`,
+      `${adviser} will call you shortly to talk through what you are looking for and answer any questions. There is nothing you need to do in the meantime.`,
+      `If it is easier to speak sooner, just reply to this email${phone}.`,
+    ]);
+  }
+  if (type === "welcome") {
+    return done(`Welcome to ${company} – here's what happens next`, [
+      `Hi ${first},`,
+      `Thanks for your enquiry – it's great to have you on board. I'll be looking after your mortgage personally.`,
+      `Here's how it works: we'll have a quick chat about your situation, I'll search the market for the right deal, handle the application and paperwork, and keep you updated at every step – you won't need to chase us.`,
+      `I'll be in touch very shortly. In the meantime, just reply to this email${phone} if there's anything you'd like to ask.`,
+    ]);
+  }
   if (type === "factfind") {
-    HOUSE_TPL_FACTFIND_LINES.forEach((l) => lines.push(l));
-    return { lines, signoff: previewSignoffLines(c && c.assigned_to) };
+    /* R75 · B5a's honesty rule kept inside v19's real sentences: the link is minted by the sending
+       run from the fact_finds token, so it is NAMED as what it is, never invented here. */
+    return done(`${company} – your mortgage fact find (5–10 minutes)`, [
+      regarding,
+      `Hi ${first},`,
+      `To get your mortgage moving, the next step is a short fact find — it tells us about you, your income and what you're looking to do, so the advice we give you actually fits.`,
+      `Start your fact find → (a secure link, built for this client at the moment the email goes)`,
+      `The link is personal to you — there's no login and nothing to install. It saves as you go, so you can stop and come back any time. On a phone is fine.`,
+      `If you'd rather do it over the phone, just reply to this email${phone} and we'll take the details together.`,
+    ]);
   }
-  lines.push(opening.replace("{M}", mention === "sentence" ? "your mortgage on " + addr : "your mortgage"));
-  if (HOUSE_TPL_DOC_TYPES.includes(type)) {
-    const onCase = (ctx && ctx.outstanding) || null;    // null = no checklist on this case
-    const items = onCase && onCase.length ? onCase : ((ctx && ctx.firmDocs) || []);
-    if (items.length) {
-      lines.push(onCase && onCase.length ? "Still outstanding:" : "Please send:");
-      items.forEach((it) => lines.push("· " + it));
+  if (type === "docs_request" || type === "docs_chase") {
+    const onCase = (ctx && ctx.outstanding) || null;       // null = no checklist on this case
+    if (onCase && onCase.length) {
+      // v19's checklist-aware wording. A chase = any earlier docs_request on the same case
+      // (docs_chase rows are chases by definition — production writes them as later
+      // docs_request rows, the queue's own docs_chase type IS the second ask).
+      const chase = type === "docs_chase" || !!(ctx && ctx.docChase);
+      const n = onCase.length;
+      const site = String(s.site_url || "").replace(/\/+$/, "");
+      const link = c.doc_token && site ? `${site}/docs?token=${c.doc_token}` : "";
+      return done(
+        chase ? `${company} – still waiting on ${n} document${n === 1 ? "" : "s"}` : `${company} – documents we'll need from you`,
+        [
+          `Hi ${first},`,
+          chase
+            ? `Just a gentle nudge – we're still missing ${n === 1 ? "one thing" : "a few things"} before we can move your mortgage forward:`
+            : `To get your mortgage moving we'll need a few documents. Here's what we're still missing:`,
+          ...onCase.map((it) => `· ${it}`),
+          link ? `Send your documents → ${link}` : null,
+          link
+            ? `The link is personal to you – there's no login and nothing to install. Photos taken on your phone are fine. If you'd rather, just reply to this email with the files attached.`
+            : `Photos or scans are both fine – just reply to this email with them attached.`,
+          `The sooner we have these, the sooner we can secure your deal${phone ? " – any questions, just reply" + phone : ""}.`,
+        ]);
     }
-    if (onCase && onCase.length && ctx && ctx.docsLink) lines.push("You can upload them here: " + ctx.docsLink);
+    // No checklist (or one with nothing outstanding): the firm-wide list, v19's exact fallback.
+    const docs = (ctx && ctx.firmDocs) || [];
+    return done(`${company} – documents we'll need from you`, [
+      `Hi ${first},`,
+      `To get your mortgage moving we'll need a few documents. Could you reply to this email attaching:`,
+      ...docs.map((d) => `· ${d}`),
+      `Photos or scans are both fine. The sooner we have these, the sooner we can secure your deal${phone ? " – any questions, just reply" + phone : ""}.`,
+    ]);
   }
-  return { lines, signoff: previewSignoffLines(c && c.assigned_to) };
+  if (type === "submitted_update") {
+    return done(`Good news – your mortgage application has been submitted`, [
+      `Hi ${first},`,
+      `A quick update: your application${c.lender ? ` to ${c.lender}` : ""}${forProp} has been submitted. 🎉`,
+      `The lender will now assess it – typically they come back to us within a few working days, sometimes with requests for extra information (that's completely normal). We'll handle all of that and let you know the moment there's news.`,
+      `Nothing is needed from you right now. Any questions, just reply${phone}.`,
+    ]);
+  }
+  if (type === "offer_update") {
+    return done(`Your mortgage offer has been issued 🎉`, [
+      `Hi ${first},`,
+      `Excellent news – ${c.lender ? `${c.lender} has` : "the lender has"} issued your mortgage offer${forProp}.`,
+      row && row.attachment_path ? `We've attached a copy of your offer document to this email for your records.` : null,
+      `From here the legal work takes over: the solicitors will work towards completion and we'll chase them regularly so things keep moving. We'll keep you posted at every milestone.`,
+      `Any questions at all, just reply${phone}.`,
+    ]);
+  }
+  if (type === "protection_offer") {
+    return done(`Your mortgage is agreed – have you protected it?`, [
+      regarding,
+      `Hi ${first},`,
+      `With your mortgage${c.lender ? ` from ${c.lender}` : ""} now agreed, this is a natural moment to think about protecting it.`,
+      `A mortgage is one of the biggest financial commitments most of us ever take on. Many of our clients choose to put cover in place – such as life cover, critical illness cover or income protection – so that the mortgage would be taken care of if the unexpected happened.`,
+      `If you'd like, we can review the options alongside your mortgage with no obligation – it usually takes one short conversation. Just reply to this email${phone} and we'll arrange a time.`,
+      `This email is for information only and is not personal advice or a recommendation. Any recommendation would only follow a full review of your circumstances.`,
+    ]);
+  }
+  if (type === "gi_exchange") {
+    return done(`Buildings insurance needs to be in place when you exchange`, [
+      `Hi ${first},`,
+      `As you approach exchange of contracts on your purchase${ofProp}, a quick but important reminder: buildings insurance must be in place from the moment you exchange – it's a standard condition of your mortgage.`,
+      `If you haven't arranged cover yet, we can help you compare quotes quickly, and look at contents cover at the same time if useful.`,
+      `Just reply to this email${phone} and we'll get it sorted well before your exchange date.`,
+      `This email is for information only and is not personal advice or a recommendation.`,
+    ]);
+  }
+  if (type === "completion_congrats") {
+    return done(`Congratulations – your mortgage has completed! 🏡`, [
+      `Hi ${first},`,
+      `Wonderful news – your mortgage${onProp} has completed. Congratulations!`,
+      `We'll stay in touch: before your current rate ends we'll automatically review the market for you, so you'll never drift onto an expensive standard variable rate.`,
+      `It's been a pleasure – and if you ever need anything in the meantime, just reply${phone}.`,
+    ]);
+  }
+  if (type === "referral_request") {
+    return done(`Know someone who needs mortgage help?`, [
+      `Hi ${first},`,
+      `I hope you're settling in well since your mortgage completed.`,
+      `A small favour: most of our clients come to us through recommendations from people like you. If a friend, family member or colleague needs a mortgage or is coming to the end of their rate, we'd love to help them the same way we helped you – just pass on this email or our number${advPhone ? " (" + advPhone + ")" : ""}.`,
+      `Thank you – it genuinely makes a difference to a small firm like ours.`,
+    ]);
+  }
+  if (type === "birthday_greeting") {
+    return done(`Happy birthday from ${company}! 🎂`, [
+      `Hi ${first},`,
+      `Just a quick note from all of us at ${company} to wish you a very happy birthday. We hope you have a wonderful day.`,
+      `We're always here if your mortgage or protection needs ever change – but today, no business, just our best wishes!`,
+    ]);
+  }
+  if (type === "completion_anniversary") {
+    return done(`A year on – how's the home? 🏡`, [
+      `Hi ${first},`,
+      `It's been a year since your mortgage${c.lender ? ` with ${c.lender}` : ""} completed – we hope the home is treating you well!`,
+      `A quick reminder that we keep an eye on your rate for you and will be in touch well before it ends. If anything has changed – a move, home improvements, or you're thinking about protection – just reply${phone} and we'll help.`,
+    ]);
+  }
+  if (type === "rate_end_reminder") {
+    return done(`Your mortgage rate ends on ${edgeFmtDate(c.rate_end_date)} – let's review your options`, [
+      `Hi ${first},`,
+      `Your current ${c.rate_type || "fixed"} rate${c.lender ? ` with ${c.lender}` : ""}${c.rate_percent ? ` (${c.rate_percent}%)` : ""}${prop ? ` for your mortgage on ${prop}` : ""} is due to end on ${edgeFmtDate(c.rate_end_date)}.`,
+      `When it ends you'll usually move onto your lender's standard variable rate, which is often significantly more expensive. The good news: we can typically secure a new deal up to 6 months in advance, so now is the perfect time to review your options.`,
+      `Simply reply to this email${phone} and we'll take care of the rest – including checking whether staying with your current lender or switching gets you the better deal.`,
+    ]);
+  }
+  if (type === "rate_end_chase") {
+    return done(`Still time to sort your new rate before ${edgeFmtDate(c.rate_end_date)}`, [
+      `Hi ${first},`,
+      `Just a friendly nudge – your ${c.rate_type || "fixed"} rate${c.lender ? ` with ${c.lender}` : ""}${prop ? ` for your mortgage on ${prop}` : ""} ends on ${edgeFmtDate(c.rate_end_date)}, and we haven't yet locked anything in for you.`,
+      `Rates can be secured months in advance and re-checked right up to completion – so there's no downside to getting something reserved now.`,
+      `Reply to this email${phone} and we'll take it from there. If you've already sorted a new deal elsewhere, just let us know and we'll close your file.`,
+    ]);
+  }
+  if (type === "review_request" || type === "review_reminder") {
+    /* v19's reminder rides on the SAME email_type, worked out from the case's history — this
+       queue also writes explicit review_reminder rows, and those ARE the reminder, so both roads
+       reach the same wording. The CTA follows v19's ladder: the NPS scale where it is switched on
+       AND the case carries its token, else the review link. */
+    const reminder = type === "review_reminder" || !!(ctx && ctx.reviewReminder);
+    const link = s.review_platform_link || s.google_review_link || "";
+    const useNps = s.nps_enabled === "on" && c.id && c.nps_token;
+    const cta = useNps
+      ? [`How likely are you to recommend us to a friend?`, `😍 Loved it · 😊 Good · 😐 OK · 😕 Meh · 😞 Poor (each a one-tap answer)`]
+      : (link ? [`Leave a review → ${link}`] : []);
+    return done(
+      reminder ? `A quick nudge – how did we do?` : `Thanks for choosing ${company} – how did we do?`,
+      reminder
+        ? [
+          `Hi ${first},`,
+          `I dropped you a note a little while ago asking how we did with your mortgage. I know how easily these things slide down the list, so this is just one gentle reminder – and the last time we'll ask.`,
+          `It really does take 60 seconds, and it makes a genuine difference to a small business like ours.`,
+          ...cta,
+          `Either way, thank you – we're here whenever you need us next.`,
+        ]
+        : [
+          `Hi ${first},`,
+          `Congratulations on completing your mortgage – it's been a pleasure helping you.`,
+          `If you have 60 seconds, letting us know how we did makes a huge difference to a small business like ours.`,
+          ...cta,
+          `Thank you – and remember we're here whenever you need us next.`,
+        ]);
+  }
+  if (type === "fee_request") {
+    const ref = `${String(cl.last_name || "").replace(/[^A-Za-z]/g, "").slice(0, 10).toUpperCase()}-${String(c.id || (row && row.case_id) || "").slice(0, 6).toUpperCase()}`;
+    /* Bank details are Owner-only AT THE DATABASE (BACKEND-R4 §6): the send composes them with the
+       service role, but a non-owner's settings simply do not carry the keys — so the preview names
+       the fields and says who fills them in, rather than showing three blanks as if they were the
+       email. An Owner sees the real values, exactly as the client will. */
+    const bankKnown = !!(s.bank_account_name || s.bank_sort_code || s.bank_account_number);
+    return done(`${company} – broker fee payment details`, [
+      regarding,
+      `Hi ${first},`,
+      `As agreed, our broker fee for arranging your mortgage is ${edgeMoney(c.broker_fee)}.`,
+      `You can pay by bank transfer using the details below:`,
+      bankKnown ? `Account name: ${s.bank_account_name || ""}` : `Account name / Sort code / Account number — filled in from Settings by the send (bank details are Owner-only to read from this screen).`,
+      bankKnown ? `Sort code: ${s.bank_sort_code || ""}` : null,
+      bankKnown ? `Account number: ${s.bank_account_number || ""}` : null,
+      `Reference: ${ref}`,
+      `Please use the reference above so we can match your payment. Any questions, just reply${phone}.`,
+    ]);
+  }
+  // `custom` never reaches here (the stored body wins upstream); anything else composes nothing
+  // in v19 and the fold says so rather than guessing.
+  return null;
 }
 /* The fold itself. A <details>, closed, exactly like the R69 My Day "+N more" folds — a closed
    <details> is not rendered, so a hundred previews cost nothing until one is opened. The summary
@@ -24410,23 +24814,28 @@ function previewComposeEmail(type, row, ctx) {
 function emailPreviewFoldHtml(e, ctx) {
   const stored = emailBodyPreviewHtml(e.body_html);
   /* R74 · B5 — the stored text still wins where there is one (a hand-written ✉️ Write to client
-     email IS the email). Only where the column is empty does the house template get a reading. */
+     email IS the email). Only where the column is empty does the v19 replica get a reading. */
   const composed = stored ? null : previewComposeEmail(e.email_type, e, ctx);
   const bodyHtml = stored || (composed
     ? emailBodyPreviewHtml(composed.lines.map((l) => `<p>${esc(l)}</p>`).join("")
         + `<p>${composed.signoff.map((s) => esc(s)).join("<br>")}</p>`)
+      + (composed.unsub ? `<p class="em-prev-unsub">${esc(EDGE_UNSUB_LINE)}</p>` : "")
     : "");
-  const subject = String(e.subject || "").trim();
+  /* R79 · A2 — the Subject line is the send's own first decision, so the fold now leads with the
+     REAL one: the composed subject for a template email (the row's stored subject column is
+     whatever queue-time text happened to be written, and the send overwrites it), the stored
+     subject where the stored body wins. */
+  const subject = composed ? String(composed.subject || "").trim() : String(e.subject || "").trim();
   return `<details class="em-fold" data-em-preview="${esc(e.id)}">
       <summary onclick="event.stopPropagation()">Preview this email</summary>
       <div class="em-prev">
-        <div class="em-prev-subject"><span class="em-prev-lbl">Subject</span> ${subject ? esc(subject) : '<span class="cs-muted">no subject stored yet — the sending run composes one from the template</span>'}</div>
+        <div class="em-prev-subject"><span class="em-prev-lbl">Subject:</span> ${subject ? esc(subject) : '<span class="cs-muted">no subject stored yet — the sending run composes one from the template</span>'}</div>
         ${bodyHtml
           ? `<div class="em-prev-body"${composed ? ' data-em-composed="1"' : ""}>${bodyHtml}</div>
              <div class="em-prev-note">${composed
-               ? `This is a <strong>preview of the standard ${esc(emailTypeLabel(e.email_type).toLowerCase())} wording</strong>, built here from the same house template the sending run uses — the words are not stored on the row until it goes, so this is a reading of the template rather than a copy of a draft. ${HOUSE_TPL_DOC_TYPES.includes(e.email_type) ? "The document list is <strong>what is outstanding on this case right now</strong>, so it can still change before the run picks the row up. " : ""}Shown as plain formatting only — no links, images or styling are loaded from it.`
+               ? `This is the exact wording the send composes. ${HOUSE_TPL_DOC_TYPES.includes(e.email_type) ? "The document list is <strong>what is outstanding on this case right now</strong>, so it can still change before the run picks the row up. " : ""}Shown as plain formatting only — no links, images or styling are loaded from it.`
                : "This is the stored text, shown as plain formatting only — no links, images or styling are loaded from it."}</div>`
-          : `<div class="em-prev-note">There is no house wording for a <strong>${esc(emailTypeLabel(e.email_type).toLowerCase())}</strong> to show here: its words are composed by the sending run from something this page cannot read (a fact-find link, or a template this back office does not hold). Nothing is missing from the row — there is simply nothing here to preview until it goes.</div>`}
+          : `<div class="em-prev-note">There is no house wording for a <strong>${esc(emailTypeLabel(e.email_type).toLowerCase())}</strong> to show here: its words are composed by the sending run from something this page cannot read. Nothing is missing from the row — there is simply nothing here to preview until it goes.</div>`}
       </div>
     </details>`;
 }
@@ -24464,14 +24873,18 @@ function queueViewTest(key, defs) {
    gets a chip reading 0 — a chip that appears and disappears is a chip you cannot aim for.
    `defs` is either a plain list of statuses (the SMS queue, unchanged — "All" is prepended) or a
    list of [key, label, test] triples that already includes its own "all". */
-function renderQueueChips(sel, defs, rows, current, onPick) {
+function renderQueueChips(sel, defs, rows, current, onPick, counts) {
   const wrap = $(sel);
   if (!wrap) return;
   const idBase = sel === "#sms-filters" ? "sms-chip-" : "em-chip-";
   const list = Array.isArray(defs[0])
     ? defs
     : ["all", ...defs].map((k) => [k, k === "all" ? "All" : k.charAt(0).toUpperCase() + k.slice(1), null]);
-  const count = (k) => rows.filter(queueViewTest(k, list)).length;
+  /* R79 · A3 — `counts` (key → number) overrides the window-derived figure where the caller has a
+     REAL count. The email queue passes whole-table head:true counts, because deriving the chips
+     from the newest-100 window read ~4× low at seeded scale; a key the caller could not count
+     (or the SMS queue, which passes nothing) keeps the rows-derived number. */
+  const count = (k) => (counts && counts[k] != null ? counts[k] : rows.filter(queueViewTest(k, list)).length);
   wrap.innerHTML = list.map(([k, label]) => {
     const on = current === k;
     return `<button type="button" class="seg-btn${on ? " active" : ""}" role="tab" aria-selected="${on}" id="${idBase}${esc(k)}" data-em-status="${esc(k)}">${esc(label)} <span class="seg-count">${count(k)}</span></button>`;
@@ -24500,19 +24913,93 @@ async function loadEmails() {
      page paints in the same order it always did — email chips, summary, list,
      then SMS — only the waiting is shared.
      ======================================================================== */
-  const [{ data: emails, error }, { data: sms, error: smsErr }] = await Promise.all([
+  /* ========================================================================
+     R79 · A3 — THE CHIPS AND THE SUMMARY COUNT THE WHOLE TABLE NOW. Both were
+     derived from the newest-EMAIL_ROW_LIMIT window, which at seeded scale
+     read ~4× low — a chip saying "Sent 61" over a table holding 240 sent
+     rows. Real head:true count queries, one per status plus the due-now
+     count and the since-midnight sends, all fired INSIDE wave 1 (the same
+     Promise.all — R78's two-wave budget holds). The LIST stays windowed with
+     its honest "newest N listed" wording; only the numbers stopped lying.
+     RULE: a chip/summary count on this page comes from these counts, never
+     from filtering the windowed rows. A count that could not be read falls
+     back to the window-derived figure (and the summary says only what it
+     knows).
+     ======================================================================== */
+  const emNowIso = new Date().toISOString();
+  const EMAIL_STATUSES = ["queued", "sending", "sent", "failed", "cancelled"];
+  /* Today 00:00 Europe/London as an ISO instant — try the two offsets London can hold and keep
+     the one that lands on today's London date at hour 00 (localDateStr is the house clock). */
+  const emMorningStart = (() => {
+    const d = localDateStr();
+    const hourFmt = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", hour: "2-digit", hourCycle: "h23" });
+    for (const off of ["+01:00", "+00:00"]) {
+      const t = new Date(d + "T00:00:00" + off);
+      if (localDateStr(t) === d && hourFmt.format(t) === "00") return t.toISOString();
+    }
+    return new Date(d + "T00:00:00Z").toISOString();
+  })();
+  const [{ data: emails, error }, { data: sms, error: smsErr }, emCountsRes, emDueRes, emMorningRes] = await Promise.all([
     db.from("email_queue")
       .select("*, clients(first_name,last_name,email)")
       .order("created_at", { ascending: false }).limit(EMAIL_ROW_LIMIT),
     db.from("sms_queue")
       .select("*, cases(*), clients(*)")
       .order("created_at", { ascending: false }).limit(EMAIL_ROW_LIMIT),
+    Promise.all(EMAIL_STATUSES.map((st) => db.from("email_queue").select("id", { count: "exact", head: true }).eq("status", st))),
+    db.from("email_queue").select("id", { count: "exact", head: true }).eq("status", "queued").or(`scheduled_for.is.null,scheduled_for.lte.${emNowIso}`),
+    db.from("email_queue").select("email_type,to_email,sent_at,clients(first_name,last_name)")
+      .eq("status", "sent").gte("sent_at", emMorningStart).order("sent_at", { ascending: true }),
   ]);
   if (seq !== emailsLoadSeq) return;   // R78 · A5 — a newer load owns this page
   if (error) { renderLoadError("#email-list", error, loadEmails); return; }
   const badge = { queued: "amber", sent: "green", failed: "red", cancelled: "grey" };
   const allEmails = emails || [];
-  renderQueueChips("#em-filters", EMAIL_QUEUE_VIEWS, allEmails, emailStatusFilter, (k) => { emailStatusFilter = k; loadEmails(); });
+  // Per-status truth (null where the count read failed — the chip then falls back to the window).
+  const emCounts = {};
+  EMAIL_STATUSES.forEach((st, i) => {
+    const r = emCountsRes && emCountsRes[i];
+    emCounts[st] = r && !r.error && r.count != null ? r.count : null;
+  });
+  const emCountsKnown = EMAIL_STATUSES.every((st) => emCounts[st] != null);
+  const emTrue = emCountsKnown ? {
+    queued: emCounts.queued, sent: emCounts.sent, failed: emCounts.failed, cancelled: emCounts.cancelled,
+    needs: emCounts.queued + emCounts.failed,
+    history: emCounts.sent + emCounts.cancelled,
+    all: EMAIL_STATUSES.reduce((a, st) => a + emCounts[st], 0),
+  } : null;
+  const emDueTrue = emDueRes && !emDueRes.error && emDueRes.count != null ? emDueRes.count : null;
+  renderQueueChips("#em-filters", EMAIL_QUEUE_VIEWS, allEmails, emailStatusFilter, (k) => { emailStatusFilter = k; loadEmails(); }, emTrue);
+  /* R79 · A3 — SENT THIS MORNING: the day-one damage-control view. Everything that has actually
+     gone out since London midnight, grouped by type with the first recipients named — read in
+     wave 1, bounded by the day itself. */
+  const emMorningEl = $("#em-morning");
+  if (emMorningEl) {
+    const mRows = (emMorningRes && !emMorningRes.error && emMorningRes.data) || [];
+    const mErr = emMorningRes && emMorningRes.error;
+    const byType = {};
+    mRows.forEach((r) => {
+      const k = r.email_type || "unknown";
+      (byType[k] = byType[k] || { n: 0, who: [] });
+      byType[k].n++;
+      if (byType[k].who.length < 3) {
+        const nm = r.clients ? [r.clients.first_name, r.clients.last_name].filter(Boolean).join(" ") : "";
+        byType[k].who.push(nm || r.to_email || "unknown recipient");
+      }
+    });
+    const mTotal = mRows.length;
+    const mKinds = Object.keys(byType).sort((a, b) => byType[b].n - byType[a].n || (a < b ? -1 : 1));
+    emMorningEl.innerHTML = `<h3 class="em-morning-h">Sent this morning</h3>
+      <p class="panel-sub" id="em-morning-sub">${mErr
+        ? `Couldn't read this morning's sends just now (${esc(mErr.message || "error")}) — reload to try again.`
+        : mTotal
+          ? `<strong>${mTotal}</strong> email${mTotal === 1 ? "" : "s"} ${mTotal === 1 ? "has" : "have"} actually gone out since midnight (Europe/London) — the whole morning, grouped by type, newest recipients first below. If something here should not have gone, this is where you find out today, not next week.`
+          : `Nothing has been sent since midnight (Europe/London)${emailHoldOn() ? " — email sending is on hold, so that is expected" : ""}. After a morning run this panel lists exactly what went out, grouped by type, so a wrong send is caught the day it happens.`}</p>
+      ${mKinds.map((k) => `<div class="row-item em-morning-row" data-morning-type="${esc(k)}">
+        <div class="row-main"><div class="t">${esc(emailTypeLabel(k))} <span class="badge grey em-morning-n">${byType[k].n}</span></div>
+        <div class="s">${esc(byType[k].who.join(", "))}${byType[k].n > byType[k].who.length ? ` …and ${byType[k].n - byType[k].who.length} more` : ""}</div></div>
+      </div>`).join("")}`;
+  }
   /* R11-5 — the one line this page is opened to read.
 
      R12a K-7 — AND IT WAS COUNTING THE WRONG THING. "queued" is not what the 8am run picks up:
@@ -24532,15 +25019,29 @@ async function loadEmails() {
          run), reminders for review requests nobody answered, and rate-end reminders that have
          fallen due. Same vocabulary as the Run-automation-now confirm, deliberately.
      The bounded-read caveat is unchanged and still only appears when the read came back full. */
-  const emNowIso = new Date().toISOString();
+  /* R79 · A3 — the summary's three numbers are the COUNT QUERIES' now (whole table), falling back
+     to the window only where a count read failed. The window-derived figures survive purely as
+     that fallback. */
   const emQueuedRows = allEmails.filter((e) => e.status === "queued");
-  const nQueued = emQueuedRows.length;
-  const nDue = emQueuedRows.filter((e) => !e.scheduled_for || e.scheduled_for <= emNowIso).length;
-  const nDeferred = nQueued - nDue;
+  const nQueued = emTrue ? emTrue.queued : emQueuedRows.length;
+  const nDue = emDueTrue != null ? emDueTrue : emQueuedRows.filter((e) => !e.scheduled_for || e.scheduled_for <= emNowIso).length;
+  const nDeferred = Math.max(0, nQueued - nDue);
   const capped = allEmails.length >= EMAIL_ROW_LIMIT;
   const emSummary = $("#em-summary");
   if (emSummary) {
-    const cappedTxt = capped ? ` Only the newest ${EMAIL_ROW_LIMIT} rows are listed, so there may be older queued ones too.` : "";
+    /* With real counts the cap is a statement about the LIST, not a doubt about the numbers;
+       without them (a failed count read) the old doubt is the honest wording. */
+    const cappedTxt = capped
+      ? (emTrue ? ` Only the newest ${EMAIL_ROW_LIMIT} rows are listed below — the counts here cover the whole queue.`
+        : ` Only the newest ${EMAIL_ROW_LIMIT} rows are listed, so there may be older queued ones too.`)
+      : "";
+    /* R79 · A3 — BACKLOG HONESTY. A run sends at most 50 (v18/v19's candidate limit); a due pile
+       deeper than that clears over days, and saying "the next run will send 180" was arithmetic
+       the server was never going to do. */
+    const emRuns = Math.ceil(nDue / 50);
+    const backlogTxt = nDue > 50
+      ? ` Sends go out <strong>up to 50 per run</strong> — at this rate the ${nDue} due emails take ~${emRuns} runs (~${emRuns} days at one 8am run a day).`
+      : "";
     const composes = ` It may also compose and send NEW emails as it runs — rate-end reminders that have fallen due, review requests (up to 5 a run) and reminders for review requests nobody answered — so the total that leaves can be higher than the number above.`;
     /* ======================================================================
        R74 · A3 (panel A#9 + D-25) — THIS LINE NOW READS THE HEARTBEAT AND THE
@@ -24568,22 +25069,29 @@ async function loadEmails() {
     const dueSplit = nDeferred
       ? ` <strong>${nDue}</strong> of them ${nDue === 1 ? "is" : "are"} due now; <strong>${nDeferred}</strong> ${nDeferred === 1 ? "is" : "are"} deferred to a later date. The Queued chip counts all ${nQueued}, deferred ones included.`
       : ` All of them are due now.`;
+    /* R79 · A3 — with real counts, a zero/queued figure is the whole table's truth and the "at
+       least in the newest N rows" doubt would itself be the lie; it survives only on the
+       count-read-failed fallback. */
+    const winDoubt = capped && !emTrue ? `, at least in the newest ${EMAIL_ROW_LIMIT} rows listed here` : "";
     if (!nQueued) {
       emSummary.innerHTML = held
-        ? `Nothing is waiting — there is nothing here for the hold to keep back${capped ? `, at least in the newest ${EMAIL_ROW_LIMIT} rows listed here` : ""}. <strong>Email sending is on hold</strong> (Settings › Email sending), so anything queued from now on is held until that is released.`
+        ? `Nothing is waiting — there is nothing here for the hold to keep back${winDoubt}. <strong>Email sending is on hold</strong> (Settings › Email sending), so anything queued from now on is held until that is released.`
         : cronBroken
-          ? `Nothing is queued${capped ? `, at least in the newest ${EMAIL_ROW_LIMIT} rows listed here` : ""} — but ${cron.state === "never" ? "the 8am run has never confirmed it ran" : `the 8am run has not completed since ${esc(fmtD(cron.at))}`}, so nothing would go out even if something were. Today's banner carries the detail.`
-          : `Nothing is queued — the next 8am run${runClock} has nothing waiting to send${capped ? `, at least in the newest ${EMAIL_ROW_LIMIT} rows listed here` : ""}. That is not the same as "nothing will go": the run composes its own sends first — rate-end reminders that have fallen due, review requests (up to 5 a run) and reminders for review requests nobody answered.`;
+          ? `Nothing is queued${winDoubt} — but ${cron.state === "never" ? "the 8am run has never confirmed it ran" : `the 8am run has not completed since ${esc(fmtD(cron.at))}`}, so nothing would go out even if something were. Today's banner carries the detail.`
+          : `Nothing is queued — the next 8am run${runClock} has nothing waiting to send${winDoubt}. That is not the same as "nothing will go": the run composes its own sends first — rate-end reminders that have fallen due, review requests (up to 5 a run) and reminders for review requests nobody answered.`;
     } else if (held) {
-      emSummary.innerHTML = `${nWord(nQueued)} ${nQueued === 1 ? "is" : "are"} <strong>held</strong> and will wait — <strong>email sending is on hold</strong> (Settings › Email sending), so no run sends them.${dueSplit}${cappedTxt} They are not lost and nothing needs re-queuing: releasing the hold is what sends them, and only an Owner can do that.`;
+      emSummary.innerHTML = `${nWord(nQueued)} ${nQueued === 1 ? "is" : "are"} <strong>held</strong> and will wait — <strong>email sending is on hold</strong> (Settings › Email sending), so no run sends them.${dueSplit}${backlogTxt}${cappedTxt} They are not lost and nothing needs re-queuing: releasing the hold is what sends them, and only an Owner can do that.`;
     } else if (cronBroken) {
       emSummary.innerHTML = cron.state === "never"
-        ? `${nWord(nQueued)} ${nQueued === 1 ? "is" : "are"} waiting, and <strong>the 8am run has never confirmed it ran</strong> — these are waiting on it, not on a schedule.${dueSplit}${cappedTxt} Until the run reports in, queued mail is genuinely stuck; Today's banner has a “▶ Run now”.`
-        : `<strong>The 8am run has not completed since ${esc(fmtD(cron.at))}</strong> — ${nWord(nQueued)} ${nQueued === 1 ? "is" : "are"} waiting on it.${dueSplit}${cappedTxt} While the run is stopped this mail is genuinely stuck; Today's banner says the same thing and offers a “▶ Run now”.`;
+        ? `${nWord(nQueued)} ${nQueued === 1 ? "is" : "are"} waiting, and <strong>the 8am run has never confirmed it ran</strong> — these are waiting on it, not on a schedule.${dueSplit}${backlogTxt}${cappedTxt} Until the run reports in, queued mail is genuinely stuck; Today's banner has a “▶ Run now”.`
+        : `<strong>The 8am run has not completed since ${esc(fmtD(cron.at))}</strong> — ${nWord(nQueued)} ${nQueued === 1 ? "is" : "are"} waiting on it.${dueSplit}${backlogTxt}${cappedTxt} While the run is stopped this mail is genuinely stuck; Today's banner says the same thing and offers a “▶ Run now”.`;
     } else {
-      emSummary.innerHTML = nDeferred
-        ? `The next 8am run${runClock} will send <strong>${nDue}</strong> of the <strong>${nQueued}</strong> queued emails listed here — the ones due now <strong>(+${nDeferred} deferred to a later date)</strong>. The Queued chip counts all ${nQueued}, deferred ones included.${cappedTxt}${composes}`
-        : `The next 8am run${runClock} will send <strong>${nQueued}</strong> queued email${nQueued === 1 ? "" : "s"} — all of them due now.${cappedTxt}${composes}`;
+      /* R79 · A3 — deeper than one run's worth: say what one run actually does. */
+      emSummary.innerHTML = nDue > 50
+        ? `<strong>${nDue}</strong> queued emails are due now${nDeferred ? ` <strong>(+${nDeferred} deferred to a later date)</strong>` : ""} — the next 8am run${runClock} sends the oldest <strong>50</strong> of them.${backlogTxt} The Queued chip counts all ${nQueued}, deferred ones included.${cappedTxt}${composes}`
+        : nDeferred
+          ? `The next 8am run${runClock} will send <strong>${nDue}</strong> of the <strong>${nQueued}</strong> queued emails — the ones due now <strong>(+${nDeferred} deferred to a later date)</strong>. The Queued chip counts all ${nQueued}, deferred ones included.${cappedTxt}${composes}`
+          : `The next 8am run${runClock} will send <strong>${nQueued}</strong> queued email${nQueued === 1 ? "" : "s"} — all of them due now.${cappedTxt}${composes}`;
     }
   }
   /* R62 — CURRENT FIRST on the All view. The list interleaved cancelled rows among queued ones
@@ -24640,7 +25148,11 @@ async function loadEmails() {
   const [qCtx, emDocsRes, emLeadsRes] = await Promise.all([
     loadPropContext(
       [...emailRows.map((e) => e.case_id), ...smsRows.map((x) => x.case_id)],
-      { clientIds: [...emailRows.map((e) => e.client_id), ...smsRows.map((x) => x.client_id)] }),
+      { clientIds: [...emailRows.map((e) => e.client_id), ...smsRows.map((x) => x.client_id)],
+        /* R79 · A2 — the v19 preview replica composes from these (all base columns): the rate
+           trio for rate-end wording, broker_fee for the fee letter, nps_token for the review
+           CTA, doc_token for the upload link. */
+        extraCols: "rate_end_date,rate_type,rate_percent,broker_fee,nps_token,doc_token" }),
     (async () => {
       if (!emDocCaseIds.length || (await docsSupported()) === false) return { data: [] };
       return inChunks(emDocCaseIds, (sl) => db.from("case_documents").select("case_id,item,status").in("case_id", sl));
@@ -24666,11 +25178,23 @@ async function loadEmails() {
   // Everything the fold needs for one row, assembled once per row rather than re-derived inside it.
   const emPreviewCtx = (e) => {
     const chk = emOutstanding[e.case_id];
+    /* R79 · A2 — v19's variant flags, derived from what this page already loads (the newest
+       window): a docs_request with an earlier non-cancelled docs_request on the same case is a
+       CHASE; a review_request with an earlier non-cancelled review_request is the REMINDER. The
+       edge derives the same facts from the whole table — a prior ask older than the window can
+       make the preview read as a first ask where the send will chase, which is the one bounded
+       divergence and it is bounded by EMAIL_ROW_LIMIT. */
+    const prior = (type) => !!(e.case_id && allEmails.some((x) => x.case_id === e.case_id
+      && x.email_type === type && x.status !== "cancelled" && x.id !== e.id
+      && String(x.created_at || "") < String(e.created_at || "")));
     return {
       caseRow: propCtxCase(emailCtx, e.case_id),
       // null = "this case has no checklist" (fall back to the firm list); [] = "one, all received".
       outstanding: chk && chk.any ? chk.items : null,
       firmDocs: emFirmDocs,
+      docChase: e.email_type === "docs_request" ? prior("docs_request") : false,
+      reviewReminder: e.email_type === "review_request" ? prior("review_request") : false,
+      lead: e.lead_id ? emailLeads[e.lead_id] : null,
     };
   };
   /* R7-5 — THE LEAD ACKNOWLEDGEMENTS. The database's AFTER INSERT trigger on `leads` queues a
@@ -25416,8 +25940,14 @@ async function runAutomation(silent, opts) {
    "sent", "queued but the send failed" and "could not reach the send service" can never again be
    collapsed into the same sentence. The email row itself is already safely in the queue in every
    branch; what differs is whether the client has actually received anything. */
-function sendResultToast(res, queuedMsg) {
+function sendResultToast(res, queuedMsg, opts) {
   if (res && res.sent > 0) return toast("Email sent ✓");
+  /* R79 · A4 — THE HELD BRANCH. The v18/v19 response carries {held:true, warning} while
+     settings.email_hold is anything but 'off': the row is safely queued and NOTHING has gone to
+     the client — which is a different fact from "queued, waiting for the 8am run" and must not
+     wear that sentence. `opts.heldNote` lets a caller append its own held consequence (queueEmail
+     adds the skipped chase task). */
+  if (res && res.held) return toast(`Email queued and HELD — nothing sends until the hold is released (Settings › Email sending).${opts && opts.heldNote ? " " + opts.heldNote : ""}`);
   if (res && res.unreachable) return toast(`Email queued, but the send service could not be reached (${res.error}) — it stays in the queue; check the Emails tab.`);
   if (res && res.error) return toast(`Email queued, but sending it FAILED: ${res.error} — nothing has reached the client; see the Emails tab.`);
   if (res && res.failed > 0) return toast("Email queued, but the send service reported it as failed — nothing has reached the client; see the Emails tab.");
@@ -25450,6 +25980,11 @@ async function runQueueNow(btn, after) {
        BEFORE asking, so the number in the confirm is the number that will land in clients' inboxes.
        Queueing is not sending: if the Owner cancels, those rows simply wait for tonight's cron,
        which would have created them anyway. */
+    /* R79 · B3 — both queueing RPCs write cases server-side (queue_automated_emails creates
+       retention successor cases and stamps rate_reminder_queued_at; queue_comms_extras stamps
+       review_requested_at), bypassing the R78 write-wrap. Same rule as reassign_holdings: bust
+       the board cache eagerly at the call site. */
+    try { bustBoardCache(); } catch (_) { /* cache module not evaluated yet — nothing to bust */ }
     const qa = await db.rpc("queue_automated_emails");
     const qc = await db.rpc("queue_comms_extras");
     // Where the client isn't allowed to call the queueing RPCs directly, the send is scoped to the
@@ -37621,6 +38156,13 @@ const moveSentence = (h) => [
 const isMissingFunctionError = (e) => !!e && (e.code === "42883" || /does not exist/i.test(String(e.message || "")));
 async function reassignHoldingsRpc(fromId, toId) {
   try {
+    /* R79 · B3 — reassign_holdings WRITES cases server-side, which bypasses R78's db.from
+       write-wrap (the one choke point that busts the board cache), so a book handover left the
+       board serving the OLD adviser's snapshot until something else happened to write a case
+       (runtime-proven at base). Busted here, eagerly — at call time, even if the RPC then fails —
+       exactly the wrap's own rule. HARNESS RULE (new): any db.rpc whose function writes cases or
+       case_events must bust the board cache at its call site. */
+    try { bustBoardCache(); } catch (_) { /* cache module not evaluated yet — nothing to bust */ }
     const { data, error } = await db.rpc("reassign_holdings", { p_from: fromId, p_to: toId });
     if (error) {
       if (!isMissingFunctionError(error)) {

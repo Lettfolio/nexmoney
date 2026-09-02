@@ -96,6 +96,16 @@ async function main() {
     console.log("\n— R5-1/R5-13/R5-8 · scoped send from a case (p2 Wayne, ca017 Louise Garnham)");
     {
       const page = await newPage(browser, "p2");
+      /* R79: the mock's SCOPED path now honours the hold like prod v18/v19 (r79_send §F), and the
+         chase task is deliberately skipped while held (A4) — so this section's contract (send +
+         task + full confirm wording) states the R76 precondition too: hold off, server key on. */
+      await snapshot(page, async () => {
+        const rows = window.__mock.db.settings;
+        const row = rows.filter((r) => r.key === "email_hold")[0];
+        if (row) row.value = "off"; else rows.push({ key: "email_hold", value: "off" });
+        window.__mock.setResendKey(true);
+        await window.__reloadSettings();
+      });
       const before = await snapshot(page, async () => {
         const db = window.__mockDb;
         const { data: q } = await db.from("email_queue").select("id,status").eq("status", "queued");
@@ -157,6 +167,14 @@ async function main() {
     console.log("\n— R5-1 · accept a lead (p1 Kim): only the welcome goes");
     {
       const page = await newPage(browser, "p1");
+      /* R79: same precondition — the scoped welcome send now honours the hold like prod. */
+      await snapshot(page, async () => {
+        const rows = window.__mock.db.settings;
+        const row = rows.filter((r) => r.key === "email_hold")[0];
+        if (row) row.value = "off"; else rows.push({ key: "email_hold", value: "off" });
+        window.__mock.setResendKey(true);
+        await window.__reloadSettings();
+      });
       const before = await snapshot(page, async () => {
         const { data: q } = await window.__mockDb.from("email_queue").select("id").eq("status", "queued");
         return q.map((r) => r.id).sort();

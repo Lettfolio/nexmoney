@@ -459,7 +459,8 @@ const groundTruth = (page) => page.evaluate(async ({ CHASE_MAX }) => {
   }, G.ids.amery);
   ok("the token survives a reopen — the button now says Copy", /Copy upload link/.test(reopened), reopened);
   // put Amery back the way the fixtures left her: no token
-  await owner.evaluate(async (i) => { await window.__mockDb.from("cases").update({ doc_token: null }).eq("id", i); }, G.ids.amery);
+  // PATCHED R79: the mint now also stamps doc_token_expires_at (+30d) — reset that too.
+  await owner.evaluate(async (i) => { await window.__mockDb.from("cases").update({ doc_token: null, doc_token_expires_at: null }).eq("id", i); }, G.ids.amery);
 
   console.log("\n=== R9-5 · SEND DOCUMENT REQUEST NOW (scoped — never a flush) ===");
   const mailsBefore = await owner.evaluate(async () => (await window.__mockDb.from("email_queue").select("id,case_id,email_type,status")).data || []);

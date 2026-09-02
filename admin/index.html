@@ -1205,6 +1205,11 @@
            describe exactly the list underneath them. -->
       <div id="em-filters" class="pipe-segment em-filters" role="tablist" aria-label="Filter emails by status"></div>
       <p class="panel-sub em-summary" id="em-summary"></p>
+      <!-- R79 · A3 — the day-one damage-control view: everything that has ACTUALLY gone out since
+           midnight (Europe/London), grouped by type with the first recipients named, painted by
+           loadEmails() from its own bounded read (not the newest-100 window). Honest empty state
+           while nothing has been sent. -->
+      <div class="panel em-morning" id="em-morning"></div>
       <!-- R72 · B3 (M3) — the queue can now be READ and stopped in bulk. Stated once, above the
            list, because both affordances are new and neither is obvious from a checkbox. -->
       <p class="panel-sub"><strong>Read one before it goes.</strong> Every queued or failed row has a <em>Preview this email</em> fold showing the subject and, where the wording is already written, the text itself — shown as plain formatting only, with no links, images or styling loaded from it. <strong>Stop several at once.</strong> Tick the queued or failed rows you do not want sent and use <em>Cancel selected</em> on the bar: one confirmation for the whole batch, and a cancelled email never sends and is never retried. <em>Retry</em> stays what it always was — it only ever acts on rows that have already failed, and says how many of your selection that is.</p>

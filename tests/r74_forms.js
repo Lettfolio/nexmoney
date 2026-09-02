@@ -682,8 +682,11 @@ const tasksFor = (page, caseId) => page.evaluate(async (id) => {
       });
       ok("E2a · a house-template email renders a real composed body in its fold", !!prev && prev.text.length > 40, JSON.stringify(prev && prev.text.slice(0, 120)));
       ok("E2b · …that reads like the email the run would send", !!prev && /mortgage|documents|review|insurance|fee|congratulations/i.test(prev.text), prev && prev.text.slice(0, 160));
-      ok("E2c · …and says plainly that it is a preview of the standard wording, not a stored draft",
-        !!prev && /preview of the standard/i.test(prev.note), prev && prev.note.slice(0, 160));
+      /* R79 (A2): the replica is now v19's exact compose(), and the note's claim tightened with
+         it — "the exact wording the send composes" (r79_send §A pins the sentences type by type).
+         Re-pointed, not weakened: the fold still states what it shows and where it came from. */
+      ok("E2c · …and says plainly what it is: the exact wording the send composes",
+        !!prev && /exact wording the send composes/i.test(prev.note), prev && prev.note.slice(0, 160));
       eq("E2d · the R72 inert pipeline still applies — no live links in a preview", prev ? prev.anchors : 0, 0);
 
       // A row that DOES store its text still shows what is stored, not the template.

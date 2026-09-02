@@ -134,7 +134,208 @@ node tests/r77_owner.js
 node tests/r77_health.js
 node tests/r78_hands.js
 node tests/r78_fast.js
+node tests/r79_send.js
+node tests/r79_locks.js
 ```
+
+**R79 · A notes — "Trust the send", agent A (`tests/r79_send.js` 91).** Five items around the
+same fact: email sending is held pre-go-live, process-emails v18 is deployed, and the CTO ships
+agent A's **v19** (a deliverable FILE in this repo — `edge/process-emails-v19.ts`, v18 verbatim
+plus four `v19:`-commented changes — and `edge/unsubscribe.ts`) at round close, together with the
+migration: `clients.comms_optout` bool NOT NULL default false, `clients.comms_token` uuid (mock
+seeds a unique token per client), `fact_finds.expires_at` timestamptz, `cases.doc_token_expires_at`
+timestamptz. Every contract:
+
+  - **THE FOUR MARKETING-ADJACENT TYPES (owner decision — binding list):**
+    `["birthday_greeting", "completion_anniversary", "referral_request", "review_request"]` —
+    v19's `MARKETING_TYPES`, mirrored verbatim in the mock and as app.js's
+    `EDGE_MARKETING_TYPES`. Opt-out is honoured for ALL FOUR; all four carry the unsubscribe
+    footer. Link expiry is **30 days** (the other owner decision).
+  - **A1 — v19 + unsubscribe.** v19's exact four changes: (1) the UNSCOPED candidate query gains
+    `.order("scheduled_for", { ascending: true })` (oldest-due first, still `.limit(50)`; scoped
+    path unchanged); (2) the send loop RE-READS `clients.comms_optout` at send time for the four
+    types — true ⇒ the row goes `status:'cancelled'` with error **exactly
+    `client opted out of these emails`**, `results.skipped_optout++`, nothing sends (a failed
+    re-read falls back to the joined row's value, never blocks); (3) the four templates append
+    one small footer line above the grey house footer —
+    "Prefer not to get emails like this? Unsubscribe." linking
+    `${FN_BASE}/unsubscribe?c=<client_id>&t=<comms_token>` (comms_token from the already-joined
+    clients row); (4) a successful factfind send stamps that fact_finds row
+    `expires_at = now()+30d`; a successful docs_request send that CARRIED an upload link (case
+    doc_token + site_url) stamps `cases.doc_token_expires_at = now()+30d`. `edge/unsubscribe.ts`
+    is public GET `?c=&t=`: constant-time-ish compare against comms_token, sets
+    `comms_optout = true`, always answers 200 HTML — a good token gets the friendly branded page
+    ("You won't get relationship emails from us again. Emails about your own mortgage are
+    unaffected."), a wrong/missing token gets a generic "link not recognised" page with NO
+    information leak (same shape, no echo of any client fact).
+  - **A2 — the preview IS v19's wording.** `previewComposeEmail(type, row, ctx)` (app.js) is a
+    faithful client-side replica of v19's compose(): per type the ACTUAL sentences and ACTUAL
+    subject, from the same inputs — per-adviser rules (profile full_name/phone falling back to
+    settings; sign-off = the profile's `email_signoff` block, else v19's exact
+    `Best regards, / <adviser> / <company>` — `previewSignoffLines` is that ladder), v19's
+    property mentions (in-sentence on/for/of fragments vs the standalone `Regarding:` line), the
+    docs chase variant, the review reminder variant, the offer-attachment sentence
+    (row.attachment_path), the NPS-vs-review-link CTA ladder, and the unsubscribe footer on the
+    four types (rendered `.em-prev-unsub`, sentence exactly
+    "Prefer not to get emails like this? Unsubscribe."). **RULE: if the edge function's wording
+    changes, update this replica in the same commit** — the fold now claims, verbatim,
+    "This is the exact wording the send composes." and r79_send §A pins the sentences type by
+    type. Dates render via a LOCAL `edgeFmtDate` (en-GB long months — the edge's own format),
+    deliberately NOT fmtD; money via `edgeMoney` (Intl GBP). The fold leads with a
+    **`Subject:`** line — for a template email that is the COMPOSED subject (the send overwrites
+    the stored column), for a stored (custom) body the stored subject; the stored body still
+    wins outright (R74's rule). Variant flags (`docChase`/`reviewReminder`) are derived from the
+    rows the page already lists (prior non-cancelled same-type row on the case, older
+    created_at) — window-bounded by EMAIL_ROW_LIMIT, the one stated divergence from the edge's
+    whole-table read. The queue's explicit `review_reminder` rows render the reminder variant
+    (they ARE v19's reminder). What the replica cannot mint says so in its own lines: the
+    fact-find link stays NAMED not invented (R75 rule), and the fee request's bank lines show
+    real values only where settings carry them (Owner) — otherwise one line says the send fills
+    them in (bank details are Owner-only at the database). `loadPropContext` gained
+    `opts.extraCols` (BASE columns only — the emails page passes
+    `rate_end_date,rate_type,rate_percent,broker_fee,nps_token,doc_token`); no-arg callers are
+    byte-identical. MOCK-SHAPE: `cases.nps_token` joined mkCase + the nullable list (real prod
+    column since NPS capture; null on every fixture row).
+  - **A3 — Emails page truth at scale.** **RULE: every chip/summary count on the Emails page
+    comes from whole-table `head:true` count queries** (one per status + the queued-due count +
+    the since-midnight sent read, all inside wave 1's Promise.all — R78's two-wave budget holds;
+    r78_fast §B passes unchanged), never from filtering the newest-EMAIL_ROW_LIMIT window (which
+    read ~4× low at seeded scale). `renderQueueChips` takes an optional 6th arg `counts`
+    (key→number override; SMS passes nothing and keeps window counts). A failed count read falls
+    back to the window figure AND restores the old "at least in the newest 100 rows" doubt; with
+    real counts the cap sentence is
+    " Only the newest 100 rows are listed below — the counts here cover the whole queue." The
+    LIST stays windowed with its honest wording. **Backlog honesty:** due-now > 50 ⇒ the summary
+    carries " Sends go out up to 50 per run — at this rate the N due emails take ~X runs (~X days
+    at one 8am run a day)." and the healthy branch says the run "sends the oldest 50 of them"
+    instead of promising all N. **`#em-morning`** ("Sent this morning", index.html panel between
+    `#em-summary` and the list): everything `status='sent'` with `sent_at >=` today 00:00
+    **Europe/London** (computed against localDateStr — the two-offset probe), grouped by type
+    (`.em-morning-row[data-morning-type]`, count in `.em-morning-n`, first ≤3 recipients named +
+    "…and N more"), sub-line `#em-morning-sub`; empty state is honest and, while held, says the
+    silence is expected.
+  - **A4 — held honesty on per-case sends.** While `emailHoldOn()`, EVERY per-case send confirm
+    carries the holdLine, word for word:
+    "Sending is currently ON HOLD (Settings › Email sending) — this will queue and wait; nothing
+    is sent now." — the queueEmail confirm (fee request, review request, docs request, fact-find,
+    rate-end reminder), protQueueEmail's own confirm, and emailOfferToClient (now hold-aware; its
+    old hardcoded "Client email is not switched on yet" sentence is gone — when NOT held it
+    states the R54 far-ahead parking instead). `sendResultToast(res, queuedMsg, opts)` gained the
+    HELD branch — the v18/v19 response carries `{held:true, warning}` — toast, word for word:
+    **"Email queued and HELD — nothing sends until the hold is released (Settings › Email
+    sending)."** (+ `opts.heldNote` appended). **RULE: no chase task while held** — the rate-end
+    7-day follow-up and the fact-find 3-day chase are the two auto-tasks tied to "the client got
+    this email"; both are SKIPPED while held (bulk `{bulk:true}` callers included — they share
+    the same branches), the confirm's extraLine says so beforehand ("No follow-up/chase task will
+    be created while sending is held — the client is not getting this email yet, so there is
+    nothing to chase."), and the held toast appends "No chase task was created while the hold is
+    on." The fact-find case NOTE is still written (it records intent).
+  - **A5 — mock parity.** The mock's process-emails now mirrors v19: (a) **the SCOPED path
+    honours the hold** — `{queue_ids:[…]}` under `email_hold ≠ 'off'` answers
+    `{held:true, pending:<named due>, warning}` and rows stay queued (this was the repro'd gap:
+    a per-case "send now" under the seeded hold used to toast "Email sent ✓");
+    **LAST_EMAIL_RUN** is written `{scoped:true, held:true, sent:0}`. The no-Resend-key half of
+    prod's gate is DELIBERATELY still not mirrored for scoped sends (documented divergence — the
+    hold is the state production lives in). **RULE (extends R76's): a suite that drives a
+    per-case send through to "sent" must set `email_hold` "off" AND `__mock.setResendKey(true)`
+    first.** (b) the unscoped run sorts due rows scheduled_for-ascending nulls-last and takes at
+    most 50 (`considered` ≤ 50); (c) the optout gate cancels marketing rows with the exact error
+    string above and reports `skipped_optout`; (d) composeEmail appends the footer sentence to
+    `body_lines` and exposes `unsubscribe_url` (client id + comms_token) on the four types, null
+    elsewhere; (e) expiry stamping on successful factfind (`fact_finds.expires_at`) and
+    link-carrying docs_request (`cases.doc_token_expires_at`) sends. FIXTURES: every client row
+    carries `comms_optout` (false) + a unique `comms_token` (agent B's seed lines, byte-identical
+    on both branches so the merge is clean); **exactly two rows are flipped `comms_optout=true`
+    by an A5 mutation pass — Chloe Pennington (38) and Harold Mainwaring (39)** — chosen off the
+    completed book so no drip/count anywhere moves. NOTE: the mock's own composeEmail still
+    carries its pre-R79 line-model divergences from v18 (sign-off without "Best regards,",
+    docs.html link path) — the app's preview replica follows the AUTHORITATIVE v19 source, not
+    the mock's older model; reconciling the mock's line model wholesale was out of scope and is
+    named here rather than left to be rediscovered.
+  Old-suite patches (all commented R79): r5_batch1 (scoped-send + accept-lead sections state the
+  hold-off + key precondition), r5_batch8 (compose-parity leg, same), r64 (H-02 confirm wording +
+  MOCK(b) compose parity, same), r12a §D3 (fact-find send path, same), r66_comms §A20–A24 (custom
+  send-through, same), r69_polish §D9 (RE-POINTED: a scoped run under the hold now answers
+  {held, pending} and touches nothing — the old pin WAS the mock-only gap), r72_admin §D7/D7b
+  (composed subject + "exact wording" note), r74_forms §E2c (same note), r75_queues §F1
+  (HOUSE_TPL_OPENING is gone — inventory asserted through previewComposeEmail itself; v19
+  sentences). Everything else in the battery passes unchanged.
+
+**R79 · B notes — "Trust the send", agent B (`tests/r79_locks.js` 63).** Six items, every
+contract written down:
+
+  - **B1 — export without live keys.** `exportScrubTokens(rows)` (app.js, beside EXPORT_TABLES)
+    runs on every table's rows BEFORE they touch the payload: any column whose NAME ends in
+    `token` (`/token$/i` — cases.doc_token, cases.nps_token, fact_finds.token, clients.comms_token,
+    and anything future) has its non-null VALUE replaced with the literal **`"(withheld)"`**; the
+    column and the row both survive, so per-table counts still match the database exactly (r13's
+    pin holds unpatched). `audit_log` rows get the same rule INSIDE their `changes` diff (a token
+    write is audited with old AND new values — both are scrubbed as one). Columns that merely
+    CONTAIN "token" (`doc_token_expires_at`) are dates about a token and are kept. The payload
+    gains a top-level **`tokens_withheld`** manifest sentence and the on-screen/toast summary
+    appends **"· link tokens withheld"**. The vault was never exported and still isn't.
+    Withheld tokens are unrecoverable from the file by design — regenerate from the case.
+  - **B2 — 30-day links (owner decision).** Migration contract (CTO applies at close; the app and
+    mock assume the columns): `fact_finds.expires_at` timestamptz, `cases.doc_token_expires_at`
+    timestamptz, both nullable, NO backfill — a pre-R79 link has no expiry and the app says so.
+    `LINK_TOKEN_DAYS`/`linkExpiryIso()`/`linkExpiryLine()` (app.js, beside newDocToken) are the
+    ONE stamping + wording implementation: every client-side mint — factFind's first insert, its
+    legacy-token back-fill, "New blank fact-find", copyDocUploadLink's create — stamps
+    `now()+30d` as ISO (fmtD for display only; nothing stores a walked local date). HONEST STATE:
+    **`#ff-link-state`** in the fact-find dialog (hidden once status=submitted — the link has done
+    its job) and **`#docs-link-state`** under the docs actions, wording exactly
+    "Link valid until <date>." / "Link expired <date> — regenerate to send a fresh one." /
+    the no-expiry legacy sentence. REGENERATE (staff, house `confirmDestructive`): **`#ff-regen`**
+    updates that fact_finds row's token to `ffToken()` (crypto.randomUUID) + fresh expiry —
+    saved answers live on the ROW and survive; **`#docs-link-regen`** → `regenDocLink()` does
+    cases.doc_token likewise (then `refreshOpenedStamp`, repaint). Both confirms state the old
+    link is invalidated BY VALUE ("the current link stops working immediately — the old address
+    itself becomes invalid"). Copy buttons and the bearer warning are otherwise unchanged; the
+    warning's expiry sentence is per-link honest (stop date / expired / "does not expire on its
+    own" only for legacy). MOCK: columns in applyInsertDefaults (fact_finds.expires_at,
+    clients.comms_optout/comms_token defaults per the migration — no UI reads the comms pair yet)
+    + mkCase (doc_token_expires_at); fixtures: Ellingham's doc link valid (+21d), **Quirke's doc
+    link EXPIRED (−3d)**, Osei's legacy (null), fact-find `ff-demo-0002-sent` **EXPIRED (−5d)**
+    — the two expired fixtures keep both "regenerate" states permanently on screen.
+  - **B3 — bust the board cache after cases-writing RPCs.** **RULE (new, standing): any `db.rpc`
+    whose function writes `cases` or `case_events` must call `bustBoardCache()` eagerly at its
+    call site** — RPCs bypass R78's db.from write-wrap choke point (runtime-proven: a
+    reassign_holdings handover left the board serving the leaver's snapshot). Swept sites:
+    `reassignHoldingsRpc` (reassign_holdings) and `runQueueNow` (queue_automated_emails creates
+    retention successor cases + stamps rate_reminder_queued_at; queue_comms_extras stamps
+    review_requested_at). run_watchtower/mark_tour_seen/the read RPCs write no cases and do not
+    bust. Busting is eager (call time, even if the RPC then fails), the wrap's own rule.
+  - **B4 — tour resilience.** An outside click NO LONGER ends the tour: a click ON the current
+    step's spotlighted target ADVANCES it (last step's target click = Finish, mark_tour_seen);
+    any other stray click is ignored (tourClickHandler, still capture-phase). Progress is
+    remembered under **`nx_tour_step_<uid>`** — written on every tourRender, cleared ONLY by the
+    deliberate exits (Finish / Skip / Escape, the same three that call mark_tour_seen) — so a
+    quiet interruption (nav, openModal — both still tourEnd(false)) or a reload resumes at the
+    same step; an explicit Retake (`{force:true}`) always starts at 0. No steps added; every
+    role's list, the target-vanished skip, and the DB seen-flag gates are untouched.
+  - **B5 — what's-new knows who arrived when.** The band's dismissal state is now the per-user
+    **last-seen-release marker `nx_whatsnew_last_<uid>`** (an integer, e.g. "79" =
+    WHATSNEW_RELEASE) replacing the per-release nx_whatsnew_r72 key — which is still HONOURED on
+    read as "seen up to 72". FIRST-EVER sign-in (tour_seen_at null): the band stays hidden AND
+    the marker is stamped CURRENT, so day two does not greet a brand-new user with changes
+    predating their existence; it stays quiet until a genuinely newer release ships. ENTRIES
+    (WHATSNEW_ENTRIES) carry `{rel, roles, text}` — `roles: null` = everybody (the default
+    posture), a roles array limits it (the go-live-list clause is owner/admin; R79's export
+    clause is owner-only) — an adviser is never shown an owner-only screen's name. The band
+    renders ONLY the newest eligible release's entries (a greeting, not a changelog — r11's
+    height budget and r69_today §B's phone budget both depend on one line). Suites clearing
+    band state must clear the MARKER key now (r72_owner §D7 patched, commented R79).
+  - **B6 — explicit sign-out reloads.** `#logout-btn` awaits `db.auth.signOut()` then
+    `location.reload()` — the prior user's book (DOM, boardCache, closures) is torn down on a
+    shared machine and the login screen comes up on a clean page. ONLY the explicit button
+    reloads: the involuntary `!session` path keeps R76 · B4's signed-out strip over open work,
+    typed text preserved, no reload — both halves pinned (r79_locks §F; r76_intake unpatched).
+    HARNESS caveat: the mock's SIGNED_OUT flag is in-memory and `?as=` re-signs the persona in on
+    the fresh load, so the suite pins the NAVIGATION + heap teardown, not the login screen.
+  Old-suite patches (commented R79): r72_owner §D7 (dismissal key → `nx_whatsnew_last_p4` =
+  current release), r9_docs Amery cleanup (also nulls doc_token_expires_at). Everything else in
+  the battery passes unchanged — the full battery was re-run to prove it (r11_ux's owner-height
+  budget is what forced the newest-release-only band rule).
 
 **R78 · B notes — "fast and solid", agent B (`tests/r78_hands.js`).** Seven items, every
 contract written down:

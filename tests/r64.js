@@ -435,6 +435,16 @@ async function refileFromCaseModal(page, sourceCaseId, noteId, targetCaseId) {
     console.log("\n— H-02 · rate-end reminder confirm names the property");
     {
       const page = await newPage(browser, "p1");
+      /* R79: the per-case confirm now carries the holdLine and swaps the follow-up-task sentence
+         for its held variant while email_hold is on (the fixture's seed) — this section pins the
+         CLASSIC wording, so it states the hold-off precondition first. */
+      await page.evaluate(async () => {
+        const rows = window.__mock.db.settings;
+        const row = rows.filter((r) => r.key === "email_hold")[0];
+        if (row) row.value = "off"; else rows.push({ key: "email_hold", value: "off" });
+        window.__mock.setResendKey(true);
+        await window.__reloadSettings();
+      });
       const { cases } = await findClient(page, "Underhill");
       const withProp = cases.find((c) => c.property_address && c.rate_end_date);
 
@@ -659,6 +669,14 @@ async function refileFromCaseModal(page, sourceCaseId, noteId, targetCaseId) {
     console.log("\n— MOCK parity (b) · compose, via __mock.lastEmailRun()");
     {
       const page = await newPage(browser, "p1");
+      /* R79: the scoped run honours the hold like prod now — compose parity needs hold off + key. */
+      await page.evaluate(async () => {
+        const rows = window.__mock.db.settings;
+        const row = rows.filter((r) => r.key === "email_hold")[0];
+        if (row) row.value = "off"; else rows.push({ key: "email_hold", value: "off" });
+        window.__mock.setResendKey(true);
+        await window.__reloadSettings();
+      });
       const ADDR = "12A Herbert Avenue, Parkstone, Poole BH12 4HR";
       const composed = await page.evaluate(async (addr) => {
         const db = window.__mockDb;

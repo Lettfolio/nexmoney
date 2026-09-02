@@ -684,6 +684,11 @@ async function analyse(page, csv) {
       const page = await boot(browser, "p1");
       const errBefore = realErrs(page).length;
 
+      /* R79 (A2): previewComposeEmail is now a faithful replica of process-emails v19's compose()
+         — the summary-opening map (HOUSE_TPL_OPENING) is gone and the lines below are v19's own
+         sentences (r79_send §A pins them word for word). Re-pointed, not weakened: this section's
+         facts — the composed set covers the enum, factfind NAMES its link, a real queued
+         review_request renders wording — all still hold. */
       const preview = await page.evaluate(() => {
         const types = ["review_request", "welcome", "lead_ack", "referral_request",
           "birthday_greeting", "completion_anniversary", "factfind", "rate_end_reminder"];
@@ -692,34 +697,29 @@ async function analyse(page, csv) {
           const c = previewComposeEmail(t, { email_type: t }, { caseRow: null });
           out[t] = c ? c.lines : null;
         });
-        return { out, mapKeys: Object.keys(HOUSE_TPL_OPENING).sort() };
+        return { out };
       });
       ok("F1a · review_request composes a body at last (Kim's 23 queued rows)",
-        Array.isArray(preview.out.review_request) && /short review/.test(preview.out.review_request.join(" ")),
+        Array.isArray(preview.out.review_request) && /letting us know how we did makes a huge difference/.test(preview.out.review_request.join(" ")),
         JSON.stringify(preview.out.review_request));
       ["welcome", "lead_ack", "referral_request", "birthday_greeting", "completion_anniversary"].forEach((t) => {
         ok(`F1b · ${t} composes a body`, Array.isArray(preview.out[t]) && preview.out[t].length > 0, JSON.stringify(preview.out[t]));
       });
-      ok("F1c · factfind composes its three real sentences and NAMES the link rather than inventing one",
-        (preview.out.factfind || []).length === 3 && /a secure link, built for this client/.test((preview.out.factfind || []).join(" ")),
+      ok("F1c · factfind composes v19's real sentences and NAMES the link rather than inventing one",
+        /a secure link, built for this client/.test((preview.out.factfind || []).join(" "))
+        && /the next step is a short fact find/.test((preview.out.factfind || []).join(" ")),
         JSON.stringify(preview.out.factfind));
-      ok("F1d · the pre-existing eleven are untouched",
-        /rate on your mortgage is coming to an end/.test((preview.out.rate_end_reminder || []).join(" ")),
+      ok("F1d · rate_end_reminder composes v19's own sentence",
+        /is due to end on/.test((preview.out.rate_end_reminder || []).join(" ")),
         JSON.stringify(preview.out.rate_end_reminder));
 
-      // F1e — the inventory: every type the harness's model of v17 composes is in
-      // the map. That model IS the written-down contract for the deployed function.
-      const inventory = await page.evaluate(() => {
-        const known = Object.keys(HOUSE_TPL_OPENING);
-        // The mock's composer knows a type when it has an opening for it; factfind
-        // composes through its own builder and is handled separately in the app.
-        return { known: known.sort() };
-      });
+      // F1e — the inventory: every composed type in the enum gets a reading from the replica.
       const mustHave = ["review_request", "review_reminder", "welcome", "lead_ack", "referral_request",
         "birthday_greeting", "completion_anniversary", "rate_end_reminder", "rate_end_chase",
         "submitted_update", "offer_update", "completion_congrats", "protection_offer", "fee_request",
         "gi_exchange", "docs_request", "docs_chase"];
-      eq("F1e · the preview map covers every composed type in the enum", mustHave.filter((t) => !inventory.known.includes(t)), []);
+      const inventory = await page.evaluate((list) => list.filter((t) => !previewComposeEmail(t, { email_type: t }, { caseRow: null })), mustHave);
+      eq("F1e · the preview replica covers every composed type in the enum", inventory, []);
 
       // F1f — end to end: an actual queued review_request row renders the wording.
       await page.evaluate(async () => {
@@ -742,8 +742,8 @@ async function analyse(page, csv) {
         const body = row.querySelector(".em-prev-body");
         return { found: true, composed: !!(body && body.dataset.emComposed), text: body ? body.textContent.replace(/\s+/g, " ").trim() : "" };
       });
-      ok("F1f · a real queued review_request row previews the composed house wording",
-        rendered.found && rendered.composed && /short review/.test(rendered.text), JSON.stringify(rendered).slice(0, 300));
+      ok("F1f · a real queued review_request row previews the composed house wording", // R79: v19's sentence
+        rendered.found && rendered.composed && /letting us know how we did makes a huge difference/.test(rendered.text), JSON.stringify(rendered).slice(0, 300));
 
       ok("§F1 · no console errors", noNewErr(page, errBefore), JSON.stringify(realErrs(page)));
       await page.close();

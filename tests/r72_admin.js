@@ -833,14 +833,14 @@ function docSuggested(docsListRaw, kind) {
           note: (fold.querySelector(".em-prev-note") || {}).textContent || "",
         };
       }, qPlain);
-      ok("D7 · a row whose wording is not written yet shows its subject", /Your document checklist/.test(prevPlain.subject), prevPlain.subject);
-      /* R74 (panel A#7): R72's honest "there is nothing here to show until it goes" was true of
-         the body_html COLUMN and useless to the administrator, for whom every automated type is
-         exactly the kind they want to check. The fold now COMPOSES the house wording client-side
-         and labels it as a reading of the template rather than a stored draft. Re-pointed, not
-         weakened: it still asserts the fold explains what it is showing and where it came from. */
-      ok("D7b · …and renders the standard wording, saying plainly that it is a preview of the template",
-        prevPlain.hasBody && /preview of the standard/i.test(prevPlain.note), prevPlain.note);
+      /* R79 (A2): the fold now leads with the SEND's OWN subject for a template email — the
+         stored queue-time subject column is whatever text happened to be written, and the send
+         overwrites it. For this docs_request that is v19's composed subject, not the row's
+         "Your document checklist". The note's claim tightened with it: the wording shown is the
+         exact wording the send composes (r79_send §A pins it type by type). */
+      ok("D7 · a template row's fold leads with the subject the SEND composes", /documents we'll need from you/.test(prevPlain.subject), prevPlain.subject);
+      ok("D7b · …and renders the wording, saying plainly it is the send's exact wording",
+        prevPlain.hasBody && /exact wording the send composes/i.test(prevPlain.note), prevPlain.note);
 
       /* ---- THE BULK BAR ---- */
       await page.check(`#email-list .email-cb[data-id="${qNasty}"]`);

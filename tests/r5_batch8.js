@@ -152,6 +152,15 @@ const readProfile = (page, id) => page.evaluate((pid) =>
          1d · The mock process-emails compose() picks up Wayne's new phone
          and sign-off on the very next send for one of his cases.
          ----------------------------------------------------------------- */
+      /* R79: the scoped send now honours the hold like prod — compose() only runs with the hold
+         off (and the harness key on), so this parity check states that precondition. */
+      await page.evaluate(async () => {
+        const rows = window.__mock.db.settings;
+        const row = rows.filter((r) => r.key === "email_hold")[0];
+        if (row) row.value = "off"; else rows.push({ key: "email_hold", value: "off" });
+        window.__mock.setResendKey(true);
+        await window.__reloadSettings();
+      });
       await page.evaluate(() => window.openCase("ca017")); // Louise Garnham — assigned to Wayne (p2)
       await page.waitForTimeout(600);
       const hasReminderBtn = await page.evaluate(() => !!document.querySelector("#act-reminder") && !document.querySelector("#act-reminder").classList.contains("hidden"));

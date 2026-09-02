@@ -421,6 +421,7 @@
      app's degrade path (errorEventsOff + the "isn't enabled" note). */
   var errorEventsSupported = true;
   var errorEventSeq = 0;   // serial-style incrementing id, assigned on insert
+  var commsTokenSeq = 0;   // R79 — clients.comms_token "gen_random_uuid()" stand-in, unique per row
   /* R43 — same feature-gate shape as errorEventsSupported above:
      __setSavedViewsSupported(false) makes every op on saved_views answer with a PostgREST 42P01,
      which is what an un-migrated deployment does and what the app's localStorage fallback exists
@@ -1378,12 +1379,16 @@
          neither (a lead accepted without a source, a bulk import row) must still round-trip
          them as null so select("*")/hasOwnProperty consumers always see the key — the same
          parity rule as every column below. */
+      /* R79 · B2 — cases.doc_token_expires_at (timestamptz, nullable, no backfill): joins the
+         nullable list on the standard rule. Old links have no expiry — the app says so — and only
+         a mint/regenerate stamps one. */
       ["lost_reason", "lost_detail", "broker_fee_paid_at", "proc_fee_paid_at", "sols_fee_paid_at", "property_address",
         "expected_completion_date", "lead_source",
-        "waiting_on", "solicitor_firm", "doc_token", "referrer_client_id",
+        "waiting_on", "solicitor_firm", "doc_token", "doc_token_expires_at", "referrer_client_id",
         "current_balance", "reversion_rate", "monthly_payment", "erc_amount",
         "policy_start_date", "exchange_date", "offer_issued_date", "repayment_method",
         "mortgage_account_number", "objective", "property_sold_at",
+        "nps_token", /* R79 · A2 — same parity rule; see mkCase */
         "monthly_rent", "icr_stress_rate", "icr_required_pct",
         "lender_reference", "application_status", "application_status_at"]
         .forEach(function (f) { if (r[f] === undefined) r[f] = null; });
@@ -1440,6 +1445,18 @@
       if (r.first_contact_at === undefined) r.first_contact_at = null;
     }
     if (table === "fact_finds" && !r.status) r.status = "sent";
+    /* R79 · B2 — fact_finds.expires_at (timestamptz, nullable, no server default): the CLIENT
+       stamps now()+30d at mint time; a row inserted without one round-trips it as null so the
+       app's honest "no expiry" state is observable. */
+    if (table === "fact_finds" && r.expires_at === undefined) r.expires_at = null;
+    /* R79 (migration contract, agent A's columns seeded here for parity) —
+       clients.comms_optout bool NOT NULL DEFAULT false; clients.comms_token uuid DEFAULT
+       gen_random_uuid(). Every client row the app inserts gets both, exactly as the migration
+       leaves them; the token is deterministic here (fixture DB) but unique per row. */
+    if (table === "clients") {
+      if (r.comms_optout === undefined || r.comms_optout === null) r.comms_optout = false;
+      if (r.comms_token === undefined || r.comms_token === null) r.comms_token = "comms-" + (++commsTokenSeq) + "-a1b2c3d4e5f6";
+    }
     if (table === "case_emails" && !r.triage_status) r.triage_status = "new";
     /* R14 — vault_entries: category default 'other', fields default '[]'::jsonb,
        visible_to default null (= visible to every staff role), sort_order
@@ -1689,6 +1706,9 @@
       date_of_birth: HAS_DOB(i) ? dateOnly(new Date(NOW.getFullYear() - c[4], (i * 7) % 12, ((i * 5) % 27) + 1)) : null,
       address: c[5], notes: null,
       sms_opt_out: i === 9 || i === 21, marketing_opt_out: i === 7 || i === 30,
+      /* R79 (migration contract) — comms_optout false + a unique comms_token on every row,
+         exactly as the migration's defaults leave a real book. No UI reads them yet. */
+      comms_optout: false, comms_token: "comms-fx-" + (++commsTokenSeq) + "-c3d4e5f6",
       is_vulnerable: i === 11,
       vulnerability_note: i === 11 ? "Recently bereaved — prefers correspondence by post, not phone; give extra time on decisions." : null,
       suppress_automation: i === 11 || i === 20,
@@ -1696,6 +1716,15 @@
     });
   });
   var CL = function (n) { return DB.clients[n].id; };
+  /* R79 · A5 — TWO OPTED-OUT CLIENTS. comms_optout=true on exactly two fixture rows, so v19's
+     send-time opt-out cancel is permanently reproducible: Chloe Pennington (38) and Harold
+     Mainwaring (39). Chosen deliberately OFF the completed book (10..27) and off the prior-year
+     completions (28..30), so the review-request drip never queues either of them on its own and
+     no existing suite's sent/queued arithmetic moves — comms_optout is read by NOTHING but the
+     v19 send loop's marketing gate. Mutation, not a seed-line change, so the R79 · B seed lines
+     above stay byte-identical to branch r79b's. */
+  DB.clients[38].comms_optout = true;
+  DB.clients[39].comms_optout = true;
 
   /* --- cases (50) -------------------------------------------------------- */
   var LENDERS = ["Halifax", "Nationwide", "Santander", "NatWest", "Barclays", "Coventry Building Society",
@@ -1749,6 +1778,9 @@
       waiting_on: o.waiting_on || null,
       solicitor_firm: o.solicitor_firm || null,
       doc_token: o.doc_token || null,
+      /* R79 · B2 — when the upload link above stops working (timestamptz). Null on every
+         pre-R79 link on purpose: no backfill shipped, and the app states "no expiry" plainly. */
+      doc_token_expires_at: o.doc_token_expires_at || null,
       /* M11 — the client who sent this one to us. */
       referrer_client_id: o.referrer_client_id || null,
       protection_status: o.protection_status || "not_discussed",
@@ -1761,6 +1793,11 @@
       retention_source_case_id: o.retention_source_case_id || null,
       offer_doc_path: o.offer_doc_path || null,
       nps_score: o.nps_score == null ? null : o.nps_score,
+      /* R79 · A2 — nps_token joins the row shape (nullable, no fixture mints one). The column has
+         been real in production since the NPS capture shipped (nps-capture matches on it), but no
+         mock row ever carried the KEY, so the app could not even SELECT it here. Null everywhere
+         keeps every NPS-dependent branch exactly as it behaved. */
+      nps_token: o.nps_token || null,
       review_requested_at: o.review_requested_at || null,
       rate_reminder_queued_at: o.rate_reminder_queued_at || null,
       /* R70 — cases.reminder_guarded, boolean NOT NULL DEFAULT false. Unlike every
@@ -2537,6 +2574,7 @@
   DB.fact_finds.push({
     id: nid("ff"), case_id: ffCase.id, client_id: ffCase.client_id, created_by: "p2",
     token: "ff-demo-0001-submitted", status: "submitted",
+    expires_at: iso(shift(21)),   /* R79 · B2 — minted 9 days ago, 21 left of its 30 */
     submitted_at: iso(shift(-2)), created_at: iso(shift(-9)),
     data: {
       a1_first: ffClient.first_name,
@@ -2558,9 +2596,14 @@
       has_a2: "no"
     }
   });
+  /* R79 · B2 — THE SEEDED EXPIRED FACT-FIND. Sent, never submitted, and its 30 days are up: the
+     one fixture that keeps the "link expired <date> — regenerate to send a fresh one" state (and
+     the Regenerate verb next to it) permanently on screen. created_at is left at its old value
+     on purpose — an expiry is stamped at MINT time, not derived from created_at. */
   DB.fact_finds.push({
     id: nid("ff"), case_id: liveCases[3].id, client_id: liveCases[3].client_id, created_by: "p3",
     token: "ff-demo-0002-sent", status: "sent", submitted_at: null,
+    expires_at: iso(shift(-5)),
     created_at: iso(shift(-4)), data: {}
   });
   /* A few more SUBMITTED fact-finds so the Apply flow is easy to reach from several
@@ -2573,6 +2616,7 @@
       DB.fact_finds.push({
         id: nid("ff"), case_id: c.id, client_id: c.client_id, created_by: c.assigned_to || "p4",
         token: "ff-demo-submitted-" + (i + 3), status: "submitted",
+        expires_at: iso(shift(24 - i)),   /* R79 · B2 — inside their 30 days */
         submitted_at: iso(shift(-(i + 1))), created_at: iso(shift(-(i + 6))),
         data: {
           a1_first: cl.first_name || "", a1_last: cl.last_name || "",
@@ -2704,6 +2748,7 @@
         id: nid("cl"), first_name: first, last_name: last, email: email, phone: phone,
         date_of_birth: dateOnly(new Date(NOW.getFullYear() - ageYears, 3, 17)),
         address: address, notes: null, sms_opt_out: false, marketing_opt_out: false,
+        comms_optout: false, comms_token: "comms-fx-" + (++commsTokenSeq) + "-c3d4e5f6", /* R79 */
         is_vulnerable: false, vulnerability_note: null, suppress_automation: false,
         created_at: iso(shift(-madeDaysAgo)), updated_at: iso(shift(-Math.round(madeDaysAgo / 4)))
       };
@@ -2921,6 +2966,7 @@
         id: nid("cl"), first_name: o.first, last_name: o.last, email: o.email, phone: o.phone,
         date_of_birth: o.dob || null, address: o.address, notes: null,
         sms_opt_out: false, marketing_opt_out: false,
+        comms_optout: false, comms_token: "comms-fx-" + (++commsTokenSeq) + "-c3d4e5f6", /* R79 */
         is_vulnerable: false, vulnerability_note: null, suppress_automation: false,
         created_at: iso(o.created), updated_at: iso(o.updated || o.created)
       };
@@ -3304,6 +3350,8 @@
     var partial = caseFor("Sarah Ellingham", "fact_find");
     if (partial) {
       partial.doc_token = "doc-ellingham-4f21c8";
+      /* R79 · B2 — a link still inside its 30 days: the "valid until" state. */
+      partial.doc_token_expires_at = iso(shift(21));
       partial.waiting_on = "client";
       addDoc(partial, D_ID, { requestedDaysAgo: 9, status: "received", receivedDaysAgo: 7, storage_path: seedDocFile("docs/" + partial.id + "/photo-id.pdf") });
       addDoc(partial, D_PAY, { requestedDaysAgo: 9, status: "received", receivedDaysAgo: 6, storage_path: seedDocFile("docs/" + partial.id + "/payslips.pdf") });
@@ -3322,6 +3370,8 @@
     var chaseDue = caseFor("Bethany Quirke", "application");
     if (chaseDue) {
       chaseDue.doc_token = "doc-quirke-90b7ae";
+      /* R79 · B2 — an EXPIRED upload link: the "expired — regenerate" state, always on screen. */
+      chaseDue.doc_token_expires_at = iso(shift(-3));
       chaseDue.waiting_on = "client";
       [D_ID, D_BANK, D_DEP].forEach(function (item) { addDoc(chaseDue, item, { requestedDaysAgo: 12 }); });
       sentMail(chaseDue, "docs_request", 12, "Your document checklist");
@@ -3368,6 +3418,8 @@
     var clean = caseFor("Tanya Osei", "fact_find");
     if (clean) {
       clean.doc_token = "doc-osei-2d64f0";
+      /* R79 · B2 — deliberately NO doc_token_expires_at: the pre-R79 legacy link, so the
+         app's "no expiry date — it predates 30-day links" state stays observable. */
       [D_ID, D_PAY].forEach(function (item, i) {
         addDoc(clean, item, { requestedDaysAgo: 20, status: "received", receivedDaysAgo: 17 - i * 2, storage_path: seedDocFile("docs/" + clean.id + "/" + (i + 1) + ".pdf") });
       });
@@ -5495,6 +5547,20 @@
      "exactly the email we sent before" on an un-migrated database rather than to
      an email with an empty list in it. */
   var DOC_TYPES = ["docs_request", "docs_chase"];
+  /* R79 · A5 — v19: the four marketing-adjacent types (owner decision — opt-out honoured for ALL
+     FOUR, and each carries the unsubscribe footer). This list is v19's MARKETING_TYPES, verbatim. */
+  var MARKETING_TYPES = ["birthday_greeting", "completion_anniversary", "referral_request", "review_request"];
+  /* v19's exact per-row cancel reason when a marketing-adjacent send finds comms_optout=true at
+     send time. Tests assert this STRING — it is the row's error column in production. */
+  var OPTOUT_CANCEL_ERROR = "client opted out of these emails";
+  /* v19's unsubscribe footer, as the client reads it. The link goes to the public unsubscribe
+     edge function with the client's id + comms_token. */
+  var UNSUB_LINE = "Prefer not to get emails like this? Unsubscribe.";
+  function unsubscribeUrlFor(clientId) {
+    var cl = DB.clients.filter(function (x) { return x.id === clientId; })[0];
+    if (!cl || !cl.comms_token) return null;
+    return "https://mock.functions.supabase.co/functions/v1/unsubscribe?c=" + cl.id + "&t=" + cl.comms_token;
+  }
   function caseChecklist(caseId) {
     if (!MIGRATIONS.m10 || !caseId) return [];
     return DB.case_documents.filter(function (d) { return d.case_id === caseId; });
@@ -5685,6 +5751,12 @@
        untouched for "process-emails" to catch, exactly like a real function
        invocation failing before it returns anything. */
     var ffCompose = t === "factfind" ? composeFactfind(row, cs) : null;
+    /* R79 · A5 — v19: the unsubscribe footer rides on the four marketing-adjacent types, one
+       small line below the sign-off and above the grey house footer. The link carries the
+       client's id + comms_token (the row every marketing send has a client for). */
+    var unsubUrl = MARKETING_TYPES.indexOf(t) >= 0 && row.client_id ? unsubscribeUrlFor(row.client_id) : null;
+    var bodyLines = ffCompose ? factfindBodyLines(mention, addr, ffCompose.link) : emailBodyLines(t, addr, mention, cs);
+    if (unsubUrl && bodyLines) bodyLines = bodyLines.concat([UNSUB_LINE]);
     return {
       queue_id: row.id,
       to_email: row.to_email,
@@ -5715,7 +5787,10 @@
          reads rather than a flag about it. */
       property_line: mention === "regarding" ? "Regarding: " + addr : null,
       property_phrase: mention === "sentence" ? "your mortgage on " + addr : null,
-      body_lines: ffCompose ? factfindBodyLines(mention, addr, ffCompose.link) : emailBodyLines(t, addr, mention, cs),
+      body_lines: bodyLines,
+      /* R79 · A5 — v19: null on every type outside MARKETING_TYPES (and on a client-less row);
+         the four carry the public unsubscribe link built from the client's own comms_token. */
+      unsubscribe_url: unsubUrl,
       /* R9 — what the document mails actually asked for, so a test can assert the
          list a client reads rather than a flag about it. Null on every type that
          is not about documents: "this mail carries no checklist" and "it carries
@@ -6510,10 +6585,10 @@
          the hold ON). LAST_EMAIL_RUN is still written (sent:0, held:true)
          so __mock.lastEmailRun() can testify the run happened and sent
          nothing. */
+      var holdRowRun = DB.settings.filter(function (s) { return s.key === "email_hold"; })[0];
+      var holdValRun = holdRowRun ? String(holdRowRun.value || "").trim().toLowerCase() : "on";
+      var heldRun = holdValRun !== "off";
       if (!ids) {
-        var holdRowRun = DB.settings.filter(function (s) { return s.key === "email_hold"; })[0];
-        var holdValRun = holdRowRun ? String(holdRowRun.value || "").trim().toLowerCase() : "on";
-        var heldRun = holdValRun !== "off";
         if (heldRun || !MOCK_RESEND_KEY) {
           LAST_EMAIL_RUN = {
             at: nowIso, scoped: false, queue_ids: null, considered: due.length,
@@ -6528,13 +6603,63 @@
           };
         }
       }
-      var sent = 0, failed = 0, composed = [];
+      /* ==================================================================
+         R79 · A5 — THE SCOPED PATH HONOURS THE HOLD, exactly like prod.
+         v18 (and v19) enforce the global hold for BOTH the cron path and
+         interactive scoped sends — `if (!apiKey || sendHeld)` sits ABOVE the
+         candidate query, so a per-case "send now" on a held system queues
+         the row and sends NOTHING, answering {warning, held, pending}. This
+         mock's scoped path sent anyway (repro'd: a fee-request "send now"
+         under the seeded hold toasted "Email sent ✓"), which is precisely
+         the day-one lie the R79 held toasts exist to remove. Rows stay
+         'queued', untouched; pending counts the NAMED rows still queued
+         (v18's .in("id", ids) count). The no-Resend-key half of prod's gate
+         is DELIBERATELY still not mirrored for scoped sends — every
+         per-case suite drives this path and the harness has always let it
+         pretend a key exists; the hold is the state production actually
+         lives in, so the hold is what must be true here. LAST_EMAIL_RUN is
+         written ({scoped:true, sent:0, held:true}) so __mock.lastEmailRun()
+         can testify. */
+      if (ids && heldRun) {
+        LAST_EMAIL_RUN = {
+          at: nowIso, scoped: true, queue_ids: ids, considered: due.length,
+          sent: 0, failed: 0, held: true, queued: queued, composed: []
+        };
+        return {
+          held: true,
+          pending: due.length,
+          scoped: true,
+          warning: "email_hold is on — nothing was sent; the " + due.length + " named email" + (due.length === 1 ? "" : "s") + " stay held in the queue."
+        };
+      }
+      /* R79 · A5 — v19: the unscoped run takes the OLDEST-due rows first (order by scheduled_for
+         ascending, nulls last — PostgREST's asc default), capped at v18's 50-per-run. The scoped
+         path names its rows and is unchanged. */
+      if (!ids) {
+        due = due.slice().sort(function (a, b) {
+          var A = a.scheduled_for || "9999-12-31T23:59:59Z", B = b.scheduled_for || "9999-12-31T23:59:59Z";
+          return A < B ? -1 : (A > B ? 1 : 0);
+        }).slice(0, 50);
+      }
+      var sent = 0, failed = 0, skippedOptout = 0, composed = [];
       due.forEach(function (e) {
         if (!e.to_email) {
           e.status = "failed";
           e.error = "No recipient address — the client record has no email on file";
           failed++;
           return;
+        }
+        /* R79 · A5 — v19: opt-out re-read AT SEND TIME for the four marketing-adjacent types.
+           comms_optout=true cancels the row with the exact production error string and sends
+           nothing; the row is a cancelled record, never retried. */
+        if (MARKETING_TYPES.indexOf(e.email_type) >= 0 && e.client_id) {
+          var ocl = DB.clients.filter(function (x) { return x.id === e.client_id; })[0];
+          if (ocl && ocl.comms_optout) {
+            e.status = "cancelled";
+            e.error = OPTOUT_CANCEL_ERROR;
+            skippedOptout++;
+            return;
+          }
         }
         /* R12a·D3 — v12: compose() can now throw (factfind, no site_url). A
            row whose compose blows up goes status='failed' with THAT error,
@@ -6564,12 +6689,23 @@
           var ffRow = DB.fact_finds.filter(function (f) { return f.id === composedRow.fact_find_id; })[0];
           if (ffRow && ["created", "sent"].indexOf(ffRow.status) >= 0) ffRow.status = "sent";
         }
+        /* R79 · A5 — v19: link expiry (owner decision: 30 days), stamped ONLY on a successful
+           send. A factfind send restarts that fact_finds row's clock; a docs_request that
+           actually carried an upload link restarts the case's doc-link clock. */
+        if (e.email_type === "factfind" && composedRow.fact_find_id) {
+          var ffExp = DB.fact_finds.filter(function (f) { return f.id === composedRow.fact_find_id; })[0];
+          if (ffExp) ffExp.expires_at = iso(new Date(Date.now() + 30 * 86400000));
+        }
+        if (e.email_type === "docs_request" && composedRow.docs_link && e.case_id) {
+          var dcs = DB.cases.filter(function (x) { return x.id === e.case_id; })[0];
+          if (dcs) dcs.doc_token_expires_at = iso(new Date(Date.now() + 30 * 86400000));
+        }
       });
       LAST_EMAIL_RUN = {
         at: nowIso, scoped: !!ids, queue_ids: ids, considered: due.length,
-        sent: sent, failed: failed, queued: queued, composed: composed
+        sent: sent, failed: failed, skipped_optout: skippedOptout, queued: queued, composed: composed
       };
-      return { ok: true, sent: sent, failed: failed, scoped: !!ids, skipped_queueing: !!ids, queued: queued };
+      return { ok: true, sent: sent, failed: failed, skipped_optout: skippedOptout, scoped: !!ids, skipped_queueing: !!ids, queued: queued };
     },
     /* R63 · A3 — PARITY NOTE, not a behaviour change. In production this function is ALSO on a
        schedule of its own: the `nexmoney-send-sms` cron invokes it daily at 08:05 UTC (09:05 while

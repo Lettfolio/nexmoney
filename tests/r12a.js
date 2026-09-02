@@ -376,6 +376,17 @@ async function mkClientCase(page, opts) {
       console.log("\n— D3 · the digital fact-find send path (process-emails v12)");
       const page = await newPage(browser, "p4");
 
+      /* R79: the scoped send path now honours the hold like prod (r79_send §F), and the chase
+         task is skipped while held (A4) — this section pins the classic send-through behaviour,
+         so it states the R76 precondition: hold off, server key on. */
+      await page.evaluate(async () => {
+        const rows = window.__mock.db.settings;
+        const row = rows.filter((r) => r.key === "email_hold")[0];
+        if (row) row.value = "off"; else rows.push({ key: "email_hold", value: "off" });
+        window.__mock.setResendKey(true);
+        await window.__reloadSettings();
+      });
+
       const { clientId, caseId, email } = await mkClientCase(page, { first: "Priya", last: "Chandaria", stage: "fact_find", assigned_to: "p3" });
       await page.evaluate((id) => window.openCase(id), caseId);
       await wait(page, 900);

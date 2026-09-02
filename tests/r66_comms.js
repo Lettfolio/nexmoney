@@ -209,6 +209,15 @@ const closeModal = async (page) => { await page.evaluate(() => window.closeModal
   ok("A12 · nothing was queued while the form was invalid",
     (await page.evaluate(async (id) => (await window.__mockDb.from("email_queue").select("id").eq("case_id", id)).data.length, fx.live)) === 0);
 
+  /* R79: the scoped send path now honours the hold like prod (r79_send §F) — A20–A24 pin the
+     classic queued→sent flow, so they state the R76 precondition: hold off, server key on. */
+  await page.evaluate(async () => {
+    const rows = window.__mock.db.settings;
+    const row = rows.filter((r) => r.key === "email_hold")[0];
+    if (row) row.value = "off"; else rows.push({ key: "email_hold", value: "off" });
+    window.__mock.setResendKey(true);
+    await window.__reloadSettings();
+  });
   await page.fill("#overlay-modal #cust-body", "Hi Sarah,\nAre you still keeping <b>number 12</b>?\n\nBest,\nDan");
   await page.click("#cust-ok");
   await page.waitForTimeout(1600);

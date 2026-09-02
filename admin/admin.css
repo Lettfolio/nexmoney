@@ -5546,3 +5546,13 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 }
 #lead-joint-overlay .ljo-cand input { margin-right: 8px; }
 #lead-joint-overlay .form-grid { margin: 10px 0; }
+
+/* ==========================================================================
+   R79 · A2/A3 — the exact-wording preview and the "Sent this morning" panel.
+   The unsubscribe footer line renders the way the client meets it: small and
+   grey, below the sign-off. The morning panel is a house panel of row-items;
+   only its heading and count chip need a size of their own.
+   ========================================================================== */
+.em-prev-unsub { color: var(--muted, #6b7280); font-size: 12px; margin: 10px 0 0; }
+.em-morning-h { margin: 0 0 6px; }
+.em-morning .row-item .t .em-morning-n { margin-left: 6px; }
