@@ -1373,7 +1373,13 @@
          toggle (same as mortgage_account_number above), null on every row a
          write doesn't name so btlIcrSupported()/lenderTrackSupported()'s
          hasOwnProperty probe always sees them. */
+      /* R77 — expected_completion_date and lead_source join the nullable list. Both are
+         ORIGINAL-schema columns mkCase has always seeded, but an app-side insert that names
+         neither (a lead accepted without a source, a bulk import row) must still round-trip
+         them as null so select("*")/hasOwnProperty consumers always see the key — the same
+         parity rule as every column below. */
       ["lost_reason", "lost_detail", "broker_fee_paid_at", "proc_fee_paid_at", "sols_fee_paid_at", "property_address",
+        "expected_completion_date", "lead_source",
         "waiting_on", "solicitor_firm", "doc_token", "referrer_client_id",
         "current_balance", "reversion_rate", "monthly_payment", "erc_amount",
         "policy_start_date", "exchange_date", "offer_issued_date", "repayment_method",
@@ -2340,6 +2346,52 @@
       starts_at: iso(todayAt(14)), ends_at: iso(new Date(todayAt(14).getTime() + 45 * 60000)),
       staff_id: "p2", client_id: marcus.id, case_id: mcase ? mcase.id : null,
       location: "Office", notes: null, outcome: null, created_at: iso(shift(-5))
+    });
+  })();
+
+  /* R77 · B1 — RECORDED appointment outcomes, in the PREVIOUS month, so the
+     Reports "Appointment outcomes" panel has a spread to count: some attended,
+     some no_show (Ruby Sinclair twice — the 2+ no-show register's fixture),
+     one rearranged, and a majority left null (prod's real shape: the chips
+     shipped in r12b and most of the diary is unscored — the panel's
+     "unrecorded" number must have something honest to say). Placement rules,
+     kept deliberately:
+       · previous-month days ONLY (3rd–25th) — inside the panel's 90-day
+         window, never on today (r5_batch9 pins "today has exactly these 3")
+         and never on the current-month even days the 16-loop above owns;
+       · clients reused from liveCases[0..5] and RUBY, every one of whom
+         already has a NEWER current-month appointment seeded above — so no
+         client's "last contact" moves and the gone-quiet/comms radars are
+         untouched;
+       · case_id null (a real prod shape — see the Whitfield row above), so no
+         case modal's appointment list changes length under a pinned suite.
+     `outcome` values are prod's exact strings: attended / no_show / rearranged. */
+  (function outcomeSpreadLastMonth() {
+    var lm = function (dom, h) { return new Date(NOW.getFullYear(), NOW.getMonth() - 1, dom, h, 0, 0, 0); };
+    var lc = function (i) { return liveCases[i % liveCases.length].client_id; };
+    var spread = [
+      ["p2", lc(0), 3, "attended"],
+      ["p2", lc(1), 5, "attended"],
+      ["p2", lc(2), 7, "no_show"],
+      ["p2", lc(3), 9, null],
+      ["p2", lc(4), 11, null],
+      ["p3", lc(5), 13, "attended"],
+      ["p3", RUBY, 15, "no_show"],      // Ruby no-show #1
+      ["p3", lc(0), 17, null],
+      ["p4", lc(1), 19, "rearranged"],
+      ["p4", lc(2), 21, null],
+      ["p2", RUBY, 25, "no_show"]       // Ruby no-show #2 — the 2+ register's row
+    ];
+    spread.forEach(function (row, i) {
+      var when = lm(row[2], 9 + (i % 6));
+      DB.appointments.push({
+        id: nid("ap"), title: APPT_TITLES[i % APPT_TITLES.length],
+        starts_at: iso(when), ends_at: iso(new Date(when.getTime() + 45 * 60000)),
+        staff_id: row[0], client_id: row[1], case_id: null,
+        location: pick(["Office", "Phone", "Teams"]), notes: null,
+        outcome: row[3],
+        created_at: iso(shift(-45))
+      });
     });
   })();
 
@@ -3763,6 +3815,25 @@
     if (jw) jw.mortgage_account_number = "MTG-TEST-4471";
     var owen = caseForClientName("Owen Cadwallader", "completed");
     if (owen) owen.mortgage_account_number = "ACC-0099-TEST";
+  })();
+
+  /* --- R77 · A2 — lead_source casing spread -------------------------------
+     Production's lead_source is FREE TEXT typed by hand, and the one thing
+     free text guarantees is inconsistent casing — the Reports Lead-sources
+     panel now groups case-insensitively and the case form's datalist offers
+     the book's most common casing, and both behaviours need fixture rows
+     that actually vary. MUTATION ONLY of casing on rows already seeded
+     above (no new clients, no new cases, no value changes beyond case), so
+     no count anywhere else in the battery moves; exactly ONE row of each
+     source is flipped, so the ORIGINAL casing stays the majority and the
+     merged table reads "Google"/"Website" exactly as it did before. */
+  (function r77LeadSourceCasings() {
+    var flip = function (from, to) {
+      var rows = DB.cases.filter(function (c) { return c.lead_source === from; });
+      if (rows.length > 1) rows[1].lead_source = to;
+    };
+    flip("Google", "google");
+    flip("Website", "WEBSITE");
   })();
 
   /* --- R16 — BTL rental/ICR + submit-to-lender tracker --------------------

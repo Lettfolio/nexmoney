@@ -768,7 +768,12 @@
           <div id="report-funnel"></div>
         </div>
         <div class="panel" id="report-sources-panel">
-          <h3>Lead sources</h3>
+          <!-- R77 · A2b — the Losses panel's exact scope toggle, on the panel that needed it most:
+               a single month of lead_source is usually too few rows to read. -->
+          <div class="panel-head-row">
+            <h3>Lead sources</h3>
+            <button type="button" class="btn btn-sm" id="report-sources-scope-btn" onclick="toggleSourcesScope()">All time</button>
+          </div>
           <p class="panel-sub" id="report-sources-scope">Set the lead source on cases to build this up.</p>
           <div id="report-sources"></div>
         </div>
@@ -843,7 +848,25 @@
         <h3>Commission forecast — live pipeline</h3>
         <div class="kpi-row" id="report-forecast-headline" style="margin:8px 0 12px;"></div>
         <div id="report-forecast-buckets"></div>
+        <!-- R77 · A1a — the forecast meets the target: the ≤30-days-vs-monthly-target gap line
+             (#report-forecast-target-line) and the no-date clause wired to the existing
+             toggleForecastNoneList. Populated by renderForecastBuckets(); owner-only with it. -->
+        <div id="report-forecast-target"></div>
         <p class="panel-sub" id="report-forecast-hint" style="margin:10px 0 0;">Live cases from DIP to exchange, weighted by stage conversion, bucketed by how far off the expected completion date is.</p>
+      </div>
+      <!-- ==================================================================
+           R77 · A4 — BUSINESS MIX BY CASE TYPE. Completions YTD and the live
+           pipeline, grouped by case_kind, with broker-fee sums and averages.
+           Owner-only (it is fee money), from the same Reports rows every panel
+           above uses. Populated by renderBusinessMix().
+           ================================================================== -->
+      <div class="panel hidden" id="report-mix-panel">
+        <div class="panel-head-row">
+          <h3>Business mix — by case type</h3>
+          <button type="button" class="btn btn-sm" id="report-mix-csv" title="Download the business-mix table as CSV">⭳ CSV</button>
+        </div>
+        <p class="panel-sub" id="report-mix-scope"></p>
+        <div id="report-mix"></div>
       </div>
       <div class="grid-2">
         <div class="panel" id="report-months-panel">
@@ -945,6 +968,27 @@
           <summary>Show every conveyancer<span class="ledger-n"></span></summary>
           <div id="report-conveyancer-body"></div>
         </details>
+      </div>
+      <!-- ==================================================================
+           R77 · B1 — APPOINTMENT OUTCOMES. appointments.outcome has been
+           recorded since r12b (the ✓ ✗ ↻ chips on Today, the radios in the
+           editor) and READ by nothing: the column's own comment said the
+           counting was a later round's job, and this is that round. Three
+           blocks: a headline row whose FIRST number is the share of past
+           appointments with NO outcome recorded (a diary nobody scores can't
+           answer "who wasted my Tuesday?", so the honesty gap outranks the
+           no-show count), a per-adviser table over the last 90 days, and the
+           short list of clients with 2+ recorded no-shows in the window.
+           Owner-only — per-adviser conduct numbers, the same gate as the
+           per-adviser scores in the Advocacy panel above (showMoney), and the
+           gate r42 §B pins for this whole section on an adviser login.
+           ================================================================== -->
+      <div class="panel hidden" id="report-outcomes-panel">
+        <h3>Appointment outcomes — who turns up, and whether we record it</h3>
+        <p class="panel-sub" id="report-outcomes-basis"></p>
+        <div class="kpi-row" id="report-outcomes-headline" style="margin:12px 0 4px;"></div>
+        <div id="report-outcomes-adviser"></div>
+        <div id="report-outcomes-noshows" style="margin-top:18px;"></div>
       </div>
       <!-- ====================================================================
            R66 · M6b — §6. REFERRALS OUT.

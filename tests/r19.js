@@ -392,8 +392,15 @@ function monthIso(t0, deltaMonths, day, hour = 12) {
       rows.push({ stage: "completed", assigned_to: "p2", broker_fee: 0, proc_fee: 0, submitted_at: agoIso(T0, 90), completed_at: agoIso(T0, 70) });
       rows.push({ stage: "completed", assigned_to: "p3", broker_fee: 0, proc_fee: 0, submitted_at: agoIso(T0, 95), completed_at: agoIso(T0, 60) });
       // --- group E: run-rate + scoreboard period, known months + fees ---
-      rows.push({ stage: "completed", assigned_to: "p2", broker_fee: 500, proc_fee: 100, completed_at: monthIso(T0, 0, 3) });   // this month
-      rows.push({ stage: "completed", assigned_to: "p3", broker_fee: 1500, proc_fee: 0, completed_at: monthIso(T0, 0, 3) });   // this month
+      /* R77 (flake fix, found on Sep 1st): these two rows relied on the mock's DEFAULTED
+         created_at (= now) landing AFTER their day-3-of-this-month completed_at, so the
+         created→completion gap was negative and the pair stayed OUT of the velocity arrays.
+         On the 1st/2nd of any month "now" is BEFORE day 3 and the gap turned +2d, polluting
+         the velocity median and both advisers' median cycles. The created_at is now EXPLICIT,
+         one day after the completion, so the exclusion the expectations were always built on
+         holds on every calendar day. */
+      rows.push({ stage: "completed", assigned_to: "p2", broker_fee: 500, proc_fee: 100, completed_at: monthIso(T0, 0, 3), created_at: monthIso(T0, 0, 4) });   // this month
+      rows.push({ stage: "completed", assigned_to: "p3", broker_fee: 1500, proc_fee: 0, completed_at: monthIso(T0, 0, 3), created_at: monthIso(T0, 0, 4) });   // this month
       rows.push({ stage: "completed", assigned_to: null, broker_fee: 800, proc_fee: 200, completed_at: monthIso(T0, -3, 15) }); // 3 months ago
       rows.push({ stage: "completed", assigned_to: "p2", broker_fee: 300, proc_fee: 0, completed_at: monthIso(T0, -11, 20) });  // oldest in-window
       rows.push({ stage: "completed", assigned_to: "p2", broker_fee: 9999, proc_fee: 9999, completed_at: monthIso(T0, -13, 10) }); // OUTSIDE the 12-month window
@@ -431,11 +438,27 @@ function monthIso(t0, deltaMonths, day, hour = 12) {
 
       // ---- Panel 2: velocity table ----
       const velRows = await page.$$eval("#report-mi-velocity table tr", (trs) => trs.slice(1).map((tr) => [...tr.querySelectorAll("td")].map((td) => td.textContent.trim())));
+      /* R77 · A3 — deliberate re-point: a velocity row computed from n≤1 dated cases now carries
+         the coverage clause (one case is not a median) whenever the thinness is caused by missing
+         milestone dates. This dataset's created→completion transition has exactly one dated pair,
+         and its live/completed rows are missing plenty of dates — the clause count mirrors
+         renderPipelineMI's own rule. The guard itself is pinned in tests/r77_owner.js §E. */
+      const R77_RANKS = { enquiry: 0, fact_find: 1, decision_in_principle: 2, application: 3, offer: 4, exchange: 5, completed: 6 };
+      const r77miss = rows.reduce((n, r) => {
+        if (r.stage === "not_proceeding") return n;
+        const rank = R77_RANKS[r.stage]; if (rank == null) return n;
+        if (rank >= 3 && !r.submitted_at) return n + 1;
+        if (rank >= 4 && !r.offer_issued_date) return n + 1;
+        return n;
+      }, 0);
+      const r77clause = `date coverage too thin — ${r77miss} case${r77miss === 1 ? " is" : "s are"} missing application/offer dates → fix in Data health`;
       const velExpected = [
         ["Created → application", `${exp.medCreatedApp}d`, `${exp.meanCreatedApp}d`, String(exp.vCreatedApp.length)],
         ["Application → offer", `${exp.medAppOffer}d`, `${exp.meanAppOffer}d`, String(exp.vAppOffer.length)],
         ["Offer → completion", `${exp.medOfferComp}d`, `${exp.meanOfferComp}d`, String(exp.vOfferComp.length)],
-        ["Created → completion (total)", `${exp.medCreatedComp}d`, `${exp.meanCreatedComp}d`, String(exp.vCreatedComp.length)],
+        exp.vCreatedComp.length <= 1 && r77miss > 0
+          ? ["Created → completion (total)", r77clause, String(exp.vCreatedComp.length)]   // R77: clause spans the two number cells
+          : ["Created → completion (total)", `${exp.medCreatedComp}d`, `${exp.meanCreatedComp}d`, String(exp.vCreatedComp.length)],
       ];
       eq("C · velocity table: median/average/n for all four transitions", velRows, velExpected);
 

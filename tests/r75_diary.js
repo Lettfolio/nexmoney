@@ -313,8 +313,12 @@ const apptRow = (page, id) => page.evaluate(async (i) => {
     const wed = new Date(monday); wed.setDate(wed.getDate() + 2);
     const apptId = await mkAppt(page, {
       client_id: gt.clientId, case_id: gt.caseId, title: "Slotclick fact find " + t,
-      starts_at: new Date(wed.getFullYear(), wed.getMonth(), wed.getDate(), 15, 0).toISOString(),
-      ends_at: new Date(wed.getFullYear(), wed.getMonth(), wed.getDate(), 15, 45).toISOString(),
+      /* R77 — 08:00, not 15:00: when the battery runs on a WEDNESDAY, the fixtures' own
+         todayAt(10/14/15) appointments share this cell, and a month cell shows only its first
+         three by time before folding the rest into "+N more" — a 15:00 seed then has no .appt
+         element to click (B2 crashed on Wed 2 Sep). First-of-the-day is always rendered. */
+      starts_at: new Date(wed.getFullYear(), wed.getMonth(), wed.getDate(), 8, 0).toISOString(),
+      ends_at: new Date(wed.getFullYear(), wed.getMonth(), wed.getDate(), 8, 45).toISOString(),
       staff_id: "p2",
     });
     await goPage(page, "diary", 2600);

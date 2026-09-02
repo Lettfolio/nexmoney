@@ -402,11 +402,25 @@ const sortedIds = (a) => a.slice().sort();
       eq("B1 · funnel CSV header", funnelCsv.header, ["Section", "Item", "Count", "Step %"]);
       const STAGE_LABELS = ["Enquiry", "Fact Find", "DIP", "Application", "Offer", "Exchange"];
       const stepStr = (v) => (v == null ? "—" : v + "%"); // "—"
+      /* R77 · A3 — deliberate re-point: this dataset's Completed step used to print "300%"
+         (3 completed of 1 offer-dated), which is exactly the impossible figure the coverage
+         guard now refuses to emit — the CSV carries the plain-text clause with the missing-date
+         count, mirroring renderPipelineMI's own rule. The guard is pinned in
+         tests/r77_owner.js §E. */
+      const R77_RANKS = { enquiry: 0, fact_find: 1, decision_in_principle: 2, application: 3, offer: 4, exchange: 5, completed: 6 };
+      const r77miss = rows.reduce((n, r) => {
+        if (r.stage === "not_proceeding") return n;
+        const rank = R77_RANKS[r.stage]; if (rank == null) return n;
+        if (rank >= 3 && !r.submitted_at) return n + 1;
+        if (rank >= 4 && !r.offer_issued_date) return n + 1;
+        return n;
+      }, 0);
+      const r77step = (num, den, plain) => (num > den ? `date coverage too thin (${r77miss} missing dates)` : plain);
       const funnelExpected = MI_LIVE_STAGES.map((s, i) => ["Live funnel", STAGE_LABELS[i], String(exp.funnel[s]), ""]).concat([
         ["Conversion", "Created", String(exp.total), ""],
-        ["Conversion", "Reached application (submitted)", String(exp.reachedApp), stepStr(exp.stepApp)],
-        ["Conversion", "Reached offer (offer issued)", String(exp.reachedOffer), stepStr(exp.stepOffer)],
-        ["Conversion", "Completed", String(exp.reachedCompleted), stepStr(exp.stepComp)],
+        ["Conversion", "Reached application (submitted)", String(exp.reachedApp), r77step(exp.reachedApp, exp.total, stepStr(exp.stepApp))],
+        ["Conversion", "Reached offer (offer issued)", String(exp.reachedOffer), r77step(exp.reachedOffer, exp.reachedApp, stepStr(exp.stepOffer))],
+        ["Conversion", "Completed", String(exp.reachedCompleted), r77step(exp.reachedCompleted, exp.reachedOffer, stepStr(exp.stepComp))],
         ["Win rate", `${exp.completedN} completed of ${exp.terminal} terminal`, exp.terminal >= 5 ? exp.winPct + "%" : "n/a (<5 terminal)", ""],
       ]);
       eq("B1 · funnel CSV rows: live funnel by stage + conversion milestones + win-rate row, exact", funnelCsv.rows, funnelExpected);

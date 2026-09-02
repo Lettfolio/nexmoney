@@ -662,7 +662,17 @@ async function readRows(page, table, filters) {
          the same fix R70 made here for a different reason: navigate the way a person does. */
       await page.evaluate(() => { const b = document.querySelector("#diary-view-month"); if (b) b.click(); });
       await wait(page, 700);
-      await page.evaluate((d) => { window.diaryMonth = new Date(d.getFullYear(), d.getMonth(), 1); window.loadDiary(); }, new Date());
+      /* R77 (flake fix, found on Sep 1st): the outcome-badged appointment sits 2 days in the past,
+         which on the 1st/2nd of a month is LAST month — and the old `window.diaryMonth = …` jump
+         never worked anyway (diaryMonth is a lexical `let`, not a window property; the line was a
+         no-op that passed only while "2 days ago" was inside the current month). Navigate the way
+         a person does: press ‹ Prev until the grid shows the appointment's month. The fact under
+         test (the has-outcome class on its tile) is unchanged. */
+      await page.evaluate(() => window.loadDiary());
+      await wait(page, 500);
+      const pastD = new Date(past);
+      const monthsBack = (new Date().getFullYear() - pastD.getFullYear()) * 12 + (new Date().getMonth() - pastD.getMonth());
+      for (let i = 0; i < monthsBack; i++) { await page.click("#diary-prev"); await wait(page, 500); }
       await wait(page, 900);
       const hasOutcomeBadge = await page.evaluate((apptId) => {
         const el = document.querySelector(`.appt[onclick*="${apptId}"]`);

@@ -4643,6 +4643,9 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .dh-fix { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 .dh-fix-input { padding: 4px 6px; font-size: 13px; border: 1px solid var(--border); border-radius: 6px; min-width: 130px; }
 .dh-fix-input[type="text"] { min-width: 220px; flex: 1 1 220px; }
+/* R77 · B4a — the client-column variants: an email needs room, a phone less so. */
+.dh-fix-input[type="email"] { min-width: 200px; flex: 1 1 200px; }
+.dh-fix-input[type="tel"] { min-width: 150px; }
 .dh-fix-input:focus { outline: none; border-color: var(--navy); box-shadow: var(--focus-ring); }
 @media (max-width: 700px) {
   .dh-fix { justify-content: flex-start; width: 100%; }

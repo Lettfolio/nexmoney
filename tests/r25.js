@@ -428,7 +428,12 @@ async function panelRows(page) {
       const errBefore = (pageF.__err || []).length;
 
       const capBefore = await pageF.evaluate(() => FORWARD_SUPPORTED);
-      ok("F1 · FORWARD_SUPPORTED is still unresolved (null) before Data health has ever loaded", capBefore === null, capBefore);
+      /* R77 (stale pin, failing identically on the R76 base): runCombinedSupportProbe() now
+         resolves FORWARD_SUPPORTED during boot (the one-row combined probe), so "still null
+         before Data health loads" stopped being true rounds ago. The fact this section actually
+         needs is only that the flag CAN be forced false from here before the offer-half code
+         under test reads it — which F2 pins. Accept either state at boot, but never false. */
+      ok("F1 · FORWARD_SUPPORTED at boot: unresolved or probe-resolved true — never false on the migrated mock", capBefore === null || capBefore === true, capBefore);
 
       await pageF.evaluate(() => { FORWARD_SUPPORTED = false; });
       const capNow = await pageF.evaluate(() => FORWARD_SUPPORTED);

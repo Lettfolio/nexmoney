@@ -270,7 +270,11 @@ const columnCells = (page, key) => page.evaluate((k) => {
       ok("A1i · the move's own toast names the waiting-on answer", /waiting on solicitor/i.test(await toastText(page)), await toastText(page));
 
       // ---- A2 · already answered → no dialog at all
-      const a2 = await mkCase(page, { last: "R65Wait", stage: "decision_in_principle", waiting_on: "lender" });
+      // R77: "already answered" at Application now includes the expected completion date (the
+      // R77 · A1b capture rides this dialog and can raise it alone) — seed it so the fact under
+      // test stays "a fully-answered case is not asked again". The R77 field's own behaviour is
+      // pinned in tests/r77_owner.js §B.
+      const a2 = await mkCase(page, { last: "R65Wait", stage: "decision_in_principle", waiting_on: "lender", expected_completion_date: "2031-01-01" });
       const mv2 = startMove(page, a2.caseId, "application");
       await wait(page, 1100);
       const s2 = await overlayState(page);

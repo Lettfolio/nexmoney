@@ -7584,6 +7584,46 @@ window.dashRunCronNow = function (btn) {
   return runQueueNow(btn, async () => { await refreshHeartbeatKeys(); renderDashNotices(); });
 };
 /* ==========================================================================
+   R77 · B2 — THE BACKUP NAG RUNS THE EXPORT.
+
+   One button, split by role, and the split is stated rather than implied:
+
+     OWNER      exportFirmData() DIRECTLY — the same function, the same house
+                confirm ("Export the firm's data?" / #ovl-confirm-ok), the same
+                file and the same last_full_export_at stamp the Settings button
+                produces. Nothing about the confirm is weakened: Cancel writes
+                nothing, reads nothing, and leaves the nag standing. On the way
+                back the notices strip is repainted, so a completed export
+                clears this banner in front of the person who pressed it (the
+                stamp is already in the local `settings` cache by then —
+                exportFirmData wrote it there).
+
+     NON-OWNER  the banner itself is Owner-only (r13 §A2 pins that), so this
+                leg guards the function rather than serving an audience — but
+                exportFirmData would refuse a non-owner with a toast anyway,
+                and a refusal toast is a dead end where a route exists. They
+                get nav('settings') plus goliveJump('#firm-export-panel'): the
+                existing jump machinery (opens any <details> on the way,
+                scrolls, flashes), landing ON the Data & backup section instead
+                of the top of an ~8,400px page. The 700ms wait is the same one
+                the clawback tile uses for its cross-page jump — Settings has
+                to finish rendering before there is a panel to scroll to.
+   ========================================================================== */
+window.dashBackupNow = async function (btn) {
+  if (!isOwner()) {
+    nav("settings");
+    setTimeout(() => goliveJump("#firm-export-panel"), 700);
+    return;
+  }
+  if (btn) btn.disabled = true;
+  try {
+    await exportFirmData();
+    renderDashNotices();   // the stamp exportFirmData just wrote is what this banner is drawn from
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+};
+/* ==========================================================================
    R74 · A3 (panel D-25 + A#9) — THE HEARTBEAT, READ ONCE, BY EVERYONE.
 
    Today's banner has known since R13 whether the 8am run has stopped. The
@@ -7646,17 +7686,29 @@ function renderDashNotices() {
   /* R13 · M-42 — the backup nag. Same key the Settings panel stamps. Owner-only, quiet, and it
      names the number of days rather than saying "a while ago", because "62" is what makes somebody
      press the button and "a while" is what makes them scroll past. */
+  /* R77 · B2 — THE NAG RUNS THE EXPORT. "Go to Settings" dropped the Owner at the TOP of an
+     ~8,400px page and left them to find the Data & backup panel by scrolling; the thing the
+     banner wants doing is one function away, behind its own confirm. The button now calls
+     dashBackupNow(): the Owner (the only role this banner ever renders for — r13 §A2 pins that)
+     gets exportFirmData() DIRECTLY — same overlay confirm, same file, same last_full_export_at
+     stamp, so the nag clears the moment the export lands — and any non-owner reaching the
+     function (today: nobody through this banner; the split is the guard, not the audience)
+     deep-links to Settings' Data & backup section through goliveJump instead of the page top.
+     The confirm is exportFirmData's own and is not weakened here. */
   if (isOwner()) {
     const expKnown = Object.prototype.hasOwnProperty.call(settings, "last_full_export_at");
     const expAt = String(settings.last_full_export_at || "").trim();
     const days = expAt ? daysSinceLocal(expAt) : null;
+    const expBtn = `<button type="button" class="dash-notice-link" id="dash-export-run-btn" onclick="dashBackupNow(this)" title="${esc(isOwner()
+      ? "Runs the firm export right here — the same confirm and the same file as Settings › Data & backup, and it stamps the export date so this reminder clears."
+      : "Opens Settings at the Data & backup section.")}">${isOwner() ? "💾 Export it now" : "Go to Settings"}</button>`;
     if (!expAt) {
-      bits.push(`<div class="dash-notice" id="dash-export-notice" data-state="never"><span class="dash-notice-msg">💾 No firm backup has ever been taken${expKnown ? "" : ""} — export from Settings.</span>
-        <button type="button" class="dash-notice-link" onclick="nav('settings')">Go to Settings</button></div>`);
+      bits.push(`<div class="dash-notice" id="dash-export-notice" data-state="never"><span class="dash-notice-msg">💾 No firm backup has ever been taken${expKnown ? "" : ""} — the button exports one from here.</span>
+        ${expBtn}</div>`);
       heads.push("no firm backup has ever been taken");
     } else if (days != null && !isNaN(days) && days > EXPORT_NAG_DAYS) {
-      bits.push(`<div class="dash-notice" id="dash-export-notice" data-state="stale"><span class="dash-notice-msg">💾 No firm backup in ${days} days — export from Settings.</span>
-        <button type="button" class="dash-notice-link" onclick="nav('settings')">Go to Settings</button></div>`);
+      bits.push(`<div class="dash-notice" id="dash-export-notice" data-state="stale"><span class="dash-notice-msg">💾 No firm backup in ${days} days — the button exports one from here.</span>
+        ${expBtn}</div>`);
       heads.push(`no firm backup in ${days} days`);
     }
   }
@@ -14755,6 +14807,30 @@ async function knownLenders() {
     return [...seen.values()].sort((a, b) => a.localeCompare(b));
   } catch (_) { return []; }
 }
+/* R77 · A2a — every lead source already on the book, for the case form's datalist. Same reasoning
+   as knownLenders/knownSolicitorFirms, with one addition: production has recorded exactly ONE
+   distinct value ever, so the moment capture starts working "google" beside "Google" is how one
+   source becomes two rows on the Lead-sources report. Case-insensitively deduped; the variant
+   offered is the casing the book uses MOST (ties break toward the first one seen). */
+async function knownLeadSources() {
+  try {
+    const rows = await softRows(db.from("cases").select("lead_source").limit(5000));
+    const seen = new Map();   // lowercased key → Map(variant → count)
+    rows.forEach((r) => {
+      const v = r && r.lead_source ? String(r.lead_source).trim() : "";
+      if (!v) return;
+      const k = v.toLowerCase();
+      let vars = seen.get(k);
+      if (!vars) { vars = new Map(); seen.set(k, vars); }
+      vars.set(v, (vars.get(v) || 0) + 1);
+    });
+    return [...seen.values()].map((vars) => {
+      let best = null, bestN = -1;
+      vars.forEach((n, variant) => { if (n > bestN) { best = variant; bestN = n; } });
+      return best;
+    }).sort((a, b) => a.localeCompare(b));
+  } catch (_) { return []; }
+}
 const DIP_CHASE_TASK_TITLE = "Chase DIP decision";
 /* ==========================================================================
    R65 · H7a — "WHO IS THIS CASE WAITING ON NOW?" AT STAGE ENTRY.
@@ -14817,6 +14893,49 @@ function wireStageEntryWaitingOn(box) {
   const sync = () => { if (field) field.classList.toggle("hidden", sel.value !== "solicitor"); };
   sel.addEventListener("change", sync);
   sync();
+}
+/* ==========================================================================
+   R77 · A1b — "WHEN WILL THIS COMPLETE?" AT STAGE ENTRY.
+
+   `expected_completion_date` is what the Commission forecast on Reports
+   buckets by, and in production it is blank on 131 of 132 live cases — the
+   forecast's "No date" pile IS the book, so the comparison against the
+   monthly target (R77 · A1a) is only as good as this capture. The field is
+   asked at the two stages where the answer is actually born — APPLICATION
+   (the lender names a timescale) and OFFER (the offer letter names one) —
+   and nowhere else; Exchange keeps its waiting-on-only dialog untouched.
+
+   Same rules as every other stage-entry prompt in this block, deliberately:
+     · OPTIONAL, ALWAYS. Blank is skip — it writes nothing, clears nothing,
+       and never blocks the move.
+     · PREFILLED where the case already has a date, so the dialog is also the
+       correction point — but an UNCHANGED prefill writes nothing at all
+       (a no-op write would pointlessly kill the R74 stage-move Undo).
+     · A case whose date is already recorded is not asked on its own account
+       ("already answered — do not ask"), though the field still appears,
+       prefilled, whenever the dialog is up for another question.
+   ========================================================================== */
+function stageEntryExpectedHtml(cRow) {
+  if (!cRow || typeof cRow !== "object") return "";
+  // A row that does not CARRY the column knows nothing about this case's answer (the
+  // registerClientProps discipline, same as the waiting-on field above).
+  if (!Object.prototype.hasOwnProperty.call(cRow, "expected_completion_date")) return "";
+  const cur = cRow.expected_completion_date ? String(cRow.expected_completion_date).slice(0, 10) : "";
+  return `<label style="margin-top:10px;">Expected completion <span class="cs-muted">(optional)</span>
+      <input type="date" id="se-expected" value="${esc(cur)}">
+      <span class="s cs-muted">This is what the commission forecast on Reports is bucketed by — a case with no date sits in its “No date” pile where nobody can plan around it. Blank is fine and never blocks the move.</span>
+    </label>`;
+}
+/* What Save & advance should add for the expected date, or null for "nothing to write": blank is
+   skip (never a write, never a clear), and an unchanged prefill is silence too. */
+function stageEntryExpectedPatch(box, cRow) {
+  const el = box.querySelector("#se-expected");
+  if (!el) return null;
+  const v = String(el.value || "").trim();
+  if (!v) return null;
+  const cur = cRow && cRow.expected_completion_date ? String(cRow.expected_completion_date).slice(0, 10) : "";
+  if (v === cur) return null;
+  return { expected_completion_date: v };
 }
 /* What "Save & advance" should add to the patch, or null for "nothing was chosen". Never returns
    solicitor_firm on its own and never writes an empty firm — a blank box is not an answer. */
@@ -14946,7 +15065,13 @@ async function promptStageEntry(targetStage, cRow, caseName) {
        asks, and a case where both are already answered asks nothing at all and advances. */
     const needExpiry = !(cRow && cRow.offer_expiry_date);
     const waitHtml = await stageEntryWaitingOnHtml(cRow);
-    if (!needExpiry && !waitHtml) return {};
+    /* R77 · A1b — the expected-completion field joins this one dialog (never a second one). It can
+       raise the dialog on its own — an offer with expiry and waiting-on both answered but no
+       expected date is exactly the case the forecast cannot see — and a case whose date is already
+       recorded is not asked on its own account, though the field still rides along, prefilled. */
+    const expHtml = stageEntryExpectedHtml(cRow);
+    const needExpected = !!expHtml && !(cRow && cRow.expected_completion_date);
+    if (!needExpiry && !waitHtml && !needExpected) return {};
     /* R13 · M-11 — the SAME letter carries both dates, so both are asked for in the one dialog
        rather than in two prompts a fortnight apart. "Issued" is prefilled with today because in
        practice the offer is filed the day it lands and that is the answer nine times in ten; it is
@@ -14962,6 +15087,7 @@ async function promptStageEntry(targetStage, cRow, caseName) {
         <input type="date" id="se-issued" value="${esc(issuedDefault)}">
         <span class="s cs-muted">The date printed on the offer letter. Today is filled in because that is usually right — change it or clear it if it is not.</span>
       </label>` : ""}` : ""}
+      ${expHtml}
       ${waitHtml}
       <p class="panel-sub" style="margin-top:8px;">Leave ${needExpiry && waitHtml ? "either of these" : "it"} blank and nothing is written for ${needExpiry && waitHtml ? "that one" : "it"}. <strong>Skip</strong> advances the case and changes nothing else; ${needExpiry ? "the expiry field is on the case form whenever the letter turns up" : "who the case is waiting on is on the case form too"}.</p>
       <div class="modal-actions">
@@ -14982,6 +15108,7 @@ async function promptStageEntry(targetStage, cRow, caseName) {
         const patch = {};
         if (v) patch.offer_expiry_date = v;
         if (iv) patch.offer_issued_date = iv;
+        Object.assign(patch, stageEntryExpectedPatch(box, cRow) || {});   // R77 · A1b
         Object.assign(patch, stageEntryWaitingOnPatch(box) || {});
         finish({ patch: Object.keys(patch).length ? patch : null });
       };
@@ -14995,13 +15122,25 @@ async function promptStageEntry(targetStage, cRow, caseName) {
      did before this round. */
   if (WAITING_ON_STAGE_ENTRY_STAGES.includes(targetStage)) {
     const waitHtml = await stageEntryWaitingOnHtml(cRow);
-    if (!waitHtml) return {};
+    /* R77 · A1b — APPLICATION also asks for the expected completion date (see
+       stageEntryExpectedHtml's header): the lender has just named a timescale, and this is the
+       only moment anyone is looking at the case with that letter in hand. Exchange deliberately
+       does NOT gain the field — its date is days away and the offer dialog already asked.
+       The expected question can raise this dialog on its own; a case whose date is already
+       recorded is never asked on its own account. */
+    const expHtml = targetStage === "application" ? stageEntryExpectedHtml(cRow) : "";
+    const needExpected = !!expHtml && !(cRow && cRow.expected_completion_date);
+    if (!waitHtml && !needExpected) return {};
     const stageName = STAGE_LABEL[targetStage] || targetStage;
+    const intro = waitHtml
+      ? `A case sits at ${esc(stageName)} for weeks, and the stage does not say <strong>who it is sitting with</strong> — the lender, the solicitor, or the client who still owes us something. Recording it here is what makes the board answer “who do I have to ring today”.`
+      : `The one thing this case does not say is <strong>when it is expected to complete</strong> — and that date is what the commission forecast on Reports is built from.`;
     return openOverlay(`
       <h3>Moving ${esc(caseName || "this case")} to ${esc(stageName)}</h3>
-      <p class="panel-sub">A case sits at ${esc(stageName)} for weeks, and the stage does not say <strong>who it is sitting with</strong> — the lender, the solicitor, or the client who still owes us something. Recording it here is what makes the board answer “who do I have to ring today”.</p>
+      <p class="panel-sub">${intro}</p>
       ${waitHtml}
-      <p class="panel-sub" style="margin-top:8px;">Leave it blank and nothing is written — a guessed answer is worse than an empty one. <strong>Skip</strong> advances the case and changes nothing else; the field is on the case form and on the case screen whenever you know.</p>
+      ${expHtml}
+      <p class="panel-sub" style="margin-top:8px;">Leave ${waitHtml && expHtml ? "either of these" : "it"} blank and nothing is written — a guessed answer is worse than an empty one. <strong>Skip</strong> advances the case and changes nothing else; the field${waitHtml && expHtml ? "s are" : " is"} on the case form and on the case screen whenever you know.</p>
       <div class="modal-actions">
         <div><button type="button" class="btn btn-ghost" id="se-cancel">Don't advance</button></div>
         <div class="right">
@@ -15013,8 +15152,8 @@ async function promptStageEntry(targetStage, cRow, caseName) {
       box.querySelector("#se-cancel").onclick = () => finish(null);
       box.querySelector("#se-skip").onclick = () => finish({});
       box.querySelector("#se-ok").onclick = () => {
-        const patch = stageEntryWaitingOnPatch(box);
-        finish({ patch: patch && Object.keys(patch).length ? patch : null });
+        const patch = Object.assign({}, stageEntryWaitingOnPatch(box) || {}, stageEntryExpectedPatch(box, cRow) || {});   // R77 · A1b
+        finish({ patch: Object.keys(patch).length ? patch : null });
       };
     });
   }
@@ -15164,7 +15303,11 @@ window.moveCaseToStage = async function (caseId, targetStage, opts = {}) {
       /* R76 · A1 — broker_fee/fee_status/fee_requested_at/review_requested_at (all original-schema
          columns) ride along so the Completed overlay can say WHY a box is dead — and so queueEmail
          gets the same row shape the Actions ▾ buttons hand it. */
-      .select("id,client_id,assigned_to,stage,protection_status,completed_at,case_kind,lender,offer_expiry_date,rate_end_date,rate_end_estimated,broker_fee,fee_status,fee_requested_at,review_requested_at" + (propOn ? ",property_address" : "") + (refOn ? ",referrer_client_id" : "") + (seDocsOn ? ",waiting_on,solicitor_firm" : "") + ",clients!client_id(first_name,last_name)")
+      /* R77 · A1b — expected_completion_date rides along for the same reason offer_expiry_date
+         does: the application/offer stage-entry prompts must tell "already recorded" from "never
+         asked", and prefill the correction. A base column (BOARD_CASE_COLS has always carried it),
+         so naming it costs no feature detection. */
+      .select("id,client_id,assigned_to,stage,protection_status,completed_at,case_kind,lender,offer_expiry_date,expected_completion_date,rate_end_date,rate_end_estimated,broker_fee,fee_status,fee_requested_at,review_requested_at" + (propOn ? ",property_address" : "") + (refOn ? ",referrer_client_id" : "") + (seDocsOn ? ",waiting_on,solicitor_firm" : "") + ",clients!client_id(first_name,last_name)")
       .eq("id", caseId).single()).data;
   }
   /* =======================================================================
@@ -15454,6 +15597,8 @@ window.moveCaseToStage = async function (caseId, targetStage, opts = {}) {
       + (stageEntry.patch && stageEntry.patch.offer_expiry_date ? ` · offer expiry ${fmtD(stageEntry.patch.offer_expiry_date)}` : "")
       // R13 · M-11 — the toast names everything the prompt actually wrote, or it is not a receipt.
       + (stageEntry.patch && stageEntry.patch.offer_issued_date ? ` · offer issued ${fmtD(stageEntry.patch.offer_issued_date)}` : "")
+      // R77 · A1b — the expected-completion answer, on the same receipt.
+      + (stageEntry.patch && stageEntry.patch.expected_completion_date ? ` · expected completion ${fmtD(stageEntry.patch.expected_completion_date)}` : "")
       /* R65 · H7a — the waiting-on answer on the same receipt as everything else the prompt wrote.
          Named with the firm where one was given, because "waiting on solicitor" with no solicitor
          named is the shrug waitingChipHtml's own comment complains about. */
@@ -19064,6 +19209,7 @@ window.openCase = async function (id, opts = {}) {
   if (id) noteLenderTrackFromStarRow(c);
   const lenderTrackOn = id ? Object.prototype.hasOwnProperty.call(c, "application_status") : ((await lenderTrackSupported()) === true);
   const solicitorFirms = docsOn ? await knownSolicitorFirms() : [];
+  const knownSources = await knownLeadSources();   // R77 · A2a — for the lead-source datalist
   const siblingCases = c.client_id ? await softRows(db.from("cases").select("*").eq("client_id", c.client_id)) : [];
   registerClientProps(c.client_id, siblingCases);   // R6-FIX V2/V4 — the client's whole book
   /* ---- R6-FIX OP-R62-05 · "this building is on someone else's file too" ----
@@ -19491,7 +19637,11 @@ window.openCase = async function (id, opts = {}) {
            moved to a title tooltip. */ ""}
       ${/* ---- Where it came from ---- */ ""}
       <h4 class="cs-sub-h full">Where it came from</h4>
-      <label>Lead source<input name="lead_source" value="${esc(c.lead_source)}" placeholder="e.g. Google, referral, repeat"></label>
+      ${/* R77 · A2a — free text KEPT (a new source must be typeable), but the datalist offers every
+           source already on the book, case-insensitively deduped to its most common casing, so the
+           Lead-sources report groups instead of splintering. */ ""}
+      <label>Lead source<input name="lead_source" list="case-lead-sources" value="${esc(c.lead_source)}" placeholder="e.g. Google, referral, repeat" autocomplete="off"></label>
+      <datalist id="case-lead-sources">${knownSources.map((s) => `<option value="${esc(s)}"></option>`).join("")}</datalist>
       <label>Introducer<select name="introducer_id"><option value="">— none —</option>${introOpts}</select></label>
       ${/* R9-1 · m11 — REFERRED BY. Next to Lead source and Introducer because it answers the same
            question they do — where did this case come from — and it is the answer those two could
@@ -27295,6 +27445,11 @@ window.openLeadInToday = async function (leadId) {
    adviser or per client is a report, and a report built on three days of
    outcome data says more about when the column shipped than about anybody's
    diary. The recording comes first; the counting is a later round's job.
+   R77 · B1 — that later round arrived: renderApptOutcomes() (Reports §5,
+   #report-outcomes-panel) now counts the last 90 days per adviser, leads with
+   the UNRECORDED share (this comment's own caveat, made the first number),
+   and lists clients with 2+ recorded no-shows. The chips here stay the one
+   writer; the panel is the one reader.
    ====================================================================== */
 /* R37 · W11 — the five appointment titles this back office actually books, offered as chips above
    the (still free-text) Title field. Presentation only: no column, no validation, no reporting
@@ -30152,35 +30307,83 @@ function renderThreadedPanels(all, mv, repAdvisers) {
     </div>` : "";
   }).join("") : `<div class="empty">No cases created in ${label}.</div>`;
 
-  // ---- Lead sources: leads (cases) created in the selected month. ----
-  const srcMap = {};
-  monthCases.forEach((c) => {
-    const k = (c.lead_source || "").trim() || "(not set)";
-    srcMap[k] = srcMap[k] || { cases: 0, completed: 0, lost: 0, live: 0, revenue: 0, last: null };
-    const v = srcMap[k];
+  /* R77 · A2b — the Lead-sources table moved into its own renderer with the Losses panel's
+     This-month / All-time toggle and case-insensitive grouping. Same columns, same convCell
+     small-sample honesty, same everyone-sees-volumes / owner-sees-Revenue split. */
+  renderLeadSourcesPanel(all, mv);
+
+  renderLossesPanel(all, mv);
+}
+
+/* ==========================================================================
+   R77 · A2b — LEAD SOURCES: READ WHAT A2a CAPTURES, WITHOUT SPLINTERING IT.
+
+   Two changes to the table that was previously inlined in renderThreadedPanels,
+   both driven by the production data: lead_source is blank on 130 of 132 live
+   cases, so (a) a SINGLE month of it is usually too few rows to read — the
+   panel gains the Losses panel's exact This-month / All-time toggle (All time
+   = every case on the book, matching what Losses chose); and (b) the moment
+   capture starts working, "google" beside "Google" is two rows pretending to
+   be two sources — grouping is now case-insensitive (trim + lowercase key),
+   displaying the casing the book uses most. Columns, the convCell (n<5)
+   small-sample honesty and the owner-only Revenue column are unchanged.
+   ========================================================================== */
+let sourcesAllTime = false;
+let sourcesState = { all: [], mv: null };
+function renderLeadSourcesPanel(all, mv) {
+  sourcesState.all = all || sourcesState.all;
+  sourcesState.mv = mv || sourcesState.mv;
+  const rowsAll = sourcesState.all || [];
+  const label = monthLabel(sourcesState.mv);
+  const money = showMoney();
+  const scoped = sourcesAllTime ? rowsAll
+    : rowsAll.filter((c) => c.created_at && localMonthStr(c.created_at) === sourcesState.mv);
+  const btn = $("#report-sources-scope-btn");
+  if (btn) btn.textContent = sourcesAllTime ? "This month" : "All time";
+  const scopeEl = $("#report-sources-scope");
+  if (scopeEl) {
+    scopeEl.textContent = sourcesAllTime
+      ? `Set the lead source on cases to build this up. Every case on the book, all time (${rowsAll.length}). Sources are grouped case-insensitively — “google” and “Google” are one row.`
+      : `Set the lead source on cases to build this up. Scoped to leads created in ${label}.`;
+  }
+  const srcMap = {};   // trim+lowercase key → aggregate; display = the most common casing
+  scoped.forEach((c) => {
+    const raw = (c.lead_source || "").trim();
+    const k = raw ? raw.toLowerCase() : "(not set)";
+    const v = srcMap[k] || (srcMap[k] = { cases: 0, completed: 0, lost: 0, live: 0, revenue: 0, last: null, variants: new Map() });
+    if (raw) v.variants.set(raw, (v.variants.get(raw) || 0) + 1);
     v.cases++;
     if (c.created_at && (!v.last || c.created_at > v.last)) v.last = c.created_at;
     if (c.stage === "completed") { v.completed++; v.revenue += Number(c.proc_fee || 0) + Number(c.broker_fee || 0) + Number(c.sols_fee || 0); }
     else if (c.stage === "not_proceeding") v.lost++;
     else v.live++;
   });
-  $("#report-sources-scope").textContent = `Set the lead source on cases to build this up. Scoped to leads created in ${label}.`;
+  const displayOf = (k, v) => {
+    if (k === "(not set)") return "(not set)";
+    let best = null, bestN = -1;
+    v.variants.forEach((n, variant) => { if (n > bestN) { best = variant; bestN = n; } });
+    return best || k;
+  };
   // Lead-source VOLUMES are operational and stay for everyone; the Revenue column is money.
-  $("#report-sources").innerHTML = monthCases.length ? `<table class="imp-table">
+  $("#report-sources").innerHTML = scoped.length ? `<table class="imp-table">
     <tr><th>Source</th><th>Cases</th><th title="Still in the live pipeline — neither won nor lost, and excluded from Conversion">Live</th><th>Completed</th><th title="${esc(CONV_TH_TITLE)}">Conversion</th><th>Last lead</th>${money ? "<th>Revenue</th>" : ""}</tr>
-    ${Object.entries(srcMap).sort((a, b) => b[1].cases - a[1].cases).map(([k, v]) => `<tr>
-      <td>${k === "(not set)" ? esc(k) : `<button type="button" class="linkish" onclick="reportGotoSearch('${jsArg(k)}')" title="Open the pipeline filtered to ${esc(k)}">${esc(k)}</button>`}</td>
+    ${Object.entries(srcMap).sort((a, b) => b[1].cases - a[1].cases).map(([k, v]) => {
+      const disp = displayOf(k, v);
+      return `<tr>
+      <td>${k === "(not set)" ? esc(disp) : `<button type="button" class="linkish" onclick="reportGotoSearch('${jsArg(disp)}')" title="Open the pipeline filtered to ${esc(disp)}">${esc(disp)}</button>`}</td>
       <td>${v.cases}</td>
       <td>${v.live}</td>
       <td>${v.completed}</td>
       <td>${convCell(v.completed, v.lost)}</td>
       <td>${fmtD(v.last)}</td>
       ${money ? `<td class="num">${fmtM(v.revenue)}</td>` : ""}
-    </tr>`).join("")}
-  </table>` : `<div class="empty">No leads created in ${label}.</div>`;
-
-  renderLossesPanel(all, mv);
+    </tr>`; }).join("")}
+  </table>` : `<div class="empty">${sourcesAllTime ? "No cases on the book yet." : `No leads created in ${label}.`}</div>`;
 }
+window.toggleSourcesScope = function () {
+  sourcesAllTime = !sourcesAllTime;
+  renderLeadSourcesPanel(null, null);
+};
 
 /* ==========================================================================
    B3 / R5-20 — LOSSES BY REASON
@@ -30267,7 +30470,11 @@ function renderForecastBuckets(all) {
   // Commission forecast = money. Owner-only in the UI (presentation, not a control).
   const fcPanel = $("#report-forecast-panel");
   if (fcPanel) fcPanel.classList.toggle("hidden", !showMoney());
-  if (!showMoney()) { $("#report-forecast-headline").innerHTML = ""; $("#report-forecast-buckets").innerHTML = ""; return; }
+  if (!showMoney()) {
+    $("#report-forecast-headline").innerHTML = ""; $("#report-forecast-buckets").innerHTML = "";
+    const tOff = $("#report-forecast-target"); if (tOff) tOff.innerHTML = "";   // R77 · A1a
+    return;
+  }
   // T1-17 — the forecast now covers the live book, not just its last two stages. Application and
   // DIP cases carry real commission and were invisible here; they keep the same per-stage
   // conversion basis the offer/exchange weights already used, just further down the pipeline.
@@ -30333,6 +30540,42 @@ function renderForecastBuckets(all) {
     </div>` : "";
     return row + expandList;
   }).join("") : '<div class="empty">No live cases between DIP and exchange.</div>';
+  /* ==========================================================================
+     R77 · A1a — THE FORECAST MEETS THE TARGET.
+
+     The buckets above say what is coming; the firm's monthly fee target
+     (settings.monthly_fee_target — the SAME key the hero and the target bar
+     read) says what is needed; nothing on this panel ever put the two in one
+     sentence. One line does it now: the ≤30-days weighted figure against the
+     monthly target, with the gap named in whichever direction it runs. And
+     because in production the "No date" bucket is effectively the whole book
+     (131 of 132 live cases carry no expected completion date), the same line
+     carries the no-date clause, wired to the EXISTING toggleForecastNoneList
+     list so the offending cases are one click away — capture before
+     comparison. No target set is a real state: the line says so and points at
+     Settings rather than inventing a gap against zero.
+     ========================================================================== */
+  const targetLineEl = $("#report-forecast-target");
+  if (targetLineEl) {
+    if (!open.length) targetLineEl.innerHTML = "";
+    else {
+      const fcTarget = Number(settings.monthly_fee_target || 0);
+      let line;
+      if (fcTarget > 0) {
+        const h30w = buckets.h30.weighted;
+        const gap = fcTarget - h30w;
+        line = `<span id="report-forecast-target-line">≤30 days weighted <strong>${fmtM(h30w)}</strong> vs monthly target ${fmtM(fcTarget)} → ${gap > 0
+          ? `gap <strong>${fmtM(gap)}</strong>`
+          : `<strong>${fmtM(-gap)}</strong> ahead of target`}</span>`;
+      } else {
+        line = `<span id="report-forecast-target-line">No monthly fee target is set, so there is no gap to read this against — <button type="button" class="linkish" id="report-forecast-target-set" onclick="nav('settings')">set one in Settings › Targets</button>.</span>`;
+      }
+      const noneLine = buckets.none.cases
+        ? ` · <button type="button" class="linkish" id="report-forecast-none-line" onclick="toggleForecastNoneList()" title="Show which cases have no expected completion date">${buckets.none.cases} case${buckets.none.cases === 1 ? "" : "s"} (${fmtM(buckets.none.weighted)} weighted) ${buckets.none.cases === 1 ? "has" : "have"} no expected completion date</button>`
+        : "";
+      targetLineEl.innerHTML = `<p class="panel-sub" style="margin:8px 0 0;">${line}${noneLine}</p>`;
+    }
+  }
   const hintEl = $("#report-forecast-hint");
   if (hintEl) {
     hintEl.textContent = (open.length && buckets.none.cases === open.length)
@@ -30350,6 +30593,80 @@ window.toggleForecastNoneList = function () {
   list.classList.toggle("hidden", !willShow);
   if (btn) btn.textContent = willShow ? "▾ Hide" : "▸ Show";
 };
+
+/* ==========================================================================
+   R77 · A4 — BUSINESS MIX BY CASE TYPE.
+
+   The one question no Reports panel answered: WHAT KIND of business is the
+   firm actually writing? Completions year-to-date and the live pipeline,
+   grouped by case_kind — count, broker-fee sum and average per group — in
+   Money & book, because the Reports read already carries case_kind on every
+   row (no new query) and the neighbouring panels are the money this mixes.
+
+   Rules, all inherited rather than invented:
+     · Owner-only (broker fees), the same showMoney() presentation gate as the
+       forecast panel above it.
+     · YTD is by completed_at on localDateStr's Europe/London basis — the same
+       yearOf the KPI tiles use, so "Completions YTD" here and the tile can
+       never disagree.
+     · Live = the six MI_LIVE_STAGES (enquiry → exchange), the same set the
+       funnel and the MI forecast call the live pipeline.
+     · Kinds are named by the case form's own KINDS list; a case with no kind
+       recorded keeps its row, labelled "(not recorded)", last — hidden rows
+       are how a mix report lies.
+     · CSV via miCsv, the panel-header affordance its Money & book neighbours
+       (Money owed, the MI panels) already carry.
+   ========================================================================== */
+function renderBusinessMix(all, yr) {
+  const panel = $("#report-mix-panel");
+  if (!panel) return;
+  const money = showMoney();
+  panel.classList.toggle("hidden", !money);
+  if (!money) { const el = $("#report-mix"); if (el) el.innerHTML = ""; return; }
+  const rows = all || [];
+  const yearOf = (d) => localDateStr(d).slice(0, 4);
+  const doneYtd = rows.filter((c) => c.completed_at && yearOf(c.completed_at) === String(yr));
+  const liveRows = rows.filter((c) => MI_LIVE_STAGES.includes(c.stage));
+  const agg = new Map();   // kind key ("" = not recorded) → aggregate
+  const bump = (c, slot) => {
+    const k = (c.case_kind || "").trim();
+    let a = agg.get(k);
+    if (!a) { a = { kind: k, doneN: 0, doneFees: 0, liveN: 0, liveFees: 0 }; agg.set(k, a); }
+    a[slot + "N"]++;
+    a[slot + "Fees"] += Number(c.broker_fee || 0);
+  };
+  doneYtd.forEach((c) => bump(c, "done"));
+  liveRows.forEach((c) => bump(c, "live"));
+  const scopeEl = $("#report-mix-scope");
+  if (scopeEl) scopeEl.textContent = `Completions are ${yr} year-to-date by completion date; live pipeline is enquiry → exchange right now. Fees are the broker fee only — earned on the case, not necessarily paid. Averages are over each group's own cases, fee or no fee.`;
+  const kindLabel = (k) => (k ? ((KINDS.find((x) => x[0] === k) || [])[1] || k) : "(not recorded)");
+  const KIND_ORDER = KINDS.map(([k]) => k);
+  const orderOf = (k) => { if (!k) return KIND_ORDER.length + 1; const i = KIND_ORDER.indexOf(k); return i === -1 ? KIND_ORDER.length : i; };
+  const list = [...agg.values()].sort((a, b) => orderOf(a.kind) - orderOf(b.kind) || a.kind.localeCompare(b.kind));
+  const avg = (fees, n) => (n ? fmtM(Math.round(fees / n)) : '<span class="cs-muted">—</span>');
+  const tot = list.reduce((s, a) => ({ doneN: s.doneN + a.doneN, doneFees: s.doneFees + a.doneFees, liveN: s.liveN + a.liveN, liveFees: s.liveFees + a.liveFees }),
+    { doneN: 0, doneFees: 0, liveN: 0, liveFees: 0 });
+  $("#report-mix").innerHTML = list.length ? `<table class="imp-table">
+    <tr><th>Case type</th><th>Completed YTD</th><th title="Broker fee on this type's YTD completions — earned, not necessarily paid">Fees YTD</th><th title="Fees YTD ÷ completed YTD">Avg fee</th><th>Live pipeline</th><th title="Broker fee on this type's live cases">Live fees</th><th title="Live fees ÷ live cases">Avg fee</th></tr>
+    ${list.map((a) => `<tr${a.kind ? "" : ' class="loss-unrecorded"'}>
+      <td>${esc(kindLabel(a.kind))}</td>
+      <td>${a.doneN}</td>
+      <td class="num">${fmtM(a.doneFees)}</td>
+      <td class="num">${avg(a.doneFees, a.doneN)}</td>
+      <td>${a.liveN}</td>
+      <td class="num">${fmtM(a.liveFees)}</td>
+      <td class="num">${avg(a.liveFees, a.liveN)}</td>
+    </tr>`).join("")}
+    <tr class="scoreboard-foot"><td><strong>Total</strong></td><td><strong>${tot.doneN}</strong></td><td class="num"><strong>${fmtM(tot.doneFees)}</strong></td><td class="num">${avg(tot.doneFees, tot.doneN)}</td><td><strong>${tot.liveN}</strong></td><td class="num"><strong>${fmtM(tot.liveFees)}</strong></td><td class="num">${avg(tot.liveFees, tot.liveN)}</td></tr>
+  </table>` : '<div class="empty">No completed or live cases on the book yet.</div>';
+  const csvBtn = $("#report-mix-csv");
+  if (csvBtn) csvBtn.onclick = () => {
+    const dstr = new Date().toISOString().slice(0, 10);
+    const r = list.map((a) => [kindLabel(a.kind), a.doneN, a.doneFees, a.doneN ? Math.round(a.doneFees / a.doneN) : "", a.liveN, a.liveFees, a.liveN ? Math.round(a.liveFees / a.liveN) : ""]);
+    r.push(["Total", tot.doneN, tot.doneFees, tot.doneN ? Math.round(tot.doneFees / tot.doneN) : "", tot.liveN, tot.liveFees, tot.liveN ? Math.round(tot.liveFees / tot.liveN) : ""]);
+    miCsv(`nexmoney-business-mix-${dstr}.csv`, ["Case type", `Completed YTD (${yr})`, "Fees YTD £", "Avg fee £", "Live cases", "Live fees £", "Avg fee £"], r);
+  };
+}
 
 /* ==========================================================================
    R19 — PIPELINE MI (Owner / Admin management information).
@@ -30414,9 +30731,24 @@ function renderPipelineMI(all, mv) {
   const advMap = new Map(); // assigned_to || "__unassigned"
 
   let miSkipped = 0;   // R21 Part B — one bad case must not abort the whole MI aggregation
+  /* R77 · A3 — HOW THIN IS THE DATE COVERAGE? The conversion and velocity figures below are built
+     from milestone DATES, and in production those are mostly blank (104 cases completed in 2026
+     carry no submitted_at; one case in the whole book has an offer_issued_date) — which is how the
+     conversion table prints "Completed 30 (3000%)". Count, per case, the EARLIEST milestone date
+     its stage says it should carry but doesn't (Data health's dh-tile-milestone rule, without its
+     back-book age cut — this is about what THESE figures can and cannot see). */
+  const MI_RANKS = Object.fromEntries(STAGES.map(([k], i) => [k, i]));
+  const MI_APP_RANK = MI_RANKS["application"], MI_OFFER_RANK = MI_RANKS["offer"];
+  let missMilestone = 0;
   rows.forEach((c) => {
     try {
     const live = MI_LIVE_STAGES.includes(c.stage);
+    // R77 · A3 — the coverage counter (see above). A dropped case owes no milestone date.
+    if (c.stage !== "not_proceeding") {
+      const rank = MI_RANKS[c.stage];
+      if (rank != null && rank >= MI_APP_RANK && !c.submitted_at) missMilestone++;
+      else if (rank != null && rank >= MI_OFFER_RANK && !c.offer_issued_date) missMilestone++;
+    }
     if (live) { funnel[c.stage]++; liveFeeByStage[c.stage] += fee(c); }
 
     const hasApp = !!c.submitted_at, hasOffer = !!c.offer_issued_date, hasComp = !!c.completed_at;
@@ -30471,13 +30803,23 @@ function renderPipelineMI(all, mv) {
 
   const total = rows.length;
   const stepPct = (num, den) => (den ? Math.round((num / den) * 100) + "%" : "—");
+  /* R77 · A3 — THE COVERAGE GUARD: NEVER PRINT 3000%. A later milestone counting MORE cases than
+     the one before it is not a conversion rate, it is a hole in the dates (a case can only reach
+     offer THROUGH application — the arithmetic can exceed 100% only because the earlier date is
+     missing). Where that happens the percentage is replaced — never the row, never silently — by
+     an honest clause naming how many cases are missing their dates, linking to Data health's own
+     missing-milestone list (dh-tile-milestone), whose tile copy already points back at this table.
+     The same clause replaces a velocity median/average computed from n≤1 dated cases: a "median"
+     of one case is that case, not a rate the firm can plan on. */
+  const miCoverageClause = (n) => `<button type="button" class="linkish mi-coverage-clause" onclick="miGotoMilestoneHealth()" title="Open Data health at the missing application/offer date list">date coverage too thin — ${n} case${n === 1 ? " is" : "s are"} missing application/offer dates → fix in Data health</button>`;
+  const stepCell = (num, den) => (num > den ? miCoverageClause(missMilestone) : stepPct(num, den));
   $("#report-mi-conversion").innerHTML = `
     <table class="imp-table">
       <tr><th>Milestone</th><th>Cases</th><th title="Share reaching this milestone from the one before it">Step %</th></tr>
       <tr><td>Created</td><td>${total}</td><td><span class="cs-muted">—</span></td></tr>
-      <tr><td>Reached application <span class="cs-muted">(submitted)</span></td><td>${reachedApp}</td><td>${stepPct(reachedApp, total)}</td></tr>
-      <tr><td>Reached offer <span class="cs-muted">(offer issued)</span></td><td>${reachedOffer}</td><td>${stepPct(reachedOffer, reachedApp)}</td></tr>
-      <tr><td>Completed</td><td>${reachedCompleted}</td><td>${stepPct(reachedCompleted, reachedOffer)}</td></tr>
+      <tr><td>Reached application <span class="cs-muted">(submitted)</span></td><td>${reachedApp}</td><td>${stepCell(reachedApp, total)}</td></tr>
+      <tr><td>Reached offer <span class="cs-muted">(offer issued)</span></td><td>${reachedOffer}</td><td>${stepCell(reachedOffer, reachedApp)}</td></tr>
+      <tr><td>Completed</td><td>${reachedCompleted}</td><td>${stepCell(reachedCompleted, reachedOffer)}</td></tr>
     </table>
     <p class="panel-sub" style="margin:6px 0 0;">From milestone dates, not stage-change history.</p>`;
 
@@ -30497,6 +30839,17 @@ function renderPipelineMI(all, mv) {
     <tr><th>Transition</th><th title="Headline — robust to outliers">Median</th><th>Average</th><th>n</th></tr>
     ${vMetrics.map((m) => {
       const md = miMedian(m.arr), av = miMean(m.arr);
+      /* R77 · A3 — a velocity figure from n≤1 dated cases is one case wearing a median's clothes.
+         Where the thinness is CAUSED by missing dates the row keeps its place and its n, and the
+         numbers are replaced by the coverage clause; a genuinely tiny book with nothing missing
+         (missMilestone 0) keeps the plain "—"/number — there is nothing to send anyone to fix. */
+      if (m.arr.length <= 1 && missMilestone > 0) {
+        return `<tr>
+        <td>${m.label}</td>
+        <td colspan="2">${miCoverageClause(missMilestone)}</td>
+        <td>${m.arr.length}</td>
+      </tr>`;
+      }
       return `<tr>
         <td>${m.label}</td>
         <td>${md == null ? '<span class="cs-muted">—</span>' : `<strong>${md}d</strong>`}</td>
@@ -30614,9 +30967,11 @@ function renderPipelineMI(all, mv) {
     const r = [];
     MI_LIVE_STAGES.forEach((s) => r.push(["Live funnel", STAGE_LABEL[s], funnel[s], ""]));
     r.push(["Conversion", "Created", total, ""]);
-    r.push(["Conversion", "Reached application (submitted)", reachedApp, stepPct(reachedApp, total)]);
-    r.push(["Conversion", "Reached offer (offer issued)", reachedOffer, stepPct(reachedOffer, reachedApp)]);
-    r.push(["Conversion", "Completed", reachedCompleted, stepPct(reachedCompleted, reachedOffer)]);
+    // R77 · A3 — the CSV keeps the guard: an impossible % is no truer in a spreadsheet.
+    const stepCsv = (num, den) => (num > den ? `date coverage too thin (${missMilestone} missing dates)` : stepPct(num, den));
+    r.push(["Conversion", "Reached application (submitted)", reachedApp, stepCsv(reachedApp, total)]);
+    r.push(["Conversion", "Reached offer (offer issued)", reachedOffer, stepCsv(reachedOffer, reachedApp)]);
+    r.push(["Conversion", "Completed", reachedCompleted, stepCsv(reachedCompleted, reachedOffer)]);
     r.push(["Win rate", `${completedN} completed of ${terminal} terminal`, terminal >= 5 ? Math.round((completedN / terminal) * 100) + "%" : "n/a (<5 terminal)", ""]);
     miCsv(`nexmoney-mi-funnel-${dstr}.csv`, ["Section", "Item", "Count", "Step %"], r);
   };
@@ -30640,6 +30995,19 @@ function renderPipelineMI(all, mv) {
     miCsv(`nexmoney-mi-scoreboard-${dstr}.csv`, ["Adviser", "Live", `Completed (${label})`, "Fees written £", "Win rate", "Terminal n", "Median cycle days"], r);
   };
 }
+
+/* R77 · A3 — the coverage clause's destination: Data health's OWN missing-milestone list
+   (dh-tile-milestone → #dh-milestone-panel), whose tile copy has said since R25 that these blanks
+   "silently skew the Reports velocity & funnel". This is the reverse link. Same nav-then-reveal
+   shape as the clawback tile's cross-page jump (Data health renders async; the panel is revealed
+   rather than toggled so a second click can never hide it). */
+window.miGotoMilestoneHealth = function () {
+  nav("data");
+  setTimeout(() => {
+    const p = $("#dh-milestone-panel");
+    if (p) { p.classList.remove("hidden"); p.scrollIntoView({ behavior: "smooth", block: "start" }); }
+  }, 700);
+};
 
 /* R20 — one thin CSV emitter for the MI panels and drill-downs. exportCsv() (~8735) is
    case-book-shaped: fixed columns + a fixed `pipeline-…` filename, so it cannot serialize the
@@ -31277,6 +31645,9 @@ async function loadReports() {
      artefact, not management information, and it was costing every owner a scroll past it on
      every Reports read. Nothing else about it changed. */
   renderForecastBuckets(all);
+  /* R77 · A4 — the business-mix table, from the same rows (the Reports select has always carried
+     case_kind) and the same yr basis as the KPI tiles above. Owner-gated inside. */
+  renderBusinessMix(all, yr);
   // Client LTV is the one remaining RPC-only panel (needs client_id/name joins this page doesn't
   // otherwise fetch) — hide it gracefully if the RPC failed; everything else above still renders.
   renderReportExtras(rep);
@@ -31285,6 +31656,11 @@ async function loadReports() {
      point at) and the two nav builders below have to see the panel it produces. `all` is passed so
      a case already on this page — property column merged and client embedded — is never re-read. */
   await renderReferralsOut(all, mv);
+  /* R77 · B1 — §5's appointment-outcomes panel. AWAITED for the same reason renderReferralsOut
+     is: it owns one bounded read of its own (90 days of appointments), and the two nav builders
+     below must see whether the panel exists before they draw its chip. Gates itself on
+     showMoney(), so for an adviser this is one function call and no query. */
+  await renderApptOutcomes();
   /* R11-4 — LAST, deliberately. Every panel above has just decided whether it exists for this
      role and this data, and the jump bar is built by READING those decisions rather than by
      re-deriving them: one gate, not seventeen copies of one, so a money panel and its chip can
@@ -31398,6 +31774,7 @@ const REPORT_JUMP_SECTIONS = [
   ["owed", "Money owed", "#report-owed-panel"],
   ["rateend", "Rate-end book", "#report-rateend-panel"],
   ["forecast", "Forecast", "#report-forecast-panel"],
+  ["mix", "Business mix", "#report-mix-panel"],   // R77 · A4 — sits after the forecast in the DOM
   ["months", "Completions", "#report-months-panel"],
   ["introducers", "Introducers", "#report-introducers-panel"],
   ["ltv", "Client LTV", "#report-ltv-panel"],
@@ -31410,6 +31787,8 @@ const REPORT_JUMP_SECTIONS = [
   ["leadresp", "Lead response", "#report-leadresp-panel"],
   ["advocacy", "Advocacy", "#report-advocacy-panel"],
   ["conveyancer", "Conveyancers", "#report-conveyancer-panel"],
+  // R77 · B1 — in DOM order (the panel sits after conveyancers, closing §5), per the note above.
+  ["apptoutcomes", "Appointments", "#report-outcomes-panel"],
   // R66 · M6b — last in the DOM, therefore last here (see the DOM-order note above).
   ["referralsout", "Referrals out", "#report-referrals-panel"],
 ];
@@ -31624,8 +32003,9 @@ const REPORT_SECTIONS = [
   ["mine", "My numbers", "#rsec-mine", ["#report-mine-panel"]],
   ["month", "This month", "#rsec-month", ["#report-month-panel", "#report-scoreboard-panel"]],
   ["mi", "Pipeline MI", "#rsec-mi", ["#report-mi-section", "#report-funnel-panel", "#report-sources-panel", "#report-losses-panel"]],
-  ["money", "Money & book", "#rsec-money", ["#report-kpis", "#report-owed-panel", "#report-rateend-panel", "#report-forecast-panel", "#report-months-panel", "#report-introducers-panel", "#report-ltv-panel"]],
-  ["quality", "Service & quality", "#rsec-quality", ["#report-leadresp-panel", "#report-nps-panel", "#report-advocacy-panel", "#report-conveyancer-panel"]],
+  ["money", "Money & book", "#rsec-money", ["#report-kpis", "#report-owed-panel", "#report-rateend-panel", "#report-forecast-panel", "#report-mix-panel", "#report-months-panel", "#report-introducers-panel", "#report-ltv-panel"]],   // R77 · A4 — mix panel joins its section
+  // R77 · B1 — "#report-outcomes-panel" appended (agent B's only entry in this list).
+  ["quality", "Service & quality", "#rsec-quality", ["#report-leadresp-panel", "#report-nps-panel", "#report-advocacy-panel", "#report-conveyancer-panel", "#report-outcomes-panel"]],
   /* R66 · M6b — §6. The sixth question this page answers: what did we send OUT, and to whom. One
      panel, visible to every staff role (no money on it), so unlike §4 and §5 this section is never
      empty for anybody — but it still goes through the same repJumpVisible walk as the other five
@@ -32125,6 +32505,143 @@ function renderConveyancerSpeed(all, firmMap) {
    NOT OWNER-GATED. A referral count is not money and no £ appears here; see
    the markup's own block comment.
    ========================================================================== */
+/* ==========================================================================
+   R77 · B1 — APPOINTMENT OUTCOMES, COUNTED AT LAST.
+
+   `appointments.outcome` (attended / no_show / rearranged, null = not
+   recorded) has been written by the ✓ ✗ ↻ chips on Today and the editor's
+   radios since r12b, and read by NOTHING — the column's own comment deferred
+   the counting to "a later round". This is that round, and the r12b warning
+   ("a report built on three days of outcome data says more about when the
+   column shipped than about anybody's diary") is answered by making the
+   RECORDING GAP the first-class number: the headline leads with the share of
+   past appointments carrying NO outcome, because every other figure on the
+   panel is only as good as that share is small — and the panel says so
+   instead of drawing confident bars over unscored rows.
+
+   THE WINDOW is the last 90 days of appointments that have already STARTED:
+   a future booking has no outcome to record and is not "unrecorded", it is
+   pending — counting it would inflate the honesty number with rows nobody
+   could have scored. Window arithmetic through localDateStr (Europe/London).
+
+   PER ADVISER by staff_id (the diary's own "who is this booked for"), plus
+   the short register of clients with 2+ recorded no-shows in the window —
+   the "who wasted my Tuesday?" answer r12b promised. Read-only: Open links,
+   no verbs; what to do about a serial no-show is a conversation, not a
+   button.
+
+   OWNER-ONLY (showMoney) — per-adviser conduct numbers, the same gate as the
+   per-adviser review scores in the Advocacy panel, and the gate r42 §B pins
+   for this section on an adviser login. One bounded read of its own; empty
+   and thin data render honestly through emptyState / the basis line.
+   ========================================================================== */
+const APPT_OUTCOME_WINDOW_DAYS = 90;
+async function renderApptOutcomes() {
+  const panel = $("#report-outcomes-panel");
+  if (!panel) return;
+  const parts = ["#report-outcomes-headline", "#report-outcomes-adviser", "#report-outcomes-noshows", "#report-outcomes-basis"];
+  if (!showMoney()) {
+    panel.classList.add("hidden");
+    parts.forEach((s) => { const el = $(s); if (el) el.innerHTML = ""; });
+    return;
+  }
+  panel.classList.remove("hidden");
+  const today = localDateStr();
+  const d = new Date(today + "T12:00:00");
+  d.setDate(d.getDate() - APPT_OUTCOME_WINDOW_DAYS);
+  const since = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const { data: rows, error } = await readAll(
+    db.from("appointments").select("id,staff_id,client_id,outcome,starts_at,clients(first_name,last_name)")
+      .gte("starts_at", since + "T00:00:00").order("id"));
+  if (error) {
+    $("#report-outcomes-basis").innerHTML = `Appointment outcomes could not be read just now (${esc(error.message || "no answer")}) — this panel is a failed question, not an empty diary.`;
+    ["#report-outcomes-headline", "#report-outcomes-adviser", "#report-outcomes-noshows"].forEach((s) => { const el = $(s); if (el) el.innerHTML = ""; });
+    return;
+  }
+  const nowMs = Date.now();
+  // Already started = judged or judgeable. A future booking is pending, not unrecorded.
+  const past = (rows || []).filter((a) => {
+    const t = new Date(a.starts_at || "").getTime();
+    return isFinite(t) && t <= nowMs;
+  });
+  const known = (k) => k === "attended" || k === "no_show" || k === "rearranged";
+  const total = past.length;
+  const unrecorded = past.filter((a) => !known(a.outcome)).length;
+  const noShows = past.filter((a) => a.outcome === "no_show");
+  const unrecPct = total ? Math.round((unrecorded / total) * 100) : 0;
+  $("#report-outcomes-basis").innerHTML =
+    `Every appointment that has already started in the <strong>last ${APPT_OUTCOME_WINDOW_DAYS} days</strong> (since ${esc(fmtD(since))}) — ${total} of them — counted by the adviser it was booked for. `
+    + `The outcome is what the <strong>✓ ✗ ↻ chips on Today</strong> (and the radios in the appointment editor) record; <strong>null means not recorded</strong>, and that share leads the numbers below because every other figure on this panel is only as good as the recording. `
+    + `Future bookings are pending, not unrecorded, and are not counted. Not scoped to the month picker.`;
+  if (!total) {
+    $("#report-outcomes-headline").innerHTML = "";
+    $("#report-outcomes-adviser").innerHTML = emptyState({
+      headline: "No appointments in the window.",
+      sub: `Nothing in the diary has started in the last ${APPT_OUTCOME_WINDOW_DAYS} days, so there is nothing to count — this is an empty diary, not a clean sheet.`,
+    });
+    $("#report-outcomes-noshows").innerHTML = "";
+    return;
+  }
+  /* The headline: the recording gap FIRST and loudest, then the two counts it qualifies. */
+  $("#report-outcomes-headline").innerHTML = [
+    `<div class="kpi ${unrecorded ? "warn" : ""}" id="outcomes-unrecorded-kpi" title="Past appointments in the window with no outcome recorded. The ✓ ✗ ↻ chips on each appointment on Today record one in a click."><div class="num" id="outcomes-unrecorded-pct">${unrecPct}%</div><div class="lbl">unrecorded — the chips on Today record it</div><div class="s">${unrecorded} of ${total} past appointments</div></div>`,
+    `<div class="kpi"><div class="num">${total - unrecorded}</div><div class="lbl">outcomes recorded</div><div class="s">attended, no-show or rearranged</div></div>`,
+    `<div class="kpi ${noShows.length ? "warn" : ""}"><div class="num" id="outcomes-noshow-n">${noShows.length}</div><div class="lbl">no-shows recorded</div><div class="s">in the ${APPT_OUTCOME_WINDOW_DAYS}-day window</div></div>`,
+  ].join("");
+  /* Per adviser, biggest diary first. staffName answers for departed logins too. */
+  const byAdv = new Map();
+  past.forEach((a) => {
+    const k = a.staff_id || "";
+    if (!byAdv.has(k)) byAdv.set(k, { total: 0, attended: 0, no_show: 0, rearranged: 0, unrecorded: 0 });
+    const b = byAdv.get(k);
+    b.total++;
+    if (known(a.outcome)) b[a.outcome]++; else b.unrecorded++;
+  });
+  const advRows = [...byAdv.entries()]
+    .map(([id, b]) => ({ id, name: id ? staffName(id) : "(nobody booked)", ...b }))
+    .sort((a, b) => b.total - a.total || String(a.name).localeCompare(String(b.name)));
+  $("#report-outcomes-adviser").innerHTML = `<h4 class="leadresp-h">By adviser</h4>
+    <div style="overflow-x:auto;"><table class="imp-table outcomes-table" id="report-outcomes-table">
+      <tr><th>Adviser</th><th class="num">Appointments</th><th class="num">Attended</th><th class="num">No-show</th><th class="num">Rearranged</th><th class="num" title="Past appointments this adviser has not recorded an outcome for — the share in brackets is theirs, not the firm's">Not recorded</th></tr>
+      ${advRows.map((r) => `<tr data-adviser="${esc(r.id)}">
+        <td>${esc(r.name)}</td>
+        <td class="num">${r.total}</td>
+        <td class="num">${r.attended}</td>
+        <td class="num">${r.no_show}</td>
+        <td class="num">${r.rearranged}</td>
+        <td class="num"${r.unrecorded ? ` style="font-weight:600;"` : ""}>${r.unrecorded}${r.total ? ` (${Math.round((r.unrecorded / r.total) * 100)}%)` : ""}</td>
+      </tr>`).join("")}
+    </table></div>`;
+  /* Clients with 2+ recorded no-shows — the actionable short list, honestly framed: it can only
+     ever be as complete as the recording above it, and when nothing is recorded it says so
+     rather than printing a clean sheet. */
+  const byClient = new Map();
+  noShows.forEach((a) => {
+    const k = a.client_id || "";
+    if (!k) return;
+    if (!byClient.has(k)) {
+      const nm = a.clients ? [a.clients.first_name, a.clients.last_name].filter(Boolean).join(" ") : "";
+      byClient.set(k, { id: k, name: nm || "(no name)", n: 0, last: "" });
+    }
+    const c = byClient.get(k);
+    c.n++;
+    if (String(a.starts_at || "") > c.last) c.last = a.starts_at || "";
+  });
+  const repeat = [...byClient.values()].filter((c) => c.n >= 2).sort((a, b) => b.n - a.n || String(b.last).localeCompare(String(a.last)));
+  $("#report-outcomes-noshows").innerHTML = `<h4 class="leadresp-h">Clients with 2+ no-shows · last ${APPT_OUTCOME_WINDOW_DAYS} days</h4>`
+    + (repeat.length
+      ? `<div id="report-outcomes-noshow-list">${repeat.map((c) => `
+        <div class="row-item" data-client="${esc(c.id)}">
+          <div class="row-main"><div class="t" onclick="openClient('${jsArg(c.id)}')">${esc(c.name)}</div><div class="s"><strong>${c.n}</strong> recorded no-show${c.n === 1 ? "" : "s"} · last one ${esc(fmtD(c.last))}</div></div>
+          <button class="btn btn-sm" onclick="openClient('${jsArg(c.id)}')">Open</button>
+        </div>`).join("")}</div>`
+      : emptyState({
+        headline: "No client has 2+ recorded no-shows.",
+        sub: unrecorded
+          ? `${unrecorded} of the ${total} past appointments in the window carry no outcome at all, so this list can only be as good as the recording above it.`
+          : "Every past appointment in the window carries an outcome, so this is a real clean sheet.",
+      }));
+}
 const REFOUT_ROW_CAP = 500;      // referrals read for one month — bounded like every Reports select
 const REFOUT_LIST_CAP = 100;     // rows drawn in the ledger drawer; the CSV carries the lot
 let refOutScope = null;          // "mine" | "all"; null = not yet defaulted for this role
@@ -35025,6 +35542,64 @@ async function loadDataHealth() {
     .sort((a, b) => (b.of - b.have) - (a.of - a.have) || (a.have / a.of) - (b.have / b.of) || String(a.name).localeCompare(String(b.name)));
 
   /* ==========================================================================
+     R77 · B3 — DID IT COMPLETE WITH FILE GAPS? (the AR file-check register)
+
+     Nothing anywhere asked this. The tile above filters isLiveStage on purpose
+     ("a completed case's file is finished" — true of the WORK, not of the
+     QUESTION), and the case modal's completeness chip deliberately hides on
+     completed cases (R71, kept). So a case could sail into Completed with no
+     fact find on file and the app would never mention it again — and "show me
+     the fact find" is the first line of every AR/network file-check.
+
+     WATCHLIST, NOT FAULT — the R74 band model, Vulnerable clients as the
+     pattern: it is context to READ, it is NOT in dhReadinessChecks, it never
+     moves the headline, it carries no warn/amber (the R71 decision that the
+     back book is never coloured amber holds for a closed file too), and the
+     reveal is a read-only register — Open links only, NO chase verbs: a chase
+     onto a case that closed months ago is not work anybody should be sent from
+     a tile; what the register supports is a human deciding which files to
+     complete before the auditor asks.
+
+     THE MEASURE is caseCompleteness — the same single definition the live tile
+     and the modal chip use — asked at the case's PRE-COMPLETION requirements:
+     the three durable artefacts a finished file must still hold (document
+     checklist, fact find, case papers), i.e. the denominator at
+     decision_in_principle with the transient/prose items gated off through the
+     function's own gates (objectiveOn/waitingOn false; expected-completion is
+     below DIP's stage rank and never enters). Waiting-on and an expected date
+     are questions ABOUT progress, meaningless on a case that has finished;
+     the objective is prose. What is left is exactly what a file-check reads.
+
+     OWNER-ONLY: this is the firm answering for its files, not a work queue —
+     the same audience as the AR visit it exists for. 6 months by completed_at,
+     walked through localDateStr (Europe/London), so a completion stamped near
+     midnight cannot slide across the boundary.
+     ========================================================================== */
+  const dhCompletedGapsOn = isOwner();
+  let completedGaps = [];
+  if (dhCompletedGapsOn) {
+    const d6 = new Date(localDateStr() + "T12:00:00");
+    d6.setMonth(d6.getMonth() - 6);
+    const sixMonthsAgo = `${d6.getFullYear()}-${String(d6.getMonth() + 1).padStart(2, "0")}-${String(d6.getDate()).padStart(2, "0")}`;
+    completedGaps = allCases
+      .filter((cs) => cs.stage === "completed" && cs.completed_at && localDateStr(cs.completed_at) >= sixMonthsAgo)
+      .map((cs) => {
+        const score = caseCompleteness(
+          { stage: "decision_in_principle", objective: null, waiting_on: null, expected_completion_date: null },
+          Object.assign({
+            docCount: docsBy[cs.id] || 0,
+            fileCount: dhCaseFileCases.has(cs.id) ? 1 : 0,
+            factFindCount: dhFactFindCases.has(cs.id) ? 1 : 0,
+          }, dhCompletenessExtras, { objectiveOn: false, waitingOn: false }));
+        return { case_id: cs.id, client_id: cs.client_id, name: caseName(cs), lender: cs.lender || null, completedAt: cs.completed_at, have: score.have, of: score.of, missing: score.missing };
+      })
+      .filter((r) => r.of > 0 && r.have < r.of)
+      // Newest completion first: the file most recently closed is the one somebody can still
+      // actually complete — and the one an auditor sampling "recent business" reaches for first.
+      .sort((a, b) => String(b.completedAt || "").localeCompare(String(a.completedAt || "")) || String(a.name).localeCompare(String(b.name)));
+  }
+
+  /* ==========================================================================
      R42 · F5 — A CLEAN FAULT TILE HIDES ITSELF.
 
      This row had grown to seventeen tiles, and on a tidy book most of them read zero. A zero on a
@@ -35122,6 +35697,9 @@ async function loadDataHealth() {
   dhTile("dh-tile-waitingdocs", waitingDocs.length, "watch", dhDocsOn ? `<div class="kpi dq-clickable" id="dh-tile-waitingdocs" title="Live cases with at least one document still outstanding on their checklist — the paperwork queue. Click to read it."><div class="num">${waitingDocs.length}</div><div class="lbl">Waiting on documents ▾</div></div>` : "");
   dhTile("dh-tile-sharedprop", sharedProps.length, "watch", dhPropOn ? `<div class="kpi dq-clickable" id="dh-tile-sharedprop" title="Addresses that appear on more than one client's cases — usually a sale we advised on both sides of, occasionally a mistake. Informational: click to read them"><div class="num">${sharedProps.length}</div><div class="lbl">Shared property addresses ▾</div></div>` : "");
   dhTile("dh-tile-vulnerable", dhVulnerable.length, "watch", dhCareOn ? `<div class="kpi dq-clickable" id="dh-tile-vulnerable" title="Clients flagged as vulnerable. Information, not a fault — click to read the list and check each one carries a note explaining the care need."><div class="num">${dhVulnerable.length}</div><div class="lbl">Vulnerable clients ▾</div></div>` : "");
+  /* R77 · B3 — the completed-file audit register. WATCH band on the Vulnerable-clients model:
+     never counted toward the headline, never amber, never folded. Owner-only. */
+  dhTile("dh-tile-completedgaps", completedGaps.length, "watch", dhCompletedGapsOn ? `<div class="kpi dq-clickable" id="dh-tile-completedgaps" title="Cases completed in the last 6 months whose file is missing at least one of the three durable artefacts a file-check reads — document checklist, fact find, case papers. A register to READ before an audit reads it for you: it is not counted in the headline above, and nothing here chases anybody. Click to read the register."><div class="num">${completedGaps.length}</div><div class="lbl">Completed with file gaps · 6 months ▾</div></div>` : "");
   dhTile("dh-tile-suppressed", dhSuppressed.length, "watch", dhCareOn ? `<div class="kpi dq-clickable" id="dh-tile-suppressed" title="Clients the database refuses every automated email and SMS to. Click to list them — worth reading, because nothing automated will ever reach these people again until it is turned off."><div class="num">${dhSuppressed.length}</div><div class="lbl">Automation suppressed ▾</div></div>` : "");
   dhTile("dh-tile-nopolicystart", dhNoPolicyStart.length, "watch", dhClawbackOn ? `<div class="kpi ${dhNoPolicyStart.length ? "warn" : ""}${dhFault(dhNoPolicyStart.length)} dq-clickable" id="dh-tile-nopolicystart" title="Policies recorded as taken with no start date — their clawback window cannot be watched. Click to open the Protection page's Clawback window panel."><div class="num">${dhNoPolicyStart.length}</div><div class="lbl">Policies with no start date →</div></div>` : "");
   /* Stable sort inside each band, biggest first: two tiles on the same count keep the order they
@@ -35265,16 +35843,49 @@ async function loadDataHealth() {
       <button class="btn btn-sm" onclick="openCase('${jsArg(r.case_id)}')">Open</button>
     </div>`;
   };
+  /* ========================================================================
+     R77 · B4a — THE SAME INLINE FIX, FOR THE CLIENT COLUMNS.
 
+     The four CONTACT panels (missing email, missing phone, invalid email,
+     invalid phone) were the last fix lists on this page still routing every
+     repair through the full 51-field client modal — for a value the panel had
+     already told you was blank or broken. Same shape as dhFixCell above, with
+     three deliberate differences:
+
+       · data-client, not data-case — the write is
+         db.from("clients").update({email|phone}).eq("id", id): one column,
+         one client, nothing else on the record read or sent.
+       · the INVALID panels prefill the input with the broken value, because
+         "07700 90012" is usually one keystroke from right and retyping the
+         whole thing is how a second typo gets in.
+       · validation is the client form's OWN pair — isValidEmailLike /
+         isValidPhoneLike, refused with the client form's own message (see
+         dhInlineFixSave) — so a value this box refuses is exactly a value the
+         modal would refuse, and nothing unsendable can be saved from here.
+
+     "Open" stays beside every input (fix-focused where the panel is about a
+     broken value), for everything the box cannot do. */
+  const dhFixCellClient = (r, col, opts) => {
+    const o = opts || {};
+    return `<div class="dh-fix" data-client="${esc(r.id)}" data-col="${esc(col)}">
+      <input class="dh-fix-input" type="${col === "email" ? "email" : "tel"}"${o.placeholder ? ` placeholder="${esc(o.placeholder)}"` : ""}${o.value ? ` value="${esc(o.value)}"` : ""} aria-label="${esc(o.label || col)} for ${esc(r.name)}">
+      <button type="button" class="btn btn-sm dh-fix-save" data-name="${esc(r.name)}" title="${esc(o.saveTitle || "Save this value onto the client's record. Nothing else on the record is touched.")}">Save</button>
+      <button class="btn btn-sm" onclick="openClient('${jsArg(r.id)}'${o.focus ? `,'${o.focus}'` : ""})">Open</button>
+    </div>`;
+  };
+
+  /* R77 · B4a — table rows became .row-item rows, matching the phone panel beside it, so the
+     inline fix, the "N left in this list" counter (dhSyncPanelLeft counts .row-item) and the
+     emptied-out state all work the same way in all four contact panels. Panel id, gate and
+     always-rendered/scroll-to behaviour are unchanged. */
   const missingPanel = `<div class="panel" id="dh-missing-panel">
     <h3>Clients missing email (with a live case)</h3>
     ${missingEmail.length === 300 ? '<p class="panel-sub">Showing the first 300 — there may be more.</p>' : ""}
-    ${missingEmail.length ? `<table class="imp-table">
-      ${missingEmail.slice(0, DH_PANEL_CAP).map((c) => `<tr>
-        <td>${esc(c.name)}</td>
-        <td style="text-align:right;white-space:nowrap;"><button class="btn btn-sm" onclick="openClient('${c.id}')">Open</button></td>
-      </tr>`).join("")}${missingEmail.length > DH_PANEL_CAP ? `<tr><td colspan="2">…and ${missingEmail.length - DH_PANEL_CAP} more not shown — use the firm export to work the whole list.</td></tr>` : ""}
-    </table>` : '<div class="empty">Every client with a live case has an email. 👍</div>'}
+    ${missingEmail.length ? missingEmail.slice(0, DH_PANEL_CAP).map((c) => `
+      <div class="row-item" data-fix-row="${esc(c.id)}">
+        <div class="row-main"><div class="t" onclick="openClient('${c.id}')">${esc(c.name)}</div></div>
+        ${dhFixCellClient(c, "email", { label: "Email address", placeholder: "name@example.com", saveTitle: "Save this email address onto the client's record. Nothing else on the record is touched — and a value the client form would refuse is refused here too." })}
+      </div>`).join("") + dhMoreNote(missingEmail.length) : '<div class="empty">Every client with a live case has an email. 👍</div>'}
   </div>`;
 
   // BUILD 7c — bulk-select on the unassigned-cases panel. Prune the selection to the cases still
@@ -35314,9 +35925,9 @@ async function loadDataHealth() {
   const phonePanel = `<div class="panel hidden" id="dh-phone-panel">
     <h3>Clients missing phone (with a live case)</h3>
     ${missingPhoneLive.length ? missingPhoneLive.slice(0, DH_PANEL_CAP).map((c) => `
-      <div class="row-item">
+      <div class="row-item" data-fix-row="${esc(c.id)}">
         <div class="row-main"><div class="t" onclick="openClient('${c.id}')">${esc(c.name)}</div></div>
-        <button class="btn btn-sm" onclick="openClient('${c.id}')">Open</button>
+        ${dhFixCellClient(c, "phone", { label: "Phone number", placeholder: "07700 900123", saveTitle: "Save this phone number onto the client's record. Nothing else on the record is touched — and a number the client form would refuse is refused here too." })}
       </div>`).join("") + dhMoreNote(missingPhoneLive.length) : '<div class="empty">Every client with a live case has a phone number. 👍</div>'}
   </div>`;
 
@@ -35420,6 +36031,21 @@ async function loadDataHealth() {
       </div>`).join("") + dhMoreNote(fileGaps.length) : '<div class="empty">Every live case carries the file artefacts its stage asks for. 👍</div>'}
   </div>`;
 
+  /* R77 · B3 — the audit register behind the completed-with-file-gaps tile. Read-only on purpose:
+     Open links and nothing else. No chase button, no send, no bulk verb — the decision this list
+     supports is a human's, and the R71 rule that the back book is never worked from an amber list
+     holds here too. Owner-only, like the tile. */
+  const completedGapsPanel = !dhCompletedGapsOn ? "" : `<div class="panel hidden" id="dh-completedgaps-panel">
+    <h3>Completed in the last 6 months with file gaps</h3>
+    <p class="panel-sub">Cases that reached <strong>Completed</strong> in the last 6 months whose file is missing at least one of the three durable artefacts an AR or network file-check asks to see — the <strong>document checklist</strong>, the <strong>fact find</strong>, the firm's own <strong>case papers</strong>. Same single measure as the live tile above (caseCompleteness), asked at the case's pre-completion requirements; who-we-were-waiting-on and the expected completion date are progress questions and are not asked of a finished case. This is a <strong>register to read, not a queue to work</strong>: it never counts toward the headline above, nothing here is coloured as a fault, and there is deliberately no chase button — what closes a row is the missing artefact landing on the case. Newest completion first.</p>
+    ${completedGaps.length ? completedGaps.slice(0, DH_PANEL_CAP).map((c) => `
+      <div class="row-item">
+        <div class="row-main"><div class="t" onclick="openCase('${jsArg(c.case_id)}')">${esc(c.name)}</div><div class="s">${esc([c.lender, "completed " + fmtD(c.completedAt)].filter(Boolean).join(" · "))} · <strong>${c.have}/${c.of}</strong> · missing: ${esc(c.missing.join(", "))}</div></div>
+        <button class="btn btn-sm" onclick="openCase('${jsArg(c.case_id)}')">Open case</button>
+        <button class="btn btn-sm" onclick="openClient('${jsArg(c.client_id)}',null,null,'${jsArg(c.case_id)}')">Client</button>
+      </div>`).join("") + dhMoreNote(completedGaps.length) : '<div class="empty">Every case completed in the last 6 months carries its checklist, fact find and case papers. 👍</div>'}
+  </div>`;
+
   // T1-26 — the least-reachable records in the database, which previously had no list anywhere.
   const bothPanel = `<div class="panel hidden" id="dh-both-panel">
     <h3>Clients with no email and no phone</h3>
@@ -35431,21 +36057,23 @@ async function loadDataHealth() {
   </div>`;
 
   // T1-9 — present but unusable. The value is shown so the typo is visible without opening anything.
+  /* R77 · B4a — the two INVALID panels: the broken value stays visible on the row AND is
+     prefilled into the box, fix-focused Open beside it. Same ids, same hidden-until-clicked. */
   const invalidEmailPanel = `<div class="panel hidden" id="dh-invalid-email-panel">
     <h3>Clients with an invalid email address</h3>
     ${invalidEmail.length ? invalidEmail.slice(0, DH_PANEL_CAP).map((c) => `
-      <div class="row-item">
+      <div class="row-item" data-fix-row="${esc(c.id)}">
         <div class="row-main"><div class="t" onclick="openClient('${c.id}','email')">${esc(c.name)}</div><div class="s">${esc(c.value)}</div></div>
-        <button class="btn btn-sm" onclick="openClient('${c.id}','email')">Fix</button>
+        ${dhFixCellClient(c, "email", { label: "Email address", value: c.value, focus: "email", saveTitle: "Save the corrected email address onto the client's record — the broken value is prefilled so the typo can be repaired in place. A value the client form would refuse is refused here too." })}
       </div>`).join("") + dhMoreNote(invalidEmail.length) : '<div class="empty">Every email address on file looks sendable. 👍</div>'}
   </div>`;
 
   const invalidPhonePanel = `<div class="panel hidden" id="dh-invalid-phone-panel">
     <h3>Clients with an invalid phone number</h3>
     ${invalidPhone.length ? invalidPhone.slice(0, DH_PANEL_CAP).map((c) => `
-      <div class="row-item">
+      <div class="row-item" data-fix-row="${esc(c.id)}">
         <div class="row-main"><div class="t" onclick="openClient('${c.id}','phone')">${esc(c.name)}</div><div class="s">${esc(c.value)}</div></div>
-        <button class="btn btn-sm" onclick="openClient('${c.id}','phone')">Fix</button>
+        ${dhFixCellClient(c, "phone", { label: "Phone number", value: c.value, focus: "phone", saveTitle: "Save the corrected phone number onto the client's record — the broken value is prefilled so the typo can be repaired in place. A number the client form would refuse is refused here too." })}
       </div>`).join("") + dhMoreNote(invalidPhone.length) : '<div class="empty">Every phone number on file looks textable. 👍</div>'}
   </div>`;
 
@@ -35554,6 +36182,7 @@ async function loadDataHealth() {
     ${addressPanel}
     ${loanPanel}
     ${completenessPanel}
+    ${completedGapsPanel}
     ${dhCareOn ? `<div class="grid-2">${vulnerablePanel}${suppressedPanel}</div>` : ""}`;
 
   /* R74 · A5b — "Clients total" is not a fault and had nothing to drill into, so it left the wall.
@@ -35577,7 +36206,12 @@ async function loadDataHealth() {
               so the one place the work was visible was the one place it did not show. The number
               and the check count are carried in data- attributes rather than parsed back out of
               the sentence, because the sentence is prose and prose gets rewritten. */ ""}
-        <p class="panel-sub" id="dh-readiness-headline" data-total="${dhReadinessTotal}" data-checks="${dhReadinessChecks.length}" style="margin:0 0 8px;"><strong><span class="dh-headline-n">${dhReadinessTotal}</span> data-quality issue${dhReadinessTotal === 1 ? "" : "s"}</strong> across <span class="dh-headline-checks">${dhReadinessChecks.length}</span> check${dhReadinessChecks.length === 1 ? "" : "s"} to clear before importing.</p>
+        ${/* R77 · B4b — "before importing" was R31's launch framing and the import is YEARS done;
+              a permanent headline whose reason has expired reads as furniture. The page's own
+              honest reason (it is the dh-page-sub's, said where the number is): these exact
+              fields are what the automations and every report read. Same sentence at BOTH render
+              sites — here and in dhDecrementHeadline's rewrite. */ ""}
+        <p class="panel-sub" id="dh-readiness-headline" data-total="${dhReadinessTotal}" data-checks="${dhReadinessChecks.length}" style="margin:0 0 8px;"><strong><span class="dh-headline-n">${dhReadinessTotal}</span> data-quality issue${dhReadinessTotal === 1 ? "" : "s"}</strong> across <span class="dh-headline-checks">${dhReadinessChecks.length}</span> check${dhReadinessChecks.length === 1 ? "" : "s"} to clear — automations and reports read these exact fields.</p>
         <div style="display:flex;flex-direction:column;gap:2px;">
           ${dhReadinessChecks.map((c) => `<div class="dh-readiness-item" role="button" tabindex="0" title="Jump to “${c.label}”" style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:4px 8px;border-radius:4px;cursor:pointer;" onclick="${jump(c.tileId)}"><span class="dh-readiness-label">${c.label}</span> <strong class="dh-readiness-count">${c.count}</strong></div>`).join("")}
         </div>
@@ -35620,6 +36254,7 @@ async function loadDataHealth() {
   wireTile("#dh-tile-address", "#dh-address-panel");   // R71 · B2
   wireTile("#dh-tile-loan", "#dh-loan-panel");   // R71 · B2
   wireTile("#dh-tile-completeness", "#dh-completeness-panel");   // R71 · B4
+  wireTile("#dh-tile-completedgaps", "#dh-completedgaps-panel");   // R77 · B3
   wireTile("#dh-tile-both", "#dh-both-panel");
   wireTile("#dh-tile-invalid-email", "#dh-invalid-email-panel");
   wireTile("#dh-tile-invalid-phone", "#dh-invalid-phone-panel");
@@ -35737,12 +36372,42 @@ async function loadDataHealth() {
 async function dhInlineFixSave(btn) {
   const wrap = btn.closest(".dh-fix");
   if (!wrap) return;
-  const caseId = wrap.dataset.case, col = wrap.dataset.col;
+  const caseId = wrap.dataset.case, clientId = wrap.dataset.client, col = wrap.dataset.col;
   const input = wrap.querySelector(".dh-fix-input");
-  const name = btn.dataset.name || "this case";
-  if (!caseId || !col || !input) return;
+  const name = btn.dataset.name || (clientId ? "this client" : "this case");
+  if ((!caseId && !clientId) || !col || !input) return;
   const raw = String(input.value || "").trim();
   if (!raw) return toast("Nothing to save — type a value first.");
+  /* ========================================================================
+     R77 · B4a — THE CLIENT BRANCH. The four contact panels write ONE column of
+     the CLIENTS row (email or phone), validated by the client form's own pair
+     — isValidEmailLike / isValidPhoneLike — and refused with the client form's
+     own message, verbatim, so this box and the modal can never disagree about
+     what a sendable address is. Everything after the write (row leaves, tile
+     and rollup and headline come down, panel counter, toast naming the person)
+     is the same repair path the case-column fixes have used since R71.
+     ======================================================================== */
+  if (clientId) {
+    if (col === "email" && !isValidEmailLike(raw)) return toast(`"${raw}" isn't a valid email address.`);
+    if (col === "phone" && !isValidPhoneLike(raw)) return toast(`"${raw}" isn't a valid phone number — UK numbers need 11 digits (e.g. 07700 900123).`);
+    btn.disabled = true;
+    const { error } = await db.from("clients").update({ [col]: raw }).eq("id", clientId);
+    if (error) {
+      btn.disabled = false;
+      return toast("Couldn't save: " + (error.message || error));
+    }
+    /* R18-D1's rule again, client-shaped: if the client modal is holding THIS record, re-baseline
+       its stale-write stamp (refreshOpenedClientStamp — the CLIENT guard, not the case one) so
+       our own targeted write doesn't read as somebody else's edit. */
+    if (typeof currentModal !== "undefined" && currentModal && currentModal.type === "client" && currentModal.id === clientId) {
+      try { await refreshOpenedClientStamp(clientId); } catch (_) { /* the guard is best-effort */ }
+    }
+    const cPanel = btn.closest(".panel");
+    const cRow = btn.closest(".row-item");
+    if (cRow) cRow.remove();
+    dhDecrementTile(cPanel);
+    return toast(`Saved — ${name}: ${DH_FIX_LABEL[col] || col} set to ${raw}`);
+  }
   let value = raw, said = raw;
   if (col === "loan_amount") {
     const n = Number(raw.replace(/[£,\s]/g, ""));
@@ -35780,6 +36445,8 @@ async function dhInlineFixSave(btn) {
 const DH_FIX_LABEL = {
   rate_end_date: "rate-end date", completed_at: "completion date",
   property_address: "property address", loan_amount: "loan amount",
+  // R77 · B4a — the two client columns the contact panels fix inline.
+  email: "email", phone: "phone number",
 };
 /* The page repair. Finds the tile this panel belongs to from the wiring table below (one place,
    so a new fix panel cannot forget to say which tile it feeds), takes one off its count and off
@@ -35791,6 +36458,12 @@ const DH_FIX_PANEL_TILE = {
   "dh-nocompleted-panel": "dh-tile-nocompleted",
   "dh-address-panel": "dh-tile-address",
   "dh-loan-panel": "dh-tile-loan",
+  /* R77 · B4a — the four contact panels joined the inline-fix family; each names the tile it
+     feeds, same rule as above (one place, so a fix panel cannot forget its tile). */
+  "dh-missing-panel": "dh-tile-email",
+  "dh-phone-panel": "dh-tile-phone",
+  "dh-invalid-email-panel": "dh-tile-invalid-email",
+  "dh-invalid-phone-panel": "dh-tile-invalid-phone",
 };
 function dhDecrementTile(panel) {
   if (!panel) return;
@@ -35798,11 +36471,22 @@ function dhDecrementTile(panel) {
   const tile = tileId ? document.getElementById(tileId) : null;
   if (tile) {
     const numEl = tile.querySelector(".num");
-    const n = Number(String((numEl && numEl.textContent) || "").trim());
-    if (numEl && isFinite(n)) {
-      const left = Math.max(0, n - 1);
-      numEl.textContent = String(left);
+    const txt = String((numEl && numEl.textContent) || "").trim();
+    /* R77 · B4a — the missing-email/phone tiles read "N of M" (N with a live case, M overall —
+       r29 §G pins the format). A contact fix removes the client from BOTH counts, so both come
+       down and the format is kept; the plain single-number tiles behave exactly as before. */
+    const ofM = txt.match(/^(\d+) of (\d+)$/);
+    if (numEl && ofM) {
+      const left = Math.max(0, Number(ofM[1]) - 1);
+      numEl.textContent = `${left} of ${Math.max(0, Number(ofM[2]) - 1)}`;
       if (!left) tile.classList.remove("warn");
+    } else {
+      const n = Number(txt);
+      if (numEl && txt !== "" && isFinite(n)) {
+        const left = Math.max(0, n - 1);
+        numEl.textContent = String(left);
+        if (!left) tile.classList.remove("warn");
+      }
     }
   }
   const items = document.querySelectorAll("#dh-readiness .dh-readiness-item");
@@ -35847,7 +36531,8 @@ function dhDecrementHeadline(checkCleared) {
     if (box) box.innerHTML = `<div class="panel" id="dh-readiness-panel"><p class="panel-sub" style="margin:0;">Your book looks clean — no data-quality issues flagged. ✅</p></div>`;
     return;
   }
-  h.innerHTML = `<strong><span class="dh-headline-n">${total}</span> data-quality issue${total === 1 ? "" : "s"}</strong> across <span class="dh-headline-checks">${checks}</span> check${checks === 1 ? "" : "s"} to clear before importing.`;
+  // R77 · B4b — the same sentence the render path writes; the two sites may never drift apart.
+  h.innerHTML = `<strong><span class="dh-headline-n">${total}</span> data-quality issue${total === 1 ? "" : "s"}</strong> across <span class="dh-headline-checks">${checks}</span> check${checks === 1 ? "" : "s"} to clear — automations and reports read these exact fields.`;
 }
 /* R74 · A5a — "N left in this list" on a fix panel's own heading, kept in step with the rows that
    are actually in it. Counts the rows on screen, so it can never claim more than the panel holds;

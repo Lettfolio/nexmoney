@@ -674,8 +674,13 @@ const retChipAll = (page) => page.$eval("#ret-month-chips .ret-month-chip[data-m
       ok("§E1e · the watchlist is sorted the same way",
         watchTiles.every((t, i) => i === 0 || watchTiles[i - 1].n >= t.n), JSON.stringify(watchTiles));
 
-      const WATCH = ["dh-tile-failed", "dh-tile-waitingdocs", "dh-tile-sharedprop", "dh-tile-vulnerable", "dh-tile-suppressed", "dh-tile-nopolicystart"];
-      eq("§E1f · the watchlist holds exactly the six the brief names", watchTiles.map((t) => t.id).sort(), WATCH.slice().sort());
+      /* R77: a SEVENTH watch tile — dh-tile-completedgaps ("Completed with file gaps · 6 months",
+         B3's owner-only audit register). This list is the r74 contract's ground truth for "which
+         tiles are context, not counted", not a claim the band may never grow; the new tile obeys
+         the band's whole discipline (sorted, never counted, never amber, never folded) and every
+         assertion around this one is unweakened. This run is p4, so the owner-only tile is present. */
+      const WATCH = ["dh-tile-failed", "dh-tile-waitingdocs", "dh-tile-sharedprop", "dh-tile-vulnerable", "dh-tile-suppressed", "dh-tile-nopolicystart", "dh-tile-completedgaps"];
+      eq("§E1f · the watchlist holds exactly the six the brief names (+ R77's audit register)", watchTiles.map((t) => t.id).sort(), WATCH.slice().sort());
 
       /* r42 §J's ground truth is a SET, and it is unchanged — only order and grouping moved. */
       const READINESS_TILE_IDS = ["dh-tile-email", "dh-tile-phone", "dh-tile-both", "dh-tile-invalid-email",

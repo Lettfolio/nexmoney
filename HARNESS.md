@@ -130,7 +130,86 @@ node tests/r75_diary.js
 node tests/r75_queues.js
 node tests/r76_case.js
 node tests/r76_intake.js
+node tests/r77_owner.js
+node tests/r77_health.js
 ```
+
+**R77 · B notes — "the owner decides", agent B (`tests/r77_health.js` 75).** Four items, every
+contract written down:
+
+  - **B1 — appointment outcomes get their first reader.** `renderApptOutcomes()` →
+    **`#report-outcomes-panel`**, Reports §5 Service & quality (last panel of the section; its
+    entries were appended to `REPORT_SECTIONS`' quality list and to `REPORT_JUMP_SECTIONS` as
+    `["apptoutcomes", "Appointments", …]` — chip id `rep-nav-apptoutcomes`, section-scoped so it
+    only paints with §5 selected). **OWNER-ONLY (showMoney)** — per-adviser conduct numbers, the
+    same gate as Advocacy's per-adviser scores, and the gate that keeps r42 §B true (an adviser
+    still has NO Service & quality section). WINDOW: appointments that have already **started**
+    in the last 90 days (`APPT_OUTCOME_WINDOW_DAYS`; boundary walked from localDateStr) — future
+    bookings are *pending*, never "unrecorded". CONTRACT IDS: `#report-outcomes-basis`,
+    `#report-outcomes-headline` (the FIRST kpi is `#outcomes-unrecorded-kpi` /
+    `#outcomes-unrecorded-pct` — "N% unrecorded — the chips on Today record it"; also
+    `#outcomes-noshow-n`), `#report-outcomes-table` (one `tr[data-adviser]` per staff_id:
+    total / attended / no-show / rearranged / not-recorded (n + that adviser's own %)), and
+    `#report-outcomes-noshow-list` (`row-item[data-client]` per client with **2+ recorded
+    no-shows**, Open only — no verbs). HONESTY RULES: all-null outcomes ⇒ 100% unrecorded and
+    the empty no-show register says it "can only be as good as the recording"; an empty window ⇒
+    `emptyState` ("an empty diary, not a clean sheet"); a failed read names itself on the basis
+    line. The r12b chips/radios remain the ONE writer; the r12b comment block now points here.
+    MOCK: `outcomeSpreadLastMonth()` seeds 11 previous-month appointments (attended ×3, no_show
+    ×3 — Ruby Sinclair twice, so the 2+ register always has a fixture row — rearranged ×1, null
+    ×4; prod's exact strings) on days 3–25 of the PREVIOUS month, clients reused from
+    liveCases[0..5]+RUBY (each already has a newer current-month appointment, so no gone-quiet /
+    comms-radar drift), `case_id: null` (a real prod shape) so no case modal list changes length.
+  - **B2 — the backup nag runs the export.** The Today banner's button is now
+    **`#dash-export-run-btn`** → `window.dashBackupNow(btn)`. THE SPLIT: an **owner** gets
+    `exportFirmData()` DIRECTLY — the identical house confirm ("Export the firm's data?",
+    `#ovl-confirm-ok`/`#ovl-confirm-cancel`, unencrypted-file warning intact, NOT weakened), the
+    same file and the same `last_full_export_at` stamp, then `renderDashNotices()` so the nag
+    clears in place (Cancel stamps nothing and the nag stays); a **non-owner** gets
+    `nav('settings')` + `goliveJump('#firm-export-panel')` after 700ms — the Data & backup
+    section, not the top of the page. The banner itself is STILL owner-only (r13 §A2's pin,
+    untouched), so the non-owner leg is a guard, exercised via `window.dashBackupNow()` directly.
+    Banner copy: the r13-pinned phrases ("No firm backup has ever been taken", "in N days")
+    survive; the tail is now "— the button exports one from here."
+  - **B3 — the completed-file audit watchlist.** **`#dh-tile-completedgaps`** ("Completed with
+    file gaps · 6 months ▾") + reveal **`#dh-completedgaps-panel`**, **owner-only**
+    (`dhCompletedGapsOn = isOwner()`), in the **WATCH band** on the Vulnerable-clients model:
+    NOT in `dhReadinessChecks`, NEVER in the headline, NEVER `warn`/amber (the R71
+    no-amber-back-book decision holds on a closed file), never folded (no dhFault). MEASURE:
+    `caseCompleteness` — the one definition — at the case's pre-completion requirements: stage
+    `decision_in_principle` with `objectiveOn:false, waitingOn:false` through the function's own
+    gates, leaving exactly the three durable artefacts (document checklist / fact find / case
+    papers); waiting-on + expected-completion are progress questions, meaningless on a finished
+    case, and the objective is prose. WINDOW: `completed_at` within 6 calendar months, walked
+    from localDateStr. The reveal is a READ-ONLY register (newest completion first): client,
+    lender, completed date, have/of, missing list, **Open case + Client buttons and nothing
+    else — no chase/send/remind verbs anywhere**. The live tile's isLiveStage filter and the
+    case modal's hide-chip-on-completed rule (R71) are both deliberately untouched.
+    Old-suite patch (commented R77): r74_numbers §E1f's WATCH ground-truth list gains
+    `dh-tile-completedgaps` (run as p4; the band's discipline applies to it unweakened).
+  - **B4a — inline contact fixes.** The four contact panels — `#dh-missing-panel` (its rows are
+    now `.row-item`s like the other three, not a table), `#dh-phone-panel`,
+    `#dh-invalid-email-panel`, `#dh-invalid-phone-panel` — carry `dhFixCellClient()`: a `.dh-fix`
+    with **`data-client`** (not data-case) + `data-col` email|phone, `.dh-fix-input`
+    (type email/tel; the INVALID panels PREFILL the broken value) and the shared `.dh-fix-save`
+    delegation. `dhInlineFixSave` grew a client branch: validated by the client form's OWN
+    `isValidEmailLike`/`isValidPhoneLike` and refused with the client form's message **verbatim**
+    (`"X" isn't a valid email address.` / `"X" isn't a valid phone number — UK numbers need 11
+    digits (e.g. 07700 900123).`); the write is `clients.update({col}).eq(id)` — one column,
+    nothing else read or sent; an open client modal on the same record is re-baselined via
+    `refreshOpenedClientStamp`. Saves run the SAME repair path as the case fixes: row leaves,
+    tile decrements — the "N of M" email/phone tiles come down on BOTH numbers, format kept
+    (r29 §G still pins `^\d+ of \d+$`) — rollup row, headline, and the panel's own
+    "N left in this list" counter (all four panels joined `DH_FIX_PANEL_TILE`).
+  - **B4b — the headline's honest reason.** "…to clear before importing" → "…to clear —
+    automations and reports read these exact fields." at BOTH render sites (the initial
+    `#dh-readiness-headline` paint AND `dhDecrementHeadline`'s rewrite); no suite pinned the old
+    tail, and r31/r74's structural pins (`N data-quality issues`, `across N checks`,
+    data-total/data-checks) are untouched.
+
+  Pre-existing base failures (verified identical on pristine 3363305 before this round, NOT
+  caused or touched by R77-B): r25 §F1 (FORWARD_SUPPORTED already resolved at boot), r19 §C ×2
+  (velocity/scoreboard date drift), r12b §B3 diary month has-outcome badge.
 
 **R76 · A notes — "close the loop" (`tests/r76_case.js`).**
 Seven items, all on the case/board/diary loop. **A1 · Completed stage-entry overlay** —
@@ -269,6 +348,87 @@ contract written down:
   guess" fact no longer exists), r68_admin §A5/A9 (overlay + no-prompt assertion; 112-ish → 114),
   r63_tasks §A (accepts the first NON-joint lead — the playbook write is the thing under test,
   the joint flow lives in r76_intake §C).
+
+**R77 · A notes — "the owner decides", agent A (`tests/r77_owner.js` 62).** Four items on the
+owner surfaces (Reports money panels walked as p4; capture prompts as p1). Every new contract:
+
+  - **A1a — the forecast meets the target.** `renderForecastBuckets` now also fills
+    `#report-forecast-target` (new div in index.html between the buckets and the hint; cleared on
+    the non-owner path with the rest of the panel). Inside it, WORDING RULES:
+    `#report-forecast-target-line` reads exactly
+    `≤30 days weighted £X vs monthly target £T → gap £Y` when the ≤30-days weighted figure is
+    short of `settings.monthly_fee_target` (the SAME key the hero/target bar read), and
+    `≤30 days weighted £X vs monthly target £T → £Y ahead of target` when it is not — never a
+    negative gap. Target unset ⇒ the line is
+    "No monthly fee target is set, so there is no gap to read this against — set one in
+    Settings › Targets." with `#report-forecast-target-set` (nav('settings')) as the link — no
+    invented gap against zero. Beside it, `#report-forecast-none-line`
+    ("N case(s) (£Z weighted) has/have no expected completion date") calls the EXISTING
+    `toggleForecastNoneList()` — same list, same `#report-forecast-none-toggle` flip. The
+    £-target marker on the MI run-rate chart was consciously SKIPPED: the chart scales to its own
+    max month, usually far below the target, so a marker would either overflow or force a shared
+    scale that squashes every bar (it "fights the chart code").
+  - **A1b — expected-completion capture at stage entry.** `stageEntryExpectedHtml/-Patch` add an
+    optional `#se-expected` date field to the APPLICATION and OFFER prompts only (Exchange keeps
+    its waiting-on-only dialog; DIP/Fact Find untouched). Rules, all pinned: prefilled with the
+    case's current `expected_completion_date`; blank writes NOTHING and never blocks; an
+    UNCHANGED prefill also writes nothing (so the R74 stage-move Undo survives a Save that
+    changed nothing); the question can raise the dialog ON ITS OWN (so "already answered → not
+    asked" now means waiting_on AND expected at Application — r65_pipeline §A2 seeds the date,
+    commented R77); a case whose date is set is never asked on its own account; the move toast
+    gains `· expected completion <fmtD>` only when a write happened. `expected_completion_date`
+    joined moveCaseToStage's fresh-read select (base column, no gate). MOCK-PARITY:
+    `expected_completion_date` and `lead_source` joined applyInsertDefaults' cases nullable list.
+  - **A2a — lead-source capture.** `knownLeadSources()` (beside knownLenders, same softRows
+    shape) feeds a new `<datalist id="case-lead-sources">` behind the case form's UNCHANGED
+    free-text `lead_source` input: distinct sources on the book, case-insensitively deduped, the
+    variant offered is the casing the book uses MOST (tie → first seen). FIXTURES: an R77 pass
+    flips exactly ONE "Google" row to "google" and ONE "Website" row to "WEBSITE" (mutation
+    only — no new rows, no count anywhere moves, and the original casing stays the majority so
+    merged tables read exactly as before).
+  - **A2b — lead sources read.** The panel's table moved to `renderLeadSourcesPanel(all, mv)`
+    (state `sourcesState`/`sourcesAllTime`, test-invisible) with the Losses panel's exact toggle:
+    `#report-sources-scope-btn` ("All time"/"This month") → `window.toggleSourcesScope()`.
+    This-month scope line is BYTE-UNCHANGED ("Set the lead source on cases to build this up.
+    Scoped to leads created in <label>."); All time = EVERY case on the book (matching Losses'
+    choice), scope line "…Every case on the book, all time (N). Sources are grouped
+    case-insensitively — “google” and “Google” are one row." Grouping key is trim+lowercase,
+    display is the majority casing, "(not set)" bucket kept, columns/convCell (n<5)/owner-only
+    Revenue all unchanged.
+  - **A3 — the MI coverage guard (never print 3000%).** `renderPipelineMI` counts
+    `missMilestone` (per case, earliest missing milestone its stage implies: rank ≥ application
+    with no submitted_at, else rank ≥ offer with no offer_issued_date; not_proceeding exempt —
+    Data health's dh-tile-milestone rule without its 180-day back-book cut). WORDING RULE
+    (verbatim, `.mi-coverage-clause`, a linkish button):
+    `date coverage too thin — N case(s) is/are missing application/offer dates → fix in Data
+    health`, wired to `window.miGotoMilestoneHealth()` = nav('data') + reveal (never toggle)
+    `#dh-milestone-panel` after the page's async render. It replaces (a) any conversion Step %
+    whose numerator EXCEEDS its denominator (the row and its count always stay), and (b) the
+    median/average cells (one colspan-2 cell; n column kept) of any velocity row with n≤1 —
+    but only while missMilestone > 0: a genuinely tiny book with nothing missing keeps its plain
+    figures, because the link would have nothing to fix. The funnel CSV carries the guard as
+    plain text: `date coverage too thin (N missing dates)`; the velocity CSV still emits raw
+    numbers + n. Old-suite patches (commented R77): r20 §B1 (the "300%" cell was pinned — now
+    expects the CSV clause), r19 §C (velocity row 4 n=1 → clause; PLUS a calendar-flake fix
+    found on Sep 1: group E's this-month completions now carry an explicit created_at one day
+    after their completed_at, because the previously-defaulted created_at=now flipped their
+    cycle gap positive on the 1st/2nd of any month), r25 §F1 (stale pin, red on the R76 base:
+    the boot-time combined probe resolves FORWARD_SUPPORTED, so "still null" became "null or
+    true, never false"). Same-day flake also fixed in r12b §B3 (the diary month-grid jump was a
+    no-op `window.diaryMonth` write; it now presses ‹ Prev to the month containing the
+    appointment).
+  - **A4 — business mix by case type.** New panel `#report-mix-panel` in Money & book (index.html,
+    directly after the forecast panel — the Reports select has always carried case_kind, so no
+    new query), rendered by `renderBusinessMix(all, yr)` from loadReports. Owner-only
+    (showMoney(), like its neighbours). One table `#report-mix`: a row per case_kind in the case
+    form's KINDS order — Completed YTD (by completed_at on the localDateStr year, same yearOf as
+    the KPI tiles) and Live pipeline (the six MI_LIVE_STAGES) — count, broker-fee sum (fmtM),
+    average (sum/count, "—" at n=0), plus a Total foot row; a case with no kind keeps its row as
+    "(not recorded)", LAST, styled loss-unrecorded. Scope line `#report-mix-scope` names all
+    three bases. CSV via `#report-mix-csv` → miCsv (`nexmoney-business-mix-<date>.csv`).
+    Jump-nav: ONE new entry `["mix","Business mix","#report-mix-panel"]` in
+    REPORT_JUMP_SECTIONS (after forecast, DOM order) and `#report-mix-panel` added to the money
+    section's membership in REPORT_SECTIONS — nothing else in either list touched.
 
 **R75 notes — speed round (`tests/r75_diary.js` 102, `tests/r75_queues.js` 153).**
 Diary half: **WEEK is the desktop default** (owner decision; storage key `nx_diaryview_<uid>` —
