@@ -138,8 +138,135 @@ node tests/r79_send.js
 node tests/r79_locks.js
 node tests/r80_protect.js
 node tests/r80_ledger.js
+node tests/r81_platform.js
+node tests/r81_strict.js
 ```
 
+**MERGED BATTERY, R81 (2026-09-03, CTO run on the merged r81a+r81b tree):** smoke + 86 suites,
+**7,846 checks, 0 failures**, and **zero `MOCK STRICT` throws anywhere** — so the carve moved no
+column reference and strict mode is clean against the three-file app, not just the two-file one.
+ZERO re-points: not one test file needed changing to merge the two halves. Ops note for the
+2-core sandbox: `tests/r78_hands.js` runs ~250-500 s and will be killed mid-run by a foreground
+chunk budget under ~600 s — a "Target page, context or browser has been closed" at `mkCase` in
+its log is that kill, not a failure; re-run it alone (53/0).
+
+**R81 · A notes — "Platform #2", agent A (`tests/r81_platform.js` 57).** Four items, all
+platform — NO on-screen fact changed anywhere. The binding rules, then the map:
+
+  - **CARVE #2: admin/reports-money.js (A1).** The ENTIRE Reports + Money page family —
+    everything from app.js's old `/* ---------- Reports ---------- */` marker down to and
+    including the R44 reconciliation wiring IIFE (5,841 lines, 245 top-level declarations + 14
+    `window.*` verbs: loadReports, loadMoneyPage, every report panel renderer/model, the jump
+    nav, the row-cap machinery, the R44 reconciliation, the R80 promoters block) — moved
+    VERBATIM to `admin/reports-money.js`. **SCRIPT ORDER IS A CONTRACT AND IT IS PROVEN, NOT
+    ASSUMED: core.js → reports-money.js → app.js.** Why reports-money.js loads BEFORE app.js
+    (the R78 rule applied in reverse): its own top-level eval touches ONLY core.js's `$` and JS
+    globals (AST-verified, both directions — app.js's top-level eval names nothing moved); and
+    app.js must stay LAST because its final line calls `init()`, whose awaits resolve from
+    MICROTASKS — and microtask checkpoints run BETWEEN classic scripts, so a deep link to
+    #reports/#money could reach nav()'s page map (which names loadReports/loadMoneyPage) before
+    a script loaded after app.js had evaluated. The R78 declare-before-use / no-duplicate-const
+    rules apply across all THREE scripts now. The sandbox hook block (`__setReportsRowCap`,
+    `__setOwnerRowCap`, `__bustBoardCache`, `__bustProtCache`, `__reloadSettings`,
+    `__r74RateBookCounts`, `__r74AllRepChips`) moved with the family, so those hooks are now
+    DEFINED IN reports-money.js (the Test-hooks section's "defined in admin/app.js" for
+    `__setReportsRowCap` should be read as "in admin/reports-money.js since R81").
+    reports-money.js DEPLOYS (app code — NOT in .vercelignore); r81_platform §A md5-checks the
+    served set against the repo and spot-checks one function per moved family on its page.
+    ONE load-order accommodation (tagged "R81 · A1" in the file — the dependency the identifier
+    audit could not see, because it is a DOM dependency): the R44 wiring block binds at
+    DOMContentLoaded rather than at script eval, because #procrates-file / #recon-file are
+    CREATED by app.js's eval-time mountDropZone(), which now runs after this file; DCL fires
+    only after every classic script has evaluated, so the bind-once semantics are unchanged.
+  - **MONEY WAVES (A2), pinned by r81_platform §B: ≤ 2 (measured 2; was 6).** `loadMoneyPage`
+    wave 1 = every read that does not need the cases rows (case_tasks + leads + case_events +
+    loadCaseExtraColumns + the NEW `moneyQuoteStampsAll()` + `loadProcRates(true)` + the R44
+    statements list + the propAddrSupported probe when uncached); wave 2 = the big cases read
+    fired TOGETHER with `renderReconPanel(pre)` so the per-line counter read shares the wave.
+    `moneyQuoteStampsAll()` reads every quoted case's stamps server-side-filtered
+    (`.eq("protection_status","quoted")`) with the feature-detect FOLDED IN (42703 ⇒ {} and
+    PROT_QUOTE_SUPPORTED stamped) — the exact superset the old loadQuoteStamps(ids) call gave
+    this page. `renderProcRatesPanel(pre)` / `renderReconPanel(pre)` take an optional prefetch
+    (the R80 renderClawbackWindow(pre) pattern); every other caller passes nothing and keeps
+    the old read-here behaviour byte-for-byte. `moneyLoadSeq` is the R78 seq-guard idiom.
+  - **THE BUILD-TAG DEPLOY HANDSHAKE (A3).** sw.js is network-first with NO precache, so a
+    deploy window can pair a fresh index.html with stale cached JS (now THREE files) — silent
+    breakage. index.html declares inline `window.NX_BUILD_TAG = "r81"`; each JS file ends with
+    `window.__nxTag_core` / `__nxTag_reportsmoney` / `__nxTag_app` (same literal);
+    `nxCheckBuildTags()` (app.js, top of init()) compares all four: mismatch ⇒ non-dismissable
+    `#nx-tag-strip` ("A new version of this app has part-loaded — reloading…") + ONE
+    `location.reload()` guarded by sessionStorage `nx_tag_reloaded`; still mismatched with the
+    guard set ⇒ the strip stays and says a hard refresh (Ctrl+F5) should fix it, and NOTHING
+    loops; a match clears strip + guard. SANDBOX SEAM: `window.__nxTagReload` (reload observer)
+    and `window.__nxCheckBuildTags` (drive the compare directly). **THE DELIVERY RULE — ON
+    EVERY ROUND'S CHECKLIST FROM NOW ON: any round that edits ANY of index.html / core.js /
+    reports-money.js / app.js bumps the tag IN ALL FOUR PLACES.** r81_platform §C asserts the
+    four SOURCE-file literals are equal (a partial bump fails the battery at merge time) and
+    walks strip/reload/no-loop/heal in-page. The strip exists in the DOM ONLY on mismatch, so
+    no DOM-census suite sees it on a healthy load.
+  - **dbFail SWEEP #2 (A4).** 75 custom-worded DB-failure toast sites (69 in app.js, 6 in the
+    moved reports-money.js — storage upload/signed-url included) now route through
+    `dbFail(where, error, customMsg)`: wording BYTE-IDENTICAL (r81_platform §D forces three and
+    demands the exact old sentence + the new ERROR_LOG "caught" entry), logging added. PLUS two
+    formerly-SILENT write results: the fact-find legacy-token back-fill (a refused update used
+    to still present the dead link — now `dbFail("factFindToken")` and the dialog refuses) and
+    the R44 import's clean-up delete (failure now logged quietly — the lines toast stays the
+    one the user reads; an orphaned statement row blocking re-import is no longer invisible).
+    Deliberately NOT converted: XLSX/file-parse errors, ensureXlsx script-load, edge-function
+    fetch failures (Outlook/SMS/Automation — not db.from/db.rpc), the 23505 "already imported"
+    duplicate-upload guard (the guard working, not a failure), and best-effort case_notes
+    side-writes already documented as best-effort. Every converted line carries an
+    `// R81 · A4` tag.
+  SEAMS, named: (1) the FIRST deploy of R81 itself is the one transition the handshake cannot
+  fully guard — a cached pre-R81 app.js has no compare to run (every later deploy is covered);
+  (2) a stale loadMoneyPage that loses the seq race can still have painted the statements list
+  via renderReconPanel(pre) before the guard bites — same rows either way, cosmetic only;
+  (3) moneyQuoteStampsAll reads stamps for ALL quoted cases rather than the visible page's ids —
+  a superset read, never fewer rows than before. Battery: everything passes UNCHANGED (the
+  carve is verbatim); no re-points were needed anywhere.
+**R81 · B notes — strict column mode (`tests/r81_strict.js` 40).** The mock now refuses ghost
+COLUMN names the way it always refused ghost tables (42P01) and RPCs (42883): a per-table
+COLUMN REGISTRY (union of every seeded fixture row's keys, snapshotted eagerly at load so a
+suite that wipes a table can't wipe the schema, plus `STRICT_EXTRA_COLUMNS` hand lists for
+tables seeded empty on purpose and for real prod columns no fixture carries) is enforced on
+every select-string column (embeds recursed at any depth, `alias:col`/`::cast`/JSON-path
+tokens resolved to the real column), every filter/order/`.or()` column (dotted
+embedded-resource filters validate against the embedded table), every insert/update/upsert
+payload key (and `onConflict` list), and every rpc ARG NAME per known RPC (`RPC_ARGS` —
+`reassign_holdings` registers only prod's `(p_from, p_to)`, not the mock body's old
+`from_id`/`to_id` tolerance). A violation THROWS synchronously in the caller's stack:
+`MOCK STRICT: unknown column '<t>.<c>' — prod would 42703 (add it to the registry if prod
+really has it)`. Migration-toggle behaviour is unchanged: a column an OFF migration removes
+is still the RETURNED 42703 `{error}` app.js feature-detects on, never a strict throw
+(r81_strict §D6 pins that seam). **The only escape hatch is `window.__mockStrict = false`
+(default TRUE; set it before or after load). There is deliberately NO per-call allowlist —
+fix the caller, or fix the registry; a suite that needs the lenient mock for one probe flips
+the flag around that probe and flips it back.** `window.__mock.columnRegistry()` returns the
+whole registry (or one table's) for assertions — 28 entries (27 tables + `v_alerts`), 334
+columns; §A2 asserts every `__mock.db` table has a non-empty entry, so a table added later
+can't arrive with no schema behind it.
+  Findings from running the FULL battery under strict (detail in `R81-strict-findings.md`):
+  smoke 152/0 and all 84 pre-existing suites 0 failed (7,597 checks) + r81_strict 40/0 —
+  **zero `MOCK STRICT` throws anywhere in the logs**. (`r12b`/`r14`/`r63_docs` hit the
+  runner's 900 s wall on the first pass, stalled on a `page.evaluate` with the box idle and
+  no strict string in their logs; re-run serially they are green 157/169/74 — Playwright
+  flakes on a 2-core box, not strict failures.)
+  **(a) app ghost columns: NONE** — every strict violation traced to the harness, not app.js
+  (a static sweep of every literal select/filter column in app.js/core.js against the
+  registry also came back clean; the sweeper was self-tested against four planted ghosts and
+  named all four, so the clean result is a result). **(b) registry/parity gaps fixed:**
+  `email_queue.lead_id` is REAL in prod (the leads AFTER-INSERT trigger's `lead_ack` rows
+  carry it, the Emails page reads `e.lead_id` — the mock's row shape never had the key, the
+  R79-nps_token situation again; now registered AND nulled by applyInsertDefaults on the
+  standing parity rule), `case_emails.from_name` (run_watchtower's client_waiting rule reads
+  it), the R66 `email_queue` subject/body_html/attachment_path trio (defaulted on app inserts
+  but absent from every load-time fixture row, so the row-union alone missed them), and hand
+  lists for `duplicate_dismissals`, `error_events`, `saved_views`, `referrals`, `audit_log`,
+  the three R44 tables, and `cases.protection_quoted_at`/`_by`. **(c) suite ghost columns
+  patched (both commented R81):** r69_polish wrote `email_queue.body` (prod's column is
+  `body_html`), r78_hands wrote `sms_queue.body` twice (no such column exists anywhere —
+  send-sms composes from `sms_type`). No assertion in either suite changed, only the ghost
+  keys. Ops note: the patched `/tmp` copies rule and REPO/PORT hardcoding are unchanged.
 **R80 · A notes — "Mine the book", agent A (`tests/r80_protect.js` 58).** The CTO rewrote the
 LIVE `get_protection_pipeline` (already deployed): the 250-row cap is now the **BEST 250 —
 `ORDER BY score DESC` before the limit** (it used to be an arbitrary, unordered 250 of ~1,531
@@ -4971,10 +5098,13 @@ test scripts to reach into the mock without going through the UI:
 - `window.__mockDb` — the mock's live supabase client handle (same object
   `app.js` uses); tests call `.from(...)`, `.rpc(...)` etc. directly on it to
   read ground truth out of the fixture DB.
-- `window.__setReportsRowCap(n)` — defined in `admin/app.js` (not the mock),
-  lets a test shrink the reports row cap (default 5000) to prove the "showing
-  first N — truncated" notice actually appears without needing 5000 rows of
-  fixtures.
+- `window.__setReportsRowCap(n)` — defined in `admin/reports-money.js` since
+  R81 (in `admin/app.js` before that; not the mock), lets a test shrink the
+  reports row cap (default 5000) to prove the "showing first N — truncated"
+  notice actually appears without needing 5000 rows of fixtures. The rest of
+  the sandbox hook block (`__setOwnerRowCap`, `__bustBoardCache`,
+  `__bustProtCache`, `__reloadSettings`, `__r74RateBookCounts`,
+  `__r74AllRepChips`) moved with it — same behaviour, new file.
 
 ## Standing rules
 
@@ -4988,6 +5118,22 @@ test scripts to reach into the mock without going through the UI:
   `admin/mock-supabase.js` is synthetic (deterministic PRNG seed), and it must
   stay that way — no real NexMoney client names, emails, phone numbers or
   addresses, ever.
+- **The build tag is bumped in ALL FOUR places, every round that edits any of
+  them (R81 · A3).** index.html (`window.NX_BUILD_TAG`), core.js
+  (`window.__nxTag_core`), reports-money.js (`window.__nxTag_reportsmoney`),
+  app.js (`window.__nxTag_app`) must carry the SAME literal — it is the deploy
+  handshake that catches a mixed-deploy cache. `tests/r81_platform.js` §C
+  fails the battery on a partial bump, so this is a delivery-checklist item:
+  edit any of those four files ⇒ bump the tag in all four.
+- **A column the mock does not know is a 42703 (R81 · B).** `admin/mock-supabase.js` runs
+  STRICT COLUMN MODE by default: every select/filter/order/payload/rpc-arg column name is
+  checked against the per-table registry and an unknown one THROWS
+  (`MOCK STRICT: unknown column '<t>.<c>'`) instead of silently passing as prod's 42703 would
+  not. So: adding a real prod column means registering it (a fixture row key, or
+  `STRICT_EXTRA_COLUMNS` for tables no fixture carries) IN THE SAME ROUND, and a strict throw
+  in a battery log is a REAL ghost-column bug in the caller — fix the caller or fix the
+  registry, never reach for an allowlist. `window.__mockStrict = false` disables it wholesale
+  and exists only for a deliberate one-probe exception that flips it straight back.
 - **Mock files are excluded from the live deploy.** `admin/mock.html` and
   `admin/mock-supabase.js` (and now `tests/`, `smoke.js`, `HARNESS.md`,
   `shots/`) are listed in `.vercelignore` so none of the harness ships to the

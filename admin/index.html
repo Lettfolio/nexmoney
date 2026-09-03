@@ -1487,7 +1487,18 @@
 <!-- R78 · A7 — core.js FIRST: pure leaf utilities ($, esc, toast, fmt*, localDateStr, readAll,
      inChunks) plus the R21/R30 error capture and R78's dbFail, shared into app.js via the
      classic-script global scope. Load order is a contract: core.js, then app.js. -->
+<!-- R81 · A1 — reports-money.js SECOND, app.js LAST. The order is proven, not assumed:
+     reports-money.js's own top-level eval touches only core.js's $ (AST-scanned), so it is safe
+     this early; app.js must stay LAST because its final line calls init(), whose awaits resolve
+     from microtasks — and microtask checkpoints run BETWEEN classic scripts, so a script loaded
+     after app.js could still be unevaluated when a deep link reaches nav()'s page map (which
+     names loadReports / loadMoneyPage). Full proof in reports-money.js's header.
+     R81 · A3 — NX_BUILD_TAG below is the deploy handshake: each JS file ends by stamping its own
+     window.__nxTag_*, and app.js's boot compares all four. EVERY round that edits ANY of
+     index.html / core.js / reports-money.js / app.js bumps the tag IN ALL FOUR PLACES. -->
+<script>window.NX_BUILD_TAG = "r81";</script>
 <script src="/admin/core.js"></script>
+<script src="/admin/reports-money.js"></script>
 <script src="/admin/app.js"></script>
 <script>
   // PWA install support. Register only over https (never file:// or the sandbox http harness).

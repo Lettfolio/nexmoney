@@ -438,7 +438,10 @@ async function mkCase(page, opts) {
         const mk = async (status, withCase) => {
           const { data, error } = await db.from("sms_queue").insert({
             client_id: clientId, case_id: withCase ? caseId : null, sms_type: "appointment_reminder",
-            to_phone: "07700900456", status, body: "r78 probe",
+            /* R81 — dropped `body: "r78 probe"`: sms_queue has no body column
+               (send-sms composes from sms_type; app.js never writes one) and
+               strict column mode now refuses it the way prod's 42703 would. */
+            to_phone: "07700900456", status,
           }).select("id").single();
           if (error) throw new Error(error.message);
           return data.id;
@@ -514,7 +517,8 @@ async function mkCase(page, opts) {
         const db = window.__mockDb;
         const mk = async (status) => (await db.from("sms_queue").insert({
           client_id: clientId, case_id: caseId, sms_type: "appointment_reminder",
-          to_phone: "07700900456", status, error: status === "failed" ? "undeliverable" : null, body: "r78 probe 2",
+          /* R81 — same ghost-column fix as above: `body` dropped. */
+          to_phone: "07700900456", status, error: status === "failed" ? "undeliverable" : null,
         }).select("id").single()).data.id;
         return { f2: await mk("failed"), q3: await mk("queued") };
       }, person);

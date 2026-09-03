@@ -256,7 +256,24 @@
        like `tests/r15.js` does — these fixture rows exist for realism/manual
        verification, not because any suite's count depends on their figures.
 
-   Personas (?as=…):  p1 Kim Martin (admin, DEFAULT) · p2 Wayne Kellow (adviser)
+   ROUND 81 · B (STRICT COLUMN MODE — the mock stops forgiving ghost columns):
+     · A per-table COLUMN REGISTRY (fixture-row key union snapshotted at load
+       + STRICT_EXTRA_COLUMNS hand lists — see the R81 block above the QUERY
+       BUILDER) is enforced, default ON, on every select-string column (embeds
+       recursed, "alias:col"/"::cast"/JSON-path tokens handled), every
+       filter/order/.or() column, every insert/update/upsert payload key (and
+       onConflict list), and every rpc ARG NAME (RPC_ARGS). A violation THROWS
+       "MOCK STRICT: unknown column '<t>.<c>' — prod would 42703 (…)" in the
+       caller's own stack. `window.__mockStrict = false` is the only escape
+       hatch (no per-call allowlist — fix the caller or the registry).
+       Registry gaps closed while turning it on: email_queue.lead_id (REAL in
+       prod — the leads trigger's lead_ack rows carry it and the Emails page
+       reads it; now also nulled by applyInsertDefaults on the standing parity
+       rule), case_emails.from_name, the R66 email_queue text trio, and hand
+       lists for every table seeded empty on purpose. tests/r81_strict.js
+       pins the whole contract; findings in R81-strict-findings.md.
+
+  Personas (?as=…):  p1 Kim Martin (admin, DEFAULT) · p2 Wayne Kellow (adviser)
                       p3 Luke Richards (adviser) · p4 Daniel Potts (owner)
                       p5 Rachel Foyle (introducer — fails the staff login gate)
    ========================================================================== */
@@ -1453,6 +1470,11 @@
          row is the only one the APP fills both text columns on; every other type leaves them for
          process-emails to compose. */
       ["subject", "body_html", "attachment_path"].forEach(function (f) { if (r[f] === undefined) r[f] = null; });
+      /* R81 — lead_id joins the nullable list on the standing parity rule:
+         production's leads trigger writes it on lead_ack rows and the Emails
+         page reads e.lead_id, so an app/suite insert that doesn't name it
+         must still round-trip the key as null. */
+      if (r.lead_id === undefined) r.lead_id = null;
     }
     if (table === "sms_queue" && !r.status) r.status = "queued";
     /* r12b — appointments.outcome: null = not recorded. Exists on every row,
@@ -4726,6 +4748,210 @@
   var VIEWS = { v_alerts: vAlerts };
 
   /* =========================================================================
+     R81 · B — STRICT COLUMN MODE (default ON)
+
+     The R79 code-health panel confirmed the gap this closes: the mock throws
+     on an unknown TABLE (42P01) and an unknown RPC (42883), but a typo'd
+     COLUMN name sailed straight through — a select naming a ghost column came
+     back with undefined fields, a filter on one matched nothing, and an
+     insert/update writing one stored it happily — while production PostgREST
+     fails every one of those with 42703. Real bugs rode the battery green.
+
+     From R81 every column name the query surface touches is validated against
+     a per-table COLUMN REGISTRY:
+       · select-string columns (commas, "*", PostgREST "alias:col" aliases —
+         the COLUMN is the part after the colon — "col::type" casts, "->/->>"
+         JSON paths validated on the root column, and count/head selects);
+       · relationship embeds, recursively: "clients(first_name,last_name)"
+         validates first_name/last_name against the CLIENTS registry, at any
+         nesting depth, hints and !inner included;
+       · every filter/order column: .eq/.neq/.gt/.gte/.lt/.lte/.like/.ilike/
+         .is/.in/.contains/.not/.match/.filter/.order, plus every column named
+         inside an .or() logic string (and()/or()/not. nesting included) and
+         dotted embedded-resource filters ("clients.first_name" checks
+         first_name against clients);
+       · insert/update/upsert payload keys (and upsert onConflict columns);
+       · rpc ARG NAMES per known RPC (RPC_ARGS below — production would refuse
+         the call with PGRST202 "could not find the function with those named
+         args", so an unknown arg name is the same class of silent typo).
+
+     On violation the mock THROWS, synchronously, in the caller's own stack:
+       MOCK STRICT: unknown column '<table>.<col>' — prod would 42703 (add it
+       to the registry if prod really has it)
+     Loud, named, actionable — not a returned {error} the caller can shrug at.
+
+     THE REGISTRY is derived from what the mock itself knows: the union of
+     every seeded fixture row's keys per table (mkCase / applyInsertDefaults /
+     the fixture objects — computed once, lazily, at the first strict check,
+     which is always before any app write lands because every write is itself
+     strict-checked first), plus STRICT_EXTRA_COLUMNS — a hand-checked list
+     for (i) tables seeded EMPTY on purpose (saved_views, proc_rates,
+     commission_statements, commission_lines, error_events, referrals,
+     audit_log has no load-time rows either) and (ii) real production columns
+     no fixture ever carries (cases.protection_quoted_at/_by — app.js writes
+     both ad hoc when a case is marked "quoted", and the watchtower's
+     protection_quote_stale rule reads the first; see the R65 note above).
+
+     ESCAPE HATCH: `window.__mockStrict = false` disables every check (the
+     default is TRUE — an unset flag is strict). There is deliberately NO
+     per-call allowlist: fix the caller, or fix the registry. That rule is in
+     HARNESS.md § R81 · B.
+     ======================================================================= */
+  var STRICT_EXTRA_COLUMNS = {
+    /* real prod columns no fixture object declares (app.js is the source of
+       truth: cs-prot "mark quoted" writes both in one .update, r12a §D9) */
+    cases: ["protection_quoted_at", "protection_quoted_by"],
+    /* prod column the fixtures never seed: run_watchtower's client_waiting rule
+       (mirrored from production's ten) reads e.from_name || e.from_email, and
+       r65_watchtower seeds rows with it. No fixture row carries one — senderOf's
+       from_email fallback is the state the base book is in. */
+    case_emails: ["from_name"],
+    /* R66 · M8 columns — applyInsertDefaults nulls all three on every APP
+       insert (the standing parity rule), but the load-time fixture rows are
+       pushed raw and none of them carries the keys, so the row-union alone
+       would miss real prod columns the app and the suites write. */
+    email_queue: ["subject", "body_html", "attachment_path",
+      /* R81 — lead_id is REAL in production (the AFTER INSERT trigger on
+         `leads` queues a lead_ack carrying lead_id and NO client_id, and the
+         Emails page reads e.lead_id to name/open the enquiry — see app.js
+         "R7-5 — THE LEAD ACKNOWLEDGEMENTS"). This mock has no leads trigger,
+         so no fixture row ever carried the key; r79_send seeds one by hand. */
+      "lead_id"],
+    /* seeded empty on purpose — column lists transcribed from
+       applyInsertDefaults + the R30/R43/R44/R56 schema comments above */
+    duplicate_dismissals: ["id", "kind", "a_id", "b_id", "reason", "dismissed_by", "created_at"],
+    error_events: ["id", "created_at", "error_type", "location", "page", "role"],
+    saved_views: ["user_id", "scope", "name", "filters", "updated_at"],
+    proc_rates: ["id", "lender", "product", "lg_code", "rate", "notes", "effective_label", "uploaded_at", "created_at"],
+    commission_statements: ["id", "ref", "statement_label", "statement_date", "filename",
+      "gross_total", "net_total", "line_count", "created_by", "created_at"],
+    commission_lines: ["id", "statement_id", "line_date", "tran_type", "addressee", "provider",
+      "account_number", "opp_id", "reason", "premium", "banked_gross", "banked_net",
+      "policy_type", "policy_group", "adviser_name", "match_status", "matched_case_id",
+      "match_note", "confirmed_at", "attributed_to", "created_at"],
+    referrals: ["id", "case_id", "client_id", "kind", "referred_to", "notes", "status",
+      "created_by", "created_at", "updated_at"],
+    /* no audit row exists at load time (fixture seeding bypasses auditRow) —
+       transcribed from auditRow() above */
+    audit_log: ["id", "happened_at", "actor", "actor_label", "action", "table_name",
+      "row_id", "case_id", "client_id", "summary", "changes"]
+  };
+  var COLUMN_REGISTRY_CACHE = {};
+  function columnRegistry(table) {
+    if (COLUMN_REGISTRY_CACHE[table]) return COLUMN_REGISTRY_CACHE[table];
+    var set = Object.create(null);
+    var rows = VIEWS[table] ? VIEWS[table]() : (DB[table] || []);
+    for (var i = 0; i < rows.length; i++) {
+      var keys = Object.keys(rows[i] || {});
+      for (var j = 0; j < keys.length; j++) set[keys[j]] = true;
+    }
+    (STRICT_EXTRA_COLUMNS[table] || []).forEach(function (c) { set[c] = true; });
+    COLUMN_REGISTRY_CACHE[table] = set;
+    return set;
+  }
+  /* Snapshot the whole registry EAGERLY, once, at load time. The fixtures
+     above are the mock's schema knowledge, and a test that wipes a table
+     must not be able to wipe the schema with it (r20 deletes every case,
+     which cascades fact_finds to zero rows — a lazy registry computed after
+     that wipe would have no fact_finds columns at all). */
+  Object.keys(DB).forEach(function (t) { columnRegistry(t); });
+  columnRegistry("v_alerts");
+  function strictEnabled() {
+    return !(typeof window !== "undefined" && window.__mockStrict === false);
+  }
+  function strictViolation(table, col) {
+    throw new Error("MOCK STRICT: unknown column '" + table + "." + col +
+      "' — prod would 42703 (add it to the registry if prod really has it)");
+  }
+  /* plain (non-dotted) column check — payload keys, select tokens, order cols */
+  function assertColumnFlat(table, col) {
+    if (!strictEnabled()) return;
+    if (!DB[table] && !VIEWS[table]) return;   /* unknown table → existing 42P01 path */
+    var reg = columnRegistry(table);
+    if (!reg[col]) strictViolation(table, col);
+  }
+  /* filter/order column — a dotted name is an embedded-resource filter:
+     "clients.first_name" validates first_name against clients */
+  function assertFilterColumn(table, col) {
+    if (!strictEnabled()) return;
+    if (!DB[table] && !VIEWS[table]) return;
+    var c = String(col == null ? "" : col);
+    var dot = c.indexOf(".");
+    if (dot > 0) {
+      var head = c.slice(0, dot);
+      if (DB[head]) return assertFilterColumn(head, c.slice(dot + 1));
+      strictViolation(table, c);
+    }
+    assertColumnFlat(table, c);
+  }
+  /* every column named inside an .or() logic string, nesting included */
+  function assertLogicColumns(table, str) {
+    if (!strictEnabled()) return;
+    splitTop(String(str == null ? "" : str), ",").forEach(function (tok) {
+      tok = tok.trim();
+      if (/^not\./i.test(tok)) tok = tok.slice(4).trim();
+      var grp = /^(and|or)\s*\((.*)\)$/i.exec(tok);
+      if (grp) return assertLogicColumns(table, grp[2]);
+      var i1 = tok.indexOf(".");
+      if (i1 > 0) assertFilterColumn(table, tok.slice(0, i1));
+    });
+  }
+  /* the whole select string, embeds recursed into their own table's registry */
+  function assertSelectColumns(table, sel) {
+    if (!strictEnabled()) return;
+    if (!DB[table] && !VIEWS[table]) return;
+    var p = parseSelect(sel);
+    p.cols.forEach(function (tok) {
+      var col = String(tok).replace(/\s+/g, "");
+      if (col.indexOf("(") >= 0) return;             /* unparsed embed-ish token — mock projects it as-is */
+      if (col === "count") return;                   /* PostgREST aggregate, not a column */
+      var cast = col.indexOf("::"); if (cast >= 0) col = col.slice(0, cast);
+      var ali = col.indexOf(":"); if (ali >= 0) col = col.slice(ali + 1);   /* PostgREST "alias:col" — the COLUMN is after the colon */
+      var jp = col.search(/->/); if (jp >= 0) col = col.slice(0, jp);       /* JSON path — validate the root column */
+      if (!col) return;
+      assertColumnFlat(table, col);
+    });
+    p.embeds.forEach(function (e) {
+      if (!DB[e.name] && !VIEWS[e.name]) strictViolation(table, e.name);
+      assertSelectColumns(e.name, e.spec);
+    });
+  }
+  function assertPayloadColumns(table, payload) {
+    if (!strictEnabled()) return;
+    if (!DB[table]) return;                          /* views/unknown tables: existing paths answer */
+    var rows = Array.isArray(payload) ? payload : [payload];
+    for (var i = 0; i < rows.length; i++) {
+      var keys = Object.keys(rows[i] || {});
+      for (var j = 0; j < keys.length; j++) assertColumnFlat(table, keys[j]);
+    }
+  }
+  /* rpc ARG NAMES per known RPC — production resolves a function by its named
+     args, so rpc("get_briefing", {p_scop: "all"}) is PGRST202 there, not a
+     briefing that quietly ignored the scope. Args mirror the deployed
+     signatures (reassign_holdings is (p_from, p_to) — the from_id/to_id
+     fallback the mock's own body tolerates is NOT a prod signature and is
+     deliberately not registered). */
+  var RPC_ARGS = {
+    my_role: [], reassign_holdings: ["p_from", "p_to"], has_bank_details: [],
+    get_briefing: ["p_scope"], get_reports: [], get_data_quality: [],
+    get_protection_pipeline: ["p_scope"], get_protection_pipeline_total: ["p_scope"],
+    find_duplicate_clients: [], run_watchtower: [],
+    queue_automated_emails: [], queue_comms_extras: [], mark_tour_seen: []
+  };
+  function assertRpcArgs(name, args) {
+    if (!strictEnabled()) return;
+    if (!RPCS[name] || functionIsMissing(name)) return;   /* unknown fn → existing 42883 path */
+    var allowed = RPC_ARGS[name];
+    if (!allowed) return;
+    Object.keys(args || {}).forEach(function (k) {
+      if (allowed.indexOf(k) < 0) {
+        throw new Error("MOCK STRICT: unknown rpc arg '" + name + "." + k +
+          "' — prod would PGRST202 (add it to the registry if prod really has it)");
+      }
+    });
+  }
+
+  /* =========================================================================
      QUERY BUILDER
      ======================================================================= */
   function sourceRows(table) {
@@ -4781,6 +5007,9 @@
 
   BP.select = function (cols, opts) {
     opts = opts || {};
+    /* R81 — strict column mode: a ghost column in a select string (returning
+       clause included) throws here, synchronously, in the caller's stack. */
+    assertSelectColumns(this._table, cols == null ? "*" : cols);
     if (this._op && this._op !== "select") { this._returning = cols == null ? "*" : cols; return this; }
     this._op = "select";
     this._columns = cols == null ? "*" : cols;
@@ -4788,12 +5017,19 @@
     if (opts.head) this._head = true;
     return this;
   };
-  BP.insert = function (rows) { this._op = "insert"; this._payload = rows; return this; };
-  BP.upsert = function (rows, opts) { this._op = "upsert"; this._payload = rows; this._upsertOpts = opts || {}; return this; };
-  BP.update = function (patch) { this._op = "update"; this._payload = patch; return this; };
+  BP.insert = function (rows) { assertPayloadColumns(this._table, rows); this._op = "insert"; this._payload = rows; return this; };
+  BP.upsert = function (rows, opts) {
+    assertPayloadColumns(this._table, rows);
+    /* R81 — an onConflict list naming a ghost column is a 42P10 in prod */
+    var oc = opts && opts.onConflict;
+    if (oc != null) { var bt = this._table; String(oc).split(",").forEach(function (c) { c = c.trim(); if (c) assertColumnFlat(bt, c); }); }
+    this._op = "upsert"; this._payload = rows; this._upsertOpts = opts || {}; return this;
+  };
+  BP.update = function (patch) { assertPayloadColumns(this._table, patch); this._op = "update"; this._payload = patch; return this; };
   BP["delete"] = function () { this._op = "delete"; return this; };
 
   function addFilter(b, col, op, val) {
+    assertFilterColumn(b._table, col);   /* R81 — strict column mode */
     b._preds.push(function (row) { return testOp(row[col], op, val); });
     return b;
   }
@@ -4804,10 +5040,12 @@
   BP["in"] = function (col, vals) { return addFilter(this, col, "in", vals); };
   BP.contains = function (col, val) { return addFilter(this, col, "cs", val); };
   BP.not = function (col, op, val) {
+    assertFilterColumn(this._table, col);   /* R81 — strict column mode */
     this._preds.push(function (row) { return !testOp(row[col], op, val); });
     return this;
   };
   BP.or = function (str) {
+    assertLogicColumns(this._table, str);   /* R81 — strict column mode */
     var fn = parseLogicList(String(str), "or");
     this._preds.push(fn);
     return this;
@@ -4820,6 +5058,10 @@
   };
   BP.order = function (col, opts) {
     opts = opts || {};
+    /* R81 — strict column mode. An order on an embedded resource
+       (foreignTable/referencedTable) validates against that table. */
+    var ot = opts.foreignTable || opts.referencedTable;
+    if (ot) assertFilterColumn(ot, col); else assertFilterColumn(this._table, col);
     var asc = opts.ascending === undefined ? true : !!opts.ascending;
     var nullsFirst = opts.nullsFirst === undefined ? !asc : !!opts.nullsFirst;  /* Postgres default */
     this._orders.push({ col: col, asc: asc, nullsFirst: nullsFirst });
@@ -5499,6 +5741,7 @@
   };
 
   function rpcCall(name, args) {
+    assertRpcArgs(name, args);   /* R81 — strict column mode: ghost arg names throw in the caller's stack */
     return new Promise(function (resolve) {
       setTimeout(function () {
         var fn = RPCS[name];
@@ -7346,8 +7589,20 @@
     };
     /* handles for the smoke harness / persona agents — never used by app.js */
     window.__mockDb = client;
+    /* R81 — strict column mode defaults ON; only an explicit `window.__mockStrict
+       = false` (set any time, even before this script runs) disables it. */
+    if (window.__mockStrict === undefined) window.__mockStrict = true;
     window.__mock = {
       db: DB, personas: PERSONAS, persona: ME_KEY,
+      /* R81 — the strict-mode column registry, for tests. No table arg → every
+         DB table (plus v_alerts) with its sorted column list. */
+      columnRegistry: function (table) {
+        if (table) return Object.keys(columnRegistry(table)).sort();
+        var o = {};
+        Object.keys(DB).forEach(function (t) { o[t] = Object.keys(columnRegistry(t)).sort(); });
+        o.v_alerts = Object.keys(columnRegistry("v_alerts")).sort();
+        return o;
+      },
       role: function () { return myRole(); },
       counts: function () {
         var o = {};

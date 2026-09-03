@@ -501,7 +501,10 @@ const favImgs = (page, names) => page.evaluate((ns) => {
         const mk = (when) => ({
           case_id: tpl.case_id || null, client_id: tpl.client_id || null,
           to_email: "r69probe@example.com", email_type: tpl.email_type, subject: "R69 probe row",
-          body: "R69 probe row", status: "queued", scheduled_for: when,
+          /* R81 — was `body:`, a ghost column this suite invented: email_queue's
+             text column is `body_html` (R66 · M8), and strict column mode now
+             refuses the typo the way production's 42703 always would have. */
+          body_html: "R69 probe row", status: "queued", scheduled_for: when,
         });
         const future = new Date(Date.now() + 36 * 3600 * 1000).toISOString();
         const past = new Date(Date.now() - 36 * 3600 * 1000).toISOString();
