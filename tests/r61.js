@@ -162,10 +162,16 @@ async function boot(browser, persona) {
   ok("C6 · no page errors on Retention", pc.__err.filter((e) => !/ERR_TUNNEL|Failed to fetch|sheetjs/i.test(e)).length === 0, pc.__err.join("|").slice(0, 200));
   await pc.close();
 
-  /* ================= §D · Protection bands ================= */
-  console.log("\n— §D · Protection: status bands, current first");
+  /* ================= §D · Protection order ================= */
+  /* R80: RE-POINTED. R61's status bands are RETIRED — the rewritten
+     get_protection_pipeline returns the book's BEST candidates score-desc and
+     the table now preserves THAT order (tests/r80_protect.js §B pins it in
+     full). This section keeps its persona and its DOM-contract half, and its
+     band assertions become the new order's: no band rows, rows in the RPC's
+     own score order. */
+  console.log("\n— §D · Protection: RPC score order (R80 — the R61 bands are retired)");
   const pd = await boot(browser, "p1");
-  // guarantee more than one band: set one open opportunity to quoted, one to discussed
+  // still write a quoted + a discussed row: proves mixed statuses no longer regroup the table
   await pd.evaluate(async () => {
     const db = window.__mockDb;
     const { data: cs } = await db.from("cases").select("id,stage,protection_status").in("stage", ["application", "offer"]).limit(10);
@@ -174,25 +180,22 @@ async function boot(browser, persona) {
   });
   await pd.evaluate(() => { location.hash = "#protection"; });
   await pd.waitForTimeout(1800);
-  const d = await pd.evaluate(() => {
+  const d = await pd.evaluate(async () => {
     const t = document.querySelector("#prot-list-table");
     if (!t) return null;
-    const bands = [...t.querySelectorAll("tr.prot-band")].map((r) => r.className.match(/prot-band-(\w+)/)?.[1]);
-    // the row order of statuses must be non-interleaved and follow quoted→discussed→not_discussed
-    const order = { quoted: 0, discussed: 1, not_discussed: 2 };
-    const rowStatuses = [...t.querySelectorAll("tr")].filter((r) => r.querySelector(".prot-cb")).map((r) => {
-      const b = r.querySelector("td:nth-child(6) .badge");
-      return b ? b.textContent.trim() : "";
-    });
-    const seq = rowStatuses.map((s) => s === "QUOTED" ? 0 : s === "DISCUSSED" ? 1 : 2);
-    const sorted = seq.every((v, i) => i === 0 || v >= seq[i - 1]);
+    const bands = [...t.querySelectorAll("tr.prot-band")].length;
+    const domIds = [...t.querySelectorAll(".prot-cb")].map((cb) => cb.dataset.id);
+    const { data: rpc } = await window.__mockDb.rpc("get_protection_pipeline", { p_scope: "all" });
+    const rpcIds = (rpc || []).map((r) => r.case_id).filter((id) => domIds.includes(id));
+    const orderOk = domIds.length > 0 && domIds.every((id, i) => id === rpcIds[i]);
+    const scoreDesc = (rpc || []).every((r, i, a) => i === 0 || Number(a[i - 1].score) >= Number(r.score));
     const contract = [...t.querySelectorAll("tr")].filter((r) => r.querySelector(".prot-cb"))
       .every((r) => r.querySelector(".prot-actions button") && r.querySelector(".prot-status-set"));
-    return { bands, sorted, rows: rowStatuses.length, contract, bandOrderOk: bands.every((b, i) => i === 0 || (order[b] ?? 3) > (order[bands[i - 1]] ?? 3)) };
+    return { bands, orderOk, scoreDesc, rows: domIds.length, contract };
   });
-  ok("D1 · band header rows render (quoted / discussed / not discussed)", d && d.bands.length >= 2, JSON.stringify(d && d.bands));
-  ok("D2 · bands run current-first: quoted → discussed → not discussed", d && d.bandOrderOk, JSON.stringify(d && d.bands));
-  ok("D3 · rows are grouped, never interleaved", d && d.sorted, JSON.stringify(d && d.rows));
+  ok("D1 · R80: NO band header rows render any more", d && d.bands === 0, JSON.stringify(d && d.bands));
+  ok("D2 · R80: the table preserves the RPC's score-desc rank order", d && d.orderOk && d.scoreDesc, JSON.stringify(d));
+  ok("D3 · R80: mixed statuses stay in rank order — nothing regroups them", d && d.orderOk, JSON.stringify(d && d.rows));
   ok("D4 · every row keeps its Open button and status select (DOM contract)", d && d.contract);
   ok("D5 · no page errors on Protection", pd.__err.filter((e) => !/ERR_TUNNEL|Failed to fetch|sheetjs/i.test(e)).length === 0, pd.__err.join("|").slice(0, 200));
   await pd.close();

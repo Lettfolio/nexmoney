@@ -136,7 +136,212 @@ node tests/r78_hands.js
 node tests/r78_fast.js
 node tests/r79_send.js
 node tests/r79_locks.js
+node tests/r80_protect.js
+node tests/r80_ledger.js
 ```
+
+**R80 · A notes — "Mine the book", agent A (`tests/r80_protect.js` 58).** The CTO rewrote the
+LIVE `get_protection_pipeline` (already deployed): the 250-row cap is now the **BEST 250 —
+`ORDER BY score DESC` before the limit** (it used to be an arbitrary, unordered 250 of ~1,531
+candidates), each row carries the same shape PLUS `score`, and a NEW companion RPC
+**`get_protection_pipeline_total(p_scope)` → `{"total": N}`** reports the uncapped candidate
+count. Non-admin callers are FORCED to `p_scope='mine'` server-side. The Protection page became
+a worked call list around it. Every contract:
+
+  - **THE SCORE (pinned formula, live + mock + suite all agree):** stage urgency (offer 100 ·
+    exchange 95 · application 90 · DIP 80 · fact_find 70 · enquiry 50 · completed 30) +
+    warm-quote bonus (quoted +15 · referred +10 · discussed +5) + loan size (loan_amount ÷
+    50,000, capped at 20) + 3 when the client has an email. `est_commission` is NO LONGER the
+    old status-probability weight: it is the `protection_avg_commission` setting × a loan band
+    (0.7 under £100k · 1.0 to £250k · 1.3 to £500k · 1.6 above) — the KPI tile's basis label
+    changed with it (r5_batch6 patched, commented R80).
+  - **A1a — the honest headline.** `#prot-cap-line` above the table: cap biting ⇒
+    "Showing the best 250 of 1,531 opportunities (~£X estimated commission on this page)."
+    (total via `toLocaleString("en-GB")`; £ = Σ est_commission over the rows the RPC returned,
+    fmtM); total ≤ cap ⇒ just "N opportunities (~£X …)"; a database missing the total RPC says
+    plainly that whether the ceiling bites is unknown. The line's `title` explains the score
+    formula in words; the `#` cell's tooltip (`protScoreTitle`) spells out each row's own
+    arithmetic. **The cap-line £ is the ONE owner-approved exception to the money gate**: the
+    RPC scopes rows server-side, so the sum is the reader's own scope by construction —
+    `#prot-money-note` says whose money it is per role (adviser wording contains "YOURS" and
+    "scoped server-side"; r80_protect §F pins it). The KPI tile + per-row Est. £ stay
+    Owner-only exactly as before.
+  - **A1b — waves + the session cache.** `loadProtectionPage` = **wave 1: BOTH RPCs in one
+    Promise.all**; **wave 2: loadPropContext + loadQuoteStamps + loadClawbackRows in one
+    Promise.all** (was 4 serial waves; ≤2 pinned by r80_protect §B with r78_fast's
+    instrumentation). The result lives in **`protCache`** for the session: search / status
+    filter / scope clicks re-render from it with **ZERO network** (`renderProtectionPage` is a
+    pure renderer; `renderClawbackWindow(pre)` too). **BUST RULE: `bustProtCache()` rides R78's
+    choke point** — every cases/case_events write (which covers every protection_status /
+    gi_status quick-set and every score-moving edit) busts it eagerly, exactly like the board
+    cache; `protLoadSeq` is the R78 seq-guard idiom. Sandbox hook `window.__bustProtCache` (a
+    suite that seeds via `__mock.seedProtectionBook` bypasses db.from, so the choke point never
+    sees it). SEAM, named: a `protection_avg_commission` settings change mid-session does not
+    bust this cache — next cases write or reload picks it up.
+  - **A1c — R61's STATUS BANDS ARE RETIRED.** The table preserves the RPC's score-desc order in
+    every view (filters are stable) — regrouping by status would bury the best candidates. NO
+    `tr.prot-band` rows render any more (r61 §D, r65_pipeline E14, r66_comms B21–B24 all
+    re-pointed, commented R80). The row verbs: **📞 Log call** (`protLogCall` → the ONE
+    `openLogCallModal`, own `panelId: "prot-logcall-panel"` per R75 · A4's both-entry-points
+    contract; icon-only in the table cell for the R69 1280 fit — `.prot-actions .btn-sm` gave
+    back 3px side padding each; full label on the call-list/GI rows), **Task** (`protCallTask`,
+    unchanged), **Email** (`protQueueEmail` — its native `confirm()` is now the house
+    `confirmDestructive({danger:false})`: title "Queue the protection intro email?", body keeps
+    the principal-approval sentence + R79's held line verbatim while held, ids
+    `#ovl-confirm-body`/`#ovl-confirm-ok`; r79_send §D5 re-pointed to press the overlay), and
+    the protection/GI **quick-set selects** (unchanged writers `setProtStatus`/`setGiStatus` —
+    plain db.from updates, so the audit trigger fires; r80_protect §E2 pins the audit row).
+  - **A1d — BULK "Queue protection intro to N".** `#prot-bulk-intro` on the existing S3c bulk
+    bar → `bulkQueueProtIntro()`: re-reads the selected cases' client emails (chunked), then a
+    house overlay (`#prot-bulk-intro-box`) that names the REAL queue count on its button,
+    carries R79's held sentence verbatim while held, and states no-email skips (count + reason)
+    BEFORE anything queues. Confirm inserts `protection_offer` rows for exactly the emailed
+    clients and drives the SAME scoped `runAutomation({queueIds})` path as the row's own Email
+    button — under the hold the rows STAY queued and `sendResultToast`'s held branch speaks
+    (r80_protect §C).
+  - **A2 — THE GI CALL LIST.** `gi_status` finally has a working surface: `#prot-gi-panel`
+    ("GI never discussed") between the completed-book call list and the clawback window — cases
+    where `gi_status` is `not_discussed` (the column's only "never started" value; quoted /
+    policy_taken / declined / not_applicable are all closed-out) on a GI-applicable kind
+    (`caseGiApplies`: purchase / FTB / BTL / remortgage — a product transfer keeps its cover).
+    **Derived from the SAME cached RPC rows — zero extra network** (gi_status rides on every
+    pipeline row), same score order, scope buttons apply / status drop-down does not, top 25
+    shown, honest empty state, and the same cap-honesty sentence as the call list when the 250
+    ceiling bites ("Counted within the best-250 pipeline this page holds"). Row verbs: 📞 Log
+    call, Task, the GI quick-set (same options + writer as the table's `.prot-gi-set`), Open.
+  - **A3 — MOCK PARITY + THE CAP CANARY.** `rpc_get_protection_pipeline` mirrors the rewrite
+    exactly: same predicate as ever (stage ≠ not_proceeding; the four OPEN statuses), forced
+    `'mine'` for non-admin (T1-5's ownerless quirk kept), score computed per the formula,
+    **sort score desc (case_id asc tie-break), `.slice(0, PROT_PIPE_CAP)`** — the one mock RPC
+    that now enforces an honest cap — plus `rpc_get_protection_pipeline_total` (same predicate,
+    uncapped count). **`window.__mock.protPipeCap`** exposes the cap (= 250) so a suite can
+    seed past it and assert the lowest scores fell off without hardcoding it twice.
+    **`window.__mock.seedProtectionBook(n)`** (append-only fixture hook, nothing seeded until
+    called — no other suite's counts move): n (default 300) deterministic synthetic candidates,
+    ~90% completed back book, varied stages/loans/statuses/owners, every 9th client email-less,
+    far-future rate ends so retention/alert surfaces stay untouched. r80_protect §A recomputes
+    the score for EVERY candidate from fixture ground truth and asserts the RPC's 250 are
+    EXACTLY the top 250, with planted hot/cold rows beyond position 250 by fixture order.
+  Old-suite patches (all commented R80): r5_batch6 (Est. commission basis label → "firm average
+  × loan band"), r61 §D (bands → rank order), r65_pipeline E14 (layout without bands) **and
+  §D's send-through precondition** (the R79 hold-off + resend-key rule applied late — its D12
+  trio had been red on the R79 base ever since R79's scoped-hold parity landed), r66_comms
+  B21–B24 (referred keeps badge/settability/rank, no band), r79_send §D5 (protection confirm →
+  overlay body). Everything else in the battery passes unchanged — the full battery was re-run
+  to prove it. KNOWN PRE-EXISTING RED, not caused or touched by R80: `r75_diary` §C2 (the
+  week-view drag leg) fails identically on the untouched R79 base under early-September 2026
+  dates — the drag never registers, the appointment stays put; date-sensitive environment, not
+  a contract change. Four other suites (r12b B1, r41 §C1, r42 §D3, r63_tasks A3/B1) fail ONLY
+  inside the 23:00–00:00 UTC hour when Europe/London's date is already tomorrow — all four
+  re-ran green past midnight UTC; they are the localDateStr-vs-UTC seam, not defects.
+
+**R80 · B notes — "mine the book", agent B (`tests/r80_ledger.js` 87).** Three items, every
+contract written down:
+
+  - **B1 — "Promoters never asked" (the referral list).** New block
+    **`#adv-block-promoters`** inside `#report-advocacy-panel`, SIXTH after the five R9 blocks —
+    the panel's owner-gate is UNTOUCHED (Advocacy stays Owner-only; r9_adv §9 / r42 §B /
+    r11_ux R11-C all pass unpatched). MEMBERSHIP: one row per CLIENT whose case carries
+    `caseReviewScore ≥ 9` (the panel's ONE score reading — nps_score today), keeping the
+    newest-completed scored case; a client is "asked" — and off the list — when EITHER record
+    exists: `cases.referral_requested_at` on ANY of their cases (real prod column, stamps when a
+    referral request queues; the mock's mkCase + nullable list now carry it, and `queueEmail`
+    stamps it on a referral_request queue, best-effort, exactly the review_request shape beside
+    it), OR any non-cancelled `email_queue` `referral_request` row. The queue read rides the
+    reports Promise.all (plus a clients id/email read and a soft comms_optout read); a FAILED
+    queue read ⇒ the list REFUSES to render (`#adv-promoters-empty` says a list shown anyway
+    would over-ask). **OPT-OUT MEANS PHONE, NOT SILENCE:** an opted-out promoter is LISTED,
+    flagged `.adv-promo-optout` ("opted out — ask by phone"), with the call verb only — the queue
+    verb is withheld because v19 would cancel the send; a no-email promoter gets the twin flag
+    `.adv-promo-noemail` for the twin reason. `#adv-promoters-phone` says an opted-out promoter
+    can still be ASKED BY PHONE. CONTRACT IDS: `#adv-promoters-basis` (names the ≥9 rule and
+    BOTH halves of never-asked), `#adv-promoters-asked` (the asked-count exclusion line), rows
+    `.adv-promo-row[data-client][data-case]` (`.adv-promo-score` as `9/10`/`10/10`, completed
+    date, lender, adviser), Open case button. THE VERBS ARE EXISTING PATHS: `.adv-promo-call` →
+    `window.advPromoCallTask` → ONE case_tasks insert titled "Call <name> — thank them and ask
+    for a referral", assigned to the case's own adviser, **due tomorrow rolled off a weekend
+    (weekendRollYmd)** — protCallTask's exact shape, toast wording included; `.adv-promo-ask` →
+    `window.advPromoAsk` → **`queueEmail(caseId, clientId, "referral_request", …)`** — the ONE
+    email writer, so R79's holdLine rides the confirm and the held toast ("Email queued and
+    HELD — …") rides the result, wording untouched, and the stamp is written by queueEmail
+    itself. advPromoAsk adds ONE pre-flight: a `comms_optout` client is REFUSED with a toast
+    naming the certain cancellation and the phone (the R13 suppression-pre-flight judgement;
+    v19's send-time gate stays the backstop). On success `loadReports()` re-renders and the row
+    leaves; the asked-count line takes it over.
+  - **B2 — price the unreachable (Data health + one Retention sentence).** The ~90 no-email
+    clients are silently skipped by EVERY automation; the missing-email panel now says what that
+    costs and orders itself by it. (a) HEADLINE `#dh-atrisk-email` (`.dh-atrisk-line`, directly
+    under the h3): "**N unreachable clients** hold **£X** of maturing lending — the automation
+    cannot chase any of it: the rate-end reminder is an email, and there is no address to send
+    it to." — the £ behind `showMoney()` (non-owner keeps the count and gets "The £ at stake is
+    shown to the Owner."), and **THE BASIS IS STATED IN THE LINE** because the funnel's
+    £-at-risk model lives inline in renderRetOutcomeFunnel with no reusable helper: the loan on
+    the affected clients' in-window completed cases added up, a case with no loan amount counts
+    as nothing, "It is not a fee forecast." — Retention's exact value-at-risk reading, named as
+    such, never a second money model. WINDOW: `rate_reminder_months × 30` days from
+    `localDateStr()` — rateBookSelect's arithmetic, the same edge R78 · B7b bounded the
+    gone-quiet badge to, so Data health and Retention agree about which rates are "coming".
+    (b) **THE RANK:** the missing-email list is ordered by that £, biggest first (soonest rate
+    end breaks a tie; the unpriced majority keeps the RPC's order under a stable sort) — Kim
+    fixes the expensive ones first. Affected rows carry **`.dh-rate-tag[data-client]`** ("rate
+    ending <fmtD soonest> · £loan", £ behind showMoney), amber badge. Nothing affected ⇒ NO
+    line and NO tags. The R77 `.dh-fix` inline-fix rows, counters and tiles are untouched
+    around it (rows are keyed by data-client; position is nothing to them). The missing-PHONE
+    panel is deliberately untouched — those clients still get every email. (c) The SHORT form
+    of the same clause on the Retention gone-quiet summary (`#ret-cold-sub`, same window, same
+    loan reading): "N of these clients have no email on file, so every automated chase skips
+    them — the call is the only chase there is (£X of maturing lending rides on it … not a fee
+    forecast; Data health's missing-email list is where the address gets fixed)." — rendered
+    only when it applies; Retention's structure untouched.
+  - **B3 — audit coverage: verified and closed.** Mock parity: **`AUDITED` gains `fact_finds`,
+    `leads` and `sms_queue`** — production's table-level `audit_row` triggers cover them
+    (CTO-verified list: cases, clients, case_tasks, case_notes, case_documents, case_files,
+    appointments, leads, settings, profiles, sms_queue, fact_finds, watch_alerts,
+    duplicate_dismissals, staff_absences, introducers) and the mock under-mirrored exactly those
+    three, so e.g. the R79 fact-find regenerate audited in prod and not here. `email_queue` is
+    DELIBERATELY still absent (prod carries `log_email_event` only — the accepted gap in the
+    table below; long-standing and not R80's to change). Labels: mock
+    `AUDIT_TABLE_WORD`/`rowLabel` (a fact-find is labelled by its case's client; a lead by its
+    name; an SMS by `to_phone`) and app `AUDIT_TABLE_LABEL` ("Fact-find" / "Lead" / "Text
+    message"). R79 · B1's export scrub already masks `/token$/` values inside audit `changes`,
+    so the newly-audited fact_finds token rotations export as "(withheld)" with zero new code.
+    FIXTURES (R80 pass, blast radius in the mock comment): Peter Thackeray's scored case gets a
+    SENT `referral_request` row (35d ago) + the corroborating stamp (the queue-row exclusion);
+    **Bruce Lindquist's scored case gets the STAMP ALONE** (-160d, no queue row — the stamp-only
+    exclusion); **Damian Fairhurst joins Chloe/Harold with `comms_optout=true`** (the R79 pair
+    contained no promoter; r79_send's `.limit(1)` optout pick still lands on Chloe by insertion
+    order); **Yvonne Kerr** (already missing BOTH email and phone, live fact-find case) gains
+    the round's ONE new case row — a back-book completed remortgage, rate ending +100d, loan
+    £168,000, completed 14 months ago (outside every YTD/monthly figure), **nps_score 9** (so
+    she is B1's no-email promoter AND B2's priced unreachable client; the score dates by
+    review_requested_at's fallback, 14 months back — outside the 6-month advocacy series), fee
+    paid back then, review asked long ago, `rate_reminder_queued_at` stamped +
+    `reminder_guarded: true` (the R45 guard shape — the queueing RPC never touches it),
+    milestone dates set, protection/GI `declined` — it joins the retention-feed window (+1),
+    which every counting suite computes from the DB at runtime.
+
+  **AUDIT COVERAGE (R80)** — the post-R74 verbs, what audits each, and the test pinning it
+  (all in `tests/r80_ledger.js` §E):
+
+  | verb | audited via | proven in |
+  |---|---|---|
+  | bulkMoveStage (bulk stage move) | `cases` update → audit_row (mock: update-path auditRow) | §E1 |
+  | single stage move + **stage-move Undo** (`moveCaseToStage` / `undoStageMove`) | `cases` update ×2 — the move and the Undo are BOTH audited, the trail keeps both | §E2 |
+  | R76 completion overlay (moveCaseToStage + entry prompt) | `cases` update (stage/completed_at; ticked emails also stamp fee/review columns — audited) | §E3 |
+  | diary drag + Undo (`diaryMoveAppt`) | `appointments` update ×2 (move + undo) | §E4 |
+  | client merge (fast + keyword paths share the writer) | `cases`/queue-table `client_id` updates, `clients` update (survivor), `clients` delete (loser), `case_notes` insert (the merge note) | §E5 |
+  | dup-create-anyway (`#dup-client-create`) | `clients` insert | §E6 |
+  | R79 regenerate-link (`#ff-regen` / `#docs-link-regen`) | `fact_finds` update (NEW parity) / `cases` update — token diffs scrubbed on export by R79 · B1 | §E7 |
+  | reassign_holdings (book handover RPC) | per-case `cases` update auditRow inside the mock RPC (prod: the `cases` table trigger fires on the RPC's writes — service role does not bypass triggers) | §E8 |
+  | R80 · B1's own verbs (advPromoCallTask / advPromoAsk) | `case_tasks` insert / `cases` update (the stamp) — both on the trigger list; the queue row itself is the accepted gap below | §B (behavioural) |
+  | **ACCEPTED GAP** — anything touching ONLY `email_queue` (queue/cancel/retry an email; the completion overlay's queued rows) | NO audit_log row in prod: email_queue carries `log_email_event` only, not audit_row. B1's queue path stamps `cases.referral_requested_at`, which IS audited. Pinned as an invariant: `audit_log` never holds a `table_name='email_queue'` row | §E3b |
+
+  Old-suite patch (ONE, commented R80): r11_ux R11-REGRESSION's owner-dashboard height ceiling
+  2900 → 2950 — Yvonne Kerr's fixture case is one more genuine row in the Today rate feed
+  (measured 2,902). Everything else passes unchanged: the advocacy owner-gate never moved, so
+  r9_adv §9, r42 §B, r77_health §A8c and r11_ux R11-C hold as written; the Data-health and
+  Retention pins (r77_health, r25, r71_health, r75_queues, r70_retention, r64) compute their
+  counts from the DB at runtime and absorb the fixture.
 
 **R79 · A notes — "Trust the send", agent A (`tests/r79_send.js` 91).** Five items around the
 same fact: email sending is held pre-go-live, process-emails v18 is deployed, and the CTO ships

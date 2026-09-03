@@ -192,7 +192,12 @@ const noErr = (page, label) => ok(`no console errors (${label})`, !page.__err, J
          measured height is deducted so this stays a pin on the PAGE's shape, not on the note. */
       const height = await page.evaluate(() => document.documentElement.scrollHeight
         - ((document.getElementById("locale-note") || {}).offsetHeight || 0));
-      ok("R11-REGRESSION · owner dashboard height stays well under the pre-R11 ~3249px", height < 2900, height);
+      /* PATCHED R80: 2900 → 2950, once and for a named reason — the R80 fixture pass gives
+         Yvonne Kerr a back-book completed case whose rate ends inside the reminder window
+         (the B2 pricing fixture), which is ONE more genuine row in the Today rate feed
+         (measured 2,902 — 2px over the old ceiling). Still 299px clear of the pre-R11
+         3,249px shape this pin exists to catch. */
+      ok("R11-REGRESSION · owner dashboard height stays well under the pre-R11 ~3249px", height < 2950, height);
 
       const overflow1440 = await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
       ok("R11-REGRESSION · no horizontal overflow on the owner dashboard at 1440", overflow1440);

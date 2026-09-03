@@ -412,18 +412,25 @@ const closeModal = async (page) => { await page.evaluate(() => window.closeModal
   await page.waitForTimeout(SETTLE + 600);
   await page.evaluate(() => { const s = document.querySelector("#prot-filter"); if (s) { s.value = "all"; s.dispatchEvent(new Event("change")); } });
   await page.waitForTimeout(1400);
-  const bProt = await page.evaluate(() => ({
-    bulkOptions: [...document.querySelectorAll("#prot-bulk-status option, .prot-status-set option")].map((o) => o.value),
-    referredBadges: [...document.querySelectorAll("#prot-list-table .badge")].filter((b) => /REFERRED/.test(b.textContent)).length,
-    band: !!document.querySelector("#prot-list-table tr.prot-band-referred"),
-    bandText: (document.querySelector("#prot-list-table tr.prot-band-referred") || {}).textContent || "",
-    bandOrder: [...document.querySelectorAll("#prot-list-table tr.prot-band")].map((r) => (r.className.match(/prot-band-(\w+)/) || [])[1]),
-  }));
+  /* R80: RE-POINTED — R61's status bands are retired (the rewritten RPC returns the book's best
+     candidates score-desc and the table preserves that order; r80_protect.js §B pins it). What
+     `referred` must still do on this page: wear its own REFERRED badge, stay a settable status,
+     and — the new order's half — keep its RPC rank position rather than being regrouped. */
+  const bProt = await page.evaluate(async () => {
+    const domIds = [...document.querySelectorAll("#prot-list-table .prot-cb")].map((cb) => cb.dataset.id);
+    const { data: rpc } = await window.__mockDb.rpc("get_protection_pipeline", { p_scope: "all" });
+    const rpcIds = (rpc || []).map((r) => r.case_id).filter((id) => domIds.includes(id));
+    return {
+      bulkOptions: [...document.querySelectorAll("#prot-bulk-status option, .prot-status-set option")].map((o) => o.value),
+      referredBadges: [...document.querySelectorAll("#prot-list-table .badge")].filter((b) => /REFERRED/.test(b.textContent)).length,
+      bands: document.querySelectorAll("#prot-list-table tr.prot-band").length,
+      orderOk: domIds.length > 0 && domIds.every((id, i) => id === rpcIds[i]),
+    };
+  });
   ok("B21 · `referred` is a settable protection status (the shared PROT_BULK_STATUS list)", bProt.bulkOptions.includes("referred"), JSON.stringify([...new Set(bProt.bulkOptions)]));
   ok("B22 · a referred case carries the REFERRED badge on the Protection table", bProt.referredBadges >= 1, JSON.stringify(bProt));
-  ok("B23 · …under its own R61 band", bProt.band && /Referred/.test(bProt.bandText), JSON.stringify(bProt.bandText));
-  const bi = bProt.bandOrder.indexOf("referred"), qi = bProt.bandOrder.indexOf("quoted"), di = bProt.bandOrder.indexOf("discussed");
-  ok("B24 · …placed between quoted and discussed", bi >= 0 && (qi === -1 || qi < bi) && (di === -1 || bi < di), JSON.stringify(bProt.bandOrder));
+  ok("B23 · R80: no band rows — the R61 bands are retired", bProt.bands === 0, JSON.stringify(bProt.bands));
+  ok("B24 · R80: referred rows keep their RPC rank position (score order, never regrouped)", bProt.orderOk, JSON.stringify(bProt));
 
   // The client record: a referred case is NOT a protection gap.
   const bGap = await page.evaluate(async () => {

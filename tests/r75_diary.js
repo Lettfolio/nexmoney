@@ -433,14 +433,17 @@ const apptRow = (page, id) => page.evaluate(async (i) => {
     }, { id: movingId, thuD: ymdOf(thu) });
     await page.mouse.move(boxes.from.x, boxes.from.y);
     await page.mouse.down();
-    await page.mouse.move(boxes.laneX, boxes.laneTop + 360, { steps: 12 });   // 08:00 + 6h = 14:00
+    /* R80 — 12:00, not 14:00: fixtures seed todayAt(10/14/15) appointments, so on the weekday
+       matching the drop day (this broke on a THURSDAY) a 14:00 drop double-books and raises the
+       house ask-first overlay, which this drag never answers. 12:00 is fixture-free every day. */
+    await page.mouse.move(boxes.laneX, boxes.laneTop + 240, { steps: 12 });   // 08:00 + 4h = 12:00
     await page.mouse.up();
     await page.waitForTimeout(1600);
     const moved = await apptRow(page, movingId);
     const movedLocal = new Date(moved.starts_at);
     eq("C2 · the drag moved the appointment to the day it was dropped on", ymdOf(movedLocal), ymdOf(thu));
-    ok("C2b · …at the half hour it was dropped on (~14:00)",
-      /^1[34]:(00|30)$/.test(`${pad2(movedLocal.getHours())}:${pad2(movedLocal.getMinutes())}`),
+    ok("C2b · …at the half hour it was dropped on (~12:00)",
+      /^1[12]:(00|30)$/.test(`${pad2(movedLocal.getHours())}:${pad2(movedLocal.getMinutes())}`),
       `${movedLocal.getHours()}:${movedLocal.getMinutes()}`);
     eq("C2c · …and the 45-minute duration survived the move",
       Math.round((new Date(moved.ends_at) - movedLocal) / 60000), 45);

@@ -22,6 +22,11 @@ try {
           if (typeof orig === "function") {
             b[mth] = function (...args) {
               try { bustBoardCache(); } catch (_) { /* cache module not evaluated yet — nothing to bust */ }
+              /* R80 · A2 — the Protection page's session cache rides the SAME choke point: every
+                 protection_status / gi_status write is a cases update, and any other cases write
+                 (stage move, loan edit, delete) changes the score the pipeline ranks by, so the
+                 bust is eager and unconditional exactly like the board's. */
+              try { bustProtCache(); } catch (_) { /* cache module not evaluated yet — nothing to bust */ }
               return orig.apply(this, args);
             };
           }
@@ -9804,11 +9809,24 @@ async function loadRetentionCold(scope) {
      times. It belongs in the sub; a row that DOES have a last contact still
      carries its own date, because that one differs per row. */
   const silent = sorted.filter((c) => !data.last.get(c.id)).length;
+  /* R80 · B2 — THE UNREACHABLE, PRICED HERE TOO (the short form of Data health's missing-email
+     headline — same window as coldRateEdge above, same value-at-risk reading: the loan on the
+     client's completed cases maturing inside it, added up, never a fee forecast). A gone-quiet
+     client with no email is double-dark: no automated chase ever reaches them, so the call this
+     list exists for is the ONLY chase there is. One sentence on the summary, only when it
+     applies; the panel itself is untouched — the full clause, the tags and the £-rank live on
+     Data health's missing-email panel, which is where the address gets fixed. */
+  const coldNoEmail = sorted.filter((c) => !c.email);
+  const coldNoEmailLoan = coldNoEmail.reduce((s, c) => s + (c.cases || []).reduce((t, x) => {
+    const d = x && x.stage === "completed" && x.rate_end_date ? String(x.rate_end_date).slice(0, 10) : null;
+    return t + (d && d >= todayStr && d <= coldRateEdge && x.loan_amount ? Number(x.loan_amount) : 0);
+  }, 0), 0);
   const sub = $("#ret-cold-sub");
   if (sub) {
     sub.textContent = clientColdDefinition(clientContactCutoff())
       + ` Showing ${scope === "mine" ? "clients with at least one case assigned to you" : "every adviser's clients"}.`
       + (silent ? ` ${silent === sorted.length ? "Every client here has" : `${silent} of these have`} no contact of any kind on record in the last ${clientCommsWindowDays()} days — the rows say so only where there IS a last contact to name.` : "")
+      + (coldNoEmail.length ? ` ${coldNoEmail.length === 1 ? "One of these clients has" : `${coldNoEmail.length} of these clients have`} no email on file, so every automated chase skips them — the call is the only chase there is${showMoney() && coldNoEmailLoan ? ` (${fmtM(coldNoEmailLoan)} of maturing lending rides on it — the loan on their completed cases maturing inside the reminder window, not a fee forecast; Data health's missing-email list is where the address gets fixed)` : ""}.` : "")
       + " Ordered by the next rate end, soonest first: that is the deadline, and it is what makes one of these calls worth making today.";
   }
   /* The hand-off. The Clients page is where this list is actually worked (bulk task, export, the
@@ -17598,9 +17616,10 @@ $("#new-case-btn").addEventListener("click", () => openCase(null));
 /* ---------- Protection & GI page ---------- */
 let protScope = "mine", protFilter = "all";
 /* R36-A · L6 — the client search term for the protection table. Client-side over rows already in
-   hand (the RPC returns the whole book and the scope/status filters are applied here too), so a
-   keystroke costs no query. Module scope so a re-render from anywhere — setProtStatus, the bulk
-   bar, the Quoted tile — keeps the search the operator typed. */
+   hand (the scope/status filters are applied there too), so a keystroke costs no query — and
+   since R80 · A2 that is enforced by construction: the RPC result is session-cached (protCache),
+   so search/filter/scope re-renders perform ZERO network. Module scope so a re-render from
+   anywhere — setProtStatus, the bulk bar, the Quoted tile — keeps the search the operator typed. */
 let protSearch = "";
 const PROT_BADGE = {
   not_discussed: ["grey", "NOT DISCUSSED"], discussed: ["blue", "DISCUSSED"], quoted: ["amber", "QUOTED"],
@@ -17660,20 +17679,115 @@ function protStatChipHtml(c, stage) {
   }[st] || ["cs-warn", String(st).replace(/_/g, " "), ""];
   return `<div class="cs-stat ${S[0]}" id="cs-prot-warn" data-prot="${esc(st)}" title="${esc(S[2])}"><span class="cs-lbl">Protection</span><span class="cs-val">${esc(S[1])}</span></div>`;
 }
+/* ==========================================================================
+   R80 · A2 — THE PROTECTION PAGE'S DATA LAYER: one cache, two waves, zero
+   network per keystroke.
+
+   The CTO rewrote get_protection_pipeline in the live database: it now
+   returns the BEST 250 CANDIDATES BY SCORE (it used to be `limit 250` with
+   no order — an arbitrary 250 of 1,531), each row carrying the new `score`
+   column, and a companion RPC get_protection_pipeline_total(p_scope) reports
+   the uncapped candidate count. Non-admin callers are forced to
+   p_scope='mine' SERVER-SIDE, so an adviser's rows (and the £ estimate built
+   from them) are their own book by construction.
+
+   This page used to cost FOUR serial waves (RPC → propCtx → quoteStamps →
+   clawback) and re-ran the whole RPC on every search keystroke and filter
+   click. Now:
+     · WAVE 1: pipeline + total, one Promise.all.
+     · WAVE 2: property context + quote stamps + the clawback read, one
+       Promise.all (each keeps its own soft-degrade).
+     · The result is CACHED for the session. Search / filter / scope clicks
+       re-render from the cache — 0 network. The cache is busted at the R78
+       choke point (every cases/case_events write — which covers every
+       protection_status / gi_status write and every score-moving edit), and
+       protLoadSeq is the dashLoadSeq stale-guard idiom.
+
+   THE SCORE (mirrored from the live function, for the tooltip and nothing
+   else — the ORDER always comes from the RPC): stage urgency (offer 100 ·
+   exchange 95 · application 90 · DIP 80 · fact_find 70 · enquiry 50 ·
+   completed 30) + warmth (quoted +15 · referred +10 · discussed +5) +
+   loan/50000 capped at 20 + 3 for an email on file. est_commission is the
+   protection_avg_commission setting × loan band (0.7 / 1.0 / 1.3 / 1.6).
+
+   SEAM, said out loud: a protection_avg_commission settings change mid-
+   session does not bust this cache (the choke point wraps cases/case_events
+   only, per the R78 contract) — the next cases write or page reload picks it
+   up. And the call list / GI band below count WITHIN the cached best-250
+   when the cap bites; their basis lines say so. */
+let protCache = null;   // { rows, total, totalKnown, propCtx, quoteCtx, clawback }
+let protLoadSeq = 0;    // R78 · A5 stale-guard idiom — the newest load owns the page
+function bustProtCache() { protCache = null; }
+const PROT_SCORE_STAGE = { offer: 100, exchange: 95, application: 90, decision_in_principle: 80, fact_find: 70, enquiry: 50, completed: 30 };
+const PROT_SCORE_WARM = { quoted: 15, referred: 10, discussed: 5 };
+/* R80 · A2d — the rank explained in words, never a bare number. Components recomputed from the
+   row's own fields (same formula as the RPC); the score itself prefers the RPC's `score` column
+   and only falls back to the local sum on a database predating it. */
+function protScoreTitle(r, rank) {
+  const stagePts = PROT_SCORE_STAGE[r.stage] || 0;
+  const warmPts = PROT_SCORE_WARM[r.protection_status] || 0;
+  const loanPts = Math.min(Number(r.loan_amount || 0) / 50000, 20);
+  const emailPts = r.has_email ? 3 : 0;
+  const score = r.score != null && isFinite(Number(r.score)) ? Number(r.score) : stagePts + warmPts + loanPts + emailPts;
+  const r1 = (x) => Math.round(x * 10) / 10;
+  return `#${rank} — score ${r1(score)}: ${STAGE_LABEL[r.stage] || r.stage} stage ${stagePts}`
+    + (warmPts ? ` + conversation warmth ${warmPts}` : "")
+    + (loanPts ? ` + loan size ${r1(loanPts)}` : "")
+    + (emailPts ? " + email on file 3" : "")
+    + ". The pipeline ranks every candidate in the book by this score and returns the best first.";
+}
+/* The clawback read, hoisted out of renderClawbackWindow so it can ride wave 2's Promise.all and
+   be cached with everything else. Same feature-detect, same soft-degrade as before. */
+async function loadClawbackRows() {
+  if (!$("#prot-clawback-panel")) return { absent: true };
+  if ((await policyStartSupported()) === false) return { unsupported: true };
+  const { data, error } = await db.from("cases")
+    .select("id,client_id,policy_start_date,protection_commission,assigned_to,clients!client_id(first_name,last_name)")
+    .eq("protection_status", "policy_taken");
+  if (error && isMissingColumnError(error)) { POLICY_START_SUPPORTED = false; return { unsupported: true }; }
+  return { rows: Array.isArray(data) ? data : [], error: error || null };
+}
 async function loadProtectionPage() {
-  // T1-5: the RPC's "mine" scope also hands back every ownerless case, so "Mine" meant "mine plus
-  // nobody's" for all three advisers at once. Fetch the whole book and apply the scope here, where
-  // Mine / Unassigned / All are three distinct, honest sets.
-  const { data, error } = await db.rpc("get_protection_pipeline", { p_scope: "all" });
-  if (error) {
-    $("#prot-table").innerHTML = `<div class="empty">Protection pipeline unavailable — ${esc(error.message)}</div>`;
-    return;
+  const seq = ++protLoadSeq;
+  if (!protCache) {
+    /* WAVE 1 — the pipeline and its uncapped total, together. The total is feature-detected by
+       absence (42883 on a database without the companion RPC): the header then says plainly that
+       the uncapped count is unknown rather than inventing one. */
+    const [pipe, tot] = await Promise.all([
+      db.rpc("get_protection_pipeline", { p_scope: "all" }),
+      db.rpc("get_protection_pipeline_total", { p_scope: "all" }),
+    ]);
+    if (seq !== protLoadSeq) return;   // a newer load owns the page
+    if (pipe.error) {
+      $("#prot-table").innerHTML = `<div class="empty">Protection pipeline unavailable — ${esc(pipe.error.message)}</div>`;
+      return;
+    }
+    const rows = Array.isArray(pipe.data) ? pipe.data : [];
+    let total = rows.length, totalKnown = false;
+    if (!tot.error && tot.data && isFinite(Number(tot.data.total))) { total = Number(tot.data.total); totalKnown = true; }
+    /* WAVE 2 — everything else the page paints from, in parallel. Each degrades on its own. */
+    const [propCtx, quoteCtx, clawback] = await Promise.all([
+      loadPropContext(rows.map((r) => r.case_id)),
+      loadQuoteStamps(rows.filter((r) => r.protection_status === "quoted").map((r) => r.case_id)),
+      loadClawbackRows(),
+    ]);
+    if (seq !== protLoadSeq) return;
+    protCache = { rows, total, totalKnown, propCtx, quoteCtx, clawback };
   }
+  renderProtectionPage(protCache);
+}
+function renderProtectionPage(cache) {
+  const data = cache.rows;
+  const capActive = cache.totalKnown && cache.total > data.length;
+  // T1-5: the RPC's "mine" scope also hands back every ownerless case, so "Mine" meant "mine plus
+  // nobody's" for all three advisers at once. The client-side scope keeps Mine / Unassigned / All
+  // three distinct, honest sets over whatever the RPC handed this session (the whole firm for
+  // admin/owner; the adviser's own book — server-forced — for everyone else).
   /* R7-3 — the scope filter is split out from the status filter, because the "completed, no
      protection outcome" call list below answers to the SCOPE (whose book am I looking at) but not
      to the drop-down (which slice of it) — a call list that disappeared when you filtered to
      "Live cases" would be a call list nobody ever worked. */
-  const scoped = (Array.isArray(data) ? data : []).filter((r) => {
+  const scoped = data.filter((r) => {
     if (protScope === "mine" && r.owner !== (ME && ME.id)) return false;
     if (protScope === "unassigned" && r.owner != null) return false;
     return true;
@@ -17692,21 +17806,28 @@ async function loadProtectionPage() {
     return true;
   });
   const estTotal = rows.reduce((s, r) => s + Number(r.est_commission || 0), 0);
+  // R80 · A2c — the cap line's figure: every row the RPC returned this session, before the
+  // client-side scope/status/search narrowing (the line describes the PAGE's holdings, the KPI
+  // tiles describe the current view).
+  const estAllRows = data.reduce((s, r) => s + Number(r.est_commission || 0), 0);
   /* BACKEND-R4 §1 (owner's decision) — commission is money reporting, and money reporting is
-     Owner-only IN THE UI. This page was the one that never asked: the RPC is called with scope
-     "all", so "Est. commission" is the WHOLE firm's estimated protection commission and reads the
-     same for an adviser as for the Owner, and the Est. £ column is that same money case by case.
-     Same gate as Today and Reports, and the same caveat: THIS IS PRESENTATION, NOT A SECURITY
-     CONTROL. get_protection_pipeline() still returns est_commission to any staff session and the
-     cases table still carries protection_commission — anyone with the browser console can read
-     what this hides. Opportunity counts, statuses and who each case sits with are unaffected. */
+     Owner-only IN THE UI for the KPI tile and the per-row Est. £ column, exactly as before.
+     R80 · A2c (owner-approved) — the CAP LINE's £ figure is the one deliberate exception: the RPC
+     now scopes rows server-side (an adviser only ever receives their OWN candidates), so the sum
+     over the returned rows is the reader's own scope by construction — the firm's for the Owner
+     and the Administrator, the adviser's own book for an adviser. Same caveat as ever: THIS IS
+     PRESENTATION, NOT A SECURITY CONTROL — get_protection_pipeline() still returns est_commission
+     to any staff session. */
   const money = showMoney();
   const commTile = $("#prot-kpi-comm") ? $("#prot-kpi-comm").closest(".kpi") : null;
   if (commTile) commTile.classList.toggle("hidden", !money);
   const protNote = $("#prot-money-note");
   if (protNote) {
     protNote.classList.toggle("hidden", money);
-    protNote.textContent = money ? "" : "Estimated commission is shown to the Owner only — the figure on this page is the whole firm's, not yours. Opportunity counts, protection and GI status and the adviser each case sits with are all below, and the commission on an individual case is on the case itself.";
+    protNote.textContent = money ? ""
+      : isAdminOrOwner()
+        ? "The Est. commission tile and the per-case Est. £ column are shown to the Owner only. The £ figure in the line above the table (R80, owner-approved) is the whole firm's estimated commission on the pipeline's candidates."
+        : "The Est. commission tile and the per-case Est. £ column are shown to the Owner only. The £ figure in the line above the table is YOURS: the pipeline is scoped server-side to your own book for advisers, so it estimates the commission on your candidates, not the firm's.";
   }
   $("#prot-kpi-count").textContent = rows.length;
   $("#prot-kpi-comm").textContent = money ? fmtM(estTotal) : "—";
@@ -17722,40 +17843,39 @@ async function loadProtectionPage() {
      Email) start a conversation with the client. Gareth Pollard holds three rows here, one of them
      with no lender at all ("Enquiry Buy to Let"), which named none of his five buildings. Same
      chip, same rules, same batched lookup as Today's lists — the RPC carries no property column,
-     so the cases behind the rows on screen are resolved in one read. */
-  /* R61 — CURRENT FIRST, IN BANDS. The table used to render in the RPC's own order, so a page of
-     dozens read as one undifferentiated run with NOT DISCUSSED stamped down the whole status
-     column. The rows are now grouped by where the conversation actually stands — quoted (the
-     client owes US a decision: chase these first), then discussed (follow up), then not-discussed
-     (start the conversation) — with a coloured band row introducing each group. The sort is
-     stable, so within a band the RPC's recency order is untouched, and every existing hook
-     (.prot-cb data-ids, .prot-client counts, bulk select) is anchored by id/class, never index. */
-  /* R66 · M6a — `referred` sits BETWEEN quoted and discussed. Both bands above it are waiting on
-     somebody outside this firm (the client, then the protection adviser), and both are ahead of
-     "discussed", which is waiting on us. It is deliberately not top: a quote the client is sitting
-     on goes cold on a clock this firm can watch; a referral is somebody else's clock. */
-  const PROT_BAND_ORDER = { quoted: 0, referred: 1, discussed: 2, not_discussed: 3 };
-  const PROT_BAND_LABEL = {
-    quoted: ["amber", "⏳ Quoted — awaiting the client's decision"],
-    referred: ["amber", "🛡️ Referred — with the protection adviser"],
-    discussed: ["blue", "💬 Discussed — follow up"],
-    not_discussed: ["grey", "🛡️ Not discussed yet — start the conversation"],
-  };
-  const bandOf = (r) => (PROT_BAND_ORDER[r.protection_status] != null ? r.protection_status : "not_discussed");
-  rows.sort((a, b) => (PROT_BAND_ORDER[bandOf(a)]) - (PROT_BAND_ORDER[bandOf(b)]));
-  const protBandsOn = new Set(rows.map(bandOf)).size > 1;
-  const protPageCtx = await loadPropContext(rows.map((r) => r.case_id));
+     so the cases behind the rows on screen are resolved in one read (wave 2, cached). */
+  /* R80 · A2d — RANK ORDER IS THE RPC'S, ALWAYS. R61's status bands are retired: the pipeline now
+     returns the book's best candidates by SCORE, and re-grouping them by status would bury a
+     £600k offer-stage case under a page of small not-discussed rows — the exact opposite of a
+     call list you work top to bottom. Filters are stable (Array.filter preserves order), so the
+     visible order is the RPC's score-desc order in every view; the # column is the rank and its
+     tooltip (protScoreTitle) explains the score in words. The status itself is still the badge on
+     every row and the Status filter above. */
+  const protPageCtx = cache.propCtx || {};
   /* R7-3 — the quote clock. get_protection_pipeline carries the status but not when it was set, so
-     the stamps for the quoted rows on screen are read in one batched query; on a database without
-     M8 the map comes back empty and every badge reads "quote age unknown" rather than throwing. */
-  const protQuoteCtx = await loadQuoteStamps(scoped.filter((r) => r.protection_status === "quoted").map((r) => r.case_id));
+     the stamps for the quoted rows were read in wave 2 (cached); on a database without M8 the map
+     comes back empty and every badge reads "quote age unknown" rather than throwing. */
+  const protQuoteCtx = cache.quoteCtx || {};
+  /* R80 · A2c — THE CEILING, SAID OUT LOUD. The line states exactly what the page holds: the best
+     N of the book's M candidates (or all of them when the book fits), and the estimated commission
+     across the rows the RPC returned — see the money comment above for who reads whose £. */
+  const protCapTitle = "Ranked by the pipeline's score: stage urgency (Offer 100 · Exchange 95 · Application 90 · DIP 80 · Fact Find 70 · Enquiry 50 · Completed 30) + conversation warmth (quoted +15 · referred +10 · discussed +5) + loan size (loan ÷ £50,000, capped at 20) + 3 when an email address is on file.";
+  const protCapLine = `<p class="panel-sub" id="prot-cap-line" title="${esc(protCapTitle)}">${
+    cache.totalKnown
+      ? (capActive
+        ? `Showing the <strong>best ${data.length}</strong> of <strong>${cache.total.toLocaleString("en-GB")}</strong> opportunities (~<strong>${fmtM(estAllRows)}</strong> estimated commission on this page).`
+        : `<strong>${cache.total.toLocaleString("en-GB")}</strong> opportunit${cache.total === 1 ? "y" : "ies"} (~<strong>${fmtM(estAllRows)}</strong> estimated commission on this page).`)
+      : `Showing ${data.length} opportunities (~<strong>${fmtM(estAllRows)}</strong> estimated commission on this page). This database cannot report the uncapped opportunity total (get_protection_pipeline_total is missing), so whether the 250-row ceiling is biting is unknown.`
+  } <span class="cs-muted">Rows are ranked best-first by score — hover the # column for each row's arithmetic.</span></p>`;
   $("#prot-table").innerHTML = rows.length ? `
+    ${protCapLine}
     <div class="bulk-bar" id="prot-bulk-bar"${protBulkSel.size ? "" : " hidden"}>
       <span class="bulk-bar-count"><strong id="prot-bulk-n">${protBulkSel.size}</strong> selected</span>
       <select id="prot-bulk-status" class="bulk-bar-select" aria-label="Set protection status on selected cases">
         <option value="" selected>Set status →</option>
         ${PROT_BULK_STATUS.map(([k, l]) => `<option value="${k}">${l}</option>`).join("")}
       </select>
+      <button type="button" class="btn btn-sm" id="prot-bulk-intro" title="Queue one protection intro email (type protection_offer — the same send path as the row's own Email button) to every selected client that has an email address. Clients with no address are skipped and counted.">✉️ Queue protection intro</button>
       <button type="button" class="btn btn-sm" id="prot-bulk-clear">Clear</button>
     </div>
     <div class="board-scroll-wrap board-scroll-wrap--table">
@@ -17766,14 +17886,11 @@ async function loadProtectionPage() {
         const kind = (KINDS.find((x) => x[0] === r.case_kind) || [])[1] || "";
         const p = PROT_BADGE[r.protection_status] || PROT_BADGE.not_discussed;
         const gi = caseGiApplies(r.case_kind) ? (GI_BADGE[r.gi_status] || GI_BADGE.not_discussed) : null;
-        /* R61 — the band header row, at each status change (only when >1 band is present). */
-        const band = bandOf(r);
-        const bandRow = protBandsOn && (i === 0 || bandOf(rows[i - 1]) !== band)
-          ? `<tr class="prot-band prot-band-${band}"><td colspan="${money ? 9 : 8}">${PROT_BAND_LABEL[band][1]} <span class="prot-band-n">${rows.filter((x) => bandOf(x) === band).length}</span></td></tr>`
-          : "";
-        return `${bandRow}<tr class="prot-row">
+        /* R80 · A2d — the # cell IS the rank (RPC score order, filters stable); its tooltip is the
+           score spelled out, never a bare number on the row. */
+        return `<tr class="prot-row">
         ${protCb(r)}
-        <td class="prot-col-n" style="color:var(--muted);">${i + 1}</td>
+        <td class="prot-col-n" style="color:var(--muted);" title="${esc(protScoreTitle(r, i + 1))}">${i + 1}</td>
         <td class="stick-col"><span class="prot-client" onclick="openClient('${r.client_id}')">${esc(r.client_name)}</span><span class="prot-fold-info">Loan ${fmtM(r.loan_amount)}${money ? " · Est. " + fmtM(r.est_commission) : ""}</span></td>
         <td class="prot-col-case">${(() => {
           const chip = propCtxChip(protPageCtx, r.case_id, "row-prop", { noStage: true });
@@ -17804,6 +17921,12 @@ async function loadProtectionPage() {
             <option value="">GI…</option>
             ${[["quoted", "GI quoted"], ["policy_taken", "GI taken"], ["declined", "GI declined"], ["not_applicable", "GI n/a"]].map(([k, l]) => `<option value="${k}">${l}</option>`).join("")}
           </select>` : ""}
+          ${/* R80 · A2e — the working verb this call list lacked: the ONE log-call presentation
+                (openLogCallModal — same overlay Retention and the case modal open), its own
+                panelId per the both-entry-points contract. Icon-only IN THE TABLE CELL so the
+                row still fits at 1280 with no sideways scroll (R69's geometry contract, pinned
+                by r69_polish B1/B2); the call-list and GI-band rows carry the full label. */ ""}
+          <button class="btn btn-sm" onclick="protLogCall('${r.case_id}')" title="Log a call — opens the log-call overlay (note, outcome, protection tick, follow-up)" aria-label="Log a call">📞</button>
           <button class="btn btn-sm" onclick="protCallTask('${r.case_id}')">Task</button>
           ${r.has_email ? `<button class="btn btn-sm" onclick="protQueueEmail('${r.case_id}', event)">Email</button>` : '<span class="badge grey">no email</span>'}
         </td>
@@ -17848,9 +17971,12 @@ async function loadProtectionPage() {
   };
   const protStatusSel = $("#prot-bulk-status");
   if (protStatusSel) protStatusSel.onchange = () => { const v = protStatusSel.value; protStatusSel.value = ""; if (v) bulkSetProtStatus(v); };
+  const protIntroBtn = $("#prot-bulk-intro");
+  if (protIntroBtn) protIntroBtn.onclick = () => bulkQueueProtIntro();
   updateProtBulkBar();
-  renderProtCallList(scoped, protQuoteCtx);
-  renderClawbackWindow();
+  renderProtCallList(scoped, protQuoteCtx, capActive);
+  renderProtGiBand(scoped, capActive);
+  renderClawbackWindow(cache.clawback);
   syncNumHeaders("#page-protection");   // R73 · B4
 }
 /* ---------- R13 · M-23/M-25 — THE CLAWBACK WINDOW ----------
@@ -17862,21 +17988,22 @@ async function loadProtectionPage() {
    NOT scoped by the Mine / Unassigned / All buttons above, and that is deliberate: a clawback is
    money the FIRM pays back. Whose case it was does not change who is out of pocket, and an adviser
    filtering to "Mine" and seeing an empty clawback list would be reading a true statement about
-   their book as a false one about the risk. The adviser IS named on every row. */
-async function renderClawbackWindow() {
+   their book as a false one about the risk. The adviser IS named on every row.
+
+   R80 · A2a — the read moved into loadProtectionPage's wave 2 (loadClawbackRows) and is cached
+   with the pipeline; this function is now a pure renderer of that preloaded result, so a search
+   keystroke repainting the page costs it nothing. */
+function renderClawbackWindow(pre) {
   const panel = $("#prot-clawback-panel");
   if (!panel) return;
-  if ((await policyStartSupported()) === false) { panel.classList.add("hidden"); return; }
-  const { data, error } = await db.from("cases")
-    .select("id,client_id,policy_start_date,protection_commission,assigned_to,clients!client_id(first_name,last_name)")
-    .eq("protection_status", "policy_taken");
-  if (error) {
-    if (isMissingColumnError(error)) { POLICY_START_SUPPORTED = false; panel.classList.add("hidden"); return; }
+  pre = pre || {};
+  if (pre.absent || pre.unsupported) { panel.classList.add("hidden"); return; }
+  if (pre.error) {
     panel.classList.remove("hidden");
-    $("#prot-clawback-list").innerHTML = `<div class="empty">Clawback window unavailable just now — ${esc(error.message)}</div>`;
+    $("#prot-clawback-list").innerHTML = `<div class="empty">Clawback window unavailable just now — ${esc(pre.error.message)}</div>`;
     return;
   }
-  const rows = Array.isArray(data) ? data : [];
+  const rows = Array.isArray(pre.rows) ? pre.rows : [];
   if (rows.length) notePolicyStartFromStarRow(rows[0]);
   panel.classList.remove("hidden");
   const money = showMoney();
@@ -17926,10 +18053,10 @@ async function renderClawbackWindow() {
    the Owner reads the firm's. The rows themselves are counts and statuses, not money, so this
    panel is NOT Owner-gated: it is a work list, and withholding an adviser's own follow-up calls
    would be the opposite of the point. */
-function renderProtCallList(scoped, quoteCtx) {
+function renderProtCallList(scoped, quoteCtx, capActive) {
   const panel = $("#prot-calllist-panel");
   if (!panel) return;
-  /* get_protection_pipeline already excludes not_proceeding and already returns ONLY the three
+  /* get_protection_pipeline already excludes not_proceeding and already returns ONLY the four
      open statuses, so within its output `!live` is exactly "completed, still open". */
   const list = (scoped || []).filter((r) => !r.live);
   panel.classList.remove("hidden");
@@ -17943,6 +18070,10 @@ function renderProtCallList(scoped, quoteCtx) {
   $("#prot-calllist-basis").innerHTML =
     `Completed cases whose protection conversation is still open — ${byStatus.not_discussed} never discussed, ${byStatus.discussed} discussed, ${byStatus.quoted} quoted and waiting, ${byStatus.referred} referred to a protection adviser. `
     + `A client who has just completed is the warmest call the firm has. Scoped to <strong>${esc(scopeWord)}</strong> (the buttons above); the status drop-down does not narrow this list. `
+    /* R80 · A2c — cap honesty: when the 250-row ceiling is biting, this list is counted WITHIN the
+       best-250 the page holds, not over the whole book, and pretending otherwise would be the old
+       arbitrary-250 lie in a smaller font. */
+    + (capActive ? `<strong>Counted within the best-250 pipeline this page holds</strong> — the uncapped candidate total is in the line above the table. ` : "")
     + `<span class="money-basis">(completed · protection_status not policy_taken and not declined)</span>`;
   $("#prot-calllist").innerHTML = list.length ? list.slice(0, 25).map((r) => {
     const p = PROT_BADGE[r.protection_status] || PROT_BADGE.not_discussed;
@@ -17953,11 +18084,131 @@ function renderProtCallList(scoped, quoteCtx) {
       </div>
       <span class="badge ${p[0]}">${p[1]}</span>
       ${r.protection_status === "quoted" ? quoteAgeBadge(((quoteCtx || {})[r.case_id] || {}).protection_quoted_at) : ""}
+      <button class="btn btn-sm" onclick="protLogCall('${r.case_id}')">📞 Log call</button>
       <button class="btn btn-sm" onclick="protCallTask('${r.case_id}')">Task</button>
       ${r.has_email ? `<button class="btn btn-sm" onclick="protQueueEmail('${r.case_id}', event)">Email</button>` : '<span class="badge grey">no email</span>'}
     </div>`;
   }).join("") + (list.length > 25 ? `<div class="empty">…and ${list.length - 25} more — filter to "Completed book" above to work the whole list.</div>` : "")
     : '<div class="empty">Every completed case in this scope has a protection outcome recorded — a policy or a decline. Nothing to chase. 🛡️</div>';
+}
+/* ==========================================================================
+   R80 · A3 — THE GI CALL LIST. gi_status has been written on every case since
+   its column landed and NO surface ever read it as a work list. Same
+   conversation family as protection, so it lives on this page: a compact
+   second band of the cases where the GI (buildings & contents) conversation
+   has never been started — gi_status still `not_discussed` on a case kind GI
+   applies to (caseGiApplies: purchase / first-time buyer / buy-to-let /
+   remortgage; a product transfer keeps its existing cover, mirroring the
+   protection predicate's "open, not closed-out" style — quoted/taken/
+   declined/not_applicable are all CLOSED here because each records that the
+   conversation happened).
+
+   ZERO extra network, by construction: the pipeline RPC already returns
+   gi_status on every row, so this band is derived from the SAME cached rows,
+   in the SAME score order (filter is stable), with the same Log-call verb.
+   Scope buttons apply exactly as the protection call list's do; the status
+   drop-down does not narrow it. Honest empty state when the book is clean,
+   and the same cap-honesty sentence when the 250 ceiling is biting. */
+function renderProtGiBand(scoped, capActive) {
+  const panel = $("#prot-gi-panel");
+  if (!panel) return;
+  const list = (scoped || []).filter((r) => caseGiApplies(r.case_kind) && (r.gi_status || "not_discussed") === "not_discussed");
+  panel.classList.remove("hidden");
+  const scopeWord = protScope === "mine" ? "your cases" : protScope === "unassigned" ? "unassigned cases" : "every adviser's cases";
+  const countEl = $("#prot-gi-count");
+  if (countEl) { countEl.textContent = list.length; countEl.className = "badge " + (list.length ? "amber" : "green"); }
+  $("#prot-gi-basis").innerHTML =
+    `Cases where the GI conversation has never been started, in the pipeline's own score order (best first). `
+    + `Derived from the same rows as the table above — this band costs no extra reads. Scoped to <strong>${esc(scopeWord)}</strong> (the buttons above); the status drop-down does not narrow this list. `
+    + (capActive ? `<strong>Counted within the best-250 pipeline this page holds</strong> — the uncapped candidate total is in the line above the table. ` : "")
+    + `<span class="money-basis">(gi_status not_discussed · case kind GI applies to — a product transfer keeps its existing cover)</span>`;
+  $("#prot-gi-list").innerHTML = list.length ? list.slice(0, 25).map((r) => `<div class="row-item">
+      <div class="row-main">
+        <div class="t" onclick="openCase('${r.case_id}')">${esc(r.client_name)}</div>
+        <div class="s">${stageBadge(r.stage)} ${lenderIcon(r.lender)}${esc(r.lender || "")} · loan ${fmtM(r.loan_amount)}${r.owner ? " · " + esc(staffName(r.owner)) : " · unassigned"}</div>
+      </div>
+      <span class="badge grey" title="${TIP_GI}">GI not discussed</span>
+      <button class="btn btn-sm" onclick="protLogCall('${r.case_id}')">📞 Log call</button>
+      <button class="btn btn-sm" onclick="protCallTask('${r.case_id}')">Task</button>
+      ${/* R80 · A3 — the quick-set that CLOSES a row out of this band: the same setGiStatus
+           write (db.from update → audit trigger + the choke-point cache bust) and the same
+           option list as the table's own .prot-gi-set, so the two can never drift. */ ""}
+      <select class="prot-status-set prot-gi-set" onchange="setGiStatus('${r.case_id}', this.value)" title="Set general-insurance status" aria-label="Set general-insurance status">
+        <option value="">GI…</option>
+        ${[["quoted", "GI quoted"], ["policy_taken", "GI taken"], ["declined", "GI declined"], ["not_applicable", "GI n/a"]].map(([k, l]) => `<option value="${k}">${l}</option>`).join("")}
+      </select>
+      <button class="btn btn-sm" onclick="openCase('${r.case_id}')">Open</button>
+    </div>`).join("") + (list.length > 25 ? `<div class="empty">…and ${list.length - 25} more below the fold of this band — work the top of the list first; it is ranked.</div>` : "")
+    : '<div class="empty">Every GI-applicable case in this scope has its GI conversation recorded — quoted, taken, declined or n/a. Nothing to start. 🏠</div>';
+}
+/* R80 · A2e — the Protection page's own entry point into the ONE log-call presentation
+   (openLogCallModal — the same overlay Retention rows, the case modal and the appointment toast
+   open; R75 · A4's both-entry-points contract). Its panelId is its own contract, like theirs.
+   A saved call that records the protection conversation writes cases.protection_status through
+   the ordinary choke point, which busts this page's cache — so the reload below re-ranks. */
+window.protLogCall = async function (caseId) {
+  const { data: c, error } = await db.from("cases")
+    .select("id,client_id,assigned_to,protection_status,stage,clients!client_id(first_name,last_name)")
+    .eq("id", caseId).single();
+  if (error || !c) return toast("Couldn't open that case — " + ((error && error.message) || "it may have been deleted"));
+  const who = [c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ") || "this client";
+  const saved = await openLogCallModal(c, { panelId: "prot-logcall-panel", whoName: who });
+  if (saved && !$("#page-protection").classList.contains("hidden")) loadProtectionPage();
+  return saved;
+};
+/* ==========================================================================
+   R80 · A2f — BULK "QUEUE PROTECTION INTRO TO N". The pipeline bulk-bar
+   pattern (tick rows → one named action), through the EXISTING
+   protection_offer queue path — the same email type, the same insert shape
+   and the same scoped runAutomation the row's own Email button (protQueueEmail)
+   uses; no new send path is invented here. The consent is a house overlay
+   (openOverlay — Escape/backdrop cancel) that:
+     · carries R79's held honesty, in the single-send confirm's own words,
+       while settings.email_hold is on;
+     · SKIPS clients with no email address and says how many and why BEFORE
+       anything is queued (an email cannot be queued to nowhere);
+     · names the count it will actually queue on the button itself.
+   The client emails are re-read here (chunked — the feed-sized .in() rule)
+   rather than trusted from the RPC's has_email flag, so an address added
+   since the cache was cut still gets its email and a deleted one still gets
+   skipped. */
+async function bulkQueueProtIntro() {
+  const ids = [...protBulkSel];
+  if (!ids.length) return;
+  const { data, error } = await inChunks(ids, (sl) => db.from("cases")
+    .select("id,client_id,clients!client_id(email,first_name,last_name)").in("id", sl));
+  if (error) return dbFail("bulkQueueProtIntro", error);
+  const rows = (data || []).filter((r) => r && r.client_id);
+  const withEmail = rows.filter((r) => r.clients && r.clients.email);
+  const skipped = rows.length - withEmail.length;
+  if (!withEmail.length) return toast(`Nothing to queue — none of the ${rows.length} selected case${rows.length === 1 ? "'s clients has" : "s' clients have"} an email address on file. Add addresses on the client records first.`);
+  const held = emailHoldOn();
+  const goAhead = await openOverlay(`
+    <div id="prot-bulk-intro-box">
+      <h3>Queue protection intro to ${withEmail.length} client${withEmail.length === 1 ? "" : "s"}?</h3>
+      <p class="panel-sub">Ensure the template has principal approval. One protection intro email (type <strong>protection_offer</strong> — the same send path as the row's own Email button) is queued per client.</p>
+      ${held ? `<p class="dq-notice" id="prot-bulk-intro-held">Sending is currently ON HOLD (Settings › Email sending) — this will queue and wait; nothing is sent now.</p>` : ""}
+      ${skipped ? `<p class="dq-notice bad" id="prot-bulk-intro-skips"><strong>${skipped} of the ${rows.length} selected case${rows.length === 1 ? " is" : "s are"} skipped</strong> — ${skipped === 1 ? "its client has" : "their clients have"} no email address on file, and an email cannot be queued to nowhere. Add an address on the client record to include them.</p>` : ""}
+      <div class="modal-actions"><div></div><div class="right">
+        <button type="button" class="btn" id="prot-bulk-intro-cancel">Cancel</button>
+        <button type="button" class="btn btn-primary" id="prot-bulk-intro-go">Queue ${withEmail.length} email${withEmail.length === 1 ? "" : "s"}</button>
+      </div></div>
+    </div>`, (finish, box) => {
+    box.querySelector("#prot-bulk-intro-cancel").onclick = () => finish(null);
+    box.querySelector("#prot-bulk-intro-go").onclick = () => { box.querySelector("#prot-bulk-intro-go").disabled = true; finish(true); };
+  });
+  if (!goAhead) return;
+  const { data: qRows, error: qErr } = await db.from("email_queue")
+    .insert(withEmail.map((r) => ({ case_id: r.id, client_id: r.client_id, email_type: "protection_offer", to_email: r.clients.email })))
+    .select("id");
+  if (qErr) return dbFail("bulkQueueProtIntro", qErr);
+  const qIds = (qRows || []).map((q) => q.id).filter(Boolean);
+  // R5-1's rule, at bulk scale: the run is scoped to EXACTLY the rows just inserted.
+  const res = qIds.length ? await runAutomation(true, { queueIds: qIds }) : null;
+  const skipNote = skipped ? `${skipped} selected case${skipped === 1 ? " was" : "s were"} skipped — no client email address on file.` : "";
+  sendResultToast(res, `Protection intro ${heldWord()} for ${withEmail.length} client${withEmail.length === 1 ? "" : "s"} — check Emails tab.${skipNote ? " " + skipNote : ""}`, { heldNote: skipNote });
+  protBulkSel.clear();
+  loadProtectionPage();
 }
 // S3c — mirror the current protection selection into its action bar (count + select-all state).
 function updateProtBulkBar() {
@@ -18216,9 +18467,19 @@ window.protQueueEmail = async function (caseId, ev) {
     const { data: cl } = await db.from("clients").select("email").eq("id", c.client_id).single();
     if (!cl?.email) return toast("This client has no email address — add one first.");
     /* R79 · A4 — the protection intro has its own confirm (it never passes through queueEmail),
-       so it carries the same held line, word for word. */
-    if (!confirm("Queue the protection intro email? Ensure the template has principal approval."
-      + (emailHoldOn() ? "\n\nSending is currently ON HOLD (Settings › Email sending) — this will queue and wait; nothing is sent now." : ""))) return;
+       so it carries the same held line, word for word.
+       R80 · A1c — native confirm() → the house overlay (the R76 natives-go-house rule:
+       confirmDestructive, non-danger since queueing destroys nothing; ids
+       #ovl-confirm-body / #ovl-confirm-ok / #ovl-confirm-cancel, Escape/backdrop = no, and it
+       can never pop behind a toast). The promo-approval wording is kept verbatim; the held
+       sentence is R79's, verbatim, only while the hold is on. r79_send §D5 re-pointed. */
+    const goAhead = await confirmDestructive({
+      title: "Queue the protection intro email?",
+      body: esc("Ensure the template has principal approval.")
+        + (emailHoldOn() ? `<p class="dq-notice" style="margin:8px 0 0;">${esc("Sending is currently ON HOLD (Settings › Email sending) — this will queue and wait; nothing is sent now.")}</p>` : ""),
+      okLabel: "Queue it", cancelLabel: "Cancel", danger: false,
+    });
+    if (!goAhead) return;
     const { data: qRow, error } = await db.from("email_queue")
       .insert({ case_id: caseId, client_id: c.client_id, email_type: "protection_offer", to_email: cl.email })
       .select("id").single();
@@ -21670,6 +21931,12 @@ async function queueEmail(caseId, clientId, type, c, ev, opts = {}) {
       }
     }
     if (type === "review_request") await db.from("cases").update({ review_requested_at: new Date().toISOString() }).eq("id", caseId);
+    /* R80 · B1 — the referral request stamps its corroborating date, exactly the shape the
+       review request has stamped since R9. BEST-EFFORT and deliberately unchecked: the
+       email_queue row above is the truth the promoters list reads (any status except
+       cancelled); this column only corroborates it, so a database without the column must
+       not make a queued email look like a failure. */
+    if (type === "referral_request") await db.from("cases").update({ referral_requested_at: new Date().toISOString() }).eq("id", caseId);
     /* The fee request was the one type that sent and left no trace on the case: no fee_status, no
        fee_requested_at. The case went on reading "Not requested", it stayed in the not-requested
        half of the fee reporting, and nothing recorded that the client had been asked — so a second
@@ -23326,6 +23593,11 @@ const AUDIT_TABLE_LABEL = {
   case_tasks: "Task", case_notes: "Note", appointments: "Appointment", introducers: "Introducer",
   // G1N-5 — snoozing a compliance alert is a supervised act and now writes an audit row (M3).
   watch_alerts: "Watchtower alert", duplicate_dismissals: "Not-a-duplicate mark",
+  /* R80 · B3 — the three tables production's audit_row trigger covers that this map never
+     learned to name (fact_finds, leads and sms_queue are on the CTO-verified trigger list;
+     the mock now mirrors them — see AUDITED there). Labels only; nothing about what is
+     audited changes here. */
+  fact_finds: "Fact-find", leads: "Lead", sms_queue: "Text message",
 };
 const auditTableLabel = (t) => AUDIT_TABLE_LABEL[t] || String(t || "record").replace(/_/g, " ");
 let chState = { group: CH_ALL, actor: CH_ALL, from: "", to: "", page: 0 };
@@ -32208,6 +32480,10 @@ if (typeof window !== "undefined" && window.supabase && window.supabase.__isMock
   /* R78 · A5 — sandbox hook so a suite can force the next board load to refetch (r24 §D reads
      the SELECT string off a fresh load; the cache would otherwise serve it silently). */
   window.__bustBoardCache = function () { bustBoardCache(); };
+  /* R80 · A2 — same idea for the Protection page's session cache: a suite that seeds candidates
+     internally (window.__mock.seedProtectionBook pushes rows without a db.from write, so the
+     choke point never sees it) can force the next Protection load to refetch. */
+  window.__bustProtCache = function () { bustProtCache(); };
   /* R68 · M7 — re-read the settings table into `settings`. Production re-reads it at sign-in and
      after a save, which is the only time it changes; a harness that has just written a row (an
      adviser fee target, the email hold) needs the same refresh WITHOUT owning the Save button
@@ -32305,7 +32581,7 @@ async function loadReports() {
   const mv = (picker && picker.value) || thisMonth;
   if (picker && !picker.value) picker.value = mv;
   reportsCapHits = []; // R5-F4 — one verdict per render, never carried over from the last one
-  const [{ data: cases }, { data: intros }, repRes, extraCols, lostAt, propCols, leadRes, refCols, advDates, detrTasks, solCols, callPack] = await Promise.all([
+  const [{ data: cases }, { data: intros }, repRes, extraCols, lostAt, propCols, leadRes, refCols, advDates, detrTasks, solCols, callPack, advRefQ, advOptoutRes, advEmailRes] = await Promise.all([
     // G1N-4 — same order and same explicit ceiling as loadCaseExtraColumns, so the two selects
     // that are merged by id below can never walk different subsets of the table.
     /* R7 — widened by five BASE columns (client_id, lender, rate_end_date, rate_end_estimated)
@@ -32325,7 +32601,11 @@ async function loadReports() {
        and velocity. It is an R13 date column, present in prod (like submitted_at beside it), so it
        cannot 42703 this select on the current database; on an older one it simply comes back
        undefined and the MI conversion/velocity fall back to the milestones that ARE populated. */
-    readAll(db.from("cases").select("id,client_id,stage,case_kind,lender,loan_amount,broker_fee,proc_fee,sols_fee,submitted_at,offer_issued_date,fee_status,fee_paid_at,completed_at,created_at,updated_at,rate_percent,rate_end_date,rate_end_estimated,lead_source,introducer_id,protection_status,retention_source_case_id,assigned_to,nps_score,review_requested_at,expected_completion_date,clients!client_id(first_name,last_name)")
+    /* R80 · B1 — plus `referral_requested_at`, half of the "has this client ever been asked for a
+       referral" answer the promoters block needs (the other half is the email_queue read added to
+       this Promise.all below). A real production column — it stamps when a referral request queues
+       (CTO-verified, like review_requested_at beside it) — so it cannot 42703 this select. */
+    readAll(db.from("cases").select("id,client_id,stage,case_kind,lender,loan_amount,broker_fee,proc_fee,sols_fee,submitted_at,offer_issued_date,fee_status,fee_paid_at,completed_at,created_at,updated_at,rate_percent,rate_end_date,rate_end_estimated,lead_source,introducer_id,protection_status,retention_source_case_id,assigned_to,nps_score,review_requested_at,referral_requested_at,expected_completion_date,clients!client_id(first_name,last_name)")
       .order("id"), { cap: REPORTS_ROW_CAP }),
     db.from("introducers").select("id,name"),
     db.rpc("get_reports"),
@@ -32355,6 +32635,22 @@ async function loadReports() {
     loadSolicitorColumn(REPORTS_ROW_CAP),
     /* R12b · W-15c — and the call-pack columns, same discipline again. */
     loadCaseCallPack(),
+    /* R80 · B1 — the three small reads the "Promoters never asked" list needs. The email_queue
+       read is half of the membership truth: a client with any non-cancelled referral_request row
+       has been asked, whatever became of the send (the other half — referral_requested_at — rides
+       on the widened cases select above, because a stamp with no queue row behind it still means
+       somebody asked once). The ERROR is kept, not swallowed: an unreadable queue means "who has
+       been asked is unknown", and a list rendered over that unknown would over-ask — the block
+       says so instead of guessing. */
+    readAll(db.from("email_queue").select("client_id,status").eq("email_type", "referral_request").neq("status", "cancelled").order("id")),
+    /* R80 · B1 — who has opted out (R79's comms_optout). Soft: on a database without the
+       column no row is flagged, and v19's send-time opt-out gate (plus advPromoAsk's own
+       pre-flight) remains the backstop for the four marketing-adjacent types. */
+    db.from("clients").select("id").eq("comms_optout", true).then((r) => r).catch(() => ({ data: null, error: true })),
+    /* R80 · B1 — who HAS an email address, so the queue verb can be withheld from a row it
+       could only fail on (queueEmail refuses a no-email client anyway; hiding the button is the
+       honest rendering of that refusal). Base-schema columns only — this cannot 42703. */
+    readAll(db.from("clients").select("id,email").order("id")),
   ]);
   const all = cases || [];
   noteRowCap("cases", cases);
@@ -32382,7 +32678,16 @@ async function loadReports() {
   /* R9-2 — the advocacy dashboard, from those same rows plus its three feature-detected extras.
      Owner-gated inside renderAdvocacy, like every panel above it. */
   if (refCols) all.forEach((c) => { if (refCols[c.id] !== undefined) c.referrer_client_id = refCols[c.id]; });
-  renderAdvocacy(all, { referrers: refCols, scoreDates: advDates, detractorTasks: detrTasks });
+  /* R80 · B1 — the promoters-list context rides in beside the R9 extras. `referralAsked` is
+     null when the queue read failed (the block refuses to render a list that would over-ask);
+     `optoutIds` is null when comms_optout is unreadable (no row is flagged); `clientEmails` is
+     null when the clients read failed (no queue verb is withheld — queueEmail still refuses). */
+  renderAdvocacy(all, {
+    referrers: refCols, scoreDates: advDates, detractorTasks: detrTasks,
+    referralAsked: (advRefQ && !advRefQ.error) ? new Set((advRefQ.data || []).map((r) => r.client_id).filter(Boolean)) : null,
+    optoutIds: (advOptoutRes && !advOptoutRes.error && Array.isArray(advOptoutRes.data)) ? new Set(advOptoutRes.data.map((r) => r.id)) : null,
+    clientEmails: (advEmailRes && !advEmailRes.error && Array.isArray(advEmailRes.data)) ? new Map(advEmailRes.data.map((r) => [r.id, r.email || null])) : null,
+  });
   /* R9-6 — and the conveyancer-speed panel, from the same rows plus m10's solicitor column.
      Owner-gated inside renderConveyancerSpeed, like every panel above it. */
   if (solCols) all.forEach((c) => { if (solCols[c.id] !== undefined) c.solicitor_firm = solCols[c.id]; });
@@ -33150,13 +33455,160 @@ function advMiniSeries(months, counts) {
     </div>`;
   }).join("") + `</div>`;
 }
+/* ==========================================================================
+   R80 · B1 — "PROMOTERS NEVER ASKED" — mine the book for the referral list.
+
+   A client who scored us 9 or 10 said, in a number, that they would recommend
+   us — and the firm never asked them to. This block lists exactly those
+   people: a case carrying a review score ≥ 9 (caseReviewScore — the ONE
+   reading of a score this panel uses) where the client has NEVER had a
+   referral request queued.
+
+   "NEVER ASKED" IS READ FROM BOTH RECORDS, AND EITHER ONE DISQUALIFIES:
+     · `cases.referral_requested_at` on ANY of the client's cases — the stamp
+       queueEmail leaves (this round taught it to; production stamps it when a
+       referral request queues), and
+     · any email_queue `referral_request` row for the client in any status
+       except cancelled — queued, held, sent or failed, the firm has made the
+       ask (or is about to).
+   When the queue read itself failed the list is NOT rendered — a list built
+   over "who has been asked is unknown" would over-ask — and the block says so.
+
+   OPT-OUT MEANS PHONE, NOT SILENCE. A promoter who unsubscribed from
+   relationship emails said no to the EMAIL, not to the relationship: their row
+   STAYS on the list, flagged, with the call verb only — the queue verb is
+   withheld because the send is certain to be cancelled (v19's opt-out gate),
+   and the panel says an opted-out promoter can still be asked by phone. A
+   promoter with no email address on file gets the same treatment for the same
+   mechanical reason.
+
+   The panel's owner-gate is untouched: Advocacy is Owner-only and this block
+   renders inside it, sixth after the five R9 blocks.
+
+   THE VERBS ARE EXISTING PATHS wearing this block's ids:
+     · ✆ Call task → advPromoCallTask → one case_tasks insert, assigned to the
+       case's own adviser, due TOMORROW rolled off a weekend (weekendRollYmd —
+       protCallTask's exact shape).
+     · ✉ Queue referral request → advPromoAsk → queueEmail(...,
+       "referral_request") — the ONE email writer, R79 held honesty and all;
+       nothing new composes or sends anything.
+     · Open case → openCase, as everywhere.
+   ========================================================================== */
+function advPromoterModel(all, ctx) {
+  const askedQ = ctx && ctx.referralAsked;   // Set of client_ids | null = queue unreadable
+  const optout = ctx && ctx.optoutIds;       // Set of client_ids | null = column unreadable
+  const emails = ctx && ctx.clientEmails;    // Map client_id → email|null | null = unreadable
+  const stamped = new Set();                 // referral_requested_at on ANY case disqualifies
+  (all || []).forEach((c) => { if (c.referral_requested_at && c.client_id) stamped.add(c.client_id); });
+  const byClient = new Map();                // one row per PERSON — their newest scored ≥9 case
+  (all || []).forEach((c) => {
+    const s = caseReviewScore(c);
+    if (s == null || s < 9 || !c.client_id) return;
+    const cur = byClient.get(c.client_id);
+    if (!cur || String(c.completed_at || "") > String(cur.completed_at || "")) byClient.set(c.client_id, c);
+  });
+  const rows = [...byClient.values()];
+  const isAsked = (id) => stamped.has(id) || (askedQ && askedQ.has(id));
+  const askedN = rows.filter((c) => isAsked(c.client_id)).length;
+  const waiting = rows
+    .filter((c) => !isAsked(c.client_id))
+    .sort((a, b) => caseReviewScore(b) - caseReviewScore(a)
+      || String(b.completed_at || "").localeCompare(String(a.completed_at || ""))
+      || String(a.id).localeCompare(String(b.id)))
+    .map((c) => ({
+      c,
+      optedOut: !!(optout && optout.has(c.client_id)),
+      noEmail: !!(emails && !emails.get(c.client_id)),
+    }));
+  return { waiting, askedN, askedKnown: !!askedQ, phoneOnlyN: waiting.filter((w) => w.optedOut || w.noEmail).length };
+}
+function advPromotersBlockHtml(all, ctx) {
+  const m = advPromoterModel(all, ctx);
+  let body;
+  if (!m.askedKnown) {
+    /* HONESTY over helpfulness: without the queue, "never asked" cannot be computed. */
+    body = `<div class="adv-empty" id="adv-promoters-empty">The email queue could not be read just now, so who has already been asked is unknown — a list shown anyway would ask some of these clients twice. Reload to try again.</div>`;
+  } else if (!m.waiting.length) {
+    body = `<div class="adv-empty" id="adv-promoters-empty">No promoters are waiting to be asked — ${m.askedN ? "every client who scored 9 or 10 has been asked already" : "no case carries a score of 9 or more yet"}.</div>`;
+  } else {
+    body = `<div id="adv-promoters-list">` + m.waiting.slice(0, 50).map(({ c, optedOut, noEmail }) => {
+      const name = [c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ").trim() || "(no name)";
+      const s = caseReviewScore(c);
+      /* The queue verb is withheld where the send could only be refused: v19 cancels every
+         relationship email to an opted-out client, and queueEmail refuses a no-email one. The
+         flag says WHY in the row, so a missing button never reads as a rendering fault. */
+      const flag = optedOut
+        ? ` <span class="badge grey adv-promo-optout" title="This client opted out of relationship emails (a referral request is one of them), so the queue verb is withheld — the send would be cancelled. They said no to the email, not to the relationship: ask on the phone.">opted out — ask by phone</span>`
+        : noEmail
+          ? ` <span class="badge grey adv-promo-noemail" title="No email address on file, so there is nothing to queue a referral request to — the call is the ask. (Data health's missing-email list is where the address gets fixed.)">no email — ask by phone</span>`
+          : "";
+      return `<div class="row-item adv-promo-row" data-client="${esc(c.client_id)}" data-case="${esc(c.id)}">
+        <div class="row-main">
+          <div class="t"><button type="button" class="linkish" onclick="openClient('${jsArg(c.client_id)}')" title="Open this client's record">${esc(name)}</button>${flag}</div>
+          <div class="s"><span class="adv-promo-score">${s}/10</span>${c.completed_at ? ` · completed ${fmtD(c.completed_at)}` : " · not completed"}${c.lender ? ` · ${esc(c.lender)}` : ""}${c.assigned_to ? ` · ${esc(staffName(c.assigned_to))}` : ""}</div>
+          <div class="ret-row-acts adv-promo-acts">
+            <button type="button" class="btn btn-sm ret-row-chip adv-promo-call" onclick="event.stopPropagation();advPromoCallTask('${jsArg(c.id)}')" title="Add a call task on this case — assigned to the case's adviser, due tomorrow (a weekend landing rolls to Monday). A thank-you call is how most referral asks actually happen.">✆ Call task</button>
+            ${optedOut || noEmail ? "" : `<button type="button" class="btn btn-sm ret-row-chip adv-promo-ask" onclick="event.stopPropagation();advPromoAsk('${jsArg(c.id)}', event)" title="Queue the house referral-request email for this client — the same writer as every other send, so the hold, the opt-out rule and the unsubscribe footer all apply.">✉ Queue referral request</button>`}
+          </div>
+        </div>
+        <button class="btn btn-sm" onclick="openCase('${jsArg(c.id)}')">Open case</button>
+      </div>`;
+    }).join("") + (m.waiting.length > 50 ? `<div class="empty">…and ${m.waiting.length - 50} more — queue or call the ones above first.</div>` : "") + `</div>`;
+  }
+  const noteBits = [];
+  if (m.askedKnown && m.askedN) noteBits.push(`<span id="adv-promoters-asked">${m.askedN} promoter${m.askedN === 1 ? " is" : "s are"} not listed — a referral request has already been queued or sent for ${m.askedN === 1 ? "them" : "each of them"}.</span>`);
+  if (m.phoneOnlyN) noteBits.push(`<span id="adv-promoters-phone">${m.phoneOnlyN === 1 ? "One flagged row carries" : `${m.phoneOnlyN} flagged rows carry`} the call verb only — an opted-out promoter said no to relationship email, not to being asked, and can still be ASKED BY PHONE (a no-email promoter can only be).</span>`);
+  return `<div class="adv-block" id="adv-block-promoters"><h4>Promoters never asked</h4>
+    <p class="adv-basis" id="adv-promoters-basis">Clients whose case carries a review score of <strong>9 or 10</strong> and for whom <strong>no referral request has ever been queued</strong> — no stamp on any of their cases, and no email_queue row in any status except cancelled. Ranked best score first, newest completion first.</p>
+    ${body}
+    ${noteBits.length ? `<p class="adv-basis" id="adv-promoters-excl">${noteBits.join(" ")}</p>` : ""}</div>`;
+}
+/* R80 · B1 — the call verb: ONE case_tasks insert, protCallTask's exact shape (assigned to the
+   case's own adviser, due tomorrow, a weekend landing rolled to Monday by weekendRollYmd, dbFail
+   on the error). Nothing here emails anybody — the task IS the phone ask. */
+window.advPromoCallTask = async function (caseId) {
+  const { data: c, error } = await db.from("cases")
+    .select("id,assigned_to,clients!client_id(first_name,last_name)")
+    .eq("id", caseId).single();
+  if (error || !c) return toast("Couldn't open that case — " + ((error && error.message) || "it may have been deleted"));
+  const who = [c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ").trim() || "client";
+  const roll = weekendRollYmd(localDateStr(Date.now() + 86400000));
+  const { error: terr } = await db.from("case_tasks").insert({
+    case_id: caseId, title: `Call ${who} — thank them and ask for a referral`, due_date: roll.date,
+    created_by: (ME && ME.id) || null, assigned_to: c.assigned_to || (ME && ME.id) || null,
+  });
+  if (terr) return dbFail("advPromoCallTask", terr);
+  toast(roll.rolled ? "Call task added for Monday — skipped the weekend" : "Call task added for tomorrow");
+};
+/* R80 · B1 — queue the referral request through the ONE email writer. queueEmail supplies the
+   confirm (with R79's holdLine while sending is held), the insert, the scoped send,
+   sendResultToast's held wording and the referral_requested_at stamp; this function adds only the
+   opt-out pre-flight — the same judgement as the R13 suppression pre-flight: a send that is
+   CERTAIN to be cancelled should be refused with the reason, not queued and reported as a skip.
+   v19's send-time gate stays the backstop for every other route. */
+window.advPromoAsk = async function (caseId, ev) {
+  const { data: c, error } = await db.from("cases")
+    .select("id,client_id,assigned_to,stage,lender,broker_fee,fee_status,rate_end_date,completed_at,clients!client_id(first_name,last_name)")
+    .eq("id", caseId).single();
+  if (error || !c) return toast("Couldn't open that case — " + ((error && error.message) || "it may have been deleted"));
+  const { data: optRow } = await db.from("clients").select("comms_optout").eq("id", c.client_id).single();
+  if (optRow && optRow.comms_optout === true) {
+    return toast("This client has opted out of relationship emails — a referral request would be cancelled at send, so nothing was queued. Ask them on the phone instead.");
+  }
+  const res = await queueEmail(caseId, c.client_id, "referral_request", c, ev);
+  if (res === true && currentPage === "reports") loadReports();   // the row has earned its exit
+  return res;
+};
 function renderAdvocacy(all, ctx) {
   const panel = $("#report-advocacy-panel");
   if (!panel) return;
   /* The gate, both halves. isOwner() decides whether the panel exists at all; showMoney() decides
      the money column inside it. They are the same person today — that is the point of writing
-     both, so a future role change cannot silently widen one without the other. */
+     both, so a future role change cannot silently widen one without the other. R80 · B1 — the
+     promoters block renders INSIDE this gate, sixth: the referral list is an owner surface like
+     the rest of Advocacy, exactly as it was. */
   if (!isOwner()) { panel.classList.add("hidden"); $("#report-advocacy-grid").innerHTML = ""; return; }
+  const promotersBlock = advPromotersBlockHtml(all, ctx);
   panel.classList.remove("hidden");
   const rows = all || [];
   const refMap = ctx && ctx.referrers;          // null ⇒ migration m11 absent
@@ -33279,7 +33731,8 @@ function renderAdvocacy(all, ctx) {
     <div class="adv-block" id="adv-block-series"><h4>Reviews per month — last ${ADV_SERIES_MONTHS}</h4>${reviewsBlock}</div>
     <div class="adv-block" id="adv-block-ratio"><h4>Referrals per completion</h4>${referralBlock}</div>
     <div class="adv-block" id="adv-block-top"><h4>Top referrers</h4>${topBlock}</div>
-    <div class="adv-block" id="adv-block-detractors"><h4>Detractor follow-ups outstanding</h4>${detractorBlock}</div>`;
+    <div class="adv-block" id="adv-block-detractors"><h4>Detractor follow-ups outstanding</h4>${detractorBlock}</div>
+    ${promotersBlock}`;
   const basis = $("#report-advocacy-basis");
   if (basis) basis.innerHTML = `Everything on this panel is computed from the ${rows.length} case row${rows.length === 1 ? "" : "s"} this page already holds — no separate report, nothing scoped to the month picker above. `
     + `${refMap ? "" : "<strong>Referral figures are unavailable: migration m11 has not run.</strong> "}`
@@ -36072,6 +36525,71 @@ async function loadDataHealth() {
     }
   });
   const missingPhoneLive = [...missingPhoneMap.values()];
+  /* ==========================================================================
+     R80 · B2 — PRICE THE UNREACHABLE.
+
+     The ~90 clients with no email address are silently skipped by EVERY
+     automation — rate-end reminders, review requests, doc chases, all of it.
+     A missing email is an inconvenience on most rows and a live loss on a few:
+     the ones whose COMPLETED case has a rate ending inside the forward window,
+     because the rate-end automation is an email and it has no address to send
+     to. So the missing-email panel gets a headline naming what is at stake,
+     the affected rows get a "rate ending <date>" tag, and THE LIST IS RANKED
+     BY THAT £, biggest first — the expensive faults get fixed first.
+
+     THE £ IS RETENTION'S OWN READING, NOT A SECOND MONEY MODEL. The funnel's
+     "£X at risk" and the gone-quiet rows both price a case as THE LOAN ON IT —
+     deliberately the loan and not the fee, and never a forecast (that model
+     lives inline in renderRetOutcomeFunnel; there is no shared helper to call,
+     so the BASIS IS STATED IN THE LINE, in Retention's own words: the loan
+     added up, a case with no loan amount counts as nothing, "not a fee
+     forecast"). Window = rate_reminder_months × 30 days from today —
+     rateBookSelect's arithmetic, the same edge the gone-quiet "rate coming"
+     badge uses (R78 · B7b), so Data health and Retention agree about which
+     rates are "coming". Behind showMoney() like every other firm-£ line; the
+     COUNT sentence renders for everyone. The gone-quiet panel's summary line
+     carries the short form of the same clause (see loadRetentionCold).
+     ========================================================================== */
+  const dhRemMonths = Number(settings.rate_reminder_months) || 6;
+  const dhTodayStr = localDateStr();
+  const dhRateEdgeStr = (() => {
+    const d = new Date(dhTodayStr + "T12:00:00");
+    d.setDate(d.getDate() + dhRemMonths * 30);
+    return localDateStr(d);
+  })();
+  const dhRateRiskByClient = new Map();   // client_id → {date: soonest rate end, loan, n, unpriced}
+  allCases.forEach((cs) => {
+    if (cs.stage !== "completed" || !cs.rate_end_date) return;
+    const d = String(cs.rate_end_date).slice(0, 10);
+    if (d < dhTodayStr || d > dhRateEdgeStr) return;
+    const cur = dhRateRiskByClient.get(cs.client_id) || { date: d, loan: 0, n: 0, unpriced: 0 };
+    if (d < cur.date) cur.date = d;
+    cur.n++;
+    if (cs.loan_amount) cur.loan += Number(cs.loan_amount); else cur.unpriced++;
+    dhRateRiskByClient.set(cs.client_id, cur);
+  });
+  const dhRateTag = (clientId) => {
+    const r = dhRateRiskByClient.get(clientId);
+    return r ? ` <span class="badge amber dh-rate-tag" data-client="${esc(clientId)}" title="A completed case of this client's has a rate ending inside the ${dhRemMonths}-month window — fixing the email address is what lets the retention automation reach them in time.">rate ending ${fmtD(r.date)}${showMoney() && r.loan ? ` · ${fmtM(r.loan)}` : ""}</span>` : "";
+  };
+  /* THE RANK: priced faults first, biggest loan first (soonest rate end breaks a tie), then the
+     unpriced rows in the order the RPC returned them. `sort` is stable, so a key of 0 keeps the
+     unaffected majority exactly as it always listed. The R77 .dh-fix rows are keyed by
+     data-client and care nothing for position — the inline fix works wherever the row lands. */
+  const dhRankByRisk = (rows) => rows.slice().sort((a, b) => {
+    const ra = dhRateRiskByClient.get(a.id), rb = dhRateRiskByClient.get(b.id);
+    return ((rb ? rb.loan : 0) - (ra ? ra.loan : 0))
+      || String((ra ? ra.date : "￿")).localeCompare(String(rb ? rb.date : "￿"));
+  });
+  const dhAtRiskLine = (rows) => {
+    const hit = rows.filter((r) => dhRateRiskByClient.has(r.id));
+    if (!hit.length) return "";
+    let loan = 0, unpriced = 0, nCases = 0;
+    hit.forEach((r) => { const x = dhRateRiskByClient.get(r.id); loan += x.loan; unpriced += x.unpriced; nCases += x.n; });
+    return `<p class="panel-sub dh-atrisk-line" id="dh-atrisk-email"><strong>${hit.length} unreachable client${hit.length === 1 ? "" : "s"}</strong> hold${hit.length === 1 ? "s" : ""} ${showMoney() ? `<strong>${fmtM(loan)}</strong> of` : ""} maturing lending — the automation cannot chase any of it: the rate-end reminder is an email, and there is no address to send it to.${showMoney()
+      ? ` The £ is the loan on ${nCases === 1 ? "the one completed case" : `the ${nCases} completed cases`} with a rate ending within ${dhRemMonths} months added up — the same value-at-risk reading Retention prices its funnel and gone-quiet lists with${unpriced ? ` (${unpriced} carr${unpriced === 1 ? "ies" : "y"} no loan amount and count${unpriced === 1 ? "s" : ""} as nothing)` : ""}. It is not a fee forecast.`
+      : ` The £ at stake is shown to the Owner.`} The list is ranked by it, biggest first — fix the expensive ones first.</p>`;
+  };
   const caseName = (cs) => (cs.clients ? [cs.clients.first_name, cs.clients.last_name].filter(Boolean).join(" ") || "(no name)" : "(no name)");
   /* R45 — ONE predicate for tile, panel and readiness rollup, mirroring get_data_quality exactly:
      tracker/variable deals carry no fixed end; a retention successor inherits its source's date
@@ -36775,10 +37293,12 @@ async function loadDataHealth() {
      always-rendered/scroll-to behaviour are unchanged. */
   const missingPanel = `<div class="panel" id="dh-missing-panel">
     <h3>Clients missing email (with a live case)</h3>
+    ${/* R80 · B2 — the £-context headline and the £-rank (see the PRICE THE UNREACHABLE banner above). */ ""}
+    ${dhAtRiskLine(missingEmail)}
     ${missingEmail.length === 300 ? '<p class="panel-sub">Showing the first 300 — there may be more.</p>' : ""}
-    ${missingEmail.length ? missingEmail.slice(0, DH_PANEL_CAP).map((c) => `
+    ${missingEmail.length ? dhRankByRisk(missingEmail).slice(0, DH_PANEL_CAP).map((c) => `
       <div class="row-item" data-fix-row="${esc(c.id)}">
-        <div class="row-main"><div class="t" onclick="openClient('${c.id}')">${esc(c.name)}</div></div>
+        <div class="row-main"><div class="t" onclick="openClient('${c.id}')">${esc(c.name)}${dhRateTag(c.id)}</div></div>
         ${dhFixCellClient(c, "email", { label: "Email address", placeholder: "name@example.com", saveTitle: "Save this email address onto the client's record. Nothing else on the record is touched — and a value the client form would refuse is refused here too." })}
       </div>`).join("") + dhMoreNote(missingEmail.length) : '<div class="empty">Every client with a live case has an email. 👍</div>'}
   </div>`;

@@ -480,10 +480,15 @@ const finishMove = (page) => page.evaluate(() => window.__r77mv);
       const velRows = await page.$$eval("#report-mi-velocity table tr", (trs) => trs.slice(1).map((tr) => [...tr.querySelectorAll("td")].map((td) => td.textContent.trim())));
       const appOfferRow = velRows.find((r) => r[0] === "Application → offer");
       const offerCompRow = velRows.find((r) => r[0] === "Offer → completion");
-      ok("E2 · fixture sanity: both offer-anchored velocity rows are n≤1 on this book",
-        exp.nAppOffer <= 1 && exp.nOfferComp <= 1, JSON.stringify(exp));
-      eq("E2b · an n≤1 velocity row swaps its numbers for the clause, keeping its n",
-        [appOfferRow[1], appOfferRow[appOfferRow.length - 1]], [clause, String(exp.nAppOffer)]);
+      /* R80 — was "both … n≤1". The R80 protection/advocacy fixtures added a second dated
+         offer-stage case, so application→offer is legitimately n=2 and shows its REAL median —
+         which is the guard working, not failing. The offer→completion row (still n=1) remains
+         the clause specimen (E2c); the app→offer row now plays E2d's part at low-but-sufficient n. */
+      ok("E2 · fixture sanity: the offer→completion velocity row is n≤1 on this book",
+        exp.nOfferComp <= 1, JSON.stringify(exp));
+      ok("E2b · an n=2 velocity row keeps its REAL median (the guard replaces only n≤1)",
+        /^\d+d$/.test(appOfferRow[1]) && appOfferRow[appOfferRow.length - 1] === String(exp.nAppOffer),
+        JSON.stringify(appOfferRow));
       eq("E2c · …both of them", [offerCompRow[1], offerCompRow[offerCompRow.length - 1]], [clause, String(exp.nOfferComp)]);
       const wellFedRow = velRows.find((r) => r[0] === "Created → completion (total)");
       ok("E2d · a well-dated transition keeps its real median (the guard replaces nothing it needn't)",

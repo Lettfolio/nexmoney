@@ -294,11 +294,14 @@ const shiftMv = (mv, n) => {
         /earned/i.test(legend) && /outstanding/i.test(legend) && /cash \(banked\)/i.test(legend), JSON.stringify(legend));
 
       // The Protection page's Est. £ carries R5-57's label half.
+      // R80: RE-POINTED — the CTO's rewritten RPC changed the formula under the tile (firm-average
+      // commission × loan band, no longer the status-probability weight), so the honest label
+      // changed with it. Still an estimate, still never presented as banked money.
       await page.click('[data-page="protection"]');
       await page.waitForTimeout(1000);
       const prot = await txt(page, "#prot-summary");
-      ok("R5-17 · Protection Est. commission states it is not loan-based",
-        prot.includes("(probability-weighted average, not loan-based)"), JSON.stringify(prot));
+      ok("R5-17 · Protection Est. commission states its basis (R80: firm average × loan band, an estimate)",
+        prot.includes("(firm average × loan band — an estimate, not banked money)"), JSON.stringify(prot));
       await openReports(page);
 
       // …and the labelled figures still equal the same arithmetic they always did.
@@ -558,8 +561,10 @@ const shiftMv = (mv, n) => {
          drawn from six scores that are all 6, 8 or 9 can say nothing about a firm. The count is
          still asserted exactly, so a fixture drifting silently still fails here; what it has to be
          has moved. */
-      ok("fixture · twelve cases carry a review score, spanning detractors, passives and promoters",
-        scored.length === 12
+      /* R80 — was 12. Yvonne Kerr (score 9, back-book, no email) joins the scored fixtures as the
+         promoters-panel's no-email promoter; the exact-count pin moves with her, spread unchanged. */
+      ok("fixture · thirteen cases carry a review score, spanning detractors, passives and promoters",
+        scored.length === 13
         && scored.some((c) => c.nps_score <= 6)
         && scored.some((c) => c.nps_score === 7 || c.nps_score === 8)
         && scored.some((c) => c.nps_score >= 9),

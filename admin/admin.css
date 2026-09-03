@@ -2045,6 +2045,11 @@ select.task-reassign { width: auto; padding: 3px 6px; font-size: 12px; }
    made it destructive. 429px → ~300px, on one line. */
 #prot-list-table .prot-actions { white-space: nowrap; }
 #prot-list-table .prot-actions > * { vertical-align: middle; }
+/* R80 · A2e — the row gained a sixth control (📞 Log call, icon-only in the cell). Even icon-only
+   it pushed the Owner's table (which alone carries the Est. £ column) 20px past the R69 fit-at-
+   1280 contract (r69_polish B2), so the cell's buttons give back 3px of side padding each — the
+   same 12.5px type, one size rung, nothing else touched. */
+#prot-list-table td.prot-actions .btn-sm { padding-left: 7px; padding-right: 7px; }
 .prot-status-set { width: 96px; max-width: 96px; }
 /* R73 · B3 — 74px clipped "GI taken" to "GI...", which is the one word on the row
    that says the job is done. 96px fits the longest option; the column has the room
@@ -3298,6 +3303,12 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 #report-advocacy-panel .adv-mon .adv-mlbl { font-size: 10px; color: var(--muted); margin-top: 3px; white-space: nowrap; }
 #report-advocacy-panel .adv-mon .adv-mn { font-size: 11px; font-weight: 700; color: var(--dark); font-variant-numeric: tabular-nums; }
 #report-advocacy-panel .adv-headline { display: flex; gap: 18px; flex-wrap: wrap; align-items: baseline; margin: 2px 0 6px; }
+/* R80 · B1 — the promoters list: the score leads each row's sub-line (green, like the NPS
+   list's promoter tint), and the verb chips reuse .ret-row-acts wholesale. */
+#report-advocacy-panel .adv-promo-score { font-weight: 700; color: var(--green); font-variant-numeric: tabular-nums; }
+#report-advocacy-panel .adv-promo-row .row-main { min-width: 0; }
+/* R80 · B2 — the "rate ending <date> · £loan" tag on Data health's missing-email rows. */
+.dh-rate-tag { margin-left: 6px; white-space: nowrap; }
 #report-advocacy-panel .adv-big { font-size: 22px; font-weight: 800; color: var(--dark); font-variant-numeric: tabular-nums; }
 /* R73 · B3 — size from the .btn-xs scale above (was a seventh size, 11px). */
 #report-advocacy-panel .adv-open-btn { white-space: nowrap; }

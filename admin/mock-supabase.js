@@ -1102,16 +1102,27 @@
   /* R13 — staff_absences and case_files join the audited set under the same
      round-4 rule that put duplicate_dismissals and case_documents there:
      every new table gets the trigger. */
+  /* R80 · B3 — fact_finds, leads and sms_queue join the audited set, closing a PARITY GAP
+     rather than inventing a rule: production's table-level audit_row triggers cover (CTO-verified
+     list) cases, clients, case_tasks, case_notes, appointments, case_documents, case_files,
+     fact_finds, leads, settings, profiles, sms_queue, watch_alerts, duplicate_dismissals,
+     introducers and staff_absences — the mock was missing exactly those three, so a verb whose
+     only footprint was one of them (the R79 fact-find link regenerate is the live example) left
+     an audit trail in production and none here, and no suite could pin it. email_queue is
+     DELIBERATELY still absent: in production it carries log_email_event only, not audit_row,
+     so an email_queue write leaves no audit_log row anywhere — mirrored by leaving it out. */
   var AUDITED = ["clients", "cases", "case_tasks", "case_notes", "appointments", "settings", "profiles",
     "introducers", "duplicate_dismissals", "watch_alerts", "case_documents",
-    "staff_absences", "case_files", "vault_entries"];
+    "staff_absences", "case_files", "vault_entries", "fact_finds", "leads", "sms_queue"];
   var AUDIT_HIDDEN = "(hidden)";
   var AUDIT_TABLE_WORD = {
     clients: "client", cases: "case", case_tasks: "task", case_notes: "note",
     appointments: "appointment", settings: "setting", profiles: "login", introducers: "introducer",
     duplicate_dismissals: "not-a-duplicate mark", watch_alerts: "watchtower alert",
     case_documents: "document", staff_absences: "absence", case_files: "file",
-    vault_entries: "vault entry"
+    vault_entries: "vault entry",
+    /* R80 · B3 — words for the three tables that joined AUDITED above. */
+    fact_finds: "fact-find", leads: "lead", sms_queue: "text message"
   };
   function rowLabel(table, row) {
     if (!row) return "";
@@ -1133,6 +1144,16 @@
       return (absP ? (absP.full_name || absP.email) : row.profile_id) + " — " + row.starts_on + " to " + row.ends_on;
     }
     if (table === "case_files") return row.name || row.id;
+    /* R80 · B3 — labels for the three newly-mirrored audited tables. A fact-find is named by
+       the client on its case (that is what a person scanning the trail is looking for); a lead
+       by the enquirer's name; an SMS by its recipient number. */
+    if (table === "fact_finds") {
+      var ffc = DB.cases.filter(function (c) { return c.id === row.case_id; })[0];
+      var ffcl = ffc ? DB.clients.filter(function (c) { return c.id === ffc.client_id; })[0] : null;
+      return (ffcl ? [ffcl.first_name, ffcl.last_name].filter(Boolean).join(" ") : "") || row.id;
+    }
+    if (table === "leads") return [row.first_name, row.last_name].filter(Boolean).join(" ") || row.name || row.email || row.id;
+    if (table === "sms_queue") return row.to_phone || row.id;
     // R14 — "<name> (<owner>)" when an owner is set, else just the name; matches
     // how the vault list itself disambiguates the three "Test Bank A" rows.
     if (table === "vault_entries") return row.name + (row.owner_label ? " (" + row.owner_label + ")" : "");
@@ -1389,6 +1410,7 @@
         "policy_start_date", "exchange_date", "offer_issued_date", "repayment_method",
         "mortgage_account_number", "objective", "property_sold_at",
         "nps_token", /* R79 · A2 — same parity rule; see mkCase */
+        "referral_requested_at", /* R80 · B1 — same parity rule; see mkCase */
         "monthly_rent", "icr_stress_rate", "icr_required_pct",
         "lender_reference", "application_status", "application_status_at"]
         .forEach(function (f) { if (r[f] === undefined) r[f] = null; });
@@ -1799,6 +1821,12 @@
          keeps every NPS-dependent branch exactly as it behaved. */
       nps_token: o.nps_token || null,
       review_requested_at: o.review_requested_at || null,
+      /* R80 · B1 — referral_requested_at (timestamptz, nullable): real production column (it
+         stamps when a referral request queues — CTO-verified), never carried by the mock's row
+         shape before because nothing queued referral requests from the app until now. Null on
+         every fixture row; the queueEmail stamp is its only writer, and the promoters list
+         deliberately reads the email_queue rather than this column. */
+      referral_requested_at: o.referral_requested_at || null,
       rate_reminder_queued_at: o.rate_reminder_queued_at || null,
       /* R70 — cases.reminder_guarded, boolean NOT NULL DEFAULT false. Unlike every
          nullable column above this one is never null: the R45 import guard stamped
@@ -4050,6 +4078,108 @@
     });
   })();
 
+  /* =========================================================================
+     ROUND 80 FIXTURES — agent B ("mine the book"). Three deliberate seeds, and
+     the blast radius of each is written down:
+
+     1. THE ALREADY-ASKED PROMOTERS, ONE PER RECORD. Peter Thackeray (10/10):
+        one email_queue referral_request row, status 'sent' 35 days ago, PLUS
+        the corroborating cases.referral_requested_at stamp — the queue-row
+        exclusion, permanently on screen. Bruce Lindquist (10/10): the STAMP
+        ALONE, no queue row — the stamp-only exclusion. Either record
+        disqualifies on its own under B1's membership rule. One extra SENT
+        history row for Peter; nothing queued, nothing due, sent_at long
+        before today (no "sent this morning" movement, no docs-chase
+        interference — type-specific).
+
+     2. THE OPTED-OUT PROMOTER. Damian Fairhurst (score 9) joins Chloe and
+        Harold with comms_optout=true — the R79 pair alone contained no
+        promoter, so B1's phone-only row (listed, flagged, queue verb
+        withheld) had no fixture to stand on. His review case is already
+        scored, so no drip, reminder or count moves; r79_send's optout leg
+        reads .eq(comms_optout,true).limit(1) and still lands on Chloe
+        (insertion order).
+
+     3. THE PRICED CONTACT FAULT — AND THE NO-EMAIL PROMOTER. Yvonne Kerr —
+        ALREADY missing both email and phone with a live fact-find case, i.e.
+        on BOTH Data-health contact panels — gains the one thing the book
+        lacked: a COMPLETED case whose rate ends inside the forward window
+        (no natural fixture client had that intersection; the only
+        completed-in-window client with a live case is Sarah Ellingham,
+        whose contact details half the battery depends on). It carries
+        nps_score 9, making Yvonne B1's no-email promoter too (phone-only
+        row). The case is shaped to move as little as possible: completed 14
+        months ago (outside every YTD/monthly figure and outside the
+        advocacy 6-month series — the score dates by review_requested_at's
+        fallback), fee paid back then (no money-owed / missing-fee
+        movement), review asked long ago (the drip's 5-a-run order is
+        untouched), rate_reminder_queued_at stamped + reminder_guarded=true
+        (the R45 back-book guard shape — the queueing RPC never touches it,
+        so no suite's run arithmetic moves), milestone dates set (no
+        Data-health milestone drift), protection/GI 'declined' (the least
+        actionable bucket on agent A's surfaces). It DOES join the retention
+        feed/rate-book window (+1) — every suite reading those counts
+        computes them from the DB at runtime.
+     ======================================================================= */
+  (function roundEightyFixtures() {
+    var findClient = function (first, last) {
+      return DB.clients.filter(function (c) { return c.first_name === first && c.last_name === last; })[0] || null;
+    };
+    /* 1 · Peter Thackeray has been asked. */
+    var peter = findClient("Peter", "Thackeray");
+    var peterCase = peter ? DB.cases.filter(function (c) {
+      return c.client_id === peter.id && c.stage === "completed" && Number(c.nps_score) >= 9;
+    })[0] : null;
+    if (peterCase) {
+      DB.email_queue.push({
+        id: nid("eq"), case_id: peterCase.id, client_id: peter.id, email_type: "referral_request",
+        to_email: peter.email || "", subject: "Know someone who needs mortgage help?",
+        status: "sent", error: null,
+        sent_at: iso(shift(-35)), scheduled_for: iso(shift(-35)), created_at: iso(shift(-35))
+      });
+      peterCase.referral_requested_at = iso(shift(-35));   // the corroborating stamp, as prod leaves it
+    }
+    /* 1b · Bruce Lindquist carries the STAMP ALONE — referral_requested_at set, no email_queue
+       row behind it (the queue was purged, or the ask predates the queue's retention). Either
+       record disqualifies on its own under B1's membership rule, so Bruce pins the stamp-only
+       leg the way Peter pins the queue-row leg. */
+    var bruce = findClient("Bruce", "Lindquist");
+    var bruceCase = bruce ? DB.cases.filter(function (c) {
+      return c.client_id === bruce.id && c.stage === "completed" && Number(c.nps_score) >= 9;
+    })[0] : null;
+    if (bruceCase) bruceCase.referral_requested_at = iso(shift(-160));
+    /* 2 · Damian Fairhurst opted out. */
+    var damian = findClient("Damian", "Fairhurst");
+    if (damian) damian.comms_optout = true;
+    /* 3 · Yvonne Kerr's priced back-book case. */
+    var yvonne = findClient("Yvonne", "Kerr");
+    if (yvonne) {
+      var yv = mkCase({
+        client_id: yvonne.id, case_kind: "remortgage", stage: "completed",
+        lender: "Test Bank C", loan_amount: 168000, property_value: 240000,
+        rate_percent: 1.94, rate_type: "fixed",
+        rate_end_date: dateOnly(shift(100)),
+        property_address: "3 Larkspur Close, Wimborne BH21 2XY",
+        broker_fee: 395, fee_status: "paid",
+        fee_requested_at: iso(shift(-424)), fee_paid_at: iso(shift(-410)),
+        broker_fee_paid_at: iso(shift(-410)),
+        submitted_at: iso(shift(-480)), offer_issued_date: dateOnly(shift(-455)),
+        completed_at: iso(shift(-425)),
+        review_requested_at: iso(shift(-410)),
+        /* B1's no-email promoter: Yvonne scored a 9 (on paper, filed by hand — she has no
+           email, so no NPS email ever reached her; the column does not care how the number
+           arrived). Score dated by review_requested_at's fallback 14 months back — outside the
+           advocacy panel's 6-month series, so the monthly bars don't move. */
+        nps_score: 9,
+        rate_reminder_queued_at: iso(shift(-30)), reminder_guarded: true,
+        protection_status: "declined", gi_status: "declined",
+        assigned_to: "p2",
+        created_at: iso(shift(-510)), updated_at: iso(shift(-425))
+      });
+      void yv;   // mkCase pushes onto DB.cases itself (and seeds the case_created event)
+    }
+  })();
+
   /* --- case_events: give the live cases a stage history ------------------ */
   var STAGE_ORDER = ["enquiry", "fact_find", "decision_in_principle", "application", "offer", "exchange", "completed"];
   DB.cases.forEach(function (c) {
@@ -5191,32 +5321,75 @@
     };
   }
 
-  function rpc_get_protection_pipeline() {
-    var avg = Number((DB.settings.filter(function (s) { return s.key === "protection_avg_commission"; })[0] || {}).value) || 850;
+  /* =========================================================================
+     R80 · A1 — get_protection_pipeline mirrors the CTO's rewritten live RPC.
+
+     The live function used to apply `limit 250` with NO order — an arbitrary
+     250 of the book's 1,531 protection candidates. It now returns the BEST
+     250 BY SCORE, where (pinned formula, mirrored exactly here):
+
+       score = stage urgency  (offer 100 · exchange 95 · application 90 ·
+                               DIP 80 · fact_find 70 · enquiry 50 · completed 30)
+             + warm-quote bonus (quoted +15 · referred +10 · discussed +5)
+             + loan size        (loan_amount / 50000, capped at 20)
+             + has_email        (+3)
+
+     est_commission is no longer the old status-probability weight: it is the
+     protection_avg_commission setting (default 850) × a LOAN BAND —
+     0.7 under £100k · 1.0 to £250k · 1.3 to £500k · 1.6 above. Each row keeps
+     the same shape as before PLUS the new `score` column. Candidate predicate
+     unchanged (stage ≠ not_proceeding; the four OPEN statuses — R66 · M6a's
+     `referred` widening stands). Non-admin callers are FORCED to
+     p_scope='mine' server-side (T1-5's quirk kept: 'mine' includes ownerless
+     rows; the app's client-side scope buttons still split them out).
+
+     NOTE (HARNESS "R80 · A"): mock rpcCall generally BYPASSES MOCK_MAX_ROWS —
+     that gap stands everywhere else; THIS rpc now enforces its own honest cap
+     the way the live function does, plus the companion total below. */
+  var PROT_PIPE_CAP = 250;
+  var PROT_SCORE_STAGE = { offer: 100, exchange: 95, application: 90, decision_in_principle: 80, fact_find: 70, enquiry: 50, completed: 30 };
+  var PROT_SCORE_WARM = { quoted: 15, referred: 10, discussed: 5 };
+  function protPipeScore(stage, status, loan, hasEmail) {
+    return (PROT_SCORE_STAGE[stage] || 0) + (PROT_SCORE_WARM[status] || 0)
+      + Math.min(Number(loan || 0) / 50000, 20) + (hasEmail ? 3 : 0);
+  }
+  function protLoanBand(loan) {
+    var l = Number(loan || 0);
+    return l < 100000 ? 0.7 : l < 250000 ? 1.0 : l < 500000 ? 1.3 : 1.6;
+  }
+  function protPipeCandidates(args) {
+    /* the live function forces p_scope='mine' for anyone who is not admin/owner */
+    var scope = isAdminOrOwner() ? String((args && args.p_scope) || "all") : "mine";
     return DB.cases.filter(function (c) {
       if (c.stage === "not_proceeding") return false;
       var p = c.protection_status || "not_discussed";
-      /* R66 · M6a — `referred` is the fourth OPEN protection state (the case has been handed to a
-         protection adviser; no policy, no decline), so the pipeline returns it alongside the other
-         three. Production's get_protection_pipeline needs the identical one-value widening —
-         without it a referred case would drop off the Protection page entirely the moment the
-         status is set, which is the opposite of what recording the referral is for. */
-      return ["not_discussed", "discussed", "quoted", "referred"].indexOf(p) >= 0;
-    }).map(function (c) {
+      if (["not_discussed", "discussed", "quoted", "referred"].indexOf(p) < 0) return false;
+      /* T1-5 quirk, kept deliberately: 'mine' hands back ownerless cases too. */
+      if (scope === "mine" && c.assigned_to != null && c.assigned_to !== CURRENT_UID) return false;
+      return true;
+    });
+  }
+  function rpc_get_protection_pipeline(args) {
+    var avg = Number((DB.settings.filter(function (s) { return s.key === "protection_avg_commission"; })[0] || {}).value) || 850;
+    return protPipeCandidates(args).map(function (c) {
       var cl = DB.clients.filter(function (x) { return x.id === c.client_id; })[0] || {};
       var p = c.protection_status || "not_discussed";
-      /* Weighted between discussed and quoted: a referral is more likely to end in a policy than a
-         conversation nobody has quoted, and less likely than a quote already in the client's hands
-         — and the commission, if it lands, is not wholly this firm's anyway. */
-      var weight = p === "quoted" ? 0.7 : p === "referred" ? 0.5 : p === "discussed" ? 0.4 : 0.2;
       return {
         case_id: c.id, client_id: c.client_id, client_name: clientName(c.client_id),
         case_kind: c.case_kind, stage: c.stage, lender: c.lender,
         loan_amount: c.loan_amount, protection_status: p, gi_status: c.gi_status || "not_discussed",
-        est_commission: Math.round(avg * weight), owner: c.assigned_to,
-        live: isLive(c.stage), has_email: !!cl.email
+        est_commission: Math.round(avg * protLoanBand(c.loan_amount)), owner: c.assigned_to,
+        live: isLive(c.stage), has_email: !!cl.email,
+        score: protPipeScore(c.stage, p, c.loan_amount, !!cl.email)
       };
-    }).sort(function (a, b) { return b.est_commission - a.est_commission; });
+    }).sort(function (a, b) {
+      /* score desc; id asc as the deterministic tie-break (the live ORDER BY's ctid-free stability) */
+      return (b.score - a.score) || (a.case_id < b.case_id ? -1 : a.case_id > b.case_id ? 1 : 0);
+    }).slice(0, PROT_PIPE_CAP);
+  }
+  /* R80 · A1 — the companion: the UNCAPPED candidate count, same predicate, same forced scope. */
+  function rpc_get_protection_pipeline_total(args) {
+    return { total: protPipeCandidates(args).length };
   }
 
   function rpc_find_duplicate_clients() {
@@ -5312,6 +5485,7 @@
     get_reports: rpc_get_reports,
     get_data_quality: rpc_get_data_quality,
     get_protection_pipeline: rpc_get_protection_pipeline,
+    get_protection_pipeline_total: rpc_get_protection_pipeline_total,   /* R80 · A1 — uncapped candidate count */
     find_duplicate_clients: rpc_find_duplicate_clients,
     run_watchtower: runWatchtower,
     /* The two SECURITY DEFINER queueing functions process-emails calls before it flushes. They
@@ -7312,6 +7486,89 @@
       });
       return made;
     };
+    /* ------------------------------------------------------------------
+       R80 · A1 fixture hook (APPEND-ONLY, same contract as the Revolution
+       hook above: nothing is inserted until a test calls this, so no other
+       suite's counts move by a single row).
+
+       seedProtectionBook(n) inflates THIS page instance's book with `n`
+       (default 300) extra protection-pipeline candidates — enough that
+       get_protection_pipeline's 250-row cap genuinely bites, which is the
+       property tests/r80_protect.js exists to pin ("best 250 by score, not
+       an arbitrary 250"). Deterministic local LCG (fixed seed), synthetic
+       names only, prod string shapes: mostly completed back-book (the live
+       book is 1,471 completed of 1,531 candidates), stages/loans/statuses/
+       owners/emails all varied so the score formula has every term to bite
+       on. Rows are built from the case/client templates the way the
+       Revolution hook builds them (mkCase is out of scope here), with every
+       column the Protection page actually reads set explicitly.
+       ------------------------------------------------------------------ */
+    window.__mock.seedProtectionBook = function (n) {
+      n = Number(n) > 0 ? Math.floor(Number(n)) : 300;
+      var clT = DB.clients[0] || {}, caT = DB.cases[0] || {};
+      var s = 424242;
+      var rnd = function () { s = (s * 1103515245 + 12345) % 2147483648; return s / 2147483648; };
+      var pk = function (arr) { return arr[Math.floor(rnd() * arr.length)]; };
+      var FIRST = ["Marek", "Sofia", "Callum", "Priya", "Dominic", "Eleri", "Tobias", "Nadia", "Rhys", "Imogen",
+        "Stefan", "Carys", "Leonard", "Anouk", "Gregor", "Tamsin", "Oskar", "Bethan", "Casimir", "Delyth"];
+      var LAST = ["Tremaine", "Ollerton", "Vashti", "Penhaligon", "Marchbank", "Quill", "Sedgemoor", "Ravenscroft",
+        "Winterbourne", "Applethwaite", "Corrigan", "Dunmore", "Ellsworth", "Fenwright", "Garrow",
+        "Hollingdale", "Iversen", "Jephcott", "Kestrel", "Lockridge"];
+      var LEND = ["Halifax", "Nationwide", "Santander", "Barclays", "NatWest", "HSBC", "Skipton", "Coventry BS", "Accord", "Virgin Money"];
+      var KIND = ["remortgage", "purchase", "buy_to_let", "first_time_buyer", "remortgage", "purchase", "product_transfer"];
+      var LIVE_STAGES = ["enquiry", "fact_find", "decision_in_principle", "application", "offer", "exchange"];
+      var made = [];
+      for (var i = 0; i < n; i++) {
+        var first = FIRST[i % FIRST.length], last = LAST[Math.floor(i / FIRST.length) % LAST.length];
+        var cl = {};
+        Object.keys(clT).forEach(function (k) { cl[k] = null; });
+        cl.id = nid("cl");
+        cl.first_name = first;
+        cl.last_name = i >= FIRST.length * LAST.length ? last + "-" + Math.floor(i / (FIRST.length * LAST.length)) : last;
+        /* every 9th client has NO email — the has_email score term and the bulk-intro skip both need them */
+        cl.email = i % 9 === 8 ? null : (first + "." + last + i + "@example.com").toLowerCase();
+        cl.phone = "07700 900" + String(100 + (i % 900));
+        cl.comms_optout = false;
+        cl.comms_token = "80c0ffee-0000-4000-8000-" + String(100000000000 + i);
+        cl.created_at = iso(shift(-(400 + (i % 300))));
+        cl.updated_at = iso(shift(-(i % 90)));
+        DB.clients.push(cl);
+        var completed = i % 10 !== 3;   /* ~90% completed back-book, ~10% live — the prod mix */
+        var stage = completed ? "completed" : LIVE_STAGES[i % LIVE_STAGES.length];
+        var loan = 45000 + Math.floor(rnd() * 176) * 5000;   /* £45k .. £920k */
+        var c = {};
+        Object.keys(caT).forEach(function (k) { c[k] = null; });
+        c.id = nid("ca");
+        c.client_id = cl.id;
+        c.case_kind = KIND[i % KIND.length];
+        c.stage = stage;
+        c.lender = pk(LEND);
+        c.loan_amount = loan;
+        c.property_value = Math.round(loan / 0.72);
+        c.rate_type = "fixed";
+        c.rate_end_estimated = false;
+        c.reminder_guarded = false;
+        c.fee_status = "not_requested";
+        c.term_years = 25;
+        /* all four OPEN statuses, weighted towards not_discussed like the real back-book */
+        c.protection_status = i % 20 === 6 ? "quoted" : i % 20 === 13 ? "referred" : i % 5 === 2 ? "discussed" : "not_discussed";
+        c.gi_status = i % 3 === 0 ? "not_discussed" : pk(["not_discussed", "quoted", "policy_taken", "declined", "not_applicable"]);
+        c.assigned_to = pk(["p2", "p2", "p3", "p3", "p4", null]);
+        c.completed_at = completed ? iso(shift(-(30 + Math.floor(rnd() * 700)))) : null;
+        /* far-future rate end so these rows add NOTHING to retention/alert surfaces */
+        c.rate_end_date = completed ? dateOnly(shift(900 + (i % 200))) : null;
+        c.created_at = iso(shift(-(60 + (i % 500))));
+        c.updated_at = iso(shift(-(i % 45)));
+        DB.cases.push(c);
+        made.push(c.id);
+      }
+      return { clients: n, cases: made.length };
+    };
+    /* R80 · A1 — the cap CANARY: the mock's cap is exposed read-only so a suite can seed
+       cap+10 candidates and assert the 10 lowest scores fell off, without hardcoding 250 in
+       two places that could then drift apart. The live function's cap is the contract; if the
+       CTO ever moves it, this is the ONE mock line that changes and the suite follows. */
+    window.__mock.protPipeCap = PROT_PIPE_CAP;
     return client;
   }
 

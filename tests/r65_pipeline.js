@@ -675,6 +675,20 @@ const columnCells = (page, key) => page.evaluate((k) => {
         await db.from("email_queue").insert({ case_id: o.caseId, client_id: cs.client_id, email_type: "docs_request", to_email: cl.email, status: "queued" });
       }, d6);
 
+      /* R80: the R79 standing rule, applied late — since R79 · A5 the mock's SCOPED send path
+         honours the hold (rows stay queued and the response is {held}), so a suite that drives a
+         send through to "sent" (D12/D12b below) must set email_hold "off" AND
+         __mock.setResendKey(true) first. This section was written pre-R79 and was missed by the
+         R79 sweep; the D12 trio had been red on the R79 base ever since. Direct fixture mutation
+         (r79_send's documented pattern — an admin cannot write settings). */
+      await page.evaluate(async () => {
+        const rows = window.__mock.db.settings;
+        const row = rows.filter((r) => r.key === "email_hold")[0];
+        if (row) row.value = "off"; else rows.push({ key: "email_hold", value: "off" });
+        window.__mock.setResendKey(true);
+        await window.__reloadSettings();
+      });
+
       await pipelineTable(page, { search: "R65Docs" });
       // the Completed segment is a different table; keep the live four in view and act on them
       const shown = await page.$$eval("#pipe-table .bulk-cb", (e) => e.length);
@@ -836,16 +850,21 @@ const columnCells = (page, key) => page.evaluate((k) => {
       ok("E13 · R40's case timeline still renders (both filter chips + the list)", tl.filters === 2 && tl.list, JSON.stringify(tl));
       await page.evaluate(() => { if (window.closeModal) window.closeModal(); });
       await goto(page, "protection", 2200);
+      /* R80: RE-POINTED — R61's bands are retired (the table now preserves the rewritten RPC's
+         score-desc order; r80_protect.js §B pins it). What this check still owns is that the
+         Protection table LAYS OUT after this suite's fixture churn: rows render, no band rows,
+         and every row keeps its DOM contract. */
       const bands = await page.evaluate(() => {
         const t = document.querySelector("#prot-list-table");
         if (!t) return null;
         return {
           bands: [...t.querySelectorAll("tr.prot-band")].length,
+          rows: [...t.querySelectorAll("tr")].filter((r) => r.querySelector(".prot-cb")).length,
           contract: [...t.querySelectorAll("tr")].filter((r) => r.querySelector(".prot-cb"))
             .every((r) => r.querySelector(".prot-actions button") && r.querySelector(".prot-status-set")),
         };
       });
-      ok("E14 · R61's protection bands still lay out", bands && bands.bands >= 2 && bands.contract, JSON.stringify(bands));
+      ok("E14 · the Protection table still lays out (R80: rank order, NO band rows)", bands && bands.bands === 0 && bands.rows > 0 && bands.contract, JSON.stringify(bands));
 
       ok("§E · no console errors", noNewErr(page, errBefore), JSON.stringify(page.__err));
       await page.close();

@@ -482,11 +482,21 @@ async function seedPreviewCase(page) {
         tasks.filter((t) => /Follow up rate-end reminder|Chase fact-find/.test(t)), []);
 
       // The protection intro's own confirm.
-      page.__dialogs = [];
-      await page.evaluate(async (fx) => { await window.protQueueEmail(fx.caseId, null); }, fx);
+      // R80: RE-POINTED — protQueueEmail's native confirm() became the house overlay
+      // (confirmDestructive, non-danger; the R76 natives-go-house rule). Same promo-approval
+      // wording, same held sentence — now read from #ovl-confirm-title/-body and confirmed by
+      // pressing #ovl-confirm-ok (fire the call UNAWAITED; the overlay blocks it).
+      await page.evaluate((fx) => { window.protQueueEmail(fx.caseId, null); }, fx);
       await wait(page, 700);
-      const protMsg = (page.__dialogs.filter((d) => d.type === "confirm").slice(-1)[0] || {}).message || "";
-      ok("D5a · protection intro confirm carries the holdLine", protMsg.includes(HOLD_LINE), protMsg);
+      const protMsg = await page.evaluate(() => {
+        const t = (document.querySelector("#ovl-confirm-title") || {}).textContent || "";
+        const b = (document.querySelector("#ovl-confirm-body") || {}).textContent || "";
+        return (t + " " + b).replace(/\s+/g, " ").trim();
+      });
+      ok("D5a · protection intro confirm carries the holdLine (R80: house overlay body)", protMsg.includes(HOLD_LINE), protMsg);
+      ok("D5a2 · …and keeps the promo-approval wording", /Ensure the template has principal approval\./.test(protMsg), protMsg);
+      await page.evaluate(() => { const b = document.querySelector("#ovl-confirm-ok"); if (b) b.click(); });
+      await wait(page, 1200);
       ok("D5b · protection intro toast is the held branch", /Email queued and HELD/.test(await toastText()), await toastText());
 
       // The rows all stayed queued — the mock's scoped path now honours the hold like prod.
