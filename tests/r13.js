@@ -828,8 +828,16 @@ const readBlobJson = (page) => page.evaluate(async () => (window.__blob ? JSON.p
       await wait(adviser, 700);
       const whoOptions = await adviser.$$eval("#abs-who option", (els) => els.map((e) => e.value)).catch(() => []);
       eq("I1 · an adviser's 'Who' select offers only themselves (RLS mirror)", whoOptions, ["p2"]);
-      await adviser.fill("#abs-from", "2026-09-01");
-      await adviser.fill("#abs-to", "2026-09-03");
+      /* R82 — WAS hardcoded "2026-09-01".."2026-09-03", and it aged out: the absences panel
+         lists only absences "today or in the future", so once the real date passed 3 Sep 2026
+         the row saved (the assertion below still passed) but never rendered, and the delete
+         button it looks for was never drawn. Anchored to TODAY in Europe/London — the same
+         zone localDateStr() uses — so the span is always current. HARNESS's calendar-fixture
+         rule: a suite that needs a date must compute it, never spell it. */
+      const absFrom = await adviser.evaluate(() => new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/London" }).format(new Date()));
+      const absTo = await adviser.evaluate(() => new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/London" }).format(new Date(Date.now() + 2 * 86400000)));
+      await adviser.fill("#abs-from", absFrom);
+      await adviser.fill("#abs-to", absTo);
       await adviser.fill("#abs-note", "Wedding — out of office");
       await adviser.click("#abs-add-btn");
       await wait(adviser, 700);
@@ -839,7 +847,11 @@ const readBlobJson = (page) => page.evaluate(async () => (window.__blob ? JSON.p
       // Somebody else's absence — try (via the mock directly, bypassing the select) and confirm the
       // RLS mirror refuses it exactly as the database would.
       const refused = await adviser.evaluate(async () => {
-        const { error } = await window.__mockDb.from("staff_absences").insert({ profile_id: "p3", starts_on: "2026-09-05", ends_on: "2026-09-06", created_by: "p2" });
+        /* R82 — relative for the same reason as the span above; these dates only need to be
+           valid, since the point of this probe is that the write is REFUSED. */
+        const d1 = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/London" }).format(new Date(Date.now() + 5 * 86400000));
+        const d2 = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/London" }).format(new Date(Date.now() + 6 * 86400000));
+        const { error } = await window.__mockDb.from("staff_absences").insert({ profile_id: "p3", starts_on: d1, ends_on: d2, created_by: "p2" });
         return !!error;
       });
       ok("I1 · the mock refuses an adviser writing a colleague's absence (RLS mirror)", refused);

@@ -85,7 +85,9 @@ const gotoDiary = async (page) => {
       // longer what a fresh load lands on. Pre-seeding the stored filter as "all" restores the
       // ORIGINAL scenario this check guards — Month keeping its own remembered value untouched by
       // Day's separate default — without pretending R34 didn't change the plain default.
-      await page.evaluate(() => { try { localStorage.setItem("nx_diary_staff", "all"); } catch (e) { /* ignore */ } });
+      // PATCHED R82 · A4 — nx_diary_staff is namespaced per signed-in user now (the bare key is
+      // dropped at sign-in), so the pre-seed has to be written under p2's own key to survive.
+      await page.evaluate(() => { try { localStorage.setItem("nx_diary_staff_p2", "all"); } catch (e) { /* ignore */ } });
       await page.reload();
       await page.waitForTimeout(SETTLE);
       await gotoDiary(page);

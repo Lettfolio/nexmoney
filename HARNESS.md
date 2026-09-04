@@ -140,7 +140,26 @@ node tests/r80_protect.js
 node tests/r80_ledger.js
 node tests/r81_platform.js
 node tests/r81_strict.js
+node tests/r82_correct.js
+node tests/r82_mock.js
 ```
+
+**MERGED BATTERY, R82 (2026-09-04, CTO run on the merged r82a+r82b tree):** smoke + 88 suites,
+**8,052 checks, 0 failures**, zero `MOCK STRICT` throws, and `node db/check-schema-drift.js`
+reporting **"Schema OK"** — the mock's strict-mode column registry now provably agrees with
+production on every modelled table (see the R82 · CTO section below; that check found a live
+production bug on its first run).
+  Two reds in the run, both diagnosed and neither a regression: `r11_ux` died on a
+`page.goto: Timeout 30000ms exceeded` and is green alone (the documented 2-core infra stall —
+it landed on a *different* suite than R81's, which is how you tell infra from code); `r13 §I1`
+went red AT MIDNIGHT because it spelled a 1-3 Sep 2026 absence span and the absences panel
+lists only "today or in the future" — the row still saved (that assertion kept passing) but was
+never rendered, so the delete button the next line clicks was never drawn. **Fixed properly:
+the span is computed in Europe/London now.** Its own passing sibling assertion is what proved
+it was a fixture bug and not a permissions regression — when a suite half-fails, read which
+half. `r73_system` also showed "Target page, context or browser has been closed" — that is the
+chunk-budget kill again (it runs ~281 s); keep the foreground chunk budget at **250 s**, not
+300+, or a long suite starting late overruns the 600 s Bash cap and is lost mid-run.
 
 **MERGED BATTERY, R81 (2026-09-03, CTO run on the merged r81a+r81b tree):** smoke + 86 suites,
 **7,846 checks, 0 failures**, and **zero `MOCK STRICT` throws anywhere** — so the carve moved no
@@ -5187,3 +5206,474 @@ r8_touch search ground truth, r12b C4 + r5_batch3 R5-53 open the timeline fold f
 counts, r11_ux R11-C chip list. Prod: `referrals_kind_check` widened, `email_type` has 'custom',
 `get_protection_pipeline` keeps 'referred'. `protection_referral_partner` is read for the protection
 referral's default "referred to" but has NO Settings field yet.
+
+
+**R82 · CTO notes — the mock's schema is CHECKED against production, not trusted.**
+`db/columns.json` is a snapshot of production's real `information_schema` (the query that
+makes it is `db/columns.sql`; `backup_*` tables are deliberately excluded — they are the
+SB-IMPORT-1 safety net, due to be dropped, and are not part of the app's schema contract).
+`node db/check-schema-drift.js` boots the mock, reads `window.__mock.columnRegistry()`, and
+diffs the two in both directions. **Run it after every migration; refresh the snapshot when
+production is the thing that changed.**
+
+  WHY IT EXISTS, stated plainly: R81 gave the mock strict column mode, which makes the mock
+  refuse column names the way prod's 42703 does — but strict mode only knows what its own
+  hand-built registry says. A registry that is merely self-consistent will certify a
+  falsehood, and R81's did: it concluded `sms_queue.body` did not exist and DELETED the
+  column from `tests/r78_hands.js` (twice) as a ghost. **`sms_queue.body` is a real
+  production column.** R82 restored it and corrected the comment.
+
+  **THE LIVE BUG IT FOUND ON ITS FIRST RUN (24 disagreements): `clients.updated_at`.**
+  Since R18, `app.js` has read it to baseline the client modal's stale-write guard
+  (`refreshOpenedClientStamp`, app.js:19652) and filtered on it when saving
+  (`.eq("updated_at", openedClientUpdatedAt)`, app.js:25084), mirroring the case guard. The
+  column was never created — production answers `select updated_at from clients` with 42703,
+  verified directly. **So that guard could never have worked, and 86 suites / ~7,900
+  assertions were green over it, because the mock had the column and production did not.**
+  This is the exact failure mode strict mode was built to prevent, and it took a source of
+  truth outside the mock to see it. Migration `r82_clients_updated_at` adds the column, a
+  backfill (1,161 rows, no nulls) and a `touch_client()` BEFORE UPDATE trigger mirroring
+  `cases`/`touch_case`.
+
+  **RULE: the three-way direction test.** in-prod-not-in-registry ⇒ the mock will throw
+  MOCK STRICT on a legitimate column, and someone will "fix" working code (R81 did).
+  in-registry-not-in-prod ⇒ the mock permits what prod 42703s, and the battery is green over
+  a real bug (`clients.updated_at` was). **Before removing anything from the registry, grep
+  app.js for it first** — that is how `clients.updated_at` was told apart from
+  `proc_rates.created_at`, `settings.updated_at` and `v_alerts.assigned_to`, which were
+  genuinely unused and were removed (prod's `settings` is `(key, value)` only; the mock's
+  `v_alerts` view now emits production's real column list — `assigned_to` gone,
+  `client_email`/`product_name`/`review_requested_at` added; nothing reads `assigned_to` off
+  an alert row, app.js takes it from the widened cases read every v_alerts consumer is
+  paired with).
+
+  Two production tables are knowingly unmodelled and reported as INFO, not error:
+  `assistant_actions` and `sync_state`. Adding a table to the mock later must not arrive with
+  no schema behind it — r81_strict §A2 already pins that.
+
+  ALSO THIS ROUND (CTO, server-side; none of it ships by push):
+  · **`get_staff_activity()`** — new SECURITY DEFINER RPC, house staff guard, returns
+    `[{id, has_signed_in, last_sign_in_at, invited_at}]`. The app could not see sign-ins at
+    all before this (the adoption panel said so, honestly); agent A consumes it to stop
+    routing enquiries to colleagues who have never logged in, agent B to make the adoption
+    panel tell the truth. `authenticated` only — never `anon`.
+  · **`process-emails` v20 deployed** (the financial-promotions gate — see R82 · A1).
+    ⚠ **NUMBERING TRAP: the v20 SOURCE is deployed as function VERSION 21.** Version 20 was a
+    bad deploy — a placeholder body — caught and replaced within minutes; nothing sent,
+    `email_hold` was on throughout. `edge/process-emails-v20.ts` is the source of truth and
+    matches what is live. Verify a deploy by reading the function back, always.
+  · **Hardening:** `audit_vault_row()` and `get_protection_pipeline_total(text)` were
+    executable by `anon`; both revoked (neither was a live hole — the first is a trigger
+    function, the second carries the staff guard — but neither should be reachable unsigned).
+
+**R82 · A notes — "put it right", agent A (`tests/r82_correct.js` 92).** A FIX round: five defects,
+every one measured against the live production database by discovery panel #6. No new surfaces.
+Every changed line carries an `// R82 · A<n>` tag.
+
+  - **⚠ BUILD TAG — AGENT B MUST BUMP THE OTHER TWO.** This round edits `admin/index.html` and
+    `admin/app.js`, and both are bumped to **`"r82"`**. `admin/core.js` (`__nxTag_core`) and
+    `admin/reports-money.js` (`__nxTag_reportsmoney`) are **agent B's files and still say `"r81"`
+    on branch `r82a`** — `tests/r81_platform.js` §C asserts all four SOURCE literals are equal and
+    will fail the merged battery until B bumps them. It is not only a test: on a tree with a
+    partial bump `nxCheckBuildTags()` fires on every load, reloads once and leaves the
+    non-dismissable `#nx-tag-strip` up. (Both files were bumped LOCALLY to run this round's
+    battery against a coherent tree, then reverted, so nothing outside A's named files is
+    committed here — the battery figures below were all measured with all four tags at r82.)
+  - **⚠ FOR AGENT B — REGISTER `get_staff_activity()` IN THE MOCK (A3).** It is LIVE in production
+    now (the CTO shipped it; no migration needed from anyone). Contract, verbatim: **name
+    `get_staff_activity`, NO arguments (so no `RPC_ARGS` entry beyond the empty list), guarded to
+    signed-in staff, returns a JSON ARRAY with one entry per row of `profiles`:
+    `{ id, has_signed_in (boolean), last_sign_in_at (timestamptz|null), invited_at
+    (timestamptz|null) }`.** app.js consumes it DEFENSIVELY and that is pinned: a 42883, an RLS
+    refusal, a transport failure or an unrecognised shape all set `STAFF_ACTIVITY_SUPPORTED=false`
+    and the app then behaves EXACTLY as it did before R82 (r82_correct §D1 pins that against the
+    mock as it stands today, with the RPC absent). `neverSignedIn(id)` is true ONLY where the RPC
+    positively reported `has_signed_in:false` — never inferred, never guessed. §D2/§D3 exercise the
+    live half through an in-page shim of that exact shape, so the suite is also the written record
+    of it; once B registers the RPC those sections keep passing unchanged and §D1 will need the
+    mock's own "function missing" toggle (or re-pointing) — that is B's call, flagged here rather
+    than left to be discovered.
+  - **A1 — THE COMPLIANCE GATE (gate it AND reword it — the owner's decision).**
+    `settings.financial_promotions_approved` was read in exactly ONE enforcement point in the whole
+    system: the server-side `queue_automated_emails` RPC, gating `referral_request` only. Both
+    `protection_offer` queue paths — the case row's own Email button (`protQueueEmail`) and R80's
+    bulk `bulkQueueProtIntro` — inserted straight into `email_queue` and immediately fired a scoped
+    send, with no gate at all. `gi_exchange` has no insert site anywhere in the codebase. Production
+    runs the switch OFF. Now: **`FIN_PROMO_TYPES = ["referral_request","protection_offer",
+    "gi_exchange"]` + `finPromosApproved()` + `finPromoRefusal(what)`** (one sentence, two call
+    sites) beside `emailHoldOn()`; both protection paths refuse BEFORE reading, asking or writing —
+    the refusal names the switch and the exact path to it ("Settings › Rules that block work ›
+    'Financial promotions approved'"), says a protection intro is a regulated financial promotion,
+    and says nothing was queued and nothing was sent. Deliberately NOT a disabled button. **The two
+    UI strings are reworded** (`#setting-note-financial_promotions_approved` and the `golive-promos`
+    checklist row) to name the three enforcement points that exist and nothing else, to say what the
+    switch does NOT touch, and to state out loud that no button in this app queues a GI email at all.
+    **SERVER-SIDE BELT: `edge/process-emails-v20.ts`** — v19 verbatim plus three `v20:`-marked
+    changes: the `FIN_PROMO_TYPES` list (deliberately NOT `MARKETING_TYPES`, which answers a
+    different question — who may unsubscribe), a send-time refusal beside v19's opt-out gate that
+    sets the row `status:'cancelled'` with error exactly
+    `financial promotions not approved (settings.financial_promotions_approved)`, and
+    `results.skipped_promos` counted alongside v19's `skipped_optout`. Fail-closed default
+    (`?? "off"`), same as the hold's. **NOT DEPLOYED BY A — the CTO deploys edge functions.**
+    **REPLICA RULE, discharged:** v20 changes NO wording a client sees — the refusal cancels the row
+    *before* `compose()` is reached — so `previewComposeEmail` is untouched; r82_correct §A5h/§A5i
+    prove it by diffing v19 against v20 (exactly ONE v19 line replaced, the `results` initialiser;
+    no added line touches a template or a subject).
+  - **A2 — THE BOARD-CACHE LIVELOCK, and the same shape on Protection.** `boardCache` is busted by
+    THIS TAB'S writes only (no polling, no realtime, no `visibilitychange` anywhere in the app), so
+    R76's stale-board guard toasted "…refreshing the board", called `loadPipeline()`, and repainted
+    the identical cache: press again, same toast, for ever, F5 the only escape. **`reloadPipelineFresh()`
+    / `reloadProtectionFresh()`** (bust, then load) are the fix and the idiom. **THE RULE: a path
+    that refuses an action BECAUSE a fresh read disagreed with what is on screen must reload FRESH;
+    a path that refuses for a reason unrelated to freshness (a cancelled confirm, an abandoned
+    lost-reason capture) keeps the cheap cached repaint — nothing changed underneath it.** Applied
+    to the stale-stage guard AND to its sibling, the protection-gate refusal just below it (decided
+    on the fresh row's `protection_status`, so the cached chip can be a lie), and to the case form's
+    concurrent-edit branch. **Protection got the guard it never had:** `PROT_OPEN_STATUSES` (the
+    RPC's own predicate) + `protRowClosedOut(freshStatus, verb)` on `protLogCall` and
+    `protQueueEmail` — a colleague recording `policy_taken`/`declined` used to leave the ranked list
+    re-offering that client for the whole session; the verb now refuses, names where the case went,
+    and re-reads. r82_correct §B presses the stale control TWICE and asserts convergence (the
+    repainted card carries the true stage and the second press goes through); §C does the same on
+    the call list. Both simulate the colleague with a FIXTURE write (`window.__mock.db.cases`) —
+    **a write through `window.__mockDb` goes through the app's own db.from choke point and busts the
+    caches, which is exactly what a colleague's write does not do.** New suites: use the fixture.
+  - **A3 — ROUTING TO PEOPLE WHO HAVE NEVER LOGGED IN.** 1,575 of 2,017 cases, and 119 of the 130
+    OPEN ones, sit on staff who have never signed in: `leastLoadedAdviser()` ranks by open cases +
+    open tasks and a dormant desk scores perfectly on both, permanently. R13 · M-31 had already
+    written the reasoning for the adjacent case ("SOMEBODY ON HOLIDAY IS NOT THE LIGHTEST DESK,
+    THEY ARE AN EMPTY ONE"); this is that rule one step further down, and **the away rule's shape is
+    copied exactly, waiver included**: `here → present` (away skipped, waived if that empties it),
+    then `present → active` (never-signed-in skipped, waived if THAT empties it). Applied in
+    `leastLoadedAdviser()` AND in `leadRoundRobinOrder()` (accept-all-leads states "same pool and
+    the same away-rule" as a contract, so it inherits both). They stay in the dropdown and stay
+    selectable, labelled **`" (never signed in)"`** — `neverSignedInSuffix`, rendered LAST beside
+    `awaySuffix` so the `(me)` and `· lightest load` markers every older suite reads do not move —
+    and `leadLoadTitle` says the exclusion (and its waiver) out loud. **BULK "ASSIGN TO ME" (the
+    missing half):** `confirmBulkRetentionStart` now renders `#bulkret-tome` (+ `#bulkret-tome-label`,
+    and `#bulkret-dormant` naming any dormant desk the batch would otherwise land on) whenever there
+    is a real choice — I am on the team and at least one case would go elsewhere — exactly the rule
+    `retentionToMeHtml` uses on the single row; the overlay resolves `{toMe}` (Cancel/Escape still
+    falsy) and the runner passes `assignTo` into `startRetentionCase`, so case, call task and queued
+    reminder read the ONE value. `assigned_to` joined the pre-flight read for it. The tally names it.
+  - **A4 — SCOPE KEYS LEAK BETWEEN USERS.** `nx_board_adviser`, `nx_diary_staff` and
+    `nx_clients_adviser` were stored UN-namespaced, against the rule app.js states about itself at
+    the `lsGet`/`lsSet` block, and in all three resolvers a stored value OUTRANKS the signed-in
+    user's role default — so on a shared browser Wayne's first-ever Pipeline, Diary and Clients
+    pages all opened filtered to Daniel Potts. **`userKey(base)` → `` `${base}_${authUid}` ``**,
+    applied INSIDE `staffFilterDefault` / `persistStaffFilter` / `clientAdviserResolve` and the two
+    Clients writers, so the constants keep their names and meaning (the BASE key) and the uid is
+    read at call time (it is only known after sign-in). **MIGRATION: NONE — an existing
+    un-namespaced value is DROPPED, not moved** (`restoreUserPrefs` deletes all three at sign-in).
+    Moving it would hand whichever colleague signs in first somebody else's answer, which is the
+    defect wearing a migration; the cost of dropping is one re-pick of a filter, once, per person.
+  - **A5 — CONFLICT RECOVERY THAT CANNOT SILENTLY CLOBBER.** The R18 `updated_at` guard fired
+    correctly; what followed was the defect — "Save again to overwrite" replayed ~40 opened-at form
+    fields, wiped the colleague's change, and toasted the bare words "Case saved", with neither
+    party ever told which field it was. Now, on a conflict the row is RE-READ and diffed against the
+    snapshot the modal opened on, over the columns the form would write:
+    **`keep`** (they changed it, you did not) and **`clash`** (you both did). A **house overlay
+    `#case-conflict-box`** (the native `confirm()` is gone — the R68 house rule, and a field-by-field
+    before/after cannot be said in a confirm at all) names every one of them with values, in
+    `#case-conflict-keep` / `#case-conflict-clash`, and offers `#case-conflict-reload` (discard mine)
+    / `#case-conflict-keepmine` (keep editing). `caseConflictPlan` is armed BEFORE the dialog, so an
+    Escape gets the protection too. **The retry then DROPS every `keep` column the operator still has
+    not touched** (a field they have since typed into is a decision, not a stale replay, and is
+    written), and the success toast names both halves — `· kept your colleague's N change(s) (…)`
+    and `· OVERWROTE N field(s) your colleague changed (…)`. The plan is per case id, cleared on
+    any `openCase` and on a successful save. A failed re-read leaves `keep` empty — the old
+    replay-everything behaviour, which is the honest fallback when we could not find out what moved,
+    and the overlay says so.
+  Old-suite patches, all commented `PATCHED R82`, every one deliberate:
+    · **r79_send §D5** and **r80_protect §C** — NEW PRECONDITION: both drive a `protection_offer`
+      queue through, which A1 now refuses while `financial_promotions_approved` is off (the fixture
+      default and production's state). Each sets the setting on and calls `__reloadSettings()` first,
+      the same shape as R79's own hold-off + resend-key precondition. **RULE (extends R79's): a suite
+      that drives a protection intro through to a queued row must approve financial promotions
+      first.**
+    · **r34.js** — `R34_KEYS` now clears the bare AND the per-persona forms of the three scope keys;
+      C1e/C1f clear `nx_board_adviser_p2` / `nx_diary_staff_p2`; C3a2/C3c read `nx_board_adviser_p2`.
+    · **r64_small.js** — same treatment for `NX_KEYS`; §B1b/§B3a/§B3c read `nx_clients_adviser_p2`.
+      (§B4a/§B4d still pass unpatched, and now for a second reason: a bogus BARE key is dropped.)
+    · **r5_batch9.js** — the Month/Day pre-seed writes `nx_diary_staff_p2`.
+    · **r5_batch2.js §R5-3** — the case-form conflict is an overlay, not a native confirm: the block
+      now reads `#case-conflict-box`, asserts it NAMES the colleague's field, asserts zero native
+      dialogs, and presses `#case-conflict-keepmine`. Everything it existed to prove (typing
+      preserved, nothing written by the refused save, Save again writes the operator's version) is
+      unchanged and still asserted.
+  BATTERY (measured on `r82a` with all four build tags at r82): smoke 152/0 plus **r82_correct 92/0** (133/0 after the A6-A9 addendum below)
+  and 41 existing suites re-run green with ZERO further re-points — r5_batch1/2/3/6/7/8/9, r9_adv,
+  r11_ux, r12b, r13, r18, r24, r34, r35, r40, r41, r42, r43, r57, r63_tasks, r64, r64_hf1,
+  r64_retention, r64_small, r65_pipeline, r66_book, r66_comms, r68_admin, r69_polish, r69_today,
+  r70_calls, r70_retention, r72_admin, r72_owner, r73_system, r73_visible, r74_forms, r74_numbers,
+  r75_diary, r75_queues, r76_case, r76_intake, r77_owner, r78_fast, r79_locks, r79_send, r80_ledger,
+  r80_protect, r81_platform, r81_strict. (`r75_diary` §C2, the known date-sensitive week-drag red,
+  passed in this window.)
+  DELIBERATELY NOT DONE, and why: (1) the v20 gate is **not mirrored in the mock's process-emails** —
+  `admin/mock-supabase.js` is agent B's file this round; the client-side gate is what the suite can
+  reach and it is pinned, and B can mirror the send-time cancel (`FIN_PROMO_TYPES`, status
+  `cancelled`, `skipped_promos`) whenever it suits. (2) The `" (never signed in)"` label is added to
+  the LEAD ROUTING select only, not to every `awaySuffix` call site (the task-assignee select, the
+  handover pickers) — that is the surface the defect is about, and widening it is a wording change
+  on controls this round has no measurement for. (3) `protCallTask` did NOT get the closed-out
+  guard: it reads only `assigned_to`, and adding a column to its select to police a task somebody
+  deliberately typed is not the same defect. (4) No polling / realtime / `visibilitychange` was
+  added — the caches still only re-read on a bust, and A2 makes every refusal that PROVES staleness
+  bust first; a live-sync design is a round of its own, not a fix.
+
+**R82 · A ADDENDUM — four more fixes (A6-A9), same branch, `tests/r82_correct.js` now 133.**
+Same fix-round rules; every changed line tagged `// R82 · A6`…`A9`. Build tags UNCHANGED at
+`"r82"` — **agent B's core.js / reports-money.js bump is still outstanding** (see the ⚠ above).
+
+  - **APPLIED FROM AGENT B (merge cleanliness).** B has registered `get_staff_activity` in the
+    mock, so §D1 — which pins the RPC-ABSENT path — had to ask for the absence rather than assume
+    it. B's measured fix, applied verbatim: §D's first `boot(browser, "p1")` now passes
+    `() => { window.__mockMigrations = { m12: false }; }` as boot's existing third argument
+    (an `addInitScript`), so the function is missing and answers 42883 — the production state the
+    defensive path exists for. D1a/D1b/D1c are otherwise unchanged. §D2/§D3 shim `db.rpc` in-page
+    and are unaffected either way.
+  - **A6 — TODAY'S PROTECTION TAB IGNORED "MINE".** `loadProtection()` had no `assigned_to` filter
+    and no scope control of any kind, while the Fees tab beside it has been gated since
+    BACKEND-R4 §1 and the Rate & ERC drawer above it grew its own scope in R12b · W-16 for exactly
+    this reason. Verified on production: signed in as Wayne, who carries nothing, EVERY panel on
+    Today reads 0 except this one, which lists five strangers with "discuss protection" on each —
+    and with 119 of the 130 open cases assigned to people who have never signed in (A3), that is
+    what every new adviser sees on day one. It now follows **`briefingScope`, My Day's own Mine/All
+    toggle**, rather than growing a fourth segment on one screen: the control is already there,
+    already role-defaulted at sign-in (adviser ⇒ mine, Owner/Administrator ⇒ all — the R12b · W-7
+    split). The filter is applied **server-side, before `.limit(12)`** (narrowing twelve firm-wide
+    rows afterwards would hand an adviser two of their own and call it a list); `#protection-scope-note`
+    says whose list it is, in the shape the Fees tab's own caption uses; `setBriefScope` repaints it.
+  - **A7 — PHONE NUMBERS ON THE PROTECTION PAGE.** The firm's best revenue surface ("best 250 of
+    1,516 opportunities (~£248,710 estimated commission on this page)") carried ZERO `tel:` and
+    ZERO `sms:` across the table, the completed-book call list and the GI band, because
+    `get_protection_pipeline` returns `has_email` and no phone — so ringing the top-ranked name
+    cost a case modal: 30-45s and a broken rhythm on every call, 2-3 hours per 250-name pass.
+    **`protRowPhones(rows)`** is `retRowPhones`' pattern verbatim (client-side lookup for rows the
+    RPC did not carry), riding **wave 2's existing Promise.all** and cached with everything else —
+    no migration, no new wave (r80_protect §B's ≤2 still passes), and search/filter/scope clicks
+    still cost zero network. **`protPhoneHtml(phones, r, opts)`** is the one place the three
+    protection surfaces turn a row into its affordance. Two additions to the ONE shared helper
+    `phoneActionsHtml` (R70 · B4), both stated:
+      · **`opts.smsOptOut`** — `clients.sms_opt_out` has been a real column and a field on the
+        client form since the schema was written and NOTHING has ever read it. A pre-drafted text
+        to somebody who asked not to be texted is the one thing a NEW texting affordance must not
+        ship, so the 💬 half is replaced by the reason and the 📞 stays (a call is not a text).
+        **NAMED FOLLOW-UP, deliberately not done here:** the three OLDER callers (Retention's rate
+        rows, the Gone-quiet list, My Day / no-next-action) take their number from reads that do
+        not carry the column, and widening those would change what those rows render for the two
+        opted-out fixture clients — a behaviour change this fix round did not measure. One helper,
+        one flag; they adopt it by passing it.
+      · **`opts.compact`** — icons only, number in the title, **for the TABLE only**. R69 · B2 pins
+        the Protection table fitting 1280 with nothing to scroll, and the printed number plus the
+        word "Text" is ~150px that layout does not have (measured: r69_polish B2 went red, then
+        green). The row-item bands (call list, GI band) and every Retention surface keep the full
+        form; r82_correct §H3c pins the two forms apart so they cannot silently converge.
+    The no-phone state is Retention's exactly: nothing renders at all, never a dead "📞 —".
+  - **A8 — WORK ASSIGNED TO SOMEBODY NEVER REACHED THEM.** A task assigned to Wayne, due in ten
+    days, was invisible on every page in this app except a Diary walked forward a month — no badge,
+    no count, no "assigned to me" anywhere. `publishAdviserTaskLoad` gains ONE COLUMN (`due_date`)
+    on the read the dashboard already makes — no new query, no new horizon — and publishes
+    **`advTaskAhead`** (adviser id → `{n, soonest}` for open tasks due AFTER today, inside the same
+    fortnight). `briefAheadLine()` paints **`#brief-ahead`**, a `.badge` in My Day's own `<h3>`
+    reading "N due later", whose `title`/`aria-label` carry the whole sentence (how many, whose,
+    when the first lands, and that they are deliberately NOT the rows below) and which opens the
+    diary when pressed. It follows `briefingScope`. TWO measured constraints decided the shape,
+    both stated because a later round will want to move it:
+      · **it is not a block element.** R69 · B's phone contract is that the first actionable My Day
+        row starts above 900px and the margin left is ~0 — a `<div class="panel-sub">` there
+        measured 931 and turned r69_today §B and r11_ux's dashboard-height regression red. A
+        heading badge costs no vertical space.
+      · **it is NOT `class="count"`.** `panelCount(listSel, n)` writes into the FIRST `h3 .count`
+        it finds in a panel, and My Day's own row count already owns that slot — a second `.count`
+        is simply overwritten on the next paint (measured: the badge read "14"). `.badge` says the
+        same thing in the same heading and cannot collide.
+  - **A9 — THE FREE 290ms.** The Google Fonts stylesheet was RENDER-BLOCKING (A/B: 596ms vs 306ms
+    to first paint) on every one of the 505+ `goto`s in the battery and on every real sign-in.
+    `media="print" onload="this.media='all'"` takes it off the critical path and swaps it in when
+    it lands; a `<noscript>` keeps the old blocking link for a JS-off browser. The fallback is
+    already real and is what the reader sees for those milliseconds: admin.css's `--font` is
+    `"Inter", -apple-system, "Segoe UI", system-ui, Roboto, Arial, sans-serif`, and the URL's
+    existing `&display=swap` means text paints in it rather than hiding. The two `preconnect`s
+    stay — they make the now-non-blocking fetch faster. Measured after the change: the `load`
+    event fires at ~230ms on this box. r82_correct §J asserts the SOURCE shape and that the page
+    still renders (wall-clock assertions are flaky here and are deliberately not made).
+  Old-suite patches from this addendum: **NONE.** Every existing suite passes unchanged — the two
+  reds A8 and A7 first produced (r69_today §B / r11_ux dashboard height; r69_polish §B2·1280) were
+  fixed in the APP, not in the tests, which is what those contracts are for.
+  BATTERY (addendum, all four tags at r82): smoke 152/0, **r82_correct 133/0**, and re-run green:
+  r5_batch1, r5_batch6, r11_ux, r12b, r13, r23, r29_scale, r34, r61, r63_tasks, r64, r66_comms,
+  r68_admin, r69_polish, r69_today, r70_calls, r72_admin, r73_visible, r75_queues, r78_fast,
+  r79_send, r80_protect, r81_platform.
+  KNOWN ENVIRONMENTAL REDS during this addendum's run, A/B-PROVEN NOT OURS: the run crossed the
+  documented 23:00-00:00 UTC seam (London was already the next day while the mock's fixture TODAY
+  is UTC). `r41` §C1 and `r76_case` §F3c both fail in that window — and both fail IDENTICALLY on
+  the untouched R81 base (`git worktree add /tmp/wt-base a1e9f4d`, served on 8124, same two
+  assertions, same values). Both were green earlier in this same session before 23:00 UTC. Re-run
+  them past midnight UTC rather than treating either as a contract change.
+**R82 · B notes — "the app can see sign-ins now", agent B (`tests/r82_mock.js` 71).** A FIX round.
+Four items: one new RPC registered in the mock, the build tag, the adoption panel's blind spot
+closed, and v20's send gate mirrored. Every changed line carries an `// R82 · B<n>` tag.
+
+  - **⚠ BUILD TAG — DISCHARGED ON B'S TWO FILES (B2).** `admin/core.js` (`__nxTag_core`) and
+    `admin/reports-money.js` (`__nxTag_reportsmoney`) are bumped to **`"r82"`**, matching agent A's
+    `admin/index.html` and `admin/app.js`. `tests/r81_platform.js` §C is green on the merged tree.
+    (index.html / mock.html / app.js were bumped LOCALLY to run this round's battery against a
+    coherent tree, then reverted — nothing outside B's named files is committed on `r82b`.)
+  - **⚠ FOR AGENT A — `get_staff_activity()` IS REGISTERED, AND §D1 NEEDS THE TOGGLE (B1).**
+    `tests/r82_correct.js` §D1 asserts `STAFF_ACTIVITY_SUPPORTED === false` at boot on the grounds
+    that "the mock does not register get_staff_activity yet". It does now, so **§D1 must boot with
+    the RPC switched off**, and the mock has the toggle for it. TWO WAYS IN, both mine to provide
+    and both pinned by r82_mock §A5/§A6:
+      · `window.__mock.setMigrations({ m12: false })` — post-load, the existing house pattern; the
+        call then answers `42883 {error}` with production's own
+        `function public.get_staff_activity() does not exist` wording, which is exactly what
+        `isMissingFunctionError()` feature-detects on. `{m12:true}` puts it back.
+      · **NEW: `window.__mockMigrations`, a PRE-LOAD migration seed.** `setMigrations()` can only be
+        called once the page has loaded, which is already too late for anything read inside
+        `init()` — and `loadStaffActivity()` is read inside `init()`. A suite that needs a migration
+        off from the very first read sets it in a Playwright `addInitScript`, which runs before any
+        page script:
+            await page.addInitScript(() => { window.__mockMigrations = { m12: false }; });
+        Unknown keys are ignored, exactly like `setMigrations`. **This is the one-line change §D1
+        needs, and it is MEASURED, not guessed:** on a scratch merge of `r82a`+`r82b` §D1 fails
+        exactly once (D1a, `STAFF_ACTIVITY_SUPPORTED` true where it wants false) and passing
+        `() => { window.__mockMigrations = { m12: false }; }` as `boot()`'s existing third argument
+        at §D's `boot(browser, "p1")` takes r82_correct back to **92/0** with D1a/D1b/D1c unchanged,
+        still proving exactly what they were written to prove. §D2/§D3 shim `db.rpc` themselves and are
+        unaffected either way. `m12` is NOT a migration anyone has to take (the RPC is deployed and
+        live); it is registered as a migration FUNCTION purely so the harness keeps a way to model
+        a database without it. Default ON.
+  - **B1 — THE RPC, MIRRORED FAITHFULLY.** `get_staff_activity()`: **no arguments**
+    (`RPC_ARGS.get_staff_activity = []`, so an invented arg name throws the strict
+    `MOCK STRICT: unknown rpc arg` message — r82_mock §A2); **guarded to signed-in staff**, and the
+    guard **returns `[]`, it does not raise** (an introducer gets an empty array — §A4b); returns a
+    JSON **array**, one entry per `profiles` row — the deactivated colleague p6 and the introducer
+    p5 included, because it reports on LOGINS, not on advisers — each
+    `{ id, has_signed_in: boolean, last_sign_in_at: ts|null, invited_at: ts|null }`, with
+    `last_sign_in_at` null wherever `has_signed_in` is false (the only combination `auth.users` can
+    produce). **NOT MODELLED AS `profiles` COLUMNS, deliberately:** in production these facts live
+    in `auth.users`, which the browser client cannot read at all — that is *why* a SECURITY DEFINER
+    function exists. Putting them on `profiles` would let a ghost `select("last_sign_in_at")` pass
+    R81's strict column mode that production would 42703, so the mock keeps them in their own side
+    table reachable only through the RPC. **The strict registry is therefore unmoved** (28 entries,
+    334 columns — r81_strict §A2 unchanged and green).
+    **THE DEFAULT IS "EVERYBODY HAS SIGNED IN", AND THAT IS A DECISION.** No fixture has ever
+    carried sign-in data, so all 86 suites were written on the assumption that every colleague is a
+    live desk; making Kim/Wayne/Luke dormant by default — the true production situation — would
+    silently re-point `leastLoadedAdviser()`, the lead round-robin and everything built on them.
+    The production situation is expressed by a HOOK instead, the `seedProtectionBook(n)` /
+    `__mock.protPipeCap` house pattern:
+        window.__mock.seedStaffActivity({ p1: false, p2: false, p3: false })
+    `false` is shorthand for "invited, never signed in"; `true` the mirror; an object
+    `{ has_signed_in, last_sign_in_at, invited_at }` sets the row outright, so "invited N days ago"
+    is expressible exactly. `window.__mock.staffActivity()` reads it back. Append-only: nothing
+    changes until a suite calls it, and **no fixture count moved this round** (r42 166/0, r68_mi
+    126/0, r72_owner, r75_queues 153/0 and r80_ledger 87/0 all re-run green).
+    ONE derived rule, not a moved default: **a profile with no row is an invite that has not
+    landed.** Every profile that exists at load time is seeded signed-in; a profile created AFTER
+    load (the `invite-user` edge function) has no row and the RPC reports it as production would
+    report a freshly invited login — `has_signed_in:false`, `last_sign_in_at:null`,
+    `invited_at = created_at`. That is the one state an invite is actually in.
+  - **B3 — THE ADOPTION PANEL CAN SEE SIGN-INS (`reports-money.js`).** The panel used to say, and
+    had to: *"It is not a sign-in. This app cannot see sign-ins: that lives in the authentication
+    service and is not readable from here."* True until this round; a false claim about the app
+    after it, and this panel's whole character is scrupulousness about what a number means. It
+    matters because of what the live book says today: **Kim, Wayne and Luke were invited on 4 July
+    2026 and have never signed in; Daniel is the only human who has ever used this system** — and
+    the owner's only view of that was a column that could not tell "signed in and read quietly"
+    from "never came". Both read `never`, which is a claim about a person made on missing evidence.
+    · **NEW COLUMN `Signed in`, immediately BEFORE `Last active`** (`td.adopt-signin`, always
+      carrying `data-signin` = `never` | `yes` | `unknown`; `data-invited` / `data-last-signin` hold
+      the real timestamps). THREE states and no fourth, because a fourth would be a guess: `never`
+      (+ "invited N days ago" when known — two months and never came is a different fact from
+      invited yesterday), a sign-in DATE with the panel's own today/yesterday/N-days-ago idiom, or
+      the panel's **em dash** for unknown — never a bare 0, never the word "never".
+    · **DORMANT PILL `#report-adoption-dormant`** ("3 never signed in") in the h4, second, only when
+      the RPC answered and the count is non-zero — a "0 never signed in" would itself be a claim.
+      The original `N of M active` pill keeps its place and wording, so `.adopt-h .count` (r73_system
+      B10) still finds it first.
+    · **THE PARAGRAPH IS REWRITTEN** (`adoptionSubHtml`): it now names the two columns as the two
+      different questions they are, and is exactly as precise about the NEW limitation, which is
+      real — **a sign-in is not usage**. A recent sign-in beside "never" active means they came and
+      did nothing, and the panel says so rather than letting it read as work. The `never` cell's own
+      title says which of the two it is, per person. The nightly-automation exclusion and the
+      "everyone with a login, not only advisers" promise are untouched.
+    · **CONSUMED DEFENSIVELY, and this is the part that matters most: never let a failed read make
+      a colleague look inactive — that is a claim about a person.** `readStaffActivity()` treats a
+      42883, an RLS refusal, a transport rejection and an unrecognised shape as ONE answer ("we do
+      not know"): the column goes to em dashes, NOBODY is flagged, the pill does not render, and the
+      paragraph reverts to today's honest wording (plus one sentence saying the read failed, so the
+      dashes are not read as findings). `adoptionNeverSignedIn(id)` is true only where the RPC
+      positively reported `has_signed_in:false` — the `known` discipline, mirroring app.js's
+      `neverSignedIn`. r82_mock §C drives all three failure modes.
+    · **ITS OWN READ, not app.js's, on purpose.** app.js keeps `STAFF_ACTIVITY` for lead routing;
+      reports-money.js loads FIRST (R81 · A1's proven script order) and must not depend on a global
+      declared after it. The panel therefore asks the same question for itself, with its own state
+      (`ADOPTION_ACTIVITY` / `ADOPTION_ACTIVITY_SUPPORTED` — deliberately different names from
+      app.js's, so the R78 no-duplicate-declaration rule across the three scripts holds). **NO NEW
+      WAVE:** the call is folded into the `Promise.all` the panel already fires, and it resolves to
+      a boolean and never rejects, so it cannot take the panel down with it.
+  - **B4 — v20's SEND-TIME REFUSAL MIRRORED IN THE MOCK (`process-emails`).** HARNESS's standing
+    mock-parity rule requires this mock's `process-emails` to match the deployed function on every
+    path; it already mirrored v19's hold, oldest-due-first ≤50 and the opt-out cancel. v20 adds one
+    more, read straight off agent A's `edge/process-emails-v20.ts`:
+    **`FIN_PROMO_TYPES = ["referral_request","protection_offer","gi_exchange"]`** (a DIFFERENT list
+    from `MARKETING_TYPES`, which answers who may unsubscribe) — when
+    `settings.financial_promotions_approved` is anything but `"on"`, the row is set
+    **`status:'cancelled'`** with error **exactly**
+    `financial promotions not approved (settings.financial_promotions_approved)` and counted as
+    **`results.skipped_promos`** (in the invoke result AND in `__mock.lastEmailRun()`). Placed in
+    v20's own position — after the missing-address failure and after v19's opt-out cancel, BEFORE
+    `compose()`, so no template is touched and a type in both lists (`referral_request`) still takes
+    v19's opt-out cancel first. **Fail-closed:** an absent settings row reads "off". Asymmetry with
+    the hold, and it is the point: the hold PARKS mail and releases it later (rows stay `queued`);
+    this is a refusal, so the row is closed out with the reason on it and never retried.
+  Old-suite patches, both deliberate, both commented in the file:
+    · **`tests/r72_owner.js` §A1c** — CONTRACT CHANGE. The adoption panel has a fourth column, so
+      `cols.slice(2)` is now `["Signed in","Last active","Cases touched (30d)","Overdue tasks"]`.
+      The three original columns are unchanged in name, meaning and order; one was added ahead of
+      them. Everything else in §A (§A1d "not a sign-in", §A1e "automation is excluded", the overdue
+      recount, the System-rows test, the "never" row, the owner's own write) passes UNPATCHED — the
+      reworded paragraph still says both of those things, and still means them.
+    · **`tests/r64.js` MOCK (b)** — NEW PRECONDITION, extending R82 · A's rule. That block queues one
+      row of eight email types and drives a run to assert every template's WORDING; two of the eight
+      (`protection_offer`, `gi_exchange`) are financial promotions and are now cancelled before
+      `compose()` while the switch is off, so it composed 12 of 16. It approves financial promotions
+      before the run. **RULE (extends R79's hold-off and R82 · A's): a suite that drives a financial
+      promotion through to a COMPOSED or SENT row approves financial promotions first.**
+    · **`tests/r5_batch1.js` §R5-1 (run-now) and `tests/r76_intake.js` §A6** — the SAME precondition,
+      one step further out, and worth naming because it is a real production consequence of v20 and
+      not a harness artefact: **the full run's consent confirm counts QUEUED rows, and v20 cancels
+      financial promotions at SEND time**, so on a book with unapproved promos in the queue the
+      number consented to is legitimately larger than the number sent (measured: promised 14, sent
+      12 — the fixture holds two). Both blocks exist to pin *consent*, so both now approve financial
+      promotions alongside the hold-off they already set, which puts the assertion back on the
+      invariant it was written for. The gap itself is deliberate and is pinned in its own right by
+      r82_mock §D1/§D2 — it is the belt working, not a defect. (If the owner ever wants the confirm
+      to name the refusal in advance, that is a client-side change to `runAutomation`'s confirm and
+      belongs to whoever owns app.js.)
+  MERGE, MEASURED on a scratch merge of `r82a`+`r82b` (HARNESS.md is the only conflict, and it is
+  the trivial one both halves expected — the battery-list line and the two appended sections; A's
+  section first, B's last): **r81_platform 57/0** (the four build tags agree), **r82_mock 71/0**,
+  **r72_owner 85/0**, and **r82_correct 92/0 once §D1 takes the one-line init script above** (91/1
+  without it, D1a only).
+  BATTERY (measured on `r82b`, all four build tags at r82): **r82_mock 71/0**, plus re-run green —
+  r72_owner 85/0 (patched), r64 91/0 (patched), r5_batch1 54/0 (patched), r76_intake 96/0 (patched),
+  r5_batch5 79/0, r5_batch8 42/0, r12a 114/0, r13 144/0, r42 166/0, r68_mi 126/0, r69_polish 103/0,
+  r73_system 73/0, r74_numbers 125/0, r75_queues 153/0, r77_owner 62/0, r79_send 92/0, r80_ledger
+  87/0, r80_protect 58/0, r81_platform 57/0, r81_strict 40/0 — **zero `MOCK STRICT` throws
+  anywhere.** Every suite that invokes `process-emails` was run (`r5_batch1`, `r5_batch5`,
+  `r5_batch8`, `r12a`, `r64`, `r68_mi`, `r69_polish`, `r75_queues`, `r76_intake`, `r79_send`), and
+  every suite that renders the Reports adoption strip.
+  DELIBERATELY NOT DONE, and why: (1) `neverSignedIn` is NOT read by anything in reports-money.js
+  other than this panel — the adviser scoreboard, Monday money and the Data-health panels are about
+  what the BOOK holds, not about who logged in, and adding a dormancy flag to them would be a new
+  surface in a fix round. (2) The panel does not tint a never-signed-in row `row-warn`; that class
+  means "nothing recorded in the change history" and it is now the weaker of the two findings, so
+  overloading it would blur both. The dormant pill and the cell carry the new fact. (3) The mock's
+  `queue_automated_emails` was NOT given a second gate — production reads
+  `financial_promotions_approved` there already for `referral_request`, and this mock never queues
+  that type automatically, so there is nothing to mirror. (4) No suite was given a
+  `seedStaffActivity` call except r82_mock's own — the default stays "everybody has signed in" so
+  that no other suite's routing, counts or assertions move.

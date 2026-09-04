@@ -106,7 +106,15 @@ const noNewErr = (page, before) => (page.__err || []).length === before;
    "clear these too if you touch those areas" — this suite touches nx_views_v1
    (saved-view apply) so it is cleared alongside the R34 keys. */
 const DRAWER_KEYS = ["watchtower", "unactioned", "leads", "todayappts", "tasks", "rateerc", "retention", "revenue"].map((k) => "nx_drawer_" + k);
-const R34_KEYS = ["nx_wt_scope", "nx_board_adviser", "nx_clients_adviser"/* R64 · M9 — the Clients adviser filter persists now */, "nx_diary_staff", "nx_views_v1"].concat(DRAWER_KEYS);
+/* PATCHED R82 · A4 — the three scope keys are namespaced per signed-in user now
+   (nx_board_adviser_<uid> etc; the bare names are DROPPED at sign-in and never written again),
+   so a hygiene clear has to name both forms: the bare one because a stale pre-R82 value may still
+   be sitting there, and each persona's own because that is where a pick now lands. */
+const SCOPE_KEYS = ["nx_board_adviser", "nx_clients_adviser"/* R64 · M9 — the Clients adviser filter persists now */, "nx_diary_staff"];
+const R34_KEYS = ["nx_wt_scope", "nx_views_v1"]
+  .concat(SCOPE_KEYS)
+  .concat([].concat(...["p1", "p2", "p3", "p4"].map((u) => SCOPE_KEYS.map((k) => `${k}_${u}`))))
+  .concat(DRAWER_KEYS);
 const clearR34Keys = (page) => page.evaluate((keys) => { keys.forEach((k) => { try { localStorage.removeItem(k); } catch (e) { /* ignore */ } }); }, R34_KEYS);
 const clearKey = (page, key) => page.evaluate((k) => { try { localStorage.removeItem(k); } catch (e) { /* ignore */ } }, key);
 const lsGetPage = (page, key) => page.evaluate((k) => localStorage.getItem(k), key);
@@ -365,8 +373,9 @@ const hasFirmLevelGroup = (groups) => groups.some((k) => FIRM_RULES.some((r) => 
       await goto(page, "diary");
       eq("C1d · setting #diary-staff to \"all\" persists across a reload", await page.evaluate(() => document.getElementById("diary-staff").value), "all");
 
-      await clearKey(page, "nx_board_adviser");
-      await clearKey(page, "nx_diary_staff");
+      // PATCHED R82 · A4 — the stored value lives under the signed-in user's own key now.
+      await clearKey(page, "nx_board_adviser_p2");
+      await clearKey(page, "nx_diary_staff_p2");
       await page.reload();
       await wait(page, SETTLE);
       await goto(page, "pipeline");
@@ -415,12 +424,12 @@ const hasFirmLevelGroup = (groups) => groups.some((k) => FIRM_RULES.some((r) => 
       await page.selectOption("#board-adviser", "p3");
       await wait(page, 300);
       eq("C3a · #board-adviser now reads p3, and that is what's stored", await page.evaluate(() => document.getElementById("board-adviser").value), "p3");
-      eq("C3a2 · …persisted too", await lsGetPage(page, "nx_board_adviser"), "p3");
+      eq("C3a2 · …persisted too", await lsGetPage(page, "nx_board_adviser_p2"), "p3");   // PATCHED R82 · A4
 
       await page.selectOption("#board-views", viewName);
       await wait(page, 500);
       eq("C3b · applying the saved view restores #board-adviser to \"all\"", await page.evaluate(() => document.getElementById("board-adviser").value), "all");
-      eq("C3c · …and re-persists \"all\" to localStorage", await lsGetPage(page, "nx_board_adviser"), "all");
+      eq("C3c · …and re-persists \"all\" to localStorage", await lsGetPage(page, "nx_board_adviser_p2"), "all");   // PATCHED R82 · A4
 
       await page.reload();
       await wait(page, SETTLE);

@@ -658,12 +658,72 @@ const ADOPTION_TOUCH_DAYS = 30;    // "cases touched" is the tighter, 30-day que
    this person used the app", and the administrator (who on this firm has 1 overdue task and has
    never signed in) is exactly the person it must not leave out. */
 function adoptionRoster() { return TEAM.slice(); }
+/* ==========================================================================
+   R82 · B3 — THE BLIND SPOT IS CLOSED: get_staff_activity()
+
+   Until this round the panel below had to say, honestly, that this app cannot
+   see sign-ins — they live in the authentication service, and `auth.users` is
+   not readable from the browser client. The CTO has shipped a SECURITY DEFINER
+   RPC that answers exactly that question and nothing else:
+
+     get_staff_activity() → [ { id, has_signed_in, last_sign_in_at, invited_at } ]
+
+   one entry per `profiles` row, guarded to signed-in staff (anybody else gets
+   an empty array). It matters because of what the live database says today:
+   Kim, Wayne and Luke were invited on 4 July 2026 and have NEVER signed in;
+   Daniel is the only human who has ever used this system. This panel is the
+   owner's only view of that fact, and until now it could not tell "signed in
+   and read quietly" apart from "never came" — both read `never` under Last
+   active, which is a claim about a person made on missing evidence.
+
+   CONSUMED DEFENSIVELY, exactly as app.js consumes it (the PROT_QUOTE_SUPPORTED
+   / absencesSupported pattern): a 42883, an RLS refusal, a transport failure or
+   a shape this code does not recognise all mean ONE thing — "we do not know" —
+   and the panel then renders today's behaviour and today's wording, down to the
+   old disclaimer paragraph. A FAILED READ NEVER MAKES A COLLEAGUE LOOK
+   INACTIVE: `never signed in` is printed only where the RPC positively said
+   has_signed_in:false. Unknown prints the panel's own em dash, never a zero and
+   never a "never".
+
+   Its own read, not app.js's. app.js keeps STAFF_ACTIVITY for lead routing;
+   this file loads FIRST (see the header) and must not depend on a global
+   declared after it, so the panel asks the same question for itself. One extra
+   RPC, folded into the two reads this panel already fires in parallel — no
+   extra wave.
+   ========================================================================== */
+let ADOPTION_ACTIVITY = {};                 // profile id → { known, has_signed_in, last_sign_in_at, invited_at }
+let ADOPTION_ACTIVITY_SUPPORTED = null;     // null = not asked · false = no data, behave as before R82
+async function readStaffActivity() {
+  try {
+    const { data, error } = await db.rpc("get_staff_activity");
+    if (error || !Array.isArray(data)) { ADOPTION_ACTIVITY = {}; ADOPTION_ACTIVITY_SUPPORTED = false; return false; }
+    const map = {};
+    data.forEach((r) => {
+      if (!r || !r.id) return;
+      map[r.id] = {
+        /* `known` is the whole discipline: only a real boolean from the server counts. A row
+           the RPC did not carry, or carried without the flag, is unknown — not dormant. */
+        known: typeof r.has_signed_in === "boolean",
+        has_signed_in: r.has_signed_in === true,
+        last_sign_in_at: r.last_sign_in_at || null,
+        invited_at: r.invited_at || null,
+      };
+    });
+    ADOPTION_ACTIVITY = map; ADOPTION_ACTIVITY_SUPPORTED = true; return true;
+  } catch (_) { ADOPTION_ACTIVITY = {}; ADOPTION_ACTIVITY_SUPPORTED = false; return false; }
+}
+/* The one test, mirroring app.js's neverSignedIn: false whenever we do not KNOW. */
+function adoptionNeverSignedIn(id) {
+  if (ADOPTION_ACTIVITY_SUPPORTED !== true || !id) return false;
+  const a = ADOPTION_ACTIVITY[id];
+  return !!a && a.known === true && a.has_signed_in === false;
+}
 async function readAdoptionData() {
   const ids = adoptionRoster().map((p) => p.id).filter(Boolean);
   if (!ids.length) return { audit: [], tasks: [], auditErr: null, tasksErr: null };
   const sinceIso = new Date(Date.now() - ADOPTION_WINDOW_DAYS * 86400000).toISOString();
   const today = localDateStr();   // Europe/London, like every other date comparison in this file
-  const [aud, tsk] = await Promise.all([
+  const [aud, tsk] = await Promise.all([   // R82 · B3 — readStaffActivity() rides this wave (below)
     /* `.in("actor", ids)` — four ids, no chunking needed (see the block comment). ORDER is
        required by readAll's pager, and `happened_at` alone is not unique, so `id` breaks ties. */
     readAll(db.from("audit_log").select("actor,case_id,happened_at")
@@ -671,6 +731,10 @@ async function readAdoptionData() {
       .order("happened_at", { ascending: false }).order("id", { ascending: false }), { cap: OWNER_ROW_CAP }),
     readAll(db.from("case_tasks").select("assigned_to,due_date,done_at")
       .is("done_at", null).lt("due_date", today).order("id"), { cap: OWNER_ROW_CAP }),
+    /* R82 · B3 — the sign-in read, in the SAME wave as the two above. It resolves to a boolean
+       and never rejects (readStaffActivity swallows its own failure into "we do not know"), so
+       it can never take the panel down with it. */
+    readStaffActivity(),
   ]);
   return { audit: (aud && aud.data) || [], tasks: (tsk && tsk.data) || [],
     auditErr: aud && aud.error, tasksErr: tsk && tsk.error };
@@ -695,6 +759,63 @@ function adoptionRowsFrom(roster, audit, tasks) {
     return { id: r.id, name: r.name, role: r.role, last: r.last, casesTouched: r.cases.size, overdue: r.overdue };
   });
 }
+/* R82 · B3 — the Signed in cell. THREE states and no fourth, because a fourth would be a guess:
+     · unknown  — the RPC is absent, refused or answered a shape we do not recognise. The panel's
+                  own em dash (never a 0, never the word "never"), and the title says the read
+                  failed rather than saying anything about the person.
+     · never    — the RPC positively reported has_signed_in:false. Says how long ago they were
+                  invited when it knows, because "invited two months ago and never came" is a
+                  different fact from "invited yesterday".
+     · signed in— the date, plus today/yesterday/N days ago in the Last active cell's own idiom.
+   A SIGN-IN IS NOT USAGE and the cell never implies it is: it says when somebody came, not what
+   they did. What they did is the column next to it. */
+function adoptionSignInCell(id) {
+  const a = ADOPTION_ACTIVITY_SUPPORTED === true ? ADOPTION_ACTIVITY[id] : null;
+  if (!a || a.known !== true) {
+    return '<td class="adopt-signin adopt-signin-unknown" data-signin="unknown"' +
+      ' title="The sign-in record could not be read just now, so this says nothing either way. It is a failed question, not a finding about this person."><span class="cs-muted">—</span></td>';
+  }
+  if (a.has_signed_in !== true) {
+    const invitedDays = a.invited_at ? daysSinceLocal(a.invited_at) : null;
+    const invited = invitedDays == null ? "" :
+      invitedDays === 0 ? "invited today" : invitedDays === 1 ? "invited yesterday" : `invited ${invitedDays} days ago`;
+    return `<td class="adopt-signin adopt-signin-never" data-signin="never" data-invited="${esc(String(a.invited_at || ""))}"` +
+      ` title="The authentication service has no sign-in on record for this login${a.invited_at ? ` — invited ${esc(new Date(a.invited_at).toLocaleString("en-GB"))}` : ""}. They have never opened the app.">` +
+      `never${invited ? ` <span class="cs-muted">(${esc(invited)})</span>` : ""}</td>`;
+  }
+  const last = a.last_sign_in_at;
+  if (!last) {
+    return '<td class="adopt-signin" data-signin="yes" title="This login has signed in, but the authentication service did not report when.">yes <span class="cs-muted">(date not reported)</span></td>';
+  }
+  const days = daysSinceLocal(last);
+  const when = days === 0 ? "today" : days === 1 ? "yesterday" : `${days} days ago`;
+  return `<td class="adopt-signin" data-signin="yes" data-last-signin="${esc(String(last))}"` +
+    ` title="The last time this login signed in — ${esc(new Date(last).toLocaleString("en-GB"))}. Signing in is not the same as doing something; the column beside this one is what they did.">` +
+    `${esc(fmtD(String(last).slice(0, 10)))} <span class="cs-muted">(${esc(when)})</span></td>`;
+}
+
+/* R82 · B3 — THE EXPLANATORY PARAGRAPH, in two versions, and the difference between them is
+   whether a limitation still exists.
+
+   BEFORE this round it said, correctly: “This app cannot see sign-ins: that lives in the
+   authentication service and is not readable from here.” That is no longer true, and a panel
+   whose whole character is scrupulousness about what a number means may not go on disclaiming a
+   blind spot it does not have. The supported version therefore states the two columns as the two
+   different questions they are — and is just as precise about the NEW limitation, which is real:
+   a sign-in is not usage. Somebody can sign in, read one page and do nothing, and this panel will
+   show it as exactly that (a sign-in date beside “never” active), not as work.
+
+   The UNSUPPORTED version is the old paragraph, unchanged in substance, because when the sign-in
+   read fails the old limitation is precisely the situation we are in again — plus one sentence
+   saying so, so the em dashes in the column are not read as findings. */
+function adoptionSubHtml(tasksErr) {
+  const tail = `Read over the last ${ADOPTION_WINDOW_DAYS} days; “never” under Last active means nothing recorded in that window. <strong>The nightly automation is excluded</strong> — its rows are logged with no person against them (they show as “System (automation)” in the change history), so they can never make a colleague look busy. Everyone with a back-office login is listed, not only advisers.${tasksErr ? " Overdue tasks could not be read just now and are shown as 0." : ""}`;
+  if (ADOPTION_ACTIVITY_SUPPORTED === true) {
+    return `<p class="panel-sub" id="report-adoption-sub"><strong>These are two different questions.</strong> <strong>“Signed in”</strong> comes from the authentication service — whether this login has ever been used at all, and when it last was. <strong>“Last active” means the last change this person recorded</strong> — a case edited, a task ticked, a note or an appointment written — as logged in the <strong>change history</strong> at the bottom of Settings; <strong>it is not a sign-in</strong>, and a sign-in is not work. Somebody who signs in and only reads leaves no trace on the change history, so a recent sign-in beside “never” active means they came and did nothing — which is a different finding from never having come at all, and now you can tell them apart. ${tail}</p>`;
+  }
+  return `<p class="panel-sub" id="report-adoption-sub"><strong>“Last active” means the last change this person recorded</strong> — a case edited, a task ticked, a note or an appointment written — as logged in the <strong>change history</strong> at the bottom of Settings. <strong>It is not a sign-in.</strong> The sign-in record could not be read just now, so the “Signed in” column says nothing about anybody and shows “—” for everyone — that is a failed question, not a finding. Somebody who signs in and only reads leaves no trace on this table. ${tail}</p>`;
+}
+
 async function renderAdoptionStrip() {
   const el = $("#report-adoption");
   if (!el) return;
@@ -717,18 +838,35 @@ async function renderAdoptionStrip() {
   const activeN = rows.filter((r) => r.last).length;
   const cell = (r) => {
     if (!r.last) {
-      return `<td class="adopt-last adopt-never" data-last="" title="Nothing this person did was recorded in the change history in the last ${ADOPTION_WINDOW_DAYS} days. That is not proof they have never signed in — the app cannot see sign-ins — but they have changed nothing.">never</td>`;
+      /* R82 · B3 — this title used to end "that is not proof they have never signed in — the
+         app cannot see sign-ins". It can now, so the sentence says what the sign-in column
+         beside it actually reports rather than disclaiming a limitation that has gone. When the
+         sign-in read failed, the ORIGINAL wording stands — it was true then and it is true now. */
+      const signInWord = ADOPTION_ACTIVITY_SUPPORTED !== true
+        ? `That is not proof they have never signed in — the sign-in record could not be read just now — but they have changed nothing.`
+        : adoptionNeverSignedIn(r.id)
+          ? `They have never signed in either, so there is nothing to explain: this login has not been used.`
+          : `They have signed in — see the column beside this one — so they have been in and changed nothing.`;
+      return `<td class="adopt-last adopt-never" data-last="" title="Nothing this person did was recorded in the change history in the last ${ADOPTION_WINDOW_DAYS} days. ${signInWord}">never</td>`;
     }
     const days = daysSinceLocal(r.last);
     const when = days === 0 ? "today" : days === 1 ? "yesterday" : `${days} days ago`;
     return `<td class="adopt-last" data-last="${esc(String(r.last))}" title="The most recent change this person recorded — ${esc(new Date(r.last).toLocaleString("en-GB"))}.">${esc(fmtD(String(r.last).slice(0, 10)))} <span class="cs-muted">(${esc(when)})</span></td>`;
   };
-  el.innerHTML = `<h4 class="adopt-h" id="report-adoption-h">Is anyone using it? <span class="count${activeN === rows.length ? "" : " hot"}">${activeN} of ${rows.length} active</span></h4>
+  /* R82 · B3 — the second pill exists ONLY when the RPC answered. It is the headline the
+     production book would show today (three of four logins never signed in), and it is left off
+     entirely rather than shown as "0 never signed in" when we do not know — a zero would be a
+     claim. The first pill keeps its place and its wording, so nothing reading `.adopt-h .count`
+     moves. */
+  const dormant = ADOPTION_ACTIVITY_SUPPORTED === true ? rows.filter((r) => adoptionNeverSignedIn(r.id)).length : null;
+  const dormantPill = dormant ? ` <span class="count hot" id="report-adoption-dormant" data-n="${dormant}" title="These logins exist and have never been signed in to. Everything else on this row is therefore about a desk nobody has opened.">${dormant} never signed in</span>` : "";
+  el.innerHTML = `<h4 class="adopt-h" id="report-adoption-h">Is anyone using it? <span class="count${activeN === rows.length ? "" : " hot"}">${activeN} of ${rows.length} active</span>${dormantPill}</h4>
     <div style="overflow-x:auto;"><table class="imp-table" id="report-adoption-table">
-      <tr><th>Person</th><th>Role</th><th title="The most recent change this person recorded in the change history, over the last ${ADOPTION_WINDOW_DAYS} days.">Last active</th><th title="How many different cases this person changed something on in the last ${ADOPTION_TOUCH_DAYS} days.">Cases touched (${ADOPTION_TOUCH_DAYS}d)</th><th title="Open tasks assigned to this person whose due date is already past.">Overdue tasks</th></tr>
+      <tr><th>Person</th><th>Role</th><th title="${ADOPTION_ACTIVITY_SUPPORTED === true ? `Whether this login has ever signed in at all, and when it last did — read from the authentication service, not from anything recorded in this app.` : `The sign-in record could not be read just now, so this column says nothing about anybody.`}">Signed in</th><th title="The most recent change this person recorded in the change history, over the last ${ADOPTION_WINDOW_DAYS} days.">Last active</th><th title="How many different cases this person changed something on in the last ${ADOPTION_TOUCH_DAYS} days.">Cases touched (${ADOPTION_TOUCH_DAYS}d)</th><th title="Open tasks assigned to this person whose due date is already past.">Overdue tasks</th></tr>
       ${rows.map((r) => `<tr class="adopt-row${r.last ? "" : " row-warn"}" data-staff="${esc(r.id)}">
         <td><strong>${esc(r.name)}</strong></td>
         <td>${esc(ROLE_LABEL[r.role] || r.role || "")}</td>
+        ${adoptionSignInCell(r.id)}
         ${cell(r)}
         <td class="num adopt-touched" data-n="${r.casesTouched}">${r.casesTouched || '<span class="cs-muted">—</span>'}</td>
         ${/* R73 · B2 — AMBER, and an em dash. The identical metric ("open tasks whose
@@ -741,7 +879,7 @@ async function renderAdoptionStrip() {
         <td class="num adopt-overdue" data-n="${r.overdue}">${r.overdue ? `<span class="badge amber">${r.overdue}</span>` : '<span class="cs-muted">—</span>'}</td>
       </tr>`).join("")}
     </table></div>
-    <p class="panel-sub" id="report-adoption-sub"><strong>“Last active” means the last change this person recorded</strong> — a case edited, a task ticked, a note or an appointment written — as logged in the <strong>change history</strong> at the bottom of Settings. <strong>It is not a sign-in.</strong> This app cannot see sign-ins: that lives in the authentication service and is not readable from here, so somebody who signs in and only reads leaves no trace on this table. Read over the last ${ADOPTION_WINDOW_DAYS} days; “never” means nothing recorded in that window. <strong>The nightly automation is excluded</strong> — its rows are logged with no person against them (they show as “System (automation)” in the change history), so they can never make a colleague look busy. Everyone with a back-office login is listed, not only advisers.${tasksErr ? " Overdue tasks could not be read just now and are shown as 0." : ""}</p>`;
+    ${adoptionSubHtml(tasksErr)}`;
 }
 
 /* BUILD 5c — the Reports month picker (defaults to the current month) now threads into every
@@ -5940,4 +6078,4 @@ async function r44ConfirmTicked() {
 
 /* R81 · A3 — deploy handshake stamp. Every round that edits ANY of index.html / core.js /
    reports-money.js / app.js bumps the tag IN ALL FOUR PLACES (see nxCheckBuildTags in app.js). */
-window.__nxTag_reportsmoney = "r81";
+window.__nxTag_reportsmoney = "r82";   // R82 · B2

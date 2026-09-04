@@ -199,8 +199,13 @@ const pickChip = async (page, k) => {
     });
     ok("§A1 · the strip renders inside the owner scoreboard panel", shape && shape.inScoreboard, JSON.stringify(shape));
     eq("§A1b · one row per back-office login (TEAM — the administrator included)", shape.ids, shape.team);
-    eq("§A1c · the three columns the panel asked for", shape.cols.slice(2),
-      ["Last active", "Cases touched (30d)", "Overdue tasks"]);
+    /* PATCHED R82 · B3 — DELIBERATE CONTRACT CHANGE. The panel has a FOURTH column: "Signed in",
+       from the newly-live get_staff_activity() RPC, placed immediately before "Last active"
+       because it is the prior question (did this person ever come at all?) and the two are only
+       readable together. The three original columns are unchanged in name, meaning and order;
+       one was added ahead of them. */
+    eq("§A1c · the four columns the panel now carries — Signed in ahead of the original three", shape.cols.slice(2),
+      ["Signed in", "Last active", "Cases touched (30d)", "Overdue tasks"]);
     ok("§A1d · the copy says “Last active” is not a sign-in", shape.subHasSignIn, JSON.stringify(shape));
     ok("§A1e · the copy says the automation is excluded", shape.subHasSystem, JSON.stringify(shape));
 

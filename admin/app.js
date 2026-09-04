@@ -597,6 +597,32 @@ let authUid = null;
 function lsGet(key) { try { return localStorage.getItem(key); } catch (e) { return null; } }
 function lsSet(key, val) { try { localStorage.setItem(key, val); } catch (e) { /* storage unavailable — degrade to session-only */ } }
 function lsDel(key) { try { localStorage.removeItem(key); } catch (e) { /* storage unavailable — nothing to remove */ } }
+/* ==========================================================================
+   R82 · A4 — THE THREE SCOPE KEYS THAT WERE NEVER NAMESPACED.
+
+   The comment eight lines above states this file's own rule: "every key is
+   namespaced with the signed-in user's id (so a shared machine never leaks one
+   adviser's choice to another)". `nx_diaryview_<uid>`, `nx_tour_step_<uid>`,
+   `nx_whatsnew_last_<uid>`, `nx_seg_<uid>` and `nx_view_<uid>` all obey it.
+   `nx_board_adviser`, `nx_diary_staff` and `nx_clients_adviser` did not — and
+   because a stored value OUTRANKS the signed-in user's role default in all
+   three resolvers, the leak is not cosmetic: verified on a shared browser,
+   Wayne's first-ever Pipeline, Diary and Clients pages all opened filtered to
+   Daniel Potts, silently, with the control showing somebody else's name.
+
+   userKey() is the namespacing, applied inside the three resolvers/writers so
+   the constants keep their names and their meaning (the BASE key). Reading it
+   at call time rather than baking it into a const is deliberate: authUid is
+   only known after sign-in, and these keys are read on the first paint after it.
+
+   MIGRATION: none. An existing un-namespaced value is DROPPED, not moved —
+   restoreUserPrefs deletes all three the moment a user signs in. Moving it
+   would hand whichever colleague happens to sign in first the value that was
+   somebody else's, which is the defect wearing a migration. The cost of
+   dropping is one re-pick of a filter, once, by each person; the role default
+   is what they get in the meantime, which is the right answer anyway.
+   ========================================================================== */
+function userKey(base) { return authUid ? `${base}_${authUid}` : base; }
 const segStoreKey = (uid) => `nx_seg_${uid}`;
 const viewStoreKey = (uid) => `nx_view_${uid}`;
 /* ==========================================================================
@@ -636,6 +662,10 @@ const diaryViewStoreKey = (uid) => `nx_diaryview_${uid}`;
 function restoreUserPrefs(uid) {
   authUid = uid || null;
   if (!uid) return;
+  /* R82 · A4 — drop the pre-R82 un-namespaced values rather than migrate them (see the block
+     above). Idempotent, cheap, and the only place it has to happen: every reader below is
+     already namespaced, so a leftover key would simply sit there being another user's answer. */
+  ["nx_board_adviser", "nx_diary_staff", "nx_clients_adviser"].forEach(lsDel);
   const seg = lsGet(segStoreKey(uid));
   if (seg && SEGMENTS.some(([k]) => k === seg)) pipelineSegment = seg;
   const view = lsGet(viewStoreKey(uid));
@@ -895,6 +925,64 @@ function absenceOn(profileId, ymd) {
 }
 const absenceToday = (profileId) => absenceOn(profileId, localDateStr());
 const isAwayToday = (profileId) => !!absenceToday(profileId);
+/* ==========================================================================
+   R82 · A3 — SOMEBODY WHO HAS NEVER SIGNED IN IS NOT THE LIGHTEST DESK EITHER.
+
+   R13 · M-31 wrote the reasoning for the adjacent case in capitals and it is
+   the same reasoning: "SOMEBODY ON HOLIDAY IS NOT THE LIGHTEST DESK, THEY ARE
+   AN EMPTY ONE." An invited colleague who has never once signed in scores
+   PERFECTLY on the measure leastLoadedAdviser ranks by — zero open cases, zero
+   open tasks, for ever — so they are not merely suggested sometimes, they are
+   structurally and permanently the answer. Discovery panel #6 measured what
+   that costs on the live database: 1,575 of 2,017 cases, and 119 of the 130
+   OPEN ones, are assigned to staff who have never signed in.
+
+   THE ENABLER IS ALREADY LIVE. The CTO has shipped `get_staff_activity()` — no
+   arguments, guarded to signed-in staff, returning a JSON array of
+   `{ id, has_signed_in, last_sign_in_at, invited_at }`, one entry per profile.
+   Nothing here migrates anything.
+
+   FEATURE-DETECTED like every other optional read in this file (the
+   PROT_QUOTE_SUPPORTED / absencesSupported pattern): a 42883, an RLS refusal,
+   a transport failure or a shape this code does not recognise all mean the
+   SAME thing — "no activity data" — and the app then behaves EXACTLY as it did
+   before this round. It never guesses that somebody has not signed in; the
+   exclusion applies only to profiles the RPC positively reported as dormant.
+   ========================================================================== */
+let STAFF_ACTIVITY_SUPPORTED = null;   // null = not yet asked; false = no data, behave as before
+let STAFF_ACTIVITY = {};               // profile id → { has_signed_in, last_sign_in_at, invited_at }
+async function loadStaffActivity() {
+  try {
+    const { data, error } = await db.rpc("get_staff_activity");
+    if (error || !Array.isArray(data)) {
+      // 42883 / RLS refusal / transport / an unexpected shape — all one answer: we do not know.
+      STAFF_ACTIVITY_SUPPORTED = false; STAFF_ACTIVITY = {};
+      return false;
+    }
+    const map = {};
+    data.forEach((r) => {
+      if (!r || !r.id) return;
+      map[r.id] = {
+        has_signed_in: r.has_signed_in === true,
+        // Only trusted when the RPC actually said false; anything else is "unknown", not "dormant".
+        known: typeof r.has_signed_in === "boolean",
+        last_sign_in_at: r.last_sign_in_at || null,
+        invited_at: r.invited_at || null,
+      };
+    });
+    STAFF_ACTIVITY = map; STAFF_ACTIVITY_SUPPORTED = true;
+    return true;
+  } catch (_) { STAFF_ACTIVITY_SUPPORTED = false; STAFF_ACTIVITY = {}; return false; }
+}
+/* The one test. False whenever we do not KNOW — never "probably dormant". */
+function neverSignedIn(profileId) {
+  if (STAFF_ACTIVITY_SUPPORTED !== true || !profileId) return false;
+  const a = STAFF_ACTIVITY[profileId];
+  return !!a && a.known === true && a.has_signed_in === false;
+}
+/* " (never signed in)" — the awaySuffix idiom, so a labelled-but-selectable option reads the same
+   way for both exclusions. Empty string when they have signed in, or when we do not know. */
+const neverSignedInSuffix = (profileId) => (neverSignedIn(profileId) ? " (never signed in)" : "");
 /* " (away until 12 Aug)" — the suffix every informational label uses, so the wording is identical
    on a task assignee select, a lead dropdown and the retention confirm. Empty string when the
    person is here, so a caller can concatenate it unconditionally. */
@@ -940,7 +1028,17 @@ function leastLoadedAdviser() {
      is worse than a lead routed to somebody who is back on Tuesday, and the label on the option
      says which one this is, so nobody is misled about it. */
   const here = pool.filter((p) => !isAwayToday(p.id));
-  const candidates = here.length ? here : pool;
+  const present = here.length ? here : pool;
+  /* R82 · A3 — the SAME rule and the SAME fallback, one step further down. Somebody who has never
+     signed in cannot ring the client back either, and unlike a holiday it never ends. They stay
+     in the dropdown, labelled "(never signed in)" — this removes them from the SUGGESTION only.
+     THE FALLBACK RULE, again stated because it is the interesting half: if the exclusion would
+     empty the pool (a firm where nobody advising has signed in yet — a brand-new install), it is
+     waived and the lightest desk is chosen from whoever is left, exactly as the away rule waives
+     itself. A lead that cannot be routed is worse than a lead routed to somebody dormant, and the
+     option label says which one this is. */
+  const active = present.filter((p) => !neverSignedIn(p.id));
+  const candidates = active.length ? active : present;
   let best = null;
   candidates.forEach((p) => { if (!best || map[p.id].total < map[best].total) best = p.id; });
   return best;
@@ -1013,6 +1111,13 @@ function leadLoadTitle(id) {
         ? "Everyone who advises is away today, so this is the lightest desk regardless — the lead still has to go somewhere. "
         : "Anyone away today is skipped for this suggestion; they are still in the list, labelled. ")
       : "")
+    /* R82 · A3 — and the same sentence for the same exclusion, or "lightest load" over a name that
+       has never once opened this app reads exactly as wrong as it is. */
+    + (pool.some((p) => neverSignedIn(p.id))
+      ? (pool.every((p) => neverSignedIn(p.id))
+        ? "Nobody who advises has ever signed in, so this is the lightest desk regardless — the lead still has to go somewhere. "
+        : "Anyone who has never signed in is skipped for this suggestion; they are still in the list, labelled. ")
+      : "")
     + `It is a suggestion, not an assignment — change it and the lead goes where you say.`;
 }
 /* T1-3 — the "route this lead to…" select. Unlike adviserOptionsHtml there is no blank placeholder:
@@ -1032,7 +1137,10 @@ function leadAdviserOptionsHtml() {
   /* R13 · M-31 — an away colleague is still offered and still selectable; the label says so. The
      suffix goes LAST so the "(me)" and "· lightest load" markers the tests and the operator read
      are exactly where they were. */
-  return ordered.map((p) => `<option value="${p.id}" ${p.id === sel ? "selected" : ""}>${esc(staffName(p.id))}${p.id === meId ? " (me)" : ""}${p.id === rr ? " · lightest load" : ""}${esc(awaySuffix(p.id))}</option>`).join("");
+  /* R82 · A3 — the never-signed-in suffix rides LAST, beside awaySuffix and for the same reason:
+     the "(me)" and "· lightest load" markers the tests and the operator read stay exactly where
+     they were, and an excluded colleague is still offered and still selectable. */
+  return ordered.map((p) => `<option value="${p.id}" ${p.id === sel ? "selected" : ""}>${esc(staffName(p.id))}${p.id === meId ? " (me)" : ""}${p.id === rr ? " · lightest load" : ""}${esc(awaySuffix(p.id))}${esc(neverSignedInSuffix(p.id))}</option>`).join("");
 }
 /* The select plus the "(lightest load)" note that sits beside it. The note is hidden the moment the
    selection moves off the suggestion (see the delegated change listener below) — a label that keeps
@@ -4609,7 +4717,7 @@ function staffFilterDefault(sel, key) {
   const el = $(sel);
   if (!el) return null;
   const has = (v) => !!v && [...el.options].some((o) => o.value === v);
-  const stored = lsGet(key);
+  const stored = lsGet(userKey(key));   // R82 · A4 — per user, like every other pref this file stores
   if (has(stored)) return stored;
   if (ME && !isAdminOrOwner() && has(ME.id)) return ME.id;
   return "all";
@@ -4629,7 +4737,7 @@ function applyStoredStaffFilter(sel, key) {
 function persistStaffFilter(sel, key) {
   const el = $(sel);
   if (!el) return;
-  lsSet(key, el.value || "all");
+  lsSet(userKey(key), el.value || "all");   // R82 · A4
 }
 async function loadTeam(session) {
   // T1-1: 'admin' is a first-class back-office role (the login gate at showApp already admits it),
@@ -4715,6 +4823,11 @@ async function loadTeam(session) {
      arrives after them would leave the first screen of the day showing the one answer this
      feature exists to correct. Soft — a database without the table simply reads back nothing. */
   await loadAbsences();
+  /* R82 · A3 — and the sign-in record, in the same place and for the same reason the rota is read
+     here: the first paint of My Day carries lead-routing selects, and a suggestion computed before
+     this answers is the exact suggestion this round exists to stop making. Soft in every failure
+     mode — a database without the RPC simply leaves every routing decision as it was. */
+  await loadStaffActivity();
 }
 $("#login-form").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -5570,6 +5683,41 @@ async function clientDobStats() {
 let emailSendingState = null;      // last probe result — the release overlay quotes its pending count
 const EMAIL_HOLD_KEYWORD = "SEND";
 const emailHoldOn = () => String(settings.email_hold ?? "on").trim().toLowerCase() !== "off";
+/* ==========================================================================
+   R82 · A1 — THE FINANCIAL-PROMOTIONS GATE, ACTUALLY ENFORCED CLIENT-SIDE.
+
+   Settings has said, in bold, since the switch was added: "the referral nudge,
+   the protection intro email and the GI email never leave, whatever their own
+   switches say." Production runs with the switch OFF. Discovery panel #6 read
+   the code and found the sentence was true of exactly ONE of the three: the
+   server-side `queue_automated_emails` RPC declines to create a
+   `referral_request` row. `protection_offer` was inserted straight into
+   email_queue by BOTH protection paths — the row's own Email button and R80's
+   bulk "Queue protection intro" — with no gate on either, and each then fired
+   a scoped send at the row it had just written. (`gi_exchange` has no insert
+   site anywhere in this app, which is why nobody noticed: the switch was
+   never load-bearing for it.)
+
+   So both protection paths now REFUSE, before they ask anything and before
+   they write anything, and the refusal says what is off and where to turn it
+   on — the same shape as the emailHoldOn() notice two lines up, which is the
+   other switch that changes what a send button does. It is deliberately not a
+   disabled button: a control that does nothing and does not say why is the
+   defect this round exists to remove.
+
+   BELT AND BRACES: `edge/process-emails-v20.ts` refuses the same three types
+   at SEND time (a row queued before the switch went off, or by any other
+   client, is cancelled rather than delivered). The client gate is the one that
+   can explain itself to the person pressing the button; the server gate is the
+   one that is actually a control. Neither is the other's substitute.
+   ========================================================================== */
+const FIN_PROMO_TYPES = ["referral_request", "protection_offer", "gi_exchange"];
+const finPromosApproved = () => String(settings.financial_promotions_approved ?? "off").trim().toLowerCase() === "on";
+/* One sentence, two call sites, so the two protection paths can never explain the same refusal in
+   two different ways. `what` names the thing that was refused in the reader's own words. */
+const finPromoRefusal = (what) => `${what} — financial promotions are switched OFF `
+  + `(Settings › Rules that block work › “Financial promotions approved”). A protection intro is a regulated financial promotion, `
+  + `so nothing was queued and nothing was sent. An Owner turns that switch on once your network has approved the template.`;
 function emailSendingProbe() {
   return Promise.resolve(db.functions.invoke("process-emails", { body: { queue_ids: [] } }))
     .then((r) => {
@@ -5790,8 +5938,10 @@ function goliveChecks() {
       sel: "#adviser-targets-section", fallback: "#set-sec-digest" },
     { id: "golive-promos", label: "Financial promotions approved",
       state: String(settings.financial_promotions_approved ?? "off") === "on" ? "ready" : "blocked",
-      detail: String(settings.financial_promotions_approved ?? "off") === "on" ? "Approved — the three marketing emails may send." : "Off — the master switch has never been turned on.",
-      blocks: "The referral nudge, the protection intro email and the GI email are regulated financial promotions and none of them sends while this is off. Get your network's approval for the templates first.",
+      /* R82 · A1 — reworded with the Settings note, and for the same reason: this line has to be
+         true of what the code does, not of what the switch was meant to do. */
+      detail: String(settings.financial_promotions_approved ?? "off") === "on" ? "Approved — referral, protection intro and GI emails may be queued and sent." : "Off — the master switch has never been turned on.",
+      blocks: "The referral nudge is never queued, the Protection page's two intro-email buttons refuse and say why, and any referral / protection / GI email already in the queue is cancelled at send time rather than delivered. Everything that is not a financial promotion — rate-end reminders, document requests, fee and review requests — is unaffected. Get your network's approval for the templates first.",
       sel: '[name="financial_promotions_approved"]', fallback: "#set-sec-comms" },
     { id: "golive-reviewlink", label: "Review link for happy clients",
       state: reviewLink ? "ready" : "blocked",
@@ -5909,7 +6059,7 @@ async function renderSettings() {
             <option value="off" ${(settings.financial_promotions_approved ?? "off") === "on" ? "" : "selected"}>Off</option>
             <option value="on" ${settings.financial_promotions_approved === "on" ? "selected" : ""}>On</option>
           </select>
-        </label>`, `<p class="panel-sub set-note" id="setting-note-financial_promotions_approved"><strong>Off = the referral nudge, the protection intro email and the GI email never leave, whatever their own switches say.</strong> All three are regulated financial promotions. Confirm your network has approved the templates before switching this on.</p>`) : ""}
+        </label>`, `<p class="panel-sub set-note" id="setting-note-financial_promotions_approved">${/* R82 · A1 — REWORDED. The old sentence ("the referral nudge, the protection intro email and the GI email never leave, whatever their own switches say") was true of one of the three: the nightly queueing function declines to create a referral nudge. Both protection-intro buttons inserted and sent straight past it, and nothing anywhere queues a GI email at all. A reader must be able to trust this paragraph literally, so it now names the three enforcement points that exist and nothing else. */ ""}<strong>Off = a regulated financial promotion is not queued, and is cancelled rather than sent if it is already sitting in the queue.</strong> That is enforced in three places, and these are all of them: the nightly queueing job never creates a <strong>referral nudge</strong>; the <strong>Queue protection intro</strong> buttons on the Protection page — the row's own and the bulk one — refuse and say why; and the send run cancels any queued referral nudge, protection intro or GI email, marking the row cancelled with the reason instead of delivering it. Nothing else is affected: rate-end reminders, document requests, fact-finds, fee and review requests are not financial promotions and go out as normal. Note that the <strong>GI / buildings-insurance email</strong> has no button anywhere in this app that queues one — there is nothing for this switch to stop yet. Confirm your network has approved the templates before switching this on.</p>`) : ""}
       </div>
     </div>`;
   const general = blockerGroup + beforeBank.map(settingFieldHtml).join("") + bankGroup + afterBank.map(settingFieldHtml).join("") + `
@@ -8357,13 +8507,28 @@ function phoneActionsHtml(phone, opts) {
   const raw = String(phone).trim();
   if (!raw) return "";
   const href = raw.replace(/[^\d+]/g, "");
-  const tel = `<span class="ret-row-tel" title="Ring the client — the number on their record.">📞 ${telLink(raw)}</span>`;
+  /* R82 · A7 — `compact`: the icons alone, the number in the title. For a cell inside a TABLE whose
+     width is a contract (R69 · B2 pins the Protection table fitting 1280 with nothing to scroll),
+     the printed number and the word "Text" are ~150px this layout does not have — and a
+     click-to-call does not need the digits on screen to be pressed. Row-item layouts (the call
+     list, the GI band, every Retention surface) keep the full form. */
+  const tel = o.compact
+    ? `<span class="ret-row-tel"><a class="contact-link" href="tel:${esc(raw.replace(/[^\d+]/g, ""))}" title="Ring ${esc(raw)} — the number on their record." aria-label="Ring ${esc(raw)}" onclick="event.stopPropagation()">📞</a></span>`
+    : `<span class="ret-row-tel" title="Ring the client — the number on their record.">📞 ${telLink(raw)}</span>`;
   if (!o.sms) return tel;
+  /* R82 · A7 — `clients.sms_opt_out` has been a real column (and a field on the client form) since
+     the schema was written, and NOTHING has ever read it. A pre-drafted text to somebody who has
+     asked not to be texted is the one thing this affordance must not offer, so the 💬 half is
+     replaced by the reason — the call stays, because a call is not a text and the opt-out is about
+     texts. Only callers that HOLD the flag pass it; the three older callers (Retention's rate rows,
+     the Gone-quiet list, My Day / no-next-action) take their number from reads that do not carry
+     the column yet and are unchanged — named in HARNESS as the follow-up rather than half-done here. */
+  if (o.smsOptOut) return tel + ` <span class="row-sms-optout cs-muted" title="This client is marked SMS opt-out on their record (Client › Contact preferences). Ring them instead, or change it there.">${o.compact ? "🚫" : "no texts"}</span>`;
   /* encodeURIComponent leaves ' ! ( ) * alone — legal in a URI, but a bare apostrophe inside an
      href attribute is one more thing for a message app's own parser to get wrong, so the whole
      body is percent-encoded. */
   const body = encodeURIComponent(smsHouseBody(o)).replace(/['()!*]/g, (ch) => "%" + ch.charCodeAt(0).toString(16).toUpperCase());
-  return tel + ` <a class="contact-link row-sms-link" href="sms:${esc(href)}?&amp;body=${esc(body)}" title="${esc(SMS_TIP)}" onclick="event.stopPropagation()">💬 Text</a>`;
+  return tel + ` <a class="contact-link row-sms-link" href="sms:${esc(href)}?&amp;body=${esc(body)}" title="${esc(SMS_TIP)}" onclick="event.stopPropagation()">${o.compact ? "💬" : "💬 Text"}</a>`;
 }
 /* ==========================================================================
    R70 · B2 — "LAST CONTACT", THE SAME DEFINITION THE COLD SEGMENT USES.
@@ -9776,6 +9941,46 @@ async function retRowPhones(feed, rows) {
   } catch (_) { /* no numbers — the rows render exactly as they did before */ }
   return out;
 }
+/* ==========================================================================
+   R82 · A7 — THE PROTECTION PAGE'S PHONE NUMBERS, THE retRowPhones WAY.
+
+   The Protection page is the firm's best revenue surface — it currently reads
+   "best 250 of 1,516 opportunities (~£248,710 estimated commission on this
+   page)" — and it carried NO phone number anywhere: zero `tel:`, zero `sms:`
+   across the table, the completed-book call list and the GI band, because
+   `get_protection_pipeline` returns `has_email` and no phone. So ringing the
+   top-ranked name meant opening the case: 30-45 seconds and a broken rhythm on
+   every single call, two to three hours across a 250-name pass.
+
+   NO MIGRATION AND NO NEW WAVE. This is retRowPhones' pattern verbatim — a
+   client-side lookup for rows the RPC did not carry — riding wave 2's existing
+   Promise.all and cached with everything else, so search / filter / scope
+   clicks still cost zero network. `sms_opt_out` comes along because the 💬 half
+   of phoneActionsHtml is a text (see A7 in that helper). Soft by design: a
+   failed read leaves every row exactly as it was, with no dead "📞 —".
+   ========================================================================== */
+async function protRowPhones(rows) {
+  const out = {};
+  try {
+    const ids = [...new Set((rows || []).map((r) => r && r.client_id).filter(Boolean))];
+    if (!ids.length) return out;
+    const { data } = await inChunks(ids, (sl) => db.from("clients").select("id,phone,first_name,sms_opt_out").in("id", sl));
+    (data || []).forEach((r) => { if (r && r.phone) out[r.id] = { phone: r.phone, first: r.first_name || "", smsOptOut: !!r.sms_opt_out }; });
+  } catch (_) { /* no numbers — the rows render exactly as they did before */ }
+  return out;
+}
+/* The one place the protection surfaces turn a row into its phone affordance, so the table, the
+   call list and the GI band can never present a number three different ways. */
+function protPhoneHtml(phones, r, opts) {
+  const p = phones && r && phones[r.client_id];
+  if (!p) return "";
+  return phoneActionsHtml(p.phone, {
+    sms: true,
+    name: p.first || String(r.client_name || "").split(/\s+/)[0] || "",
+    smsOptOut: p.smsOptOut,
+    compact: !!(opts && opts.compact),
+  });
+}
 /* §2 — the pipeline those buttons feed. Same rows and same figures as Today's drawer; this one is
    scoped, and capped at a hundred rather than twelve. */
 async function loadRetentionPipelinePanel(scope) {
@@ -10263,15 +10468,71 @@ window.markRateReminded = async function (caseId, ev) {
 async function publishAdviserTaskLoad() {
   const horizon = localDateStr(Date.now() + 14 * 86400000);
   const { data: raw, error } = await db.from("case_tasks")
-    .select("id,assigned_to")
+    /* R82 · A8 — due_date joins the select. NOT a new read and NOT a new horizon: the same rows,
+       the same fortnight, one more column, so the "assigned to me and due later" figure below
+       costs exactly nothing. */
+    .select("id,assigned_to,due_date")
     .is("done_at", null)
     .lte("due_date", horizon)
     .limit(200); // the same fetch cap the drawer used, so the figure cannot change meaning
   /* BOTH halves or none (adviserLoadMap's own rule): a failed read is UNKNOWN, not zero. Leaving a
      stale map from the previous paint would let the select claim a ranking it can no longer see. */
-  if (error) { advLoadTasks = null; return; }
+  if (error) { advLoadTasks = null; advTaskAhead = null; return; }
   advLoadTasks = {};
-  (raw || []).forEach((t) => { if (t.assigned_to) advLoadTasks[t.assigned_to] = (advLoadTasks[t.assigned_to] || 0) + 1; });
+  advTaskAhead = {};
+  const today = localDateStr();
+  (raw || []).forEach((t) => {
+    if (!t.assigned_to) return;
+    advLoadTasks[t.assigned_to] = (advLoadTasks[t.assigned_to] || 0) + 1;
+    /* R82 · A8 — the rows My Day cannot show. get_briefing returns OVERDUE and DUE-TODAY tasks, so
+       a task assigned to you and due in ten days appears on no page in this app except a Diary
+       walked forward a month. Counted here per adviser, with the soonest date, so the panel below
+       can say how much work is coming and when the first of it lands. */
+    const d = String(t.due_date || "").slice(0, 10);
+    if (!d || d <= today) return;
+    const cur = advTaskAhead[t.assigned_to] || { n: 0, soonest: null };
+    cur.n++;
+    if (!cur.soonest || d < cur.soonest) cur.soonest = d;
+    advTaskAhead[t.assigned_to] = cur;
+  });
+}
+/* ==========================================================================
+   R82 · A8 — WORK ASSIGNED TO SOMEBODY HAS TO REACH THEM.
+
+   Assignment itself is built well — every writer resolves ONE assignee and the
+   case, its task and its queued email all read it. What was missing is the
+   other end: a task assigned to Wayne, due in ten days, was invisible on every
+   single page. My Day shows overdue and due-today (get_briefing's own contract);
+   the Diary shows it only if you walk forward a month; no badge, no count, no
+   "assigned to me" anywhere. Work that nobody can see is work that does not get
+   done, and this firm assigns a great deal of it (A3: 119 of 130 open cases).
+
+   DELIBERATELY THE SMALLEST THING THAT FIXES IT: one honest line under My Day's
+   date, from a read the dashboard already makes, saying how many are coming and
+   when the first lands — and a way to go and look at them. No new page, no
+   notification system, no KPI tile (the strip is a five-tile contract several
+   suites read as a census). It obeys My Day's own Mine/All toggle, because that
+   is the control that already says whose day this screen is describing.
+   ========================================================================== */
+let advTaskAhead = null;   // adviser id → { n, soonest } for open tasks due AFTER today
+function briefAheadLine() {
+  const el = $("#brief-ahead");
+  if (!el) return;
+  if (!advTaskAhead) { el.classList.add("hidden"); el.innerHTML = ""; return; }
+  const mine = briefingScope === "mine" && !!(ME && ME.id);
+  let n = 0, soonest = null;
+  const take = (v) => { if (!v) return; n += v.n; if (!soonest || (v.soonest && v.soonest < soonest)) soonest = v.soonest; };
+  if (mine) take(advTaskAhead[ME.id]);
+  else Object.keys(advTaskAhead).forEach((k) => take(advTaskAhead[k]));
+  if (!n) { el.classList.add("hidden"); el.textContent = ""; el.removeAttribute("title"); return; }
+  el.classList.remove("hidden");
+  el.textContent = `${n} due later`;
+  el.setAttribute("data-ahead-n", String(n));
+  el.title = `${n} more open task${n === 1 ? "" : "s"} `
+    + (mine ? "assigned to you" : "assigned across the team")
+    + ` ${n === 1 ? "is" : "are"} due later${soonest ? ` — the first on ${fmtD(soonest)}` : ""}. `
+    + `They are not on this list: My Day shows what is overdue or due today. Press this to open the diary.`;
+  el.setAttribute("aria-label", el.title);
 }
 /* ---------- R12a·D12 — DONE, AND UNDONE ----------
    "Done" was one unconfirmed click on a small ✓ next to another small ✓, the row disappeared, and
@@ -10394,11 +10655,40 @@ function taskSnoozeControlsHtml(taskId, ctx) {
     </span>`;
 }
 
+/* ==========================================================================
+   R82 · A6 — TODAY'S PROTECTION TAB SHOWED EVERY ADVISER'S CLIENTS.
+
+   This drawer's other half — the Fees tab beside it — has been gated since
+   BACKEND-R4 §1 so that a list of other people's clients is not put in front
+   of somebody it is not for. The Rate & ERC drawer above it grew its own
+   Mine/Unassigned/All segment in R12b · W-16 for the identical reason, written
+   down there: "Wayne's 'rates ending soon' was the whole firm's — thirty-odd
+   rows, most of them Luke's". This panel was the last one in the family with
+   NO owner filter of any kind.
+
+   Verified on production: signed in as Wayne, who carries nothing, every panel
+   on Today reads 0 — except this one, which lists five strangers. That is not
+   a cosmetic complaint. 119 of the 130 open cases in production are assigned to
+   people who have never signed in (see A3), so on the day a real adviser first
+   signs in, the ONE panel on Today that is not empty is a list of clients that
+   are not theirs, with "discuss protection" beside each.
+
+   IT FOLLOWS MY DAY'S OWN Mine/All TOGGLE (`briefingScope`) rather than growing
+   a fourth segment on one screen: the control is already on this page, already
+   role-defaulted at sign-in (adviser ⇒ mine; Owner/Administrator ⇒ all, the
+   R12b · W-7 split), and the reader has already told it whose day this is. The
+   filter is applied SERVER-SIDE, before `.limit(12)` — filtering twelve
+   firm-wide rows down afterwards would hand an adviser two of their own and
+   call it a list. `setBriefScope` repaints this panel with the rest.
+   ========================================================================== */
 async function loadProtection() {
   const cutoff = new Date(Date.now() - 30 * 86400000).toISOString();
-  const { data: opps, error } = await db.from("cases")
-    .select("id,client_id,stage,lender,completed_at,clients!client_id(first_name,last_name)")
-    .eq("protection_status", "not_discussed")
+  const mine = briefingScope === "mine" && !!(ME && ME.id);
+  let q = db.from("cases")
+    .select("id,client_id,stage,lender,completed_at,assigned_to,clients!client_id(first_name,last_name)")
+    .eq("protection_status", "not_discussed");
+  if (mine) q = q.eq("assigned_to", ME.id);
+  const { data: opps, error } = await q
     .or(`stage.in.(application,offer),and(stage.eq.completed,completed_at.gte.${cutoff})`)
     .order("updated_at", { ascending: false })
     .limit(12);
@@ -10411,14 +10701,19 @@ async function loadProtection() {
   /* R78 · A1a — client_id joined the select (base column, free) purely so the context's
      sibling read can start in the same wave — the A2 hint contract. */
   const protCtx = await loadPropContext((opps || []).map((c) => c.id), { clientIds: (opps || []).map((c) => c.client_id) });
-  $("#protection-list").innerHTML = (opps || []).length ? opps.map((c) => `
+  /* R82 · A6 — say whose list this is, the way the Fees tab says what its own list is narrowed to.
+     A count with no scope on it is the thing that made this panel readable as the firm's book. */
+  const protTabCaption = `<div class="panel-sub" id="protection-scope-note" style="margin:0 0 8px;">${
+    mine ? "Showing <strong>your cases only</strong> — My Day's Mine/All toggle above decides this."
+      : "Showing <strong>every adviser's cases</strong> — My Day's Mine/All toggle above decides this."}</div>`;
+  $("#protection-list").innerHTML = protTabCaption + ((opps || []).length ? opps.map((c) => `
     <div class="row-item">
       <div class="row-main">
         <div class="t" onclick="openCase('${c.id}')">${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" "))} ${propCtxChip(protCtx, c.id, "row-prop", { noStage: true })}</div>
         <div class="s">${c.lender ? lenderIcon(c.lender) + esc(c.lender) + " · " : ""}${STAGE_LABEL[c.stage] || c.stage}${c.stage === "completed" ? " " + fmtD(c.completed_at) : ""}</div>
       </div>
       <span class="badge amber">discuss protection</span>
-    </div>`).join("") : '<div class="empty">All live cases have protection recorded. 👍</div>';
+    </div>`).join("") : `<div class="empty">${mine ? "None of your live cases is missing a protection conversation. 👍" : "All live cases have protection recorded. 👍"}</div>`);
   $("#tab-protection-count").textContent = (opps || []).length;
   updateRevenueDrawerCount();
 }
@@ -10627,6 +10922,7 @@ function briefActions(it) {
 window.gotoSettings = function () { nav("settings"); };
 async function loadBriefing() {
   $("#briefing-date").textContent = new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+  briefAheadLine();   // R82 · A8 — from the load map loadDashboard has already published
   /* ========================================================================
      R78 · A1b — MY DAY'S ENRICHMENT READS RUN IN WAVES, NOT IN A QUEUE.
 
@@ -11467,6 +11763,8 @@ function setBriefScope(s) {
      window in which the tiles and the list underneath them describe different people. */
   renderTodayKpis();
   loadBriefing();
+  loadProtection();   // R82 · A6 — the Protection tab follows this toggle now, so it repaints with it
+  briefAheadLine();   // R82 · A8 — and so does the "due later" line (no read: it re-reads the map)
 }
 $("#brief-scope-mine").addEventListener("click", () => setBriefScope("mine"));
 $("#brief-scope-all").addEventListener("click", () => setBriefScope("all"));
@@ -13322,6 +13620,30 @@ function boardDupeClientIds(cases) {
 let boardCache = null;      // { cases, stageEntry } — last successful board read this session
 let boardLoadSeq = 0;       // R78 · A5 — stale-response guard (the dashLoadSeq idiom)
 function bustBoardCache() { boardCache = null; }
+/* ==========================================================================
+   R82 · A2 — A REFUSAL-DRIVEN REFRESH MUST ACTUALLY RE-READ.
+
+   boardCache is busted by THIS TAB'S writes and by nothing else: there is no
+   polling, no realtime subscription and no visibilitychange handler anywhere
+   in this app. So R76's stale-board guard (moveCaseToStage, below) — which
+   exists precisely to notice a COLLEAGUE'S change — detected the mismatch off
+   its own fresh single-case read, toasted "…refreshing the board" and called
+   loadPipeline(), which repainted the identical cached snapshot because no
+   write had happened here. The card came back at the old stage, the next press
+   raised the same toast, and the only way out was F5. The comment above that
+   guard already stated the intent it was not achieving: "then the board
+   repaints so the next press is against the truth."
+
+   These two helpers are that intent, spelled. Use them on any path that
+   refuses an action BECAUSE the fresh read disagreed with what is on screen:
+   the snapshot has been PROVEN wrong, so it must not be what the repaint
+   serves. Paths that refuse for a reason unrelated to freshness (a cancelled
+   confirm, a captured lost-reason abandoned) keep the cheap cached repaint —
+   nothing changed underneath them, and a needless refetch on every Escape is
+   the cost R78 removed on purpose.
+   ========================================================================== */
+function reloadPipelineFresh() { bustBoardCache(); return loadPipeline(); }
+function reloadProtectionFresh() { bustProtCache(); return loadProtectionPage(); }
 async function loadPipeline() {
   const seq = ++boardLoadSeq;
   /* R43 — the server-side store, read once a session, from the same place (and for the same
@@ -15642,7 +15964,9 @@ window.moveCaseToStage = async function (caseId, targetStage, opts = {}) {
   if (opts.expectedStage && cRow && cRow.stage !== opts.expectedStage) {
     if (!silent) {
       toast(`This case moved to ${STAGE_LABEL[cRow.stage] || cRow.stage} since this board loaded — refreshing the board`);
-      if (!skipReload) loadPipeline();
+      /* R82 · A2 — reloadPipelineFresh, not loadPipeline. The fresh read above has just PROVEN
+         the cached snapshot wrong; repainting it was what made this refusal repeat for ever. */
+      if (!skipReload) reloadPipelineFresh();
     }
     return "stale";
   }
@@ -15650,7 +15974,11 @@ window.moveCaseToStage = async function (caseId, targetStage, opts = {}) {
   if (cRow && protectionGateBlocks(cRow, targetStage)) {
     if (!silent) {
       toast("🛡️ Record the protection conversation before submitting — set a protection status");
-      if (!skipReload) loadPipeline(); // put the card back
+      /* R82 · A2 — the sibling with the same defect. This refusal is decided on the FRESH row's
+         protection_status, so a colleague who has just recorded (or cleared) it makes the board's
+         cached chip a lie; repainting the cache put the same wrong card back under the same
+         refusal. Bust first — and the case modal that opens below reads the database anyway. */
+      if (!skipReload) reloadPipelineFresh(); // put the card back — against the truth
       /* R5-34 — the refusal used to be the end of it: a toast, the card snapped back, and the field
          that would unblock the move was three clicks away inside a collapsed drawer. Open the case
          ON the protection select so the block routes straight to its own fix.
@@ -16191,7 +16519,10 @@ async function bulkStartRetentionRun(ids) {
   const { data: rows, error } = await inChunks(ids, (sl) => db.from("cases")
     /* R70 · A3 — created_at joins the read because the sold-property pre-flight below compares it
        against the other client's case ("is theirs NEWER than ours?" — propSoldWarning). */
-    .select("id,client_id,stage,rate_end_date,case_kind,lender,retention_source_case_id,created_at"
+    /* R82 · A3 — assigned_to joins the read so the confirm can say WHOSE desk this batch is
+       about to land on, and so the "assign to me" control below has something to be a choice
+       against. A base column; naming it costs no feature detection. */
+    .select("id,client_id,stage,rate_end_date,case_kind,lender,retention_source_case_id,created_at,assigned_to"
       + (propOn ? ",property_address" : "") + ",clients!client_id(first_name,last_name)")
     .in("id", sl));
   if (error) return dbFail("bulkStartRetentionRun", error);
@@ -16247,15 +16578,39 @@ async function bulkStartRetentionRun(ids) {
     return toast(`Nothing to start — ${soldSkips.length} of the ${ids.length} selected look sold (${soldSkips.slice(0, 3).map((s) => nameOf(s.c)).join("; ")}${soldSkips.length > 3 ? `; and ${soldSkips.length - 3} more` : ""})`
       + (skipped.length ? ` and ${skipped.length} ${skipped.length === 1 ? "is" : "are"} ineligible` : ""));
   }
-  const okd = await confirmBulkRetentionStart(startable, soldSkips, skipped, ids.length, nameOf);
+  /* ==========================================================================
+     R82 · A3 — THE BULK PATH GETS THE CONTROL THE SINGLE ROW HAS HAD SINCE R12b.
+
+     retentionToMeHtml puts "assign to me" beside every single-row retention
+     button, because the successor INHERITS the completed case's adviser and
+     that is not always the right answer. The bulk verb — the one that starts
+     122 of them in a press — had no such control at all, so a sweep dealt the
+     whole batch onto whichever desks history happened to leave them on,
+     including (measured on the live database) advisers who have never signed
+     in. The tick is offered only where it is a real choice, exactly as the row
+     control is: I am on the team, and at least one case would otherwise go
+     somewhere else.
+     ========================================================================== */
+  const meId = (ME && ME.id) || null;
+  const assignees = startable.map((c) => retentionAssigneeFor(c));
+  const elsewhereN = meId ? assignees.filter((a) => a.id && a.id !== meId).length : 0;
+  // R82 · A3 — and the fact that makes the tick urgent rather than merely available.
+  const dormantNames = [...new Set(assignees.filter((a) => a.id && a.id !== meId && neverSignedIn(a.id)).map((a) => staffName(a.id)))];
+  const okd = await confirmBulkRetentionStart(startable, soldSkips, skipped, ids.length, nameOf, { meId, elsewhereN, dormantNames });
   if (!okd) return;
+  const toMe = !!(okd && okd.toMe && meId);
 
   let created = 0, cancelled = 0, failed = 0, partial = 0;
   const failures = [], partials = [];
   for (const c of startable) {
     /* assumeConfirmed: the overlay above asked every question this batch can answer, including the
        sold-property one, so the per-case confirm would be the same question a second time. */
-    const res = await startRetentionCase(c.id, null, { silent: true, assumeConfirmed: true });
+    /* R82 · A3 — `assignTo` is startRetentionCase's own programmatic override (R12b · W-14a), so
+       the case, its call task and the queued reminder all read the one value, exactly as the
+       single-row tick makes them. Absent when the tick is off: the inherit rule is untouched. */
+    const res = await startRetentionCase(c.id, null, toMe
+      ? { silent: true, assumeConfirmed: true, assignTo: meId }
+      : { silent: true, assumeConfirmed: true });
     const st = (res && res.status) || "error";
     if (st === "created") created++;
     else if (st === "created_with_warnings") { created++; partial++; partials.push(nameOf(c)); }
@@ -16267,6 +16622,7 @@ async function bulkStartRetentionRun(ids) {
      only "6 created" when two of them failed to queue their reminder is the failure mode the
      single-case flow already fixed for itself. */
   let out = `${created} retention case${created === 1 ? "" : "s"} created`;
+  if (created && toMe) out += ` — assigned to you (${staffName(meId)})`;   // R82 · A3
   if (partial) out += ` (${partial} with problems: ${partials.slice(0, 3).join(", ")}${partials.length > 3 ? ` and ${partials.length - 3} more` : ""} — open them and check the note, task and queued email)`;
   if (cancelled) out += ` · ${cancelled} cancelled by you`;
   if (skipped.length) out += ` · ${skipped.length} skipped as ineligible`;
@@ -16290,9 +16646,20 @@ async function bulkStartRetentionRun(ids) {
    only on the primary button. Everything the old text said is still said — what will be created,
    who for, what was skipped and why — plus the sold-property answers the per-case dialogs used to
    carry one at a time. */
-function confirmBulkRetentionStart(startable, soldSkips, skipped, selectedN, nameOf) {
+function confirmBulkRetentionStart(startable, soldSkips, skipped, selectedN, nameOf, who) {
   const list = (rows, render) => rows.slice(0, 12).map(render).join("")
     + (rows.length > 12 ? `<li class="cs-muted">…and ${rows.length - 12} more</li>` : "");
+  /* R82 · A3 — the bulk "assign to me". Rendered only where it can do something (see the block in
+     bulkStartRetentionRun): no me, or nothing going elsewhere, and it is a dead control. */
+  const w = who || {};
+  const offerToMe = !!(w.meId && w.elsewhereN > 0);
+  const dormant = (w.dormantNames || []);
+  const toMeHtml = offerToMe ? `
+    ${dormant.length ? `<p class="dq-notice bad" id="bulkret-dormant"><strong>${dormant.length === 1 ? "One of these advisers has" : `${dormant.length} of these advisers have`} never signed in to this system</strong> — ${esc(dormant.slice(0, 3).join(", "))}${dormant.length > 3 ? ` and ${dormant.length - 3} more` : ""}. A case, a call task and a queued client reminder landing on a desk nobody opens is work that will not get done. Tick the box below to take them yourself.</p>` : ""}
+    <label class="row-check" id="bulkret-tome-label" style="display:flex;gap:8px;align-items:flex-start;font-size:13px;font-weight:600;color:var(--dark);margin-top:8px;">
+      <input type="checkbox" id="bulkret-tome" style="width:auto;margin-top:2px;">
+      <span>Assign all ${startable.length} to me instead<span class="s cs-muted" style="font-weight:400;"> — ${w.elsewhereN} of the ${startable.length} would otherwise go to the adviser on the completed case. The new case, its “Call client — rate ends …” task and the queued reminder all follow this choice.</span></span>
+    </label>` : "";
   return openOverlay(`
     <h3>🔁 Start ${startable.length} retention case${startable.length === 1 ? "" : "s"}</h3>
     <p class="panel-sub">One retention case each: a new Enquiry linked back to the completed case, a “Call client — rate ends …” task on that case's own adviser, and a rate-end reminder queued to the client (never sent from here). ${esc(startable.length === selectedN ? "Every case you selected is eligible." : `${startable.length} of the ${selectedN} you selected — the rest are listed below.`)}</p>
@@ -16308,12 +16675,15 @@ function confirmBulkRetentionStart(startable, soldSkips, skipped, selectedN, nam
     <p class="panel-sub">${esc(emailHoldOn()
       ? "Sending is currently ON HOLD (Settings › Email sending) — every reminder will queue and wait; nothing is sent now."
       : "The reminders send with the next automation run; nothing is sent now.")}</p>
+    ${toMeHtml}
     <div class="modal-actions"><div></div><div class="right">
       <button type="button" class="btn" id="bulkret-cancel">Cancel</button>
       <button type="button" class="btn btn-primary" id="bulkret-ok">Start ${startable.length} retention case${startable.length === 1 ? "" : "s"}</button>
     </div></div>`, (finish, box) => {
-    box.querySelector("#bulkret-cancel").onclick = () => finish(false);
-    box.querySelector("#bulkret-ok").onclick = () => finish(true);
+    box.querySelector("#bulkret-cancel").onclick = () => finish(null);
+    /* R82 · A3 — the answer is now {toMe}, not `true`; every caller tests truthiness, and Cancel /
+       Escape / backdrop still resolve falsy (null / undefined) exactly as before. */
+    box.querySelector("#bulkret-ok").onclick = () => finish({ toMe: !!(box.querySelector("#bulkret-tome") || {}).checked });
   });
 }
 async function bulkQueueRateRemindersRun(ids) {
@@ -17773,6 +18143,34 @@ function protStatChipHtml(c, stage) {
 let protCache = null;   // { rows, total, totalKnown, propCtx, quoteCtx, clawback }
 let protLoadSeq = 0;    // R78 · A5 stale-guard idiom — the newest load owns the page
 function bustProtCache() { protCache = null; }
+/* ==========================================================================
+   R82 · A2 — THE CALL LIST'S OWN STALE GUARD (the board's defect, this page).
+
+   protCache has exactly boardCache's lifetime rule: this tab's writes bust it,
+   nothing else does. The ranked list is therefore a snapshot, and the one
+   change that matters most to it — a colleague recording `policy_taken` or
+   `declined` — is invisible here until something local writes a case. The
+   visible symptom is worse than a stale board: the list keeps OFFERING a
+   client whose protection is already settled, so the next call made off it is
+   a call about a policy the client has already taken.
+
+   Same treatment as the board, at the two row verbs that act on a client:
+   compare the fresh single-row read against the statuses the ranked list is
+   built from (the RPC's own predicate — see get_protection_pipeline), and if
+   the row has closed out since the snapshot, refuse, say where it went, and
+   reload against the truth rather than the snapshot that is now wrong.
+   ========================================================================== */
+const PROT_OPEN_STATUSES = ["not_discussed", "discussed", "quoted", "referred"];
+const protStatusWord = (k) => (PROT_BULK_STATUS.find(([v]) => v === k) || [null, String(k || "").replace(/_/g, " ")])[1];
+/* True when this row is no longer a candidate — and the refusal has already been spoken and the
+   page already told to re-read. `verb` is what the caller was about to do, in the caller's words. */
+function protRowClosedOut(freshStatus, verb) {
+  const st = String(freshStatus || "not_discussed");
+  if (PROT_OPEN_STATUSES.includes(st)) return false;
+  toast(`${verb} — protection on this case is already recorded as “${protStatusWord(st)}” since this list loaded. Refreshing the call list.`);
+  reloadProtectionFresh();
+  return true;
+}
 const PROT_SCORE_STAGE = { offer: 100, exchange: 95, application: 90, decision_in_principle: 80, fact_find: 70, enquiry: 50, completed: 30 };
 const PROT_SCORE_WARM = { quoted: 15, referred: 10, discussed: 5 };
 /* R80 · A2d — the rank explained in words, never a bare number. Components recomputed from the
@@ -17821,13 +18219,14 @@ async function loadProtectionPage() {
     let total = rows.length, totalKnown = false;
     if (!tot.error && tot.data && isFinite(Number(tot.data.total))) { total = Number(tot.data.total); totalKnown = true; }
     /* WAVE 2 — everything else the page paints from, in parallel. Each degrades on its own. */
-    const [propCtx, quoteCtx, clawback] = await Promise.all([
+    const [propCtx, quoteCtx, clawback, phones] = await Promise.all([
       loadPropContext(rows.map((r) => r.case_id)),
       loadQuoteStamps(rows.filter((r) => r.protection_status === "quoted").map((r) => r.case_id)),
       loadClawbackRows(),
+      protRowPhones(rows),   // R82 · A7 — rides wave 2; still ≤2 waves
     ]);
     if (seq !== protLoadSeq) return;
-    protCache = { rows, total, totalKnown, propCtx, quoteCtx, clawback };
+    protCache = { rows, total, totalKnown, propCtx, quoteCtx, clawback, phones };
   }
   renderProtectionPage(protCache);
 }
@@ -17911,6 +18310,7 @@ function renderProtectionPage(cache) {
      the stamps for the quoted rows were read in wave 2 (cached); on a database without M8 the map
      comes back empty and every badge reads "quote age unknown" rather than throwing. */
   const protQuoteCtx = cache.quoteCtx || {};
+  const protPagePhones = cache.phones || {};   // R82 · A7
   /* R80 · A2c — THE CEILING, SAID OUT LOUD. The line states exactly what the page holds: the best
      N of the book's M candidates (or all of them when the book fits), and the estimated commission
      across the rows the RPC returned — see the money comment above for who reads whose £. */
@@ -17946,7 +18346,11 @@ function renderProtectionPage(cache) {
         return `<tr class="prot-row">
         ${protCb(r)}
         <td class="prot-col-n" style="color:var(--muted);" title="${esc(protScoreTitle(r, i + 1))}">${i + 1}</td>
-        <td class="stick-col"><span class="prot-client" onclick="openClient('${r.client_id}')">${esc(r.client_name)}</span><span class="prot-fold-info">Loan ${fmtM(r.loan_amount)}${money ? " · Est. " + fmtM(r.est_commission) : ""}</span></td>
+        ${/* R82 · A7 — the number goes in the CLIENT cell, not the actions cell: the actions cell is
+              the one R69's 1280 geometry contract is measured on, and a phone number belongs beside
+              the name you are about to say into the phone anyway. Nothing renders at all when the
+              client has no number (retRowPhones' own rule). */ ""}
+        <td class="stick-col"><span class="prot-client" onclick="openClient('${r.client_id}')">${esc(r.client_name)}</span>${(() => { /* R82 · A7 — icons only inside the 1280 table */ const ph = protPhoneHtml(protPagePhones, r, { compact: true }); return ph ? `<span class="prot-row-phone" style="display:block;margin-top:2px;">${ph}</span>` : ""; })()}<span class="prot-fold-info">Loan ${fmtM(r.loan_amount)}${money ? " · Est. " + fmtM(r.est_commission) : ""}</span></td>
         <td class="prot-col-case">${(() => {
           const chip = propCtxChip(protPageCtx, r.case_id, "row-prop", { noStage: true });
           return `${stageBadge(r.stage)} ${esc(kind)}${r.lender ? " · " : " "}${lenderIcon(r.lender)}${esc(r.lender || "")}${chip ? `<div class="prot-case-prop">${chip}</div>` : ""}`;
@@ -18029,8 +18433,8 @@ function renderProtectionPage(cache) {
   const protIntroBtn = $("#prot-bulk-intro");
   if (protIntroBtn) protIntroBtn.onclick = () => bulkQueueProtIntro();
   updateProtBulkBar();
-  renderProtCallList(scoped, protQuoteCtx, capActive);
-  renderProtGiBand(scoped, capActive);
+  renderProtCallList(scoped, protQuoteCtx, capActive, protPagePhones);   // R82 · A7
+  renderProtGiBand(scoped, capActive, protPagePhones);                    // R82 · A7
   renderClawbackWindow(cache.clawback);
   syncNumHeaders("#page-protection");   // R73 · B4
 }
@@ -18108,7 +18512,7 @@ function renderClawbackWindow(pre) {
    the Owner reads the firm's. The rows themselves are counts and statuses, not money, so this
    panel is NOT Owner-gated: it is a work list, and withholding an adviser's own follow-up calls
    would be the opposite of the point. */
-function renderProtCallList(scoped, quoteCtx, capActive) {
+function renderProtCallList(scoped, quoteCtx, capActive, phones) {
   const panel = $("#prot-calllist-panel");
   if (!panel) return;
   /* get_protection_pipeline already excludes not_proceeding and already returns ONLY the four
@@ -18136,6 +18540,7 @@ function renderProtCallList(scoped, quoteCtx, capActive) {
       <div class="row-main">
         <div class="t" onclick="openCase('${r.case_id}')">${esc(r.client_name)}</div>
         <div class="s">${stageBadge(r.stage)} ${lenderIcon(r.lender)}${esc(r.lender || "")} · loan ${fmtM(r.loan_amount)}${r.owner ? " · " + esc(staffName(r.owner)) : " · unassigned"}</div>
+        ${protPhoneHtml(phones, r)}${/* R82 · A7 */ ""}
       </div>
       <span class="badge ${p[0]}">${p[1]}</span>
       ${r.protection_status === "quoted" ? quoteAgeBadge(((quoteCtx || {})[r.case_id] || {}).protection_quoted_at) : ""}
@@ -18164,7 +18569,7 @@ function renderProtCallList(scoped, quoteCtx, capActive) {
    Scope buttons apply exactly as the protection call list's do; the status
    drop-down does not narrow it. Honest empty state when the book is clean,
    and the same cap-honesty sentence when the 250 ceiling is biting. */
-function renderProtGiBand(scoped, capActive) {
+function renderProtGiBand(scoped, capActive, phones) {
   const panel = $("#prot-gi-panel");
   if (!panel) return;
   const list = (scoped || []).filter((r) => caseGiApplies(r.case_kind) && (r.gi_status || "not_discussed") === "not_discussed");
@@ -18181,6 +18586,7 @@ function renderProtGiBand(scoped, capActive) {
       <div class="row-main">
         <div class="t" onclick="openCase('${r.case_id}')">${esc(r.client_name)}</div>
         <div class="s">${stageBadge(r.stage)} ${lenderIcon(r.lender)}${esc(r.lender || "")} · loan ${fmtM(r.loan_amount)}${r.owner ? " · " + esc(staffName(r.owner)) : " · unassigned"}</div>
+        ${protPhoneHtml(phones, r)}${/* R82 · A7 */ ""}
       </div>
       <span class="badge grey" title="${TIP_GI}">GI not discussed</span>
       <button class="btn btn-sm" onclick="protLogCall('${r.case_id}')">📞 Log call</button>
@@ -18206,6 +18612,8 @@ window.protLogCall = async function (caseId) {
     .select("id,client_id,assigned_to,protection_status,stage,clients!client_id(first_name,last_name)")
     .eq("id", caseId).single();
   if (error || !c) return dbFail("protLogCall", error, "Couldn't open that case — " + ((error && error.message) || "it may have been deleted"));   // R81 · A4
+  // R82 · A2 — the fresh row is already in hand; refuse before the overlay opens over a settled case.
+  if (protRowClosedOut(c.protection_status, "Not opening a protection call")) return null;
   const who = [c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ") || "this client";
   const saved = await openLogCallModal(c, { panelId: "prot-logcall-panel", whoName: who });
   if (saved && !$("#page-protection").classList.contains("hidden")) loadProtectionPage();
@@ -18230,6 +18638,9 @@ window.protLogCall = async function (caseId) {
 async function bulkQueueProtIntro() {
   const ids = [...protBulkSel];
   if (!ids.length) return;
+  /* R82 · A1 — the gate, before the read, the overlay and the insert. Refusing here rather than
+     after the confirm means nobody is asked to approve a batch that was never going to be written. */
+  if (!finPromosApproved()) return toast(finPromoRefusal(`Nothing queued for the ${ids.length} selected case${ids.length === 1 ? "" : "s"}`));
   const { data, error } = await inChunks(ids, (sl) => db.from("cases")
     .select("id,client_id,clients!client_id(email,first_name,last_name)").in("id", sl));
   if (error) return dbFail("bulkQueueProtIntro", error);
@@ -18517,8 +18928,15 @@ window.protQueueEmail = async function (caseId, ev) {
   const btn = (ev && (ev.currentTarget || ev.target)) || null;
   if (btn) { if (btn.disabled) return; btn.disabled = true; } // guard against double-click double-insert
   try {
+    /* R82 · A1 — the same gate as the bulk path, in the same words, before anything is read,
+       asked or written. This button used to insert a protection_offer row and immediately fire a
+       scoped send at it with the master switch off. */
+    if (!finPromosApproved()) return toast(finPromoRefusal("Not queued"));
     const { data: c } = await db.from("cases").select("*").eq("id", caseId).single();
     if (!c) return toast("Could not load case");
+    // R82 · A2 — and the same guard on the client-facing verb: no protection intro to somebody a
+    // colleague has already written a policy for.
+    if (protRowClosedOut(c.protection_status, "Not queued")) return;
     const { data: cl } = await db.from("clients").select("email").eq("id", c.client_id).single();
     if (!cl?.email) return toast("This client has no email address — add one first.");
     /* R79 · A4 — the protection intro has its own confirm (it never passes through queueEmail),
@@ -18992,6 +19410,65 @@ $("#prot-tile-quoted").addEventListener("click", () => {
    else's edit and, worse, silently reloaded over the operator's typing. Module scope so the writes
    that don't re-render can re-stamp it (refreshOpenedStamp) instead of poisoning the save. */
 let openedUpdatedAt = null;
+/* ==========================================================================
+   R82 · A5 — CONFLICT RECOVERY THAT CANNOT SILENTLY CLOBBER A COLLEAGUE.
+
+   The `.eq("updated_at", openedUpdatedAt)` guard has fired correctly since R18.
+   What happened NEXT was the defect: the app said "Save again to overwrite the
+   other change", and Save again re-sent the WHOLE form — roughly forty fields,
+   every one of them holding the value it had when the modal opened. So the one
+   field the colleague had actually changed was overwritten by a stale copy the
+   operator had never looked at, let alone typed; the final toast said "Case
+   saved"; and neither party was ever told which field it was.
+
+   THE RULE, in three parts:
+
+   1. NAME IT. On a conflict the current row is re-read and diffed against the
+      snapshot this modal opened on. Every field that moved underneath is
+      listed by name, with the colleague's value and (where they differ) yours.
+   2. A FIELD YOU DID NOT TOUCH IS NOT YOURS TO OVERWRITE. Fields the colleague
+      changed and you did not are DROPPED from the retry — their value survives,
+      and "Save again" stops meaning "replay forty stale fields".
+   3. A FIELD YOU BOTH CHANGED IS AN OVERWRITE, AND IT IS SAID OUT LOUD. Yours
+      wins — you typed it, deliberately, after the modal opened — but you are
+      shown both values BEFORE you press Save again, and the success toast names
+      what you overwrote instead of the bare "Case saved" that hid it.
+
+   The plan is per case id and per conflict: opening any case clears it, and a
+   successful save clears it, so it can never leak onto a later edit.
+   ========================================================================== */
+let caseConflictPlan = null;   // { id, keep: [col], overwrite: [{ field, mine, theirs }] }
+/* Compare like the database will: null / undefined / "" are one value ("not set"), everything else
+   is compared as its own string, so a form's "250000" and a column's 250000 are not a phantom edit. */
+const cfNorm = (v) => (v === undefined || v === null ? "" : typeof v === "boolean" ? (v ? "true" : "false") : String(v).trim());
+const cfSame = (a, b) => cfNorm(a) === cfNorm(b);
+const cfShow = (v) => { const t = cfNorm(v); return t === "" ? "(empty)" : (t.length > 70 ? t.slice(0, 70) + "…" : t); };
+/* The one presentation. `keep` = they changed it, you did not (their value survives). `clash` =
+   you both changed it (yours wins, and here is what it replaces). Resolves "reload" | "keep". */
+function promptCaseConflict(keep, clash) {
+  const rowHtml = (r, withMine) => `<tr><th>${esc(auditFieldLabel(r.field))}</th><td>${esc(cfShow(r.theirs))}</td>${withMine ? `<td>${esc(cfShow(r.mine))}</td>` : ""}</tr>`;
+  const nothingNamed = !keep.length && !clash.length;
+  return openOverlay(`
+    <div id="case-conflict-box">
+      <h3>Somebody else edited this case while you had it open</h3>
+      ${nothingNamed
+        ? `<p class="panel-sub" id="case-conflict-none">Nothing you can see on this form has changed — the case was touched by something else (a queued email, a stage stamp, a note). Saving again is safe and will not overwrite anybody's work.</p>`
+        : ""}
+      ${keep.length ? `<h4>Changed by a colleague — you did not touch ${keep.length === 1 ? "it" : "these"}</h4>
+        <p class="panel-sub">These are being <strong>kept</strong>. They are dropped from your save, so pressing Save again cannot replace them with the values this form was holding before they made the change.</p>
+        <table class="imp-table" id="case-conflict-keep"><thead><tr><th>Field</th><th>Their value</th></tr></thead><tbody>${keep.map((r) => rowHtml(r, false)).join("")}</tbody></table>` : ""}
+      ${clash.length ? `<h4 class="bulk-confirm-warn">⚠ You have both changed ${clash.length === 1 ? "this one" : `these ${clash.length}`}</h4>
+        <p class="panel-sub">Saving again <strong>overwrites</strong> their value with yours — you typed yours after this form opened, so it is the deliberate one. If theirs is right, cancel out, close the case and open it again.</p>
+        <table class="imp-table" id="case-conflict-clash"><thead><tr><th>Field</th><th>Their value</th><th>Yours</th></tr></thead><tbody>${clash.map((r) => rowHtml(r, true)).join("")}</tbody></table>` : ""}
+      <div class="modal-actions">
+        <div><button type="button" class="btn btn-ghost" id="case-conflict-reload">Reload the case — discard my edits</button></div>
+        <div class="right"><button type="button" class="btn btn-primary" id="case-conflict-keepmine">Keep editing${clash.length ? ` — Save again overwrites ${clash.length}` : ""}</button></div>
+      </div>
+    </div>`, (finish, box) => {
+    box.querySelector("#case-conflict-reload").onclick = () => finish("reload");
+    box.querySelector("#case-conflict-keepmine").onclick = () => finish("keep");
+  });
+}
 /* R18-P6 — session cache for the case modal's client-picker list. Null means "refetch on next open".
    Every client-insert path MUST call invalidateClientPicker() so a newly created client shows up in
    the picker: openClient save, the case modal's inline "+ New client…" flow, and the Revolution
@@ -19669,6 +20146,7 @@ window.openCase = async function (id, opts = {}) {
   // a failed read is "unknown", which drops the artefact from the chip's denominator, not "missing".
   let caseFileN = 0, caseFactFindN = 0, caseFilesReadOk = false, caseFactFindReadOk = false;
   openedUpdatedAt = null;
+  caseConflictPlan = null;   // R82 · A5 — a merge plan belongs to one conflict on one open form
   pendingOffer = null; // a re-render replaces the diff panel — don't leave a stale proposal armed
   if (id) {
     /* BACKEND-R4 §3 — the forensic audit_log under the modal. Soft-fails: a blocked table must not
@@ -20796,6 +21274,19 @@ window.openCase = async function (id, opts = {}) {
         if (row.lender_reference) row.lender_reference = String(row.lender_reference).trim() || null;
       }
       if (id) {
+        /* R82 · A5 — THE MERGE PLAN, applied to the retry. A previous conflict on THIS case
+           recorded which columns a colleague had changed and this operator had not; those are
+           dropped from the payload here, so "Save again" writes the operator's own edits and
+           leaves the colleague's alone rather than replaying forty opened-at values over them. */
+        let cfKept = [];
+        if (caseConflictPlan && caseConflictPlan.id === id) {
+          /* Only a field the operator STILL has not touched is theirs to keep: if they have since
+             typed into it deliberately, that is a decision, not a stale replay, and it is written
+             (and named on the toast as an overwrite by the plan's own clash list if it was one). */
+          cfKept = caseConflictPlan.keep.filter((k) => (k in row) && cfSame(row[k], c[k]));
+          cfKept.forEach((k) => { delete row[k]; });
+        }
+        const cfOverwrote = (caseConflictPlan && caseConflictPlan.id === id) ? caseConflictPlan.overwrite.slice() : [];
         // Optimistic concurrency: only update if the row hasn't changed since we opened it.
         let { data: updated, error } = await db.from("cases").update(row).eq("id", id).eq("updated_at", openedUpdatedAt).select();
         // Feature-detect M2 — an older database has no lost-reason columns; the save still lands and
@@ -20885,27 +21376,51 @@ window.openCase = async function (id, opts = {}) {
         if (!updated || updated.length === 0) {
           /* R5-3 — this used to reload the case over the operator's typing: minutes of work gone,
              and usually to a "conflict" the modal itself had caused. Nothing is discarded without
-             being asked, and the choice says plainly what each answer costs. */
-          const reload = confirm(
-            "This case was changed elsewhere since you opened it.\n\n" +
-            "OK = reload the case (DISCARDS the edits you have on screen)\n" +
-            "Cancel = keep editing (your values stay; Save again to overwrite the other change)"
-          );
-          wtMarkStale(); loadPipeline(); loadDashboard(); // R55 · F3 — a case write must re-run the checker
-          if (reload) { openCase(id); return; }
+             being asked, and the choice says plainly what each answer costs.
+             R82 · A5 — and the choice is now made against the FACTS: the row is re-read and diffed
+             against the snapshot this form opened on, so the dialog can name the fields that moved
+             underneath instead of saying "the other change" about something nobody can see. The
+             native confirm goes with it (the house rule since R68: a new question is an overlay) —
+             a field-by-field before/after cannot be said in a confirm() at all. */
+          const { data: theirs } = await db.from("cases").select("*").eq("id", id).single();
+          const keep = [], clash = [];
+          if (theirs) {
+            Object.keys(row).forEach((k) => {
+              if (cfSame(theirs[k], c[k])) return;              // nothing moved underneath on this one
+              if (cfSame(row[k], c[k])) keep.push({ field: k, theirs: theirs[k], mine: row[k] });
+              else clash.push({ field: k, theirs: theirs[k], mine: row[k] });
+            });
+          }
+          /* Armed BEFORE the dialog so an Escape (which is "keep editing", the answer that
+             discards nothing) still gets the protection rather than only the button press. A
+             failed re-read leaves keep empty — the old replay-everything behaviour, which is the
+             honest fallback when we could not find out what changed, and the dialog says so. */
+          caseConflictPlan = { id, keep: keep.map((r) => r.field), overwrite: clash };
+          wtMarkStale(); reloadPipelineFresh(); loadDashboard(); // R55 · F3 + R82 · A2 — the board is provably stale here
+          const answer = await promptCaseConflict(keep, clash);
+          if (answer === "reload") { caseConflictPlan = null; openCase(id); return; }
           // Kept editing: re-baseline on the current row so the next Save is a deliberate overwrite
           // rather than an unwinnable loop against the same conflict.
           await refreshOpenedStamp(id);
-          toast("Your edits are still here — press Save again to overwrite the other change");
+          toast(clash.length
+            ? `Your edits are still here — Save again writes them and overwrites ${clash.length} field${clash.length === 1 ? "" : "s"} your colleague changed (${clash.slice(0, 3).map((r) => auditFieldLabel(r.field)).join(", ")}${clash.length > 3 ? ` and ${clash.length - 3} more` : ""})`
+            : keep.length
+              ? `Your edits are still here — Save again keeps your colleague's ${keep.length} change${keep.length === 1 ? "" : "s"} (${keep.slice(0, 3).map((r) => auditFieldLabel(r.field)).join(", ")}${keep.length > 3 ? ` and ${keep.length - 3} more` : ""}) and writes yours`
+              : "Your edits are still here — nothing on this form changed underneath, so Save again is safe");
           return;
         }
+        caseConflictPlan = null;   // R82 · A5 — the write landed; the plan has done its job
         if (lost) {
           const { error: nErr } = await db.from("case_notes")
             .insert({ case_id: id, body: lostReasonNoteBody(lost), created_by: (ME && ME.id) || null });
           if (nErr) dbFail("caseSaveLostNote", nErr, "Case saved, but the reason note could not be written: " + nErr.message);   // R81 · A4
         }
         closeModal();
-        toast("Case saved" + (lostColsMissing ? " · reason kept as a note only (run migration M2)" : "")
+        /* R82 · A5 — the toast that used to be the bare word "saved" over somebody else's lost
+           edit. It now reports BOTH halves of the merge, in the recovery's own terms. */
+        const cfNote = (cfKept.length ? ` · kept your colleague's ${cfKept.length} change${cfKept.length === 1 ? "" : "s"} (${cfKept.slice(0, 3).map(auditFieldLabel).join(", ")}${cfKept.length > 3 ? ` and ${cfKept.length - 3} more` : ""})` : "")
+          + (cfOverwrote.length ? ` · OVERWROTE ${cfOverwrote.length} field${cfOverwrote.length === 1 ? "" : "s"} your colleague changed (${cfOverwrote.slice(0, 3).map((r) => auditFieldLabel(r.field)).join(", ")}${cfOverwrote.length > 3 ? ` and ${cfOverwrote.length - 3} more` : ""})` : "");
+        toast("Case saved" + cfNote + (lostColsMissing ? " · reason kept as a note only (run migration M2)" : "")
           + (propColMissing ? " · property address NOT saved (run migration M7)" : "")
           + (refColMissing ? " · referrer NOT saved (run migration m11)" : "")
           + (docColsMissing ? " · waiting-on / solicitor NOT saved (run migration m10)" : "")
@@ -22278,7 +22793,7 @@ let clientAdviser = null;          // null = not resolved yet; renderClientAdvis
 function clientAdviserResolve(opts) {
   const has = (v) => !!v && opts.some(([k]) => k === v);
   if (has(clientAdviser)) return clientAdviser;
-  const stored = lsGet(CLIENT_ADVISER_KEY);
+  const stored = lsGet(userKey(CLIENT_ADVISER_KEY));   // R82 · A4
   if (has(stored)) return (clientAdviser = stored);
   if (ME && !isAdminOrOwner() && has(ME.id)) return (clientAdviser = ME.id);
   return (clientAdviser = "all");
@@ -22320,7 +22835,7 @@ function renderClientAdviser(clients) {
   if (!sel.dataset.wired) {
     sel.dataset.wired = "1";
     // R64 · M9 — the ONE writer. A pick is a choice, and the page opens on it next time.
-    sel.onchange = () => { clientAdviser = sel.value; lsSet(CLIENT_ADVISER_KEY, sel.value || "all"); clientSel.clear(); loadClients($("#client-search").value); };
+    sel.onchange = () => { clientAdviser = sel.value; lsSet(userKey(CLIENT_ADVISER_KEY), sel.value || "all"); clientSel.clear(); loadClients($("#client-search").value); };   // R82 · A4
   }
   const note = $("#client-adv-note");
   if (!note) return;
@@ -22565,7 +23080,7 @@ function sortClientList(list, sort, todayStr, rateYear) {
 window.clearClientFilters = function () {
   clientSegment = "all";
   clientAdviser = "all";
-  lsSet(CLIENT_ADVISER_KEY, "all");
+  lsSet(userKey(CLIENT_ADVISER_KEY), "all");   // R82 · A4
   const box = $("#client-search");
   if (box) box.value = "";
   clientSel.clear();
@@ -28240,7 +28755,12 @@ function leadRoundRobinOrder() {
   const pool = advisingStaff();
   if (!pool.length) return [];
   const here = pool.filter((p) => !isAwayToday(p.id));
-  const ids = (here.length ? here : pool).map((p) => p.id);
+  const present = here.length ? here : pool;
+  // R82 · A3 — "same pool and the same away-rule as leastLoadedAdviser" is a stated contract of
+  // this function, so the never-signed-in exclusion and its waiver come with it. Accept-all-leads
+  // deals onto real desks or it is not sharing work out, it is hiding it.
+  const active = present.filter((p) => !neverSignedIn(p.id));
+  const ids = (active.length ? active : present).map((p) => p.id);
   const map = adviserLoadMap();
   if (!map) return ids;
   return ids.slice().sort((a, b) => ((map[a] && map[a].total) || 0) - ((map[b] && map[b].total) || 0));
@@ -35839,6 +36359,6 @@ async function deleteVaultEntry(id) {
 
 /* R81 · A3 — deploy handshake stamp. Every round that edits ANY of index.html / core.js /
    reports-money.js / app.js bumps the tag IN ALL FOUR PLACES (see nxCheckBuildTags above). */
-window.__nxTag_app = "r81";
+window.__nxTag_app = "r82";
 
 init();

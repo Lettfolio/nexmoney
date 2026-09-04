@@ -471,7 +471,19 @@
      writes to the new columns come back as Postgres 42703 (undefined_column),
      selects stop returning them, an un-migrated TABLE comes back as 42P01 and an
      un-migrated FUNCTION comes back as 42883 (undefined_function). */
-  var MIGRATIONS = { m1: true, m2: true, m3: true, m4: true, m5: true, m6: true, m7: true, m10: true, m11: true };
+  var MIGRATIONS = { m1: true, m2: true, m3: true, m4: true, m5: true, m6: true, m7: true, m10: true, m11: true, m12: true };
+  /* R82 · B1 — PRE-LOAD MIGRATION SEED. `__mock.setMigrations()` can only be
+     called once this script has run, which is already too late for anything
+     the app reads inside init() (get_staff_activity is one). A suite that needs
+     a migration OFF from the very first read sets `window.__mockMigrations` in
+     a Playwright addInitScript, which runs before any page script:
+         await page.addInitScript(() => { window.__mockMigrations = { m12: false }; });
+     Unknown keys are ignored, exactly like setMigrations. */
+  if (typeof window !== "undefined" && window.__mockMigrations) {
+    Object.keys(window.__mockMigrations).forEach(function (k) {
+      if (Object.prototype.hasOwnProperty.call(MIGRATIONS, k)) MIGRATIONS[k] = !!window.__mockMigrations[k];
+    });
+  }
   /* R68 · M15 — is RESEND_API_KEY set on the "server"? A secret, not a table, so it cannot be
      a settings row: it lives here as a harness flag, DEFAULT FALSE because that is production's
      actual state (no key is set, and nothing has ever been able to send). Flip it with
@@ -504,7 +516,13 @@
      database simply does not have the function. OFF ⇒ 42883, which is exactly what
      app.js's isMissingFunctionError() feature-detects on before falling back to the
      compensating client-side path in openDeactivate(). */
-  var MIGRATION_FUNCTIONS = { m6: ["reassign_holdings"] };
+  /* R82 · B1 — m12 is NOT a production migration anyone still has to take:
+     get_staff_activity is deployed and live. It is registered here as a
+     migration FUNCTION purely so the harness keeps a way to model the database
+     WITHOUT it — which is the state app.js's defensive consumption exists for
+     and the state a suite pinning "missing RPC ⇒ behave exactly as before"
+     has to be able to reach. Default ON, like every other flag. */
+  var MIGRATION_FUNCTIONS = { m6: ["reassign_holdings"], m12: ["get_staff_activity"] };
   function functionIsMissing(name) {
     var missing = false;
     Object.keys(MIGRATION_FUNCTIONS).forEach(function (mk) {
@@ -1552,6 +1570,66 @@
   /* one deactivated colleague — exercises the "no access (still assigned)" paths */
   DB.profiles.push({ id: "p6", full_name: "Priya Raman", email: "priya@nexmoney.co.uk", role: "none", introducer_id: null, phone: null, email_signoff: null, tour_seen_at: iso(shift(-380)), created_at: iso(shift(-380)) });
 
+  /* ------------------------------------------------- R82 · B1 — STAFF ACTIVITY
+     `get_staff_activity()` is LIVE in production (shipped by the CTO this
+     round; no migration). It answers the ONE question this app has never been
+     able to answer about its own colleagues: has this person ever actually
+     signed in?
+
+     WHY IT IS NOT COLUMNS ON `profiles`. In production these facts live in
+     `auth.users` (`last_sign_in_at`, `invited_at`) — a schema the anon/authed
+     client cannot read at all, which is exactly why a SECURITY DEFINER
+     function exists to hand three scalars back per profile. Modelling them as
+     `profiles` columns here would be a parity LIE twice over: it would let a
+     ghost `select("last_sign_in_at")` on profiles pass R81's strict column
+     mode when production would 42703 it, and it would let a caller filter or
+     order on a column that does not exist. So the mock keeps them in their own
+     side table, reachable ONLY through the RPC — the same shape as the real
+     boundary.
+
+     THE DEFAULT IS "EVERYBODY HAS SIGNED IN", DELIBERATELY. Nothing in the
+     book has ever carried sign-in data, so every existing fixture, count and
+     routing assertion in 86 suites was written on the assumption that every
+     colleague is a live desk. Making Kim/Wayne/Luke dormant BY DEFAULT — which
+     is the true production situation — would silently re-point lead routing,
+     the round-robin and every suggestion built on them. The production
+     situation is therefore expressed by a HOOK, not by a moved default:
+
+       window.__mock.seedStaffActivity({ p1: false, p2: false, p3: false })
+
+     (append-only, exactly like `seedProtectionBook(n)` — nothing changes until
+     a suite calls it). `false` is the shorthand for "invited, never signed in";
+     an object `{ has_signed_in, last_sign_in_at, invited_at }` sets the row
+     outright. `window.__mock.staffActivity()` reads the table back.
+
+     A PROFILE WITH NO ROW IS AN INVITE THAT HAS NOT LANDED. Every profile that
+     exists at load time is seeded signed-in; a profile created AFTER load (the
+     `invite-user` edge function) has no row, and the RPC reports it exactly as
+     production would report a freshly invited login — has_signed_in false,
+     last_sign_in_at null, invited_at = the profile's created_at. That is not a
+     default being moved; it is the one state an invite is actually in. */
+  var STAFF_ACTIVITY = {};
+  DB.profiles.forEach(function (p) {
+    STAFF_ACTIVITY[p.id] = {
+      has_signed_in: true,
+      last_sign_in_at: iso(shift(-1)),
+      invited_at: p.created_at || iso(shift(-420))
+    };
+  });
+  function staffActivityRow(p) {
+    var a = STAFF_ACTIVITY[p.id];
+    if (!a) {
+      /* invited since load and never signed in — production's own answer */
+      return { id: p.id, has_signed_in: false, last_sign_in_at: null, invited_at: p.created_at || null };
+    }
+    return {
+      id: p.id,
+      has_signed_in: a.has_signed_in === true,
+      last_sign_in_at: a.has_signed_in === true ? (a.last_sign_in_at || null) : null,
+      invited_at: a.invited_at || null
+    };
+  }
+
   /* --- introducers ------------------------------------------------------- */
   [
     ["Foyle & Co Estate Agents", "rachel@foyleandco.co.uk"],
@@ -1672,7 +1750,10 @@
     email_hold: "on"
   };
   Object.keys(SETTINGS_SEED).forEach(function (k) {
-    DB.settings.push({ key: k, value: SETTINGS_SEED[k], updated_at: iso(shift(-30)) });
+    /* R82 — production's `settings` table is (key, value) and nothing else; seeding an
+       updated_at here put a column in the strict registry that prod would 42703 on.
+       Nothing in app.js or any suite reads it. Removed to match db/columns.json. */
+    DB.settings.push({ key: k, value: SETTINGS_SEED[k] });
   });
 
   /* --- clients (40, with the deliberate landmines) ------------------------ */
@@ -4741,7 +4822,17 @@
            Retention feed reads v_alerts and nothing else, so a badge that has to
            tell "imported guard" from "we actually wrote to them" needs it here. */
         reminder_guarded: !!c.reminder_guarded,
-        assigned_to: c.assigned_to
+        /* R82 — RECONCILED WITH PRODUCTION's v_alerts (db/columns.json).
+           `assigned_to` is GONE: production's view does not expose it, and this mock
+           did — so a caller reading it off an alert row would have worked here and been
+           undefined in production. Nothing reads it off an alert (app.js takes
+           assigned_to from the widened cases read that every v_alerts consumer is
+           paired with — "R7-5", app.js:9059; no suite touches it either), so removing
+           it costs nothing and closes a real fidelity gap.
+           The three below production DOES expose and this mock did not. */
+        client_email: cl.email || null,
+        product_name: c.product_name,
+        review_requested_at: c.review_requested_at
       };
     });
   }
@@ -4797,15 +4888,48 @@
      per-call allowlist: fix the caller, or fix the registry. That rule is in
      HARNESS.md § R81 · B.
      ======================================================================= */
+  /* ======================================================================
+     R82 — RECONCILED AGAINST PRODUCTION, and no longer taken on trust.
+
+     R81 built this registry by hand and, being self-consistent, it certified a
+     falsehood: it concluded `sms_queue.body` did not exist and DELETED the column
+     from two suites as a ghost. Production has had `sms_queue.body` all along.
+     A hand-maintained mirror of a schema nobody versioned will drift, and strict
+     mode makes drift authoritative rather than harmless.
+
+     So production is now SNAPSHOTTED in `db/columns.json` and this registry is
+     checked against it by `node db/check-schema-drift.js`. Its first run found 24
+     disagreements, one of which was a live production bug (see clients.updated_at
+     below). Every list here is now reconciled; run the checker after any migration.
+     ====================================================================== */
   var STRICT_EXTRA_COLUMNS = {
     /* real prod columns no fixture object declares (app.js is the source of
-       truth: cs-prot "mark quoted" writes both in one .update, r12a §D9) */
-    cases: ["protection_quoted_at", "protection_quoted_by"],
+       truth: cs-prot "mark quoted" writes both in one .update, r12a §D9).
+       R82 — anniversary_sent_at / nps_score_at added from the production snapshot. */
+    cases: ["protection_quoted_at", "protection_quoted_by", "anniversary_sent_at", "nps_score_at"],
     /* prod column the fixtures never seed: run_watchtower's client_waiting rule
        (mirrored from production's ten) reads e.from_name || e.from_email, and
        r65_watchtower seeds rows with it. No fixture row carries one — senderOf's
-       from_email fallback is the state the base book is in. */
-    case_emails: ["from_name"],
+       from_email fallback is the state the base book is in.
+       R82 — the Outlook-sync columns (R67) are real in prod and no fixture carries them. */
+    case_emails: ["from_name", "direction", "graph_id", "mailbox", "web_link"],
+    /* R82 — clients.updated_at is REAL IN PRODUCTION AS OF THIS ROUND, and this is
+       the entry that earned the drift checker its keep. app.js has read it since R18
+       to baseline the client modal's stale-write guard (refreshOpenedClientStamp) and
+       filtered on it when saving (.eq("updated_at", openedClientUpdatedAt)) — mirroring
+       the case guard exactly. The column was never created: production returned 42703,
+       so that guard could never work, and the battery was green over it for many rounds
+       because THIS MOCK HAD THE COLUMN AND PRODUCTION DID NOT. R82 added the column and
+       a touch_client() BEFORE UPDATE trigger, mirroring cases/touch_case. referral_code
+       is a long-standing prod column no fixture carries. */
+    clients: ["referral_code"],
+    /* R82 — real prod columns no fixture row carries. sms_queue's four are the
+       R81 correction: `body` IS a production column (R81 deleted it from
+       tests/r78_hands.js as a ghost; R82 restored it). */
+    sms_queue: ["body", "claimed_at", "provider_id", "scheduled_for"],
+    leads: ["acknowledged_at", "source_ip", "source_page"],
+    introducers: ["phone"],
+    fact_finds: ["updated_at"],
     /* R66 · M8 columns — applyInsertDefaults nulls all three on every APP
        insert (the standing parity rule), but the load-time fixture rows are
        pushed raw and none of them carries the keys, so the row-union alone
@@ -4816,13 +4940,18 @@
          Emails page reads e.lead_id to name/open the enquiry — see app.js
          "R7-5 — THE LEAD ACKNOWLEDGEMENTS"). This mock has no leads trigger,
          so no fixture row ever carried the key; r79_send seeds one by hand. */
-      "lead_id"],
+      "lead_id",
+      /* R82 — real in prod (the edge function claims a row with it); no fixture carries it. */
+      "claimed_at"],
     /* seeded empty on purpose — column lists transcribed from
        applyInsertDefaults + the R30/R43/R44/R56 schema comments above */
     duplicate_dismissals: ["id", "kind", "a_id", "b_id", "reason", "dismissed_by", "created_at"],
     error_events: ["id", "created_at", "error_type", "location", "page", "role"],
     saved_views: ["user_id", "scope", "name", "filters", "updated_at"],
-    proc_rates: ["id", "lender", "product", "lg_code", "rate", "notes", "effective_label", "uploaded_at", "created_at"],
+    /* R82 — "created_at" removed: production's proc_rates has no such column
+       (the table stamps uploaded_at, which is what reports-money.js reads and writes).
+       The mock was permitting a column prod would 42703 on. Nothing in the app used it. */
+    proc_rates: ["id", "lender", "product", "lg_code", "rate", "notes", "effective_label", "uploaded_at"],
     commission_statements: ["id", "ref", "statement_label", "statement_date", "filename",
       "gross_total", "net_total", "line_count", "created_by", "created_at"],
     commission_lines: ["id", "statement_id", "line_date", "tran_type", "addressee", "provider",
@@ -4936,6 +5065,7 @@
     get_briefing: ["p_scope"], get_reports: [], get_data_quality: [],
     get_protection_pipeline: ["p_scope"], get_protection_pipeline_total: ["p_scope"],
     find_duplicate_clients: [], run_watchtower: [],
+    get_staff_activity: [],   /* R82 · B1 — takes no arguments at all */
     queue_automated_emails: [], queue_comms_extras: [], mark_tour_seen: []
   };
   function assertRpcArgs(name, args) {
@@ -5634,6 +5764,33 @@
     return { total: protPipeCandidates(args).length };
   }
 
+  /* =========================================================================
+     R82 · B1 — get_staff_activity()  (LIVE in production, mirrored faithfully)
+
+       · NO arguments (registered in RPC_ARGS with an empty list, so a caller
+         that invents one gets the strict PGRST202 throw, same as every other).
+       · GUARDED to signed-in staff. Production's function returns an EMPTY
+         ARRAY to anybody else rather than raising — it is a read about the
+         firm's own logins, and an introducer or a signed-out caller simply
+         gets nothing. Mirrored exactly: `[]`, not a 42501, not a throw.
+       · Returns a JSON ARRAY, one entry per `profiles` row (the deactivated
+         colleague and the introducer login included — it reports on logins,
+         not on advisers), each
+             { id, has_signed_in: boolean, last_sign_in_at: ts|null,
+               invited_at: ts|null }
+         `last_sign_in_at` is null whenever has_signed_in is false, which is
+         the only combination auth.users can actually produce.
+       · MISSING-FUNCTION TOGGLE: registered under migration flag `m12`
+         (MIGRATION_FUNCTIONS below), so `setMigrations({m12:false})` — or the
+         pre-load seed `window.__mockMigrations = {m12:false}` — makes the call
+         answer 42883 exactly as a database without it does. That is the toggle
+         a suite pinning the UNSUPPORTED path needs.
+     ======================================================================= */
+  function rpc_get_staff_activity() {
+    if (!isStaff()) return [];
+    return DB.profiles.map(staffActivityRow);
+  }
+
   function rpc_find_duplicate_clients() {
     var pairs = [], seen = {};
     var push = function (a, b, reason, score) {
@@ -5729,6 +5886,8 @@
     get_protection_pipeline: rpc_get_protection_pipeline,
     get_protection_pipeline_total: rpc_get_protection_pipeline_total,   /* R80 · A1 — uncapped candidate count */
     find_duplicate_clients: rpc_find_duplicate_clients,
+    /* R82 · B1 — who has ever actually signed in (see rpc_get_staff_activity) */
+    get_staff_activity: rpc_get_staff_activity,
     run_watchtower: runWatchtower,
     /* The two SECURITY DEFINER queueing functions process-emails calls before it flushes. They
        exist in production as public functions; exposing them here lets the Run-automation-now
@@ -5970,6 +6129,33 @@
   /* v19's exact per-row cancel reason when a marketing-adjacent send finds comms_optout=true at
      send time. Tests assert this STRING — it is the row's error column in production. */
   var OPTOUT_CANCEL_ERROR = "client opted out of these emails";
+  /* R82 · B4 — v20: THE FINANCIAL PROMOTIONS, mirrored from
+     edge/process-emails-v20.ts (agent A wrote it; the CTO deploys it). The
+     HARNESS standing rule is that this mock's process-emails matches the
+     DEPLOYED function on every path, and v20 adds one: a send-time refusal.
+
+     This is a DIFFERENT list from MARKETING_TYPES above and deliberately so —
+     MARKETING_TYPES answers "which emails may a client unsubscribe from",
+     this one answers "which emails are regulated financial promotions that may
+     not leave at all until the network has approved the templates". The three
+     are the referral nudge, the protection intro and the GI email; a rate-end
+     reminder, a fee request, a review request or a birthday note is servicing
+     mail about business the client already has, so none of them is gated.
+
+     ASYMMETRY WITH THE HOLD, and it is the point: email_hold PARKS mail and
+     releases it later, so its rows stay 'queued'. This is a REFUSAL — the
+     promotion was never approved — so the row is closed out 'cancelled' with
+     the reason on it, exactly like v19's opt-out cancel beside it, and is
+     never retried. Counted as `results.skipped_promos`, alongside v19's
+     `skipped_optout`. FAIL-CLOSED: an absent settings row reads "off". */
+  var FIN_PROMO_TYPES = ["referral_request", "protection_offer", "gi_exchange"];
+  /* v20's exact per-row cancel reason. Tests assert this STRING — it is the
+     row's `error` column in production and what the Emails page displays. */
+  var FIN_PROMO_CANCEL_ERROR = "financial promotions not approved (settings.financial_promotions_approved)";
+  function finPromosApprovedMock() {
+    var row = DB.settings.filter(function (x) { return x.key === "financial_promotions_approved"; })[0];
+    return String((row && row.value) != null ? row.value : "off").trim().toLowerCase() === "on";
+  }
   /* v19's unsubscribe footer, as the client reads it. The link goes to the public unsubscribe
      edge function with the client's id + comms_token. */
   var UNSUB_LINE = "Prefer not to get emails like this? Unsubscribe.";
@@ -6976,8 +7162,9 @@
            pattern used elsewhere (find-or-push on `key`). */
         var heartbeatRow = DB.settings.filter(function (s) { return s.key === "last_cron_run_at"; })[0];
         var heartbeatAt = iso(new Date());
-        if (heartbeatRow) { heartbeatRow.value = heartbeatAt; heartbeatRow.updated_at = heartbeatAt; }
-        else DB.settings.push({ key: "last_cron_run_at", value: heartbeatAt, updated_at: heartbeatAt });
+        /* R82 — no updated_at: prod's settings table has only (key, value). */
+        if (heartbeatRow) { heartbeatRow.value = heartbeatAt; }
+        else DB.settings.push({ key: "last_cron_run_at", value: heartbeatAt });
       }
       var nowIso = iso(new Date());
       var due = DB.email_queue.filter(function (e) {
@@ -7058,7 +7245,7 @@
           return A < B ? -1 : (A > B ? 1 : 0);
         }).slice(0, 50);
       }
-      var sent = 0, failed = 0, skippedOptout = 0, composed = [];
+      var sent = 0, failed = 0, skippedOptout = 0, skippedPromos = 0, composed = [];   // R82 · B4 — skippedPromos
       due.forEach(function (e) {
         if (!e.to_email) {
           e.status = "failed";
@@ -7077,6 +7264,18 @@
             skippedOptout++;
             return;
           }
+        }
+        /* R82 · B4 — v20: the financial-promotions gate, at send time, in v20's own
+           position: after the missing-address failure and after v19's opt-out cancel,
+           before compose() is reached. A row that got into the queue by ANY route —
+           queued before the switch was turned off, written by a script, inserted by a
+           surface the client-side gate does not cover — is cancelled here rather than
+           delivered. Nothing a client reads is composed, so no template is touched. */
+        if (FIN_PROMO_TYPES.indexOf(e.email_type) >= 0 && !finPromosApprovedMock()) {
+          e.status = "cancelled";
+          e.error = FIN_PROMO_CANCEL_ERROR;
+          skippedPromos++;
+          return;
         }
         /* R12a·D3 — v12: compose() can now throw (factfind, no site_url). A
            row whose compose blows up goes status='failed' with THAT error,
@@ -7120,9 +7319,13 @@
       });
       LAST_EMAIL_RUN = {
         at: nowIso, scoped: !!ids, queue_ids: ids, considered: due.length,
-        sent: sent, failed: failed, skipped_optout: skippedOptout, queued: queued, composed: composed
+        sent: sent, failed: failed, skipped_optout: skippedOptout,
+        skipped_promos: skippedPromos,   /* R82 · B4 */
+        queued: queued, composed: composed
       };
-      return { ok: true, sent: sent, failed: failed, skipped_optout: skippedOptout, scoped: !!ids, skipped_queueing: !!ids, queued: queued };
+      return { ok: true, sent: sent, failed: failed, skipped_optout: skippedOptout,
+        skipped_promos: skippedPromos,   /* R82 · B4 — v20 counts its refusals beside v19's */
+        scoped: !!ids, skipped_queueing: !!ids, queued: queued };
     },
     /* R63 · A3 — PARITY NOTE, not a behaviour change. In production this function is ALSO on a
        schedule of its own: the `nexmoney-send-sms` cron invokes it daily at 08:05 UTC (09:05 while
@@ -7824,6 +8027,50 @@
        two places that could then drift apart. The live function's cap is the contract; if the
        CTO ever moves it, this is the ONE mock line that changes and the suite follows. */
     window.__mock.protPipeCap = PROT_PIPE_CAP;
+    /* ------------------------------------------------------------------
+       R82 · B1 — STAFF ACTIVITY HOOKS (append-only; nothing above changed).
+
+       `seedStaffActivity(patch)` is how a suite expresses the production
+       situation the default fixture deliberately does NOT carry: staff who
+       were invited and have never signed in. Production today, verbatim —
+       Kim, Wayne and Luke invited on 4 July 2026 and never once signed in,
+       Daniel the only human who has ever used the system:
+
+         window.__mock.seedStaffActivity({ p1: false, p2: false, p3: false });
+
+       `false` is shorthand for { has_signed_in:false, last_sign_in_at:null }
+       and leaves invited_at as it was; `true` is the mirror shorthand. An
+       OBJECT sets the row outright — { has_signed_in, last_sign_in_at,
+       invited_at } — so an "invited N days ago" case can be stated exactly:
+
+         seedStaffActivity({ p2: { has_signed_in: false, invited_at: iso } });
+
+       Returns the whole table after the patch, so a suite can assert the seed
+       took without a second call. `staffActivity()` reads it back unchanged.
+       NEITHER hook goes near db.from — the RPC is the only reader.
+       ------------------------------------------------------------------ */
+    window.__mock.seedStaffActivity = function (patch) {
+      Object.keys(patch || {}).forEach(function (id) {
+        var v = patch[id];
+        var cur = STAFF_ACTIVITY[id] || { has_signed_in: true, last_sign_in_at: null, invited_at: null };
+        if (v === false || v === true) {
+          cur.has_signed_in = v;
+          if (!v) cur.last_sign_in_at = null;
+          else if (!cur.last_sign_in_at) cur.last_sign_in_at = iso(shift(-1));
+        } else if (v && typeof v === "object") {
+          if (Object.prototype.hasOwnProperty.call(v, "has_signed_in")) cur.has_signed_in = v.has_signed_in === true;
+          if (Object.prototype.hasOwnProperty.call(v, "last_sign_in_at")) cur.last_sign_in_at = v.last_sign_in_at || null;
+          if (Object.prototype.hasOwnProperty.call(v, "invited_at")) cur.invited_at = v.invited_at || null;
+          if (cur.has_signed_in !== true) cur.last_sign_in_at = null;
+        } else if (v == null) {
+          delete STAFF_ACTIVITY[id];
+          return;
+        }
+        STAFF_ACTIVITY[id] = cur;
+      });
+      return clone(STAFF_ACTIVITY);
+    };
+    window.__mock.staffActivity = function () { return clone(STAFF_ACTIVITY); };
     return client;
   }
 

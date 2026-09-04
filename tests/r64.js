@@ -689,6 +689,17 @@ async function refileFromCaseModal(page, sourceCaseId, noteId, targetCaseId) {
           return data.id;
         };
         const withProp = await mk(addr), without = await mk(null);
+        /* PATCHED R82 · B4 — NEW PRECONDITION. The mock's process-emails now mirrors v20's
+           send-time financial-promotions refusal: protection_offer and gi_exchange are cancelled
+           unqueued-unsent while settings.financial_promotions_approved is off (the fixture
+           default, and production's state), so two of the eight types below would never reach
+           compose() and this block — which is about the WORDING of every template — would be
+           testing four fewer templates than it names. Approving them here is the same precondition
+           R82 · A applied to r79_send §D5 and r80_protect §C, and the RULE it states: a suite that
+           drives a financial promotion through to a composed or sent row approves them first.
+           Nothing else in this block changes; the composed wording is unaffected by the switch. */
+        const fp = window.__mock.db.settings.filter((r) => r.key === "financial_promotions_approved")[0];
+        if (fp) fp.value = "on"; else window.__mock.db.settings.push({ key: "financial_promotions_approved", value: "on" });
         const types = ["rate_end_reminder", "rate_end_chase", "submitted_update", "offer_update", "completion_congrats",
           "protection_offer", "fee_request", "gi_exchange"];
         const ids = [];

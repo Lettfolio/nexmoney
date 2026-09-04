@@ -486,6 +486,17 @@ async function seedPreviewCase(page) {
       // (confirmDestructive, non-danger; the R76 natives-go-house rule). Same promo-approval
       // wording, same held sentence — now read from #ovl-confirm-title/-body and confirmed by
       // pressing #ovl-confirm-ok (fire the call UNAWAITED; the overlay blocks it).
+      /* PATCHED R82 · A1 — NEW PRECONDITION, deliberate contract change. The protection intro is a
+         regulated financial promotion and BOTH queue paths now refuse while
+         settings.financial_promotions_approved is off (production's state, and the fixture's).
+         Same shape as R79's own "hold off + resend key" precondition: state it, then drive the
+         path this section is actually about. The held-branch assertions below are unchanged. */
+      await page.evaluate(async () => {
+        const rows = window.__mock.db.settings;
+        const row = rows.filter((r) => r.key === "financial_promotions_approved")[0];
+        if (row) row.value = "on"; else rows.push({ key: "financial_promotions_approved", value: "on" });
+        await window.__reloadSettings();
+      });
       await page.evaluate((fx) => { window.protQueueEmail(fx.caseId, null); }, fx);
       await wait(page, 700);
       const protMsg = await page.evaluate(() => {

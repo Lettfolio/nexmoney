@@ -228,6 +228,18 @@ async function setHold(page, value) {
         JSON.stringify(noKey.data));
 
       /* Hold OFF + key set: the CLASSIC consent confirm, byte-for-byte, and the send lands. */
+      /* PATCHED R82 · B4 — and financial promotions approved, which is a THIRD precondition of the
+         same kind as the two above. The mock's process-emails now mirrors v20's send-time
+         financial-promotions refusal, so the fixture's two queued financial-promotion rows are
+         CANCELLED at send time while the switch is off — and "the number consented to is the number
+         sent" would then be measuring the compliance gate rather than the consent flow this block
+         is about. The gate itself is pinned by tests/r82_mock.js §D. */
+      await page.evaluate(async () => {
+        const rows = window.__mock.db.settings;
+        const fp = rows.filter((r) => r.key === "financial_promotions_approved")[0];
+        if (fp) fp.value = "on"; else rows.push({ key: "financial_promotions_approved", value: "on" });
+        await window.__reloadSettings();
+      });
       await page.evaluate(() => window.__mock.setResendKey(true));
       page.__dialogs.length = 0;
       await page.click("#run-now-btn");

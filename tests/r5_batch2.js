@@ -167,11 +167,26 @@ async function main() {
         await window.__mockDb.from("cases").update({ lender: "Someone Else Bank" }).eq("id", "ca034");
       });
       page.__dialogs = [];
-      page.__dialogPlan = ["dismiss"];            // Cancel = keep editing
+      /* PATCHED R82 · A5 — DELIBERATE CONTRACT CHANGE. The conflict was a native confirm() whose
+         two answers were "OK = reload / Cancel = keep editing"; it is now a house overlay
+         (#case-conflict-box) that NAMES the fields which moved underneath, because the old dialog
+         could not say what "the other change" was and "Save again to overwrite" then replayed ~40
+         stale form fields over it. Same two answers, same meanings: #case-conflict-reload
+         discards the operator's edits, #case-conflict-keepmine keeps editing. The assertions
+         below (typing preserved, nothing written by the refused save, Save again writes the
+         operator's version) are UNCHANGED and still the point of this section. */
       await page.click("#modal-save");
-      await page.waitForTimeout(900);
-      const msg = lastDialog(page, /changed elsewhere/i);
-      ok("R5-3 · the conflict is explained as a choice, not an order", /OK = reload/.test(msg) && /Cancel = keep editing/.test(msg), JSON.stringify(msg));
+      await page.waitForTimeout(1200);
+      const msg = await page.evaluate(() => {
+        const b = document.querySelector("#case-conflict-box");
+        return b ? b.textContent.replace(/\s+/g, " ").trim() : "";
+      });
+      ok("R5-3 · the conflict is explained as a choice, not an order", /Somebody else edited this case/i.test(msg)
+        && /Reload the case — discard my edits/.test(msg) && /Keep editing/.test(msg), JSON.stringify(msg.slice(0, 240)));
+      ok("R5-3 · …and it NAMES the field the colleague changed (R82 · A5)", /lender/i.test(msg) && /Someone Else Bank/.test(msg), JSON.stringify(msg.slice(0, 300)));
+      eq("R5-3 · no native dialog is raised any more", page.__dialogs.filter((d) => /changed elsewhere/i.test(d.message)).length, 0);
+      await page.click("#case-conflict-keepmine");
+      await page.waitForTimeout(700);
       const stillOpen = await page.evaluate(() => ({
         open: !document.querySelector("#modal-backdrop").classList.contains("hidden"),
         product: (document.querySelector("#case-form input[name='product_name']") || {}).value,
@@ -182,7 +197,6 @@ async function main() {
         JSON.stringify({ product: midway.product_name, lender: midway.lender }));
 
       // Saving again is a deliberate overwrite and must now succeed (no unwinnable loop).
-      page.__dialogPlan = [];
       await page.click("#modal-save");
       await page.waitForTimeout(900);
       const after = await caseRow(page, "ca034");

@@ -97,9 +97,16 @@ function serverUp() {
 /* R64 · M9 — `nx_clients_adviser` joins this list, and it matters more than most of them: the
    Clients page now REMEMBERS an adviser pick, so a block that expects the whole firm's list has to
    start from a clean key exactly as the board's blocks have always had to. */
-const NX_KEYS = ["nx_wt_scope", "nx_board_adviser", "nx_clients_adviser", "nx_diary_staff", "nx_views_v1", "nx_nav_firm",
+/* PATCHED R82 · A4 — nx_board_adviser / nx_clients_adviser / nx_diary_staff are namespaced per
+   signed-in user now (the bare names are dropped at sign-in and never written again), so the
+   hygiene clear names both forms: the bare one for a stale pre-R82 value, and each persona's own
+   for where a pick actually lands. */
+const R82_SCOPE_KEYS = ["nx_board_adviser", "nx_clients_adviser", "nx_diary_staff"];
+const NX_KEYS = ["nx_wt_scope", "nx_views_v1", "nx_nav_firm",
   "nx_import_blurb", "nx_ret_scope", "nx_drawer_watchtower", "nx_drawer_unactioned", "nx_drawer_leads",
-  "nx_drawer_todayappts", "nx_drawer_tasks", "nx_drawer_rateerc", "nx_drawer_retention", "nx_drawer_revenue"];
+  "nx_drawer_todayappts", "nx_drawer_tasks", "nx_drawer_rateerc", "nx_drawer_retention", "nx_drawer_revenue"]
+  .concat(R82_SCOPE_KEYS)
+  .concat([].concat(...["p1", "p2", "p3", "p4"].map((u) => R82_SCOPE_KEYS.map((k) => `${k}_${u}`))));
 const clearNxKeys = (page) => page.evaluate((keys) => { keys.forEach((k) => { try { localStorage.removeItem(k); } catch (e) { /* ignore */ } }); }, NX_KEYS);
 const lsGet = (page, k) => page.evaluate((key) => { try { return localStorage.getItem(key); } catch (e) { return null; } }, k);
 const lsSet = (page, k, v) => page.evaluate(({ key, val }) => { try { localStorage.setItem(key, val); } catch (e) { /* ignore */ } }, { key: k, val: v });
@@ -365,7 +372,7 @@ async function setSettingLive(page, key, value) {
       const errBefore = (page.__err || []).length;
       await goto(page, "clients", 1800);
       eq("§B1a · #client-adviser opens on the signed-in adviser", await page.$eval("#client-adviser", (e) => e.value), "p2");
-      eq("§B1b · …and nothing was written to storage by the DEFAULT itself", await lsGet(page, "nx_clients_adviser"), null);
+      eq("§B1b · …and nothing was written to storage by the DEFAULT itself", await lsGet(page, "nx_clients_adviser_p2"), null);   // PATCHED R82 · A4
 
       const shown = await page.$$eval("#client-list .client-row", (rows) => rows.map((r) => r.dataset.client).sort());
       const expected = await clientsOfAdviser(page, "p2");
@@ -408,7 +415,7 @@ async function setSettingLive(page, key, value) {
       await goto(page, "clients", 1800);
       await page.selectOption("#client-adviser", "all");
       await wait(page, 900);
-      eq("§B3a · picking All advisers persists nx_clients_adviser", await lsGet(page, "nx_clients_adviser"), "all");
+      eq("§B3a · picking All advisers persists nx_clients_adviser", await lsGet(page, "nx_clients_adviser_p2"), "all");   // PATCHED R82 · A4 — per user
 
       await page.reload();
       await wait(page, SETTLE);
@@ -418,7 +425,7 @@ async function setSettingLive(page, key, value) {
 
       await page.selectOption("#client-adviser", "p3");
       await wait(page, 900);
-      eq("§B3c · picking a COLLEAGUE persists too", await lsGet(page, "nx_clients_adviser"), "p3");
+      eq("§B3c · picking a COLLEAGUE persists too", await lsGet(page, "nx_clients_adviser_p2"), "p3");   // PATCHED R82 · A4
       await page.reload();
       await wait(page, SETTLE);
       await goto(page, "clients", 1800);

@@ -438,9 +438,12 @@ async function mkCase(page, opts) {
         const mk = async (status, withCase) => {
           const { data, error } = await db.from("sms_queue").insert({
             client_id: clientId, case_id: withCase ? caseId : null, sms_type: "appointment_reminder",
-            /* R81 — dropped `body: "r78 probe"`: sms_queue has no body column
-               (send-sms composes from sms_type; app.js never writes one) and
-               strict column mode now refuses it the way prod's 42703 would. */
+            /* R82 — `body` RESTORED. R81 dropped it here calling it a ghost column;
+               production's sms_queue HAS a body column (verified against
+               information_schema and now snapshotted in db/columns.json). R81's
+               registry was self-consistent and wrong, which is why db/check-schema-drift.js
+               exists. The original probe value is back, unchanged. */
+            body: "r78 probe",
             to_phone: "07700900456", status,
           }).select("id").single();
           if (error) throw new Error(error.message);
@@ -517,7 +520,8 @@ async function mkCase(page, opts) {
         const db = window.__mockDb;
         const mk = async (status) => (await db.from("sms_queue").insert({
           client_id: clientId, case_id: caseId, sms_type: "appointment_reminder",
-          /* R81 — same ghost-column fix as above: `body` dropped. */
+          /* R82 — `body` restored; see the note at the first site. It is a real prod column. */
+          body: "r78 probe 2",
           to_phone: "07700900456", status, error: status === "failed" ? "undeliverable" : null,
         }).select("id").single()).data.id;
         return { f2: await mk("failed"), q3: await mk("queued") };

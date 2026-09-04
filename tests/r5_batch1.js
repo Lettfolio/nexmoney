@@ -254,6 +254,17 @@ async function main() {
         const rows = window.__mock.db.settings;
         const row = rows.filter((r) => r.key === "email_hold")[0];
         if (row) row.value = "off"; else rows.push({ key: "email_hold", value: "off" });
+        /* PATCHED R82 · B4 — SECOND PRECONDITION, same shape as the hold-off one above and for the
+           same reason. The mock's process-emails now mirrors v20's send-time financial-promotions
+           refusal, so any queued referral_request / protection_offer / gi_exchange row is CANCELLED
+           at send time while settings.financial_promotions_approved is off (the fixture default and
+           production's state) — and the fixture holds two. The invariant this block exists for is
+           "the number in the confirm is the number that goes out", and a promo refusal is a second,
+           unrelated reason for those two numbers to differ; approving them here keeps the assertion
+           about consent rather than about the compliance gate. That gate is pinned in its own right
+           by tests/r82_mock.js §D, including this exact consequence. */
+        const fp = rows.filter((r) => r.key === "financial_promotions_approved")[0];
+        if (fp) fp.value = "on"; else rows.push({ key: "financial_promotions_approved", value: "on" });
         window.__mock.setResendKey(true);
         await window.__reloadSettings();
       });

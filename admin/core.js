@@ -322,4 +322,4 @@ async function readAll(q, opts) {
 
 /* R81 · A3 — deploy handshake stamp. Every round that edits ANY of index.html / core.js /
    reports-money.js / app.js bumps the tag IN ALL FOUR PLACES (see nxCheckBuildTags in app.js). */
-window.__nxTag_core = "r81";
+window.__nxTag_core = "r82";   // R82 · B2

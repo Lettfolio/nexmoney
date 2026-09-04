@@ -359,6 +359,17 @@ const bandOf = (loan) => { const l = Number(loan || 0); return l < 100000 ? 0.7 
         const { data } = await window.__mockDb.from("settings").select("value").eq("key", "email_hold").maybeSingle();
         return String((data || {}).value ?? "on").trim().toLowerCase() !== "off";
       });
+      /* PATCHED R82 · A1 — NEW PRECONDITION, deliberate contract change: bulkQueueProtIntro now
+         refuses outright while financial_promotions_approved is off (the fixture default), because
+         a protection intro is a regulated financial promotion. R82's own suite pins the refusal;
+         this section is about the overlay's counts and skips, so it states the precondition and
+         gets on with it. */
+      await page.evaluate(async () => {
+        const rows = window.__mock.db.settings;
+        const row = rows.filter((r) => r.key === "financial_promotions_approved")[0];
+        if (row) row.value = "on"; else rows.push({ key: "financial_promotions_approved", value: "on" });
+        await window.__reloadSettings();
+      });
       await page.click("#prot-bulk-intro");
       const ov = await waitFor(page, () => {
         const box = document.querySelector("#prot-bulk-intro-box");

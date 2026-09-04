@@ -13,7 +13,19 @@
 <meta name="theme-color" content="#0b1f35">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<!-- R82 · A9 — THE FREE 290ms. This stylesheet was RENDER-BLOCKING: nothing painted until Google
+     Fonts answered, measured A/B at 596ms vs 306ms to first paint, on every one of the 505+ page
+     loads the battery drives and on every real sign-in. media="print" makes the browser fetch it
+     at low priority WITHOUT blocking the render tree; the onload swaps it to all the moment it
+     lands, so Inter still arrives — just after the page is already usable. The fallback stack is
+     already real and already the thing the user sees for those milliseconds: admin.css's
+     --font is "Inter", -apple-system, "Segoe UI", system-ui, Roboto, Arial, sans-serif, and the
+     &display=swap on this URL means the webfont swaps in when it arrives rather than hiding text
+     while it is fetched. The preconnects above stay — they make the non-blocking fetch faster.
+     <noscript> keeps the old blocking behaviour for a browser with JS off, which cannot run the
+     onload and would otherwise never get the face at all. -->
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+<noscript><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet"></noscript>
 <link rel="stylesheet" href="/admin/admin.css">
 <!-- R31-A · a11y — skip link styling. Lives here (not admin.css) so the whole
      main-nav accessibility pass ships in index.html + app.js only. Off-screen
@@ -177,6 +189,19 @@
       <p class="dq-notice hidden" id="dash-cap-notice"></p>
       <div class="panel" id="briefing-panel">
         <h3>☀️ My Day
+          <!-- R82 · A8 — "assigned to me and due later", as a HEADING COUNT rather than another
+               line above the list. The house idiom for this exact fact is a .count in an h3
+               (#revenue-count, #prot-calllist-count, panelCount) and it costs no vertical space:
+               R69 · B's phone contract is that the first actionable My Day row starts above 900px,
+               and a block element here spends 31 of the ~0px that contract has left. The whole
+               sentence — how many, whose, when the first lands, and that they are deliberately not
+               in the list below — is its title, and pressing it opens the diary. Hidden whenever
+               the count is zero or the task read failed, so it never claims a number it lacks.
+               DELIBERATELY NOT class="count": panelCount(listSel, n) writes into the FIRST
+               `h3 .count` it finds in a panel, and My Day's own row count already owns that slot —
+               a second .count here is simply overwritten by it on the next paint (measured, not
+               guessed). A .badge says the same thing in the same heading and cannot collide. -->
+          <button type="button" class="badge amber hidden" id="brief-ahead" onclick="nav('diary')" style="cursor:pointer;border:0;"></button>
           <span class="segment" role="group" aria-label="Whose items to show">
             <button class="btn btn-sm seg-btn seg-first scope-active" id="brief-scope-mine" aria-pressed="true" aria-label="Show only my items">Mine</button>
             <button class="btn btn-sm seg-btn seg-last" id="brief-scope-all" aria-pressed="false" aria-label="Show all team items">All</button>
@@ -1496,7 +1521,7 @@
      R81 · A3 — NX_BUILD_TAG below is the deploy handshake: each JS file ends by stamping its own
      window.__nxTag_*, and app.js's boot compares all four. EVERY round that edits ANY of
      index.html / core.js / reports-money.js / app.js bumps the tag IN ALL FOUR PLACES. -->
-<script>window.NX_BUILD_TAG = "r81";</script>
+<script>window.NX_BUILD_TAG = "r82";</script>
 <script src="/admin/core.js"></script>
 <script src="/admin/reports-money.js"></script>
 <script src="/admin/app.js"></script>
