@@ -231,6 +231,9 @@
 
   async function send(submit) {
     var res = await fetch(FN, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: token, data: collect(), submit: !!submit }) });
+    // R84 — fact-find v4 answers 429 "too_fast" to a second save within 5 s of the last one. The
+    // first save landed, so this is not an error for the person pressing the button twice.
+    if (res.status === 429 && !submit) return { ok: true, status: "started", note: "too_fast" };
     if (!res.ok) throw new Error("save failed " + res.status);
     return res.json();
   }
@@ -254,7 +257,9 @@
     .then(function (o) {
       if (!o.ok || !o.j || o.j.error) { show("invalid"); return; }
       if (o.j.status === "submitted") { show("done"); return; }
-      if (o.j.company) { document.querySelector(".brand").innerHTML = o.j.company.replace(/Money/i, "<span>Money</span>"); }
+      // R84 — same escape as docs.html: the value is a settings row, but it is the one innerHTML on the page.
+      var esc = function (s) { return s == null ? "" : String(s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); };
+      if (o.j.company) { document.querySelector(".brand").innerHTML = esc(o.j.company).replace(/Money/i, "<span>Money</span>"); }
       fill(o.j.data, o.j.prefill);
       show("form");
     })

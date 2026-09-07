@@ -144,6 +144,21 @@ node tests/r82_correct.js
 node tests/r82_mock.js
 ```
 
+**R84 (2026-09-07 evening, "optimum performance + structurally sound" — server-side review + build step):**
+Four server-side reviewers (RPCs/cron · triggers/RLS/schema · public edge fns · staff edge fns) + one
+migration verifier; 13 migrations applied via MCP (all in `db/r84/*.sql`, each with a VERIFY query;
+`04_reassign_holdings` was withdrawn in favour of fallback-at-successor-creation inside `02`); 12 edge
+functions redeployed from `edge/*-vN.ts` (hash-verified read-back). **THE BUILD STEP (build.js +
+package.json + vercel.json buildCommand/outputDirectory=dist): the repo stays readable, Vercel serves
+esbuild whitespace+syntax-minified copies (identifiers NEVER renamed — three classic scripts share one
+global scope). app.js 2,561 KB → 1,150 KB (gzip 831 → 346 KB). THE HARNESS IS UNAFFECTED: smoke/tests
+serve the repo tree, so §A of r81_platform still compares source to source. LIVE-VERIFY CHANGES: the
+served SHA-256 must equal `node build.js --hash`, NOT `git show origin/main:…`.** Build output `dist/` is
+gitignored; `npm install` (esbuild only) is needed to run `node build.js` locally. Migration numbering:
+01–06 S1 (queue fns), 10–15 S2 (views/policies/triggers/grants), 20 S3 (bucket), 30 S4 (ai_usage).
+Storage note: `delete from storage.objects` is blocked by `storage.protect_delete()` — retire a bucket by
+`update storage.buckets set public=false` and delete objects through the Storage API.
+
 **MERGED BATTERY, R83 (2026-09-07, bug-review round — eight slice reviewers + one adversarial verifier over
 the merged diff):** smoke (152) + 88 suites, **7,900 ✓, 0 failures** on the merged tree, `Schema OK`. Five goto
 stalls during the run (`r11_ux`, `r13`, `r23`, `r80_ledger` + one baseline `r79_send`) were ALL green re-run

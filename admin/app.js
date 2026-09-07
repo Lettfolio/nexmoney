@@ -3717,7 +3717,7 @@ async function uploadCaseFile(caseId, c, ev) {
     if (insErr) {
       // Undo the half-done state rather than leaving an object nothing points at.
       let removed = true;
-      try { const r = await db.storage.from(DOC_BUCKET).remove([key]); if (r && r.error) removed = false; } catch (_) { removed = false; }
+      try { const r = await db.storage.from(DOC_BUCKET).remove([key]); if (!r || r.error || !Array.isArray(r.data) || r.data.length === 0) removed = false; } catch (_) { removed = false; }   // R84 — Storage answers [] (no error) when RLS refuses: [] means "not removed"
       restore();
       return dbFail("caseFileRecord", insErr, "The file uploaded but could NOT be recorded on the case: " + insErr.message   // R81 · A4
         + (removed ? " — the uploaded copy has been removed again, so nothing is left half-done. Try once more."
@@ -3762,7 +3762,8 @@ async function deleteCaseFile(fileId, caseId, c, files) {
   if (f.storage_path) {
     try {
       const r = await db.storage.from(DOC_BUCKET).remove([docBucketPath(f.storage_path)]);
-      if (r && r.error) { storageGone = false; storageWhy = r.error.message || ""; }
+      if (!r || r.error) { storageGone = false; storageWhy = (r && r.error && r.error.message) || ""; }   // R84
+      else if (!Array.isArray(r.data) || r.data.length === 0) { storageGone = false; storageWhy = "storage reported nothing deleted (no permission, or the object was already gone)"; }   // R84 — [] means "not removed"
     } catch (e) { storageGone = false; storageWhy = (e && e.message) || String(e); }
   }
   const who = (ME && (ME.full_name || ME.email)) || "a colleague";
@@ -36787,6 +36788,6 @@ async function deleteVaultEntry(id) {
 
 /* R81 · A3 — deploy handshake stamp. Every round that edits ANY of index.html / core.js /
    reports-money.js / app.js bumps the tag IN ALL FOUR PLACES (see nxCheckBuildTags above). */
-window.__nxTag_app = "r83";
+window.__nxTag_app = "r84";
 
 init();

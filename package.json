@@ -1,0 +1,11 @@
+{
+  "name": "nexmoney-site",
+  "private": true,
+  "description": "NexMoney website + back office. `npm run build` writes the served copy to dist/ (see build.js); the repo stays readable.",
+  "scripts": {
+    "build": "node build.js"
+  },
+  "devDependencies": {
+    "esbuild": "0.24.2"
+  }
+}

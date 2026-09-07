@@ -131,11 +131,21 @@ async function showApp(session) {
   const { data: me } = await db.from("introducers").select("name").eq("id", profile.introducer_id).single();
   if (me) $("#intro-title").textContent = "Your referrals — " + me.name;
 
-  const { data: cases } = await db.from("cases")
-    .select("id,stage,case_kind,created_at,completed_at,clients!client_id(first_name,last_name)")
-    .eq("introducer_id", profile.introducer_id) // R18-S1 — defence-in-depth: RLS already scopes this, make the intent explicit
+  // R84 — the base tables are staff-only again. Introducers read two whitelist views
+  // (v_introducer_cases / v_introducer_clients: stage, kind, dates and client NAMES — nothing
+  // else), both scoped server-side to this login's introducer. Two reads joined here rather than
+  // an embed, so nothing depends on PostgREST inferring a relationship through the views.
+  const { data: cases } = await db.from("v_introducer_cases")
+    .select("id,client_id,stage,case_kind,created_at,completed_at")
+    .eq("introducer_id", profile.introducer_id) // R18-S1 — defence-in-depth: the view already scopes this, make the intent explicit
     .order("created_at", { ascending: false });
   const all = cases || [];
+  const clientIds = [...new Set(all.map((c) => c.client_id).filter(Boolean))];   // R84
+  const { data: clientRows } = clientIds.length                                    // R84
+    ? await db.from("v_introducer_clients").select("id,first_name,last_name").in("id", clientIds)
+    : { data: [] };
+  const clientById = Object.fromEntries((clientRows || []).map((cl) => [cl.id, cl]));   // R84
+  all.forEach((c) => { c.clients = clientById[c.client_id] || null; });                 // R84 — same shape the row template always read
   const row = (c) => `
     <div class="row-item">
       <div class="row-main">

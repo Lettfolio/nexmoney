@@ -2,7 +2,7 @@
   "name": "NexMoney Back Office",
   "short_name": "NexMoney",
   "description": "NexMoney back office for field brokers.",
-  "start_url": "/admin/",
+  "start_url": "/admin",
   "scope": "/admin/",
   "display": "standalone",
   "orientation": "portrait-primary",

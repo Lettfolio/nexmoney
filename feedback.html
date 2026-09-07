@@ -191,20 +191,46 @@
   paint();
   show("page");
 
-  /* Best effort only: where the function offers a JSON view of the case it
-     gives us a first name and the score it actually holds, which is better
-     than the one in the URL. Where it does not, the page carries on exactly
-     as it is — this call can never be the reason somebody cannot complain. */
-  fetch(FN + "?format=json&case=" + encodeURIComponent(caseId) + "&token=" + encodeURIComponent(token), { method: "GET" })
-    .then(function (r) { return r.ok ? r.json() : null; })
-    .then(function (j) {
-      if (!j || j.error) return;
-      if (typeof j.score === "number" && !isNaN(j.score)) { score = j.score; paint(); }
-      if (j.first_name) {
-        $("lead").textContent = j.first_name + " — " + $("lead").textContent.charAt(0).toLowerCase() + $("lead").textContent.slice(1);
-      }
+  /* R84 — THE SCORE IS RECORDED FROM HERE, NOT FROM THE EMAIL LINK. The link in the
+     email is a plain GET, and every link in a delivered email is fetched by the
+     recipient's mail security (Safe Links, Defender, Proofpoint) before a person
+     sees it — so nps-capture v4 makes that GET a redirect to this page and only
+     writes the score on a POST, which those scanners never make because they do
+     not run scripts. Write-once server-side still holds: the response carries the
+     score the firm actually recorded, and that is what this page then shows.
+     Promoters (9–10) are sent on to the review link the server names; nobody else
+     leaves this page. */
+  function applyContext(j) {
+    if (!j || j.error) return;
+    if (typeof j.score === "number" && !isNaN(j.score)) { score = j.score; paint(); }
+    if (j.first_name) {
+      $("lead").textContent = j.first_name + " — " + $("lead").textContent.charAt(0).toLowerCase() + $("lead").textContent.slice(1);
+    }
+  }
+  if (score != null && !isNaN(score) && caseId && token) {
+    fetch(FN, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ case_id: caseId, token: token, score: score }),
     })
-    .catch(function () { /* no context available — the page already works */ });
+      .then(function (r) { return r.json().then(function (j) { return { status: r.status, j: j }; }); })
+      .then(function (o) {
+        /* A 404 here is NOT shown as "invalid" — this call is best-effort context (the R9 contract:
+           the page must work without it); the submit below is the one that decides validity. */
+        if (!o.j || o.j.error) return;
+        applyContext(o.j);
+        if (o.j.redirect && typeof o.j.score === "number" && o.j.score >= 9) { location.replace(o.j.redirect); return; }
+      })
+      .catch(function () { /* the page still works; the comment POST below carries the score again */ });
+  } else {
+    /* No score on the link (trimmed, or a return visit): best effort only — the JSON
+       view gives us a first name and the score the firm holds, which is better than
+       nothing. This call can never be the reason somebody cannot complain. */
+    fetch(FN + "?format=json&case=" + encodeURIComponent(caseId) + "&token=" + encodeURIComponent(token), { method: "GET" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(applyContext)
+      .catch(function () { /* no context available — the page already works */ });
+  }
 
   $("form").addEventListener("submit", async function (e) {
     e.preventDefault();
