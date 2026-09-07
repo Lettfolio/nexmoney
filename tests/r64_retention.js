@@ -155,8 +155,12 @@ async function selectRows(page, ids) {
       await window.__mockDb.from("cases").insert({
         client_id: o.clientId, case_kind: "remortgage", stage: "enquiry", assigned_to: "p2",
         retention_source_case_id: o.caseId, property_address: "4 R64 Way, Testtown TE6 4AD",
+        /* R83 — a successor COPIES its source's rate_end_date at creation (R58: same date = same
+           cycle), and the bulk verb is now cycle-aware exactly like startRetentionCase. A
+           successor seeded WITHOUT the date reads as a previous cycle on both paths. */
+        rate_end_date: o.rateEnd,
       });
-    }, hasSucc);
+    }, { clientId: hasSucc.clientId, caseId: hasSucc.caseId, rateEnd: daysFrom(-15) });
 
     await goRetention(page, 2400);
     const ids = await pageRowIds(page);
@@ -199,6 +203,14 @@ async function selectRows(page, ids) {
     await page.waitForTimeout(1600);
 
     /* --- ⏰ Queue rate-end reminders, on exactly two of the four --- */
+    /* R83 — the bulk sweep is hold-aware like the single send (R79 · A4): while email_hold is on it
+       books NO follow-up tasks. This suite asserts the follow-up tasks, so release the hold first. */
+    await page.evaluate(async () => {
+      const rows = window.__mock.db.settings;
+      const row = rows.filter((r) => r.key === "email_hold")[0];
+      if (row) row.value = "off"; else rows.push({ key: "email_hold", value: "off" });
+      await window.__reloadSettings();
+    });
     await selectRows(page, [ended1.caseId, ended2.caseId]);
     await page.click("#ret-bulk-rate");
     await page.waitForTimeout(3000);

@@ -144,6 +144,26 @@ node tests/r82_correct.js
 node tests/r82_mock.js
 ```
 
+**MERGED BATTERY, R83 (2026-09-07, bug-review round — eight slice reviewers + one adversarial verifier over
+the merged diff):** smoke (152) + 88 suites, **7,900 ✓, 0 failures** on the merged tree, `Schema OK`. Five goto
+stalls during the run (`r11_ux`, `r13`, `r23`, `r80_ledger` + one baseline `r79_send`) were ALL green re-run
+alone — **START `python3 -m http.server 8099` BEFORE a battery; a suite's self-spawned server racing the
+previous suite's teardown is what those `page.goto: Timeout` reds are.** Five contract changes, each tagged
+`R83` in the suite: `r14` C1/C2 (a SECRET field's VALUE is no longer searchable — R37·K4 and the R73 empty-state
+copy win over the R14 replica), `r21` §F (the dashboard's v_alerts read is paged now, so the failure stub must be
+chainable: select/order/range/then), `r5_batch5` S3a / `r64_small` §A2 / `r64_retention` §A2 (the bulk rate-end
+sweep is hold-aware like the single send — release `email_hold` in the fixture before asserting follow-up
+tasks), `r64_retention` §A3c (a hand-seeded successor must carry its source's `rate_end_date` — R58 same-cycle).
+Defect classes fixed this round (the ones to grep for next time): `.limit()` whole-book reads still capped at
+1,000 (8 sites → readAll), loaders without a LoadSeq guard (9 → guarded), `{ data }` destructures dropping
+`error` (6 → dbFail), listeners re-added to STATIC hosts per paint (`#diary-day-lane`, `#data-content`), single-
+path rules missing on the bulk path (hold-aware chase tasks, suppression gate on retry-all, cycle-aware
+successors, `assigned_to` on bulk stage moves), the AI importer's provenance note counting as contact
+(`SYSTEM_NOTE_RE`), UTC month/day bounds (referrals-out, adoption strip, change history), vault search over
+secret values, and O(n²) hot paths (pipeline sort key, rateBookSelect, diary clash scan, matcher key recompute,
+import preview). Edge: `edge/process-emails-v21.ts` + `edge/unsubscribe-v2.ts` are SOURCE ONLY (not deployed);
+the mock's process-emails and `previewComposeEmail` count prior docs/review rows as `sent` only, matching v21.
+
 **MERGED BATTERY, R82 (2026-09-04, CTO run on the merged r82a+r82b tree):** smoke + 88 suites,
 **8,052 checks, 0 failures**, zero `MOCK STRICT` throws, and `node db/check-schema-drift.js`
 reporting **"Schema OK"** — the mock's strict-mode column registry now provably agrees with

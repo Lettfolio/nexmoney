@@ -372,7 +372,8 @@ const readCsvName = (page) => page.evaluate(() => window.__csvName);
         const logBefore = window.__errorLog.length;
         const orig = window.__mockDb.from.bind(window.__mockDb);
         window.__mockDb.from = (t) => {
-          if (t === "v_alerts") return { select: () => ({ order: () => Promise.resolve({ data: null, error: { message: "r21 simulated v_alerts failure" } }) }) };
+          /* R83 — the dashboard's v_alerts read is now paged (readAll: .order().order().range()), so the stub must be chainable. */
+          if (t === "v_alerts") { const fail = { data: null, error: { message: "r21 simulated v_alerts failure" } }; const q = { select: () => q, order: () => q, range: () => Promise.resolve(fail), then: (res, rej) => Promise.resolve(fail).then(res, rej) }; return q; }
           return orig(t);
         };
         window.nav("dashboard");

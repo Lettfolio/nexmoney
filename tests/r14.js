@@ -122,7 +122,10 @@ function vaultRowMatches(r, qRaw) {
   const q = (qRaw || "").trim().toLowerCase();
   if (!q) return true;
   const hay = [r.name, r.owner_label, r.note]
-    .concat((r.fields || []).reduce((a, f) => a.concat([f && f.label, f && f.value]), []))
+    /* R83 CONTRACT CHANGE — a SECRET field contributes only its LABEL: the app's own empty-state copy
+       ("not the secrets themselves", R73) and R37·K4 ("NEVER A SECRET") forbid a search oracle over
+       password characters, which the R14 replica below used to allow. */
+    .concat((r.fields || []).reduce((a, f) => a.concat(f && f.secret ? [f.label] : [f && f.label, f && f.value]), []))
     .filter((x) => x != null && x !== "")
     .join(" ").toLowerCase();
   return hay.indexOf(q) >= 0;
@@ -233,8 +236,9 @@ const fmtMGT = (n) => (n == null || n === "" ? "—" : Number(n).toLocaleString(
       await wait(page, 400);
       let names = await page.$$eval("#vault-list .vault-name", (els) => els.map((e) => e.textContent.trim()));
       const expectBluecar = all.filter((r) => vaultRowMatches(r, "bluecar")).map((r) => r.name).sort();
-      eq("C1 · searching a secret field's value ('bluecar') filters to the one owning row", names.slice().sort(), expectBluecar);
-      eq("C1 · exactly one card for 'bluecar'", names.length, 1);
+      // R83 — a secret's VALUE must NOT be searchable (no disclosure oracle); the replica and the app agree on zero cards.
+      eq("C1 · searching a secret field's value ('bluecar') matches NOTHING — secrets are not searchable (R83)", names.slice().sort(), expectBluecar);
+      eq("C1 · zero cards for 'bluecar'", names.length, 0);
 
       // C2 — case-insensitive.
       await page.fill("#vault-search", "BLUECAR");

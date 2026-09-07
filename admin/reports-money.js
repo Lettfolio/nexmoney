@@ -712,6 +712,12 @@ async function readStaffActivity() {
     ADOPTION_ACTIVITY = map; ADOPTION_ACTIVITY_SUPPORTED = true; return true;
   } catch (_) { ADOPTION_ACTIVITY = {}; ADOPTION_ACTIVITY_SUPPORTED = false; return false; }
 }
+/* R83 — the calendar day of a timestamp on the Europe/London basis daysSinceLocal already uses,
+   so "1 Sep (today)" can no longer appear at 00:30 BST on the 2nd. Falls back to the raw date
+   portion for anything Intl refuses to format. */
+function adoptDayStr(iso) {
+  try { return localDateStr(iso); } catch (_) { return String(iso).slice(0, 10); }
+}
 /* The one test, mirroring app.js's neverSignedIn: false whenever we do not KNOW. */
 function adoptionNeverSignedIn(id) {
   if (ADOPTION_ACTIVITY_SUPPORTED !== true || !id) return false;
@@ -791,7 +797,7 @@ function adoptionSignInCell(id) {
   const when = days === 0 ? "today" : days === 1 ? "yesterday" : `${days} days ago`;
   return `<td class="adopt-signin" data-signin="yes" data-last-signin="${esc(String(last))}"` +
     ` title="The last time this login signed in — ${esc(new Date(last).toLocaleString("en-GB"))}. Signing in is not the same as doing something; the column beside this one is what they did.">` +
-    `${esc(fmtD(String(last).slice(0, 10)))} <span class="cs-muted">(${esc(when)})</span></td>`;
+    `${esc(fmtD(adoptDayStr(last)))} <span class="cs-muted">(${esc(when)})</span></td>`;   // R83 — London day, like daysSinceLocal beside it
 }
 
 /* R82 · B3 — THE EXPLANATORY PARAGRAPH, in two versions, and the difference between them is
@@ -826,7 +832,9 @@ async function renderAdoptionStrip() {
   const roster = adoptionRoster();
   if (!roster.length) { el.innerHTML = ""; return; }
   el.innerHTML = `<h4 class="adopt-h" id="report-adoption-h">Is anyone using it?</h4><p class="panel-sub">Checking the change history…</p>`;
+  const seq0 = reportsLoadSeq;   // R83 — un-awaited by loadReports, so it guards itself against a newer load
   const { audit, tasks, auditErr, tasksErr } = await readAdoptionData();
+  if (seq0 !== reportsLoadSeq) return;   // R83
   if (auditErr) {
     /* A log this session cannot read costs the strip and says so — it never degrades into a table
        of "never"s, which would read as a finding rather than as a failed question. */
@@ -851,7 +859,7 @@ async function renderAdoptionStrip() {
     }
     const days = daysSinceLocal(r.last);
     const when = days === 0 ? "today" : days === 1 ? "yesterday" : `${days} days ago`;
-    return `<td class="adopt-last" data-last="${esc(String(r.last))}" title="The most recent change this person recorded — ${esc(new Date(r.last).toLocaleString("en-GB"))}.">${esc(fmtD(String(r.last).slice(0, 10)))} <span class="cs-muted">(${esc(when)})</span></td>`;
+    return `<td class="adopt-last" data-last="${esc(String(r.last))}" title="The most recent change this person recorded — ${esc(new Date(r.last).toLocaleString("en-GB"))}.">${esc(fmtD(adoptDayStr(r.last)))} <span class="cs-muted">(${esc(when)})</span></td>`;   // R83
   };
   /* R82 · B3 — the second pill exists ONLY when the RPC answered. It is the headline the
      production book would show today (three of four logins never signed in), and it is left off
@@ -2194,7 +2202,13 @@ async function loadLostDates() {
   } catch (_) { return {}; }
 }
 
+/* R83 — the Reports seq-guard (the R81 · A2 idiom loadMoneyPage already uses): the month picker
+   fires loadReports() per change and each run captures its own `mv`, so a slow earlier month could
+   resolve last and paint July under a picker reading August. Newest load wins; a stale one returns
+   silently after every await. */
+let reportsLoadSeq = 0;   // R83
 async function loadReports() {
+  const seq = ++reportsLoadSeq;   // R83 — seq-guard
   const yr = Number(localDateStr().slice(0, 4)); // G1N-6 — Europe/London, like every other figure here
   const thisMonth = localMonthStr();
   const picker = $("#report-month");
@@ -2202,11 +2216,12 @@ async function loadReports() {
      offered next month, cur.hasData came back false while the PREVIOUS month (this one) had rows,
      so deltaChip took its real-percentage branch and every tile read "0 ▼ −100% vs <this month>" —
      the one case the "no data" wording exists to separate out, reported backwards. */
-  if (picker && !picker.max) picker.max = thisMonth;
+  // R83 — always re-stamped: an app left open across midnight on the 1st could not select the new month.
+  if (picker) picker.max = thisMonth;   // R83
   const mv = (picker && picker.value) || thisMonth;
   if (picker && !picker.value) picker.value = mv;
   reportsCapHits = []; // R5-F4 — one verdict per render, never carried over from the last one
-  const [{ data: cases }, { data: intros }, repRes, extraCols, lostAt, propCols, leadRes, refCols, advDates, detrTasks, solCols, callPack, advRefQ, advOptoutRes, advEmailRes] = await Promise.all([
+  const [casesRes, introsRes, repRes, extraCols, lostAt, propCols, leadRes, refCols, advDates, detrTasks, solCols, callPack, advRefQ, advOptoutRes, advEmailRes] = await Promise.all([
     // G1N-4 — same order and same explicit ceiling as loadCaseExtraColumns, so the two selects
     // that are merged by id below can never walk different subsets of the table.
     /* R7 — widened by five BASE columns (client_id, lender, rate_end_date, rate_end_estimated)
@@ -2246,8 +2261,10 @@ async function loadReports() {
        migration, and this way the columns are simply absent and the panel says so. Unfiltered by
        date because the "breaching now" count has to see an enquiry that has been sitting there
        since before the 90-day window; the window is applied to the statistics client-side. */
-    db.from("leads").select("*").order("created_at", { ascending: false }).limit(LEAD_RESP_ROW_CAP)
-      .then((r) => r).catch(() => ({ data: [], error: true })),
+    /* R83 — through readAll: `.limit(2000)` returned PostgREST's 1,000-row ceiling (R69-HF1), so
+       the "breaching now" count — deliberately over EVERY inbox lead — silently lost the oldest
+       ones, and the panel's own truncation notice (>= LEAD_RESP_ROW_CAP) could never fire. */
+    readAll(db.from("leads").select("*").order("created_at", { ascending: false }).order("id"), { cap: LEAD_RESP_ROW_CAP }),   // R83
     /* R9-2 — the three reads the advocacy panel needs, each in its own small query for exactly the
        reason M2's and M7's are: a database without m11 (or without a score-capture date, or with
        case_tasks locked down by RLS) loses one BLOCK of that panel and says so, rather than
@@ -2277,6 +2294,14 @@ async function loadReports() {
        honest rendering of that refusal). Base-schema columns only — this cannot 42703. */
     readAll(db.from("clients").select("id,email").order("id")),
   ]);
+  if (seq !== reportsLoadSeq) return;   // R83 — a newer load owns the page
+  /* R83 — readAll answers a failed read with {data: rowsSoFar, error}; the error was dropped on
+     the floor here, so an RLS refusal or a failed page 3 rendered the whole page over empty or
+     PARTIAL rows with no toast — zeros, "Nothing outstanding", plausible-looking wrong money. */
+  if (casesRes && casesRes.error) return dbFail("loadReports", casesRes.error);   // R83
+  const cases = (casesRes && casesRes.data) || [];   // R83
+  if (introsRes && introsRes.error) dbFail("loadReports introducers", introsRes.error);   // R83 — table still renders, introducers read "Unknown"
+  const intros = (introsRes && !introsRes.error && introsRes.data) || [];   // R83
   const all = cases || [];
   noteRowCap("cases", cases);
   renderCapNotice();
@@ -2346,7 +2371,11 @@ async function loadReports() {
   /* G1N-2 — the tile is not "invoiced money": it counts fee_status in ('not_requested','requested'),
      and on the current book most of it has never been asked for. Splitting the two states here lets
      the basis line say so, so nobody goes looking for invoices behind the bigger half. */
-  const feesOutstandingRows = all.filter((c) => ["not_requested", "requested"].includes(c.fee_status) && c.broker_fee > 0 && c.stage !== "not_proceeding");
+  /* R83 — a broker fee that carries its own paid date is banked whatever fee_status says: feePaidPatch
+     only flips the legacy status to "paid" once EVERY fee type is dated, so a case with the broker fee
+     banked and the proc fee still owed read as "outstanding" here AND "banked" one tile over. */
+  const feesOutstandingRows = all.filter((c) => ["not_requested", "requested"].includes(c.fee_status) && c.broker_fee > 0 && c.stage !== "not_proceeding"
+    && !feeCashDate(c, "broker_fee_paid_at"));   // R83
   const feesOutstanding = feesOutstandingRows.reduce((s, c) => s + Number(c.broker_fee || 0), 0);
   const feesInvoiced = feesOutstandingRows.filter((c) => c.fee_status === "requested").reduce((s, c) => s + Number(c.broker_fee || 0), 0);
   const feesNotInvoiced = feesOutstanding - feesInvoiced;
@@ -2504,11 +2533,13 @@ async function loadReports() {
      point at) and the two nav builders below have to see the panel it produces. `all` is passed so
      a case already on this page — property column merged and client embedded — is never re-read. */
   await renderReferralsOut(all, mv);
+  if (seq !== reportsLoadSeq) return;   // R83
   /* R77 · B1 — §5's appointment-outcomes panel. AWAITED for the same reason renderReferralsOut
      is: it owns one bounded read of its own (90 days of appointments), and the two nav builders
      below must see whether the panel exists before they draw its chip. Gates itself on
      showMoney(), so for an adviser this is one function call and no query. */
   await renderApptOutcomes();
+  if (seq !== reportsLoadSeq) return;   // R83
   /* R11-4 — LAST, deliberately. Every panel above has just decided whether it exists for this
      role and this data, and the jump bar is built by READING those decisions rather than by
      re-deriving them: one gate, not seventeen copies of one, so a money panel and its chip can
@@ -3043,7 +3074,10 @@ async function loadAdvScoreDates(cap) {
   const col = await advScoreDateColumn();
   if (!col) return null;
   try {
-    const { data, error } = await db.from("cases").select("id," + col).order("id").limit(cap || REPORTS_ROW_CAP);
+    /* R83 — through readAll: `.limit(20000)` returned PostgREST's 1,000-row ceiling (R69-HF1), so
+       on a 2,000-case book the later cases silently fell back to review_requested_at while the
+       basis line claimed "dated by <col>". */
+    const { data, error } = await readAll(db.from("cases").select("id," + col).order("id"), { cap: cap || REPORTS_ROW_CAP });   // R83
     if (error) return null;
     const map = {};
     (data || []).forEach((r) => { if (r && r.id) map[r.id] = r[col] ?? null; });
@@ -3634,12 +3668,18 @@ async function renderReferralsOut(all, mv) {
   // The month, as a half-open [start, next) range on created_at — the same shape every other
   // month-scoped read on this page uses, so a referral made at 23:59 on the 31st is in the month
   // it was made in and not the one after.
-  const start = mv + "-01T00:00:00.000Z";
+  /* R83 — the bounds were UTC midnight ("…T00:00:00.000Z"), not Europe/London: in BST a referral
+     recorded at 00:30 on the 1st sat in the PREVIOUS month's panel while its own row printed the
+     1st (fmtD reads local). The read is widened by a day either side and the rows are then kept
+     on localMonthStr — the same Europe/London bucket every other month-scoped figure here uses,
+     whatever timezone the browser happens to be in. */
+  const start = new Date(Date.parse(mv + "-01T00:00:00Z") - 86400000).toISOString();   // R83
   const endM = monthAdd(mv, 1);
-  const end = endM + "-01T00:00:00.000Z";
-  const refs = await softRows(db.from("referrals").select("*")
+  const end = new Date(Date.parse(endM + "-01T00:00:00Z") + 86400000).toISOString();   // R83
+  const refsRaw = await softRows(db.from("referrals").select("*")
     .gte("created_at", start).lt("created_at", end)
     .order("created_at", { ascending: false }).limit(REFOUT_ROW_CAP));
+  const refs = refsRaw.filter((r) => r && r.created_at && localMonthStr(r.created_at) === mv);   // R83
   const allById = {};
   (all || []).forEach((c) => { if (c && c.id) allById[c.id] = c; });
   const missing = [...new Set(refs.map((r) => r.case_id).filter((id) => id && !allById[id]))];
@@ -3678,7 +3718,7 @@ async function renderReferralsOut(all, mv) {
       + `Showing <strong>${refOutScope === "mine" ? "your own referrals" : "every adviser's referrals"}</strong> — a referral belongs to the person who recorded it, falling back to the case's adviser where nobody is stamped on the row. `
       + `Status is what somebody set on the case afterwards: <em>Referred</em> means nobody has come back yet. `
       + `No money on this panel — the firm's share of a referral is not held anywhere in this system — so it is visible to everyone.`
-      + (refs.length >= REFOUT_ROW_CAP ? ` <span class="client-list-cap-note">Showing the newest ${REFOUT_ROW_CAP} of this month's referrals.</span>` : "");
+      + (refsRaw.length >= REFOUT_ROW_CAP ? ` <span class="client-list-cap-note">Showing the newest ${REFOUT_ROW_CAP} of this month's referrals.</span>` : "");
   }
   if (!scoped.length) {
     groupsEl.innerHTML = `<div class="empty">No referrals recorded in ${esc(label)}${refOutScope === "mine" ? " against your name" : ""}. Referrals are recorded from a case — the “Refer for …” actions on the case screen.</div>`;
@@ -5486,9 +5526,15 @@ async function renderReconPanel(pre) {
      denormalised onto the statement row: a confirm changes them, and a count
      that only refreshes on import would be wrong the moment anybody worked. */
   const ids = rows.map((s) => s.id);
-  const { data: lineRows } = await readAll(db.from("commission_lines")
+  const { data: lineRows, error: linesErr } = await readAll(db.from("commission_lines")
     .select("id,statement_id,tran_type,policy_group,addressee,reason,match_status,banked_gross")
     .in("statement_id", ids).order("id"));
+  /* R83 — a failed lines read printed "0 mortgage receipts · 0 confirmed" on every statement as
+     though it were a finding. Say it failed instead. */
+  if (linesErr) {   // R83
+    list.innerHTML = `<div class="empty">The statement lines could not be read — ${esc(linesErr.message || "no answer")}</div>`;
+    return;
+  }
   const byStmt = {};
   (lineRows || []).forEach((l) => { (byStmt[l.statement_id] = byStmt[l.statement_id] || []).push(l); });
   list.innerHTML = rows.map((s) => {
@@ -5594,21 +5640,25 @@ const R44_GROUPS = [
   { key: "renewal", title: "Renewal commissions", sub: "The “VARIOUS” trailer: no addressee, nothing to match. Imported as not-applicable and shown as one total." },
   { key: "other", title: "Other lines", sub: "Imported, counted, and not matchable — shown so nothing on the statement is silently invisible." },
 ];
+let reconOpenSeq = 0;   // R83 — Review clicked on A then B: the slower open must not paint over the newer one
 async function openReconReview(stmtId) {
   const review = $("#recon-review");
   if (!review) return;
   if (!showMoney()) return;
+  const seq = ++reconOpenSeq;   // R83
   review.classList.remove("hidden");
   review.innerHTML = `<div class="empty">Loading the statement…</div>`;
   const [{ data: st, error: sErr }, { data: lines, error: lErr }] = await Promise.all([
     db.from("commission_statements").select("id,ref,statement_label,statement_date,filename,gross_total,net_total,line_count").eq("id", stmtId).maybeSingle(),
     readAll(db.from("commission_lines").select("*").eq("statement_id", stmtId).order("id")),
   ]);
+  if (seq !== reconOpenSeq) return;   // R83
   if (sErr || lErr || !st) {
     review.innerHTML = `<div class="empty">That statement could not be read${sErr || lErr ? " — " + esc((sErr || lErr).message) : ""}.</div>`;
     return;
   }
   const [cases, priors, rates] = await Promise.all([r44LoadCandidateCases(), r44LoadPriorLines(), loadProcRates()]);
+  if (seq !== reconOpenSeq) return;   // R83
   const ls = lines || [];
   /* The suggestions are recomputed from the stored lines on every open rather
      than being read back off the row: the review has to survive a reload, and
@@ -5929,7 +5979,10 @@ async function r44ConfirmLine(lineId, opts) {
      assigned to the owner), overriding any import-time name guess. Written in
      the SAME line update as match_status/matched_case_id/confirmed_at. Misc
      insurance never reaches here — its note-only confirm keeps owner attribution. */
-  linePatch.attributed_to = c.assigned_to || null;
+  /* R83 — owner fallback, as r44AttributeLine has always had: an UNASSIGNED case nulled the
+     attribution here, and a confirmed line with no attribution sat in "Needs you" forever — the
+     attribute control is withheld on confirmed lines, so nothing could ever clear it. */
+  linePatch.attributed_to = c.assigned_to || st.ownerId || null;   // R83
   linePatch.match_note = [
     "proc fee dated " + r44NoteDate(l),
     setProcFee ? (have ? "case proc fee updated" : "case proc fee set") : "",
@@ -6078,4 +6131,4 @@ async function r44ConfirmTicked() {
 
 /* R81 · A3 — deploy handshake stamp. Every round that edits ANY of index.html / core.js /
    reports-money.js / app.js bumps the tag IN ALL FOUR PLACES (see nxCheckBuildTags in app.js). */
-window.__nxTag_reportsmoney = "r82";   // R82 · B2
+window.__nxTag_reportsmoney = "r83";   // R83

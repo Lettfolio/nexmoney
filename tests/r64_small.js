@@ -223,6 +223,14 @@ async function setSettingLive(page, key, value) {
 
       const before = await reminderRows(page);
       for (const id of ids) await page.check(`#pipe-table .bulk-cb[data-id="${id}"]`);
+      /* R83 — the bulk sweep is hold-aware like the single send (R79 · A4): while email_hold is on it
+         books NO follow-up tasks. This suite asserts the follow-up tasks, so release the hold first. */
+      await page.evaluate(async () => {
+        const rows = window.__mock.db.settings;
+        const row = rows.filter((r) => r.key === "email_hold")[0];
+        if (row) row.value = "off"; else rows.push({ key: "email_hold", value: "off" });
+        await window.__reloadSettings();
+      });
       page.__dialogs = [];
       await page.click("#pipe-bulk-rate");
       await wait(page, 2000);

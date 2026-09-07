@@ -32,6 +32,13 @@
  *     deliberately models only what the app touches; `backup_*` tables are excluded from
  *     the snapshot entirely (they are Daniel's import safety net, due to be dropped, and
  *     are not part of the app's schema contract).
+ *   · a table the mock models that prod does NOT have -> ERROR (R83 · fixH). It used to be
+ *     INFO, which meant a whole ghost table — the R81 failure class at table rather than
+ *     column granularity — kept the battery green. The snapshot includes views, so a
+ *     modelled view that exists in prod is matched, not flagged.
+ *   · db/columns.json must map table -> ARRAY of column names. The raw columns.sql output
+ *     is a comma-joined string per table; a snapshot pasted in unconverted now fails with a
+ *     named reason instead of `p.filter is not a function` (R83 · fixH).
  */
 const fs = require("fs");
 const path = require("path");
@@ -44,6 +51,14 @@ const log = (...a) => { if (!QUIET) console.log(...a); };
 
 (async () => {
   const prod = JSON.parse(fs.readFileSync(path.join(REPO, "db", "columns.json"), "utf8"));
+  // R83 · fixH — the snapshot must be table -> sorted array. A raw columns.sql paste is a
+  // comma-joined string per table; refuse it by name rather than crashing further down.
+  const badShape = Object.keys(prod).filter((t) => !Array.isArray(prod[t]) || prod[t].some((c) => typeof c !== "string"));
+  if (badShape.length) {
+    console.error(`db/columns.json: expected an ARRAY of column names for ${badShape.length} table(s), got something else: ${badShape.slice(0, 5).join(", ")}${badShape.length > 5 ? ", …" : ""}`);
+    console.error(`Convert the columns.sql output (split each "cols" string on ",") before committing the snapshot.`);
+    process.exit(2);
+  }
 
   // Serve the repo and read the registry out of a loaded mock page.
   const http = require("http");
@@ -102,7 +117,12 @@ const log = (...a) => { if (!QUIET) console.log(...a); };
   });
 
   Object.keys(registry).sort().forEach((table) => {
-    if (!prod[table]) infos.push(`  (info) ${table} — modelled by the mock, absent from the snapshot (view? renamed? dropped?)`);
+    if (prod[table]) return;
+    // R83 · fixH — a whole table the mock models that production does not have is the R81
+    // failure at table granularity: every column on it is one prod would 42703. ERROR, not info.
+    errors += 1;
+    log(`  DRIFT ${table}: modelled by the mock but ABSENT from production (${registry[table].length} columns)`);
+    log(`        renamed? dropped? a view missing from the snapshot? Fix the registry, or refresh db/columns.json.`);
   });
 
   log("");

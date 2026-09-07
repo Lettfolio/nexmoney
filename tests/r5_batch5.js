@@ -147,6 +147,14 @@ const sendCalls = (page) => page.evaluate(() => window.__sendCalls || []);
       eq("S3a · the bulk bar counts the five selected rows", await page.evaluate(() => document.querySelector("#pipe-bulk-n").textContent), "5");
       ok("S3a · the pipeline bulk bar offers 'Queue rate-end reminders'", await page.evaluate(() => !!document.querySelector("#pipe-bulk-rate")));
 
+      /* R83 — the bulk sweep is hold-aware like the single send (R79 · A4): while email_hold is on it
+         books NO follow-up tasks. This suite asserts the follow-up tasks, so release the hold first. */
+      await page.evaluate(async () => {
+        const rows = window.__mock.db.settings;
+        const row = rows.filter((r) => r.key === "email_hold")[0];
+        if (row) row.value = "off"; else rows.push({ key: "email_hold", value: "off" });
+        await window.__reloadSettings();
+      });
       page.__dialogs = [];
       await page.click("#pipe-bulk-rate");
       await page.waitForTimeout(1800);

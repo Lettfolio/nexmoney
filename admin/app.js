@@ -16,7 +16,9 @@ try {
     const _dbFrom = db.from.bind(db);
     db.from = function (table) {
       const b = _dbFrom(table);
-      if (table === "cases" || table === "case_events") {
+      // R83 — clients too: the board embeds clients(first_name,last_name,email) for the card name
+      // and the dupe hint, so a client edit left both stale for the rest of the session.
+      if (table === "cases" || table === "case_events" || table === "clients") {
         ["insert", "upsert", "update", "delete"].forEach((mth) => {
           const orig = b[mth];
           if (typeof orig === "function") {
@@ -346,7 +348,11 @@ function parseUkDate(s) {
 }
 /* _localDateFmt / localDateStr / localMonthStr — MOVED to admin/core.js (R78 · A7). */
 // Normalise a UK phone number for comparison/search: strip spaces/punctuation and map +44/0044 → 0.
-const normPhone = (p) => (p == null ? "" : String(p).replace(/[\s()\-.]/g, "").replace(/^\+44/, "0").replace(/^0044/, "0"));
+/* R83 — "+44 (0)7700 900123" / "0044 (0) 7700…" is the commonest way a UK number is written with its
+   country code, and the bare separator strip turned it into 007700900123 (12 digits): the client form
+   refused it as invalid, Data health listed it as a bad phone, and the matcher could not pair it with
+   the same number typed 07700 900123. The bracketed trunk zero is folded away FIRST. */
+const normPhone = (p) => (p == null ? "" : String(p).replace(/^\s*(?:\+44|0044)\s*\(\s*0\s*\)\s*/, "0").replace(/[\s()\-.]/g, "").replace(/^\+44/, "0").replace(/^0044/, "0"));   // R83
 /* T1-9 — "could we actually text this?", built on normPhone rather than a second phone rule.
    normPhone already maps +44/0044 → 0, so a UK number lands as 11 digits starting 0. A value that
    still carries a leading + is a non-UK international number: accept 10-15 digits there rather than
@@ -418,6 +424,29 @@ async function fetchMatchClients() {
   if (error) { console.error(error); return []; }
   return data || [];
 }
+/* R83 — the per-client comparison fields, computed ONCE per row object. clientNameKey (regex, split,
+   sort, join) used to run over every client on every call, and the importer calls this once per
+   incoming row: a 2,000-row back-book import against 1,161 clients was ~10M key computations in the
+   preview. A WeakMap keyed on the row means every caller (import preview, acceptLead, the briefing's
+   per-lead check, dupClientGate) gets the cache for free and a re-fetched row set is simply re-keyed.
+   The fields are exactly what the matcher compared before, so the verdicts are byte-identical. */
+const CLIENT_MATCH_MEMO = new WeakMap();
+function clientMatchFields(c) {
+  if (!c || typeof c !== "object") return { email: "", phone: "", nk: "", lastLc: "", ini: "", pc: "" };
+  let f = CLIENT_MATCH_MEMO.get(c);
+  if (!f) {
+    f = {
+      email: (c.email || "").trim().toLowerCase(),
+      phone: normPhone(c.phone),
+      nk: clientNameKey(clientFullName(c)),
+      lastLc: (c.last_name || "").trim().toLowerCase(),
+      ini: (c.first_name || "").trim().charAt(0).toLowerCase(),
+      pc: postcodeOf(c.address),
+    };
+    CLIENT_MATCH_MEMO.set(c, f);
+  }
+  return f;
+}
 function findClientMatches(q, rows) {
   const list = rows || [];
   const name = (q.name || [q.first, q.last].filter(Boolean).join(" ") || "").trim();
@@ -429,13 +458,13 @@ function findClientMatches(q, rows) {
   const nk = clientNameKey(name || (first + " " + last));
   const pc = postcodeOf(q.address || q.postcode || "");
 
-  const byEmail = email ? list.filter((c) => (c.email || "").trim().toLowerCase() === email) : [];
-  const byPhone = phone && phone.replace(/\D/g, "").length >= 9 ? list.filter((c) => normPhone(c.phone) === phone) : [];
-  const byName = nk ? list.filter((c) => clientNameKey(clientFullName(c)) === nk) : [];
+  const byEmail = email ? list.filter((c) => clientMatchFields(c).email === email) : [];   // R83 — memoised fields
+  const byPhone = phone && phone.replace(/\D/g, "").length >= 9 ? list.filter((c) => clientMatchFields(c).phone === phone) : [];   // R83
+  const byName = nk ? list.filter((c) => clientMatchFields(c).nk === nk) : [];   // R83
 
   const contradicts = (c) =>
-    (email && c.email && (c.email || "").trim().toLowerCase() !== email) ||
-    (phone && c.phone && normPhone(c.phone) !== phone);
+    (email && c.email && clientMatchFields(c).email !== email) ||   // R83
+    (phone && c.phone && clientMatchFields(c).phone !== phone);
 
   let exact = null, reason = "";
   if (byEmail.length) { exact = byEmail[0]; reason = "same email address"; }
@@ -450,11 +479,12 @@ function findClientMatches(q, rows) {
     const lastLc = last.toLowerCase();
     const ini = (first || "").trim().charAt(0).toLowerCase();
     list.forEach((c) => {
-      if ((c.last_name || "").trim().toLowerCase() !== lastLc) return;
-      const cIni = (c.first_name || "").trim().charAt(0).toLowerCase();
+      const f = clientMatchFields(c);   // R83
+      if (f.lastLc !== lastLc) return;
+      const cIni = f.ini;
       if (ini && cIni && ini === cIni) add(c, "same surname and first initial");
-      else if (phone && normPhone(c.phone) === phone) add(c, "same surname and phone number");
-      else if (pc && postcodeOf(c.address) === pc) add(c, "same surname and postcode");
+      else if (phone && f.phone === phone) add(c, "same surname and phone number");
+      else if (pc && f.pc === pc) add(c, "same surname and postcode");
     });
   }
   return { exact, reason, near: near.slice(0, 5) };
@@ -1286,7 +1316,7 @@ function fmtAgo(d) {
   const days = Math.floor(ms / 86400000);
   if (days < 30) return days + "d ago";
   const mos = Math.floor(days / 30);
-  if (mos < 12) return mos + "mo ago";
+  if (days < 365) return mos + "mo ago";   // R83 — days 360–364 floored to "0y ago" under `mos < 12`
   return Math.floor(days / 365) + "y ago";
 }
 function initials(id) { const n = staffName(id); return n === "—" ? "" : n.split(/[\s@.]+/).filter(Boolean).map((w) => w[0]).slice(0, 2).join("").toUpperCase(); }
@@ -2816,7 +2846,10 @@ function noteReferrerFromStarRow(row) {
 async function loadReferrerColumn(cap) {
   try {
     if ((await referrerSupported()) === false) return null;
-    const { data, error } = await db.from("cases").select("id,referrer_client_id").order("id").limit(cap || 5000);
+    /* R83 — readAll, not .limit(): `.limit()` cannot lift PostgREST's 1,000-row max-rows (see core.js
+       R69-HF1), so on the 2,015-case book this map silently held an arbitrary half of the cases and
+       every case it lacked counted as "not referred" on the Advocacy panel. */
+    const { data, error } = await readAll(db.from("cases").select("id,referrer_client_id").order("id"), { cap: cap || REPORTS_ROW_CAP });   // R83
     if (error) { if (isMissingColumnError(error)) REFERRER_SUPPORTED = false; return null; }
     /* …and the same check the probe makes, on the rows we just got, because a cached "yes" set
        before the migration was rolled back would otherwise turn into a confident map of nulls —
@@ -3200,7 +3233,8 @@ function waitingChipHtml(c) {
 async function knownSolicitorFirms() {
   try {
     if ((await docsSupported()) === false) return [];
-    const rows = await softRows(db.from("cases").select("solicitor_firm").limit(5000));
+    // R83 — same 1,000-row ceiling as loadSolicitorColumn: the datalist only knew the first 1,000 rows' firms.
+    const rows = await softRows(readAll(db.from("cases").select("id,solicitor_firm").order("id")));   // R83
     const seen = new Map();
     rows.forEach((r) => {
       const v = r && r.solicitor_firm ? String(r.solicitor_firm).trim() : "";
@@ -3217,7 +3251,8 @@ async function knownSolicitorFirms() {
 async function loadSolicitorColumn(cap) {
   try {
     if ((await docsSupported()) === false) return null;
-    const { data, error } = await db.from("cases").select("id,solicitor_firm").order("id").limit(cap || 5000);
+    // R83 — readAll for the same reason as loadReferrerColumn: half the completed book lost its solicitor.
+    const { data, error } = await readAll(db.from("cases").select("id,solicitor_firm").order("id"), { cap: cap || REPORTS_ROW_CAP });   // R83
     if (error) { if (isMissingColumnError(error)) DOCS_SUPPORTED = false; return null; }
     if ((data || []).length && !Object.prototype.hasOwnProperty.call(data[0], "solicitor_firm")) {
       DOCS_SUPPORTED = false;
@@ -5763,7 +5798,9 @@ async function renderEmailSendingStatus() {
       ${cron ? esc(cron) + " " : ""}<button type="button" class="btn btn-sm" id="email-sending-retry">Check again</button></div>
       <p class="panel-sub" id="email-sending-sub">This strip asks the server whether email can actually go out. The caveats further down this page describe what is required; this line is the only thing that says whether it is true right now.</p>`;
     const again = $("#email-sending-retry");
-    if (again) again.onclick = renderEmailSendingStatus;
+    // R83 — the go-live rollup quotes this probe's answer (two of its rows ARE it), so a retry
+    // that turns "not known" into a real answer has to reach the panel below as well.
+    if (again) again.onclick = () => renderEmailSendingStatus().then(renderSettingsGolive);   // R83
     return;
   }
   const n = p.pending;
@@ -5848,12 +5885,14 @@ async function releaseEmailHold() {
   if (!(await writeEmailHold("off"))) return;
   toast(`Email hold released — ${n} email${n === 1 ? "" : "s"} due now will go out on the next run.`);
   await renderEmailSendingStatus();
+  renderSettingsGolive();   // R83 — its "Email hold released" row is this probe's answer; it was left saying "blocked" after the release
 }
 async function putEmailOnHold() {
   if (!isOwner()) return toast("Only the Owner can change the email hold.");
   if (!(await writeEmailHold("on"))) return;
   toast("Email sending is on hold — nothing goes out until it is released. Mail keeps queueing.");
   await renderEmailSendingStatus();
+  renderSettingsGolive();   // R83 — same reason as releaseEmailHold
 }
 
 /* ==========================================================================
@@ -6496,12 +6535,19 @@ function settingsDirtyReset() {
     if (!dirty.length) return;
     const groups = new Set(dirty.map((d) => d.group));
     save.disabled = true;
+    /* R83 — the bar only ever REPORTS; the three writers say whether they wrote. Each returns true
+       on a write that landed and false otherwise (refused by the database, a blocked bank/numeric
+       field, or an in-flight guard), and the bar re-baselines and says "Saved" ONLY when all of
+       them did. Before this it reset the dirty state and toasted "Saved — N changes" over the
+       dbFail toast whatever had happened, so a refused write read as a successful one. */
+    let ok = true;
     try {
       // In the page's own order, so the toasts and "Saved ✓" flashes read top to bottom.
-      if (groups.has("settings")) await saveSettingsForm();
-      if (groups.has("targets")) await saveAdviserTargets();
-      if (groups.has("mydetails")) await saveMyDetails();
+      if (groups.has("settings")) ok = (await saveSettingsForm()) === true && ok;   // R83
+      if (groups.has("targets")) ok = (await saveAdviserTargets()) === true && ok;   // R83
+      if (groups.has("mydetails")) ok = (await saveMyDetails()) === true && ok;   // R83
     } finally { save.disabled = false; }
+    if (!ok) { settingsDirtyPaint(); return; }   // R83 — the writer's own toast says what happened; the edits stay marked unsaved
     settingsDirtyReset();
     toast(`Saved — ${dirty.length} change${dirty.length === 1 ? "" : "s"}.`);
   };
@@ -6938,7 +6984,7 @@ async function sendDigestNow() {
 async function saveSettingsForm() {
   // Presentation guard only — the button is already hidden for a non-Owner and RLS refuses the
   // upsert regardless. This stops a stale/forced click producing a raw policy-violation toast.
-  if (!isOwner()) return toast("Only the Owner can change settings.");
+  if (!isOwner()) { toast("Only the Owner can change settings."); return false; }   // R83 — returns whether it wrote (see the unsaved-changes bar)
   const fields = [...$("#settings-form").querySelectorAll("input, select")];
   // Light validation — warns but never blocks the save (nothing here should stop a workflow).
   const warnings = [];
@@ -6968,11 +7014,11 @@ async function saveSettingsForm() {
   if (allMsgs.length) toast(allMsgs.join(" · "));
   const rows = fields.filter((i) => !blockedKeys.has(i.name)).map((i) => ({ key: i.name, value: i.value.trim() }));
   const btn = $("#save-settings-btn"); // T1-15 — in-flight guard
-  if (btn.disabled) return;
+  if (btn.disabled) return false;   // R83
   btn.disabled = true;
   try {
     const { error } = await db.from("settings").upsert(rows);
-    if (error) return dbFail("saveSettingsForm", error);
+    if (error) { dbFail("saveSettingsForm", error); return false; }   // R83
     await loadSettings();
     $("#settings-saved").classList.remove("hidden");
     setTimeout(() => $("#settings-saved").classList.add("hidden"), 2500);
@@ -6980,7 +7026,11 @@ async function saveSettingsForm() {
     // R74 · B1 — the page is now what is stored, however the save was reached (this button, or
     // the unsaved-changes bar routing to it). Re-baselining HERE rather than only in the bar is
     // what stops "Save settings" leaving a bar behind claiming the work is still unsaved.
-    settingsDirtyReset();
+    /* R83 — a save that had to DROP a blocked field is not a clean "Saved — N changes": the
+       blocked toast above already names the field, the bar must not talk over it, and the
+       blocked field's edit stays marked unsaved (the baseline is re-set only on a clean save). */
+    if (blocked.length === 0) settingsDirtyReset(); else settingsDirtyPaint();   // R83
+    return blocked.length === 0;   // R83
   } finally { btn.disabled = false; }
 }
 $("#save-settings-btn").addEventListener("click", saveSettingsForm);
@@ -7000,9 +7050,9 @@ function renderMyDetailsCard() {
   $("#my-signoff").value = (mine && mine.email_signoff) || "";
 }
 async function saveMyDetails() {
-  if (!ME) return;
+  if (!ME) return false;   // R83 — returns whether it wrote (see the unsaved-changes bar)
   const btn = $("#save-my-details-btn"); // in-flight guard, same pattern as #save-settings-btn
-  if (!btn || btn.disabled) return;
+  if (!btn || btn.disabled) return false;   // R83
   const phone = $("#my-phone").value.trim();
   const signoff = $("#my-signoff").value.trim();
   btn.disabled = true;
@@ -7014,13 +7064,14 @@ async function saveMyDetails() {
         PROFILE_CONTACT_SUPPORTED = false;
         $("#my-details-panel").classList.add("hidden");
       } else dbFail("saveMyDetails", error);
-      return;
+      return false;   // R83
     }
     const mine = PROFILES.find((p) => p.id === ME.id);
     if (mine) { mine.phone = phone || null; mine.email_signoff = signoff || null; }
     $("#my-details-saved").classList.remove("hidden");
     setTimeout(() => $("#my-details-saved").classList.add("hidden"), 2500);
     settingsDirtyReset();   // R74 · B1 — see saveSettingsForm
+    return true;   // R83
   } finally { btn.disabled = false; }
 }
 if ($("#save-my-details-btn")) $("#save-my-details-btn").addEventListener("click", saveMyDetails);
@@ -7077,9 +7128,9 @@ function renderAdviserTargetsEditor(owner) {
 }
 async function saveAdviserTargets() {
   // Presentation guard only — the section is owner-only and RLS refuses the write regardless.
-  if (!isOwner()) return toast("Only the Owner can change settings.");
+  if (!isOwner()) { toast("Only the Owner can change settings."); return false; }   // R83 — returns whether it wrote (see the unsaved-changes bar)
   const btn = $("#adviser-targets-save");
-  if (!btn || btn.disabled) return;
+  if (!btn || btn.disabled) return false;   // R83
   // Build {staffId: number}, dropping blank / 0 / NaN — never write anything but numbers here.
   const map = {};
   [...document.querySelectorAll(".adv-target-input")].forEach((el) => {
@@ -7090,12 +7141,13 @@ async function saveAdviserTargets() {
   btn.disabled = true;
   try {
     const { error } = await db.from("settings").upsert([{ key: "adviser_fee_targets", value: JSON.stringify(map) }]);
-    if (error) return dbFail("saveAdviserTargets", error);
+    if (error) { dbFail("saveAdviserTargets", error); return false; }   // R83
     await loadSettings();
     settingsDirtyReset();   // R74 · B1 — see saveSettingsForm
     toast("Per-adviser targets saved.");
     // If the owner is looking at Reports, re-render so the Target column reflects the new figures.
     if (currentPage === "reports") loadReports();
+    return true;   // R83
   } finally { btn.disabled = false; }
 }
 
@@ -7110,8 +7162,18 @@ let retentionSourceIds = new Set();
 let rateErcSortMode = "value";
 window.toggleRateErcSort = function () {
   rateErcSortMode = rateErcSortMode === "value" ? "date" : "value";
-  loadDashboard();
+  repaintRateErcDrawer();   // R83 — the drawer only, from rows already in hand
 };
+/* R83 — a scope or sort flip on the Rate & ERC drawer used to call loadDashboard(): every read on
+   Today (cases, alerts, five ops counts, the tour/whats-new profile reads, briefing, watchtower,
+   protection, radar) re-run to re-filter rows the page already holds — while the KPI strip's own
+   Mine/All toggle deliberately repaints from dashKpiData for exactly this reason (R12b · W-7).
+   Now the drawer repaints from the same cache; the full load stays the fallback for a page that
+   has never loaded (or whose last load failed and left no rows). */
+function repaintRateErcDrawer() {   // R83
+  if (!dashKpiData) return loadDashboard();
+  return renderRateErcDrawer();
+}
 /* ==========================================================================
    R12b · W-16 — THE RATE & ERC DRAWER GETS THE SAME SCOPE AS ITS SIBLINGS.
 
@@ -7135,7 +7197,7 @@ function syncRateScopeButtons() {
 function setRateScope(s) {
   rateScope = s;
   syncRateScopeButtons();
-  loadDashboard();
+  repaintRateErcDrawer();   // R83 — the drawer only, from rows already in hand
 }
 if ($("#rate-scope-mine")) {
   $("#rate-scope-mine").addEventListener("click", (e) => { e.stopPropagation(); setRateScope("mine"); });
@@ -8106,7 +8168,7 @@ const rateWithinActionFloor = (a, on) => !on || (a.days_to_rate_end != null && a
    segment. Matched by the import tag prefix so a real note that merely mentions the word is never
    caught. Kept as its own predicate so any future bulk import using the same tag convention is
    covered without touching the cold logic again. */
-const SYSTEM_NOTE_RE = /^\s*SB-IMPORT-\d/;
+const SYSTEM_NOTE_RE = /^\s*(SB-IMPORT-\d|AI bulk import\b)/;   // R83 — the AI importer's "AI bulk import | …" provenance note is not contact either (same Gate-0 failure, second importer)
 function isSystemProvenanceNote(body) { return typeof body === "string" && SYSTEM_NOTE_RE.test(body); }
 /* ==========================================================================
    R74 · A1 — ONE RATE BOOK, ONE DEFINITION, THREE SURFACES.
@@ -8215,13 +8277,20 @@ function rateBookSelect(cases, alerts, opts) {
   const ercFlagsScoped = ercFlagsAll.filter((a) => rateAlertInScope(a, scope, caseAdviser));
   const ercIds = new Set(ercFlagsScoped.map((a) => a.case_id));
   const rateErcAll = [...ratesSoonScoped];
-  ercFlagsScoped.forEach((a) => { if (!rateErcAll.some((x) => x.case_id === a.case_id)) rateErcAll.push(a); });
-  return { reminderMonths, scope, caseAdviser, sets, ratesSoonAll, ercFlagsAll, ratesSoonScoped, ercFlagsScoped, ercIds, rateErcAll };
+  /* R83 — a Set, not `.some()` per flag: this ran three times per Today paint over feed-sized
+     arrays. Same rows, same order (soon first, then each ERC-only flag in its own order). */
+  const inAll = new Set(rateErcAll.map((a) => a.case_id));   // R83
+  ercFlagsScoped.forEach((a) => { if (!inAll.has(a.case_id)) { inAll.add(a.case_id); rateErcAll.push(a); } });   // R83
+  /* R83 — the firm-wide "N alerts" figure both sub-lines print (Today's drawer, the Retention
+     page) was the same `.some()` walk again; counted here once, with the same set arithmetic. */
+  const soonAllIds = new Set(ratesSoonAll.map((a) => a.case_id));   // R83
+  const alertsFirmWide = ratesSoonAll.length + ercFlagsAll.filter((a) => !soonAllIds.has(a.case_id)).length;   // R83
+  return { reminderMonths, scope, caseAdviser, sets, ratesSoonAll, ercFlagsAll, ratesSoonScoped, ercFlagsScoped, ercIds, rateErcAll, alertsFirmWide };
 }
 async function buildRateErcFeed(cases, alerts, opts) {
   const o = opts || {};
   const sel = rateBookSelect(cases, alerts, o);
-  const { reminderMonths, scope, caseAdviser, sets, ratesSoonAll, ercFlagsAll, ratesSoonScoped, ercFlagsScoped, ercIds, rateErcAll } = sel;
+  const { reminderMonths, scope, caseAdviser, sets, ratesSoonAll, ercFlagsAll, ratesSoonScoped, ercFlagsScoped, ercIds, rateErcAll, alertsFirmWide } = sel;   // R83 — alertsFirmWide
   retentionSourceIds = sets.sourceIds;         // what the row markup below reads for "already started"
   /* R7-2 — what each expiring rate is WORTH, keyed by case id, from the widened cases read.
      `lastFee` is proc + broker + sols on the case: the fee the firm earned last time it did this
@@ -8277,7 +8346,7 @@ async function buildRateErcFeed(cases, alerts, opts) {
      the property context, because neither needs the other. */
   return {
     scope, reminderMonths, caseAdviser, ctx, money, callPack, ercIds, rows, reminderByCase,
-    ratesSoonAll, ercFlagsAll, ratesSoonScoped, ercFlagsScoped,
+    ratesSoonAll, ercFlagsAll, ratesSoonScoped, ercFlagsScoped, alertsFirmWide,   // R83
     collapsed: rateErcAll.length - rows.length,
   };
 }
@@ -8432,7 +8501,7 @@ function sortRateErcRows(feed, byValue, dir) {
   if (byValue) {
     list.sort((a, b) => {
       const d = ((feed.money[b.case_id] || {}).loan || 0) - ((feed.money[a.case_id] || {}).loan || 0);
-      return d || ((a.rate_end_date || "") < (b.rate_end_date || "") ? -1 : 1);
+      return d || dateCmp(a, b);   // R83
     });
   } else if (dir === "newest") {
     const grp = (a) => (rateErcEnded(a) ? 0 : 1);          // ended first, exactly as the page groups
@@ -8445,9 +8514,16 @@ function sortRateErcRows(feed, byValue, dir) {
       return grp(a) === 0 ? (da > db_ ? -1 : 1) : (da < db_ ? -1 : 1);
     });
   } else {
-    list.sort((a, b) => (a.rate_end_date || "") < (b.rate_end_date || "") ? -1 : 1);
+    list.sort(dateCmp);   // R83
   }
   return list;
+}
+/* R83 — the two date comparators above answered 1 for EQUAL dates (cmp(a,b) and cmp(b,a) both
+   positive), which is an inconsistent comparator: harmless in V8 today, engine-dependent in
+   principle. 0 on a tie keeps the sort stable and the order it already had. */
+function dateCmp(a, b) {   // R83
+  const da = a.rate_end_date || "", db_ = b.rate_end_date || "";
+  return da === db_ ? 0 : (da < db_ ? -1 : 1);
 }
 /* R12b · W-16 — the tooltip a scoped count carries. The firm-wide figure is not deleted, it is put
    here, so switching scope never looks like work vanishing. */
@@ -9058,7 +9134,11 @@ async function loadDashboard() {
     /* R7-5 — plus assigned_to, a base column since the original schema, so the lead-routing
        suggestion can weigh each adviser's open caseload without a read of its own. */
     readDashboardCases(),
-    db.from("v_alerts").select("*").order("rate_end_date"),
+    /* R83 — PAGED, like the Retention page's twin read (loadRetentionRates). Unpaged, this stopped
+       at PostgREST's 1,000-row ceiling and — ordered by rate_end_date ascending — the rows it
+       dropped were the LATEST maturities: the still-to-end half of the reminder window, their ERC
+       flags and the Fees-due rows. Same secondary order as the page so the pages cannot overlap. */
+    readAll(db.from("v_alerts").select("*").order("rate_end_date").order("case_id")),   // R83
     /* R5-28 — one firm-wide question, asked once per dashboard load and cached for the briefing's
        "Chase fee" buttons (see briefActions). A failed RPC leaves the answer unknown (null), which
        renders the buttons as before rather than blanking a working action on a network hiccup. */
@@ -9072,6 +9152,7 @@ async function loadDashboard() {
      before the feed is ever built and the case modal's own button reads this set. */
   retentionSourceIds = retentionSuccessorSets(cases).sourceIds;
   if (casesErr || alertsErr) {
+    dashKpiData = null;   // R83 — a scope/sort flip after a failed load must retry (repaintRateErcDrawer falls back to loadDashboard), not repaint yesterday's rows over the error
     renderLoadError("#kpi-row", casesErr || alertsErr, loadDashboard);
     renderLoadError("#alerts-rateerc", casesErr || alertsErr, loadDashboard);
     // The independent dashboard widgets self-report their own errors.
@@ -9082,7 +9163,7 @@ async function loadDashboard() {
     publishAdviserTaskLoad(); loadProtection(); loadBriefing(); loadWatchtower(); loadUnactioned();
     return;
   }
-  renderOwnerCapNotice("#dash-cap-notice", ownerCapHit(cases)); // R23 — never silently truncate the KPI book
+  renderOwnerCapNotice("#dash-cap-notice", ownerCapHit(cases) || ownerCapHit(alerts)); // R23 — never silently truncate the KPI book · R83 — the alerts read is paged and capped too
   const activeAll = (cases || []).filter((c) => !["completed", "not_proceeding"].includes(c.stage));
   /* R7-5 — half of the lead-routing load figure, from the rows this panel has already read. "Open"
      is every stage except completed and not proceeding — the same `active` set the KPI above counts,
@@ -9162,60 +9243,12 @@ async function loadDashboard() {
      they are, which two rows are one building, what a row looks like — is
      computed and rendered in exactly one place.
      ========================================================================== */
-  const rateFeed = await buildRateErcFeed(cases, alerts, { reminderMonths, scope: rateScope, caseAdviser, recentOnly: true });
-  if (seq !== dashLoadSeq) return;   // R78 · A5
-  /* R7-2 — sorted by VALUE AT RISK by default (the loan on the case), because the question this
-     panel is scanned with is "which of these matters most", and a date sort answers a different
-     one. The date sort is one click away and the header says which is in force. Owner only: the
-     loan and fee columns are firm money and an adviser keeps the round-6 panel exactly as it was,
-     date-sorted, with no money on it. */
-  const rateValueSort = showMoney() && rateErcSortMode === "value";
-  const rateErcMerged = sortRateErcRows(rateFeed, rateValueSort);
-  const rateErcH3 = $("#rate-erc-panel h3");
-  /* R12b · W-16 — the counts in the heading COUNT WHAT THE LIST SHOWS, and say whose. A badge that
-     kept reading "31 ending soon" over eight visible rows is the same class of lie the KPI strip
-     was telling one panel higher up. See rateCountTip() for where the firm-wide figure went. */
-  /* R74 · A1 — the SAME helper and the SAME words as the KPI tile two panels up. The badge used to
-     read "N ending soon" over a figure that included rates which have already lapsed; "in the
-     N-month window" is what it actually counts, and the tooltip names the ended/still-to-end split
-     the Retention page groups by. */
-  const rateBook = rateBookCounts(rateFeed);
-  /* R74 · A1 — the strip above and this badge must be the same number, and the R7-2 collapse
-     ("one building, one maturity date, one row") is part of that number. The collapse needs the
-     property context this feed has just read, so the tiles are repainted now that the map exists.
-     Free and synchronous — renderTodayKpis re-counts rows already in memory, which is exactly what
-     the Mine/All toggle does — and it only ever CHANGES anything on the very first dashboard load
-     of a session, because rateBookCollapseKeys persists from here on. */
-  renderTodayKpis();
-  rateErcH3.innerHTML = `⚠️ Rate &amp; ERC alerts
-    ${rateBook.inWindow ? `<span class="count hot" title="${esc(rateCountTip(rateBook.inWindow, rateFeed.ratesSoonAll.length, rateBookWindowWord(reminderMonths), rateScope) + ` ${rateBook.ended} of them have already ended and ${rateBook.ending} are still to end — the Retention page groups them.`)}">${rateBook.inWindow} ${rateBookWindowWord(reminderMonths)}</span>` : ""}
-    ${rateBook.ercAll ? `<span class="count" style="background:#fbe9e7;color:var(--red);" title="${esc(rateCountTip(rateBook.ercAll, rateFeed.ercFlagsAll.length, "ERC conflicts", rateScope) + (rateBook.ercOnly ? ` ${rateBook.ercOnly} of them are on this list ONLY for the ERC — their rate ends beyond the window.` : ""))}">${rateBook.ercAll} ERC conflict</span>` : ""}
-    ${showMoney() ? `<button type="button" class="btn btn-sm rate-sort-btn" id="rate-erc-sort" onclick="event.stopPropagation();toggleRateErcSort()" title="${rateValueSort ? "Sorted by loan size — the value at risk. Click to sort by date instead." : "Sorted by rate end date. Click to sort by loan size — the value at risk."}">${rateValueSort ? "↕ By value at risk" : "↕ By date"}</button>` : ""}
-    ${/* R38 — this drawer is the morning glance; the page is where the list is actually worked.
-         One link, so the fifteen-row slice is never mistaken for the whole feed. */ ""}
-    <button type="button" class="btn btn-ghost btn-sm ret-page-link" id="rate-erc-open-retention" onclick="event.stopPropagation();nav('retention')" title="The same feed, un-truncated, with the retention pipeline and the clients who have gone quiet">Open Retention page →</button>`;
-  const rateSub = $("#rate-erc-sub");
-  if (rateSub) {
-    rateSub.textContent = `Rates ending within the reminder window, and cases where the ERC outlasts the rate. `
-      + `Showing ${rateScopeWord(rateScope)}${rateScope === "all" ? "" : ` — ${rateFeed.ratesSoonAll.length + rateFeed.ercFlagsAll.filter((a) => !rateFeed.ratesSoonAll.some((r) => r.case_id === a.case_id)).length} alerts firm-wide.`}`
-      /* R61 — the money-line basis, once for the drawer (the rows no longer repeat it). */
-      + (showMoney() ? " Money lines read value at risk: the loan on the case, with the last fee as a proxy." : "");
-  }
-  /* R70 · B4 — the drawer's tel:/sms: pair. The Retention page has had the numbers since R64 via
-     exactly this helper; Today's drawer had none, so the fifteen rows an adviser reads first thing
-     were the fifteen it cost a modal to ring. ONE bounded `in` on clients over the FIFTEEN client
-     ids actually on screen — the same read shape, a fifteenth of the size — and it is soft: a
-     failed read leaves the rows precisely as R38 drew them. Deliberately not the last-contact
-     clause as well (see rowLastContactHtml): that one costs five reads, which a morning glance
-     does not earn. */
-  const rateErcShown = rateErcMerged.slice(0, 15);
-  const dashPhones = await retRowPhones(rateFeed, rateErcShown);
-  if (seq !== dashLoadSeq) return;   // R78 · A5
-  $("#alerts-rateerc").innerHTML = rateErcMerged.length
-    ? rateErcShown.map((a) => renderRateErcRow(a, rateFeed, { phones: dashPhones })).join("")
-      + (rateErcMerged.length > 15 ? `<div class="empty">…and ${rateErcMerged.length - 15} more — <button type="button" class="dash-notice-link" onclick="nav('retention')">see the Retention page</button>.</div>` : "")
-      + rateErcDedupeNote(rateFeed.collapsed)
-    : '<div class="empty">Nothing ending in the reminder window, and no ERC conflicts. 👍</div>';
+  /* R83 — the drawer is painted by renderRateErcDrawer() from the rows this load has just put in
+     dashKpiData, so the drawer's own scope/sort buttons can repaint it WITHOUT re-running the
+     whole dashboard (they used to call loadDashboard(): ~15 reads to change a filter over rows
+     already in memory). Same code, same output — moved, not rewritten. */
+  await renderRateErcDrawer(() => seq !== dashLoadSeq);   // R83
+  if (seq !== dashLoadSeq) return;   // R78 · A5 — a newer DASHBOARD load owns the page now (a superseded drawer repaint alone must not abort the Fees tab / Outlook sync below — R83 verifier #1)
 
   /* R7-5 / R41 · F1 / T1-11 / R55 · F3 — publishAdviserTaskLoad → loadBriefing, and
      run_watchtower → loadWatchtower, both MOVED above the rate-feed chain (R78 · A1a): the
@@ -9259,6 +9292,74 @@ async function loadDashboard() {
     </div>`).join("") : '<div class="empty">No outstanding fees on completed cases.</div>');
   $("#tab-fees-count").textContent = feeAlerts.length;
   updateRevenueDrawerCount();
+}
+
+/* R83 — THE DRAWER, FROM ROWS ALREADY IN HAND. Extracted verbatim from loadDashboard so that
+   setRateScope()/toggleRateErcSort() repaint only this panel. `isStale` is the caller's own
+   stale test (loadDashboard passes its dashLoadSeq check); on top of it the drawer keeps a
+   sequence of its own so two quick scope flips cannot paint out of order. Returns the feed, or
+   null when the paint was superseded. */
+let rateDrawerSeq = 0;   // R83
+async function renderRateErcDrawer(isStale) {   // R83
+  if (!dashKpiData) return null;
+  const dseq = ++rateDrawerSeq;
+  const stale = () => dseq !== rateDrawerSeq || (isStale ? isStale() : false);
+  const { cases, alerts, caseAdviser, reminderMonths } = dashKpiData;
+  const rateFeed = await buildRateErcFeed(cases, alerts, { reminderMonths, scope: rateScope, caseAdviser, recentOnly: true });
+  if (stale()) return null;   // R78 · A5 · R83 — superseded (a newer dashboard load, or a newer scope/sort flip)
+  /* R7-2 — sorted by VALUE AT RISK by default (the loan on the case), because the question this
+     panel is scanned with is "which of these matters most", and a date sort answers a different
+     one. The date sort is one click away and the header says which is in force. Owner only: the
+     loan and fee columns are firm money and an adviser keeps the round-6 panel exactly as it was,
+     date-sorted, with no money on it. */
+  const rateValueSort = showMoney() && rateErcSortMode === "value";
+  const rateErcMerged = sortRateErcRows(rateFeed, rateValueSort);
+  const rateErcH3 = $("#rate-erc-panel h3");
+  /* R12b · W-16 — the counts in the heading COUNT WHAT THE LIST SHOWS, and say whose. A badge that
+     kept reading "31 ending soon" over eight visible rows is the same class of lie the KPI strip
+     was telling one panel higher up. See rateCountTip() for where the firm-wide figure went. */
+  /* R74 · A1 — the SAME helper and the SAME words as the KPI tile two panels up. The badge used to
+     read "N ending soon" over a figure that included rates which have already lapsed; "in the
+     N-month window" is what it actually counts, and the tooltip names the ended/still-to-end split
+     the Retention page groups by. */
+  const rateBook = rateBookCounts(rateFeed);
+  /* R74 · A1 — the strip above and this badge must be the same number, and the R7-2 collapse
+     ("one building, one maturity date, one row") is part of that number. The collapse needs the
+     property context this feed has just read, so the tiles are repainted now that the map exists.
+     Free and synchronous — renderTodayKpis re-counts rows already in memory, which is exactly what
+     the Mine/All toggle does — and it only ever CHANGES anything on the very first dashboard load
+     of a session, because rateBookCollapseKeys persists from here on. */
+  renderTodayKpis();
+  rateErcH3.innerHTML = `⚠️ Rate &amp; ERC alerts
+    ${rateBook.inWindow ? `<span class="count hot" title="${esc(rateCountTip(rateBook.inWindow, rateFeed.ratesSoonAll.length, rateBookWindowWord(reminderMonths), rateScope) + ` ${rateBook.ended} of them have already ended and ${rateBook.ending} are still to end — the Retention page groups them.`)}">${rateBook.inWindow} ${rateBookWindowWord(reminderMonths)}</span>` : ""}
+    ${rateBook.ercAll ? `<span class="count" style="background:#fbe9e7;color:var(--red);" title="${esc(rateCountTip(rateBook.ercAll, rateFeed.ercFlagsAll.length, "ERC conflicts", rateScope) + (rateBook.ercOnly ? ` ${rateBook.ercOnly} of them are on this list ONLY for the ERC — their rate ends beyond the window.` : ""))}">${rateBook.ercAll} ERC conflict</span>` : ""}
+    ${showMoney() ? `<button type="button" class="btn btn-sm rate-sort-btn" id="rate-erc-sort" onclick="event.stopPropagation();toggleRateErcSort()" title="${rateValueSort ? "Sorted by loan size — the value at risk. Click to sort by date instead." : "Sorted by rate end date. Click to sort by loan size — the value at risk."}">${rateValueSort ? "↕ By value at risk" : "↕ By date"}</button>` : ""}
+    ${/* R38 — this drawer is the morning glance; the page is where the list is actually worked.
+         One link, so the fifteen-row slice is never mistaken for the whole feed. */ ""}
+    <button type="button" class="btn btn-ghost btn-sm ret-page-link" id="rate-erc-open-retention" onclick="event.stopPropagation();nav('retention')" title="The same feed, un-truncated, with the retention pipeline and the clients who have gone quiet">Open Retention page →</button>`;
+  const rateSub = $("#rate-erc-sub");
+  if (rateSub) {
+    rateSub.textContent = `Rates ending within the reminder window, and cases where the ERC outlasts the rate. `
+      + `Showing ${rateScopeWord(rateScope)}${rateScope === "all" ? "" : ` — ${rateFeed.alertsFirmWide} alerts firm-wide.`}`   // R83 — counted once in rateBookSelect
+      /* R61 — the money-line basis, once for the drawer (the rows no longer repeat it). */
+      + (showMoney() ? " Money lines read value at risk: the loan on the case, with the last fee as a proxy." : "");
+  }
+  /* R70 · B4 — the drawer's tel:/sms: pair. The Retention page has had the numbers since R64 via
+     exactly this helper; Today's drawer had none, so the fifteen rows an adviser reads first thing
+     were the fifteen it cost a modal to ring. ONE bounded `in` on clients over the FIFTEEN client
+     ids actually on screen — the same read shape, a fifteenth of the size — and it is soft: a
+     failed read leaves the rows precisely as R38 drew them. Deliberately not the last-contact
+     clause as well (see rowLastContactHtml): that one costs five reads, which a morning glance
+     does not earn. */
+  const rateErcShown = rateErcMerged.slice(0, 15);
+  const dashPhones = await retRowPhones(rateFeed, rateErcShown);
+  if (stale()) return null;   // R78 · A5 · R83 — superseded (a newer dashboard load, or a newer scope/sort flip)
+  $("#alerts-rateerc").innerHTML = rateErcMerged.length
+    ? rateErcShown.map((a) => renderRateErcRow(a, rateFeed, { phones: dashPhones })).join("")
+      + (rateErcMerged.length > 15 ? `<div class="empty">…and ${rateErcMerged.length - 15} more — <button type="button" class="dash-notice-link" onclick="nav('retention')">see the Retention page</button>.</div>` : "")
+      + rateErcDedupeNote(rateFeed.collapsed)
+    : '<div class="empty">Nothing ending in the reminder window, and no ERC conflicts. 👍</div>';
+  return rateFeed;
 }
 
 /* R41 · F1 — loadRetention() (Today's "🔁 Retention pipeline" drawer, #retention-list /
@@ -9705,7 +9806,13 @@ async function loadRetentionPage() {
    the same widened cases select the dashboard uses (DASH_CASE_COLS carries everything the shared
    builder needs — loan, fees, retention_source_case_id, assigned_to) and v_alerts, both bounded by
    OWNER_ROW_CAP with the usual notice when the cap bites. */
+/* R83 — the R78 · A5 stale-response idiom, which this loader never had: every chip on the page
+   (scope, month, outcome, untouched, select-all) calls it directly, and the "6 months + ERC"
+   window's last-contact pass is several reads slower than "This month"'s, so the OLDER call could
+   land last and paint the whole book under a chip row that said "This month". */
+let retRatesLoadSeq = 0;   // R83
 async function loadRetentionRates(scope) {
+  const seq = ++retRatesLoadSeq;   // R83 — re-checked after every await below
   const reminderMonths = Number(settings.rate_reminder_months) || 6; // T1-10 — a stray non-numeric stored value can't render "≤ NaNmo"
   const [{ data: cases, error: casesErr }, { data: alerts, error: alertsErr }, outcomeNotes] = await Promise.all([
     readDashboardCases(),
@@ -9715,6 +9822,7 @@ async function loadRetentionRates(scope) {
        bounded by the filter and not merely by the row cap. */
     readRateEndOutcomeNotes(),
   ]);
+  if (seq !== retRatesLoadSeq) return;   // R83 — a newer load owns the panel now
   if (casesErr || alertsErr) {
     // R72 · A2 — a failed read must not leave the previous paint's outcome tile standing over an
     // error message, claiming to describe rows that are no longer on screen.
@@ -9723,6 +9831,7 @@ async function loadRetentionRates(scope) {
   }
   renderOwnerCapNotice("#ret-cap-notice", ownerCapHit(cases) || ownerCapHit(alerts));
   const feed = await buildRateErcFeed(cases, alerts, { reminderMonths, scope });
+  if (seq !== retRatesLoadSeq) return;   // R83
   /* R72 · A2 — everything the outcome derivation needs, built from rows already in hand: which
      source cases have a COMPLETED retention successor (no query), and the 📌 notes read above. */
   const outcomeExtras = { retained: retainedSourceIds(cases), outcomes: (outcomeNotes && outcomeNotes.map) || {}, error: outcomeNotes && outcomeNotes.error };
@@ -9749,6 +9858,7 @@ async function loadRetentionRates(scope) {
      numbers measured over the same months. */
   const ratesSoonScopedW = feed.ratesSoonScoped.filter(inWindow);
   const ratesSoonAllW = feed.ratesSoonAll.filter(inWindow);
+  const ratesSoonAllWIds = new Set(ratesSoonAllW.map((a) => a.case_id));   // R83 — for the sub-line's firm-wide count
   const ercScopedW = feed.ercFlagsScoped.filter(inWindow);
   const ercAllW = feed.ercFlagsAll.filter(inWindow);
   /* R74 · A1 — THE THREE GROUPS, FROM THE SHARED HELPER, OVER THE WINDOWED ROWS THAT ARE ON SCREEN.
@@ -9782,6 +9892,7 @@ async function loadRetentionRates(scope) {
      ========================================================================== */
   const lastContact = await lastContactByClient(
     ordered.map((a) => (propCtxCase(feed.ctx, a.case_id) || {}).client_id));
+  if (seq !== retRatesLoadSeq) return;   // R83
   const untouchedFirst = retUntouchedOn();
   const neverRung = (a) => {
     const cid = (propCtxCase(feed.ctx, a.case_id) || {}).client_id;
@@ -9796,16 +9907,18 @@ async function loadRetentionRates(scope) {
   }
   renderRetUntouchedChip(ordered.filter(neverRung).length, ordered.length);
   const shown = ordered.slice(0, RET_LIST_CAP);
-  /* R64 · A1 — the selection is pruned to what is actually on screen (BUILD 7c's rule for the
-     pipeline table): flipping scope or month must never leave a verb pointed at a row the
-     operator can no longer see. */
-  retShownIds = shown.map((a) => a.case_id);
-  const shownSet = new Set(retShownIds);
-  [...retSel].forEach((id) => { if (!shownSet.has(id)) retSel.delete(id); });
   /* R64 · A3 — one phone read for the rows on screen. The feed already reads `cases` for the
      property context, and `clients` carries the number; without it the "📞" on a retention row
      would be a link to nothing. Soft: no phones simply means no tel: links. */
   const phones = await retRowPhones(feed, shown);
+  if (seq !== retRatesLoadSeq) return;   // R83 — the last await: nothing below is painted or mutated for a superseded load
+  /* R64 · A1 — the selection is pruned to what is actually on screen (BUILD 7c's rule for the
+     pipeline table): flipping scope or month must never leave a verb pointed at a row the
+     operator can no longer see. R83 — moved below the last await so a superseded load never
+     prunes the selection the newer one is about to paint. */
+  retShownIds = shown.map((a) => a.case_id);
+  const shownSet = new Set(retShownIds);
+  [...retSel].forEach((id) => { if (!shownSet.has(id)) retSel.delete(id); });
   const h3 = $("#ret-rates-h3");
   if (h3) {
     /* The two scoped badges are the DRAWER's two badges, from the same feed and with the same
@@ -9846,7 +9959,7 @@ async function loadRetentionRates(scope) {
   const sub = $("#ret-rates-sub");
   if (sub) {
     sub.textContent = `Rates ending within the ${reminderMonths}-month reminder window, and cases where the ERC outlasts the rate. `
-      + `Showing ${rateScopeWord(scope)}${scope === "all" ? "" : ` — ${ratesSoonAllW.length + ercAllW.filter((a) => !ratesSoonAllW.some((r) => r.case_id === a.case_id)).length} alerts firm-wide.`} `
+      + `Showing ${rateScopeWord(scope)}${scope === "all" ? "" : ` — ${ratesSoonAllW.length + ercAllW.filter((a) => !ratesSoonAllWIds.has(a.case_id)).length} alerts firm-wide.`} `   // R83 — Set, not .some()
       + "The same feed as Today's Rate & ERC drawer, un-truncated."
       /* R74 · A1 — THE ARITHMETIC, IN WORDS, ONCE. The three group headings below, the badges
          above and the chip's own number are all the same rows counted the same way, and this is
@@ -10920,7 +11033,10 @@ function briefActions(it) {
 }
 // Inline handlers run in global scope, so the one nav target the briefing offers needs a window hook.
 window.gotoSettings = function () { nav("settings"); };
+let briefLoadSeq = 0;   // R83 — stale-response guard (the dashLoadSeq idiom)
 async function loadBriefing() {
+  const seq = ++briefLoadSeq;   // R83
+  const scope = briefingScope;  // R83 — the scope the RPC is asked with; every post-filter below reads THIS, not the live toggle
   $("#briefing-date").textContent = new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
   briefAheadLine();   // R82 · A8 — from the load map loadDashboard has already published
   /* ========================================================================
@@ -10942,7 +11058,7 @@ async function loadBriefing() {
      ======================================================================== */
   const briefSoft = async (q) => { try { return await q; } catch (e) { return { data: null, error: e }; } };
   const [rpcRes, ocRes, rtRes, emFailRes, smsFailRes] = await Promise.all([
-    Promise.resolve(db.rpc("get_briefing", { p_scope: briefingScope })),
+    Promise.resolve(db.rpc("get_briefing", { p_scope: scope })),   // R83
     briefSoft(db.from("cases")
       .select("id,stage,assigned_to")
       .in("stage", ["offer", "exchange"])
@@ -10955,6 +11071,7 @@ async function loadBriefing() {
     briefSoft(db.from("sms_queue").select("id,case_id,client_id,sms_type,to_phone,error,created_at,clients(first_name,last_name)")
       .eq("status", "failed").order("created_at", { ascending: false }).limit(BRIEF_FAILED_READ)),
   ]);
+  if (seq !== briefLoadSeq) return;   // R83 — a newer briefing load owns the list
   const { data, error } = rpcRes;
   if (error) {
     $("#briefing-list").innerHTML = `<div class="empty">Briefing unavailable — ${esc(error.message)}</div>`;
@@ -10968,7 +11085,7 @@ async function loadBriefing() {
      firm's shared inbox, it is what the Accept dropdown on the row is for, and R5-21 (Batch 1)
      depends on it being in My Day. Leads are therefore kept in both scopes. */
   const items = (Array.isArray(data) ? data : []).filter((it) =>
-    (briefingScope === "all" || it.kind === "lead_new" || it.owner === (ME && ME.id))
+    (scope === "all" || it.kind === "lead_new" || it.owner === (ME && ME.id))   // R83
     /* R12b · W-19 — A ROW WITH NOTHING AN ADVISER CAN DO TO IT IS NOT A ROW.
        With no bank details in Settings, every fee-request email is refused server-side, so R5-28
        (correctly) replaced the dead "Chase fee" button with a badge explaining why. For the Owner
@@ -10992,7 +11109,7 @@ async function loadBriefing() {
     const { data: openCases } = ocRes;
     // R5-35 — the same strict rule: under Mine this counts MY offer/exchange cases, not the
     // ownerless ones as well. The row itself is an aggregate, so it carries no owner suffix.
-    const mine = (owner) => briefingScope === "all" || owner === (ME && ME.id);
+    const mine = (owner) => scope === "all" || owner === (ME && ME.id);   // R83
     const n = (openCases || []).filter((c) => mine(c.assigned_to)).length;
     if (n > 0) {
       items.push({
@@ -11025,7 +11142,7 @@ async function loadBriefing() {
     const todayStr = localDateStr();
     (revTasks || []).filter((t) => t && isReviewFeedbackTask(t.title) && !already.has(String(t.id)))
       // R5-35's rule, verbatim: Mine means owner === me. An ownerless one lives under All.
-      .filter((t) => briefingScope === "all" || t.assigned_to === (ME && ME.id))
+      .filter((t) => scope === "all" || t.assigned_to === (ME && ME.id))   // R83
       .forEach((t) => {
         const who = t.cases?.clients ? [t.cases.clients.first_name, t.cases.clients.last_name].filter(Boolean).join(" ") : "";
         const late = t.due_date && t.due_date < todayStr;
@@ -11077,6 +11194,7 @@ async function loadBriefing() {
     apptItems.length ? briefSoft(db.from("appointments").select("*").in("id", apptItems.map((it) => it.appt_id))) : Promise.resolve({ data: [] }),
     leadItems.length ? briefSoft(db.from("leads").select("*").in("id", leadItems.map((it) => it.lead_id))) : Promise.resolve({ data: [] }),
   ]);
+  if (seq !== briefLoadSeq) return;   // R83
   try {
     if (failCaseIds.length) {
       const { data: fcs } = fcsRes;
@@ -11088,7 +11206,7 @@ async function loadBriefing() {
       failedRows
         .filter((r) => { const k = (r.__sms ? "s:" : "e:") + r.id; if (!r.case_id || seenFail.has(k)) return false; seenFail.add(k); return true; })
         .filter((r) => { const c = caseById[r.case_id]; return c && c.stage !== "completed" && c.stage !== "not_proceeding"; })
-        .filter((r) => briefingScope === "all" || (caseById[r.case_id].assigned_to === (ME && ME.id)))
+        .filter((r) => scope === "all" || (caseById[r.case_id].assigned_to === (ME && ME.id)))   // R83
         .slice(0, BRIEF_FAILED_MAX)
         .forEach((r) => {
           const c = caseById[r.case_id];
@@ -11137,6 +11255,7 @@ async function loadBriefing() {
          chunked by. No new query — Today does not gain a round trip for a phone link. */
       const cols = "id,client_id,stage,case_kind,lender,clients!client_id(first_name,phone)" + ((await propAddrSupported()) ? ",property_address" : "");
       const { data: cs } = await inChunks(clientIds, (sl) => db.from("cases").select(cols).in("client_id", sl));
+      if (seq !== briefLoadSeq) return;   // R83
       const live = (cs || []).filter((c) => c.stage !== "not_proceeding");
       const perClient = {};
       live.forEach((c) => { perClient[c.client_id] = (perClient[c.client_id] || 0) + 1; });
@@ -11220,6 +11339,7 @@ async function loadBriefing() {
       leadItems.forEach((it) => { const l = byId[it.lead_id]; if (l) it.lead = l; });
     }
   } catch (e) { /* graceful degradation — lead rows render without the clock */ }
+  if (seq !== briefLoadSeq) return;   // R83
   lastBriefItems = items;
   renderBriefing();
 }
@@ -12035,7 +12155,9 @@ window.wtToggleGroup = function (key, el) {
   if (head) head.setAttribute("aria-expanded", String(open));
 };
 
+let wtLoadSeq = 0;   // R83 — stale-response guard (the dashLoadSeq idiom)
 async function loadWatchtower() {
+  const seq = ++wtLoadSeq;   // R83
   const [res, tally] = await Promise.all([
     db.from("watch_alerts")
       .select("*")
@@ -12047,6 +12169,7 @@ async function loadWatchtower() {
     db.from("watch_alerts").select("id", { count: "exact", head: true }).is("resolved_at", null)
       .then((r) => r).catch(() => ({ count: null })),
   ]);
+  if (seq !== wtLoadSeq) return;   // R83 — a newer Watchtower load owns the panel
   const { data, error } = res;
   if (error) {
     $("#watchtower-list").innerHTML = `<div class="empty">Watchtower unavailable — ${esc(error.message)}</div>`;
@@ -12086,7 +12209,9 @@ async function loadWatchtower() {
     (async () => {
       if (!wtCaseIds.length) return {};
       try {
-        const { data: owners, error: ownErr } = await db.from("cases").select("id,client_id,assigned_to").in("id", wtCaseIds).limit(WATCH_FETCH_CAP);
+        // R83 — through inChunks: up to WATCH_FETCH_CAP ids in one .in() is exactly the feed-sized
+        // list the house rule exists for, and a 400 here silently un-scoped Mine to the whole firm.
+        const { data: owners, error: ownErr } = await inChunks(wtCaseIds, (sl) => db.from("cases").select("id,client_id,assigned_to").in("id", sl));
         if (ownErr) return null;
         const by = {};
         (owners || []).forEach((c) => { by[c.id] = c.assigned_to || null; by["cl:" + c.id] = c.client_id || null; });
@@ -12101,6 +12226,7 @@ async function loadWatchtower() {
     .map((a) => (a.client_id || (wtOwnersOut && wtOwnersOut["cl:" + a.case_id]) || null))
     .filter(Boolean);
   const wtCtx = await loadPropContext(wtCtxRows.map((a) => a.case_id), { clientIds: wtCtxClientHint });
+  if (seq !== wtLoadSeq) return;   // R83
   if (wtOwnersOut === null) wtAssignedBy = null;
   else Object.keys(wtOwnersOut).forEach((k) => { if (k.indexOf("cl:") !== 0) wtAssignedBy[k] = wtOwnersOut[k]; });
   /* R11-2 — everything above this line is the fetch, and it is unchanged. Everything below is
@@ -12933,9 +13059,11 @@ const UNACTIONED_DAYS = 7;
    named and handed to the Pipeline, never silently dropped, and the panel's count still counts
    every quiet case. */
 const RADAR_CAP = 25;
+let unactionedLoadSeq = 0;   // R83 — stale-response guard (the dashLoadSeq idiom)
 async function loadUnactioned() {
   const listEl = $("#unactioned-list");
   if (!listEl) return;
+  const seq = ++unactionedLoadSeq;   // R83
   const sinceIso = new Date(Date.now() - UNACTIONED_DAYS * 86400000).toISOString();
   /* R18-P3 — the note/event reads used to ship the ENTIRE case_notes/case_events tables on every
      dashboard load (unbounded, index-served nowhere). Read a WIDER 90-day window: MEMBERSHIP still
@@ -12978,8 +13106,16 @@ async function loadUnactioned() {
     db.from("case_notes").select("case_id,created_at").gte("created_at", activitySinceIso),
     softRows(db.from("case_events").select("case_id,created_at").gte("created_at", activitySinceIso)),
   ]);
+  if (seq !== unactionedLoadSeq) return;   // R83 — a newer radar load owns the panel
   if (casesRes.error) {
     listEl.innerHTML = `<div class="empty">No-next-action radar unavailable — ${esc(casesRes.error.message)}</div>`;
+    return;
+  }
+  /* R83 — the notes read was the one of the four not soft-wrapped AND not checked: on failure every
+     case whose only recent touch was a note read as "no next action", silently. A radar built on
+     half its evidence is not a radar, so it says so instead. */
+  if (notesRes && notesRes.error) {
+    listEl.innerHTML = `<div class="empty">No-next-action radar unavailable — ${esc(notesRes.error.message)}</div>`;
     return;
   }
   // case_id → most recent note/event timestamp (activity). Undated / absent ⇒ never touched.
@@ -13007,6 +13143,7 @@ async function loadUnactioned() {
     !(lastActivity[c.id] && lastActivity[c.id] >= sinceIso)
   );
   const ctx = await loadPropContext(quiet.map((c) => c.id));
+  if (seq !== unactionedLoadSeq) return;   // R83
   const daysQuiet = (c) => daysSince(lastActivity[c.id] || c.created_at);
   /* ==========================================================================
      R70 · B4/L1 — RATE-SOONEST FIRST, QUIET-DAYS AS THE TIEBREAK, CAPPED AT 25.
@@ -14538,8 +14675,20 @@ window.undoStageMove = async function (snap) {
   // Only ever restore completed_at where the move CHANGED it (stamped it on the way in, or cleared
   // it on the way out). Writing it unconditionally would be this function inventing a fact.
   if (snap.completedAtTouched) patch.completed_at = snap.prevCompletedAt || null;
-  const { error } = await db.from("cases").update(patch).eq("id", snap.caseId);
+  /* R83 — only undo a move the case is still sitting on. The R76 stale guard stops a stale control
+     dragging a case backwards; an Undo pressed after a colleague moved it further on is the same
+     thing, so the write is conditioned on the stage this move set (`toStage`) and a zero-row
+     result is reported rather than reverting somebody else's work. */
+  let q = db.from("cases").update(patch).eq("id", snap.caseId);
+  if (snap.toStage) q = q.eq("stage", snap.toStage);
+  const { data: hit, error } = await q.select("id");
   if (error) return dbFail("undoStageMove", error, "The move could not be undone: " + error.message);   // R81 · A4
+  if (snap.toStage && Array.isArray(hit) && !hit.length) {
+    toast("Nothing undone — this case has moved on since");   // R83
+    if (currentModal && currentModal.type === "case" && currentModal.id === snap.caseId) await openCase(snap.caseId);
+    else if (currentPage === "pipeline") reloadPipelineFresh();
+    return;
+  }
   let removed = 0, delErr = "";
   if (snap.taskIds && snap.taskIds.length) {
     const { error: dErr } = await inChunks(snap.taskIds, (sl) => db.from("case_tasks").delete().in("id", sl));
@@ -15946,6 +16095,12 @@ window.moveCaseToStage = async function (caseId, targetStage, opts = {}) {
       .select("id,client_id,assigned_to,stage,protection_status,completed_at,case_kind,lender,offer_expiry_date,expected_completion_date,rate_end_date,rate_end_estimated,broker_fee,fee_status,fee_requested_at,review_requested_at" + (propOn ? ",property_address" : "") + (refOn ? ",referrer_client_id" : "") + (seDocsOn ? ",waiting_on,solicitor_firm" : "") + ",clients!client_id(first_name,last_name)")
       .eq("id", caseId).single()).data;
   }
+  /* R83 — no row means no case (deleted, or not ours to see). Every guard below is `cRow && …`, so
+     without this the update ran against nothing, touched no rows, and the toast said "Moved". */
+  if (!cRow) {
+    if (!silent) toast("That case could not be loaded — it may have been deleted");
+    return "error";
+  }
   /* =======================================================================
      R76 · A2 — THE STALE-BOARD GUARD.
 
@@ -16206,7 +16361,7 @@ window.moveCaseToStage = async function (caseId, targetStage, opts = {}) {
     && !(refResult && refResult.message) && !playbookErr
     && !!(cRow && cRow.stage) && (!playbookAdded || playbookIds.length === playbookAdded);
   const undoSnap = undoable ? {
-    caseId, fromStage: cRow.stage,
+    caseId, fromStage: cRow.stage, toStage: targetStage,   // R83 — what the Undo must still find
     completedAtTouched: Object.prototype.hasOwnProperty.call(patch, "completed_at"),
     prevCompletedAt: (cRow && cRow.completed_at) || null,
     taskIds: playbookIds,
@@ -16283,7 +16438,10 @@ async function bulkMoveStage(targetStage) {
   const { data: rows } = await inChunks(ids, (sl) => db.from("cases")
     /* R71 · A2 — rate_end_date rides along so the playbook writer the move calls does not have to
        go back for it once per case (the product-transfer Enquiry call step is dated off it). */
-    .select("id,stage,protection_status,completed_at,case_kind,lender,rate_end_date" + (propOn ? ",property_address" : "") + ",clients!client_id(first_name,last_name)")
+    /* R83 — assigned_to and client_id ride along too: moveCaseToStage never refetches a row it is
+       handed, and without assigned_to the playbook writer fell back to ME for every case in the
+       batch, so a bulk move put the adviser's stage tasks on the operator's list. */
+    .select("id,stage,protection_status,completed_at,case_kind,lender,rate_end_date,assigned_to,client_id" + (propOn ? ",property_address" : "") + ",clients!client_id(first_name,last_name)")   // R83
     .in("id", sl));
   const byId = {}; (rows || []).forEach((r) => (byId[r.id] = r));
   // Classify exactly the way moveCaseToStage will, so the confirm can't promise one thing and the
@@ -16528,14 +16686,19 @@ async function bulkStartRetentionRun(ids) {
   if (error) return dbFail("bulkStartRetentionRun", error);
   const nameOf = bulkCaseLabel;
   // Which of these already have a successor — one query, not one per row.
-  const { data: succ } = await inChunks(ids, (sl) => db.from("cases").select("retention_source_case_id").in("retention_source_case_id", sl));
-  const hasSuccessor = new Set((succ || []).map((r) => r.retention_source_case_id));
+  /* R83 — CYCLE-AWARE, like startRetentionCase (R58) and the case header: a successor only counts
+     when it was started for THIS rate end. A case that had a retention case for a previous fix,
+     then renewed, was skipped here as "already has a retention case" while its own row button
+     still offered it. The key is `source|rate_end_date`, the same equality the single path tests. */
+  const { data: succ } = await inChunks(ids, (sl) => db.from("cases").select("retention_source_case_id,rate_end_date").in("retention_source_case_id", sl));
+  const cycleKey = (src, rateEnd) => `${src}|${rateEnd || ""}`;
+  const hasSuccessor = new Set((succ || []).map((r) => cycleKey(r.retention_source_case_id, r.rate_end_date)));
   const today = localDateStr();
   const eligible = [], skipped = [];
   (rows || []).forEach((c) => {
     if (c.stage !== "completed") skipped.push(`${nameOf(c)} (not completed)`);
     else if (!c.rate_end_date) skipped.push(`${nameOf(c)} (no rate-end date)`);
-    else if (hasSuccessor.has(c.id)) skipped.push(`${nameOf(c)} (already has a retention case)`);
+    else if (hasSuccessor.has(cycleKey(c.id, c.rate_end_date))) skipped.push(`${nameOf(c)} (already has a retention case)`);   // R83
     else {
       /* R7-2 — the same nine-month rule the Rate & ERC panel applies to its button. Starting a
          retention case a year out creates a live enquiry, a call task and a queued client email
@@ -16734,11 +16897,18 @@ async function bulkQueueRateRemindersRun(ids) {
   const already = eligible.filter((c) => c.rate_reminder_queued_at && !c.reminder_guarded);
   const guarded = eligible.filter((c) => c.reminder_guarded);
   const chaseDue = localDateStr(Date.now() + 7 * 86400000);
+  /* R83 — NO CHASE TASK WHILE HELD, the R79 · A4 rule the single send (queueEmail) already
+     applies: the follow-up exists to chase a client who GOT the email and went quiet; while the
+     hold is on nobody gets it, so a sweep was booking N chases for conversations that never
+     started. Said in the confirm before anything is queued, and in the tally after. */
+  const held = emailHoldOn();
   const confirmMsg = `Queue ${eligible.length} rate-end reminder${eligible.length === 1 ? "" : "s"}?`
     + (skipped.length ? ` (${skipped.length} skipped: no email/no rate-end date)` : "")
     /* R70 · L4 — driven from emailHoldOn(), so this sentence stays true the day the hold lifts. */
     + `\n\n${queuedSendLine()}`
-    + `\nEach one also gets a follow-up task due ${fmtD(chaseDue)}.`
+    + (held
+      ? `\nNo follow-up tasks will be created while sending is held — the clients are not getting these emails yet, so there is nothing to chase.`
+      : `\nEach one also gets a follow-up task due ${fmtD(chaseDue)}.`)
     + (skipped.length ? `\n\nSkipped: ${skipped.slice(0, 5).join(", ")}${skipped.length > 5 ? ` and ${skipped.length - 5} more` : ""}` : "")
     + (already.length ? `\n\n⚠ ${already.length} of these ${already.length === 1 ? "has" : "have"} already been reminded once — they will be reminded again:\n${already.slice(0, 5).map((c) => "· " + nameOf(c)).join("\n")}${already.length > 5 ? `\n· and ${already.length - 5} more` : ""}` : "")
     /* R70 · A2 — named, not silent, and NOT a warning: this block exists so the operator knows why
@@ -16763,7 +16933,10 @@ async function bulkQueueRateRemindersRun(ids) {
        operator on the same list) both read `eligible` before either stamped anything; without this
        re-read the second run cheerfully queues a duplicate reminder to the same client. */
     const { data: fresh } = await db.from("cases").select("rate_reminder_queued_at").eq("id", c.id).single();
-    if (fresh && fresh.rate_reminder_queued_at && !c.rate_reminder_queued_at) { raced++; continue; }
+    /* R83 — compare against the stamp THIS run read, not against "was it ever stamped": the old test
+       could only catch a race on a never-reminded row, so the guarded back book (import-stamped)
+       and every "reminded once" case the confirm allows were unprotected against a second run. */
+    if (fresh && (fresh.rate_reminder_queued_at || null) !== (c.rate_reminder_queued_at || null)) { raced++; continue; }
     const { error: qErr } = await db.from("email_queue").insert({
       case_id: c.id, client_id: c.client_id, email_type: "rate_end_reminder", to_email: c.clients.email,
     });
@@ -16773,6 +16946,7 @@ async function bulkQueueRateRemindersRun(ids) {
        to this client, so "imported and never reminded" is no longer true of the case. */
     const { error: sErr } = await updateCaseClearingGuard(c.id, { rate_reminder_queued_at: new Date().toISOString() });
     if (sErr) failedStamp.push({ id: c.id, label: nameOf(c) });
+    if (held) continue;   // R83 — no chase for an email the client has not received (see above)
     const { error: tErr } = await db.from("case_tasks").insert({
       case_id: c.id,
       title: `Follow up rate-end reminder — ${(c.clients.first_name || "client").trim()}`,
@@ -16788,7 +16962,7 @@ async function bulkQueueRateRemindersRun(ids) {
   if (failedQueue.length) detail.push(`no reminder was queued for ${names(failedQueue)}`);
   if (failedTask.length) detail.push(`the follow-up task failed for ${names(failedTask)} — nothing holds the next step`);
   if (failedStamp.length) detail.push(`${names(failedStamp)} could not be marked as reminded, so ${failedStamp.length === 1 ? "it still reads" : "they still read"} “Reminder pending” and will be offered again`);
-  let msg = `${queued} reminder${queued === 1 ? "" : "s"} queued · ${tasks} follow-up task${tasks === 1 ? "" : "s"} · 0 sent`;
+  let msg = `${queued} reminder${queued === 1 ? "" : "s"} queued · ${held ? "no follow-up tasks (sending held)" : `${tasks} follow-up task${tasks === 1 ? "" : "s"}`} · 0 sent`;   // R83
   if (skipped.length) msg += ` · ${skipped.length} skipped`;
   if (tooEarly.length) msg += ` · ${tooEarly.length} too early (rate more than nine months out)`;   // R64 · M5
   if (raced) msg += ` · ${raced} already reminded by another run`;
@@ -16932,10 +17106,15 @@ async function bulkSendDocsRequestsRun(ids) {
   if (error) return dbFail("bulkSendDocsRequestsRun", error);
   const nameOf = bulkCaseLabel;
   // Three batched reads for the whole selection — never one per case.
-  const [{ data: docRows }, { data: mailRows }] = await Promise.all([
+  const [{ data: docRows, error: docErr }, { data: mailRows, error: mailErr }] = await Promise.all([
     inChunks(ids, (sl) => db.from("case_documents").select("case_id,status").in("case_id", sl)),
     inChunks(ids, (sl) => db.from("email_queue").select("case_id,email_type,status,sent_at").in("case_id", sl)),
   ]);
+  /* R83 — both errors were dropped. A failed checklist read skipped every case as "no document
+     checklist" (a false diagnosis); a failed queue read emptied the already-queued set and
+     re-queued the very duplicate it exists to prevent. Refuse the batch instead. */
+  if (docErr) return dbFail("bulkSendDocsRequestsRun", docErr, "Error reading the document checklists: " + docErr.message);
+  if (mailErr) return dbFail("bulkSendDocsRequestsRun", mailErr, "Error reading the email queue: " + mailErr.message);
   const care = await loadClientCare([...new Set((rows || []).map((c) => c.client_id).filter(Boolean))]);
   const total = {}, outstanding = {};
   (docRows || []).forEach((d) => {
@@ -17002,6 +17181,7 @@ async function bulkSendDocsRequestsRun(ids) {
     else if (res.unreachable) msg += ` · the send service could not be reached (${res.error}) — they stay in the queue; check the Emails tab`;
     else if (res.error) msg += ` · sending FAILED: ${res.error} — nothing has reached the clients; see the Emails tab`;
     else if (res.failed > 0) msg += ` · the send service reported them as failed — nothing has reached the clients; see the Emails tab`;
+    else if (res.held) msg += ` · HELD — nothing sends until the hold is released (Settings › Email sending)`;   // R83 — sendResultToast's R79 branch, said here too
   }
   toast(msg);
   // Anything that failed stays selected, so the retry is targeted rather than a re-run that would
@@ -17586,19 +17766,25 @@ function renderPipelineTable(filtered, stageEntry = {}, propOn = true, opts = {}
   // R75 · B4 — tested against the FULL set: a key that exists but is currently
   // hidden is not a missing key, and rule 4 un-hides it anyway.
   if (completedMode && !allCols.some(([k]) => k === sortKey)) { sk = "completed_at"; sd = -1; }
-  rows = rows.slice().sort((a, b) => {
+  /* R83 — and the mirror case: a key carried OUT of Completed (completed_at, loan_amount) into a
+     live segment sorted every row on `undefined` and the header line read the raw column name.
+     Same fallback shape: the live table's own default, newest-updated first. */
+  else if (!completedMode && !allCols.some(([k]) => k === sortKey)) { sk = "updated_at"; sd = -1; }
+  /* R83 — DECORATE ONCE, THEN SORT. val() runs propSortKey (regex normalisation), staffName and
+     daysSince; inside the comparator that was ~40,000 calls per repaint on the 1,900-row Completed
+     table, and the table repaints on every header click and every search keystroke. */
+  const decorated = rows.map((c) => ({ c, key: val(c, sk), addressed: sk === "property" ? !!propLabel(c) : true }));
+  decorated.sort((a, b) => {
     /* R6-FIX T4 — a case with no address is not "last alphabetically", it is ABSENT, and absence
        has no place at either end of a deliberate sort. Ascending already pushed the ~45 legacy
        NULL rows to the bottom with a sentinel; clicking the header again put every one of them at
        the TOP, so a quarter of the table was blank before the first real address. They stay last
        in both directions and the addressed rows reverse around them. */
-    if (sk === "property") {
-      const ax = !!propLabel(a), bx = !!propLabel(b);
-      if (ax !== bx) return ax ? -1 : 1;
-    }
-    const x = val(a, sk), y = val(b, sk);
+    if (a.addressed !== b.addressed) return a.addressed ? -1 : 1;
+    const x = a.key, y = b.key;
     return (x < y ? -1 : x > y ? 1 : 0) * sd;
   });
+  rows = decorated.map((d) => d.c);
 
   // BUILD 7c — prune any bulk selection down to what's still visible in this filter/segment/tab, so
   // "select-all" and the action bar only ever act on the rows on screen.
@@ -19286,7 +19472,7 @@ window.ffApplyDiff = async function (caseId, clientId, data) {
       }
       if (Object.keys(caseUpd).length) {
         const { error } = await db.from("cases").update(caseUpd).eq("id", caseId);
-        if (error) { dbFail("disp", error); return; }
+        if (error) { dbFail("ffApplyDiff", error); return; }   // R83 — was mislabelled "disp"
       }
       let uid = (ME && ME.id) || null;
       try { const { data: { user } } = await db.auth.getUser(); if (user && user.id) uid = user.id; } catch (e) {}
@@ -20134,7 +20320,14 @@ async function logCallSave(root, c, hooks) {
   }
   return { noteBody, protRecorded, madeTask: !!task, task, userId: user.id };
 }
+/* R83 — the R78 · A5 stale-response guard, on the case modal. Every page has one; this modal, with
+   a dozen awaits between the click and the paint, did not — so a second case opened while the
+   first was still loading could be painted over by the FIRST when it finally resolved, and the
+   module-scoped openedUpdatedAt then belonged to a case that was not on screen (every Save on the
+   visible case failed its version guard as a phantom conflict). */
+let caseOpenSeq = 0;
 window.openCase = async function (id, opts = {}) {
+  const openSeq = ++caseOpenSeq;   // R83
   let c = { stage: "enquiry", case_kind: "remortgage", rate_type: "fixed" };
   let notes = [], tasks = [];
   let auditRows = [];
@@ -20187,6 +20380,7 @@ window.openCase = async function (id, opts = {}) {
       Promise.resolve(db.from("case_files").select("id").eq("case_id", id).limit(1)),
       Promise.resolve(db.from("fact_finds").select("id").eq("case_id", id).limit(1)),
     ]);
+    if (openSeq !== caseOpenSeq) return;   // R83 — a newer openCase owns the modal
     if (!cs) return toast("Case not found — it may have been deleted or you don't have access");
     c = cs; notes = ns || []; tasks = ts || []; auditRows = aud;
     caseDocs = docs || []; docMails = dmail || []; caseAppts = appts || [];
@@ -20205,6 +20399,7 @@ window.openCase = async function (id, opts = {}) {
        this one, because the whole point is that there is exactly one definition of "what happened
        on a case" and both surfaces call it. */
     tlItems = await buildClientTimeline(cs.client_id, [cs]);
+    if (openSeq !== caseOpenSeq) return;   // R83
     /* R40 — and then scoped to THIS case. Appointments are the one source the builder reads by
        client_id rather than case_id, so on a multi-case client another case's diary would
        otherwise appear in this case's history. Rows with NO case_id are kept on purpose: a
@@ -20241,15 +20436,21 @@ window.openCase = async function (id, opts = {}) {
      above names its columns on purpose (it feeds a select of the whole book), so widening it would
      42703 an un-migrated database; this is one extra row-scoped read, feature-detected, empty when
      the columns are not there. */
-  const caseCare = id && c.client_id ? (await loadClientCare([c.client_id]))[c.client_id] : null;
+  /* R83 — the row-scoped reads below (care chips, the security-check client row, the client's
+     other cases, the lead-source list) do not depend on one another; they used to be awaited one
+     after the other, four serial round-trips before the modal could paint. Started here, awaited
+     together further down once the feature probes (all cached after first use) have answered. */
+  const carePromise = id && c.client_id ? loadClientCare([c.client_id]) : Promise.resolve({});
   /* R14 — the client's DOB and home address for the security-check card at the top of this modal.
      caseClient (from the whole-book select above) carries only name/email/phone, so this is one
      extra row-scoped read for just this case's client. date_of_birth is R8 and address predates it,
      so both columns exist — but softRows swallows any failure and the card simply shows "—" rather
      than blocking the case opening. Not fetched at all for a brand-new (unsaved) case. */
-  const secClient = id && c.client_id
-    ? (await softRows(db.from("clients").select("id,first_name,last_name,date_of_birth,address").eq("id", c.client_id).limit(1)))[0] || null
-    : null;
+  const secPromise = id && c.client_id
+    ? softRows(db.from("clients").select("id,first_name,last_name,date_of_birth,address").eq("id", c.client_id).limit(1))
+    : Promise.resolve([]);
+  const sourcesPromise = knownLeadSources();   // R77 · A2a — for the lead-source datalist
+  const siblingsPromise = c.client_id ? softRows(db.from("cases").select("*").eq("client_id", c.client_id)) : Promise.resolve([]);
   /* R6 — the client's OTHER cases, for two jobs: (1) the header only spends a
      "no address" chip where differentiation actually matters, i.e. the client
      has more than one case; (2) the new-case property picker offers the
@@ -20290,9 +20491,13 @@ window.openCase = async function (id, opts = {}) {
     || c.monthly_rent != null || c.icr_stress_rate != null || c.icr_required_pct != null;
   if (id) noteLenderTrackFromStarRow(c);
   const lenderTrackOn = id ? Object.prototype.hasOwnProperty.call(c, "application_status") : ((await lenderTrackSupported()) === true);
-  const solicitorFirms = docsOn ? await knownSolicitorFirms() : [];
-  const knownSources = await knownLeadSources();   // R77 · A2a — for the lead-source datalist
-  const siblingCases = c.client_id ? await softRows(db.from("cases").select("*").eq("client_id", c.client_id)) : [];
+  // R83 — one wait for the five independent reads started above (see carePromise).
+  const [careMap, secRows, knownSources, siblingCases, solicitorFirms] = await Promise.all([
+    carePromise, secPromise, sourcesPromise, siblingsPromise, docsOn ? knownSolicitorFirms() : Promise.resolve([]),
+  ]);
+  if (openSeq !== caseOpenSeq) return;   // R83
+  const caseCare = id && c.client_id ? (careMap || {})[c.client_id] : null;
+  const secClient = id && c.client_id ? (secRows || [])[0] || null : null;
   registerClientProps(c.client_id, siblingCases);   // R6-FIX V2/V4 — the client's whole book
   /* ---- R6-FIX OP-R62-05 · "this building is on someone else's file too" ----
      9 Bryanstone Road sits on Kwame Boateng's completed purchase and Gareth
@@ -20748,6 +20953,7 @@ window.openCase = async function (id, opts = {}) {
       <label>Assigned to<select name="assigned_to"><option value="">— unassigned —</option>${assigneeOptionsHtml(id ? c.assigned_to : newCaseDefaultAssignee())}</select></label>
       ${id ? "" : `<p class="panel-sub full case-assign-sub" id="case-assign-sub">${newCaseAssigneeSub()}</p>`}
 `;
+  if (openSeq !== caseOpenSeq) return;   // R83 — last check before the paint (casesOnSameProperty above awaited)
   const caseFormHtml = id ? `
     <details class="case-details" >
       <summary>Case details</summary>
@@ -22251,7 +22457,11 @@ async function applyOfferDiff() {
     /* R6-36 — a ticked property row rewrites which building this case is about, which is exactly the
        kind of change that should be legible in the timeline afterwards rather than only in the audit
        diff. The note is written with the extras below. */
-    if (patch.property_address) extras.push(`Property address set from the offer: ${patch.property_address}`);
+    /* R83 — a COPY, never the armed proposal's own array: on the conflict branch below the proposal
+       stays on screen for a second Apply, and pushing into pendingOffer.extras wrote the property
+       line into the note twice. */
+    const noteExtras = extras.slice();
+    if (patch.property_address) noteExtras.push(`Property address set from the offer: ${patch.property_address}`);
     // ONE write, guarded by the version this modal opened on: if the case moved under us the
     // readings stay on screen to re-apply rather than silently overwriting somebody else's edit.
     let { data: updated, error } = await db.from("cases").update(patch).eq("id", caseId).eq("updated_at", openedUpdatedAt).select();
@@ -22267,10 +22477,10 @@ async function applyOfferDiff() {
       toast("This case changed while the offer was being read — reopen it and apply again (nothing was written).");
       return;
     }
-    if (extras.length) {
+    if (noteExtras.length) {   // R83
       let uid = (ME && ME.id) || null;
       try { const { data: { user } } = await db.auth.getUser(); if (user && user.id) uid = user.id; } catch (e) {}
-      await db.from("case_notes").insert({ case_id: caseId, body: "From mortgage offer (AI-read): " + extras.join(" | "), created_by: uid });
+      await db.from("case_notes").insert({ case_id: caseId, body: "From mortgage offer (AI-read): " + noteExtras.join(" | "), created_by: uid });
     }
     pendingOffer = null;
     toast(`Applied ${n} field${n === 1 ? "" : "s"} from the offer ✓`);
@@ -22623,7 +22833,12 @@ async function queueCustomEmail(caseId, c, ev) {
            second is the standing hold this whole app is under (see emailOfferToClient, R54) and it
            is said here in the same words. */ ""}
       <p class="panel-sub" id="cust-preview">Sent as <strong>${esc(signedBy)}</strong> with your usual sign-off — the house template wraps it.</p>
-      <p class="panel-sub" id="cust-held">Client email is not switched on yet, so this will be QUEUED and held — it sends once email sending goes live. Nothing reaches ${esc(who)} today.</p>
+      ${/* R83 — hold-aware, like every other per-case send since R79 · A4: this sentence used to be
+           hard-coded, and the moment the hold lifted it promised "nothing reaches the client today"
+           over a button that then sent the email at once (the scoped runAutomation below). */ ""}
+      <p class="panel-sub" id="cust-held">${emailHoldOn()
+        ? `Client email is not switched on yet, so this will be QUEUED and held — it sends once email sending goes live. Nothing reaches ${esc(who)} today.`
+        : `Sending is ON — pressing Queue email sends this to ${esc(who)} straight away, in the firm's template.`}</p>
       <div class="ovl-err" id="cust-err"></div>
       <div class="modal-actions"><div></div><div class="right">
         <button type="button" class="btn" id="cust-cancel">Cancel</button>
@@ -22870,6 +23085,12 @@ function coldClients(data, adviser) {
   const ctx = { last: data.last, cutoffMs: clientContactCutoff().getTime() };
   return (data.clients || []).filter((c) => clientHasAdviser(c, adviser) && clientInSegment(c, "cold", ctx));
 }
+/* R83 — the AI bulk import writes its own provenance note ("AI bulk import | …", runImport) on
+   every case it creates, and it does NOT use the SB-IMPORT tag isSystemProvenanceNote matches — so
+   an AI-imported book read as "last contact today (note)" everywhere, exactly the R47 Gate-0
+   failure with a different prefix. One predicate for the Clients page and the client header. */
+const AI_IMPORT_NOTE_RE = /^\s*AI bulk import\b/;   // R83
+function isClientProvenanceNote(body) { return isSystemProvenanceNote(body) || (typeof body === "string" && AI_IMPORT_NOTE_RE.test(body)); }   // R83
 async function loadClientData() {
   /* R18-P3 — bound the four comms reads to a fixed recent window. These reads only feed the "last
      contact" detail and the cold segment. The window is always WIDER than the cold cutoff (see
@@ -22901,10 +23122,15 @@ async function loadClientData() {
     // one per policy/deal, all dated the import day) can be told apart from real contact. Counting
     // them as "last contact" made every imported client read as spoken-to today and collapsed the
     // cold list to nothing — the dangerous kind of wrong. Filtered out at the bump below.
-    db.from("case_notes").select("case_id,created_at,body").gte("created_at", commsSinceIso),
-    db.from("email_queue").select("client_id,case_id,status,sent_at").gte("sent_at", commsSinceIso),
-    db.from("appointments").select("client_id,case_id,starts_at").gte("starts_at", commsSinceIso),
-    db.from("case_tasks").select("case_id,done_at").gte("done_at", commsSinceIso),
+    /* R83 — PAGED. These four are whole-table reads inside a 210+ day window, and the back-book
+       import alone wrote 2,000+ provenance notes on ONE day — so a bare read hit PostgREST's
+       1,000-row ceiling (core.js R69-HF1) and returned an arbitrary page, silently dropping real
+       contact and calling clients cold who were not. readAll walks past the ceiling; the order is
+       what makes paging deterministic. */
+    readAll(db.from("case_notes").select("case_id,created_at,body").gte("created_at", commsSinceIso).order("created_at").order("id")),   // R83
+    readAll(db.from("email_queue").select("client_id,case_id,status,sent_at").gte("sent_at", commsSinceIso).order("sent_at").order("id")),   // R83
+    readAll(db.from("appointments").select("client_id,case_id,starts_at").gte("starts_at", commsSinceIso).order("starts_at").order("id")),   // R83
+    readAll(db.from("case_tasks").select("case_id,done_at").gte("done_at", commsSinceIso).order("done_at").order("id")),   // R83
   ]);
   if (clientsRes.error) return { error: clientsRes.error };
   const clients = clientsRes.data || [];
@@ -22919,7 +23145,7 @@ async function loadClientData() {
     const cur = last.get(clientId);
     if (!cur || String(at) > String(cur.at)) last.set(clientId, { at: String(at), what });
   };
-  (notesRes.data || []).forEach((n) => { if (isSystemProvenanceNote(n.body)) return; bump(caseOwner.get(n.case_id), n.created_at, "note"); });
+  (notesRes.data || []).forEach((n) => { if (isClientProvenanceNote(n.body)) return; bump(caseOwner.get(n.case_id), n.created_at, "note"); });   // R83
   // Only a row that actually WENT. queued/failed/cancelled are things we meant to say, not things
   // the client has heard, and counting them would let a bounced email hide a silent client.
   (emailsRes.data || []).forEach((e) => {
@@ -23100,12 +23326,20 @@ const CLIENT_LIST_CAP = 100;
 // The current full filtered+sorted list, kept module-level so the ONE delegated #client-list change
 // handler (R18-P2) can re-render the bulk bar against it without re-wiring per row.
 let clientRenderedList = [];
+let clientsLoadSeq = 0;   // R83 — stale-response guard (the dashLoadSeq / emailsLoadSeq idiom)
 async function loadClients(filter = "", opts = {}) {
   // R43 / R37 · L7 — same one-shot pair as the board, in the same order and for the same reasons
   // (see loadPipeline): the server read first, then the local starter seed it may suppress.
   loadSavedViews();
   seedStarterViews();
+  const seq = ++clientsLoadSeq;   // R83
   const cached = await clientDataCached(opts.force);
+  /* R83 — a slow force:true load (a save, a bulk action, an adviser pick) raced the debounced
+     search: the keystroke painted from the old cache at once, then the forced read landed and
+     repainted with the filter captured at ITS call time, leaving the list on "a" while the box said
+     "ab". A newer call owns the page. A superseded FORCED load has still refreshed the cache, so it
+     asks for one more paint from the box's live value rather than leaving the fresh data unpainted. */
+  if (seq !== clientsLoadSeq) { if (opts.force && !cached.error) loadClients($("#client-search").value); return; }   // R83
   if (cached.error) { renderLoadError("#client-list", cached.error, () => loadClients(filter, { force: true })); return; }
   const { clients, last } = cached;
   const cutoff = clientContactCutoff();
@@ -23648,8 +23882,11 @@ async function bulkClientAddTaskRun(rows) {
   const already = new Set();
   if (targets.length) {
     try {
-      const { data } = await db.from("case_tasks").select("case_id,title")
-        .in("case_id", targets.map((t) => t.caseId)).is("done_at", null);
+      /* R83 — through inChunks: "Select all" takes the whole filtered list (not the 100 rendered),
+         so this .in() can carry 1,000+ ids, which PostgREST 400s silently — and the catch below
+         then read that as "no duplicates", so a second press duplicated every task. */
+      const { data, error } = await inChunks(targets.map((t) => t.caseId), (sl) => db.from("case_tasks").select("case_id,title").in("case_id", sl).is("done_at", null));   // R83
+      if (error) throw error;   // R83 — degrade to writing, as before, but never on a half-read
       const key = playbookTitleKey(picked.title);
       (data || []).forEach((r) => { if (playbookTitleKey(r.title) === key) already.add(r.case_id); });
     } catch (_) { /* no dedupe this run */ }
@@ -23657,14 +23894,23 @@ async function bulkClientAddTaskRun(rows) {
   let ok = 0;
   const dup = [];
   const failed = [];
-  for (const t of targets) {
-    if (already.has(t.caseId)) { dup.push(t); continue; }
-    const { error } = await db.from("case_tasks").insert({
+  /* R83 — ONE batched insert per IN_CHUNK-sized slice instead of a round trip per client. A slice
+     that fails fails whole (the insert is atomic), so every target in it is reported and kept
+     selected for the retry; the rows themselves are byte-identical to the per-row insert. */
+  const toWrite = [];
+  targets.forEach((t) => {
+    if (already.has(t.caseId)) { dup.push(t); return; }
+    already.add(t.caseId);   // two selected clients resolved to one case still mean one task
+    toWrite.push(t);
+  });
+  for (let i = 0; i < toWrite.length; i += IN_CHUNK) {   // R83
+    const slice = toWrite.slice(i, i + IN_CHUNK);
+    const { error } = await db.from("case_tasks").insert(slice.map((t) => ({
       case_id: t.caseId, title: picked.title, due_date: picked.due,
       assigned_to: picked.who || t.assignedTo || (ME && ME.id) || null,
       created_by: (ME && ME.id) || null,
-    });
-    if (error) failed.push(t); else { ok++; already.add(t.caseId); }
+    })));
+    if (error) slice.forEach((t) => failed.push(t)); else ok += slice.length;
   }
   let msg = `${ok} task${ok === 1 ? "" : "s"} added (“${picked.title}”)${picked.due ? " · due " + fmtD(picked.due) : ""}`;
   if (dup.length) msg += ` · ${dup.length} already had that task open — ${namedList(dup.map((d) => d.name))}`;
@@ -23694,15 +23940,19 @@ function bulkClientExportCsv() {
   };
   const head = ["Client", "Email", "Phone", "Date of birth", "Cases", "Live cases", "Next rate end", "Protection outstanding", "Last contact", "Advisers", "Broker fees total"]
     .filter((h) => money || h !== "Broker fees total");
+  const csvToday = localDateStr();   // R83
   const line = (c) => {
     const cases = c.cases || [];
     const live = cases.filter((x) => CLIENT_LIVE(x.stage));
-    const rateEnds = cases.map((x) => x.rate_end_date).filter(Boolean).sort();
+    /* R83 — "Next rate end" was the EARLIEST rate end on the client, matured ones included, so a
+       2019 deal printed over the March 2027 one the row on screen shows. Same rule as the row:
+       clientNextRateEnd, which counts only dates from today onwards. */
+    const nextRate = clientNextRateEnd(c, csvToday);   // R83
     const advisers = [...new Set(cases.map((x) => x.assigned_to).filter(Boolean))].map((id) => staffName(id)).filter((n) => n && n !== "—");
     const lc = last.get(c.id);
     return [
       clientDisplayName(c), c.email || "", c.phone || "", c.date_of_birth || "",
-      cases.length, live.length, rateEnds[0] || "",
+      cases.length, live.length, nextRate ? nextRate.date : "",   // R83
       live.some((x) => ["not_discussed", "discussed"].includes(x.protection_status || "not_discussed")) ? "yes" : "no",
       lc ? String(lc.at).slice(0, 10) : "",
       advisers.join(" / "),
@@ -23813,7 +24063,7 @@ async function buildClientTimeline(clientId, cases) {
     ]);
   } catch (_) { /* keep whatever resolved */ }
   const items = [];
-  const push = (ts, cat, icon, title, caseId) => { if (!ts) return; items.push({ ts, cat, icon, title, caseId, caseLabel: caseLabel[caseId], caseChip: caseChip[caseId] }); };
+  const push = (ts, cat, icon, title, caseId, extra) => { if (!ts) return; items.push(Object.assign({ ts, cat, icon, title, caseId, caseLabel: caseLabel[caseId], caseChip: caseChip[caseId] }, extra || {})); };   // R83 — `extra` carries per-row flags (provenance)
   /* R6.4 H-01 — the same correction the case modal shows, on the client's own
      timeline: a re-filed note reads struck and badged, its marker reads plainly,
      and everything else keeps its Re-file control. The body is escaped before it
@@ -23834,7 +24084,9 @@ async function buildClientTimeline(clientId, cases) {
     const title = (refiled ? `<s class="tl-refiled">${text}</s> ${REFILE_BADGE}` : text)
       + authorChipHtml(n.created_by)
       + (n.id && !refiled && !marker ? refileBtnHtml(n.id) : "");
-    push(n.created_at, nt.type, rev ? "⭐" : nt.icon, title, n.case_id);
+    // R83 — a provenance note (SB-IMPORT / AI bulk import) is history, not a conversation: flagged so
+    // the header's "Last contact" line skips it, the same way the Clients page's cold segment does.
+    push(n.created_at, nt.type, rev ? "⭐" : nt.icon, title, n.case_id, { provenance: isClientProvenanceNote(n.body) });   // R83
   });
   /* R63 · A1 — the second (and third) "Document request" on a case IS the chase; production has
      no separate docs_chase type. Without this the history reads as the same first ask, repeated. */
@@ -24182,6 +24434,20 @@ function chNextDay(ymd) {
   d.setDate(d.getDate() + 1);
   return localDateStr(d);
 }
+/* R83 — a date-only bound ("2026-08-01") is cast by the database in ITS zone (UTC on Supabase), so
+   in British Summer Time the "From" day started at 01:00 London and the "To" day ran an hour into
+   the next: a change the panel printed as "02/08/2026, 00:30" sat inside a filter that said
+   "to 1 Aug". The bound is now London midnight as an instant — the emMorningStart rule: try the two
+   offsets London can hold and keep the one that lands on that date at hour 00. */
+function chLondonMidnightIso(ymd) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(ymd || ""))) return ymd;
+  const hourFmt = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", hour: "2-digit", hourCycle: "h23" });
+  for (const off of ["+01:00", "+00:00"]) {
+    const t = new Date(ymd + "T00:00:00" + off);
+    if (!isNaN(t) && localDateStr(t) === ymd && hourFmt.format(t) === "00") return t.toISOString();
+  }
+  return ymd;
+}
 /* One row of the whole-log view. Same expandable field-level detail as the case and client
    drawers (auditChangesHtml, which already renders the database's "(hidden)" masking of bank
    details, keys and tokens as "changed — value not recorded"), plus the record type and the actor,
@@ -24211,8 +24477,8 @@ function chApplyFilters(q) {
   if (grp && grp[2]) q = q.in("table_name", grp[2]);
   if (chState.actor === CH_SYSTEM) q = q.is("actor", null);
   else if (chState.actor !== CH_ALL) q = q.eq("actor", chState.actor);
-  if (chState.from) q = q.gte("happened_at", chState.from);
-  if (chState.to) q = q.lt("happened_at", chNextDay(chState.to));
+  if (chState.from) q = q.gte("happened_at", chLondonMidnightIso(chState.from));   // R83
+  if (chState.to) q = q.lt("happened_at", chLondonMidnightIso(chNextDay(chState.to)));   // R83
   return q.order("happened_at", { ascending: false }).order("id", { ascending: false });
 }
 /* R68 · M14 — a plain-English name for whatever the filters are currently set to, so the toast
@@ -24750,11 +25016,16 @@ window.openClient = async function (id, focus, attempted, presetCaseId) {
   let auditRows = []; // audit_log for this client AND everything hanging off their cases
   openedClientUpdatedAt = null; // R18-D1 — null baseline (new-client INSERT stays unguarded)
   if (id) {
-    const [{ data: cl, error: clErr }, { data: cs }] = await Promise.all([
+    const [{ data: cl, error: clErr }, { data: cs, error: csErr }] = await Promise.all([   // R83
       db.from("clients").select("*").eq("id", id).single(),
       db.from("cases").select("*").eq("client_id", id).order("created_at", { ascending: false }),
     ]);
     if (clErr || !cl) return toast("Client not found — it may have been deleted or you don't have access.");
+    /* R83 — the cases error was discarded: a failed read opened the record on "No cases yet", wiped
+       the property registration for this client, offered the composer no case and dropped the
+       "COMPLETED cases with regulated records" line from the delete confirm. A record that cannot
+       say what is on it must not open as if nothing were. */
+    if (csErr) return dbFail("openClient", csErr);   // R83
     c = cl; cases = cs || [];
     openedClientUpdatedAt = cl.updated_at; // R18-D1 — exact string from the loaded row, for the stale-write guard
     /* R6-FIX V2/V4 — this is the client's whole book by definition, so it is the authoritative
@@ -24830,7 +25101,7 @@ window.openClient = async function (id, focus, attempted, presetCaseId) {
   ].filter(Boolean).join(" · ")}</p>` : "";
   /* R12b · W-21 — read off the SAME timeline items already built above (newest first), so this
      line can never disagree with what the timeline underneath it shows. Never a system row. */
-  const lastContactItem = id ? tlItems.find((it) => CONTACT_TL_CATS.has(it.cat) && new Date(it.ts) - Date.now() <= 0) : null;
+  const lastContactItem = id ? tlItems.find((it) => CONTACT_TL_CATS.has(it.cat) && !it.provenance && new Date(it.ts) - Date.now() <= 0) : null;   // R83 — provenance notes are not contact
   const lastContactHtml = id ? `<p class="panel-sub client-last-contact" id="client-last-contact">${lastContactItem
     ? `Last contact: ${esc(CONTACT_KIND_LABEL[lastContactItem.cat] || lastContactItem.cat)}, ${lastContactAgeLabel(lastContactItem.ts)}`
     : "No contact recorded"}</p>` : "";
@@ -26025,13 +26296,16 @@ async function loadEmails() {
   const emPreviewCtx = (e) => {
     const chk = emOutstanding[e.case_id];
     /* R79 · A2 — v19's variant flags, derived from what this page already loads (the newest
-       window): a docs_request with an earlier non-cancelled docs_request on the same case is a
-       CHASE; a review_request with an earlier non-cancelled review_request is the REMINDER. The
+       window): a docs_request with an earlier SENT docs_request on the same case is a
+       CHASE; a review_request with an earlier SENT review_request is the REMINDER. The
        edge derives the same facts from the whole table — a prior ask older than the window can
        make the preview read as a first ask where the send will chase, which is the one bounded
        divergence and it is bounded by EMAIL_ROW_LIMIT. */
+    /* R83 — only a prior row that actually WENT (status = 'sent') makes this one a chase or a
+       reminder, mirroring the edge function: a failed or still-queued first ask has not reached
+       the client, so the next one is still the first ask. Was `status !== "cancelled"`. */
     const prior = (type) => !!(e.case_id && allEmails.some((x) => x.case_id === e.case_id
-      && x.email_type === type && x.status !== "cancelled" && x.id !== e.id
+      && x.email_type === type && x.status === "sent" && x.id !== e.id   // R83
       && String(x.created_at || "") < String(e.created_at || "")));
     return {
       caseRow: propCtxCase(emailCtx, e.case_id),
@@ -26259,6 +26533,27 @@ function retryReport(ok, blocked) {
   }
   return msg;
 }
+/* R83 — THE GATE THE BULK RETRIES NEVER HAD. retryEmail/retrySms run confirmSuppressedSend on the
+   interactive path only and say the bulk loops "are gated once, by their own caller" — no caller
+   did. Same shape as smsFlushSuppressionOk: one read of the care flags over the rows about to be
+   re-queued, one confirm naming the suppressed clients. Fail-open exactly as that function is: no
+   care columns, or a read that errors, retries exactly as before. Returns the ids to proceed with
+   ([] when the operator says no). */
+async function bulkRetrySuppressionGate(table, ids, noun) {
+  try {
+    const { data, error } = await inChunks(ids, (sl) => db.from(table).select("id,client_id").in("id", sl));
+    if (error || !data || !data.length) return ids;
+    const care = await loadClientCare(data.map((r) => r.client_id));
+    const hit = data.filter((r) => r.client_id && care[r.client_id] && care[r.client_id].suppress_automation);
+    if (!hit.length) return ids;
+    const { data: people } = await db.from("clients").select("id,first_name,last_name").in("id", [...new Set(hit.map((r) => r.client_id))]);
+    const names = (people || []).map((p) => [p.first_name, p.last_name].filter(Boolean).join(" ")).filter(Boolean);
+    return confirm(`${hit.length} of these ${noun} ${hit.length === 1 ? "is" : "are"} addressed to a client whose automation is suppressed`
+      + `${names.length ? ` (${names.join(", ")})` : ""}.\n\n`
+      + `A retry is a send by hand, so it WILL go. Cancel the individual rows in the list instead if that is not what you want.\n\nRe-queue them anyway?`)
+      ? ids : [];
+  } catch (_) { return ids; }
+}
 /* ==========================================================================
    R76 · B5 — FIX THE CONTACT, THEN BE OFFERED THE RETRY.
    Every "Fix contact" on a failed send opened the client modal fix-focused;
@@ -26434,8 +26729,10 @@ async function bulkRetryEmails() {
     return !cb || cb.dataset.status === "failed";
   });
   if (!ids.length) return toast("Nothing to retry — Retry only applies to emails that have already failed.");
+  const go = await bulkRetrySuppressionGate("email_queue", ids, "emails");   // R83
+  if (!go.length) return;
   let ok = 0; const blocked = [];
-  for (const id of ids) {
+  for (const id of go) {
     const r = await retryEmail(id, true);
     if (r && r.ok) ok++; else blocked.push((r && r.reason) || "it couldn't be re-queued");
   }
@@ -26583,8 +26880,10 @@ async function bulkRetrySms() {
     return !cb || cb.dataset.status === "failed";
   });
   if (!ids.length) return toast("Nothing to retry — Retry only applies to SMS that have already failed.");
+  const go = await bulkRetrySuppressionGate("sms_queue", ids, "SMS");   // R83
+  if (!go.length) return;
   let ok = 0; const blocked = [];
-  for (const id of ids) {
+  for (const id of go) {
     const r = await retrySms(id, true);
     if (r && r.ok) ok++; else blocked.push((r && r.reason) || "it couldn't be re-queued");
   }
@@ -26682,8 +26981,10 @@ window.retryAllFailedEmails = async function () {
   const { data: emails } = await db.from("email_queue").select("id").eq("status", "failed");
   const ids = (emails || []).map((e) => e.id);
   if (!ids.length) return toast("No failed emails to retry");
+  const go = await bulkRetrySuppressionGate("email_queue", ids, "emails");   // R83
+  if (!go.length) return;
   let ok = 0; const blocked = [];
-  for (const id of ids) {
+  for (const id of go) {
     const r = await retryEmail(id, true);
     if (r && r.ok) ok++; else blocked.push((r && r.reason) || "it couldn't be re-queued");
   }
@@ -26694,8 +26995,10 @@ window.retryAllFailedSms = async function () {
   const { data: sms } = await db.from("sms_queue").select("id").eq("status", "failed");
   const ids = (sms || []).map((s) => s.id);
   if (!ids.length) return toast("No failed SMS to retry");
+  const go = await bulkRetrySuppressionGate("sms_queue", ids, "SMS");   // R83
+  if (!go.length) return;
   let ok = 0; const blocked = [];
-  for (const id of ids) {
+  for (const id of go) {
     const r = await retrySms(id, true);
     if (r && r.ok) ok++; else blocked.push((r && r.reason) || "it couldn't be re-queued");
   }
@@ -27210,6 +27513,7 @@ $("#analyse-btn").addEventListener("click", async () => {
     const j = await r.json();
     if (!r.ok || j.error) { $("#import-status").textContent = ""; return dbFail("impParsePaste", (j.error || r.status)); }
     importRows = j.rows || [];
+    impMemoBump();   // R83
     // R6-33 — recover the property column the analyser has no pattern for (see impAttachProperties).
     const nProp = impAttachProperties(content, importRows);
     // R5-23a — one clients fetch feeds every row's match; runImport re-reads it before writing so a
@@ -27218,6 +27522,7 @@ $("#analyse-btn").addEventListener("click", async () => {
     // R6-34 — and the cases those clients already hold, so a row can be judged "another case on a
     // property we already have for this person" vs "a new property" BEFORE it is written.
     importCases = await fetchMatchCases(importClients);
+    impMemoBump();   // R83 — fresh reads, fresh answers
     /* R75 · B1 — "1 records found." was the app telling somebody who had just
        pasted one row that it cannot count. Every other tally in this file is
        pluralised; this one now is too. */
@@ -27369,9 +27674,12 @@ async function fetchMatchCases(clients) {
   const ids = [...new Set((clients || []).map((c) => c.id).filter(Boolean))];
   if (!ids.length) return [];
   if ((await propAddrSupported()) === false) return [];   // no property column → no verdicts to give
-  const { data, error } = await db.from("cases")
+  /* R83 — PAGED. This is a firm-wide read (2,015 cases in production) and a bare select stops at
+     PostgREST's 1,000-row ceiling with no error, so the duplicate / cross-client verdicts were being
+     judged against an arbitrary half of the book. readAll walks past it; the order makes it stable. */
+  const { data, error } = await readAll(db.from("cases")
     .select("id,client_id,stage,case_kind,lender,property_address,created_at")
-    .not("property_address", "is", null);
+    .not("property_address", "is", null).order("id"));   // R83
   /* This read is also the freshest possible M7 check, and it runs before the preview is drawn: a
      cached "supported" from earlier in the session (or from before a rollback) is corrected here, so
      the preview hides the Property column instead of offering an input whose save can only 42703.
@@ -27411,6 +27719,11 @@ const impLenderKey = (l) => String(l == null ? "" : l).toLowerCase().replace(/[^
 function impPropVerdict(r) {
   const key = propKey(r && r.property_address);
   if (!key) return null;
+  const memo = impMemo(r);   // R83
+  if (memo.verdict !== undefined) return memo.verdict;
+  return (memo.verdict = impPropVerdictCompute(r, key));   // R83
+}
+function impPropVerdictCompute(r, key) {   // R83 — the body of impPropVerdict, unchanged
   const d = impResolveMatch(r);
   /* The row's PERSON identity, so two rows in one file can be compared without both having to
      resolve to a stored client: a matched client is its id, an unmatched one is its own name/email. */
@@ -27542,18 +27855,68 @@ function impPropVerdictHtml(r, i) {
   return `<div class="imp-prop-verdict">${v.batchHit ? `<span class="badge grey" title="${esc(`Row ${v.batchHit.n} of this same file is the same person on the same property, with a different lender — both rows import.` + xNote)}">also on row ${v.batchHit.n} of this file</span> ` : ""}<span class="s">${esc(label)}</span>${xBadge}</div>`;
 }
 
+/* ==========================================================================
+   R83 — THE PREVIEW STOPS RE-DERIVING EVERY ROW SIX TIMES.
+   One render called impResolveMatch/impPropVerdict ~6 times per row (impRowFlagged, the match
+   cell, the verdict, the conflict expander twice), each a full findClientMatches pass over the
+   whole client book (1,161 rows) plus three propSameBuilding sweeps over every case (2,015): a
+   400-row file was ~7M client comparisons on the main thread. Two things, no change in answers:
+     · MEMO. A row's match and verdict are cached on the row under a GENERATION stamp. Anything that
+       can change an answer — the rows, the client/case reads, an edit or a decision on ANY row
+       (row i's verdict reads earlier rows' resolutions) — bumps the generation (impMemoBump) and
+       every cached answer lapses at once. No per-field bookkeeping to get wrong.
+     · CANDIDATES. findClientMatches only ever matches on the same email, the same phone, the same
+       name key, or the same surname (its own four tests, see the function) — so the book is
+       indexed once per fetch on exactly those four and the matcher is handed the union, not the
+       whole table. The matcher itself is untouched; if it ever gains a fifth test, widen
+       impClientCandidates with it. */
+let impMemoGen = 0;
+function impMemoBump() { impMemoGen++; }
+let impClientIndex = null;   // { src: importClients, byEmail, byPhone, byKey, byLast }
+function impClientCandidates(r) {
+  if (!impClientIndex || impClientIndex.src !== importClients) {
+    const ix = { src: importClients, byEmail: new Map(), byPhone: new Map(), byKey: new Map(), byLast: new Map(), pos: new Map() };
+    const add = (m, k, c) => { if (!k) return; const l = m.get(k); if (l) l.push(c); else m.set(k, [c]); };
+    (importClients || []).forEach((c, i) => {
+      ix.pos.set(c, i);   // R83 — candidates are returned in BOOK order so findClientMatches's [0] picks match the full scan
+      add(ix.byEmail, (c.email || "").trim().toLowerCase(), c);
+      add(ix.byPhone, normPhone(c.phone), c);
+      add(ix.byKey, clientNameKey(clientFullName(c)), c);
+      add(ix.byLast, (c.last_name || "").trim().toLowerCase(), c);
+    });
+    impClientIndex = ix;
+  }
+  const ix = impClientIndex;
+  const name = String(r.client_name || "").trim();
+  const parts = name ? splitName(name) : { first_name: "", last_name: "" };
+  const out = new Set();
+  [ix.byEmail.get((r.email || "").trim().toLowerCase()), ix.byPhone.get(normPhone(r.phone)),
+    ix.byKey.get(clientNameKey(name)), ix.byLast.get(String(parts.last_name || "").trim().toLowerCase())]
+    .forEach((l) => (l || []).forEach((c) => out.add(c)));
+  return [...out].sort((a, b) => ix.pos.get(a) - ix.pos.get(b));   // R83
+}
+function impMemo(r) {
+  if (!r._memo || r._memo.gen !== impMemoGen) r._memo = { gen: impMemoGen };
+  return r._memo;
+}
 // The row's resolved decision: an explicit operator choice first, then the matcher's exact hit.
 function impResolveMatch(r) {
-  const m = findClientMatches({ name: r.client_name, email: r.email, phone: r.phone }, importClients);
-  if (r._force_new) return { mode: "new", forced: true, near: m.near, exact: m.exact };
-  if (r._match_client_id) {
-    const chosen = importClients.find((c) => c.id === r._match_client_id);
-    if (chosen) return { mode: "attach", client: chosen, chosen: true, reason: "you chose this client", near: m.near };
-    // The chosen client is gone (merged/deleted since the preview was drawn) — fall through.
-  }
-  if (m.exact) return { mode: "attach", client: m.exact, reason: m.reason, near: m.near };
-  if (m.near.length) return { mode: "undecided", near: m.near };
-  return { mode: "new", near: [] };
+  const memo = impMemo(r);   // R83
+  if (memo.match) return memo.match;
+  const m = findClientMatches({ name: r.client_name, email: r.email, phone: r.phone }, impClientCandidates(r));   // R83
+  const out = (() => {
+    if (r._force_new) return { mode: "new", forced: true, near: m.near, exact: m.exact };
+    if (r._match_client_id) {
+      const chosen = importClients.find((c) => c.id === r._match_client_id);
+      if (chosen) return { mode: "attach", client: chosen, chosen: true, reason: "you chose this client", near: m.near };
+      // The chosen client is gone (merged/deleted since the preview was drawn) — fall through.
+    }
+    if (m.exact) return { mode: "attach", client: m.exact, reason: m.reason, near: m.near };
+    if (m.near.length) return { mode: "undecided", near: m.near };
+    return { mode: "new", near: [] };
+  })();
+  memo.match = out;   // R83
+  return out;
 }
 // Which incoming contact details disagree with what the client record already holds.
 function impConflicts(r, client) {
@@ -27704,7 +28067,7 @@ function renderImportPreview() {
             ${STAGES.map(([k, l]) => `<option value="${k}" ${k === r.stage ? "selected" : ""}>${l}</option>`).join("")}
           </select></td>
           <td class="imp-edit" contenteditable="true" spellcheck="false" data-i="${i}" data-field="lender" title="Click to edit">${esc(r.lender || "")}</td>
-          <td class="imp-edit" contenteditable="true" spellcheck="false" data-i="${i}" data-field="rate_percent" title="Click to edit">${r.rate_percent != null ? r.rate_percent : ""}</td>
+          <td class="imp-edit" contenteditable="true" spellcheck="false" data-i="${i}" data-field="rate_percent" title="Click to edit">${r.rate_percent != null ? esc(r.rate_percent) : ""}</td>${/* R83 — esc'd like every neighbour; it arrives as analyser JSON */ ""}
           ${impDateCell(r, i, "rate_end_date", r.rate_end_estimated ? ` <span class="badge ${EST_BADGE_CLS}" title="${TIP_APPROX}">≈</span>` : "")}
           ${impDateCell(r, i, "erc_end_date")}
           ${impDateCell(r, i, "completed_date")}
@@ -27745,6 +28108,7 @@ function renderImportPreview() {
     if (!btn) return;
     const i = Number(btn.dataset.i), r = importRows[i];
     if (!r) return;
+    impMemoBump();   // R83 — every branch below changes an answer on this row (and so on later rows)
     /* R6-FIX OP-01 — adopt the spelling already on file. It rewrites the row's property cell (which
        is what imports and what the preview reads), so the verdict re-derives to "another case on a
        property we hold" — or to a duplicate flag if the lender matches too. */
@@ -27781,6 +28145,7 @@ function renderImportPreview() {
     }
     /* R6-34 — the person decision decides which cases the property verdict compares against
        ("New client" means there are none), so the duplicate flag can appear or vanish with it. */
+    impMemoBump();   // R83 — the decision fields were just written; the answer read above is stale
     impRepaintMatch(i);
     const nowFlagged = impRowFlagged(r);
     const cb = document.querySelector(`.imp-row[data-i="${i}"]`);
@@ -27807,6 +28172,7 @@ function renderImportPreview() {
          value with itself and meant an edit could never re-tick a row. */
       const wasFlagged0 = impRowFlagged(importRows[i]);
       let val = td.textContent.trim();
+      impMemoBump();   // R83 — the write below changes what this row (and rows after it) mean
       if (field === "rate_percent") {
         val = val.replace("%", "").trim();
         importRows[i][field] = val === "" ? null : Number(val);
@@ -27919,6 +28285,7 @@ async function runImport() {
   /* R6-33/34 — the same discipline for the property side: re-read the cases the verdicts were made
      against, and re-check M7 once for the whole run rather than per row. */
   importCases = await fetchMatchCases(importClients);
+  impMemoBump();   // R83 — the decisions are re-made against the database as it is NOW
   const propAddrOk = await propAddrSupported();
   let nPropSaved = 0, nPropDropped = 0;
   /* G6-06 — "2 PROPERTY ADDRESSES" for one address, because this counted ROWS. Two identical rows on
@@ -28020,6 +28387,8 @@ async function runImport() {
           const { error: upErr } = await db.from("clients").update(patch).eq("id", client.id);
           if (upErr) throw upErr;
           Object.assign(client, patch);
+          impMemoBump();   // R83 — a client row in importClients just changed
+          CLIENT_MATCH_MEMO.delete(client); impClientIndex = null;   // R83 — the row's match fields and its index buckets are stale too
           if (client.email) byEmail[client.email.trim().toLowerCase()] = client;
           nUpdated++;
         }
@@ -28123,7 +28492,7 @@ async function runImport() {
       </table></div>`;
     $("#import-preview").insertAdjacentHTML("beforeend", errHtml);
   } else {
-    importRows = []; $("#import-text").value = "";
+    importRows = []; impMemoBump(); $("#import-text").value = "";   // R83
     // Defect 30: don't just clear the preview to blank — leave a compact, clickable summary so
     // verification doesn't require a search (which may itself be broken for multi-word names).
     const names = [...touchedClients.entries()];
@@ -29337,13 +29706,21 @@ async function loadDiaryRange(start, end, who) {
     .gte("starts_at", start.toISOString()).lt("starts_at", end.toISOString())
     .order("starts_at");
   if (who !== "all") q = q.eq("staff_id", who);
-  const { data: appts } = await q;
+  const { data: appts, error } = await q;   // R83
+  /* R83 — a FAILED read used to be indistinguishable from an empty one: the error was dropped and
+     every view painted an authoritative "nothing booked" (the Day view even names whose free day it
+     is) over an RLS refusal or a dead network. It goes through the one door now, and the callers
+     leave the last good paint in place rather than drawing a diary that is not true. */
+  if (error) {   // R83
+    dbFail("loadDiaryRange", error, "The diary could not be read: " + error.message);
+    return { appts: null, ctx: { byId: {}, caseCount: {}, sharedProp: {} }, tasks: [], error };
+  }
   const rows = appts || [];
   const [ctx, tasks] = await Promise.all([
     loadPropContext(rows.map((a) => a.case_id), { clientIds: rows.map((a) => a.client_id) }),
     loadDiaryTasks(diaryYmd(start), diaryYmd(end), who),
   ]);
-  return { appts: rows, ctx, tasks };
+  return { appts: rows, ctx, tasks, error: null };
 }
 function diaryTasksByDay(rows) {
   const by = {};
@@ -29501,8 +29878,9 @@ async function loadDiary() {
      G6B-03's property chip and R12b · W-18's dated tasks both still come from exactly these
      reads — they just no longer queue behind each other. */
   const seq = ++diaryLoadSeq;
-  const { appts, ctx: apptCtx, tasks: diaryRangeTasks } = await loadDiaryRange(gridStart, gridEnd, who);
+  const { appts, ctx: apptCtx, tasks: diaryRangeTasks, error: rangeErr } = await loadDiaryRange(gridStart, gridEnd, who);
   if (seq !== diaryLoadSeq) return;   // R78 · A5 — a newer diary load (any view) owns the page
+  if (rangeErr) return;   // R83 — the read failed and said so; do not paint an empty month over it
   const tasksByDay = diaryTasksByDay(diaryRangeTasks);
   $("#diary-title").textContent = "Diary — " + monthStart.toLocaleDateString("en-GB", { month: "long", year: "numeric" });
   // T1-14 — compute per-staff clashes in one pass over the appointments already in memory. Keyed by
@@ -29511,13 +29889,25 @@ async function loadDiary() {
   /* R12a·D11 — the overlap test is apptOverlaps() now (same adviser, half-open [start,end),
      an end-less row treated as a minute rather than an instant), so this grid, the day lane, the
      editor's live notice and the save-time confirm all agree on what a clash is. */
+  /* R83 — same predicate (apptInterval / same staff_id / half-open), no longer a full n² scan
+     that re-parsed four Dates per pair: a busy "Everyone" month is ~400 rows = 160k pairs a paint.
+     Only same-adviser pairs can clash, so each adviser's rows are sorted by start and swept once;
+     the partner recorded is still the earliest-starting other row it overlaps, as before. */
   const clashPartner = {};
+  const byStaff = {};
   (appts || []).forEach((a) => {
     if (!a.staff_id) return;
-    (appts || []).forEach((b) => {
-      if (b === a || clashPartner[a.id]) return;
-      if (apptOverlaps(a, b)) clashPartner[a.id] = b;
-    });
+    const [s, e] = apptInterval(a);
+    (byStaff[a.staff_id] = byStaff[a.staff_id] || []).push({ a, s: s.getTime(), e: e.getTime() });
+  });
+  Object.values(byStaff).forEach((list) => {
+    list.sort((x, y) => x.s - y.s);
+    for (let i = 0; i < list.length; i++) {
+      for (let j = i + 1; j < list.length && list[j].s < list[i].e; j++) {
+        if (!clashPartner[list[i].a.id]) clashPartner[list[i].a.id] = list[j].a;
+        if (!clashPartner[list[j].a.id]) clashPartner[list[j].a.id] = list[i].a;
+      }
+    }
   });
   const todayStr = new Date().toDateString();
   const todayStrYmd = localDateStr();   // R12b · W-18 — the overdue test for the task chips
@@ -29704,8 +30094,9 @@ async function loadDiaryDay() {
   /* R78 · A3 — the shared fetch; G6B-03's context and R12b · W-18's uncapped day tasks are the
      same reads as ever, now two waves instead of three. */
   const seq = ++diaryLoadSeq;
-  const { appts, ctx: apptCtx, tasks: dayTasks } = await loadDiaryRange(dayStart, dayEnd, who);
+  const { appts, ctx: apptCtx, tasks: dayTasks, error: rangeErr } = await loadDiaryRange(dayStart, dayEnd, who);
   if (seq !== diaryLoadSeq) return;   // R78 · A5
+  if (rangeErr) return;   // R83 — never the "nothing booked" empty state over a failed read
   $("#diary-title").textContent = "Diary — " + dayStart.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
   renderDiaryDayTasks(dayTasks, diaryYmd(dayStart), who);
   renderDiaryDay(appts || [], who, apptCtx);
@@ -29920,8 +30311,9 @@ async function loadDiaryWeek() {
   const who = $("#diary-staff").value || "all";
   /* R78 · A3 — the shared fetch: the SAME read the month grid makes, bounded to seven days. */
   const seq = ++diaryLoadSeq;
-  const { appts, ctx: apptCtx, tasks: weekTasks } = await loadDiaryRange(weekStart, weekEnd, who);
+  const { appts, ctx: apptCtx, tasks: weekTasks, error: rangeErr } = await loadDiaryRange(weekStart, weekEnd, who);
   if (seq !== diaryLoadSeq) return;   // R78 · A5
+  if (rangeErr) return;   // R83 — see loadDiaryRange
   const tasksByDay = diaryTasksByDay(weekTasks);
   const lastDay = new Date(weekStart); lastDay.setDate(lastDay.getDate() + 6);
   /* "Diary — week of 1 September 2026" reads as a period; "1–7 September" reads as a range and is
@@ -30134,6 +30526,12 @@ function wireDiaryDnD() {
     el.addEventListener("dragend", () => { el.classList.remove("dragging"); diaryDragId = null; });
   });
   document.querySelectorAll("#diary-grid .diary-day, #diary-week-view .dw-lane, #diary-day-lane").forEach((target) => {
+    /* R83 — the month cells and week lanes are innerHTML-fresh on every paint, but #diary-day-lane
+       is a STATIC element whose children are replaced: re-wiring it on every paint of ANY view
+       stacked another drop handler each time, so one drop ran diaryMoveAppt once per paint since
+       sign-in (N writes, N Undo toasts, N stacked clash dialogs). Wired once, flagged on the node. */
+    if (target.__diaryDndWired) return;   // R83
+    target.__diaryDndWired = true;        // R83
     target.addEventListener("dragover", (e) => { e.preventDefault(); target.classList.add("dragover"); });
     target.addEventListener("dragleave", () => target.classList.remove("dragover"));
     target.addEventListener("drop", (e) => {
@@ -30421,12 +30819,15 @@ window.openAppt = async function (id, presets = {}, openOpts = {}) {
      appointment, and re-offered from scratch when the client is repointed (a case cannot follow a
      client change — that is what made the G6B-02 NULLing necessary in the first place). */
   const apptPropOn = await propAddrSupported();
-  const apptCaseCols = "id,client_id,case_kind,lender,stage" + (apptPropOn ? ",property_address" : "");
+  /* R83 — updated_at/created_at are what `recent` below sorts on; they were never selected, so
+     every row compared as "" and the comparator answered 1 for every pair — "most recent first"
+     was a no-op with an engine-dependent order. Named now, and the comparator made symmetric. */
+  const apptCaseCols = "id,client_id,case_kind,lender,stage,updated_at,created_at" + (apptPropOn ? ",property_address" : "");   // R83
   const loadApptCases = async (clientId) => {
     if (!clientId) return [];
     const { data } = await db.from("cases").select(apptCaseCols).eq("client_id", clientId);
     const rows = data || [];
-    const recent = (x, y) => (String(y.updated_at || y.created_at || "") < String(x.updated_at || x.created_at || "") ? -1 : 1);
+    const recent = (x, y) => String(y.updated_at || y.created_at || "").localeCompare(String(x.updated_at || x.created_at || ""));   // R83
     return rows.filter((x) => x.stage !== "completed" && x.stage !== "not_proceeding").sort(recent)
       .concat(rows.filter((x) => x.stage === "completed" || x.stage === "not_proceeding").sort(recent));
   };
@@ -30620,14 +31021,20 @@ window.openAppt = async function (id, presets = {}, openOpts = {}) {
      that it is bound to change/input on the four fields that can move an appointment; a typed time
      fires it a handful of times, and each is one narrow query. It never blocks anything. */
   const apptClashEl = $("#appt-clash-note");
+  let apptClashSeq = 0;   // R83 — the LoadSeq idiom: only the newest keystroke's answer may paint
   const syncApptClash = async () => {
     if (!apptClashEl) return;
     const f = new FormData($("#appt-form"));
     const st = new Date(f.get("date") + "T" + f.get("time"));
     const staffId = f.get("staff_id") || null;
+    const mySeq = ++apptClashSeq;   // R83
     if (!staffId || isNaN(st)) { apptClashEl.classList.add("hidden"); apptClashEl.textContent = ""; return; }
     const en = new Date(st.getTime() + (Number(f.get("mins")) || 60) * 60000);
     const clash = await apptClashFor(staffId, st, en, id);
+    /* R83 — this fires on every input event with no debounce, so a slow earlier query (14:00)
+       could resolve AFTER the one for the time now in the field (15:00) and paint a clash for a
+       slot that is free — or clear a real one. A stale answer is dropped. */
+    if (mySeq !== apptClashSeq) return;   // R83
     if (!clash) { apptClashEl.classList.add("hidden"); apptClashEl.textContent = ""; return; }
     apptClashEl.textContent = `⚠ Clashes with ${apptClashPhrase(clash)} — ${staffName(staffId)} is already booked. You can still save this; the diary will show both, flagged.`;
     apptClashEl.classList.remove("hidden");
@@ -30952,9 +31359,21 @@ async function buildEvidencePack(caseId) {
      `sent` has no column either — it is derived from the queued fact-find email that did the
      sending, which is exactly what the case screen does (see FF_BADGE / factFind()). */
   const FF_ORDER = ["created", "sent", "started", "submitted"];
-  const ffSentAt = (emails || [])
+  const ffSentMails = (emails || [])
     .filter((e) => e.email_type === "factfind" && e.status === "sent")
-    .map((e) => e.sent_at || e.created_at).filter(Boolean).sort().slice(-1)[0] || null;
+    .map((e) => e.sent_at || e.created_at).filter(Boolean).sort();
+  /* R83 — ONE date per fact-find, not the case's latest. The single latest sent email used to be
+     stamped onto every fact-find printed, so on a case with two the first one's "Sent" row carried
+     the email that sent the SECOND — a date after its own submission, in the one document whose
+     job is the sequence. Each fact-find takes the latest send inside its own window: from its
+     creation (bounded only when it is not the first, so a send stamped a moment before the row
+     still counts) up to the next fact-find's creation. */
+  const ffSentAtFor = (i) => {   // R83
+    const lo = i > 0 ? String(packFF[i].created_at || "") : "";
+    const next = packFF[i + 1];
+    const hi = next && next.created_at ? String(next.created_at) : null;
+    return ffSentMails.filter((t) => (!lo || String(t) >= lo) && (!hi || String(t) < hi)).slice(-1)[0] || null;
+  };
   function packFactFindHtml() {
     if (!packFF.length) {
       return '<p class="muted">No fact-find was created for this case. The client\'s circumstances were not captured through the digital fact-find; anything recorded about them is in the notes and the case details above.</p>';
@@ -30982,7 +31401,7 @@ async function buildEvidencePack(caseId) {
       return (packFF.length > 1 ? `<p class="muted"><strong>Fact-find ${i + 1} of ${packFF.length}</strong> — a new blank fact-find replaces the previous one as the active link; earlier ones are kept and printed here so the sequence is visible.</p>` : "")
         + `<table><tr><th>Step</th><th>When</th></tr>
           ${stepRow("created", "Created", ff.created_at, "no date recorded")}
-          ${stepRow("sent", "Sent to the client", ffSentAt, "no date recorded — the send predates the queued fact-find email, or it was sent by hand from the adviser's own mail program")}
+          ${stepRow("sent", "Sent to the client", ffSentAtFor(i), "no date recorded — the send predates the queued fact-find email, or it was sent by hand from the adviser's own mail program")}
           ${stepRow("started", "Started by the client", null, "no date is recorded for this step — the database holds no start timestamp")}
           ${stepRow("submitted", "Submitted", ff.submitted_at, "no date recorded")}
         </table>${answers}`;
@@ -32494,7 +32913,12 @@ async function loadDataHealth() {
      page does not need. Enter in the box saves, because typing a date and reaching for the mouse
      is the thing that makes an inline edit no faster than the modal. */
   const dhContent = $("#data-content");
-  if (dhContent) {
+  /* R83 — #data-content is a static host (only its innerHTML is repainted), and this function
+     runs again on Refresh and after every dismiss / merge / bulk-assign / chase. Each run added
+     another pair of delegates, so one Save (or Enter) wrote the same column once per load so far.
+     Wired once, flagged on the node. */
+  if (dhContent && !dhContent.__dhFixWired) {   // R83
+    dhContent.__dhFixWired = true;              // R83
     dhContent.addEventListener("click", (e) => {
       const btn = e.target.closest(".dh-fix-save");
       if (btn) dhInlineFixSave(btn);
@@ -36059,8 +36483,12 @@ let vaultLoaded = false;
 
 function vaultMatch(r, q) {
   if (!q) return true;
+  /* R83 — a SECRET field's value is never searched. It was: the haystack carried every field's
+     value regardless of the secret tick, so typing a password filtered the list to its card (and
+     the live chip counts made it a character-at-a-time oracle) — the exact disclosure R37 · K4
+     rules out and the empty state promises does not happen. Labels are still searchable. */
   const hay = [r.name, r.owner_label, r.note]
-    .concat(Array.isArray(r.fields) ? r.fields.reduce((a, f) => a.concat([f && f.label, f && f.value]), []) : [])
+    .concat(Array.isArray(r.fields) ? r.fields.reduce((a, f) => a.concat(f && f.secret ? [f.label] : [f && f.label, f && f.value]), []) : [])   // R83
     .filter(Boolean).join(" ").toLowerCase();
   return hay.indexOf(q) >= 0;
 }
@@ -36359,6 +36787,6 @@ async function deleteVaultEntry(id) {
 
 /* R81 · A3 — deploy handshake stamp. Every round that edits ANY of index.html / core.js /
    reports-money.js / app.js bumps the tag IN ALL FOUR PLACES (see nxCheckBuildTags above). */
-window.__nxTag_app = "r82";
+window.__nxTag_app = "r83";
 
 init();
