@@ -289,10 +289,17 @@ async function seedScale(page, n) {
         return { wall, reads: stamps.length, waves: groups.map((g) => g.n) };
       });
       console.log(`    loadDataHealth() at 2,000 cases: ${waves.wall.toFixed(0)}ms wall, ${waves.reads} table reads issued in ${waves.waves.length} wave(s) of ${JSON.stringify(waves.waves)}`);
-      ok("A3a · every table read the page makes is issued in ONE wave (a cold support probe may take one of its own, never more)",
-        waves.waves.length <= 2, JSON.stringify(waves));
-      ok("A3b · …and that wave carries the whole page — the big cases/clients reads and the five feature-detected ones together",
-        Math.max.apply(null, waves.waves) >= 8, JSON.stringify(waves));
+      /* R85 · D contract change — the big cases/clients reads and the five feature-detected column
+         reads are the session BOOK now (loadDataHealth → bookLoad: one snapshot, picked locally), so
+         the page issues at most the book's own walk (its paged cases+clients reads, a wave of its
+         own when the seed above dirtied it) and then the group's five non-book reads
+         (case_documents, email_queue, duplicate_dismissals, fact_finds, case_files) in ONE wave. The
+         structural claim is unchanged — no read waits on another read's answer — the ceiling is
+         "book walk + one group wave (+ a cold probe)", and the group wave carries all five. */
+      ok("A3a · every table read the page makes is issued in ONE wave (the book's walk and a cold support probe may take one of their own, never more)",
+        waves.waves.length <= 3, JSON.stringify(waves));
+      ok("A3b · …and the group wave carries the whole page — the five non-book reads together (the cases/clients columns come off the book)",
+        Math.max.apply(null, waves.waves) >= 5, JSON.stringify(waves));
       await page.waitForTimeout(1200);
 
       const rendered = await page.$eval("#data-content", (e) => e.innerHTML.length).catch(() => 0);

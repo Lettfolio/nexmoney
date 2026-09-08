@@ -203,7 +203,13 @@ const readsFor = (page, table) => page.evaluate((t) => window.__r23Reads.filter(
       const errBefore = (page.__err || []).length;
 
       // B1 — Dashboard.
+      /* R85 · B contract change — the dashboard's cases read is the session BOOK's walk now
+         (readDashboardCases → bookLoad), and the book was already loaded by the boot on Today,
+         BEFORE the recorder was installed. Bust it as a delete so this nav performs the full walk
+         the assertion observes: what is proven is unchanged — the read that feeds the page is paged
+         to OWNER_ROW_CAP and resolves with the whole book. */
       await clearReads(page);
+      await page.evaluate(() => window.__bustBookCache("delete"));
       await goto(page, "dashboard", 1200);
       const dashCasesReads = await readsFor(page, "cases");
       ok("B1 · Dashboard's cases read is PAGED to OWNER_ROW_CAP=20000 (readAll's first .range(0,999) window)", dashCasesReads.some((r) => isPagedRead(r, 20000)), JSON.stringify(dashCasesReads));
@@ -215,6 +221,7 @@ const readsFor = (page, table) => page.evaluate((t) => window.__r23Reads.filter(
 
       // B2 — Pipeline.
       await clearReads(page);
+      await page.evaluate(() => window.__bustBookCache("delete"));   // R85 · B — the board reads the book; see B1
       await goto(page, "pipeline", 1200);
       const pipeCasesReads = await readsFor(page, "cases");
       ok("B2 · Pipeline's cases read is PAGED to OWNER_ROW_CAP=20000", pipeCasesReads.some((r) => isPagedRead(r, 20000)), JSON.stringify(pipeCasesReads));
@@ -231,7 +238,12 @@ const readsFor = (page, table) => page.evaluate((t) => window.__r23Reads.filter(
       ok("B2 · #board-cap-notice is hidden below the cap", boardHidden);
 
       // B3 — Clients.
+      /* R85 · D contract change — the Clients page's clients+cases read is the session BOOK
+         (clientDataCached → bookLoad; the fat `*`+embed read is gone), and the book was loaded at
+         boot, before the recorder. Bust it as a delete so this nav performs the paged full walk the
+         assertion observes; what is proven — paged to OWNER_ROW_CAP, whole book — is unchanged. */
       await clearReads(page);
+      await page.evaluate(() => window.__bustBookCache("delete"));
       await goto(page, "clients", 900);
       const clientsReads = await readsFor(page, "clients");
       ok("B3 · Clients' loadClientData read is PAGED to OWNER_ROW_CAP=20000", clientsReads.some((r) => isPagedRead(r, 20000)), JSON.stringify(clientsReads));
@@ -243,6 +255,7 @@ const readsFor = (page, table) => page.evaluate((t) => window.__r23Reads.filter(
 
       // B4 — Data health.
       await clearReads(page);
+      await page.evaluate(() => window.__bustBookCache("delete"));   // R85 · D contract change — Data health reads the book; see B3
       await goto(page, "data", 1200);
       const dhCasesReads = await readsFor(page, "cases");
       const dhClientsReads = await readsFor(page, "clients");
@@ -309,7 +322,12 @@ const readsFor = (page, table) => page.evaluate((t) => window.__r23Reads.filter(
       await clearReads(page);
       await goto(page, "pipeline", 1200);
       const pipeReads = await readsFor(page, "cases");
-      ok("D2 · Pipeline's cases read now resolves with EXACTLY 10 rows (truncated)", pipeReads.some((r) => r.len === 10), JSON.stringify(pipeReads));
+      /* R85 · V5 contract change — a capped book is walked ONCE (D1's dashboard load) and served to
+         every later page; it reloads on a bust or when stale, not per consumer. So D2–D4 assert the
+         truncation on the SNAPSHOT the page rendered from (10 rows, capHit) — or on a fresh 10-row
+         read if one happened — rather than requiring a network read on every nav. */
+      const bookCapped = async (table) => page.evaluate((t) => { const b = window.__bookPeek(); return !!(b && b.capHit && b[t].length === 10); }, table);
+      ok("D2 · Pipeline's cases read now resolves with EXACTLY 10 rows (truncated)", pipeReads.some((r) => r.len === 10) || await bookCapped("cases"), JSON.stringify(pipeReads));
       const boardVisible = await page.$eval("#board-cap-notice", (e) => !e.classList.contains("hidden"));
       ok("D2 · #board-cap-notice is now VISIBLE", boardVisible);
       const boardTxt = await page.$eval("#board-cap-notice", (e) => e.textContent.trim());
@@ -321,7 +339,7 @@ const readsFor = (page, table) => page.evaluate((t) => window.__r23Reads.filter(
       await clearReads(page);
       await goto(page, "clients", 900);
       const clientsReadsCapped = await readsFor(page, "clients");
-      ok("D3 · Clients' read now resolves with EXACTLY 10 rows (truncated)", clientsReadsCapped.some((r) => r.len === 10), JSON.stringify(clientsReadsCapped));
+      ok("D3 · Clients' read now resolves with EXACTLY 10 rows (truncated)", clientsReadsCapped.some((r) => r.len === 10) || await bookCapped("clients"), JSON.stringify(clientsReadsCapped));   // R85 · V5 — see D2
       const clientsVisible = await page.$eval("#clients-cap-notice", (e) => !e.classList.contains("hidden"));
       ok("D3 · #clients-cap-notice is now VISIBLE", clientsVisible);
       const clientsTxt = await page.$eval("#clients-cap-notice", (e) => e.textContent.trim());
@@ -334,8 +352,8 @@ const readsFor = (page, table) => page.evaluate((t) => window.__r23Reads.filter(
       await goto(page, "data", 1200);
       const dhCasesCapped = await readsFor(page, "cases");
       const dhClientsCapped = await readsFor(page, "clients");
-      ok("D4 · Data health's cases read now resolves with EXACTLY 10 rows (truncated)", dhCasesCapped.some((r) => r.len === 10), JSON.stringify(dhCasesCapped));
-      ok("D4 · Data health's clients read now resolves with EXACTLY 10 rows (truncated)", dhClientsCapped.some((r) => r.len === 10), JSON.stringify(dhClientsCapped));
+      ok("D4 · Data health's cases read now resolves with EXACTLY 10 rows (truncated)", dhCasesCapped.some((r) => r.len === 10) || await bookCapped("cases"), JSON.stringify(dhCasesCapped));   // R85 · V5 — see D2
+      ok("D4 · Data health's clients read now resolves with EXACTLY 10 rows (truncated)", dhClientsCapped.some((r) => r.len === 10) || await bookCapped("clients"), JSON.stringify(dhClientsCapped));   // R85 · V5 — see D2
       const dataVisible = await page.$eval("#data-cap-notice", (e) => !e.classList.contains("hidden"));
       ok("D4 · #data-cap-notice is now VISIBLE", dataVisible);
       const dataTxt = await page.$eval("#data-cap-notice", (e) => e.textContent.trim());

@@ -143,6 +143,138 @@ node tests/r81_strict.js
 node tests/r82_correct.js
 node tests/r82_mock.js
 ```
+node tests/r85_book.js
+```
+
+**R85 · A notes — "One book", agent A (`tests/r85_book.js` 97 = §B–§G 95 green + §A's two
+walk-count assertions, RED BY DESIGN until the consumer agents land).** The foundation the
+consumer conversions (agents B…) build on. Every contract, then the seams:
+
+  - **THE BOOK (A1, app.js beside boardCache; R85-DESIGN.md is the binding text).** ONE
+    `cases` + `clients` snapshot per session, loaded ONCE (both tables in parallel,
+    `readAll(..., {cap: OWNER_ROW_CAP})`, `.order("id")`) and kept fresh INCREMENTALLY.
+    API (hoisted `function`s, nothing on `window` in the shipped app):
+      · `await bookLoad()` → `{ cases, clients, caseById, clientById, casesByClient, capHit,
+        syncedAt, syncedAtMs, error }`. Decides full / incremental / nothing; one in-flight promise
+        shared by concurrent callers; never throws.
+      · `bustBookCache(kind)` — `"cases" | "clients"` mark that table dirty; `undefined` both;
+        `"delete"` forces a FULL reload. A bust never drops the snapshot.
+      · `await bookCases()` / `await bookClients()` — the two arrays. `bookPeek()` — the last
+        snapshot or null, sync, no network (repaint paths).
+      · `sortRows(rows, key, dir)` → a COPY in server order (`asc` ⇒ nulls last, `desc` ⇒ nulls
+        first, stable ties); `key` may be a column or an array of columns / `[col, dir]` pairs
+        (`sortRows(cases, [["updated_at","desc"], "id"])` is the board's order).
+      · `BOOK_CASE_COLS` (61) / `BOOK_CLIENT_COLS` (15) — explicit, every one a real prod column
+        (`node db/check-schema-drift.js` → Schema OK). `BOOK_STALE_MS` = 60 000.
+    ROWS: `caseRow.clients` is a SYNTHESISED embed `{ id, first_name, last_name, email, phone,
+    sms_opt_out, comms_optout, is_vulnerable, suppress_automation }` (null when the client is
+    missing) — a superset of every `clients!client_id(…)` shape the app reads; `clientRow.cases`
+    is the reverse embed (same objects, created_at desc). Arrays come back cases-by-id-asc,
+    clients-by-last_name,id. **Row objects are SHARED between arrays and maps and between
+    callers: treat them as frozen (never mutate, never sort in place — sortRows copies).**
+    FRESHNESS: (1) the db.from write-wrap (top of app.js) busts on every insert/upsert/update/
+    delete of cases/case_events/clients (`"delete"` for delete; case_events counts as cases);
+    (2) the NEW db.rpc wrap beside it busts on `BOOK_WRITER_RPCS` = reassign_holdings,
+    queue_automated_emails, queue_comms_extras (the three whose bodies write cases/clients —
+    read against the mock's mirrors and db/r84/*.sql; run_watchtower / mark_tour_seen / every
+    get_* are reads or write other tables); `runAutomation` busts after process-emails returns
+    (the one writer that reaches cases through neither door); `reloadPipelineFresh` /
+    `reloadProtectionFresh` bust the book too (R82 · A2's "proven wrong" now means the book);
+    `__setOwnerRowCap` busts as a delete. (3) A snapshot older than BOOK_STALE_MS syncs on the
+    next bookLoad regardless — a colleague's write is at most a minute old on any nav.
+    The sync reads `updated_at >= (syncedAt − 2 s)` per dirty table, merges by id, rebuilds the
+    maps; `syncedAt` = max updated_at SEEN (server clock, never Date.now()). A `capHit` book
+    (`rows.length === OWNER_ROW_CAP`, R23 semantics preserved) never merges — full reload on
+    every bust. A 42703 from the book read is retried ONCE with the named column parsed out
+    (both PostgREST's `column cases.x does not exist` and psql's `column "x" of relation`
+    spellings) and dropped from the SESSION's select, logged via logClientError; the first case
+    row of every FULL load feeds notePropAddrFromStarRow / noteDocsFromStarRow /
+    noteCallPackFromStarRow so the probes stay honest. ERRORS: a failed FULL load →
+    `dbFail("book", err)` once, an EMPTY snapshot carrying `error`, book left null (next caller
+    retries); a failed INCREMENTAL sync → old snapshot served, still dirty, a "caught" ERROR_LOG
+    entry (`where: "bookSync"`) + error_events fingerprint, NO toast (the consumer's own copy
+    stays the one voice). **RULE FOR CONSUMERS: `bookCases()` / `bookClients()` + local filter /
+    sort / pick, output shape identical to the read you replace; the book serves LISTS — every
+    single-row editor read, every bulk runner's pre-write selection read and every importer
+    stays a live read. Keep your LoadSeq guard exactly as it is: the book is a source, the seq
+    decides who paints.**
+  - **R85 · V (CTO verifier pass, after the B/C/D/E merge).** (V1) a bulk SEND gate reads care
+    FRESH: `loadClientCare(ids, { fresh: true })` in bulkSendDocsRequestsRun, as in the other
+    two sweeps — any verdict that gates a send never comes off the cached book. (V2) `sendChat`
+    busts the book when the assistant reports actions (assistant-v8 creates/updates cases and
+    clients server-side — through neither door). (V3) COLLATION: production collates text as
+    en_US.UTF-8, so a server `.order("last_name")` is case-insensitive and accent/punctuation-
+    blind at the first level; `cmpBookVal` (and therefore `sortRows`, bookAssemble's clients
+    order, both client pickers) now compares strings through `Intl.Collator("en", {sensitivity:
+    "base", ignorePunctuation: true})` with a code-point tie-break — and the MOCK's `cmp` does the
+    same, so an order the app derives from the book and the order the mock "server" returns
+    agree (they used to agree on the WRONG answer: "de Souza" below "Zimmer"). (V4) bookLoad
+    CLAIMS the dirty flags before the read goes out and restores them on failure, so a bust that
+    lands during an in-flight walk survives to the next call (it used to be wiped). (V5) a
+    capHit book reloads in full on a BUST or when stale, not on every consumer call. (V6) after a
+    failed sync, dirty-driven retries back off for `BOOK_RETRY_MS` (15 s); a stale-driven sync
+    still goes. (V7) `window.__mock.setMigrations()` now busts the book as a delete — flipping a
+    migration is "a different database", and a snapshot taken under the old schema must not
+    survive it (r5_batch6's M2-off section found this; every "older database" section is covered
+    by the hook rather than by per-suite bust lines).
+  - **THE BOARD (A3).** `loadPipeline` takes `cases` from the book (a `sortRows` copy in the R23
+    order), keeps ONLY `stageEntry` in `boardCache` (keyed to the snapshot's `syncedAt`, so a
+    colleague's synced write re-reads case_events once; the choke point still nulls it on every
+    write here). `BOARD_CASE_COLS` STAYS as the board's column CONTRACT: **r24 §D/§E now assert
+    the book's select CONTAINS every BOARD_CASE_COLS column + the three gated columns, that the
+    rows carry the synthesised embed, and that the tokens / offer_doc_path / lost_detail are
+    NOT in the book** (proc_fee and property_value left the "dropped" list — they are in the
+    book for Reports / Data health). r24's §D/§E bust the book as a delete to observe the walk.
+  - **get_dashboard_counts (A5/A6, `db/r85/01_get_dashboard_counts.sql`, staff-guarded, RAISES
+    42501 to non-staff — an empty count object would read as "nothing stuck").** One SECURITY
+    DEFINER RPC returns `{ queued_emails, failed_emails, queued_sms, new_leads,
+    docs_overdue_tasks, open_watch_alerts, tour_seen_at, heartbeat: {key: value} }` with the
+    EXACT predicates of the nine reads it replaces (documented field-by-field in the SQL and
+    in the mock's `rpc_get_dashboard_counts`). `loadDashboard` fires it ONCE
+    (`fetchDashboardCounts()` → data or null) and hands the promise to `refreshHeartbeatKeys(pre)`,
+    `renderOpsStrip(cases, pre)`, `maybeStartTour(pre)`, `renderWhatsNewBand(pre)` and
+    `loadWatchtower(pre)` — the last ONLY when run_watchtower did not just run (a count taken
+    before the sweep is the old book). Every consumer keeps its old read as the FALLBACK when the
+    promise resolves null (42883 on an older database, a refused call) or when called without
+    one (the "Run now" repaint, r12b's direct `maybeStartTour()` re-ask, the watchtower's
+    dismiss/snooze repaints). Heartbeat presence is read off KEY PRESENCE in `heartbeat`, exactly
+    as the row set was. Output byte-identical either way (r85_book §E12 pins the fallback chips
+    against the rpc chips). `db/r85/02_clients_updated_at_idx.sql` adds the index the clients
+    sync walks — **CREATE INDEX CONCURRENTLY: apply it OUTSIDE a transaction, on its own.**
+  - **MOCK PARITY (A4).** (a) `updated_at` bump on update: ALREADY THERE — `_runUpdate` stamps
+    `iso(new Date())` on every cases/clients/vault_entries update (unconditionally, like the
+    BEFORE UPDATE triggers) and the upsert-onto-existing path stamps it on a real diff. (b)
+    `.gte("updated_at", iso)` compares ISO strings via `cmp` (string order = time order for the
+    mock's uniform `toISOString()` stamps) — verified. **(c) FOUND AND FIXED: inserted
+    cases/clients rows defaulted `updated_at` to the fixture's LOAD-TIME `NOW`, not the insert
+    moment** (`default now()` in prod) — a row inserted minutes into a session sat BEFORE a
+    later sync point and the book never saw it (r85_book §B10 caught it). `applyInsertDefaults`
+    now stamps `iso(new Date())` for those three tables; `created_at` keeps the fixture NOW (no
+    suite compares them, and a day-boundary risk is the documented midnight window either way).
+    (d) `rpc_get_dashboard_counts` + `RPC_ARGS.get_dashboard_counts: []` + migration flag
+    **`m13`** (`setMigrations({m13:false})` ⇒ 42883 — the fallback-path toggle). (e)
+    **`window.__mock.failNextSelect(table[, {message, code}])`** — the NEXT select on `table`
+    answers with a pg error ONCE (default 57014 statement timeout; pass `{code:"42703",
+    message:'column cases.x does not exist'}` to exercise the book's column-drop retry). Writes
+    untouched; readAll's per-page await means one page of one read fails. **Arm it right before
+    the read you mean to fail — a nav to the diary reads cases too (loadPropContext).**
+  - **SANDBOX HOOKS (A7, reports-money.js `__isMock` block):** `__bustBookCache(kind)`,
+    `__bookStats()` → `{ fullLoads, syncs, failedSyncs, lastSyncRows, syncedAt, dirty:{cases,
+    clients,full}, capHit, loaded, cases, clients, caseSelect, clientSelect }`,
+    `__setBookStaleMs(n)`, `__bookPeek()`.
+  - **THE SUITE'S TECHNIQUE (`tests/r85_book.js`):** r78_fast's `__net` init script extended —
+    every mock `_run` is LOGGED (`table, op, preds, head, single, limit, range, gte[], cols`)
+    with the builder's `gte` wrapped to note its columns, every rpc by name. A "walk page" =
+    `cases` select with `preds === 0 && !head && !single` and not a 1-row probe; `updated_at`
+    in `gte` = an incremental sync. §A prints the real walk counts (build A alone: cases 14,
+    clients 6 — the consumer agents drive both to 1).
+  - **SEAMS, named:** (1) a COLLEAGUE'S DELETE is invisible to an incremental sync (the row is
+    simply absent) — it lands on the next full reload (this tab's own delete, a cap change, a
+    reload); (2) `syncedAt` is one clock for both tables (the max over both) — correct because
+    every write stamps now(), and the 2 s slack covers commit-after-now() skew; (3) a
+    consumer holding an old snapshot's row objects sees their `.clients`/`.cases` embeds
+    re-pointed by the next assemble (our own bookkeeping, same rows) — its LoadSeq repaints from
+    the new snapshot anyway.
 
 **R84 (2026-09-07 evening, "optimum performance + structurally sound" — server-side review + build step):**
 Four server-side reviewers (RPCs/cron · triggers/RLS/schema · public edge fns · staff edge fns) + one
@@ -5159,6 +5291,10 @@ test scripts to reach into the mock without going through the UI:
   the sandbox hook block (`__setOwnerRowCap`, `__bustBoardCache`,
   `__bustProtCache`, `__reloadSettings`, `__r74RateBookCounts`,
   `__r74AllRepChips`) moved with it — same behaviour, new file.
+- `window.__bustBookCache(kind)` / `__bookStats()` / `__setBookStaleMs(n)` /
+  `__bookPeek()` — R85's session-book seams (reports-money.js, same block);
+  `window.__mock.failNextSelect(table[, {message, code}])` — the next select on
+  that table fails once (R85 · A4). See the R85 · A notes.
 
 ## Standing rules
 

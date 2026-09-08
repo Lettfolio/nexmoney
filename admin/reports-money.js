@@ -2109,10 +2109,25 @@ if (typeof window !== "undefined" && window.supabase && window.supabase.__isMock
   /* R78 · A5 — a cap change invalidates the board cache too: the cached snapshot was taken
      under the OLD cap, so serving it under the new one would show rows the cap now excludes
      (this is also what keeps r23 §D honest — every post-cap-change board load re-reads). */
-  window.__setOwnerRowCap = function (n) { OWNER_ROW_CAP = Number(n) || 5000; bustBoardCache(); return OWNER_ROW_CAP; };
+  window.__setOwnerRowCap = function (n) { OWNER_ROW_CAP = Number(n) || 5000; bustBoardCache(); bustBookCache("delete"); return OWNER_ROW_CAP; };   // R85 — a cap change forces a FULL book reload too (a snapshot under the old cap is not the book under the new one)
   /* R78 · A5 — sandbox hook so a suite can force the next board load to refetch (r24 §D reads
      the SELECT string off a fresh load; the cache would otherwise serve it silently). */
   window.__bustBoardCache = function () { bustBoardCache(); };
+  /* R85 · A7 — the session book's sandbox seams. `__bustBookCache(kind)` marks it dirty exactly
+     as the choke point would ("cases" | "clients" | "delete" ⇒ full reload | nothing ⇒ both
+     tables); `__bookStats()` reports the load/sync counters plus the dirty flags and capHit;
+     `__setBookStaleMs(n)` shrinks the bounded-staleness window so a suite can prove a colleague's
+     write (seeded straight into __mock.db, past the choke point) shows on the next nav;
+     `__bookPeek()` is the snapshot without a network call. */
+  window.__bustBookCache = function (kind) { bustBookCache(kind); };
+  window.__bookStats = function () {
+    const b = bookPeek();
+    return { fullLoads: bookStats.fullLoads, syncs: bookStats.syncs, failedSyncs: bookStats.failedSyncs, lastSyncRows: bookStats.lastSyncRows,
+      syncedAt: b ? b.syncedAt : null, dirty: { ...bookDirty }, capHit: !!(b && b.capHit), loaded: !!b,
+      cases: b ? b.cases.length : 0, clients: b ? b.clients.length : 0, caseSelect: bookCaseSelect, clientSelect: bookClientSelect };
+  };
+  window.__setBookStaleMs = function (n) { BOOK_STALE_MS = Math.max(0, Number(n) || 0); return BOOK_STALE_MS; };
+  window.__bookPeek = function () { return bookPeek(); };
   /* R80 · A2 — same idea for the Protection page's session cache: a suite that seeds candidates
      internally (window.__mock.seedProtectionBook pushes rows without a db.from write, so the
      choke point never sees it) can force the next Protection load to refetch. */
@@ -2134,11 +2149,56 @@ if (typeof window !== "undefined" && window.supabase && window.supabase.__isMock
 /* G1N-9 — "…→ not_proceeding" (the move INTO the lost stage), never "not_proceeding → …" (a
    reopen). The bare-name alternative covers a writer that records only the new stage. */
 const LOST_EVENT_RE = /(?:→|->)\s*not_proceeding\s*$|^\s*not_proceeding\s*$/;
+/* ==========================================================================
+   R85 · E0 — THIS FILE'S BOOK PICK. Every list read of `cases` / `clients` in
+   this file now comes off the session Book (app.js, `bookLoad`) and is PICKED
+   to the exact columns the retired select named, into a NEW object: the book's
+   rows are shared with every other consumer and several sites here assign onto
+   their rows (loadReports / loadMoneyPage merge the fee-date columns with
+   Object.assign; r44ConfirmLine stamps proc_fee_paid_at onto the cached
+   candidate). A key is copied only when the row HAS it, so a column the book
+   dropped on a 42703 stays absent — the probes (PROP_ADDR_SUPPORTED,
+   CALLPACK_SUPPORTED) read that gap exactly as they read a server row's.
+   `embed` rebuilds the `clients!client_id(a,b)` shape the select carried:
+   `{a, b}` off the book's synthesised embed, or null where the server would
+   have returned null (no client on the row). Same body as Agent B/D's
+   pickCols in app.js plus the embed — fold onto one helper on merge.
+   ========================================================================== */
+function rmBookPick(row, cols, embed) {
+  const o = {};
+  for (let i = 0; i < cols.length; i++) {
+    const k = cols[i];
+    if (Object.prototype.hasOwnProperty.call(row, k)) o[k] = row[k];
+  }
+  if (embed) {
+    const src = row.clients;
+    if (!src) o.clients = null;
+    else { const e = {}; embed.forEach((k) => { e[k] = src[k] === undefined ? null : src[k]; }); o.clients = e; }
+  }
+  return o;
+}
+/* The Reports-page slice of the book: id order (the book's own), cut at the cap the retired
+   readAll used, so noteRowCap's `rows.length === cap` verdict means what it always meant. */
+const rmBookCasesCapped = (snap, cap) => snap.cases.slice(0, cap || REPORTS_ROW_CAP);
+/* The Reports page's named case columns — the 28 loadReports' select carried through R80 (see the
+   R7 / R9-2 / R12b / R19 / R80 notes at the call site for why each is there). Every one is in
+   BOOK_CASE_COLS; the `clients(first_name,last_name)` embed is rebuilt by rmBookPick. */
+const REPORTS_CASE_COLS = ["id", "client_id", "stage", "case_kind", "lender", "loan_amount", "broker_fee", "proc_fee", "sols_fee",
+  "submitted_at", "offer_issued_date", "fee_status", "fee_paid_at", "completed_at", "created_at", "updated_at", "rate_percent",
+  "rate_end_date", "rate_end_estimated", "lead_source", "introducer_id", "protection_status", "retention_source_case_id",
+  "assigned_to", "nps_score", "review_requested_at", "referral_requested_at", "expected_completion_date"];
+/* The Money page's (loadMoneyPage) — 20 columns, property_address added under the M7 probe. */
+const MONEY_CASE_COLS = ["id", "client_id", "stage", "case_kind", "lender", "loan_amount", "proc_fee", "broker_fee", "sols_fee",
+  "fee_status", "fee_paid_at", "completed_at", "created_at", "updated_at", "rate_end_date", "rate_end_estimated",
+  "protection_status", "retention_source_case_id", "assigned_to", "lead_source"];
 async function loadCaseExtraColumns() {
   try {
-    const { data, error } = await readAll(db.from("cases").select("id,lost_reason,broker_fee_paid_at,proc_fee_paid_at,sols_fee_paid_at")
-      .order("id"), { cap: REPORTS_ROW_CAP });
-    if (error) return null;
+    /* R85 · E1 — off the session Book (its own R83-era walk retired). The M2 columns ride the
+       book unconditionally; on a database without them the book's single 42703 retry drops the
+       column and the pick leaves the key absent, so every consumer's undefined fallback still fires. */
+    const snap = await bookLoad();
+    if (snap.error) return null;
+    const data = rmBookCasesCapped(snap).map((r) => rmBookPick(r, ["id", "lost_reason", "broker_fee_paid_at", "proc_fee_paid_at", "sols_fee_paid_at"]));
     noteRowCap("case fee dates", data);
     const map = {};
     (data || []).forEach((r) => { if (r && r.id) { const { id, ...rest } = r; map[id] = rest; } });
@@ -2152,8 +2212,14 @@ async function loadCaseExtraColumns() {
 async function loadCasePropColumn() {
   try {
     if ((await propAddrSupported()) === false) return null;
-    const { data, error } = await readAll(db.from("cases").select("id,property_address").order("id"), { cap: REPORTS_ROW_CAP });
-    if (error) { if (isMissingColumnError(error)) PROP_ADDR_SUPPORTED = false; return null; }
+    /* R85 · E2 — off the session Book. The probe still gates; the "no such column" branch is now
+       the pick coming back without the key (the book dropped it on its 42703 retry), which is the
+       same proof the 42703 used to be. */
+    const snap = await bookLoad();
+    if (snap.error) return null;
+    const rows = rmBookCasesCapped(snap);
+    if (rows.length && !Object.prototype.hasOwnProperty.call(rows[0], "property_address")) { PROP_ADDR_SUPPORTED = false; return null; }
+    const data = rows.map((r) => rmBookPick(r, ["id", "property_address"]));
     noteRowCap("case property addresses", data);
     const map = {};
     (data || []).forEach((r) => { if (r && r.id) map[r.id] = r.property_address ?? null; });
@@ -2167,8 +2233,12 @@ async function loadCasePropColumn() {
 async function loadCaseCallPack() {
   try {
     if ((await callPackSupported()) === false) return null;
-    const { data, error } = await readAll(db.from("cases").select("id," + CALLPACK_SELECT).order("id"), { cap: REPORTS_ROW_CAP });
-    if (error) { if (isMissingColumnError(error)) CALLPACK_SUPPORTED = false; return null; }
+    /* R85 · E3 — off the session Book, gated and degraded exactly as E2 above. */
+    const snap = await bookLoad();
+    if (snap.error) return null;
+    const rows = rmBookCasesCapped(snap);
+    if (rows.length && !Object.prototype.hasOwnProperty.call(rows[0], "current_balance")) { CALLPACK_SUPPORTED = false; return null; }
+    const data = rows.map((r) => rmBookPick(r, ["id", ...CALLPACK_COLS]));
     noteRowCap("case call-pack figures", data);
     const map = {};
     (data || []).forEach((r) => { if (r && r.id) { const { id, ...rest } = r; map[id] = rest; } });
@@ -2245,8 +2315,15 @@ async function loadReports() {
        referral" answer the promoters block needs (the other half is the email_queue read added to
        this Promise.all below). A real production column — it stamps when a referral request queues
        (CTO-verified, like review_requested_at beside it) — so it cannot 42703 this select. */
-    readAll(db.from("cases").select("id,client_id,stage,case_kind,lender,loan_amount,broker_fee,proc_fee,sols_fee,submitted_at,offer_issued_date,fee_status,fee_paid_at,completed_at,created_at,updated_at,rate_percent,rate_end_date,rate_end_estimated,lead_source,introducer_id,protection_status,retention_source_case_id,assigned_to,nps_score,review_requested_at,referral_requested_at,expected_completion_date,clients!client_id(first_name,last_name)")
-      .order("id"), { cap: REPORTS_ROW_CAP }),
+    /* R85 · E4 — THE READ ABOVE IS NOW THE SESSION BOOK. The same 28 columns (REPORTS_CASE_COLS —
+       every one in BOOK_CASE_COLS) picked off the book's id-ordered rows, cut at REPORTS_ROW_CAP,
+       with the `clients!client_id(first_name,last_name)` embed rebuilt to that exact shape. Same
+       `{ data, error }` envelope so the R83 error branch below is untouched; a failed book load is
+       the old read's error. The picks are NEW objects — the merges below (Object.assign of the
+       M2 / M7 / call-pack maps) must never write onto the shared book rows. */
+    bookLoad().then((snap) => (snap.error
+      ? { data: null, error: snap.error }
+      : { data: rmBookCasesCapped(snap).map((r) => rmBookPick(r, REPORTS_CASE_COLS, ["first_name", "last_name"])), error: null })),
     db.from("introducers").select("id,name"),
     db.rpc("get_reports"),
     // M2 columns in their OWN query, so an un-migrated database (42703 on the whole select) costs
@@ -2288,11 +2365,19 @@ async function loadReports() {
     /* R80 · B1 — who has opted out (R79's comms_optout). Soft: on a database without the
        column no row is flagged, and v19's send-time opt-out gate (plus advPromoAsk's own
        pre-flight) remains the backstop for the four marketing-adjacent types. */
-    db.from("clients").select("id").eq("comms_optout", true).then((r) => r).catch(() => ({ data: null, error: true })),
+    /* R85 · E5 — off the session Book: `.eq("comms_optout", true)` is `=== true` over the book's
+       clients (a database without the column leaves the key absent ⇒ nobody flagged, as before);
+       the id/email walk is the book's clients in id order picked to those two columns. Both keep
+       their `{ data, error }` envelopes for the two consumers below. */
+    bookLoad().then((snap) => (snap.error
+      ? { data: null, error: snap.error }
+      : { data: snap.clients.filter((c) => c.comms_optout === true).map((c) => ({ id: c.id })), error: null })),
     /* R80 · B1 — who HAS an email address, so the queue verb can be withheld from a row it
        could only fail on (queueEmail refuses a no-email client anyway; hiding the button is the
        honest rendering of that refusal). Base-schema columns only — this cannot 42703. */
-    readAll(db.from("clients").select("id,email").order("id")),
+    bookLoad().then((snap) => (snap.error
+      ? { data: null, error: snap.error }
+      : { data: sortRows(snap.clients, "id").map((c) => rmBookPick(c, ["id", "email"])), error: null })),
   ]);
   if (seq !== reportsLoadSeq) return;   // R83 — a newer load owns the page
   /* R83 — readAll answers a failed read with {data: rowsSoFar, error}; the error was dropped on
@@ -3077,8 +3162,25 @@ async function loadAdvScoreDates(cap) {
     /* R83 — through readAll: `.limit(20000)` returned PostgREST's 1,000-row ceiling (R69-HF1), so
        on a 2,000-case book the later cases silently fell back to review_requested_at while the
        basis line claimed "dated by <col>". */
-    const { data, error } = await readAll(db.from("cases").select("id," + col).order("id"), { cap: cap || REPORTS_ROW_CAP });   // R83
-    if (error) return null;
+    /* R85 · E6 — served from the session Book WHEN the resolved column rides it (a candidate
+       named in BOOK_CASE_COLS and still present on the session's rows after any 42703 drop);
+       otherwise the live R83 read stays. Today NONE of ADV_SCORE_DATE_COLS is in BOOK_CASE_COLS —
+       prod's column is `nps_score_at` (db/columns.json) — so on the current book this is the ONE
+       whole-table `cases` walk this file still makes on the Reports tour. The cheapest cure is
+       one token in app.js (add `nps_score_at` to BOOK_CASE_COLS, Agent A's region), at which
+       point this branch takes over with no further change here. */
+    const named = typeof BOOK_CASE_COLS === "string" && BOOK_CASE_COLS.split(",").includes(col);
+    const snap = named ? await bookLoad() : null;
+    const onBook = !!snap && !snap.error && (!snap.cases.length || Object.prototype.hasOwnProperty.call(snap.cases[0], col));
+    let data;
+    if (onBook) {
+      data = rmBookCasesCapped(snap, cap).map((r) => rmBookPick(r, ["id", col]));
+    } else {
+      if (snap && snap.error) return null;   // a failed book load is the old read's error branch
+      const res = await readAll(db.from("cases").select("id," + col).order("id"), { cap: cap || REPORTS_ROW_CAP });   // R83
+      if (res.error) return null;
+      data = res.data;
+    }
     const map = {};
     (data || []).forEach((r) => { if (r && r.id) map[r.id] = r[col] ?? null; });
     return { col, map };
@@ -3687,8 +3789,13 @@ async function renderReferralsOut(all, mv) {
     /* Deliberately NOT naming property_address: it is the one optional column on this table
        (m7, feature-detected elsewhere on this page) and a 42703 would lose the whole panel over
        an address. Cases already in `all` bring their address with them. */
-    const { data: extra } = await inChunks(missing, (sl) =>
-      db.from("cases").select("id,client_id,case_kind,stage,assigned_to,clients!client_id(first_name,last_name)").in("id", sl));
+    /* R85 · E7 — the `.in("id")` top-up is a caseById lookup on the session Book, picked to the
+       same five columns + the (first_name,last_name) embed. property_address is still NOT picked
+       (the pick is the select's column list, as before). A case the book lacks — under the cap,
+       or deleted since — stays "(client not on file)", as a server miss did. */
+    const snap = await bookLoad();
+    const extra = snap.error ? null : missing.map((id) => snap.caseById.get(id)).filter(Boolean)
+      .map((c) => rmBookPick(c, ["id", "client_id", "case_kind", "stage", "assigned_to"], ["first_name", "last_name"]));
     (extra || []).forEach((c) => { if (c && c.id && !allById[c.id]) allById[c.id] = c; });
   }
   refOutRows = refs.map((r) => {
@@ -4324,8 +4431,12 @@ async function loadQuoteStamps(caseIds) {
   if (!ids.length) return {};
   if (!(await protQuoteSupported())) return {};
   try {
-    const { data, error } = await inChunks(ids, (sl) => db.from("cases").select("id,protection_quoted_at,protection_quoted_by").in("id", sl));
-    if (error) return {};
+    /* R85 · E8 — the `.in("id")` read is a caseById pick on the session Book (both M8 columns
+       ride BOOK_CASE_COLS); the probe above still gates. Same map shape: id → {id, at, by}. */
+    const snap = await bookLoad();
+    if (snap.error) return {};
+    const data = ids.map((id) => snap.caseById.get(id)).filter(Boolean)
+      .map((c) => rmBookPick(c, ["id", "protection_quoted_at", "protection_quoted_by"]));
     const map = {};
     (data || []).forEach((r) => { if (r && r.id) map[r.id] = r; });
     return map;
@@ -4565,11 +4676,17 @@ let moneyLoadSeq = 0;
 async function moneyQuoteStampsAll() {
   if (PROT_QUOTE_SUPPORTED === false) return {};
   try {
-    const { data, error } = await readAll(db.from("cases")
-      .select("id,protection_quoted_at,protection_quoted_by")
-      .eq("protection_status", "quoted").order("id"), { cap: REPORTS_ROW_CAP });
-    if (error) { if (isMissingColumnError(error)) PROT_QUOTE_SUPPORTED = false; return {}; }
+    /* R85 · E9 — off the session Book: `.eq("protection_status","quoted")` is a `===` filter over
+       the id-ordered book, cut at the cap. The folded feature-detect survives as the pick's key
+       presence: a book whose rows lack protection_quoted_at (dropped on the 42703 retry) stamps
+       PROT_QUOTE_SUPPORTED false, exactly as the read's 42703 did; rows that carry it stamp true. */
+    const snap = await bookLoad();
+    if (snap.error) return {};
+    const rows = rmBookCasesCapped(snap);
+    if (rows.length && !Object.prototype.hasOwnProperty.call(rows[0], "protection_quoted_at")) { PROT_QUOTE_SUPPORTED = false; return {}; }
     PROT_QUOTE_SUPPORTED = true;
+    const data = rows.filter((c) => c.protection_status === "quoted")
+      .map((c) => rmBookPick(c, ["id", "protection_quoted_at", "protection_quoted_by"]));
     const map = {};
     (data || []).forEach((r) => { if (r && r.id) map[r.id] = r; });
     return map;
@@ -4626,9 +4743,14 @@ async function loadMoneyPage() {
   ]);
   if (seq !== moneyLoadSeq) return;   // R81 · A2 — a newer load owns the page
   const propOn = propOnRaw !== false;
+  /* R85 · E10 — the cases read is the session Book: MONEY_CASE_COLS (+ property_address under the
+     M7 probe, as the select added it) picked off the id-ordered rows, cut at REPORTS_ROW_CAP, the
+     (first_name,last_name) embed rebuilt. Same `{ data, error }` envelope for the branch below;
+     the picks are copies, so the Object.assign of the M2 dates never touches a shared row. */
   const [casesRes] = await Promise.all([
-    readAll(db.from("cases").select("id,client_id,stage,case_kind,lender,loan_amount,proc_fee,broker_fee,sols_fee,fee_status,fee_paid_at,completed_at,created_at,updated_at,rate_end_date,rate_end_estimated,protection_status,retention_source_case_id,assigned_to,lead_source" + (propOn ? ",property_address" : "") + ",clients!client_id(first_name,last_name)")
-      .order("id"), { cap: REPORTS_ROW_CAP }),
+    bookLoad().then((snap) => (snap.error
+      ? { data: null, error: snap.error }
+      : { data: rmBookCasesCapped(snap).map((r) => rmBookPick(r, propOn ? MONEY_CASE_COLS.concat("property_address") : MONEY_CASE_COLS, ["first_name", "last_name"])), error: null })),
     renderReconPanel(stmtsPre),   // R81 · A2 — statements already in hand; its lines read shares this wave
   ]);
   if (seq !== moneyLoadSeq) return;   // R81 · A2
@@ -5398,6 +5520,8 @@ const R44_STMT_LIST = 10;
    completed_at, which the board has no use for, and coupling them would make
    every future change to one a change to the other. */
 const R44_CASE_COLS = "id,lender,stage,loan_amount,proc_fee,proc_fee_paid_at,completed_at,assigned_to,clients!client_id(first_name,last_name)";
+/* R85 · E11 — kept as the reconciliation's column CONTRACT (what its rows carry); the read itself is
+   now the R44_CASE_PICK off the session Book below, which mirrors it column for column. */
 const R44_CANDIDATE_MONTHS = 18;
 
 async function loadProcRates(force) {
@@ -5417,11 +5541,21 @@ async function loadProcRates(force) {
    server-side; the completed-window narrowing is applied to the returned rows
    rather than as an .or() with an ISO timestamp inside it, which PostgREST's
    filter grammar makes fragile to quote. */
+/* R85 · E11 — THE CANDIDATE LIST COMES OFF THE SESSION BOOK; THE WRITE DOES NOT. The rows this
+   returns only feed the SUGGESTIONS (suggestStatementMatches: surname / lender / amount / account
+   hits, the "already paid" narrowing) and the pick drop-downs. The one path that writes money
+   onto a case — r44ConfirmLine — re-reads the picked case FRESH by id (`.maybeSingle()`, "Read
+   the case FRESH" above it) and computes its patch from THAT row, and this tab's own confirm
+   busts the book through the db.from choke point, so a second statement in the same session
+   sees the stamped proc_fee_paid_at. What a colleague's write can do is leave a just-paid case
+   in the candidate list for up to BOOK_STALE_MS: a suggestion, never a write. The rows are picks
+   (copies) because r44ConfirmLine stamps proc_fee / proc_fee_paid_at onto the cached candidate. */
+const R44_CASE_PICK = ["id", "lender", "stage", "loan_amount", "proc_fee", "proc_fee_paid_at", "completed_at", "assigned_to"];
 async function r44LoadCandidateCases() {
-  const { data, error } = await readAll(db.from("cases").select(R44_CASE_COLS)
-    .in("stage", ["offer", "exchange", "completed"])
-    .order("id"));
-  if (error) return [];
+  const snap = await bookLoad();
+  if (snap.error) return [];
+  const stages = new Set(["offer", "exchange", "completed"]);
+  const data = snap.cases.filter((c) => stages.has(c.stage)).map((c) => rmBookPick(c, R44_CASE_PICK, ["first_name", "last_name"]));
   const cutoff = new Date(Date.now() - R44_CANDIDATE_MONTHS * 30.5 * 86400000).toISOString();
   return (data || []).filter((c) => c.stage !== "completed" || !c.proc_fee_paid_at || !c.completed_at || c.completed_at >= cutoff);
 }
@@ -6131,4 +6265,4 @@ async function r44ConfirmTicked() {
 
 /* R81 · A3 — deploy handshake stamp. Every round that edits ANY of index.html / core.js /
    reports-money.js / app.js bumps the tag IN ALL FOUR PLACES (see nxCheckBuildTags in app.js). */
-window.__nxTag_reportsmoney = "r84";   // R84
+window.__nxTag_reportsmoney = "r85";   // R85

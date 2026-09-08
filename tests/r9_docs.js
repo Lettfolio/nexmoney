@@ -630,6 +630,11 @@ const groundTruth = (page) => page.evaluate(async ({ CHASE_MAX }) => {
   await off.reload();
   await off.waitForTimeout(SETTLE);
   await off.evaluate(() => window.__mock.setMigrations({ m10: false }));
+  /* R85 · B contract change — the boot on Today already loaded the session Book (under m10 ON,
+     since the reload re-seeds the mock's migrations); the board and the case modal read that
+     snapshot now, not a fresh cases select. Bust it as a delete so the session re-reads under the
+     absent migration — the state this section is about. */
+  await off.evaluate(() => window.__bustBookCache("delete"));
   await openCase(off, G.ids.quirke, 1300);
   ok("no Documents section", !(await exists(off, "#case-docs")));
   await openDetails(off);

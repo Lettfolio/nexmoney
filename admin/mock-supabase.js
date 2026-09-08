@@ -471,7 +471,7 @@
      writes to the new columns come back as Postgres 42703 (undefined_column),
      selects stop returning them, an un-migrated TABLE comes back as 42P01 and an
      un-migrated FUNCTION comes back as 42883 (undefined_function). */
-  var MIGRATIONS = { m1: true, m2: true, m3: true, m4: true, m5: true, m6: true, m7: true, m10: true, m11: true, m12: true };
+  var MIGRATIONS = { m1: true, m2: true, m3: true, m4: true, m5: true, m6: true, m7: true, m10: true, m11: true, m12: true, m13: true };
   /* R82 · B1 — PRE-LOAD MIGRATION SEED. `__mock.setMigrations()` can only be
      called once this script has run, which is already too late for anything
      the app reads inside init() (get_staff_activity is one). A suite that needs
@@ -522,7 +522,7 @@
      WITHOUT it — which is the state app.js's defensive consumption exists for
      and the state a suite pinning "missing RPC ⇒ behave exactly as before"
      has to be able to reach. Default ON, like every other flag. */
-  var MIGRATION_FUNCTIONS = { m6: ["reassign_holdings"], m12: ["get_staff_activity"] };
+  var MIGRATION_FUNCTIONS = { m6: ["reassign_holdings"], m12: ["get_staff_activity"], m13: ["get_dashboard_counts"] };   /* R85 — m13 = db/r85/01 */
   function functionIsMissing(name) {
     var missing = false;
     Object.keys(MIGRATION_FUNCTIONS).forEach(function (mk) {
@@ -756,8 +756,13 @@
     var A = String(a), B = String(b);
     var nA = Number(A), nB = Number(B);
     if (A !== "" && B !== "" && !isNaN(nA) && !isNaN(nB)) return nA < nB ? -1 : nA > nB ? 1 : 0;
+    /* R85 · V3 parity — production collates text as en_US.UTF-8 (case-insensitive, accent- and
+       punctuation-blind at the first level); a code-point compare here let the app's Book order
+       diverge from what the server returns without any suite noticing. Ties break by code point. */
+    if (MOCK_COLLATOR && typeof a === "string" && typeof b === "string") { var cc = MOCK_COLLATOR.compare(A, B); if (cc) return cc; }
     return A < B ? -1 : A > B ? 1 : 0;
   }
+  var MOCK_COLLATOR = (typeof Intl !== "undefined" && Intl.Collator) ? new Intl.Collator("en", { sensitivity: "base", ignorePunctuation: true }) : null;
   function testOp(val, op, arg) {
     switch (op) {
       case "eq": if (val == null) return false; return String(val) === String(arg);
@@ -1401,7 +1406,12 @@
     }
     if (pk === "id" && !r.id) r.id = nid(PREFIX[table] || "row");
     if (!r.created_at && table !== "settings" && table !== "saved_views") r.created_at = iso(NOW);
-    if (table === "cases" || table === "clients" || table === "vault_entries") { if (!r.updated_at) r.updated_at = iso(NOW); }
+    /* R85 · A4 — updated_at defaults to THE INSERT MOMENT (`default now()` in prod), not the
+       fixture's load-time NOW: the session book syncs `updated_at >= syncedAt - 2s`, and a row
+       inserted minutes into a session but stamped with the page's load time would sit BEFORE a
+       later sync point and never be picked up — a parity lie the book would have hidden. Updates
+       already stamp new Date() (touch_case/touch_client parity, _runUpdate / _runInsert-upsert). */
+    if (table === "cases" || table === "clients" || table === "vault_entries") { if (!r.updated_at) r.updated_at = iso(new Date()); }
     if (table === "cases") {
       if (!r.stage) r.stage = "enquiry";
       if (r.protection_status == null) r.protection_status = "not_discussed";
@@ -5066,7 +5076,8 @@
     get_protection_pipeline: ["p_scope"], get_protection_pipeline_total: ["p_scope"],
     find_duplicate_clients: [], run_watchtower: [],
     get_staff_activity: [],   /* R82 · B1 — takes no arguments at all */
-    queue_automated_emails: [], queue_comms_extras: [], mark_tour_seen: []
+    queue_automated_emails: [], queue_comms_extras: [], mark_tour_seen: [],
+    get_dashboard_counts: []   /* R85 · A4 — no arguments (see rpc_get_dashboard_counts) */
   };
   function assertRpcArgs(name, args) {
     if (!strictEnabled()) return;
@@ -5444,12 +5455,23 @@
     });
   }
 
+  /* R85 · A4 — `window.__mock.failNextSelect(table[, err])`: the NEXT select on `table` answers
+     with a Postgres error ONCE (default: a statement timeout, 57014), then the table reads
+     normally again. It exists for the book's failure-honesty contract — an incremental sync that
+     fails must serve the OLD snapshot and log, never blank the page — which has no other way in
+     (the mock never fails a read on its own). Writes are untouched; readAll's per-page await
+     means exactly one page of one read fails. */
+  var FAIL_NEXT_SELECT = {};
   BP._run = function () {
     var self = this;
     return new Promise(function (resolve) {
       var res;
       try {
-        if (self._table === "error_events" && !errorEventsSupported) {
+        if ((!self._op || self._op === "select") && FAIL_NEXT_SELECT[self._table]) {
+          var fErr = FAIL_NEXT_SELECT[self._table];
+          delete FAIL_NEXT_SELECT[self._table];
+          res = { data: null, error: fErr, count: null, status: 500, statusText: "Internal Server Error" };
+        } else if (self._table === "error_events" && !errorEventsSupported) {
           /* R30 feature-gate — a DB without the table answers every op with 42P01. */
           res = { data: null, error: { message: 'relation "error_events" does not exist', code: "42P01", details: null, hint: null }, count: null, status: 404, statusText: "Not Found" };
         } else if (self._table === "saved_views" && !savedViewsSupported) {
@@ -5791,6 +5813,50 @@
     return DB.profiles.map(staffActivityRow);
   }
 
+  /* =========================================================================
+     R85 · A4 — get_dashboard_counts()  (db/r85/01, mirrored here from the same fixture tables)
+
+       · NO arguments. STAFF-GUARDED: a non-staff caller gets a 42501 raise (the function is
+         SECURITY DEFINER and the counts are the firm's plumbing, not an introducer's).
+       · Returns ONE jsonb object — the nine scalars the Today chrome used to fetch with nine
+         requests, each with the EXACT predicate its old read had (app.js renderOpsStrip /
+         maybeStartTour / renderWhatsNewBand / refreshHeartbeatKeys / loadWatchtower):
+           queued_emails      email_queue.status = 'queued'
+           failed_emails      email_queue.status = 'failed'
+           queued_sms         sms_queue.status = 'queued'
+           new_leads          leads.status = 'new'
+           docs_overdue_tasks case_tasks.done_at is null and title like 'Documents overdue — call %'
+           open_watch_alerts  watch_alerts.resolved_at is null   (snoozed rows INCLUDED — as the
+                              head:true count it replaces; the app's list filters snoozes itself)
+           tour_seen_at       profiles.tour_seen_at for auth.uid()  (null ⇒ first run)
+           heartbeat          { key: value } for the settings rows whose key is one of
+                              last_cron_run_at / last_full_export_at — KEY PRESENCE is the
+                              signal (a key absent from the object = absent from the table),
+                              exactly as refreshHeartbeatKeys reads the row set.
+       · MISSING-FUNCTION TOGGLE: registered under migration flag `m13` (MIGRATION_FUNCTIONS),
+         so `setMigrations({m13:false})` answers 42883 the way a database without db/r85/01
+         does — that is the toggle a suite pinning the nine-read FALLBACK path needs.
+     ======================================================================= */
+  var HEARTBEAT_SETTING_KEYS = ["last_cron_run_at", "last_full_export_at"];
+  function rpc_get_dashboard_counts() {
+    if (!isStaff()) throw pgErrorThrow("permission denied: get_dashboard_counts is for staff", "42501");
+    var count = function (rows, pred) { return rows.filter(pred).length; };
+    var docsRe = likeToRe("Documents overdue — call %", false);
+    var mine = DB.profiles.filter(function (p) { return p.id === CURRENT_UID; })[0];
+    var hb = {};
+    DB.settings.forEach(function (r) { if (HEARTBEAT_SETTING_KEYS.indexOf(r.key) >= 0) hb[r.key] = r.value == null ? null : r.value; });
+    return {
+      queued_emails: count(DB.email_queue, function (e) { return e.status === "queued"; }),
+      failed_emails: count(DB.email_queue, function (e) { return e.status === "failed"; }),
+      queued_sms: count(DB.sms_queue, function (e) { return e.status === "queued"; }),
+      new_leads: count(DB.leads, function (l) { return l.status === "new"; }),
+      docs_overdue_tasks: count(DB.case_tasks, function (t) { return t.done_at == null && t.title != null && docsRe.test(String(t.title)); }),
+      open_watch_alerts: count(DB.watch_alerts, function (a) { return a.resolved_at == null; }),
+      tour_seen_at: mine && mine.tour_seen_at != null ? mine.tour_seen_at : null,
+      heartbeat: hb
+    };
+  }
+
   function rpc_find_duplicate_clients() {
     var pairs = [], seen = {};
     var push = function (a, b, reason, score) {
@@ -5896,7 +5962,9 @@
     queue_automated_emails: function () { return queueAutomatedEmails(); },
     queue_comms_extras: function () { return queueCommsExtras(); },
     /* r12b — first-run tour ack. See rpc_mark_tour_seen() for the guard. */
-    mark_tour_seen: function () { return rpc_mark_tour_seen(); }
+    mark_tour_seen: function () { return rpc_mark_tour_seen(); },
+    /* R85 · A4 — the Today chrome's nine scalars in one call (see rpc_get_dashboard_counts) */
+    get_dashboard_counts: rpc_get_dashboard_counts
   };
 
   function rpcCall(name, args) {
@@ -7834,6 +7902,11 @@
         Object.keys(patch || {}).forEach(function (k) {
           if (Object.prototype.hasOwnProperty.call(MIGRATIONS, k)) MIGRATIONS[k] = !!patch[k];
         });
+        /* R85 — flipping a migration is "a different database": the session Book (a snapshot of
+           cases/clients taken under the OLD schema) must not survive it, or a suite's "older
+           database" section keeps reading columns the mock now 42703s. A delete-bust forces the
+           next bookLoad() to walk the tables again under the new answer. */
+        try { if (window.__bustBookCache) window.__bustBookCache("delete"); } catch (_) { /* app not booted yet */ }
         return clone(MIGRATIONS);
       },
       /* What the last process-emails run actually did — including the composed
@@ -7852,6 +7925,13 @@
       },
       resetDocUploadRate: function () { DOC_UPLOAD_HITS = {}; return true; },
       failDocStorageOnce: function () { DOC_UPLOAD_FAIL_STORAGE = true; return true; },
+      /* R85 · A4 — arm one failing select on a table (see FAIL_NEXT_SELECT by BP._run). `err`
+         may be a partial {message, code} to shape the failure (a 42703 naming a column, say). */
+      failNextSelect: function (table, err) {
+        var e = err && typeof err === "object" ? err : {};
+        FAIL_NEXT_SELECT[table] = pgError(e.message || "canceling statement due to statement timeout", e.code || "57014");
+        return true;
+      },
       /* Fast-forward a snooze so expiry can be tested without waiting. */
       expireSnooze: function (alertId) {
         var a = DB.watch_alerts.filter(function (x) { return x.id === alertId; })[0];

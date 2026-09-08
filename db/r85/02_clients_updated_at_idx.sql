@@ -1,0 +1,23 @@
+-- =============================================================================
+-- R85 · 02 · clients_updated_at_idx — the book's incremental sync on `clients`
+--
+-- WHAT: `create index concurrently if not exists clients_updated_at_idx on
+--       public.clients (updated_at desc)`. `cases` already carries one; `clients`
+--       gained `updated_at` (and its touch_client trigger) in R82 with no index.
+-- WHY:  R85's session book keeps itself fresh with `updated_at >= <syncedAt - 2s>`
+--       on both tables after every write (app.js bookSync). On cases the planner
+--       has an index to walk; on clients it would seq-scan 1,161 rows per sync —
+--       cheap today, but the point of the sync is to stay cheap as the book grows,
+--       and an index the size of a timestamp column costs nothing to keep.
+-- EFFECT: none on results. CONCURRENTLY ⇒ no write lock on clients while it builds.
+--
+-- NOTE: CREATE INDEX CONCURRENTLY cannot run inside a transaction block — apply
+--       this file on its own (NOT wrapped in BEGIN/COMMIT, unlike 01), and not via
+--       a tool that wraps statements in a transaction.
+-- VERIFY (after apply):
+--   select indexname, indexdef from pg_indexes
+--    where schemaname = 'public' and tablename = 'clients' and indexname = 'clients_updated_at_idx';
+--   -- expect one row: CREATE INDEX clients_updated_at_idx ON public.clients USING btree (updated_at DESC)
+--   select indisvalid from pg_index where indexrelid = 'public.clients_updated_at_idx'::regclass;  -- expect true
+-- =============================================================================
+create index concurrently if not exists clients_updated_at_idx on public.clients (updated_at desc);

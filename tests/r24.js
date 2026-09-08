@@ -25,6 +25,24 @@
        the new truth rather than dropped.
      - `.order("updated_at",{ascending:false}).limit(OWNER_ROW_CAP)` (R23)
        unchanged.
+     - R85 · CONTRACT CHANGE (agent A, "One book"). The board no longer issues a
+       cases select of its own: its rows come from the session BOOK (app.js
+       bookLoad, beside boardCache), whose select is BOOK_CASE_COLS — a SUPERSET
+       of BOARD_CASE_COLS plus the three gated columns, read ONCE per session
+       and kept fresh incrementally. The `clients!client_id(...)` embed is no
+       longer fetched: the book SYNTHESISES `row.clients` (first_name,
+       last_name, email and more) from its own clients read. So §D/§E now
+       assert (a) the ONE cases select observed is the book's, (b) it CONTAINS
+       every BOARD_CASE_COLS column and the three gated columns — the board's
+       contract, kept honest against the book — and (c) every row carries the
+       synthesised embed. The "dropped heavy columns" list moved with it:
+       proc_fee and property_value ARE in the book (Reports / Data health need
+       them); the columns the book deliberately never carries are the tokens,
+       offer_doc_path, lost_detail (R85-DESIGN.md). §E's forced-unsupported walk
+       keeps its point — no 42703, board renders — but the book carries the
+       gated columns REGARDLESS of the probes (the render paths gate; the
+       select does not), so E5–E7 now assert presence, not omission. Every
+       re-pointed line is tagged R85.
 
    This file:
      §A — sanity: BOARD_CASE_COLS is exactly the documented list; the three
@@ -145,10 +163,15 @@ const clearSelects = (page) => page.evaluate(() => { window.__r24Selects = []; }
    "cases" table in app.js while writing this file). */
 async function boardSelectCalls(page) {
   return page.evaluate(async () => {
-    const base = BOARD_CASE_COLS;
-    return window.__r24Selects.filter((r) => r.table === "cases" && typeof r.cols === "string" && r.cols.indexOf(base) === 0);
+    /* R85 — the board's rows come from the session book; its select is the fingerprint now
+       (the session's live book select — bookCaseSelect — not the constant, so a 42703-trimmed
+       select would still be recognised as the book's). */
+    const base = window.__bookStats().caseSelect;
+    return window.__r24Selects.filter((r) => r.table === "cases" && typeof r.cols === "string" && r.cols === base);
   });
 }
+/* R85 — every column of `list` (comma string) is in the select string `cols`. */
+const hasCols = (cols, list) => { const set = new Set(String(cols).split(",")); return String(list).split(",").every((c) => set.has(c)); };
 
 /* Insert a client + a "kitchen sink" case carrying a real, non-null value in EVERY field the
    board's named select must still provide — one round trip, independent of the seeded fixture, so
@@ -386,24 +409,29 @@ async function readTableRow(page, fullName) {
       await goto(pageA, "clients", 500);   // navigate away and back so loadPipeline() runs again under the recorder
       // R78: the board now caches its cases read for the session (A5); bust it so this walk
       // OBSERVES a fresh select — the assertion is about the select string, not the cache.
-      await pageA.evaluate(() => window.__bustBoardCache());
+      // R85: …and the BOOK, as a delete (a full walk) — a plain bust would be an incremental sync.
+      await pageA.evaluate(() => { window.__bustBoardCache(); window.__bustBookCache("delete"); });
       await goto(pageA, "pipeline", 1200);
       const calls = await boardSelectCalls(pageA);
-      ok("D1 · exactly one board cases select observed", calls.length === 1, JSON.stringify(calls));
+      ok("D1 · exactly one board cases select observed (R85: the book's ONE walk)", calls.length === 1, JSON.stringify(calls));
       const cols = calls[0] && calls[0].cols;
       ok("D2 · the select argument is NOT \"*\"", cols !== "*", cols);
       const base = await pageA.evaluate(() => BOARD_CASE_COLS);
-      ok("D3 · the select argument starts with BOARD_CASE_COLS verbatim", typeof cols === "string" && cols.indexOf(base) === 0, cols);
-      // R37 · non-masking repair — the board's clients embed now widens to include `email` (W9
-      // duplicate-client hint); the string this test checks for is updated to that new truth, not
-      // relaxed — it still asserts a named, non-"*" embed appended last.
-      ok("D4 · …and includes the clients!client_id embed (R37: widened to include email)", cols.indexOf("clients!client_id(first_name,last_name,email)") !== -1, cols);
-      ok("D5 · …and ends with the clients embed (appended last, per app.js)", cols.slice(-"clients!client_id(first_name,last_name,email)".length) === "clients!client_id(first_name,last_name,email)", cols);
-      ok("D6 · …and (defaults ON) includes property_address", cols.indexOf(",property_address") !== -1, cols);
-      ok("D7 · …and includes waiting_on,solicitor_firm", cols.indexOf(",waiting_on,solicitor_firm") !== -1, cols);
-      ok("D8 · …and includes application_status", cols.indexOf(",application_status") !== -1, cols);
-      ["proc_fee", "notes", "offer_doc_path", "property_value"].forEach((dropped) => {
-        ok(`D9 · dropped column "${dropped}" is NOT in the select (real schema column, deliberately narrowed away)`, cols.indexOf(dropped) === -1, cols);
+      // R85 — BOARD_CASE_COLS is the board's column CONTRACT; the book's select must carry every one.
+      ok("D3 · the book's select CONTAINS every BOARD_CASE_COLS column (R85: superset, not prefix)", typeof cols === "string" && hasCols(cols, base), cols);
+      // R37 · non-masking repair — the board's clients embed widened to include `email` (W9
+      // duplicate-client hint). R85 — the embed is SYNTHESISED by the book from its own clients
+      // read, not fetched: assert the shape on the rows, and that no embed rides the select.
+      ok("D4 · every board row carries the synthesised clients embed (first_name,last_name,email — R37's widened shape)", await pageA.evaluate(() =>
+        window.__bookPeek().cases.every((c) => !c.client_id || (c.clients && ["first_name", "last_name", "email"].every((k) => Object.prototype.hasOwnProperty.call(c.clients, k))))));
+      ok("D5 · …and the select carries NO embed (the book reads clients itself — R85)", cols.indexOf("clients!client_id") === -1 && cols.indexOf("(") === -1, cols);
+      ok("D6 · …and includes property_address", hasCols(cols, "property_address"), cols);
+      ok("D7 · …and includes waiting_on,solicitor_firm", hasCols(cols, "waiting_on,solicitor_firm"), cols);
+      ok("D8 · …and includes application_status", hasCols(cols, "application_status"), cols);
+      // R85 — the heavy columns the BOOK deliberately never carries (R85-DESIGN.md); proc_fee and
+      // property_value left this list because Reports / Data health read them off the book now.
+      ["notes", "offer_doc_path", "doc_token", "nps_token", "lost_detail"].forEach((dropped) => {
+        ok(`D9 · dropped column "${dropped}" is NOT in the select (deliberately kept out of the book — R85)`, !hasCols(cols, dropped), cols);
       });
       ok("D · no console errors", noNewErr(pageA, errBefore), JSON.stringify(pageA.__err));
     }
@@ -497,17 +525,22 @@ async function readTableRow(page, fullName) {
       eq("E1 · the three caches are now forced false", flagsNow, { p: false, d: false, l: false });
 
       await clearSelects(pageE);
-      await pageE.evaluate(() => loadPipeline());
+      // R85 — force the book's full walk under the forced flags (a boot may already hold a book).
+      await pageE.evaluate(() => { window.__bustBookCache("delete"); return loadPipeline(); });
       await wait(pageE, 1200);
 
       const calls = await boardSelectCalls(pageE);
       ok("E2 · exactly one board cases select observed while forced-unsupported", calls.length === 1, JSON.stringify(calls));
       const cols = calls[0] && calls[0].cols;
-      ok("E3 · the select still includes the base BOARD_CASE_COLS", typeof cols === "string" && cols.indexOf(await pageE.evaluate(() => BOARD_CASE_COLS)) === 0, cols);
-      ok("E4 · the select still includes the clients embed (R37: widened to include email)", cols && cols.indexOf("clients!client_id(first_name,last_name,email)") !== -1, cols);
-      ok("E5 · property_address is OMITTED (not requested at all)", cols && cols.indexOf("property_address") === -1, cols);
-      ok("E6 · waiting_on/solicitor_firm are OMITTED", cols && cols.indexOf("waiting_on") === -1 && cols.indexOf("solicitor_firm") === -1, cols);
-      ok("E7 · application_status is OMITTED", cols && cols.indexOf("application_status") === -1, cols);
+      ok("E3 · the select still includes every base BOARD_CASE_COLS column (R85: the book's select)", typeof cols === "string" && hasCols(cols, await pageE.evaluate(() => BOARD_CASE_COLS)), cols);
+      ok("E4 · the rows still carry the (synthesised) clients embed — R85", await pageE.evaluate(() =>
+        window.__bookPeek().cases.every((c) => !c.client_id || (c.clients && ["first_name", "last_name", "email"].every((k) => Object.prototype.hasOwnProperty.call(c.clients, k))))));
+      // R85 — the book carries the gated columns regardless of the probes (the RENDER paths gate on
+      // propOn/docsOn/lenderOn; a real un-migrated database answers the book's 42703 with a one-time
+      // retry that drops the named column — tests/r85_book.js §F pins that path).
+      ok("E5 · property_address is still in the book's select (R85: probes gate the paint, not the read)", cols && hasCols(cols, "property_address"), cols);
+      ok("E6 · waiting_on/solicitor_firm are still in the book's select (R85)", cols && hasCols(cols, "waiting_on,solicitor_firm"), cols);
+      ok("E7 · application_status is still in the book's select (R85)", cols && hasCols(cols, "application_status"), cols);
 
       const boardHtml = await pageE.evaluate(() => document.querySelector("#board").innerHTML);
       ok("E8 · the board is NOT showing a load-error state (renderLoadError never fired — omission, not a 42703)", boardHtml.indexOf("42703") === -1 && boardHtml.indexOf("does not exist") === -1, boardHtml.slice(0, 200));

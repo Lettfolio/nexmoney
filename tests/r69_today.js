@@ -564,9 +564,15 @@ function readGroup(page, caseId) {
     ok("D2 · a cap that bites renders the notice", capped.hidden === false, JSON.stringify(capped));
     ok("D2 · …saying how many rows it read and that the radar may be incomplete",
       /Showing the first 3/.test(capped.text) && /radar may be incomplete/i.test(capped.text), capped.text);
-    ok("D2 · the capped read keeps the OLDEST-touched cases — which is what the radar is for",
-      capped.ids.length > 0 && capped.ids.every((id) => oldest3.includes(id)),
-      JSON.stringify({ shown: capped.ids, oldest3 }));
+    /* R85 · C contract change — the radar no longer has a read of its own: it filters the session
+       Book, whose ONE walk is id-ordered and capped at OWNER_ROW_CAP (R85-DESIGN "Cap"). A capped
+       book cannot keep the oldest-touched end for one consumer, so what the cap now guarantees is
+       honesty: the notice fires (asserted above, off the book's capHit) and every row shown is one
+       of the rows the book actually holds — never a row conjured from outside the walk. */
+    const bookIds = await page.evaluate(() => (window.__bookPeek() ? window.__bookPeek().cases.map((c) => c.id) : []));
+    ok("D2 · the capped radar draws only on the capped book's rows (cap honoured; the notice above says it bit)",
+      bookIds.length === 3 && capped.ids.every((id) => bookIds.includes(id)),
+      JSON.stringify({ shown: capped.ids, bookIds, oldest3 }));
 
     await page.evaluate((n) => window.__setOwnerRowCap(n), baseCap);
     await reloadDashboard(page);

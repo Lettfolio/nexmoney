@@ -599,13 +599,23 @@ const favImgs = (page, names) => page.evaluate((ns) => {
           return b;
         };
       });
+      /* R85 · V contract change — the book was loaded by an earlier section and nothing has busted
+         it, so this nav would (correctly) make NO cases read at all. Bust it as a delete so the
+         recorder observes the one walk the page depends on. */
+      await page.evaluate(() => window.__bustBookCache("delete"));
       await goto(page, "data", 3000);
       const sels = await page.evaluate(() => window.__r69sel || []);
       const withValue = sels.filter((s) => s.includes("property_value"));
       eq("E1a · exactly one cases read on this page asks for property_value", withValue.length, 1);
-      ok("E1b · …and it is the data-health read that was already being made, not a second one",
-        withValue[0] && withValue[0].includes("rate_end_date") && withValue[0].includes("clients!client_id"),
-        JSON.stringify(withValue));
+      /* R85 · D contract change — Data health's cases read IS the session Book's walk now
+         (loadDataHealth → bookLoad picks property_value off the snapshot), so the one read that
+         names the column is the book's select (BOOK_CASE_COLS, whose embed is synthesised rather
+         than a `clients!client_id(...)` fragment). What is proven is unchanged: one read, the one
+         already being made, no second property_value read. */
+      const bookSel = await page.evaluate(() => (window.__bookStats && window.__bookStats().caseSelect) || null);
+      ok("E1b · …and it is the session Book's read that was already being made, not a second one",
+        withValue[0] && withValue[0].includes("rate_end_date") && bookSel && withValue[0] === bookSel,
+        JSON.stringify({ withValue, bookSel }));
 
       const tile = await page.evaluate(() => {
         const t = document.querySelector("#dh-tile-ltv");
