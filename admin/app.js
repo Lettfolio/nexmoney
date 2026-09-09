@@ -634,6 +634,14 @@ let ME = null, TEAM = [];   // R41 · F1 — `tasksScope` went with the Tasks-du
    described as a control. */
 let MY_ROLE = "none";
 const STAFF_ROLES = ["owner", "admin", "adviser", "staff"]; // 'staff' = legacy alias, kept so no login is locked out
+/* R86 · A1 — WHICH ROLES MUST SIGN IN WITH A SECOND FACTOR. A MIRROR of the database's
+   `settings.mfa_enforced_roles` ('owner,admin'), used ONLY for the Settings → Security card's
+   copy (which roles are "asked at their next sign-in", which button set a role gets). The
+   sign-in decision itself never reads this: enterApp() asks the server's session_ok() (R86 · V4),
+   the one expression every RLS helper and RPC guard evaluates, so a widened or emptied list on
+   the server is felt by the client with no deploy. Advisers are the optional role. */
+const MFA_ENFORCED_ROLES = ["owner", "admin"];
+const MFA_FRIENDLY_NAME = "NexMoney back office";
 const isOwner = () => MY_ROLE === "owner";
 const isAdminOrOwner = () => MY_ROLE === "owner" || MY_ROLE === "admin";
 const ROLE_LABEL = { owner: "Owner", admin: "Administrator", adviser: "Adviser", staff: "Staff (legacy)", introducer: "Introducer", none: "No access" };
@@ -4714,14 +4722,269 @@ async function init() {
   nxCheckBuildTags();   // R81 · A3 — before anything else can break strangely, say WHY it would
   const isRecovery = location.hash.includes("type=recovery");
   db.auth.onAuthStateChange((event, s) => {
-    if (event === "PASSWORD_RECOVERY") return showRecovery();
+    if (event === "PASSWORD_RECOVERY") return showRecovery(s);   // R86 · V2 — the recovery session, so a verified factor can be challenged first
+    /* R86 · A2 — MFA_CHALLENGE_VERIFIED needs nothing here: verify() resolved in the screen that
+       asked for the code, and that screen calls showApp itself. Listed so the event is not
+       mistaken for an unhandled state. */
+    if (event === "MFA_CHALLENGE_VERIFIED") return;
     if (!s) showLogin();
   });
   if (isRecovery) { showLogin(); return; } // wait for PASSWORD_RECOVERY event
   const { data: { session } } = await db.auth.getSession();
-  if (session) showApp(session); else showLogin();
+  if (session) enterApp(session); else showLogin();   // R86 · A2 — the second-factor decision sits between the session and the app
 }
-function showRecovery() {
+/* ==========================================================================
+   R86 · A2 — THE SECOND-FACTOR DECISION, BEFORE showApp(). Both doors into
+   the app — a restored session in init() and the sign-in submit handler —
+   come through here, so the rule is written once:
+     a. the session HAS a verified factor but has not used it this session
+        (currentLevel aal1, nextLevel aal2) → the CHALLENGE screen. Every
+        enforced role lands here on every fresh password sign-in; an adviser
+        who opted in lands here too — a factor, once set up, is always asked for.
+     b. no factor to challenge → learn the role (my_role() is deliberately NOT
+        gated by session_ok(), so it answers at aal1). An ENFORCED role with no
+        verified factor → the ENROLMENT screen (required; the only way on).
+     c. otherwise → showApp, exactly as before this round.
+   The server enforces regardless of what this decides (session_ok() in every
+   RLS helper and RPC guard): if the client somehow skipped a screen, an
+   enforced session at aal1 simply reads empty tables, and the R76 signed-out
+   strip / empty states already say "no data" — nothing here is a control,
+   it is the screen that lets the user satisfy the control.
+   ========================================================================== */
+async function enterApp(session) {
+  /* R86 · V3 — FRESH TRUTH FIRST. getAuthenticatorAssuranceLevel() reads the STORED session's
+     user.factors, which is stale until the token refreshes (a factor enrolled in another tab, or
+     removed in the dashboard, is invisible to it for up to an hour). listFactors() asks the
+     server. So: a verified factor exists and this session is not at aal2 → the challenge, whatever
+     the stored claim says. */
+  const hasFactor = await mfaHasVerifiedFactor();
+  let aal = null;
+  try {
+    const r = await db.auth.mfa.getAuthenticatorAssuranceLevel();
+    aal = r && r.data ? r.data : null;
+  } catch (e) { aal = null; }   // an auth outage: the server still gates; fall through to session_ok()
+  if (hasFactor && (!aal || aal.currentLevel !== "aal2")) return showMfaChallenge(session);
+  await resolveMyRole(session);
+  if (!STAFF_ROLES.includes(MY_ROLE)) return showApp(session);   // not staff at all → showApp's own gate signs them out with the honest toast
+  /* R86 · V4 — THE SERVER DECIDES. session_ok() (db/r86/01) is the one expression every RLS
+     helper and RPC guard evaluates; asking it is asking whether this session will read anything.
+     true → in; false with no factor → enrol (the only way on); false with a factor → challenge
+     (a stale aal2 claim the server no longer honours); the function MISSING (a database without
+     db/r86, 42883 / PostgREST's PGRST202) → exactly the pre-R86 behaviour, straight in. */
+  const ok = await sessionOkLive();
+  if (ok === true || ok === null) return showApp(session);
+  if (hasFactor) return showMfaChallenge(session);
+  return showMfaEnrol(session, { required: true });
+}
+/* R86 · V4 — `select public.session_ok()` as the caller. true / false, or null when the database
+   does not have the function (pre-R86) or the call could not be made at all — the caller treats
+   null as "no gate to satisfy here"; the server keeps its own answer regardless. */
+async function sessionOkLive() {
+  try {
+    const { data, error } = await db.rpc("session_ok");
+    if (!error && typeof data === "boolean") return data;
+  } catch (e) { /* transport — fall through */ }
+  return null;
+}
+/* R86 · A2 — does this login hold at least one VERIFIED TOTP factor? Any failure reads as
+   "no" (least privilege: the enrolment screen is offered, never skipped). */
+async function mfaHasVerifiedFactor() {
+  try {
+    const { data, error } = await db.auth.mfa.listFactors();
+    if (error || !data) return false;
+    return ((data.all || data.totp || [])).some((f) => f && f.status === "verified" && (f.factor_type == null || f.factor_type === "totp"));
+  } catch (e) { return false; }
+}
+/* R86 · A2 — the factor id to challenge (the first verified TOTP factor), or null. */
+async function mfaVerifiedFactorId() {
+  try {
+    const { data, error } = await db.auth.mfa.listFactors();
+    if (error || !data) return null;
+    const f = (data.all || data.totp || []).find((x) => x && x.status === "verified" && (x.factor_type == null || x.factor_type === "totp"));
+    return f ? f.id : null;
+  } catch (e) { return null; }
+}
+/* R86 · A2 — challenge + verify one code against a factor. Resolves null on success, or the
+   auth error ({message}) to show. The code is never logged and never toasted. */
+async function mfaVerifyCode(factorId, code) {
+  const ch = await db.auth.mfa.challenge({ factorId });
+  if (ch.error) return ch.error;
+  const v = await db.auth.mfa.verify({ factorId, challengeId: ch.data.id, code });
+  return v.error || null;
+}
+/* R86 · A2 — start (or restart) an enrolment: unverified leftovers from an abandoned attempt
+   are unenrolled first (the auth API refuses a second unverified factor with the same name),
+   then a fresh factor is enrolled. Resolves { factorId, totp: { qr_code, secret, uri } } or
+   { error }. The secret lives ONLY in the returned object and the screen that paints it. */
+async function mfaStartEnrol() {
+  try {
+    const lf = await db.auth.mfa.listFactors();
+    const leftovers = ((lf.data && lf.data.all) || []).filter((f) => f && f.status !== "verified");
+    for (const f of leftovers) await db.auth.mfa.unenroll({ factorId: f.id });
+    const { data, error } = await db.auth.mfa.enroll({ factorType: "totp", friendlyName: MFA_FRIENDLY_NAME });
+    if (error) return { error };
+    if (!data || !data.id || !data.totp) return { error: { message: "The authenticator could not be set up — try again." } };
+    return { factorId: data.id, totp: data.totp };
+  } catch (e) { return { error: { message: (e && e.message) || "The authenticator could not be set up — try again." } }; }
+}
+/* R86 · A2 — the 6-digit code control shared by the challenge screen, the enrolment screen and
+   the Settings remove dialog. `inputmode=numeric autocomplete=one-time-code pattern=[0-9]{6}`;
+   wireMfaCodeInput() auto-submits on the sixth digit. */
+function mfaCodeInputHtml(id, label, errId) {
+  /* R86 · V — `errId` names THIS host's error line (login-error on the card, ovl-mfa-err in the
+     Settings overlays), so assistive tech is pointed at the line that actually speaks. */
+  return `<label>${esc(label || "6-digit code")}
+      <input type="text" id="${esc(id)}" class="mfa-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required spellcheck="false"${errId ? ` aria-describedby="${esc(errId)}"` : ""} placeholder="123456">
+    </label>`;
+}
+function wireMfaCodeInput(input, submit) {
+  if (!input) return;
+  input.addEventListener("input", () => {
+    input.value = input.value.replace(/\D/g, "").slice(0, 6);
+    if (/^\d{6}$/.test(input.value)) submit();
+  });
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); submit(); } });
+}
+/* R86 · A2 — the enrolment BLOCK (QR + secret + code), used by both hosts: the login card
+   (required enrolment for an enforced role) and the Settings overlay (an adviser opting in).
+   The QR is the SVG data URI the auth API returns; the secret is shown ONCE, in a <code>, for
+   manual entry. esc() on every interpolation — the URI and secret are server strings. */
+function mfaEnrolBlockHtml(totp, codeId, errId) {
+  return `
+    <p class="panel-sub mfa-lead">Scan this code with an authenticator app (Google Authenticator, Microsoft Authenticator, 1Password, Authy…), then type the 6-digit code it shows.</p>
+    <div class="mfa-qr"><img src="${esc(totp.qr_code || "")}" alt="QR code for your authenticator app" width="164" height="164"></div>
+    <p class="panel-sub mfa-secret-line">Can’t scan? Enter this key by hand: <code class="mfa-secret">${esc(totp.secret || "")}</code></p>
+    ${mfaCodeInputHtml(codeId, "Code from the app", errId)}`;
+}
+/* R86 · A3 — THE CHALLENGE SCREEN. Rendered INSIDE #login-form like showRecovery(): same card,
+   same house classes, its own submit handler (the original submit listener steps aside when
+   #login-email is gone — the R78 guard). On a verified code the session is at aal2 and
+   showApp runs exactly as before this round. */
+async function showMfaChallenge(session, opts) {
+  /* R86 · V2 — `opts.onVerified` is the continuation (default showApp): the recovery flow
+     re-uses this screen as "verify, then continue" before the new-password card, because
+     updateUser({password}) is refused at aal1 when a factor exists (GoTrue insufficient_aal). */
+  const o = opts || {};
+  $("#login-view").classList.remove("hidden");
+  $("#app-view").classList.add("hidden");
+  const card = $("#login-form");
+  card.innerHTML = `
+    <div class="login-logo">Nex<span>Money</span></div>
+    <h1>${esc(o.heading || "Two-step sign-in")}</h1>
+    <p class="panel-sub mfa-lead">Signed in as <strong>${esc(session.user.email)}</strong>. ${esc(o.lead || "Enter the 6-digit code from your authenticator app.")}</p>
+    ${mfaCodeInputHtml("mfa-code", "6-digit code", "login-error")}
+    <button type="submit" class="btn btn-primary btn-block" id="mfa-verify-btn">Verify</button>
+    <p id="login-error" class="error hidden" role="alert"></p>
+    <p class="panel-sub mfa-help">Lost your authenticator? Ask Daniel to reset it.</p>
+    <button type="button" id="mfa-signout" class="btn btn-ghost btn-block">Sign out</button>`;
+  const err = (m) => { $("#login-error").textContent = m; $("#login-error").classList.remove("hidden"); };
+  let busy = false;
+  const submit = async () => {
+    if (busy) return;
+    const code = ($("#mfa-code").value || "").trim();
+    if (!/^\d{6}$/.test(code)) { err("Enter the 6-digit code from your authenticator app."); return; }
+    busy = true; $("#mfa-verify-btn").disabled = true;
+    $("#login-error").classList.add("hidden");
+    try {
+      const factorId = await mfaVerifiedFactorId();
+      if (!factorId) { err("No authenticator is set up on this login — ask Daniel."); return; }
+      const e = await mfaVerifyCode(factorId, code);
+      if (e) { err(e.message || "That code was not accepted — try the next one."); $("#mfa-code").value = ""; $("#mfa-code").focus(); return; }
+      const { data: { session: fresh } } = await db.auth.getSession();
+      if (typeof o.onVerified === "function") await o.onVerified(fresh || session);   // R86 · V2
+      else await showApp(fresh || session);
+    } finally { busy = false; const b = $("#mfa-verify-btn"); if (b) b.disabled = false; }
+  };
+  card.onsubmit = (e) => { e.preventDefault(); submit(); };
+  wireMfaCodeInput($("#mfa-code"), submit);
+  $("#mfa-signout").onclick = async () => {
+    try { await db.auth.signOut(); } catch (e) { /* dead token — the reload sorts it out */ }
+    location.reload();   // R79 · B6 — a deliberate sign-out reloads to a clean page
+  };
+  $("#mfa-code").focus();
+}
+/* R86 · A3 — THE ENROLMENT SCREEN (required: an enforced role with no verified factor). Same
+   card. `opts.required` is the only mode this host has — an adviser's optional enrolment goes
+   through the Settings overlay (openMfaEnrolOverlay), not here. */
+async function showMfaEnrol(session, opts) {
+  const o = opts || {};
+  $("#login-view").classList.remove("hidden");
+  $("#app-view").classList.add("hidden");
+  const card = $("#login-form");
+  card.innerHTML = `
+    <div class="login-logo">Nex<span>Money</span></div>
+    <h1>Set up your authenticator</h1>
+    <p class="panel-sub mfa-lead">Setting up…</p>`;
+  const started = await mfaStartEnrol();
+  if (started.error) {
+    card.innerHTML = `
+      <div class="login-logo">Nex<span>Money</span></div>
+      <h1>Set up your authenticator</h1>
+      <p id="login-error" class="error" role="alert">${esc(started.error.message || "The authenticator could not be set up.")}</p>
+      <button type="button" id="mfa-retry" class="btn btn-primary btn-block">Try again</button>
+      <button type="button" id="mfa-signout" class="btn btn-ghost btn-block">Sign out</button>`;
+    $("#mfa-retry").onclick = () => showMfaEnrol(session, o);
+    $("#mfa-signout").onclick = async () => { try { await db.auth.signOut(); } catch (e) { /* see above */ } location.reload(); };
+    return;
+  }
+  card.innerHTML = `
+    <div class="login-logo">Nex<span>Money</span></div>
+    <h1>Set up your authenticator</h1>
+    <p class="panel-sub mfa-lead"><strong>${esc(session.user.email)}</strong> — ${o.required ? "your role requires a second factor to sign in. This takes a minute and you only do it once." : "add a second factor to this login."}</p>
+    ${mfaEnrolBlockHtml(started.totp, "mfa-code", "login-error")}
+    <button type="submit" class="btn btn-primary btn-block" id="mfa-verify-btn">Turn on</button>
+    <p id="login-error" class="error hidden" role="alert"></p>
+    <button type="button" id="mfa-signout" class="btn btn-ghost btn-block">Sign out</button>`;
+  const err = (m) => { $("#login-error").textContent = m; $("#login-error").classList.remove("hidden"); };
+  let busy = false;
+  const submit = async () => {
+    if (busy) return;
+    const code = ($("#mfa-code").value || "").trim();
+    if (!/^\d{6}$/.test(code)) { err("Type the 6-digit code your authenticator app shows."); return; }
+    busy = true; $("#mfa-verify-btn").disabled = true;
+    $("#login-error").classList.add("hidden");
+    try {
+      const e = await mfaVerifyCode(started.factorId, code);
+      if (e) { err(e.message || "That code was not accepted — wait for the next one and try again."); $("#mfa-code").value = ""; $("#mfa-code").focus(); return; }
+      card.innerHTML = `<div class="login-logo">Nex<span>Money</span></div><h1>Authenticator on</h1><p class="panel-sub mfa-lead">Opening the back office…</p>`;   // the secret leaves the page before the app paints
+      const { data: { session: fresh } } = await db.auth.getSession();
+      await showApp(fresh || session);
+    } finally { busy = false; const b = $("#mfa-verify-btn"); if (b) b.disabled = false; }
+  };
+  card.onsubmit = (e) => { e.preventDefault(); submit(); };
+  wireMfaCodeInput($("#mfa-code"), submit);
+  $("#mfa-signout").onclick = async () => { try { await db.auth.signOut(); } catch (e) { /* see above */ } location.reload(); };
+  $("#mfa-code").focus();
+}
+/* R86 · A3 — the login card as index.html shipped it, captured at eval so a session that ends
+   AFTER a challenge / enrolment / recovery screen took the card over can put the password form
+   back (showLogin restores it). Captured once; never rebuilt from strings. */
+const LOGIN_CARD_HTML = $("#login-form") ? $("#login-form").innerHTML : "";
+function restoreLoginCard() {
+  const card = $("#login-form");
+  if (!card || !LOGIN_CARD_HTML || $("#login-email")) return;
+  card.innerHTML = LOGIN_CARD_HTML;
+  card.onsubmit = null;   // the takeover's own handler goes with its markup; the original listener is on the element and still there
+}
+async function showRecovery(session) {
+  /* R86 · V2 — A RECOVERY SESSION IS aal1. GoTrue refuses updateUser({password}) from an aal1
+     session when the user holds a verified factor (insufficient_aal), so the new-password card
+     would fail on Save with a message nobody could act on. Verify the code FIRST — the challenge
+     screen with a recovery lead and this card as its continuation — then paint the form. A user
+     with no factor goes straight to the form, exactly as before. Callers without a session
+     (older paths) get it looked up. */
+  let s = session || null;
+  if (!s) { try { s = (await db.auth.getSession()).data.session; } catch (e) { s = null; } }
+  if (s && await mfaHasVerifiedFactor()) {
+    let aal = null;
+    try { aal = (await db.auth.mfa.getAuthenticatorAssuranceLevel()).data; } catch (e) { aal = null; }
+    if (!aal || aal.currentLevel !== "aal2") {
+      return showMfaChallenge(s, { heading: "Two-step sign-in", lead: "Before choosing a new password, enter the 6-digit code from your authenticator app.", onVerified: () => paintRecoveryCard() });
+    }
+  }
+  paintRecoveryCard();
+}
+function paintRecoveryCard() {
   $("#login-view").classList.remove("hidden");
   $("#app-view").classList.add("hidden");
   const card = $("#login-form");
@@ -4789,6 +5052,7 @@ function showLogin() {
   $("#app-view").classList.add("hidden");
   $("#assistant-fab").classList.add("hidden");
   $("#assistant-drawer").classList.add("hidden");
+  restoreLoginCard();   // R86 · A3 — a challenge / enrolment / recovery takeover ends with the session it belonged to
   signedOutOverOpenWork(); // R76 · B4 — no-op unless a modal/overlay is open over this login
 }
 /* BACKEND-R4 §1 — resolve the caller's role from the my_role() RPC, which is the same expression
@@ -4989,7 +5253,7 @@ $("#login-form").addEventListener("submit", async (e) => {
     password: $("#login-password").value,
   });
   if (error) { $("#login-error").textContent = error.message; $("#login-error").classList.remove("hidden"); return; }
-  showApp(data.session);
+  enterApp(data.session);   // R86 · A2 — challenge / enrol / straight in, decided in one place
 });
 /* R79 · B6 — EXPLICIT SIGN-OUT RELOADS THE PAGE. showLogin() only hides #app-view: the previous
    user's whole book — rendered lists, boardCache, TEAM, settings, every closure — stayed live in
@@ -6492,6 +6756,7 @@ async function renderSettings() {
   // the "My details" card (everyone) already have what they need.
   renderTeamRoster();
   renderMyDetailsCard();
+  renderSecurityCard();   // R86 · A4 — every role's own authenticator status (+ the team column for Owner/Admin); sets its panel's .hidden synchronously before its first await
   // R26 — owner-only per-adviser fee-target editor. `owner` is the SAME isOwner() gate this
   // function already uses for every other owner-only block (SETTING fields, master switch, export).
   renderAdviserTargetsEditor(owner);
@@ -7210,6 +7475,181 @@ async function saveMyDetails() {
   } finally { btn.disabled = false; }
 }
 if ($("#save-my-details-btn")) $("#save-my-details-btn").addEventListener("click", saveMyDetails);
+
+/* ==========================================================================
+   R86 · A4 — SETTINGS → "SECURITY". Every role sees their own authenticator
+   status; the optional roles (advisers) get "Set up" / "Remove" here; the
+   enforced roles (MFA_ENFORCED_ROLES) see status only — they cannot remove
+   their own factor (a lost phone is reset by the Owner in the Supabase
+   dashboard, and the card says so). The Owner / Administrator also get the
+   TEAM column from get_team_mfa() (db/r86/03) so they can see who has
+   enrolled — with a plain "not available" line on a database without the
+   RPC or when the call is refused (a session_ok() refusal included).
+   LoadSeq-guarded like every other painter on this page: two quick visits to
+   Settings must not let the slower answer paint last.
+   ========================================================================== */
+let securityLoadSeq = 0;
+const mfaRoleEnforced = () => MFA_ENFORCED_ROLES.includes(MY_ROLE);
+/* The caller's VERIFIED TOTP factors ([] on any failure) plus whether the auth API answered. */
+async function mfaMyFactors() {
+  try {
+    const { data, error } = await db.auth.mfa.listFactors();
+    if (error || !data) return { ok: false, factors: [] };
+    return { ok: true, factors: (data.all || data.totp || []).filter((f) => f && f.status === "verified" && (f.factor_type == null || f.factor_type === "totp")) };
+  } catch (e) { return { ok: false, factors: [] }; }
+}
+async function renderSecurityCard() {
+  const panel = $("#security-panel");
+  if (!panel) return;
+  panel.classList.remove("hidden");
+  const teamHost = $("#security-team");
+  if (teamHost) teamHost.classList.toggle("hidden", !isAdminOrOwner());
+  const seq = ++securityLoadSeq;
+  const host = $("#security-mfa");
+  host.innerHTML = `<p class="panel-sub">Checking your authenticator…</p>`;
+  const teamP = isAdminOrOwner() ? db.rpc("get_team_mfa") : Promise.resolve(null);   // one wave with the factor read
+  const mine = await mfaMyFactors();
+  if (seq !== securityLoadSeq) return;
+  const enforced = mfaRoleEnforced();
+  const f = mine.factors[0] || null;
+  const status = !mine.ok
+    ? `<p class="panel-sub" id="sec-mfa-status">Authenticator status isn’t available right now — try again in a moment.</p>`
+    : f
+      ? `<p class="panel-sub" id="sec-mfa-status">Authenticator app: <span class="badge green">on</span> since ${fmtD(f.created_at)}.</p>`
+      : `<p class="panel-sub" id="sec-mfa-status">Authenticator app: <span class="badge grey">not set up</span>.</p>`;
+  let actions = "";
+  if (mine.ok && !f) {
+    actions += `<button type="button" class="btn btn-sm btn-primary" id="sec-mfa-enrol">Set up authenticator</button>`;
+    if (enforced) actions += `<p class="panel-sub sec-note">Your role requires a second factor; enforcement is currently switched off on this database, so you can sign in without one — setting it up now means nothing changes for you when it is switched back on.</p>`;
+  } else if (mine.ok && f && enforced) {
+    actions += `<p class="panel-sub sec-note" id="sec-mfa-enforced-note">Your role requires it, so it cannot be removed from here. Lost your phone? The Owner removes the authenticator in the Supabase dashboard (Authentication → Users → your login → MFA); you set it up again at your next sign-in.</p>`;
+  } else if (mine.ok && f) {
+    actions += `<button type="button" class="btn btn-sm" id="sec-mfa-remove">Remove authenticator</button>
+      <p class="panel-sub sec-note">Removing it means your password alone signs you in. You will be asked for a fresh code first.</p>`;
+  }
+  host.innerHTML = status + `<div class="sec-actions">${actions}</div>`;
+  const enrolBtn = $("#sec-mfa-enrol");
+  if (enrolBtn) enrolBtn.onclick = async () => {
+    enrolBtn.disabled = true;
+    try {
+      const on = await openMfaEnrolOverlay();
+      if (on) toast("Authenticator app is on. You’ll be asked for a code at every sign-in.");
+    } finally { enrolBtn.disabled = false; }
+    renderSecurityCard();
+  };
+  const removeBtn = $("#sec-mfa-remove");
+  if (removeBtn) removeBtn.onclick = async () => {
+    removeBtn.disabled = true;
+    try {
+      const off = await openMfaRemoveOverlay(f.id);
+      if (off) toast("Authenticator removed. Your password alone signs you in now.");
+    } finally { removeBtn.disabled = false; }
+    renderSecurityCard();
+  };
+  if (!teamHost || !isAdminOrOwner()) return;
+  teamHost.innerHTML = `<h4 class="sec-team-h">Who has an authenticator</h4><p class="panel-sub">Checking…</p>`;
+  let team = null;
+  try { team = await teamP; } catch (e) { team = null; }
+  if (seq !== securityLoadSeq) return;
+  const rows = team && !team.error && Array.isArray(team.data) ? team.data : null;
+  if (!rows) {
+    // 42883 on a database without db/r86/03, a refusal, a transport failure — one honest line, no toast.
+    teamHost.innerHTML = `<h4 class="sec-team-h">Who has an authenticator</h4><p class="panel-sub" id="sec-team-note">Team authenticator status isn’t available on this database yet.</p>`;
+    return;
+  }
+  const roleWord = (r) => r === "owner" ? "Owner" : r === "admin" ? "Administrator" : r === "adviser" ? "Adviser" : esc(r || "");
+  teamHost.innerHTML = `<h4 class="sec-team-h">Who has an authenticator</h4>
+    <p class="panel-sub">${rows.filter((r) => r.mfa_on).length} of ${rows.length} logins have one. ${esc(MFA_ENFORCED_ROLES.map((r) => roleWord(r)).join(" and "))} logins are asked to set one up at their next sign-in; advisers may opt in from this card.</p>
+    <table class="imp-table sec-team-tbl" id="sec-team-tbl">
+      <thead><tr><th>Name</th><th>Role</th><th>Authenticator</th><th>Since</th></tr></thead>
+      <tbody>${rows.map((r) => `<tr data-id="${esc(r.id)}">
+        <td>${esc(r.full_name || r.id)}</td>
+        <td>${roleWord(r.role)}</td>
+        <td>${r.mfa_on ? `<span class="badge green">on</span>` : `<span class="badge ${MFA_ENFORCED_ROLES.includes(r.role) ? "amber" : "grey"}">off</span>`}</td>
+        <td>${r.mfa_on && r.enrolled_at ? fmtD(r.enrolled_at) : "—"}</td>
+      </tr>`).join("")}</tbody>
+    </table>`;
+}
+/* R86 · A4 — the OPTIONAL-role enrolment, in the house overlay. Same block as the login-card
+   screen (mfaEnrolBlockHtml), same verify path. Resolves true when the factor was verified.
+   A cancel unenrols the half-made factor so nothing unverified is left behind on the login. */
+async function openMfaEnrolOverlay() {
+  const started = await mfaStartEnrol();
+  if (started.error) { toast(started.error.message || "The authenticator could not be set up — try again."); return false; }
+  const html = `
+    <h3 id="ovl-mfa-title">Set up your authenticator</h3>
+    ${mfaEnrolBlockHtml(started.totp, "ovl-mfa-code", "ovl-mfa-err")}
+    <div class="ovl-err" id="ovl-mfa-err" role="alert"></div>
+    <div class="modal-actions">
+      <div></div>
+      <div class="right">
+        <button type="button" class="btn" id="ovl-mfa-cancel">Cancel</button>
+        <button type="button" class="btn btn-primary" id="ovl-mfa-ok">Turn on</button>
+      </div>
+    </div>`;
+  const done = await openOverlay(html, (finish, box) => {
+    const input = box.querySelector("#ovl-mfa-code"), err = box.querySelector("#ovl-mfa-err"), okBtn = box.querySelector("#ovl-mfa-ok");
+    let busy = false;
+    const submit = async () => {
+      if (busy) return;
+      const code = (input.value || "").trim();
+      if (!/^\d{6}$/.test(code)) { err.textContent = "Type the 6-digit code your authenticator app shows."; return; }
+      busy = true; okBtn.disabled = true; err.textContent = "";
+      try {
+        const e = await mfaVerifyCode(started.factorId, code);
+        if (e) { err.textContent = e.message || "That code was not accepted — wait for the next one and try again."; input.value = ""; input.focus(); return; }
+        finish(true);
+      } finally { busy = false; okBtn.disabled = false; }
+    };
+    wireMfaCodeInput(input, submit);
+    okBtn.onclick = submit;
+    box.querySelector("#ovl-mfa-cancel").onclick = () => finish(false);
+    input.focus();
+  });
+  if (done !== true) {
+    try { await db.auth.mfa.unenroll({ factorId: started.factorId }); } catch (e) { /* an unverified leftover is cleaned up at the next attempt anyway */ }
+    return false;
+  }
+  return true;
+}
+/* R86 · A4 — REMOVE, with a fresh code (challenge + verify against the factor being removed,
+   then unenroll). Only reachable for the optional roles — the card hides it for enforced ones. */
+async function openMfaRemoveOverlay(factorId) {
+  const html = `
+    <h3 id="ovl-mfa-title">Remove your authenticator?</h3>
+    <div class="panel-sub" id="ovl-mfa-body">Type a fresh code from your authenticator app to confirm. After this, your <strong>password alone</strong> signs you in.</div>
+    ${mfaCodeInputHtml("ovl-mfa-code", "Code from the app", "ovl-mfa-err")}
+    <div class="ovl-err" id="ovl-mfa-err" role="alert"></div>
+    <div class="modal-actions">
+      <div></div>
+      <div class="right">
+        <button type="button" class="btn" id="ovl-mfa-cancel">Keep it</button>
+        <button type="button" class="btn btn-danger-solid" id="ovl-mfa-ok">Remove</button>
+      </div>
+    </div>`;
+  const done = await openOverlay(html, (finish, box) => {
+    const input = box.querySelector("#ovl-mfa-code"), err = box.querySelector("#ovl-mfa-err"), okBtn = box.querySelector("#ovl-mfa-ok");
+    let busy = false;
+    const submit = async () => {
+      if (busy) return;
+      const code = (input.value || "").trim();
+      if (!/^\d{6}$/.test(code)) { err.textContent = "Type the 6-digit code your authenticator app shows."; return; }
+      busy = true; okBtn.disabled = true; err.textContent = "";
+      try {
+        const e = await mfaVerifyCode(factorId, code);
+        if (e) { err.textContent = e.message || "That code was not accepted — wait for the next one and try again."; input.value = ""; input.focus(); return; }
+        const un = await db.auth.mfa.unenroll({ factorId });
+        if (un.error) { err.textContent = un.error.message || "The authenticator could not be removed."; return; }
+        finish(true);
+      } finally { busy = false; okBtn.disabled = false; }
+    };
+    wireMfaCodeInput(input, submit);
+    okBtn.onclick = submit;
+    box.querySelector("#ovl-mfa-cancel").onclick = () => finish(false);
+    input.focus();
+  });
+  return done === true;
+}
 
 /* R26 — the owner-only per-adviser fee-target editor. Built entirely in JS and injected next to the
    settings form: NO index.html container is added (this round is app.js only), so the section is
@@ -37487,6 +37927,6 @@ async function deleteVaultEntry(id) {
 
 /* R81 · A3 — deploy handshake stamp. Every round that edits ANY of index.html / core.js /
    reports-money.js / app.js bumps the tag IN ALL FOUR PLACES (see nxCheckBuildTags above). */
-window.__nxTag_app = "r85";   // R85
+window.__nxTag_app = "r86";   // R86
 
 init();

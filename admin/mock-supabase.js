@@ -117,7 +117,9 @@
      edge   : process-emails, send-sms, outlook-sync, owner-digest, invite-user,
               ai-import, parse-offer, assistant, doc-upload, nps-capture
      auth   : getSession, getUser, onAuthStateChange, signInWithPassword,
-              signOut, resetPasswordForEmail, updateUser
+              signOut, resetPasswordForEmail, updateUser; R86 — auth.mfa
+              (enroll, challenge, verify, unenroll, listFactors,
+              getAuthenticatorAssuranceLevel) over per-persona MFA state
      storage: offers bucket (upload, createSignedUrl); client-docs bucket
               (createSignedUrl — R12a·D8, the admin "open" link on a checklist
               row a client uploaded through doc-upload; R13 — the bucket is
@@ -373,8 +375,108 @@
   var CURRENT_UID = ME_KEY;
   function me() { return DB.profiles.filter(function (p) { return p.id === CURRENT_UID; })[0] || PERSONAS[CURRENT_UID]; }
   function myRole() { var p = me(); return (p && p.role) || "none"; }
-  function isOwner() { return myRole() === "owner"; }
-  function isAdminOrOwner() { return myRole() === "owner" || myRole() === "admin"; }
+
+  /* =========================================================================
+     R86 — THE SECOND FACTOR (db/r86/*.sql mirrored here).
+
+     Per-persona MFA state, exactly the two facts production's auth schema and
+     JWT carry: the user's `auth.mfa_factors` rows and the session's `aal`
+     claim.  `MFA[personaKey] = { factors: [{ id, status, friendly_name,
+     factor_type, created_at, updated_at }], aal: "aal1" | "aal2" }`.
+
+       · DEFAULTS (so every pre-R86 suite is untouched): p4 Daniel (owner) and
+         p1 Kim (admin) boot with ONE verified factor and a session already at
+         aal2 — a `?as=` boot is a RESTORED session, i.e. one that verified its
+         code earlier, exactly like a refreshed tab in production.  p2/p3
+         (advisers — the optional role) and p5 (introducer) have no factor and
+         sit at aal1, which session_ok() accepts for a non-enforced role.
+       · `signInWithPassword` ALWAYS lands at aal1, as the real thing does: a
+         password proves one factor.  A persona with a verified factor then
+         meets the challenge screen; an enforced persona with none meets the
+         enrolment screen.  Only the sign-in path and the `__mock.setMfa` /
+         `window.__mockMfa` hooks move `aal` downwards.
+       · `sessionOk()` is db/r86/01's `public.session_ok()` line for line:
+         role null → false; role not in the settings row `mfa_enforced_roles`
+         (comma list, trimmed, lower-cased; '' = enforcement off — the
+         break-glass) → true; enforced → aal === 'aal2'.  isStaff() /
+         isAdminOrOwner() / isOwner() below are role AND sessionOk(), so every
+         RLS mirror (readFilter / writePolicy) and every RPC guard that calls
+         them refuses an enforced session that has not verified — an owner at
+         aal1 reads NOTHING, which is the whole point of the round.
+       · The verify code is the fixed "000000"; anything else answers the real
+         AuthApiError shape `{ message: "Invalid TOTP code entered" }`.  The
+         secret is the fixed "MOCKSECRET" (r86_mfa §G asserts it never leaks
+         past the enrol screen).
+       · PRE-LOAD SEED: `window.__mockMfa = { p4: { aal: "aal1" }, … }` in an
+         addInitScript patches the defaults before app.js's init() runs (the
+         R82 · B1 __mockMigrations idiom); `window.__mock.setMfa(persona,
+         state)` does the same after load; `window.__mock.mfaState(persona)`
+         reads it back.
+     ======================================================================= */
+  var MFA_SECRET = "MOCKSECRET";
+  var MFA_CODE = "000000";
+  function mfaFactor(key, at) {
+    return { id: "mf-" + key, status: "verified", friendly_name: "NexMoney back office", factor_type: "totp",
+      created_at: at, updated_at: at };
+  }
+  var MFA = {
+    p1: { factors: [mfaFactor("p1", iso(shift(-40)))], aal: "aal2" },
+    p2: { factors: [], aal: "aal1" },
+    p3: { factors: [], aal: "aal1" },
+    p4: { factors: [mfaFactor("p4", iso(shift(-45)))], aal: "aal2" },
+    p5: { factors: [], aal: "aal1" }
+  };
+  function mfaOf(key) {
+    if (!MFA[key]) MFA[key] = { factors: [], aal: "aal1" };
+    return MFA[key];
+  }
+  function mfaVerifiedFactors(key) {
+    return mfaOf(key).factors.filter(function (f) { return f.status === "verified"; });
+  }
+  function mfaPatch(key, state) {
+    var st = mfaOf(key), s = state || {};
+    if (Object.prototype.hasOwnProperty.call(s, "factors")) {
+      st.factors = (s.factors || []).map(function (f, i) {
+        var at = f.created_at || iso(new Date());
+        return { id: f.id || ("mf-" + key + "-" + i), status: f.status || "verified",
+          friendly_name: f.friendly_name || "NexMoney back office", factor_type: f.factor_type || "totp",
+          created_at: at, updated_at: f.updated_at || at };
+      });
+    }
+    if (s.verified === true && !st.factors.length) st.factors = [mfaFactor(key, iso(new Date()))];
+    if (s.verified === false) st.factors = [];
+    if (s.aal === "aal1" || s.aal === "aal2") st.aal = s.aal;
+    return st;
+  }
+  if (typeof window !== "undefined" && window.__mockMfa) {
+    Object.keys(window.__mockMfa).forEach(function (k) { mfaPatch(k, window.__mockMfa[k]); });
+  }
+  function mfaEnforcedRoles() {
+    var r = DB.settings.filter(function (s) { return s.key === "mfa_enforced_roles"; })[0];
+    return String(r && r.value != null ? r.value : "").split(",")
+      .map(function (x) { return x.trim().toLowerCase(); }).filter(Boolean);
+  }
+  /* db/r86/01 · public.session_ok(), mirrored line for line. */
+  function sessionOk() {
+    var p = me();
+    var role = p ? p.role : null;
+    /* R86 · V — exactly the SQL: only a NULL role (no profile) is false; an empty-string role is a
+       role like any other and is simply not in the list (→ true). Both sides btrim'd + lower-cased. */
+    if (role == null) return false;
+    if (mfaEnforcedRoles().indexOf(String(role).trim().toLowerCase()) < 0) return true;
+    return mfaOf(CURRENT_UID).aal === "aal2";
+  }
+  /* R86 · V3 — `__mock.setStaleFactors(persona, bool)`: production's getAuthenticatorAssuranceLevel()
+     reads the STORED session's user.factors, stale until the token refreshes; with this set the
+     mock's aal call reports NO factor (nextLevel = currentLevel) while listFactors() — a server
+     read — still shows it. The app must decide from listFactors (r86_mfa §J). */
+  var MFA_STALE = {};
+  if (typeof window !== "undefined" && window.__mockStale) {
+    Object.keys(window.__mockStale).forEach(function (k) { MFA_STALE[k] = !!window.__mockStale[k]; });
+  }
+  /* R86 — role AND session_ok(), as db/r86/01 re-creates the three RLS helpers. */
+  function isOwner() { return myRole() === "owner" && sessionOk(); }
+  function isAdminOrOwner() { return (myRole() === "owner" || myRole() === "admin") && sessionOk(); }
   function actorLabel() { var p = me(); return (p && (p.full_name || p.email)) || "Unknown user"; }
 
   /* --------------------------------------------------------------- the store */
@@ -471,7 +573,7 @@
      writes to the new columns come back as Postgres 42703 (undefined_column),
      selects stop returning them, an un-migrated TABLE comes back as 42P01 and an
      un-migrated FUNCTION comes back as 42883 (undefined_function). */
-  var MIGRATIONS = { m1: true, m2: true, m3: true, m4: true, m5: true, m6: true, m7: true, m10: true, m11: true, m12: true, m13: true };
+  var MIGRATIONS = { m1: true, m2: true, m3: true, m4: true, m5: true, m6: true, m7: true, m10: true, m11: true, m12: true, m13: true, m14: true, m15: true };   /* R86 — m14 = get_team_mfa, m15 = session_ok */
   /* R82 · B1 — PRE-LOAD MIGRATION SEED. `__mock.setMigrations()` can only be
      called once this script has run, which is already too late for anything
      the app reads inside init() (get_staff_activity is one). A suite that needs
@@ -522,7 +624,7 @@
      WITHOUT it — which is the state app.js's defensive consumption exists for
      and the state a suite pinning "missing RPC ⇒ behave exactly as before"
      has to be able to reach. Default ON, like every other flag. */
-  var MIGRATION_FUNCTIONS = { m6: ["reassign_holdings"], m12: ["get_staff_activity"], m13: ["get_dashboard_counts"] };   /* R85 — m13 = db/r85/01 */
+  var MIGRATION_FUNCTIONS = { m6: ["reassign_holdings"], m12: ["get_staff_activity"], m13: ["get_dashboard_counts"], m14: ["get_team_mfa"], m15: ["session_ok"] };   /* R85 — m13 = db/r85/01 · R86 — m14 = db/r86/03, m15 = db/r86/01 */
   function functionIsMissing(name) {
     var missing = false;
     Object.keys(MIGRATION_FUNCTIONS).forEach(function (mk) {
@@ -857,10 +959,25 @@
      because the app now writes both, and a mock that accepts anything cannot tell a typo from a
      migration that has not run. */
   var REFERRAL_KINDS = ["survey", "conveyancing", "protection", "gi", "other"];
-  function isStaff() { return ["owner", "admin", "adviser", "staff"].indexOf(myRole()) >= 0; }
+  /* R86 — role AND session_ok() (db/r86/01 · is_staff()); see the MFA block by PERSONAS. */
+  function isStaff() { return ["owner", "admin", "adviser", "staff"].indexOf(myRole()) >= 0 && sessionOk(); }
+  /* R86 — the tables whose EVERY policy is an is_staff()/is_owner()/is_admin_or_owner() test
+     (db/r84/12_policy_initplan.sql + 10_introducer_views.sql): a caller who is not staff — an
+     introducer, or an enforced role whose session has not verified its second factor — reads
+     nothing and writes nothing on any of them.  `profiles` is the one exception (its SELECT
+     policy lets a login read its OWN row, which is how an introducer's portal names them, and
+     its UPDATE policy lets a login edit its own row); `saved_views` is per-user (scoped in
+     _matching). Tables with a finer rule of their own (vault visible_to, settings redaction,
+     audit_log) keep it in addition to this gate, below. */
+  var SELF_ROW_TABLES = ["profiles", "saved_views"];
   function writePolicy(table, op, payload, targets) {
     if (table === "audit_log") {
       return pgError('permission denied for table audit_log — the audit trail is append-only', "42501");
+    }
+    /* R86 — an unverified enforced session (or any non-staff login) writes nothing (RLS
+       `with check ((select is_staff()))` on every staff table). */
+    if (SELF_ROW_TABLES.indexOf(table) < 0 && !isStaff()) {
+      return pgError('new row violates row-level security policy for table "' + table + '"', "42501");
     }
     /* M2 — cases_lost_reason_chk */
     if (table === "cases" && payload && payload.lost_reason != null && LOST_REASONS.indexOf(payload.lost_reason) === -1) {
@@ -1091,6 +1208,13 @@
   }
   /* SELECT-side redaction, mirroring the production SELECT policies. */
   function readFilter(table, rows) {
+    /* R86 — `using ((select is_staff()))` on every staff table: a non-staff caller (an introducer,
+       or an owner/admin session still at aal1) gets an EMPTY read, exactly as production's RLS
+       answers — no error, no rows. profiles: own row only (the R4 "profiles read" policy). */
+    if (!isStaff()) {
+      if (table === "profiles") return rows.filter(function (r) { return r.id === CURRENT_UID; });
+      if (SELF_ROW_TABLES.indexOf(table) < 0) return [];
+    }
     if (table === "settings" && !isOwner()) {
       return rows.filter(function (r) { return SENSITIVE_SETTING_KEYS.indexOf(r.key) === -1; });
     }
@@ -1757,7 +1881,12 @@
        real value or the strip's default state would be untestable. Tests that
        want the released state write 'off' themselves — which is also the only
        way to prove the switch really is the gate. */
-    email_hold: "on"
+    email_hold: "on",
+    /* R86 — WHICH ROLES MUST HAVE A SECOND FACTOR (db/r86/01 seeds the same row). A comma list
+       session_ok() reads on every RLS helper call: an owner/admin session at aal1 reads nothing
+       until it verifies. '' switches enforcement OFF — the CTO's break-glass, and what r86_mfa
+       §F writes to prove the switch really is the gate. Advisers are the optional role. */
+    mfa_enforced_roles: "owner,admin"
   };
   Object.keys(SETTINGS_SEED).forEach(function (k) {
     /* R82 — production's `settings` table is (key, value) and nothing else; seeding an
@@ -1765,6 +1894,15 @@
        Nothing in app.js or any suite reads it. Removed to match db/columns.json. */
     DB.settings.push({ key: k, value: SETTINGS_SEED[k] });
   });
+  /* R86 · V — PRE-LOAD SETTINGS PATCH: `window.__mockSettingsPatch = { mfa_enforced_roles: "…" }` in an
+     addInitScript overrides seeded VALUES before app.js's init() reads anything (the enforced list
+     is read by session_ok() on the very first call). Keys only — a key not in the seed is added. */
+  if (typeof window !== "undefined" && window.__mockSettingsPatch) {
+    Object.keys(window.__mockSettingsPatch).forEach(function (k) {
+      var row = DB.settings.filter(function (r) { return r.key === k; })[0];
+      if (row) row.value = window.__mockSettingsPatch[k]; else DB.settings.push({ key: k, value: window.__mockSettingsPatch[k] });
+    });
+  }
 
   /* --- clients (40, with the deliberate landmines) ------------------------ */
   var CLIENT_SEED = [
@@ -5077,7 +5215,9 @@
     find_duplicate_clients: [], run_watchtower: [],
     get_staff_activity: [],   /* R82 · B1 — takes no arguments at all */
     queue_automated_emails: [], queue_comms_extras: [], mark_tour_seen: [],
-    get_dashboard_counts: []   /* R85 · A4 — no arguments (see rpc_get_dashboard_counts) */
+    get_dashboard_counts: [],   /* R85 · A4 — no arguments (see rpc_get_dashboard_counts) */
+    get_team_mfa: [],   /* R86 — no arguments (see rpc_get_team_mfa) */
+    session_ok: []   /* R86 · V4 */
   };
   function assertRpcArgs(name, args) {
     if (!strictEnabled()) return;
@@ -5509,6 +5649,8 @@
   function rpc_my_role() { return myRole(); }
 
   function rpc_has_bank_details() {
+    /* R86 — db/r86/02: `public.session_ok() and …` — false (not an error) for an unverified enforced session. */
+    if (!sessionOk()) return false;
     var g = function (k) { var r = DB.settings.filter(function (s) { return s.key === k; })[0]; return r ? String(r.value || "").trim() : ""; };
     return !!(g("bank_account_name") && g("bank_sort_code") && g("bank_account_number"));
   }
@@ -5520,12 +5662,14 @@
      no-op, not a re-stamp — the first-run tour records the first run, not the
      most recent one. Returns void, exactly like the real function. */
   function rpc_mark_tour_seen() {
+    if (!sessionOk()) return null;   /* R86 — db/r86/02: `… and public.session_ok()` in the UPDATE's where — a no-op, not an error */
     var mine = DB.profiles.filter(function (p) { return p.id === CURRENT_UID; })[0];
     if (mine && mine.tour_seen_at == null) mine.tour_seen_at = iso(new Date());
     return null;
   }
 
   function rpc_get_briefing(args) {
+    if (!isStaff()) return [];   /* R86 — prod's staff guard (+ session_ok()) returns '[]'::jsonb */
     var scope = (args && args.p_scope) || "mine";
     var uid = CURRENT_UID;
     var items = [];
@@ -5641,6 +5785,7 @@
   }
 
   function rpc_get_reports() {
+    if (!isAdminOrOwner()) return {};   /* R86 — prod's owner/admin guard (+ session_ok()) returns '{}'::jsonb */
     var yr = NOW.getFullYear();
     /* M5 — fees_banked_ytd keys on the per-type broker cash date where the
        migration has landed, falling back to the legacy single date. Every other
@@ -5670,6 +5815,7 @@
   }
 
   function rpc_get_data_quality() {
+    if (!isStaff()) return {};   /* R86 — prod's staff guard (+ session_ok()) returns '{}'::jsonb */
     var liveClientIds = {};
     DB.cases.forEach(function (c) { if (isLive(c.stage)) liveClientIds[c.client_id] = true; });
     var missingEmail = DB.clients.filter(function (c) { return !c.email && liveClientIds[c.id]; })
@@ -5764,6 +5910,7 @@
     });
   }
   function rpc_get_protection_pipeline(args) {
+    if (!isStaff()) return [];   /* R86 — prod's staff guard (+ session_ok()) returns '[]'::jsonb */
     var avg = Number((DB.settings.filter(function (s) { return s.key === "protection_avg_commission"; })[0] || {}).value) || 850;
     return protPipeCandidates(args).map(function (c) {
       var cl = DB.clients.filter(function (x) { return x.id === c.client_id; })[0] || {};
@@ -5783,6 +5930,7 @@
   }
   /* R80 · A1 — the companion: the UNCAPPED candidate count, same predicate, same forced scope. */
   function rpc_get_protection_pipeline_total(args) {
+    if (!isStaff()) return { total: 0 };   /* R86 — prod's staff guard (+ session_ok()) returns {"total": 0} */
     return { total: protPipeCandidates(args).length };
   }
 
@@ -5858,6 +6006,7 @@
   }
 
   function rpc_find_duplicate_clients() {
+    if (!isStaff()) return [];   /* R86 — prod's staff guard (+ session_ok()) returns '[]'::jsonb */
     var pairs = [], seen = {};
     var push = function (a, b, reason, score) {
       var k = [a.id, b.id].sort().join("|");
@@ -5941,8 +6090,40 @@
     return { cases: cases.length, tasks: tasks.length, appointments: appts.length };
   }
 
+  /* =========================================================================
+     R86 — get_team_mfa()  (db/r86/03, mirrored here)
+
+       · NO arguments. OWNER/ADMIN-GUARDED — plus session_ok(), like every guard
+         this round touches: a refusal RAISES 42501 (an empty roster would read
+         as "nobody has enrolled", a false fact).
+       · Returns a JSON ARRAY, one entry per STAFF profiles row (owner / admin /
+         adviser / staff — never the introducer), ordered by full_name:
+             { id, full_name, role, mfa_on: boolean, enrolled_at: ts|null }
+         `mfa_on` = at least one VERIFIED auth.mfa_factors row; `enrolled_at` is
+         the earliest verified factor's created_at (null when mfa_on is false).
+       · MISSING-FUNCTION TOGGLE: migration flag `m14` (MIGRATION_FUNCTIONS), so
+         `setMigrations({m14:false})` answers 42883 — the Security card's
+         "not available" path.
+     ======================================================================= */
+  function rpc_get_team_mfa() {
+    if (!isAdminOrOwner()) throw pgErrorThrow("permission denied: get_team_mfa is for the Owner and Administrators", "42501");
+    return DB.profiles.filter(function (p) { return ["owner", "admin", "adviser", "staff"].indexOf(p.role) >= 0; })
+      .slice().sort(function (a, b) { return cmp(a.full_name || "", b.full_name || ""); })
+      .map(function (p) {
+        var v = mfaVerifiedFactors(p.id).slice().sort(function (a, b) { return cmp(a.created_at, b.created_at); });
+        return { id: p.id, full_name: p.full_name, role: p.role, mfa_on: v.length > 0, enrolled_at: v.length ? v[0].created_at : null };
+      });
+  }
+
+  /* R86 · V4 — `select public.session_ok()` as the caller: the app's gate decision asks the server
+     (enterApp → sessionOkLive). Migration flag m15 models a database WITHOUT db/r86 (42883 ⇒ the
+     app behaves exactly as before R86). */
+  function rpc_session_ok() { return sessionOk(); }
+
   var RPCS = {
     my_role: rpc_my_role,
+    session_ok: rpc_session_ok,   /* R86 · V4 */
+    get_team_mfa: rpc_get_team_mfa,   /* R86 — who has an authenticator (see rpc_get_team_mfa) */
     /* R5-M6 — the atomic handover behind openDeactivate()'s RPC-first path */
     reassign_holdings: rpc_reassign_holdings,
     has_bank_details: rpc_has_bank_details,
@@ -5954,13 +6135,19 @@
     find_duplicate_clients: rpc_find_duplicate_clients,
     /* R82 · B1 — who has ever actually signed in (see rpc_get_staff_activity) */
     get_staff_activity: rpc_get_staff_activity,
-    run_watchtower: runWatchtower,
+    /* R86 — db/r86/02: the SIGNED-IN caller branch (`auth.uid() is not null and not exists (… and
+       public.session_ok())`) answers {"error":"forbidden"}; the cron/service-role path (uid null)
+       never comes through this client, so it is untouched — as in production. */
+    run_watchtower: function () { if (!isStaff()) return { error: "forbidden" }; return runWatchtower(); },
     /* The two SECURITY DEFINER queueing functions process-emails calls before it flushes. They
        exist in production as public functions; exposing them here lets the Run-automation-now
        button queue FIRST and then ask permission for the real number (G1I-Q1), instead of naming
        the rows already in the queue and sending those plus everything the flush creates. */
-    queue_automated_emails: function () { return queueAutomatedEmails(); },
-    queue_comms_extras: function () { return queueCommsExtras(); },
+    /* R86 · V (P2) — db/r86/02: the run_watchtower-pattern guard as the FIRST statement — a
+       signed-in caller who is not staff (an enforced role at aal1 included) gets '{}'::jsonb; the
+       cron / service-role path (uid null) never comes through this client and is untouched. */
+    queue_automated_emails: function () { if (!isStaff()) return {}; return queueAutomatedEmails(); },
+    queue_comms_extras: function () { if (!isStaff()) return {}; return queueCommsExtras(); },
     /* r12b — first-run tour ack. See rpc_mark_tour_seen() for the guard. */
     mark_tour_seen: function () { return rpc_mark_tour_seen(); },
     /* R85 · A4 — the Today chrome's nine scalars in one call (see rpc_get_dashboard_counts) */
@@ -6011,6 +6198,7 @@
     };
   }
   var SIGNED_OUT = false;
+  var MFA_CHALLENGES = {};   /* R86 — challenge id → factor id, consumed by verify() */
   var auth = {
     getSession: function () {
       return Promise.resolve({ data: { session: SIGNED_OUT ? null : session() }, error: null });
@@ -6031,9 +6219,80 @@
         return Promise.resolve({ data: { user: null, session: null }, error: { message: "Invalid login credentials", status: 400 } });
       }
       CURRENT_UID = p.id; SIGNED_OUT = false;
+      /* R86 — a password proves ONE factor: every fresh sign-in lands at aal1, as in production.
+         A persona with a verified factor then meets the challenge screen; an enforced persona
+         with none meets enrolment. (A `?as=` boot is a RESTORED session and keeps its aal.) */
+      mfaOf(p.id).aal = "aal1";
       var s = session();
       authListeners.forEach(function (cb) { try { cb("SIGNED_IN", s); } catch (e) { } });
       return Promise.resolve({ data: { user: s.user, session: s }, error: null });
+    },
+    /* R86 — supabase-js 2.110's auth.mfa surface, over the per-persona MFA state (see the block by
+       PERSONAS). Shapes are the real client's: every call resolves `{ data, error }`. */
+    mfa: {
+      enroll: function (opts) {
+        var o = opts || {};
+        if (SIGNED_OUT) return Promise.resolve({ data: null, error: { message: "Auth session missing!", status: 400 } });
+        if (o.factorType !== "totp") return Promise.resolve({ data: null, error: { message: "factorType must be totp", status: 422 } });
+        var st = mfaOf(CURRENT_UID), at = iso(new Date());
+        var f = { id: nid("mf-" + CURRENT_UID + "-"), status: "unverified", friendly_name: o.friendlyName || null, factor_type: "totp", created_at: at, updated_at: at };
+        /* the real API refuses a second UNVERIFIED factor with the same friendly name */
+        if (st.factors.some(function (x) { return x.friendly_name === f.friendly_name && x.friendly_name; })) {
+          return Promise.resolve({ data: null, error: { message: "A factor with the friendly name " + JSON.stringify(f.friendly_name) + " for this user already exists", status: 422, code: "mfa_factor_name_conflict" } });
+        }
+        st.factors.push(f);
+        var email = (me() || {}).email || "";
+        var uri = "otpauth://totp/NexMoney:" + encodeURIComponent(email) + "?secret=" + MFA_SECRET + "&issuer=NexMoney";
+        var qr = "data:image/svg+xml;utf8," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 41 41" width="164" height="164"><rect width="41" height="41" fill="#fff"/><path d="M4 4h7v7H4zM30 4h7v7h-7zM4 30h7v7H4zM13 4h2v2h-2zM17 6h2v2h-2zM21 4h2v2h-2zM13 13h2v2h-2zM19 15h4v4h-4zM26 13h2v2h-2zM30 19h2v2h-2zM13 26h2v2h-2zM19 24h2v2h-2zM24 30h4v4h-4zM33 26h4v2h-4zM17 32h2v2h-2z" fill="#000"/></svg>');
+        return Promise.resolve({ data: { id: f.id, type: "totp", friendly_name: f.friendly_name, totp: { qr_code: qr, secret: MFA_SECRET, uri: uri } }, error: null });
+      },
+      challenge: function (opts) {
+        var id = opts && opts.factorId;
+        var f = mfaOf(CURRENT_UID).factors.filter(function (x) { return x.id === id; })[0];
+        if (!f) return Promise.resolve({ data: null, error: { message: "Factor not found", status: 404, code: "mfa_factor_not_found" } });
+        var ch = { id: nid("mfch-"), type: "totp", expires_at: Math.floor(Date.now() / 1000) + 300 };
+        MFA_CHALLENGES[ch.id] = f.id;
+        return Promise.resolve({ data: ch, error: null });
+      },
+      verify: function (opts) {
+        var o = opts || {};
+        var st = mfaOf(CURRENT_UID);
+        var f = st.factors.filter(function (x) { return x.id === o.factorId; })[0];
+        if (!f) return Promise.resolve({ data: null, error: { message: "Factor not found", status: 404, code: "mfa_factor_not_found" } });
+        if (!o.challengeId || MFA_CHALLENGES[o.challengeId] !== f.id) {
+          return Promise.resolve({ data: null, error: { message: "MFA challenge not found", status: 404, code: "mfa_challenge_expired" } });
+        }
+        if (String(o.code || "") !== MFA_CODE) {
+          return Promise.resolve({ data: null, error: { message: "Invalid TOTP code entered", status: 422, code: "mfa_verification_failed" } });
+        }
+        delete MFA_CHALLENGES[o.challengeId];
+        f.status = "verified"; f.updated_at = iso(new Date());
+        st.aal = "aal2";
+        var s = session();
+        authListeners.forEach(function (cb) { try { cb("MFA_CHALLENGE_VERIFIED", s); } catch (e) { } });
+        return Promise.resolve({ data: { access_token: s.access_token, token_type: "bearer", expires_in: 3600, expires_at: s.expires_at, refresh_token: s.refresh_token, user: s.user }, error: null });
+      },
+      unenroll: function (opts) {
+        var id = opts && opts.factorId;
+        var st = mfaOf(CURRENT_UID);
+        var f = st.factors.filter(function (x) { return x.id === id; })[0];
+        if (!f) return Promise.resolve({ data: null, error: { message: "Factor not found", status: 404, code: "mfa_factor_not_found" } });
+        st.factors = st.factors.filter(function (x) { return x.id !== id; });
+        return Promise.resolve({ data: { id: id }, error: null });
+      },
+      listFactors: function () {
+        if (SIGNED_OUT) return Promise.resolve({ data: null, error: { message: "Auth session missing!", status: 400 } });
+        var all = clone(mfaOf(CURRENT_UID).factors);
+        /* the real client's `totp` list is the VERIFIED totp factors only; `all` is everything */
+        return Promise.resolve({ data: { all: all, totp: all.filter(function (f) { return f.factor_type === "totp" && f.status === "verified"; }), phone: [] }, error: null });
+      },
+      getAuthenticatorAssuranceLevel: function () {
+        if (SIGNED_OUT) return Promise.resolve({ data: { currentLevel: null, nextLevel: null, currentAuthenticationMethods: [] }, error: null });
+        var st = mfaOf(CURRENT_UID);
+        var next = !MFA_STALE[CURRENT_UID] && mfaVerifiedFactors(CURRENT_UID).length ? "aal2" : st.aal;   /* R86 · V3 — see MFA_STALE */
+        var methods = st.aal === "aal2" ? [{ method: "password", timestamp: 0 }, { method: "totp", timestamp: 0 }] : [{ method: "password", timestamp: 0 }];
+        return Promise.resolve({ data: { currentLevel: st.aal, nextLevel: next, currentAuthenticationMethods: methods }, error: null });
+      }
     },
     signOut: function () {
       SIGNED_OUT = true;
@@ -6041,7 +6300,14 @@
       return Promise.resolve({ error: null });
     },
     resetPasswordForEmail: function () { return Promise.resolve({ data: {}, error: null }); },
-    updateUser: function () { return Promise.resolve({ data: { user: session() ? session().user : null }, error: null }); },
+    updateUser: function () {
+      /* R86 · V2 — GoTrue refuses a password/email change from an aal1 session when the user holds
+         a verified factor: the recovery flow must challenge first. */
+      if (mfaVerifiedFactors(CURRENT_UID).length && mfaOf(CURRENT_UID).aal !== "aal2") {
+        return Promise.resolve({ data: { user: null }, error: { message: "AAL2 session is required to update email or password when MFA is enabled", code: "insufficient_aal", status: 403 } });
+      }
+      return Promise.resolve({ data: { user: session() ? session().user : null }, error: null });
+    },
     refreshSession: function () { return Promise.resolve({ data: { session: session() }, error: null }); }
   };
 
@@ -6069,8 +6335,17 @@
      stub below, which now writes storage_path WITH the "client-docs/" prefix
      — see DOC_STORAGE_BUCKET and the file banner at the top of this file.
      ======================================================================= */
+  /* R86 · V — production's storage.objects policies are is_staff()-gated (db/r84/14), so an
+     enforced persona at aal1 (or any non-staff caller) is refused on every object call. One shape
+     for all of them: the Storage API's RLS refusal. */
+  var STORAGE_DENIED = { statusCode: "403", error: "Unauthorized", message: "new row violates row-level security policy" };
   var storage = {
     from: function (bucket) {
+      if (!isStaff()) {
+        var deny = function () { return Promise.resolve({ data: null, error: clone(STORAGE_DENIED) }); };
+        return { upload: deny, createSignedUrl: deny, download: deny, remove: deny, list: deny,
+          getPublicUrl: function (path) { return { data: { publicUrl: "about:blank#mock-public/" + encodeURIComponent(path) } }; } };
+      }
       return {
         upload: function (path, file, opts) {
           storageFiles[bucket + "/" + path] = { size: file && file.size, type: (opts && opts.contentType) || "application/pdf", at: iso(NOW) };
@@ -7792,6 +8067,7 @@
     b.forEach(function (v, k) { if (!(k in form)) form[k] = v; });
     return form;
   }
+  var MFA_GATED_EDGE = ["invite-user", "send-sms", "owner-digest", "outlook-sync", "assistant", "parse-offer", "ai-import"];   /* R86 · V1 */
   var realFetch = window.fetch ? window.fetch.bind(window) : null;
   window.fetch = function (input, init) {
     var url = typeof input === "string" ? input : (input && input.url) || "";
@@ -7799,6 +8075,15 @@
     if (!m) return realFetch ? realFetch(input, init) : Promise.reject(new Error("fetch unavailable"));
     var fnName = m[1];
     var handler = EDGE[fnName];
+    /* R86 · V1 — every edge function that acts FOR A SIGNED-IN USER (edge/invite-user-v6,
+       send-sms-v5, owner-digest-v7, outlook-sync-v6, assistant-v9, parse-offer-v6, ai-import-v4)
+       calls session_ok() through the caller's own JWT right after resolving the user and refuses
+       with { error: "second factor required" } 403 when it is false. The mock's handlers are only
+       ever reached by the signed-in persona (there is no cron-key path through this client), so
+       the gate sits here, once, in front of exactly those seven. */
+    if (handler && MFA_GATED_EDGE.indexOf(fnName) >= 0 && !sessionOk()) {
+      handler = function () { return { __status: 403, error: "second factor required" }; };
+    }
     var raw = init && init.body;
     var form = parseForm(raw);
     var body = null;
@@ -7948,6 +8233,19 @@
          This proves the part that DOES matter for "sticks across users": the row lives in the
          shared table, gated only by the M4 RLS policy ("dup dismiss read staff" — any staff role),
          not by who inserted it. CURRENT_UID is restored immediately after. */
+      /* R86 — drive a persona's MFA state: `{ factors: [...] | verified: true|false, aal: "aal1"|"aal2" }`.
+         Busts the app's session Book (an aal change is a different reader — a snapshot taken at
+         aal2 must not survive a drop to aal1). Returns the state it set. */
+      setMfa: function (personaKey, state) {
+        var st = clone(mfaPatch(personaKey, state));
+        try { if (window.__bustBookCache) window.__bustBookCache("delete"); } catch (_) { /* app not booted yet */ }
+        return st;
+      },
+      mfaState: function (personaKey) { return clone(mfaOf(personaKey || CURRENT_UID)); },
+      /* R86 · V3 — make getAuthenticatorAssuranceLevel() report a STALE stored session (no factor)
+         while listFactors() still shows the verified one. */
+      setStaleFactors: function (personaKey, on) { MFA_STALE[personaKey] = !!on; return MFA_STALE[personaKey]; },
+      mfaCode: MFA_CODE,
       readTableAs: function (personaKey, table) {
         var prev = CURRENT_UID;
         CURRENT_UID = personaKey;

@@ -5567,3 +5567,22 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .em-prev-unsub { color: var(--muted, #6b7280); font-size: 12px; margin: 10px 0 0; }
 .em-morning-h { margin: 0 0 6px; }
 .em-morning .row-item .t .em-morning-n { margin-left: 6px; }
+
+/* ==========================================================================
+   R86 · A5 — TWO-STEP SIGN-IN. The challenge / enrolment screens live in the
+   login card (same classes as the password form); the enrol block is reused
+   in the Settings overlay. Existing tokens only.
+   ========================================================================== */
+.mfa-lead { margin: -14px 0 16px; }
+.login-card .mfa-lead { color: var(--text); font-size: 13px; line-height: 1.5; }
+.mfa-qr { display: flex; justify-content: center; margin: 4px 0 12px; }
+.mfa-qr img { width: 164px; height: 164px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--white); padding: 6px; }
+.mfa-secret-line { font-size: 12px; margin: 0 0 14px; word-break: break-all; }
+.mfa-secret { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; letter-spacing: .12em; background: var(--light); border: 1px solid var(--border); border-radius: 6px; padding: 2px 6px; user-select: all; }
+input.mfa-code { font-size: 22px; letter-spacing: .35em; text-align: center; font-variant-numeric: tabular-nums; }
+.login-card input.mfa-code { font-size: 22px; }
+.mfa-help { font-size: 12px; margin: 12px 0 0; }
+#security-panel .sec-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 8px; }
+#security-panel .sec-note { flex-basis: 100%; margin: 0; }
+#security-panel .sec-team-h { margin: 20px 0 4px; font-size: 14px; }
+#security-panel .sec-team-tbl { margin-top: 8px; }

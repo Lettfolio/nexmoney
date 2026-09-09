@@ -678,6 +678,20 @@ async function setHold(page, value) {
         document.querySelector("#login-form").requestSubmit();
       });
       await wait(page, 2400);
+      /* R86 contract change — Kim is an ADMIN, an enforced role with a verified authenticator, and a
+         fresh password sign-in lands at aal1: the login card is now the CHALLENGE screen and the
+         session is not usable (and the strip stays up, correctly) until the 6-digit code is
+         verified. Same handler, same submit path — one more step before showApp. "000000" is the
+         mock's fixed code (HARNESS.md R86). */
+      const challenged = await page.evaluate(() => ({
+        code: !!document.querySelector("#mfa-code"),
+        strip: !document.querySelector("#signedout-strip").classList.contains("hidden"),
+      }));
+      ok("D3 · R86: a fresh sign-in as an enforced role meets the challenge screen first — and the strip stays up until the code is verified",
+        challenged.code === true && challenged.strip === true, JSON.stringify(challenged));
+      await page.fill("#mfa-code", "");
+      await page.type("#mfa-code", "000000", { delay: 15 });   // R86 — the sixth digit auto-submits
+      await wait(page, 2400);
       const back = await page.evaluate(() => ({
         strip: document.querySelector("#signedout-strip").classList.contains("hidden"),
         modalOpen: !document.querySelector("#modal-backdrop").classList.contains("hidden"),

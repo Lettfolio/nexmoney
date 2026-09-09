@@ -144,7 +144,119 @@ node tests/r82_correct.js
 node tests/r82_mock.js
 ```
 node tests/r85_book.js
+node tests/r86_mfa.js
 ```
+
+**R86 notes — "Second factor", TOTP two-step sign-in (`tests/r86_mfa.js` 123, incl. the R86 · V verifier round).** The contract is
+R86-DESIGN.md; the server side is `db/r86/01_session_ok.sql` (settings seed + `session_ok()` +
+`is_staff()/is_admin_or_owner()/is_owner()` re-created as role AND `session_ok()`),
+`02_rpc_guards.sql` (fourteen live RPC bodies, VERBATIM, one guard each tagged `-- R86`) and
+`03_get_team_mfa.sql`. Decision (Daniel, 8 Sep 2026): ENFORCED for owner + admin, OPTIONAL for
+advisers; a lost phone = the Owner removes the factor in the Supabase dashboard.
+
+  - **THE SERVER GATE.** `public.session_ok()`: role null → false; role not in
+    `settings.mfa_enforced_roles` (comma list, trimmed, lower-cased) → true; enforced →
+    `coalesce(auth.jwt()->>'aal','aal1') = 'aal2'`. It sits inside the three RLS helpers, so all
+    63 policies gate on it, and inside every RPC caller guard (get_briefing, get_reports,
+    get_protection_pipeline(+_total), get_data_quality, get_staff_activity, get_dashboard_counts,
+    find_duplicate_clients, reassign_holdings, has_bank_details, mark_tour_seen, and — on their
+    SIGNED-IN branch only, the cron/service-role path with `auth.uid()` null untouched —
+    run_watchtower, queue_automated_emails and queue_comms_extras (the last two gained the
+    run_watchtower-pattern guard as their first statement, R86 · V P2; VERIFY expects 18 names). Each keeps its own refusal shape ('[]' / '{}' / {"total":0} / 42501 / false / no-op).
+    `my_role()` is deliberately NOT gated — the app learns the role at aal1 to pick a screen.
+    **RULE FROM HERE ON: any NEW RPC guard must include `public.session_ok()`** (and the mock
+    mirror must call `isStaff()` / `isAdminOrOwner()` / `isOwner()`, which carry it).
+  - **DEPLOY ORDER (R86 · V, read before applying db/r86).** CLIENT FIRST, THEN THE SQL. The
+    SQL makes every owner/admin session at aal1 read NOTHING; only the R86 client knows to show
+    the enrolment screen. Apply 01 with the settings value `''` (enforcement OFF), push the
+    client, then flip the row to `'owner,admin'`. The seven gated edge functions (below) deploy
+    after 01 — they call `session_ok()` and would 42883 on a database without it.
+  - **THE BREAK-GLASS — and its limits.** `update settings set value = '' where key =
+    'mfa_enforced_roles';` — enforcement off, every session reads as before R86. (b) It unblocks
+    users WITHOUT a factor only: a user who already holds a verified factor is still challenged
+    at every sign-in (GoTrue's aal rule — `nextLevel` is aal2 whenever a verified factor exists,
+    and the client challenges on that) until the factor is removed in the dashboard. (c)
+    Removing a factor in the dashboard does NOT revoke an existing aal2 JWT (up to an hour) —
+    for a compromised device also "Sign out user from all sessions" (Auth → Users). (d) A TYPO
+    in the settings value fails OPEN for the misspelt role (it is simply "not enforced"): after
+    any edit run the parsed-list VERIFY in `01_session_ok.sql`, which prints the list exactly as
+    `session_ok()` reads it (trimmed, lower-cased). In the mock: set the `mfa_enforced_roles`
+    row's value on `__mock.db.settings` (r86_mfa §F), or pre-load with
+    `window.__mockSettingsPatch = { mfa_enforced_roles: "…" }`.
+  - **EDGE FUNCTIONS (R86 · V1).** Every edge function that acts for a SIGNED-IN user calls
+    `session_ok()` through the caller's own JWT right after resolving the user and refuses with
+    `{ error: "second factor required" }` 403 before doing anything: `edge/invite-user-v6.ts`,
+    `send-sms-v5.ts`, `owner-digest-v7.ts` (manual trigger only — the cron-key path never
+    reaches the gate), `outlook-sync-v6.ts`, `assistant-v9.ts`, `parse-offer-v6.ts`,
+    `ai-import-v4.ts` — each VERBATIM from its predecessor plus the gate (header "R86 · V1").
+    Verify a deploy by reading the function back. The mock gates the same seven names in its
+    fetch dispatcher (`MFA_GATED_EDGE`) with the same 403 shape (r86_mfa §H).
+  - **THE CLIENT (app.js `R86 · A<n>` / `R86 · V<n>` tags).** `enterApp(session)` sits between
+    the session and `showApp()` on BOTH doors (init()'s restored session and the sign-in submit):
+    (a) FRESH TRUTH FIRST (V3): `listFactors()` says a verified factor exists and the session is
+    not at aal2 → `showMfaChallenge` (6-digit code, auto-submit on the sixth digit, "Lost your
+    authenticator? Ask Daniel", Sign out = reload) — `getAuthenticatorAssuranceLevel()` reads the
+    STORED session's factors and is stale until refresh, so it is never the deciding read; (b)
+    else `resolveMyRole` (non-staff → showApp's own gate signs them out) and THE SERVER DECIDES
+    (V4): `db.rpc("session_ok")` — true → showApp; false + no factor → `showMfaEnrol` (QR `<img>`
+    from the SVG data URI + the secret in a `<code>` + code; unverified leftovers unenrolled
+    first); false + factor → challenge; the function MISSING (42883, pre-R86 database) → straight
+    in, exactly as before R86. `MFA_ENFORCED_ROLES` survives ONLY for the Security card's copy.
+    RECOVERY (V2): `showRecovery(session)` challenges first when a verified factor exists and the
+    recovery session is aal1 (GoTrue refuses `updateUser({password})` there with
+    `insufficient_aal`), then paints the new-password card (`paintRecoveryCard`). Both screens render INSIDE `#login-form` like
+    showRecovery; `showLogin()` now restores the password form (`LOGIN_CARD_HTML`, captured at
+    eval) so a session that ends after a takeover never leaves a stale code screen. Settings →
+    **"Security" card (`#security-panel`, every role; no jump-nav chip — r37 pins the chip set)**:
+    own status (on since / not set up); advisers get Set up (house overlay, `#ovl-mfa-code`) and
+    Remove (fresh code → challenge + verify → unenroll); enforced roles get status + the
+    dashboard-reset note and NO Remove; Owner/Admin get the team table from
+    `db.rpc("get_team_mfa")` (`#sec-team-tbl`) or one honest "isn't available" line
+    (`#sec-team-note`) on 42883 / refusal — no toast, no ERROR_LOG entry. The secret never
+    reaches a toast or a log, and the enrol card is replaced before showApp paints.
+  - **MOCK MFA MODEL (`admin/mock-supabase.js`, block by PERSONAS).** `MFA[persona] = { factors:
+    [{id, status, friendly_name, factor_type, created_at, updated_at}], aal }`. **PERSONA
+    DEFAULTS: p4 Daniel + p1 Kim = one verified factor + aal2 (a `?as=` boot is a RESTORED,
+    already-verified session — which is why the 89 earlier suites are untouched); p2/p3 advisers
+    + p5 = no factor, aal1.** `signInWithPassword` ALWAYS lands at aal1 (a password proves one
+    factor) — the one behaviour an old suite could feel: r76_intake §D3 signs back in as Kim
+    through the form and now meets the challenge first (re-pointed, commented R86). `auth.mfa` =
+    enroll / challenge / verify / unenroll / listFactors (`totp` = VERIFIED totp factors only,
+    `all` = everything, as supabase-js does) / getAuthenticatorAssuranceLevel (`nextLevel` =
+    aal2 iff a verified factor exists). Fixed code **"000000"** (`__mock.mfaCode`); anything
+    else answers `{ error: { message: "Invalid TOTP code entered", status: 422, code:
+    "mfa_verification_failed" } }`; the secret is **"MOCKSECRET"**; enroll answers `{ id, type,
+    totp: { qr_code: "data:image/svg+xml;utf8,…", secret, uri } }`. `sessionOk()` mirrors the SQL
+    line for line off the `mfa_enforced_roles` settings row (seeded "owner,admin");
+    `isStaff/isAdminOrOwner/isOwner` = role AND sessionOk(); `readFilter` answers `[]` on every
+    staff table (profiles: own row only) and `writePolicy` 42501s every write for a non-staff
+    caller — which an enforced persona at aal1 now IS; every RPC mirror guards through the same
+    three helpers (the ones that had no guard at all — get_briefing, get_reports,
+    get_data_quality, get_protection_pipeline(+_total), find_duplicate_clients — gained prod's,
+    with prod's refusal shape). `rpc_get_team_mfa` + `RPC_ARGS.get_team_mfa: []` + migration flag
+    **`m14`** (`setMigrations({m14:false})` ⇒ 42883, the card's "not available" path);
+    `rpc_session_ok` (the SQL, line for line) under flag **`m15`** (off ⇒ 42883 ⇒ the app's
+    pre-R86 behaviour, r86_mfa §J2). `queue_automated_emails` / `queue_comms_extras` answer `{}`
+    to a non-staff signed-in caller (P2). `storage.from(bucket)` refuses every object call
+    (`{ statusCode: "403", error: "Unauthorized", … }`) for a non-staff caller — prod's
+    objects policies are is_staff()-gated. `auth.updateUser` refuses at aal1 with a verified
+    factor (`insufficient_aal`, 403). `readTableAs(persona, table)` keeps its meaning and now
+    honours that persona's aal.
+  - **HOOKS.** Pre-load seeds in an addInitScript (the R82 · B1 __mockMigrations idiom — the
+    only way to meet the challenge / enrol screen on a RESTORED session): `window.__mockMfa = {
+    p4: { aal: "aal1" }, p1: { factors: [], aal: "aal1" } }`, `window.__mockStale = { p4: true }`
+    (the aal call reports NO factor while listFactors shows it — V3), `window.__mockSettingsPatch
+    = { mfa_enforced_roles: "owner,admin,adviser" }`. After load: `window.__mock.setMfa(persona,
+    { factors | verified: true|false, aal })` (busts the Book as a delete — a different aal is a
+    different reader), `__mock.mfaState(persona)`, `__mock.setStaleFactors(persona, bool)`,
+    `__mock.mfaCode`.
+  - **SEAMS, named:** (1) a `?as=` boot never exercises the challenge on its own — a suite that
+    wants it seeds aal1 or signs in through the form; (2) the enforced-roles read at aal1 cannot
+    tell "row hidden by RLS" from "row absent on a pre-R86 database" — both fall back to the
+    mirror, so on a database without db/r86 an owner is asked to enrol although the server would
+    not insist (apply 01 with the client, as the round ships); (3) a settings-row change
+    mid-session (break-glass flipped) is felt on the next sign-in, not the open one — the R76
+    strip / empty states already cover a session the server has stopped answering.
 
 **R85 · A notes — "One book", agent A (`tests/r85_book.js` 97 = §B–§G 95 green + §A's two
 walk-count assertions, RED BY DESIGN until the consumer agents land).** The foundation the
@@ -5295,6 +5407,10 @@ test scripts to reach into the mock without going through the UI:
   `__bookPeek()` — R85's session-book seams (reports-money.js, same block);
   `window.__mock.failNextSelect(table[, {message, code}])` — the next select on
   that table fails once (R85 · A4). See the R85 · A notes.
+- `window.__mockMfa` / `__mockStale` / `__mockSettingsPatch` (pre-load seeds),
+  `window.__mock.setMfa(persona, state)` / `mfaState(persona)` /
+  `setStaleFactors(persona, bool)` / `mfaCode` — R86's per-persona MFA state
+  (factors + aal). See the R86 notes.
 
 ## Standing rules
 
@@ -5324,6 +5440,11 @@ test scripts to reach into the mock without going through the UI:
   in a battery log is a REAL ghost-column bug in the caller — fix the caller or fix the
   registry, never reach for an allowlist. `window.__mockStrict = false` disables it wholesale
   and exists only for a deliberate one-probe exception that flips it straight back.
+- **Every RPC guard carries `public.session_ok()` (R86).** A new SECURITY DEFINER
+  function that checks the caller's role must AND it with `public.session_ok()`, and its
+  mock mirror must refuse through `isStaff()` / `isAdminOrOwner()` / `isOwner()` (which
+  carry the mirror). A guard without it lets an owner/admin session that has not verified
+  its authenticator read through the RPC door what RLS already refuses at the table.
 - **Mock files are excluded from the live deploy.** `admin/mock.html` and
   `admin/mock-supabase.js` (and now `tests/`, `smoke.js`, `HARNESS.md`,
   `shots/`) are listed in `.vercelignore` so none of the harness ships to the

@@ -1337,6 +1337,19 @@
         <button type="button" class="btn btn-sm btn-primary" id="save-my-details-btn">Save my details</button>
         <span id="my-details-saved" class="saved-msg hidden">Saved ✓</span>
       </div>
+      <!-- R86 · A4 — SECURITY. Every signed-in staff member's own two-step sign-in status
+           (renderSecurityCard). Advisers set up / remove an authenticator here; the enforced
+           roles (Owner, Administrator) see status only — their factor is set up at sign-in and
+           removed only by the Owner in the Supabase dashboard. #security-team is the Owner /
+           Administrator roster column from get_team_mfa(). Deliberately OUTSIDE #settings-form
+           (nothing here is a settings row) and with NO jump-nav chip (r37 pins the chip set
+           per role; it sits directly under My details, one scroll from that chip). -->
+      <div class="panel hidden" id="security-panel" style="margin-top:24px;">
+        <h3>Security</h3>
+        <p class="panel-sub">Two-step sign-in: a 6-digit code from an authenticator app on your phone, asked for after your password. It is what stops a stolen or reused password opening the whole client book.</p>
+        <div id="security-mfa"></div>
+        <div id="security-team" class="hidden"></div>
+      </div>
 
       <div class="panel" style="margin-top:24px;" id="introducers-panel">
         <h3>Introducers</h3>
@@ -1521,7 +1534,7 @@
      R81 · A3 — NX_BUILD_TAG below is the deploy handshake: each JS file ends by stamping its own
      window.__nxTag_*, and app.js's boot compares all four. EVERY round that edits ANY of
      index.html / core.js / reports-money.js / app.js bumps the tag IN ALL FOUR PLACES. -->
-<script>window.NX_BUILD_TAG = "r85";</script>
+<script>window.NX_BUILD_TAG = "r86";</script>
 <script src="/admin/core.js"></script>
 <script src="/admin/reports-money.js"></script>
 <script src="/admin/app.js"></script>
