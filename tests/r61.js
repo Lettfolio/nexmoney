@@ -142,7 +142,9 @@ async function boot(browser, persona) {
   await pc.waitForTimeout(1800);
   const c = await pc.evaluate(() => {
     const list = document.querySelector("#ret-rates-list");
-    const sub = document.querySelector("#ret-rates-sub")?.textContent || "";
+    /* R87 · book (C2): the money basis moved from #ret-rates-sub (now the one ≤25-word line) into
+       the panel's closed howFold, as #ret-rates-money-basis — same sentence, said once. */
+    const sub = document.querySelector("#ret-rates-money-basis")?.textContent || "";
     const endedRows = list ? list.querySelectorAll(".ret-group-h.ret-g-ended").length : 0;
     const soonHead = list ? list.querySelectorAll(".ret-group-h.ret-g-soon").length : 0;
     // the per-row "≈ estimate" marker on an uplift figure is row-specific and stays;
@@ -156,7 +158,7 @@ async function boot(browser, persona) {
   });
   ok("C1 · the Ended group head wears its red class (and Soon its amber, when present)", c.endedRows >= 1 || c.soonHead >= 1, JSON.stringify(c));
   ok("C2 · NO row repeats the money basis any more", c.rowBasis === 0, `rowBasis=${c.rowBasis}`);
-  ok("C3 · the basis is said once, in the panel subtitle", /value at risk/.test(c.sub) && /proxy/.test(c.sub), c.sub.slice(0, 160));
+  ok("C3 · the basis is said once, in the panel's fold (R87)", /value at risk/.test(c.sub) && /proxy/.test(c.sub), c.sub.slice(0, 160));
   ok("C4 · long-ended rates read in months/years, not day counts", c.moneyRows === 0 || c.humanised || c.endedCount === 0, JSON.stringify({ humanised: c.humanised, endedCount: c.endedCount }));
   ok("C5 · year sub-heads render inside a long Ended group (date sort)", c.endedCount <= 8 || c.yearHeads.length >= 1, JSON.stringify(c.yearHeads));
   ok("C6 · no page errors on Retention", pc.__err.filter((e) => !/ERR_TUNNEL|Failed to fetch|sheetjs/i.test(e)).length === 0, pc.__err.join("|").slice(0, 200));

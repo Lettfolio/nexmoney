@@ -137,7 +137,7 @@ const seedBank = (page) => page.evaluate(async () => {
   if (error) throw new Error("bank seed: " + error.message);
 });
 /* Fire a stage move WITHOUT awaiting it (an overlay may be about to open) and stash the promise. */
-const fireMove = (page, caseId, stage) => page.evaluate(({ id, s }) => { window.__r76mv = window.moveCaseToStage(id, s); }, { id: caseId, s: stage });
+const fireMove = (page, caseId, stage) => page.evaluate(({ id, s }) => { window.__r76mv = window.moveCaseToStage(id, s, { promptStageEntry: false /* R87 · slice B: this suite measures the Completed overlay and the reopen gate; it opts out of the (now default) stage-entry prompt */ }); }, { id: caseId, s: stage });
 const moveResult = (page) => page.evaluate(() => window.__r76mv);
 
 (async () => {
@@ -245,10 +245,17 @@ const moveResult = (page) => page.evaluate(() => window.__r76mv);
       (await page.evaluate((id) => document.querySelector(`#board .card[data-id="${id}"]`).dataset.stage, c.caseId)) === "application");
     // A colleague advances the case while this board sits stale.
     await page.evaluate(async (id) => { await window.__mockDb.from("cases").update({ stage: "offer" }).eq("id", id); }, c.caseId);
-    await page.click(`#board .card[data-id="${c.caseId}"] .card-advance`);
+    /* R87 · slice B (panel 03 #1): the card's hover-only "→" is gone — the card has ONE move control,
+       the stage <select> (it prompts now, like every move; the stale guard fires before any prompt).
+       Driven the way its inline handler is driven, exactly as the second half of this section does. */
+    await page.evaluate((id) => {
+      const s = document.querySelector(`#board .card[data-id="${id}"] .card-stage-move`);
+      s.value = "offer";
+      s.dispatchEvent(new Event("change"));
+    }, c.caseId);
     await wait(page, 1200);
     const t1 = await toastText(page);
-    ok("B2a · the stale Advance → is refused with the refreshing toast",
+    ok("B2a · the stale card move (select → Offer) is refused with the refreshing toast",
       /This case moved to Offer since this board loaded — refreshing the board/.test(t1), t1);
     eq("B2b · …and the case was NOT dragged backwards", (await caseRow(page, c.caseId)).stage, "offer");
     await wait(page, 1600);   // the guard's own loadPipeline() repaint

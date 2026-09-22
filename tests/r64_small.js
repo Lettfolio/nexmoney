@@ -232,6 +232,7 @@ async function setSettingLive(page, key, value) {
         await window.__reloadSettings();
       });
       page.__dialogs = [];
+      await page.evaluate(() => { document.querySelector("#pipe-bulk-more").open = true; });   // R87 · slice B: verb is inside More ▾
       await page.click("#pipe-bulk-rate");
       await wait(page, 2000);
 
@@ -281,6 +282,7 @@ async function setSettingLive(page, key, value) {
       const before = await reminderRows(page);
       for (const id of ids) await page.check(`#pipe-table .bulk-cb[data-id="${id}"]`);
       page.__dialogs = [];
+      await page.evaluate(() => { document.querySelector("#pipe-bulk-more").open = true; });   // R87 · slice B: verb is inside More ▾
       await page.click("#pipe-bulk-rate");
       await wait(page, 1600);
 

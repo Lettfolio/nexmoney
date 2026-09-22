@@ -149,7 +149,7 @@ const openCase = async (page, caseId) => {
   await wait(page, 1100);
 };
 const move = async (page, caseId, stage, ms) => {
-  const r = await page.evaluate(({ id, s }) => window.moveCaseToStage(id, s, {}), { id: caseId, s: stage });
+  const r = await page.evaluate(({ id, s }) => window.moveCaseToStage(id, s, { promptStageEntry: false /* R87 · slice B: headless call opts out of the (now default) stage-entry prompt */ }), { id: caseId, s: stage });
   await wait(page, ms == null ? 1400 : ms);
   return r;
 };
@@ -344,12 +344,16 @@ function docSuggested(docsListRaw, kind) {
       await pipelineTable(page, "R71Pb");
       const ticked = await tickRows(page, [a1.caseId, a2.caseId, a3.caseId, a4.caseId]);
       ok("A0 · fixture — all four seeded cases are selectable in the table", ticked === 4, String(ticked));
-      ok("A0b · the bulk bar carries the “Apply stage playbooks” button", await page.$("#pipe-bulk-playbook") !== null);
-      ok("A0c · …and a .panel-sub sentence explaining what the bar's verbs do",
-        await page.$eval("#pipe-bulk-sub", (e) => /back-fill|send nothing/i.test(e.textContent)).catch(() => false));
+      /* R87 · slice B (panel 03 #5): the two import-era back-fill verbs are OFF the pipeline bulk bar
+         (it is one row: move · assign · task · More ▾ · clear) and the ⓘ paragraph is gone. The
+         runners are exported on window (bulkApplyPlaybooks / bulkBuildChecklists, reading the same
+         pipeSel selection) for a one-off Data health action — this suite drives them from there. */
+      ok("A0b · the “Apply stage playbooks” verb is off the bar (R87) …", await page.$("#pipe-bulk-playbook") === null);
+      ok("A0c · …and exported for Data health / this suite (window.bulkApplyPlaybooks)",
+        await page.evaluate(() => typeof window.bulkApplyPlaybooks === "function"));
 
       page.__dialogs.length = 0;
-      await page.click("#pipe-bulk-playbook");
+      await page.evaluate(() => { window.bulkApplyPlaybooks(); });   // R87 · slice B: off the bar, exported runner
       await wait(page, 2200);
       const ov = await overlay(page);
       ok("A1 · ONE overlay confirm opens (not a native dialog)", ov.open && ov.hasPlaybookOk, JSON.stringify(ov).slice(0, 200));
@@ -405,7 +409,7 @@ function docSuggested(docsListRaw, kind) {
       // A11 — idempotent. A second press over the same rows writes nothing and says so.
       page.__dialogs.length = 0;
       const before = (await tasksOf(page, a1.caseId)).length;
-      await page.click("#pipe-bulk-playbook");
+      await page.evaluate(() => { window.bulkApplyPlaybooks(); });   // R87 · slice B: off the bar, exported runner
       await wait(page, 2400);
       const ov2 = await overlay(page);
       ok("A11 · running it again finds nothing to write and never opens a confirm", !ov2.open, JSON.stringify(ov2).slice(0, 200));
@@ -442,10 +446,10 @@ function docSuggested(docsListRaw, kind) {
       await pipelineTable(page, "R71Dc");
       const ticked = await tickRows(page, [b1, b2, b3, b4, b5, b6].map((r) => r.caseId));
       ok("B0b · fixture — all six seeded cases are selectable", ticked === 6, String(ticked));
-      ok("B0c · the bulk bar carries the “Build checklists” button", await page.$("#pipe-bulk-checklists") !== null);
+      ok("B0c · the “Build checklists” verb is off the bar (R87) and exported", await page.$("#pipe-bulk-checklists") === null && await page.evaluate(() => typeof window.bulkBuildChecklists === "function"));
 
       page.__dialogs.length = 0;
-      await page.click("#pipe-bulk-checklists");
+      await page.evaluate(() => { window.bulkBuildChecklists(); });   // R87 · slice B: off the bar, exported runner
       await wait(page, 2400);
       const ov = await overlay(page);
       ok("B1 · ONE overlay confirm opens", ov.open && ov.hasDocsOk, JSON.stringify(ov).slice(0, 200));
@@ -504,7 +508,7 @@ function docSuggested(docsListRaw, kind) {
 
       // B9 — idempotent: the three cases it just built on are now "already has a checklist".
       page.__dialogs.length = 0;
-      await page.click("#pipe-bulk-checklists");
+      await page.evaluate(() => { window.bulkBuildChecklists(); });   // R87 · slice B: off the bar, exported runner
       await wait(page, 2400);
       ok("B9 · a second press finds nothing to build and opens no confirm", !(await overlay(page)).open);
       ok("B9b · …and says so", /Nothing to build/i.test(await toastText(page)), await toastText(page));
@@ -542,7 +546,7 @@ function docSuggested(docsListRaw, kind) {
       await pipelineTable(page, "R71Pt");
       const ticked = await tickRows(page, [c1, c2, c3, c4, c5].map((r) => r.caseId));
       ok("C0 · fixture — all five enquiry cases are selectable", ticked === 5, String(ticked));
-      await page.click("#pipe-bulk-playbook");
+      await page.evaluate(() => { window.bulkApplyPlaybooks(); });   // R87 · slice B: off the bar, exported runner
       await wait(page, 2200);
       ok("C0b · the confirm opens", (await overlay(page)).hasPlaybookOk);
       await page.click("#bulkpb-ok");
@@ -607,7 +611,7 @@ function docSuggested(docsListRaw, kind) {
       await pipelineTable(page, "R71Pt");
       await tickRows(page, [c1.caseId]);
       page.__dialogs.length = 0;
-      await page.click("#pipe-bulk-playbook");
+      await page.evaluate(() => { window.bulkApplyPlaybooks(); });   // R87 · slice B: off the bar, exported runner
       await wait(page, 2400);
       const ovC = await overlay(page);
       if (ovC.open) { await page.click("#bulkpb-ok"); await wait(page, 2200); }
@@ -673,7 +677,7 @@ function docSuggested(docsListRaw, kind) {
       // (e) and they ride the bulk verb, which is how the imported book actually gets them
       await pipelineTable(page, "R71File");
       await tickRows(page, [d4.caseId]);
-      await page.click("#pipe-bulk-playbook");
+      await page.evaluate(() => { window.bulkApplyPlaybooks(); });   // R87 · slice B: off the bar, exported runner
       await wait(page, 2200);
       ok("D6 · the bulk verb offers to write them onto a case that never moved", (await overlay(page)).hasPlaybookOk);
       await page.click("#bulkpb-ok");

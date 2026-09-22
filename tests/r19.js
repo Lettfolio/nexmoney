@@ -505,8 +505,14 @@ function monthIso(t0, deltaMonths, day, hour = 12) {
         a.winPct == null ? "—" : `${a.winPct}% (${a.term})`,
         a.medCycle == null ? "—" : `${a.medCycle}d`,
       ]));
+      /* R87 · owner-admin (05 #11): the board hides the administrator / no-access / Unassigned / empty rows behind
+         "Show all" on arrival. The full set — the contract this block pins — is what Show all shows, so press it
+         first (when it is offered; a fixture with no quiet rows has no button). Every row's arithmetic and the
+         fees-desc sort are unchanged. */
+      await page.evaluate(() => { const b = document.getElementById("report-mi-scoreboard-showall"); if (b && /Show all/.test(b.textContent)) b.click(); });
+      await wait(page, 500);
       const boardRowsTxt = await page.$$eval("#report-mi-scoreboard table tr", (trs) => trs.slice(1).map((tr) => [...tr.querySelectorAll("td")].map((td) => td.textContent.trim().replace(/\s+/g, " "))));
-      eq("C · scoreboard: adviser name/live/completed(period)/fees(period)/win rate(all-time)/median cycle(all-time), sorted by fees desc",
+      eq("C · scoreboard (Show all): adviser name/live/completed(period)/fees(period)/win rate(all-time)/median cycle(all-time), sorted by fees desc",
         boardRowsTxt, boardExpected);
       // Sort-by-fees-desc, and the Unassigned row, checked explicitly (redundant with the row-by-row
       // check above, but a direct, named assertion of the two behaviours SPEC19.md calls out).

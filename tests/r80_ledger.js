@@ -560,7 +560,7 @@ const promoterDom = (page) => page.evaluate(() => ({
     const page = await boot(browser, "p1");
     const gt = await mkClientCase(page, { first: "R80", last: "Undomove", kase: { stage: "fact_find" } });
     await goPage(page, "pipeline", 2000);
-    await page.evaluate((id) => window.moveCaseToStage(id, "decision_in_principle"), gt.caseId);
+    await page.evaluate((id) => window.moveCaseToStage(id, "decision_in_principle", { promptStageEntry: false /* R87 · slice B: headless call opts out of the (now default) stage-entry prompt */ }), gt.caseId);
     await wait(page, 1600);
     const moved = (await auditRowsFor(page, "cases", gt.caseId)).filter((r) => r.action === "update" && r.changes && r.changes.stage);
     ok("E2 · the move itself is an audited cases update (fact_find → DIP)",
@@ -578,7 +578,7 @@ const promoterDom = (page) => page.evaluate(() => ({
     console.log("\n— §E3 · the completion overlay audits, and email_queue never does (p4)");
     const page = await boot(browser, "p4");
     const gt = await mkClientCase(page, { first: "R80", last: "Completer", email: "r80.completer@example.com", kase: { stage: "exchange", rate_end_date: "2029-01-01" } });
-    await page.evaluate(({ id }) => { window.__r80mv = window.moveCaseToStage(id, "completed"); }, { id: gt.caseId });
+    await page.evaluate(({ id }) => { window.__r80mv = window.moveCaseToStage(id, "completed", { promptStageEntry: false /* R87 · slice B */ }); }, { id: gt.caseId });
     await page.waitForSelector("#stage-completed-ok", { timeout: 8000 });
     await page.click("#stage-completed-ok");
     await wait(page, 1600);

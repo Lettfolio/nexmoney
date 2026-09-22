@@ -58,6 +58,20 @@
    ========================================================================== */
 "use strict";
 
+/* R87 · slice B (panel 03 #8): the stage-entry overlays have two exits now — "Don't advance" (#se-cancel)
+   and "Save & advance" (#se-ok); "Skip — advance anyway" (#se-skip) is gone because an all-blank /
+   all-unticked Save was already the same answer. r87SkipEntry is what Skip meant: clear every field
+   and tick in the overlay, then Save. */
+async function r87SkipEntry(page) {
+  await page.evaluate(() => {
+    const box = document.querySelector("#overlay-modal");
+    box.querySelectorAll("input[type=checkbox]").forEach((i) => { i.checked = false; });
+    box.querySelectorAll("input:not([type=checkbox]), textarea").forEach((i) => { i.value = ""; });
+    box.querySelectorAll("select").forEach((sel) => { sel.value = ""; sel.dispatchEvent(new Event("change")); });
+  });
+  await page.click("#se-ok");
+}
+
 const { chromium } = require("playwright");
 const { spawn } = require("child_process");
 const http = require("http");
@@ -160,7 +174,7 @@ const openTitlesOf = async (page, caseId) =>
   (await tasksOf(page, caseId)).filter((t) => !t.done_at).map((t) => t.title).sort();
 
 const move = async (page, caseId, stage, ms) => {
-  const r = await page.evaluate(({ id, s }) => window.moveCaseToStage(id, s, {}), { id: caseId, s: stage });
+  const r = await page.evaluate(({ id, s }) => window.moveCaseToStage(id, s, { promptStageEntry: false /* R87 · slice B: headless call opts out of the (now default) stage-entry prompt */ }), { id: caseId, s: stage });
   await wait(page, ms == null ? 1200 : ms);
   return r;
 };
@@ -398,7 +412,7 @@ const dueFor = (offset, now) => dstr(now + offset * DAY_MS);
          DIP ends up holding Application work. This section is about DUPLICATES, so it answers
          "Move and keep them" — the case comes back carrying exactly what it carried, which is the
          state B2 measures. */
-      const b2back = page.evaluate(({ id, s }) => window.moveCaseToStage(id, s, {}), { id: b1.caseId, s: "enquiry" });
+      const b2back = page.evaluate(({ id, s }) => window.moveCaseToStage(id, s, { promptStageEntry: false /* R87 · slice B: headless call opts out of the (now default) stage-entry prompt */ }), { id: b1.caseId, s: "enquiry" });
       await wait(page, 900);
       ok("R74 · B2 · moving back a stage asks about the later stage's still-open steps",
         await page.evaluate(() => !!document.querySelector("#stage-back-keep")));
@@ -422,8 +436,8 @@ const dueFor = (offset, now) => dstr(now + offset * DAY_MS);
       /* R63 · H2 (merged in the same round): Advance into Fact Find on a case with no checklist now
          opens the document-checklist prompt first. "Skip — advance anyway" moves the case without
          writing a checklist — the playbook tasks below are H1b's, written on the move itself. */
-      ok("B3 · the Fact Find checklist prompt (R63 · H2) opened on Advance", !!(await page.$("#se-skip")));
-      await page.click("#se-skip").catch(() => {});
+      ok("B3 · the Fact Find checklist prompt (R63 · H2) opened on Advance", !!(await page.$("#se-ok")));   // R87 · slice B: #se-skip removed
+      await r87SkipEntry(page).catch(() => {});   // R87 · slice B: Skip → blank Save
       await wait(page, 2200);
       eq("B3 · advancing from the modal writes the Fact Find steps",
         await openTitlesOf(page, b3.caseId), pbTitles("fact_find", "purchase"));
@@ -462,7 +476,7 @@ const dueFor = (offset, now) => dstr(now + offset * DAY_MS);
          dialog is answered here — the same shape tests/r5_batch2.js uses for this flow. */
       const b6 = await mkClientCase(page, { first: "Dead", last: "NoTasks", case_kind: "purchase", stage: "fact_find", assigned_to: "p2" });
       const b6Before = (await tasksOf(page, b6.caseId)).length;
-      await page.evaluate((id) => { window.__r63move = window.moveCaseToStage(id, "not_proceeding", {}); }, b6.caseId);
+      await page.evaluate((id) => { window.__r63move = window.moveCaseToStage(id, "not_proceeding", { promptStageEntry: false /* R87 · slice B */ }); }, b6.caseId);
       await wait(page, 800);
       await page.selectOption("#lost-reason", "another_broker");
       await page.click("#lost-ok");

@@ -405,15 +405,21 @@ async function groundTruth(page) {
         ok(`R9-E4 · ${persona} · …naming the client on each`, hasAName(prot.text) >= 1, prot.text.slice(0, 160));
         ok(`R9-E4 · ${persona} · Protection shows no embed error`, !/more than one relationship/i.test(prot.text));
 
-        /* Emails */
+        /* Emails — R87 · slice B (panel 01 #3): Owner/Administrator only (PAGE_ROLE_GATE); an adviser
+           persona is bounced to Today, so the embed check runs only for roles that can open the page. */
         await goTo(pg, "emails", 1600);
         const em = await pg.evaluate(() => {
           const el = document.querySelector("#email-list");
-          return { text: el ? el.innerText : "", rows: el ? el.children.length : 0 };
+          const gated = document.querySelector("#page-emails").classList.contains("hidden") && !document.querySelector("#page-dashboard").classList.contains("hidden");
+          return { text: el ? el.innerText : "", rows: el ? el.children.length : 0, gated };
         });
+        if (persona === "p2" || persona === "p3") {
+          ok(`R9-E4 · ${persona} · Emails is gated for an adviser — bounced to Today (R87)`, em.gated, JSON.stringify(em));
+        } else {
         ok(`R9-E4 · ${persona} · Emails lists queued messages`, em.rows > 0, String(em.rows));
         ok(`R9-E4 · ${persona} · …naming the recipient`, hasAName(em.text) >= 1, em.text.slice(0, 160));
         ok(`R9-E4 · ${persona} · Emails shows no embed error`, !/more than one relationship/i.test(em.text));
+        }
 
         ok(`R9-E4 · ${persona} · no console errors across all five pages`, !pg.__err, JSON.stringify(pg.__err));
         await pg.close();

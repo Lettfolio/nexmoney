@@ -203,8 +203,10 @@ const readCase = (page, caseId) => page.evaluate(async (id) => {
            Open button opens the case scrolled onto its Documents checklist
        ======================================================================= */
     {
-      console.log("\n— §1a · DH waiting-docs row Open button → modal opens with #case-docs in view (p2)");
-      const page = await newPage(browser, "p2");
+      /* R87 · slice B (panel 01 #3): Data health is an Owner/Administrator page now (PAGE_ROLE_GATE),
+         so this section runs as p1 (admin) — the persona was incidental; the case stays p2's. */
+      console.log("\n— §1a · DH waiting-docs row Open button → modal opens with #case-docs in view (p1 — R87: DH is admin/owner)");
+      const page = await newPage(browser, "p1");
       const errBefore = (page.__err || []).length;
 
       const seed = await mkClientCase(page, {
@@ -284,7 +286,10 @@ const readCase = (page, caseId) => page.evaluate(async (id) => {
            and opening a <details>-wrapped target
        ======================================================================= */
     {
-      console.log("\n— §2 · Settings jump nav: owner 14 > admin 12 > adviser 9 chips, correct sets (p4/p1/p2)");
+      /* R87 · owner-admin (05 #12): the 14 per-section chips became the FIVE group headings (firm · automations ·
+         integrations · team · data), and an adviser's Settings is now My details + Security only, so their bar
+         has nothing to jump between and hides. The role rule is unchanged: chips are read off the rendered page. */
+      console.log("\n— §2 · Settings jump nav: owner 5 = admin 5 > adviser 0 chips (five group headings), correct sets (p4/p1/p2)");
       const readChips = async (page) => page.evaluate(() => {
         const bar = document.querySelector("#settings-jump");
         return {
@@ -300,45 +305,46 @@ const readCase = (page, caseId) => page.evaluate(async (id) => {
       const ownerChips = await readChips(owner);
       ok("§2a · owner: the jump bar is visible", ownerChips.barHidden === false, JSON.stringify(ownerChips));
       ok("§2a · owner: every chip id is settings-nav-<key>", ownerChips.idsMatch, JSON.stringify(ownerChips));
-      eq("§2a · owner sees all 14 sections", ownerChips.keys.slice().sort(),
-        ["advanced", "comms", "diag", "digest", "documents", "export", "history", "introducers", "mydetails", "outlook", "protection", "sms", "targets", "team"].slice().sort());
+      eq("§2a · owner sees the five group headings (R87: was 14 sections)", ownerChips.keys.slice().sort(),
+        ["automations", "data", "firm", "integrations", "team"]);
 
       const admin = await newPage(browser, "p1");
       const errAdmin = (admin.__err || []).length;
       await goto(admin, "settings", 1500);
       const adminChips = await readChips(admin);
-      eq("§2b · admin: 12 sections — export and history (both Owner-only) are the only two missing",
+      eq("§2b · admin: the same five groups — Data anchors on Diagnostics for them (export and history are Owner-only)",
         adminChips.keys.slice().sort(),
-        ["advanced", "comms", "diag", "digest", "documents", "introducers", "mydetails", "outlook", "protection", "sms", "targets", "team"].slice().sort());
+        ["automations", "data", "firm", "integrations", "team"]);
 
       const adv = await newPage(browser, "p2");
       const errAdv = (adv.__err || []).length;
       await goto(adv, "settings", 1500);
       const advChips = await readChips(adv);
-      eq("§2c · adviser: 9 sections — export/history/team/diag/targets are all gone too",
-        advChips.keys.slice().sort(),
-        ["advanced", "comms", "digest", "documents", "introducers", "mydetails", "outlook", "protection", "sms"].slice().sort());
+      eq("§2c · adviser: no chips — their Settings is My details + Security only (R87 · 01 #3), so the bar hides",
+        { keys: advChips.keys, barHidden: advChips.barHidden }, { keys: [], barHidden: true });
 
-      ok("§2d · owner > admin > adviser, strictly", ownerChips.keys.length > adminChips.keys.length && adminChips.keys.length > advChips.keys.length,
+      ok("§2d · owner ≥ admin > adviser", ownerChips.keys.length >= adminChips.keys.length && adminChips.keys.length > advChips.keys.length,
         JSON.stringify({ owner: ownerChips.keys.length, admin: adminChips.keys.length, adviser: advChips.keys.length }));
 
       /* Clicking a plain (non-<details>) chip scrolls its section into view. */
       const scrollRes = await owner.evaluate(async () => {
-        const before = document.querySelector("#set-sec-documents").getBoundingClientRect().top;
-        document.getElementById("settings-nav-documents").click();
+        // R87: the plain chip is "Automations", anchored on the Stage tasks heading.
+        const before = document.querySelector("#set-sec-stage-tasks").getBoundingClientRect().top;
+        document.getElementById("settings-nav-automations").click();
         await new Promise((r) => setTimeout(r, 1200));
-        const after = document.querySelector("#set-sec-documents").getBoundingClientRect().top;
+        const after = document.querySelector("#set-sec-stage-tasks").getBoundingClientRect().top;
         const active = [...document.querySelectorAll("#settings-jump-chips .seg-btn.active")].map((b) => b.id);
         return { before, after, active };
       });
       ok("§2e · clicking a chip scrolls its target near the top of the viewport", scrollRes.after < 250, JSON.stringify(scrollRes));
-      eq("§2f · the clicked chip becomes the sole active one", scrollRes.active, ["settings-nav-documents"]);
+      eq("§2f · the clicked chip becomes the sole active one", scrollRes.active, ["settings-nav-automations"]);
 
       /* Clicking a chip whose target lives inside a collapsed <details> opens that details first. */
       const beforeOpen = await owner.evaluate(() => document.getElementById("set-sec-advanced").open);
       eq("fixture · the Advanced accordion starts collapsed", beforeOpen, false);
       const detailsRes = await owner.evaluate(async () => {
-        document.getElementById("settings-nav-outlook").click();
+        // R87: the <details>-wrapped target is the Advanced fold itself, under the "Integrations" chip.
+        document.getElementById("settings-nav-integrations").click();
         await new Promise((r) => setTimeout(r, 1200));
         const det = document.getElementById("set-sec-advanced");
         const target = document.getElementById("set-sec-outlook");

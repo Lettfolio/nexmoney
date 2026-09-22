@@ -197,8 +197,10 @@ const apptGroundTruth = (page) => page.evaluate(() => {
       eq("§A2b · …and it matches the ground truth exactly", panel.pct, gt.pct + "%");
       ok("§A2c · …and it points at the recorder: \"the chips on Today record it\"", /the chips on Today record it/.test(panel.firstKpiTxt), panel.firstKpiTxt);
       eq("§A2d · the no-show KPI matches ground truth", Number(panel.noshowN), gt.noShows);
-      ok("§A2e · the basis names the window and the null-means-unrecorded rule",
-        /last 90 days/.test(panel.basis) && /null means not recorded/i.test(panel.basis), panel.basis.slice(0, 160));
+      /* R87 · owner-admin (06 #11): was /null means not recorded/ — "null" is a database word; the basis (now behind
+         its fold, read here through textContent) says "not recorded means nobody scored it". */
+      ok("§A2e · the basis names the window and the not-recorded rule",
+        /last 90 days/.test(panel.basis) && /not recorded.{0,12}means nobody scored it/i.test(panel.basis), panel.basis.slice(0, 160));
 
       /* Per-adviser table vs ground truth, row by row. */
       const advRows = await page.$$eval("#report-outcomes-table tr[data-adviser]", (els) => els.map((r) => ({
@@ -452,8 +454,10 @@ const apptGroundTruth = (page) => page.evaluate(() => {
       await goPage(page, "data", 3200);
       ok("§C6a · no #dh-tile-completedgaps for an adviser", !(await page.$("#dh-tile-completedgaps")));
       ok("§C6b · no #dh-completedgaps-panel for an adviser", !(await page.$("#dh-completedgaps-panel")));
-      const bands = await page.$$eval("#dh-kpi-row .dh-band-h", (els) => els.map((e) => e.dataset.band));
-      eq("§C6c · both bands still render for an adviser (r74 §E3's wall, intact)", bands, ["counted", "watch"]);
+      // R87 · slice B (panel 01 #3): Data health is gated to Owner/Administrator — an adviser is bounced
+      // to Today, so the wall never renders for them (r74 §E3 was re-pointed the same way).
+      const gate = await page.evaluate(() => !document.querySelector("#page-dashboard").classList.contains("hidden") && document.querySelector("#page-data").classList.contains("hidden"));
+      ok("§C6c · an adviser is bounced to Today — Data health is Owner/Administrator only (R87)", gate);
       eq("§C6 · no console errors", realErrs(page).slice(errBefore), []);
       await page.close();
     }

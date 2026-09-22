@@ -122,6 +122,10 @@ async function newPage(browser, persona, opts) {
   return page;
 }
 const wait = (page, ms) => page.waitForTimeout(ms);
+/* R87 · today (A5): a task row's four snooze controls now live inside ONE closed "⏰ Snooze ▾"
+   <details> menu (same ids, same writes). A suite that presses an item opens its menu first —
+   exactly what a person does. */
+const openSnoozeMenu = (page, sel) => page.evaluate((s) => { const b = document.querySelector(s); const d = b && b.closest("details.snooze-menu"); if (d) d.open = true; return !!d; }, sel);
 const noNewErr = (page, before) => (page.__err || []).length === before;
 const toastText = (page) => page.$eval("#toast", (e) => e.textContent).catch(() => "");
 const goto = async (page, pageName, ms) => {
@@ -391,6 +395,7 @@ const readRow = (page, table, id) => page.evaluate(async ({ table, id }) => {
       }), taskId);
       ok("§C1 · the row carries the full snooze cluster + ✓ Done", Object.values(controlsPresent).every(Boolean), JSON.stringify(controlsPresent));
 
+      await openSnoozeMenu(page, `#snooze-3d-brief-${taskId}`);   // R87 · today (A5) — inside the row's Snooze ▾ menu
       await page.click(`#snooze-3d-brief-${taskId}`);
       await wait(page, 600);
       const afterSnooze = await readRow(page, "case_tasks", taskId);

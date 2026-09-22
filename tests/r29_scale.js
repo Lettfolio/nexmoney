@@ -380,12 +380,14 @@ async function seedScale(page, n) {
       const boardHtml = await page.$eval("#board", (e) => e.innerHTML).catch(() => "");
       ok("B1 · #board rendered and non-empty", boardHtml.length > 0);
       const colCount = await rowCount(page, "#board .col");
-      eq("B2 · all 8 stage columns render", colCount, 8);
+      // R87 · slice B (panel 03 #2): the board paints the six LIVE stages only — Completed / Not
+      // proceeding are table-only (they were 53% of the cards, painted off the right edge).
+      eq("B2 · the six live stage columns render (R87: terminal stages are table-only)", colCount, 6);
 
       const cardsPerCol = await page.$$eval("#board .col", (cols) => cols.map((c) => c.querySelectorAll(".card").length));
       ok("B3 · EVERY column is bounded to BOARD_COL_CAP=50 cards", cardsPerCol.every((n) => n <= 50), JSON.stringify(cardsPerCol));
       const totalCards = cardsPerCol.reduce((a, b) => a + b, 0);
-      ok("B4 · total rendered cards ≤ 8×50=400 — render is bounded, not proportional to the ~2,600-case book", totalCards <= 400, totalCards);
+      ok("B4 · total rendered cards ≤ 6×50=300 — render is bounded, not proportional to the ~2,600-case book", totalCards <= 300, totalCards);
 
       const showMoreN = await rowCount(page, "#board .board-show-more");
       ok("B5 · at least one column is over its cap and shows a 'Show N more' control", showMoreN > 0, showMoreN);
@@ -396,8 +398,9 @@ async function seedScale(page, n) {
       ok("B6 · every column HEADER count (the full, uncapped count) is a finite non-negative number", headerCounts.every((n) => Number.isFinite(n) && n >= 0), JSON.stringify(headerCounts));
       const headerSum = headerCounts.reduce((a, b) => a + b, 0);
       // R69-HF1 — paged, per __readAllRaw in newPage.
-      const groundTruthStages = await page.evaluate(async () => (await window.__readAllRaw("cases", "id,stage")).length);
-      eq("B7 · sum of column header counts equals the true total case count (headers are never themselves capped)", headerSum, groundTruthStages);
+      // R87 · slice B: the ground truth is the LIVE book — the six stages the board paints.
+      const groundTruthStages = await page.evaluate(async () => (await window.__readAllRaw("cases", "id,stage")).filter((c) => !["completed", "not_proceeding"].includes(c.stage)).length);
+      eq("B7 · sum of column header counts equals the true LIVE case count (headers are never themselves capped; R87: terminal stages are not columns)", headerSum, groundTruthStages);
 
       const boardCapHidden = await page.$eval("#board-cap-notice", (e) => e.classList.contains("hidden")).catch(() => null);
       ok("B8 · #board-cap-notice stays HIDDEN at this scale (OWNER_ROW_CAP not hit)", boardCapHidden === true, boardCapHidden);

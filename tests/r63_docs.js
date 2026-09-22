@@ -38,6 +38,20 @@
    ========================================================================== */
 "use strict";
 
+/* R87 · slice B (panel 03 #8): the stage-entry overlays have two exits now — "Don't advance" (#se-cancel)
+   and "Save & advance" (#se-ok); "Skip — advance anyway" (#se-skip) is gone because an all-blank /
+   all-unticked Save was already the same answer. r87SkipEntry is what Skip meant: clear every field
+   and tick in the overlay, then Save. */
+async function r87SkipEntry(page) {
+  await page.evaluate(() => {
+    const box = document.querySelector("#overlay-modal");
+    box.querySelectorAll("input[type=checkbox]").forEach((i) => { i.checked = false; });
+    box.querySelectorAll("input:not([type=checkbox]), textarea").forEach((i) => { i.value = ""; });
+    box.querySelectorAll("select").forEach((sel) => { sel.value = ""; sel.dispatchEvent(new Event("change")); });
+  });
+  await page.click("#se-ok");
+}
+
 const { chromium } = require("playwright");
 const { spawn } = require("child_process");
 const http = require("http");
@@ -474,8 +488,8 @@ function suggestionsGT(docsList, kind) {
       eq("E5 · …none of them pre-ticked", picks.droppedTicked, 0);
       ok("E6 · the prompt says in plain English why an empty checklist matters",
         /no checklist is never chased/i.test(picks.copy), picks.copy.slice(0, 300));
-      ok("E7 · all three exits are offered", await page.evaluate(() =>
-        !!document.querySelector("#se-cancel") && !!document.querySelector("#se-skip") && !!document.querySelector("#se-ok")));
+      ok("E7 · both exits are offered (R87: Don't advance / Save & advance — Skip removed, untick is skip)", await page.evaluate(() =>
+        !!document.querySelector("#se-cancel") && !document.querySelector("#se-skip") && !!document.querySelector("#se-ok")));
 
       await page.click("#se-ok");
       await wait(page, 1200);
@@ -495,7 +509,7 @@ function suggestionsGT(docsList, kind) {
       const skip = await mkClientCase(page, { first: "Factfind", last: "Skipcase", stage: "enquiry", assigned_to: "p2", case_kind: "product_transfer" });
       await openAdvance(skip);
       ok("E13 · the prompt opens for the second case too", await overlayOpen(page));
-      await page.click("#se-skip");
+      await r87SkipEntry(page);   // R87 · slice B: Skip → blank Save
       await wait(page, 1200);
       eq("E14 · Skip still advances the stage", (await readRow(page, "cases", skip.caseId)).stage, "fact_find");
       eq("E15 · …and writes no checklist at all",
@@ -536,7 +550,7 @@ function suggestionsGT(docsList, kind) {
 
       // E23 — the programmatic path stays headless, exactly as the DIP/Offer prompts do.
       const headless = await mkClientCase(page, { first: "Factfind", last: "Headlesscase", stage: "enquiry", assigned_to: "p2", case_kind: "product_transfer" });
-      const res = await page.evaluate((id) => window.moveCaseToStage(id, "fact_find", { skipReload: true }), headless.caseId);
+      const res = await page.evaluate((id) => window.moveCaseToStage(id, "fact_find", { skipReload: true, promptStageEntry: false /* R87 · slice B: the prompt is the default now; a headless call opts out */ }), headless.caseId);
       await wait(page, 600);
       eq("E23 · a programmatic moveCaseToStage() to Fact Find still just moves", res, "moved");
       ok("E24 · …raising no overlay", !(await overlayOpen(page)));

@@ -40,6 +40,20 @@
    ========================================================================== */
 "use strict";
 
+/* R87 · slice B (panel 03 #8): the stage-entry overlays have two exits now — "Don't advance" (#se-cancel)
+   and "Save & advance" (#se-ok); "Skip — advance anyway" (#se-skip) is gone because an all-blank /
+   all-unticked Save was already the same answer. r87SkipEntry is what Skip meant: clear every field
+   and tick in the overlay, then Save. */
+async function r87SkipEntry(page) {
+  await page.evaluate(() => {
+    const box = document.querySelector("#overlay-modal");
+    box.querySelectorAll("input[type=checkbox]").forEach((i) => { i.checked = false; });
+    box.querySelectorAll("input:not([type=checkbox]), textarea").forEach((i) => { i.value = ""; });
+    box.querySelectorAll("select").forEach((sel) => { sel.value = ""; sel.dispatchEvent(new Event("change")); });
+  });
+  await page.click("#se-ok");
+}
+
 const { chromium } = require("playwright");
 const { spawn } = require("child_process");
 const http = require("http");
@@ -221,10 +235,10 @@ const finishMove = (page) => page.evaluate(() => window.__r77mv);
       const b1state = await page.evaluate(() => ({
         expected: !!document.querySelector("#se-expected"),
         waiting: !!document.querySelector("#se-waiting"),
-        threeWay: !!(document.querySelector("#se-cancel") && document.querySelector("#se-skip") && document.querySelector("#se-ok")),
+        threeWay: !!(document.querySelector("#se-cancel") && !document.querySelector("#se-skip") && document.querySelector("#se-ok")),   // R87 · slice B: two exits
       }));
       ok("B1b · …carrying #se-expected but NOT re-asking the answered waiting-on question", b1state.expected && !b1state.waiting, JSON.stringify(b1state));
-      ok("B1c · …with the three-way exit intact", b1state.threeWay);
+      ok("B1c · …with the two-way exit (R87: Don't advance / Save & advance)", b1state.threeWay);
       await page.fill("#se-expected", "2027-03-15");
       await page.click("#se-ok");
       await finishMove(page);
@@ -249,7 +263,7 @@ const finishMove = (page) => page.evaluate(() => window.__r77mv);
       const b3 = await mkCase(page, { stage: "decision_in_principle", waiting_on: "lender" });
       await startMove(page, b3.caseId, "application");
       await wait(page, 1100);
-      await page.click("#se-skip");
+      await r87SkipEntry(page);   // R87 · slice B: Skip → blank Save
       await finishMove(page);
       await wait(page, 800);
       const r3 = await caseRow(page, b3.caseId);
@@ -293,7 +307,7 @@ const finishMove = (page) => page.evaluate(() => window.__r77mv);
       }));
       ok("B6 · the Exchange dialog still asks waiting-on and does NOT gain the expected field",
         b6state.open && b6state.waiting && !b6state.expected, JSON.stringify(b6state));
-      await page.click("#se-skip");
+      await r87SkipEntry(page);   // R87 · slice B: Skip → blank Save
       await finishMove(page);
       await wait(page, 800);
 

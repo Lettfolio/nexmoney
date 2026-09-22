@@ -301,7 +301,9 @@ const shiftMv = (mv, n) => {
       await page.waitForTimeout(1000);
       const prot = await txt(page, "#prot-summary");
       ok("R5-17 · Protection Est. commission states its basis (R80: firm average × loan band, an estimate)",
-        prot.includes("(firm average × loan band — an estimate, not banked money)"), JSON.stringify(prot));
+        /* R87 · book (C5): the KPI caption is ≤25 words now — "(estimate — firm average × loan band)";
+           the "not banked money" clause lives in the tile's fold. Same basis, shorter label. */
+        /firm average × loan band/.test(prot) && /estimate/.test(prot), JSON.stringify(prot));
       await openReports(page);
 
       // …and the labelled figures still equal the same arithmetic they always did.

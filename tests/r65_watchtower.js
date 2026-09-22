@@ -429,6 +429,7 @@ const openWatchtower = async (page) => {
       const c = await newPage(browser, "p1");
       await openWatchtower(c);
       /* The button, not the RPC — this is the operator's own path and it repaints the list. */
+      await c.evaluate(() => { const d = document.querySelector("#brief-more"); if (d) d.open = true; });   /* R87 · today (A6): the control lives in My Day's ⋯ menu */
       await c.click("#watchtower-run");
       await wait(c, 1500);
 
@@ -514,6 +515,7 @@ const openWatchtower = async (page) => {
       for (const persona of ["p2", "p4"]) {
         const q = await newPage(browser, persona);
         await openWatchtower(q);
+        await q.evaluate(() => { const d = document.querySelector("#brief-more"); if (d) d.open = true; });   /* R87 · today (A6): the control lives in My Day's ⋯ menu */
         await q.click("#watchtower-run");
         await wait(q, 1500);
         const gs = await wtGroups(q);

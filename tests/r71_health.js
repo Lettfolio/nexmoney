@@ -647,15 +647,20 @@ async function seedScale(page, n) {
        §E · an adviser sees the same page, error-free
        ===================================================================== */
     {
-      console.log("\n— §E · adviser pass (p2)");
+      /* R87 · slice B (panel 01 #3): Data health is an Owner/Administrator page now (PAGE_ROLE_GATE) —
+         an adviser has no lever for any of its worklists, so the contract here is the gate: the nav
+         entry is hidden, nav('data') lands on Today, and the page never renders for them. */
+      console.log("\n— §E · adviser pass (p2) — R87: Data health is off an adviser's map");
       const page = await boot(browser, "p2");
       const errBefore = realErrs(page).length;
       await goPage(page, "data");
-      const tiles = await page.evaluate(() => ["dh-tile-address", "dh-tile-loan", "dh-tile-completeness"]
-        .map((id) => { const t = document.getElementById(id); return t ? Number(t.querySelector(".num").textContent.trim()) : null; }));
-      ok("E1 · all three new tiles render for an adviser with real numbers", tiles.every((n) => Number.isFinite(n)), JSON.stringify(tiles));
-      const inputs = await page.$$eval(".dh-fix-input", (els) => els.length);
-      ok("E2 · the inline repair boxes are on the page for an adviser too (data quality is everybody's job)", inputs > 0, inputs);
+      const gate = await page.evaluate(() => ({
+        navHidden: !!document.querySelector('#topnav button[data-page="data"]') && document.querySelector('#topnav button[data-page="data"]').classList.contains("hidden"),
+        onToday: !document.querySelector("#page-dashboard").classList.contains("hidden") && document.querySelector("#page-data").classList.contains("hidden"),
+        hash: location.hash,
+      }));
+      ok("E1 · the Data health nav entry is hidden for an adviser (R87)", gate.navHidden, JSON.stringify(gate));
+      ok("E2 · nav('data') lands an adviser on Today with the hash rewritten (R87)", gate.onToday && gate.hash === "#today", JSON.stringify(gate));
       eq("E3 · no console errors", realErrs(page).slice(errBefore), []);
       await page.close();
     }

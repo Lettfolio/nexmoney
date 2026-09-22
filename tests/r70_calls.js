@@ -438,17 +438,23 @@ const caseRow = (page, caseId) => page.evaluate(async (id) => {
     await goPage(page, "retention", 3000);
     const dRow = await rowFor(page, "#ret-rates-list", done.caseId);
     const lRow = await rowFor(page, "#ret-rates-list", live.caseId);
-    eq("C1a · a completed row carries exactly three outcome chips", dRow && dRow.outChips.length, 3);
-    ok("C1b · …the first two into the rate-end outcome machinery, the third into startRetentionCase",
+    /* R87 · book (C3, 04 #5): was three — the third, "🔁 Re-mortgaging with us", rendered under the
+       same guard as the badge area's "🔁 Start retention case" button, so every startable row said
+       the same verb twice. The button stays (C4 below presses it); the chip is gone. */
+    eq("C1a · a completed row carries exactly two outcome chips (R87: the duplicate Start verb is gone)", dRow && dRow.outChips.length, 2);
+    ok("C1b · …both into the rate-end outcome machinery (R87: Start retention case is the badge-area button alone)",
       dRow && /retRateOutcome\('[^']+','renewed'\)/.test(dRow.outChips[0])
       && /retRateOutcome\('[^']+','sold'\)/.test(dRow.outChips[1])
-      && /startRetentionCase\('[^']+', event\)/.test(dRow.outChips[2]), JSON.stringify(dRow && dRow.outChips));
+      && dRow.outChips.length === 2, JSON.stringify(dRow && dRow.outChips));   // R87 · book (C3): no third chip
     ok("C1c · …each stopping the row's own click-through to the case", dRow && dRow.outChips.every((h) => /event\.stopPropagation\(\)/.test(h)), JSON.stringify(dRow && dRow.outChips));
     eq("C1d · a LIVE row carries none — there is no rate end to record an outcome for", lRow && lRow.outChips.length, 0);
     eq("C1e · …and the drawer carries none either (page-only, like the rest of the cluster)",
       await page.evaluate(() => document.querySelectorAll("#alerts-rateerc .ret-out-chip").length), 0);
 
     // C2 — "Renewed elsewhere" opens R58's overlay on the renewed radio.
+    /* R87 · book (C3): the outcome chips sit behind the row's "More ▾" <details>; open them first. */
+    const openMore = () => page.evaluate(() => document.querySelectorAll("#ret-rates-list details.ret-row-more").forEach((d) => { d.open = true; }));
+    await openMore();
     await page.click(`#ret-rates-list button[onclick*="retRateOutcome('${done.caseId}','renewed')"]`);
     await page.waitForTimeout(1500);
     const renewOverlay = await page.evaluate(() => ({
@@ -474,6 +480,7 @@ const caseRow = (page, caseId) => page.evaluate(async (id) => {
 
     // C3 — "Property sold" opens the SAME overlay on the other radio, and recording it works.
     await goPage(page, "retention", 2800);
+    await openMore();   // R87 · book (C3)
     await page.click(`#ret-rates-list button[onclick*="retRateOutcome('${sold.caseId}','sold')"]`);
     await page.waitForTimeout(1500);
     const soldOverlay = await page.evaluate(() => ({
@@ -558,12 +565,15 @@ const caseRow = (page, caseId) => page.evaluate(async (id) => {
       return {
         rows: rows.length,
         withTel: rows.filter((x) => x.querySelector("a[href^='tel:']")).length,
-        withSms: rows.filter((x) => x.querySelector("a[href^='sms:']")).length,
+        /* R87 · today (A3): a row whose client is marked sms_opt_out carries the call link and a
+           "no texts" reason in place of the 💬 (phoneActionsHtml's R82 · A7 rule, now reached from
+           My Day) — the fixture has two such clients. Counted as "carries the pair" here. */
+        withSms: rows.filter((x) => x.querySelector("a[href^='sms:'], .row-sms-optout")).length,
         sample: (rows.find((x) => x.querySelector("a[href^='sms:']")) || { querySelector: () => null }).querySelector("a[href^='sms:']"),
       };
     });
     ok("D4a · My Day rows carry a tel: link wherever a number is known", brief.withTel > 0, JSON.stringify(brief));
-    eq("D4b · …and every one of them carries the matching sms: link", brief.withSms, brief.withTel);
+    eq("D4b · …and every one of them carries the matching sms: link (or, R87, the opt-out's “no texts” in its place)", brief.withSms, brief.withTel);
     // Ground truth: a My Day row whose client genuinely has no phone offers neither link.
     const noPhoneRows = await page.evaluate(async () => {
       const { data: cls } = await window.__mockDb.from("clients").select("id,phone");

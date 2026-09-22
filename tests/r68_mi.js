@@ -90,6 +90,10 @@ async function boot(browser, persona) {
 const realErr = (page) => (page.__err || []).filter((e) => !/ERR_TUNNEL|Failed to fetch|sheetjs|favicon/i.test(e));
 const wait = (page, ms) => page.waitForTimeout(ms);
 const txt = (page, sel) => page.evaluate((s) => { const e = document.querySelector(s); return e ? e.innerText.replace(/\s+/g, " ").trim() : null; }, sel);
+/* R87 · owner-admin (T1): the long explanations this suite reads on Settings and My numbers now sit behind a
+   CLOSED howFold() <details> inside the same element — innerText skips a closed fold, textContent does not.
+   The words are unchanged; only the reader has to open the drawer. */
+const txtAll = (page, sel) => page.evaluate((s) => { const e = document.querySelector(s); return e ? e.textContent.replace(/\s+/g, " ").trim() : null; }, sel);
 const has = (page, sel) => page.evaluate((s) => !!document.querySelector(s), sel);
 
 async function goto(page, id) {
@@ -232,7 +236,7 @@ const money = (n) => "£" + Math.round(Number(n) || 0).toLocaleString("en-GB");
         gt.retPct == null || (retTile || "").includes(`${gt.retWon} completed, ${gt.retLost} lost`), JSON.stringify({ retTile, gt }));
 
       /* --- the scope line names all three windows ------------------------------ */
-      const scope = await txt(page, "#report-mine-scope");
+      const scope = await txtAll(page, "#report-mine-scope");   // R87 — the three-window explanation is in the fold
       ok("A4 · the scope line says the banked tile is the calendar YEAR", /calendar year/i.test(scope || ""), scope);
       ok("A4b · …that the target bar and attach rate follow the MONTH picker", /follow the month picker/i.test(scope || ""), scope);
       ok("A4c · …and that retention conversion is all-time", /all-time/i.test(scope || ""), scope);
@@ -615,7 +619,11 @@ const money = (n) => "£" + Math.round(Number(n) || 0).toLocaleString("en-GB");
       const page = await boot(browser, "p1");
       await wait(page, 1200);
       ok("D1 · the admin gets the ops strip", await page.evaluate(() => !document.querySelector("#ops-strip").classList.contains("hidden")));
-      ok("D1b · …with a line saying what it is", /The firm's plumbing/i.test((await txt(page, "#ops-strip-sub")) || ""));
+      /* R87 · today (T1 / 02 #10): was "…with a line saying what it is" (#ops-strip-sub, 50 words).
+         The strip is chips only now — every chip's title already says what it counts and where it
+         goes, and grey/amber is the colour's job. */
+      ok("D1b (R87) · …as chips only: the 50-word caption is gone, every chip still carries its own title",
+        await page.evaluate(() => !document.querySelector("#ops-strip-sub") && [...document.querySelectorAll("#ops-strip .ops-chip")].every((c) => (c.getAttribute("title") || "").length > 20)));
 
       /* R11-1's adjacency is load-bearing and tests/r11_ux.js locks it — the strip must not have
          got between the heading and the numbers. */
@@ -719,9 +727,9 @@ const money = (n) => "£" + Math.round(Number(n) || 0).toLocaleString("en-GB");
           return /Protection/.test(sec || "");
         }));
       ok("E1b · …with the note that says what it does and that blank is allowed",
-        /firm or adviser a protection referral is addressed to by default/i.test((await txt(page, "#setting-note-protection_referral_partner")) || "")
-        && /Leave it blank/i.test((await txt(page, "#setting-note-protection_referral_partner")) || ""),
-        await txt(page, "#setting-note-protection_referral_partner"));
+        /firm or adviser a protection referral is addressed to by default/i.test((await txtAll(page, "#setting-note-protection_referral_partner")) || "")
+        && /Leave it blank/i.test((await txtAll(page, "#setting-note-protection_referral_partner")) || ""),
+        await txtAll(page, "#setting-note-protection_referral_partner"));
       ok("E1c · …and it starts empty, because production has never set one",
         await page.evaluate(() => document.querySelector('[name="protection_referral_partner"]').value) === "");
 

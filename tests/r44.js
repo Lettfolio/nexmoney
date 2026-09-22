@@ -530,9 +530,11 @@ async function importStatement(page, ref, rows, opts) {
       const list0 = (await p4.textContent("#recon-statements")) || "";
       ok("§D4 · empty statement list says nothing imported yet", /No commission statement imported yet/.test(list0), list0.slice(0, 100));
       ok("§D5 · #recon-review starts hidden", await p4.evaluate(() => document.querySelector("#recon-review").classList.contains("hidden")));
-      ok("§D6 · DOM order: advisers panel → recon panel → procrates panel", await p4.evaluate(() => {
+      /* R87 · owner-admin (05 #3): was advisers → recon → procrates. The weekly statement is the page's one action
+         and now LEADS #money-body, the rate card follows it, and the read-only panels come after. */
+      ok("§D6 · DOM order: recon panel → procrates panel → advisers panel (R87: the ritual leads)", await p4.evaluate(() => {
         const a = document.querySelector("#money-advisers-panel"), r = document.querySelector("#money-recon-panel"), p = document.querySelector("#money-procrates-panel");
-        return !!(a.compareDocumentPosition(r) & Node.DOCUMENT_POSITION_FOLLOWING) && !!(r.compareDocumentPosition(p) & Node.DOCUMENT_POSITION_FOLLOWING);
+        return !!(r.compareDocumentPosition(p) & Node.DOCUMENT_POSITION_FOLLOWING) && !!(p.compareDocumentPosition(a) & Node.DOCUMENT_POSITION_FOLLOWING);
       }));
       ok("§D · owner console clean on Monday money", noNewErr(p4, errBefore4), JSON.stringify(p4.__err));
 

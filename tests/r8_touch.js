@@ -765,18 +765,29 @@ function parseCsvLine(line) {
        8 · GATING — an adviser and an admin see honest, refusing settings
        =================================================================== */
     {
-      console.log("\n— R8-4 · owner/adviser gating on the new switch (p2 Wayne, adviser)");
+      /* R87 · owner-admin (01 #3): was "an adviser sees the annual-review switch read-only, not missing" on p2.
+         An adviser's Settings is now My details + Security only — a disabled 47-control form is not information —
+         so the read-only view this block pins belongs to the ADMINISTRATOR (p1), who still gets every control
+         disabled and the same honest copy. The adviser is asserted to get NO firm form at all. */
+      console.log("\n— R8-4 · owner/admin/adviser gating on the new switch (p1 Kim admin read-only · p2 Wayne adviser none)");
+      const admin = await newPage(browser, "p1");
+      await admin.evaluate(() => window.nav("settings"));
+      await admin.waitForTimeout(1200);
+      const dis = await admin.$eval("select[name='annual_review_enabled']", (e) => e.disabled);
+      ok("R8-4 · an administrator sees the annual-review switch read-only, not missing", dis === true);
+      const saveHidden = await admin.$eval("#save-settings-btn", (e) => e.classList.contains("hidden"));
+      ok("R8-4 · …and no Save button to press", saveHidden === true);
+      const note = await admin.$eval("#annual-review-note", (e) => e.textContent.trim());
+      ok("R8-4 · …but the same honest explanation of what it does", /No email is sent/i.test(note), note.slice(0, 120));
+      const status = await admin.$eval("#birthday-status", (e) => e.textContent.trim());
+      ok("R8-3 · …and the same DOB status line", /have a date of birth/.test(status), status);
+      await admin.close();
       const page = await newPage(browser, "p2");
       await page.evaluate(() => window.nav("settings"));
       await page.waitForTimeout(1200);
-      const dis = await page.$eval("select[name='annual_review_enabled']", (e) => e.disabled);
-      ok("R8-4 · an adviser sees the annual-review switch read-only, not missing", dis === true);
-      const saveHidden = await page.$eval("#save-settings-btn", (e) => e.classList.contains("hidden"));
-      ok("R8-4 · …and no Save button to press", saveHidden === true);
-      const note = await page.$eval("#annual-review-note", (e) => e.textContent.trim());
-      ok("R8-4 · …but the same honest explanation of what it does", /No email is sent/i.test(note), note.slice(0, 120));
-      const status = await page.$eval("#birthday-status", (e) => e.textContent.trim());
-      ok("R8-3 · …and the same DOB status line", /have a date of birth/.test(status), status);
+      ok("R8-4 · an adviser gets no firm form at all (R87 · 01 #3) — My details and Security only",
+        (await page.$("select[name='annual_review_enabled']")) === null && (await page.$eval("#save-settings-btn", (e) => e.classList.contains("hidden"))) === true
+        && (await page.$eval("#my-details-panel", (e) => !e.classList.contains("hidden"))));
 
       /* the client page verbs are NOT owner-gated — an adviser sweeps their own book */
       await gotoClients(page);

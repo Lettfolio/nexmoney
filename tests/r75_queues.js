@@ -233,17 +233,21 @@ async function analyse(page, csv) {
       ok("A4e · both re-enable the moment there is something to read", !btnFull.analyse && !btnFull.rev, JSON.stringify(btnFull));
       ok("A4f · …and the enabled title says what pressing it does", /Nothing is saved/.test(btnFull.analyseTitle), btnFull.analyseTitle);
 
-      // A5 — the Revolution panel reads as the quieter of the two doors.
+      /* A5 — R87 · owner-admin (05 #9): INVERTED. Was "the Revolution panel takes the quieter secondary treatment".
+         The migration is done; the weekly Revolution export is the front door and the one-off AI import is the
+         quieter, second one — so the AI panel (#import-ai-panel) now carries .panel-secondary and Revolution leads. */
       const quiet = await page.evaluate(() => {
         const rev = document.getElementById("rev-input-panel");
-        const imp = document.querySelector("#page-import .panel");
+        const imp = document.getElementById("import-ai-panel");
         return {
-          secondary: rev.classList.contains("panel-secondary"),
+          revSecondary: rev.classList.contains("panel-secondary"),
+          aiSecondary: imp.classList.contains("panel-secondary"),
+          revFirst: !!(rev.compareDocumentPosition(imp) & Node.DOCUMENT_POSITION_FOLLOWING),
           revBg: getComputedStyle(rev).backgroundColor,
           impBg: getComputedStyle(imp).backgroundColor,
         };
       });
-      ok("A5 · the Revolution panel takes the quieter secondary treatment", quiet.secondary && quiet.revBg !== quiet.impBg, JSON.stringify(quiet));
+      ok("A5 · the AI import takes the quieter secondary treatment and the Revolution door leads (R87)", !quiet.revSecondary && quiet.aiSecondary && quiet.revFirst && quiet.revBg !== quiet.impBg, JSON.stringify(quiet));
 
       // A3 — the Money uploaders: same component, and the readout survives the
       // handler clearing the input (which is what it does, so the same workbook
@@ -396,18 +400,26 @@ async function analyse(page, csv) {
       await page.close();
     }
     {
-      console.log("\n— §B4c · …and an ADVISER still gets “assign to me” ticked (the R72 newCaseSelfAssigns rule)");
+      /* R87 · slice B (panel 01 #3): Import is an Owner/Administrator page now (PAGE_ROLE_GATE) — an
+         adviser cannot reach the review table at all, so "an adviser gets assign-to-me ticked" is
+         no longer a reachable state. The contract is the gate: nav hidden, nav() bounces to Today,
+         and the R72 newCaseSelfAssigns() rule itself is still adviser-shaped. */
+      console.log("\n— §B4c · …and an ADVISER no longer reaches Import at all (R87 role gate); the R72 rule itself still holds");
       const page = await boot(browser, "p2");
       const errBefore = realErrs(page).length;
-      await analyse(page, CSV);
-      const advAssign = await page.evaluate(() => ({
-        checked: document.getElementById("imp-assign-me").checked,
-        why: (document.getElementById("imp-assign-why") || {}).textContent || "",
-        rule: newCaseSelfAssigns(),
-      }));
-      ok("B4c · an adviser gets it ticked", advAssign.checked === true, JSON.stringify(advAssign));
-      ok("B4d · …and the checkbox agrees with newCaseSelfAssigns() itself", advAssign.checked === advAssign.rule, JSON.stringify(advAssign));
-      ok("B4e · …with an adviser-shaped reason", /You are an adviser/.test(advAssign.why), advAssign.why);
+      const advAssign = await page.evaluate(() => {
+        const btn = document.querySelector('#topnav button[data-page="import"]');
+        window.nav("import");
+        return {
+          navHidden: !!btn && btn.classList.contains("hidden"),
+          landed: !document.querySelector("#page-dashboard").classList.contains("hidden") && document.querySelector("#page-import").classList.contains("hidden"),
+          hash: location.hash,
+          rule: newCaseSelfAssigns(),
+        };
+      });
+      ok("B4c · the Import nav entry is hidden for an adviser (R87)", advAssign.navHidden, JSON.stringify(advAssign));
+      ok("B4d · nav('import') bounces an adviser to Today, hash rewritten", advAssign.landed && advAssign.hash === "#today", JSON.stringify(advAssign));
+      ok("B4e · newCaseSelfAssigns() is still true for an adviser (the R72 rule is untouched)", advAssign.rule === true, JSON.stringify(advAssign));
       ok("§B4c · no console errors", noNewErr(page, errBefore), JSON.stringify(realErrs(page)));
       await page.close();
     }
@@ -646,12 +658,17 @@ async function analyse(page, csv) {
           boardItems: board ? board.querySelectorAll(".bl-item").length : 0,
           legendSame: !!(legend && board && legend.innerHTML === board.innerHTML),
           legendVisible: !!(legend && legend.offsetParent !== null),
+          legendInFold: !!(legend && legend.closest("#pipe-how")),   // R87 · slice B
+          foldClosed: !!document.getElementById("pipe-how") && !document.getElementById("pipe-how").open,
         };
       });
       ok("E5 · Download CSV is out of the horizontal scroller", chrome.csvInScroller === false);
       ok("E5b · …and into the panel header, where it stays put", chrome.csvInHead);
-      ok("E6 · the board's day-colour legend is repeated in table view",
-        chrome.legendVisible && chrome.legendItems === chrome.boardItems && chrome.legendItems >= 3, JSON.stringify(chrome));
+      /* R87 · slice B (panel 03 #4): the legend is still repeated in table view, from the board's
+         own markup, but it now sits inside the closed "How this table is built" fold (#pipe-how)
+         with the column rules — the page keeps one standing line. Present, not on-screen. */
+      ok("E6 · the board's day-colour legend is repeated in table view (inside the #pipe-how fold — R87)",
+        chrome.legendInFold && chrome.foldClosed && chrome.legendItems === chrome.boardItems && chrome.legendItems >= 3, JSON.stringify(chrome));
       ok("E6b · …from the board's own markup, so the two cannot drift", chrome.legendSame);
 
       ok("§E · no console errors", noNewErr(page, errBefore), JSON.stringify(realErrs(page)));

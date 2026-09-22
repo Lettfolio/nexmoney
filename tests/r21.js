@@ -251,11 +251,14 @@ const readCsvName = (page) => page.evaluate(() => window.__csvName);
         // ONLY inside the per-card try (app.js ~L8789), never in the board's earlier, unguarded
         // sort comparator — unlike cardAge, which is called in BOTH places and would abort the
         // whole board's sort before a single card is skip-counted.
-        const orig = window.nextStageFor;
+        /* R87 · slice B: the card no longer calls nextStageFor (its hover-only "→" is gone — panel
+           03 #1), so the probe moved to waitingChipHtml: also a top-level function declaration,
+           also called ONLY inside the per-card try (boardCardHtml), never in the sort comparator. */
+        const orig = window.waitingChipHtml;
         let fired = false;
-        window.nextStageFor = function (stage, kind) {
+        window.waitingChipHtml = function (c) {
           if (!fired) { fired = true; throw new Error("r21-board-card-probe"); }
-          return orig(stage, kind);
+          return orig(c);
         };
         const logBefore = window.__errorLog.length;
         await window.loadPipeline();
@@ -263,7 +266,7 @@ const readCsvName = (page) => page.evaluate(() => window.__csvName);
         const after = document.querySelectorAll("#board .card").length;
         const noteText = document.querySelector("#board .board-skip-note")?.textContent || null;
         const newEntries = window.__errorLog.slice(logBefore);
-        window.nextStageFor = orig;
+        window.waitingChipHtml = orig;
         await window.loadPipeline();
         await new Promise((res) => setTimeout(res, 400));
         const restored = document.querySelectorAll("#board .card").length;

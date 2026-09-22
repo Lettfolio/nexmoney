@@ -224,7 +224,10 @@ const showMoney = () => isOwner();
    excluded — showMoney() already gives them the fuller, firm-wide set below, and a second "my
    numbers" card would just be a subset of what they can already see.
    Still a PRESENTATION choice, not a control: the same caveat as showMoney() applies verbatim. */
-const MY_NUMBERS_ROLES = ["adviser", "admin", "staff"];
+/* R87 · owner-admin (05 #7) — "admin" LEFT this list. Kim is back-office: the fixture gives her two
+   cases and every tile read £0 / —, so the first thing an administrator met on Reports was a card of
+   zeros about herself. The card is the adviser's (and legacy "staff", which is an adviser role). */
+const MY_NUMBERS_ROLES = ["adviser", "staff"];
 const showMyNumbers = () => !!ME && !isOwner() && MY_NUMBERS_ROLES.includes(MY_ROLE);
 /* R5-F1 (CSV half) — whether a pipeline export may carry the Broker fee column. The Owner is
    unchanged (always). For an ADVISER the column is dropped only when the export would spill a
@@ -408,13 +411,17 @@ function renderMyNumbers(all, yr, mv) {
 
   const scope = $("#report-mine-scope");
   if (scope) {
-    scope.textContent = `Your own figures only — every number on this card counts cases assigned to you (${mine.length} case${mine.length === 1 ? "" : "s"}). `
-      + `Nothing here is a firm total and no colleague's cases are in it. `
-      /* R68 · M7 — three different windows on one card is exactly how two people end up
-         arguing about which number is wrong, so the card states each one. */
-      + `“My fees banked” is the calendar year ${yr}. “Fees earned this month vs my target” and “My attach rate” follow the month picker above and are showing ${mLabel}. `
-      + `“My retention conversion” is all-time — a retention case can be started in one month and completed in another, so the firm figure it matches has never been cut by month. `
-      + `${ATTRIB_NOTE}`;
+    /* R87 · owner-admin (T1) — ONE line in the open; the three-window explanation (R68 · M7) keeps
+       every word behind howFold. #report-mine-scope is a <p> in the markup, and a <details> inside
+       a <p> is closed by the parser, so the scope is written as a <div> the first time through. */
+    const scopeHost = scope.tagName === "P" ? (() => { const d = document.createElement("div"); d.className = scope.className; d.id = scope.id; scope.replaceWith(d); return d; })() : scope;
+    scopeHost.innerHTML = `Your own figures only — cases assigned to you (${mine.length} case${mine.length === 1 ? "" : "s"}); no firm totals, no colleague's cases. `
+      + howFold({ id: "report-mine-how", title: "How these are counted", html: `<p>Every number on this card counts cases assigned to you. Nothing here is a firm total and no colleague's cases are in it. `
+        /* R68 · M7 — three different windows on one card is exactly how two people end up
+           arguing about which number is wrong, so the card states each one. */
+        + `“My fees banked” is the calendar year ${yr}. “Fees earned this month vs my target” and “My attach rate” follow the month picker above and are showing ${esc(mLabel)}. `
+        + `“My retention conversion” is all-time — a retention case can be started in one month and completed in another, so the firm figure it matches has never been cut by month. `
+        + `${esc(ATTRIB_NOTE)}</p>` });
   }
   $("#report-mine").innerHTML = `
     <div class="kpi"><div class="num" title="${esc(fmtM(banked.total))}">${fmtM(banked.total)}</div><div class="lbl">My fees banked ${yr}</div>${basisLine(BASIS_MY_CASH_YTD + (banked.futureN ? ` — ${fmtM(banked.futureTotal)} dated after today (${banked.futureN}) is excluded` : ""))}</div>
@@ -522,7 +529,9 @@ function renderMonthReport(all, mv) {
           ? `<span class="rep-hero-lbl">No firm monthly target is set, so there is no percentage to read this against — set one in Settings › Targets.</span>`
           : `<span class="rep-hero-pct" style="color:${pctColour};">${heroPct}% of target</span>
              <span class="rep-hero-lbl">${esc(monthLabel(mv))} · target ${fmtM(heroTarget)}</span>`)
-        + `<span class="rep-hero-basis">Fee value (procuration + broker + solicitor) on the ${heroEarned.n} case${heroEarned.n === 1 ? "" : "s"} that COMPLETED in ${esc(monthLabel(mv))}, paid or not. <span class="money-basis">${esc(BASIS_TARGET_EARNED)}</span> The bar, the month-on-month comparison and the cash figure beside it are in <strong>Monthly business</strong> below.</span>`;
+        /* R87 · owner-admin (T1) — the pointer sentence ("the bar … are in Monthly business below")
+           restated the panel one scroll down; the basis stays (r74 §D1d pins "paid or not" + the chip). */
+        + `<span class="rep-hero-basis">Fee value on the ${heroEarned.n} case${heroEarned.n === 1 ? "" : "s"} that completed in ${esc(monthLabel(mv))}, paid or not. <span class="money-basis">${esc(BASIS_TARGET_EARNED)}</span></span>`;
       /* The other three month figures, demoted rather than deleted OR duplicated: one quiet line
          under the hero, deliberately NOT a second row of tiles — the tiles with their
          month-on-month deltas are the Monthly business panel's own job, and printing them twice
@@ -605,7 +614,7 @@ function renderMonthReport(all, mv) {
     <tr><th>Adviser</th><th>Submitted</th>${money ? "<th>Proc £</th><th>Broker £</th><th>Sols £</th>" : ""}<th>Completed</th>${money ? '<th title="Value of fees earned on cases completed this month — whether or not those fees have been paid yet">Completed £ (earned)</th>' : ""}${prevHead}</tr>
     ${rows.map((r) => `<tr${r.nSub || r.nDone ? "" : ' class="stat-weak" title="No activity in this month — listed so the previous-month comparison column still totals that month\'s own report."'}><td><strong>${esc(r.name)}</strong></td><td class="num">${r.nSub}</td>${money ? `<td class="num">${fmtM(r.sProc)}</td><td class="num">${fmtM(r.sBrk)}</td><td class="num">${fmtM(r.sSol)}</td>` : ""}<td class="num">${r.nDone}</td>${money ? `<td class="num">${fmtM(r.dTot)}</td>` : ""}<td class="stat-weak num">${r.pDone}</td>${money ? `<td class="stat-weak num">${fmtM(r.pTot)}</td>` : ""}</tr>`).join("")}
   </table></div>
-  <p class="panel-sub month-attrib" id="month-advisers-attrib" style="margin:8px 0 0;">${esc(ATTRIB_NOTE)} The previous-month columns list every adviser who completed anything in ${esc(monthLabel(prevMv))}, including advisers with no activity in ${esc(monthLabel(mv))}, so they total that month's own report.</p>` : '<div class="empty">No submissions or completions recorded for this month.</div>';
+  <p class="panel-sub month-attrib" id="month-advisers-attrib" style="margin:8px 0 0;">${esc(ATTRIB_NOTE)} ${esc(prevLbl)} columns include advisers with nothing in ${esc(monthShortLabel(mv, false))}.</p>` : '<div class="empty">No submissions or completions recorded for this month.</div>';
 }
 
 /* ==========================================================================
@@ -816,10 +825,16 @@ function adoptionSignInCell(id) {
    saying so, so the em dashes in the column are not read as findings. */
 function adoptionSubHtml(tasksErr) {
   const tail = `Read over the last ${ADOPTION_WINDOW_DAYS} days; “never” under Last active means nothing recorded in that window. <strong>The nightly automation is excluded</strong> — its rows are logged with no person against them (they show as “System (automation)” in the change history), so they can never make a colleague look busy. Everyone with a back-office login is listed, not only advisers.${tasksErr ? " Overdue tasks could not be read just now and are shown as 0." : ""}`;
-  if (ADOPTION_ACTIVITY_SUPPORTED === true) {
-    return `<p class="panel-sub" id="report-adoption-sub"><strong>These are two different questions.</strong> <strong>“Signed in”</strong> comes from the authentication service — whether this login has ever been used at all, and when it last was. <strong>“Last active” means the last change this person recorded</strong> — a case edited, a task ticked, a note or an appointment written — as logged in the <strong>change history</strong> at the bottom of Settings; <strong>it is not a sign-in</strong>, and a sign-in is not work. Somebody who signs in and only reads leaves no trace on the change history, so a recent sign-in beside “never” active means they came and did nothing — which is a different finding from never having come at all, and now you can tell them apart. ${tail}</p>`;
-  }
-  return `<p class="panel-sub" id="report-adoption-sub"><strong>“Last active” means the last change this person recorded</strong> — a case edited, a task ticked, a note or an appointment written — as logged in the <strong>change history</strong> at the bottom of Settings. <strong>It is not a sign-in.</strong> The sign-in record could not be read just now, so the “Signed in” column says nothing about anybody and shows “—” for everyone — that is a failed question, not a finding. Somebody who signs in and only reads leaves no trace on this table. ${tail}</p>`;
+  /* R87 · owner-admin (T1) — ONE line in the open (the distinction the reader needs before the
+     table), the 177-word essay behind howFold, text intact. The id stays on the wrapper so
+     #report-adoption-sub's textContent still carries every sentence r72/r82 read. */
+  const line = ADOPTION_ACTIVITY_SUPPORTED === true
+    ? `<strong>“Signed in”</strong> is from the login service; <strong>“Last active”</strong> is the last change recorded here — <strong>not a sign-in</strong>.`
+    : `<strong>“Last active”</strong> is the last change this person recorded here — <strong>it is not a sign-in</strong>; the sign-in record could not be read just now.`;
+  const body = ADOPTION_ACTIVITY_SUPPORTED === true
+    ? `<p><strong>These are two different questions.</strong> <strong>“Signed in”</strong> comes from the authentication service — whether this login has ever been used at all, and when it last was. <strong>“Last active” means the last change this person recorded</strong> — a case edited, a task ticked, a note or an appointment written — as logged in the <strong>change history</strong> at the bottom of Settings; <strong>it is not a sign-in</strong>, and a sign-in is not work. Somebody who signs in and only reads leaves no trace on the change history, so a recent sign-in beside “never” active means they came and did nothing — which is a different finding from never having come at all, and now you can tell them apart. ${tail}</p>`
+    : `<p><strong>“Last active” means the last change this person recorded</strong> — a case edited, a task ticked, a note or an appointment written — as logged in the <strong>change history</strong> at the bottom of Settings. <strong>It is not a sign-in.</strong> The sign-in record could not be read just now, so the “Signed in” column says nothing about anybody and shows “—” for everyone — that is a failed question, not a finding. Somebody who signs in and only reads leaves no trace on this table. ${tail}</p>`;
+  return `<div class="panel-sub" id="report-adoption-sub">${line} ${howFold({ id: "report-adoption-how", title: "How these are counted", html: body })}</div>`;
 }
 
 async function renderAdoptionStrip() {
@@ -895,7 +910,28 @@ async function renderAdoptionStrip() {
    Open-case counts and overdue-task counts describe "right now" rather than a historical window,
    so those stay live even inside the threaded scoreboard panel. Computed entirely client-side from
    `all` (the same cases already fetched for the rest of Reports) — no RPC change needed. */
+/* R87 · owner-admin (05 #11) — the scoreboards' "Show all" state, one flag for both (the month
+   scoreboard here and the MI scoreboard), so pressing it once shows the empty rows everywhere. */
+let scoreboardShowAll = false;
+let threadedState = { all: null, mv: null, repAdvisers: null };
+window.toggleScoreboardShowAll = function () {
+  scoreboardShowAll = !scoreboardShowAll;
+  if (typeof currentPage !== "undefined" && currentPage === "money") { loadMoneyPage(); return; }
+  if (threadedState.all) renderThreadedPanels(threadedState.all, threadedState.mv, threadedState.repAdvisers);
+  if (miState.all) renderPipelineMI(miState.all, miState.mv);
+};
+/* The Monday money "Per adviser" strip shares the flag; a toggle there repaints that page. */
+function advRowsAllMoney(rows, quietFn) {
+  const quiet = rows.filter(quietFn);
+  const shown = (scoreboardShowAll || !rows.some((r) => !quietFn(r))) ? rows : rows.filter((r) => !quietFn(r));
+  const line = quiet.length && shown.length !== rows.length
+    ? `<p class="panel-sub" id="money-advisers-quiet" style="margin:8px 0 0;">${quiet.length} row${quiet.length === 1 ? "" : "s"} with nothing to show hidden (${esc(quiet.map((r) => r.name).join(", "))}). <button type="button" class="linkish" id="money-advisers-showall" onclick="toggleScoreboardShowAll()">Show all</button></p>`
+    : quiet.length && scoreboardShowAll && rows.some((r) => !quietFn(r))
+      ? `<p class="panel-sub" id="money-advisers-quiet" style="margin:8px 0 0;"><button type="button" class="linkish" id="money-advisers-showall" onclick="toggleScoreboardShowAll()">Hide the ${quiet.length} empty row${quiet.length === 1 ? "" : "s"}</button></p>` : "";
+  return { rows: shown, quiet, line };
+}
 function renderThreadedPanels(all, mv, repAdvisers) {
+  threadedState = { all, mv, repAdvisers };
   const inMonth = (d) => d && localMonthStr(d) === mv;
   const label = monthLabel(mv);
   /* R74 · A2 — the short month the Attach column header carries, from the same fixed table fmtD
@@ -970,16 +1006,30 @@ function renderThreadedPanels(all, mv, repAdvisers) {
   const teamIds = TEAM.map((p) => p.id);
   const strays = [];
   all.forEach((c) => { if (c.assigned_to && teamIds.indexOf(c.assigned_to) === -1 && strays.indexOf(c.assigned_to) === -1) strays.push(c.assigned_to); });
-  const advRows = TEAM.map((p) => mkAdvRow(p.id, staffName(p.id), false))
+  const advRowsAll = TEAM.map((p) => mkAdvRow(p.id, staffName(p.id), false))
     // A stray holder now has a name to show — PROFILES keeps everyone, so "Not on the team (p3)"
     // only appears when the profile itself is gone.
     .concat(strays.map((id) => mkAdvRow(id, profileName(id) ? profileName(id) + " — no access" : "Not on the team (" + id + ")", true)))
     .concat([mkAdvRow(null, "Unassigned", true)])
     .filter((r) => r.open || r.completions || r.feesBanked || r.trend.some((n) => n));
+  /* R87 · owner-admin (05 #11) — FOUR PEOPLE, SIX ROWS, HALF OF THEM DASHES. The scoreboard is for
+     the people who advise and have something on the board this month: a row for the administrator,
+     for a login whose access has been removed, or for the Unassigned bucket — each with 0 completions
+     and £0 — is furniture. They are not deleted (the Open column must still reconcile with the live
+     KPI, and the dormant accounts are out of scope for deletion): they sit behind "Show all", and
+     the foot row keeps totalling EVERY row so the counts stay honest whichever view is showing. */
+  const advRowQuiet = (r) => {
+    if (r.offTeam || r.id === null) return true;                        // "— no access" / Unassigned
+    const p = TEAM.find((x) => x.id === r.id);
+    if (p && p.role === "admin") return true;                            // back-office, not an adviser
+    return !r.open && !r.completions && !r.feesBanked;                   // nothing on the board
+  };
+  const advRowsQuiet = advRowsAll.filter(advRowQuiet);
+  const advRows = (scoreboardShowAll || !advRowsAll.some((r) => !advRowQuiet(r))) ? advRowsAll : advRowsAll.filter((r) => !advRowQuiet(r));
   // One vertical scale for the whole trend column (see sparklineSvg).
-  const sparkMax = Math.max(1, ...advRows.map((r) => Math.max.apply(null, r.trend)));
+  const sparkMax = Math.max(1, ...advRowsAll.map((r) => Math.max.apply(null, r.trend)));
   const liveTotal = all.filter((c) => activeStages.includes(c.stage)).length;
-  const openSum = advRows.reduce((s, r) => s + r.open, 0);
+  const openSum = advRowsAll.reduce((s, r) => s + r.open, 0);   // R87 — every row, shown or not, so the reconciliation line stays true
   const unassignedLive = all.filter((c) => !c.assigned_to && activeStages.includes(c.stage)).length;
   const advName = (a) => {
     const target = a.id === null ? "unassigned" : (a.offTeam ? null : a.id);
@@ -1043,7 +1093,7 @@ function renderThreadedPanels(all, mv, repAdvisers) {
       <div class="rep-howcounted-body">
         <p><strong>Fees banked (paid)</strong> <span class="money-basis">${esc(BASIS_CASH_MONTH)}</span> — broker fees actually received this month, each counted on the date that fee was paid. A different scope from "Completed £ (earned)" on the Monthly business panel above, which is fee value earned on cases completed this month regardless of payment status.${bankedFuture ? ` Excludes future-dated payments (${bankedFuture}).` : ""}</p>
         <p><strong>Target</strong> <span class="money-basis">(fees earned ÷ target · this month)</span> — fees earned (procuration + broker + solicitor) on that adviser's ${esc(label)} completions, paid or not, against the per-adviser monthly target set in Settings. The same earned-on-completion basis as the firm "Fees earned vs target" bar above, and deliberately a different figure from the cash "Fees banked" column beside it; advisers with no target set show "—".</p>
-        <p><strong>Banked ${ytdYear}</strong> <span class="money-basis">(broker only · cash · YTD)</span> — that adviser's broker cash for the calendar year, straight from get_reports.${ytdGap ? ` It covers people who still have a login, so it totals ${fmtM(ytdRpcSum)} against the ${fmtM(ytdFirm)} on the "Fees banked ${ytdYear}" tile below — the ${fmtM(ytdGap)} difference sits on completed cases still attributed to someone whose access has been removed.` : ""}</p>
+        <p><strong>Banked ${ytdYear}</strong> <span class="money-basis">(broker only · cash · YTD)</span> — that adviser's broker cash for the calendar year, as the server reports it.${ytdGap ? ` It covers people who still have a login, so it totals ${fmtM(ytdRpcSum)} against the ${fmtM(ytdFirm)} on the "Fees banked ${ytdYear}" tile below — the ${fmtM(ytdGap)} difference sits on completed cases still attributed to someone whose access has been removed.` : ""}</p>
         <p><strong>Attach (${esc(attachShort)})</strong> <span class="money-basis">(policy taken ÷ completions · this month)</span> — the share of THIS MONTH's completions that ended with a protection policy, with the count in brackets. On a month's worth of completions a single case moves it a long way, so read the bracket before the percentage. The Monday money page carries the same measure over the whole calendar year, and its header says so.</p>
         <p><strong>Avg days</strong> — mean days from case created to completed, over completions in ${esc(label)} only; fewer than three completions is greyed and is not a ranking. <strong>6-mo trend</strong> — completions per month over the last 6 calendar months, every row on one shared scale.</p>
         ${/* R74 · A4b — the Overdue column left this table; say where it went rather than letting
@@ -1056,7 +1106,7 @@ function renderThreadedPanels(all, mv, repAdvisers) {
      sides (their fees earned — proc+broker+sols — this month vs the sum of set targets). None set → "—". */
   const footTargetCell = (() => {
     let sumTargets = 0, sumEarned = 0;
-    advRows.forEach((a) => { const t = a.id ? Number(advTargets[a.id] || 0) : 0; if (t > 0) { sumTargets += t; sumEarned += Number(a.feeEarnedTotal) || 0; } });
+    advRowsAll.forEach((a) => { const t = a.id ? Number(advTargets[a.id] || 0) : 0; if (t > 0) { sumTargets += t; sumEarned += Number(a.feeEarnedTotal) || 0; } });
     if (!(sumTargets > 0)) return `<td class="adv-target-cell">—</td>`;
     const p = Math.round((sumEarned / sumTargets) * 100);
     const c = p >= 100 ? "var(--green)" : p >= 60 ? "var(--amber)" : "var(--red)";
@@ -1071,14 +1121,14 @@ function renderThreadedPanels(all, mv, repAdvisers) {
           above). ATTACH CARRIES ITS PERIOD IN THE HEADER — "Attach (Aug)" here, "Attach (2026)"
           on Monday money — because the same person read 0% on one page and 43% on the other and
           nothing on either said one was a month and the other a year. */ ""}
-    <tr><th>Adviser</th><th>Open</th><th>Completions</th><th title="Broker fees actually received this month, counted on the broker fee's own paid date. Payments dated in the future are excluded. ${esc(BASIS_CASH_MONTH)}">Fees banked</th><th title="Fees earned (procuration + broker + solicitor) on each adviser's completions this month (paid or not) versus their monthly target set in Settings — the same earned-on-completion basis as the firm 'Fees earned vs target' bar above, NOT the cash 'Fees banked' column beside it. Blank target = no target (shows —). (fees earned ÷ target · this month)">Target</th><th title="Broker fees this adviser has banked so far in ${ytdYear}, as reported by get_reports (M5) — the same coalesce(broker_fee_paid_at, fee_paid_at) basis as the column beside it, widened to the whole year. (broker only · cash · YTD)">Banked ${ytdYear}</th><th title="Of the cases this adviser completed in ${esc(label)}, the share that ended with a protection policy (protection_status = policy taken). The count is in brackets — a month is a small sample and a single case can swing it. Monday money measures the same thing over the whole of ${ytdYear}, which is why the two pages can differ. (policy taken ÷ completions · this month)">Attach (${esc(attachShort)})</th><th title="Mean days from case created to completed, over completions in the selected month only. The sample size is in brackets; fewer than 3 completions is greyed and should not be read as a ranking.">Avg days</th><th title="Completions per month over the last 6 calendar months. Every row shares one vertical scale (peak ${sparkMax}); the number is this month's value.">6-mo trend</th></tr>
+    <tr><th>Adviser</th><th>Open</th><th>Completions</th><th title="Broker fees actually received this month, counted on the broker fee's own paid date. Payments dated in the future are excluded. ${esc(BASIS_CASH_MONTH)}">Fees banked</th><th title="Fees earned (procuration + broker + solicitor) on each adviser's completions this month (paid or not) versus their monthly target set in Settings — the same earned-on-completion basis as the firm 'Fees earned vs target' bar above, NOT the cash 'Fees banked' column beside it. Blank target = no target (shows —). (fees earned ÷ target · this month)">Target</th><th title="Broker fees this adviser has banked so far in ${ytdYear} — each fee counted on its own paid date, the same basis as the column beside it, widened to the whole year. (broker only · cash · YTD)">Banked ${ytdYear}</th><th title="Of the cases this adviser completed in ${esc(label)}, the share that ended with a protection policy taken. The count is in brackets — a month is a small sample and a single case can swing it. Monday money measures the same thing over the whole of ${ytdYear}, which is why the two pages can differ. (policy taken ÷ completions · this month)">Attach (${esc(attachShort)})</th><th title="Mean days from case created to completed, over completions in the selected month only. The sample size is in brackets; fewer than 3 completions is greyed and should not be read as a ranking.">Avg days</th><th title="Completions per month over the last 6 calendar months. Every row shares one vertical scale (peak ${sparkMax}); the number is this month's value.">6-mo trend</th></tr>
     ${advRows.map((a) => `<tr${a.offTeam ? ' class="row-warn"' : ""}>
       <td>${advName(a)}</td>
       <td class="num">${a.open}</td>
       <td class="num">${a.completions}</td>
       <td class="num">${fmtM(a.feesBanked)}</td>
       ${advTargetCell(a)}
-      <td${a.id && ytdById[a.id] == null ? ' class="stat-weak" title="Not covered by get_reports — this row has no active login."' : ""}>${a.id && ytdById[a.id] != null ? fmtM(ytdById[a.id]) : "—"}</td>
+      <td${a.id && ytdById[a.id] == null ? ' class="stat-weak" title="Not covered by the server figure — this row has no active login."' : ""}>${a.id && ytdById[a.id] != null ? fmtM(ytdById[a.id]) : "—"}</td>
       <td${a.attach == null ? ' class="stat-weak" title="No completions in this month, so there is nothing to attach a policy to."' : (a.completions < 3 ? ' class="stat-weak" title="Fewer than 3 completions — too small a sample to read as a ranking."' : "")}>${a.attach == null ? "—" : `${a.attach}% <span class="cs-muted">(${a.protTaken}/${a.completions})</span>`}</td>
       ${/* R74 · A4b — the Overdue column has LEFT this table (it rendered twice more on the same
            page: the adoption strip immediately below, and Monday money). R73's one-amber-badge
@@ -1100,6 +1150,11 @@ function renderThreadedPanels(all, mv, repAdvisers) {
       <td colspan="4"></td>
     </tr>
   </table>
+  ${advRowsQuiet.length && advRows.length !== advRowsAll.length
+    ? `<p class="panel-sub" id="report-scoreboard-quiet" style="margin:8px 0 0;">${advRowsQuiet.length} row${advRowsQuiet.length === 1 ? "" : "s"} with nothing this month hidden (${esc(advRowsQuiet.map((r) => r.name).join(", "))}) — counted in the totals. <button type="button" class="linkish" id="report-scoreboard-showall" onclick="toggleScoreboardShowAll()">Show all</button></p>`
+    : advRowsQuiet.length && scoreboardShowAll && advRowsAll.some((r) => !advRowQuiet(r))
+      ? `<p class="panel-sub" id="report-scoreboard-quiet" style="margin:8px 0 0;"><button type="button" class="linkish" id="report-scoreboard-showall" onclick="toggleScoreboardShowAll()">Hide the ${advRowsQuiet.length} empty row${advRowsQuiet.length === 1 ? "" : "s"}</button></p>`
+      : ""}
   <p class="panel-sub" id="report-scoreboard-reconcile" style="margin:8px 0 0;">The ${openSum} open cases above ${openSum === liveTotal ? "<strong>reconcile with</strong>" : "<strong>do not reconcile with</strong>"} the ${liveTotal} live cases on the KPI row below${unassignedLive ? ` · ${unassignedLive} of them unassigned` : ""}.</p>` : `<div class="empty">No adviser activity in ${label}.</div>`;
   }
 
@@ -1111,8 +1166,9 @@ function renderThreadedPanels(all, mv, repAdvisers) {
      the MI one is the live book right now. The pointer to the other is only offered when the
      reader can actually see it — Pipeline MI is isAdminOrOwner-gated, and directing an adviser to
      a section that is not on their page would be worse than saying nothing. */
+  /* R87 · owner-admin (T1) — the cross-pointer to the MI funnel is a title, not a sentence. */
   $("#report-funnel-scope").innerHTML = `<strong>Cases CREATED in ${esc(label)}</strong> — how far they have got, by current stage. ${monthCases.length} case${monthCases.length === 1 ? "" : "s"}.`
-    + (isAdminOrOwner() ? ` <em>(The live snapshot — everything open right now, whenever it started — is “Funnel &amp; conversion” in Pipeline MI above.)</em>` : "");
+    + (isAdminOrOwner() ? ` <em title="The live snapshot — everything open right now, whenever it started — is “Funnel &amp; conversion” in Pipeline MI above.">(live snapshot: Pipeline MI above)</em>` : "");
   const maxF = Math.max(...STAGES.map(([s]) => monthCases.filter((c) => c.stage === s).length), 1);
   $("#report-funnel").innerHTML = monthCases.length ? STAGES.map(([s, l]) => {
     const n = monthCases.filter((c) => c.stage === s).length;
@@ -1159,8 +1215,9 @@ function renderLeadSourcesPanel(all, mv) {
   if (btn) btn.textContent = sourcesAllTime ? "This month" : "All time";
   const scopeEl = $("#report-sources-scope");
   if (scopeEl) {
+    // R87 — the "“google” and “Google” are one row" example left the line (r77 §D pins the shape).
     scopeEl.textContent = sourcesAllTime
-      ? `Set the lead source on cases to build this up. Every case on the book, all time (${rowsAll.length}). Sources are grouped case-insensitively — “google” and “Google” are one row.`
+      ? `Set the lead source on cases to build this up. Every case on the book, all time (${rowsAll.length}). Sources are grouped case-insensitively.`
       : `Set the lead source on cases to build this up. Scoped to leads created in ${label}.`;
   }
   const srcMap = {};   // trim+lowercase key → aggregate; display = the most common casing
@@ -1238,8 +1295,8 @@ function renderLossesPanel(all, mv) {
   const scopeEl = $("#report-losses-scope");
   if (scopeEl) {
     scopeEl.textContent = lossesAllTime
-      ? `Every case marked not proceeding, all time (${rowsAll.length}). "Σ fees lost" is the fee value that was on the case when it stopped — earned nothing, so it is a measure of what walked away, not of money owed.`
-      : `Cases marked not proceeding in ${monthLabel(lossState.mv)} (${scoped.length} of ${rowsAll.length} all time), dated by the stage change where the event log records one and by last touched where it doesn't. "Σ fees lost" is the fee value that was on the case when it stopped.`;
+      ? `Every case marked not proceeding, all time (${rowsAll.length}). "Σ fees lost" is the fee value on the case when it stopped — what walked away, not money owed.`
+      : `Marked not proceeding in ${monthLabel(lossState.mv)} (${scoped.length} of ${rowsAll.length} all time), dated by the stage change or last touched. "Σ fees lost" is the fee value on the case when it stopped.`;
   }
   if (!scoped.length) {
     $("#report-losses").innerHTML = `<div class="empty">${lossesAllTime ? "No cases have been marked not proceeding." : `No cases were marked not proceeding in ${esc(monthLabel(lossState.mv))}.`}</div>`;
@@ -1397,7 +1454,7 @@ function renderForecastBuckets(all) {
   if (hintEl) {
     hintEl.textContent = (open.length && buckets.none.cases === open.length)
       ? "None of these cases have an expected completion date yet — set one on each case (in Case details) to sharpen this forecast."
-      : "Live cases from DIP to exchange, weighted by stage conversion (DIP 25% · application 50% · offer 80% · exchange 95%) and bucketed by how far off the expected completion date is, counted forward from today. An overdue date counts in the ≤30 days bucket.";
+      : "Live cases from DIP to exchange, weighted by stage (DIP 25% · application 50% · offer 80% · exchange 95%), bucketed by expected completion date; overdue counts as ≤30 days.";
   }
 }
 // BUILD 6c — expand/collapse the "No date" bucket's offending-case list. State lives only on the
@@ -1455,7 +1512,7 @@ function renderBusinessMix(all, yr) {
   doneYtd.forEach((c) => bump(c, "done"));
   liveRows.forEach((c) => bump(c, "live"));
   const scopeEl = $("#report-mix-scope");
-  if (scopeEl) scopeEl.textContent = `Completions are ${yr} year-to-date by completion date; live pipeline is enquiry → exchange right now. Fees are the broker fee only — earned on the case, not necessarily paid. Averages are over each group's own cases, fee or no fee.`;
+  if (scopeEl) scopeEl.textContent = `Completions are ${yr} year-to-date; live pipeline is enquiry → exchange now. Broker fee only, earned not necessarily paid; averages over each group's own cases.`;
   const kindLabel = (k) => (k ? ((KINDS.find((x) => x[0] === k) || [])[1] || k) : "(not recorded)");
   const KIND_ORDER = KINDS.map(([k]) => k);
   const orderOf = (k) => { if (!k) return KIND_ORDER.length + 1; const i = KIND_ORDER.indexOf(k); return i === -1 ? KIND_ORDER.length : i; };
@@ -1518,7 +1575,9 @@ const miMedian = (arr) => {
 const miMean = (arr) => (arr.length ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length) : null);
 const miDays = (a, b) => { const d = Math.round((new Date(b) - new Date(a)) / 86400000); return isNaN(d) ? null : d; };
 
+let miState = { all: null, mv: null };   // R87 — so toggleScoreboardShowAll can repaint the MI board
 function renderPipelineMI(all, mv) {
+  miState = { all, mv };
   const sec = $("#report-mi-section");
   if (!sec) return;
   /* OWNER/ADMIN gate — the whole section, hidden for plain advisers. Same mechanism the money
@@ -1602,7 +1661,7 @@ function renderPipelineMI(all, mv) {
   });
 
   const label = monthLabel(mv);
-  $("#report-mi-scope").textContent = "Owner management information, derived from the case book's milestone dates (created → submitted → offer issued → completed). Pre-launch the samples are small; every figure below states its own basis and sharpens as the book grows.";
+  $("#report-mi-scope").textContent = "From the case book's milestone dates (created → submitted → offer issued → completed). Samples are small pre-launch and sharpen as the book grows.";
   if (miSkipped > 0) $("#report-mi-scope").insertAdjacentHTML("beforeend", ` <span class="client-list-cap-note">${miSkipped} record(s) couldn't be displayed — logged</span>`);
 
   // ---- Panel 1: funnel + conversion + win rate ----
@@ -1730,7 +1789,7 @@ function renderPipelineMI(all, mv) {
     </table>`;
 
   // ---- Panel 4: per-adviser scoreboard ----
-  const boardRows = [...advMap.values()]
+  const boardRowsAll = [...advMap.values()]
     .filter((a) => a.live || a.completedPeriod || a.feesPeriod || a.won || a.lost)
     .map((a) => {
       const term = a.won + a.lost;
@@ -1741,7 +1800,22 @@ function renderPipelineMI(all, mv) {
       };
     })
     .sort((x, y) => y.feesPeriod - x.feesPeriod);
-  $("#report-mi-scoreboard-scope").textContent = `Live cases are as of now; completed and fees written are for ${label}; win rate and median cycle are all-time. Sorted by fees written.`;
+  /* R87 · owner-admin (05 #11) — same rule as the month scoreboard: a row for somebody who is not an
+     adviser (the administrator, a removed login, a profile this page cannot name) or the Unassigned
+     bucket, or one with nothing this month, sits behind "Show all". Not deleted — r19/r20 drill it. */
+  const miRowQuiet = (a) => {
+    if (!a.id) return true;
+    const p = TEAM.find((x) => x.id === a.id);
+    if (!p || p.role === "admin" || p.role === "none") return true;
+    return !a.live && !a.completedPeriod && !a.feesPeriod;
+  };
+  const miQuiet = boardRowsAll.filter(miRowQuiet);
+  const boardRows = (scoreboardShowAll || !boardRowsAll.some((a) => !miRowQuiet(a))) ? boardRowsAll : boardRowsAll.filter((a) => !miRowQuiet(a));
+  const miQuietLine = miQuiet.length && boardRows.length !== boardRowsAll.length
+    ? ` <button type="button" class="linkish" id="report-mi-scoreboard-showall" onclick="toggleScoreboardShowAll()">Show all (${miQuiet.length} hidden: ${esc(miQuiet.map((a) => a.name).join(", "))})</button>`
+    : miQuiet.length && scoreboardShowAll && boardRowsAll.some((a) => !miRowQuiet(a))
+      ? ` <button type="button" class="linkish" id="report-mi-scoreboard-showall" onclick="toggleScoreboardShowAll()">Hide the ${miQuiet.length} empty row${miQuiet.length === 1 ? "" : "s"}</button>` : "";
+  $("#report-mi-scoreboard-scope").innerHTML = `Live cases as of now; completed and fees written for ${esc(label)}; win rate and median cycle all-time. Sorted by fees written.${miQuietLine}`;
   $("#report-mi-scoreboard").innerHTML = boardRows.length ? `<table class="imp-table">
     <tr><th>Adviser</th><th>Live</th><th title="Completed in ${esc(label)}">Completed</th><th title="Broker + proc fee on cases completed in ${esc(label)}">Fees written</th><th title="All-time completed ÷ (completed + not proceeding)">Win rate</th><th title="All-time median days, created → completed">Median cycle</th></tr>
     ${boardRows.map((a) => `<tr>
@@ -1808,7 +1882,8 @@ function renderPipelineMI(all, mv) {
   };
   const csvBoard = $("#report-mi-csv-scoreboard");
   if (csvBoard) csvBoard.onclick = () => {
-    const r = boardRows.map((a) => [a.name, a.live, a.completedPeriod, a.feesPeriod, a.winPct == null ? "" : a.winPct + "%", a.term, a.medCycle == null ? "" : a.medCycle]);
+    // R87 — the CSV carries EVERY row, shown or hidden: a file is not a view, and r20 §B4 pins the full set.
+    const r = boardRowsAll.map((a) => [a.name, a.live, a.completedPeriod, a.feesPeriod, a.winPct == null ? "" : a.winPct + "%", a.term, a.medCycle == null ? "" : a.medCycle]);
     miCsv(`nexmoney-mi-scoreboard-${dstr}.csv`, ["Adviser", "Live", `Completed (${label})`, "Fees written £", "Win rate", "Terminal n", "Median cycle days"], r);
   };
 }
@@ -2493,10 +2568,12 @@ async function loadReports() {
        sentence is added for ADMIN ONLY — an adviser sees no run-rate at all, so telling them
        "the aggregate run-rate above is the admin view" would be a pointer to a panel that is not
        on their page. Owner sees no note at all, exactly as before. */
-    moneyNote.textContent = money ? "" : ("Firm-wide money figures — fees banked and outstanding, pipeline loan value, the adviser scoreboard, the forecast, introducer revenue and client lifetime value — are shown to the Owner only. Case counts, the funnel, completions and lead sources are below, your own numbers are in the My numbers card at the top, and the fees on your own cases are on each case."
-      + (MY_ROLE === "admin"
-        ? " As an Admin this page ENDS where that £-detail begins, and that is the rule rather than a page that failed to load: Money owed, the commission and completion forecasts, the rate-end book value, introducer revenue and client lifetime value are Owner-only. The aggregate run-rate in Pipeline MI above is the admin view of the firm's money."
-        : ""));
+    /* R87 · owner-admin (05 #7) — 130 words about what an administrator cannot see became one line
+       (≤ 20 words) for each role. The two anchors r37 §12 reads ("ENDS where", "Pipeline MI") are
+       kept for the admin's line; the adviser's names the My numbers card and the case. */
+    moneyNote.textContent = money ? "" : (MY_ROLE === "admin"
+      ? "Firm money figures are Owner-only — this page ENDS where they begin; Pipeline MI is the admin view."
+      : "Firm money figures are Owner-only; your own numbers are in My numbers above and on each case.");
   }
   /* R5-F2 (Daniel-approved) — the HEADLINE fee figure for the year is now what the firm EARNED on
      the cases it completed (proc+broker+sols on completed_at), not what happened to arrive in the
@@ -2589,7 +2666,7 @@ async function loadReports() {
       // R5-17 — the Revenue basis sits UNDER the table rather than in the column head: this panel
       // shares a two-column grid with the completions chart, and a long unwrapping heading sets
       // the table's min-content width, which squeezes the chart beside it to a sliver.
-      + (money ? `<p class="panel-sub" style="margin:8px 0 0;">Revenue ${esc(BASIS_INTRO_REV)} — fee value on this introducer's completed cases, whether or not it has been paid.</p>` : "")
+      + (money ? `<p class="panel-sub" style="margin:8px 0 0;">Revenue ${esc(BASIS_INTRO_REV)} — fee value on completed cases, paid or not.</p>` : "")
     : '<div class="empty">No cases assigned to introducers yet.</div>';
 
   const rep = repRes && !repRes.error ? repRes.data : null;
@@ -2799,6 +2876,22 @@ let repJumpWired = false;
    ========================================================================== */
 let repSectionActive = "";
 let repSectionItems = [];       // the live level-1 sections, in DOM order
+/* R87 · owner-admin (05 #12) — THE CHIP STRIP IS OPT-IN. Two sticky strips cost 105px of every
+   viewport and the 23-chip one answered a question nobody had asked yet. On arrival only the five
+   section pills show; the per-panel chips appear the moment a pill is pressed (or a deep link
+   lands), and stay for the rest of the visit. #rep-nav keeps its id, its markup and its sticky
+   position — buildReportsJumpNav still paints it on every section change so the scroll-spy has
+   chips to light — it simply also carries `hidden` until the reader asks for it. */
+let repChipsWanted = false;
+function repShowChips(on) {
+  repChipsWanted = !!on;
+  const bar = $("#rep-nav");
+  if (bar && repJumpItems.length) bar.hidden = !repChipsWanted;
+  const t = $("#reports-jump-toggle");
+  if (t) { t.setAttribute("aria-expanded", repChipsWanted ? "true" : "false"); t.textContent = repChipsWanted ? "Panels ▴" : "Panels ▾"; }
+  measureRepJumpOffsets();
+}
+window.repToggleChips = function () { repShowChips(!repChipsWanted); };
 /* Which section an element sits in: the last live section head at or before it in the DOM.
    compareDocumentPosition rather than offsetTop, so it is a structural answer and cannot be
    thrown by a panel that has not laid out yet. */
@@ -2835,6 +2928,8 @@ function buildReportsJumpNav() {
   repJumpItems = built ? built.items : [];
   if (!built) return;
   repJumpActive = "";                 // the chips are new elements — nothing is active yet
+  const barEl = $("#rep-nav");        // R87 — built, but shown only once the reader has asked
+  if (barEl) barEl.hidden = !repChipsWanted;
   measureRepJumpOffsets();
   if (!repJumpWired) {
     repJumpWired = true;
@@ -2850,7 +2945,9 @@ function measureRepJumpOffsets() {
   const bar = $("#rep-nav"), page = $("#page-reports");
   // A resize while another page is open would measure a bar of height 0 and leave every heading on
   // Reports with a 12px scroll margin. Nothing to measure until Reports is the page on screen.
-  if (!bar || bar.hidden || !page || page.classList.contains("hidden")) return;
+  // R87 — the chip strip may be hidden (opt-in); the SECTION strip still needs its offset and the
+  // headings their scroll margin, so only the chip-bar half of the measurement is skipped then.
+  if (!bar || !page || page.classList.contains("hidden")) return;
   const shell = document.querySelector(".app-shell");
   const side = document.querySelector(".sidebar");
   let off = 0;
@@ -2868,8 +2965,9 @@ function measureRepJumpOffsets() {
     secH = Math.round(sec.getBoundingClientRect().height);
   }
   bar.style.top = (off + secH) + "px";
-  const h = Math.round(bar.getBoundingClientRect().height);
+  const h = bar.hidden ? 0 : Math.round(bar.getBoundingClientRect().height);
   document.documentElement.style.setProperty("--rep-jump-scroll", (off + secH + h + REP_JUMP_GAP) + "px");
+  if (bar.hidden) return;
   // Only fade the right edge when there is genuinely more strip out there to scroll to.
   // R73 · A5 — the fade AND the chevron, both decided by the same measurement, and both switched
   // off once the strip is at its right-hand end.
@@ -2886,8 +2984,11 @@ function onRepJumpScroll() {
   requestAnimationFrame(() => {
     repJumpTick = false;
     const page = $("#page-reports"), bar = $("#rep-nav");
-    if (!page || page.classList.contains("hidden") || !bar || bar.hidden || !repJumpItems.length) return;
-    const line = bar.getBoundingClientRect().bottom + REP_JUMP_GAP + 2;
+    if (!page || page.classList.contains("hidden") || !bar || !repJumpItems.length) return;
+    // R87 — while the chip strip is opt-in-hidden the section pills are the sticky edge to spy from.
+    const edge = bar.hidden ? $("#reports-jump") : bar;
+    if (!edge || edge.hidden) return;
+    const line = edge.getBoundingClientRect().bottom + REP_JUMP_GAP + 2;
     /* R74 · A4c — the SECTION follows the reader too. Scrolling out of "This month" and into
        "Money & book" re-scopes the chip strip, so it never describes a part of the page that is
        no longer on screen. Same walk, same threshold line, over the section heads.
@@ -2970,10 +3071,14 @@ function buildReportSectionNav() {
   repSectionItems = live;
   if (!live.some((x) => x.key === repSectionActive)) repSectionActive = live[0].key;
   wrap.innerHTML = live.map((s) =>
-    `<button type="button" class="seg-btn${s.key === repSectionActive ? " active" : ""}" id="reports-nav-${esc(s.key)}" role="tab" aria-selected="${s.key === repSectionActive}" data-reports-jump="${esc(s.key)}" title="Show the ${esc(s.label)} panels and jump to them">${esc(s.label)}</button>`).join("");
+    `<button type="button" class="seg-btn${s.key === repSectionActive ? " active" : ""}" id="reports-nav-${esc(s.key)}" role="tab" aria-selected="${s.key === repSectionActive}" data-reports-jump="${esc(s.key)}" title="Show the ${esc(s.label)} panels and jump to them">${esc(s.label)}</button>`).join("")
+    /* R87 · owner-admin (05 #12) — the door to the per-panel chips. NOT a tab (no role, no
+       data-reports-jump), so the pill count r74 §D2 reads is untouched. */
+    + `<button type="button" class="btn btn-sm btn-ghost rep-chips-toggle" id="reports-jump-toggle" aria-controls="rep-nav" aria-expanded="${repChipsWanted ? "true" : "false"}" onclick="repToggleChips()" title="Show or hide the strip of one chip per panel in the selected section">${repChipsWanted ? "Panels ▴" : "Panels ▾"}</button>`;
   wrap.querySelectorAll("[data-reports-jump]").forEach((b) => (b.onclick = () => {
     const it = live.find((s) => s.key === b.dataset.reportsJump);
     if (!it) return;
+    if (!repChipsWanted) repShowChips(true);   // R87 — pressing a pill is asking for its panels
     repSetSection(it.key);
     repJumpUntil = Date.now() + REP_JUMP_SETTLE_MS;
     // scroll-margin-top on .report-section-head (--rep-jump-scroll, measured) is what stops the
@@ -3015,6 +3120,7 @@ window.repRevealPanel = function (sel) {
   const p = $(sel);
   if (!p || p.classList.contains("hidden") || !repJumpVisible(p)) return false;
   const key = repSectionOfEl(p);
+  if (!repChipsWanted) repShowChips(true);   // R87 — a deep link is a request for the strip too
   if (key) { repSetSection(key); setRepJumpActive(""); }
   repJumpUntil = Date.now() + REP_JUMP_SETTLE_MS;
   p.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -3318,11 +3424,12 @@ function advPromotersBlockHtml(all, ctx) {
   }
   const noteBits = [];
   if (m.askedKnown && m.askedN) noteBits.push(`<span id="adv-promoters-asked">${m.askedN} promoter${m.askedN === 1 ? " is" : "s are"} not listed — a referral request has already been queued or sent for ${m.askedN === 1 ? "them" : "each of them"}.</span>`);
-  if (m.phoneOnlyN) noteBits.push(`<span id="adv-promoters-phone">${m.phoneOnlyN === 1 ? "One flagged row carries" : `${m.phoneOnlyN} flagged rows carry`} the call verb only — an opted-out promoter said no to relationship email, not to being asked, and can still be ASKED BY PHONE (a no-email promoter can only be).</span>`);
+  if (m.phoneOnlyN) noteBits.push(`<span id="adv-promoters-phone">${m.phoneOnlyN === 1 ? "One flagged row carries" : `${m.phoneOnlyN} flagged rows carry`} the call verb only — opted out of email, not of being ASKED BY PHONE.</span>`);
   return `<div class="adv-block" id="adv-block-promoters"><h4>Promoters never asked</h4>
-    <p class="adv-basis" id="adv-promoters-basis">Clients whose case carries a review score of <strong>9 or 10</strong> and for whom <strong>no referral request has ever been queued</strong> — no stamp on any of their cases, and no email_queue row in any status except cancelled. Ranked best score first, newest completion first.</p>
-    ${body}
-    ${noteBits.length ? `<p class="adv-basis" id="adv-promoters-excl">${noteBits.join(" ")}</p>` : ""}</div>`;
+    <div class="adv-basis" id="adv-promoters-basis">Scored <strong>9 or 10</strong> and <strong>no referral request has ever been queued</strong>; best score first. ${howFold({ id: "adv-promoters-how", title: "How this is counted", html: `<p>Clients whose case carries a review score of 9 or 10 and for whom no referral request has ever been queued — no stamp on any of their cases, and no queued email in any status except cancelled. Ranked best score first, newest completion first.</p>`
+      /* R87 fixer (09 D2) — the "not listed" note lives in the fold now; r80 reads its ids by textContent. */
+      + (noteBits.length ? `<p class="adv-basis" id="adv-promoters-excl">${noteBits.join(" ")}</p>` : "") })}</div>
+    ${body}</div>`;
 }
 /* R80 · B1 — the call verb: ONE case_tasks insert, protCallTask's exact shape (assigned to the
    case's own adviser, due tomorrow, a weekend landing rolled to Monday by weekendRollYmd, dbFail
@@ -3393,12 +3500,15 @@ function renderAdvocacy(all, ctx) {
     .sort((a, b) => b.scores.length - a.scores.length || String(a.name).localeCompare(String(b.name)));
   const totalScored = advRowsList.reduce((s, a) => s + a.scores.length, 0);
   const thinN = advRowsList.filter((a) => a.scores.length < ADV_MIN_N).length;
+  /* R87 fixer (09 D2) — one open line per panel (#report-advocacy-basis); each block's basis sits in a
+     closed fold, ids kept so r9_adv / r80_ledger still read the sentences by textContent. */
+  const npsHow = (extra) => howFold({ id: "adv-nps-how", title: "How this is counted", html: `<p class="adv-basis">Mean score out of 10 on each adviser's <strong>completed</strong> cases, all time; fewer than ${ADV_MIN_N} answers is greyed (n&lt;${ADV_MIN_N}).</p>${extra || ""}` });
   const npsBlock = advRowsList.length
     ? `<table id="adv-nps-table"><tr><th>Adviser</th><th class="num">Scores</th><th class="num" title="Mean score out of 10 on that adviser's completed cases. Marked (n&lt;${ADV_MIN_N}) where fewer than ${ADV_MIN_N} clients have answered.">Avg</th><th class="num" title="Scores of 6 or below.">Detractors</th></tr>`
       + advRowsList.map((a) => `<tr data-adviser="${esc(a.id)}"><td>${esc(a.name)}</td><td class="num">${a.scores.length}</td><td class="num adv-avg">${advScoreCell(a.scores)}</td><td class="num">${a.scores.filter((x) => x <= 6).length || ""}</td></tr>`).join("")
       + `</table>`
-      + `<p class="adv-basis" id="adv-nps-note">${totalScored} score${totalScored === 1 ? "" : "s"} across ${advRowsList.length} adviser${advRowsList.length === 1 ? "" : "s"}${thinN ? ` · ${thinN} marked (n&lt;${ADV_MIN_N}) — too few answers to read as a track record` : ""}.</p>`
-    : ADV_EMPTY(`No completed case has returned a review score yet, so there is nothing to average. Switch review requests on in Settings and the first scores will appear here — a blank table is the truthful state, not a broken one.`);
+      + npsHow(`<p class="adv-basis" id="adv-nps-note">${totalScored} score${totalScored === 1 ? "" : "s"} across ${advRowsList.length} adviser${advRowsList.length === 1 ? "" : "s"}${thinN ? ` · ${thinN} marked (n&lt;${ADV_MIN_N}) — too few answers to read as a track record` : ""}.</p>`)
+    : ADV_EMPTY(`No completed case has returned a review score yet, so there is nothing to average. Switch review requests on in Settings and the first scores will appear here — a blank table is the truthful state, not a broken one.`) + npsHow();
 
   // ---- 2 · Reviews received per month ------------------------------------
   const months = last6Months().slice(-ADV_SERIES_MONTHS);
@@ -3408,12 +3518,13 @@ function renderAdvocacy(all, ctx) {
   const scoredRows = rows.filter((c) => caseReviewScore(c) != null);
   const perMonth = months.map((mv) => scoredRows.filter((c) => { const d = dateOf(c); return d && localMonthStr(d) === mv; }).length);
   const seriesTotal = perMonth.reduce((s, n) => s + n, 0);
+  /* R87 · owner-admin (06 #11) — column names left the sentence: "dated by when the score came back"
+     / "dated by when the request went out". The honesty clause is unchanged. */
   const dateBasis = scoreDates
-    ? `dated by <code>${esc(scoreDates.col)}</code> — when the score came back`
-    : (`dated by <code>review_requested_at</code> — <strong>the database records no date for when a score came back</strong>, so this is when the request went out. `
-      + `Treat it as "reviews prompted", not "reviews received", until that column exists.`);
+    ? `dated by when the score came back`
+    : `dated by when the request went out — <strong>the database records no date for the answer</strong>, so read it as "reviews prompted".`;
   const reviewsBlock = seriesTotal
-    ? advMiniSeries(months, perMonth) + `<p class="adv-basis" id="adv-series-basis">${seriesTotal} score${seriesTotal === 1 ? "" : "s"} in the last ${ADV_SERIES_MONTHS} months · ${dateBasis}</p>`
+    ? advMiniSeries(months, perMonth) + howFold({ id: "adv-series-how", title: "How this is counted", html: `<p class="adv-basis" id="adv-series-basis">${seriesTotal} score${seriesTotal === 1 ? "" : "s"} in the last ${ADV_SERIES_MONTHS} months · ${dateBasis}</p>` })
     : ADV_EMPTY(`No scores fall in the last ${ADV_SERIES_MONTHS} months${scoredRows.length ? ` (the book holds ${scoredRows.length} in total, all older)` : ""}. ${scoreDates ? "" : "There is also no column recording when a score came back, so even the older ones can only be dated by when they were asked for."}`);
 
   // ---- 3 · Referrals per completion --------------------------------------
@@ -3432,7 +3543,7 @@ function renderAdvocacy(all, ctx) {
         <span class="adv-big" id="adv-ratio">${ratio == null ? "—" : ratio.toFixed(2)}</span>
         <span class="cs-muted">referrals per completion</span>
       </div>
-      <p class="adv-basis" id="adv-ratio-basis">${referredPeople.size} referred client${referredPeople.size === 1 ? "" : "s"} ÷ ${nDone} completed case${nDone === 1 ? "" : "s"} — all time, whole book. Counted as PEOPLE referred (a client who came back for a second mortgage is one referral, not two) over completions, so a firm doing more business has to earn more referrals to hold the number steady.${referredCases.length !== referredPeople.size ? ` ${referredCases.length} referred cases sit behind those ${referredPeople.size} people.` : ""}${nDone ? "" : " No completions yet, so there is nothing to divide by."}</p>`;
+      <div class="adv-basis" id="adv-ratio-basis">${referredPeople.size} referred client${referredPeople.size === 1 ? "" : "s"} ÷ ${nDone} completed case${nDone === 1 ? "" : "s"}, all time.${nDone ? "" : " No completions yet, so there is nothing to divide by."} ${howFold({ id: "adv-ratio-how", title: "How this is counted", html: `<p>Counted as PEOPLE referred (a client who came back for a second mortgage is one referral, not two) over completions, whole book, so a firm doing more business has to earn more referrals to hold the number steady.${referredCases.length !== referredPeople.size ? ` ${referredCases.length} referred cases sit behind those ${referredPeople.size} people.` : ""}</p>` })}</div>`;
   }
 
   // ---- 4 · Top referrers -------------------------------------------------
@@ -3465,8 +3576,8 @@ function renderAdvocacy(all, ctx) {
       ? `<table id="adv-top-table"><tr><th>Referrer</th><th class="num" title="Distinct people they have sent us.">Referrals</th><th class="num" title="How many of those referred cases have completed.">Completed</th>${money ? `<th class="num" title="Fee value (proc + broker + sols) earned on this referrer's referred cases that completed — paid or not. All time.">Converted value</th>` : ""}</tr>`
         + list.map((v) => `<tr data-referrer="${esc(v.id)}"><td><button type="button" class="linkish" onclick="openClient('${jsArg(v.id)}')" title="Open this client's record">${esc(nameById[v.id] || "(client not in this view)")}</button></td><td class="num">${v.clients.size}</td><td class="num">${v.done}</td>${money ? `<td class="num adv-value">${fmtM(v.value)}</td>` : ""}</tr>`).join("")
         + `</table>`
-        + (money ? `<p class="adv-basis" id="adv-top-basis">Converted value ${esc(BASIS_INTRO_REV)} — fee value on the completed cases behind each referral, whether or not it has been paid. Not cash.</p>`
-          : `<p class="adv-basis" id="adv-top-basis">Referral counts only — fee value is not shown at your access level.</p>`)
+        + howFold({ id: "adv-top-how", title: "How this is counted", html: money ? `<p class="adv-basis" id="adv-top-basis">Converted value ${esc(BASIS_INTRO_REV)} — fee value on completed referred cases, paid or not.</p>`
+          : `<p class="adv-basis" id="adv-top-basis">Referral counts only — fee value is not shown at your access level.</p>` })
       : ADV_EMPTY(`Nobody has been recorded as a referrer yet. The field is on the case form (“Referred by (client)”), under Lead source — fill it in as referrals arrive and this table builds itself.`);
   }
 
@@ -3483,21 +3594,19 @@ function renderAdvocacy(all, ctx) {
           + `<td>${t.case_id ? `<button type="button" class="btn btn-sm adv-open-btn" onclick="openCase('${jsArg(t.case_id)}')" title="Open the case — the timeline holds what the client actually said">Open</button>` : ""}</td></tr>`;
       }).join("")
       + `</table>`
-      + `<p class="adv-basis" id="adv-detractor-basis">${openTasks.length} open review-feedback task${openTasks.length === 1 ? "" : "s"}${overdueN ? ` · <strong>${overdueN} overdue</strong>` : ""}. These are raised when an unhappy client answers a review request; the score and their comment are on the case timeline. Open tasks only — a completed call-back drops off this list.</p>`
+      + howFold({ id: "adv-detractor-how", title: "How this is counted", html: `<p class="adv-basis" id="adv-detractor-basis">${openTasks.length} open review-feedback task${openTasks.length === 1 ? "" : "s"}${overdueN ? ` · <strong>${overdueN} overdue</strong>` : ""} — raised when an unhappy client answers; their words are on the case timeline.</p>` })
     : ADV_EMPTY(`No review-feedback call-backs are outstanding. That means either nobody has scored us badly, or every one that came in has been rung back and closed — the case timelines say which.`);
 
   $("#report-advocacy-grid").innerHTML = `
-    <div class="adv-block" id="adv-block-nps"><h4>Review score by adviser</h4>
-      <p class="adv-basis">Mean score out of 10 on each adviser's <strong>completed</strong> cases, all time. Fewer than ${ADV_MIN_N} answers is marked (n&lt;${ADV_MIN_N}) and greyed — the same rule the conversion columns use.</p>${npsBlock}</div>
+    <div class="adv-block" id="adv-block-nps"><h4>Review score by adviser</h4>${npsBlock}</div>
     <div class="adv-block" id="adv-block-series"><h4>Reviews per month — last ${ADV_SERIES_MONTHS}</h4>${reviewsBlock}</div>
     <div class="adv-block" id="adv-block-ratio"><h4>Referrals per completion</h4>${referralBlock}</div>
     <div class="adv-block" id="adv-block-top"><h4>Top referrers</h4>${topBlock}</div>
     <div class="adv-block" id="adv-block-detractors"><h4>Detractor follow-ups outstanding</h4>${detractorBlock}</div>
     ${promotersBlock}`;
   const basis = $("#report-advocacy-basis");
-  if (basis) basis.innerHTML = `Everything on this panel is computed from the ${rows.length} case row${rows.length === 1 ? "" : "s"} this page already holds — no separate report, nothing scoped to the month picker above. `
-    + `${refMap ? "" : "<strong>Referral figures are unavailable: migration m11 has not run.</strong> "}`
-    + `Owner-only, like the rest of the firm-wide figures here.`;
+  if (basis) basis.innerHTML = `All time, from the ${rows.length} case row${rows.length === 1 ? "" : "s"} on this page — not scoped to the month picker. `
+    + `${refMap ? "" : "<strong>Referral figures are unavailable: migration m11 has not run.</strong> "}`;
 }
 /* ==========================================================================
    R9-6 · CONVEYANCER SPEED  (Reports, Owner-only)
@@ -3529,9 +3638,8 @@ function renderConveyancerSpeed(all, firmMap) {
   const body = $("#report-conveyancer-body");
   const basisEl = $("#report-conveyancer-basis");
   if (basisEl) {
-    basisEl.innerHTML = `Average days from <strong>application submitted</strong> to <strong>completed</strong>, grouped by the solicitor named on the case. `
-      + `The database records no date an offer was issued — <code>offer_expiry_date</code> is when an offer runs out, not when it arrived — so this measures from submission, which is the last date on a case that is definitely real. `
-      + `Owner-only, like the rest of the firm-wide figures here.`;
+    basisEl.innerHTML = `Average days from <strong>application submitted</strong> to <strong>completed</strong>, by the solicitor named on the case. `
+      + howFold({ id: "report-conveyancer-how", title: "Why from submission", html: `<p>The database records no date an offer was issued — the offer expiry date is when an offer runs out, not when it arrived — so this measures from submission, which is the last date on a case that is definitely real.</p>` });
   }
   if (!firmMap) {
     body.innerHTML = `<div class="adv-empty">Solicitors are not being recorded yet — this database has not taken migration <code>m10</code> (<code>cases.solicitor_firm</code>), so no case can name its conveyancer. Nothing here is a zero; it is an absence.</div>`;
@@ -3679,9 +3787,9 @@ async function renderApptOutcomes() {
   const noShows = past.filter((a) => a.outcome === "no_show");
   const unrecPct = total ? Math.round((unrecorded / total) * 100) : 0;
   $("#report-outcomes-basis").innerHTML =
-    `Every appointment that has already started in the <strong>last ${APPT_OUTCOME_WINDOW_DAYS} days</strong> (since ${esc(fmtD(since))}) — ${total} of them — counted by the adviser it was booked for. `
-    + `The outcome is what the <strong>✓ ✗ ↻ chips on Today</strong> (and the radios in the appointment editor) record; <strong>null means not recorded</strong>, and that share leads the numbers below because every other figure on this panel is only as good as the recording. `
-    + `Future bookings are pending, not unrecorded, and are not counted. Not scoped to the month picker.`;
+    `Appointments that started in the <strong>last ${APPT_OUTCOME_WINDOW_DAYS} days</strong> (${total} since ${esc(fmtD(since))}), by the adviser booked. Not scoped to the month picker. `
+    + howFold({ id: "report-outcomes-how", title: "How this is counted", html: `<p>The outcome is what the <strong>✓ ✗ ↻ chips on Today</strong> (and the radios in the appointment editor) record; <strong>not recorded</strong> means nobody scored it, and that share leads the numbers below because every other figure on this panel is only as good as the recording. `
+      + `Future bookings are pending, not unrecorded, and are not counted.</p>` });
   if (!total) {
     $("#report-outcomes-headline").innerHTML = "";
     $("#report-outcomes-adviser").innerHTML = emptyState({
@@ -3821,11 +3929,12 @@ async function renderReferralsOut(all, mv) {
     b.onclick = () => { refOutScope = k; renderReferralsOut(all, mv); };
   });
   if (basisEl) {
-    basisEl.innerHTML = `Referrals this firm made OUT to somebody else, counted on the date they were recorded, scoped to <strong>${esc(label)}</strong> (the month picker at the top of this page). `
-      + `Showing <strong>${refOutScope === "mine" ? "your own referrals" : "every adviser's referrals"}</strong> — a referral belongs to the person who recorded it, falling back to the case's adviser where nobody is stamped on the row. `
-      + `Status is what somebody set on the case afterwards: <em>Referred</em> means nobody has come back yet. `
-      + `No money on this panel — the firm's share of a referral is not held anywhere in this system — so it is visible to everyone.`
-      + (refsRaw.length >= REFOUT_ROW_CAP ? ` <span class="client-list-cap-note">Showing the newest ${REFOUT_ROW_CAP} of this month's referrals.</span>` : "");
+    basisEl.innerHTML = `Referrals this firm made out in <strong>${esc(label)}</strong> — <strong>${refOutScope === "mine" ? "your own referrals" : "every adviser's referrals"}</strong>. <em>Referred</em> means nobody has come back yet.`
+      + (refsRaw.length >= REFOUT_ROW_CAP ? ` <span class="client-list-cap-note">Showing the newest ${REFOUT_ROW_CAP} of this month's referrals.</span>` : "")
+      + howFold({ id: "report-ref-how", title: "How this is counted", html: `<p>Referrals this firm made OUT to somebody else, counted on the date they were recorded, scoped to the month picker at the top of this page. `
+        + `A referral belongs to the person who recorded it, falling back to the case's adviser where nobody is stamped on the row. `
+        + `Status is what somebody set on the case afterwards: <em>Referred</em> means nobody has come back yet. `
+        + `No money on this panel — the firm's share of a referral is not held anywhere in this system — so it is visible to everyone.</p>` });
   }
   if (!scoped.length) {
     groupsEl.innerHTML = `<div class="empty">No referrals recorded in ${esc(label)}${refOutScope === "mine" ? " against your name" : ""}. Referrals are recorded from a case — the “Refer for …” actions on the case screen.</div>`;
@@ -4099,10 +4208,15 @@ function renderMoneyOwed(all) {
      panel-specific facts — which column each fee type is counted on, what a waived fee does, what
      it is aged from — are what this line is FOR and are untouched. BASIS_OWED itself is not
      touched: Monday money (#money-owed-basis) still prints it and that page is out of scope. */
+  /* R87 · owner-admin (05 #8, T1) — one plain line, the column names gone ("each fee on its own
+     paid date", "aged from the completion date"), the detail behind howFold. The basis chip stays
+     LAST so the element's textContent still ends on the R42 ending r42 §F3 pins. */
   $("#report-owed-basis").innerHTML =
-    `Every completed case carrying a fee amount with no paid date against it — proc, solicitor and broker fees counted separately, each on <code>coalesce(&lt;type&gt;_fee_paid_at, fee_paid_at)</code>. `
-    + `A broker fee marked <strong>waived</strong> is excluded (money you chose not to charge is not money you are owed); a waived status has no effect on proc or solicitor fees. `
-    + `Aged from <strong>completed_at</strong>. <span class="money-basis">— basis: outstanding (see legend above)</span>`;
+    `Completed cases with a fee that has no paid date — proc, solicitor and broker counted separately, aged from the completion date. `
+    + howFold({ id: "report-owed-how", title: "How this is counted", html: `<p>Every completed case carrying a fee amount with no paid date against it — proc, solicitor and broker fees counted separately, each on its own paid date (falling back to the case's single paid date where the fee has none). `
+      + `A broker fee marked <strong>waived</strong> is excluded (money you chose not to charge is not money you are owed); a waived status has no effect on proc or solicitor fees. `
+      + `Aged from the completion date.</p>` })
+    + `<span class="money-basis">— basis: outstanding (see legend above)</span>`;
 
   $("#report-owed-buckets").innerHTML = m.bucketList.map((b) => {
     const hot = b.key === "60-90" || b.key === "90+";
@@ -4155,7 +4269,7 @@ function renderMoneyOwed(all) {
     ${body}
     <tr class="owed-total-row"><td><strong>All ${owedGroupBy === "lender" ? "lenders" : "advisers"}</strong></td>${cellsFor(m.rows)}<td class="owed-cell"><strong>${fmtM(m.grand)}</strong></td></tr>
   </table></div>
-  <p class="panel-sub" style="margin:10px 0 0;">Both groupings hold the same ${m.n} case${m.n === 1 ? "" : "s"} and add to the same ${fmtM(m.grand)} — the toggle changes who you would chase, never what is outstanding. Click any case row to open it.</p>`;
+  <p class="panel-sub" style="margin:10px 0 0;">Both groupings hold the same ${m.n} case${m.n === 1 ? "" : "s"} and the same ${fmtM(m.grand)}. Click a case row to open it.</p>`;
 }
 window.setOwedGroup = function (g) {
   if (g === owedGroupBy) return;
@@ -4332,13 +4446,16 @@ function renderRateEndBook(all) {
   panel.classList.remove("hidden");
   const m = rateEndBookModel(all);
   const merged = m.buckets.reduce((s, b) => s + b.merged, 0);
+  /* R87 fixer (09 D2) — the basis chip moved inside the fold; the open line is ≤25 words with its summary. */
   $("#report-rateend-basis").innerHTML =
-    `Completed cases carrying a rate end date, bucketed by how far off that date is. `
-    + `<strong>Loan balance</strong> is the loan recorded on the case (not a redemption figure). `
-    + `<strong>Expected fee</strong> uses the <em>last fee earned on that mortgage</em> (proc + broker + sols) as a proxy — it is not a forecast and nothing weights it for whether the client stays. `
-    + (merged ? `${merged} maturit${merged === 1 ? "y is" : "ies are"} held by more than one case on the same property and the same date; each is counted <strong>once</strong> (${m.rawN} case rows → ${m.n} maturities). ` : "")
-    + (m.noFee ? `${m.noFee} of ${m.n} have no fee recorded and add nothing to the value, so the expected figure is a floor. ` : "")
-    + `<span class="money-basis">(book value · completed cases · last fee as proxy · next 24 months)</span>`;
+    `Completed cases with a rate end date, by how far off it is; expected fee is that mortgage's last fee. `
+    + howFold({ id: "report-rateend-how", title: "How this is counted", html: `<p><span class="money-basis">(book value · completed cases · last fee as proxy · next 24 months)</span></p>`
+      + `<p>Completed cases carrying a rate end date, bucketed by how far off that date is. `
+      + `<strong>Loan balance</strong> is the loan recorded on the case (not a redemption figure). `
+      + `<strong>Expected fee</strong> uses the <em>last fee earned on that mortgage</em> (proc + broker + sols) as a proxy — it is not a forecast and nothing weights it for whether the client stays. `
+      + (merged ? `${merged} maturit${merged === 1 ? "y is" : "ies are"} held by more than one case on the same property and the same date; each is counted <strong>once</strong> (${m.rawN} case rows → ${m.n} maturities). ` : "")
+      + (m.noFee ? `${m.noFee} of ${m.n} have no fee recorded and add nothing to the value, so the expected figure is a floor. ` : "")
+      + `</p>` });
 
   const rows = m.buckets.map((b) => {
     const open = rateEndOpen.has(b.key);
@@ -4374,7 +4491,7 @@ function renderRateEndBook(all) {
   $("#report-rateend-recover").innerHTML = `
     <div class="panel-head-row"><h3 style="margin:0;">Recover — rates that already ended</h3>
       <span class="badge ${rec.uncovered.length ? "red" : "green"}">${rec.uncovered.length} uncovered</span></div>
-    <p class="panel-sub">Completed cases whose rate end date has already passed. ${rec.covered.length} of ${rec.past.length} already have a follow-on case — created by the retention flow, by hand, or by the overnight recovery sweep; this panel does not distinguish between those and does not claim to. ${rec.uncovered.length ? `<strong>${rec.uncovered.length}</strong> still have none, worth ${fmtM(rec.uncoveredValue)} at last-fee rates on ${fmtM(rec.uncoveredLoan)} of lending.` : "Nothing is uncovered."} <span class="money-basis">(completed · rate end in the past · successor = a case whose retention_source_case_id points here)</span></p>
+    <p class="panel-sub">Rate end already passed: ${rec.covered.length} of ${rec.past.length} have a follow-on case. ${rec.uncovered.length ? `<strong>${rec.uncovered.length}</strong> still have none, worth ${fmtM(rec.uncoveredValue)} on ${fmtM(rec.uncoveredLoan)} of lending.` : "Nothing is uncovered."}</p>
     ${rec.uncovered.length ? `<div id="rateend-recover-list">${rec.uncovered
       .slice()
       .sort((a, b) => (a.rate_end_date < b.rate_end_date ? -1 : 1))
@@ -4568,15 +4685,20 @@ function renderLeadResponse(leads, cases) {
   const m = leadRespModel(leads, cases);
   leadRespState.model = m;
   const slaOff = LEAD_SLA_SUPPORTED === false;
+  /* R87 · owner-admin (05 #8, 06 #11) — "first_contact_at − created_at" and "ceil(0.9 × n)" were
+     audit trails for the builder; the reader gets "from the enquiry arriving to a person first
+     making contact" and "the wait nine in ten enquiries were inside". Warnings stay in the open. */
   $("#report-leadresp-basis").innerHTML =
-    `Website enquiries created in the last <strong>${m.windowDays} days</strong> (${m.nLeads} of them). Response time is <code>first_contact_at − created_at</code> — the moment a person accepted the lead, or discarded it having made contact — and is counted only where BOTH exist. `
-    + `The automatic acknowledgement is <strong>not</strong> a response and is not measured here. `
-    + `<strong>p90</strong> is nearest-rank: the value at position ceil(0.9 × n), so it is always a wait somebody really had. `
-    + `<strong>Conversion</strong> is the share of enquiries in the window that became a case, answered or not. `
-    + `Source is the enquiry type the website form recorded; adviser is whoever the accepted lead's case was created for. `
-    + (slaOff ? `<strong style="color:var(--red);">This database has no first_contact_at column yet, so nothing can be measured — run the lead-SLA migration.</strong> ` : "")
+    `Website enquiries from the last <strong>${m.windowDays} days</strong> (${m.nLeads}): how long until a person first made contact. `
+    + (slaOff ? `<strong style="color:var(--red);">This database does not record first contact yet, so nothing can be measured — run the lead-SLA migration.</strong> ` : "")
     + ((leads || []).length >= LEAD_RESP_ROW_CAP ? `<strong style="color:var(--red);">Only the newest ${LEAD_RESP_ROW_CAP.toLocaleString("en-GB")} enquiries were read — these figures describe that subset, not the whole book.</strong> ` : "")
-    + `<span class="money-basis">(leads · first_contact_at − created_at · last ${m.windowDays} days)</span>`;
+    + `<span class="money-basis">(enquiries · first contact − arrived · last ${m.windowDays} days)</span>`
+    + howFold({ id: "report-leadresp-how", title: "How this is counted", html: `<p>Response time runs from the enquiry arriving to the moment a person accepted the lead, or discarded it having made contact — and is counted only where both moments exist. `
+      + `The automatic acknowledgement is <strong>not</strong> a response and is not measured here. `
+      + `<strong>p90</strong> is the wait that nine in ten enquiries were inside — always a wait somebody really had, never an average. `
+      + `<strong>Conversion</strong> is the share of enquiries in the window that became a case, answered or not. `
+      + `Source is the enquiry type the website form recorded; adviser is whoever the accepted lead's case was created for. `
+      + `An enquiry with no case behind it has no adviser — it was never accepted, or it was accepted before the lead-to-case link existed — and is counted in the “no adviser recorded” row rather than dropped.</p>` });
 
   const nBreach = m.breaching.length;
   $("#leadresp-tools").innerHTML = `<button type="button" class="btn btn-sm${nBreach ? " btn-danger" : ""}" id="leadresp-breach-btn" onclick="gotoLeadInbox()" title="${nBreach ? `${nBreach} enquir${nBreach === 1 ? "y is" : "ies are"} past the ${LEAD_SLA_MIN}-minute promise right now — open My Day on Today.` : "Nothing is past the promise right now. Open My Day on Today."}">${nBreach ? `⏱ ${nBreach} breaching now` : "⏱ none breaching"} →</button>`;
@@ -4622,8 +4744,7 @@ function renderLeadResponse(leads, cases) {
     return;
   }
   $("#report-leadresp-source").innerHTML = `<h4 class="leadresp-h">By source</h4>` + tableFor(m.bySource, "Source", "No enquiries in the window.");
-  $("#report-leadresp-adviser").innerHTML = `<h4 class="leadresp-h">By adviser</h4>` + tableFor(m.byAdviser, "Adviser", "No enquiries in the window.")
-    + `<p class="panel-sub" style="margin:10px 0 0;">An enquiry with no case behind it has no adviser — it was never accepted, or it was accepted before the lead-to-case link existed — and it is counted in the “no adviser recorded” row rather than dropped. It is still an enquiry the firm received, and leaving it out would flatter every column beside it.</p>`;
+  $("#report-leadresp-adviser").innerHTML = `<h4 class="leadresp-h">By adviser</h4>` + tableFor(m.byAdviser, "Adviser", "No enquiries in the window.");
 }
 
 /* --------------------------------------------------------------------------
@@ -4716,7 +4837,11 @@ async function loadMoneyPage() {
   if (denied) { denied.classList.add("hidden"); denied.textContent = ""; }
   if (body) body.classList.remove("hidden");
   const wk = lastWeekRange();
-  if (scope) scope.textContent = `Last week means ${fmtD(wk.start)} to ${fmtD(wk.end)} (Monday to Sunday, Europe/London). Every figure below is computed in this browser from the same rows the rest of the app reads — nothing here is a separate report. ${ATTRIB_NOTE}`;
+  /* R87 · owner-admin (T1, 05 #3) — the page-level scope is ONE line; the "computed in this browser
+     from the same rows" reassurance and the attribution note move behind howFold. */
+  /* R87 fixer (09 D2) — one ≤25-word line, summary included; the "same rows" clause lives in the fold. */
+  if (scope) scope.innerHTML = `Last week = ${esc(fmtD(wk.start))} – ${esc(fmtD(wk.end))}. Start with this week's statement; the figures below match Reports. `
+    + howFold({ id: "money-how", title: "How these are counted", html: `<p>Last week means Monday to Sunday, Europe/London. Every figure on this page is computed in this browser from the same rows the rest of the app (and Reports) reads — nothing here is a separate report. ${esc(ATTRIB_NOTE)}</p>` });
 
   /* R81 · A2 — TWO WAVES, down from six. WAVE 1 fires every read that does not need the cases
      rows: the three side tables, the M2 fee-date columns, the quoted-case stamps (see
@@ -4775,7 +4900,8 @@ async function loadMoneyPage() {
 
   /* ---- owed, by age (the same model the Reports panel renders) ---- */
   const owed = moneyOwedModel(all);
-  $("#money-owed-basis").innerHTML = `Unpaid proc, solicitor and broker fees on completed cases, aged from the completion date. Identical arithmetic to the Money owed panel on Reports — same rows, same total. <span class="money-basis">${esc(BASIS_OWED)}</span>`;
+  $("#money-owed-basis").innerHTML = `Unpaid fees on completed cases, aged from completion — the same rows as Reports. `
+    + howFold({ id: "money-owed-how", title: "How this is counted", html: `<p>The same rows and total as Money owed on Reports: completed cases with a fee that has no paid date, aged from the completion date. <span class="money-basis">${esc(BASIS_OWED)}</span></p>` });
   $("#money-owed").innerHTML = owed.n ? `<table class="imp-table">
     <tr><th>Age</th><th>Cases</th><th>Owed</th></tr>
     ${/* R74 · A2 — was "—" for an empty band while the SAME band on Reports read "£0", and the
@@ -4791,7 +4917,8 @@ async function loadMoneyPage() {
   const soon = dedupeRateEndRows(soonRaw).sort((a, b) => Number(b.c.loan_amount || 0) - Number(a.c.loan_amount || 0));
   const top5 = soon.slice(0, 5);
   const soonValue = soon.reduce((s, e) => s + caseLastFee(e.c), 0);
-  $("#money-rateends-basis").innerHTML = `Completed cases whose rate ends between ${fmtD(today)} and ${fmtD(in60)}, ranked by <strong>loan size</strong> — the value at risk. ${soon.length} maturit${soon.length === 1 ? "y" : "ies"} in the window${soonRaw.length !== soon.length ? ` (${soonRaw.length} case rows, de-duplicated to one per property + rate end date)` : ""}, ${fmtM(soonValue)} of last-fee value in total. <span class="money-basis">(value at risk · loan amount · last fee as proxy)</span>`;
+  $("#money-rateends-basis").innerHTML = `${soon.length} rate end${soon.length === 1 ? "" : "s"} between ${fmtD(today)} and ${fmtD(in60)}, biggest loan first — ${fmtM(soonValue)} of last-fee value. `
+    + howFold({ id: "money-rateends-how", title: "How this is counted", html: `<p>Completed cases whose rate ends in the next 60 days; value is the last fee earned on that mortgage, as a proxy, not a forecast. <span class="money-basis">(value at risk · loan amount · last fee as proxy${soonRaw.length !== soon.length ? ` · ${soonRaw.length} rows de-duplicated to ${soon.length}` : ""})</span></p>` });
   $("#money-rateends").innerHTML = top5.length ? `<table class="imp-table">
     <tr><th>Client</th><th>Lender</th><th>Rate ends</th><th>Loan</th><th>Last fee</th></tr>
     ${top5.map((e) => {
@@ -4816,7 +4943,7 @@ async function loadMoneyPage() {
   });
   const cold = withAge.filter((x) => x.days != null && x.days > QUOTE_AGE_RED).sort((a, b) => b.days - a.days);
   const undatedQuotes = withAge.filter((x) => x.days == null);
-  $("#money-cold-basis").innerHTML = `Cases sitting at <strong>Quoted</strong> whose quote is more than ${QUOTE_AGE_RED} days old, measured from the date the status was set to quoted. ${quoted.length} quoted in total${undatedQuotes.length ? `, ${undatedQuotes.length} of which carry no quote date and cannot be aged` : ""}. <span class="money-basis">(protection_status = quoted · aged from protection_quoted_at)</span>`;
+  $("#money-cold-basis").innerHTML = `Protection quotes more than ${QUOTE_AGE_RED} days old — ${quoted.length} quoted in total${undatedQuotes.length ? `, ${undatedQuotes.length} undated` : ""}. <span class="money-basis">(status quoted · aged from the date it was quoted)</span>`;
   $("#money-cold").innerHTML = cold.length ? cold.slice(0, 10).map((x) => `
     <div class="row-item">
       <div class="row-main">
@@ -4848,13 +4975,14 @@ async function loadMoneyPage() {
     return d != null && d > 30;
   });
   const movedActive = activeCases.filter((c) => movedIds.has(c.id));
-  $("#money-movement-basis").innerHTML = `<strong>Moved</strong> counts live cases with at least one recorded stage change between ${fmtD(wk.start)} and ${fmtD(wk.end)}. <strong>Stuck</strong> counts live cases whose last recorded stage change (or, where there is none, their creation date) is more than 30 days ago. <span class="money-basis">(case_events · stage_changed · live stages only)</span>`;
+  $("#money-movement-basis").innerHTML = `<strong>Moved</strong>: a stage change last week. <strong>Stuck</strong>: no move for 30+ days. `
+    + howFold({ id: "money-movement-how", title: "How this is counted", html: `<p>Moved: live cases with a recorded stage change last week. Stuck: live cases whose stage has not changed for 30 days or more. A case can be both — moved last week and still 30+ days in its stage. <span class="money-basis">(recorded stage changes · live stages only)</span></p>` });
   $("#money-movement").innerHTML = `<table class="imp-table">
     <tr><th>&nbsp;</th><th>Cases</th><th>Loan value</th></tr>
     <tr><td>Moved last week</td><td class="num"><strong id="money-moved-n">${movedActive.length}</strong></td><td class="num">${fmtM(movedActive.reduce((s, c) => s + Number(c.loan_amount || 0), 0))}</td></tr>
     <tr${stuck.length ? ' class="owed-hot"' : ""}><td>Stuck more than 30 days</td><td class="num"><strong id="money-stuck-n">${stuck.length}</strong></td><td class="num">${fmtM(stuck.reduce((s, c) => s + Number(c.loan_amount || 0), 0))}</td></tr>
     <tr><td class="cs-muted">Live cases in total</td><td class="cs-muted">${activeCases.length}</td><td class="cs-muted">${fmtM(activeCases.reduce((s, c) => s + Number(c.loan_amount || 0), 0))}</td></tr>
-  </table>${stuck.length ? `<p class="panel-sub" style="margin:10px 0 0;">A case can be both — moved last week and still older than 30 days in its stage.</p>` : ""}`;
+  </table>`;
 
   /* ---- new leads last week, by source ---- */
   const leads = leadsRes.error ? [] : (leadsRes.data || []);
@@ -4865,7 +4993,7 @@ async function loadMoneyPage() {
   const leadSourceOf = (l) => String((l && (l.source || l.lead_source || l.enquiry_type)) || "").trim() || "(not recorded)";
   const bySource = new Map();
   wkLeads.forEach((l) => { const k = leadSourceOf(l); bySource.set(k, (bySource.get(k) || 0) + 1); });
-  $("#money-leads-basis").innerHTML = `Website enquiries created between ${fmtD(wk.start)} and ${fmtD(wk.end)}, whatever has since happened to them. Source is the enquiry type the website form recorded. <span class="money-basis">(leads · created_at · last week)</span>`;
+  $("#money-leads-basis").innerHTML = `Website enquiries that arrived last week, by the enquiry type the form recorded. <span class="money-basis">(enquiries · by arrival date · last week)</span>`;
   $("#money-leads").innerHTML = wkLeads.length ? `<table class="imp-table">
     <tr><th>Source</th><th>Leads</th><th>Accepted</th></tr>
     ${[...bySource.entries()].sort((a, b) => b[1] - a[1]).map(([k, n]) => {
@@ -4893,14 +5021,19 @@ async function loadMoneyPage() {
              rWon, rLost, conv: rWon + rLost ? Math.round((rWon / (rWon + rLost)) * 100) : null,
              unpaidProc, overdue };
   }).filter((r) => r.nDone || r.rWon || r.rLost || r.unpaidProc || r.overdue);
-  $("#money-advisers-basis").innerHTML = `<strong>Attach rate</strong> is policy_taken ÷ completions, over ${yr} completions only — a whole-year sample, because a week of completions is too few to rank anybody on. <strong>Retention conversion</strong> is won ÷ (won + lost) over that adviser's retention cases, all time. <strong>Unpaid proc</strong> is the procuration fee owed on their completed cases. <strong>Overdue</strong> is open tasks due before today. ${ATTRIB_NOTE} <span class="money-basis">(per adviser · mixed bases, each named above)</span>`;
-  $("#money-advisers").innerHTML = advRows.length ? `<div style="overflow-x:auto;"><table class="imp-table" id="money-adviser-table">
+  $("#money-advisers-basis").innerHTML = `Per adviser: attach rate, retention conversion, unpaid proc, overdue tasks. `
+    + howFold({ id: "money-advisers-how", title: "How these are counted", html: `<p><strong>Attach rate</strong> is policies taken ÷ completions, over ${yr} completions only — a whole-year sample, because a week of completions is too few to rank anybody on. <strong>Retention conversion</strong> is won ÷ (won + lost) over that adviser's retention cases, all time. <strong>Unpaid proc</strong> is the procuration fee owed on their completed cases. <strong>Overdue</strong> is open tasks due before today. ${esc(ATTRIB_NOTE)}</p>` });
+  /* R87 · owner-admin (05 #11) — the administrator's "0% (0/1) · none decided · £0 · —" row, and any
+     row with nothing decided, nothing unpaid and nothing overdue, sit behind the shared Show all. */
+  const moneyAdvQuiet = (r) => { const p = TEAM.find((x) => x.id === r.id); return (p && p.role === "admin") || (!r.nDone && !r.rWon && !r.rLost && !r.unpaidProc && !r.overdue); };
+  const advQuiet = advRowsAllMoney(advRows, moneyAdvQuiet);
+  $("#money-advisers").innerHTML = advQuiet.rows.length ? `<div style="overflow-x:auto;"><table class="imp-table" id="money-adviser-table">
     ${/* R74 · A2 (panel D#4) — the period goes IN the header. The same adviser read 0% on Reports
           and 43% here, because that one is the selected MONTH's completions and this one is the
           whole calendar year — true of both, said by neither. "Attach (2026)" against Reports'
           "Attach (Aug)" makes the difference visible without opening a tooltip. */ ""}
     <tr><th>Adviser</th><th title="Completed cases in ${yr} that ended with a protection policy — the whole calendar year, because a week of completions is too few to rank anybody on. The Reports scoreboard measures the same thing over the selected MONTH only, which is why the two pages can differ.">Attach (${yr})</th><th title="Retention cases won as a share of those decided.">Retention conversion</th><th>Unpaid proc</th><th>Overdue tasks</th></tr>
-    ${advRows.map((r) => `<tr data-adv="${esc(r.id)}">
+    ${advQuiet.rows.map((r) => `<tr data-adv="${esc(r.id)}">
       <td><strong>${esc(r.name)}</strong></td>
       <td>${r.attach == null ? '<span class="cs-muted">no completions</span>' : `${r.attach}% <span class="cs-muted">(${r.taken}/${r.nDone})</span>`}</td>
       <td>${r.conv == null ? '<span class="cs-muted">none decided</span>' : `${r.conv}% <span class="cs-muted">(${r.rWon}/${r.rWon + r.rLost})</span>`}</td>
@@ -4910,7 +5043,7 @@ async function loadMoneyPage() {
            look like different KINDS of problem. */ ""}
       <td class="num">${r.overdue ? `<span class="badge amber">${r.overdue}</span>` : '<span class="cs-muted">—</span>'}</td>
     </tr>`).join("")}
-  </table></div>` : MONEY_EMPTY("No adviser has completions, retention cases, unpaid proc fees or overdue tasks.");
+  </table></div>${advQuiet.line}` : MONEY_EMPTY("No adviser has completions, retention cases, unpaid proc fees or overdue tasks.");
 
   /* R44 — the two reconciliation panels. R81 · A2: both already READ in waves 1–2 above
      (loadProcRates(true) refreshed the rate card; renderReconPanel(stmtsPre) painted beside
@@ -5584,7 +5717,7 @@ async function renderProcRatesPanel(pre) {
   panel.classList.remove("hidden");
   const rates = pre || await loadProcRates(true);
   if (!rates.length) {
-    status.innerHTML = `<strong>No rates uploaded yet — expected-fee checks are off.</strong> Upload the network's proc-rate card and every mortgage receipt on a statement gains an expected-fee badge.`;
+    status.innerHTML = `<strong>No rates uploaded yet — expected-fee checks are off.</strong>`;
     return;
   }
   const at = rates.reduce((a, r) => (r.uploaded_at && (!a || r.uploaded_at > a) ? r.uploaded_at : a), null);
@@ -5653,7 +5786,7 @@ async function renderReconPanel(pre) {
   }
   const rows = stmts || [];
   if (!rows.length) {
-    list.innerHTML = MONEY_EMPTY("No commission statement imported yet. Choose the weekly workbook above — nothing is written to a case until you review and confirm it.");
+    list.innerHTML = MONEY_EMPTY("No commission statement imported yet — choose the workbook above.");
     return;
   }
   /* The per-statement counters come from the lines themselves rather than being
@@ -6265,4 +6398,4 @@ async function r44ConfirmTicked() {
 
 /* R81 · A3 — deploy handshake stamp. Every round that edits ANY of index.html / core.js /
    reports-money.js / app.js bumps the tag IN ALL FOUR PLACES (see nxCheckBuildTags in app.js). */
-window.__nxTag_reportsmoney = "r86";   // R86
+window.__nxTag_reportsmoney = "r87";   // R87

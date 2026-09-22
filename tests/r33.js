@@ -166,12 +166,16 @@ Duncan Armitage,duncan.armitage@example.com,07700 900102,offer,Halifax,4.29,495`
       const afterClick = await page.evaluate(() => ({
         collapsed: document.getElementById("nav-firm-group").classList.contains("collapsed"),
         expanded: document.getElementById("nav-firm-toggle").getAttribute("aria-expanded"),
-        visible: [...document.querySelectorAll("#nav-firm-group button[data-page]")].every((b) => b.offsetParent !== null),
+        /* R87 · slice B (panel 01 #3): Emails / Import / Data health are Owner-Administrator pages now
+           (PAGE_ROLE_GATE) and their buttons carry .hidden for an adviser — so for p2 "genuinely
+           visible" means every button the gate leaves in the group (Settings), not all four. */
+        visible: [...document.querySelectorAll("#nav-firm-group button[data-page]:not(.hidden)")].every((b) => b.offsetParent !== null)
+          && [...document.querySelectorAll("#nav-firm-group button[data-page]:not(.hidden)")].map((b) => b.dataset.page).join() === "settings",
         ls: localStorage.getItem("nx_nav_firm"),
       }));
       ok("A2a · clicking the toggle un-collapses the group", !afterClick.collapsed, JSON.stringify(afterClick));
       eq("A2b · toggle now reports aria-expanded=\"true\"", afterClick.expanded, "true");
-      ok("A2c · the 4 buttons are now genuinely visible", afterClick.visible, JSON.stringify(afterClick));
+      ok("A2c · the group's un-gated button (Settings) is now genuinely visible — R87 hides the other three for an adviser", afterClick.visible, JSON.stringify(afterClick));
       eq("A2d · the choice is written to localStorage as \"open\"", afterClick.ls, "open");
 
       await page.reload();

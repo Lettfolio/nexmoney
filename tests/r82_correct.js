@@ -267,13 +267,27 @@ const setPromos = (page, on) => page.evaluate(async (v) => {
     {
       const page = await boot(browser, "p1");
       await goPage(page, "pipeline", 2500);
-      /* A card at Enquiry: its Advance goes to Fact find, which raises no stage-entry prompt, so
-         the two presses this section makes are a clean repro and nothing else. */
+      /* R87 · slice B (panel 03 #1): the card's hover-only "→" is gone; the card's ONE move control is
+         its stage <select>, driven here the way its inline handler is driven. Every move now raises
+         the stage-entry prompt, so this section moves Enquiry → Fact find with the colleague having
+         moved it to Fact find already (press 1: stale refusal) and then presses again from the TRUE
+         stage — where the move to DIP asks for a lender; the case is seeded with one so the second
+         press is a clean write and nothing else. */
       const target = await page.evaluate(() => {
-        const c = [...document.querySelectorAll('#board .card[data-stage="enquiry"]')].find((el) => el.querySelector(".card-advance"));
+        const c = [...document.querySelectorAll('#board .card[data-stage="enquiry"]')].find((el) => el.querySelector(".card-stage-move"));
         return c ? { id: c.dataset.id, stage: c.dataset.stage } : null;
       });
-      ok("B0 · found an Enquiry card with an Advance control", !!target, JSON.stringify(target));
+      ok("B0 · found an Enquiry card with a move control (the stage select)", !!target, JSON.stringify(target));
+      await page.evaluate(async (id) => { const row = window.__mock.db.cases.filter((c) => c.id === id)[0]; if (row && !row.lender) row.lender = "Skipton"; }, target.id);
+      const pressCard = (id, to) => page.evaluate(({ id, to }) => {
+        const c = document.querySelector(`#board .card[data-id="${id}"]`);
+        if (!c) return { err: "card gone" };
+        const s = c.querySelector(".card-stage-move");
+        if (!s) return { err: "no move control" };
+        s.value = to;
+        s.dispatchEvent(new Event("change"));
+        return { pressedFrom: c.dataset.stage };
+      }, { id, to });
 
       /* THE COLLEAGUE. Written against the fixture array, NOT through window.__mockDb: a write
          through the client would pass the app's own db.from choke point and bust boardCache,
@@ -288,7 +302,7 @@ const setPromos = (page, on) => page.evaluate(async (v) => {
       eq("B1 · a colleague advanced the case underneath this tab (fixture write, no cache bust)", moved, "fact_find");
 
       await clearToast(page);
-      await page.click(`#board .card[data-id="${target.id}"] .card-advance`);
+      await pressCard(target.id, "fact_find");
       await page.waitForTimeout(1000);
       const t1 = await toastText(page);
       ok("B2 · the R76 guard still fires and still names where the case actually went",
@@ -303,14 +317,7 @@ const setPromos = (page, on) => page.evaluate(async (v) => {
       eq("B3 · the refusal's own reload genuinely RE-READ — the card repaints at the true stage", repainted, "fact_find");
 
       await clearToast(page);
-      const second = await page.evaluate(async (id) => {
-        const c = document.querySelector(`#board .card[data-id="${id}"]`);
-        if (!c) return { err: "card gone" };
-        const btn = c.querySelector(".card-advance");
-        if (!btn) return { err: "no advance control" };
-        btn.click();
-        return { pressedFrom: c.dataset.stage };
-      }, target.id);
+      const second = await pressCard(target.id, "decision_in_principle");
       await page.waitForTimeout(1400);
       const t2 = await toastText(page);
       eq("B4 · the second press is baked from the TRUE stage", second.pressedFrom, "fact_find");

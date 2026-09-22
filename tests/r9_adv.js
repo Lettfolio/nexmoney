@@ -87,7 +87,7 @@ const toastText = (page) => page.$eval("#toast", (e) => e.textContent).catch(() 
    NOT be awaited inside page.evaluate while an overlay is up — fire it, drive the DOM, then read
    the stored promise. `referral` = "accept" | "decline" | null (no referral overlay expected). */
 async function completeCase76(page, caseId, referral) {
-  await page.evaluate((id) => { window.__r76mv = window.moveCaseToStage(id, "completed"); }, caseId);
+  await page.evaluate((id) => { window.__r76mv = window.moveCaseToStage(id, "completed", { promptStageEntry: false /* R87 · slice B: headless call opts out of the (now default) stage-entry prompt */ }); }, caseId);
   await page.waitForSelector("#stage-completed-ok", { timeout: 8000 });
   const completedBody = await page.$eval("#overlay-modal", (e) => e.textContent);
   await page.click("#stage-completed-ok");
@@ -425,7 +425,7 @@ const tasksOnCase = (page, caseId) => page.evaluate(async (cid) =>
       {
         const page = await newPage(browser, "p4");
         const before = await tasksOnCase(page, ref.target.caseId);
-        await page.evaluate((id) => window.moveCaseToStage(id, "exchange"), ref.caseId);
+        await page.evaluate((id) => window.moveCaseToStage(id, "exchange", { promptStageEntry: false /* R87 · slice B */ }), ref.caseId);
         await page.waitForTimeout(1400);
         eq("R9-1 · a move that is not a completion prompts nothing", page.__dialogs.length, 0);
         eq("R9-1 · …and creates no thank-you task", await tasksOnCase(page, ref.target.caseId), before);
@@ -482,7 +482,7 @@ const tasksOnCase = (page, caseId) => page.evaluate(async (cid) =>
         await completeCase76(page, ref.caseId, "accept");
         /* R76: reopening a settled case interactively is confirmTyped REOPEN now — the same gate
            the bulk path has had since R75. Fire unawaited, type the word, press the danger OK. */
-        await page.evaluate((id) => { window.__r76re = window.moveCaseToStage(id, "offer"); }, ref.caseId);
+        await page.evaluate((id) => { window.__r76re = window.moveCaseToStage(id, "offer", { promptStageEntry: false /* R87 · slice B */ }); }, ref.caseId);
         await page.waitForSelector("#ovl-typed-input", { timeout: 8000 });
         ok("R9-1 · R76 — reopening asks for the typed word REOPEN",
           await page.evaluate(() => /REOPEN/.test(document.querySelector("#ovl-typed-label").textContent)));
@@ -610,8 +610,10 @@ const tasksOnCase = (page, caseId) => page.evaluate(async (cid) =>
       // --- reviews per month ---
       eq(`R9-2 · the mini-series covers ${GT.months.length} months`, shown.seriesBars.length, GT.months.length);
       eq("R9-2 · each month's count matches an independent recomputation", shown.seriesBars.map((b) => b.n), GT.perMonth);
-      ok("R9-2 · the series says WHICH date it counted on",
-        /review_requested_at/.test(shown.seriesBasis), shown.seriesBasis.slice(0, 200));
+      /* R87 · owner-admin (06 #11): was /review_requested_at/ — column names no longer reach the screen; the basis
+         says which date in words ("dated by when the request went out"). */
+      ok("R9-2 · the series says WHICH date it counted on (in words, not a column name)",
+        /dated by when the request went out/.test(shown.seriesBasis) && !/review_requested_at/.test(shown.seriesBasis), shown.seriesBasis.slice(0, 200));
       ok("R9-2 · …and admits that is when we ASKED, not when they answered",
         /when the request went out/i.test(shown.seriesBasis) && /records no date/i.test(shown.seriesBasis), shown.seriesBasis.slice(0, 260));
 

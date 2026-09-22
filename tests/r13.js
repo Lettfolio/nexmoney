@@ -298,7 +298,11 @@ const readBlobJson = (page) => page.evaluate(async () => (window.__blob ? JSON.p
        ======================================================================= */
     {
       console.log("\n— B1 · M-43 · cron heartbeat — the fixture default (stale)");
-      const page = await newPage(browser, "p2", { skipTour: true });
+      /* R87 · today (01 #6): was p2 (an adviser). The heartbeat banner now follows the ops strip's
+         role rule beneath it — Administrator and Owner only — because it is a system-health
+         warning about a queue an adviser has no lever for, with a button to a page they should not
+         have. Read as the admin (Kim), who gets exactly this banner and no backup nag. */
+      const page = await newPage(browser, "p1", { skipTour: true });
       await goto(page, "dashboard");
       const staleEl = await page.$("#dash-cron-notice[data-state='stale']");
       ok("B1 · the fixture's 3-day-old default renders the stale (amber) state", !!staleEl);
@@ -318,7 +322,7 @@ const readBlobJson = (page) => page.evaluate(async () => (window.__blob ? JSON.p
     {
       console.log("\n— B2 · M-43 · cron heartbeat — absent / empty / fresh");
       // Written as the Owner (settings writes are Owner-only at the database) — the heartbeat
-      // BANNER itself is visible to every role (B1 proved that reading it as an adviser), this
+      // BANNER is Administrator + Owner only since R87 (B1 reads it as the admin), this
       // block only needs an Owner session to set the three states up.
       const page = await newPage(browser, "p4", { skipTour: true });
 
@@ -804,14 +808,22 @@ const readBlobJson = (page) => page.evaluate(async () => (window.__blob ? JSON.p
       ok("H2 · fixture sanity — a live case with an outstanding checklist item exists", !!wdCase);
       if (wdCase) {
         await page.evaluate(async (id) => { await window.__mockDb.from("cases").update({ exchange_date: "2020-01-01" }).eq("id", id); }, wdCase);
-        await goto(page, "data");
-        await wait(page, 700);
-        const badgeRow = await page.$(`#dh-waitingdocs-panel tr[data-case="${wdCase}"]`);
-        ok("H2 · the case appears on the waiting-docs queue", !!badgeRow);
+        /* R87 · slice B (panel 01 #3): Data health is an Owner/Administrator page now (PAGE_ROLE_GATE) —
+           the queue is read as p1 (admin) in a fresh page with the same scenario applied to its own
+           (deterministically seeded) mock. The adviser page's own checks continue below. */
+        const dh = await newPage(browser, "p1", { skipTour: true });
+        // each page seeds its own in-memory mock (ids are deterministic), so the scenario is re-applied here
+        await dh.evaluate(async (id) => { await window.__mockDb.from("cases").update({ exchange_date: "2020-01-01" }).eq("id", id); }, wdCase);
+        await goto(dh, "data");
+        await wait(dh, 700);
+        const badgeRow = await dh.$(`#dh-waitingdocs-panel tr[data-case="${wdCase}"]`);
+        ok("H2 · the case appears on the waiting-docs queue (read as admin — R87 gate)", !!badgeRow);
         const badgeTxt = badgeRow ? await badgeRow.evaluate((e) => e.textContent) : "";
         ok("H2 · a past-exchange case shows the red 'exchanged' badge", /exchanged/i.test(badgeTxt), badgeTxt);
-        const badgeCls = await page.$eval(`#dh-waitingdocs-panel tr[data-case="${wdCase}"] .badge`, (e) => e.className).catch(() => "");
+        const badgeCls = await dh.$eval(`#dh-waitingdocs-panel tr[data-case="${wdCase}"] .badge`, (e) => e.className).catch(() => "");
         ok("H2 · …and it is styled red, not routine", /\bred\b/.test(badgeCls), badgeCls);
+        ok("H2 · no console errors (admin)", !dh.__err, JSON.stringify(dh.__err));
+        await dh.close();
       }
 
       ok("H2 · no console errors", !page.__err, JSON.stringify(page.__err));
@@ -875,11 +887,14 @@ const readBlobJson = (page) => page.evaluate(async () => (window.__blob ? JSON.p
       const ownerWho = await owner.$$eval("#abs-who option", (els) => els.map((e) => e.value)).catch(() => []);
       ok("I1 · the Owner's 'Who' select offers the whole team", ownerWho.length > 1, JSON.stringify(ownerWho));
       await owner.selectOption("#abs-who", "p3");
-      await owner.fill("#abs-from", "2026-09-10");
-      await owner.fill("#abs-to", "2026-09-10");
+      /* R87 · CTO — the owner half still spelled "2026-09-10" and aged out on 11 Sep 2026 exactly as
+         the adviser half had (R82 note above); anchored to today + 5 days, Europe/London. */
+      const lukeDay = await owner.evaluate(() => new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/London" }).format(new Date(Date.now() + 5 * 86400000)));
+      await owner.fill("#abs-from", lukeDay);
+      await owner.fill("#abs-to", lukeDay);
       await owner.click("#abs-add-btn");
       await wait(owner, 700);
-      const lukeAbs = await readRows(owner, "staff_absences", { profile_id: "p3", starts_on: "2026-09-10" });
+      const lukeAbs = await readRows(owner, "staff_absences", { profile_id: "p3", starts_on: lukeDay });
       ok("I1 · the Owner can record ANYONE's absence", lukeAbs.length === 1, JSON.stringify(lukeAbs));
       const ownerCanDelete = await owner.$(`.abs-del[data-absence="${lukeAbs[0].id}"]`);
       ok("I1 · …and can delete it too", !!ownerCanDelete);
@@ -1086,6 +1101,7 @@ const readBlobJson = (page) => page.evaluate(async () => (window.__blob ? JSON.p
       });
       ok("J2 · run_watchtower's return shape is exactly {open,new,resolved}", shape && typeof shape.open === "number" && typeof shape.new === "number" && typeof shape.resolved === "number", JSON.stringify(shape));
 
+      await page.evaluate(() => { const d = document.querySelector("#brief-more"); if (d) d.open = true; });   /* R87 · today (A6): the control lives in My Day's ⋯ menu */
       await page.click("#watchtower-run");
       await wait(page, 700);
       const toastTxt = await page.$eval("#toast", (e) => e.textContent).catch(() => "");

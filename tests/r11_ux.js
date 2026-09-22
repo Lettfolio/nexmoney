@@ -350,6 +350,7 @@ const noErr = (page, label) => ok(`no console errors (${label})`, !page.__err, J
         ok("R11-B · clicking a folded group's header opens it", !openedNow.folded && openedNow.expanded === "true", openedNow);
 
         /* Run checks re-renders the whole panel (loadWatchtower) — the manual open must survive it */
+        await page.evaluate(() => { const d = document.querySelector("#brief-more"); if (d) d.open = true; });   /* R87 · today (A6): the control lives in My Day's ⋯ menu */
         await page.click("#watchtower-run");
         await page.waitForTimeout(1500);
         const afterRerender = await page.evaluate((k) => {
@@ -371,6 +372,7 @@ const noErr = (page, label) => ok(`no console errors (${label})`, !page.__err, J
         const snoozed = (data || []).filter(isSnoozed);
         return { alerts: alerts.length, snoozed: snoozed.length };
       });
+      await page.evaluate(() => { const d = document.querySelector("#brief-more"); if (d) d.open = true; });   /* R87 · today (A6): the control lives in My Day's ⋯ menu */
       await page.click("#watchtower-run");
       await page.waitForTimeout(1500);
       const toastTxt = await page.$eval("#toast", (e) => e.textContent).catch(() => "");

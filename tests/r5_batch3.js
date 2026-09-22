@@ -98,7 +98,9 @@ const openDrawer = async (page, panelId) => {
          PAGE's #ret-pipeline-stats (see loadRetentionPipelinePanel in app.js). Read it there. */
       await page.evaluate(() => window.nav("retention"));
       await page.waitForTimeout(1200);
-      const copy = await page.evaluate(() => document.querySelector("#ret-pipeline-stats").textContent);
+      /* R87 · book (C2): the two sentences moved from #ret-pipeline-stats (now the figures + scope,
+         one line) into the panel's closed howFold, #ret-pipeline-basis — same words. */
+      const copy = await page.evaluate(() => document.querySelector("#ret-pipeline-stats").textContent + " " + (document.querySelector("#ret-pipeline-basis") || {}).textContent);
       ok("R5-6 · the stats line no longer claims nothing creates these", !/Nothing creates these/i.test(copy), copy);
       ok("R5-6 · it says the backend creates them automatically", /Created automatically when a completed client's rate enters the reminder window/.test(copy), copy);
       ok("R5-6 · …and names the manual path for rates already past", /open the case and press Start retention case/.test(copy), copy);

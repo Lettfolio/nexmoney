@@ -323,8 +323,11 @@ const tasksFor = (page, caseId) => page.evaluate(async (id) => {
         await new Promise((r) => setTimeout(r, 700));
         return [...document.querySelectorAll("#settings-jump-chips .seg-btn.active")].map((b) => b.id);
       });
-      eq("A8b · reading Documents highlights Documents (it said SMS at 425ca06 — the two Advanced targets measure 0×0 while the accordion is shut)",
-        spyDocs, ["settings-nav-documents"]);
+      /* R87 · owner-admin: was ["settings-nav-documents"] — the 14 chips are now the 5 group headings (05 #12), and
+         Documents sits inside the "Automations" group, so reading it highlights that group's chip. The property
+         (the spy never answers with a collapsed Advanced target) is unchanged. */
+      eq("A8b · reading Documents highlights its group, Automations (it said SMS at 425ca06 — the two Advanced targets measure 0×0 while the accordion is shut)",
+        spyDocs, ["settings-nav-automations"]);
 
       /* R72 contracts this round must not have touched. */
       const kept72 = await page.evaluate(() => ({
@@ -504,6 +507,10 @@ const tasksFor = (page, caseId) => page.evaluate(async (id) => {
       });
       if (vaultDel) {
         const before = await page.evaluate(async () => ((await window.__mockDb.from("vault_entries").select("id")).data || []).length);
+        /* R87 · owner-admin (05 #13): Delete lives inside the card's ⋯ menu now — open it first, as a person would. */
+        const openMenu = () => page.click(`#vault-list .vault-card[data-id="${vaultDel}"] details.vault-more summary`);
+        await openMenu();
+        await wait(page, 200);
         await page.click(`#vault-list .vault-del[data-id="${vaultDel}"]`);
         await wait(page, 600);
         const vd = await page.evaluate(() => {
@@ -517,6 +524,8 @@ const tasksFor = (page, caseId) => page.evaluate(async (id) => {
         await wait(page, 500);
         const afterCancel = await page.evaluate(async () => ((await window.__mockDb.from("vault_entries").select("id")).data || []).length);
         eq("C2c · cancelling deletes nothing", afterCancel, before);
+        await openMenu();   // R87 — the menu closed with the dialog
+        await wait(page, 200);
         await page.click(`#vault-list .vault-del[data-id="${vaultDel}"]`);
         await wait(page, 600);
         await page.click("#ovl-confirm-ok");
@@ -550,7 +559,7 @@ const tasksFor = (page, caseId) => page.evaluate(async (id) => {
         return { clientId: cl.id, caseId: cs.id };
       });
       const before = await tasksFor(page, made.caseId);
-      const moved = await page.evaluate(async (id) => window.moveCaseToStage(id, "application", {}), made.caseId);
+      const moved = await page.evaluate(async (id) => window.moveCaseToStage(id, "application", { promptStageEntry: false /* R87 · slice B: headless call opts out of the (now default) stage-entry prompt */ }), made.caseId);
       await wait(page, 1500);
       const after = await tasksFor(page, made.caseId);
       const created = after.filter((t) => !before.some((b) => b.id === t.id));
@@ -594,11 +603,11 @@ const tasksFor = (page, caseId) => page.evaluate(async (id) => {
         return cid;
       }, [made.caseId, decoyId]);
       const beforeFwd = await tasksFor(page, made.caseId);
-      await page.evaluate(async (id) => window.moveCaseToStage(id, "application", {}), made.caseId);
+      await page.evaluate(async (id) => window.moveCaseToStage(id, "application", { promptStageEntry: false /* R87 · slice B: headless call opts out of the (now default) stage-entry prompt */ }), made.caseId);
       await wait(page, 1500);
       const afterFwd = await tasksFor(page, made.caseId);
       const fwdCreated = afterFwd.filter((t) => !beforeFwd.some((b) => b.id === t.id)).map((t) => t.id);
-      const backPromise = page.evaluate(async (id) => window.moveCaseToStage(id, "decision_in_principle", {}), made.caseId);
+      const backPromise = page.evaluate(async (id) => window.moveCaseToStage(id, "decision_in_principle", { promptStageEntry: false /* R87 · slice B */ }), made.caseId);
       await wait(page, 1200);
       const backDlg = await page.evaluate(() => {
         const clear = document.querySelector("#stage-back-clear");

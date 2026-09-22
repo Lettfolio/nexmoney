@@ -180,8 +180,10 @@ async function selectRows(page, ids) {
   }, ids);
   await page.waitForTimeout(300);
 }
+/* R87 · book (C2): was page.click; the "ended", "ended3" and "next" chips render `hidden` now
+   (RET_MONTHS_FOLDED — four chips show), so the pick is a programmatic click on the same element. */
 const pickChip = async (page, k) => {
-  await page.click(`#ret-month-chips .ret-month-chip[data-month="${k}"]`);
+  await page.evaluate((m) => document.querySelector(`#ret-month-chips .ret-month-chip[data-month="${m}"]`).click(), k);
   await page.waitForTimeout(2200);
 };
 const caseRow = (page, id) => page.evaluate(async (i) => {
@@ -297,13 +299,20 @@ const toastText = (page) => page.evaluate(() => (document.getElementById("toast"
     }
     await goRetention(page, 3200);
 
-    const btn = await page.evaluate(() => {
-      const b = document.getElementById("ret-sort-dir");
-      return b ? { label: b.textContent.trim(), pressed: b.getAttribute("aria-pressed"), title: b.getAttribute("title") } : null;
+    /* R87 · book (C2): the two h3 toggle buttons (#ret-sort-dir, #ret-rates-sort) are ONE
+       <select id="ret-sort"> in the page's tools row — options newest / oldest, plus "value" for
+       the money-holder only. Same stored choice (nx_ret_sortdir), same orders; the checks below
+       read the select's selected option where they read the button's label. */
+    const sortState = () => page.evaluate(() => {
+      const s = document.getElementById("ret-sort");
+      if (!s) return null;
+      const o = s.options[s.selectedIndex];
+      return { label: o ? o.textContent.trim() : "", value: s.value, title: s.getAttribute("title"), values: [...s.options].map((x) => x.value) };
     });
+    const btn = await sortState();
     ok("§B1a · an adviser gets a date-direction control at all (it is not behind the money gate)", !!btn, JSON.stringify(btn));
     ok("§B1b · …and the money sort is still owner-only, so this is the only one they see",
-      await page.evaluate(() => !document.getElementById("ret-rates-sort")));
+      !!btn && !btn.values.includes("value"), JSON.stringify(btn));
     ok("§B1c · the default is most-recently-ended first", /Most recently ended first/i.test((btn || {}).label || ""), JSON.stringify(btn));
     ok("§B1d · the control explains what it does, in English", /freshest lapse/i.test((btn || {}).title || "") && /soonest-first/i.test((btn || {}).title || ""), (btn || {}).title);
 
@@ -321,10 +330,10 @@ const toastText = (page) => page.evaluate(() => (document.getElementById("toast"
     ok("§B2d · the year sub-heads survive the reversal (descending years)",
       yearsDesc.length > 1 && yearsDesc.join(",") === [...yearsDesc].sort().reverse().join(","), JSON.stringify(yearsDesc));
 
-    await page.click("#ret-sort-dir");
+    await page.selectOption("#ret-sort", "oldest");   // R87 · book (C2): was a click on #ret-sort-dir
     await page.waitForTimeout(2200);
-    const btn2 = await page.evaluate(() => document.getElementById("ret-sort-dir").textContent.trim());
-    ok("§B3a · one click flips the label to 'Oldest first'", /Oldest first/i.test(btn2), btn2);
+    const btn2 = (await sortState() || {}).label;
+    ok("§B3a · one pick flips the label to 'Oldest … first'", /Oldest .*first/i.test(btn2), btn2);
     const order2 = await pageRowIds(page);
     const pos2 = (id) => order2.indexOf(id);
     ok("§B3b · …and the ended rows reverse (−1200 before −200 before −3)",
@@ -340,7 +349,7 @@ const toastText = (page) => page.evaluate(() => (document.getElementById("toast"
     await page.reload({ waitUntil: "networkidle" });
     await page.waitForTimeout(1600);
     await goRetention(page, 2400);
-    ok("§B4b · …and survives a reload", /Oldest first/i.test(await page.evaluate(() => document.getElementById("ret-sort-dir").textContent)));
+    ok("§B4b · …and survives a reload", /Oldest .*first/i.test((await sortState() || {}).label));   // R87 · book (C2)
     ok("§B · no console errors", realErrs(page).length === 0, realErrs(page).slice(0, 3).join(" | "));
     await page.close();
   }
@@ -373,8 +382,10 @@ const toastText = (page) => page.evaluate(() => (document.getElementById("toast"
       return { rows, foot };
     });
     ok("§B5a · the list is still capped at 100 rows", capped.rows === 100, JSON.stringify(capped.rows));
-    ok("§B5b · the footer names the CHIPS that reach the rest, by their own labels",
-      /Ended · last 3 months/.test(capped.foot) && /Ended · last 12 months/.test(capped.foot), capped.foot.slice(0, 260));
+    /* R87 · book (C2): "Ended · last 3 months" is a folded (hidden) chip now, so the footer names
+       the one visible lapsed-window chip, "Ended · last 12 months". */
+    ok("§B5b · the footer names the CHIP that reaches the rest, by its own label",
+      /Ended · last 12 months/.test(capped.foot), capped.foot.slice(0, 260));
     ok("§B5c · …and the direction control, so the other end of the list is reachable too",
       /Most recently ended first|Oldest first/.test(capped.foot), capped.foot.slice(0, 260));
     ok("§B5d · …and it no longer sends the reader to 'the scope control'", !/scope control/.test(capped.foot), capped.foot.slice(0, 260));
@@ -758,7 +769,7 @@ const toastText = (page) => page.evaluate(() => (document.getElementById("toast"
     await goRetention(page, 2600);
     const seen = await page.evaluate(() => ({
       chips: document.querySelectorAll("#ret-month-chips .ret-month-chip").length,
-      dir: !!document.getElementById("ret-sort-dir"),
+      dir: !!document.getElementById("ret-sort"),   // R87 · book (C2): the select replaces #ret-sort-dir
       badges: document.querySelectorAll("#ret-rates-list .ret-rem-badge").length,
     }));
     eq(`§H · ${persona} sees the seven month chips`, seen.chips, 7);

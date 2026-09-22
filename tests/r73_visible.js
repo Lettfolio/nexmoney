@@ -218,24 +218,28 @@ const boxes = (page, sel) => page.evaluate((s) => [...document.querySelectorAll(
       bands.length >= 2 && bands[0] === "brief-sec-warm" && bands[1] === "brief-sec-hot"
       && (bands.length < 3 || bands[2] === "brief-sec-rest"), JSON.stringify(bands));
 
+    /* R87 · today (T1): was "both explanatory paragraphs end in a Why? disclosure" (A1k–A1n).
+       Now NEITHER paragraph stands on the page at all: the grouping sentence restated what every
+       fold's own summary says ("+1 more on this case: …"), and the leads-bar sentence moved into
+       the Accept button's title. The fold that the grouping sentence explained is still there, and
+       the words that were behind "Why?" are still reachable (the button's title names the joint-
+       name / existing-client rule), so nothing a reader needs is lost — it is one hover away
+       instead of one press. */
     const why = await page.evaluate(() => {
-      const g = document.querySelector("#briefing-group-sub details.why-fold");
-      const l = document.querySelector("#leads-accept-bar-sub details.why-fold");
+      const g = document.querySelector("#briefing-group-sub");
+      const l = document.querySelector("#leads-accept-bar-sub");
+      const btn = document.querySelector("#leads-accept-all");
       return {
-        groupFold: !!g, groupOpen: g ? g.open : null,
-        groupText: (document.querySelector("#briefing-group-sub") || {}).textContent || "",
-        leadFold: !!l, leadOpen: l ? l.open : null,
-        leadText: (document.querySelector("#leads-accept-bar-sub") || {}).textContent || "",
-        summary: g ? g.querySelector("summary").textContent.replace(/\s+/g, " ").trim() : null,
+        groupHidden: !g || g.classList.contains("hidden"), groupText: g ? g.textContent.trim() : "",
+        groupFolds: document.querySelectorAll("#briefing-list details.brief-more").length,
+        leadSub: !!l, leadTitle: btn ? btn.getAttribute("title") || "" : null,
       };
     });
-    ok("A1k · both of Today's explanatory paragraphs end in a “Why?” disclosure",
-      why.groupFold && why.leadFold, JSON.stringify({ g: why.groupFold, l: why.leadFold }));
-    eq("A1l · …closed by default", [why.groupOpen, why.leadOpen], [false, false]);
-    ok("A1m · …labelled Why?", /Why\?/.test(why.summary || ""), why.summary);
-    ok("A1n · …and NOTHING is lost: the whole sentence is still in the element's text",
-      /\+N more/.test(why.groupText) && /New enquiries are never folded/.test(why.groupText)
-      && /joint name/i.test(why.leadText) && /lightest desk/i.test(why.leadText), JSON.stringify(why).slice(0, 260));
+    ok("A1k (R87) · the grouping sentence no longer stands above the rows", why.groupHidden && why.groupText === "", JSON.stringify(why));
+    ok("A1l (R87) · …while the per-case folds it used to explain are still there", why.groupFolds > 0, JSON.stringify(why));
+    ok("A1m (R87) · the leads bar's sub-paragraph is gone", !why.leadSub, JSON.stringify(why));
+    ok("A1n (R87) · …and its explanation lives in the Accept button's title (joint names / existing clients are left for a person)",
+      why.leadTitle == null || (/joint name/i.test(why.leadTitle) && /already hold|already have/i.test(why.leadTitle)), JSON.stringify(why.leadTitle));
 
     /* The leads bar counts the set it will actually accept. Ground truth is an INDEPENDENT
        re-implementation of the two rules classifyLeadsForAccept() applies — a joint name, and a
@@ -289,8 +293,13 @@ const boxes = (page, sel) => page.evaluate((s) => [...document.querySelectorAll(
         rows: [...document.querySelectorAll("#watchtower-list .wt-row")].slice(0, 6).map((r) => Math.round(r.getBoundingClientRect().top)),
       };
     });
-    ok("B1a · the Watchtower bar RESERVES its height at zero selection",
-      before.h > 0 && before.vis === "hidden", JSON.stringify(before));
+    /* R87 · today (A4): was "the bar RESERVES its height at zero selection" (h > 0). Now the
+       sticky host is ZERO height while nothing is ticked — the reserved box was a 45px blank strip
+       between the chips and the first alert on every load — and the bar OVERLAYS the top of the
+       list when a tick lands (an absolutely-positioned child of the 0px sticky host). B1c below
+       still holds: not one row moves on the first tick. */
+    ok("B1a (R87) · the Watchtower bar takes NO height at zero selection, and is out of the tree",
+      before.h === 0 && before.vis === "hidden", JSON.stringify(before));
     ok("B1b · …and is sticky to the top of the list's own scroller",
       before.pos === "sticky" && before.top === "0px", JSON.stringify(before));
 
@@ -350,34 +359,33 @@ const boxes = (page, sel) => page.evaluate((s) => [...document.querySelectorAll(
       cb.checked = true; cb.dispatchEvent(new Event("change", { bubbles: true }));
       await new Promise((r) => setTimeout(r, 350));
       const dock = document.querySelector("#pipe-bulk-dock");
-      const sub = document.querySelector("#pipe-bulk-sub");
+      const more = document.querySelector("#pipe-bulk-more");   // R87 · slice B: the ⓘ paragraph is gone; the rarely-used verbs are behind "More ▾"
       const kids = [...document.querySelector("#table-wrap").children].map((k) => k.id || k.className);
       return {
         t0, t1: tableTop(),
         dockPos: getComputedStyle(dock).position, dockBottom: getComputedStyle(dock).bottom,
         dockAfterTable: kids.indexOf("pipe-bulk-dock") > kids.findIndex((c) => /board-scroll-wrap/.test(c)),
         barHidden: document.querySelector("#pipe-bulk-bar").hidden,
-        subHidden: sub.hidden, info: !!document.querySelector("#pipe-bulk-info"), subLen: sub.textContent.length,
+        moreClosed: !!more && !more.open, moreVerbs: more ? more.querySelectorAll("button").length : 0,
+        barRows: new Set([...document.querySelectorAll("#pipe-bulk-bar > *")].map((e) => Math.round((e.getBoundingClientRect().top + e.getBoundingClientRect().bottom) / 2 / 20))).size,   // centre-line, 20px bands: controls of different heights on ONE row share it
+        barH: document.querySelector("#pipe-bulk-bar").getBoundingClientRect().height,
       };
     });
     eq("B3a · ticking a pipeline row does not move the table (it used to drop ~170px)", pipe.t1, pipe.t0);
     ok("B3b · the bar is docked below the table and sticks to the bottom of it",
       pipe.dockAfterTable === true && pipe.dockPos === "sticky" && pipe.dockBottom === "0px", JSON.stringify(pipe));
     eq("B3c · …and is shown, as it always was, once something is ticked", pipe.barHidden, false);
-    ok("B3d · its 60-word paragraph is behind a ⓘ, closed by default — and still there in full",
-      pipe.info === true && pipe.subHidden === true && pipe.subLen > 200, JSON.stringify(pipe));
-    const infoOpen = await page.evaluate(async () => {
-      document.querySelector("#pipe-bulk-info").click();
-      await new Promise((r) => setTimeout(r, 200));
-      return { hidden: document.querySelector("#pipe-bulk-sub").hidden, expanded: document.querySelector("#pipe-bulk-info").getAttribute("aria-expanded") };
-    });
-    ok("B3e · …and one press opens it", infoOpen.hidden === false && infoOpen.expanded === "true", JSON.stringify(infoOpen));
+    /* R87 · slice B (panel 03 #5): the ⓘ + 60-word paragraph are deleted (each verb's title says what
+       it does); the four send/chase verbs sit in a closed "More ▾" so the bar is ONE row. */
+    ok("B3d · the rarely-used verbs are behind “More ▾”, closed by default (R87)",
+      pipe.moreClosed === true && pipe.moreVerbs === 4, JSON.stringify(pipe));
+    ok("B3e · …so the bar is one row (≤ 60px; it was 89px on two rows)", pipe.barRows === 1 && pipe.barH <= 60, JSON.stringify({ rows: pipe.barRows, h: pipe.barH }));
 
-    // This round is chrome, not behaviour: every verb is still on the bar with its own id.
+    // Every remaining verb keeps its id; the two import-era back-fill verbs are off the bar (R87).
     const missing = await page.evaluate(() => ["pipe-bulk-stage", "pipe-bulk-adviser", "pipe-bulk-rate", "pipe-bulk-retention",
-      "pipe-bulk-chase", "pipe-bulk-docs", "pipe-bulk-playbook", "pipe-bulk-checklists", "pipe-bulk-task", "pipe-bulk-clear"]
+      "pipe-bulk-chase", "pipe-bulk-docs", "pipe-bulk-task", "pipe-bulk-clear"]
       .filter((id) => !document.getElementById(id)));
-    eq("B3f · every pipeline bulk verb is still on the bar, unchanged", missing, []);
+    eq("B3f · every remaining pipeline bulk verb keeps its id (R87: playbooks/checklists are off the bar)", missing, []);
     const wtVerbs = await page.evaluate(() => ["wt-bulk-snooze7", "wt-bulk-snooze30", "wt-bulk-dismiss", "wt-bulk-clear"]
       .filter((id) => !document.getElementById(id)));
     eq("B3g · …and so is every Watchtower one", wtVerbs, []);
@@ -478,8 +486,11 @@ const boxes = (page, sel) => page.evaluate((s) => [...document.querySelectorAll(
           docW: document.documentElement.scrollWidth,
         };
       });
-      ok(`C3 · ${k} · the case bar costs ≤96px of the 844px screen (it was 231 / 393 at e1a2490)`,
-        m.h <= 96, JSON.stringify(m));
+      /* R87 · E (slice E, 06 #3): was ≤96, now ≤108 because every control in the bar is a 44px tap
+         target at ≤760px (two 44px rows + 5px gap + 5px padding each side = 103–104). The R73
+         point — the bar must not eat the screen (it was 231 / 393) — still holds at 12% of 844. */
+      ok(`C3 · ${k} · the case bar costs ≤108px of the 844px screen (it was 231 / 393 at e1a2490; ≤96 before R87's 44px targets)`,
+        m.h <= 108, JSON.stringify(m));
       ok(`C3 · ${k} · …and still carries the stage, Log call and Actions ▾`,
         m.stage && m.logcall && m.more, JSON.stringify(m));
       ok(`C3 · ${k} · #new-note carries a scroll-margin so it cannot hide behind the bar`,

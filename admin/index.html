@@ -189,6 +189,9 @@
       <p class="dq-notice hidden" id="dash-cap-notice"></p>
       <div class="panel" id="briefing-panel">
         <h3>☀️ My Day
+          <!-- R87 · today (T1) — the date is a quiet span in the heading, not a 32px line under
+               it. Same id, written by loadBriefing exactly as before. -->
+          <span class="brief-date" id="briefing-date"></span>
           <!-- R82 · A8 — "assigned to me and due later", as a HEADING COUNT rather than another
                line above the list. The house idiom for this exact fact is a .count in an h3
                (#revenue-count, #prot-calllist-count, panelCount) and it costs no vertical space:
@@ -201,14 +204,27 @@
                `h3 .count` it finds in a panel, and My Day's own row count already owns that slot —
                a second .count here is simply overwritten by it on the next paint (measured, not
                guessed). A .badge says the same thing in the same heading and cannot collide. -->
-          <button type="button" class="badge amber hidden" id="brief-ahead" onclick="nav('diary')" style="cursor:pointer;border:0;"></button>
           <span class="segment" role="group" aria-label="Whose items to show">
             <button class="btn btn-sm seg-btn seg-first scope-active" id="brief-scope-mine" aria-pressed="true" aria-label="Show only my items">Mine</button>
             <button class="btn btn-sm seg-btn seg-last" id="brief-scope-all" aria-pressed="false" aria-label="Show all team items">All</button>
           </span>
-          <button class="btn btn-ghost btn-sm" id="sync-outlook-btn" aria-label="Sync Outlook inbox">⟳ Sync Outlook</button>
+          <!-- R87 · today (A6, 02 #12) — ONE ⋯ OVERFLOW for the four header controls that have no
+               daily use at a four-person firm: "N due later" (R82 · A8, opens the Diary),
+               "⟳ Sync Outlook" (hidden unless Settings › Outlook is on), and the Watchtower's
+               "Run checks" / "N snoozed" (moved up from the drawer's own heading — the checks
+               already auto-run on every dashboard load). Every id is unchanged, so the suites that
+               drive them still find them; they open the menu first (details.open = true). Closed
+               by a click anywhere else (wireBriefMoreMenu). -->
+          <details class="hdr-more" id="brief-more">
+            <summary class="btn btn-ghost btn-sm hdr-more-btn" aria-label="More: Outlook sync, Watchtower checks, snoozed alerts, tasks due later" title="More — Outlook sync, Watchtower checks, snoozed alerts, tasks due later">⋯</summary>
+            <div class="hdr-more-menu" role="menu">
+              <button type="button" class="badge amber hidden" id="brief-ahead" onclick="nav('diary')" style="cursor:pointer;border:0;"></button>
+              <button class="btn btn-ghost btn-sm" id="sync-outlook-btn" aria-label="Sync Outlook inbox">⟳ Sync Outlook</button>
+              <button class="btn btn-ghost btn-sm" id="watchtower-run" title="Re-run the Watchtower checks now — they already run on every load of this page">Run checks</button>
+              <button class="btn btn-ghost btn-sm hidden" id="watchtower-snoozed-toggle" title="Show/hide snoozed alerts">0 snoozed</button>
+            </div>
+          </details>
         </h3>
-        <p class="panel-sub" id="briefing-date"></p>
         <!-- R69 · A1/M4 — the grouping sentence. Written by renderBriefing and HIDDEN whenever
              nothing is grouped, because a subtitle that explains a fold nobody can see is how a
              panel subtitle stops being read. Its own element rather than more words on
@@ -238,13 +254,20 @@
             <button class="btn btn-sm seg-btn seg-first" id="wt-scope-mine" aria-label="Show only alerts on my cases">Mine</button>
             <button class="btn btn-sm seg-btn seg-last" id="wt-scope-all" aria-label="Show every alert, including firm-wide ones">All</button>
           </span>
-          <button class="btn btn-ghost btn-sm" id="watchtower-run">Run checks</button>
-          <button class="btn btn-ghost btn-sm hidden" id="watchtower-snoozed-toggle" title="Show/hide snoozed alerts">0 snoozed</button>
+          <!-- R87 · today (A6) — "Run checks" and "N snoozed" moved to My Day's ⋯ menu above. -->
         </h3>
-        <p class="panel-sub" id="watchtower-sub">Problems found automatically — resolves itself when fixed. <strong>Two checks watch a pair of dates:</strong> <em>Offer expires before completion</em> catches an offer that dies before the completion it is meant to fund, so it has to be re-issued; <em>Completing inside old ERC</em> catches a retention case completing while the client's old deal is still inside its Early Repayment Charge, so they pay to leave early. <em>Client emails unanswered</em> is counted per client — one row per person waiting on a reply, not one per message.</p>
-        <!-- R72 · B2 (H5b) — bulk triage. Its own paragraph rather than a clause on the one above:
-             that paragraph is about what the CHECKS mean, this is about what you can do to them. -->
-        <p class="panel-sub"><strong>Clear a whole run of them at once.</strong> Tick the alerts you have judged — or use <em>Select all</em> on a check's own heading to take every row of that one check — then <em>Snooze 7 days</em>, <em>Snooze 30 days</em> or <em>Dismiss</em> on the bar. One confirmation for the batch, one optional reason applied to all of them, and the list repaints once at the end. Neither verb fixes anything: a snooze hides an alert until the date passes, and a dismissal closes it — either way, a problem that is still there is raised again the next time the checks run. A reason is required when the batch includes a <strong>critical</strong> alert, and it is written onto that alert's case, exactly as it is when you snooze or dismiss one on its own.</p>
+        <!-- R87 · today (T1 / 02 #3) — 219 WORDS BECAME ONE LINE AND ONE FOLD. The two standing
+             paragraphs (85 words on what the checks mean, 134 on bulk triage) sat above the
+             filter chips on every load — 254px of scroll, 488px on a phone, between "Watchtower"
+             and the first critical alert. The one sentence that changes what a reader does stays
+             standing; every other word is inside the closed "How these checks work" fold below,
+             lightly tightened, so r65_watchtower §C3 still reads the check names from
+             #watchtower-sub's text. -->
+        <p class="panel-sub" id="watchtower-sub-line">Problems found automatically — an alert clears itself once the case is fixed.</p>
+        <details class="rep-howcounted how-fold" id="watchtower-sub"><summary>How these checks work</summary><div class="rep-howcounted-body">
+          <p><strong>Two checks watch a pair of dates.</strong> <em>Offer expires before completion</em> catches an offer that dies before the completion it is meant to fund, so it has to be re-issued. <em>Completing inside old ERC</em> catches a retention case completing while the client's old deal is still inside its Early Repayment Charge, so they pay to leave early. <em>Client emails unanswered</em> is counted per client — one row per person waiting on a reply, not one per message.</p>
+          <p><strong>Clearing a run of them at once.</strong> Tick the alerts you have judged — or <em>Select all</em> on a check's heading — then <em>Snooze 7 days</em>, <em>Snooze 30 days</em> or <em>Dismiss</em> on the bar. One confirmation for the batch, one optional reason for all of them, one repaint. Neither verb fixes anything: a snooze hides an alert until the date passes, a dismissal closes it, and a problem that is still there is raised again on the next run. A reason is required when the batch includes a <strong>critical</strong> alert, and it is written onto that alert's case — exactly as when you snooze or dismiss one on its own.</p>
+        </div></details>
         <!-- R11-2a — severity filter chips, written by loadWatchtower so the counts are live.
              Client-side only: it filters the rows already fetched, it does not re-query. -->
         <div id="wt-filters" class="pipe-segment wt-filters"></div>
@@ -263,7 +286,11 @@
              a read comes back holding exactly OWNER_ROW_CAP rows, i.e. when it may have been
              truncated and the radar can no longer claim to describe the whole book. -->
         <p class="panel-sub unactioned-cap hidden" id="unactioned-cap-notice"></p>
-        <p class="panel-sub">Live cases with nothing open for the stage they are actually at, and no note or event in the last 7 days — before they drift into "stalled". A case whose only open task is a leftover from an earlier stage counts too, and says so. Open one and give it a next step.</p>
+        <!-- R87 · today (T1 / 02 #3) — the 54-word intro is one line plus a fold. -->
+        <p class="panel-sub" id="unactioned-sub-line">Live cases with nothing open for their stage and no touch in 7 days.</p>
+        <details class="rep-howcounted how-fold" id="unactioned-how"><summary>How this is counted</summary><div class="rep-howcounted-body">
+          <p>A case is here when nothing is open for the stage it is actually at, and no note or event has been recorded in the last 7 days — before it drifts into "stalled". A case whose only open task is a leftover from an earlier stage counts too, and says so. Open one and give it a next step.</p>
+        </div></details>
         <div id="unactioned-list" class="dash-scroll"></div>
       </div>
       <!-- R41 · F1 — THE FOUR DUPLICATE DRAWERS ARE GONE.
@@ -328,11 +355,19 @@
            coding: a red/amber left edge on a card, and a "≈" glyph on a rate-end
            date, neither explained anywhere. Both scan as rendering faults until
            somebody tells you what they are, so the board now says what they mean. -->
-      <p class="board-legend" id="board-legend">
-        <span class="bl-item"><span class="bl-edge bl-edge-amber" aria-hidden="true"></span>Left edge: 14+ days in this stage</span>
-        <span class="bl-item"><span class="bl-edge bl-edge-red" aria-hidden="true"></span>30+ days in this stage</span>
-        <span class="bl-item"><span class="bl-approx" aria-hidden="true">&#8776;</span>&#8776; or a dashed pill means the date is an estimate, not confirmed</span>
-      </p>
+      <!-- R87 · B3 (panel 03 #4) — the legend is a closed fold (the howFold shape from core.js, in
+           static markup): the board keeps ONE standing line, the drag hint above. #board-legend is
+           still the single source the table view copies its legend from (renderPipelineTable). -->
+      <details class="rep-howcounted how-fold" id="board-how">
+        <summary>What the colours mean</summary>
+        <div class="rep-howcounted-body">
+          <p class="board-legend" id="board-legend">
+            <span class="bl-item"><span class="bl-edge bl-edge-amber" aria-hidden="true"></span>Left edge: 14+ days in this stage</span>
+            <span class="bl-item"><span class="bl-edge bl-edge-red" aria-hidden="true"></span>30+ days in this stage</span>
+            <span class="bl-item"><span class="bl-approx" aria-hidden="true">&#8776;</span>&#8776; or a dashed pill means the date is an estimate, not confirmed</span>
+          </p>
+        </div>
+      </details>
       <div id="stage-tabs" class="stage-tabs hidden"></div>
       <div id="table-wrap" class="hidden"></div>
       <p class="dq-notice hidden" id="board-cap-notice"></p>
@@ -359,10 +394,11 @@
         <!-- R5-17 (label half) / R80 · A2 (formula changed under it) — the estimate is now the CTO's
              rewritten RPC's: the firm-average commission (Settings) × a loan-size band
              (0.7 / 1.0 / 1.3 / 1.6). Still an estimate, never banked money — the label says both. -->
-        <div class="kpi"><div class="num" id="prot-kpi-comm">—</div><div class="lbl">Est. commission</div><div class="s">(firm average × loan band — an estimate, not banked money)</div></div>
+        <div class="kpi"><div class="num" id="prot-kpi-comm">—</div><div class="lbl">Est. commission</div><div class="s" title="The firm-average commission (Settings) × a loan-size band: 0.7 under £100k · 1.0 to £250k · 1.3 to £500k · 1.6 above. Never banked money.">(estimate — firm average × loan band)</div></div>
         <div class="kpi dq-clickable" id="prot-tile-quoted" title="Click to filter the table to quoted cases awaiting a decision"><div class="num" id="prot-kpi-quoted">—</div><div class="lbl">Quoted, awaiting decision</div></div>
       </div>
-      <p class="panel-sub hidden" id="prot-money-note"></p>
+      <!-- R87 · book (04 #11) — #prot-money-note (the owner-only-tile apology shown to advisers) is
+           gone; whose £ the line above the table shows is in that line's title. -->
       <div class="page-tools" style="margin-bottom:14px;">
         <span class="segment" role="group" aria-label="Whose protection cases to show">
           <button class="btn btn-sm seg-btn seg-first scope-active" id="prot-scope-mine" aria-pressed="true">Mine</button>
@@ -379,34 +415,45 @@
           <option value="live">Live cases</option>
           <option value="completed">Completed book</option>
           <option value="quoted">Quoted</option>
+          <!-- R87 · book · C4 (04 #3, partial) — the two bands below, as filters over the ONE
+               ranked table (same predicates: protBandNoOutcome / protBandGi; counts filled by
+               renderProtectionPage), so no client is listed twice on the page. -->
+          <option value="nooutcome">Completed, no protection outcome</option>
+          <option value="gi">GI not discussed</option>
         </select>
       </div>
       <div id="prot-table"></div>
       <!-- R7-3 — the call list. Cases that COMPLETED with no protection outcome recorded
            (not discussed / discussed / quoted, i.e. anything that is neither a policy nor a
            decline). It honours the Mine / Unassigned / All scope buttons above, so an adviser
-           sees their own and the Owner sees the firm's. -->
-      <div class="panel hidden" id="prot-calllist-panel" style="margin-top:18px;">
-        <div class="panel-head-row">
+           sees their own and the Owner sees the firm's.
+           R87 · book · C4 — COLLAPSED: the same rows are one filter option on the table above, so
+           the band is a closed <details> (same ids, same rows, same verbs) rather than a second
+           list of the same clients. -->
+      <details class="panel hidden prot-band-fold" id="prot-calllist-panel" style="margin-top:18px;">
+        <summary class="panel-head-row">
           <h3>Completed, no protection outcome</h3>
           <span class="badge amber" id="prot-calllist-count">0</span>
-        </div>
+          <span class="cs-muted prot-band-hint">also a filter on the table above</span>
+        </summary>
         <p class="panel-sub" id="prot-calllist-basis"></p>
         <div id="prot-calllist"></div>
-      </div>
+      </details>
       <!-- R80 · A3 — THE GI CALL LIST. gi_status is on every case and no surface ever read it as
            work. Same conversation family, so it is a compact second band here: cases where the GI
            conversation has never been started (gi_status not_discussed on a GI-applicable kind),
            derived from the SAME cached pipeline rows as the table above (zero extra network),
-           ranked by the same score, with the same Log-call verb. -->
-      <div class="panel hidden" id="prot-gi-panel" style="margin-top:18px;">
-        <div class="panel-head-row">
+           ranked by the same score, with the same Log-call verb.
+           R87 · book · C4 — collapsed, as above. -->
+      <details class="panel hidden prot-band-fold" id="prot-gi-panel" style="margin-top:18px;">
+        <summary class="panel-head-row">
           <h3>GI never discussed</h3>
           <span class="badge amber" id="prot-gi-count">0</span>
-        </div>
+          <span class="cs-muted prot-band-hint">also a filter on the table above</span>
+        </summary>
         <p class="panel-sub" id="prot-gi-basis"></p>
         <div id="prot-gi-list"></div>
-      </div>
+      </details>
       <!-- R13 · M-23/M-25 — THE CLAWBACK WINDOW. Policies taken inside the last 24 months, i.e.
            the ones a provider could still reclaim commission on if they lapse. Its more useful
            half is the second line: the policies with NO start date, whose window cannot be
@@ -416,7 +463,9 @@
           <h3>Clawback window</h3>
           <span class="badge grey" id="prot-clawback-count">0</span>
         </div>
-        <p class="panel-sub" id="prot-clawback-basis"></p>
+        <!-- R87 · book · C5 — one line; the full basis keeps its id inside the fold (#prot-clawback-how). -->
+        <p class="panel-sub" id="prot-clawback-line"></p>
+        <div id="prot-clawback-how"></div>
         <p class="panel-sub" id="prot-clawback-nodate"></p>
         <div id="prot-clawback-list"></div>
       </div>
@@ -566,85 +615,93 @@
                choice, neither of which is known when this markup is parsed. ONE control: it
                scopes all three panels below, because they are three views of one book. -->
           <span class="segment" role="group" aria-label="Whose retention book to show">
-            <button class="btn btn-sm seg-btn seg-first" id="ret-scope-mine" aria-label="Show only my cases and clients">Mine</button>
-            <button class="btn btn-sm seg-btn seg-last" id="ret-scope-all" aria-label="Show every adviser's cases and clients">All</button>
+            <button class="btn btn-sm seg-btn seg-first" id="ret-scope-mine" aria-label="Show only my cases and clients" title="The rates on cases assigned to you, the retention cases assigned to you, and the clients with at least one case of yours.">Mine</button>
+            <button class="btn btn-sm seg-btn seg-last" id="ret-scope-all" aria-label="Show every adviser's cases and clients" title="Every adviser's cases and clients — the whole firm.">All</button>
           </span>
+          <!-- R87 · book · C2 — ONE sort control for the rates list, here in the tools row
+               (was two toggle buttons inside the panel's h3). Options filled by
+               renderRetSortSelect(): most recently ended first · oldest first · value at risk
+               (owner only); the choice is remembered exactly as before (nx_ret_sortdir). -->
+          <select id="ret-sort" aria-label="Sort the rates list"></select>
         </div>
       </div>
       <p class="panel-sub" id="ret-scope-note"></p>
       <p class="dq-notice hidden" id="ret-cap-notice"></p>
       <div class="panel" id="ret-rates-panel">
         <h3 id="ret-rates-h3">⚠️ Rates ending &amp; ended</h3>
+        <!-- R87 · book · C2 — the panel's ONE line (which window, whose cases). Everything that
+             used to be standing prose here — the R74 reconciliation, the R61 money basis, the
+             R72 outcome-funnel population — is inside the closed howFold #ret-rates-how below,
+             word for word. -->
         <p class="panel-sub" id="ret-rates-sub"></p>
         <!-- R64 · A2 — the month window. NOT a second scope control: it composes with
              Mine/All above (that one says WHOSE, this one says WHEN). Filled in by
-             renderRetMonthChips(); the pick is remembered in localStorage nx_ret_month. -->
-        <div class="ret-month-chips" id="ret-month-chips" role="group" aria-label="Which rate-end month to show"></div>
+             renderRetMonthChips(); the pick is remembered in localStorage nx_ret_month.
+             R87 · book — four chips show; the other three keys render hidden (RET_MONTHS_FOLDED). -->
+        <div class="ret-chips-row">
+          <div class="ret-month-chips" id="ret-month-chips" role="group" aria-label="Which rate-end month to show"></div>
+          <!-- R70 · B2 — "Never contacted first". A TOGGLE, not a filter: it re-orders the rows
+               below and never hides one. Rendered by renderRetUntouchedChip(); the pick is
+               remembered in localStorage nx_ret_untouched. R87 · book — on the chips' line. -->
+          <div class="ret-untouched-row" id="ret-untouched"></div>
+        </div>
         <!-- R72 · A2 (panel H5c) — RATE-END OUTCOMES. retained / renewed elsewhere / sold / no
              outcome, for the rates that ended in the last 12 months. Directly under the ended
              chips because it is a summary OF that window, and above the rows because the "no
              outcome" figure is the instruction for working them. Read-only derivation — see
              renderRateEndOutcomeFunnel; empty markup here, painted by loadRetentionRates. -->
         <div class="ret-outcome-funnel" id="ret-outcome-funnel"></div>
-        <!-- R64 · A1 — select-all + the bulk action bar, rendered by renderRetBulkBar(). -->
-        <div id="ret-bulk"></div>
-        <!-- R70 · B2 — "Never contacted first". A TOGGLE, not a filter: it re-orders the rows
-             below and never hides one. Rendered by renderRetUntouchedChip(); the pick is
-             remembered in localStorage nx_ret_untouched. -->
-        <div class="ret-untouched-row" id="ret-untouched"></div>
+        <div id="ret-rates-how"></div>
         <!-- R75 · B2 — the funnel chips are buttons now and they FILTER the list below.
              A filter that is on and does not say so is a list that lies about the size
              of the book, so this notice sits directly above the rows, carries the count
              it narrowed to, and names the way out. Hidden while no chip is pressed. -->
         <p class="dq-notice" id="ret-outcome-filter-note" hidden></p>
+        <!-- R64 · A1 — select-all + the bulk action bar, rendered by renderRetBulkBar().
+             R87 · book — directly above the rows it selects, where the Clients page puts it. -->
+        <div id="ret-bulk"></div>
         <div id="ret-rates-list"></div>
       </div>
       <div class="panel" id="ret-pipeline-panel" style="margin-top:18px;">
         <h3>🔁 Retention pipeline</h3>
         <p class="panel-sub" id="ret-pipeline-stats"></p>
+        <div id="ret-pipeline-how"></div>
         <div id="ret-pipeline-list"></div>
       </div>
       <div class="panel" id="ret-cold-panel" style="margin-top:18px;">
         <h3>🌙 Gone quiet
           <button type="button" class="btn btn-ghost btn-sm" id="ret-cold-goto" title="Open the Clients page on this same segment, with the same adviser filter — where you can bulk-task, export and open the records">Work this list on Clients →</button>
         </h3>
-        <p class="panel-sub" id="ret-cold-sub"></p>
+        <!-- R87 · book · C2 — one line here; the full definition keeps its id (#ret-cold-sub)
+             inside the closed howFold that loadRetentionCold renders into #ret-cold-how. -->
+        <p class="panel-sub" id="ret-cold-line"></p>
+        <div id="ret-cold-how"></div>
         <div id="ret-cold-list"></div>
       </div>
     </section>
 
     <!-- Import -->
+    <!-- R87 · owner-admin (05 #9) — THE DOORS ARE IN WEEKLY ORDER. The 2,000-case migration is done;
+         the Revolution export is the file that arrives every week and the AI bulk import is the rare
+         door, so the Revolution panel now leads and carries the primary treatment, and the AI import
+         follows as the quieter .panel-secondary. Every id inside both panels is unchanged; only the
+         DOM order and which panel carries the secondary skin have swapped (r75 A5 re-pointed). -->
     <section id="page-import" class="page hidden">
-      <h2>Bulk import</h2>
-      <p class="panel-sub">Drop in existing-client data from anywhere — a spreadsheet, an email, rough notes. AI sorts it into clients and cases, and nothing is saved until you review and confirm.</p>
-      <div class="panel">
-        <!-- R75 · B1 — the raw <input type=file> is gone; mountDropZone() builds the
-             styled zone (and the input, with the SAME id/accept/aria-label) into this
-             slot at boot. One component, four doors. -->
-        <div class="drop-zone-slot" id="import-file-slot"></div>
-        <textarea id="import-text" rows="9" aria-label="Paste rows or text to import" placeholder="…or paste rows / text here"></textarea>
-        <div style="margin-top:10px;display:flex;align-items:center;gap:12px;">
-          <button class="btn btn-primary" id="analyse-btn">✨ Analyse with AI</button>
-          <span id="import-status" class="panel-sub" style="margin:0;"></span>
-        </div>
-      </div>
-      <div id="import-preview"></div>
-
       <!-- ==================================================================
            R8-REV · REVOLUTION SYNC
            Everything is keyed into Revolution first; this reads the weekly
            Stonebridge client_data_export_V2 and shows, field by field, what
-           would change HERE. Three deliberate rules, stated on screen:
+           would change HERE. Three deliberate rules, stated in the fold:
              · headers are recognised by NAME, never by position
              · nothing is written until a human confirms it, per field
              · nothing is emailed, and no stage moves, as a side effect
            =============================================================== -->
       <h2>Revolution sync</h2>
-      <p class="panel-sub">The weekly <code>client_data_export_V2</code> from Stonebridge. Everything is keyed into Revolution first, so this reads <em>from</em> it: it matches each row to a client and a case you already hold, shows the field-by-field difference, and writes only what you tick. It never queues an email, and it never moves a case stage on its own.</p>
-      <!-- R75 · B1 — .panel-secondary: the Revolution door is the WEEKLY, second-choice
-             one (the bulk AI import is the front door), so it reads as the quieter of the
-             two panels rather than as its identical twin. Presentation only. -->
-      <div class="panel panel-secondary" id="rev-input-panel">
+      <p class="panel-sub" id="rev-intro">Weekly: drop the Stonebridge client export here. It shows what would change and writes only what you tick.</p>
+      <details class="rep-howcounted how-fold" id="rev-how"><summary>How the sync works</summary><div class="rep-howcounted-body">
+        <p>Everything is keyed into Revolution first, so this reads <em>from</em> it: it matches each row of the weekly client data export to a client and a case you already hold, shows the field-by-field difference, and writes only what you tick. Column headings are recognised by name, never by position. It never queues an email, and it never moves a case stage on its own.</p>
+      </div></details>
+      <div class="panel" id="rev-input-panel">
         <div class="rev-lastsync" id="rev-lastsync">Last import: checking…</div>
         <div class="drop-zone-slot" id="rev-file-slot"></div>
         <textarea id="rev-text" rows="6" aria-label="Paste the Revolution export" placeholder="…or paste the export here — the first row must be the column headings"></textarea>
@@ -657,6 +714,21 @@
       <div id="rev-mapping"></div>
       <div id="rev-preview"></div>
       <div id="rev-result"></div>
+
+      <h2 id="import-ai-head" style="margin-top:28px;">Bring in data from anywhere</h2>
+      <p class="panel-sub" id="import-intro">One-off: a spreadsheet, an email or rough notes. AI sorts it into clients and cases; nothing is saved until you confirm.</p>
+      <div class="panel panel-secondary" id="import-ai-panel">
+        <!-- R75 · B1 — the raw <input type=file> is gone; mountDropZone() builds the
+             styled zone (and the input, with the SAME id/accept/aria-label) into this
+             slot at boot. One component, four doors. -->
+        <div class="drop-zone-slot" id="import-file-slot"></div>
+        <textarea id="import-text" rows="9" aria-label="Paste rows or text to import" placeholder="…or paste rows / text here"></textarea>
+        <div style="margin-top:10px;display:flex;align-items:center;gap:12px;">
+          <button class="btn btn-primary" id="analyse-btn">✨ Analyse with AI</button>
+          <span id="import-status" class="panel-sub" style="margin:0;"></span>
+        </div>
+      </div>
+      <div id="import-preview"></div>
     </section>
 
     <!-- Reports -->
@@ -696,6 +768,8 @@
            it is money, and money on this page is Owner-only. -->
       <div class="rep-hero hidden" id="report-hero"></div>
       <div class="rep-hero-sec hidden" id="report-hero-strip"></div>
+      <!-- R87 · owner-admin — the basis/scope lines below are <div class="panel-sub"> (not <p>) so a
+           howFold() <details> can sit inside them without the parser closing the element. -->
       <p class="panel-sub hidden" id="report-money-note"></p>
       <!-- R74 · A4a — the three-money-bases paragraph moves behind a closed disclosure. It is not
            deleted and not shortened (r42 §E pins it verbatim): it is the reference you read once
@@ -731,7 +805,7 @@
            whose fuller figures are below. -->
       <div class="panel hidden" id="report-mine-panel">
         <h3>My numbers</h3>
-        <p class="panel-sub" id="report-mine-scope"></p>
+        <div class="panel-sub" id="report-mine-scope"></div>
         <div class="kpi-row" id="report-mine" style="margin:12px 0 0;"></div>
         <!-- R68 · M7 — the adviser's own "fees earned this month vs my target" bar. Its own
              container BELOW the tiles, mirroring #month-fee-target's position under #month-kpis
@@ -780,7 +854,7 @@
            ================================================================== -->
       <div class="mi-section hidden" id="report-mi-section">
         <h3 class="mi-section-head">Pipeline MI</h3>
-        <p class="panel-sub" id="report-mi-scope"></p>
+        <div class="panel-sub" id="report-mi-scope"></div>
         <div class="grid-2">
           <div class="panel" id="report-mi-funnel-panel">
             <h3>Funnel &amp; conversion<button type="button" class="btn btn-sm mi-csv-btn" id="report-mi-csv-funnel" title="Download this panel as CSV">⭳ CSV</button></h3>
@@ -788,7 +862,9 @@
                  duplicates and are not: this one is a LIVE snapshot of the whole book, that one is
                  the selected month's cohort. They are not merged (both questions are real ones);
                  the scope is simply made unmissable on each, with a pointer to the other. -->
-            <p class="panel-sub"><strong>Everything LIVE right now, by stage</strong> — regardless of when it was created, and unaffected by the month picker above. Historical conversion below is from milestone dates. <em>(The month-cohort view — cases created in the selected month — is “Pipeline funnel” further down this page.)</em></p>
+            <!-- R87 · owner-admin (T1) — one line stays; the cross-pointer to the other funnel folds. -->
+            <div class="panel-sub" id="report-mi-funnel-scope"><strong>Everything LIVE right now, by stage</strong> — not affected by the month picker.
+              <details class="rep-howcounted how-fold" id="report-mi-funnel-how"><summary>How this is counted</summary><div class="rep-howcounted-body"><p>Every open case, regardless of when it was created. Historical conversion below is from milestone dates. The month-cohort view — cases created in the selected month — is “Pipeline funnel” further down this page.</p></div></details></div>
             <div id="report-mi-funnel"></div>
             <div id="report-mi-conversion" style="margin-top:14px;"></div>
             <div id="report-mi-winrate" style="margin-top:12px;"></div>
@@ -809,7 +885,7 @@
         </div>
         <div class="panel" id="report-mi-scoreboard-panel">
           <h3>Adviser scoreboard — pipeline &amp; outcomes<button type="button" class="btn btn-sm mi-csv-btn" id="report-mi-csv-scoreboard" title="Download this panel as CSV">⭳ CSV</button></h3>
-          <p class="panel-sub" id="report-mi-scoreboard-scope"></p>
+          <div class="panel-sub" id="report-mi-scoreboard-scope"></div>
           <div id="report-mi-scoreboard"></div>
         </div>
       </div>
@@ -875,7 +951,7 @@
             <button type="button" class="btn btn-sm" id="owed-csv-btn" title="Download every unpaid fee line, including the proc and sols columns">⭳ CSV</button>
           </div>
         </div>
-        <p class="panel-sub" id="report-owed-basis"></p>
+        <div class="panel-sub" id="report-owed-basis"></div>
         <div class="kpi-row" id="report-owed-buckets" style="margin:12px 0 4px;"></div>
         <!-- R42 · F3 — the four ageing buckets above ARE the answer for most reads; the per-lender / per-adviser ledger under them is the chase list, wanted on the day you chase. #owed-csv-btn sits in the panel head row and exports the same rows without opening this. -->
         <details class="report-ledger">
@@ -891,7 +967,7 @@
            ================================================================== -->
       <div class="panel hidden" id="report-rateend-panel">
         <h3>Rate-end book value — next 24 months</h3>
-        <p class="panel-sub" id="report-rateend-basis"></p>
+        <div class="panel-sub" id="report-rateend-basis"></div>
         <!-- R42 · F3 — the 24-month maturity ledger with its per-case expanders. "Recover" below it stays open: uncovered maturities are the work, the table is the reference. -->
         <details class="report-ledger">
           <summary>Show the 24-month table<span class="ledger-n"></span></summary>
@@ -908,7 +984,7 @@
              (#report-forecast-target-line) and the no-date clause wired to the existing
              toggleForecastNoneList. Populated by renderForecastBuckets(); owner-only with it. -->
         <div id="report-forecast-target"></div>
-        <p class="panel-sub" id="report-forecast-hint" style="margin:10px 0 0;">Live cases from DIP to exchange, weighted by stage conversion, bucketed by how far off the expected completion date is.</p>
+        <p class="panel-sub" id="report-forecast-hint" style="margin:10px 0 0;">Live cases from DIP to exchange, weighted by stage conversion, bucketed by expected completion date.</p>
       </div>
       <!-- ==================================================================
            R77 · A4 — BUSINESS MIX BY CASE TYPE. Completions YTD and the live
@@ -961,7 +1037,7 @@
           <h3>Lead response — how fast we answer an enquiry</h3>
           <div class="owed-tools" id="leadresp-tools"></div>
         </div>
-        <p class="panel-sub" id="report-leadresp-basis"></p>
+        <div class="panel-sub" id="report-leadresp-basis"></div>
         <div class="kpi-row" id="report-leadresp-headline" style="margin:12px 0 4px;"></div>
         <div id="report-leadresp-source"></div>
         <div id="report-leadresp-adviser" style="margin-top:18px;"></div>
@@ -998,7 +1074,7 @@
            ================================================================== -->
       <div class="panel hidden" id="report-advocacy-panel">
         <h3>Advocacy — reviews, referrals and the people who send us business</h3>
-        <p class="panel-sub" id="report-advocacy-basis"></p>
+        <div class="panel-sub" id="report-advocacy-basis"></div>
         <div class="adv-grid" id="report-advocacy-grid"></div>
       </div>
 
@@ -1018,7 +1094,7 @@
            ================================================================== -->
       <div class="panel hidden" id="report-conveyancer-panel">
         <h3>Conveyancer speed — how long each solicitor takes</h3>
-        <p class="panel-sub" id="report-conveyancer-basis"></p>
+        <div class="panel-sub" id="report-conveyancer-basis"></div>
         <!-- R42 · F3 — the per-firm table. The basis line above it stays visible — it is the part that has to be read before the numbers are. -->
         <details class="report-ledger">
           <summary>Show every conveyancer<span class="ledger-n"></span></summary>
@@ -1041,7 +1117,7 @@
            ================================================================== -->
       <div class="panel hidden" id="report-outcomes-panel">
         <h3>Appointment outcomes — who turns up, and whether we record it</h3>
-        <p class="panel-sub" id="report-outcomes-basis"></p>
+        <div class="panel-sub" id="report-outcomes-basis"></div>
         <div class="kpi-row" id="report-outcomes-headline" style="margin:12px 0 4px;"></div>
         <div id="report-outcomes-adviser"></div>
         <div id="report-outcomes-noshows" style="margin-top:18px;"></div>
@@ -1075,7 +1151,7 @@
             <button type="button" class="seg-btn" id="report-ref-scope-all" data-refout-scope="all" role="tab" aria-selected="false" title="Every adviser's referrals">All</button>
           </div>
         </div>
-        <p class="panel-sub" id="report-ref-basis"></p>
+        <div class="panel-sub" id="report-ref-basis"></div>
         <div id="report-ref-groups"></div>
         <details class="report-ledger">
           <summary>Show every referral in this period<span class="ledger-n"></span></summary>
@@ -1099,70 +1175,27 @@
         <h2>Monday money</h2>
         <button class="btn btn-sm" id="money-refresh">↻ Refresh</button>
       </div>
-      <p class="panel-sub" id="money-scope"></p>
+      <div class="panel-sub" id="money-scope"></div>
       <div id="money-denied" class="dq-notice hidden"></div>
       <div id="money-body">
-        <div class="panel">
-          <h3>Banked last week</h3>
-          <div class="kpi-row" id="money-banked" style="margin:12px 0 0;"></div>
-        </div>
-        <div class="panel">
-          <div class="panel-head-row">
-            <h3>Owed to you, by age</h3>
-            <button type="button" class="btn btn-sm" id="money-owed-open" title="Open the full Money owed list on Reports">Open the full list →</button>
-          </div>
-          <p class="panel-sub" id="money-owed-basis"></p>
-          <div id="money-owed"></div>
-        </div>
-        <div class="grid-2">
-          <div class="panel">
-            <h3>Top rate-ends in the next 60 days</h3>
-            <p class="panel-sub" id="money-rateends-basis"></p>
-            <div id="money-rateends"></div>
-          </div>
-          <div class="panel">
-            <h3>Protection quotes gone cold</h3>
-            <p class="panel-sub" id="money-cold-basis"></p>
-            <div id="money-cold"></div>
-          </div>
-        </div>
-        <div class="grid-2">
-          <div class="panel">
-            <h3>Movement</h3>
-            <p class="panel-sub" id="money-movement-basis"></p>
-            <div id="money-movement"></div>
-          </div>
-          <div class="panel">
-            <h3>New leads last week, by source</h3>
-            <p class="panel-sub" id="money-leads-basis"></p>
-            <div id="money-leads"></div>
-          </div>
-        </div>
-        <div class="panel" id="money-advisers-panel">
-          <h3>Per adviser</h3>
-          <p class="panel-sub" id="money-advisers-basis"></p>
-          <div id="money-advisers"></div>
-        </div>
-
         <!-- ================================================================
-             R44 — STONEBRIDGE PAYMENT RECONCILIATION. Two panels, both inside
-             #money-body so they inherit this page's Owner gate, and both also
-             hidden/emptied explicitly by loadMoneyPage()'s non-owner branch.
-
-             The statement panel sits ABOVE the rate card because that is the
-             weekly motion; the rate card is a monthly-ish one that only exists
-             to give the statement's expected-fee badges something to check
-             against. Neither writes anything to a case on import — the review
-             below the list is where a human confirms, one line at a time.
+             R44 — STONEBRIDGE PAYMENT RECONCILIATION.
+             R87 · owner-admin (05 #3) — THE RITUAL LEADS. The weekly commission statement (the one
+             control on this page that DOES something) sat at y≈1,886px under six read-only panels;
+             it is now the first thing in #money-body, then the rate card it checks against, then the
+             read-only panels. Nothing is deleted: the six panels keep their ids and their renderers
+             (R89 merges them into Reports). Both recon panels are inside #money-body so they inherit
+             this page's Owner gate, and both are also hidden/emptied explicitly by loadMoneyPage()'s
+             non-owner branch. Neither writes anything to a case on import — the review below the list
+             is where a human confirms, one line at a time.
              ============================================================== -->
         <div class="panel" id="money-recon-panel">
           <div class="panel-head-row">
             <h3>Weekly commission statement</h3>
           </div>
-          <p class="panel-sub">Import the network's weekly commission statement. Every line is matched against the book and shown for review — <strong>nothing is written to a case until you confirm it</strong>. A statement already imported (same Ref) is refused rather than duplicated.</p>
-          <!-- R75 · B1 — the same drop zone the two import doors use. It moved out of the
-               panel head: a bare "Choose File" button beside an h3 was the smallest,
-               least explained control on the page for the biggest weekly motion. -->
+          <!-- R87 fixer (09 D2) — one ≤25-word line; the matching note sits in a closed fold (howFold markup, static). -->
+          <div class="panel-sub" id="money-recon-sub">Drop this week's Stonebridge statement — <strong>nothing is written until you confirm</strong>. <details class="rep-howcounted how-fold" id="money-recon-how"><summary>How matching works</summary><div class="rep-howcounted-body"><p>Every line is matched to the book for review; nothing is written to a case until you review and confirm it.</p></div></details></div>
+          <!-- R75 · B1 — the same drop zone the two import doors use. -->
           <div class="drop-zone-slot" id="recon-file-slot"></div>
           <p class="panel-sub" id="recon-status"></p>
           <div id="recon-statements"></div>
@@ -1173,9 +1206,53 @@
           <div class="panel-head-row">
             <h3>Proc fee rates (Stonebridge)</h3>
           </div>
-          <p class="panel-sub">The network's rate card, used to work out what a procuration fee on a given lender and loan <em>should</em> be. Uploading replaces the stored card wholesale.</p>
+          <div class="panel-sub" id="money-procrates-sub">The network's rate card — uploading replaces the stored card. <details class="rep-howcounted how-fold" id="money-procrates-how"><summary>What it is used for</summary><div class="rep-howcounted-body"><p>Used to check each statement line's expected procuration fee: with a card loaded, every mortgage receipt on a statement gains an expected-fee badge. Without one, expected-fee checks are off.</p></div></details></div>
           <div class="drop-zone-slot" id="procrates-file-slot"></div>
           <p class="panel-sub" id="procrates-status"></p>
+        </div>
+
+        <!-- R87 · owner-admin — the read-only panels, below the ritual. Same ids, same order among
+             themselves; R89 decides their future. -->
+        <div class="panel" id="money-banked-panel">
+          <h3>Banked last week</h3>
+          <div class="kpi-row" id="money-banked" style="margin:12px 0 0;"></div>
+        </div>
+        <div class="panel" id="money-owed-panel">
+          <div class="panel-head-row">
+            <h3>Owed to you, by age</h3>
+            <button type="button" class="btn btn-sm" id="money-owed-open" title="Open the full Money owed list on Reports">Open the full list →</button>
+          </div>
+          <div class="panel-sub" id="money-owed-basis"></div>
+          <div id="money-owed"></div>
+        </div>
+        <div class="grid-2">
+          <div class="panel" id="money-rateends-panel">
+            <h3>Top rate-ends in the next 60 days</h3>
+            <div class="panel-sub" id="money-rateends-basis"></div>
+            <div id="money-rateends"></div>
+          </div>
+          <div class="panel" id="money-cold-panel">
+            <h3>Protection quotes gone cold</h3>
+            <div class="panel-sub" id="money-cold-basis"></div>
+            <div id="money-cold"></div>
+          </div>
+        </div>
+        <div class="grid-2">
+          <div class="panel" id="money-movement-panel">
+            <h3>Movement</h3>
+            <div class="panel-sub" id="money-movement-basis"></div>
+            <div id="money-movement"></div>
+          </div>
+          <div class="panel" id="money-leads-panel">
+            <h3>New leads last week, by source</h3>
+            <div class="panel-sub" id="money-leads-basis"></div>
+            <div id="money-leads"></div>
+          </div>
+        </div>
+        <div class="panel" id="money-advisers-panel">
+          <h3>Per adviser</h3>
+          <div class="panel-sub" id="money-advisers-basis"></div>
+          <div id="money-advisers"></div>
         </div>
       </div>
     </section>
@@ -1207,7 +1284,14 @@
                list. Nothing in tests/ or smoke.js referenced the checkbox, and the one caller
                that drove it programmatically (dhGotoEmails, from the Data-health tiles) now sets
                the chip state directly, so the behaviour it provided is unchanged. -->
+          <!-- R87 · owner-admin (05 #10) — while the hold is on, the PRIMARY control is the one that
+               changes the state: "Release hold…" (Owner → Settings › Email sending; the Administrator
+               sees the same button disabled, saying who releases). The run button stays (it still
+               queues and stamps the heartbeat) but demoted, with one short line saying why it cannot
+               send. Both painted by loadEmails(). -->
+          <button class="btn btn-primary hidden" id="em-release-hold-btn" title="Open Settings › Email sending, where the Owner releases the hold">Release hold…</button>
           <button class="btn hidden" id="run-now-btn" title="Sends every queued email for the whole firm — asks first">▶ Run automation now</button>
+          <span class="panel-sub hidden" id="run-now-why" style="margin:0;"></span>
           <!-- R63 · A3 — the daily nexmoney-send-sms cron already sends this queue at 08:05 UTC
                (09:05 BST); this button is the "don't wait for it" path, not the only path. -->
           <button class="btn" id="run-sms-btn" title="Sends any queued SMS immediately, instead of waiting for the 8:05am run">▶ Send SMS now</button>
@@ -1218,7 +1302,9 @@
            operator needs on arrival stay in the open; everything else — including the R8/R9/R12a copy-audit
            paragraphs, whose wording is contractual and is reproduced here WORD FOR WORD, ids intact — folds
            behind one line that says what is inside. Nothing is deleted and nothing is rewritten. -->
-      <p class="panel-sub">The 8am cron job sends whatever is sitting in the email queue. Sending the whole firm's queue early is an Owner / Administrator action.</p>
+      <!-- R87 · owner-admin (05 small stuff, 06 #11) — "cron job" said to a broker becomes "the 8am run";
+           the two-sentence shape r42 §I pins is kept (re-pointed to this wording). -->
+      <p class="panel-sub" id="emails-intro">The 8am run sends whatever is waiting in the email queue. Sending the whole firm's queue early is an Owner / Administrator action.</p>
       <details class="prose-fold" id="emails-explainer">
         <summary>ⓘ How the queue, review requests and reminders behave</summary>
         <p class="panel-sub">Nothing composes new emails for you: rate-end reminders, review requests and fee requests are queued by you from a case, and each one sends on its own — pressing an action on a case never releases anybody else's queue. Running the whole firm's queue early confirms the count and recipients first.</p>
@@ -1236,6 +1322,7 @@
            status "cancelled", so this paragraph described a control that did not exist;
            the sentence names the button by its label rather than leaving "cancel the row"
            to be hunted for, and says what cancelling records. -->
+      <p class="panel-sub" id="emails-r72-note"><strong>Read one before it goes.</strong> Every queued or failed row has a <em>Preview this email</em> fold showing the subject and, where the wording is already written, the text itself — shown as plain formatting only, with no links, images or styling loaded from it. <strong>Stop several at once.</strong> Tick the queued or failed rows you do not want sent and use <em>Cancel selected</em> on the bar: one confirmation for the whole batch, and a cancelled email never sends and is never retried. <em>Retry</em> stays what it always was — it only ever acts on rows that have already failed, and says how many of your selection that is.</p>
       <p class="panel-sub" id="emails-r9-note"><strong>An unanswered review request is followed up once.</strong> About <strong>a week</strong> after a review request that was actually <em>sent</em> and never answered (the exact gap is the “Review reminder if unanswered” setting), one reminder is queued — shown below as <em>Review reminder (2nd ask)</em>. One per case ever, never a third, and it comes out of the same 5-a-run budget as the requests, taken only after them: a client who has never been asked always goes before one who is being asked twice. If somebody should not be asked again, cancel the row while it is still queued: press <strong>Cancel</strong> on it, confirm, and the email never sends — its status becomes <em>cancelled</em>, and where the row belongs to a case the cancellation is written onto that case's timeline with your name. · <strong>An unhappy answer creates work, not an email.</strong> A score of 6 or below raises a call-back task for the case's adviser and writes the client's own words onto the case timeline; nothing is sent back to the client automatically.</p>
       </details>
       <!-- R11-5 — status chips + the one line that answers the question this page is actually
@@ -1243,7 +1330,7 @@
            in loadEmails() from the rows it already reads — no extra query — so the counts always
            describe exactly the list underneath them. -->
       <div id="em-filters" class="pipe-segment em-filters" role="tablist" aria-label="Filter emails by status"></div>
-      <p class="panel-sub em-summary" id="em-summary"></p>
+      <div class="panel-sub em-summary" id="em-summary"></div>
       <!-- R79 · A3 — the day-one damage-control view: everything that has ACTUALLY gone out since
            midnight (Europe/London), grouped by type with the first recipients named, painted by
            loadEmails() from its own bounded read (not the newest-100 window). Honest empty state
@@ -1251,7 +1338,9 @@
       <div class="panel em-morning" id="em-morning"></div>
       <!-- R72 · B3 (M3) — the queue can now be READ and stopped in bulk. Stated once, above the
            list, because both affordances are new and neither is obvious from a checkbox. -->
-      <p class="panel-sub"><strong>Read one before it goes.</strong> Every queued or failed row has a <em>Preview this email</em> fold showing the subject and, where the wording is already written, the text itself — shown as plain formatting only, with no links, images or styling loaded from it. <strong>Stop several at once.</strong> Tick the queued or failed rows you do not want sent and use <em>Cancel selected</em> on the bar: one confirmation for the whole batch, and a cancelled email never sends and is never retried. <em>Retry</em> stays what it always was — it only ever acts on rows that have already failed, and says how many of your selection that is.</p>
+      <!-- R87 · owner-admin (T1 / 05 #10) — the 108-word "Read one before it goes / Stop several at once"
+           paragraph moved into #emails-explainer below (id emails-r72-note, text intact): the queue rows
+           carry "Preview this email" and a checkbox, so the instructions are visible in the control. -->
       <div id="email-list"></div>
       <div class="panel" style="margin-top:20px;">
         <h3>SMS activity</h3>
@@ -1295,31 +1384,6 @@
       <button class="btn btn-primary" id="save-settings-btn">Save settings</button>
       <span id="settings-saved" class="saved-msg hidden">Saved ✓</span>
 
-      <!-- R13 · M-42 — FIRM EXPORT.
-           R74 · B1 (panel D#15) — MOVED, AND DEMOTED. It sat at the TOP of Settings in a navy
-           primary button, which made the loudest control on the page one an Owner presses perhaps
-           twice a year — above every switch the firm actually changes, and above the go-live
-           rollup that tells them what is still broken. It keeps every word of its own copy and its
-           own id; what changes is where it sits (with the rest of the firm's housekeeping, under
-           its own "Data & backup" heading), that the button is a secondary one, and that it asks
-           before it writes an unencrypted file full of clients' dates of birth to somebody's
-           Downloads folder. Hidden for everyone but the Owner (renderSettings toggles it); the
-           reads it makes are RLS'd anyway, so a non-Owner's export would be a partial file
-           labelled as a backup, which is worse than no button. -->
-      <div class="panel hidden" id="firm-export-panel" style="margin-top:24px;">
-        <h3>Data &amp; backup</h3>
-        <p class="panel-sub">One file containing every row this back office holds — clients, cases, tasks, notes, documents, appointments, leads, the email and SMS queues, fact-finds, introducers, settings, logins, alerts, absences and the audit log. It is a <strong>backup you control</strong>: keep it somewhere safe outside this system, so the firm's record of itself does not depend on this application or its hosting continuing to exist.</p>
-        <p class="panel-sub"><strong class="export-warn">It is not encrypted.</strong> It is a plain JSON file with your clients' names, contact details, dates of birth and financial figures in it. Treat the file exactly as you would treat the database: somewhere access-controlled, not a shared drive and not an email attachment.</p>
-        <p class="panel-sub">This is a copy, not a migration: nothing here restores it, and no other system reads this format. It is what you would hand a developer, an auditor or a successor firm.</p>
-        <!-- R14 — the password vault is DELIBERATELY excluded from this file. The export is unencrypted
-             JSON the owner keeps outside the system; dumping every company login and password into it
-             is exactly the file you would least want to leak. Vault entries are not in EXPORT_TABLES,
-             and this line says so out loud so nobody assumes the backup covers them. -->
-        <p class="panel-sub"><strong>The password vault is not in this file.</strong> Company logins and passwords are deliberately excluded — an unencrypted backup is the last place they belong. Manage them on the Vault page instead.</p>
-        <button type="button" class="btn" id="firm-export-btn">Export the firm's data</button>
-        <span id="firm-export-last" class="panel-sub" style="margin-left:10px;"></span>
-        <div id="firm-export-result"></div>
-      </div>
       <!-- B4 UI (R5-8) — every signed-in staff member's own contact/sign-off, independent of the
            Owner-only form above (M1's self-update RLS policy covers exactly this row). Hidden
            outright when the database predates M1 — there is no column to write to. -->
@@ -1346,7 +1410,7 @@
            per role; it sits directly under My details, one scroll from that chip). -->
       <div class="panel hidden" id="security-panel" style="margin-top:24px;">
         <h3>Security</h3>
-        <p class="panel-sub">Two-step sign-in: a 6-digit code from an authenticator app on your phone, asked for after your password. It is what stops a stolen or reused password opening the whole client book.</p>
+        <p class="panel-sub" id="security-sub">Two-step sign-in: a 6-digit code from an authenticator app, asked for after your password.</p>
         <div id="security-mfa"></div>
         <div id="security-team" class="hidden"></div>
       </div>
@@ -1373,7 +1437,7 @@
              (isAdminOrOwner() but not Owner) sees the panel with this block hidden and the roster
              below rendered read-only instead. -->
         <div id="team-invite-block">
-          <p class="panel-sub">Owner only. Choose the tier before you send the invite — it decides what the new login may do, and the database enforces it.</p>
+          <p class="panel-sub" id="team-invite-sub">Owner only — the tier decides what the new login may do.</p>
           <div style="display:flex;gap:8px;flex-wrap:wrap;">
             <input id="staff-name" aria-label="New colleague’s full name" placeholder="Full name" style="flex:2;min-width:160px;">
             <input id="staff-email" type="email" aria-label="New colleague’s email" placeholder="Email" style="flex:2;min-width:160px;">
@@ -1385,18 +1449,53 @@
             <select id="staff-introducer" class="hidden" aria-label="Which introducer this login belongs to" style="flex:2;min-width:160px;"></select>
             <button class="btn btn-primary" id="invite-staff-btn">Create login</button>
           </div>
-          <p id="staff-role-hint" class="panel-sub" style="margin-top:8px;"></p>
+          <div id="staff-role-hint" class="panel-sub" style="margin-top:8px;"></div>
           <p id="invite-result" class="panel-sub" style="margin-top:10px;"></p>
         </div>
         <h4 style="margin:20px 0 4px;font-size:14px;">Who has access</h4>
-        <p class="panel-sub" id="team-roster-caption">Change a colleague's role here. Only an Owner can, and the last Owner can't be demoted — promote someone else first.</p>
+        <div class="panel-sub" id="team-roster-caption">Change a colleague's role here — Owner only.</div>
         <div id="team-roster"></div>
         <p id="team-role-msg" class="panel-sub hidden" style="margin-top:8px;"></p>
       </div>
 
+      <!-- R87 · owner-admin (05 #12) — the Data & backup panel moved DOWN to sit with Change history
+           and Diagnostics: the three are the "Data" group the five-chip jump nav names, and the
+           people panels (targets · my details · security · introducers · team) are now contiguous.
+           Ids and copy are unchanged. -->
+      <!-- R13 · M-42 — FIRM EXPORT.
+           R74 · B1 (panel D#15) — MOVED, AND DEMOTED. It sat at the TOP of Settings in a navy
+           primary button, which made the loudest control on the page one an Owner presses perhaps
+           twice a year — above every switch the firm actually changes, and above the go-live
+           rollup that tells them what is still broken. It keeps every word of its own copy and its
+           own id; what changes is where it sits (with the rest of the firm's housekeeping, under
+           its own "Data & backup" heading), that the button is a secondary one, and that it asks
+           before it writes an unencrypted file full of clients' dates of birth to somebody's
+           Downloads folder. Hidden for everyone but the Owner (renderSettings toggles it); the
+           reads it makes are RLS'd anyway, so a non-Owner's export would be a partial file
+           labelled as a backup, which is worse than no button. -->
+      <div class="panel hidden" id="firm-export-panel" style="margin-top:24px;">
+        <h3>Data &amp; backup</h3>
+        <!-- R87 · owner-admin (T1) — one warning line stays in the open (it changes what the reader does
+             with the file); the four-paragraph explainer keeps every word behind a closed fold. -->
+        <p class="panel-sub" id="firm-export-sub"><strong class="export-warn">Not encrypted.</strong> One file of everything held here — keep it off shared drives and email.</p>
+        <details class="rep-howcounted how-fold" id="firm-export-how"><summary>What is in the file</summary><div class="rep-howcounted-body">
+        <p class="panel-sub">One file containing every row this back office holds — clients, cases, tasks, notes, documents, appointments, leads, the email and SMS queues, fact-finds, introducers, settings, logins, alerts, absences and the audit log. It is a <strong>backup you control</strong>: keep it somewhere safe outside this system, so the firm's record of itself does not depend on this application or its hosting continuing to exist.</p>
+        <p class="panel-sub"><strong class="export-warn">It is not encrypted.</strong> It is a plain JSON file with your clients' names, contact details, dates of birth and financial figures in it. Treat the file exactly as you would treat the database: somewhere access-controlled, not a shared drive and not an email attachment.</p>
+        <p class="panel-sub">This is a copy, not a migration: nothing here restores it, and no other system reads this format. It is what you would hand a developer, an auditor or a successor firm.</p>
+        <!-- R14 — the password vault is DELIBERATELY excluded from this file (not in EXPORT_TABLES). -->
+        <p class="panel-sub"><strong>The password vault is not in this file.</strong> Company logins and passwords are deliberately excluded — an unencrypted backup is the last place they belong. Manage them on the Vault page instead.</p>
+        </div></details>
+        <button type="button" class="btn" id="firm-export-btn">Export the firm's data</button>
+        <span id="firm-export-last" class="panel-sub" style="margin-left:10px;"></span>
+        <div id="firm-export-result"></div>
+      </div>
       <div class="panel hidden" id="change-history-panel">
         <h3>Change history</h3>
-        <p class="panel-sub">Owner only. Every insert, update and delete the database recorded — including changes to Settings and to who can sign in, which belong to no client or case and so appear on no other screen. Written by the audit trigger; there is no write path through the back office, so nothing here can be edited or erased. Bank details, keys, tokens and passwords record as “(hidden)”: the log proves the value changed and deliberately never stores the value.</p>
+        <!-- R87 · owner-admin (T1, 06 #11) — one line, plain English; the explainer folds. -->
+        <p class="panel-sub" id="change-history-sub">Owner only. Every change the database recorded; nothing here can be edited or erased.</p>
+        <details class="rep-howcounted how-fold" id="change-history-how"><summary>How the log works</summary><div class="rep-howcounted-body">
+        <p>Every record created, updated and deleted — including changes to Settings and to who can sign in, which belong to no client or case and so appear on no other screen. Written by the database itself; there is no write path through the back office, so nothing here can be edited or erased. Bank details, keys, tokens and passwords record as “(hidden)”: the log proves the value changed and deliberately never stores the value. The CSV downloads every change the filters match, not just the page on screen.</p>
+        </div></details>
         <div class="ch-filters">
           <label>What changed<select id="ch-table"></select></label>
           <label>Who<select id="ch-actor"></select></label>
@@ -1407,7 +1506,7 @@
                the 25-row page range taken off. Beside the filters because that is what it acts on. -->
           <button type="button" class="btn btn-sm" id="ch-csv" title="Download every change matching the filters above — all pages, not just this one — as a CSV.">⭳ CSV</button>
         </div>
-        <p class="panel-sub" id="ch-csv-note" style="margin:4px 0 8px;">⭳ CSV downloads <strong>every change these filters match</strong>, not just the page on screen — when, who, what changed, the action, the record and the summary. Very large exports stop at the same record ceiling as the rest of this page and the file name says so.</p>
+        <p class="panel-sub" id="ch-csv-note" style="margin:4px 0 8px;">⭳ CSV downloads <strong>every change these filters match</strong> — all pages.</p>
         <div id="ch-list" class="ch-list"></div>
         <div class="ch-pager" id="ch-pager"></div>
       </div>
@@ -1422,7 +1521,7 @@
         <summary>Diagnostics</summary>
         <div class="mi-section hidden" id="report-diag-section">
           <h3 class="mi-section-head">Diagnostics</h3>
-          <p class="panel-sub">Client-side error capture for this session — visible to Owners / Administrators only and never sent anywhere. Export or copy it to share with support.</p>
+          <p class="panel-sub">Errors captured in this browser session — Owners / Administrators only, never sent anywhere. Copy or export it for support.</p>
           <div class="panel">
             <h3>Session health<button type="button" class="btn btn-sm mi-csv-btn" id="report-diag-csv" title="Download the error log as CSV">⭳ CSV</button><button type="button" class="btn btn-sm" id="report-diag-copy" title="Copy the diagnostics to your clipboard">Copy diagnostics</button><button type="button" class="btn btn-sm" id="report-diag-clear" title="Clear this session's in-memory error log">Clear</button></h3>
             <div class="panel-sub" id="report-diag-health"></div>
@@ -1430,7 +1529,7 @@
             <!-- R30 — additive cross-session table. Sanitised fingerprints only (error type,
                  code location, base page route, staff role); no messages, names or client data. -->
             <h3 style="margin-top:18px;">Across sessions (persisted)<button type="button" class="btn btn-sm" id="report-diag-persist-clear" title="Delete the persisted cross-session error log">Clear persisted</button></h3>
-            <p class="panel-sub">A sanitised, cross-session history — error type, code location, page and staff role only. No messages, names or client data are ever stored here.</p>
+            <p class="panel-sub">Error type, code location, page and role only — no messages, names or client data are ever stored here.</p>
             <div id="diag-persist-table" style="margin-top:8px;"></div>
           </div>
         </div>
@@ -1458,7 +1557,7 @@
         <h2>Vault</h2>
         <button class="btn btn-primary" id="new-vault-btn">+ New entry</button>
       </div>
-      <p class="panel-sub" id="vault-intro">Company password safe — all staff can see every entry. Individual entries can be restricted using “Who can see this”. Passwords are hidden until you reveal them, and are never included in the firm data export.</p>
+      <p class="panel-sub" id="vault-intro">Company password safe. All staff see every entry unless it is restricted; passwords stay hidden until you reveal them.</p>
       <input type="search" id="vault-search" class="search" aria-label="Search the vault" placeholder="Search the vault — name, owner, username, anything…">
       <div id="vault-segment" class="pipe-segment" role="tablist" aria-label="Vault category"></div>
       <div id="vault-list"></div>
@@ -1534,7 +1633,7 @@
      R81 · A3 — NX_BUILD_TAG below is the deploy handshake: each JS file ends by stamping its own
      window.__nxTag_*, and app.js's boot compares all four. EVERY round that edits ANY of
      index.html / core.js / reports-money.js / app.js bumps the tag IN ALL FOUR PLACES. -->
-<script>window.NX_BUILD_TAG = "r86";</script>
+<script>window.NX_BUILD_TAG = "r87";</script>
 <script src="/admin/core.js"></script>
 <script src="/admin/reports-money.js"></script>
 <script src="/admin/app.js"></script>

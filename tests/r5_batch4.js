@@ -157,6 +157,7 @@ const openDrawer = async (page, panelId) => {
       ok("R5-22 · the CRITICAL alert's reason is written to the case as a note", /snoozed/i.test(note.body) && note.body.includes(snoozeReason), JSON.stringify(note));
 
       // Snooze survives "Run checks" — run_watchtower's ON CONFLICT upsert never touches M3 columns.
+      await page.evaluate(() => { const d = document.querySelector("#brief-more"); if (d) d.open = true; });   /* R87 · today (A6): the control lives in My Day's ⋯ menu */
       await page.click("#watchtower-run");
       await page.waitForTimeout(500);
       ok("R5-22 · still gone after Run checks (survives run_watchtower's upsert)", await page.evaluate((id) => !document.querySelector("#watchtower-list").innerHTML.includes(`snoozeAlert('${id}'`), fixture.critId));  /* R65 — by alert id, see above */
@@ -196,6 +197,7 @@ const openDrawer = async (page, panelId) => {
       }, warnAlert);
       ok("R5-22 · a non-CRITICAL snooze does not write a case note", critNoteBody !== "wrote a note", critNoteBody);
 
+      await page.evaluate(() => { const d = document.querySelector("#brief-more"); if (d) d.open = true; });   /* R87 · today (A6): the control lives in My Day's ⋯ menu */
       await page.click("#watchtower-snoozed-toggle");
       await page.waitForTimeout(200);
       ok("R5-22 · the snoozed list shows the until-date, reason and an Unsnooze button", await page.evaluate(() => {
@@ -334,31 +336,25 @@ const openDrawer = async (page, panelId) => {
     /* ===================================================================
        3 · B6 — any staff can dismiss; Merge and Undo stay Owner/Admin-only
        =================================================================== */
-    console.log("\n— B6 / R5-39 · role gating (p3 Luke, adviser)");
+    /* R87 · slice B (panel 01 #3): Data health is an Owner/Administrator page now (PAGE_ROLE_GATE) —
+       an adviser never reaches the duplicates table, so "adviser sees the badge / dismisses / gets no
+       Undo" is unreachable UI. The role contract this section pins is now the gate itself: nav entry
+       hidden, nav('data') bounces to Today. The dismiss / merge-gate / audit behaviour is still
+       covered for the roles that can reach the page (sections 1–2 above, p1/p4). */
+    console.log("\n— B6 / R5-39 · role gating (p3 Luke, adviser) — R87: Data health is off an adviser's map");
     {
       const page = await newPage(browser, "p3");
-      await page.evaluate(() => window.nav("data"));
-      await page.waitForTimeout(800);
-      const row = await page.evaluate(() => {
-        const r = [...document.querySelectorAll("#data-content .imp-table tr")].find((x) => x.textContent.includes("Pike"));
-        return r ? r.innerHTML : null;
+      const gate = await page.evaluate(() => {
+        const btn = document.querySelector('#topnav button[data-page="data"]');
+        window.nav("data");
+        return {
+          hidden: !!btn && btn.classList.contains("hidden"),
+          onToday: !document.querySelector("#page-dashboard").classList.contains("hidden") && document.querySelector("#page-data").classList.contains("hidden"),
+          hash: location.hash,
+        };
       });
-      ok("R5-39 · adviser sees the merge-gate badge, not a Merge button", row && row.includes("merge: Owner / Admin") && !row.includes("openMergeClients"));
-      ok("R5-39 · adviser still gets the Not-a-duplicate action", row && row.includes("Not a duplicate"));
-      page.__dialogAnswer = "adviser call — different family";
-      await page.evaluate(() => {
-        const r = [...document.querySelectorAll("#data-content .imp-table tr")].find((x) => x.textContent.includes("Pike"));
-        const btn = [...r.querySelectorAll("button")].find((b) => b.textContent.trim() === "Not a duplicate");
-        btn.click();
-      });
-      await page.waitForTimeout(500);
-      ok("R5-39 · the adviser's dismissal took", await page.evaluate(() => ![...document.querySelectorAll("#data-content .imp-table tr")].some((r) => r.textContent.includes("Pike"))));
-      const auditActor = await page.evaluate(async () => {
-        const { data } = await window.__mockDb.from("audit_log").select("*").eq("table_name", "duplicate_dismissals");
-        return data[data.length - 1].actor_label;
-      });
-      eq("R5-39 · audit records the adviser as the actor", auditActor, "Luke Richards");
-      ok("R5-39 · Undo is NOT offered to an adviser", await page.evaluate(() => !document.querySelector("#dh-dismissed-list button") && document.body.innerHTML.includes("undo: Owner / Admin")));
+      ok("R5-39 / R87 · the Data health nav entry is hidden for an adviser", gate.hidden, JSON.stringify(gate));
+      ok("R5-39 / R87 · nav('data') bounces an adviser to Today, hash rewritten", gate.onToday && gate.hash === "#today", JSON.stringify(gate));
       ok("no console errors", !page.__err, JSON.stringify(page.__err));
       await page.close();
     }

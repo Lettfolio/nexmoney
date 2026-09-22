@@ -468,19 +468,21 @@ async function groupHeadings(page, containerSel) {
       const soonest = await mkClientCase(page, { first: "R38C3", last: "SoonestDate" + tag(), case: { stage: "completed", assigned_to: "p2", rate_end_date: isoDaysFromNow(1), lender: "TSB", loan_amount: 5000 } });
 
       await goto(page, "retention", 1800);
-      const sortBtnPresent = await page.evaluate(() => !!document.getElementById("ret-rates-sort"));
-      ok("§C3a · the owner sees the sort toggle", sortBtnPresent);
+      /* R87 · book (C2): the owner-only "↕ By value at risk" toggle (#ret-rates-sort) is the
+         "value" option of the one <select id="ret-sort"> in the tools row. */
+      const sortBtnPresent = await page.evaluate(() => !!document.querySelector('#ret-sort option[value="value"]'));
+      ok("§C3a · the owner sees the sort toggle (the value option on #ret-sort)", sortBtnPresent);
 
       const byValue = await rowIds(page, "#ret-rates-list", "openCase");
       ok("§C3b · default sort is by value — the huge loan sorts ahead of the soonest-but-tiny one", byValue.indexOf(big.caseId) < byValue.indexOf(soonest.caseId), JSON.stringify({ big: byValue.indexOf(big.caseId), soonest: byValue.indexOf(soonest.caseId) }));
 
-      await page.click("#ret-rates-sort");
+      await page.selectOption("#ret-sort", "newest");   // R87 · book (C2): was a click on #ret-rates-sort
       await wait(page, 1200);
       const byDate = await rowIds(page, "#ret-rates-list", "openCase");
       ok("§C3c · after toggling, date sort puts the soonest rate end ahead of the merely-bigger loan", byDate.indexOf(soonest.caseId) < byDate.indexOf(big.caseId), JSON.stringify({ big: byDate.indexOf(big.caseId), soonest: byDate.indexOf(soonest.caseId) }));
 
-      const label = await page.$eval("#ret-rates-sort", (e) => e.textContent.trim());
-      eq("§C3d · the toggle's own label now reads \"By date\"", label, "↕ By date");
+      const label = await page.$eval("#ret-sort", (e) => e.value);
+      eq("§C3d · the control now reads a date order (R87: the select's value is \"newest\")", label, "newest");
 
       ok("§C3 · no console errors", noNewErr(page, errBefore), JSON.stringify(page.__err));
       await page.close();

@@ -315,8 +315,10 @@ const cardShape = (page, caseId) => page.evaluate((id) => {
 
       const appCardAfter = await cardShape(page, appCase.id);
       ok("B3 · once its twin completes (twin count fell to 1) the remaining card's tag disappears", appCardAfter && !appCardAfter.hasTag, JSON.stringify(appCardAfter));
+      // R87 · slice B (panel 03 #2): the board never paints a terminal column any more — a completed
+      // case lives in the table (Completed & closed / All), so it is simply not a card here.
       const completedCard = await cardShape(page, offerCase.id);
-      ok("B3b · …and the now-completed card carries no tag either (terminal, no longer a twin)", completedCard && !completedCard.hasTag, JSON.stringify(completedCard));
+      ok("B3b · …and the now-completed case is no longer a board card at all (terminal cases live in the table — R87)", completedCard === null, JSON.stringify(completedCard));
 
       ok("B · no console errors (p4)", noNewErr(page, errBefore), JSON.stringify(page.__err));
       await page.close();
@@ -460,8 +462,19 @@ const cardShape = (page, caseId) => page.evaluate((id) => {
       // A legal BACKWARDS move — offer -> application — needs no confirm (not completed, not a
       // reopening out of a terminal stage) and never trips the protection gate (which only guards
       // FORWARD moves), so it is the cleanest way to exercise the control end-to-end.
+      /* R87 · slice B: the select lives at the top of Actions ▾ now (panel 02 #7 — the row is one
+         line), and every interactive move raises the stage-entry prompt (panel 03 #1); arriving at
+         Application asks who the case is waiting on — answered blank, which writes nothing. */
+      await page.click("#case-more-actions-toggle");
+      await page.evaluate(() => { document.querySelector("#cs-sticky-actions").dataset.r35Before = "1"; });   // marker: gone once the move's openCase() repaints
       await page.selectOption("#cs-stage-select", "application");
-      await wait(page, 700);
+      await wait(page, 900);
+      if (await page.evaluate(() => !document.querySelector("#overlay-backdrop").classList.contains("hidden") && !!document.querySelector("#se-ok"))) {
+        await page.click("#se-ok");
+      }
+      // the move's own openCase() repaint — wait for the marked node to be replaced, then settle
+      await page.waitForFunction(() => { const st = document.querySelector("#cs-sticky-actions"); return !!st && !st.dataset.r35Before; }, null, { timeout: 10000 }).catch(() => {});
+      await wait(page, 1200);
       const afterMove = await readCase(page, c.caseId);
       eq("E2a · the case's stage genuinely changed in the mock db", afterMove.stage, "application");
       const repainted = await page.evaluate(() => {

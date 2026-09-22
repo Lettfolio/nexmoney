@@ -260,9 +260,10 @@ const retChipAll = (page) => page.$eval("#ret-month-chips .ret-month-chip[data-m
       });
       ok("§A2k · …and it sits under the ERC-only heading", !!ercGroupIds && ercGroupIds.includes(ercOnly.caseId), JSON.stringify(ercGroupIds));
 
-      /* The sub-line does the arithmetic out loud. */
-      const sub = await txt(page, "#ret-rates-sub");
-      ok("§A2l · the panel sub states the reconciliation in words",
+      /* The arithmetic is still said out loud — R87 · book (C2) moved it from #ret-rates-sub (now
+         the panel's one ≤25-word line) into the closed howFold's #ret-rates-basis, word for word. */
+      const sub = await txt(page, "#ret-rates-basis");
+      ok("§A2l · the panel's fold states the reconciliation in words",
         /already ended and \d+ still to end make the \d+ in the \d+-month window/.test(sub) && /rows in all/.test(sub), sub.slice(-260));
 
       eq("§A2 · no console errors", realErrs(page).slice(errBefore), []);
@@ -306,7 +307,9 @@ const retChipAll = (page) => page.$eval("#ret-month-chips .ret-month-chip[data-m
       await goPage(page, "dashboard", 2600);
       const mineN = await kpiRateNum(page);
       const mineLbl = await kpiRateLbl(page);
-      ok("§A4a · the adviser's tile still says whose it is", /mine/i.test(await page.$eval("#kpi-row .kpi:nth-child(3)", (e) => e.textContent)), mineLbl);
+      /* R87 · today (T1 / 02 #10): the scope word is said once on the Today heading (#kpi-row-scope),
+         not under each tile. Same word, same Mine/All source. */
+      ok("§A4a · the adviser's strip still says whose it is (R87: once, on the heading)", /mine/i.test(await page.$eval("#today-heading #kpi-row-scope", (e) => e.textContent)), mineLbl);
       /* Flip My Day to All: the tile is re-counted from rows already in memory, and must not shrink. */
       await page.evaluate(() => document.getElementById("brief-scope-all").click());
       await page.waitForTimeout(900);
@@ -772,13 +775,18 @@ const retChipAll = (page) => page.$eval("#ret-month-chips .ret-month-chip[data-m
     }
 
     {
-      console.log("\n— §E3 · an adviser sees the same banded wall, error-free (p2)");
+      /* R87 · slice B (panel 01 #3): Data health is an Owner/Administrator page now (PAGE_ROLE_GATE);
+         an adviser never sees the wall. The contract is the gate — hidden nav entry, bounce to Today. */
+      console.log("\n— §E3 · an adviser no longer reaches Data health at all (p2) — R87 role gate");
       const page = await boot(browser, "p2");
       const errBefore = realErrs(page).length;
-      await goPage(page, "data", 3600);
-      const bands = await page.$$eval("#dh-kpi-row .dh-band-h", (els) => els.map((e) => e.dataset.band));
-      eq("§E3a · both bands render for an adviser", bands, ["counted", "watch"]);
-      ok("§E3b · the key renders too", !!(await page.$("#dh-key")));
+      await goPage(page, "data", 1500);
+      const gate = await page.evaluate(() => ({
+        navHidden: document.querySelector('#topnav button[data-page="data"]').classList.contains("hidden"),
+        onToday: !document.querySelector("#page-dashboard").classList.contains("hidden") && document.querySelector("#page-data").classList.contains("hidden"),
+      }));
+      ok("§E3a · the Data health nav entry is hidden for an adviser (R87)", gate.navHidden, JSON.stringify(gate));
+      ok("§E3b · nav('data') lands an adviser on Today (R87)", gate.onToday, JSON.stringify(gate));
       eq("§E3 · no console errors", realErrs(page).slice(errBefore), []);
       await page.close();
     }

@@ -210,7 +210,9 @@ const advisingPool = (page) => page.evaluate(async () => {
         const b = document.querySelector("#leads-accept-all");
         return {
           present: !!b, label: b ? b.textContent : "",
-          sub: (document.querySelector("#leads-accept-bar-sub") || {}).textContent || "",
+          /* R87 · today (A1): the bar is the button alone; its explanation lives in the button's
+             title (one hover / long-press away) rather than a standing paragraph under it. */
+          sub: (document.querySelector("#leads-accept-bar-sub") || {}).textContent || (document.querySelector("#leads-accept-all") || {}).title || "",
           insideList: !!document.querySelector("#briefing-list #leads-accept-all"),
           rows: document.querySelectorAll('#briefing-list [onclick^="acceptLead("]').length,
         };
@@ -583,7 +585,7 @@ const advisingPool = (page) => page.evaluate(async () => {
       }, { stage, prot });
 
       const blocked = await mkCase("fact_find", "not_discussed");
-      const res = await page.evaluate((id) => window.moveCaseToStage(id, "application", {}), blocked);
+      const res = await page.evaluate((id) => window.moveCaseToStage(id, "application", { promptStageEntry: false /* R87 · slice B: headless call opts out of the (now default) stage-entry prompt */ }), blocked);
       await wait(page, 1600);
       eq("C1a · a move to Application with nothing recorded is refused", res, "blocked");
       const panel = await page.evaluate(() => {
@@ -607,13 +609,18 @@ const advisingPool = (page) => page.evaluate(async () => {
       ok("C1h · the chips are labelled in words, not enum values", panel && /Referred to protection adviser/.test(panel.labels.join("|")), JSON.stringify(panel && panel.labels));
 
       await page.click('#prot-gate-chips .prot-gate-chip[data-status="discussed"]');
-      await wait(page, 2200);
+      await wait(page, 1500);
+      /* R87 · slice B (panel 03 #1): every interactive move raises the stage-entry prompt now, and the
+         resumed move is an interactive one — arriving at Application asks who the case is waiting
+         on. Answered blank (writes nothing), which is what the old silent path did. */
+      if (await page.$("#se-ok")) { await page.click("#se-ok"); }
+      await wait(page, 1500);
       const moved = await page.evaluate(async (id) => {
         const { data } = await window.__mockDb.from("cases").select("stage,protection_status").eq("id", id).single();
         return data;
       }, blocked);
       eq("C2a · one click writes the protection status", moved.protection_status, "discussed");
-      eq("C2b · …AND resumes the move that was refused", moved.stage, "application");
+      eq("C2b · …AND resumes the move that was refused (through the stage-entry prompt — R87)", moved.stage, "application");
       const gone = await page.evaluate(() => ({
         panel: !!document.querySelector("#prot-gate-chips"),
         chip: (document.querySelector("#cs-prot-warn") || {}).dataset,
@@ -623,7 +630,7 @@ const advisingPool = (page) => page.evaluate(async () => {
 
       // A case with protection already recorded is not gated, so it never sees the panel.
       const okCase = await mkCase("fact_find", "discussed");
-      const res2 = await page.evaluate((id) => window.moveCaseToStage(id, "application", {}), okCase);
+      const res2 = await page.evaluate((id) => window.moveCaseToStage(id, "application", { promptStageEntry: false /* R87 · slice B: headless call opts out of the (now default) stage-entry prompt */ }), okCase);
       await wait(page, 1500);
       const noPanel = await page.evaluate(() => !!document.querySelector("#prot-gate-chips"));
       eq("C3a · a case with the conversation on file moves without a block", res2, "moved");
@@ -641,7 +648,7 @@ const advisingPool = (page) => page.evaluate(async () => {
       });
       if (gateOffRan) {
         const offCase = await mkCase("fact_find", "not_discussed");
-        const res3 = await page.evaluate((id) => window.moveCaseToStage(id, "application", {}), offCase);
+        const res3 = await page.evaluate((id) => window.moveCaseToStage(id, "application", { promptStageEntry: false /* R87 · slice B: headless call opts out of the (now default) stage-entry prompt */ }), offCase);
         await wait(page, 1500);
         const offPanel = await page.evaluate(() => !!document.querySelector("#prot-gate-chips"));
         eq("C4a · with the gate off the move is not refused", res3, "moved");

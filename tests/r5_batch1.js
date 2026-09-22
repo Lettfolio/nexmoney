@@ -407,7 +407,14 @@ async function main() {
       // recomputed suggestion (accepting leadA just gave p2 an extra open case, so the ground
       // truth is recomputed here rather than reused from gt0 — R5-5's "recomputed, never
       // remembered" rule, unchanged by W-9).
+      /* R87 · slice B (panel 01 #1): accepting the lead opened its new case, and an open record is in
+         the URL now (#case/<id>) — so a reload REOPENS that case on the Pipeline page, which is the
+         point of the change. This step is about My Day's lead rows, so it goes back to Today. */
+      await page.evaluate(() => { if (window.closeModal) window.closeModal(); });
+      await page.waitForTimeout(300);
       await page.reload();
+      await page.waitForTimeout(SETTLE);
+      await page.evaluate(() => window.nav("dashboard"));
       await page.waitForTimeout(SETTLE);
       const gt1 = await leastLoadedGroundTruth();
       const reloaded = await page.evaluate(() => [...document.querySelectorAll("#briefing-list select.lead-adviser")].map((s) => s.value));

@@ -334,13 +334,16 @@ async function panelRows(page) {
       ok("C2 · found at least one offer-reason ground-truth row", !!offerSample);
       if (appSample) {
         const stageLabel = await page.evaluate((s) => STAGE_LABEL[s], appSample.stage);
-        eq("C3 · app-reason row text is '<Stage> · missing: application date (submitted_at)'",
-          rowsById[appSample.id], `${stageLabel} · missing: application date (submitted_at)`);
+        /* R87 · fixer (09 9d): was "application date (submitted_at)", now "application date" because
+           column names left user-facing text (BUILD-BRIEF rule 5). */
+        eq("C3 · app-reason row text is '<Stage> · missing: application date'",
+          rowsById[appSample.id], `${stageLabel} · missing: application date`);
       }
       if (offerSample) {
         const stageLabel = await page.evaluate((s) => STAGE_LABEL[s], offerSample.stage);
-        eq("C4 · offer-reason row text is '<Stage> · missing: offer date (offer_issued_date)'",
-          rowsById[offerSample.id], `${stageLabel} · missing: offer date (offer_issued_date)`);
+        /* R87 · fixer (09 9d): was "offer date (offer_issued_date)", now "offer date" — same reason. */
+        eq("C4 · offer-reason row text is '<Stage> · missing: offer date'",
+          rowsById[offerSample.id], `${stageLabel} · missing: offer date`);
       }
 
       ok("B/C · no console errors after inserts + reload", noNewErr(page, errBeforeB), JSON.stringify(page.__err));

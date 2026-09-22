@@ -331,13 +331,15 @@ function readGroup(page, caseId) {
         folds: document.querySelectorAll("#briefing-list details.brief-more").length,
       };
     });
-    eq("A1 · the briefing's .panel-sub is shown when grouping happened", subInfo.hidden, false);
-    ok("A1 · …and says so in plain English, naming how many cases and that leads are exempt",
-      /Rows for the same case are grouped/.test(subInfo.text || "")
-      && /\+N more/.test(subInfo.text || "")
-      && /New enquiries are never folded/.test(subInfo.text || ""), subInfo.text);
-    ok("A1 · …with the grouped-case count the list actually shows",
-      new RegExp(`— ${subInfo.folds} cases? here`).test(subInfo.text || ""), JSON.stringify(subInfo));
+    /* R87 · today (T1): was "the .panel-sub is shown when grouping happened … says so in plain
+       English … with the grouped-case count". The sentence restated what every fold's own summary
+       says ("+1 more on this case: …") on every load, above the first row, so it no longer stands;
+       the element stays (hidden) and carries the grouped-case count as data-grouped. */
+    const grouped = await page.evaluate(() => Number((document.querySelector("#briefing-group-sub") || {}).getAttribute?.("data-grouped")));
+    eq("A1 (R87) · the grouping sentence no longer stands above the rows", subInfo.hidden, true);
+    ok("A1 (R87) · …its text is empty (nothing to read past)", (subInfo.text || "") === "", subInfo.text);
+    ok("A1 (R87) · …and the grouped-case count it used to print matches the folds the list shows",
+      grouped === subInfo.folds, JSON.stringify({ grouped, folds: subInfo.folds }));
 
     /* An adviser with nothing grouped must not be told about a fold they cannot see. Driven by
        emptying the fold-worthy half of the list rather than hunting for a persona that happens
@@ -349,8 +351,8 @@ function readGroup(page, caseId) {
       const folds = document.querySelectorAll("#briefing-list details.brief-more").length;
       return { folds, hidden: el.classList.contains("hidden") };
     });
-    ok("A1 · the subtitle's shown/hidden state tracks whether anything is grouped at all",
-      (noGroup.folds > 0) === (noGroup.hidden === false), JSON.stringify(noGroup));
+    ok("A1 (R87) · the subtitle stays hidden whether or not anything is grouped (the fold explains itself)",
+      noGroup.hidden === true, JSON.stringify(noGroup));
 
     ok("§A · no console/page errors", realErr(page).length === 0, realErr(page).join(" | ").slice(0, 300));
     await page.close();
@@ -439,14 +441,17 @@ function readGroup(page, caseId) {
     ok("B · p4 · no console/page errors", realErr(owner).length === 0, realErr(owner).join(" | ").slice(0, 300));
     await owner.close();
 
-    const adv = await boot(browser, "p3", { viewport: { width: 390, height: 844 } });
+    /* R87 · today (01 #6): was p3 (adviser) as the one-notice reader. The heartbeat banner is now
+       Administrator + Owner only, so the single-notice path is read as the ADMIN (Kim): she gets
+       the cron banner and never the owner-only backup nag — exactly one notice. */
+    const adv = await boot(browser, "p1", { viewport: { width: 390, height: 844 } });
     await goto(adv, "dashboard", 1400);
     const one = await adv.evaluate(() => ({
       notices: document.querySelectorAll("#dash-notices .dash-notice").length,
       hasFold: !!document.querySelector("#dash-notices details.dash-notice-fold"),
       cronDirect: !!document.querySelector("#dash-notices > #dash-cron-notice"),
     }));
-    ok("B · p3 · ONE notice is left exactly as it was — no expander to click through", one.notices === 1 && one.hasFold === false && one.cronDirect, JSON.stringify(one));
+    ok("B · p1 (R87: was p3) · ONE notice is left exactly as it was — no expander to click through", one.notices === 1 && one.hasFold === false && one.cronDirect, JSON.stringify(one));
     await adv.close();
   }
 
@@ -520,7 +525,11 @@ function readGroup(page, caseId) {
       btn: !!document.querySelector("#dash-cron-run-btn"),
       checkLink: !!document.querySelector("#dash-cron-notice .dash-notice-link"),
     }));
-    ok("C3 · an adviser still sees the banner…", advState.notice && advState.checkLink, JSON.stringify(advState));
+    /* R87 · today (01 #6): was "an adviser still sees the banner… and never the Run now button".
+       The banner now follows the ops strip's role rule beneath it (Administrator + Owner only): a
+       system-health warning about a queue an adviser cannot flush, pointing at a page they should
+       not have, is noise on the page they start their day from. Nothing of it renders for p3. */
+    ok("C3 (R87) · an adviser gets NO heartbeat banner at all — it is admin/owner machinery, like the ops strip", !advState.notice && !advState.checkLink, JSON.stringify(advState));
     ok("C3 · …and never the ▶ Run now button (they cannot flush the firm's queue)", advState.btn === false, JSON.stringify(advState));
     ok("§C · no console/page errors (adviser)", realErr(advPage).length === 0, realErr(advPage).join(" | ").slice(0, 300));
     await advPage.close();

@@ -80,6 +80,20 @@
    ========================================================================== */
 "use strict";
 
+/* R87 · slice B (panel 03 #8): the stage-entry overlays have two exits now — "Don't advance" (#se-cancel)
+   and "Save & advance" (#se-ok); "Skip — advance anyway" (#se-skip) is gone because an all-blank /
+   all-unticked Save was already the same answer. r87SkipEntry is what Skip meant: clear every field
+   and tick in the overlay, then Save. */
+async function r87SkipEntry(page) {
+  await page.evaluate(() => {
+    const box = document.querySelector("#overlay-modal");
+    box.querySelectorAll("input[type=checkbox]").forEach((i) => { i.checked = false; });
+    box.querySelectorAll("input:not([type=checkbox]), textarea").forEach((i) => { i.value = ""; });
+    box.querySelectorAll("select").forEach((sel) => { sel.value = ""; sel.dispatchEvent(new Event("change")); });
+  });
+  await page.click("#se-ok");
+}
+
 const { chromium } = require("playwright");
 const { spawn } = require("child_process");
 const http = require("http");
@@ -211,11 +225,16 @@ async function readRows(page, table, filters) {
       console.log("\n— A1 · W-7 · Today KPI strip scoped Mine/All (p2 adviser, p4 owner)");
       const page = await newPage(browser, "p2", { skipTour: true });
 
+      /* R87 · today (T1 / 02 #10): was one .kpi-scope word UNDER EACH tile ("mine" ×4/5). The
+         word is now said ONCE, on the Today heading (#kpi-row-scope, data-scope = mine|all), so
+         the strip's five tiles no longer repeat it. Same source (My Day's Mine/All), same tooltip. */
+      const rowScope = () => page.evaluate(() => { const t = document.querySelector("#today-heading #kpi-row-scope"); return t ? { scope: t.getAttribute("data-scope"), text: t.textContent.trim() } : null; });
       const scopeWords = await page.$$eval("#kpi-row .kpi", (els) => els.map((e) => ({
         lbl: (e.querySelector(".lbl") || {}).textContent || "",
         scope: (e.querySelector(".kpi-scope") || {}).textContent || "",
       })));
-      ok("A1 · adviser's Today strip defaults to Mine", scopeWords.length > 0 && scopeWords.every((s) => s.scope === "mine"), JSON.stringify(scopeWords));
+      const advScope = await rowScope();
+      ok("A1 · adviser's Today strip defaults to Mine (R87: one scope word on the heading)", scopeWords.length > 0 && scopeWords.every((s) => s.scope === "") && advScope && advScope.scope === "mine" && /mine/.test(advScope.text), JSON.stringify({ advScope, scopeWords }));
       ok("A1 · no fee tile for an adviser (Owner-only money, any scope)", !scopeWords.some((s) => /Fees outstanding/.test(s.lbl)));
 
       const activeMineGT = await page.evaluate(async () => {
@@ -227,8 +246,8 @@ async function readRows(page, table, filters) {
 
       await page.click("#brief-scope-all");
       await wait(page, 700);
-      const scopeAllWords = await page.$$eval("#kpi-row .kpi .kpi-scope", (els) => els.map((e) => e.textContent));
-      ok("A1 · switching to All repaints the strip's own captions", scopeAllWords.length > 0 && scopeAllWords.every((s) => s === "whole firm"));
+      const scopeAllWords = await rowScope();   // R87 · today — the heading's one scope word
+      ok("A1 · switching to All repaints the strip's own caption (R87: the heading's scope word)", !!scopeAllWords && scopeAllWords.scope === "all" && /whole firm/.test(scopeAllWords.text), JSON.stringify(scopeAllWords));
       const activeAllGT = await page.evaluate(async () => {
         const { data: cases } = await window.__mockDb.from("cases").select("id,stage");
         return (cases || []).filter((c) => !["completed", "not_proceeding"].includes(c.stage)).length;
@@ -239,14 +258,14 @@ async function readRows(page, table, filters) {
       await page.close();
 
       const owner = await newPage(browser, "p4", { skipTour: true });
-      const ownerScope = await owner.$$eval("#kpi-row .kpi .kpi-scope", (els) => els.map((e) => e.textContent));
-      ok("A1 · owner's Today strip defaults to All", ownerScope.length > 0 && ownerScope.every((s) => s === "whole firm"));
+      const ownerScope = await owner.evaluate(() => { const t = document.querySelector("#today-heading #kpi-row-scope"); return t ? { scope: t.getAttribute("data-scope"), text: t.textContent.trim() } : null; });   // R87 · today
+      ok("A1 · owner's Today strip defaults to All (R87: heading scope word)", !!ownerScope && ownerScope.scope === "all" && /whole firm/.test(ownerScope.text), JSON.stringify(ownerScope));
       const ownerHasFee = await owner.$$eval("#kpi-row .kpi .lbl", (els) => els.some((e) => /Fees outstanding/.test(e.textContent)));
       ok("A1 · the fee tile IS offered to the owner", ownerHasFee);
       await owner.click("#brief-scope-mine");
       await wait(owner, 700);
-      const ownerMineScope = await owner.$$eval("#kpi-row .kpi .kpi-scope", (els) => els.map((e) => e.textContent));
-      ok("A1 · owner can still switch to Mine", ownerMineScope.length > 0 && ownerMineScope.every((s) => s === "mine"));
+      const ownerMineScope = await owner.evaluate(() => { const t = document.querySelector("#today-heading #kpi-row-scope"); return t ? { scope: t.getAttribute("data-scope"), text: t.textContent.trim() } : null; });   // R87 · today
+      ok("A1 · owner can still switch to Mine (R87: heading scope word)", !!ownerMineScope && ownerMineScope.scope === "mine" && /mine/.test(ownerMineScope.text), JSON.stringify(ownerMineScope));
       const ownerHasFeeMine = await owner.$$eval("#kpi-row .kpi .lbl", (els) => els.some((e) => /Fees outstanding/.test(e.textContent)));
       ok("A1 · the fee tile stays offered to the owner under Mine — the money gate is role-based, not scope-based", ownerHasFeeMine);
       ok("A1 · no console errors (owner)", !owner.__err, JSON.stringify(owner.__err));
@@ -919,7 +938,7 @@ async function readRows(page, table, filters) {
       await wait(page, 500);
       const offerOverlayVisible = await page.evaluate(() => !document.querySelector("#overlay-backdrop").classList.contains("hidden"));
       ok("B8 · advancing to Offer with no expiry opens ITS OWN stage-entry prompt", offerOverlayVisible);
-      await page.click("#se-skip");
+      await r87SkipEntry(page);   // R87 · slice B: Skip → blank Save
       await wait(page, 900);
       const offerCase = await readRow(page, "cases", offer.caseId);
       eq("B8 · Skip still advances the stage", offerCase.stage, "offer");
@@ -931,7 +950,7 @@ async function readRows(page, table, filters) {
       await wait(page, 500);
       await page.click("#cs-advance-btn");
       await wait(page, 500);
-      await page.click("#se-skip");
+      await r87SkipEntry(page);   // R87 · slice B: Skip → blank Save
       await wait(page, 900);
       const dip2Case = await readRow(page, "cases", dip2.caseId);
       eq("B8 · blank + Skip on the DIP prompt writes nothing and advances cleanly", dip2Case.lender, null);
@@ -945,7 +964,7 @@ async function readRows(page, table, filters) {
       // Programmatic call — stays headless, no dialog, no promptStageEntry.
       const dip3 = await mkClientCase(page, { first: "Stage", last: "Headlesstest", stage: "fact_find", assigned_to: "p2", caseFields: { lender: null } });
       const overlayBefore = await page.evaluate(() => document.querySelector("#overlay-backdrop").classList.contains("hidden"));
-      const res = await page.evaluate((id) => window.moveCaseToStage(id, "decision_in_principle", { skipReload: true }), dip3.caseId);
+      const res = await page.evaluate((id) => window.moveCaseToStage(id, "decision_in_principle", { skipReload: true, promptStageEntry: false /* R87 · slice B: the prompt is the default now; a headless call opts out */ }), dip3.caseId);
       await wait(page, 500);
       const overlayAfter = await page.evaluate(() => document.querySelector("#overlay-backdrop").classList.contains("hidden"));
       ok("B8 · a programmatic moveCaseToStage() call raises NO overlay", overlayBefore && overlayAfter, `before hidden=${overlayBefore}, after hidden=${overlayAfter}`);

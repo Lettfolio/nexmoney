@@ -301,8 +301,10 @@ const bandOf = (loan) => { const l = Number(loan || 0); return l < 100000 ? 0.7 
         order.length === CAP && order.every((id, i) => id === rpcOrder[i])
         && (await page.evaluate(() => document.querySelectorAll("tr.prot-band").length)) === 0,
         JSON.stringify({ n: order.length, first: order[0], wantFirst: rpcOrder[0] }));
-      const rankTitle = await page.evaluate(() => (document.querySelector("#prot-list-table td.prot-col-n") || {}).title || "");
-      ok("B6 · the # cell's tooltip explains the row's score, not a bare number",
+      /* R87 · book (C4, 04 #8): the # column is gone (it was hidden below 1560px — every office
+         width); the rank is the small "#1" prefix on the client cell (.prot-rank), same tooltip. */
+      const rankTitle = await page.evaluate(() => (document.querySelector("#prot-list-table tr.prot-row .prot-rank") || {}).title || "");
+      ok("B6 · the rank's tooltip explains the row's score, not a bare number",
         /#1 — score [\d.]+:/.test(rankTitle) && /stage \d+/.test(rankTitle), rankTitle.slice(0, 90));
       ok("B6b · the hot planted case ranks FIRST on the page", order[0] === planted.hot, JSON.stringify({ got: order[0], want: planted.hot }));
 
@@ -612,18 +614,24 @@ const bandOf = (loan) => { const l = Number(loan || 0); return l < 100000 ? 0.7 
       await p2.waitForTimeout(2500);
       const advView = await p2.evaluate(async () => {
         const { data } = await window.__mockDb.rpc("get_protection_pipeline", { p_scope: "all" });
-        const sum = (data || []).reduce((s, r) => s + Number(r.est_commission || 0), 0);
+        /* R87 · book (C4, 04 #4): the line's £ is the estimate over the rows IN THE VIEW — the same
+           rows the tile counts — so under the page's default Mine scope it excludes the ownerless
+           rows the RPC's 'mine' hands back (T1-5). Was: Σ over every returned row. */
+        const me = (typeof ME !== "undefined" && ME) ? ME.id : null;
+        const sum = (data || []).filter((r) => r.owner === me).reduce((s, r) => s + Number(r.est_commission || 0), 0);
         return {
           cap: (document.querySelector("#prot-cap-line") || {}).textContent || "",
           wantMoney: (() => { try { return fmtM(sum); } catch (e) { return null; } })(),
-          note: (document.querySelector("#prot-money-note") || {}).textContent || "",
-          noteHidden: document.querySelector("#prot-money-note").classList.contains("hidden"),
+          note: document.querySelector("#prot-money-note"),
+          capTitle: (document.querySelector("#prot-cap-line") || {}).title || "",
         };
       });
       ok("F3 · the adviser's header £ is the sum over THEIR rows (their scope, per the RPC's own rule)",
         advView.wantMoney && advView.cap.includes(advView.wantMoney), JSON.stringify({ want: advView.wantMoney, cap: advView.cap.slice(0, 140) }));
-      ok("F4 · the money note says whose money the header figure is (yours, not the firm's)",
-        !advView.noteHidden && /YOURS/i.test(advView.note) && /scoped server-side/.test(advView.note), advView.note.slice(0, 140));
+      /* R87 · book (04 #11): #prot-money-note — a 60-word paragraph to an adviser about a tile he
+         cannot see — is gone; whose £ the line shows is the line's own title. */
+      ok("F4 · the money note is gone, and the header line's title says whose money the figure is (yours)",
+        advView.note === null && /your own candidates/i.test(advView.capTitle), advView.capTitle.slice(0, 200));
       await p2.context().close();
     }
   } finally {

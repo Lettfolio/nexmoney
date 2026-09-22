@@ -167,8 +167,10 @@ const rowOutcome = (page, caseId) => page.evaluate((id) => {
   const o = r.querySelector(".ret-row-outcome");
   return { found: true, clause: o ? o.textContent.trim() : null, key: o ? o.dataset.outcome : null };
 }, caseId);
+/* R87 · book (C2): programmatic click — the "ended", "ended3" and "next" chips render `hidden`
+   (RET_MONTHS_FOLDED); ended12 is visible but the helper is one shape for all keys. */
 const pickChip = async (page, k) => {
-  await page.click(`#ret-month-chips .ret-month-chip[data-month="${k}"]`);
+  await page.evaluate((m) => document.querySelector(`#ret-month-chips .ret-month-chip[data-month="${m}"]`).click(), k);
   await page.waitForTimeout(2600);
 };
 

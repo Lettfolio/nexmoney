@@ -394,7 +394,7 @@ async function main() {
       const page = await newPage(browser, "p1");
       const before = await caseRow(page, "ca028");
       // Start the move, then try to confirm with no reason chosen.
-      await page.evaluate(() => { window.__moveResult = window.moveCaseToStage("ca028", "not_proceeding"); });
+      await page.evaluate(() => { window.__moveResult = window.moveCaseToStage("ca028", "not_proceeding", { promptStageEntry: false /* R87 · slice B: headless call opts out of the (now default) stage-entry prompt */ }); });
       await page.waitForTimeout(600);
       ok("R5-20 · the reason capture opens", await page.evaluate(() => !document.querySelector("#overlay-backdrop").classList.contains("hidden")));
       await page.click("#lost-ok");
@@ -409,7 +409,7 @@ async function main() {
       eq("R5-20 · …and writes nothing", await page.evaluate(() => window.__moveResult), "cancelled");
 
       // Now do it properly. (Fire-and-store: the call does not settle until the capture is answered.)
-      await page.evaluate(() => { window.__moveResult = window.moveCaseToStage("ca028", "not_proceeding"); });
+      await page.evaluate(() => { window.__moveResult = window.moveCaseToStage("ca028", "not_proceeding", { promptStageEntry: false /* R87 · slice B: headless call opts out of the (now default) stage-entry prompt */ }); });
       await page.waitForTimeout(600);
       await page.selectOption("#lost-reason", "went_direct");
       await page.fill("#lost-note", "Lender called them first");
@@ -562,7 +562,7 @@ async function main() {
     console.log("\n— R5-34 · a blocked move opens the case on the protection select (ca038 Yvonne Kerr)");
     {
       const page = await newPage(browser, "p1");
-      const res = await page.evaluate(() => window.moveCaseToStage("ca038", "application"));
+      const res = await page.evaluate(() => window.moveCaseToStage("ca038", "application", { promptStageEntry: false /* R87 · slice B */ }));
       await page.waitForTimeout(1200);
       eq("R5-34 · the move is still blocked", res, "blocked");
       const state = await page.evaluate(() => {
@@ -631,7 +631,7 @@ async function main() {
       const page = await newPage(browser, "p3");
       const before = await caseRow(page, "ca030");
       eq("fixture: ca030 has no protection conversation recorded", before.protection_status, "not_discussed");
-      const blockedFirst = await page.evaluate(() => window.moveCaseToStage("ca030", "offer"));
+      const blockedFirst = await page.evaluate(() => window.moveCaseToStage("ca030", "offer", { promptStageEntry: false /* R87 · slice B */ }));
       await page.waitForTimeout(900);
       eq("fixture: the pipeline gate currently blocks it", blockedFirst, "blocked");
 
@@ -663,7 +663,7 @@ async function main() {
       const saved = await caseRow(page, "ca030");
       eq("R5-3 + R5-49 · saving straight after the tick is not a false conflict", [saved.product_name, saved.protection_status], ["Post-call product", "discussed"]);
 
-      const nowMoves = await page.evaluate(() => window.moveCaseToStage("ca030", "offer"));
+      const nowMoves = await page.evaluate(() => window.moveCaseToStage("ca030", "offer", { promptStageEntry: false /* R87 · slice B */ }));
       await page.waitForTimeout(900);
       eq("R5-49 · the pipeline gate now passes", nowMoves, "moved");
       ok("no console errors", !page.__err, JSON.stringify(page.__err));
@@ -692,7 +692,7 @@ async function main() {
 
       // (b) A Not-Proceeding move still records the reason — as a note.
       const notesBefore = await notesFor(page, "ca031");
-      await page.evaluate(() => { window.__moveResult = window.moveCaseToStage("ca031", "not_proceeding"); });
+      await page.evaluate(() => { window.__moveResult = window.moveCaseToStage("ca031", "not_proceeding", { promptStageEntry: false /* R87 · slice B */ }); });
       await page.waitForTimeout(700);
       await page.selectOption("#lost-reason", "valuation");
       await page.click("#lost-ok");

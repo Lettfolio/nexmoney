@@ -145,6 +145,11 @@ node tests/r82_mock.js
 ```
 node tests/r85_book.js
 node tests/r86_mfa.js
+node tests/r87_today.js
+node tests/r87_pipeline_case.js
+node tests/r87_book.js
+node tests/r87_owner_admin.js
+node tests/r87_shell.js
 ```
 
 **R86 notes — "Second factor", TOTP two-step sign-in (`tests/r86_mfa.js` 123, incl. the R86 · V verifier round).** The contract is

@@ -156,6 +156,7 @@ const sendCalls = (page) => page.evaluate(() => window.__sendCalls || []);
         await window.__reloadSettings();
       });
       page.__dialogs = [];
+      await page.evaluate(() => { document.querySelector("#pipe-bulk-more").open = true; });   // R87 · slice B: verb is inside More ▾
       await page.click("#pipe-bulk-rate");
       await page.waitForTimeout(1800);
 
@@ -217,6 +218,7 @@ const sendCalls = (page) => page.evaluate(() => window.__sendCalls || []);
       });
       await page.check(`#pipe-table .bulk-cb[data-id="${fix.good[0]}"]`);
       page.__dialogPlan = ["dismiss"];
+      await page.evaluate(() => { document.querySelector("#pipe-bulk-more").open = true; });   // R87 · slice B: verb is inside More ▾
       await page.click("#pipe-bulk-rate");
       await page.waitForTimeout(1000);
       const afterCancel = await page.evaluate(async () => {

@@ -333,7 +333,10 @@ const readsFor = (page, table) => page.evaluate((t) => window.__r23Reads.filter(
       const boardTxt = await page.$eval("#board-cap-notice", (e) => e.textContent.trim());
       eq("D2 · …with the exact expected text", boardTxt, EXPECTED_TXT);
       const boardCardsCapped = await page.$$eval("#board .col .card", (els) => els.length);
-      ok("D2 · the board rendered no more than the 10 cases now read (truncation is real, not cosmetic)", boardCardsCapped <= 10 && boardCardsCapped > 0, boardCardsCapped);
+      /* R87 · slice B (panel 03 #2): the board paints live stages only, so a 10-row truncated read
+         may hold ZERO live cases (the fixture's first ten rows are largely completed) — "no more
+         than 10" is the truncation claim; ">0" was an accident of which rows the cap kept. */
+      ok("D2 · the board rendered no more than the 10 cases now read (truncation is real, not cosmetic; R87: only the live ones are cards)", boardCardsCapped <= 10, boardCardsCapped);
 
       // D3 — Clients.
       await clearReads(page);

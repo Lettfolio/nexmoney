@@ -238,7 +238,10 @@ const wtState = (page) => page.evaluate(() => {
        the tab order and out of the accessibility tree, which is all the attribute was doing for
        us. Same question, read off the property that now answers it. */
     barHidden: !!bar && getComputedStyle(bar).visibility === "hidden",
-    barBoxKept: !!bar && Math.round(bar.getBoundingClientRect().height) > 0,
+    /* R87 · today (A4): was "height > 0" (R73 reserved the bar's box). The host is now a 0px sticky
+       element and the bar OVERLAYS the list when a tick lands, so "no row shifts" is kept without
+       a reserved box — the property this flag stands for is "the host is in the layout, at 0px". */
+    barBoxKept: !!bar && Math.round(bar.getBoundingClientRect().height) === 0 && getComputedStyle(bar).position === "sticky",
     barN: Number((document.querySelector("#wt-bulk-n") || {}).textContent || "-1"),
     checked: [...document.querySelectorAll("#watchtower-list .wt-cb")].filter((c) => c.checked).map((c) => c.dataset.id),
   };
@@ -612,8 +615,9 @@ function docSuggested(docsListRaw, kind) {
       ok("C1c · the per-row Snooze… and Dismiss buttons are still on every real row",
         s0.groups.every((g) => g.rows.every((r) => r.synth || (r.hasSnooze && r.hasDismiss))));
       ok("C2 · the bulk bar exists and is hidden with nothing ticked", s0.barPresent && s0.barHidden, JSON.stringify({ p: s0.barPresent, h: s0.barHidden }));
-      // R73 · A2 — …and keeps its height while it is, so the first tick moves nothing.
-      ok("C2a · …while keeping its box, so ticking a row shifts no rows", s0.barBoxKept, JSON.stringify({ kept: s0.barBoxKept }));
+      // R73 · A2 — …and the first tick moves nothing. R87 · today (A4): the box is no longer
+      // reserved (0px sticky host, the bar overlays on tick) — see barBoxKept's note.
+      ok("C2a (R87) · …as a 0px sticky host whose bar overlays the list, so ticking a row shifts no rows", s0.barBoxKept, JSON.stringify({ kept: s0.barBoxKept }));
       ok("C2b · each group header carries its own “Select all N”", /Select all 5/.test(alpha.allBtn) && /Select all 2/.test(beta.allBtn),
         JSON.stringify([alpha.allBtn, beta.allBtn]));
 
@@ -950,7 +954,7 @@ function docSuggested(docsListRaw, kind) {
       await pipelineTable(page, "R72Dip");
       eq("E0b · both seeded cases are selectable", await tickRows(page, [dip.caseId, enq.caseId]), 2);
       page.__dialogs.length = 0;
-      await page.click("#pipe-bulk-checklists");
+      await page.evaluate(() => { window.bulkBuildChecklists(); });   // R87 · slice B: off the bulk bar (import-era back-fill), exported runner
       await wait(page, 2400);
       const ovF = await overlay(page);
       ok("E1 · ONE overlay confirm opens", ovF.open && ovF.hasDocsOk, JSON.stringify(ovF).slice(0, 200));

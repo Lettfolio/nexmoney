@@ -485,6 +485,10 @@ const fmtMGT = (n) => (n == null || n === "" ? "—" : Number(n).toLocaleString(
       ok("F6 · the new card renders with a delete button for the Owner", !!(await page.$(delSel)));
       /* R74 · B3: the vault delete is guarded by the house overlay now, not a native confirm —
          the dialog names the entry and its confirming button carries the danger treatment. */
+      /* R87 · owner-admin (05 #13): Delete sits inside the card's ⋯ menu (a <details>), no longer red at rest —
+         open the menu first, as a person would; the class, data-id and the house dialog are unchanged. */
+      await page.click(`#vault-list .vault-card[data-id="${created.id}"] details.vault-more summary`);
+      await wait(page, 200);
       await page.click(delSel);
       await wait(page, 400);
       const delDlg = await page.evaluate(() => {
@@ -623,11 +627,19 @@ const fmtMGT = (n) => (n == null || n === "" ? "—" : Number(n).toLocaleString(
         eq(`I1 · "${f.label}"'s copy target matches its real value`, row && row.dataVal, f.value);
       });
 
-      // The password-shortcut button on a card with a password-like secret field.
+      /* R87 · owner-admin (05 #13): was "the '🔑 Copy password' shortcut's target is the real password value". The
+         head shortcut duplicated the ⧉ on the password row (two copy affordances for one secret), so it is gone;
+         the row's own Copy is the one control and its target is the real value. */
       const bankA = await readRow(page, "vault_entries", { name: "Test Bank A", owner_label: "Luke" });
       const pwField = bankA.fields.find((f) => f.secret && /pass/i.test(f.label));
-      const pwShortcutTarget = await page.$eval(`#vault-list .vault-card[data-id="${bankA.id}"] .vault-pw-copy`, (e) => e.getAttribute("data-nexcopy")).catch(() => null);
-      eq("I2 · the '🔑 Copy password' shortcut's target is the real password value", pwShortcutTarget, pwField.value);
+      const pwShortcut = await page.$(`#vault-list .vault-card[data-id="${bankA.id}"] .vault-pw-copy`);
+      eq("I2 · no duplicate '🔑 Copy password' shortcut in the card head (R87 — one copy affordance per secret)", !!pwShortcut, false);
+      const pwRowTarget = await page.evaluate(({ id, label }) => {
+        const card = document.querySelector(`#vault-list .vault-card[data-id="${id}"]`);
+        const row = [...card.querySelectorAll(".vault-field")].find((f) => f.querySelector(".vf-label").textContent.trim() === label);
+        return row && row.querySelector(".vf-copy") ? row.querySelector(".vf-value").getAttribute("data-val") : null;
+      }, { id: bankA.id, label: pwField.label });
+      eq("I2b · the password row's own Copy targets the real password value", pwRowTarget, pwField.value);
 
       // A secret field with a value carries BOTH Reveal and Copy.
       const secretRow = await page.evaluateHandle(({ sel, label }) => {

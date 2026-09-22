@@ -305,7 +305,10 @@ async function selectRows(page, ids) {
     ok("§B1b · the last chip ('6 months (all)') is the default — the page's original behaviour",
       chips[6] && chips[6].on && !chips.slice(0, 6).some((c) => c.on), JSON.stringify(chips));
 
-    const pick = async (k) => { await page.click(`#ret-month-chips .ret-month-chip[data-month="${k}"]`); await page.waitForTimeout(2200); return pageRowIds(page); };
+    /* R87 · book (C2): was page.click on the chip; now a programmatic click, because the chips for
+       "ended", "ended3" and "next" render `hidden` (RET_MONTHS_FOLDED — four chips show, the other
+       three keys still exist and still filter). Same element, same handler. */
+    const pick = async (k) => { await page.evaluate((m) => document.querySelector(`#ret-month-chips .ret-month-chip[data-month="${m}"]`).click(), k); await page.waitForTimeout(2200); return pageRowIds(page); };
     const all = await pageRowIds(page);
     ok("§B2a · under '6 months (all)' every seeded case is shown",
       [thisM, nextM, plus2, plus5, oldEnd].every((x) => all.includes(x.caseId)), JSON.stringify(all.length));
@@ -335,7 +338,10 @@ async function selectRows(page, ids) {
     ok("§B3a · the sub says 'Ended' means already matured", /ALREADY ended/.test(subs.ended), subs.ended.slice(-140));
     ok("§B3b · the sub names the actual month for 'Next month'", /Showing only rates ending in [A-Z][a-z]+ \d{4}\./.test(subs.next), subs.next.slice(-140));
     ok("§B3c · the sub names all three months for '3 months'", /Showing rates ending in .+, .+ and .+\./.test(subs["3mo"]), subs["3mo"].slice(-160));
-    ok("§B3d · the R61 'basis said once' sentence survives the addition", /value at risk/.test(subs.all) && /proxy/.test(subs.all), subs.all.slice(0, 120));
+    /* R87 · book (C2): the money basis moved from #ret-rates-sub into the panel's one howFold
+       (#ret-rates-money-basis inside #ret-rates-how) — the sub is the one ≤25-word line now. */
+    const moneyBasis = await page.evaluate(() => (document.getElementById("ret-rates-money-basis") || {}).textContent || "");
+    ok("§B3d · the R61 'basis said once' sentence survives the addition (in the fold)", /value at risk/.test(moneyBasis) && /proxy/.test(moneyBasis), moneyBasis.slice(0, 120));
     ok("§B3e · the sub still names the scope it composes with", /Showing every adviser's cases|Showing your cases/.test(subs.all), subs.all.slice(0, 160));
 
     /* h3 counts + grouping, on the filtered set. */
@@ -488,6 +494,9 @@ async function selectRows(page, ids) {
 
     /* --- Book review, from the row --- */
     await goRetention(page, 2400);
+    /* R87 · book (C3): Book review sits behind the row's "More ▾" (a native <details>) — open it
+       first; the button, its class and its handler are unchanged. */
+    await page.evaluate(() => document.querySelectorAll("#ret-rates-list details.ret-row-more").forEach((d) => { d.open = true; }));
     await page.click(`#ret-rates-list button[onclick*="retBookReview('${withPhone.caseId}')"]`);
     await page.waitForTimeout(2000);
     const prefill = await page.evaluate(() => {

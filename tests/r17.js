@@ -102,6 +102,10 @@ async function newPage(browser, persona) {
   return page;
 }
 const wait = (page, ms) => page.waitForTimeout(ms);
+/* R87 · today (A5): a task row's four snooze controls now live inside ONE closed "⏰ Snooze ▾"
+   <details> menu (same ids, same writes). A suite that presses an item opens its menu first —
+   exactly what a person does. */
+const openSnoozeMenu = (page, sel) => page.evaluate((s) => { const b = document.querySelector(s); const d = b && b.closest("details.snooze-menu"); if (d) d.open = true; return !!d; }, sel);
 
 /* Insert a client + case in one round trip, returning {clientId, caseId}. Every case this file
    opens comes from here — never a fixture row — mirroring tests/r15.js / r16.js's mkClientCase. */
@@ -552,6 +556,7 @@ const isoDaysAgo = (n) => new Date(Date.now() - n * DAY_MS).toISOString();
       await goto(page, "dashboard", 1200);
       const btn3 = `#snooze-3d-brief-${d1task}`;
       ok("D1 · the +3d snooze control is on My Day (the task is due today)", await page.evaluate((s) => !!document.querySelector(s), btn3));
+      await openSnoozeMenu(page, btn3);   // R87 · today (A5) — the item is inside the row's Snooze ▾ menu
       await page.click(btn3);
       await wait(page, 500);
       let d1row = await page.evaluate((id) => window.__mockDb.from("case_tasks").select("due_date").eq("id", id).single().then((r) => r.data), d1task);
@@ -597,6 +602,7 @@ const isoDaysAgo = (n) => new Date(Date.now() - n * DAY_MS).toISOString();
       const btn1wk = `#snooze-1wk-brief-${d4task}`;
       await openBriefFolds(); // R61 — long bands fold past 10 rows; open them so the click can land
       ok("D4 · the +1wk snooze control is on My Day (the task is overdue)", await page.evaluate((s) => !!document.querySelector(s), btn1wk));
+      await openSnoozeMenu(page, btn1wk);   // R87 · today (A5)
       await page.click(btn1wk);
       await wait(page, 500);
       const d4row = await page.evaluate((id) => window.__mockDb.from("case_tasks").select("due_date").eq("id", id).single().then((r) => r.data), d4task);
@@ -612,6 +618,7 @@ const isoDaysAgo = (n) => new Date(Date.now() - n * DAY_MS).toISOString();
       const briefBtn = `#snooze-3d-brief-${d5task}`;
       await openBriefFolds(); // R61 — same fold-opening before clicking inside My Day
       ok("D5 · the task carries snooze controls on My Day while due today", await page.evaluate((s) => !!document.querySelector(s), briefBtn));
+      await openSnoozeMenu(page, briefBtn);   // R87 · today (A5)
       await page.click(briefBtn);
       await wait(page, 700);
       const d5row = await page.evaluate((id) => window.__mockDb.from("case_tasks").select("due_date").eq("id", id).single().then((r) => r.data), d5task);

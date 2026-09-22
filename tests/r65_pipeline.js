@@ -172,6 +172,19 @@ const mailsOf = (page, id) => page.evaluate(async (i) =>
 function startMove(page, caseId, stage) {
   return page.evaluate(({ id, s }) => window.moveCaseToStage(id, s, { promptStageEntry: true }), { id: caseId, s: stage });
 }
+/* R87 · slice B (panel 03 #8): the stage-entry overlays have TWO exits now — "Don't advance"
+   (#se-cancel) and "Save & advance" (#se-ok). "Skip — advance anyway" (#se-skip) is gone because an
+   all-blank / all-unticked Save was already the same answer. This helper is what the old Skip meant:
+   clear every field and tick, then Save. */
+const skipEntry = async (page) => {
+  await page.evaluate(() => {
+    const box = document.querySelector("#overlay-modal");
+    box.querySelectorAll("input[type=checkbox]").forEach((i) => { i.checked = false; });
+    box.querySelectorAll("input:not([type=checkbox]), textarea").forEach((i) => { i.value = ""; });
+    box.querySelectorAll("select").forEach((sel) => { sel.value = ""; sel.dispatchEvent(new Event("change")); });
+  });
+  await page.click("#se-ok");
+};
 const overlayState = (page) => page.evaluate(() => {
   const box = document.querySelector("#overlay-modal");
   const open = !!box && !document.querySelector("#overlay-backdrop").classList.contains("hidden");
@@ -187,7 +200,8 @@ const overlayState = (page) => page.evaluate(() => {
     hasExpiry: !!box.querySelector("#se-expiry"),
     hasDocPicks: !!box.querySelector("#se-doc-suggested"),
     hasLender: !!box.querySelector("#se-lender"),
-    threeWay: !!(box.querySelector("#se-cancel") && box.querySelector("#se-skip") && box.querySelector("#se-ok")),
+    // R87 · slice B: two-way exit (Cancel · Save & advance); #se-skip was removed — untick/blank IS skip.
+    threeWay: !!(box.querySelector("#se-cancel") && !box.querySelector("#se-skip") && box.querySelector("#se-ok")),
     text: box.textContent.replace(/\s+/g, " ").trim(),
   };
 });
@@ -252,7 +266,7 @@ const columnCells = (page, key) => page.evaluate((k) => {
       eq("A1c · …offering exactly the case form's four values, plus a blank", s1.waitingOptions,
         ["", "client", "lender", "solicitor", "other"]);
       ok("A1d · …with the solicitor-firm box hidden until Solicitor is picked", s1.firmHidden && s1.hasFirmInput, JSON.stringify(s1));
-      ok("A1e · …keeping the three-way exit (Don't advance / Skip / Save & advance)", s1.threeWay);
+      ok("A1e · …with the two-way exit (Don't advance / Save & advance — R87: Skip removed, blank is skip)", s1.threeWay);
       ok("A1f · …and saying in plain English what the answer feeds", /⏳ chip|Waiting on/i.test(s1.text), s1.text.slice(0, 240));
 
       // pick Solicitor → the firm box appears; save → BOTH land in the same patch
@@ -291,12 +305,12 @@ const columnCells = (page, key) => page.evaluate((k) => {
       const s3 = await overlayState(page);
       ok("A3 · advancing to Exchange asks the same question", s3.open && s3.hasWaiting, JSON.stringify(s3).slice(0, 200));
       ok("A3b · …and asks NOTHING else (no expiry, no checklist, no lender)", !s3.hasExpiry && !s3.hasDocPicks && !s3.hasLender, JSON.stringify(s3).slice(0, 200));
-      // Skip writes nothing
-      await page.click("#se-skip");
+      // A blank Save writes nothing (R87: this is what Skip used to be)
+      await skipEntry(page);
       await mv3;
       await wait(page, 1000);
       const r3 = await caseRow(page, a3.caseId);
-      eq("A3c · Skip advances the case and writes NOTHING", [r3.stage, r3.waiting_on, r3.solicitor_firm], ["exchange", null, null]);
+      eq("A3c · a blank Save & advance advances the case and writes NOTHING", [r3.stage, r3.waiting_on, r3.solicitor_firm], ["exchange", null, null]);
 
       // ---- A4 · Offer: ONE dialog carrying the expiry question AND the waiting-on question
       const a4 = await mkCase(page, { last: "R65Wait", stage: "application", waiting_on: null, offer_expiry_date: null });
@@ -336,7 +350,7 @@ const columnCells = (page, key) => page.evaluate((k) => {
       const s6 = await overlayState(page);
       eq("A6 · a product transfer is not offered “Solicitor” (there is no conveyancing)",
         s6.waitingOptions, ["", "client", "lender", "other"]);
-      await page.click("#se-skip");
+      await skipEntry(page);
       await mv6;
       await wait(page, 800);
 
@@ -347,7 +361,7 @@ const columnCells = (page, key) => page.evaluate((k) => {
       const s7 = await overlayState(page);
       ok("A7 · Fact Find still raises its checklist prompt", s7.open && s7.hasDocPicks, JSON.stringify(s7).slice(0, 200));
       ok("A7b · …and does NOT gain the waiting-on question", !s7.hasWaiting, JSON.stringify(s7).slice(0, 200));
-      await page.click("#se-skip");
+      await skipEntry(page);
       await mv7;
       await wait(page, 1000);
 
@@ -357,13 +371,14 @@ const columnCells = (page, key) => page.evaluate((k) => {
       const s8 = await overlayState(page);
       ok("A8 · DIP still raises its lender prompt", s8.open && s8.hasLender, JSON.stringify(s8).slice(0, 200));
       ok("A8b · …and does NOT gain the waiting-on question", !s8.hasWaiting, JSON.stringify(s8).slice(0, 200));
-      await page.click("#se-skip");
+      await skipEntry(page);
       await mv8;
       await wait(page, 1000);
 
-      // ---- A9 · a programmatic move (no promptStageEntry) is untouched — the R12b contract
+      // ---- A9 · a programmatic move is untouched — the R12b contract, R87 · slice B: the prompt is the
+      // default for every move now, so a headless caller DECLARES silence with { silent: true }.
       const a9 = await mkCase(page, { last: "R65Wait", stage: "decision_in_principle", waiting_on: null });
-      await page.evaluate((id) => window.moveCaseToStage(id, "application", {}), a9.caseId);
+      await page.evaluate((id) => window.moveCaseToStage(id, "application", { promptStageEntry: false }), a9.caseId);
       await wait(page, 1000);
       const s9 = await overlayState(page);
       const r9 = await caseRow(page, a9.caseId);
@@ -565,8 +580,10 @@ const columnCells = (page, key) => page.evaluate((k) => {
         view: pipelineView, seg: pipelineSegment,
         stored: localStorage.getItem("nx_view_" + (ME && ME.id)),
       }));
-      eq("C4 · with nothing stored the pipeline still opens on the BOARD (segment “all” is unchanged)",
-        [before.view, before.seg, before.stored], ["board", "all", null]);
+      // R87 · slice B (panel 03 #2): the default segment is "live" (six working stages) — "all" is a
+      // table-only segment now, since the board never paints Completed / Not proceeding columns.
+      eq("C4 · with nothing stored the pipeline still opens on the BOARD (segment “live” — R87 default)",
+        [before.view, before.seg, before.stored], ["board", "live", null]);
       await page.evaluate(() => [...document.querySelectorAll("#pipe-segment .seg-btn")].find((b) => b.dataset.seg === "current").click());
       await wait(page, 1800);
       const cur = await page.evaluate(() => ({
@@ -620,10 +637,13 @@ const columnCells = (page, key) => page.evaluate((k) => {
       eq("D0 · the three seeded cases are the whole table", rowN, 3);
       await page.click("#pipe-bulk-all");
       await wait(page, 400);
-      ok("D1 · the bulk bar carries a “Chase solicitors” button", await page.$("#pipe-bulk-chase") !== null);
-      ok("D1b · …and a “Send document request” button", await page.$("#pipe-bulk-docs") !== null);
+      // R87 · slice B (panel 03 #5): the send/chase verbs live inside the bar's "More ▾" (<details>),
+      // so the bar is one row; ids and handlers unchanged. Open the menu before pressing them.
+      ok("D1 · the bulk bar carries a “Chase solicitors” button (inside More ▾ — R87)", await page.$("#pipe-bulk-more #pipe-bulk-chase") !== null);
+      ok("D1b · …and a “Send document request” button (inside More ▾ — R87)", await page.$("#pipe-bulk-more #pipe-bulk-docs") !== null);
 
       page.__dialogs.length = 0;
+      await page.evaluate(() => { document.querySelector("#pipe-bulk-more").open = true; });   // R87 · slice B: verb is inside More ▾
       await page.click("#pipe-bulk-chase");
       await wait(page, 2200);
       const chaseConfirm = (page.__dialogs.find((d) => d.type === "confirm") || {}).message || "";
@@ -650,6 +670,7 @@ const columnCells = (page, key) => page.evaluate((k) => {
       await page.click("#pipe-bulk-all");
       await wait(page, 400);
       page.__dialogs.length = 0;
+      await page.evaluate(() => { document.querySelector("#pipe-bulk-more").open = true; });   // R87 · slice B: verb is inside More ▾
       await page.click("#pipe-bulk-chase");
       await wait(page, 2200);
       const again = await tasksOf(page, k1.caseId);
@@ -696,6 +717,7 @@ const columnCells = (page, key) => page.evaluate((k) => {
       await page.click("#pipe-bulk-all");
       await wait(page, 400);
       page.__dialogs.length = 0;
+      await page.evaluate(() => { document.querySelector("#pipe-bulk-more").open = true; });   // R87 · slice B: verb is inside More ▾
       await page.click("#pipe-bulk-docs");
       await wait(page, 2600);
       const docConfirm = (page.__dialogs.filter((d) => d.type === "confirm").pop() || {}).message || "";
@@ -738,6 +760,7 @@ const columnCells = (page, key) => page.evaluate((k) => {
       await page.click("#pipe-bulk-all");
       await wait(page, 400);
       page.__dialogs.length = 0;
+      await page.evaluate(() => { document.querySelector("#pipe-bulk-more").open = true; });   // R87 · slice B: verb is inside More ▾
       await page.click("#pipe-bulk-docs");
       await wait(page, 2600);
       const second = page.__dialogs.map((d) => d.message).join(" | ");

@@ -560,7 +560,10 @@ const sortedIds = (a) => a.slice().sort();
       eq("D3 · scoreboard \"p2\" drill-down lists exactly p2's cases (live AND terminal)", sortedIds(d3.ids), sortedIds(p2Expected));
       await closeAnyModal(page);
 
-      // D4 — scoreboard "Unassigned" row.
+      // D4 — scoreboard "Unassigned" row. R87 · owner-admin (05 #11): the Unassigned row sits behind "Show all"
+      // on arrival, so press that first (when offered) — the drill-down itself is unchanged.
+      await page.evaluate(() => { const b = document.getElementById("report-mi-scoreboard-showall"); if (b && /Show all/.test(b.textContent)) b.click(); });
+      await wait(page, 500);
       await page.click('#report-mi-scoreboard .mi-adv-link[data-mi-adv="__unassigned"]');
       await wait(page, 500);
       const unassignedExpected = rows.filter((r) => (r.assigned_to || "__unassigned") === "__unassigned").map((r) => r.id);

@@ -131,6 +131,20 @@ const $ = (s) => document.querySelector(s);
 const esc = (s) => (s == null ? "" : String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])));
 // R18-P2 — trailing-edge debounce for high-frequency search/filter inputs. The wrapped fn reads the
 // live input value at fire time, so the delayed call always sees the latest keystroke.
+/* R87 · foundation — howFold(): THE one way to keep an explanation on a page without
+   standing between the reader and their work. Renders a closed <details> in the house
+   .rep-howcounted style; the summary is ≤ 6 words ("How this works" by default), the body
+   is whatever HTML the caller passes (already escaped/safe — callers pass their own
+   markup). Pure: no DOM access, no late globals. The R87 rule: a page or panel gets at
+   most one ≤25-word line of standing prose; everything longer goes in here. */
+function howFold(o) {
+  const x = o || {};
+  const id = x.id ? ` id="${esc(x.id)}"` : "";
+  const open = x.open ? " open" : "";
+  const cls = "rep-howcounted how-fold" + (x.cls ? " " + esc(x.cls) : "");
+  return `<details class="${cls}"${id}${open}><summary>${esc(x.title || "How this works")}</summary><div class="rep-howcounted-body">${x.html || ""}</div></details>`;
+}
+
 function debounce(fn, wait) {
   let t;
   return function (...args) {
@@ -322,4 +336,4 @@ async function readAll(q, opts) {
 
 /* R81 · A3 — deploy handshake stamp. Every round that edits ANY of index.html / core.js /
    reports-money.js / app.js bumps the tag IN ALL FOUR PLACES (see nxCheckBuildTags in app.js). */
-window.__nxTag_core = "r86";   // R86
+window.__nxTag_core = "r87";   // R87
