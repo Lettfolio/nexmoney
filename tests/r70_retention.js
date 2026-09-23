@@ -151,12 +151,13 @@ async function mkClientCase(page, opts) {
 
 /* The ids currently painted, in the order they are painted — the order IS the assertion in §B. */
 const pageRowIds = (page) => page.evaluate(() =>
-  [...document.querySelectorAll("#ret-rates-list .row-item .t[onclick]")]
+  /* R88 · C: the kit row's name opens the CLIENT; the case is the chip (.ret-case-chip). */
+  [...document.querySelectorAll("#ret-rates-list .row-item .ret-case-chip[onclick]")]
     .map((el) => (el.getAttribute("onclick").match(/openCase\('([^']+)'\)/) || [])[1]).filter(Boolean));
 
 const rowOf = (page, id, root) => page.evaluate((o) => {
   const r = [...document.querySelectorAll(`${o.root} .row-item`)].find((x) => {
-    const t = x.querySelector(".t[onclick]");
+    const t = x.querySelector(".ret-case-chip[onclick], .t[onclick*='openCase']");   // R88 · C: page → chip; drawer → name
     return t && t.getAttribute("onclick").includes(`'${o.id}'`);
   });
   if (!r) return null;
@@ -217,7 +218,7 @@ const toastText = (page) => page.evaluate(() => (document.getElementById("toast"
     await goRetention(page, 2600);
 
     const chips = await page.evaluate(() => [...document.querySelectorAll("#ret-month-chips .ret-month-chip")]
-      .map((b) => ({ k: b.dataset.month, label: b.textContent.replace(/\s+/g, " ").trim(), n: Number((b.querySelector(".count") || {}).textContent || -1) })));
+      .map((b) => ({ k: b.dataset.month, label: b.textContent.replace(/\s+/g, " ").trim(), n: Number((b.querySelector(".seg-count") || {}).textContent || -1) })));   // R88 · C: the kit's .seg-count
     eq("§A1a · the two lapsed windows sit between 'Ended' and 'This month'",
       chips.map((c) => c.k).join(","), "ended,ended3,ended12,this,next,3mo,all");
     ok("§A1b · …labelled in the words the panel used", /Ended · last 3 months/.test(chips[1].label) && /Ended · last 12 months/.test(chips[2].label), JSON.stringify(chips.map((c) => c.label)));
@@ -269,7 +270,7 @@ const toastText = (page) => page.evaluate(() => (document.getElementById("toast"
     await page.reload({ waitUntil: "networkidle" });
     await page.waitForTimeout(1600);
     await goRetention(page, 2400);
-    const activeAfter = await page.evaluate(() => (document.querySelector("#ret-month-chips .ret-month-chip.scope-active") || {}).dataset?.month);
+    const activeAfter = await page.evaluate(() => (document.querySelector("#ret-month-chips .ret-month-chip[aria-pressed='true']") || {}).dataset?.month   /* R88 · C: kit chips */);
     eq("§A7b · …and survives a reload", activeAfter, "ended12");
     ok("§A · no console errors", realErrs(page).length === 0, realErrs(page).slice(0, 3).join(" | "));
     await page.close();
@@ -378,7 +379,7 @@ const toastText = (page) => page.evaluate(() => (document.getElementById("toast"
     await goRetention(page, 4000);
     const capped = await page.evaluate(() => {
       const rows = document.querySelectorAll("#ret-rates-list .row-item").length;
-      const foot = [...document.querySelectorAll("#ret-rates-list .empty")].map((e) => e.textContent).join(" ");
+      const foot = [...document.querySelectorAll("#ret-rates-list .list-foot")].map((e) => e.textContent).join(" ");   // R88 · C: the cap note is a .list-foot (was a .empty box)
       return { rows, foot };
     });
     ok("§B5a · the list is still capped at 100 rows", capped.rows === 100, JSON.stringify(capped.rows));
@@ -473,7 +474,7 @@ const toastText = (page) => page.evaluate(() => (document.getElementById("toast"
     const pageBadges = await page.evaluate((ids) => {
       const out = {};
       [...document.querySelectorAll("#ret-rates-list .row-item")].forEach((r) => {
-        const t = r.querySelector(".t[onclick]"), b = r.querySelector(".ret-rem-badge");
+        const t = r.querySelector(".ret-case-chip[onclick]"), b = r.querySelector(".ret-rem-badge");   // R88 · C: the case is the chip
         const id = t && (t.getAttribute("onclick").match(/openCase\('([^']+)'\)/) || [])[1];
         if (id && b && ids.includes(id)) out[id] = b.textContent.trim();
       });

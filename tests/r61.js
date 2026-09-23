@@ -182,23 +182,29 @@ async function boot(browser, persona) {
   });
   await pd.evaluate(() => { location.hash = "#protection"; });
   await pd.waitForTimeout(1800);
+  /* R88 · C: RE-POINTED. The table is a kit list with ONE ROW PER CLIENT (#prot-list, .prot-row,
+     .prot-cb carrying the CLIENT id): the rank order is now "each client where their best case
+     ranks" — the RPC's score order, first appearance per client. The DOM contract follows the
+     design: every row keeps an Open (inside More ▾, one per case) and the status select moved
+     inside 📝 Log call (tests/r88_book_c.js §C7), so the row's contract is the Log-call verb. */
   const d = await pd.evaluate(async () => {
-    const t = document.querySelector("#prot-list-table");
+    const t = document.querySelector("#prot-list");
     if (!t) return null;
-    const bands = [...t.querySelectorAll("tr.prot-band")].length;
+    const bands = [...document.querySelectorAll("#page-protection tr.prot-band, #prot-calllist-panel, #prot-gi-panel")].length;
     const domIds = [...t.querySelectorAll(".prot-cb")].map((cb) => cb.dataset.id);
     const { data: rpc } = await window.__mockDb.rpc("get_protection_pipeline", { p_scope: "all" });
-    const rpcIds = (rpc || []).map((r) => r.case_id).filter((id) => domIds.includes(id));
-    const orderOk = domIds.length > 0 && domIds.every((id, i) => id === rpcIds[i]);
+    const firstSeen = [];
+    (rpc || []).forEach((r) => { if (domIds.includes(r.client_id) && !firstSeen.includes(r.client_id)) firstSeen.push(r.client_id); });
+    const orderOk = domIds.length > 0 && domIds.every((id, i) => id === firstSeen[i]);
     const scoreDesc = (rpc || []).every((r, i, a) => i === 0 || Number(a[i - 1].score) >= Number(r.score));
-    const contract = [...t.querySelectorAll("tr")].filter((r) => r.querySelector(".prot-cb"))
-      .every((r) => r.querySelector(".prot-actions button") && r.querySelector(".prot-status-set"));
+    const contract = [...t.querySelectorAll(".prot-row")]
+      .every((r) => r.querySelector(".row-acts .prot-logcall") && r.querySelector(".row-more-body button[onclick*='openCase']"));
     return { bands, orderOk, scoreDesc, rows: domIds.length, contract };
   });
-  ok("D1 · R80: NO band header rows render any more", d && d.bands === 0, JSON.stringify(d && d.bands));
-  ok("D2 · R80: the table preserves the RPC's score-desc rank order", d && d.orderOk && d.scoreDesc, JSON.stringify(d));
+  ok("D1 · R80: NO band header rows render any more (R88: nor the two band panels)", d && d.bands === 0, JSON.stringify(d && d.bands));
+  ok("D2 · R80: the list preserves the RPC's score-desc rank order (R88: per client, first appearance)", d && d.orderOk && d.scoreDesc, JSON.stringify(d));
   ok("D3 · R80: mixed statuses stay in rank order — nothing regroups them", d && d.orderOk, JSON.stringify(d && d.rows));
-  ok("D4 · every row keeps its Open button and status select (DOM contract)", d && d.contract);
+  ok("D4 · every row keeps an Open per case (More ▾) and 📝 Log call, where the status select now lives (DOM contract, R88)", d && d.contract);
   ok("D5 · no page errors on Protection", pd.__err.filter((e) => !/ERR_TUNNEL|Failed to fetch|sheetjs/i.test(e)).length === 0, pd.__err.join("|").slice(0, 200));
   await pd.close();
 

@@ -159,6 +159,11 @@ const openClient = async (page, id) => {
   await page.evaluate(() => { const d = document.querySelector(".client-details"); if (d) d.open = true; });
 };
 
+/* R88 · A — THE RADAR IS PART OF MY DAY. Its panel (#unactioned-list) is gone; a quiet case is a
+   Worth doing row on My Day (or, when the case already has a My Day row, a sub-line on it), and
+   every such row carries data-radar. These read the same things the old list did. */
+const radarText = (page) => page.evaluate(() => [...document.querySelectorAll("#briefing-list .brief-row[data-radar]")].map((r) => r.textContent).join(" \n "));
+const radarRowText = (page, name) => page.evaluate((n) => { const r = [...document.querySelectorAll("#briefing-list .brief-row[data-radar]")].find((e) => e.textContent.includes(n)); return r ? r.textContent : null; }, name);
 (async () => {
   let server = null;
   if (!(await serverUp())) {
@@ -210,7 +215,7 @@ const openClient = async (page, id) => {
       // every seeded card behind a filter this block never meant to exercise. Pinned to "all" here,
       // a real UI selection like every other control this suite drives, and left there for the rest
       // of this block's `pipeline` visits (nothing re-defaults it mid-session).
-      await page.selectOption("#board-adviser", "all");
+      await page.click("#board-scope-all");   // R88 · B: was selectOption on the (now hidden compat) adviser select — scope is the kit Mine|All(|Unassigned) toggle
       await wait(page, 300);
       // Baseline: however many 'application'-stage cases the fixture book already has, read straight
       // off the app's OWN rendered header — never assumed from fixture composition.
@@ -303,14 +308,15 @@ const openClient = async (page, id) => {
       const rowCount = await page.$$eval("#client-list .client-row", (els) => els.length);
       eq("C · exactly CLIENT_LIST_CAP (100) rows render", rowCount, 100);
       const noteTxt = await page.$eval("#client-list .client-list-cap-note", (e) => e.textContent.trim());
-      eq("C · the cap note reads \"Showing 100 of N — refine your search to narrow the list.\"",
-        noteTxt, `Showing 100 of ${total} — refine your search to narrow the list.`);
+      // R88 · B (panel 04 #10): was "Showing 100 of N — refine your search to narrow the list."; the line is now six words.
+      eq("C · the cap note reads \"Showing 100 of N — search to narrow\"",
+        noteTxt, `Showing 100 of ${total} — search to narrow`);
 
       // Full-list counts: the "All" segment chip and the bulk-select-all line both describe the FULL
       // filtered set (`total`), never the capped 100 actually rendered.
       const allSegTxt = await page.$eval('#client-segment .seg-btn[data-seg="all"] .seg-count', (e) => e.textContent.trim());
       eq("C · the \"All\" segment count is the FULL list, not the capped 100", Number(allSegTxt), total);
-      const selectAllTxt = await page.$eval("#client-bulk .client-selall label", (e) => e.textContent.trim());
+      const selectAllTxt = await page.$eval("#client-bulk .list-selall label", (e) => e.textContent.trim());   // R88 · B: was .client-selall — kit selectAllHtml
       eq("C · \"Select all N shown\" also reads the FULL list count", selectAllTxt, `Select all ${total} shown`);
 
       // A search narrowing the result below the cap removes the note entirely.
@@ -443,16 +449,16 @@ const openClient = async (page, id) => {
       const f1 = await mkQuietCase(page, { first: "Radar90", last: "Note30d", assigned_to: "p2" });
       await page.evaluate(({ caseId, when }) => window.__mockDb.from("case_notes").insert({ case_id: caseId, body: "old check-in", created_at: when }), { caseId: f1.caseId, when: isoDaysAgo(30) });
       await goto(page, "dashboard", 1200);
-      let listTxt = await page.$eval("#unactioned-list", (e) => e.textContent);
+      let listTxt = await radarText(page)   /* R88 · A: was #unactioned-list */;
       ok("F1 · a case with a 30-day-old note IS quiet (outside the 7-day membership window)", listTxt.includes("Radar90 Note30d"), listTxt.slice(0, 200));
-      const f1Row = await page.$$eval("#unactioned-list .row-item", (els, name) => { const r = els.find((e) => e.textContent.includes(name)); return r ? r.textContent : null; }, "Radar90 Note30d");
+      const f1Row = await radarRowText(page, "Radar90 Note30d")   /* R88 · A: was #unactioned-list .row-item */;
       ok("F1 · …labelled \"quiet 30 days\" — the TRUE last-touch date, read via the 90-day window", /quiet 30 days/.test(f1Row || ""), f1Row);
 
       // F2 — a note 3 days old: inside the 7-day membership window, so the case is NOT quiet at all.
       const f2 = await mkQuietCase(page, { first: "Radar90", last: "Note3d", assigned_to: "p2" });
       await page.evaluate(({ caseId, when }) => window.__mockDb.from("case_notes").insert({ case_id: caseId, body: "recent check-in", created_at: when }), { caseId: f2.caseId, when: isoDaysAgo(3) });
       await goto(page, "dashboard", 1200);
-      listTxt = await page.$eval("#unactioned-list", (e) => e.textContent);
+      listTxt = await radarText(page)   /* R88 · A: was #unactioned-list */;
       ok("F2 · a case with a 3-day-old note is EXCLUDED from the radar entirely", !listTxt.includes("Radar90 Note3d"), listTxt.slice(0, 200));
 
       // F3 — a note 100 days old: outside BOTH the 7-day membership window AND the 90-day activity
@@ -461,9 +467,9 @@ const openClient = async (page, id) => {
       const f3 = await mkQuietCase(page, { first: "Radar90", last: "Note100d", assigned_to: "p2", created_at: isoDaysAgo(50) });
       await page.evaluate(({ caseId, when }) => window.__mockDb.from("case_notes").insert({ case_id: caseId, body: "ancient check-in", created_at: when }), { caseId: f3.caseId, when: isoDaysAgo(100) });
       await goto(page, "dashboard", 1200);
-      listTxt = await page.$eval("#unactioned-list", (e) => e.textContent);
+      listTxt = await radarText(page)   /* R88 · A: was #unactioned-list */;
       ok("F3 · a case with ONLY a 100-day-old note (outside the 90-day read) IS quiet", listTxt.includes("Radar90 Note100d"), listTxt.slice(0, 200));
-      const f3Row = await page.$$eval("#unactioned-list .row-item", (els, name) => { const r = els.find((e) => e.textContent.includes(name)); return r ? r.textContent : null; }, "Radar90 Note100d");
+      const f3Row = await radarRowText(page, "Radar90 Note100d")   /* R88 · A: was #unactioned-list .row-item */;
       ok("F3 · …the label FALLS BACK to created_at (\"quiet 50 days\"), the 100-day note is invisible to the 90-day read", /quiet 50 days/.test(f3Row || ""), f3Row);
 
       ok("F · no console errors", noNewErr(errBefore), JSON.stringify(page.__err));

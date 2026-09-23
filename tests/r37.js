@@ -409,14 +409,15 @@ const readCase = (page, caseId) => page.evaluate(async (id) => {
       ok("§4a · …and \"Unassigned leads\"", boardOpts.includes("Unassigned leads"), JSON.stringify(boardOpts));
 
       await goto(page, "clients", 1400);
-      const clientOpts = await page.$$eval("#client-views option", (os) => os.map((o) => o.value));
+      // R88 · B: was read off #client-views — the Clients trio is removed; the seeded store is read directly (dormant data path).
+      const clientOpts = await page.evaluate(() => savedViews("clients").map((v) => v.name));
       const coldName = `Cold clients (${months}mo+)`;
       ok("§4a · #client-views was seeded with the owner's cold-clients starter", clientOpts.includes(coldName), JSON.stringify({ clientOpts, coldName }));
 
       // Applying a seeded pipeline view actually restores its captured filters.
       await goto(page, "pipeline", 1000);
       await page.fill("#board-search", "some unrelated text");
-      await page.selectOption("#board-adviser", "all");
+      await page.click("#board-scope-all");   // R88 · B: was selectOption on the (now hidden compat) adviser select — scope is the kit Mine|All(|Unassigned) toggle
       await wait(page, 400);
       await page.selectOption("#board-views", "Unassigned leads");
       await wait(page, 700);
@@ -482,7 +483,7 @@ const readCase = (page, caseId) => page.evaluate(async (id) => {
       ok("§4f · …and it is pinned to the signed-in adviser (p2), not \"all\"", mine && mine.filters && mine.filters.adviser === "p2", JSON.stringify(mine));
 
       await goto(page, "clients", 1200);
-      const clientOpts = await page.$$eval("#client-views option", (os) => os.map((o) => o.value));
+      const clientOpts = await page.evaluate(() => savedViews("clients").map((v) => v.name));   // R88 · B: was #client-views options (trio removed)
       eq("§4g · adviser's client starter reads \"My cold clients (Nmo+)\"", clientOpts.includes(`My cold clients (${months}mo+)`), true);
 
       ok("§4 · no console errors (adviser)", noNewErr(page, errBefore), JSON.stringify(page.__err));
@@ -524,7 +525,7 @@ const readCase = (page, caseId) => page.evaluate(async (id) => {
       const solo = await mkClientCase(page, { first: tag, last: "SoloNoHint", email: `${tag}.solo@example.com`, case: { case_kind: "remortgage", stage: "application", assigned_to: "p2" } });
 
       await goto(page, "pipeline", 1000);
-      await page.selectOption("#board-adviser", "all");
+      await page.click("#board-scope-all");   // R88 · B: was selectOption on the (now hidden compat) adviser select — scope is the kit Mine|All(|Unassigned) toggle
       await wait(page, 600);
       await page.fill("#board-search", tag);
       await wait(page, 600);

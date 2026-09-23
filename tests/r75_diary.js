@@ -194,7 +194,8 @@ const apptRow = (page, id) => page.evaluate(async (i) => {
     // A1 — the owner decision: a desktop with no stored choice opens on WEEK.
     const opened = await page.evaluate(() => ({
       weekActive: document.querySelector("#diary-view-week").classList.contains("scope-active"),
-      weekSelected: document.querySelector("#diary-view-week").getAttribute("aria-selected"),
+      // R88 · E: was aria-selected (role=tab); the Month|Week|Day toggle is aria-pressed buttons in a role=group now.
+      weekSelected: document.querySelector("#diary-view-week").getAttribute("aria-pressed"),
       weekShown: !document.querySelector("#diary-week-view").classList.contains("hidden"),
       gridHidden: document.querySelector("#diary-grid").classList.contains("hidden"),
       dayHidden: document.querySelector("#diary-day-view").classList.contains("hidden"),

@@ -203,8 +203,12 @@ const wordsOf = (t) => String(t || "").trim().split(/\s+/).filter(Boolean).lengt
         !!wt.wtFold && wt.wtFold.tag === "DETAILS" && wt.wtFold.open === false && wt.wtFold.how
         && /Offer expires before completion/.test(wt.wtFold.text) && /Completing inside old ERC/.test(wt.wtFold.text) && /Early Repayment Charge/.test(wt.wtFold.text)
         && /critical/i.test(wt.wtFold.text) && /Select all/.test(wt.wtFold.text), JSON.stringify(wt.wtFold && { open: wt.wtFold.open, summary: wt.wtFold.summary }));
-      ok("A1n · the radar keeps ONE standing line of ≤ 25 words (was 54) plus a closed fold with the rule",
-        wt.rLines.length === 1 && wt.rLines[0] <= 25 && !!wt.rFold && wt.rFold.open === false && /earlier stage/.test(wt.rFold.text), JSON.stringify({ lines: wt.rLines, fold: wt.rFold && wt.rFold.open }));
+      /* R88 · A: was "the radar keeps ONE standing line (≤ 25 words) plus a closed fold with the rule".
+         The radar panel is gone (its cases are Worth doing rows on My Day, R88-DESIGN §A), so it has
+         NO standing words at all; its rule survives as the Worth doing band header's title. */
+      const rBand = await page.evaluate(() => { const b = document.querySelector("#briefing-list .brief-sec-rest"); return { panel: !!document.getElementById("unactioned-panel"), title: b ? b.getAttribute("title") || "" : null }; });
+      ok("A1n (R88) · the radar has no standing prose (its panel is gone) — its rule is the Worth doing band's title",
+        wt.rLines.length === 0 && !wt.rFold && !rBand.panel && (rBand.title == null || /no next step/.test(rBand.title)), JSON.stringify({ lines: wt.rLines, band: rBand }));
 
       /* THE PROSE RULE, measured over the whole page: no standing .panel-sub longer than 25 words. */
       const prose = await page.evaluate(() => [...document.querySelectorAll("#page-dashboard .panel-sub")]
@@ -520,15 +524,21 @@ const wordsOf = (t) => String(t || "").trim().split(/\s+/).filter(Boolean).lengt
         };
       });
       ok("G1 · #brief-more is a CLOSED <details> in My Day's heading", g.isDetails && g.open === false && g.inHeading, JSON.stringify(g));
-      ok("G2 · all four controls keep their ids inside it (Sync Outlook, Run checks, N snoozed, N due later)", g.ids.every(Boolean) && !g.wtHeadHasRun, JSON.stringify(g.ids));
+      /* R88 · A: was "all four controls keep their ids inside it". Run checks and N snoozed moved
+         on into the Checks drawer (R88-DESIGN §A: the drawer holds Run checks and the snoozed view);
+         the menu keeps Sync Outlook and N due later. Ids unchanged everywhere. */
+      const inDrawer = await page.evaluate(() => ["watchtower-run", "watchtower-snoozed-toggle"].map((id) => { const e = document.getElementById(id); return !!(e && e.closest("#watchtower-panel")); }));
+      ok("G2 (R88) · Sync Outlook and N due later keep their ids in the menu; Run checks and N snoozed are in the Checks drawer",
+        g.ids[0] && g.ids[3] && !g.ids[1] && !g.ids[2] && inDrawer.every(Boolean) && !g.wtHeadHasRun, JSON.stringify({ menu: g.ids, drawer: inDrawer }));
       ok("G3 · the heading shows ≤ 3 visible controls — Mine, All and ⋯ (was 5 incl. Sync Outlook and the due-later badge)", g.visH3.length <= 3, JSON.stringify(g.visH3));
       ok("G4 · Sync Outlook is hidden while Settings › Outlook is off (the mock's default)", g.outlookSetting !== "1" && g.outlookHidden, JSON.stringify({ setting: g.outlookSetting, hidden: g.outlookHidden }));
-      ok("G5 · the menu's items are not rendered until it opens", g.menuItemsHidden);
+      ok("G5 · the menu's items are not rendered until it opens (R88 · A: Run checks is in the closed drawer, also unrendered)", g.menuItemsHidden);
       /* Open → the items are real buttons; Escape closes; an outside click closes. */
       await page.click("#brief-more > summary");
       await page.waitForTimeout(150);
-      const opened = await page.evaluate(() => ({ open: document.getElementById("brief-more").open, run: document.getElementById("watchtower-run").checkVisibility(), ahead: (() => { const a = document.getElementById("brief-ahead"); return a.classList.contains("hidden") ? "hidden" : a.textContent.trim(); })() }));
-      ok("G6 · pressing ⋯ opens it and Run checks is a real button", opened.open && opened.run, JSON.stringify(opened));
+      const opened = await page.evaluate(() => ({ open: document.getElementById("brief-more").open, ahead: (() => { const a = document.getElementById("brief-ahead"); return a.classList.contains("hidden") ? "hidden" : a.textContent.trim(); })() }));
+      /* R88 · A: was "…and Run checks is a real button" — Run checks is the drawer's now (G10). */
+      ok("G6 (R88) · pressing ⋯ opens it", opened.open, JSON.stringify(opened));
       ok("G7 · “N due later” is in the menu as text-and-link, not a badge in the heading", opened.ahead === "hidden" || /^\d+ due later$/.test(opened.ahead), JSON.stringify(opened.ahead));
       await page.keyboard.press("Escape");
       await page.waitForTimeout(100);
@@ -539,13 +549,13 @@ const wordsOf = (t) => String(t || "").trim().split(/\s+/).filter(Boolean).lengt
       await page.waitForTimeout(100);
       const outside = await page.evaluate(() => document.getElementById("brief-more").open);
       eq("G9 · a click anywhere else closes it", outside, false);
-      /* Run checks still runs from inside the menu. */
+      /* Run checks still runs. R88 · A: from inside the Checks drawer (was: from the ⋯ menu). */
       const paintsBefore = await page.evaluate(() => window.__wtPaints());
-      await page.evaluate(() => { document.getElementById("brief-more").open = true; });
+      await page.evaluate(() => { document.getElementById("watchtower-panel").open = true; });
       await page.click("#watchtower-run");
       await page.waitForTimeout(1500);
       const ran = await page.evaluate((pb) => ({ paints: window.__wtPaints() > pb, label: document.getElementById("watchtower-run").textContent.trim(), toast: (document.querySelector("#toast, .toast") || {}).textContent || "" }), paintsBefore);
-      ok("G10 · Run checks from the menu re-runs the checks and repaints the Watchtower", ran.paints && ran.label === "Run checks", JSON.stringify(ran));
+      ok("G10 (R88) · Run checks from the Checks drawer re-runs the checks and repaints the Watchtower", ran.paints && ran.label === "Run checks", JSON.stringify(ran));
       /* The snoozed toggle opens the drawer it now sits above. */
       const snz = await page.evaluate(async () => {
         const t = document.getElementById("watchtower-snoozed-toggle");
@@ -553,12 +563,11 @@ const wordsOf = (t) => String(t || "").trim().split(/\s+/).filter(Boolean).lengt
         const drawer = document.getElementById("watchtower-panel");
         if (!drawer.classList.contains("collapsed")) window.toggleDrawer(null, "watchtower");
         const wasCollapsed = drawer.classList.contains("collapsed");
-        document.getElementById("brief-more").open = true;
-        t.click();
+        t.click();   // R88 · A: the toggle sits in the drawer now; a programmatic press still opens it
         await new Promise((r) => setTimeout(r, 150));
         return { wasCollapsed, nowOpen: !drawer.classList.contains("collapsed"), listShown: !document.getElementById("watchtower-snoozed").classList.contains("hidden"), label: t.textContent.trim() };
       });
-      ok("G11 · “N snoozed” from the menu shows the snoozed list AND opens the collapsed drawer it lives in",
+      ok("G11 · “N snoozed” shows the snoozed list AND opens the collapsed drawer it lives in",
         snz.skip || (snz.wasCollapsed && snz.nowOpen && snz.listShown && /^\d+ snoozed$/.test(snz.label)), JSON.stringify(snz));
       ok("§G · no console/page errors", realErr(page).length === 0, realErr(page).join(" | ").slice(0, 300));
       await page.__ctx.close();
@@ -572,7 +581,8 @@ const wordsOf = (t) => String(t || "").trim().split(/\s+/).filter(Boolean).lengt
       const html = fs.readFileSync(path.join(REPO, "admin", "index.html"), "utf8");
       const app = fs.readFileSync(path.join(REPO, "admin", "app.js"), "utf8");
       ok("H1 · index.html no longer carries the two Watchtower paragraphs as standing <p>s", !/<p class="panel-sub" id="watchtower-sub">/.test(html) && !/<p class="panel-sub"><strong>Clear a whole run/.test(html));
-      ok("H2 · index.html carries the Watchtower and radar howFolds (closed <details class=\"rep-howcounted how-fold\">)", /id="watchtower-sub"><summary>/.test(html) && /id="unactioned-how"><summary>/.test(html) && !/id="watchtower-sub" open/.test(html));
+      /* R88 · A: was "…the Watchtower and radar howFolds". The radar panel (and its fold) is gone. */
+      ok("H2 (R88) · index.html carries the Watchtower howFold (closed <details class=\"rep-howcounted how-fold\">) and no radar panel", /id="watchtower-sub"><summary>/.test(html) && !/id="unactioned-how"/.test(html) && !/id="unactioned-panel"/.test(html) && !/id="watchtower-sub" open/.test(html));
       ok("H3 · app.js no longer renders #ops-strip-sub or #leads-accept-bar-sub", !/id="ops-strip-sub"/.test(app) && !/id="leads-accept-bar-sub"/.test(app));
       ok("H4 · the what's-new line is built through howFold()", /howFold\(\{ id: "whatsnew-details"/.test(app));
     }

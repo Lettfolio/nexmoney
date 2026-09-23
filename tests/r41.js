@@ -244,7 +244,8 @@ const readRow = (page, table, id) => page.evaluate(async ({ table, id }) => {
       await clearNxKeys(page);
       await goto(page, "dashboard", 1500);
 
-      const survivors = ["briefing-panel", "watchtower-panel", "unactioned-panel", "rate-erc-panel", "revenue-panel"];
+      /* R88 · A: "unactioned-panel" left the list — the radar's cases are My Day rows now (R88-DESIGN §A). */
+      const survivors = ["briefing-panel", "watchtower-panel", "rate-erc-panel", "revenue-panel"];
       const present = await page.evaluate((ids) => ids.map((id) => [id, !!document.getElementById(id)]), survivors);
       ok("§A2a · every surviving panel is present", present.every(([, p]) => p), JSON.stringify(present));
 
@@ -275,8 +276,11 @@ const readRow = (page, table, id) => page.evaluate(async ({ table, id }) => {
          B7c) joins #dash-notices/#whatsnew-band above the title, on exactly the same argument
          both of them used. The lock is widened by that one entry, deliberately, as it was for
          each of them; the R11-1 adjacency below the title is untouched. */
+      /* R88 · A: "unactioned-panel" removed from the lock — the radar panel left the DOM, its cases
+         are Worth doing rows inside #briefing-panel. #watchtower-panel (now the Checks <details>)
+         keeps its place directly under My Day. */
       eq("§A2b · #page-dashboard's own child order is the locked one",
-        order, ["dash-notices", "whatsnew-band", "locale-note-host", "ops-strip", "today-heading", "kpi-row", "dash-cap-notice", "briefing-panel", "watchtower-panel", "unactioned-panel", "grid-2:rate-erc-panel,revenue-panel"]);
+        order, ["dash-notices", "whatsnew-band", "locale-note-host", "ops-strip", "today-heading", "kpi-row", "dash-cap-notice", "briefing-panel", "watchtower-panel", "grid-2:rate-erc-panel,revenue-panel"]);
 
       ok("§A2 · no console errors", noNewErr(page, errBefore), JSON.stringify(page.__err));
       await page.close();
@@ -288,7 +292,12 @@ const readRow = (page, table, id) => page.evaluate(async ({ table, id }) => {
       const errBefore = (page.__err || []).length;
       const shape = await page.evaluate(() => ({ id: DASH_DRAWER_PANEL_ID, keys: DASH_DRAWER_KEYS }));
       eq("§A3a · DASH_DRAWER_PANEL_ID is { rateerc: \"rate-erc-panel\" } only", shape.id, { rateerc: "rate-erc-panel" });
-      eq("§A3b · DASH_DRAWER_KEYS is [\"watchtower\",\"unactioned\",\"rateerc\",\"revenue\"]", shape.keys, ["watchtower", "unactioned", "rateerc", "revenue"]);
+      /* R88 · E: was ["watchtower","unactioned","rateerc","revenue"]. R88 · A removed the radar panel
+         (#unactioned-panel) — its cases are My Day rows — so its drawer key went with it. */
+      /* R88 · fixer (10 D1): was ["watchtower","rateerc","revenue"]. A stored pre-R88 nx_drawer_watchtower
+         = "open" re-opened the Checks drawer on every boot (its alerts on screen twice); the drawer is
+         born closed now, so its key is no longer restored (and is dropped at sign-in). */
+      eq("§A3b · DASH_DRAWER_KEYS is [\"rateerc\",\"revenue\"]", shape.keys, ["rateerc", "revenue"]);
       ok("§A3 · no console errors", noNewErr(page, errBefore), JSON.stringify(page.__err));
       await page.close();
     }
@@ -637,42 +646,32 @@ const readRow = (page, table, id) => page.evaluate(async ({ table, id }) => {
       const errBefore = (page.__err || []).length;
       await goto(page, "clients", 1500);
 
+      /* R88 · B (panel 04 #6/#10): was .client-controls holding three groups (saved views · adviser
+         select + note · sort + note). The row is now the list kit's ONE .list-tools row — search ·
+         Mine|All · Sort; the saved-views trio, the named-adviser select and both note lines are gone
+         (#client-adviser survives as a hidden compat select). Same properties asserted: one row,
+         its ids live, above #client-seg-def, and the sort still re-orders the list. */
       const groups = await page.evaluate(() => {
-        const wrap = document.querySelector(".client-controls");
+        const wrap = document.querySelector("#client-tools.list-tools");
         if (!wrap) return null;
-        return {
-          hasViews: !!wrap.querySelector(".client-views"),
-          hasAdvFilter: !!wrap.querySelector(".client-advfilter"),
-          hasSort: !!wrap.querySelector(".client-sort"),
-          groupCount: wrap.children.length,
-          ids: [...wrap.querySelectorAll("[id]")].map((e) => e.id),
-        };
+        return { ids: [...wrap.querySelectorAll("[id]")].map((e) => e.id), tops: [...wrap.children].filter((e) => e.offsetParent).map((e) => Math.round(e.getBoundingClientRect().top)) };
       });
-      ok("§G1a · .client-controls exists and wraps all three groups", groups && groups.hasViews && groups.hasAdvFilter && groups.hasSort, JSON.stringify(groups));
-      eq("§G1b · …exactly three direct child groups", groups && groups.groupCount, 3);
-      const expectedIds = ["client-views", "client-view-save", "client-view-del", "client-adviser", "client-adv-note", "cl-sort", "cl-sort-note"];
+      ok("§G1a · #client-tools is one .list-tools row", !!groups && new Set(groups.tops).size <= 2, JSON.stringify(groups));
+      const expectedIds = ["client-search", "cl-scope-mine", "cl-scope-all", "cl-sort"];
       const missing = expectedIds.filter((id) => !groups.ids.includes(id));
-      eq("§G1c · every one of the control row's known ids is still present and live", missing, []);
-
-      // §G1d — the sort div sits INSIDE the controls row, ABOVE the segment chips (moved from
-      // below #client-seg-def).
+      eq("§G1c · every one of the tools row's ids is present and live", missing, []);
+      eq("§G1b · …and the removed controls are gone (compat #client-adviser is hidden)", await page.evaluate(() => ["client-views", "client-view-save", "client-view-del", "client-adv-note", "cl-sort-note"].filter((id) => document.getElementById(id)).concat(document.getElementById("client-adviser").hidden ? [] : ["client-adviser visible"])), []);
       const layout = await page.evaluate(() => {
-        const controls = document.querySelector(".client-controls");
+        const controls = document.querySelector("#client-tools");
         const segDef = document.getElementById("client-seg-def");
         if (!controls || !segDef) return null;
-        // DOCUMENT_POSITION_FOLLOWING (4) on controls means segDef comes AFTER it.
         return !!(controls.compareDocumentPosition(segDef) & Node.DOCUMENT_POSITION_FOLLOWING);
       });
-      ok("§G1d · .client-controls (carrying the sort) sits above #client-seg-def", layout);
+      ok("§G1d · the tools row (carrying the sort) sits above #client-seg-def", layout);
 
-      // §G2 — the sort select still actually works from its new position.
-      const noteBefore = await page.$eval("#cl-sort-note", (e) => e.textContent).catch(() => "");
-      eq("§G2a · \"Name A–Z\" (the default) carries no sort note", noteBefore, "");
+      // §G2 — the sort select still actually works (R88 · B: the sort-note line is gone).
       await page.selectOption("#cl-sort", "recent");
       await wait(page, 700);
-      const noteAfter = await page.$eval("#cl-sort-note", (e) => e.textContent).catch(() => "");
-      eq("§G2b · choosing \"Recently added\" updates the sort note to the exact copy app.js writes", noteAfter,
-        "Newest first, by the date the client record was created here — not necessarily the date they became a client of the firm.");
       const createdAtOrder = await page.evaluate(async () => {
         const ids = [...document.querySelectorAll("#client-list .client-row")].slice(0, 20).map((r) => r.dataset.client);
         const { data } = await window.__mockDb.from("clients").select("id,created_at").in("id", ids);
@@ -735,6 +734,9 @@ const readRow = (page, table, id) => page.evaluate(async ({ table, id }) => {
       // an EMPTY last-contact — the biggest tie group loadRetentionCold's own comment describes.
 
       await goto(page, "retention", 1800);
+      // R88 · C: the Gone-quiet panel is the "Gone quiet" chip on the rates list's strip — press it.
+      await page.evaluate(() => document.querySelector('#ret-segs .seg-btn[data-seg="cold"]').click());
+      await page.waitForTimeout(2000);
       const order = await page.evaluate(() => [...document.querySelectorAll("#ret-cold-list .row-item .t[onclick]")].map((e) => {
         const m = e.getAttribute("onclick").match(/openClient\('([^']+)'\)/);
         return m ? m[1] : null;

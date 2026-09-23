@@ -397,9 +397,12 @@ async function setSettingLive(page, key, value) {
       });
       eq("§B1e · the “All” chip counts the FILTERED book, not the firm's", allChip, expected.length);
 
-      const note = await page.$eval("#client-adv-note", (e) => ({ hidden: e.classList.contains("hidden"), text: e.textContent }));
-      ok("§B1f · the note under the control says the page opened on your own clients and how to leave",
-        !note.hidden && /opens on your own clients/.test(note.text) && /All advisers/.test(note.text), JSON.stringify(note));
+      /* R88 · B: was the #client-adv-note sentence ("opens on your own clients … pick All advisers");
+         now the kit's Mine|All toggle says it — Mine pressed, All one press away (the note is gone:
+         prose rule, panel 04 #6). */
+      const note = await page.evaluate(() => ({ mine: (document.querySelector("#cl-scope-mine") || {}).getAttribute?.("aria-pressed"), all: !!document.querySelector("#cl-scope-all"), gone: !document.querySelector("#client-adv-note") }));
+      ok("§B1f · the page says it opened on your own clients (Mine pressed) and how to leave (All)",
+        note.mine === "true" && note.all && note.gone, JSON.stringify(note));
       ok("§B1 · no console errors", noNewErr(page, errBefore), JSON.stringify(page.__err));
       await page.close();
     }
@@ -410,8 +413,9 @@ async function setSettingLive(page, key, value) {
       const errBefore = (page.__err || []).length;
       await goto(page, "clients", 1800);
       eq(`§B2 · ${persona} opens on "all"`, await page.$eval("#client-adviser", (e) => e.value), "all");
-      const noteHidden = await page.$eval("#client-adv-note", (e) => e.classList.contains("hidden"));
-      eq(`§B2 · ${persona} · …and the scope note stays hidden (nothing is narrowed)`, noteHidden, true);
+      // R88 · B: was "#client-adv-note stays hidden"; the note is gone — All is the pressed scope.
+      const allPressed = await page.$eval("#cl-scope-all", (e) => e.getAttribute("aria-pressed"));
+      eq(`§B2 · ${persona} · …and the scope toggle reads All (nothing is narrowed)`, allPressed, "true");
       const shown = await page.$$eval("#client-list .client-row", (rows) => rows.length);
       ok(`§B2 · ${persona} · …and more clients are on screen than any one adviser holds`, shown > (await clientsOfAdviser(page, "p2")).length, String(shown));
       ok(`§B2 · ${persona} · no console errors`, noNewErr(page, errBefore), JSON.stringify(page.__err));
@@ -423,7 +427,7 @@ async function setSettingLive(page, key, value) {
       const page = await newPage(browser, "p2");
       const errBefore = (page.__err || []).length;
       await goto(page, "clients", 1800);
-      await page.selectOption("#client-adviser", "all");
+      await page.click("#cl-scope-all");   // R88 · B: was selectOption("#client-adviser", "all") — the select is a hidden compat control; All is the kit toggle
       await wait(page, 900);
       eq("§B3a · picking All advisers persists nx_clients_adviser", await lsGet(page, "nx_clients_adviser_p2"), "all");   // PATCHED R82 · A4 — per user
 
@@ -433,7 +437,8 @@ async function setSettingLive(page, key, value) {
       eq("§B3b · …and the page opens on it next time, not back on the adviser's own book",
         await page.$eval("#client-adviser", (e) => e.value), "all");
 
-      await page.selectOption("#client-adviser", "p3");
+      // R88 · B: a colleague's book has no button (Mine|All); it is set through the hidden compat select, as Retention's door does.
+      await page.$eval("#client-adviser", (e, v) => { e.value = v; e.dispatchEvent(new Event("change")); }, "p3");
       await wait(page, 900);
       eq("§B3c · picking a COLLEAGUE persists too", await lsGet(page, "nx_clients_adviser_p2"), "p3");   // PATCHED R82 · A4
       await page.reload();
@@ -573,6 +578,9 @@ async function setSettingLive(page, key, value) {
 
       // The Retention page's Gone-quiet panel reads the same one function.
       await goto(page, "retention", 2200);
+      // R88 · C: the Gone-quiet panel is a chip on the rates list now — press it; its fold keeps #ret-cold-sub.
+      await page.evaluate(() => document.querySelector('#ret-segs .seg-btn[data-seg="cold"]').click());
+      await page.waitForTimeout(2000);
       const sub = await page.$eval("#ret-cold-sub", (e) => e.textContent);
       ok("§C2f · the Retention “Gone quiet” panel prints 3 too", /3-month window/.test(sub) && /is a setting/.test(sub), sub);
       const inPanel = await page.evaluate((id) => [...document.querySelectorAll("#ret-cold-list .row-item .t")].some((t) => (t.getAttribute("onclick") || "").includes(id)), probe.clientId);
@@ -633,7 +641,9 @@ async function setSettingLive(page, key, value) {
       const page = await newPage(browser, "p2");
       const errBefore = (page.__err || []).length;
       await goto(page, "clients", 2000);
-      const names = await page.$$eval("#client-views option", (os) => os.map((o) => o.value));
+      /* R88 · B: was read off #client-views' options — the Clients saved-views trio is removed (panel
+         04 #10); the starter set it seeded is the dormant data path, read here directly. */
+      const names = await page.evaluate(() => starterViewSet().clients.map((v) => v.name));
       ok("§C5 · at six months the starter view is still “My cold clients (6mo+)”",
         names.includes("My cold clients (6mo+)"), JSON.stringify(names));
       ok("§C5 · no console errors", noNewErr(page, errBefore), JSON.stringify(page.__err));

@@ -213,7 +213,8 @@ const visibleProse = (page, sectionSel) => page.evaluate((sel) => {
       await page.waitForTimeout(2200);
       const nextState = await page.evaluate(() => ({
         shown: [...document.querySelectorAll("#ret-month-chips .ret-month-chip")].filter((b) => b.offsetParent !== null).map((b) => b.dataset.month),
-        active: (document.querySelector("#ret-month-chips .ret-month-chip.scope-active") || {}).dataset?.month,
+        /* R88 · C: the chips are the kit's (.seg-btn, aria-pressed/.active) — was .scope-active. */
+        active: (document.querySelector("#ret-month-chips .ret-month-chip[aria-pressed='true']") || {}).dataset?.month,
         sub: document.getElementById("ret-rates-sub").textContent,
       }));
       ok("B3c · a hidden key that IS the pick shows its chip pressed, so a remembered choice is never invisible", nextState.active === "next" && nextState.shown.includes("next") && /Showing only rates ending in/.test(nextState.sub), JSON.stringify(nextState));
@@ -224,12 +225,14 @@ const visibleProse = (page, sectionSel) => page.evaluate((sel) => {
       const sort = await page.evaluate(() => {
         const s = document.getElementById("ret-sort");
         return {
-          inTools: !!(s && s.closest(".page-tools")), values: s ? [...s.options].map((o) => o.value) : null, value: s && s.value,
+          inTools: !!(s && s.closest(".list-tools")), values   /* R88 · C: the kit's tools row (was .page-tools) */: s ? [...s.options].map((o) => o.value) : null, value: s && s.value,
           h3Buttons: document.querySelectorAll("#ret-rates-h3 button").length, oldIds: !!(document.getElementById("ret-sort-dir") || document.getElementById("ret-rates-sort")),
         };
       });
       ok("B4 · ONE sort <select> sits in the page's tools row; the h3 carries no buttons and the two old toggles are gone", sort.inTools && sort.h3Buttons === 0 && !sort.oldIds, JSON.stringify(sort));
-      eq("B4b · its options are the three orders — value at risk for the money-holder only", sort.values, persona === "p4" ? ["newest", "oldest", "value"] : ["newest", "oldest"]);
+      /* R88 · C: was three orders; "Never contacted first" (the old untouched toggle) is the fourth
+         option now — the toggle chip is gone (04 #2e). */
+      eq("B4b · its options are the orders — value at risk for the money-holder only, never-contacted-first for all", sort.values, persona === "p4" ? ["newest", "oldest", "untouched", "value"] : ["newest", "oldest", "untouched"]);
       eq("B4c · the default order is what it always was", sort.value, persona === "p4" ? "value" : "newest");
       // The select really re-orders: pick the oldest-first order and check the ended group's dates ascend.
       await page.selectOption("#ret-sort", "oldest");
@@ -257,8 +260,10 @@ const visibleProse = (page, sectionSel) => page.evaluate((sel) => {
       eq("B5 · the bulk-bar's 30-word provenance note is gone", notes.bulkNote, false);
       ok("B5b · the untouched note prints only when the count is above zero", notes.untouchedNote === (notes.untouchedCount > 0), JSON.stringify(notes));
       ok("B5c · the group definitions are the headings' titles, not paragraphs between the reader and the rows", notes.groupSubs === 0 && notes.groupTitled, JSON.stringify(notes));
-      if (persona === "p2") ok("B5d · an adviser's Mine note is one clause and still says whose it is", !notes.scopeNoteHidden && /your cases and your clients/.test(notes.scopeNote) && words(notes.scopeNote) <= 25, notes.scopeNote);
-      else ok("B5d · under All the scope note is not shown — every panel line already says whose", notes.scopeNoteHidden, notes.scopeNote);
+      /* R88 · C: was "an adviser's Mine note is shown". The pressed Mine in the kit's tools row and the
+         panel's one line ("Showing your cases: …") both say whose, so the note is never shown now —
+         it cost an adviser the first row's place above the fold (r88_book_c §E1). */
+      ok("B5d · the scope note is not shown — the pressed Mine/All and the panel line already say whose", notes.scopeNoteHidden, notes.scopeNote);
 
       await page.evaluate(() => window.retSetSort("newest"));
       await page.waitForTimeout(2400);
@@ -285,8 +290,8 @@ const visibleProse = (page, sectionSel) => page.evaluate((sel) => {
           verbs,
           start: !!r.querySelector("button.btn-retention[onclick*='startRetentionCase']"),
           remortgageChip: [...r.querySelectorAll(".ret-out-chip")].some((b) => /Re-mortgaging/.test(b.textContent)),
-          more: !!r.querySelector("details.ret-row-more"),
-          hiddenVerbs: [...r.querySelectorAll("details.ret-row-more button")].map((b) => b.textContent.trim()),
+          more: !!r.querySelector("details.row-more"),   // R88 · C: the kit's More ▾ (was details.ret-row-more)
+          hiddenVerbs: [...r.querySelectorAll("details.row-more button")].map((b) => b.textContent.trim()),
           outChips: r.querySelectorAll(".ret-out-chip").length,
           factLines: r.querySelectorAll(".row-main > .s").length,
         };
@@ -299,15 +304,15 @@ const visibleProse = (page, sectionSel) => page.evaluate((sel) => {
       ok("C2b · every row has a “More ▾” holding Book review, plus the outcome chips on completed rows", rows.every((r) => r.more && r.hiddenVerbs.some((v) => /Book review/.test(v)) && (r.outChips === 0 || r.hiddenVerbs.some((v) => /Renewed elsewhere/.test(v)))), JSON.stringify(rows[0].hiddenVerbs));
       // More ▾ is a real <details>: opening it exposes the verbs, and they still work.
       const exposed = await page.evaluate(() => {
-        const d = document.querySelector("#ret-rates-list details.ret-row-more");
+        const d = document.querySelector("#ret-rates-list details.row-more");
         const before = [...d.querySelectorAll("button")].filter((b) => b.offsetParent !== null).length;
         d.open = true;
         const after = [...d.querySelectorAll("button")].filter((b) => b.offsetParent !== null).length;
         return { before, after, n: d.querySelectorAll("button").length };
       });
       ok("C2c · opening More exposes exactly the hidden verbs", exposed.before === 0 && exposed.after === exposed.n && exposed.n >= 1, JSON.stringify(exposed));
-      await page.evaluate(() => document.querySelectorAll("#ret-rates-list details.ret-row-more").forEach((d) => { d.open = true; }));
-      await page.click("#ret-rates-list details.ret-row-more button[onclick*=\"retBookReview\"]");
+      await page.evaluate(() => document.querySelectorAll("#ret-rates-list details.row-more").forEach((d) => { d.open = true; }));
+      await page.click("#ret-rates-list details.row-more button[onclick*=\"retBookReview\"]");
       await page.waitForTimeout(1800);
       const appt = await page.evaluate(() => ({ form: !!document.getElementById("appt-form"), title: (document.getElementById("appt-form") || { elements: {} }).elements.title?.value }));
       ok("C2d · Book review from inside More still opens the diary editor prefilled", appt.form && appt.title === "Rate-end review", JSON.stringify(appt));
@@ -336,61 +341,65 @@ const visibleProse = (page, sectionSel) => page.evaluate((sel) => {
         await page.waitForTimeout(700);
         const st = await page.evaluate(() => ({
           tile: Number(document.getElementById("prot-kpi-count").textContent),
-          rows: document.querySelectorAll("#prot-list-table tr.prot-row").length,
+          rows: document.querySelectorAll("#prot-list .kit-row.prot-row").length,   // R88 · C: one row per client (was tr.prot-row)
           cap: (document.getElementById("prot-cap-line") || {}).textContent || "",
           empty: !!document.querySelector("#prot-table .empty-state, #prot-table .empty"),
         }));
-        // "Showing the best 250 of 1,516 opportunities…" / "Showing the best 12 in this view…" / "5 opportunities on your cases…"
-        const n = Number(((st.cap.match(/best (\d+)/) || st.cap.match(/^(\d+) opportunit/) || [])[1]));
+        // R88 · C: the one line leads with the client count — "4 clients, 5 opportunities (…)…"
+        const n = Number(((st.cap.match(/^(\d+) client/) || [])[1]));
         ok(`D1·${sc} · the tile and the line read the SAME number (${st.tile}) and it is the rows on screen`, st.tile === st.rows && (st.empty || n === st.tile), JSON.stringify(st));
       }
       await page.click("#prot-scope-all"); await page.waitForTimeout(600);
       const page1 = await page.evaluate(() => ({
-        hashCol: document.querySelectorAll("#prot-list-table .prot-col-n").length,
+        hashCol: document.querySelectorAll("#page-protection .prot-col-n").length,
         hover: /hover the #/.test(document.getElementById("page-protection").innerText),
-        rankTitle: (document.querySelector("#prot-list-table tr.prot-row .prot-rank") || {}).title || "",
-        rankText: (document.querySelector("#prot-list-table tr.prot-row .prot-rank") || {}).textContent || "",
-        glyphs: [...document.querySelectorAll("#prot-list-table tr.prot-row")].map((r) => (r.textContent.match(/📞/g) || []).length),
-        logcall: [...document.querySelectorAll("#prot-list-table tr.prot-row .prot-actions button[aria-label='Log a call']")].map((b) => b.textContent.trim()),
+        /* R88 · C: kit rows (.prot-row), the rank is a row chip, Log call a labelled verb "📝 Log call". */
+        rankTitle: (document.querySelector("#prot-list .prot-row .prot-rank") || {}).title || "",
+        rankText: (document.querySelector("#prot-list .prot-row .prot-rank") || {}).textContent || "",
+        glyphs: [...document.querySelectorAll("#prot-list .prot-row")].map((r) => (r.textContent.match(/📞/g) || []).length),
+        logcall: [...document.querySelectorAll("#prot-list .prot-row .row-acts .prot-logcall")].map((b) => b.textContent.trim().slice(0, 2)),
         moneyNote: !!document.getElementById("prot-money-note"),
         capWords: (document.getElementById("prot-cap-line") || {}).textContent.trim().split(/\s+/).length,
       }));
       eq("D2 · the # column is gone", page1.hashCol, 0);
       eq("D2b · …and so is the “hover the # column” sentence", page1.hover, false);
       ok("D2c · the rank rides on the client cell with the score spelled out in its tooltip", /^#1$/.test(page1.rankText.trim()) && /#1 — score [\d.]+:/.test(page1.rankTitle) && /stage \d+/.test(page1.rankTitle), page1.rankTitle.slice(0, 80));
-      ok("D3 · exactly one 📞 per table row — the dial glyph beside the name; Log call is 📝", page1.glyphs.length > 0 && page1.glyphs.every((g) => g <= 1) && page1.logcall.every((t) => t === "📝"), JSON.stringify({ g: page1.glyphs.slice(0, 6), l: page1.logcall.slice(0, 3) }));
+      ok("D3 · exactly one 📞 per table row — the dial glyph beside the name; Log call is 📝", page1.glyphs.length > 0 && page1.glyphs.every((g) => g <= 1) && page1.logcall.length === page1.glyphs.length && page1.logcall.every((t) => t === "📝"), JSON.stringify({ g: page1.glyphs.slice(0, 6), l: page1.logcall.slice(0, 3) }));
       eq("D4 · no owner-only-money apology paragraph exists on the page", page1.moneyNote, false);
       ok("D4b · the line under the tools row is ≤ 25 words", page1.capWords <= 25, String(page1.capWords));
 
-      // D5 — the bands are filter options over the ONE table, same predicates, collapsed below.
+      /* D5 — R88 · C: RE-POINTED. The two bands were filter OPTIONS over the one table (R87) with
+         collapsed <details> below; they are CHIPS on #prot-segs now (the status select is a hidden
+         compat select), the band panels are gone, and every count is CLIENTS (one row per client). */
       const band = await page.evaluate(async () => {
-        const gi = (r) => ["purchase", "first_time_buyer", "buy_to_let", "remortgage"].includes(r.case_kind) && (r.gi_status || "not_discussed") === "not_discussed";
+        const gi = (r) => caseGiApplies(r.case_kind) && (r.gi_status || "not_discussed") === "not_discussed";
         const { data } = await window.__mockDb.rpc("get_protection_pipeline", { p_scope: "all" });
         const rows = data || [];
-        const opts = [...document.querySelectorAll("#prot-filter option")].map((o) => ({ v: o.value, t: o.textContent }));
+        const chip = (k) => Number((document.querySelector(`#prot-segs .seg-btn[data-seg="${k}"] .seg-count`) || {}).textContent);
+        const clients = (list) => new Set(list.map((r) => r.client_id)).size;
         return {
-          opts, wantNo: rows.filter((r) => !r.live).length, wantGi: rows.filter(gi).length,
-          bandNo: Number(document.getElementById("prot-calllist-count").textContent), bandGi: Number(document.getElementById("prot-gi-count").textContent),
-          details: [...document.querySelectorAll("#prot-calllist-panel, #prot-gi-panel")].map((d) => ({ tag: d.tagName, open: d.open, hidden: d.classList.contains("hidden") })),
+          wantNo: clients(rows.filter((r) => !r.live)), wantGi: clients(rows.filter(gi)),
+          bandNo: chip("nooutcome"), bandGi: chip("gi"),
+          details: document.querySelectorAll("#prot-calllist-panel, #prot-gi-panel").length,
+          compatHidden: (() => { const s = document.getElementById("prot-filter"); const r = s.getBoundingClientRect(); return s.getAttribute("aria-hidden") === "true" && r.width <= 1 && r.height <= 1; })(),
         };
       });
-      const optNo = band.opts.find((o) => o.v === "nooutcome"), optGi = band.opts.find((o) => o.v === "gi");
-      ok("D5 · the status filter offers both bands as options, each carrying its scoped count", !!optNo && !!optGi && Number((optNo.t.match(/\((\d+)\)/) || [])[1]) === band.bandNo && Number((optGi.t.match(/\((\d+)\)/) || [])[1]) === band.bandGi, JSON.stringify(band.opts));
-      if (persona === "p4") ok("D5b · …and those counts are the RPC's own predicates (All scope)", band.bandNo === band.wantNo && band.bandGi === band.wantGi, JSON.stringify(band));
-      ok("D5c · both bands are collapsed <details> — rendered, closed, not a second list on the page", band.details.length === 2 && band.details.every((d) => d.tag === "DETAILS" && !d.open && !d.hidden), JSON.stringify(band.details));
-      await page.selectOption("#prot-filter", "nooutcome"); await page.waitForTimeout(700);
+      ok("D5 · both bands are chips on the one strip, each carrying its scoped client count", Number.isFinite(band.bandNo) && Number.isFinite(band.bandGi), JSON.stringify(band));
+      if (persona === "p4") ok("D5b · …and those counts are the RPC's own predicates (All scope, distinct clients)", band.bandNo === band.wantNo && band.bandGi === band.wantGi, JSON.stringify(band));
+      ok("D5c · the band panels are gone and #prot-filter is a visually-hidden compat select", band.details === 0 && band.compatHidden, JSON.stringify(band));
+      await page.selectOption("#prot-filter", "nooutcome");   // the visually-hidden compat select still drives the list
+      await page.waitForTimeout(700);
       const filtered = await page.evaluate(() => ({
-        rows: document.querySelectorAll("#prot-list-table tr.prot-row").length, tile: Number(document.getElementById("prot-kpi-count").textContent),
-        completedOnly: [...document.querySelectorAll("#prot-list-table tr.prot-row .prot-col-case")].every((td) => /Completed/.test(td.textContent)),
-        names: [...document.querySelectorAll("#prot-list-table tr.prot-row .prot-client")].map((e) => e.textContent),
-        bandNames: [...document.querySelectorAll("#prot-calllist .row-item .t")].map((e) => e.textContent),
+        rows: document.querySelectorAll("#prot-list .prot-row").length, tile: Number(document.getElementById("prot-kpi-count").textContent),
+        completedOnly: [...document.querySelectorAll("#prot-list .prot-row .prot-case-chip")].every((c) => /Completed/.test(c.textContent)),
+        names: [...document.querySelectorAll("#prot-list .prot-row .row-head > .t")].map((e) => e.textContent),
       }));
-      ok("D5d · picking “Completed, no protection outcome” filters the ONE table to exactly the band's rows", filtered.rows === band.bandNo && filtered.tile === filtered.rows && filtered.completedOnly, JSON.stringify(filtered));
-      eq("D5e · …the same clients the band lists (first 25), in the same order", filtered.names.slice(0, 25), filtered.bandNames);
-      await page.selectOption("#prot-filter", "gi"); await page.waitForTimeout(700);
-      const giRows = await page.evaluate(() => document.querySelectorAll("#prot-list-table tr.prot-row").length);
-      eq("D5f · and “GI not discussed” filters to the GI band's rows", giRows, band.bandGi);
-      await page.selectOption("#prot-filter", "all"); await page.waitForTimeout(500);
+      ok("D5d · picking “Completed, no protection outcome” filters the ONE list to exactly the chip's rows", filtered.rows === band.bandNo && filtered.tile === filtered.rows && filtered.completedOnly, JSON.stringify(filtered));
+      eq("D5e · …one row per client (no name twice)", filtered.names.filter((n, i) => filtered.names.indexOf(n) !== i), []);
+      await page.evaluate(() => document.querySelector('#prot-segs .seg-btn[data-seg="gi"]').click()); await page.waitForTimeout(700);
+      const giRows = await page.evaluate(() => document.querySelectorAll("#prot-list .prot-row").length);
+      eq("D5f · and “GI not discussed” filters to the GI chip's rows", giRows, band.bandGi);
+      await page.evaluate(() => document.querySelector('#prot-segs .seg-btn[data-seg="all"]').click()); await page.waitForTimeout(500);
       ok("§D · no console errors", noNewErr(page, errBefore), JSON.stringify(realErrs(page)));
       await page.close();
     }
@@ -410,13 +419,14 @@ const visibleProse = (page, sectionSel) => page.evaluate((sel) => {
         const folds = await page.evaluate(() => ({
           claw: !!document.querySelector("#prot-clawback-how-fold #prot-clawback-basis"), clawOpen: (document.getElementById("prot-clawback-how-fold") || {}).open,
           clawText: (document.getElementById("prot-clawback-basis") || {}).textContent || "",
-          giBasis: (document.getElementById("prot-gi-basis") || {}).textContent || "", giInFold: !!document.querySelector("#prot-gi-panel #prot-gi-basis"),
-          kpiCaption: (document.querySelector("#prot-summary .kpi .s") || {}).textContent || "",
+          /* R88 · C: the GI band is a chip; its definition is the chip's title. The KPI tiles are one line. */
+          giBasis: (document.querySelector('#prot-segs .seg-btn[data-seg="gi"]') || {}).title || "",
+          kpiCaption: (document.getElementById("prot-summary") || {}).textContent || "",
         }));
         ok(`E2·${persona} · the clawback basis keeps its id and its words inside a closed howFold`, folds.claw && folds.clawOpen === false && /assumption/.test(folds.clawText) && /providers differ/.test(folds.clawText), folds.clawText.slice(0, 80));
         if (persona === "p2") ok("E2b · …and still tells an adviser the commission column is Owner-only", /Owner only/.test(folds.clawText), folds.clawText.slice(-160));
-        ok(`E3·${persona} · the GI band's 60-word basis sits inside the collapsed band with its id`, folds.giInFold && /no extra reads/.test(folds.giBasis), folds.giBasis.slice(0, 80));
-        if (persona === "p4") ok("E4 · the KPI tile caption is ≤ 25 words", words(folds.kpiCaption) <= 25 && folds.kpiCaption.length > 0, folds.kpiCaption);
+        ok(`E3·${persona} · the GI definition is the GI chip's title (R88 · C: the band is a chip)`, /GI/.test(folds.giBasis) && /product transfer/.test(folds.giBasis), folds.giBasis.slice(0, 80));
+        ok(`E4·${persona} · the one summary line (was three KPI tiles) is ≤ 25 words`, words(folds.kpiCaption) <= 25 && folds.kpiCaption.length > 0, folds.kpiCaption);
         ok(`§E·${persona} · no console errors`, noNewErr(page, errBefore), JSON.stringify(realErrs(page)));
         await page.close();
       }

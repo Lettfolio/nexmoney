@@ -294,14 +294,28 @@ const sendCalls = (page) => page.evaluate(() => window.__sendCalls || []);
       await page.selectOption("#prot-filter", "quoted");
       await page.waitForTimeout(900);
 
-      ok("S3c · the Protection table gained a checkbox column", await page.evaluate(() => !!document.querySelector("#prot-list-table th.bulk-col") && document.querySelectorAll("#prot-list-table .prot-cb").length > 0));
+      /* R88 · C: RE-POINTED. The table is the list kit with ONE ROW PER CLIENT: each row's checkbox
+         (.prot-cb, the CLIENT id) selects every case of that client in view, the bar counts the
+         CLIENTS ticked, and the bulk verbs write every selected case. So this picks client rows until
+         six QUOTED cases are selected (the old "six rows") and reads the case ids off the rows. */
+      ok("S3c · the Protection list carries a checkbox per row (+ select-all)", await page.evaluate(() => !!document.querySelector("#prot-list #prot-bulk-all") && document.querySelectorAll("#prot-list .prot-cb").length > 0));
       const quotedBefore = await page.evaluate(() => Number(document.querySelector("#prot-kpi-quoted").textContent));
       ok("fixture · at least six quoted opportunities are on screen", quotedBefore >= 6, String(quotedBefore));
 
-      const picked = await page.evaluate(() => [...document.querySelectorAll("#prot-list-table .prot-cb")].slice(0, 6).map((cb) => cb.dataset.id));
-      eq("fixture · six quoted rows selected", picked.length, 6);
-      for (const id of picked) await page.check(`#prot-list-table .prot-cb[data-id="${id}"]`);
-      eq("S3c · the bulk bar appears with the count", await page.evaluate(() => ({ hidden: document.querySelector("#prot-bulk-bar").hidden, n: document.querySelector("#prot-bulk-n").textContent })), { hidden: false, n: "6" });
+      const pickRows = await page.evaluate(() => {
+        const out = { clients: [], cases: [] };
+        for (const r of document.querySelectorAll("#prot-list .prot-row")) {
+          const cs = protRowCases.get(r.querySelector(".prot-cb").dataset.id) || [];   // every case the row's tick selects
+          if (out.cases.length + cs.length > 6) continue;
+          out.clients.push(r.querySelector(".prot-cb").dataset.id); out.cases.push(...cs);
+          if (out.cases.length === 6) break;
+        }
+        return out;
+      });
+      const picked = pickRows.cases;
+      eq("fixture · six quoted cases selected (by client row)", picked.length, 6);
+      for (const id of pickRows.clients) await page.check(`#prot-list .prot-cb[data-id="${id}"]`);
+      eq("S3c · the bulk bar appears with the count (clients ticked)", await page.evaluate(() => ({ hidden: document.querySelector("#prot-bulk-bar").classList.contains("is-empty"), n: document.querySelector("#prot-bulk-n").textContent })), { hidden: false, n: String(pickRows.clients.length) });
 
       page.__dialogs = [];
       /* R37 · non-masking repair — R7-3's requirement ("policy taken" needs a commission figure)
@@ -335,14 +349,15 @@ const sendCalls = (page) => page.evaluate(() => window.__sendCalls || []);
       eq("S3c · …each carrying the commission that was typed", res.commissions, new Array(6).fill(1250));
       const quotedAfter = await page.evaluate(() => Number(document.querySelector("#prot-kpi-quoted").textContent));
       eq("S3c · the KPI tiles refresh — six fewer quoted", quotedAfter, quotedBefore - 6);
-      eq("S3c · the selection is cleared afterwards", await page.evaluate(() => document.querySelector("#prot-bulk-bar") ? document.querySelector("#prot-bulk-bar").hidden : true), true);
+      eq("S3c · the selection is cleared afterwards", await page.evaluate(() => document.querySelector("#prot-bulk-bar") ? document.querySelector("#prot-bulk-bar").classList.contains("is-empty") : true), true);   // R88 · C: the kit bar empties
 
       // Backing out changes nothing.
       await page.selectOption("#prot-filter", "all");
       await page.waitForTimeout(800);
-      const one = await page.evaluate(() => (document.querySelector("#prot-list-table .prot-cb") || {}).dataset.id);
+      const oneRow = await page.evaluate(() => { const r = document.querySelector("#prot-list .prot-row"); return r ? { client: r.querySelector(".prot-cb").dataset.id, caseId: r.querySelector(".prot-fact-case").dataset.case } : {}; });   // R88 · C
+      const one = oneRow.caseId;
       const wasStatus = await page.evaluate(async (id) => (await window.__mockDb.from("cases").select("protection_status").eq("id", id).single()).data.protection_status, one);
-      await page.check(`#prot-list-table .prot-cb[data-id="${one}"]`);
+      await page.check(`#prot-list .prot-cb[data-id="${oneRow.client}"]`);
       page.__dialogPlan = ["dismiss"];
       await page.selectOption("#prot-bulk-status", "declined");
       await page.waitForTimeout(900);

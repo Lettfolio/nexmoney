@@ -189,13 +189,23 @@ const isoDaysFromNow = (n) => new Date(Date.now() + n * 86400000).toISOString().
    (onclick="openCase('<id>')" / onclick="openClient('<id>')") rather than a data- attribute — this
    pulls it back out the same way the row was built, so a test never has to guess a selector the
    product markup doesn't offer. */
+/* R88 · C: RE-POINTED. The Retention rows are the list kit's: the NAME opens the CLIENT and the
+   case is a chip (.ret-case-chip, onclick="openCase('<id>')"), so an openCase id is read off the
+   chip when the name no longer carries it. And the Gone-quiet PANEL is a chip on the one strip
+   (#ret-segs, data-seg="cold") whose list is #ret-cold-list — pressed here to read it, and
+   released again so the caller's page is left on the rates it was on. */
 async function rowIds(page, containerSel, fnName) {
-  return page.evaluate(({ sel, fn }) => {
-    return [...document.querySelectorAll(sel + " .row-item .t[onclick]")].map((el) => {
-      const m = el.getAttribute("onclick").match(new RegExp(fn + "\\('([^']+)'\\)"));
+  const cold = containerSel === "#ret-cold-list";
+  const press = () => page.evaluate(() => { const b = document.querySelector('#ret-segs .seg-btn[data-seg="cold"]'); if (b) b.click(); });
+  if (cold) { await press(); await page.waitForTimeout(1800); }
+  const ids = await page.evaluate(({ sel, fn }) => {
+    return [...document.querySelectorAll(sel + " .row-item .t[onclick], " + sel + " .row-item .ret-case-chip[onclick]")].map((el) => {
+      const m = el.getAttribute("onclick").match(new RegExp(fn + "\\('([^']+)'"));
       return m ? m[1] : null;
     }).filter(Boolean);
   }, { sel: containerSel, fn: fnName });
+  if (cold) { await press(); await page.waitForTimeout(1800); }
+  return ids;
 }
 async function groupHeadings(page, containerSel) {
   return page.evaluate((sel) => [...document.querySelectorAll(sel + " .ret-group-h")].map((h) => h.textContent.replace(/\s+/g, " ").trim()), containerSel);
@@ -603,6 +613,9 @@ async function groupHeadings(page, containerSel) {
       // reads CLIENT_SEG_CONTACT_MONTHS — this computes the EXPECTED age off the app's own function
       // rather than this file re-deriving the day-count math independently.
       const expectedAge = await page.evaluate((ts) => lastContactAgeLabel(ts), agedTs);
+      // R88 · C: the Gone-quiet list (and #ret-cold-goto on its line) shows while its chip is pressed.
+      await page.evaluate(() => document.querySelector('#ret-segs .seg-btn[data-seg="cold"]').click());
+      await wait(page, 1800);
       const agedRowText = await page.evaluate((id) => {
         const row = [...document.querySelectorAll("#ret-cold-list .row-item")].find((r) => r.querySelector(`.t[onclick="openClient('${id}')"]`));
         return row ? row.textContent : null;
@@ -630,6 +643,9 @@ async function groupHeadings(page, containerSel) {
       const errBefore = (page.__err || []).length;
       await clearNxKeys(page);
       await goto(page, "retention", 1500);
+      // R88 · C: the hand-off rides on the Gone-quiet chip's line — press the chip first.
+      await page.evaluate(() => document.querySelector('#ret-segs .seg-btn[data-seg="cold"]').click());
+      await wait(page, 1800);
       const gotoPresent = await page.$("#ret-cold-goto");
       ok("fixture · #ret-cold-goto is present for the owner too", !!gotoPresent);
       await page.click("#ret-cold-goto");

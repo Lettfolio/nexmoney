@@ -200,15 +200,19 @@ const boxes = (page, sel) => page.evaluate((s) => [...document.querySelectorAll(
     ok("A1i (R73-HF1) · …and the cage re-measures itself once the cap is honest again",
       parseInt(hf1.after.inline, 10) >= 160 && hf1.after.clientH >= 160 && hf1.after.foot === true, JSON.stringify(hf1.after));
 
-    const radar = await page.evaluate(() => {
-      const l = document.getElementById("unactioned-list");
-      const foot = document.getElementById("unactioned-list-cage");
-      return { clientH: l.clientHeight, scrollH: l.scrollHeight, foot: foot ? foot.textContent.replace(/\s+/g, " ").trim() : null };
-    });
-    ok("A1h · the No-next-action radar is un-caged too (it was a 181px list in a 300px card)",
-      radar.clientH > 181, JSON.stringify(radar));
-    ok("A1i · …and either shows everything, or says how many cases it is still holding back",
-      radar.scrollH <= radar.clientH + 2 || /^\d+ more cases ↓$/.test(radar.foot || ""), JSON.stringify(radar));
+    /* R88 · A: was "the No-next-action radar is un-caged too / shows everything or says how many
+       it holds back" — measured on #unactioned-list. The radar has no list of its own any more: its
+       cases are Worth doing rows INSIDE #briefing-list (R88-DESIGN §A), so they sit under My Day's
+       own cage, whose honesty A1a–A1i above already prove. What is asserted here is that move. */
+    const radar = await page.evaluate(() => ({
+      list: !!document.getElementById("unactioned-list"), foot: !!document.getElementById("unactioned-list-cage"),
+      inMyDay: document.querySelectorAll("#briefing-list .brief-row[data-radar]").length,
+      src: window.__todaySources().radar.length,
+    }));
+    ok("A1h (R88) · the radar's own caged list is gone — no #unactioned-list, no second cage",
+      !radar.list && !radar.foot, JSON.stringify(radar));
+    ok("A1i (R88) · …its cases are rows under My Day's one cage instead, every one of them",
+      radar.src > 0 && radar.inMyDay === radar.src, JSON.stringify(radar));
 
     /* THE OWNER'S DECISION, 28 Aug 2026: TODAY → URGENT → WORTH DOING. Asserted on the band
        CLASSES, which are what a band's membership is defined by, not on their labels. */
@@ -284,6 +288,11 @@ const boxes = (page, sel) => page.evaluate((s) => [...document.querySelectorAll(
     console.log("\n— §B · A2 · sticky bulk bars, reserved height, select-all expands");
     const page = await boot(browser, "p1", DESK);
     await goPage(page, "dashboard");
+    /* R88 · A: the bulk-triage bar lives in the Checks drawer, which is CLOSED by default and no
+       longer auto-opens on a critical (every alert is a My Day row now). Open it first, as a person
+       triaging a run of alerts does; the bar's contract below is unchanged. */
+    await page.evaluate(() => { document.getElementById("watchtower-panel").open = true; });
+    await page.waitForTimeout(300);
 
     const before = await page.evaluate(() => {
       const bar = document.querySelector("#wt-bulk-bar");

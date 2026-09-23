@@ -236,7 +236,7 @@ const cardShape = (page, caseId) => page.evaluate((id) => {
       const hollowCaseId = await insertCase(page, { client_id: hollowClient, case_kind: "buy_to_let", stage: "application", assigned_to: "p2", lender: "R35TestLenderC", property_address: null });
 
       await goto(page, "pipeline");
-      await page.selectOption("#board-adviser", "all");
+      await page.click("#board-scope-all");   // R88 · B: was selectOption on the (now hidden compat) adviser select — scope is the kit Mine|All(|Unassigned) toggle
       await wait(page, 500);
 
       const remoCard = await cardShape(page, remo.caseId);
@@ -266,7 +266,7 @@ const cardShape = (page, caseId) => page.evaluate((id) => {
       await page.reload();
       await wait(page, SETTLE);
       await goto(page, "pipeline");
-      await page.selectOption("#board-adviser", "all");
+      await page.click("#board-scope-all");   // R88 · B: was selectOption on the (now hidden compat) adviser select — scope is the kit Mine|All(|Unassigned) toggle
       await wait(page, 500);
 
       // Duncan Armitage's own fixture pair — the R35 comment's own worked example: an
@@ -310,7 +310,7 @@ const cardShape = (page, caseId) => page.evaluate((id) => {
       // this is the "come back and look again" this step needs, without the mock db reset a real
       // page.reload() would cause (see the comment above).
       await goto(page, "pipeline");
-      await page.selectOption("#board-adviser", "all");
+      await page.click("#board-scope-all");   // R88 · B: was selectOption on the (now hidden compat) adviser select — scope is the kit Mine|All(|Unassigned) toggle
       await wait(page, 500);
 
       const appCardAfter = await cardShape(page, appCase.id);

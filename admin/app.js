@@ -703,6 +703,173 @@ let pipelineSegment = "live", viewBeforeCompleted = null;   // R87 · B2 — was
 // introducer by name so the Introducers table can link into a genuinely filtered pipeline. Empty
 // until Reports has been opened; then the search simply doesn't match introducers, as before.
 let introducerNames = {};
+/* ===== R88 LIST KIT =====
+   One list pattern for the book pages (panel 04 #6, 03 #3, R88-DESIGN §F). Pure render helpers
+   returning HTML strings, plus ONE wiring helper (dockBulkBar). No page knowledge lives here: a
+   consumer passes its own ids, its own verbs and its own handlers, and the kit renders the house
+   anatomy — the Clients row, the pipeline dock, the R73 chip family — the same way every time.
+   API + rules: panel-r87/KIT.md. Suite: tests/r88_kit.js.
+
+     listToolsHtml     🔍 search · Mine|All(|Unassigned) `.segment` · sort <select>  → .list-tools
+     segmentChipsHtml  .seg-strip of .seg-btn + .seg-count (aria-pressed; page handles data-seg)
+     selectAllHtml     the "Select all N shown" checkbox line                        → .list-selall
+     bulkBarHtml       .bulk-bar: count · ≤3 verbs · More ▾ (.row-more) · Clear
+     dockBulkBar       wraps the bar in .bulk-dock, sticky at the BOTTOM of the list's scroller
+     rowItemHtml       .row-item: ☐ · name (→ client) + ≤2 chips · one fact line · 📞 💬 · ≤3 verbs
+
+   Every id the caller passes is rendered verbatim, so suites that pin `#client-search`,
+   `#ret-scope-mine`, `#cl-sort`, `#prot-scope-all` … keep finding them. Text fields are escaped
+   here; `fact`, `sub` and `extra` are HTML the caller has already escaped. `emptyState()` (R73)
+   stays THE empty state — the kit adds no second one. */
+const KIT_MAX_VERBS = 3;
+const KIT_MAX_CHIPS = 2;
+const KIT_SCOPE_LABEL = { mine: "Mine", all: "All", unassigned: "Unassigned" };
+const KIT_SCOPE_TITLE = { mine: "Only what is assigned to you", all: "Everyone's — the whole firm", unassigned: "Nobody's — cases without an adviser" };
+const kitAttr = (name, v) => (v == null || v === "" ? "" : ` ${name}="${esc(v)}"`);
+/* R88 · E — the optional `attrs` map on a row or a chip: each key renders as an escaped data-*
+   attribute (camelCase → data-kebab-case; null / undefined / false are skipped), except `hidden`,
+   which renders the bare `hidden` attribute when truthy. So a page never re-stamps the kit's
+   markup after render (the old data-client / data-month / data-outcome / data-n writes). */
+function kitDataAttrs(attrs) {
+  if (!attrs) return "";
+  return Object.keys(attrs).map((k) => {
+    const v = attrs[k];
+    if (k === "hidden") return v ? " hidden" : "";
+    if (v == null || v === false) return "";
+    const name = k.replace(/[A-Z]/g, (m) => "-" + m.toLowerCase()).replace(/[^a-z0-9-]/g, "");
+    return name ? ` data-${name}="${esc(String(v))}"` : "";
+  }).join("");
+}
+/* One verb: an ordinary .btn-sm. `onclick` is the caller's expression; the row's own click is
+   stopped first so a verb never also opens the row. `href` renders an <a> instead. */
+function kitVerbHtml(v, cls) {
+  if (!v || !v.label) return "";
+  const classes = ["btn", "btn-sm", cls, v.cls].filter(Boolean).join(" ");
+  const common = `class="${esc(classes)}"${kitAttr("id", v.id)}${kitAttr("title", v.title)}`;
+  if (v.href) return `<a ${common} href="${esc(v.href)}" onclick="event.stopPropagation()">${esc(v.label)}</a>`;
+  const click = v.onclick ? ` onclick="event.stopPropagation();${esc(v.onclick)}"` : ` onclick="event.stopPropagation()"`;
+  return `<button type="button" ${common}${click}${v.disabled ? " disabled" : ""}>${esc(v.label)}</button>`;
+}
+/* ≤3 visible verbs; the 4th onward join `more` inside one native <details class="row-more">. */
+function kitVerbsHtml(verbs, more, opts) {
+  const o = opts || {};
+  const all = (verbs || []).filter((v) => v && v.label);
+  const shown = all.slice(0, KIT_MAX_VERBS);
+  const rest = all.slice(KIT_MAX_VERBS).concat((more || []).filter((v) => v && v.label));
+  const moreHtml = rest.length
+    ? `<details class="row-more${o.moreCls ? " " + esc(o.moreCls) : ""}"${kitAttr("id", o.moreId)} onclick="event.stopPropagation()"><summary class="btn btn-sm" title="${esc(o.moreTitle || "More actions")}">More ▾</summary><span class="row-more-body">${rest.map((v) => kitVerbHtml(v, o.verbCls)).join("")}</span></details>`
+    : "";
+  return shown.map((v) => kitVerbHtml(v, o.verbCls)).join("") + moreHtml;
+}
+function listToolsHtml(o) {
+  o = o || {};
+  const s = o.search, sc = o.scope, so = o.sort;
+  const search = s
+    ? `<input type="search" class="search list-search"${kitAttr("id", s.id)} placeholder="${esc(s.placeholder || "Search…")}" value="${esc(s.value || "")}" aria-label="${esc(s.ariaLabel || s.placeholder || "Search this list")}" autocomplete="off">`
+    : "";
+  let scope = "";
+  if (sc) {
+    const opts = (sc.options && sc.options.length ? sc.options : ["mine", "all"]).filter((k) => KIT_SCOPE_LABEL[k]);
+    const cur = opts.includes(sc.value) ? sc.value : opts[0];
+    scope = `<span class="segment list-scope" role="group" aria-label="${esc(sc.ariaLabel || "Whose to show")}">` + opts.map((k, i) => {
+      const id = (sc.ids && sc.ids[k]) || (sc.id ? `${sc.id}-${k}` : "");
+      const on = k === cur;
+      const cls = ["btn", "btn-sm", "seg-btn", i === 0 ? "seg-first" : "", i === opts.length - 1 ? "seg-last" : "", on ? "scope-active" : ""].filter(Boolean).join(" ");
+      return `<button type="button" class="${cls}"${kitAttr("id", id)} data-scope="${esc(k)}" aria-pressed="${on}" title="${esc((sc.titles && sc.titles[k]) || KIT_SCOPE_TITLE[k])}">${esc((sc.labels && sc.labels[k]) || KIT_SCOPE_LABEL[k])}</button>`;
+    }).join("") + `</span>`;
+  }
+  const sort = so
+    ? `<select class="list-sort"${kitAttr("id", so.id)} aria-label="${esc(so.ariaLabel || "Sort this list")}">` + (so.options || []).map((op) => `<option value="${esc(op.value)}"${op.value === so.value ? " selected" : ""}>${esc(op.label)}</option>`).join("") + `</select>`
+    : "";
+  return `<div class="list-tools"${kitAttr("id", o.id)}>${search}${scope}${sort}${o.extra || ""}</div>`;
+}
+function segmentChipsHtml(o) {
+  o = o || {};
+  const chips = (o.chips || []).filter((c) => c && c.key != null);
+  return `<div class="seg-strip"${kitAttr("id", o.id)} role="group" aria-label="${esc(o.ariaLabel || "Filter this list")}">` + chips.map((c) => {
+    const on = !!c.active;
+    const n = c.count == null ? "" : ` <span class="seg-count">${esc(c.count)}</span>`;
+    return `<button type="button" class="seg-btn${on ? " active" : ""}${c.cls ? " " + esc(c.cls) : ""}"${kitAttr("id", c.id)} data-seg="${esc(c.key)}" aria-pressed="${on}"${kitAttr("title", c.title)}${kitDataAttrs(c.attrs)}>${esc(c.label == null ? c.key : c.label)}${n}</button>`;
+  }).join("") + `</div>`;
+}
+/* Pressing a chip flips aria-pressed / .active inside ITS strip at once; the page's own data-seg
+   handler then re-renders. One delegated listener for every strip on every page. */
+document.addEventListener("click", (e) => {
+  const b = e.target && e.target.closest && e.target.closest(".seg-strip > .seg-btn");
+  if (!b) return;
+  b.parentElement.querySelectorAll(".seg-btn").forEach((x) => { const on = x === b; x.classList.toggle("active", on); x.setAttribute("aria-pressed", String(on)); });
+});
+function selectAllHtml(o) {
+  o = o || {};
+  const n = Number(o.count) || 0;
+  if (!n && !o.always) return "";
+  const label = o.label || `Select all ${n} shown`;
+  return `<div class="list-selall"${kitAttr("id", o.id ? `${o.id}-wrap` : "")}><label><input type="checkbox"${kitAttr("id", o.id)} aria-label="${esc(o.ariaLabel || "Select every row in this view")}"${o.checked ? " checked" : ""}> ${esc(label)}</label></div>`;
+}
+function bulkBarHtml(o) {
+  o = o || {};
+  const n = Number(o.count) || 0;
+  const countId = o.countId || (o.id ? `${o.id}-n` : "");
+  const clearId = o.clearId || (o.id ? `${o.id}-clear` : "");
+  return `<div class="bulk-bar${n ? "" : " is-empty"}"${kitAttr("id", o.id)} role="toolbar" aria-label="${esc(o.ariaLabel || "Actions on the selected rows")}">`
+    + `<span class="bulk-bar-count"><strong${kitAttr("id", countId)}>${n}</strong> selected</span>`
+    + (o.extra || "")
+    + kitVerbsHtml(o.verbs, o.more, { moreId: o.moreId, moreCls: o.moreCls, moreTitle: o.moreTitle || "The other verbs for the selected rows" })
+    + `<button type="button" class="btn btn-sm bulk-clear"${kitAttr("id", clearId)}${o.onClear ? ` onclick="${esc(o.onClear)}"` : ""}>Clear</button>`
+    + `</div>`;
+}
+/* dockBulkBar(listEl, barEl) — the bar sits in a .bulk-dock as the LAST child of the list's
+   scroller and rises over the rows (position: sticky; bottom: 0). Idempotent: call it after every
+   render. The dock is zero-height while the bar is .is-empty, so nothing shifts on the first tick. */
+function dockBulkBar(listEl, barEl) {
+  const list = typeof listEl === "string" ? document.querySelector(listEl) : listEl;
+  const bar = typeof barEl === "string" ? document.querySelector(barEl) : barEl;
+  if (!list || !bar) return null;
+  let dock = bar.parentElement && bar.parentElement.classList.contains("bulk-dock") ? bar.parentElement : null;
+  if (!dock) { dock = document.createElement("div"); dock.className = "bulk-dock"; dock.appendChild(bar); }
+  if (dock.parentElement !== list || list.lastElementChild !== dock) list.appendChild(dock);
+  dock.classList.toggle("is-empty", bar.classList.contains("is-empty"));
+  return dock;
+}
+function rowItemHtml(o) {
+  o = o || {};
+  const name = o.name || {};
+  const text = name.text == null ? "" : String(name.text);
+  const cb = o.cb
+    ? `<input type="checkbox" class="bulk-cb${o.cb.name ? " " + esc(o.cb.name) : ""}" data-id="${esc(o.cb.value == null ? o.id : o.cb.value)}" aria-label="Select ${esc(text || "this row")}"${o.cb.checked ? " checked" : ""}>`
+    : "";
+  /* The name ALWAYS opens the client. `clientId` is the house way; a raw onclick/href is allowed
+     only for a list whose rows are not clients (KIT.md rule 3). */
+  let nameEl;
+  if (name.clientId) nameEl = `<div class="t" onclick="openClient('${jsArg(name.clientId)}')">${esc(text)}</div>`;
+  else if (name.href) nameEl = `<a class="t" href="${esc(name.href)}">${esc(text)}</a>`;
+  else nameEl = `<div class="t"${name.onclick ? ` onclick="${esc(name.onclick)}"` : ""}>${esc(text)}</div>`;
+  const chips = (o.chips || []).filter((c) => c && c.label).slice(0, KIT_MAX_CHIPS).map((c) => {
+    const cls = `badge ${c.cls || "grey"}`;
+    return c.onclick
+      ? `<button type="button" class="${esc(cls)} row-chip"${kitAttr("id", c.id)}${kitAttr("title", c.title)} onclick="event.stopPropagation();${esc(c.onclick)}">${esc(c.label)}</button>`
+      : `<span class="${esc(cls)}"${kitAttr("id", c.id)}${kitAttr("title", c.title)}>${esc(c.label)}</span>`;
+  }).join(" ");
+  const contact = o.contact && o.contact.phone
+    ? phoneActionsHtml(o.contact.phone, { sms: o.contact.sms !== false, name: o.contact.first || o.contact.name || text, rateEnd: o.contact.rateEnd, smsOptOut: !!o.contact.smsOptOut })
+    : "";
+  /* R88 · fixer (10 D3) — the 📞 / 💬 pair is its own NON-SHRINKING element after the fact text, which
+     alone takes the ellipsis. It used to be appended to the one nowrap line, so a long Retention fact
+     pushed the pair out of the box on 10 of 15 desktop rows (the DOM still held the tel: link). */
+  const fact = (o.fact ? `<span class="row-fact-t">${o.fact}</span>` : "")
+    + (contact ? `<span class="row-contact">${o.fact ? "· " : ""}${contact}</span>` : "");
+  const acts = kitVerbsHtml(o.verbs, o.more, { moreCls: o.moreCls, moreTitle: o.moreTitle || "More actions on this row", verbCls: o.verbCls });
+  return `<div class="row-item kit-row${o.cls ? " " + esc(o.cls) : ""}${o.cb && o.cb.checked ? " is-sel" : ""}"${kitAttr("id", o.id ? `row-${o.id}` : "")}${kitAttr("data-id", o.id)}${kitDataAttrs(o.attrs)}>`
+    + cb
+    + `<div class="row-main">`
+    + `<div class="row-head">${nameEl}${chips ? `<span class="row-chips">${chips}</span>` : ""}</div>`
+    + (fact ? `<div class="s row-fact">${fact}</div>` : "")
+    + `</div>`
+    + (acts ? `<div class="row-acts">${acts}</div>` : "")
+    + (o.sub ? `<div class="row-sub">${o.sub}</div>` : "")
+    + `</div>`;
+}
+/* ===== END R88 LIST KIT ===== */
 // BUILD 6d — per-user persisted pipeline prefs (segment + board/table view). localStorage is a
 // normal feature of this web app, but every key is namespaced with the signed-in user's id (so a
 // shared machine never leaks one adviser's choice to another) and every access is try/catch-guarded
@@ -780,6 +947,8 @@ function restoreUserPrefs(uid) {
      above). Idempotent, cheap, and the only place it has to happen: every reader below is
      already namespaced, so a leftover key would simply sit there being another user's answer. */
   ["nx_board_adviser", "nx_diary_staff", "nx_clients_adviser"].forEach(lsDel);
+  /* R88 · fixer (10 D1) — the pre-R88 Checks-drawer preference: see DASH_DRAWER_KEYS. */
+  lsDel("nx_drawer_watchtower");
   const seg = lsGet(segStoreKey(uid));
   if (seg && SEGMENTS.some(([k]) => k === seg)) pipelineSegment = seg;
   const view = lsGet(viewStoreKey(uid));
@@ -4487,9 +4656,15 @@ function panelCount(listSel, n, hot = false) {
    'leads', 'tasks' and 'retention' keys below. The MECHANISM is untouched: any nx_drawer_leads /
    _tasks / _todayappts / _retention left in a browser's localStorage is now an orphan that nothing
    reads, which is harmless and deliberately not migrated — a one-off cleanup pass would be more
-   code, and more risk, than the four dead strings it deletes. */
+   code, and more risk, than the four dead strings it deletes.
+   R88 · E — 'unactioned' went too: R88 · A removed the radar panel (#unactioned-panel) from the DOM;
+   its cases are My Day rows now. A stored nx_drawer_unactioned is an orphan, as above.
+   R88 · fixer (10 D1) — 'watchtower' went as well. The Checks drawer is born closed and its alerts
+   are My Day rows; honouring a pre-R88 nx_drawer_watchtower = "open" (written by every old header
+   click, never cleared) re-opened it on every boot — two lists of the same alerts again. Unlike the
+   orphans above this one is dropped at sign-in (restoreUserPrefs), because it used to be read. */
 const DASH_DRAWER_PANEL_ID = { rateerc: "rate-erc-panel" };
-const DASH_DRAWER_KEYS = ["watchtower", "unactioned", "rateerc", "revenue"];
+const DASH_DRAWER_KEYS = ["rateerc", "revenue"];
 const drawerPanelEl = (key) => document.getElementById(DASH_DRAWER_PANEL_ID[key] || key + "-panel");
 const drawerStoreKey = (key) => "nx_drawer_" + key;
 /* "open" | "closed" | null. Null means the user has never made a choice about this drawer, which
@@ -5709,7 +5884,7 @@ function openHelpPanel() {
    what they assert.
    ========================================================================== */
 const TOUR_STEP_MY_DAY = { target: "#briefing-panel", title: "My Day", body: "Everything today in one list — tasks due, appointments, new leads and rate alerts — with the action on the row: tick a task off, snooze it, accept a lead, record who turned up. Tasks are things to DO, each with a due date; the Diary (its own page in the nav) is where you're supposed to BE. There's no “new appointment” button here — booking one lives INSIDE a case." };
-const TOUR_STEP_WATCHTOWER = { target: "#watchtower-panel", title: "Watchtower", body: "Automatic checks across the whole book. “Resolves itself when fixed” means an alert isn't a task to tick off by hand — fix the thing it's complaining about (assign an adviser, record a rate end) and it clears itself next time checks run." };
+const TOUR_STEP_WATCHTOWER = { target: "#watchtower-panel", title: "Checks", body: "Automatic checks across the whole book. “Resolves itself when fixed” means an alert isn't a task to tick off by hand — fix the thing it's complaining about (assign an adviser, record a rate end) and it clears itself next time checks run." };
 const TOUR_STEP_PIPELINE = { target: "#topnav button[data-page=\"pipeline\"]", title: "Where cases are created", body: "New cases start on Pipeline, with the “+ New case” button there — not on Today. It is also where your own cases live: switch the board to a stage, or to the table view, and everything you are carrying is on one screen." };
 const TOUR_STEP_HELP = { target: "#help-btn", title: "Need a definition?", body: "ERC, GI, DIP, Watchtower and the rest are explained here — and you can replay this tour from the same button, any time." };
 /* The last step for EVERY role. R70/R71 rebuilt this page around working the back book, and it is
@@ -7145,7 +7320,7 @@ function settingsJumpVisible(el) {
      · the <2-items-hide guard (Settings guards on its own items; Reports
        guards on the PAGE's items — `guardOn:"all"` — so a one-panel section
        keeps its single chip and the sticky bar keeps its height, R74 · A4c)
-     · chip markup (seg-btn, role=tab, aria-selected, "Jump to <label>")
+     · chip markup (seg-btn, aria-pressed — R88 · E: was role=tab/aria-selected, "Jump to <label>")
      · the click = beforeJump hook → smooth scrollIntoView → setActive(key).
    Returns {items, allItems}, or null when the bar hid itself. */
 function buildJumpNav(barId, wrapId, sections, visibleFn, opts) {
@@ -7166,7 +7341,7 @@ function buildJumpNav(barId, wrapId, sections, visibleFn, opts) {
   // One chip is not navigation, it is decoration — the guard both twins carried.
   if ((o.guardOn === "all" ? allItems : items).length < 2) { wrap.innerHTML = ""; bar.hidden = true; return null; }
   wrap.innerHTML = items.map((s) =>
-    `<button type="button" class="seg-btn" id="${o.chipIdPrefix}${esc(s.key)}" role="tab" aria-selected="false" ${o.attr}="${esc(s.key)}" title="Jump to ${esc(s.label)}">${esc(s.label)}</button>`).join("");
+    `<button type="button" class="seg-btn" id="${o.chipIdPrefix}${esc(s.key)}" aria-pressed="false" ${o.attr}="${esc(s.key)}" title="Jump to ${esc(s.label)}">${esc(s.label)}</button>`).join("");
   wrap.querySelectorAll(`[${o.attr}]`).forEach((b) => (b.onclick = () => {
     const it = items.find((s) => s.key === b.getAttribute(o.attr));
     if (!it || !it.el) return;
@@ -7183,7 +7358,7 @@ function jumpNavActivePaint(wrapId, attr, chipIdPrefix, key) {
   document.querySelectorAll(`#${wrapId} [${attr}]`).forEach((b) => {
     const on = b.getAttribute(attr) === key;
     b.classList.toggle("active", on);
-    b.setAttribute("aria-selected", on ? "true" : "false");
+    b.setAttribute("aria-pressed", on ? "true" : "false");
   });
   /* Keep the active chip inside the horizontal scroller by hand. scrollIntoView() on the chip
      would also scroll the PAGE, which would fight the scroll that just triggered this. */
@@ -9241,34 +9416,39 @@ function reminderState(a, feed) {
   const map = feed && feed.reminderByCase;
   const row = map ? map[a.case_id] : null;
   const st = row ? String(row.status || "").toLowerCase() : "";
-  const badge = (cls, text, title) => `<span class="badge ${cls} ret-rem-badge" data-rem="${st || (guarded ? "guarded" : stamped ? "marked" : "none")}" title="${esc(title)}">${esc(text)}</span>`;
+  const remKey = st || (guarded ? "guarded" : stamped ? "marked" : "none");
+  /* R88 · C — the badge's parts ride along (chip: cls/text/title/remKey) so the Retention page's kit
+     row can draw the SAME badge as a row chip; Today's drawer keeps badgeHtml, byte for byte. */
+  let last = null;
+  const badge = (cls, text, title) => { last = { cls, text, title, remKey }; return `<span class="badge ${cls} ret-rem-badge" data-rem="${remKey}" title="${esc(title)}">${esc(text)}</span>`; };
+  const withChip = (o) => Object.assign(o, { chip: last });
   if (st === "sent") {
     const when = row.sent_at || row.created_at;
-    return { key: "sent", workable: false,
-      badgeHtml: badge("green", "Reminder sent", `A rate-end reminder was sent to this client${when ? ` on ${fmtD(String(when).slice(0, 10))}` : ""}.`) };
+    return withChip({ key: "sent", workable: false,
+      badgeHtml: badge("green", "Reminder sent", `A rate-end reminder was sent to this client${when ? ` on ${fmtD(String(when).slice(0, 10))}` : ""}.`) });
   }
   if (st === "queued") {
     const held = emailHoldOn();
-    return { key: "queued", workable: false,
+    return withChip({ key: "queued", workable: false,
       badgeHtml: badge("amber", held ? "Reminder queued — held" : "Reminder queued",
         held
           ? "A rate-end reminder is queued for this client, but sending is currently ON HOLD (Settings › Email sending) — it will wait until the hold is released."
-          : "A rate-end reminder is queued for this client and goes out with the next automation run.") };
+          : "A rate-end reminder is queued for this client and goes out with the next automation run.") });
   }
   if (st === "failed") {
-    return { key: "failed", workable: false,
-      badgeHtml: badge("red", "Reminder failed", "The rate-end reminder to this client failed — nobody has heard from us. Check the address on the Emails page and send it again.") };
+    return withChip({ key: "failed", workable: false,
+      badgeHtml: badge("red", "Reminder failed", "The rate-end reminder to this client failed — nobody has heard from us. Check the address on the Emails page and send it again.") });
   }
   if (guarded) {
-    return { key: "guarded", workable: true,
-      badgeHtml: badge("grey", "No reminder sent", "Imported with the back book; the automation was told to leave this case alone. Work it from here.") };
+    return withChip({ key: "guarded", workable: true,
+      badgeHtml: badge("grey", "No reminder sent", "Imported with the back book; the automation was told to leave this case alone. Work it from here.") });
   }
   if (stamped) {
-    return { key: "marked", workable: false,
-      badgeHtml: badge("grey", "Marked reminded", "Marked as dealt with on this case — no reminder email was ever queued or sent for it.") };
+    return withChip({ key: "marked", workable: false,
+      badgeHtml: badge("grey", "Marked reminded", "Marked as dealt with on this case — no reminder email was ever queued or sent for it.") });
   }
-  return { key: "none", workable: true,
-    badgeHtml: badge("amber", "Reminder pending", "Nothing has been queued or sent to this client about this rate ending.") };
+  return withChip({ key: "none", workable: true,
+    badgeHtml: badge("amber", "Reminder pending", "Nothing has been queued or sent to this client about this rate ending.") });
 }
 /* R7-2 — sorted by VALUE AT RISK by default (the loan on the case), because the question this feed
    is scanned with is "which of these matters most", and a date sort answers a different one. The
@@ -9508,24 +9688,16 @@ function rowLastContactHtml(a, feed, opts) {
 
    Completed rows only: a live case has no rate END to record an outcome for.
    ========================================================================== */
-function rowOutcomeChipsHtml(a, feed, opts) {
-  if (!(opts && opts.page)) return "";
-  if (a.stage !== "completed") return "";
+/* R88 · C — the two outcome entry points as KIT VERBS (they sit in the row's More ▾ with Book review;
+   same handlers, same titles, same .ret-out-chip class). Completed rows only. The third chip
+   ("Re-mortgaging with us") went in R87: it was the badge area's Start retention case twice. */
+function rowOutcomeVerbs(a) {
+  if (a.stage !== "completed") return [];
   const id = jsArg(a.case_id);
-  /* R70 MERGE NOTE (CTO) — the third chip is an ENTRY POINT to startRetentionCase, so it obeys
-     exactly the visibility rule the badge area's own Start button follows (reminderState().workable,
-     no existing successor, not nine-months-early). Without this, a row whose reminder was SENT — or
-     whose stamp was a human's "mark reminded" decision — re-offered a start affordance that A2's
-     honesty pass had just removed, and a case with a successor could be offered a second one. The
-     two OUTCOME chips stay on every completed row: recording "renewed elsewhere" or "sold" is valid
-     whatever the reminder state, and rateEndOutcome carries its own guards. */
-  /* R87 · book (04 #5) — the third chip, "🔁 Re-mortgaging with us", is GONE: it rendered under
-     exactly the guard the badge area's "🔁 Start retention case" button renders under, so every
-     startable row carried the same verb twice under two names. The button stays (it is the one
-     r38 §C4 / r70 C4 press); the two OUTCOME chips remain, on every completed row. */
-  void feed;
-  return `<button type="button" class="btn btn-sm ret-row-chip ret-out-chip" onclick="event.stopPropagation();retRateOutcome('${id}','renewed')" title="They took a new deal direct or with somebody else. Opens the rate-end outcome form on that answer — it asks for the NEW rate end date, then re-arms this case so it comes back before that one ends.">🔄 Renewed elsewhere</button>`
-    + `<button type="button" class="btn btn-sm ret-row-chip ret-out-chip" onclick="event.stopPropagation();retRateOutcome('${id}','sold')" title="The property is sold or the mortgage redeemed. Opens the rate-end outcome form on that answer — it stops tracking this rate and marks the property SOLD on the client's record.">🏠 Property sold</button>`;
+  return [
+    { label: "🔄 Renewed elsewhere", cls: "ret-row-chip ret-out-chip", onclick: `retRateOutcome('${id}','renewed')`, title: "They took a new deal direct or with somebody else. Opens the rate-end outcome form on that answer — it asks for the NEW rate end date, then re-arms this case so it comes back before that one ends." },
+    { label: "🏠 Property sold", cls: "ret-row-chip ret-out-chip", onclick: `retRateOutcome('${id}','sold')`, title: "The property is sold or the mortgage redeemed. Opens the rate-end outcome form on that answer — it stops tracking this rate and marks the property SOLD on the client's record." },
+  ];
 }
 /* ==========================================================================
    R72 · A2 — WHAT ACTUALLY HAPPENED AT THE END OF THE RATE (panel H5c)
@@ -9660,20 +9832,23 @@ function rowOutcomeStateHtml(a, opts) {
     : o.key === "sold"
       ? "Recorded on this case as a rate-end outcome: the property was sold or the mortgage redeemed."
       : "Recorded on this case as a rate-end outcome: the client took a new deal direct or elsewhere.";
-  return `<div class="s ret-row-outcome" data-outcome="${esc(o.key)}" title="${esc(why)}">· outcome: ${esc(o.label)}</div>`;
+  // R88 · C — a span on the row's one fact line (it was a line of its own).
+  return ` <span class="ret-row-outcome" data-outcome="${esc(o.key)}" title="${esc(why)}">· outcome: ${esc(o.label)}</span>`;
 }
 /* The tile. Population and window are argued for in the block comment above; every word of that
-   argument that the reader needs is in the subtitle below. */
-function renderRateEndOutcomeFunnel(feed, extras, o) {
-  const el = $("#ret-outcome-funnel");
-  if (!el) return;
+   argument that the reader needs is in the subtitle below.
+   R88 · C — THE FUNNEL IS FOUR CHIPS ON THE PAGE'S ONE STRIP NOW (renderRetSegs), so this no longer
+   paints a tile of its own: it RETURNS the R72 tally (same derivation, same two-half population, same
+   £-at-risk reading) and rebuilds the fold's explanation, and the strip draws the chips from it. */
+function rateEndOutcomeTally(feed, extras, o) {
   const opts = o || {};
   const scope = opts.scope || "all";
   const caseAdviser = opts.caseAdviser || {};
   const casesById = opts.casesById || {};
+  retOutcomeSubHtml = "";   // R87 · book — rebuilt below; the fold reads it after this returns
   if (extras && extras.error) {
-    el.innerHTML = `<p class="panel-sub" id="ret-outcome-error">Rate-end outcomes could not be read just now (${esc((extras.error && extras.error.message) || "no answer")}) — this tile is a failed question, not an empty book.</p>`;
-    return;
+    retOutcomeSubHtml = `<p class="panel-sub" id="ret-outcome-error">Rate-end outcomes could not be read just now (${esc((extras.error && extras.error.message) || "no answer")}) — the outcome chips are a failed question, not an empty book.</p>`;
+    return { error: extras.error, counts: null, total: 0 };
   }
   const sinceMs = Date.now() - RATE_OUTCOME_WINDOW_DAYS * 86400000;
   const counts = { retained: 0, renewed_elsewhere: 0, sold: 0, none: 0 };
@@ -9697,29 +9872,9 @@ function renderRateEndOutcomeFunnel(feed, extras, o) {
     counts[extras.retained && extras.retained.has(cid) ? "retained" : rec.kind]++;
   });
   const total = counts.retained + counts.renewed_elsewhere + counts.sold + counts.none;
-  retOutcomeSubHtml = "";   // R87 · book — rebuilt below; the fold reads it after this paints
-  if (!total) { el.innerHTML = ""; return; }
-  /* ==========================================================================
-     R75 · B2 (panel D#19) — THE FUNNEL BECOMES A CONTROL, AND SAYS WHAT IS AT
-     STAKE.
-
-     The strip said "155 with no outcome" and then left the reader to find those
-     155 rows in a list of 593 by eye. The chips already carried `data-outcome`
-     and were inert `<span>`s; they are BUTTONS now and pressing one filters the
-     ended list below to exactly that outcome (press again to clear). "No
-     outcome" is the money click and is the one the copy points at.
-
-     THE NUMBERS ARE NOT REDEFINED. Every count above is the R72 derivation,
-     untouched, and the group counts below still come from rateBookCounts — this
-     wires clicks onto figures that were already right.
-
-     £ AT RISK is the sum of the LOAN on the no-outcome cases, from the money the
-     feed already carries (feed.money — the same figure each row prints as
-     "Loan £X"), and it is behind showMoney() like every other firm-money line.
-     It is deliberately the loan and not the fee: what is at risk when nobody
-     knows where a client went is the mortgage, and the fee is a fraction of it
-     that we would be guessing at.
-     ========================================================================== */
+  /* R75 · B2 — £ AT RISK is the sum of the LOAN on the no-outcome cases, from the money the feed
+     already carries (feed.money), behind showMoney() like every other firm-money line. The loan,
+     not the fee: what is at risk when nobody knows where a client went is the mortgage. */
   const money = showMoney();
   let atRisk = 0, atRiskRows = 0, atRiskUnpriced = 0;
   if (money) {
@@ -9731,155 +9886,140 @@ function renderRateEndOutcomeFunnel(feed, extras, o) {
       if (loan) atRisk += loan; else atRiskUnpriced++;
     });
   }
-  const active = retOutcomeFilter;
-  const chip = (key, label, n, tip) => {
-    const on = active === key;
-    return `<button type="button" class="btn btn-xs ret-outcome-chip${key === "none" && n ? " hot" : ""}${on ? " scope-active" : ""}" data-outcome="${key}" data-n="${n}" aria-pressed="${on}" title="${esc(tip + " " + (n === 0 ? "Nothing to show under this one." : on ? "Pressed — the list below is filtered to these. Press again to show the whole list." : `Press to show only these ${n} in the list below.`))}">${esc(label)} <strong>${n}</strong></button>`;
-  };
-  el.innerHTML = `<div class="ret-outcome-row" id="ret-outcome-chips">
-      <span class="ret-outcome-title">Rate-end outcomes <span class="cs-muted">· last 12 months</span></span>
-      ${chip("retained", "retained", counts.retained, "A retention case linked to that rate reached Completed — the client re-mortgaged with us.")}
-      ${chip("renewed_elsewhere", "renewed elsewhere", counts.renewed_elsewhere, "Recorded on the case as a rate-end outcome: a new deal taken direct or with somebody else.")}
-      ${chip("sold", "sold", counts.sold, "Recorded on the case as a rate-end outcome: property sold or mortgage redeemed.")}
-      ${chip("none", "no outcome", counts.none, "The rate ended and nothing has been recorded about what happened. This is the pile to work.")}
-      ${money && counts.none ? `<span class="ret-outcome-atrisk" id="ret-outcome-atrisk" title="${esc(`The loan on each of the ${atRiskRows} case${atRiskRows === 1 ? "" : "s"} with no outcome recorded, added up.` + (atRiskUnpriced ? ` ${atRiskUnpriced} of them carry no loan amount and contribute nothing to this total.` : "") + " It is the borrowing this firm no longer knows the fate of, not a fee forecast.")}"><strong>${fmtM(atRisk)}</strong> at risk</span>` : ""}
-    </div>`;
-  /* R87 · book (04 #2/#11) — the ~110-word explanation is no longer standing prose under the
-     strip: it is handed to the rates panel's ONE howFold (loadRetentionRates renders it into
-     #ret-rates-how, same id, same words), so the strip is four chips and a £ figure. */
-  retOutcomeSubHtml = `<p class="panel-sub" id="ret-outcome-sub">${counts.none ? `<strong>${counts.none} of ${total}</strong> rates that ended in the last 12 months have <strong>no outcome recorded</strong> — nobody knows whether those clients stayed, went, or sold. Press <strong>no outcome</strong> above to bring exactly those rows up in the list below; the <strong>🔄 Renewed elsewhere</strong>, <strong>🏠 Property sold</strong> and <strong>🔁 Re-mortgaging with us</strong> chips on a row each record one, in a click and a confirm.` : `Every rate that ended in the last 12 months has an outcome recorded against it. ✅`} Counted over rates that <strong>matured in the last 12 months</strong>${counts.renewed_elsewhere + counts.sold ? ", plus outcomes recorded in the same 12 months on rates that have since left this list — recording “sold” clears the rate-end date and recording “renewed” moves it to the new deal, so those cases can only be counted on the date the outcome was written" : ""}. “Retained” is read from the linked retention case reaching Completed; the other two are read from the 📌 note the outcome form writes on the case.${money && counts.none ? ` <strong>${fmtM(atRisk)} at risk</strong> is the loan on those ${atRiskRows} case${atRiskRows === 1 ? "" : "s"} added up — the borrowing whose fate nobody here knows${atRiskUnpriced ? `, over the ${atRiskRows - atRiskUnpriced} that carry a loan amount (${atRiskUnpriced} do not and count as nothing)` : ""}. It is not a fee forecast.` : ""} ${scope === "mine" ? "Your cases only — switch to All above for the firm." : "Every adviser's cases."}</p>`;
-  /* One delegated handler, re-bound with the strip it belongs to. Toggling is the
-     whole interaction: pressing the pressed chip clears the filter. */
-  el.onclick = (e) => {
-    const btn = e.target.closest(".ret-outcome-chip");
-    if (!btn) return;
-    const key = btn.dataset.outcome || "";
-    if (!key) return;
-    if (retOutcomeFilter !== key && !Number(btn.dataset.n)) {
-      return toast("Nothing has been recorded under that outcome in the last 12 months — there is nothing to show.");
-    }
-    retOutcomeFilter = retOutcomeFilter === key ? "" : key;
-    loadRetentionRates(retScopeResolved());
-  };
+  if (total) {
+    retOutcomeSubHtml = `<p class="panel-sub" id="ret-outcome-sub">${counts.none ? `<strong>${counts.none} of ${total}</strong> rates that ended in the last 12 months have <strong>no outcome recorded</strong> — nobody knows whether those clients stayed, went, or sold. Press the <strong>No outcome</strong> chip to bring exactly those rows up; the <strong>🔄 Renewed elsewhere</strong> and <strong>🏠 Property sold</strong> verbs (a row's More ▾) and <strong>🔁 Start retention case</strong> each record one, in a click and a confirm.` : `Every rate that ended in the last 12 months has an outcome recorded against it. ✅`} Counted over rates that <strong>matured in the last 12 months</strong>${counts.renewed_elsewhere + counts.sold ? ", plus outcomes recorded in the same 12 months on rates that have since left this list — recording “sold” clears the rate-end date and recording “renewed” moves it to the new deal, so those cases can only be counted on the date the outcome was written (and cannot be listed: they are no longer rates ending)" : ""}. “Retained” is read from the linked retention case reaching Completed; the other two are read from the 📌 note the outcome form writes on the case.${money && counts.none ? ` <strong>${fmtM(atRisk)} at risk</strong> is the loan on those ${atRiskRows} case${atRiskRows === 1 ? "" : "s"} added up — the borrowing whose fate nobody here knows${atRiskUnpriced ? `, over the ${atRiskRows - atRiskUnpriced} that carry a loan amount (${atRiskUnpriced} do not and count as nothing)` : ""}. It is not a fee forecast.` : ""} ${scope === "mine" ? "Your cases only — switch to All above for the firm." : "Every adviser's cases."}</p>`;
+  }
+  return { error: null, counts, total, money, atRisk, atRiskRows, atRiskUnpriced };
 }
 
-/* ONE ROW of the feed. Every branch below is the round-6-to-round-35 markup, moved rather than
-   rewritten, so the drawer and the page cannot render the same alert differently. */
+/* ONE ROW of Today's Rate & ERC drawer. The round-6-to-round-35 markup, moved rather than rewritten.
+   R88 · C — the Retention page no longer draws its rows here: it draws them with the list kit
+   (renderRetPageRow below — name → client, the case a chip, ≤3 verbs), so everything that was
+   page-only (the checkbox, the verb cluster, the outcome state, the last-contact clause) left this
+   function. Every byte the drawer rendered is unchanged: those branches were "" with no options. */
 function renderRateErcRow(a, feed, opts) {
   const money = showMoney();
   const mny = feed.money[a.case_id] || { loan: 0, lastFee: 0 };
   const cp = feed.callPack[a.case_id] || null;
   const farOut = rateErcFarOut(a);
   const rem = reminderState(a, feed);   // R70 · A2 — badge + "is this still workable?", computed once
-  /* ==========================================================================
-     R64 · A1/A3 — THE ROW GAINS A CHECKBOX AND THREE CALL CHIPS, BUT ONLY ON
-     THE RETENTION PAGE.
-
-     Today's Rate & ERC drawer passes no options at all, so `page` is false and
-     every character below collapses to "" — the drawer's markup is byte-for-byte
-     what R38 §C proved it against. That is deliberate, not caution: the drawer is
-     a morning glance, folded shut by lunchtime, and a select-all column plus a
-     call form on every row is not a glance. The Retention page is where the list
-     is SAT DOWN AND WORKED, which is the whole reason it exists.
-     ========================================================================== */
-  const page = !!(opts && opts.page);
-  const sel = page && opts.sel ? opts.sel : null;
-  const picked = !!(sel && sel.has(a.case_id));
-  /* R70 · B4 — the property context is resolved on BOTH surfaces now, because the phone
-     affordance is on both. Today's drawer reads its ≤15 numbers in one bounded `in` (see
-     loadDashboard) exactly the way the page has since R64; with no map at all `phone` is empty
-     and nothing renders, which is the un-migrated / failed-read path. */
+  /* R70 · B4 — the property context is resolved for the phone affordance. Today's drawer reads its
+     ≤15 numbers in one bounded `in` (see loadDashboard); with no map at all `phone` is empty and
+     nothing renders, which is the un-migrated / failed-read path. */
   const ctxRow = propCtxCase(feed.ctx, a.case_id);
-  /* R87 · book · C1 (04 #1) — retRowPhones now hands back { phone, smsOptOut } per client (the
-     protRowPhones shape), so the 💬 half is withheld for a client marked SMS opt-out on BOTH the
-     page and Today's drawer, which call the same helper. A bare string (an older caller) still
-     works: it is a number with no flag. */
+  /* R87 · book · C1 (04 #1) — retRowPhones hands back { phone, smsOptOut } per client (the
+     protRowPhones shape), so the 💬 half is withheld for a client marked SMS opt-out. A bare string
+     (an older caller) still works: it is a number with no flag. */
   const ph = ctxRow && opts && opts.phones ? opts.phones[ctxRow.client_id] : "";
   const phone = ph && typeof ph === "object" ? ph.phone : ph;
   const smsOptOut = !!(ph && typeof ph === "object" && ph.smsOptOut);
-  const cb = page
-    ? `<input type="checkbox" class="bulk-cb ret-cb" data-id="${esc(a.case_id)}" aria-label="Select ${esc(a.client_name || "this case")}"${picked ? " checked" : ""}>`
-    : "";
-  /* R61's card-advance pattern: quiet until the row is hovered or the control is focused, so a
-     hundred rows read as a list rather than as a wall of buttons. Keyboard users never lose them
-     (:focus-within keeps the whole set visible). */
-  /* No leading newline on purpose: `acts` is appended to the last line of .row-main, so with
-     `page` false the row's markup is not merely equivalent to the drawer's, it is the same bytes —
-     and lifting the cluster back out of a page row leaves the drawer's row exactly (see §D2). */
-  /* R70 · B4 — the tel:/sms: pair moved OUT of the hover-quiet cluster and onto the row's own
-     text block, because it is now rendered on the drawer too (which has no cluster) and because a
-     phone number you have to hover to see is not an affordance. Same `.ret-row-tel` wrapper the
-     R64 link used, so nothing that looked for it has to change. */
-  /* R73 · B3 — the quiet treatment moves OFF the container and onto the one verb it
-     was ever meant for. "Log call" is what the whole page is asking for, and the
-     three outcome chips are what the funnel copy points at; both are full weight.
-     Only "Book review" — a second-choice action on a row you may not be working —
-     keeps the quiet manners. Same classes, same handlers, same order. */
-  /* R87 · book · C3 (04 #5) — THREE VISIBLE VERBS, THE REST BEHIND "More ▾". A row offered eight
-     controls (one of them twice) and the eye could not find the one that matters. Visible now:
-     the dial pair, 📞 Log call, and the badge area's Start / Mark-reminded button. Book review
-     and the two outcome chips keep their classes and handlers inside a native <details> — the
-     same elements, one click further away; nothing is removed and no id changes. */
-  const more = page
-    ? `<button type="button" class="btn btn-sm ret-row-chip hover-quiet" onclick="event.stopPropagation();retBookReview('${jsArg(a.case_id)}')" title="Book a rate-end review in the diary, prefilled with this client, this case and the adviser who owns it.">📅 Book review</button>`
-      + rowOutcomeChipsHtml(a, feed, opts)
-    : "";
-  /* The dial pair stays where R70 · B4 put it — on the row's text block, on BOTH surfaces, so the
-     drawer's row and the page's row still share every byte outside the page-only cluster (r64
-     §D2); on the page the cluster is inline-flex (admin.css) so the pair and the verbs share one
-     line. */
   const dial = phoneActionsHtml(phone, { sms: true, name: a.client_name, rateEnd: a.rate_end_date, smsOptOut });
-  const acts = page ? `<div class="ret-row-acts">`
-    + `<button type="button" class="btn btn-sm ret-row-chip ret-logcall-chip" onclick="event.stopPropagation();retLogCall('${jsArg(a.case_id)}')" title="Log a call against this case — the same form the case modal uses: outcome chip, note, protection tick and an optional follow-up task.">📞 Log call</button>`
-    + (more ? `<details class="row-more ret-row-more" onclick="event.stopPropagation()"><summary class="btn btn-sm ret-row-chip" title="Book review, and the two rate-end outcomes (renewed elsewhere · property sold).">More ▾</summary><span class="row-more-body">${more}</span></details>` : "")
-    + `</div>` : "";
   return `
-    <div class="row-item${picked ? " is-sel" : ""}">${cb}
+    <div class="row-item">
       <div class="row-main">
         <div class="t" onclick="openCase('${a.case_id}')">${esc(a.client_name)} ${propCtxChip(feed.ctx, a.case_id, "row-prop")}${a.__dupes > 1 ? ` <span class="badge grey" title="${a.__dupes} cases share this property and this rate end date — shown once, because it is one mortgage conversation.">${a.__dupes} cases</span>` : ""}</div>
-        ${/* R87 · book · C3 (04 #5) — ONE FACT LINE: lender · rate · ends · (ERC) · money · last
-             contact. These were three stacked lines; on the page they now share one, wrapping
-             only when the row is narrow. Same classes (.rate-money, .ret-row-lastc), same words. */ ""}
-        <div class="s">${lenderIcon(a.lender)}${esc(a.lender || "")} ${a.rate_percent ? a.rate_percent + "%" : ""} — ends ${fmtD(a.rate_end_date)}${a.days_to_rate_end != null ? ` (${a.days_to_rate_end < 0 ? fmtDaysAway(a.days_to_rate_end) + " ago" : "in " + fmtDaysAway(a.days_to_rate_end)})` : ""}${feed.ercIds.has(a.case_id) ? ` — ERC runs until ${fmtD(a.erc_end_date)}` : ""}${/* R61 — the "(value at risk · loan on the case · last fee as proxy)" basis used to print
-             on EVERY money line — a hundred identical parentheticals down the Retention page. The
-             basis is a fact about the FEED, not about any row, so it now says itself once, in the
-             panel's fold (see loadRetentionRates and the Today drawer's sub). */ ""}${money ? ` <span class="rate-money">· Loan <strong>${mny.loan ? fmtM(mny.loan) : "—"}</strong> · last fee <strong>${mny.lastFee ? fmtM(mny.lastFee) : "none recorded"}</strong></span>` : ""}${rowLastContactHtml(a, feed, opts)}</div>
-        ${/* R12b · W-15b — the call pack, on the row the call is made from. Client money, not firm
-             money, so it is NOT behind showMoney(): the balance and the payment are the client's
-             own figures and the adviser ringing them needs both. Only drawn when at least one is
-             recorded; each one absent renders "—", never 0. */ ""}
-        ${/* R12b · W-15c — the uplift is inline here, and ONLY on rows whose rate has actually
-             ENDED. A client still inside their fix is not paying anything extra yet, and a
-             "£X/mo more" over a rate with four months to run reads as a bill they already get. */ ""}
-        ${/* R72 · A2 — the STATE beside the entry points: what has already been recorded about how
-             this rate ended. Silent when nothing has been (which is most of the book) and absent
-             outright on Today's drawer, which passes no options. */ ""}
-        ${rowOutcomeStateHtml(a, opts)}
-        ${callPackLineHtml(cp, rateErcEnded(a))}${dial}${acts}
+        ${""}
+        <div class="s">${rateErcFactHtml(a, feed, money, mny)}</div>
+        ${""}
+        ${""}
+        ${""}
+        ${""}
+        ${callPackLineHtml(cp, rateErcEnded(a))}${dial}
       </div>
       ${a.days_to_rate_end < 0 ? '<span class="badge red">OVERDUE</span>' : ""}
       ${feed.ercIds.has(a.case_id) ? `<span class="badge red" title="${TIP_ERC}">ERC conflict</span>` : ""}
       ${a.rate_end_estimated ? `<span class="badge ${EST_BADGE_CLS}" title="${TIP_APPROX}">≈ estimate</span>` : ""}
-      ${/* R70 · A2 — the badge is derived from what the email queue actually holds (plus the
-           import guard), not from a stamp that the R45 import wrote 1,711 times without sending
-           anything. reminderState() is the single source for both this badge and the two
-           controls below it. */ ""}
+      ${""}
       ${a.stage === "completed" ? rem.badgeHtml : stageBadge(a.stage)}
-      ${/* R5-6 — the backend auto-creates a retention case only while the rate is still in FUTURE
-           reminder window; a rate that has already ended is never picked up, and these rows sat
-           here saying "reminder pending" forever. This is the manual path for exactly those. */ ""}
+      ${""}
       ${a.stage === "completed" && rem.workable && a.rate_end_date && !retentionSourceIds.has(a.case_id)
         ? (farOut
-          ? `<span class="badge grey rate-too-early" title="This rate has more than nine months to run. Starting a retention case now would create a live enquiry, a call task and a queued client email for a conversation that cannot usefully happen yet — the ${feed.reminderMonths}-month reminder window reaches this case long before it is too late.">too early — ${Math.round(a.days_to_rate_end / 30)}mo out</span>`
-          : retentionToMeHtml(a.case_id, cp) + `<button class="btn btn-sm btn-retention" onclick="event.stopPropagation();startRetentionCase('${a.case_id}', event)" title="Create the follow-on remortgage case, the call task and a queued reminder">🔁 Start retention case</button>`) : ""}
-      ${/* G1I-R5 — the recovery control. A retention case already exists for this one, so the
-           button above is (correctly) gone, but the source was never stamped: the row nags
-           "Reminder pending" forever and the nightly RPC will never pick it up either, because
-           the rate has ended and a successor exists. Without this the only way out was to send the
-           client a SECOND reminder email. */ ""}
+          ? `<span class="badge grey rate-too-early" title="${esc(rateTooEarlyTip(feed))}">too early — ${Math.round(a.days_to_rate_end / 30)}mo out</span>`
+          : retentionToMeHtml(a.case_id, cp) + `<button class="btn btn-sm btn-retention" onclick="event.stopPropagation();startRetentionCase('${a.case_id}', event)" title="${RET_START_TIP}">🔁 Start retention case</button>`) : ""}
+      ${""}
       ${a.stage === "completed" && rem.workable && retentionSourceIds.has(a.case_id)
-        ? `<button class="btn btn-sm btn-retention" onclick="event.stopPropagation();markRateReminded('${a.case_id}', event)" title="This case already has a retention case, but it was never marked as reminded — clear the nag without emailing the client again">✓ Mark as reminded</button>` : ""}
+        ? `<button class="btn btn-sm btn-retention" onclick="event.stopPropagation();markRateReminded('${a.case_id}', event)" title="${RET_MARK_TIP}">✓ Mark as reminded</button>` : ""}
     </div>`;
+}
+/* The words both row shapes share, so the drawer and the page cannot describe one rate two ways. */
+const RET_START_TIP = "Create the follow-on remortgage case, the call task and a queued reminder";
+const RET_MARK_TIP = "This case already has a retention case, but it was never marked as reminded — clear the nag without emailing the client again";
+const rateTooEarlyTip = (feed) => `This rate has more than nine months to run. Starting a retention case now would create a live enquiry, a call task and a queued client email for a conversation that cannot usefully happen yet — the ${feed.reminderMonths}-month reminder window reaches this case long before it is too late.`;
+/* The rate's one fact line: lender · rate · ends · (ERC) · money. R61 — the money basis is a fact
+   about the FEED, said once in the fold, never on every row. */
+function rateErcFactHtml(a, feed, money, mny) {
+  return `${lenderIcon(a.lender)}${esc(a.lender || "")} ${a.rate_percent ? a.rate_percent + "%" : ""} — ends ${fmtD(a.rate_end_date)}${a.days_to_rate_end != null ? ` (${a.days_to_rate_end < 0 ? fmtDaysAway(a.days_to_rate_end) + " ago" : "in " + fmtDaysAway(a.days_to_rate_end)})` : ""}${feed.ercIds.has(a.case_id) ? ` — ERC runs until ${fmtD(a.erc_end_date)}` : ""}${money ? ` <span class="rate-money">· Loan <strong>${mny.loan ? fmtM(mny.loan) : "—"}</strong> · last fee <strong>${mny.lastFee ? fmtM(mny.lastFee) : "none recorded"}</strong></span>` : ""}`;
+}
+/* ==========================================================================
+   R88 · C — ONE RETENTION ROW, ON THE KIT (panel 04 #5, #6).
+
+   The Clients row anatomy: ☐ · the client's NAME (opens the CLIENT — it
+   opened the case, which made the name mean something different here from
+   everywhere else) · two chips: the CASE (property or product — a click opens
+   the case) and the ONE status that matters (ERC conflict, else the honest
+   R70 reminder badge, else the stage) · ONE fact line (lender · rate · ends ·
+   money · last contact · outcome · the dial pair) · ≤3 verbs: 📞 Log call,
+   and the badge area's 🔁 Start retention case / ✓ Mark as reminded where it
+   applies (same guard, same handler, same .btn-retention). Book review and the
+   two outcome verbs sit in More ▾. The call pack (balance, reversion, uplift)
+   is the one optional second line — the client's own figures, only when
+   recorded — and so is "assign to me" beside a Start button.
+   ========================================================================== */
+function retCaseChip(feed, a) {
+  const r = propCtxCase(feed.ctx, a.case_id);
+  const addr = r ? String(propCanonAddr(r.client_id, propAddress(r)) || propAddress(r) || "").trim() : "";
+  const short = addr ? addr.split(",")[0].trim() : "";
+  const kind = caseTypeLabel(r || a.case_kind || null);
+  const base = short || [kind !== "Case" ? kind : "", a.lender || ""].filter(Boolean).join(" · ") || "Case";
+  const label = base + (a.__dupes > 1 ? ` · ${a.__dupes} cases` : "");
+  return {
+    label, cls: "blue ret-case-chip", onclick: `openCase('${jsArg(a.case_id)}')`,
+    title: `Open the case${addr ? ` on ${addr}` : ""} — ${STAGE_LABEL[a.stage] || a.stage || ""}.${a.__dupes > 1 ? ` ${a.__dupes} cases share this property and this rate end date — shown once, because it is one mortgage conversation.` : ""}`,
+  };
+}
+function renderRetPageRow(a, feed, opts) {
+  const o = opts || {};
+  const money = showMoney();
+  const mny = feed.money[a.case_id] || { loan: 0, lastFee: 0 };
+  const cp = feed.callPack[a.case_id] || null;
+  const rem = reminderState(a, feed);
+  const ctxRow = propCtxCase(feed.ctx, a.case_id);
+  const clientId = a.client_id || (ctxRow && ctxRow.client_id) || null;
+  const ph = clientId && o.phones ? o.phones[clientId] : null;
+  const id = jsArg(a.case_id);
+  const erc = feed.ercIds.has(a.case_id);
+  let status;
+  if (erc) status = { label: "ERC conflict", cls: "red", title: TIP_ERC };
+  else if (a.stage === "completed" && rem.chip) status = { label: rem.chip.text, cls: `${rem.chip.cls} ret-rem-badge ret-rem-${rem.chip.remKey}`, title: rem.chip.title };
+  else status = { label: STAGE_LABEL[a.stage] || stageWordFor(a.stage), cls: `${stageBadgeClass(a.stage)} stage-chip` };
+  const startable = a.stage === "completed" && rem.workable && a.rate_end_date && !retentionSourceIds.has(a.case_id);
+  const tooEarly = startable && rateErcFarOut(a);
+  const verbs = [{ label: "📞 Log call", cls: "ret-row-chip ret-logcall-chip", onclick: `retLogCall('${id}')`, title: "Log a call against this case — the same form the case modal uses: outcome chip, note, protection tick and an optional follow-up task." }];
+  if (startable && !tooEarly) verbs.push({ label: "🔁 Start retention case", cls: "btn-retention", onclick: `startRetentionCase('${id}', event)`, title: RET_START_TIP });
+  if (a.stage === "completed" && rem.workable && retentionSourceIds.has(a.case_id)) verbs.push({ label: "✓ Mark as reminded", cls: "btn-retention", onclick: `markRateReminded('${id}', event)`, title: RET_MARK_TIP });
+  const more = [{ label: "📅 Book review", cls: "ret-row-chip hover-quiet", onclick: `retBookReview('${id}')`, title: "Book a rate-end review in the diary, prefilled with this client, this case and the adviser who owns it." }]
+    .concat(rowOutcomeVerbs(a));
+  /* The one fact line, in the order a caller reads it: the rate and when it ends, who last spoke to
+     them, what is recorded, then the loan (owner) — the last fee stays on Today's drawer and in the
+     fold's basis; on a one-line row it pushed the dial pair off the end. */
+  const fact = rateErcFactHtml(a, feed, false, mny)
+    + (a.rate_end_estimated ? ` <span class="approx" title="${esc(TIP_APPROX)}">≈ estimate</span>` : "")
+    + (tooEarly ? ` <span class="badge grey rate-too-early" title="${esc(rateTooEarlyTip(feed))}">too early — ${Math.round(a.days_to_rate_end / 30)}mo out</span>` : "")
+    + rowLastContactHtml(a, feed, o) + rowOutcomeStateHtml(a, o)
+    + (money ? ` <span class="rate-money" title="Value at risk: the loan on the case. The last fee (${mny.lastFee ? fmtM(mny.lastFee) : "none recorded"}) is the proxy for the fee at stake.">· Loan <strong>${mny.loan ? fmtM(mny.loan) : "—"}</strong></span>` : "");
+  const tome = startable && !tooEarly ? retentionToMeHtml(a.case_id, cp) : "";
+  const sub = [callPackLineHtml(cp, rateErcEnded(a)), tome].filter(Boolean).join("");
+  return rowItemHtml({
+    id: `ret-${a.case_id}`, cls: "ret-row",
+    cb: { name: "ret-cb", value: a.case_id, checked: !!(o.sel && o.sel.has(a.case_id)) },
+    name: clientId ? { text: a.client_name, clientId } : { text: a.client_name },
+    chips: [retCaseChip(feed, a), status],
+    fact,
+    contact: ph && ph.phone ? { phone: ph.phone, smsOptOut: !!ph.smsOptOut, first: ph.first || a.client_name, rateEnd: a.rate_end_date } : null,
+    verbs, more,
+    moreTitle: "Book review, and the two rate-end outcomes (renewed elsewhere · property sold).",
+    sub,
+  });
 }
 /* R7-2 — the dedupe footnote. Said wherever the feed is drawn, because a count that does not match
    the rows on screen is the thing this note exists to explain. */
@@ -10251,9 +10391,31 @@ window.retSetScope = function (s) {
   syncRetScopeButtons();
   loadRetentionPage();
 };
+/* R88 · C — THE TOOLS ROW, FROM THE KIT (panel 04 #6). Rendered once, at load, BEFORE anything wires
+   it: 🔍 a client-name search (Retention never had one), Mine|All keeping #ret-scope-mine /
+   #ret-scope-all exactly, and the one Sort <select id="ret-sort"> whose options renderRetSortSelect
+   fills (the "Never contacted first" toggle is one of them now). The scope buttons' active state is
+   still resolved on first render (syncRetScopeButtons) — it depends on the role and a stored pick. */
+let retSearch = "";
+(() => {
+  const slot = $("#ret-tools");
+  if (!slot) return;
+  slot.outerHTML = listToolsHtml({
+    id: "ret-tools",
+    search: { id: "ret-search", placeholder: "Search client…", ariaLabel: "Search the retention list by client name" },
+    scope: {
+      value: "mine", options: ["mine", "all"], ids: { mine: "ret-scope-mine", all: "ret-scope-all" }, ariaLabel: "Whose retention book to show",
+      titles: { mine: "The rates on cases assigned to you, and the clients with at least one case of yours.", all: "Every adviser's cases and clients — the whole firm." },
+    },
+    sort: { id: "ret-sort", value: "newest", options: [], ariaLabel: "Sort the rates list" },
+  });
+})();
 if ($("#ret-scope-mine")) {
   $("#ret-scope-mine").addEventListener("click", () => retSetScope("mine"));
   $("#ret-scope-all").addEventListener("click", () => retSetScope("all"));
+}
+if ($("#ret-search")) {
+  $("#ret-search").addEventListener("input", debounce(() => { retSearch = $("#ret-search").value || ""; loadRetentionRates(retScopeResolved()); }, 250));
 }
 /* R7-2 semantics, page-local state: the drawer and the page are read in different postures and a
    click on one must not silently re-order the other. Same default and same rule — value at risk
@@ -10303,25 +10465,36 @@ window.toggleRetSortDir = function () {
    (nx_ret_sortdir, retSortMode). toggleRetSort / toggleRetSortDir stay as the
    programmatic path; the select is what a hand reaches for.
    ========================================================================== */
+/* R88 · C (04 #2e, #6) — AND THE "NEVER CONTACTED FIRST" TOGGLE IS THE FOURTH OPTION. It always
+   re-ordered and never hid (R70 · B2), which is what a sort is; as a toggle beside the chips it was
+   one more control with its own count and its own note. Choosing it keeps the date direction already
+   in force and puts the never-contacted rows first inside each group (a stable partition, as before);
+   choosing any other order turns it off. Still remembered in nx_ret_untouched. */
 function renderRetSortSelect(valueSort, sortDir) {
   const sel = $("#ret-sort");
   if (!sel) return;
   const opts = [
     ["newest", "Sort: Most recently ended first", "Ended rates are listed most-recently-ended first — the freshest lapse at the top. Rates still to come always read soonest-first."],
     ["oldest", "Sort: Oldest first", "Ended rates are listed oldest first. Rates still to come always read soonest-first."],
+    ["untouched", "Sort: Never contacted first", "The clients nobody has ever contacted sit at the top of each group, in date order. It re-orders — it never hides a row. \"Never contacted\" means no note, no sent email, no past appointment and no completed task on record; import notes do not count."],
   ];
   if (showMoney()) opts.push(["value", "Sort: By value at risk", "Sorted by loan size — the value at risk — instead of by date."]);
-  const cur = valueSort ? "value" : sortDir;
+  const cur = retUntouchedOn() ? "untouched" : valueSort ? "value" : sortDir;
   sel.innerHTML = opts.map(([k, l, tip]) => `<option value="${k}" title="${esc(tip)}"${k === cur ? " selected" : ""}>${esc(l)}</option>`).join("");
+  sel.value = cur;
   sel.title = (opts.find(([k]) => k === cur) || [])[2] || "";
   sel.onchange = () => retSetSort(sel.value);
 }
 window.retSetSort = function (v) {
+  retUntouched = v === "untouched";
+  lsSet(RET_UNTOUCHED_KEY, retUntouched ? "1" : "0");
   if (v === "value") { retSortMode = "value"; }
-  else {
+  else if (v !== "untouched") {
     retSortMode = "date";
     retSortDir = v === "oldest" ? "oldest" : "newest";
     lsSet(RET_SORTDIR_KEY, retSortDir);
+  } else {
+    retSortMode = "date";
   }
   loadRetentionPage();
 };
@@ -10421,41 +10594,92 @@ function retMonthWindowCopy(key, todayIdx) {
   if (key === "3mo") return `Showing rates ending in ${ymLabel(todayIdx)}, ${ymLabel(todayIdx + 1)} and ${ymLabel(todayIdx + 2)}.`;
   return "Showing the whole 6-month window: every rate ending in it, every rate already ended, and the ERC-only cases.";   // R87 · book — ≤ 25 words with the scope clause
 }
+/* R88 · C — pressing a window chip leaves the outcome filter and the Gone-quiet list: one chip is
+   pressed at a time on the strip, and it names the list below. */
 window.retSetMonth = function (k) {
   retMonth = RET_MONTHS.some(([x]) => x === k) ? k : "all";
   lsSet(RET_MONTH_KEY, retMonth);
+  retOutcomeFilter = "";
+  retCold = false;
   loadRetentionPage();
 };
-/* The chip row. Each chip carries how many rows it WOULD show, from the feed already in hand, so
-   picking a window is never a guess about whether it is empty. */
-function renderRetMonthChips(counts) {
+/* ==========================================================================
+   R88 · C (04 #2, #6) — ONE CHIP STRIP FOR THE WHOLE PAGE.
+
+   Three controls said "which rows": the month chips (R64), the outcome funnel
+   (R72/R75 — four chips in a tile of their own) and the Gone-quiet PANEL (a
+   second list, of clients, under the first). They are one .seg-strip now
+   (segmentChipsHtml, #ret-segs inside #ret-month-chips), and ONE chip is
+   pressed at a time, because one chip = one list:
+     · a WINDOW chip — the rate rows maturing in it (RET_MONTHS; the three
+       R87-folded keys still render, `hidden`, unless one of them is the pick);
+     · an OUTCOME chip — the rates that ENDED in the last 12 months with that
+       outcome recorded (the R72 funnel's own population (a)). Its count is the
+       R72 tally, unchanged — which also counts outcomes recorded on rates that
+       have since LEFT this list (sold clears the date, renewed moves it), so a
+       Renewed/Sold chip can say more than it can show; its title says so;
+     · GONE QUIET — the Clients page's cold segment (coldClients, the shared
+       last-contact definition), one row per client. It IS the old panel.
+   Every chip carries the count it would show before it is pressed.
+   The keys are the old ones (data-seg, plus data-month / data-outcome /
+   data-n carried on the buttons via the kit's attrs map, so every reader of those keeps working).
+   ========================================================================== */
+const RET_OUTCOME_CHIPS = [
+  ["retained", "Retained", "A retention case linked to that rate reached Completed — the client re-mortgaged with us."],
+  /* R88 · fixer (10 4c) — "Elsewhere" (was "Renewed elsewhere"): the nine chips fit ONE line at 1440 again; the title says it in full. */
+  ["renewed_elsewhere", "Elsewhere", "Renewed elsewhere — recorded on the case as a rate-end outcome: a new deal taken direct or with somebody else."],
+  ["sold", "Sold", "Recorded on the case as a rate-end outcome: property sold or mortgage redeemed."],
+  ["none", "No outcome", "The rate ended in the last 12 months and nothing has been recorded about what happened. This is the pile to work."],
+];
+let retCold = false;          // the Gone-quiet chip — not persisted, like the outcome filter (R75 · B2)
+let retColdFresh = true;      // the comms re-read happens once per page entry, not on every chip press
+function retActiveSeg() {
+  return retCold ? "cold" : retOutcomeFilter ? retOutcomeFilter : retMonthResolved();
+}
+function renderRetSegs(counts) {
   const wrap = $("#ret-month-chips");
   if (!wrap) return;
-  const cur = retMonthResolved();
-  /* R73 · B3 — one window is chosen at a time, which is the definition of a
-     segmented control, so the chips sit in the same grey track every other one in
-     the app now uses. The LABEL stays outside the track: it names the control, it
-     is not one of the options. */
-  wrap.innerHTML = `<span class="due-chips-lbl">Rate ends:</span>`
-    + `<span class="segment">`
-    + RET_MONTHS.map(([k, label, tip]) =>
-      `<button type="button" class="btn btn-sm ret-month-chip${k === cur ? " scope-active" : ""}" data-month="${k}" aria-pressed="${k === cur}"${RET_MONTHS_FOLDED.has(k) && k !== cur ? " hidden" : ""} title="${esc(tip)}">${esc(label)}${counts && counts[k] != null ? ` <span class="count">${counts[k]}</span>` : ""}</button>`
-    ).join("")
-    + `</span>`;
-  wrap.querySelectorAll(".ret-month-chip").forEach((b) => (b.onclick = () => retSetMonth(b.dataset.month)));
+  const c = counts || {};
+  const cur = retActiveSeg();
+  const oc = (c.outcomes && c.outcomes.counts) || null;
+  const chips = RET_MONTHS.map(([k, label, tip]) => ({
+    key: k, label, title: tip, cls: "ret-month-chip", count: c.month && c.month[k] != null ? c.month[k] : null, active: k === cur,
+    /* the old readers' key, and the R87 fold (three windows hidden unless picked) */
+    attrs: { month: k, hidden: RET_MONTHS_FOLDED.has(k) && k !== cur },
+  })).concat(oc ? RET_OUTCOME_CHIPS.map(([k, label, tip]) => ({
+    key: k, label, count: oc[k], active: k === cur, attrs: { outcome: k, n: String(oc[k] || 0) },
+    cls: `ret-outcome-chip${k === "none" && oc[k] ? " hot" : ""}`,
+    title: `${tip} Rates that ended in the last 12 months${k === "renewed_elsewhere" || k === "sold" ? " — the count includes outcomes recorded on rates that have since left this list, which cannot be shown here" : ""}. ${oc[k] ? (k === cur ? "Pressed — press again for the rate window." : "Press to show these in the list.") : "Nothing to show under this one."}`,
+  })) : []).concat(c.cold == null ? [] : [{
+    key: "cold", label: "Gone quiet", count: c.cold, active: cur === "cold", cls: "ret-cold-chip",
+    title: `Clients nobody has contacted in ${clientQuietMonths()} months — the Clients page's cold segment, the same definition. Soonest rate end first.`,
+  }]);
+  wrap.innerHTML = segmentChipsHtml({ id: "ret-segs", ariaLabel: "Which retention list to show", chips });
+  wrap.onclick = (e) => {
+    const b = e.target.closest(".seg-btn");
+    if (!b) return;
+    const k = b.dataset.seg;
+    if (b.classList.contains("ret-month-chip")) return retSetMonth(k);
+    if (b.classList.contains("ret-cold-chip")) {
+      retCold = cur !== "cold";   // press again to go back to the window
+      retOutcomeFilter = "";
+      return loadRetentionRates(retScopeResolved());
+    }
+    if (b.classList.contains("ret-outcome-chip")) {
+      if (retOutcomeFilter !== k && !Number(b.dataset.n)) {
+        renderRetSegs(counts);   // undo the kit's optimistic press — nothing was chosen
+        return toast("Nothing has been recorded under that outcome in the last 12 months — there is nothing to show.");
+      }
+      retOutcomeFilter = retOutcomeFilter === k ? "" : k;
+      retCold = false;
+      return loadRetentionRates(retScopeResolved());
+    }
+  };
 }
 /* ==========================================================================
-   R70 · B2 — "NEVER CONTACTED FIRST", A TOGGLE AND NOT A FILTER.
-
-   The fact that nobody has ever spoken to this client belongs ON the retention
-   row, and it has to be workable: 103 of Daniel's 105 product-transfer
-   prospects are untouched, interleaved with a back book that has been worked.
-
-   A TOGGLE, deliberately, and not a sixth month chip: it re-orders, it never
-   hides. Pressing it and finding twelve rows where there were ninety would be
-   a filter pretending to be a sort, and the operator would not know which rows
-   had gone. The chip carries the count, so pressing it is never a guess, and
-   the choice is remembered (nx_ret_untouched) like the scope and the month.
+   R70 · B2 — "NEVER CONTACTED FIRST", RE-ORDERS AND NEVER HIDES.
+   R88 · C — no longer a toggle chip: it is the Sort select's fourth option (renderRetSortSelect).
+   The state and its storage key are unchanged (nx_ret_untouched).
    ========================================================================== */
 const RET_UNTOUCHED_KEY = "nx_ret_untouched";
 let retUntouched = null;
@@ -10468,80 +10692,71 @@ window.retToggleUntouched = function () {
   lsSet(RET_UNTOUCHED_KEY, retUntouched ? "1" : "0");
   loadRetentionRates(retScopeResolved());
 };
-function renderRetUntouchedChip(never, total) {
-  const wrap = $("#ret-untouched");
-  if (!wrap) return;
-  const on = retUntouchedOn();
-  wrap.innerHTML = `<button type="button" class="btn btn-sm ret-untouched-chip${on ? " scope-active" : ""}" id="ret-untouched-btn" aria-pressed="${on}" title="${on
-    ? "On: the clients nobody has ever contacted sit at the top of each group. Press again for the date order. Nothing is hidden either way."
-    : "Bring the clients nobody has ever contacted to the top of each group. It RE-ORDERS the list — it never hides a row. \"Never contacted\" means no note, no sent email, no past appointment and no completed task on record; import notes do not count."}">🕸 Never contacted first <span class="count">${never}</span></button>`
-    /* R87 · book (04 #11) — the note only when there is somebody to talk about, and one clause
-       long; the definition moved into the chip's own title. "0 of 15 rows have no note…" was a
-       sentence about nobody. */
-    + (never ? `<span class="ret-untouched-note">${never} of ${total} row${total === 1 ? "" : "s"} never contacted.</span>` : "");
-  const btn = $("#ret-untouched-btn");
-  if (btn) btn.onclick = () => retToggleUntouched();
-}
 /* ==========================================================================
    R64 · A1 — BULK VERBS ON THE PAGE NAMED AFTER THE JOB.
 
-   The Pipeline table has had ⏰ Queue rate-end reminders / 🔁 Start retention
-   cases / ＋ Add task since R5 and R7-2, and they are surface-agnostic: they
-   take a list of case ids and do the whole job, pre-flight, per-case confirms,
-   skips and tally included. The Retention page — the page a retention broker
-   opens FIRST — had none of them, so forty rate-ends a month were worked one
-   case modal at a time.
-
-   Nothing here is a second implementation. retSel is the same shape as pipeSel
-   and clientSel (a Set of case ids), the bar is the same .bulk-bar, and each
-   button calls the SAME *Run() function the pipeline's bar calls. What the page
-   adds is a selection that lives on THESE rows and a repaint of THIS page
-   afterwards.
+   The Pipeline table's ⏰ Queue rate-end reminders / 🔁 Start retention cases /
+   ＋ Add task, on the page a retention broker opens FIRST. Nothing here is a
+   second implementation: retSel is the same shape as pipeSel (a Set of case
+   ids) and each verb calls the SAME *Run() function the pipeline's bar calls.
+   R88 · C — the bar is the kit's (bulkBarHtml — same ids: #ret-bulk-bar,
+   #ret-bulk-n, #ret-bulk-rate/-retention/-task, #ret-bulk-clear), docked at the
+   BOTTOM of the list (dockBulkBar), and "Select all N shown" is the kit's line
+   (#ret-bulk-all) directly above the rows. Ticking updates the bar in place.
    ========================================================================== */
 let retSel = new Set();
 let retShownIds = [];        // the ids currently on screen — what "select all shown" means
-function renderRetBulkBar(shownIds) {
-  const wrap = $("#ret-bulk");
-  if (!wrap) return;
-  const list = shownIds || retShownIds || [];
-  const n = retSel.size;
-  // Nothing on screen: a "Select all 0 shown" line is furniture, not a control.
-  if (!list.length && !n) { wrap.innerHTML = ""; return; }
-  wrap.innerHTML = `
-    <div class="client-selall ret-selall">
-      <label><input type="checkbox" id="ret-bulk-all" aria-label="Select every rate row shown"${n && n >= list.length && list.length ? " checked" : ""}> Select all ${list.length} shown</label>
-      ${n ? `<button type="button" class="linkish" id="ret-selall-clear">clear</button>` : ""}
-    </div>
-    <div class="bulk-bar" id="ret-bulk-bar"${n ? "" : " hidden"}>
-      <span class="bulk-bar-count"><strong id="ret-bulk-n">${n}</strong> selected</span>
-      <button type="button" class="btn btn-sm" id="ret-bulk-rate" title="Queue a rate-end reminder for every selected case that has a client email and a rate end date. Nothing is sent now — they go with the next automation run, and each one leaves a follow-up task behind.">⏰ Queue rate-end reminders</button>
-      ${/* R70 · A3 — the title said "each one asks you to confirm", which is what it did and is no
-           longer true: the batch asks ONCE now, on an overlay that names every case it will start
-           and every case it is holding back. */ ""}
-      <button type="button" class="btn btn-sm" id="ret-bulk-retention" title="Start a retention case for every selected completed case whose rate is ending. ONE confirmation for the whole batch, naming what it will start and what it is skipping — too far out, already has a retention case, or the property looks sold.">🔁 Start retention cases</button>
-      <button type="button" class="btn btn-sm" id="ret-bulk-task" title="One task per selected case, each landing on that case's own adviser.">＋ Add task…</button>
-      <button type="button" class="btn btn-sm" id="ret-bulk-clear">Clear</button>
-    </div>
-    ${/* R87 · book (04 #11) — the 30-word "where these verbs come from" note is gone: each
-         button's own title says what it does and what it skips. */ ""}`;
+function retBulkBarHtml() {
+  return bulkBarHtml({
+    id: "ret-bulk-bar", countId: "ret-bulk-n", clearId: "ret-bulk-clear", count: retSel.size,
+    ariaLabel: "Actions on the selected rate rows",
+    verbs: [
+      { id: "ret-bulk-rate", label: "⏰ Queue rate-end reminders", title: "Queue a rate-end reminder for every selected case that has a client email and a rate end date. Nothing is sent now — they go with the next automation run, and each one leaves a follow-up task behind." },
+      { id: "ret-bulk-retention", label: "🔁 Start retention cases", title: "Start a retention case for every selected completed case whose rate is ending. ONE confirmation for the whole batch, naming what it will start and what it is skipping — too far out, already has a retention case, or the property looks sold." },
+      { id: "ret-bulk-task", label: "＋ Add task…", title: "One task per selected case, each landing on that case's own adviser." },
+    ],
+  });
+}
+/* Wires the bar and the select-all line that loadRetentionRates just painted, and docks the bar. */
+function wireRetBulk() {
+  const list = $("#ret-rates-list");
+  const bar = $("#ret-bulk-bar");
+  if (!list || !bar) return;
+  dockBulkBar(list, bar);
   const all = $("#ret-bulk-all");
-  if (all) {
-    all.indeterminate = n > 0 && n < list.length;
-    all.onchange = () => {
-      if (all.checked) list.forEach((id) => retSel.add(id)); else retSel.clear();
-      loadRetentionRates(retScopeResolved());
-    };
-  }
-  const clearLink = $("#ret-selall-clear");
-  if (clearLink) clearLink.onclick = () => { retSel.clear(); loadRetentionRates(retScopeResolved()); };
+  if (all) all.onchange = () => {
+    if (all.checked) retShownIds.forEach((id) => retSel.add(id)); else retSel.clear();
+    list.querySelectorAll(".ret-cb").forEach((cb) => { cb.checked = retSel.has(cb.dataset.id); const r = cb.closest(".row-item"); if (r) r.classList.toggle("is-sel", cb.checked); });
+    updateRetBulkBar();
+  };
   const clearBtn = $("#ret-bulk-clear");
-  if (clearBtn) clearBtn.onclick = () => { retSel.clear(); loadRetentionRates(retScopeResolved()); };
+  if (clearBtn) clearBtn.onclick = () => {
+    retSel.clear();
+    list.querySelectorAll(".ret-cb").forEach((cb) => { cb.checked = false; const r = cb.closest(".row-item"); if (r) r.classList.remove("is-sel"); });
+    updateRetBulkBar();
+  };
   const rateBtn = $("#ret-bulk-rate");
   if (rateBtn) rateBtn.onclick = () => retBulkRun(bulkQueueRateRemindersRun);
   const retBtn = $("#ret-bulk-retention");
   if (retBtn) retBtn.onclick = () => retBulkRun(bulkStartRetentionRun);
   const taskBtn = $("#ret-bulk-task");
   if (taskBtn) taskBtn.onclick = () => retBulkRun(bulkAddTaskRun);
+  updateRetBulkBar();
+}
+/* The count, the empty state of the bar and the select-all tick, in place — no repaint. */
+function updateRetBulkBar() {
+  const bar = $("#ret-bulk-bar");
+  if (!bar) return;
+  const n = retSel.size;
+  const nEl = $("#ret-bulk-n"); if (nEl) nEl.textContent = n;
+  bar.classList.toggle("is-empty", !n);
+  if (bar.parentElement && bar.parentElement.classList.contains("bulk-dock")) bar.parentElement.classList.toggle("is-empty", !n);
+  const all = $("#ret-bulk-all");
+  if (all) {
+    const shown = retShownIds.length;
+    all.checked = !!n && n >= shown && shown > 0;
+    all.indeterminate = n > 0 && n < shown;
+  }
 }
 /* G1I-D7's in-flight guard, shared with the pipeline bar: a key-repeat on a focused bulk button
    must not start two overlapping runs. The verbs themselves clear pipeSel and repaint the
@@ -10566,7 +10781,7 @@ async function retBulkRun(fn) {
     if (!cb || !cb.classList || !cb.classList.contains("ret-cb")) return;
     if (cb.checked) retSel.add(cb.dataset.id); else retSel.delete(cb.dataset.id);
     const row = cb.closest(".row-item"); if (row) row.classList.toggle("is-sel", cb.checked);
-    renderRetBulkBar(retShownIds);
+    updateRetBulkBar();
   });
 })();
 /* ==========================================================================
@@ -10602,8 +10817,9 @@ function openLogCallModal(c, opts) {
   return openOverlay(`
     <h3>📞 Log a call — ${esc(who)}</h3>
     <p class="panel-sub">${esc(o.intro || LOGCALL_INTRO)}</p>
-    <div class="cs-logcall-panel" id="${esc(panelId)}">${logCallPanelHtml(c)}</div>`, (finish, box) => {
+    <div class="cs-logcall-panel" id="${esc(panelId)}">${logCallPanelHtml(c)}</div>${o.extraHtml || ""}`, (finish, box) => {
     const panel = box.querySelector("#" + panelId);
+    if (o.wireExtra) o.wireExtra(box, finish);   // R88 · C — an entry point's own controls (Protection's status selects)
     wireLogCallPanel(panel, {
       onCancel: () => finish(null),
       onSave: async () => {
@@ -10677,12 +10893,17 @@ async function loadRetentionPage() {
     note.textContent = scope === "mine"
       ? "Showing your cases and your clients. Switch to All for the whole firm."
       : "";
-    note.hidden = scope !== "mine";   // under All every panel line already says whose; the note is the narrowing
+    /* R88 · C — never shown now: the pressed Mine in the tools row and the panel's one line
+       ("Showing your cases: …") both say whose, and a second line saying it again cost an adviser
+       the first row's place above the fold. The words stay on the element for anything reading it. */
+    note.hidden = true;
   }
+  /* R88 · C — two panels now: the Gone-quiet panel is a chip on the rates list (renderRetSegs),
+     read inside loadRetentionRates. A page entry re-reads the comms behind it once. */
+  retColdFresh = true;
   await Promise.all([
     loadRetentionRates(scope),
     loadRetentionPipelinePanel(scope),
-    loadRetentionCold(scope),
   ]);
 }
 /* §1 — the rate & ERC feed, un-truncated and split at the maturity date. The page's OWN two reads:
@@ -10697,19 +10918,22 @@ let retRatesLoadSeq = 0;   // R83
 async function loadRetentionRates(scope) {
   const seq = ++retRatesLoadSeq;   // R83 — re-checked after every await below
   const reminderMonths = Number(settings.rate_reminder_months) || 6; // T1-10 — a stray non-numeric stored value can't render "≤ NaNmo"
-  const [{ data: cases, error: casesErr }, { data: alerts, error: alertsErr }, outcomeNotes] = await Promise.all([
+  const coldFresh = retColdFresh;
+  retColdFresh = false;
+  const [{ data: cases, error: casesErr }, { data: alerts, error: alertsErr }, outcomeNotes, coldData] = await Promise.all([
     readDashboardCases(),
     readAll(db.from("v_alerts").select("*").order("rate_end_date").order("case_id")),
-    /* R72 · A2 — the ONE read this round adds to this page, in the wave that was already here
-       rather than as a fourth sequential await. `like`-filtered to the 📌 outcome notes, so it is
-       bounded by the filter and not merely by the row cap. */
+    /* R72 · A2 — the ONE read R72 added to this page, in the wave that was already here. `like`-
+       filtered to the 📌 outcome notes, so it is bounded by the filter and not merely by the cap. */
     readRateEndOutcomeNotes(),
+    /* R88 · C — the Gone-quiet chip's list and count: the Clients page's own shared data (the Book
+       + the comms window, cached) in the same wave. Fresh once per page entry (was: the old
+       panel's own clientDataCached(true)); a chip press re-reads nothing. */
+    clientDataCached(coldFresh),
   ]);
   if (seq !== retRatesLoadSeq) return;   // R83 — a newer load owns the panel now
   if (casesErr || alertsErr) {
-    // R72 · A2 — a failed read must not leave the previous paint's outcome tile standing over an
-    // error message, claiming to describe rows that are no longer on screen.
-    const fnl = $("#ret-outcome-funnel"); if (fnl) fnl.innerHTML = "";
+    const segs = $("#ret-month-chips"); if (segs) segs.innerHTML = "";
     renderLoadError("#ret-rates-list", casesErr || alertsErr, loadRetentionPage); return;
   }
   renderOwnerCapNotice("#ret-cap-notice", ownerCapHit(cases) || ownerCapHit(alerts));
@@ -10720,177 +10944,118 @@ async function loadRetentionRates(scope) {
   const outcomeExtras = { retained: retainedSourceIds(cases), outcomes: (outcomeNotes && outcomeNotes.map) || {}, error: outcomeNotes && outcomeNotes.error };
   const casesById = {};
   (cases || []).forEach((c) => { if (c && c.id) casesById[c.id] = c; });
-  renderRateEndOutcomeFunnel(feed, outcomeExtras, { scope, caseAdviser: feed.caseAdviser, casesById });
+  const tally = rateEndOutcomeTally(feed, outcomeExtras, { scope, caseAdviser: feed.caseAdviser, casesById });
+  if (retOutcomeFilter && !(tally.counts && tally.counts[retOutcomeFilter])) retOutcomeFilter = "";   // nothing left under it
+  /* R88 · C — the cold set, from the shared predicate (coldClients) and the page's scope. */
+  const coldList = coldData && !coldData.error ? retColdSorted(coldData, scope) : null;
+  if (!coldList) retCold = false;
+  const q = retSearch.trim().toLowerCase();
+  const nameHit = (name) => !q || String(name || "").toLowerCase().includes(q);
   /* R64 · A2 — the month window, applied to the SCOPED feed. The chip counts are computed first,
-     from the whole scoped feed, so every chip says what it would show before it is pressed. */
+     from the whole scoped feed (and the search), so every chip says what it would show before it
+     is pressed. */
   const monthKey = retMonthResolved();
   const todayIdx = ymIndex(localDateStr());
-  const inWindow = (a) => retMonthMatch(a, monthKey, todayIdx);
+  const outFiltered = !retCold && !!retOutcomeFilter;
+  /* R88 · C — an OUTCOME chip is its own window: the rates that ended in the last 12 months (the
+     R72 funnel's population (a)), with that outcome recorded. A WINDOW chip is R64's. */
+  const inWindow = outFiltered
+    ? (a) => rateErcEnded(a) && a.days_to_rate_end >= -RATE_OUTCOME_WINDOW_DAYS && rateEndOutcomeOf(a, outcomeExtras).key === retOutcomeFilter
+    : (a) => retMonthMatch(a, monthKey, todayIdx);
+  const searched = feed.rows.filter((a) => nameHit(a.client_name));
   const chipCounts = {};
-  RET_MONTHS.forEach(([k]) => { chipCounts[k] = feed.rows.filter((a) => retMonthMatch(a, k, todayIdx)).length; });
-  renderRetMonthChips(chipCounts);
+  RET_MONTHS.forEach(([k]) => { chipCounts[k] = searched.filter((a) => retMonthMatch(a, k, todayIdx)).length; });
+  const coldShown = coldList ? coldList.filter((c) => nameHit([c.first_name, c.last_name].filter(Boolean).join(" "))) : null;
+  renderRetSegs({ month: chipCounts, outcomes: tally.error ? null : tally, cold: coldShown ? coldShown.length : null });
   const valueSort = showMoney() && retSortMode === "value";
   const sortDir = retSortDirResolved();     // R70 · A1 — everyone's control, not just the owner's
-  const sorted = sortRateErcRows(feed, valueSort, sortDir).filter(inWindow);
-  /* Rows the window cannot place at all: no readable rate end date, so there is no month to put
-     them in. Named on screen rather than quietly dropped. */
-  const undated = feed.rows.filter((a) => !inWindow(a) && ymIndex(a.rate_end_date) == null).length;
-  /* The two scoped badges follow the window as well — they are counts OF THE ROWS ON SCREEN, and
-     a badge that outruns its list is the W-16 defect. The firm-wide figure in each tooltip is
-     narrowed the same way, so "12 on your cases — 40 across the whole firm" always compares two
-     numbers measured over the same months. */
-  const ratesSoonScopedW = feed.ratesSoonScoped.filter(inWindow);
+  renderRetSortSelect(valueSort, sortDir);
+  if (retCold) return renderRetColdList(coldData, coldShown, scope, seq);
+  const sorted = sortRateErcRows(feed, valueSort, sortDir).filter((a) => nameHit(a.client_name)).filter(inWindow);
+  /* Rows the window cannot place at all: no readable rate end date. Named in the fold. */
+  const undated = feed.rows.filter((a) => !retMonthMatch(a, monthKey, todayIdx) && ymIndex(a.rate_end_date) == null).length;
+  /* The scoped badges follow the window — they are counts OF THE ROWS ON SCREEN (W-16), and the
+     firm-wide figure in each tooltip is narrowed the same way. */
   const ratesSoonAllW = feed.ratesSoonAll.filter(inWindow);
-  const ratesSoonAllWIds = new Set(ratesSoonAllW.map((a) => a.case_id));   // R83 — for the sub-line's firm-wide count
+  const ratesSoonAllWIds = new Set(ratesSoonAllW.map((a) => a.case_id));   // R83
   const ercScopedW = feed.ercFlagsScoped.filter(inWindow);
   const ercAllW = feed.ercFlagsAll.filter(inWindow);
-  /* R74 · A1 — THE THREE GROUPS, FROM THE SHARED HELPER, OVER THE WINDOWED ROWS THAT ARE ON SCREEN.
-     ENDED FIRST: a rate that matured last month is a client already paying the reversion rate; one
-     with four months to run is a diary entry. ERC-ONLY LAST and, for the first time, under its own
-     heading — those rows were being merged into "Ending soon" although their rate ends well beyond
-     the window, which is exactly why this list read 14 under a heading that said 11. */
+  /* R74 · A1 — THE THREE GROUPS, FROM THE SHARED HELPER, OVER THE WINDOWED ROWS: ended first, then
+     ending soon, then ERC-only. An outcome chip can only ever hold ended rows. */
   const book = rateBookCounts(feed, sorted);
-  const ended = book.rows.ended;
-  const soon = book.rows.ending;
-  const ercOnly = book.rows.ercOnly;
-  /* R75 · B2 — the funnel chip, applied. An outcome is a thing that happens at the
-     END of a rate, so a filter can only ever narrow the ENDED group: the other two
-     groups are dropped while it is on rather than left sitting underneath a list
-     the reader has just asked to be narrowed. The book counts above (badges, h3,
-     the funnel itself) are NOT re-derived from this — they describe the book, and
-     a filter is a view of it. The notice below the h3 says which is which. */
-  const outFiltered = !!retOutcomeFilter;
-  const endedShown = outFiltered
-    ? ended.filter((a) => rateEndOutcomeOf(a, outcomeExtras).key === retOutcomeFilter)
-    : ended;
-  let ordered = outFiltered ? endedShown.slice() : ended.concat(soon, ercOnly);
-  /* ==========================================================================
-     R70 · B2 — WHO HAS ALREADY BEEN RUNG, ON EVERY ROW, AND A WAY TO WORK THE
-     ONES WHO HAVE NOT.
-
-     Computed over the WHOLE windowed feed rather than the hundred rows on
-     screen, because "Never contacted first" has to be able to reach past the
-     cap — a toggle that only re-orders what you can already see answers a
-     question nobody asked. Chunked and paged (see lastContactByClient).
-     ========================================================================== */
-  const lastContact = await lastContactByClient(
-    ordered.map((a) => (propCtxCase(feed.ctx, a.case_id) || {}).client_id));
+  let ordered = book.rows.ended.concat(book.rows.ending, book.rows.ercOnly);
+  /* R70 · B2 — last contact, over the WHOLE windowed list (the "never contacted first" order has
+     to reach past the cap). Chunked and paged (lastContactByClient). */
+  const lastContact = await lastContactByClient(ordered.map((a) => a.client_id || (propCtxCase(feed.ctx, a.case_id) || {}).client_id));
   if (seq !== retRatesLoadSeq) return;   // R83
-  const untouchedFirst = retUntouchedOn();
   const neverRung = (a) => {
-    const cid = (propCtxCase(feed.ctx, a.case_id) || {}).client_id;
+    const cid = a.client_id || (propCtxCase(feed.ctx, a.case_id) || {}).client_id;
     return !cid || !lastContact[cid];
   };
-  if (untouchedFirst) {
-    /* A STABLE partition, not a re-sort: inside each half the order the reader chose (date or
-       value, ended before soon) is untouched, so the toggle answers one question and changes
-       nothing else. The ended/soon groups below are re-derived by filtering this list, so the
-       never-contacted rows come first within each group rather than jumping between them. */
-    ordered = ordered.filter(neverRung).concat(ordered.filter((a) => !neverRung(a)));
-  }
-  renderRetUntouchedChip(ordered.filter(neverRung).length, ordered.length);
+  /* A STABLE partition, not a re-sort: inside each half the order the reader chose is untouched. */
+  if (retUntouchedOn()) ordered = ordered.filter(neverRung).concat(ordered.filter((a) => !neverRung(a)));
+  const neverN = ordered.filter(neverRung).length;
   const shown = ordered.slice(0, RET_LIST_CAP);
-  /* R64 · A3 — one phone read for the rows on screen. The feed already reads `cases` for the
-     property context, and `clients` carries the number; without it the "📞" on a retention row
-     would be a link to nothing. Soft: no phones simply means no tel: links. */
   const phones = await retRowPhones(feed, shown);
-  if (seq !== retRatesLoadSeq) return;   // R83 — the last await: nothing below is painted or mutated for a superseded load
-  /* R64 · A1 — the selection is pruned to what is actually on screen (BUILD 7c's rule for the
-     pipeline table): flipping scope or month must never leave a verb pointed at a row the
-     operator can no longer see. R83 — moved below the last await so a superseded load never
-     prunes the selection the newer one is about to paint. */
+  if (seq !== retRatesLoadSeq) return;   // R83 — the last await: nothing below is painted for a superseded load
+  /* R64 · A1 — the selection is pruned to what is on screen (BUILD 7c's rule). */
   retShownIds = shown.map((a) => a.case_id);
   const shownSet = new Set(retShownIds);
   [...retSel].forEach((id) => { if (!shownSet.has(id)) retSel.delete(id); });
   const h3 = $("#ret-rates-h3");
   if (h3) {
-    /* The two scoped badges are the DRAWER's two badges, from the same feed and with the same
-       firm-wide tooltip, so the page and Today can never disagree about how much work there is.
-       "Already ended" is the page's own, because the page is the only surface that splits them. */
-    /* R70 · L3 — SAY EACH SET ONCE. The reminder window's own definition includes rates that have
-       already lapsed, so under an ENDED-only chip the two badges read "161 already ended · 161 in
-       the 6-month window" — the same 161 rows under two labels, which reads as 322 pieces of work.
-       Under those chips the window badge is dropped rather than reworded: there is nothing it can
-       add that the "already ended" badge beside it has not said. Every other window keeps the
-       count it has always carried (it is the same number Today's drawer badge shows — r38 §C2b
-       pins those two together, and they must not drift apart over a label). */
-    /* R74 · A1 — L3's rule, DERIVED rather than listed. The window badge is dropped exactly when
-       the window holds nothing the "already ended" badge beside it has not already said — which
-       is what an ended-only chip produces, and is now measured instead of enumerated. */
+    /* R74 · A1 / R70 · L3 — the badges add up to the list: "already ended" is inside the window
+       badge (said in its title), the ERC badge counts the rows here ONLY for an ERC, and the window
+       badge is dropped when it would only repeat the ended one. */
     const endedOnlyWindow = book.ended > 0 && book.ended === book.inWindow;
-    /* R74 · A1 — THE BADGES NOW ADD UP TO THE LIST. "4 already ended · 11 in the 6-month window"
-       over a 14-row list read as 15 pieces of work over 14 rows, because the 4 are INSIDE the 11
-       and the 3 rows carried by an ERC conflict alone were in neither number. The window badge
-       keeps the count it has always had (r38 §C2b pins it to Today's drawer badge) and its tooltip
-       now says the ended ones are part of it; the ERC badge counts the rows that are here ONLY for
-       an ERC, so window + ERC-only = the rows on screen = the chip above. */
     h3.innerHTML = `⚠️ Rates ending &amp; ended
       ${book.ended ? `<span class="count hot" title="Rates that have already matured — the client is on the reversion rate now.${endedOnlyWindow ? " This window holds nothing else, so there is no second count beside it: these ARE the rows on screen." : ` These ${book.ended} are part of the ${book.inWindow} ${rateBookWindowWord(reminderMonths)} beside this, not extra to it — a lapsed rate is inside the window.`}">${book.ended} already ended</span>` : ""}
       ${endedOnlyWindow || !book.inWindow ? "" : `<span class="count" title="${esc(rateCountTip(book.inWindow, ratesSoonAllW.length, rateBookWindowWord(reminderMonths), scope) + ` Includes the ${book.ended} already ended; the other ${book.ending} are still to end.`)}">${book.inWindow} ${rateBookWindowWord(reminderMonths)}</span>`}
-      ${book.ercOnly ? `<span class="count" style="background:#fbe9e7;color:var(--red);" title="${esc(`${book.ercOnly} row${book.ercOnly === 1 ? " is" : "s are"} on this list ONLY because the ERC outlasts the rate — the rate itself ends beyond the ${reminderMonths}-month window. ` + rateCountTip(ercScopedW.length, ercAllW.length, "ERC conflicts in all", scope) + " The rest of those already appear above, inside the window.")}">${book.ercOnly} ERC conflict only</span>` : ""}
-      ${/* R87 · book · C2 — the two sort toggles that lived here (#ret-sort-dir, #ret-rates-sort)
-           are one <select id="ret-sort"> in the page's tools row (renderRetSortSelect). */ ""}`;
+      ${book.ercOnly ? `<span class="count erc-count" title="${esc(`${book.ercOnly} row${book.ercOnly === 1 ? " is" : "s are"} on this list ONLY because the ERC outlasts the rate — the rate itself ends beyond the ${reminderMonths}-month window. ` + rateCountTip(ercScopedW.length, ercAllW.length, "ERC conflicts in all", scope) + " The rest of those already appear above, inside the window.")}">${book.ercOnly} ERC conflict only</span>` : ""}`;
   }
-  renderRetSortSelect(valueSort, sortDir);
-  /* ==========================================================================
-     R87 · book · C2 (04 #2, #11) — THE PANEL KEEPS ONE LINE; THE MANUAL GOES IN THE FOLD.
-
-     The sub was 526 words across nine paragraphs before the first row (696px
-     down on a desktop, 1,333px on a phone). Every sentence was defensible;
-     together they were a manual. #ret-rates-sub is now the one ≤25-word line
-     — which window is in force, and whose cases — and everything that
-     explained the arithmetic (the R74 reconciliation, the R61 money basis, the
-     firm-wide count under Mine, the undated rows, the R72 funnel's population)
-     is inside ONE howFold, #ret-rates-how, word for word, closed until asked.
-     ========================================================================== */
+  /* R87 · book · C2 — THE PANEL KEEPS ONE LINE (#ret-rates-sub: which list, whose, how many); the
+     manual is inside ONE howFold (#ret-rates-how). R88 · C — the £ at risk (owner) rides on it. */
   const sub = $("#ret-rates-sub");
   if (sub) {
-    sub.textContent = monthKey === "all"
-      ? `Showing ${rateScopeWord(scope)}: the whole ${reminderMonths}-month window, every rate already ended, and the ERC-only cases.`
-      : `${retMonthWindowCopy(monthKey, todayIdx)} Showing ${rateScopeWord(scope)}.`;
+    const whose = rateScopeWord(scope);
+    const lead = outFiltered
+      ? `Rates that ended in the last 12 months recorded as “${RATE_OUTCOME_LABEL[retOutcomeFilter] || retOutcomeFilter}”, on ${whose}.`
+      : monthKey === "all"
+        ? `Showing ${whose}: the whole ${reminderMonths}-month window, every rate already ended, and the ERC-only cases.`
+        : `${retMonthWindowCopy(monthKey, todayIdx)} Showing ${whose}.`;
+    sub.innerHTML = esc(lead)
+      + (tally.money && tally.counts && tally.counts.none ? ` <span class="ret-outcome-atrisk" id="ret-outcome-atrisk" title="${esc(`The loan on each of the ${tally.atRiskRows} case${tally.atRiskRows === 1 ? "" : "s"} with no outcome recorded, added up.` + (tally.atRiskUnpriced ? ` ${tally.atRiskUnpriced} of them carry no loan amount and contribute nothing to this total.` : "") + " It is the borrowing this firm no longer knows the fate of, not a fee forecast.")}"><strong>${fmtM(tally.atRisk)}</strong> at risk</span>` : "");
   }
   const how = $("#ret-rates-how");
   if (how) {
     const arith = `Rates ending within the ${reminderMonths}-month reminder window, and cases where the ERC outlasts the rate — the same feed as Today's Rate &amp; ERC drawer, un-truncated.`
       + (scope === "all" ? "" : ` ${ratesSoonAllW.length + ercAllW.filter((a) => !ratesSoonAllWIds.has(a.case_id)).length} alerts firm-wide.`)   // R83 — Set, not .some()
-      /* R74 · A1 — THE ARITHMETIC, IN WORDS, ONCE. The three group headings below, the badges
-         above and the chip's own number are all the same rows counted the same way, and this is
-         the sentence that says so — including the fact a lapsed rate is inside the window rather
-         than past it, which is the assumption that made three surfaces look like they disagreed. */
       + ` ${book.ended} already ended and ${book.ending} still to end make the ${book.inWindow} ${rateBookWindowWord(reminderMonths)} — the figure Today's tile and the Rate &amp; ERC panel both carry`
       + (book.ercOnly ? `; a further ${book.ercOnly} ${book.ercOnly === 1 ? "row is" : "rows are"} here only because the ERC outlasts the rate. ${book.total} rows in all.` : `. ${book.total} rows in all.`)
-      + (undated ? ` ${undated} row${undated === 1 ? " has" : "s have"} no readable rate-end date and can only be shown under “6 months + ERC conflicts”.` : "");
+      + (undated ? ` ${undated} row${undated === 1 ? " has" : "s have"} no readable rate-end date and can only be shown under “6 months + ERC conflicts”.` : "")
+      + (neverN ? ` ${neverN} of the ${ordered.length} row${ordered.length === 1 ? "" : "s"} are clients nobody has contacted in the last ${clientCommsWindowDays()} days — Sort › Never contacted first brings them up.` : "");
     how.innerHTML = howFold({
       id: "ret-rates-how-fold",
       title: "How this list is counted",
       html: `<p id="ret-rates-basis">${arith}</p>`
-        /* R61 — the money-line basis, said ONCE for the whole feed instead of on every row. */
         + (showMoney() ? `<p id="ret-rates-money-basis">Money lines read value at risk: the loan on the case, with the last fee as a proxy for the fee at stake.</p>` : "")
-        + `<p>Ended rates come first, freshest lapse at the top; rates still to end read soonest-first. Use <strong>Sort</strong> in the tools row to change that, and the window chips to narrow the months.</p>`
+        + `<p>Ended rates come first, freshest lapse at the top; rates still to end read soonest-first. Use <strong>Sort</strong> in the tools row to change that, and the chips to pick the window, an outcome, or the clients who have gone quiet.</p>`
         + retOutcomeSubHtml,
     });
   }
-  /* R75 · B2 — the filter says itself, above the list it narrowed, with the way
-     out named. Without this a reader who pressed a chip five minutes ago has a
-     Retention page that is quietly lying about the size of the book. */
+  /* R75 · B2 — the outcome chip says itself above the list it narrowed, with the way out named. */
   const fnote = $("#ret-outcome-filter-note");
   if (fnote) {
     fnote.hidden = !outFiltered;
+    const endedAll = rateBookCounts(feed, feed.rows.filter((a) => nameHit(a.client_name) && rateErcEnded(a) && a.days_to_rate_end >= -RATE_OUTCOME_WINDOW_DAYS)).rows.ended.length;
     fnote.innerHTML = outFiltered
-      ? `Filtered to <strong>${esc(RATE_OUTCOME_LABEL[retOutcomeFilter] || retOutcomeFilter)}</strong> — ${endedShown.length} of the ${ended.length} ended row${ended.length === 1 ? "" : "s"} in this window. Rates still to end, and ERC-only rows, are hidden while this is on.
-        <button type="button" class="btn btn-sm" id="ret-outcome-clear" title="Clear the outcome filter and show the whole list again">Show everything</button>`
+      ? `Filtered to <strong>${esc(RATE_OUTCOME_LABEL[retOutcomeFilter] || retOutcomeFilter)}</strong> — ${book.ended} of the ${endedAll} rate${endedAll === 1 ? "" : "s"} that ended in the last 12 months. <button type="button" class="btn btn-sm" id="ret-outcome-clear" title="Clear the outcome filter and show the rate window again">Show everything</button>`
       : "";
     const clearBtn = $("#ret-outcome-clear");
     if (clearBtn) clearBtn.onclick = () => { retOutcomeFilter = ""; loadRetentionRates(retScopeResolved()); };
   }
-  renderRetBulkBar(retShownIds);
-  /* R61 — the two groups now carry their own colour (ended = red, soon = amber; CSS on the
-     class) and, inside Ended under the DATE sort, quiet year sub-heads: 594 ended rates as one
-     undifferentiated run gave 2020's lost causes the same visual claim as last month's. Value
-     sort keeps the flat list — a value ranking interleaves the years on purpose. */
-  /* R64 — the page's row options: the checkbox column, the selection it reflects, and the phone
-     numbers behind the tel: links. Today's drawer passes none of this and renders exactly as it
-     did before (see renderRateErcRow). */
+  /* R61 — the groups carry their own colour (ended red, soon amber) and, inside Ended under the
+     DATE sort, quiet year sub-heads. The rows are the kit's (renderRetPageRow). */
   const rowOpts = { page: true, sel: retSel, phones, lastContact, outcomes: outcomeExtras };
   const group = (title, why, rows, cls) => {
     if (!rows.length) return "";
@@ -10901,44 +11066,48 @@ async function loadRetentionRates(scope) {
         const y = String(a.rate_end_date || "").slice(0, 4) || "—";
         const head = y !== yr ? `<div class="ret-year-h">${esc(y)}</div>` : "";
         yr = y;
-        return head + renderRateErcRow(a, feed, rowOpts);
+        return head + renderRetPageRow(a, feed, rowOpts);
       }).join("");
     } else {
-      body = rows.map((a) => renderRateErcRow(a, feed, rowOpts)).join("");
+      body = rows.map((a) => renderRetPageRow(a, feed, rowOpts)).join("");
     }
-    /* R87 · book (04 #2) — the group's one-sentence definition is the heading's title, not a
-       third paragraph between the reader and the rows. */
     return `<h4 class="ret-group-h ret-g-${cls}" title="${esc(why)}">${title} <span class="count">${rows.length}</span></h4>` + body;
   };
-  /* R74 · A1 — THREE HEADED GROUPS, from the shared classification, over the rows ON SCREEN. The
-     badge on each head IS that group's row count, and the three sum to the chip above the list. */
   const shownBook = rateBookCounts(feed, shown);
-  $("#ret-rates-list").innerHTML = ordered.length
-    ? RATE_BOOK_GROUPS.map(([k, title, cls, why]) => group(title, why, shownBook.rows[k], cls)).join("")
-      /* R70 · A1 — the footer names the CONTROL that gets the reader to the rows it is hiding.
-         "Narrow the list with the scope control" pointed at Mine/All, which on a 593-row lapsed
-         book barely moves the number; the chips are what cut it to a sitting's worth of work, so
-         they are named, by their own labels. */
-      + (ordered.length > RET_LIST_CAP ? `<div class="empty">…and ${ordered.length - RET_LIST_CAP} more — narrow it with the <strong>Ended · last 12 months</strong> chip above (or a month chip for what is still to come), switch <strong>Sort</strong> to <strong>${sortDir === "newest" ? "Oldest first" : "Most recently ended first"}</strong> to work the other end of the list, or take the whole set to the Pipeline table view.</div>` : "")
-      /* R64 · A2 — the dedupe footnote counts the siblings folded into the rows THAT ARE ON
-         SCREEN, not the whole feed's: under a month window "3 further cases are folded into the
-         rows above" would be counting rows the reader cannot see. Each surviving row carries its
-         own __dupes, so under "6 months (all)" this is arithmetically identical to the old
-         feed.collapsed and nothing about that case changes. */
-      + rateErcDedupeNote(ordered.reduce((s, a) => s + Math.max(0, (a.__dupes || 1) - 1), 0))
-    /* R75 · B2 — an empty list under an outcome filter is not an empty book, and
-       saying "nothing ending in the reminder window" would be a lie the operator
-       would act on. Same discipline as R64's empty-month message below it. */
-    : (outFiltered
-      ? `<div class="empty">No ended rate in this window is recorded as “${esc(RATE_OUTCOME_LABEL[retOutcomeFilter] || retOutcomeFilter)}” on ${rateScopeWord(scope)}. Press <strong>Show everything</strong> above, or another chip in the strip, to widen it again.</div>`
-      : monthKey === "all"
-      ? `<div class="empty">Nothing ending in the reminder window on ${rateScopeWord(scope)}, and no ERC conflicts. 👍</div>`
-      /* R64 · A2 — an empty MONTH is not an empty book, and saying "nothing ending" would be a
-         lie the operator would act on. Name the window and offer the way out of it. */
-      : `<div class="empty">Nothing in this window on ${rateScopeWord(scope)} — ${esc(retMonthWindowCopy(monthKey, todayIdx).replace(/^Showing /, "showing "))} There ${feed.rows.length === 1 ? "is" : "are"} ${feed.rows.length} row${feed.rows.length === 1 ? "" : "s"} under “6 months + ERC conflicts”.</div>`);
-  // No panelCount() here on purpose: this heading already carries three counts of its own, and
-  // panelCount writes into the first .count it finds in the h3.
+  const dupes = shown.reduce((n, a) => n + Math.max(0, (a.__dupes || 1) - 1), 0);
+  const listEl = $("#ret-rates-list");
+  listEl.innerHTML = ordered.length
+    ? selectAllHtml({ id: "ret-bulk-all", count: shown.length, checked: retSel.size > 0 && retSel.size >= shown.length, ariaLabel: "Select every rate row shown" })
+      + RATE_BOOK_GROUPS.map(([k, title, cls, why]) => group(title, why, shownBook.rows[k], cls)).join("")
+      + (ordered.length > RET_LIST_CAP ? `<p class="list-foot ret-cap-more">Showing ${RET_LIST_CAP} of ${ordered.length} — narrow it with the <strong>Ended · last 12 months</strong> chip or the search, or switch <strong>Sort</strong> to <strong>${sortDir === "newest" ? "Oldest first" : "Most recently ended first"}</strong> for the other end.</p>` : "")
+      /* R64 · A2 — the dedupe footnote counts the siblings folded into the rows ON SCREEN. */
+      + (dupes ? `<p class="list-foot rate-erc-dedupe-note">${dupes} further case${dupes === 1 ? " is" : "s are"} folded into the rows above — same property, same rate end date, one conversation.</p>` : "")
+      + retBulkBarHtml()
+    /* R88 · C — emptyState(), the house one, with the way out named: an empty chip is not an
+       empty book (R64 · A2 / R75 · B2). */
+    : (q
+      ? emptyState({ headline: `No retention rows for “${retSearch.trim()}”`, sub: "The search looks at client names inside the chip and the scope above.", action: { label: "Clear the search", id: "ret-empty-clear", onclick: "retClearSearch()" } })
+      : outFiltered
+        ? emptyState({ headline: `No ended rate is recorded as “${RATE_OUTCOME_LABEL[retOutcomeFilter] || retOutcomeFilter}” on ${rateScopeWord(scope)}`, sub: "Those outcomes have left this list with their rate-end date.", action: { label: "Show everything", id: "ret-empty-window", onclick: "retSetMonth(retMonthResolved())" } })
+        : monthKey === "all"
+          ? emptyState({ headline: `Nothing ending in the reminder window on ${rateScopeWord(scope)}`, sub: "And no ERC conflicts." })
+          : emptyState({ headline: `Nothing in this window on ${rateScopeWord(scope)}`, sub: `${feed.rows.length} row${feed.rows.length === 1 ? "" : "s"} under “6 months + ERC conflicts”.`, action: { label: "Show the whole window", id: "ret-empty-all", onclick: "retSetMonth('all')" } }));
+  if (ordered.length) wireRetBulk();
+  retFixRemKeys(listEl);
+  activateAll("#ret-rates-list .kit-row .t");
 }
+/* data-rem (R70 · A2's key) back onto the kit chip that carries the reminder badge. */
+function retFixRemKeys(root) {
+  (root || document).querySelectorAll(".ret-rem-badge").forEach((b) => {
+    const m = b.className.match(/\bret-rem-(sent|queued|failed|guarded|marked|none)\b/);
+    if (m) b.dataset.rem = m[1];
+  });
+}
+window.retClearSearch = function () {
+  retSearch = "";
+  const box = $("#ret-search"); if (box) box.value = "";
+  loadRetentionRates(retScopeResolved());
+};
 /* R64 · A3 — the phone numbers for the rows on screen, in ONE read. The feed already knows which
    client each case belongs to (loadPropContext's byId), so this is a single `in` on clients and
    nothing is asked for twice. Soft by design: a database or a client row without a number leaves
@@ -11018,63 +11187,28 @@ async function loadRetentionPipelinePanel(scope) {
   if (how) how.innerHTML = howFold({ id: "ret-pipeline-how-fold", title: "Where these come from", html: `<p id="ret-pipeline-basis">${esc(RETENTION_PIPELINE_HOW)} Open, won and lost are counted over ${esc(rateScopeWord(scope))}.</p>` });
   $("#ret-pipeline-list").innerHTML = st.open.length
     ? (await renderRetentionRows(st.open, RET_LIST_CAP))
-      + (st.open.length > RET_LIST_CAP ? `<div class="empty">…and ${st.open.length - RET_LIST_CAP} more open retention cases.</div>` : "")
-    : `<div class="empty">No open retention opportunities on ${rateScopeWord(scope)}. One is created for you when a completed client's rate enters the reminder window; for a rate that has already ended, use Start retention case on a row above.</div>`;
+      + (st.open.length > RET_LIST_CAP ? `<p class="list-foot">Showing ${RET_LIST_CAP} of ${st.open.length} open retention cases.</p>` : "")
+    /* R88 · C — the house empty state (was a raw .empty). */
+    : emptyState({ headline: `No open retention opportunities on ${rateScopeWord(scope)}`, sub: "One is created when a completed client's rate enters the reminder window; for a rate already ended, use Start retention case on a row above." });
   panelCount("#ret-pipeline-list", st.open.length);
 }
 /* §3 — the clients nobody has spoken to. Straight from the Clients page's own cold segment: same
    five reads (shared cache), same last-contact definition, same predicate. Re-deriving "cold" here
-   with a different query would give this panel and that segment two different answers to one
-   question, which is the whole reason it is not done. */
-async function loadRetentionCold(scope) {
-  const data = await clientDataCached(true);
-  if (data.error) { renderLoadError("#ret-cold-list", data.error, loadRetentionPage); return; }
-  const adviser = scope === "mine" && ME && ME.id ? ME.id : "all";
-  const cold = coldClients(data, adviser);
+   with a different query would give this list and that segment two different answers to one
+   question, which is the whole reason it is not done.
+   R88 · C (04 #6) — it is no longer a panel: it is the "Gone quiet" chip on the rates list's strip,
+   and pressing it draws these rows (one per client, on the kit) where the rates were. */
+function retColdAdviser(scope) { return scope === "mine" && ME && ME.id ? ME.id : "all"; }
+/* R41 · L8 / R75 · B3 — THE SORT IS THE REASON TO RING: soonest future rate end first, clients with
+   none last, then the longest silence, then the name so the order is stable. Both keys are printed
+   on the row that they sorted — no new read. */
+function retColdSorted(data, scope) {
+  const cold = coldClients(data, retColdAdviser(scope));
   const todayStr = localDateStr();
-  /* R78 · B7b — the "rate coming" BADGE is bounded to the same forward window the rest of
-     Retention works (rate_reminder_months × 30 days — rateBookSelect's own arithmetic): a rate
-     end recorded as 2099-12-31 is a data placeholder, not "a reason to ring them", and badging it
-     amber told the operator to make a call twenty years early. The row's OWN "next rate ends …"
-     line and the sort are deliberately untouched — the date is still true and still ordering the
-     list; only the amber urgency claim is bounded. */
-  const coldReminderMonths = Number(settings.rate_reminder_months) || 6;
-  const coldRateEdge = (() => {
-    const d = new Date(todayStr + "T12:00:00");
-    d.setDate(d.getDate() + coldReminderMonths * 30);
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  })();
-  /* Longest silence first — a client with nothing on record in the comms window sorts
-     above one last spoken to in March, because that is the order the list is worked in.
-     R41 · L8 — AND WITHIN "NEVER SPOKEN TO", THE ONE WHOSE RATE ENDS SOONEST.
-     That first group is the top of the list and it is the biggest: everybody in it has an empty
-     lcAt, so they all compared equal and the stable sort left them in the `.order("last_name")`
-     the read arrived in. Alphabetical is not a work order — it put the client whose fix expires
-     next Tuesday behind a "Z" surname with nothing maturing for two years. So when BOTH sides are
-     empty, the tie is broken by the soonest rate end across the client's cases; a client with
-     none maturing ahead of them has no such claim and sorts after those who do, then by name so
-     the order is still stable and still looks deliberate. No new read — clientNextRateEnd() works
-     off the `cases.rate_end_date` the clients embed already carries, and it is the same date the
-     row itself prints ("next rate ends …") and the same "rate coming" badge, so what the list is
-     sorted by is visible ON the rows it sorted. */
   const lcAt = (c) => { const lc = data.last.get(c.id); return lc ? String(lc.at) : ""; };
   const nextRateKey = (c) => { const n = clientNextRateEnd(c, todayStr); return n ? n.date : ""; };
   const nameKey = (c) => [c.last_name, c.first_name].filter(Boolean).join(" ").toLowerCase();
-  /* ==========================================================================
-     R75 · B3 (panel D#22) — THE SORT IS NOW THE REASON TO RING, FOR EVERYONE.
-
-     R41 · L8 made "soonest rate end" the tie-break INSIDE the never-contacted
-     group, which is where every row on this firm's list happens to sit — so the
-     order looked right and was, for the wrong reason: a client last spoken to in
-     March with a rate maturing next Tuesday still sorted behind eleven people
-     whose silence was two days longer and whose fixes have three years to run.
-     Length of silence is what puts somebody ON this list; what orders it is the
-     deadline. So: soonest future rate end FIRST, clients with none last (nothing
-     to ring them about first), then the longest silence, then the name so the
-     order is stable and still looks deliberate. Both keys are printed on the row
-     that they sorted — no new read, and nothing changes about who is on the list.
-     ========================================================================== */
-  const sorted = cold.slice().sort((a, b) => {
+  return cold.slice().sort((a, b) => {
     const ra = nextRateKey(a), rb = nextRateKey(b);
     if (ra !== rb) {
       if (!ra) return 1;
@@ -11085,80 +11219,78 @@ async function loadRetentionCold(scope) {
     if (primary !== 0) return primary;
     return nameKey(a).localeCompare(nameKey(b));
   });
-  /* R75 · B3 — the SHARED fact, said once. Every row on this firm's list read
-     "no contact of any kind in the last 210 days"; nine identical sentences is
-     not nine pieces of information, it is the panel definition printed nine
-     times. It belongs in the sub; a row that DOES have a last contact still
-     carries its own date, because that one differs per row. */
+}
+function renderRetColdList(data, sorted, scope, seq) {
+  if (seq !== retRatesLoadSeq) return;
+  const todayStr = localDateStr();
+  /* R78 · B7b — the "rate coming" chip is bounded to the same forward window the rest of Retention
+     works (rate_reminder_months × 30 days): a 2099-12-31 placeholder is not a reason to ring. */
+  const coldReminderMonths = Number(settings.rate_reminder_months) || 6;
+  const coldRateEdge = (() => {
+    const d = new Date(todayStr + "T12:00:00");
+    d.setDate(d.getDate() + coldReminderMonths * 30);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  })();
   const silent = sorted.filter((c) => !data.last.get(c.id)).length;
-  /* R80 · B2 — THE UNREACHABLE, PRICED HERE TOO (the short form of Data health's missing-email
-     headline — same window as coldRateEdge above, same value-at-risk reading: the loan on the
-     client's completed cases maturing inside it, added up, never a fee forecast). A gone-quiet
-     client with no email is double-dark: no automated chase ever reaches them, so the call this
-     list exists for is the ONLY chase there is. One sentence on the summary, only when it
-     applies; the panel itself is untouched — the full clause, the tags and the £-rank live on
-     Data health's missing-email panel, which is where the address gets fixed. */
+  /* R80 · B2 — the unreachable: a gone-quiet client with no email gets no automated chase at all. */
   const coldNoEmail = sorted.filter((c) => !c.email);
   const coldNoEmailLoan = coldNoEmail.reduce((s, c) => s + (c.cases || []).reduce((t, x) => {
     const d = x && x.stage === "completed" && x.rate_end_date ? String(x.rate_end_date).slice(0, 10) : null;
     return t + (d && d >= todayStr && d <= coldRateEdge && x.loan_amount ? Number(x.loan_amount) : 0);
   }, 0), 0);
-  /* R87 · book · C2 (04 #2, #11) — ONE LINE ON THE PANEL, THE DEFINITION IN THE FOLD. The sub
-     ran to ~120 words (the last-contact definition, the setting, the silent count, the
-     unreachable clause, the sort). #ret-cold-line is the ≤25-word line; the full text keeps its
-     id (#ret-cold-sub) and every word inside the closed howFold #ret-cold-how. The unreachable
-     clause is a warning that changes what the reader should do, so it stays on the line in short
-     form ("N have no email — the call is the only chase"). */
   const coldFull = clientColdDefinition(clientContactCutoff())
     + ` Showing ${scope === "mine" ? "clients with at least one case assigned to you" : "every adviser's clients"}.`
     + (silent ? ` ${silent === sorted.length ? "Every client here has" : `${silent} of these have`} no contact of any kind on record in the last ${clientCommsWindowDays()} days — the rows say so only where there IS a last contact to name.` : "")
     + (coldNoEmail.length ? ` ${coldNoEmail.length === 1 ? "One of these clients has" : `${coldNoEmail.length} of these clients have`} no email on file, so every automated chase skips them — the call is the only chase there is${showMoney() && coldNoEmailLoan ? ` (${fmtM(coldNoEmailLoan)} of maturing lending rides on it — the loan on their completed cases maturing inside the reminder window, not a fee forecast; Data health's missing-email list is where the address gets fixed)` : ""}.` : "")
     + " Ordered by the next rate end, soonest first: that is the deadline, and it is what makes one of these calls worth making today.";
-  const line = $("#ret-cold-line");
-  if (line) {
-    line.textContent = `No contact in ${clientQuietMonths()} months, on ${scope === "mine" ? "your clients" : "every adviser's clients"} — soonest rate end first.`
+  const h3 = $("#ret-rates-h3");
+  if (h3) h3.innerHTML = `🌙 Gone quiet <span class="count">${sorted.length}</span>`;
+  const sub = $("#ret-rates-sub");
+  if (sub) {
+    sub.textContent = `No contact in ${clientQuietMonths()} months, on ${scope === "mine" ? "your clients" : "every adviser's clients"} — soonest rate end first.`
       + (coldNoEmail.length ? ` ${coldNoEmail.length} with no email: the call is the only chase.` : "");
   }
-  const how = $("#ret-cold-how");
-  if (how) how.innerHTML = howFold({ id: "ret-cold-how-fold", title: "How “gone quiet” is counted", html: `<p class="panel-sub" id="ret-cold-sub">${esc(coldFull)}</p>` });
-  /* The hand-off. The Clients page is where this list is actually worked (bulk task, export, the
-     full record), and landing there on "All clients" would undo the scope the reader just chose —
-     hence the adviser argument (R38's one addition to gotoClientSegment). */
-  const link = $("#ret-cold-goto");
-  if (link) link.onclick = () => gotoClientSegment("cold", adviser);
-  $("#ret-cold-list").innerHTML = sorted.length
-    ? sorted.slice(0, RET_LIST_CAP).map((c) => {
-      const lc = data.last.get(c.id);
-      const next = clientNextRateEnd(c, todayStr);
-      /* R75 · B3 — WHAT THIS CLIENT IS WORTH, AND THE TWO VERBS.
-         The loan is the sum of the loans on their LIVE and completed cases (the
-         cases embed already carries it — see loadClientData), behind showMoney()
-         like every other firm-money line; the phone pair is the SAME
-         phoneActionsHtml() the Retention rows above use, so a call started from
-         here is started exactly as it is started from there. "Log call" opens the
-         same form the case modal does, on this client's soonest-maturing case —
-         which is the case the row is about and the one the conversation is for. */
-      const money = showMoney();
-      const loanTotal = (c.cases || []).reduce((s, x) => s + (x && x.stage !== "not_proceeding" && x.loan_amount ? Number(x.loan_amount) : 0), 0);
-      const nextCase = clientNextRateCase(c, todayStr);
-      const acts = `<div class="ret-row-acts ret-cold-acts">`
-        + (nextCase ? `<button type="button" class="btn btn-sm ret-row-chip ret-logcall-chip" onclick="event.stopPropagation();retLogCall('${jsArg(nextCase.id)}')" title="Log a call against the case whose rate matures next — the same form the case modal uses: outcome chip, note, protection tick and an optional follow-up task.">📞 Log call</button>` : "")
-        + `</div>`;
-      return `
-    <div class="row-item">
-      <div class="row-main">
-        <div class="t" onclick="openClient('${c.id}')">${esc([c.first_name, c.last_name].filter(Boolean).join(" ") || "(no name)")}</div>
-        <div class="s">${lc ? `<span class="client-lastcontact">last contact ${esc(lastContactAgeLabel(lc.at))} — ${esc(lc.what)} on ${esc(fmtD(String(lc.at).slice(0, 10)))}</span>` : ""}${next ? `${lc ? " · " : ""}<span class="client-rate-bit">next rate ends ${esc(fmtD(next.date))}${next.lender ? ` · ${esc(next.lender)}` : ""}${next.n > 1 ? ` (of ${next.n})` : ""}</span>` : `${lc ? " · " : ""}no future rate end on file`}</div>
-        ${money && loanTotal ? `<div class="s rate-money ret-cold-money">Loan <strong>${fmtM(loanTotal)}</strong>${(c.cases || []).length > 1 ? ` <span class="cs-muted">· across ${(c.cases || []).filter((x) => x && x.stage !== "not_proceeding" && x.loan_amount).length} case${(c.cases || []).filter((x) => x && x.stage !== "not_proceeding" && x.loan_amount).length === 1 ? "" : "s"}</span>` : ""}</div>` : ""}
-        ${/* R87 · book · C1 (04 #1) — the row is a Book client row, so it carries sms_opt_out. */ ""}
-        ${phoneActionsHtml(c.phone, { sms: true, name: c.first_name || "", rateEnd: next ? next.date : null, smsOptOut: !!c.sms_opt_out })}${acts}
-      </div>
-      ${next && next.date <= coldRateEdge ? '<span class="badge amber" title="This client has a rate maturing — a reason to ring them.">rate coming</span>' : ""}
-    </div>`;
-    }).join("")
-      + (sorted.length > RET_LIST_CAP ? `<div class="empty">…and ${sorted.length - RET_LIST_CAP} more — work the rest from the Clients page.</div>` : "")
-    : `<div class="empty">Nobody has gone quiet on ${scope === "mine" ? "your book" : "the firm's book"}. 👍</div>`;
-  panelCount("#ret-cold-list", sorted.length);
+  /* The hand-off: the Clients page is where the cold set is bulk-worked; landing there on "All
+     clients" would undo the scope the reader chose — hence the adviser argument (R38). It sits
+     beside the fold, not inside the one line. */
+  const how = $("#ret-rates-how");
+  if (how) {
+    how.innerHTML = `<button type="button" class="btn btn-ghost btn-sm" id="ret-cold-goto" title="Open the Clients page on this same segment, with the same adviser filter — where you can bulk-task, export and open the records">Work this list on Clients →</button>`
+      + howFold({ id: "ret-cold-how-fold", title: "How “gone quiet” is counted", html: `<p class="panel-sub" id="ret-cold-sub">${esc(coldFull)}</p>` });
+    const link = $("#ret-cold-goto");
+    if (link) link.onclick = () => gotoClientSegment("cold", retColdAdviser(scope));
+  }
+  const fnote = $("#ret-outcome-filter-note"); if (fnote) { fnote.hidden = true; fnote.innerHTML = ""; }
+  retShownIds = [];
+  retSel.clear();
+  const money = showMoney();
+  const rows = sorted.slice(0, RET_LIST_CAP).map((c) => {
+    const lc = data.last.get(c.id);
+    const next = clientNextRateEnd(c, todayStr);
+    const nextCase = clientNextRateCase(c, todayStr);
+    const live = (c.cases || []).filter((x) => x && x.stage !== "not_proceeding" && x.loan_amount);
+    const loanTotal = live.reduce((t, x) => t + Number(x.loan_amount), 0);
+    const bits = [];
+    if (lc) bits.push(`<span class="client-lastcontact">last contact ${esc(lastContactAgeLabel(lc.at))} — ${esc(lc.what)} on ${esc(fmtD(String(lc.at).slice(0, 10)))}</span>`);
+    bits.push(next ? `<span class="client-rate-bit">next rate ends ${esc(fmtD(next.date))}${next.lender ? ` · ${esc(next.lender)}` : ""}${next.n > 1 ? ` (of ${next.n})` : ""}</span>` : "no future rate end on file");
+    if (money && loanTotal) bits.push(`<span class="rate-money ret-cold-money">Loan <strong>${fmtM(loanTotal)}</strong>${live.length > 1 ? ` <span class="cs-muted">across ${live.length} cases</span>` : ""}</span>`);
+    return rowItemHtml({
+      id: `retcold-${c.id}`, cls: "ret-cold-row",
+      name: { text: [c.first_name, c.last_name].filter(Boolean).join(" ") || "(no name)", clientId: c.id },
+      chips: [
+        nextCase ? { label: caseTypeLabel(nextCase) + (next && next.lender ? ` · ${next.lender}` : ""), cls: "blue ret-case-chip", onclick: `openCase('${jsArg(nextCase.id)}')`, title: "Open the case whose rate matures next — the one this call is about." } : null,
+        next && next.date <= coldRateEdge ? { label: "rate coming", cls: "amber", title: "This client has a rate maturing — a reason to ring them." } : null,
+      ],
+      fact: bits.join(" · "),
+      /* R87 · book · C1 (04 #1) — a Book client row carries sms_opt_out. */
+      contact: c.phone ? { phone: c.phone, smsOptOut: !!c.sms_opt_out, first: c.first_name || "", rateEnd: next ? next.date : null } : null,
+      verbs: nextCase ? [{ label: "📞 Log call", cls: "ret-row-chip ret-logcall-chip", onclick: `retLogCall('${jsArg(nextCase.id)}')`, title: "Log a call against the case whose rate matures next — the same form the case modal uses: outcome chip, note, protection tick and an optional follow-up task." }] : [],
+    });
+  }).join("");
+  $("#ret-rates-list").innerHTML = `<div id="ret-cold-list">${sorted.length
+    ? rows + (sorted.length > RET_LIST_CAP ? `<p class="list-foot">Showing ${RET_LIST_CAP} of ${sorted.length} — work the rest from the Clients page.</p>` : "")
+    : emptyState({ headline: `Nobody has gone quiet on ${scope === "mine" ? "your book" : "the firm's book"}`, sub: `Every client has had some contact in the last ${clientQuietMonths()} months.` })}</div>`;
+  activateAll("#ret-cold-list .kit-row .t");
 }
 
 /* R5-6 — the manual half of the retention loop.
@@ -11810,11 +11942,15 @@ let briefClientPhone = {};
    call stays: the opt-out is about texts. */
 function briefPhoneHtml(it) {
   const cid = it && it.client_id;
-  const p = cid && briefClientPhone[cid];
+  /* R88 · A — a folded-in Watchtower / radar row brings its own number (from the Book, the read
+     its own loader already made), because briefClientPhone only covers get_briefing's clients. */
+  const p = (it && it.__phone) || (cid && briefClientPhone[cid]);
   if (!p || !p.phone) return "";
-  return phoneActionsHtml(p.phone, { sms: true, name: p.first || "", smsOptOut: !!p.smsOptOut });
+  return phoneActionsHtml(p.phone, { sms: true, name: p.first || "", rateEnd: p.rateEnd || undefined, smsOptOut: !!p.smsOptOut });
 }
 function briefCaseDisc(it) {
+  // R88 · A — an alert / radar row carries the property chip its own loader resolved.
+  if (it && it.__disc != null && !(it.case_id && briefCaseChip[it.case_id])) return it.__disc ? " " + it.__disc : "";
   const chip = (it && it.case_id && briefCaseChip[it.case_id]) || "";
   const d = it && it.case_id && briefCaseMeta[it.case_id];
   return (chip ? " " + chip : "") + (d ? ` <span class="cs-muted">(${esc(d)})</span>` : "");
@@ -11869,6 +12005,10 @@ function briefBadge(it) {
     case "stalled": return '<span class="badge grey">STALLED</span>';
     case "fee_chase": return '<span class="badge amber">FEE</span>';
     case "protection_hot": return '<span class="badge green">PROTECTION</span>';
+    /* R88 · A — the two folded-in kinds wear the badge they wore in their old panels, ONCE per
+       row: the check's own severity pill, and the radar's grey "no next action". */
+    case "wt_alert": return WATCH_BADGE[it.alert && it.alert.severity] || WATCH_BADGE.info;
+    case "radar": return `<span class="badge grey"${it.stale ? ` title="${esc(STALE_TASK_TIP)}"` : ""}>${it.stale ? "STALE TASK ONLY" : "NO NEXT ACTION"}</span>`;
     default: return "";
   }
 }
@@ -11908,6 +12048,14 @@ function apptQuickOutcomeHtml(it) {
 function briefActions(it) {
   const open = it.case_id ? `<button class="btn btn-sm" onclick="openCase('${it.case_id}')">Open</button>` : "";
   switch (it.kind) {
+    /* R88 · A — THE FOLDED-IN KINDS, IN MY DAY'S GRAMMAR. A check's row is Open (the case) plus
+       the verb that closes it: ✓ Done (= dismiss, no reason) for a warning or an FYI, and the
+       compliance pair Snooze… / Dismiss — both with the mandatory reason — ONLY for a critical.
+       A radar row is Open plus the one thing it asks for: a next step. */
+    case "wt_alert":
+      return briefAlertVerbsHtml(it.alert, open);
+    case "radar":
+      return `${open}<button class="btn btn-sm btn-primary brief-add-step" onclick="addNextStep('${jsArg(it.case_id)}')" title="Open the case at its task box — give it a next step">Add next step</button>`;
     case "task_overdue":
     case "task_today":
       return `${taskSnoozeControlsHtml(it.task_id, "brief")}<button class="btn btn-sm" onclick="briefDone('${it.task_id}')">✓ Done</button>${open}`;
@@ -11964,9 +12112,14 @@ function briefActions(it) {
          pair of buttons: the drawer showed the chip AND kept the buttons pressed, but on a row
          this dense a second way to change it is noise — the appointment editor is where an
          outcome is corrected (and it is the only surface that offers "rearranged" at all). */
+      /* R88 · A (02 #11) — ONE MEANING PER VERB. "Open" on this row went to the appointment
+         editor while "Open" on the task row beside it went to the case, and a ghost "Case" button
+         carried the difference. Open is now the case, exactly as on every other My Day row; the
+         appointment itself is still one press away on the row's title (briefTitleClickAttr). An
+         appointment with no case behind it keeps Open → the appointment, the only thing to open. */
       return apptQuickOutcomeHtml(it)
-        + (it.appt_id ? `<button class="btn btn-sm" onclick="openAppt('${it.appt_id}')">Open</button>` : "")
-        + (it.case_id ? `<button class="btn btn-sm btn-ghost" onclick="openCase('${it.case_id}')" title="Open the linked case">Case</button>` : "");
+        + (it.case_id ? open
+          : it.appt_id ? `<button class="btn btn-sm" onclick="openAppt('${it.appt_id}')">Open</button>` : "");
     case "rate_urgent":
       return `${(it.sub || "").includes("not contacted") ? `<button class="btn btn-sm" onclick="briefQueueEmail('${it.case_id}','rate_end_reminder', event)">Send reminder</button>` : ""}${open}`;
     case "fee_chase":
@@ -12320,6 +12473,7 @@ async function loadBriefing() {
   } catch (e) { /* graceful degradation — lead rows render without the clock */ }
   if (seq !== briefLoadSeq) return;   // R83
   lastBriefItems = items;
+  briefLoaded = true;   // R88 · A — from here on a Watchtower / radar load repaints the merged list
   renderBriefing();
 }
 // BUILD 7d (defect 18) — one case (e.g. Ruby Sinclair: overdue task + rate-end + protection, all
@@ -12363,18 +12517,73 @@ async function loadBriefing() {
      ended rate (pri 8) and a housekeeping row (pri 45) appears ONCE, in Urgent
      — never in Worth doing, and never in both.
    ========================================================================== */
+/* ==========================================================================
+   R88 · A — ONE LIST, ONE ROW PER CASE (02 #2).
+
+   Today carried three worklists — My Day, the Watchtower and the No-next-action
+   radar — with three verb sets over heavily overlapping cases (9 of 16
+   Watchtower cases were already on My Day). They are one list now, and this is
+   where the "one" is made:
+
+   · My Day's own items group exactly as before (below): one PRIMARY row per
+     case, its highest-priority item as the head, the rest in the closed fold.
+   · A folded-in item (`__side`: a Watchtower alert or a radar case — see
+     todaySideItems) NEVER becomes the head of a case My Day already has a row
+     for. It is a SUB-LINE on that row (`row.side`), carrying its own verbs, so
+     the case is on the page once and the row stays in the band its My Day work
+     put it in.
+   · A case with no My Day row gets ONE row, headed by its most severe alert (the
+     side items arrive severity-sorted, radar last), with any further alerts and
+     its radar entry as sub-lines on it. Its band is its head's: CRITICAL →
+     Urgent, WARNING → Today, FYI and radar → Worth doing.
+   · Rows are then stable-sorted by their head's priority, so a critical check
+     sits with the other urgent rows rather than at the end of the list.
+   A lead is still never grouped and never folded; an item with no case (a lead,
+   the aggregate completion-date row, a firm-level check) is its own row.
+   ========================================================================== */
 function groupBriefRows(items) {
   const seen = new Set();
   const rows = [];
-  (items || []).forEach((it) => {
+  const byCase = new Map();
+  /* R88 · fixer (10 D2) — a lead is on the list once as well. A `lead_slow` check has no case but
+     carries the lead's id; it joins that lead's `lead_new` row as a sub-line (the lead's Accept
+     verbs stay the head, the check keeps its own Snooze… / Dismiss on the sub-line), exactly as
+     an alert joins its case's row. A lead check whose lead has no row here stays its own row. */
+  const byLead = new Map();
+  const main = (items || []).filter((it) => !it.__side);
+  main.forEach((it) => {
     // No case (a lead, a client-level reminder, the aggregate completion-date row) — untouched.
-    if (!it.case_id || it.kind === "lead_new") { rows.push({ key: null, head: it, extra: [] }); return; }
+    if (!it.case_id || it.kind === "lead_new") {
+      const row = { key: null, head: it, extra: [], side: [] };
+      rows.push(row);
+      if (it.kind === "lead_new" && it.lead_id && !byLead.has(it.lead_id)) byLead.set(it.lead_id, row);
+      return;
+    }
     if (seen.has(it.case_id)) return;
     seen.add(it.case_id);
-    const group = items.filter((x) => x.case_id === it.case_id && x.kind !== "lead_new");
-    rows.push({ key: it.case_id, head: it, extra: group.filter((x) => x !== it) });
+    const group = main.filter((x) => x.case_id === it.case_id && x.kind !== "lead_new");
+    const row = { key: it.case_id, head: it, extra: group.filter((x) => x !== it), side: [] };
+    rows.push(row);
+    byCase.set(it.case_id, row);
   });
-  return rows;
+  (items || []).filter((it) => it.__side).forEach((it) => {
+    const lid = it.alert && it.alert.lead_id;
+    if (!it.case_id && lid && byLead.has(lid)) { byLead.get(lid).side.push(it); return; }
+    if (!it.case_id) { rows.push({ key: null, head: it, extra: [], side: [] }); return; }
+    const row = byCase.get(it.case_id);
+    if (row) { row.side.push(it); return; }
+    const nr = { key: it.case_id, head: it, extra: [], side: [] };
+    rows.push(nr);
+    byCase.set(it.case_id, nr);
+  });
+  /* ROWS ONLY EVER MOVE UP (R69's rule, kept): a row's band is its MOST urgent item's, head or
+     sub-line — a critical check on a case whose My Day item is housekeeping lifts that row into
+     Urgent rather than sitting under "Worth doing". The head (and so the row's words and verbs)
+     is still My Day's own item. */
+  rows.forEach((r) => { r.pri = Math.min(r.head.pri || 0, ...(r.side || []).map((x) => x.pri || 0)); });
+  return rows.map((r, i) => [r, i])
+    .sort((a, b) => (a[0].pri - b[0].pri) || (a[1] - b[1]))
+    .map((x) => x[0]);
 }
 /* The fold's summary names what is behind it in the reader's own words rather than in kind ids —
    "📄 docs overdue · 📅 appointment today" tells somebody whether it is worth opening; "+3 more"
@@ -12420,7 +12629,61 @@ const briefOwnerAttr = (it) => (it && it.owner ? ` data-brief-owner="${esc(it.ow
    markup from phoneActionsHtml, same .ret-row-tel / .row-sms-link hooks. */
 function briefSubLineHtml(it) {
   const phone = briefPhoneHtml(it);
-  return `<div class="s">${esc(it.sub || "")}${briefOwnerSuffix(it)}${phone ? ` <span class="brief-phone">${phone}</span>` : ""}</div>`;
+  // R88 · A — `__subHtml` is pre-escaped markup a folded-in row adds to its one line (the radar's rate end).
+  return `<div class="s">${esc(it.sub || "")}${it.__subHtml || ""}${briefOwnerSuffix(it)}${phone ? ` <span class="brief-phone">${phone}</span>` : ""}</div>`;
+}
+/* R88 · A — the verbs a check carries, on its own row or as a sub-line. `open` is the row's Open
+   (the case) or "" on a sub-line, whose host row already has one. Critical rules keep the
+   compliance pair — both with the mandatory reason (promptSnooze / resolveAlert's prompt) and the
+   case-timeline note; everything else is ✓ Done, which dismisses without asking. A client-side
+   data-health row (__synth) has no watch_alerts row behind it, so it carries no close verb at all:
+   fixing the record is what clears it. The R7 / R74 "door" buttons (Money owed →, Lead inbox →,
+   Retention →, Their day →) come along unchanged. */
+function briefAlertVerbsHtml(a, open) {
+  if (!a) return open || "";
+  let door = "";
+  const link = R7_ALERT_LINKS[a.rule];
+  if (link && link.when()) {
+    const go = typeof link.go === "function" ? link.go(a) : link.go;
+    door = `<button class="btn btn-sm wt-link-btn" onclick="event.stopPropagation();${go}" title="${esc(link.title)}">${esc(link.label)}</button>`;
+  }
+  if (a.__synth) return (open || "") + (a.__go ? `<button class="btn btn-sm wt-link-btn" onclick="event.stopPropagation();${a.__go}" title="Open the firm's Data health page">Data health</button>` : "");
+  const id = jsArg(a.id), cid = jsArg(a.case_id || "");
+  const close = a.severity === "crit"
+    ? `<button class="btn btn-sm brief-wt-snooze" onclick="snoozeAlert('${id}','crit','${cid}')" title="Critical check — hide it until a date you pick. A reason is required and is written to the case.">⏰ Snooze…</button>`
+      + `<button class="btn btn-sm brief-wt-dismiss" onclick="resolveAlert('${id}','crit','${cid}')" title="Critical check — close it now. A reason is required and is written to the case; it is raised again if the problem is still there.">Dismiss</button>`
+    : `<button class="btn btn-sm brief-wt-done" onclick="wtDoneAlert('${id}')" title="Done — closes this check. It is raised again on the next run if the problem is still there.">✓ Done</button>`;
+  return (open || "") + door + close;
+}
+/* R88 · A — ONE SUB-LINE for a folded-in item on a row that already exists for its case: what it
+   is in a few words, and its own verbs. The alert's detail sentence is the line's title (the
+   hover that asks), so the line stays one line. */
+const BRIEF_SIDE_ICON = { crit: "🚨", warn: "⚠️", info: "ℹ️" };
+function briefSideHtml(it) {
+  if (it.kind === "radar") {
+    return `<div class="s brief-side brief-side-radar" data-radar="${esc(it.case_id)}" data-radar-rank="${it.radarRank}"${it.stale ? ` title="${esc(STALE_TASK_TIP)}"` : ""}>`
+      + `<span class="brief-side-t">🕰️ ${it.stale ? "Stale task only" : "No next action"} · ${esc(it.sub || "")}${it.__subHtml || ""}</span>`
+      + `<span class="brief-side-acts"><button class="btn btn-sm brief-add-step" onclick="addNextStep('${jsArg(it.case_id)}')" title="Open the case at its task box — give it a next step">Add next step</button></span></div>`;
+  }
+  const a = it.alert || {};
+  const sev = wtSevKey(a);
+  return `<div class="s brief-side brief-side-alert brief-side-${sev}" data-alert-id="${esc(a.id || "")}" data-sev="${sev}" title="${esc(it.sub || "")}">`
+    + `<span class="brief-side-t">${BRIEF_SIDE_ICON[sev] || "•"} ${esc(it.title || "")}</span>`
+    + `<span class="brief-side-acts">${briefAlertVerbsHtml(a, "")}</span></div>`;
+}
+/* The data a row carries about what it merged, so a reader (and a suite) can see that a case is
+   on the page once and which lists it came from. */
+function briefRowDataAttrs(row) {
+  const all = [row.head].concat(row.side || []);
+  const radar = all.find((x) => x.kind === "radar");
+  const nWt = all.filter((x) => x.kind === "wt_alert").length;
+  /* R88 · fixer (10 D2) — a lead row names its lead too, so "no lead twice" is as checkable as "no case twice". */
+  const lead = row.head.kind === "lead_new" ? row.head.lead_id : (row.head.alert && row.head.alert.lead_id);
+  return (row.head.case_id ? ` data-case="${esc(row.head.case_id)}"` : "")
+    + (lead ? ` data-brief-lead="${esc(lead)}"` : "")
+    + (radar ? ` data-radar="${esc(radar.case_id)}" data-radar-rank="${radar.radarRank}"` : "")
+    + (nWt ? ` data-wt="${nWt}"` : "")
+    + (row.head.kind === "wt_alert" && row.head.alert ? ` data-alert-id="${esc(row.head.alert.id || "")}" data-sev="${wtSevKey(row.head.alert)}"` : "");
 }
 function briefSubRowHtml(it) {
   return `<div class="row-item brief-row brief-subrow"${briefOwnerAttr(it)}>
@@ -12439,13 +12702,16 @@ function briefRowHtml(row) {
      primary row's innerText still reads as exactly one row's worth of text (the summary line
      aside) and every suite that counts My Day rows by their visible text keeps counting what it
      always counted. `.brief-row:not(.brief-subrow)` remains the selector for "a primary row". */
-  return `<div class="row-item brief-row ${it.pri < 15 ? "hot" : it.pri < 35 ? "warm" : ""}"${briefOwnerAttr(it)}>
+  const kindCls = it.kind === "radar" ? " unactioned-row" + (it.stale ? " unactioned-stale" : "") : it.kind === "wt_alert" ? " brief-wt-row" : "";
+  const pri = row.pri != null ? row.pri : it.pri;   // R88 · A — the row's band priority (groupBriefRows)
+  return `<div class="row-item brief-row ${pri < 15 ? "hot" : pri < 35 ? "warm" : ""}${kindCls}"${briefOwnerAttr(it)}${briefRowDataAttrs(row)}>
       <div class="row-main">
         <div class="t" ${briefTitleAttrs(it)}>${esc(it.title)}${briefCaseDisc(it)}</div>
         ${/* R70 · B4 — 📞 / 💬 on the row, from the number the case-meta read already carried.
              ABOVE the fold, never inside it: the fold holds the case's OTHER rows and each of
              those carries its own pair. R87 · today — on the sub-line (briefSubLineHtml). */ ""}
         ${briefSubLineHtml(it)}
+        ${(row.side || []).map(briefSideHtml).join("")}
         ${briefMoreHtml(row)}
       </div>
       ${briefBadge(it)}
@@ -12478,9 +12744,11 @@ const BRIEF_BAND_CAP = 10;
    ONLY THE ORDER OF THIS ARRAY CHANGED. The tests, the thresholds, the hot/warm row classes and
    the per-band counts are all untouched — a row is in exactly the band it was in before. */
 const BRIEF_BANDS = [
-  { key: "warm", test: (p) => p >= 15 && p < 35, label: "Today", icon: "📅", why: "appointments and tasks due today" },
-  { key: "hot",  test: (p) => p < 15, label: "Urgent", icon: "🔥", why: "ended rates · overdue tasks · failed sends · new leads" },
-  { key: "rest", test: (p) => p >= 35, label: "Worth doing", icon: "🧹", why: "housekeeping — nothing on fire" },
+  /* R88 · A — the bands also hold the folded-in checks and radar (see groupBriefRows): the `why`
+     titles say so. Thresholds unchanged. */
+  { key: "warm", test: (p) => p >= 15 && p < 35, label: "Today", icon: "📅", why: "appointments and tasks due today · warning checks" },
+  { key: "hot",  test: (p) => p < 15, label: "Urgent", icon: "🔥", why: "ended rates · overdue tasks · failed sends · new leads · critical checks" },
+  { key: "rest", test: (p) => p >= 35, label: "Worth doing", icon: "🧹", why: "housekeeping · FYI checks · live cases with no next step for their stage and no touch in 7 days" },
 ];
 /* R69 · A1 — the band header's number, and what it is a number OF.
    Before this it was a bare count that meant "grouped rows" and read as "items", so a band
@@ -12534,13 +12802,12 @@ window.dashCageOpen = window.dashCageOpen || {};
    OF: primary rows, the same unit the band headings count in and the same unit the caller's
    `total` is in. Counting headings as rows is how a footer ends up offering 27 more over a list
    of 25. */
+/* R88 · A — the radar's own list (#unactioned-list) is gone: its cases are My Day rows. */
 const DASH_CAGE_ROW_SEL = {
-  "briefing-list": ".brief-row:not(.brief-subrow), .brief-sec, details.brief-fold",
-  "unactioned-list": ".row-item",
+  "briefing-list": ".brief-row:not(.brief-subrow), .brief-sec, details.brief-fold, .brief-tail",
 };
 const DASH_CAGE_COUNT_SEL = {
   "briefing-list": ".brief-row:not(.brief-subrow)",
-  "unactioned-list": ".row-item",
 };
 const DASH_CAGE_LAST = {};
 const DASH_CAGE_RETRY = {};   // R73-HF1 — per-list count of deferred re-measures (see below)
@@ -12645,8 +12912,89 @@ window.addEventListener("resize", () => {
   clearTimeout(recageTimer);
   recageTimer = setTimeout(recageDashLists, 120);
 });
+/* ==========================================================================
+   R88 · A — THE FOLDED-IN ITEMS: Watchtower alerts and radar cases, in My Day's
+   item shape, cut to My Day's own Mine/All scope.
+
+   Built from what the two loaders already hold (wtLast, radarLast) — no read of
+   its own — so a scope flip, a dismiss or a radar reload repaints the one list
+   without anybody re-querying. Snoozed alerts are not here (wtLast.alerts has
+   already dropped them; the Checks drawer's snoozed view is where they live).
+
+   SCOPE. The alert test is the drawer's own (wtInScope) asked with My Day's
+   scope: under Mine, an alert on a case assigned to me; a firm-level check (no
+   case) is owner/admin work in both scopes and never an adviser's. The radar
+   keeps R17's rule on top: an adviser's radar is their own book whatever the
+   toggle says, and the Owner/Administrator's follows the toggle.
+
+   PRIORITY decides the band (BRIEF_BANDS): CRITICAL 13 → Urgent, WARNING 30 →
+   Today, FYI 40 and radar 50 → Worth doing. The radar keeps its R70 order
+   (rate-soonest, quiet-days as the tiebreak) as `radarRank`, and its R70 cap:
+   the first RADAR_CAP are rows, the rest are named in one line with the door
+   to the Pipeline.
+   ========================================================================== */
+let briefLoaded = false;   // My Day's own items have landed at least once — the side items wait for them
+let radarLast = null;      // loadUnactioned's result, for the merge
+let radarTail = 0;         // quiet cases beyond RADAR_CAP in the current scope (the "…and N more" line)
+let radarTotal = 0;        // every quiet case in the current scope
+const WT_BRIEF_PRI = { crit: 13, warn: 30, info: 40 };
+const RADAR_BRIEF_PRI = 50;
+function todaySideItems() {
+  const out = [];
+  const scope = briefingScope;
+  const me = (ME && ME.id) || null;
+  const bk = bookPeek();
+  const phoneOf = (cid) => {
+    if (!cid || briefClientPhone[cid]) return null;
+    const cl = bk && bk.clientById && bk.clientById.get(cid);
+    return cl && cl.phone ? { phone: cl.phone, first: cl.first_name || "", smsOptOut: !!cl.sms_opt_out } : null;
+  };
+  if (wtLast) {
+    const { alerts, ctx, assignedBy, synth } = wtLast;
+    (alerts || []).concat(synth || [])
+      .filter((a) => wtInScope(a, scope, assignedBy))
+      .sort((a, b) => (WATCH_SEV[a.severity] ?? 3) - (WATCH_SEV[b.severity] ?? 3))
+      .forEach((a) => {
+        const sev = wtSevKey(a);
+        const c = propCtxCase(ctx, a.case_id) || (a.case_id && bk && bk.caseById && bk.caseById.get(a.case_id)) || null;
+        const clientId = a.client_id || (c && c.client_id) || null;
+        out.push({
+          kind: "wt_alert", __side: true, pri: WT_BRIEF_PRI[sev], alert: a,
+          case_id: a.case_id || null, client_id: clientId,
+          owner: a.case_id ? ((assignedBy && assignedBy[a.case_id]) || (c && c.assigned_to) || null) : null,
+          aggregate: !a.case_id,
+          title: humanizeAlertDates(a.title || WT_RULE_LABELS[a.rule] || "Check"),
+          sub: humanizeAlertDates(watchDetailFor(a)),
+          __disc: c ? caseIdentityHtml(c, { fallback: true, cls: "row-prop" }) : "",
+          __phone: phoneOf(clientId),
+        });
+      });
+  }
+  radarTail = 0; radarTotal = 0;
+  if (radarLast) {
+    const inScope = radarLast.quiet.filter((q) => scope === "all" || q.c.assigned_to === me);
+    radarTotal = inScope.length;
+    radarTail = Math.max(0, inScope.length - RADAR_CAP);
+    inScope.slice(0, RADAR_CAP).forEach((q, i) => out.push(Object.assign({}, q.item, { radarRank: i })));
+  }
+  return out;
+}
+/* Every item the one list shows: My Day's own, then the folded-in ones. */
+function todayMergedItems() {
+  return (lastBriefItems || []).concat(todaySideItems());
+}
+window.__todaySources = function () {   // R88 · A — for the harness: what the merge was built from, no DOM
+  const side = todaySideItems();
+  return {
+    scope: briefingScope,
+    brief: (lastBriefItems || []).map((it) => ({ kind: it.kind, case_id: it.case_id || null, lead_id: it.lead_id || null })),   // R88 · fixer: + lead_id (10 D2)
+    wt: side.filter((x) => x.kind === "wt_alert").map((x) => ({ id: x.alert.id, case_id: x.case_id, lead_id: x.alert.lead_id || null, sev: wtSevKey(x.alert), synth: !!x.alert.__synth })),
+    radar: side.filter((x) => x.kind === "radar").map((x) => x.case_id),
+    radarTotal, radarTail,
+  };
+};
 function renderBriefing() {
-  const items = lastBriefItems;
+  const items = todayMergedItems();
   const rows = groupBriefRows(items);
   /* The subtitle only claims grouping when grouping actually happened. A short day where every
      case has one thing on it must not be told about a fold it cannot see — that is how a panel
@@ -12664,7 +13012,7 @@ function renderBriefing() {
     sub.innerHTML = "";
     sub.setAttribute("data-grouped", String(groupedCases));
   }
-  const bands = BRIEF_BANDS.map((b) => ({ ...b, rows: rows.filter((r) => b.test(r.head.pri)) })).filter((b) => b.rows.length);
+  const bands = BRIEF_BANDS.map((b) => ({ ...b, rows: rows.filter((r) => b.test(r.pri != null ? r.pri : r.head.pri)) })).filter((b) => b.rows.length);
   let html;
   /* R73 · A1 — how many rows the cage's "N more ↓" is counting. NOT rows.length: a band longer
      than BRIEF_BAND_CAP already folds its tail behind "show the other N", and those rows are not
@@ -12673,8 +13021,12 @@ function renderBriefing() {
      about. So it is the rows the renderer places OUTSIDE the band folds, accumulated from the
      same arrays that build the HTML. */
   let unfoldedRows = 0;
+  /* R88 · A — the radar's R70 tail, named once at the foot of the band it sits in. */
+  const tailHtml = radarTail
+    ? `<div class="brief-tail unactioned-more cs-muted">…and ${radarTail} more with no next action — <button type="button" class="dash-notice-link" onclick="nav('pipeline')">open Pipeline</button> to work the rest.</div>`
+    : "";
   if (!rows.length) {
-    html = '<div class="empty">All clear — nothing needs you right now 🎉</div>';
+    html = '<div class="empty">All clear — nothing needs you right now 🎉</div>';   // .empty kept: every suite's boot waits on it
   } else if (bands.length > 1 || rows.length > BRIEF_BAND_CAP) {
     html = bands.map((b) => {
       /* A NEW LEAD IS NEVER FOLDED. Speed-to-lead (R7) is the one clock on this page measured in
@@ -12695,19 +13047,27 @@ function renderBriefing() {
         + (folded.length ? `<details class="brief-fold"${briefFoldOpen[b.key] ? " open" : ""} ontoggle="briefFoldOpen['${b.key}']=this.open">
             <summary>Show the other ${folded.length} ${b.label.toLowerCase()} item${folded.length === 1 ? "" : "s"}</summary>
             ${folded.map(briefRowHtml).join("")}
-          </details>` : "");
+          </details>` : "")
+        + (b.key === "rest" ? tailHtml : "");
     }).join("");
+    if (tailHtml && !bands.some((b) => b.key === "rest")) html += tailHtml;
   } else {
-    html = rows.map(briefRowHtml).join("");
+    html = rows.map(briefRowHtml).join("") + tailHtml;
     unfoldedRows = rows.length;
   }
-  $("#briefing-list").innerHTML = html;
+  const listEl = $("#briefing-list");
+  listEl.innerHTML = html;
+  /* R88 · A — every quiet case in scope, not just the RADAR_CAP shown. R88 · fixer (10 D4): when the
+     radar read failed (radarLast null) the total is UNKNOWN, not zero — the attribute is left off. */
+  if (radarLast) listEl.setAttribute("data-radar-total", String(radarTotal));
+  else listEl.removeAttribute("data-radar-total");
+  listEl.setAttribute("data-rows", String(rows.length));
   panelCount("#briefing-list", items.length, items.some((it) => it.pri < 15));
   /* R73 · A1 — the cut lands on a whole row and the rest is one press away. `unfoldedRows` is the
      grouped-row count this paint just placed OUTSIDE the band folds (see its note above), which
      is the same unit the band headings count in and the only honest unit for "N more". */
   applyDashCage("briefing-list", unfoldedRows, "more rows");
-  renderLeadsAcceptBar(items);   // R68 · B1 — the "accept all unambiguous leads" bar above the list
+  renderLeadsAcceptBar(lastBriefItems);   // R68 · B1 — the "accept all unambiguous leads" bar above the list (My Day's own leads)
   applyLeadAdvChoices();   // R12a K-1 — a lead_new row's select is the SAME control as the drawer's
 }
 /* R68 · B1/M12 — the bar above My Day. Shown only from TWO new enquiries up: "accept all" of one
@@ -12904,6 +13264,9 @@ function setBriefScope(s) {
   loadBriefing();
   loadProtection();   // R82 · A6 — the Protection tab follows this toggle now, so it repaints with it
   briefAheadLine();   // R82 · A8 — and so does the "due later" line (no read: it re-reads the map)
+  /* R88 · fixer (10 1k) — and the Checks drawer, whose scope is this one now (wtScopeResolved). */
+  syncWtScopeButtons();
+  renderWatchtower();
 }
 $("#brief-scope-mine").addEventListener("click", () => setBriefScope("mine"));
 $("#brief-scope-all").addEventListener("click", () => setBriefScope("all"));
@@ -13037,12 +13400,14 @@ let wtLast = null;
    firm. Those rows are shown to the Owner and the Administrator in BOTH scopes, and to an adviser
    in NEITHER — flipping to All must not hand an adviser a to-do list that is not theirs to work.
    ========================================================================= */
-let wtScope = null;                            // "mine" | "all" — resolved on first render
-const WT_SCOPE_KEY = "nx_wt_scope";
+/* R88 · fixer (10 1k) — THE CHECKS DRAWER FOLLOWS MY DAY'S Mine|All. Its alerts are My Day rows
+   now, so a second toggle over the same alerts (with a count that disagreed with the list above it)
+   is gone: #wt-scope-mine / -all stay in the DOM, hidden, and mirror My Day's scope; pressing one
+   programmatically sets My Day's. The stored nx_wt_scope is no longer read (My Day's scope has the
+   same role-shaped default and is not remembered between sessions — R12b · W-7). */
+let wtScope = null;                            // "mine" | "all" — mirrors briefingScope
 function wtScopeResolved() {
-  if (wtScope) return wtScope;
-  const stored = lsGet(WT_SCOPE_KEY);
-  wtScope = (stored === "mine" || stored === "all") ? stored : (ME && !isAdminOrOwner() ? "mine" : "all");
+  wtScope = briefingScope === "mine" ? "mine" : "all";
   return wtScope;
 }
 function syncWtScopeButtons() {
@@ -13057,8 +13422,8 @@ function syncWtScopeButtons() {
 /* Re-render only. Like the severity chips, this filters rows already in hand — it costs no query,
    and it never touches the drawer's open/closed state. */
 window.wtSetScope = function (s) {
-  wtScope = s === "mine" ? "mine" : "all";
-  lsSet(WT_SCOPE_KEY, wtScope);
+  const want = s === "mine" ? "mine" : "all";
+  if (want !== briefingScope) return setBriefScope(want);   // R88 · fixer — one scope for Today
   syncWtScopeButtons();
   renderWatchtower();
 };
@@ -13549,8 +13914,11 @@ function renderWatchtower() {
      working down it. Re-wired on every paint because the list's innerHTML was just replaced. */
   wtWireBulk(groups);
   panelCount("#watchtower-list", alerts.length, alerts.some((a) => a.severity === "crit"));
-  autoDrawer("watchtower", alerts.some((a) => a.severity === "crit")); // auto-open on anything critical, else stay collapsed
+  /* R88 · A — NO AUTO-OPEN. The drawer used to open itself on any critical; every alert is now a
+     row on My Day (critical ones in the Urgent band), so the "Checks" drawer is the triage tool
+     and stays closed until somebody opens it. */
   renderSnoozedWatchAlerts(snoozed);
+  if (briefLoaded) renderBriefing();   // R88 · A — the alerts are My Day rows too: repaint the one list
 }
 /* ==========================================================================
    R72 · B2 (H5b) — WATCHTOWER BULK TRIAGE.
@@ -13837,15 +14205,53 @@ function renderSnoozedWatchAlerts(snoozed) {
      collapsed. Showing the snoozed list opens the drawer (through toggleDrawer, so the stored
      preference is honoured the same way a header click would) and brings it into view; hiding
      the list leaves the drawer as it is. */
+  /* R88 · A — the toggle is inside the Checks drawer now, beside Run checks; it can only be
+     pressed with the drawer open, but a programmatic click still opens it (the <details>). */
   toggle.onclick = () => {
     const show = panel.classList.contains("hidden");
     panel.classList.toggle("hidden", !show);
     if (!show) return;
     const drawer = drawerPanelEl("watchtower");
-    if (drawer && drawer.classList.contains("collapsed")) window.toggleDrawer(null, "watchtower");
+    if (drawer && drawer.tagName === "DETAILS" && !drawer.open) drawer.open = true;
+    else if (drawer && drawer.classList.contains("collapsed")) window.toggleDrawer(null, "watchtower");
     if (drawer) drawer.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 }
+/* ==========================================================================
+   R88 · A — THE CHECKS DRAWER IS A <details>.
+   #watchtower-panel keeps its id (and .panel, so panelCount finds its heading
+   count) but is a native disclosure now, closed by default, holding the
+   bulk-triage bar, Run checks, the snoozed view and the per-check groups. Two
+   things still speak the old drawer language — the `.collapsed` class that
+   toggleDrawer / applyStoredDrawer flip, and code that reads it — so the class
+   and the open state are kept as mirrors of each other: open ⇄ no .collapsed.
+   A header click is the <summary>'s own; a toggleDrawer(null,'watchtower') or a
+   stored preference flips the class and the observer opens or closes it.
+   ========================================================================== */
+(function wireChecksDrawer() {
+  const d = $("#watchtower-panel");
+  if (!d || d.tagName !== "DETAILS") return;
+  const syncClass = () => { if (d.classList.contains("collapsed") === d.open) d.classList.toggle("collapsed", !d.open); };
+  d.addEventListener("toggle", syncClass);
+  new MutationObserver(() => {
+    const want = !d.classList.contains("collapsed");
+    if (d.open !== want) d.open = want;
+  }).observe(d, { attributes: true, attributeFilter: ["class"] });
+  syncClass();
+})();
+/* R88 · A — ✓ Done on a warning / FYI check: the same write Dismiss makes, without the question
+   (a reason is only ever required on a critical, and this button is never offered on one). */
+window.wtDoneAlert = async function (id) {
+  const a = wtLast && wtLast.alerts.find((x) => x.id === id);
+  if (a && a.severity === "crit") return window.resolveAlert(id, "crit", a.case_id || "");
+  const { error } = await db.from("watch_alerts").update({ resolved_at: new Date().toISOString() }).eq("id", id);
+  if (error) return dbFail("wtDoneAlert", error);
+  toast("Done ✓ — the check raises it again if the problem is still there");
+  loadWatchtower();
+};
+/* R88 · A — "Add next step" on a radar row: the case, opened at its task box. R88 · fixer (10 1f):
+   one implementation of the gesture — slice D's openCase(id, { focus: "task" }). */
+window.addNextStep = function (caseId) { return window.openCase(caseId, { focus: "task" }); };
 /* B5 / R5-22 — date chips (1 week / 1 month / custom, min tomorrow) + a required reason, on the
    shared second-layer overlay (openOverlay, R5 batch 2). Resolves {date, reason} or null on cancel. */
 function promptSnooze() {
@@ -14109,10 +14515,19 @@ const UNACTIONED_DAYS = 7;
    every quiet case. */
 const RADAR_CAP = 25;
 let unactionedLoadSeq = 0;   // R83 — stale-response guard (the dashLoadSeq idiom)
+/* R88 · A — THE RADAR HAS NO PANEL. Its reads, its membership rule, its order and its cap are all
+   unchanged; what it no longer does is draw a list. It builds one My Day item per quiet case
+   (kind "radar") into radarLast and repaints My Day, whose merge (todaySideItems) puts each case
+   in the Worth doing band — or, when the case already has a row, on that row as a sub-line —
+   with ONE verb, "Add next step". A failed read says so in #unactioned-cap-notice, under My Day. */
 async function loadUnactioned() {
-  const listEl = $("#unactioned-list");
-  if (!listEl) return;
   const seq = ++unactionedLoadSeq;   // R83
+  const radarFail = (msg) => {
+    radarLast = null;
+    const n = $("#unactioned-cap-notice");
+    if (n) { n.classList.remove("hidden"); n.textContent = `⚠ No-next-action check unavailable — ${msg}`; }
+    if (briefLoaded) renderBriefing();
+  };
   const sinceIso = new Date(Date.now() - UNACTIONED_DAYS * 86400000).toISOString();
   /* R18-P3 — the note/event reads used to ship the ENTIRE case_notes/case_events tables on every
      dashboard load (unbounded, index-served nowhere). Read a WIDER 90-day window: MEMBERSHIP still
@@ -14162,17 +14577,11 @@ async function loadUnactioned() {
     softRows(db.from("case_events").select("case_id,created_at").gte("created_at", activitySinceIso)),
   ]);
   if (seq !== unactionedLoadSeq) return;   // R83 — a newer radar load owns the panel
-  if (casesRes.error) {
-    listEl.innerHTML = `<div class="empty">No-next-action radar unavailable — ${esc(casesRes.error.message)}</div>`;
-    return;
-  }
+  if (casesRes.error) return radarFail(casesRes.error.message);
   /* R83 — the notes read was the one of the four not soft-wrapped AND not checked: on failure every
      case whose only recent touch was a note read as "no next action", silently. A radar built on
      half its evidence is not a radar, so it says so instead. */
-  if (notesRes && notesRes.error) {
-    listEl.innerHTML = `<div class="empty">No-next-action radar unavailable — ${esc(notesRes.error.message)}</div>`;
-    return;
-  }
+  if (notesRes && notesRes.error) return radarFail(notesRes.error.message);
   // case_id → most recent note/event timestamp (activity). Undated / absent ⇒ never touched.
   const lastActivity = {};
   const note = (cid, ts) => { if (cid && ts && (!lastActivity[cid] || ts > lastActivity[cid])) lastActivity[cid] = ts; };
@@ -14227,50 +14636,43 @@ async function loadUnactioned() {
     }
     return (daysQuiet(b) ?? 9999) - (daysQuiet(a) ?? 9999);
   });
-  const radarShown = quiet.slice(0, RADAR_CAP);
+  /* R88 · A — one My Day item per quiet case, ALL of them (the cap is applied in the merge,
+     after My Day's Mine/All scope has cut the list — see todaySideItems). The row's words are
+     the radar's own: stage · quiet N days, the rate end and the lender on the same line, the
+     client's number (opt-out honoured), and the badge. */
   const radarBook = { clientById: casesRes.clientById || null };   // R87 · today (A3)
-  listEl.innerHTML = quiet.length ? radarShown.map((c) => {
+  const radarItems = quiet.map((c) => {
     const who = c.clients ? [c.clients.first_name, c.clients.last_name].filter(Boolean).join(" ") : "";
     const n = daysQuiet(c);
     const nLabel = n == null ? "no activity recorded" : `quiet ${n} ${n === 1 ? "day" : "days"}`;
     const stageLbl = STAGE_LABEL[c.stage] || String(c.stage || "").replace(/_/g, " ");
     /* R63 · H1c — a case that reached this list DESPITE having an open task is a different
-       finding, and saying "no next action" over a visible open task is how a panel loses its
-       reader. Name what is actually there instead. */
+       finding: the badge and the line say so. */
     const stale = staleOnly(c);
-    /* R70 · B4 — the rate line. The one fact that decides who to ring, on the row, in the same
-       words the Retention feed uses ("ends 14 Mar 2026 (3 months ago)"), plus the lender, because
-       a product transfer is a conversation about a specific lender's reversion rate. Silent on a
-       case with no rate end — a purchase in progress has nothing to say here. */
-    /* Same sign convention as v_alerts.days_to_rate_end (negative once the rate has ended), off
-       the same calendar-day arithmetic the rest of the app counts dates with. */
+    /* R70 · B4 — the rate: the one fact that decides who to ring, in the Retention feed's words;
+       same sign convention as v_alerts.days_to_rate_end. Silent on a case with no rate end. No
+       lender favicon (r69_polish §A4's one-request-per-domain property). */
     const rSince = c.rate_end_date ? daysSinceLocal(String(c.rate_end_date).slice(0, 10)) : null;
     const rDays = rSince == null ? null : -rSince;
     const rateBit = c.rate_end_date
-      /* Deliberately NO lender favicon here, unlike the Retention rows. The dashboard is the first
-         page painted in a session, and putting a new set of lender domains on it only moves those
-         image requests earlier — r69_polish §A4's "one request per domain across the session"
-         property is worth more than a 16px logo on a list that is already dense. The lender's NAME
-         is the part that decides the call. */
-      ? `<div class="s unactioned-rate">${esc(c.lender || "no lender on the case")} — rate ${rDays != null && rDays < 0 ? "ended" : "ends"} ${esc(fmtD(c.rate_end_date))}${rDays != null ? ` (${rDays < 0 ? fmtDaysAway(rDays) + " ago" : "in " + fmtDaysAway(rDays)})` : ""}</div>`
+      ? ` · <span class="unactioned-rate">${esc(c.lender || "no lender on the case")} — rate ${rDays != null && rDays < 0 ? "ended" : "ends"} ${esc(fmtD(c.rate_end_date))}${rDays != null ? ` (${rDays < 0 ? fmtDaysAway(rDays) + " ago" : "in " + fmtDaysAway(rDays)})` : ""}</span>`
       : "";
     const phone = (c.clients && c.clients.phone) || "";
-    /* R87 · today (A3) — the Book row's clients embed carries sms_opt_out; the clientById lookup
-       covers a row whose embed lacks it. phoneActionsHtml turns the 💬 into "no texts". */
     const radarCl = (c.clients && c.clients.sms_opt_out == null && radarBook.clientById && radarBook.clientById.get(c.client_id)) || null;
     const radarOptOut = c.clients && c.clients.sms_opt_out != null ? !!c.clients.sms_opt_out : !!(radarCl && radarCl.sms_opt_out);
-    return `<div class="row-item${stale ? " unactioned-stale" : ""}">
-      <div class="row-main">
-        <div class="t" onclick="openCase('${c.id}')">${esc(who) || "(no name)"} ${propCtxChip(ctx, c.id, "row-prop")}</div>
-        <div class="s">${esc(stageLbl)} · ${esc(staffName(c.assigned_to))} · ${nLabel}${stale ? ` · <span class="unactioned-stale-note" title="${esc(STALE_TASK_TIP)}">only an earlier-stage task is open</span>` : ""}</div>
-        ${rateBit}${phoneActionsHtml(phone, { sms: true, name: who, rateEnd: c.rate_end_date, smsOptOut: radarOptOut })}
-      </div>
-      <span class="badge grey"${stale ? ` title="${esc(STALE_TASK_TIP)}"` : ""}>${stale ? "STALE TASK ONLY" : "NO NEXT ACTION"}</span>
-      <button class="btn btn-sm" onclick="openCase('${c.id}')">Open</button>
-    </div>`;
-  }).join("")
-    + (quiet.length > RADAR_CAP ? `<div class="empty unactioned-more">…and ${quiet.length - RADAR_CAP} more — <button type="button" class="dash-notice-link" onclick="nav('pipeline')">open Pipeline</button> to work the rest.</div>` : "")
-    : `<div class="empty">Every live case has a next action 🎉</div>`;
+    return {
+      c,
+      item: {
+        kind: "radar", __side: true, pri: RADAR_BRIEF_PRI,
+        case_id: c.id, client_id: c.client_id || null, owner: c.assigned_to || null,
+        title: who || "(no name)", stale,
+        sub: `${stageLbl} · ${nLabel}${stale ? " · only an earlier-stage task is open" : ""}`,
+        __subHtml: rateBit,
+        __disc: propCtxChip(ctx, c.id, "row-prop") || "",
+        __phone: phone ? { phone, first: who, smsOptOut: radarOptOut, rateEnd: c.rate_end_date || undefined } : null,
+      },
+    };
+  });
   /* R69 · A4 — say it when the bound bites. Same `=== cap` test the R23 owner-read notices use
      (ownerCapHit): a read that comes back holding EXACTLY the ceiling is, as far as the client can
      tell, truncated. Either cap firing makes the radar unreliable in a different direction — a
@@ -14288,12 +14690,8 @@ async function loadUnactioned() {
       ? `⚠ Showing the first ${OWNER_ROW_CAP.toLocaleString("en-GB")} ${casesCapped ? "live cases (oldest-touched first)" : "open tasks"} — the radar may be incomplete.`
       : "";
   }
-  panelCount("#unactioned-list", quiet.length, quiet.length > 0);
-  /* R73 · A1 — the radar's own cage. `radarShown.length` and not `quiet.length`: the RADAR_CAP
-     tail is already disclosed by its own "…and N more — open Pipeline" line, so the button here
-     must only ever offer what this list actually holds. */
-  applyDashCage("unactioned-list", radarShown.length, "more cases");
-  autoDrawer("unactioned", quiet.length > 0);
+  radarLast = { quiet: radarItems };
+  if (briefLoaded) renderBriefing();   // R88 · A — the radar is part of the one list now
 }
 
 /* ---------- Pipeline ---------- */
@@ -14692,7 +15090,7 @@ function boardCardHtml(c, ctx) {
            captured stage-entry data and it was invisible (opacity 0) until hovered, while the
            visible gesture (drag) and the phone control (the <select>) asked nothing. Every move
            now prompts, so one control per surface is enough — desktop drags, a phone uses the
-           <select> below. The .card-advance CSS (admin.css 1046–1057, 1858) is now unreferenced. */
+           <select> below. The .card-advance CSS was deleted in R88 · E. */
         /* R6-FIX G63-03 — the pill and the .cd line have to be decided TOGETHER.
            The board's chip is rendered with noLender, i.e. on an address-less
            case it was the case KIND and nothing else; and .cd prints the kind
@@ -15716,11 +16114,27 @@ const CASE_ACTION_TOP = {
 // (header, tasks, notes, history, change-history, case-details) are stage-
 // independent and always render. `showStages` = shown at all; `fullStages` =
 // shown in full (else compact/collapsed but still present).
+/* R88 · D (panel 02 #5) — `defaultOpen(ctx)`: below Notes + History every section is a collapsed
+   <details> fold, and a fold opens on arrival ONLY when it has content worth reading. ctx is
+   { stage, docCount, fileCount, factsNeedAttention } from openCase. A section with no rule, or no
+   defaultOpen, is born closed. Case details stays closed (it is the 51-field form). */
 const CASE_SECTION_RULES = {
   security:  { showStages: ["decision_in_principle", "application", "offer", "exchange", "completed", "not_proceeding"] },
-  files:     { showStages: ["decision_in_principle", "application", "offer", "exchange", "completed", "not_proceeding"] },
-  documents: { fullStages: ["enquiry", "fact_find", "decision_in_principle", "application", "offer", "exchange"] },
+  files:     { showStages: ["decision_in_principle", "application", "offer", "exchange", "completed", "not_proceeding"],
+               defaultOpen: (x) => x.fileCount > 0 },
+  documents: { fullStages: ["enquiry", "fact_find", "decision_in_principle", "application", "offer", "exchange"],
+               // A checklist exists → open; at completed/not_proceeding it stays the compact, closed fold (R15 §3).
+               defaultOpen: (x) => x.docCount > 0 && caseSectionFull("documents", x.stage) },
+  milestones: { defaultOpen: () => false },   // was open at application/offer/exchange (R65 · L4)
+  checklist:  { defaultOpen: () => false },   // its summary carries the "N suggested" count
+  // More facts: closed, unless a cell in it is asking for something (amber/red, add-rent, a prompt).
+  facts:      { defaultOpen: (x) => !!x.factsNeedAttention },
+  details:    { defaultOpen: () => false },
 };
+function caseSectionOpen(section, ctx) {
+  const rule = CASE_SECTION_RULES[section];
+  return !!(rule && typeof rule.defaultOpen === "function" && rule.defaultOpen(ctx || {}));
+}
 /* ==========================================================================
    R17 · §1 — STAGE PLAYBOOKS. Advancing a stage creates zero work today, so
    advisers re-invent "what do I do at DIP/Application" from memory and drop
@@ -16375,7 +16789,7 @@ function caseActionBarHtml(c, stage, kind, opts) {
         ${/* R87 · B6 — the menu gained the stage select at its head; on a short viewport its last items
              (Mark not proceeding) ran under the sticky Cancel/Save footer, which then swallowed the
              click. Capped to the room it has and scrolls inside itself instead. */ ""}
-        <div class="more-actions-menu hidden" id="case-more-actions" style="max-height:calc(100vh - 230px);overflow-y:auto;">${overflowHtml || '<span class="more-actions-empty">No other actions at this stage.</span>'}</div>
+        <div class="more-actions-menu hidden" id="case-more-actions">${overflowHtml || '<span class="more-actions-empty">No other actions at this stage.</span>'}</div>
       </div>
     </div>`;
 }
@@ -18957,7 +19371,7 @@ function renderSegmentControl(filtered) {
   if (!wrap) return;
   const count = (seg) => filtered.filter((c) => inSegment(c.stage, seg)).length;
   wrap.innerHTML = SEGMENTS.map(([k, l]) =>
-    `<button class="seg-btn${pipelineSegment === k ? " active" : ""}" role="tab" aria-selected="${pipelineSegment === k}" data-seg="${k}">${l} <span class="seg-count">${count(k)}</span></button>`
+    `<button class="seg-btn${pipelineSegment === k ? " active" : ""}" aria-pressed="${pipelineSegment === k}" data-seg="${k}">${l} <span class="seg-count">${count(k)}</span></button>`
   ).join("");
   wrap.querySelectorAll(".seg-btn").forEach((b) => (b.onclick = () => setSegment(b.dataset.seg)));
   syncViewToggle();
@@ -19042,6 +19456,7 @@ window.reportGotoStage = function (stage) {
 // Keep the board/table toggle honest: hidden in Completed (locked to table), otherwise labelled
 // for the view it would switch to.
 function syncViewToggle() {
+  syncBoardScope();   // R88 · B — every board/table paint passes here (renderSegmentControl), so the Mine|All buttons follow #board-adviser
   const btn = $("#view-toggle");
   if (!btn) return;
   btn.style.display = segmentIsTableOnly(pipelineSegment) ? "none" : "";   // R87 · B2 — Completed and All are table-only
@@ -19265,7 +19680,7 @@ function feeStatusCellHtml(c) {
       default: return "<td></td>";
     }
   };
-  const bodyRows = rows.map((c) => `<tr onclick="openCase('${c.id}')" style="cursor:pointer;">
+  const bodyRows = rows.map((c) => `<tr onclick="openCase('${c.id}')">
         ${cbCell(c)}${cols.map(([k]) => pipeCellHtml(c, k)).join("")}
       </tr>`).join("");
   /* ==========================================================================
@@ -19317,29 +19732,28 @@ function feeStatusCellHtml(c) {
      imported rather than worked", R71 · A1) are OFF the bar: bulkApplyPlaybooks / bulkBuildChecklists
      stay exported on window for a one-off "Back-fill imported cases" action on Data health. The
      ⓘ paragraph is gone; each verb's title still says what it does and what it sends. */
-  const pipeBulkDock = `<div class="pipe-bulk-dock" id="pipe-bulk-dock">
-    <div class="bulk-bar" id="pipe-bulk-bar"${pipeSel.size ? "" : " hidden"}>
-      <span class="bulk-bar-count"><strong id="pipe-bulk-n">${pipeSel.size}</strong> selected</span>
-      <select id="pipe-bulk-stage" class="bulk-bar-select" aria-label="Move selected cases to stage">
+  /* R88 · B (panel 03 #3/#5) — the bar is the list kit's bulkBarHtml: count · the two picker selects
+     (Move to stage… / Assign to…, as `extra` — they are the bar's first two verbs) · ＋ Add task… ·
+     the kit's More ▾ (<details class="row-more">, was an inline-styled popover) holding the four
+     send/chase verbs · Clear. Every id, title and handler is unchanged; dockBulkBar (after the
+     paint) makes #table-wrap's last child the sticky .bulk-dock, zero-height while nothing is ticked. */
+  const pipeBulkBar = bulkBarHtml({
+    id: "pipe-bulk-bar", countId: "pipe-bulk-n", clearId: "pipe-bulk-clear", moreId: "pipe-bulk-more",
+    count: pipeSel.size, ariaLabel: "Actions on the selected cases", moreTitle: "Send and chase verbs for the selected cases",
+    extra: `<select id="pipe-bulk-stage" class="bulk-bar-select" aria-label="Move selected cases to stage">
         <option value="" selected>Move to stage…</option>
         ${STAGES.map(([k, l]) => `<option value="${k}">${l}</option>`).join("")}
-      </select>
-      <select id="pipe-bulk-adviser" class="bulk-bar-select" aria-label="Assign selected cases to adviser">${adviserOptionsHtml("Assign to…")}</select>
-      <button type="button" class="btn btn-sm" id="pipe-bulk-task">＋ Add task…</button>
-      <details class="bulk-more" id="pipe-bulk-more" style="position:relative;">
-        <summary class="btn btn-sm" id="pipe-bulk-more-toggle" title="Send and chase verbs for the selected cases" style="list-style:none;cursor:pointer;">More ▾</summary>
-        <div class="bulk-more-menu" id="pipe-bulk-more-menu" style="position:absolute;bottom:calc(100% + 6px);left:0;z-index:9;display:flex;flex-direction:column;gap:6px;padding:8px;background:var(--white,#fff);border:1px solid var(--border,#d9dee5);border-radius:10px;box-shadow:0 8px 24px rgba(20,30,50,.14);min-width:240px;">
-          <button type="button" class="btn btn-sm" id="pipe-bulk-rate" title="Queue a rate-end reminder for every selected case that has a client email and a rate end date. A rate ending more than nine months out is listed in the confirmation and NOT queued — it is too early to be a useful conversation. Nothing is sent now.">⏰ Queue rate-end reminders</button>
-          ${/* R7-2 / R70 · A3 — the bulk half of the retention sweep: same per-case flow, one batch confirm. */ ""}
-          <button type="button" class="btn btn-sm" id="pipe-bulk-retention" title="Start a retention case for every selected completed case whose rate is ending. ONE confirmation for the whole batch, naming what it will start and what it is skipping.">🔁 Start retention cases</button>
-          ${/* R65 · M11 — the two chase verbs: pre-flighted, every skip named in one confirm, idempotent. */ ""}
-          <button type="button" class="btn btn-sm" id="pipe-bulk-chase" title="Add a “Chase solicitors for completion date” task, due today, on every selected case — assigned to that case's own adviser. A case that already has an open “Chase solicitors…” task is named in the confirmation and skipped, so pressing this twice never doubles anybody's list. No email is sent.">⚖️ Chase solicitors</button>
-          <button type="button" class="btn btn-sm" id="pipe-bulk-docs" title="Queue the document-request email for every selected LIVE case that has outstanding checklist items and a client email. It lists only what is still missing on each case. You get one confirmation naming exactly who is written to and who is skipped, and why.">📄 Send document request</button>
-        </div>
-      </details>
-      <button type="button" class="btn btn-sm" id="pipe-bulk-clear">Clear</button>
-    </div>
-  </div>`;
+      </select><select id="pipe-bulk-adviser" class="bulk-bar-select" aria-label="Assign selected cases to adviser">${adviserOptionsHtml("Assign to…")}</select>`,
+    verbs: [{ id: "pipe-bulk-task", label: "＋ Add task…" }],
+    more: [
+      { id: "pipe-bulk-rate", label: "⏰ Queue rate-end reminders", title: "Queue a rate-end reminder for every selected case that has a client email and a rate end date. A rate ending more than nine months out is listed in the confirmation and NOT queued — it is too early to be a useful conversation. Nothing is sent now." },
+      // R7-2 / R70 · A3 — the bulk half of the retention sweep: same per-case flow, one batch confirm.
+      { id: "pipe-bulk-retention", label: "🔁 Start retention cases", title: "Start a retention case for every selected completed case whose rate is ending. ONE confirmation for the whole batch, naming what it will start and what it is skipping." },
+      // R65 · M11 — the two chase verbs: pre-flighted, every skip named in one confirm, idempotent.
+      { id: "pipe-bulk-chase", label: "⚖️ Chase solicitors", title: "Add a “Chase solicitors for completion date” task, due today, on every selected case — assigned to that case's own adviser. A case that already has an open “Chase solicitors…” task is named in the confirmation and skipped, so pressing this twice never doubles anybody's list. No email is sent." },
+      { id: "pipe-bulk-docs", label: "📄 Send document request", title: "Queue the document-request email for every selected LIVE case that has outstanding checklist items and a client email. It lists only what is still missing on each case. You get one confirmation naming exactly who is written to and who is skipped, and why." },
+    ],
+  });
   /* R75 · B4b — SORT AFFORDANCES. Every sortable head now shows a quiet ↕ so it
      reads as a control before you hover it, and the active one keeps the ▲/▼ it
      has always had. The ↕ is drawn by CSS (`#pipe-table th[data-k]` with
@@ -19362,7 +19776,11 @@ function feeStatusCellHtml(c) {
   /* R87 · B3 — the fold. The legend's markup is copied in from #board-legend after the paint (below),
      so the two can never drift; the "In stage" header carries the same legend as a title. */
   const legendTitle = ($("#board-legend")?.textContent || "").replace(/\s+/g, " ").trim();
-  const pipeHow = mobileCards ? "" : howFold({ id: "pipe-how", title: "How this table is built", html: `${currentWhy}${colsWhy}<p class="board-legend pipe-table-legend" id="pipe-legend"></p>` });
+  /* R88 · B — prose rule on the phone too: the 44-word "shown as cards" paragraph was a second
+     standing line under "Sorted by …"; it is the phone's fold now (same id, same words). */
+  const pipeHow = mobileCards
+    ? howFold({ id: "pipe-how", title: "Why cards on a phone", html: `<p class="panel-sub pipe-mobile-note" id="pipe-mobile-note">On a phone this list is shown as <strong>cards</strong> — the same cards as the board — because ${allCols.length} columns on a 390px screen is a table you can read one column of. Everything is here; pick what to order it by below, and tap a card to open the case.</p>` })
+    : howFold({ id: "pipe-how", title: "How this table is built", html: `${currentWhy}${colsWhy}<p class="board-legend pipe-table-legend" id="pipe-legend"></p>` });
   $("#table-wrap").innerHTML = `
     ${/* R75 · B4d/B4e — THE PANEL HEADER. Download CSV used to sit INSIDE the
          horizontal scroller, so on any view wide enough to need scrolling it slid
@@ -19373,6 +19791,9 @@ function feeStatusCellHtml(c) {
          #board-legend rather than re-written, so the two can never drift. */ ""}
     <div class="pipe-table-head" id="pipe-table-head">
       <div class="pipe-table-head-l">
+        ${/* R88 · B (panel 03 #3) — select-all is the kit's "Select all N shown" line, in the header
+             strip (no extra height above the rows); #pipe-bulk-all keeps its id. */ ""}
+        ${mobileCards ? "" : selectAllHtml({ id: "pipe-bulk-all", count: rows.length, ariaLabel: "Select all cases in this view" })}
         <span class="pipe-sorted-by" id="pipe-sorted-by">Sorted by <strong>${esc(sortedByLabel || "—")}</strong> ${sd > 0 ? "(A→Z / low to high)" : "(Z→A / high to low)"}${mobileCards ? "" : " — click any column heading to change it"}</span>
       </div>
       <div class="pipe-table-head-r">
@@ -19385,32 +19806,35 @@ function feeStatusCellHtml(c) {
     ${/* R65 · L9 — the horizontal scroller is the TABLE's affordance. A card list has nothing to
          scroll sideways, and an overflow-x:auto box also promotes overflow-y to auto, which is how
          a card list ends up inside a second vertical scrollbar on a phone. */ ""}
-    <div class="panel" id="pipe-scroll" style="overflow-x:${mobileCards ? "visible" : "auto"};">
+    <div class="panel${mobileCards ? " is-cards" : ""}" id="pipe-scroll">
     ${/* R42 · F7 — ⭳, not ⬇: one glyph for "this downloads a file". Every other CSV control on
           the app (the MI panels, the diagnostics export, the drill-downs) already used ⭳, and
           two glyphs for one action is a difference that has to be checked before it is
           dismissed. Label, id and behaviour unchanged. R75 · B4d moved it into the header
           strip above; the id, the glyph, the label and the handler are untouched. */ ""}
-    ${mobileCards ? `<p class="panel-sub pipe-mobile-note" id="pipe-mobile-note">On a phone this list is shown as <strong>cards</strong> — the same cards as the board — because ${allCols.length} columns on a 390px screen is a table you can read one column of. Everything is here; pick what to order it by below, and tap a card to open the case.</p>
-    <div class="pipe-mobile-sort" id="pipe-mobile-sort-row">
+    ${mobileCards ? `<div class="pipe-mobile-sort" id="pipe-mobile-sort-row">
       <label for="pipe-mobile-sort">Sort by</label>
       <select id="pipe-mobile-sort" aria-label="Sort the case list">
         ${allCols.map(([k, l]) => `<option value="${k}"${sk === k ? " selected" : ""}>${esc(l)}</option>`).join("")}
       </select>
       <button type="button" class="btn btn-sm" id="pipe-mobile-sortdir" title="${sd > 0 ? "Sorted A→Z / low to high — press to reverse" : "Sorted Z→A / high to low — press to reverse"}" aria-label="Reverse the sort order">${sd > 0 ? "▲ A→Z" : "▼ Z→A"}</button>
     </div>` : ""}
-    ${!rows.length ? `<div class="empty" style="padding:40px 16px;text-align:center;">No cases in this view.</div>`
+    ${!rows.length ? emptyState({ headline: "No cases in this view." })
       : mobileCards ? `<div class="pipe-card-list" id="pipe-card-list">${rows.map((c) => {
           try { return boardCardHtml(c, cardCtx); }
           catch (err) { logClientError("caught", "pipeline card render failed: " + ((err && err.message) || err), { recordId: c && c.id, where: "renderPipelineTable" }); return ""; }
         }).join("")}</div>`
       : `<table class="imp-table has-bulk" id="pipe-table">
-      <tr><th class="bulk-col"><input type="checkbox" id="pipe-bulk-all" aria-label="Select all cases in this view"></th>${cols.map(([k, l]) => `<th data-k="${k}" class="${k === "client" ? "stick-col" : k === "updated_at" ? "pipe-col-updated" : ""}" style="cursor:pointer;" aria-sort="${sk === k ? (sd > 0 ? "ascending" : "descending") : "none"}" title="${esc((sk === k ? `Sorted by ${l} — click to reverse it.` : `Click to sort by ${l}.`) + (k === "erc_end_date" ? " " + TIP_ERC : "") + (k === "days_in_stage" && legendTitle ? " " + legendTitle : ""))}">${l}${sortMark(k)}</th>`).join("")}</tr>
+      <tr><th class="bulk-col" aria-label="Select"></th>${cols.map(([k, l]) => `<th data-k="${k}" class="${k === "client" ? "stick-col" : k === "updated_at" ? "pipe-col-updated" : ""}" aria-sort="${sk === k ? (sd > 0 ? "ascending" : "descending") : "none"}" title="${esc((sk === k ? `Sorted by ${l} — click to reverse it.` : `Click to sort by ${l}.`) + (k === "erc_end_date" ? " " + TIP_ERC : "") + (k === "days_in_stage" && legendTitle ? " " + legendTitle : ""))}">${l}${sortMark(k)}</th>`).join("")}</tr>
       ${bodyRows}
     </table>`}</div>
     <button type="button" class="board-scroll-arrow" aria-label="Scroll right" title="Scroll right">›</button>
     </div>
-    ${pipeBulkDock}`;
+    ${pipeBulkBar}`;
+  /* R88 · B — dock the kit bar: #table-wrap's last child, sticky at its bottom (the id the R73 suite
+     pins stays on the dock). Zero-height while nothing is ticked. */
+  const pipeDock = dockBulkBar("#table-wrap", "#pipe-bulk-bar");
+  if (pipeDock) pipeDock.id = "pipe-bulk-dock";
   /* R75 · B4e — one legend, two places. Copied from the board's own element so a
      wording change there lands here in the same breath. */
   const legendSrc = $("#board-legend"), legendCopy = $("#pipe-legend");
@@ -19504,7 +19928,12 @@ function updatePipeBulkBar() {
   const bar = $("#pipe-bulk-bar");
   if (!bar) return;
   const n = pipeSel.size;
+  /* R88 · B — the kit's .is-empty (0px dock) and the `hidden` the r5_batch5 / r71 / r73 / r87 suites
+     read, kept in step. */
   bar.hidden = n === 0;
+  bar.classList.toggle("is-empty", n === 0);
+  const dock = bar.parentElement;
+  if (dock && dock.classList.contains("bulk-dock")) dock.classList.toggle("is-empty", n === 0);
   // R87 · B3 — an empty selection folds "More ▾" back up with the bar.
   const more = $("#pipe-bulk-more");
   if (more && n === 0) more.open = false;
@@ -19582,6 +20011,54 @@ $("#board-adviser").addEventListener("change", debounce(() => loadPipeline(), 25
 // R34 · W2 — remembering the choice is not the same job as re-running the query, so it is not
 // behind the query's debounce: the value is stored the moment it is picked.
 $("#board-adviser").addEventListener("change", () => persistStaffFilter("#board-adviser", BOARD_ADVISER_KEY));
+/* R88 · B (panel 03 #3) — THE SCOPE IS Mine | All | Unassigned (list kit), not a named-adviser <select>.
+   #board-adviser stays as a HIDDEN compat select (loadTeam builds its options; loadPipeline, the
+   saved views, reportGotoAdviser and ~10 suites read or set it): a button press writes the select
+   and fires its own change event, so persisting and reloading are the two listeners above,
+   unchanged. A colleague's board (Reports' per-adviser door, a saved view, a pre-R88 stored pick)
+   presses no button and shows a "✕" chip that goes back to All. */
+function pickBoardAdviser(v) {
+  const sel = $("#board-adviser");
+  if (!sel) return;
+  const want = [...sel.options].some((o) => o.value === v) ? v : "all";
+  if (sel.value !== want) { sel.value = want; sel.dispatchEvent(new Event("change")); }
+  syncBoardScope();
+}
+function syncBoardScope() {
+  const sel = $("#board-adviser");
+  const v = (sel && sel.value) || "all";
+  const pressed = ME && ME.id && v === ME.id ? "mine" : v === "all" ? "all" : v === "unassigned" ? "unassigned" : "";
+  document.querySelectorAll("#board-tools .list-scope .seg-btn").forEach((b) => {
+    const on = b.dataset.scope === pressed;
+    b.classList.toggle("scope-active", on);
+    b.setAttribute("aria-pressed", String(on));
+  });
+  const other = $("#board-scope-other");
+  if (!other) return;
+  other.classList.toggle("hidden", !!pressed);
+  if (!pressed) { other.textContent = `${staffName(v)}'s ✕`; other.title = `Showing only ${staffName(v)}'s cases — press to show everyone's.`; }
+}
+(() => {
+  const slot = $("#board-tools");
+  if (!slot) return;
+  slot.outerHTML = listToolsHtml({
+    id: "board-tools",
+    scope: { id: "board-scope", value: "all", options: ["mine", "all", "unassigned"], ariaLabel: "Whose cases",
+      titles: { mine: "Only cases assigned to you — remembered for next time", all: "Every adviser's cases — remembered for next time", unassigned: "Cases with no adviser — remembered for next time" } },
+    extra: `<button type="button" class="btn btn-sm list-scope-other hidden" id="board-scope-other"></button>`,
+  });
+  const tools = $("#board-tools");
+  const q = $("#board-search");
+  if (q) tools.prepend(q);   // the kit row is search · scope; the box keeps its own listeners
+  tools.addEventListener("click", (e) => {
+    const b = e.target.closest("button");
+    if (!b) return;
+    if (b.id === "board-scope-other") { pickBoardAdviser("all"); return; }
+    if (!b.dataset.scope) return;
+    pickBoardAdviser(b.dataset.scope === "mine" ? (ME && ME.id) || "all" : b.dataset.scope);
+  });
+})();
+$("#board-adviser").addEventListener("change", syncBoardScope);
 // R31-B — saved filter views on the board. Selecting one applies its captured filter set and
 // re-renders; save prompts for a name and captures the live set; delete removes the picked view.
 (() => {
@@ -19639,6 +20116,21 @@ let protScope = "mine", protFilter = "all";
    so search/filter/scope re-renders perform ZERO network. Module scope so a re-render from
    anywhere — setProtStatus, the bulk bar, the Quoted tile — keeps the search the operator typed. */
 let protSearch = "";
+/* R88 · C — THE TOOLS ROW, FROM THE KIT. Rendered at load, before the scope/search wiring further
+   down reaches for #prot-search / #prot-scope-*: 🔍 search · Mine|Unassigned|All. No Sort — the
+   order is the pipeline's score, always (R80 · A2d). */
+(() => {
+  const slot = $("#prot-tools");
+  if (!slot) return;
+  slot.outerHTML = listToolsHtml({
+    id: "prot-tools",
+    search: { id: "prot-search", placeholder: "Search client…", ariaLabel: "Search protection rows by client name" },
+    scope: {
+      value: "mine", options: ["mine", "unassigned", "all"], ariaLabel: "Whose protection cases to show",
+      ids: { mine: "prot-scope-mine", unassigned: "prot-scope-unassigned", all: "prot-scope-all" },
+    },
+  });
+})();
 const PROT_BADGE = {
   not_discussed: ["grey", "NOT DISCUSSED"], discussed: ["blue", "DISCUSSED"], quoted: ["amber", "QUOTED"],
   /* R66 · M6a — REFERRED. The conversation happened and it has been handed to somebody else (the
@@ -19835,232 +20327,220 @@ async function loadProtectionPage() {
   }
   renderProtectionPage(protCache);
 }
+/* ==========================================================================
+   R88 · C (04 #3, #4, #6, #9) — ONE LIST, ONE ROW PER CLIENT, ON THE KIT.
+
+   The page listed Sarah Ellingham four times: once per open case in the
+   table, and again under "Completed, no protection outcome" and "GI never
+   discussed" — three lists that were one conversation per client. Now:
+     · the RPC's rows are GROUPED BY CLIENT (protGroupByClient), in the RPC's
+       score order — a client ranks where their BEST case ranks, and the rank
+       stays a chip (#N, the score in words in its title);
+     · the row's ONE fact line names the cases (stage · kind · lender · loan ·
+       status badge, the GI badge where GI applies); the case is a chip (the
+       top one) and every case is an "Open …" in More ▾;
+     · the status <select> and the two bands are CHIPS (#prot-segs): All ·
+       Live · Completed · Quoted · Completed, no outcome · GI not discussed —
+       the same predicates (protBandNoOutcome / protBandGi), each chip counting
+       the CLIENT rows it would show. #prot-filter stays as a hidden compat
+       select, written in step;
+     · the three KPI tiles are ONE line (#prot-summary > #prot-cap-line), whose
+       client count IS the list's row count and whose £ is over the same rows
+       (R87 · C4's rule: one count, one £, one line);
+     · the per-row Status…/GI… selects live inside 📝 Log call (protLogCall).
+   ========================================================================== */
+const PROT_FILTERS = [
+  ["all", "All", "Every open protection or GI opportunity in this scope.", () => true],
+  ["live", "Live", "Cases still in the pipeline.", (r) => r.live],
+  ["completed", "Completed", "Completed cases with protection still open.", (r) => !r.live],
+  ["quoted", "Quoted", "Quoted, awaiting the client's decision.", (r) => r.protection_status === "quoted"],
+  ["nooutcome", "Completed, no outcome", "Completed cases whose protection conversation is still open — neither a policy nor a decline. The warmest call the firm has.", (r) => protBandNoOutcome(r)],
+  ["gi", "GI not discussed", "The GI (buildings & contents) conversation never started, on a case kind GI applies to — a product transfer keeps its existing cover.", (r) => protBandGi(r)],
+];
+const protFilterPred = (k) => (PROT_FILTERS.find((f) => f[0] === k) || PROT_FILTERS[0])[3];
+/* One entry per client, in the order the client's FIRST (best-ranked) case appears; `rank` is that
+   case's 1-based position among the case rows in view, so the chip means what the # column meant. */
+function protGroupByClient(rows) {
+  const by = new Map();
+  rows.forEach((r, i) => {
+    const key = r.client_id || `case:${r.case_id}`;
+    let g = by.get(key);
+    if (!g) { g = { client_id: r.client_id || null, client_name: r.client_name, rank: i + 1, cases: [] }; by.set(key, g); }
+    g.cases.push(r);
+  });
+  return [...by.values()];
+}
+let protRowCases = new Map();   // client row key → the case ids it stands for in this view (bulk selection)
+function protCaseLabel(r) {
+  const kind = (KINDS.find((x) => x[0] === r.case_kind) || [])[1] || "";
+  return [STAGE_LABEL[r.stage] || stageWordFor(r.stage), kind].filter(Boolean).join(" · ");
+}
+/* One case on the row's fact line. `first` drops the stage · kind the case chip beside the name
+   already says. The quote age only when a quote date is KNOWN (04 small stuff: "quote age unknown"
+   on four of five quoted rows was noise — the case modal still says it). */
+function protFactCaseHtml(r, quoteCtx, money, first) {
+  const p = PROT_BADGE[r.protection_status] || PROT_BADGE.not_discussed;
+  const gi = caseGiApplies(r.case_kind) ? (GI_BADGE[r.gi_status] || GI_BADGE.not_discussed) : null;
+  const qAt = r.protection_status === "quoted" ? ((quoteCtx || {})[r.case_id] || {}).protection_quoted_at : null;
+  const lead = [first ? "" : esc(protCaseLabel(r)), r.lender ? `${lenderIcon(r.lender)}${esc(r.lender)}` : "", fmtM(r.loan_amount) + (money ? ` <span class="prot-est" title="Estimated commission — firm average × loan band">est. ${fmtM(r.est_commission)}</span>` : "")].filter(Boolean).join(" · ");
+  return `<span class="prot-fact-case" data-case="${esc(r.case_id)}">${lead} <span class="badge ${p[0]} prot-status-badge">${p[1]}</span>${qAt ? " " + quoteAgeBadge(qAt) : ""}${gi ? ` <span class="badge ${gi[0]}" title="${TIP_GI}">${gi[1]}</span>` : ""}</span>`;
+}
+function protRowHtml(g, ctx) {
+  const top = g.cases[0];
+  const money = ctx.money;
+  const ids = g.cases.map((r) => r.case_id);
+  const key = g.client_id || `case:${top.case_id}`;
+  protRowCases.set(key, ids);
+  const picked = ids.every((id) => protBulkSel.has(id));
+  const owners = [...new Set(g.cases.map((r) => r.owner || ""))];
+  const ownerBit = protScope === "mine" ? "" : " · " + owners.map((o) => !o ? "unassigned"
+    : initials(o) ? `<span title="${esc(staffName(o))}">${esc(initials(o))}</span>`
+    : `<span class="cs-muted" title="This case is assigned to a staff id that is not on the current roster (${esc(o)}) — most likely someone who has left. Reassign it from the case.">off roster</span>`).join(", ");
+  /* The top case in full (its badges are what the row is ranked on); the client's other open cases
+     are NAMED, briefly — the chip says "+N" and More ▾ opens each — so the dial pair at the end of
+     the one line is not pushed off it. */
+  const others = g.cases.slice(1);
+  const fact = protFactCaseHtml(top, ctx.quoteCtx, money, true)
+    + (others.length ? ` · <span class="cs-muted prot-fact-more" title="${esc(others.map((r) => `${protCaseLabel(r)}${r.lender ? " · " + r.lender : ""} · ${fmtM(r.loan_amount)} — ${(PROT_BADGE[r.protection_status] || PROT_BADGE.not_discussed)[1].toLowerCase()}`).join("; "))}">+ ${others.slice(0, 2).map((r) => `<span class="prot-fact-case" data-case="${esc(r.case_id)}" data-prot="${esc(r.protection_status || "not_discussed")}">${esc(protCaseLabel(r))} (${esc((PROT_BADGE[r.protection_status] || PROT_BADGE.not_discussed)[1].toLowerCase())})</span>`).join(", ")}${others.length > 2 ? ` +${others.length - 2}` : ""}</span>` : "")
+    + ownerBit
+    + (top.has_email ? "" : ` · <span class="badge grey prot-noemail">no email</span>`);
+  const ph = g.client_id ? (ctx.phones || {})[g.client_id] : null;
+  const cid = jsArg(top.case_id);
+  return rowItemHtml({
+    id: `prot-${g.client_id || top.case_id}`, cls: "prot-row",
+    cb: { name: "prot-cb", value: key, checked: picked },
+    name: g.client_id ? { text: g.client_name, clientId: g.client_id } : { text: g.client_name },
+    chips: [
+      { label: `#${g.rank}`, cls: "grey prot-rank", title: protScoreTitle(top, g.rank) },
+      { label: protCaseLabel(top) + (g.cases.length > 1 ? ` +${g.cases.length - 1}` : ""), cls: `${stageBadgeClass(top.stage)} prot-case-chip`, onclick: `openCase('${cid}')`,
+        title: `Open the case — ${protCaseLabel(top)}${top.lender ? " · " + top.lender : ""}.${g.cases.length > 1 ? ` ${g.cases.length} of this client's cases are open opportunities; More ▾ opens each.` : ""}` },
+    ],
+    fact,
+    contact: ph && ph.phone ? { phone: ph.phone, smsOptOut: !!ph.smsOptOut, first: ph.first || String(g.client_name || "").split(/\s+/)[0] || "" } : null,
+    verbs: [
+      /* R87 · book (04 #9) — 📝, not a second 📞: the dial glyph beside the name rings the client;
+         this opens the form (and, since R88 · C, the protection and GI status selects). */
+      { label: "📝 Log call", cls: "prot-logcall", onclick: `protLogCall('${cid}')`, title: "Log a call — note, outcome, protection tick, follow-up — and set the protection or GI status." },
+      { label: "Task", onclick: `protCallTask('${cid}')`, title: "Add a “Protection call” task for tomorrow on this case's adviser." },
+      top.has_email ? { label: "Email", cls: "prot-email", onclick: `protQueueEmail('${cid}', event)`, title: "Queue the protection intro email to this client." } : null,
+    ].filter(Boolean),
+    more: g.cases.map((r) => ({ label: `Open · ${protCaseLabel(r)}`, onclick: `openCase('${jsArg(r.case_id)}')`, title: `${r.lender || ""} · ${fmtM(r.loan_amount)}` })),
+    moreTitle: "Open each of this client's cases",
+  });
+}
 function renderProtectionPage(cache) {
+  syncProtScopeButtons();   // R88 · C — boot may have moved protScope (no ME → All) without the aria state
   const data = cache.rows;
   const capActive = cache.totalKnown && cache.total > data.length;
-  // T1-5: the RPC's "mine" scope also hands back every ownerless case, so "Mine" meant "mine plus
-  // nobody's" for all three advisers at once. The client-side scope keeps Mine / Unassigned / All
-  // three distinct, honest sets over whatever the RPC handed this session (the whole firm for
-  // admin/owner; the adviser's own book — server-forced — for everyone else).
-  /* R7-3 — the scope filter is split out from the status filter, because the "completed, no
-     protection outcome" call list below answers to the SCOPE (whose book am I looking at) but not
-     to the drop-down (which slice of it) — a call list that disappeared when you filtered to
-     "Live cases" would be a call list nobody ever worked. */
+  // T1-5: Mine / Unassigned / All are three distinct, honest sets over whatever the RPC handed this
+  // session (the whole firm for admin/owner; the adviser's own book — server-forced — otherwise).
   const scoped = data.filter((r) => {
     if (protScope === "mine" && r.owner !== (ME && ME.id)) return false;
     if (protScope === "unassigned" && r.owner != null) return false;
     return true;
   });
-  /* R36-A · L6 — search sits INSIDE the same chain as the status drop-down, after the scope, so
-     the two compose the way an operator expects ("Mine · Quoted · okafor") and the KPI tiles above
-     re-read against the search — the same contract the pipeline's segment counts and the client
-     list's chips have had since BUILD 5a. The completed-with-no-outcome call list below still
-     answers only to the SCOPE, exactly as it did before search existed. */
+  /* R36-A · L6 — search composes with scope and chip ("Mine · Quoted · okafor"). */
   const protQ = protSearch.trim().toLowerCase();
-  /* R87 · book · C4 (04 #3, partial) — THE TWO BANDS ARE TWO FILTERS OVER THIS ONE LIST. "Completed,
-     no protection outcome" and "GI not discussed" were two more lists under the table, built from
-     the SAME scoped rows with the SAME predicates (protBandNoOutcome / protBandGi), so a client
-     ranked in the table reappeared two screens down with a different verb set. They are options
-     on the status filter now, over the one ranked table; the band panels below are collapsed
-     <details> that carry the same counts for anyone who wants the old view. */
-  const rows = scoped.filter((r) => {
-    if (protQ && !String(r.client_name || "").toLowerCase().includes(protQ)) return false;
-    if (protFilter === "live") return r.live;
-    if (protFilter === "completed") return !r.live;
-    if (protFilter === "quoted") return r.protection_status === "quoted";
-    if (protFilter === "nooutcome") return protBandNoOutcome(r);
-    if (protFilter === "gi") return protBandGi(r);
-    return true;
-  });
-  const protFilterSel = $("#prot-filter");
-  if (protFilterSel) {
-    const setOpt = (v, label) => { const o = protFilterSel.querySelector(`option[value="${v}"]`); if (o) o.textContent = label; };
-    setOpt("nooutcome", `Completed, no protection outcome (${scoped.filter(protBandNoOutcome).length})`);
-    setOpt("gi", `GI not discussed (${scoped.filter(protBandGi).length})`);
+  const searched = scoped.filter((r) => !protQ || String(r.client_name || "").toLowerCase().includes(protQ));
+  if (!PROT_FILTERS.some((f) => f[0] === protFilter)) protFilter = "all";
+  const rows = searched.filter(protFilterPred(protFilter));
+  const groups = protGroupByClient(rows);
+  const clientsIn = (list) => new Set(list.map((r) => r.client_id || `case:${r.case_id}`)).size;
+  const chipsEl = $("#prot-chips");
+  if (chipsEl) {
+    chipsEl.innerHTML = segmentChipsHtml({
+      id: "prot-segs", ariaLabel: "Which protection opportunities to show",
+      chips: PROT_FILTERS.map(([k, label, tip, pred]) => ({ key: k, label, title: tip + " Counts clients.", count: clientsIn(searched.filter(pred)), active: k === protFilter, cls: "prot-seg" })),
+    });
+    chipsEl.onclick = (e) => {
+      const b = e.target.closest(".seg-btn");
+      if (!b) return;
+      setProtFilter(b.dataset.seg);
+    };
   }
+  const fsel = $("#prot-filter"); if (fsel) fsel.value = protFilter;
   const estTotal = rows.reduce((s, r) => s + Number(r.est_commission || 0), 0);
-  // R87 · book · C4 — the cap line's £ was estAllRows (every row the RPC returned, before the
-  // client-side scope/status/search narrowing) while the tile beside it read the view; both are
-  // estTotal now, so the two figures 60px apart can never disagree.
-  /* BACKEND-R4 §1 (owner's decision) — commission is money reporting, and money reporting is
-     Owner-only IN THE UI for the KPI tile and the per-row Est. £ column, exactly as before.
-     R80 · A2c (owner-approved) — the CAP LINE's £ figure is the one deliberate exception: the RPC
-     now scopes rows server-side (an adviser only ever receives their OWN candidates), so the sum
-     over the returned rows is the reader's own scope by construction — the firm's for the Owner
-     and the Administrator, the adviser's own book for an adviser. Same caveat as ever: THIS IS
-     PRESENTATION, NOT A SECURITY CONTROL — get_protection_pipeline() still returns est_commission
-     to any staff session. */
   const money = showMoney();
-  const commTile = $("#prot-kpi-comm") ? $("#prot-kpi-comm").closest(".kpi") : null;
-  if (commTile) commTile.classList.toggle("hidden", !money);
-  /* R87 · book (04 #11) — #prot-money-note is gone: a 60-word paragraph to an adviser about a
-     tile they cannot see. Whose £ the cap line's figure is now lives in that line's own title. */
-  $("#prot-kpi-count").textContent = rows.length;
-  $("#prot-kpi-comm").textContent = money ? fmtM(estTotal) : "—";
-  $("#prot-kpi-quoted").textContent = rows.filter((r) => r.protection_status === "quoted").length;
-  /* S3c — bulk-select on this table. Same pattern as the pipeline's (BUILD 7c): the selection is
-     pruned to what is actually on screen after every filter/scope change, so "6 selected" can only
-     ever mean six rows the operator can see. */
+  const quotedN = rows.filter((r) => r.protection_status === "quoted").length;
+  /* ==========================================================================
+     R87 · C4 → R88 · C — ONE COUNT, ONE £, ONE LINE. The three tiles (count,
+     owner-only £, quoted) and the cap line are one sentence: the CLIENT count
+     is the rows below (#prot-kpi-count), the opportunities are the cases in
+     them, the £ is the estimate over those same cases (the reader's own scope
+     by construction — R80 · A2c), and "best N of M" is said only when the 250
+     ceiling bites. The formula is the line's title.
+     ========================================================================== */
+  const protCapTitle = "Ranked by the pipeline's score: stage urgency (Offer 100 · Exchange 95 · Application 90 · DIP 80 · Fact Find 70 · Enquiry 50 · Completed 30) + conversation warmth (quoted +15 · referred +10 · discussed +5) + loan size (loan ÷ £50,000, capped at 20) + 3 when an email address is on file. A client ranks where their best case ranks."
+    + ` The £ is the estimated commission over the cases in this view — ${isAdminOrOwner() ? "whichever scope is pressed above" : "your own candidates: the pipeline is scoped to your book"} — firm average × loan band, an estimate, never banked money.`;
+  const protScopeWord = protScope === "mine" ? "your cases" : protScope === "unassigned" ? "unassigned cases" : "every adviser's cases";
+  const moneyBit = ` (~<strong id="prot-kpi-comm">${fmtM(estTotal)}</strong> estimate: firm average × loan band)`;
+  const counts = `<strong id="prot-kpi-count">${groups.length}</strong> client${groups.length === 1 ? "" : "s"}, ${rows.length} opportunit${rows.length === 1 ? "y" : "ies"}${moneyBit}, <strong id="prot-kpi-quoted">${quotedN}</strong> quoted and awaiting decision`;
+  const summary = $("#prot-summary");
+  if (summary) {
+    summary.innerHTML = `<span id="prot-cap-line" title="${esc(protCapTitle)}">${
+      capActive
+        ? `${counts}. Best ${data.length} of ${cache.total.toLocaleString("en-GB")}; search for the rest.`
+        : cache.totalKnown
+          ? `${counts} — ${esc(protScopeWord)}, best first.`
+          : `${counts}. The uncapped total is unknown here.`
+    }</span>`;
+  }
+  /* S3c — the selection is pruned to what is on screen after every chip/scope/search change. */
   const protRowIds = new Set(rows.map((r) => r.case_id));
   [...protBulkSel].forEach((id) => { if (!protRowIds.has(id)) protBulkSel.delete(id); });
-  const protCb = (r) => `<td class="bulk-col"><input type="checkbox" class="prot-cb bulk-cb" data-id="${r.case_id}" aria-label="Select this case"${protBulkSel.has(r.case_id) ? " checked" : ""}></td>`;
-  /* R6-FIX OP-02/V1 — the CASE column was the round-5 "stage + kind · lender" string, i.e. exactly
-     the label this round exists to replace, on the one nav-level page whose row actions (Task,
-     Email) start a conversation with the client. Gareth Pollard holds three rows here, one of them
-     with no lender at all ("Enquiry Buy to Let"), which named none of his five buildings. Same
-     chip, same rules, same batched lookup as Today's lists — the RPC carries no property column,
-     so the cases behind the rows on screen are resolved in one read (wave 2, cached). */
-  /* R80 · A2d — RANK ORDER IS THE RPC'S, ALWAYS. R61's status bands are retired: the pipeline now
-     returns the book's best candidates by SCORE, and re-grouping them by status would bury a
-     £600k offer-stage case under a page of small not-discussed rows — the exact opposite of a
-     call list you work top to bottom. Filters are stable (Array.filter preserves order), so the
-     visible order is the RPC's score-desc order in every view; the # column is the rank and its
-     tooltip (protScoreTitle) explains the score in words. The status itself is still the badge on
-     every row and the Status filter above. */
-  const protPageCtx = cache.propCtx || {};
-  /* R7-3 — the quote clock. get_protection_pipeline carries the status but not when it was set, so
-     the stamps for the quoted rows were read in wave 2 (cached); on a database without M8 the map
-     comes back empty and every badge reads "quote age unknown" rather than throwing. */
-  const protQuoteCtx = cache.quoteCtx || {};
-  const protPagePhones = cache.phones || {};   // R82 · A7
-  /* R80 · A2c — THE CEILING, SAID OUT LOUD. The line states exactly what the page holds: the best
-     N of the book's M candidates (or all of them when the book fits), and the estimated commission
-     across the rows the RPC returned — see the money comment above for who reads whose £. */
-  /* ==========================================================================
-     R87 · book · C4 (04 #4, #8) — ONE COUNT, ONE £, ONE LINE.
-
-     The tile said 5 and the line 60px below it said 39: the tile counted the
-     VIEW (scope + status + search) and the line counted the RPC's unscoped
-     total. Both now read the same `rows` — the line's count IS the tile's, by
-     construction, and its £ is the estimate over those same rows (so an
-     adviser's figure is theirs and the Owner's Mine figure is his own book,
-     not the firm's). The "best N of M" sentence is kept for the one case it
-     was written for — the 250 ceiling biting — and M is the firm-wide total
-     only where that IS the scope on screen (All); under Mine/Unassigned the
-     line says what it knows: the best N in this view, and how big the book is.
-     The "hover the # column" sentence is gone with the # column (it was hidden
-     below 1560px, i.e. at every office width); the rank sits on the name.
-     ========================================================================== */
-  const protCapTitle = "Ranked by the pipeline's score: stage urgency (Offer 100 · Exchange 95 · Application 90 · DIP 80 · Fact Find 70 · Enquiry 50 · Completed 30) + conversation warmth (quoted +15 · referred +10 · discussed +5) + loan size (loan ÷ £50,000, capped at 20) + 3 when an email address is on file."
-    + ` The £ is the estimated commission over the rows in this view — ${isAdminOrOwner() ? "whichever scope is pressed above" : "your own candidates: the pipeline is scoped to your book"} — firm average × loan band, an estimate, never banked money.`;
-  const protScopeWord = protScope === "mine" ? "your cases" : protScope === "unassigned" ? "unassigned cases" : "every adviser's cases";
-  const wholePage = protScope === "all" && protFilter === "all" && !protQ;
-  const protMoneyBit = ` (~<strong>${fmtM(estTotal)}</strong> estimated commission ${wholePage ? "on this page" : "in this view"})`;
-  const protCapLine = `<p class="panel-sub" id="prot-cap-line" title="${esc(protCapTitle)}">${
-    capActive
-      ? (wholePage
-        ? `Showing the <strong>best ${rows.length}</strong> of <strong>${cache.total.toLocaleString("en-GB")}</strong> opportunities${protMoneyBit} — search to reach the rest.`
-        : `Showing the <strong>best ${rows.length}</strong> in this view${protMoneyBit}, from the page's best 250 of the firm's ${cache.total.toLocaleString("en-GB")} — search to reach the rest.`)
-      : cache.totalKnown
-        ? `<strong>${rows.length}</strong> opportunit${rows.length === 1 ? "y" : "ies"} on ${esc(protScopeWord)}${protMoneyBit}, best first.`
-        : `Showing <strong>${rows.length}</strong> opportunities${protMoneyBit}. This database cannot report the uncapped total (the companion count function is missing), so whether the 250-row ceiling is biting is unknown.`
-  }</p>`;
-  $("#prot-table").innerHTML = rows.length ? `
-    ${protCapLine}
-    <div class="bulk-bar" id="prot-bulk-bar"${protBulkSel.size ? "" : " hidden"}>
-      <span class="bulk-bar-count"><strong id="prot-bulk-n">${protBulkSel.size}</strong> selected</span>
-      <select id="prot-bulk-status" class="bulk-bar-select" aria-label="Set protection status on selected cases">
-        <option value="" selected>Set status →</option>
-        ${PROT_BULK_STATUS.map(([k, l]) => `<option value="${k}">${l}</option>`).join("")}
-      </select>
-      <button type="button" class="btn btn-sm" id="prot-bulk-intro" title="Queue one protection intro email (type protection_offer — the same send path as the row's own Email button) to every selected client that has an email address. Clients with no address are skipped and counted.">✉️ Queue protection intro</button>
-      <button type="button" class="btn btn-sm" id="prot-bulk-clear">Clear</button>
-    </div>
-    <div class="board-scroll-wrap board-scroll-wrap--table">
-    <div class="panel prot-table-wrap" id="prot-scroll">
-    <table class="imp-table has-bulk mob-cards" id="prot-list-table">
-      <tr><th class="bulk-col"><input type="checkbox" id="prot-bulk-all" aria-label="Select all cases in this view"></th><th class="stick-col">Client</th><th class="prot-col-case">Case</th><th class="prot-col-loan">Loan</th><th class="prot-col-status">Status</th>${money ? '<th class="prot-col-est">Est. £</th>' : ""}<th>Adviser</th><th class="stick-col-right">Actions</th></tr>
-      ${rows.map((r, i) => {
-        const kind = (KINDS.find((x) => x[0] === r.case_kind) || [])[1] || "";
-        const p = PROT_BADGE[r.protection_status] || PROT_BADGE.not_discussed;
-        const gi = caseGiApplies(r.case_kind) ? (GI_BADGE[r.gi_status] || GI_BADGE.not_discussed) : null;
-        /* R80 · A2d — the rank (RPC score order, filters stable) with the score spelled out in its
-           tooltip, never a bare number. R87 · book (04 #8) — it is a small muted prefix ON THE
-           NAME now: the # column it lived in was hidden below 1560px, i.e. at every office width. */
-        return `<tr class="prot-row">
-        ${protCb(r)}
-        ${/* R82 · A7 — the number goes in the CLIENT cell, not the actions cell: the actions cell is
-              the one R69's 1280 geometry contract is measured on, and a phone number belongs beside
-              the name you are about to say into the phone anyway. Nothing renders at all when the
-              client has no number (retRowPhones' own rule). */ ""}
-        <td class="stick-col"><span class="prot-client" onclick="openClient('${r.client_id}')">${esc(r.client_name)}</span>${(() => { /* R82 · A7 — icons only inside the 1280 table. R87 — the rank leads this second line, so the name line (the column's width, nowrap) stays exactly as wide as before (r69 §B pins the table fitting 1280). */ const ph = protPhoneHtml(protPagePhones, r, { compact: true }); return `<span class="prot-row-phone" style="display:block;margin-top:2px;"><span class="prot-rank cs-muted" title="${esc(protScoreTitle(r, i + 1))}">#${i + 1}</span> ${ph}</span>`; })()}<span class="prot-fold-info">Loan ${fmtM(r.loan_amount)}${money ? " · Est. " + fmtM(r.est_commission) : ""}</span></td>
-        <td class="prot-col-case">${(() => {
-          const chip = propCtxChip(protPageCtx, r.case_id, "row-prop", { noStage: true });
-          return `${stageBadge(r.stage)} ${esc(kind)}${r.lender ? " · " : " "}${lenderIcon(r.lender)}${esc(r.lender || "")}${chip ? `<div class="prot-case-prop">${chip}</div>` : ""}`;
-        })()}</td>
-        <td class="prot-col-loan">${fmtM(r.loan_amount)}</td>
-        <td class="prot-col-status"><span class="badge ${p[0]}">${p[1]}</span>${r.protection_status === "quoted" ? " " + quoteAgeBadge((protQuoteCtx[r.case_id] || {}).protection_quoted_at) : ""}${gi ? ` <span class="badge ${gi[0]}" title="${TIP_GI}">${gi[1]}</span>` : ""}</td>
-        ${money ? `<td class="prot-est prot-col-est">${fmtM(r.est_commission)}</td>` : ""}
-        ${/* R6-FIX V14 — a case owned by a staff id that is not on the roster (a leaver) produced
-              initials(""), i.e. an avatar with no letters in it: a solid navy circle, which now
-              reads as a colour dot in an app where colour dots mean a property. Say what it is. */ ""}
-        <td>${!r.owner ? '<span class="cs-muted">— unassigned —</span>'
-          : initials(r.owner) ? `<span class="chip" title="${esc(staffName(r.owner))}">${esc(initials(r.owner))}</span>`
-          : `<span class="cs-muted" title="This case is assigned to a staff id that is not on the current roster (${esc(r.owner)}) — most likely someone who has left. Reassign it from the case.">— off roster —</span>`}</td>
-        <td class="stick-col-right prot-actions">
-          <button class="btn btn-sm" onclick="openCase('${r.case_id}')">Open</button>
-          ${/* R6-B4 (W21) — the placeholder is shortened from "Set status…"/"Set GI…" to
-               "Status…"/"GI…" and each select is sized to THAT rather than to its longest
-               option. Before, the pair were 132px each and still ellipsised — "Set GI…"
-               told you nothing — and together with three buttons they made this cell
-               429px wide, wider than a phone. The current value is not lost: it is the
-               badge in the STATUS column of the same row, which is now never covered. */ ""}
-          <select class="prot-status-set" onchange="setProtStatus('${r.case_id}', this.value)" title="Set protection status" aria-label="Set protection status">
-            <option value="">Status…</option>
-            ${PROT_BULK_STATUS.map(([k, l]) => `<option value="${k}">${l}</option>`).join("")}
-          </select>
-          ${gi ? `<select class="prot-status-set prot-gi-set" onchange="setGiStatus('${r.case_id}', this.value)" title="Set general-insurance status" aria-label="Set general-insurance status">
-            <option value="">GI…</option>
-            ${[["quoted", "GI quoted"], ["policy_taken", "GI taken"], ["declined", "GI declined"], ["not_applicable", "GI n/a"]].map(([k, l]) => `<option value="${k}">${l}</option>`).join("")}
-          </select>` : ""}
-          ${/* R80 · A2e — the working verb this call list lacked: the ONE log-call presentation
-                (openLogCallModal — same overlay Retention and the case modal open), its own
-                panelId per the both-entry-points contract. Icon-only IN THE TABLE CELL so the
-                row still fits at 1280 with no sideways scroll (R69's geometry contract, pinned
-                by r69_polish B1/B2); the call-list and GI-band rows carry the full label. */ ""}
-          ${/* R87 · book (04 #9) — 📝, not a second 📞: the dial glyph beside the name rings the
-                client; this one opens a form. */ ""}
-          <button class="btn btn-sm" onclick="protLogCall('${r.case_id}')" title="Log a call — opens the log-call overlay (note, outcome, protection tick, follow-up)" aria-label="Log a call">📝</button>
-          <button class="btn btn-sm" onclick="protCallTask('${r.case_id}')">Task</button>
-          ${r.has_email ? `<button class="btn btn-sm" onclick="protQueueEmail('${r.case_id}', event)">Email</button>` : '<span class="badge grey">no email</span>'}
-        </td>
-      </tr>`;
-      }).join("")}
-    </table>
-    </div>
-    <button type="button" class="board-scroll-arrow" aria-label="Scroll right" title="Scroll right">›</button>
-  </div>` : (protQ
-    /* R36-A · L6 — "nice clean book" is a compliment, and it must never be paid to a search that
-       simply found nobody. Name the term, and name the scope it was searched inside.
-       R73 · B5 — same two sentences, house empty state, way out attached. */
-    ? emptyState({
-        headline: `No protection rows for “${protSearch.trim()}”`,
-        sub: "The search looks at client names inside the current scope and status filter, so one of those three is hiding the row you want.",
-        action: { label: "Clear the search", id: "prot-empty-clear", onclick: "clearProtSearch()" },
+  protRowCases = new Map();
+  const ctx = { money, quoteCtx: cache.quoteCtx || {}, phones: cache.phones || {} };
+  const listEl = $("#prot-table");
+  listEl.innerHTML = groups.length
+    ? `<div class="panel prot-list" id="prot-list">`
+      + selectAllHtml({ id: "prot-bulk-all", count: groups.length, label: `Select all ${groups.length} client${groups.length === 1 ? "" : "s"} shown`, ariaLabel: "Select every client in this view" })
+      + groups.map((g) => protRowHtml(g, ctx)).join("")
+      + bulkBarHtml({
+        id: "prot-bulk-bar", countId: "prot-bulk-n", clearId: "prot-bulk-clear", count: 0,
+        ariaLabel: "Actions on the selected clients",
+        extra: `<select id="prot-bulk-status" class="bulk-bar-select" aria-label="Set protection status on the selected clients' cases">
+          <option value="" selected>Set status →</option>
+          ${PROT_BULK_STATUS.map(([k, l]) => `<option value="${k}">${l}</option>`).join("")}
+        </select>`,
+        verbs: [{ id: "prot-bulk-intro", label: "✉️ Queue protection intro", title: "Queue ONE protection intro email (type protection_offer — the same send path as the row's own Email button) to each selected client that has an email address. Clients with no address are skipped and counted." }],
       })
-    : emptyState({
-        headline: "No protection or GI opportunities in this view",
-        sub: "Nice clean book. 🛡️ Every case in this scope has its protection conversation recorded one way or the other.",
-      }));
-  wireTableHScroll("prot-scroll");
-  cardifyTables("prot-table");   // R73 · A4 — the 877px table becomes a card list at ≤767px
-  // S3c — bulk wiring. The bar updates imperatively (no re-render) so a long selection survives.
-  document.querySelectorAll("#prot-list-table .prot-cb").forEach((cb) => (cb.onchange = () => {
-    if (cb.checked) protBulkSel.add(cb.dataset.id); else protBulkSel.delete(cb.dataset.id);
-    updateProtBulkBar();
-  }));
-  const protAll = $("#prot-bulk-all");
-  if (protAll) protAll.onchange = () => {
-    document.querySelectorAll("#prot-list-table .prot-cb").forEach((cb) => {
-      cb.checked = protAll.checked;
-      if (protAll.checked) protBulkSel.add(cb.dataset.id); else protBulkSel.delete(cb.dataset.id);
+      + `</div>`
+    : (protQ
+      /* R36-A · L6 — a search that found nobody is not a clean book. R73 · B5 — the way out. */
+      ? emptyState({
+          headline: `No protection rows for “${protSearch.trim()}”`,
+          sub: "The search looks at client names inside the current scope and chip, so one of those three is hiding the row you want.",
+          action: { label: "Clear the search", id: "prot-empty-clear", onclick: "clearProtSearch()" },
+        })
+      : emptyState({
+          headline: "No protection or GI opportunities in this view",
+          sub: "Every case here has its protection conversation recorded one way or the other.",
+        }));
+  if (groups.length) {
+    const list = $("#prot-list");
+    dockBulkBar(list, "#prot-bulk-bar");
+    list.addEventListener("change", (e) => {
+      const cb = e.target;
+      if (!cb || !cb.classList) return;
+      if (cb.classList.contains("prot-cb")) {
+        (protRowCases.get(cb.dataset.id) || []).forEach((id) => { if (cb.checked) protBulkSel.add(id); else protBulkSel.delete(id); });
+        const r = cb.closest(".row-item"); if (r) r.classList.toggle("is-sel", cb.checked);
+        updateProtBulkBar();
+      } else if (cb.id === "prot-bulk-all") {
+        list.querySelectorAll(".prot-cb").forEach((b) => {
+          b.checked = cb.checked;
+          (protRowCases.get(b.dataset.id) || []).forEach((id) => { if (cb.checked) protBulkSel.add(id); else protBulkSel.delete(id); });
+          const r = b.closest(".row-item"); if (r) r.classList.toggle("is-sel", cb.checked);
+        });
+        updateProtBulkBar();
+      }
     });
-    updateProtBulkBar();
-  };
+    activateAll("#prot-list .kit-row .t");
+  }
   const protClear = $("#prot-bulk-clear");
   if (protClear) protClear.onclick = () => {
     protBulkSel.clear();
-    document.querySelectorAll("#prot-list-table .prot-cb").forEach((cb) => (cb.checked = false));
+    document.querySelectorAll("#prot-list .prot-cb").forEach((cb) => { cb.checked = false; const r = cb.closest(".row-item"); if (r) r.classList.remove("is-sel"); });
     updateProtBulkBar();
   };
   const protStatusSel = $("#prot-bulk-status");
@@ -20068,10 +20548,14 @@ function renderProtectionPage(cache) {
   const protIntroBtn = $("#prot-bulk-intro");
   if (protIntroBtn) protIntroBtn.onclick = () => bulkQueueProtIntro();
   updateProtBulkBar();
-  renderProtCallList(scoped, protQuoteCtx, capActive, protPagePhones);   // R82 · A7
-  renderProtGiBand(scoped, capActive, protPagePhones);                    // R82 · A7
   renderClawbackWindow(cache.clawback);
   syncNumHeaders("#page-protection");   // R73 · B4
+}
+/* R88 · C — the chips and the hidden compat select write the same filter. */
+function setProtFilter(k) {
+  protFilter = PROT_FILTERS.some((f) => f[0] === k) ? k : "all";
+  const fsel = $("#prot-filter"); if (fsel) fsel.value = protFilter;
+  loadProtectionPage();
 }
 /* ---------- R13 · M-23/M-25 — THE CLAWBACK WINDOW ----------
    get_protection_pipeline deliberately returns only the OPEN protection statuses, so this panel
@@ -20094,7 +20578,7 @@ function renderClawbackWindow(pre) {
   if (pre.absent || pre.unsupported) { panel.classList.add("hidden"); return; }
   if (pre.error) {
     panel.classList.remove("hidden");
-    $("#prot-clawback-list").innerHTML = `<div class="empty">Clawback window unavailable just now — ${esc(pre.error.message)}</div>`;
+    $("#prot-clawback-list").innerHTML = emptyState({ headline: "Clawback window unavailable just now", sub: pre.error.message || "" });   // R88 · C — the house empty state
     return;
   }
   const rows = Array.isArray(pre.rows) ? pre.rows : [];
@@ -20132,121 +20616,26 @@ function renderClawbackWindow(pre) {
       <td class="clawback-months${CLAWBACK_MONTHS - r.months <= 3 ? " clawback-left-hot" : ""}">${CLAWBACK_MONTHS - r.months}</td>
       ${money ? `<td class="num">${r.protection_commission > 0 ? fmtM(r.protection_commission) : '<span class="cs-muted">none recorded</span>'}</td>` : ""}
       <td>${r.assigned_to ? esc(staffName(r.assigned_to)) : '<span class="cs-muted">— unassigned —</span>'}</td>
-      <td style="text-align:right;"><button class="btn btn-sm" onclick="openCase('${jsArg(r.id)}')">Open</button></td>
+      <td class="clawback-open"><button class="btn btn-sm" onclick="openCase('${jsArg(r.id)}')">Open</button></td>
     </tr>`;
   $("#prot-clawback-list").innerHTML = (inWindow.length ? `<table class="imp-table" id="prot-clawback-table">
       <tr><th>Client</th><th>Policy started</th><th>Months elapsed</th><th>Months left in window</th>${money ? "<th>Commission</th>" : ""}<th>Adviser</th><th></th></tr>
       ${inWindow.map(rowHtml).join("")}
-    </table>` : `<div class="empty">No policy started in the last ${CLAWBACK_MONTHS} months${rows.length ? " — nothing is inside a clawback window" : ""}. 👍</div>`)
-    + (noDate.length ? `<div class="dq-notice" id="prot-clawback-nodate-list" style="margin-top:12px;">
+    </table>` : emptyState({ headline: `No policy started in the last ${CLAWBACK_MONTHS} months`, sub: rows.length ? "Nothing is inside a clawback window." : "" }))
+    + (noDate.length ? `<div class="dq-notice" id="prot-clawback-nodate-list">
       <strong>No start date — window cannot be watched:</strong>
       ${noDate.map((r) => `<button type="button" class="btn btn-sm" onclick="openCase('${jsArg(r.id)}')">${esc(nameOf(r))}</button>`).join(" ")}
     </div>` : "");
 }
-/* ---------- R7-3 — "completed, no protection outcome" ----------
-   The cases that got all the way to completion with the protection conversation left open: status
-   still not_discussed, discussed or quoted, i.e. anything that is neither a policy nor a client
-   who said no. Those are the calls worth making — the client has just moved house or remortgaged,
-   the relationship is warm, and nobody has closed the loop.
-
-   Scope follows the Mine / Unassigned / All buttons above, so an adviser reads their own list and
-   the Owner reads the firm's. The rows themselves are counts and statuses, not money, so this
-   panel is NOT Owner-gated: it is a work list, and withholding an adviser's own follow-up calls
-   would be the opposite of the point. */
-/* R87 · book · C4 — the two band predicates, named once so the filter options on the table and
-   the collapsed bands below cannot drift. get_protection_pipeline already excludes not_proceeding
-   and returns ONLY the four open statuses, so within its output `!live` is exactly "completed,
-   still open"; the GI one is R80 · A3's, verbatim. */
+/* ---------- R7-3 / R80 · A3 — the two call lists, as predicates ----------
+   "Completed, no protection outcome" (the cases that got all the way to completion with the
+   protection conversation left open — the warmest call the firm has) and "GI not discussed" (the GI
+   conversation never started on a case kind GI applies to). R87 folded the two bands into closed
+   <details>; R88 · C removes them: they are two chips on the one list (PROT_FILTERS), with these
+   predicates, verbatim. get_protection_pipeline already excludes not_proceeding and returns ONLY the
+   four open statuses, so within its output `!live` is exactly "completed, still open". */
 const protBandNoOutcome = (r) => !r.live;
 const protBandGi = (r) => caseGiApplies(r.case_kind) && (r.gi_status || "not_discussed") === "not_discussed";
-function renderProtCallList(scoped, quoteCtx, capActive, phones) {
-  const panel = $("#prot-calllist-panel");
-  if (!panel) return;
-  const list = (scoped || []).filter(protBandNoOutcome);
-  panel.classList.remove("hidden");
-  const scopeWord = protScope === "mine" ? "your cases" : protScope === "unassigned" ? "unassigned cases" : "every adviser's cases";
-  // R66 · M6a — `referred` is a fourth open state the pipeline now returns; counted here so the
-  // basis line's arithmetic still adds up to the count in the badge.
-  const byStatus = { not_discussed: 0, discussed: 0, quoted: 0, referred: 0 };
-  list.forEach((r) => { if (byStatus[r.protection_status] != null) byStatus[r.protection_status]++; });
-  $("#prot-calllist-count").textContent = list.length;
-  $("#prot-calllist-count").className = "badge " + (list.length ? "amber" : "green");
-  $("#prot-calllist-basis").innerHTML =
-    `Completed cases whose protection conversation is still open — ${byStatus.not_discussed} never discussed, ${byStatus.discussed} discussed, ${byStatus.quoted} quoted and waiting, ${byStatus.referred} referred to a protection adviser. `
-    + `A client who has just completed is the warmest call the firm has. Scoped to <strong>${esc(scopeWord)}</strong> (the buttons above); the status drop-down does not narrow this list. `
-    /* R80 · A2c — cap honesty: when the 250-row ceiling is biting, this list is counted WITHIN the
-       best-250 the page holds, not over the whole book, and pretending otherwise would be the old
-       arbitrary-250 lie in a smaller font. */
-    + (capActive ? `<strong>Counted within the best-250 pipeline this page holds</strong> — the uncapped candidate total is in the line above the table. ` : "")
-    + `<span class="money-basis">(completed · protection status not "policy taken" and not "declined")</span>`;
-  $("#prot-calllist").innerHTML = list.length ? list.slice(0, 25).map((r) => {
-    const p = PROT_BADGE[r.protection_status] || PROT_BADGE.not_discussed;
-    return `<div class="row-item">
-      <div class="row-main">
-        <div class="t" onclick="openCase('${r.case_id}')">${esc(r.client_name)}</div>
-        <div class="s">${stageBadge(r.stage)} ${lenderIcon(r.lender)}${esc(r.lender || "")} · loan ${fmtM(r.loan_amount)}${r.owner ? " · " + esc(staffName(r.owner)) : " · unassigned"}</div>
-        ${protPhoneHtml(phones, r)}${/* R82 · A7 */ ""}
-      </div>
-      <span class="badge ${p[0]}">${p[1]}</span>
-      ${r.protection_status === "quoted" ? quoteAgeBadge(((quoteCtx || {})[r.case_id] || {}).protection_quoted_at) : ""}
-      <button class="btn btn-sm" onclick="protLogCall('${r.case_id}')">📝 Log call</button>
-      <button class="btn btn-sm" onclick="protCallTask('${r.case_id}')">Task</button>
-      ${r.has_email ? `<button class="btn btn-sm" onclick="protQueueEmail('${r.case_id}', event)">Email</button>` : '<span class="badge grey">no email</span>'}
-    </div>`;
-  }).join("") + (list.length > 25 ? `<div class="empty">…and ${list.length - 25} more — pick "Completed, no protection outcome" in the filter above to work the whole list in the table.</div>` : "")
-    : '<div class="empty">Every completed case in this scope has a protection outcome recorded — a policy or a decline. Nothing to chase. 🛡️</div>';
-}
-/* ==========================================================================
-   R80 · A3 — THE GI CALL LIST. gi_status has been written on every case since
-   its column landed and NO surface ever read it as a work list. Same
-   conversation family as protection, so it lives on this page: a compact
-   second band of the cases where the GI (buildings & contents) conversation
-   has never been started — gi_status still `not_discussed` on a case kind GI
-   applies to (caseGiApplies: purchase / first-time buyer / buy-to-let /
-   remortgage; a product transfer keeps its existing cover, mirroring the
-   protection predicate's "open, not closed-out" style — quoted/taken/
-   declined/not_applicable are all CLOSED here because each records that the
-   conversation happened).
-
-   ZERO extra network, by construction: the pipeline RPC already returns
-   gi_status on every row, so this band is derived from the SAME cached rows,
-   in the SAME score order (filter is stable), with the same Log-call verb.
-   Scope buttons apply exactly as the protection call list's do; the status
-   drop-down does not narrow it. Honest empty state when the book is clean,
-   and the same cap-honesty sentence when the 250 ceiling is biting. */
-function renderProtGiBand(scoped, capActive, phones) {
-  const panel = $("#prot-gi-panel");
-  if (!panel) return;
-  const list = (scoped || []).filter(protBandGi);
-  panel.classList.remove("hidden");
-  const scopeWord = protScope === "mine" ? "your cases" : protScope === "unassigned" ? "unassigned cases" : "every adviser's cases";
-  const countEl = $("#prot-gi-count");
-  if (countEl) { countEl.textContent = list.length; countEl.className = "badge " + (list.length ? "amber" : "green"); }
-  $("#prot-gi-basis").innerHTML =
-    `Cases where the GI conversation has never been started, in the pipeline's own score order (best first). `
-    + `Derived from the same rows as the table above — this band costs no extra reads. Scoped to <strong>${esc(scopeWord)}</strong> (the buttons above); the status drop-down does not narrow this list. `
-    + (capActive ? `<strong>Counted within the best-250 pipeline this page holds</strong> — the uncapped candidate total is in the line above the table. ` : "")
-    + `<span class="money-basis">(GI status "not discussed" · case kind GI applies to — a product transfer keeps its existing cover)</span>`;
-  $("#prot-gi-list").innerHTML = list.length ? list.slice(0, 25).map((r) => `<div class="row-item">
-      <div class="row-main">
-        <div class="t" onclick="openCase('${r.case_id}')">${esc(r.client_name)}</div>
-        <div class="s">${stageBadge(r.stage)} ${lenderIcon(r.lender)}${esc(r.lender || "")} · loan ${fmtM(r.loan_amount)}${r.owner ? " · " + esc(staffName(r.owner)) : " · unassigned"}</div>
-        ${protPhoneHtml(phones, r)}${/* R82 · A7 */ ""}
-      </div>
-      <span class="badge grey" title="${TIP_GI}">GI not discussed</span>
-      <button class="btn btn-sm" onclick="protLogCall('${r.case_id}')">📝 Log call</button>
-      <button class="btn btn-sm" onclick="protCallTask('${r.case_id}')">Task</button>
-      ${/* R80 · A3 — the quick-set that CLOSES a row out of this band: the same setGiStatus
-           write (db.from update → audit trigger + the choke-point cache bust) and the same
-           option list as the table's own .prot-gi-set, so the two can never drift. */ ""}
-      <select class="prot-status-set prot-gi-set" onchange="setGiStatus('${r.case_id}', this.value)" title="Set general-insurance status" aria-label="Set general-insurance status">
-        <option value="">GI…</option>
-        ${[["quoted", "GI quoted"], ["policy_taken", "GI taken"], ["declined", "GI declined"], ["not_applicable", "GI n/a"]].map(([k, l]) => `<option value="${k}">${l}</option>`).join("")}
-      </select>
-      <button class="btn btn-sm" onclick="openCase('${r.case_id}')">Open</button>
-    </div>`).join("") + (list.length > 25 ? `<div class="empty">…and ${list.length - 25} more below the fold of this band — work the top of the list first; it is ranked.</div>` : "")
-    : '<div class="empty">Every GI-applicable case in this scope has its GI conversation recorded — quoted, taken, declined or n/a. Nothing to start. 🏠</div>';
-}
 /* R80 · A2e — the Protection page's own entry point into the ONE log-call presentation
    (openLogCallModal — the same overlay Retention rows, the case modal and the appointment toast
    open; R75 · A4's both-entry-points contract). Its panelId is its own contract, like theirs.
@@ -20254,13 +20643,41 @@ function renderProtGiBand(scoped, capActive, phones) {
    the ordinary choke point, which busts this page's cache — so the reload below re-ranks. */
 window.protLogCall = async function (caseId) {
   const { data: c, error } = await db.from("cases")
-    .select("id,client_id,assigned_to,protection_status,stage,clients!client_id(first_name,last_name)")
+    .select("id,client_id,assigned_to,protection_status,gi_status,case_kind,stage,clients!client_id(first_name,last_name)")
     .eq("id", caseId).single();
   if (error || !c) return dbFail("protLogCall", error, "Couldn't open that case — " + ((error && error.message) || "it may have been deleted"));   // R81 · A4
   // R82 · A2 — the fresh row is already in hand; refuse before the overlay opens over a settled case.
   if (protRowClosedOut(c.protection_status, "Not opening a protection call")) return null;
   const who = [c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ") || "this client";
-  const saved = await openLogCallModal(c, { panelId: "prot-logcall-panel", whoName: who });
+  /* R88 · C (04 #6) — the row's Status… and GI… selects moved IN HERE: the row carries three verbs,
+     and a status is recorded in the same sitting as the call. Picking one closes the overlay and
+     writes through the SAME setProtStatus / setGiStatus the row selects called (the policy-taken
+     commission overlay, the quote clock, the audit trigger, the cache bust) — after the overlay has
+     closed, because the house overlay has one host and the commission ask needs it. */
+  const gi = caseGiApplies(c.case_kind);
+  const extraHtml = `<div class="prot-logcall-status" id="prot-logcall-status">
+      <label>Or just set the protection status
+        <select class="prot-status-set" id="prot-logcall-prot" aria-label="Set protection status">
+          <option value="">Status…</option>
+          ${PROT_BULK_STATUS.map(([k, l]) => `<option value="${k}">${l}</option>`).join("")}
+        </select></label>
+      ${gi ? `<label>GI
+        <select class="prot-status-set prot-gi-set" id="prot-logcall-gi" aria-label="Set general-insurance status">
+          <option value="">GI…</option>
+          ${[["quoted", "GI quoted"], ["policy_taken", "GI taken"], ["declined", "GI declined"], ["not_applicable", "GI n/a"]].map(([k, l]) => `<option value="${k}">${l}</option>`).join("")}
+        </select></label>` : ""}
+    </div>`;
+  const saved = await openLogCallModal(c, {
+    panelId: "prot-logcall-panel", whoName: who, extraHtml,
+    wireExtra: (box, finish) => {
+      const ps = box.querySelector("#prot-logcall-prot");
+      if (ps) ps.onchange = () => { if (ps.value) finish({ protStatus: ps.value }); };
+      const gs = box.querySelector("#prot-logcall-gi");
+      if (gs) gs.onchange = () => { if (gs.value) finish({ giStatus: gs.value }); };
+    },
+  });
+  if (saved && saved.protStatus) return setProtStatus(caseId, saved.protStatus);
+  if (saved && saved.giStatus) return setGiStatus(caseId, saved.giStatus);
   if (saved && !$("#page-protection").classList.contains("hidden")) loadProtectionPage();
   return saved;
 };
@@ -20289,17 +20706,20 @@ async function bulkQueueProtIntro() {
   const { data, error } = await inChunks(ids, (sl) => db.from("cases")
     .select("id,client_id,clients!client_id(email,first_name,last_name)").in("id", sl));
   if (error) return dbFail("bulkQueueProtIntro", error);
-  const rows = (data || []).filter((r) => r && r.client_id);
+  /* R88 · C — rows are CLIENTS now and a ticked client stands for all its open cases, so one intro
+     per CLIENT (the first of their cases in the selection), never one per case. */
+  const seenClient = new Set();
+  const rows = (data || []).filter((r) => r && r.client_id && !seenClient.has(r.client_id) && seenClient.add(r.client_id));
   const withEmail = rows.filter((r) => r.clients && r.clients.email);
   const skipped = rows.length - withEmail.length;
-  if (!withEmail.length) return toast(`Nothing to queue — none of the ${rows.length} selected case${rows.length === 1 ? "'s clients has" : "s' clients have"} an email address on file. Add addresses on the client records first.`);
+  if (!withEmail.length) return toast(`Nothing to queue — none of the ${rows.length} selected client${rows.length === 1 ? " has" : "s have"} an email address on file. Add addresses on the client records first.`);
   const held = emailHoldOn();
   const goAhead = await openOverlay(`
     <div id="prot-bulk-intro-box">
       <h3>Queue protection intro to ${withEmail.length} client${withEmail.length === 1 ? "" : "s"}?</h3>
       <p class="panel-sub">Ensure the template has principal approval. One protection intro email (type <strong>protection_offer</strong> — the same send path as the row's own Email button) is queued per client.</p>
       ${held ? `<p class="dq-notice" id="prot-bulk-intro-held">Sending is currently ON HOLD (Settings › Email sending) — this will queue and wait; nothing is sent now.</p>` : ""}
-      ${skipped ? `<p class="dq-notice bad" id="prot-bulk-intro-skips"><strong>${skipped} of the ${rows.length} selected case${rows.length === 1 ? " is" : "s are"} skipped</strong> — ${skipped === 1 ? "its client has" : "their clients have"} no email address on file, and an email cannot be queued to nowhere. Add an address on the client record to include them.</p>` : ""}
+      ${skipped ? `<p class="dq-notice bad" id="prot-bulk-intro-skips"><strong>${skipped} of the ${rows.length} selected client${rows.length === 1 ? " is" : "s are"} skipped</strong> — no email address on file, and an email cannot be queued to nowhere. Add an address on the client record to include them.</p>` : ""}
       <div class="modal-actions"><div></div><div class="right">
         <button type="button" class="btn" id="prot-bulk-intro-cancel">Cancel</button>
         <button type="button" class="btn btn-primary" id="prot-bulk-intro-go">Queue ${withEmail.length} email${withEmail.length === 1 ? "" : "s"}</button>
@@ -20316,22 +20736,24 @@ async function bulkQueueProtIntro() {
   const qIds = (qRows || []).map((q) => q.id).filter(Boolean);
   // R5-1's rule, at bulk scale: the run is scoped to EXACTLY the rows just inserted.
   const res = qIds.length ? await runAutomation(true, { queueIds: qIds }) : null;
-  const skipNote = skipped ? `${skipped} selected case${skipped === 1 ? " was" : "s were"} skipped — no client email address on file.` : "";
+  const skipNote = skipped ? `${skipped} selected client${skipped === 1 ? " was" : "s were"} skipped — no email address on file.` : "";
   sendResultToast(res, `Protection intro ${heldWord()} for ${withEmail.length} client${withEmail.length === 1 ? "" : "s"} — check Emails tab.${skipNote ? " " + skipNote : ""}`, { heldNote: skipNote });
   protBulkSel.clear();
   loadProtectionPage();
 }
 // S3c — mirror the current protection selection into its action bar (count + select-all state).
+// R88 · C — the bar is the kit's (docked, .is-empty at 0) and it counts CLIENTS, the rows ticked;
+// the selection itself stays a Set of case ids, which is what the two bulk verbs write.
 function updateProtBulkBar() {
   const bar = $("#prot-bulk-bar");
   if (!bar) return;
-  const n = protBulkSel.size;
-  bar.hidden = n === 0;
-  const nEl = $("#prot-bulk-n"); if (nEl) nEl.textContent = n;
+  const boxes = [...document.querySelectorAll("#prot-list .prot-cb")];
+  const checked = boxes.filter((b) => b.checked).length;
+  bar.classList.toggle("is-empty", checked === 0);
+  if (bar.parentElement && bar.parentElement.classList.contains("bulk-dock")) bar.parentElement.classList.toggle("is-empty", checked === 0);
+  const nEl = $("#prot-bulk-n"); if (nEl) nEl.textContent = checked;
   const all = $("#prot-bulk-all");
   if (all) {
-    const boxes = [...document.querySelectorAll("#prot-list-table .prot-cb")];
-    const checked = boxes.filter((b) => b.checked).length;
     all.checked = checked > 0 && checked === boxes.length;
     all.indeterminate = checked > 0 && checked < boxes.length;
   }
@@ -21024,15 +21446,23 @@ function prettyFF(k) {
 }
 function setProtScope(s) {
   protScope = s;
-  $("#prot-scope-mine").classList.toggle("scope-active", s === "mine");
-  $("#prot-scope-unassigned").classList.toggle("scope-active", s === "unassigned");
-  $("#prot-scope-all").classList.toggle("scope-active", s === "all");
+  syncProtScopeButtons();
   loadProtectionPage();
+}
+// R88 · C — the kit's scope buttons carry aria-pressed as well as .scope-active; both follow protScope.
+function syncProtScopeButtons() {
+  ["mine", "unassigned", "all"].forEach((k) => {
+    const b = $(`#prot-scope-${k}`);
+    if (!b) return;
+    b.classList.toggle("scope-active", protScope === k);
+    b.setAttribute("aria-pressed", String(protScope === k));
+  });
 }
 $("#prot-scope-mine").addEventListener("click", () => setProtScope("mine"));
 $("#prot-scope-unassigned").addEventListener("click", () => setProtScope("unassigned"));
 $("#prot-scope-all").addEventListener("click", () => setProtScope("all"));
-$("#prot-filter").addEventListener("change", () => { protFilter = $("#prot-filter").value; loadProtectionPage(); });
+// R88 · C — the hidden compat select (the chips are the control); same filter either way.
+$("#prot-filter").addEventListener("change", () => setProtFilter($("#prot-filter").value));
 // R36-A · L6 — same 250ms debounce as #board-search, so a fast typist gets one render, not eight.
 // R73 · B5 — the way out of the protection page's empty state.
 window.clearProtSearch = function () {
@@ -21041,12 +21471,7 @@ window.clearProtSearch = function () {
   loadProtectionPage();
 };
 $("#prot-search").addEventListener("input", debounce(() => { protSearch = $("#prot-search").value || ""; loadProtectionPage(); }, 250));
-// Clicking the "Quoted, awaiting decision" tile filters the table to those rows (QW15).
-$("#prot-tile-quoted").addEventListener("click", () => {
-  protFilter = "quoted";
-  $("#prot-filter").value = "quoted";
-  loadProtectionPage();
-});
+// R88 · C — the "Quoted, awaiting decision" tile (QW15) is the Quoted chip on #prot-segs now.
 
 /* ---------- Case modal ---------- */
 /* R5-3 — the stale-write guard's baseline. It used to be a local of openCase, so every write the
@@ -22064,6 +22489,47 @@ window.openCase = async function (id, opts = {}) {
   const rateOverdue = c.rate_end_date && c.rate_end_date < todayStr;
   const rateSoon = c.rate_end_date && !rateOverdue && (new Date(c.rate_end_date) - new Date(todayStr)) < 183 * 86400000;
   const nextStage = id ? nextStageFor(c.stage, c.case_kind) : null; // BUILD 7b — drives the modal's "Advance to…" button (hidden on terminal stages) · R15 · §5 skips exchange for PT
+  /* R88 · D — the header's OTHER stat cells, byte-for-byte the cells that used to follow the key four
+     in .cs-stats, now painted inside the collapsed "More facts" fold (see the modal body). */
+  const caseMoreFactsHtml = id ? `
+      ${/* R6 — was labelled "Property" and showed the property VALUE, which is the single most
+           misread token in the modal: the one field named after the property is a price. The
+           word "Property" now belongs to the address (the chip above); this is "Value". */ ""}
+      <div class="cs-stat"><span class="cs-lbl">Value</span><span class="cs-val">${fmtM(c.property_value)}</span></div>
+      ${/* R15 · §6 — a completed case says WHEN it completed, right here in the header stats.
+           Drawn only from the recorded completed_at, so there is no nudge and no empty state. */ ""}
+      ${c.stage === "completed" && c.completed_at ? `<div class="cs-stat" id="cs-completed-stat" title="This case completed on ${esc(fmtD(c.completed_at))}."><span class="cs-lbl">Completed</span><span class="cs-val">${fmtD(c.completed_at)}</span></div>` : ""}
+      ${c.broker_fee > 0 ? `<div class="cs-stat"><span class="cs-lbl">Fee</span><span class="cs-val">${fmtM(c.broker_fee)}${c.fee_status ? ` <span class="cs-muted">(${esc(String(c.fee_status).replace(/_/g, " "))})</span>` : ""}</span></div>` : ""}
+      ${protStatChipHtml(c, c.stage)}
+      ${["offer", "exchange"].includes(c.stage) ? (c.expected_completion_date
+        ? `<div class="cs-stat"><span class="cs-lbl">Expected completion</span><span class="cs-val">${fmtD(c.expected_completion_date)}</span></div>`
+        : `<div class="cs-stat cs-warn" id="cs-expected-nudge" style="cursor:pointer;" title="Click to set the expected completion date"><span class="cs-lbl">Expected completion</span><span class="cs-val">Set expected completion →</span></div>`) : ""}
+      ${/* R13 · M-13 — EXCHANGED. Only ever drawn from a recorded date, so there is no nudge and
+           no empty state: an unexchanged case has nothing to say here, and a prompt asking for a
+           date that does not exist yet would be noise on every case at Enquiry. Deliberately
+           stage-independent — a completed case that exchanged is still a case that exchanged. */ ""}
+      ${c.exchange_date ? `<div class="cs-stat" id="cs-exchanged" title="Contracts exchanged on ${esc(fmtD(c.exchange_date))}. From this date the client is legally committed."><span class="cs-lbl">Exchanged</span><span class="cs-val">${fmtD(c.exchange_date)}</span></div>` : ""}
+      ${/* R16 §A — the ICR verdict, echoed compactly here for a BTL case an adviser reads on the phone. */ ""}
+      ${/* R35 §3 — AFFORDABILITY NEVER SILENTLY VANISHES. The row used to require btlIcr(c),
+           which is null until a rent is captured — so the one BTL case where affordability is
+           unknown (the case most likely to be sent to a lender that will refuse it) showed
+           nothing at all, and the absence was indistinguishable from "not a BTL". The row is
+           now drawn for every BTL case: the chip when there is a rent, an amber "not captured"
+           with the way to fix it when there is not. Non-BTL cases are unchanged — no row. */ ""}
+      ${btlIcrOn && c.case_kind === "buy_to_let" ? `<div class="cs-stat" id="cs-btl-icr"><span class="cs-lbl">Affordability</span>${btlIcr(c)
+        ? `<span class="cs-val">${btlIcrChipHtml(c)}</span>`
+        : `<span class="cs-val"><span class="badge amber">Rent — not captured</span> <button type="button" class="linkish" id="cs-btl-add-rent">add</button></span>`}</div>` : ""}
+      ${/* R16 §B — the submit-to-lender status, drawn only in the application window (DIP→exchange). */ ""}
+      ${lenderTrackOn && lenderTrackVisible(c.stage) && c.application_status && APP_STATUS_LABEL[c.application_status] ? `<div class="cs-stat" id="cs-lender-status"${c.lender_reference ? ` title="Lender ref: ${esc(c.lender_reference)}"` : ""}><span class="cs-lbl">Application</span><span class="cs-val">${c.application_status === "offer_issued" ? "📄" : c.application_status === "submitted" ? "📤" : "🏦"} ${esc(APP_STATUS_LABEL[c.application_status])}${c.application_status === "submitted" && c.submitted_at ? " " + fmtD(c.submitted_at) : ""}</span></div>` : ""}
+      ${/* R12b · W-15b — THE CALL PACK, on the header an adviser reads with the phone in their
+           hand. Four stats, drawn only when the case actually carries at least one of them, each
+           absent value rendered "—" rather than £0. This is the same block the Rate & ERC row
+           shows in one line; a retention case is exactly where it earns its space. */ ""}
+      ${hasCallPack(c) ? `<div class="cs-stat cs-callpack" id="cs-callpack-balance"><span class="cs-lbl">Balance</span><span class="cs-val">${callPackVal(c.current_balance)}</span></div>
+      <div class="cs-stat cs-callpack" id="cs-callpack-reversion"><span class="cs-lbl">Reverts to</span><span class="cs-val">${callPackVal(c.reversion_rate, true)}</span></div>
+      <div class="cs-stat cs-callpack" id="cs-callpack-payment"><span class="cs-lbl">Monthly payment</span><span class="cs-val">${callPackVal(c.monthly_payment)}</span></div>
+      <div class="cs-stat cs-callpack" id="cs-callpack-erc"><span class="cs-lbl">ERC amount</span><span class="cs-val">${callPackVal(c.erc_amount)}</span></div>` : ""}
+  ` : "";
   const summaryHeader = id ? `
     <div class="case-summary">
       <div class="cs-top">
@@ -22110,14 +22576,20 @@ window.openCase = async function (id, opts = {}) {
               ? `<span class="cs-referrer" id="cs-referrer" title="${esc(referrerName)} referred this client. Open their record to see everyone they have sent.">🤝 Referred by <a href="#" class="cs-referrer-link" data-client="${esc(c.referrer_client_id)}" onclick="event.preventDefault();openClient('${jsArg(c.referrer_client_id)}')">${esc(referrerName)}</a></span>` : ""}
           </div>
           ${caseClient && (caseClient.phone || caseClient.email) ? `<div class="cs-contact">${caseClient.phone ? "📞 " + telLink(caseClient.phone) : ""}${caseClient.email ? "✉️ " + mailLink(caseClient.email) : ""}</div>` : ""}
-          ${objectiveLineHtml(c)}
+          ${/* R88 · D (panel 02 #6) — the objective PROMPT is live-stage only (the gate the completeness
+               chip uses above); a completed case with an objective on file still shows it. */ ""}
+          ${!["completed", "not_proceeding"].includes(c.stage) || (c.objective && String(c.objective).trim()) ? objectiveLineHtml(c) : ""}
         </div>
         ${/* R65 · L1 — the header's action group MOVED into #cs-sticky-actions at the top of the
              modal (Log call · Advance · stage select · Book appointment · More actions, one row
              that stays on screen). Nothing was deleted; every id and handler is unchanged, they
              are simply all in one place now. */ ""}
       </div>
-      <div class="cs-stats">
+      <div class="cs-stats cs-stats-key" id="cs-stats-key">
+        ${/* R88 · D (panel 02 #5) — FOUR KEY STATS: Adviser, Loan/LTV, Lender, Rate/ends. The numbers an
+             adviser is asked on the phone. Every other .cs-stat cell (value, fee, protection, dates,
+             BTL, application, call pack) moved — same markup, same ids — into the "More facts" fold
+             below History (caseMoreFactsHtml). The first .cs-stats is still this row (r14 J4b/J5b). */ ""}
         ${/* The stage moved up into the identity line above — this row is numbers. */ ""}
         <div class="cs-stat"><span class="cs-lbl">Adviser</span><span class="cs-val" id="cs-adviser-val">${c.assigned_to ? esc(staffName(c.assigned_to)) : '<span class="cs-muted">— unassigned —</span>'}</span></div>
         ${/* R78 · B7a — a stored loan_amount of 0 renders as not-recorded ("—", fmtM's own null
@@ -22125,10 +22597,6 @@ window.openCase = async function (id, opts = {}) {
              HERE, because only here does null already render "—": anywhere a real £0 could be
              meaningful it still says £0 (zeroMoney's rule). */ ""}
         <div class="cs-stat"><span class="cs-lbl">Loan</span><span class="cs-val">${fmtM(Number(c.loan_amount) ? c.loan_amount : null)}</span></div>
-        ${/* R6 — was labelled "Property" and showed the property VALUE, which is the single most
-             misread token in the modal: the one field named after the property is a price. The
-             word "Property" now belongs to the address (the chip above); this is "Value". */ ""}
-        <div class="cs-stat"><span class="cs-lbl">Value</span><span class="cs-val">${fmtM(c.property_value)}</span></div>
         ${/* R75 · A5 (panel A#25) — LTV, BESIDE THE TWO NUMBERS IT IS MADE OF.
              It is the first thing a lender's criteria turn on and the first thing an adviser is
              asked on the phone, and it lived in ONE place: inside a collapsed security fold, four
@@ -22138,41 +22606,8 @@ window.openCase = async function (id, opts = {}) {
              silent rather than "0%" when either figure is missing, which is the same rule the
              call-pack stats follow. */ ""}
         ${caseLtvPct(c) != null ? `<div class="cs-stat" id="cs-ltv" title="Loan ÷ property value, worked out from the two figures on this case. Shown only when both are recorded."><span class="cs-lbl">LTV</span><span class="cs-val">${caseLtvPct(c)}%</span></div>` : ""}
-        ${/* R15 · §6 — a completed case says WHEN it completed, right here in the header stats.
-             Drawn only from the recorded completed_at, so there is no nudge and no empty state. */ ""}
-        ${c.stage === "completed" && c.completed_at ? `<div class="cs-stat" id="cs-completed-stat" title="This case completed on ${esc(fmtD(c.completed_at))}."><span class="cs-lbl">Completed</span><span class="cs-val">${fmtD(c.completed_at)}</span></div>` : ""}
         ${c.lender ? `<div class="cs-stat"><span class="cs-lbl">Lender</span><span class="cs-val">${esc(c.lender)}</span></div>` : ""}
-        ${c.broker_fee > 0 ? `<div class="cs-stat"><span class="cs-lbl">Fee</span><span class="cs-val">${fmtM(c.broker_fee)}${c.fee_status ? ` <span class="cs-muted">(${esc(String(c.fee_status).replace(/_/g, " "))})</span>` : ""}</span></div>` : ""}
-        ${protStatChipHtml(c, c.stage)}
         ${c.rate_percent != null || c.rate_end_date ? `<div class="cs-stat ${rateOverdue ? "cs-danger" : rateSoon ? "cs-warn" : ""}"><span class="cs-lbl">Rate${rateOverdue ? " — ended" : rateSoon ? " — <6mo" : ""}</span><span class="cs-val">${c.rate_percent != null ? c.rate_percent + "%" : "—"}${c.rate_end_date ? ` · ends ${fmtD(c.rate_end_date)}` : ""}</span></div>` : ""}
-        ${["offer", "exchange"].includes(c.stage) ? (c.expected_completion_date
-          ? `<div class="cs-stat"><span class="cs-lbl">Expected completion</span><span class="cs-val">${fmtD(c.expected_completion_date)}</span></div>`
-          : `<div class="cs-stat cs-warn" id="cs-expected-nudge" style="cursor:pointer;" title="Click to set the expected completion date"><span class="cs-lbl">Expected completion</span><span class="cs-val">Set expected completion →</span></div>`) : ""}
-        ${/* R13 · M-13 — EXCHANGED. Only ever drawn from a recorded date, so there is no nudge and
-             no empty state: an unexchanged case has nothing to say here, and a prompt asking for a
-             date that does not exist yet would be noise on every case at Enquiry. Deliberately
-             stage-independent — a completed case that exchanged is still a case that exchanged. */ ""}
-        ${c.exchange_date ? `<div class="cs-stat" id="cs-exchanged" title="Contracts exchanged on ${esc(fmtD(c.exchange_date))}. From this date the client is legally committed."><span class="cs-lbl">Exchanged</span><span class="cs-val">${fmtD(c.exchange_date)}</span></div>` : ""}
-        ${/* R16 §A — the ICR verdict, echoed compactly here for a BTL case an adviser reads on the phone. */ ""}
-        ${/* R35 §3 — AFFORDABILITY NEVER SILENTLY VANISHES. The row used to require btlIcr(c),
-             which is null until a rent is captured — so the one BTL case where affordability is
-             unknown (the case most likely to be sent to a lender that will refuse it) showed
-             nothing at all, and the absence was indistinguishable from "not a BTL". The row is
-             now drawn for every BTL case: the chip when there is a rent, an amber "not captured"
-             with the way to fix it when there is not. Non-BTL cases are unchanged — no row. */ ""}
-        ${btlIcrOn && c.case_kind === "buy_to_let" ? `<div class="cs-stat" id="cs-btl-icr"><span class="cs-lbl">Affordability</span>${btlIcr(c)
-          ? `<span class="cs-val">${btlIcrChipHtml(c)}</span>`
-          : `<span class="cs-val"><span class="badge amber">Rent — not captured</span> <button type="button" class="linkish" id="cs-btl-add-rent">add</button></span>`}</div>` : ""}
-        ${/* R16 §B — the submit-to-lender status, drawn only in the application window (DIP→exchange). */ ""}
-        ${lenderTrackOn && lenderTrackVisible(c.stage) && c.application_status && APP_STATUS_LABEL[c.application_status] ? `<div class="cs-stat" id="cs-lender-status"${c.lender_reference ? ` title="Lender ref: ${esc(c.lender_reference)}"` : ""}><span class="cs-lbl">Application</span><span class="cs-val">${c.application_status === "offer_issued" ? "📄" : c.application_status === "submitted" ? "📤" : "🏦"} ${esc(APP_STATUS_LABEL[c.application_status])}${c.application_status === "submitted" && c.submitted_at ? " " + fmtD(c.submitted_at) : ""}</span></div>` : ""}
-        ${/* R12b · W-15b — THE CALL PACK, on the header an adviser reads with the phone in their
-             hand. Four stats, drawn only when the case actually carries at least one of them, each
-             absent value rendered "—" rather than £0. This is the same block the Rate & ERC row
-             shows in one line; a retention case is exactly where it earns its space. */ ""}
-        ${hasCallPack(c) ? `<div class="cs-stat cs-callpack" id="cs-callpack-balance"><span class="cs-lbl">Balance</span><span class="cs-val">${callPackVal(c.current_balance)}</span></div>
-        <div class="cs-stat cs-callpack" id="cs-callpack-reversion"><span class="cs-lbl">Reverts to</span><span class="cs-val">${callPackVal(c.reversion_rate, true)}</span></div>
-        <div class="cs-stat cs-callpack" id="cs-callpack-payment"><span class="cs-lbl">Monthly payment</span><span class="cs-val">${callPackVal(c.monthly_payment)}</span></div>
-        <div class="cs-stat cs-callpack" id="cs-callpack-erc"><span class="cs-lbl">ERC amount</span><span class="cs-val">${callPackVal(c.erc_amount)}</span></div>` : ""}
       </div>
       ${/* R16 §B — the chase nudge. Amber, header-only, and silent unless a case has genuinely sat
            in a chaseable status (submitted/underwriting/valuation) past LENDER_CHASE_DAYS. */ ""}
@@ -22432,8 +22867,24 @@ window.openCase = async function (id, opts = {}) {
   if (openSeq !== caseOpenSeq) return;   // R83 — last check before the paint (casesOnSameProperty above awaited)
   // R87 · B6/B8 — phone (≤767px, the CSS's own breakpoint): compact labels on the action row; footer follows the fold.
   const csPhone = typeof window.matchMedia === "function" && window.matchMedia("(max-width: 767px)").matches;
+  /* R88 · D — the fold kit for the sections below History. One <details class="case-fold"> per
+     section; `open` comes from CASE_SECTION_RULES.defaultOpen, `hidden` from caseSectionVisible
+     (a stage-hidden section hides its summary too), `sub` is the one muted fact on the summary. */
+  const caseFoldHtml = (key, label, inner, o = {}) => inner
+    ? `<details class="case-fold${o.hidden ? " hidden" : ""}" id="case-fold-${key}" data-fold="${key}"${o.open ? " open" : ""}><summary>${label}${o.sub ? ` <span class="cs-muted case-fold-sub">${o.sub}</span>` : ""}</summary>${inner}</details>`
+    : "";
+  const caseFactsNeedAttention = /cs-warn|cs-danger|cs-btl-add-rent|cs-prot-prompt/.test(caseMoreFactsHtml);
+  const caseFoldCtx = { stage: c.stage, docCount: caseDocs.length, fileCount: caseFileN, factsNeedAttention: caseFactsNeedAttention };
+  const caseChecklistInner = id ? caseStageChecklistHtml(c, tasks) : "";
+  const caseChecklistToAdd = (caseChecklistInner.match(/class="btn btn-sm playbook-add"/g) || []).length;
+  const caseChecklistSub = caseChecklistInner ? (caseChecklistToAdd ? `— ${caseChecklistToAdd} suggested step${caseChecklistToAdd === 1 ? "" : "s"} not on the list` : "— all on the task list") : "";
+  const caseDocsSub = caseDocs.length ? `— ${caseDocs.length} on the checklist` : "— none requested";
+  const caseFactsSub = (() => {
+    const lbls = [...caseMoreFactsHtml.matchAll(/<span class="cs-lbl">([^<]+)</g)].map((m) => m[1].trim());
+    return lbls.length ? `— ${esc(lbls.slice(0, 4).join(", "))}${lbls.length > 4 ? ` +${lbls.length - 4}` : ""}${caseFactsNeedAttention ? " · ⚠" : ""}` : "";
+  })();
   const caseFormHtml = id ? `
-    <details class="case-details" >
+    <details class="case-details case-fold" data-fold="details">
       <summary>Case details</summary>
       <form id="case-form" class="form-grid" data-case-id="${id}">${caseCoreFieldsHtml}${caseRestFieldsHtml}${caseAssignedFieldHtml}
     </form>
@@ -22447,10 +22898,17 @@ window.openCase = async function (id, opts = {}) {
         </div>
       </details>
     </form>`;
+  /* R88 · D — a re-render of the SAME case (a checklist "+ Add", a task tick, a stage move) keeps
+     the folds the operator opened; a different case starts from CASE_SECTION_RULES.defaultOpen. */
+  const prevForm = $("#modal #case-form");
+  const modalShowing = !!$("#modal-backdrop") && !$("#modal-backdrop").classList.contains("hidden");
+  const keptFolds = id && modalShowing && prevForm && prevForm.dataset.caseId === String(id)
+    ? [...document.querySelectorAll("#modal details.case-fold")].reduce((m, d) => { if (d.dataset.fold) m[d.dataset.fold] = d.open; return m; }, {})
+    : null;
   $("#modal").innerHTML = `
-    ${/* R87 · B4 — "⧉ Copy link" sits with the heading: one control, the deep link routeFromHash
-         already reads. The h3's text stays exactly "Case" (suites read it). */ ""}
-    <div class="cs-h3-row" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;"><h3 style="margin-bottom:0;">${id ? "Case" : "New case"}</h3>${id ? `<button type="button" class="btn btn-sm btn-ghost" id="cs-copy-link" title="Copy a link that opens this case">⧉ Copy link</button>` : ""}</div>
+    ${/* R87 · B4 — the h3's text stays exactly "Case" (suites read it). R88 · D: "⧉ Copy link" (the deep
+         link routeFromHash reads) moved from here to the top of Actions ▾ — see menuLeadHtml below. */ ""}
+    <div class="cs-h3-row" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;"><h3 style="margin-bottom:0;">${id ? "Case" : "New case"}</h3></div>
     ${/* ==================================================================
          R65 · L1 — ONE ACTION ROW, AT THE TOP, THAT STAYS THERE.
 
@@ -22497,17 +22955,15 @@ window.openCase = async function (id, opts = {}) {
              Proceeding, a jump the workflow does not model — meant closing the modal and finding the
              card on the board. Same control, same options, same single write path (moveCaseToStage).
              R87 · B6 — it lives at the top of Actions ▾ now (see the row's note above). */ ""}
+        ${/* R88 · D — ⧉ Copy link moved here from beside the "Case" heading (R87 · B4): same id, same
+             handler, one of the controls the first screen no longer spends (≤14, panel 02 #5). */ ""}
+        <button type="button" class="btn btn-sm btn-ghost" id="cs-copy-link" title="Copy a link that opens this case">⧉ Copy link</button>
         <div class="more-actions-group">Move to stage</div>
         <select id="cs-stage-select" class="card-stage-move" aria-label="Move to stage" title="Move this case to any stage">
           ${STAGES.map(([k, l]) => `<option value="${k}" ${k === c.stage ? "selected" : ""}${k === "decision_in_principle" ? ` title="${TIP_DIP}"` : ""}>${l}</option>`).join("")}
         </select>` })}
     </div>` : ""}
-    ${/* R15 · §3 — the security card is a lender-call tool; it has nothing to hold before a lender
-         is involved, so it is HIDDEN at enquiry+fact_find and shown DIP→terminal. Wrapped, never
-         deleted: the node (and its toggle wiring) stays in the DOM, just hidden. */ ""}
-    ${id ? `<div id="case-sec-wrap"${caseSectionVisible("security", c.stage) ? "" : ' class="hidden"'}>${securityCardHtml(c, caseClient, secClient)}</div>` : ""}
     ${summaryHeader}
-    ${id ? caseMilestonesHtml(c) : ""}
     ${c.retention_source_case_id ? `<p class="panel-sub" style="margin-top:-8px;">🔁 Retention opportunity — linked to a completed case. <span class="t" style="cursor:pointer;text-decoration:underline;" onclick="openCase('${c.retention_source_case_id}')">View original case</span></p>` : ""}
     ${/* R15 · §6 — a not-proceeding case says WHY, prominently. Prefer the recorded lost_reason (a
          select("*") carries it when the M2 columns exist); fall back to the last note; and offer a
@@ -22518,25 +22974,32 @@ window.openCase = async function (id, opts = {}) {
         : " — <span class=\"cs-muted\">no reason recorded.</span>"} <a href="#" class="t" style="text-decoration:underline;" title="Record or correct why this case did not proceed" onclick="event.preventDefault();var b=document.getElementById('act-record-reason');if(b)b.click();">record reason</a></p>` : ""}
     ${c.nps_score != null ? `<p class="panel-sub" style="margin-top:-8px;">Client review score: <strong style="color:${c.nps_score >= 9 ? "var(--green)" : c.nps_score >= 7 ? "var(--amber)" : "var(--red)"};">${c.nps_score}/10</strong></p>` : ""}
     ${id ? `
-    <div style="margin-top:14px;">
+    <div class="case-tasks" id="case-tasks">
       <h3 style="font-size:14px;">Tasks</h3>
+      ${/* R88 · D (panel 02 #5) — NEXT TASK + ADD TASK, straight under the header. The composer is one
+           line (title + Add task); its options — the due chips, the assignee and the date — sit in
+           .compose-opts, revealed the moment the composer is focused (.is-active, wired below), so a
+           case opens with two task controls on screen, not eight. DOM (and so tab) order is still
+           title → chips → assignee → date → Add (R12a·D10): CSS `order` puts Add on the first line. */ ""}
       ${/* R12a·D10 — the DUE chips used to sit BELOW this row, i.e. after the Add button in both
             reading and tab order, so the natural gesture (type the title, press Enter) submitted
             before the operator had reached the thing that sets the date. They now sit between the
             title box and the row that ends in Add, which is the order the task is actually
             composed in. The dateless-submit default below is the belt to this braces. */ ""}
-      <div class="due-chips" style="margin:8px 0 6px;">
-        <span class="due-chips-lbl">Due:</span>
-        <button type="button" class="btn btn-sm due-chip" data-days="1">Tomorrow</button>
-        <button type="button" class="btn btn-sm due-chip" data-days="3">+3d</button>
-        <button type="button" class="btn btn-sm due-chip" data-days="7">+1wk</button>
-        <button type="button" class="btn btn-sm due-chip" data-months="1">+1mo</button>
-      </div>
-      <div style="display:flex;gap:8px;margin:0 0 8px;flex-wrap:wrap;">
+      <div class="task-compose" id="task-compose">
         <input id="new-task" placeholder="Add a task…" style="flex:1;min-width:140px;">
-        <select id="new-task-assignee" aria-label="Assign task to" style="width:auto;" title="Assign task to">${TEAM.map((p) => `<option value="${p.id}" ${p.id === defaultAssignee(c.assigned_to) ? "selected" : ""}>${esc(staffName(p.id))}</option>`).join("")}</select>
-        <input id="new-task-due" type="date" style="width:auto;" title="Leave this empty and the task is due tomorrow — a task with no date appears on no list anywhere.">
-        <button class="btn btn-sm" id="add-task-btn" title="Add task">Add task</button>
+        <div class="compose-opts task-opts">
+        <div class="due-chips" style="margin:8px 0 6px;">
+          <span class="due-chips-lbl">Due:</span>
+          <button type="button" class="btn btn-sm due-chip" data-days="1">Tomorrow</button>
+          <button type="button" class="btn btn-sm due-chip" data-days="3">+3d</button>
+          <button type="button" class="btn btn-sm due-chip" data-days="7">+1wk</button>
+          <button type="button" class="btn btn-sm due-chip" data-months="1">+1mo</button>
+        </div>
+          <select id="new-task-assignee" aria-label="Assign task to" style="width:auto;" title="Assign task to">${TEAM.map((p) => `<option value="${p.id}" ${p.id === defaultAssignee(c.assigned_to) ? "selected" : ""}>${esc(staffName(p.id))}</option>`).join("")}</select>
+          <input id="new-task-due" type="date" style="width:auto;" title="Leave this empty and the task is due tomorrow — a task with no date appears on no list anywhere.">
+        </div>
+        <button class="btn btn-sm compose-opts" id="add-task-btn" title="Add task">Add task</button>
       </div>
       ${/* R63 · H1c — the chip that names a leftover. A step from an earlier stage of THIS case is
             still open work as far as every list in the app is concerned, and it is the single
@@ -22557,42 +23020,7 @@ window.openCase = async function (id, opts = {}) {
             : `<button class="btn btn-sm${stale ? " task-stale-done" : ""}" aria-label="Mark task done" title="${stale ? esc("Mark this earlier-stage step done. It is what the case header is showing as the next task, and it is what is keeping this case off the No-next-action radar.") : "Mark task done"}" onclick="doneTaskInCase('${t.id}','${id}')">${stale ? "✓ Done" : "✓"}</button>`}
         </div>`; }).join("") || '<div class="empty">No tasks.</div>'}</div>
     </div>
-    ${/* R17 · §1 — the Stage checklist sits directly under Tasks: the house steps for the current
-         stage, each a one-click add that writes a real case_tasks row and dedupes against what is
-         already open. Advisory; renders only where the stage has steps (never on not_proceeding). */ ""}
-    ${id ? caseStageChecklistHtml(c, tasks) : ""}
-    ${/* R9-5 · m10 — THE DOCUMENT CHECKLIST. Between Tasks and Notes because that is where it sits
-         in the day: it is work outstanding, not history. Absent entirely on a database without the
-         migration — see docsSupported(). Painted by renderCaseDocs() below. */ ""}
-    ${/* R15 · §3+§4 — Documents renders in full up to Exchange; at completed+not_proceeding it
-         collapses into a <details> (kept reachable, not front-and-centre). The static intro is CUT:
-         the section title and its outstanding/received counts already say what it is. #case-docs-body
-         exists in both variants, so renderCaseDocs paints the same either way. */ ""}
-    ${docsOn ? (caseSectionFull("documents", c.stage) ? `
-    <div style="margin-top:14px;" id="case-docs">
-      <h3 style="font-size:14px;">Documents <span class="cs-muted" style="font-weight:400;" title="What this client has been asked for and what has arrived. The document emails list only what is still outstanding.">?</span></h3>
-      <div id="case-docs-body"></div>
-    </div>` : `
-    <details style="margin-top:14px;" id="case-docs" class="case-docs-compact">
-      <summary style="font-size:14px;font-weight:600;cursor:pointer;">Documents <span class="cs-muted" style="font-weight:400;">(checklist — click to expand)</span></summary>
-      <div id="case-docs-body"></div>
-    </details>`) : ""}
-    ${/* R13 · M-2 — THE FIRM'S OWN PAPERS. Directly under Documents so the pair read as one idea
-         with two halves, and worded so nobody has to work out which is which: the sub-line names
-         the distinction outright. Absent entirely, with the absence STATED, on a database without
-         the table — see caseFilesSupported(). Painted by renderCaseFiles() below. */ ""}
-    ${/* R15 · §3+§4 — the firm's own case papers appear once a case is real (DIP onward) and are
-         HIDDEN at enquiry+fact_find. Wrapped/hidden, never deleted (#case-files-body stays for
-         renderCaseFiles). Intro shortened to one line + a title tooltip; the old "no case_files
-         table" migration paragraph is CUT to a single muted line. */ ""}
-    ${id ? `<div style="margin-top:14px;" id="case-files"${caseSectionVisible("files", c.stage) ? "" : ' class="hidden"'}>
-      <h3 style="font-size:14px;">Files</h3>
-      ${filesOn
-        ? `<p class="panel-sub" style="margin:2px 0 6px;" title="The illustration/ESIS, the research, the signed client agreement, the offer and suitability letters. Documents above are what we ask the client for; these are what we produce or receive. Nothing here is chased or sent to the client.">The firm's own case papers — what we produce or receive, not what we ask the client for. <span class="cs-muted">?</span></p>
-      <div id="case-files-body"></div>`
-        : '<p class="panel-sub cs-muted" style="margin:2px 0 6px;">No case-files table on this database yet.</p>'}
-    </div>` : ""}
-    <div style="margin-top:14px;">
+    <div class="case-notes note-compose" id="note-compose">
       <h3 style="font-size:14px;">Notes</h3>
       <div style="display:flex;gap:8px;margin:8px 0 0;flex-wrap:wrap;">
         ${/* R33 · W5 — a textarea, not a single-line input. The call logger six inches above this
@@ -22601,9 +23029,9 @@ window.openCase = async function (id, opts = {}) {
               of it. Enter still submits and Shift+Enter still makes a newline — the keydown
               handler below was already written that way, it just had nowhere to put the line. */ ""}
         <textarea id="new-note" rows="2" placeholder="Add a note…" style="flex:1;min-width:140px;"></textarea>
-        <button class="btn btn-sm" id="add-note-btn" title="Add note">Add note</button>
+        <button class="btn btn-sm compose-opts" id="add-note-btn" title="Add note">Add note</button>
       </div>
-      <div class="type-chips" id="note-type-chips">
+      <div class="type-chips compose-opts" id="note-type-chips">
         <button type="button" class="tl-chip active" data-type="note">📝 Note</button>
         <button type="button" class="tl-chip" data-type="call">📞 Call</button>
         <button type="button" class="tl-chip" data-type="email">✉️ Email</button>
@@ -22643,7 +23071,59 @@ window.openCase = async function (id, opts = {}) {
     <div id="case-referrals" class="case-referrals"></div>
     ${/* R5-4 — where a parsed mortgage offer PROPOSES its readings (Current vs Incoming, ticked
          field by field) instead of writing them behind the operator's back. Empty until a parse. */ ""}
-    <div id="offer-diff" class="offer-diff hidden"></div>` : ""}
+    <div id="offer-diff" class="offer-diff hidden"></div>
+    ${/* ==================================================================
+         R88 · D (panel 02 #5) — EVERYTHING ELSE IS A FOLD, BELOW THE WORK.
+         The order used to be stats → milestones → stage checklist → documents → files, and only
+         then Notes and History — the two things a case is opened FOR sat 1,800px down. Now each of
+         those is a collapsed <details class="case-fold"> under History, in this order: Milestones,
+         Stage checklist, Documents, Files, More facts, Security check, Case details. A fold opens
+         on arrival only when it has content (CASE_SECTION_RULES.defaultOpen). Every inner id is
+         unchanged (#case-milestones, #case-stage-checklist, #case-docs, #case-files, #case-sec-wrap);
+         a stage-hidden section hides its fold with it (caseSectionVisible).
+         ================================================================== */ ""}
+    ${caseMilestonesHtml(c)}
+    ${/* R17 · §1 (R88 · D: now a fold under History) — the Stage checklist: the house steps for the current
+         stage, each a one-click add that writes a real case_tasks row and dedupes against what is
+         already open. Advisory; renders only where the stage has steps (never on not_proceeding). */ ""}
+    ${caseFoldHtml("checklist", "Stage checklist", caseChecklistInner, { sub: caseChecklistSub })}
+    ${/* R9-5 · m10 — THE DOCUMENT CHECKLIST. Between Tasks and Notes because that is where it sits
+         in the day: it is work outstanding, not history. Absent entirely on a database without the
+         migration — see docsSupported(). Painted by renderCaseDocs() below. */ ""}
+    ${/* R15 · §3+§4 — Documents renders in full up to Exchange; at completed+not_proceeding it
+         collapses into a <details> (kept reachable, not front-and-centre). The static intro is CUT:
+         the section title and its outstanding/received counts already say what it is. #case-docs-body
+         exists in both variants, so renderCaseDocs paints the same either way. */ ""}
+    ${docsOn ? (caseSectionFull("documents", c.stage) ? caseFoldHtml("docs", "Documents", `
+    <div style="margin-top:14px;" id="case-docs">
+      <h3 style="font-size:14px;">Documents <span class="cs-muted" style="font-weight:400;" title="What this client has been asked for and what has arrived. The document emails list only what is still outstanding.">?</span></h3>
+      <div id="case-docs-body"></div>
+    </div>`, { open: caseSectionOpen("documents", caseFoldCtx), sub: caseDocsSub }) : `
+    <details style="margin-top:14px;" id="case-docs" class="case-docs-compact case-fold" data-fold="docs">
+      <summary style="font-size:14px;font-weight:600;cursor:pointer;">Documents <span class="cs-muted" style="font-weight:400;">(checklist — click to expand)</span></summary>
+      <div id="case-docs-body"></div>
+    </details>`) : ""}
+    ${/* R13 · M-2 — THE FIRM'S OWN PAPERS. Directly under Documents so the pair read as one idea
+         with two halves, and worded so nobody has to work out which is which: the sub-line names
+         the distinction outright. Absent entirely, with the absence STATED, on a database without
+         the table — see caseFilesSupported(). Painted by renderCaseFiles() below. */ ""}
+    ${/* R15 · §3+§4 — the firm's own case papers appear once a case is real (DIP onward) and are
+         HIDDEN at enquiry+fact_find. Wrapped/hidden, never deleted (#case-files-body stays for
+         renderCaseFiles). Intro shortened to one line + a title tooltip; the old "no case_files
+         table" migration paragraph is CUT to a single muted line. */ ""}
+    ${id ? caseFoldHtml("files", "Files", `<div style="margin-top:14px;" id="case-files"${caseSectionVisible("files", c.stage) ? "" : ' class="hidden"'}>
+      <h3 style="font-size:14px;">Files</h3>
+      ${filesOn
+        ? `<p class="panel-sub" style="margin:2px 0 6px;" title="The illustration/ESIS, the research, the signed client agreement, the offer and suitability letters. Documents above are what we ask the client for; these are what we produce or receive. Nothing here is chased or sent to the client.">The firm's own case papers — what we produce or receive, not what we ask the client for. <span class="cs-muted">?</span></p>
+      <div id="case-files-body"></div>`
+        : '<p class="panel-sub cs-muted" style="margin:2px 0 6px;">No case-files table on this database yet.</p>'}
+    </div>`, { open: caseSectionOpen("files", caseFoldCtx), hidden: !caseSectionVisible("files", c.stage) }) : ""}
+    ${caseFoldHtml("facts", "More facts", caseMoreFactsHtml.trim() ? `<div class="cs-stats cs-stats-more" id="cs-stats-more">${caseMoreFactsHtml}</div>` : "", { open: caseSectionOpen("facts", caseFoldCtx), sub: caseFactsSub })}
+    ${/* R15 · §3 — the security card is a lender-call tool; it has nothing to hold before a lender
+         is involved, so it is HIDDEN at enquiry+fact_find and shown DIP→terminal. Wrapped, never
+         deleted: the node (and its toggle wiring) stays in the DOM, just hidden. */ ""}
+    ${id ? `<div id="case-sec-wrap"${caseSectionVisible("security", c.stage) ? "" : ' class="hidden"'}>${securityCardHtml(c, caseClient, secClient)}</div>` : ""}
+    ` : ""}
     ${caseFormHtml}
     <div class="modal-actions">
       ${/* R48 — case hard-delete removed (Daniel's binding decision). A case is only ever CLOSED via
@@ -22664,6 +23144,21 @@ window.openCase = async function (id, opts = {}) {
   const caseFormEl = $("#case-form");
   if (caseFormEl) caseFormEl.addEventListener("input", (e) => clearOneFieldError(e.target));
   markRequiredFields("#case-form");
+  /* R88 · D — Milestones is the first fold. caseMilestonesHtml still decides its own markup; the
+     modal decides whether it is born open (CASE_SECTION_RULES.milestones — closed: the stage badge
+     on the identity line already says where the case is). */
+  const msFold = $("#modal #case-milestones");
+  if (msFold) { msFold.classList.add("case-fold"); msFold.dataset.fold = "milestones"; msFold.open = caseSectionOpen("milestones", caseFoldCtx); }
+  if (keptFolds) document.querySelectorAll("#modal details.case-fold").forEach((d) => {
+    if (d.dataset.fold && Object.prototype.hasOwnProperty.call(keptFolds, d.dataset.fold)) d.open = keptFolds[d.dataset.fold];
+  });
+  /* R88 · D — the two composers show their options (due chips / assignee / date; note type chips)
+     once focused. Sticky for the life of the modal: the chosen due date or type never vanishes
+     because focus moved to a toast or the scrollbar. */
+  ["#task-compose", "#note-compose"].forEach((sel) => {
+    const box = $("#modal " + sel);
+    if (box) box.addEventListener("focusin", () => box.classList.add("is-active"));
+  });
   /* R14b — the security-check card's collapse toggle. In-memory only: the modal re-renders on every
      open, so the card is born collapsed (the .sec-collapsed class is in its markup) and this just
      flips the class + the aria-expanded state on click. No persistence by design — it is a strip you
@@ -22704,6 +23199,15 @@ window.openCase = async function (id, opts = {}) {
     const syncFooter = () => { caseFooter.hidden = !caseDetails.open; };
     syncFooter();
     caseDetails.addEventListener("toggle", syncFooter);
+  }
+  /* R88 · D (panel 02 #8) — on DESKTOP the footer stays (R87 H4) but Cancel follows the fold: with
+     Case details closed there is nothing to cancel, and ✕ closes the modal. Save and Open client
+     are untouched (suites and the R82 conflict box press Save by id). */
+  const caseCancel = $("#modal > .modal-actions #modal-cancel");
+  if (id && caseCancel && caseDetails && !csPhone) {
+    const syncCancel = () => { caseCancel.classList.toggle("hidden", !caseDetails.open); };
+    syncCancel();
+    caseDetails.addEventListener("toggle", syncCancel);
   }
   /* R9-5 — the Documents section, painted from the reads the modal already made. `docCase` is a
      deliberately small object rather than `c` itself: renderCaseDocs stores the generated upload
@@ -23617,6 +24121,17 @@ window.openCase = async function (id, opts = {}) {
       }
     }
   }
+  /* R88 · D — { focus: "task" | "note" }: land on a composer, open and focused. Today's radar row
+     "Add next step" (slice A) opens the case this way; openCase(id) alone is unchanged. */
+  if (id && (opts.focus === "task" || opts.focus === "note")) {
+    const box = $(opts.focus === "task" ? "#modal #task-compose" : "#modal #note-compose");
+    const field = $(opts.focus === "task" ? "#modal #new-task" : "#modal #new-note");
+    if (box && field) {
+      box.classList.add("is-active");
+      field.scrollIntoView({ block: "center" });
+      field.focus();
+    }
+  }
   /* R68 · B3/M2 — THE BLOCKED MOVE, ANSWERED WHERE IT WAS BLOCKED. See renderProtGatePanel. */
   if (id && opts.gateTo) renderProtGatePanel(id, c, opts.gateTo);
   /* R37 · K2 — { scrollTo: "docs" }. A row that flagged DOCUMENTS (Data health's "Waiting on
@@ -23629,6 +24144,8 @@ window.openCase = async function (id, opts = {}) {
     const docs = $("#modal #case-docs");
     if (docs) {
       if (docs.tagName === "DETAILS") docs.open = true;
+      // R88 · D — at a live stage #case-docs sits inside the Documents fold; open that first.
+      const docsFold = docs.closest("details.case-fold"); if (docsFold) docsFold.open = true;
       docs.scrollIntoView({ behavior: "smooth", block: "start" });
     }
   }
@@ -24562,20 +25079,43 @@ function renderClientAdviser(clients) {
   if (!sel.dataset.wired) {
     sel.dataset.wired = "1";
     // R64 · M9 — the ONE writer. A pick is a choice, and the page opens on it next time.
-    sel.onchange = () => { clientAdviser = sel.value; lsSet(userKey(CLIENT_ADVISER_KEY), sel.value || "all"); clientSel.clear(); loadClients($("#client-search").value); };   // R82 · A4
+    // R88 · B — the select is a hidden compat control now; the Mine|All toggle writes through it.
+    sel.onchange = () => pickClientAdviser(sel.value);
   }
-  const note = $("#client-adv-note");
-  if (!note) return;
-  if (clientAdviser === "all") { note.textContent = ""; note.classList.add("hidden"); return; }
-  note.classList.remove("hidden");
-  /* R64 · M9 — the note now also says WHY the page opened here and how to leave, because a list
-     that has quietly narrowed itself to one person is the exact thing an operator must not have to
-     work out from the counts. */
-  const mineNow = !!(ME && ME.id && clientAdviser === ME.id);
-  note.textContent = clientAdviser === "none"
-    ? "Clients with no case assigned to anybody — including clients with no case at all."
-    : `Clients with at least one case assigned to ${staffName(clientAdviser)}. A client whose cases are split between two advisers appears under both — that is correct, they are both advisers' client. The segment counts and the sort below all follow this filter.`
-      + (mineNow ? " This page opens on your own clients — pick “All advisers” for the whole firm's, and it will open on that next time." : " Your pick is remembered for next time.");
+  /* R88 · B (panel 04 #6) — the 25–60-word #client-adv-note is gone: the scope is said by the
+     pressed Mine|All button, and a colleague's / nobody's book by the "✕" chip beside it. */
+  syncClientScope();
+}
+/* R88 · B — THE ONE WRITER of the Clients scope (was the select's onchange). `v` is a staff id,
+   "all" or "none", exactly the values clientHasAdviser reads. */
+function pickClientAdviser(v) {
+  clientAdviser = v || "all";
+  const sel = $("#client-adviser");
+  if (sel && sel.value !== clientAdviser) sel.value = clientAdviser;
+  lsSet(userKey(CLIENT_ADVISER_KEY), clientAdviser);   // R82 · A4
+  clientSel.clear();
+  loadClients($("#client-search").value);
+}
+/* R88 · B — the Mine|All buttons follow clientAdviser. A colleague's book (reached from Retention,
+   or a stored pick from before R88) or "nobody's" presses neither and shows a "✕" chip to leave it. */
+function syncClientScope() {
+  const mine = !!(ME && ME.id && clientAdviser === ME.id);
+  const all = clientAdviser === "all" || !clientAdviser;
+  document.querySelectorAll("#client-tools .list-scope .seg-btn").forEach((b) => {
+    const on = b.dataset.scope === "mine" ? mine : b.dataset.scope === "all" ? all : false;
+    b.classList.toggle("scope-active", on);
+    b.setAttribute("aria-pressed", String(on));
+  });
+  const other = $("#cl-scope-other");
+  if (!other) return;
+  const show = !mine && !all;
+  other.classList.toggle("hidden", !show);
+  if (!show) return;
+  other.textContent = clientAdviser === "none" ? "Nobody's ✕" : `${staffName(clientAdviser)}'s ✕`;
+  other.title = (clientAdviser === "none"
+    ? "Clients with no case assigned to anybody."
+    : `Clients with at least one case assigned to ${staffName(clientAdviser)} — a client split between two advisers appears under both.`)
+    + " Press to show everyone's.";
 }
 /* One fetch, cached for the life of the page visit. force:true re-reads (page navigation, a
    save, a completed bulk action); a keystroke in the search box does not.
@@ -24852,10 +25392,9 @@ const CLIENT_LIST_CAP = 100;
 let clientRenderedList = [];
 let clientsLoadSeq = 0;   // R83 — stale-response guard (the dashLoadSeq / emailsLoadSeq idiom)
 async function loadClients(filter = "", opts = {}) {
-  // R43 / R37 · L7 — same one-shot pair as the board, in the same order and for the same reasons
-  // (see loadPipeline): the server read first, then the local starter seed it may suppress.
-  loadSavedViews();
-  seedStarterViews();
+  /* R88 · B (panel 03 #6 / 04 #10) — the saved-views trio is off the Clients page, so this page no
+     longer kicks the saved-views read or the starter seed (the board still does both; the data
+     path — savedViews("clients"), refreshClientViews — stays dormant, not deleted). */
   const seq = ++clientsLoadSeq;   // R83
   const cached = await clientDataCached(opts.force);
   /* R83 — a slow force:true load (a save, a bulk action, an adviser pick) raced the debounced
@@ -24889,7 +25428,7 @@ async function loadClients(filter = "", opts = {}) {
   const rateYear = clientSegment.startsWith("rate_") ? clientSegment.slice(5) : null;
   const list = sortClientList(searched.filter((c) => clientInSegment(c, clientSegment, ctx)), clientSort, todayStr, rateYear);
   renderClientSegments(searched, ctx, segs, cutoff);
-  renderClientSort(list, todayStr, rateYear);
+  renderClientSort();
   // Prune the selection to what this segment + search actually shows, so a bulk verb can never
   // act on a client scrolled out of the operator's view two filters ago.
   const visible = new Set(list.map((c) => c.id));
@@ -24920,8 +25459,9 @@ async function loadClients(filter = "", opts = {}) {
   const showNextRate = !rateYear && clientSort === "rate_end";
   clientRenderedList = list;
   const capped = list.slice(0, CLIENT_LIST_CAP);
+  // R88 · B (panel 04 #10) — the cap line says what to do about it, in six words.
   const capNote = list.length > CLIENT_LIST_CAP
-    ? `<div class="client-list-cap-note">Showing ${CLIENT_LIST_CAP} of ${list.length} — refine your search to narrow the list.</div>`
+    ? `<div class="client-list-cap-note">Showing ${CLIENT_LIST_CAP} of ${list.length} — search to narrow</div>`
     : "";
   let clientSkipped = 0;   // R21 Part B — skip-and-count: one malformed row must not white-screen the list
   const clientRowsHtml = (list.length ? capped.map((c) => {
@@ -24947,9 +25487,7 @@ async function loadClients(filter = "", opts = {}) {
        reading "1 property" beside "1 case" is noise. Absent on an un-migrated database, where the
        embed carries no property_address and every key is null. */
     const propN = clientPropertyCount(cases);
-    const propBadge = propN > 1
-      ? `<span class="badge grey client-prop-n" title="This client's cases sit on ${propN} different properties. Open the record to see them grouped by building.">${propN} properties</span>`
-      : "";
+    const propBadge = propN > 1;   // R88 · B — rendered as the row's second kit chip (below)
     /* R36-A · L9(b) — last contact, in days, on EVERY row rather than only in the Cold segment.
        Same source (loadClientData's `last` map) and same wording helper (lastContactAgeLabel) the
        cold cutoff itself uses, so the label and the segment can never disagree. The four comms
@@ -24985,20 +25523,36 @@ async function loadClients(filter = "", opts = {}) {
         }
       }
     }
-    return `<div class="row-item client-row${clientSel.has(c.id) ? " is-sel" : ""}" data-client="${esc(c.id)}">
-      <input type="checkbox" class="bulk-cb client-cb" data-id="${esc(c.id)}" aria-label="Select ${esc([c.first_name, c.last_name].filter(Boolean).join(" "))}"${clientSel.has(c.id) ? " checked" : ""}>
-      <div class="row-main">
-        <div class="t" onclick="openClient('${c.id}')">${esc([c.last_name, c.first_name].filter(Boolean).join(", "))}</div>
-        <div class="s">${c.email ? mailLink(c.email) : "no email"}${c.phone ? " · " + telLink(c.phone) : ""}${
-          /* R8-3 — the DOB is on the ROW in the segment that exists because it is missing, with the
-             one-click way to put it right. Everywhere else it stays off the row: a list of birthdays
-             is not what the other six segments are for. */
-          showDob ? ` · <span class="client-dob-missing">DOB: —</span> <a href="javascript:void(0)" class="client-dob-add" onclick="event.stopPropagation();openClient('${c.id}','dob')">add</a>` : ""}${
-          clientSegment === "cold" ? ` · <span class="client-lastcontact">${lc ? `last contact ${fmtD(String(lc.at).slice(0, 10))} (${esc(lc.what)})` : "no contact on record"}</span>` : ""}${lcAge}${rateBit}${nextBit}</div>
-      </div>
-      ${propBadge}
-      <span class="badge ${active ? "blue" : "grey"}">${cases.length} case${cases.length === 1 ? "" : "s"}${active ? ` (${active} active)` : ""}</span>
-    </div>`;
+    /* R88 · B (panel 04 #6) — the row is the list kit's rowItemHtml: ☐ · name (→ the CLIENT,
+       never a case) + ≤2 chips · ONE fact line (the same R61/R36/R8 spans, same classes) · 📞 💬
+       (opt-out honoured). The cases badge is a chip; with exactly one live case it opens THAT case,
+       so the case is one press away without the name ever meaning it. */
+    const liveCases = cases.filter((x) => CLIENT_LIVE(x.stage));
+    const soleLive = liveCases.length === 1 ? liveCases[0] : null;
+    const caseChip = {
+      label: `${cases.length} case${cases.length === 1 ? "" : "s"}${active ? ` (${active} active)` : ""}`,
+      cls: `${active ? "blue" : "grey"} client-case-chip`,
+      onclick: soleLive ? `openCase('${jsArg(soleLive.id)}')` : "",
+      title: soleLive ? "Open the live case" : "",
+    };
+    const propsChip = propBadge ? { label: `${propN} properties`, cls: "grey client-prop-n", title: "This client's cases sit on " + propN + " different properties. Open the record to see them grouped by building." } : null;
+    /* R8-3 — the DOB is on the ROW in the segment that exists because it is missing, with the
+       one-click way to put it right. Everywhere else it stays off the row. */
+    const dobBit = showDob ? ` · <span class="client-dob-missing">DOB: —</span> <a href="javascript:void(0)" class="client-dob-add" onclick="event.stopPropagation();openClient('${jsArg(c.id)}','dob')">add</a>` : "";
+    const coldBit = clientSegment === "cold" ? ` · <span class="client-lastcontact">${lc ? `last contact ${fmtD(String(lc.at).slice(0, 10))} (${esc(lc.what)})` : "no contact on record"}</span>` : "";
+    const fact = `${c.email ? mailLink(c.email) : "no email"}${dobBit}${coldBit}${lcAge}${rateBit}${nextBit}`;
+    return rowItemHtml({
+      id: c.id,
+      cls: "client-row",
+      cb: { name: "client-cb", value: c.id, checked: clientSel.has(c.id) },
+      /* R88 · B — compat: ~20 suites and the R12b/R36 readers address a row by data-client, so the
+         row carries it beside the kit's data-id (R88 · E: via the kit's attrs map, not a post-render copy). */
+      attrs: { client: c.id },
+      name: { text: [c.last_name, c.first_name].filter(Boolean).join(", "), clientId: c.id },
+      chips: [caseChip, propsChip].filter(Boolean),
+      fact,
+      contact: c.phone ? { phone: c.phone, smsOptOut: !!c.sms_opt_out, first: c.first_name } : null,
+    });
     } catch (err) {
       clientSkipped++;
       logClientError("caught", "client-list row render failed: " + ((err && err.message) || err), { recordId: c && c.id, where: "loadClients" });
@@ -25008,7 +25562,14 @@ async function loadClients(filter = "", opts = {}) {
   const clientSkipNote = clientSkipped > 0
     ? `<div class="client-list-cap-note">${clientSkipped} record(s) couldn't be displayed — logged</div>`
     : "";
-  $("#client-list").innerHTML = `<div class="panel">` + (list.length ? clientRowsHtml + clientSkipNote + capNote : `<div class="empty">${emptyMsg}</div>`) + `</div>`;
+  /* R88 · B — emptyState() is the only empty state (no .empty wrapper), and the kit bulk bar is the
+     list's LAST child: dockBulkBar holds it sticky at the bottom, zero-height while nothing is ticked. */
+  const listEl = $("#client-list");
+  listEl.innerHTML = `<div class="panel">` + (list.length ? clientRowsHtml + clientSkipNote + capNote : emptyMsg) + `</div>` + clientBulkBarHtml();
+  const dock = dockBulkBar(listEl, "#client-bulk-bar");
+  if (dock) dock.id = "client-bulk-dock";
+  wireClientBulkBar();
+  syncClientBulk(list);
   // R73 · B1 — call site 2 of 4: the client name is an onclick div inside the row.
   activateAll("#client-list .client-row .t");
   renderOwnerCapNotice("#clients-cap-notice", ownerCapHit(clients)); // R23 — the full clients read is the one most certain to exceed 1,000
@@ -25028,21 +25589,21 @@ async function loadClients(filter = "", opts = {}) {
   });
 })();
 function renderClientSegments(searched, ctx, segs, cutoff) {
-  const wrap = $("#client-segment");
-  if (!wrap) return;
-  wrap.innerHTML = segs.map(([k, l]) => {
-    const n = searched.filter((c) => clientInSegment(c, k, ctx)).length;
-    return `<button class="seg-btn${clientSegment === k ? " active" : ""}" role="tab" aria-selected="${clientSegment === k}" data-seg="${esc(k)}">${esc(l)} <span class="seg-count">${n}</span></button>`;
-  }).join("");
-  wrap.querySelectorAll(".seg-btn").forEach((b) => (b.onclick = () => {
-    if (b.dataset.seg === clientSegment) return;
-    clientSegment = b.dataset.seg;
-    loadClients($("#client-search").value);
-  }));
+  /* R88 · B (panel 04 #6) — the eight chips are the kit's segmentChipsHtml (.seg-strip > .seg-btn >
+     .seg-count, aria-pressed). Same keys, same counts (over the adviser+search set, as since R12b),
+     rendered with the id #client-segment into its slot; each chip's definition is its title too.
+     Clicks are handled once, delegated on the slot (wireClientTools). */
+  const slot = $("#client-segment-slot");
+  if (!slot) return;
+  const coldDef = clientColdDefinition(cutoff);
+  slot.innerHTML = segmentChipsHtml({
+    id: "client-segment", ariaLabel: "Client segment",
+    chips: segs.map(([k, l, d]) => ({ key: k, label: l, count: searched.filter((c) => clientInSegment(c, k, ctx)).length, active: clientSegment === k, title: k === "cold" ? coldDef : d })),
+  });
   const def = $("#client-seg-def");
   if (def) {
     const row = segs.find(([k]) => k === clientSegment);
-    const text = clientSegment === "cold" ? clientColdDefinition(cutoff) : (row ? row[2] : "");
+    const text = clientSegment === "cold" ? coldDef : (row ? row[2] : "");
     /* R73 · B5 — "Every client on the book." over a list showing NO clients is the
        segment's definition read as a statement about what is on screen, and it
        contradicts the empty state two lines below it. The definition explains a
@@ -25053,10 +25614,11 @@ function renderClientSegments(searched, ctx, segs, cutoff) {
     def.classList.toggle("hidden", !showDef);
   }
 }
-/* R11-6 — the sort control, plus the one line that says what the chosen order is measuring.
-   Wired imperatively on every render (the same way the segment chips are) so the select can never
-   show one thing while the list is in another order. */
-function renderClientSort(list, todayStr, rateYear) {
+/* R11-6 — the sort control. Wired imperatively on every render (the same way the segment chips
+   are) so the select can never show one thing while the list is in another order.
+   R88 · B (panel 04 #6) — the #cl-sort-note line is gone (the row already names the date it was
+   sorted on — R11-6 — and the page keeps ONE standing line, the segment definition). */
+function renderClientSort() {
   const sel = $("#cl-sort");
   if (!sel) return;
   if (sel.value !== clientSort) sel.value = clientSort;
@@ -25064,63 +25626,114 @@ function renderClientSort(list, todayStr, rateYear) {
     sel.dataset.wired = "1";
     sel.onchange = () => { clientSort = sel.value; loadClients($("#client-search").value); };
   }
-  const note = $("#cl-sort-note");
-  if (!note) return;
-  if (clientSort === "rate_end") {
-    const none = (list || []).filter((c) => !clientRateKey(c, rateYear, todayStr)).length;
-    note.textContent = (rateYear
-      ? `Earliest ${rateYear} rate end first — the date shown on each row.`
-      : `Soonest rate end first, counting only dates from today onwards.`)
-      + (none ? ` ${none} of the ${list.length} shown ${none === 1 ? "has" : "have"} no ${rateYear ? `${rateYear} ` : ""}rate end${rateYear ? "" : " ahead of them"} and stay at the bottom, in name order.` : "");
-  } else if (clientSort === "recent") {
-    note.textContent = "Newest first, by the date the client record was created here — not necessarily the date they became a client of the firm.";
-  } else {
-    note.textContent = "";
-  }
 }
+/* R88 · B — the select-all line (kit selectAllHtml, in #client-bulk above the rows; ids
+   #client-bulk-all / #client-bulk-all-wrap) and the in-place sync of the docked bar. The bar itself
+   is rendered with the rows (clientBulkBarHtml) so it can be the list's last child. */
 function renderClientBulkBar(list) {
   const wrap = $("#client-bulk");
-  if (!wrap) return;
-  const n = clientSel.size;
-  wrap.innerHTML = `
-    ${/* R73 · B5 — the retention page settled this in R64: "a 'Select all 0 shown' line
-         is furniture, not a control". The clients page kept printing it. Same rule here. */ ""}
-    ${list.length ? `<div class="client-selall">
-      <label><input type="checkbox" id="client-bulk-all" aria-label="Select every client in this view"${n && n === list.length ? " checked" : ""}> Select all ${list.length} shown</label>
-    </div>` : ""}
-    <div class="bulk-bar" id="client-bulk-bar"${n ? "" : " hidden"}>
-      <span class="bulk-bar-count"><strong id="client-bulk-n">${n}</strong> selected</span>
-      <button type="button" class="btn btn-sm" id="client-bulk-task" title="One task per selected client, on that client's case. Says which clients it can and cannot place a task for before it writes anything.">＋ Add task…</button>
-      ${/* R42 · F7 — ⭳, the app's one download glyph (was ⬇). Label and id unchanged. */ ""}
-      <button type="button" class="btn btn-sm" id="client-bulk-csv" title="Download the selected clients as a spreadsheet.">⭳ Export CSV</button>
-      <button type="button" class="btn btn-sm" id="client-bulk-clear">Clear</button>
-    </div>
-    ${/* R8-2 — said where someone would look for the verb that isn't here, rather than only in a
-          code comment: the absence is a decision, and an unexplained absence reads as an oversight. */ ""}
-    ${/* R66 · M8 — the note had to change with the behaviour it was explaining. "There is no way to
-         write to a client" is no longer true: ✉️ Write to client, on the case, sends the adviser's
-         own subject and body on the firm's template. What is still true — and is the whole reason
-         this stays a case-level action — is that FORTY of them at once is a template, and a
-         template the firm sends to its whole book needs approving before it exists. */ ""}
-    ${n ? `<p class="panel-sub client-bulk-note" id="client-bulk-note">No bulk email yet. You <em>can</em> write to a client one at a time — open any of their cases and use <strong>✉️ Write to client</strong>, which sends your own subject and message on the firm's template with your sign-off. Sending the same message to a whole selection is a different thing: that is a template going to the firm's book, and it needs a template decision (and sign-off) first.</p>` : ""}`;
-  const all = $("#client-bulk-all");
-  if (all) {
-    all.indeterminate = n > 0 && n < list.length;
-    all.onchange = () => {
+  if (wrap) {
+    /* R73 · B5 — "a 'Select all 0 shown' line is furniture, not a control": the kit returns "" at 0. */
+    const n = clientSel.size;
+    wrap.innerHTML = selectAllHtml({ id: "client-bulk-all", count: list.length, checked: !!n && n === list.length, ariaLabel: "Select every client in this view" });
+    const all = $("#client-bulk-all");
+    if (all) all.onchange = () => {
       if (all.checked) list.forEach((c) => clientSel.add(c.id)); else clientSel.clear();
       loadClients($("#client-search").value);
     };
   }
+  syncClientBulk(list);
+}
+/* The bar: ≤3 verbs (Add task · Export CSV) + Clear. The R8-2/R66 "no bulk email" explanation keeps
+   its id and words but lives in a closed howFold on the bar (prose rule), not a standing paragraph. */
+function clientBulkBarHtml() {
+  return bulkBarHtml({
+    id: "client-bulk-bar", countId: "client-bulk-n", clearId: "client-bulk-clear", count: clientSel.size,
+    ariaLabel: "Actions on the selected clients",
+    verbs: [
+      { id: "client-bulk-task", label: "＋ Add task…", title: "One task per selected client, on that client's case. Says which clients it can and cannot place a task for before it writes anything." },
+      // R42 · F7 — ⭳, the app's one download glyph. Label and id unchanged.
+      { id: "client-bulk-csv", label: "⭳ Export CSV", title: "Download the selected clients as a spreadsheet." },
+    ],
+    /* R8-2 / R66 · M8 — said where someone would look for the verb that isn't here. */
+    extra: howFold({ id: "client-bulk-why", cls: "bulk-why", title: "No bulk email?", html: `<p class="panel-sub client-bulk-note" id="client-bulk-note">No bulk email yet. You <em>can</em> write to a client one at a time — open any of their cases and use <strong>✉️ Write to client</strong>, which sends your own subject and message on the firm's template with your sign-off. Sending the same message to a whole selection is a different thing: that is a template going to the firm's book, and it needs a template decision (and sign-off) first.</p>` }),
+  });
+}
+function wireClientBulkBar() {
+  const bar = $("#client-bulk-bar");
+  if (!bar) return;
   const clearBtn = $("#client-bulk-clear");
+  const why = $("#client-bulk-why");
+  if (why && clearBtn) bar.insertBefore(why, clearBtn);   // the fold reads after the verbs, before Clear
   if (clearBtn) clearBtn.onclick = () => { clientSel.clear(); loadClients($("#client-search").value); };
   const taskBtn = $("#client-bulk-task");
   if (taskBtn) taskBtn.onclick = () => bulkClientAddTask();
   const csvBtn = $("#client-bulk-csv");
   if (csvBtn) csvBtn.onclick = () => bulkClientExportCsv();
 }
+/* In place, no re-render: count, .is-empty on the bar and its dock (0px while empty), and the
+   select-all's checked / indeterminate. `hidden` is kept in step for the suites that read it
+   (r8_touch, r11_ux) — .is-empty is what the kit's zero-height dock keys off. */
+function syncClientBulk(list) {
+  const n = clientSel.size;
+  const bar = $("#client-bulk-bar");
+  if (bar) {
+    bar.classList.toggle("is-empty", !n);
+    bar.hidden = !n;
+    const nEl = $("#client-bulk-n"); if (nEl) nEl.textContent = n;
+    if (!n) { const why = $("#client-bulk-why"); if (why) why.open = false; }
+    const dock = bar.parentElement;
+    if (dock && dock.classList.contains("bulk-dock")) dock.classList.toggle("is-empty", !n);
+  }
+  const all = $("#client-bulk-all");
+  if (all) {
+    all.checked = !!n && n === (list || []).length;
+    all.indeterminate = n > 0 && n < (list || []).length;
+  }
+}
+/* R88 · B (panel 04 #6, 03 #3) — THE TOOLS ROW: 🔍 search · Mine|All · Sort, one kit row rendered
+   into #client-tools once at load (the search box must not be re-created under a typing user). The
+   named-adviser <select> is gone from the UI; #client-adviser stays as a HIDDEN compat control that
+   still carries the value (r33/r38/r64_small/r82 read it). A colleague's or nobody's book — reachable
+   from Retention (gotoClientSegment) or a pre-R88 stored pick — shows as a "✕" chip to leave it. */
+(() => {
+  const slot = $("#client-tools");
+  if (!slot) return;
+  slot.outerHTML = listToolsHtml({
+    id: "client-tools",
+    // R66 · H4 — the box says what it looks at (name, email, phone AND the cases' postcode and lender).
+    search: { id: "client-search", placeholder: "Search name, email, phone, postcode or lender…", ariaLabel: "Search clients by name, email, phone, postcode or lender" },
+    scope: { id: "cl-scope", value: "all", options: ["mine", "all"], ariaLabel: "Whose clients",
+      titles: { mine: "Clients with at least one case assigned to you — remembered for next time", all: "Every client on the book — remembered for next time" } },
+    sort: { id: "cl-sort", value: clientSort, ariaLabel: "Sort the client list",
+      options: [{ value: "name", label: "Name A–Z" }, { value: "rate_end", label: "Next rate end" }, { value: "recent", label: "Recently added" }] },
+    extra: `<button type="button" class="btn btn-sm list-scope-other hidden" id="cl-scope-other"></button>`,
+  });
+  const tools = $("#client-tools");
+  tools.addEventListener("click", (e) => {
+    const b = e.target.closest("button");
+    if (!b) return;
+    if (b.id === "cl-scope-other") { pickClientAdviser("all"); return; }
+    if (!b.dataset.scope) return;
+    const want = b.dataset.scope === "mine" && ME && ME.id ? ME.id : "all";
+    if (want === clientAdviser) return;
+    pickClientAdviser(want);
+  });
+  const segSlot = $("#client-segment-slot");
+  if (segSlot) segSlot.addEventListener("click", (e) => {
+    const b = e.target.closest(".seg-btn");
+    if (!b || !b.dataset.seg || b.dataset.seg === clientSegment) return;
+    clientSegment = b.dataset.seg;
+    loadClients($("#client-search").value);
+  });
+})();
 $("#client-search").addEventListener("input", debounce(() => loadClients($("#client-search").value), 250)); // R18-P2 — read the live value at fire time
 $("#new-client-btn").addEventListener("click", () => openClient(null));
 
+/* R88 · B (panel 03 #6, 04 #10) — the Clients saved-views trio (#client-views / Save / 🗑) is REMOVED:
+   the eight chips already express every starter, and the page remembers its own scope. The
+   capture/apply/refresh functions below stay DORMANT (refreshClientViews is still called by the
+   shared saved-views store and returns at once without its <select>). */
 // R31-B — saved filter views on the Clients page. Captured set is search + adviser + segment +
 // sort (the four filters the list actually reads). Same localStorage store as the board, under
 // the "clients" scope; applying one restores the vars and controls then re-renders the list.
@@ -25143,42 +25756,6 @@ function refreshClientViews() {
     + savedViews("clients").map((v) => `<option value="${esc(v.name)}">${esc(v.name)}</option>`).join("");
   if (cur && savedViews("clients").some((v) => v.name === cur)) sel.value = cur;
 }
-(() => {
-  const sel = $("#client-views"), saveBtn = $("#client-view-save"), delBtn = $("#client-view-del");
-  if (!sel) return;
-  refreshClientViews();
-  sel.addEventListener("change", (e) => {
-    const v = savedViews("clients").find((x) => x.name === e.target.value);
-    if (!v) return;
-    applyClientsFilterState(v.filters);
-    clientSel.clear();
-    loadClients($("#client-search").value);
-  });
-  if (saveBtn) saveBtn.addEventListener("click", () => {
-    const name = prompt("Save current client filters as…");
-    if (name == null) return;
-    const nm = String(name).trim();
-    if (!nm) return;
-    saveView("clients", nm, clientsFilterState());
-    refreshClientViews();
-    sel.value = nm;
-    toast("View saved");
-  });
-  if (delBtn) delBtn.addEventListener("click", async () => {
-    const name = sel.value;
-    if (!name) { toast("Pick a saved view to delete"); return; }
-    // R74 · B3 — house overlay, same as the pipeline's saved-view delete.
-    if (!(await confirmDestructive({
-      title: "Delete this saved view?",
-      body: `<strong>${esc(name)}</strong> — the filters it holds are forgotten. The clients themselves are untouched.`,
-      okLabel: "Delete view", cancelLabel: "Keep it",
-    }))) return;
-    deleteView("clients", name);
-    refreshClientViews();
-    toast("View deleted");
-  });
-})();
-
 /* ---------- R8-2 · BULK ACTIONS ON THE FILTERED SET ----------------------------------------
    TASK TARGETING, HONESTLY. case_tasks.case_id is NOT NULL — the schema has no client-level
    task row, exactly as R6FIX-1 found the schema has no client-level NOTE row. That fix ended
@@ -27545,7 +28122,7 @@ function renderQueueChips(sel, defs, rows, current, onPick, counts) {
   const count = (k) => (counts && counts[k] != null ? counts[k] : rows.filter(queueViewTest(k, list)).length);
   wrap.innerHTML = list.map(([k, label]) => {
     const on = current === k;
-    return `<button type="button" class="seg-btn${on ? " active" : ""}" role="tab" aria-selected="${on}" id="${idBase}${esc(k)}" data-em-status="${esc(k)}">${esc(label)} <span class="seg-count">${count(k)}</span></button>`;
+    return `<button type="button" class="seg-btn${on ? " active" : ""}" aria-pressed="${on}" id="${idBase}${esc(k)}" data-em-status="${esc(k)}">${esc(label)} <span class="seg-count">${count(k)}</span></button>`;
   }).join("");
   wrap.querySelectorAll("[data-em-status]").forEach((b) => (b.onclick = () => {
     if (b.dataset.emStatus === current) return;
@@ -32244,7 +32821,7 @@ function setDiaryViewMode(mode, opts = {}) {
     const b = $(sel);
     if (!b) return;
     b.classList.toggle("scope-active", mode === m);
-    b.setAttribute("aria-selected", mode === m ? "true" : "false");
+    b.setAttribute("aria-pressed", mode === m ? "true" : "false");
   });
   $("#diary-grid").classList.toggle("hidden", mode !== "month");
   /* The adviser-colour legend belongs to any view that colours its blocks by adviser, which is
@@ -38178,7 +38755,7 @@ function renderVaultSegments() {
   const count = (k) => k === "all" ? searched.length : searched.filter((r) => (r.category || "other") === k).length;
   const chips = [["all", "All"]].concat(VAULT_CATS);
   wrap.innerHTML = chips.map(([k, l]) =>
-    `<button class="seg-btn${vaultCategory === k ? " active" : ""}" role="tab" aria-selected="${vaultCategory === k}" data-seg="${esc(k)}">${esc(l)} <span class="seg-count">${count(k)}</span></button>`
+    `<button class="seg-btn${vaultCategory === k ? " active" : ""}" aria-pressed="${vaultCategory === k}" data-seg="${esc(k)}">${esc(l)} <span class="seg-count">${count(k)}</span></button>`
   ).join("");
   wrap.querySelectorAll(".seg-btn").forEach((b) => (b.onclick = () => {
     if (b.dataset.seg === vaultCategory) return;
@@ -38253,7 +38830,7 @@ function vaultCardHtml(r) {
       </div>
       <div class="vault-card-actions">
         <button type="button" class="btn btn-sm vault-edit" data-id="${esc(r.id)}">Edit</button>
-        ${isAdminOrOwner() ? `<details class="vault-more" data-id="${esc(r.id)}" style="position:relative;display:inline-block;"><summary class="btn btn-sm vault-more-btn" role="button" aria-label="More actions for ${esc(r.name || "this entry")}" title="More actions" style="list-style:none;display:inline-flex;">⋯</summary><div class="vault-more-menu" style="position:absolute;right:0;top:calc(100% + 4px);z-index:20;background:#fff;border:1px solid var(--border, #e4e9f0);border-radius:8px;padding:6px;box-shadow:0 6px 18px rgba(0,0,0,.12);min-width:120px;"><button type="button" class="btn btn-sm btn-danger vault-del" data-id="${esc(r.id)}">Delete</button></div></details>` : ""}
+        ${isAdminOrOwner() ? `<details class="vault-more" data-id="${esc(r.id)}"><summary class="btn btn-sm vault-more-btn" role="button" aria-label="More actions for ${esc(r.name || "this entry")}" title="More actions">⋯</summary><div class="vault-more-menu"><button type="button" class="btn btn-sm btn-danger vault-del" data-id="${esc(r.id)}">Delete</button></div></details>` : ""}
       </div>
     </div>
     <div class="vault-fields">${fields.map(vaultFieldHtml).join("") || '<span class="empty">No fields recorded.</span>'}</div>
@@ -38451,6 +39028,6 @@ async function deleteVaultEntry(id) {
 
 /* R81 · A3 — deploy handshake stamp. Every round that edits ANY of index.html / core.js /
    reports-money.js / app.js bumps the tag IN ALL FOUR PLACES (see nxCheckBuildTags above). */
-window.__nxTag_app = "r87";   // R87
+window.__nxTag_app = "r88";   // R88
 
 init();

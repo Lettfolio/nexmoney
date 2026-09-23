@@ -258,18 +258,29 @@ const ringOf = (page, token) => page.evaluate((t) => {
       const fv = css.match(/^[^\n]*:focus-visible[^\n]*\{[^}]*box-shadow[^}]*\}/gm) || [];
       ok("D7 · exactly two focus-ring rules remain: the shared :is(...) rule and its .sidebar variant",
         fv.length === 2 && fv.every((r) => /:is\(button/.test(r)), fv.map((r) => r.slice(0, 70)).join(" | "));
+      /* R88 · E: restored. R88 · C had relaxed this to "no later box-shadow" while the consumer
+         slices' blocks sat after FOCUS; R88 · E moved them back above it, so FOCUS is last again. */
       ok("D8 · the shared rule is the LAST box-shadow rule in the file (so it wins every tie)",
         css.lastIndexOf("box-shadow") > css.lastIndexOf(":is(button") - 10 && css.lastIndexOf(":is(button") > css.length - 600);
-      ok("D9 · .prot-band* rules are still present (slice C removes the bands — left for R88)", /\.prot-band/.test(css));
-      ok("D10 · .card-advance rules are still present (slice B may leave it dead — left for R88)", /\.card-advance/.test(css));
+      /* R88 · fixer (10 D5): was "still present (slice C removes the bands — left for R88)". R88 · C
+         removed the bands (no producer of prot-band anywhere), so the dead rules went and the pin flips. */
+      ok("D9 · .prot-band* rules are gone (the bands died in R88 · C; their CSS in the R88 fixer)", !/\.prot-band/.test(css));
+      /* R88 · E: was "still present (left for R88)". The board's ➜ advance button died in R87; R88 · E
+         deleted its dead CSS, so the pin flips: the rule is gone. */
+      ok("D10 · .card-advance rules are gone (dead since R87, deleted in R88 · E)", !/\.card-advance/.test(css));
       const noneRules = css.match(/\.segment > \.btn \{[^}]*box-shadow: none/);
       ok("D11 · .segment > .btn still resets box-shadow at rest (the segment look is unchanged)", !!noneRules);
       // the classes the file names still exist in the app (nothing live was deleted)
       const src = fs.readFileSync(path.join(REPO, "admin", "index.html"), "utf8") + appJs + fs.readFileSync(path.join(REPO, "admin", "reports-money.js"), "utf8") + fs.readFileSync(path.join(REPO, "admin", "core.js"), "utf8");
       const cssNoComments = css.replace(/\/\*[\s\S]*?\*\//g, "");
       const classes = [...new Set((cssNoComments.replace(/\{[^{}]*\}/g, "{}").match(/\.(-?[_a-zA-Z][-\w]*)/g) || []).map((c) => c.slice(1)))];
-      const dead = classes.filter((c) => !src.includes(c) && !/^(age-|ao-|appt-outcome-|audit-|brief-sec-|doc-chase-|pc-h\d|qrow-|ret-g-|rev-|wt-group-|prot-band)/.test(c));
+      const dead = classes.filter((c) => !src.includes(c) && !/^(age-|ao-|appt-outcome-|audit-|brief-sec-|brief-side-|doc-chase-|pc-h\d|qrow-|ret-g-|rev-|wt-group-)/.test(c));   // R88 · E: + brief-side- (R88 · A's `brief-side-${sev}`); R88 · fixer: − prot-band (deleted)
       ok(`D12 · every class admin.css names is in the app or a documented dynamic family (${classes.length} classes)`, dead.length === 0, dead.join(", "));
+      /* R88 · fixer (10 D5): ids too — the class diff never noticed #unactioned-panel / -list / -sub-line
+         (and #pipe-bulk-sub / -info) outliving their markup. Every #id the file names is in the app. */
+      const ids = [...new Set((cssNoComments.replace(/\{[^{}]*\}/g, "{}").match(/#(-?[_a-zA-Z][-\w]*)/g) || []).map((c) => c.slice(1)))];
+      const deadIds = ids.filter((i) => !src.includes(i));
+      ok(`D12b · every #id admin.css names is in the app (${ids.length} ids)`, ids.length > 50 && deadIds.length === 0, deadIds.join(", "));
     }
 
     /* =====================================================================

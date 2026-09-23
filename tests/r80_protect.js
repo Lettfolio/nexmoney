@@ -287,33 +287,39 @@ const bandOf = (loan) => { const l = Number(loan || 0); return l < 100000 ? 0.7 
         cap: (document.querySelector("#prot-cap-line") || {}).textContent || "",
         capTitle: (document.querySelector("#prot-cap-line") || {}).title || "",
       }));
-      const m = header.cap.match(/best (\d+) of ([\d,]+) opportunities/);
-      ok("B2 · header states the ceiling: “Showing the best 250 of <total> opportunities”",
+      /* R88 · C: the three tiles and this line are ONE line now ("N clients, M opportunities (~£…
+         estimate: …), Q quoted… Best 250 of 1,516; search for the rest.") — same facts, fewer words. */
+      const m = header.cap.match(/Best (\d+) of ([\d,]+)/);
+      ok("B2 · header states the ceiling: “Best 250 of <total>”",
         !!m && Number(m[1]) === CAP && Number(m[2].replace(/,/g, "")) === candidates.length, JSON.stringify(header.cap));
       const wantMoney = await page.evaluate((n) => { try { return fmtM(n); } catch (e) { return null; } }, estSum);
       ok("B3 · …and the ~£ sum matches fixture arithmetic (Σ est_commission over the returned rows)",
-        wantMoney && header.cap.includes(`(~${wantMoney} estimated commission on this page)`), JSON.stringify({ wantMoney, cap: header.cap }));
+        wantMoney && header.cap.includes(`(~${wantMoney} estimate`), JSON.stringify({ wantMoney, cap: header.cap }));   // R88 · C
       ok("B4 · the score is explained in words on the header line's tooltip", /stage urgency|Offer 100/i.test(header.capTitle), header.capTitle.slice(0, 80));
 
-      const order = await page.evaluate(() => [...document.querySelectorAll("#prot-list-table .prot-cb")].map((cb) => cb.dataset.id));
-      const rpcOrder = gt.rows.map((r) => r.case_id);
+      /* R88 · C: ONE ROW PER CLIENT — the checkbox carries the CLIENT id, and the order is each
+         client where their best case ranks (the RPC's score order, first appearance). */
+      const order = await page.evaluate(() => [...document.querySelectorAll("#prot-list .prot-cb")].map((cb) => cb.dataset.id));
+      const rpcOrder = [];
+      gt.rows.forEach((r) => { if (!rpcOrder.includes(r.client_id)) rpcOrder.push(r.client_id); });
       ok("B5 · rank order preserved from the RPC (score desc) — R61 status bands retired",
-        order.length === CAP && order.every((id, i) => id === rpcOrder[i])
+        order.length === rpcOrder.length && order.every((id, i) => id === rpcOrder[i])
         && (await page.evaluate(() => document.querySelectorAll("tr.prot-band").length)) === 0,
         JSON.stringify({ n: order.length, first: order[0], wantFirst: rpcOrder[0] }));
       /* R87 · book (C4, 04 #8): the # column is gone (it was hidden below 1560px — every office
          width); the rank is the small "#1" prefix on the client cell (.prot-rank), same tooltip. */
-      const rankTitle = await page.evaluate(() => (document.querySelector("#prot-list-table tr.prot-row .prot-rank") || {}).title || "");
+      const rankTitle = await page.evaluate(() => (document.querySelector("#prot-list .prot-row .prot-rank") || {}).title || "");   // R88 · C: a row chip
       ok("B6 · the rank's tooltip explains the row's score, not a bare number",
         /#1 — score [\d.]+:/.test(rankTitle) && /stage \d+/.test(rankTitle), rankTitle.slice(0, 90));
-      ok("B6b · the hot planted case ranks FIRST on the page", order[0] === planted.hot, JSON.stringify({ got: order[0], want: planted.hot }));
+      const hotClient = (gt.rows.find((r) => r.case_id === planted.hot) || {}).client_id;   // R88 · C: rows are clients
+      ok("B6b · the hot planted case's client ranks FIRST on the page", order[0] === hotClient, JSON.stringify({ got: order[0], want: hotClient }));
 
       /* keystroke discipline: search, status filter, scope — all 0 network */
       await netReset(page);
       await page.fill("#prot-search", "zinnia");
       await page.waitForTimeout(700);   // past the 250ms debounce
       const searchNet = await netRead(page);
-      const searchRows = await page.evaluate(() => document.querySelectorAll("#prot-list-table tr.prot-row").length);
+      const searchRows = await page.evaluate(() => document.querySelectorAll("#prot-list .prot-row").length);   // R88 · C
       eq("B7 · a search keystroke performs ZERO network calls (session cache)", searchNet.calls, 0);
       ok("B7b · …and the search actually narrowed the table", searchRows === 1, String(searchRows));
       await page.fill("#prot-search", "");
@@ -344,19 +350,21 @@ const bandOf = (loan) => { const l = Number(loan || 0); return l < 100000 ? 0.7 
          §C · A2f — bulk "Queue protection intro to N" (same page)
          ===================================================================== */
       console.log("\n— §C · A2f · bulk queue respects held wording + skips no-email rows, counted (p4)");
+      /* R88 · C: rows are CLIENTS (the checkbox carries the client id) and a ticked client gets ONE
+         intro, never one per case; "no email" is a badge on the fact line (.prot-noemail). */
       const pick = await page.evaluate((nomailId) => {
-        const rows = [...document.querySelectorAll("#prot-list-table tr.prot-row")];
+        const rows = [...document.querySelectorAll("#prot-list .prot-row")];
         const withEmail = [], noEmail = [];
         rows.forEach((tr) => {
           const id = tr.querySelector(".prot-cb").dataset.id;
-          if (tr.querySelector(".prot-actions .badge.grey")) noEmail.push(id); else withEmail.push(id);
+          if (tr.querySelector(".prot-noemail")) noEmail.push(id); else withEmail.push(id);
         });
         // the planted no-email case is deterministic; any other no-email row would also do
         return { withEmail: withEmail.slice(0, 3), noEmail: noEmail.includes(nomailId) ? [nomailId] : noEmail.slice(0, 1) };
-      }, planted.nomail);
+      }, (gt.rows.find((r) => r.case_id === planted.nomail) || {}).client_id);
       ok("C0 · found 3 emailed rows + 1 no-email row to select", pick.withEmail.length === 3 && pick.noEmail.length === 1, JSON.stringify(pick));
       const qBefore = await page.evaluate(async () => (await window.__mockDb.from("email_queue").select("id", { count: "exact", head: true }).eq("email_type", "protection_offer")).count);
-      for (const id of [...pick.withEmail, ...pick.noEmail]) await page.check(`#prot-list-table .prot-cb[data-id="${id}"]`);
+      for (const id of [...pick.withEmail, ...pick.noEmail]) await page.check(`#prot-list .prot-cb[data-id="${id}"]`);
       const holdOn = await page.evaluate(async () => {
         const { data } = await window.__mockDb.from("settings").select("value").eq("key", "email_hold").maybeSingle();
         return String((data || {}).value ?? "on").trim().toLowerCase() !== "off";
@@ -388,29 +396,29 @@ const bandOf = (loan) => { const l = Number(loan || 0); return l < 100000 ? 0.7 
         !!ov && (ov.held === holdOn) && (!holdOn || /Sending is currently ON HOLD \(Settings › Email sending\) — this will queue and wait; nothing is sent now\./.test(ov.heldText)),
         JSON.stringify({ holdOn, heldText: ov && ov.heldText }));
       ok("C3 · the skip is stated with count AND reason before anything queues",
-        !!ov && /1 of the 4 selected cases are skipped/.test(ov.skips) && /no email address on file/.test(ov.skips), ov && ov.skips);
+        !!ov && /1 of the 4 selected clients are skipped/.test(ov.skips)   /* R88 · C: clients, not cases */ && /no email address on file/.test(ov.skips), ov && ov.skips);
       ok("C4 · the confirm button names the real count", !!ov && /Queue 3 emails/.test(ov.goLabel), ov && ov.goLabel);
       await page.click("#prot-bulk-intro-go");
       await page.waitForTimeout(2500);
       const qAfter = await page.evaluate(async (p) => {
         const { data } = await window.__mockDb.from("email_queue").select("id,case_id,client_id,email_type,to_email").eq("email_type", "protection_offer").order("created_at", { ascending: false }).limit(10);
-        return (data || []).filter((r) => p.withEmail.includes(r.case_id) || p.noEmail.includes(r.case_id));
+        return (data || []).filter((r) => p.withEmail.includes(r.client_id) || p.noEmail.includes(r.client_id));   // R88 · C: by client
       }, pick);
-      ok("C5 · exactly the 3 emailed clients got a protection_offer queue row; the no-email case got NONE",
-        qAfter.length === 3 && qAfter.every((r) => pick.withEmail.includes(r.case_id) && r.to_email), JSON.stringify(qAfter.map((r) => r.case_id)));
+      ok("C5 · exactly the 3 emailed clients got ONE protection_offer queue row each; the no-email client got NONE",
+        qAfter.length === 3 && qAfter.every((r) => pick.withEmail.includes(r.client_id) && r.to_email) && new Set(qAfter.map((r) => r.client_id)).size === 3, JSON.stringify(qAfter.map((r) => r.client_id)));
       const qCount = await page.evaluate(async () => (await window.__mockDb.from("email_queue").select("id", { count: "exact", head: true }).eq("email_type", "protection_offer")).count);
       eq("C6 · net new protection_offer rows = 3", qCount - qBefore, 3);
       /* held honesty at bulk scale: the fixture hold is ON (the state production lives in), so
          the scoped run must send NOTHING and every row must STAY queued. */
       ok("C6b · the email hold is ON in this suite (the fixture default — nothing turned it off)", holdOn === true, String(holdOn));
       const heldState = await page.evaluate(async (p) => {
-        const { data } = await window.__mockDb.from("email_queue").select("case_id,status").eq("email_type", "protection_offer");
-        return [...new Set((data || []).filter((r) => p.withEmail.includes(r.case_id)).map((r) => r.status))];
+        const { data } = await window.__mockDb.from("email_queue").select("case_id,client_id,status").eq("email_type", "protection_offer");
+        return [...new Set((data || []).filter((r) => p.withEmail.includes(r.client_id)).map((r) => r.status))];   // R88 · C: by client
       }, pick);
       eq("C6c · held = STAYS QUEUED: every bulk-queued row's status is 'queued' (nothing sent under the hold)", heldState, ["queued"]);
       const selCleared = await waitFor(page, () => {
         const bar = document.querySelector("#prot-bulk-bar");
-        return bar && bar.hidden ? true : null;
+        return bar && bar.classList.contains("is-empty") ? true : null;   // R88 · C: the kit bar empties, it is not hidden
       });
       ok("C7 · the selection is cleared after the run", !!selCleared, "");
 
@@ -422,36 +430,37 @@ const bandOf = (loan) => { const l = Number(loan || 0); return l < 100000 ? 0.7 
       await page.waitForTimeout(1500);
       await page.click("#prot-scope-all");
       await page.waitForTimeout(500);
+      /* R88 · C: RE-POINTED. The GI band is a CHIP on the one list now (#prot-segs, data-seg="gi"),
+         counting CLIENTS (one row per client); its definition is the chip's title; the empty state
+         is the house emptyState over that chip. Same predicate, same cached rows, same score order. */
       const giGt = await page.evaluate(async () => {
         const { data } = await window.__mockDb.rpc("get_protection_pipeline", { p_scope: "all" });
-        const GI_KINDS = ["purchase", "first_time_buyer", "buy_to_let", "remortgage"];
-        const want = (data || []).filter((r) => GI_KINDS.includes(r.case_kind) && (r.gi_status || "not_discussed") === "not_discussed");
+        const want = (data || []).filter((r) => caseGiApplies(r.case_kind) && (r.gi_status || "not_discussed") === "not_discussed");
+        const chip = document.querySelector('#prot-segs .seg-btn[data-seg="gi"]');
         return {
-          wantCount: want.length, firstName: (want[0] || {}).client_name,
-          count: Number(document.querySelector("#prot-gi-count").textContent),
-          items: document.querySelectorAll("#prot-gi-list .row-item").length,
-          firstShown: (document.querySelector("#prot-gi-list .row-item .t") || {}).textContent || "",
-          basis: (document.querySelector("#prot-gi-basis") || {}).textContent || "",
-          hidden: document.querySelector("#prot-gi-panel").classList.contains("hidden"),
+          wantCount: new Set(want.map((r) => r.client_id)).size, firstName: (want[0] || {}).client_name,
+          count: Number((chip.querySelector(".seg-count") || {}).textContent), title: chip.title,
         };
       });
-      ok("D1 · the GI band renders with the fixture-true count (gi not_discussed · GI-applicable kind, within the pipeline)",
-        !giGt.hidden && giGt.count === giGt.wantCount && giGt.wantCount > 0, JSON.stringify(giGt));
-      ok("D2 · capped at 25 visible rows, in the pipeline's own score order (best first)",
-        giGt.items === Math.min(25, giGt.wantCount) && giGt.firstShown === giGt.firstName, JSON.stringify({ shown: giGt.firstShown, want: giGt.firstName }));
-      ok("D3 · the basis says it costs no extra network and names the cap when it bites",
-        /no extra reads/.test(giGt.basis) && /best-250/.test(giGt.basis), giGt.basis.slice(0, 140));
-      const giRowVerb = await page.evaluate(() => {
-        const row = document.querySelector("#prot-gi-list .row-item");
-        return row ? [...row.querySelectorAll("button")].map((b) => b.textContent.trim()) : [];
-      });
-      ok("D4 · each GI row carries the Log-call verb", giRowVerb.some((t) => /Log call/.test(t)), JSON.stringify(giRowVerb));
+      await page.evaluate(() => document.querySelector('#prot-segs .seg-btn[data-seg="gi"]').click());
+      await page.waitForTimeout(700);
+      const giShown = await page.evaluate(() => ({
+        items: document.querySelectorAll("#prot-list .prot-row").length,
+        firstShown: (document.querySelector("#prot-list .prot-row .row-head > .t") || {}).textContent || "",
+        verbs: [...(document.querySelector("#prot-list .prot-row .row-acts") || { querySelectorAll: () => [] }).querySelectorAll("button")].map((b) => b.textContent.trim()),
+      }));
+      ok("D1 · the GI chip carries the fixture-true count (gi not_discussed · GI-applicable kind, within the pipeline — distinct clients)",
+        giGt.count === giGt.wantCount && giGt.wantCount > 0, JSON.stringify(giGt));
+      ok("D2 · pressing it lists exactly those clients, in the pipeline's own score order (best first)",
+        giShown.items === giGt.wantCount && giShown.firstShown === giGt.firstName, JSON.stringify({ shown: giShown, want: giGt.firstName }));
+      ok("D3 · the chip's title says what it counts", /GI/.test(giGt.title) && /never started/.test(giGt.title) && /product transfer/.test(giGt.title), giGt.title.slice(0, 140));
+      ok("D4 · each GI row carries the Log-call verb", giShown.verbs.some((t) => /Log call/.test(t)), JSON.stringify(giShown.verbs));
       const giEmpty = await page.evaluate(() => {
-        renderProtGiBand([], false);   // the renderer, fed a clean book
-        const t = (document.querySelector("#prot-gi-list .empty") || {}).textContent || "";
-        return t;
+        renderProtectionPage(Object.assign({}, protCache, { rows: protCache.rows.filter((r) => !protBandGi(r)) }));   // a clean book
+        return (document.querySelector("#prot-table .empty-state") || {}).textContent || "";
       });
-      ok("D5 · honest empty state when the band is clean", /Every GI-applicable case in this scope has its GI conversation recorded/.test(giEmpty), giEmpty);
+      ok("D5 · honest empty state (the house one) when the chip is clean", /No protection or GI opportunities in this view/.test(giEmpty), giEmpty);
+      await page.evaluate(() => document.querySelector('#prot-segs .seg-btn[data-seg="all"]').click());
       await page.evaluate(() => loadProtectionPage());   // repaint the real state
       await page.waitForTimeout(600);
 
@@ -460,8 +469,7 @@ const bandOf = (loan) => { const l = Number(loan || 0); return l < 100000 ? 0.7 
          ===================================================================== */
       console.log("\n— §E · A2e · 📞 Log call opens the ONE openLogCallModal overlay (p4)");
       await page.evaluate(() => {
-        const btn = [...document.querySelectorAll("#prot-list-table .prot-actions button")]
-          .find((b) => /Log a call/.test(b.getAttribute("aria-label") || "") || /Log call/.test(b.textContent));
+        const btn = document.querySelector("#prot-list .prot-row .row-acts .prot-logcall");   // R88 · C: the kit verb "📝 Log call"
         btn.click();
       });
       const modal = await waitFor(page, () => {
@@ -486,25 +494,27 @@ const bandOf = (loan) => { const l = Number(loan || 0); return l < 100000 ? 0.7 
          §E2 · A1c — the quick-sets WRITE (db.from → audit trigger) and repaint
          ===================================================================== */
       console.log("\n— §E2 · A1c · status quick-sets write through db.from, repaint, and leave an AUDIT row (p4)");
+      /* R88 · C: RE-POINTED. The row's Status… select moved INSIDE 📝 Log call (#prot-logcall-prot,
+         same .prot-status-set class, same setProtStatus write). Picking a status there closes the
+         overlay and writes; the row's badge for that case repaints. */
       const qsTarget = await page.evaluate(() => {
-        const tr = [...document.querySelectorAll("#prot-list-table tr.prot-row")]
-          .find((r) => { const b = r.querySelector(".prot-col-status .badge"); return b && b.textContent.trim() === "NOT DISCUSSED" && r.querySelector(".prot-status-set"); });
-        return tr ? tr.querySelector(".prot-cb").dataset.id : null;
+        const f = [...document.querySelectorAll("#prot-list .prot-row")].map((r) => r.querySelector(".prot-fact-case"))
+          .find((c) => c && (c.querySelector(".prot-status-badge") || {}).textContent === "NOT DISCUSSED");
+        return f ? f.dataset.case : null;
       });
       ok("E4 · found a NOT DISCUSSED row to quick-set", !!qsTarget, String(qsTarget));
-      await page.evaluate((id) => {
-        const sel = [...document.querySelectorAll("#prot-list-table tr.prot-row")]
-          .find((r) => r.querySelector(`.prot-cb[data-id="${id}"]`)).querySelector(".prot-status-set");
+      await page.evaluate((id) => { protLogCall(id); }, qsTarget);
+      await waitFor(page, () => document.querySelector("#prot-logcall-prot") ? true : null);
+      await page.evaluate(() => {
+        const sel = document.querySelector("#prot-logcall-prot.prot-status-set");
         sel.value = "discussed";
         sel.dispatchEvent(new Event("change"));
-      }, qsTarget);
+      });
       const repainted = await waitFor(page, (id) => {
-        const tr = [...document.querySelectorAll("#prot-list-table tr.prot-row")]
-          .find((r) => r.querySelector(`.prot-cb[data-id="${id}"]`));
-        const b = tr && tr.querySelector(".prot-col-status .badge");
-        return b && b.textContent.trim() === "DISCUSSED" ? true : null;
+        const c = document.querySelector(`#prot-list .prot-fact-case[data-case="${id}"] .prot-status-badge`);
+        return c && c.textContent.trim() === "DISCUSSED" ? true : null;
       }, qsTarget);
-      ok("E5 · the write repaints the page — the row's badge now reads DISCUSSED", !!repainted, "");
+      ok("E5 · the write repaints the page — that case's badge now reads DISCUSSED", !!repainted, "");
       const qsProof = await page.evaluate(async (id) => {
         const db = window.__mockDb;
         const { data: c } = await db.from("cases").select("protection_status").eq("id", id).single();
@@ -518,22 +528,23 @@ const bandOf = (loan) => { const l = Number(loan || 0); return l < 100000 ? 0.7 
         && JSON.stringify(qsProof.aud.changes || {}).includes('"discussed"'), JSON.stringify(qsProof.aud));
 
       /* the GI band's own quick-set: closes the row out of the band, audited the same way */
+      /* R88 · C: the GI quick-set lives in the same overlay (#prot-logcall-gi, .prot-gi-set); the
+         GI chip's rows are the old band's. Setting n/a closes the case out of that chip. */
+      await page.evaluate(() => document.querySelector('#prot-segs .seg-btn[data-seg="gi"]').click());
+      await page.waitForTimeout(600);
       const giTarget = await page.evaluate(() => {
-        const btn = document.querySelector("#prot-gi-list .row-item button[onclick^=\"protLogCall\"]");
-        return btn ? (btn.getAttribute("onclick").match(/'([^']+)'/) || [])[1] : null;
+        const btn = document.querySelector("#prot-list .prot-row .row-acts .prot-logcall");
+        return btn ? (btn.getAttribute("onclick").match(/protLogCall\('([^']+)'/) || [])[1] : null;
       });
-      ok("E8 · found a GI-band row to quick-set", !!giTarget, String(giTarget));
-      await page.evaluate((id) => {
-        const sel = [...document.querySelectorAll("#prot-gi-list .row-item .prot-gi-set")]
-          .find((s) => (s.getAttribute("onchange") || "").includes(id));
+      ok("E8 · found a GI-chip row to quick-set", !!giTarget, String(giTarget));
+      await page.evaluate((id) => { protLogCall(id); }, giTarget);
+      await waitFor(page, () => document.querySelector("#prot-logcall-gi") ? true : null);
+      await page.evaluate(() => {
+        const sel = document.querySelector("#prot-logcall-gi.prot-gi-set");
         sel.value = "not_applicable";
         sel.dispatchEvent(new Event("change"));
-      }, giTarget);
-      const giGone = await waitFor(page, (id) => {
-        const still = [...document.querySelectorAll("#prot-gi-list .row-item .prot-gi-set")]
-          .some((s) => (s.getAttribute("onchange") || "").includes(id));
-        return still ? null : true;
-      }, giTarget);
+      });
+      const giGone = await waitFor(page, (id) => document.querySelector(`#prot-list .prot-fact-case[data-case="${id}"]`) ? null : true, giTarget);
       const giProof = await page.evaluate(async (id) => {
         const db = window.__mockDb;
         const { data: c } = await db.from("cases").select("gi_status").eq("id", id).single();
@@ -551,7 +562,7 @@ const bandOf = (loan) => { const l = Number(loan || 0); return l < 100000 ? 0.7 
       const dialogsBefore = page.__dialogs.length;
       const qRowsBefore = await page.evaluate(async () => (await window.__mockDb.from("email_queue").select("id", { count: "exact", head: true }).eq("email_type", "protection_offer")).count);
       await page.evaluate(() => {
-        const btn = [...document.querySelectorAll("#prot-list-table .prot-actions button")].find((b) => b.textContent.trim() === "Email");
+        const btn = document.querySelector("#prot-list .prot-row .row-acts .prot-email");   // R88 · C: the kit verb
         btn.click();
       });
       const emailOv = await waitFor(page, () => {

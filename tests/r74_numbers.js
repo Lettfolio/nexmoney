@@ -155,7 +155,7 @@ const retGroups = (page) => page.$$eval("#ret-rates-list .ret-group-h", (els) =>
 })));
 const retChipAll = (page) => page.$eval("#ret-month-chips .ret-month-chip[data-month='all']", (e) => ({
   label: e.textContent.replace(/\s+/g, " ").trim(),
-  n: Number((e.querySelector(".count") || {}).textContent || 0),
+  n: Number((e.querySelector(".seg-count") || {}).textContent || 0),   // R88 · C: the kit chip's count is .seg-count
 }));
 
 (async () => {
@@ -570,12 +570,14 @@ const retChipAll = (page) => page.$eval("#ret-month-chips .ret-month-chip[data-m
       const errBefore = realErrs(page).length;
       await goPage(page, "reports", 3800);
 
+      /* R88 · E: was aria-selected (role=tab); the section pills are aria-pressed toggle buttons in a
+         role=group now (they are a segment control, not a tab panel) — the live state is the same. */
       const sections = await page.$$eval("#reports-jump-chips .seg-btn", (els) => els.map((e) => ({
-        key: e.dataset.reportsJump, label: e.textContent.trim(), active: e.classList.contains("active"), sel: e.getAttribute("aria-selected"),
+        key: e.dataset.reportsJump, label: e.textContent.trim(), active: e.classList.contains("active"), sel: e.getAttribute("aria-pressed"),
       })));
       ok("§D2a · the section pills are on the page", sections.length >= 4, JSON.stringify(sections.map((s) => s.key)));
       eq("§D2b · exactly one is selected", sections.filter((s) => s.active).length, 1);
-      eq("§D2c · aria-selected is a live state, not a hard-coded false", sections.filter((s) => s.sel === "true").length, 1);
+      eq("§D2c · aria-pressed is a live state, not a hard-coded false", sections.filter((s) => s.sel === "true").length, 1);
 
       const totalPanels = await page.evaluate(() => window.__r74AllRepChips ? window.__r74AllRepChips() : null);
       const perSection = [];

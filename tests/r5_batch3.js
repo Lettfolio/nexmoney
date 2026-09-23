@@ -380,7 +380,11 @@ const openDrawer = async (page, panelId) => {
          the FIRST ".brief-row button" in document order can be one that is folded away and
          therefore not clickable. The assertion is about the Owner's row offering the link, which
          is a PRIMARY row; say so in the selector. */
-      await owner.click("#briefing-list .brief-row:not(.brief-subrow) > button:has-text('Open Settings')");
+      /* R88 · merge — the one worklist is longer, so the first fee row can now sit past
+         BRIEF_BAND_CAP inside the band's closed "Show the other N items" fold (details.brief-fold),
+         where Playwright rightly refuses to click it. The assertion is that a VISIBLE Owner row
+         offers the link and it goes to Settings — so click the first visible one. */
+      await owner.click("#briefing-list .brief-row:not(.brief-subrow) > button:has-text('Open Settings') >> visible=true");
       await owner.waitForTimeout(900);
       ok("R5-28 · …and the link goes there", await owner.evaluate(() => !document.querySelector("#page-settings").classList.contains("hidden")));
       ok("no console errors", !owner.__err, JSON.stringify(owner.__err));

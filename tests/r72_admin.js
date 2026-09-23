@@ -207,7 +207,9 @@ const openWatchtower = async (page) => {
   });
   // Whole-firm scope: this file's seeded alerts hang off cases owned by several advisers, and
   // "Mine" would hide the ones that are not the viewer's.
-  if (await page.$("#wt-scope-all")) { await page.click("#wt-scope-all"); }
+  /* R88 · fixer: was a click on #wt-scope-all — that toggle is hidden now (the Checks drawer follows
+     My Day's Mine|All), so the whole-firm scope is set where it lives: My Day's All. */
+  if (await page.$("#brief-scope-all")) { await page.click("#brief-scope-all"); }
   await wait(page, 900);
 };
 const wtState = (page) => page.evaluate(() => {

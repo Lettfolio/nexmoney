@@ -118,7 +118,8 @@ function monthYmd(offset, day) {
 const daysFrom = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
 
 const pageRowIds = (page) => page.evaluate(() =>
-  [...document.querySelectorAll("#ret-rates-list .row-item .t[onclick]")]
+  /* R88 · C: the kit row's NAME opens the client; the CASE is the chip (.ret-case-chip). */
+  [...document.querySelectorAll("#ret-rates-list .row-item .ret-case-chip[onclick]")]
     .map((el) => (el.getAttribute("onclick").match(/openCase\('([^']+)'\)/) || [])[1]).filter(Boolean));
 
 async function selectRows(page, ids) {
@@ -170,7 +171,8 @@ async function selectRows(page, ids) {
 
     const bar0 = await page.evaluate(() => {
       const b = document.getElementById("ret-bulk-bar");
-      return { exists: !!b, hidden: b ? b.hidden : null, cbs: document.querySelectorAll("#ret-rates-list .ret-cb").length, selall: !!document.getElementById("ret-bulk-all") };
+      /* R88 · C: the kit's bar is always in the DOM, docked, and .is-empty (zero-height) at 0 — "hidden" reads that. */
+      return { exists: !!b, hidden: b ? b.classList.contains("is-empty") : null, cbs: document.querySelectorAll("#ret-rates-list .ret-cb").length, selall: !!document.getElementById("ret-bulk-all") };
     });
     ok("§A1a · every rate row carries a .ret-cb checkbox", bar0.cbs === (await pageRowIds(page)).length && bar0.cbs > 0, JSON.stringify(bar0));
     ok("§A1b · a 'select all shown' checkbox sits above the list", bar0.selall);
@@ -178,7 +180,7 @@ async function selectRows(page, ids) {
 
     await selectRows(page, [ended1.caseId]);
     const bar1 = await page.evaluate(() => ({
-      hidden: document.getElementById("ret-bulk-bar").hidden,
+      hidden: document.getElementById("ret-bulk-bar").classList.contains("is-empty"),
       n: document.getElementById("ret-bulk-n").textContent,
       verbs: ["ret-bulk-rate", "ret-bulk-retention", "ret-bulk-task", "ret-bulk-clear"].filter((i) => !!document.getElementById(i)),
     }));
@@ -188,7 +190,7 @@ async function selectRows(page, ids) {
 
     await page.click("#ret-bulk-clear");
     await page.waitForTimeout(1600);
-    const bar2 = await page.evaluate(() => ({ hidden: document.getElementById("ret-bulk-bar").hidden, checked: document.querySelectorAll("#ret-rates-list .ret-cb:checked").length }));
+    const bar2 = await page.evaluate(() => ({ hidden: document.getElementById("ret-bulk-bar").classList.contains("is-empty"), checked: document.querySelectorAll("#ret-rates-list .ret-cb:checked").length }));
     ok("§A1g · Clear empties the selection and hides the bar again", bar2.hidden === true && bar2.checked === 0, JSON.stringify(bar2));
 
     await page.click("#ret-bulk-all");
@@ -225,7 +227,7 @@ async function selectRows(page, ids) {
     ok("§A2c · …and both source cases are stamped as reminded", stamped.every((c) => !!c.rate_reminder_queued_at), JSON.stringify(stamped.map((c) => c.rate_reminder_queued_at)));
     const untouched = await rowsOf(page, "email_queue", "case_id", [farOut.caseId, hasSucc.caseId]);
     eq("§A2d · nothing was queued for the two cases that were NOT selected", untouched.length, 0);
-    const selAfter = await page.evaluate(() => ({ hidden: document.getElementById("ret-bulk-bar").hidden, checked: document.querySelectorAll("#ret-rates-list .ret-cb:checked").length }));
+    const selAfter = await page.evaluate(() => ({ hidden: document.getElementById("ret-bulk-bar").classList.contains("is-empty"), checked: document.querySelectorAll("#ret-rates-list .ret-cb:checked").length }));
     ok("§A2e · the selection is cleared and the page repainted after the verb", selAfter.hidden === true && selAfter.checked === 0, JSON.stringify(selAfter));
 
     /* --- 🔁 Start retention cases, with both skips in the selection --- */
@@ -295,7 +297,7 @@ async function selectRows(page, ids) {
     const oldEnd = await mk("Longended", { rate_end_date: monthYmd(-14), property_address: "14 R64 Month Rd, Testtown TE6 5AE" });
 
     await goRetention(page, 2400);
-    const chips = await page.evaluate(() => [...document.querySelectorAll("#ret-month-chips .ret-month-chip")].map((b) => ({ k: b.dataset.month, label: b.textContent.replace(/\s+/g, " ").trim(), on: b.classList.contains("scope-active") })));
+    const chips = await page.evaluate(() => [...document.querySelectorAll("#ret-month-chips .ret-month-chip")].map((b) => ({ k: b.dataset.month, label: b.textContent.replace(/\s+/g, " ").trim(), on: b.getAttribute("aria-pressed") === "true" })));   // R88 · C: kit chips (aria-pressed)
     /* R70 · A1 PATCH — was five chips ("ended,this,next,3mo,all"). Two lapsed WINDOWS were added
        between "Ended" and "This month" ("Ended · last 3 months" / "Ended · last 12 months"),
        because "Ended" on the real book is 593 rows back to 2017 and the 137 that lapsed in the
@@ -378,7 +380,7 @@ async function selectRows(page, ids) {
     await goRetention(page, 2400);
     const after = await page.evaluate(() => ({
       stored: localStorage.getItem("nx_ret_month"),
-      on: [...document.querySelectorAll("#ret-month-chips .ret-month-chip")].filter((b) => b.classList.contains("scope-active")).map((b) => b.dataset.month),
+      on: [...document.querySelectorAll("#ret-month-chips .ret-month-chip")].filter((b) => b.getAttribute("aria-pressed") === "true").map((b) => b.dataset.month),   // R88 · C
       sub: document.getElementById("ret-rates-sub").textContent,
     }));
     eq("§B5b · …and survives a reload", after.stored, "next");
@@ -403,7 +405,7 @@ async function selectRows(page, ids) {
 
     const rowBits = await page.evaluate((o) => {
       const row = (id) => [...document.querySelectorAll("#ret-rates-list .row-item")]
-        .find((r) => (r.querySelector(".t[onclick]") || {}).getAttribute && r.querySelector(".t[onclick]").getAttribute("onclick").includes(`'${id}'`));
+        .find((r) => r.querySelector(`.ret-cb[data-id="${id}"]`));   // R88 · C: the case id rides on the row's checkbox
       const r1 = row(o.a), r2 = row(o.b);
       const tel = r1 && r1.querySelector(".ret-row-tel a[href^='tel:']");
       return {
@@ -496,7 +498,7 @@ async function selectRows(page, ids) {
     await goRetention(page, 2400);
     /* R87 · book (C3): Book review sits behind the row's "More ▾" (a native <details>) — open it
        first; the button, its class and its handler are unchanged. */
-    await page.evaluate(() => document.querySelectorAll("#ret-rates-list details.ret-row-more").forEach((d) => { d.open = true; }));
+    await page.evaluate(() => document.querySelectorAll("#ret-rates-list details.row-more").forEach((d) => { d.open = true; }));
     await page.click(`#ret-rates-list button[onclick*="retBookReview('${withPhone.caseId}')"]`);
     await page.waitForTimeout(2000);
     const prefill = await page.evaluate(() => {
@@ -559,43 +561,27 @@ async function selectRows(page, ids) {
     ok("§D1c · no drawer row carries the Log call / Book review chips", drawer && drawer.logcall === 0 && drawer.book === 0, JSON.stringify(drawer && { l: drawer.logcall, b: drawer.book }));
     ok("§D1d · no bulk bar leaks into the drawer", drawer && drawer.bar === false);
 
+    /* R88 · C: RE-POINTED. §D2 compared the page row to the drawer row byte for byte (with the R64
+       additions lifted out). The page row is the list KIT's row now (name → client, the case a chip,
+       ≤3 verbs), so the bytes differ by design; what must still be the same is the STORY — the
+       one fact line both surfaces build with the same helper (rateErcFactHtml: lender · rate · ends ·
+       ERC) and the same dial pair on the same number. The drawer's own markup is still pinned above
+       (§D1) and in r38 §C / r87_today. */
     await goRetention(page, 2400);
     const pageRow = await page.evaluate((id) => {
-      const row = [...document.querySelectorAll("#ret-rates-list .row-item")]
-        .find((r) => (r.querySelector(".t[onclick]") || {}).getAttribute && r.querySelector(".t[onclick]").getAttribute("onclick").includes(`'${id}'`));
+      const row = [...document.querySelectorAll("#ret-rates-list .row-item")].find((r) => r.querySelector(`.ret-cb[data-id="${id}"]`));
       if (!row) return null;
-      const clone = row.cloneNode(true);
-      /* R70 · B2 (merge-time patch, one selector) — `.ret-row-lastc` joins the two R64 page-only
-         elements this parity check has always lifted out. The "last contact 3 days ago (LR)" /
-         "never contacted" clause is deliberately PAGE-ONLY: rendering it needs the five scoped
-         comms reads in lastContactByClient(), which a fifteen-row morning glance does not earn.
-         The tel:/sms: pair, by contrast, is on BOTH surfaces from R70 on, so it is NOT stripped —
-         it is compared, byte for byte, like everything else. No assertion is weakened: the whole
-         row is still compared, and a row that differs anywhere else still fails. */
-      clone.querySelectorAll(".ret-cb, .ret-row-acts, .ret-row-lastc").forEach((n) => n.remove());
-      clone.classList.remove("is-sel");
-      return { main: clone.querySelector(".row-main").innerHTML, html: clone.outerHTML };
+      return { fact: row.querySelector(".row-fact").textContent, tel: (row.querySelector("a[href^='tel:']") || {}).href || null, sms: (row.querySelector("a[href^='sms:']") || {}).href || null };
     }, both.caseId);
-    /* The lender favicon's onerror handler writes style="display:none" at runtime, on whichever
-       surface has been on screen longest — normalised out so this compares MARKUP, not timing.
-
-       R69 · B1/L3 — that handler now REMOVES the failed <img> instead of hiding it, and remembers
-       the domain so later paints emit none at all. The timing skew this line has always existed to
-       absorb is therefore structural rather than an attribute: whichever of the two surfaces was
-       painted before the favicon failed still carries the whole <img class="lfav">, and the one
-       painted after carries nothing. So the tag itself is normalised out of BOTH sides — the same
-       normalisation this line already performed, one level up. Nothing else is relaxed: every
-       other byte of both rows is still compared, and a row that differs anywhere else still
-       fails. */
-    const norm = (s) => String(s || "")
-      .replace(/ style="display: none;"/g, "")
-      .replace(/<img class="lfav"[^>]*>/g, "");
-    ok("§D2a · with the R64 additions removed, the page row's body is byte-identical to the drawer's",
-      !!pageRow && !!drawer && norm(pageRow.main) === norm(drawer.main),
-      JSON.stringify({ page: norm(pageRow && pageRow.main).slice(0, 220), drawer: norm(drawer && drawer.main).slice(0, 220) }));
-    ok("§D2b · …and so is the whole row element",
-      !!pageRow && !!drawer && norm(pageRow.html) === norm(drawer.html),
-      JSON.stringify({ page: norm(pageRow && pageRow.html).slice(0, 260), drawer: norm(drawer && drawer.html).slice(0, 260) }));
+    const drawerFact = await page.evaluate((html) => {
+      const d = document.createElement("div"); d.innerHTML = html;
+      const s = d.querySelector(".row-main > .s"); s.querySelectorAll(".rate-money").forEach((n) => n.remove());
+      return { fact: s.textContent.trim(), tel: (d.querySelector("a[href^='tel:']") || {}).href || null, sms: (d.querySelector("a[href^='sms:']") || {}).href || null };
+    }, drawer ? drawer.html : "<div></div>");
+    ok("§D2a · the page row's fact line opens with exactly the drawer's fact (same helper, same words)",
+      !!pageRow && !!drawer && pageRow.fact.trim().startsWith(drawerFact.fact), JSON.stringify({ page: pageRow && pageRow.fact.slice(0, 160), drawer: drawerFact.fact.slice(0, 160) }));
+    ok("§D2b · …and both offer the same dial pair on the same number",
+      !!pageRow && !!pageRow.tel && pageRow.tel === drawerFact.tel && pageRow.sms === drawerFact.sms, JSON.stringify({ page: pageRow, drawer: drawerFact }));
     ok("§D · no console errors", realErrs(page).length === 0, realErrs(page).slice(0, 3).join(" | "));
     await page.close();
   }
@@ -610,7 +596,7 @@ async function selectRows(page, ids) {
     const seen = await page.evaluate(() => ({
       chips: document.querySelectorAll("#ret-month-chips .ret-month-chip").length,
       bar: !!document.getElementById("ret-bulk-bar"),
-      barHidden: document.getElementById("ret-bulk-bar") ? document.getElementById("ret-bulk-bar").hidden : null,
+      barHidden: document.getElementById("ret-bulk-bar") ? document.getElementById("ret-bulk-bar").classList.contains("is-empty") : null,
       selall: !!document.getElementById("ret-bulk-all"),
     }));
     eq(`§E · ${persona} sees the seven month chips`, seen.chips, 7);   // R70 · A1 — five + the two lapsed windows

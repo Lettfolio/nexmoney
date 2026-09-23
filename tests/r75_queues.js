@@ -433,9 +433,11 @@ async function analyse(page, csv) {
       const errBefore = realErrs(page).length;
       await goto(page, "retention", 3000);
 
-      const chips = await page.evaluate(() => [...document.querySelectorAll("#ret-outcome-funnel .ret-outcome-chip")].map((c) => ({
+      /* R88 · C: the four chips are on the page's ONE strip (#ret-segs, segmentChipsHtml) — same
+         data-outcome / data-n, the kit's .seg-btn button family, .active for pressed. */
+      const chips = await page.evaluate(() => [...document.querySelectorAll("#ret-segs .ret-outcome-chip")].map((c) => ({
         tag: c.tagName, outcome: c.dataset.outcome, n: Number(c.dataset.n),
-        pressed: c.getAttribute("aria-pressed"), btn: c.classList.contains("btn"),
+        pressed: c.getAttribute("aria-pressed"), btn: c.classList.contains("seg-btn"),
       })));
       eq("C1 · the four chips are still there, still carrying data-outcome and data-n",
         chips.map((c) => c.outcome), ["retained", "renewed_elsewhere", "sold", "none"]);
@@ -463,12 +465,12 @@ async function analyse(page, csv) {
         groups: [...document.querySelectorAll("#ret-rates-list .ret-group-h")].map((h) => h.className),
         book: window.__r74RateBookCounts ? "exposed" : "missing",
       }));
-      await page.click('#ret-outcome-funnel .ret-outcome-chip[data-outcome="none"]');
+      await page.click('#ret-segs .ret-outcome-chip[data-outcome="none"]');
       await page.waitForTimeout(2200);
       const after = await page.evaluate(() => ({
         rows: document.querySelectorAll("#ret-rates-list .row-item").length,
         pressed: document.querySelector('.ret-outcome-chip[data-outcome="none"]').getAttribute("aria-pressed"),
-        active: document.querySelector('.ret-outcome-chip[data-outcome="none"]').classList.contains("scope-active"),
+        active: document.querySelector('.ret-outcome-chip[data-outcome="none"]').classList.contains("active"),   // R88 · C: kit chip
         notice: (() => { const n = document.getElementById("ret-outcome-filter-note"); return n && !n.hidden ? n.textContent.replace(/\s+/g, " ").trim() : null; })(),
         groups: [...document.querySelectorAll("#ret-rates-list .ret-group-h")].map((h) => h.className),
         outcomes: [...document.querySelectorAll("#ret-rates-list .row-item")].map((r) => {
@@ -487,7 +489,7 @@ async function analyse(page, csv) {
         /Filtered to/.test(after.notice || "") && /Show everything/.test(after.notice || ""), after.notice);
 
       // C4 — toggling off.
-      await page.click('#ret-outcome-funnel .ret-outcome-chip[data-outcome="none"]');
+      await page.click('#ret-segs .ret-outcome-chip[data-outcome="none"]');
       await page.waitForTimeout(2200);
       const cleared = await page.evaluate(() => ({
         rows: document.querySelectorAll("#ret-rates-list .row-item").length,
@@ -518,6 +520,9 @@ async function analyse(page, csv) {
       const page = await boot(browser, "p4");
       const errBefore = realErrs(page).length;
       await goto(page, "retention", 3000);
+      // R88 · C: the Gone-quiet panel is the "Gone quiet" chip on the rates list — press it.
+      await page.evaluate(() => document.querySelector('#ret-segs .seg-btn[data-seg="cold"]').click());
+      await page.waitForTimeout(2200);
 
       const cold = await page.evaluate(() => {
         const sub = document.getElementById("ret-cold-sub").textContent;
@@ -916,6 +921,8 @@ async function analyse(page, csv) {
       ok("G1b · …and is a comfortable target", phoneZone.h >= 44, String(phoneZone.h));
       ok("G1c · the Import page does not scroll sideways at 390px", phoneZone.overflow === false);
       await goto(page, "retention", 3200);
+      await page.evaluate(() => document.querySelector('#ret-segs .seg-btn[data-seg="cold"]').click());   // R88 · C
+      await page.waitForTimeout(2200);
       const phoneCold = await page.evaluate(() => {
         const chips = [...document.querySelectorAll("#ret-cold-list .ret-logcall-chip")];
         return {

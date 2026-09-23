@@ -213,8 +213,12 @@ const hasFirmLevelGroup = (groups) => groups.some((k) => FIRM_RULES.some((r) => 
       ok("A1e · every rendered row's case is genuinely assigned to p2 (verified via the mock db)", notMine.length === 0, JSON.stringify(notMine));
       ok("A1f · no firm-level (case-less) rule group is showing in Mine scope", !hasFirmLevelGroup(mine1.groups), JSON.stringify(mine1.groups));
 
-      console.log("\n— A2 · clicking All reveals other advisers' cases, still no firm-level rows, and persists immediately");
-      await page.click("#wt-scope-all");
+      /* R88 · fixer (10 1k): the drawer's own Mine|All is hidden — the Checks drawer follows My Day's
+         toggle (one scope on Today). Was a click on #wt-scope-all and a persisted nx_wt_scope; now the
+         press is My Day's All, the hidden #wt-scope-* mirror it, and nothing is remembered (My Day's
+         scope never was — R12b · W-7). */
+      console.log("\n— A2 · My Day's All reveals other advisers' cases in the drawer, still no firm-level rows");
+      await page.click("#brief-scope-all");
       await wait(page, 500);
       const all1 = await watchtowerState(page);
       const allNonSynth = all1.rows.filter((r) => !r.synth);
@@ -227,13 +231,14 @@ const hasFirmLevelGroup = (groups) => groups.some((k) => FIRM_RULES.some((r) => 
       const someoneElse = (allOwners || []).some((c) => c.assigned_to !== "p2");
       ok("A2a · All scope shows at least one case NOT assigned to p2", someoneElse, JSON.stringify(allOwners));
       ok("A2b · …and still shows no firm-level rule group (adviser, both scopes)", !hasFirmLevelGroup(all1.groups), JSON.stringify(all1.groups));
-      eq("A2c · the choice is written to localStorage immediately", await lsGetPage(page, "nx_wt_scope"), "all");
+      const mirror = await page.evaluate(() => ({ all: document.getElementById("wt-scope-all").getAttribute("aria-pressed"), hidden: !document.getElementById("wt-scope-all").checkVisibility() }));
+      ok("A2c · the drawer's hidden #wt-scope-all mirrors My Day's All (pressed), and no nx_wt_scope is written", mirror.all === "true" && mirror.hidden && (await lsGetPage(page, "nx_wt_scope")) === null, JSON.stringify(mirror));
 
-      console.log("\n— A3 · a reload keeps All (persisted choice beats the role default)");
+      console.log("\n— A3 · a reload returns to My Day's role default (Mine for an adviser) — R88 · fixer: was 'keeps All'");
       await page.reload();
       await wait(page, SETTLE);
-      const afterReload = await page.evaluate(() => document.getElementById("wt-scope-all").classList.contains("scope-active"));
-      ok("A3 · #wt-scope-all is still active after a reload", afterReload);
+      const afterReload = await page.evaluate(() => document.getElementById("wt-scope-mine").classList.contains("scope-active") && document.getElementById("brief-scope-mine").classList.contains("scope-active"));
+      ok("A3 · after a reload the drawer and My Day are both on Mine again (one scope, not remembered)", afterReload);
 
       console.log("\n— A4 · clearing nx_wt_scope + reload restores the Mine default");
       await clearKey(page, "nx_wt_scope");
@@ -358,7 +363,7 @@ const hasFirmLevelGroup = (groups) => groups.some((k) => FIRM_RULES.some((r) => 
       eq("C1b · #diary-staff defaults to p2's own id on a fresh load", await page.evaluate(() => document.getElementById("diary-staff").value), "p2");
 
       await goto(page, "pipeline");
-      await page.selectOption("#board-adviser", "all");
+      await page.click("#board-scope-all");   // R88 · B: was selectOption on the (now hidden compat) adviser select — scope is the kit Mine|All(|Unassigned) toggle
       await wait(page, 300);
       await page.reload();
       await wait(page, SETTLE);
@@ -413,7 +418,7 @@ const hasFirmLevelGroup = (groups) => groups.some((k) => FIRM_RULES.some((r) => 
       await wait(page, SETTLE);
       await goto(page, "pipeline");
 
-      await page.selectOption("#board-adviser", "all");
+      await page.click("#board-scope-all");   // R88 · B: was selectOption on the (now hidden compat) adviser select — scope is the kit Mine|All(|Unassigned) toggle
       await wait(page, 300);
       const viewName = "r34-view-" + Date.now();
       await page.evaluate((nm) => { window.prompt = () => nm; }, viewName);
@@ -421,7 +426,7 @@ const hasFirmLevelGroup = (groups) => groups.some((k) => FIRM_RULES.some((r) => 
       await wait(page, 400);
 
       // Move the live filter away from "all" so applying the view is the only thing that can put it back.
-      await page.selectOption("#board-adviser", "p3");
+      await page.$eval("#board-adviser", (e, v) => { e.value = v; e.dispatchEvent(new Event("change")); }, "p3");   // R88 · B: was selectOption on the (now hidden compat) adviser select — scope is the kit Mine|All(|Unassigned) toggle
       await wait(page, 300);
       eq("C3a · #board-adviser now reads p3, and that is what's stored", await page.evaluate(() => document.getElementById("board-adviser").value), "p3");
       eq("C3a2 · …persisted too", await lsGetPage(page, "nx_board_adviser_p2"), "p3");   // PATCHED R82 · A4

@@ -106,7 +106,8 @@ async function newPage(browser, persona) {
     const d = await page.evaluate(() => ({
       rows: document.querySelectorAll("#ret-rates-list .row-item").length,
       tel: document.querySelectorAll('#ret-rates-list a[href^="tel:"]').length,
-      props: document.querySelectorAll("#ret-rates-list .row-prop").length,
+      // R88 · C: the property is named on the row's CASE chip (.ret-case-chip — kit rows carry no .row-prop pill).
+      props: [...document.querySelectorAll("#ret-rates-list .ret-case-chip")].filter((c) => /\d/.test(c.textContent)).length,
     }));
     ok("D1 · rows render", d.rows > 0, JSON.stringify(d));
     ok("D2 · at least one tel: link (fixture clients have phones)", d.tel > 0, JSON.stringify(d));

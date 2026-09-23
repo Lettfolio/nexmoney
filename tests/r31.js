@@ -273,7 +273,7 @@ async function readinessItems(page) {
 
       const SEARCH_1 = "r31-pipeline-probe-alpha";
       await page.fill("#board-search", SEARCH_1);
-      await page.selectOption("#board-adviser", "unassigned");
+      await page.click("#board-scope-unassigned");   // R88 · B: was selectOption on the (now hidden compat) adviser select — scope is the kit Mine|All(|Unassigned) toggle
       await stubDialogs(page);
       await page.click("#board-view-save");
       await wait(page, 400);
@@ -293,7 +293,7 @@ async function readinessItems(page) {
 
       // Change the live filters away from the saved values…
       await page.fill("#board-search", "some other text entirely");
-      await page.selectOption("#board-adviser", "all");
+      await page.click("#board-scope-all");   // R88 · B: was selectOption on the (now hidden compat) adviser select — scope is the kit Mine|All(|Unassigned) toggle
       await wait(page, 400);
       const changedBefore = await page.$eval("#board-search", (e) => e.value);
       eq("B1g · sanity — the search box really did change before restoring", changedBefore, "some other text entirely");
@@ -334,40 +334,23 @@ async function readinessItems(page) {
       await presetEmptyViews(page);
       await goto(page, "clients");
 
+      /* R88 · B (panel 03 #6 / 04 #10) — CONTRACT CHANGE. Was: Save/select/Delete round-trip on the
+         Clients #client-views trio. The trio is REMOVED from the Clients page (the eight chips express
+         every starter; the page remembers its own scope). The pipeline trio (B1) is untouched. What is
+         pinned now: the three controls are gone, and the dormant data path (clientsFilterState /
+         applyClientsFilterState, savedViews("clients")) still exists and still round-trips. */
       const SEARCH_2 = "r31-clients-probe-beta";
+      const gone = await page.evaluate(() => ["client-views", "client-view-save", "client-view-del"].filter((id) => document.getElementById(id)));
+      eq("B2a · the Clients saved-views trio is gone (R88 · B)", gone, []);
       await page.fill("#client-search", SEARCH_2);
-      await stubDialogs(page);
-      await page.click("#client-view-save");
       await wait(page, 400);
-
-      const optsAfterSave = await page.$$eval("#client-views option", (os) => os.map((o) => o.value));
-      ok("B2a · a new option 'My view' appears in #client-views after Save", optsAfterSave.indexOf("My view") !== -1, JSON.stringify(optsAfterSave));
-
-      // R43 · non-masking repair — same reasoning as B1c: a fresh clients load under
-      // presetEmptyViews() settles into DB mode, so this Save landed in the table.
-      const rowsAfterSave = await tableView(page, "clients", "My view");
-      ok("B2b · saved_views holds exactly one clients row named 'My view'", rowsAfterSave.length === 1, JSON.stringify(rowsAfterSave));
-      const savedView = rowsAfterSave[0];
-      eq("B2c · saved view's name is 'My view'", savedView && savedView.name, "My view");
-      eq("B2d · saved view captured the search box's live value", savedView && savedView.filters && savedView.filters.search, SEARCH_2);
-
-      // Restore proof, lighter than pipeline's: change the box, select the view, confirm restore.
-      await page.fill("#client-search", "something else");
-      await page.selectOption("#client-views", "My view");
-      await wait(page, 500);
-      const restored = await page.$eval("#client-search", (e) => e.value);
-      eq("B2e · selecting the saved view restores #client-search", restored, SEARCH_2);
-
-      await page.click("#client-view-del");
-      await wait(page, 400);
-      /* R74: same house-overlay answer as the pipeline delete above. */
-      if (await page.$("#ovl-confirm-ok")) { await page.click("#ovl-confirm-ok"); await wait(page, 500); }
-      const optsAfterDel = await page.$$eval("#client-views option", (os) => os.map((o) => o.value));
-      eq("B2f · #client-views no longer offers 'My view' after Delete", optsAfterDel.indexOf("My view"), -1);
-      // R43 · non-masking repair — same reasoning as B1k.
-      const rowsAfterDel = await tableView(page, "clients", "My view");
-      eq("B2g · saved_views no longer holds a clients row named 'My view' after Delete", rowsAfterDel.length, 0);
-
+      const dormant = await page.evaluate((q) => {
+        const st = clientsFilterState();
+        document.querySelector("#client-search").value = "something else";
+        applyClientsFilterState(st);
+        return { captured: st.search, restored: document.querySelector("#client-search").value, store: Array.isArray(savedViews("clients")) };
+      }, SEARCH_2);
+      ok("B2b · the dormant capture/apply path still round-trips the search box, and savedViews(\"clients\") still answers", dormant.captured === SEARCH_2 && dormant.restored === SEARCH_2 && dormant.store, JSON.stringify(dormant));
       ok("B2 · no console errors", noNewErr(page, errBefore), JSON.stringify(page.__err));
       await page.close();
     }
@@ -387,8 +370,9 @@ async function readinessItems(page) {
 
       const boardViewsSel = await page.$("#board-views");
       ok("B3a · #board-views still renders with a corrupt store", !!boardViewsSel);
-      const clientViewsSel = await page.$("#client-views");
-      ok("B3b · #client-views still renders with a corrupt store", !!clientViewsSel);
+      // R88 · B: was "#client-views still renders" — the Clients trio is removed; the Clients page must still render its list.
+      const clientListOk = await page.$("#client-list .client-row, #client-list .empty-state");
+      ok("B3b · the Clients list still renders with a corrupt store", !!clientListOk);
       const boardOpts = await page.$$eval("#board-views option", (os) => os.map((o) => o.value));
       eq("B3c · #board-views degrades to just the placeholder (no crash, no phantom views)", boardOpts, [""]);
 

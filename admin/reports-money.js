@@ -3067,11 +3067,11 @@ function buildReportSectionNav() {
   // One button is not navigation, it is decoration — the same guard #rep-nav uses.
   if (live.length < 2) { wrap.innerHTML = ""; bar.hidden = true; return; }
   /* R74 · A4c — these pills SELECT as well as jump: the chip strip below is scoped to the chosen
-     section. aria-selected is now a live state rather than a permanent "false". */
+     section. aria-pressed (R88 · E: was aria-selected) is a live state rather than a permanent "false". */
   repSectionItems = live;
   if (!live.some((x) => x.key === repSectionActive)) repSectionActive = live[0].key;
   wrap.innerHTML = live.map((s) =>
-    `<button type="button" class="seg-btn${s.key === repSectionActive ? " active" : ""}" id="reports-nav-${esc(s.key)}" role="tab" aria-selected="${s.key === repSectionActive}" data-reports-jump="${esc(s.key)}" title="Show the ${esc(s.label)} panels and jump to them">${esc(s.label)}</button>`).join("")
+    `<button type="button" class="seg-btn${s.key === repSectionActive ? " active" : ""}" id="reports-nav-${esc(s.key)}" aria-pressed="${s.key === repSectionActive}" data-reports-jump="${esc(s.key)}" title="Show the ${esc(s.label)} panels and jump to them">${esc(s.label)}</button>`).join("")
     /* R87 · owner-admin (05 #12) — the door to the per-panel chips. NOT a tab (no role, no
        data-reports-jump), so the pill count r74 §D2 reads is untouched. */
     + `<button type="button" class="btn btn-sm btn-ghost rep-chips-toggle" id="reports-jump-toggle" aria-controls="rep-nav" aria-expanded="${repChipsWanted ? "true" : "false"}" onclick="repToggleChips()" title="Show or hide the strip of one chip per panel in the selected section">${repChipsWanted ? "Panels ▴" : "Panels ▾"}</button>`;
@@ -3105,7 +3105,7 @@ function repSetSection(key, opts) {
   document.querySelectorAll("#reports-jump-chips [data-reports-jump]").forEach((b) => {
     const on = b.dataset.reportsJump === key;
     b.classList.toggle("active", on);
-    b.setAttribute("aria-selected", on ? "true" : "false");
+    b.setAttribute("aria-pressed", on ? "true" : "false");
   });
   buildReportsJumpNav();
   if (!(opts && opts.quiet)) measureRepJumpOffsets();
@@ -3925,7 +3925,7 @@ async function renderReferralsOut(all, mv) {
     const b = $("#report-ref-scope-" + k);
     if (!b) return;
     b.classList.toggle("active", refOutScope === k);
-    b.setAttribute("aria-selected", refOutScope === k ? "true" : "false");
+    b.setAttribute("aria-pressed", refOutScope === k ? "true" : "false");
     b.onclick = () => { refOutScope = k; renderReferralsOut(all, mv); };
   });
   if (basisEl) {
@@ -6398,4 +6398,4 @@ async function r44ConfirmTicked() {
 
 /* R81 · A3 — deploy handshake stamp. Every round that edits ANY of index.html / core.js /
    reports-money.js / app.js bumps the tag IN ALL FOUR PLACES (see nxCheckBuildTags in app.js). */
-window.__nxTag_reportsmoney = "r87";   // R87
+window.__nxTag_reportsmoney = "r88";   // R88

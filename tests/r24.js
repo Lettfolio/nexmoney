@@ -464,7 +464,7 @@ async function readTableRow(page, fullName) {
       // case is deliberately assigned to p3 (proving the RENDER is correct regardless of who is
       // looking, not that p2 owns it), so p2's own default would hide it entirely. Pinned to "all",
       // same real-UI-action fix as tests/r18.js's board-cap block.
-      await pageC.selectOption("#board-adviser", "all");
+      await pageC.click("#board-scope-all");   // R88 · B: was selectOption on the (now hidden compat) adviser select — scope is the kit Mine|All(|Unassigned) toggle
       await wait(pageC, 300);
       const card = await readCard(pageC, ins.caseId);
       ok("C1 · the kitchen-sink card is present on the board for an adviser", !!card, ins.caseId);

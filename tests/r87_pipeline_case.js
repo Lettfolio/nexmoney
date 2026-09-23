@@ -289,6 +289,9 @@ const cardSelect = (page, id, to) => page.evaluate(({ id, to }) => {
       eq("D2 · …and the tab reads “<Client name> · NexMoney Back Office”", open.title, `${c.name} · NexMoney Back Office`);
       ok("D3 · a ⧉ Copy link control sits in the case header (the h3 still reads “Case”)", open.copy && open.h3 === "Case", JSON.stringify(open));
       await page.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin: `http://localhost:${PORT}` });
+      /* R88 · D: was a button beside the "Case" heading, now the first item in Actions ▾ (same id,
+         same handler) because the case's first screen is held to ≤14 controls (panel 02 #5). */
+      if (!(await page.isVisible("#cs-copy-link"))) await page.click("#cs-sticky-actions #case-more-actions-toggle");
       await page.click("#cs-copy-link");
       await wait(page, 500);
       const copied = await page.evaluate(async () => { try { return await navigator.clipboard.readText(); } catch (e) { return "ERR " + e.message; } });

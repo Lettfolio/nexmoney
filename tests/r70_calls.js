@@ -140,7 +140,9 @@ async function mkClientCase(page, opts) {
 
 const rowFor = (page, sel, caseId) => page.evaluate(({ s, id }) => {
   const row = [...document.querySelectorAll(`${s} .row-item`)]
-    .find((r) => { const t = r.querySelector(".t[onclick]"); return t && t.getAttribute("onclick").includes(`'${id}'`); });
+    /* R88 · C: on the Retention page the NAME opens the client and the case is a chip (.ret-case-chip);
+       Today's drawer still names the case on .t — either carries the case id. */
+    .find((r) => { const t = r.querySelector(".ret-case-chip[onclick], .t[onclick*='openCase']"); return t && t.getAttribute("onclick").includes(`'${id}'`); });
   if (!row) return null;
   const tel = row.querySelector("a[href^='tel:']");
   const sms = row.querySelector("a[href^='sms:']");
@@ -158,7 +160,7 @@ const rowFor = (page, sel, caseId) => page.evaluate(({ s, id }) => {
 }, { s: sel, id: caseId });
 
 const retRowIds = (page) => page.evaluate(() =>
-  [...document.querySelectorAll("#ret-rates-list .row-item .t[onclick]")]
+  [...document.querySelectorAll("#ret-rates-list .row-item .ret-case-chip[onclick]")]   // R88 · C: the case is the chip
     .map((el) => (el.getAttribute("onclick").match(/openCase\('([^']+)'\)/) || [])[1]).filter(Boolean));
 
 const notesFor = (page, caseId) => page.evaluate(async (id) => {
@@ -359,19 +361,23 @@ const caseRow = (page, caseId) => page.evaluate(async (id) => {
     ok("B2b · …carrying the note author's initials", w1 && /\(LR\)$/.test(w1.lastc || ""), JSON.stringify(w1));
     eq("B2c · an SB-IMPORT provenance note is NOT contact (R47 Gate 0, unchanged)", i1 && i1.lastc, "· never contacted");
 
-    // B3 — the toggle. It re-orders and NEVER hides.
+    /* B3 — R88 · C: RE-POINTED. The toggle chip is a SORT OPTION now (#ret-sort "untouched", 04 #2e);
+       its count is said in the rates panel's fold ("N of the M rows are clients nobody has
+       contacted…"). Same behaviour: it re-orders and NEVER hides, and it is remembered. */
     const chip = await page.evaluate(() => {
-      const b = document.querySelector("#ret-untouched-btn");
-      return b ? { on: b.getAttribute("aria-pressed"), count: Number((b.querySelector(".count") || {}).textContent), text: b.textContent.replace(/\s+/g, " ").trim(), note: (document.querySelector(".ret-untouched-note") || {}).textContent } : null;
+      const s = document.querySelector("#ret-sort");
+      const o = s && s.querySelector('option[value="untouched"]');
+      const m = /(\d+) of the \d+ rows? are clients nobody has contacted/.exec((document.getElementById("ret-rates-basis") || {}).textContent || "");
+      return o ? { on: s.value === "untouched" ? "true" : "false", count: m ? Number(m[1]) : 0, text: o.textContent } : null;
     });
-    ok("B3a · the page carries a 'Never contacted first' toggle, off by default",
+    ok("B3a · the Sort select carries 'Never contacted first', off by default",
       !!chip && chip.on === "false" && /Never contacted first/.test(chip.text), JSON.stringify(chip));
     // Ground truth, computed here: which of the rows on screen have no contact of any kind.
     const truthNever = await page.evaluate(async () => {
       const db = window.__mockDb;
       const win = 210 * 86400000;                       // ≥ the app's comms window at the 6-month default
       const since = Date.now() - win;
-      const ids = [...document.querySelectorAll("#ret-rates-list .row-item .t[onclick]")]
+      const ids = [...document.querySelectorAll("#ret-rates-list .row-item .ret-case-chip[onclick]")]   // R88 · C
         .map((el) => (el.getAttribute("onclick").match(/openCase\('([^']+)'\)/) || [])[1]).filter(Boolean);
       const { data: cases } = await db.from("cases").select("id,client_id");
       const byId = {}; (cases || []).forEach((c) => { byId[c.id] = c.client_id; });
@@ -393,10 +399,10 @@ const caseRow = (page, caseId) => page.evaluate(async (id) => {
       });
       return out.length;
     });
-    eq("B3b · the chip's count matches an independently computed 'never contacted' set", chip && chip.count, truthNever);
+    eq("B3b · the fold's count matches an independently computed 'never contacted' set", chip && chip.count, truthNever);
 
     const before = await retRowIds(page);
-    await page.click("#ret-untouched-btn");
+    await page.selectOption("#ret-sort", "untouched");   // R88 · C: was a click on #ret-untouched-btn
     await page.waitForTimeout(2600);
     const after = await retRowIds(page);
     eq("B3c · the toggle is a SORT, not a filter — the same rows, all of them", after.slice().sort(), before.slice().sort());
@@ -409,8 +415,8 @@ const caseRow = (page, caseId) => page.evaluate(async (id) => {
     await page.reload({ waitUntil: "networkidle" });
     await page.waitForTimeout(1600);
     await goPage(page, "retention", 3000);
-    const pressedAfterReload = await page.$eval("#ret-untouched-btn", (b) => b.getAttribute("aria-pressed")).catch(() => null);
-    eq("B3f · …and restored after a reload", pressedAfterReload, "true");
+    const pressedAfterReload = await page.$eval("#ret-sort", (b) => b.value).catch(() => null);   // R88 · C
+    eq("B3f · …and restored after a reload", pressedAfterReload, "untouched");
 
     // B4 — the drawer deliberately does NOT carry the clause (it would cost five reads).
     await goPage(page, "dashboard", 2800);
@@ -453,7 +459,7 @@ const caseRow = (page, caseId) => page.evaluate(async (id) => {
 
     // C2 — "Renewed elsewhere" opens R58's overlay on the renewed radio.
     /* R87 · book (C3): the outcome chips sit behind the row's "More ▾" <details>; open them first. */
-    const openMore = () => page.evaluate(() => document.querySelectorAll("#ret-rates-list details.ret-row-more").forEach((d) => { d.open = true; }));
+    const openMore = () => page.evaluate(() => document.querySelectorAll("#ret-rates-list details.row-more").forEach((d) => { d.open = true; }));
     await openMore();
     await page.click(`#ret-rates-list button[onclick*="retRateOutcome('${done.caseId}','renewed')"]`);
     await page.waitForTimeout(1500);
@@ -622,17 +628,24 @@ const caseRow = (page, caseId) => page.evaluate(async (id) => {
     ok("E0 · fixture — thirty quiet product-transfer cases seeded", seeded.length === 30, String(seeded.length));
     await goPage(page, "dashboard", 3600);
 
+    /* R88 · A: the radar is part of My Day. Each quiet case is ONE element carrying data-radar
+       (its own Worth doing row, or a sub-line on the case's existing My Day row) with its R70 order
+       as data-radar-rank; the "…and N more" tail sits at the foot of the band; the every-quiet-case
+       count is #briefing-list's data-radar-total (the radar has no panel heading of its own). Was:
+       #unactioned-list .row-item (DOM order) and #unactioned-panel .count. */
     const radar = await page.evaluate(() => {
-      const rows = [...document.querySelectorAll("#unactioned-list .row-item")];
+      const units = [...document.querySelectorAll("#briefing-list .brief-row[data-radar]")]
+        .sort((a, b) => Number(a.dataset.radarRank) - Number(b.dataset.radarRank));
+      const rowOf = (u) => u.closest(".brief-row");
       return {
-        rows: rows.length,
-        ids: rows.map((r) => ((r.querySelector(".t[onclick]") || { getAttribute: () => "" }).getAttribute("onclick").match(/openCase\('([^']+)'\)/) || [])[1]),
-        rateLines: rows.filter((r) => r.querySelector(".unactioned-rate")).length,
-        tels: rows.filter((r) => r.querySelector("a[href^='tel:']")).length,
-        smss: rows.filter((r) => r.querySelector("a[href^='sms:']")).length,
-        more: (document.querySelector("#unactioned-list .unactioned-more") || {}).textContent || "",
-        count: (document.querySelector("#unactioned-panel .count") || {}).textContent || "",
-        firstRate: (document.querySelector("#unactioned-list .unactioned-rate") || {}).textContent || "",
+        rows: units.length,
+        ids: units.map((u) => u.dataset.radar),
+        rateLines: units.filter((u) => u.querySelector(".unactioned-rate")).length,
+        tels: units.filter((u) => rowOf(u).querySelector("a[href^='tel:']")).length,
+        smss: units.filter((u) => rowOf(u).querySelector("a[href^='sms:']")).length,
+        more: (document.querySelector("#briefing-list .unactioned-more") || {}).textContent || "",
+        count: document.getElementById("briefing-list").getAttribute("data-radar-total") || "",
+        firstRate: (units[0] && units[0].querySelector(".unactioned-rate") || {}).textContent || "",
       };
     });
     eq("E1a · the radar is capped at 25 rows (L1 — it was the last uncapped list on Today)", radar.rows, 25);
@@ -682,7 +695,7 @@ const caseRow = (page, caseId) => page.evaluate(async (id) => {
     await goPage(page, "dashboard", 2600);
     await goPage(page, "retention", 2800);
     const seen = await page.evaluate(() => ({
-      toggle: !!document.querySelector("#ret-untouched-btn"),
+      toggle: !!document.querySelector('#ret-sort option[value="untouched"]'),   // R88 · C: a Sort option now
       clauses: document.querySelectorAll("#ret-rates-list .ret-row-lastc").length,
       rows: document.querySelectorAll("#ret-rates-list .row-item").length,
     }));

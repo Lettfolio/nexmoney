@@ -159,6 +159,9 @@ const openCase = async (page, caseId) => {
   // R33 — scoped to #modal: Settings' new #diag-details shares the `.case-details` styling class
   // and, being static markup, is always in the DOM — an unscoped selector now matches it first.
   await page.evaluate(() => { const d = document.querySelector("#modal .case-details"); if (d) d.open = true; });
+  /* R88 · D: was — the Stage checklist rendered open under Tasks; now it is a collapsed fold under
+     History (panel 02 #5). Opened here like Case details, so its + Add / + Add all are clickable. */
+  await page.evaluate(() => { const d = document.querySelector("#modal #case-fold-checklist"); if (d) d.open = true; });
 };
 
 const readCase = (page, caseId) => page.evaluate(async (id) => {
@@ -189,6 +192,11 @@ const openDrawer = async (page, panelId) => {
   if (collapsed) { await page.click(`${panelId} h3`, { position: { x: 12, y: 10 } }); await wait(page, 300); }
 };
 
+/* R88 · A — THE RADAR IS PART OF MY DAY. Its panel (#unactioned-list) is gone; a quiet case is a
+   Worth doing row on My Day (or, when the case already has a My Day row, a sub-line on it), and
+   every such row carries data-radar. This reads the same thing the old list's textContent did:
+   the text of every row the radar put on Today. */
+const radarText = (page) => page.evaluate(() => [...document.querySelectorAll("#briefing-list .brief-row[data-radar]")].map((r) => r.textContent).join(" \n "));
 /* ---------------------------------------------------------------------------
    Independent re-implementation of the R17 SPEC, never imported from app.js.
    ------------------------------------------------------------------------- */
@@ -436,30 +444,32 @@ const isoDaysAgo = (n) => new Date(Date.now() - n * DAY_MS).toISOString();
       // C1 — a genuinely quiet live case (no tasks, no notes, no events) appears on the radar.
       const c1 = await mkQuietCase(page, { first: "Radar", last: "Quiet", case_kind: "purchase", stage: "application", assigned_to: "p2" });
       await goto(page, "dashboard", 1200);
-      let listTxt = await page.$eval("#unactioned-list", (e) => e.textContent);
+      let listTxt = await radarText(page)   /* R88 · A: was #unactioned-list */;
       ok("C1 · a fresh quiet live case appears on the radar", listTxt.includes("Radar Quiet"), listTxt.slice(0, 120));
-      const badge = await page.$$eval("#unactioned-list .row-item", (els) =>
-        els.find((e) => e.textContent.includes("Radar Quiet")) ? "found" : "missing");
+      /* R88 · A: was a .row-item of #unactioned-list containing the name; now the My Day row for
+         that case, whose badge (or radar sub-line) says NO NEXT ACTION. */
+      const badge = await page.$$eval("#briefing-list .brief-row[data-radar]", (els) =>
+        els.find((e) => e.textContent.includes("Radar Quiet") && /NO NEXT ACTION|No next action/.test(e.textContent)) ? "found" : "missing");
       eq("C1 · …carrying the NO NEXT ACTION badge", badge, "found");
 
       // C2 — adding an OPEN task removes it from the radar.
       await page.evaluate((caseId) => window.__mockDb.from("case_tasks").insert({ case_id: caseId, title: "Call client", due_date: null }), c1.caseId);
       await goto(page, "dashboard", 1200);
-      listTxt = await page.$eval("#unactioned-list", (e) => e.textContent);
+      listTxt = await radarText(page)   /* R88 · A: was #unactioned-list */;
       ok("C2 · once an open task exists, the case drops off the radar", !listTxt.includes("Radar Quiet"), listTxt.slice(0, 120));
 
       // C2b — a DONE task (done_at set) does not count as "having a next action" — still quiet.
       const c2b = await mkQuietCase(page, { first: "Radar", last: "OnlyDoneTask", case_kind: "purchase", stage: "application", assigned_to: "p2" });
       await page.evaluate((caseId) => window.__mockDb.from("case_tasks").insert({ case_id: caseId, title: "Old task", due_date: null, done_at: new Date().toISOString() }), c2b.caseId);
       await goto(page, "dashboard", 1200);
-      listTxt = await page.$eval("#unactioned-list", (e) => e.textContent);
+      listTxt = await radarText(page)   /* R88 · A: was #unactioned-list */;
       ok("C2b · a task that is already DONE does not count — the case is still quiet", listTxt.includes("Radar OnlyDoneTask"), listTxt.slice(0, 200));
 
       // C3 — a case with a RECENT note (no tasks, no events) is excluded.
       const c3 = await mkQuietCase(page, { first: "Radar", last: "RecentNote", case_kind: "purchase", stage: "application", assigned_to: "p2" });
       await page.evaluate((caseId) => window.__mockDb.from("case_notes").insert({ case_id: caseId, body: "Called client, still deciding." }), c3.caseId);
       await goto(page, "dashboard", 1200);
-      listTxt = await page.$eval("#unactioned-list", (e) => e.textContent);
+      listTxt = await radarText(page)   /* R88 · A: was #unactioned-list */;
       ok("C3 · a case with a recent note does NOT appear on the radar", !listTxt.includes("Radar RecentNote"), listTxt.slice(0, 120));
 
       // C3b — boundary: a note 8 days old is stale (case still quiet); a note 6 days old is recent
@@ -469,7 +479,7 @@ const isoDaysAgo = (n) => new Date(Date.now() - n * DAY_MS).toISOString();
       const c3fresh = await mkQuietCase(page, { first: "Radar", last: "Note6dOld", case_kind: "purchase", stage: "application", assigned_to: "p2" });
       await page.evaluate(({ caseId, when }) => window.__mockDb.from("case_notes").insert({ case_id: caseId, body: "recent-ish note", created_at: when }), { caseId: c3fresh.caseId, when: isoDaysAgo(6) });
       await goto(page, "dashboard", 1200);
-      listTxt = await page.$eval("#unactioned-list", (e) => e.textContent);
+      listTxt = await radarText(page)   /* R88 · A: was #unactioned-list */;
       ok("C3b · an 8-day-old note is stale — the case IS quiet", listTxt.includes("Radar Note8dOld"), listTxt.slice(0, 300));
       ok("C3b · a 6-day-old note is still recent — the case is NOT quiet", !listTxt.includes("Radar Note6dOld"), listTxt.slice(0, 300));
 
@@ -477,7 +487,7 @@ const isoDaysAgo = (n) => new Date(Date.now() - n * DAY_MS).toISOString();
       for (const stage of ["completed", "not_proceeding"]) {
         const c = await mkQuietCase(page, { first: "Radar", last: "Terminal" + stage, case_kind: "purchase", stage, assigned_to: "p2" });
         await goto(page, "dashboard", 1200);
-        listTxt = await page.$eval("#unactioned-list", (e) => e.textContent);
+        listTxt = await radarText(page)   /* R88 · A: was #unactioned-list */;
         ok(`C4 · a quiet ${stage} case never appears on the radar`, !listTxt.includes("Radar Terminal" + stage), listTxt.slice(0, 120));
       }
 
@@ -491,7 +501,7 @@ const isoDaysAgo = (n) => new Date(Date.now() - n * DAY_MS).toISOString();
       const mine = await mkQuietCase(page, { first: "Radar", last: "ScopeMineP2", case_kind: "purchase", stage: "application", assigned_to: "p2" });
       const notMine = await mkQuietCase(page, { first: "Radar", last: "ScopeOtherP3", case_kind: "purchase", stage: "application", assigned_to: "p3" });
       await goto(page, "dashboard", 1200);
-      let selfTxt = await page.$eval("#unactioned-list", (e) => e.textContent);
+      let selfTxt = await radarText(page)   /* R88 · A: was #unactioned-list */;
       ok("C5 · adviser p2 sees their OWN quiet case", selfTxt.includes("Radar ScopeMineP2"), selfTxt.slice(0, 300));
       ok("C5 · …but NOT a quiet case assigned to a different adviser (p3)", !selfTxt.includes("Radar ScopeOtherP3"), selfTxt.slice(0, 300));
 
@@ -499,7 +509,7 @@ const isoDaysAgo = (n) => new Date(Date.now() - n * DAY_MS).toISOString();
       await mkQuietCase(page4, { first: "Radar", last: "OwnerSeesP2", case_kind: "purchase", stage: "application", assigned_to: "p2" });
       await mkQuietCase(page4, { first: "Radar", last: "OwnerSeesP3", case_kind: "purchase", stage: "application", assigned_to: "p3" });
       await goto(page4, "dashboard", 1200);
-      const ownerTxt = await page4.$eval("#unactioned-list", (e) => e.textContent);
+      const ownerTxt = await radarText(page4)   /* R88 · A: was #unactioned-list */;
       ok("C5 · the owner (p4) sees a quiet case assigned to p2", ownerTxt.includes("Radar OwnerSeesP2"), ownerTxt.slice(0, 300));
       ok("C5 · …AND one assigned to p3 — owner/admin scope to the whole firm", ownerTxt.includes("Radar OwnerSeesP3"), ownerTxt.slice(0, 300));
       await page4.close();
@@ -650,7 +660,9 @@ const isoDaysAgo = (n) => new Date(Date.now() - n * DAY_MS).toISOString();
       const pt = await mkClientCase(page, { first: "GI", last: "ProductTransfer", case_kind: "product_transfer", stage: "application", assigned_to: "p2", gi_status: "quoted" });
 
       await goto(page, "protection", 1200);
-      const rowText = (caseId) => page.$eval(`input.prot-cb[data-id="${caseId}"]`, (el) => el.closest("tr").textContent).catch(() => "ABSENT");
+      /* R88 · C: the Protection list is one row per CLIENT; each case is a .prot-fact-case (data-case)
+         on the row's fact line carrying that case's badges — the case's own "cell". */
+      const rowText = (caseId) => page.$eval(`#prot-list .prot-fact-case[data-case="${caseId}"]`, (el) => el.textContent).catch(() => "ABSENT");
 
       const btlTxt = await rowText(btl.caseId);
       ok("E · buy_to_let with gi_status=quoted · Protection row shows the \"GI quoted\" badge", /GI quoted/.test(btlTxt), btlTxt);
@@ -659,8 +671,8 @@ const isoDaysAgo = (n) => new Date(Date.now() - n * DAY_MS).toISOString();
       const ptTxt = await rowText(pt.caseId);
       ok("E · product_transfer (gi_status=quoted, but N/A for this kind) · NO GI badge at all", !/GI (quoted|taken|declined|not discussed|n\/a)/.test(ptTxt), ptTxt);
 
-      const giBadgeClass = await page.$eval(`input.prot-cb[data-id="${btl.caseId}"]`, (el) => {
-        const b = [...el.closest("tr").querySelectorAll(".badge")].find((x) => /GI quoted/.test(x.textContent));
+      const giBadgeClass = await page.$eval(`#prot-list .prot-fact-case[data-case="${btl.caseId}"]`, (el) => {   // R88 · C
+        const b = [...el.querySelectorAll(".badge")].find((x) => /GI quoted/.test(x.textContent));
         return b ? [...b.classList] : null;
       });
       ok("E · the badge carries the amber colour class for \"quoted\"", giBadgeClass && giBadgeClass.includes("amber"), JSON.stringify(giBadgeClass));
@@ -698,8 +710,9 @@ const isoDaysAgo = (n) => new Date(Date.now() - n * DAY_MS).toISOString();
       const bad = await mkClientCase(page, { first: "Fmt", last: "BadLoan", case_kind: "purchase", stage: "application", assigned_to: "p2" });
       await page.evaluate((caseId) => window.__mockDb.from("cases").update({ loan_amount: "not-a-number" }).eq("id", caseId), bad.caseId);
       await goto(page, "protection", 1200);
-      const loanTxt = await page.$eval(`input.prot-cb[data-id="${bad.caseId}"]`, (el) => el.closest("tr").querySelector(".prot-col-loan").textContent).catch(() => "ABSENT");
-      eq("F · rendered surface — a non-numeric loan_amount shows \"—\" on the Protection page, not \"£NaN\"", loanTxt.trim(), "—");
+      // R88 · C: no Loan column — the loan is on the case's fact (.prot-fact-case): "—", never "£NaN".
+      const loanTxt = await page.$eval(`#prot-list .prot-fact-case[data-case="${bad.caseId}"]`, (el) => el.textContent).catch(() => "ABSENT");
+      ok("F · rendered surface — a non-numeric loan_amount shows \"—\" on the Protection page, not \"£NaN\"", loanTxt !== "ABSENT" && /—/.test(loanTxt) && !/NaN/.test(loanTxt), loanTxt.trim());
 
       ok("F · no console errors", noNewErr(errBefore), JSON.stringify(page.__err));
     }

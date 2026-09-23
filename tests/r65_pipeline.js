@@ -805,9 +805,13 @@ const columnCells = (page, key) => page.evaluate((k) => {
         });
       };
       eq("E1 · Enquiry — closed (nothing has happened yet)", await openState(eEnq), false);
-      eq("E2 · Application — open", await openState(eApp), true);
-      eq("E3 · Offer — open", await openState(eOff), true);
-      eq("E4 · Exchange — open", await openState(eExc), true);
+      /* R88 · D: was — Milestones opened itself at Application/Offer/Exchange (R65 · L4); now it is
+         the first collapsed fold under History and is born CLOSED at every stage
+         (CASE_SECTION_RULES.milestones.defaultOpen), because the stage badge on the identity line
+         already says where the case is and the panel measured it as 152px above the work (02 #5). */
+      eq("E2 · Application — closed (R88 · D)", await openState(eApp), false);
+      eq("E3 · Offer — closed (R88 · D)", await openState(eOff), false);
+      eq("E4 · Exchange — closed (R88 · D)", await openState(eExc), false);
       eq("E5 · Completed — closed again", await openState(eCmp), false);
 
       // the sticky action row
@@ -877,17 +881,19 @@ const columnCells = (page, key) => page.evaluate((k) => {
          score-desc order; r80_protect.js §B pins it). What this check still owns is that the
          Protection table LAYS OUT after this suite's fixture churn: rows render, no band rows,
          and every row keeps its DOM contract. */
+      /* R88 · C: the table is the list kit (#prot-list, one .prot-row per client); the row's contract
+         is its 📝 Log call verb (where the status select now lives) and an Open per case in More ▾. */
       const bands = await page.evaluate(() => {
-        const t = document.querySelector("#prot-list-table");
+        const t = document.querySelector("#prot-list");
         if (!t) return null;
         return {
-          bands: [...t.querySelectorAll("tr.prot-band")].length,
-          rows: [...t.querySelectorAll("tr")].filter((r) => r.querySelector(".prot-cb")).length,
-          contract: [...t.querySelectorAll("tr")].filter((r) => r.querySelector(".prot-cb"))
-            .every((r) => r.querySelector(".prot-actions button") && r.querySelector(".prot-status-set")),
+          bands: document.querySelectorAll("#page-protection tr.prot-band").length,
+          rows: t.querySelectorAll(".prot-row").length,
+          contract: [...t.querySelectorAll(".prot-row")]
+            .every((r) => r.querySelector(".row-acts .prot-logcall") && r.querySelector(".row-more-body button[onclick*='openCase']")),
         };
       });
-      ok("E14 · the Protection table still lays out (R80: rank order, NO band rows)", bands && bands.bands === 0 && bands.rows > 0 && bands.contract, JSON.stringify(bands));
+      ok("E14 · the Protection list still lays out (R80: rank order, NO band rows)", bands && bands.bands === 0 && bands.rows > 0 && bands.contract, JSON.stringify(bands));
 
       ok("§E · no console errors", noNewErr(page, errBefore), JSON.stringify(page.__err));
       await page.close();

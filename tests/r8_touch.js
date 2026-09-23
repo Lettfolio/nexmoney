@@ -298,7 +298,7 @@ function parseCsvLine(line) {
       /* an empty intersection says which two filters produced it */
       await page.fill("#client-search", "zzzznobody");
       await page.waitForTimeout(450);
-      const emptyMsg = await page.$eval("#client-list .empty", (e) => e.textContent.trim()).catch(() => "");
+      const emptyMsg = await page.$eval("#client-list .empty-state", (e) => e.textContent.trim()).catch(() => "");   // R88 · B: was .empty — emptyState() is the only empty state (no wrapper)
       ok("R8-1 · an empty intersection blames both filters, not just the search", /in this segment/i.test(emptyMsg), emptyMsg);
       ok("no console errors (search × segment)", !page.__err, JSON.stringify(page.__err));
       await page.close();

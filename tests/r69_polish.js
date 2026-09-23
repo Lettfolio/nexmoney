@@ -320,76 +320,39 @@ const favImgs = (page, names) => page.evaluate((ns) => {
       const page = await newPage(browser, "p4", { viewport: { width: 1500, height: 900 } });
       await goto(page, "protection", 2000);
 
-      const rowsOnScreen = await page.evaluate(() => document.querySelectorAll("#prot-list-table tr.prot-row").length);
-      ok("B0 · the protection table has rows to measure", rowsOnScreen >= 5, String(rowsOnScreen));
+      /* R88 · C: RE-POINTED. The 877px table (and its sticky/scrolling Actions cell, R69 · B1/B2,
+         R73 · A4's card fallback) is gone: Protection is the list kit — one row per client, ≤3 verbs
+         and More ▾ on the row's own line. The question this section exists to answer is unchanged
+         and is asked at the same five widths: is every action control on screen, inside the list,
+         with the page never scrolling sideways? There is no sideways scroller left at any width. */
+      await page.click("#prot-scope-all");
+      await wait(page, 600);
+      const rowsOnScreen = await page.evaluate(() => document.querySelectorAll("#prot-list .prot-row").length);
+      ok("B0 · the protection list has rows to measure", rowsOnScreen >= 5, String(rowsOnScreen));
 
       const measure = () => page.evaluate(() => {
-        const sc = document.querySelector("#prot-scroll");
+        const sc = document.querySelector("#prot-list");
         if (!sc) return null;
         const box = sc.getBoundingClientRect();
         const outside = [];
-        document.querySelectorAll("#prot-list-table tr.prot-row td.prot-actions").forEach((td, i) => {
-          td.querySelectorAll("button, select").forEach((b) => {
+        document.querySelectorAll("#prot-list .prot-row .row-acts").forEach((td, i) => {
+          td.querySelectorAll(":scope > .btn, :scope > .row-more > summary").forEach((b) => {
             const r = b.getBoundingClientRect();
-            if (r.right > box.right + 0.5 || r.left < box.left - 0.5) {
-              outside.push({ i, t: (b.textContent || "").trim().slice(0, 10), l: Math.round(r.left), r: Math.round(r.right) });
-            }
+            if (r.right > box.right + 0.5 || r.left < box.left - 0.5) outside.push({ i, t: (b.textContent || "").trim().slice(0, 10), l: Math.round(r.left), r: Math.round(r.right) });
           });
         });
-        const controls = document.querySelectorAll("#prot-list-table tr.prot-row td.prot-actions button, #prot-list-table tr.prot-row td.prot-actions select").length;
-        return {
-          w: innerWidth, controls, outside: outside.slice(0, 3), nOutside: outside.length,
-          needsScroll: sc.scrollWidth > sc.clientWidth + 1,
-          overflowX: getComputedStyle(sc).overflowX,
-          docSW: document.documentElement.scrollWidth,
-          actionsSticky: getComputedStyle(document.querySelector("#prot-list-table td.stick-col-right")).position,
-        };
+        const controls = document.querySelectorAll("#prot-list .prot-row .row-acts > .btn, #prot-list .prot-row .row-acts > .row-more > summary").length;
+        return { w: innerWidth, controls, outside: outside.slice(0, 3), nOutside: outside.length, needsScroll: sc.scrollWidth > sc.clientWidth + 1, docSW: document.documentElement.scrollWidth };
       });
 
-      for (const w of [1280, 1500, 1920]) {
-        await page.setViewportSize({ width: w, height: 900 });
+      for (const w of [1280, 1500, 1920, 1024, 390]) {
+        await page.setViewportSize({ width: w, height: w === 390 ? 844 : 900 });
         await wait(page, 600);
         const m = await measure();
-        ok(`B1·${w} · every action control sits inside #prot-scroll`, m && m.nOutside === 0, JSON.stringify(m));
-        ok(`B2·${w} · …with the table fitting, so nothing has to be scrolled to reach it`, m && !m.needsScroll, JSON.stringify(m && { sw: m.needsScroll }));
+        ok(`B1·${w} · every action control sits inside the list's box`, m && m.nOutside === 0, JSON.stringify(m));
+        ok(`B2·${w} · …with nothing to scroll sideways to reach it`, m && !m.needsScroll, JSON.stringify(m && { sw: m.needsScroll }));
         ok(`B3·${w} · the page body never scrolls sideways`, m && m.docSW <= w, JSON.stringify(m && m.docSW));
-        ok(`B4·${w} · the Actions cell is no longer sticky, so it cannot paint over another column`, m && m.actionsSticky === "static", JSON.stringify(m && m.actionsSticky));
-        ok(`B5·${w} · every row really was measured (5 controls or 4 where GI does not apply)`, m && m.controls >= rowsOnScreen * 4, JSON.stringify(m && m.controls));
-      }
-
-      /* Below 1280 the deal is different and stated in the role card: the table scrolls INSIDE its
-         own container, and the page still does not. */
-      for (const w of [1024, 390]) {
-        await page.setViewportSize({ width: w, height: 844 });
-        await wait(page, 600);
-        const m = await measure();
-        /* R73 · A4: below 768px this table is not a table any more. R73 propagated the R65 · L9
-           mobile-card treatment to Protection & GI — an 877px table inside a 364px box meant
-           reading the list one column at a time — so at 390px the rows render as stacked cards,
-           #prot-scroll has nothing left to scroll sideways, and its overflow-x is `visible` on
-           purpose (an overflow-x box also promotes overflow-y to auto, which is how a card list
-           ends up inside a second vertical scrollbar). The 1024 deal is unchanged: still a table,
-           still scrolling inside its own container.
-           NOT WEAKENED — the question B6/B8 exist to answer is "can every action control be
-           reached without the page scrolling sideways", and at 390 the answer is now stronger:
-           there is nothing to scroll at all and every control is already inside the box. */
-        if (w >= 768) {
-          ok(`B6·${w} · the table scrolls inside #prot-scroll`, m && m.overflowX === "auto", JSON.stringify(m && m.overflowX));
-        } else {
-          ok(`B6·${w} · R73 — the table is a CARD LIST here, so there is no sideways scroller`,
-            m && m.overflowX === "visible" && !m.needsScroll, JSON.stringify(m && { ox: m.overflowX, needs: m.needsScroll }));
-        }
-        ok(`B7·${w} · the page body still does not scroll sideways`, m && m.docSW <= w, JSON.stringify(m && m.docSW));
-        const reach = await page.evaluate(() => {
-          const sc = document.querySelector("#prot-scroll");
-          sc.scrollLeft = sc.scrollWidth;
-          const box = sc.getBoundingClientRect();
-          const btns = [...document.querySelectorAll("#prot-list-table tr.prot-row td.prot-actions button")];
-          const last = btns[btns.length - 1].getBoundingClientRect();
-          return { inside: last.right <= box.right + 0.5 && last.left >= box.left - 0.5, scrolled: sc.scrollLeft > 0 };
-        });
-        ok(`B8·${w} · …and every action button is reachable inside the box`,
-          reach.inside && (reach.scrolled || w >= 1024 || w < 768), JSON.stringify(reach));
+        ok(`B5·${w} · every row really was measured (≥ 3 controls a row: Log call · Task · Email/More)`, m && m.controls >= rowsOnScreen * 3, JSON.stringify(m && m.controls));
       }
       eq("B9 · no console errors on Protection", realErr(page), []);
       await page.close();

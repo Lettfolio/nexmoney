@@ -273,6 +273,11 @@ function dstr(ms) {
 }
 const dueFor = (offset, now) => dstr(now + offset * DAY_MS);
 
+/* R88 · A — THE RADAR IS PART OF MY DAY. Its panel (#unactioned-list) is gone; a quiet case is a
+   Worth doing row on My Day (or, when the case already has a My Day row, a sub-line on it), and
+   every such row carries data-radar. These read the same things the old list did. */
+const radarText = (page) => page.evaluate(() => [...document.querySelectorAll("#briefing-list .brief-row[data-radar]")].map((r) => r.textContent).join(" \n "));
+const radarRowText = (page, name) => page.evaluate((n) => { const r = [...document.querySelectorAll("#briefing-list .brief-row[data-radar]")].find((e) => e.textContent.includes(n)); return r ? r.textContent : null; }, name);
 (async () => {
   let server = null;
   if (!(await serverUp())) {
@@ -675,18 +680,22 @@ const dueFor = (offset, now) => dstr(now + offset * DAY_MS);
       const c4fresh = await mkQuietCase(page, { first: "Radar63", last: "FreshTask", case_kind: "purchase", stage: "offer", assigned_to: "p2" });
       await addTask(page, c4fresh.caseId, "Check mortgage offer terms", today, "p2");
       await goto(page, "dashboard", 2000);
-      const radar = await page.$eval("#unactioned-list", (e) => e.textContent);
+      const radar = await radarText(page)   /* R88 · A: was #unactioned-list */;
       ok("C4 · a case whose ONLY open task is an earlier-stage leftover reaches the radar",
         radar.includes("Radar63 StaleOnly"), radar.slice(0, 400));
       ok("C4 · …while a case with a task for the stage it is actually at does NOT",
         !radar.includes("Radar63 FreshTask"), radar.slice(0, 400));
+      /* R88 · A: the radar entry is a My Day row (or, as here — the leftover DIP task is overdue, so
+         the case already has a My Day row — a sub-line on it). Was: the #unactioned-list row's
+         badge. The words are the same: STALE TASK ONLY / "Stale task only" and the reason. */
       const staleRow = await page.evaluate(() => {
-        const row = [...document.querySelectorAll("#unactioned-list .row-item")]
+        const row = [...document.querySelectorAll("#briefing-list .brief-row[data-radar]")]
           .find((r) => r.textContent.includes("Radar63 StaleOnly"));
-        return row ? { cls: row.className, badge: (row.querySelector(".badge") || {}).textContent, txt: row.textContent } : null;
+        const unit = row && (row.querySelector(".brief-side-radar") || row);
+        return row ? { cls: row.className, badge: unit === row ? (row.querySelector(":scope > .badge") || {}).textContent : unit.textContent, txt: unit.textContent } : null;
       });
       ok("C4 · …and the row says WHY it is here rather than claiming no task exists",
-        !!staleRow && /only an earlier-stage task is open/i.test(staleRow.txt) && /STALE TASK ONLY/.test(staleRow.badge || ""),
+        !!staleRow && /only an earlier-stage task is open/i.test(staleRow.txt) && /STALE TASK ONLY/i.test(staleRow.badge || ""),
         JSON.stringify(staleRow));
 
       // C5 — the 7-day activity threshold is untouched: a stale-only case that was touched
@@ -697,7 +706,7 @@ const dueFor = (offset, now) => dstr(now + offset * DAY_MS);
         .insert({ case_id: id, body: "Rang them yesterday", created_at: when }),
         { id: c5.caseId, when: new Date(nowC - DAY_MS).toISOString() });
       await goto(page, "dashboard", 2000);
-      const radar2 = await page.$eval("#unactioned-list", (e) => e.textContent);
+      const radar2 = await radarText(page)   /* R88 · A: was #unactioned-list */;
       ok("C5 · the 7-day threshold is unchanged — a case touched yesterday stays off the radar",
         !radar2.includes("Radar63 StaleButTouched"), radar2.slice(0, 400));
 

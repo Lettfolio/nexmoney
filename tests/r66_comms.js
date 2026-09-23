@@ -416,19 +416,25 @@ const closeModal = async (page) => { await page.evaluate(() => window.closeModal
      candidates score-desc and the table preserves that order; r80_protect.js §B pins it). What
      `referred` must still do on this page: wear its own REFERRED badge, stay a settable status,
      and — the new order's half — keep its RPC rank position rather than being regrouped. */
+  /* R88 · C: the table is the list kit, ONE ROW PER CLIENT (.prot-cb carries the client id; each
+     case is a .prot-fact-case with its status badge on the row's fact line). Rank order = each
+     client where their best case ranks (first appearance in the RPC's score order). */
   const bProt = await page.evaluate(async () => {
-    const domIds = [...document.querySelectorAll("#prot-list-table .prot-cb")].map((cb) => cb.dataset.id);
+    const domIds = [...document.querySelectorAll("#prot-list .prot-cb")].map((cb) => cb.dataset.id);
     const { data: rpc } = await window.__mockDb.rpc("get_protection_pipeline", { p_scope: "all" });
-    const rpcIds = (rpc || []).map((r) => r.case_id).filter((id) => domIds.includes(id));
+    // each row's TOP case (its first .prot-fact-case) must appear in the RPC's order, row after row
+    const tops = [...document.querySelectorAll("#prot-list .prot-row")].map((r) => (r.querySelector(".prot-fact-case") || {}).dataset?.case);
+    const idx = tops.map((id) => (rpc || []).findIndex((r) => r.case_id === id));
     return {
       bulkOptions: [...document.querySelectorAll("#prot-bulk-status option, .prot-status-set option")].map((o) => o.value),
-      referredBadges: [...document.querySelectorAll("#prot-list-table .badge")].filter((b) => /REFERRED/.test(b.textContent)).length,
-      bands: document.querySelectorAll("#prot-list-table tr.prot-band").length,
-      orderOk: domIds.length > 0 && domIds.every((id, i) => id === rpcIds[i]),
+      // R88 · C: a client's top case wears the badge; its other open cases are named with their status in words
+      referredBadges: [...document.querySelectorAll("#prot-list .badge, #prot-list .prot-fact-more .prot-fact-case")].filter((b) => /REFERRED|\(referred/i.test(b.textContent)).length,
+      bands: document.querySelectorAll("#page-protection tr.prot-band").length,
+      orderOk: domIds.length > 0 && idx.every((n, i) => n >= 0 && (i === 0 || n > idx[i - 1])),
     };
   });
   ok("B21 · `referred` is a settable protection status (the shared PROT_BULK_STATUS list)", bProt.bulkOptions.includes("referred"), JSON.stringify([...new Set(bProt.bulkOptions)]));
-  ok("B22 · a referred case carries the REFERRED badge on the Protection table", bProt.referredBadges >= 1, JSON.stringify(bProt));
+  ok("B22 · a referred case carries the REFERRED badge on the Protection list", bProt.referredBadges >= 1, JSON.stringify(bProt));
   ok("B23 · R80: no band rows — the R61 bands are retired", bProt.bands === 0, JSON.stringify(bProt.bands));
   ok("B24 · R80: referred rows keep their RPC rank position (score order, never regrouped)", bProt.orderOk, JSON.stringify(bProt));
 

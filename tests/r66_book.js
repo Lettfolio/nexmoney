@@ -130,7 +130,7 @@ async function search(page, term) {
     return pa.evaluate((id) => {
       const rows = [...document.querySelectorAll("#client-list .client-row")];
       const segAll = document.querySelector('#client-segment .seg-btn[data-seg="all"] .seg-count');
-      const selAll = document.querySelector("#client-bulk .client-selall label");
+      const selAll = document.querySelector("#client-bulk .list-selall label");   // R88 · B: was .client-selall — the select-all line is the kit's selectAllHtml (.list-selall)
       return {
         found: rows.some((r) => r.dataset.client === id),
         rows: rows.length,

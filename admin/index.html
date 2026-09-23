@@ -215,13 +215,14 @@
                already auto-run on every dashboard load). Every id is unchanged, so the suites that
                drive them still find them; they open the menu first (details.open = true). Closed
                by a click anywhere else (wireBriefMoreMenu). -->
+          <!-- R88 · A — "Run checks" and "N snoozed" moved on again, into the Checks drawer below
+               (the drawer is the triage tool now; My Day holds the alerts as rows). The ⋯ keeps
+               the two My Day controls, ids unchanged. -->
           <details class="hdr-more" id="brief-more">
-            <summary class="btn btn-ghost btn-sm hdr-more-btn" aria-label="More: Outlook sync, Watchtower checks, snoozed alerts, tasks due later" title="More — Outlook sync, Watchtower checks, snoozed alerts, tasks due later">⋯</summary>
+            <summary class="btn btn-ghost btn-sm hdr-more-btn" aria-label="More: Outlook sync, tasks due later" title="More — Outlook sync, tasks due later">⋯</summary>
             <div class="hdr-more-menu" role="menu">
-              <button type="button" class="badge amber hidden" id="brief-ahead" onclick="nav('diary')" style="cursor:pointer;border:0;"></button>
+              <button type="button" class="badge amber hidden" id="brief-ahead" onclick="nav('diary')"></button>
               <button class="btn btn-ghost btn-sm" id="sync-outlook-btn" aria-label="Sync Outlook inbox">⟳ Sync Outlook</button>
-              <button class="btn btn-ghost btn-sm" id="watchtower-run" title="Re-run the Watchtower checks now — they already run on every load of this page">Run checks</button>
-              <button class="btn btn-ghost btn-sm hidden" id="watchtower-snoozed-toggle" title="Show/hide snoozed alerts">0 snoozed</button>
             </div>
           </details>
         </h3>
@@ -242,57 +243,43 @@
              two new enquiries, because "accept all" of one lead is just Accept. -->
         <div id="leads-accept-bar" class="leads-accept-bar hidden"></div>
         <div id="briefing-list" class="dash-scroll"></div>
+        <!-- R88 · A — the no-next-action check's read-bound / failure notice (was the radar
+             panel's). Its cases are rows in the Worth doing band above; hidden unless a read bit. -->
+        <p class="panel-sub unactioned-cap hidden" id="unactioned-cap-notice"></p>
       </div>
-      <div class="panel dash-drawer collapsed" id="watchtower-panel">
-        <h3 onclick="toggleDrawer(event,'watchtower')">🚨 Watchtower
-          <!-- R34 · W1 — the same Mine|All segment My Day and the Rate & ERC drawer carry, scoped
-               by the CASE's adviser. (R41: the Tasks drawer this used to name as the third carrier
-               of it is gone.) Which one starts active is decided in JS (renderWatchtower →
-               syncWtScopeButtons), because it depends on the signed-in role and on a stored
-               choice, neither of which is known when this markup is parsed. -->
-          <span class="segment" role="group" aria-label="Which alerts to show">
+      <!-- R88 · A — ONE WORKLIST. The Watchtower's alerts are My Day rows now (CRITICAL →
+           Urgent, WARNING → Today, FYI → Worth doing, one row per case), and the No-next-action
+           radar's cases are Worth doing rows with one verb, "Add next step" — its panel is gone.
+           What stays here is the TRIAGE tool: a closed "Checks" drawer with the per-check groups,
+           the tick-and-bulk bar, Run checks and the snoozed view. A <details>, closed by default
+           and never auto-opened; same id, still a .panel (panelCount), `.collapsed` mirrored for
+           toggleDrawer (wireChecksDrawer). -->
+      <details class="panel checks-drawer collapsed" id="watchtower-panel">
+        <summary class="checks-drawer-sum"><h3>🚨 Checks</h3></summary>
+        <p class="panel-sub" id="watchtower-sub-line">Every open check is also a row on My Day — tick here to clear a run of one kind at once.</p>
+        <details class="rep-howcounted how-fold" id="watchtower-sub"><summary>How these checks work</summary><div class="rep-howcounted-body">
+          <p><strong>Two checks watch a pair of dates.</strong> <em>Offer expires before completion</em> catches an offer that dies before the completion it is meant to fund, so it has to be re-issued. <em>Completing inside old ERC</em> catches a retention case completing while the client's old deal is still inside its Early Repayment Charge, so they pay to leave early. <em>Client emails unanswered</em> is counted per client — one row per person waiting on a reply, not one per message.</p>
+          <p><strong>On My Day.</strong> A critical check is an Urgent row with <em>Snooze…</em> and <em>Dismiss</em>, both asking for a reason; a warning or FYI is a Today / Worth doing row with <em>✓ Done</em>. A case already on My Day carries its checks as a line on its own row.</p>
+          <p><strong>Clearing a run of them at once.</strong> Tick the alerts you have judged — or <em>Select all</em> on a check's heading — then <em>Snooze 7 days</em>, <em>Snooze 30 days</em> or <em>Dismiss</em> on the bar. One confirmation for the batch, one optional reason for all of them, one repaint. Neither verb fixes anything: a snooze hides an alert until the date passes, a dismissal closes it, and a problem that is still there is raised again on the next run. A reason is required when the batch includes a <strong>critical</strong> alert, and it is written onto that alert's case — exactly as when you snooze or dismiss one on its own.</p>
+        </div></details>
+        <!-- R34 · W1 — the drawer's own Mine|All (scoped by the CASE's adviser); R88 · A — beside
+             Run checks and the snoozed toggle (moved here from My Day's ⋯ menu), out of the
+             <summary> so a press never folds the drawer. R88 · fixer — hidden: the drawer follows My
+             Day's Mine|All (one scope on Today); the ids stay for the scope mirror. -->
+        <div class="checks-tools">
+          <span class="segment hidden" role="group" aria-label="Which alerts to show">
             <button class="btn btn-sm seg-btn seg-first" id="wt-scope-mine" aria-label="Show only alerts on my cases">Mine</button>
             <button class="btn btn-sm seg-btn seg-last" id="wt-scope-all" aria-label="Show every alert, including firm-wide ones">All</button>
           </span>
-          <!-- R87 · today (A6) — "Run checks" and "N snoozed" moved to My Day's ⋯ menu above. -->
-        </h3>
-        <!-- R87 · today (T1 / 02 #3) — 219 WORDS BECAME ONE LINE AND ONE FOLD. The two standing
-             paragraphs (85 words on what the checks mean, 134 on bulk triage) sat above the
-             filter chips on every load — 254px of scroll, 488px on a phone, between "Watchtower"
-             and the first critical alert. The one sentence that changes what a reader does stays
-             standing; every other word is inside the closed "How these checks work" fold below,
-             lightly tightened, so r65_watchtower §C3 still reads the check names from
-             #watchtower-sub's text. -->
-        <p class="panel-sub" id="watchtower-sub-line">Problems found automatically — an alert clears itself once the case is fixed.</p>
-        <details class="rep-howcounted how-fold" id="watchtower-sub"><summary>How these checks work</summary><div class="rep-howcounted-body">
-          <p><strong>Two checks watch a pair of dates.</strong> <em>Offer expires before completion</em> catches an offer that dies before the completion it is meant to fund, so it has to be re-issued. <em>Completing inside old ERC</em> catches a retention case completing while the client's old deal is still inside its Early Repayment Charge, so they pay to leave early. <em>Client emails unanswered</em> is counted per client — one row per person waiting on a reply, not one per message.</p>
-          <p><strong>Clearing a run of them at once.</strong> Tick the alerts you have judged — or <em>Select all</em> on a check's heading — then <em>Snooze 7 days</em>, <em>Snooze 30 days</em> or <em>Dismiss</em> on the bar. One confirmation for the batch, one optional reason for all of them, one repaint. Neither verb fixes anything: a snooze hides an alert until the date passes, a dismissal closes it, and a problem that is still there is raised again on the next run. A reason is required when the batch includes a <strong>critical</strong> alert, and it is written onto that alert's case — exactly as when you snooze or dismiss one on its own.</p>
-        </div></details>
+          <button class="btn btn-sm" id="watchtower-run" title="Re-run the checks now — they already run on every load of this page">Run checks</button>
+          <button class="btn btn-sm hidden" id="watchtower-snoozed-toggle" title="Show/hide snoozed alerts">0 snoozed</button>
+        </div>
         <!-- R11-2a — severity filter chips, written by loadWatchtower so the counts are live.
              Client-side only: it filters the rows already fetched, it does not re-query. -->
         <div id="wt-filters" class="pipe-segment wt-filters"></div>
         <div id="watchtower-list" class="dash-scroll wt-scroll"></div>
         <div id="watchtower-snoozed" class="dash-scroll hidden"></div>
-      </div>
-      <!-- R17 · §2 — Unactioned-cases radar. A live case with no open task and nothing recorded for
-           a week is invisible until the 45-day stalled trigger; this closes that gap. Client-computed
-           (no new schema), adviser-scoped like the rest of Today. -->
-      <div class="panel dash-card dash-drawer collapsed" id="unactioned-panel">
-        <h3 onclick="toggleDrawer(event,'unactioned')">🕰️ No next action</h3>
-        <!-- R63 · H1c — the membership rule changed and the sentence had to change with it: a case
-             whose only open task is a step from an EARLIER stage has no next action for where it
-             actually is, and that case used to be invisible here purely because the task existed. -->
-        <!-- R69 · A4/L10 — the read-bound notice. Normally hidden; written by loadUnactioned when
-             a read comes back holding exactly OWNER_ROW_CAP rows, i.e. when it may have been
-             truncated and the radar can no longer claim to describe the whole book. -->
-        <p class="panel-sub unactioned-cap hidden" id="unactioned-cap-notice"></p>
-        <!-- R87 · today (T1 / 02 #3) — the 54-word intro is one line plus a fold. -->
-        <p class="panel-sub" id="unactioned-sub-line">Live cases with nothing open for their stage and no touch in 7 days.</p>
-        <details class="rep-howcounted how-fold" id="unactioned-how"><summary>How this is counted</summary><div class="rep-howcounted-body">
-          <p>A case is here when nothing is open for the stage it is actually at, and no note or event has been recorded in the last 7 days — before it drifts into "stalled". A case whose only open task is a leftover from an earlier stage counts too, and says so. Open one and give it a next step.</p>
-        </div></details>
-        <div id="unactioned-list" class="dash-scroll"></div>
-      </div>
+      </details>
       <!-- R41 · F1 — THE FOUR DUPLICATE DRAWERS ARE GONE.
            New website leads, Today's appointments, Tasks due and the Retention pipeline each
            restated a slice of My Day one screen lower down, so the morning read was 2.6 screens
@@ -339,8 +326,12 @@
       <div class="page-head">
         <h2>Case pipeline</h2>
         <div class="page-tools">
+          <!-- R88 · B (panel 03 #3) — search · Mine|All|Unassigned is ONE kit row (listToolsHtml), rendered into
+               #board-tools by app.js at load; #board-search is moved into it (its listeners come with it).
+               #board-adviser stays as a HIDDEN compat select: it still holds the value loadPipeline reads. -->
+          <div id="board-tools"></div>
           <input type="search" id="board-search" class="search" placeholder="Search cases…" aria-label="Search cases">
-          <select id="board-adviser" aria-label="Filter by adviser"></select>
+          <select id="board-adviser" hidden aria-label="Filter by adviser"></select>
           <!-- R31-B — SAVED FILTER VIEWS (per-browser, localStorage). -->
           <select id="board-views" aria-label="Saved views"><option value="">Saved views…</option></select>
           <button class="btn btn-sm" id="board-view-save">＋ Save view</button>
@@ -349,7 +340,7 @@
           <button class="btn btn-primary" id="new-case-btn">+ New case</button>
         </div>
       </div>
-      <div id="pipe-segment" class="pipe-segment" role="tablist" aria-label="Pipeline focus"></div>
+      <div id="pipe-segment" class="pipe-segment" role="group" aria-label="Pipeline focus"></div>
       <p class="panel-sub" id="board-hint"><span class="desktop-hint">Drag cards between columns to move a case on.</span><span class="mobile-hint">Tap a card to open it, or use the stage dropdown on each card to move it on.</span></p>
       <!-- R6-B4 (D6-24 / SM-19) — the board carried two pieces of unlabelled colour
            coding: a red/amber left edge on a card, and a "≈" glyph on a rate-end
@@ -389,76 +380,30 @@
            drawer) stays short, on the same rule the rest of the app uses for a term once it has
            been said in full nearby. -->
       <h2>Protection &amp; GI <span class="page-h2-expand">(General Insurance)</span></h2>
-      <div class="kpi-row" id="prot-summary">
-        <div class="kpi"><div class="num" id="prot-kpi-count">—</div><div class="lbl">Opportunities</div></div>
-        <!-- R5-17 (label half) / R80 · A2 (formula changed under it) — the estimate is now the CTO's
-             rewritten RPC's: the firm-average commission (Settings) × a loan-size band
-             (0.7 / 1.0 / 1.3 / 1.6). Still an estimate, never banked money — the label says both. -->
-        <div class="kpi"><div class="num" id="prot-kpi-comm">—</div><div class="lbl">Est. commission</div><div class="s" title="The firm-average commission (Settings) × a loan-size band: 0.7 under £100k · 1.0 to £250k · 1.3 to £500k · 1.6 above. Never banked money.">(estimate — firm average × loan band)</div></div>
-        <div class="kpi dq-clickable" id="prot-tile-quoted" title="Click to filter the table to quoted cases awaiting a decision"><div class="num" id="prot-kpi-quoted">—</div><div class="lbl">Quoted, awaiting decision</div></div>
-      </div>
-      <!-- R87 · book (04 #11) — #prot-money-note (the owner-only-tile apology shown to advisers) is
-           gone; whose £ the line above the table shows is in that line's title. -->
-      <div class="page-tools" style="margin-bottom:14px;">
-        <span class="segment" role="group" aria-label="Whose protection cases to show">
-          <button class="btn btn-sm seg-btn seg-first scope-active" id="prot-scope-mine" aria-pressed="true">Mine</button>
-          <button class="btn btn-sm seg-btn" id="prot-scope-unassigned" aria-pressed="false">Unassigned</button>
-          <button class="btn btn-sm seg-btn seg-last" id="prot-scope-all" aria-pressed="false">All</button>
-        </span>
-        <!-- R36-A · L6 — a client search on this table. The scope buttons and the status drop-down
-             both answer "which slice of the book", never "where is Mrs Okafor's row" — and on an
-             Owner's "All" view this table is the longest list in the app. Same control, class and
-             debounce as the pipeline's #board-search. -->
-        <input type="search" id="prot-search" class="search" placeholder="Search client…" aria-label="Search protection rows by client name">
-        <select id="prot-filter" aria-label="Filter protection cases">
-          <option value="all">All</option>
-          <option value="live">Live cases</option>
-          <option value="completed">Completed book</option>
-          <option value="quoted">Quoted</option>
-          <!-- R87 · book · C4 (04 #3, partial) — the two bands below, as filters over the ONE
-               ranked table (same predicates: protBandNoOutcome / protBandGi; counts filled by
-               renderProtectionPage), so no client is listed twice on the page. -->
-          <option value="nooutcome">Completed, no protection outcome</option>
-          <option value="gi">GI not discussed</option>
-        </select>
-      </div>
+      <!-- R88 · C — ONE LIST ON THE KIT, ONE ROW PER CLIENT. The tools row (search · Mine|Unassigned|All)
+           is rendered by listToolsHtml() into #prot-tools at script load, keeping #prot-search and
+           #prot-scope-*. The KPI tiles are ONE line (#prot-summary, filled by renderProtectionPage,
+           keeping #prot-kpi-count / #prot-kpi-quoted / #prot-kpi-comm); the status drop-down and the
+           two collapsed bands are the chips of #prot-segs. #prot-filter stays as a visually-hidden compat
+           select (aria-hidden, out of the tab order — suites drive it with selectOption, which needs a
+           box); the chips and it write the same protFilter. -->
+      <div id="prot-tools"></div>
+      <select id="prot-filter" class="compat-select" aria-hidden="true" tabindex="-1" aria-label="Filter protection cases (compat — the chips above are the control)">
+        <option value="all">All</option>
+        <option value="live">Live cases</option>
+        <option value="completed">Completed book</option>
+        <option value="quoted">Quoted</option>
+        <option value="nooutcome">Completed, no protection outcome</option>
+        <option value="gi">GI not discussed</option>
+      </select>
+      <p class="panel-sub" id="prot-summary"></p>
+      <div id="prot-chips"></div>
       <div id="prot-table"></div>
-      <!-- R7-3 — the call list. Cases that COMPLETED with no protection outcome recorded
-           (not discussed / discussed / quoted, i.e. anything that is neither a policy nor a
-           decline). It honours the Mine / Unassigned / All scope buttons above, so an adviser
-           sees their own and the Owner sees the firm's.
-           R87 · book · C4 — COLLAPSED: the same rows are one filter option on the table above, so
-           the band is a closed <details> (same ids, same rows, same verbs) rather than a second
-           list of the same clients. -->
-      <details class="panel hidden prot-band-fold" id="prot-calllist-panel" style="margin-top:18px;">
-        <summary class="panel-head-row">
-          <h3>Completed, no protection outcome</h3>
-          <span class="badge amber" id="prot-calllist-count">0</span>
-          <span class="cs-muted prot-band-hint">also a filter on the table above</span>
-        </summary>
-        <p class="panel-sub" id="prot-calllist-basis"></p>
-        <div id="prot-calllist"></div>
-      </details>
-      <!-- R80 · A3 — THE GI CALL LIST. gi_status is on every case and no surface ever read it as
-           work. Same conversation family, so it is a compact second band here: cases where the GI
-           conversation has never been started (gi_status not_discussed on a GI-applicable kind),
-           derived from the SAME cached pipeline rows as the table above (zero extra network),
-           ranked by the same score, with the same Log-call verb.
-           R87 · book · C4 — collapsed, as above. -->
-      <details class="panel hidden prot-band-fold" id="prot-gi-panel" style="margin-top:18px;">
-        <summary class="panel-head-row">
-          <h3>GI never discussed</h3>
-          <span class="badge amber" id="prot-gi-count">0</span>
-          <span class="cs-muted prot-band-hint">also a filter on the table above</span>
-        </summary>
-        <p class="panel-sub" id="prot-gi-basis"></p>
-        <div id="prot-gi-list"></div>
-      </details>
       <!-- R13 · M-23/M-25 — THE CLAWBACK WINDOW. Policies taken inside the last 24 months, i.e.
            the ones a provider could still reclaim commission on if they lapse. Its more useful
            half is the second line: the policies with NO start date, whose window cannot be
            watched at all. Hidden outright on a database with no policy_start_date column. -->
-      <div class="panel hidden" id="prot-clawback-panel" style="margin-top:18px;">
+      <div class="panel hidden" id="prot-clawback-panel">
         <div class="panel-head-row">
           <h3>Clawback window</h3>
           <span class="badge grey" id="prot-clawback-count">0</span>
@@ -481,10 +426,10 @@
                R75 · A1 — WEEK joins them, in the middle, because that is where it sits in scale
                (a month is context, a week is the working horizon, a day is the detail). It is the
                DESKTOP DEFAULT now (owner decision, 28 Aug) — see restoreUserPrefs. -->
-          <div class="pipe-segment segment" id="diary-view-toggle" role="tablist" aria-label="Diary view">
-            <button type="button" class="btn btn-sm seg-btn seg-first scope-active" id="diary-view-month" role="tab" aria-selected="true">Month</button>
-            <button type="button" class="btn btn-sm seg-btn" id="diary-view-week" role="tab" aria-selected="false">Week</button>
-            <button type="button" class="btn btn-sm seg-btn seg-last" id="diary-view-day" role="tab" aria-selected="false">Day</button>
+          <div class="pipe-segment segment" id="diary-view-toggle" role="group" aria-label="Diary view">
+            <button type="button" class="btn btn-sm seg-btn seg-first scope-active" id="diary-view-month" aria-pressed="true">Month</button>
+            <button type="button" class="btn btn-sm seg-btn" id="diary-view-week" aria-pressed="false">Week</button>
+            <button type="button" class="btn btn-sm seg-btn seg-last" id="diary-view-day" aria-pressed="false">Day</button>
           </div>
           <select id="diary-staff" aria-label="Show whose diary"></select>
           <button class="btn" id="diary-prev">‹ Prev</button>
@@ -537,61 +482,17 @@
         <h2>Clients</h2>
         <button class="btn btn-primary" id="new-client-btn">+ New client</button>
       </div>
-      <!-- R66 · H4 — the box says what it looks at. It matches the client's own name, email and
-           phone AND any of their cases' postcode/address and lender, so the placeholder names all
-           five: a search box that silently ignores what you typed is worse than one that finds
-           nothing, because you cannot tell the difference. -->
-      <input type="search" id="client-search" class="search" placeholder="Search name, email, phone, postcode or lender…" aria-label="Search clients by name, email, phone, postcode or lender">
-      <!-- R41 · F6 — ONE CONTROL ROW, NOT THREE.
-           Saved views, the adviser filter and the sort each had a row of their own, stacked one
-           under the other with their own block margins: three lines of chrome carrying three
-           controls, ~397px of the screen gone before the first client. They are the same KIND of
-           thing — "which slice, whose, in what order" — so they now share one wrapping flex row.
-           LAYOUT ONLY: every id, element, label, note span and listener below is byte-identical
-           to what it was; nothing about behaviour, saved views or the sort moved. Under ~720px
-           the media query in admin.css stacks them back up, because three controls side by side
-           on a phone is worse than three rows. -->
-      <div class="client-controls">
-        <!-- R31-B — SAVED FILTER VIEWS (per-browser, localStorage). Captures search + adviser + segment + sort. -->
-        <div class="client-views">
-          <select id="client-views" aria-label="Saved views"><option value="">Saved views…</option></select>
-          <button class="btn btn-sm" id="client-view-save">＋ Save view</button>
-          <button class="btn btn-sm" id="client-view-del" aria-label="Delete saved view" title="Delete saved view">🗑</button>
-        </div>
-        <!-- R12b · W-29 — ADVISER FILTER. Every other list of people in this app can be narrowed to
-             one adviser and this one could not, so "my clients" was a page an adviser had to read
-             past his colleagues' book to assemble. It sits ABOVE the segment chips because it
-             changes what those chips are counting: the counts, the definition line and the R11 sort
-             all recompute underneath it. Options are written by loadTeam-time code in app.js
-             (renderClientAdviser), which follows the same PROFILES-vs-TEAM rule as #board-adviser. -->
-        <div class="client-advfilter">
-          <label for="client-adviser">Adviser</label>
-          <select id="client-adviser" aria-label="Filter clients by adviser"><option value="all">Everyone</option></select>
-          <span class="client-adv-note" id="client-adv-note"></span>
-        </div>
-        <!-- R11-6 — SORT. Alphabetical is right for "where is Mrs Okafor" and useless for "who
-             needs ringing next". All three orders are computed from the rows loadClientData()
-             already holds (clients.created_at, and rate_end_date on the embedded cases) — no extra
-             query, and no option offered that the loaded data cannot actually honour.
-             R41 · F6 — it used to sit BELOW the segment definition line; it is now the third
-             control on the row above the chips. The order it is read in is unchanged in substance
-             (choose the slice, then the order to work it in) and the definition line still sits
-             directly under the chips it defines. -->
-        <div class="client-sort">
-          <label for="cl-sort">Sort</label>
-          <select id="cl-sort" aria-label="Sort the client list">
-            <option value="name">Name A–Z</option>
-            <option value="rate_end">Next rate end</option>
-            <option value="recent">Recently added</option>
-          </select>
-          <span class="client-sort-note" id="cl-sort-note"></span>
-        </div>
-      </div>
-      <!-- R8-1 — CLIENT SEGMENTS. The chips, the definition line under them and the bulk bar are
-           all rendered by loadClients(); these are the containers, in the order they read:
-           search → the controls row → which slice of the book → what that slice MEANS → what you
-           can do to it. -->
-      <div id="client-segment" class="pipe-segment client-segment" role="tablist" aria-label="Client segment"></div>
+      <!-- R88 · B (panel 04 #6 / 03 #3) — ONE tools row from the list kit: 🔍 search · Mine|All · Sort.
+           app.js renders it into this slot at load (listToolsHtml keeps #client-search, #cl-sort and
+           adds #cl-scope-mine / #cl-scope-all). The saved-views trio, the named-adviser row and the
+           sort-note line are gone (panel 04 #10). #client-adviser stays as a HIDDEN compat select:
+           it still holds the scope value the page and the suites read. -->
+      <div id="client-tools"></div>
+      <select id="client-adviser" hidden aria-label="Filter clients by adviser"><option value="all">All advisers</option></select>
+      <!-- R8-1 — CLIENT SEGMENTS. R88 · B — the kit's .seg-strip#client-segment is rendered into this slot
+           by loadClients(); then what that slice MEANS; then select-all (#client-bulk). The bulk bar is
+           docked at the bottom of #client-list. -->
+      <div id="client-segment-slot" class="client-segment"></div>
       <p class="panel-sub client-seg-def" id="client-seg-def"></p>
       <div id="client-bulk"></div>
       <p class="dq-notice hidden" id="clients-cap-notice"></p>
@@ -609,74 +510,34 @@
     <section id="page-retention" class="page hidden">
       <div class="page-head">
         <h2>Retention</h2>
-        <div class="page-tools">
-          <!-- R34 pattern (#wt-scope-*). Which one starts active is decided in JS
-               (retScopeResolved), because it depends on the signed-in role and on a stored
-               choice, neither of which is known when this markup is parsed. ONE control: it
-               scopes all three panels below, because they are three views of one book. -->
-          <span class="segment" role="group" aria-label="Whose retention book to show">
-            <button class="btn btn-sm seg-btn seg-first" id="ret-scope-mine" aria-label="Show only my cases and clients" title="The rates on cases assigned to you, the retention cases assigned to you, and the clients with at least one case of yours.">Mine</button>
-            <button class="btn btn-sm seg-btn seg-last" id="ret-scope-all" aria-label="Show every adviser's cases and clients" title="Every adviser's cases and clients — the whole firm.">All</button>
-          </span>
-          <!-- R87 · book · C2 — ONE sort control for the rates list, here in the tools row
-               (was two toggle buttons inside the panel's h3). Options filled by
-               renderRetSortSelect(): most recently ended first · oldest first · value at risk
-               (owner only); the choice is remembered exactly as before (nx_ret_sortdir). -->
-          <select id="ret-sort" aria-label="Sort the rates list"></select>
-        </div>
       </div>
+      <!-- R88 · C — ONE LIST ON THE KIT. The tools row (search · Mine|All · Sort) is rendered by
+           listToolsHtml() into #ret-tools at script load, keeping #ret-scope-mine / #ret-scope-all /
+           #ret-sort (and adding #ret-search). "Never contacted first" is a Sort option now. -->
+      <div id="ret-tools"></div>
       <p class="panel-sub" id="ret-scope-note"></p>
       <p class="dq-notice hidden" id="ret-cap-notice"></p>
       <div class="panel" id="ret-rates-panel">
         <h3 id="ret-rates-h3">⚠️ Rates ending &amp; ended</h3>
-        <!-- R87 · book · C2 — the panel's ONE line (which window, whose cases). Everything that
-             used to be standing prose here — the R74 reconciliation, the R61 money basis, the
-             R72 outcome-funnel population — is inside the closed howFold #ret-rates-how below,
-             word for word. -->
-        <p class="panel-sub" id="ret-rates-sub"></p>
-        <!-- R64 · A2 — the month window. NOT a second scope control: it composes with
-             Mine/All above (that one says WHOSE, this one says WHEN). Filled in by
-             renderRetMonthChips(); the pick is remembered in localStorage nx_ret_month.
-             R87 · book — four chips show; the other three keys render hidden (RET_MONTHS_FOLDED). -->
-        <div class="ret-chips-row">
-          <div class="ret-month-chips" id="ret-month-chips" role="group" aria-label="Which rate-end month to show"></div>
-          <!-- R70 · B2 — "Never contacted first". A TOGGLE, not a filter: it re-orders the rows
-               below and never hides one. Rendered by renderRetUntouchedChip(); the pick is
-               remembered in localStorage nx_ret_untouched. R87 · book — on the chips' line. -->
-          <div class="ret-untouched-row" id="ret-untouched"></div>
+        <!-- The panel's ONE line (which window, whose cases, how many). The arithmetic is in the
+             closed howFold #ret-rates-how. -->
+        <div class="ret-sub-row">
+          <p class="panel-sub" id="ret-rates-sub"></p>
+          <div id="ret-rates-how"></div>
         </div>
-        <!-- R72 · A2 (panel H5c) — RATE-END OUTCOMES. retained / renewed elsewhere / sold / no
-             outcome, for the rates that ended in the last 12 months. Directly under the ended
-             chips because it is a summary OF that window, and above the rows because the "no
-             outcome" figure is the instruction for working them. Read-only derivation — see
-             renderRateEndOutcomeFunnel; empty markup here, painted by loadRetentionRates. -->
-        <div class="ret-outcome-funnel" id="ret-outcome-funnel"></div>
-        <div id="ret-rates-how"></div>
-        <!-- R75 · B2 — the funnel chips are buttons now and they FILTER the list below.
-             A filter that is on and does not say so is a list that lies about the size
-             of the book, so this notice sits directly above the rows, carries the count
-             it narrowed to, and names the way out. Hidden while no chip is pressed. -->
+        <!-- R88 · C — ONE chip strip (segmentChipsHtml, #ret-segs): the rate-end windows, the four
+             rate-end outcomes and "Gone quiet" (the Clients page's cold segment). One chip is pressed
+             at a time and it says which list is below. Filled by renderRetSegs(). -->
+        <div class="ret-month-chips" id="ret-month-chips"></div>
         <p class="dq-notice" id="ret-outcome-filter-note" hidden></p>
-        <!-- R64 · A1 — select-all + the bulk action bar, rendered by renderRetBulkBar().
-             R87 · book — directly above the rows it selects, where the Clients page puts it. -->
-        <div id="ret-bulk"></div>
+        <!-- Select-all, the rows (.row-item.kit-row) and the docked bulk bar all live in here. -->
         <div id="ret-rates-list"></div>
       </div>
-      <div class="panel" id="ret-pipeline-panel" style="margin-top:18px;">
+      <div class="panel" id="ret-pipeline-panel">
         <h3>🔁 Retention pipeline</h3>
         <p class="panel-sub" id="ret-pipeline-stats"></p>
         <div id="ret-pipeline-how"></div>
         <div id="ret-pipeline-list"></div>
-      </div>
-      <div class="panel" id="ret-cold-panel" style="margin-top:18px;">
-        <h3>🌙 Gone quiet
-          <button type="button" class="btn btn-ghost btn-sm" id="ret-cold-goto" title="Open the Clients page on this same segment, with the same adviser filter — where you can bulk-task, export and open the records">Work this list on Clients →</button>
-        </h3>
-        <!-- R87 · book · C2 — one line here; the full definition keeps its id (#ret-cold-sub)
-             inside the closed howFold that loadRetentionCold renders into #ret-cold-how. -->
-        <p class="panel-sub" id="ret-cold-line"></p>
-        <div id="ret-cold-how"></div>
-        <div id="ret-cold-list"></div>
       </div>
     </section>
 
@@ -747,7 +608,7 @@
            NOT sticky — #rep-nav is the sticky strip and two sticky bars would sit on top of each
            other. -->
       <div class="rep-sections-nav" id="reports-jump" hidden>
-        <div class="pipe-segment rep-nav-chips" id="reports-jump-chips" role="tablist" aria-label="Jump to a section of Reports"></div>
+        <div class="pipe-segment rep-nav-chips" id="reports-jump-chips" role="group" aria-label="Jump to a section of Reports"></div>
       </div>
       <!-- R11-4 — JUMP NAV. Reports is ~7,700px of stacked panels and the only way to reach the
            bottom half was the scroll wheel. One chip per panel, sticky under the page header.
@@ -756,7 +617,7 @@
            at the END of loadReports — after each panel has decided whether it exists — rather
            than rendered here and then corrected, which would flash money chips at an adviser. -->
       <div class="rep-nav" id="rep-nav" hidden>
-        <div class="pipe-segment rep-nav-chips" id="rep-nav-chips" role="tablist" aria-label="Jump to a section of this report"></div>
+        <div class="pipe-segment rep-nav-chips" id="rep-nav-chips" role="group" aria-label="Jump to a section of this report"></div>
       </div>
       <!-- R74 · A4a (panel D#12) — THE HERO. This page opened on a 5-line paragraph about three
            money bases; the number the owner is actually judged on — fee value earned on the
@@ -1146,9 +1007,9 @@
       <div class="panel" id="report-referrals-panel">
         <div class="panel-head-row">
           <h3>Referrals out — who we sent where</h3>
-          <div class="pipe-segment" role="tablist" aria-label="Scope the referrals report">
-            <button type="button" class="seg-btn" id="report-ref-scope-mine" data-refout-scope="mine" role="tab" aria-selected="false" title="Only referrals you made">Mine</button>
-            <button type="button" class="seg-btn" id="report-ref-scope-all" data-refout-scope="all" role="tab" aria-selected="false" title="Every adviser's referrals">All</button>
+          <div class="pipe-segment" role="group" aria-label="Scope the referrals report">
+            <button type="button" class="seg-btn" id="report-ref-scope-mine" data-refout-scope="mine" aria-pressed="false" title="Only referrals you made">Mine</button>
+            <button type="button" class="seg-btn" id="report-ref-scope-all" data-refout-scope="all" aria-pressed="false" title="Every adviser's referrals">All</button>
           </div>
         </div>
         <div class="panel-sub" id="report-ref-basis"></div>
@@ -1329,7 +1190,7 @@
            opened to answer ("is anything going out in the morning, and how much"). Both are built
            in loadEmails() from the rows it already reads — no extra query — so the counts always
            describe exactly the list underneath them. -->
-      <div id="em-filters" class="pipe-segment em-filters" role="tablist" aria-label="Filter emails by status"></div>
+      <div id="em-filters" class="pipe-segment em-filters" role="group" aria-label="Filter emails by status"></div>
       <div class="panel-sub em-summary" id="em-summary"></div>
       <!-- R79 · A3 — the day-one damage-control view: everything that has ACTUALLY gone out since
            midnight (Europe/London), grouped by type with the first recipients named, painted by
@@ -1347,7 +1208,7 @@
         <!-- R11-5 — the same chips for the SMS queue, with its own status set (it has a `sending`
              state the email queue does not) and its own filter state, so narrowing one list does
              not silently narrow the other. -->
-        <div id="sms-filters" class="pipe-segment em-filters" role="tablist" aria-label="Filter SMS by status"></div>
+        <div id="sms-filters" class="pipe-segment em-filters" role="group" aria-label="Filter SMS by status"></div>
         <p class="panel-sub em-summary" id="sms-summary"></p>
         <div id="sms-list"></div>
       </div>
@@ -1364,7 +1225,7 @@
            declared here, which is what stops an adviser being offered a chip for a panel they
            have no panel for. -->
       <div class="rep-nav" id="settings-jump" hidden>
-        <div class="pipe-segment rep-nav-chips" id="settings-jump-chips" role="tablist" aria-label="Jump to a section of Settings"></div>
+        <div class="pipe-segment rep-nav-chips" id="settings-jump-chips" role="group" aria-label="Jump to a section of Settings"></div>
       </div>
       <!-- R68 · M15 — EMAIL SENDING STATUS. First thing on the page, above even the export panel,
            because it is the only line in this back office that answers "can we actually email a
@@ -1559,7 +1420,7 @@
       </div>
       <p class="panel-sub" id="vault-intro">Company password safe. All staff see every entry unless it is restricted; passwords stay hidden until you reveal them.</p>
       <input type="search" id="vault-search" class="search" aria-label="Search the vault" placeholder="Search the vault — name, owner, username, anything…">
-      <div id="vault-segment" class="pipe-segment" role="tablist" aria-label="Vault category"></div>
+      <div id="vault-segment" class="pipe-segment" role="group" aria-label="Vault category"></div>
       <div id="vault-list"></div>
     </section>
   </main>
@@ -1633,7 +1494,7 @@
      R81 · A3 — NX_BUILD_TAG below is the deploy handshake: each JS file ends by stamping its own
      window.__nxTag_*, and app.js's boot compares all four. EVERY round that edits ANY of
      index.html / core.js / reports-money.js / app.js bumps the tag IN ALL FOUR PLACES. -->
-<script>window.NX_BUILD_TAG = "r87";</script>
+<script>window.NX_BUILD_TAG = "r88";</script>
 <script src="/admin/core.js"></script>
 <script src="/admin/reports-money.js"></script>
 <script src="/admin/app.js"></script>

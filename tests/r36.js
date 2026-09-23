@@ -316,7 +316,8 @@ const clientRow = (page, clientId) => page.evaluate((id) => {
       await wait(page, 600);
 
       const kpiCount = (p) => p.$eval("#prot-kpi-count", (e) => Number(e.textContent) || 0);
-      const rowCount = (p) => p.$$eval("#prot-list-table .prot-client", (els) => els.length);
+      // R88 · C: the kit list, one row per client — the client's name is the row's .t (was .prot-client in a table)
+      const rowCount = (p) => p.$$eval("#prot-list .prot-row .row-head > .t", (els) => els.length);
 
       const countBefore = await kpiCount(page);
       const rowsBefore = await rowCount(page);
@@ -325,7 +326,7 @@ const clientRow = (page, clientId) => page.evaluate((id) => {
       await page.fill("#prot-search", uniq);
       await wait(page, 450);
       const rowsAfter = await rowCount(page);
-      const namesAfter = await page.$$eval("#prot-list-table .prot-client", (els) => els.map((e) => e.textContent));
+      const namesAfter = await page.$$eval("#prot-list .prot-row .row-head > .t", (els) => els.map((e) => e.textContent));
       eq("A3a · typing the unique name narrows the table to exactly that one row", rowsAfter, 1);
       ok("A3b · …and it is the right row", namesAfter.every((n) => n.includes(uniq)), JSON.stringify(namesAfter));
       const countAfter = await kpiCount(page);

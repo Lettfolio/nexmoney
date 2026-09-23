@@ -238,7 +238,8 @@ async function rateErcFeedDirect(page, opts) {
    same technique tests/r38.js's rowIds() uses, reused verbatim here. */
 async function rowIds(page, containerSel) {
   return page.evaluate((sel) => {
-    return [...document.querySelectorAll(sel + " .row-item .t[onclick]")].map((el) => {
+    // R88 · C: on the Retention page the name opens the client and the case is the chip (.ret-case-chip).
+    return [...document.querySelectorAll(sel + " .row-item .t[onclick], " + sel + " .row-item .ret-case-chip[onclick]")].map((el) => {
       const m = el.getAttribute("onclick").match(/openCase\('([^']+)'\)/);
       return m ? m[1] : null;
     }).filter(Boolean);

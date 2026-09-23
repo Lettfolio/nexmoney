@@ -320,16 +320,17 @@ async function readRows(page, table, filters) {
       }, { clientId });
 
       await goto(page, "clients", 1200);
-      await page.selectOption("#client-adviser", "p2");
+      await page.$eval("#client-adviser", (e, v) => { e.value = v; e.dispatchEvent(new Event("change")); }, "p2");   // R88 · B: was selectOption on the (now hidden compat) adviser select — scope is the kit Mine|All(|Unassigned) toggle
       await wait(page, 500);
       const underP2 = await page.$(`.client-row[data-client="${clientId}"]`);
       ok("A3 · the dual-adviser client appears under Wayne's (p2) filter", !!underP2);
 
-      await page.selectOption("#client-adviser", "p3");
+      await page.$eval("#client-adviser", (e, v) => { e.value = v; e.dispatchEvent(new Event("change")); }, "p3");   // R88 · B: was selectOption on the (now hidden compat) adviser select — scope is the kit Mine|All(|Unassigned) toggle
       await wait(page, 500);
       const underP3 = await page.$(`.client-row[data-client="${clientId}"]`);
       ok("A3 · …and ALSO appears under Luke's (p3) filter — this is correct, not a bug", !!underP3);
-      const noteTxt = await page.$eval("#client-adv-note", (e) => e.textContent).catch(() => "");
+      // R88 · B: was #client-adv-note's sentence; the note is gone and the "✕ Luke's" scope chip carries the rule as its title.
+      const noteTxt = await page.$eval("#cl-scope-other", (e) => e.title).catch(() => "");
       ok("A3 · the note explains the split-book rule", /split between two advisers|both advisers/.test(noteTxt), noteTxt);
 
       // K-15/K-17/L-16 — the "no access" stray (p6 Priya Raman) still holds a fixture case.
@@ -339,7 +340,7 @@ async function readRows(page, table, filters) {
       ok("A3 · …titled with the standard no-access explanation", !!priyaOpt && priyaOpt.title.length > 0, JSON.stringify(priyaOpt));
 
       // Composition: adviser filter + segment + sort together.
-      await page.selectOption("#client-adviser", "all");
+      await page.click("#cl-scope-all");   // R88 · B: was selectOption on the (now hidden compat) adviser select — scope is the kit Mine|All(|Unassigned) toggle
       await wait(page, 400);
       await page.fill("#client-search", "");
       await wait(page, 300);

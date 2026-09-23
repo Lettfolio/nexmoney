@@ -155,7 +155,13 @@ const setPromos = (page, on) => page.evaluate(async (v) => {
       eq("A0 · precondition: the master switch is OFF (as production runs it)", off, "off");
 
       await goPage(page, "protection", 2500);
-      const rowIds = await page.evaluate(() => [...document.querySelectorAll("#prot-list-table .prot-cb")].map((b) => b.dataset.id));
+      /* R88 · C: ONE ROW PER CLIENT — the checkbox carries the CLIENT id; the row's verbs act on its
+         top case (the 📝 Log call verb's argument). */
+      const rowPairs = await page.evaluate(() => [...document.querySelectorAll("#prot-list .prot-row")].map((r) => ({
+        client: r.querySelector(".prot-cb").dataset.id,
+        caseId: ((r.querySelector(".prot-logcall") || { getAttribute: () => "" }).getAttribute("onclick").match(/protLogCall\('([^']+)'/) || [])[1],
+      })));
+      const rowIds = rowPairs.map((p) => p.caseId);
       ok("A0b · the call list has rows to act on", rowIds.length >= 2, String(rowIds.length));
 
       /* ---- the row's own Email button ---- */
@@ -179,8 +185,8 @@ const setPromos = (page, on) => page.evaluate(async (v) => {
       eq("A1e · NOT a silent no-op with a write behind it — zero new protection_offer rows", qMid - qBefore, 0);
 
       /* ---- the bulk path ---- */
-      await page.check(`#prot-list-table .prot-cb[data-id="${rowIds[0]}"]`);
-      await page.check(`#prot-list-table .prot-cb[data-id="${rowIds[1]}"]`);
+      await page.check(`#prot-list .prot-cb[data-id="${rowPairs[0].client}"]`);
+      await page.check(`#prot-list .prot-cb[data-id="${rowPairs[1].client}"]`);
       await clearToast(page);
       await page.click("#prot-bulk-intro");
       await page.waitForTimeout(900);
@@ -341,8 +347,8 @@ const setPromos = (page, on) => page.evaluate(async (v) => {
       const page = await boot(browser, "p4");
       await goPage(page, "protection", 2500);
       const pick = await page.evaluate(() => {
-        const cb = document.querySelector("#prot-list-table .prot-cb");
-        return cb ? cb.dataset.id : null;
+        // R88 · C: the top row's top case — the case its 📝 Log call acts on
+        const b = document.querySelector("#prot-list .prot-row .prot-logcall"); return b ? (b.getAttribute("onclick").match(/protLogCall\('([^']+)'/) || [])[1] : null;
       });
       ok("C0 · the ranked call list is offering a case", !!pick, String(pick));
 
@@ -368,15 +374,14 @@ const setPromos = (page, on) => page.evaluate(async (v) => {
       });
       eq("C3 · …before the log-call overlay opens", modalUp, false);
       const gone = await waitFor(page, (id) => {
-        const rows = [...document.querySelectorAll("#prot-list-table .prot-cb")].map((b) => b.dataset.id);
+        const rows = [...document.querySelectorAll("#prot-list .prot-fact-case")].map((c) => c.dataset.case);   // R88 · C: cases named on the rows
         return rows.length && !rows.includes(id) ? true : null;
       }, pick);
       eq("C4 · …and the refusal's reload RE-READ the RPC — the settled case has left the list", gone, true);
 
       await setPromos(page, true);   // so the promo gate is not what refuses below
       const pick2 = await page.evaluate(() => {
-        const cb = document.querySelector("#prot-list-table .prot-cb");
-        return cb ? cb.dataset.id : null;
+        const b = document.querySelector("#prot-list .prot-row .prot-logcall"); return b ? (b.getAttribute("onclick").match(/protLogCall\('([^']+)'/) || [])[1] : null;
       });
       await page.evaluate((id) => {
         const row = window.__mock.db.cases.filter((c) => c.id === id)[0];
@@ -556,7 +561,7 @@ const setPromos = (page, on) => page.evaluate(async (v) => {
     {
       const page = await boot(browser, "p2");
       await goPage(page, "pipeline", 2000);
-      await page.selectOption("#board-adviser", "p3");
+      await page.$eval("#board-adviser", (e, v) => { e.value = v; e.dispatchEvent(new Event("change")); }, "p3");   // R88 · B: was selectOption on the (now hidden compat) adviser select — scope is the kit Mine|All(|Unassigned) toggle
       await page.waitForTimeout(1200);
       const keys = await page.evaluate(() => ({
         namespaced: localStorage.getItem("nx_board_adviser_p2"),
@@ -566,7 +571,7 @@ const setPromos = (page, on) => page.evaluate(async (v) => {
       eq("E1b · …and nothing is written to the shared, un-namespaced key", keys.bare, null);
 
       await goPage(page, "clients", 2500);
-      await page.selectOption("#client-adviser", "all");
+      await page.click("#cl-scope-all");   // R88 · B: was selectOption on the (now hidden compat) adviser select — scope is the kit Mine|All(|Unassigned) toggle
       await page.waitForTimeout(1200);
       const ck = await page.evaluate(() => ({
         namespaced: localStorage.getItem("nx_clients_adviser_p2"),
@@ -783,7 +788,7 @@ const setPromos = (page, on) => page.evaluate(async (v) => {
          Then bust the session cache and reload the page, which is exactly the path a real edit
          takes through the R78 choke point. */
       const planted = await page.evaluate(async () => {
-        const ids = [...document.querySelectorAll("#prot-list-table .prot-client")]
+        const ids = [...document.querySelectorAll("#prot-list .prot-row .row-head > .t")]   // R88 · C: the kit row's name
           .map((el) => ((el.getAttribute("onclick") || "").match(/openClient\('([^']+)'\)/) || [])[1])
           .filter(Boolean);
         const uniq = [...new Set(ids)];
@@ -798,10 +803,13 @@ const setPromos = (page, on) => page.evaluate(async (v) => {
       ok("H0 · planted a textable client and an SMS-opted-out one on rows the page is showing", !!planted, JSON.stringify(planted));
       await page.waitForTimeout(1200);
 
+      /* R88 · C: RE-POINTED. The table is the kit list; the dial pair rides on the row's fact line in
+         the FULL Retention form (the 1280 table-width contract that forced icons-only is gone with
+         the table). */
       const table = await page.evaluate((p) => {
         const cell = (cid) => {
-          const link = [...document.querySelectorAll("#prot-list-table .prot-client")].find((el) => (el.getAttribute("onclick") || "").includes(cid));
-          return link ? link.closest("td") : null;
+          const link = [...document.querySelectorAll("#prot-list .prot-row .row-head > .t")].find((el) => (el.getAttribute("onclick") || "").includes(cid));
+          return link ? link.closest(".prot-row") : null;
         };
         const read = (cid) => {
           const td = cell(cid);
@@ -816,7 +824,7 @@ const setPromos = (page, on) => page.evaluate(async (v) => {
             optoutNote: (td.querySelector(".row-sms-optout") || {}).textContent || "",
           };
         };
-        return { ok: read(p.ok), optout: read(p.optout), anyTel: document.querySelectorAll('#prot-list-table a[href^="tel:"]').length };
+        return { ok: read(p.ok), optout: read(p.optout), anyTel: document.querySelectorAll('#prot-list a[href^="tel:"]').length };
       }, planted);
       ok("H1a · the ranked table now carries a tel: link on the row's client cell",
         !!table.ok && table.ok.tel === "tel:07700900123", JSON.stringify(table.ok));
@@ -826,34 +834,21 @@ const setPromos = (page, on) => page.evaluate(async (v) => {
       /* R69 · B2 pins this table fitting 1280 with nothing to scroll, so inside it the affordance
          is the two ICONS with the number in the title — the digits and the word "Text" are ~150px
          this layout does not have, and a click-to-call does not need them on screen. */
-      ok("H1b2 · …in the table's compact form, with the number in the link's title",
-        !!table.ok && table.ok.telText === "📞" && /07700900123/.test(table.ok.telTitle || ""), JSON.stringify(table.ok));
+      ok("H1b2 · …in the FULL form now (R88 · C: no table width to fit) — the number on screen",
+        !!table.ok && /07700\s?900\s?123|07700900123/.test(table.ok.telText || ""), JSON.stringify(table.ok));
       ok("H1c · the table is no longer a page with zero phone numbers on it", table.anyTel > 0, String(table.anyTel));
       ok("H2a · a client marked sms_opt_out keeps the CALL…",
         !!table.optout && table.optout.tel === "tel:07700900456", JSON.stringify(table.optout));
       ok("H2b · …and loses the pre-drafted text, with the reason in its place",
         !!table.optout && !table.optout.sms && !!table.optout.optoutNote, JSON.stringify(table.optout));
 
-      const bands = await page.evaluate(() => ({
-        call: document.querySelectorAll('#prot-calllist a[href^="tel:"]').length,
-        callRows: document.querySelectorAll("#prot-calllist .row-item").length,
-        gi: document.querySelectorAll('#prot-gi-list a[href^="tel:"]').length,
-        giRows: document.querySelectorAll("#prot-gi-list .row-item").length,
-      }));
-      ok("H3a · the completed-book call list carries them too (or has no rows to carry them on)",
-        bands.callRows === 0 || bands.call > 0, JSON.stringify(bands));
-      ok("H3b · …and so does the GI band", bands.giRows === 0 || bands.gi > 0, JSON.stringify(bands));
-      const rowForm = await page.evaluate(() => {
-        const a = document.querySelector('#prot-calllist a[href^="tel:"], #prot-gi-list a[href^="tel:"]');
-        const sms = document.querySelector("#prot-calllist a.row-sms-link, #prot-gi-list a.row-sms-link");
-        return { tel: a ? a.textContent.trim() : null, sms: sms ? sms.textContent.trim() : null };
-      });
-      ok("H3c · the row-item bands keep the FULL Retention form (number on screen, “💬 Text”) — only the table is compact",
-        !rowForm.tel || (/\d/.test(rowForm.tel) && (!rowForm.sms || /Text/.test(rowForm.sms))), JSON.stringify(rowForm));
-
+      /* R88 · C: the completed-book call list and the GI band are CHIPS on the one list now, so their
+         rows ARE the list's rows (H1/H2 above); there is no second surface to carry the pair. */
+      const bands = await page.evaluate(() => ({ panels: document.querySelectorAll("#prot-calllist, #prot-gi-list").length, rows: document.querySelectorAll("#prot-list .prot-row").length, full: [...document.querySelectorAll('#prot-list a[href^="tel:"]')].every((a) => /\d/.test(a.textContent)) }));
+      ok("H3 · the two bands are gone (chips on the one list) and every row's dial pair is the full form", bands.panels === 0 && bands.rows > 0 && bands.full, JSON.stringify(bands));
       /* The no-phone state Retention respects: nothing at all, never a dead "📞 —". */
       const dead = await page.evaluate(() => {
-        const cells = [...document.querySelectorAll("#prot-list-table .prot-row .stick-col")];
+        const cells = [...document.querySelectorAll("#prot-list .prot-row .row-fact")];   // R88 · C
         return cells.filter((td) => /📞/.test(td.textContent) && !td.querySelector('a[href^="tel:"]')).length;
       });
       eq("H4 · a client with no number renders no phone affordance at all — no dead 📞", dead, 0);

@@ -372,9 +372,6 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
 /* ---------- Dashboard cards & tabs ---------- */
 .dash-card { display: flex; flex-direction: column; height: 300px; }
 .dash-card.slim { height: auto; }
-/* The radar's cage, treated like My Day's. */
-#unactioned-panel.dash-card { height: auto; }
-#unactioned-list { max-height: min(62vh, 720px); }
 .dash-scroll { flex: 1; overflow-y: auto; min-height: 0; }
 .dash-tabs { display: flex; gap: 18px; border-bottom: 1px solid var(--border); margin-bottom: 10px; padding-bottom: 8px; flex-shrink: 0; }
 .dash-tab {
@@ -649,20 +646,6 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
 .age-cell.age-red { color: #c23b3b; font-weight: 600; }
 /* Touch/mobile fallback for drag-and-drop — hidden on desktop, shown on narrow viewports. */
 .card-stage-move { display: none; }
-/* Board card "advance to next stage" affordance (BUILD 7b, defect 17) — a quick way to progress a deal without the buried .card-stage-move <select>. */
-.card-advance {
-  flex: 0 0 auto;
-  width: 20px; height: 20px;
-  border: 1px solid var(--border-strong); border-radius: 50%;
-  background: #fff; color: var(--navy);
-  font-size: 12px; font-weight: 700; line-height: 1;
-  display: flex; align-items: center; justify-content: center;
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity .15s ease, background .15s ease;
-}
-.card:hover .card-advance, .card-advance:focus-visible { opacity: 1; }
-.card-advance:hover { background: var(--blue-bg); }
 /* Drag & drop */
 .card.dragging { opacity: .4; }
 .col.dragover { outline: 2px dashed var(--navy); outline-offset: -4px; }
@@ -795,6 +778,8 @@ main input:focus, main select:focus, main textarea:focus,
   display: flex; flex-direction: column; gap: 6px; padding: 8px; min-width: 220px;
   background: #fff; border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 8px 28px rgba(9,20,38,.16); }
 .more-actions-menu .btn { width: 100%; justify-content: flex-start; text-align: left; }
+/* The case footer's overflow menu scrolls inside the viewport (was an inline style, R88 · E). */
+#case-more-actions.more-actions-menu { max-height: calc(100vh - 230px); overflow-y: auto; }
 .more-actions-empty { color: var(--muted); font-size: 13px; padding: 4px 6px; }
 .overlay-backdrop { z-index: 70; background: rgba(9,20,38,.35); }
 .overlay-modal { width: 460px; padding: 22px 24px; }
@@ -1234,40 +1219,17 @@ select.task-reassign { width: auto; padding: 3px 6px; font-size: 12px; }
 .mobile-hint { display: none; }
 
 /* ---------- Protection & GI page ---------- */
-.prot-table-wrap { overflow-x: auto; }
 .prot-client { font-weight: 600; color: var(--dark); cursor: pointer; }
 .prot-client:hover { color: var(--navy); text-decoration: underline; }
 .prot-est { font-weight: 700; color: var(--navy); font-variant-numeric: tabular-nums; }
 .prot-status-set { padding: 4px 8px; font-size: 12.5px; max-width: 132px; }
-#prot-list-table .btn-sm { vertical-align: middle; }
-#prot-list-table .prot-actions { white-space: nowrap; }
-#prot-list-table .prot-actions > * { vertical-align: middle; }
-/* The row gained a sixth control (📞 Log call, icon-only in the cell). */
-#prot-list-table td.prot-actions .btn-sm { padding-left: 7px; padding-right: 7px; }
 .prot-status-set { width: 96px; max-width: 96px; }
 /* 74px clipped "GI taken" to "GI...", which is the one word on the row that says the job is done. */
 .prot-status-set.prot-gi-set { width: 96px; max-width: 96px; }
-/* Sticky key column (Client) and, on the protection table, a sticky-right Actions column, for every wide table that scrolls horizontally. */
+/* Sticky key column (Client) for every wide table that scrolls horizontally. */
 .imp-table .stick-col { position: sticky; left: 0; z-index: 1; background: var(--white); box-shadow: 2px 0 4px rgba(16,24,40,.06); }
 .imp-table th.stick-col { background: var(--light); z-index: 2; }
 .imp-table tr:hover td.stick-col { background: #f8fafc; }
-.imp-table .stick-col-right { position: sticky; right: 0; z-index: 1; background: var(--white); box-shadow: -2px 0 4px rgba(16,24,40,.06); }
-.imp-table th.stick-col-right { background: var(--light); z-index: 2; }
-.imp-table tr:hover td.stick-col-right { background: #f8fafc; }
-/* A STICKY COLUMN IS ONLY LEGITIMATE IF IT IS NARROW RELATIVE TO THE SCROLLPORT. */
-/* B2/L7 — …and the answer above turned out to be "sticky is never legitimate here". */
-#prot-list-table .stick-col-right { position: static; box-shadow: none; }
-#prot-list-table td.stick-col { z-index: 3; }
-#prot-list-table th.stick-col { z-index: 4; }
-/* THE TWO COLUMNS THAT ARE ALLOWED TO WRAP. */
-#prot-list-table td.prot-col-case, #prot-list-table th.prot-col-case,
-#prot-list-table td.prot-col-status, #prot-list-table th.prot-col-status { white-space: normal; }
-/* Below 1500px, fold the low-value LOAN / EST. */
-.prot-fold-info { display: none; white-space: normal; color: var(--muted); font-size: 12px; font-weight: 400; }
-/* FIX OP-02/V1 — the property on a Protection & GI row. */
-.prot-case-prop { margin-top: 3px; }
-.prot-case-prop .prop-chip { max-width: 210px; }
-.prot-col-case { white-space: normal; }
 /* The sticky Client cell is the one cell whose width is load-bearing for every other column, so it is bounded and its name ellipsises. */
 .imp-table td.stick-col, .imp-table th.stick-col { max-width: 210px; overflow: hidden; text-overflow: ellipsis; }
 
@@ -1564,12 +1526,6 @@ select.combo-native { display: none !important; }
   margin: -4px 0 12px; max-width: 78ch; font-size: 12.5px; line-height: 1.5;
 }
 .client-seg-def.hidden { display: none; }
-.client-selall {
-  display: flex; align-items: center; gap: 8px;
-  padding: 2px 2px 10px; font-size: 13px; color: var(--muted);
-}
-.client-selall label { display: inline-flex; align-items: center; gap: 8px; margin: 0; font-weight: 500; cursor: pointer; }
-.client-selall input { width: 18px; height: 18px; margin: 0; cursor: pointer; accent-color: var(--navy); }
 .client-bulk-note { margin: -6px 0 12px; max-width: 78ch; font-size: 12px; line-height: 1.5; }
 .client-row > .client-cb { align-self: center; margin-right: 2px; }
 .client-row.is-sel { background: var(--blue-bg); }
@@ -2109,14 +2065,6 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .em-filters { margin-bottom: 10px; }
 .em-summary { margin: -2px 0 12px; font-weight: 500; }
 .em-summary:empty { display: none; }
-.client-sort {
-  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-  margin: 0 0 10px; font-size: 13px; color: var(--muted);
-}
-.client-sort label { margin: 0; font-weight: 500; }
-.client-sort select { width: auto; min-width: 168px; margin: 0; }
-.client-sort-note { font-size: 12px; color: var(--muted); }
-.client-sort-note:empty { display: none; }
 /* The per-row detail the active segment/sort puts on a client. */
 .client-rateend { font-variant-numeric: tabular-nums; }
 .client-lc-age { color: var(--muted); font-variant-numeric: tabular-nums; }
@@ -2142,27 +2090,6 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   color: var(--muted); white-space: nowrap; cursor: pointer;
 }
 .ret-tome input { width: auto; margin: 0; min-height: 0; }
-/* W-29 — the Clients adviser filter. Same shape as the R11 sort control below it, because they are read as a pair: whose book, then in what order. */
-.client-advfilter {
-  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-  margin: 10px 0 8px; font-size: 13px; color: var(--muted);
-}
-.client-advfilter label { margin: 0; font-weight: 500; }
-.client-advfilter select { width: auto; min-width: 200px; margin: 0; }
-.client-adv-note { font-size: 12px; color: var(--muted); flex: 1 1 260px; }
-.client-adv-note:empty, .client-adv-note.hidden { display: none; }
-.client-controls {
-  display: flex; flex-wrap: wrap; align-items: flex-start;
-  gap: 8px 20px; margin: 0;
-}
-.client-controls > .client-views,
-.client-controls > .client-advfilter,
-.client-controls > .client-sort { margin: 0; }
-/* .client-views had no rules of its own — as a block div its select and two buttons already sat on one line. */
-.client-controls > .client-views { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.client-controls > .client-advfilter { flex: 1 1 300px; }
-.client-controls .client-adv-note,
-.client-controls .client-sort-note { flex: 1 1 100%; max-width: 88ch; }
 .cs-top-actions .ret-tome { align-self: center; margin: 0; }
 /* W-15c — inline on a list row, so a rate-end row stays four lines rather than five. */
 .rate-callpack .rate-uplift { font-weight: 600; }
@@ -2397,6 +2324,10 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .vault-name { font-weight: 700; color: var(--dark); font-size: 14px; overflow-wrap: anywhere; }
 .vault-user { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere; }
 .vault-card-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+/* The vault card's ⋯ menu (was inline styles, R88 · E): a native <details> whose menu floats under the button. */
+details.vault-more { position: relative; display: inline-block; }
+details.vault-more > summary.vault-more-btn { list-style: none; display: inline-flex; }
+details.vault-more > .vault-more-menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 20; background: #fff; border: 1px solid var(--border, #e4e9f0); border-radius: 8px; padding: 6px; box-shadow: 0 6px 18px rgba(0,0,0,.12); min-width: 120px; }
 .vault-owner { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; letter-spacing: .01em; }
 .vault-owner-daniel { background: var(--blue-bg); color: var(--navy); }
 .vault-owner-luke   { background: var(--green-bg); color: var(--green); }
@@ -2579,13 +2510,6 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 /* The third group the list always contained and never headed: rows carried by an ERC conflict alone, whose rate ends beyond the reminder window. */
 .ret-group-h.ret-g-erc { background: #eef1f7; border-left: 4px solid #6b7c99; }
 .ret-year-h { margin: 10px 0 2px; font-size: 11.5px; font-weight: 800; letter-spacing: 0.06em; color: #8a93a5; border-bottom: 1px solid #e3e7ee; padding-bottom: 2px; }
-/* D · protection: band rows + quiet action cluster */
-#prot-list-table tr.prot-band td { padding: 6px 10px; font-size: 12px; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; border-left: 4px solid #aab4c3; background: #eef1f5; color: #556275; }
-#prot-list-table tr.prot-band-quoted td { background: #fef3e0; color: #9a6200; border-left-color: #f5a623; }
-#prot-list-table tr.prot-band-discussed td { background: #e8f0fe; color: #1a5fb4; border-left-color: #4285f4; }
-.prot-band-n { background: rgba(255,255,255,0.75); border-radius: 10px; padding: 0 8px; }
-.prot-actions > *:not(:first-child) { opacity: 0.75; transition: opacity 0.12s; }
-#prot-list-table tr:hover .prot-actions > *, .prot-actions:focus-within > * { opacity: 1; }
 /* R62 — the R61 leftovers: Emails current-first, fee-status weighting, Settings bands. */
 .row-item.qrow-cancelled { opacity: 0.55; }
 .row-item.qrow-cancelled:hover { opacity: 0.9; }
@@ -2597,13 +2521,10 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .settings-details[open] > summary { margin-bottom: 10px; }
 .ret-month-chips { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
 .ret-month-chips .due-chips-lbl { margin-right: 2px; }
-.ret-month-chip .count, .ret-untouched-chip .count { margin-left: 5px; background: rgba(16,42,78,.08); border-radius: 10px; padding: 0 6px; font-size: 11px; font-weight: 700; }
+.ret-month-chip .count { margin-left: 5px; background: rgba(16,42,78,.08); border-radius: 10px; padding: 0 6px; font-size: 11px; font-weight: 700; }
 /* The chosen chip is a WHITE pill, so a white-on-white count would vanish. */
-.ret-month-chip.scope-active .count, .ret-untouched-chip.scope-active .count { background: var(--navy); color: #fff; }
-.ret-selall { padding-top: 0; }
-.ret-selall .linkish { font-size: 12.5px; }
+.ret-month-chip.scope-active .count { background: var(--navy); color: #fff; }
 .bulk-bar #ret-bulk-clear { margin-left: auto; }
-#ret-rates-list .row-item > .ret-cb { align-self: center; margin-right: 2px; }
 #ret-rates-list .row-item.is-sel { background: var(--blue-bg); }
 .ret-row-acts { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 5px; }
 /* This shrank every retention row verb to a seventh size (11.5px at 2px padding, ~21px tall — the phone tap-target complaint too). */
@@ -2616,7 +2537,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 /* WORKING THE BACK BOOK: THE CALL AFFORDANCES. */
 .ret-row-tel + .row-sms-link { margin-left: 8px; }
 .row-sms-link { font-size: 12.5px; white-space: nowrap; }
-#briefing-list .ret-row-tel, #unactioned-list .ret-row-tel { display: inline-block; margin-top: 3px; }
+#briefing-list .ret-row-tel { display: inline-block; margin-top: 3px; }
 /* The grey "who has already rung this client" clause. */
 .ret-row-lastc { font-variant-numeric: tabular-nums; }
 .ret-row-never { color: var(--red); font-weight: 600; }
@@ -2625,9 +2546,6 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .ret-out-chip { border-style: solid; }
 .ret-row-outcome { color: var(--muted); font-variant-numeric: tabular-nums; }
 /* R72 · A2 — the rate-end outcome funnel, in the same chip language as the month row above it. */
-.ret-outcome-funnel:empty { display: none; }
-.ret-outcome-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; margin: 0 0 6px; }
-.ret-outcome-title { font-weight: 600; font-size: 13px; }
 .ret-outcome-chip { border: 1px solid var(--border); border-radius: 12px; padding: 1px 9px; background: var(--light); }
 .ret-outcome-chip strong { font-variant-numeric: tabular-nums; }
 .ret-outcome-chip.hot { background: var(--amber-bg); border-color: var(--amber); color: var(--amber); }
@@ -2637,9 +2555,6 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .adopt-h .count { margin-left: 6px; }
 #report-adoption-table .adopt-never { color: var(--red); font-weight: 600; }
 #report-adoption-table td { font-variant-numeric: tabular-nums; }
-/* The "Never contacted first" toggle, in the same chip language as the month row above it. */
-.ret-untouched-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; margin: 0 0 10px; }
-.ret-untouched-note { font-size: 12px; color: var(--muted); max-width: 70ch; line-height: 1.5; }
 /* The radar's rate line — the fact that decides who to ring, so it is not muted away. */
 .unactioned-rate { font-variant-numeric: tabular-nums; }
 .unactioned-more { margin-top: 4px; }
@@ -2870,13 +2785,6 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   margin-bottom: 0;
   box-shadow: 0 -2px 12px rgba(16,24,40,.14);
 }
-.pipe-bulk-dock #pipe-bulk-sub {
-  margin: 0; padding: 10px 12px; max-width: 78ch;
-  background: var(--white); border: 1px solid #cfe0f4; border-top: none;
-  border-radius: 0 0 8px 8px;
-}
-.pipe-bulk-dock #pipe-bulk-sub[hidden] { display: none; }
-#pipe-bulk-info { margin-left: 0; }
 /* A3 · THE CASE MODAL'S ACTION BAR, IN ONE ROW (panel #4). */
 /* .action-bar was `flex: 1 1 auto` — it claimed the whole line whatever it held, so it ALWAYS started a second row however few buttons were in it. */
 .cs-sticky-actions .action-bar { flex: 0 1 auto; }
@@ -2970,28 +2878,11 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .rep-howcounted-body p:last-child { margin-bottom: 0; }
 .how-fold { margin: 4px 0 10px; }
 /* R87 · today — the one-line intros above the Watchtower / radar folds sit tight on their fold. */
-#watchtower-sub-line, #unactioned-sub-line { margin-bottom: 2px; }
+#watchtower-sub-line { margin-bottom: 2px; }
 .how-fold .rep-howcounted-body ul, .how-fold .rep-howcounted-body ol { margin: 0 0 7px 18px; font-size: 12.5px; color: var(--muted); line-height: 1.5; }
-/* R87 · book · C3 — "More ▾" on a list row: a native <details> whose summary is an ordinary .btn-sm; ≤3 verbs shown, the rest inline once opened. */
-.row-more { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-.row-more > summary { list-style: none; cursor: pointer; user-select: none; }
-.row-more > summary::-webkit-details-marker { display: none; }
-.row-more[open] > summary { background: var(--light); }
-.row-more-body { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-.row-more:not([open]) .row-more-body { display: none; }
+/* R87 · book · C3 — the .row-more rules moved to the R88 list kit block below. */
 /* R87 · book · C3 — the row's dial pair sits on the verb line. */
 #ret-rates-list .ret-row-acts { display: inline-flex; vertical-align: middle; margin-left: 8px; }
-/* R87 · book · C2 — month chips and the "Never contacted first" toggle share one line. */
-.ret-chips-row { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 16px; }
-.ret-chips-row .ret-month-chips, .ret-chips-row .ret-untouched-row { margin-bottom: 8px; }
-/* R87 · book · C2 — a folded month chip: .btn's display would beat the UA [hidden] rule. */
-.ret-month-chip[hidden] { display: none; }
-/* R87 · book · C4 — the two Protection bands, collapsed: a .panel that is a <details>. */
-.prot-band-fold > summary { list-style: none; cursor: pointer; user-select: none; }
-.prot-band-fold > summary::-webkit-details-marker { display: none; }
-.prot-band-fold > summary h3::before { content: "▸ "; color: var(--muted); font-size: 12px; }
-.prot-band-fold[open] > summary h3::before { content: "▾ "; }
-.prot-band-fold .prot-band-hint { font-size: 12px; margin-left: 6px; }
 .prot-rank { font-size: 11.5px; font-variant-numeric: tabular-nums; margin-right: 2px; }
 /* A4c — the two Reports strips now stack: level-1 sections above level-2 panels, both sticky, so jumping never scrolls the section pills out of reach. */
 .rep-sections-nav {
@@ -3192,7 +3083,6 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 
 /* --- B3 · gone quiet gets verbs ------------------------------------------- */
 .ret-cold-money { margin-top: 2px; }
-.ret-cold-acts { margin-top: 4px; }
 
 /* --- B4 · the pipeline table --------------------------------------------- */
 .pipe-table-head {
@@ -3244,14 +3134,56 @@ input.mfa-code { font-size: 22px; letter-spacing: .35em; text-align: center; fon
 #security-panel .sec-team-tbl { margin-top: 8px; }
 
 /* ==========================================================================
+   R88 · D — CASE PANEL ORDER (panel 02 #5/#6). The work first (tasks, notes, history), then every
+   other section as a collapsed .case-fold <details>. Composer options appear on focus (.is-active).
+   ========================================================================== */
+.case-tasks, .note-compose { margin-top: 14px; }
+.task-compose { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+.task-compose > #new-task { flex: 1 1 200px; min-width: 140px; }
+.task-compose > #add-task-btn { order: 2; }
+.task-compose > .task-opts { order: 3; flex: 1 1 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.task-compose > .task-opts > .due-chips { margin: 0 !important; }
+.task-compose > .task-opts > select, .task-compose > .task-opts > input { width: auto; }
+.task-compose:not(.is-active) > .compose-opts, .note-compose:not(.is-active) .compose-opts { display: none; }
+.case-fold { margin: 10px 0 0; border: 1px solid var(--border); border-radius: 10px; background: #fff; padding: 0 12px; }
+.case-fold > summary { cursor: pointer; list-style: none; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-height: 40px; font-size: 14px; font-weight: 600; color: var(--dark); user-select: none; }
+.case-fold > summary::-webkit-details-marker { display: none; }
+.case-fold > summary::before { content: "\25B8"; font-size: 12px; color: var(--muted); transition: transform .15s ease; }
+.case-fold[open] > summary::before { transform: rotate(90deg); }
+.case-fold[open] { padding-bottom: 10px; }
+.case-fold > summary .case-fold-sub { font-weight: 400; font-size: 13px; }
+/* The fold's summary names the section, so the inner heading would say it twice. */
+.case-fold > #case-docs > h3:first-child, .case-fold > #case-files > h3:first-child, .case-fold > #case-stage-checklist > h3:first-child { display: none; }
+.case-fold > #case-docs, .case-fold > #case-files, .case-fold > #case-stage-checklist { margin-top: 0 !important; }
+.case-fold > .cs-stats-more { margin: 4px 0 0; }
+.case-milestones.case-fold { margin: 10px 0 0; padding: 0 12px; }
+.case-milestones.case-fold[open] { padding-bottom: 10px; }
+details.case-docs-compact.case-fold { margin-top: 10px !important; }
+details.case-details.case-fold { border-top: 1px solid var(--border); padding: 0 12px; }
+#case-sec-wrap { margin-top: 10px; }
+
+/* R88 · A — TODAY, ONE WORKLIST. My Day holds the Watchtower's alerts and the radar's cases as rows
+   (or as a sub-line on a case's existing row); the Watchtower is a closed "Checks" <details>. */
+.brief-side { display: flex; align-items: center; gap: 6px; margin-top: 3px; min-width: 0; }
+.brief-side-t { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.brief-side-acts { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; }
+.brief-side-crit .brief-side-t { color: var(--red); font-weight: 600; }
+.brief-tail { margin: 6px 0 2px; font-size: 12px; }
+.checks-drawer > summary { list-style: none; cursor: pointer; user-select: none; }
+.checks-drawer > summary::-webkit-details-marker { display: none; }
+.checks-drawer > summary > h3 { display: flex; align-items: center; gap: 8px; margin: 0; }
+.checks-drawer > summary > h3::after { content: "\25B8"; color: var(--muted); font-size: 10px; margin-left: auto; }
+.checks-drawer[open] > summary > h3::after { content: "\25BE"; }
+.checks-drawer[open] > summary { margin-bottom: 8px; }
+.checks-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 6px 0 8px; }
+
+/* ==========================================================================
    RESPONSIVE. Every @media block lives here, one block per threshold, wider first, so a narrower
    rule always wins a tie. R87 · E4: 60 blocks over 10 phone thresholds became 12 blocks over 7
    (767→760, 699/720→700 and min-width 760→761 unified — nothing measurable moved).
    ========================================================================== */
 
 @media (max-width: 1500px) {
-  .prot-col-loan, .prot-col-est { display: none; }
-  .prot-fold-info { display: block; }
   .pipe-col-updated { display: none; }
 }
 
@@ -3276,13 +3208,6 @@ input.mfa-code { font-size: 22px; letter-spacing: .35em; text-align: center; fon
     border: 1px solid var(--border-strong); border-radius: 8px;
     background: #fff; color: var(--dark);
   }
-  /* Advance affordance is always visible (no hover on touch) and sized to a real touch target. */
-  .card-advance {
-    opacity: 1;
-    width: 44px; height: 44px;
-    min-width: 44px; min-height: 44px;
-    font-size: 16px;
-  }
 }
 
 /* ---- PHONE — the one phone breakpoint (was 760 + 767) ---- */
@@ -3303,7 +3228,7 @@ details.hdr-more > .hdr-more-menu {
   font-size: 13px; font-weight: 500; text-transform: none; letter-spacing: 0;
 }
 details.hdr-more > .hdr-more-menu > .btn { justify-content: flex-start; text-align: left; }
-details.hdr-more > .hdr-more-menu > .badge { display: block; text-align: left; padding: 6px 10px; border-radius: 6px; font-size: 12px; }
+details.hdr-more > .hdr-more-menu > .badge { display: block; text-align: left; padding: 6px 10px; border-radius: 6px; font-size: 12px; cursor: pointer; border: 0; }
 details.hdr-more > .hdr-more-menu > .hidden { display: none; }
 /* R87 · today (A5) — My Day's 📞/💬 pair sits on the sub-line, after the owner. */
 #briefing-list .brief-phone { white-space: nowrap; margin-left: 6px; }
@@ -3418,7 +3343,6 @@ details.hdr-more > .hdr-more-menu > .hidden { display: none; }
   #assistant-fab .fab-label { display: none; }
   .diary-day { display: none; }
   .diary-day.has-appts, .diary-day.today { display: block; }
-  .prot-table-wrap { -webkit-overflow-scrolling: touch; }
   #page-protection .page-tools select { flex: 1; }
   .global-search { margin: 0; padding: 7px 9px; flex: 0 0 auto; }
   .global-search .gs-txt, .global-search .gs-kbd { display: none; }
@@ -3435,7 +3359,6 @@ details.hdr-more > .hdr-more-menu > .hidden { display: none; }
     box-shadow: 0 -2px 12px rgba(16,24,40,.12);
   }
   .bulk-bar-select { flex: 1 1 auto; min-height: 44px; }
-  .client-selall input { width: 24px; height: 24px; }
   .client-segment { margin-top: 10px; }
   .client-seg-def { margin-bottom: 10px; }
   .wt-sev-chip { padding: 5px 8px; gap: 5px; }
@@ -3460,9 +3383,6 @@ details.hdr-more > .hdr-more-menu > .hidden { display: none; }
     background-attachment: local, local, scroll, scroll;
   }
   .rep-nav { margin: 0 -12px 4px; padding: 8px 12px 2px; }
-  .client-sort select { flex: 1 1 auto; min-height: 44px; }
-  .client-advfilter select { flex: 1 1 auto; min-height: 44px; }
-  .client-adv-note { flex: 1 1 100%; }
   .cs-top-actions .ret-tome { align-self: flex-start; }
   /* The modal's own padding drops to 18px at this width (see .modal), so the bleed must match. */
   .cs-sticky-actions { margin: 0 -18px 12px; padding: 8px 62px 8px 18px; }
@@ -3519,7 +3439,7 @@ details.hdr-more > .hdr-more-menu > .hidden { display: none; }
   .ret-row-tel .contact-link { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; font-size: 0; }
   .ret-row-tel .contact-link::after { content: "Call"; font-size: 13px; font-weight: 600; }
   .ret-row-tel + .row-sms-link { margin-left: 0; }
-  #briefing-list .ret-row-tel, #unactioned-list .ret-row-tel { display: inline-flex; margin-top: 6px; }
+  #briefing-list .ret-row-tel { display: inline-flex; margin-top: 6px; }
 
   /* --- the rest of the 44px pass -------------------------------------------------------- */
   /* Task snooze chips (+1d / +3d / +1wk) measured 42×24. */
@@ -3560,9 +3480,6 @@ details.hdr-more > .hdr-more-menu > .hidden { display: none; }
   .ret-month-chips > * { flex: 0 0 auto; }
   .ret-month-chips .segment { flex-wrap: nowrap; flex: 0 0 auto; }
   .ret-month-chips .ret-month-chip { min-height: 44px; white-space: nowrap; }
-  .ret-untouched-row { display: flex; flex-direction: column; gap: 4px; }
-  /* Not clamped — see the A1 note about dead ellipses. */
-  .ret-untouched-chip { min-height: 44px; white-space: nowrap; align-self: flex-start; }
   /* The KPI strip's right edge: a fade, not a cut through the middle of a word · #kpi-row is a one-line scroller at ≤767px (R69 · A2). */
   #page-dashboard #kpi-row {
     -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent 100%);
@@ -3602,14 +3519,10 @@ details.hdr-more > .hdr-more-menu > .hidden { display: none; }
   table.mob-cards > tbody > tr > td[data-lbl=""]::before { display: none; }
   table.mob-cards > tbody > tr > td .btn,
   table.mob-cards > tbody > tr > td select { min-height: 44px; margin: 2px 4px 2px 0; }
-  /* A full-width band row (Protection's status bands) is a heading, not a card. */
-  table.mob-cards > tbody > tr.prot-band { padding: 0; border: none; background: none; box-shadow: none; }
-  table.mob-cards > tbody > tr.prot-band > td { display: block; }
-  table.mob-cards > tbody > tr.prot-band > td::before { display: none; }
   /* The bulk checkbox keeps its own line at the top of the card. */
   table.mob-cards > tbody > tr > td.bulk-col { text-align: left; padding-bottom: 6px; }
   table.mob-cards > tbody > tr > td.bulk-col::before { display: none; }
-  .prot-table-wrap, #dh-waitingdocs-panel .dh-wd-scroll, .dh-sharedprop { overflow-x: visible; }
+  #dh-waitingdocs-panel .dh-wd-scroll, .dh-sharedprop { overflow-x: visible; }
   .board-scroll-wrap--table:has(table.mob-cards)::after,
   .board-scroll-wrap--table:has(table.mob-cards) .board-scroll-arrow { display: none; }
   /* A card list has no sideways scroller, so neither arrow nor fade belongs on it. */
@@ -3630,16 +3543,14 @@ details.hdr-more > .hdr-more-menu > .hidden { display: none; }
   #imp-review-table .stick-col, #pipe-table .stick-col { left: 40px; }
   .pipe-table-head { gap: 8px; }
   .pipe-table-head-r .btn { min-height: 44px; }
+  /* R88 · D — case panel folds and the task box on a phone. */
+  .case-fold > summary, details.case-details > summary { min-height: 44px; }
+  .task-compose > #new-task { flex-basis: 100%; }
 }
 
 /* ---- Small phone (was 699 / 700 / 720) ---- */
 @media (max-width: 700px) {
   .settings-grid { grid-template-columns: 1fr; }
-  /* Under ~720px three controls abreast is worse than three rows: stack them back up, with the spacing the standalone rows used to carry. */
-  .client-controls { display: block; }
-  .client-controls > .client-views { margin: 0 0 10px; }
-  .client-controls > .client-advfilter { margin: 0 0 8px; }
-  .client-controls > .client-sort { margin: 0 0 10px; }
   .recon-line { grid-template-columns: 1fr; }
   .recon-controls .recon-pick { flex-basis: 100%; }
   .recon-attr .recon-attr-pick { flex-basis: 100%; }
@@ -3732,6 +3643,59 @@ details.hdr-more > .hdr-more-menu > .hidden { display: none; }
   .brief-row .task-snooze > summary { opacity: 1; }
 }
 /* ==========================================================================
+   R88 list kit (R88-DESIGN §F, panel-r87/KIT.md). Rendered by the fenced kit block at the top of
+   app.js. The chip family is .seg-strip > .seg-btn + .seg-count (.seg-btn/.seg-count rules above,
+   BUILD 5a); scope toggles keep .segment. Nothing page-specific belongs under this heading.
+   ========================================================================== */
+/* The tools row: 🔍 search · Mine|All · Sort, one line, wrapping on a phone. */
+.list-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
+.list-tools .search { margin: 0; flex: 1 1 220px; min-width: 0; max-width: 420px; }
+.list-tools .list-sort { font-size: 13px; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border-strong); background: var(--white); color: var(--text); min-height: 34px; cursor: pointer; }
+/* The chip strip: same pill tray as .pipe-segment. */
+.seg-strip { display: inline-flex; gap: 4px; flex-wrap: wrap; background: #eef2f7; padding: 4px; border-radius: 999px; max-width: 100%; vertical-align: top; margin-bottom: 12px; }
+/* "Select all N shown" line. */
+.list-selall { display: flex; align-items: center; gap: 8px; padding: 2px 2px 10px; font-size: 13px; color: var(--muted); }
+.list-selall label { display: inline-flex; align-items: center; gap: 8px; margin: 0; font-weight: 500; cursor: pointer; }
+.list-selall input { width: 18px; height: 18px; margin: 0; cursor: pointer; accent-color: var(--navy); }
+/* The bulk bar's own verbs sit left; Clear pins right. */
+.bulk-bar > .bulk-clear { margin-left: auto; }
+.bulk-bar > .btn + .bulk-clear, .bulk-bar > .row-more + .bulk-clear { margin-left: auto; }
+.bulk-bar > .row-more { margin-left: 0; }
+.bulk-bar > .row-more > .row-more-body > .btn { margin-left: 0; }
+/* The dock: last child of the list's scroller, sticky at its bottom; the bar rises over the rows. Zero height while the bar is empty (R87 Watchtower pattern). */
+.bulk-dock { position: sticky; bottom: 0; z-index: 20; }
+.bulk-dock > .bulk-bar { margin-bottom: 0; box-shadow: 0 -2px 12px rgba(16,24,40,.14); }
+.bulk-dock.is-empty, .bulk-dock:has(> .bulk-bar.is-empty) { height: 0; min-height: 0; overflow: hidden; margin: 0; padding: 0; border: 0; }
+/* "More ▾" on a row or a bar: a native <details> whose summary is an ordinary .btn-sm; ≤3 verbs shown, the rest inline once opened. (Was R87 · book · C3.) */
+.row-more { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.row-more > summary { list-style: none; cursor: pointer; user-select: none; }
+.row-more > summary::-webkit-details-marker { display: none; }
+.row-more[open] > summary { background: var(--light); }
+.row-more-body { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.row-more:not([open]) .row-more-body { display: none; }
+/* The row: the Clients anatomy — ☐ · name + ≤2 chips · one fact line · verbs. */
+/* The checkbox sits on the name's line (the top of the row), not mid-row (R88 · E: was B's #client-list patch). */
+.row-item.kit-row > .bulk-cb { align-self: flex-start; margin-right: 2px; }
+.row-item.kit-row.is-sel { background: var(--blue-bg); }
+/* `attrs: { hidden: true }` on a row or a chip: the flex / inline-flex display would beat the UA [hidden] rule. */
+.row-item.kit-row[hidden], .seg-strip > .seg-btn[hidden] { display: none; }
+.kit-row .row-head { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; min-width: 0; }
+.kit-row .row-head > .t { min-width: 0; overflow-wrap: anywhere; }
+.kit-row a.t { text-decoration: none; }
+.kit-row .row-chips { display: inline-flex; align-items: center; gap: 4px; }
+.kit-row .row-chip { font: inherit; font-size: 11px; font-weight: 600; cursor: pointer; line-height: inherit; }
+.kit-row .row-chip:hover { filter: brightness(.95); }
+/* R88 · fixer (10 D3): the fact TEXT takes the ellipsis; the 📞 / 💬 pair (.row-contact) never shrinks, so it is never clipped off a desktop row. */
+.kit-row .row-fact { display: flex; align-items: baseline; min-width: 0; white-space: nowrap; overflow: hidden; }
+.kit-row .row-fact > .row-fact-t { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.kit-row .row-fact > .row-contact { flex: 0 0 auto; }
+.kit-row .row-fact-t + .row-contact { margin-left: 4px; }
+.kit-row .row-fact .ret-row-tel, .kit-row .row-fact .row-sms-link { margin-left: 2px; }
+.kit-row .row-acts { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.kit-row .row-sub { flex: 1 1 100%; font-size: 12.5px; color: var(--muted); }
+/* Phone layout for the kit lives in the tap-target block below (one @media, not two). */
+
+/* ==========================================================================
    TAP TARGETS (R87 · E2, panel 06 #3). On a phone or any coarse pointer every control is at least
    44px tall: buttons, chips, selects and text inputs by min-height; inline contact links by a
    padded hit area cancelled with a negative margin, so the row they sit in does not grow.
@@ -3749,12 +3713,122 @@ details.hdr-more > .hdr-more-menu > .hidden { display: none; }
      negative margins keep the row it sits in the same height */
   main input[type="checkbox"], .modal input[type="checkbox"] { height: 44px; margin-top: -10px; margin-bottom: -10px; }
   /* A list row's clickable name: same trick, the text does not move */
-  main .row-main > .t[onclick] { padding: 13px 0; margin: -13px 0; }
+  main .row-main > .t[onclick], main .row-head > .t[onclick] { padding: 13px 0; margin: -13px 0; }
   /* R87 fixer (09 8d, P3) — the Today ⋯ menu button is 44px wide as well as tall, and every
      howFold / how-fold summary is a 44px-tall tap target (it was 19–23px). */
   details.hdr-more > summary { min-width: 44px; display: inline-flex; align-items: center; justify-content: center; }
   .rep-howcounted > summary, .how-fold > summary { min-height: 44px; }
+  /* R88 list kit — phone layout, and every control the kit renders is 44px wherever the list is mounted. */
+  .seg-strip { display: flex; width: 100%; overflow-x: auto; flex-wrap: nowrap; -webkit-overflow-scrolling: touch; border-radius: 12px; }
+  .seg-strip > .seg-btn { flex: 0 0 auto; }
+  .list-tools .search { flex: 1 1 100%; max-width: 100%; }
+  .kit-row .row-fact { display: block; white-space: normal; }
+  .kit-row .row-fact > .row-fact-t { overflow: visible; }
+  .kit-row .row-acts { flex: 1 1 100%; }
+  .list-tools > .search, .list-tools > .list-sort, .list-tools .seg-btn, .seg-strip > .seg-btn, .row-more > summary,
+  .bulk-bar > .btn, .row-more-body > .btn, .kit-row .row-acts > .btn { min-height: 44px; }
+  .kit-row .row-chip { padding-top: 14px; padding-bottom: 14px; margin-top: -12px; margin-bottom: -12px; }
+  /* R88 · fixer (10 D6) — the kit checkbox is 44×44 (was 24 wide). A native checkbox scales its glyph to
+     the smaller side, so it is drawn instead: a 22px box centred in the 44px hit area, negative margins
+     keep the row and the name exactly where they were. */
+  .list-selall input, .row-item.kit-row > .bulk-cb, #prot-list > .list-selall #prot-bulk-all {
+    appearance: none; -webkit-appearance: none; width: 44px; height: 44px; margin: -10px -8px -10px -10px; border: 0; border-radius: 8px;
+    background: no-repeat center / 22px 22px url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 22 22'%3E%3Crect x='1' y='1' width='20' height='20' rx='4' fill='%23fff' stroke='%238a96a8' stroke-width='2'/%3E%3C/svg%3E");
+  }
+  .list-selall input:checked, .kit-row > .bulk-cb:checked, #prot-list > .list-selall #prot-bulk-all:checked {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 22 22'%3E%3Crect x='0' y='0' width='22' height='22' rx='5' fill='%2300488c'/%3E%3Cpath d='M5.5 11.5l3.8 3.8 7.2-8' fill='none' stroke='%23fff' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  }
+  .list-selall input:indeterminate, #prot-list > .list-selall #prot-bulk-all:indeterminate {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 22 22'%3E%3Crect x='0' y='0' width='22' height='22' rx='5' fill='%2300488c'/%3E%3Cpath d='M6 11h10' stroke='%23fff' stroke-width='2.6' stroke-linecap='round'/%3E%3C/svg%3E");
+  }
+  /* A row's checkbox stays on the name's line: the phone's `.row-item > .row-main { flex: 1 1 100% }` would push it onto a line of its own. */
+  .kit-row > .bulk-cb + .row-main { flex-basis: calc(100% - 44px); }
+  /* R88 · A — Today's alert / radar sub-lines wrap, and their verbs and the Checks drawer are 44px. */
+  .brief-side { flex-wrap: wrap; }
+  .brief-side-t { white-space: normal; }
+  .brief-side-acts > .btn, .checks-tools .btn, .checks-drawer > summary { min-height: 44px; }
+  /* R88 · C — Protection's select-all (#prot-bulk-all) is in the kit checkbox rule above: an older id rule (24px) would win on specificity. */
 }
+
+/* ===================================================================
+   R88 · B — CLIENTS + PIPELINE TABLE on the list kit (R88-DESIGN §B). Page glue only; the kit's
+   own rules live under "R88 list kit" above. No @media here (r87_shell D4 caps the count): the
+   one phone difference is carried by max() on the viewport width.
+   ========================================================================== */
+/* The "✕ Wayne's" chip beside Mine|All: a colleague's / nobody's book, one press back to All. */
+.list-tools .list-scope-other { white-space: nowrap; }
+.list-tools > .list-scope { flex: 0 0 auto; flex-wrap: nowrap; white-space: nowrap; }
+/* Pipeline: the kit row sits inside the page-head toolbar — no bottom margin; the search keeps the
+   toolbar's 200px on a desktop and the full line under 761px ((761px - 100vw) is positive only there). */
+.page-tools > .list-tools { margin-bottom: 0; flex: 0 0 auto; max-width: 100%; }
+.page-tools > .list-tools { flex-wrap: wrap; }
+.page-tools > .list-tools > .search { flex: 0 1 auto; width: max(200px, (761px - 100vw) * 1000); max-width: 100%; }
+/* Pipeline table: select-all in the header strip; rows and sortable heads are clickable (was
+   style="cursor:pointer" on every <tr>/<th>); the scroller is horizontal only for the table (the
+   phone card list must not grow a second scrollbar — R65 · L9). */
+.pipe-table-head-l { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 16px; }
+.pipe-table-head-l > .list-selall { padding: 0; }
+#pipe-table tr[onclick], #pipe-table th[data-k] { cursor: pointer; }
+#pipe-scroll { overflow-x: auto; }
+#pipe-scroll.is-cards { overflow-x: visible; }
+.bulk-bar > .bulk-bar-select { margin: 0; }
+/* Clients: "No bulk email?" is a closed fold on the bar; opened, its note floats above the bar. */
+.bulk-bar > .how-fold.bulk-why { position: relative; margin: 0; }
+.bulk-bar > .how-fold.bulk-why > summary { font-size: 12.5px; }
+.bulk-bar > .how-fold.bulk-why[open] > .rep-howcounted-body {
+  position: absolute; bottom: calc(100% + 10px); right: 0; z-index: 2;
+  width: min(420px, 80vw); padding: 10px 12px;
+  background: var(--white); border: 1px solid var(--border-strong); border-radius: 10px;
+}
+/* ==========================================================================
+   R88 · C — Retention + Protection on the list kit (R88-DESIGN §C). Page rules only; the kit's own
+   anatomy is the "R88 list kit" block above.
+   ========================================================================== */
+/* Retention's one chip strip (its R87-folded windows' [hidden] is the kit's rule now, R88 · E). */
+/* R88 · fixer (10 4c): nine chips on ONE line at 1440 (they wrapped to two, first row 370 → 335). */
+#ret-segs { gap: 2px; }
+#ret-segs > .seg-btn { padding-left: 6px; padding-right: 6px; gap: 5px; font-size: 12px; }
+#ret-segs > .seg-btn > .seg-count { padding-left: 5px; padding-right: 5px; }
+/* The outcome chips are ordinary strip chips now; the R72/R75 tile styling (bordered pill, amber fill) steps back to amber text on "No outcome". */
+#ret-segs > .ret-outcome-chip { border: 0; border-radius: 999px; padding-top: 7px; padding-bottom: 7px; }
+#ret-segs > .ret-outcome-chip:not(.active) { background: transparent; }
+#ret-segs > .ret-outcome-chip.hot:not(.active) { color: #b35309; }
+#ret-segs > .ret-outcome-chip.active { background: var(--white); color: var(--navy); }
+#ret-rates-sub { max-width: none; }
+#ret-rates-how > #ret-cold-goto { margin-right: 10px; }
+#ret-pipeline-panel { margin-top: 18px; }
+/* The h3's ERC-only count (was an inline style). */
+#ret-rates-h3 .count.erc-count { background: #fbe9e7; color: var(--red); }
+/* A retention row's optional second line: the call pack and "assign to me" share it. */
+.ret-row > .row-sub { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 14px; }
+.ret-row > .row-sub > .rate-callpack { margin: 0; }
+.ret-row .ret-row-outcome, .ret-row .ret-row-lastc { color: inherit; }
+/* Cap and dedupe footnotes under a kit list (they were .empty boxes). */
+.list-foot { font-size: 12.5px; color: var(--muted); margin: 10px 2px 4px; }
+/* Protection: the one list sits in a card; the summary line carries the three old tiles. */
+.prot-list.panel { padding-top: 12px; padding-bottom: 4px; }
+#prot-summary { max-width: none; margin-bottom: 10px; }
+#prot-summary strong { font-variant-numeric: tabular-nums; }
+.prot-row .prot-est { color: var(--muted); font-size: 12px; }
+.prot-row .prot-fact-case .badge { vertical-align: 1px; }
+#prot-clawback-panel { margin-top: 18px; }
+/* The status and GI selects inside Protection's Log call overlay. */
+.prot-logcall-status { display: flex; flex-wrap: wrap; gap: 10px 18px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); font-size: 13px; color: var(--muted); }
+.prot-logcall-status label { display: inline-flex; align-items: center; gap: 8px; margin: 0; }
+/* Retention's one line and its "How this list is counted" fold share a row; an opened fold takes the full width. */
+.ret-sub-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 16px; margin-bottom: 8px; }
+.ret-sub-row > #ret-rates-sub { margin: 0; flex: 0 1 auto; }
+.ret-sub-row > #ret-rates-how { flex: 0 0 auto; }
+.ret-sub-row > #ret-rates-how > .how-fold { margin: 0; }
+.ret-sub-row > #ret-rates-how:has(> details[open]) { flex-basis: 100%; }
+#ret-month-chips .seg-strip { margin-bottom: 8px; }
+#ret-rates-list > .list-selall { padding-bottom: 4px; }
+#prot-clawback-table td.clawback-open { text-align: right; }
+#prot-clawback-nodate-list { margin-top: 12px; }
+/* Protection's #prot-filter: a compat select the suites drive (selectOption needs a rendered box); nobody sees or tabs to it. */
+.compat-select { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0; overflow: hidden; clip-path: inset(50%); opacity: 0; pointer-events: none; }
+.ret-sub-row > #ret-rates-how { display: inline-flex; align-items: baseline; flex-wrap: wrap; }
+#ret-rates-how > details[open] { flex-basis: 100%; }
 
 /* ==========================================================================
    FOCUS (R87 · E3, panel 06 #6). One rule instead of nineteen per-class ones. :is() carries

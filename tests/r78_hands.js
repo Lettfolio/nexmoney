@@ -397,6 +397,9 @@ async function mkCase(page, opts) {
       // D4 — the case modal's "Tomorrow" Due chip fills the date box with the ROLLED date.
       await page.evaluate((id) => window.openCase(id), c1.caseId);
       await page.waitForTimeout(2200);
+      /* R88 · D: was — the due chips were always on screen; now they appear once the task composer
+         is focused (it opens with title + Add only, panel 02 #5 ≤14 controls). Focus first. */
+      await page.focus("#modal #new-task");
       await page.click('#modal .due-chip[data-days="1"]');
       const chipVal = await page.$eval("#new-task-due", (e) => e.value);
       eq("§D4 · the Tomorrow chip fills the visible date box with the weekend-rolled date", chipVal, rollWeekend(addDays(todayStr, 1)));
@@ -577,6 +580,9 @@ async function mkCase(page, opts) {
       const far = await mkCase(page, { first: "R78far", last: `Rate${label}`, case: { rate_end_date: "2099-12-31" } });
       const soon = await mkCase(page, { first: "R78soon", last: `Rate${label}`, case: { rate_end_date: addDays(todayStr, 30) } });
       await goPage(page, "retention", 3200);
+      // R88 · C: the Gone-quiet panel is the "Gone quiet" chip on the rates list — press it.
+      await page.evaluate(() => document.querySelector('#ret-segs .seg-btn[data-seg="cold"]').click());
+      await page.waitForTimeout(2000);
       const badges = await page.evaluate((ids) => {
         const rowOf = (cid) => {
           const t = document.querySelector(`#ret-cold-list .t[onclick="openClient('${cid}')"]`);

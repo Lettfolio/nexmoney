@@ -155,14 +155,13 @@ async function mkClientCase(page, o) {
 
 const funnelCounts = (page) => page.evaluate(() => {
   const out = {};
-  document.querySelectorAll("#ret-outcome-funnel .ret-outcome-chip").forEach((c) => { out[c.dataset.outcome] = Number(c.dataset.n); });
+  // R88 · C: the funnel's four chips are on the page's one strip (#ret-segs), same data-outcome / data-n.
+  document.querySelectorAll("#ret-segs .ret-outcome-chip").forEach((c) => { out[c.dataset.outcome] = Number(c.dataset.n); });
   return out;
 });
 const rowOutcome = (page, caseId) => page.evaluate((id) => {
-  const r = [...document.querySelectorAll("#ret-rates-list .row-item")].find((x) => {
-    const t = x.querySelector(".t[onclick]");
-    return t && t.getAttribute("onclick").includes(`'${id}'`);
-  });
+  // R88 · C: the kit row's name opens the client; the case id rides on the row's checkbox.
+  const r = [...document.querySelectorAll("#ret-rates-list .row-item")].find((x) => x.querySelector(`.ret-cb[data-id="${id}"]`));
   if (!r) return { found: false };
   const o = r.querySelector(".ret-row-outcome");
   return { found: true, clause: o ? o.textContent.trim() : null, key: o ? o.dataset.outcome : null };

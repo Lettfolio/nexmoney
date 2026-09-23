@@ -545,11 +545,13 @@ function readGroup(page, caseId) {
 
     const baseCap = await page.evaluate(() => OWNER_ROW_CAP);
     ok("D1 · the radar reads to the house owner cap, not to an unbounded full table", baseCap >= 1000, String(baseCap));
+    /* R88 · A: the radar's rows are My Day rows (each carries data-radar = its case id); the cap
+       notice kept its id and moved under My Day. Was: #unactioned-list .row-item / its .t onclick. */
     const normal = await page.evaluate(() => ({
       hidden: document.querySelector("#unactioned-cap-notice").classList.contains("hidden"),
       text: document.querySelector("#unactioned-cap-notice").textContent,
-      rows: document.querySelectorAll("#unactioned-list .row-item").length,
-      ids: [...document.querySelectorAll("#unactioned-list .row-item .t")].map((t) => (t.getAttribute("onclick") || "").replace(/[^']*'([^']+)'.*/, "$1")),
+      rows: document.querySelectorAll("#briefing-list .brief-row[data-radar]").length,
+      ids: [...document.querySelectorAll("#briefing-list .brief-row[data-radar]")].map((r) => r.dataset.radar),
     }));
     ok("D1 · at the normal cap the notice is silent", normal.hidden === true && normal.text === "", JSON.stringify(normal));
     ok("D1 · fixture · the radar has rows to compare against", normal.rows > 0, JSON.stringify(normal));
@@ -568,7 +570,7 @@ function readGroup(page, caseId) {
     const capped = await page.evaluate(() => ({
       hidden: document.querySelector("#unactioned-cap-notice").classList.contains("hidden"),
       text: document.querySelector("#unactioned-cap-notice").textContent.replace(/\s+/g, " ").trim(),
-      ids: [...document.querySelectorAll("#unactioned-list .row-item .t")].map((t) => (t.getAttribute("onclick") || "").replace(/[^']*'([^']+)'.*/, "$1")),
+      ids: [...document.querySelectorAll("#briefing-list .brief-row[data-radar]")].map((r) => r.dataset.radar),   // R88 · A (see D1)
     }));
     ok("D2 · a cap that bites renders the notice", capped.hidden === false, JSON.stringify(capped));
     ok("D2 · …saying how many rows it read and that the radar may be incomplete",
@@ -587,7 +589,7 @@ function readGroup(page, caseId) {
     await reloadDashboard(page);
     const restored = await page.evaluate(() => ({
       hidden: document.querySelector("#unactioned-cap-notice").classList.contains("hidden"),
-      rows: document.querySelectorAll("#unactioned-list .row-item").length,
+      rows: document.querySelectorAll("#briefing-list .brief-row[data-radar]").length,   // R88 · A (see D1)
     }));
     ok("D3 · back at the normal cap the notice goes quiet again", restored.hidden === true, JSON.stringify(restored));
     eq("D3 · …and the radar's own count is unchanged by any of this", restored.rows, normal.rows);

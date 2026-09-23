@@ -538,7 +538,8 @@ const ALL_PAGES = ["dashboard", "pipeline", "diary", "clients", "protection", "r
       // C6/C7 — the opacity floors.
       const op = await page.evaluate(() => ({
         out: [...document.querySelectorAll(".ret-out-chip")].slice(0, 3).map((e) => getComputedStyle(e).opacity),
-        quiet: [...document.querySelectorAll(".ret-row-acts .hover-quiet")].slice(0, 3).map((e) => getComputedStyle(e).opacity),
+        // R88 · C: the row's quiet verb (Book review) sits in the kit row's More ▾ now (was .ret-row-acts)
+        quiet: [...document.querySelectorAll("#ret-rates-list .kit-row .hover-quiet")].slice(0, 3).map((e) => getComputedStyle(e).opacity),
         logcall: (() => { const e = document.querySelector(".ret-logcall-chip"); return e ? getComputedStyle(e).opacity : null; })(),
       }));
       ok("C6 · the three rate-end OUTCOME chips are full opacity at rest", op.out.length > 0 && op.out.every((o) => Number(o) === 1), JSON.stringify(op.out));
@@ -548,7 +549,8 @@ const ALL_PAGES = ["dashboard", "pipeline", "diary", "clients", "protection", "r
 
       await goPage(page, "protection", 3000);
       const prot = await page.evaluate(() => ({
-        act: [...document.querySelectorAll(".prot-actions > *:not(:first-child)")].slice(0, 4).map((e) => getComputedStyle(e).opacity),
+        // R88 · C: the kit row's verbs (was the table's .prot-actions cell)
+        act: [...document.querySelectorAll("#prot-list .prot-row .row-acts > *:not(:first-child)")].slice(0, 4).map((e) => getComputedStyle(e).opacity),
         gi: (() => { const e = document.querySelector(".prot-gi-set"); return e ? Math.round(e.getBoundingClientRect().width) : null; })(),
       }));
       ok("C9 · protection row actions floor at 0.75 (was 0.35)", prot.act.length > 0 && prot.act.every((o) => Number(o) >= 0.7), JSON.stringify(prot.act));
@@ -867,7 +869,7 @@ const ALL_PAGES = ["dashboard", "pipeline", "diary", "clients", "protection", "r
         const btn = es && es.querySelector(".btn");
         if (btn) btn.click();
         await new Promise((r) => setTimeout(r, 1800));
-        return { rendered: !!es, hasButton: !!btn, rowsAfter: document.querySelectorAll("#prot-list-table tr").length };
+        return { rendered: !!es, hasButton: !!btn, rowsAfter: document.querySelectorAll("#prot-list .prot-row").length + 1 };   // R88 · C: kit rows (+1 stood for the table's header row)
       });
       ok("E10 · protection uses the .empty-state component, and its button works",
         protEmpty.noBox || (protEmpty.rendered && protEmpty.hasButton && protEmpty.rowsAfter > 1), JSON.stringify(protEmpty));

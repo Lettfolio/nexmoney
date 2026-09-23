@@ -488,6 +488,9 @@ const promoterDom = (page) => page.evaluate(() => ({
       }, 0), 0);
       return { n: noEmail.length, loan, seededCold: noEmail.some((c) => c.last_name === "R80unreach") };
     });
+    // R88 · C: the Gone-quiet panel is a chip on the rates list; its fold (with #ret-cold-sub) renders while it is pressed.
+    await page.evaluate(() => document.querySelector('#ret-segs .seg-btn[data-seg="cold"]').click());
+    await page.waitForTimeout(2000);
     const sub2 = await txt(page, "#ret-cold-sub");
     ok("D5c · the seeded no-email client IS gone-quiet (no comms ever) and carries in-window lending",
       retGT2.seededCold && retGT2.n >= 1 && retGT2.loan >= 91000, JSON.stringify(retGT2));
