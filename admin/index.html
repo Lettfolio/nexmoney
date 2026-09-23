@@ -707,14 +707,14 @@
             <h3>Velocity — cycle times<button type="button" class="btn btn-sm mi-csv-btn" id="report-mi-csv-velocity" title="Download this panel as CSV">⭳ CSV</button></h3>
             <p class="panel-sub">Median (headline) and average days between milestones. Only cases with both dates count.</p>
             <div id="report-mi-velocity"></div>
-            <p class="panel-sub" id="report-mi-bottleneck" style="margin:10px 0 0;"></p>
+            <p class="panel-sub u-m-10-0-0" id="report-mi-bottleneck"></p>
           </div>
         <div class="panel" id="report-mi-revenue-panel">
           <h3>Revenue — run-rate &amp; forecast<button type="button" class="btn btn-sm mi-csv-btn" id="report-mi-csv-revenue" title="Download this panel as CSV">⭳ CSV</button></h3>
           <div class="kpi-row" id="report-mi-forecast-headline" style="margin:8px 0 12px;"></div>
           <div id="report-mi-runrate"></div>
-          <p class="panel-sub" id="report-mi-runrate-basis" style="margin:10px 0 0;"></p>
-          <div id="report-mi-forecast" style="margin-top:14px;"></div>
+          <p class="panel-sub u-m-10-0-0" id="report-mi-runrate-basis"></p>
+          <div id="report-mi-forecast" class="u-mt-14"></div>
         </div>
       </div>
       <!-- R33 — the #report-diag-section block that stood here has MOVED to Settings (see
@@ -788,7 +788,7 @@
           <summary>Show the 24-month table<span class="ledger-n"></span></summary>
           <div id="report-rateend-table"></div>
         </details>
-        <div id="report-rateend-recover" style="margin-top:18px;"></div>
+        <div id="report-rateend-recover" class="u-mt-18"></div>
       </div>
       <!-- ==================================================================
            R77 · A4 — BUSINESS MIX BY CASE TYPE. Completions YTD and the live
@@ -842,9 +842,9 @@
           <div class="owed-tools" id="leadresp-tools"></div>
         </div>
         <div class="panel-sub" id="report-leadresp-basis"></div>
-        <div class="kpi-row" id="report-leadresp-headline" style="margin:12px 0 4px;"></div>
+        <div class="kpi-row u-m-12-0-4" id="report-leadresp-headline"></div>
         <div id="report-leadresp-source"></div>
-        <div id="report-leadresp-adviser" style="margin-top:18px;"></div>
+        <div id="report-leadresp-adviser" class="u-mt-18"></div>
       </div>
       <!-- ==================================================================
            R9-2 — THE ADVOCACY DASHBOARD. Five questions the firm could not
@@ -907,9 +907,9 @@
       <div class="panel hidden" id="report-outcomes-panel">
         <h3>Appointment outcomes — who turns up, and whether we record it</h3>
         <div class="panel-sub" id="report-outcomes-basis"></div>
-        <div class="kpi-row" id="report-outcomes-headline" style="margin:12px 0 4px;"></div>
+        <div class="kpi-row u-m-12-0-4" id="report-outcomes-headline"></div>
         <div id="report-outcomes-adviser"></div>
-        <div id="report-outcomes-noshows" style="margin-top:18px;"></div>
+        <div id="report-outcomes-noshows" class="u-mt-18"></div>
       </div>
       </div>
       <div class="page-tab-panel hidden" data-tabpanel="referrals">
@@ -1016,7 +1016,7 @@
           </div>
         </div>
         <div class="panel-sub" id="report-owed-basis"></div>
-        <div class="kpi-row" id="report-owed-buckets" style="margin:12px 0 4px;"></div>
+        <div class="kpi-row u-m-12-0-4" id="report-owed-buckets"></div>
         <!-- R42 · F3 — the four ageing buckets above ARE the answer for most reads; the per-lender / per-adviser ledger under them is the chase list, wanted on the day you chase. #owed-csv-btn sits in the panel head row and exports the same rows without opening this. -->
         <details class="report-ledger">
           <summary>Show every unpaid fee line<span class="ledger-n"></span></summary>
@@ -1058,7 +1058,7 @@
                send. Both painted by loadEmails(). -->
           <button class="btn btn-primary hidden" id="em-release-hold-btn" title="Open Settings › Email sending, where the Owner releases the hold">Release hold…</button>
           <button class="btn hidden" id="run-now-btn" title="Sends every queued email for the whole firm — asks first">▶ Run automation now</button>
-          <span class="panel-sub hidden" id="run-now-why" style="margin:0;"></span>
+          <span class="panel-sub hidden u-m0" id="run-now-why"></span>
           <!-- R63 · A3 — the daily nexmoney-send-sms cron already sends this queue at 08:05 UTC
                (09:05 BST); this button is the "don't wait for it" path, not the only path. -->
           <button class="btn" id="run-sms-btn" title="Sends any queued SMS immediately, instead of waiting for the 8:05am run">▶ Send SMS now</button>
@@ -1148,7 +1148,7 @@
         <div class="rev-actions">
           <button class="btn btn-primary" id="rev-read-btn">Read the export</button>
           <button class="btn" id="rev-reset-btn" hidden>Start again</button>
-          <span id="rev-status" class="panel-sub" style="margin:0;"></span>
+          <span id="rev-status" class="panel-sub u-m0"></span>
         </div>
       </div>
       <div id="rev-mapping"></div>
@@ -1165,7 +1165,7 @@
         <textarea id="import-text" rows="9" aria-label="Paste rows or text to import" placeholder="…or paste rows / text here"></textarea>
         <div style="margin-top:10px;display:flex;align-items:center;gap:12px;">
           <button class="btn btn-primary" id="analyse-btn">✨ Analyse with AI</button>
-          <span id="import-status" class="panel-sub" style="margin:0;"></span>
+          <span id="import-status" class="panel-sub u-m0"></span>
         </div>
       </div>
       <div id="import-preview"></div>
@@ -1284,13 +1284,13 @@
             <select id="staff-introducer" class="hidden" aria-label="Which introducer this login belongs to" style="flex:2;min-width:160px;"></select>
             <button class="btn btn-primary" id="invite-staff-btn">Create login</button>
           </div>
-          <div id="staff-role-hint" class="panel-sub" style="margin-top:8px;"></div>
-          <p id="invite-result" class="panel-sub" style="margin-top:10px;"></p>
+          <div id="staff-role-hint" class="panel-sub u-mt-8"></div>
+          <p id="invite-result" class="panel-sub u-mt-10"></p>
         </div>
         <h4 style="margin:20px 0 4px;font-size:14px;">Who has access</h4>
         <div class="panel-sub" id="team-roster-caption">Change a colleague's role here — Owner only.</div>
         <div id="team-roster"></div>
-        <p id="team-role-msg" class="panel-sub hidden" style="margin-top:8px;"></p>
+        <p id="team-role-msg" class="panel-sub hidden u-mt-8"></p>
       </div>
       </div>
 
@@ -1364,12 +1364,12 @@
           <div class="panel">
             <h3>Session health<button type="button" class="btn btn-sm mi-csv-btn" id="report-diag-csv" title="Download the error log as CSV">⭳ CSV</button><button type="button" class="btn btn-sm" id="report-diag-copy" title="Copy the diagnostics to your clipboard">Copy diagnostics</button><button type="button" class="btn btn-sm" id="report-diag-clear" title="Clear this session's in-memory error log">Clear</button></h3>
             <div class="panel-sub" id="report-diag-health"></div>
-            <div id="diag-error-table" style="margin-top:12px;"></div>
+            <div id="diag-error-table" class="u-mt-12"></div>
             <!-- R30 — additive cross-session table. Sanitised fingerprints only (error type,
                  code location, base page route, staff role); no messages, names or client data. -->
             <h3 style="margin-top:18px;">Across sessions (persisted)<button type="button" class="btn btn-sm" id="report-diag-persist-clear" title="Delete the persisted cross-session error log">Clear persisted</button></h3>
             <p class="panel-sub">Error type, code location, page and role only — no messages, names or client data are ever stored here.</p>
-            <div id="diag-persist-table" style="margin-top:8px;"></div>
+            <div id="diag-persist-table" class="u-mt-8"></div>
           </div>
         </div>
       </details>
@@ -1471,12 +1471,21 @@
      from microtasks — and microtask checkpoints run BETWEEN classic scripts, so a script loaded
      after app.js could still be unevaluated when a deep link reaches nav()'s page map (which
      names loadReports / loadMoneyPage). Full proof in reports-money.js's header.
+     R90 · F — diary.js, import.js, vault.js (the third carve) load AFTER reports-money.js and
+     BEFORE app.js, by the same definition-time rule: none of their top-level evals references
+     anything from a later script (AST-scanned; each file's header has the proof). import.js's two
+     bindings on the drop-zone inputs app.js CREATES at eval run at DOMContentLoaded (R81 · A1's
+     recipe). app.js stays LAST.
      R81 · A3 — NX_BUILD_TAG below is the deploy handshake: each JS file ends by stamping its own
-     window.__nxTag_*, and app.js's boot compares all four. EVERY round that edits ANY of
-     index.html / core.js / reports-money.js / app.js bumps the tag IN ALL FOUR PLACES. -->
-<script>window.NX_BUILD_TAG = "r89";</script>
+     window.__nxTag_*, and app.js's boot compares all SEVEN (R90 · F). EVERY round that edits ANY
+     of index.html / core.js / reports-money.js / diary.js / import.js / vault.js / app.js bumps
+     the tag IN ALL SEVEN PLACES. -->
+<script>window.NX_BUILD_TAG = "r90";</script>
 <script src="/admin/core.js"></script>
 <script src="/admin/reports-money.js"></script>
+<script src="/admin/diary.js"></script>
+<script src="/admin/import.js"></script>
+<script src="/admin/vault.js"></script>
 <script src="/admin/app.js"></script>
 <script>
   // PWA install support. Register only over https (never file:// or the sandbox http harness).

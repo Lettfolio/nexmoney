@@ -670,44 +670,11 @@ async function main() {
       await page.close();
     }
     /* ===================================================================
-       9 · Feature detection — the same two flows against a database that
-       has NOT had migration M2 applied (older DB tolerated, per the plan)
+       9 · Feature detection (M2 off) — R90 · A: RETIRED. Was "Mark fee paid falls back to the
+       single legacy date and says 'migration M2'; a Not-Proceeding move keeps the reason as a
+       note and toasts 'migration M2'". The per-fee dates and lost-reason columns are live in
+       production, both fallbacks and their toasts are gone, and the mock's m2 flag is inert.
        =================================================================== */
-    console.log("\n— M2 feature-detect · per-fee dates and lost reasons degrade instead of failing");
-    {
-      const page = await newPage(browser, "p1");
-      await page.evaluate(() => window.__mock.setMigrations({ m2: false }));
-
-      // (a) Mark fee paid falls back to the single legacy date and says why.
-      await page.evaluate(() => window.openCase("ca011"));
-      await page.waitForTimeout(700);
-      page.__dialogs = [];
-      await clickAction(page, "act-paid");
-      await page.waitForTimeout(900);
-      const feeMsg = lastDialog(page, /M2|paid/i);
-      ok("M2 · the fee capture explains the missing migration instead of erroring", /migration M2/i.test(feeMsg), JSON.stringify(feeMsg));
-      const feeCase = await caseRow(page, "ca011");
-      eq("M2 · the legacy write still lands", feeCase.fee_status, "paid");
-      ok("M2 · with the legacy single date", !!feeCase.fee_paid_at, JSON.stringify(feeCase.fee_paid_at));
-
-      // (b) A Not-Proceeding move still records the reason — as a note.
-      const notesBefore = await notesFor(page, "ca031");
-      await page.evaluate(() => { window.__moveResult = window.moveCaseToStage("ca031", "not_proceeding", { promptStageEntry: false /* R87 · slice B */ }); });
-      await page.waitForTimeout(700);
-      await page.selectOption("#lost-reason", "valuation");
-      await page.click("#lost-ok");
-      await page.waitForTimeout(1200);
-      const moved = await caseRow(page, "ca031");
-      eq("M2 · the move still happens on an un-migrated database", moved.stage, "not_proceeding");
-      eq("M2 · …and returns a clean result, not an error", await page.evaluate(() => window.__moveResult), "moved");
-      const notesAfter = await notesFor(page, "ca031");
-      ok("M2 · the reason survives as a case-history note", notesAfter.length === notesBefore.length + 1
-        && notesAfter.some((n) => n === "Not proceeding — Valuation problem"), JSON.stringify(notesAfter.slice(0, 2)));
-      const toastTxt = await page.textContent("#toast");
-      ok("M2 · and the operator is told the column is missing", /migration M2/i.test(toastTxt || ""), JSON.stringify(toastTxt));
-      ok("no console errors", !page.__err, JSON.stringify(page.__err));
-      await page.close();
-    }
 
     /* ===================================================================
        10 · M7 (round 6) — cases.property_address, and the multi-property
@@ -762,31 +729,19 @@ async function main() {
       ok("M7 fixture · most of the book still has no property address (no backfill)",
         shape.total - shape.withAddress > shape.withAddress, JSON.stringify({ total: shape.total, withAddress: shape.withAddress }));
 
+      /* R90 · A: was "with the migration off, an UPDATE / INSERT naming property_address is 42703
+         and SELECTs omit it". The m7 flag is inert now (the column is live in production and the app
+         no longer feature-detects it): flipping it OFF leaves the column readable. No write — a
+         landing write would mutate the fixture the rest of this section reads. */
       const detect = await page.evaluate(async () => {
         const db = window.__mockDb;
         const seeded = (await db.from("cases").select("id,property_address")).data.filter((c) => c.property_address)[0];
         window.__mock.setMigrations({ m7: false });
-        const write = await db.from("cases").update({ property_address: "1 Nowhere Road" }).eq("id", seeded.id);
-        const insert = await db.from("cases").insert({ client_id: "cl001", stage: "enquiry", property_address: "2 Nowhere Road" });
         const read = (await db.from("cases").select("*").eq("id", seeded.id)).data[0];
-        const named = (await db.from("cases").select("id,property_address").eq("id", seeded.id)).data[0];
         window.__mock.setMigrations({ m7: true });
-        const back = (await db.from("cases").select("*").eq("id", seeded.id)).data[0];
-        return {
-          writeCode: write.error && write.error.code,
-          writeMsg: write.error && write.error.message,
-          insertCode: insert.error && insert.error.code,
-          omittedFromStar: !("property_address" in read),
-          omittedWhenNamed: !("property_address" in (named || {})),
-          was: seeded.property_address,
-          restored: back.property_address,
-        };
+        return { present: read.property_address === seeded.property_address };
       });
-      eq("M7 · with the migration off, an UPDATE naming the column is 42703", detect.writeCode, "42703");
-      ok("M7 · … and says which column does not exist", /property_address/.test(detect.writeMsg || ""), JSON.stringify(detect.writeMsg));
-      eq("M7 · … an INSERT naming it is refused the same way", detect.insertCode, "42703");
-      ok("M7 · … and SELECTs simply do not return it", detect.omittedFromStar && detect.omittedWhenNamed, JSON.stringify(detect));
-      eq("M7 · the refused write changed nothing — the value is intact when it comes back", detect.restored, detect.was);
+      ok("M7 · (R90 · A) the m7 flag is inert — SELECT still returns the address with it flipped OFF", detect.present, JSON.stringify(detect));
       ok("no console errors", !page.__err, JSON.stringify(page.__err));
       await page.close();
     }

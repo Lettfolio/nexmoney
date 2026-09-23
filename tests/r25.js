@@ -57,11 +57,9 @@
         not a re-run of r13's own coverage of them.
    §E — no console errors on the Data health page for owner (p4) and admin
         (p1).
-   §F — forward dates OFF (`FORWARD_SUPPORTED` forced `false` directly on
-        the page, same module-scope-`let` technique tests/r24.js §E already
-        uses for `PROP_ADDR_SUPPORTED`/etc.): the offer half of the
-        predicate is skipped entirely (only application-date misses can
-        appear), and the page loads with no console error and no 42703.
+   §F — R90 · A: RETIRED (was "forward dates OFF ⇒ the offer half is skipped"; the
+        FORWARD_SUPPORTED gate is gone). Now only the Data health sanity: no 42703
+        surfaced, no console error.
 
    R45 · non-masking repair — R45 (admin/app.js ~24173) added a 180-day
    freshness guard to noMilestoneDate: a COMPLETED case whose completed_at
@@ -164,7 +162,7 @@ async function groundTruth(page) {
     const { data: cases } = await window.__mockDb.from("cases")
       .select("id,stage,submitted_at,offer_issued_date,completed_at,clients!client_id(first_name,last_name)")
       .order("id");
-    const fwdOn = (await forwardDatesSupported()) === true;
+    const fwdOn = true; /* R90 · fixer: probe retired, column live */
     const rankOf = Object.fromEntries(STAGES.map((s, i) => [s[0], i]));
     const appRank = rankOf["application"], offerRank = rankOf["offer"];
     const daysSince = (iso) => { if (!iso) return null; const t = new Date(iso).getTime(); if (isNaN(t)) return null; return Math.max(0, Math.floor((Date.now() - t) / 86400000)); };
@@ -426,54 +424,21 @@ async function panelRows(page) {
            runtime state a real un-migrated database produces.
        ======================================================================= */
     {
-      console.log("\n— F · FORWARD_SUPPORTED forced false: offer half skipped, no 42703 (p4)");
+      /* R90 · A: §F RETIRED. It forced FORWARD_SUPPORTED false to walk the "database without the
+         forward-dates migration" branch (offer half of the milestone predicate skipped). That flag
+         and that branch are gone — offer_issued_date is live in production, so the offer half is
+         always evaluated (§B/§C above pin it). What survives is the page-level sanity: Data health
+         loads with no 42703 surfaced and no console error. */
+      console.log("\n— F · (R90 · A) forward-dates gate retired — Data health sanity (p4)");
       const pageF = await newPage(browser, "p4");
       const errBefore = (pageF.__err || []).length;
-
-      const capBefore = await pageF.evaluate(() => FORWARD_SUPPORTED);
-      /* R77 (stale pin, failing identically on the R76 base): runCombinedSupportProbe() now
-         resolves FORWARD_SUPPORTED during boot (the one-row combined probe), so "still null
-         before Data health loads" stopped being true rounds ago. The fact this section actually
-         needs is only that the flag CAN be forced false from here before the offer-half code
-         under test reads it — which F2 pins. Accept either state at boot, but never false. */
-      ok("F1 · FORWARD_SUPPORTED at boot: unresolved or probe-resolved true — never false on the migrated mock", capBefore === null || capBefore === true, capBefore);
-
-      await pageF.evaluate(() => { FORWARD_SUPPORTED = false; });
-      const capNow = await pageF.evaluate(() => FORWARD_SUPPORTED);
-      eq("F2 · FORWARD_SUPPORTED is now forced false", capNow, false);
-
       await goto(pageF, "data");
-
-      // R45 · non-masking repair — same 180-day freshness guard as groundTruth() above, so this
-      // forward-dates-off recompute stays honest against the current predicate too.
-      const gtOff = await pageF.evaluate(async () => {
-        const { data: cases } = await window.__mockDb.from("cases")
-          .select("id,stage,submitted_at,offer_issued_date,completed_at");
-        const rankOf = Object.fromEntries(STAGES.map((s, i) => [s[0], i]));
-        const appRank = rankOf["application"];
-        const daysSince = (iso) => { if (!iso) return null; const t = new Date(iso).getTime(); if (isNaN(t)) return null; return Math.max(0, Math.floor((Date.now() - t) / 86400000)); };
-        const expected = [];
-        (cases || []).forEach((c) => {
-          if (c.stage === "not_proceeding") return;
-          if (c.stage === "completed" && c.completed_at && daysSince(c.completed_at) > 180) return;
-          const rank = rankOf[c.stage];
-          if (rank == null) return;
-          if (rank >= appRank && !c.submitted_at) expected.push(c.id);
-        });
-        return expected;
-      });
-      const rowsOff = await panelRows(pageF);
-      const numOff = await pageF.$eval("#dh-tile-milestone .num", (e) => Number(e.textContent));
-
-      eq("F3 · tile count with forward dates OFF matches the application-only recompute", numOff, gtOff.length);
-      eq("F4 · panel's case-id set matches the application-only recompute exactly", rowsOff.map((r) => r.id).sort(), gtOff.slice().sort());
-      const anyOfferReason = rowsOff.some((r) => /offer date \(offer_issued_date\)/.test(r.text));
-      ok("F5 · no row cites the offer-date reason (offer half genuinely skipped, not just empty by chance)", !anyOfferReason);
-
+      ok("F1 · the FORWARD_SUPPORTED flag is retired (R90 · A) — the offer half has no gate to force off",
+        await pageF.evaluate(() => typeof FORWARD_SUPPORTED === "undefined" || FORWARD_SUPPORTED === true));   // eslint-disable-line no-undef
       const html = await pageF.evaluate(() => document.querySelector("#page-data").innerHTML);
       ok("F6 · no 42703 / 'does not exist' surfaced anywhere on the page", html.indexOf("42703") === -1 && html.toLowerCase().indexOf("does not exist") === -1);
 
-      ok("F · no console errors / no 42703 with forward dates forced off", noNewErr(pageF, errBefore), JSON.stringify(pageF.__err));
+      ok("F · no console errors on Data health", noNewErr(pageF, errBefore), JSON.stringify(pageF.__err));
       await pageF.close();
     }
 

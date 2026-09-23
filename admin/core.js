@@ -1,25 +1,9 @@
 /* ==========================================================================
    NexMoney Back Office — admin/core.js  (R78 · A7)
-
-   THE FIRST CARVE OF app.js: strictly PURE, DEPENDENCY-FREE LEAF UTILITIES,
-   loaded via a classic <script> tag BEFORE /admin/app.js (see index.html).
-   Classic scripts share one global scope, so everything declared here is
-   visible to app.js exactly as it was when these lived there — moved, not
-   rewritten. THE RULE (HARNESS.md "R78 · A"): a declaration may live here ONLY
-   if it references nothing that stays in app.js at its own DEFINITION time
-   (call-time references to late globals such as ME / MY_ROLE / db /
-   OWNER_ROW_CAP are fine — by the time anything here runs, app.js has long
-   evaluated). Nothing page-specific, no overlays/modals, no prop engine.
-
-   What lives here, in order:
-     · the R21/R30 error-capture block (ERROR_LOG, logClientError, the two
-       global handlers) — moved ABOVE everything so the handlers are installed
-       before any other script line can throw, plus R78's dbFail()
-     · $, esc, debounce
-     · fmtD (+ FMT_MONTHS), localDateStr / localMonthStr singletons
-     · fmtM / fmtM2
-     · the toast machinery (TOAST_MS / TOAST_ACTION_MS / toast)
-     · inChunks (R64-HF1) and readAll (R69-HF1)
+   The first carve of app.js: PURE, DEPENDENCY-FREE LEAF UTILITIES, loaded BEFORE app.js. A declaration
+   may live here only if it references nothing in app.js at its own DEFINITION time (HARNESS.md "R78 · A").
+   In order: the error-capture block (installed first so nothing can throw unseen) + dbFail(); $, esc,
+   debounce; fmtD / localDateStr / localMonthStr; fmtM / fmtM2; the toast machinery; inChunks, readAll.
    ========================================================================== */
 
 /* ==========================================================================
@@ -129,14 +113,8 @@ window.dbFail = dbFail;
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => (s == null ? "" : String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])));
-// R18-P2 — trailing-edge debounce for high-frequency search/filter inputs. The wrapped fn reads the
-// live input value at fire time, so the delayed call always sees the latest keystroke.
-/* R87 · foundation — howFold(): THE one way to keep an explanation on a page without
-   standing between the reader and their work. Renders a closed <details> in the house
-   .rep-howcounted style; the summary is ≤ 6 words ("How this works" by default), the body
-   is whatever HTML the caller passes (already escaped/safe — callers pass their own
-   markup). Pure: no DOM access, no late globals. The R87 rule: a page or panel gets at
-   most one ≤25-word line of standing prose; everything longer goes in here. */
+/* R18-P2 — trailing-edge debounce for high-frequency search/filter inputs. The wrapped fn reads the live
+   input value at fire time, so the delayed call always sees the latest keystroke. */
 function howFold(o) {
   const x = o || {};
   const id = x.id ? ` id="${esc(x.id)}"` : "";
@@ -189,17 +167,8 @@ const fmtM = (n) => (n == null || n === "" || isNaN(Number(n)) ? "—" : Number(
 // Exact-pence money — for fee figures on the case detail / evidence pack only. Dashboards keep fmtM (whole pounds).
 const fmtM2 = (n) => (n == null || n === "" || isNaN(Number(n)) ? "—" : Number(n).toLocaleString("en-GB", { style: "currency", currency: "GBP", minimumFractionDigits: 2, maximumFractionDigits: 2 }));
 
-/* R12a·D12 — THE TOAST CAN NOW CARRY ONE ACTION.
-   It was text-only, which is why "Task done" was a one-way door: the row vanished from every list
-   and the only route back was the database. `action` is deliberately generic — {label, onClick,
-   ms} — and deliberately singular: a toast is a passing sentence, not a menu, and a second button
-   on it would be a dialog wearing the wrong clothes. Other flows (delete, waive, dismiss) can use
-   the same hook without touching this function again.
-
-   The toast element itself stays pointer-events:none (M7 — it must never intercept a tap on a
-   field beneath it); only the action button turns pointer events back on, so an undo link cannot
-   swallow clicks on whatever it happens to be floating over. An action toast lives longer than a
-   plain one — 10s — because it has to be readable AND reachable, not just readable. */
+/* R12a·D12: THE TOAST CAN NOW CARRY ONE ACTION. It was text-only, which is why "Task done" was a one-way
+   door: the row vanished from every list and the only route back was the database. */
 const TOAST_ACTION_MS = 10000;
 const TOAST_MS = 4500;   // R73 · B1 — non-action toasts
 /* R76 · A4 — `action2`, a SECOND optional action on the same toast. The R12a·D12 "one action"
@@ -236,10 +205,8 @@ function toast(msg, action, action2) {
     t.textContent = msg;   // replaces any previous action markup outright
   }
   t.classList.remove("hidden");
-  /* R73 · B1 — 3.2s was under the ~4s a screen reader needs to finish announcing a
-     long confirmation, and under what a reader needs to find a bar that has just
-     moved to the corner of the screen. Action toasts keep their own (longer)
-     timing: the reader has to DECIDE, not just read. */
+  /* R73 · B1: 3.2s was under the ~4s a screen reader needs to finish announcing a long confirmation, and
+     under what a reader needs to find a bar that has just moved to the corner of the screen. */
   t._h = setTimeout(() => { t.classList.add("hidden"); t.classList.remove("has-action"); }, live ? (action.ms || TOAST_ACTION_MS) : TOAST_MS);
 }
 
@@ -336,4 +303,4 @@ async function readAll(q, opts) {
 
 /* R81 · A3 — deploy handshake stamp. Every round that edits ANY of index.html / core.js /
    reports-money.js / app.js bumps the tag IN ALL FOUR PLACES (see nxCheckBuildTags in app.js). */
-window.__nxTag_core = "r89";   // R89
+window.__nxTag_core = "r90";   // R89

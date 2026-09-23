@@ -244,7 +244,7 @@ async function milestoneGroundTruth(page) {
   return page.evaluate(async () => {
     const { data: cases } = await window.__mockDb.from("cases")
       .select("id,stage,submitted_at,offer_issued_date,completed_at");
-    const fwdOn = (await forwardDatesSupported()) === true;
+    const fwdOn = true; /* R90 · fixer: probe retired, column live */
     const rankOf = Object.fromEntries(STAGES.map((s, i) => [s[0], i]));
     const appRank = rankOf["application"], offerRank = rankOf["offer"];
     const daysSince = (iso) => { if (!iso) return null; const t = new Date(iso).getTime(); if (isNaN(t)) return null; return Math.max(0, Math.floor((Date.now() - t) / 86400000)); };

@@ -67,7 +67,8 @@
           heavy columns that are real schema (proc_fee, notes,
           offer_doc_path, property_value — all real, used elsewhere in
           app.js, e.g. the case-fees table and case form).
-     §E — un-migrated safety: PROP_ADDR_SUPPORTED / DOCS_SUPPORTED /
+     §E — (R90 · A: the forcing is retired with the detectors; §E now pins the
+          ordinary load.) Was: un-migrated safety: PROP_ADDR_SUPPORTED / DOCS_SUPPORTED /
           LENDER_TRACK_SUPPORTED (module-scope `let`s app.js reads as its
           feature-detect cache) are set to `false` directly from the test —
           the same "force the detector to report unsupported" outcome a real
@@ -288,14 +289,21 @@ async function readTableRow(page, fullName) {
       const EXPECTED_BASE = "id,client_id,stage,case_kind,lender,product_name,loan_amount,rate_percent,rate_end_date,rate_end_estimated,erc_end_date,broker_fee,fee_status,protection_status,submitted_at,completed_at,created_at,updated_at,expected_completion_date,retention_source_case_id,lead_source,introducer_id,assigned_to";
       const base = await pageA.evaluate(() => BOARD_CASE_COLS);
       eq("A1 · BOARD_CASE_COLS is exactly the documented 22-column list", base, EXPECTED_BASE);
-      const types = await pageA.evaluate(() => ({
-        propAddrSupported: typeof window.propAddrSupported || typeof propAddrSupported,
-        docsSupported: typeof window.docsSupported || typeof docsSupported,
-        lenderTrackSupported: typeof window.lenderTrackSupported || typeof lenderTrackSupported,
-      }));
-      eq("A2 · propAddrSupported is a function", types.propAddrSupported, "function");
-      eq("A3 · docsSupported is a function", types.docsSupported, "function");
-      eq("A4 · lenderTrackSupported is a function", types.lenderTrackSupported, "function");
+      /* R90 · A: was "each feature-detect probe is a function"; now the probes are RETIRED (every
+         column they asked about is live in production) and the board's columns ride the book
+         unconditionally. Each name is either gone, or is the openCase compatibility stub (R90 · A,
+         until slice B's split drops the calls) — which answers "yes", never a real probe. */
+      const types = await pageA.evaluate(async () => {
+        const probe = async (fn) => (typeof fn === "undefined" ? "retired" : (await fn()) === true ? "retired" : "live probe");
+        return {
+          propAddrSupported: await probe(typeof propAddrSupported === "undefined" ? undefined : propAddrSupported),       // eslint-disable-line no-undef
+          docsSupported: await probe(typeof docsSupported === "undefined" ? undefined : docsSupported),                   // eslint-disable-line no-undef
+          lenderTrackSupported: await probe(typeof lenderTrackSupported === "undefined" ? undefined : lenderTrackSupported), // eslint-disable-line no-undef
+        };
+      });
+      eq("A2 · propAddrSupported is retired (R90 · A)", types.propAddrSupported, "retired");
+      eq("A3 · docsSupported is retired (R90 · A)", types.docsSupported, "retired");
+      eq("A4 · lenderTrackSupported is retired (R90 · A)", types.lenderTrackSupported, "retired");
       ok("A · no console errors", noNewErr(pageA, errBefore), JSON.stringify(pageA.__err));
     }
 
@@ -515,22 +523,22 @@ async function readTableRow(page, fullName) {
            load with no 42703 and no console error, on the base columns only.
        ======================================================================= */
     {
-      console.log("\n— E · All three feature-detects forced unsupported: board still loads, no 42703 (p4)");
+      /* R90 · A: was "force the three feature detectors unsupported, the board still loads"; the
+         detectors are RETIRED (no flag left to force — the columns are live in production), so
+         E1 is gone and E2–E10 now pin the ordinary load: one book select carrying the base list,
+         the embed and the three formerly-gated columns, no 42703, a rendered board. */
+      console.log("\n— E · (R90 · A) the board's book select carries the formerly-gated columns (p4)");
       const pageE = await newPage(browser, "p4");
       const errBefore = (pageE.__err || []).length;
       await installSelectRecorder(pageE);
 
-      await pageE.evaluate(() => { PROP_ADDR_SUPPORTED = false; DOCS_SUPPORTED = false; LENDER_TRACK_SUPPORTED = false; });
-      const flagsNow = await pageE.evaluate(() => ({ p: PROP_ADDR_SUPPORTED, d: DOCS_SUPPORTED, l: LENDER_TRACK_SUPPORTED }));
-      eq("E1 · the three caches are now forced false", flagsNow, { p: false, d: false, l: false });
-
       await clearSelects(pageE);
-      // R85 — force the book's full walk under the forced flags (a boot may already hold a book).
+      // R85 — force the book's full walk (a boot may already hold a book).
       await pageE.evaluate(() => { window.__bustBookCache("delete"); return loadPipeline(); });
       await wait(pageE, 1200);
 
       const calls = await boardSelectCalls(pageE);
-      ok("E2 · exactly one board cases select observed while forced-unsupported", calls.length === 1, JSON.stringify(calls));
+      ok("E2 · exactly one board cases select observed", calls.length === 1, JSON.stringify(calls));
       const cols = calls[0] && calls[0].cols;
       ok("E3 · the select still includes every base BOARD_CASE_COLS column (R85: the book's select)", typeof cols === "string" && hasCols(cols, await pageE.evaluate(() => BOARD_CASE_COLS)), cols);
       ok("E4 · the rows still carry the (synthesised) clients embed — R85", await pageE.evaluate(() =>
@@ -549,7 +557,7 @@ async function readTableRow(page, fullName) {
       const boardVisible = await pageE.$eval("#board", (e) => !e.classList.contains("hidden"));
       ok("E10 · #board is visible (not stuck hidden behind an error branch)", boardVisible);
 
-      ok("E · no console errors / no 42703 surfaced while forced-unsupported", noNewErr(pageE, errBefore), JSON.stringify(pageE.__err));
+      ok("E · no console errors / no 42703 surfaced", noNewErr(pageE, errBefore), JSON.stringify(pageE.__err));
       await pageE.close();
     }
 
@@ -565,9 +573,8 @@ async function readTableRow(page, fullName) {
       const errBefore = (pageF.__err || []).length;
 
       await goto(pageF, "pipeline", 1200);
-      const flags = await pageF.evaluate(() => ({ p: PROP_ADDR_SUPPORTED, d: DOCS_SUPPORTED }));
-      eq("F1 · PROP_ADDR_SUPPORTED resolves true (migrations default ON)", flags.p, true);
-      eq("F2 · DOCS_SUPPORTED resolves true (migrations default ON)", flags.d, true);
+      /* R90 · A: F1/F2 ("PROP_ADDR_SUPPORTED / DOCS_SUPPORTED resolve true") retired with the
+         star-row detectors themselves; the chips below are what they used to gate. */
 
       const gt = await pageF.evaluate(async () => {
         const db = window.__mockDb;

@@ -663,31 +663,23 @@ const shiftMv = (mv, n) => {
     }
 
     /* ===================================================================
-       7 · guard — M2 not applied: Reports degrades, it does not break
+       7 · guard — R90 · A: RETIRED. Was "M2 off ⇒ cash falls back to the single legacy
+       fee_paid_at and every loss lands in '(not recorded)'". The M2 columns are live in
+       production, the mock's m2 flag is inert, and the app no longer carries the fallback's
+       migration branches; what is left is the page-level sanity with the (inert) flag flipped.
        =================================================================== */
-    console.log("\n— guard · older database (M2 off): feature-detection degrades cleanly");
+    console.log("\n— guard · (R90 · A) the m2 flag is inert — Reports renders as normal");
     {
       const page = await newPage(browser, "p4");
       await page.evaluate(() => window.__mock.setMigrations({ m2: false }));
       await openReports(page);
-      const fx = await fixture(page);
       const rendered = await page.evaluate(() => ({
         kpis: (document.querySelector("#month-kpis") || {}).innerText || "",
-        bar: (document.querySelector("#month-fee-target") || {}).innerText || "",
         losses: (document.querySelector("#report-losses") || {}).innerText || "",
-        lossHidden: document.querySelector("#report-losses-panel").classList.contains("hidden"),
       }));
       ok("guard · the month card still renders", rendered.kpis.includes("APPLICATIONS SUBMITTED"), JSON.stringify(rendered.kpis.slice(0, 80)));
-      // Without the per-type columns every fee falls back to the single legacy date.
-      const legacyTotal = fx.cases.filter((c) => c.fee_paid_at && String(c.fee_paid_at).slice(0, 7) === fx.thisMv
-        && String(c.fee_paid_at).slice(0, 10) <= fx.todayIso)
-        .reduce((s, c) => s + Number(c.proc_fee || 0) + Number(c.broker_fee || 0) + Number(c.sols_fee || 0), 0);
-      ok("guard · cash falls back to the single legacy fee_paid_at", rendered.bar.includes(money(legacyTotal)),
-        JSON.stringify({ bar: rendered.bar, want: money(legacyTotal) }));
-      ok("guard · the losses panel still renders, all in the '(not recorded)' bucket",
-        !rendered.lossHidden && rendered.losses.includes("(not recorded)") && !/Went direct/.test(rendered.losses),
-        JSON.stringify(rendered.losses));
-      eq("guard · no console errors on an un-migrated database", page.__err || [], []);
+      ok("guard · (R90 · A) the losses panel keeps its recorded reasons with m2 flipped OFF", /Used another broker|Went direct/.test(rendered.losses), JSON.stringify(rendered.losses.slice(0, 160)));
+      eq("guard · no console errors", page.__err || [], []);
       await page.evaluate(() => window.__mock.setMigrations({ m2: true }));
       await page.close();
     }

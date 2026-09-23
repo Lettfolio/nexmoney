@@ -13,9 +13,9 @@
    dist/; the git-push deploy flow is unchanged.
 
    WHY WHITESPACE+SYNTAX ONLY, NOT IDENTIFIER MINIFICATION: core.js,
-   reports-money.js and app.js are three CLASSIC scripts sharing one global
-   scope (see HARNESS.md "R78 · A"). Renaming top-level identifiers in one file
-   would break the other two; esbuild's --minify-whitespace --minify-syntax
+   reports-money.js, diary.js, import.js, vault.js (R90 · F) and app.js are
+   CLASSIC scripts sharing one global scope (see HARNESS.md "R78 · A"). Renaming
+   top-level identifiers in one file would break the others; esbuild's --minify-whitespace --minify-syntax
    keeps every name and only strips comments/whitespace and folds constants.
    The window.__nxTag_* / NX_BUILD_TAG string literals survive untouched, so
    the R81 build-tag handshake still works on the served files.
@@ -49,6 +49,9 @@ const SKIP_EXT = new Set([".md", ".pdf", ".docx", ".bat", ".log", ".zip"]);
 const MINIFY = {
   "admin/core.js": "js",
   "admin/reports-money.js": "js",
+  "admin/diary.js": "js",          // R90 · F — the third carve: diary.js / import.js / vault.js
+  "admin/import.js": "js",
+  "admin/vault.js": "js",
   "admin/app.js": "js",
   "admin/admin.css": "css",
   "style.css": "css",

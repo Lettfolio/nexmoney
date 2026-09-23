@@ -109,6 +109,7 @@ node tests/r63_tasks.js
 node tests/r64_retention.js
 node tests/r64_hf1.js
 node tests/r65_watchtower.js
+node tests/r65_pipeline.js
 node tests/r66_book.js
 node tests/r66_comms.js
 node tests/r68_mi.js
@@ -159,7 +160,75 @@ node tests/r89_tabs.js
 node tests/r89_operations.js
 node tests/r89_reports.js
 node tests/r89_settings.js
+node tests/r90_carve.js
+node tests/r90_migrations.js
+node tests/r90_case_split.js
+node tests/r90_queues.js
 ```
+
+**R90 · F notes — "Under the floor", CARVE #3 (`tests/r90_carve.js` 68; oracle `panel-r87/dom-dump.js` +
+`dom-diff.js`, baseline `panel-r87/dump-base/`).** Three page families moved out of app.js VERBATIM (cut/paste,
+comments included; app.js 39,247 → 34,542 lines), the R78/R81 recipe repeated. **THE CARVE MAP — what lives where:**
+  - `admin/diary.js` (1,733 L) — the appointment-OUTCOME vocabulary that the Leads/My Day block used to own
+    (APPT_TITLE_PICKS, APPT_OUTCOMES, APPT_OUTCOME_LABEL/_MARK/_TIP, isApptOutcome, apptOutcomeChipHtml,
+    apptWhenLabel, offerNoShowTask, writeApptOutcome) + the whole Diary (diaryMonth, DIARY_PALETTE/adviserColor,
+    apptClientLine, dated tasks, month/week/day views, mondayOf, drag-to-move, diaryViewMode / diaryStaffVal /
+    loadDiaryForMode / initDiaryViewFromPrefs / setDiaryViewMode / refreshDiaryView, clash rules, window.openAppt /
+    openApptFromCase / deleteAppt). window.quickApptOutcome (My Day's ✓/✗) STAYS in app.js.
+  - `admin/import.js` (2,677 L) — Bulk import (AI) (importRows … runImport, the R6 address pass, the shared person
+    check, the R83 preview memo) + R8-REV Revolution sync (REV_FIELDS … window.__rev, renderRevLastSync). The
+    shared drop-zone widget (dropZoneHtml / wireDropZone / mountDropZone + its four eval-time mounts) STAYS in
+    app.js — Money's recon and rate-card zones use it.
+  - `admin/vault.js` (447 L) — R14's Vault + the shared copy/reveal plumbing (window.nexCopy and the ONE delegated
+    document click handler for .vf-copy / .vf-reveal / [data-nexcopy] that the case modal's security card uses).
+  **SCRIPT ORDER (a contract, pinned by r81_platform §A and r90_carve §A): core.js → reports-money.js → diary.js →
+  import.js → vault.js → app.js.** THE DEFINITION-TIME RULE decides it: a declaration may live in a file loaded
+  BEFORE app.js only if it references nothing from a LATER script at its own definition time (call-time references
+  to db, ME, TEAM, openOverlay, confirmDestructive … are fine). AST-verified both ways for all three files (every
+  eval-time identifier; initializers are data/arrows or use the file's own names; listener bindings sit on nodes in
+  the SHIPPED markup) — and app.js stays LAST for R81's microtask reason (init()'s awaits run between classic
+  scripts; a file after app.js could be unevaluated when a deep link reaches nav()'s page map / PAGE_TAB_LOADERS).
+  ONE accommodation, tagged "R90 · F" in import.js (R81 · A1's recipe): #import-file and #rev-file are CREATED by
+  app.js's eval-time mountDropZone(), so their two change bindings run at DOMContentLoaded — still after the drop
+  zone's own readout listener; r90_carve §D proves both fire. Side note: vault.js's two document click listeners
+  now register BEFORE app.js's (independent selectors, no stopImmediatePropagation, no defaultPrevented reader —
+  unobservable). **THE ORACLE:** `node panel-r87/dom-dump.js <dir>` dumps p1/p2/p4 × 1440/390 × every page and tab
+  (Today, Pipeline, Diary week/day/month, Clients, Protection, Retention, each Reports tab, Vault, each Operations
+  tab, each Settings tab) + the case modal on the Offer and Completed fixtures + the client modal: masked
+  body innerText and [tag, display, position, visibility, text-hash] of every element with an id (clocks masked:
+  ISO stamps, HH:MM(:SS), "N min ago"). `node panel-r87/dom-diff.js panel-r87/dump-base <dir>` must say IDENTICAL
+  (142 views, 99,018 id records; two runs of the untouched tree are identical, and so was the carved tree).
+  Re-point (commented "R90 · F"): r87_shell D12 reads the classes/ids from all SIX scripts (was four sources).
+  Build: `node build.js --hash` prints SEVEN admin hashes (core, reports-money, diary, import, vault, app, admin.css).
+
+**R90 · B / C / D notes.**
+  - **B — THE openCase FUNCTION MAP.** `window.openCase(id, {focus})` is ≤ 200 lines with ≤ 1 nested closure (the
+    Save binding); its work lives in 40 named top-level functions sitting contiguously right above it, in call
+    order `caseOpenLoad` → … → `applyCaseOpenOpts`. The authoritative list is `LIFTED` in `tests/r90_case_split.js`
+    (read it there rather than copying it here). `saveCase(k)` writes the form's FormData + stamps as ONE cases
+    update / ONE insert — no M-migration retry ladder. Modal DOM oracle: `tests/r90_case_split.snap.json`.
+  - **C — ONE QUEUE MACHINE.** `QUEUE_KINDS` (app.js, `email` / `sms`: table, list, ids, nouns, tags) is read by
+    `queueTable(kind)` (bulk bar, retry-all row, checkbox, wiring) and `queueVerbs(kind)` (retry, bulk cancel,
+    retry-all); the old global names (`retryEmail`, `retrySms`, `retryAllFailed*`) are one-line shims onto it.
+    **u-\* utilities**: the fenced `/* R90 · C utilities */ … /* end R90 · C utilities */` block in admin.css (24
+    rules, cap 25, `!important` on purpose because each replaces an inline style, no @media). Inline `style="`
+    CEILINGS asserted by r90_queues A4 (`STYLE_CEILING`): app 143 · diary 11 · import 9 · vault 0 ·
+    reports-money 31 · index.html 19 — a new inline style needs a utility class instead, or the ceiling raised
+    in the same commit with a reason.
+  - **D — THE COMMENT RULES** (every admin script): a comment says WHY a non-obvious line exists, ≤ 3 lines where
+    that loses nothing (≤ 6 for a banner; keep the original in full rather than lose a why); a changelog essay
+    becomes one line `R73 · B3: <why>`; tombstones for code that no longer exists go; no `${/* … */ ""}` in
+    templates; never touch a string, regex or template text. A comment ending in `…` is condensed — the full text
+    is in git history (`git log -S` on its first words; pre-pass text at ee1eb07). **THE ORACLE:**
+    `node build.js --hash` must print the same seven hashes before and after any comment-only edit (esbuild strips
+    comments — a changed hash means something else changed); mock-supabase.js is not built, so its oracle is
+    `node --check` + an acorn token stream (comments excluded) equal to the previous one.
+    Fixer pass (R90): D2 had head-truncated 1,295 comments; every one that had dropped ≥ 400 chars of its
+    original was re-condensed by rule (first sentence(s) + every sentence carrying because / so that / never /
+    must / rule / contract / pins, ≤ 6 lines, else the original in full), the ten the verifier named were
+    rewritten by hand, the six remaining tombstones went (noteRowHtml, propLineHoldsRun,
+    eventTimelineHtml, loadTasks, loadLeads, loadTodayAppts), and the stale "older database / feature probe" wording
+    on paths that no longer feature-detect was corrected.
 
 **R89 notes — "Fewer rooms" (page tabs; `tests/r89_tabs.js`, `r89_operations.js`, `r89_reports.js`, `r89_settings.js`).**
 Emails, Import and Data health are the three tabs of one Operations page; Monday money is the Owner's Money tab of
@@ -5414,10 +5483,18 @@ in this environment — no `npx playwright install` needed.
 Exposed on `window` by `admin/mock-supabase.js` (and one by `app.js`) for the
 test scripts to reach into the mock without going through the UI:
 
-- `window.__mock.setMigrations({m2: false, ...})` — flips one or more of the
-  M1–M7 migration flags off (all default ON) so a test can exercise the app's
-  feature-detect fallback path (Postgres 42703 undefined-column / 42P01
-  missing-relation / 42883 undefined-function) for an "unmigrated database".
+- `window.__mock.setMigrations({m2: false, ...})` — **R90 · A: the migration layer is
+  retired.** The app no longer feature-detects any M1–M13 column, table or RPC (every one
+  is live in production — verified against `db/columns.json` and
+  `db/_live_functions_snapshot.sql`), so flags **m1–m13 are INERT**: the hook (and the
+  pre-load seed `window.__mockMigrations`) accepts them and changes nothing. Only **m14**
+  (`get_team_mfa`) and **m15** (`session_ok`) stay LIVE — their functions ship in
+  `db/r86/*.sql`, newer than the Sep-8 snapshot, so the app keeps those 42883 fallbacks.
+  The hook **still busts the session Book as a delete (R85)** — suites keep calling it for
+  that. To reach an app fallback that remains (a refused/failed RPC or read), shim
+  `window.db.rpc` / `window.db.from` in-page (r82_mock §C, r85_book E10, r78_fast §E).
+  openCase's eleven `*Supported()` probes went with R90 · D1 (and with them the fenced
+  "R90 · A openCase compatibility block") — no probe name is left in admin/*.js.
 - `window.__mock.lastEmailRun()` — what the last `process-emails` invocation
   actually sent, including the composed per-adviser sign-off text for every
   message.
@@ -5466,13 +5543,16 @@ test scripts to reach into the mock without going through the UI:
   `admin/mock-supabase.js` is synthetic (deterministic PRNG seed), and it must
   stay that way — no real NexMoney client names, emails, phone numbers or
   addresses, ever.
-- **The build tag is bumped in ALL FOUR places, every round that edits any of
-  them (R81 · A3).** index.html (`window.NX_BUILD_TAG`), core.js
-  (`window.__nxTag_core`), reports-money.js (`window.__nxTag_reportsmoney`),
-  app.js (`window.__nxTag_app`) must carry the SAME literal — it is the deploy
-  handshake that catches a mixed-deploy cache. `tests/r81_platform.js` §C
-  fails the battery on a partial bump, so this is a delivery-checklist item:
-  edit any of those four files ⇒ bump the tag in all four.
+- **The build tag is bumped in ALL SEVEN places, every round that edits any of
+  them (R81 · A3; seven since R90 · F — was four).** index.html
+  (`window.NX_BUILD_TAG`), core.js (`window.__nxTag_core`), reports-money.js
+  (`window.__nxTag_reportsmoney`), diary.js (`window.__nxTag_diary`), import.js
+  (`window.__nxTag_import`), vault.js (`window.__nxTag_vault`), app.js
+  (`window.__nxTag_app`) must carry the SAME literal — it is the deploy
+  handshake that catches a mixed-deploy cache (nxCheckBuildTags compares all
+  seven). `tests/r81_platform.js` §C and `tests/r90_carve.js` §A fail the
+  battery on a partial bump, so this is a delivery-checklist item: edit any of
+  those seven files ⇒ bump the tag in all seven.
 - **A column the mock does not know is a 42703 (R81 · B).** `admin/mock-supabase.js` runs
   STRICT COLUMN MODE by default: every select/filter/order/payload/rpc-arg column name is
   checked against the per-table registry and an unknown one THROWS

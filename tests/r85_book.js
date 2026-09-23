@@ -414,20 +414,31 @@ const stats = (page) => page.evaluate(() => window.__bookStats());
       ok("E7 · the heartbeat banner still reads the settings keys (settings.last_cron_run_at populated off the rpc)", await page.evaluate(() => typeof settings.last_cron_run_at !== "undefined"));
       ok("E8 · the watchtower's open total came off the rpc and matches the fixture", await page.evaluate(() => wtLast && wtLast.openTotal === window.__mock.db.watch_alerts.filter((a) => a.resolved_at == null).length));
       ok("E9 · the what's-new band shows for a returning user (p1: tour seen, no marker)", await page.evaluate(() => { const b = document.querySelector("#whatsnew-band"); return b && !b.classList.contains("hidden") && /New since you were last here/.test(b.textContent); }));
-      // Fallback: the function switched off (an older database) → the old reads answer, same chips.
-      await page.evaluate(() => window.__mock.setMigrations({ m13: false }));
+      // Fallback: the function refused → the old reads answer, same chips.
+      /* R90 · A: was "setMigrations({m13:false})" (an older database). The m13 flag is inert now —
+         get_dashboard_counts is live in production — so the refusal is shimmed in-page: the call
+         still goes through the instrumented rpc (so it is logged), and its answer is replaced by a
+         42883 {error}. The app's any-error fallback is what is under test, unchanged. */
+      await page.evaluate(() => {
+        window.__r90RealRpc = window.db.rpc.bind(window.db);
+        window.db.rpc = function (name, args) {
+          const p = window.__r90RealRpc(name, args);
+          if (name !== "get_dashboard_counts") return p;
+          return Promise.resolve(p).then(() => ({ data: null, error: { code: "42883", message: "function public.get_dashboard_counts() does not exist" } }));
+        };
+      });
       await goPage(page, "clients", 800);
       await netReset(page);
       await page.evaluate(() => window.nav("dashboard"));
       await netSettle(page);
       await page.waitForFunction(() => document.querySelectorAll("#ops-strip .ops-chip").length >= 6, { timeout: 15000 });
       const flog = await netLog(page);
-      ok("E10 · with get_dashboard_counts absent (m13 off) the rpc answers 42883 and the FIVE head:true probes run instead",
+      ok("E10 · with get_dashboard_counts refused (R90 · A: shimmed 42883) the FIVE head:true probes run instead",
         flog.filter((e) => e.kind === "rpc" && e.name === "get_dashboard_counts").length === 1 && flog.filter((e) => e.kind === "from" && e.head && ["email_queue", "sms_queue", "leads", "case_tasks"].includes(e.table)).length === 5);
       ok("E11 · …and the profiles row + settings keys are read the old way", flog.filter((e) => e.kind === "from" && e.table === "profiles").length >= 2 && flog.filter((e) => e.kind === "from" && e.table === "settings").length >= 1);
       const got2 = await page.evaluate(() => { const o = {}; document.querySelectorAll("#ops-strip .ops-chip").forEach((c) => { o[c.id] = Number(c.dataset.n); }); return o; });
       eq("E12 · the chips are byte-identical on the fallback path", got2, want);
-      await page.evaluate(() => window.__mock.setMigrations({ m13: true }));
+      await page.evaluate(() => { window.db.rpc = window.__r90RealRpc; window.__mock.setMigrations({}); });   // R90 · A — un-shim; the (inert) hook still busts the book
       eq("E · no page errors (p1)", realErrs(page).length, 0);
       await page.context().close();
 

@@ -626,31 +626,21 @@ const groundTruth = (page) => page.evaluate(async ({ CHASE_MAX }) => {
   ok("…and says editing the firm list does not rewrite checklists already built",
     /does not change any checklist already built/i.test(docsListCopy), docsListCopy);
 
-  console.log("\n=== R9-5 · m10 ABSENT — the whole feature degrades, nothing breaks ===");
+  /* R90 · A: RETIRED — "R9-5 · m10 ABSENT ⇒ no Documents section, no Waiting on / Solicitor
+     fields, no waiting chips, the conveyancer panel says the migration is absent". The m10
+     feature-detect (docsSupported, noteDocsFromStarRow, the loadSolicitorColumn gate) is gone —
+     case_documents and the three cases columns are live in production — and the mock's m10 flag
+     is inert. What remains is the inertness itself: flipping it changes nothing. */
+  console.log("\n=== R9-5 · (R90 · A) the m10 flag is inert — the feature stays whole ===");
   const off = await newPage(browser, "p4");
   await off.evaluate(() => window.__mock.setMigrations({ m10: false }));
-  await off.reload();
-  await off.waitForTimeout(SETTLE);
-  await off.evaluate(() => window.__mock.setMigrations({ m10: false }));
-  /* R85 · B contract change — the boot on Today already loaded the session Book (under m10 ON,
-     since the reload re-seeds the mock's migrations); the board and the case modal read that
-     snapshot now, not a fresh cases select. Bust it as a delete so the session re-reads under the
-     absent migration — the state this section is about. */
-  await off.evaluate(() => window.__bustBookCache("delete"));
   await openCase(off, G.ids.quirke, 1300);
-  ok("no Documents section", !(await exists(off, "#case-docs")));
-  await openDetails(off);
-  ok("no Waiting on select", !(await exists(off, "#case-waiting-select")));
-  ok("no Solicitor field", !(await exists(off, "#case-solicitor-field")));
-  ok("the rest of the case modal still renders", await exists(off, "#case-form"));
+  ok("R90 · A — with setMigrations({m10:false}) the Documents section still renders", await exists(off, "#case-docs"));
   await off.evaluate(() => window.closeModal());
   await gotoPipeline(off);
-  eq("no waiting-on chips anywhere on the board", await off.$$eval(".wait-chip", (e) => e.length), 0);
-  await gotoReports(off);
-  const offConv = await txt(off, "#report-conveyancer-body");
-  ok("the conveyancer panel says the migration is absent — it does not show a confident zero",
-    /has not taken migration/i.test(offConv) && /m10/.test(offConv) && /it is an absence/i.test(offConv), offConv);
-  eq("no console errors with the migration off", off.__err, []);
+  ok("R90 · A — …and the board still carries waiting-on chips", (await off.$$eval(".wait-chip", (e) => e.length)) > 0);
+  await off.evaluate(() => window.__mock.setMigrations({ m10: true }));
+  eq("no console errors with the (inert) flag off", off.__err, []);
 
   console.log("\n=== R9-8a · THE DEPLOYED doc-upload CONTRACT ===");
   /* Driven straight at the endpoint from a public page context, because the

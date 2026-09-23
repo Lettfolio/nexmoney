@@ -527,73 +527,12 @@ const sendCalls = (page) => page.evaluate(() => window.__sendCalls || []);
       await page.close();
     }
 
-    /* ===================================================================
-       R5-M6 · the same handover on a database that has NOT taken the
-       migration. reassign_holdings() comes back 42883, isMissingFunctionError()
-       recognises it, and the compensating client-side path runs instead —
-       same three scopes, same outcome, just not in one transaction. The
-       fallback existing is the whole point of calling the RPC first.
-       =================================================================== */
-    console.log("\n— R5-M6 · older database (m6 off): the handover falls back and still moves the work");
-    {
-      const page = await newPage(browser, "p4");
-      const before = await page.evaluate(async () => {
-        window.__mock.setMigrations({ m6: false });
-        const probe = await window.__mockDb.rpc("reassign_holdings", { p_from: "p3", p_to: "p2" });
-        const db = window.__mockDb;
-        const nowIso = new Date().toISOString();
-        const { data: cases } = await db.from("cases").select("id,stage,assigned_to");
-        const { data: tasks } = await db.from("case_tasks").select("id,assigned_to,done_at");
-        const { data: appts } = await db.from("appointments").select("id,staff_id,starts_at");
-        return {
-          rpcCode: probe.error && probe.error.code,
-          live: cases.filter((c) => c.assigned_to === "p3" && ["completed", "not_proceeding"].indexOf(c.stage) === -1).map((c) => c.id),
-          closed: cases.filter((c) => c.assigned_to === "p3" && ["completed", "not_proceeding"].indexOf(c.stage) >= 0).map((c) => c.id),
-          openTasks: tasks.filter((t) => t.assigned_to === "p3" && !t.done_at).map((t) => t.id),
-          futureAppts: appts.filter((a) => a.staff_id === "p3" && a.starts_at >= nowIso).map((a) => a.id),
-        };
-      });
-      eq("R5-M6 · the function really is missing on this database (42883)", before.rpcCode, "42883");
-      ok("fixture · and the probe moved nothing (a missing function cannot have side effects)",
-        before.live.length > 0, JSON.stringify({ live: before.live.length }));
-
-      await page.click('[data-page="settings"]'); await page.waitForTimeout(600); await page.click("#settings-tabs-team");   // R89 · C: the roster is on Settings › Team & security
-      await page.waitForTimeout(1200);
-      await page.selectOption('#team-roster select.team-role[data-id="p3"]', "none");
-      await page.waitForTimeout(1400);
-      await page.selectOption("#deact-to", "p2");
-      page.__dialogs = [];
-      await page.click("#deact-reassign");
-      await page.waitForTimeout(2400);
-
-      const after = await page.evaluate(async (b) => {
-        const db = window.__mockDb;
-        const { data: cases } = await db.from("cases").select("id,assigned_to");
-        const { data: tasks } = await db.from("case_tasks").select("id,assigned_to");
-        const { data: appts } = await db.from("appointments").select("id,staff_id");
-        const byId = Object.fromEntries(cases.map((c) => [c.id, c.assigned_to]));
-        const tById = Object.fromEntries(tasks.map((t) => [t.id, t.assigned_to]));
-        const aById = Object.fromEntries(appts.map((a) => [a.id, a.staff_id]));
-        const { data: prof } = await db.from("profiles").select("id,role").eq("id", "p3").single();
-        window.__mock.setMigrations({ m6: true });
-        return {
-          role: prof.role,
-          liveMoved: b.live.every((id) => byId[id] === "p2"),
-          closedKept: b.closed.every((id) => byId[id] === "p3"),
-          tasksMoved: b.openTasks.every((id) => tById[id] === "p2"),
-          apptsMoved: b.futureAppts.every((id) => aById[id] === "p2"),
-          roleMsg: (document.querySelector("#team-role-msg") || {}).textContent || "",
-        };
-      }, before);
-      eq("R5-M6 · the leaver's access is still removed", after.role, "none");
-      ok("R5-M6 · the fallback moved the live cases", after.liveMoved);
-      ok("R5-M6 · … and left the completed/closed ones alone", after.closedKept);
-      ok("R5-M6 · … and moved the open tasks and future appointments", after.tasksMoved && after.apptsMoved);
-      ok("R5-M6 · the confirmation does NOT claim a transaction it never had",
-        !/in one transaction/.test(after.roleMsg) && /moved to Wayne Kellow/.test(after.roleMsg), JSON.stringify(after.roleMsg));
-      ok("no console errors", !page.__err, JSON.stringify(page.__err));
-      await page.close();
-    }
+    /* R90 · A: RETIRED — "R5-M6 · the same handover on a database that has NOT taken the
+       migration (m6 off ⇒ reassign_holdings 42883 ⇒ the compensating client-side path)".
+       reassign_holdings is live in production, the app's 42883 recognition
+       (isMissingFunctionError) is gone and the mock's m6 flag is inert, so the harness has no
+       un-migrated state to reach. The compensating path itself stays in the app for a refused or
+       failed RPC; the RPC-first handover above is the contract. */
   } finally {
     await browser.close();
     if (server) { try { process.kill(-server.pid); } catch (e) {} }

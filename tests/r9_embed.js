@@ -31,10 +31,8 @@
      §1-§3  THE MOCK IS NOW STRICT. An unhinted embed between an ambiguous pair
             returns the exact PostgREST error shape (returned, never thrown);
             the `!column_name` and `!constraint_name` hints resolve to the
-            relationship they name, both directions, nested; and the migration
-            gate is honoured — with m11 OFF there is only one relationship and
-            an unhinted embed is legal again, which is what a database that has
-            not taken m11 really does.
+            relationship they name, both directions, nested. (R90 · A: the m11
+            gate is retired — the flag is inert and the pair stays ambiguous.)
      §4     THE APP IS NOW HINTED. Pipeline / My Day / Clients / Protection /
             Emails render REAL CLIENT NAMES as p1, p2 and p4. Names are the
             assertion on purpose: a page that 300s still draws its chrome, so
@@ -330,17 +328,20 @@ async function groundTruth(page) {
        3 · THE MIGRATION GATE — no m11, no second relationship, no ambiguity
        =================================================================== */
     {
-      console.log("\n— R9-EMBED-3 · without m11 the pair has ONE relationship again");
+      /* R90 · A: was "m11 OFF ⇒ one relationship ⇒ an unhinted embed is legal again". The m11 flag
+         is inert now (cases.referrer_client_id is live in production, and the app no longer
+         models a database without it), so the pair stays ambiguous whatever the flag says: E3/E3c
+         now pin that the refusal SURVIVES the flip; E3b (the hinted form resolves) is unchanged. */
+      console.log("\n— R9-EMBED-3 · (R90 · A) the m11 flag is inert — the pair stays ambiguous");
       const p = await newPage(browser, "p4");
       await p.evaluate(() => window.__mock.setMigrations({ m11: false }));
       const un = await runSelect(p, "cases", "id,clients(first_name,last_name)", { limit: 5 });
-      ok("R9-E3 · an unhinted embed is legal on a database that never took m11",
-        !un.error && Array.isArray(un.data) && un.data.length > 0 && !!un.data[0].clients, JSON.stringify(un.error));
+      eq("R9-E3 · with m11 flipped OFF an unhinted embed is STILL refused (R90 · A — the flag is inert)", un.error && un.error.code, "PGRST201");
       const hi = await runSelect(p, "cases", "id,clients!client_id(first_name,last_name)", { limit: 5 });
       ok("R9-E3b · …and the hinted form the app now sends still resolves there",
         !hi.error && Array.isArray(hi.data) && hi.data.length > 0 && !!hi.data[0].clients, JSON.stringify(hi.error));
       const rv = await runSelect(p, "clients", "id,cases(id)", { limit: 5 });
-      ok("R9-E3c · the reverse direction is unambiguous without m11 as well", !rv.error, JSON.stringify(rv.error));
+      eq("R9-E3c · the reverse direction is still refused too (R90 · A)", rv.error && rv.error.code, "PGRST201");
       await p.evaluate(() => window.__mock.setMigrations({ m11: true }));
       const back = await runSelect(p, "cases", "id,clients(first_name)", { limit: 5 });
       eq("R9-E3d · turning m11 back on restores the refusal", back.error && back.error.code, "PGRST201");

@@ -179,15 +179,15 @@ const STRICT_RE = /^MOCK STRICT: unknown column '([a-z_]+\.[A-Za-z_]+)' — prod
       const del = await db.from("case_tasks").delete().eq("id", ins.data.id);
       return del.error ? "delete: " + del.error.message : "ok";`);
     eq("D5 · legitimate insert/update/delete round-trips untouched", d5.out, "ok");
-    /* feature-detect parity: a migration-disabled column is a RETURNED 42703,
-       exactly what app.js's fallbacks probe for — strict must never turn that
-       contract into a throw. */
+    /* R90 · A: was "a migration-disabled column (m7 off) is a RETURNED 42703, not a strict throw".
+       The m7 flag is inert now (the app no longer feature-detects M7), so a write naming
+       property_address is simply legal — and strict must still not throw on it. */
     const d6 = await attempt(page, `
       window.__mock.setMigrations({ m7: false });
       const r = await db.from("cases").update({ property_address: "1 Test St" }).eq("stage", "no_such_stage");
       window.__mock.setMigrations({ m7: true });
       return { code: r.error && r.error.code, threwNot: true };`);
-    ok("D6 · a migration-disabled column stays a returned 42703 {error}, NOT a strict throw", !d6.threw && d6.out && d6.out.code === "42703", JSON.stringify(d6));
+    ok("D6 · (R90 · A) with the inert m7 flag flipped OFF, a write naming property_address is legal — no error, no strict throw", !d6.threw && d6.out && d6.out.code == null, JSON.stringify(d6));
 
     /* ===================================================================
        E · EMBED INNER-COLUMN VALIDATION

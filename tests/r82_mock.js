@@ -277,34 +277,34 @@ async function setSetting(page, key, value) {
       await page.__ctx.close();
     }
     {
-      /* A5 — THE MISSING-FUNCTION TOGGLE, both ways in. This is the toggle any suite pinning the
-         UNSUPPORTED path needs, agent A's r82_correct §D1 included. */
+      /* A5 — R90 · A: was "THE MISSING-FUNCTION TOGGLE: setMigrations({m12:false}) makes the call
+         a 42883". get_staff_activity is live in production (db/_live_functions_snapshot.sql) and the
+         mock's m12 flag is INERT: flipping it OFF changes nothing. The unsupported path is still
+         pinned — §C reaches it by shimming the RPC in-page, the C2/C3 technique. */
       const page = await boot(browser, "p1");
       const a5 = await page.evaluate(async () => {
         window.__mock.setMigrations({ m12: false });
         const off = await window.__mockDb.rpc("get_staff_activity");
+        const flag = window.__mock.migrations.m12;
         window.__mock.setMigrations({ m12: true });
-        const on = await window.__mockDb.rpc("get_staff_activity");
-        return { offCode: off.error && off.error.code, offMsg: off.error && off.error.message,
-          offData: off.data, onOk: Array.isArray(on.data) && on.error === null };
+        return { offOk: Array.isArray(off.data) && off.error === null, flag };
       });
-      eq("A5a · setMigrations({m12:false}) makes the call a 42883 {error}, not a throw",
-        [a5.offCode, a5.offData], ["42883", null]);
-      ok("A5b · …with production's own undefined-function wording, which is what app.js feature-detects on",
-        /function public\.get_staff_activity\(\) does not exist/.test(a5.offMsg || ""), a5.offMsg);
-      ok("A5c · …and flipping it back on restores the RPC", a5.onOk, JSON.stringify(a5));
+      ok("A5a · (R90 · A) setMigrations({m12:false}) is inert — the RPC still answers an array", a5.offOk, JSON.stringify(a5));
+      eq("A5b · (R90 · A) …and the flag itself stays on", a5.flag, true);
       await page.__ctx.close();
     }
     {
       /* A6 — the PRE-LOAD seed. setMigrations() can only be called once the page has loaded, which
          is already too late for anything read inside init(). A suite that needs the RPC missing
          from the very first read sets window.__mockMigrations in an addInitScript. */
+      /* R90 · A: was "{m12:false} is honoured from the very first read (42883)"; the seed is now
+         honoured only for the two LIVE flags (m14/m15) — m12 is inert. */
       const page = await boot(browser, "p1", () => { window.__mockMigrations = { m12: false }; });
       const a6 = await page.evaluate(async () => {
         const r = await window.__mockDb.rpc("get_staff_activity");
         return { code: r.error && r.error.code, m12: window.__mock.migrations.m12, m6: window.__mock.migrations.m6 };
       });
-      eq("A6a · window.__mockMigrations = {m12:false} is honoured from the very first read", [a6.code, a6.m12], ["42883", false]);
+      eq("A6a · (R90 · A) window.__mockMigrations = {m12:false} is inert — no 42883, the flag stays on", [a6.code, a6.m12], [null, true]);
       eq("A6b · …and it touches nothing else (m6 is still on)", a6.m6, true);
       ok("A6c · no console errors (§A)", realErrs(page).length === 0, JSON.stringify(realErrs(page)));
       await page.__ctx.close();
@@ -389,10 +389,17 @@ async function setSetting(page, key, value) {
        ===================================================================== */
     console.log("\n— §C · B3 · a missing / broken RPC falls back to today's behaviour and today's wording");
     {
-      /* C1 — THE RPC IS ABSENT. Pre-load seed, so it is missing from the very first read, exactly
-         as it is on a database that never took it. */
-      const page = await boot(browser, "p4", () => { window.__mockMigrations = { m12: false }; });
+      /* C1 — THE RPC IS ABSENT. R90 · A: was reached with the pre-load seed {m12:false}; that flag is
+         inert now, so the 42883 is shimmed in-page (the C2/C3 technique) before Reports reads it. */
+      const page = await boot(browser, "p4");
       await seedProduction(page);   // …and the seed makes no difference, because nothing can read it
+      await page.evaluate(() => {
+        const real = window.db.rpc.bind(window.db);
+        window.db.rpc = function (name, args) {
+          if (name === "get_staff_activity") return Promise.resolve({ data: null, error: { code: "42883", message: "function public.get_staff_activity() does not exist" } });
+          return real(name, args);
+        };
+      });
       await goPage(page, "reports", 4200);
       await page.evaluate(() => repSetAdvView("activity")); await page.waitForTimeout(2500);   // R89 · B: the adoption strip is the activity VIEW of the one adviser table
       const strip = await readStrip(page);

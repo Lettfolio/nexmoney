@@ -1,283 +1,11 @@
 /* ============================================================================
-   mock-supabase.js — SANDBOX-ONLY mock of the supabase-js v2 surface that
-   admin/app.js actually uses. Loaded by admin/mock.html IN PLACE OF the
-   supabase CDN bundle. Never shipped, never imported by index.html.
-
-   Scope is derived strictly from app.js (the sole source of truth):
-     tables : clients, cases, case_tasks, case_notes, case_events, appointments,
-              email_queue, sms_queue, case_emails, fact_finds, leads,
-              introducers, profiles, settings, watch_alerts, audit_log,
-              duplicate_dismissals (M4), case_documents (M10), staff_absences,
-              case_files (R13), vault_entries (R14), error_events (R30),
-              saved_views (R43), proc_rates / commission_statements /
-              commission_lines (R44)
-     view   : v_alerts
-     rpcs   : my_role, get_briefing, get_reports, get_data_quality,
-              get_protection_pipeline, run_watchtower, find_duplicate_clients,
-              has_bank_details
-
-   ROUND 5 (PLAN-R5.md § Harness fixes + § Migrations):
-     · M1-M4 schema mirrored (profiles.phone/email_signoff + self-edit policy;
-       cases lost_reason/lost_detail + per-fee-type paid dates; watch_alerts
-       snooze columns; duplicate_dismissals table with RLS + audit trigger),
-       M5 mirrored in get_reports (fees_banked_ytd on the coalesced cash date).
-     · window.__mock.setMigrations({m2:false}) turns any migration OFF again so
-       the app's feature-detect fallbacks are testable (unknown-column 42703 /
-       missing-relation 42P01 / missing-function 42883).
-
-   ROUND 6 (harness repair + multi-property fixtures):
-     · rpc reassign_holdings(p_from, p_to) — the SECURITY DEFINER, Owner-only,
-       single-transaction handover openDeactivate() calls RPC-first. Migration
-       toggle m6; setMigrations({m6:false}) makes it 42883 so the compensating
-       client-side path is still testable.
-     · M7 = cases.property_address (text, nullable). Toggle m7.
-     · Multi-property fixtures: four clients hold several cases across DISTINCT
-       UK property addresses, one property carries two cases of the SAME client
-       at different times, and one address is shared by TWO clients (sold
-       between them). Most cases keep property_address NULL on purpose — that
-       is the legacy reality the app has to cope with.
-     · process-emails is v8: accepts {queue_ids:[…]} to send ONLY those rows,
-       otherwise runs queue_automated_emails + queue_comms_extras and sends all
-       due; per-adviser sign-off is read from profiles.
-     · fact_finds carry the log_fact_find_submit() trigger (event + note + task).
-
-   ROUND 8 (migration r8_m1 parity + the client-touch fixtures):
-     · queue_comms_extras() gains the ANNUAL REVIEW TOUCH — a completed case
-       whose completion anniversary is TODAY and which completed at least 12
-       months ago gets ONE call task ("Annual review call — <client> (completed
-       DD/MM/YYYY[, on <first address line>])"), due today, on the case's
-       adviser. No email: the anniversary of a completion is a phone call, not a
-       mailshot. Idempotent on an 11-month look-back over that case's own tasks,
-       so a re-run (or the app's queue-before-you-ask on the Emails page) can
-       never write the same call twice. Gated on the new setting
-       `annual_review_enabled`, seeded OFF exactly as production ships it. The
-       returned tally gains `annual_review_tasks`.
-     · The review-request block is now a DRIP: at most 5 per run, oldest
-       completed_at first, and only those 5 are stamped — the rest roll to the
-       next run. PARITY NOTE: the round-8 brief describes this change as landing
-       in queue_automated_emails(); in this mock (and in the production function
-       this mock was built from) the review-request block lives in
-       queue_comms_extras(), so that is where the cap is implemented. The
-       behaviour an operator or a test can observe — 5 queued and stamped per
-       run, oldest first, remainder waiting — is identical either way, because
-       process-emails runs both functions back to back on every unscoped run.
-     · Fixtures for the round-8 client-touch UI: DOBs on ~60% of the book (one
-       birthday today, one tomorrow, the rest of the book deliberately blank so
-       the "Missing DOB" segment has members), annual-review fodder at exactly
-       12 / 24 months ago today plus an 11-month control, a review-request
-       backlog of 8 (bigger than one run's cap of 5, so the rollover is
-       observable in two runs), and members for every client segment including
-       clients last contacted 8 and 14 months ago. See FIXTURES-R7.md § R8.
-   ROUND 9 (migrations r9_m10 / r9_m11 parity + the document-chase fixtures):
-     · M10 = the document checklist. New table `case_documents` (id, case_id,
-       item, status requested|received|waived, requested_at, received_at, note,
-       storage_path, created_at) plus three columns on `cases`: `waiting_on`,
-       `solicitor_firm` and `doc_token`. One toggle covers the lot (m10), because
-       they shipped as one migration: setMigrations({m10:false}) takes the table
-       to 42P01 and the three columns to 42703 at once.
-     · M11 = cases.referrer_client_id (nullable, self-referencing clients). Its
-       own toggle m11, because it is its own migration — app.js feature-detects
-       it separately (referrerSupported()) and hides the "Referred by" field
-       outright when it is not there.
-     · doc-upload edge function — the client-facing half of the checklist, and
-       the only thing here a client without a login ever touches. Mirrors the
-       DEPLOYED v1 contract, not a convenient version of it:
-         GET  ?token=…  → {ok, company, first_name, greeting, items[{id,item,
-                          status}], outstanding:<int>, complete}. Waived items
-                          are filtered out server-side; a first name is the only
-                          personal thing that comes back.
-         POST multipart/form-data ONLY — parts `token` (in the BODY; query
-              params are ignored on POST), `item_id` (the ID from the GET, never
-              the name), `file` (a real file part with a filename; the EXTENSION
-              is authoritative, not Content-Type) and an optional `website`
-              honeypot. A JSON body is a 400 before any logic runs, which is the
-              whole reason this stub refuses it too — a page that works against
-              a lenient stub and 400s for every real client is exactly the
-              failure this mirror exists to catch.
-         Success is 200 {ok:true, item, outstanding:<int>}; a bare {ok:true} is
-         the HONEYPOT answer and means nothing was written. Errors are matched
-         on STATUS: 400 malformed · 404 dead link or unknown item · 409 already
-         received (carries `status`) or a claim race · 413 over 10MB · 415 bad
-         extension or magic bytes · 429 rate cap (per link, per minute) · 500
-         storage. The 429 cap and the 500 are reachable from __mock hooks.
-     · nps-capture v2 — a detractor (≤6) submission carrying a reason writes the
-       verbatim feedback to the case as a note and puts a call task on the case's
-       adviser, due tomorrow.
-     · Comms: the docs_request template is CHECKLIST-AWARE (it lists only what is
-       still missing, plus the upload link, whenever the case has a checklist,
-       and keeps its old firm-wide wording where it has none); a nightly DOC
-       CHASE queues at most three chases per case and then writes an adviser task
-       instead; and a REVIEW REMINDER goes out a week after an unanswered review
-       request, inside the same 5-a-run drip the requests themselves respect.
-     · Fixtures: four document checklists (one per state — part-received, chase
-       due, chases exhausted, all in), solicitor firms and waiting-on values
-       across the book, referrer attribution, and a review-score spread. See
-       FIXTURES-R7.md § R9.
-     tables : … + case_documents (M10)
-     edge   : process-emails, send-sms, outlook-sync, owner-digest, invite-user,
-              ai-import, parse-offer, assistant, doc-upload, nps-capture
-     auth   : getSession, getUser, onAuthStateChange, signInWithPassword,
-              signOut, resetPasswordForEmail, updateUser; R86 — auth.mfa
-              (enroll, challenge, verify, unenroll, listFactors,
-              getAuthenticatorAssuranceLevel) over per-persona MFA state
-     storage: offers bucket (upload, createSignedUrl); client-docs bucket
-              (createSignedUrl — R12a·D8, the admin "open" link on a checklist
-              row a client uploaded through doc-upload; R13 — the bucket is
-              named `client-docs` in production, NOT `case-documents` as R12a
-              shipped it here; see "R13 · BUCKET CORRECTION" below)
-
-   ROUND 12a (D8 — signed-URL open link on a received checklist document):
-     · No new mock surface was needed: `storage.from(bucket)` was already
-       bucket-name-agnostic (built once for `offers`, never validated the
-       bucket string), so `storage.from("case-documents").createSignedUrl(...)`
-       already behaves exactly like the `offers` case. What the fixtures
-       lacked was any row with real content behind its `storage_path` to open,
-       and any row proving the app must NOT offer the link at all — a document
-       marked received over email/phone has no file, and `storage_path` is how
-       the app tells the two apart (see case_documents fixtures, search
-       "R12a·D8").
-
-   ROUND 13 · BUCKET CORRECTION (a real production defect R12a's mock hid):
-     · Production has NO "case-documents" bucket. The real buckets are
-       web / offers / client-docs. The deployed doc-upload edge function (a)
-       uses bucket "client-docs", (b) stores paths as
-       `<caseId>/<slug>-<ts>.<ext>` INSIDE the bucket, and (c) writes
-       `case_documents.storage_path` WITH the bucket prefix on it:
-       `client-docs/<caseId>/<file>`. Every fixture storage_path below is
-       re-prefixed the same way, `DOC_STORAGE_BUCKET` is now "client-docs",
-       and the doc-upload stub writes the prefixed form on a real upload
-       (search "R13 · BUCKET CORRECTION" below for both). `storage.from(bucket)`
-       needed no change — it was already bucket-name-agnostic — but every
-       piece of fixture content keyed into `storageFiles` moved with the
-       bucket rename. `tests/r12a.js` D8 still asserts the OLD
-       "case-documents/<path>" signed-URL shape and is not this file's to
-       edit; that one check is now expected to fail — see HARNESS.md / the
-       handoff notes for the exact line.
-     · `clients` gains `is_vulnerable` (bool), `vulnerability_note` (text) and
-       `suppress_automation` (bool), mirroring app.js's CARE_COLS. Suppression
-       is enforced in every automated queueing path that actually exists in
-       this mock (see "R13 · SUPPRESSION" below for the exact list and the
-       honest gaps — some settings-gated sends production has were never
-       built here and still are not).
-     · `cases` gains four nullable, writable columns with no backfill:
-       `policy_start_date`, `exchange_date`, `offer_issued_date`,
-       `repayment_method`.
-     · Two new tables: `staff_absences` (id, profile_id, starts_on, ends_on,
-       note, created_by, created_at — staff read; write is own-row or
-       admin/owner, mirroring the `profiles` self-edit policy) and
-       `case_files` (id, case_id, client_id, name, kind, storage_path,
-       uploaded_by, created_at — staff all).
-     · `settings` gains `last_full_export_at` and `last_cron_run_at` (M-42/
-       M-43). `process-emails` UPSERTs `last_cron_run_at` on every FULL
-       (unscoped) run, never on a scoped one.
-     · `run_watchtower` is replaced wholesale with production's ten rules —
-       see "R13 · WATCHTOWER" below. The old seven-rule set this file used to
-       run (rate_ended, erc_conflict, no_adviser, protection_gap, stalled,
-       completed_no_date, no_contact) is GONE; two existing tests
-       (tests/r5_batch4.js) hard-assert two of those old rule names on
-       fixture rows and are not this file's to edit — see the handoff notes.
-
-   ROUND 12b (retention call-pack, first-run tour, appointment outcomes,
-   doc-chase widening — mirrors production migrations deployed just before
-   this round):
-     · `cases` gains four nullable numerics for the retention call-pack (W-15):
-       `current_balance`, `reversion_rate`, `monthly_payment`, `erc_amount`.
-       No backfill, so NULL everywhere except the handful of fixture rows
-       seeded below (search "r12b" in the fixture pass after roundNineFixtures)
-       — Kwame Boateng and Louise Garnham (the two cases the Recover — rates
-       that already ended panel shows uncovered) and Sarah Ellingham's live
-       fact_find case (the retention-relevant one). Andrew Pemberton's
-       rate-ended case is left with all four null on purpose, and Louise's
-       carries a balance only — the app must render absence, not zero, and
-       partial data, not a crash.
-     · `profiles` gains nullable `tour_seen_at timestamptz` plus RPC
-       `mark_tour_seen()` — SECURITY DEFINER, sets tour_seen_at = now() on
-       exactly the CALLER's own profile row and only if it is currently null;
-       a second call is a no-op. Every staff fixture has a past timestamp
-       except Luke (p3), who is null so the first-run tour has exactly one
-       persona to fire for.
-     · `appointments` gains nullable text `outcome` (null = not recorded; the
-       app writes attended / no_show / rearranged). Null on every fixture row.
-     · `queue_comms_extras()`'s document chase (r9) widens from
-       fact_find/application to every live stage — enquiry through exchange —
-       in both the chase-email branch and the overdue-task branch (they share
-       one filter, `DOC_CHASE_STAGES`, exactly as production's two CTEs moved
-       together in one migration). Ruby Sinclair's decision_in_principle case
-       carries a checklist with outstanding items so the widening is
-       observable — `doc_chase_enabled` still seeds OFF, so nothing chases it
-       until a test turns the setting on.
-
-   ROUND 14 (the company password safe — `vault_entries`):
-     · New table `vault_entries` (id, category text default 'other' — lender|
-       protection|gi|admin|contact|other, name, owner_label — Daniel|Luke|
-       Wayne|Shared|null, fields jsonb array of {label,value,secret}, note,
-       visible_to text[] — null/empty = every staff role, else only the roles
-       listed, sort_order int default 0, updated_by, created_at, updated_at).
-       RLS mirrors profiles/settings exactly: SELECT is any staff AND
-       (visible_to empty OR the caller's role is in it — see readFilter());
-       INSERT/UPDATE is any staff; DELETE is Owner/Administrator ONLY, same
-       shape as the clients/cases delete rule from R4 (see writePolicy()).
-       Every insert/update/delete writes an audit_log row exactly like every
-       other AUDITED table, except `maskChanges()` reaches INTO the `fields`
-       array and rewrites the `value` of every entry with `secret:true` to
-       "(hidden)" — a non-secret field's value is left in the clear, mirroring
-       production's audit_vault_row() trigger. Fixtures: 12 entries, all
-       plainly-fake test data (no real password ever), covering every
-       category, three individually-owned "Test Bank A" rows (Daniel/Luke/
-       Wayne) plus a Shared one, one gated admin row (visible_to=['owner'])
-       so the RLS gate is exercised, one entry with a note, one with a blank
-       secret value (nothing filled in yet), and several mixing secret/
-       non-secret fields on the same row.
-
-   ROUND 14b (`cases.mortgage_account_number`):
-     · Nullable text, no migration toggle (plain column, always present —
-       app.js feature-detects it by `hasOwnProperty`, same as
-       `protection_quoted_at`, not by the M-flag system). Defaulted null in
-       `mkCase()` and `applyInsertDefaults()`, alongside the R13
-       forward-capture columns. Two fixture values, both plainly fake:
-       James Whitfield's case → "MTG-TEST-4471", Owen Cadwallader's
-       completed case → "ACC-0099-TEST".
-
-   ROUND 16 (BTL rental + ICR affordability, submit-to-lender tracker):
-     · `cases` gains six more plain nullable columns, same no-migration-toggle
-       rule as R14b: `monthly_rent`, `icr_stress_rate`, `icr_required_pct`
-       (the BTL trio — app.js probes presence via `monthly_rent`) and
-       `lender_reference`, `application_status`, `application_status_at` (the
-       tracker trio — probed via `application_status`). Defaulted null in
-       `mkCase()` and `applyInsertDefaults()`. Canonical ICR/yield formula
-       lives ONLY in app.js's `btlIcr()` — this file computes nothing, it
-       just stores the numbers. Four fixture rows carry real (fake) values
-       (search "R16" in the fixture pass after roundFourteenBFixtures): two
-       of Gareth Pollard's BTL cases (application-stage ICR fail, offer-stage
-       ICR pass) and two lender-tracker rows (Melanie Underhill's BTL
-       application case — status "underwriting" stamped 15 days ago, so the
-       chase nudge fires; the Fairweathers' BTL offer case — status
-       "offer_issued" stamped 25 days ago, so it does NOT, despite being
-       older, since offer_issued is excluded from the chase). `tests/r16.js`
-       mints its own fresh cases for every exact-number assertion, exactly
-       like `tests/r15.js` does — these fixture rows exist for realism/manual
-       verification, not because any suite's count depends on their figures.
-
-   ROUND 81 · B (STRICT COLUMN MODE — the mock stops forgiving ghost columns):
-     · A per-table COLUMN REGISTRY (fixture-row key union snapshotted at load
-       + STRICT_EXTRA_COLUMNS hand lists — see the R81 block above the QUERY
-       BUILDER) is enforced, default ON, on every select-string column (embeds
-       recursed, "alias:col"/"::cast"/JSON-path tokens handled), every
-       filter/order/.or() column, every insert/update/upsert payload key (and
-       onConflict list), and every rpc ARG NAME (RPC_ARGS). A violation THROWS
-       "MOCK STRICT: unknown column '<t>.<c>' — prod would 42703 (…)" in the
-       caller's own stack. `window.__mockStrict = false` is the only escape
-       hatch (no per-call allowlist — fix the caller or the registry).
-       Registry gaps closed while turning it on: email_queue.lead_id (REAL in
-       prod — the leads trigger's lead_ack rows carry it and the Emails page
-       reads it; now also nulled by applyInsertDefaults on the standing parity
-       rule), case_emails.from_name, the R66 email_queue text trio, and hand
-       lists for every table seeded empty on purpose. tests/r81_strict.js
-       pins the whole contract; findings in R81-strict-findings.md.
-
-  Personas (?as=…):  p1 Kim Martin (admin, DEFAULT) · p2 Wayne Kellow (adviser)
-                      p3 Luke Richards (adviser) · p4 Daniel Potts (owner)
-                      p5 Rachel Foyle (introducer — fails the staff login gate)
+   mock-supabase.js — SANDBOX-ONLY mock of the supabase-js v2 surface admin/app.js uses. Loaded by
+   admin/mock.html IN PLACE OF the supabase CDN bundle; never shipped. Scope is derived from app.js:
+   its tables, v_alerts, and the RPCs the app calls. Per-round fixture and parity notes live with the
+   code they describe. R81 · B STRICT COLUMN MODE: an unknown column / rpc arg THROWS "MOCK STRICT"
+   (escape hatch: window.__mockStrict = false); tests/r81_strict.js pins it.
+   Personas (?as=…): p1 Kim Martin (admin, DEFAULT) · p2 Wayne Kellow (adviser) · p3 Luke Richards
+   (adviser) · p4 Daniel Potts (owner) · p5 Rachel Foyle (introducer — fails the staff login gate)
    ========================================================================== */
 (function () {
   "use strict";
@@ -287,35 +15,24 @@
   var DAY = 86400000;
   var pad2 = function (n) { return String(n).padStart(2, "0"); };
   var dateOnly = function (d) { var x = new Date(d); return x.getFullYear() + "-" + pad2(x.getMonth() + 1) + "-" + pad2(x.getDate()); };
-  /* R12b flake fix — dateOnly() reads the BROWSER/Node process's own local timezone, which in this
-     harness is whatever the host happens to be, not necessarily Europe/London. app.js's own
-     "today"/"tomorrow" (localDateStr(), used for every due-date the app itself writes — the
-     rate-end chase task, the fee-paid date input's max, etc.) is always Europe/London-pinned. The
-     two only disagree for the hour 23:00–00:00 UTC (00:00–01:00 London during BST, already
-     "tomorrow" there while a UTC/process-local read still says "today") — exactly the class of
-     flake this harness has hit before (see shiftNoon() above). Anywhere the mock computes a due
-     date FROM A LIVE REQUEST (not a fixture pinned at load with shiftNoon) that a test will compare
-     against a Europe/London expectation, use this instead of dateOnly(). */
+  /* R12b flake fix: dateOnly() reads the BROWSER/Node process's own local timezone, which in this harness is
+     whatever the host happens to be, not necessarily Europe/London. app.js's own "today"/"tomorrow"
+     (localDateStr(), used for every due-date the app itself writes — the rate-end chase task, the fee-paid date
+     input's max, etc.) is always Europe/London-pinned. … */
   var dateOnlyLondon = function (d) { return new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/London" }).format(new Date(d)); };
   var iso = function (d) { return new Date(d).toISOString(); };
-  /* DD/MM/YYYY — how a date is written INSIDE a title an adviser reads, which is
-     the one place in this file a date is not an ISO string (r8_m1's annual-review
-     call task quotes the completion date the same way production does). */
+  /* DD/MM/YYYY — how a date is written INSIDE a title an adviser reads, which is the one place in this file a
+     date is not an ISO string. */
   var ukDate = function (d) {
     var p = String(d == null ? "" : d).slice(0, 10).split("-");
     return p.length === 3 ? p[2] + "/" + p[1] + "/" + p[0] : String(d == null ? "" : d);
   };
   var shift = function (days, base) { return new Date((base ? new Date(base).getTime() : NOW.getTime()) + days * DAY); };
-  /* Same as shift(), but pinned to local noon on the resulting calendar day.
-     A `date` column (submitted_at) rendered via dateOnly() always lands on
-     midnight of the right day, but a `timestamptz` column (completed_at)
-     rendered via iso(shift(...)) keeps whatever hh:mm:ss real "now" happened
-     to have when the fixtures loaded — so the whole-day gap between the two,
-     rounded, could be one day higher or lower purely depending on what time
-     of day a test happened to run. Anywhere a completed_at is paired with a
-     dateOnly() submitted_at and the gap between them is measured (conveyancer
-     speed), build the timestamp with shiftNoon() instead so the gap is a
-     fixed number of days regardless of real wall-clock time at load. */
+  /* Same as shift(), but pinned to local noon on the resulting calendar day. A `date` column (submitted_at)
+     rendered via dateOnly() always lands on midnight of the right day, but a `timestamptz` column (completed_at)
+     rendered via iso(shift(...)) keeps whatever hh:mm:ss real "now" happened to have when the fixtures loaded — so
+     the whole-day gap between the two, rounded, could be one day higher or lower purely depending on what time of
+     day a test happened to run. … */
   var shiftNoon = function (days, base) { var d = shift(days, base); return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12, 0, 0); };
   var TODAY = dateOnly(NOW);
 
@@ -376,43 +93,8 @@
   function me() { return DB.profiles.filter(function (p) { return p.id === CURRENT_UID; })[0] || PERSONAS[CURRENT_UID]; }
   function myRole() { var p = me(); return (p && p.role) || "none"; }
 
-  /* =========================================================================
-     R86 — THE SECOND FACTOR (db/r86/*.sql mirrored here).
-
-     Per-persona MFA state, exactly the two facts production's auth schema and
-     JWT carry: the user's `auth.mfa_factors` rows and the session's `aal`
-     claim.  `MFA[personaKey] = { factors: [{ id, status, friendly_name,
-     factor_type, created_at, updated_at }], aal: "aal1" | "aal2" }`.
-
-       · DEFAULTS (so every pre-R86 suite is untouched): p4 Daniel (owner) and
-         p1 Kim (admin) boot with ONE verified factor and a session already at
-         aal2 — a `?as=` boot is a RESTORED session, i.e. one that verified its
-         code earlier, exactly like a refreshed tab in production.  p2/p3
-         (advisers — the optional role) and p5 (introducer) have no factor and
-         sit at aal1, which session_ok() accepts for a non-enforced role.
-       · `signInWithPassword` ALWAYS lands at aal1, as the real thing does: a
-         password proves one factor.  A persona with a verified factor then
-         meets the challenge screen; an enforced persona with none meets the
-         enrolment screen.  Only the sign-in path and the `__mock.setMfa` /
-         `window.__mockMfa` hooks move `aal` downwards.
-       · `sessionOk()` is db/r86/01's `public.session_ok()` line for line:
-         role null → false; role not in the settings row `mfa_enforced_roles`
-         (comma list, trimmed, lower-cased; '' = enforcement off — the
-         break-glass) → true; enforced → aal === 'aal2'.  isStaff() /
-         isAdminOrOwner() / isOwner() below are role AND sessionOk(), so every
-         RLS mirror (readFilter / writePolicy) and every RPC guard that calls
-         them refuses an enforced session that has not verified — an owner at
-         aal1 reads NOTHING, which is the whole point of the round.
-       · The verify code is the fixed "000000"; anything else answers the real
-         AuthApiError shape `{ message: "Invalid TOTP code entered" }`.  The
-         secret is the fixed "MOCKSECRET" (r86_mfa §G asserts it never leaks
-         past the enrol screen).
-       · PRE-LOAD SEED: `window.__mockMfa = { p4: { aal: "aal1" }, … }` in an
-         addInitScript patches the defaults before app.js's init() runs (the
-         R82 · B1 __mockMigrations idiom); `window.__mock.setMfa(persona,
-         state)` does the same after load; `window.__mock.mfaState(persona)`
-         reads it back.
-     ======================================================================= */
+  /* R86: THE SECOND FACTOR. Per-persona MFA state, exactly the two facts production's auth schema and JWT
+     carry: the user's `auth.mfa_factors` rows and the session's `aal` claim. */
   var MFA_SECRET = "MOCKSECRET";
   var MFA_CODE = "000000";
   function mfaFactor(key, at) {
@@ -466,10 +148,8 @@
     if (mfaEnforcedRoles().indexOf(String(role).trim().toLowerCase()) < 0) return true;
     return mfaOf(CURRENT_UID).aal === "aal2";
   }
-  /* R86 · V3 — `__mock.setStaleFactors(persona, bool)`: production's getAuthenticatorAssuranceLevel()
-     reads the STORED session's user.factors, stale until the token refreshes; with this set the
-     mock's aal call reports NO factor (nextLevel = currentLevel) while listFactors() — a server
-     read — still shows it. The app must decide from listFactors (r86_mfa §J). */
+  /* R86 · V3: `__mock.setStaleFactors(persona, bool)`: production's getAuthenticatorAssuranceLevel() reads
+     the STORED session's user.factors, stale until the token refreshes… */
   var MFA_STALE = {};
   if (typeof window !== "undefined" && window.__mockStale) {
     Object.keys(window.__mockStale).forEach(function (k) { MFA_STALE[k] = !!window.__mockStale[k]; });
@@ -488,143 +168,67 @@
     /* R9-M10 — the document checklist. One row per item we have asked a client
        for, on the case it belongs to. */
     case_documents: [],
-    /* R13 — staff out-of-office spans (for lead-routing exclusion) and staff-
-       uploaded case files (the checklist above is client-uploaded; this is
-       the mirror for what the FIRM attaches — signed illustrations, offer
-       letters kept as a record, etc.). */
+    /* R13: staff out-of-office spans and staff- uploaded case files. */
     staff_absences: [], case_files: [],
     /* R14 — the company password safe. */
     vault_entries: [],
-    /* R30 — persisted, SANITISED client-error fingerprints (owner/admin diagnostics).
-       Columns: id, created_at, error_type, location, page, role — NO message/stack/PII
-       column, by construction, exactly like production. */
+    /* R30: persisted, SANITISED client-error fingerprints (owner/admin diagnostics). Columns: id, created_at,
+       error_type, location, page, role — NO message/stack/PII column, by construction… */
     error_events: [],
     /* R56 — outbound referrals (survey / conveyancing) recorded per case. */
     referrals: [],
-    /* R43 — the saved filter views R31 kept in localStorage, now a table.
-       Columns: user_id (defaults to the caller, PK part 1), scope ('pipeline' |
-       'clients' | '_meta'), name, filters jsonb, updated_at. PK is the TRIPLE
-       (user_id, scope, name) — the only composite key in this store, which is
-       why the upsert branch below grew a conflict-target registry. RLS is
-       per-user on all four ops (see readFilter/_matching + writePolicy), so a
-       persona only ever sees and writes their own rows. SEEDED EMPTY on
-       purpose: the app's first-run behaviour (starter seed on a virgin store,
-       one-time migration from an existing localStorage key) is the thing worth
-       exercising, and a fixture row would hide both. */
+    /* R43: the saved filter views R31 kept in localStorage, now a table. Columns: user_id (defaults to the caller,
+       PK part 1), scope ('pipeline' | 'clients' | '_meta'), name, filters jsonb, updated_at. … */
     saved_views: [],
-    /* R44 — Stonebridge payment reconciliation (migration r44_reconciliation).
-       Three tables, all is_owner() on every operation, which is why they are
-       registered here and then never seeded: a non-owner persona must read
-       EMPTY (not "hidden but present"), and the owner's first-run state — no
-       rate card, no statement, both panels saying so in words — is the state
-       most worth exercising. A fixture row would hide both.
-         · proc_rates — the network's rate card, REPLACED WHOLESALE on each
-           upload (delete-all then chunked insert), rate is a 0-1 fraction.
-         · commission_statements — one row per weekly workbook. `ref` carries a
-           UNIQUE index WHERE ref <> '', which is the double-import guard; the
-           emulation of it lives in writePolicy() below.
-         · commission_lines — one row per statement line, statement_id cascades,
-           matched_case_id is ON DELETE SET NULL, match_status is CHECKed. */
+    /* R44: Stonebridge payment reconciliation (migration r44_reconciliation). Three tables, all is_owner() on every
+       operation, which is why they are registered here and then never seeded: a non-owner persona must read EMPTY
+       (not "hidden but present"), and the owner's first-run state — no rate card, no statement, both panels saying
+       so in words — is the state most worth exercising. … */
     proc_rates: [], commission_statements: [], commission_lines: []
   };
-  /* R44 — production makes all three `id bigint generated always as identity`.
-     Serial-style counters (the same shape R30 gave error_events) rather than
-     nid()'s zero-padded strings, so `.order("id")` sorts the way the real
-     table does at any row count and the app can never come to depend on an
-     id being a string. */
+  /* R44: production makes all three `id bigint generated always as identity`. Serial-style counters rather
+     than nid()'s zero-padded strings, so `.order("id")` sorts the way the real table does at any row count… */
   var procRateSeq = 0, commissionStatementSeq = 0, commissionLineSeq = 0;
   var R44_TABLES = ["proc_rates", "commission_statements", "commission_lines"];
   var R44_MATCH_STATUSES = ["unmatched", "suggested", "confirmed", "dismissed", "na"];
-  /* R30 — feature-gate toggle (default true). __setErrorEventsSupported(false) makes any
-     op on error_events answer with a PostgREST-shaped 42P01, so tests can exercise the
-     app's degrade path (errorEventsOff + the "isn't enabled" note). */
+  /* R30: feature-gate toggle (default true). __setErrorEventsSupported with false makes any op on
+     error_events answer with a PostgREST-shaped 42P01, so tests can exercise the app's degrade path. */
   var errorEventsSupported = true;
   var errorEventSeq = 0;   // serial-style incrementing id, assigned on insert
   var commsTokenSeq = 0;   // R79 — clients.comms_token "gen_random_uuid()" stand-in, unique per row
-  /* R43 — same feature-gate shape as errorEventsSupported above:
-     __setSavedViewsSupported(false) makes every op on saved_views answer with a PostgREST 42P01,
-     which is what an un-migrated deployment does and what the app's localStorage fallback exists
-     for. Default true. */
+  /* R43: same feature-gate shape as errorEventsSupported above: __setSavedViewsSupported with false makes
+     every op on saved_views answer with a PostgREST 42P01… */
   var savedViewsSupported = true;
-  /* R43 — a PK may now be a LIST of columns: saved_views' key is the triple
-     (user_id, scope, name). pkOf() keeps returning what is registered (the string call sites —
-     audit row_id, the embed resolver, the id default — are all single-key tables and never see
-     an array), and pkCols() is the always-an-array form the upsert conflict target uses. */
+  /* R43: a PK may now be a LIST of columns: saved_views' key is the triple (user_id, scope, name). pkOf()
+     keeps returning what is registered… */
   var PK = { settings: "key", saved_views: ["user_id", "scope", "name"] };
   function pkOf(t) { return PK[t] || "id"; }
   function pkCols(t) { var p = pkOf(t); return Array.isArray(p) ? p : [p]; }
 
-  /* R12a·D8 — storage object registry, moved up here (ahead of the STORAGE
-     section below which merely defines the `storage.from()` surface) so the
-     fixture block can seed real entries for the case-documents checklist
-     files a client uploaded, the same way a genuine upload would populate it.
-     Keyed "<bucket>/<path>", same as the `storage` object writes below. */
+  /* R12a·D8: storage object registry, moved up here (ahead of the STORAGE section below which merely defines
+     the `storage.from()` surface) so the fixture block can seed real entries for the case-documents… */
   var storageFiles = {};
-  /* R13 · BUCKET CORRECTION — module-scope so both the fixture pass (which
-     seeds content into `storageFiles`) and the doc-upload handler (which
-     writes a real upload into it) agree on the same bucket name. Production's
-     real bucket, not R12a's invented "case-documents". */
+  /* R13 · BUCKET CORRECTION — module-scope so both the fixture pass and the doc-upload handler agree on the
+     same bucket name. Production's real bucket, not R12a's invented "case-documents". */
   var DOC_STORAGE_BUCKET = "client-docs";
 
-  /* ------------------------------------------------- migrations M1-M7 (parity)
-     Every migration the app feature-detects is mirrored here and is ON by default,
-     so the app's feature-detection takes the "migrated" branch under test. Flip one
-     OFF with window.__mock.setMigrations({m2:false}) to exercise the fallback:
-     writes to the new columns come back as Postgres 42703 (undefined_column),
-     selects stop returning them, an un-migrated TABLE comes back as 42P01 and an
-     un-migrated FUNCTION comes back as 42883 (undefined_function). */
+  /* migration flags (R90 · A) R90 · A — THE MIGRATION LAYER IS RETIRED. The app no longer feature-detects any
+     M1–M13 column, table or RPC (every one is live in production), so their flags are INERT:
+     setMigrations({m3:false}) and window.__mockMigrations are accepted and change nothing. … */
   var MIGRATIONS = { m1: true, m2: true, m3: true, m4: true, m5: true, m6: true, m7: true, m10: true, m11: true, m12: true, m13: true, m14: true, m15: true };   /* R86 — m14 = get_team_mfa, m15 = session_ok */
-  /* R82 · B1 — PRE-LOAD MIGRATION SEED. `__mock.setMigrations()` can only be
-     called once this script has run, which is already too late for anything
-     the app reads inside init() (get_staff_activity is one). A suite that needs
-     a migration OFF from the very first read sets `window.__mockMigrations` in
-     a Playwright addInitScript, which runs before any page script:
-         await page.addInitScript(() => { window.__mockMigrations = { m12: false }; });
-     Unknown keys are ignored, exactly like setMigrations. */
-  if (typeof window !== "undefined" && window.__mockMigrations) {
-    Object.keys(window.__mockMigrations).forEach(function (k) {
-      if (Object.prototype.hasOwnProperty.call(MIGRATIONS, k)) MIGRATIONS[k] = !!window.__mockMigrations[k];
+  var LIVE_MIGRATION_FLAGS = ["m14", "m15"];
+  function applyMigrationPatch(patch) {
+    Object.keys(patch || {}).forEach(function (k) {
+      if (LIVE_MIGRATION_FLAGS.indexOf(k) >= 0) MIGRATIONS[k] = !!patch[k];
     });
   }
-  /* R68 · M15 — is RESEND_API_KEY set on the "server"? A secret, not a table, so it cannot be
-     a settings row: it lives here as a harness flag, DEFAULT FALSE because that is production's
-     actual state (no key is set, and nothing has ever been able to send). Flip it with
-     __mock.setResendKey(true) to exercise the configured states. Read only by the
-     process-emails safe probe. */
+  /* R82 · B1 — PRE-LOAD SEED, for the live flags: a suite that needs one OFF from
+     the very first read sets `window.__mockMigrations` in a Playwright addInitScript. */
+  if (typeof window !== "undefined" && window.__mockMigrations) applyMigrationPatch(window.__mockMigrations);
+  /* R68 · M15: is RESEND_API_KEY set on the "server"? A secret, not a table, so it cannot be a settings row:
+     it lives here as a harness flag, DEFAULT FALSE because that is production's actual state. */
   var MOCK_RESEND_KEY = false;
-  var MIGRATION_COLUMNS = {
-    m1: { profiles: ["phone", "email_signoff"] },
-    m2: { cases: ["lost_reason", "lost_detail", "broker_fee_paid_at", "proc_fee_paid_at", "sols_fee_paid_at"] },
-    m3: { watch_alerts: ["snoozed_until", "snooze_note", "snoozed_by"] },
-    /* R6-M7 — today's production migration: `alter table cases add column
-       property_address text` (nullable, no backfill). OFF ⇒ a write naming the
-       column returns 42703 and a SELECT simply does not return it, which is what
-       an app running against a database that has not taken the migration sees. */
-    m7: { cases: ["property_address"] },
-    /* R9-M10 — `alter table cases add column waiting_on text, add column
-       solicitor_firm text, add column doc_token text` shipped in the SAME
-       migration as the case_documents table, so one toggle governs both: a
-       database that has not taken r9_m10 has neither the table nor the columns,
-       and flipping them independently would model a state that cannot exist. */
-    m10: { cases: ["waiting_on", "solicitor_firm", "doc_token"] },
-    /* R9-M11 — `alter table cases add column referrer_client_id uuid references
-       clients(id)`. Its own migration and its own toggle: app.js probes for it
-       separately (referrerSupported()) and renders no "Referred by" field at all
-       when it is missing. */
-    m11: { cases: ["referrer_client_id"] }
-  };
-  var MIGRATION_TABLES = { m4: ["duplicate_dismissals"], m10: ["case_documents"] };
-  /* R5-M6 — reassign_holdings(p_from, p_to) shipped as a migration too, so an older
-     database simply does not have the function. OFF ⇒ 42883, which is exactly what
-     app.js's isMissingFunctionError() feature-detects on before falling back to the
-     compensating client-side path in openDeactivate(). */
-  /* R82 · B1 — m12 is NOT a production migration anyone still has to take:
-     get_staff_activity is deployed and live. It is registered here as a
-     migration FUNCTION purely so the harness keeps a way to model the database
-     WITHOUT it — which is the state app.js's defensive consumption exists for
-     and the state a suite pinning "missing RPC ⇒ behave exactly as before"
-     has to be able to reach. Default ON, like every other flag. */
-  var MIGRATION_FUNCTIONS = { m6: ["reassign_holdings"], m12: ["get_staff_activity"], m13: ["get_dashboard_counts"], m14: ["get_team_mfa"], m15: ["session_ok"] };   /* R85 — m13 = db/r85/01 · R86 — m14 = db/r86/03, m15 = db/r86/01 */
+  var MIGRATION_FUNCTIONS = { m14: ["get_team_mfa"], m15: ["session_ok"] };   /* R86 — m14 = db/r86/03, m15 = db/r86/01 */
   function functionIsMissing(name) {
     var missing = false;
     Object.keys(MIGRATION_FUNCTIONS).forEach(function (mk) {
@@ -632,34 +236,6 @@
       if (MIGRATION_FUNCTIONS[mk].indexOf(name) >= 0) missing = true;
     });
     return missing;
-  }
-  function disabledColumns(table) {
-    var out = [];
-    Object.keys(MIGRATION_COLUMNS).forEach(function (mk) {
-      if (MIGRATIONS[mk]) return;
-      (MIGRATION_COLUMNS[mk][table] || []).forEach(function (c) { out.push(c); });
-    });
-    return out;
-  }
-  function tableIsMissing(table) {
-    var missing = false;
-    Object.keys(MIGRATION_TABLES).forEach(function (mk) {
-      if (MIGRATIONS[mk]) return;
-      if (MIGRATION_TABLES[mk].indexOf(table) >= 0) missing = true;
-    });
-    return missing;
-  }
-  /* first payload key that the current migration state says does not exist */
-  function undefinedColumn(table, payload) {
-    if (!payload) return null;
-    var bad = disabledColumns(table);
-    if (!bad.length) return null;
-    var rows = Array.isArray(payload) ? payload : [payload];
-    for (var i = 0; i < rows.length; i++) {
-      var keys = Object.keys(rows[i] || {});
-      for (var j = 0; j < keys.length; j++) if (bad.indexOf(keys[j]) >= 0) return keys[j];
-    }
-    return null;
   }
 
   /* Relationship resolution for PostgREST-style embeds. `<embed>` on table T is
@@ -676,11 +252,7 @@
      a permissive resolver is exactly what let the live Pipeline break while the
      harness stayed green. A request disambiguates with the column-name hint
      (`clients!client_id(...)`) or the constraint-name hint
-     (`clients!cases_client_id_fkey(...)`).
-
-     Note the migration gate: with m11 OFF, cases.referrer_client_id does not
-     exist, only one relationship matches, and an unhinted embed is legal again —
-     which is precisely what a database that has not taken m11 does. */
+     (`clients!cases_client_id_fkey(...)`). */
   var FK_COLUMNS = {
     clients: ["client_id", "referrer_client_id"],
     cases: ["case_id"],
@@ -694,8 +266,7 @@
   function hasCol(table, col) {
     if (!DB[table]) return false;
     var sample = DB[table][0];
-    if (!sample || !Object.prototype.hasOwnProperty.call(sample, col)) return false;
-    return disabledColumns(table).indexOf(col) < 0;
+    return !!sample && Object.prototype.hasOwnProperty.call(sample, col);
   }
   /* every relationship between `table` and `embed`, in resolution order.
      -> [{ kind, target, fk, column, constraint, source }] */
@@ -751,9 +322,8 @@
         ". Find the desired relationship in the 'details' key."
     };
   }
-  /* Walk a select list before any row is projected and refuse the whole request
-     if any embed — at any nesting depth, in either direction — is ambiguous.
-     Returns null when the select is resolvable. */
+  /* Walk a select list before any row is projected and refuse the whole request if any embed — at any nesting
+     depth, in either direction — is ambiguous. Returns null when the select is resolvable. */
   function embedError(table, sel) {
     var p = parseSelect(sel);
     for (var i = 0; i < p.embeds.length; i++) {
@@ -781,12 +351,8 @@
     out.push(cur);
     return out.map(function (x) { return x.trim(); }).filter(function (x) { return x.length; });
   }
-  /* -> { star:bool, cols:[..], embeds:[{name, hint, inner, spec}] }
-     An embed token is `<table>[!<hint>][!inner](<spec>)`. The hint is either the
-     FK column name (`clients!client_id`) or the constraint name
-     (`clients!cases_client_id_fkey`); `!inner` is a join modifier, not a hint.
-     The result key is always the bare table name — a hint disambiguates the
-     relationship, it does not rename the field. */
+  /* -> { star:bool, cols:[..], embeds:[{name, hint, inner, spec}] } An embed token is
+     `<table>[!<hint>][!inner](<spec>)`. The hint is either the FK column name (`clients!client_id`) or the… */
   function parseSelect(sel) {
     var res = { star: false, cols: [], embeds: [] };
     if (sel == null || sel === "") { res.star = true; return res; }
@@ -828,8 +394,6 @@
         if (e.inner && !kids.length) out.__innerDrop = true;
       }
     });
-    /* an un-migrated column simply isn't in the result set */
-    disabledColumns(table).forEach(function (c) { delete out[c]; });
     return out;
   }
   /* project a whole result set, applying `!inner` (a row whose inner-joined
@@ -858,9 +422,8 @@
     var A = String(a), B = String(b);
     var nA = Number(A), nB = Number(B);
     if (A !== "" && B !== "" && !isNaN(nA) && !isNaN(nB)) return nA < nB ? -1 : nA > nB ? 1 : 0;
-    /* R85 · V3 parity — production collates text as en_US.UTF-8 (case-insensitive, accent- and
-       punctuation-blind at the first level); a code-point compare here let the app's Book order
-       diverge from what the server returns without any suite noticing. Ties break by code point. */
+    /* R85 · V3 parity — production collates text as en_US.UTF-8; a code-point compare here let the app's Book
+       order diverge from what the server returns without any suite noticing. Ties break by code point. */
     if (MOCK_COLLATOR && typeof a === "string" && typeof b === "string") { var cc = MOCK_COLLATOR.compare(A, B); if (cc) return cc; }
     return A < B ? -1 : A > B ? 1 : 0;
   }
@@ -887,9 +450,8 @@
       default: return true;
     }
   }
-  /* PostgREST `.or()` string -> predicate. Supports paren-nested and()/or()/not.
-     e.g.  stage.in.(application,offer),and(stage.eq.completed,completed_at.gte.X)
-           phone.ilike.%0%7%7%0%0%9%0%0%1%2%3%                                     */
+  /* PostgREST `.or()` string -> predicate. Supports paren-nested and()/or()/not. e.g.
+     stage.in.(application,offer),and(stage.eq.completed,completed_at.gte.X)… */
   function parseLogicList(str, joiner) {
     var parts = splitTop(str, ",").map(parseLogicNode);
     return function (row) {
@@ -928,9 +490,8 @@
   function pgError(message, code) {
     return { message: message, code: code || "42501", details: null, hint: null };
   }
-  /* A Postgres error raised from INSIDE a function body. rpcCall() unwraps it so an
-     RPC can refuse with a real SQLSTATE (permission denied, FK violation, raise
-     exception) instead of the generic "MOCK" catch-all. */
+  /* A Postgres error raised from INSIDE a function body. rpcCall() unwraps it so an RPC can refuse with a
+     real SQLSTATE instead of the generic "MOCK" catch-all. */
   function pgErrorThrow(message, code) {
     var e = new Error(message);
     e.__pg = pgError(message, code);
@@ -938,37 +499,26 @@
   }
   var LOST_REASONS = ["went_direct", "product_transfer_online", "another_broker", "staying_put", "affordability",
     "rate_price", "valuation", "client_changed_mind", "our_service", "other"];
-  /* R9-M10 — case_documents_status_chk. "waived" is a first-class outcome, not a
-     deletion: a document we decided we did not need after all is a fact about
-     the case, and dropping the row would leave the checklist looking as though
-     it was never asked for. */
+  /* R9-M10 — case_documents_status_chk. "waived" is a first-class outcome, not a deletion: a document we
+     decided we did not need after all is a fact about the case… */
   var DOC_STATUSES = ["requested", "received", "waived"];
-  /* R66 · M8 — the `email_type` ENUM, mirrored. Production's column is a real Postgres enum, so an
-     unknown value is a 22P02 at insert time, not a row that quietly sits in the queue until
-     process-emails has to decide what to do with it. This list is EMAIL_LABEL's sixteen types plus
-     the legacy `docs_chase` (rows of that type still exist on the deployed queue — see
-     docChaseCount — even though nothing writes new ones) and R66's new `custom`. Adding a type to
-     app.js without adding it here is exactly the drift this mirror exists to catch. */
+  /* R66 · M8: the `email_type` ENUM, mirrored. Production's column is a real Postgres enum, so an unknown value is
+     a 22P02 at insert time, not a row that quietly sits in the queue until process-emails has to decide what to do
+     with it. … */
   var EMAIL_TYPES_ENUM = ["welcome", "docs_request", "docs_chase", "submitted_update", "offer_update",
     "completion_congrats", "rate_end_reminder", "rate_end_chase", "review_request", "review_reminder",
     "fee_request", "referral_request", "protection_offer", "gi_exchange", "birthday_greeting",
     "completion_anniversary", "lead_ack", "factfind", "custom"];
-  /* R66 · M6a — referrals_kind_chk, widened in production this round from
-     ('survey','conveyancing','other') to include the two the firm actually makes money on:
-     `protection` (the network's protection team) and `gi` (buildings & contents). Mirrored here
-     because the app now writes both, and a mock that accepts anything cannot tell a typo from a
-     migration that has not run. */
+  /* R66 · M6a: referrals_kind_chk, widened in production this round from to include the two the firm actually
+     makes money on: `protection` and `gi` (buildings & contents). */
   var REFERRAL_KINDS = ["survey", "conveyancing", "protection", "gi", "other"];
   /* R86 — role AND session_ok() (db/r86/01 · is_staff()); see the MFA block by PERSONAS. */
   function isStaff() { return ["owner", "admin", "adviser", "staff"].indexOf(myRole()) >= 0 && sessionOk(); }
-  /* R86 — the tables whose EVERY policy is an is_staff()/is_owner()/is_admin_or_owner() test
-     (db/r84/12_policy_initplan.sql + 10_introducer_views.sql): a caller who is not staff — an
-     introducer, or an enforced role whose session has not verified its second factor — reads
-     nothing and writes nothing on any of them.  `profiles` is the one exception (its SELECT
-     policy lets a login read its OWN row, which is how an introducer's portal names them, and
-     its UPDATE policy lets a login edit its own row); `saved_views` is per-user (scoped in
-     _matching). Tables with a finer rule of their own (vault visible_to, settings redaction,
-     audit_log) keep it in addition to this gate, below. */
+  /* R86: the tables whose EVERY policy is an is_staff()/is_owner()/is_admin_or_owner() test
+     (db/r84/12_policy_initplan.sql + 10_introducer_views.sql): a caller who is not staff — an introducer, or an
+     enforced role whose session has not verified its second factor — reads nothing and writes nothing on any of
+     them. Tables with a finer rule of their own (vault visible_to, settings redaction, audit_log) keep it in
+     addition to this gate, below. … */
   var SELF_ROW_TABLES = ["profiles", "saved_views"];
   function writePolicy(table, op, payload, targets) {
     if (table === "audit_log") {
@@ -1019,11 +569,8 @@
       }
       return null;
     }
-    /* R9-M10 — case_documents. Staff write it from the case; nobody else can,
-       and the check constraint on `status` is real, because the one value that
-       must never be invented is "received". The public upload link does NOT
-       come through here: the edge function runs as the service role, which is
-       what makes a link a client can use without a login possible at all. */
+    /* R9-M10 — case_documents. Staff write it from the case; nobody else can, and the check constraint on
+       `status` is real, because the one value that must never be invented is "received". */
     if (table === "case_documents") {
       if (!isStaff()) {
         return pgError('new row violates row-level security policy for table "case_documents"', "42501");
@@ -1045,12 +592,8 @@
       }
       return null;
     }
-    /* R13 — staff_absences: staff read (see readFilter), but a write is only
-       ever your OWN row, or an Owner/Administrator's on anybody's — the same
-       shape as the M1 "profiles self edit" policy just above, because
-       recording somebody else's absence for them is exactly the kind of edit
-       that has to be traceable to whoever actually made it, unless they run
-       the firm. */
+    /* R13: staff_absences: staff read (see readFilter), but a write is only ever your OWN row, or an
+       Owner/Administrator's on anybody's… */
     if (table === "staff_absences") {
       if (!isStaff()) {
         return pgError('new row violates row-level security policy for table "staff_absences"', "42501");
@@ -1070,12 +613,8 @@
       }
       return null;
     }
-    /* R14 — vault_entries: SELECT is gated in readFilter() by visible_to; write
-       (insert/update) is any staff, mirroring the "case_files: staff all" shape
-       just above; DELETE is Owner/Administrator ONLY — the same rule the M4
-       clients/cases delete check below applies, called out here explicitly
-       because vault_entries is not one of the two table names that generic
-       check tests for. */
+    /* R14: vault_entries: SELECT is gated in readFilter() by visible_to; write (insert/update) is any staff,
+       mirroring the "case_files: staff all" shape just above; DELETE is Owner/Administrator ONLY… */
     if (table === "vault_entries") {
       if (op === "delete") {
         if (!isAdminOrOwner()) {
@@ -1088,15 +627,10 @@
       }
       return null;
     }
-    /* R43 — saved_views: per-user on all four ops, with is_staff() on the insert/update WITH CHECK.
-       The row's user_id has already been defaulted to the caller by the time an insert gets here
-       (applyInsertDefaults), so the only way to fail the identity half is to NAME somebody else —
-       which production's WITH CHECK refuses, and so does this. The two CHECK constraints are
-       mirrored as well: an unknown scope or an empty/over-long name is a 23514, not a silent row,
-       because the app's migration path deliberately drops names it knows the table would reject
-       and that decision is only worth anything if the table would in fact reject them.
-       Read/update/delete scoping is enforced one layer down, in _matching() — see the comment
-       there for why it is not in readFilter() with the rest of the SELECT-side redaction. */
+    /* R43: saved_views: per-user on all four ops, with is_staff() on the insert/update WITH CHECK. The two CHECK
+       constraints are mirrored as well: an unknown scope or an empty/over-long name is a 23514, not a silent row,
+       because the app's migration path deliberately drops names it knows the table would reject and that decision
+       is only worth anything if the table would in fact reject them. … */
     if (table === "saved_views") {
       if (!isStaff()) {
         return pgError('new row violates row-level security policy for table "saved_views"', "42501");
@@ -1118,12 +652,8 @@
       }
       return null;
     }
-    /* R44 — proc_rates / commission_statements / commission_lines: is_owner()
-       for EVERY operation, mirroring the migration exactly. There is no adviser
-       or administrator half to this feature; a non-owner's writes are blocked
-       here and their reads come back empty from readFilter(), which is what
-       makes "the UI simply does not render for them" a safe design rather than
-       a decoration over readable data. */
+    /* R44: proc_rates / commission_statements / commission_lines: is_owner() for EVERY operation, mirroring
+       the migration exactly. There is no adviser or administrator half to this feature… */
     if (R44_TABLES.indexOf(table) >= 0) {
       if (!isOwner()) {
         return pgError('new row violates row-level security policy for table "' + table + '"', "42501");
@@ -1157,11 +687,8 @@
           }
         }
       }
-      /* The UNIQUE index on commission_statements(ref) WHERE ref <> ''. This is
-         the double-upload guard the app's whole import flow is built around —
-         the statement row goes in FIRST precisely so a 23505 here costs nothing
-         — so it is emulated rather than left to chance. Blank refs are exempt,
-         same as the partial index. */
+      /* The UNIQUE index on commission_statements(ref) WHERE ref <> ''. This is the double-upload guard the
+         app's whole import flow is built around… */
       if (table === "commission_statements" && op !== "delete") {
         var wantRef = r44pay.ref == null ? "" : String(r44pay.ref).trim();
         if (wantRef !== "") {
@@ -1208,9 +735,8 @@
   }
   /* SELECT-side redaction, mirroring the production SELECT policies. */
   function readFilter(table, rows) {
-    /* R86 — `using ((select is_staff()))` on every staff table: a non-staff caller (an introducer,
-       or an owner/admin session still at aal1) gets an EMPTY read, exactly as production's RLS
-       answers — no error, no rows. profiles: own row only (the R4 "profiles read" policy). */
+    /* R86: `using ((select is_staff()))` on every staff table: a non-staff caller gets an EMPTY read, exactly
+       as production's RLS answers — no error, no rows. profiles: own row only. */
     if (!isStaff()) {
       if (table === "profiles") return rows.filter(function (r) { return r.id === CURRENT_UID; });
       if (SELF_ROW_TABLES.indexOf(table) < 0) return [];
@@ -1223,23 +749,15 @@
     }
     /* M4 — "dup dismiss read staff" */
     if (table === "duplicate_dismissals" && !isStaff()) return [];
-    /* R9-M10 — "case docs read staff". A client's document checklist says what
-       they have and have not been able to produce; an introducer login has no
-       business seeing it. The client's own view of it comes from the doc-upload
-       function on the service role, not from a policy here. */
+    /* R9-M10 — "case docs read staff". A client's document checklist says what they have and have not been
+       able to produce; an introducer login has no business seeing it. */
     if (table === "case_documents" && !isStaff()) return [];
-    /* R13 — "staff read" / "staff all": staff_absences and case_files are
-       both firm-internal records with no client- or introducer-facing view
-       anywhere in the app. */
+    /* R13: "staff read" / "staff all": staff_absences and case_files are both firm-internal records with no
+       client- or introducer-facing view anywhere in the app. */
     if (table === "staff_absences" && !isStaff()) return [];
     if (table === "case_files" && !isStaff()) return [];
-    /* R14 — "vault select": is_staff() AND (visible_to is null/empty OR the
-       signed-in user's role = any(visible_to)). An introducer (never staff)
-       sees nothing; every other staff role sees every row whose visible_to
-       is unset, plus any row that names their own role. */
-    /* R44 — "is_owner() for select" on all three reconciliation tables. An
-       adviser or administrator gets an EMPTY read, not a filtered one: there is
-       no row on these tables that is theirs to see. */
+    /* R14: "vault select": is_staff() AND (visible_to is null/empty OR the signed-in user's role =
+       any(visible_to)). An introducer (never staff) sees nothing… */
     if (R44_TABLES.indexOf(table) >= 0 && !isOwner()) return [];
     if (table === "vault_entries") {
       if (!isStaff()) return [];
@@ -1252,29 +770,8 @@
     return rows;
   }
 
-  /* --------------------------------------------------- triggers: audit + events */
-  /* M4 rule (round-4): every new table gets the audit_row trigger. */
-  /* G1N-5 — watch_alerts joins the audited set with M3. Hiding a compliance alert for a month is a
-     supervised act, and it was the one new round-5 mutation path that left no audit row at all: a
-     CRITICAL snooze mirrored its reason into a case note (which IS audited), so criticals left an
-     indirect trail, but every warn/info snooze left none — and even for criticals the trail showed
-     a note, not who suppressed which alert until when. */
-  /* R9 — case_documents joins the audited set under the same round-4 rule that
-     put duplicate_dismissals there: every new table gets the trigger. Marking a
-     document "received" or "waived" is a decision about whether a file is
-     complete, and who made it is worth keeping. */
-  /* R13 — staff_absences and case_files join the audited set under the same
-     round-4 rule that put duplicate_dismissals and case_documents there:
-     every new table gets the trigger. */
-  /* R80 · B3 — fact_finds, leads and sms_queue join the audited set, closing a PARITY GAP
-     rather than inventing a rule: production's table-level audit_row triggers cover (CTO-verified
-     list) cases, clients, case_tasks, case_notes, appointments, case_documents, case_files,
-     fact_finds, leads, settings, profiles, sms_queue, watch_alerts, duplicate_dismissals,
-     introducers and staff_absences — the mock was missing exactly those three, so a verb whose
-     only footprint was one of them (the R79 fact-find link regenerate is the live example) left
-     an audit trail in production and none here, and no suite could pin it. email_queue is
-     DELIBERATELY still absent: in production it carries log_email_event only, not audit_row,
-     so an email_queue write leaves no audit_log row anywhere — mirrored by leaving it out. */
+  /* triggers: audit + events M4 rule (round-4): every new table gets the audit_row trigger. G1N-5 —
+     watch_alerts joins the audited set with M3. Hiding a compliance alert for a month is a supervised act… */
   var AUDITED = ["clients", "cases", "case_tasks", "case_notes", "appointments", "settings", "profiles",
     "introducers", "duplicate_dismissals", "watch_alerts", "case_documents",
     "staff_absences", "case_files", "vault_entries", "fact_finds", "leads", "sms_queue"];
@@ -1308,9 +805,8 @@
       return (absP ? (absP.full_name || absP.email) : row.profile_id) + " — " + row.starts_on + " to " + row.ends_on;
     }
     if (table === "case_files") return row.name || row.id;
-    /* R80 · B3 — labels for the three newly-mirrored audited tables. A fact-find is named by
-       the client on its case (that is what a person scanning the trail is looking for); a lead
-       by the enquirer's name; an SMS by its recipient number. */
+    /* R80 · B3: labels for the three newly-mirrored audited tables. A fact-find is named by the client on its
+       case; a lead by the enquirer's name; an SMS by its recipient number. */
     if (table === "fact_finds") {
       var ffc = DB.cases.filter(function (c) { return c.id === row.case_id; })[0];
       var ffcl = ffc ? DB.clients.filter(function (c) { return c.id === ffc.client_id; })[0] : null;
@@ -1332,11 +828,8 @@
     }
     return row.id;
   }
-  /* R14 — mirrors production's audit_vault_row() trigger: every field entry
-     flagged secret:true has its VALUE replaced with "(hidden)"; the label and
-     the secret flag itself (and every non-secret field, untouched) stay in
-     the clear, because "what fields exist" is not the secret — the values
-     behind the secret ones are. */
+  /* R14: mirrors production's audit_vault_row() trigger: every field entry flagged secret:true has its VALUE
+     replaced with "(hidden)"; the label and the secret flag itself stay in the clear… */
   function maskVaultFieldsArray(arr) {
     return (Array.isArray(arr) ? arr : []).map(function (f) {
       if (f && f.secret) return { label: f.label, value: AUDIT_HIDDEN, secret: true };
@@ -1413,16 +906,9 @@
       actor: actorId === undefined ? CURRENT_UID : actorId, created_at: whenIso || iso(NOW)
     });
   }
-  /* ------------------------------------------------------------------------
-     TRIGGER PARITY: fact_finds_log_submit → log_fact_find_submit()
-     (PLAN-R5 § Backend ground truth (e) / § Harness fixes 5, closing R5-14)
-
-     Production fires on a fact_find becoming `submitted` and creates, in one
-     transaction: a case_event, a case_note, and a "Review submitted fact-find"
-     task due today, assigned to the case's adviser. The mock owed the app all
-     three — their absence is what made R5-14 look like an app gap.
-     Idempotent: one task per fact_find row, exactly as the trigger is.
-     ---------------------------------------------------------------------- */
+  /* TRIGGER PARITY: fact_finds_log_submit → log_fact_find_submit() (PLAN-R5 § Backend ground truth (e) / § Harness
+     fixes 5, closing R5-14) Production fires on a fact_find becoming `submitted` and creates, in one transaction: a
+     case_event, a case_note, and a "Review submitted fact-find" task due today, assigned to the case's adviser. … */
   var FF_TASK_TITLE = "Review submitted fact-find";
   function logFactFindSubmit(ff, whenIso, actorId) {
     if (!ff || !ff.case_id) return;
@@ -1480,21 +966,15 @@
       if (r.id == null) r.id = ++errorEventSeq;
       ["error_type", "location", "page", "role"].forEach(function (f) { if (r[f] === undefined) r[f] = null; });
     }
-    /* R43 — saved_views: user_id DEFAULTS TO THE CALLER (production's `default auth.uid()`), which
-       is why the app never sends it; filters defaults to '{}'::jsonb and updated_at to now().
-       No id (the PK is the triple) and no created_at — the real table has neither column. */
+    /* R43: saved_views: user_id DEFAULTS TO THE CALLER (production's `default auth.uid()`), which is why the
+       app never sends it; filters defaults to '{}'::jsonb and updated_at to now(). */
     if (table === "saved_views") {
       if (r.user_id == null) r.user_id = CURRENT_UID;
       if (r.filters == null) r.filters = {};
       r.updated_at = iso(new Date());
     }
-    /* R44 — the three reconciliation tables. Identity ids, `created_by default
-       auth.uid()` on the statement, and — the part that matters for parity —
-       every text column defaults to '' rather than null, exactly as the
-       migration declares it. The app reads these columns straight into HTML
-       through esc(), and esc(null) and esc("") both render nothing, but a test
-       asserting "the addressee is empty" should see the empty string production
-       would give it, not null. */
+    /* R44: the three reconciliation tables. Identity ids, `created_by default auth.uid()` on the statement,
+       and — the part that matters for parity — every text column defaults to '' rather than null… */
     if (table === "proc_rates") {
       if (r.id == null) r.id = ++procRateSeq;
       ["lender", "product", "lg_code", "notes", "effective_label"].forEach(function (f) { if (r[f] == null) r[f] = ""; });
@@ -1513,11 +993,8 @@
       ["tran_type", "addressee", "provider", "account_number", "opp_id", "reason",
         "policy_type", "policy_group", "adviser_name", "match_note"].forEach(function (f) { if (r[f] == null) r[f] = ""; });
       if (r.match_status == null) r.match_status = "unmatched";
-      /* R48 — attributed_to (nullable uuid → profiles.id) rides alongside the
-         other nullable columns so .select("*") always returns the key and an
-         .update({attributed_to}) round-trips. The FK is left as loose as the
-         mock's other soft FKs (matched_case_id gets a depth check; this mirrors
-         production's `on delete set null` without a strict insert guard). */
+      /* R48: attributed_to rides alongside the other nullable columns so .select("*") always returns the key
+         and an .update({attributed_to}) round-trips. The FK is left as loose as the mock's other soft FKs. */
       ["line_date", "premium", "banked_gross", "banked_net", "matched_case_id", "confirmed_at", "attributed_to"]
         .forEach(function (f) { if (r[f] === undefined) r[f] = null; });
     }
@@ -1530,48 +1007,19 @@
     }
     if (pk === "id" && !r.id) r.id = nid(PREFIX[table] || "row");
     if (!r.created_at && table !== "settings" && table !== "saved_views") r.created_at = iso(NOW);
-    /* R85 · A4 — updated_at defaults to THE INSERT MOMENT (`default now()` in prod), not the
-       fixture's load-time NOW: the session book syncs `updated_at >= syncedAt - 2s`, and a row
-       inserted minutes into a session but stamped with the page's load time would sit BEFORE a
-       later sync point and never be picked up — a parity lie the book would have hidden. Updates
-       already stamp new Date() (touch_case/touch_client parity, _runUpdate / _runInsert-upsert). */
+    /* R85 · A4: updated_at defaults to THE INSERT MOMENT (`default now()` in prod), not the fixture's
+       load-time NOW: the session book syncs `updated_at >= syncedAt - 2s`… */
     if (table === "cases" || table === "clients" || table === "vault_entries") { if (!r.updated_at) r.updated_at = iso(new Date()); }
     if (table === "cases") {
       if (!r.stage) r.stage = "enquiry";
       if (r.protection_status == null) r.protection_status = "not_discussed";
       if (r.fee_status == null) r.fee_status = "not_requested";
       if (r.rate_end_estimated == null) r.rate_end_estimated = false;
-      /* R70 — reminder_guarded is NOT NULL DEFAULT false in production, so it is
-         defaulted here rather than joining the nullable list below: a case the app
-         creates has the column, set false, exactly as the migration leaves it. */
+      /* R70: reminder_guarded is NOT NULL DEFAULT false in production, so it is defaulted here rather than
+         joining the nullable list below: a case the app creates has the column, set false… */
       if (r.reminder_guarded == null) r.reminder_guarded = false;
-      /* M2 / M7 / M10 / M11 columns exist on every row, null until something
-         records them. waiting_on, solicitor_firm, doc_token and
-         referrer_client_id join the list for round 9 — a case created by the app
-         has all four, empty, exactly as the migrations leave them. r12b adds
-         the retention call-pack numerics the same way: they exist, empty,
-         on a case the app creates — nobody types a reversion rate in on the
-         New Case form. */
-      /* R13 — policy_start_date / exchange_date / offer_issued_date /
-         repayment_method land with no backfill, same as every other M-round
-         column above: null on every row until something records it. */
-      /* R14b — mortgage_account_number joins the list on the same rule: null
-         on every row a write doesn't name, undefined-safe so select("*")
-         always returns the key (app.js's hasOwnProperty feature-detect
-         depends on that). */
-      /* R16 — the BTL rent/ICR trio and the three lender-tracker columns join
-         the list on the identical rule: plain nullable columns, no migration
-         toggle (same as mortgage_account_number above), null on every row a
-         write doesn't name so btlIcrSupported()/lenderTrackSupported()'s
-         hasOwnProperty probe always sees them. */
-      /* R77 — expected_completion_date and lead_source join the nullable list. Both are
-         ORIGINAL-schema columns mkCase has always seeded, but an app-side insert that names
-         neither (a lead accepted without a source, a bulk import row) must still round-trip
-         them as null so select("*")/hasOwnProperty consumers always see the key — the same
-         parity rule as every column below. */
-      /* R79 · B2 — cases.doc_token_expires_at (timestamptz, nullable, no backfill): joins the
-         nullable list on the standard rule. Old links have no expiry — the app says so — and only
-         a mint/regenerate stamps one. */
+      /* M2 / M7 / M10 / M11 columns exist on every row, null until something records them. waiting_on,
+         solicitor_firm, doc_token and referrer_client_id join the list for round 9… */
       ["lost_reason", "lost_detail", "broker_fee_paid_at", "proc_fee_paid_at", "sols_fee_paid_at", "property_address",
         "expected_completion_date", "lead_source",
         "waiting_on", "solicitor_firm", "doc_token", "doc_token_expires_at", "referrer_client_id",
@@ -1617,15 +1065,11 @@
       if (r.scheduled_for === undefined || r.scheduled_for === null) r.scheduled_for = r.created_at;
       if (r.error === undefined) r.error = null;
       if (r.sent_at === undefined) r.sent_at = null;
-      /* R66 · M8 — subject / body_html / attachment_path exist on every row, null until something
-         writes them, so select("*") always returns the keys (the standing parity rule). A `custom`
-         row is the only one the APP fills both text columns on; every other type leaves them for
-         process-emails to compose. */
+      /* R66 · M8: subject / body_html / attachment_path exist on every row, null until something writes them,
+         so select("*") always returns the keys (the standing parity rule). */
       ["subject", "body_html", "attachment_path"].forEach(function (f) { if (r[f] === undefined) r[f] = null; });
-      /* R81 — lead_id joins the nullable list on the standing parity rule:
-         production's leads trigger writes it on lead_ack rows and the Emails
-         page reads e.lead_id, so an app/suite insert that doesn't name it
-         must still round-trip the key as null. */
+      /* R81: lead_id joins the nullable list on the standing parity rule: production's leads trigger writes
+         it on lead_ack rows and the Emails page reads e.lead_id… */
       if (r.lead_id === undefined) r.lead_id = null;
     }
     if (table === "sms_queue" && !r.status) r.status = "queued";
@@ -1641,22 +1085,18 @@
       if (r.first_contact_at === undefined) r.first_contact_at = null;
     }
     if (table === "fact_finds" && !r.status) r.status = "sent";
-    /* R79 · B2 — fact_finds.expires_at (timestamptz, nullable, no server default): the CLIENT
-       stamps now()+30d at mint time; a row inserted without one round-trips it as null so the
-       app's honest "no expiry" state is observable. */
+    /* R79 · B2: fact_finds.expires_at: the CLIENT stamps now()+30d at mint time; a row inserted without one
+       round-trips it as null so the app's honest "no expiry" state is observable. */
     if (table === "fact_finds" && r.expires_at === undefined) r.expires_at = null;
-    /* R79 (migration contract, agent A's columns seeded here for parity) —
-       clients.comms_optout bool NOT NULL DEFAULT false; clients.comms_token uuid DEFAULT
-       gen_random_uuid(). Every client row the app inserts gets both, exactly as the migration
-       leaves them; the token is deterministic here (fixture DB) but unique per row. */
+    /* R79 — clients.comms_optout bool NOT NULL DEFAULT false; clients.comms_token uuid DEFAULT
+       gen_random_uuid(). Every client row the app inserts gets both… */
     if (table === "clients") {
       if (r.comms_optout === undefined || r.comms_optout === null) r.comms_optout = false;
       if (r.comms_token === undefined || r.comms_token === null) r.comms_token = "comms-" + (++commsTokenSeq) + "-a1b2c3d4e5f6";
     }
     if (table === "case_emails" && !r.triage_status) r.triage_status = "new";
-    /* R14 — vault_entries: category default 'other', fields default '[]'::jsonb,
-       visible_to default null (= visible to every staff role), sort_order
-       default 0. owner_label/note/updated_by are nullable with no default. */
+    /* R14: vault_entries: category default 'other', fields default '[]'::jsonb, visible_to default null,
+       sort_order default 0. owner_label/note/updated_by are nullable with no default. */
     if (table === "vault_entries") {
       if (!r.category) r.category = "other";
       if (r.fields === undefined || r.fields === null) r.fields = [];
@@ -1669,13 +1109,8 @@
     return r;
   }
 
-  /* =========================================================================
-     FIXTURES
-     ======================================================================= */
-  /* --- profiles ---------------------------------------------------------- */
-  /* M1 — per-adviser identity. Wayne and Daniel have theirs filled in so the
-     per-adviser sign-off path is exercised; Kim and Luke are deliberately blank
-     so the settings.adviser_name / adviser_phone fallback is exercised too. */
+  /* FIXTURES profiles M1 — per-adviser identity. Wayne and Daniel have theirs filled in so the per-adviser
+     sign-off path is exercised… */
   var PROFILE_IDENTITY = {
     p2: {
       phone: "01202 900124",
@@ -1686,10 +1121,8 @@
       email_signoff: "Daniel Potts\nDirector\nNexMoney"
     }
   };
-  /* r12b — tour_seen_at (nullable timestamptz). Every staff persona has
-     already seen the first-run tour EXCEPT Luke (p3, adviser): he is the one
-     persona the app's first-run tour has to actually fire for, so the tour
-     logic gets exercised without every other page-load test tripping it. */
+  /* r12b — tour_seen_at (nullable timestamptz). Every staff persona has already seen the first-run tour
+     EXCEPT Luke (p3, adviser): he is the one persona the app's first-run tour has to actually fire for… */
   var TOUR_SEEN_AT = { p3: null };
   Object.keys(PERSONAS).forEach(function (k) {
     var p = PERSONAS[k];
@@ -1792,21 +1225,18 @@
     bank_account_number: "",
     monthly_fee_target: "9500",
     rate_reminder_months: "6",
-    /* R64 · L5 — the gone-quiet window, seeded at its default so the fixture reads exactly as the
-       hard-coded six months did before it became a setting. A suite that wants a different window
-       upserts this key and re-runs loadSettings(); blank/absent still means 6 in app.js. */
+    /* R64 · L5: the gone-quiet window, seeded at its default so the fixture reads exactly as the hard-coded
+       six months did before it became a setting. A suite that wants a different window upserts this key and… */
     client_quiet_months: "6",
     review_delay_days: "14",
     referral_delay_days: "21",
     solicitor_chase_days: "7",
-    /* R63 · A2/A3 — THE FIVE bool10 KEYS, AND WHY THEY ARE SPELLED "1"/"0" HERE.
-       The Settings form in app.js writes these five as "1"/"0"; the rows production was seeded
-       with, and the SQL trigger that reads them, use 'on'/'off'. Both spellings are real, both
-       are in the field, and everything that READS one of these keys must accept either —
-       app.js's isBool10On() and this file's settingBool10On() are the two places that do.
-       The seeded VALUES below are unchanged (auto_offer_update and auto_referral stay off, so
-       "the setting is off, so nothing was queued" is a state the harness can still reach); only
-       the reading rule moved. */
+    /* R63 · A2/A3: THE FIVE bool10 KEYS, AND WHY THEY ARE SPELLED "1"/"0" HERE. The Settings form in app.js writes
+       these five as "1"/"0"; the rows production was seeded with, and the SQL trigger that reads them, use
+       'on'/'off'. Both spellings are real, both are in the field, and everything that READS one of these keys must
+       accept either — app.js's isBool10On() and this file's settingBool10On() are the two places that do. The
+       seeded VALUES below are unchanged (auto_offer_update and auto_referral stay off, so "the setting is off, so
+       nothing was queued" is a state the harness can still reach); only the reading rule moved. */
     auto_docs_request: "1",
     auto_submitted_update: "1",
     auto_offer_update: "0",
@@ -1822,33 +1252,20 @@
     financial_promotions_approved: "off",
     birthday_enabled: "off",
     anniversary_enabled: "off",
-    /* r8_m1 — the annual review touch, seeded OFF exactly as production ships
-       it: a firm that has never been asked must not start booking calls into
-       its advisers' task lists on the strength of a deploy. The tests that
-       exercise it turn it on themselves, which is also the only way to prove
-       the switch is really the gate. */
+    /* r8_m1 — the annual review touch, seeded OFF exactly as production ships it: a firm that has never been
+       asked must not start booking calls into its advisers' task lists on the strength of a deploy. */
     annual_review_enabled: "off",
-    /* R63 · H1a/H1b — automatic stage-checklist tasks, seeded ON. Unlike the two
-       switches either side of it this one does not email anybody: it writes the
-       firm's OWN checklist onto their OWN cases, which is the work they had
-       already agreed was the work. It ships on because the defect it fixes is
-       that 127 of 134 live cases carried no open task at all while the checklist
-       sat in the case modal being advisory. The app treats an ABSENT row as ON
-       for the same reason (playbookAutoTasksOn), so this row is the mock stating
-       the prod default out loud rather than the thing that creates it — the
-       tests that prove the switch really is the gate set it to "off" themselves. */
+    /* R63 · H1a/H1b: automatic stage-checklist tasks, seeded ON. Unlike the two switches either side of it this one
+       does not email anybody: it writes the firm's OWN checklist onto their OWN cases, which is the work they had
+       already agreed was the work. It ships on because the defect it fixes is that 127 of 134 live cases carried no
+       open task at all while the checklist sat in the case modal being advisory. … */
     playbook_auto_tasks: "on",
-    /* r9_m10 — the nightly document chase, seeded OFF for the same reason the
-       annual review touch is: chasing a client is a decision a firm makes, not
-       something a deploy starts doing to their book on its own. The tests that
-       exercise it turn it on themselves, which is also the only way to prove the
-       switch really is the gate. `doc_chase_days` is the quiet window — nothing
-       is chased if anything about documents went to that client inside it. */
+    /* r9_m10 — the nightly document chase, seeded OFF for the same reason the annual review touch is: chasing
+       a client is a decision a firm makes, not something a deploy starts doing to their book on its own. */
     doc_chase_enabled: "off",
     doc_chase_days: "3",
-    /* r9 — how long an unanswered review request is left before it is nudged
-       once. Seven days: long enough not to read as nagging, short enough that
-       the completion is still recent to the client. */
+    /* r9 — how long an unanswered review request is left before it is nudged once. Seven days: long enough
+       not to read as nagging, short enough that the completion is still recent to the client. */
     review_reminder_days: "7",
     nps_enabled: "on",
     owner_digest: "on",
@@ -1859,44 +1276,28 @@
     sms_provider: "twilio",
     sms_from: "NexMoney",
     cron_key: "cron_9f2b41ce77a04e13b6d5",
-    /* R13 · M-42 — the backup nag. Empty string, not null/absent: this is a
-       firm that has NEVER exported, which is the "never" state the nag's
-       copy has to render (as opposed to a database that hasn't taken the
-       migration at all, which is feature-detected on the KEY being absent —
-       see app.js's hasOwnProperty check — and this key is always present). */
+    /* R13 · M-42: the backup nag. Empty string, not null/absent: this is a firm that has NEVER exported,
+       which is the "never" state the nag's copy has to render. */
     last_full_export_at: "",
-    /* R13 · M-43 — the cron heartbeat. Noon-pinned, ~3 days ago: comfortably
-       past the 48h staleness threshold, so the amber "may be silently stuck"
-       state is the harness default and is testable without a test having to
-       manufacture staleness itself. process-emails UPSERTs this on every
-       FULL (unscoped) run — see the process-emails stub — so a battery that
-       runs an unscoped send will move this value forward; nothing in the
-       existing suites relies on it staying exactly 3 days stale. */
+    /* R13 · M-43: the cron heartbeat. Noon-pinned, ~3 days ago: comfortably past the 48h staleness threshold,
+       so the amber "may be silently stuck" state is the harness default and is testable without a test… */
     last_cron_run_at: iso(shiftNoon(-3)),
-    /* R68 · M15 — THE EMAIL HOLD, seeded 'on' because that is what production
-       actually holds: `settings.email_hold = 'on'`, and nothing sends while it
-       is anything other than 'off'. app.js has referred to this key in a comment
-       since R60 and no screen has ever shown it; the Settings "Email sending"
-       strip is the first thing that reads it, so the harness has to hold the
-       real value or the strip's default state would be untestable. Tests that
-       want the released state write 'off' themselves — which is also the only
-       way to prove the switch really is the gate. */
+    /* R68 · M15: THE EMAIL HOLD, seeded 'on' because that is what production actually holds: `settings.email_hold =
+       'on'`, and nothing sends while it is anything other than 'off'. app.js has referred to this key in a comment
+       since R60 and no screen has ever shown it; the Settings "Email sending" strip is the first thing that reads
+       it, so the harness has to hold the real value or the strip's default state would be untestable. … */
     email_hold: "on",
-    /* R86 — WHICH ROLES MUST HAVE A SECOND FACTOR (db/r86/01 seeds the same row). A comma list
-       session_ok() reads on every RLS helper call: an owner/admin session at aal1 reads nothing
-       until it verifies. '' switches enforcement OFF — the CTO's break-glass, and what r86_mfa
-       §F writes to prove the switch really is the gate. Advisers are the optional role. */
+    /* R86: WHICH ROLES MUST HAVE A SECOND FACTOR. A comma list session_ok() reads on every RLS helper call:
+       an owner/admin session at aal1 reads nothing until it verifies. */
     mfa_enforced_roles: "owner,admin"
   };
   Object.keys(SETTINGS_SEED).forEach(function (k) {
-    /* R82 — production's `settings` table is (key, value) and nothing else; seeding an
-       updated_at here put a column in the strict registry that prod would 42703 on.
-       Nothing in app.js or any suite reads it. Removed to match db/columns.json. */
+    /* R82: production's `settings` table is (key, value) and nothing else; seeding an updated_at here put a
+       column in the strict registry that prod would 42703 on. Nothing in app.js or any suite reads it. */
     DB.settings.push({ key: k, value: SETTINGS_SEED[k] });
   });
-  /* R86 · V — PRE-LOAD SETTINGS PATCH: `window.__mockSettingsPatch = { mfa_enforced_roles: "…" }` in an
-     addInitScript overrides seeded VALUES before app.js's init() reads anything (the enforced list
-     is read by session_ok() on the very first call). Keys only — a key not in the seed is added. */
+  /* R86 · V: PRE-LOAD SETTINGS PATCH: `window.__mockSettingsPatch = { mfa_enforced_roles: "…" }` in an
+     addInitScript overrides seeded VALUES before app.js's init() reads anything (the enforced list is read… */
   if (typeof window !== "undefined" && window.__mockSettingsPatch) {
     Object.keys(window.__mockSettingsPatch).forEach(function (k) {
       var row = DB.settings.filter(function (r) { return r.key === k; })[0];
@@ -1959,19 +1360,8 @@
      Clients 2 and 3 are exempt from the blanking: they are the strong duplicate
      pair and their matching DOB is what makes that match strong. */
   var HAS_DOB = function (i) { return i === 2 || i === 3 || (i % 5 !== 3 && i % 5 !== 4); };
-  /* R13 · CARE COLUMNS (Consumer Duty) — `is_vulnerable` / `vulnerability_note` /
-     `suppress_automation`, mirroring app.js's CARE_COLS. Two fixture rows carry
-     something other than the false/null/false default, chosen deliberately:
-       · i===11 (Priya Nadkarni) — vulnerable, WITH a note, AND suppressed. A
-         completed-book client (indices 10..27 get a completed case below) with
-         an email on file, so suppression is actually observable in the queueing
-         paths that would otherwise mail her (review request/reminder, rate-end
-         reminder if she ever gets a retention successor).
-       · i===20 (Hannah Verity) — suppressed but NOT vulnerable: the "do not
-         contact" case, a business decision with no care reason behind it. Also
-         completed-book, also has an email, for the same observability reason.
-     Everyone else stays false/null/false — the untouched default a real book
-     is mostly made of. */
+  /* R13 · CARE COLUMNS (Consumer Duty) — `is_vulnerable` / `vulnerability_note` / `suppress_automation`, mirroring
+     app.js's CARE_COLS. … */
   CLIENT_SEED.forEach(function (c, i) {
     DB.clients.push({
       id: nid("cl"),
@@ -1989,13 +1379,8 @@
     });
   });
   var CL = function (n) { return DB.clients[n].id; };
-  /* R79 · A5 — TWO OPTED-OUT CLIENTS. comms_optout=true on exactly two fixture rows, so v19's
-     send-time opt-out cancel is permanently reproducible: Chloe Pennington (38) and Harold
-     Mainwaring (39). Chosen deliberately OFF the completed book (10..27) and off the prior-year
-     completions (28..30), so the review-request drip never queues either of them on its own and
-     no existing suite's sent/queued arithmetic moves — comms_optout is read by NOTHING but the
-     v19 send loop's marketing gate. Mutation, not a seed-line change, so the R79 · B seed lines
-     above stay byte-identical to branch r79b's. */
+  /* R79 · A5: TWO OPTED-OUT CLIENTS. comms_optout=true on exactly two fixture rows, so v19's send-time
+     opt-out cancel is permanently reproducible: Chloe Pennington (38) and Harold Mainwaring (39). */
   DB.clients[38].comms_optout = true;
   DB.clients[39].comms_optout = true;
 
@@ -2040,14 +1425,11 @@
       /* M2 — lost reasons */
       lost_reason: o.lost_reason || null,
       lost_detail: o.lost_detail || null,
-      /* M7 — the property the case is about. NULL on most rows by design: the
-         column landed today with no backfill, so every case created before it
-         has nothing in it. */
+      /* M7 — the property the case is about. NULL on most rows by design: the column landed today with no
+         backfill, so every case created before it has nothing in it. */
       property_address: o.property_address || null,
-      /* M10 — what the case is waiting on, who is conveyancing it, and the
-         token behind the client's document-upload link. NULL on nearly every
-         row on purpose: these landed with no backfill, so the book the app has
-         to cope with is mostly blank. */
+      /* M10 — what the case is waiting on, who is conveyancing it, and the token behind the client's
+         document-upload link. NULL on nearly every row on purpose: these landed with no backfill… */
       waiting_on: o.waiting_on || null,
       solicitor_firm: o.solicitor_firm || null,
       doc_token: o.doc_token || null,
@@ -2066,48 +1448,31 @@
       retention_source_case_id: o.retention_source_case_id || null,
       offer_doc_path: o.offer_doc_path || null,
       nps_score: o.nps_score == null ? null : o.nps_score,
-      /* R79 · A2 — nps_token joins the row shape (nullable, no fixture mints one). The column has
-         been real in production since the NPS capture shipped (nps-capture matches on it), but no
-         mock row ever carried the KEY, so the app could not even SELECT it here. Null everywhere
-         keeps every NPS-dependent branch exactly as it behaved. */
+      /* R79 · A2: nps_token joins the row shape. The column has been real in production since the NPS capture
+         shipped, but no mock row ever carried the KEY, so the app could not even SELECT it here. */
       nps_token: o.nps_token || null,
       review_requested_at: o.review_requested_at || null,
-      /* R80 · B1 — referral_requested_at (timestamptz, nullable): real production column (it
-         stamps when a referral request queues — CTO-verified), never carried by the mock's row
-         shape before because nothing queued referral requests from the app until now. Null on
-         every fixture row; the queueEmail stamp is its only writer, and the promoters list
-         deliberately reads the email_queue rather than this column. */
+      /* R80 · B1: referral_requested_at (timestamptz, nullable): real production column, never carried by the
+         mock's row shape before because nothing queued referral requests from the app until now. */
       referral_requested_at: o.referral_requested_at || null,
       rate_reminder_queued_at: o.rate_reminder_queued_at || null,
-      /* R70 — cases.reminder_guarded, boolean NOT NULL DEFAULT false. Unlike every
-         nullable column above this one is never null: the R45 import guard stamped
-         rate_reminder_queued_at on 1,711 back-book cases WITHOUT ever queuing an
-         email, and this flag is the record of that — "the stamp is a guard, not a
-         send". The app reads it off v_alerts (see vAlerts below) to draw an honest
-         badge and to let the bulk verbs treat those cases as never reminded. */
+      /* R70: cases.reminder_guarded, boolean NOT NULL DEFAULT false. Unlike every nullable column above this
+         one is never null: the R45 import guard stamped rate_reminder_queued_at on 1,711 back-book cases… */
       reminder_guarded: !!o.reminder_guarded,
-      /* r12b — the retention call-pack columns (W-15). Four nullable numerics,
-         NULL on nearly every row on purpose: they landed with no backfill, so
-         the book the app has to cope with is mostly blank exactly like M7/M10
-         before it. See the r12b fixture pass below for the handful of rows
-         that carry real (or deliberately partial) numbers. */
+      /* r12b — the retention call-pack columns (W-15). Four nullable numerics, NULL on nearly every row on
+         purpose: they landed with no backfill… */
       current_balance: o.current_balance == null ? null : o.current_balance,
       reversion_rate: o.reversion_rate == null ? null : o.reversion_rate,
       monthly_payment: o.monthly_payment == null ? null : o.monthly_payment,
       erc_amount: o.erc_amount == null ? null : o.erc_amount,
-      /* r13 — policy_start_date / exchange_date / offer_issued_date /
-         repayment_method. Four more nullable, writable columns with no
-         backfill — null on nearly every row on purpose, exactly like the
-         r12b call-pack numerics above. See the r13 fixture pass below for
-         the handful of rows that carry real values. */
+      /* r13 — policy_start_date / exchange_date / offer_issued_date / repayment_method. Four more nullable,
+         writable columns with no backfill — null on nearly every row on purpose… */
       policy_start_date: o.policy_start_date || null,
       exchange_date: o.exchange_date || null,
       offer_issued_date: o.offer_issued_date || null,
       repayment_method: o.repayment_method || null,
-      /* R14b — cases.mortgage_account_number, nullable text, no backfill —
-         null on nearly every row, exactly like the four r13 columns above.
-         See the R14 fixture pass below for the two rows that carry a
-         (plainly fake) value. */
+      /* R14b: cases.mortgage_account_number, nullable text, no backfill — null on nearly every row, exactly
+         like the four r13 columns above. See the R14 fixture pass below for the two rows that carry a… */
       mortgage_account_number: o.mortgage_account_number || null,
       /* R57 — the pinned objective. Nullable text, no backfill, same rule as
          every plain-column addition above. */
@@ -2115,12 +1480,8 @@
       /* R59 — property_sold_at, the visible SOLD stamp written by the rate-end
          outcome's sold path. Nullable date, no backfill, same rule as above. */
       property_sold_at: o.property_sold_at || null,
-      /* R16 §A/§B — BTL rent/ICR trio (numerics, null = not recorded) and the
-         submit-to-lender tracker (lender_reference text, application_status
-         text, application_status_at timestamptz). No backfill — null on
-         nearly every row, exactly like every other plain-column addition
-         above. See the R16 fixture pass below for the handful of rows that
-         carry real (fake) values. */
+      /* R16 §A/§B: BTL rent/ICR trio and the submit-to-lender tracker. No backfill — null on nearly every
+         row, exactly like every other plain-column addition above. */
       monthly_rent: o.monthly_rent == null ? null : o.monthly_rent,
       icr_stress_rate: o.icr_stress_rate == null ? null : o.icr_stress_rate,
       icr_required_pct: o.icr_required_pct == null ? null : o.icr_required_pct,
@@ -2141,16 +1502,11 @@
     for (var k = 0; k < 3; k++) {
       var idx = m * 3 + k;
       var compDays = -(m * 30 + 6 + k * 8);
-      /* noon-pinned: submitted_at below is dateOnly() (midnight); completed_at
-         is iso(comp) (keeps hh:mm:ss) — see shiftNoon() comment. EXCEPT the one
-         case that lands exactly on review_delay_days (14): the review-request
-         drip backlog below decides "already 14 days old" with
-         (NOW - completed_at)/DAY < delay, and shift(-14) is the one
-         construction that keeps that exactly 14.000 days — always the same
-         side of the line — because it is built from the identical NOW
-         instance the drip check reads. Noon-pinning that one case would make
-         its age wobble either side of 14 with real wall-clock time instead,
-         which is a second copy of the very bug this pin is fixing. */
+      /* noon-pinned: submitted_at below is dateOnly() (midnight); completed_at is iso(comp) (keeps hh:mm:ss) — see
+         shiftNoon() comment. EXCEPT the one case that lands exactly on review_delay_days (14): the review-request
+         drip backlog below decides "already 14 days old" with (NOW - completed_at)/DAY < delay, and shift(-14) is
+         the one construction that keeps that exactly 14.000 days — always the same side of the line — because it is
+         built from the identical NOW instance the drip check reads. … */
       var comp = compDays === -14 ? shift(compDays) : shiftNoon(compDays);
       var clientIdx = 10 + idx;                      /* clients 10..27 */
       var proc = 1150 + rint(0, 22) * 100;
@@ -2174,11 +1530,8 @@
         proc_fee: proc, sols_fee: sols, broker_fee: broker,
         fee_status: feeStatus,
         fee_requested_at: feeStatus === "not_requested" ? null : iso(shift(compDays + 1)),
-        /* R5-18 (MOCK_ARTEFACT) — a fee cannot have been banked in the future.
-           completion + 3..20 days ran past the fixture "now" for recent months,
-           which is what manufactured the 88%-vs-45% target-bar discrepancy.
-           Clamped to yesterday; the deliberate future-dated row for the app-side
-           clamp test is seeded separately (see FUTURE-DATED FEE below). */
+        /* R5-18 (MOCK_ARTEFACT): a fee cannot have been banked in the future. completion + 3..20 days ran
+           past the fixture "now" for recent months… */
         fee_paid_at: feeStatus === "paid"
           ? iso(Math.min(shift(compDays + rint(3, 20)).getTime(), shift(-1).getTime()))
           : null,
@@ -2392,9 +1745,8 @@
   DB.clients[3].last_name = DB.clients[2].last_name;
   DB.clients[3].date_of_birth = DB.clients[2].date_of_birth;
 
-  /* ---------------------------------------------------------------- M2 seeds */
-  /* Backfill exactly as the migration does: the single legacy date stands in for
-     each fee type that has an amount. */
+  /* M2 seeds Backfill exactly as the migration does: the single legacy date stands in for each fee type that
+     has an amount. */
   DB.cases.forEach(function (c) {
     if (c.fee_status !== "paid" || !c.fee_paid_at) return;
     if (Number(c.broker_fee || 0) > 0) c.broker_fee_paid_at = c.fee_paid_at;
@@ -2402,9 +1754,8 @@
     if (Number(c.sols_fee || 0) > 0) c.sols_fee_paid_at = c.fee_paid_at;
   });
 
-  /* SPLIT-PAID case (B7 / Batch 6.4): broker banked last month, proc banked this
-     month, so a per-type-date report must land each £ in a different month while
-     the legacy single date can only ever pick one. */
+  /* SPLIT-PAID case (B7 / Batch 6.4): broker banked last month, proc banked this month, so a per-type-date
+     report must land each £ in a different month while the legacy single date can only ever pick one. */
   (function splitPaid() {
     var c = completedCases.filter(function (x) {
       return Number(x.broker_fee || 0) > 0 && Number(x.proc_fee || 0) > 0 && x.fee_status === "paid";
@@ -2418,9 +1769,8 @@
     c.fee_paid_at = iso(thisMonth);           /* legacy column = the latest date */
   })();
 
-  /* FUTURE-DATED FEE — one row deliberately banked in the future, so Batch 6.4's
-     "excludes future-dated payments (N)" clamp has something to exclude. This is
-     the only future cash date in the fixtures (see R5-18 clamp above). */
+  /* FUTURE-DATED FEE — one row deliberately banked in the future, so Batch 6.4's "excludes future-dated
+     payments (N)" clamp has something to exclude. This is the only future cash date in the fixtures (see… */
   (function futureDatedFee() {
     var c = completedCases.filter(function (x) {
       return Number(x.broker_fee || 0) > 0 && x.fee_status === "requested";
@@ -2452,12 +1802,8 @@
     });
   })();
 
-  /* RETENTION WINDOW — one completed case whose rate ends INSIDE the reminder
-     window with no reminder queued and no successor, so mock
-     queue_automated_emails() has a case to auto-create from (production's real
-     create path). The already-ended rates (Kwame Boateng, −132d) stay outside
-     the window on purpose: that is the production gap the manual "Start
-     retention case" button exists to close. */
+  /* RETENTION WINDOW — one completed case whose rate ends INSIDE the reminder window with no reminder queued
+     and no successor, so mock queue_automated_emails() has a case to auto-create from. */
   (function retentionWindowSeed() {
     var src = completedCases[8];              /* owned by an adviser, so the successor is too */
     src.rate_end_date = dateOnly(shift(45));
@@ -2465,9 +1811,8 @@
     src.rate_reminder_queued_at = null;
   })();
 
-  /* A current-month cohort so the Reports funnel / lead sources have depth on
-     the picker's default month. Live stages only — a completed case's created_at
-     must stay behind its completion date. */
+  /* A current-month cohort so the Reports funnel / lead sources have depth on the picker's default month.
+     Live stages only — a completed case's created_at must stay behind its completion date. */
   (function currentMonthCohort() {
     var wanted = ["enquiry", "fact_find", "decision_in_principle", "application", "offer", "exchange", "not_proceeding"];
     /* R8 FIXTURE REPAIR — `Math.max(2, NOW.getDate() - 2)` broke this block for the
@@ -2493,17 +1838,14 @@
       pool.slice(0, 2).forEach(function (c, j) {
         var back = Math.min(maxBack, 1 + i * 2 + j);
         var t = shift(-back).getTime() - (seq * 3) * 60000;
-        /* Too new, or before the month began (a month only hours old): fall back to
-           an even spread over the elapsed part of the month, which is distinct per
-           row and always in the past. */
+        /* Too new, or before the month began (a month only hours old): fall back to an even spread over the
+           elapsed part of the month, which is distinct per row and always in the past. */
         if (t > latest || t < monthStart) t = monthStart + Math.round((elapsed * (seq + 1)) / (COHORT_MAX + 2));
         var when = new Date(t);
         seq++;
         c.created_at = iso(when);
-        /* The submitted stages carry a submission INSIDE this month too — without
-           it, on the 1st the reports page's default month opens with no
-           applications at all and every month-on-month comparison is against
-           nothing. A case is submitted no earlier than it is created. */
+        /* The submitted stages carry a submission INSIDE this month too — without it, on the 1st the reports
+           page's default month opens with no applications at all and every month-on-month comparison is… */
         if (["application", "offer", "exchange"].indexOf(stage) >= 0) c.submitted_at = dateOnly(when);
         if (new Date(c.updated_at) < new Date(c.created_at)) c.updated_at = c.created_at;
         if (!c.lead_source) c.lead_source = LEAD_SOURCES[(i + j) % (LEAD_SOURCES.length - 1)];
@@ -2514,15 +1856,11 @@
     });
   })();
 
-  /* PRIOR-YEAR COMPLETIONS (Batch 6.1 / S8) — the year-on-year series on the
-     "Completions by month" chart needs a previous calendar year to draw beside
-     the current one, and the base fixture only spans the last six months, so
-     the prior year was empty and a YoY chart had nothing to show.
-     Deliberately placed in March / May / September so June and July of the
-     prior year stay COMPLETELY EMPTY: that is the "no data" case the KPI delta
-     chips must distinguish from a real fall to zero. Fees are banked in the
-     same month each case completed, and the rate ends well outside the
-     retention reminder window so these rows add no alerts or Today items. */
+  /* PRIOR-YEAR COMPLETIONS (Batch 6.1 / S8) — the year-on-year series on the "Completions by month" chart needs a
+     previous calendar year to draw beside the current one, and the base fixture only spans the last six months, so
+     the prior year was empty and a YoY chart had nothing to show. Deliberately placed in March / May / September so
+     June and July of the prior year stay COMPLETELY EMPTY: that is the "no data" case the KPI delta chips must
+     distinguish from a real fall to zero. … */
   (function priorYearCompletions() {
     var pyr = NOW.getFullYear() - 1;
     [{ mo: 2, day: 11, cl: 28, adv: "p2", proc: 1420, broker: 495, sols: 250, loan: 232000, kind: "remortgage", lender: "Halifax", src: "Referral" },
@@ -2609,11 +1947,8 @@
   var APPT_TITLES = ["Fact find call", "Review meeting", "Protection review", "Document collection", "Completion call"];
   for (var a = 0; a < 16; a++) {
     var apptDom = Math.min(28, 2 + a * 2);
-    /* Never let this spread land ON TODAY: the dedicated "today" appointments seeded right below
-       this loop (Ruby/Duncan's deliberate p2 clash + Marcus's plain-titled one) are the exact,
-       closed set several tests (tests/r5_batch9.js's Day-view §2) key off — "today has exactly
-       these 3". apptDom is always even (2 + a*2), so nudging it off today by 1 always lands on an
-       odd day this loop never otherwise uses, with no risk of colliding with another seeded day. */
+    /* Never let this spread land ON TODAY: the dedicated "today" appointments seeded right below this loop
+       are the exact, closed set several tests key off… */
     if (apptDom === NOW.getDate()) apptDom = apptDom >= 28 ? apptDom - 1 : apptDom + 1;
     var when = new Date(NOW.getFullYear(), NOW.getMonth(), apptDom, 9 + (a % 7), 0, 0, 0);
     var c2 = liveCases[a % liveCases.length];
@@ -2649,10 +1984,8 @@
     staff_id: "p3", client_id: CL(10), case_id: null,
     location: "Phone", notes: null, outcome: null, created_at: iso(shift(-3))
   });
-  /* PLAN-R5 Batch 3 (R5-9) — a PLAIN-titled appointment today. Every other appointment seeded for
-     today already has the client's name typed into its title, which is exactly the case R5-9 must
-     NOT double up; this is the case it must fill in. Deliberately at 14:00 so it clashes with
-     nothing (R5-25's pair is the 10:00 one above). */
+  /* PLAN-R5 Batch 3 (R5-9) — a PLAIN-titled appointment today. Every other appointment seeded for today
+     already has the client's name typed into its title… */
   (function plainTitledApptToday() {
     var marcus = DB.clients.filter(function (x) { return x.first_name === "Marcus" && x.last_name === "Bell"; })[0];
     if (!marcus) return;
@@ -2665,23 +1998,8 @@
     });
   })();
 
-  /* R77 · B1 — RECORDED appointment outcomes, in the PREVIOUS month, so the
-     Reports "Appointment outcomes" panel has a spread to count: some attended,
-     some no_show (Ruby Sinclair twice — the 2+ no-show register's fixture),
-     one rearranged, and a majority left null (prod's real shape: the chips
-     shipped in r12b and most of the diary is unscored — the panel's
-     "unrecorded" number must have something honest to say). Placement rules,
-     kept deliberately:
-       · previous-month days ONLY (3rd–25th) — inside the panel's 90-day
-         window, never on today (r5_batch9 pins "today has exactly these 3")
-         and never on the current-month even days the 16-loop above owns;
-       · clients reused from liveCases[0..5] and RUBY, every one of whom
-         already has a NEWER current-month appointment seeded above — so no
-         client's "last contact" moves and the gone-quiet/comms radars are
-         untouched;
-       · case_id null (a real prod shape — see the Whitfield row above), so no
-         case modal's appointment list changes length under a pinned suite.
-     `outcome` values are prod's exact strings: attended / no_show / rearranged. */
+  /* R77 · B1: RECORDED appointment outcomes, in the PREVIOUS month, so the Reports "Appointment outcomes"
+     panel has a spread to count: some attended, some no_show, one rearranged, and a majority left null. */
   (function outcomeSpreadLastMonth() {
     var lm = function (dom, h) { return new Date(NOW.getFullYear(), NOW.getMonth() - 1, dom, h, 0, 0, 0); };
     var lc = function (i) { return liveCases[i % liveCases.length].client_id; };
@@ -2746,11 +2064,8 @@
     status: "failed", error: "550 5.1.1 recipient address is invalid — message bounced",
     sent_at: null, scheduled_for: iso(shift(-3)), created_at: iso(shift(-3))
   });
-  /* A stuck-in-the-queue row, older than a day.
-     R5-1/R5-51 HARNESS FIX: this row used to hardcode Duncan Armitage's address
-     onto Callum Brodie's case — an impossible state that no code path can
-     produce, and it made the "queued row addressed to the wrong person" repro
-     unfalsifiable. The recipient is now derived from the row's own client. */
+  /* A stuck-in-the-queue row, older than a day. R5-1/R5-51 HARNESS FIX: this row used to hardcode Duncan
+     Armitage's address onto Callum Brodie's case — an impossible state that no code path can produce… */
   (function stuckQueued() {
     var c = liveCases[1];
     var cl = DB.clients.filter(function (x) { return x.id === c.client_id; })[0] || {};
@@ -2761,9 +2076,8 @@
       sent_at: null, scheduled_for: iso(shift(-4)), created_at: iso(shift(-4))
     });
   })();
-  /* …and the HONEST version of R5-51's scenario, kept separate: a row queued to
-     the address the client had at the time, whose client has since changed their
-     email. to_email is a genuine stale snapshot, not a mismatched person. */
+  /* …and the HONEST version of R5-51's scenario, kept separate: a row queued to the address the client had at
+     the time, whose client has since changed their email. to_email is a genuine stale snapshot… */
   (function staleAddressQueued() {
     var cl = DB.clients[35];                                 /* Craig Dunwoody, live at Offer */
     if (!cl || !cl.email) return;
@@ -2779,24 +2093,9 @@
     });
   })();
 
-  /* =========================================================================
-     R70 · A2 — THE IMPORT-GUARDED BACK BOOK (cases.reminder_guarded).
-
-     Production fact, 27 Aug: the R45 import guard stamped rate_reminder_queued_at
-     on 1,711 completed cases so the nightly engine would not machine-gun the whole
-     back book the day it was imported. NOTHING was ever queued or sent for any of
-     them, and until R70 the app read that stamp as "Reminder sent" (green) and the
-     bulk reminder read it as "already reminded" — the entire imported book both
-     looked nudged and was excluded from the one verb that could nudge it.
-
-     The fixture reproduces exactly that state on the completed cases whose rates
-     have ALREADY ENDED (the recovery book — the rows this matters on): the stamp
-     is set, reminder_guarded is true, and there is no email_queue row of type
-     rate_end_reminder anywhere against them. Seeded AFTER the email_queue block on
-     purpose, so a case that genuinely has a reminder row (Andrew Pemberton's, which
-     actually sent) can be excluded by looking rather than by assumption — he stays
-     the un-guarded "Reminder sent" control the badge test needs.
-     ======================================================================== */
+  /* R70 · A2: THE IMPORT-GUARDED BACK BOOK (cases.reminder_guarded). Production fact, 27 Aug: the R45 import guard
+     stamped rate_reminder_queued_at on 1,711 completed cases so the nightly engine would not machine-gun the whole
+     back book the day it was imported. … */
   (function importGuardedBackBook() {
     var reminded = {};
     DB.email_queue.forEach(function (e) {
@@ -2875,19 +2174,16 @@
       has_a2: "no"
     }
   });
-  /* R79 · B2 — THE SEEDED EXPIRED FACT-FIND. Sent, never submitted, and its 30 days are up: the
-     one fixture that keeps the "link expired <date> — regenerate to send a fresh one" state (and
-     the Regenerate verb next to it) permanently on screen. created_at is left at its old value
-     on purpose — an expiry is stamped at MINT time, not derived from created_at. */
+  /* R79 · B2: THE SEEDED EXPIRED FACT-FIND. Sent, never submitted, and its 30 days are up: the one fixture
+     that keeps the "link expired <date>… */
   DB.fact_finds.push({
     id: nid("ff"), case_id: liveCases[3].id, client_id: liveCases[3].client_id, created_by: "p3",
     token: "ff-demo-0002-sent", status: "sent", submitted_at: null,
     expires_at: iso(shift(-5)),
     created_at: iso(shift(-4)), data: {}
   });
-  /* A few more SUBMITTED fact-finds so the Apply flow is easy to reach from several
-     cases. Each carries values that CONFLICT with the case/client on some fields and
-     fill gaps on others — that is the whole point of the Apply diff screen. */
+  /* A few more SUBMITTED fact-finds so the Apply flow is easy to reach from several cases. Each carries
+     values that CONFLICT with the case/client on some fields and fill gaps on others… */
   liveCases.filter(function (c) { return ["fact_find", "decision_in_principle", "application"].indexOf(c.stage) >= 0; })
     .slice(0, 4).forEach(function (c, i) {
       if (DB.fact_finds.some(function (f) { return f.case_id === c.id; })) return;
@@ -2912,9 +2208,8 @@
         }
       });
     });
-  /* …and every seeded SUBMITTED fact-find carries the trigger's output, so the
-     "Review submitted fact-find" task exists on those cases from the start
-     (PLAN-R5 § Harness fixes 5). */
+  /* …and every seeded SUBMITTED fact-find carries the trigger's output, so the "Review submitted fact-find"
+     task exists on those cases from the start. */
   DB.fact_finds.filter(function (f) { return f.status === "submitted"; })
     .forEach(function (f) { logFactFindSubmit(f, f.submitted_at, null); });
 
@@ -2931,15 +2226,11 @@
       id: nid("ld"), name: l[0], email: l[1], phone: l[2], enquiry_type: l[3],
       message: l[4], status: l[5], created_at: iso(shift(l[6])),
       property_value: l[7], converted_case_id: null,
-      /* R11 — `alter table leads add column discard_reason text` (nullable, no
-         backfill, no RLS change). Null on every fixture row, including the
-         one already discarded — production shipped this with nothing filled
-         in, so a discarded lead with no reason on file is the honest state,
-         not a fixture gap. */
+      /* R11: `alter table leads add column discard_reason text`. Null on every fixture row, including the one
+         already discarded — production shipped this with nothing filled in… */
       discard_reason: null,
-      /* R7-5 — `alter table leads add column first_contact_at timestamptz`
-         (nullable, no backfill). Null on every row above; none of them has
-         ever been accepted or discarded-after-contact. */
+      /* R7-5: `alter table leads add column first_contact_at timestamptz` (nullable, no backfill). Null on
+         every row above; none of them has ever been accepted or discarded-after-contact. */
       first_contact_at: null
     });
   });
@@ -3016,9 +2307,8 @@
     /* a date n whole months from now, for rate-end dates that must land in
        named, DIFFERENT months however far the fixture "now" has drifted */
     var inMonths = function (n, day) { return dateOnly(new Date(NOW.getFullYear(), NOW.getMonth() + n, day)); };
-    /* an absolute past date, used to keep new completions inside months the
-       fixtures already populate (June/July of the prior year stay empty on
-       purpose — the KPI delta chips distinguish "no data" from a fall to zero) */
+    /* an absolute past date, used to keep new completions inside months the fixtures already populate
+       (June/July of the prior year stay empty on purpose… */
     var on = function (y, mo, day) { return new Date(y, mo - 1, day, 12, 0, 0); };
     var PY = NOW.getFullYear() - 1;
 
@@ -3035,10 +2325,8 @@
       return c.id;
     };
 
-    /* ---- (a) the portfolio landlord --------------------------------------
-       He lives in Westbourne and rents out five other properties. Two are
-       done and on fixed rates that expire in different months; the other
-       three are at three different points of the pipeline. */
+    /* (a) the portfolio landlord He lives in Westbourne and rents out five other properties. Two are done and
+       on fixed rates that expire in different months… */
     var pollard = newClient("Gareth", "Pollard", "gareth.pollard@example.com", "07700 900141", 57,
       "5 Grosvenor Road, Westbourne, Bournemouth BH4 9AZ", 900);
     var pollardCompletedA = mkCase({
@@ -3109,11 +2397,8 @@
       created_at: iso(shift(-9)), updated_at: iso(shift(-9))
     });
 
-    /* LANDMINE — the PREVIOUS owner of 9 Bryanstone Road (Kwame Boateng, whose
-       purchase completed there earlier in the year and who has since sold it on
-       to Gareth). The SAME address string therefore sits on two unrelated
-       clients' cases. Nothing may read that as one property-owner relationship,
-       as a duplicate client, or as one case superseding the other. */
+    /* LANDMINE — the PREVIOUS owner of 9 Bryanstone Road. The SAME address string therefore sits on two
+       unrelated clients' cases. Nothing may read that as one property-owner relationship… */
     var priorOwner = completedCases[completedCases.length - 1];
     priorOwner.property_address = "9 Bryanstone Road, Bournemouth BH3 7JQ";
 
@@ -3175,10 +2460,8 @@
       created_at: iso(shift(-52)), updated_at: iso(shift(-2))
     });
 
-    /* ---- (c) addresses for the cases that already exist -------------------
-       Ruby's six live cases become six cases across FIVE properties: the
-       buy-to-let application on 8 Grand Avenue and the remortgage decision in
-       principle that followed it a fortnight later are the same flat. */
+    /* (c) addresses for the cases that already exist Ruby's six live cases become six cases across FIVE
+       properties… */
     var RUBY_PROPERTIES = [
       "16 Kimberley Road, Southbourne, Bournemouth BH6 5DL",            /* enquiry          */
       "Flat 2, 118 Poole Road, Westbourne, Bournemouth BH4 9EF",        /* fact find        */
@@ -3234,10 +2517,8 @@
      ======================================================================= */
   (function roundEightFixtures() {
     var noonOn = function (y, m, d) { return new Date(y, m, d, 12, 0, 0); };
-    /* The same calendar day, n whole years back: the MM-DD match production's
-       annual-review touch does. (29 February is the one day of the year that
-       has no anniversary in a non-leap year; JS rolls it to 1 March here and
-       the touch simply finds nothing that day, which is what the SQL does too.) */
+    /* The same calendar day, n whole years back: the MM-DD match production's annual-review touch does. (29
+       February is the one day of the year that has no anniversary in a non-leap year… */
     var yearsAgoToday = function (n) { return noonOn(NOW.getFullYear() - n, NOW.getMonth(), NOW.getDate()); };
     var monthsAgo = function (n) { return noonOn(NOW.getFullYear(), NOW.getMonth() - n, NOW.getDate()); };
     var addClient = function (o) {
@@ -3256,10 +2537,8 @@
       DB.case_notes.push({ id: nid("nt"), case_id: caseId, body: body, created_by: by || null, created_at: iso(when) });
     };
 
-    /* ---- (a) birthdays --------------------------------------------------- */
-    /* Ruby Sinclair's birthday is today, Duncan Armitage's is tomorrow. Their
-       ages are left exactly as CLIENT_SEED set them — only the day moves, so
-       nothing that reads an age changes. */
+    /* (a) birthdays Ruby Sinclair's birthday is today, Duncan Armitage's is tomorrow. Their ages are left
+       exactly as CLIENT_SEED set them — only the day moves, so nothing that reads an age changes. */
     var bdayFor = function (client, when) {
       if (!client || !client.date_of_birth) return;
       client.date_of_birth = dateOnly(new Date(Number(String(client.date_of_birth).slice(0, 4)), when.getMonth(), when.getDate()));
@@ -3267,14 +2546,8 @@
     bdayFor(DB.clients[0], NOW);
     bdayFor(DB.clients[1], shift(1));
 
-    /* FIXED dates of birth for the seven clients tests/fixtures/revolution_sample.csv
-       is written against. Everything else in these fixtures is generated relative
-       to "now", which is right — but a CSV file on disk cannot chase a moving
-       date, and "the import matched this client on name + DOB" is exactly the
-       assertion a moving DOB would quietly turn into "the import matched on name
-       alone". These seven therefore carry absolute dates, and the sample file
-       carries the same seven. (A real person's DOB does not move either; only
-       their age does, which is the point.) */
+    /* FIXED dates of birth for the seven clients tests/fixtures/revolution_sample.csv is written against.
+       Everything else in these fixtures is generated relative to "now", which is right… */
     var FIXED_DOB = {
       "James Whitfield": "1990-03-14",
       "Priya Nadkarni": "1992-11-02",
@@ -3289,11 +2562,8 @@
       if (FIXED_DOB[k]) c.date_of_birth = FIXED_DOB[k];
     });
 
-    /* ---- (b) annual-review fodder ---------------------------------------- */
-    /* Three completions with addresses, so the call task can name the property
-       the review is about. Rate ends are all well outside the 6-month reminder
-       window: this block must add annual-review fodder and nothing else — no
-       retention successors, no rate-end alerts. */
+    /* (b) annual-review fodder Three completions with addresses, so the call task can name the property the
+       review is about. Rate ends are all well outside the 6-month reminder window… */
     var reviewFodder = [
       {
         first: "Nathaniel", last: "Fearnley", email: "nathaniel.fearnley@example.com", phone: "07700 900151",
@@ -3336,15 +2606,12 @@
         loan_amount: f.loan, property_value: f.value, rate_percent: 4.64, term_years: 24,
         rate_end_date: dateOnly(noonOn(NOW.getFullYear(), NOW.getMonth() + f.rateEndMonths, 18)),
         rate_end_estimated: false,
-        /* A fixed day count, not "2 calendar months before" — these three feed
-           the conveyancer-speed report (any completed, non-product-transfer
-           case with both dates counts) as well as the annual-review fodder
-           they were built for, and "2 months" measured in calendar months
-           wobbles by a day or two depending which two months it lands on,
-           which in turn nudges which third a firm's average falls in every
-           time the fixture "now" crosses a month boundary. subDays is that
-           wobble pinned to today's value so the gap is exact regardless of
-           what real date the fixtures load on. */
+        /* A fixed day count, not "2 calendar months before" — these three feed the conveyancer-speed report (any
+           completed, non-product-transfer case with both dates counts) as well as the annual-review fodder they
+           were built for, and "2 months" measured in calendar months wobbles by a day or two depending which two
+           months it lands on, which in turn nudges which third a firm's average falls in every time the fixture
+           "now" crosses a month boundary. subDays is that wobble pinned to today's value so the gap is exact
+           regardless of what real date the fixtures load on. */
         submitted_at: dateOnly(shift(-f.subDays, comp)),
         proc_fee: f.proc, broker_fee: f.broker, sols_fee: 0,
         fee_status: "paid",
@@ -3365,9 +2632,8 @@
       c.review_requested_at = iso(new Date(comp.getTime() + 14 * DAY));
       addNote(c.id, "Call: completion day — keys collected, client delighted.", comp, f.adv);
       if (i === 1) {
-        /* LAST year's annual review call on the two-year-old case: created 12
-           months ago, i.e. OUTSIDE the 11-month idempotency window, so this
-           year's call must still be written. */
+        /* LAST year's annual review call on the two-year-old case: created 12 months ago, i.e. OUTSIDE the
+           11-month idempotency window, so this year's call must still be written. */
         DB.case_tasks.push({
           id: nid("tk"), case_id: c.id,
           title: "Annual review call — " + f.first + " " + f.last + " (completed " +
@@ -3379,11 +2645,8 @@
       }
     });
 
-    /* ---- (c) segment members --------------------------------------------- */
-    /* A client with NO case at all. The "No live case" segment says "or they
-       have no case at all" and until now nothing in the book was in that state,
-       so the words were untested. An enquiry that never became a case is the
-       ordinary way it happens. */
+    /* (c) segment members A client with NO case at all. The "No live case" segment says "or they have no case
+       at all" and until now nothing in the book was in that state, so the words were untested. */
     addClient({
       first: "Petra", last: "Winsloe", email: "petra.winsloe@example.com", phone: "07700 900154",
       dob: null, address: "9 Portman Crescent, Bournemouth BH5 2AR",
@@ -3398,14 +2661,8 @@
       address: "31 Gloucester Road, Boscombe, Bournemouth BH7 6JB",
       created: monthsAgo(30), updated: monthsAgo(14)
     });
-    /* submitted_at below is a FIXED day count before completion, not
-       monthsAgo(21) — this case also feeds the conveyancer-speed report
-       (any completed, non-product-transfer case with both dates counts), and
-       two independent monthsAgo() calls wobble against each other by a day
-       or two depending which two calendar months separate them, nudging
-       which third a firm's average falls in as the fixture "now" crosses a
-       month boundary. 61 is today's gap, pinned — see reviewFodder's
-       subDays for the same fix. */
+    /* submitted_at below is a FIXED day count before completion, not monthsAgo(21) — this case also feeds the
+       conveyancer-speed report… */
     var northcoteCompleted = monthsAgo(19);
     var northcoteCase = mkCase({
       client_id: northcote, case_kind: "remortgage", stage: "completed",
@@ -3426,13 +2683,8 @@
     northcoteCase.review_requested_at = iso(monthsAgo(18));
     addNote(northcoteCase.id, "Call: courtesy call after completion — all well.", monthsAgo(14), "p3");
 
-    /* Cold WITH a live case: the case moved three weeks ago (a stage change an
-       administrator made), but the last time anyone actually spoke to her was
-       eight months back. Case activity is not client contact — this is the
-       client the segment is for. Protection is "discussed" with no outcome, so
-       she is a member of the no-protection-outcome segment too, and the stage
-       (fact find) keeps her out of the protection-gap watchtower rule, which
-       only fires at application/offer. */
+    /* Cold WITH a live case: the case moved three weeks ago, but the last time anyone actually spoke to her
+       was eight months back. Case activity is not client contact — this is the client the segment is for. */
     var farrant = addClient({
       first: "Suki", last: "Farrant", email: "suki.farrant@example.com", phone: "07700 900156",
       dob: dateOnly(noonOn(NOW.getFullYear() - 36, 6, 28)),
@@ -3464,11 +2716,8 @@
       property_address: "12 Petersfield Road, Bournemouth BH7 6QL",
       lender: "Halifax", product_name: "2yr Fixed 70%",
       loan_amount: 121000, property_value: 196000, rate_percent: 4.89, term_years: 15,
-      /* Deliberately 18 months out, NOT inside the 6-month reminder window: this
-         client exists to be the not-quite-cold control, and a rate ending sooner
-         would quietly hand queue_automated_emails() a SECOND retention case to
-         create on every run. A fixture that changes what another block is
-         measuring is worse than no fixture at all. */
+      /* Deliberately 18 months out, NOT inside the 6-month reminder window: this client exists to be the
+         not-quite-cold control… */
       rate_end_date: dateOnly(noonOn(NOW.getFullYear() + 1, 11, 30)), rate_end_estimated: false,
       submitted_at: dateOnly(monthsAgo(9)),
       proc_fee: 605, broker_fee: 0, sols_fee: 0, fee_status: "paid",
@@ -3482,13 +2731,8 @@
     halloranCase.review_requested_at = iso(monthsAgo(7));
     addNote(halloranCase.id, "Call: five-month check-in — rate ends this December, diarised.", monthsAgo(5), "p2");
 
-    /* ---- (d) the review-request drip backlog ------------------------------ */
-    /* Eight eligible completions, not nineteen. The cap is 5 a run, so eight
-       proves the cap AND drains in two runs — which is what keeps the Emails
-       page's "nothing is waiting" state reachable, and keeps the firm-wide
-       flush's promise ("N will be sent") true, since a run can never create
-       rows behind the confirm it has already shown. Everything older is
-       stamped as already asked, on the date it would have gone out. */
+    /* (d) the review-request drip backlog Eight eligible completions, not nineteen. The cap is 5 a run, so
+       eight proves the cap AND drains in two runs… */
     (function reviewDripBacklog() {
       var delay = Number(setting("review_delay_days", "14")) || 14;
       var eligible = DB.cases.filter(function (c) {
@@ -3548,9 +2792,8 @@
       var c = DB.clients.filter(function (x) { return x.id === cid; })[0];
       return c ? [c.first_name, c.last_name].filter(Boolean).join(" ") : "";
     };
-    /* Cases are chosen BY CLIENT NAME AND STAGE, never by id: ids renumber the
-       moment anything above this block seeds one more row, and a fixture that
-       silently lands on a different case is the worst kind of harness bug. */
+    /* Cases are chosen BY CLIENT NAME AND STAGE, never by id: ids renumber the moment anything above this
+       block seeds one more row… */
     var caseFor = function (client, stage) {
       return DB.cases.filter(function (c) {
         return nameOf(c.client_id) === client && (!stage || c.stage === stage);
@@ -3562,9 +2805,8 @@
     var addNote = function (caseId, body, whenDaysAgo, by) {
       DB.case_notes.push({ id: nid("nt"), case_id: caseId, body: body, created_by: by || null, created_at: iso(shift(-whenDaysAgo)) });
     };
-    /* A document mail that has already gone out. Status "sent" on purpose: a
-       queued row has not reached the client, so it must not count as a chase and
-       must not count as contact. */
+    /* A document mail that has already gone out. Status "sent" on purpose: a queued row has not reached the
+       client, so it must not count as a chase and must not count as contact. */
     var sentMail = function (cs, type, daysAgo, subject) {
       var cl = DB.clients.filter(function (x) { return x.id === cs.client_id; })[0] || {};
       DB.email_queue.push({
@@ -3587,45 +2829,23 @@
         created_at: iso(shift(-reqDays))
       });
     };
-    /* R12a·D8 — a document received THROUGH THE UPLOAD LINK gets a real entry in
-       `storageFiles` behind its storage_path, the same shape `storage.upload()`
-       writes for a genuine file (size/type/at) — so the admin "open" link's
-       createSignedUrl exercises a file that is actually there. A document
-       received by some other route (email, phone, handed over at a meeting) has
-       no storage_path at all — that is the field the app uses to decide whether
-       an "open" link renders, not the status, and at least one fixture row below
-       is deliberately left that way (see "received by EMAIL" below). */
-    /* R13 · BUCKET CORRECTION — the bucket is "client-docs" in production, not
-       "case-documents". `case_documents.storage_path` is written WITH the
-       bucket prefix on it (that's the real contract — see the file banner),
-       so `seedDocFile` now returns the PREFIXED value for the fixture row
-       while `storageFiles` keeps keying "<bucket>/<path-in-bucket>" exactly
-       as `storage.from(bucket)` below writes it — the two agree because
-       DOC_STORAGE_BUCKET + "/" + path === the prefixed value returned.
-       DOC_STORAGE_BUCKET itself is declared at module scope now (search
-       "storage object registry" near the top of this file) — the doc-upload
-       handler needs to reach the exact same constant. */
+    /* R12a·D8: a document received THROUGH THE UPLOAD LINK gets a real entry in `storageFiles` behind its
+       storage_path, the same shape `storage.upload()` writes for a genuine file (size/type/at)… */
     var seedDocFile = function (path, sizeBytes) {
       storageFiles[DOC_STORAGE_BUCKET + "/" + path] = { size: sizeBytes || 84213, type: "application/pdf", at: iso(shift(-7)) };
       return DOC_STORAGE_BUCKET + "/" + path;
     };
 
-    /* ---- (a) the four checklists ----------------------------------------- */
-    /* The items are the firm's own docs_list, verbatim. A checklist is created
-       FROM that list, so the two agreeing is not a coincidence to be tested
-       around — it is how the feature works. */
+    /* (a) the four checklists The items are the firm's own docs_list, verbatim. A checklist is created FROM
+       that list, so the two agreeing is not a coincidence to be tested around — it is how the feature works. */
     var DOCS = String(setting("docs_list", "")).split("|").map(function (s) { return s.trim(); }).filter(Boolean);
     var D_ID = DOCS[0] || "Photo ID";
     var D_PAY = DOCS[1] || "Last 3 payslips";
     var D_BANK = DOCS[2] || "Last 3 months bank statements";
     var D_DEP = DOCS[3] || "Proof of deposit";
 
-    /* A1 · PART-RECEIVED, RECENTLY MAILED — Sarah Ellingham, at Fact Find.
-       Four items, two of them in (both through the link, which is why the case
-       carries the two notes the upload function writes), and a docs_request that
-       went out YESTERDAY. This is the control the quiet window exists for: there
-       are outstanding items and no chase has ever been sent, and still nothing
-       may go tonight, because we spoke to her yesterday. */
+    /* A1 · PART-RECEIVED, RECENTLY MAILED — Sarah Ellingham, at Fact Find. Four items, two of them in, and a
+       docs_request that went out YESTERDAY. This is the control the quiet window exists for… */
     var partial = caseFor("Sarah Ellingham", "fact_find");
     if (partial) {
       partial.doc_token = "doc-ellingham-4f21c8";
@@ -3641,11 +2861,8 @@
       sentMail(partial, "docs_request", 1, "Your document checklist");
     }
 
-    /* A2 · THE THIRD CHASE IS DUE — Bethany Quirke, at Application.
-       Three items, none of them in, an original request twelve days ago and two
-       chases since. The last of them was four days ago, so the quiet window
-       (three days) has passed and tonight's run must send the third — and the
-       third is the LAST. */
+    /* A2 · THE THIRD CHASE IS DUE — Bethany Quirke, at Application. Three items, none of them in, an original
+       request twelve days ago and two chases since. */
     var chaseDue = caseFor("Bethany Quirke", "application");
     if (chaseDue) {
       chaseDue.doc_token = "doc-quirke-90b7ae";
@@ -3658,16 +2875,8 @@
       sentMail(chaseDue, "docs_chase", 4, "Still waiting on your documents");
     }
 
-    /* A3 · CHASES EXHAUSTED — Rosalind Amery, at Application.
-       Three chases spent over a month and nothing has arrived. The next run must
-       write the adviser a call task instead of a fourth email. Deliberately the
-       one checklist case with NO doc_token: the upload link is not the point of
-       the feature, chasing is, and the mails on this case therefore prove the
-       checklist-aware template still lists the missing items when there is no
-       link to offer. One item is WAIVED — she is not on payslips, she is self
-       employed — which is why "three outstanding" and "four items" are both
-       true here, and why anything counting outstanding work must count status,
-       not rows. */
+    /* A3 · CHASES EXHAUSTED — Rosalind Amery, at Application. Three chases spent over a month and nothing has
+       arrived. The next run must write the adviser a call task instead of a fourth email. */
     var exhausted = caseFor("Rosalind Amery", "application");
     if (exhausted) {
       exhausted.waiting_on = "client";
@@ -3682,18 +2891,8 @@
       sentMail(exhausted, "docs_chase", 8, "Still waiting on your documents");
     }
 
-    /* A4 · EVERYTHING IN — Tanya Osei, at Fact Find. The clean state: a
-       checklist with nothing outstanding, so no chase may ever fire on it and
-       the upload page has nothing left to ask for. It keeps its token, because a
-       client who opens yesterday's link after sending everything must get a page
-       that says so rather than a 404.
-       R12a·D8 — not every "received" item arrived through the link: the first two
-       (Photo ID, payslips) came back that way and carry a real seeded file, but
-       the bank statements arrived by EMAIL — received is a decision a member of
-       staff records with the ✓ Received button regardless of how the file turned
-       up, and storage_path is null on that row on purpose. The admin "open" link
-       must render for the first two and must NOT render for the third — this is
-       the one field that tells the two apart, not the status. */
+    /* A4 · EVERYTHING IN — Tanya Osei, at Fact Find. The clean state: a checklist with nothing outstanding,
+       so no chase may ever fire on it and the upload page has nothing left to ask for. */
     var clean = caseFor("Tanya Osei", "fact_find");
     if (clean) {
       clean.doc_token = "doc-osei-2d64f0";
@@ -3709,21 +2908,13 @@
       sentMail(clean, "docs_request", 20, "Your document checklist");
     }
 
-    /* ---- (b) solicitors, and what each live case is waiting on ------------ */
-    /* Three firms, and they are not interchangeable: the whole point of putting
-       the name on the case is that after a year the firm can say which
-       conveyancer costs it weeks. The assignment below is by MEASURED duration
-       (submission → completion) on the cases that already exist, fastest third
-       to Harker & Bligh and slowest to Bexley Rowe, so an average-days-by-
-       solicitor report has three genuinely different answers to give. Doing it
-       the other way round — naming firms at random and then moving the dates —
-       would have rewritten completion dates that a dozen other fixtures and
-       reports depend on. */
+    /* ---- (b) solicitors, and what each live case is waiting on */
+    /* Three firms, and they are not interchangeable: the whole point of putting the name on the case is that after
+       a year the firm can say which conveyancer costs it weeks. … */
     var SOLICITORS = ["Harker & Bligh LLP", "Trelawny Conveyancing", "Bexley Rowe Solicitors"];
     (function seedSolicitors() {
-      /* A product transfer has no solicitor — nothing changes hands — so those
-         are left blank on purpose, along with everything that never completed.
-         "Blank" here means "there was no conveyancer", not "we forgot". */
+      /* A product transfer has no solicitor — nothing changes hands — so those are left blank on purpose,
+         along with everything that never completed. "Blank" here means "there was no conveyancer"… */
       var withDuration = DB.cases.filter(function (c) {
         return c.stage === "completed" && c.completed_at && c.submitted_at && c.case_kind !== "product_transfer";
       }).map(function (c) {
@@ -3736,11 +2927,8 @@
       });
     })();
 
-    /* WAITING ON. Only live cases, and only from Application onwards — before
-       that there is nothing outside the office to wait for. The value cycles so
-       all three appear, and every case that says it is waiting on a solicitor is
-       given the solicitor it is waiting on: a "waiting on solicitor" report whose
-       rows cannot name the solicitor is a list of shrugs. */
+    /* WAITING ON. Only live cases, and only from Application onwards — before that there is nothing outside
+       the office to wait for. The value cycles so all three appear, and every case that says it is waiting… */
     (function seedWaitingOn() {
       var order = ["client", "lender", "solicitor"];
       var live = DB.cases.filter(function (c) {
@@ -3753,9 +2941,8 @@
           c.solicitor_firm = SOLICITORS[i % SOLICITORS.length];
         }
       });
-      /* And the ones that are genuinely STUCK — nothing has moved on them in
-         over six weeks — get the value spelled out even where the cycle above
-         did not reach them, because these are the rows the report exists for. */
+      /* And the ones that are genuinely STUCK — nothing has moved on them in over six weeks — get the value
+         spelled out even where the cycle above did not reach them… */
       DB.cases.filter(function (c) {
         return isLive(c.stage) && (NOW - new Date(c.updated_at)) / DAY > 45 && !c.waiting_on;
       }).forEach(function (c, i) {
@@ -3764,17 +2951,12 @@
       });
     })();
 
-    /* ---- (c) advocacy ----------------------------------------------------- */
-    /* WHO SENT US THIS CLIENT. Three cases, two referrers, and the two of them
-       are deliberately different shapes, because app.js has to decide WHERE the
-       thank-you task goes:
-         · Meera Chandran has exactly ONE case, so a thank-you lands on it with
-           nothing to decide. She has referred TWO clients, which is what makes a
-           "who refers us business" list have a top row at all.
-         · Gareth Pollard is the landlord with five cases, three of them live.
-           There is no right answer to "which of his six buy-to-lets does this
-           thank-you belong on", so the app must decline to guess — and that path
-           needs a fixture or it is never walked. */
+    /* ---- (c) advocacy */
+    /* WHO SENT US THIS CLIENT. Three cases, two referrers, and the two of them are deliberately different shapes,
+       because app.js has to decide WHERE the thank-you task goes: · Meera Chandran has exactly ONE case, so a
+       thank-you lands on it with nothing to decide. There is no right answer to "which of his six buy-to-lets does
+       this thank-you belong on", so the app must decline to guess — and that path needs a fixture or it is never
+       walked. … */
     (function seedReferrers() {
       var meera = clientNamed("Meera Chandran");
       var pollard = clientNamed("Gareth Pollard");
@@ -3790,18 +2972,11 @@
       });
     })();
 
-    /* THE REVIEW LOOP. Three states, because the reminder only means anything if
-       all three exist side by side:
-         · asked eight days ago, never answered      → the reminder is due
-         · answered badly, with a reason             → note + call task
-         · answered well                             → nothing happens at all
-       The unanswered one carries a SENT email as well as the stamp on the case:
-       the stamp records that we decided to ask, the sent row records that the
-       client was actually asked, and the reminder is keyed on the second. */
+    /* THE REVIEW LOOP. Three states, because the reminder only means anything if all three exist side by
+       side: · asked eight days ago, never answered → the reminder is due · answered badly… */
     (function seedReviewLoop() {
-      /* Their first completion that has been ASKED and not yet scored — the same
-         rule for all three, so none of these lands on a case that already
-         carries somebody else's answer. */
+      /* Their first completion that has been ASKED and not yet scored — the same rule for all three, so none
+         of these lands on a case that already carries somebody else's answer. */
       var askedUnscored = function (client) {
         return DB.cases.filter(function (x) {
           return nameOf(x.client_id) === client && x.stage === "completed" &&
@@ -3815,12 +2990,8 @@
         sentMail(unanswered, "review_request", 8, "How did we do?");
       }
 
-      /* The detractor, exactly as nps-capture v2 leaves a case: the score on the
-         case, the client's own words in a note, and a call task on the case's
-         adviser due tomorrow. Written here rather than by calling the edge
-         function so the state exists on a cold page load — the Reports review
-         panel and the adviser's task list both have to show it before anybody
-         submits anything. */
+      /* The detractor, exactly as nps-capture v2 leaves a case: the score on the case, the client's own words
+         in a note, and a call task on the case's adviser due tomorrow. */
       var detractor = askedUnscored("Ian Corrigan");
       if (detractor) {
         var reason = "Took nearly three weeks to get an answer on the valuation and I had to chase every time.";
@@ -3839,18 +3010,12 @@
         });
       }
 
-      /* The rest of the distribution. Six cases carried a score before this
-         round and every one of them was a 6, an 8 or a 9 — a book with no
-         extremes at either end, which is the one shape a review dashboard can
-         say nothing useful about. These take it to twelve, spanning 4 to 10,
-         with detractors, passives and promoters all represented. Each one is
-         written onto a case that had ALREADY been asked (review_requested_at is
-         set), so nothing here changes who is waiting in the review drip. */
+      /* The rest of the distribution. Six cases carried a score before this round and every one of them was a
+         6, an 8 or a 9 — a book with no extremes at either end… */
       [["Damian Fairhurst", 9], ["Fiona Strachan", 7], ["Peter Thackeray", 10],
        ["Bruce Lindquist", 10], ["Kwame Boateng", 10]].forEach(function (p) {
-        /* Their first already-asked, not-yet-scored completion — not simply
-           their first completion, which for a two-time client can be one that
-           already carries a score. */
+        /* Their first already-asked, not-yet-scored completion — not simply their first completion, which for
+           a two-time client can be one that already carries a score. */
         var c = DB.cases.filter(function (x) {
           return nameOf(x.client_id) === p[0] && x.stage === "completed" &&
             x.nps_score == null && !!x.review_requested_at;
@@ -3860,15 +3025,8 @@
     })();
   })();
 
-  /* =========================================================================
-     ROUND 12b FIXTURES — retention call-pack numerics (W-15) + a DIP-stage
-     checklist for the widened document chase (W-24).
-
-     Same constraint as the round-9 pass above: no new clients, no new cases.
-     Everything here is written onto rows that already exist, so every count
-     the rest of the battery depends on (completions per month, the review
-     drip, watchtower alerts) is exactly where round 12a left it.
-     ======================================================================= */
+  /* ROUND 12b FIXTURES — retention call-pack numerics (W-15) + a DIP-stage checklist for the widened document
+     chase (W-24). Same constraint as the round-9 pass above: no new clients, no new cases. */
   (function roundTwelveBFixtures() {
     var nameOf = function (cid) {
       var c = DB.clients.filter(function (x) { return x.id === cid; })[0];
@@ -3914,11 +3072,8 @@
     /* Andrew Pemberton — nothing written; his row keeps the mkCase() default
        of null on all four, which is the point of naming him here. */
 
-    /* Sarah Ellingham's live fact_find case is the "at least one LIVE
-       retention-relevant case" — it is r9's retention pair successor
-       (retention_source_case_id points at her earlier completed case), and
-       her current rate ends inside the next few months, exactly the case an
-       adviser would pull a call-pack up for ahead of ringing her. */
+    /* Sarah Ellingham's live fact_find case is the "at least one LIVE retention-relevant case" — it is r9's
+       retention pair successor, and her current rate ends inside the next few months… */
     var sarahRetention = DB.cases.filter(function (c) {
       return nameOf(c.client_id) === "Sarah Ellingham" && c.stage === "fact_find" && c.retention_source_case_id;
     })[0];
@@ -3971,18 +3126,8 @@
     }
   })();
 
-  /* =========================================================================
-     ROUND 13 FIXTURES — the four new `cases` columns (policy_start_date /
-     exchange_date / offer_issued_date / repayment_method), staff_absences,
-     case_files. (Client care columns are seeded in-line on the CLIENT_SEED
-     pass above, and the two new settings keys in the SETTINGS_SEED block —
-     search "R13" in each.)
-
-     Same constraint as every fixture pass since round 9: no new clients, no
-     new cases — everything here is written onto rows that already exist, so
-     every count the rest of the battery depends on stays exactly where round
-     12b left it.
-     ========================================================================= */
+  /* ROUND 13 FIXTURES — the four new `cases` columns (policy_start_date / exchange_date / offer_issued_date /
+     repayment_method), staff_absences, case_files. … */
   (function roundThirteenFixtures() {
     var nameOf = function (cid) {
       var c = DB.clients.filter(function (x) { return x.id === cid; })[0];
@@ -3995,11 +3140,8 @@
     };
     var monthsAgo = function (n) { return dateOnly(new Date(NOW.getFullYear(), NOW.getMonth() - n, NOW.getDate())); };
 
-    /* ---- (a) policy_start_date — two of the three policy_taken/completed
-       cases the book already carries (Tom Beresford, Elaine Mowbray, Bruce
-       Lindquist — all PROT[idx%5===3] from the completedCases loop). Bruce is
-       left untouched on purpose: "most stay null" is the honest state a
-       data-quality panel needs something to render against. */
+    /* (a) policy_start_date — two of the three policy_taken/completed cases the book already carries. Bruce
+       is left untouched on purpose: "most stay null" is the honest state a data-quality panel needs… */
     var tom = caseFor("Tom Beresford", "completed");
     /* inside the 24-month clawback window, ~4 months of it left to run */
     if (tom) tom.policy_start_date = monthsAgo(20);
@@ -4023,13 +3165,8 @@
     var harold = caseFor("Harold Mainwaring", "exchange");
     if (harold) harold.exchange_date = dateOnly(shift(-4));
 
-    /* ---- (d) staff_absences — p3 Luke Richards, absent TODAY spanning a
-       few fixed days (started yesterday, runs two more), so lead-routing
-       exclusion is testable against a stable, non-flaky window. Plus one
-       past absence, so the table is not a single-row fixture. Noon-pinned
-       per house rules (see shiftNoon() and the R11/R12b flake-fix notes) —
-       `created_at` is a timestamp, `starts_on`/`ends_on` are dates and need
-       no time component at all. */
+    /* (d) staff_absences — p3 Luke Richards, absent TODAY spanning a few fixed days, so lead-routing
+       exclusion is testable against a stable, non-flaky window. */
     DB.staff_absences.push({
       id: nid("sa"), profile_id: "p3",
       starts_on: dateOnly(shift(-1)), ends_on: dateOnly(shift(2)),
@@ -4041,12 +3178,8 @@
       note: "Conference — out of office", created_by: "p4", created_at: iso(shiftNoon(-45))
     });
 
-    /* ---- (e) case_files — 1-2 fixture rows with a real blob behind them,
-       mirroring the case_documents pattern (search "R12a·D8 — seed real
-       storage content" above): a real `storageFiles` entry keyed
-       "client-docs/files/<caseId>/…", the same shape a genuine app upload
-       via supabase-js storage.upload() would leave, so createSignedUrl on
-       either of these exercises a file that is actually there. */
+    /* (e) case_files — 1-2 fixture rows with a real blob behind them, mirroring the case_documents pattern: a
+       real `storageFiles` entry keyed "client-docs/files/<caseId>/…"… */
     var CASE_FILES_BUCKET = "client-docs";
     var seedCaseFile = function (caseId, clientId, name, kind, path, uploadedBy, daysAgo) {
       var full = CASE_FILES_BUCKET + "/files/" + caseId + "/" + path;
@@ -4126,16 +3259,8 @@
     }
   })();
 
-  /* --- R14b — cases.mortgage_account_number ------------------------------
-     Nullable text, no backfill — null on nearly every case, exactly like the
-     r13 forward-capture columns above. Two plainly-fake values, chosen on
-     stable-named clients: James Whitfield is one of the seven FIXED_DOB
-     clients above (always present, with a real loan_amount + lender), which
-     is exactly the case tests/r14.js's security-card section already opens
-     for its "DOB present" fixture — so this row lights up there rather than
-     reading "—" on every run. Owen Cadwallader (also FIXED_DOB, completed,
-     already carries a repayment_method from the r13 pass) gets the second
-     value for variety, so a card with a number is not a one-off. */
+  /* --- R14b — cases.mortgage_account_number Nullable text, no backfill — null on nearly every case, exactly like
+     the r13 forward-capture columns above. … */
   (function roundFourteenBFixtures() {
     var caseForClientName = function (name, stage) {
       var cl = DB.clients.filter(function (c) { return [c.first_name, c.last_name].filter(Boolean).join(" ") === name; })[0];
@@ -4148,16 +3273,10 @@
     if (owen) owen.mortgage_account_number = "ACC-0099-TEST";
   })();
 
-  /* --- R77 · A2 — lead_source casing spread -------------------------------
-     Production's lead_source is FREE TEXT typed by hand, and the one thing
-     free text guarantees is inconsistent casing — the Reports Lead-sources
-     panel now groups case-insensitively and the case form's datalist offers
-     the book's most common casing, and both behaviours need fixture rows
-     that actually vary. MUTATION ONLY of casing on rows already seeded
-     above (no new clients, no new cases, no value changes beyond case), so
-     no count anywhere else in the battery moves; exactly ONE row of each
-     source is flipped, so the ORIGINAL casing stays the majority and the
-     merged table reads "Google"/"Website" exactly as it did before. */
+  /* --- R77 · A2 — lead_source casing spread Production's lead_source is FREE TEXT typed by hand, and the one thing
+     free text guarantees is inconsistent casing — the Reports Lead-sources panel now groups case-insensitively and
+     the case form's datalist offers the book's most common casing, and both behaviours need fixture rows that
+     actually vary. … */
   (function r77LeadSourceCasings() {
     var flip = function (from, to) {
       var rows = DB.cases.filter(function (c) { return c.lead_source === from; });
@@ -4188,34 +3307,24 @@
       if (!cl) return null;
       return DB.cases.filter(function (c) { return c.client_id === cl.id && c.case_kind === kind && c.stage === stage; })[0] || null;
     };
-    /* (a) ICR FAIL — Gareth Pollard's application-stage BTL case (loan
-       196000, value 268000). rent 1200 -> annualRent 14400, stressInterest
-       (default 5.5%) 10780, icrPct round(133.58)=134, needs default 145 -> fail. */
+    /* (a) ICR FAIL — Gareth Pollard's application-stage BTL case. rent 1200 -> annualRent 14400,
+       stressInterest (default 5.5%) 10780, icrPct round(133.58)=134, needs default 145 -> fail. */
     var pollardApp = caseForClientKindStage("Gareth Pollard", "buy_to_let", "application");
     if (pollardApp) pollardApp.monthly_rent = 1200;
-    /* (b) ICR PASS — Gareth Pollard's offer-stage BTL case (loan 154000,
-       value 224000). rent 1500 -> annualRent 18000, stressInterest 8470,
-       icrPct round(212.5..)=213 >= 145 -> pass. */
+    /* (b) ICR PASS — Gareth Pollard's offer-stage BTL case. rent 1500 -> annualRent 18000, stressInterest
+       8470, icrPct round(212.5..)=213 >= 145 -> pass. */
     var pollardOffer = caseForClientKindStage("Gareth Pollard", "buy_to_let", "offer");
     if (pollardOffer) pollardOffer.monthly_rent = 1500;
-    /* (c) lender tracker, CHASEABLE — Harold Mainwaring's exchange-stage case
-       (not BTL — the tracker itself is not kind-gated): status "submitted"
-       stamped 15 days ago (>= the 10-day LENDER_CHASE_DAYS window) — the
-       header nudge fires. Deliberately NOT Melanie Underhill's application
-       case (ca061), which R13's fixture pass already uses for the
-       app_not_submitted watchtower rule (submitted_at cleared there) —
-       stacking an "in underwriting" status on a case fixtured as "not yet
-       submitted" would be confusing to read even though nothing actually
-       collides (app_not_submitted never reads application_status). */
+    /* (c) lender tracker, CHASEABLE — Harold Mainwaring's exchange-stage case: status "submitted" stamped 15
+       days ago — the header nudge fires. Deliberately NOT Melanie Underhill's application case (ca061)… */
     var haroldExchange = caseForClientKindStage("Harold Mainwaring", "first_time_buyer", "exchange");
     if (haroldExchange) {
       haroldExchange.lender_reference = "APP-441829";
       haroldExchange.application_status = "submitted";
       haroldExchange.application_status_at = iso(shift(-15));
     }
-    /* (d) lender tracker, NOT chaseable despite being old — the Fairweathers'
-       offer-stage BTL case: status "offer_issued" stamped 25 days ago. The
-       chase nudge excludes offer_issued regardless of age. */
+    /* (d) lender tracker, NOT chaseable despite being old — the Fairweathers' offer-stage BTL case: status
+       "offer_issued" stamped 25 days ago. The chase nudge excludes offer_issued regardless of age. */
     var fairweatherOffer = caseForClientKindStage("Ian & Susan Fairweather", "buy_to_let", "offer");
     if (fairweatherOffer) {
       fairweatherOffer.lender_reference = "APP-552013";
@@ -4224,11 +3333,8 @@
     }
   })();
 
-  /* --- vault_entries (R14 — the company password safe) -------------------
-     EVERY value below is plainly, deliberately fake — no real lender login,
-     no real staff password, ever. sort_order is left at the column default
-     (0) for all twelve; nothing in this pass depends on a particular within-
-     category order. */
+  /* vault_entries EVERY value below is plainly, deliberately fake — no real lender login, no real staff
+     password, ever. sort_order is left at the column default (0) for all twelve… */
   (function roundFourteenFixtures() {
     var V = function (o) {
       var row = {
@@ -4244,10 +3350,8 @@
     };
     var F = function (label, value, secret) { return { label: label, value: value, secret: !!secret }; };
 
-    /* lender — "Test Bank A" held individually by all three advising/owner
-       personas, plus a Shared "Test Bank B" (note lives here, exercising the
-       note field). Each row mixes a non-secret Username with two secrets
-       (Password + a memorable word), so masking is exercised everywhere. */
+    /* lender — "Test Bank A" held individually by all three advising/owner personas, plus a Shared "Test Bank
+       B". Each row mixes a non-secret Username with two secrets, so masking is exercised everywhere. */
     V({
       category: "lender", name: "Test Bank A", owner_label: "Daniel",
       fields: [F("Username", "daniel.p", false), F("Password", "test-pass-1", true), F("Memorable word", "bluecar", true)],
@@ -4291,9 +3395,8 @@
       updated_by: "p1", daysAgo: 160
     });
 
-    /* admin — an ordinary Shared row everyone sees, PLUS a gated one
-       (visible_to = ['owner']) so the RLS visibility gate has something to
-       test: only the owner role sees it, not admin, not adviser. */
+    /* admin — an ordinary Shared row everyone sees, PLUS a gated one (visible_to = ['owner']) so the RLS
+       visibility gate has something to test: only the owner role sees it, not admin, not adviser. */
     V({
       category: "admin", name: "Test Admin System", owner_label: "Shared",
       fields: [F("Username", "admin@nexmoney.test", false), F("Password", "test-pass-6", true)],
@@ -4318,9 +3421,8 @@
       updated_by: "p1", daysAgo: 120
     });
 
-    /* other — a blank secret value: something the team knows it needs to
-       fill in but has not yet, exercising the "nothing behind the mask yet"
-       state. Also carries a note. */
+    /* other — a blank secret value: something the team knows it needs to fill in but has not yet, exercising
+       the "nothing behind the mask yet" state. Also carries a note. */
     V({
       category: "other", name: "Test Office WiFi", owner_label: "Shared",
       fields: [F("Network", "NexMoney-Guest", false), F("Password", "", true)],
@@ -4390,10 +3492,8 @@
       });
       peterCase.referral_requested_at = iso(shift(-35));   // the corroborating stamp, as prod leaves it
     }
-    /* 1b · Bruce Lindquist carries the STAMP ALONE — referral_requested_at set, no email_queue
-       row behind it (the queue was purged, or the ask predates the queue's retention). Either
-       record disqualifies on its own under B1's membership rule, so Bruce pins the stamp-only
-       leg the way Peter pins the queue-row leg. */
+    /* 1b · Bruce Lindquist carries the STAMP ALONE — referral_requested_at set, no email_queue row behind it.
+       Either record disqualifies on its own under B1's membership rule… */
     var bruce = findClient("Bruce", "Lindquist");
     var bruceCase = bruce ? DB.cases.filter(function (c) {
       return c.client_id === bruce.id && c.stage === "completed" && Number(c.nps_score) >= 9;
@@ -4417,10 +3517,8 @@
         submitted_at: iso(shift(-480)), offer_issued_date: dateOnly(shift(-455)),
         completed_at: iso(shift(-425)),
         review_requested_at: iso(shift(-410)),
-        /* B1's no-email promoter: Yvonne scored a 9 (on paper, filed by hand — she has no
-           email, so no NPS email ever reached her; the column does not care how the number
-           arrived). Score dated by review_requested_at's fallback 14 months back — outside the
-           advocacy panel's 6-month series, so the monthly bars don't move. */
+        /* B1's no-email promoter: Yvonne scored a 9. Score dated by review_requested_at's fallback 14 months
+           back — outside the advocacy panel's 6-month series, so the monthly bars don't move. */
         nps_score: 9,
         rate_reminder_queued_at: iso(shift(-30)), reminder_guarded: true,
         protection_status: "declined", gi_status: "declined",
@@ -4474,10 +3572,8 @@
     DB.case_notes.slice(0, 20).forEach(function (n) { auditRow("case_notes", "insert", n, clone(n), n.created_at, n.created_by); });
     DB.appointments.slice(0, 10).forEach(function (ap) { auditRow("appointments", "insert", ap, clone(ap), ap.created_at, ap.staff_id); });
     DB.introducers.forEach(function (i2) { auditRow("introducers", "insert", i2, clone(i2), i2.created_at, "p4"); });
-    /* R14 — every vault entry gets its creation audited too, exactly like
-       every other AUDITED table above; this also exercises maskChanges()'s
-       secret-field masking at fixture-load time, not just from a live test
-       write. */
+    /* R14: every vault entry gets its creation audited too, exactly like every other AUDITED table above;
+       this also exercises maskChanges()'s secret-field masking at fixture-load time… */
     DB.vault_entries.forEach(function (v) { auditRow("vault_entries", "insert", v, clone(v), v.created_at, v.updated_by || "p1"); });
     /* Owner-only rows: settings + profiles (withheld from everyone else on SELECT) */
     ["company_name", "monthly_fee_target", "google_review_link"].forEach(function (key, i) {
@@ -4581,17 +3677,11 @@
     var today = TODAY;
     var nowMs = NOW.getTime();
     var GBP = function (n) { return "£" + Math.round(n).toLocaleString("en-GB"); };
-    /* R65 — production prints these with to_char(… AT TIME ZONE 'Europe/London', 'DD Mon YYYY')
-       and 'DD Mon HH24:MI'. Both are zero-padded on the day and 24-hour on the clock, which is
-       what to_char does and what fmtD() in app.js (day:"numeric") does NOT — so they are built
-       here rather than left to the app, exactly like every other word run_watchtower composes.
-       A date-only column is read at midday UTC so the London calendar day can never slide across
-       a midnight the way `new Date("2026-08-26")` at 00:00Z does under BST. */
+    /* R65: production prints these with to_char(… AT TIME ZONE 'Europe/London', 'DD Mon YYYY') and 'DD Mon
+       HH24:MI'. Both are zero-padded on the day and 24-hour on the clock… */
     var LDN = "Europe/London";
-    /* to_char's 'Mon' is a fixed three-letter English abbreviation. Intl's month:"short" is NOT
-       (en-GB renders September as "Sept", en-AU as "Sep."), so the month name comes from this
-       table and only the CALENDAR FIELDS come from Intl — via en-CA, which is ISO-ordered and
-       therefore trivially parseable. */
+    /* to_char's 'Mon' is a fixed three-letter English abbreviation. Intl's month:"short" is NOT, so the month
+       name comes from this table and only the CALENDAR FIELDS come from Intl — via en-CA… */
     var WT_MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
     var londonParts = function (t) {
       var ymd = new Intl.DateTimeFormat("en-CA", { timeZone: LDN, year: "numeric", month: "2-digit", day: "2-digit" }).format(t).split("-");
@@ -4691,13 +3781,8 @@
       });
     });
 
-    /* 5 · email_unanswered — case_emails, triage_status 'new', received 24h+ ago.
-       R65 — ONE ROW PER CLIENT, not per message. The waiting set is partitioned on client_id:
-       every message that HAS one is folded into that client's single alert (count, latest
-       subject, latest message's case_id); a message with NO client_id has nothing to fold into
-       and keeps the original per-email dedupe key, so an unmatched inbox row is still visible
-       and still individually dismissible. The alert's case_id is the LATEST message's case —
-       across two cases the newest conversation is the one Open should land on. */
+    /* 5 · email_unanswered — case_emails, triage_status 'new', received 24h+ ago. R65 — ONE ROW PER CLIENT, not per
+       message. … */
     var waiting = DB.case_emails.filter(function (e) {
       if (e.triage_status !== "new") return false;
       return (nowMs - new Date(e.received_at).getTime()) / DAY > 1;
@@ -4763,9 +3848,8 @@
       });
     });
 
-    /* 8 · retention_gap — AGGREGATE, single row, only when count > 0: cases
-       with a rate ending inside 90 days, no reminder queued, no retention
-       successor already started, not lost. */
+    /* 8 · retention_gap — AGGREGATE, single row, only when count > 0: cases with a rate ending inside 90
+       days, no reminder queued, no retention successor already started, not lost. */
     var retentionGapCases = DB.cases.filter(function (c) {
       if (c.stage === "not_proceeding" || !c.rate_end_date || c.rate_reminder_queued_at || c.retention_source_case_id) return false;
       var days = (new Date(c.rate_end_date + "T12:00:00").getTime() - new Date(today + "T12:00:00").getTime()) / DAY;
@@ -4829,15 +3913,8 @@
       });
     });
 
-    /* 11 · offer_before_completion (R65) — a case at 'offer' or 'exchange' that has BOTH an
-       offer expiry and an expected completion date recorded, where the OFFER DIES FIRST.
-       Nothing on the case screen compares those two fields, so the mismatch only surfaces in
-       the week the offer expires — by which point re-issuing it is a rush job on the lender's
-       timetable, not ours. CRITICAL once the offer itself is inside 30 days (the point at which
-       there is no longer time to re-broke it calmly), a WARNING before that: the same date pair,
-       but one is a fire and the other is a diary note.
-       Exchange is included on purpose — an exchanged case still completes against the same
-       offer, and that is exactly when a slipped completion date starts to bite. */
+    /* 11 · offer_before_completion (R65) — a case at 'offer' or 'exchange' that has BOTH an offer expiry and
+       an expected completion date recorded, where the OFFER DIES FIRST. */
     DB.cases.forEach(function (c) {
       if (c.stage !== "offer" && c.stage !== "exchange") return;
       if (!c.offer_expiry_date || !c.expected_completion_date) return;
@@ -4890,12 +3967,8 @@
     var byKey = {};
     DB.watch_alerts.forEach(function (a) { byKey[a.dedupe_key] = a; });
     var resolved = 0, added = 0;
-    /* auto-resolve sweep — any open alert not named by THIS run's rule set
-       (i.e. whose last_seen_at was not just refreshed to "now" below) closes.
-       Equivalent to comparing last_seen_at against the run start, since every
-       alert this run DOES want gets last_seen_at stamped to now() a few
-       lines down — so anything left with a stale last_seen_at after this
-       loop is exactly "not named this run". */
+    /* auto-resolve sweep — any open alert not named by THIS run's rule set closes. Equivalent to comparing
+       last_seen_at against the run start, since every alert this run DOES want gets last_seen_at stamped to… */
     DB.watch_alerts.forEach(function (a) {
       if (a.resolved_at) return;
       if (!wantedKeys[a.dedupe_key]) { a.resolved_at = iso(NOW); resolved++; }
@@ -4930,11 +4003,8 @@
   runWatchtower();
   /* backdate the seeded alerts so "created" reads sensibly on the drawer */
   DB.watch_alerts.forEach(function (a, i) { a.created_at = iso(shift(-(i % 9) - 1)); });
-  /* M3 — one alert already snoozed, so the "N snoozed" header/toggle has a row
-     on first load. Invisible to the pre-round-5 app, which ignores the columns.
-     R13 — re-pointed from the retired "protection_gap" rule to
-     "protection_quote_stale", production's closest analogue (also an
-     info-adjacent, non-urgent protection-conversation state). */
+  /* M3 — one alert already snoozed, so the "N snoozed" header/toggle has a row on first load. Invisible to
+     the pre-round-5 app, which ignores the columns. R13 — re-pointed from the retired "protection_gap" rule… */
   (function seedSnooze() {
     var a = DB.watch_alerts.filter(function (x) { return x.rule === "protection_quote_stale" && !x.resolved_at; })[0]
       || DB.watch_alerts.filter(function (x) { return x.severity !== "crit" && !x.resolved_at; })[0];
@@ -4944,9 +4014,7 @@
     a.snoozed_by = "p2";
   })();
 
-  /* =========================================================================
-     v_alerts — a computed view over cases + clients
-     ======================================================================= */
+  /* v_alerts — a computed view over cases + clients */
   function vAlerts() {
     return DB.cases.filter(function (c) { return !!c.rate_end_date; }).map(function (c) {
       var cl = DB.clients.filter(function (x) { return x.id === c.client_id; })[0] || {};
@@ -4966,18 +4034,12 @@
         fee_status: c.fee_status,
         broker_fee: c.broker_fee,
         rate_reminder_queued_at: c.rate_reminder_queued_at,
-        /* R70 — the guard rides on the view, exactly as production exposes it: the
-           Retention feed reads v_alerts and nothing else, so a badge that has to
-           tell "imported guard" from "we actually wrote to them" needs it here. */
+        /* R70: the guard rides on the view, exactly as production exposes it: the Retention feed reads
+           v_alerts and nothing else… */
         reminder_guarded: !!c.reminder_guarded,
-        /* R82 — RECONCILED WITH PRODUCTION's v_alerts (db/columns.json).
-           `assigned_to` is GONE: production's view does not expose it, and this mock
-           did — so a caller reading it off an alert row would have worked here and been
-           undefined in production. Nothing reads it off an alert (app.js takes
-           assigned_to from the widened cases read that every v_alerts consumer is
-           paired with — "R7-5", app.js:9059; no suite touches it either), so removing
-           it costs nothing and closes a real fidelity gap.
-           The three below production DOES expose and this mock did not. */
+        /* R82: RECONCILED WITH PRODUCTION's v_alerts (db/columns.json). `assigned_to` is GONE: production's view
+           does not expose it, and this mock did — so a caller reading it off an alert row would have worked here
+           and been undefined in production. … */
         client_email: cl.email || null,
         product_name: c.product_name,
         review_requested_at: c.review_requested_at
@@ -5036,58 +4098,31 @@
      per-call allowlist: fix the caller, or fix the registry. That rule is in
      HARNESS.md § R81 · B.
      ======================================================================= */
-  /* ======================================================================
-     R82 — RECONCILED AGAINST PRODUCTION, and no longer taken on trust.
-
-     R81 built this registry by hand and, being self-consistent, it certified a
-     falsehood: it concluded `sms_queue.body` did not exist and DELETED the column
-     from two suites as a ghost. Production has had `sms_queue.body` all along.
-     A hand-maintained mirror of a schema nobody versioned will drift, and strict
-     mode makes drift authoritative rather than harmless.
-
-     So production is now SNAPSHOTTED in `db/columns.json` and this registry is
-     checked against it by `node db/check-schema-drift.js`. Its first run found 24
-     disagreements, one of which was a live production bug (see clients.updated_at
-     below). Every list here is now reconciled; run the checker after any migration.
-     ====================================================================== */
   var STRICT_EXTRA_COLUMNS = {
-    /* real prod columns no fixture object declares (app.js is the source of
-       truth: cs-prot "mark quoted" writes both in one .update, r12a §D9).
-       R82 — anniversary_sent_at / nps_score_at added from the production snapshot. */
+    /* real prod columns no fixture object declares. R82 — anniversary_sent_at / nps_score_at added from the
+       production snapshot. */
     cases: ["protection_quoted_at", "protection_quoted_by", "anniversary_sent_at", "nps_score_at"],
-    /* prod column the fixtures never seed: run_watchtower's client_waiting rule
-       (mirrored from production's ten) reads e.from_name || e.from_email, and
-       r65_watchtower seeds rows with it. No fixture row carries one — senderOf's
-       from_email fallback is the state the base book is in.
-       R82 — the Outlook-sync columns (R67) are real in prod and no fixture carries them. */
+    /* prod column the fixtures never seed: run_watchtower's client_waiting rule reads e.from_name ||
+       e.from_email, and r65_watchtower seeds rows with it. No fixture row carries one… */
     case_emails: ["from_name", "direction", "graph_id", "mailbox", "web_link"],
-    /* R82 — clients.updated_at is REAL IN PRODUCTION AS OF THIS ROUND, and this is
-       the entry that earned the drift checker its keep. app.js has read it since R18
-       to baseline the client modal's stale-write guard (refreshOpenedClientStamp) and
-       filtered on it when saving (.eq("updated_at", openedClientUpdatedAt)) — mirroring
-       the case guard exactly. The column was never created: production returned 42703,
-       so that guard could never work, and the battery was green over it for many rounds
-       because THIS MOCK HAD THE COLUMN AND PRODUCTION DID NOT. R82 added the column and
-       a touch_client() BEFORE UPDATE trigger, mirroring cases/touch_case. referral_code
-       is a long-standing prod column no fixture carries. */
+    /* R82: clients.updated_at is REAL IN PRODUCTION AS OF THIS ROUND, and this is the entry that earned the drift
+       checker its keep. app.js has read it since R18 to baseline the client modal's stale-write guard
+       (refreshOpenedClientStamp) and filtered on it when saving (.eq("updated_at", openedClientUpdatedAt)) —
+       mirroring the case guard exactly. The column was never created: production returned 42703, so that guard
+       could never work, and the battery was green over it for many rounds because THIS MOCK HAD THE COLUMN AND
+       PRODUCTION DID NOT. … */
     clients: ["referral_code"],
-    /* R82 — real prod columns no fixture row carries. sms_queue's four are the
-       R81 correction: `body` IS a production column (R81 deleted it from
-       tests/r78_hands.js as a ghost; R82 restored it). */
+    /* R82: real prod columns no fixture row carries. sms_queue's four are the R81 correction: `body` IS a
+       production column. */
     sms_queue: ["body", "claimed_at", "provider_id", "scheduled_for"],
     leads: ["acknowledged_at", "source_ip", "source_page"],
     introducers: ["phone"],
     fact_finds: ["updated_at"],
-    /* R66 · M8 columns — applyInsertDefaults nulls all three on every APP
-       insert (the standing parity rule), but the load-time fixture rows are
-       pushed raw and none of them carries the keys, so the row-union alone
-       would miss real prod columns the app and the suites write. */
+    /* R66 · M8 columns — applyInsertDefaults nulls all three on every APP insert (the standing parity rule),
+       but the load-time fixture rows are pushed raw and none of them carries the keys… */
     email_queue: ["subject", "body_html", "attachment_path",
-      /* R81 — lead_id is REAL in production (the AFTER INSERT trigger on
-         `leads` queues a lead_ack carrying lead_id and NO client_id, and the
-         Emails page reads e.lead_id to name/open the enquiry — see app.js
-         "R7-5 — THE LEAD ACKNOWLEDGEMENTS"). This mock has no leads trigger,
-         so no fixture row ever carried the key; r79_send seeds one by hand. */
+      /* R81: lead_id is REAL in production. This mock has no leads trigger, so no fixture row ever carried
+         the key; r79_send seeds one by hand. */
       "lead_id",
       /* R82 — real in prod (the edge function claims a row with it); no fixture carries it. */
       "claimed_at"],
@@ -5096,9 +4131,8 @@
     duplicate_dismissals: ["id", "kind", "a_id", "b_id", "reason", "dismissed_by", "created_at"],
     error_events: ["id", "created_at", "error_type", "location", "page", "role"],
     saved_views: ["user_id", "scope", "name", "filters", "updated_at"],
-    /* R82 — "created_at" removed: production's proc_rates has no such column
-       (the table stamps uploaded_at, which is what reports-money.js reads and writes).
-       The mock was permitting a column prod would 42703 on. Nothing in the app used it. */
+    /* R82: "created_at" removed: production's proc_rates has no such column. The mock was permitting a column
+       prod would 42703 on. Nothing in the app used it. */
     proc_rates: ["id", "lender", "product", "lg_code", "rate", "notes", "effective_label", "uploaded_at"],
     commission_statements: ["id", "ref", "statement_label", "statement_date", "filename",
       "gross_total", "net_total", "line_count", "created_by", "created_at"],
@@ -5126,11 +4160,8 @@
     COLUMN_REGISTRY_CACHE[table] = set;
     return set;
   }
-  /* Snapshot the whole registry EAGERLY, once, at load time. The fixtures
-     above are the mock's schema knowledge, and a test that wipes a table
-     must not be able to wipe the schema with it (r20 deletes every case,
-     which cascades fact_finds to zero rows — a lazy registry computed after
-     that wipe would have no fact_finds columns at all). */
+  /* Snapshot the whole registry EAGERLY, once, at load time. The fixtures above are the mock's schema
+     knowledge, and a test that wipes a table must not be able to wipe the schema with it. */
   Object.keys(DB).forEach(function (t) { columnRegistry(t); });
   columnRegistry("v_alerts");
   function strictEnabled() {
@@ -5202,12 +4233,8 @@
       for (var j = 0; j < keys.length; j++) assertColumnFlat(table, keys[j]);
     }
   }
-  /* rpc ARG NAMES per known RPC — production resolves a function by its named
-     args, so rpc("get_briefing", {p_scop: "all"}) is PGRST202 there, not a
-     briefing that quietly ignored the scope. Args mirror the deployed
-     signatures (reassign_holdings is (p_from, p_to) — the from_id/to_id
-     fallback the mock's own body tolerates is NOT a prod signature and is
-     deliberately not registered). */
+  /* rpc ARG NAMES per known RPC — production resolves a function by its named args, so rpc("get_briefing",
+     {p_scop: "all"}) is PGRST202 there, not a briefing that quietly ignored the scope. */
   var RPC_ARGS = {
     my_role: [], reassign_holdings: ["p_from", "p_to"], has_bank_details: [],
     get_briefing: ["p_scope"], get_reports: [], get_data_quality: [],
@@ -5232,42 +4259,15 @@
     });
   }
 
-  /* =========================================================================
-     QUERY BUILDER
-     ======================================================================= */
+  /* QUERY BUILDER */
   function sourceRows(table) {
     if (VIEWS[table]) return VIEWS[table]();
     if (!DB[table]) return [];
     return DB[table];
   }
 
-  /* R69-HF1 — POSTGREST'S max-rows CEILING, ENFORCED HERE.
-
-     Production finding (27 Aug, Daniel's browser): Supabase runs PostgREST with `max-rows = 1000`.
-     That is a HARD SERVER ceiling. `.limit(20000)` does not raise it — a `limit` larger than
-     max-rows is simply clamped, so the read comes back holding 1,000 rows and NOTHING says so:
-       db.from('clients').select('id',{count:'exact'}).order('last_name').limit(20000)
-         → data.length 1000, count 1161      (cases: 1000 of 2015)
-       db.from('clients').select('id').order('last_name').range(1000,1999)
-         → 161 rows                          (so PAGING past the ceiling is how you get the rest)
-     Until now this mock happily returned 2,500 rows to a `.limit(20000)`, which is precisely why
-     no suite — not even the 2,500-row scale suite — ever caught the truncation the whole book has
-     been suffering since the back-book import. The mock now behaves the way the server does:
-
-       · `.range(a, b)`  → at most MOCK_MAX_ROWS rows starting at `a` (the requested window is
-                           clamped to the ceiling, the OFFSET is honoured in full — that is exactly
-                           how paging past 1,000 works in production).
-       · `.limit(n)`     → min(n, MOCK_MAX_ROWS).
-       · no limit/range  → the first MOCK_MAX_ROWS rows.
-       · `count:'exact'` → still the TRUE total (PostgREST reports the real count in content-range
-                           regardless of how few rows the window returned; that asymmetry is the
-                           only signal a truncated caller ever gets).
-
-     The ceiling applies to SELECTs only, never to an insert/update/delete's `returning` rows —
-     PostgREST's max-rows governs read windows, and a bulk insert's representation comes back
-     whole (which the scale suites rely on to collect the ids they just minted).
-
-     setMaxRows(0) removes the ceiling entirely, for a test that wants the old unbounded mock. */
+  /* R69-HF1 — POSTGREST'S max-rows CEILING, ENFORCED HERE. Production finding (27 Aug, Daniel's browser):
+     Supabase runs PostgREST with `max-rows = 1000`. That is a HARD SERVER ceiling. */
   var MOCK_MAX_ROWS = 1000;
 
   function Builder(table) {
@@ -5363,11 +4363,8 @@
     var rows = sourceRows(table).filter(function (row) {
       return preds.every(function (p) { return p(row); });
     });
-    /* R43 — saved_views' RLS is per-user on SELECT, UPDATE and DELETE alike, so the scoping goes
-       HERE rather than in readFilter() (which only redacts the select path). It matters: the app
-       deletes with .match({scope,name}) and nothing else, and in production that statement can
-       only ever reach the caller's own row. Filtering here means it deletes exactly one person's
-       "Unassigned leads", the same way, instead of every persona's. */
+    /* R43: saved_views' RLS is per-user on SELECT, UPDATE and DELETE alike, so the scoping goes HERE rather
+       than in readFilter(). It matters: the app deletes with .match({scope,name}) and nothing else… */
     if (table === "saved_views") {
       rows = rows.filter(function (r) { return r.user_id === CURRENT_UID; });
     }
@@ -5414,9 +4411,8 @@
     var rows = readFilter(this._table, this._matching());
     var total = rows.length;
     rows = this._sort(rows);
-    /* R69-HF1 — the server's max-rows ceiling (see MOCK_MAX_ROWS above). Applied AFTER the sort,
-       exactly where PostgREST applies it: the window is chosen from the ordered set, and `total`
-       (captured before any of this) is what count:'exact' keeps reporting. */
+    /* R69-HF1 — the server's max-rows ceiling (see MOCK_MAX_ROWS above). Applied AFTER the sort, exactly
+       where PostgREST applies it: the window is chosen from the ordered set… */
     var ceiling = MOCK_MAX_ROWS > 0 ? MOCK_MAX_ROWS : Infinity;
     if (this._range) {
       var rFrom = this._range[0], rTo = this._range[1];
@@ -5429,13 +4425,11 @@
     return this._finish(out, total);
   };
 
-  /* R43 — which columns an upsert resolves its conflict against. PostgREST uses the table's PRIMARY
-     KEY unless the caller names an `onConflict` list, and until this round every table in this mock
-     had a single-column key, so `raw[pk]` was the whole story. saved_views' key is the triple
-     (user_id, scope, name), and its user_id arrives DEFAULTED rather than sent — so the probe row
-     must carry that default too, or the second upsert of the same view would land as a duplicate
-     row instead of an update. Deliberately NOT applyInsertDefaults(): that one has side effects
-     (error_events' serial), and this is only ever a lookup. */
+  /* R43: which columns an upsert resolves its conflict against. PostgREST uses the table's PRIMARY KEY unless the
+     caller names an `onConflict` list, and until this round every table in this mock had a single-column key, so
+     `raw[pk]` was the whole story. saved_views' key is the triple (user_id, scope, name), and its user_id arrives
+     DEFAULTED rather than sent — so the probe row must carry that default too, or the second upsert of the same
+     view would land as a duplicate row instead of an update. … */
   function conflictCols(table, opts) {
     var oc = opts && opts.onConflict;
     if (oc) return String(oc).split(",").map(function (s) { return s.trim(); }).filter(Boolean);
@@ -5460,10 +4454,6 @@
         existing = DB[table].filter(function (r) {
           return keys.every(function (k) { return probe[k] != null && r[k] === probe[k]; });
         })[0] || null;
-      }
-      var badCol = undefinedColumn(table, raw);
-      if (badCol) {
-        return { data: null, error: pgError('column "' + badCol + '" of relation "' + table + '" does not exist', "42703"), count: null, status: 400, statusText: "Bad Request" };
       }
       var err = writePolicy(table, existing ? "update" : "insert", raw, existing ? [existing] : []);
       if (err) return { data: null, error: err, count: null, status: 403, statusText: "Forbidden" };
@@ -5507,10 +4497,6 @@
   BP._runUpdate = function () {
     var table = this._table;
     var targets = this._matching();
-    var badCol = undefinedColumn(table, this._payload);
-    if (badCol) {
-      return { data: null, error: pgError('column "' + badCol + '" of relation "' + table + '" does not exist', "42703"), count: null, status: 400, statusText: "Bad Request" };
-    }
     var err = writePolicy(table, "update", this._payload, targets);
     if (err) return { data: null, error: err, count: null, status: 403, statusText: "Forbidden" };
     var patch = this._payload || {};
@@ -5567,9 +4553,8 @@
         });
       }
       if (table === "cases") cascadeCase(row.id);
-      /* R44 — commission_lines.statement_id is ON DELETE CASCADE. The import's
-         rollback depends on it: when a line-insert fails part way the app
-         deletes the statement row and expects whatever landed to go with it. */
+      /* R44: commission_lines.statement_id is ON DELETE CASCADE. The import's rollback depends on it: when a
+         line-insert fails part way the app deletes the statement row and expects whatever landed to go with… */
       if (table === "commission_statements") {
         DB.commission_lines = DB.commission_lines.filter(function (l) { return String(l.statement_id) !== String(row.id); });
       }
@@ -5584,9 +4569,8 @@
     ["case_tasks", "case_notes", "case_events", "email_queue", "sms_queue", "case_emails", "fact_finds", "watch_alerts", "appointments"].forEach(function (t) {
       DB[t] = DB[t].filter(function (r) { return r.case_id !== caseId; });
     });
-    /* R44 — commission_lines.matched_case_id is ON DELETE SET NULL, not cascade:
-       a deleted case must not take the network's record of the payment with it.
-       The line survives, unmatched, which is the honest state. */
+    /* R44: commission_lines.matched_case_id is ON DELETE SET NULL, not cascade: a deleted case must not take
+       the network's record of the payment with it. The line survives, unmatched, which is the honest state. */
     DB.commission_lines.forEach(function (l) {
       if (String(l.matched_case_id) === String(caseId)) {
         l.matched_case_id = null;
@@ -5595,12 +4579,8 @@
     });
   }
 
-  /* R85 · A4 — `window.__mock.failNextSelect(table[, err])`: the NEXT select on `table` answers
-     with a Postgres error ONCE (default: a statement timeout, 57014), then the table reads
-     normally again. It exists for the book's failure-honesty contract — an incremental sync that
-     fails must serve the OLD snapshot and log, never blank the page — which has no other way in
-     (the mock never fails a read on its own). Writes are untouched; readAll's per-page await
-     means exactly one page of one read fails. */
+  /* R85 · A4: `window.__mock.failNextSelect(table[, err])`: the NEXT select on `table` answers with a
+     Postgres error ONCE, then the table reads normally again. */
   var FAIL_NEXT_SELECT = {};
   BP._run = function () {
     var self = this;
@@ -5615,11 +4595,10 @@
           /* R30 feature-gate — a DB without the table answers every op with 42P01. */
           res = { data: null, error: { message: 'relation "error_events" does not exist', code: "42P01", details: null, hint: null }, count: null, status: 404, statusText: "Not Found" };
         } else if (self._table === "saved_views" && !savedViewsSupported) {
-          /* R43 feature-gate — the un-migrated deployment the app's localStorage fallback exists
-             for. Every op, not just the read: the fallback has to hold for a save and a delete
-             made in the same session as the failed read. */
+          /* R43 feature-gate — the un-migrated deployment the app's localStorage fallback exists for. Every
+             op, not just the read: the fallback has to hold for a save and a delete made in the same… */
           res = { data: null, error: pgError('relation "public.saved_views" does not exist', "42P01"), count: null, status: 404, statusText: "Not Found" };
-        } else if ((!DB[self._table] && !VIEWS[self._table]) || tableIsMissing(self._table)) {
+        } else if (!DB[self._table] && !VIEWS[self._table]) {
           res = { data: null, error: pgError('relation "public.' + self._table + '" does not exist', "42P01"), count: null, status: 404, statusText: "Not Found" };
         } else if (self._op === "insert") res = self._runInsert(false);
         else if (self._op === "upsert") res = self._runInsert(true);
@@ -5637,9 +4616,7 @@
   BP["catch"] = function (fn) { return this._run()["catch"](fn); };
   BP["finally"] = function (fn) { return this._run()["finally"](fn); };
 
-  /* =========================================================================
-     RPCs — all computed over the fixtures above
-     ======================================================================= */
+  /* RPCs — all computed over the fixtures above */
   function clientName(id) {
     var c = DB.clients.filter(function (x) { return x.id === id; })[0];
     return c ? ([c.first_name, c.last_name].filter(Boolean).join(" ") || "(no name)") : "(unknown)";
@@ -5655,12 +4632,8 @@
     return !!(g("bank_account_name") && g("bank_sort_code") && g("bank_account_number"));
   }
 
-  /* r12b — mark_tour_seen(). SECURITY DEFINER in production, granted to
-     authenticated: it may only ever touch the CALLING persona's own profiles
-     row (never one named by an argument — it takes none), and only sets
-     tour_seen_at the first time. A second call with it already set is a
-     no-op, not a re-stamp — the first-run tour records the first run, not the
-     most recent one. Returns void, exactly like the real function. */
+  /* r12b — mark_tour_seen(). SECURITY DEFINER in production, granted to authenticated: it may only ever touch
+     the CALLING persona's own profiles row, and only sets tour_seen_at the first time. */
   function rpc_mark_tour_seen() {
     if (!sessionOk()) return null;   /* R86 — db/r86/02: `… and public.session_ok()` in the UPDATE's where — a no-op, not an error */
     var mine = DB.profiles.filter(function (p) { return p.id === CURRENT_UID; })[0];
@@ -5716,24 +4689,8 @@
       });
     });
 
-    /* R43 · T1 — RATE ALERTS AND THE CASE THAT IS ALREADY THE ANSWER TO THEM.
-       Production's rate_urgent block gained two rules this round (the reasoning is written out in
-       full above app.js's retentionSuccessorSets — R35 §4; this is the same question asked of the
-       briefing rather than of the feed, and it must answer the same way or the drawer and the
-       Today briefing disagree about the same client):
-         1. A SUCCESSOR case is silent while it is live. Starting a retention case copies the
-            source case's rate_end_date onto the new one, so the successor is itself a case with a
-            rate ending imminently — and nagging about it is nagging about the thing that is
-            already being done. Once it completes it is an ordinary book case again and its own
-            rate end alerts normally.
-         2. A SOURCE case is silent while it HAS a live successor, for the same reason from the
-            other end: the conversation is open, on a case, with an adviser.
-       Prod: `(c.retention_source_case_id is null or c.stage = 'completed')` and `not exists (…
-       rc.retention_source_case_id = c.id and rc.stage not in ('completed','not_proceeding'))`.
-       A successor that has completed or fallen through is handling nothing and suppresses nothing.
-       Also mirrored here: `stage <> 'not_proceeding'`. The mock never had it — a case the firm has
-       lost was still being chased about its rate end in the briefing, which production has never
-       done. */
+    /* R43 · T1: RATE ALERTS AND THE CASE THAT IS ALREADY THE ANSWER TO THEM. Production's rate_urgent block
+       gained two rules this round: 1. A SUCCESSOR case is silent while it is live. */
     var liveSuccessorSourceIds = {};
     DB.cases.forEach(function (c) {
       if (!c.retention_source_case_id) return;
@@ -5787,11 +4744,10 @@
   function rpc_get_reports() {
     if (!isAdminOrOwner()) return {};   /* R86 — prod's owner/admin guard (+ session_ok()) returns '{}'::jsonb */
     var yr = NOW.getFullYear();
-    /* M5 — fees_banked_ytd keys on the per-type broker cash date where the
-       migration has landed, falling back to the legacy single date. Every other
-       branch (and the role guard) is unchanged. */
+    /* M5 — fees_banked_ytd keys on the per-type broker cash date where the migration has landed, falling back
+       to the legacy single date. Every other branch (and the role guard) is unchanged. */
     var cashDate = function (c) {
-      return (MIGRATIONS.m2 && MIGRATIONS.m5 && c.broker_fee_paid_at) || c.fee_paid_at || null;
+      return c.broker_fee_paid_at || c.fee_paid_at || null;
     };
     var advisers = DB.profiles.filter(function (p) { return ["owner", "admin", "adviser", "staff"].indexOf(p.role) >= 0; }).map(function (p) {
       return {
@@ -5833,11 +4789,8 @@
       missing_phone_count: DB.clients.filter(function (c) { return !c.phone; }).length,
       live_unassigned: liveUnassigned,
       completed_missing_fee: noFee,
-      /* R45 — full parity with prod get_data_quality: tracker/variable deals have no fixed end;
-         a retention successor inherits its source's date question; a record with no loan and no
-         mortgage account number is not a mortgage; and a completed deal SUPERSEDED by a newer
-         completed deal on the same property (same client) has had its rate-end cleared on
-         purpose — the back-book import writes exactly that shape. */
+      /* R45: full parity with prod get_data_quality: tracker/variable deals have no fixed end; a retention
+         successor inherits its source's date question… */
       completed_missing_rate_end: DB.cases.filter(function (c) {
         if (c.stage !== "completed" || c.rate_end_date) return false;
         var rt = String(c.rate_type || "");
@@ -5845,9 +4798,8 @@
         if (c.retention_source_case_id) return false;
         if (c.loan_amount == null && !c.mortgage_account_number) return false;
         var key = String(c.property_address || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-        /* Prod's `n.completed_at > c.completed_at` is NULL (not true) when c has no date — an
-           undated completion is never treated as superseded. Guard it, or "" string-compares as
-           older than everything. */
+        /* Prod's `n.completed_at > c.completed_at` is NULL (not true) when c has no date — an undated
+           completion is never treated as superseded. Guard it, or "" string-compares as older than… */
         if (key && c.completed_at && DB.cases.some(function (n) {
           return n.id !== c.id && n.client_id === c.client_id && n.stage === "completed" &&
             String(n.property_address || "").toLowerCase().replace(/[^a-z0-9]/g, "") === key &&
@@ -5861,31 +4813,8 @@
     };
   }
 
-  /* =========================================================================
-     R80 · A1 — get_protection_pipeline mirrors the CTO's rewritten live RPC.
-
-     The live function used to apply `limit 250` with NO order — an arbitrary
-     250 of the book's 1,531 protection candidates. It now returns the BEST
-     250 BY SCORE, where (pinned formula, mirrored exactly here):
-
-       score = stage urgency  (offer 100 · exchange 95 · application 90 ·
-                               DIP 80 · fact_find 70 · enquiry 50 · completed 30)
-             + warm-quote bonus (quoted +15 · referred +10 · discussed +5)
-             + loan size        (loan_amount / 50000, capped at 20)
-             + has_email        (+3)
-
-     est_commission is no longer the old status-probability weight: it is the
-     protection_avg_commission setting (default 850) × a LOAN BAND —
-     0.7 under £100k · 1.0 to £250k · 1.3 to £500k · 1.6 above. Each row keeps
-     the same shape as before PLUS the new `score` column. Candidate predicate
-     unchanged (stage ≠ not_proceeding; the four OPEN statuses — R66 · M6a's
-     `referred` widening stands). Non-admin callers are FORCED to
-     p_scope='mine' server-side (T1-5's quirk kept: 'mine' includes ownerless
-     rows; the app's client-side scope buttons still split them out).
-
-     NOTE (HARNESS "R80 · A"): mock rpcCall generally BYPASSES MOCK_MAX_ROWS —
-     that gap stands everywhere else; THIS rpc now enforces its own honest cap
-     the way the live function does, plus the companion total below. */
+  /* R80 · A1: get_protection_pipeline mirrors the CTO's rewritten live RPC. The live function used to apply
+     `limit 250` with NO order — an arbitrary 250 of the book's 1,531 protection candidates. */
   var PROT_PIPE_CAP = 250;
   var PROT_SCORE_STAGE = { offer: 100, exchange: 95, application: 90, decision_in_principle: 80, fact_find: 70, enquiry: 50, completed: 30 };
   var PROT_SCORE_WARM = { quoted: 15, referred: 10, discussed: 5 };
@@ -5934,57 +4863,15 @@
     return { total: protPipeCandidates(args).length };
   }
 
-  /* =========================================================================
-     R82 · B1 — get_staff_activity()  (LIVE in production, mirrored faithfully)
-
-       · NO arguments (registered in RPC_ARGS with an empty list, so a caller
-         that invents one gets the strict PGRST202 throw, same as every other).
-       · GUARDED to signed-in staff. Production's function returns an EMPTY
-         ARRAY to anybody else rather than raising — it is a read about the
-         firm's own logins, and an introducer or a signed-out caller simply
-         gets nothing. Mirrored exactly: `[]`, not a 42501, not a throw.
-       · Returns a JSON ARRAY, one entry per `profiles` row (the deactivated
-         colleague and the introducer login included — it reports on logins,
-         not on advisers), each
-             { id, has_signed_in: boolean, last_sign_in_at: ts|null,
-               invited_at: ts|null }
-         `last_sign_in_at` is null whenever has_signed_in is false, which is
-         the only combination auth.users can actually produce.
-       · MISSING-FUNCTION TOGGLE: registered under migration flag `m12`
-         (MIGRATION_FUNCTIONS below), so `setMigrations({m12:false})` — or the
-         pre-load seed `window.__mockMigrations = {m12:false}` — makes the call
-         answer 42883 exactly as a database without it does. That is the toggle
-         a suite pinning the UNSUPPORTED path needs.
-     ======================================================================= */
+  /* R82 · B1: get_staff_activity() (LIVE in production, mirrored faithfully) · NO arguments (registered in RPC_ARGS
+     with an empty list, so a caller that invents one gets the strict PGRST202 throw, same as every other). ·
+     GUARDED to signed-in staff. … */
   function rpc_get_staff_activity() {
     if (!isStaff()) return [];
     return DB.profiles.map(staffActivityRow);
   }
 
-  /* =========================================================================
-     R85 · A4 — get_dashboard_counts()  (db/r85/01, mirrored here from the same fixture tables)
-
-       · NO arguments. STAFF-GUARDED: a non-staff caller gets a 42501 raise (the function is
-         SECURITY DEFINER and the counts are the firm's plumbing, not an introducer's).
-       · Returns ONE jsonb object — the nine scalars the Today chrome used to fetch with nine
-         requests, each with the EXACT predicate its old read had (app.js renderOpsStrip /
-         maybeStartTour / renderWhatsNewBand / refreshHeartbeatKeys / loadWatchtower):
-           queued_emails      email_queue.status = 'queued'
-           failed_emails      email_queue.status = 'failed'
-           queued_sms         sms_queue.status = 'queued'
-           new_leads          leads.status = 'new'
-           docs_overdue_tasks case_tasks.done_at is null and title like 'Documents overdue — call %'
-           open_watch_alerts  watch_alerts.resolved_at is null   (snoozed rows INCLUDED — as the
-                              head:true count it replaces; the app's list filters snoozes itself)
-           tour_seen_at       profiles.tour_seen_at for auth.uid()  (null ⇒ first run)
-           heartbeat          { key: value } for the settings rows whose key is one of
-                              last_cron_run_at / last_full_export_at — KEY PRESENCE is the
-                              signal (a key absent from the object = absent from the table),
-                              exactly as refreshHeartbeatKeys reads the row set.
-       · MISSING-FUNCTION TOGGLE: registered under migration flag `m13` (MIGRATION_FUNCTIONS),
-         so `setMigrations({m13:false})` answers 42883 the way a database without db/r85/01
-         does — that is the toggle a suite pinning the nine-read FALLBACK path needs.
-     ======================================================================= */
+  /* R85 · A4: get_dashboard_counts() (db/r85/01, mirrored here from the same fixture tables) · NO arguments. … */
   var HEARTBEAT_SETTING_KEYS = ["last_cron_run_at", "last_full_export_at"];
   function rpc_get_dashboard_counts() {
     if (!isStaff()) throw pgErrorThrow("permission denied: get_dashboard_counts is for staff", "42501");
@@ -6044,26 +4931,16 @@
     return pairs.sort(function (a, b) { return b.score - a.score; });
   }
 
-  /* -------------------------------------------------------------------------
-     R5-M6 · reassign_holdings(p_from, p_to) -> jsonb {cases, tasks, appointments}
-
-     Production shape mirrored: SECURITY DEFINER, Owner-only via is_owner(), and
-     ONE transaction that moves exactly the three scopes openDeactivate()'s
-     pre-flight promises — LIVE cases (never completed / not_proceeding, because
-     every report that reads assigned_to is a historical record), tasks that are
-     still open, and appointments that have not happened yet. It returns a tally
-     of what it moved, which the caller prints instead of its own estimate.
-
-     "Atomic" here means: every precondition is checked and every row that will
-     move is collected BEFORE a single row is written, and the writes cannot then
-     fail part-way — so there is no half-done state for the caller to compensate
-     for. A refusal or a bad argument writes nothing at all.                     */
+  /* R5-M6 · reassign_holdings(p_from, p_to) -> jsonb {cases, tasks, appointments} Production shape mirrored:
+     SECURITY DEFINER, Owner-only via is_owner(), and ONE transaction that moves exactly the three scopes
+     openDeactivate()'s pre-flight promises — LIVE cases (never completed / not_proceeding, because every report
+     that reads assigned_to is a historical record), tasks that are still open, and appointments that have not
+     happened yet. … */
   function rpc_reassign_holdings(args) {
     var from = (args && (args.p_from || args.from_id)) || null;
     var to = (args && (args.p_to || args.to_id)) || null;
-    /* is_owner() — an Admin or an Adviser gets the same refusal production gives
-       them. Deliberately NOT worded "does not exist": app.js treats that phrase
-       as "the migration is missing" and would silently take the fallback. */
+    /* is_owner() — an Admin or an Adviser gets the same refusal production gives them. Deliberately NOT
+       worded "does not exist": app.js treats that phrase as "the migration is missing" and would silently… */
     if (!isOwner()) {
       throw pgErrorThrow('permission denied for function reassign_holdings', "42501");
     }
@@ -6115,9 +4992,8 @@
       });
   }
 
-  /* R86 · V4 — `select public.session_ok()` as the caller: the app's gate decision asks the server
-     (enterApp → sessionOkLive). Migration flag m15 models a database WITHOUT db/r86 (42883 ⇒ the
-     app behaves exactly as before R86). */
+  /* R86 · V4: `select public.session_ok()` as the caller: the app's gate decision asks the server (enterApp →
+     sessionOkLive). Migration flag m15 models a database WITHOUT db/r86. */
   function rpc_session_ok() { return sessionOk(); }
 
   var RPCS = {
@@ -6135,17 +5011,11 @@
     find_duplicate_clients: rpc_find_duplicate_clients,
     /* R82 · B1 — who has ever actually signed in (see rpc_get_staff_activity) */
     get_staff_activity: rpc_get_staff_activity,
-    /* R86 — db/r86/02: the SIGNED-IN caller branch (`auth.uid() is not null and not exists (… and
-       public.session_ok())`) answers {"error":"forbidden"}; the cron/service-role path (uid null)
-       never comes through this client, so it is untouched — as in production. */
+    /* R86: db/r86/02: the SIGNED-IN caller branch (`auth.uid() is not null and not exists (… and
+       public.session_ok())`) answers {"error":"forbidden"}… */
     run_watchtower: function () { if (!isStaff()) return { error: "forbidden" }; return runWatchtower(); },
-    /* The two SECURITY DEFINER queueing functions process-emails calls before it flushes. They
-       exist in production as public functions; exposing them here lets the Run-automation-now
-       button queue FIRST and then ask permission for the real number (G1I-Q1), instead of naming
-       the rows already in the queue and sending those plus everything the flush creates. */
-    /* R86 · V (P2) — db/r86/02: the run_watchtower-pattern guard as the FIRST statement — a
-       signed-in caller who is not staff (an enforced role at aal1 included) gets '{}'::jsonb; the
-       cron / service-role path (uid null) never comes through this client and is untouched. */
+    /* The two SECURITY DEFINER queueing functions process-emails calls before it flushes. They exist in
+       production as public functions; exposing them here lets the Run-automation-now button queue FIRST and… */
     queue_automated_emails: function () { if (!isStaff()) return {}; return queueAutomatedEmails(); },
     queue_comms_extras: function () { if (!isStaff()) return {}; return queueCommsExtras(); },
     /* r12b — first-run tour ack. See rpc_mark_tour_seen() for the guard. */
@@ -6176,9 +5046,7 @@
     });
   }
 
-  /* =========================================================================
-     AUTH
-     ======================================================================= */
+  /* AUTH */
   var authListeners = [];
   function session() {
     var p = me();
@@ -6219,9 +5087,8 @@
         return Promise.resolve({ data: { user: null, session: null }, error: { message: "Invalid login credentials", status: 400 } });
       }
       CURRENT_UID = p.id; SIGNED_OUT = false;
-      /* R86 — a password proves ONE factor: every fresh sign-in lands at aal1, as in production.
-         A persona with a verified factor then meets the challenge screen; an enforced persona
-         with none meets enrolment. (A `?as=` boot is a RESTORED session and keeps its aal.) */
+      /* R86: a password proves ONE factor: every fresh sign-in lands at aal1, as in production. A persona
+         with a verified factor then meets the challenge screen… */
       mfaOf(p.id).aal = "aal1";
       var s = session();
       authListeners.forEach(function (cb) { try { cb("SIGNED_IN", s); } catch (e) { } });
@@ -6311,33 +5178,11 @@
     refreshSession: function () { return Promise.resolve({ data: { session: session() }, error: null }); }
   };
 
-  /* =========================================================================
-     STORAGE — `offers` (offer-letter PDFs), `client-docs` (R12a·D8 / R13,
-     the checklist files a client sends back through their upload link, and
-     the case_files staff-uploaded blobs — see "R13 · case_files" below), and
-     `web` (unused by anything the mock exercises).
-     `storage.from(bucket)` below is bucket-name-agnostic by construction — it
-     was written once for `offers` and never validates the bucket string — so
-     no code change was needed to make a second/third bucket work; what WAS
-     missing was any seeded content to open. See the fixture block (search
-     "R12a·D8 — seed real storage content") for the checklist files that have
-     a real entry in `storageFiles`, so `createSignedUrl` on them exercises
-     the same path a genuine upload would have taken, not just an empty path
-     string with nothing behind it. Semantics are identical across buckets:
-     `createSignedUrl` does not check that the object exists (same looseness
-     `offers` already had — not something this pass introduces or tightens),
-     so a test asserting an open-link flow has to do it via the encoded
-     fragment URL / `storageFiles` entry, not via actually fetching it.
-     R13 · BUCKET CORRECTION — production's bucket is `client-docs`, not
-     `case-documents` as R12a shipped it here. `storage.from()` itself needed
-     no code change (it was always bucket-name-agnostic); what moved is every
-     piece of fixture content keyed into `storageFiles`, and the doc-upload
-     stub below, which now writes storage_path WITH the "client-docs/" prefix
-     — see DOC_STORAGE_BUCKET and the file banner at the top of this file.
-     ======================================================================= */
-  /* R86 · V — production's storage.objects policies are is_staff()-gated (db/r84/14), so an
-     enforced persona at aal1 (or any non-staff caller) is refused on every object call. One shape
-     for all of them: the Storage API's RLS refusal. */
+  /* STORAGE — `offers` (offer-letter PDFs), `client-docs` (R12a·D8 / R13, the checklist files a client sends back
+     through their upload link, and the case_files staff-uploaded blobs — see "R13 · case_files" below), and `web`
+     (unused by anything the mock exercises). `storage.from(bucket)` below is bucket-name-agnostic by construction —
+     it was written once for `offers` and never validates the bucket string — so no code change was needed to make a
+     second/third bucket work; what WAS missing was any seeded content to open. … */
   var STORAGE_DENIED = { statusCode: "403", error: "Unauthorized", message: "new row violates row-level security policy" };
   var storage = {
     from: function (bucket) {
@@ -6368,9 +5213,7 @@
     }
   };
 
-  /* =========================================================================
-     EDGE FUNCTIONS — window.fetch stub
-     ======================================================================= */
+  /* EDGE FUNCTIONS — window.fetch stub */
   var SUPABASE_HOST_RE = /^https:\/\/[a-z0-9]+\.supabase\.co\/functions\/v1\/([a-z0-9-]+)/i;
   function jsonResponse(body, status) {
     var text = JSON.stringify(body);
@@ -6384,24 +5227,10 @@
       clone: function () { return jsonResponse(body, status); }
     };
   }
-  /* -------------------------------------------------------------------------
-     process-emails v8 — PLAN-R5 Batch 1 + § Harness fixes 4
-
-     Three things the old two-line stub did not model, and whose absence made
-     round-4 findings unreadable:
-       1. queue_automated_emails() — production calls this SECURITY DEFINER RPC
-          on every unscoped run and it AUTO-CREATES retention successor cases.
-          R5-6's "nothing creates these" was a harness illusion, not a backend
-          gap. Mirrored here, including the real gap: a rate that has ALREADY
-          ended is never picked up (that's what the manual button is for).
-       2. queue_comms_extras() — review requests etc. Both queueing steps are
-          SKIPPED when the caller scopes the run with queue_ids, which is what
-          makes a per-case "Send reminder" stop flushing the firm's queue.
-       3. compose() — per-adviser From/Reply-To/phone/sign-off, read from
-          profiles. v7 filtered `profiles.role = 'staff'`, a pre-round-4 value
-          that matches zero rows, so every email signed off with the firm-wide
-          settings.adviser_name. Fixed here the same way v8 fixes it in prod.
-     ----------------------------------------------------------------------- */
+  /* process-emails v8 — PLAN-R5 Batch 1 + § Harness fixes 4 Three things the old two-line stub did not model, and
+     whose absence made round-4 findings unreadable: 1. queue_automated_emails() — production calls this SECURITY
+     DEFINER RPC on every unscoped run and it AUTO-CREATES retention successor cases. Mirrored here, including the
+     real gap: a rate that has ALREADY ended is never picked up (that's what the manual button is for). … */
   function setting(k, dflt) {
     var r = DB.settings.filter(function (s) { return s.key === k; })[0];
     var v = r ? String(r.value == null ? "" : r.value).trim() : "";
@@ -6414,25 +5243,15 @@
     if (!p || ["owner", "admin", "adviser", "staff"].indexOf(p.role) === -1) return null;
     return p;
   }
-  /* R6.4 MOCK PARITY (b) — how each email type names the property, mirroring the
-     templates production redeployed today.
-       "sentence" — the address belongs INSIDE the first line, because the mail is
-                    about that mortgage: "your mortgage on 63 Malvern Road…".
-       "regarding" — the mail is about something adjacent (a protection quote, a
-                    fee, a GI renewal), so a standalone "Regarding: <address>" line
-                    identifies the case without bending the opening sentence.
-     A type that is in neither list, and any case with no address at all, is left
-     WORD-FOR-WORD as it was: this feature adds a mention, it does not reword the
-     firm's existing emails. */
+  /* R6.4 MOCK PARITY (b): how each email type names the property, mirroring the templates production redeployed
+     today. "sentence" — the address belongs INSIDE the first line, because the mail is about that mortgage: "your
+     mortgage on 63 Malvern Road…". … */
   var PROP_SENTENCE_TYPES = ["rate_end_reminder", "rate_end_chase", "submitted_update", "offer_update", "completion_congrats"];
-  /* R12a·D3 — v12 adds "factfind" here: "Regarding: <property>" is the same
-     mechanism every other adjacent-to-the-mortgage mail already uses, not a
-     bespoke line of its own. */
+  /* R12a·D3: v12 adds "factfind" here: "Regarding: <property>" is the same mechanism every other
+     adjacent-to-the-mortgage mail already uses, not a bespoke line of its own. */
   var PROP_REGARDING_TYPES = ["protection_offer", "fee_request", "gi_exchange", "factfind"];
-  /* The opening line each type sends. "{M}" is the subject of the sentence: with
-     an address it becomes "your mortgage on <full address>", without one it stays
-     "your mortgage" — which is the wording every one of these emails has always
-     had, unchanged, so a case with no address reads exactly as it did before. */
+  /* The opening line each type sends. "{M}" is the subject of the sentence: with an address it becomes "your
+     mortgage on <full address>", without one it stays "your mortgage"… */
   var EMAIL_OPENING = {
     rate_end_reminder: "I'm getting in touch because the rate on {M} is coming to an end.",
     rate_end_chase: "Following up on my last message about {M} — the rate is still due to end shortly.",
@@ -6442,18 +5261,13 @@
     protection_offer: "While we were arranging your mortgage we talked about protecting the payments.",
     fee_request: "Please find below the details for our advice fee.",
     gi_exchange: "Now that you are exchanging, this is the point at which buildings insurance needs to be in place.",
-    /* R9 — the three types round 9 composes. The docs_request opening is the v10
-       wording, WORD FOR WORD: a case with no checklist must read exactly as it
-       did before this round, and only the list underneath it changes. */
+    /* R9: the three types round 9 composes. The docs_request opening is the v10 wording, WORD FOR WORD: a
+       case with no checklist must read exactly as it did before this round… */
     docs_request: "Before we can get your application moving we need a few documents from you.",
     docs_chase: "Just a quick reminder — we are still waiting on some documents before your application can move on.",
     review_reminder: "A little while ago I asked how we did. If you have a spare minute, a short review really does help us.",
-    /* R75 · B5a — the six openings v17 composes that this model never carried.
-       `review_request` is 23 of the 36 rows in the live queue and had NO wording
-       here at all, so `emailBodyLines` returned null for it and the app's preview
-       replica (app.js HOUSE_TPL_OPENING, which mirrors this list) had nothing to
-       show for the one email the administrator most wants to read before it goes.
-       Byte-identical to the app's copy — that is the whole point of the mirror. */
+    /* R75 · B5a: the six openings v17 composes that this model never carried. `review_request` is 23 of the
+       36 rows in the live queue and had NO wording here at all… */
     review_request: "Thank you for letting us look after {M}. If you have two minutes, a short review of how we did would help us more than you would think.",
     welcome: "Thank you for getting in touch — I am glad to be helping with {M}, and this is just to say hello and tell you what happens next.",
     lead_ack: "Thank you for your enquiry — it has reached us and somebody will be in touch shortly.",
@@ -6461,10 +5275,8 @@
     birthday_greeting: "Just a quick note to wish you a very happy birthday from all of us.",
     completion_anniversary: "It is a year today since {M} completed — I hope it has all settled in well."
   };
-  /* R9 — the document checklist as the email templates see it. Empty whenever
-     the migration is not there, which is what makes "checklist-aware" degrade to
-     "exactly the email we sent before" on an un-migrated database rather than to
-     an email with an empty list in it. */
+  /* R9: the document checklist as the email templates see it. Empty whenever the migration is not there,
+     which is what makes "checklist-aware" degrade to "exactly the email we sent before" on an un-migrated… */
   var DOC_TYPES = ["docs_request", "docs_chase"];
   /* R79 · A5 — v19: the four marketing-adjacent types (owner decision — opt-out honoured for ALL
      FOUR, and each carries the unsubscribe footer). This list is v19's MARKETING_TYPES, verbatim. */
@@ -6508,19 +5320,14 @@
     return "https://mock.functions.supabase.co/functions/v1/unsubscribe?c=" + cl.id + "&t=" + cl.comms_token;
   }
   function caseChecklist(caseId) {
-    if (!MIGRATIONS.m10 || !caseId) return [];
+    if (!caseId) return [];
     return DB.case_documents.filter(function (d) { return d.case_id === caseId; });
   }
   function outstandingDocs(caseId) {
     return caseChecklist(caseId).filter(function (d) { return d.status === "requested"; });
   }
-  /* ---- r9 · what the DEPLOYED doc-upload enforces on a file --------------
-     Kept beside the checklist helpers rather than inside the handler so the
-     limits are readable in one place and the test hooks below can reach them.
-     The extension list is the contract's, in the contract's order. */
-  /* R13 · BUCKET CORRECTION — the slug half of production's
-     `<caseId>/<slug>-<ts>.<ext>` storage path. Lowercased, non-alphanumeric
-     runs collapsed to one hyphen, leading/trailing hyphens trimmed. */
+  /* r9 · what the DEPLOYED doc-upload enforces on a file Kept beside the checklist helpers rather than inside
+     the handler so the limits are readable in one place and the test hooks below can reach them. */
   function slugify(s) {
     return String(s == null ? "" : s).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "file";
   }
@@ -6529,9 +5336,8 @@
   var DOC_UPLOAD_RATE_CAP = 20;          /* uploads per link per rolling minute */
   var DOC_UPLOAD_HITS = {};              /* token -> [timestamps] */
   var DOC_UPLOAD_FAIL_STORAGE = false;   /* armed by __mock.failDocStorageOnce() */
-  /* The first bytes of the file, as a plain array. Files arrive from a real
-     <input type=file> in the harness, so this is genuine content, not a
-     declared type — which is the whole point of checking it. */
+  /* The first bytes of the file, as a plain array. Files arrive from a real <input type=file> in the harness,
+     so this is genuine content, not a declared type — which is the whole point of checking it. */
   function docUploadHead(file) {
     try {
       if (typeof file.slice === "function" && typeof Blob !== "undefined") {
@@ -6542,11 +5348,8 @@
     } catch (e) { /* fall through */ }
     return Promise.resolve([]);
   }
-  /* Magic bytes, per accepted extension. An extension is something the caller
-     chooses; these are what is actually in the file. An empty head (a runtime
-     that could not read the blob) is allowed through rather than refused —
-     failing closed here would reject every upload on an older browser over a
-     check that is a second line of defence, not the first. */
+  /* Magic bytes, per accepted extension. An extension is something the caller chooses; these are what is
+     actually in the file. An empty head is allowed through rather than refused… */
   function docBytesMatch(ext, h) {
     if (!h || !h.length) return true;
     var starts = function (sig) { return sig.every(function (b, i) { return h[i] === b; }); };
@@ -6559,12 +5362,10 @@
     }
     return true;
   }
-  /* The client's upload link. Built from site_url + the case's own token, so a
-     case whose checklist predates the token (or a database without m10) gets the
-     list of items and no link — which is the state the firm was in yesterday,
-     and still has to read properly. */
+  /* The client's upload link. Built from site_url + the case's own token, so a case whose checklist predates
+     the token gets the list of items and no link — which is the state the firm was in yesterday… */
   function docsLinkFor(cs) {
-    var token = (MIGRATIONS.m10 && cs && cs.doc_token) ? String(cs.doc_token) : "";
+    var token = (cs && cs.doc_token) ? String(cs.doc_token) : "";
     if (!token) return null;
     var base = setting("site_url", "https://www.nexmoney.co.uk").replace(/\/+$/, "");
     return base + "/docs.html?token=" + token;
@@ -6582,11 +5383,8 @@
     var lines = [];
     if (mention === "regarding") lines.push("Regarding: " + addr);
     lines.push(opening.replace("{M}", mention === "sentence" ? "your mortgage on " + addr : "your mortgage"));
-    /* R9 — THE CHECKLIST-AWARE HALF. With a checklist on the case the mail lists
-       ONLY what is still missing: a client who has already sent their passport
-       and is asked for it again a second time reasonably concludes we lost it.
-       With no checklist it falls back to the firm's static docs_list, which is
-       the wording (and the whole list, every time) that v10 sent. */
+    /* R9: THE CHECKLIST-AWARE HALF. With a checklist on the case the mail lists ONLY what is still missing: a
+       client who has already sent their passport and is asked for it again a second time reasonably… */
     if (DOC_TYPES.indexOf(type) >= 0) {
       var chk = caseChecklist(cs && cs.id);
       var items = chk.length
@@ -6601,29 +5399,13 @@
     }
     return lines;
   }
-  /* =========================================================================
-     R12a·D3 — process-emails v12: the digital fact-find link as a real queued
-     email ("factfind"), replacing the admin's own bare mailto. Mirrors the
-     DEPLOYED v12 behaviour exactly — everything else about v12 is byte-
-     identical to v11 (EMAIL_OPENING/DOC_TYPES/emailBodyLines above are
-     untouched).
-
-     A token generator for a fact_finds row created HERE, server-side (the
-     service role, same as doc-upload) — analogous to app.js's own ffToken(),
-     which only ever runs client-side and has no reason to exist in this file
-     otherwise. */
+  /* R12a·D3: process-emails v12: the digital fact-find link as a real queued email ("factfind"), replacing the
+     admin's own bare mailto. … */
   function ffTokenServerSide() {
     return "ff-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
   }
-  /* The case's newest fact_finds row (created_at desc, limit 1) — the same
-     "active" row the admin's own factFind() reads and reuses. If none exists
-     yet, ONE IS INSERTED here: {case_id, client_id (the queue row's, falling
-     back to the case's — a service-role write has only the queue row and the
-     case to go on), status: "created"}. status "created" is what pass B's
-     client-side factFind() now inserts explicitly rather than relying on a
-     column default, and fact_finds carries NO check constraint on status in
-     production (verified against the real schema) or in this mock — nothing
-     here or in writePolicy() rejects it. */
+  /* The case's newest fact_finds row (created_at desc, limit 1) — the same "active" row the admin's own factFind()
+     reads and reuses. … */
   function resolveFactFindForEmail(row, cs) {
     var caseId = row.case_id;
     if (!caseId) return null;
@@ -6639,10 +5421,8 @@
     DB.fact_finds.push(created);
     return created;
   }
-  /* The CTA body. The leading "Regarding: <addr>" line follows the exact same
-     rule emailBodyLines() applies to every other REGARDING type — `factfind`
-     having joined PROP_REGARDING_TYPES above is what makes `mention` arrive
-     here already resolved, not a second copy of that decision. */
+  /* The CTA body. The leading "Regarding: <addr>" line follows the exact same rule emailBodyLines() applies
+     to every other REGARDING type… */
   function factfindBodyLines(mention, addr, link) {
     var lines = [];
     if (mention === "regarding") lines.push("Regarding: " + addr);
@@ -6651,14 +5431,12 @@
     lines.push("You can save as you go and come back to finish it later.");
     return lines;
   }
-  /* THE THROW. No site_url configured means no link can be built at all — v12
-     raises rather than send a mail with nothing to click, and
-     "process-emails" below turns that into status='failed' with this EXACT
-     message on the row, which is what a misconfigured install is meant to
-     see, not have quietly swallowed. Deliberately no fallback default here
-     (unlike docsLinkFor's, which is a pre-existing, unrelated convenience for
-     the docs bucket) — v12's own rule is "not set = throw", and mirroring a
-     default in would hide exactly the misconfiguration this exists to catch. */
+  /* THE THROW. No site_url configured means no link can be built at all — v12 raises rather than send a mail with
+     nothing to click, and "process-emails" below turns that into status='failed' with this EXACT message on the
+     row, which is what a misconfigured install is meant to see, not have quietly swallowed. Deliberately no
+     fallback default here (unlike docsLinkFor's, which is a pre-existing, unrelated convenience for the docs
+     bucket) — v12's own rule is "not set = throw", and mirroring a default in would hide exactly the
+     misconfiguration this exists to catch. */
   function composeFactfind(row, cs) {
     var ff = resolveFactFindForEmail(row, cs);
     var siteUrlRaw = String(setting("site_url", "")).trim();
@@ -6678,28 +5456,22 @@
   function composeEmail(row) {
     var cs = row.case_id ? DB.cases.filter(function (c) { return c.id === row.case_id; })[0] : null;
     var adv = staffProfile(cs && cs.assigned_to);
-    var advPhone = (MIGRATIONS.m1 && adv && adv.phone) || null;
-    var advSignoff = (MIGRATIONS.m1 && adv && adv.email_signoff) || null;
+    var advPhone = (adv && adv.phone) || null;
+    var advSignoff = (adv && adv.email_signoff) || null;
     var name = (adv && adv.full_name) || setting("adviser_name", "Daniel Potts");
     var phone = advPhone || setting("adviser_phone", "");
-    /* R6.4 MOCK PARITY (b) — the property mention. `property_address` is the FULL
-       address in both shapes; the app never shortens it in an email, because the
-       client is being asked to recognise their own house. */
-    var addr = (MIGRATIONS.m7 && cs && cs.property_address) ? String(cs.property_address).trim() : "";
+    /* R6.4 MOCK PARITY (b) — the property mention. `property_address` is the FULL address in both shapes; the
+       app never shortens it in an email, because the client is being asked to recognise their own house. */
+    var addr = (cs && cs.property_address) ? String(cs.property_address).trim() : "";
     var t = row.email_type;
     var mention = "";
     if (addr && PROP_SENTENCE_TYPES.indexOf(t) >= 0) mention = "sentence";
     else if (addr && PROP_REGARDING_TYPES.indexOf(t) >= 0) mention = "regarding";
-    /* R12a·D3 — factfind's subject/body/link come from a side read (and maybe
-       a side WRITE) of fact_finds, not from EMAIL_OPENING. This runs BEFORE
-       the object below is built, and can throw (composeFactfind's THROW
-       comment) — deliberately, so that throw propagates out of composeEmail()
-       untouched for "process-emails" to catch, exactly like a real function
-       invocation failing before it returns anything. */
+    /* R12a·D3: factfind's subject/body/link come from a side read (and maybe a side WRITE) of fact_finds, not
+       from EMAIL_OPENING. This runs BEFORE the object below is built, and can throw — deliberately… */
     var ffCompose = t === "factfind" ? composeFactfind(row, cs) : null;
-    /* R79 · A5 — v19: the unsubscribe footer rides on the four marketing-adjacent types, one
-       small line below the sign-off and above the grey house footer. The link carries the
-       client's id + comms_token (the row every marketing send has a client for). */
+    /* R79 · A5: v19: the unsubscribe footer rides on the four marketing-adjacent types, one small line below
+       the sign-off and above the grey house footer. The link carries the client's id + comms_token. */
     var unsubUrl = MARKETING_TYPES.indexOf(t) >= 0 && row.client_id ? unsubscribeUrlFor(row.client_id) : null;
     var bodyLines = ffCompose ? factfindBodyLines(mention, addr, ffCompose.link) : emailBodyLines(t, addr, mention, cs);
     if (unsubUrl && bodyLines) bodyLines = bodyLines.concat([UNSUB_LINE]);
@@ -6707,17 +5479,11 @@
       queue_id: row.id,
       to_email: row.to_email,
       email_type: row.email_type,
-      /* Null on every type except factfind: those are display-only via the
-         row's own `subject` column, set once at queue time — v12 is the only
-         type where compose() itself decides the subject. */
-      /* R66 · M8 — a `custom` row's subject is the ADVISER's, written at queue time and carried on
-         the row's own column; v17 does not compose one. (factfind is the other exception, for the
-         opposite reason: there compose() is the only thing that knows the subject.) */
+      /* Null on every type except factfind: those are display-only via the row's own `subject` column, set
+         once at queue time — v12 is the only type where compose() itself decides the subject. */
       subject: ffCompose ? ffCompose.subject : (t === "custom" ? (row.subject || null) : null),
-      /* R66 · M8 — and the body. v17 wraps this HTML in the house template and appends the sign-off
-         below; it is passed through verbatim, never re-escaped and never reworded — the escaping
-         happened once, in the app, before the row was written. Null on every other type, whose
-         body is composed from body_lines above. */
+      /* R66 · M8: and the body. v17 wraps this HTML in the house template and appends the sign-off below; it
+         is passed through verbatim, never re-escaped and never reworded — the escaping happened once… */
       body_html: t === "custom" ? (row.body_html || null) : null,
       from: name + " <" + setting("from_email", "hello@nexmoney.co.uk") + ">",
       reply_to: (adv && adv.email) || setting("reply_to_email", "hello@nexmoney.co.uk"),
@@ -6737,20 +5503,15 @@
       /* R79 · A5 — v19: null on every type outside MARKETING_TYPES (and on a client-less row);
          the four carry the public unsubscribe link built from the client's own comms_token. */
       unsubscribe_url: unsubUrl,
-      /* R9 — what the document mails actually asked for, so a test can assert the
-         list a client reads rather than a flag about it. Null on every type that
-         is not about documents: "this mail carries no checklist" and "it carries
-         an empty one" are different facts. */
+      /* R9: what the document mails actually asked for, so a test can assert the list a client reads rather
+         than a flag about it. Null on every type that is not about documents… */
       checklist_source: DOC_TYPES.indexOf(t) >= 0 ? (caseChecklist(cs && cs.id).length ? "case" : "settings") : null,
       checklist_items: DOC_TYPES.indexOf(t) >= 0
         ? (caseChecklist(cs && cs.id).length ? outstandingDocs(cs.id).map(function (d) { return d.item; }) : settingsDocsList())
         : null,
       docs_link: DOC_TYPES.indexOf(t) >= 0 && caseChecklist(cs && cs.id).length ? docsLinkFor(cs) : null,
-      /* R12a·D3 — the fact-find row this send resolved (created if it did not
-         already exist) and the link built from its token, so a test can
-         assert the exact link a client would click, and process-emails below
-         can advance that row's status after a successful send without
-         re-deriving it. Null on every type but factfind. */
+      /* R12a·D3: the fact-find row this send resolved and the link built from its token, so a test can assert
+         the exact link a client would click… */
       fact_find_id: ffCompose ? ffCompose.fact_find_id : null,
       fact_find_link: ffCompose ? ffCompose.link : null,
       signoff: advSignoff ? String(advSignoff).split("\n") : [name, setting("company_name", "NexMoney")].concat(phone ? [phone] : []),
@@ -6758,10 +5519,8 @@
     };
   }
   function hasRetentionSuccessor(caseId) {
-    /* R58 — CYCLE-AWARE, mirroring production's new gate: only a successor whose rate_end_date
-       matches the source's CURRENT rate_end_date blocks (a successor copies the date at creation,
-       so same date = same product cycle). A source that was "renewed elsewhere" gets a new date
-       and becomes eligible again even though an old-cycle successor exists. */
+    /* R58: CYCLE-AWARE, mirroring production's new gate: only a successor whose rate_end_date matches the
+       source's CURRENT rate_end_date blocks. A source that was "renewed elsewhere" gets a new date and… */
     var src = DB.cases.filter(function (x) { return x.id === caseId; })[0];
     var srcDate = src ? (src.rate_end_date || null) : null;
     return DB.cases.some(function (c) {
@@ -6773,10 +5532,8 @@
     DB.email_queue.push(row);
     return row;
   }
-  /* R6.4 MOCK PARITY (a) — the first line of a property address, which is what a
-     task title has room for: "Flat 4, 27 Stourwood Avenue, Southbourne,
-     Bournemouth BH6 3QP" → "Flat 4". Production splits on the first comma the
-     same way. */
+  /* R6.4 MOCK PARITY (a) — the first line of a property address, which is what a task title has room for:
+     "Flat 4, 27 Stourwood Avenue, Southbourne, Bournemouth BH6 3QP" → "Flat 4". */
   function firstAddrLine(addr) {
     var s = String(addr == null ? "" : addr).trim();
     if (!s) return "";
@@ -6794,13 +5551,9 @@
     }).slice().forEach(function (src) {
       var cl = DB.clients.filter(function (x) { return x.id === src.client_id; })[0] || {};
       var when = iso(new Date());
-      /* R6.4 MOCK PARITY (a) — production's queue_automated_emails() was redeployed
-         today to carry the security property across to the successor and to NAME it
-         in the two artefacts a person actually reads (the call task and the origin
-         note). The mock's successor was born property-less, so the harness was
-         asserting the bug the backend had just stopped having. Gated on m7 because
-         a database without the column has nothing to copy. */
-      var srcAddr = (MIGRATIONS.m7 && src.property_address) ? String(src.property_address) : "";
+      /* R6.4 MOCK PARITY (a) — production's queue_automated_emails() was redeployed today to carry the
+         security property across to the successor and to NAME it in the two artefacts a person actually… */
+      var srcAddr = src.property_address ? String(src.property_address) : "";
       var succ = applyInsertDefaults("cases", {
         client_id: src.client_id,
         case_kind: src.case_kind === "buy_to_let" ? "buy_to_let" : "remortgage",
@@ -6818,10 +5571,8 @@
       /* SECURITY DEFINER: the audit actor is the system, not the signed-in user */
       auditRow("cases", "insert", succ, clone(succ), when, null);
       caseEvent(succ.id, "case_created", "Stage: enquiry", when, null);
-      /* R6.4 MOCK PARITY (a) — with an address the note is the property-aware
-         sentence production now writes; with none, it is word-for-word what it
-         always was (an un-migrated or address-less case must read exactly as
-         before, which is the half of parity that is easy to lose). */
+      /* R6.4 MOCK PARITY (a) — with an address the note is the property-aware sentence production now writes;
+         with none, it is word-for-word what it always was. */
       DB.case_notes.push({
         id: nid("nt"), case_id: succ.id,
         body: srcAddr
@@ -6831,9 +5582,8 @@
             "'s rate on the previous case ends " + src.rate_end_date + ".",
         created_by: null, created_at: when
       });
-      /* "Call client — rate ends …", due 3 months before the rate ends, never in the past.
-         R6.4 — the first address line goes in the middle where there is one, so a
-         landlord's four call tasks are four different titles in one list. */
+      /* "Call client — rate ends …", due 3 months before the rate ends, never in the past. R6.4 — the first
+         address line goes in the middle where there is one… */
       var due = new Date(src.rate_end_date + "T12:00:00");
       due.setMonth(due.getMonth() - 3);
       var tomorrow = shift(1);
@@ -6847,14 +5597,8 @@
         assigned_to: src.assigned_to || null, created_at: when
       });
       out.retention_tasks_created++;
-      /* R13 · SUPPRESSION — the retention case, its note and the adviser's
-         call task are all created regardless: those are staff-facing (or, for
-         the case/note, just a record of what happened), not automated contact
-         TO the client, and the exchange-chase-task precedent says a task is
-         never what suppress_automation withholds. Only the two client emails
-         below are gated on it — "a suppressed client must get NOTHING
-         automated" means nothing sent to them, not nothing recorded about
-         them. */
+      /* R13 · SUPPRESSION: the retention case, its note and the adviser's call task are all created
+         regardless: those are staff-facing, not automated contact TO the client… */
       if (cl.email && !cl.suppress_automation) {
         queueRow({
           case_id: succ.id, client_id: src.client_id, email_type: "rate_end_reminder",
@@ -6885,21 +5629,11 @@
     return out;
   }
   /* public.queue_comms_extras() — review requests on completed cases */
-  /* r8_m1 — the annual review touch.
-       ONE call task, on the anniversary of a completion that is at least a year
-       old, due today, owned by the adviser whose case it is. Deliberately NOT an
-       email: a year after completion the useful act is a conversation, and an
-       automated "happy anniversary" from a mortgage broker is the kind of mail
-       that gets a firm unsubscribed from. The title carries the two facts the
-       adviser needs before dialling — when they completed and which property —
-       because a task list is read out of context.
-       Idempotency is an 11-month look-back over that case's own tasks matching
-       'Annual review call — %', which is what makes the touch safe to run as
-       often as you like: the app queues before every firm-wide flush, the cron
-       queues nightly, and neither may write the same call twice. Eleven, not
-       twelve, so a run a day or two either side of the anniversary can never
-       double up, while last year's call — 12 months old — does not suppress
-       this year's. */
+  /* r8_m1 — the annual review touch. ONE call task, on the anniversary of a completion that is at least a year old,
+     due today, owned by the adviser whose case it is. The title carries the two facts the adviser needs before
+     dialling — when they completed and which property — because a task list is read out of context. Eleven, not
+     twelve, so a run a day or two either side of the anniversary can never double up, while last year's call — 12
+     months old — does not suppress this year's. … */
   var ANNUAL_REVIEW_TITLE_PREFIX = "Annual review call — ";
   function queueAnnualReviewTasks() {
     var made = 0;
@@ -6920,7 +5654,7 @@
       });
     }).slice().forEach(function (c) {
       var when = iso(new Date());
-      var addr = (MIGRATIONS.m7 && c.property_address) ? firstAddrLine(c.property_address) : "";
+      var addr = c.property_address ? firstAddrLine(c.property_address) : "";
       DB.case_tasks.push({
         id: nid("tk"), case_id: c.id,
         title: ANNUAL_REVIEW_TITLE_PREFIX + clientName(c.client_id) +
@@ -6936,14 +5670,8 @@
     });
     return made;
   }
-  /* r8_m1 — at most five review requests per run. Before, one run asked every
-     eligible client at once: a firm switching the feature on emailed its entire
-     back book in a single evening, and a quiet month followed by a busy one sent
-     a spike that reads as spam to both the client and the mail provider. Five a
-     run, oldest completion first (the people who have been waiting longest go
-     first, and nobody is skipped forever), and ONLY those five are stamped — the
-     stamp is the queue's memory, so stamping a row that was not queued would
-     silently drop it for good. */
+  /* r8_m1 — at most five review requests per run. Before, one run asked every eligible client at once: a firm
+     switching the feature on emailed its entire back book in a single evening… */
   var REVIEW_REQUESTS_PER_RUN = 5;
   /* =========================================================================
      r9 — THE NIGHTLY DOCUMENT CHASE
@@ -7005,46 +5733,8 @@
     var requests = live.filter(function (e) { return e.email_type === "docs_request"; }).length;
     return legacy + Math.max(0, requests - 1);
   }
-  /* =========================================================================
-     R63 · A2(b) — TRIGGER PARITY: auto_stage_comms (prod) on cases.stage change
-
-     Production carries an AFTER UPDATE trigger on `cases` that fires the moment a case's stage
-     changes. This mock never had it — which is what the "honest gap" note further down used to
-     record — and the cost was not academic: four real settings with real Settings-page UI
-     (auto_docs_request / auto_submitted_update / auto_offer_update / auto_completion_email) and
-     the whole "advance a case and a client hears about it" behaviour were invisible to the
-     harness, so nothing could catch the app describing them wrongly.
-
-     WHAT THE TRIGGER DOES, mirrored exactly:
-
-     · ONE EMAIL PER ARRIVAL, keyed on the stage the case lands in:
-         fact_find   → docs_request        (auto_docs_request)
-         application → submitted_update    (auto_submitted_update)
-         offer       → offer_update        (auto_offer_update)
-         completed   → completion_congrats (auto_completion_email)
-       Each is gated on its OWN setting, read with settingBool10On below: '1' AND 'on' both mean
-       on, because the Settings form writes "1"/"0" while the seeded rows (and the production SQL)
-       say 'on'/'off'. A switch whose two spellings disagree is a switch nobody can trust.
-     · SKIPPED when the client has no email address (there is nothing to send to — Data health
-       owns that gap) and when the client is `suppress_automation` — the same rule, checked the
-       same way, as every other automated client email in this file.
-     · IDEMPOTENT PER CASE + EMAIL TYPE. The existence of the row IS the memory, so a case dragged
-       Offer → Application → Offer is not congratulated twice, and a case somebody advanced by
-       accident and moved straight back leaves exactly one row behind, not two. Cancelled rows
-       count as "already queued" for this purpose: somebody stopping the email is a decision, and
-       re-entering the stage must not quietly re-send what they stopped.
-     · THE SOLICITOR CHASE TASK at `exchange`: "Chase solicitors for completion date", due
-       TODAY + solicitor_chase_days (7 when unset), assigned to the case's own adviser. Written
-       only when the case has no OPEN task whose title starts "Chase solicitors" — the same
-       LIKE-prefix idempotency production uses, so a task somebody retitled slightly is still
-       recognised as the one that exists. NOT gated on suppression, and not on a client email
-       address: it is work for staff, not a message to a client, exactly like the doc-overdue
-       task below and the exchange alert in the watchtower fixtures.
-
-     Fires only on a genuine stage CHANGE (before.stage !== after.stage), from the two write paths
-     that can change one — the update builder and the upsert builder — so a save that touches
-     anything else on the case queues nothing.
-     ======================================================================= */
+  /* R63 · A2(b): TRIGGER PARITY: auto_stage_comms (prod) on cases.stage change Production carries an AFTER
+     UPDATE trigger on `cases` that fires the moment a case's stage changes. */
   function settingBool10On(k) {
     var v = String(setting(k, "off")).trim().toLowerCase();
     return v === "1" || v === "on";
@@ -7096,7 +5786,6 @@
   function queueDocChases() {
     var out = { doc_chases_queued: 0, doc_overdue_tasks: 0 };
     if (setting("doc_chase_enabled", "off") !== "on") return out;
-    if (!MIGRATIONS.m10) return out;                 /* no checklist table, nothing to chase from */
     var quiet = Number(setting("doc_chase_days", "3")) || 3;
     DB.cases.filter(function (c) {
       return DOC_CHASE_STAGES.indexOf(c.stage) >= 0 && outstandingDocs(c.id).length > 0;
@@ -7104,9 +5793,8 @@
       var chases = docChaseCountFor(c.id);          /* R63 · A2(a) — the production rule */
       var when = iso(new Date());
       if (chases >= DOC_CHASE_MAX) {
-        /* Out of chases. A task, not a fourth email — and deliberately NOT
-           subject to the quiet window: the window governs how often we mail a
-           client, and this is the point at which we stop mailing them. */
+        /* Out of chases. A task, not a fourth email — and deliberately NOT subject to the quiet window: the
+           window governs how often we mail a client, and this is the point at which we stop mailing them. */
         var title = DOC_OVERDUE_TITLE_PREFIX + clientName(c.client_id);
         var already = DB.case_tasks.some(function (t) {
           return t.case_id === c.id && t.title === title && !t.done_at;
@@ -7126,16 +5814,11 @@
       if (last && (NOW - new Date(last)) / DAY < quiet) return;      /* said something too recently */
       var cl = DB.clients.filter(function (x) { return x.id === c.client_id; })[0];
       if (!cl || !cl.email) return;                  /* nothing to send to — Data health owns that */
-      /* R13 · SUPPRESSION — the chase EMAIL is withheld; the overdue-tasks
-         branch above is NOT gated on it (a task for staff, same as the
-         exchange-chase task), consistent everywhere suppression is checked
-         in this file. */
+      /* R13 · SUPPRESSION: the chase EMAIL is withheld; the overdue-tasks branch above is NOT gated on it,
+         consistent everywhere suppression is checked in this file. */
       if (cl.suppress_automation) return;
-      /* R63 · A2(a) — a chase IS a further `docs_request`. Production has no `docs_chase` type
-         to write, and a harness that invents one is a harness in which the app's chase counter
-         can never be wrong. The SUBJECT stays "Still waiting on your documents" — that is what
-         distinguishes a chase from the first ask in the queue an operator reads, and it is what
-         process-emails composes for a request that is not the first on its case. */
+      /* R63 · A2(a): a chase IS a further `docs_request`. Production has no `docs_chase` type to write, and a
+         harness that invents one is a harness in which the app's chase counter can never be wrong. */
       queueRow({
         case_id: c.id, client_id: c.client_id, email_type: "docs_request",
         to_email: cl.email, subject: "Still waiting on your documents",
@@ -7145,22 +5828,12 @@
     });
     return out;
   }
-  /* =========================================================================
-     r9 — THE REVIEW REMINDER
-
-     One nudge, a week after a review request that was actually SENT and never
-     answered. Keyed on the email_queue row rather than on
-     `cases.review_requested_at`, deliberately: the stamp records that we decided
-     to ask, the sent row records that the client was asked, and only the second
-     of those is worth chasing. (It also means a back-book stamped as "already
-     asked" during a migration is never nudged for a mail nobody ever received.)
-
-     One reminder per case, ever — the existence of a `review_reminder` row is
-     the memory, so no new column is needed and a re-run can never double up.
-     It shares the review drip's budget of five a run, and takes what is left
-     AFTER the new requests: someone who has never been asked comes before
-     someone who is being asked twice.
-     ======================================================================= */
+  /* r9 — THE REVIEW REMINDER One nudge, a week after a review request that was actually SENT and never answered.
+     (It also means a back-book stamped as "already asked" during a migration is never nudged for a mail nobody ever
+     received.) One reminder per case, ever — the existence of a `review_reminder` row is the memory, so no new
+     column is needed and a re-run can never double up. It shares the review drip's budget of five a run, and takes
+     what is left AFTER the new requests: someone who has never been asked comes before someone who is being asked
+     twice. … */
   function queueReviewReminders(budget) {
     if (budget <= 0) return 0;
     var days = Number(setting("review_reminder_days", "7")) || 7;
@@ -7268,9 +5941,7 @@
   }
   var LAST_EMAIL_RUN = null;
 
-  /* -------------------------------------------------------------------------
-     ai-import parser (PLAN-R5 § Harness fixes 2 / R5-45)
-     ----------------------------------------------------------------------- */
+  /* ai-import parser (PLAN-R5 § Harness fixes 2 / R5-45) */
   var AI_IMPORT_FALLBACK = [
     { client_name: "Neil Ashcombe", email: "neil.ashcombe@example.com", phone: "07700 900501", stage: "completed", lender: "Halifax", rate_percent: 4.29, rate_end_date: "01/02/2027", erc_end_date: "", completed_date: "14/03/2026", broker_fee: 495, case_kind: "remortgage" },
     { client_name: "Priti Raval", email: "priti.raval@example.com", phone: "07700 900502", stage: "completed", lender: "Nationwide", rate_percent: 4.55, rate_end_date: "2029-08-31", erc_end_date: "", completed_date: "", broker_fee: 0, case_kind: "purchase" },
@@ -7358,15 +6029,9 @@
       if (r[f] !== null && r[f] !== undefined && r[f] !== "") r[f] = impNum(r[f]);
       else if (r[f] === "") r[f] = null;
     });
-    /* R75 · B1 MOCK PARITY — production's `ai-import` is a language model reading a
-       spreadsheet, and it hands back the trailing "TOTAL / 1,234,000" line as a row
-       like any other; that is the whole of the R73 panel's finding 10 ("the AI
-       importer pre-ticks gibberish rows the Revolution importer correctly refuses").
-       This stub dropped every person-less row on the floor, which meant the app's
-       new junk guard had nothing to guard against and the bug was untestable.
-       A row that carries NOTHING is still dropped (it is a blank line, not a row);
-       a row that carries data but no person now comes back, exactly as production's
-       does, and the app decides what to do with it. */
+    /* R75 · B1 MOCK PARITY: production's `ai-import` is a language model reading a spreadsheet, and it hands back
+       the trailing "TOTAL / 1,234,000" line as a row like any other; that is the whole of the R73 panel's finding
+       10 ("the AI importer pre-ticks gibberish rows the Revolution importer correctly refuses"). … */
     var carriesSomething = Object.keys(r).some(function (k) {
       return r[k] !== null && r[k] !== undefined && r[k] !== "" && r[k] !== false;
     });
@@ -7458,23 +6123,9 @@
          interactive caller. owner/admin/adviser/staff all pass now. */
       if (!isStaff()) return { __status: 403, error: "forbidden — staff only" };
       var ids = body && Array.isArray(body.queue_ids) ? body.queue_ids.filter(Boolean) : null;
-      /* ==================================================================
-         R68 · M15 — THE SAFE PROBE.  {queue_ids: []} names ZERO rows, so in
-         production v14 short-circuits before it queues, sends, fails or
-         stamps anything and answers three questions instead: is a Resend key
-         set on the server, is the hold on, and how many emails are due right
-         now. It is a question, not an action — which is the whole reason the
-         Settings "Email sending" strip may ask it on every page open.
-
-         Mirrored EXACTLY here, and deliberately ABOVE everything below: the
-         old code path would have fallen through to `due = []` and still
-         rewritten LAST_EMAIL_RUN, so merely opening Settings would have
-         clobbered what `__mock.lastEmailRun()` reports about the last real
-         run. A probe that leaves a footprint is not a probe.
-
-         `warning` carries the server's own words; app.js keys off the string
-         "RESEND_API_KEY". Key present AND hold off returns no warning at all.
-         ================================================================== */
+      /* R68 · M15: THE SAFE PROBE. {queue_ids: []} names ZERO rows, so in production v14 short-circuits before it
+         queues, sends, fails or stamps anything and answers three questions instead: is a Resend key set on the
+         server, is the hold on, and how many emails are due right now. … */
       if (ids && !ids.length) {
         var nowProbe = iso(new Date());
         var holdRow = DB.settings.filter(function (s) { return s.key === "email_hold"; })[0];
@@ -7499,10 +6150,8 @@
         queued.review_reminders_queued = extras.review_reminders_queued;
         queued.doc_chases_queued = extras.doc_chases_queued;
         queued.doc_overdue_tasks = extras.doc_overdue_tasks;
-        /* R13 · M-43 — v13 UPSERTs the cron heartbeat on every FULL (unscoped)
-           run, never on a scoped one (a "Send reminder" on one case is not
-           the 8am cron confirming it is alive). Mirrors the settings write
-           pattern used elsewhere (find-or-push on `key`). */
+        /* R13 · M-43: v13 UPSERTs the cron heartbeat on every FULL (unscoped) run, never on a scoped one.
+           Mirrors the settings write pattern used elsewhere (find-or-push on `key`). */
         var heartbeatRow = DB.settings.filter(function (s) { return s.key === "last_cron_run_at"; })[0];
         var heartbeatAt = iso(new Date());
         /* R82 — no updated_at: prod's settings table has only (key, value). */
@@ -7550,23 +6199,12 @@
           };
         }
       }
-      /* ==================================================================
-         R79 · A5 — THE SCOPED PATH HONOURS THE HOLD, exactly like prod.
-         v18 (and v19) enforce the global hold for BOTH the cron path and
-         interactive scoped sends — `if (!apiKey || sendHeld)` sits ABOVE the
-         candidate query, so a per-case "send now" on a held system queues
-         the row and sends NOTHING, answering {warning, held, pending}. This
-         mock's scoped path sent anyway (repro'd: a fee-request "send now"
-         under the seeded hold toasted "Email sent ✓"), which is precisely
-         the day-one lie the R79 held toasts exist to remove. Rows stay
-         'queued', untouched; pending counts the NAMED rows still queued
-         (v18's .in("id", ids) count). The no-Resend-key half of prod's gate
-         is DELIBERATELY still not mirrored for scoped sends — every
-         per-case suite drives this path and the harness has always let it
-         pretend a key exists; the hold is the state production actually
-         lives in, so the hold is what must be true here. LAST_EMAIL_RUN is
-         written ({scoped:true, sent:0, held:true}) so __mock.lastEmailRun()
-         can testify. */
+      /* R79 · A5: THE SCOPED PATH HONOURS THE HOLD, exactly like prod. v18 (and v19) enforce the global hold for
+         BOTH the cron path and interactive scoped sends — `if (!apiKey || sendHeld)` sits ABOVE the candidate
+         query, so a per-case "send now" on a held system queues the row and sends NOTHING, answering {warning,
+         held, pending}. The no-Resend-key half of prod's gate is DELIBERATELY still not mirrored for scoped sends —
+         every per-case suite drives this path and the harness has always let it pretend a key exists; the hold is
+         the state production actually lives in, so the hold is what must be true here. … */
       if (ids && heldRun) {
         LAST_EMAIL_RUN = {
           at: nowIso, scoped: true, queue_ids: ids, considered: due.length,
@@ -7579,9 +6217,8 @@
           warning: "email_hold is on — nothing was sent; the " + due.length + " named email" + (due.length === 1 ? "" : "s") + " stay held in the queue."
         };
       }
-      /* R79 · A5 — v19: the unscoped run takes the OLDEST-due rows first (order by scheduled_for
-         ascending, nulls last — PostgREST's asc default), capped at v18's 50-per-run. The scoped
-         path names its rows and is unchanged. */
+      /* R79 · A5: v19: the unscoped run takes the OLDEST-due rows first, capped at v18's 50-per-run. The
+         scoped path names its rows and is unchanged. */
       if (!ids) {
         due = due.slice().sort(function (a, b) {
           var A = a.scheduled_for || "9999-12-31T23:59:59Z", B = b.scheduled_for || "9999-12-31T23:59:59Z";
@@ -7596,9 +6233,8 @@
           failed++;
           return;
         }
-        /* R79 · A5 — v19: opt-out re-read AT SEND TIME for the four marketing-adjacent types.
-           comms_optout=true cancels the row with the exact production error string and sends
-           nothing; the row is a cancelled record, never retried. */
+        /* R79 · A5: v19: opt-out re-read AT SEND TIME for the four marketing-adjacent types.
+           comms_optout=true cancels the row with the exact production error string and sends nothing… */
         if (MARKETING_TYPES.indexOf(e.email_type) >= 0 && e.client_id) {
           var ocl = DB.clients.filter(function (x) { return x.id === e.client_id; })[0];
           if (ocl && ocl.comms_optout) {
@@ -7608,23 +6244,16 @@
             return;
           }
         }
-        /* R82 · B4 — v20: the financial-promotions gate, at send time, in v20's own
-           position: after the missing-address failure and after v19's opt-out cancel,
-           before compose() is reached. A row that got into the queue by ANY route —
-           queued before the switch was turned off, written by a script, inserted by a
-           surface the client-side gate does not cover — is cancelled here rather than
-           delivered. Nothing a client reads is composed, so no template is touched. */
+        /* R82 · B4: v20: the financial-promotions gate, at send time, in v20's own position: after the
+           missing-address failure and after v19's opt-out cancel, before compose() is reached. */
         if (FIN_PROMO_TYPES.indexOf(e.email_type) >= 0 && !finPromosApprovedMock()) {
           e.status = "cancelled";
           e.error = FIN_PROMO_CANCEL_ERROR;
           skippedPromos++;
           return;
         }
-        /* R12a·D3 — v12: compose() can now throw (factfind, no site_url). A
-           row whose compose blows up goes status='failed' with THAT error,
-           the same as a bounce or a missing address — never quietly sent, and
-           never left dangling in 'queued' either. Everything before this row
-           in the loop is unaffected; the try/catch is per-row on purpose. */
+        /* R12a·D3: v12: compose() can now throw (factfind, no site_url). A row whose compose blows up goes
+           status='failed' with THAT error, the same as a bounce or a missing address… */
         var composedRow;
         try {
           composedRow = composeEmail(e);
@@ -7639,18 +6268,14 @@
         e.sent_at = iso(new Date());
         e.error = null;
         sent++;
-        /* R12a·D3 — AFTER a successful send only: advance that fact_finds row
-           to 'sent'. Guarded to only move it on from 'created' or 'sent' —
-           never regresses a row the client already moved on to 'started' or
-           'submitted' themselves, which could easily be true by the time a
-           chase/retry send lands. */
+        /* R12a·D3: AFTER a successful send only: advance that fact_finds row to 'sent'. Guarded to only move
+           it on from 'created' or 'sent' — never regresses a row the client already moved on to 'started'… */
         if (e.email_type === "factfind" && composedRow.fact_find_id) {
           var ffRow = DB.fact_finds.filter(function (f) { return f.id === composedRow.fact_find_id; })[0];
           if (ffRow && ["created", "sent"].indexOf(ffRow.status) >= 0) ffRow.status = "sent";
         }
-        /* R79 · A5 — v19: link expiry (owner decision: 30 days), stamped ONLY on a successful
-           send. A factfind send restarts that fact_finds row's clock; a docs_request that
-           actually carried an upload link restarts the case's doc-link clock. */
+        /* R79 · A5: v19: link expiry (owner decision: 30 days), stamped ONLY on a successful send. A factfind
+           send restarts that fact_finds row's clock; a docs_request that actually carried an upload link… */
         if (e.email_type === "factfind" && composedRow.fact_find_id) {
           var ffExp = DB.fact_finds.filter(function (f) { return f.id === composedRow.fact_find_id; })[0];
           if (ffExp) ffExp.expires_at = iso(new Date(Date.now() + 30 * 86400000));
@@ -7670,13 +6295,8 @@
         skipped_promos: skippedPromos,   /* R82 · B4 — v20 counts its refusals beside v19's */
         scoped: !!ids, skipped_queueing: !!ids, queued: queued };
     },
-    /* R63 · A3 — PARITY NOTE, not a behaviour change. In production this function is ALSO on a
-       schedule of its own: the `nexmoney-send-sms` cron invokes it daily at 08:05 UTC (09:05 while
-       BST is in force), five minutes behind the email run. This mock has no clock, so — exactly
-       like process-emails above — it only ever runs when something invokes it. Written down here
-       because app.js's Emails page used to tell operators the opposite ("SMS is not on the 8am
-       cron, so nothing goes until somebody presses Send SMS now"), and the harness is where that
-       claim would otherwise keep looking true. */
+    /* R63 · A3: PARITY NOTE, not a behaviour change. In production this function is ALSO on a schedule of its
+       own: the `nexmoney-send-sms` cron invokes it daily at 08:05 UTC, five minutes behind the email run. */
     "send-sms": function () {
       var due = DB.sms_queue.filter(function (s) { return s.status === "queued" && s.to_phone; });
       due.forEach(function (s) { s.status = "sent"; s.sent_at = iso(new Date()); });
@@ -7704,28 +6324,16 @@
       auditRow("profiles", "insert", p, clone(p));
       return { ok: true, user_id: p.id, email: p.email, role: role, temp_password: "Nx-" + Math.random().toString(36).slice(2, 10) + "!7" };
     },
-    /* R5-45 (MOCK_ARTEFACT) — the stub used to ignore the request body entirely
-       and hand back the same four strangers whatever was pasted, which made
-       every import finding untestable (you could never see YOUR row in the
-       preview). It now reads `content` and derives the rows from it: a header
-       row is mapped by name; without one, each cell is sniffed by shape
-       (email / phone / percent / date / money / stage / kind / name). The canned
-       four survive only as the empty-body fallback, so the demo still has data.
-       NOTE for Daniel: the real gap behind this is that production's `ai-import`
-       needs ANTHROPIC_API_KEY set in the Supabase project — see PLAN-R5
-       § Decisions 3. */
+    /* R5-45 (MOCK_ARTEFACT): the stub used to ignore the request body entirely and hand back the same four
+       strangers whatever was pasted, which made every import finding untestable. */
     "ai-import": function (body) {
       var rows = aiImportRows(body && body.content);
       if (!rows) return { ok: true, rows: clone(AI_IMPORT_FALLBACK), source: "fallback" };
       if (!rows.length) return { ok: true, rows: [], source: "parsed", note: "Nothing in that paste looked like a client row." };
       return { ok: true, rows: rows, source: "parsed" };
     },
-    /* R6.4 MOCK PARITY (c) — production's parse-offer reads the security address off
-       the offer letter and returns it, which is the one field on a mortgage offer
-       that says WHICH property is being lent against. The stub omitted it, so the
-       app's offer-diff had nothing to propose and the whole property-from-offer
-       path was untestable end to end. Deliberately a full address with a postcode:
-       the diff is what most often first puts an address on a case. */
+    /* R6.4 MOCK PARITY (c) — production's parse-offer reads the security address off the offer letter and
+       returns it, which is the one field on a mortgage offer that says WHICH property is being lent against. */
     "parse-offer": function () {
       return {
         ok: true,
@@ -7792,21 +6400,17 @@
         if (extra) Object.keys(extra).forEach(function (k) { o[k] = extra[k]; });
         return o;
       };
-      /* The one 404 a bad link ever gets — the same words whether the token is
-         invented, expired or belonged to a case since cleared. An error that
-         distinguishes "no such link" from "not your link" is an oracle for
-         guessing tokens. */
+      /* The one 404 a bad link ever gets — the same words whether the token is invented, expired or belonged
+         to a case since cleared. An error that distinguishes "no such link" from "not your link" is an… */
       var notFound = err(404, "This document link is not valid — it may have expired.");
       var resolve = function (token) {
         if (!token) return null;
         /* Without m10 there is no doc_token column at all, so no link can
            resolve — the same 404, which is what an un-migrated database does. */
-        if (!MIGRATIONS.m10) return null;
         return DB.cases.filter(function (c) { return c.doc_token && String(c.doc_token) === token; })[0] || null;
       };
-      /* What the CLIENT is allowed to see: requested and received only. A
-         waived item is a decision the firm made about its own file; showing it
-         invites "why have you crossed that out" on a page with nobody to ask. */
+      /* What the CLIENT is allowed to see: requested and received only. A waived item is a decision the firm
+         made about its own file; showing it invites "why have you crossed that out" on a page with nobody… */
       var visible = function (caseId) {
         return caseChecklist(caseId).filter(function (d) { return d.status !== "waived"; });
       };
@@ -7833,15 +6437,12 @@
         };
       }
 
-      /* ---- POST ---------------------------------------------------------
-         Multipart or nothing. `req.form` is only populated by the fetch stub
-         when the request body was a FormData; a JSON string never produces
-         one, which is how the 400 below happens "before any logic". */
+      /* POST Multipart or nothing. `req.form` is only populated by the fetch stub when the request body was a
+         FormData; a JSON string never produces one, which is how the 400 below happens "before any logic". */
       var form = req && req.form;
       if (!form) return err(400, "This upload was not sent as a file upload.");
-      /* THE HONEYPOT, CHECKED FIRST. Before the token, before the item, before
-         anything is looked up: a bot must not be able to use the error codes
-         below as a probe. Answers 200 with nothing in it. */
+      /* THE HONEYPOT, CHECKED FIRST. Before the token, before the item, before anything is looked up: a bot
+         must not be able to use the error codes below as a probe. Answers 200 with nothing in it. */
       var pot = form.website;
       if (pot != null && String(pot.value != null ? pot.value : pot).trim() !== "") return { ok: true };
 
@@ -7850,10 +6451,8 @@
       var cs = resolve(fToken);
       if (!cs) return notFound;
 
-      /* Rate cap, per link, per rolling minute. A link with no login on it is a
-         public endpoint; without a cap one leaked URL is a way to fill the
-         firm's storage. Deliberately per TOKEN rather than per IP — the point
-         is to bound what one link can do. */
+      /* Rate cap, per link, per rolling minute. A link with no login on it is a public endpoint; without a
+         cap one leaked URL is a way to fill the firm's storage. */
       var nowMs = Date.now();
       var hits = (DOC_UPLOAD_HITS[fToken] || []).filter(function (t) { return nowMs - t < 60000; });
       if (hits.length >= DOC_UPLOAD_RATE_CAP) { DOC_UPLOAD_HITS[fToken] = hits; return err(429, "That is a lot of uploads at once — wait a minute and try again."); }
@@ -7874,9 +6473,8 @@
       if (!filename) return err(400, "That file arrived without a name.");
       if (!file.size) return err(400, "That file is empty.");
       if (file.size > DOC_UPLOAD_MAX_BYTES) return err(413, "That file is over the 10MB limit.");
-      /* THE EXTENSION IS AUTHORITATIVE, not file.type — a browser reports
-         application/octet-stream for HEIC and an empty string often enough that
-         trusting it would refuse legitimate photographs from iPhones. */
+      /* THE EXTENSION IS AUTHORITATIVE, not file.type — a browser reports application/octet-stream for HEIC
+         and an empty string often enough that trusting it would refuse legitimate photographs from iPhones. */
       var ext = (filename.split(".").pop() || "").toLowerCase();
       if (DOC_UPLOAD_EXT.indexOf(ext) < 0) return err(415, "That file type is not accepted — send a PDF, JPG, PNG or HEIC.");
       /* …and then the bytes have to agree with it, because an extension is
@@ -7892,19 +6490,13 @@
       var when = iso(new Date());
       live.status = "received";
       live.received_at = when;
-      /* R13 · BUCKET CORRECTION — the deployed function's real path shape:
-         `<caseId>/<slug>-<ts>.<ext>` INSIDE the "client-docs" bucket, with
-         `case_documents.storage_path` carrying the bucket prefix on it. A
-         real storageFiles entry is registered too, the same shape
-         `storage.upload()` writes, so the file this row points at actually
-         exists in the mock's storage registry. */
+      /* R13 · BUCKET CORRECTION — the deployed function's real path shape: `<caseId>/<slug>-<ts>.<ext>`
+         INSIDE the "client-docs" bucket, with `case_documents.storage_path` carrying the bucket prefix on it. */
       var pathInBucket = cs.id + "/" + slugify(live.item) + "-" + Date.now() + "." + ext;
       storageFiles[DOC_STORAGE_BUCKET + "/" + pathInBucket] = { size: file.size, type: file.type || "application/octet-stream", at: when };
       live.storage_path = DOC_STORAGE_BUCKET + "/" + pathInBucket;
-      /* THE NOTE. A file arriving through a link is a real event on the case,
-         because an adviser looking at the file next week must be able to see it
-         happened without knowing this feature exists. created_by is null: the
-         service role wrote it, not a member of staff. */
+      /* THE NOTE. A file arriving through a link is a real event on the case, because an adviser looking at
+         the file next week must be able to see it happened without knowing this feature exists. created_by… */
       DB.case_notes.push({
         id: nid("nt"), case_id: cs.id,
         body: "Document received via upload link: " + live.item,
@@ -7965,10 +6557,8 @@
     "nps-capture": function (body) {
       var notFound = { __status: 404, error: "This review link is not valid — it may have expired." };
       var bad = function (msg) { return { __status: 400, error: msg }; };
-      /* THE HONEYPOT, CHECKED FIRST — before the token, before anything is looked
-         up, for the same reason doc-upload checks its own first: a bot must not
-         be able to read the codes below as a probe. Answers 200 with nothing in
-         it and writes nothing at all. */
+      /* THE HONEYPOT, CHECKED FIRST — before the token, before anything is looked up, for the same reason
+         doc-upload checks its own first: a bot must not be able to read the codes below as a probe. */
       var pot = body && body.website;
       if (pot != null && String(pot).trim() !== "") return { ok: true };
 
@@ -7981,9 +6571,8 @@
       var caseId = String((body && body.case_id) || "").trim();
       if (caseId && caseId !== cs.id) return notFound;
 
-      /* WRITE-ONCE. The stored score wins where there is one; the request's is
-         accepted only to fill a blank. A client re-following their own link with
-         a different number in it changes nothing. */
+      /* WRITE-ONCE. The stored score wins where there is one; the request's is accepted only to fill a blank.
+         A client re-following their own link with a different number in it changes nothing. */
       var stored = (cs.nps_score == null || cs.nps_score === "") ? null : Number(cs.nps_score);
       var asked = (body && body.score != null && body.score !== "") ? Number(body.score) : null;
       var score = stored != null ? stored : asked;
@@ -8004,9 +6593,8 @@
         });
         out.note_created = true;
       }
-      /* The call happens whether or not they typed anything — a bare 4 still
-         needs a phone call. Idempotent on the title, so a client who submits the
-         form twice does not create two. */
+      /* The call happens whether or not they typed anything — a bare 4 still needs a phone call. Idempotent
+         on the title, so a client who submits the form twice does not create two. */
       var title = "Call " + clientName(cs.client_id) + " — review feedback needs attention";
       var dupe = DB.case_tasks.some(function (t) { return t.case_id === cs.id && t.title === title && !t.done_at; });
       if (!dupe) {
@@ -8036,11 +6624,8 @@
       };
     }
   };
-  /* r9 — the query string, parsed. doc-upload is the first edge function in this
-     app that is reached with a GET and a `?token=`, because it is the only one a
-     client without a login ever opens; everything else is a POST with a JSON
-     body. The handler signature gains an optional second argument rather than
-     changing, so every existing handler is untouched. */
+  /* r9 — the query string, parsed. doc-upload is the first edge function in this app that is reached with a
+     GET and a `?token=`, because it is the only one a client without a login ever opens… */
   function parseQuery(url) {
     var q = {};
     var i = String(url).indexOf("?");
@@ -8054,13 +6639,8 @@
     });
     return q;
   }
-  /* r9 · MULTIPART. `doc-upload` is the only deployed function that takes a
-     file, and it takes multipart/form-data and nothing else — a JSON body is a
-     400 there before any logic runs. The stub therefore has to be able to tell
-     the two apart, so a FormData body is unpacked into `req.form` (values kept
-     as they are, File objects included) and `body` stays null. A JSON body
-     never produces a `req.form`, which is exactly how that 400 happens.
-     Every existing handler still reads `body` and is untouched. */
+  /* r9 · MULTIPART. `doc-upload` is the only deployed function that takes a file, and it takes
+     multipart/form-data and nothing else — a JSON body is a 400 there before any logic runs. */
   function parseForm(b) {
     if (typeof FormData === "undefined" || !(b instanceof FormData)) return null;
     var form = {};
@@ -8075,12 +6655,8 @@
     if (!m) return realFetch ? realFetch(input, init) : Promise.reject(new Error("fetch unavailable"));
     var fnName = m[1];
     var handler = EDGE[fnName];
-    /* R86 · V1 — every edge function that acts FOR A SIGNED-IN USER (edge/invite-user-v6,
-       send-sms-v5, owner-digest-v7, outlook-sync-v6, assistant-v9, parse-offer-v6, ai-import-v4)
-       calls session_ok() through the caller's own JWT right after resolving the user and refuses
-       with { error: "second factor required" } 403 when it is false. The mock's handlers are only
-       ever reached by the signed-in persona (there is no cron-key path through this client), so
-       the gate sits here, once, in front of exactly those seven. */
+    /* R86 · V1: every edge function that acts FOR A SIGNED-IN USER calls session_ok() through the caller's
+       own JWT right after resolving the user and refuses with { error… */
     if (handler && MFA_GATED_EDGE.indexOf(fnName) >= 0 && !sessionOk()) {
       handler = function () { return { __status: 403, error: "second factor required" }; };
     }
@@ -8095,9 +6671,8 @@
     if (!handler) return Promise.resolve(jsonResponse({ error: "Function not found: " + fnName }, 404));
     return new Promise(function (resolve) {
       setTimeout(function () {
-        /* Handlers may be sync (all the originals) or async (doc-upload, which
-           has to read the file's first bytes). Promise.resolve covers both, so
-           adding one async handler did not touch the other fifteen. */
+        /* Handlers may be sync (all the originals) or async. Promise.resolve covers both, so adding one async
+           handler did not touch the other fifteen. */
         Promise.resolve().then(function () { return handler(body, req); })
           .then(function (out) { return out || {}; })
           .catch(function (e) { return { error: String((e && e.message) || e) }; })
@@ -8110,9 +6685,7 @@
     });
   };
 
-  /* =========================================================================
-     CLIENT
-     ======================================================================= */
+  /* CLIENT */
   function createClient(url, key, opts) {
     var client = {
       supabaseUrl: url,
@@ -8166,16 +6739,12 @@
         o.v_alerts = vAlerts().length;
         return o;
       },
-      /* --- round-5 test hooks ------------------------------------------- */
-      /* Migration state. All ON by default; turn one OFF to exercise the app's
-         feature-detect fallback, e.g. __mock.setMigrations({m2:false}). */
-      /* R68 · M15 — the server's Resend key, as a flag (see MOCK_RESEND_KEY). Returns the
+      /* round-5 test hooks R68 · M15 — the server's Resend key, as a flag (see MOCK_RESEND_KEY). Returns the
          value it set, so a test can assert the flip took. */
       resendKey: function () { return MOCK_RESEND_KEY; },
       setResendKey: function (v) { MOCK_RESEND_KEY = !!v; return MOCK_RESEND_KEY; },
-      /* R69-HF1 — PostgREST's max-rows ceiling (see the MOCK_MAX_ROWS block above). Default 1000,
-         the value Supabase ships. setMaxRows(0) removes the ceiling for a test that deliberately
-         wants the old unbounded mock; anything else is coerced to a positive integer. */
+      /* R69-HF1 — PostgREST's max-rows ceiling. Default 1000, the value Supabase ships. setMaxRows(0) removes
+         the ceiling for a test that deliberately wants the old unbounded mock… */
       maxRows: function () { return MOCK_MAX_ROWS; },
       setMaxRows: function (n) {
         var v = Number(n);
@@ -8183,26 +6752,20 @@
         return MOCK_MAX_ROWS;
       },
       migrations: MIGRATIONS,
+      /* R90 · A — only m14/m15 still flip (see the migration-flags block); every other key is
+         accepted and inert. */
       setMigrations: function (patch) {
-        Object.keys(patch || {}).forEach(function (k) {
-          if (Object.prototype.hasOwnProperty.call(MIGRATIONS, k)) MIGRATIONS[k] = !!patch[k];
-        });
-        /* R85 — flipping a migration is "a different database": the session Book (a snapshot of
-           cases/clients taken under the OLD schema) must not survive it, or a suite's "older
-           database" section keeps reading columns the mock now 42703s. A delete-bust forces the
-           next bookLoad() to walk the tables again under the new answer. */
+        applyMigrationPatch(patch);
+        /* R85: flipping a migration is "a different database": the session Book must not survive it. The bust
+           stays after R90 · A made most flags inert — suites use this hook to force the next bookLoad() to… */
         try { if (window.__bustBookCache) window.__bustBookCache("delete"); } catch (_) { /* app not booted yet */ }
         return clone(MIGRATIONS);
       },
       /* What the last process-emails run actually did — including the composed
          per-adviser sign-off for every message it sent. */
       lastEmailRun: function () { return LAST_EMAIL_RUN ? clone(LAST_EMAIL_RUN) : null; },
-      /* --- round-9 doc-upload hooks -------------------------------------
-         The deployed function's 429 and 500 are real rules with no other way
-         in: the rate cap needs twenty-one uploads to reach and the storage
-         failure needs storage to fall over. Both are shrunk/armed from here
-         rather than being softened in the handler, so what the tests exercise
-         is the same code path a real client hits. */
+      /* round-9 doc-upload hooks The deployed function's 429 and 500 are real rules with no other way in: the
+         rate cap needs twenty-one uploads to reach and the storage failure needs storage to fall over. */
       setDocUploadRateCap: function (n) {
         DOC_UPLOAD_RATE_CAP = Number(n) > 0 ? Number(n) : 20;
         DOC_UPLOAD_HITS = {};
@@ -8227,15 +6790,8 @@
       /* Run the production queueing RPCs on their own (no sending). */
       queueAutomatedEmails: function () { return queueAutomatedEmails(); },
       queueCommsExtras: function () { return queueCommsExtras(); },
-      /* B6 (r5_batch4.js) — the harness has no real backend, so nothing survives a literal
-         browser reload or a second browser tab (every table is page-local JS memory, by design —
-         see the R5-5 "no sticky store" test in r5_batch1.js for the same constraint on leads).
-         This proves the part that DOES matter for "sticks across users": the row lives in the
-         shared table, gated only by the M4 RLS policy ("dup dismiss read staff" — any staff role),
-         not by who inserted it. CURRENT_UID is restored immediately after. */
-      /* R86 — drive a persona's MFA state: `{ factors: [...] | verified: true|false, aal: "aal1"|"aal2" }`.
-         Busts the app's session Book (an aal change is a different reader — a snapshot taken at
-         aal2 must not survive a drop to aal1). Returns the state it set. */
+      /* B6 (r5_batch4.js) — the harness has no real backend, so nothing survives a literal browser reload or
+         a second browser tab. This proves the part that DOES matter for "sticks across users"… */
       setMfa: function (personaKey, state) {
         var st = clone(mfaPatch(personaKey, state));
         try { if (window.__bustBookCache) window.__bustBookCache("delete"); } catch (_) { /* app not booted yet */ }
@@ -8322,23 +6878,11 @@
       });
       return made;
     };
-    /* ------------------------------------------------------------------
-       R80 · A1 fixture hook (APPEND-ONLY, same contract as the Revolution
-       hook above: nothing is inserted until a test calls this, so no other
-       suite's counts move by a single row).
-
-       seedProtectionBook(n) inflates THIS page instance's book with `n`
-       (default 300) extra protection-pipeline candidates — enough that
-       get_protection_pipeline's 250-row cap genuinely bites, which is the
-       property tests/r80_protect.js exists to pin ("best 250 by score, not
-       an arbitrary 250"). Deterministic local LCG (fixed seed), synthetic
-       names only, prod string shapes: mostly completed back-book (the live
-       book is 1,471 completed of 1,531 candidates), stages/loans/statuses/
-       owners/emails all varied so the score formula has every term to bite
-       on. Rows are built from the case/client templates the way the
-       Revolution hook builds them (mkCase is out of scope here), with every
-       column the Protection page actually reads set explicitly.
-       ------------------------------------------------------------------ */
+    /* R80 · A1 fixture hook (APPEND-ONLY, same contract as the Revolution hook above: nothing is inserted until a
+       test calls this, so no other suite's counts move by a single row). seedProtectionBook(n) inflates THIS page
+       instance's book with `n` (default 300) extra protection-pipeline candidates — enough that
+       get_protection_pipeline's 250-row cap genuinely bites, which is the property tests/r80_protect.js exists to
+       pin ("best 250 by score, not an arbitrary 250"). … */
     window.__mock.seedProtectionBook = function (n) {
       n = Number(n) > 0 ? Math.floor(Number(n)) : 300;
       var clT = DB.clients[0] || {}, caT = DB.cases[0] || {};
@@ -8400,10 +6944,8 @@
       }
       return { clients: n, cases: made.length };
     };
-    /* R80 · A1 — the cap CANARY: the mock's cap is exposed read-only so a suite can seed
-       cap+10 candidates and assert the 10 lowest scores fell off, without hardcoding 250 in
-       two places that could then drift apart. The live function's cap is the contract; if the
-       CTO ever moves it, this is the ONE mock line that changes and the suite follows. */
+    /* R80 · A1: the cap CANARY: the mock's cap is exposed read-only so a suite can seed cap+10 candidates and
+       assert the 10 lowest scores fell off, without hardcoding 250 in two places that could then drift apart. */
     window.__mock.protPipeCap = PROT_PIPE_CAP;
     /* ------------------------------------------------------------------
        R82 · B1 — STAFF ACTIVITY HOOKS (append-only; nothing above changed).
@@ -8452,9 +6994,8 @@
     return client;
   }
 
-  /* R30 — test hook: toggle whether error_events exists on this "database". Default true;
-     set false to make every op on the table return a PostgREST 42P01, exercising the
-     app's feature-gate/degrade path (errorEventsOff + the "isn't enabled" note). */
+  /* R30: test hook: toggle whether error_events exists on this "database". Default true; set false to make
+     every op on the table return a PostgREST 42P01, exercising the app's feature-gate/degrade path. */
   window.__setErrorEventsSupported = function (b) { errorEventsSupported = !!b; return errorEventsSupported; };
 
   /* R43 — the same hook for saved_views: set false to make every op 42P01, which is the

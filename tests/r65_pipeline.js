@@ -413,13 +413,12 @@ const columnCells = (page, key) => page.evaluate((k) => {
       ok("B4 · every waiting chip is in the Waiting-on column", chips.anywhere > 0 && chips.inWaitingCol === chips.anywhere, JSON.stringify(chips));
       eq("B5 · …and none is left in the Stage cell (moved, not duplicated)", chips.inStageCell, 0);
 
-      // BOARD_CASE_COLS carries expected_completion_date; waiting_on rides the docsSupported() gate
+      // BOARD_CASE_COLS carries expected_completion_date.
+      // R90 · fixer: B7 retired — the m10 docs gate (DOCS_SUPPORTED) was deleted with the migration layer (R90 · A); waiting_on is always read.
       const colsOk = await page.evaluate(() => ({
         base: BOARD_CASE_COLS.split(",").includes("expected_completion_date"),
-        docsGate: DOCS_SUPPORTED,
       }));
       ok("B6 · expected_completion_date is in BOARD_CASE_COLS (no widening needed)", colsOk.base, JSON.stringify(colsOk));
-      eq("B7 · waiting_on rides the m10 gate, which this fixture answers yes", colsOk.docsGate, true);
 
       // sorting: blanks last, ascending
       await page.evaluate(() => {

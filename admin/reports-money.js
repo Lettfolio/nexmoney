@@ -1,34 +1,9 @@
 /* ==========================================================================
    NexMoney Back Office — admin/reports-money.js  (R81 · A1)
-
-   THE SECOND CARVE OF app.js: the REPORTS + MONEY page family — every panel,
-   model and helper from the "---------- Reports ----------" marker down
-   to (and including) the R44 reconciliation wiring IIFE — moved VERBATIM.
-   Loaded via a classic <script> tag AFTER /admin/core.js and BEFORE
-   /admin/app.js (see index.html for why that order is proven, not assumed).
-   Classic scripts share one global scope, so everything declared here is
-   visible to app.js exactly as it was when these lived there.
-
-   WHY THIS FILE LOADS BEFORE app.js (the R78 rule, applied in reverse):
-     - This file's own top-level eval references NOTHING from app.js — only
-       core.js's $ and JS globals (verified by AST scan of every eval-time
-       identifier: the two wiring IIFEs use $ alone; every other top-level
-       statement is a declaration whose initializer is pure data or an arrow).
-     - app.js's top-level eval references NOTHING declared here (same scan,
-       other direction) — BUT app.js's last line calls init(), whose awaits
-       (getSession / resolveMyRole) resolve from MICROTASKS, and microtask
-       checkpoints run BETWEEN classic scripts. Were this file loaded after
-       app.js, a deep link to #reports or #money could reach nav()'s page map
-       — which names loadReports / loadMoneyPage — before this script had
-       evaluated: ReferenceError, blank page. app.js therefore stays LAST.
-
-   THE MOVE RULE (HARNESS.md "R81 · A"): function bodies are byte-identical to
-   R80's app.js, comments included. The ONLY in-move edits are the tagged
-   "R81 · A2" wave collapse in/around loadMoneyPage and the tagged "R81 · A4"
-   dbFail conversions — nothing else was touched. A duplicate top-level
-   declaration across the three scripts is a SyntaxError that kills the whole
-   later script, so anything moved here was DELETED from app.js in the same
-   commit.
+   The REPORTS + MONEY page family, carved from app.js; loaded AFTER core.js and BEFORE app.js.
+   WHY BEFORE app.js: this file's top-level eval names nothing from app.js, and app.js's last line calls
+   init(), whose awaits resolve from microtasks that run BETWEEN classic scripts — loaded after app.js,
+   a deep link to #reports / #money could reach nav() before loadReports existed. app.js stays LAST.
    ========================================================================== */
 
 /* ---------- Reports ---------- */
@@ -46,11 +21,8 @@ function last6Months() {
   for (let i = 5; i >= 0; i--) out.push(localMonthStr(new Date(now.getFullYear(), now.getMonth() - i, 1)));
   return out;
 }
-// Tiny inline SVG sparkline — no chart libs. `values` is oldest-first; flat/zero series render as a
-// straight baseline rather than throwing on a 0/0 divide.
-// T1-18 — `sharedMax` lets a column of sparklines share one vertical scale. Without it every row is
-// scaled to its own peak, so a row peaking at 1 draws the same height as a row peaking at 5 and the
-// column inverts the ranking it exists to show. Omitted → per-row scale (the old behaviour).
+// Tiny inline SVG sparkline — no chart libs. `values` is oldest-first; flat/zero series render as a straight
+// baseline rather than throwing on a 0/0 divide. T1-18 — `sharedMax` lets a column of sparklines share one…
 function sparklineSvg(values, sharedMax) {
   const w = 84, h = 22, pad = 3;
   const max = sharedMax != null ? Math.max(sharedMax, 1) : Math.max(...values, 1);
@@ -58,11 +30,8 @@ function sparklineSvg(values, sharedMax) {
   const pts = values.map((v, i) => `${(pad + i * stepX).toFixed(1)},${(h - pad - (v / max) * (h - pad * 2)).toFixed(1)}`).join(" ");
   return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" class="sparkline" aria-hidden="true"><polyline points="${pts}" fill="none" stroke="var(--navy)" stroke-width="1.6"/></svg>`;
 }
-/* T1-20 — one conversion cell, used by both the Introducers table and the Lead sources table.
-   Conversion is completed / (completed + not proceeding): a case that is still live is neither a
-   win nor a loss, and counting it as a loss reads as "this introducer sends me cases that go
-   nowhere" about a referrer whose cases are sitting at Offer. Below 5 resolved cases the figure is
-   marked (n<5) and greyed — at n=2 the table produces a 0% and a 100% with equal confidence. */
+/* T1-20: one conversion cell, used by both the Introducers table and the Lead sources table. Conversion is
+   completed /: a case that is still live is neither a win nor a loss… */
 function convCell(done, lost) {
   const resolved = done + lost;
   const marker = ' <span class="stat-n">(n&lt;5)</span>';
@@ -75,47 +44,33 @@ function convCell(done, lost) {
 }
 const CONV_TH_TITLE = "Completed ÷ (completed + not proceeding). Cases still live are excluded — they have not failed yet. Shown as (n<5) where fewer than 5 cases have resolved.";
 
-/* ==========================================================================
-   BATCH 6 — money basis, per-fee-type cash dates, period deltas
-   ========================================================================== */
+/* BATCH 6 — money basis, per-fee-type cash dates, period deltas */
 
-/* R5-17 (label half) — the three bases every money figure on Reports is counted on. NOTHING here
-   changes a calculation: the point is that two figures which legitimately disagree (fee value
-   EARNED on cases that completed in July vs cash BANKED in July) stop looking like a bug. The
-   suffix strings are used verbatim on the tiles, so a test can assert them. */
+/* R5-17 (label half): the three bases every money figure on Reports is counted on. NOTHING here changes a
+   calculation: the point is that two figures which legitimately disagree stop looking like a bug. */
 const BASIS_EARNED_ALL = "(earned · all fee types)";
 const BASIS_CASH_MONTH = "(broker only · cash · this month)";
 const BASIS_CASH_YTD = "(broker only · cash · YTD)";
 const BASIS_TARGET = "cash · proc+broker+sols · by paid date";
 const BASIS_FORECAST = "(weighted · proc+broker, excl. sols)";
 const BASIS_INTRO_REV = "(all-time · earned · completed cases)";
-/* R5-F2 (Daniel-approved) — the HEADLINE basis. Fee value is now led with as EARNED ON COMPLETION:
-   proc + broker + sols on cases whose completed_at falls in the period, paid or not. The cash
-   figures (BASIS_TARGET / BASIS_CASH_*) are not deleted and not changed — they are demoted to
-   clearly-labelled secondary numbers beside the headline. Two figures answering two questions; the
-   page now leads with the one Daniel manages the business on. */
+/* R5-F2 (Daniel-approved) — the HEADLINE basis. Fee value is now led with as EARNED ON COMPLETION: proc +
+   broker + sols on cases whose completed_at falls in the period, paid or not. */
 const BASIS_EARNED_MONTH = "(earned · proc+broker+sols · completed this month)";
 const BASIS_EARNED_YTD = "(earned · proc+broker+sols · completed YTD)";
 const BASIS_TARGET_EARNED = "earned · proc+broker+sols · by completion date";
-/* R5-F1 (Daniel-approved) — the adviser's own three figures. Every one of these is scoped to
-   assigned_to = the signed-in person; the wording says so on the tile itself so the card can never
-   be mistaken for a firm-wide number. Same clamps as the owner figures: no future-dated cash. */
+/* R5-F1 (Daniel-approved) — the adviser's own three figures. Every one of these is scoped to assigned_to =
+   the signed-in person; the wording says so on the tile itself so the card can never be mistaken for a… */
 const BASIS_MY_CASH_YTD = "(cash · proc+broker+sols · by paid date · my cases · YTD · excl. future-dated)";
 const BASIS_MY_OUTSTANDING = "(earned · not yet received · my completed cases)";
 const BASIS_MY_PIPELINE = "(unweighted estimate · proc+broker · offer & exchange · my cases)";
 const basisLine = (t) => `<div class="s">${esc(t)}</div>`;
 
-/* B7 — the per-fee-type amount/date pairing is FEE_TYPES, declared with the mark-paid flow above
-   (Batch 2). Before M2 a single fee_paid_at stood for all three, so a case whose broker fee landed
-   in June and whose proc fee landed in July could only ever be counted once, in one month.
-   coalesce(<type>_fee_paid_at, fee_paid_at) — exactly what M5 does inside get_reports. Feature
-   detection is by absence: loadFeeCashDates() leaves the new keys undefined on an un-migrated
-   database, so this silently becomes the old single-date behaviour rather than throwing. */
+/* B7 — the per-fee-type amount/date pairing is FEE_TYPES, declared with the mark-paid flow above (Batch 2).
+   Before M2 a single fee_paid_at stood for all three, so a case whose broker fee landed in June and whose… */
 const feeCashDate = (c, dateCol) => (c && (c[dateCol] || c.fee_paid_at)) || null;
-/* Cash actually collected in month `mv`, keyed on each fee type's own paid date.
-   B7 clamp: a payment DATED IN THE FUTURE is not collected money — it is excluded from the total
-   and counted separately so the caller can footnote it ("excludes future-dated payments (N)").
-   `types` is a list of FEE_TYPES keys; rows is the cases array. */
+/* Cash actually collected in month `mv`, keyed on each fee type's own paid date. B7 clamp: a payment DATED IN
+   THE FUTURE is not collected money — it is excluded from the total and counted separately so the caller… */
 function cashInMonth(rows, mv, types) {
   const today = localDateStr();
   const wanted = FEE_TYPES.filter((f) => types.indexOf(f.key) >= 0);
@@ -132,9 +87,8 @@ function cashInMonth(rows, mv, types) {
   });
   return { total, futureN, futureTotal };
 }
-/* R5-F1 — the same walk, scoped to a calendar YEAR instead of a month. Deliberately a separate
-   function rather than a "period" flag on cashInMonth: the month version is load-bearing for the
-   target bar and the scoreboard, and both keep the identical future-date clamp below. */
+/* R5-F1 — the same walk, scoped to a calendar YEAR instead of a month. Deliberately a separate function
+   rather than a "period" flag on cashInMonth… */
 function cashInYear(rows, yr, types) {
   const today = localDateStr();
   const wanted = FEE_TYPES.filter((f) => types.indexOf(f.key) >= 0);
@@ -151,10 +105,8 @@ function cashInYear(rows, yr, types) {
   });
   return { total, futureN, futureTotal };
 }
-/* R5-F2 — the HEADLINE basis, in one place so the month card, the target bar and the YTD tile
-   cannot drift apart: proc + broker + sols fee value on cases whose completed_at falls in the
-   period, whether or not any of it has been paid. `period` is "YYYY-MM" or "YYYY" — matched by
-   prefix against the Europe/London completion date, the same basis every other figure here uses. */
+/* R5-F2 — the HEADLINE basis, in one place so the month card, the target bar and the YTD tile cannot drift
+   apart: proc + broker + sols fee value on cases whose completed_at falls in the period… */
 function earnedOnCompletion(rows, period) {
   const p = String(period || "");
   let total = 0, n = 0;
@@ -176,10 +128,8 @@ const monthShortLabel = (mv, withYear) => {
   const m = MONTH_SHORT[Number(String(mv).slice(5, 7)) - 1] || mv;
   return withYear ? m + " " + String(mv).slice(2, 4) : m;
 };
-/* S8 / R5-19 — one delta chip. THE POINT OF THIS FUNCTION is the difference between "we did no
-   business that month" (a real zero, which can be compared) and "we have no rows for that month
-   at all" (nothing to compare, and emphatically not a 100% fall). `priorHasData` is decided by
-   whether ANY case row is dated in the prior period, not by whether this metric was non-zero. */
+/* S8 / R5-19 — one delta chip. THE POINT OF THIS FUNCTION is the difference between "we did no business that
+   month" and "we have no rows for that month at all". */
 function deltaChip(cur, prior, priorHasData, label, fmt) {
   const f = fmt || ((n) => String(n));
   if (!priorHasData) {
@@ -200,40 +150,23 @@ function deltaChip(cur, prior, priorHasData, label, fmt) {
 function deltaChips(cur, prev, prevYear, fmt) {
   return `<div class="kpi-delta">${deltaChip(cur, prev.value, prev.hasData, prev.label, fmt)}<span class="delta-sep">·</span>${deltaChip(cur, prevYear.value, prevYear.hasData, prevYear.label, fmt)}</div>`;
 }
-/* R5-2 — the one sentence that says whose figures these are. Attribution follows the adviser
-   CURRENTLY on the case; the leaver flow (Batch 5) deliberately leaves completed cases attributed
-   to whoever closed them, so a historic month does not rewrite itself when somebody leaves. */
+/* R5-2: the one sentence that says whose figures these are. Attribution follows the adviser CURRENTLY on the
+   case; the leaver flow (Batch 5) deliberately leaves completed cases attributed to whoever closed them… */
 const ATTRIB_NOTE = "Figures follow the adviser currently on each case; completed cases keep their adviser when someone leaves.";
 
-/* BACKEND-R4 §1 (owner's decision) — money reporting is Owner-only IN THE UI: fee figures, the
-   commission forecast, the adviser scoreboard, introducer revenue and client lifetime value.
-   Operational reporting — case counts, the funnel, completions, lead-source volumes, data health —
-   stays visible to everyone.
-   THIS IS A PRESENTATION CHOICE, NOT A SECURITY CONTROL. get_reports() is still readable by any
-   staff account and the cases table still carries broker_fee/proc_fee/sols_fee to every signed-in
-   adviser; anyone with the browser console can read what this hides. Do not describe it as a
-   control, and do not rely on it for anything that matters. */
+/* BACKEND-R4 §1 (owner's decision): money reporting is Owner-only IN THE UI: fee figures, the commission
+   forecast, the adviser scoreboard, introducer revenue and client lifetime value. */
 const showMoney = () => isOwner();
-/* R5-F1 (Daniel-approved, this round) — the one exception to the paragraph above. An adviser could
-   see every firm-wide money figure withheld and none of their OWN, which meant the person doing the
-   work had no way to answer "what have I banked this year". Daniel reversed that for the adviser's
-   own book only: ONE card, every figure on it scoped to assigned_to = me, nothing firm-wide and
-   nothing belonging to a colleague.
-   Audience is advisers; a working admin who holds cases gets it too (they are staff doing the same
-   job), which is why this keys off MY_ROLE + ME rather than a single role string. The Owner is
-   excluded — showMoney() already gives them the fuller, firm-wide set below, and a second "my
-   numbers" card would just be a subset of what they can already see.
-   Still a PRESENTATION choice, not a control: the same caveat as showMoney() applies verbatim. */
-/* R87 · owner-admin (05 #7) — "admin" LEFT this list. Kim is back-office: the fixture gives her two
-   cases and every tile read £0 / —, so the first thing an administrator met on Reports was a card of
-   zeros about herself. The card is the adviser's (and legacy "staff", which is an adviser role). */
+/* R5-F1 (Daniel-approved): the one exception to the paragraph above — an adviser saw every firm-wide money
+   figure withheld and none of their OWN, so "what have I banked this year" had no answer. ONE card, every
+   figure scoped to assigned_to = me, nothing firm-wide or a colleague's. Keyed off MY_ROLE + ME rather than one
+   role string; the Owner is excluded (showMoney() already gives the fuller set). Still a PRESENTATION choice,
+   not a control: the showMoney() caveat applies verbatim. R87 · owner-admin (05 #7): "admin" LEFT the list —
+   Kim is back-office, and a card of £0 / — about herself was the first thing she met on Reports. */
 const MY_NUMBERS_ROLES = ["adviser", "staff"];
 const showMyNumbers = () => !!ME && !isOwner() && MY_NUMBERS_ROLES.includes(MY_ROLE);
-/* R5-F1 (CSV half) — whether a pipeline export may carry the Broker fee column. The Owner is
-   unchanged (always). For an ADVISER the column is dropped only when the export would spill a
-   colleague's fee: an export whose every row is their own case is their own money and now keeps the
-   column. Admin exports are deliberately unchanged (still stripped) — Daniel scoped this reversal
-   to the advisers whose own numbers they are. */
+/* R5-F1 (CSV half) — whether a pipeline export may carry the Broker fee column. The Owner is unchanged
+   (always). For an ADVISER the column is dropped only when the export would spill a colleague's fee… */
 const csvFeeRoles = () => MY_ROLE === "adviser" || MY_ROLE === "staff";
 function csvShowsFee(rows) {
   if (showMoney()) return true;
@@ -241,10 +174,8 @@ function csvShowsFee(rows) {
   const list = rows || [];
   return list.length > 0 && list.every((c) => c && c.assigned_to === ME.id);
 }
-/* S8 / R5-19 — the month card's KPI set for ANY month, so the same numbers can be computed for the
-   selected month, the month before it and the same month a year earlier without duplicating the
-   arithmetic. `hasData` answers "do we hold any case rows for that month at all" — the test that
-   separates a real zero from a period we simply have no history for. */
+/* S8 / R5-19 — the month card's KPI set for ANY month, so the same numbers can be computed for the selected
+   month, the month before it and the same month a year earlier without duplicating the arithmetic. */
 function monthKpiSet(all, mv) {
   const inMonth = (d) => d && localMonthStr(d) === mv;
   const sum = (rows, k) => rows.reduce((s, c) => s + Number(c[k] || 0), 0);
@@ -286,28 +217,21 @@ const adviserOwns = (c, adviserId) => (adviserId ? c.assigned_to === adviserId :
 function adviserMonthCompletions(cases, adviserId, mv) {
   return (cases || []).filter((c) => adviserOwns(c, adviserId) && c.completed_at && localMonthStr(c.completed_at) === mv);
 }
-/* Fees EARNED on those completions — procuration + broker + solicitor, paid or not.
-   The same basis as the firm "Fees earned vs target" bar (earnedOnCompletion sums the
-   same three fees), and deliberately NOT the cash "Fees banked" figure beside it. */
+/* Fees EARNED on those completions — procuration + broker + solicitor, paid or not. The same basis as the
+   firm "Fees earned vs target" bar, and deliberately NOT the cash "Fees banked" figure beside it. */
 function adviserMonthEarned(cases, adviserId, mv) {
   const done = adviserMonthCompletions(cases, adviserId, mv);
   return { total: done.reduce((s, c) => s + (Number(c.proc_fee) || 0) + (Number(c.broker_fee) || 0) + (Number(c.sols_fee) || 0), 0), n: done.length };
 }
-/* R7-3's protection attach rate. `pct` is null — never 0 — when there were no
-   completions at all, because nobody attached nothing to nothing; the caller renders
-   that as "—". The count travels with the percentage: on a month's completions a
-   single case moves it a long way, so the bracket is read before the number. */
+/* R7-3's protection attach rate. `pct` is null — never 0 — when there were no completions at all, because
+   nobody attached nothing to nothing; the caller renders that as "—". */
 function adviserAttachRate(cases, adviserId, mv) {
   const done = adviserMonthCompletions(cases, adviserId, mv);
   const taken = done.filter((c) => c.protection_status === "policy_taken").length;
   return { pct: done.length ? Math.round((taken / done.length) * 100) : null, taken, n: done.length };
 }
-/* Retention conversion, exactly as the firm KPI tile on this page has always defined it:
-   of the cases that exist BECAUSE an earlier case's rate was ending (retention_source_case_id
-   set), how many completed against how many were lost. Cases still in flight are in neither
-   half — they have not converted or failed to yet. It is an ALL-TIME figure, not month-scoped:
-   a retention case started in March and completed in July belongs to both months and neither,
-   and the firm tile has always counted it whole. The scope line says so out loud. */
+/* Retention conversion, exactly as the firm KPI tile on this page has always defined it: of the cases that
+   exist BECAUSE an earlier case's rate was ending, how many completed against how many were lost. */
 function retentionConversion(cases) {
   const rets = (cases || []).filter((c) => c.retention_source_case_id);
   const won = rets.filter((c) => c.stage === "completed").length;
@@ -317,12 +241,8 @@ function retentionConversion(cases) {
 function adviserRetentionConversion(cases, adviserId) {
   return retentionConversion((cases || []).filter((c) => adviserOwns(c, adviserId)));
 }
-/* R68 · M7 — the target BAR itself, lifted out of renderMonthReport unchanged so the adviser's
-   own bar on My numbers is the same object as the firm's, not a lookalike. R6-B4's rule is the
-   part worth keeping in one place: under target the track's right end IS target; over target the
-   track stretches 12% past what was achieved so there is visible track and a marker where target
-   sat — a fill clamped to 100% made 122% look identical to 100%. Colour matches the scoreboard's
-   Target cell: green ≥100 / amber ≥60 / red below. */
+/* R68 · M7: the target BAR itself, lifted out of renderMonthReport unchanged so the adviser's own bar on My
+   numbers is the same object as the firm's, not a lookalike. */
 function feeBarHtml(pct, target, ariaWhat) {
   const color = pct >= 100 ? "var(--green)" : pct >= 60 ? "var(--amber)" : "var(--red)";
   const over = pct > 100;
@@ -394,16 +314,10 @@ function renderMyNumbers(all, yr, mv) {
   const offerPlus = mine.filter((c) => OFFER_PLUS.includes(c.stage));
   const pipeline = offerPlus.reduce((s, c) => s + Number(c.proc_fee || 0) + Number(c.broker_fee || 0), 0);
 
-  /* ==========================================================================
-     R68 · M7 — THE TARGET REACHES THE PERSON IT IS SET FOR.
-     A per-adviser monthly fee target has existed since R26 and lived entirely on the
-     owner-only scoreboard: the one person who could act on it was the one person who
-     could not see it. These three figures are the adviser's own row of that scoreboard,
-     computed by the SAME helpers it uses (adviserMonthEarned / adviserAttachRate /
-     adviserRetentionConversion), so "Luke is 40% under" reads identically on both screens.
-     No target set is a real and normal state — this firm has set none — so it says so in
-     words and never renders NaN or a 0% that would read as a failure.
-     ========================================================================== */
+  /* R68 · M7: THE TARGET REACHES THE PERSON IT IS SET FOR. A per-adviser monthly fee target has existed since R26
+     and lived entirely on the owner-only scoreboard: the one person who could act on it was the one person who
+     could not see it. No target set is a real and normal state — this firm has set none — so it says so in words
+     and never renders NaN or a 0% that would read as a failure. … */
   const myTarget = Number(adviserTargets()[ME.id] || 0);
   const myEarned = adviserMonthEarned(all, ME.id, mvNow);
   const myAttach = adviserAttachRate(all, ME.id, mvNow);
@@ -411,9 +325,8 @@ function renderMyNumbers(all, yr, mv) {
 
   const scope = $("#report-mine-scope");
   if (scope) {
-    /* R87 · owner-admin (T1) — ONE line in the open; the three-window explanation (R68 · M7) keeps
-       every word behind howFold. #report-mine-scope is a <p> in the markup, and a <details> inside
-       a <p> is closed by the parser, so the scope is written as a <div> the first time through. */
+    /* R87 · owner-admin (T1): ONE line in the open; the three-window explanation (R68 · M7) keeps every word
+       behind howFold. #report-mine-scope is a <p> in the markup… */
     const scopeHost = scope.tagName === "P" ? (() => { const d = document.createElement("div"); d.className = scope.className; d.id = scope.id; scope.replaceWith(d); return d; })() : scope;
     scopeHost.innerHTML = `Your own figures only — cases assigned to you (${mine.length} case${mine.length === 1 ? "" : "s"}); no firm totals, no colleague's cases. `
       + howFold({ id: "report-mine-how", title: "How these are counted", html: `<p>Every number on this card counts cases assigned to you. Nothing here is a firm total and no colleague's cases are in it. `
@@ -427,8 +340,7 @@ function renderMyNumbers(all, yr, mv) {
     <div class="kpi"><div class="num" title="${esc(fmtM(banked.total))}">${fmtM(banked.total)}</div><div class="lbl">My fees banked ${yr}</div>${basisLine(BASIS_MY_CASH_YTD + (banked.futureN ? ` — ${fmtM(banked.futureTotal)} dated after today (${banked.futureN}) is excluded` : ""))}</div>
     <div class="kpi ${outstanding ? "warn" : ""}"><div class="num" title="${esc(fmtM(outstanding))}">${fmtM(outstanding)}</div><div class="lbl">My fees outstanding</div>${basisLine(BASIS_MY_OUTSTANDING + ` — ${outstandingN} fee${outstandingN === 1 ? "" : "s"} across ${outstandingCases.size} completed case${outstandingCases.size === 1 ? "" : "s"} with no paid date`)}</div>
     <div class="kpi"><div class="num" title="${esc(fmtM(pipeline))}">${fmtM(pipeline)}</div><div class="lbl">My pipeline at Offer+</div>${basisLine(BASIS_MY_PIPELINE + ` — ${offerPlus.length} case${offerPlus.length === 1 ? "" : "s"} at Offer or Exchange, not weighted for fall-through`)}</div>
-    ${/* R7-3's rule verbatim: no completions in the month means there was nothing to attach a
-         policy to, so it is "—" and never 0%. The bracket count is read before the percentage. */ ""}
+    
     <div class="kpi" id="report-mine-attach"><div class="num">${myAttach.pct == null ? "—" : `${myAttach.pct}%`}</div><div class="lbl">My attach rate (${esc(mLabel)})</div>${basisLine(myAttach.pct == null
       ? `(policy taken ÷ my completions · ${esc(mLabel)}) — no completions in this month, so there is nothing to attach a policy to`
       : `(policy taken ÷ my completions · ${esc(mLabel)}) — ${myAttach.taken} of ${myAttach.n} completion${myAttach.n === 1 ? "" : "s"}${myAttach.n < 3 ? ", too small a sample to read as a ranking" : ""}`)}</div>
@@ -438,14 +350,13 @@ function renderMyNumbers(all, yr, mv) {
 
   if (tgtEl) {
     if (!(myTarget > 0)) {
-      /* No target is the state this firm is actually in (adviser_fee_targets has never been
-         written), so it is the state this line is written for: say what is missing and who can
-         fix it. A 0% bar here would be a claim about performance, and it would be false. */
-      tgtEl.innerHTML = `<div class="panel-sub target-headline" id="report-mine-target-none" style="margin:12px 0 4px;">Fees earned this month vs my target — <strong>no monthly target set for you yet</strong> — ask the owner to set one in Settings › Adviser targets. `
+      /* No target is the state this firm is actually in, so it is the state this line is written for: say
+         what is missing and who can fix it. A 0% bar here would be a claim about performance… */
+      tgtEl.innerHTML = `<div class="panel-sub target-headline u-m-12-0-4" id="report-mine-target-none">Fees earned this month vs my target — <strong>no monthly target set for you yet</strong> — ask the owner to set one in Settings › Adviser targets. `
         + `You earned ${fmtM(myEarned.total)} in ${esc(mLabel)} <span class="money-basis">${esc(BASIS_TARGET_EARNED)} — ${myEarned.n} completion${myEarned.n === 1 ? "" : "s"} this month, paid or not</span></div>`;
     } else {
       const pct = Math.round((myEarned.total / myTarget) * 100);
-      tgtEl.innerHTML = `<div class="panel-sub target-headline" id="report-mine-target-line" style="margin:12px 0 4px;">Fees earned this month vs my target — ${fmtM(myEarned.total)} of ${fmtM(myTarget)} target · ${pct}% <span class="money-basis">${esc(BASIS_TARGET_EARNED)} — ${myEarned.n} completion${myEarned.n === 1 ? "" : "s"} this month, paid or not</span></div>`
+      tgtEl.innerHTML = `<div class="panel-sub target-headline u-m-12-0-4" id="report-mine-target-line">Fees earned this month vs my target — ${fmtM(myEarned.total)} of ${fmtM(myTarget)} target · ${pct}% <span class="money-basis">${esc(BASIS_TARGET_EARNED)} — ${myEarned.n} completion${myEarned.n === 1 ? "" : "s"} this month, paid or not</span></div>`
         + feeBarHtml(pct, myTarget, "monthly fee target");
     }
   }
@@ -460,11 +371,8 @@ function renderMonthReport(all, mv) {
   const prevMv = monthAdd(mv, -1), yoyMv = monthAdd(mv, -12);
   const prevSet = monthKpiSet(all, prevMv), yoySet = monthKpiSet(all, yoyMv);
   const prevLbl = monthShortLabel(prevMv, false), yoyLbl = monthShortLabel(yoyMv, true);
-  /* G1N-7 — a month that has not started yet is empty because it has not started, not because the
-     firm collapsed. deltaChip exists precisely to tell those apart, and this was the one case it
-     got backwards: cur.hasData false while the prior month has rows sent it down the real-
-     percentage branch, so every tile read "0 ▼ −100% vs <last month>". The picker now carries a max
-     (see loadReports); a month selected past it says what it is instead of inventing a fall. */
+  /* G1N-7 — a month that has not started yet is empty because it has not started, not because the firm
+     collapsed. deltaChip exists precisely to tell those apart… */
   const notStarted = mv > localMonthStr();
   const futureChip = `<div class="kpi-delta"><span class="delta none" title="${esc(monthLabel(mv))} has not started yet, so there is nothing to compare. This is an empty period, not a fall to zero.">not started yet</span></div>`;
   const cmpCount = (k) => notStarted ? futureChip : deltaChips(cur[k],
@@ -476,44 +384,29 @@ function renderMonthReport(all, mv) {
   const sub = cur.sub, done = cur.done;
   const sum = (rows, k) => rows.reduce((s, c) => s + Number(c[k] || 0), 0);
   $("#month-report-title").textContent = "Monthly business — " + monthLabel(mv);
-  // The footnote explains the Proc £ / Broker £ / Sols £ columns and points at "Fees banked (paid)"
-  // on the Adviser scoreboard. For a non-Owner those columns are stripped and that panel is hidden,
-  // so it described things that aren't on the page — it now shows with the money it describes.
+  // The footnote explains the Proc £ / Broker £ / Sols £ columns and points at "Fees banked (paid)" on the
+  // Adviser scoreboard. For a non-Owner those columns are stripped and that panel is hidden…
   const legend = $("#month-legend");
   if (legend) legend.classList.toggle("hidden", !money);
   const basisLegend = $("#report-basis-legend");
-  /* R5-F1 — the legend names the three bases every money label on this page is counted on, and
-     since the My numbers card uses all three it now describes figures an adviser CAN see. Hiding it
-     from them was correct while they had no money figures at all; it isn't any more. */
+  /* R5-F1 — the legend names the three bases every money label on this page is counted on, and since the My
+     numbers card uses all three it now describes figures an adviser CAN see. */
   if (basisLegend) basisLegend.classList.toggle("hidden", !money && !showMyNumbers());
   /* R74 · A4a — the fold follows the paragraph it holds: an empty disclosure handle on an
      adviser's page would be a control that opens onto nothing. */
   const basisFold = $("#report-basis-fold");
   if (basisFold) basisFold.hidden = !!(basisLegend && basisLegend.classList.contains("hidden"));
-  /* R5-F2 — "Completed £" is the headline: fee value EARNED on the cases that completed this
-     month. It is not moved (the tile order is load-bearing for the delta chips beside it) and its
-     label is unchanged; the emphasis is carried by kpi-headline, and by the target bar below, which
-     now measures the same basis. */
+  /* R5-F2 — "Completed £" is the headline: fee value EARNED on the cases that completed this month. It is not
+     moved and its label is unchanged; the emphasis is carried by kpi-headline… */
   $("#month-kpis").innerHTML = `
     <div class="kpi"><div class="num">${cur.nSub}</div><div class="lbl">Applications submitted</div>${cmpCount("nSub")}</div>
     ${money ? `<div class="kpi kpi-secondary"><div class="num">${fmtM(cur.subTotal)}</div><div class="lbl">Submitted £ (proc+broker+sols)</div>${basisLine(BASIS_EARNED_ALL)}${cmpMoney("subTotal")}</div>` : ""}
     <div class="kpi"><div class="num">${cur.nDone}</div><div class="lbl">Completions</div>${cmpCount("nDone")}</div>
     ${money ? `<div class="kpi kpi-headline"><div class="num">${fmtM(cur.doneTotal)}</div><div class="lbl">Completed £ (proc+broker+sols)</div>${basisLine(BASIS_EARNED_ALL)}${cmpMoney("doneTotal")}</div>` : ""}`;
 
-  /* ==========================================================================
-     R74 · A4a (panel D#12) — THE HERO ROW, AT THE TOP OF THE PAGE.
-
-     Every figure here is one the code above has already computed for the panel
-     below (cur.doneTotal, and the earned/target pair the bar uses), read from
-     the same helpers rather than re-derived, so the hero and the Monthly
-     business panel can never disagree. What the hero adds is placement: the
-     number the owner is judged on, first, at a size that says so.
-
-     Owner-only, on the same showMoney() gate as everything else it quotes. No
-     target set is a real state (and the honest one for two of the four
-     advisers here) — the hero then leads with the earned figure alone rather
-     than inventing a percentage.
-     ========================================================================== */
+  /* R74 · A4a (panel D#12): THE HERO ROW, AT THE TOP OF THE PAGE. Every figure here is one the code above has
+     already computed for the panel below (cur.doneTotal, and the earned/target pair the bar uses), read from the
+     same helpers rather than re-derived, so the hero and the Monthly business panel can never disagree. … */
   const heroEl = $("#report-hero"), heroStrip = $("#report-hero-strip");
   if (heroEl) {
     const heroTarget = money ? Number(settings.monthly_fee_target || 0) : 0;
@@ -532,33 +425,20 @@ function renderMonthReport(all, mv) {
         /* R87 · owner-admin (T1) — the pointer sentence ("the bar … are in Monthly business below")
            restated the panel one scroll down; the basis stays (r74 §D1d pins "paid or not" + the chip). */
         + `<span class="rep-hero-basis">Fee value on the ${heroEarned.n} case${heroEarned.n === 1 ? "" : "s"} that completed in ${esc(monthLabel(mv))}, paid or not. <span class="money-basis">${esc(BASIS_TARGET_EARNED)}</span></span>`;
-      /* The other three month figures, demoted rather than deleted OR duplicated: one quiet line
-         under the hero, deliberately NOT a second row of tiles — the tiles with their
-         month-on-month deltas are the Monthly business panel's own job, and printing them twice
-         within one screen is the disease this round is treating. */
+      /* The other three month figures, demoted rather than deleted OR duplicated: one quiet line under the
+         hero, deliberately NOT a second row of tiles… */
       if (heroStrip) {
         heroStrip.innerHTML = `<span class="rep-hero-sec-i"><strong>${cur.nDone}</strong> completion${cur.nDone === 1 ? "" : "s"}</span>`
           + `<span class="rep-hero-sec-i"><strong>${cur.nSub}</strong> application${cur.nSub === 1 ? "" : "s"} submitted</span>`
-          /* No basis caption here on purpose: the tile in Monthly business below carries it (and
-             r5_batch6 pins "(earned · all fee types)" to exactly the two tiles that are the
-             earned figures). This line is a pointer to those tiles, not a third copy of them. */
+          /* No basis caption here on purpose: the tile in Monthly business below carries it (and r5_batch6
+             pins "(earned · all fee types)" to exactly the two tiles that are the earned figures). */
           + `<span class="rep-hero-sec-i"><strong>${fmtM(cur.subTotal)}</strong> submitted £</span>`;
       }
     }
   }
 
-  // BUILD 6a — firm monthly fee target (settings.monthly_fee_target, blank = off).
-  // B7 / Batch 6.4 — "collected" now means each fee type counted on ITS OWN paid date
-  // (coalesce(<type>_fee_paid_at, fee_paid_at)), so a split-paid case lands each £ in the month
-  // that money actually arrived, and a payment dated in the future is excluded outright with a
-  // footnote rather than silently inflating this month's bar.
-  /* R5-F2 (Daniel-approved) — the BAR now measures fees EARNED ON COMPLETION in the month
-     (proc+broker+sols on cases whose completed_at falls in it, paid or not), because that is the
-     month's work and the thing a target is set against; cash arrives weeks later and used to make
-     a fully-worked month read as a miss. The cash figure is NOT deleted and NOT changed — it keeps
-     its own line, its own basis label and its own future-date footnote directly underneath, so
-     both numbers are on screen and neither can be mistaken for the other. The caption on each line
-     states which basis it is. */
+  /* BUILD 6a: firm monthly fee target. B7 / Batch 6.4 — "collected" now means each fee type counted on ITS
+     OWN paid date (coalesce(<type>_fee_paid_at, fee_paid_at))… */
   const targetEl = $("#month-fee-target");
   if (targetEl) {
     const target = money ? Number(settings.monthly_fee_target || 0) : 0;
@@ -569,27 +449,17 @@ function renderMonthReport(all, mv) {
       const pct = Math.round((earned.total / target) * 100);
       const cashPct = Math.round((banked / target) * 100);
       targetEl.innerHTML = `
-        <div class="panel-sub target-headline" style="margin:12px 0 4px;">Fees earned vs target — ${fmtM(earned.total)} of ${fmtM(target)} (${pct}%) <span class="money-basis">${esc(BASIS_TARGET_EARNED)} — ${earned.n} completion${earned.n === 1 ? "" : "s"} this month, paid or not</span></div>
-        ${/* R6-B4 (D6-23) — the fill used to be min(pct,100)% of a track, so anything
-             at or over target was a solid full-width slab: the track was invisible and
-             122% looked identical to 100%. The bar now scales to max(pct,100), so an
-             overshoot leaves visible track and a marker shows where target sat. Inline
-             styles moved to .fee-bar-* classes, except the one that is genuinely data
-             (the fill's width and its earned/target colour). */ ""}
-        ${/* R68 · M7 — the bar's own markup moved to feeBarHtml(), unchanged, so the adviser's
-             "vs my target" bar on My numbers is literally the same bar and cannot drift. */ ""}
+        <div class="panel-sub target-headline u-m-12-0-4">Fees earned vs target — ${fmtM(earned.total)} of ${fmtM(target)} (${pct}%) <span class="money-basis">${esc(BASIS_TARGET_EARNED)} — ${earned.n} completion${earned.n === 1 ? "" : "s"} this month, paid or not</span></div>
+        
+        
         ${feeBarHtml(pct, target, "monthly fee target")}
-        <div class="panel-sub target-secondary" style="margin:6px 0 0;">Also — total fees collected ${fmtM(banked)} of ${fmtM(target)} (${cashPct}%) <span class="money-basis">${esc(BASIS_TARGET)}${cash.futureN ? ` — excludes future-dated payments (${cash.futureN})` : ""}</span></div>`;
+        <div class="panel-sub target-secondary u-m-6-0-0">Also — total fees collected ${fmtM(banked)} of ${fmtM(target)} (${cashPct}%) <span class="money-basis">${esc(BASIS_TARGET)}${cash.futureN ? ` — excludes future-dated payments (${cash.futureN})` : ""}</span></div>`;
     } else {
       targetEl.innerHTML = "";
     }
   }
-  /* R5-2 — PROFILES, not TEAM. A month report is a historical document: the cases somebody
-     submitted and completed in June 2026 were theirs in June 2026, and the handover flow now
-     deliberately leaves completed cases attributed to them. Iterating TEAM (the STAFF_ROLES subset)
-     erased a leaver's entire row the moment their access was removed, so last month's report
-     changed retrospectively. PROFILES keeps everybody; the .filter() below still drops anyone with
-     no activity in the selected month, so no empty rows appear. */
+  /* R5-2: PROFILES, not TEAM. A month report is a historical document: the cases somebody submitted and
+     completed in June 2026 were theirs in June 2026… */
   const rows = (PROFILES.length ? PROFILES : TEAM).map((p) => {
     const s2 = sub.filter((c) => c.assigned_to === p.id);
     const d2 = done.filter((c) => c.assigned_to === p.id);
@@ -599,73 +469,26 @@ function renderMonthReport(all, mv) {
     return { name: profileName(p.id) || staffName(p.id), nSub: s2.length, sProc: sum(s2, "proc_fee"), sBrk: sum(s2, "broker_fee"), sSol: sum(s2, "sols_fee"),
              nDone: d2.length, dTot: sum(d2, "proc_fee") + sum(d2, "broker_fee") + sum(d2, "sols_fee"),
              pDone: pd.length, pTot: sum(pd, "proc_fee") + sum(pd, "broker_fee") + sum(pd, "sols_fee") };
-  /* G1N-1 — the row set is submitted ∪ completed ∪ PREVIOUS-month completions. It used to be the
-     selected month only, so anyone who did nothing this month lost their row entirely and their
-     prior-month completions vanished out of the comparison column: with July selected the
-     "Completed (Jun)" columns totalled 3 cases / £7,080 while June's own card — one click away on
-     the same picker — said 4 / £10,825. The whole point of the column is month-on-month
-     comparison, so an owner reading "we did 3 last month" against a June report saying 4 had no way
-     to tell which figure was wrong. A prior-month-only adviser now appears with zeroes for the
-     selected month (greyed, like the comparison columns themselves) and the column reconciles. */
+  /* G1N-1 — the row set is submitted ∪ completed ∪ PREVIOUS-month completions. It used to be the selected month
+     only, so anyone who did nothing this month lost their row entirely and their prior-month completions vanished
+     out of the comparison column: with July selected the "Completed (Jun)" columns totalled 3 cases / £7,080 while
+     June's own card — one click away on the same picker — said 4 / £10,825. … */
   }).filter((r) => r.nSub || r.nDone || r.pDone);
   // Non-Owner: the per-adviser activity counts stay, the fee columns go.
   const prevHead = `<th title="Completions recorded by this adviser in ${esc(monthLabel(prevMv))} — the month before the one selected.">Completed (${esc(prevLbl)})</th>${money ? `<th title="Fee value earned on those ${esc(monthLabel(prevMv))} completions.">Completed £ (${esc(prevLbl)})</th>` : ""}`;
-  $("#month-advisers").innerHTML = rows.length ? `<div style="overflow-x:auto;"><table class="imp-table">
+  $("#month-advisers").innerHTML = rows.length ? `<div class="u-ox-auto"><table class="imp-table">
     <tr><th>Adviser</th><th>Submitted</th>${money ? "<th>Proc £</th><th>Broker £</th><th>Sols £</th>" : ""}<th>Completed</th>${money ? '<th title="Value of fees earned on cases completed this month — whether or not those fees have been paid yet">Completed £ (earned)</th>' : ""}${prevHead}</tr>
     ${rows.map((r) => `<tr${r.nSub || r.nDone ? "" : ' class="stat-weak" title="No activity in this month — listed so the previous-month comparison column still totals that month\'s own report."'}><td><strong>${esc(r.name)}</strong></td><td class="num">${r.nSub}</td>${money ? `<td class="num">${fmtM(r.sProc)}</td><td class="num">${fmtM(r.sBrk)}</td><td class="num">${fmtM(r.sSol)}</td>` : ""}<td class="num">${r.nDone}</td>${money ? `<td class="num">${fmtM(r.dTot)}</td>` : ""}<td class="stat-weak num">${r.pDone}</td>${money ? `<td class="stat-weak num">${fmtM(r.pTot)}</td>` : ""}</tr>`).join("")}
   </table></div>
-  <p class="panel-sub month-attrib" id="month-advisers-attrib" style="margin:8px 0 0;">${esc(ATTRIB_NOTE)} ${esc(prevLbl)} columns include advisers with nothing in ${esc(monthShortLabel(mv, false))}.</p>` : '<div class="empty">No submissions or completions recorded for this month.</div>';
+  <p class="panel-sub month-attrib u-m-8-0-0" id="month-advisers-attrib">${esc(ATTRIB_NOTE)} ${esc(prevLbl)} columns include advisers with nothing in ${esc(monthShortLabel(mv, false))}.</p>` : '<div class="empty">No submissions or completions recorded for this month.</div>';
 }
 
-/* ==========================================================================
-   R72 · A1 — THE ADOPTION STRIP (R70 panel, H5a · Sam F4 / Priya F2)
-
-   THE PROBLEM, in one production fact: of the four back-office logins, only
-   Daniel has ever signed in. Kim, Wayne and Luke were created on 4 July and
-   have never opened the app. Nothing anywhere in this back office says so.
-   The owner's scoreboard above is a book report — cases, fees, attach rate —
-   and it happily prints a row for a person who has not been here, because a
-   completed case keeps its adviser whether or not that adviser ever logged in.
-
-   WHAT THIS STRIP CAN AND CANNOT KNOW, said out loud because the difference
-   matters and the copy under the table says it to the reader too:
-     · `auth.users.last_sign_in_at` is NOT client-readable. There is no query
-       from this app that can answer "who has signed in". Anything claiming to
-       is guessing.
-     · What the app CAN read is `audit_log` — R68's change-history panel and
-       its CSV export read the whole table already, so this costs no new
-       permission and no new column. Every insert/update/delete on a client, a
-       case, a task, a note, an appointment, a setting or a login writes one
-       row with the actor on it. So "last active" here means THE LAST CHANGE
-       THIS PERSON RECORDED, not the last time they signed in. Somebody who
-       signs in and reads for an hour leaves no row — which is the honest
-       limit, and is stated on screen rather than hidden behind a word.
-
-   SYSTEM ROWS ARE NOT HUMAN ACTIVITY. On production the nightly automation has
-   written 9,214 of the last 30 days' 9,438 audit rows across 1,817 cases; if
-   they counted, every adviser would look busy and the strip would say the
-   opposite of the truth. The automation's rows carry `actor IS NULL` — the
-   same convention the change-history "Who" filter already keys on (CH_SYSTEM),
-   whose label is "System (automation)". Filtering `actor` to the four staff
-   ids with `.in()` therefore excludes them at the database, not client-side:
-   a null actor can never match an `in` list. Four ids is one long way under
-   the inChunks threshold, so this read is deliberately NOT chunked — but any
-   future widening of it (every profile ever, say) would have to be.
-
-   COST: two bounded reads, in parallel, both through readAll().
-     1. audit_log — actor/case_id/happened_at only (no `changes` blobs), the
-        actor filtered to the staff ids, windowed to ADOPTION_WINDOW_DAYS.
-     2. case_tasks — open (done_at null) and already overdue (due_date before
-        today, Europe/London), grouped by assigned_to in JS.
-   The scoreboard's own "Overdue" column comes from get_reports and is keyed on
-   whatever that RPC counts; this one is stated in its own words on the row so
-   the two can be read together rather than argued about.
-   ========================================================================== */
+/* R72 · A1: THE ADOPTION STRIP THE PROBLEM, in one production fact: of the four back-office logins, only
+   Daniel has ever signed in. Kim, Wayne and Luke were created on 4 July and have never opened the app. */
 const ADOPTION_WINDOW_DAYS = 90;   // "last active" is read over this window; older than that reads "never"
 const ADOPTION_TOUCH_DAYS = 30;    // "cases touched" is the tighter, 30-day question the panel asked for
-/* Anyone with a back-office login — TEAM, not advisingStaff(). The question this answers is "has
-   this person used the app", and the administrator (who on this firm has 1 overdue task and has
-   never signed in) is exactly the person it must not leave out. */
+/* Anyone with a back-office login — TEAM, not advisingStaff(). The question this answers is "has this person
+   used the app", and the administrator is exactly the person it must not leave out. */
 function adoptionRoster() { return TEAM.slice(); }
 /* ==========================================================================
    R82 · B3 — THE BLIND SPOT IS CLOSED: get_staff_activity()
@@ -685,8 +508,7 @@ function adoptionRoster() { return TEAM.slice(); }
    and read quietly" apart from "never came" — both read `never` under Last
    active, which is a claim about a person made on missing evidence.
 
-   CONSUMED DEFENSIVELY, exactly as app.js consumes it (the PROT_QUOTE_SUPPORTED
-   / absencesSupported pattern): a 42883, an RLS refusal, a transport failure or
+   CONSUMED DEFENSIVELY, exactly as app.js consumes it: an RLS refusal, a transport failure or
    a shape this code does not recognise all mean ONE thing — "we do not know" —
    and the panel then renders today's behaviour and today's wording, down to the
    old disclaimer paragraph. A FAILED READ NEVER MAKES A COLLEAGUE LOOK
@@ -721,9 +543,8 @@ async function readStaffActivity() {
     ADOPTION_ACTIVITY = map; ADOPTION_ACTIVITY_SUPPORTED = true; return true;
   } catch (_) { ADOPTION_ACTIVITY = {}; ADOPTION_ACTIVITY_SUPPORTED = false; return false; }
 }
-/* R83 — the calendar day of a timestamp on the Europe/London basis daysSinceLocal already uses,
-   so "1 Sep (today)" can no longer appear at 00:30 BST on the 2nd. Falls back to the raw date
-   portion for anything Intl refuses to format. */
+/* R83: the calendar day of a timestamp on the Europe/London basis daysSinceLocal already uses, so "1 Sep
+   (today)" can no longer appear at 00:30 BST on the 2nd. */
 function adoptDayStr(iso) {
   try { return localDateStr(iso); } catch (_) { return String(iso).slice(0, 10); }
 }
@@ -746,9 +567,8 @@ async function readAdoptionData() {
       .order("happened_at", { ascending: false }).order("id", { ascending: false }), { cap: OWNER_ROW_CAP }),
     readAll(db.from("case_tasks").select("assigned_to,due_date,done_at")
       .is("done_at", null).lt("due_date", today).order("id"), { cap: OWNER_ROW_CAP }),
-    /* R82 · B3 — the sign-in read, in the SAME wave as the two above. It resolves to a boolean
-       and never rejects (readStaffActivity swallows its own failure into "we do not know"), so
-       it can never take the panel down with it. */
+    /* R82 · B3: the sign-in read, in the SAME wave as the two above. It resolves to a boolean and never
+       rejects, so it can never take the panel down with it. */
     readStaffActivity(),
   ]);
   return { audit: (aud && aud.data) || [], tasks: (tsk && tsk.data) || [],
@@ -774,16 +594,8 @@ function adoptionRowsFrom(roster, audit, tasks) {
     return { id: r.id, name: r.name, role: r.role, last: r.last, casesTouched: r.cases.size, overdue: r.overdue };
   });
 }
-/* R82 · B3 — the Signed in cell. THREE states and no fourth, because a fourth would be a guess:
-     · unknown  — the RPC is absent, refused or answered a shape we do not recognise. The panel's
-                  own em dash (never a 0, never the word "never"), and the title says the read
-                  failed rather than saying anything about the person.
-     · never    — the RPC positively reported has_signed_in:false. Says how long ago they were
-                  invited when it knows, because "invited two months ago and never came" is a
-                  different fact from "invited yesterday".
-     · signed in— the date, plus today/yesterday/N days ago in the Last active cell's own idiom.
-   A SIGN-IN IS NOT USAGE and the cell never implies it is: it says when somebody came, not what
-   they did. What they did is the column next to it. */
+/* R82 · B3: the Signed in cell. THREE states and no fourth, because a fourth would be a guess: · unknown —
+   the RPC is absent, refused or answered a shape we do not recognise. */
 function adoptionSignInCell(id) {
   const a = ADOPTION_ACTIVITY_SUPPORTED === true ? ADOPTION_ACTIVITY[id] : null;
   if (!a || a.known !== true) {
@@ -809,25 +621,15 @@ function adoptionSignInCell(id) {
     `${esc(fmtD(adoptDayStr(last)))} <span class="cs-muted">(${esc(when)})</span></td>`;   // R83 — London day, like daysSinceLocal beside it
 }
 
-/* R82 · B3 — THE EXPLANATORY PARAGRAPH, in two versions, and the difference between them is
-   whether a limitation still exists.
-
-   BEFORE this round it said, correctly: “This app cannot see sign-ins: that lives in the
-   authentication service and is not readable from here.” That is no longer true, and a panel
-   whose whole character is scrupulousness about what a number means may not go on disclaiming a
-   blind spot it does not have. The supported version therefore states the two columns as the two
-   different questions they are — and is just as precise about the NEW limitation, which is real:
-   a sign-in is not usage. Somebody can sign in, read one page and do nothing, and this panel will
-   show it as exactly that (a sign-in date beside “never” active), not as work.
-
-   The UNSUPPORTED version is the old paragraph, unchanged in substance, because when the sign-in
-   read fails the old limitation is precisely the situation we are in again — plus one sentence
-   saying so, so the em dashes in the column are not read as findings. */
+/* R82 · B3: THE EXPLANATORY PARAGRAPH, in two versions, and the difference between them is whether a limitation
+   still exists. Somebody can sign in, read one page and do nothing, and this panel will show it as exactly that (a
+   sign-in date beside “never” active), not as work. The UNSUPPORTED version is the old paragraph, unchanged in
+   substance, because when the sign-in read fails the old limitation is precisely the situation we are in again —
+   plus one sentence saying so, so the em dashes in the column are not read as findings. … */
 function adoptionSubHtml(tasksErr) {
   const tail = `Read over the last ${ADOPTION_WINDOW_DAYS} days; “never” under Last active means nothing recorded in that window. <strong>The nightly automation is excluded</strong> — its rows are logged with no person against them (they show as “System (automation)” in the change history), so they can never make a colleague look busy. Everyone with a back-office login is listed, not only advisers.${tasksErr ? " Overdue tasks could not be read just now and are shown as 0." : ""}`;
-  /* R87 · owner-admin (T1) — ONE line in the open (the distinction the reader needs before the
-     table), the 177-word essay behind howFold, text intact. The id stays on the wrapper so
-     #report-adoption-sub's textContent still carries every sentence r72/r82 read. */
+  /* R87 · owner-admin (T1): ONE line in the open, the 177-word essay behind howFold, text intact. The id
+     stays on the wrapper so #report-adoption-sub's textContent still carries every sentence r72/r82 read. */
   const line = ADOPTION_ACTIVITY_SUPPORTED === true
     ? `<strong>“Signed in”</strong> is from the login service; <strong>“Last active”</strong> is the last change recorded here — <strong>not a sign-in</strong>.`
     : `<strong>“Last active”</strong> is the last change this person recorded here — <strong>it is not a sign-in</strong>; the sign-in record could not be read just now.`;
@@ -840,9 +642,8 @@ function adoptionSubHtml(tasksErr) {
 async function renderAdoptionStrip() {
   const el = $("#report-adoption");
   if (!el) return;
-  /* Rides the scoreboard's gate rather than owning a second one: #report-scoreboard-panel is
-     hidden for anyone but the Owner (showMoney()), and a strip rendered inside a hidden panel is
-     a read spent on nothing. */
+  /* Rides the scoreboard's gate rather than owning a second one: #report-scoreboard-panel is hidden for
+     anyone but the Owner (showMoney())… */
   if (!showMoney()) { el.innerHTML = ""; return; }
   const roster = adoptionRoster();
   if (!roster.length) { el.innerHTML = ""; return; }
@@ -861,10 +662,8 @@ async function renderAdoptionStrip() {
   const activeN = rows.filter((r) => r.last).length;
   const cell = (r) => {
     if (!r.last) {
-      /* R82 · B3 — this title used to end "that is not proof they have never signed in — the
-         app cannot see sign-ins". It can now, so the sentence says what the sign-in column
-         beside it actually reports rather than disclaiming a limitation that has gone. When the
-         sign-in read failed, the ORIGINAL wording stands — it was true then and it is true now. */
+      /* R82 · B3: this title used to end "that is not proof they have never signed in — the app cannot see
+         sign-ins". It can now, so the sentence says what the sign-in column beside it actually reports… */
       const signInWord = ADOPTION_ACTIVITY_SUPPORTED !== true
         ? `That is not proof they have never signed in — the sign-in record could not be read just now — but they have changed nothing.`
         : adoptionNeverSignedIn(r.id)
@@ -876,15 +675,12 @@ async function renderAdoptionStrip() {
     const when = days === 0 ? "today" : days === 1 ? "yesterday" : `${days} days ago`;
     return `<td class="adopt-last" data-last="${esc(String(r.last))}" title="The most recent change this person recorded — ${esc(new Date(r.last).toLocaleString("en-GB"))}.">${esc(fmtD(adoptDayStr(r.last)))} <span class="cs-muted">(${esc(when)})</span></td>`;   // R83
   };
-  /* R82 · B3 — the second pill exists ONLY when the RPC answered. It is the headline the
-     production book would show today (three of four logins never signed in), and it is left off
-     entirely rather than shown as "0 never signed in" when we do not know — a zero would be a
-     claim. The first pill keeps its place and its wording, so nothing reading `.adopt-h .count`
-     moves. */
+  /* R82 · B3: the second pill exists ONLY when the RPC answered. It is the headline the production book would
+     show today, and it is left off entirely rather than shown as "0 never signed in" when we do not know… */
   const dormant = ADOPTION_ACTIVITY_SUPPORTED === true ? rows.filter((r) => adoptionNeverSignedIn(r.id)).length : null;
   const dormantPill = dormant ? ` <span class="count hot" id="report-adoption-dormant" data-n="${dormant}" title="These logins exist and have never been signed in to. Everything else on this row is therefore about a desk nobody has opened.">${dormant} never signed in</span>` : "";
   el.innerHTML = `<h4 class="adopt-h" id="report-adoption-h">Is anyone using it? <span class="count${activeN === rows.length ? "" : " hot"}">${activeN} of ${rows.length} active</span>${dormantPill}</h4>
-    <div style="overflow-x:auto;"><table class="imp-table" id="report-adoption-table">
+    <div class="u-ox-auto"><table class="imp-table" id="report-adoption-table">
       <tr><th>Person</th><th>Role</th><th title="${ADOPTION_ACTIVITY_SUPPORTED === true ? `Whether this login has ever signed in at all, and when it last did — read from the authentication service, not from anything recorded in this app.` : `The sign-in record could not be read just now, so this column says nothing about anybody.`}">Signed in</th><th title="The most recent change this person recorded in the change history, over the last ${ADOPTION_WINDOW_DAYS} days.">Last active</th><th title="How many different cases this person changed something on in the last ${ADOPTION_TOUCH_DAYS} days.">Cases touched (${ADOPTION_TOUCH_DAYS}d)</th><th title="Open tasks assigned to this person whose due date is already past.">Overdue tasks</th></tr>
       ${rows.map((r) => `<tr class="adopt-row${r.last ? "" : " row-warn"}" data-staff="${esc(r.id)}">
         <td><strong>${esc(r.name)}</strong></td>
@@ -892,26 +688,15 @@ async function renderAdoptionStrip() {
         ${adoptionSignInCell(r.id)}
         ${cell(r)}
         <td class="num adopt-touched" data-n="${r.casesTouched}">${r.casesTouched || '<span class="cs-muted">—</span>'}</td>
-        ${/* R73 · B2 — AMBER, and an em dash. The identical metric ("open tasks whose
-             due date has passed") was RED here and on the scoreboard below, and AMBER
-             on Monday money, so the same three numbers changed severity depending on
-             which page Daniel opened. Amber wins: overdue tasks are a nudge, not a
-             breach, and red is reserved on this app for things that have failed. A
-             bare 0 in a column of counts reads as a measured zero the eye still has to
-             stop on; — says "nothing here" and gets out of the way. */ ""}
+        
         <td class="num adopt-overdue" data-n="${r.overdue}">${r.overdue ? `<span class="badge amber">${r.overdue}</span>` : '<span class="cs-muted">—</span>'}</td>
       </tr>`).join("")}
     </table></div>
     ${adoptionSubHtml(tasksErr)}`;
 }
 
-/* BUILD 5c — the Reports month picker (defaults to the current month) now threads into every
-   panel where a month scope is meaningful: adviser scoreboard, pipeline funnel, lead sources.
-   Open-case counts and overdue-task counts describe "right now" rather than a historical window,
-   so those stay live even inside the threaded scoreboard panel. Computed entirely client-side from
-   `all` (the same cases already fetched for the rest of Reports) — no RPC change needed. */
-/* R87 · owner-admin (05 #11) — the scoreboards' "Show all" state, one flag for both (the month
-   scoreboard here and the MI scoreboard), so pressing it once shows the empty rows everywhere. */
+/* BUILD 5c: the Reports month picker now threads into every panel where a month scope is meaningful: adviser
+   scoreboard, pipeline funnel, lead sources. Open-case counts and overdue-task counts describe "right now"… */
 let scoreboardShowAll = false;
 let threadedState = { all: null, mv: null, repAdvisers: null };
 /* R89 · B — the flag now repaints the two scoreboard VIEWS that use it (month + pipeline). Monday
@@ -921,10 +706,8 @@ window.toggleScoreboardShowAll = function () {
   if (threadedState.all) renderThreadedPanels(threadedState.all, threadedState.mv, threadedState.repAdvisers);
   if (miBoardState.all) renderMiScoreboard(miBoardState.all, miBoardState.mv);
 };
-/* R89 · B — renderThreadedPanels draws ONLY the month scoreboard view now (#report-advisers). The
-   month-cohort funnel moved to renderCohortFunnel (the funnel panel's second view), and the lead
-   sources / losses panels are rendered by the Pipeline MI tab, where they sit. The panel's own
-   visibility belongs to renderAdvViews (one gate per view, not one per panel). */
+/* R89 · B: renderThreadedPanels draws ONLY the month scoreboard view now (#report-advisers). The month-cohort
+   funnel moved to renderCohortFunnel, and the lead sources / losses panels are rendered by the Pipeline MI… */
 function renderThreadedPanels(all, mv, repAdvisers) {
   threadedState = { all, mv, repAdvisers };
   const label = monthLabel(mv);
@@ -936,18 +719,11 @@ function renderThreadedPanels(all, mv, repAdvisers) {
   // The month view is a money table (fees banked per person) — Owner-only in the UI. R89 · B: the
   // PANEL's visibility is renderAdvViews'; this view is simply never offered to anyone else.
 
-  // ---- Adviser scoreboard: completions/fees/avg-days scoped to the selected month, plus a 6-month
-  // rolling completions trend (BUILD 6a) — same completed-cases data, just bucketed by calendar month
-  // instead of the single selected month, so no widened fetch was needed (the cases query already
-  // pulls every row with no date filter).
-  // T1-18 — overdue counts are keyed by staff id, not full_name: two people called the same thing
-  // collided into one number. `name` is kept only as a fallback for an RPC shape without an id.
+  // Adviser scoreboard: completions/fees/avg-days scoped to the selected month, plus a 6-month rolling
+  // completions trend (BUILD 6a) — same completed-cases data…
   const overdueById = {}, overdueByName = {};
-  /* G1N-8 — get_reports.fees_banked_ytd is the figure M5 was shipped for, and until now nothing on
-     any screen read it: no UI consumer means no test could ever catch it regressing, and it could
-     drift away from the firm-wide "Fees banked" tile unnoticed. It is rendered here, per adviser,
-     beside that adviser's month figure. It is deliberately NOT recomputed client-side — the point
-     is to show what the RPC says, so the two can be seen to agree (or not). */
+  /* G1N-8 — get_reports.fees_banked_ytd is the figure M5 was shipped for, and until now nothing on any screen
+     read it: no UI consumer means no test could ever catch it regressing… */
   const ytdById = {};
   (Array.isArray(repAdvisers) ? repAdvisers : []).forEach((a) => {
     const sid = a.staff_id || a.id;
@@ -971,31 +747,18 @@ function renderThreadedPanels(all, mv, repAdvisers) {
     const trend = months6.map((m) => mine.filter((c) => c.completed_at && localMonthStr(c.completed_at) === m).length);
     const trendTitle = months6.map((m, i) => `${MONTH_SHORT[Number(m.slice(5, 7)) - 1]}: ${trend[i]}`).join(" · ");
     const overdue = id ? (overdueById[id] != null ? overdueById[id] : overdueByName[name]) : undefined;
-    /* R7-3 — PROTECTION ATTACH RATE. Of the cases this adviser completed in the selected month,
-       how many ended with a policy. Scoped to the same month as every other column on this row
-       (mixing an all-time attach rate into a month-scoped table is how two people end up arguing
-       about which figure is wrong), and the sample size travels with the percentage because a
-       month is a small denominator: 1 of 2 is 50% and means almost nothing. Zero completions
-       renders as "—", never as 0%, because nobody attached nothing to nothing. */
-    // R68 · M7 — same rule, one copy (adviserAttachRate). The adviser sees this exact figure
-    // for themselves on Reports › My numbers.
+    /* R7-3: PROTECTION ATTACH RATE. Of the cases this adviser completed in the selected month, how many ended
+       with a policy. Scoped to the same month as every other column on this row… */
     const att = adviserAttachRate(all, id, mv);
     const protTaken = att.taken;
     const attach = att.pct;
-    /* R26 — broker fee EARNED on this adviser's completions in the selected month, paid or not.
-       The adviser-attributed analogue of the firm "Fees earned vs target" bar (broker only, because
-       proc/sols fees don't attribute cleanly to one adviser). This is the attainment basis for the
-       new per-adviser Target column — deliberately NOT the cash "Fees banked" figure beside it. */
-    // R28 (Daniel-approved) — target basis now folds procuration + solicitor fees in with the broker
-    // fee, so it matches the firm "Fees earned vs target" bar EXACTLY (earnedOnCompletion = proc+broker+
-    // sols on the month's completions). Each fee sits on the case, summed over the adviser's completions.
-    // R68 · M7 — same rule, one copy (adviserMonthEarned).
+    /* R26: broker fee EARNED on this adviser's completions in the selected month, paid or not. The
+       adviser-attributed analogue of the firm "Fees earned vs target" bar. */
     const feeEarnedTotal = adviserMonthEarned(all, id, mv).total;
     return { id, name, offTeam: !!offTeam, open, completions: done.length, feesBanked, overdue, avg, n: days.length, trend, trendTitle, protTaken, attach, feeEarnedTotal };
   };
-  // T1-18 — TEAM.map() alone cannot represent work nobody owns, so the Open column silently came up
-  // short against the Live cases KPI. Append the unassigned bucket, plus a row for anyone holding
-  // cases who isn't on the team at all, so every live case is accounted for on this table.
+  // T1-18: TEAM.map() alone cannot represent work nobody owns, so the Open column silently came up short
+  // against the Live cases KPI. Append the unassigned bucket, plus a row for anyone holding cases who isn't…
   const teamIds = TEAM.map((p) => p.id);
   const strays = [];
   all.forEach((c) => { if (c.assigned_to && teamIds.indexOf(c.assigned_to) === -1 && strays.indexOf(c.assigned_to) === -1) strays.push(c.assigned_to); });
@@ -1005,12 +768,8 @@ function renderThreadedPanels(all, mv, repAdvisers) {
     .concat(strays.map((id) => mkAdvRow(id, profileName(id) ? profileName(id) + " — no access" : "Not on the team (" + id + ")", true)))
     .concat([mkAdvRow(null, "Unassigned", true)])
     .filter((r) => r.open || r.completions || r.feesBanked || r.trend.some((n) => n));
-  /* R87 · owner-admin (05 #11) — FOUR PEOPLE, SIX ROWS, HALF OF THEM DASHES. The scoreboard is for
-     the people who advise and have something on the board this month: a row for the administrator,
-     for a login whose access has been removed, or for the Unassigned bucket — each with 0 completions
-     and £0 — is furniture. They are not deleted (the Open column must still reconcile with the live
-     KPI, and the dormant accounts are out of scope for deletion): they sit behind "Show all", and
-     the foot row keeps totalling EVERY row so the counts stay honest whichever view is showing. */
+  /* R87 · owner-admin (05 #11): FOUR PEOPLE, SIX ROWS, HALF OF THEM DASHES. The scoreboard is for the people
+     who advise and have something on the board this month: a row for the administrator… */
   const advRowQuiet = (r) => {
     if (r.offTeam || r.id === null) return true;                        // "— no access" / Unassigned
     const p = TEAM.find((x) => x.id === r.id);
@@ -1030,9 +789,8 @@ function renderThreadedPanels(all, mv, repAdvisers) {
       ? `<button type="button" class="linkish" onclick="reportGotoAdviser('${esc(target)}')" title="Open the pipeline filtered to ${esc(a.name)}">${esc(a.name)}</button>`
       : esc(a.name);
   };
-  // T1-18 — the sample size travels with the average. In a month where every adviser has exactly
-  // one completion, "110 vs 75" is one case against one case; below n=3 it is greyed so it can't be
-  // read as a ranking.
+  // T1-18: the sample size travels with the average. In a month where every adviser has exactly one
+  // completion, "110 vs 75" is one case against one case…
   const advAvg = (a) => {
     if (a.avg == null) return "—";
     const basis = `Mean days from case created to completed, over the ${a.n} completion${a.n === 1 ? "" : "s"} ${a.name} recorded in ${label}.`;
@@ -1040,12 +798,8 @@ function renderThreadedPanels(all, mv, repAdvisers) {
       ? `<span class="stat-weak" title="${esc(basis)} Fewer than 3 completions — not a ranking.">${a.avg} <span class="stat-n">(${a.n})</span></span>`
       : `<span title="${esc(basis)}">${a.avg} <span class="stat-n">(${a.n})</span></span>`;
   };
-  /* R26 — per-adviser monthly fee targets (owner-only, same JSON settings key everywhere). The cell
-     measures feeEarnedTotal (procuration + broker + solicitor fees EARNED on this month's completions,
-     paid or not) against this adviser's target — the SAME basis as the firm "Fees earned vs target" bar
-     above (earnedOnCompletion sums the same three fees), NOT the
-     cash "Fees banked" column beside it. Colour rule mirrors the firm bar: green>=100 / amber>=60 /
-     red<60. No target (or the Unassigned/off-team rows, id falsy) → "—", never 0%. */
+  /* R26: per-adviser monthly fee targets. The cell measures feeEarnedTotal against this adviser's target —
+     the SAME basis as the firm "Fees earned vs target" bar above… */
   const advTargets = adviserTargets();
   const advTargetCell = (a) => {
     const t = a.id ? Number(advTargets[a.id] || 0) : 0;
@@ -1061,10 +815,8 @@ function renderThreadedPanels(all, mv, repAdvisers) {
   if (!money) { $("#report-advisers").innerHTML = ""; $("#report-scoreboard-scope").textContent = ""; }
   else {
   const bankedFuture = cashInMonth(all, mv, ["broker"]).futureN;
-  /* G1N-8 — the RPC's per-adviser YTD covers profiles with a staff role only, while the firm-wide
-     tile below counts every case. The difference is real (completed cases deliberately stay with a
-     leaver who no longer has a login), so it is stated rather than left to be discovered as a
-     mismatch between two numbers on the same screen. */
+  /* G1N-8 — the RPC's per-adviser YTD covers profiles with a staff role only, while the firm-wide tile below
+     counts every case. The difference is real, so it is stated rather than left to be discovered as a… */
   const ytdYear = Number(localDateStr().slice(0, 4));
   const ytdRpcSum = Object.keys(ytdById).reduce((s, k) => s + ytdById[k], 0);
   const ytdFirm = all.reduce((s, c) => {
@@ -1072,14 +824,8 @@ function renderThreadedPanels(all, mv, repAdvisers) {
     return d && Number(localDateStr(d).slice(0, 4)) === ytdYear ? s + Number(c.broker_fee || 0) : s;
   }, 0);
   const ytdGap = ytdFirm - ytdRpcSum;
-  /* R74 · A4b (panel D#14) — ONE SENTENCE, THEN A DISCLOSURE. This paragraph had grown to ten
-     lines of essay sitting between the reader and the table it describes, and the reader who needs
-     it needs it once. The lead sentence says what the table is scoped to; everything else — every
-     column's basis, the two reconciliations, the attribution note — moves behind "▸ How these are
-     counted", which is the same fold pattern Settings uses and is closed by default.
-     NOTHING IS DELETED and no wording is softened: the column bases below are the SAME strings the
-     column headers used to print under themselves (R5-17's labels, still on the page and still
-     findable), moved here so each header can be one line and the table can fit its panel. */
+  /* R74 · A4b (panel D#14): ONE SENTENCE, THEN A DISCLOSURE. This paragraph had grown to ten lines of essay
+     sitting between the reader and the table it describes, and the reader who needs it needs it once. */
   const sbScope = $("#report-scoreboard-scope");
   if (sbScope) sbScope.innerHTML = `Completions, fees banked, attach rate and average days are for <strong>${esc(label)}</strong>; open cases are as of now.
     <details class="rep-howcounted" id="report-scoreboard-how"><summary>How these are counted</summary>
@@ -1089,8 +835,7 @@ function renderThreadedPanels(all, mv, repAdvisers) {
         <p><strong>Banked ${ytdYear}</strong> <span class="money-basis">(broker only · cash · YTD)</span> — that adviser's broker cash for the calendar year, as the server reports it.${ytdGap ? ` It covers people who still have a login, so it totals ${fmtM(ytdRpcSum)} against the ${fmtM(ytdFirm)} on the "Fees banked ${ytdYear}" tile below — the ${fmtM(ytdGap)} difference sits on completed cases still attributed to someone whose access has been removed.` : ""}</p>
         <p><strong>Attach (${esc(attachShort)})</strong> <span class="money-basis">(policy taken ÷ completions · this month)</span> — the share of THIS MONTH's completions that ended with a protection policy, with the count in brackets. On a month's worth of completions a single case moves it a long way, so read the bracket before the percentage. It is a month figure; a whole-year attach rate is not drawn anywhere else on Reports.</p>
         <p><strong>Avg days</strong> — mean days from case created to completed, over completions in ${esc(label)} only; fewer than three completions is greyed and is not a ranking. <strong>6-mo trend</strong> — completions per month over the last 6 calendar months, every row on one shared scale.</p>
-        ${/* R74 · A4b — the Overdue column left this table; say where it went rather than letting
-              the reader assume it was lost. */ ""}
+        
         <p><strong>Overdue tasks</strong> are not a column here — the same figure, per person, is the <em>Activity</em> view of this table (the By adviser toggle above).</p>
         <p>${esc(ATTRIB_NOTE)}</p>
       </div>
@@ -1106,14 +851,7 @@ function renderThreadedPanels(all, mv, repAdvisers) {
     return `<td class="adv-target-cell"><strong>${fmtM(sumEarned)} / ${fmtM(sumTargets)}</strong> <span style="color:${c};font-weight:600;">(${p}%)</span></td>`;
   })();
   $("#report-advisers").innerHTML = advRows.length ? `<table class="imp-table">
-    ${/* R74 · A2/A4b — ONE-LINE HEADERS WITH THEIR BASIS IN THE NAME. The three-line
-          <span class="money-basis"> blocks under four of these headings were what made a
-          ten-column table 1,300px wide inside a 1,160px panel, so Attach, Overdue, Avg days and
-          the trend were clipped off the right-hand edge with no scrollbar to say so. Each basis
-          now lives in the header's own title= (and, in full, behind "How these are counted"
-          above). ATTACH CARRIES ITS PERIOD IN THE HEADER — "Attach (Aug)" here, "Attach (2026)"
-          on Monday money — because the same person read 0% on one page and 43% on the other and
-          nothing on either said one was a month and the other a year. */ ""}
+    
     <tr><th>Adviser</th><th>Open</th><th>Completions</th><th title="Broker fees actually received this month, counted on the broker fee's own paid date. Payments dated in the future are excluded. ${esc(BASIS_CASH_MONTH)}">Fees banked</th><th title="Fees earned (procuration + broker + solicitor) on each adviser's completions this month (paid or not) versus their monthly target set in Settings — the same earned-on-completion basis as the firm 'Fees earned vs target' bar above, NOT the cash 'Fees banked' column beside it. Blank target = no target (shows —). (fees earned ÷ target · this month)">Target</th><th title="Broker fees this adviser has banked so far in ${ytdYear} — each fee counted on its own paid date, the same basis as the column beside it, widened to the whole year. (broker only · cash · YTD)">Banked ${ytdYear}</th><th title="Of the cases this adviser completed in ${esc(label)}, the share that ended with a protection policy taken. The count is in brackets — a month is a small sample and a single case can swing it. (policy taken ÷ completions · this month)">Attach (${esc(attachShort)})</th><th title="Mean days from case created to completed, over completions in the selected month only. The sample size is in brackets; fewer than 3 completions is greyed and should not be read as a ranking.">Avg days</th><th title="Completions per month over the last 6 calendar months. Every row shares one vertical scale (peak ${sparkMax}); the number is this month's value.">6-mo trend</th></tr>
     ${advRows.map((a) => `<tr${a.offTeam ? ' class="row-warn"' : ""}>
       <td>${advName(a)}</td>
@@ -1123,41 +861,31 @@ function renderThreadedPanels(all, mv, repAdvisers) {
       ${advTargetCell(a)}
       <td${a.id && ytdById[a.id] == null ? ' class="stat-weak" title="Not covered by the server figure — this row has no active login."' : ""}>${a.id && ytdById[a.id] != null ? fmtM(ytdById[a.id]) : "—"}</td>
       <td${a.attach == null ? ' class="stat-weak" title="No completions in this month, so there is nothing to attach a policy to."' : (a.completions < 3 ? ' class="stat-weak" title="Fewer than 3 completions — too small a sample to read as a ranking."' : "")}>${a.attach == null ? "—" : `${a.attach}% <span class="cs-muted">(${a.protTaken}/${a.completions})</span>`}</td>
-      ${/* R74 · A4b — the Overdue column has LEFT this table (it rendered twice more on the same
-           page: the adoption strip immediately below, and Monday money). R73's one-amber-badge
-           rule is unchanged and still lives on both of those. */ ""}
+      
       <td>${advAvg(a)}</td>
       <td title="${esc(a.trendTitle)}">${sparklineSvg(a.trend, sparkMax)} <span class="spark-now">${a.trend[a.trend.length - 1]}</span></td>
     </tr>`).join("")}
     <tr id="report-scoreboard-foot" class="scoreboard-foot">
       <td><strong>Total</strong></td>
       <td><strong>${openSum}</strong></td>
-      ${/* R74 · A4b — the reconciliation SENTENCE has left the table and now sits under it. A
-            60-character sentence in a colspan="2" cell was setting the minimum width of the
-            Completions and Fees banked columns, which is most of why a nine-column table would
-            not fit its own panel and lost Attach, Avg days and the trend off the right edge. The
-            colspan is kept (r26 §E3 pins the foot row's colspan-sum to the header's) and the
-            sentence is rendered in full below, where it has the width to be read. */ ""}
+      
       <td colspan="2"></td>
       ${footTargetCell}
       <td colspan="4"></td>
     </tr>
   </table>
   ${advRowsQuiet.length && advRows.length !== advRowsAll.length
-    ? `<p class="panel-sub" id="report-scoreboard-quiet" style="margin:8px 0 0;">${advRowsQuiet.length} row${advRowsQuiet.length === 1 ? "" : "s"} with nothing this month hidden (${esc(advRowsQuiet.map((r) => r.name).join(", "))}) — counted in the totals. <button type="button" class="linkish" id="report-scoreboard-showall" onclick="toggleScoreboardShowAll()">Show all</button></p>`
+    ? `<p class="panel-sub u-m-8-0-0" id="report-scoreboard-quiet">${advRowsQuiet.length} row${advRowsQuiet.length === 1 ? "" : "s"} with nothing this month hidden (${esc(advRowsQuiet.map((r) => r.name).join(", "))}) — counted in the totals. <button type="button" class="linkish" id="report-scoreboard-showall" onclick="toggleScoreboardShowAll()">Show all</button></p>`
     : advRowsQuiet.length && scoreboardShowAll && advRowsAll.some((r) => !advRowQuiet(r))
-      ? `<p class="panel-sub" id="report-scoreboard-quiet" style="margin:8px 0 0;"><button type="button" class="linkish" id="report-scoreboard-showall" onclick="toggleScoreboardShowAll()">Hide the ${advRowsQuiet.length} empty row${advRowsQuiet.length === 1 ? "" : "s"}</button></p>`
+      ? `<p class="panel-sub u-m-8-0-0" id="report-scoreboard-quiet"><button type="button" class="linkish" id="report-scoreboard-showall" onclick="toggleScoreboardShowAll()">Hide the ${advRowsQuiet.length} empty row${advRowsQuiet.length === 1 ? "" : "s"}</button></p>`
       : ""}
-  <p class="panel-sub" id="report-scoreboard-reconcile" style="margin:8px 0 0;">The ${openSum} open cases above ${openSum === liveTotal ? "<strong>reconcile with</strong>" : "<strong>do not reconcile with</strong>"} the ${liveTotal} live cases on the Money &amp; book tiles${unassignedLive ? ` · ${unassignedLive} of them unassigned` : ""}.</p>` : `<div class="empty">No adviser activity in ${label}.</div>`;
+  <p class="panel-sub u-m-8-0-0" id="report-scoreboard-reconcile">The ${openSum} open cases above ${openSum === liveTotal ? "<strong>reconcile with</strong>" : "<strong>do not reconcile with</strong>"} the ${liveTotal} live cases on the Money &amp; book tiles${unassignedLive ? ` · ${unassignedLive} of them unassigned` : ""}.</p>` : `<div class="empty">No adviser activity in ${label}.</div>`;
   }
 
 }
 
-/* R89 · B — the month-COHORT funnel: cases created in the selected month, by current stage (all 8
-   stages, so a cohort that has already completed or dropped out still shows up). It is the second
-   VIEW of the one funnel panel (the first is the MI live funnel); the arithmetic and ids are the
-   R37 panel's, unchanged. The cross-pointer to the live view is offered only to a reader who has it
-   (Pipeline MI is isAdminOrOwner-gated). */
+/* R89 · B: the month-COHORT funnel: cases created in the selected month, by current stage. It is the second
+   VIEW of the one funnel panel; the arithmetic and ids are the R37 panel's, unchanged. */
 function renderCohortFunnel(all, mv) {
   const label = monthLabel(mv);
   const monthCases = (all || []).filter((c) => c.created_at && localMonthStr(c.created_at) === mv);
@@ -1197,19 +925,12 @@ document.addEventListener("click", (e) => {
   if (b) window.repSetFunnelView(b.dataset.seg);
 });
 
-/* ==========================================================================
-   R77 · A2b — LEAD SOURCES: READ WHAT A2a CAPTURES, WITHOUT SPLINTERING IT.
-
-   Two changes to the table that was previously inlined in renderThreadedPanels,
-   both driven by the production data: lead_source is blank on 130 of 132 live
-   cases, so (a) a SINGLE month of it is usually too few rows to read — the
-   panel gains the Losses panel's exact This-month / All-time toggle (All time
-   = every case on the book, matching what Losses chose); and (b) the moment
-   capture starts working, "google" beside "Google" is two rows pretending to
-   be two sources — grouping is now case-insensitive (trim + lowercase key),
-   displaying the casing the book uses most. Columns, the convCell (n<5)
-   small-sample honesty and the owner-only Revenue column are unchanged.
-   ========================================================================== */
+/* R77 · A2b: LEAD SOURCES: READ WHAT A2a CAPTURES, WITHOUT SPLINTERING IT. Two changes to the table that was
+   previously inlined in renderThreadedPanels, both driven by the production data: lead_source is blank on 130 of
+   132 live cases, so (a) a SINGLE month of it is usually too few rows to read — the panel gains the Losses panel's
+   exact This-month / All-time toggle (All time = every case on the book, matching what Losses chose); and (b) the
+   moment capture starts working, "google" beside "Google" is two rows pretending to be two sources — grouping is
+   now case-insensitive (trim + lowercase key), displaying the casing the book uses most. … */
 let sourcesAllTime = false;
 let sourcesState = { all: [], mv: null };
 function renderLeadSourcesPanel(all, mv) {
@@ -1268,22 +989,17 @@ window.toggleSourcesScope = function () {
   renderLeadSourcesPanel(null, null);
 };
 
-/* ==========================================================================
-   B3 / R5-20 — LOSSES BY REASON
-   Batch 2 made a reason mandatory on the way to Not Proceeding; this is the panel that reason was
-   collected for. Grouped by lost_reason with an explicit "(not recorded)" bucket for every case
-   that was closed before the field existed — the legacy rows are shown, not hidden, because the
-   size of that bucket is itself the honest answer to "why are we losing work".
-   Scope: by default the selected month, dated by the STAGE-CHANGE event where the event log has
-   one (when the case actually stopped) and by updated_at where it doesn't; an all-time toggle
-   sits on the panel head because a single month of losses is usually too few to read.
-   ========================================================================== */
+/* B3 / R5-20: LOSSES BY REASON Batch 2 made a reason mandatory on the way to Not Proceeding; this is the panel that
+   reason was collected for. Grouped by lost_reason with an explicit "(not recorded)" bucket for every case that was
+   closed before the field existed — the legacy rows are shown, not hidden, because the size of that bucket is
+   itself the honest answer to "why are we losing work". Scope: by default the selected month, dated by the
+   STAGE-CHANGE event where the event log has one (when the case actually stopped) and by updated_at where it
+   doesn't; an all-time toggle sits on the panel head because a single month of losses is usually too few to read. */
 let lossesAllTime = false;
 let lossState = { all: [], mv: null, lostAt: {} };
 window.lossState = lossState; // test hook — mutated in place (see renderLossesPanel/loadLostDates), never reassigned, so this stays live.
-/* When a case stopped: the most recent stage_changed event INTO not_proceeding, else last touched.
-   `lostAt` is loaded best-effort (loadLostDates) so a blocked/absent case_events degrades to
-   updated_at rather than emptying the panel. */
+/* When a case stopped: the most recent stage_changed event INTO not_proceeding, else last touched. `lostAt`
+   is loaded best-effort (loadLostDates) so a blocked/absent case_events degrades to updated_at rather than… */
 function lostWhen(c) { return lossState.lostAt[c.id] || c.updated_at || c.created_at || null; }
 function renderLossesPanel(all, mv) {
   lossState.all = all || lossState.all;
@@ -1342,24 +1058,12 @@ window.toggleLossesScope = function () {
   renderLossesPanel(null, null);
 };
 
-/* ==========================================================================
-   R89 · B — ONE FORECAST (panel 05 #2a; verifier 08 row "05 #2").
-
-   Reports carried two answers to "what will the live book earn": the Pipeline MI
-   forecast (MI_STAGE_DEFAULT_WEIGHT on six stages, Application/Offer calibrated
-   from the book's own history) and the Money & book "Commission forecast" (a
-   fixed 4-stage STAGE_WEIGHT 25/50/80/95 from DIP). Same fee basis (proc +
-   broker), same live book, two weight tables — £31,255 against £25,292 on one
-   page. The 4-stage one is GONE. miForecastModel below is the MI forecast, lifted
-   out of renderPipelineMI so both panels draw ONE model: Pipeline MI › Revenue
-   prints its stage table, Money & book prints the same total bucketed by expected
-   completion date with the target-gap line. Every total is stamped
-   data-forecast="weighted" so a suite can prove the page holds one number.
-
-   The calibration rule is renderPipelineMI's, verbatim: with ≥5 completions on
-   the book, a stage with ≥5 cases that reached it (submitted_at / offer_issued_date)
-   takes its historical completion rate; otherwise the default likelihood stands.
-   ========================================================================== */
+/* R89 · B: ONE FORECAST (panel 05 #2a; verifier 08 row "05 #2"). Reports carried two answers to "what will the live
+   book earn": the Pipeline MI forecast (MI_STAGE_DEFAULT_WEIGHT on six stages, Application/Offer calibrated from
+   the book's own history) and the Money & book "Commission forecast" (a fixed 4-stage STAGE_WEIGHT 25/50/80/95 from
+   DIP). The calibration rule is renderPipelineMI's, verbatim: with ≥5 completions on the book, a stage with ≥5
+   cases that reached it (submitted_at / offer_issued_date) takes its historical completion rate; otherwise the
+   default likelihood stands. … */
 function miForecastModel(all) {
   const rows = all || [];
   const fee = (c) => Number(c.broker_fee || 0) + Number(c.proc_fee || 0);
@@ -1453,16 +1157,15 @@ function renderBookForecast(all) {
       ${b.list.map((c) => `
         <div class="row-item" style="padding:6px 8px;">
           <div class="row-main">
-            <div class="t" style="cursor:pointer;" onclick="openCase('${c.id}')">${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ") || "—")}</div>
+            <div class="t u-pointer" onclick="openCase('${c.id}')">${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ") || "—")}</div>
             <div class="s">${esc(STAGE_LABEL[c.stage] || c.stage)}${c.assigned_to ? " · " + esc(initials(c.assigned_to)) : ""}</div>
           </div>
         </div>`).join("")}
     </div>` : "";
     return row + expandList;
   }).join("") : '<div class="empty">No live cases in the pipeline.</div>';
-  /* R77 · A1a — THE FORECAST MEETS THE TARGET: the ≤30-days weighted figure against the firm's
-     monthly fee target (settings.monthly_fee_target — the key the hero reads), the gap named either
-     way, plus the no-date clause wired to toggleForecastNoneList. Unchanged, over the one model. */
+  /* R77 · A1a: THE FORECAST MEETS THE TARGET: the ≤30-days weighted figure against the firm's monthly fee
+     target, the gap named either way, plus the no-date clause wired to toggleForecastNoneList. */
   if (tEl) {
     if (!m.live.length) tEl.innerHTML = "";
     else {
@@ -1574,28 +1277,8 @@ function renderBusinessMix(all, yr) {
   };
 }
 
-/* ==========================================================================
-   R19 — PIPELINE MI (Owner / Admin management information).
-
-   Owner-facing MI, computed CLIENT-SIDE in a single O(n) pass over the same
-   `all` cases Reports already reads, plus the submitted_at / offer_issued_date
-   milestone dates now in the Reports select. NO new DB schema.
-
-   DATA REALITY (CTO): the DB holds only ~36 stage_changed case_events today
-   (pre-launch), so the funnel/conversion/velocity are derived from the POPULATED
-   milestone DATE columns — created_at → submitted_at → offer_issued_date →
-   completed_at — NOT from stage-change history. These are real data now and get
-   richer as the book grows. Every panel guards thin data explicitly.
-
-   Four panels, all inside #report-mi-section (OWNER/ADMIN-gated as a whole):
-     1. Funnel (live pipeline by stage) + historical conversion from milestone
-        dates + win rate among terminal cases (thin-data guard <5).
-     2. Velocity — median (headline) & average days between milestones, with the
-        slowest sub-step named as the bottleneck.
-     3. Revenue — monthly completed-fee run-rate (broker+proc, last 12 months) +
-        a stage-weighted pipeline forecast (historical weights, default fallback).
-     4. Per-adviser scoreboard.
-   ========================================================================== */
+/* R19: PIPELINE MI. Owner-facing MI, computed CLIENT-SIDE in a single O(n) pass over the same `all` cases
+   Reports already reads, plus the submitted_at / offer_issued_date milestone dates now in the Reports select. */
 const MI_STAGE_DEFAULT_WEIGHT = { enquiry: 0.1, fact_find: 0.2, decision_in_principle: 0.4, application: 0.6, offer: 0.85, exchange: 0.95 };
 const MI_LIVE_STAGES = ["enquiry", "fact_find", "decision_in_principle", "application", "offer", "exchange"];
 const miMedian = (arr) => {
@@ -1612,10 +1295,8 @@ function renderPipelineMI(all, mv) {
   miState = { all, mv };
   const sec = $("#report-mi-section");
   if (!sec) return;
-  /* OWNER/ADMIN gate — the whole section, hidden for plain advisers. Same mechanism the money
-     panels use (classList.toggle('hidden')), and the jump nav reads that .hidden to decide whether
-     to draw a chip, so an adviser gets neither the section nor a chip for it. isAdminOrOwner()
-     rather than showMoney()/isOwner() because MI is explicitly owner-AND-admin (per spec). */
+  /* OWNER/ADMIN gate — the whole section, hidden for plain advisers. Same mechanism the money panels use
+     (classList.toggle('hidden')), and the jump nav reads that .hidden to decide whether to draw a chip… */
   const show = isAdminOrOwner();
   sec.classList.toggle("hidden", !show);
   if (!show) return;
@@ -1638,12 +1319,11 @@ function renderPipelineMI(all, mv) {
   const vCreatedApp = [], vAppOffer = [], vOfferComp = [], vCreatedComp = [];
 
   let miSkipped = 0;   // R21 Part B — one bad case must not abort the whole MI aggregation
-  /* R77 · A3 — HOW THIN IS THE DATE COVERAGE? The conversion and velocity figures below are built
-     from milestone DATES, and in production those are mostly blank (104 cases completed in 2026
-     carry no submitted_at; one case in the whole book has an offer_issued_date) — which is how the
-     conversion table prints "Completed 30 (3000%)". Count, per case, the EARLIEST milestone date
-     its stage says it should carry but doesn't (Data health's dh-tile-milestone rule, without its
-     back-book age cut — this is about what THESE figures can and cannot see). */
+  /* R77 · A3: HOW THIN IS THE DATE COVERAGE? The conversion and velocity figures below are built from
+       milestone DATES, and in production those are mostly blank — which is how the conversion table printed
+       "Completed 30 (3000%)". Count, per case, the EARLIEST milestone date its stage says it should carry but
+       doesn't (Data health's dh-tile-milestone rule, without its back-book age cut — this is about what THESE
+       figures can and cannot see). */
   const MI_RANKS = Object.fromEntries(STAGES.map(([k], i) => [k, i]));
   const MI_APP_RANK = MI_RANKS["application"], MI_OFFER_RANK = MI_RANKS["offer"];
   let missMilestone = 0;
@@ -1691,9 +1371,8 @@ function renderPipelineMI(all, mv) {
   // ---- Panel 1: funnel + conversion + win rate ----
   const liveTot = MI_LIVE_STAGES.reduce((s, st) => s + funnel[st], 0);
   const maxFun = Math.max(...MI_LIVE_STAGES.map((s) => funnel[s]), 1);
-  /* R20 — each stage bar is now a real <button> (keyboard-accessible, Enter/Space native) that
-     drills to the live cases at that stage. A zero-count bar is `disabled` so it is neither
-     focusable nor clickable — there is nothing to open behind it. Listeners wired below. */
+  /* R20: each stage bar is now a real <button> that drills to the live cases at that stage. A zero-count bar
+     is `disabled` so it is neither focusable nor clickable — there is nothing to open behind it. */
   $("#report-mi-funnel").innerHTML = liveTot ? MI_LIVE_STAGES.map((s) => `
     <button type="button" class="mi-bar-row mi-drill" data-mi-stage="${s}"${funnel[s] ? ` title="Click to see the cases"` : " disabled"} aria-label="${esc(STAGE_LABEL[s])}: ${funnel[s]} live case${funnel[s] === 1 ? "" : "s"}">
       <span class="mi-bar-lbl">${STAGE_LABEL[s]}</span>
@@ -1703,14 +1382,8 @@ function renderPipelineMI(all, mv) {
 
   const total = rows.length;
   const stepPct = (num, den) => (den ? Math.round((num / den) * 100) + "%" : "—");
-  /* R77 · A3 — THE COVERAGE GUARD: NEVER PRINT 3000%. A later milestone counting MORE cases than
-     the one before it is not a conversion rate, it is a hole in the dates (a case can only reach
-     offer THROUGH application — the arithmetic can exceed 100% only because the earlier date is
-     missing). Where that happens the percentage is replaced — never the row, never silently — by
-     an honest clause naming how many cases are missing their dates, linking to Data health's own
-     missing-milestone list (dh-tile-milestone), whose tile copy already points back at this table.
-     The same clause replaces a velocity median/average computed from n≤1 dated cases: a "median"
-     of one case is that case, not a rate the firm can plan on. */
+  /* R77 · A3: THE COVERAGE GUARD: NEVER PRINT 3000%. A later milestone counting MORE cases than the one
+     before it is not a conversion rate, it is a hole in the dates. */
   const miCoverageClause = (n) => `<button type="button" class="linkish mi-coverage-clause" onclick="miGotoMilestoneHealth()" title="Open Data health at the missing application/offer date list">date coverage too thin — ${n} case${n === 1 ? " is" : "s are"} missing application/offer dates → fix in Data health</button>`;
   const stepCell = (num, den) => (num > den ? miCoverageClause(missMilestone) : stepPct(num, den));
   $("#report-mi-conversion").innerHTML = `
@@ -1721,7 +1394,7 @@ function renderPipelineMI(all, mv) {
       <tr><td>Reached offer <span class="cs-muted">(offer issued)</span></td><td>${reachedOffer}</td><td>${stepCell(reachedOffer, reachedApp)}</td></tr>
       <tr><td>Completed</td><td>${reachedCompleted}</td><td>${stepCell(reachedCompleted, reachedOffer)}</td></tr>
     </table>
-    <p class="panel-sub" style="margin:6px 0 0;">From milestone dates, not stage-change history.</p>`;
+    <p class="panel-sub u-m-6-0-0">From milestone dates, not stage-change history.</p>`;
 
   const terminal = completedN + notProceedingN;
   $("#report-mi-winrate").innerHTML = terminal < 5
@@ -1739,10 +1412,8 @@ function renderPipelineMI(all, mv) {
     <tr><th>Transition</th><th title="Headline — robust to outliers">Median</th><th>Average</th><th>n</th></tr>
     ${vMetrics.map((m) => {
       const md = miMedian(m.arr), av = miMean(m.arr);
-      /* R77 · A3 — a velocity figure from n≤1 dated cases is one case wearing a median's clothes.
-         Where the thinness is CAUSED by missing dates the row keeps its place and its n, and the
-         numbers are replaced by the coverage clause; a genuinely tiny book with nothing missing
-         (missMilestone 0) keeps the plain "—"/number — there is nothing to send anyone to fix. */
+      /* R77 · A3: a velocity figure from n≤1 dated cases is one case wearing a median's clothes. Where the
+         thinness is CAUSED by missing dates the row keeps its place and its n… */
       if (m.arr.length <= 1 && missMilestone > 0) {
         return `<tr>
         <td>${m.label}</td>
@@ -1804,13 +1475,8 @@ function renderPipelineMI(all, mv) {
   // ---- Panel 4 (the per-adviser scoreboard) — R89 · B: now a VIEW of the one adviser table on
   // This month, rendered by renderMiScoreboard (below) from the same rows. ----
 
-  /* ============================ R20 — ACTIONABLE MI ============================
-     Drill-downs and per-panel CSV, all off the in-scope `all`/`rows` set already read by
-     Reports (no new query) and inside this owner/admin-gated render (gate inherited). The
-     click targets rendered above are real <button>s, so Enter/Space work natively; each just
-     filters `rows` and hands the subset to miDrilldown(). CSV buttons live in the static panel
-     headers; their handlers reuse the aggregates computed above and emit via miCsv() (which
-     mirrors exportCsv's serialization — same injection guard, BOM, Blob, anchor download). */
+  /* R20: ACTIONABLE MI Drill-downs and per-panel CSV, all off the in-scope `all`/`rows` set already read by
+     Reports (no new query) and inside this owner/admin-gated render (gate inherited). */
   const dstr = new Date().toISOString().slice(0, 10);
 
   // Funnel stage bars → live cases at that stage.
@@ -1852,10 +1518,8 @@ function renderPipelineMI(all, mv) {
   };
 }
 
-/* R89 · B — THE MI SCOREBOARD, as the "Pipeline & outcomes" view of the one adviser table (This
-   month tab). Its own O(n) pass over the same rows renderPipelineMI walks — the per-adviser half of
-   that pass, lifted verbatim (live / completed + fees in the month / won-lost / cycles) — so the view
-   can render without the rest of Pipeline MI. Owner / Administrator, the MI gate. */
+/* R89 · B: THE MI SCOREBOARD, as the "Pipeline & outcomes" view of the one adviser table (This month tab).
+   Its own O(n) pass over the same rows renderPipelineMI walks — the per-adviser half of that pass… */
 let miBoardState = { all: null, mv: null };
 function renderMiScoreboard(all, mv) {
   miBoardState = { all, mv };
@@ -1893,9 +1557,8 @@ function renderMiScoreboard(all, mv) {
       };
     })
     .sort((x, y) => y.feesPeriod - x.feesPeriod);
-  /* R87 · owner-admin (05 #11) — same rule as the month scoreboard: a row for somebody who is not an
-     adviser (the administrator, a removed login, a profile this page cannot name) or the Unassigned
-     bucket, or one with nothing this month, sits behind "Show all". Not deleted — r19/r20 drill it. */
+  /* R87 · owner-admin (05 #11): same rule as the month scoreboard: a row for somebody who is not an adviser
+     or the Unassigned bucket, or one with nothing this month, sits behind "Show all". */
   const miRowQuiet = (a) => {
     if (!a.id) return true;
     const p = TEAM.find((x) => x.id === a.id);
@@ -1934,11 +1597,8 @@ function renderMiScoreboard(all, mv) {
   };
 }
 
-/* R77 · A3 — the coverage clause's destination: Data health's OWN missing-milestone list
-   (dh-tile-milestone → #dh-milestone-panel), whose tile copy has said since R25 that these blanks
-   "silently skew the Reports velocity & funnel". This is the reverse link. Same nav-then-reveal
-   shape as the clawback tile's cross-page jump (Data health renders async; the panel is revealed
-   rather than toggled so a second click can never hide it). */
+/* R77 · A3: the coverage clause's destination: Data health's OWN missing-milestone list, whose tile copy has
+   said since R25 that these blanks "silently skew the Reports velocity & funnel". This is the reverse link. */
 window.miGotoMilestoneHealth = function () {
   nav("operations", true, "data");
   setTimeout(() => {
@@ -1947,12 +1607,8 @@ window.miGotoMilestoneHealth = function () {
   }, 700);
 };
 
-/* R20 — one thin CSV emitter for the MI panels and drill-downs. exportCsv() (~8735) is
-   case-book-shaped: fixed columns + a fixed `pipeline-…` filename, so it cannot serialize the
-   aggregate MI tables. Rather than a second CSV library, this reuses exportCsv's EXACT
-   serialization contract — the same formula-injection guard, the same UTF-8 BOM, the same
-   Blob + anchor download — parameterized by filename/header/rows. Owner/admin-gated by virtue
-   of only being reachable from inside #report-mi-section. */
+/* R20: one thin CSV emitter for the MI panels and drill-downs. exportCsv() (~8735) is case-book-shaped: fixed
+   columns + a fixed `pipeline-…` filename, so it cannot serialize the aggregate MI tables. */
 function miCsv(filename, header, rows) {
   const q2 = (v) => {
     let s = String(v ?? "");
@@ -1967,11 +1623,8 @@ function miCsv(filename, header, rows) {
   a.click();
 }
 
-/* R20 — the reusable drill-down modal. Reuses the existing #modal / openModal() infra (same
-   pattern as the merge/appointment modals: set #modal.innerHTML, then openModal()). Lists the
-   passed-in cases (already filtered from `all` by the caller — no query), each row client ·
-   stage · adviser · fee, with an Open button that routes through openCase(), a header count,
-   and its own CSV (client, stage, adviser, fee, key milestone dates). Empty → "No cases match." */
+/* R20: the reusable drill-down modal. Reuses the existing #modal / openModal() infra (same pattern as the
+   merge/appointment modals: set #modal.innerHTML, then openModal()). */
 function miDrilldown(title, cases) {
   const list = (cases || []).slice();
   const feeOf = (c) => Number(c.broker_fee || 0) + Number(c.proc_fee || 0);
@@ -2007,12 +1660,8 @@ function miDrilldown(title, cases) {
 }
 window.miDrilldown = miDrilldown;
 
-/* ==========================================================================
-   R21 Part C — OWNER/ADMIN diagnostics panel (#report-diag-section).
-   Gated exactly like renderPipelineMI's #report-mi-section (isAdminOrOwner() +
-   classList.toggle('hidden')). Renders a health summary + a newest-first table of
-   the in-memory ERROR_LOG, and wires the CSV / copy / clear buttons. Reuses miCsv
-   (as the MI CSV buttons do), toast, esc — no new libraries, no network send. */
+/* R21 Part C — OWNER/ADMIN diagnostics panel (#report-diag-section). Gated exactly like renderPipelineMI's
+   #report-mi-section (isAdminOrOwner() + classList.toggle('hidden')). */
 function diagTimeFmt(iso) {
   if (!iso) return "";
   const d = new Date(iso);
@@ -2029,15 +1678,13 @@ function renderDiagnostics(all) {
   if (!sec) return;
   const show = isAdminOrOwner();
   sec.classList.toggle("hidden", !show);
-  /* R33 — the block now lives inside a <details> on Settings. The gate is unchanged; it just has
-     to reach the wrapper too, or an adviser would be offered a "Diagnostics" disclosure that
-     opens onto nothing. */
+  /* R33: the block now lives inside a <details> on Settings. The gate is unchanged; it just has to reach the
+     wrapper too, or an adviser would be offered a "Diagnostics" disclosure that opens onto nothing. */
   const det = $("#diag-details");
   if (det) det.classList.toggle("hidden", !show);
   if (!show) return;
-  /* R33 — `all` is the Reports read this used to be rendered from. Called from Settings there is
-     no such read and `all` is null: the record count is then OMITTED rather than reported as 0,
-     which would be a made-up number about a page the reader isn't on. */
+  /* R33: `all` is the Reports read this used to be rendered from. Called from Settings there is no such read
+     and `all` is null: the record count is then OMITTED rather than reported as 0… */
   const recCount = all == null ? null : all.length;
   const total = diagErrorTotal();
 
@@ -2056,7 +1703,7 @@ function renderDiagnostics(all) {
       const rowsNewestFirst = ERROR_LOG.slice().reverse();
       tbl.innerHTML = `<table class="imp-table"><tr><th>Time</th><th>Kind</th><th>Message</th><th title="Times this identical error repeated">×</th><th>Where</th></tr>` +
         rowsNewestFirst.map((e) => `<tr>
-          <td style="white-space:nowrap;">${esc(diagTimeFmt(e.t))}</td>
+          <td class="u-nowrap">${esc(diagTimeFmt(e.t))}</td>
           <td>${esc(e.kind || "")}</td>
           <td>${esc(e.msg || "")}</td>
           <td>${e.count || 1}</td>
@@ -2080,11 +1727,8 @@ function renderDiagnostics(all) {
      stays sync; loadPersistedDiagnostics never throws and never calls logClientError. */
   try { loadPersistedDiagnostics(); } catch (_) {}
 }
-/* R30 — the PERSISTED, cross-session error log (owner/admin), additive to the session
-   table above. Reads the sanitised error_events fingerprints, aggregates by
-   error_type|location|page → count + last-seen + roles, and renders it. Defensive by
-   design: it must NEVER throw and NEVER call logClientError (either would re-enter the
-   error path), so every branch swallows and an unsupported DB degrades to a plain note. */
+/* R30: the PERSISTED, cross-session error log (owner/admin), additive to the session table above. Reads the
+   sanitised error_events fingerprints, aggregates by error_type|location|page → count + last-seen + roles… */
 async function loadPersistedDiagnostics() {
   const box = $("#diag-persist-table");
   if (!box) return;
@@ -2117,7 +1761,7 @@ async function loadPersistedDiagnostics() {
           <td>${esc(g.location)}</td>
           <td>${esc(g.page)}</td>
           <td>${g.count}</td>
-          <td style="white-space:nowrap;">${esc(diagTimeFmt(g.last))}</td>
+          <td class="u-nowrap">${esc(diagTimeFmt(g.last))}</td>
           <td>${esc(Array.from(g.roles).join(", "))}</td>
         </tr>`).join("") + `</table>`;
     }
@@ -2163,29 +1807,12 @@ function copyDiagnostics(recCount) {
   }
 }
 
-/* Batch 6 feature-detection (M2). PostgREST answers a select naming a column that doesn't exist
-   with 42703 for the WHOLE statement, so these columns are read in a separate, small query: on an
-   older database it fails alone and Reports still renders with the legacy single fee_paid_at and
-   an all-"(not recorded)" losses panel. Returns id → {…columns} or null when unavailable. */
-/* G1N-4 — one ordered, explicitly-bounded walk shared by every Reports select. The M2 columns are
-   merged onto the main cases select BY ID, so if the two queries ever return different subsets the
-   missing rows silently revert to the legacy single fee_paid_at and to the "(not recorded)" loss
-   bucket — no error, nothing on screen, exactly the failure mode M2/M5 were built to end. Past
-   PostgREST's max-rows cap (1000 by default) an unordered, unbounded select is free to do that.
-   Ordering both by id and asking for the same explicit ceiling keeps them walking the same set.
-   R69-HF1 — the ceiling below is now an APPLICATION cap, applied by readAll() as it pages, not a
-   `.limit()` handed to the server. `.limit(20000)` never lifted PostgREST's max-rows: the server
-   clamped it to 1,000 and said nothing, so "the same explicit ceiling" above was in truth "the
-   first 1,000 rows" on both selects since the back-book import. readAll() walks the whole ordered
-   set in 1,000-row `.range()` pages and stops AT this cap, which is what the notice below has
-   always claimed. See the readAll block comment (~line 549) for the proof. */
 let REPORTS_ROW_CAP = 20000; // R18-P7 — raised 5000→20000: stage_changed case_events already exceed 5000 at current scale, so 5000 silently truncated MI. Truncation-disclosure note below still fires at the new ceiling.
-/* R5-F4 — the cap above is honest about being a cap only if the page says when it BITES. A select
-   that comes back holding exactly REPORTS_ROW_CAP rows is, as far as the client can tell, truncated:
-   every figure below then describes the first N cases by id and nothing on screen says so. These
-   two collect that fact per select and renderCapNotice() turns it into one line.
-   `=== cap` rather than `>=`: PostgREST cannot return more than the ceiling, and a book that is
-   exactly 5000 cases long is a false positive worth having over a silent truncation. */
+/* R5-F4: the cap above is honest about being a cap only if the page says when it BITES. A select that comes
+   back holding exactly REPORTS_ROW_CAP rows is, as far as the client can tell, truncated: every figure below then
+   describes the first N cases by id and nothing on screen says so; these two collect that per select and
+   renderCapNotice() turns it into one line. `=== cap` rather than `>=`: PostgREST cannot return more than the
+   ceiling, and a book exactly REPORTS_ROW_CAP long is a false positive worth having over a silent truncation. */
 let reportsCapHits = [];
 function noteRowCap(label, rows) {
   if (Array.isArray(rows) && rows.length === REPORTS_ROW_CAP) reportsCapHits.push(label);
@@ -2199,20 +1826,11 @@ function renderCapNotice() {
     ? `⚠ Showing the first ${REPORTS_ROW_CAP.toLocaleString("en-GB")} cases — figures describe this subset, not the whole book. (Reached on: ${[...new Set(reportsCapHits)].join(", ")}.)`
     : "";
 }
-/* R23 — the same silent-1000-cap fix, extended to the owner-facing full-table reads R18 left
-   unbounded (Dashboard, Pipeline, Clients, Data health, plus the client pickers and the Revolution
-   importer). ONE shared ceiling with Reports: below it (20,000 ≫ Daniel's ~2,000) every capped read
-   is byte-identical to today — it only lifts PostgREST's silent 1,000-row ceiling so a 2,000+ book is
-   read whole instead of an arbitrary first ~1,000. A read that comes back holding EXACTLY the cap is,
-   as far as the client can tell, truncated (same `=== cap` principle Reports uses above), so the page
-   surfaces one small notice. This effectively NEVER fires for Daniel — it is the safety net.
-
-   R69-HF1 — THE SENTENCE ABOVE WAS WRONG ABOUT HOW, AND THE COST WAS REAL. `.limit(20000)` does not
-   lift PostgREST's 1,000-row ceiling; nothing sent from the client can. From the back-book import
-   (1,161 clients / 2,015 cases) until this fix, every one of these reads returned the first 1,000
-   rows of its order and no notice ever fired, because 1,000 ≠ 20,000. The ceiling is now reached the
-   only way it can be — readAll() pages the ordered query with `.range()` until the table runs out or
-   this cap is hit — so `ownerCapHit` (`rows.length === OWNER_ROW_CAP`) means what it always said. */
+/* R23: the same silent-1000-cap fix, extended to the owner-facing full-table reads R18 left unbounded (Dashboard,
+   Pipeline, Clients, Data health, plus the client pickers and the Revolution importer). This effectively NEVER
+   fires for Daniel — it is the safety net. From the back-book import (1,161 clients / 2,015 cases) until this fix,
+   every one of these reads returned the first 1,000 rows of its order and no notice ever fired, because 1,000 ≠
+   20,000. … */
 let OWNER_ROW_CAP = REPORTS_ROW_CAP;
 const ownerCapHit = (rows) => Array.isArray(rows) && rows.length === OWNER_ROW_CAP;
 function renderOwnerCapNotice(sel, hit) {
@@ -2227,19 +1845,14 @@ function renderOwnerCapNotice(sel, hit) {
    when the mock supabase bundle is what loaded, so it cannot exist in the shipped app. */
 if (typeof window !== "undefined" && window.supabase && window.supabase.__isMock) {
   window.__setReportsRowCap = function (n) { REPORTS_ROW_CAP = Number(n) || 5000; return REPORTS_ROW_CAP; };
-  /* R78 · A5 — a cap change invalidates the board cache too: the cached snapshot was taken
-     under the OLD cap, so serving it under the new one would show rows the cap now excludes
-     (this is also what keeps r23 §D honest — every post-cap-change board load re-reads). */
+  /* R78 · A5: a cap change invalidates the board cache too: the cached snapshot was taken under the OLD cap,
+     so serving it under the new one would show rows the cap now excludes. */
   window.__setOwnerRowCap = function (n) { OWNER_ROW_CAP = Number(n) || 5000; bustBoardCache(); bustBookCache("delete"); return OWNER_ROW_CAP; };   // R85 — a cap change forces a FULL book reload too (a snapshot under the old cap is not the book under the new one)
   /* R78 · A5 — sandbox hook so a suite can force the next board load to refetch (r24 §D reads
      the SELECT string off a fresh load; the cache would otherwise serve it silently). */
   window.__bustBoardCache = function () { bustBoardCache(); };
-  /* R85 · A7 — the session book's sandbox seams. `__bustBookCache(kind)` marks it dirty exactly
-     as the choke point would ("cases" | "clients" | "delete" ⇒ full reload | nothing ⇒ both
-     tables); `__bookStats()` reports the load/sync counters plus the dirty flags and capHit;
-     `__setBookStaleMs(n)` shrinks the bounded-staleness window so a suite can prove a colleague's
-     write (seeded straight into __mock.db, past the choke point) shows on the next nav;
-     `__bookPeek()` is the snapshot without a network call. */
+  /* R85 · A7: the session book's sandbox seams. `__bustBookCache(kind)` marks it dirty exactly as the choke
+     point would; `__bookStats()` reports the load/sync counters plus the dirty flags and capHit… */
   window.__bustBookCache = function (kind) { bustBookCache(kind); };
   window.__bookStats = function () {
     const b = bookPeek();
@@ -2249,14 +1862,11 @@ if (typeof window !== "undefined" && window.supabase && window.supabase.__isMock
   };
   window.__setBookStaleMs = function (n) { BOOK_STALE_MS = Math.max(0, Number(n) || 0); return BOOK_STALE_MS; };
   window.__bookPeek = function () { return bookPeek(); };
-  /* R80 · A2 — same idea for the Protection page's session cache: a suite that seeds candidates
-     internally (window.__mock.seedProtectionBook pushes rows without a db.from write, so the
-     choke point never sees it) can force the next Protection load to refetch. */
+  /* R80 · A2: same idea for the Protection page's session cache: a suite that seeds candidates internally can
+     force the next Protection load to refetch. */
   window.__bustProtCache = function () { bustProtCache(); };
-  /* R68 · M7 — re-read the settings table into `settings`. Production re-reads it at sign-in and
-     after a save, which is the only time it changes; a harness that has just written a row (an
-     adviser fee target, the email hold) needs the same refresh WITHOUT owning the Save button
-     that normally performs it. Sandbox-only, for the same reason as the two caps above. */
+  /* R68 · M7: re-read the settings table into `settings`. Production re-reads it at sign-in and after a save,
+     which is the only time it changes… */
   window.__reloadSettings = function () { return loadSettings(); };
   /* R74 · A1 — the rate-book classification, so a suite can test the ONE definition directly
      rather than inferring it from three renderings of it. Sandbox-only, same rule as above. */
@@ -2270,21 +1880,11 @@ if (typeof window !== "undefined" && window.supabase && window.supabase.__isMock
 /* G1N-9 — "…→ not_proceeding" (the move INTO the lost stage), never "not_proceeding → …" (a
    reopen). The bare-name alternative covers a writer that records only the new stage. */
 const LOST_EVENT_RE = /(?:→|->)\s*not_proceeding\s*$|^\s*not_proceeding\s*$/;
-/* ==========================================================================
-   R85 · E0 — THIS FILE'S BOOK PICK. Every list read of `cases` / `clients` in
-   this file now comes off the session Book (app.js, `bookLoad`) and is PICKED
-   to the exact columns the retired select named, into a NEW object: the book's
-   rows are shared with every other consumer and several sites here assign onto
-   their rows (loadReports / loadMoneyPage merge the fee-date columns with
-   Object.assign; r44ConfirmLine stamps proc_fee_paid_at onto the cached
-   candidate). A key is copied only when the row HAS it, so a column the book
-   dropped on a 42703 stays absent — the probes (PROP_ADDR_SUPPORTED,
-   CALLPACK_SUPPORTED) read that gap exactly as they read a server row's.
-   `embed` rebuilds the `clients!client_id(a,b)` shape the select carried:
-   `{a, b}` off the book's synthesised embed, or null where the server would
-   have returned null (no client on the row). Same body as Agent B/D's
-   pickCols in app.js plus the embed — fold onto one helper on merge.
-   ========================================================================== */
+/* R85 · E0: THIS FILE'S BOOK PICK. Every list read of `cases` / `clients` in this file now comes off the session
+   Book (app.js, `bookLoad`) and is PICKED to the exact columns the retired select named, into a NEW object: the
+   book's rows are shared with every other consumer and several sites here assign onto their rows (loadReports /
+   loadMoneyPage merge the fee-date columns with Object.assign; r44ConfirmLine stamps proc_fee_paid_at onto the
+   cached candidate). … */
 function rmBookPick(row, cols, embed) {
   const o = {};
   for (let i = 0; i < cols.length; i++) {
@@ -2301,22 +1901,19 @@ function rmBookPick(row, cols, embed) {
 /* The Reports-page slice of the book: id order (the book's own), cut at the cap the retired
    readAll used, so noteRowCap's `rows.length === cap` verdict means what it always meant. */
 const rmBookCasesCapped = (snap, cap) => snap.cases.slice(0, cap || REPORTS_ROW_CAP);
-/* The Reports page's named case columns — the 28 loadReports' select carried through R80 (see the
-   R7 / R9-2 / R12b / R19 / R80 notes at the call site for why each is there). Every one is in
+/* The Reports page's named case columns — the 28 loadReports' select carried through R80. Every one is in
    BOOK_CASE_COLS; the `clients(first_name,last_name)` embed is rebuilt by rmBookPick. */
 const REPORTS_CASE_COLS = ["id", "client_id", "stage", "case_kind", "lender", "loan_amount", "broker_fee", "proc_fee", "sols_fee",
   "submitted_at", "offer_issued_date", "fee_status", "fee_paid_at", "completed_at", "created_at", "updated_at", "rate_percent",
   "rate_end_date", "rate_end_estimated", "lead_source", "introducer_id", "protection_status", "retention_source_case_id",
   "assigned_to", "nps_score", "review_requested_at", "referral_requested_at", "expected_completion_date"];
-/* The Money page's (loadMoneyPage) — 20 columns, property_address added under the M7 probe. */
+/* The Money page's (loadMoneyPage) — 20 columns plus property_address. */
 const MONEY_CASE_COLS = ["id", "client_id", "stage", "case_kind", "lender", "loan_amount", "proc_fee", "broker_fee", "sols_fee",
   "fee_status", "fee_paid_at", "completed_at", "created_at", "updated_at", "rate_end_date", "rate_end_estimated",
   "protection_status", "retention_source_case_id", "assigned_to", "lead_source"];
 async function loadCaseExtraColumns() {
   try {
-    /* R85 · E1 — off the session Book (its own R83-era walk retired). The M2 columns ride the
-       book unconditionally; on a database without them the book's single 42703 retry drops the
-       column and the pick leaves the key absent, so every consumer's undefined fallback still fires. */
+    /* R85 · E1 — off the session Book (its own R83-era walk retired). */
     const snap = await bookLoad();
     if (snap.error) return null;
     const data = rmBookCasesCapped(snap).map((r) => rmBookPick(r, ["id", "lost_reason", "broker_fee_paid_at", "proc_fee_paid_at", "sols_fee_paid_at"]));
@@ -2326,20 +1923,13 @@ async function loadCaseExtraColumns() {
     return map;
   } catch (_) { return null; }
 }
-/* R7 — M7's property_address, read the same way loadCaseExtraColumns reads M2's: its own small,
-   ordered, capped query, so a database that has not taken the migration costs the rate-end
-   ledger's de-duplication and its property chips, and nothing else on the page. Returns
-   id → address (possibly null) or null when the column isn't there at all. */
+/* R7 — M7's property_address, read the same way loadCaseExtraColumns reads M2's. Returns
+   id → address (possibly null) or null when the read fails. R85 · E2 — off the session Book. */
 async function loadCasePropColumn() {
   try {
-    if ((await propAddrSupported()) === false) return null;
-    /* R85 · E2 — off the session Book. The probe still gates; the "no such column" branch is now
-       the pick coming back without the key (the book dropped it on its 42703 retry), which is the
-       same proof the 42703 used to be. */
     const snap = await bookLoad();
     if (snap.error) return null;
     const rows = rmBookCasesCapped(snap);
-    if (rows.length && !Object.prototype.hasOwnProperty.call(rows[0], "property_address")) { PROP_ADDR_SUPPORTED = false; return null; }
     const data = rows.map((r) => rmBookPick(r, ["id", "property_address"]));
     noteRowCap("case property addresses", data);
     const map = {};
@@ -2347,18 +1937,13 @@ async function loadCasePropColumn() {
     return map;
   } catch (_) { return null; }
 }
-/* R12b · W-15c — the four call-pack columns, read exactly the way M2's and M7's are above: its
-   own small, ordered, capped query, so a database that has not taken them costs the "£X/mo more"
-   estimate on the Recover rows and nothing else on the page. `rate_percent` comes from the main
-   select, so this only has to fetch what that select cannot risk naming. */
+/* R12b · W-15c — the four call-pack columns, read exactly the way M2's and M7's are above.
+   `rate_percent` comes from the main select. R85 · E3 — off the session Book, as E2 above. */
 async function loadCaseCallPack() {
   try {
-    if ((await callPackSupported()) === false) return null;
-    /* R85 · E3 — off the session Book, gated and degraded exactly as E2 above. */
     const snap = await bookLoad();
     if (snap.error) return null;
     const rows = rmBookCasesCapped(snap);
-    if (rows.length && !Object.prototype.hasOwnProperty.call(rows[0], "current_balance")) { CALLPACK_SUPPORTED = false; return null; }
     const data = rows.map((r) => rmBookPick(r, ["id", ...CALLPACK_COLS]));
     noteRowCap("case call-pack figures", data);
     const map = {};
@@ -2366,14 +1951,12 @@ async function loadCaseCallPack() {
     return map;
   } catch (_) { return null; }
 }
-/* When each case actually stopped, from the event log: the most recent stage_changed event whose
-   detail names not_proceeding. Best-effort in the same spirit as loadStageEntries() — a blocked or
-   absent case_events leaves the map empty and the losses panel dates by updated_at instead. */
+/* When each case actually stopped, from the event log: the most recent stage_changed event whose detail names
+   not_proceeding. Best-effort in the same spirit as loadStageEntries()… */
 async function loadLostDates() {
   try {
-    // G1N-4 — case_events is the fastest-growing table in the schema (278 rows on a 54-case
-    // fixture); truncated silently, the losses panel starts dating cases by updated_at while its
-    // own scope line still claims it dated them by the stage change. Ordered and capped.
+    // G1N-4 — case_events is the fastest-growing table in the schema; truncated silently, the losses panel
+    // starts dating cases by updated_at while its own scope line still claims it dated them by the stage…
     const { data, error } = await readAll(db.from("case_events").select("case_id,event,detail,created_at")
       .eq("event", "stage_changed").order("created_at").order("id"), { cap: REPORTS_ROW_CAP });
     if (error) return {};
@@ -2382,10 +1965,7 @@ async function loadLostDates() {
     (data || []).forEach((e) => {
       if (!e || !e.case_id || !e.created_at) return;
       /* G1N-9 — anchor on the DESTINATION. The trigger writes detail as "<old> → <new>", so a bare
-         /not_proceeding/ also matches a REOPEN ("not_proceeding → offer"), which is newer and would
-         win the max() below. Today the panel is saved only by the stage filter running first; any
-         future writer that sets stage without emitting a stage_changed event would turn that into a
-         wrong "lost in <month>" date, which moves money between months. */
+         /not_proceeding/ also matches a REOPEN ("not_proceeding → offer")… */
       if (!LOST_EVENT_RE.test(String(e.detail || ""))) return;
       if (!map[e.case_id] || e.created_at > map[e.case_id]) map[e.case_id] = e.created_at;
     });
@@ -2393,117 +1973,58 @@ async function loadLostDates() {
   } catch (_) { return {}; }
 }
 
-/* R83 — the Reports seq-guard (the R81 · A2 idiom loadMoneyPage already uses): the month picker
-   fires loadReports() per change and each run captures its own `mv`, so a slow earlier month could
-   resolve last and paint July under a picker reading August. Newest load wins; a stale one returns
-   silently after every await. */
+/* R83: the Reports seq-guard: the month picker fires loadReports() per change and each run captures its own
+   `mv`, so a slow earlier month could resolve last and paint July under a picker reading August. */
 let reportsLoadSeq = 0;   // R83
 async function loadReports() {
   const seq = ++reportsLoadSeq;   // R83 — seq-guard
   const yr = Number(localDateStr().slice(0, 4)); // G1N-6 — Europe/London, like every other figure here
   const thisMonth = localMonthStr();
   const picker = $("#report-month");
-  /* G1N-7 — a month that has not started yet is not a 100% collapse. With no max the picker happily
-     offered next month, cur.hasData came back false while the PREVIOUS month (this one) had rows,
-     so deltaChip took its real-percentage branch and every tile read "0 ▼ −100% vs <this month>" —
-     the one case the "no data" wording exists to separate out, reported backwards. */
-  // R83 — always re-stamped: an app left open across midnight on the 1st could not select the new month.
+  /* G1N-7 — a month that has not started yet is not a 100% collapse. With no max the picker happily offered
+     next month, cur.hasData came back false while the PREVIOUS month (this one) had rows… */
   if (picker) picker.max = thisMonth;   // R83
   const mv = (picker && picker.value) || thisMonth;
   if (picker && !picker.value) picker.value = mv;
   reportsCapHits = []; // R5-F4 — one verdict per render, never carried over from the last one
   const [casesRes, introsRes, repRes, extraCols, lostAt, propCols, leadRes, refCols, advDates, detrTasks, solCols, callPack, advRefQ, advOptoutRes, advEmailRes] = await Promise.all([
-    // G1N-4 — same order and same explicit ceiling as loadCaseExtraColumns, so the two selects
-    // that are merged by id below can never walk different subsets of the table.
-    /* R7 — widened by five BASE columns (client_id, lender, rate_end_date, rate_end_estimated)
-       so the Money owed and Rate-end book value panels below cost no second walk of the table.
-       Every one of them has existed since the original schema, so this select cannot start
-       42703-ing on an older database; the two columns that CAN (M2's per-type paid dates, M7's
-       property_address) stay in their own small queries underneath, exactly as before. */
-    /* R9-2 — plus review_requested_at, which the advocacy panel's monthly series falls back to
-       when the database records no date for when a score came BACK. It is an original-schema
-       column (the review drip has stamped it since round 5), so it cannot 42703 this select. */
-    /* R12b · W-15c — plus `rate_percent`, the third input the "£X/mo more" estimate needs (the
-       other two ride in loadCaseCallPack's own query). It is an ORIGINAL-schema column — the case
-       form, the pipeline table and the CSV export have all selected it since day one — so, like
-       the five R7 widened this select by, it cannot start 42703-ing an older database. */
-    /* R19 — plus `offer_issued_date`, the fourth pipeline milestone date the Pipeline MI section
-       reads (created_at → submitted_at → offer_issued_date → completed_at) for its conversion funnel
-       and velocity. It is an R13 date column, present in prod (like submitted_at beside it), so it
-       cannot 42703 this select on the current database; on an older one it simply comes back
-       undefined and the MI conversion/velocity fall back to the milestones that ARE populated. */
-    /* R80 · B1 — plus `referral_requested_at`, half of the "has this client ever been asked for a
-       referral" answer the promoters block needs (the other half is the email_queue read added to
-       this Promise.all below). A real production column — it stamps when a referral request queues
-       (CTO-verified, like review_requested_at beside it) — so it cannot 42703 this select. */
-    /* R85 · E4 — THE READ ABOVE IS NOW THE SESSION BOOK. The same 28 columns (REPORTS_CASE_COLS —
-       every one in BOOK_CASE_COLS) picked off the book's id-ordered rows, cut at REPORTS_ROW_CAP,
-       with the `clients!client_id(first_name,last_name)` embed rebuilt to that exact shape. Same
-       `{ data, error }` envelope so the R83 error branch below is untouched; a failed book load is
-       the old read's error. The picks are NEW objects — the merges below (Object.assign of the
-       M2 / M7 / call-pack maps) must never write onto the shared book rows. */
+    /* G1N-4 — same order and same explicit ceiling as loadCaseExtraColumns, so the two selects that are
+       merged by id below can never walk different subsets of the table. */
     bookLoad().then((snap) => (snap.error
       ? { data: null, error: snap.error }
       : { data: rmBookCasesCapped(snap).map((r) => rmBookPick(r, REPORTS_CASE_COLS, ["first_name", "last_name"])), error: null })),
     db.from("introducers").select("id,name"),
     db.rpc("get_reports"),
-    // M2 columns in their OWN query, so an un-migrated database (42703 on the whole select) costs
-    // the losses panel and the per-type cash dates, not the entire Reports page.
-    loadCaseExtraColumns(),
+    loadCaseExtraColumns(),   // M2 columns
     loadLostDates(),
-    // R7 — M7's property column, for the same reason: without it the rate-end ledger cannot
-    // collapse two cases on one building, and says so on the panel rather than failing to render.
-    loadCasePropColumn(),
-    /* R7-5 — the leads themselves, for the Lead-response panel. select("*") ON PURPOSE: naming
-       first_contact_at would 42703 the whole query on a database that has not taken the lead-SLA
-       migration, and this way the columns are simply absent and the panel says so. Unfiltered by
-       date because the "breaching now" count has to see an enquiry that has been sitting there
-       since before the 90-day window; the window is applied to the statistics client-side. */
-    /* R83 — through readAll: `.limit(2000)` returned PostgREST's 1,000-row ceiling (R69-HF1), so
-       the "breaching now" count — deliberately over EVERY inbox lead — silently lost the oldest
-       ones, and the panel's own truncation notice (>= LEAD_RESP_ROW_CAP) could never fire. */
+    loadCasePropColumn(),   // R7 — M7's property column, for the rate-end ledger's de-duplication
+    /* R7-5: the leads themselves, for the Lead-response panel. Unfiltered by date because the "breaching now"
+       count has to see an enquiry that has been sitting there since before the 90-day window… */
     readAll(db.from("leads").select("*").order("created_at", { ascending: false }).order("id"), { cap: LEAD_RESP_ROW_CAP }),   // R83
-    /* R9-2 — the three reads the advocacy panel needs, each in its own small query for exactly the
-       reason M2's and M7's are: a database without m11 (or without a score-capture date, or with
-       case_tasks locked down by RLS) loses one BLOCK of that panel and says so, rather than
-       taking the whole Reports page down with it. */
+    /* R9-2: the three reads the advocacy panel needs, each in its own small query: a failed one loses one
+       BLOCK of that panel and says so, rather than taking the whole Reports page down with it. */
     loadReferrerColumn(REPORTS_ROW_CAP),
     loadAdvScoreDates(REPORTS_ROW_CAP),
     loadDetractorTasks(),
-    /* R9-6 — and m10's solicitor column, in its own query for exactly the same reason: without the
-       migration the conveyancer panel says so and every other panel on the page is unaffected. */
-    loadSolicitorColumn(REPORTS_ROW_CAP),
-    /* R12b · W-15c — and the call-pack columns, same discipline again. */
-    loadCaseCallPack(),
-    /* R80 · B1 — the three small reads the "Promoters never asked" list needs. The email_queue
-       read is half of the membership truth: a client with any non-cancelled referral_request row
-       has been asked, whatever became of the send (the other half — referral_requested_at — rides
-       on the widened cases select above, because a stamp with no queue row behind it still means
-       somebody asked once). The ERROR is kept, not swallowed: an unreadable queue means "who has
-       been asked is unknown", and a list rendered over that unknown would over-ask — the block
-       says so instead of guessing. */
+    loadSolicitorColumn(REPORTS_ROW_CAP),   // R9-6 — m10's solicitor column
+    loadCaseCallPack(),   // R12b · W-15c — the call-pack columns
+    /* R80 · B1: the three small reads the "Promoters never asked" list needs. The email_queue read is half of
+       the membership truth: a client with any non-cancelled referral_request row has been asked… */
     readAll(db.from("email_queue").select("client_id,status").eq("email_type", "referral_request").neq("status", "cancelled").order("id")),
-    /* R80 · B1 — who has opted out (R79's comms_optout). Soft: on a database without the
-       column no row is flagged, and v19's send-time opt-out gate (plus advPromoAsk's own
-       pre-flight) remains the backstop for the four marketing-adjacent types. */
-    /* R85 · E5 — off the session Book: `.eq("comms_optout", true)` is `=== true` over the book's
-       clients (a database without the column leaves the key absent ⇒ nobody flagged, as before);
-       the id/email walk is the book's clients in id order picked to those two columns. Both keep
-       their `{ data, error }` envelopes for the two consumers below. */
+    /* R80 · B1: who has opted out (R79's comms_optout). Soft: if the book read fails no row is
+       flagged, and v19's send-time opt-out gate remains the backstop for the four marketing-adjacent types. */
     bookLoad().then((snap) => (snap.error
       ? { data: null, error: snap.error }
       : { data: snap.clients.filter((c) => c.comms_optout === true).map((c) => ({ id: c.id })), error: null })),
-    /* R80 · B1 — who HAS an email address, so the queue verb can be withheld from a row it
-       could only fail on (queueEmail refuses a no-email client anyway; hiding the button is the
-       honest rendering of that refusal). Base-schema columns only — this cannot 42703. */
+    /* R80 · B1: who HAS an email address, so the queue verb can be withheld from a row it could only fail on.
+       Base-schema columns only — this cannot 42703. */
     bookLoad().then((snap) => (snap.error
       ? { data: null, error: snap.error }
       : { data: sortRows(snap.clients, "id").map((c) => rmBookPick(c, ["id", "email"])), error: null })),
   ]);
   if (seq !== reportsLoadSeq) return;   // R83 — a newer load owns the page
-  /* R83 — readAll answers a failed read with {data: rowsSoFar, error}; the error was dropped on
-     the floor here, so an RLS refusal or a failed page 3 rendered the whole page over empty or
-     PARTIAL rows with no toast — zeros, "Nothing outstanding", plausible-looking wrong money. */
+  /* R83: readAll answers a failed read with {data: rowsSoFar, error}; the error was dropped on the floor
+     here… */
   if (casesRes && casesRes.error) return dbFail("loadReports", casesRes.error);   // R83
   const cases = (casesRes && casesRes.data) || [];   // R83
   if (introsRes && introsRes.error) dbFail("loadReports introducers", introsRes.error);   // R83 — table still renders, introducers read "Unknown"
@@ -2511,32 +2032,24 @@ async function loadReports() {
   const all = cases || [];
   noteRowCap("cases", cases);
   renderCapNotice();
-  // Merge the feature-detected columns onto the rows. Where the migration hasn't run these stay
-  // undefined and every consumer falls back: feeCashDate → fee_paid_at, lost_reason → "(not
-  // recorded)".
+  // Merge the separately-read columns onto the rows.
   if (extraCols) all.forEach((c) => { const x = extraCols[c.id]; if (x) Object.assign(c, x); });
   if (propCols) all.forEach((c) => { if (propCols[c.id] !== undefined) c.property_address = propCols[c.id]; });
   if (callPack) all.forEach((c) => { const x = callPack[c.id]; if (x) Object.assign(c, x); });
   lossState.lostAt = lostAt || {};
   const leadRows = (leadRes && !leadRes.error && leadRes.data) || [];
-  if (leadRows.length) noteLeadSlaFromStarRow(leadRows[0]);
   if (refCols) all.forEach((c) => { if (refCols[c.id] !== undefined) c.referrer_client_id = refCols[c.id]; });
   if (solCols) all.forEach((c) => { if (solCols[c.id] !== undefined) c.solicitor_firm = solCols[c.id]; });
   // T1-19 — so the pipeline search can match an introducer by name when the Introducers table links into it.
   const introMap = Object.fromEntries((intros || []).map((i) => [i.id, i.name]));
   introducerNames = introMap;
   const rep = repRes && !repRes.error ? repRes.data : null;
-  /* R89 · B — THE READ IS SHARED, THE RENDER IS PER TAB. Everything above is the one read every tab
-     draws from; it is kept here (repCtx) and only the tab on screen is painted. A tab opened later
-     paints from this same context (repRenderTab), so switching tabs costs no second read and every
-     tab reads the same rows. A new read (arriving at Reports, the month picker, a save elsewhere)
-     invalidates the tabs that are not on screen: each re-renders from the new rows when opened. */
+  /* R89 · B: THE READ IS SHARED, THE RENDER IS PER TAB. Everything above is the one read every tab draws
+     from; it is kept here (repCtx) and only the tab on screen is painted. */
   repCtx = {
     seq, all, yr, mv, intros, introMap, rep, leadRows, solCols,
-    /* R80 · B1 — the promoters-list context rides in beside the R9 extras. `referralAsked` is
-       null when the queue read failed (the block refuses to render a list that would over-ask);
-       `optoutIds` is null when comms_optout is unreadable (no row is flagged); `clientEmails` is
-       null when the clients read failed (no queue verb is withheld — queueEmail still refuses). */
+    /* R80 · B1: the promoters-list context rides in beside the R9 extras. `referralAsked` is null when the
+       queue read failed; `optoutIds` is null when comms_optout is unreadable (no row is flagged)… */
     advCtx: {
       referrers: refCols, scoreDates: advDates, detractorTasks: detrTasks,
       referralAsked: (advRefQ && !advRefQ.error) ? new Set((advRefQ.data || []).map((r) => r.client_id).filter(Boolean)) : null,
@@ -2559,9 +2072,8 @@ function renderReportMoneyNote() {
   const moneyNote = $("#report-money-note");
   if (!moneyNote) return;
   moneyNote.classList.toggle("hidden", money);
-  /* R87 · owner-admin (05 #7) — 130 words became one line per role. R89 · B — the admin's line no
-     longer says the page "ENDS" where the money begins: the page is tabs now, and the money tabs
-     are simply not offered. */
+  /* R87 · owner-admin (05 #7): 130 words became one line per role. R89 · B — the admin's line no longer says
+     the page "ENDS" where the money begins: the page is tabs now, and the money tabs are simply not offered. */
   moneyNote.textContent = money ? "" : (MY_ROLE === "admin"
     ? "Firm money figures are Owner-only; Pipeline MI is the admin view of the book."
     : "Firm money figures are Owner-only; your own numbers are in My numbers and on each case.");
@@ -2634,21 +2146,12 @@ function renderBookKpis(c) {
   const all = c.all, yr = c.yr;
   const activeStages =["enquiry", "fact_find", "decision_in_principle", "application", "offer", "exchange"];
   const active = all.filter((c) => activeStages.includes(c.stage));
-  /* G1N-6 — bucket on the SAME Europe/London basis as every other Batch-6 figure. `new
-     Date(x).getFullYear()` reads the BROWSER's timezone, so on a machine set to another zone a
-     completion (or a fee) stamped near a year boundary was counted in one year by these tiles and
-     another by the month card and the chart beside them. localDateStr is the page's one basis. */
+  /* G1N-6 — bucket on the SAME Europe/London basis as every other Batch-6 figure. `new Date(x).getFullYear()`
+     reads the BROWSER's timezone, so on a machine set to another zone a completion (or a fee) stamped near… */
   const yearOf = (d) => localDateStr(d).slice(0, 4);
   const completedYr = all.filter((c) => c.completed_at && yearOf(c.completed_at) === String(yr));
   const pipelineValue = active.reduce((s, c) => s + Number(c.loan_amount || 0), 0);
-  // B7 / M5 — broker cash for the year on the BROKER fee's own paid date, coalescing to the legacy
-  // single date. Deliberately the same expression M5 puts in get_reports.fees_banked_ytd, so the
-  // tile and the RPC cannot disagree. (No future-date clamp here: a year-to-date figure matches the
-  // RPC exactly; the month-scoped figures above do the clamping.)
-  // G1N-3 — but it is not left silent: a payment dated after today has NOT been received, and the
-  // target bar and the scoreboard on this same screen both exclude exactly those. The tile keeps
-  // the RPC's basis and states, underneath, how much of it is still in the future and what has
-  // actually landed, so "cash" can no longer quietly mean "cash plus money we expect".
+  // B7 / M5: broker cash for the year on the BROKER fee's own paid date, coalescing to the legacy single date. …
   let feesPaidYrFuture = 0, feesPaidYrFutureN = 0;
   const todayStrYtd = localDateStr();
   const feesPaidYr = all.reduce((s, c) => {
@@ -2658,20 +2161,15 @@ function renderBookKpis(c) {
     if (localDateStr(d) > todayStrYtd) { feesPaidYrFuture += amt; feesPaidYrFutureN++; }
     return s + amt;
   }, 0);
-  /* G1N-2 — the tile is not "invoiced money": it counts fee_status in ('not_requested','requested'),
-     and on the current book most of it has never been asked for. Splitting the two states here lets
-     the basis line say so, so nobody goes looking for invoices behind the bigger half. */
-  /* R83 — a broker fee that carries its own paid date is banked whatever fee_status says: feePaidPatch
-     only flips the legacy status to "paid" once EVERY fee type is dated, so a case with the broker fee
-     banked and the proc fee still owed read as "outstanding" here AND "banked" one tile over. */
+  /* G1N-2 — the tile is not "invoiced money": it counts fee_status in, and on the current book most of it has
+     never been asked for. Splitting the two states here lets the basis line say so… */
   const feesOutstandingRows = all.filter((c) => ["not_requested", "requested"].includes(c.fee_status) && c.broker_fee > 0 && c.stage !== "not_proceeding"
     && !feeCashDate(c, "broker_fee_paid_at"));   // R83
   const feesOutstanding = feesOutstandingRows.reduce((s, c) => s + Number(c.broker_fee || 0), 0);
   const feesInvoiced = feesOutstandingRows.filter((c) => c.fee_status === "requested").reduce((s, c) => s + Number(c.broker_fee || 0), 0);
   const feesNotInvoiced = feesOutstanding - feesInvoiced;
-  /* R68 · M7 — the firm tile now reads the shared primitive, so an adviser's own
-     "My retention conversion" is the same arithmetic scoped to their cases and the two
-     figures can be reconciled rather than argued about. Same numbers as before. */
+  /* R68 · M7: the firm tile now reads the shared primitive, so an adviser's own "My retention conversion" is
+     the same arithmetic scoped to their cases and the two figures can be reconciled rather than argued about. */
   const firmRet = retentionConversion(all);
   const rWon = firmRet.won;
   const rLost = firmRet.lost;
@@ -2680,40 +2178,25 @@ function renderBookKpis(c) {
   const avgNps = scored.length ? scored.reduce((s, c) => s + Number(c.nps_score), 0) / scored.length : null;
   const promoterPct = scored.length ? Math.round((scored.filter((c) => c.nps_score >= 9).length / scored.length) * 100) : null;
 
-  // Live snapshot — not affected by the month picker (see .report-live-note above these in the DOM):
-  // this KPI row mixes year-to-date and always-current figures, pipeline loan value and NPS are
-  // all-time/live-state, and client LTV (below, RPC-backed) is a lifetime figure by nature.
-  // T1-19 — these tiles are visually identical to the Today tiles, which have been clickable since
-  // defect 19; here they were inert markup, so the same number is a link on one page and a dead end
-  // on the other. The three with an unambiguous destination now take the same kpiGoto route. The
-  // `title` on .num carries the full value so a narrow column can never quietly truncate it.
+  // Live snapshot — not affected by the month picker (see .report-live-note above these in the DOM): this KPI row
+  // mixes year-to-date and always-current figures, pipeline loan value and NPS are all-time/live-state, and client
+  // LTV (below, RPC-backed) is a lifetime figure by nature. The `title` on .num carries the full value so a narrow
+  // column can never quietly truncate it. …
   const money = showMoney();
-  /* R5-F2 (Daniel-approved) — the HEADLINE fee figure for the year is now what the firm EARNED on
-     the cases it completed (proc+broker+sols on completed_at), not what happened to arrive in the
-     bank. "Fees banked" is not deleted and its arithmetic is untouched — it keeps its tile, its
-     basis label and its future-dated footnote, one place further along and marked secondary. */
+  /* R5-F2 (Daniel-approved) — the HEADLINE fee figure for the year is now what the firm EARNED on the cases
+     it completed, not what happened to arrive in the bank. */
   const earnedYr = earnedOnCompletion(all, String(yr));
-  /* R74 · A2 — the Money-owed panel's OWN model, called here rather than re-derived, so the tile
-     and the panel further down this page can never disagree by a penny. Pure arithmetic over rows
-     already in hand; no read. */
+  /* R74 · A2: the Money-owed panel's OWN model, called here rather than re-derived, so the tile and the panel
+     further down this page can never disagree by a penny. Pure arithmetic over rows already in hand; no read. */
   const owedNow = moneyOwedModel(all);
   $("#report-kpis").innerHTML = `
     <div class="kpi dq-clickable" onclick="kpiGoto('completed')" title="View completed cases in the pipeline"><div class="num">${completedYr.length}</div><div class="lbl">Completions ${yr}</div></div>
     <div class="kpi dq-clickable" onclick="kpiGoto('active')" title="View the pipeline"><div class="num">${active.length}</div><div class="lbl">Live cases</div></div>
     ${money ? `<div class="kpi dq-clickable" onclick="kpiGoto('active')" title="View the pipeline — loan value of the ${active.length} live cases"><div class="num" title="${esc(fmtM(pipelineValue))}">${fmtM(pipelineValue)}</div><div class="lbl">Pipeline loan value</div></div>` : ""}
     ${money ? `<div class="kpi kpi-headline"><div class="num" title="${esc(fmtM(earnedYr.total))}">${fmtM(earnedYr.total)}</div><div class="lbl">Fees earned ${yr}</div>${basisLine(BASIS_EARNED_YTD + ` — ${earnedYr.n} completion${earnedYr.n === 1 ? "" : "s"}, paid or not`)}</div>
-    ${/* R74 · A2 — spans two columns so the two DEBTOR tiles below it start a fresh row and sit
-          side by side, which is the whole point of putting them together. It also gives this
-          tile's long footnote the width it was wrapping onto three lines without. */ ""}
+    
     <div class="kpi kpi-secondary kpi-wide"><div class="num" title="${esc(fmtM(feesPaidYr))}">${fmtM(feesPaidYr)}</div><div class="lbl">Fees banked ${yr}</div>${basisLine(BASIS_CASH_YTD + (feesPaidYrFutureN ? ` — includes ${fmtM(feesPaidYrFuture)} dated after today (${feesPaidYrFutureN}); ${fmtM(feesPaidYr - feesPaidYrFuture)} actually received` : ""))}</div>
-    ${/* R74 · A2 (panel D#2) — THE TWO DEBTOR FIGURES, SIDE BY SIDE, WITH THEIR BASES IN THE LABEL.
-          "Fees outstanding £14,270" sat one screen above "Money owed £27,035" and the reader had to
-          find an 11px caption on each to discover they count different things. They are not a
-          contradiction and neither is wrong: this one is the BROKER fee on every case at any live
-          stage that has not been paid; the one beside it is proc + solicitor + broker on cases that
-          have COMPLETED. Same arithmetic as before on both — moneyOwedModel is the Money-owed
-          panel's own model, reused rather than re-derived — but the basis now lives in the label,
-          where it is read, instead of under it, where it was not. */ ""}
+    
     <div class="kpi dq-clickable ${feesOutstanding ? "warn" : ""}" onclick="kpiGoto('fees')" title="Broker fees on cases at ANY stage with no payment recorded — fee_status “not requested” or “requested”. Not proceeding is excluded. View the Protection &amp; Fees drawer — Fees due tab."><div class="num" title="${esc(fmtM(feesOutstanding))}">${fmtM(feesOutstanding)}</div><div class="lbl">Broker fees outstanding (all stages)</div>${basisLine(`(broker only · not yet received · ${fmtM(feesInvoiced)} invoiced + ${fmtM(feesNotInvoiced)} not yet invoiced)`)}</div>
     <div class="kpi dq-clickable ${owedNow.grand ? "warn" : ""}" id="report-kpi-owed" onclick="gotoMoneyOwed()" title="Procuration, solicitor and broker fees on cases that have COMPLETED and carry no paid date — the money the firm has earned and not been paid. A wider set of fee types than the tile beside it, over a narrower set of cases. Opens Money owed on the Money tab."><div class="num" title="${esc(fmtM(owedNow.grand))}">${fmtM(owedNow.grand)}</div><div class="lbl">Owed on completed cases</div>${basisLine(`(proc + sols + broker · earned, not yet received · ${owedNow.n} completed case${owedNow.n === 1 ? "" : "s"})`)}</div>` : ""}
     <div class="kpi"><div class="num">${rWon + rLost ? Math.round((rWon / (rWon + rLost)) * 100) + "%" : "—"}</div><div class="lbl">Retention conversion</div></div>
@@ -2728,9 +2211,8 @@ function renderBookMonths(c) {
   const all = c.all, yr = c.yr;
   const yearOf = (d) => localDateStr(d).slice(0, 4);
   const completedYr = all.filter((x) => x.completed_at && yearOf(x.completed_at) === String(yr));
-  // S8 / R5-19 — the completions chart carries the previous calendar year as a second, muted bar
-  // per month. The hard getFullYear() scoping is removed HERE ONLY (the chart's own data build);
-  // `completedYr` above still drives the year-to-date KPI tiles and the protection-uptake rate.
+  // S8 / R5-19 — the completions chart carries the previous calendar year as a second, muted bar per month.
+  // The hard getFullYear() scoping is removed HERE ONLY; `completedYr` above still drives the year-to-date…
   const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
   // G1N-6 — localMonthStr (Europe/London), not the browser's own month: the card above and the bars
   // below must not disagree about which month a late-evening completion belongs to.
@@ -2763,10 +2245,8 @@ function renderBookMonths(c) {
 /* R89 · B — Money & book: the introducers table (volumes for everyone, Revenue for the Owner). */
 function renderBookIntroducers(c) {
   const all = c.all, money = showMoney(), introMap = c.introMap;
-  // BUILD 6a — Conversion % and Revenue added, computed the same way the Lead sources table above
-  // computes them (renderThreadedPanels): revenue is proc+broker+sols fee on completed cases only,
-  // conversion is completed / total cases. All-time (not scoped to the month picker), like the rest
-  // of this panel already was.
+  // BUILD 6a: Conversion % and Revenue added, computed the same way the Lead sources table above computes
+  // them (renderThreadedPanels): revenue is proc+broker+sols fee on completed cases only…
   const iMap = {};
   all.filter((c) => c.introducer_id).forEach((c) => {
     const k = introMap[c.introducer_id] || "Unknown";
@@ -2783,36 +2263,18 @@ function renderBookIntroducers(c) {
     ? `<table class="imp-table"><tr><th>Introducer</th><th>Cases</th><th title="Still in the live pipeline — neither won nor lost, and excluded from Conversion">Live</th><th>Completed</th><th title="${esc(CONV_TH_TITLE)}">Conversion</th><th>Last referral</th>${money ? `<th title="Fee value earned on this introducer's completed cases, all time. Not scoped to the month picker, and not cash — some of it may still be unpaid.">Revenue</th>` : ""}</tr>` +
       Object.entries(iMap).sort((a, b) => b[1].total - a[1].total)
         .map(([k, v]) => `<tr><td><button type="button" class="linkish" onclick="reportGotoSearch('${jsArg(k)}')" title="Open the pipeline filtered to ${esc(k)}">${esc(k)}</button></td><td>${v.total}</td><td>${v.live}</td><td>${v.done}</td><td>${convCell(v.done, v.lost)}</td><td>${fmtD(v.last)}</td>${money ? `<td class="num">${fmtM(v.revenue)}</td>` : ""}</tr>`).join("") + `</table>`
-      // R5-17 — the Revenue basis sits UNDER the table rather than in the column head: this panel
-      // shares a two-column grid with the completions chart, and a long unwrapping heading sets
-      // the table's min-content width, which squeezes the chart beside it to a sliver.
-      + (money ? `<p class="panel-sub" style="margin:8px 0 0;">Revenue ${esc(BASIS_INTRO_REV)} — fee value on completed cases, paid or not.</p>` : "")
+      // R5-17: the Revenue basis sits UNDER the table rather than in the column head: this panel shares a
+      // two-column grid with the completions chart…
+      + (money ? `<p class="panel-sub u-m-8-0-0">Revenue ${esc(BASIS_INTRO_REV)} — fee value on completed cases, paid or not.</p>` : "")
     : '<div class="empty">No cases assigned to introducers yet.</div>';
 }
 
-/* ==========================================================================
-   R69 · B3/L8 — EVERY TABLE ON REPORTS SCROLLS INSIDE ITS OWN BOX.
-
-   Measured at 390×844 as p4: eighteen tables on this page, twelve of them wider
-   than the 332px column they sit in — the adviser table 1284px, Money owed
-   1166px, the rate-end book 806px, the MI scoreboard 565px. Their panels are
-   plain <div>s with overflow visible, and `html, body { overflow-x: clip }` (the
-   M1 viewport containment) then CLIPS the overflow rather than scrolling it. So
-   the last four columns of the scoreboard did not exist on a phone: no scrollbar,
-   no cut-off cue, no way to reach them at all. That is worse than a wide page —
-   a wide page at least tells you it is wide.
-
-   Every <table> under #page-reports is put inside a .table-scroll (overflow-x:
-   auto, touch momentum, and a right-edge fade that is painted by the container's
-   own background and therefore disappears by itself once you reach the end —
-   see admin.css). Done in the DOM rather than in eighteen template strings
-   because half of these panels re-render on their own (the month picker, the
-   adviser drill-down, the ledger drawers) and a wrapper written into one
-   template would be wiped by the next innerHTML: a MutationObserver on the page
-   re-wraps whatever appears, so a panel added in a later round is covered on the
-   day it is written. The observer is installed once, does one pass per tick, and
-   its own wrapping is a no-op on the second pass, so it cannot loop.
-   ========================================================================== */
+/* R69 · B3/L8: EVERY TABLE ON REPORTS SCROLLS INSIDE ITS OWN BOX. Measured at 390×844 as p4: eighteen tables on
+   this page, twelve of them wider than the 332px column they sit in — the adviser table 1284px, Money owed 1166px,
+   the rate-end book 806px, the MI scoreboard 565px. Done in the DOM rather than in eighteen template strings
+   because half of these panels re-render on their own (the month picker, the adviser drill-down, the ledger
+   drawers) and a wrapper written into one template would be wiped by the next innerHTML: a MutationObserver on the
+   page re-wraps whatever appears, so a panel added in a later round is covered on the day it is written. … */
 let reportTablesObs = null;
 function wrapReportTables() {
   const pg = document.getElementById("page-reports");
@@ -2965,17 +2427,12 @@ function repAfterTab(key) {
   if (repActiveTab() !== key) return;
   repBuildChips(key);
 }
-/* R89 · B — THE TAB LOADER (PAGE_TAB_LOADERS.reports[key]).
-   R89 · fixer — idempotent per visit, decided by what activatePageTab says, not by a click flag. The
-   old `repTabClick` flag was reset by a listener registered BEFORE the kit's click handler, so every
-   tab click saw `false` and re-ran the whole read (6-7 reads a click). The rule now:
-     · `{ refresh: true }` (nav() arriving at Reports, a hash, Back) → ONE shared read (loadReports),
-       which paints the tab on screen;
-     · a first open of a tab while that read is in flight → nothing (the read paints the tab on screen
-       when it lands);
-     · a first open with the read in hand → paint from it (repRenderTab), no read;
-     · no read in hand (never arrived, or a write busted it — repBust) → read.
-   The month picker and the per-adviser target save still call loadReports() themselves. */
+/* R89 · B: THE TAB LOADER (PAGE_TAB_LOADERS.reports[key]). R89 · fixer — idempotent per visit, decided by what
+   activatePageTab says, not by a click flag. The rule now: · `{ refresh: true }` (nav() arriving at Reports, a
+   hash, Back) → ONE shared read (loadReports), which paints the tab on screen; · a first open of a tab while that
+   read is in flight → nothing (the read paints the tab on screen when it lands); · a first open with the read in
+   hand → paint from it (repRenderTab), no read; · no read in hand (never arrived, or a write busted it — repBust) →
+   read. … */
 let repReading = null;   // the in-flight shared read started here (a Promise), else null
 function repTabLoader(key, o) {
   const refresh = !!(o && o.refresh);
@@ -2985,9 +2442,8 @@ function repTabLoader(key, o) {
   repReading = p;
   Promise.resolve(p).catch(() => {}).then(() => { if (repReading === p) repReading = null; });
 }
-/* A write that stales the board (bustBoardCache, app.js) stales this read too: drop it and forget
-   which report tabs were opened, so the next tab activation reads afresh. The Money tab keeps its own
-   loader state (loadMoneyPage reads for itself). */
+/* A write that stales the board (bustBoardCache, app.js) stales this read too: drop it and forget which
+   report tabs were opened, so the next tab activation reads afresh. The Money tab keeps its own loader state. */
 function repBust() {
   repCtx = null;
   const loaded = typeof pageTabLoaded === "object" && pageTabLoaded ? pageTabLoaded.reports : null;
@@ -2999,10 +2455,8 @@ function repBust() {
   const slot = document.querySelector("#page-reports > .page-tabs-slot");
   if (slot && typeof MutationObserver === "function") new MutationObserver(() => repAfterTab(repActiveTab())).observe(slot, { childList: true });
 })();
-/* THE DEEP-LINK DOOR (R74 · A4c, kept). Anything that takes the reader to a Reports panel — the
-   Watchtower's "Money owed →", a KPI tile, the Money tab's links — comes through here: open the tab
-   the panel lives on (painting it if need be), then scroll to the panel once it is on screen. Returns
-   false for a panel that does not exist or whose tab this reader is not offered. */
+/* THE DEEP-LINK DOOR (R74 · A4c, kept). Anything that takes the reader to a Reports panel — the Watchtower's
+   "Money owed →", a KPI tile, the Money tab's links — comes through here… */
 window.repRevealPanel = function (sel) {
   const p = $(sel);
   if (!p) return false;
@@ -3066,16 +2520,8 @@ document.addEventListener("click", (e) => {
 });
 
 
-/* R42 · F3 — LEDGER DRAWERS. Six Reports panels lead with a figure and then print a table of
-   every row behind it. The figure is the answer; the table is the evidence, wanted on the day you
-   act on it. Each row-listing div is now inside a <details class="report-ledger"> (markup only —
-   the ids live on inside it and every render function still writes into them unchanged), closed
-   by default, with nothing persisted: a drawer that remembers is a drawer that surprises.
-
-   The count is appended here rather than baked into each renderer, because it is the same fact in
-   six places and it is FREE: the rows are already in the DOM by the time this runs. Per-panel row
-   selectors, not one generic "count the <tr>s", because "every unpaid fee line" and "the 24-month
-   table" are counting different things and a total-row or a header would be counted as evidence. */
+/* R42 · F3: LEDGER DRAWERS. Six Reports panels lead with a figure and then print a table of every row behind
+   it. The figure is the answer; the table is the evidence, wanted on the day you act on it. */
 const REPORT_LEDGERS = [
   ["#report-owed-table", ".owed-case-row", "line"],
   ["#report-rateend-table", "tr.rb-bucket-row", "bucket"],
@@ -3100,13 +2546,8 @@ function buildReportLedgerCounts() {
   });
 }
 
-/* ==========================================================================
-   S7 (cheap slice) / R5-47 — REVIEW SCORE DRILL-DOWN
-   The Avg review score tile answered "how are we doing" and nothing else: a 7.2 with no way to
-   reach the people behind it. This lists every case that returned a score, worst first, so the
-   detractors have names and one click reaches the case. Deliberately NO workflow — no auto-tasks,
-   no per-adviser NPS league table; that needs designing against real volumes (plan § Deferred).
-   ========================================================================== */
+/* S7 (cheap slice) / R5-47 — REVIEW SCORE DRILL-DOWN The Avg review score tile answered "how are we doing"
+   and nothing else: a 7.2 with no way to reach the people behind it. */
 let npsListOpen = false;
 function renderNpsList(scored) {
   const panel = $("#report-nps-panel");
@@ -3133,12 +2574,8 @@ window.toggleNpsList = function () {
   npsListOpen = !npsListOpen;
   const panel = $("#report-nps-panel");
   if (panel) panel.classList.toggle("hidden", !npsListOpen || !$("#report-nps-list").innerHTML);
-  /* R42 · F3 — the list is inside a .report-ledger drawer like every other Reports row-listing, and
-     that drawer ships closed. This panel is the one case where the drawer must not stay closed on
-     arrival: the whole panel is already opt-in — you get here by pressing "Avg review score ▾",
-     which IS the request to read the respondents — so revealing the panel and then making you open
-     a second disclosure inside it would be a drawer guarding a drawer. Opened here, not defaulted
-     open in the markup, so the "closed by default, nothing persisted" rule still holds. */
+  /* R42 · F3: the list is inside a .report-ledger drawer like every other Reports row-listing, and that
+     drawer ships closed. This panel is the one case where the drawer must not stay closed on arrival… */
   const det = $("#report-nps-list") && $("#report-nps-list").closest("details.report-ledger");
   if (det) det.open = npsListOpen;
   if (npsListOpen && panel) panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -3175,16 +2612,14 @@ window.toggleNpsList = function () {
 const ADV_MIN_N = 5;                 // the round-3 conversion boundary, reused
 const ADV_TOP_REFERRERS = 10;
 const ADV_SERIES_MONTHS = 6;
-/* The score on a case, whichever of the two names the column carries. `nps_score` is what this
-   schema has always called it; `review_score` is the name the round-9 brief uses. Reading both
-   costs one `??` and means the dashboard cannot be silently emptied by a rename. */
+/* The score on a case, whichever of the two names the column carries. `nps_score` is what this schema has
+   always called it; `review_score` is the name the round-9 brief uses. */
 const caseReviewScore = (c) => {
   const v = c && (c.review_score != null ? c.review_score : c.nps_score);
   return v == null || v === "" ? null : Number(v);
 };
-/* Candidate names for "when the score came back", newest convention first. Probed ONCE against a
-   select("*") row (the notePropAddrFromStarRow trick — one query, definitive) rather than five
-   speculative selects. Null means the database records no such date and the series falls back. */
+/* Candidate names for "when the score came back", newest convention first. Probed ONCE against a select("*")
+   row (one query, definitive) rather than five speculative selects. */
 const ADV_SCORE_DATE_COLS = ["review_score_at", "review_scored_at", "nps_scored_at", "nps_score_at", "reviewed_at"];
 let ADV_SCORE_DATE_COL;              // undefined = not asked yet · null = none · string = the column
 async function advScoreDateColumn() {
@@ -3204,16 +2639,8 @@ async function loadAdvScoreDates(cap) {
   const col = await advScoreDateColumn();
   if (!col) return null;
   try {
-    /* R83 — through readAll: `.limit(20000)` returned PostgREST's 1,000-row ceiling (R69-HF1), so
-       on a 2,000-case book the later cases silently fell back to review_requested_at while the
-       basis line claimed "dated by <col>". */
-    /* R85 · E6 — served from the session Book WHEN the resolved column rides it (a candidate
-       named in BOOK_CASE_COLS and still present on the session's rows after any 42703 drop);
-       otherwise the live R83 read stays. Today NONE of ADV_SCORE_DATE_COLS is in BOOK_CASE_COLS —
-       prod's column is `nps_score_at` (db/columns.json) — so on the current book this is the ONE
-       whole-table `cases` walk this file still makes on the Reports tour. The cheapest cure is
-       one token in app.js (add `nps_score_at` to BOOK_CASE_COLS, Agent A's region), at which
-       point this branch takes over with no further change here. */
+    /* R83: through readAll: `.limit(20000)` returned PostgREST's 1,000-row ceiling (R69-HF1), so on a
+       2,000-case book the later cases silently fell back to review_requested_at while the basis line… */
     const named = typeof BOOK_CASE_COLS === "string" && BOOK_CASE_COLS.split(",").includes(col);
     const snap = named ? await bookLoad() : null;
     const onBook = !!snap && !snap.error && (!snap.cases.length || Object.prototype.hasOwnProperty.call(snap.cases[0], col));
@@ -3231,9 +2658,8 @@ async function loadAdvScoreDates(cap) {
     return { col, map };
   } catch (_) { return null; }
 }
-/* The round-3 marking, applied to a mean rather than a percentage. Same class names, same (n<5)
-   marker, same "indicative only, not a track record" sentence, so the two tables teach the reader
-   one rule instead of two. */
+/* The round-3 marking, applied to a mean rather than a percentage. Same class names, same (n<5) marker, same
+   "indicative only, not a track record" sentence, so the two tables teach the reader one rule instead of two. */
 function advScoreCell(scores) {
   const n = scores.length;
   const marker = ' <span class="stat-n">(n&lt;' + ADV_MIN_N + ')</span>';
@@ -3246,9 +2672,8 @@ function advScoreCell(scores) {
     : `<span title="${esc(basis)}">${avg.toFixed(1)}</span>`;
 }
 const ADV_EMPTY = (txt) => `<div class="adv-empty">${txt}</div>`;
-/* A tiny bar column — six months of counts. Not sparklineSvg(): that draws a LINE, and a line
-   between two months of zero and one month of one implies a trend that three reviews cannot
-   support. Bars say "three things happened in March" and nothing more. */
+/* A tiny bar column — six months of counts. Not sparklineSvg(): that draws a LINE, and a line between two
+   months of zero and one month of one implies a trend that three reviews cannot support. */
 function advMiniSeries(months, counts) {
   const max = Math.max(...counts, 1);
   return `<div class="adv-series">` + months.map((mv, i) => {
@@ -3261,45 +2686,8 @@ function advMiniSeries(months, counts) {
     </div>`;
   }).join("") + `</div>`;
 }
-/* ==========================================================================
-   R80 · B1 — "PROMOTERS NEVER ASKED" — mine the book for the referral list.
-
-   A client who scored us 9 or 10 said, in a number, that they would recommend
-   us — and the firm never asked them to. This block lists exactly those
-   people: a case carrying a review score ≥ 9 (caseReviewScore — the ONE
-   reading of a score this panel uses) where the client has NEVER had a
-   referral request queued.
-
-   "NEVER ASKED" IS READ FROM BOTH RECORDS, AND EITHER ONE DISQUALIFIES:
-     · `cases.referral_requested_at` on ANY of the client's cases — the stamp
-       queueEmail leaves (this round taught it to; production stamps it when a
-       referral request queues), and
-     · any email_queue `referral_request` row for the client in any status
-       except cancelled — queued, held, sent or failed, the firm has made the
-       ask (or is about to).
-   When the queue read itself failed the list is NOT rendered — a list built
-   over "who has been asked is unknown" would over-ask — and the block says so.
-
-   OPT-OUT MEANS PHONE, NOT SILENCE. A promoter who unsubscribed from
-   relationship emails said no to the EMAIL, not to the relationship: their row
-   STAYS on the list, flagged, with the call verb only — the queue verb is
-   withheld because the send is certain to be cancelled (v19's opt-out gate),
-   and the panel says an opted-out promoter can still be asked by phone. A
-   promoter with no email address on file gets the same treatment for the same
-   mechanical reason.
-
-   The panel's owner-gate is untouched: Advocacy is Owner-only and this block
-   renders inside it, sixth after the five R9 blocks.
-
-   THE VERBS ARE EXISTING PATHS wearing this block's ids:
-     · ✆ Call task → advPromoCallTask → one case_tasks insert, assigned to the
-       case's own adviser, due TOMORROW rolled off a weekend (weekendRollYmd —
-       protCallTask's exact shape).
-     · ✉ Queue referral request → advPromoAsk → queueEmail(...,
-       "referral_request") — the ONE email writer, R79 held honesty and all;
-       nothing new composes or sends anything.
-     · Open case → openCase, as everywhere.
-   ========================================================================== */
+/* R80 · B1: "PROMOTERS NEVER ASKED" — mine the book for the referral list. A client who scored us 9 or 10
+   said, in a number, that they would recommend us — and the firm never asked them to. */
 function advPromoterModel(all, ctx) {
   const askedQ = ctx && ctx.referralAsked;   // Set of client_ids | null = queue unreadable
   const optout = ctx && ctx.optoutIds;       // Set of client_ids | null = column unreadable
@@ -3340,9 +2728,8 @@ function advPromotersBlockHtml(all, ctx) {
     body = `<div id="adv-promoters-list">` + m.waiting.slice(0, 50).map(({ c, optedOut, noEmail }) => {
       const name = [c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ").trim() || "(no name)";
       const s = caseReviewScore(c);
-      /* The queue verb is withheld where the send could only be refused: v19 cancels every
-         relationship email to an opted-out client, and queueEmail refuses a no-email one. The
-         flag says WHY in the row, so a missing button never reads as a rendering fault. */
+      /* The queue verb is withheld where the send could only be refused: v19 cancels every relationship email
+         to an opted-out client, and queueEmail refuses a no-email one. */
       const flag = optedOut
         ? ` <span class="badge grey adv-promo-optout" title="This client opted out of relationship emails (a referral request is one of them), so the queue verb is withheld — the send would be cancelled. They said no to the email, not to the relationship: ask on the phone.">opted out — ask by phone</span>`
         : noEmail
@@ -3370,9 +2757,8 @@ function advPromotersBlockHtml(all, ctx) {
       + (noteBits.length ? `<p class="adv-basis" id="adv-promoters-excl">${noteBits.join(" ")}</p>` : "") })}</div>
     ${body}</div>`;
 }
-/* R80 · B1 — the call verb: ONE case_tasks insert, protCallTask's exact shape (assigned to the
-   case's own adviser, due tomorrow, a weekend landing rolled to Monday by weekendRollYmd, dbFail
-   on the error). Nothing here emails anybody — the task IS the phone ask. */
+/* R80 · B1: the call verb: ONE case_tasks insert, protCallTask's exact shape. Nothing here emails anybody —
+   the task IS the phone ask. */
 window.advPromoCallTask = async function (caseId) {
   const { data: c, error } = await db.from("cases")
     .select("id,assigned_to,clients!client_id(first_name,last_name)")
@@ -3387,12 +2773,8 @@ window.advPromoCallTask = async function (caseId) {
   if (terr) return dbFail("advPromoCallTask", terr);
   toast(roll.rolled ? "Call task added for Monday — skipped the weekend" : "Call task added for tomorrow");
 };
-/* R80 · B1 — queue the referral request through the ONE email writer. queueEmail supplies the
-   confirm (with R79's holdLine while sending is held), the insert, the scoped send,
-   sendResultToast's held wording and the referral_requested_at stamp; this function adds only the
-   opt-out pre-flight — the same judgement as the R13 suppression pre-flight: a send that is
-   CERTAIN to be cancelled should be refused with the reason, not queued and reported as a skip.
-   v19's send-time gate stays the backstop for every other route. */
+/* R80 · B1: queue the referral request through the ONE email writer. queueEmail supplies the confirm, the
+   insert, the scoped send, sendResultToast's held wording and the referral_requested_at stamp… */
 window.advPromoAsk = async function (caseId, ev) {
   const { data: c, error } = await db.from("cases")
     .select("id,client_id,assigned_to,stage,lender,broker_fee,fee_status,rate_end_date,completed_at,clients!client_id(first_name,last_name)")
@@ -3409,16 +2791,13 @@ window.advPromoAsk = async function (caseId, ev) {
 function renderAdvocacy(all, ctx) {
   const panel = $("#report-advocacy-panel");
   if (!panel) return;
-  /* The gate, both halves. isOwner() decides whether the panel exists at all; showMoney() decides
-     the money column inside it. They are the same person today — that is the point of writing
-     both, so a future role change cannot silently widen one without the other. R80 · B1 — the
-     promoters block renders INSIDE this gate, sixth: the referral list is an owner surface like
-     the rest of Advocacy, exactly as it was. */
+  /* The gate, both halves. isOwner() decides whether the panel exists at all; showMoney() decides the money
+     column inside it. They are the same person today — that is the point of writing both… */
   if (!isOwner()) { panel.classList.add("hidden"); $("#report-advocacy-grid").innerHTML = ""; return; }
   const promotersBlock = advPromotersBlockHtml(all, ctx);
   panel.classList.remove("hidden");
   const rows = all || [];
-  const refMap = ctx && ctx.referrers;          // null ⇒ migration m11 absent
+  const refMap = ctx && ctx.referrers;          // null ⇒ the referrer read failed
   const scoreDates = ctx && ctx.scoreDates;     // null ⇒ no capture-date column
   const tasks = (ctx && ctx.detractorTasks) || [];
   const money = showMoney();
@@ -3466,13 +2845,11 @@ function renderAdvocacy(all, ctx) {
     ? advMiniSeries(months, perMonth) + howFold({ id: "adv-series-how", title: "How this is counted", html: `<p class="adv-basis" id="adv-series-basis">${seriesTotal} score${seriesTotal === 1 ? "" : "s"} in the last ${ADV_SERIES_MONTHS} months · ${dateBasis}</p>` })
     : ADV_EMPTY(`No scores fall in the last ${ADV_SERIES_MONTHS} months${scoredRows.length ? ` (the book holds ${scoredRows.length} in total, all older)` : ""}. ${scoreDates ? "" : "There is also no column recording when a score came back, so even the older ones can only be dated by when they were asked for."}`);
 
-  // ---- 3 · Referrals per completion --------------------------------------
-  /* PEOPLE per completion, not cases: one friend who takes two mortgages is one referral. The
-     denominator is completed cases, all time, which is what "per completion" has to mean if the
-     figure is to be comparable month to month. */
+  /* 3 · Referrals per completion PEOPLE per completion, not cases: one friend who takes two mortgages is one
+     referral. The denominator is completed cases, all time, which is what "per completion" has to mean if… */
   let referralBlock;
   if (!refMap) {
-    referralBlock = ADV_EMPTY(`Referrals are not being recorded yet — this database has not taken migration <code>m11</code> (<code>cases.referrer_client_id</code>), so no case can name who sent the client. Nothing here is a zero; it is an absence.`);
+    referralBlock = ADV_EMPTY(`Referrals could not be read just now, so no referral figures are shown. Nothing here is a zero; it is an absence.`);
   } else {
     const referredCases = rows.filter((c) => refMap[c.id]);
     const referredPeople = new Set(referredCases.map((c) => c.client_id).filter(Boolean));
@@ -3488,7 +2865,7 @@ function renderAdvocacy(all, ctx) {
   // ---- 4 · Top referrers -------------------------------------------------
   let topBlock;
   if (!refMap) {
-    topBlock = ADV_EMPTY(`No referrer can be named until migration <code>m11</code> is in place.`);
+    topBlock = ADV_EMPTY(`No referrer can be named until the referral read succeeds.`);
   } else {
     const byReferrer = new Map();
     rows.forEach((c) => {
@@ -3498,17 +2875,15 @@ function renderAdvocacy(all, ctx) {
       const v = byReferrer.get(rid);
       v.cases++;
       if (c.client_id) v.clients.add(c.client_id);
-      /* CONVERTED VALUE = fee value EARNED on the referred cases that completed — proc + broker +
-         sols, paid or not. Deliberately the same expression earnedOnCompletion() uses for the
-         headline "Fees earned" tile, so the two cannot disagree about what a completion is worth. */
+      /* CONVERTED VALUE = fee value EARNED on the referred cases that completed — proc + broker + sols, paid
+         or not. Deliberately the same expression earnedOnCompletion() uses for the headline "Fees earned"… */
       if (c.stage === "completed") { v.done++; v.value += Number(c.proc_fee || 0) + Number(c.broker_fee || 0) + Number(c.sols_fee || 0); }
     });
     const list = [...byReferrer.values()]
       .sort((a, b) => b.clients.size - a.clients.size || b.value - a.value)
       .slice(0, ADV_TOP_REFERRERS);
-    /* The referrer's own name comes from any case of theirs on this page; where they have none
-       (they referred somebody but have no case in the capped set) the row still counts, and says
-       so, rather than being dropped for want of a label. */
+    /* The referrer's own name comes from any case of theirs on this page; where they have none the row still
+       counts, and says so, rather than being dropped for want of a label. */
     const nameById = {};
     rows.forEach((c) => { if (c.client_id && !nameById[c.client_id]) { const n = nameOf(c); if (n) nameById[c.client_id] = n; } });
     topBlock = list.length
@@ -3545,28 +2920,10 @@ function renderAdvocacy(all, ctx) {
     ${promotersBlock}`;
   const basis = $("#report-advocacy-basis");
   if (basis) basis.innerHTML = `All time, from the ${rows.length} case row${rows.length === 1 ? "" : "s"} on this page — not scoped to the month picker. `
-    + `${refMap ? "" : "<strong>Referral figures are unavailable: migration m11 has not run.</strong> "}`;
+    + `${refMap ? "" : "<strong>Referral figures are unavailable: the referral read failed.</strong> "}`;
 }
-/* ==========================================================================
-   R9-6 · CONVEYANCER SPEED  (Reports, Owner-only)
-
-   The one number a firm can act on about its solicitors: how long a case takes
-   from submission to completion, by the firm doing the conveyancing. A broker
-   cannot make a slow conveyancer faster, but they can stop recommending one —
-   and until this panel existed there was nowhere the difference showed up.
-
-   THE BASIS IS STATED BECAUSE IT IS NOT THE OBVIOUS ONE. There is no column
-   anywhere recording the date an offer was ISSUED (offer_expiry_date is the
-   date it runs out, which is a different fact), so "offer to completion"
-   cannot be computed from this schema without inventing a date. What CAN be
-   computed honestly is submission to completion, and that is what this is —
-   said in words on the panel rather than left for someone to assume.
-
-   n<3 IS MARKED, NOT HIDDEN. Three completions is not a track record, but a
-   firm you have used twice and both times took ten weeks is exactly what an
-   owner wants to see. Same discipline as the advocacy panel's n<5, with a
-   lower boundary because a conveyancer is picked case by case, not annually.
-   ========================================================================== */
+/* R9-6 · CONVEYANCER SPEED (Reports, Owner-only) The one number a firm can act on about its solicitors: how
+   long a case takes from submission to completion, by the firm doing the conveyancing. */
 const CONV_MIN_N = 3;
 const CONV_DAY = 86400000;
 function renderConveyancerSpeed(all, firmMap) {
@@ -3581,12 +2938,11 @@ function renderConveyancerSpeed(all, firmMap) {
       + howFold({ id: "report-conveyancer-how", title: "Why from submission", html: `<p>The database records no date an offer was issued — the offer expiry date is when an offer runs out, not when it arrived — so this measures from submission, which is the last date on a case that is definitely real.</p>` });
   }
   if (!firmMap) {
-    body.innerHTML = `<div class="adv-empty">Solicitors are not being recorded yet — this database has not taken migration <code>m10</code> (<code>cases.solicitor_firm</code>), so no case can name its conveyancer. Nothing here is a zero; it is an absence.</div>`;
+    body.innerHTML = `<div class="adv-empty">Solicitors could not be read just now, so no conveyancer figures are shown. Nothing here is a zero; it is an absence.</div>`;
     return;
   }
-  /* Rounded to whole days per case BEFORE averaging, deliberately: that is how anybody checking
-     this by hand off two dates would do it, and it means the panel's figure can be reconciled
-     against a case-by-case count rather than argued with. */
+  /* Rounded to whole days per case BEFORE averaging, deliberately: that is how anybody checking this by hand
+     off two dates would do it… */
   const byFirm = new Map();
   let named = 0, unnamed = 0;
   (all || []).forEach((c) => {
@@ -3608,9 +2964,8 @@ function renderConveyancerSpeed(all, firmMap) {
     avg: days.reduce((s, d) => s + d, 0) / days.length,
     min: Math.min(...days), max: Math.max(...days),
   })).sort((a, b) => a.avg - b.avg);
-  /* "Slowest" is only a meaningful word when there is somebody to be slower THAN, and only when
-     the row is not itself marked as too thin to read. Two firms with three cases each is a
-     comparison; one firm with two is a fact about one firm. */
+  /* "Slowest" is only a meaningful word when there is somebody to be slower THAN, and only when the row is
+     not itself marked as too thin to read. Two firms with three cases each is a comparison… */
   const solid = rows.filter((r) => r.n >= CONV_MIN_N);
   const slowest = solid.length > 1 ? solid[solid.length - 1].firm : null;
   const thin = rows.filter((r) => r.n < CONV_MIN_N).length;
@@ -3632,65 +2987,8 @@ function renderConveyancerSpeed(all, firmMap) {
     + `${unnamed ? ` · ${unnamed} completion${unnamed === 1 ? "" : "s"} name no solicitor and ${unnamed === 1 ? "is" : "are"} left out entirely — a product transfer has no conveyancer, so blank is often correct` : ""}.</p>`;
 }
 
-/* ==========================================================================
-   R66 · M6b — REFERRALS OUT, THE READ.
-
-   `referrals` has been WRITE-ONLY since R56: one insert from the case modal,
-   and exactly one reader — loadCaseReferrals, which is `.eq("case_id")`. So the
-   firm can see every referral on a case it already has open, and cannot see a
-   single one any other way. "Who did I refer this quarter, and did any of it
-   come back?" had no answer at all.
-
-   THE READS, and there are two, both bounded:
-     · ONE `referrals` select for the selected month. No `.eq("case_id")` —
-       that is the whole point — and no join, because PostgREST cannot embed
-       `cases` from here without an FK hint the table does not carry a policy
-       for. Ordered newest-first, capped.
-     · ONE `inChunks` read of the cases those referrals point at, for the
-       client name, the property and the case adviser. inChunks because a busy
-       quarter's referral list is feed-sized and `.in()` 400s above ~500 ids
-       (R64 · rule 14). The Reports page's own `all` array is used FIRST where
-       it already holds the case — it carries the property column this select
-       deliberately does not name (m7 is feature-detected on the page and a
-       42703 here would take the panel down over an optional column).
-
-   WHOSE REFERRAL IS IT? `created_by` — the person who pressed the button —
-   falling back to the case's adviser where the row predates that column being
-   populated. Said on the panel, because "mine" has to mean something exact.
-
-   NOT OWNER-GATED. A referral count is not money and no £ appears here; see
-   the markup's own block comment.
-   ========================================================================== */
-/* ==========================================================================
-   R77 · B1 — APPOINTMENT OUTCOMES, COUNTED AT LAST.
-
-   `appointments.outcome` (attended / no_show / rearranged, null = not
-   recorded) has been written by the ✓ ✗ ↻ chips on Today and the editor's
-   radios since r12b, and read by NOTHING — the column's own comment deferred
-   the counting to "a later round". This is that round, and the r12b warning
-   ("a report built on three days of outcome data says more about when the
-   column shipped than about anybody's diary") is answered by making the
-   RECORDING GAP the first-class number: the headline leads with the share of
-   past appointments carrying NO outcome, because every other figure on the
-   panel is only as good as that share is small — and the panel says so
-   instead of drawing confident bars over unscored rows.
-
-   THE WINDOW is the last 90 days of appointments that have already STARTED:
-   a future booking has no outcome to record and is not "unrecorded", it is
-   pending — counting it would inflate the honesty number with rows nobody
-   could have scored. Window arithmetic through localDateStr (Europe/London).
-
-   PER ADVISER by staff_id (the diary's own "who is this booked for"), plus
-   the short register of clients with 2+ recorded no-shows in the window —
-   the "who wasted my Tuesday?" answer r12b promised. Read-only: Open links,
-   no verbs; what to do about a serial no-show is a conversation, not a
-   button.
-
-   OWNER-ONLY (showMoney) — per-adviser conduct numbers, the same gate as the
-   per-adviser review scores in the Advocacy panel, and the gate r42 §B pins
-   for this section on an adviser login. One bounded read of its own; empty
-   and thin data render honestly through emptyState / the basis line.
-   ========================================================================== */
+/* R66 · M6b: REFERRALS OUT, THE READ. `referrals` has been WRITE-ONLY since R56: one insert from the case
+   modal, and exactly one reader — loadCaseReferrals, which is `.eq("case_id")`. */
 const APPT_OUTCOME_WINDOW_DAYS = 90;
 async function renderApptOutcomes() {
   const panel = $("#report-outcomes-panel");
@@ -3757,7 +3055,7 @@ async function renderApptOutcomes() {
     .map(([id, b]) => ({ id, name: id ? staffName(id) : "(nobody booked)", ...b }))
     .sort((a, b) => b.total - a.total || String(a.name).localeCompare(String(b.name)));
   $("#report-outcomes-adviser").innerHTML = `<h4 class="leadresp-h">By adviser</h4>
-    <div style="overflow-x:auto;"><table class="imp-table outcomes-table" id="report-outcomes-table">
+    <div class="u-ox-auto"><table class="imp-table outcomes-table" id="report-outcomes-table">
       <tr><th>Adviser</th><th class="num">Appointments</th><th class="num">Attended</th><th class="num">No-show</th><th class="num">Rearranged</th><th class="num" title="Past appointments this adviser has not recorded an outcome for — the share in brackets is theirs, not the firm's">Not recorded</th></tr>
       ${advRows.map((r) => `<tr data-adviser="${esc(r.id)}">
         <td>${esc(r.name)}</td>
@@ -3765,12 +3063,11 @@ async function renderApptOutcomes() {
         <td class="num">${r.attended}</td>
         <td class="num">${r.no_show}</td>
         <td class="num">${r.rearranged}</td>
-        <td class="num"${r.unrecorded ? ` style="font-weight:600;"` : ""}>${r.unrecorded}${r.total ? ` (${Math.round((r.unrecorded / r.total) * 100)}%)` : ""}</td>
+        <td class="num${r.unrecorded ? " u-fw-600" : ""}">${r.unrecorded}${r.total ? ` (${Math.round((r.unrecorded / r.total) * 100)}%)` : ""}</td>
       </tr>`).join("")}
     </table></div>`;
-  /* Clients with 2+ recorded no-shows — the actionable short list, honestly framed: it can only
-     ever be as complete as the recording above it, and when nothing is recorded it says so
-     rather than printing a clean sheet. */
+  /* Clients with 2+ recorded no-shows — the actionable short list, honestly framed: it can only ever be as
+     complete as the recording above it… */
   const byClient = new Map();
   noShows.forEach((a) => {
     const k = a.client_id || "";
@@ -3802,9 +3099,8 @@ const REFOUT_ROW_CAP = 500;      // referrals read for one month — bounded lik
 const REFOUT_LIST_CAP = 100;     // rows drawn in the ledger drawer; the CSV carries the lot
 let refOutScope = null;          // "mine" | "all"; null = not yet defaulted for this role
 let refOutRows = [];             // the period's rows, resolved — kept so the CSV needs no re-read
-/* Adviser default: an adviser opens on their own referrals (the question they ask is "who did I
-   refer"), an owner/admin on the firm's (the question they ask is "what is the network getting").
-   Sticky for the session once the operator picks, exactly like the Protection page's scope. */
+/* Adviser default: an adviser opens on their own referrals, an owner/admin on the firm's. Sticky for the
+   session once the operator picks, exactly like the Protection page's scope. */
 function refOutDefaultScope() { return isAdminOrOwner() ? "all" : "mine"; }
 function refOutAdviser(r) { return r.created_by || r.case_assigned_to || null; }
 async function renderReferralsOut(all, mv) {
@@ -3814,14 +3110,8 @@ async function renderReferralsOut(all, mv) {
   if (refOutScope === null) refOutScope = refOutDefaultScope();
   const groupsEl = $("#report-ref-groups"), listEl = $("#report-ref-list"), basisEl = $("#report-ref-basis");
   const label = monthLabel(mv);
-  // The month, as a half-open [start, next) range on created_at — the same shape every other
-  // month-scoped read on this page uses, so a referral made at 23:59 on the 31st is in the month
-  // it was made in and not the one after.
-  /* R83 — the bounds were UTC midnight ("…T00:00:00.000Z"), not Europe/London: in BST a referral
-     recorded at 00:30 on the 1st sat in the PREVIOUS month's panel while its own row printed the
-     1st (fmtD reads local). The read is widened by a day either side and the rows are then kept
-     on localMonthStr — the same Europe/London bucket every other month-scoped figure here uses,
-     whatever timezone the browser happens to be in. */
+  /* The month, as a half-open [start, next) range on created_at — the same shape every other month-scoped
+     read on this page uses… */
   const start = new Date(Date.parse(mv + "-01T00:00:00Z") - 86400000).toISOString();   // R83
   const endM = monthAdd(mv, 1);
   const end = new Date(Date.parse(endM + "-01T00:00:00Z") + 86400000).toISOString();   // R83
@@ -3833,13 +3123,8 @@ async function renderReferralsOut(all, mv) {
   (all || []).forEach((c) => { if (c && c.id) allById[c.id] = c; });
   const missing = [...new Set(refs.map((r) => r.case_id).filter((id) => id && !allById[id]))];
   if (missing.length) {
-    /* Deliberately NOT naming property_address: it is the one optional column on this table
-       (m7, feature-detected elsewhere on this page) and a 42703 would lose the whole panel over
-       an address. Cases already in `all` bring their address with them. */
-    /* R85 · E7 — the `.in("id")` top-up is a caseById lookup on the session Book, picked to the
-       same five columns + the (first_name,last_name) embed. property_address is still NOT picked
-       (the pick is the select's column list, as before). A case the book lacks — under the cap,
-       or deleted since — stays "(client not on file)", as a server miss did. */
+    /* Deliberately NOT naming property_address: it is the one optional column on this table and a 42703 would
+       lose the whole panel over an address. Cases already in `all` bring their address with them. */
     const snap = await bookLoad();
     const extra = snap.error ? null : missing.map((id) => snap.caseById.get(id)).filter(Boolean)
       .map((c) => rmBookPick(c, ["id", "client_id", "case_kind", "stage", "assigned_to"], ["first_name", "last_name"]));
@@ -3881,9 +3166,8 @@ async function renderReferralsOut(all, mv) {
     buildReportLedgerCounts();
     return;
   }
-  /* THE GROUPING. kind × status × adviser, counted. One pass, a plain key join, and the key is
-     split back out for rendering — no nested maps, because the table is flat and a reader
-     checking the arithmetic should be able to see the same rows this loop saw. */
+  /* THE GROUPING. kind × status × adviser, counted. One pass, a plain key join, and the key is split back out
+     for rendering — no nested maps… */
   const groups = new Map();
   scoped.forEach((r) => {
     const kind = r.kind || "other";
@@ -3945,9 +3229,8 @@ async function renderReferralsOut(all, mv) {
   buildReportLedgerCounts();
 }
 
-/* The open "review feedback" call-backs behind block 5. Its own small read (the Reports page does
-   not otherwise fetch tasks), matched on the title phrase rather than on an exact string — see the
-   R9-3 block comment for why. Best-effort: on error the block renders its empty state. */
+/* The open "review feedback" call-backs behind block 5. Its own small read, matched on the title phrase
+   rather than on an exact string — see the R9-3 block comment for why. */
 async function loadDetractorTasks() {
   try {
     const { data, error } = await readAll(db.from("case_tasks")
@@ -3976,59 +3259,13 @@ function renderReportExtras(rep) {
   </table>` : '<div class="empty">No completed revenue yet.</div>';
 }
 
-/* ==========================================================================
-   ROUND 7 — THE MONEY PACK
-   ==========================================================================
-   Four surfaces, one subject: where the firm's money actually is.
-
-     R7-1  MONEY OWED           — every completed case carrying an unpaid fee,
-                                  aged from its completion date. (Reports.)
-     R7-2  RATE-END BOOK VALUE  — what the completed book is worth as it
-                                  matures over the next 24 months, plus the
-                                  RECOVER lane for rates that already ended.
-                                  (Reports.)
-     R7-3  PROTECTION QUOTE CLOCK — how old each quote is, and the commission a
-                                  policy is worth. (Protection page + Reports.)
-     R7-4  MONDAY MONEY         — the weekly read, on its own page.
-
-   EVERY ONE OF THESE IS FIRM-WIDE MONEY, so every one of them is OWNER-ONLY IN
-   THE UI, behind the same showMoney() gate the rest of Reports uses. An adviser
-   keeps exactly what round 5 gave them and nothing more: the "My numbers" card,
-   scoped to their own cases. The same standing caveat applies verbatim — THIS
-   IS PRESENTATION, NOT A SECURITY CONTROL. The cases table still carries
-   proc_fee / broker_fee / sols_fee to every signed-in staff session and anyone
-   with a browser console can read what these panels withhold. Do not describe
-   any of it as a control and do not rely on it for anything that matters.
-
-   Nothing here adds an RPC, a view or a column. Every figure is computed in the
-   browser from reads the app already makes, and every figure states its basis
-   in the round-6 form, so a number here can be reconciled against the number it
-   came from instead of argued with.
-   ========================================================================== */
+/* ROUND 7 — THE MONEY PACK Four surfaces, one subject: where the firm's money actually is. R7-1 MONEY OWED —
+   every completed case carrying an unpaid fee, aged from its completion date. (Reports.) */
 
 const R7_DAY = 86400000;
 
-/* --------------------------------------------------------------------------
-   R7-1a — WHAT "OWED" MEANS, in one place.
-
-   A fee is owed when the case has an AMOUNT for it and no date on which that
-   money arrived. The date is read through feeCashDate(), i.e.
-   coalesce(<type>_fee_paid_at, fee_paid_at) — the same expression M5 puts in
-   get_reports and the same one the My-numbers "outstanding" tile uses, so the
-   two figures reconcile by construction rather than by luck.
-
-   The ONE exception is fee_status = 'waived'. fee_status is a BROKER-fee
-   workflow field (see the FEE_TYPES note and markFeePaid): "waived" means the
-   firm decided not to charge the client. Money you chose not to charge is not
-   money you are owed, so the broker line drops out — and only the broker line.
-   A lender's procuration fee and a solicitor referral fee are not the firm's to
-   waive, so 'waived' has no bearing on either, and they stay.
-
-   Deliberately NOT keyed off fee_status otherwise: 'not_requested' and
-   'requested' describe whether an invoice has gone out, not whether the money
-   has arrived, and a case can sit at 'paid' with a proc fee still outstanding.
-   "No cash date" is the question this panel asks.
-   -------------------------------------------------------------------------- */
+/* R7-1a: WHAT "OWED" MEANS, in one place. A fee is owed when the case has an AMOUNT for it and no date on which
+   that money arrived. … */
 function feeOwedLines(c) {
   const out = [];
   if (!c) return out;
@@ -4041,19 +3278,16 @@ function feeOwedLines(c) {
   });
   return out;
 }
-/* Ageing from the COMPLETION date — the day the work finished and the clock on
-   getting paid started. Not from the invoice date (there isn't one on the
-   schema) and not from updated_at (an edit is not an event). */
+/* Ageing from the COMPLETION date — the day the work finished and the clock on getting paid started. Not from
+   the invoice date and not from updated_at (an edit is not an event). */
 const OWED_BUCKETS = [
   { key: "0-30", label: "0–30 days", lo: 0, hi: 30 },
   { key: "30-60", label: "30–60 days", lo: 30, hi: 60 },
   { key: "60-90", label: "60–90 days", lo: 60, hi: 90 },
   { key: "90+", label: "90+ days", lo: 90, hi: Infinity },
 ];
-/* A completed case with no completed_at cannot be aged at all. It is NOT
-   quietly dropped (that is money) and NOT parked in 90+ (that is a claim the
-   data doesn't support) — it gets its own bucket, which stays off the screen
-   entirely while it is empty. */
+/* A completed case with no completed_at cannot be aged at all. It is NOT quietly dropped (that is money) and
+   NOT parked in 90+ — it gets its own bucket, which stays off the screen entirely while it is empty. */
 const OWED_UNDATED = "undated";
 const OWED_BUCKET_LABEL = Object.fromEntries(OWED_BUCKETS.map((b) => [b.key, b.label]).concat([[OWED_UNDATED, "No completion date"]]));
 function owedBucketKey(days) {
@@ -4088,41 +3322,15 @@ function moneyOwedModel(all) {
            brokerTotal: rows.reduce((s, r) => s + r.broker, 0) };
 }
 const BASIS_OWED = "(earned · not yet received · completed cases · aged from completion date)";
-/* ==========================================================================
-   R74 · A2 (panel D#4) — ONE ZERO CONVENTION, STATED ONCE.
-
-   A dash and a zero are different facts, and this app was using them
-   interchangeably for the SAME rows: the Money-owed ageing buckets on Reports
-   printed "£0 · 0 cases" for an empty band while Monday money printed "—" for
-   that identical band computed from that identical model, one page away. A
-   reader comparing the two pages cannot tell whether the second one measured
-   nothing or found nothing.
-
-   The rule from here:
-     · "—" means THE QUESTION DOES NOT APPLY to this row. No completions this
-       month, so there is nothing to attach a policy to; no target set for this
-       adviser; no login for get_reports to report on. It always carries a
-       title saying which — a bare dash is the thing being fixed.
-     · "0" / "£0" means the question applies and the answer is nothing. Zero
-       owed in the 90+ band is a real and reassuring answer, and hiding it
-       behind a dash makes a clean band look unmeasured. Rendered muted so a
-       column of real zeros stays quiet without lying about being blank.
-
-   Applied on: the Reports adviser scoreboard (Target / Attach / Banked YTD),
-   both Money-owed ageing renderings (the Reports bucket tiles and the
-   per-lender / per-adviser ledger crosstab under them, and Monday money's own
-   ageing block) and Monday money's Unpaid proc column.
-   ========================================================================== */
+/* R74 · A2 (panel D#4): ONE ZERO CONVENTION, STATED ONCE. A dash and a zero are different facts, and this app was
+   using them interchangeably for the SAME rows: the Money-owed ageing buckets on Reports printed "£0 · 0 cases" for
+   an empty band while Monday money printed "—" for that identical band computed from that identical model, one page
+   away. The rule from here: · "—" means THE QUESTION DOES NOT APPLY to this row. … */
 const naDash = (why) => `<span class="cs-muted" title="${esc(why)}">—</span>`;
 const zeroMoney = (n) => (Number(n) ? fmtM(n) : `<span class="cs-muted" title="Nothing in this band — a real zero, not a missing figure.">${fmtM(0)}</span>`);
 
-/* --------------------------------------------------------------------------
-   R7-1b — the panel. Grouped by lender or by adviser, because those are the two
-   people you chase: the lender's payments team for a proc fee, and the adviser
-   for the client's broker fee. The grouping is a view toggle, never a filter —
-   both groupings contain exactly the same rows and add to the same grand total,
-   which is the point of putting the totals row at the bottom of each.
-   -------------------------------------------------------------------------- */
+/* R7-1b — the panel. Grouped by lender or by adviser, because those are the two people you chase: the
+   lender's payments team for a proc fee, and the adviser for the client's broker fee. */
 let owedGroupBy = "lender";
 let owedState = { model: null, all: null };
 function renderMoneyOwed(all) {
@@ -4139,17 +3347,11 @@ function renderMoneyOwed(all) {
   panel.classList.remove("hidden");
   const m = moneyOwedModel(all);
   owedState.model = m;
-  /* R42 · F7 — BASIS REPEAT TRIMMED. Two clauses here were saying what #report-basis-legend says
-     four panels up the same page, to the same reader (this panel is Owner-only and the legend is
-     shown to exactly that reader): "the same basis as 'Fees banked' above" re-derived the cash
-     basis, and the tail label "(earned · not yet received · …)" is the legend's own definition of
-     OUTSTANDING, plus a second copy of "aged from completion date" one clause after the first. The
-     panel-specific facts — which column each fee type is counted on, what a waived fee does, what
-     it is aged from — are what this line is FOR and are untouched. BASIS_OWED itself is not
-     touched: Monday money (#money-owed-basis) still prints it and that page is out of scope. */
-  /* R87 · owner-admin (05 #8, T1) — one plain line, the column names gone ("each fee on its own
-     paid date", "aged from the completion date"), the detail behind howFold. The basis chip stays
-     LAST so the element's textContent still ends on the R42 ending r42 §F3 pins. */
+  /* R42 · F7: BASIS REPEAT TRIMMED. Two clauses here were saying what #report-basis-legend says four panels up the
+     same page, to the same reader (this panel is Owner-only and the legend is shown to exactly that reader): "the
+     same basis as 'Fees banked' above" re-derived the cash basis, and the tail label "(earned · not yet received ·
+     …)" is the legend's own definition of OUTSTANDING, plus a second copy of "aged from completion date" one clause
+     after the first. … */
   $("#report-owed-basis").innerHTML =
     `Completed cases with a fee that has no paid date — proc, solicitor and broker counted separately, aged from the completion date. `
     + howFold({ id: "report-owed-how", title: "How this is counted", html: `<p>Every completed case carrying a fee amount with no paid date against it — proc, solicitor and broker fees counted separately, each on its own paid date (falling back to the case's single paid date where the fee has none). `
@@ -4203,21 +3405,20 @@ function renderMoneyOwed(all) {
     }).join("");
     return head + caseRows;
   }).join("");
-  $("#report-owed-table").innerHTML = `<div style="overflow-x:auto;"><table class="imp-table owed-table" id="owed-table">
+  $("#report-owed-table").innerHTML = `<div class="u-ox-auto"><table class="imp-table owed-table" id="owed-table">
     <tr><th>${owedGroupBy === "lender" ? "Lender" : "Adviser"}</th>${cols.map((k) => `<th>${esc(OWED_BUCKET_LABEL[k])}</th>`).join("")}<th>Total owed</th></tr>
     ${body}
     <tr class="owed-total-row"><td><strong>All ${owedGroupBy === "lender" ? "lenders" : "advisers"}</strong></td>${cellsFor(m.rows)}<td class="owed-cell"><strong>${fmtM(m.grand)}</strong></td></tr>
   </table></div>
-  <p class="panel-sub" style="margin:10px 0 0;">Both groupings hold the same ${m.n} case${m.n === 1 ? "" : "s"} and the same ${fmtM(m.grand)}. Click a case row to open it.</p>`;
+  <p class="panel-sub u-m-10-0-0">Both groupings hold the same ${m.n} case${m.n === 1 ? "" : "s"} and the same ${fmtM(m.grand)}. Click a case row to open it.</p>`;
 }
 window.setOwedGroup = function (g) {
   if (g === owedGroupBy) return;
   owedGroupBy = g;
   renderMoneyOwed(owedState.all || []);
 };
-/* R7-1c — the owner export. It carries the proc and sols columns the pipeline
-   CSV has never had: this file is the chase list, and a proc fee you cannot see
-   is a proc fee nobody rings the lender about. Owner-only, like the panel. */
+/* R7-1c — the owner export. It carries the proc and sols columns the pipeline CSV has never had: this file is
+   the chase list, and a proc fee you cannot see is a proc fee nobody rings the lender about. */
 window.exportOwedCsv = function () {
   if (!showMoney()) return toast("The money-owed export is Owner-only.");
   const m = owedState.model;
@@ -4251,49 +3452,23 @@ window.exportOwedCsv = function () {
   a.click();
   toast(`Exported ${m.n} case${m.n === 1 ? "" : "s"} · ${fmtM(m.grand)} outstanding`);
 };
-/* R7-1d — where the fee_aging_60 Watchtower alerts land. */
-/* R89 · B — Money owed lives on the Money tab now (drawn once); repRevealPanel opens that tab and
-   scrolls to the panel once loadMoneyPage has painted it. */
+/* R7-1d — where the fee_aging_60 Watchtower alerts land. R89 · B — Money owed lives on the Money tab now
+   (drawn once); repRevealPanel opens that tab and scrolls to the panel once loadMoneyPage has painted it. */
 window.gotoMoneyOwed = function () {
   if (!showMoney()) return toast("Money owed is Owner-only.");
   window.repRevealPanel("#report-owed-panel");
 };
 
-/* --------------------------------------------------------------------------
-   R7-2 — RATE-END BOOK VALUE.
-
-   The completed book, laid out by when each mortgage's rate matures over the
-   next 24 months. Three things it is careful about:
-
-   · WHOSE ROWS. Completed cases only, and only those carrying a rate end date.
-     A live case's rate end is a plan, not book value.
-
-   · DE-DUPLICATION. One building whose rate ends on one date is ONE maturity,
-     however many case rows the firm holds for it — a product transfer followed
-     by a remortgage on the same flat is two cases and one mortgage. Rows are
-     collapsed on propKey + rate_end_date and badged "N cases", and the
-     surviving row is the most recently completed one (the live mortgage). Both
-     the ledger totals and the per-case list use the collapsed set, so the book
-     is not double-counted. Cases with no address cannot be collapsed and are
-     never guessed at — they each stand alone.
-
-   · THE FEE. There is no "expected fee" column anywhere in the schema, so the
-     LAST fee the firm earned on that mortgage is used as the proxy, and the
-     column says so in its header rather than in a footnote nobody reads. Cases
-     with no fee recorded are counted in the case count and contribute nothing
-     to the value — the expected figure is a floor, and the row says how many
-     cases are behind it.
-   -------------------------------------------------------------------------- */
+/* R7-2: RATE-END BOOK VALUE. The completed book, laid out by when each mortgage's rate matures over the next
+   24 months. Three things it is careful about: · WHOSE ROWS. */
 const RATE_BUCKETS = [
   { key: "0-3", label: "0–3 months", lo: 0, hi: 3 },
   { key: "3-6", label: "3–6 months", lo: 3, hi: 6 },
   { key: "6-12", label: "6–12 months", lo: 6, hi: 12 },
   { key: "12-24", label: "12–24 months", lo: 12, hi: 24 },
 ];
-/* Calendar-month arithmetic on a plain YYYY-MM-DD, at local midday so no
-   timezone can move a maturity into the previous day (and so into the previous
-   bucket). Month overflow follows the platform (31 Jan + 1 month = 3 Mar);
-   that is deterministic, which is what the buckets need. */
+/* Calendar-month arithmetic on a plain YYYY-MM-DD, at local midday so no timezone can move a maturity into
+   the previous day. Month overflow follows the platform (31 Jan + 1 month = 3 Mar)… */
 function dateAddMonths(dateStr, n) {
   const s = String(dateStr || "");
   const y = Number(s.slice(0, 4)), m = Number(s.slice(5, 7)) - 1, d = Number(s.slice(8, 10));
@@ -4352,13 +3527,8 @@ function rateEndBookModel(all) {
     rawN: inWindow.length,
   };
 }
-/* The RECOVER lane. A completed case whose rate has ALREADY ended and which has
-   no successor case is money that has walked out of the door unnoticed — the
-   nightly queue only ever looks FORWARD into the reminder window, so nothing
-   automatic will ever pick it up again. The backend's recovery sweep now
-   creates successors for these; the lane deliberately shows BOTH sides, because
-   "the sweep handled 4" and "3 are still uncovered" are different sentences and
-   only one of them is work. */
+/* The RECOVER lane. A completed case whose rate has ALREADY ended and which has no successor case is money
+   that has walked out of the door unnoticed… */
 function rateEndRecoverModel(all) {
   const today = localDateStr();
   const successorOf = new Set((all || []).filter((c) => c.retention_source_case_id).map((c) => c.retention_source_case_id));
@@ -4419,7 +3589,7 @@ function renderRateEndBook(all) {
       </tr>`;
     }).join("");
   }).join("");
-  $("#report-rateend-table").innerHTML = `<div style="overflow-x:auto;"><table class="imp-table rb-table" id="rateend-table">
+  $("#report-rateend-table").innerHTML = `<div class="u-ox-auto"><table class="imp-table rb-table" id="rateend-table">
     <tr><th>Maturing in</th><th>Cases</th><th>Loan balance</th><th>Last fee earned</th><th title="The last fee earned on the same mortgage, used as a proxy for what a renewal would earn.">Expected fee (proxy)</th></tr>
     ${rows}
     <tr class="rb-total-row"><td><strong>Next 24 months</strong></td><td><strong>${m.n}</strong></td><td class="num"><strong>${fmtM(m.loan)}</strong></td><td class="num"><strong>${fmtM(m.fee)}</strong></td><td class="num"><strong>${fmtM(m.fee)}</strong></td></tr>
@@ -4438,10 +3608,7 @@ function renderRateEndBook(all) {
         <div class="row-main">
           <div class="t" onclick="openCase('${c.id}')">${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ")) || "(no name)"} ${propChip(c, { cls: "row-prop" }) || ""}</div>
           <div class="s">${lenderIcon(c.lender)}${esc(c.lender || "no lender")} — rate ended ${fmtD(c.rate_end_date)} (${daysSince(c.rate_end_date)} ${daysSince(c.rate_end_date) === 1 ? "day" : "days"} ago) · last fee ${caseLastFee(c) ? fmtM(caseLastFee(c)) : "none recorded"}</div>
-          ${/* R12b · W-15c — the reason to ring them today, on the row that lists the ones nobody
-               has rung. Rendered only when the balance, the reversion rate and the ended rate are
-               all on the case; a missing input shows nothing at all rather than a £0 that would be
-               read as "no difference". */ ""}
+          
           ${upliftLineHtml(c)}
         </div>
         ${retentionToMeHtml(c.id, c)}
@@ -4454,40 +3621,23 @@ window.toggleRateBucket = function (key) {
   if (rateEndState.all) renderRateEndBook(rateEndState.all);
 };
 
-/* --------------------------------------------------------------------------
-   R7-3a — the protection quote clock's shared arithmetic.
-   -------------------------------------------------------------------------- */
+/* R7-3a — the protection quote clock's shared arithmetic. */
 const QUOTE_AGE_AMBER = 7, QUOTE_AGE_RED = 14;
 function quoteAgeBadge(quotedAt) {
-  if (!quotedAt) return `<span class="badge grey q-age" title="This case is quoted but carries no quote date — it was set before the quote clock existed, or the database has not taken the migration that stores it.">quote age unknown</span>`;
+  if (!quotedAt) return `<span class="badge grey q-age" title="This case is quoted but carries no quote date — it was set before the quote clock existed.">quote age unknown</span>`;
   const d = daysSince(quotedAt);
   const cls = d > QUOTE_AGE_RED ? "red" : d >= QUOTE_AGE_AMBER ? "amber" : "green";
   const word = d > QUOTE_AGE_RED ? "cold" : d >= QUOTE_AGE_AMBER ? "ageing" : "fresh";
   return `<span class="badge ${cls} q-age" title="Quoted ${fmtD(quotedAt)} — ${d} day${d === 1 ? "" : "s"} ago. Green under ${QUOTE_AGE_AMBER} days, amber ${QUOTE_AGE_AMBER}–${QUOTE_AGE_RED}, red over ${QUOTE_AGE_RED}.">${d}d · ${word}</span>`;
 }
-/* M8 feature detection, by absence and then by refusal — the same discipline as
-   M1/M2/M7 elsewhere in this file. Null means "not asked yet"; false means the
-   database answered 42703 and the stamp is silently dropped from every write
-   from then on, rather than failing the status change the adviser asked for. */
-let PROT_QUOTE_SUPPORTED = null;
-async function protQuoteSupported() {
-  if (PROT_QUOTE_SUPPORTED !== null) return PROT_QUOTE_SUPPORTED;
-  try {
-    const { error } = await db.from("cases").select("id,protection_quoted_at,protection_quoted_by").limit(1);
-    PROT_QUOTE_SUPPORTED = !error;
-  } catch (_) { PROT_QUOTE_SUPPORTED = false; }
-  return PROT_QUOTE_SUPPORTED;
-}
-/* One batched read of the quote stamps for the rows on screen. Returns {} when
-   the column isn't there, so every consumer degrades to "quote age unknown"
-   rather than throwing. */
+/* One batched read of the quote stamps for the rows on screen. Returns {} when the read fails, so
+   every consumer degrades to "quote age unknown" rather than throwing. */
 async function loadQuoteStamps(caseIds) {
   const ids = [...new Set((caseIds || []).filter(Boolean))];
   if (!ids.length) return {};
-  if (!(await protQuoteSupported())) return {};
   try {
     /* R85 · E8 — the `.in("id")` read is a caseById pick on the session Book (both M8 columns
-       ride BOOK_CASE_COLS); the probe above still gates. Same map shape: id → {id, at, by}. */
+       ride BOOK_CASE_COLS). Same map shape: id → {id, at, by}. */
     const snap = await bookLoad();
     if (snap.error) return {};
     const data = ids.map((id) => snap.caseById.get(id)).filter(Boolean)
@@ -4498,30 +3648,11 @@ async function loadQuoteStamps(caseIds) {
   } catch (_) { return {}; }
 }
 
-/* ==========================================================================
-   R7-5 — LEAD RESPONSE (Reports, Owner-only).
-
-   The one number nobody could produce: how long this firm takes to answer a
-   website enquiry. It is measured from `created_at` (the enquiry landing) to
-   `first_contact_at` (a human taking it on — see acceptLead / discardLead),
-   and it is measured on nothing else. In particular it does NOT use
-   `acknowledged_at`: the automatic "we've got it" email goes out inside a
-   minute of every enquiry with an email address, so a report built on it would
-   show a sixty-second response time for a lead nobody has rung in two days.
-
-   MEDIAN AND p90 TOGETHER, always. A median answers "what normally happens";
-   it is also the statistic that hides a tail, and the tail is the whole
-   problem — five leads answered in four minutes and one left for thirty hours
-   is a median of four minutes and a lost client. p90 is nearest-rank (the
-   value at position ceil(0.9n) of the sorted list), so it is always a real
-   response time that really happened, never an interpolation between two.
-
-   AND THE HONEST EMPTY STATE. Production has zero stamps today: the columns
-   landed this round and nothing has written one yet. So the panel says that,
-   in words, and shows what it CAN see — how many enquiries are past the
-   promise right this minute — rather than drawing an empty chart and letting
-   it read as "nobody waits long".
-   ========================================================================== */
+/* R7-5: LEAD RESPONSE (Reports, Owner-only). The one number nobody could produce: how long this firm takes to
+   answer a website enquiry. A median answers "what normally happens"; it is also the statistic that hides a tail,
+   and the tail is the whole problem — five leads answered in four minutes and one left for thirty hours is a median
+   of four minutes and a lost client. p90 is nearest-rank (the value at position ceil(0.9n) of the sorted list), so
+   it is always a real response time that really happened, never an interpolation between two. … */
 const LEAD_RESP_WINDOW_DAYS = 90;
 const LEAD_RESP_ROW_CAP = 2000;
 function leadRespMedian(xs) {
@@ -4535,9 +3666,8 @@ function leadRespP90(xs) {
   const s = xs.slice().sort((a, b) => a - b);
   return s[Math.ceil(0.9 * s.length) - 1];
 }
-/* Minutes, read out the way a person says them. Deliberately not the compact
-   fmtWaitMins used on the inbox chip: a table of response times wants "1h 47m",
-   a badge on a row wants "1h". */
+/* Minutes, read out the way a person says them. Deliberately not the compact fmtWaitMins used on the inbox
+   chip: a table of response times wants "1h 47m", a badge on a row wants "1h". */
 function fmtRespMins(m) {
   if (m == null) return "—";
   if (m < 60) return `${m}min`;
@@ -4545,10 +3675,8 @@ function fmtRespMins(m) {
   const d = Math.floor(m / 1440), h = Math.floor((m % 1440) / 60);
   return h ? `${d}d ${h}h` : `${d}d`;
 }
-/* A lead is "won" when it carries the case it became, or when its status says
-   somebody took it on. Both are checked because the two are written by
-   different things: converted_case_id by acceptLead, the status by the website
-   integration and by anything that accepted a lead before that link existed. */
+/* A lead is "won" when it carries the case it became, or when its status says somebody took it on. Both are
+   checked because the two are written by different things: converted_case_id by acceptLead… */
 const leadIsWon = (l) => !!(l && (l.converted_case_id || ["converted", "accepted"].includes(String(l.status || "").toLowerCase())));
 /* Source: the same expression Monday money's lead table uses, so the two
    panels group the same enquiries the same way. */
@@ -4570,10 +3698,8 @@ function leadRespModel(leads, cases) {
     won: leadIsWon(l),
   }));
   const responded = withMins.filter((r) => r.mins != null);
-  /* Breaching NOW, and deliberately counted over every lead still sitting in
-     the inbox rather than only those inside the 90-day window: a lead that has
-     been ignored since the spring is the worst row on the screen, and dropping
-     it out of the count because it is old is exactly backwards. */
+  /* Breaching NOW, and deliberately counted over every lead still sitting in the inbox rather than only those
+     inside the 90-day window… */
   const breaching = rows.filter((l) => l && l.status === "new" && !l.first_contact_at
     && (leadAgeMins(l.created_at) ?? -1) >= LEAD_SLA_MIN);
   const group = (keyOf, labelOf) => {
@@ -4622,14 +3748,11 @@ function renderLeadResponse(leads, cases) {
   panel.classList.remove("hidden");
   const m = leadRespModel(leads, cases);
   leadRespState.model = m;
-  const slaOff = LEAD_SLA_SUPPORTED === false;
-  /* R87 · owner-admin (05 #8, 06 #11) — "first_contact_at − created_at" and "ceil(0.9 × n)" were
-     audit trails for the builder; the reader gets "from the enquiry arriving to a person first
-     making contact" and "the wait nine in ten enquiries were inside". Warnings stay in the open. */
+  /* R87 · owner-admin (05 #8, 06 #11): "first_contact_at − created_at" and "ceil(0.9 × n)" were audit trails
+     for the builder… */
   $("#report-leadresp-basis").innerHTML =
     `Website enquiries from the last <strong>${m.windowDays} days</strong> (${m.nLeads}): how long until a person first made contact. `
-    + (slaOff ? `<strong style="color:var(--red);">This database does not record first contact yet, so nothing can be measured — run the lead-SLA migration.</strong> ` : "")
-    + ((leads || []).length >= LEAD_RESP_ROW_CAP ? `<strong style="color:var(--red);">Only the newest ${LEAD_RESP_ROW_CAP.toLocaleString("en-GB")} enquiries were read — these figures describe that subset, not the whole book.</strong> ` : "")
+    + ((leads || []).length >= LEAD_RESP_ROW_CAP ? `<strong class="u-red">Only the newest ${LEAD_RESP_ROW_CAP.toLocaleString("en-GB")} enquiries were read — these figures describe that subset, not the whole book.</strong> ` : "")
     + `<span class="money-basis">(enquiries · first contact − arrived · last ${m.windowDays} days)</span>`
     + howFold({ id: "report-leadresp-how", title: "How this is counted", html: `<p>Response time runs from the enquiry arriving to the moment a person accepted the lead, or discarded it having made contact — and is counted only where both moments exist. `
       + `The automatic acknowledgement is <strong>not</strong> a response and is not measured here. `
@@ -4650,7 +3773,7 @@ function renderLeadResponse(leads, cases) {
 
   const tableFor = (groups, headWord, emptyWord) => {
     if (!groups.length) return `<div class="empty">${esc(emptyWord)}</div>`;
-    return `<div style="overflow-x:auto;"><table class="imp-table leadresp-table">
+    return `<div class="u-ox-auto"><table class="imp-table leadresp-table">
       <tr><th>${esc(headWord)}</th><th>Enquiries</th><th>Answered</th><th>Median</th><th>p90</th><th>Became a case</th></tr>
       ${groups.map((g) => `<tr data-lr-key="${esc(g.key)}">
         <td><strong>${esc(g.label)}</strong></td>
@@ -4676,7 +3799,7 @@ function renderLeadResponse(leads, cases) {
   }
   if (!m.nResponded) {
     $("#report-leadresp-source").innerHTML = `<div class="empty leadresp-empty">No data yet — none of the ${m.nLeads} enquir${m.nLeads === 1 ? "y" : "ies"} in the last ${m.windowDays} days carries a first-contact time.
-      ${slaOff ? "This database has no <code>first_contact_at</code> column yet." : `The stamp is written the first time somebody Accepts one from My Day on Today, or discards one having made contact. Nothing here is estimated in the meantime.`}
+      The stamp is written the first time somebody Accepts one from My Day on Today, or discards one having made contact. Nothing here is estimated in the meantime.
       ${nBreach ? `<br><strong>${nBreach} of them ${nBreach === 1 ? "is" : "are"} past the ${LEAD_SLA_MIN}-minute promise right now.</strong>` : ""}</div>`;
     $("#report-leadresp-adviser").innerHTML = "";
     return;
@@ -4685,12 +3808,8 @@ function renderLeadResponse(leads, cases) {
   $("#report-leadresp-adviser").innerHTML = `<h4 class="leadresp-h">By adviser</h4>` + tableFor(m.byAdviser, "Adviser", "No enquiries in the window.");
 }
 
-/* --------------------------------------------------------------------------
-   R7-4 — MONDAY MONEY.
-   -------------------------------------------------------------------------- */
-/* The completed week before the current one, Monday to Sunday inclusive. "Last
-   week" on a Monday morning means the week that just finished, and every figure
-   on the page shares this one definition so they can be added together. */
+/* R7-4: MONDAY MONEY. The completed week before the current one, Monday to Sunday inclusive. "Last week" on a
+   Monday morning means the week that just finished… */
 function lastWeekRange() {
   const t = new Date(localDateStr() + "T12:00:00");
   const dow = (t.getDay() + 6) % 7;                       // 0 = Monday
@@ -4700,9 +3819,8 @@ function lastWeekRange() {
     end: localDateStr(new Date(thisMon.getTime() - R7_DAY)),
   };
 }
-/* Cash actually collected between two YYYY-MM-DD dates inclusive, per fee type
-   on its own paid date — the same walk cashInMonth() does, with a date range
-   instead of a month, and the identical future-date clamp. */
+/* Cash actually collected between two YYYY-MM-DD dates inclusive, per fee type on its own paid date — the
+   same walk cashInMonth() does, with a date range instead of a month, and the identical future-date clamp. */
 function cashInRange(rows, from, to, types) {
   const today = localDateStr();
   const wanted = FEE_TYPES.filter((f) => (types || ["proc", "sols", "broker"]).indexOf(f.key) >= 0);
@@ -4737,10 +3855,8 @@ async function loadMoneyPage() {
       denied.classList.remove("hidden");
       denied.textContent = "Monday money is the firm's whole book — fees banked and fees owed — so it is shown to the Owner only. Your own numbers are on the Reports page, in the My numbers card.";
     }
-    /* R44 — belt and braces on top of #money-body's own .hidden: the two
-       reconciliation panels are emptied AND hidden for a non-owner, and the
-       cached rate card is dropped, so nothing about the firm's commission
-       statements is left in the page for anybody who should not have it. */
+    /* R44: belt and braces on top of #money-body's own .hidden: the two reconciliation panels are emptied AND
+       hidden for a non-owner, and the cached rate card is dropped… */
     procRatesCache = null;
     renderMoneyOwed([]);   // R89 · B — Money owed lives on this tab now; its own gate empties it
     await renderProcRatesPanel();
@@ -4750,39 +3866,29 @@ async function loadMoneyPage() {
   if (denied) { denied.classList.add("hidden"); denied.textContent = ""; }
   if (body) body.classList.remove("hidden");
   const wk = lastWeekRange();
-  /* R87 · owner-admin (T1, 05 #3) — the page-level scope is ONE line; the "computed in this browser
-     from the same rows" reassurance and the attribution note move behind howFold. */
-  /* R87 fixer (09 D2) — one ≤25-word line, summary included; the "same rows" clause lives in the fold. */
+  /* R87 · owner-admin (T1, 05 #3): the page-level scope is ONE line; the "computed in this browser from the
+     same rows" reassurance and the attribution note move behind howFold. */
   if (scope) scope.innerHTML = `Last week = ${esc(fmtD(wk.start))} – ${esc(fmtD(wk.end))}. Start with this week's statement; the figures below match Reports. `
     + howFold({ id: "money-how", title: "How these are counted", html: `<p>Last week means Monday to Sunday, Europe/London. Every figure on this page is computed in this browser from the same rows the rest of the app (and Reports) reads — nothing here is a separate report. ${esc(ATTRIB_NOTE)}</p>` });
 
-  /* R81 · A2 — TWO WAVES. WAVE 1 fires every read that does not need the cases rows: the M2
-     fee-date columns, the R44 rate card, the R44 statements list — plus the property-address
-     feature probe, which is the ONE answer the cases pick depends on. WAVE 2 is the cases read,
-     fired together with renderReconPanel(pre) so the panel's per-line counter read shares it.
-     R89 · B — the tasks, leads, stage-change and quote-stamp reads left with the four panels
-     that were their only readers (movement, leads by source, per adviser, quotes gone cold). */
-  const [propOnRaw, extra, ratesPre, stmtsPre] = await Promise.all([
-    propAddrSupported(),
-    // The per-fee-type paid dates live behind M2 and are read in their own small query for
-    // exactly the reason loadCaseExtraColumns exists: an un-migrated database must cost the
-    // itemised dates, not the whole page.
-    loadCaseExtraColumns(),
+  /* R81 · A2: TWO WAVES. WAVE 1 fires every read that does not need the cases rows: the M2 fee-date columns,
+       the R44 rate card, the R44 statements list. WAVE 2 is the cases read (the session Book), fired together with
+       renderReconPanel(pre) so the panel's per-line counter read shares it. R89 · B: the tasks, leads, stage-change
+       and quote-stamp reads left with the four panels that were their only readers. */
+  const [extra, ratesPre, stmtsPre] = await Promise.all([
+    loadCaseExtraColumns(),   // the per-fee-type paid dates (M2)
     loadProcRates(true),   // forces a fresh rate card exactly as the old `procRatesCache = null` + re-read did
     db.from("commission_statements")
       .select("id,ref,statement_label,statement_date,filename,gross_total,net_total,line_count,created_at")
       .order("id", { ascending: false }).limit(R44_STMT_LIST),
   ]);
   if (seq !== moneyLoadSeq) return;   // R81 · A2 — a newer load owns the page
-  const propOn = propOnRaw !== false;
-  /* R85 · E10 — the cases read is the session Book: MONEY_CASE_COLS (+ property_address under the
-     M7 probe) picked off the id-ordered rows, cut at REPORTS_ROW_CAP, the (first_name,last_name)
-     embed rebuilt. The picks are copies, so the Object.assign of the M2 dates never touches a
-     shared row. */
+  /* R85 · E10: the cases read is the session Book: MONEY_CASE_COLS + property_address picked off the
+     id-ordered rows, cut at REPORTS_ROW_CAP, the (first_name,last_name) embed rebuilt. */
   const [casesRes] = await Promise.all([
     bookLoad().then((snap) => (snap.error
       ? { data: null, error: snap.error }
-      : { data: rmBookCasesCapped(snap).map((r) => rmBookPick(r, propOn ? MONEY_CASE_COLS.concat("property_address") : MONEY_CASE_COLS, ["first_name", "last_name"])), error: null })),
+      : { data: rmBookCasesCapped(snap).map((r) => rmBookPick(r, MONEY_CASE_COLS.concat("property_address"), ["first_name", "last_name"])), error: null })),
     renderReconPanel(stmtsPre),   // R81 · A2 — statements already in hand; its lines read shares this wave
   ]);
   if (seq !== moneyLoadSeq) return;   // R81 · A2
@@ -4826,10 +3932,8 @@ async function loadMoneyPage() {
   syncNumHeaders("#page-money");        // R73 · B4
 }
 
-/* R7 — wiring for the controls added to Reports, Monday money and Protection.
-   Bound once at load, imperatively, exactly like the pipeline's bulk bar: these
-   nodes are in the shipped markup and are never re-created by a render, so a
-   listener here can never be attached twice or lost to an innerHTML rewrite. */
+/* R7: wiring for the controls added to Reports, Monday money and Protection. Bound once at load,
+   imperatively, exactly like the pipeline's bulk bar… */
 (() => {
   const on = (sel, fn) => { const el = $(sel); if (el) el.addEventListener("click", fn); };
   on("#owed-group-lender", () => setOwedGroup("lender"));
@@ -4838,43 +3942,16 @@ async function loadMoneyPage() {
   on("#money-refresh", () => loadMoneyPage());
 })();
 
-/* ==========================================================================
-   R44 · STONEBRIDGE PAYMENT RECONCILIATION
-   Two panels at the foot of Monday money, both OWNER-ONLY (they live inside
-   #money-body, which loadMoneyPage() hides for anyone else, and both are
-   emptied and hidden explicitly in that branch as well — belt and braces, the
-   same shape renderLeadResponse() uses on Reports).
-
-   What it is for: every week the network sends a commission statement and,
-   separately, a proc-rate card. Until now the statement was reconciled by eye
-   against the board and the paid dates were typed in from memory, which is how
-   a completed case sat six weeks unpaid on the Money-owed list while the money
-   had in fact arrived — and how a CLAWBACK went unnoticed entirely.
-
-   Daniel's three binding decisions are the whole shape of this code:
-     · REVIEW THEN CONFIRM. The importer never writes to a case. It parses,
-       matches, and shows its work; a human ticks. Nothing on the case moves
-       until somebody presses Confirm.
-     · OWNER ONLY. Fee-level money for the whole firm, so the same gate the
-       rest of this page uses, and no adviser-facing surface at all.
-     · A REAL CLAWBACK FLAGS AND CREATES A TASK. It never silently un-pays a
-       case: the history of what was banked stays true, and the ACTION becomes
-       a task on the owner's list.
-
-   Spreadsheet content is UNTRUSTED INPUT — an addressee, a provider, a note, a
-   filename all arrive from a third party's workbook — so every one of them goes
-   through esc() on the way into HTML, attributes included.
-   ====================================================================== */
+/* R44 · STONEBRIDGE PAYMENT RECONCILIATION Two panels at the foot of Monday money, both OWNER-ONLY (they live
+   inside #money-body, which loadMoneyPage() hides for anyone else, and both are emptied and hidden explicitly in
+   that branch as well — belt and braces, the same shape renderLeadResponse() uses on Reports). The importer never
+   writes to a case. It never silently un-pays a case: the history of what was banked stays true, and the ACTION
+   becomes a task on the owner's list. … */
 
 /* ---------- shared: header normalisation, cells, numbers, dates ---------- */
 
-/* Both workbooks are mapped BY HEADER NAME, never by position. The statement in
-   particular interleaves EMPTY spacer columns between the ones that carry data
-   (there are 21 columns for 16 headings), and several headings contain a
-   literal newline mid-phrase — "Tran Type \nDesc", "Account \nnumber",
-   "Banked\n(Gross)", "Policy \nType". Collapsing every run of whitespace to a
-   single space and lowercasing turns all of those into one stable key, so a
-   column moving (or a spacer being added) costs nothing. */
+/* Both workbooks are mapped BY HEADER NAME, never by position. The statement in particular interleaves EMPTY
+   spacer columns between the ones that carry data… */
 const r44Head = (s) => String(s == null ? "" : s).replace(/\s+/g, " ").trim().toLowerCase();
 
 /* A money cell. SheetJS hands back a number for a numeric cell, but a hand-typed
@@ -4895,13 +3972,8 @@ function r44Num(v) {
   return neg ? -n : n;
 }
 
-/* A date cell, STRICTLY. This is also the row classifier — "the first cell
-   parses as a date" is what separates a data row from an adviser group header —
-   so it must never say yes to a person's name. `new Date("Some Name")` is
-   Invalid Date in every engine we support, but `new Date("May 5")` is NOT, which
-   is exactly the kind of surname-shaped string a lenient parser would swallow.
-   Hence: JS Date (what {cellDates:true} gives us), Excel serial, ISO, or UK
-   d/m/y. Nothing else. */
+/* A date cell, STRICTLY. This is also the row classifier — "the first cell parses as a date" is what
+   separates a data row from an adviser group header — so it must never say yes to a person's name. */
 function r44CellDate(v) {
   if (v == null || v === "") return null;
   if (v instanceof Date) return isNaN(v.getTime()) ? null : v;
@@ -4941,11 +4013,8 @@ const r44Aoa = (ws) => XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defv
 
 /* ---------- T1 · the proc-rate card ---------- */
 
-/* Header → column. Each entry is a list of accepted names in preference order;
-   the first that appears in the sheet wins. `rate` accepts the network's own
-   column heading first ("Stonebridge") and a generic "Rate" as a fallback,
-   because the day the card is re-badged is not the day expected-fee checks
-   should silently switch off. */
+/* Header → column. Each entry is a list of accepted names in preference order; the first that appears in the
+   sheet wins. `rate` accepts the network's own column heading first ("Stonebridge") and a generic "Rate" as… */
 const R44_RATE_HEADERS = {
   lender: ["lender"],
   product: ["product description", "product"],
@@ -4953,20 +4022,11 @@ const R44_RATE_HEADERS = {
   rate: ["stonebridge", "stonebridge rate", "rate", "proc fee"],
   notes: ["notes", "note", "comments"],
 };
-/* Returns { rows, skipped, usable, headerRow, missing } — `rows` shaped for
-   proc_rates. A row with a blank or non-numeric rate is SKIPPED and counted:
-   the card saying nothing about a product is not the same claim as the card
-   saying nought, and storing the second when we were handed the first would
-   invent an expected fee of £0.
-   An EXPLICIT nought is a different matter and is kept — the card really does
-   carry 0 against some further-advance products, and dropping that would make
-   the card look as though it had never mentioned them. It cannot leak into an
-   expected fee either way: r44ExpectedFee() only counts rates above nought.
-   The rate is a DECIMAL FRACTION here (0.004 = 0.40%), which is what the
-   column's 0-1 check constraint enforces, so anything outside [0,1] is a
-   misread column rather than a rate and is skipped.
-   `usable` counts the rows that could actually drive an expected-fee check —
-   rate strictly inside (0,1] — and is what the upload gate tests. */
+/* Returns { rows, skipped, usable, headerRow, missing } — `rows` shaped for proc_rates. A row with a blank or
+   non-numeric rate is SKIPPED and counted: the card saying nothing about a product is not the same claim as the
+   card saying nought, and storing the second when we were handed the first would invent an expected fee of £0. An
+   EXPLICIT nought is a different matter and is kept — the card really does carry 0 against some further-advance
+   products, and dropping that would make the card look as though it had never mentioned them. … */
 function parseProcRatesSheet(aoa) {
   const out = { rows: [], skipped: 0, usable: 0, headerRow: -1, missing: [] };
   const rows = aoa || [];
@@ -5019,29 +4079,11 @@ const R44_LINE_HEADERS = {
   banked_gross: ["banked (gross)", "banked gross"],
   banked_net: ["banked (net)", "banked net"],
 };
-/* "File Review Client Name", "Deduction(Introducer)", "Deduction (Referrer)" and
-   "Clawback Reserve" are deliberately NOT mapped: there is no column on
-   commission_lines for any of them and we do not invent schema to hold a figure
-   nothing reads. */
+/* "File Review Client Name", "Deduction(Introducer)", "Deduction (Referrer)" and "Clawback Reserve" are
+   deliberately NOT mapped… */
 
-/* The statement walk. Everything about it is derived from the sheet rather than
-   assumed:
-     · REF — a free cell somewhere in the top five rows reading "Ref:BP1048".
-       Scanned across every cell of those rows because which column it lands in
-       is a spreadsheet layout accident.
-     · HEADER ROW — the first row whose FIRST cell is exactly "Date".
-     · GROUP HEADERS — below the header the sheet is a firm row, then one group
-       per adviser. A group header is a row whose first cell is text that does
-       not parse as a date and is not a subtotal or a total. Telling the FIRM
-       row apart from an ADVISER row is done from the sheet's own totals: the
-       trailer carries "Total for <firm>" (and "Total for this statement"), so
-       any group header whose text is one of those named firms is the firm row
-       and sets no adviser. Guessing "the first one is the firm" would put every
-       line under the wrong name the day a statement arrives without a firm row.
-     · SUBTOTALS — Policy Group reads "N item(s)".
-     · TOTALS — first cell starts "Total for"; "Total for this statement" is
-       where the statement's own gross/net come from when it is present.
-     · DATA — the first cell parses as a date. */
+/* The statement walk. Everything about it is derived from the sheet rather than assumed: · REF — a free cell
+   somewhere in the top five rows reading "Ref:BP1048". */
 function parseStatementSheet(aoa, sheetName) {
   const rows = aoa || [];
   const out = {
@@ -5141,10 +4183,8 @@ function parseStatementWorkbook(wb) {
 
 /* ---------- T3 · matcher, lender normalisation, expected fee ---------- */
 
-/* One lender vocabulary, used for provider↔case.lender AND provider↔rate-card
-   lender. "Barclays Bank PLC", "Barclays for Intermediaries" and "Barclays" are
-   the same lender; "Skipton Building Society" and "Skipton BS" are the same
-   lender; and none of the words doing the differing carry any information. */
+/* One lender vocabulary, used for provider↔case.lender AND provider↔rate-card lender. "Barclays Bank PLC",
+   "Barclays for Intermediaries" and "Barclays" are the same lender… */
 const R44_LENDER_NOISE = /\b(building society|for intermediaries|home ?loans|solutions|mortgages|mortgage|bank|bs|plc|ltd|limited|the|uk)\b/g;
 function r44LenderKey(s) {
   return String(s == null ? "" : s).toLowerCase()
@@ -5153,10 +4193,8 @@ function r44LenderKey(s) {
     .replace(R44_LENDER_NOISE, " ")
     .replace(/\s+/g, " ").trim();
 }
-/* Prefix or containment, both ways round. Guarded on length: once the noise
-   words are gone a key can be two characters ("bm" for BM Solutions), and a
-   two-character containment test matches almost everything, so anything under
-   three characters has to be an exact match. */
+/* Prefix or containment, both ways round. Guarded on length: once the noise words are gone a key can be two
+   characters ("bm" for BM Solutions), and a two-character containment test matches almost everything… */
 function r44LenderMatch(a, b) {
   const x = r44LenderKey(a), y = r44LenderKey(b);
   if (!x || !y) return false;
@@ -5165,10 +4203,8 @@ function r44LenderMatch(a, b) {
   return x.indexOf(y) === 0 || y.indexOf(x) === 0 || x.indexOf(y) >= 0 || y.indexOf(x) >= 0;
 }
 
-/* Surnames out of an addressee. "Mr Hawkins & Miss Haynes-Flood" is two people
-   and two surnames, and the hyphenated one is ONE surname — splitting it would
-   match "Haynes" against a different family. Titles are stripped, the last
-   remaining token of each person is the surname, lowercased. */
+/* Surnames out of an addressee. "Mr Hawkins & Miss Haynes-Flood" is two people and two surnames, and the
+   hyphenated one is ONE surname — splitting it would match "Haynes" against a different family. */
 const R44_TITLE_WORD = /^(mr|mrs|miss|ms|mx|dr|prof|professor|sir|lady|rev|revd)$/i;
 const R44_TITLE = /^(mr|mrs|miss|ms|mx|dr|prof|professor|sir|lady|rev|revd)\s+/i;
 function r44Surnames(addressee) {
@@ -5178,10 +4214,8 @@ function r44Surnames(addressee) {
   s.split(/\s*(?:&|\band\b|,|\+)\s*/i).forEach((part) => {
     let t = String(part).replace(/\./g, " ").replace(/\s+/g, " ").trim();
     while (R44_TITLE.test(t)) t = t.replace(R44_TITLE, "").trim();
-    /* "Mr & Mrs Ashdown-Pryce" splits into "Mr" and "Mrs Ashdown-Pryce": the
-       first fragment is a bare title with no name behind it and must NOT become
-       the surname "mr", which would then match every case whose client happens
-       to be called Mr-anything. */
+    /* "Mr & Mrs Ashdown-Pryce" splits into "Mr" and "Mrs Ashdown-Pryce": the first fragment is a bare title
+       with no name behind it and must NOT become the surname "mr"… */
     if (R44_TITLE_WORD.test(t)) return;
     if (!t) return;
     const toks = t.split(" ").filter(Boolean);
@@ -5193,11 +4227,8 @@ function r44Surnames(addressee) {
   return out;
 }
 
-/* What KIND of line this is — the four groups the review screen shows, in the
-   order they are tested. A takeback is a takeback whatever policy group it sits
-   in (the money has gone back either way). A renewal is the "VARIOUS" trailer
-   the network appends: no addressee, nothing to match to, imported as `na`
-   rather than left looking unreconciled forever. */
+/* What KIND of line this is — the four groups the review screen shows, in the order they are tested. A
+   takeback is a takeback whatever policy group it sits in. */
 function r44LineKind(l) {
   const tt = String((l || {}).tran_type || "").toLowerCase();
   const grp = String((l || {}).policy_group || "").toLowerCase();
@@ -5210,33 +4241,25 @@ function r44LineKind(l) {
 }
 const R44_MATCHABLE = { mortgage: true, takeback: true, protection: true };
 
-/* ---------- R48 · commission attribution ----------
-   Who each line's money belongs to on the reconciliation screen. PURE and
+/* R48 · commission attribution Who each line's money belongs to on the reconciliation screen. PURE and
    testable, same discipline as suggestStatementMatches: no I/O, no DOM. */
 
-/* A person's name normalised the way the matcher already normalises text: trim,
-   collapse internal whitespace, lowercase. Used to map a sheet's adviser_name
-   onto a current profile — an ex-broker (Hannah/Nathan/Ciaran/Elizabeth) has no
-   profile, so their name never keys anything and the line falls through to the
-   owner, which is exactly Daniel's rule. */
+/* A person's name normalised the way the matcher already normalises text: trim, collapse internal whitespace,
+   lowercase. Used to map a sheet's adviser_name onto a current profile — an ex-broker has no profile… */
 function r44NameKey(s) {
   return String(s == null ? "" : s).trim().replace(/\s+/g, " ").toLowerCase();
 }
 
-/* "Misc insurance" for attribution/tally purposes: all protection / GI /
-   renewal / trail — anything that is not a Mortgage-group receipt or its
-   takeback. This is the half of the money that ALWAYS sits under the owner
-   whatever name it carries on the sheet. */
+/* "Misc insurance" for attribution/tally purposes: all protection / GI / renewal / trail — anything that is
+   not a Mortgage-group receipt or its takeback. This is the half of the money that ALWAYS sits under the… */
 function r44IsMiscInsurance(l, kind) {
   kind = kind || r44LineKind(l);
   if (kind === "protection" || kind === "renewal" || kind === "other") return true;
   return String((l || {}).policy_group || "").trim().toLowerCase() !== "mortgage";
 }
 
-/* R48 — a line "needs you" when EITHER it is a matchable (mortgage/takeback)
-   line still awaiting a case decision (unmatched/suggested — not confirmed,
-   dismissed, or parked at na), OR its attribution is null. Renewals/misc that
-   were attributed to the owner at import are placed and never in the queue. */
+/* R48: a line "needs you" when EITHER it is a matchable (mortgage/takeback) line still awaiting a case
+   decision, OR its attribution is null. Renewals/misc that were attributed to the owner at import are… */
 function r44NeedsYou(l) {
   if (!l || l.match_status === "dismissed") return false;
   const k = r44LineKind(l);
@@ -5244,15 +4267,8 @@ function r44NeedsYou(l) {
   return matchablePending || !l.attributed_to;
 }
 
-/* r44AttributeLine(line, kind, matchedCase, nameToId, ownerId) → profile id (or
-   ownerId fallback). Daniel's decision, encoded:
-     · misc insurance (protection / renewal / other, OR any non-Mortgage group) →
-       the OWNER, whoever's name it sits under. This wins regardless of
-       adviser_name — it is the "all misc insurance → me" rule.
-     · mortgage / takeback → the matched case's adviser if we have a case (which
-       is the owner for the ex-broker cases the import already re-assigned to the
-       owner); else the sheet's named adviser IF they are a current profile; else
-       the owner. Never returns null — the tally is never blank at import. */
+/* r44AttributeLine(line, kind, matchedCase, nameToId, ownerId) → profile id (or ownerId fallback). Daniel's
+   decision, encoded: · misc insurance → the OWNER, whoever's name it sits under. */
 function r44AttributeLine(line, kind, matchedCase, nameToId, ownerId) {
   if (r44IsMiscInsurance(line, kind)) return ownerId || null;
   if (matchedCase && matchedCase.assigned_to) return matchedCase.assigned_to;
@@ -5260,11 +4276,8 @@ function r44AttributeLine(line, kind, matchedCase, nameToId, ownerId) {
   return named || ownerId || null;
 }
 
-/* ownerId + a normalised-name → profile-id map, built from the staff list
-   already loaded at sign-in (TEAM = the STAFF_ROLES subset of PROFILES). No
-   extra DB read: R44 is owner-gated and TEAM is populated before the Money page
-   can be reached. Owner falls back to ME.id — in R44 the current user always is
-   the owner. nameToId is current staff only, so ex-broker names miss. */
+/* ownerId + a normalised-name → profile-id map, built from the staff list already loaded at sign-in. No extra
+   DB read: R44 is owner-gated and TEAM is populated before the Money page can be reached. */
 function r44StaffMaps() {
   const staff = (typeof TEAM !== "undefined" && TEAM) ? TEAM : [];
   const ownerRow = staff.filter((p) => p && p.role === "owner")[0];
@@ -5274,10 +4287,8 @@ function r44StaffMaps() {
   return { ownerId, nameToId, staff };
 }
 
-/* Expected proc fee from the rate card: every card row whose lender normalises
-   onto this provider gives a rate, and the range is [min, max] × the loan. Null
-   when there is no card, no matching lender, or no loan — an expected fee we
-   cannot compute is shown as nothing, never as zero. */
+/* Expected proc fee from the rate card: every card row whose lender normalises onto this provider gives a
+   rate, and the range is [min, max] × the loan. Null when there is no card, no matching lender… */
 function r44ExpectedFee(provider, loanAmount, procRates) {
   const loan = Number(loanAmount || 0);
   if (!loan || !(procRates || []).length) return null;
@@ -5300,12 +4311,8 @@ function r44FeeVerdict(gross, exp) {
   return { expectedLo: exp.expectedLo, expectedHi: exp.expectedHi, verdict: "under", delta: exp.expectedLo - g, rateCount: exp.rateCount };
 }
 
-/* An in-statement reversal: a takeback and a receipt on the SAME account number,
-   inside the SAME statement, equal and opposite. The network does this when it
-   re-books a case — the money never actually left. Both halves are flagged so
-   the review screen can say "reversed in-statement · net £0" instead of raising
-   a clawback task for a clawback that did not happen. Returns a map of index →
-   the index it pairs with. */
+/* An in-statement reversal: a takeback and a receipt on the SAME account number, inside the SAME statement,
+   equal and opposite. The network does this when it re-books a case — the money never actually left. */
 const R44_PAIR_TOL = 0.02;
 function r44ReversalPairs(lines) {
   const pairs = {};
@@ -5420,10 +4427,8 @@ let procRatesCache = null;
 let reconState = null;   // { statement, lines, cases, byLine, sugg, pairs, picks, ticks, feeFix }
 const R44_CHUNK = 200;
 const R44_STMT_LIST = 10;
-/* R24 — a NEW named select, not a widening of BOARD_CASE_COLS. The board's
-   columns are the board's; this read wants proc_fee/proc_fee_paid_at/
-   completed_at, which the board has no use for, and coupling them would make
-   every future change to one a change to the other. */
+/* R24: a NEW named select, not a widening of BOARD_CASE_COLS. The board's columns are the board's; this read
+   wants proc_fee/proc_fee_paid_at/ completed_at, which the board has no use for… */
 const R44_CASE_COLS = "id,lender,stage,loan_amount,proc_fee,proc_fee_paid_at,completed_at,assigned_to,clients!client_id(first_name,last_name)";
 /* R85 · E11 — kept as the reconciliation's column CONTRACT (what its rows carry); the read itself is
    now the R44_CASE_PICK off the session Book below, which mirrors it column for column. */
@@ -5439,22 +4444,8 @@ async function loadProcRates(force) {
   procRatesCache = data || [];
   return procRatesCache;
 }
-/* ONE bounded read. Live cases at offer/exchange plus completions that could
-   still be waiting on money: completed inside ~18 months, or completed at any
-   time with no proc-fee date on them yet (an old case nobody was ever paid for
-   is exactly the case a statement might finally settle). The stage narrowing is
-   server-side; the completed-window narrowing is applied to the returned rows
-   rather than as an .or() with an ISO timestamp inside it, which PostgREST's
-   filter grammar makes fragile to quote. */
-/* R85 · E11 — THE CANDIDATE LIST COMES OFF THE SESSION BOOK; THE WRITE DOES NOT. The rows this
-   returns only feed the SUGGESTIONS (suggestStatementMatches: surname / lender / amount / account
-   hits, the "already paid" narrowing) and the pick drop-downs. The one path that writes money
-   onto a case — r44ConfirmLine — re-reads the picked case FRESH by id (`.maybeSingle()`, "Read
-   the case FRESH" above it) and computes its patch from THAT row, and this tab's own confirm
-   busts the book through the db.from choke point, so a second statement in the same session
-   sees the stamped proc_fee_paid_at. What a colleague's write can do is leave a just-paid case
-   in the candidate list for up to BOOK_STALE_MS: a suggestion, never a write. The rows are picks
-   (copies) because r44ConfirmLine stamps proc_fee / proc_fee_paid_at onto the cached candidate. */
+/* ONE bounded read. Live cases at offer/exchange plus completions that could still be waiting on money:
+   completed inside ~18 months, or completed at any time with no proc-fee date on them yet. */
 const R44_CASE_PICK = ["id", "lender", "stage", "loan_amount", "proc_fee", "proc_fee_paid_at", "completed_at", "assigned_to"];
 async function r44LoadCandidateCases() {
   const snap = await bookLoad();
@@ -5479,9 +4470,8 @@ function r44CaseLabel(c) {
   const nm = [((c.clients || {}).first_name), ((c.clients || {}).last_name)].filter(Boolean).join(" ");
   return nm || "(no name)";
 }
-/* R81 · A2 — `pre`: loadMoneyPage hands the rates it already read in wave 1 (the R80
-   renderClawbackWindow(pre) pattern). Every other caller passes nothing and keeps the
-   exact old force-re-read behaviour. */
+/* R81 · A2: `pre`: loadMoneyPage hands the rates it already read in wave 1 (the R80 renderClawbackWindow(pre)
+   pattern). Every other caller passes nothing and keeps the exact old force-re-read behaviour. */
 async function renderProcRatesPanel(pre) {
   const panel = $("#money-procrates-panel"), status = $("#procrates-status");
   if (!panel || !status) return;
@@ -5534,10 +4524,8 @@ async function r44UploadProcRates(file) {
 
 /* ---------- T2 · statements list ---------- */
 
-/* R81 · A2 — `pre`: loadMoneyPage hands the already-resolved {data, error} of the statements
-   read it fired in wave 1, so this panel's only remaining read (the per-line counters) shares
-   wave 2 with the big cases select. Every other caller passes nothing and keeps the exact old
-   read-here behaviour, error shape included. */
+/* R81 · A2: `pre`: loadMoneyPage hands the already-resolved {data, error} of the statements read it fired in
+   wave 1… */
 async function renderReconPanel(pre) {
   const panel = $("#money-recon-panel"), list = $("#recon-statements"), review = $("#recon-review");
   if (!panel || !list) return;
@@ -5561,9 +4549,8 @@ async function renderReconPanel(pre) {
     list.innerHTML = MONEY_EMPTY("No commission statement imported yet — choose the workbook above.");
     return;
   }
-  /* The per-statement counters come from the lines themselves rather than being
-     denormalised onto the statement row: a confirm changes them, and a count
-     that only refreshes on import would be wrong the moment anybody worked. */
+  /* The per-statement counters come from the lines themselves rather than being denormalised onto the
+     statement row: a confirm changes them… */
   const ids = rows.map((s) => s.id);
   const { data: lineRows, error: linesErr } = await readAll(db.from("commission_lines")
     .select("id,statement_id,tran_type,policy_group,addressee,reason,match_status,banked_gross")
@@ -5633,9 +4620,8 @@ async function r44ImportStatement(file) {
   }
   const [cases, priors, rates] = await Promise.all([r44LoadCandidateCases(), r44LoadPriorLines(), loadProcRates()]);
   const sugg = suggestStatementMatches(parsed.lines, cases, priors, rates);
-  /* R48 — every line is attributed at import so the per-person tally is never
-     blank. The suggested case (when there is one) is the matchedCase, looked up
-     in the already-loaded candidate cases; a confirm later re-homes it (T3). */
+  /* R48: every line is attributed at import so the per-person tally is never blank. The suggested case (when
+     there is one) is the matchedCase, looked up in the already-loaded candidate cases… */
   const { ownerId, nameToId } = r44StaffMaps();
   const caseById = {};
   cases.forEach((c) => { if (c && c.id) caseById[c.id] = c; });
@@ -5655,11 +4641,8 @@ async function r44ImportStatement(file) {
     if (error) { ok = false; msg = error.message; break; }
   }
   if (!ok) {
-    /* No half-import. The statement row goes, and the FK cascade takes whatever
-       lines did land with it. */
-    /* R81 · A4 — the clean-up delete's result was IGNORED: if it fails, the orphaned statement
-       row keeps its unique ref and silently blocks every re-import of the same file. Logged
-       (quietly — the lines toast below is the one the user must read; two toasts would race). */
+    /* No half-import. The statement row goes, and the FK cascade takes whatever lines did land with it. R81 ·
+       A4 — the clean-up delete's result was IGNORED: if it fails… */
     const { error: cleanErr } = await db.from("commission_statements").delete().eq("id", st.id);
     if (cleanErr) { try { logClientError("caught", cleanErr.message || "(no message)", { where: "r44ImportStatement cleanup", quiet: true }); } catch (_) { /* logging must never block the toast */ } }
     return dbFail("r44ImportStatement", { message: msg }, "The statement lines could not be saved, so nothing was imported: " + msg);   // R81 · A4
@@ -5699,11 +4682,8 @@ async function openReconReview(stmtId) {
   const [cases, priors, rates] = await Promise.all([r44LoadCandidateCases(), r44LoadPriorLines(), loadProcRates()]);
   if (seq !== reconOpenSeq) return;   // R83
   const ls = lines || [];
-  /* The suggestions are recomputed from the stored lines on every open rather
-     than being read back off the row: the review has to survive a reload, and
-     the board moves between one import and the next. What IS read back off the
-     row is the human's decision — matched_case_id, match_status — which is the
-     only part a recompute must never overwrite. */
+  /* The suggestions are recomputed from the stored lines on every open rather than being read back off the
+     row: the review has to survive a reload, and the board moves between one import and the next. */
   const sugg = suggestStatementMatches(ls, cases, priors, rates);
   /* R48 — staff maps for the per-person tally, the "attribute to …" select, and
      the ownerId fallback the confirm/attribute paths need. */
@@ -5725,9 +4705,8 @@ async function openReconReview(stmtId) {
   renderReconReview();
 }
 function r44Chip(text, cls) { return `<span class="badge ${cls || "grey"}">${esc(text)}</span>`; }
-/* Only on a mortgage RECEIPT. A takeback measured against an expected proc fee
-   would read "£375 over" on money that has gone the other way, which is a
-   sentence nobody should have to decode at speed. */
+/* Only on a mortgage RECEIPT. A takeback measured against an expected proc fee would read "£375 over" on
+   money that has gone the other way, which is a sentence nobody should have to decode at speed. */
 function r44ExpectedBadge(line, caseRow, rates) {
   if (!caseRow || r44LineKind(line) !== "mortgage") return "";
   const v = r44FeeVerdict(line.banked_gross, r44ExpectedFee(line.provider, caseRow.loan_amount, rates));
@@ -5735,12 +4714,8 @@ function r44ExpectedBadge(line, caseRow, rates) {
   if (v.verdict === "within") return r44Chip("≈ expected", "green");
   return r44Chip(`${fmtM2(v.delta)} ${v.verdict}`, "amber");
 }
-/* R48 — the "attribute to a person" control: sets attributed_to directly,
-   WITHOUT requiring a case (income with no case in the system, or correcting the
-   import guess). The select defaults to the line's current attribution, or the
-   owner when it is null. "no case — just income" also parks match_status at `na`
-   so the line stops asking for a case decision. Only on non-locked matchable
-   lines; a confirmed line is already placed. */
+/* R48: the "attribute to a person" control: sets attributed_to directly, WITHOUT requiring a case. The select
+   defaults to the line's current attribution, or the owner when it is null. */
 function r44AttrControl(l) {
   const st = reconState;
   if (l.match_status === "confirmed") return "";
@@ -5763,10 +4738,8 @@ function r44MatchCell(l) {
   const picked = st.picks[l.id] || "";
   const caseById = {};
   st.cases.forEach((c) => { caseById[c.id] = c; });
-  /* The short-list is the scored candidates. When scoring found nobody the
-     select still has to be usable, so it falls back to the nearest cases by
-     unpaid proc fee — the operator can always pick, and "— none —" stays the
-     honest default. */
+  /* The short-list is the scored candidates. When scoring found nobody the select still has to be usable, so
+     it falls back to the nearest cases by unpaid proc fee — the operator can always pick… */
   let opts = s.candidates.map((c) => c.case);
   if (!opts.length) {
     opts = st.cases.filter((c) => !c.proc_fee_paid_at)
@@ -5796,10 +4769,8 @@ function r44MatchCell(l) {
     ${r44FeeDeltaHtml(l, sel)}
     ${l.match_note ? `<div class="s cs-muted">${esc(l.match_note)}</div>` : ""}`;
 }
-/* The proc fee on the case and the gross actually banked disagreeing by more
-   than a pound is not a thing to fix silently — it is a thing to show. The
-   checkbox is OFF by default: the number on the case may well be the right one
-   and the network's the mistake. */
+/* The proc fee on the case and the gross actually banked disagreeing by more than a pound is not a thing to
+   fix silently — it is a thing to show. The checkbox is OFF by default: the number on the case may well be… */
 const R44_FEE_DELTA_MIN = 1;
 function r44FeeDeltaHtml(l, sel) {
   if (!sel || r44LineKind(l) !== "mortgage") return "";
@@ -5826,10 +4797,8 @@ function r44LineRow(l, kind) {
     <div class="recon-match">${r44MatchCell(l)}</div>
   </div>`;
 }
-/* R48 — the per-person "received this statement" tally: net banked grouped by
-   attributed_to, dismissed lines excluded. The owner's row is annotated with the
-   insurance slice (all the misc-insurance net that sits under them). A null
-   attribution rolls up into an "Unassigned — needs you" row. */
+/* R48: the per-person "received this statement" tally: net banked grouped by attributed_to, dismissed lines
+   excluded. The owner's row is annotated with the insurance slice. */
 function r44TallyHtml() {
   const st = reconState;
   const byPerson = {};
@@ -5941,9 +4910,8 @@ async function r44ConfirmLine(lineId, opts) {
   const linePatch = { match_status: "confirmed", matched_case_id: caseId, confirmed_at: new Date().toISOString() };
 
   if (kind === "takeback" && !paired) {
-    /* A REAL clawback. The paid date stays exactly where it is — what was
-       banked was banked, and rewriting that history would take the case off
-       the cash figures for a month it really did earn. The action is a task. */
+    /* A REAL clawback. The paid date stays exactly where it is — what was banked was banked, and rewriting
+       that history would take the case off the cash figures for a month it really did earn. */
     const body = `CLAWBACK ${fmtM2(gross)} — ${where}, statement ${ref}`;
     const { error: nErr } = await db.from("case_notes").insert({ case_id: caseId, body, created_by: (ME && ME.id) || null });
     if (nErr) return "the clawback note could not be written: " + nErr.message;
@@ -6000,33 +4968,17 @@ async function r44ConfirmLine(lineId, opts) {
   const cAfter = Object.assign({}, c, setProcFee ? { proc_fee: gross } : {});
   const { patch, complete } = feePaidPatch(cAfter, [{ t: procType, date: r44NoteDate(l) }]);
   if (setProcFee) patch.proc_fee = gross;
-  let { error: uErr } = await db.from("cases").update(patch).eq("id", caseId);
-  let legacyOnly = false;
-  if (uErr && isMissingColumnError(uErr)) {
-    /* Pre-M2 database: no per-fee-type dates to write. Same fallback markFeePaid
-       takes, for the same reason — one date for the lot rather than nothing. */
-    const legacy = { fee_status: "paid", fee_paid_at: feeDateToTs(r44NoteDate(l)) };
-    if (setProcFee) legacy.proc_fee = gross;
-    ({ error: uErr } = await db.from("cases").update(legacy).eq("id", caseId));
-    legacyOnly = !uErr;
-  }
+  const { error: uErr } = await db.from("cases").update(patch).eq("id", caseId);
   if (uErr) return "the case could not be updated: " + uErr.message;
   const body = `Proc fee ${fmtM2(gross)} banked ${fmtD(r44NoteDate(l))} — Stonebridge statement ${ref} (${where})`;
   const { error: nErr } = await db.from("case_notes").insert({ case_id: caseId, body, created_by: (ME && ME.id) || null });
-  /* R48 — confirming a mortgage receipt against a case re-homes the income onto
-     the case's TRUE adviser (the owner for the ex-broker cases the import
-     assigned to the owner), overriding any import-time name guess. Written in
-     the SAME line update as match_status/matched_case_id/confirmed_at. Misc
-     insurance never reaches here — its note-only confirm keeps owner attribution. */
-  /* R83 — owner fallback, as r44AttributeLine has always had: an UNASSIGNED case nulled the
-     attribution here, and a confirmed line with no attribution sat in "Needs you" forever — the
-     attribute control is withheld on confirmed lines, so nothing could ever clear it. */
+  /* R48: confirming a mortgage receipt against a case re-homes the income onto the case's TRUE adviser,
+     overriding any import-time name guess. Written in the SAME line update as… */
   linePatch.attributed_to = c.assigned_to || st.ownerId || null;   // R83
   linePatch.match_note = [
     "proc fee dated " + r44NoteDate(l),
     setProcFee ? (have ? "case proc fee updated" : "case proc fee set") : "",
     complete ? "case now reads paid" : "",
-    legacyOnly ? "legacy fee columns only (pre-M2)" : "",
     nErr ? "note failed" : "",
   ].filter(Boolean).join(" · ").slice(0, 200);
   const { error: lErr } = await db.from("commission_lines").update(linePatch).eq("id", lineId);
@@ -6053,12 +5005,8 @@ async function r44DismissLine(lineId) {
   renderReconReview();
   toast(next.match_status === "dismissed" ? "Line dismissed" : "Line back in the queue");
 }
-/* R48 — set a line's attributed_to directly, no case required. This is the
-   manual half of the "needs you" queue: a receipt that is just income with no
-   case in the system, or a correction to the import's name guess. It writes
-   ONLY attribution (leaving match_status as-is), unless the owner ticks "no case
-   — just income", which also parks the line at `na` so it stops asking to be
-   matched. A later deliberate case-confirm is the only thing that overrides it. */
+/* R48: set a line's attributed_to directly, no case required. This is the manual half of the "needs you"
+   queue: a receipt that is just income with no case in the system… */
 async function r44AttributeLineTo(lineId, profileId, noCase) {
   const st = reconState;
   if (!st) return;
@@ -6087,18 +5035,8 @@ async function r44ConfirmTicked() {
   toast(`Confirmed ${ids.length} line${ids.length === 1 ? "" : "s"} — ${results[results.length - 1]}`);
 }
 
-/* ---------- wiring ----------
-   Bound ONCE, imperatively, on nodes that live in the shipped markup and are
-   never re-created by a render — the same rule the Monday-money controls above
-   follow. Everything inside #recon-review / #recon-statements is rewritten by
-   innerHTML on every render, so those two are delegated rather than bound. */
-/* R81 · A1 — LOAD-ORDER ACCOMMODATION (the one the carve's call-graph audit could not see,
-   because it is a DOM dependency, not an identifier): #procrates-file and #recon-file are NOT
-   in the shipped markup — app.js's eval-time mountDropZone() CREATES them inside their
-   *-file-slot divs, and app.js now evaluates AFTER this file. So this block runs at
-   DOMContentLoaded — which fires only after every classic script has evaluated — instead of at
-   this script's own eval. Same bind-once semantics, a few milliseconds later; nothing can be
-   clicked before DCL. The body is byte-identical to the old IIFE's. */
+/* wiring Bound ONCE, imperatively, on nodes that live in the shipped markup and are never re-created by a
+   render — the same rule the Monday-money controls above follow. */
 (() => {
   const wireR44MoneyPanels = () => {
   const pf = $("#procrates-file");
@@ -6170,4 +5108,4 @@ async function r44ConfirmTicked() {
 
 /* R81 · A3 — deploy handshake stamp. Every round that edits ANY of index.html / core.js /
    reports-money.js / app.js bumps the tag IN ALL FOUR PLACES (see nxCheckBuildTags in app.js). */
-window.__nxTag_reportsmoney = "r89";   // R89
+window.__nxTag_reportsmoney = "r90";   // R89

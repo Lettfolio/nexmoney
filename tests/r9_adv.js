@@ -325,48 +325,30 @@ const tasksOnCase = (page, caseId) => page.evaluate(async (cid) =>
     }
 
     /* ===================================================================
-       2 · R9-1 · FEATURE-DETECT OFF (m11 absent)
+       2 · R9-1 · FEATURE-DETECT OFF (m11 absent) — R90 · A: RETIRED.
+       Was "m11 off ⇒ no Referred-by field, no referrer on the identity line, no advocacy line,
+       and the Reports advocacy blocks say m11 has not run". The m11 feature-detect
+       (referrerSupported / noteReferrerFromStarRow / loadReferrerColumn's gate) is gone —
+       cases.referrer_client_id is live in production — and the mock's m11 flag is inert. What
+       remains is the inertness: with the flag flipped OFF the feature is whole.
        =================================================================== */
     {
-      console.log("\n— R9-1 · feature-detect · m11 absent");
+      console.log("\n— R9-1 · (R90 · A) the m11 flag is inert — the referrer feature stays whole");
       const page = await newPage(browser, "p4");
       const ref = GT.referrals.find((r) => !r.target.why);
       await page.evaluate(() => window.__mock.setMigrations({ m11: false }));
       await page.evaluate((id) => window.openCase(id), ref.caseId);
       await page.waitForTimeout(900);
-      const off = await page.evaluate(() => ({
+      const on = await page.evaluate(() => ({
         field: !!document.querySelector("#case-referrer-select"),
-        line: !!document.querySelector("#cs-referrer"),
-        clientSelStillThere: !!document.querySelector("#case-client-select"),
         saveBtn: !!document.querySelector("#modal-save"),
       }));
-      eq("R9-1 · without m11 no “Referred by” field is rendered at all", off.field, false);
-      eq("R9-1 · …and no referrer appears on the identity line", off.line, false);
-      ok("R9-1 · …while the rest of the case form is untouched", off.clientSelStillThere && off.saveBtn, JSON.stringify(off));
-      // the case still saves — a missing reporting column must not cost the edit
-      await page.click("#modal-save");
-      await page.waitForTimeout(1000);
-      ok("R9-1 · a case still saves on an un-migrated database", /saved/i.test(await toastText(page)), await toastText(page));
-
+      ok("R9-1 · (R90 · A) with setMigrations({m11:false}) the “Referred by” field still renders", on.field && on.saveBtn, JSON.stringify(on));
       await page.evaluate(() => window.closeModal && window.closeModal());
-      await page.evaluate((cid) => window.openClient(cid), ref.referrerId);
-      await page.waitForTimeout(900);
-      eq("R9-4 · without m11 the client record shows no advocacy line", await page.evaluate(() => !!document.querySelector("#client-advocacy")), false);
-      await page.evaluate(() => window.closeModal && window.closeModal());
-
       await gotoReports(page);
-      const advOff = await page.evaluate(() => ({
-        basis: (document.querySelector("#report-advocacy-basis") || {}).textContent || "",
-        ratio: (document.querySelector("#adv-block-ratio") || {}).textContent || "",
-        top: (document.querySelector("#adv-block-top") || {}).textContent || "",
-        hasNumber: !!document.querySelector("#adv-ratio"),
-      }));
-      ok("R9-2 · the dashboard says m11 has not run rather than reporting a zero",
-        /m11/.test(advOff.basis) && /m11/.test(advOff.ratio) && advOff.hasNumber === false, JSON.stringify(advOff).slice(0, 300));
-      ok("R9-2 · …and the top-referrer block says the same", /m11/.test(advOff.top), advOff.top.slice(0, 160));
-      ok("R9-2 · the review blocks still render without m11 (they do not depend on it)",
-        (await page.evaluate(() => !!document.querySelector("#adv-nps-table"))) === true);
-      ok("no console errors (m11 off)", !page.__err, JSON.stringify(page.__err));
+      const adv = await page.evaluate(() => ({ basis: (document.querySelector("#report-advocacy-basis") || {}).textContent || "" }));
+      ok("R9-2 · (R90 · A) …and the advocacy dashboard never says m11 has not run", !/m11/.test(adv.basis), adv.basis.slice(0, 200));
+      ok("no console errors (inert m11 flipped off)", !page.__err, JSON.stringify(page.__err));
       await page.evaluate(() => window.__mock.setMigrations({ m11: true }));
       await page.close();
     }

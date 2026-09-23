@@ -3859,6 +3859,35 @@ details.hdr-more > .hdr-more-menu > .hidden { display: none; }
 .team-contact > .team-signoff { flex: 2; min-width: 220px; resize: vertical; }
 .team-contact-self > .team-contact-ro { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
 
+/* R90 · C utilities — what the fixed inline style="…" values became. !important on purpose: an
+   inline style beat every stylesheet rule, so the class that replaces one must too (else a more
+   specific rule would silently win and the page would move). Dynamic values stay inline. */
+.u-mt-2 { margin-top: 2px !important; }
+.u-mt-3 { margin-top: 3px !important; }
+.u-mt-6 { margin-top: 6px !important; }
+.u-mt-8 { margin-top: 8px !important; }
+.u-mt-10 { margin-top: 10px !important; }
+.u-mt-12 { margin-top: 12px !important; }
+.u-mt-14 { margin-top: 14px !important; }
+.u-mt-18 { margin-top: 18px !important; }
+.u-m0 { margin: 0 !important; }
+.u-m-0-0-8 { margin: 0 0 8px !important; }
+.u-m-6-0-0 { margin: 6px 0 0 !important; }
+.u-m-8-0-0 { margin: 8px 0 0 !important; }
+.u-m-10-0-0 { margin: 10px 0 0 !important; }
+.u-m-12-0-4 { margin: 12px 0 4px !important; }
+.u-center { text-align: center !important; }
+.u-muted { color: var(--muted) !important; }
+.u-red { color: var(--red) !important; }
+.u-fw-400 { font-weight: 400 !important; }
+.u-fw-600 { font-weight: 600 !important; }
+.u-nowrap { white-space: nowrap !important; }
+.u-pointer { cursor: pointer !important; }
+.u-w-auto { width: auto !important; }
+.u-ox-auto { overflow-x: auto !important; }
+.u-jc-end { justify-content: flex-end !important; }
+/* end R90 · C utilities */
+
 /* ==========================================================================
    FOCUS (R87 · E3, panel 06 #6). One rule instead of nineteen per-class ones. :is() carries
    [tabindex]'s (0,1,0), so this is (0,2,0) and, sitting LAST in the file, beats every earlier

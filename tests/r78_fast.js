@@ -395,9 +395,17 @@ const netRead = (page) => page.evaluate(() => ({ waves: window.__net.waves, call
         if (!alerts || !alerts.length) return { skip: true };
         const evBefore = (await window.__mockDb.from("error_events").select("id", { count: "exact" })).count || 0;
         const logBefore = window.__errorLog.length;
-        // SEED THE FAILURE: m3 off makes watch_alerts.snoozed_until a missing column, so
-        // unsnoozeAlert's ordinary update 42703s and the swept call site routes through dbFail.
-        window.__mock.setMigrations({ m3: false });
+        // SEED THE FAILURE. R90 · A: was "m3 off makes watch_alerts.snoozed_until a missing column";
+        // the m3 flag is inert now, so the same refusal is shimmed in-page, once, on the one
+        // watch_alerts update unsnoozeAlert makes — and the swept call site still routes through dbFail.
+        const realFrom = window.db.from.bind(window.db);
+        window.db.from = function (t) {
+          const b = realFrom(t);
+          if (t !== "watch_alerts") return b;
+          window.db.from = realFrom;
+          b.update = () => ({ eq: () => Promise.resolve({ data: null, error: { code: "42703", message: 'column "snoozed_until" of relation "watch_alerts" does not exist' } }) });
+          return b;
+        };
         window.unsnoozeAlert(alerts[0].id);
         return { skip: false, evBefore, logBefore };
       });
@@ -409,7 +417,6 @@ const netRead = (page) => page.evaluate(() => ({ waves: window.__net.waves, call
           const toastTxt = document.querySelector("#toast").textContent;
           const evAfter = (await window.__mockDb.from("error_events").select("id", { count: "exact" })).count || 0;
           const entry = window.__errorLog[window.__errorLog.length - 1] || {};
-          window.__mock.setMigrations({ m3: true });   // restore for anything after us
           return { toastTxt, evAfter, evBefore: before.evBefore, logGrew: window.__errorLog.length > before.logBefore, entry: { kind: entry.kind, where: entry.where, msg: entry.msg } };
         }, seeded);
         ok("E · the toast still shows and keeps the exact old wording (\"Error: \" + message)",

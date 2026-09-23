@@ -274,7 +274,10 @@ const ringOf = (page, token) => page.evaluate((t) => {
       const noneRules = css.match(/\.segment > \.btn \{[^}]*box-shadow: none/);
       ok("D11 · .segment > .btn still resets box-shadow at rest (the segment look is unchanged)", !!noneRules);
       // the classes the file names still exist in the app (nothing live was deleted)
-      const src = fs.readFileSync(path.join(REPO, "admin", "index.html"), "utf8") + appJs + fs.readFileSync(path.join(REPO, "admin", "reports-money.js"), "utf8") + fs.readFileSync(path.join(REPO, "admin", "core.js"), "utf8");
+      /* R90 · F: was index.html + app.js + reports-money.js + core.js; now + diary.js / import.js / vault.js,
+         because the carve moved the Diary, Import/Revolution and Vault markup there (verbatim) — the
+         "app" this check means is every script index.html loads. */
+      const src = fs.readFileSync(path.join(REPO, "admin", "index.html"), "utf8") + appJs + ["reports-money.js", "core.js", "diary.js", "import.js", "vault.js"].map((f) => fs.readFileSync(path.join(REPO, "admin", f), "utf8")).join("\n");
       const cssNoComments = css.replace(/\/\*[\s\S]*?\*\//g, "");
       const classes = [...new Set((cssNoComments.replace(/\{[^{}]*\}/g, "{}").match(/\.(-?[_a-zA-Z][-\w]*)/g) || []).map((c) => c.slice(1)))];
       const dead = classes.filter((c) => !src.includes(c) && !/^(age-|ao-|appt-outcome-|audit-|brief-sec-|brief-side-|doc-chase-|pc-h\d|qrow-|ret-g-|rev-|wt-group-)/.test(c));   // R88 · E: + brief-side- (R88 · A's `brief-side-${sev}`); R88 · fixer: − prot-band (deleted)

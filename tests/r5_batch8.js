@@ -237,25 +237,13 @@ const readProfile = (page, id) => page.evaluate((pid) =>
        1e · Feature-detect — M1 off hides the card / roster inputs instead
        of failing, and a save mid-session degrades gracefully
        =================================================================== */
-    console.log("\n— B4 UI · feature-detect (M1 off)");
+    /* R90 · A: RETIRED — "B4 UI · feature-detect (M1 off)": (i) a save with M1 disabled toasted
+       "migration M1" and hid the card; (ii) a fresh Settings load hid the card and the roster's
+       contact inputs. profiles.phone / email_signoff are live in production, the
+       PROFILE_CONTACT_SUPPORTED gate and its toasts are gone, and the mock's m1 flag is inert.
+       What remains: flipping it changes nothing — the card and the roster inputs stay. */
+    console.log("\n— B4 UI · (R90 · A) the m1 flag is inert");
     {
-      // (i) A save attempted after M1 is disabled mid-session degrades: a clear toast, the
-      // card hides itself rather than silently pretending the write worked.
-      const p2 = await newPage(browser, "p2");
-      await gotoSettings(p2);
-      ok("fixture · the card is visible before M1 is disabled", await p2.evaluate(() => !document.querySelector("#my-details-panel").classList.contains("hidden")));
-      await p2.evaluate(() => window.__mock.setMigrations({ m1: false }));
-      await p2.fill("#my-phone", "01202 900000");
-      await p2.click("#save-my-details-btn");
-      await p2.waitForTimeout(600);
-      const toast = await p2.evaluate(() => (document.querySelector("#toast") || {}).textContent || "");
-      ok("B4 UI · the save explains the missing migration instead of erroring", /migration M1/i.test(toast), JSON.stringify(toast));
-      ok("B4 UI · …and hides the card so a further edit isn't offered", await p2.evaluate(() => document.querySelector("#my-details-panel").classList.contains("hidden")));
-      await p2.evaluate(() => window.__mock.setMigrations({ m1: true }));
-      await p2.close();
-
-      // (ii) A fresh load of Settings against an already-un-migrated database shows neither
-      // the card nor the roster's contact inputs, without failing the page.
       const p4 = await newPage(browser, "p4");
       await p4.evaluate(() => window.__mock.setMigrations({ m1: false }));
       await p4.evaluate(async () => {
@@ -267,11 +255,9 @@ const readProfile = (page, id) => page.evaluate((pid) =>
       const state = await p4.evaluate(() => ({
         cardHidden: document.querySelector("#my-details-panel").classList.contains("hidden"),
         rosterContactInputs: document.querySelectorAll("#team-roster input.team-phone, #team-roster textarea.team-signoff").length,
-        roleSelects: document.querySelectorAll("#team-roster select.team-role").length,
       }));
-      eq("B4 UI · the \"My details\" card is hidden on an un-migrated database", state.cardHidden, true);
-      eq("B4 UI · the roster shows no phone/sign-off inputs either", state.rosterContactInputs, 0);
-      ok("B4 UI · the roster itself still renders (role selects unaffected by M1)", state.roleSelects > 0);
+      eq("B4 UI · (R90 · A) the \"My details\" card still shows with m1 flipped OFF", state.cardHidden, false);
+      ok("B4 UI · (R90 · A) …and the roster keeps its phone/sign-off inputs", state.rosterContactInputs > 0, String(state.rosterContactInputs));
       await p4.evaluate(() => window.__mock.setMigrations({ m1: true }));
       ok("no console errors", !p4.__err, JSON.stringify(p4.__err));
       await p4.close();

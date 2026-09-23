@@ -11,9 +11,9 @@
         (#report-forecast-buckets), the mix panel (#report-mix).
    §B — A2: the Money page loads in ≤ 2 serial network waves (r78_fast's
         instrumentation, verbatim), and still paints its owner panels.
-   §C — A3: the NX_BUILD_TAG handshake. All four tags equal on a clean load
-        (in-page AND in the four source files — the merge-time partial-bump
-        catch); a forced mismatch shows the non-dismissable strip and reloads
+   §C — A3: the NX_BUILD_TAG handshake. All seven tags (R90 · F: was four)
+        equal on a clean load (in-page AND in the seven source files — the
+        merge-time partial-bump catch); a forced mismatch shows the non-dismissable strip and reloads
         exactly ONCE (observed via the __nxTagReload sandbox seam); a second
         mismatch with the guard set leaves the strip up, says hard-refresh,
         and does NOT loop; a match clears strip + guard.
@@ -159,9 +159,16 @@ const netRead = (page) => page.evaluate(() => ({ waves: window.__net.waves, call
         ok(`A1 · ${label} loads /admin/reports-money.js`, rm >= 0);
         ok(`A1 · ${label} order is core.js → reports-money.js → app.js (proven in the file's own comment)`,
           core >= 0 && rm > core && app > rm, `core@${core} rm@${rm} app@${app}`);
+        /* R90 · F — the third carve: diary.js → import.js → vault.js sit between reports-money.js and
+           app.js (definition-time rule; each file's header has the proof). Was three files, now six. */
+        const di = html.indexOf('<script src="/admin/diary.js">');
+        const im = html.indexOf('<script src="/admin/import.js">');
+        const va = html.indexOf('<script src="/admin/vault.js">');
+        ok(`A1 (R90 · F) · ${label} order is core → reports-money → diary → import → vault → app`,
+          core >= 0 && rm > core && di > rm && im > di && va > im && app > va, `core@${core} rm@${rm} diary@${di} import@${im} vault@${va} app@${app}`);
       }
-      // The served set is the repo's set — md5 over HTTP vs md5 on disk, all three files.
-      for (const f of ["core.js", "reports-money.js", "app.js"]) {
+      // The served set is the repo's set — md5 over HTTP vs md5 on disk, all six files (R90 · F: was three).
+      for (const f of ["core.js", "reports-money.js", "diary.js", "import.js", "vault.js", "app.js"]) {
         const disk = md5(fs.readFileSync(path.join(REPO, "admin", f)));
         const got = await fetchBytes(`/admin/${f}`);
         ok(`A1 · served /admin/${f} is byte-identical to the repo copy (md5 ${disk.slice(0, 8)}…)`,
@@ -247,11 +254,15 @@ const netRead = (page) => page.evaluate(() => ({ waves: window.__net.waves, call
        ===================================================================== */
     console.log("\n— §C · A3 · build-tag handshake: equal on clean load; mismatch = strip + ONE reload; no loop");
     {
-      // Merge-time catch: the four tag literals in the four SOURCE files are equal.
+      // Merge-time catch: the tag literals in the SOURCE files are equal.
+      // R90 · F — seven places now (was four): + diary.js / import.js / vault.js.
       const files = {
         "index.html": /window\.NX_BUILD_TAG\s*=\s*"([^"]+)"/,
         "core.js": /window\.__nxTag_core\s*=\s*"([^"]+)"/,
         "reports-money.js": /window\.__nxTag_reportsmoney\s*=\s*"([^"]+)"/,
+        "diary.js": /window\.__nxTag_diary\s*=\s*"([^"]+)"/,
+        "import.js": /window\.__nxTag_import\s*=\s*"([^"]+)"/,
+        "vault.js": /window\.__nxTag_vault\s*=\s*"([^"]+)"/,
         "app.js": /window\.__nxTag_app\s*=\s*"([^"]+)"/,
       };
       const found = {};
@@ -260,17 +271,17 @@ const netRead = (page) => page.evaluate(() => ({ waves: window.__net.waves, call
         found[f] = m ? m[1] : "(MISSING)";
       }
       const tagVals = Object.values(found);
-      ok(`C · all four source files carry the SAME tag literal (${tagVals[0]}) — a partial bump fails here at merge time`,
+      ok(`C · all seven source files carry the SAME tag literal (${tagVals[0]}) — a partial bump fails here at merge time (R90 · F: was four)`,
         tagVals.every((v) => v !== "(MISSING)" && v === tagVals[0]), JSON.stringify(found));
 
       const page = await boot(browser, "p1");
       const clean = await page.evaluate(() => ({
-        tags: [window.NX_BUILD_TAG, window.__nxTag_core, window.__nxTag_reportsmoney, window.__nxTag_app],
+        tags: [window.NX_BUILD_TAG, window.__nxTag_core, window.__nxTag_reportsmoney, window.__nxTag_diary, window.__nxTag_import, window.__nxTag_vault, window.__nxTag_app],   // R90 · F — seven
         verdict: window.__nxCheckBuildTags(),
         strip: !!document.getElementById("nx-tag-strip"),
         guard: (() => { try { return sessionStorage.getItem("nx_tag_reloaded"); } catch (_) { return "n/a"; } })(),
       }));
-      ok("C · clean load: all four in-page tags equal and non-null", clean.tags.every((t) => t != null && t === clean.tags[0]), JSON.stringify(clean.tags));
+      ok("C · clean load: all seven in-page tags equal and non-null (R90 · F: was four)", clean.tags.length === 7 && clean.tags.every((t) => t != null && t === clean.tags[0]), JSON.stringify(clean.tags));
       eq("C · clean load: compare says match", clean.verdict, "match");
       ok("C · clean load: no strip, no reload guard", !clean.strip && !clean.guard, JSON.stringify(clean));
 

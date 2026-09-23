@@ -208,23 +208,9 @@ const openDrawer = async (page, panelId) => {
       await page.waitForTimeout(400);
       eq("R5-22 · Unsnooze puts it straight back on the working list (toggle back to 1)", await page.evaluate(() => document.querySelector("#watchtower-snoozed-toggle").textContent.trim()), "1 snoozed");
 
-      // Feature-detect: M3 off → toast, not a crash.
-      await page.evaluate(() => window.__mock.setMigrations({ m3: false }));
-      await page.evaluate(() => window.loadWatchtower());
-      await page.waitForTimeout(300);
-      const anySnoozeBtn = await page.evaluate(() => document.querySelector("#watchtower-list button[onclick^='snoozeAlert']")?.getAttribute("onclick"));
-      const anyId = anySnoozeBtn ? anySnoozeBtn.match(/'([^']+)'/)[1] : null;
-      if (anyId) {
-        await page.click(`#watchtower-list button[onclick*="snoozeAlert('${anyId}'"]`);
-        await page.waitForTimeout(300);
-        await page.click("#overlay-modal .snooze-chip[data-days='7']");
-        await page.fill("#snooze-reason", "m3-off check");
-        await page.click("#snooze-ok");
-        await page.waitForTimeout(300);
-        const m3Toast = await page.evaluate(() => document.querySelector("#toast")?.textContent || "");
-        ok("R5-22 · feature-detect — M3 off surfaces 'Snooze needs migration M3', not a crash", m3Toast === "Snooze needs migration M3", m3Toast);
-      } else ok("fixture · an alert existed to try snoozing with M3 off", false, "none found");
-      await page.evaluate(() => window.__mock.setMigrations({ m3: true }));
+      /* R90 · A: RETIRED — "M3 off ⇒ snoozing surfaces 'Snooze needs migration M3'". The M3
+         fallback and its toast are gone (watch_alerts.snoozed_until is live in production) and the
+         mock's m3 flag is inert, so there is no un-migrated state left to reach. */
 
       ok("no console errors", !page.__err, JSON.stringify(page.__err));
       await page.close();
@@ -314,20 +300,9 @@ const openDrawer = async (page, panelId) => {
       // Clean up for the M4 feature-detect check below.
       await page.evaluate(async () => { const { data } = await window.__mockDb.from("duplicate_dismissals").select("id"); for (const r of data) await window.__mockDb.from("duplicate_dismissals").delete().eq("id", r.id); });
 
-      // Feature-detect: M4 off → the button is hidden (Data Health AND the merge modal), not offered-then-failing.
-      await page.evaluate(() => window.__mock.setMigrations({ m4: false }));
-      await page.evaluate(() => window.loadDataHealth());
-      await page.waitForTimeout(500);
-      ok("R5-39 · feature-detect — M4 off hides 'Not a duplicate' in Data Health", await page.evaluate(() => ![...document.querySelectorAll("#data-content button")].some((b) => b.textContent.trim() === "Not a duplicate")));
-      await page.evaluate(() => {
-        const row = [...document.querySelectorAll("#data-content .imp-table tr")].find((r) => r.textContent.includes("Pike"));
-        const btn = [...row.querySelectorAll("button")].find((b) => b.textContent.includes("Merge"));
-        btn.click();
-      });
-      await page.waitForTimeout(400);
-      ok("R5-39 · feature-detect — M4 off hides it in the merge modal too", await page.evaluate(() => !document.querySelector("#merge-not-dup")));
-      await page.evaluate(() => window.closeModal());
-      await page.evaluate(() => window.__mock.setMigrations({ m4: true }));
+      /* R90 · A: RETIRED — "M4 off ⇒ 'Not a duplicate' is hidden in Data Health and the merge
+         modal". The duplicate_dismissals probe is gone (the table is live in production) and the
+         mock's m4 flag is inert; the button is always offered, which the checks above pin. */
 
       ok("no console errors", !page.__err, JSON.stringify(page.__err));
       await page.close();

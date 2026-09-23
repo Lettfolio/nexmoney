@@ -17,3 +17,4 @@ _cleanup.bat
 
 # R84: build output (Vercel builds it; never commit)
 dist/
+panel-r87/

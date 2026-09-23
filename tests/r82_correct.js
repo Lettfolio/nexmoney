@@ -409,7 +409,19 @@ const setPromos = (page, on) => page.evaluate(async (v) => {
          mock — so the absence has to be ASKED FOR rather than assumed. m12 is the mock's migration
          toggle for it: off ⇒ the function does not exist ⇒ 42883, which is exactly the production
          state this app must survive. §D2/§D3 below shim the RPC in-page and are unaffected. */
-      const page = await boot(browser, "p1", () => { window.__mockMigrations = { m12: false }; });
+      /* R90 · A: was reached with the pre-load seed {m12:false}; the m12 flag is inert now
+         (get_staff_activity is live in production), so the absent RPC is shimmed in-page — a
+         42883 {error} — and the app's own loader is re-run under it. Same state, same pins. */
+      const page = await boot(browser, "p1");
+      await page.evaluate(async () => {
+        const real = window.db.rpc.bind(window.db);
+        window.db.rpc = function (name, args) {
+          if (name === "get_staff_activity") return Promise.resolve({ data: null, error: { code: "42883", message: "function public.get_staff_activity() does not exist" } });
+          return real(name, args);
+        };
+        await loadStaffActivity();   // eslint-disable-line no-undef
+        window.db.rpc = real;
+      });
 
       /* D1 — THE DEFENSIVE HALF, and it is the half that ships first. The mock does not register
          get_staff_activity yet (it is agent B's file), so the RPC answers 42883 — and the app must
