@@ -326,7 +326,7 @@ const retChipAll = (page) => page.$eval("#ret-month-chips .ret-month-chip[data-m
       console.log("\n— §B1 · the two debtor KPIs sit together with their bases in the LABEL (p4)");
       const page = await boot(browser, "p4");
       const errBefore = realErrs(page).length;
-      await goPage(page, "reports", 3600);
+      await goPage(page, "reports/book", 3600);   // R89 · B: was "reports" — the KPI row is on Money & book
 
       const tiles = await page.$$eval("#report-kpis .kpi", (els) => els.map((e) => ({
         id: e.id || "",
@@ -348,6 +348,7 @@ const retChipAll = (page) => page.$eval("#ret-month-chips .ret-month-chip[data-m
 
       /* The second tile IS the Money owed panel's grand total — same model, not a re-derivation. */
       const owedTileNum = tiles[owedIdx] ? tiles[owedIdx].num : "";
+      await goPage(page, "reports/money", 3600);   // R89 · B: Money owed is drawn once, on the Money tab (the tile links there)
       const panelGrand = await page.$$eval("#report-owed-buckets .kpi", (els) => {
         const last = els[els.length - 1];
         return last ? (last.querySelector(".num") || {}).textContent.trim() : null;
@@ -372,7 +373,10 @@ const retChipAll = (page) => page.$eval("#ret-month-chips .ret-month-chip[data-m
         (await page.$$eval("#report-advisers table tr:first-child th .money-basis", (e) => e.length)) === 0);
       ok("§B2d · the Overdue column has left this table (it renders twice more on this page)",
         !heads.some((h) => /^Overdue/i.test(h.t)), JSON.stringify(heads.map((h) => h.t)));
-      ok("§B2e · …and the adoption strip below still carries it", (await page.$$eval("#report-adoption .adopt-overdue", (e) => e.length)) > 0);
+      // R89 · B: the adoption strip is the activity VIEW of the same adviser table now.
+      await page.evaluate(() => repSetAdvView("activity")); await page.waitForTimeout(2500);
+      ok("§B2e · …and the adoption strip (the table's activity view) still carries it", (await page.$$eval("#report-adoption .adopt-overdue", (e) => e.length)) > 0);
+      await page.evaluate(() => repSetAdvView("month")); await page.waitForTimeout(400);
       /* The whole point of the drop: the table fits its own panel again. */
       const fit = await page.evaluate(() => {
         const t = document.querySelector("#report-advisers table");
@@ -381,14 +385,11 @@ const retChipAll = (page) => page.$eval("#ret-month-chips .ret-month-chip[data-m
       });
       ok("§B2f · the scoreboard fits its panel at 1280 — no clipped columns", !!fit && fit.table <= fit.wrap + 1, JSON.stringify(fit));
 
+      /* R89 · B: Monday money's "Per adviser" table (#money-adviser-table, "Attach (2026)") is retired —
+         it restated the scoreboard — so the year-vs-month pair is gone and with it the need for its tooltip.
+         Asserted: the table is gone. Was §B2g/§B2h on its header. */
       await goPage(page, "money", 3600);
-      const mHead = await page.$$eval("#money-adviser-table tr:first-child th", (els) => els.map((e) => ({
-        t: e.textContent.replace(/\s+/g, " ").trim(), title: e.getAttribute("title") || "",
-      })));
-      const mAttach = mHead.filter((h) => /^Attach/.test(h.t))[0];
-      ok("§B2g · Monday money's header names the YEAR — \"Attach (2026)\"", !!mAttach && /^Attach \(20\d\d\)$/.test(mAttach.t), JSON.stringify(mHead.map((h) => h.t)));
-      ok("§B2h · …and its tooltip now says why the two pages can differ",
-        !!mAttach && /Reports scoreboard/.test(mAttach.title), mAttach && mAttach.title.slice(0, 160));
+      ok("§B2g · Monday money no longer draws a second per-adviser table", !(await page.$("#money-adviser-table")));
       eq("§B2 · no console errors", realErrs(page).slice(errBefore), []);
       await page.close();
     }
@@ -397,7 +398,7 @@ const retChipAll = (page) => page.$eval("#ret-month-chips .ret-month-chip[data-m
       console.log("\n— §B3 · the zero convention — £0 for a real zero, — only where the question does not apply (p4)");
       const page = await boot(browser, "p4");
       const errBefore = realErrs(page).length;
-      await goPage(page, "reports", 3600);
+      await goPage(page, "reports/money", 3600);   // R89 · B: Money owed (its ageing bands) is on the Money tab now
 
       /* An ageing band with nothing in it is a real zero on BOTH pages. Before R74, Reports said
          "£0 · 0 cases" and Monday money said "—" for the same band off the same model. */
@@ -410,16 +411,10 @@ const retChipAll = (page) => page.$eval("#ret-month-chips .ret-month-chip[data-m
       ok("§B3a · fixture sanity — at least one ageing band on Reports is genuinely empty", repEmpty.length > 0, JSON.stringify(repBuckets));
       ok("§B3b · an empty band on Reports reads £0, never a dash", repEmpty.every((b) => /£0/.test(b.num) && !/—/.test(b.num)), JSON.stringify(repEmpty));
 
-      await goPage(page, "money", 3600);
-      const mRows = await page.$$eval("#money-owed-ageing tr, #page-money table tr", (els) => els.map((r) =>
-        [...r.cells].map((c) => c.textContent.replace(/\s+/g, " ").trim())));
-      const ageRows = mRows.filter((r) => r.length === 3 && /days|No completion date/i.test(r[0]));
-      const emptyAge = ageRows.filter((r) => r[1] === "0");
-      ok("§B3c · fixture sanity — Monday money shows the same ageing bands", ageRows.length > 0, JSON.stringify(ageRows));
-      ok("§B3d · an empty band on Monday money reads £0 too, matching Reports (D#4)",
-        emptyAge.every((r) => /£0/.test(r[2]) && r[2] !== "—"), JSON.stringify(emptyAge));
-
-      await goPage(page, "reports", 3600);
+      /* R89 · B: Monday money's "Owed to you, by age" table is retired — Money owed is drawn ONCE (the
+         buckets above ARE on the Money tab), so there is no second copy to agree with. Was §B3c/§B3d. */
+      ok("§B3c · there is exactly one Money owed drawing (no second ageing table)", await page.evaluate(() => document.querySelectorAll("#report-owed-buckets").length === 1 && !document.getElementById("money-owed")));
+      await goPage(page, "reports/month", 3600);   // R89 · B: was "reports" — a bare #reports reopens the last tab (Money, just visited)
       /* A dash still means "not applicable", and now says which. */
       const noTargetTitle = await page.evaluate(() => {
         const c = document.querySelector("#report-advisers .adv-target-cell[data-pct='']");
@@ -570,57 +565,36 @@ const retChipAll = (page) => page.$eval("#ret-month-chips .ret-month-chip[data-m
       const errBefore = realErrs(page).length;
       await goPage(page, "reports", 3800);
 
-      /* R88 · E: was aria-selected (role=tab); the section pills are aria-pressed toggle buttons in a
-         role=group now (they are a segment control, not a tab panel) — the live state is the same. */
-      const sections = await page.$$eval("#reports-jump-chips .seg-btn", (els) => els.map((e) => ({
-        key: e.dataset.reportsJump, label: e.textContent.trim(), active: e.classList.contains("active"), sel: e.getAttribute("aria-pressed"),
+      /* R89 · B — CONTRACT CHANGE. The section pills are the page-tab strip now (#reports-tabs); the
+         level-2 strip is per tab and opt-in, and it no longer sticks (no scroll-spy measures an offset
+         for it — each tab is a screen or three, not 11,600px). What §D2 protected — one selected
+         section with a live aria-pressed, a handful of chips per section that never overflows, every
+         panel reachable — is asserted over the tabs. Was: #reports-jump pills, two sticky strips. */
+      const sections = await page.$$eval("#reports-tabs > .seg-btn", (els) => els.map((e) => ({
+        key: e.dataset.tab, label: e.textContent.trim(), active: e.classList.contains("active"), sel: e.getAttribute("aria-pressed"),
       })));
-      ok("§D2a · the section pills are on the page", sections.length >= 4, JSON.stringify(sections.map((s) => s.key)));
+      ok("§D2a · the section tabs are on the page", sections.length >= 4, JSON.stringify(sections.map((s) => s.key)));
       eq("§D2b · exactly one is selected", sections.filter((s) => s.active).length, 1);
       eq("§D2c · aria-pressed is a live state, not a hard-coded false", sections.filter((s) => s.sel === "true").length, 1);
 
-      const totalPanels = await page.evaluate(() => window.__r74AllRepChips ? window.__r74AllRepChips() : null);
+      await page.evaluate(() => repShowChips(true));
       const perSection = [];
-      for (const s of sections) {
-        await page.click(`#reports-nav-${s.key}`);
-        await page.waitForTimeout(700);
+      for (const s of sections.filter((x) => x.key !== "money")) {
+        await page.click(`#reports-tabs-${s.key}`);
+        await page.waitForTimeout(1500);
         const chips = await page.$$eval("#rep-nav-chips .seg-btn", (els) => els.map((e) => e.textContent.trim()));
         const of = await page.evaluate(() => {
           const w = document.getElementById("rep-nav-chips");
           return { sw: w.scrollWidth, cw: w.clientWidth };
         });
-        perSection.push({ key: s.key, n: chips.length, overflow: of.sw > of.cw + 1 });
+        const panels = await page.evaluate((k) => REPORT_SECTIONS.find((x) => x[0] === k)[3].filter((sel) => { const el = document.querySelector(sel); return el && el.offsetParent !== null; }).length, s.key);
+        perSection.push({ key: s.key, n: chips.length, panels, overflow: of.sw > of.cw + 1 });
       }
-      /* The panel's number was "20 → 4–6"; the real spread on this role is 1–7, and what actually
-         matters is that no strip needs a chevron at the width the app is used at. */
-      ok("§D2d · every section's chip strip is a handful of chips, never twenty (D#6)",
-        perSection.every((p) => p.n >= 1 && p.n <= 8), JSON.stringify(perSection));
+      ok("§D2d · every tab's chip strip is a handful of chips, never twenty (D#6)",
+        perSection.every((p) => p.n <= 8), JSON.stringify(perSection));
       ok("§D2e · …and none of them overflows at 1160", perSection.every((p) => !p.overflow), JSON.stringify(perSection));
-      if (totalPanels != null) {
-        const sum = perSection.reduce((a, p) => a + p.n, 0);
-        ok("§D2f · the sections between them account for every visible panel — none is unreachable",
-          sum >= totalPanels, JSON.stringify({ sum, totalPanels, perSection }));
-      }
-
-      /* The pills stay reachable while you move — the level-1 control must not scroll away. */
-      const sticky = await page.evaluate(() => {
-        const s = document.getElementById("reports-jump"), n = document.getElementById("rep-nav");
-        const cs = getComputedStyle(s), cn = getComputedStyle(n);
-        return { sPos: cs.position, nPos: cn.position, sTop: cs.top, nTop: cn.top };
-      });
-      eq("§D2g · the section strip is sticky", sticky.sPos, "sticky");
-      eq("§D2h · …and the chip strip under it still is", sticky.nPos, "sticky");
-      ok("§D2i · the two do not sit on top of each other — the chip strip is offset below the pills",
-        parseFloat(sticky.nTop) > parseFloat(sticky.sTop), JSON.stringify(sticky));
-
-      await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
-      await page.waitForTimeout(900);
-      const visibleAfterScroll = await page.evaluate(() => {
-        const s = document.getElementById("reports-jump");
-        const r = s.getBoundingClientRect();
-        return r.top >= -2 && r.bottom <= window.innerHeight;
-      });
-      ok("§D2j · the pills are still on screen after scrolling to the bottom of the page", visibleAfterScroll);
+      ok("§D2f · every tab with 2+ visible panels offers its chips; a one-panel tab needs none",
+        perSection.every((p) => (p.panels >= 2 ? p.n >= 2 : p.n === 0)), JSON.stringify(perSection));
       eq("§D2 · no console errors", realErrs(page).slice(errBefore), []);
       await page.close();
     }
@@ -630,19 +604,17 @@ const retChipAll = (page) => page.$eval("#ret-month-chips .ret-month-chip[data-m
       const page = await boot(browser, "p4", { width: 1160, height: 900 });
       const errBefore = realErrs(page).length;
       await goPage(page, "reports", 3800);
-      await page.click("#reports-nav-month");
-      await page.waitForTimeout(700);
-      const before = await page.evaluate(() => (document.querySelector("#reports-jump-chips .seg-btn.active") || {}).dataset.reportsJump);
-      eq("§D3a · starting in \"This month\"", before, "month");
+      /* R89 · B: Money owed is drawn once, on the Owner's Money tab; the deep link opens that tab and
+         scrolls to the panel. Was: switch the "Money & book" pill, chip strip holding "owed". */
+      eq("§D3a · starting in \"This month\"", await page.evaluate(() => currentPageTab("reports")), "month");
 
       /* The Watchtower's fee_aging_60 link, the one deep link that crosses sections. */
       await page.evaluate(() => window.gotoMoneyOwed());
-      await page.waitForTimeout(1600);
-      const after = await page.evaluate(() => (document.querySelector("#reports-jump-chips .seg-btn.active") || {}).dataset.reportsJump);
-      eq("§D3b · gotoMoneyOwed lands in \"Money & book\" with the tabs saying so", after, "money");
-      const chips = await page.$$eval("#rep-nav-chips .seg-btn", (els) => els.map((e) => e.dataset.repJump));
-      ok("§D3c · …and the chip strip now holds that section's panels, Money owed among them",
-        chips.includes("owed"), JSON.stringify(chips));
+      await page.waitForTimeout(2500);
+      const after = await page.evaluate(() => ({ tab: currentPageTab("reports"), hash: location.hash, pressed: (document.querySelector("#reports-tabs > .seg-btn[aria-pressed=true]") || {}).dataset }));
+      eq("§D3b · gotoMoneyOwed lands on the Money tab with the tabs saying so", [after.tab, after.hash, after.pressed && after.pressed.tab], ["money", "#reports/money", "money"]);
+      const owed = await page.evaluate(() => { const r = document.getElementById("report-owed-panel").getBoundingClientRect(); return { top: r.top, vh: innerHeight, painted: document.querySelectorAll("#report-owed-buckets .kpi").length }; });
+      ok("§D3c · …and Money owed is painted and scrolled into view", owed.painted > 0 && owed.top >= -2 && owed.top < owed.vh, JSON.stringify(owed));
       eq("§D3 · no console errors", realErrs(page).slice(errBefore), []);
       await page.close();
     }
@@ -701,14 +673,13 @@ const retChipAll = (page) => page.$eval("#ret-month-chips .ret-month-chip[data-m
       const sub = await txt(page, "#dh-page-sub");
       ok("§E1j · …the number moved into the page's own sub-line", /across \d+ clients?/.test(sub), sub);
 
-      const key = await txt(page, "#dh-key");
-      ok("§E1k · a one-line key above the wall says what orange and navy mean",
-        key != null && /Orange/.test(key) && /Navy/.test(key), key);
-      const keyBefore = await page.evaluate(() => {
-        const k = document.getElementById("dh-key"), w = document.getElementById("dh-kpi-row");
-        return !!(k && w && (k.compareDocumentPosition(w) & Node.DOCUMENT_POSITION_FOLLOWING));
-      });
-      ok("§E1l · …and it sits ABOVE the wall it describes", keyBefore);
+      /* R89 · A: was "a one-line Orange/Navy key sits above the wall". Panel 05 #6 deleted it with the
+         readiness list (prose rule: one standing line per page); what it explained is carried by the page
+         itself now — every fault row in the to-do list says "Fix" and carries the orange edge, every
+         watchlist row says "Read". Pinned: the key is gone, and the to-do rows say which kind they are. */
+      ok("§E1k · the Orange/Navy key is gone (05 #6)", !(await page.$("#dh-key")));
+      const kinds = await page.evaluate(() => [...document.querySelectorAll("#dh-readiness .dh-check")].map((c) => [c.dataset.band, (c.querySelector(".dh-check-go") || {}).textContent]));
+      ok("§E1l · …each to-do row says Fix (a fault) or Read (the watchlist)", kinds.length > 0 && kinds.every(([b, g]) => g === (b === "watch" ? "Read" : "Fix")), JSON.stringify(kinds));
       eq("§E1 · no console errors", realErrs(page).slice(errBefore), []);
       await page.close();
     }
@@ -729,15 +700,16 @@ const retChipAll = (page) => page.$eval("#ret-month-chips .ret-month-chip[data-m
         const h = document.getElementById("dh-readiness-headline");
         const tile = document.getElementById("dh-tile-loan");
         const panel = document.getElementById("dh-loan-panel");
-        const rowItem = [...document.querySelectorAll("#dh-readiness .dh-readiness-item")]
-          .filter((it) => (it.getAttribute("onclick") || "").indexOf("'dh-tile-loan'") >= 0)[0];
+        /* R89 · A: was the .dh-readiness-item row for the loan tile; now the to-do list's loan row
+           (data-n), whose head also carries the panel's "N left" counter (was the panel's own h3). */
+        const rowItem = document.querySelector("#dh-readiness .dh-check[data-tile='dh-tile-loan']");
         return {
           headline: h ? Number(h.dataset.total) : null,
           headlineText: h ? h.textContent.replace(/\s+/g, " ").trim() : null,
           checks: h ? Number(h.dataset.checks) : null,
           tile: tile ? Number(tile.querySelector(".num").textContent.trim()) : null,
-          rollup: rowItem ? Number(rowItem.querySelector(".dh-readiness-count").textContent.trim()) : null,
-          panelLeft: panel ? ((panel.querySelector("h3 .dh-left-n") || {}).textContent || "") : null,
+          rollup: rowItem ? Number(rowItem.dataset.n) : null,
+          panelLeft: rowItem ? ((rowItem.querySelector(".dh-check-head .dh-left-n") || {}).textContent || "") : null,
           rows: panel ? panel.querySelectorAll(".row-item").length : null,
         };
       });
@@ -784,7 +756,7 @@ const retChipAll = (page) => page.$eval("#ret-month-chips .ret-month-chip[data-m
       const errBefore = realErrs(page).length;
       await goPage(page, "data", 1500);
       const gate = await page.evaluate(() => ({
-        navHidden: document.querySelector('#topnav button[data-page="data"]').classList.contains("hidden"),
+        navHidden: document.querySelector('#topnav button[data-page="operations"]').classList.contains("hidden"),   // R89 · F — was data-page="data"; Data health is a tab of Operations
         onToday: !document.querySelector("#page-dashboard").classList.contains("hidden") && document.querySelector("#page-data").classList.contains("hidden"),
       }));
       ok("§E3a · the Data health nav entry is hidden for an adviser (R87)", gate.navHidden, JSON.stringify(gate));

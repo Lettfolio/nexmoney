@@ -345,6 +345,7 @@ const money = (n) => "£" + Math.round(Number(n) || 0).toLocaleString("en-GB");
         const lost = rets.filter((c) => c.stage === "not_proceeding").length;
         return (won + lost) ? Math.round((won / (won + lost)) * 100) + "%" : "—";
       });
+      await goto(page, "reports/book");   // R89 · B: the firm KPI row is on the Money & book tab, painted when shown
       const kpiText = await txt(page, "#report-kpis");
       ok("A10 · the firm Retention conversion tile is unchanged by the refactor",
         (kpiText || "").includes(firmRet), JSON.stringify({ firmRet, kpiText: (kpiText || "").slice(0, 200) }));
@@ -378,7 +379,7 @@ const money = (n) => "£" + Math.round(Number(n) || 0).toLocaleString("en-GB");
     {
       console.log("\n— §B · M14 · Settings › Change history CSV (p4 Daniel, owner)");
       const page = await boot(browser, "p4");
-      await goto(page, "settings");
+      await goto(page, "settings/data");   // R89 · C: was "settings" — Settings is five tabs; Change history is on the data tab
 
       ok("B1 · the owner gets the change-history panel", await page.evaluate(() => !document.querySelector("#change-history-panel").classList.contains("hidden")));
       const label = await page.evaluate(() => { const b = document.querySelector("#ch-csv"); return b ? b.textContent.trim() : null; });
@@ -592,12 +593,12 @@ const money = (n) => "£" + Math.round(Number(n) || 0).toLocaleString("en-GB");
     {
       console.log("\n— §C3 · the caveat paragraphs point at the strip instead of restating it (p4)");
       const page = await boot(browser, "p4");
-      await goto(page, "settings");
+      await goto(page, "settings/automations");   // R89 · C: was "settings" — Settings is five tabs; what this reads is on the automations tab
       const form = await page.evaluate(() => document.querySelector("#settings-form").innerText.replace(/\s+/g, " "));
       ok("C12 · no Settings paragraph still says the bare “Requires RESEND_API_KEY”",
         !/Requires RESEND_API_KEY/.test(form), form.slice(0, 200));
       ok("C12b · the owner-digest line points at the status strip instead",
-        /Sent daily at ~07:30 UK time\. Needs email sending to be working \(see the Email sending status at the top of this page\)/.test(form),
+        /Sent daily at ~07:30 UK time\. Needs email sending to be working \(see the Email sending status on the Firm & rules tab\)/.test(form),   // R89 · D: was "at the top of this page" — the strip is on the Firm & rules tab, this line on Automations
         (form.match(/Sent daily[^.]*\.[^.]*\./) || [""])[0]);
       const docNote = await page.evaluate(() => {
         const d = document.querySelector("#doc-chase-more");
@@ -606,7 +607,7 @@ const money = (n) => "£" + Math.round(Number(n) || 0).toLocaleString("en-GB");
         return el ? el.innerText.replace(/\s+/g, " ") : null;
       });
       ok("C12c · the document-chase rules point at it too, and keep the rule itself",
-        /see the Email sending status at the top of this page/.test(docNote || "") && /nothing goes out, whatever this says/.test(docNote || ""),
+        /see the Email sending status on the Firm & rules tab/.test(docNote || "")   /* R89 · D: was "at the top of this page" */ && /nothing goes out, whatever this says/.test(docNote || ""),
         (docNote || "").slice(-200));
       await page.close();
     }
@@ -714,7 +715,7 @@ const money = (n) => "£" + Math.round(Number(n) || 0).toLocaleString("en-GB");
     {
       console.log("\n— §E · A5 · Settings › Protection referral partner (p4 Daniel, owner)");
       const page = await boot(browser, "p4");
-      await goto(page, "settings");
+      await goto(page, "settings/automations");   // R89 · C: was "settings" — Settings is five tabs; what this reads is on the automations tab
 
       ok("E1 · the field exists, in the Protection & GI section",
         await page.evaluate(() => {

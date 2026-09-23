@@ -684,7 +684,10 @@ const boxes = (page, sel) => page.evaluate((s) => [...document.querySelectorAll(
 
     const strips = await page.evaluate(() => {
       const out = {};
-      [["rep-nav", "rep-nav-chips"], ["settings-jump", "settings-jump-chips"], ["reports-jump", "reports-jump-chips"]].forEach(([bid, wid]) => {
+      /* R89 · fixer — was also ["settings-jump", …] and ["reports-jump", …]: both strips are gone
+         (R89 · B/C made them page tabs), so E1c passed vacuously on `hidden`. E1c now asserts the strip
+         that replaced the Reports section pills — the #reports-tabs page-tab strip. */
+      [["rep-nav", "rep-nav-chips"]].forEach(([bid, wid]) => {
         const bar = document.getElementById(bid), wrap = document.getElementById(wid);
         if (!bar || !wrap || bar.hidden) { out[bid] = { hidden: true }; return; }
         const arrow = bar.querySelector(".chip-scroll-arrow");
@@ -702,8 +705,18 @@ const boxes = (page, sel) => page.evaluate((s) => [...document.querySelectorAll(
       strips["rep-nav"].hidden || strips["rep-nav"].arrow === true, JSON.stringify(strips["rep-nav"]));
     ok("E1b · …shown exactly when the strip has somewhere to scroll to",
       strips["rep-nav"].hidden || strips["rep-nav"].arrowVisible === strips["rep-nav"].overflows, JSON.stringify(strips["rep-nav"]));
-    ok("E1c · …and so does the Reports SECTION strip, which had no affordance at all",
-      strips["reports-jump"].hidden || strips["reports-jump"].arrow === true, JSON.stringify(strips["reports-jump"]));
+    /* R89 · fixer — was: `strips["reports-jump"].hidden || …arrow` (vacuous since R89: #reports-jump is
+       gone). Now: the Reports SECTION strip is the page-tab strip — on screen, one strip, ≥ 2 tabs, exactly
+       one pressed (and it is the tab on screen), and it fits at desktop width (nothing to scroll to, so no
+       chevron is owed; on a phone activatePageTab scrolls the pressed tab into view — r89_tabs). */
+    const secStrip = await page.evaluate(() => {
+      const all = document.querySelectorAll("#page-reports .page-tabs"), s = document.getElementById("reports-tabs");
+      if (!s) return { missing: true, n: all.length };
+      const bs = [...s.querySelectorAll(".seg-btn[data-tab]")], on = bs.filter((b) => b.getAttribute("aria-pressed") === "true");
+      return { n: all.length, visible: s.offsetParent !== null, tabs: bs.length, pressed: on.map((b) => b.dataset.tab), current: currentPageTab("reports"), fits: s.scrollWidth <= s.clientWidth + 1 };
+    });
+    ok("E1c · …and the Reports SECTION strip is now the page-tab strip: one, on screen, one tab pressed (the one shown), fits at 1440",
+      secStrip.n === 1 && secStrip.visible && secStrip.tabs >= 2 && secStrip.pressed.length === 1 && secStrip.pressed[0] === secStrip.current && secStrip.fits, JSON.stringify(secStrip));
 
     const atEnd = await page.evaluate(async () => {
       const bar = document.getElementById("rep-nav"), wrap = document.getElementById("rep-nav-chips");

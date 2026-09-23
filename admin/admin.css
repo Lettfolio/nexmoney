@@ -1760,7 +1760,6 @@ th .money-basis {
 .owed-cell { text-align: right; white-space: nowrap; }
 .owed-table th:not(:first-child) { text-align: right; }
 .owed-total-row > td { border-top: 2px solid var(--navy); background: var(--white); }
-tr.owed-hot > td { background: var(--red-bg); }
 
 /* ---- Rate-end book value (Reports) --------------------------------------- */
 .rb-table .rb-bucket-row { cursor: pointer; }
@@ -1800,8 +1799,6 @@ tr.owed-hot > td { background: var(--red-bg); }
 #page-money .panel-sub code { font-size: 12px; }
 #page-money .imp-table td:last-child,
 #page-money .imp-table th:last-child { text-align: right; }
-#page-money #money-adviser-table td:not(:first-child),
-#page-money #money-adviser-table th:not(:first-child) { text-align: right; }
 #page-money .row-item .t { cursor: pointer; }
 /* ROUND 7 — SPEED TO LEAD · The accept clock on the lead inbox, the round-robin routing note, and the Lead-response tables on Reports. */
 
@@ -2015,24 +2012,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 #page-reports .panel,
 #page-reports #report-kpis,
 #page-reports .report-live-note { scroll-margin-top: var(--rep-jump-scroll, 96px); }
-#page-settings .panel,
-#page-settings .settings-details,
-#page-settings #settings-form h3,
-#page-settings #settings-form h4 { scroll-margin-top: var(--settings-jump-scroll, 96px); }
-/* Reports sections, section nav and ledger drawers · Reports is five questions, not seventeen panels. */
-.report-section-head {
-  margin: 28px 0 12px;
-  padding-top: 14px;
-  border-top: 2px solid var(--line, var(--light));
-  font-size: 18px;
-  /* The same measured offset every other Reports jump target gets, so a section header lands BELOW the sticky #rep-nav strip rather than behind it */
-  scroll-margin-top: var(--rep-jump-scroll, 96px);
-}
-/* The first header opens the page — no rule above it. */
-#page-reports .report-section-head:first-of-type { margin-top: 8px; padding-top: 0; border-top: none; }
-.rep-sections-nav { margin: 0 0 6px; }
-.rep-sections-nav[hidden] { display: none; }
-.rep-sections-nav .rep-nav-chips { margin-bottom: 4px; }
+/* Reports ledger drawers. */
 .report-ledger { margin-top: 12px; }
 .report-ledger > summary {
   display: inline-flex; align-items: center; gap: 7px;
@@ -2796,21 +2776,11 @@ details.vault-more > .vault-more-menu { position: absolute; right: 0; top: calc(
 /* A5 · OVERFLOW YOU CAN SEE, AND A GRID THAT FITS (panel D#6, D#11, E#4). */
 .chip-scroll-arrow { top: 50%; right: 4px; transform: translateY(-50%); width: 28px; height: 28px; font-size: 17px; }
 .chip-scroll-arrow:hover { transform: translateY(-50%) scale(1.08); }
-.rep-nav.is-scrollable .chip-scroll-arrow,
-.rep-sections-nav.is-scrollable .chip-scroll-arrow { opacity: 1; pointer-events: auto; }
-/* The Reports SECTION strip had neither fade nor arrow; it gets the same pair as #rep-nav. */
-.rep-sections-nav { position: relative; }
-.rep-sections-nav.is-scrollable::after {
-  content: "";
-  position: absolute; top: 0; right: 0; bottom: 6px; width: 44px;
-  pointer-events: none; opacity: 1; transition: opacity .2s ease;
-  background: linear-gradient(90deg, rgba(246,248,251,0), var(--canvas) 72%);
-}
+.rep-nav.is-scrollable .chip-scroll-arrow { opacity: 1; pointer-events: auto; }
 /* At the right-hand end there is nothing left to hint at: both the fade and the arrow go, which is the signal that the strip has ended. */
 .rep-nav.is-scrollable::after { opacity: 1; transition: opacity .2s ease; }
-.rep-nav.chip-at-end::after, .rep-sections-nav.chip-at-end::after { opacity: 0; }
-.rep-nav.chip-at-end .chip-scroll-arrow,
-.rep-sections-nav.chip-at-end .chip-scroll-arrow { opacity: 0; pointer-events: none; }
+.rep-nav.chip-at-end::after { opacity: 0; }
+.rep-nav.chip-at-end .chip-scroll-arrow { opacity: 0; pointer-events: none; }
 #report-advocacy-panel .adv-grid { grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr)); }
 .board-scroll-wrap { position: relative; }
 .board-scroll-arrow-left {
@@ -2884,25 +2854,13 @@ details.vault-more > .vault-more-menu { position: absolute; right: 0; top: calc(
 /* R87 · book · C3 — the row's dial pair sits on the verb line. */
 #ret-rates-list .ret-row-acts { display: inline-flex; vertical-align: middle; margin-left: 8px; }
 .prot-rank { font-size: 11.5px; font-variant-numeric: tabular-nums; margin-right: 2px; }
-/* A4c — the two Reports strips now stack: level-1 sections above level-2 panels, both sticky, so jumping never scrolls the section pills out of reach. */
-.rep-sections-nav {
-  position: sticky; top: 0; z-index: 13;         /* above .rep-nav's 12 — level 1 sits over level 2 */
-  margin: 0 -32px 0; padding: 8px 32px 0;
-  background: var(--canvas);
-}
-.rep-sections-nav .rep-nav-chips { margin-bottom: 4px; }
-/* A5c — the key above the Data health tile wall, and the two band headings the wall is now sorted inside. */
+/* A5c — the two band headings the Data health tile wall is sorted inside. */
 #dh-kpi-row { grid-auto-rows: auto; }
 .dh-band-h {
   grid-column: 1 / -1; margin: 10px 0 0; font-size: 11.5px; font-weight: 800;
   letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted);
   display: flex; align-items: baseline; gap: 8px;
 }
-.dh-band-h .dh-band-why { font-weight: 400; letter-spacing: 0; text-transform: none; font-size: 11.5px; }
-.dh-key { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; font-size: 12px; color: var(--muted); margin: 0 0 8px; }
-.dh-key-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px; vertical-align: -1px; margin-right: 5px; }
-.dh-key-swatch.is-warn { background: #f5a623; }
-.dh-key-swatch.is-plain { background: var(--navy); }
 /* A5a — the live "N left in this list" counter on a fix panel's own heading. */
 .dh-left-n { font-size: 12px; font-weight: 600; color: var(--muted); margin-left: 8px; }
 /* A2/A4b — the adviser scoreboard fits its panel again. */
@@ -3530,7 +3488,6 @@ details.hdr-more > .hdr-more-menu > .hidden { display: none; }
   #table-wrap .board-scroll-wrap--table .board-scroll-arrow-left { display: none; }
   .board-scroll-wrap--table:has(table.mob-cards)::before,
   .board-scroll-wrap--table:has(table.mob-cards) .board-scroll-arrow-left { display: none; }
-  .rep-sections-nav { margin: 0 -12px 0; padding: 6px 12px 0; }
   /* The modal's own padding drops to 18px at this width (see .modal), so both bleeds must match it, and the strip loses 12px it does not need on a phone. */
   :root { --modal-topbar-h: 44px; }
   #modal .modal-topbar { margin: -18px -18px 6px; padding: 0 12px 0 18px; border-radius: 14px 14px 0 0; }
@@ -3693,6 +3650,12 @@ details.hdr-more > .hdr-more-menu > .hidden { display: none; }
 .kit-row .row-fact .ret-row-tel, .kit-row .row-fact .row-sms-link { margin-left: 2px; }
 .kit-row .row-acts { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .kit-row .row-sub { flex: 1 1 100%; font-size: 12.5px; color: var(--muted); }
+/* R89 · F — the page-tab strip (pageTabsHtml / activatePageTab, panel-r87/TABS.md): the same chip tray, one step
+   bigger because it names the rooms of a page, not a filter. Its phone rules are the .seg-strip ones below (one
+   scrolling line, 44px chips). An empty slot takes no room. */
+.page-tabs-slot:empty { display: none; }
+.page-tabs { margin-bottom: 16px; }
+.page-tabs > .seg-btn { font-size: 14px; padding: 7px 14px; }
 /* Phone layout for the kit lives in the tap-target block below (one @media, not two). */
 
 /* ==========================================================================
@@ -3829,6 +3792,72 @@ details.hdr-more > .hdr-more-menu > .hidden { display: none; }
 .compat-select { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0; overflow: hidden; clip-path: inset(50%); opacity: 0; pointer-events: none; }
 .ret-sub-row > #ret-rates-how { display: inline-flex; align-items: baseline; flex-wrap: wrap; }
 #ret-rates-how > details[open] { flex-basis: 100%; }
+
+/* R89 · B — REPORTS AS TABS. The level-2 chip strip lives inside the tab on screen and no longer
+   sticks (no scroll-spy measures an offset for it); the page-head door, the two view toggles (one
+   funnel, one adviser table), the spacing that left the markup's inline styles, and the Money tab's
+   link line. The month picker is not offered on the Money tab (it reads last week, not a month). */
+#page-reports .rep-nav { position: static; margin: 0 0 8px; padding: 0; border-bottom: none; background: none; }
+#page-reports:has(> #page-money:not(.hidden)) > .page-head #report-month { display: none; }
+.rep-adv-views, .rep-funnel-views { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 4px 0 10px; }
+.rep-funnel-views { margin: 0; }
+.rep-adv-views-lbl { font-size: 12px; color: var(--muted); }
+.rep-adv-view-head { align-items: flex-start; gap: 12px; }
+.rep-adv-view-head > .panel-sub { flex: 1 1 auto; margin: 0; }
+.rep-mi-conv { margin-top: 14px; }
+.rep-mi-win { margin-top: 12px; }
+#report-mi-funnel-live > .mi-csv-btn { margin-top: 10px; }
+#report-forecast-headline { margin: 8px 0 12px; }
+.rep-forecast-target { margin: 8px 0 0; }
+#report-forecast-hint { margin: 10px 0 0; }
+.rep-money-links { margin: 4px 0 16px; }
+
+/* ==========================================================================
+   R89 · A — OPERATIONS. The h2 is "Operations", the tab labels name the sections: each tab keeps its tools row
+   (.ops-tab-head), Import's doors are h3s. DATA HEALTH ONCE (05 #6): tiles are the header row; under them the
+   to-do list (#dh-readiness.dh-todo), one row per check whose head (.dh-check-btn) folds its panel (id and
+   .hidden kept). A check at zero folds away with its tile (.dh-clean); the clean toggle or a tile click (.dh-open) shows it.
+   ========================================================================== */
+.ops-tab-head { justify-content: flex-end; }
+.ops-tab-head > .panel-sub { flex: 1 1 auto; margin: 0; max-width: none; }
+.ops-door-h { margin: 0 0 6px; }
+.ops-door-h-2 { margin-top: 28px; }
+.dh-todo { display: flex; flex-direction: column; gap: 10px; }
+.dh-check { margin: 0; }
+.dh-check.dh-clean:not(.dh-open) { display: none; }
+#data-content:has(#dh-kpi-row.dh-show-clean) .dh-check.dh-clean { display: block; }
+.dh-check-head { margin: 0; font-size: 15px; }
+.dh-check-btn {
+  display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 8px 16px;
+  background: var(--white); border: 1px solid var(--border); border-radius: var(--radius);
+  font: inherit; font-weight: 700; color: var(--dark); text-align: left; cursor: pointer;
+}
+.dh-check-btn:hover { border-color: var(--border-strong); }
+.dh-check[data-band="counted"] > .dh-check-head > .dh-check-btn { border-left: 3px solid var(--orange); }
+.dh-check.dh-open > .dh-check-head > .dh-check-btn { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+.dh-check-name { flex: 1 1 auto; min-width: 0; }
+.dh-check-btn > .dh-left-n, .dh-check-n { margin-left: 0; font-size: 12px; font-weight: 600; color: var(--muted); white-space: nowrap; }
+.dh-check-go { font-size: 12.5px; font-weight: 600; color: var(--navy); white-space: nowrap; }
+.dh-check-go::after { content: " ▾"; }
+.dh-check.dh-open .dh-check-go::after { content: " ▴"; }
+.dh-check > .panel { margin: 0; border-top: 0; border-top-left-radius: 0; border-top-right-radius: 0; }
+
+/* ==========================================================================
+   R89 · C — SETTINGS AS FIVE TABS (panel-r87/R89-DESIGN.md slice C). The one #settings-form holds the
+   Firm & rules / Automations / Integrations panels; on Team & security or Data it has nothing on
+   screen, so it takes no room. The sticky footer (#settings-save, the ONE Save) shows only while a
+   form tab is on screen; its orange edge only while something is unsaved.
+   ========================================================================== */
+#settings-form:not(.settings-form-mine):not(:has(> [data-tabpanel]:not(.hidden))) { display: none; }
+#page-settings:not(:has(#settings-form > [data-tabpanel]:not(.hidden))) #settings-save { display: none; }
+.settings-save-bar:not(.has-changes) { border-left-color: var(--border-strong); }
+.settings-save-bar > #save-settings-btn { min-width: 96px; }
+.settings-save-bar > .sdb-msg { flex-basis: 120px; }
+.settings-grid > .set-sec-h { grid-column: 1 / -1; margin: 0; }
+.team-contact { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 2px 0 6px; }
+.team-contact > .team-phone { flex: 1; min-width: 130px; }
+.team-contact > .team-signoff { flex: 2; min-width: 220px; resize: vertical; }
+.team-contact-self > .team-contact-ro { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
 
 /* ==========================================================================
    FOCUS (R87 · E3, panel 06 #6). One rule instead of nineteen per-class ones. :is() carries

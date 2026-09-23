@@ -139,8 +139,11 @@ const ringOf = (page, token) => page.evaluate((t) => {
       for (const p of PAGES) {
         await goPage(page, p, 900);
         const b = await activeNavBox(page);
+        /* R89 · F — was b.page === p; emails/import/data are tabs of Operations and money of Reports now,
+           so the page (and the active sidebar entry) is the one that holds them. */
+        const wantPage = { emails: "operations", import: "operations", data: "operations", money: "reports" }[p] || p;
         ok(`A1 · ${p} · active tab [${b.left}, ${b.right}] is within [0, ${b.vw}]`,
-          b.page === p && b.left >= 0 && b.right <= b.vw, JSON.stringify(b));
+          b.page === wantPage && b.left >= 0 && b.right <= b.vw, JSON.stringify(b));
       }
       ok("A2 · nav() owns the scroll — a scrollLeft write against the active #topnav button",
         /R87 · E1[\s\S]{0,600}sb\.scrollLeft \+=/.test(appJs));

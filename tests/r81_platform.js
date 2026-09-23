@@ -169,14 +169,19 @@ const netRead = (page) => page.evaluate(() => ({ waves: window.__net.waves, call
       }
       const appSrc = fs.readFileSync(path.join(REPO, "admin", "app.js"), "utf8");
       const rmSrc = fs.readFileSync(path.join(REPO, "admin", "reports-money.js"), "utf8");
-      for (const sym of ["async function loadReports", "async function loadMoneyPage", "async function renderApptOutcomes", "function renderForecastBuckets", "function renderBusinessMix", "function renderPipelineMI", "async function renderReconPanel"]) {
+      for (const sym of ["async function loadReports", "async function loadMoneyPage", "async function renderApptOutcomes", "function renderBookForecast", "function renderBusinessMix", "function renderPipelineMI", "async function renderReconPanel"]) {
         ok(`A1 · reports-money.js declares \`${sym}\``, rmSrc.includes(sym));
         ok(`A1 · app.js no longer declares \`${sym}\``, !appSrc.includes(sym));
       }
 
       // One function per moved family, exercised via its page as the Owner (p4 sees everything).
       const page = await boot(browser, "p4");
-      await goPage(page, "reports", 3500);
+      /* R89 · B: Reports is tabbed and paints only the tab on screen — open the three tabs this block
+         reads (This month, Service & quality, Money & book) in turn and read each once painted.
+         renderForecastBuckets (the 4-stage forecast) is gone; renderBookForecast draws the one forecast. */
+      await goPage(page, "reports/month", 3500);
+      await goPage(page, "reports/quality", 3500);
+      await goPage(page, "reports/book", 3500);
       const rep = await page.evaluate(() => ({
         mine: (document.querySelector("#report-mine") || {}).innerHTML || "",
         month: (document.querySelector("#report-month-panel") || {}).innerHTML || "",
@@ -186,18 +191,18 @@ const netRead = (page) => page.evaluate(() => ({ waves: window.__net.waves, call
       }));
       ok("A1 · loadReports ran (monthly business panel rendered)", rep.month.length > 50, String(rep.month.length));
       ok("A1 · renderApptOutcomes rendered its headline (R77 · B1 contract)", rep.outcomes.length > 20, String(rep.outcomes.length));
-      ok("A1 · renderForecastBuckets rendered the forecast buckets", rep.forecast.length > 20, String(rep.forecast.length));
+      ok("A1 · renderBookForecast rendered the forecast buckets (R89 · B: was renderForecastBuckets)", rep.forecast.length > 20, String(rep.forecast.length));
       ok("A1 · renderBusinessMix rendered the mix panel (R77 · A4 contract)", rep.mix.length > 20, String(rep.mix.length));
       await goPage(page, "money", 3500);
       const mon = await page.evaluate(() => ({
         banked: (document.querySelector("#money-banked") || {}).innerHTML || "",
-        owed: (document.querySelector("#money-owed") || {}).innerHTML || "",
-        advisers: (document.querySelector("#money-advisers") || {}).innerHTML || "",
+        owed: (document.querySelector("#report-owed-buckets") || {}).innerHTML || "",   // R89 · B: Money owed is drawn once, here (#money-owed retired)
+        links: (document.querySelector("#money-links") || {}).innerHTML || "",   // R89 · B: was #money-advisers (retired: it is the scoreboard)
         recon: (document.querySelector("#recon-statements") || {}).innerHTML || "",
       }));
       ok("A1 · loadMoneyPage rendered the banked KPI strip", mon.banked.includes("kpi-headline"), mon.banked.slice(0, 80));
       ok("A1 · loadMoneyPage rendered money-owed", mon.owed.length > 20, String(mon.owed.length));
-      ok("A1 · loadMoneyPage rendered the per-adviser strip", mon.advisers.length > 20, String(mon.advisers.length));
+      ok("A1 · loadMoneyPage rendered the link line to the retired panels' homes (R89 · B)", mon.links.length > 20, String(mon.links.length));
       ok("A1 · renderReconPanel painted the statements list (empty-state or rows)", mon.recon.length > 20, String(mon.recon.length));
       eq("A1 · the three-file app runs the Reports + Money pages with zero page errors", realErrs(page).length, 0);
       await page.context().close();
@@ -220,8 +225,8 @@ const netRead = (page) => page.evaluate(() => ({ waves: window.__net.waves, call
       // …and it still painted truthfully under the merged waves.
       const painted = await page.evaluate(() => ({
         banked: ((document.querySelector("#money-banked") || {}).innerHTML || "").includes("kpi-headline"),
-        movement: ((document.querySelector("#money-movement") || {}).innerHTML || "").length > 20,
-        cold: ((document.querySelector("#money-cold") || {}).innerHTML || "").length > 5,
+        // R89 · B: #money-movement / #money-cold are retired (link, don't copy); Money owed is drawn here now.
+        owed: ((document.querySelector("#report-owed-buckets") || {}).innerHTML || "").length > 20,
       }));
       Object.entries(painted).forEach(([k, v]) => ok(`B · money panel painted after the 2-wave rewrite: ${k}`, v === true, String(v)));
       // The seq-guard exists and moves (the R78 idiom, applied by A2).

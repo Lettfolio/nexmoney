@@ -503,31 +503,22 @@ const closeModal = async (page) => { await page.evaluate(() => window.closeModal
   }, { thisMonth, lastMonth });
   ok("C0 · fixtures seeded across kinds, advisers, statuses and two months", cSeed.seeded === 8);
 
-  await page.evaluate((mv) => { const p = document.querySelector("#report-month"); if (p) p.value = mv; location.hash = "#reports"; }, thisMonth);
+  await page.evaluate((mv) => { const p = document.querySelector("#report-month"); if (p) p.value = mv; location.hash = "#reports/referrals"; }, thisMonth);   // R89 · B: was "#reports" — Referrals out is a tab, painted when shown
   await page.waitForTimeout(SETTLE + 900);
   await page.evaluate((mv) => { const p = document.querySelector("#report-month"); if (p && p.value !== mv) { p.value = mv; p.dispatchEvent(new Event("change")); } });
   await page.waitForTimeout(1600);
 
+  /* R89 · B — CONTRACT CHANGE: the sixth section is a TAB (#reports-tabs-referrals) with its panel,
+     not a header + pill + sticky chip. One panel on the tab, so it offers no per-panel strip (one chip
+     is decoration). Was: #rsec-referrals head, #reports-nav-referrals pill, #rep-nav-referralsout chip. */
   const cSec = await page.evaluate(() => ({
-    head: !!document.querySelector("#rsec-referrals"),
-    headHidden: (document.querySelector("#rsec-referrals") || {}).classList ? document.querySelector("#rsec-referrals").classList.contains("hidden") : null,
-    panel: !!document.querySelector("#report-referrals-panel"),
-    chip: !!document.querySelector("#reports-nav-referrals"),
-    chipLabels: [...document.querySelectorAll("#reports-jump-chips .seg-btn")].map((b) => b.textContent),
-    panelChip: !!document.querySelector("#rep-nav-referralsout"),
+    tab: (document.getElementById("reports-tabs-referrals") || {}).textContent || "",
+    pressed: (document.getElementById("reports-tabs-referrals") || { getAttribute: () => null }).getAttribute("aria-pressed"),
+    panel: !!document.querySelector('[data-tabpanel="referrals"] #report-referrals-panel'),
+    panelVisible: (document.querySelector("#report-referrals-panel") || {}).offsetParent != null,
   }));
-  /* R74 · A4c: the per-panel strip is now SCOPED to the selected level-1 section (panel D#6 — it
-     used to list all twenty panels at once, fourteen of them off the right-hand edge). The
-     Referrals-out panel chip therefore lives under its own section pill, which is the control a
-     reader presses to get to it. Same chip, same id, one click earlier. */
-  cSec.panelChip = await page.evaluate(async () => {
-    const pill = document.getElementById("reports-nav-referrals");
-    if (pill) { pill.click(); await new Promise((r) => setTimeout(r, 700)); }
-    return !!document.querySelector("#rep-nav-referralsout");
-  });
-  ok("C1 · Reports has a sixth section with its own header and panel", cSec.head && cSec.panel && cSec.headHidden === false, JSON.stringify(cSec));
-  ok("C2 · …and its jump chip", cSec.chip && cSec.chipLabels.includes("Referrals out"), JSON.stringify(cSec.chipLabels));
-  ok("C2b · …plus the per-panel chip on the sticky strip", cSec.panelChip);
+  ok("C1 · Reports has a sixth section — its own tab holding its panel", cSec.panel && cSec.panelVisible, JSON.stringify(cSec));
+  ok("C2 · …and the tab is labelled and pressed", cSec.tab.trim() === "Referrals out" && cSec.pressed === "true", JSON.stringify(cSec));
 
   // Owner opens on All. Recompute the grouping independently off the mock DB.
   const cGroups = await page.evaluate(async (mv) => {
@@ -618,12 +609,12 @@ const closeModal = async (page) => { await page.evaluate(() => window.closeModal
   page2.on("console", (m) => { if (m.type() === "error" && !/ERR_TUNNEL_CONNECTION_FAILED|net::ERR_/.test(m.text())) errors2.push("console: " + m.text()); });
   await page2.goto(`${BASE}?as=p2`, { waitUntil: "networkidle" });
   await page2.waitForTimeout(SETTLE);
-  await page2.evaluate(() => { location.hash = "#reports"; });
+  await page2.evaluate(() => { location.hash = "#reports/referrals"; });   // R89 · B: was "#reports" — Referrals out is a tab, painted when shown
   await page2.waitForTimeout(SETTLE + 1200);
   const cAdv = await page2.evaluate(() => ({
     panel: !!document.querySelector("#report-referrals-panel"),
     hidden: (document.querySelector("#report-referrals-panel") || {}).classList ? document.querySelector("#report-referrals-panel").classList.contains("hidden") : null,
-    chip: !!document.querySelector("#reports-nav-referrals"),
+    chip: !!document.querySelector("#reports-tabs-referrals"),   // R89 · B: the section pill is a tab
     mineActive: /active/.test((document.querySelector("#report-ref-scope-mine") || {}).className || ""),
     basis: (document.querySelector("#report-ref-basis") || {}).textContent || "",
     money: /£/.test((document.querySelector("#report-referrals-panel") || { textContent: "" }).textContent),

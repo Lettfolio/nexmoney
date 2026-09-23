@@ -139,7 +139,9 @@ async function newPublicPage(browser, url, viewport, opts = {}) {
 // R33 — scoped to #modal: Settings' new #diag-details shares the `.case-details` styling class
 // and, being static markup, is always in the DOM — an unscoped selector now matches it first.
 const openDetails = (page) => page.evaluate(() => { const d = document.querySelector("#modal .case-details"); if (d) d.open = true; });
-const gotoReports = async (page) => { await page.evaluate(() => window.nav("reports")); await page.waitForTimeout(2400); };
+/* R89 · D: was nav("reports") — every caller reads the conveyancer panel, which is on Reports › Service & quality now
+   (R89 · B's tabs; only the tab on screen renders). An adviser has no such tab and lands on their first one. */
+const gotoReports = async (page) => { await page.evaluate(() => window.nav("reports/quality")); await page.waitForTimeout(2400); };
 const gotoPipeline = async (page) => { await page.evaluate(() => window.nav("pipeline")); await page.waitForTimeout(1500); };
 const gotoSettings = async (page) => { await page.evaluate(() => window.nav("settings")); await page.waitForTimeout(1300); };
 const openCase = async (page, id, ms) => { await page.evaluate((i) => window.openCase(i), id); await page.waitForTimeout(ms || 1000); };
@@ -616,7 +618,7 @@ const groundTruth = (page) => page.evaluate(async ({ CHASE_MAX }) => {
      property is unchanged — the copy still states that nothing goes out without email sending
      working — so the assertion follows the new sentence. */
   ok("copy states the dependency — nothing sends without email sending configured",
-    /Requires email sending to be working/i.test(chaseCopy) && /Email sending status at the top of this page/i.test(chaseCopy)
+    /Requires email sending to be working/i.test(chaseCopy) && /Email sending status on the Firm & rules tab/i.test(chaseCopy)   // R89 · D: was "at the top of this page" — the strip is on another tab
     && /nothing goes out, whatever this says/i.test(chaseCopy), chaseCopy);
   const docsListCopy = await txt(owner, "#setting-note-docs_list");
   ok("the docs_list description now mentions per-case checklists and which one wins",

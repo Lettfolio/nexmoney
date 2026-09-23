@@ -101,7 +101,9 @@ async function completeCase76(page, caseId, referral) {
   await page.waitForTimeout(1300);
   return { completedBody, referralBody, result };
 }
-const gotoReports = async (page) => { await page.evaluate(() => window.nav("reports")); await page.waitForTimeout(2200); };
+/* R89 · B: Reports is tabbed and the advocacy dashboard is on Service & quality (Owner-only — a
+   non-owner asking for it lands on their first tab, where the panel is never painted). Was nav("reports"). */
+const gotoReports = async (page) => { await page.evaluate(() => window.nav("reports/quality")); await page.waitForTimeout(2200); };
 const gotoToday = async (page) => { await page.evaluate(() => window.nav("dashboard")); await page.waitForTimeout(1400); };
 
 /* ---------------------------------------------------------------------------
@@ -887,7 +889,7 @@ const tasksOnCase = (page, caseId) => page.evaluate(async (cid) =>
         const leaked = moneyStrings.filter((s) => pageTxt.replace(/[,\s]/g, "").includes(s) && Number(s) > 999);
         eq(`R9-2 · ${persona} · no top-referrer value leaks onto the page`, leaked, []);
         ok(`R9-2 · ${persona} · …while the ordinary Reports content still renders`,
-          (await page.evaluate(() => !!document.querySelector("#report-kpis").innerHTML)) === true);
+          (await page.evaluate(async () => { nav("reports/book"); await new Promise((r) => setTimeout(r, 1800)); return !!document.querySelector("#report-kpis").innerHTML; })) === true);   // R89 · B: the KPI row is on Money & book
         ok(`no console errors (gating · ${persona})`, !page.__err, JSON.stringify(page.__err));
         await page.close();
       }

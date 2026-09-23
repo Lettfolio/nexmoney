@@ -397,9 +397,15 @@ async function groundTruth(page) {
 
         /* Protection */
         await goTo(pg, "protection", 1500);
+        /* R89 · CTO — the kit rows paint after the RPC; wait for the first one rather than a fixed 1.5 s. */
+        await pg.waitForSelector("#page-protection .row-item.kit-row, #page-protection .empty-state", { timeout: 15000 }).catch(() => {});
         const prot = await pg.evaluate(() => {
+          /* R89 · CTO — R88 · C replaced the Protection <table> with one kit row per client
+             (#page-protection .row-item.kit-row); the embed contract (rows exist, each names the
+             client, no "more than one relationship" error) is unchanged. */
           const t = document.querySelector("#prot-table");
-          return { rows: t ? t.querySelectorAll("tbody tr").length : 0, text: t ? t.innerText : "" };
+          const rows = [...document.querySelectorAll("#page-protection .row-item.kit-row")];
+          return rows.length ? { rows: rows.length, text: rows.map((r) => r.innerText).join("\n") } : { rows: t ? t.querySelectorAll("tbody tr").length : 0, text: t ? t.innerText : "" };
         });
         ok(`R9-E4 · ${persona} · Protection lists cases`, prot.rows > 0, String(prot.rows));
         ok(`R9-E4 · ${persona} · …naming the client on each`, hasAName(prot.text) >= 1, prot.text.slice(0, 160));

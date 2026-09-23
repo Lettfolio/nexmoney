@@ -425,7 +425,9 @@ const cardSelect = (page, id, to) => page.evaluate(({ id, to }) => {
         const all = [...document.querySelectorAll("#topnav button[data-page]")];
         return { total: all.length, visible: all.filter((b) => !b.classList.contains("hidden")).map((b) => b.dataset.page), hidden: all.filter((b) => b.classList.contains("hidden")).map((b) => b.dataset.page) };
       });
-      eq("G1 · an adviser's sidebar hides import / emails / data (and money): 13 → 9 visible", [adv.total, adv.visible.length, adv.hidden.sort()], [13, 9, ["data", "emails", "import", "money"]]);
+      /* R89 · F — was [13, 9, [data, emails, import, money]]: the four are tabs now (Operations; Reports ›
+         Money), so the sidebar holds 10 entries and the one an adviser loses is Operations. */
+      eq("G1 · an adviser's sidebar hides Operations: 10 → 9 visible", [adv.total, adv.visible.length, adv.hidden.sort()], [10, 9, ["operations"]]);
       ok("G1b · Settings stays (slice D shrinks it)", adv.visible.includes("settings"));
       const bounce = await p2.evaluate(() => {
         const out = {};
@@ -434,12 +436,14 @@ const cardSelect = (page, id, to) => page.evaluate(({ id, to }) => {
       });
       ok("G2 · nav() to any gated page lands an adviser on Today with the hash rewritten", Object.values(bounce).every((b) => b.page === "dashboard" && b.hash === "#today" && b.shown), JSON.stringify(bounce));
       const gate = await p2.evaluate(() => Object.keys(PAGE_ROLE_GATE).sort());
-      eq("G3 · PAGE_ROLE_GATE names exactly money · import · emails · data", gate, ["data", "emails", "import", "money"]);
+      // R89 · F — + operations (the page that holds import · emails · data; their own gates stay for the aliases)
+      eq("G3 · PAGE_ROLE_GATE names exactly money · import · emails · data · operations", gate, ["data", "emails", "import", "money", "operations"]);
       ok("§G · p2 · no console errors", realErrs(p2).length === errBefore, JSON.stringify(realErrs(p2)));
       await p2.context().close();
       const p1 = await boot(browser, "p1");
-      const adm = await p1.evaluate(() => { window.nav("import"); return { page: currentPage, visible: [...document.querySelectorAll("#topnav button[data-page]")].filter((b) => !b.classList.contains("hidden")).map((b) => b.dataset.page) }; });
-      ok("G4 · an administrator keeps Import / Emails / Data health (money stays owner-only)", adm.page === "import" && ["import", "emails", "data"].every((k) => adm.visible.includes(k)) && !adm.visible.includes("money"), JSON.stringify(adm));
+      const adm = await p1.evaluate(() => { window.nav("import"); return { page: currentPage, tab: currentPageTab(), visible: [...document.querySelectorAll("#topnav button[data-page]")].filter((b) => !b.classList.contains("hidden")).map((b) => b.dataset.page) }; });
+      // R89 · F — was page "import" + three visible entries; Import is Operations › Import, one entry.
+      ok("G4 · an administrator keeps Import / Emails / Data health (money stays owner-only)", adm.page === "operations" && adm.tab === "import" && adm.visible.includes("operations") && !adm.visible.includes("money"), JSON.stringify(adm));
       await p1.context().close();
     }
     {

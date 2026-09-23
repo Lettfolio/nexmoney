@@ -365,6 +365,18 @@ const favImgs = (page, names) => page.evaluate((ns) => {
       console.log("\n— §C · Reports on a phone (p4, 390×844)");
       const page = await newPage(browser, "p4", { viewport: { width: 390, height: 844 } });
       await goto(page, "reports", 3000);
+      /* R89 · B: Reports is tabbed and paints only the tab on screen. This block audits EVERY table on the
+         page, so paint each report tab from the same read (as a tab click does), then stand on This month
+         with the adviser table on its "Pipeline & outcomes" view (the MI scoreboard, C6). */
+      await page.evaluate(async () => {
+        window.__r89Over = 0;   // a hidden tab's boxes measure 0 wide — count the overflow on each tab while it is on screen
+        for (const k of ["mi", "book", "quality", "referrals", "month"]) {
+          repTabClick = true; activatePageTab("reports", k); repTabClick = false; await new Promise((r) => setTimeout(r, 1500));
+          window.__r89Over += [...document.querySelectorAll("#page-reports .table-scroll")].filter((b) => b.offsetParent !== null && b.scrollWidth > b.clientWidth + 1).length;
+        }
+        repSetAdvView("pipeline");
+        await new Promise((r) => setTimeout(r, 800));
+      });
 
       const c = await page.evaluate(() => {
         const pg = document.querySelector("#page-reports");
@@ -384,7 +396,9 @@ const favImgs = (page, names) => page.evaluate((ns) => {
       ok("C1a · Reports really is table-heavy on a phone", c.tables >= 12, JSON.stringify(c));
       eq("C1b · every table on the page sits inside a .table-scroll", c.unwrapped, 0);
       eq("C2 · every one of those boxes actually scrolls horizontally", c.badOverflow, 0);
-      ok("C3 · several of them are wider than the phone, which is why the box exists", c.overflowing >= 5, JSON.stringify(c.overflowing));
+      // R89 · B: counted per tab while each is on screen (a hidden tab's boxes have no width); was the whole page at once.
+      const over = await page.evaluate(() => window.__r89Over);
+      ok("C3 · several of them are wider than the phone, which is why the box exists", over >= 5, JSON.stringify({ perTab: over, now: c.overflowing }));
       ok("C4 · the box carries the right-edge fade that says there is more", c.fade, JSON.stringify(c.fade));
       ok("C5 · the page itself does not scroll sideways", c.docSW <= c.iw && c.bodySW <= c.iw, JSON.stringify(c));
 
@@ -615,12 +629,9 @@ const favImgs = (page, names) => page.evaluate((ns) => {
       ok("E3d · …naming ca015's numbers and its LTV", /£235,000/.test(drawer.text) && /£185,000/.test(drawer.text) && /127%/.test(drawer.text), drawer.text.slice(0, 300));
       ok("E3e · …and explaining itself in words on the panel", /loan amount/i.test(drawer.sub) && /property value/i.test(drawer.sub), drawer.sub.slice(0, 200));
 
-      const readiness = await page.evaluate(() => [...document.querySelectorAll("#dh-readiness .dh-readiness-item")]
-        .map((el) => ({
-          label: (el.querySelector(".dh-readiness-label") || {}).textContent.trim(),
-          count: Number((el.querySelector(".dh-readiness-count") || {}).textContent.trim()),
-          tile: ((el.getAttribute("onclick") || "").match(/getElementById\('([^']+)'\)/) || [])[1] || null,
-        })));
+      /* R89 · A: was the .dh-readiness-item rows; the readiness list is the to-do list now — its counted,
+         non-clean rows carry data-tile / data-n, and the check's label is its tile's. */
+      const readiness = await page.evaluate(() => [...document.querySelectorAll("#dh-readiness .dh-check[data-band='counted']:not(.dh-clean)")].map((c) => { const t = document.getElementById(c.dataset.tile); return { label: t ? t.querySelector(".lbl").textContent.replace(/\s*▾\s*$/, "").trim() : "", count: Number(c.dataset.n), tileId: c.dataset.tile, tile: c.dataset.tile }; }));
       const row = readiness.find((r) => r.tile === "dh-tile-ltv");
       ok("E4a · the readiness rollup lists it too", !!row, JSON.stringify(readiness.map((r) => r.tile)));
       eq("E4b · …with the same count as the tile", row && row.count, expected.length);
@@ -643,8 +654,7 @@ const favImgs = (page, names) => page.evaluate((ns) => {
           clean: t.classList.contains("dh-clean"),
           warn: t.classList.contains("warn"),
           empty: !!p.querySelector(".empty"),
-          listed: [...document.querySelectorAll("#dh-readiness .dh-readiness-item")]
-            .some((el) => /getElementById\('dh-tile-ltv'\)/.test(el.getAttribute("onclick") || "")),
+          listed: !!document.querySelector("#dh-readiness .dh-check[data-band='counted'][data-tile='dh-tile-ltv']:not(.dh-clean)"),   // R89 · A: see E4
         };
       });
       eq("E5a · fixing the values takes the count to 0", fixed.n, "0");

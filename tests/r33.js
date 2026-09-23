@@ -153,42 +153,32 @@ Duncan Armitage,duncan.armitage@example.com,07700 900102,offer,Halifax,4.29,495`
         const heads = [...document.querySelectorAll(".nav-group-head")].map((h) => h.textContent.trim());
         return { collapsed: g.classList.contains("collapsed"), btns, heads, toggleExpanded: document.getElementById("nav-firm-toggle").getAttribute("aria-expanded") };
       });
-      ok("A1a · #nav-firm-group has .collapsed for an adviser by default", state.collapsed, JSON.stringify(state));
-      eq("A1b · #nav-firm-toggle reports aria-expanded=\"false\"", state.toggleExpanded, "false");
+      /* R89 · A — was: collapsed for an adviser by default, toggle/persist, auto-expand-not-persisted.
+         With Emails/Import/Data health folded into Operations (Owner/Administrator), an adviser's Firm
+         group is Settings ALONE, and a fold around one entry is a click to reach one button (01 #4). So
+         a lone group never folds: the toggle steps aside for a plain "Firm" label (#nav-firm-head) and a
+         stored nx_nav_firm is ignored (not erased). The owner/admin fold (two entries) is unchanged — A5
+         below and r89_operations §D7 keep it pinned. */
+      ok("A1a · #nav-firm-group is NOT collapsed for an adviser (one entry never folds)", !state.collapsed, JSON.stringify(state));
+      const lone = await page.evaluate(() => ({ toggleHidden: document.getElementById("nav-firm-toggle").classList.contains("hidden"), head: document.getElementById("nav-firm-head").classList.contains("hidden") ? null : document.getElementById("nav-firm-head").textContent.trim() }));
+      ok("A1b · the fold toggle steps aside for a plain 'Firm' label", lone.toggleHidden && lone.head === "Firm", JSON.stringify(lone));
       const pages = state.btns.map((b) => b.page).sort();
-      eq("A1c · the collapsed group's 4 buttons are emails/import/data/settings", pages, ["data", "emails", "import", "settings"]);
-      ok("A1d · none of the group's 4 buttons are actually visible while collapsed", state.btns.every((b) => !b.visible), JSON.stringify(state.btns));
-      eq("A1e · the three group-head labels read Work/Book/Money, in order", state.heads, ["Work", "Book", "Money"]);
+      // R89 · F — was emails/import/data/settings: the three are tabs of ONE Operations entry now.
+      eq("A1c · the group's buttons are operations/settings", pages, ["operations", "settings"]);
+      ok("A1d · Settings is visible and Operations (gated) is not", state.btns.every((b) => b.visible === (b.page === "settings")), JSON.stringify(state.btns));
+      eq("A1e · the group-head labels read Work/Book/Money/Firm, in order", state.heads, ["Work", "Book", "Money", "Firm"]);
 
-      console.log("\n— A2 · toggling opens the group and persists across a reload");
-      await page.click("#nav-firm-toggle");
-      await wait(page, 300);
-      const afterClick = await page.evaluate(() => ({
-        collapsed: document.getElementById("nav-firm-group").classList.contains("collapsed"),
-        expanded: document.getElementById("nav-firm-toggle").getAttribute("aria-expanded"),
-        /* R87 · slice B (panel 01 #3): Emails / Import / Data health are Owner-Administrator pages now
-           (PAGE_ROLE_GATE) and their buttons carry .hidden for an adviser — so for p2 "genuinely
-           visible" means every button the gate leaves in the group (Settings), not all four. */
-        visible: [...document.querySelectorAll("#nav-firm-group button[data-page]:not(.hidden)")].every((b) => b.offsetParent !== null)
-          && [...document.querySelectorAll("#nav-firm-group button[data-page]:not(.hidden)")].map((b) => b.dataset.page).join() === "settings",
-        ls: localStorage.getItem("nx_nav_firm"),
-      }));
-      ok("A2a · clicking the toggle un-collapses the group", !afterClick.collapsed, JSON.stringify(afterClick));
-      eq("A2b · toggle now reports aria-expanded=\"true\"", afterClick.expanded, "true");
-      ok("A2c · the group's un-gated button (Settings) is now genuinely visible — R87 hides the other three for an adviser", afterClick.visible, JSON.stringify(afterClick));
-      eq("A2d · the choice is written to localStorage as \"open\"", afterClick.ls, "open");
-
+      console.log("\n— A2 · a stored 'closed' is ignored while the group is one entry (and is not erased)");
+      await page.evaluate(() => localStorage.setItem("nx_nav_firm", "closed"));
       await page.reload();
       await wait(page, SETTLE);
-      ok("A2e · after a reload the group is STILL open (persisted choice beats the role default)", !(await firmGroupCollapsed(page)));
+      ok("A2a · after a reload with nx_nav_firm=closed the lone group is still open", !(await firmGroupCollapsed(page)));
+      eq("A2b · …and the stored answer is left as it was", await page.evaluate(() => localStorage.getItem("nx_nav_firm")), "closed");
 
-      console.log("\n— A3 · clearing the stored choice reverts to the (adviser) role default");
+      console.log("\n— A4 · window.nav('settings') lands with the Settings tab active and nothing persisted");
       await clearNavFirm(page);
       await page.reload();
       await wait(page, SETTLE);
-      ok("A3 · clearing nx_nav_firm + reload restores the collapsed adviser default", await firmGroupCollapsed(page));
-
-      console.log("\n— A4 · window.nav('settings') from collapsed auto-expands, WITHOUT persisting");
       await page.evaluate(() => window.nav("settings"));
       await wait(page, 500);
       const autoExpand = await page.evaluate(() => {
@@ -200,20 +190,10 @@ Duncan Armitage,duncan.armitage@example.com,07700 900102,offer,Halifax,4.29,495`
           ls: localStorage.getItem("nx_nav_firm"),
         };
       });
-      ok("A4a · landing on Settings auto-expands the (collapsed) Firm group", !autoExpand.collapsed, JSON.stringify(autoExpand));
+      ok("A4a · the Firm group is open on Settings", !autoExpand.collapsed, JSON.stringify(autoExpand));
       ok("A4b · the Settings tab carries .active", autoExpand.active, JSON.stringify(autoExpand));
       eq("A4c · …and aria-current=\"page\"", autoExpand.ariaCurrent, "page");
-      eq("A4d · the auto-expand did NOT write to localStorage", autoExpand.ls, null);
-
-      // Navigate AWAY first — reloading while still sitting on #settings would re-trigger the
-      // very same auto-expand nav() just did, which would prove nothing about persistence either
-      // way. Navigating off it first, then reloading, is what actually isolates "was this
-      // remembered" from "did I just land somewhere that auto-expands".
-      await page.evaluate(() => window.nav("dashboard"));
-      await wait(page, 300);
-      await page.reload();
-      await wait(page, SETTLE);
-      ok("A4e · after navigating away + reloading, the group is collapsed again (the auto-expand was never persisted)", await firmGroupCollapsed(page));
+      eq("A4d · nothing was written to localStorage", autoExpand.ls, null);
 
       ok("A · no console errors (p2)", noNewErr(page, errBefore), JSON.stringify(page.__err));
       await page.close();
@@ -228,10 +208,12 @@ Duncan Armitage,duncan.armitage@example.com,07700 900102,offer,Halifax,4.29,495`
       await wait(page, SETTLE);
 
       ok("A5a · #nav-firm-group is NOT collapsed for an owner by default", !(await firmGroupCollapsed(page)));
-      const navMoneyVisible = await page.evaluate(() => document.getElementById("nav-money").offsetParent !== null);
-      ok("A5b · #nav-money (Monday money) is visible for the owner", navMoneyVisible);
+      /* R89 · F — was #nav-money visible + 13 buttons. Monday money is the owner's Money TAB of Reports and
+         Emails/Import/Data health are tabs of Operations, so the owner's sidebar is 10 entries. */
+      const navMoneyVisible = await page.evaluate(() => !document.getElementById("nav-money") && document.querySelector('#topnav button[data-page="reports"]').offsetParent !== null && pageTabsAllowed("reports").some((t) => t.key === "money"));
+      ok("A5b · Monday money is the owner's Money tab of Reports (no #nav-money)", navMoneyVisible);
       const totalBtns = await page.evaluate(() => document.querySelectorAll("#topnav button[data-page]").length);
-      eq("A5c · #topnav still has all 13 data-page buttons (R38 added Retention to the Book group)", totalBtns, 13);
+      eq("A5c · #topnav has 10 data-page buttons (R89: four pages became tabs, Operations added)", totalBtns, 10);
       const allInsideTopnav = await page.evaluate(() =>
         [...document.querySelectorAll("button[data-page]")].every((b) => document.getElementById("topnav").contains(b)));
       ok("A5d · every data-page button lives inside #topnav", allInsideTopnav);
@@ -248,7 +230,7 @@ Duncan Armitage,duncan.armitage@example.com,07700 900102,offer,Halifax,4.29,495`
       console.log("\n— B1 · #diag-details on Settings: present, collapsed, opens onto the real panel (p4, owner)");
       const page = await newPage(browser, "p4");
       const errBefore = (page.__err || []).length;
-      await goto(page, "settings");
+      await goto(page, "settings/data");   // R89 · C: was "settings" — Settings is five tabs; what this reads is on the data tab
 
       const before = await page.evaluate(() => {
         const det = document.getElementById("diag-details");
@@ -326,7 +308,7 @@ Duncan Armitage,duncan.armitage@example.com,07700 900102,offer,Halifax,4.29,495`
       console.log("\n— C2 · Settings doc_chase_days round-trips: 5 → 5, blank → prose reads 3 (p4, owner)");
       const page = await newPage(browser, "p4");
       const errBefore = (page.__err || []).length;
-      await goto(page, "settings");
+      await goto(page, "settings/automations");   // R89 · C: was "settings" — Settings is five tabs; what this reads is on the automations tab
 
       const inputExists = await page.$("input[name=\"doc_chase_days\"]");
       ok("C2a · the Document chase interval field is present", !!inputExists);

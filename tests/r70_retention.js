@@ -707,7 +707,7 @@ const toastText = (page) => page.evaluate(() => (document.getElementById("toast"
   console.log("\n— §G · gi_referral_partner (M5)");
   {
     const page = await boot(browser, "p4");   // owner: the only role that can save settings
-    await goPage(page, "settings", 2200);
+    await goPage(page, "settings/automations", 2200);   // R89 · C: was "settings" — Settings is five tabs; what this reads is on the automations tab
     const field = await page.evaluate(() => {
       const el = document.querySelector('#settings-form [name="gi_referral_partner"]');
       if (!el) return null;

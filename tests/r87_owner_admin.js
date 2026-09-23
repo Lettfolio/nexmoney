@@ -143,8 +143,14 @@ const LEAK_RE = /coalesce|ceil\(|first_contact_at|protection_status|protection_q
         const text = await page.$eval(`#page-${pg}`, (e) => e.innerText);
         ok(`§A2 · ${pg}: no column identifier or formula in the rendered text`, !LEAK_RE.test(text), (text.match(LEAK_RE) || [])[0]);
       }
-      /* Reports: the long forms still exist, closed, and hold the sentences the copy suites read. */
+      /* Reports: the long forms still exist, closed, and hold the sentences the copy suites read.
+         R89 · B: Reports is tabbed and paints only the tab on screen, the adoption strip is a view of the
+         adviser table and Money owed lives on the Money tab — so paint each (as a tab click does) first. */
       await goPage(page, "reports");
+      await page.evaluate(async () => {
+        for (const k of ["book", "quality", "referrals", "money", "month"]) { repTabClick = true; activatePageTab("reports", k); repTabClick = false; await new Promise((r) => setTimeout(r, 1800)); }
+        repSetAdvView("activity"); await new Promise((r) => setTimeout(r, 2500)); repSetAdvView("month");
+      });
       const folds = await page.evaluate(() => ["report-owed-how", "report-leadresp-how", "report-adoption-how", "report-rateend-how", "report-scoreboard-how", "report-ref-how", "report-outcomes-how"].map((id) => {
         const d = document.getElementById(id);
         return { id, present: !!d, details: !!d && d.tagName === "DETAILS", open: d ? d.open : null, words: d ? d.textContent.trim().split(/\s+/).length : 0 };
@@ -160,7 +166,14 @@ const LEAK_RE = /coalesce|ceil\(|first_contact_at|protection_status|protection_q
       ok("§A7 · the scoreboard keeps one sentence in the open and its attribution note in the fold", words(scoreLine) <= 25 && /Figures follow the adviser currently on each case/.test(await txt(page, "#report-scoreboard-scope")), scoreLine);
       // Settings, owner: the field notes.
       await goPage(page, "settings");
-      const notes = await page.evaluate(`${PROSE_JS}("page-settings", ".set-note")`);
+      /* R89 · C: was one read of the whole page — Settings is five tabs now and the notes live on the three
+         form tabs, so the (visible-only) measure is taken on each of them and pooled. */
+      const notes = [];
+      for (const tab of ["firm", "automations", "integrations"]) {
+        await page.evaluate((t) => activatePageTab("settings", t), tab);
+        await page.waitForTimeout(300);
+        notes.push(...(await page.evaluate(`${PROSE_JS}("page-settings", ".set-note")`)));
+      }
       const overNotes = notes.filter((n) => n.w > 15);
       ok(`§A8 · Settings: every field note is ≤ 15 visible words (${notes.length} notes)`, notes.length >= 10 && overNotes.length === 0, JSON.stringify(overNotes));
       const longForms = await page.evaluate(() => ["setting-note-financial_promotions_approved", "playbook-auto-note", "setting-note-client_quiet_months", "setting-note-docs_list", "nps-note", "nps-reminder-note", "annual-review-note"].map((id) => {
@@ -171,7 +184,7 @@ const LEAK_RE = /coalesce|ceil\(|first_contact_at|protection_status|protection_q
         longForms.every((f) => f.tag === "DIV" && f.fold && f.open === false && f.words > 40), JSON.stringify(longForms));
       const finPromo = await txt(page, "#setting-note-financial_promotions_approved");
       ok("§A10 · the 151-word financial-promotions note still names the three enforcement points inside its fold (r82 A4b)", /nightly queueing job/.test(finPromo) && /Queue protection intro/.test(finPromo) && /cancel/i.test(finPromo), (finPromo || "").slice(0, 120));
-      const settingsText = await page.$eval("#page-settings", (e) => e.innerText);
+      const settingsText = await page.$eval("#page-settings", (e) => e.textContent);   // R89 · C: was innerText — every tab's text, not only the tab on screen
       ok("§A11 · Settings: no identifier in the rendered text", !LEAK_RE.test(settingsText), (settingsText.match(LEAK_RE) || [])[0]);
       const ch = await page.evaluate(() => [...document.querySelectorAll("#ch-list .audit-act")].map((e) => e.textContent.trim()));
       ok("§A12 · Change history badges read Created / Updated / Deleted, not INSERT / UPDATE", ch.length > 0 && ch.every((w) => /^(Created|Updated|Deleted)$/.test(w)), JSON.stringify(ch.slice(0, 6)));
@@ -193,13 +206,17 @@ const LEAK_RE = /coalesce|ceil\(|first_contact_at|protection_status|protection_q
         const body = document.getElementById("money-body");
         const kids = [...body.children].map((k) => k.id || [...k.querySelectorAll("[id]")].map((x) => x.id).join("+"));
         const y = (sel) => { const el = document.querySelector(sel); return el ? Math.round(el.getBoundingClientRect().top + window.scrollY) : null; };
-        return { kids, drop: y("#recon-file-slot"), banked: y("#money-banked-panel"), advisers: y("#money-advisers-panel"), rates: y("#money-procrates-panel"), ids: ["money-banked", "money-owed", "money-rateends", "money-cold", "money-movement", "money-leads", "money-advisers", "recon-statements", "procrates-status"].every((id) => !!document.getElementById(id)) };
+        /* R89 · B: the six panels that restated Reports are retired (link, don't copy); Money owed (#report-owed-panel) is drawn here, once. */
+        return { kids, drop: y("#recon-file-slot"), banked: y("#money-banked-panel"), owed: y("#report-owed-panel"), rates: y("#money-procrates-panel"),
+          ids: ["money-banked", "report-owed-buckets", "money-links", "recon-statements", "procrates-status"].every((id) => !!document.getElementById(id)),
+          gone: ["money-owed-panel", "money-rateends-panel", "money-cold-panel", "money-movement-panel", "money-leads-panel", "money-advisers-panel"].every((id) => !document.getElementById(id)) };
       });
       eq("§B1 · the first child of #money-body is the weekly commission statement panel", order.kids[0], "money-recon-panel");
       eq("§B2 · …the rate card is second", order.kids[1], "money-procrates-panel");
-      ok("§B3 · the drop zone sits above the first read-only panel and the per-adviser strip", order.drop != null && order.drop < order.banked && order.banked < order.advisers, JSON.stringify(order));
+      ok("§B3 · the drop zone sits above the read-only panels — banked, then Money owed (R89 · B: was '…and the per-adviser strip', retired)", order.drop != null && order.drop < order.banked && order.banked < order.owed, JSON.stringify(order));
       ok("§B4 · the statement is on the first screen (top < 900px)", order.drop < 900, String(order.drop));
-      ok("§B5 · every read-only panel keeps its id (nothing deleted — R89 merges them)", order.ids, JSON.stringify(order.kids));
+      // R89 · B: the merge R87 deferred happened — the six duplicates are gone and #money-links names where each lives.
+      ok("§B5 · the kept panels keep their ids and the six duplicated panels are gone (R89 merged them)", order.ids && order.gone, JSON.stringify(order));
       const scope = await page.evaluate(() => { const el = document.getElementById("money-scope"); const c = el.cloneNode(true); c.querySelectorAll("details").forEach((d) => d.remove()); return c.textContent.replace(/\s+/g, " ").trim(); });
       ok("§B6 · the page scope is one line pointing at the statement, with the basis behind #money-how", words(scope) <= 25 && /statement/i.test(scope) && !!(await page.$("#money-how")), scope);
       eq("§B · no console errors", realErrs(page).slice(e0), []);
@@ -216,10 +233,12 @@ const LEAK_RE = /coalesce|ceil\(|first_contact_at|protection_status|protection_q
       await goPage(admin, "reports");
       const note = await txt(admin, "#report-money-note");
       ok("§C1 · admin: the money note is one line of ≤ 20 words", !!note && words(note) <= 20, `${words(note)} words: ${note}`);
-      ok("§C2 · …that still says the page ENDS where the money begins and names Pipeline MI (r37 §12)", /ENDS where/.test(note || "") && /Pipeline MI/.test(note || ""), note);
+      // R89 · B: the page is tabs now (no "end" to name); the line says money is Owner-only and names Pipeline MI.
+      ok("§C2 · …that says the money is Owner-only and names Pipeline MI (r37 §12)", /Owner-only/.test(note || "") && /Pipeline MI/.test(note || ""), note);
       const mineAdmin = await admin.evaluate(() => ({ hidden: document.getElementById("report-mine-panel").classList.contains("hidden"), tiles: document.querySelectorAll("#report-mine .kpi").length, chip: !!document.getElementById("rep-nav-mine") }));
       ok("§C3 · admin: the 'My numbers' adviser card is hidden and empty", mineAdmin.hidden && mineAdmin.tiles === 0, JSON.stringify(mineAdmin));
-      ok("§C4 · …and no 'mine' section head or chip is offered", mineAdmin.chip === false && (await admin.evaluate(() => document.getElementById("rsec-mine").classList.contains("hidden"))), JSON.stringify(mineAdmin));
+      // R89 · B: was the #rsec-mine head; the section is a tab now — no My numbers tab, and she lands on This month.
+      ok("§C4 · …and no 'mine' tab or chip is offered; she lands on This month", mineAdmin.chip === false && (await admin.evaluate(() => !document.getElementById("reports-tabs-mine") && currentPageTab("reports") === "month")), JSON.stringify(mineAdmin));
       eq("§C · no console errors (admin)", realErrs(admin).slice(eA), []);
       await admin.close();
       const adv = await boot(browser, "p2");
@@ -263,17 +282,18 @@ const LEAK_RE = /coalesce|ceil\(|first_contact_at|protection_status|protection_q
       const after = await readBoard();
       ok("§D4 · Show all brings the hidden rows back (more rows, same foot total)", after.names.length > before.names.length && after.footOpen === before.footOpen, JSON.stringify({ before: before.names, after: after.names, foot: [before.footOpen, after.footOpen] }));
       ok("§D5 · …including the Unassigned bucket and the administrator where the book has them", after.names.some((n) => /Unassigned/.test(n)) || after.names.some((n) => gt.admin.includes(n)), JSON.stringify(after.names));
-      // MI scoreboard shares the flag.
+      // MI scoreboard shares the flag. R89 · B: it is the adviser table's "Pipeline & outcomes" view now.
+      await page.evaluate(() => repSetAdvView("pipeline"));
+      await page.waitForTimeout(700);
       const mi = await page.evaluate(() => ({ names: [...document.querySelectorAll("#report-mi-scoreboard table tr")].slice(1).map((r) => r.children[0].textContent.trim()), btn: (document.getElementById("report-mi-scoreboard-showall") || {}).textContent || "" }));
       ok("§D6 · the MI scoreboard follows the same flag: with Show all on, its hide button is offered and Unassigned is listed", /Hide/.test(mi.btn) && mi.names.some((n) => /Unassigned/.test(n)), JSON.stringify(mi));
-      await page.click("#report-scoreboard-showall");   // back to the quiet view
+      await page.evaluate(() => toggleScoreboardShowAll());   // back to the quiet view (R89 · B: the month view's button is off screen on this view)
       await page.waitForTimeout(600);
       const mi2 = await page.evaluate(() => [...document.querySelectorAll("#report-mi-scoreboard table tr")].slice(1).map((r) => r.children[0].textContent.trim()));
       ok("§D7 · …and hidden again, the MI board drops Unassigned and the administrator", !mi2.some((n) => /Unassigned/.test(n) || gt.admin.includes(n)), JSON.stringify(mi2));
-      // Monday money per adviser.
+      // R89 · B: Monday money's "Per adviser" table is retired — it IS this table (one per-adviser table, 05 #2c).
       await goPage(page, "money", 3600);
-      const mm = await page.evaluate(() => ({ names: [...document.querySelectorAll("#money-adviser-table tr")].slice(1).map((r) => r.children[0].textContent.trim()), quiet: (document.getElementById("money-advisers-quiet") || {}).textContent || "" }));
-      ok("§D8 · Monday money › Per adviser: the administrator's £0 / — row is behind Show all too", mm.names.length > 0 && !mm.names.some((n) => gt.admin.includes(n)) && /Show all/.test(mm.quiet), JSON.stringify(mm));
+      ok("§D8 · Monday money draws no second per-adviser table; its link line points at the scoreboard", !(await page.$("#money-adviser-table")) && !!(await page.$("#money-link-advisers")));
       eq("§D · no console errors", realErrs(page).slice(e0), []);
       await page.close();
     }
@@ -336,23 +356,25 @@ const LEAK_RE = /coalesce|ceil\(|first_contact_at|protection_status|protection_q
       const sw = await page.evaluate(() => ({ appt: !!document.querySelector('#settings-form [name="auto_sms_appointment"]'), rateEnd: !!document.querySelector('#settings-form [name="auto_sms_rate_end"]'), pointer: !!document.getElementById("set-protection-gate-pointer") }));
       ok("§F1 · owner: no auto_sms_appointment control (07 #7) — the rate-end SMS switch stays", !sw.appt && sw.rateEnd, JSON.stringify(sw));
       ok("§F2 · the 'it moved to the top of this page' pointer paragraph is gone", !sw.pointer);
-      const chips = await page.$$eval("#settings-jump-chips [data-settings-jump]", (els) => els.map((b) => b.dataset.settingsJump));
-      eq("§F3 · owner: the jump nav is the five group headings", chips, ["firm", "automations", "integrations", "team", "data"]);
+      /* R89 · C: was the #settings-jump-chips jump nav (settings-nav-<key>, a scroll to the section) — the five
+         group headings are TABS now (#settings-tabs-<key>); a tab shows its room instead of scrolling to it. */
+      const chips = await page.$$eval("#settings-tabs > .seg-btn[data-tab]", (els) => els.map((b) => b.dataset.tab));
+      eq("§F3 · owner: the tabs are the five group headings", chips, ["firm", "automations", "integrations", "team", "data"]);
       const jump = await page.evaluate(async () => {
-        document.getElementById("settings-nav-integrations").click();
+        document.getElementById("settings-tabs-integrations").click();
         await new Promise((r) => setTimeout(r, 1200));
-        return { open: document.getElementById("set-sec-advanced").open, top: document.getElementById("set-sec-advanced").getBoundingClientRect().top, active: [...document.querySelectorAll("#settings-jump-chips .seg-btn.active")].map((b) => b.id) };
+        return { open: !document.getElementById("set-sec-advanced").classList.contains("hidden"), top: document.getElementById("set-sec-advanced").getBoundingClientRect().top, active: [...document.querySelectorAll('#settings-tabs .seg-btn[aria-pressed="true"]')].map((b) => b.id) };
       });
-      ok("§F4 · the Integrations chip opens the Advanced fold and scrolls to it", jump.open && jump.top < 250 && jump.active.includes("settings-nav-integrations"), JSON.stringify(jump));
-      const dataChip = await page.evaluate(() => { const b = document.getElementById("settings-nav-data"); b.click(); return new Promise((r) => setTimeout(() => r(document.getElementById("firm-export-panel").getBoundingClientRect().top), 1200)); });
-      ok("§F5 · the Data chip lands on Data & backup, which now sits with Change history", dataChip < 250, String(dataChip));
+      ok("§F4 · the Integrations tab shows the old Advanced section near the top", jump.open && jump.top < 250 && jump.active.includes("settings-tabs-integrations"), JSON.stringify(jump));
+      const dataChip = await page.evaluate(() => { const b = document.getElementById("settings-tabs-data"); b.click(); return new Promise((r) => setTimeout(() => r(document.getElementById("firm-export-panel").getBoundingClientRect().top), 1200)); });
+      ok("§F5 · the Data tab opens on Data & backup, with Change history", dataChip > 0 && dataChip < 250, String(dataChip));
       eq("§F · no console errors (owner)", realErrs(page).slice(e0), []);
       await page.close();
 
       const admin = await boot(browser, "p1");
       const eA = realErrs(admin).length;
       await goPage(admin, "settings", 2600);
-      const adminChips = await admin.$$eval("#settings-jump-chips [data-settings-jump]", (els) => els.map((b) => b.dataset.settingsJump));
+      const adminChips = await admin.$$eval("#settings-tabs > .seg-btn[data-tab]", (els) => els.map((b) => b.dataset.tab));   // R89 · C: was the jump chips
       ok("§F6 · admin: the same five groups, Data anchored on a panel the admin can see (change history is Owner-only, diagnostics is not)", adminChips.length === 5 && adminChips.includes("data"), JSON.stringify(adminChips));
       const roNote = await txt(admin, "#settings-readonly-note");
       ok("§F7 · admin: the read-only line is one sentence pair, ≤ 25 words", !!roNote && words(roNote) <= 25, roNote);
@@ -367,11 +389,11 @@ const LEAK_RE = /coalesce|ceil\(|first_contact_at|protection_status|protection_q
         note: !!document.getElementById("settings-readonly-note") && /edit and save those/.test(document.getElementById("settings-readonly-note").textContent),
         hidden: ["introducers-panel", "team-logins-panel", "firm-export-panel", "change-history-panel", "settings-golive", "email-sending-status"].map((id) => document.getElementById(id).classList.contains("hidden")),
         shown: ["my-details-panel", "security-panel"].map((id) => !document.getElementById(id).classList.contains("hidden")),
-        bar: document.getElementById("settings-jump").hidden, targets: !!document.getElementById("adviser-targets-section"), save: document.getElementById("save-settings-btn").classList.contains("hidden"),
+        bar: !document.getElementById("settings-tabs"), targets: !!document.getElementById("adviser-targets-section"), save: document.getElementById("save-settings-btn").classList.contains("hidden"),
       }));
       ok("§F8 · adviser: no firm form controls at all", advView.controls === 0, String(advView.controls));
       ok("§F9 · …only My details and Security are on the page", advView.shown.every(Boolean) && advView.hidden.every(Boolean) && !advView.targets && advView.save, JSON.stringify(advView));
-      ok("§F10 · …no jump bar (nothing to jump between) and the read-only line keeps r5_batch8's 'edit and save those'", advView.bar === true && advView.note, JSON.stringify(advView));
+      ok("§F10 · …no tab strip (R89 · C: was no jump bar — one tab, nothing to switch between) and the read-only line keeps r5_batch8's 'edit and save those'", advView.bar === true && advView.note, JSON.stringify(advView));
       // Vault (owner/admin controls) — as the admin.
       await goPage(adv, "vault", 2200);
       const vAdv = await adv.evaluate(() => ({ del: document.querySelectorAll("#vault-list .vault-del").length, more: document.querySelectorAll("#vault-list details.vault-more").length }));
@@ -425,21 +447,26 @@ const LEAK_RE = /coalesce|ceil\(|first_contact_at|protection_status|protection_q
       const page = await boot(browser, "p4");
       const e0 = realErrs(page).length;
       await goPage(page, "reports");
-      const arrive = await page.evaluate(() => ({ pills: document.querySelectorAll("#reports-jump-chips [data-reports-jump]").length, pillBar: document.getElementById("reports-jump").hidden, chips: document.getElementById("rep-nav").hidden, toggle: !!document.getElementById("reports-jump-toggle"), toggleTab: document.getElementById("reports-jump-toggle").getAttribute("role") }));
-      ok("§G1 · on arrival: the section pills show, the 23-chip strip does not", arrive.pills >= 4 && !arrive.pillBar && arrive.chips === true, JSON.stringify(arrive));
-      ok("§G2 · a 'Panels' toggle sits with the pills and is not itself a tab (r74 §D2 pill count untouched)", arrive.toggle && arrive.toggleTab !== "tab", JSON.stringify(arrive));
-      await page.click("#reports-nav-money");
-      await page.waitForTimeout(900);
-      const afterPill = await page.evaluate(() => ({ chips: document.getElementById("rep-nav").hidden, n: document.querySelectorAll("#rep-nav-chips [data-rep-jump]").length, owed: !!document.getElementById("rep-nav-owed"), pos: getComputedStyle(document.getElementById("rep-nav")).position }));
-      ok("§G3 · pressing a pill reveals that section's chips (still sticky, r11/r74 contracts)", afterPill.chips === false && afterPill.n >= 1 && afterPill.owed && afterPill.pos === "sticky", JSON.stringify(afterPill));
+      /* R89 · B — the pills are the page-tab strip now; the per-panel strip stays opt-in, lives inside the
+         tab on screen and is no longer sticky (no scroll-spy). Was: pills in #reports-jump, sticky chips,
+         gotoMoneyOwed landing on "Money & book" — Money owed lives on the Money tab now. */
+      const arrive = await page.evaluate(() => ({ tabs: document.querySelectorAll("#reports-tabs > [data-tab]").length, chips: document.getElementById("rep-nav").hidden, toggle: !!document.getElementById("reports-jump-toggle") && !document.getElementById("reports-jump-toggle").hidden, toggleTab: document.getElementById("reports-jump-toggle").getAttribute("role") }));
+      ok("§G1 · on arrival: the tabs show, the chip strip does not", arrive.tabs >= 4 && arrive.chips === true, JSON.stringify(arrive));
+      ok("§G2 · a 'Panels' toggle is offered and is not itself a tab", arrive.toggle && arrive.toggleTab !== "tab", JSON.stringify(arrive));
+      await page.click("#reports-tabs-book");
+      await page.waitForTimeout(1500);
+      await page.click("#reports-jump-toggle");
+      await page.waitForTimeout(400);
+      const afterPill = await page.evaluate(() => ({ chips: document.getElementById("rep-nav").hidden, n: document.querySelectorAll("#rep-nav-chips [data-rep-jump]").length, inTab: document.querySelector('[data-tabpanel="book"]').contains(document.getElementById("rep-nav")), pos: getComputedStyle(document.getElementById("rep-nav")).position }));
+      ok("§G3 · 'Panels ▾' reveals the tab's chips, inside the tab, not sticky", afterPill.chips === false && afterPill.n >= 2 && afterPill.inTab && afterPill.pos === "static", JSON.stringify(afterPill));
       await page.click("#reports-jump-toggle");
       await page.waitForTimeout(400);
       const toggled = await page.evaluate(() => ({ chips: document.getElementById("rep-nav").hidden, expanded: document.getElementById("reports-jump-toggle").getAttribute("aria-expanded") }));
       ok("§G4 · the toggle hides them again and says so (aria-expanded)", toggled.chips === true && toggled.expanded === "false", JSON.stringify(toggled));
       await page.evaluate(() => window.gotoMoneyOwed());
-      await page.waitForTimeout(1600);
-      const deep = await page.evaluate(() => ({ chips: document.getElementById("rep-nav").hidden, section: (document.querySelector("#reports-jump-chips .seg-btn.active") || {}).dataset.reportsJump }));
-      ok("§G5 · a deep link (gotoMoneyOwed) re-opens the strip and lands in Money & book (r74 §D3)", deep.chips === false && deep.section === "money", JSON.stringify(deep));
+      await page.waitForTimeout(2000);
+      const deep = await page.evaluate(() => ({ tab: currentPageTab("reports"), owed: document.getElementById("report-owed-panel").offsetParent !== null }));
+      ok("§G5 · a deep link (gotoMoneyOwed) lands on the Money tab with Money owed on screen (r74 §D3)", deep.tab === "money" && deep.owed, JSON.stringify(deep));
       eq("§G · no console errors", realErrs(page).slice(e0), []);
       await page.close();
     }

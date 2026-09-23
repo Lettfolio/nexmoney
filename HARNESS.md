@@ -155,7 +155,39 @@ node tests/r88_today.js
 node tests/r88_book_b.js
 node tests/r88_book_c.js
 node tests/r88_case.js
+node tests/r89_tabs.js
+node tests/r89_operations.js
+node tests/r89_reports.js
+node tests/r89_settings.js
 ```
+
+**R89 notes — "Fewer rooms" (page tabs; `tests/r89_tabs.js`, `r89_operations.js`, `r89_reports.js`, `r89_settings.js`).**
+Emails, Import and Data health are the three tabs of one Operations page; Monday money is the Owner's Money tab of
+Reports; Settings is five tabs (Firm & rules / Automations / Integrations / Team & security / Data). The sidebar is
+ten entries for the Owner (Today · Pipeline · Diary · Clients · Protection · Retention · Reports · Vault · Operations
+· Settings); each entry's label, the page's h2 and `document.title` agree, and a tab reads `Page › Tab` in the title.
+
+  - **THE TABS API** is `panel-r87/TABS.md`: `PAGE_TABS` / `PAGE_TAB_LOADERS`, `activatePageTab(page, key)`,
+    `resolvePageTab`, `currentPageTab()`, `pageIsShown(name)`. `nav(page, push, tab)` and `nav("page/tab")` both
+    work; the hash is `#<page>/<tab>`; a page hash with no tab lands on the stored tab (`nx_tab_<page>_<uid>`),
+    else the first. The choice persists per user — a suite that expects a particular tab must NAME it.
+  - **ALIASES** (old names still route, after their own gate):
+
+    | Old | Now | Hash |
+    |---|---|---|
+    | `nav("emails")`, `#emails` | Operations › Emails & SMS | `#operations/emails` |
+    | `nav("import")`, `#import` | Operations › Import | `#operations/import` |
+    | `nav("data")`, `#data` | Operations › Data health | `#operations/data` |
+    | `nav("money")`, `#money` | Reports › Money (Owner; others bounce to Today) | `#reports/money` |
+
+  - **THE NESTED-PAGE RULE.** `#page-emails`, `#page-import`, `#page-data` and `#page-money` still exist and keep
+    `class="page"`, but they sit INSIDE `#page-operations` / `#page-reports` as tab panels. `currentPage` is
+    `"operations"` / `"reports"`, never the old name — so app code and suites ask `pageIsShown("emails")` (true only
+    on Operations › Emails), not `currentPage === "emails"`. `#page-emails.hidden` still means "not on screen".
+  - **DEEP LINKS NAME THEIR TAB** (R89 · D): a link that means a section says so — `nav("settings", true, "firm")`,
+    `nav("operations/emails")`, `nav("reports", true, "month")` — rather than relying on the stored tab.
+  - Clicking in a suite: `#topnav button[data-page="operations"]` then `#operations-tabs-<key>`; Reports › Money is
+    `#reports-tabs-money`. The old `#topnav button[data-page="emails"|"import"|"data"|"money"]` and `#nav-money` are gone.
 
 **R86 notes — "Second factor", TOTP two-step sign-in (`tests/r86_mfa.js` 123, incl. the R86 · V verifier round).** The contract is
 R86-DESIGN.md; the server side is `db/r86/01_session_ok.sql` (settings seed + `session_ok()` +

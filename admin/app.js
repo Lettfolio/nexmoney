@@ -231,13 +231,16 @@ const NO_ACCESS_OPTION_TITLE = "Former/removed login — still shown because cas
 const APPROX = `<span class="approx" title="${TIP_APPROX}">≈</span>`;
 // Each entry: [key, label, type?]. type: "email" / "url" light-validates on save;
 // "bool10" renders the same On/Off <select> pattern used across the page, stored as "1"/"0".
+/* R89 · C — SINGLE SOURCE (05 #4). `adviser_name` / `adviser_phone` left this form: your own phone and
+   email sign-off are edited in My details and nowhere else (the roster shows them read-only for you),
+   and every sender already prefers the adviser's profile row. `google_review_link` left too — the ONE
+   review link is `review_platform_link` (Automations › Client comms). The stored rows are untouched,
+   and every consumer keeps its `review_platform_link || google_review_link` / `adv.phone || adviser_phone`
+   fallback until the stored values are migrated. */
 const SETTING_FIELDS = [
   ["company_name", "Company name"],
-  ["adviser_name", "Adviser name (email sign-off)"],
-  ["adviser_phone", "Adviser phone"],
   ["from_email", "From email (verified in Resend)", "email"],
   ["reply_to_email", "Reply-to email", "email"],
-  ["google_review_link", "Google review link", "url"],
   ["bank_account_name", "Bank account name"],
   ["bank_sort_code", "Sort code"],
   ["bank_account_number", "Account number"],
@@ -264,10 +267,13 @@ const SETTING_FIELDS = [
   ["auto_referral", "Auto referral nudge after review", "bool10"],
   ["docs_list", "Document checklist (separate items with |)"],
 ];
+/* R89 · C — the keys above that are the firm's own facts (Settings › Firm & rules); every other
+   SETTING_FIELDS key is a timing or an automatic email and opens the Automations tab. */
+const SETTING_FIRM_KEYS = ["company_name", "from_email", "reply_to_email", "monthly_fee_target"];
 // Friendly labels for the light save-time validation (email-shaped / URL-shaped fields
 // that live outside SETTING_FIELDS, e.g. rendered inline further down in renderSettings()).
 const SETTING_EMAIL_FIELDS = { from_email: "From email", reply_to_email: "Reply-to email", owner_digest_email: "Owner digest email address" };
-const SETTING_URL_FIELDS = { google_review_link: "Google review link", review_platform_link: "Review platform link", site_url: "Site URL" };
+const SETTING_URL_FIELDS = { review_platform_link: "Review platform link", site_url: "Site URL" };   // R89 · C — google_review_link is no longer a field
 /* T1-10 — these two categories BLOCK the save (unlike the email/URL checks above, which only warn):
    a bad number here corrupts a live metric (the rate-reminder KPI renders "≤ NaNmo" and the whole
    "ending soon" bucket vanishes), and a bad bank field is the one setting with direct
@@ -869,6 +875,115 @@ function rowItemHtml(o) {
     + (o.sub ? `<div class="row-sub">${o.sub}</div>` : "")
     + `</div>`;
 }
+/* R89 · F — PAGE TABS (R89-DESIGN "Shared mechanics"; API + rules: panel-r87/TABS.md; suite
+   tests/r89_tabs.js). One page, several rooms: Operations (Emails & SMS / Import / Data health),
+   Reports (+ the owner's Money tab) and, from slice C, Settings. A page REGISTERS its tabs and
+   their loaders in the two maps below (outside this block — the kit still knows no page):
+
+     PAGE_TABS[page]        = [{ key, label, count?, when?() , id?, title? }]   (DOM order)
+     PAGE_TAB_LOADERS[page] = { <key>: loaderFn }
+
+   and the page section carries `[data-tabpanel="<key>"]` element(s) per tab (R89 · fixer: more than
+   one per key is fine — every helper toggles/looks up by `closest`, see TABS.md) plus ONE empty
+   `.page-tabs-slot` where the strip is rendered. `activatePageTab(page, key)` does the rest: shows
+   that panel, hides its siblings, re-renders the strip, remembers the choice per user
+   (`nx_tab_<page>_<uid>`), writes `#<page>/<tab>` into the address bar and runs the tab's loader
+   the FIRST time it is shown (again only on `{ refresh: true }` — nav() passes that, because
+   arriving at a page has always reloaded it). The loader is called with `{ refresh }` (R89 · fixer). A tab whose `when()` is false is neither rendered
+   nor activatable: asking for it falls back to the first allowed tab. */
+const PAGE_TABS = {};
+const PAGE_TAB_LOADERS = {};
+const pageTabActive = {};    // page → the key on screen (or about to be)
+const pageTabLoaded = {};    // page → Set of keys whose loader has run this session
+const pageTabName = (p) => String(p == null ? "" : p).replace(/^#/, "").replace(/^page-/, "");
+const pageTabStoreKey = (page) => userKey(`nx_tab_${pageTabName(page)}`);
+function pageTabWhen(t) {
+  if (!t || typeof t.when !== "function") return true;
+  try { return !!t.when(); } catch (_) { return false; }
+}
+/* The tabs a page offers THIS user, in order. */
+function pageTabsAllowed(page) {
+  return (PAGE_TABS[pageTabName(page)] || []).filter((t) => t && t.key != null && pageTabWhen(t));
+}
+/* Which key a request resolves to: an allowed explicit key wins; a key that is not allowed (a
+   hand-typed #reports/money for an admin) falls back to the FIRST allowed tab; no key at all means
+   "the one you had last", else the first. null when the page has no allowed tab. */
+function resolvePageTab(page, key) {
+  const allowed = pageTabsAllowed(page);
+  if (!allowed.length) return null;
+  const has = (k) => k != null && k !== "" && allowed.some((t) => t.key === k);
+  if (has(key)) return key;
+  if (key != null && key !== "") return allowed[0].key;
+  const stored = lsGet(pageTabStoreKey(page));
+  return has(stored) ? stored : allowed[0].key;
+}
+/* pageTabsHtml — the strip. The R73/R88 chip family (.seg-strip > .seg-btn + .seg-count), with
+   `data-tab` + `aria-pressed`. Renders "" when fewer than two tabs survive `when()` (a strip with
+   one chip is a label pretending to be a control) unless `always: true`. */
+function pageTabsHtml(o) {
+  o = o || {};
+  const tabs = (o.tabs || []).filter((t) => t && t.key != null && pageTabWhen(t));
+  if (tabs.length < 2 && !o.always) return "";
+  const active = tabs.some((t) => t.key === o.active) ? o.active : (tabs[0] ? tabs[0].key : null);
+  return `<div class="page-tabs seg-strip"${kitAttr("id", o.id)}${kitAttr("data-tabs-page", o.page)} role="group" aria-label="${esc(o.ariaLabel || "Parts of this page")}">` + tabs.map((t) => {
+    const on = t.key === active;
+    const c = typeof t.count === "function" ? (() => { try { return t.count(); } catch (_) { return null; } })() : t.count;
+    const n = c == null || c === "" ? "" : ` <span class="seg-count">${esc(c)}</span>`;
+    const id = t.id || (o.id ? `${o.id}-${t.key}` : "");
+    return `<button type="button" class="seg-btn${on ? " active" : ""}"${kitAttr("id", id)} data-tab="${esc(t.key)}" aria-pressed="${on}"${kitAttr("title", t.title)}>${esc(t.label == null ? t.key : t.label)}${n}</button>`;
+  }).join("") + `</div>`;
+}
+/* The tab panels that belong to THIS page (not to a page nested inside one of them). */
+function pageTabPanels(root) {
+  return [...root.querySelectorAll("[data-tabpanel]")].filter((p) => p.parentElement && p.parentElement.closest(".page") === root);
+}
+/* activatePageTab(page, key, { silent, refresh }) → the key shown, or null.
+   `page` is the page name ("operations") or its section id ("page-operations").
+   silent: leave the address bar alone (nav() writes it itself). refresh: re-run the loader. */
+function activatePageTab(pageId, key, opts) {
+  const o = opts || {};
+  const page = pageTabName(pageId);
+  const root = document.getElementById("page-" + page);
+  const k = resolvePageTab(page, key);
+  if (!root || k == null) return null;
+  pageTabActive[page] = k;
+  pageTabPanels(root).forEach((p) => p.classList.toggle("hidden", p.dataset.tabpanel !== k));
+  const slot = [...root.querySelectorAll(".page-tabs-slot")].find((s) => s.closest(".page") === root);
+  if (slot) slot.innerHTML = pageTabsHtml({ id: `${page}-tabs`, page, tabs: PAGE_TABS[page], active: k, ariaLabel: o.ariaLabel });
+  lsSet(pageTabStoreKey(page), k);
+  if (!o.silent && typeof currentPage !== "undefined" && currentPage === page) {
+    const hash = pageHash(page);
+    if (location.hash !== hash) histReplace({ page, tab: k }, hash);
+    setPageTitle(page);
+  }
+  /* Phone: the strip scrolls sideways — keep the pressed tab in view (the R87 · E1 sidebar move). */
+  const strip = slot && slot.querySelector(".page-tabs");
+  if (strip) requestAnimationFrame(() => {
+    const b = strip.querySelector('.seg-btn[aria-pressed="true"]');
+    if (!b || strip.scrollWidth <= strip.clientWidth + 2) return;
+    const r = b.getBoundingClientRect(), s = strip.getBoundingClientRect();
+    if (r.left < s.left || r.right > s.right) strip.scrollLeft += (r.left + r.width / 2) - (s.left + s.width / 2);
+  });
+  const loaded = pageTabLoaded[page] || (pageTabLoaded[page] = new Set());
+  const fn = (PAGE_TAB_LOADERS[page] || {})[k];
+  if (!o.noLoad && typeof fn === "function" && (o.refresh || !loaded.has(k))) {
+    loaded.add(k);
+    fn({ refresh: !!o.refresh });   // R89 · fixer — the loader is told WHY it runs: an arrival/refresh re-reads, a first open may paint from a read it already holds (repTabLoader)
+  }
+  return k;
+}
+/* The tab a page is showing — only while that page is the current one. */
+function currentPageTab(page) {
+  const p = pageTabName(page || currentPage);
+  return typeof currentPage !== "undefined" && currentPage === p ? (pageTabActive[p] || null) : null;
+}
+document.addEventListener("click", (e) => {
+  const b = e.target && e.target.closest && e.target.closest(".page-tabs > .seg-btn[data-tab]");
+  if (!b) return;
+  const strip = b.parentElement;
+  const page = strip.dataset.tabsPage || pageTabName((strip.closest(".page") || {}).id);
+  if (page) activatePageTab(page, b.dataset.tab);
+});
 /* ===== END R88 LIST KIT ===== */
 // BUILD 6d — per-user persisted pipeline prefs (segment + board/table view). localStorage is a
 // normal feature of this web app, but every key is namespaced with the signed-in user's id (so a
@@ -5298,11 +5413,8 @@ async function showApp(session) {
      carries the full address for hover and for assistive tech. */
   $("#user-email").textContent = session.user.email;
   $("#user-email").title = `Signed in as ${session.user.email}`;
-  /* R7-4 — the Monday money nav item appears only for the Owner. Done here, after resolveMyRole
-     has answered, and never in the markup, so an adviser cannot see the button at all — not even
-     for the frame between the shell being revealed and the role arriving. */
-  const navMoney = $("#nav-money");
-  if (navMoney) navMoney.classList.toggle("hidden", !isOwner());
+  /* R89 · fixer — the R7-4 #nav-money toggle that stood here went with the button (R89 · F: Money is
+     the Owner's tab of Reports, gated by its `when: isOwner`). */
   /* R33 — and, for the same reason and in the same place, the Firm group's default state: the
      role is known now and not a frame earlier. See applyNavRole(). */
   applyNavRole();
@@ -5487,7 +5599,31 @@ $("#forgot-btn").addEventListener("click", async () => {
    the PWA service worker. All history.* calls are wrapped — if the History API is unavailable or
    blocked (some file:// contexts), modal history is simply not tracked and the app still works.
    Segments/filters stay OUT of the hash (session/localStorage already persists those). */
-const PAGE_HASH = { dashboard: "today", pipeline: "pipeline", protection: "protection", diary: "diary", clients: "clients", retention: "retention", import: "import", reports: "reports", money: "money", data: "data", emails: "emails", vault: "vault", settings: "settings" };
+const PAGE_HASH = { dashboard: "today", pipeline: "pipeline", protection: "protection", diary: "diary", clients: "clients", retention: "retention", import: "import", reports: "reports", money: "money", data: "data", emails: "emails", operations: "operations", vault: "vault", settings: "settings" };
+/* R89 · F — FEWER ROOMS. Emails, Import and Data health are tabs of Operations; Monday money is the
+   owner's Money tab of Reports. Their names stay routable: nav("emails"), #emails, a palette verb
+   or an old bookmark all land on the page that now holds them, on that tab. The sections keep
+   their ids (#page-emails …) as the tab panels, so everything that reads inside them still does. */
+const PAGE_ALIAS = { emails: ["operations", "emails"], import: ["operations", "import"], data: ["operations", "data"], money: ["reports", "money"] };
+PAGE_TABS.operations = [
+  { key: "emails", label: "Emails & SMS" },
+  { key: "import", label: "Import" },
+  { key: "data", label: "Data health" },
+];
+/* R89 · B — Reports' tabs ARE its sections: REPORT_SECTIONS (reports-money.js) declares key, label and
+   who each is for; the Owner's Money tab (Monday money) is last. */
+PAGE_TABS.reports = REPORT_SECTIONS.map(([key, label, , , when]) => ({ key, label, when }))
+  .concat([{ key: "money", label: "Money", when: () => isOwner() }]);   // R7-4 — Owner-only, now as a tab
+PAGE_TAB_LOADERS.operations = { emails: () => loadEmails(), import: () => renderRevLastSync(), data: () => loadDataHealth() };
+PAGE_TAB_LOADERS.reports = Object.fromEntries(REPORT_SECTIONS.map(([key]) => [key, (o) => repTabLoader(key, o)])   // R89 · fixer — `o` = { refresh } from activatePageTab
+  .concat([["money", () => loadMoneyPage()]]));   // R89 · B — one shared read, painted per tab (repTabLoader)
+/* Is this page (or aliased tab) the one on screen? pageIsShown("money") is true only on Reports ›
+   Money. Use it instead of `currentPage === "<old page>"`, which is never true for the four. */
+function pageIsShown(name) {
+  const a = PAGE_ALIAS[name];
+  if (a) return currentPage === a[0] && pageTabActive[a[0]] === a[1];
+  return currentPage === name;
+}
 /* R7-4 — pages only some roles may open. Monday money is entirely firm-wide money, so it is
    Owner-only: the nav button is revealed by showApp and nav() below redirects anyone else who
    reaches for it (a bookmarked #money, a hand-typed hash, an old link in an email). Same standing
@@ -5502,6 +5638,7 @@ const PAGE_ROLE_GATE = {
   import: () => isAdminOrOwner(),
   emails: () => isAdminOrOwner(),
   data: () => isAdminOrOwner(),
+  operations: () => isAdminOrOwner(),   // R89 · F — the page that now holds the three above
 };
 /* R87 · B7 — the sidebar hides what the gate refuses, the way #nav-money always has (showApp), so
    an adviser's first sidebar is the pages they can act on: 13 → 10 entries. Called from
@@ -5532,7 +5669,11 @@ let modalHistoryPopPending = false;
    history entry it was raised on; the popstate handler re-pushes that entry and cancels the capture
    instead. A stack, not a single slot, so a nested capture can never orphan its parent's anchor. */
 const overlayStack = [];
-const pageHash = (page) => "#" + (PAGE_HASH[page] || "today");
+/* R89 · F — a tabbed page's hash carries its tab: #operations/import, #reports/money. */
+const pageHash = (page, tab) => {
+  const t = tab || (PAGE_TABS[page] && pageTabsAllowed(page).length > 1 ? pageTabActive[page] : "");
+  return "#" + (PAGE_HASH[page] || "today") + (t ? "/" + t : "");
+};
 function histPush(state, hash) { try { history.pushState(state, "", hash); return true; } catch (e) { return false; } }
 function histReplace(state, hash) { try { history.replaceState(state, "", hash); return true; } catch (e) { return false; } }
 // Push (or, while a modal is already open, replace) the modal's history entry. currentModal is only
@@ -5604,8 +5745,10 @@ async function routeFromHash() {
   // R7-4 — resolve the role gate HERE too, so the clean base entry written below is the page the
   // user actually landed on rather than the one they asked for and did not get.
   if (PAGE_ROLE_GATE[page] && !PAGE_ROLE_GATE[page]()) page = "dashboard";
-  nav(page, false);
-  histReplace({ page }, pageHash(page)); // establish a clean base entry (also normalises unknown hashes)
+  /* R89 · F — #<page>/<tab> (and the old #emails / #money, which nav() aliases to their tab). The
+     base entry is written from where nav() actually landed: the aliased page, the allowed tab. */
+  nav(page, false, page === "dashboard" ? undefined : id);
+  histReplace({ page: currentPage, tab: pageTabActive[currentPage] }, pageHash(currentPage)); // establish a clean base entry (also normalises unknown hashes)
 }
 // Browser Back / Forward. Modal open → close it (honouring the log-call dirty guard; cancel re-pushes
 // the entry). Otherwise switch to the target page. Never traps: a Back past the first entry exits.
@@ -5643,8 +5786,9 @@ window.addEventListener("popstate", (e) => {
     return;
   }
   const st = e.state || {};
-  const page = st.page || HASH_PAGE[(location.hash || "#today").replace(/^#/, "").split("/")[0]] || "dashboard";
-  nav(page, false);
+  const [hHead, hTab] = (location.hash || "#today").replace(/^#/, "").split("/");
+  const page = st.page || HASH_PAGE[hHead] || "dashboard";
+  nav(page, false, st.page ? st.tab : hTab);   // R89 · F — the tab travels with the entry
 });
 $("#topnav").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-page]");
@@ -5675,7 +5819,25 @@ function navFirmOpen() {
   const group = $("#nav-firm-group");
   return !!group && !group.classList.contains("collapsed");
 }
+/* R89 · A — A GROUP OF ONE DOES NOT FOLD (01 #4). Operations took Emails, Import and Data health, so
+   an adviser's Firm group is Settings alone — a fold around one entry is a click to reach one button.
+   When the role gate leaves a single entry the group is simply open: the toggle steps aside for a
+   plain "Firm" label (#nav-firm-head, a .nav-group-head like Work/Book/Money) and a stored
+   nx_nav_firm answer is ignored, not erased. Counted off PAGE_ROLE_GATE (not the .hidden classes),
+   because applyNavRole runs before applyPageRoleGateNav has revealed anything. */
+function navFirmLone() {
+  const g = $("#nav-firm-group");
+  if (!g) return false;
+  return [...g.querySelectorAll("button[data-page]")].filter((b) => {
+    const gate = PAGE_ROLE_GATE[b.dataset.page];
+    return !gate || gate();
+  }).length <= 1;
+}
 function applyNavRole() {
+  const lone = navFirmLone();
+  $("#nav-firm-toggle")?.classList.toggle("hidden", lone);
+  $("#nav-firm-head")?.classList.toggle("hidden", !lone);
+  if (lone) { setNavFirmOpen(true); return; }
   const saved = lsGet(NAV_FIRM_KEY);
   // A stored answer beats the role default in both directions — an adviser who opened the group
   // keeps it open, an owner who folded it keeps it folded.
@@ -5683,6 +5845,7 @@ function applyNavRole() {
   setNavFirmOpen(open);
 }
 $("#nav-firm-toggle")?.addEventListener("click", () => {
+  if (navFirmLone()) return;   // R89 · A — nothing to fold (the toggle is hidden then anyway)
   const open = !navFirmOpen();
   setNavFirmOpen(open);
   lsSet(NAV_FIRM_KEY, open ? "open" : "closed");
@@ -5890,19 +6053,22 @@ const TOUR_STEP_HELP = { target: "#help-btn", title: "Need a definition?", body:
 /* The last step for EVERY role. R70/R71 rebuilt this page around working the back book, and it is
    the one destination none of the three roles would otherwise be sent to. */
 const TOUR_STEP_RETENTION = { target: "#topnav button[data-page=\"retention\"]", title: "The back book lives here", body: "Retention is every client whose rate is running out — and every rate that has already ended and nobody has rung. One click to call from the row, chips to record what happened, and a “Rate-end outcomes” line at the top saying how many of the last year's endings nobody has an answer for. This is the firm's repeat business, and it is the page to open when nothing is on fire." };
+/* R89 · F — the Emails / Data health / Monday money nav items are gone (tabs of Operations and
+   Reports); their steps point at the entry that now holds them. Wording is slice A's. */
 const TOUR_STEPS_BY_ROLE = {
   owner: [
     TOUR_STEP_MY_DAY,
     TOUR_STEP_WATCHTOWER,
     { target: "#topnav button[data-page=\"reports\"]", title: "The firm's numbers", body: "Reports is completions, fees, the funnel and the adviser scoreboard — including “Is anyone using it?”, which says when each of your colleagues last recorded anything. Money figures on this page are yours alone; the rest of the team see case counts." },
-    { target: "#nav-money", title: "Monday money", body: "The one page built for the weekly money hour: fees due, fees ageing, what has been banked. Owner only, and it is not on anybody else's nav." },
+    { target: "#topnav button[data-page=\"reports\"]", title: "Reports › Money", body: "The Money tab of Reports is built for the weekly money hour: fees due, fees ageing, what has been banked. Owner only — nobody else sees the tab." },   // R89 · D: was "Monday money" (a page); it is a tab
     TOUR_STEP_RETENTION,
   ],
   admin: [
     TOUR_STEP_MY_DAY,
     TOUR_STEP_WATCHTOWER,
-    { target: "#topnav button[data-page=\"emails\"]", title: "The email queue", body: "Every automated message waits here before it goes — rate-end reminders, document requests, review asks. Nothing sends while the hold is on (Settings says so at the top, in one line), so this is the page to check before and after that switch is ever released." },
-    { target: "#topnav button[data-page=\"data\"]", title: "Data health", body: "Missing emails and phone numbers, cases with no adviser, completions with no fee — the tidying that makes everything else work, each with the list behind it and, now, a fix you can type straight into the row." },
+    /* R89 · A — both steps point at Operations and say which of its tabs they mean. */
+    { target: "#topnav button[data-page=\"operations\"]", title: "Operations › Emails & SMS — the email queue", body: "Every automated message waits here before it goes — rate-end reminders, document requests, review asks. Nothing sends while the hold is on (Settings › Firm & rules says so, in one line), so this is the tab to check before and after that switch is ever released." },
+    { target: "#topnav button[data-page=\"operations\"]", title: "Operations › Data health", body: "Missing emails and phone numbers, cases with no adviser, completions with no fee — one row per check, with the list behind it and a fix you can type straight into the row. Import is the tab beside it." },
     TOUR_STEP_RETENTION,
   ],
   adviser: [
@@ -6115,7 +6281,7 @@ function runFirstRunTour(opts) {
    role-visible entries with rel > marker, and dismissing (or the first-sign-in stamp) writes the
    current release. The old `nx_whatsnew_r72` "seen" key is honoured as "has seen up to 72", so
    nobody who dismissed the r72 line gets it back. */
-const WHATSNEW_RELEASE = 79;
+const WHATSNEW_RELEASE = 89;   // R89 · D: was 79 — one R89 entry, tagged owner/admin (an adviser's sidebar did not change; they keep the R79 line)
 const WHATSNEW_LEGACY_KEY = "nx_whatsnew_r72";
 const whatsNewKey = () => "nx_whatsnew_last_" + ((ME && ME.id) || "anon");
 /* Short clauses, in the words the screens themselves use — the band must stay ONE line on a
@@ -6125,6 +6291,7 @@ const WHATSNEW_ENTRIES = [
   { rel: 72, roles: ["owner", "admin"], text: "a go-live list on Settings" },
   { rel: 79, roles: null, text: "document and fact-find links now expire after 30 days, with a Regenerate button on the case" },
   { rel: 79, roles: ["owner"], text: "firm exports withhold client link tokens" },
+  { rel: 89, roles: ["owner", "admin"], text: "fewer rooms: Emails, Import and Data health are tabs of one Operations page, and Reports and Settings open in tabs" },
 ];
 function whatsNewStamp() { lsSet(whatsNewKey(), String(WHATSNEW_RELEASE)); }
 function dismissWhatsNew() {
@@ -6238,10 +6405,16 @@ function pageTitleLabel(page) {
   return raw || (page ? page.charAt(0).toUpperCase() + page.slice(1) : "");
 }
 function setPageTitle(page) {
-  const lbl = pageTitleLabel(page);
+  let lbl = pageTitleLabel(page);
+  /* R89 · F — a tabbed page names its tab too ("Operations › Import"), so two tabs of the app
+     showing two rooms of one page can still be told apart. */
+  const t = PAGE_TABS[page] && pageTabsAllowed(page).length > 1 ? pageTabsAllowed(page).find((x) => x.key === pageTabActive[page]) : null;
+  if (t && t.label && t.label !== lbl) lbl = `${lbl} › ${t.label}`;
   document.title = lbl ? `${lbl} · ${BASE_TITLE}` : BASE_TITLE;
 }
-function nav(page, push = true) {
+function nav(page, push = true, tab) {
+  /* R89 · F — "operations/import" is the page and its tab in one string (the hash form). */
+  if (typeof page === "string" && page.includes("/")) { const [p0, t0] = page.split("/"); page = p0; if (tab == null || tab === "") tab = t0; }
   try { bookRetryAfterMs = 0; } catch (_) { /* R85 · V6 — a navigation is a fresh chance: the sync back-off is per page load, not per session */ }
   /* R74 · B1 (panel D#9) — LEAVING SETTINGS WITH UNSAVED WORK ASKS FIRST.
      Deliberately bounded to the user-initiated navigations (push defaults true): the cold-load
@@ -6255,10 +6428,8 @@ function nav(page, push = true) {
     confirmDiscard(`Settings (${n} field${n === 1 ? "" : "s"})`).then((discard) => {
       if (!discard) return;
       settingsNavBypass = true;
-      try { nav(page, push); } finally { settingsNavBypass = false; }
-      settingsBaseline = null;   // the edits are gone with the render; nothing left to be dirty about
-      const bar = $("#settings-dirty-bar");
-      if (bar) bar.classList.add("hidden");
+      try { nav(page, push, tab); } finally { settingsNavBypass = false; }
+      settingsBaseline = null;   // the edits are gone with the render; nothing left to be dirty about (R89 · D: the dead #settings-dirty-bar lookup went — the bar is #settings-save, redrawn by renderSettings)
     });
     return;
   }
@@ -6273,8 +6444,21 @@ function nav(page, push = true) {
     page = "dashboard";
     histReplace({ page }, pageHash(page));
   }
+  /* R89 · F — the four pages that became tabs: nav("emails") IS nav("operations", …, "emails"),
+     nav("money") IS Reports › Money. Resolved AFTER the gate above, so each keeps its own gate
+     (money: Owner) on top of the page's (operations: Owner or Administrator), which runs again. */
+  if (PAGE_ALIAS[page]) {
+    const [p1, t1] = PAGE_ALIAS[page];
+    page = p1; tab = t1;
+    if (PAGE_ROLE_GATE[page] && !PAGE_ROLE_GATE[page]()) { page = "dashboard"; tab = undefined; histReplace({ page }, pageHash(page)); }
+  }
+  const tabbed = !!PAGE_TABS[page];
+  if (tabbed) pageTabActive[page] = resolvePageTab(page, tab);
   document.querySelectorAll(".page").forEach((p) => p.classList.add("hidden"));
   $("#page-" + page).classList.remove("hidden");
+  /* Show the tab's panel NOW (nested .page sections were just hidden with the rest); its loader
+     runs at the bottom, where every page's loader always has. */
+  if (tabbed) activatePageTab(page, pageTabActive[page], { silent: true, noLoad: true });
   document.querySelectorAll("#topnav button").forEach((b) => {
     const on = b.dataset.page === page;
     b.classList.toggle("active", on);
@@ -6315,14 +6499,18 @@ function nav(page, push = true) {
   currentModal = null; // switching pages dismisses any modal history ownership
   if (push) {
     const hash = pageHash(page);
+    const st = tabbed ? { page, tab: pageTabActive[page] } : { page };
     // Already sitting on this page's hash with no modal → replace (avoid stacking duplicate entries).
-    if (location.hash === hash) histReplace({ page }, hash);
-    else histPush({ page }, hash);
+    if (location.hash === hash) histReplace(st, hash);
+    else histPush(st, hash);
   }
+  /* R89 · F — a tabbed page: the ACTIVE tab's loader, and only that one (the others load the first
+     time they are opened). Arriving at the page is an explicit refresh, as it always was. */
+  if (tabbed) { activatePageTab(page, pageTabActive[page], { silent: true, refresh: true }); return; }
   // B9 (R5-31) — the diary page can be showing either the month grid or the Day view; route to
   // whichever loader matches the persisted toggle so navigating back into #diary doesn't silently
   // flip it back to Month.
-  ({ dashboard: loadDashboard, pipeline: loadPipeline, protection: loadProtectionPage, diary: () => loadDiaryForMode(), clients: () => loadClients($("#client-search").value, { force: true }), retention: loadRetentionPage, import: () => renderRevLastSync(), reports: loadReports, money: loadMoneyPage, data: loadDataHealth, emails: loadEmails, vault: loadVault, settings: renderSettings }[page])();
+  ({ dashboard: loadDashboard, pipeline: loadPipeline, protection: loadProtectionPage, diary: () => loadDiaryForMode(), clients: () => loadClients($("#client-search").value, { force: true }), retention: loadRetentionPage, vault: loadVault }[page])();   // R89 · F — import/reports/money/data/emails load through PAGE_TAB_LOADERS; R89 · C — settings too (PAGE_TAB_LOADERS.settings)
 }
 
 /* ---------- Settings ---------- */
@@ -6614,13 +6802,17 @@ async function putEmailOnHold() {
 window.goliveJump = function (sel) {
   let el = null;
   try { el = document.querySelector(sel); } catch (e) { el = null; }
-  if (!el) return;
+  if (!el) return false;
+  /* R89 · C — Settings is five tabs: a row whose control lives on another tab opens that tab first. */
+  const tabPanel = el.closest("#page-settings [data-tabpanel]");
+  if (tabPanel && tabPanel.classList.contains("hidden")) activatePageTab("settings", tabPanel.dataset.tabpanel);
   let n = el;
   while (n && n !== document.body) { if (n.tagName === "DETAILS") n.open = true; n = n.parentElement; }
   const target = el.closest("label") || el;
   try { target.scrollIntoView({ behavior: "smooth", block: "center" }); } catch (e) { /* older browsers */ }
   target.classList.add("golive-flash");
   setTimeout(() => target.classList.remove("golive-flash"), 1600);
+  return true;
 };
 /* R72-HF1 — prod's from_email is the display-name form `NexMoney <onboarding@resend.dev>`, whose
    trailing ">" defeated an end-anchored /@resend\.dev$/ (the mock seeded the bare address, so the
@@ -6637,7 +6829,11 @@ function goliveChecks() {
   const withTarget = advisers.filter((a) => Number(targets[a.id] || 0) > 0).length;
   const fromEmail = String(settings.from_email || "").trim();
   const npsOn = String(settings.nps_enabled ?? "off") === "on";
-  const reviewLink = String(settings.google_review_link || "").trim() || String(settings.review_platform_link || "").trim();
+  const reviewLink = String(settings.review_platform_link || "").trim() || String(settings.google_review_link || "").trim();   // R89 · C — one field; the old key stays a fallback until migrated
+  /* R89 · C — the phone the automated emails sign off with is the adviser's own (My details); the
+     firm-wide settings row is only the senders' fallback now, and no longer has a box on this page. */
+  const ownerPhone = (PROFILES || []).filter((p) => p && p.role === "owner").map((p) => String(p.phone || "").trim()).find(Boolean) || "";
+  const phoneSet = !!(ownerPhone || String(settings.adviser_phone || "").trim());
   const rows = [
     { id: "golive-resend", label: "Email sending key on the server",
       state: probeUnknown ? "unknown" : (emailKeyMissing(p) ? "blocked" : "ready"),
@@ -6678,12 +6874,12 @@ function goliveChecks() {
       state: String(settings.doc_chase_enabled ?? "off") === "on" ? "ready" : "blocked",
       detail: String(settings.doc_chase_enabled ?? "off") === "on" ? "On — clients are chased for outstanding documents." : "Off — nobody is chased for a missing document.",
       blocks: "Every document a client owes is chased by hand or not at all. This is a decision, not an oversight — but it should be a decision somebody made, and today it is the default.",
-      sel: "#set-sec-documents" },
+      sel: '[name="doc_chase_enabled"]', fallback: "#set-sec-documents" },   // R89 · C — the switch itself (Firm & rules › Rules that block work), not the Documents terms on another tab
     { id: "golive-phone", label: "Adviser phone number",
-      state: String(settings.adviser_phone || "").trim() ? "ready" : "blocked",
-      detail: String(settings.adviser_phone || "").trim() ? "Set." : "Empty.",
+      state: phoneSet ? "ready" : "blocked",
+      detail: phoneSet ? "Set." : "Empty — add it in My details.",
       blocks: "Automated emails sign off with the firm's number. With this empty a client who wants to ring back has nothing to ring.",
-      sel: '[name="adviser_phone"]' },
+      sel: isOwner() ? "#my-phone" : "#team-logins-panel", fallback: "#my-details-panel" },
   ];
   return rows.filter((r) => !r.skip);
 }
@@ -6699,7 +6895,7 @@ function renderSettingsGolive() {
   const outstanding = rows.filter((r) => r.state !== "ready");
   const ready = rows.filter((r) => r.state === "ready");
   const chip = (s) => s === "ready" ? `<span class="badge green">ready</span>` : s === "unknown" ? `<span class="badge grey">not known</span>` : `<span class="badge red">blocked</span>`;
-  const row = (r) => `<div class="golive-item" id="${r.id}" data-state="${r.state}" role="button" tabindex="0" title="Jump to the setting that changes this" onclick="goliveJump('${jsArg(r.sel)}')${r.fallback ? `;goliveJump('${jsArg(r.fallback)}')` : ""}">
+  const row = (r) => `<div class="golive-item" id="${r.id}" data-state="${r.state}" role="button" tabindex="0" title="Jump to the setting that changes this" onclick="goliveJump('${jsArg(r.sel)}')${r.fallback ? `||goliveJump('${jsArg(r.fallback)}')` : ""}">
       <div class="golive-item-head"><span class="golive-label">${r.label}</span> ${chip(r.state)}</div>
       <div class="golive-detail">${r.detail}</div>
       ${r.state === "ready" ? "" : `<div class="golive-blocks">${r.blocks}</div>`}
@@ -6718,6 +6914,7 @@ function renderSettingsGolive() {
 }
 
 async function renderSettings() {
+  settingsPainted = true;   // R89 · C — one render per visit (settingsTabLoad)
   const owner = isOwner();
   const dobStats = await clientDobStats();
   const visibleFields = owner ? SETTING_FIELDS : SETTING_FIELDS.filter(([k]) => !OWNER_ONLY_SETTING_KEYS.includes(k));
@@ -6748,12 +6945,15 @@ async function renderSettings() {
      ========================================================================== */
   const bankKeys = OWNER_ONLY_SETTING_KEYS;
   const mainFields = visibleFields.filter(([k]) => !bankKeys.includes(k));
-  // The bank group takes the bank fields' own place in the list (after the review link), so no
-  // other field's neighbour changes — r64_small's "client_quiet_months sits next to
-  // rate_reminder_months" contract is a statement about this ordering.
-  const beforeBank = [], afterBank = [];
-  let pastAnchor = false;
-  mainFields.forEach((f) => { (pastAnchor ? afterBank : beforeBank).push(f); if (f[0] === "google_review_link") pastAnchor = true; });
+  /* R89 · C — FIVE TABS (05 #4). The firm's own facts (identity, bank, target) are the Firm & rules
+     tab; the "how long before we act" numbers and the automatic-email switches open the Automations
+     tab, in their existing order (r64_small: client_quiet_months still sits next to
+     rate_reminder_months). The bank group follows the reply-to address, as it followed the review
+     link that has left this form. */
+  const firmFields = mainFields.filter(([k]) => SETTING_FIRM_KEYS.includes(k));
+  const autoFields = mainFields.filter(([k]) => !SETTING_FIRM_KEYS.includes(k));
+  const beforeBank = firmFields.filter(([k]) => k !== "monthly_fee_target");
+  const afterBank = firmFields.filter(([k]) => k === "monthly_fee_target");
   const bankGroup = owner ? `
     <div class="set-group" id="set-group-bank">
       <h4 class="set-group-h">Firm bank details</h4>
@@ -6785,7 +6985,10 @@ async function renderSettings() {
         </label>`, setNoteHtml("setting-note-financial_promotions_approved", `<strong>Off = no financial promotion is queued or sent.</strong> Needs your network's template approval first.`, `${/* R82 · A1 — REWORDED. The old sentence ("the referral nudge, the protection intro email and the GI email never leave, whatever their own switches say") was true of one of the three: the nightly queueing function declines to create a referral nudge. Both protection-intro buttons inserted and sent straight past it, and nothing anywhere queues a GI email at all. A reader must be able to trust this paragraph literally, so it names the three enforcement points that exist and nothing else. */ ""}<p><strong>Off = a regulated financial promotion is not queued, and is cancelled rather than sent if it is already sitting in the queue.</strong> That is enforced in three places, and these are all of them: the nightly queueing job never creates a <strong>referral nudge</strong>; the <strong>Queue protection intro</strong> buttons on the Protection page — the row's own and the bulk one — refuse and say why; and the send run cancels any queued referral nudge, protection intro or GI email, marking the row cancelled with the reason instead of delivering it. Nothing else is affected: rate-end reminders, document requests, fact-finds, fee and review requests are not financial promotions and go out as normal. Note that the <strong>GI / buildings-insurance email</strong> has no button anywhere in this app that queues one — there is nothing for this switch to stop yet. Confirm your network has approved the templates before switching this on.</p>`)) : ""}
       </div>
     </div>`;
-  const general = blockerGroup + beforeBank.map(settingFieldHtml).join("") + bankGroup + afterBank.map(settingFieldHtml).join("") + `
+  const firmTab = blockerGroup + beforeBank.map(settingFieldHtml).join("") + bankGroup + afterBank.map(settingFieldHtml).join("");
+  const automations = `
+    <h3 id="set-sec-timing" class="set-sec-h">Timings &amp; automatic emails</h3>
+    ${autoFields.map(settingFieldHtml).join("")}
     ${/* R63 · H1a/H1b — the switch behind automatic stage tasks. It sits with the other automation
           toggles above (the auto_* comms group) because it is the same kind of promise: something
           the app does on its own when a case moves. Default ON when the row is absent — this round
@@ -6849,16 +7052,16 @@ async function renderSettings() {
       <input name="owner_digest_email" type="email" value="${esc(settings.owner_digest_email ?? "")}" placeholder="you@nexmoney.co.uk">
     </label>
     ${/* R68 · M15 — was "Requires RESEND_API_KEY", which states a precondition and cannot say
-          whether it is met. The strip at the top of this page can, so this line points at it
+          whether it is met. The strip on the Firm & rules tab can (R89 · D: was "at the top of this page"), so this line points at it
           instead of repeating a caveat the reader has no way to check from here. */ ""}
-    <p class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;">Sent daily at ~07:30 UK time. Needs email sending to be working (see the Email sending status at the top of this page).</p>
+    <p class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;">Sent daily at ~07:30 UK time. Needs email sending to be working (see the Email sending status on the Firm &amp; rules tab).</p>
     <div style="grid-column:1/-1;"><button type="button" class="btn btn-sm" id="send-digest-btn">Send digest now</button></div>
     <h3 id="set-sec-comms" style="grid-column:1/-1;margin:10px 0 0;">Client comms &amp; sales</h3>
     ${/* R74 · B1 — the master switch moved up into "Rules that block work"; the sentence that says
           what it gates stays here, where the three gated types are configured. */ ""}
     ${owner ? `<h4 style="grid-column:1/-1;margin:0;">Regulated financial promotions</h4>
-    ${setNoteHtml("set-fin-promo-pointer", `Gated by the <strong>Financial promotions</strong> switch above: referral request, protection intro, GI emails.`, `<p>No marketing email sends until the master switch is on, and it gates exactly these three email types: <strong>Referral request</strong> (auto referral nudge, above), <strong>Protection intro email</strong> and <strong>GI / buildings insurance email</strong> (both in Protection &amp; GI, above). Confirm your network has approved the templates before switching on.</p>`, true)}` : ""}
-    <h4 style="grid-column:1/-1;margin:10px 0 0;">Other automated client comms${owner ? " — not gated by the switch above" : ""}</h4>
+    ${setNoteHtml("set-fin-promo-pointer", `Gated by the <strong>Financial promotions</strong> switch (Firm &amp; rules): referral request, protection intro, GI emails.`, `<p>No marketing email sends until the master switch is on, and it gates exactly these three email types: <strong>Referral request</strong> (auto referral nudge, above), <strong>Protection intro email</strong> and <strong>GI / buildings insurance email</strong> (both in Protection &amp; GI, above). Confirm your network has approved the templates before switching on.</p>`, true)}` : ""}
+    <h4 style="grid-column:1/-1;margin:10px 0 0;">Other automated client comms${owner ? " — not gated by that switch" : ""}</h4>
     <label>Auto SMS — rate-end reminder
       <select name="auto_sms_rate_end">
         <option value="off" ${(settings.auto_sms_rate_end ?? "off") === "on" ? "" : "selected"}>Off</option>
@@ -6904,7 +7107,7 @@ async function renderSettings() {
     ${/* R74 · B1 — the on/off switch moved up into "Rules that block work" (switching it on starts
           emailing real clients, which is exactly the kind of decision that box is for); the
           interval and the full rules stay here, where they are read. */ ""}
-    <p class="panel-sub" style="grid-column:1/-1;margin:0 0 2px;" id="set-doc-chase-pointer"><strong>Automatic document chasing</strong> is <strong>${(settings.doc_chase_enabled ?? "off") === "on" ? "ON" : "OFF"}</strong> (switched under Rules that block work). These are its terms.</p>
+    <p class="panel-sub" style="grid-column:1/-1;margin:0 0 2px;" id="set-doc-chase-pointer"><strong>Automatic document chasing</strong> is <strong>${(settings.doc_chase_enabled ?? "off") === "on" ? "ON" : "OFF"}</strong> (switched under Rules that block work, on the Firm &amp; rules tab). These are its terms.</p>
     ${/* R33 — the interval was already the number the chaser and the paragraph below both run on
           (docChaseDays() reads settings.doc_chase_days ?? 3); the only thing missing was a way to
           set it. Blank is a legitimate answer and means the 3-day default, which is what the note
@@ -6925,7 +7128,7 @@ async function renderSettings() {
       <p style="margin:0;">Emails a client <strong>every ${esc(String(docChaseDays()))} days</strong> while documents are outstanding, stops after ${DOC_CHASE_MAX} chases and tasks the adviser instead.</p>
       <details class="prose-fold" id="doc-chase-more">
         <summary>ⓘ Full rules</summary>
-        <p style="margin:0;">Emails a client <strong>every ${esc(String(docChaseDays()))} days</strong> while documents are still outstanding on their case's checklist, listing <strong>only the items still missing</strong> — never the whole list again. After <strong>${DOC_CHASE_MAX} chases it stops emailing</strong> and puts a call task on the case's adviser instead; the fourth email is not the one that works. Every <strong>live stage is covered — Enquiry through Exchange</strong> (widened from Fact Find and Application only): a checklist can be opened as soon as ID is asked for, and the lender still wants the missing item right up to exchange. Completed and Not proceeding are never chased. Only cases <strong>with a checklist</strong> are chased at all: a case with no checklist is not “fully documented”, it is unknown, and it is skipped rather than guessed at. The ${esc(String(docChaseDays()))}-day gap counts any document email, request or chase, so a cron run and someone pressing “Send document request now” cannot become two emails in an evening. <strong>Requires email sending to be working</strong> <em>(see the Email sending status at the top of this page)</em> — with no sender configured nothing goes out, whatever this says.</p>
+        <p style="margin:0;">Emails a client <strong>every ${esc(String(docChaseDays()))} days</strong> while documents are still outstanding on their case's checklist, listing <strong>only the items still missing</strong> — never the whole list again. After <strong>${DOC_CHASE_MAX} chases it stops emailing</strong> and puts a call task on the case's adviser instead; the fourth email is not the one that works. Every <strong>live stage is covered — Enquiry through Exchange</strong> (widened from Fact Find and Application only): a checklist can be opened as soon as ID is asked for, and the lender still wants the missing item right up to exchange. Completed and Not proceeding are never chased. Only cases <strong>with a checklist</strong> are chased at all: a case with no checklist is not “fully documented”, it is unknown, and it is skipped rather than guessed at. The ${esc(String(docChaseDays()))}-day gap counts any document email, request or chase, so a cron run and someone pressing “Send document request now” cannot become two emails in an evening. <strong>Requires email sending to be working</strong> <em>(see the Email sending status on the Firm &amp; rules tab)</em> — with no sender configured nothing goes out, whatever this says.</p>
       </details>
     </div>
     ${setFieldHtml(`<label>Review requests (NPS)
@@ -6989,16 +7192,23 @@ async function renderSettings() {
   const readOnlyNote = owner ? "" : firmFormShown
     ? `<div class="dq-notice" id="settings-readonly-note">🔒 <strong>Read-only — ${esc(ROLE_LABEL[MY_ROLE] || MY_ROLE)}.</strong> Only the Owner can change firm settings. Your own contact details below are yours — you can edit and save those.</div>`
     : `<div class="dq-notice" id="settings-readonly-note">🔒 Firm settings are the Owner's. Your own details and sign-in security are below — you can edit and save those.</div>`;
+  /* R89 · C — ONE <form>, three tab panels inside it (Firm & rules / Automations / Integrations): the
+     "General" / "Advanced" folds are gone because the tabs are the grouping now. The form stays ONE
+     element so the single Save (#settings-save) sweeps every field on every tab, and a field edited
+     on one tab is still in the form while another tab is on screen. The panels are shown/hidden by
+     activatePageTab; they are rebuilt here, so the active tab is re-applied below. */
   $("#settings-form").innerHTML = readOnlyNote + (firmFormShown ? `
-    <details class="case-details settings-details" open>
-      <summary>General</summary>
-      <div class="settings-grid">${general}</div>
-    </details>
-    <details class="case-details settings-details" id="set-sec-advanced">
-      <summary>Advanced — API keys &amp; integrations</summary>
+    <div class="set-tab-panel" data-tabpanel="firm" id="set-tab-firm">
+      <div class="settings-grid">${firmTab}</div>
+    </div>
+    <div class="set-tab-panel" data-tabpanel="automations" id="set-tab-automations">
+      <div class="settings-grid">${automations}</div>
+    </div>
+    <div class="set-tab-panel" data-tabpanel="integrations" id="set-sec-advanced">
       <div class="settings-grid">${advanced}</div>
-    </details>` : "");
+    </div>` : "");
   $("#settings-form").classList.toggle("settings-form-mine", !firmFormShown);
+  settingsApplyTab();
   if (!owner) {
     // Presentation only — the fields are shown so the configuration is legible, but nothing here
     // can be submitted (the Save button below is hidden, and RLS would refuse it anyway).
@@ -7007,6 +7217,10 @@ async function renderSettings() {
   // R87 — the Introducers panel is firm configuration too: Owner / Administrator only.
   const introPanel = $("#introducers-panel");
   if (introPanel) introPanel.classList.toggle("hidden", !firmFormShown);
+  /* R89 · C — the ONE Save is the sticky footer; the Owner's alone (an Administrator's form is
+     read-only). CSS shows it only while a form tab is on screen. */
+  const saveBar = $("#settings-save");
+  if (saveBar) saveBar.classList.toggle("hidden", !owner);
   const saveBtn = $("#save-settings-btn");
   if (saveBtn) saveBtn.classList.toggle("hidden", !owner);
   const savedMsg = $("#settings-saved");
@@ -7059,10 +7273,6 @@ async function renderSettings() {
      and so appear on no other screen. Owner-only in the UI; the database is what actually
      withholds those rows from everyone else. */
   loadChangeHistory();
-  /* R37 · P-settings — the jump nav is built LAST, once every block above has decided whether it
-     exists for this role. loadChangeHistory() and renderDiagnostics() both set their panel's
-     .hidden synchronously before their first await, so the answer is already on the page. */
-  buildSettingsJumpNav();
   // R74 · B1 — switches over the on/off selects, then the dirty baseline, LAST: every block above
   // has finished painting, so the baseline is the page exactly as it was handed over.
   wireSettingSwitches();
@@ -7197,15 +7407,23 @@ function settingsDirtyPaint() {
     const host = n.el.closest(".set-field") || n.el.closest("label") || n.el;
     host.classList.toggle("is-dirty", keys.has(n.key));
   });
-  const bar = $("#settings-dirty-bar");
+  /* R89 · C — the bar IS the one Save now (#settings-save, the sticky footer of the form tabs): it
+     is always there on those tabs for the Owner, and says whether anything is unsaved. */
+  const bar = $("#settings-save");
   if (!bar) return;
-  bar.classList.toggle("hidden", dirty.length === 0);
-  if (!dirty.length) return;
+  bar.classList.toggle("has-changes", dirty.length > 0);
+  const discard = $("#settings-discard-btn");
+  if (discard) discard.classList.toggle("hidden", dirty.length === 0);
   const n = $("#settings-dirty-n");
+  const where = $("#settings-dirty-where");
+  if (!dirty.length) {
+    if (n) n.textContent = "No unsaved changes";
+    if (where) where.textContent = "";
+    return;
+  }
   if (n) n.textContent = `${dirty.length} unsaved change${dirty.length === 1 ? "" : "s"}`;
   const groups = [...new Set(dirty.map((d) => d.group))].map((g) => SETTINGS_GROUP_LABEL[g] || g);
-  const where = $("#settings-dirty-where");
-  if (where) where.textContent = ` · in ${groups.join(" and ")} — nothing is saved until you press Save`;
+  if (where) where.textContent = ` · in ${groups.join(" and ")}`;
 }
 function settingsDirtyReset() {
   settingsBaseline = settingsSnapshot();
@@ -7217,12 +7435,17 @@ function settingsDirtyReset() {
   const page = $("#page-settings");
   if (!page) return;
   ["input", "change"].forEach((ev) => page.addEventListener(ev, () => { if (settingsBaseline) settingsDirtyPaint(); }, true));
-  const save = $("#settings-dirty-save");
+  /* R89 · C — ONE SAVE. #save-settings-btn in the sticky #settings-save footer is the page's only
+     Save for the form: it writes every CHANGED field on every form tab (saveSettingsForm diffs), and
+     routes a dirty My details / Adviser targets edit to its own writer exactly as the R74 bar did. */
+  const save = $("#save-settings-btn");
   if (save) save.onclick = async () => {
     if (save.disabled) return;
     const dirty = settingsDirtyList();
-    if (!dirty.length) return;
+    const formChanged = settingsFormChanged().length > 0;
+    if (!dirty.length && !formChanged) { toast("Nothing to save — no setting has changed."); return; }
     const groups = new Set(dirty.map((d) => d.group));
+    if (formChanged) groups.add("settings");
     save.disabled = true;
     /* R83 — the bar only ever REPORTS; the three writers say whether they wrote. Each returns true
        on a write that landed and false otherwise (refused by the database, a blocked bank/numeric
@@ -7238,7 +7461,8 @@ function settingsDirtyReset() {
     } finally { save.disabled = false; }
     if (!ok) { settingsDirtyPaint(); return; }   // R83 — the writer's own toast says what happened; the edits stay marked unsaved
     settingsDirtyReset();
-    toast(`Saved — ${dirty.length} change${dirty.length === 1 ? "" : "s"}.`);
+    const nSaved = Math.max(dirty.length, 1);
+    toast(`Saved — ${nSaved} change${nSaved === 1 ? "" : "s"}.`);
   };
   const discard = $("#settings-discard-btn");
   if (discard) discard.onclick = async () => {
@@ -7253,58 +7477,66 @@ function settingsDirtyReset() {
   };
 })();
 /* ==========================================================================
-   R37 · P-settings — SETTINGS JUMP NAV
+   R89 · C — SETTINGS AS FIVE TABS (R89-DESIGN slice C; 05 #4, #12).
 
-   The same device Reports got in R11-4 (REPORT_JUMP_SECTIONS / buildReportsJumpNav), applied to
-   the other long flat page in the app. Same classes, same markup, same behaviour, so the two read
-   as one idea rather than two.
+   The five jump-nav chips were already the five groups this page has (R87 · owner-admin, 05 #12);
+   they are real tabs now, through the shared page-tab kit (TABS.md): Firm & rules / Automations /
+   Integrations / Team & security / Data. The chip strip, its scroll-spy and its sticky offset are
+   gone — a tab shows its room and hides the others, so there is nothing left to jump to.
 
-   The role rule is copied verbatim and it is the point: the chip list is READ off the rendered
-   page, never declared. Every block on Settings already owns its own visibility gate (owner for
-   the export panel and the change history, isAdminOrOwner for Team and Diagnostics, the M1 column
-   check for My details), so re-testing the role here would be a second copy of a gate that could
-   drift from the first. An adviser's bar has no chip for a section an adviser has no section for,
-   because the section said so.
-
-   The one thing Reports does not have to do: two of these sections live inside a <details>. A
-   chip that scrolled to a collapsed <summary> would be a jump to nothing, so the click opens
-   every <details> the target sits inside first.
+   · Firm & rules, Automations and Integrations are the three panels INSIDE the one #settings-form:
+     one form, one Save (#settings-save, the sticky footer shown while one of them is on screen).
+     The sending strip and the go-live rollup are Firm & rules too (#settings-status).
+   · Team & security and Data are the panels after the form (people; export, history, diagnostics).
+   · An adviser's Settings is My details + Security, i.e. ONE tab: pageTabsHtml draws no strip for
+     one tab and the hash stays #settings. Owner/Administrator get all five (the Administrator's
+     firm form is read-only, as before).
+   · Loading: the page is still ONE render (renderSettings) per visit — every tab's loader is
+     settingsTabLoad(), which renders when the page has been off screen since the last render and is
+     a no-op for a tab opened within the same visit. A tab switch must never re-render the form: an
+     edit made on another tab would be thrown away before the one Save could write it.
    ========================================================================== */
-/* R74 · B1 — the list is in DOCUMENT order, and the export panel moved down the page (D#15), so
-   its entry moves with it: it now sits between Adviser targets and My details. The KEY is
-   unchanged ("export") — that is what the chip ids and r37's role-by-role chip SETS are written
-   against — and no chip is added for the new "Rules that block work" group, deliberately, for the
-   same reason R72 gave the go-live rollup none: r37 pins the exact set per role, and a chip is a
-   contract, not decoration. The group sits at the top of the form, one screen from the bar. */
-/* R87 · owner-admin (05 #12) — FOURTEEN CHIPS → FIVE GROUP HEADINGS. On a 390px phone the fourteen
-   ran to x=1,210px, three screen-widths of chip under a page seventeen screens tall. The five are the
-   groups the page actually has: the firm's own facts and the rules that block work; the automations
-   (stage tasks, protection & GI, digest, client comms, documents); the integrations (the Advanced
-   fold: Outlook, AI, SMS); the people (targets, my details, security, introducers, team); the data
-   (backup, change history, diagnostics). Same builder, same visibility walk — an adviser, whose page
-   is My details + Security only, gets no bar at all (< 2 sections). R37/R74 chip contracts re-pointed. */
 const SETTINGS_JUMP_SECTIONS = [
-  ["firm", "Firm & rules", "#set-sec-firm"],
-  ["automations", "Automations", "#set-sec-stage-tasks"],
-  ["integrations", "Integrations", "#set-sec-advanced"],
-  ["team", "Team & security", "#adviser-targets-section, #my-details-panel, #security-panel, #team-logins-panel"],
-  ["data", "Data", "#firm-export-panel, #change-history-panel, #diag-details"],
+  ["firm", "Firm & rules", () => isAdminOrOwner()],
+  ["automations", "Automations", () => isAdminOrOwner()],
+  ["integrations", "Integrations", () => isAdminOrOwner()],
+  ["team", "Team & security", null],
+  ["data", "Data", () => isAdminOrOwner()],
 ];
-let settingsJumpItems = [];
-let settingsJumpActive = "";
-let settingsJumpTick = false;
-let settingsJumpWired = false;
-/* Visible = on the page AND not inside anything .hidden — the same walk repJumpVisible does, with
-   #page-settings as the stop. A collapsed <details> is NOT hidden: its chip is offered and the
-   click opens it. */
-function settingsJumpVisible(el) {
-  let n = el;
-  while (n && n.id !== "page-settings") {
-    if (n.classList && n.classList.contains("hidden")) return false;
-    n = n.parentElement;
-  }
-  return !!n;
+PAGE_TABS.settings = SETTINGS_JUMP_SECTIONS.map(([key, label, when]) => (when ? { key, label, when } : { key, label }));
+let settingsPainted = false;
+/* "Has the page been off screen since the last render?" — nav() hides every .page and shows the
+   one it lands on, so a hide/show of #page-settings is exactly an arrival. The observer notes a
+   departure; takeRecords() catches a nav("settings") made while already on Settings (hidden and
+   shown again inside one synchronous nav, before any observer callback could run). */
+const settingsPageObs = (typeof MutationObserver === "function" && document.getElementById("page-settings"))
+  ? new MutationObserver(() => { const pg = document.getElementById("page-settings"); if (pg && pg.classList.contains("hidden")) settingsPainted = false; })
+  : null;
+if (settingsPageObs) settingsPageObs.observe(document.getElementById("page-settings"), { attributes: true, attributeFilter: ["class"], attributeOldValue: true });
+function settingsTabLoad() {
+  const recs = settingsPageObs ? settingsPageObs.takeRecords() : [];
+  if (!settingsPageObs || recs.some((r) => /(^|\s)hidden(\s|$)/.test(r.oldValue || ""))) settingsPainted = false;
+  if (settingsPainted) return;
+  renderSettings();
 }
+PAGE_TAB_LOADERS.settings = Object.fromEntries(SETTINGS_JUMP_SECTIONS.map(([key]) => [key, settingsTabLoad]));
+/* renderSettings rebuilds the three form panels, so the tab on screen is re-applied to them. */
+function settingsApplyTab() {
+  const k = resolvePageTab("settings", pageTabActive.settings);
+  if (k == null) return;
+  document.querySelectorAll("#page-settings [data-tabpanel]").forEach((p) => {
+    if (p.parentElement && p.parentElement.closest(".page") === document.getElementById("page-settings")) p.classList.toggle("hidden", p.dataset.tabpanel !== k);
+  });
+}
+/* The roster's "Edit in My details" — the one editor of your own phone and sign-off. */
+window.settingsGotoMyDetails = function () {
+  if (currentPage !== "settings") nav("settings", true, "team");
+  else activatePageTab("settings", "team");
+  const card = $("#my-details-panel");
+  if (card) { try { card.scrollIntoView({ behavior: "smooth", block: "start" }); } catch (_) { /* older browsers */ } }
+  const f = $("#my-phone");
+  if (f) { try { f.focus({ preventScroll: true }); } catch (_) { f.focus(); } }
+};
 /* ==========================================================================
    R78 · A4 — ONE BUILDER FOR THE TWO CHIP JUMP NAVS.
 
@@ -7369,86 +7601,6 @@ function jumpNavActivePaint(wrapId, attr, chipIdPrefix, key) {
     if (l < wrap.scrollLeft) wrap.scrollLeft = Math.max(0, l - 12);
     else if (r > wrap.scrollLeft + wrap.clientWidth) wrap.scrollLeft = r - wrap.clientWidth + 12;
   }
-}
-function buildSettingsJumpNav() {
-  // R78 · A4 — through the shared builder; what stays here is only what is Settings' own.
-  const built = buildJumpNav("settings-jump", "settings-jump-chips", SETTINGS_JUMP_SECTIONS, settingsJumpVisible, {
-    attr: "data-settings-jump", chipIdPrefix: "settings-nav-",
-    // Open every disclosure the target sits inside, outermost first, before scrolling to it.
-    beforeJump: (it) => {
-      for (let n = it.el; n && n.id !== "page-settings"; n = n.parentElement) {
-        if (n.tagName === "DETAILS") n.open = true;
-      }
-      if (it.el.tagName === "DETAILS") it.el.open = true;
-    },
-    setActive: setSettingsJumpActive,
-  });
-  settingsJumpItems = built ? built.items : [];
-  if (!built) return;
-  settingsJumpActive = "";
-  measureSettingsJumpOffsets();
-  if (!settingsJumpWired) {
-    settingsJumpWired = true;
-    window.addEventListener("scroll", onSettingsJumpScroll, { passive: true });
-    window.addEventListener("resize", () => { measureSettingsJumpOffsets(); onSettingsJumpScroll(); }, { passive: true });
-  }
-  onSettingsJumpScroll();
-}
-/* Identical measurement to Reports': at =<760px .app-shell stacks and the sidebar becomes a sticky
-   top strip, so the bar's own `top` is read off the layout in force rather than a duplicated
-   breakpoint number. --settings-jump-scroll is the scroll-margin the sections are given. */
-function measureSettingsJumpOffsets() {
-  const bar = $("#settings-jump"), page = $("#page-settings");
-  if (!bar || bar.hidden || !page || page.classList.contains("hidden")) return;
-  const shell = document.querySelector(".app-shell");
-  const side = document.querySelector(".sidebar");
-  let off = 0;
-  try {
-    if (shell && side && getComputedStyle(shell).flexDirection === "column") off = Math.round(side.getBoundingClientRect().height);
-  } catch (_) { off = 0; }
-  bar.style.top = off + "px";
-  const h = Math.round(bar.getBoundingClientRect().height);
-  document.documentElement.style.setProperty("--settings-jump-scroll", (off + h + REP_JUMP_GAP) + "px");
-  wireChipStripOverflow("settings-jump", "settings-jump-chips");   // R73 · A5
-}
-function setSettingsJumpActive(key) {
-  if (key === settingsJumpActive) return;
-  settingsJumpActive = key;
-  jumpNavActivePaint("settings-jump-chips", "data-settings-jump", "settings-nav-", key);   // R78 · A4
-}
-function onSettingsJumpScroll() {
-  if (settingsJumpTick) return;
-  settingsJumpTick = true;
-  requestAnimationFrame(() => {
-    settingsJumpTick = false;
-    const page = $("#page-settings"), bar = $("#settings-jump");
-    if (!page || page.classList.contains("hidden") || !bar || bar.hidden || !settingsJumpItems.length) return;
-    /* R74 · B1(d) — THE SPY WAS READING SECTIONS THAT WERE NOT ON THE PAGE.
-       Two of the fourteen targets (#set-sec-outlook, #set-sec-sms) live inside the COLLAPSED
-       "Advanced" <details>. A collapsed element's bounding box is 0×0 at top 0, so both of them
-       passed the "has this scrolled past the bar?" test at every scroll position, and the loop —
-       which walked the list in declaration order and stopped at the first section that had NOT —
-       ran straight through them. Reading the Documents section, the highlighted chip said SMS.
-       Fixed at the measurement, not with a special case: each section is placed by its own top
-       edge in DOCUMENT coordinates, falling back to its nearest laid-out ancestor where the
-       element itself is collapsed (so a folded section is placed at the fold, which is where it
-       actually is), and the list is then read in the order the page is in.
-       And nothing is highlighted above the first section: `cur` starts empty rather than at
-       item[0], so the bar does not claim you are in "Data & backup" while you are reading the
-       page heading above it. */
-    const line = bar.getBoundingClientRect().bottom + REP_JUMP_GAP + 2;
-    const placed = settingsJumpItems.map((s) => {
-      let el = s.el, r = el ? el.getBoundingClientRect() : null;
-      while (el && r && r.width === 0 && r.height === 0 && el.parentElement && el.id !== "page-settings") {
-        el = el.parentElement; r = el.getBoundingClientRect();
-      }
-      return { key: s.key, top: r ? r.top : Infinity };
-    }).sort((a, b) => a.top - b.top);
-    let cur = "";
-    placed.forEach((p) => { if (p.top <= line) cur = p.key; });
-    if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2) cur = placed[placed.length - 1].key;
-    setSettingsJumpActive(cur);
-  });
 }
 /* ==========================================================================
    R13 · M-42 — THE FIRM EXPORT ("would not go live without it")
@@ -7672,11 +7824,39 @@ async function sendDigestNow() {
    (await it, and know whether it wrote) instead of synthesising a click on a button it cannot
    wait for. The button's own listener is the same function: there is still exactly one writer of
    the settings upsert, and it is this. */
+/* R89 · C — WHAT CHANGED. A control's rendered value is its own default (an input's value
+   attribute, a select's `selected` option), so "changed" needs no second copy of the page: a field
+   the reader never touched is never written, whichever tab it is on. After a save the written
+   values become the new defaults (settingsFormMarkSaved). */
+function settingsControlDefault(el) {
+  if (el.tagName === "SELECT") {
+    const d = [...el.options].find((o) => o.defaultSelected) || el.options[0];
+    return d ? d.value : "";
+  }
+  return el.defaultValue;
+}
+function settingsFormChanged() {
+  const form = $("#settings-form");
+  if (!form) return [];
+  return [...form.querySelectorAll("input[name], select[name], textarea[name]")]
+    .filter((el) => !el.disabled && String(el.value) !== String(settingsControlDefault(el)));
+}
+function settingsFormMarkSaved(els) {
+  els.forEach((el) => {
+    if (el.tagName === "SELECT") [...el.options].forEach((o) => { o.defaultSelected = o.value === el.value; });
+    else el.defaultValue = el.value;
+  });
+}
+let settingsFormSaving = false;
 async function saveSettingsForm() {
   // Presentation guard only — the button is already hidden for a non-Owner and RLS refuses the
   // upsert regardless. This stops a stale/forced click producing a raw policy-violation toast.
   if (!isOwner()) { toast("Only the Owner can change settings."); return false; }   // R83 — returns whether it wrote (see the unsaved-changes bar)
-  const fields = [...$("#settings-form").querySelectorAll("input, select")];
+  /* R89 · C — only the fields that CHANGED (was: every input and select in the form, touched or
+     not, which on five tabs would rewrite forty settings the reader never saw). Nothing changed is
+     a clean no-op, not a write. */
+  const fields = settingsFormChanged();
+  if (!fields.length) return true;
   // Light validation — warns but never blocks the save (nothing here should stop a workflow).
   const warnings = [];
   // T1-10 — numeric / bank fields are a different class of risk (a corrupted live metric, or a
@@ -7703,13 +7883,16 @@ async function saveSettingsForm() {
   // toast() shows one message at a time, so combine — blocking issues are the more important half.
   const allMsgs = blocked.concat(warnings);
   if (allMsgs.length) toast(allMsgs.join(" · "));
-  const rows = fields.filter((i) => !blockedKeys.has(i.name)).map((i) => ({ key: i.name, value: i.value.trim() }));
-  const btn = $("#save-settings-btn"); // T1-15 — in-flight guard
-  if (btn.disabled) return false;   // R83
-  btn.disabled = true;
+  const toWrite = fields.filter((i) => !blockedKeys.has(i.name));
+  const rows = toWrite.map((i) => ({ key: i.name, value: i.value.trim() }));
+  if (settingsFormSaving) return false;   // T1-15 — in-flight guard (R89 · C: a flag, the footer button is the router's)
+  settingsFormSaving = true;
   try {
-    const { error } = await db.from("settings").upsert(rows);
-    if (error) { dbFail("saveSettingsForm", error); return false; }   // R83
+    if (rows.length) {
+      const { error } = await db.from("settings").upsert(rows);
+      if (error) { dbFail("saveSettingsForm", error); return false; }   // R83
+      settingsFormMarkSaved(toWrite);
+    }
     await loadSettings();
     $("#settings-saved").classList.remove("hidden");
     setTimeout(() => $("#settings-saved").classList.add("hidden"), 2500);
@@ -7722,9 +7905,9 @@ async function saveSettingsForm() {
        blocked field's edit stays marked unsaved (the baseline is re-set only on a clean save). */
     if (blocked.length === 0) settingsDirtyReset(); else settingsDirtyPaint();   // R83
     return blocked.length === 0;   // R83
-  } finally { btn.disabled = false; }
+  } finally { settingsFormSaving = false; }
 }
-$("#save-settings-btn").addEventListener("click", saveSettingsForm);
+/* R89 · C — #save-settings-btn's click is wired by the one-Save router above (wireSettingsDirtyWatch). */
 
 /* B4 UI (R5-8) — every signed-in staff member's own phone + email sign-off, independent of the
    Owner-only form above: M1's "profiles self edit" policy covers exactly this row (update where
@@ -7762,6 +7945,8 @@ async function saveMyDetails() {
     $("#my-details-saved").classList.remove("hidden");
     setTimeout(() => $("#my-details-saved").classList.add("hidden"), 2500);
     settingsDirtyReset();   // R74 · B1 — see saveSettingsForm
+    renderTeamRoster();   // R89 · C — your roster row shows these read-only; it now says what was just saved
+    renderSettingsGolive();   // R89 · C — "Adviser phone number" reads the Owner's own phone
     return true;   // R83
   } finally { btn.disabled = false; }
 }
@@ -7963,8 +8148,9 @@ function renderAdviserTargetsEditor(owner) {
      read. */
   const readOnly = !owner && MY_ROLE === "admin";
   if (!owner && !readOnly) return;
-  const anchor = $("#settings-saved");
-  if (!anchor || !anchor.parentNode) return;
+  /* R89 · C — the section lives in Settings › Team & security (its slot), not after the form's Save. */
+  const anchor = $("#adviser-targets-slot");
+  if (!anchor) return;
   const targets = adviserTargets();
   // R28 (Daniel-approved) — one row per ADVISING staff member only (advisingStaff() = TEAM filtered by
   // isAdvisingStaff), not the whole team: an owner/admin who doesn't advise carries no fee target.
@@ -7977,7 +8163,6 @@ function renderAdviserTargetsEditor(owner) {
   const sec = document.createElement("div");
   sec.className = "panel";
   sec.id = "adviser-targets-section";
-  sec.style.marginTop = "24px";
   sec.innerHTML = `<h3>Per-adviser monthly fee targets</h3>
     <div class="panel-sub" id="adviser-targets-sub">Each adviser's fees earned this month vs their target. <strong>Blank = no target.</strong>
       ${howFold({ id: "adviser-targets-how", title: "How the target is measured", html: `<p>On the owner Reports scoreboard, each adviser's <strong>fees earned (procuration + broker + solicitor) on their completions this month</strong> (paid or not — the same basis as the firm "Fees earned vs target" bar, not the cash "Fees banked" column) is measured against the target ${readOnly ? "shown here" : "you set here"}. <strong>Blank or 0 = no target</strong> for that adviser (their Target cell shows "—"). This complements — it does not replace — the firm-wide monthly fee target above. <strong>The adviser sees their own target</strong> on their Reports › My numbers card, as a “Fees earned this month vs my target” bar on the same basis; an adviser with no target set is told that in words there, not shown 0%.</p>` })}</div>
@@ -7990,7 +8175,7 @@ function renderAdviserTargetsEditor(owner) {
     ${readOnly ? `<div class="dq-notice" id="adviser-targets-readonly">🔒 <strong>Read-only — set by the Owner.</strong> The Reports scoreboard is Owner-only (not on your Reports page); advisers see their own target on My numbers.</div>` : ""}
     <div class="settings-grid">${rows || `<p class="panel-sub" style="grid-column:1/-1;">No active team advisers ${readOnly ? "have a target" : "to set targets for"}.</p>`}</div>
     ${readOnly ? "" : `<button type="button" class="btn btn-primary btn-sm" id="adviser-targets-save">Save targets</button>`}`;
-  anchor.parentNode.insertBefore(sec, anchor.nextSibling);
+  anchor.appendChild(sec);
   const btn = $("#adviser-targets-save");
   if (btn) btn.onclick = saveAdviserTargets;
 }
@@ -8746,6 +8931,9 @@ async function refreshHeartbeatKeys(pre) {
    just noise on the page they start their day from.
    ========================================================================== */
 const OPS_STRIP_ROLES = () => isAdminOrOwner();
+/* R89 · A — "Operations › Emails & SMS": the page and tab names as the tab strip and the title say them. */
+const opsTabName = (key) => `Operations › ${((PAGE_TABS.operations || []).find((t) => t.key === key) || {}).label || key}`;
+const OPS_EMAILS_NAME = opsTabName("emails");
 async function renderOpsStrip(cases, pre) {
   const el = $("#ops-strip");
   if (!el) return;
@@ -8791,17 +8979,19 @@ async function renderOpsStrip(cases, pre) {
     `<div class="ops-chips">`,
     /* R74 · A3 — "emails held" while the hold is on, the same word Settings, the Emails page and
        Data health now use. The chip's id, count and destination are unchanged. */
-    chip("ops-emails-queued", "✉️", `emails ${heldWord()}`, emailsQueued, "nav('emails')",
+    /* R89 · A — the three mail chips name where they land by the page's own words, "Operations ›
+       Emails & SMS" (the tab title), and go there by the tab's hash form. */
+    chip("ops-emails-queued", "✉️", `emails ${heldWord()}`, emailsQueued, "nav('operations/emails')",
       emailHoldOn()
-        ? "Emails waiting to go out. Sending is currently ON HOLD (Settings › Email sending), so no run sends them — they are held, not lost. Opens the Emails page."
-        : "Emails waiting to go out on the daily automation run. Opens the Emails page. Whether they can actually send is on Settings › Email sending."),
+        ? `Emails waiting to go out. Sending is currently ON HOLD (Settings › Email sending), so no run sends them — they are held, not lost. Opens ${OPS_EMAILS_NAME}.`
+        : `Emails waiting to go out on the daily automation run. Opens ${OPS_EMAILS_NAME}. Whether they can actually send is on Settings › Email sending.`),
     /* R87 · today (01 #7) — "emails failed" opens EMAILS filtered to failed, the same door the
        Data health tile itself deep-links to (dhGotoEmails). Two chips about mail now go to one
        page; Data health's own answer to this chip was "go to Emails". */
     chip("ops-emails-failed", "⚠️", "emails failed", emailsFailed, "dhGotoEmails(true)",
-      "Emails the sender rejected — a bad address, or a send that errored. They do not retry themselves. Opens the Emails page filtered to failed messages."),
-    chip("ops-sms-queued", "💬", "SMS queued", smsQueued, "nav('emails')",
-      "Text messages waiting on the SMS run (about 08:05 UK). Opens the Emails page, where the SMS queue sits beside the email one."),
+      `Emails the sender rejected — a bad address, or a send that errored. They do not retry themselves. Opens ${OPS_EMAILS_NAME} filtered to failed messages.`),
+    chip("ops-sms-queued", "💬", "SMS queued", smsQueued, "nav('operations/emails')",
+      `Text messages waiting on the SMS run (about 08:05 UK). Opens ${OPS_EMAILS_NAME}, where the SMS queue sits under the email one.`),
     chip("ops-leads-new", "🧲", "leads to assign", leadsNew, "opsGotoLeads()",
       "Website leads nobody has accepted yet. Opens the New leads block on My Day, below."),
     chip("ops-unassigned", "🗂️", "cases with no adviser", noAdviser, "reportGotoAdviser('unassigned')",
@@ -8887,7 +9077,7 @@ window.dashRunCronNow = function (btn) {
    ========================================================================== */
 window.dashBackupNow = async function (btn) {
   if (!isOwner()) {
-    nav("settings");
+    nav("settings", true, "data");   // R89 · D: the export lives on the Data tab
     setTimeout(() => goliveJump("#firm-export-panel"), 700);
     return;
   }
@@ -8952,7 +9142,7 @@ function renderDashNotices() {
   if (!cronAudience) { /* adviser: no system-health banner */ }
   else if (cronKnown && !cronAt) {
     bits.push(`<div class="dash-notice" id="dash-cron-notice" data-state="never"><span class="dash-notice-msg">⏱ The 8am automation has never confirmed a run.</span>
-      <button type="button" class="dash-notice-link" onclick="nav('emails')">Open Emails</button>${cronRunNowBtnHtml()}</div>`);
+      <button type="button" class="dash-notice-link" onclick="nav('operations/emails')">Open Emails</button>${cronRunNowBtnHtml()}</div>`);
     heads.push("the 8am automation has never run");
   } else if (cronAt) {
     const ms = Date.now() - new Date(cronAt).getTime();
@@ -8964,7 +9154,7 @@ function renderDashNotices() {
          screen. Same words, same element, still read out in full by a screen reader. */
       bits.push(`<div class="dash-notice warn" id="dash-cron-notice" data-state="stale"><span class="dash-notice-msg" title="The 8am automation last ran ${esc(fmtD(cronAt))}. Emails may be silently stuck: the queue fills up and nothing on this page changes when the sender stops.">⏱ <strong>The 8am automation last ran ${esc(fmtD(cronAt))} — ${days} day${days === 1 ? "" : "s"} ago.</strong>
         <span class="dash-notice-why">Emails may be silently stuck: the queue fills up and nothing on this page changes when the sender stops.</span></span>
-        <button type="button" class="dash-notice-link" onclick="nav('emails')">Check the queue</button>${cronRunNowBtnHtml()}</div>`);
+        <button type="button" class="dash-notice-link" onclick="nav('operations/emails')">Check the queue</button>${cronRunNowBtnHtml()}</div>`);
       heads.push(`the 8am automation last ran ${days} day${days === 1 ? "" : "s"} ago`);
     }
   }
@@ -12143,7 +12333,7 @@ function briefActions(it) {
   }
 }
 // Inline handlers run in global scope, so the one nav target the briefing offers needs a window hook.
-window.gotoSettings = function () { nav("settings"); };
+window.gotoSettings = function () { nav("settings", true, "firm"); };   // R89 · D: the bank details are on Firm & rules
 let briefLoadSeq = 0;   // R83 — stale-response guard (the dashLoadSeq idiom)
 async function loadBriefing() {
   const seq = ++briefLoadSeq;   // R83
@@ -13688,7 +13878,7 @@ async function loadMyDataHealthAlerts(existingAlerts) {
     const extra = rows.length - WT_MY_DH_CAP;
     const capped = rows.slice(0, WT_MY_DH_CAP);
     capped.push({
-      __synth: true, __go: "nav('data')", id: "synth:my_data_health:more", rule: "my_data_health",
+      __synth: true, __go: "nav('operations/data')", id: "synth:my_data_health:more", rule: "my_data_health",
       severity: "info", case_id: null, client_id: null,
       title: `Your data health — …and ${extra} more to fix`,
       detail: `${rows.length} of your cases have a missing email address or a missing rate-end date. The whole list, with the rest of the firm's, is on Data health.`,
@@ -15538,7 +15728,7 @@ async function bookSync(stale, claimed) {
    every write here (a case_events-only write moves no case row). */
 let boardCache = null;      // { cases, stageEntry, syncedAt } — last successful board paint this session, keyed to the book snapshot (R85)
 let boardLoadSeq = 0;       // R78 · A5 — stale-response guard (the dashLoadSeq idiom)
-function bustBoardCache() { boardCache = null; }
+function bustBoardCache() { boardCache = null; try { repBust(); } catch (_) { /* reports module not evaluated — nothing to bust */ } }   // R89 · fixer — a write that stales the board stales Reports' shared read too
 /* ==========================================================================
    R82 · A2 — A REFUSAL-DRIVEN REFRESH MUST ACTUALLY RE-READ.
 
@@ -19419,7 +19609,7 @@ window.kpiGoto = function (which) {
   // T1-19 — "completions" is the Today tile (its number lives on Reports); "completed" is the
   // Reports tile, whose rows live in the pipeline's Completed segment.
   if (which === "completed") return gotoPipelineSegment("completed");
-  if (which === "completions") return nav("reports");
+  if (which === "completions") return nav("reports", true, "month");   // R89 · D: completions are on This month
   nav("dashboard");
   if (which === "rates" || which === "erc") return focusDashPanel("rate-erc-panel");
   if (which === "fees") return focusDashPanel("revenue-panel", "fees");
@@ -28149,7 +28339,7 @@ async function loadEmails() {
     relBtn.disabled = !isOwner();
     relBtn.textContent = isOwner() ? "Release hold…" : "Held — Owner releases in Settings";
     relBtn.title = isOwner() ? "Open Settings › Email sending, where you release the hold" : "Email sending is on hold; only the Owner can release it, from Settings › Email sending";
-    relBtn.onclick = () => { if (!isOwner()) return; nav("settings"); setTimeout(() => { const t = $("#email-sending-status"); if (t) t.scrollIntoView({ behavior: "smooth", block: "start" }); }, 350); };
+    relBtn.onclick = () => { if (!isOwner()) return; nav("settings", true, "firm"); setTimeout(() => { const t = $("#email-sending-status"); if (t) t.scrollIntoView({ behavior: "smooth", block: "start" }); }, 350); };
   }
   if (runBtn) runBtn.classList.toggle("btn-primary", false);
   if (runWhy) {
@@ -33737,12 +33927,12 @@ async function buildEvidencePack(caseId) {
 function dhGotoEmails(failedOnly) {
   emailStatusFilter = failedOnly ? "failed" : "all";
   smsStatusFilter = failedOnly ? "failed" : "all";
-  nav("emails");
+  nav("operations", true, "emails");
 }
 async function loadDataHealth() {
   const el = $("#data-content");
   el.innerHTML = '<div class="empty">Loading…</div>';
-  { const rEl = document.getElementById("dh-readiness"); if (rEl) rEl.innerHTML = ""; } // R31-C — clear the rollup while reloading
+  // R89 · A — #dh-readiness (the to-do list) lives inside #data-content now, so "Loading…" clears it.
   /* ==========================================================================
      R71 · B1/H6 — THIS PAGE OPENS IN ONE ROUND TRIP, NOT SIX.
 
@@ -34512,9 +34702,11 @@ async function loadDataHealth() {
     if (!inBand.length) return "";
     /* H3, not H4: the page's own heading is the H2 in .page-head, and r73_system §A15 holds the
        app to never skipping a heading level. The panels below this wall are H3s too, which is
-       right — a band label and a panel title are the same level of the page's outline. */
-    return `<h3 class="dh-band-h" data-band="${band}">${esc(title)} <span class="dh-band-why">${esc(why)}</span></h3>`
-      + inBand.map((t) => t.html).join("");
+       right — a band label and a panel title are the same level of the page's outline.
+       R89 · A — the band's "why" sentence is the heading's title (prose rule: one standing line per
+       page), and each tile says which band it is in (data-band) so a reader need not walk siblings. */
+    return `<h3 class="dh-band-h" data-band="${band}" title="${esc(why)}">${esc(title)}</h3>`
+      + inBand.map((t) => t.html.replace('<div class="kpi', `<div data-band="${band}" class="kpi`)).join("");
   }).join("")
     + (dhCleanN ? `<div class="kpi dh-clean-toggle" id="dh-clean-toggle" role="button" tabindex="0" aria-expanded="false" data-n="${dhCleanN}" title="${dhCleanN} data-quality check${dhCleanN === 1 ? " has" : "s have"} nothing to fix, so ${dhCleanN === 1 ? "its tile is" : "their tiles are"} folded away. Click to show ${dhCleanN === 1 ? "it" : "them"} — the counts are unchanged, and the informational lists (documents, shared addresses, vulnerable, suppressed) are never folded."><div class="lbl" id="dh-clean-toggle-lbl">✓ ${dhCleanN} check${dhCleanN === 1 ? "" : "s"} clean ▸</div></div>` : "");
 
@@ -34570,7 +34762,7 @@ async function loadDataHealth() {
           ${isAdminOrOwner() ? `<button class="btn btn-sm" onclick="undoDismissDuplicate('${r.id}')">Undo</button>` : '<span class="badge grey">undo: Owner / Admin</span>'}
         </div>`).join("")}
     </div>` : "";
-  const dupPanel = `<div class="panel">
+  const dupPanel = `<div class="panel" id="dh-dup-panel">
     <h3>Possible duplicate clients</h3>
     <p class="panel-sub">Flagged for human review — never merged automatically. Open each side to compare before merging by hand.</p>
     ${dups.length ? `<table class="imp-table mob-cards">
@@ -34591,7 +34783,7 @@ async function loadDataHealth() {
      two apart: same PLACE, never same person. Every case links open; there is no bulk action, because
      there is no safe automatic answer. */
   const sharedPropPanel = !dhPropOn ? "" : `<div class="panel hidden" id="dh-sharedprop-panel">
-    <h3>Shared property addresses</h3>
+    <h3>Addresses on more than one client's cases</h3>
     <div class="panel-sub">Addresses on more than one client's cases — usually a sale we advised both sides of. Information, not a fault; never merge. ${howFold({ id: "dh-sharedprop-how", title: "More", html: `<p>Addresses that appear on more than one <strong>client's</strong> cases. This is information, not a fault: the usual cause is a sale we advised on both sides of, and the newest case is normally the current owner. It is <strong>not</strong> a duplicate-client signal — two people with cases at one address are two people, and nothing here should ever be merged. It matters because a retention or remortgage started on the wrong side of a sale chases a client about a house they have sold; “Start retention case” now warns when the newest case on the address belongs to somebody else.</p>` })}</div>
     ${sharedProps.length ? sharedProps.map((g) => `
       <div class="dh-sharedprop" data-prop-key="${esc(g.key)}">
@@ -34612,6 +34804,20 @@ async function loadDataHealth() {
   // cases can't balloon the DOM. Only the RENDER is bounded; every compute/selection stays as-is.
   const DH_PANEL_CAP = 200;
   const dhMoreNote = (n) => n > DH_PANEL_CAP ? `<div class="empty">…and ${n - DH_PANEL_CAP} more not shown — clear the ones above first, or use the firm export to work the whole list.</div>` : "";
+  /* R89 · A — THE FIX LISTS ARE KIT ROWS (KIT.md). A row's name opens the CLIENT (kit rule 1) — a
+     case row finds its client off the book's rows; the case itself is the row's first verb ("Open"),
+     so every reader that takes the case id off a row's first button still finds it there. The
+     inline fix (dhFixCell / dhFixCellClient, which carries its own Open) rides in the kit's `sub`,
+     and `data-fix-row` is passed as an attr rather than stamped. Rows stay `.row-item`, so the
+     "N left" counter, the emptied-out line and DH_PANEL_CAP all count them exactly as before. */
+  const dhClientOfCase = new Map(allCases.map((cs) => [cs.id, cs.client_id]));
+  const dhOpenCaseVerb = (id) => ({ label: "Open", title: "Open the case", onclick: `openCase('${jsArg(id)}')` });
+  const dhCaseRow = (c, o) => rowItemHtml(Object.assign({
+    name: { text: c.name, clientId: c.client_id || dhClientOfCase.get(c.case_id) || null, onclick: `openCase('${jsArg(c.case_id)}')` },
+    verbs: [dhOpenCaseVerb(c.case_id)],
+  }, o || {}));
+  const dhClientRow = (c, o) => rowItemHtml(Object.assign({ name: { text: c.name, clientId: c.id } }, o || {}));
+  const dhStage = (st) => esc(STAGE_LABEL[st] || st || "");
 
   /* ==========================================================================
      R71 · B3/H6+M8 — FIX THE GAP HERE, NOT THROUGH THE 51-FIELD MODAL.
@@ -34682,11 +34888,10 @@ async function loadDataHealth() {
     ${/* R80 · B2 — the £-context headline and the £-rank (see the PRICE THE UNREACHABLE banner above). */ ""}
     ${dhAtRiskLine(missingEmail)}
     ${missingEmail.length === 300 ? '<p class="panel-sub">Showing the first 300 — there may be more.</p>' : ""}
-    ${missingEmail.length ? dhRankByRisk(missingEmail).slice(0, DH_PANEL_CAP).map((c) => `
-      <div class="row-item" data-fix-row="${esc(c.id)}">
-        <div class="row-main"><div class="t" onclick="openClient('${c.id}')">${esc(c.name)}${dhRateTag(c.id)}</div></div>
-        ${dhFixCellClient(c, "email", { label: "Email address", placeholder: "name@example.com", saveTitle: "Save this email address onto the client's record. Nothing else on the record is touched — and a value the client form would refuse is refused here too." })}
-      </div>`).join("") + dhMoreNote(missingEmail.length) : '<div class="empty">Every client with a live case has an email. 👍</div>'}
+    ${missingEmail.length ? dhRankByRisk(missingEmail).slice(0, DH_PANEL_CAP).map((c) => dhClientRow(c, {
+        attrs: { fixRow: c.id }, fact: dhRateTag(c.id).trim(),
+        sub: dhFixCellClient(c, "email", { label: "Email address", placeholder: "name@example.com", saveTitle: "Save this email address onto the client's record. Nothing else on the record is touched — and a value the client form would refuse is refused here too." }),
+      })).join("") + dhMoreNote(missingEmail.length) : '<div class="empty">Every client with a live case has an email. 👍</div>'}
   </div>`;
 
   // BUILD 7c — bulk-select on the unassigned-cases panel. Prune the selection to the cases still
@@ -34701,35 +34906,24 @@ async function loadDataHealth() {
   const unassignedPanel = `<div class="panel" id="dh-unassigned-panel">
     <h3>Live cases with no adviser</h3>
     ${unassigned.length ? dhBulkBar : ""}
-    ${unassigned.length ? unassigned.slice(0, DH_PANEL_CAP).map((c) => `
-      <div class="row-item">
-        <input type="checkbox" class="dh-cb" data-id="${c.case_id}" aria-label="Select this case"${dhSel.has(c.case_id) ? " checked" : ""} onclick="event.stopPropagation()">
-        <div class="row-main">
-          <div class="t" onclick="openCase('${c.case_id}')">${esc(c.name)}</div>
-          <div class="s">${esc(STAGE_LABEL[c.stage] || c.stage)}</div>
-        </div>
-        <button class="btn btn-sm" onclick="openCase('${c.case_id}')">Open</button>
-      </div>`).join("") + dhMoreNote(unassigned.length) : '<div class="empty">Every live case has an adviser. 👍</div>'}
+    ${unassigned.length ? unassigned.slice(0, DH_PANEL_CAP).map((c) => dhCaseRow(c, {
+        cb: { name: "dh-cb", value: c.case_id, checked: dhSel.has(c.case_id) }, fact: dhStage(c.stage),
+      })).join("") + dhMoreNote(unassigned.length) : '<div class="empty">Every live case has an adviser. 👍</div>'}
   </div>`;
 
   const noFeePanel = `<div class="panel" id="dh-nofee-panel">
     <h3>Completed cases with no fee recorded</h3>
-    ${noFee.length ? noFee.slice(0, DH_PANEL_CAP).map((c) => `
-      <div class="row-item">
-        <div class="row-main"><div class="t" onclick="openCase('${c.case_id}')">${esc(c.name)}</div></div>
-        <button class="btn btn-sm" onclick="openCase('${c.case_id}')">Open</button>
-      </div>`).join("") + dhMoreNote(noFee.length) : '<div class="empty">All completed cases have a fee recorded. 👍</div>'}
+    ${noFee.length ? noFee.slice(0, DH_PANEL_CAP).map((c) => dhCaseRow(c)).join("") + dhMoreNote(noFee.length) : '<div class="empty">All completed cases have a fee recorded. 👍</div>'}
   </div>`;
 
   // Defect 13: the two previously dead-end tiles, now expandable list panels — same row-item
   // pattern as missingPanel/unassignedPanel/noFeePanel above. Hidden until the tile is clicked.
   const phonePanel = `<div class="panel hidden" id="dh-phone-panel">
     <h3>Clients missing phone (with a live case)</h3>
-    ${missingPhoneLive.length ? missingPhoneLive.slice(0, DH_PANEL_CAP).map((c) => `
-      <div class="row-item" data-fix-row="${esc(c.id)}">
-        <div class="row-main"><div class="t" onclick="openClient('${c.id}')">${esc(c.name)}</div></div>
-        ${dhFixCellClient(c, "phone", { label: "Phone number", placeholder: "07700 900123", saveTitle: "Save this phone number onto the client's record. Nothing else on the record is touched — and a number the client form would refuse is refused here too." })}
-      </div>`).join("") + dhMoreNote(missingPhoneLive.length) : '<div class="empty">Every client with a live case has a phone number. 👍</div>'}
+    ${missingPhoneLive.length ? missingPhoneLive.slice(0, DH_PANEL_CAP).map((c) => dhClientRow(c, {
+        attrs: { fixRow: c.id },
+        sub: dhFixCellClient(c, "phone", { label: "Phone number", placeholder: "07700 900123", saveTitle: "Save this phone number onto the client's record. Nothing else on the record is touched — and a number the client form would refuse is refused here too." }),
+      })).join("") + dhMoreNote(missingPhoneLive.length) : '<div class="empty">Every client with a live case has a phone number. 👍</div>'}
   </div>`;
 
   const rateEndPanel = `<div class="panel hidden" id="dh-rateend-panel">
@@ -34738,22 +34932,20 @@ async function loadDataHealth() {
           to discover. Setting a rate-end date on a completed case is not a bookkeeping tidy-up: it
           is what puts the case into the retention feed at the right moment. The panel says so. */ ""}
     <div class="panel-sub">Type the rate-end date and it saves onto the case — <strong>this is what puts the case into retention</strong>. ${howFold({ id: "dh-rateend-how", title: "More", html: `<p>Set the date here and it saves straight onto the case — nothing else on the case is touched. <strong>This is what puts the case into retention:</strong> a completed case with a rate-end date joins the Retention feed on its own, at the usual lead time, with no re-arming and nothing else to switch on. Deals on a tracker or variable rate, retention successors and protection-only records are already left out of this list — they have no fixed end to record.</p>` })}</div>
-    ${noRateEnd.length ? noRateEnd.slice(0, DH_PANEL_CAP).map((c) => `
-      <div class="row-item" data-fix-row="${esc(c.case_id)}">
-        <div class="row-main"><div class="t" onclick="openCase('${c.case_id}')">${esc(c.name)}</div></div>
-        ${dhFixCell(c, "rate_end_date", "date", { label: "Rate-end date", saveTitle: "Save this rate-end date onto the case. It joins the Retention feed from here on." })}
-      </div>`).join("") + dhMoreNote(noRateEnd.length) : '<div class="empty">Every completed case has a rate-end date. 👍</div>'}
+    ${noRateEnd.length ? noRateEnd.slice(0, DH_PANEL_CAP).map((c) => dhCaseRow(c, {
+        verbs: [], attrs: { fixRow: c.case_id },
+        sub: dhFixCell(c, "rate_end_date", "date", { label: "Rate-end date", saveTitle: "Save this rate-end date onto the case. It joins the Retention feed from here on." }),
+      })).join("") + dhMoreNote(noRateEnd.length) : '<div class="empty">Every completed case has a rate-end date. 👍</div>'}
   </div>`;
 
   // T1-7 — same shape as rateEndPanel. Opening the case and saving it re-stamps completed_at.
   const noCompletedPanel = `<div class="panel hidden" id="dh-nocompleted-panel">
     <h3>Completed cases with no completion date</h3>
     <div class="panel-sub">Completed cases with no completion date are missing from every month's figures. Type the date here. ${howFold({ id: "dh-compdate-how", title: "More", html: `<p>Reports count completions by date — these are complete in the pipeline but missing from every month's figures. Type the date here and it saves straight onto the case; nothing else on the case is touched. A date in the future is refused, because a case cannot have completed on a day that has not happened.</p>` })}</div>
-    ${noCompletedAt.length ? noCompletedAt.slice(0, DH_PANEL_CAP).map((c) => `
-      <div class="row-item" data-fix-row="${esc(c.case_id)}">
-        <div class="row-main"><div class="t" onclick="openCase('${c.case_id}')">${esc(c.name)}</div></div>
-        ${dhFixCell(c, "completed_at", "date", { label: "Completion date", max: localDateStr(), saveTitle: "Save this completion date onto the case. It appears in the month's completion figures from here on." })}
-      </div>`).join("") + dhMoreNote(noCompletedAt.length) : '<div class="empty">Every completed case has a completion date. 👍</div>'}
+    ${noCompletedAt.length ? noCompletedAt.slice(0, DH_PANEL_CAP).map((c) => dhCaseRow(c, {
+        verbs: [], attrs: { fixRow: c.case_id },
+        sub: dhFixCell(c, "completed_at", "date", { label: "Completion date", max: localDateStr(), saveTitle: "Save this completion date onto the case. It appears in the month's completion figures from here on." }),
+      })).join("") + dhMoreNote(noCompletedAt.length) : '<div class="empty">Every completed case has a completion date. 👍</div>'}
   </div>`;
 
   // R25 · MI-1 — same row-item shape as the other date panels. Each row names WHICH milestone date is
@@ -34763,22 +34955,18 @@ async function loadDataHealth() {
     <h3>Cases missing an application/offer date</h3>
     ${/* R87 · owner-admin (05 #8) — "submitted_at / offer_issued_date" become the dates' names. */ ""}
     <p class="panel-sub">At application or offer with no <strong>submitted</strong> / <strong>offer issued</strong> date — Reports' funnel and velocity read these. Open each and set the date.</p>
-    ${noMilestoneDate.length ? noMilestoneDate.slice(0, DH_PANEL_CAP).map((c) => `
-      <div class="row-item">
-        <div class="row-main"><div class="t" onclick="openCase('${c.case_id}')">${esc(c.name)}</div><div class="s">${esc(STAGE_LABEL[c.stage] || c.stage)} · missing: ${esc(c.missing)}</div></div>
-        <button class="btn btn-sm" onclick="openCase('${c.case_id}')">Open</button>
-      </div>`).join("") + dhMoreNote(noMilestoneDate.length) : '<div class="empty">Every case past application or offer has its milestone date. 👍</div>'}
+    ${noMilestoneDate.length ? noMilestoneDate.slice(0, DH_PANEL_CAP).map((c) => dhCaseRow(c, {
+        fact: `${dhStage(c.stage)} · missing: ${esc(c.missing)}`,
+      })).join("") + dhMoreNote(noMilestoneDate.length) : '<div class="empty">Every case past application or offer has its milestone date. 👍</div>'}
   </div>`;
 
   // R27 — live cases whose forward date has already passed. See the deadBook compute above.
   const deadBookPanel = `<div class="panel hidden" id="dh-deadbook-panel">
     <h3>Overdue — open cases past a key date</h3>
     <div class="panel-sub">Live cases open past their <strong>expected completion</strong> (or rate-end) date. Close each or push the date out; most overdue first. ${howFold({ id: "dh-deadbook-how", title: "More", html: `<p>Live cases still open after their <strong>expected completion date</strong> — or, failing that, their <strong>rate-end date</strong> — has already passed. These are the classic dead-wood that silently inflates the live pipeline and pollutes MI. Open each one and either close it or push the date out. Sorted most-overdue first.</p>` })}</div>
-    ${deadBook.length ? deadBook.slice(0, DH_PANEL_CAP).map((c) => `
-      <div class="row-item">
-        <div class="row-main"><div class="t" onclick="openCase('${c.case_id}')">${esc(c.name)}</div><div class="s">${esc(STAGE_LABEL[c.stage] || c.stage)} · ${esc(c.reason)}</div></div>
-        <button class="btn btn-sm" onclick="openCase('${c.case_id}')">Open</button>
-      </div>`).join("") + dhMoreNote(deadBook.length) : '<div class="empty">No open cases are past a completion or rate-end date. 👍</div>'}
+    ${deadBook.length ? deadBook.slice(0, DH_PANEL_CAP).map((c) => dhCaseRow(c, {
+        fact: `${dhStage(c.stage)} · ${esc(c.reason)}`,
+      })).join("") + dhMoreNote(deadBook.length) : '<div class="empty">No open cases are past a completion or rate-end date. 👍</div>'}
   </div>`;
 
   /* R69 · B5/L12 — the list behind the "Loan above property value" tile. Both numbers are shown
@@ -34786,13 +34974,11 @@ async function loadDataHealth() {
      the pair: £235,000 against £185,000 is a value keyed short, £2,350,000 against £235,000 is a
      loan keyed long. Open the case and correct whichever one is wrong. */
   const ltvPanel = `<div class="panel hidden" id="dh-ltv-panel">
-    <h3>Loan above property value</h3>
+    <h3>Loan keyed above the property value</h3>
     <div class="panel-sub"><strong>Loan amount</strong> above <strong>property value</strong> — nearly always a mistyped number. A genuine 100%+ deal needs no change. ${howFold({ id: "dh-loanltv-how", title: "More", html: `<p>Cases where <strong>loan amount</strong> is bigger than <strong>property value</strong>. Nothing is wrong with the case itself — this is a sense-check on the two numbers on it, and a loan above the value is nearly always one of them mistyped or mis-imported. Cases that are not proceeding are left out. If a deal really is above 100% (a guarantor product, fees added to the loan), nothing needs changing — the row is here to be read, not cleared.</p>` })}</div>
-    ${ltvOver.length ? ltvOver.slice(0, DH_PANEL_CAP).map((c) => `
-      <div class="row-item">
-        <div class="row-main"><div class="t" onclick="openCase('${c.case_id}')">${esc(c.name)}</div><div class="s">${esc(STAGE_LABEL[c.stage] || c.stage)} · loan ${fmtM(c.loan)} against a value of ${fmtM(c.value)} — <strong>${c.pct}%</strong></div></div>
-        <button class="btn btn-sm" onclick="openCase('${c.case_id}')">Open</button>
-      </div>`).join("") + dhMoreNote(ltvOver.length) : '<div class="empty">Every case with both numbers on it has a loan at or below the property value. 👍</div>'}
+    ${ltvOver.length ? ltvOver.slice(0, DH_PANEL_CAP).map((c) => dhCaseRow(c, {
+        fact: `${dhStage(c.stage)} · loan ${esc(fmtM(c.loan))} against a value of ${esc(fmtM(c.value))} — <strong>${esc(c.pct)}%</strong>`,
+      })).join("") + dhMoreNote(ltvOver.length) : '<div class="empty">Every case with both numbers on it has a loan at or below the property value. 👍</div>'}
   </div>`;
 
   /* R71 · B2/B3 — the two new gap panels. Both fix in place: a text box for the address, a number
@@ -34802,21 +34988,21 @@ async function loadDataHealth() {
   const addressPanel = !dhPropOn ? "" : `<div class="panel hidden" id="dh-address-panel">
     <h3>Completed cases with no property address</h3>
     <div class="panel-sub">Completed mortgages with no property address are invisible to retention and the property views. Type the address here. ${howFold({ id: "dh-address-how", title: "More", html: `<p>The property address is what the retention flow, the shared-address check, the property chips and the client's property list all work from, so a completed case without one is invisible to every one of them. Type the address here and it saves straight onto the case — nothing else on the case is touched. <strong>Protection-only records are not on this list</strong>: a case that is not mortgage-shaped — no mortgage account number and not one of the mortgage case kinds — is not secured on a building, so there is no address to key. That is the R45 “this is not a mortgage” idea the rate-end tile already applies, asked in a way that does not depend on the very field the tile is about.</p>` })}</div>
-    ${noPropAddress.length ? noPropAddress.slice(0, DH_PANEL_CAP).map((c) => `
-      <div class="row-item" data-fix-row="${esc(c.case_id)}">
-        <div class="row-main"><div class="t" onclick="openCase('${c.case_id}')">${esc(c.name)}</div><div class="s">${esc([c.lender, c.completedAt ? "completed " + fmtD(c.completedAt) : "no completion date"].filter(Boolean).join(" · "))}</div></div>
-        ${dhFixCell(c, "property_address", "text", { label: "Property address", placeholder: "e.g. 9 Bryanstone Road, Bournemouth BH3 7EQ", saveTitle: "Save this property address onto the case. Nothing else on the case is touched." })}
-      </div>`).join("") + dhMoreNote(noPropAddress.length) : '<div class="empty">Every completed mortgage case has a property address. 👍</div>'}
+    ${noPropAddress.length ? noPropAddress.slice(0, DH_PANEL_CAP).map((c) => dhCaseRow(c, {
+        verbs: [], attrs: { fixRow: c.case_id },
+        fact: esc([c.lender, c.completedAt ? "completed " + fmtD(c.completedAt) : "no completion date"].filter(Boolean).join(" · ")),
+        sub: dhFixCell(c, "property_address", "text", { label: "Property address", placeholder: "e.g. 9 Bryanstone Road, Bournemouth BH3 7EQ", saveTitle: "Save this property address onto the case. Nothing else on the case is touched." }),
+      })).join("") + dhMoreNote(noPropAddress.length) : '<div class="empty">Every completed mortgage case has a property address. 👍</div>'}
   </div>`;
 
   const loanPanel = `<div class="panel hidden" id="dh-loan-panel">
     <h3>Completed cases with no loan amount</h3>
     <div class="panel-sub">Mortgages with no loan amount are skipped by every figure that divides by the loan. Type the amount in pounds here. ${howFold({ id: "dh-loan-how", title: "More", html: `<p>Anything that divides by the loan — LTV, average loan size, total lending, the loan-above-value sense-check — silently skips a case with no loan amount on it. Type the amount in pounds here and it saves straight onto the case; nothing else on the case is touched. <strong>Protection-only records are not on this list</strong>: a case that is not mortgage-shaped — no mortgage account number and not one of the mortgage case kinds — has no lending on it, so there is no number to fill in and the row would never leave the list. That is R45’s “this is not a mortgage” rule, asked without using the blank loan amount as half its own answer.</p>` })}</div>
-    ${noLoanAmount.length ? noLoanAmount.slice(0, DH_PANEL_CAP).map((c) => `
-      <div class="row-item" data-fix-row="${esc(c.case_id)}">
-        <div class="row-main"><div class="t" onclick="openCase('${c.case_id}')">${esc(c.name)}</div><div class="s">${esc([c.lender, c.completedAt ? "completed " + fmtD(c.completedAt) : "no completion date"].filter(Boolean).join(" · "))}</div></div>
-        ${dhFixCell(c, "loan_amount", "number", { label: "Loan amount", step: "1", min: "0", placeholder: "£", saveTitle: "Save this loan amount onto the case. Nothing else on the case is touched." })}
-      </div>`).join("") + dhMoreNote(noLoanAmount.length) : '<div class="empty">Every completed mortgage case has a loan amount. 👍</div>'}
+    ${noLoanAmount.length ? noLoanAmount.slice(0, DH_PANEL_CAP).map((c) => dhCaseRow(c, {
+        verbs: [], attrs: { fixRow: c.case_id },
+        fact: esc([c.lender, c.completedAt ? "completed " + fmtD(c.completedAt) : "no completion date"].filter(Boolean).join(" · ")),
+        sub: dhFixCell(c, "loan_amount", "number", { label: "Loan amount", step: "1", min: "0", placeholder: "£", saveTitle: "Save this loan amount onto the case. Nothing else on the case is touched." }),
+      })).join("") + dhMoreNote(noLoanAmount.length) : '<div class="empty">Every completed mortgage case has a loan amount. 👍</div>'}
   </div>`;
 
   /* R71 · B4/M2 — the completeness list. No inline fix here on purpose: what is missing is a
@@ -34824,13 +35010,11 @@ async function loadDataHealth() {
      a box — each one is a real piece of work that happens on the case. So this panel names what is
      missing, worst-first, and sends you to the place it gets done. */
   const completenessPanel = `<div class="panel hidden" id="dh-completeness-panel">
-    <h3>Live cases with file gaps</h3>
+    <h3>Live cases missing part of their file</h3>
     <div class="panel-sub">How complete each live case's file is — objective, checklist, papers, fact find, waiting-on, expected date. Worst gaps first. ${howFold({ id: "dh-filegaps-how", title: "More", html: `<p>One measure of whether a case's file is actually complete: the pinned objective, a document checklist, the firm's own papers, a fact find, who we are waiting on, and the expected completion date. <strong>Each stage is only asked for what it can have</strong> — an enquiry is not marked down for having no expected completion date — so the denominator moves as the case moves, and the same figure appears as the “📁 File” chip at the top of the case. Worst gaps first. There is nothing to type here: every missing item is a piece of work on the case itself, so each row opens where that work happens.</p>` })}</div>
-    ${fileGaps.length ? fileGaps.slice(0, DH_PANEL_CAP).map((c) => `
-      <div class="row-item">
-        <div class="row-main"><div class="t" onclick="openCase('${c.case_id}')">${esc(c.name)}</div><div class="s">${esc(STAGE_LABEL[c.stage] || c.stage)} · <strong>${c.have}/${c.of}</strong> · missing: ${esc(c.missing.join(", "))}</div></div>
-        <button class="btn btn-sm" onclick="openCase('${jsArg(c.case_id)}')">Open</button>
-      </div>`).join("") + dhMoreNote(fileGaps.length) : '<div class="empty">Every live case carries the file artefacts its stage asks for. 👍</div>'}
+    ${fileGaps.length ? fileGaps.slice(0, DH_PANEL_CAP).map((c) => dhCaseRow(c, {
+        fact: `${dhStage(c.stage)} · <strong>${esc(c.have)}/${esc(c.of)}</strong> · missing: ${esc(c.missing.join(", "))}`,
+      })).join("") + dhMoreNote(fileGaps.length) : '<div class="empty">Every live case carries the file artefacts its stage asks for. 👍</div>'}
   </div>`;
 
   /* R77 · B3 — the audit register behind the completed-with-file-gaps tile. Read-only on purpose:
@@ -34840,22 +35024,18 @@ async function loadDataHealth() {
   const completedGapsPanel = !dhCompletedGapsOn ? "" : `<div class="panel hidden" id="dh-completedgaps-panel">
     <h3>Completed in the last 6 months with file gaps</h3>
     <div class="panel-sub">Completions from the last 6 months missing a checklist, fact find or case papers — a <strong>register to read, not a queue to work</strong>. ${howFold({ id: "dh-completedfiles-how", title: "More", html: `<p>Cases that reached <strong>Completed</strong> in the last 6 months whose file is missing at least one of the three durable artefacts an AR or network file-check asks to see — the <strong>document checklist</strong>, the <strong>fact find</strong>, the firm's own <strong>case papers</strong>. Same single measure as the live tile above (caseCompleteness), asked at the case's pre-completion requirements; who-we-were-waiting-on and the expected completion date are progress questions and are not asked of a finished case. This is a <strong>register to read, not a queue to work</strong>: it never counts toward the headline above, nothing here is coloured as a fault, and there is deliberately no chase button — what closes a row is the missing artefact landing on the case. Newest completion first.</p>` })}</div>
-    ${completedGaps.length ? completedGaps.slice(0, DH_PANEL_CAP).map((c) => `
-      <div class="row-item">
-        <div class="row-main"><div class="t" onclick="openCase('${jsArg(c.case_id)}')">${esc(c.name)}</div><div class="s">${esc([c.lender, "completed " + fmtD(c.completedAt)].filter(Boolean).join(" · "))} · <strong>${c.have}/${c.of}</strong> · missing: ${esc(c.missing.join(", "))}</div></div>
-        <button class="btn btn-sm" onclick="openCase('${jsArg(c.case_id)}')">Open case</button>
-        <button class="btn btn-sm" onclick="openClient('${jsArg(c.client_id)}',null,null,'${jsArg(c.case_id)}')">Client</button>
-      </div>`).join("") + dhMoreNote(completedGaps.length) : '<div class="empty">Every case completed in the last 6 months carries its checklist, fact find and case papers. 👍</div>'}
+    ${completedGaps.length ? completedGaps.slice(0, DH_PANEL_CAP).map((c) => dhCaseRow(c, {
+        fact: `${esc([c.lender, "completed " + fmtD(c.completedAt)].filter(Boolean).join(" · "))} · <strong>${esc(c.have)}/${esc(c.of)}</strong> · missing: ${esc(c.missing.join(", "))}`,
+        verbs: [{ label: "Open case", onclick: `openCase('${jsArg(c.case_id)}')` }, { label: "Client", onclick: `openClient('${jsArg(c.client_id)}',null,null,'${jsArg(c.case_id)}')` }],
+      })).join("") + dhMoreNote(completedGaps.length) : '<div class="empty">Every case completed in the last 6 months carries its checklist, fact find and case papers. 👍</div>'}
   </div>`;
 
   // T1-26 — the least-reachable records in the database, which previously had no list anywhere.
   const bothPanel = `<div class="panel hidden" id="dh-both-panel">
     <h3>Clients with no email and no phone</h3>
-    ${missingBoth.length ? missingBoth.slice(0, DH_PANEL_CAP).map((c) => `
-      <div class="row-item">
-        <div class="row-main"><div class="t" onclick="openClient('${c.id}')">${esc(c.name)}</div></div>
-        <button class="btn btn-sm" onclick="openClient('${c.id}')">Open</button>
-      </div>`).join("") + dhMoreNote(missingBoth.length) : '<div class="empty">Every client has at least one way to reach them. 👍</div>'}
+    ${missingBoth.length ? missingBoth.slice(0, DH_PANEL_CAP).map((c) => dhClientRow(c, {
+        verbs: [{ label: "Open", title: "Open the client to add an email or a phone number", onclick: `openClient('${jsArg(c.id)}')` }],
+      })).join("") + dhMoreNote(missingBoth.length) : '<div class="empty">Every client has at least one way to reach them. 👍</div>'}
   </div>`;
 
   // T1-9 — present but unusable. The value is shown so the typo is visible without opening anything.
@@ -34863,42 +35043,36 @@ async function loadDataHealth() {
      prefilled into the box, fix-focused Open beside it. Same ids, same hidden-until-clicked. */
   const invalidEmailPanel = `<div class="panel hidden" id="dh-invalid-email-panel">
     <h3>Clients with an invalid email address</h3>
-    ${invalidEmail.length ? invalidEmail.slice(0, DH_PANEL_CAP).map((c) => `
-      <div class="row-item" data-fix-row="${esc(c.id)}">
-        <div class="row-main"><div class="t" onclick="openClient('${c.id}','email')">${esc(c.name)}</div><div class="s">${esc(c.value)}</div></div>
-        ${dhFixCellClient(c, "email", { label: "Email address", value: c.value, focus: "email", saveTitle: "Save the corrected email address onto the client's record — the broken value is prefilled so the typo can be repaired in place. A value the client form would refuse is refused here too." })}
-      </div>`).join("") + dhMoreNote(invalidEmail.length) : '<div class="empty">Every email address on file looks sendable. 👍</div>'}
+    ${invalidEmail.length ? invalidEmail.slice(0, DH_PANEL_CAP).map((c) => dhClientRow(c, {
+        attrs: { fixRow: c.id }, fact: esc(c.value),
+        sub: dhFixCellClient(c, "email", { label: "Email address", value: c.value, focus: "email", saveTitle: "Save the corrected email address onto the client's record — the broken value is prefilled so the typo can be repaired in place. A value the client form would refuse is refused here too." }),
+      })).join("") + dhMoreNote(invalidEmail.length) : '<div class="empty">Every email address on file looks sendable. 👍</div>'}
   </div>`;
 
   const invalidPhonePanel = `<div class="panel hidden" id="dh-invalid-phone-panel">
     <h3>Clients with an invalid phone number</h3>
-    ${invalidPhone.length ? invalidPhone.slice(0, DH_PANEL_CAP).map((c) => `
-      <div class="row-item" data-fix-row="${esc(c.id)}">
-        <div class="row-main"><div class="t" onclick="openClient('${c.id}','phone')">${esc(c.name)}</div><div class="s">${esc(c.value)}</div></div>
-        ${dhFixCellClient(c, "phone", { label: "Phone number", value: c.value, focus: "phone", saveTitle: "Save the corrected phone number onto the client's record — the broken value is prefilled so the typo can be repaired in place. A number the client form would refuse is refused here too." })}
-      </div>`).join("") + dhMoreNote(invalidPhone.length) : '<div class="empty">Every phone number on file looks textable. 👍</div>'}
+    ${invalidPhone.length ? invalidPhone.slice(0, DH_PANEL_CAP).map((c) => dhClientRow(c, {
+        attrs: { fixRow: c.id }, fact: esc(c.value),
+        sub: dhFixCellClient(c, "phone", { label: "Phone number", value: c.value, focus: "phone", saveTitle: "Save the corrected phone number onto the client's record — the broken value is prefilled so the typo can be repaired in place. A number the client form would refuse is refused here too." }),
+      })).join("") + dhMoreNote(invalidPhone.length) : '<div class="empty">Every phone number on file looks textable. 👍</div>'}
   </div>`;
 
   /* R13 · M-4/M-30 — the two care lists. Neutral wording throughout: these are not faults, and the
      empty state is not a 👍 (having no vulnerable clients on file is not an achievement — on a book
      of this size it is more likely nobody has recorded one yet, and the copy says so). */
   const vulnerablePanel = !dhCareOn ? "" : `<div class="panel hidden" id="dh-vulnerable-panel">
-    <h3>Vulnerable clients</h3>
+    <h3>Clients flagged vulnerable</h3>
     <div class="panel-sub">Clients flagged as vulnerable — <strong>information, not a problem list</strong>. Check each carries a note saying how to help. ${howFold({ id: "dh-vulnerable-how", title: "More", html: `<p>Clients flagged as vulnerable on their record. This is <strong>information, not a problem list</strong> — nothing here needs clearing. What is worth checking is that each one carries a note: a flag with no explanation tells the next colleague to be careful without telling them how.</p>` })}</div>
-    ${dhVulnerable.length ? dhVulnerable.slice(0, DH_PANEL_CAP).map((c) => `
-      <div class="row-item">
-        <div class="row-main"><div class="t" onclick="openClient('${jsArg(c.id)}')">${esc(c.name)}</div><div class="s">${c.note ? esc(c.note) : '<span class="cs-muted">no note recorded — add one so a colleague knows what the care need is</span>'}</div></div>
-        <button class="btn btn-sm" onclick="openClient('${jsArg(c.id)}')">Open</button>
-      </div>`).join("") + dhMoreNote(dhVulnerable.length) : '<div class="empty">No client is flagged as vulnerable. That may be right, or it may mean nobody has recorded one yet — the flag is on the client record, under “Care &amp; contact”.</div>'}
+    ${dhVulnerable.length ? dhVulnerable.slice(0, DH_PANEL_CAP).map((c) => dhClientRow(c, {
+        fact: c.note ? esc(c.note) : '<span class="cs-muted">no note recorded — add one so a colleague knows what the care need is</span>',
+      })).join("") + dhMoreNote(dhVulnerable.length) : '<div class="empty">No client is flagged as vulnerable. That may be right, or it may mean nobody has recorded one yet — the flag is on the client record, under “Care &amp; contact”.</div>'}
   </div>`;
   const suppressedPanel = !dhCareOn ? "" : `<div class="panel hidden" id="dh-suppressed-panel">
     <h3>Clients with automation suppressed</h3>
     <div class="panel-sub">Every automated email and SMS to these clients is refused until the switch on their record is turned off. ${howFold({ id: "dh-suppressed-how", title: "More", html: `<p>The database refuses <strong>every automated email and SMS</strong> to these clients — rate-end reminders, review requests, document chases, birthday and anniversary messages. Nothing scheduled will reach them until the switch is turned off on their record. Sending by hand still works and asks you to confirm first. Worth reading occasionally: a suppression set for a good reason in March is easy to forget by September.</p>` })}</div>
-    ${dhSuppressed.length ? dhSuppressed.slice(0, DH_PANEL_CAP).map((c) => `
-      <div class="row-item">
-        <div class="row-main"><div class="t" onclick="openClient('${jsArg(c.id)}')">${esc(c.name)}</div><div class="s">${c.note ? esc(c.note) : '<span class="cs-muted">no note recorded</span>'}</div></div>
-        <button class="btn btn-sm" onclick="openClient('${jsArg(c.id)}')">Open</button>
-      </div>`).join("") + dhMoreNote(dhSuppressed.length) : '<div class="empty">No client has automated contact suppressed.</div>'}
+    ${dhSuppressed.length ? dhSuppressed.slice(0, DH_PANEL_CAP).map((c) => dhClientRow(c, {
+        fact: c.note ? esc(c.note) : '<span class="cs-muted">no note recorded</span>',
+      })).join("") + dhMoreNote(dhSuppressed.length) : '<div class="empty">No client has automated contact suppressed.</div>'}
   </div>`;
 
   /* R12b · K-11 / W-24 — THE PANEL. One row per live case with outstanding items: who, where the
@@ -34907,7 +35081,7 @@ async function loadDataHealth() {
      per-case: open it, or send. */
   const chaseOnNow = (settings.doc_chase_enabled ?? "off") === "on";
   const waitingDocsPanel = !dhDocsOn ? "" : `<div class="panel" id="dh-waitingdocs-panel">
-    <h3>Waiting on documents</h3>
+    <h3>Live cases with checklist items outstanding</h3>
     <div class="panel-sub">Live cases with checklist items outstanding, quietest first. ${chaseOnNow
       ? `<strong>Automatic chasing is ON</strong> — every ${esc(String(docChaseDays()))} days, up to ${DOC_CHASE_MAX} times.`
       : `<strong>Automatic chasing is OFF</strong> — nothing here is chased except by hand.`} ${howFold({ id: "dh-docqueue-how", title: "More", html: `<p>Every <strong>live</strong> case with at least one item still outstanding on its checklist — the paperwork queue, in the order it has gone quiet. ${chaseOnNow
@@ -34963,75 +35137,89 @@ async function loadDataHealth() {
     </table></div>` : '<div class="empty">No live case has an outstanding document on its checklist. 👍</div>'}
   </div>`;
 
+  /* ==========================================================================
+     R89 · A — DATA HEALTH ONCE (panel 05 #6).
+
+     The readiness list, the tile wall and the panels were the same numbers three
+     times (2,904px desktop, 6,130px phone). Now the tiles are the header row —
+     they ARE the counts — and under them is ONE to-do list: a row per check
+     (its name, how many are left, and the fix list folded beneath it), faults
+     worst-first, then the duplicate review, then the watchlist. The readiness
+     list is gone; its id (#dh-readiness) is the to-do list now, and its headline
+     (#dh-readiness-headline) is the page's one line. The orange/navy key went
+     with it (the to-do list says which rows are faults: they say "Fix").
+
+     Each panel keeps its id, its `.hidden` (= folded) semantics and every row,
+     control and counter inside it; its <h3> is lifted into the check's row head
+     so the name is said once. A check at zero is folded away with its tile
+     (.dh-clean) and comes back with #dh-clean-toggle or a tile click.
+     ========================================================================== */
+  const DH_CHECKS = [
+    // [panel html, panel id, tile id, rows, band]
+    [missingPanel, "dh-missing-panel", "dh-tile-email", missingEmail.length, "counted"],
+    [phonePanel, "dh-phone-panel", "dh-tile-phone", missingPhoneLive.length, "counted"],
+    [bothPanel, "dh-both-panel", "dh-tile-both", missingBoth.length, "counted"],
+    [invalidEmailPanel, "dh-invalid-email-panel", "dh-tile-invalid-email", invalidEmail.length, "counted"],
+    [invalidPhonePanel, "dh-invalid-phone-panel", "dh-tile-invalid-phone", invalidPhone.length, "counted"],
+    [unassignedPanel, "dh-unassigned-panel", "dh-tile-unassigned", unassigned.length, "counted"],
+    [noFeePanel, "dh-nofee-panel", "dh-tile-nofee", noFee.length, "counted"],
+    [rateEndPanel, "dh-rateend-panel", "dh-tile-rateend", noRateEnd.length, "counted"],
+    [noCompletedPanel, "dh-nocompleted-panel", "dh-tile-nocompleted", noCompletedAt.length, "counted"],
+    [milestonePanel, "dh-milestone-panel", "dh-tile-milestone", noMilestoneDate.length, "counted"],
+    [deadBookPanel, "dh-deadbook-panel", "dh-tile-deadbook", deadBook.length, "counted"],
+    [ltvPanel, "dh-ltv-panel", "dh-tile-ltv", ltvOver.length, "counted"],
+    [addressPanel, "dh-address-panel", "dh-tile-address", noPropAddress.length, "counted"],
+    [loanPanel, "dh-loan-panel", "dh-tile-loan", noLoanAmount.length, "counted"],
+    [completenessPanel, "dh-completeness-panel", "dh-tile-completeness", fileGaps.length, "counted"],
+    [dupPanel, "dh-dup-panel", null, dups.length, "review"],
+    [waitingDocsPanel, "dh-waitingdocs-panel", "dh-tile-waitingdocs", waitingDocs.length, "watch"],
+    [sharedPropPanel, "dh-sharedprop-panel", "dh-tile-sharedprop", sharedProps.length, "watch"],
+    [completedGapsPanel, "dh-completedgaps-panel", "dh-tile-completedgaps", completedGaps.length, "watch"],
+    [vulnerablePanel, "dh-vulnerable-panel", "dh-tile-vulnerable", dhVulnerable.length, "watch"],
+    [suppressedPanel, "dh-suppressed-panel", "dh-tile-suppressed", dhSuppressed.length, "watch"],
+  ].filter((c) => c[0]);
+  const DH_BAND_ORDER = { counted: 0, review: 1, watch: 2 };
+  /* Worst first inside the faults (the order the readiness list used to give them); the review and
+     the watchlist keep their written order — they are lists to read, not a queue. */
+  DH_CHECKS.sort((a, b) => (DH_BAND_ORDER[a[4]] - DH_BAND_ORDER[b[4]]) || (a[4] === "counted" ? b[3] - a[3] : 0));
+  const dhCheckHtml = ([html, panelId, tileId, n, band]) => {
+    const m = html.match(/<h3>([\s\S]*?)<\/h3>/);
+    const body = m ? html.replace(m[0], "") : html;
+    const open = !/^\s*<div class="panel hidden"/.test(body);
+    const count = DH_FIX_PANEL_TILE[panelId] ? `<span class="dh-left-n"></span>` : `<span class="dh-check-n">${n}</span>`;
+    return `<section class="dh-check${band === "counted" && !n ? " dh-clean" : ""}${open ? " dh-open" : ""}" data-band="${band}" data-panel="${panelId}"${tileId ? ` data-tile="${tileId}"` : ""} data-n="${n}">`
+      + `<h3 class="dh-check-head"><button type="button" class="dh-check-btn" aria-expanded="${open}" aria-controls="${panelId}"><span class="dh-check-name">${m ? m[1] : ""}</span>${count}<span class="dh-check-go" aria-hidden="true">${band === "watch" ? "Read" : "Fix"}</span></button></h3>`
+      + body + `</section>`;
+  };
   el.innerHTML = `
     ${/* R73 · B1 — call site 4 of 4: see the activateAll below this template. */ ""}
-    ${/* R74 · A5c — the one line that says what the colours mean. Every tile on this wall is a
-          number in a box and half of them go amber; nothing anywhere said whether amber meant
-          "urgent" or simply "not zero", so a Consumer-Duty list and a typo read the same. */ ""}
-    <p class="dh-key" id="dh-key"><span><span class="dh-key-swatch is-warn"></span>Orange — a fault to fix.</span><span><span class="dh-key-swatch is-plain"></span>Navy — a number to read.</span><span><strong>▾</strong> opens the list here · <strong>→</strong> opens its page.</span></p>
     <div class="kpi-row" id="dh-kpi-row">${kpis}</div>
     ${stuckNotice}
-    ${dupPanel}
-    ${sharedPropPanel}
-    <div class="grid-2">${missingPanel}${unassignedPanel}</div>
-    ${waitingDocsPanel}
-    ${noFeePanel}
-    <div class="grid-2">${phonePanel}${rateEndPanel}</div>
-    <div class="grid-2">${bothPanel}${noCompletedPanel}</div>
-    <div class="grid-2">${invalidEmailPanel}${invalidPhonePanel}</div>
-    <div class="grid-2">${milestonePanel}${deadBookPanel}</div>
-    ${ltvPanel}
-    ${/* R71 · B2/B4 — full width, not in a grid-2 pair: each row carries an input and its Save,
-          and a half-width panel is where that wraps into two lines on a laptop. */ ""}
-    ${addressPanel}
-    ${loanPanel}
-    ${completenessPanel}
-    ${completedGapsPanel}
-    ${dhCareOn ? `<div class="grid-2">${vulnerablePanel}${suppressedPanel}</div>` : ""}`;
+    <div class="dh-todo" id="dh-readiness">${DH_CHECKS.map(dhCheckHtml).join("")}</div>`;
 
   /* R74 · A5b — "Clients total" is not a fault and had nothing to drill into, so it left the wall.
-     The number itself is not lost: it is the denominator every check below is measured against,
-     and it belongs in the sentence that introduces them. */
+     R89 · A — it is the first clause of the page's ONE line, and the readiness headline (whose
+     list is gone) is the rest of it: "Checks across 50 clients: 97 data-quality issues across 13
+     checks to clear." #dh-readiness-headline keeps its data-total / data-checks, which
+     dhDecrementHeadline counts down as fixes save. */
   const dhPageSub = $("#dh-page-sub");
   if (dhPageSub) {
-    dhPageSub.textContent = `Automatic data-quality checks across ${dq.clients_total ?? 0} client${(dq.clients_total ?? 0) === 1 ? "" : "s"} — fix these to keep automations and reporting accurate.`;
-  }
-  const dhReadinessEl = document.getElementById("dh-readiness");
-  if (dhReadinessEl) {
-    if (dhReadinessTotal === 0) {
-      dhReadinessEl.innerHTML = `<div class="panel" id="dh-readiness-panel"><p class="panel-sub" style="margin:0;">Your book looks clean — no data-quality issues flagged. ✅</p></div>`;
-    } else {
-      // The onclick jumps to the tile and clicks it — the tiles are already wired (above) to
-      // scroll to and expand their own list panel, so one line reuses that behaviour verbatim.
-      const jump = (id) => `document.getElementById('${id}')?.scrollIntoView({behavior:'smooth'}); document.getElementById('${id}')?.click();`;
-      dhReadinessEl.innerHTML = `<div class="panel" id="dh-readiness-panel">
-        ${/* R74 · A5a (panel finding 10) — THE HEADLINE MOVES WHEN A FIX SAVES. It has never
-              decremented: you could clear six gaps in the panel below and this line still said 97,
-              so the one place the work was visible was the one place it did not show. The number
-              and the check count are carried in data- attributes rather than parsed back out of
-              the sentence, because the sentence is prose and prose gets rewritten. */ ""}
-        ${/* R77 · B4b — "before importing" was R31's launch framing and the import is YEARS done;
-              a permanent headline whose reason has expired reads as furniture. The page's own
-              honest reason (it is the dh-page-sub's, said where the number is): these exact
-              fields are what the automations and every report read. Same sentence at BOTH render
-              sites — here and in dhDecrementHeadline's rewrite. */ ""}
-        <p class="panel-sub" id="dh-readiness-headline" data-total="${dhReadinessTotal}" data-checks="${dhReadinessChecks.length}" style="margin:0 0 8px;"><strong><span class="dh-headline-n">${dhReadinessTotal}</span> data-quality issue${dhReadinessTotal === 1 ? "" : "s"}</strong> across <span class="dh-headline-checks">${dhReadinessChecks.length}</span> check${dhReadinessChecks.length === 1 ? "" : "s"} to clear — automations and reports read these exact fields.</p>
-        <div style="display:flex;flex-direction:column;gap:2px;">
-          ${dhReadinessChecks.map((c) => `<div class="dh-readiness-item" role="button" tabindex="0" title="Jump to “${c.label}”" style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:4px 8px;border-radius:4px;cursor:pointer;" onclick="${jump(c.tileId)}"><span class="dh-readiness-label">${c.label}</span> <strong class="dh-readiness-count">${c.count}</strong></div>`).join("")}
-        </div>
-      </div>`;
-    }
+    const nCl = dq.clients_total ?? 0;
+    dhPageSub.innerHTML = `Checks across ${esc(nCl)} client${nCl === 1 ? "" : "s"}: <span id="dh-readiness-headline" data-total="${dhReadinessTotal}" data-checks="${dhReadinessChecks.length}">${dhHeadlineHtml(dhReadinessTotal, dhReadinessChecks.length)}</span>`;
   }
 
-  // Tiles whose panel is hidden until asked for: toggle, and scroll to it when revealing so the
-  // list isn't opened off-screen below the fold.
+  /* R89 · A — one door per check, two handles: its tile (header row) and its row head (to-do list).
+     Both open the fold; the tile also brings the row into view. A tile whose list is always open
+     (wireTileScroll) re-opens it if the row was folded, then scrolls. */
+  const dhSetOpen = (panel, open) => dhCheckSetOpen(panel, open);
+  const dhScrollTo = (panel) => (panel.closest(".dh-check") || panel).scrollIntoView({ behavior: "smooth", block: "start" });
   const wireTile = (tileId, panelId) => {
     const tile = $(tileId), panel = $(panelId);
     if (!tile || !panel) return;
     tile.style.cursor = "pointer";
     tile.onclick = () => {
-      panel.classList.toggle("hidden");
-      if (!panel.classList.contains("hidden")) panel.scrollIntoView({ behavior: "smooth", block: "start" });
+      dhSetOpen(panel, panel.classList.contains("hidden"));
+      if (!panel.classList.contains("hidden")) dhScrollTo(panel);
     };
   };
   /* R73 · A4 — stamp each body cell with its column heading, so the three wide tables on this
@@ -35043,7 +35231,7 @@ async function loadDataHealth() {
     const tile = $(tileId), panel = $(panelId);
     if (!tile || !panel) return;
     tile.style.cursor = "pointer";
-    tile.onclick = () => panel.scrollIntoView({ behavior: "smooth", block: "start" });
+    tile.onclick = () => { dhSetOpen(panel, true); dhScrollTo(panel); };
   };
   /* R74 · A5a — every inline-fix panel opens with its own live count in its heading, so the
      counter the save decrements is already there to come down rather than appearing from nowhere.
@@ -35147,6 +35335,12 @@ async function loadDataHealth() {
     dhContent.addEventListener("click", (e) => {
       const btn = e.target.closest(".dh-fix-save");
       if (btn) dhInlineFixSave(btn);
+      /* R89 · A — a to-do row's head folds / unfolds its list. */
+      const head = e.target.closest(".dh-check-btn");
+      if (head) {
+        const panel = document.getElementById(head.getAttribute("aria-controls") || "");
+        if (panel) dhCheckSetOpen(panel, panel.classList.contains("hidden"));
+      }
     });
     dhContent.addEventListener("keydown", (e) => {
       if (e.key !== "Enter") return;
@@ -35298,25 +35492,11 @@ function dhDecrementTile(panel) {
       }
     }
   }
-  const items = document.querySelectorAll("#dh-readiness .dh-readiness-item");
-  let rowCleared = false;
-  items.forEach((it) => {
-    const onclick = it.getAttribute("onclick") || "";
-    if (tileId && onclick.indexOf("'" + tileId + "'") === -1) return;
-    if (!tileId) return;
-    const cEl = it.querySelector(".dh-readiness-count");
-    const n = Number(String((cEl && cEl.textContent) || "").trim());
-    if (!cEl || !isFinite(n)) return;
-    const left = Math.max(0, n - 1);
-    if (!left) { it.remove(); rowCleared = true; } else cEl.textContent = String(left);
-  });
-  /* R74 · A5a (panel finding 10) — AND THE HEADLINE COMES DOWN WITH IT. "97 data-quality issues
-     across 13 checks" was the one number on this page that never moved: an operator could clear
-     six gaps and the line above the wall still read 97, so the work looked like it had achieved
-     nothing. The tile and the readiness row have decremented since R71; the headline is the third
-     reader of the same event. Whole sentence rewritten from the two data- attributes, so the
-     plurals ("issue"/"issues", "check"/"checks") stay right all the way down to the last one, and
-     the empty state is the same "looks clean" sentence the render path writes. */
+  /* R89 · A — the readiness list is gone (its rows were the tiles' numbers again), so the tile
+     is the one count to bring down; a check is cleared when its tile reaches zero. */
+  const chk = panel.closest(".dh-check");   // R89 · A — the to-do row's own count comes down with it
+  if (chk) chk.dataset.n = String(Math.max(0, (Number(chk.dataset.n) || 0) - 1));
+  const rowCleared = !!(tile && /^0( of \d+)?$/.test(String((tile.querySelector(".num") || {}).textContent || "").trim()));
   dhDecrementHeadline(rowCleared);
   /* R74 · A5a — the counter ON THE PANEL, where the work is happening. The reward for a save was
      two screens up; the row simply vanished and nothing said how many were left. */
@@ -35335,20 +35515,33 @@ function dhDecrementHeadline(checkCleared) {
   const checks = Math.max(0, (Number(h.dataset.checks) || 0) - (checkCleared ? 1 : 0));
   h.dataset.total = String(total);
   h.dataset.checks = String(checks);
-  if (!total || !checks) {
-    const box = document.getElementById("dh-readiness");
-    if (box) box.innerHTML = `<div class="panel" id="dh-readiness-panel"><p class="panel-sub" style="margin:0;">Your book looks clean — no data-quality issues flagged. ✅</p></div>`;
-    return;
-  }
-  // R77 · B4b — the same sentence the render path writes; the two sites may never drift apart.
-  h.innerHTML = `<strong><span class="dh-headline-n">${total}</span> data-quality issue${total === 1 ? "" : "s"}</strong> across <span class="dh-headline-checks">${checks}</span> check${checks === 1 ? "" : "s"} to clear — automations and reports read these exact fields.`;
+  // R89 · A — the same sentence the render path writes (dhHeadlineHtml); the two sites may never drift.
+  h.innerHTML = dhHeadlineHtml(total, checks);
+}
+/* R89 · A — the headline clause of Data health's one line; "looks clean" when nothing is left. */
+function dhHeadlineHtml(total, checks) {
+  if (!total || !checks) return "no data-quality issues — your book looks clean. ✅";
+  return `<strong><span class="dh-headline-n">${total}</span> data-quality issue${total === 1 ? "" : "s"}</strong> across <span class="dh-headline-checks">${checks}</span> check${checks === 1 ? "" : "s"} to clear.`;
+}
+/* R89 · A — fold / unfold one to-do row: the panel's `.hidden` (what every suite reads), the row's
+   .dh-open (what keeps a cleared check on screen while it is open) and the head's aria-expanded. */
+function dhCheckSetOpen(panel, open) {
+  if (!panel) return;
+  panel.classList.toggle("hidden", !open);
+  const chk = panel.closest(".dh-check");
+  if (!chk) return;
+  chk.classList.toggle("dh-open", !!open);
+  const b = chk.querySelector(".dh-check-btn");
+  if (b) b.setAttribute("aria-expanded", open ? "true" : "false");
 }
 /* R74 · A5a — "N left in this list" on a fix panel's own heading, kept in step with the rows that
    are actually in it. Counts the rows on screen, so it can never claim more than the panel holds;
    the panel's own "…and N more" footnote (DH_PANEL_CAP) still says when the list is capped. */
 function dhSyncPanelLeft(panel) {
   if (!panel) return;
-  const h3 = panel.querySelector("h3");
+  /* R89 · A — the panel's heading is its to-do row's head now (lifted out of the panel). */
+  const chk = panel.closest(".dh-check");
+  const h3 = (chk && chk.querySelector(".dh-check-head")) || panel.querySelector("h3");
   if (!h3) return;
   const n = panel.querySelectorAll(".row-item").length;
   let el = h3.querySelector(".dh-left-n");
@@ -35970,6 +36163,17 @@ function renderSecondOwnerNotice() {
   if (!show) { el.innerHTML = ""; return; }
   el.innerHTML = `<strong>The firm has one Owner.</strong> Lose that login and nobody can change settings, keys or roles. <strong>Appoint a second Owner</strong> on the roster below.`;
 }
+/* R89 · C — SINGLE SOURCE (05 #4). Your own phone and email sign-off are edited in My details and
+   nowhere else: your roster row shows them read-only with a door to that card. Another person's
+   stay editable here by the Owner (saved on blur, as before). */
+function rosterSelfContactHtml(p) {
+  if (!PROFILE_CONTACT_SUPPORTED) return "";
+  const signoff = String(p.email_signoff || "").split(/\n+/).map((x) => x.trim()).filter(Boolean).join(" · ");
+  return `<div class="team-contact team-contact-self" data-self-contact="${esc(p.id)}">
+    <span class="team-contact-ro" id="team-self-contact">📞 ${p.phone ? esc(p.phone) : "no phone"} · sign-off: ${signoff ? esc(signoff) : "none"}</span>
+    <button type="button" class="btn btn-sm btn-ghost" id="team-self-edit" onclick="settingsGotoMyDetails()">Edit in My details</button>
+  </div>`;
+}
 async function renderTeamRoster() {
   const el = $("#team-roster");
   if (!el) return;
@@ -35988,6 +36192,7 @@ async function renderTeamRoster() {
           <div class="s">${esc(p.email || "")}${p.email ? " · " : ""}${esc(holdingsSentence(h))}</div>
         </div>
         </div>
+        ${p.id === (ME && ME.id) ? rosterSelfContactHtml(p) : ""}
       </div>`;
     }).join("") : '<div class="empty">No team logins yet.</div>';
     return;
@@ -36007,9 +36212,9 @@ async function renderTeamRoster() {
         ${opts.map(([k, l]) => `<option value="${esc(k)}" ${k === p.role ? "selected" : ""}>${esc(l)}</option>`).join("")}
       </select>
       </div>
-      ${PROFILE_CONTACT_SUPPORTED ? `<div class="team-contact" style="display:flex;gap:8px;flex-wrap:wrap;margin:2px 0 6px;">
-        <input class="team-phone" type="tel" data-id="${esc(p.id)}" value="${esc(p.phone || "")}" placeholder="Phone" aria-label="Phone for ${esc(p.full_name || p.email || p.id)}" style="flex:1;min-width:130px;">
-        <textarea class="team-signoff" rows="1" data-id="${esc(p.id)}" placeholder="Email sign-off" aria-label="Email sign-off for ${esc(p.full_name || p.email || p.id)}" style="flex:2;min-width:220px;resize:vertical;">${esc(p.email_signoff || "")}</textarea>
+      ${p.id === (ME && ME.id) ? rosterSelfContactHtml(p) : PROFILE_CONTACT_SUPPORTED ? `<div class="team-contact">
+        <input class="team-phone" type="tel" data-id="${esc(p.id)}" value="${esc(p.phone || "")}" placeholder="Phone" aria-label="Phone for ${esc(p.full_name || p.email || p.id)}">
+        <textarea class="team-signoff" rows="1" data-id="${esc(p.id)}" placeholder="Email sign-off" aria-label="Email sign-off for ${esc(p.full_name || p.email || p.id)}">${esc(p.email_signoff || "")}</textarea>
       </div>` : ""}
       <div class="team-deact hidden" data-deact="${esc(p.id)}"></div>
     </div>`;
@@ -36847,14 +37052,23 @@ const PALETTE_VERBS = [
     run: () => { if (!paletteClick("#act-write")) toast("Writing to the client isn't offered on this case."); },
   },
   { id: "accept-leads", icon: "📥", title: "Accept leads", sub: "Go to Today, where the new website enquiries are", run: () => window.paletteGotoLeads() },
+  /* R89 · D — one "Go to" per sidebar entry (the ten pages; Today and Vault were missing), each titled as the sidebar says. */
+  { id: "goto-today", icon: "🏠", title: "Go to Today", sub: "My Day, the checks and the firm's headline numbers", run: () => nav("dashboard") },
   { id: "goto-pipeline", icon: "🗂️", title: "Go to Pipeline", sub: "The board of live cases", run: () => nav("pipeline") },
   { id: "goto-clients", icon: "👥", title: "Go to Clients", sub: "The client book", run: () => nav("clients") },
   { id: "goto-retention", icon: "🔁", title: "Go to Retention", sub: "Rates ending and the ERC list", run: () => nav("retention") },
   { id: "goto-protection", icon: "🛡️", title: "Go to Protection", sub: "The protection pipeline and call list", run: () => nav("protection") },
   { id: "goto-diary", icon: "📅", title: "Go to Diary", sub: "Appointments, month or day", run: () => nav("diary") },
   { id: "goto-reports", icon: "📊", title: "Go to Reports", sub: "The firm's numbers", run: () => nav("reports") },
-  { id: "goto-emails", icon: "✉️", title: "Go to Emails", sub: "The send queue and what has failed", run: () => nav("emails") },
-  { id: "goto-money", icon: "💷", title: "Go to Monday money", sub: "Owner only — fees, banked and forecast", when: () => isOwner(), run: () => nav("money") },
+  { id: "goto-vault", icon: "🔑", title: "Go to Vault", sub: "The firm's shared logins", run: () => nav("vault") },
+  /* R89 · A — Emails, Import and Data health are the three tabs of Operations: one "Go to Operations"
+     (the tab you last had) and a verb per tab, named the way the tab title names it. Owner /
+     Administrator only, like the page — an adviser was offered a verb that bounced to Today. */
+  { id: "goto-operations", icon: "🧰", title: "Go to Operations", sub: "Emails & SMS, Import and Data health", when: () => isAdminOrOwner(), run: () => nav("operations") },
+  { id: "goto-emails", icon: "✉️", title: opsTabName("emails"), sub: "The send queue and what has failed", when: () => isAdminOrOwner(), run: () => nav("operations/emails") },
+  { id: "goto-import", icon: "📥", title: opsTabName("import"), sub: "The weekly Revolution export, or bring in a spreadsheet", when: () => isAdminOrOwner(), run: () => nav("operations/import") },
+  { id: "goto-data", icon: "🩺", title: opsTabName("data"), sub: "Data-quality checks and their fix lists", when: () => isAdminOrOwner(), run: () => nav("operations/data") },
+  { id: "goto-money", icon: "💷", title: "Go to Reports › Money", sub: "Owner only — fees, banked and forecast", when: () => isOwner(), run: () => nav("reports/money") },   // R89 · D: was "Go to Monday money" (a page)
   { id: "goto-settings", icon: "⚙️", title: "Go to Settings", sub: "Automation switches, templates, the team", run: () => nav("settings") },
 ];
 (function () {
@@ -39028,6 +39242,6 @@ async function deleteVaultEntry(id) {
 
 /* R81 · A3 — deploy handshake stamp. Every round that edits ANY of index.html / core.js /
    reports-money.js / app.js bumps the tag IN ALL FOUR PLACES (see nxCheckBuildTags above). */
-window.__nxTag_app = "r88";   // R88
+window.__nxTag_app = "r89";   // R89
 
 init();

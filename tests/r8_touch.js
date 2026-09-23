@@ -526,7 +526,7 @@ function parseCsvLine(line) {
       const page = await newPage(browser, "p4");
       const gt = await groundTruth(page);
 
-      await page.evaluate(() => window.nav("settings"));
+      await page.evaluate(() => window.nav("settings/automations"));   // R89 · C: was nav("settings") — birthday / annual-review switches are on the Automations tab
       await page.waitForTimeout(1200);
       const status = await page.$eval("#birthday-status", (e) => e.textContent.replace(/\s+/g, " ").trim());
       ok("R8-3 · the status line states the switch", /Birthday greetings: (ON|OFF)/.test(status), status);
@@ -594,7 +594,7 @@ function parseCsvLine(line) {
     {
       console.log("\n— R8-4 · annual review (p4 Daniel, owner)");
       const page = await newPage(browser, "p4");
-      await page.evaluate(() => window.nav("settings"));
+      await page.evaluate(() => window.nav("settings/automations"));   // R89 · C: was nav("settings") — birthday / annual-review switches are on the Automations tab
       await page.waitForTimeout(1200);
 
       const sel = await page.$("select[name='annual_review_enabled']");

@@ -404,7 +404,7 @@ const readsFor = (page, table) => page.evaluate((t) => window.__r23Reads.filter(
 
       // E2 — Reports still renders normally for the owner with OWNER_ROW_CAP back at 20000; its own
       // notice is silent (this fixture is nowhere near REPORTS_ROW_CAP either).
-      await goto(page, "reports", 1300);
+      await goto(page, "reports/mi", 1300);   // R89 · B: was "reports" — Pipeline MI is a tab, painted when shown
       const repHidden = await page.$eval("#report-cap-notice", (e) => e.classList.contains("hidden"));
       ok("E2 · #report-cap-notice is hidden (fixture is nowhere near REPORTS_ROW_CAP)", repHidden);
       const miVisible = await page.evaluate(() => { const el = document.querySelector("#report-mi-section"); return !!el && !el.classList.contains("hidden"); });

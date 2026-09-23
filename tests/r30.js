@@ -212,7 +212,7 @@ const errorLog = (page) => page.evaluate(() => window.__errorLog);
       eq("C0 · two distinct persisted rows seeded", rowsSeeded.length, 2);
 
       // R33 — diagnostics now lives on Settings, inside a collapsed <details>.
-      await goto(page, "settings", 1500);
+      await goto(page, "settings/data", 1500);   /* R89 · CTO — Diagnostics live on the Data tab now */
       await openDiagDetails(page);
       await wait(page, 500);
 
@@ -261,7 +261,7 @@ const errorLog = (page) => page.evaluate(() => window.__errorLog);
       eq("D3 · error_events stayed empty (no insert attempted/succeeded)", rows.length, 0);
 
       // R33 — diagnostics now lives on Settings, inside a collapsed <details>.
-      await goto(page, "settings", 1500);
+      await goto(page, "settings/data", 1500);   /* R89 · CTO — Diagnostics live on the Data tab now */
       await openDiagDetails(page);
       await wait(page, 500);
       const tblText = await page.$eval("#diag-persist-table", (e) => e.textContent);

@@ -532,9 +532,13 @@ async function importStatement(page, ref, rows, opts) {
       ok("§D5 · #recon-review starts hidden", await p4.evaluate(() => document.querySelector("#recon-review").classList.contains("hidden")));
       /* R87 · owner-admin (05 #3): was advisers → recon → procrates. The weekly statement is the page's one action
          and now LEADS #money-body, the rate card follows it, and the read-only panels come after. */
-      ok("§D6 · DOM order: recon panel → procrates panel → advisers panel (R87: the ritual leads)", await p4.evaluate(() => {
-        const a = document.querySelector("#money-advisers-panel"), r = document.querySelector("#money-recon-panel"), p = document.querySelector("#money-procrates-panel");
-        return !!(r.compareDocumentPosition(p) & Node.DOCUMENT_POSITION_FOLLOWING) && !!(p.compareDocumentPosition(a) & Node.DOCUMENT_POSITION_FOLLOWING);
+      /* R89 · B: the per-adviser panel (#money-advisers-panel) is retired (it restated the scoreboard), and
+         the Money tab reads statement → banked → Money owed → rate card. The ritual still LEADS: the recon
+         panel is the first panel in #money-body and the rate card follows it. Was recon → procrates → advisers. */
+      ok("§D6 · DOM order: recon panel first in #money-body, the rate card after it (R87: the ritual leads)", await p4.evaluate(() => {
+        const r = document.querySelector("#money-recon-panel"), p = document.querySelector("#money-procrates-panel");
+        const first = [...document.querySelector("#money-body").children].find((c) => c.classList.contains("panel"));
+        return first === r && !!(r.compareDocumentPosition(p) & Node.DOCUMENT_POSITION_FOLLOWING) && !document.querySelector("#money-advisers-panel");
       }));
       ok("§D · owner console clean on Monday money", noNewErr(p4, errBefore4), JSON.stringify(p4.__err));
 

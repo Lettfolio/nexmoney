@@ -116,11 +116,11 @@ const goPage = async (page, id, ms) => {
   await page.waitForTimeout(ms == null ? 2400 : ms);
 };
 const tileNum = (page, id) => page.$eval("#" + id + " .num", (e) => (e.textContent || "").trim()).catch(() => null);
-const readinessRows = (page) => page.evaluate(() => [...document.querySelectorAll("#dh-readiness .dh-readiness-item")].map((el) => ({
-  label: ((el.querySelector(".dh-readiness-label") || {}).textContent || "").trim(),
-  count: Number(((el.querySelector(".dh-readiness-count") || {}).textContent || "").trim()),
-  tile: ((el.getAttribute("onclick") || "").match(/getElementById\('([^']+)'\)/) || [])[1] || null,
-})));
+/* R89 · A: was the #dh-readiness .dh-readiness-item rows (label / count / onclick tile id), now the
+   to-do list's rows — Data health says each number once: the readiness list is gone, and #dh-readiness
+   is the to-do list whose non-clean counted rows (.dh-check[data-band=counted]) are exactly the checks
+   it listed, carrying their tile id (data-tile) and live count (data-n); the label is the tile's. */
+const readinessRows = (page) => page.evaluate(() => [...document.querySelectorAll("#dh-readiness .dh-check[data-band='counted']:not(.dh-clean)")].map((c) => { const t = document.getElementById(c.dataset.tile); return { label: t ? t.querySelector(".lbl").textContent.replace(/\s*▾\s*$/, "").trim() : "", count: Number(c.dataset.n), tileId: c.dataset.tile, tile: c.dataset.tile }; }));
 const toastTxt = (page) => page.evaluate(() => (document.querySelector("#toast") || {}).textContent || "");
 
 let uniq = 0;
@@ -655,7 +655,8 @@ async function seedScale(page, n) {
       const errBefore = realErrs(page).length;
       await goPage(page, "data");
       const gate = await page.evaluate(() => ({
-        navHidden: !!document.querySelector('#topnav button[data-page="data"]') && document.querySelector('#topnav button[data-page="data"]').classList.contains("hidden"),
+        // R89 · F — was button[data-page="data"]; Data health is a tab of Operations, whose entry is the gated one
+        navHidden: !!document.querySelector('#topnav button[data-page="operations"]') && document.querySelector('#topnav button[data-page="operations"]').classList.contains("hidden"),
         onToday: !document.querySelector("#page-dashboard").classList.contains("hidden") && document.querySelector("#page-data").classList.contains("hidden"),
         hash: location.hash,
       }));

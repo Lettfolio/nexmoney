@@ -914,34 +914,27 @@ async function renderAdoptionStrip() {
    scoreboard here and the MI scoreboard), so pressing it once shows the empty rows everywhere. */
 let scoreboardShowAll = false;
 let threadedState = { all: null, mv: null, repAdvisers: null };
+/* R89 · B — the flag now repaints the two scoreboard VIEWS that use it (month + pipeline). Monday
+   money's "Per adviser" strip, the third user, is gone (it is the scoreboard). */
 window.toggleScoreboardShowAll = function () {
   scoreboardShowAll = !scoreboardShowAll;
-  if (typeof currentPage !== "undefined" && currentPage === "money") { loadMoneyPage(); return; }
   if (threadedState.all) renderThreadedPanels(threadedState.all, threadedState.mv, threadedState.repAdvisers);
-  if (miState.all) renderPipelineMI(miState.all, miState.mv);
+  if (miBoardState.all) renderMiScoreboard(miBoardState.all, miBoardState.mv);
 };
-/* The Monday money "Per adviser" strip shares the flag; a toggle there repaints that page. */
-function advRowsAllMoney(rows, quietFn) {
-  const quiet = rows.filter(quietFn);
-  const shown = (scoreboardShowAll || !rows.some((r) => !quietFn(r))) ? rows : rows.filter((r) => !quietFn(r));
-  const line = quiet.length && shown.length !== rows.length
-    ? `<p class="panel-sub" id="money-advisers-quiet" style="margin:8px 0 0;">${quiet.length} row${quiet.length === 1 ? "" : "s"} with nothing to show hidden (${esc(quiet.map((r) => r.name).join(", "))}). <button type="button" class="linkish" id="money-advisers-showall" onclick="toggleScoreboardShowAll()">Show all</button></p>`
-    : quiet.length && scoreboardShowAll && rows.some((r) => !quietFn(r))
-      ? `<p class="panel-sub" id="money-advisers-quiet" style="margin:8px 0 0;"><button type="button" class="linkish" id="money-advisers-showall" onclick="toggleScoreboardShowAll()">Hide the ${quiet.length} empty row${quiet.length === 1 ? "" : "s"}</button></p>` : "";
-  return { rows: shown, quiet, line };
-}
+/* R89 · B — renderThreadedPanels draws ONLY the month scoreboard view now (#report-advisers). The
+   month-cohort funnel moved to renderCohortFunnel (the funnel panel's second view), and the lead
+   sources / losses panels are rendered by the Pipeline MI tab, where they sit. The panel's own
+   visibility belongs to renderAdvViews (one gate per view, not one per panel). */
 function renderThreadedPanels(all, mv, repAdvisers) {
   threadedState = { all, mv, repAdvisers };
-  const inMonth = (d) => d && localMonthStr(d) === mv;
   const label = monthLabel(mv);
   /* R74 · A2 — the short month the Attach column header carries, from the same fixed table fmtD
      uses (R73: never Intl, so "Sep" is never "Sept"). */
   const attachShort = MONTH_SHORT[Number(String(mv).slice(5, 7)) - 1] || label;
   const money = showMoney();
   const activeStages = ["enquiry", "fact_find", "decision_in_principle", "application", "offer", "exchange"];
-  // The whole Adviser scoreboard is a money panel (fees banked per person) — Owner-only in the UI.
-  const board = $("#report-scoreboard-panel");
-  if (board) board.classList.toggle("hidden", !money);
+  // The month view is a money table (fees banked per person) — Owner-only in the UI. R89 · B: the
+  // PANEL's visibility is renderAdvViews'; this view is simply never offered to anyone else.
 
   // ---- Adviser scoreboard: completions/fees/avg-days scoped to the selected month, plus a 6-month
   // rolling completions trend (BUILD 6a) — same completed-cases data, just bucketed by calendar month
@@ -1094,11 +1087,11 @@ function renderThreadedPanels(all, mv, repAdvisers) {
         <p><strong>Fees banked (paid)</strong> <span class="money-basis">${esc(BASIS_CASH_MONTH)}</span> — broker fees actually received this month, each counted on the date that fee was paid. A different scope from "Completed £ (earned)" on the Monthly business panel above, which is fee value earned on cases completed this month regardless of payment status.${bankedFuture ? ` Excludes future-dated payments (${bankedFuture}).` : ""}</p>
         <p><strong>Target</strong> <span class="money-basis">(fees earned ÷ target · this month)</span> — fees earned (procuration + broker + solicitor) on that adviser's ${esc(label)} completions, paid or not, against the per-adviser monthly target set in Settings. The same earned-on-completion basis as the firm "Fees earned vs target" bar above, and deliberately a different figure from the cash "Fees banked" column beside it; advisers with no target set show "—".</p>
         <p><strong>Banked ${ytdYear}</strong> <span class="money-basis">(broker only · cash · YTD)</span> — that adviser's broker cash for the calendar year, as the server reports it.${ytdGap ? ` It covers people who still have a login, so it totals ${fmtM(ytdRpcSum)} against the ${fmtM(ytdFirm)} on the "Fees banked ${ytdYear}" tile below — the ${fmtM(ytdGap)} difference sits on completed cases still attributed to someone whose access has been removed.` : ""}</p>
-        <p><strong>Attach (${esc(attachShort)})</strong> <span class="money-basis">(policy taken ÷ completions · this month)</span> — the share of THIS MONTH's completions that ended with a protection policy, with the count in brackets. On a month's worth of completions a single case moves it a long way, so read the bracket before the percentage. The Monday money page carries the same measure over the whole calendar year, and its header says so.</p>
+        <p><strong>Attach (${esc(attachShort)})</strong> <span class="money-basis">(policy taken ÷ completions · this month)</span> — the share of THIS MONTH's completions that ended with a protection policy, with the count in brackets. On a month's worth of completions a single case moves it a long way, so read the bracket before the percentage. It is a month figure; a whole-year attach rate is not drawn anywhere else on Reports.</p>
         <p><strong>Avg days</strong> — mean days from case created to completed, over completions in ${esc(label)} only; fewer than three completions is greyed and is not a ranking. <strong>6-mo trend</strong> — completions per month over the last 6 calendar months, every row on one shared scale.</p>
         ${/* R74 · A4b — the Overdue column left this table; say where it went rather than letting
               the reader assume it was lost. */ ""}
-        <p><strong>Overdue tasks</strong> are not a column here any more — the same figure, per person, is in "Is anyone using it?" directly below this table, and again on Monday money. It was the tenth column of a ten-column table and it was the one being clipped off the right-hand edge.</p>
+        <p><strong>Overdue tasks</strong> are not a column here — the same figure, per person, is the <em>Activity</em> view of this table (the By adviser toggle above).</p>
         <p>${esc(ATTRIB_NOTE)}</p>
       </div>
     </details>`;
@@ -1121,7 +1114,7 @@ function renderThreadedPanels(all, mv, repAdvisers) {
           above). ATTACH CARRIES ITS PERIOD IN THE HEADER — "Attach (Aug)" here, "Attach (2026)"
           on Monday money — because the same person read 0% on one page and 43% on the other and
           nothing on either said one was a month and the other a year. */ ""}
-    <tr><th>Adviser</th><th>Open</th><th>Completions</th><th title="Broker fees actually received this month, counted on the broker fee's own paid date. Payments dated in the future are excluded. ${esc(BASIS_CASH_MONTH)}">Fees banked</th><th title="Fees earned (procuration + broker + solicitor) on each adviser's completions this month (paid or not) versus their monthly target set in Settings — the same earned-on-completion basis as the firm 'Fees earned vs target' bar above, NOT the cash 'Fees banked' column beside it. Blank target = no target (shows —). (fees earned ÷ target · this month)">Target</th><th title="Broker fees this adviser has banked so far in ${ytdYear} — each fee counted on its own paid date, the same basis as the column beside it, widened to the whole year. (broker only · cash · YTD)">Banked ${ytdYear}</th><th title="Of the cases this adviser completed in ${esc(label)}, the share that ended with a protection policy taken. The count is in brackets — a month is a small sample and a single case can swing it. Monday money measures the same thing over the whole of ${ytdYear}, which is why the two pages can differ. (policy taken ÷ completions · this month)">Attach (${esc(attachShort)})</th><th title="Mean days from case created to completed, over completions in the selected month only. The sample size is in brackets; fewer than 3 completions is greyed and should not be read as a ranking.">Avg days</th><th title="Completions per month over the last 6 calendar months. Every row shares one vertical scale (peak ${sparkMax}); the number is this month's value.">6-mo trend</th></tr>
+    <tr><th>Adviser</th><th>Open</th><th>Completions</th><th title="Broker fees actually received this month, counted on the broker fee's own paid date. Payments dated in the future are excluded. ${esc(BASIS_CASH_MONTH)}">Fees banked</th><th title="Fees earned (procuration + broker + solicitor) on each adviser's completions this month (paid or not) versus their monthly target set in Settings — the same earned-on-completion basis as the firm 'Fees earned vs target' bar above, NOT the cash 'Fees banked' column beside it. Blank target = no target (shows —). (fees earned ÷ target · this month)">Target</th><th title="Broker fees this adviser has banked so far in ${ytdYear} — each fee counted on its own paid date, the same basis as the column beside it, widened to the whole year. (broker only · cash · YTD)">Banked ${ytdYear}</th><th title="Of the cases this adviser completed in ${esc(label)}, the share that ended with a protection policy taken. The count is in brackets — a month is a small sample and a single case can swing it. (policy taken ÷ completions · this month)">Attach (${esc(attachShort)})</th><th title="Mean days from case created to completed, over completions in the selected month only. The sample size is in brackets; fewer than 3 completions is greyed and should not be read as a ranking.">Avg days</th><th title="Completions per month over the last 6 calendar months. Every row shares one vertical scale (peak ${sparkMax}); the number is this month's value.">6-mo trend</th></tr>
     ${advRows.map((a) => `<tr${a.offTeam ? ' class="row-warn"' : ""}>
       <td>${advName(a)}</td>
       <td class="num">${a.open}</td>
@@ -1155,20 +1148,21 @@ function renderThreadedPanels(all, mv, repAdvisers) {
     : advRowsQuiet.length && scoreboardShowAll && advRowsAll.some((r) => !advRowQuiet(r))
       ? `<p class="panel-sub" id="report-scoreboard-quiet" style="margin:8px 0 0;"><button type="button" class="linkish" id="report-scoreboard-showall" onclick="toggleScoreboardShowAll()">Hide the ${advRowsQuiet.length} empty row${advRowsQuiet.length === 1 ? "" : "s"}</button></p>`
       : ""}
-  <p class="panel-sub" id="report-scoreboard-reconcile" style="margin:8px 0 0;">The ${openSum} open cases above ${openSum === liveTotal ? "<strong>reconcile with</strong>" : "<strong>do not reconcile with</strong>"} the ${liveTotal} live cases on the KPI row below${unassignedLive ? ` · ${unassignedLive} of them unassigned` : ""}.</p>` : `<div class="empty">No adviser activity in ${label}.</div>`;
+  <p class="panel-sub" id="report-scoreboard-reconcile" style="margin:8px 0 0;">The ${openSum} open cases above ${openSum === liveTotal ? "<strong>reconcile with</strong>" : "<strong>do not reconcile with</strong>"} the ${liveTotal} live cases on the Money &amp; book tiles${unassignedLive ? ` · ${unassignedLive} of them unassigned` : ""}.</p>` : `<div class="empty">No adviser activity in ${label}.</div>`;
   }
 
-  // ---- Pipeline funnel: cases created in the selected month, by current stage (all 8 stages,
-  // so a month's cohort that has already completed or dropped out still shows up). ----
-  const monthCases = all.filter((c) => inMonth(c.created_at));
-  /* R37 · P1-corrected — say the SCOPE loudly, because the page carries two funnels and they are
-     not duplicates: this one is a month COHORT (created in <label>, wherever they have got to),
-     the MI one is the live book right now. The pointer to the other is only offered when the
-     reader can actually see it — Pipeline MI is isAdminOrOwner-gated, and directing an adviser to
-     a section that is not on their page would be worse than saying nothing. */
-  /* R87 · owner-admin (T1) — the cross-pointer to the MI funnel is a title, not a sentence. */
+}
+
+/* R89 · B — the month-COHORT funnel: cases created in the selected month, by current stage (all 8
+   stages, so a cohort that has already completed or dropped out still shows up). It is the second
+   VIEW of the one funnel panel (the first is the MI live funnel); the arithmetic and ids are the
+   R37 panel's, unchanged. The cross-pointer to the live view is offered only to a reader who has it
+   (Pipeline MI is isAdminOrOwner-gated). */
+function renderCohortFunnel(all, mv) {
+  const label = monthLabel(mv);
+  const monthCases = (all || []).filter((c) => c.created_at && localMonthStr(c.created_at) === mv);
   $("#report-funnel-scope").innerHTML = `<strong>Cases CREATED in ${esc(label)}</strong> — how far they have got, by current stage. ${monthCases.length} case${monthCases.length === 1 ? "" : "s"}.`
-    + (isAdminOrOwner() ? ` <em title="The live snapshot — everything open right now, whenever it started — is “Funnel &amp; conversion” in Pipeline MI above.">(live snapshot: Pipeline MI above)</em>` : "");
+    + (isAdminOrOwner() ? ` <em title="The live snapshot — everything open right now, whenever it started — is the Live now view of this panel (Pipeline MI).">(live snapshot: Live now, Pipeline MI)</em>` : "");
   const maxF = Math.max(...STAGES.map(([s]) => monthCases.filter((c) => c.stage === s).length), 1);
   $("#report-funnel").innerHTML = monthCases.length ? STAGES.map(([s, l]) => {
     const n = monthCases.filter((c) => c.stage === s).length;
@@ -1179,14 +1173,29 @@ function renderThreadedPanels(all, mv, repAdvisers) {
       <span style="width:24px;font-size:12px;font-weight:600;">${n}</span>
     </div>` : "";
   }).join("") : `<div class="empty">No cases created in ${label}.</div>`;
-
-  /* R77 · A2b — the Lead-sources table moved into its own renderer with the Losses panel's
-     This-month / All-time toggle and case-insensitive grouping. Same columns, same convCell
-     small-sample honesty, same everyone-sees-volumes / owner-sees-Revenue split. */
-  renderLeadSourcesPanel(all, mv);
-
-  renderLossesPanel(all, mv);
 }
+/* R89 · B — the funnel panel's two views. Live now is the MI funnel (Owner / Administrator); Created
+   in <month> is the cohort (everyone). One view on screen; the toggle only exists when both do. */
+let repFunnelView = "live";
+function renderFunnelViews(mv) {
+  const views = [
+    { key: "live", label: "Live now", on: isAdminOrOwner() },
+    { key: "cohort", label: `Created in ${monthShortLabel(mv, false)}`, on: true },
+  ].filter((v) => v.on);
+  if (!views.some((v) => v.key === repFunnelView)) repFunnelView = views[0].key;
+  const host = $("#report-funnel-views");
+  if (host) host.innerHTML = views.length > 1 ? segmentChipsHtml({ id: "report-funnel-seg", ariaLabel: "Which funnel",
+    chips: views.map((v) => ({ key: v.key, label: v.label, id: `report-funnel-view-${v.key}`, active: v.key === repFunnelView })) }) : "";
+  document.querySelectorAll("#report-mi-funnel-panel [data-funnel-view]").forEach((el) => el.classList.toggle("hidden", el.dataset.funnelView !== repFunnelView));
+}
+window.repSetFunnelView = function (key) {
+  repFunnelView = key;
+  renderFunnelViews(repCtx ? repCtx.mv : localMonthStr());
+};
+document.addEventListener("click", (e) => {
+  const b = e.target && e.target.closest && e.target.closest("#report-funnel-seg > .seg-btn[data-seg]");
+  if (b) window.repSetFunnelView(b.dataset.seg);
+});
 
 /* ==========================================================================
    R77 · A2b — LEAD SOURCES: READ WHAT A2a CAPTURES, WITHOUT SPLINTERING IT.
@@ -1333,31 +1342,54 @@ window.toggleLossesScope = function () {
   renderLossesPanel(null, null);
 };
 
-/* BUILD 5c — Commission forecast, reworked into buckets. Scoped to open cases at offer/exchange
-   only (the two stages close enough to completion that a date is meaningful), weighted by the
-   same per-stage conversion the old by-stage forecast used (read from get_reports()'s mock:
-   offer 80%, exchange 95%). Bucketed by expected_completion_date — "This month" also swallows
-   any overdue date so nothing silently vanishes. Purely client-side from `all`, independent of
-   the Reports month picker (this is a live forward-look, not a historical one) and of the RPC,
-   so it renders — all under "No date" — even on day one in prod when the column is all-null. */
-function renderForecastBuckets(all) {
-  // Commission forecast = money. Owner-only in the UI (presentation, not a control).
-  const fcPanel = $("#report-forecast-panel");
-  if (fcPanel) fcPanel.classList.toggle("hidden", !showMoney());
-  if (!showMoney()) {
-    $("#report-forecast-headline").innerHTML = ""; $("#report-forecast-buckets").innerHTML = "";
-    const tOff = $("#report-forecast-target"); if (tOff) tOff.innerHTML = "";   // R77 · A1a
-    return;
+/* ==========================================================================
+   R89 · B — ONE FORECAST (panel 05 #2a; verifier 08 row "05 #2").
+
+   Reports carried two answers to "what will the live book earn": the Pipeline MI
+   forecast (MI_STAGE_DEFAULT_WEIGHT on six stages, Application/Offer calibrated
+   from the book's own history) and the Money & book "Commission forecast" (a
+   fixed 4-stage STAGE_WEIGHT 25/50/80/95 from DIP). Same fee basis (proc +
+   broker), same live book, two weight tables — £31,255 against £25,292 on one
+   page. The 4-stage one is GONE. miForecastModel below is the MI forecast, lifted
+   out of renderPipelineMI so both panels draw ONE model: Pipeline MI › Revenue
+   prints its stage table, Money & book prints the same total bucketed by expected
+   completion date with the target-gap line. Every total is stamped
+   data-forecast="weighted" so a suite can prove the page holds one number.
+
+   The calibration rule is renderPipelineMI's, verbatim: with ≥5 completions on
+   the book, a stage with ≥5 cases that reached it (submitted_at / offer_issued_date)
+   takes its historical completion rate; otherwise the default likelihood stands.
+   ========================================================================== */
+function miForecastModel(all) {
+  const rows = all || [];
+  const fee = (c) => Number(c.broker_fee || 0) + Number(c.proc_fee || 0);
+  const liveFeeByStage = Object.fromEntries(MI_LIVE_STAGES.map((s) => [s, 0]));
+  let reachedApp = 0, reachedOffer = 0, reachedCompleted = 0, appAndCompleted = 0, offerAndCompleted = 0;
+  /* R21 Part B's rule holds here too: one unreadable case is skipped, never allowed to abort the
+     forecast (renderPipelineMI's own pass already logs it, so this one stays quiet). */
+  rows.forEach((c) => {
+    try {
+      if (!c) return;
+      const hasApp = !!c.submitted_at, hasOffer = !!c.offer_issued_date, hasComp = !!c.completed_at;
+      if (MI_LIVE_STAGES.includes(c.stage)) liveFeeByStage[c.stage] += fee(c);
+      if (hasApp) reachedApp++;
+      if (hasOffer) reachedOffer++;
+      if (hasComp) reachedCompleted++;
+      if (hasApp && hasComp) appAndCompleted++;
+      if (hasOffer && hasComp) offerAndCompleted++;
+    } catch (_) { /* skipped — see above */ }
+  });
+  const weightOf = {};
+  MI_LIVE_STAGES.forEach((s) => { weightOf[s] = MI_STAGE_DEFAULT_WEIGHT[s]; });
+  let calibrated = false;
+  if (reachedCompleted >= 5) {
+    if (reachedApp >= 5) { weightOf.application = appAndCompleted / reachedApp; calibrated = true; }
+    if (reachedOffer >= 5) { weightOf.offer = offerAndCompleted / reachedOffer; calibrated = true; }
   }
-  // T1-17 — the forecast now covers the live book, not just its last two stages. Application and
-  // DIP cases carry real commission and were invisible here; they keep the same per-stage
-  // conversion basis the offer/exchange weights already used, just further down the pipeline.
-  const STAGE_WEIGHT = { decision_in_principle: 0.25, application: 0.5, offer: 0.8, exchange: 0.95 };
-  const commission = (c) => Number(c.broker_fee || 0) + Number(c.proc_fee || 0);
-  const open = all.filter((c) => STAGE_WEIGHT[c.stage] != null);
-  // T1-17 — rolling horizon from today (Europe/London), not calendar months. The question this
-  // panel answers is "what completes in the next 60 days and what is it worth"; under calendar
-  // months a case due in 40 days sat in "Later" next to one due in a year.
+  const liveFeeTotal = MI_LIVE_STAGES.reduce((s, st) => s + liveFeeByStage[st], 0);
+  const weightedTotal = MI_LIVE_STAGES.reduce((s, st) => s + liveFeeByStage[st] * weightOf[st], 0);
+  /* The date buckets (the retired panel's one idea worth keeping): each live case's weighted fee, by
+     expected completion date on a rolling Europe/London horizon; an overdue date counts as ≤30 days. */
   const d30 = localDateStr(Date.now() + 30 * 86400000);
   const d60 = localDateStr(Date.now() + 60 * 86400000);
   const d90 = localDateStr(Date.now() + 90 * 86400000);
@@ -1368,32 +1400,46 @@ function renderForecastBuckets(all) {
     later: { label: "Later", cases: 0, weighted: 0 },
     none: { label: "No date", cases: 0, weighted: 0, list: [] },
   };
-  let gross_total = 0;
-  open.forEach((c) => {
-    const gross = commission(c);
-    gross_total += gross;
-    const weighted = gross * STAGE_WEIGHT[c.stage];
+  const live = rows.filter((c) => { try { return c && MI_LIVE_STAGES.includes(c.stage) && (c.expected_completion_date, true); } catch (_) { return false; } });
+  live.forEach((c) => {
     let key = "none";
     if (c.expected_completion_date) {
-      // An already-overdue date lands in the nearest bucket rather than vanishing.
       const d = String(c.expected_completion_date).slice(0, 10);
       key = d <= d30 ? "h30" : d <= d60 ? "h60" : d <= d90 ? "h90" : "later";
     }
     buckets[key].cases++;
-    buckets[key].weighted += weighted;
+    buckets[key].weighted += fee(c) * weightOf[c.stage];
     if (key === "none") buckets.none.list.push(c);
   });
-  const weighted_total = Object.values(buckets).reduce((s, b) => s + b.weighted, 0);
-  // R5-17 — say what this money IS: a probability-weighted forward look at proc + broker fee on
-  // live cases. Solicitor referral fees are not in it, and none of it has been earned yet.
-  $("#report-forecast-headline").innerHTML = `
-    <div class="kpi"><div class="num">${fmtM(weighted_total)}</div><div class="lbl">Weighted commission</div>${basisLine(BASIS_FORECAST)}</div>
-    <div class="kpi"><div class="num">${fmtM(gross_total)}</div><div class="lbl">Gross (unweighted)</div>${basisLine("(not yet earned · proc+broker, excl. sols)")}</div>`;
+  return { liveFeeByStage, weightOf, calibrated, liveFeeTotal, weightedTotal, buckets, live,
+    weightLabel: calibrated
+      ? "(application/offer weights calibrated from history; other stages default likelihoods)"
+      : "(default likelihoods — will calibrate as cases complete)" };
+}
+/* The headline pair both panels print. data-forecast marks THE figure. */
+function miForecastTilesHtml(m) {
+  return `<div class="kpi kpi-headline"><div class="num" data-forecast="weighted" title="${esc(fmtM(m.weightedTotal))}">${fmtM(m.weightedTotal)}</div><div class="lbl">Weighted-expected to land</div>${basisLine(BASIS_FORECAST)}</div>
+    <div class="kpi"><div class="num" title="${esc(fmtM(m.liveFeeTotal))}">${fmtM(m.liveFeeTotal)}</div><div class="lbl">Fees in live pipeline</div></div>`;
+}
+/* Money & book's view of the one forecast. Owner-only (it is money), like the panel it replaces. */
+function renderBookForecast(all) {
+  const fcPanel = $("#report-forecast-panel");
+  if (!fcPanel) return;
+  const money = showMoney();
+  fcPanel.classList.toggle("hidden", !money);
+  const tEl = $("#report-forecast-target"), hEl = $("#report-forecast-hint");
+  if (!money) {
+    $("#report-forecast-headline").innerHTML = ""; $("#report-forecast-buckets").innerHTML = "";
+    if (tEl) tEl.innerHTML = ""; if (hEl) hEl.innerHTML = "";
+    return;
+  }
+  const m = miForecastModel(all);
+  const buckets = m.buckets;
+  $("#report-forecast-headline").innerHTML = miForecastTilesHtml(m);
   const maxW = Math.max(...Object.values(buckets).map((b) => b.weighted), 1);
-  $("#report-forecast-buckets").innerHTML = open.length ? ["h30", "h60", "h90", "later", "none"].map((k) => {
+  $("#report-forecast-buckets").innerHTML = m.live.length ? ["h30", "h60", "h90", "later", "none"].map((k) => {
     const b = buckets[k];
-    // BUILD 6c — the "No date" bucket is the feed for the completion-date chaser: let the adviser
-    // drill into exactly which cases are missing a date, one click each straight to the case.
+    // BUILD 6c — the "No date" bucket is the feed for the completion-date chaser.
     const canExpand = k === "none" && b.cases > 0;
     const row = `
     <div style="display:flex;align-items:center;gap:8px;margin:3px 0;">
@@ -1413,25 +1459,12 @@ function renderForecastBuckets(all) {
         </div>`).join("")}
     </div>` : "";
     return row + expandList;
-  }).join("") : '<div class="empty">No live cases between DIP and exchange.</div>';
-  /* ==========================================================================
-     R77 · A1a — THE FORECAST MEETS THE TARGET.
-
-     The buckets above say what is coming; the firm's monthly fee target
-     (settings.monthly_fee_target — the SAME key the hero and the target bar
-     read) says what is needed; nothing on this panel ever put the two in one
-     sentence. One line does it now: the ≤30-days weighted figure against the
-     monthly target, with the gap named in whichever direction it runs. And
-     because in production the "No date" bucket is effectively the whole book
-     (131 of 132 live cases carry no expected completion date), the same line
-     carries the no-date clause, wired to the EXISTING toggleForecastNoneList
-     list so the offending cases are one click away — capture before
-     comparison. No target set is a real state: the line says so and points at
-     Settings rather than inventing a gap against zero.
-     ========================================================================== */
-  const targetLineEl = $("#report-forecast-target");
-  if (targetLineEl) {
-    if (!open.length) targetLineEl.innerHTML = "";
+  }).join("") : '<div class="empty">No live cases in the pipeline.</div>';
+  /* R77 · A1a — THE FORECAST MEETS THE TARGET: the ≤30-days weighted figure against the firm's
+     monthly fee target (settings.monthly_fee_target — the key the hero reads), the gap named either
+     way, plus the no-date clause wired to toggleForecastNoneList. Unchanged, over the one model. */
+  if (tEl) {
+    if (!m.live.length) tEl.innerHTML = "";
     else {
       const fcTarget = Number(settings.monthly_fee_target || 0);
       let line;
@@ -1442,19 +1475,18 @@ function renderForecastBuckets(all) {
           ? `gap <strong>${fmtM(gap)}</strong>`
           : `<strong>${fmtM(-gap)}</strong> ahead of target`}</span>`;
       } else {
-        line = `<span id="report-forecast-target-line">No monthly fee target is set, so there is no gap to read this against — <button type="button" class="linkish" id="report-forecast-target-set" onclick="nav('settings')">set one in Settings › Targets</button>.</span>`;
+        line = `<span id="report-forecast-target-line">No monthly fee target is set, so there is no gap to read this against — <button type="button" class="linkish" id="report-forecast-target-set" onclick="nav('settings', true, 'firm')">set one in Settings › Firm & rules</button>.</span>`;
       }
       const noneLine = buckets.none.cases
         ? ` · <button type="button" class="linkish" id="report-forecast-none-line" onclick="toggleForecastNoneList()" title="Show which cases have no expected completion date">${buckets.none.cases} case${buckets.none.cases === 1 ? "" : "s"} (${fmtM(buckets.none.weighted)} weighted) ${buckets.none.cases === 1 ? "has" : "have"} no expected completion date</button>`
         : "";
-      targetLineEl.innerHTML = `<p class="panel-sub" style="margin:8px 0 0;">${line}${noneLine}</p>`;
+      tEl.innerHTML = `<p class="panel-sub rep-forecast-target">${line}${noneLine}</p>`;
     }
   }
-  const hintEl = $("#report-forecast-hint");
-  if (hintEl) {
-    hintEl.textContent = (open.length && buckets.none.cases === open.length)
-      ? "None of these cases have an expected completion date yet — set one on each case (in Case details) to sharpen this forecast."
-      : "Live cases from DIP to exchange, weighted by stage (DIP 25% · application 50% · offer 80% · exchange 95%), bucketed by expected completion date; overdue counts as ≤30 days.";
+  if (hEl) {
+    hEl.innerHTML = `The same forecast as Pipeline MI › Revenue, by expected completion date. `
+      + howFold({ id: "report-forecast-how", title: "How this is counted", html: `<p>Every live case (enquiry to exchange) contributes its proc + broker fee — solicitor fees excluded, nothing here is earned yet — times the likelihood that a case at its stage completes: ${MI_LIVE_STAGES.map((s) => `${esc(STAGE_LABEL[s] || s)} ${Math.round(m.weightOf[s] * 100)}%`).join(" · ")}. <span class="money-basis">${esc(m.weightLabel)}</span> `
+        + `Buckets are by the case's expected completion date on a rolling horizon from today; an overdue date counts as ≤30 days${m.live.length && buckets.none.cases === m.live.length ? ". None of these cases has an expected completion date yet — set one on each case to sharpen the buckets" : ""}. This is the one forecast on Reports; the stage-by-stage table is in Pipeline MI.</p>` });
   }
 }
 // BUILD 6c — expand/collapse the "No date" bucket's offending-case list. State lives only on the
@@ -1575,7 +1607,7 @@ const miMedian = (arr) => {
 const miMean = (arr) => (arr.length ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length) : null);
 const miDays = (a, b) => { const d = Math.round((new Date(b) - new Date(a)) / 86400000); return isNaN(d) ? null : d; };
 
-let miState = { all: null, mv: null };   // R87 — so toggleScoreboardShowAll can repaint the MI board
+let miState = { all: null, mv: null };
 function renderPipelineMI(all, mv) {
   miState = { all, mv };
   const sec = $("#report-mi-section");
@@ -1604,7 +1636,6 @@ function renderPipelineMI(all, mv) {
   let completedN = 0, notProceedingN = 0;                       // terminal outcomes
   let appAndCompleted = 0, offerAndCompleted = 0;               // for historical stage weights
   const vCreatedApp = [], vAppOffer = [], vOfferComp = [], vCreatedComp = [];
-  const advMap = new Map(); // assigned_to || "__unassigned"
 
   let miSkipped = 0;   // R21 Part B — one bad case must not abort the whole MI aggregation
   /* R77 · A3 — HOW THIN IS THE DATE COVERAGE? The conversion and velocity figures below are built
@@ -1646,14 +1677,7 @@ function renderPipelineMI(all, mv) {
     // run-rate — completed fee income (broker + proc) bucketed by completed_at month
     if (hasComp) { const m = localMonthStr(c.completed_at); if (m in runMap) runMap[m] += fee(c); }
 
-    // per-adviser aggregate
-    const key = c.assigned_to || "__unassigned";
-    let a = advMap.get(key);
-    if (!a) { a = { id: c.assigned_to || null, live: 0, completedPeriod: 0, feesPeriod: 0, won: 0, lost: 0, cycles: [] }; advMap.set(key, a); }
-    if (live) a.live++;
-    if (c.stage === "completed") { a.won++; if (c.created_at && hasComp) { const d = miDays(c.created_at, c.completed_at); if (d != null && d >= 0) a.cycles.push(d); } }
-    else if (c.stage === "not_proceeding") a.lost++;
-    if (hasComp && localMonthStr(c.completed_at) === mv) { a.completedPeriod++; a.feesPeriod += fee(c); }
+    // R89 · B — the per-adviser aggregate moved with the MI scoreboard (renderMiScoreboard).
     } catch (err) {
       miSkipped++;
       logClientError("caught", "reports MI aggregation failed for a case: " + ((err && err.message) || err), { recordId: c && c.id, where: "renderPipelineMI" });
@@ -1759,36 +1783,105 @@ function renderPipelineMI(all, mv) {
   }).join("");
   $("#report-mi-runrate-basis").innerHTML = `Completed-fee income (broker + proc) by completion month, last 12 months. 12-month total <strong>${fmtM(runTotal)}</strong>.`;
 
-  // stage weights: historical stage→completed rate where the sample is big enough, defaults otherwise.
-  const thin = reachedCompleted < 5;
-  const weightOf = {};
-  MI_LIVE_STAGES.forEach((s) => { weightOf[s] = MI_STAGE_DEFAULT_WEIGHT[s]; });
-  let calibrated = false;
-  if (!thin) {
-    if (reachedApp >= 5) { weightOf.application = appAndCompleted / reachedApp; calibrated = true; }
-    if (reachedOffer >= 5) { weightOf.offer = offerAndCompleted / reachedOffer; calibrated = true; }
-  }
-  const liveFeeTotal = MI_LIVE_STAGES.reduce((s, st) => s + liveFeeByStage[st], 0);
-  const weightedTotal = MI_LIVE_STAGES.reduce((s, st) => s + liveFeeByStage[st] * weightOf[st], 0);
-  const weightLabel = calibrated
-    ? "(application/offer weights calibrated from history; other stages default likelihoods)"
-    : "(default likelihoods — will calibrate as cases complete)";
-  $("#report-mi-forecast-headline").innerHTML = `
-    <div class="kpi kpi-headline"><div class="num" title="${esc(fmtM(weightedTotal))}">${fmtM(weightedTotal)}</div><div class="lbl">Weighted-expected to land</div></div>
-    <div class="kpi"><div class="num" title="${esc(fmtM(liveFeeTotal))}">${fmtM(liveFeeTotal)}</div><div class="lbl">Fees in live pipeline</div></div>`;
+  /* R89 · B — ONE FORECAST: the weights, the calibration and both totals come from miForecastModel,
+     the same model Money & book's forecast panel draws, so the two can never print two numbers. */
+  const fc = miForecastModel(rows);
+  const { weightOf, liveFeeTotal, weightedTotal, weightLabel } = fc;
+  const liveFeeByStageFc = fc.liveFeeByStage;
+  $("#report-mi-forecast-headline").innerHTML = miForecastTilesHtml(fc);
   $("#report-mi-forecast").innerHTML = `
     <p class="panel-sub" style="margin:0 0 6px;"><strong>${fmtM(liveFeeTotal)}</strong> of fees in the live pipeline, <strong>~${fmtM(weightedTotal)}</strong> weighted-expected to land. <span class="money-basis">${weightLabel}</span></p>
     <table class="imp-table">
       <tr><th>Stage</th><th>Live £</th><th title="Completion likelihood">Weight</th><th>Expected £</th></tr>
       ${MI_LIVE_STAGES.map((s) => `<tr>
         <td>${STAGE_LABEL[s]}</td>
-        <td class="num">${fmtM(liveFeeByStage[s])}</td>
+        <td class="num">${fmtM(liveFeeByStageFc[s])}</td>
         <td>${Math.round(weightOf[s] * 100)}%</td>
-        <td class="num">${fmtM(liveFeeByStage[s] * weightOf[s])}</td>
+        <td class="num">${fmtM(liveFeeByStageFc[s] * weightOf[s])}</td>
       </tr>`).join("")}
     </table>`;
 
-  // ---- Panel 4: per-adviser scoreboard ----
+  // ---- Panel 4 (the per-adviser scoreboard) — R89 · B: now a VIEW of the one adviser table on
+  // This month, rendered by renderMiScoreboard (below) from the same rows. ----
+
+  /* ============================ R20 — ACTIONABLE MI ============================
+     Drill-downs and per-panel CSV, all off the in-scope `all`/`rows` set already read by
+     Reports (no new query) and inside this owner/admin-gated render (gate inherited). The
+     click targets rendered above are real <button>s, so Enter/Space work natively; each just
+     filters `rows` and hands the subset to miDrilldown(). CSV buttons live in the static panel
+     headers; their handlers reuse the aggregates computed above and emit via miCsv() (which
+     mirrors exportCsv's serialization — same injection guard, BOM, Blob, anchor download). */
+  const dstr = new Date().toISOString().slice(0, 10);
+
+  // Funnel stage bars → live cases at that stage.
+  $("#report-mi-funnel").querySelectorAll(".mi-bar-row[data-mi-stage]").forEach((btn) => {
+    const s = btn.getAttribute("data-mi-stage");
+    btn.addEventListener("click", () => miDrilldown(`Live cases · ${STAGE_LABEL[s] || s}`, rows.filter((c) => c.stage === s)));
+  });
+  // Win-rate figure → the terminal cases (completed + not proceeding) behind the rate.
+  const wrLink = $("#report-mi-winrate-link");
+  if (wrLink) wrLink.addEventListener("click", () => miDrilldown("Terminal cases · win rate", rows.filter((c) => c.stage === "completed" || c.stage === "not_proceeding")));
+
+  // ---- Per-panel CSV export ----
+  const csvFunnel = $("#report-mi-csv-funnel");
+  if (csvFunnel) csvFunnel.onclick = () => {
+    const r = [];
+    MI_LIVE_STAGES.forEach((s) => r.push(["Live funnel", STAGE_LABEL[s], funnel[s], ""]));
+    r.push(["Conversion", "Created", total, ""]);
+    // R77 · A3 — the CSV keeps the guard: an impossible % is no truer in a spreadsheet.
+    const stepCsv = (num, den) => (num > den ? `date coverage too thin (${missMilestone} missing dates)` : stepPct(num, den));
+    r.push(["Conversion", "Reached application (submitted)", reachedApp, stepCsv(reachedApp, total)]);
+    r.push(["Conversion", "Reached offer (offer issued)", reachedOffer, stepCsv(reachedOffer, reachedApp)]);
+    r.push(["Conversion", "Completed", reachedCompleted, stepCsv(reachedCompleted, reachedOffer)]);
+    r.push(["Win rate", `${completedN} completed of ${terminal} terminal`, terminal >= 5 ? Math.round((completedN / terminal) * 100) + "%" : "n/a (<5 terminal)", ""]);
+    miCsv(`nexmoney-mi-funnel-${dstr}.csv`, ["Section", "Item", "Count", "Step %"], r);
+  };
+  const csvVel = $("#report-mi-csv-velocity");
+  if (csvVel) csvVel.onclick = () => {
+    const r = vMetrics.map((m) => [m.label, miMedian(m.arr) ?? "", miMean(m.arr) ?? "", m.arr.length]);
+    miCsv(`nexmoney-mi-velocity-${dstr}.csv`, ["Transition", "Median days", "Mean days", "n"], r);
+  };
+  const csvRev = $("#report-mi-csv-revenue");
+  if (csvRev) csvRev.onclick = () => {
+    const r = [];
+    runMonths.forEach((m, i) => r.push(["Run-rate", m, runVals[i], "", ""]));
+    r.push(["Run-rate", "12-month total", runTotal, "", ""]);
+    MI_LIVE_STAGES.forEach((s) => r.push(["Forecast", STAGE_LABEL[s], liveFeeByStage[s], Math.round(weightOf[s] * 100) + "%", Math.round(liveFeeByStage[s] * weightOf[s])]));
+    r.push(["Forecast", "Live pipeline total", liveFeeTotal, "", Math.round(weightedTotal)]);
+    miCsv(`nexmoney-mi-revenue-${dstr}.csv`, ["Section", "Item", "£ / count", "Weight", "Weighted £"], r);
+  };
+}
+
+/* R89 · B — THE MI SCOREBOARD, as the "Pipeline & outcomes" view of the one adviser table (This
+   month tab). Its own O(n) pass over the same rows renderPipelineMI walks — the per-adviser half of
+   that pass, lifted verbatim (live / completed + fees in the month / won-lost / cycles) — so the view
+   can render without the rest of Pipeline MI. Owner / Administrator, the MI gate. */
+let miBoardState = { all: null, mv: null };
+function renderMiScoreboard(all, mv) {
+  miBoardState = { all, mv };
+  const host = $("#report-mi-scoreboard");
+  if (!host) return;
+  if (!isAdminOrOwner()) { host.innerHTML = ""; $("#report-mi-scoreboard-scope").innerHTML = ""; return; }
+  const rows = all || [];
+  const label = monthLabel(mv);
+  const fee = (c) => Number(c.broker_fee || 0) + Number(c.proc_fee || 0);
+  const advMap = new Map(); // assigned_to || "__unassigned"
+  rows.forEach((c) => {
+    try {
+      const live = MI_LIVE_STAGES.includes(c.stage);
+      const hasComp = !!c.completed_at;
+      const key = c.assigned_to || "__unassigned";
+      let a = advMap.get(key);
+      if (!a) { a = { id: c.assigned_to || null, live: 0, completedPeriod: 0, feesPeriod: 0, won: 0, lost: 0, cycles: [] }; advMap.set(key, a); }
+      if (live) a.live++;
+      if (c.stage === "completed") { a.won++; if (c.created_at && hasComp) { const d = miDays(c.created_at, c.completed_at); if (d != null && d >= 0) a.cycles.push(d); } }
+      else if (c.stage === "not_proceeding") a.lost++;
+      if (hasComp && localMonthStr(c.completed_at) === mv) { a.completedPeriod++; a.feesPeriod += fee(c); }
+    } catch (err) {
+      logClientError("caught", "reports MI scoreboard failed for a case: " + ((err && err.message) || err), { recordId: c && c.id, where: "renderMiScoreboard" });
+    }
+  });
+  const dstr = new Date().toISOString().slice(0, 10);
   const boardRowsAll = [...advMap.values()]
     .filter((a) => a.live || a.completedPeriod || a.feesPeriod || a.won || a.lost)
     .map((a) => {
@@ -1827,59 +1920,12 @@ function renderPipelineMI(all, mv) {
       <td>${a.medCycle == null ? '<span class="cs-muted">—</span>' : a.medCycle + "d"}</td>
     </tr>`).join("")}
   </table>` : '<div class="empty">No adviser activity yet.</div>';
-
-  /* ============================ R20 — ACTIONABLE MI ============================
-     Drill-downs and per-panel CSV, all off the in-scope `all`/`rows` set already read by
-     Reports (no new query) and inside this owner/admin-gated render (gate inherited). The
-     click targets rendered above are real <button>s, so Enter/Space work natively; each just
-     filters `rows` and hands the subset to miDrilldown(). CSV buttons live in the static panel
-     headers; their handlers reuse the aggregates computed above and emit via miCsv() (which
-     mirrors exportCsv's serialization — same injection guard, BOM, Blob, anchor download). */
-  const dstr = new Date().toISOString().slice(0, 10);
-
-  // Funnel stage bars → live cases at that stage.
-  $("#report-mi-funnel").querySelectorAll(".mi-bar-row[data-mi-stage]").forEach((btn) => {
-    const s = btn.getAttribute("data-mi-stage");
-    btn.addEventListener("click", () => miDrilldown(`Live cases · ${STAGE_LABEL[s] || s}`, rows.filter((c) => c.stage === s)));
-  });
   // Scoreboard adviser rows → that adviser's cases (all of them, live + terminal).
   $("#report-mi-scoreboard").querySelectorAll(".mi-adv-link[data-mi-adv]").forEach((btn) => {
     const key = btn.getAttribute("data-mi-adv");
     const nm = key === "__unassigned" ? "Unassigned" : staffName(key);
     btn.addEventListener("click", () => miDrilldown(`${nm} · all cases`, rows.filter((c) => (c.assigned_to || "__unassigned") === key)));
   });
-  // Win-rate figure → the terminal cases (completed + not proceeding) behind the rate.
-  const wrLink = $("#report-mi-winrate-link");
-  if (wrLink) wrLink.addEventListener("click", () => miDrilldown("Terminal cases · win rate", rows.filter((c) => c.stage === "completed" || c.stage === "not_proceeding")));
-
-  // ---- Per-panel CSV export ----
-  const csvFunnel = $("#report-mi-csv-funnel");
-  if (csvFunnel) csvFunnel.onclick = () => {
-    const r = [];
-    MI_LIVE_STAGES.forEach((s) => r.push(["Live funnel", STAGE_LABEL[s], funnel[s], ""]));
-    r.push(["Conversion", "Created", total, ""]);
-    // R77 · A3 — the CSV keeps the guard: an impossible % is no truer in a spreadsheet.
-    const stepCsv = (num, den) => (num > den ? `date coverage too thin (${missMilestone} missing dates)` : stepPct(num, den));
-    r.push(["Conversion", "Reached application (submitted)", reachedApp, stepCsv(reachedApp, total)]);
-    r.push(["Conversion", "Reached offer (offer issued)", reachedOffer, stepCsv(reachedOffer, reachedApp)]);
-    r.push(["Conversion", "Completed", reachedCompleted, stepCsv(reachedCompleted, reachedOffer)]);
-    r.push(["Win rate", `${completedN} completed of ${terminal} terminal`, terminal >= 5 ? Math.round((completedN / terminal) * 100) + "%" : "n/a (<5 terminal)", ""]);
-    miCsv(`nexmoney-mi-funnel-${dstr}.csv`, ["Section", "Item", "Count", "Step %"], r);
-  };
-  const csvVel = $("#report-mi-csv-velocity");
-  if (csvVel) csvVel.onclick = () => {
-    const r = vMetrics.map((m) => [m.label, miMedian(m.arr) ?? "", miMean(m.arr) ?? "", m.arr.length]);
-    miCsv(`nexmoney-mi-velocity-${dstr}.csv`, ["Transition", "Median days", "Mean days", "n"], r);
-  };
-  const csvRev = $("#report-mi-csv-revenue");
-  if (csvRev) csvRev.onclick = () => {
-    const r = [];
-    runMonths.forEach((m, i) => r.push(["Run-rate", m, runVals[i], "", ""]));
-    r.push(["Run-rate", "12-month total", runTotal, "", ""]);
-    MI_LIVE_STAGES.forEach((s) => r.push(["Forecast", STAGE_LABEL[s], liveFeeByStage[s], Math.round(weightOf[s] * 100) + "%", Math.round(liveFeeByStage[s] * weightOf[s])]));
-    r.push(["Forecast", "Live pipeline total", liveFeeTotal, "", Math.round(weightedTotal)]);
-    miCsv(`nexmoney-mi-revenue-${dstr}.csv`, ["Section", "Item", "£ / count", "Weight", "Weighted £"], r);
-  };
   const csvBoard = $("#report-mi-csv-scoreboard");
   if (csvBoard) csvBoard.onclick = () => {
     // R87 — the CSV carries EVERY row, shown or hidden: a file is not a view, and r20 §B4 pins the full set.
@@ -1894,7 +1940,7 @@ function renderPipelineMI(all, mv) {
    shape as the clawback tile's cross-page jump (Data health renders async; the panel is revealed
    rather than toggled so a second click can never hide it). */
 window.miGotoMilestoneHealth = function () {
-  nav("data");
+  nav("operations", true, "data");
   setTimeout(() => {
     const p = $("#dh-milestone-panel");
     if (p) { p.classList.remove("hidden"); p.scrollIntoView({ behavior: "smooth", block: "start" }); }
@@ -2472,36 +2518,120 @@ async function loadReports() {
   if (propCols) all.forEach((c) => { if (propCols[c.id] !== undefined) c.property_address = propCols[c.id]; });
   if (callPack) all.forEach((c) => { const x = callPack[c.id]; if (x) Object.assign(c, x); });
   lossState.lostAt = lostAt || {};
-  // R68 · M7 — `mv` too: the target bar and attach rate on this card follow the month picker,
-  // while "My fees banked" stays the calendar year. Both scopes are named on the card.
-  renderMyNumbers(all, yr, mv);
-  renderMonthReport(all, mv);
-  /* R7-1 / R7-2 — the two new money panels, from the same rows the rest of the page uses. Both
-     hide themselves for anyone but the Owner (see renderMoneyOwed / renderRateEndBook). */
-  renderMoneyOwed(all);
-  renderRateEndBook(all);
-  /* R7-5 — and the speed-to-lead panel, from the leads read above joined to those same case rows
-     for the adviser each accepted lead went to. Owner-only, like the two above it. */
   const leadRows = (leadRes && !leadRes.error && leadRes.data) || [];
   if (leadRows.length) noteLeadSlaFromStarRow(leadRows[0]);
-  renderLeadResponse(leadRows, all);
-  /* R9-2 — the advocacy dashboard, from those same rows plus its three feature-detected extras.
-     Owner-gated inside renderAdvocacy, like every panel above it. */
   if (refCols) all.forEach((c) => { if (refCols[c.id] !== undefined) c.referrer_client_id = refCols[c.id]; });
-  /* R80 · B1 — the promoters-list context rides in beside the R9 extras. `referralAsked` is
-     null when the queue read failed (the block refuses to render a list that would over-ask);
-     `optoutIds` is null when comms_optout is unreadable (no row is flagged); `clientEmails` is
-     null when the clients read failed (no queue verb is withheld — queueEmail still refuses). */
-  renderAdvocacy(all, {
-    referrers: refCols, scoreDates: advDates, detractorTasks: detrTasks,
-    referralAsked: (advRefQ && !advRefQ.error) ? new Set((advRefQ.data || []).map((r) => r.client_id).filter(Boolean)) : null,
-    optoutIds: (advOptoutRes && !advOptoutRes.error && Array.isArray(advOptoutRes.data)) ? new Set(advOptoutRes.data.map((r) => r.id)) : null,
-    clientEmails: (advEmailRes && !advEmailRes.error && Array.isArray(advEmailRes.data)) ? new Map(advEmailRes.data.map((r) => [r.id, r.email || null])) : null,
-  });
-  /* R9-6 — and the conveyancer-speed panel, from the same rows plus m10's solicitor column.
-     Owner-gated inside renderConveyancerSpeed, like every panel above it. */
   if (solCols) all.forEach((c) => { if (solCols[c.id] !== undefined) c.solicitor_firm = solCols[c.id]; });
-  renderConveyancerSpeed(all, solCols);
+  // T1-19 — so the pipeline search can match an introducer by name when the Introducers table links into it.
+  const introMap = Object.fromEntries((intros || []).map((i) => [i.id, i.name]));
+  introducerNames = introMap;
+  const rep = repRes && !repRes.error ? repRes.data : null;
+  /* R89 · B — THE READ IS SHARED, THE RENDER IS PER TAB. Everything above is the one read every tab
+     draws from; it is kept here (repCtx) and only the tab on screen is painted. A tab opened later
+     paints from this same context (repRenderTab), so switching tabs costs no second read and every
+     tab reads the same rows. A new read (arriving at Reports, the month picker, a save elsewhere)
+     invalidates the tabs that are not on screen: each re-renders from the new rows when opened. */
+  repCtx = {
+    seq, all, yr, mv, intros, introMap, rep, leadRows, solCols,
+    /* R80 · B1 — the promoters-list context rides in beside the R9 extras. `referralAsked` is
+       null when the queue read failed (the block refuses to render a list that would over-ask);
+       `optoutIds` is null when comms_optout is unreadable (no row is flagged); `clientEmails` is
+       null when the clients read failed (no queue verb is withheld — queueEmail still refuses). */
+    advCtx: {
+      referrers: refCols, scoreDates: advDates, detractorTasks: detrTasks,
+      referralAsked: (advRefQ && !advRefQ.error) ? new Set((advRefQ.data || []).map((r) => r.client_id).filter(Boolean)) : null,
+      optoutIds: (advOptoutRes && !advOptoutRes.error && Array.isArray(advOptoutRes.data)) ? new Set(advOptoutRes.data.map((r) => r.id)) : null,
+      clientEmails: (advEmailRes && !advEmailRes.error && Array.isArray(advEmailRes.data)) ? new Map(advEmailRes.data.map((r) => [r.id, r.email || null])) : null,
+    },
+  };
+  repRendered = new Set();
+  repAdvRendered = new Set();
+  renderReportMoneyNote();
+  const key = repActiveTab();
+  const loaded = typeof pageTabLoaded === "object" && pageTabLoaded ? pageTabLoaded.reports : null;
+  if (loaded) REPORT_SECTIONS.forEach(([k]) => { if (k !== key) loaded.delete(k); });
+  if (key && key !== "money") await repRenderTab(key);
+}
+
+/* R89 · B — the admin / adviser line about what this page leaves out (05 #7): ≤ 20 words, one line. */
+function renderReportMoneyNote() {
+  const money = showMoney();
+  const moneyNote = $("#report-money-note");
+  if (!moneyNote) return;
+  moneyNote.classList.toggle("hidden", money);
+  /* R87 · owner-admin (05 #7) — 130 words became one line per role. R89 · B — the admin's line no
+     longer says the page "ENDS" where the money begins: the page is tabs now, and the money tabs
+     are simply not offered. */
+  moneyNote.textContent = money ? "" : (MY_ROLE === "admin"
+    ? "Firm money figures are Owner-only; Pipeline MI is the admin view of the book."
+    : "Firm money figures are Owner-only; your own numbers are in My numbers and on each case.");
+}
+
+/* R89 · B — the tab a Reports read paints: the one on screen, else the one arriving. */
+function repActiveTab() {
+  const cur = typeof currentPageTab === "function" ? currentPageTab("reports") : null;
+  if (cur) return cur;
+  return (typeof pageTabActive === "object" && pageTabActive && pageTabActive.reports) || (typeof resolvePageTab === "function" ? resolvePageTab("reports") : "month");
+}
+let repCtx = null;             // the last read (see loadReports)
+let repRendered = new Set();   // tabs painted from repCtx
+/* R89 · B — paint ONE tab from the shared read. Every renderer is the one that painted the same
+   panel before R89; only WHEN it runs changed. */
+async function repRenderTab(key) {
+  const c = repCtx;
+  if (!c) return;
+  const seq = c.seq;
+  if (key === "mine") {
+    // R68 · M7 — `mv` too: the target bar and attach rate follow the month picker; banked is the year.
+    renderMyNumbers(c.all, c.yr, c.mv);
+  } else if (key === "month") {
+    renderMonthReport(c.all, c.mv);
+    renderAdvViews();
+  } else if (key === "mi") {
+    renderPipelineMI(c.all, c.mv);
+    renderCohortFunnel(c.all, c.mv);
+    renderFunnelViews(c.mv);
+    /* R77 · A2b — lead sources with the This-month / All-time toggle; losses (Owner). */
+    renderLeadSourcesPanel(c.all, c.mv);
+    renderLossesPanel(c.all, c.mv);
+  } else if (key === "book") {
+    renderNpsList(renderBookKpis(c));
+    renderBookForecast(c.all);
+    /* R7-2 — the rate-end book value; Owner-gated inside. */
+    renderRateEndBook(c.all);
+    /* R77 · A4 — the business-mix table, same rows and yr basis as the KPI tiles. Owner-gated inside. */
+    renderBusinessMix(c.all, c.yr);
+    renderBookMonths(c);
+    renderBookIntroducers(c);
+    // Client LTV — the one RPC-only panel; hidden gracefully if the RPC failed.
+    renderReportExtras(c.rep);
+  } else if (key === "quality") {
+    /* R7-5 — speed-to-lead, from the leads read joined to the case rows. Owner-only. */
+    renderLeadResponse(c.leadRows, c.all);
+    /* R9-2 — the advocacy dashboard. Owner-gated inside renderAdvocacy. */
+    renderAdvocacy(c.all, c.advCtx);
+    /* R9-6 — conveyancer speed, from the rows plus m10's solicitor column. Owner-gated inside. */
+    renderConveyancerSpeed(c.all, c.solCols);
+    /* R77 · B1 — appointment outcomes: one bounded read of its own, so awaited. Owner-gated inside. */
+    await renderApptOutcomes();
+  } else if (key === "referrals") {
+    /* R66 · M6b — the referrals-out ledger: two reads of its own, awaited. */
+    await renderReferralsOut(c.all, c.mv);
+  } else return;
+  if (seq !== reportsLoadSeq) return;   // R83 — a newer read owns the page
+  repRendered.add(key);
+  // R42 · F3 — the ledger drawers count rows already on the page.
+  buildReportLedgerCounts();
+  /* R69 · B3/L8 — once the tab has put its tables on the page. */
+  watchReportTables();
+  syncNumHeaders("#page-reports");      // R73 · B4
+  repAfterTab(key);
+}
+
+/* R89 · B — the Money & book KPI row (the "live snapshot" tiles). Returns the scored rows for the
+   review-score drill-down beneath it. */
+function renderBookKpis(c) {
+  const all = c.all, yr = c.yr;
   const activeStages =["enquiry", "fact_find", "decision_in_principle", "application", "offer", "exchange"];
   const active = all.filter((c) => activeStages.includes(c.stage));
   /* G1N-6 — bucket on the SAME Europe/London basis as every other Batch-6 figure. `new
@@ -2558,23 +2688,6 @@ async function loadReports() {
   // on the other. The three with an unambiguous destination now take the same kpiGoto route. The
   // `title` on .num carries the full value so a narrow column can never quietly truncate it.
   const money = showMoney();
-  const moneyNote = $("#report-money-note");
-  if (moneyNote) {
-    moneyNote.classList.toggle("hidden", money);
-    /* R37 · item 22 — STATE THE RULE, for the reader it is most confusing to. An admin's Reports
-       simply stops where the owner-only money panels begin: they get the Pipeline MI run-rate (an
-       aggregate, admin-visible) and then nothing, with no line anywhere saying that the £-detail
-       below it exists and is withheld deliberately. That reads as a page that failed to load. The
-       sentence is added for ADMIN ONLY — an adviser sees no run-rate at all, so telling them
-       "the aggregate run-rate above is the admin view" would be a pointer to a panel that is not
-       on their page. Owner sees no note at all, exactly as before. */
-    /* R87 · owner-admin (05 #7) — 130 words about what an administrator cannot see became one line
-       (≤ 20 words) for each role. The two anchors r37 §12 reads ("ENDS where", "Pipeline MI") are
-       kept for the admin's line; the adviser's names the My numbers card and the case. */
-    moneyNote.textContent = money ? "" : (MY_ROLE === "admin"
-      ? "Firm money figures are Owner-only — this page ENDS where they begin; Pipeline MI is the admin view."
-      : "Firm money figures are Owner-only; your own numbers are in My numbers above and on each case.");
-  }
   /* R5-F2 (Daniel-approved) — the HEADLINE fee figure for the year is now what the firm EARNED on
      the cases it completed (proc+broker+sols on completed_at), not what happened to arrive in the
      bank. "Fees banked" is not deleted and its arithmetic is untouched — it keeps its tile, its
@@ -2602,13 +2715,19 @@ async function loadReports() {
           panel's own model, reused rather than re-derived — but the basis now lives in the label,
           where it is read, instead of under it, where it was not. */ ""}
     <div class="kpi dq-clickable ${feesOutstanding ? "warn" : ""}" onclick="kpiGoto('fees')" title="Broker fees on cases at ANY stage with no payment recorded — fee_status “not requested” or “requested”. Not proceeding is excluded. View the Protection &amp; Fees drawer — Fees due tab."><div class="num" title="${esc(fmtM(feesOutstanding))}">${fmtM(feesOutstanding)}</div><div class="lbl">Broker fees outstanding (all stages)</div>${basisLine(`(broker only · not yet received · ${fmtM(feesInvoiced)} invoiced + ${fmtM(feesNotInvoiced)} not yet invoiced)`)}</div>
-    <div class="kpi dq-clickable ${owedNow.grand ? "warn" : ""}" id="report-kpi-owed" onclick="gotoMoneyOwed()" title="Procuration, solicitor and broker fees on cases that have COMPLETED and carry no paid date — the money the firm has earned and not been paid. A wider set of fee types than the tile beside it, over a narrower set of cases. Opens the Money owed panel below."><div class="num" title="${esc(fmtM(owedNow.grand))}">${fmtM(owedNow.grand)}</div><div class="lbl">Owed on completed cases</div>${basisLine(`(proc + sols + broker · earned, not yet received · ${owedNow.n} completed case${owedNow.n === 1 ? "" : "s"})`)}</div>` : ""}
+    <div class="kpi dq-clickable ${owedNow.grand ? "warn" : ""}" id="report-kpi-owed" onclick="gotoMoneyOwed()" title="Procuration, solicitor and broker fees on cases that have COMPLETED and carry no paid date — the money the firm has earned and not been paid. A wider set of fee types than the tile beside it, over a narrower set of cases. Opens Money owed on the Money tab."><div class="num" title="${esc(fmtM(owedNow.grand))}">${fmtM(owedNow.grand)}</div><div class="lbl">Owed on completed cases</div>${basisLine(`(proc + sols + broker · earned, not yet received · ${owedNow.n} completed case${owedNow.n === 1 ? "" : "s"})`)}</div>` : ""}
     <div class="kpi"><div class="num">${rWon + rLost ? Math.round((rWon / (rWon + rLost)) * 100) + "%" : "—"}</div><div class="lbl">Retention conversion</div></div>
     <div class="kpi"><div class="num">${completedYr.length ? Math.round((protDone / completedYr.length) * 100) + "%" : "—"}</div><div class="lbl">Protection uptake ${yr}</div></div>
     <div class="kpi ${scored.length ? "dq-clickable" : ""}" ${scored.length ? `id="report-nps-tile" onclick="toggleNpsList()" title="List every case that returned a review score"` : ""}><div class="num">${scored.length ? avgNps.toFixed(1) : "—"}</div><div class="lbl">Avg review score (${scored.length})${promoterPct != null ? ` · ${promoterPct}% promoters` : ""}${scored.length ? " ▾" : ""}</div></div>`;
   activateAll("#report-kpis .kpi.dq-clickable");   // R73 · B1 — same gesture as the other three
-  renderNpsList(scored);
+  return scored;
+}
 
+/* R89 · B — Money & book: completions by month, this year against last. */
+function renderBookMonths(c) {
+  const all = c.all, yr = c.yr;
+  const yearOf = (d) => localDateStr(d).slice(0, 4);
+  const completedYr = all.filter((x) => x.completed_at && yearOf(x.completed_at) === String(yr));
   // S8 / R5-19 — the completions chart carries the previous calendar year as a second, muted bar
   // per month. The hard getFullYear() scoping is removed HERE ONLY (the chart's own data build);
   // `completedYr` above still drives the year-to-date KPI tiles and the protection-uptake rate.
@@ -2639,14 +2758,15 @@ async function loadReports() {
       </div>
       <span class="mchart-n">${byMonth[i] || ""}${byMonthPrev[i] ? ` <span class="prev-n">/ ${byMonthPrev[i]}</span>` : ""}</span>
     </div>`).join("");
+}
 
+/* R89 · B — Money & book: the introducers table (volumes for everyone, Revenue for the Owner). */
+function renderBookIntroducers(c) {
+  const all = c.all, money = showMoney(), introMap = c.introMap;
   // BUILD 6a — Conversion % and Revenue added, computed the same way the Lead sources table above
   // computes them (renderThreadedPanels): revenue is proc+broker+sols fee on completed cases only,
   // conversion is completed / total cases. All-time (not scoped to the month picker), like the rest
   // of this panel already was.
-  const introMap = Object.fromEntries((intros || []).map((i) => [i.id, i.name]));
-  // T1-19 — so the pipeline search can match an introducer by name when this table links into it.
-  introducerNames = introMap;
   const iMap = {};
   all.filter((c) => c.introducer_id).forEach((c) => {
     const k = introMap[c.introducer_id] || "Unknown";
@@ -2668,55 +2788,6 @@ async function loadReports() {
       // the table's min-content width, which squeezes the chart beside it to a sliver.
       + (money ? `<p class="panel-sub" style="margin:8px 0 0;">Revenue ${esc(BASIS_INTRO_REV)} — fee value on completed cases, paid or not.</p>` : "")
     : '<div class="empty">No cases assigned to introducers yet.</div>';
-
-  const rep = repRes && !repRes.error ? repRes.data : null;
-  renderThreadedPanels(all, mv, rep ? rep.advisers : null);
-  /* R72 · A1 — the adoption strip inside the scoreboard panel renderThreadedPanels has just
-     painted. NOT awaited, for the same reason the ops strip on Today is not: it owns two reads of
-     its own and a strip arriving 200ms after the table above it is still a strip. It gates itself
-     on showMoney(), so for an admin or an adviser this is one function call and no query. */
-  renderAdoptionStrip();
-  /* R19 — the OWNER/ADMIN Pipeline MI section, from the same `all` rows plus the two milestone
-     dates in the select above. Gated inside (isAdminOrOwner); hidden for plain advisers. */
-  renderPipelineMI(all, mv);
-  /* R21 Part C / R33 — the diagnostics panel used to render from here, off the `all` count in
-     scope. It now lives on Settings (renderSettings → renderDiagnostics(null)): it is a support
-     artefact, not management information, and it was costing every owner a scroll past it on
-     every Reports read. Nothing else about it changed. */
-  renderForecastBuckets(all);
-  /* R77 · A4 — the business-mix table, from the same rows (the Reports select has always carried
-     case_kind) and the same yr basis as the KPI tiles above. Owner-gated inside. */
-  renderBusinessMix(all, yr);
-  // Client LTV is the one remaining RPC-only panel (needs client_id/name joins this page doesn't
-  // otherwise fetch) — hide it gracefully if the RPC failed; everything else above still renders.
-  renderReportExtras(rep);
-  /* R66 · M6b — §6, the referrals-out ledger. AWAITED, unlike every renderer above it, because it
-     owns two reads of its own (the month's referrals and one inChunks resolve of the cases they
-     point at) and the two nav builders below have to see the panel it produces. `all` is passed so
-     a case already on this page — property column merged and client embedded — is never re-read. */
-  await renderReferralsOut(all, mv);
-  if (seq !== reportsLoadSeq) return;   // R83
-  /* R77 · B1 — §5's appointment-outcomes panel. AWAITED for the same reason renderReferralsOut
-     is: it owns one bounded read of its own (90 days of appointments), and the two nav builders
-     below must see whether the panel exists before they draw its chip. Gates itself on
-     showMoney(), so for an adviser this is one function call and no query. */
-  await renderApptOutcomes();
-  if (seq !== reportsLoadSeq) return;   // R83
-  /* R11-4 — LAST, deliberately. Every panel above has just decided whether it exists for this
-     role and this data, and the jump bar is built by READING those decisions rather than by
-     re-deriving them: one gate, not seventeen copies of one, so a money panel and its chip can
-     never disagree. */
-  /* R42 · F3 — and on the same terms, for the same reason: the five section buttons ask the panels
-     that have just rendered whether anything under each header exists for this role, and the six
-     ledger drawers take their row counts off rows that are already on the page.
-     R74 · A4c — the SECTIONS are built FIRST now: the chip strip below them is scoped to the
-     selected section, so it cannot be built until the sections have decided which of them exist. */
-  buildReportSectionNav();
-  buildReportsJumpNav();
-  buildReportLedgerCounts();
-  /* R69 · B3/L8 — and LAST of all, once every panel above has put its table on the page. */
-  watchReportTables();
-  syncNumHeaders("#page-reports");      // R73 · B4 — after every panel has rendered
 }
 
 /* ==========================================================================
@@ -2771,361 +2842,229 @@ function watchReportTables() {
 }
 
 /* ==========================================================================
-   R11-4 — THE REPORTS JUMP NAV.
+   R89 · B — REPORTS TABS (R89-DESIGN slice B; panel 05 #1 #7 #12).
 
-   Reports is one page about sixteen different questions, stacked, roughly
-   7,700px tall on an Owner's screen. The only navigation it had was the scroll
-   wheel, so "what is the rate-end book worth" meant six seconds of scrolling
-   past four panels about something else, every time.
+   R11-4 gave Reports a jump nav (one chip per panel), R42 grouped the panels
+   into sections with a pill per section, R74 made the pills scope the chips,
+   R87 made the chips opt-in — and "THE SECTIONS DO NOT COLLAPSE" was still the
+   rule: every open painted all 21 panels on one 11,600px page and a scroll-spy
+   lit the pill you happened to be scrolled past. A pill that says it is
+   selected while the other four sections stay on the page is a control that
+   lies. The sections are now TABS (the kit's pageTabsHtml / activatePageTab,
+   panel-r87/TABS.md):
 
-   Three decisions worth stating:
-
-   · THE CHIP LIST IS READ, NOT DECLARED. Half these panels are Owner-only and
-     each one already owns its own gate (showMoney() inside renderMoneyOwed,
-     renderRateEndBook, renderLeadResponse, renderAdvocacy, …). Re-testing the
-     role here would be a second copy of the gate that could drift from the
-     first, which is exactly how a money chip leaks to an adviser. So the bar
-     is built at the END of loadReports and simply asks each target element
-     whether it — or anything it sits inside — is .hidden. An adviser's bar has
-     no chip for a panel an adviser has no panel for, because the panel said so.
-
-   · IT IS BUILT ONCE THE ANSWER IS KNOWN. The markup ships EMPTY and `hidden`;
-     nothing is rendered before role and data are in hand, so there is no
-     moment where a money chip is on screen and then withdrawn.
-
-   · HIGHLIGHTING IS A SCROLL LISTENER, NOT AN OBSERVER. rAF-throttled, one
-     getBoundingClientRect per visible section per frame that actually scrolls,
-     and it returns immediately when Reports is not the open page. An
-     IntersectionObserver would need a rootMargin recomputed from the sticky
-     bar's own measured height anyway, and would still have to break ties
-     between the several panels visible at once on a laptop.
+   · REPORT_SECTIONS below is the tab registry (PAGE_TABS.reports in app.js is
+     built from it, plus the Owner's Money tab). Each entry: key, label, the
+     tab panel, its member panels (DOM order), and who it is for. Membership is
+     the tab panel now — the markup wraps each section in [data-tabpanel].
+   · ONLY THE TAB ON SCREEN IS PAINTED. loadReports does the one shared read
+     and paints the active tab (repRenderTab); a tab opened later paints from
+     the same read. A tab nobody opens is never painted.
+   · WHO GETS A TAB IS A ROLE RULE, not a DOM walk (the DOM of an unpainted tab
+     cannot answer): My numbers — an adviser (showMyNumbers); Service & quality —
+     the Owner (every panel in it is Owner-only); Money — the Owner. The rest are
+     everyone's. So p4 (Owner) sees six report tabs + Money, p1 (Administrator)
+     four, p2 (adviser) five. The first allowed tab is where a reader lands —
+     This month for the Owner and the Administrator, My numbers for an adviser.
+   · The level-2 chip strip (#rep-nav, opt-in behind "Panels ▾") survives as a
+     per-tab jump strip: it lists the panels of the tab on screen and lives
+     inside that tab. No scroll-spy, no sticky offsets, no settle timers.
    ========================================================================== */
+const REPORT_SECTIONS = [
+  ["mine", "My numbers", '[data-tabpanel="mine"]', ["#report-mine-panel"], () => showMyNumbers()],
+  ["month", "This month", '[data-tabpanel="month"]', ["#report-hero", "#report-month-panel", "#report-scoreboard-panel"], () => true],
+  ["mi", "Pipeline MI", '[data-tabpanel="mi"]', ["#report-mi-funnel-panel", "#report-mi-section", "#report-sources-panel", "#report-losses-panel"], () => true],
+  ["book", "Money & book", '[data-tabpanel="book"]', ["#report-kpis", "#report-nps-panel", "#report-forecast-panel", "#report-rateend-panel", "#report-mix-panel", "#report-months-panel", "#report-introducers-panel", "#report-ltv-panel"], () => true],
+  ["quality", "Service & quality", '[data-tabpanel="quality"]', ["#report-leadresp-panel", "#report-advocacy-panel", "#report-conveyancer-panel", "#report-outcomes-panel"], () => showMoney()],
+  ["referrals", "Referrals out", '[data-tabpanel="referrals"]', ["#report-referrals-panel"], () => true],
+];
+/* The per-panel chips of the level-2 strip. Keys and chip ids (rep-nav-<key>) are the R11-4 ones;
+   a chip is offered only for a panel that is inside the tab on screen and visible. */
 const REPORT_JUMP_SECTIONS = [
-  ["mine", "My numbers", "#report-mine-panel"],
   ["month", "Monthly business", "#report-month-panel"],
   ["advisers", "Adviser scoreboard", "#report-scoreboard-panel"],
-  ["mi", "Pipeline MI", "#report-mi-funnel-panel"],
+  ["mi", "Funnel", "#report-mi-funnel-panel"],
   ["mivelocity", "Velocity", "#report-mi-velocity-panel"],
-  ["mirevenue", "Run-rate", "#report-mi-revenue-panel"],
-  ["miboard", "MI scoreboard", "#report-mi-scoreboard-panel"],
-  ["funnel", "Funnel", "#report-funnel-panel"],
+  ["mirevenue", "Run-rate & forecast", "#report-mi-revenue-panel"],
   ["sources", "Lead sources", "#report-sources-panel"],
   ["losses", "Losses", "#report-losses-panel"],
-  ["live", "Live snapshot", "#report-live-note"],
-  ["owed", "Money owed", "#report-owed-panel"],
-  ["rateend", "Rate-end book", "#report-rateend-panel"],
+  ["live", "Live snapshot", "#report-kpis"],
   ["forecast", "Forecast", "#report-forecast-panel"],
-  ["mix", "Business mix", "#report-mix-panel"],   // R77 · A4 — sits after the forecast in the DOM
+  ["rateend", "Rate-end book", "#report-rateend-panel"],
+  ["mix", "Business mix", "#report-mix-panel"],
   ["months", "Completions", "#report-months-panel"],
   ["introducers", "Introducers", "#report-introducers-panel"],
   ["ltv", "Client LTV", "#report-ltv-panel"],
-  /* R42 · F3 — lead response, advocacy and conveyancers moved BELOW the money panels when Reports
-     was grouped into its five sections (they are §5 Service & quality; the money panels are §4).
-     This list is re-ordered to match, and that is not cosmetic: onRepJumpScroll() walks it in order
-     and BREAKS at the first section below the fold line, so a list in a different order from the
-     DOM stops highlighting at the first entry that has moved — every chip below it would have gone
-     dead. Keep this array in DOM order. Keys, labels and chip ids are unchanged. */
   ["leadresp", "Lead response", "#report-leadresp-panel"],
   ["advocacy", "Advocacy", "#report-advocacy-panel"],
   ["conveyancer", "Conveyancers", "#report-conveyancer-panel"],
-  // R77 · B1 — in DOM order (the panel sits after conveyancers, closing §5), per the note above.
   ["apptoutcomes", "Appointments", "#report-outcomes-panel"],
-  // R66 · M6b — last in the DOM, therefore last here (see the DOM-order note above).
-  ["referralsout", "Referrals out", "#report-referrals-panel"],
 ];
-/* Visible = on the page AND not inside anything hidden. The .grid-2 wrappers mean a panel's own
-   class is not the whole answer, so walk up to the page section. */
+/* Visible = on the page AND not inside anything hidden (the tab panel included). */
 function repJumpVisible(el) {
   let n = el;
   while (n && n.id !== "page-reports") {
-    if (n.classList && n.classList.contains("hidden")) return false;
+    if (n.hidden || (n.classList && n.classList.contains("hidden"))) return false;
     n = n.parentElement;
   }
   return !!n;
 }
-/* The gap a jumped-to heading is left sitting below the bar, and — because they must be the same
-   number — the line the highlighter measures "is this section at the top of the screen" against.
-   With two different constants a chip you had just clicked could arrive one pixel short of its own
-   threshold and light up the section ABOVE it, which is how a jump nav ends up looking broken. */
-const REP_JUMP_GAP = 12;
-let repJumpItems = [];
-let repJumpActive = "";
-let repJumpTick = false;
-let repJumpWired = false;
-/* ==========================================================================
-   R74 · A4c (panel D#6) — THE LEVEL-2 STRIP SHOWS ONE SECTION'S PANELS.
-
-   Reports carries two strips: five or six SECTION pills, and one chip per
-   PANEL. The panel strip listed all twenty at once, so on a 1,160px laptop
-   fourteen of them lived off the right-hand edge behind a chevron, and the two
-   strips answered the same question at two different resolutions with no
-   relationship between them.
-
-   The section pills are now a real control: picking one scopes the chip strip
-   below it to that section's own panels (four to six — no overflow at any
-   width this app supports), and SCROLLING re-picks it, so the strip always
-   describes where the reader is. Both strips stay stuck to the top while you
-   move, because a level-1 control that scrolls away the moment you use it is
-   the thing being fixed.
-
-   Membership is DERIVED, not declared twice: a panel belongs to the last
-   `.report-section-head` that precedes it in the document. REPORT_SECTIONS
-   already declares which panels sit under which head for the gating walk, and
-   a second hand-maintained copy of that mapping is how a chip ends up in the
-   wrong section after a panel moves.
-   ========================================================================== */
-let repSectionActive = "";
-let repSectionItems = [];       // the live level-1 sections, in DOM order
-/* R87 · owner-admin (05 #12) — THE CHIP STRIP IS OPT-IN. Two sticky strips cost 105px of every
-   viewport and the 23-chip one answered a question nobody had asked yet. On arrival only the five
-   section pills show; the per-panel chips appear the moment a pill is pressed (or a deep link
-   lands), and stay for the rest of the visit. #rep-nav keeps its id, its markup and its sticky
-   position — buildReportsJumpNav still paints it on every section change so the scroll-spy has
-   chips to light — it simply also carries `hidden` until the reader asks for it. */
+/* The tab panel element for a report key, and the report key a Reports element sits in. */
+const repTabPanel = (key) => document.querySelector(`#page-reports > [data-tabpanel="${key}"]`);
+function repTabOfEl(el) {
+  const p = el && el.closest && el.closest("#page-reports [data-tabpanel]");
+  return p ? p.dataset.tabpanel : null;
+}
+/* R87 · owner-admin (05 #12) — THE CHIP STRIP IS OPT-IN, and stays so: "Panels ▾" in the page head
+   shows it; the choice lasts the visit. */
 let repChipsWanted = false;
+let repJumpItems = [];
 function repShowChips(on) {
   repChipsWanted = !!on;
-  const bar = $("#rep-nav");
-  if (bar && repJumpItems.length) bar.hidden = !repChipsWanted;
-  const t = $("#reports-jump-toggle");
-  if (t) { t.setAttribute("aria-expanded", repChipsWanted ? "true" : "false"); t.textContent = repChipsWanted ? "Panels ▴" : "Panels ▾"; }
-  measureRepJumpOffsets();
+  repBuildChips(repActiveTab());
 }
 window.repToggleChips = function () { repShowChips(!repChipsWanted); };
-/* Which section an element sits in: the last live section head at or before it in the DOM.
-   compareDocumentPosition rather than offsetTop, so it is a structural answer and cannot be
-   thrown by a panel that has not laid out yet. */
-function repSectionOfEl(el) {
-  if (!el) return "";
-  let cur = "";
-  for (const s of repSectionItems) {
-    if (!s.head) continue;
-    // FOLLOWING = s.head comes after el in document order → we have gone past it.
-    if (s.head.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) cur = s.key;
-    else break;
+/* Build the strip for one tab: the chips of its visible panels, inside that tab, at its top. */
+function repBuildChips(key) {
+  const bar = $("#rep-nav"), wrap = $("#rep-nav-chips"), t = $("#reports-jump-toggle");
+  if (!bar || !wrap) return;
+  const panel = key && key !== "money" ? repTabPanel(key) : null;
+  const items = panel ? REPORT_JUMP_SECTIONS
+    .map(([k, label, sel]) => ({ key: k, label, el: $(sel) }))
+    .filter((s) => s.el && panel.contains(s.el) && repJumpVisible(s.el)) : [];
+  repJumpItems = items;
+  const offer = items.length >= 2;   // one chip is decoration, not navigation
+  if (t) {
+    t.hidden = !offer;
+    t.setAttribute("aria-expanded", repChipsWanted && offer ? "true" : "false");
+    t.textContent = repChipsWanted && offer ? "Panels ▴" : "Panels ▾";
   }
-  return cur || (repSectionItems[0] && repSectionItems[0].key) || "";
-}
-function buildReportsJumpNav() {
-  /* R78 · A4 — through the shared builder. What stays here is Reports' own: the R74 · A4c
-     section scoping (filterItems), the guard on the PAGE's items rather than the scoped strip
-     (guardOn:"all" — a one-panel section keeps its single chip and the sticky bar its height),
-     and the jump-settle stamp the scroll-spy respects. scroll-margin-top (set from the measured
-     bar height below) is still what stops the sticky bar landing on the heading it just took
-     you to. */
-  const built = buildJumpNav("rep-nav", "rep-nav-chips", REPORT_JUMP_SECTIONS, repJumpVisible, {
-    attr: "data-rep-jump", chipIdPrefix: "rep-nav-", guardOn: "all",
-    filterItems: (allItems) => {
-      allItems.forEach((s) => { s.section = repSectionOfEl(s.el); });
-      /* A section the reader picked that no longer exists (role change, a panel that went hidden)
-         falls back to the first live one rather than emptying the strip. */
-      if (!repSectionItems.some((x) => x.key === repSectionActive)) repSectionActive = (repSectionItems[0] || {}).key || "";
-      return allItems.filter((s) => !repSectionActive || s.section === repSectionActive);
-    },
-    beforeJump: () => { repJumpUntil = Date.now() + REP_JUMP_SETTLE_MS; },   // R74 · A4c — see onRepJumpScroll
-    setActive: setRepJumpActive,
-  });
-  repJumpItems = built ? built.items : [];
-  if (!built) return;
-  repJumpActive = "";                 // the chips are new elements — nothing is active yet
-  const barEl = $("#rep-nav");        // R87 — built, but shown only once the reader has asked
-  if (barEl) barEl.hidden = !repChipsWanted;
-  measureRepJumpOffsets();
-  if (!repJumpWired) {
-    repJumpWired = true;
-    window.addEventListener("scroll", onRepJumpScroll, { passive: true });
-    window.addEventListener("resize", () => { measureRepJumpOffsets(); onRepJumpScroll(); }, { passive: true });
-  }
-  onRepJumpScroll();
-}
-/* The sticky offset is not a constant: at =<760px .app-shell stacks and the sidebar becomes a
-   sticky strip across the top, so the jump bar has to sit under it. Measured from the layout that
-   is actually in force rather than from a duplicated breakpoint number. */
-function measureRepJumpOffsets() {
-  const bar = $("#rep-nav"), page = $("#page-reports");
-  // A resize while another page is open would measure a bar of height 0 and leave every heading on
-  // Reports with a 12px scroll margin. Nothing to measure until Reports is the page on screen.
-  // R87 — the chip strip may be hidden (opt-in); the SECTION strip still needs its offset and the
-  // headings their scroll margin, so only the chip-bar half of the measurement is skipped then.
-  if (!bar || !page || page.classList.contains("hidden")) return;
-  const shell = document.querySelector(".app-shell");
-  const side = document.querySelector(".sidebar");
-  let off = 0;
-  try {
-    if (shell && side && getComputedStyle(shell).flexDirection === "column") off = Math.round(side.getBoundingClientRect().height);
-  } catch (_) { off = 0; }
-  /* R74 · A4c — TWO sticky strips now, stacked: sections on top, the section's panels under it.
-     Both offsets come from the same measurement pass, so the pair can never overlap.
-     R73-HF1's rule holds: nothing is written from an unguarded measurement — the section strip is
-     only measured (and only given a top) while it is actually on the page and not hidden. */
-  const sec = $("#reports-jump");
-  let secH = 0;
-  if (sec && !sec.hidden) {
-    sec.style.top = off + "px";
-    secH = Math.round(sec.getBoundingClientRect().height);
-  }
-  bar.style.top = (off + secH) + "px";
-  const h = bar.hidden ? 0 : Math.round(bar.getBoundingClientRect().height);
-  document.documentElement.style.setProperty("--rep-jump-scroll", (off + secH + h + REP_JUMP_GAP) + "px");
-  if (bar.hidden) return;
-  // Only fade the right edge when there is genuinely more strip out there to scroll to.
-  // R73 · A5 — the fade AND the chevron, both decided by the same measurement, and both switched
-  // off once the strip is at its right-hand end.
-  wireChipStripOverflow("rep-nav", "rep-nav-chips");
+  if (panel && bar.parentElement !== panel) panel.insertBefore(bar, panel.firstChild);
+  wrap.innerHTML = offer ? items.map((s) =>
+    `<button type="button" class="seg-btn" id="rep-nav-${esc(s.key)}" aria-pressed="false" data-rep-jump="${esc(s.key)}" title="Jump to ${esc(s.label)}">${esc(s.label)}</button>`).join("") : "";
+  bar.hidden = !(offer && repChipsWanted);
 }
 function setRepJumpActive(key) {
-  if (key === repJumpActive) return;
-  repJumpActive = key;
-  jumpNavActivePaint("rep-nav-chips", "data-rep-jump", "rep-nav-", key);   // R78 · A4
-}
-function onRepJumpScroll() {
-  if (repJumpTick) return;
-  repJumpTick = true;
-  requestAnimationFrame(() => {
-    repJumpTick = false;
-    const page = $("#page-reports"), bar = $("#rep-nav");
-    if (!page || page.classList.contains("hidden") || !bar || !repJumpItems.length) return;
-    // R87 — while the chip strip is opt-in-hidden the section pills are the sticky edge to spy from.
-    const edge = bar.hidden ? $("#reports-jump") : bar;
-    if (!edge || edge.hidden) return;
-    const line = edge.getBoundingClientRect().bottom + REP_JUMP_GAP + 2;
-    /* R74 · A4c — the SECTION follows the reader too. Scrolling out of "This month" and into
-       "Money & book" re-scopes the chip strip, so it never describes a part of the page that is
-       no longer on screen. Same walk, same threshold line, over the section heads.
-       …EXCEPT while a jump this control started is still in flight. scrollIntoView({behavior:
-       "smooth"}) travels through every section between here and there, and a spy that re-picked on
-       the way would repaint the strip four times and land wherever the animation happened to be
-       when it stopped. The jump names its destination; the spy stands aside until it arrives. */
-    if (repJumpUntil > Date.now()) return;
-    if (repSectionItems.length > 1) {
-      let secNow = repSectionItems[0].key;
-      for (const s of repSectionItems) {
-        if (s.head && s.head.getBoundingClientRect().top <= line) secNow = s.key; else break;
-      }
-      if (secNow !== repSectionActive) { repSetSection(secNow); return; }
-    }
-    let cur = repJumpItems[0].key;
-    for (const s of repJumpItems) {
-      if (s.el && s.el.getBoundingClientRect().top <= line) cur = s.key; else break;
-    }
-    /* At the very bottom of the page the last panel may never reach the line (it is shorter than
-       the viewport), which would leave the second-to-last chip lit on a page that has stopped
-       scrolling. Bottom of the document means the last section. */
-    if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2) cur = repJumpItems[repJumpItems.length - 1].key;
-    setRepJumpActive(cur);
-  });
-}
-
-/* ==========================================================================
-   R42 · F3 — REPORTS SECTIONS.
-
-   Reports answers five questions — my numbers, this month, where the work is,
-   where the money is, how well we are serving people — and it had been
-   answering them in one flat 7,700px stack of seventeen panels. The panels have
-   MOVED into those five groups (ids, gates and render code all untouched); each
-   group carries a slim <h3 class="report-section-head" id="rsec-*"> and one
-   button in #reports-jump.
-
-   THE SECTIONS DO NOT COLLAPSE. This is grouping and wayfinding. Anything a
-   role can see, it still sees on arrival.
-
-   THE ROLE RULE IS THE ONE R11-4 ESTABLISHED AND IS NOT COPIED: every panel
-   already owns its own gate, so a section asks its PANELS whether any of them
-   is visible (repJumpVisible, the same walk the chip bar uses) rather than
-   re-testing MY_ROLE here — which is how a money button leaks to an adviser.
-   A section with nothing visible under it loses its button AND its header: an
-   empty "Money & book" heading is worse than no heading at all.
-
-   The membership list below is declared, unlike #rep-nav's chip list, because
-   the page is flat markup: a section is a header plus the panels that follow
-   it, and there is no wrapper element to ask. Keep it in DOM order — the nav
-   reads top to bottom.
-   ========================================================================== */
-const REPORT_SECTIONS = [
-  ["mine", "My numbers", "#rsec-mine", ["#report-mine-panel"]],
-  ["month", "This month", "#rsec-month", ["#report-month-panel", "#report-scoreboard-panel"]],
-  ["mi", "Pipeline MI", "#rsec-mi", ["#report-mi-section", "#report-funnel-panel", "#report-sources-panel", "#report-losses-panel"]],
-  ["money", "Money & book", "#rsec-money", ["#report-kpis", "#report-owed-panel", "#report-rateend-panel", "#report-forecast-panel", "#report-mix-panel", "#report-months-panel", "#report-introducers-panel", "#report-ltv-panel"]],   // R77 · A4 — mix panel joins its section
-  // R77 · B1 — "#report-outcomes-panel" appended (agent B's only entry in this list).
-  ["quality", "Service & quality", "#rsec-quality", ["#report-leadresp-panel", "#report-nps-panel", "#report-advocacy-panel", "#report-conveyancer-panel", "#report-outcomes-panel"]],
-  /* R66 · M6b — §6. The sixth question this page answers: what did we send OUT, and to whom. One
-     panel, visible to every staff role (no money on it), so unlike §4 and §5 this section is never
-     empty for anybody — but it still goes through the same repJumpVisible walk as the other five
-     rather than being special-cased, because that walk is the ONE gate. */
-  ["referrals", "Referrals out", "#rsec-referrals", ["#report-referrals-panel"]],
-];
-function buildReportSectionNav() {
-  const bar = $("#reports-jump"), wrap = $("#reports-jump-chips");
-  if (!bar || !wrap) return;
-  const live = REPORT_SECTIONS.map(([key, label, headSel, panels]) => {
-    const head = $(headSel);
-    const on = panels.some((sel) => { const el = $(sel); return el && repJumpVisible(el); });
-    // The header goes with the button — one decision, applied to both.
-    if (head) head.classList.toggle("hidden", !on);
-    return { key, label, head, on };
-  }).filter((s) => s.head && s.on);
-  // One button is not navigation, it is decoration — the same guard #rep-nav uses.
-  if (live.length < 2) { wrap.innerHTML = ""; bar.hidden = true; return; }
-  /* R74 · A4c — these pills SELECT as well as jump: the chip strip below is scoped to the chosen
-     section. aria-pressed (R88 · E: was aria-selected) is a live state rather than a permanent "false". */
-  repSectionItems = live;
-  if (!live.some((x) => x.key === repSectionActive)) repSectionActive = live[0].key;
-  wrap.innerHTML = live.map((s) =>
-    `<button type="button" class="seg-btn${s.key === repSectionActive ? " active" : ""}" id="reports-nav-${esc(s.key)}" aria-pressed="${s.key === repSectionActive}" data-reports-jump="${esc(s.key)}" title="Show the ${esc(s.label)} panels and jump to them">${esc(s.label)}</button>`).join("")
-    /* R87 · owner-admin (05 #12) — the door to the per-panel chips. NOT a tab (no role, no
-       data-reports-jump), so the pill count r74 §D2 reads is untouched. */
-    + `<button type="button" class="btn btn-sm btn-ghost rep-chips-toggle" id="reports-jump-toggle" aria-controls="rep-nav" aria-expanded="${repChipsWanted ? "true" : "false"}" onclick="repToggleChips()" title="Show or hide the strip of one chip per panel in the selected section">${repChipsWanted ? "Panels ▴" : "Panels ▾"}</button>`;
-  wrap.querySelectorAll("[data-reports-jump]").forEach((b) => (b.onclick = () => {
-    const it = live.find((s) => s.key === b.dataset.reportsJump);
-    if (!it) return;
-    if (!repChipsWanted) repShowChips(true);   // R87 — pressing a pill is asking for its panels
-    repSetSection(it.key);
-    repJumpUntil = Date.now() + REP_JUMP_SETTLE_MS;
-    // scroll-margin-top on .report-section-head (--rep-jump-scroll, measured) is what stops the
-    // sticky strips landing on top of the header this just took you to.
-    if (it.head) it.head.scrollIntoView({ behavior: "smooth", block: "start" });
-  }));
-  bar.hidden = false;
-  /* R73 · A5 — this strip had NO overflow affordance at all, not even the fade #rep-nav has:
-     five section buttons fit a laptop and do not fit a phone, and the ones off the edge were
-     invisible and un-guessable. Same control as the other two strips. */
-  wireChipStripOverflow("reports-jump", "reports-jump-chips");
-}
-/* R74 · A4c — pick a section: repaint the pills, rebuild the chip strip beneath them to that
-   section's panels only, and re-measure (a strip of 5 chips is a different height from one of 20
-   once it stops wrapping). Does NOT scroll — the callers decide whether this is a jump or a
-   scroll-spy correction, and a spy that scrolled would fight the scroll that triggered it. */
-/* How long a programmatic jump owns the section choice. Long enough for a smooth scroll across
-   the whole page, short enough that a reader who grabs the wheel mid-flight gets the spy back. */
-const REP_JUMP_SETTLE_MS = 900;
-let repJumpUntil = 0;
-function repSetSection(key, opts) {
-  if (!key || key === repSectionActive) return;
-  repSectionActive = key;
-  document.querySelectorAll("#reports-jump-chips [data-reports-jump]").forEach((b) => {
-    const on = b.dataset.reportsJump === key;
+  document.querySelectorAll("#rep-nav-chips [data-rep-jump]").forEach((b) => {
+    const on = b.dataset.repJump === key;
     b.classList.toggle("active", on);
     b.setAttribute("aria-pressed", on ? "true" : "false");
   });
-  buildReportsJumpNav();
-  if (!(opts && opts.quiet)) measureRepJumpOffsets();
 }
-/* R74 · A4c — THE DEEP-LINK DOOR. Anything that takes the reader straight to a Reports panel —
-   the Watchtower's "Money owed →", a KPI tile, a future palette verb — goes through here, because
-   scrolling to a panel whose SECTION is not the selected one would leave the chip strip describing
-   somewhere else entirely. Switch the section first, then scroll. Safe to call before Reports has
-   finished rendering: the section list is empty until buildReportSectionNav runs, and the scroll
-   is guarded on the panel being both present and visible, exactly as it was before. */
+document.addEventListener("click", (e) => {
+  const b = e.target && e.target.closest && e.target.closest("#rep-nav-chips [data-rep-jump]");
+  if (!b) return;
+  const it = repJumpItems.find((s) => s.key === b.dataset.repJump);
+  if (!it || !it.el) return;
+  setRepJumpActive(it.key);
+  it.el.scrollIntoView({ behavior: "smooth", block: "start" });
+});
+/* After a tab is painted or shown: the chip strip follows it. */
+function repAfterTab(key) {
+  if (!key || key === "money") { const bar = $("#rep-nav"), t = $("#reports-jump-toggle"); if (bar) bar.hidden = true; if (t) t.hidden = true; return; }
+  if (repActiveTab() !== key) return;
+  repBuildChips(key);
+}
+/* R89 · B — THE TAB LOADER (PAGE_TAB_LOADERS.reports[key]).
+   R89 · fixer — idempotent per visit, decided by what activatePageTab says, not by a click flag. The
+   old `repTabClick` flag was reset by a listener registered BEFORE the kit's click handler, so every
+   tab click saw `false` and re-ran the whole read (6-7 reads a click). The rule now:
+     · `{ refresh: true }` (nav() arriving at Reports, a hash, Back) → ONE shared read (loadReports),
+       which paints the tab on screen;
+     · a first open of a tab while that read is in flight → nothing (the read paints the tab on screen
+       when it lands);
+     · a first open with the read in hand → paint from it (repRenderTab), no read;
+     · no read in hand (never arrived, or a write busted it — repBust) → read.
+   The month picker and the per-adviser target save still call loadReports() themselves. */
+let repReading = null;   // the in-flight shared read started here (a Promise), else null
+function repTabLoader(key, o) {
+  const refresh = !!(o && o.refresh);
+  if (!refresh && repReading) return;
+  if (!refresh && repCtx) { if (!repRendered.has(key)) repRenderTab(key); return; }
+  const p = loadReports();
+  repReading = p;
+  Promise.resolve(p).catch(() => {}).then(() => { if (repReading === p) repReading = null; });
+}
+/* A write that stales the board (bustBoardCache, app.js) stales this read too: drop it and forget
+   which report tabs were opened, so the next tab activation reads afresh. The Money tab keeps its own
+   loader state (loadMoneyPage reads for itself). */
+function repBust() {
+  repCtx = null;
+  const loaded = typeof pageTabLoaded === "object" && pageTabLoaded ? pageTabLoaded.reports : null;
+  if (loaded) REPORT_SECTIONS.forEach(([k]) => loaded.delete(k));
+}
+/* activatePageTab re-renders the strip on EVERY activation (click, nav, hash, programmatic), so the
+   strip's slot changing is the one signal that the tab on screen changed: the chip strip follows. */
+(() => {
+  const slot = document.querySelector("#page-reports > .page-tabs-slot");
+  if (slot && typeof MutationObserver === "function") new MutationObserver(() => repAfterTab(repActiveTab())).observe(slot, { childList: true });
+})();
+/* THE DEEP-LINK DOOR (R74 · A4c, kept). Anything that takes the reader to a Reports panel — the
+   Watchtower's "Money owed →", a KPI tile, the Money tab's links — comes through here: open the tab
+   the panel lives on (painting it if need be), then scroll to the panel once it is on screen. Returns
+   false for a panel that does not exist or whose tab this reader is not offered. */
 window.repRevealPanel = function (sel) {
   const p = $(sel);
-  if (!p || p.classList.contains("hidden") || !repJumpVisible(p)) return false;
-  const key = repSectionOfEl(p);
+  if (!p) return false;
+  const key = repTabOfEl(p);
+  if (!key || typeof resolvePageTab !== "function" || resolvePageTab("reports", key) !== key) return false;
+  if (currentPage !== "reports") nav("reports", true, key);
+  else if (repActiveTab() !== key) { activatePageTab("reports", key); repAfterTab(key); }   // R89 · fixer — a first open paints from the read in hand (repTabLoader); no click flag
   if (!repChipsWanted) repShowChips(true);   // R87 — a deep link is a request for the strip too
-  if (key) { repSetSection(key); setRepJumpActive(""); }
-  repJumpUntil = Date.now() + REP_JUMP_SETTLE_MS;
-  p.scrollIntoView({ behavior: "smooth", block: "start" });
+  let tries = 0;
+  const go = () => {
+    if (repJumpVisible(p)) { p.scrollIntoView({ behavior: "smooth", block: "start" }); return; }
+    if (++tries < 40) setTimeout(go, 100);
+  };
+  go();
   return true;
 };
+
+/* ==========================================================================
+   R89 · B — ONE PER-ADVISER TABLE, FOUR VIEWS (panel 05 #2c, #11).
+
+   The views of #report-scoreboard-panel, in toggle order. Each keeps its own
+   gate: the month scoreboard and the activity strip are money / per-person
+   conduct (Owner); the pipeline board is Pipeline MI's (Owner and
+   Administrator); submitted & completed is the Monthly business breakdown every
+   role always had (its fee columns stay Owner-only inside renderMonthReport).
+   The first allowed view is where a reader lands (Owner: This month;
+   Administrator: Pipeline; adviser: Submitted) unless they picked another,
+   which is remembered per user. Only the chosen view is painted.
+   ========================================================================== */
+const REP_ADV_VIEWS = [
+  { key: "month", label: "This month", when: () => showMoney(), render: (c) => renderThreadedPanels(c.all, c.mv, c.rep ? c.rep.advisers : null) },
+  { key: "pipeline", label: "Pipeline & outcomes", when: () => isAdminOrOwner(), render: (c) => renderMiScoreboard(c.all, c.mv) },
+  { key: "submitted", label: "Submitted & completed", when: () => true, render: () => {} },   // painted by renderMonthReport (#month-advisers)
+  { key: "activity", label: "Who's using it", when: () => showMoney(), render: () => renderAdoptionStrip() },
+];
+let repAdvView = null;
+let repAdvRendered = new Set();
+const repAdvStoreKey = () => userKey("nx_repadv");
+function renderAdvViews(pick) {
+  const panel = $("#report-scoreboard-panel");
+  if (!panel || !repCtx) return;
+  const views = REP_ADV_VIEWS.filter((v) => { try { return v.when(); } catch (_) { return false; } });
+  panel.classList.toggle("hidden", !views.length);
+  if (!views.length) return;
+  if (pick) { repAdvView = pick; lsSet(repAdvStoreKey(), pick); }
+  if (!views.some((v) => v.key === repAdvView)) {
+    const stored = lsGet(repAdvStoreKey());
+    repAdvView = views.some((v) => v.key === stored) ? stored : views[0].key;
+  }
+  const host = $("#report-adv-views");
+  if (host) host.innerHTML = views.length > 1 ? `<span class="rep-adv-views-lbl">By adviser</span>` + segmentChipsHtml({ id: "report-adv-seg", ariaLabel: "Which adviser table",
+    chips: views.map((v) => ({ key: v.key, label: v.label, id: `report-adv-view-${v.key}`, active: v.key === repAdvView })) }) : "";
+  panel.querySelectorAll("[data-adv-view]").forEach((el) => el.classList.toggle("hidden", el.dataset.advView !== repAdvView));
+  const v = views.find((x) => x.key === repAdvView);
+  if (v && !repAdvRendered.has(v.key)) { repAdvRendered.add(v.key); v.render(repCtx); }
+}
+window.repSetAdvView = function (key) { renderAdvViews(key); syncNumHeaders("#page-reports"); };
+document.addEventListener("click", (e) => {
+  const b = e.target && e.target.closest && e.target.closest("#report-adv-seg > .seg-btn[data-seg]");
+  if (b) window.repSetAdvView(b.dataset.seg);
+});
+
 
 /* R42 · F3 — LEDGER DRAWERS. Six Reports panels lead with a figure and then print a table of
    every row behind it. The figure is the answer; the table is the evidence, wanted on the day you
@@ -4313,12 +4252,11 @@ window.exportOwedCsv = function () {
   toast(`Exported ${m.n} case${m.n === 1 ? "" : "s"} · ${fmtM(m.grand)} outstanding`);
 };
 /* R7-1d — where the fee_aging_60 Watchtower alerts land. */
+/* R89 · B — Money owed lives on the Money tab now (drawn once); repRevealPanel opens that tab and
+   scrolls to the panel once loadMoneyPage has painted it. */
 window.gotoMoneyOwed = function () {
   if (!showMoney()) return toast("Money owed is Owner-only.");
-  nav("reports");
-  // R74 · A4c — through repRevealPanel, so arriving from Watchtower selects "Money & book" on the
-  // section strip rather than dropping the reader into a section the tabs say they are not in.
-  setTimeout(() => { window.repRevealPanel("#report-owed-panel"); }, 350);
+  window.repRevealPanel("#report-owed-panel");
 };
 
 /* --------------------------------------------------------------------------
@@ -4787,32 +4725,6 @@ const MONEY_EMPTY = (what) => `<div class="empty">${esc(what)}</div>`;
 /* R81 · A2 — the Money page's seq-guard token (the R78 idiom: newest load wins; a stale
    load returns silently after every await instead of painting over the newer one). */
 let moneyLoadSeq = 0;
-/* R81 · A2 — ONE read of the quote stamps for every case sitting at Quoted, so the stamps no
-   longer wait for the main cases read to hand over ids (that dependency alone cost a wave).
-   Filtering server-side on protection_status returns exactly the rows the cold-quotes panel
-   consults (`stamps[c.id]` is only ever read for quoted cases). The feature-detect is FOLDED
-   into the read itself: a database without the M-columns answers 42703 here just as it did on
-   protQuoteSupported()'s probe, and the same {} degrade applies — with PROT_QUOTE_SUPPORTED
-   stamped either way so the Protection page's own probe is answered for free. */
-async function moneyQuoteStampsAll() {
-  if (PROT_QUOTE_SUPPORTED === false) return {};
-  try {
-    /* R85 · E9 — off the session Book: `.eq("protection_status","quoted")` is a `===` filter over
-       the id-ordered book, cut at the cap. The folded feature-detect survives as the pick's key
-       presence: a book whose rows lack protection_quoted_at (dropped on the 42703 retry) stamps
-       PROT_QUOTE_SUPPORTED false, exactly as the read's 42703 did; rows that carry it stamp true. */
-    const snap = await bookLoad();
-    if (snap.error) return {};
-    const rows = rmBookCasesCapped(snap);
-    if (rows.length && !Object.prototype.hasOwnProperty.call(rows[0], "protection_quoted_at")) { PROT_QUOTE_SUPPORTED = false; return {}; }
-    PROT_QUOTE_SUPPORTED = true;
-    const data = rows.filter((c) => c.protection_status === "quoted")
-      .map((c) => rmBookPick(c, ["id", "protection_quoted_at", "protection_quoted_by"]));
-    const map = {};
-    (data || []).forEach((r) => { if (r && r.id) map[r.id] = r; });
-    return map;
-  } catch (_) { return {}; }
-}
 async function loadMoneyPage() {
   const seq = ++moneyLoadSeq;   // R81 · A2 — seq-guard
   const denied = $("#money-denied"), body = $("#money-body"), scope = $("#money-scope");
@@ -4823,13 +4735,14 @@ async function loadMoneyPage() {
     if (scope) scope.textContent = "";
     if (denied) {
       denied.classList.remove("hidden");
-      denied.textContent = "Monday money is the firm's whole book — fees banked, fees owed, book value and per-adviser figures — so it is shown to the Owner only. Your own numbers are on the Reports page, in the My numbers card.";
+      denied.textContent = "Monday money is the firm's whole book — fees banked and fees owed — so it is shown to the Owner only. Your own numbers are on the Reports page, in the My numbers card.";
     }
     /* R44 — belt and braces on top of #money-body's own .hidden: the two
        reconciliation panels are emptied AND hidden for a non-owner, and the
        cached rate card is dropped, so nothing about the firm's commission
        statements is left in the page for anybody who should not have it. */
     procRatesCache = null;
+    renderMoneyOwed([]);   // R89 · B — Money owed lives on this tab now; its own gate empties it
     await renderProcRatesPanel();
     await renderReconPanel();
     return;
@@ -4843,24 +4756,18 @@ async function loadMoneyPage() {
   if (scope) scope.innerHTML = `Last week = ${esc(fmtD(wk.start))} – ${esc(fmtD(wk.end))}. Start with this week's statement; the figures below match Reports. `
     + howFold({ id: "money-how", title: "How these are counted", html: `<p>Last week means Monday to Sunday, Europe/London. Every figure on this page is computed in this browser from the same rows the rest of the app (and Reports) reads — nothing here is a separate report. ${esc(ATTRIB_NOTE)}</p>` });
 
-  /* R81 · A2 — TWO WAVES, down from six. WAVE 1 fires every read that does not need the cases
-     rows: the three side tables, the M2 fee-date columns, the quoted-case stamps (see
-     moneyQuoteStampsAll above), the R44 rate card, the R44 statements list — plus the
-     property-address feature probe, which is the ONE answer the big cases select's column list
-     depends on (usually cached from an earlier page; joins wave 1 when it is not). WAVE 2 is
-     the cases read itself, fired together with renderReconPanel(pre) so the panel's per-line
-     counter read shares the wave. The R44 panels then render from data already in hand.
-     Merge order below is unchanged from R80 — only WHEN each read starts moved. */
-  const [propOnRaw, tasksRes, leadsRes, eventsRes, extra, stamps, ratesPre, stmtsPre] = await Promise.all([
+  /* R81 · A2 — TWO WAVES. WAVE 1 fires every read that does not need the cases rows: the M2
+     fee-date columns, the R44 rate card, the R44 statements list — plus the property-address
+     feature probe, which is the ONE answer the cases pick depends on. WAVE 2 is the cases read,
+     fired together with renderReconPanel(pre) so the panel's per-line counter read shares it.
+     R89 · B — the tasks, leads, stage-change and quote-stamp reads left with the four panels
+     that were their only readers (movement, leads by source, per adviser, quotes gone cold). */
+  const [propOnRaw, extra, ratesPre, stmtsPre] = await Promise.all([
     propAddrSupported(),
-    readAll(db.from("case_tasks").select("id,assigned_to,due_date,done_at").is("done_at", null).order("id"), { cap: REPORTS_ROW_CAP }),
-    readAll(db.from("leads").select("*").order("id"), { cap: REPORTS_ROW_CAP }),
-    readAll(db.from("case_events").select("case_id,event,created_at").eq("event", "stage_changed").order("created_at").order("id"), { cap: REPORTS_ROW_CAP }),
-    // The per-fee-type paid dates live behind M2 and are read in their own small
-    // query for exactly the reason loadCaseExtraColumns exists: an un-migrated
-    // database must cost the itemised dates, not the whole page.
+    // The per-fee-type paid dates live behind M2 and are read in their own small query for
+    // exactly the reason loadCaseExtraColumns exists: an un-migrated database must cost the
+    // itemised dates, not the whole page.
     loadCaseExtraColumns(),
-    moneyQuoteStampsAll(),
     loadProcRates(true),   // forces a fresh rate card exactly as the old `procRatesCache = null` + re-read did
     db.from("commission_statements")
       .select("id,ref,statement_label,statement_date,filename,gross_total,net_total,line_count,created_at")
@@ -4869,9 +4776,9 @@ async function loadMoneyPage() {
   if (seq !== moneyLoadSeq) return;   // R81 · A2 — a newer load owns the page
   const propOn = propOnRaw !== false;
   /* R85 · E10 — the cases read is the session Book: MONEY_CASE_COLS (+ property_address under the
-     M7 probe, as the select added it) picked off the id-ordered rows, cut at REPORTS_ROW_CAP, the
-     (first_name,last_name) embed rebuilt. Same `{ data, error }` envelope for the branch below;
-     the picks are copies, so the Object.assign of the M2 dates never touches a shared row. */
+     M7 probe) picked off the id-ordered rows, cut at REPORTS_ROW_CAP, the (first_name,last_name)
+     embed rebuilt. The picks are copies, so the Object.assign of the M2 dates never touches a
+     shared row. */
   const [casesRes] = await Promise.all([
     bookLoad().then((snap) => (snap.error
       ? { data: null, error: snap.error }
@@ -4879,7 +4786,7 @@ async function loadMoneyPage() {
     renderReconPanel(stmtsPre),   // R81 · A2 — statements already in hand; its lines read shares this wave
   ]);
   if (seq !== moneyLoadSeq) return;   // R81 · A2
-  if (casesRes.error) { renderLoadError("#money-owed", casesRes.error, loadMoneyPage); return; }
+  if (casesRes.error) { renderLoadError("#report-owed-table", casesRes.error, loadMoneyPage); return; }
   const all = casesRes.data || [];
   if (extra) all.forEach((c) => { const x = extra[c.id]; if (x) Object.assign(c, x); });
 
@@ -4898,158 +4805,24 @@ async function loadMoneyPage() {
       : `<div class="kpi"><div class="num">—</div><div class="lbl">No weekly target</div><div class="s">Set a monthly fee target in Settings and this becomes target × 12 ÷ 52.</div></div>`}
     <div class="kpi kpi-secondary"><div class="num" title="${esc(fmtM(prevBanked.total))}">${fmtM(prevBanked.total)}</div><div class="lbl">Week before (${fmtD(prevWkStart)} – ${fmtD(prevWkEnd)})</div><div class="s">(same basis — shown so last week can be read as a direction, not just a number)</div></div>`;
 
-  /* ---- owed, by age (the same model the Reports panel renders) ---- */
-  const owed = moneyOwedModel(all);
-  $("#money-owed-basis").innerHTML = `Unpaid fees on completed cases, aged from completion — the same rows as Reports. `
-    + howFold({ id: "money-owed-how", title: "How this is counted", html: `<p>The same rows and total as Money owed on Reports: completed cases with a fee that has no paid date, aged from the completion date. <span class="money-basis">${esc(BASIS_OWED)}</span></p>` });
-  $("#money-owed").innerHTML = owed.n ? `<table class="imp-table">
-    <tr><th>Age</th><th>Cases</th><th>Owed</th></tr>
-    ${/* R74 · A2 — was "—" for an empty band while the SAME band on Reports read "£0", and the
-          case count beside it read "0" either way. One convention: a real zero reads £0. */ ""}
-    ${owed.bucketList.map((b) => `<tr${b.key === "90+" && b.total ? ' class="owed-hot"' : ""}><td>${esc(OWED_BUCKET_LABEL[b.key])}</td><td class="num">${b.n}</td><td class="num">${zeroMoney(b.total)}</td></tr>`).join("")}
-    <tr class="owed-total-row"><td><strong>Total</strong></td><td class="num"><strong>${owed.n}</strong></td><td class="num"><strong>${fmtM(owed.grand)}</strong></td></tr>
-  </table>` : MONEY_EMPTY("Nothing outstanding — every completed case with a fee on it has a date against the money.");
+  /* ---- R7-1 · Money owed — drawn ONCE, here (R89 · B). The same model and panel Reports drew;
+     the "Owed to you, by age" table that restated it is gone. ---- */
+  renderMoneyOwed(all);
 
-  /* ---- top 5 rate-ends by value in the next 60 days ---- */
-  const today = localDateStr();
-  const in60 = localDateStr(new Date(new Date(today + "T12:00:00").getTime() + 60 * R7_DAY));
-  const soonRaw = all.filter((c) => c.stage === "completed" && c.rate_end_date && c.rate_end_date >= today && c.rate_end_date <= in60);
-  const soon = dedupeRateEndRows(soonRaw).sort((a, b) => Number(b.c.loan_amount || 0) - Number(a.c.loan_amount || 0));
-  const top5 = soon.slice(0, 5);
-  const soonValue = soon.reduce((s, e) => s + caseLastFee(e.c), 0);
-  $("#money-rateends-basis").innerHTML = `${soon.length} rate end${soon.length === 1 ? "" : "s"} between ${fmtD(today)} and ${fmtD(in60)}, biggest loan first — ${fmtM(soonValue)} of last-fee value. `
-    + howFold({ id: "money-rateends-how", title: "How this is counted", html: `<p>Completed cases whose rate ends in the next 60 days; value is the last fee earned on that mortgage, as a proxy, not a forecast. <span class="money-basis">(value at risk · loan amount · last fee as proxy${soonRaw.length !== soon.length ? ` · ${soonRaw.length} rows de-duplicated to ${soon.length}` : ""})</span></p>` });
-  $("#money-rateends").innerHTML = top5.length ? `<table class="imp-table">
-    <tr><th>Client</th><th>Lender</th><th>Rate ends</th><th>Loan</th><th>Last fee</th></tr>
-    ${top5.map((e) => {
-      const c = e.c;
-      return `<tr onclick="openCase('${c.id}')" style="cursor:pointer;">
-        <td><strong>${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ")) || "(no name)"}</strong> ${propChip(c, { cls: "row-prop" }) || ""}${e.dupes > 1 ? ` <span class="badge grey">${e.dupes} cases</span>` : ""}</td>
-        <td>${lenderIcon(c.lender)}${esc(c.lender || "")}</td>
-        <td>${fmtD(c.rate_end_date)}${c.rate_end_estimated ? " " + APPROX : ""} <span class="cs-muted">(${Math.max(0, Math.round((new Date(c.rate_end_date + "T12:00:00") - new Date(today + "T12:00:00")) / R7_DAY))}d)</span></td>
-        <td class="num">${c.loan_amount ? fmtM(c.loan_amount) : '<span class="cs-muted">—</span>'}</td>
-        <td class="num">${caseLastFee(c) ? fmtM(caseLastFee(c)) : '<span class="cs-muted">none recorded</span>'}</td>
-      </tr>`;
-    }).join("")}
-  </table>` : MONEY_EMPTY("No completed rate ends in the next 60 days.");
+  /* ---- R89 · B — link, don't copy: where the retired read-only panels live. ---- */
+  const links = $("#money-links");
+  if (links) links.innerHTML = `Also: <button type="button" class="linkish" id="money-link-rateend" onclick="repRevealPanel('#report-rateend-panel')">Rate-end book</button>`
+    + ` · <button type="button" class="linkish" id="money-link-advisers" onclick="repRevealPanel('#report-scoreboard-panel')">Adviser scoreboard</button>`
+    + ` · <button type="button" class="linkish" id="money-link-sources" onclick="repRevealPanel('#report-sources-panel')">Lead sources</button>`
+    + ` · <button type="button" class="linkish" id="money-link-quotes" onclick="nav('protection')">Protection quotes</button>`
+    + ` · <button type="button" class="linkish" id="money-link-pipeline" onclick="nav('pipeline')">Pipeline</button>.`;
 
-  /* ---- protection quotes gone cold ---- */
-  const quoted = all.filter((c) => c.protection_status === "quoted");
-  /* R81 · A2 — `stamps` arrived in wave 1 (moneyQuoteStampsAll — every quoted case's stamps,
-     the exact superset the old loadQuoteStamps(quoted ids) call produced for this page). */
-  const withAge = quoted.map((c) => {
-    const at = (stamps[c.id] || {}).protection_quoted_at || null;
-    return { c, at, days: at ? daysSince(at) : null };
-  });
-  const cold = withAge.filter((x) => x.days != null && x.days > QUOTE_AGE_RED).sort((a, b) => b.days - a.days);
-  const undatedQuotes = withAge.filter((x) => x.days == null);
-  $("#money-cold-basis").innerHTML = `Protection quotes more than ${QUOTE_AGE_RED} days old — ${quoted.length} quoted in total${undatedQuotes.length ? `, ${undatedQuotes.length} undated` : ""}. <span class="money-basis">(status quoted · aged from the date it was quoted)</span>`;
-  $("#money-cold").innerHTML = cold.length ? cold.slice(0, 10).map((x) => `
-    <div class="row-item">
-      <div class="row-main">
-        <div class="t" onclick="openCase('${x.c.id}')">${esc([x.c.clients?.first_name, x.c.clients?.last_name].filter(Boolean).join(" ")) || "(no name)"} ${propChip(x.c, { cls: "row-prop" }) || ""}</div>
-        <div class="s">Quoted ${fmtD(x.at)} · ${lenderIcon(x.c.lender)}${esc(x.c.lender || "no lender")}</div>
-      </div>
-      ${quoteAgeBadge(x.at)}
-    </div>`).join("") + (cold.length > 10 ? `<div class="empty">…and ${cold.length - 10} more on the Protection page.</div>` : "")
-    : MONEY_EMPTY(undatedQuotes.length
-        ? `No quote is more than ${QUOTE_AGE_RED} days old. ${undatedQuotes.length} quoted case${undatedQuotes.length === 1 ? " carries" : "s carry"} no quote date, so ${undatedQuotes.length === 1 ? "it is" : "they are"} not counted here.`
-        : `No quote is more than ${QUOTE_AGE_RED} days old.`);
-
-  /* ---- movement: what moved last week vs what is stuck ---- */
-  const movedIds = new Set();
-  (eventsRes.data || []).forEach((e) => {
-    if (!e || !e.case_id || !e.created_at) return;
-    const d = localDateStr(e.created_at);
-    if (d >= wk.start && d <= wk.end) movedIds.add(e.case_id);
-  });
-  const ACTIVE_STAGES = ["enquiry", "fact_find", "decision_in_principle", "application", "offer", "exchange"];
-  const activeCases = all.filter((c) => ACTIVE_STAGES.includes(c.stage));
-  const entryMap = {};
-  (eventsRes.data || []).forEach((e) => {
-    if (!e || !e.case_id || !e.created_at) return;
-    if (!entryMap[e.case_id] || e.created_at > entryMap[e.case_id]) entryMap[e.case_id] = e.created_at;
-  });
-  const stuck = activeCases.filter((c) => {
-    const d = daysSince(entryMap[c.id] || c.created_at);
-    return d != null && d > 30;
-  });
-  const movedActive = activeCases.filter((c) => movedIds.has(c.id));
-  $("#money-movement-basis").innerHTML = `<strong>Moved</strong>: a stage change last week. <strong>Stuck</strong>: no move for 30+ days. `
-    + howFold({ id: "money-movement-how", title: "How this is counted", html: `<p>Moved: live cases with a recorded stage change last week. Stuck: live cases whose stage has not changed for 30 days or more. A case can be both — moved last week and still 30+ days in its stage. <span class="money-basis">(recorded stage changes · live stages only)</span></p>` });
-  $("#money-movement").innerHTML = `<table class="imp-table">
-    <tr><th>&nbsp;</th><th>Cases</th><th>Loan value</th></tr>
-    <tr><td>Moved last week</td><td class="num"><strong id="money-moved-n">${movedActive.length}</strong></td><td class="num">${fmtM(movedActive.reduce((s, c) => s + Number(c.loan_amount || 0), 0))}</td></tr>
-    <tr${stuck.length ? ' class="owed-hot"' : ""}><td>Stuck more than 30 days</td><td class="num"><strong id="money-stuck-n">${stuck.length}</strong></td><td class="num">${fmtM(stuck.reduce((s, c) => s + Number(c.loan_amount || 0), 0))}</td></tr>
-    <tr><td class="cs-muted">Live cases in total</td><td class="cs-muted">${activeCases.length}</td><td class="cs-muted">${fmtM(activeCases.reduce((s, c) => s + Number(c.loan_amount || 0), 0))}</td></tr>
-  </table>`;
-
-  /* ---- new leads last week, by source ---- */
-  const leads = leadsRes.error ? [] : (leadsRes.data || []);
-  const wkLeads = leads.filter((l) => {
-    const d = l && l.created_at ? localDateStr(l.created_at) : null;
-    return d && d >= wk.start && d <= wk.end;
-  });
-  const leadSourceOf = (l) => String((l && (l.source || l.lead_source || l.enquiry_type)) || "").trim() || "(not recorded)";
-  const bySource = new Map();
-  wkLeads.forEach((l) => { const k = leadSourceOf(l); bySource.set(k, (bySource.get(k) || 0) + 1); });
-  $("#money-leads-basis").innerHTML = `Website enquiries that arrived last week, by the enquiry type the form recorded. <span class="money-basis">(enquiries · by arrival date · last week)</span>`;
-  $("#money-leads").innerHTML = wkLeads.length ? `<table class="imp-table">
-    <tr><th>Source</th><th>Leads</th><th>Accepted</th></tr>
-    ${[...bySource.entries()].sort((a, b) => b[1] - a[1]).map(([k, n]) => {
-      const acc = wkLeads.filter((l) => leadSourceOf(l) === k && l.status === "converted").length;
-      return `<tr><td>${esc(k)}</td><td>${n}</td><td>${acc}</td></tr>`;
-    }).join("")}
-    <tr class="owed-total-row"><td><strong>Total</strong></td><td><strong>${wkLeads.length}</strong></td><td><strong>${wkLeads.filter((l) => l.status === "converted").length}</strong></td></tr>
-  </table>` : MONEY_EMPTY(leadsRes.error ? "Leads could not be read — the figure is missing, not zero." : "No website enquiries arrived last week.");
-
-  /* ---- per-adviser strip ---- */
-  const tasks = tasksRes.error ? [] : (tasksRes.data || []);
-  const yr = String(new Date(localDateStr()).getFullYear());
-  const advRows = (TEAM.length ? TEAM : PROFILES).map((p) => {
-    const mine = all.filter((c) => c.assigned_to === p.id);
-    const doneYr = mine.filter((c) => c.completed_at && localDateStr(c.completed_at).slice(0, 4) === yr);
-    const taken = doneYr.filter((c) => c.protection_status === "policy_taken").length;
-    const rets = mine.filter((c) => c.retention_source_case_id);
-    const rWon = rets.filter((c) => c.stage === "completed").length;
-    const rLost = rets.filter((c) => c.stage === "not_proceeding").length;
-    const unpaidProc = mine.filter((c) => c.stage === "completed")
-      .reduce((s, c) => s + Number((feeOwedLines(c).find((l) => l.key === "proc") || {}).amount || 0), 0);
-    const overdue = tasks.filter((t) => t.assigned_to === p.id && t.due_date && t.due_date < today).length;
-    return { id: p.id, name: profileName(p.id) || staffName(p.id), nDone: doneYr.length, taken,
-             attach: doneYr.length ? Math.round((taken / doneYr.length) * 100) : null,
-             rWon, rLost, conv: rWon + rLost ? Math.round((rWon / (rWon + rLost)) * 100) : null,
-             unpaidProc, overdue };
-  }).filter((r) => r.nDone || r.rWon || r.rLost || r.unpaidProc || r.overdue);
-  $("#money-advisers-basis").innerHTML = `Per adviser: attach rate, retention conversion, unpaid proc, overdue tasks. `
-    + howFold({ id: "money-advisers-how", title: "How these are counted", html: `<p><strong>Attach rate</strong> is policies taken ÷ completions, over ${yr} completions only — a whole-year sample, because a week of completions is too few to rank anybody on. <strong>Retention conversion</strong> is won ÷ (won + lost) over that adviser's retention cases, all time. <strong>Unpaid proc</strong> is the procuration fee owed on their completed cases. <strong>Overdue</strong> is open tasks due before today. ${esc(ATTRIB_NOTE)}</p>` });
-  /* R87 · owner-admin (05 #11) — the administrator's "0% (0/1) · none decided · £0 · —" row, and any
-     row with nothing decided, nothing unpaid and nothing overdue, sit behind the shared Show all. */
-  const moneyAdvQuiet = (r) => { const p = TEAM.find((x) => x.id === r.id); return (p && p.role === "admin") || (!r.nDone && !r.rWon && !r.rLost && !r.unpaidProc && !r.overdue); };
-  const advQuiet = advRowsAllMoney(advRows, moneyAdvQuiet);
-  $("#money-advisers").innerHTML = advQuiet.rows.length ? `<div style="overflow-x:auto;"><table class="imp-table" id="money-adviser-table">
-    ${/* R74 · A2 (panel D#4) — the period goes IN the header. The same adviser read 0% on Reports
-          and 43% here, because that one is the selected MONTH's completions and this one is the
-          whole calendar year — true of both, said by neither. "Attach (2026)" against Reports'
-          "Attach (Aug)" makes the difference visible without opening a tooltip. */ ""}
-    <tr><th>Adviser</th><th title="Completed cases in ${yr} that ended with a protection policy — the whole calendar year, because a week of completions is too few to rank anybody on. The Reports scoreboard measures the same thing over the selected MONTH only, which is why the two pages can differ.">Attach (${yr})</th><th title="Retention cases won as a share of those decided.">Retention conversion</th><th>Unpaid proc</th><th>Overdue tasks</th></tr>
-    ${advQuiet.rows.map((r) => `<tr data-adv="${esc(r.id)}">
-      <td><strong>${esc(r.name)}</strong></td>
-      <td>${r.attach == null ? '<span class="cs-muted">no completions</span>' : `${r.attach}% <span class="cs-muted">(${r.taken}/${r.nDone})</span>`}</td>
-      <td>${r.conv == null ? '<span class="cs-muted">none decided</span>' : `${r.conv}% <span class="cs-muted">(${r.rWon}/${r.rWon + r.rLost})</span>`}</td>
-      <td class="num">${zeroMoney(r.unpaidProc)}</td>   ${/* R74 · A2 — nothing unpaid is £0, not a blank */ ""}
-      ${/* R73 · B2 — one colour, not a threshold. "Amber under six, red at six" was a
-           severity rule stated nowhere on the page, and it made Luke's 5 and Wayne's 6
-           look like different KINDS of problem. */ ""}
-      <td class="num">${r.overdue ? `<span class="badge amber">${r.overdue}</span>` : '<span class="cs-muted">—</span>'}</td>
-    </tr>`).join("")}
-  </table></div>${advQuiet.line}` : MONEY_EMPTY("No adviser has completions, retention cases, unpaid proc fees or overdue tasks.");
-
-  /* R44 — the two reconciliation panels. R81 · A2: both already READ in waves 1–2 above
-     (loadProcRates(true) refreshed the rate card; renderReconPanel(stmtsPre) painted beside
-     the cases read), so what remains here is the rate-card panel's render from data in hand —
-     zero further network. Each still carries its own owner gate. */
+  /* R44 — the rate-card panel renders from data already in hand (R81 · A2): zero further network.
+     It still carries its own owner gate. */
   await renderProcRatesPanel(ratesPre);
+  if (seq !== moneyLoadSeq) return;
+  wrapReportTables();                   // #page-money sits inside #page-reports now
+  buildReportLedgerCounts();            // R89 · B — the Money owed drawer lives here now
   syncNumHeaders("#page-money");        // R73 · B4
 }
 
@@ -5063,7 +4836,6 @@ async function loadMoneyPage() {
   on("#owed-group-adviser", () => setOwedGroup("adviser"));
   on("#owed-csv-btn", () => exportOwedCsv());
   on("#money-refresh", () => loadMoneyPage());
-  on("#money-owed-open", () => gotoMoneyOwed());
 })();
 
 /* ==========================================================================
@@ -6398,4 +6170,4 @@ async function r44ConfirmTicked() {
 
 /* R81 · A3 — deploy handshake stamp. Every round that edits ANY of index.html / core.js /
    reports-money.js / app.js bumps the tag IN ALL FOUR PLACES (see nxCheckBuildTags in app.js). */
-window.__nxTag_reportsmoney = "r88";   // R88
+window.__nxTag_reportsmoney = "r89";   // R89

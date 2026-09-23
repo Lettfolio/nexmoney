@@ -433,66 +433,49 @@ const noErr = (page, label) => ok(`no console errors (${label})`, !page.__err, J
          chevron). Reaching "every money chip" therefore means walking the section pills, which is
          what a reader does. The assertion below is unchanged in what it demands: the same complete
          set must still be reachable, and no chip may be stranded. */
+      /* R89 · B — CONTRACT CHANGE. The sections are TABS; the level-2 strip survives as an opt-in
+         per-tab jump strip ("Panels ▾") inside the tab on screen — no longer sticky, no scroll-spy
+         (there is one tab's worth of page to spy on). What R11-C protected — every panel the owner can
+         see is one chip away, ids rep-nav-*, the money gate — is walked over the tabs instead. Money
+         owed left Reports for the Money tab (drawn once), so "owed" is no longer a Reports chip. */
       const ownerNav = await page.evaluate(async () => {
-        const bar = document.querySelector("#rep-nav");
+        repShowChips(true);
         const chips = [];
-        const pills = [...document.querySelectorAll("#reports-jump-chips [data-reports-jump]")];
-        for (const p of pills) {
-          p.click();
-          await new Promise((r) => setTimeout(r, 700));
+        let hidden = true, sticky = null;
+        for (const t of pageTabsAllowed("reports").filter((x) => x.key !== "money")) {
+          document.getElementById(`reports-tabs-${t.key}`).click();
+          await new Promise((r) => setTimeout(r, 1200));
+          const bar = document.querySelector("#rep-nav");
+          if (bar && !bar.hidden) { hidden = false; sticky = getComputedStyle(bar).position; }
           [...document.querySelectorAll("#rep-nav-chips [data-rep-jump]")]
             .forEach((b) => { if (!chips.some((c) => c.key === b.dataset.repJump)) chips.push({ id: b.id, key: b.dataset.repJump }); });
         }
-        return {
-          hidden: !bar || bar.hidden,
-          sticky: bar ? getComputedStyle(bar).position : null,
-          chips,
-        };
+        return { hidden, sticky, chips };
       });
-      ok("R11-C · owner: the jump bar is visible", !ownerNav.hidden, ownerNav);
-      ok("R11-C · owner: it is position:sticky", ownerNav.sticky === "sticky", ownerNav.sticky);
+      ok("R11-C · owner: the jump strip is offered", !ownerNav.hidden, ownerNav);
+      ok("R11-C · owner: it is NOT sticky any more (R89 · B: per-tab strip, no spy)", ownerNav.sticky === "static", ownerNav.sticky);
       ok("R11-C · owner: every chip id is rep-nav-*", ownerNav.chips.every((c) => c.id === `rep-nav-${c.key}`), ownerNav.chips);
       const ownerKeys = ownerNav.chips.map((c) => c.key);
-      const MONEY_KEYS = ["owed", "rateend", "leadresp", "advocacy", "conveyancer", "forecast", "ltv", "advisers", "losses"];
+      const MONEY_KEYS = ["rateend", "leadresp", "advocacy", "conveyancer", "forecast", "ltv", "advisers", "losses"];   // R89 · B: "owed" left for the Money tab
       ok("R11-C · owner: sees every money chip", MONEY_KEYS.every((k) => ownerKeys.includes(k)), ownerKeys);
       ok("R11-C · owner: does NOT see the adviser-only ‘mine’ chip", !ownerKeys.includes("mine"), ownerKeys);
 
-      /* clicking a deep chip scrolls, and scroll-margin keeps the heading clear of the sticky bar */
+      /* clicking a chip scrolls to its panel on the tab it lives on */
       const jump = await page.evaluate(async () => {
-        // R74: pick the section that holds Client LTV first — that is the control the reader uses.
-        document.getElementById("reports-nav-money").click();
-        await new Promise((r) => setTimeout(r, 400));
+        document.getElementById("reports-tabs-book").click();
+        await new Promise((r) => setTimeout(r, 800));
+        window.scrollTo(0, 0);
         document.getElementById("rep-nav-ltv").click();
         await new Promise((r) => setTimeout(r, 1400));
-        const bar = document.querySelector("#rep-nav").getBoundingClientRect();
         const h = document.querySelector("#report-ltv-panel h3").getBoundingClientRect();
-        return { barBottom: bar.bottom, headTop: h.top, y: window.scrollY,
+        return { headTop: h.top, vh: window.innerHeight, y: window.scrollY,
                  active: [...document.querySelectorAll("#rep-nav-chips .seg-btn.active")].map((b) => b.id) };
       });
-      ok("R11-C · clicking a chip actually scrolls the page", jump.y > 500, jump.y);
-      ok("R11-C · the heading lands clear of the sticky bar (scroll-margin-top works)", jump.headTop >= jump.barBottom, jump);
+      ok("R11-C · clicking a chip actually scrolls the page", jump.y > 300, jump.y);
+      ok("R11-C · the heading lands inside the viewport", jump.headTop >= 0 && jump.headTop < jump.vh, jump);
       eq("R11-C · the clicked chip becomes the sole active one", jump.active, ["rep-nav-ltv"]);
-
-      /* R74: scrolling now re-picks the SECTION as well as the chip, so the top of the page lands
-         back in "This month" and lights its first chip. Same behaviour, one level deeper. */
-      const topActive = await page.evaluate(async () => {
-        window.scrollTo(0, 0);
-        await new Promise((r) => setTimeout(r, 900));
-        return {
-          chips: [...document.querySelectorAll("#rep-nav-chips .seg-btn.active")].map((b) => b.id),
-          section: (document.querySelector("#reports-jump-chips .seg-btn.active") || {}).id,
-        };
-      });
-      eq("R11-C · scrolling back to the top re-highlights the first chip", topActive.chips, ["rep-nav-month"]);
-      eq("R11-C · …and the section pill above it follows", topActive.section, "reports-nav-month");
-
-      const midActive = await page.evaluate(async () => {
-        const el = document.querySelector("#report-advocacy-panel");
-        window.scrollTo(0, el.getBoundingClientRect().top + window.scrollY - 40);
-        await new Promise((r) => setTimeout(r, 900));   // R74: the section re-scope repaints the strip
-        return [...document.querySelectorAll("#rep-nav-chips .seg-btn.active")].map((b) => b.id);
-      });
-      eq("R11-C · scrolling to a section highlights that section's own chip", midActive, ["rep-nav-advocacy"]);
+      const stay = await page.evaluate(async () => { window.scrollTo(0, 0); await new Promise((r) => setTimeout(r, 600)); return currentPageTab("reports"); });
+      eq("R11-C · scrolling never changes the tab (the scroll-spy is gone)", stay, "book");
       noErr(page, "owner reports nav");
       await page.close();
     }
@@ -505,40 +488,40 @@ const noErr = (page, label) => ok(`no console errors (${label})`, !page.__err, J
          level-1 section now, so "the adviser's complete chip list" is collected by pressing each
          section pill in turn. The money-leak assertions underneath are untouched and still have to
          pass over the WHOLE collected set, which is the point of collecting it this way. */
+      /* R89 · B — walked over the adviser's TABS (was: section pills). The adviser now gets the adviser
+         table's "Submitted & completed" view (counts only — the month breakdown they always had), so
+         #report-scoreboard-panel and its "advisers" chip are no longer money for them; the money view
+         inside it (#report-advisers) stays empty. A one-panel tab offers no strip (mine, referrals). */
       const advNav = await page.evaluate(async () => {
-        const MONEY_PANELS = ["#report-owed-panel", "#report-rateend-panel", "#report-leadresp-panel", "#report-advocacy-panel", "#report-conveyancer-panel", "#report-forecast-panel", "#report-ltv-panel", "#report-scoreboard-panel", "#report-losses-panel"];
+        const MONEY_PANELS = ["#report-owed-panel", "#report-rateend-panel", "#report-leadresp-panel", "#report-advocacy-panel", "#report-conveyancer-panel", "#report-forecast-panel", "#report-ltv-panel", "#report-losses-panel", "#rep-adv-view-month", "#rep-adv-view-activity"];
+        repShowChips(true);
         const chips = [];
-        const pills = [...document.querySelectorAll("#reports-jump-chips [data-reports-jump]")];
-        for (const p of (pills.length ? pills : [null])) {
-          if (p) { p.click(); await new Promise((r) => setTimeout(r, 700)); }
-          [...document.querySelectorAll("#rep-nav-chips [data-rep-jump]")]
-            .forEach((b) => { if (chips.indexOf(b.dataset.repJump) === -1) chips.push(b.dataset.repJump); });
+        let built = false;
+        const wired = [];
+        for (const t of pageTabsAllowed("reports")) {
+          document.getElementById(`reports-tabs-${t.key}`).click();
+          await new Promise((r) => setTimeout(r, 1200));
+          if (!document.querySelector("#rep-nav").hidden) built = true;
+          [...document.querySelectorAll("#rep-nav-chips [data-rep-jump]")].forEach((b) => {
+            if (chips.indexOf(b.dataset.repJump) === -1) chips.push(b.dataset.repJump);
+            const sel = (REPORT_JUMP_SECTIONS.find((x) => x[0] === b.dataset.repJump) || [])[2];
+            const el = sel && document.querySelector(sel);
+            wired.push(!!el && el.offsetParent !== null);
+          });
         }
         return {
-          chips,
+          chips, wired: wired.every(Boolean),
           leaked: MONEY_PANELS.filter((s) => { const el = document.querySelector(s); return el && !el.classList.contains("hidden"); }),
-          barHidden: (document.querySelector("#rep-nav") || {}).hidden,
+          moneyTable: (document.querySelector("#report-advisers") || {}).innerHTML || "",
+          barHidden: !built,
         };
       });
-      ok("R11-C · adviser: the bar is built", !advNav.barHidden);
-      const MONEY_KEYS = ["owed", "rateend", "leadresp", "advocacy", "conveyancer", "forecast", "ltv", "advisers", "losses"];
-      /* R66 · M6b — "referralsout" joins the adviser's chip list. It is deliberately NOT a money
-         chip and does not belong in MONEY_KEYS below: the Referrals-out panel carries counts only
-         (no fee, no commission, no £ anywhere on it), so every staff role sees it — which is why
-         the money-leak assertions underneath are untouched and still have to pass. */
-      eq("R11-C · adviser: exactly mine/month/funnel/sources/live/months/introducers/referralsout, no money", advNav.chips, ["mine", "month", "funnel", "sources", "live", "months", "introducers", "referralsout"]);
-      ok("R11-C · adviser: no money panel is visible in the DOM either", advNav.leaked.length === 0, advNav.leaked);
+      ok("R11-C · adviser: the strip is built", !advNav.barHidden);
+      const MONEY_KEYS = ["owed", "rateend", "leadresp", "advocacy", "conveyancer", "forecast", "ltv", "losses"];
+      eq("R11-C · adviser: exactly month/advisers/mi/sources/live/months/introducers, no money", advNav.chips, ["month", "advisers", "mi", "sources", "live", "months", "introducers"]);
+      ok("R11-C · adviser: no money panel is visible in the DOM either", advNav.leaked.length === 0 && advNav.moneyTable === "", advNav.leaked);
       ok("R11-C · adviser: no money chip present", !advNav.chips.some((k) => MONEY_KEYS.includes(k)), advNav.chips);
-      const wired = await page.evaluate(() => {
-        // R66 · M6b — the map has to know the new chip's panel or the "genuinely visible" walk
-        // below reads `undefined` for it and fails on a chip that is in fact perfectly wired.
-        const SEL = { mine: "#report-mine-panel", month: "#report-month-panel", funnel: "#report-funnel-panel", sources: "#report-sources-panel", live: "#report-live-note", months: "#report-months-panel", introducers: "#report-introducers-panel", referralsout: "#report-referrals-panel" };
-        return [...document.querySelectorAll("#rep-nav-chips [data-rep-jump]")].every((b) => {
-          const el = document.querySelector(SEL[b.dataset.repJump]);
-          return el && el.offsetParent !== null;
-        });
-      });
-      ok("R11-C · every adviser chip maps to a genuinely visible panel", wired);
+      ok("R11-C · every adviser chip maps to a genuinely visible panel", advNav.wired);
       noErr(page, "adviser reports nav");
       await page.close();
     }

@@ -129,19 +129,24 @@ async function ensureServer() {
   console.log("\n— §C · Settings: banded section summaries");
   await page.evaluate(() => { location.hash = "#settings"; });
   await page.waitForTimeout(1200);
+  /* R89 · C: was the two <details class="settings-details"> folds in #settings-form (General / Advanced) — the
+     form's sections are TABS now (Firm & rules / Automations / Integrations are its three [data-tabpanel]
+     panels), so C1 counts those; the band (C2) is read on the fold that still uses it, Diagnostics
+     (#diag-details, Settings › Data). */
   const c = await page.evaluate(() => {
-    const secs = [...document.querySelectorAll("#settings-form details.settings-details")];
+    const panels = [...document.querySelectorAll("#settings-form > [data-tabpanel]")].map((p) => p.dataset.tabpanel);
+    const secs = [...document.querySelectorAll("#page-settings details.settings-details")];
     return {
-      n: secs.length,
+      n: panels.length, panels,
       summaries: secs.map((d) => d.querySelector("summary")?.textContent.trim().slice(0, 30)),
-      styled: secs.every((d) => {
+      styled: secs.length > 0 && secs.every((d) => {
         const s = getComputedStyle(d.querySelector("summary"));
         return s.textTransform === "uppercase" && s.borderLeftWidth !== "0px";
       }),
     };
   });
-  ok("C1 · both settings sections render", c.n >= 2, JSON.stringify(c.summaries));
-  ok("C2 · the summaries wear the contrast band (uppercase + left border)", c.styled, JSON.stringify(c));
+  ok("C1 · the settings form renders its three tab sections", c.n === 3, JSON.stringify(c.panels));
+  ok("C2 · the remaining section fold wears the contrast band (uppercase + left border)", c.styled, JSON.stringify(c));
 
   const realErrors = errors.filter((e) => !/ERR_TUNNEL|Failed to fetch|sheetjs/i.test(e));
   ok("no page errors", realErrors.length === 0, realErrors.join(" | ").slice(0, 300));

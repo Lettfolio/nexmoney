@@ -85,6 +85,9 @@ const goto = async (page, pageName, ms) => {
   await page.evaluate((p) => window.nav(p), pageName);
   await wait(page, ms == null ? 900 : ms);
 };
+/* R89 · B — Reports is tabbed: Pipeline MI is a tab and the MI scoreboard is the "Pipeline & outcomes"
+   view of the adviser table on This month. Switch before clicking what lives there. */
+const repTab = async (pg, k, v) => { await pg.evaluate(([k, v]) => { activatePageTab("reports", k); if (v) repSetAdvView(v); }, [k, v]); await pg.waitForTimeout(600); };
 const closeAnyModal = async (page) => { await page.evaluate(() => { if (window.closeModal) window.closeModal(); }); await wait(page, 200); };
 
 /* ---------------------------------------------------------------------------
@@ -299,20 +302,25 @@ const sortedIds = (a) => a.slice().sort();
 
       const pageOwner = await newPage(browser, "p4");
       const errBeforeOwner = (pageOwner.__err || []).length;
-      await goto(pageOwner, "reports", 1200);
+      await goto(pageOwner, "reports/mi", 1200);   // R89 · B: was "reports"
+      await repTab(pageOwner, "month", "pipeline"); await repTab(pageOwner, "mi");   // R89 · B: paint the scoreboard view too
       ok("A · owner: #report-mi-section is NOT hidden", !(await pageOwner.$eval("#report-mi-section", (e) => e.classList.contains("hidden"))));
       const ownerBtns = await pageOwner.evaluate((ids) => ids.map((s) => {
         const el = document.querySelector(s);
-        return el ? { tag: el.tagName, wired: typeof el.onclick === "function", insideSection: !!el.closest("#report-mi-section") } : null;
+        /* R89 · B: was insideSection (#report-mi-section) for all four. The funnel CSV moved with the ONE
+           funnel panel (outside the section, so an adviser keeps the cohort view) and the scoreboard CSV
+           with the MI scoreboard (a view of the adviser table); each still sits in the panel it exports. */
+        const home = { "#report-mi-csv-funnel": "#report-mi-funnel-panel", "#report-mi-csv-velocity": "#report-mi-section", "#report-mi-csv-revenue": "#report-mi-section", "#report-mi-csv-scoreboard": "#report-mi-scoreboard-panel" }[s];
+        return el ? { tag: el.tagName, wired: typeof el.onclick === "function", insideSection: !!el.closest(home) } : null;
       }), CSV_IDS);
-      eq("A · owner: all four CSV buttons exist, are <button>s, are wired, and live inside #report-mi-section",
+      eq("A · owner: all four CSV buttons exist, are <button>s, are wired, and live inside the panel they export",
         ownerBtns, CSV_IDS.map(() => ({ tag: "BUTTON", wired: true, insideSection: true })));
       ok("A · owner: no console errors", (pageOwner.__err || []).length === errBeforeOwner, JSON.stringify(pageOwner.__err));
       await pageOwner.close();
 
       const pageAdv = await newPage(browser, "p2");
       const errBeforeAdv = (pageAdv.__err || []).length;
-      await goto(pageAdv, "reports", 1200);
+      await goto(pageAdv, "reports/mi", 1200);   // R89 · B: was "reports"
       ok("A · adviser: #report-mi-section IS hidden", await pageAdv.$eval("#report-mi-section", (e) => e.classList.contains("hidden")));
       const advBtns = await pageAdv.evaluate((ids) => ids.map((s) => { const el = document.querySelector(s); return el ? typeof el.onclick === "function" : null; }), CSV_IDS);
       eq("A · adviser: none of the four CSV buttons got wired (renderPipelineMI returned before reaching them)", advBtns, [false, false, false, false]);
@@ -384,7 +392,7 @@ const sortedIds = (a) => a.slice().sort();
       ok("B · fixture sanity: every adviser's own term < 5 (per-row weak win-rate branch)", exp.boardRows.every((a) => a.term < 5), JSON.stringify(exp.boardRows));
       eq("B · fixture sanity: scoreboard sorted p2 > p3 > Unassigned by feesPeriod (500/300/100)", exp.boardRows.map((a) => a.feesPeriod), [500, 300, 100]);
 
-      await goto(page, "reports", 1500);
+      await goto(page, "reports/mi", 1500);   // R89 · B: was "reports" — Pipeline MI is a tab
 
       /* ---------------------------------------------------------------------
          B1 · Funnel + conversion CSV (#report-mi-csv-funnel)
@@ -467,6 +475,7 @@ const sortedIds = (a) => a.slice().sort();
          B4 · Scoreboard CSV (#report-mi-csv-scoreboard)
          ------------------------------------------------------------------- */
       await resetCsvCapture(page);
+      await repTab(page, "month", "pipeline");   // R89 · B
       await page.click("#report-mi-csv-scoreboard");
       await wait(page, 300);
       ok("B4 · scoreboard CSV starts with a UTF-8 BOM (raw bytes EF BB BF)", await readCsvHasBom(page));
@@ -528,6 +537,7 @@ const sortedIds = (a) => a.slice().sort();
       };
 
       // D1 — funnel stage bar "enquiry" (2 live cases: p2 150, p3 50).
+      await repTab(page, "mi");   // R89 · B
       await page.click('#report-mi-funnel .mi-bar-row[data-mi-stage="enquiry"]');
       await wait(page, 500);
       ok("D1 · #mi-drilldown opened", await page.$eval("#modal-backdrop", (e) => !e.classList.contains("hidden")));
@@ -550,6 +560,7 @@ const sortedIds = (a) => a.slice().sort();
 
       // D3 — scoreboard adviser row for p2 (ALL of p2's cases: live + terminal, per the app's own
       //      filter `(assigned_to||"__unassigned")===key`, not just the live ones).
+      await repTab(page, "month", "pipeline");   // R89 · B — the MI scoreboard is a view on This month
       const p2Row = await page.$$eval("#report-mi-scoreboard .mi-adv-link[data-mi-adv]", (els) => els.map((e) => e.getAttribute("data-mi-adv")));
       ok("D3 · a scoreboard row for p2 exists", p2Row.includes("p2"), JSON.stringify(p2Row));
       await page.click('#report-mi-scoreboard .mi-adv-link[data-mi-adv="p2"]');
@@ -573,6 +584,7 @@ const sortedIds = (a) => a.slice().sort();
 
       // D5 — win-rate figure (terminal = completed + not_proceeding, ALL of them, not scoped to
       //      one adviser or one month).
+      await repTab(page, "mi");   // R89 · B
       await page.click("#report-mi-winrate-link");
       await wait(page, 500);
       const terminalExpected = rows.filter((r) => r.stage === "completed" || r.stage === "not_proceeding").map((r) => r.id);
@@ -679,7 +691,7 @@ const sortedIds = (a) => a.slice().sort();
       const evilCase = await seedCases(page, evilClientId, [{ stage: "enquiry", assigned_to: null, broker_fee: 42, proc_fee: 7, created_at: "2026-01-05T12:00:00.000Z", completed_at: null }]);
       const evilId = evilCase[0];
 
-      await goto(page, "reports", 1500);
+      await goto(page, "reports/mi", 1500);   // R89 · B: was "reports" — Pipeline MI is a tab
       await page.click('#report-mi-funnel .mi-bar-row[data-mi-stage="enquiry"]');
       await wait(page, 500);
       const hIds = await page.$$eval("#mi-drilldown table tr", (trs) => trs.slice(1).map((tr) => {

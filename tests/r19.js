@@ -253,7 +253,7 @@ function monthIso(t0, deltaMonths, day, hour = 12) {
 
       const pageOwner = await newPage(browser, "p4");
       const errBeforeOwner = (pageOwner.__err || []).length;
-      await goto(pageOwner, "reports", 1200);
+      await goto(pageOwner, "reports/mi", 1200)   /* R89 · B: was "reports" — Pipeline MI is a tab now, painted only when shown */;
       const ownerHidden = await pageOwner.evaluate(() => document.querySelector("#report-mi-section").classList.contains("hidden"));
       ok("A · owner (p4): #report-mi-section is NOT hidden", !ownerHidden);
       const ownerPanelsVisible = await pageOwner.evaluate(() => {
@@ -264,32 +264,38 @@ function monthIso(t0, deltaMonths, day, hour = 12) {
       /* R74: the level-2 chip strip is scoped to the SELECTED level-1 section (D#6 — it used to
          list all twenty panels at once). The MI chips live under the "Pipeline MI" pill, so the
          reader picks that section first. Same assertion, same four chips, one control earlier. */
+      /* R89 · B: the pills are tabs; the level-2 strip lists the panels of the tab on screen. The MI
+         scoreboard left this tab — it is the "Pipeline & outcomes" view of the one adviser table on
+         This month — so its chip is the scoreboard's ("advisers") there. Was: four MI chips. */
       const ownerChips = await pageOwner.evaluate(async () => {
-        const pill = document.getElementById("reports-nav-mi");
-        if (pill) { pill.click(); await new Promise((r) => setTimeout(r, 500)); }
-        return ["mi", "mivelocity", "mirevenue", "miboard"].map((k) => !!document.querySelector(`#rep-nav-${k}`));
+        repShowChips(true);
+        await new Promise((r) => setTimeout(r, 300));
+        return ["mi", "mivelocity", "mirevenue"].map((k) => !!document.querySelector(`#rep-nav-${k}`)).concat([!!document.querySelector("#report-scoreboard-panel #report-mi-scoreboard-panel")]);
       });
-      eq("A · owner: all four MI jump chips are present", ownerChips, [true, true, true, true]);
+      eq("A · owner: the three MI jump chips are present, and the MI scoreboard is a view of the adviser table", ownerChips, [true, true, true, true]);
       ok("A · owner: no console errors", (pageOwner.__err || []).length === errBeforeOwner, JSON.stringify(pageOwner.__err));
       await pageOwner.close();
 
       const pageAdv = await newPage(browser, "p2");
       const errBeforeAdv = (pageAdv.__err || []).length;
-      await goto(pageAdv, "reports", 1200);
+      await goto(pageAdv, "reports/mi", 1200)   /* R89 · B: was "reports" (the adviser's Pipeline MI tab: cohort funnel + lead sources) */;
       const advHidden = await pageAdv.evaluate(() => document.querySelector("#report-mi-section").classList.contains("hidden"));
       ok("A · adviser (p2): #report-mi-section IS hidden", advHidden);
       /* R74: an adviser has no MI section at all, so there is no pill to press — the chips must be
          absent whichever section is selected. Walk them all rather than trusting one. */
       const advChips = await pageAdv.evaluate(async () => {
         const found = { mi: false, mivelocity: false, mirevenue: false, miboard: false };
-        const pills = [...document.querySelectorAll("#reports-jump-chips [data-reports-jump]")];
-        for (const p of (pills.length ? pills : [null])) {
-          if (p) { p.click(); await new Promise((r) => setTimeout(r, 300)); }
+        /* R89 · B: walk every TAB this adviser is offered (was: every section pill) with the strip open. */
+        repShowChips(true);
+        for (const t of pageTabsAllowed("reports")) {
+          activatePageTab("reports", t.key); await new Promise((r) => setTimeout(r, 700));
           Object.keys(found).forEach((k) => { if (document.querySelector(`#rep-nav-${k}`)) found[k] = true; });
         }
         return ["mi", "mivelocity", "mirevenue", "miboard"].map((k) => found[k]);
       });
-      eq("A · adviser: none of the four MI jump chips are present", advChips, [false, false, false, false]);
+      /* R89 · B: the "mi" chip is the ONE funnel panel now, which an adviser keeps (its month-cohort view,
+         the funnel they always had) — so it is present; the three MI-only chips stay absent. Was all four false. */
+      eq("A · adviser: only the funnel chip; none of the MI-only chips", advChips, [true, false, false, false]);
       ok("A · adviser: no console errors", (pageAdv.__err || []).length === errBeforeAdv, JSON.stringify(pageAdv.__err));
       await pageAdv.close();
     }
@@ -316,7 +322,7 @@ function monthIso(t0, deltaMonths, day, hour = 12) {
         { stage: "completed", assigned_to: "p2", broker_fee: 0, proc_fee: 0 },
         { stage: "not_proceeding", assigned_to: "p2", broker_fee: 0, proc_fee: 0 },
       ]);
-      await goto(page, "reports", 1500);
+      await goto(page, "reports/mi", 1500)   /* R89 · B: was "reports" — Pipeline MI is a tab now */;
 
       const funnelTxt = await page.$eval("#report-mi-funnel", (e) => e.textContent.trim());
       eq("B · funnel: empty-state message when there are no live cases", funnelTxt, "No live cases in the pipeline.");
@@ -408,7 +414,7 @@ function monthIso(t0, deltaMonths, day, hour = 12) {
       await seedMiRows(page, cid, rows);
       const exp = computeExpectedMI(rows, mv, monthKeys);
 
-      await goto(page, "reports", 1500);
+      await goto(page, "reports/mi", 1500)   /* R89 · B: was "reports" — Pipeline MI is a tab now */;
 
       // ---- Panel 1: funnel ----
       // R20 — each stage row is now a real <button class="mi-bar-row"> (was a plain <div>), so it
@@ -509,6 +515,9 @@ function monthIso(t0, deltaMonths, day, hour = 12) {
          "Show all" on arrival. The full set — the contract this block pins — is what Show all shows, so press it
          first (when it is offered; a fixture with no quiet rows has no button). Every row's arithmetic and the
          fees-desc sort are unchanged. */
+      // R89 · B: the MI scoreboard is the "Pipeline & outcomes" view of the adviser table on This month.
+      await page.evaluate(() => { activatePageTab("reports", "month"); repSetAdvView("pipeline"); });
+      await wait(page, 800);
       await page.evaluate(() => { const b = document.getElementById("report-mi-scoreboard-showall"); if (b && /Show all/.test(b.textContent)) b.click(); });
       await wait(page, 500);
       const boardRowsTxt = await page.$$eval("#report-mi-scoreboard table tr", (trs) => trs.slice(1).map((tr) => [...tr.querySelectorAll("td")].map((td) => td.textContent.trim().replace(/\s+/g, " "))));

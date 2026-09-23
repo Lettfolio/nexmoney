@@ -179,7 +179,7 @@ const apptGroundTruth = (page) => page.evaluate(() => {
         gt.total > 0 && gt.unrecorded > 0 && gt.total - gt.unrecorded > 0, JSON.stringify(gt));
       ok("§A0b · fixture sanity — at least one client has 2+ recorded no-shows", gt.repeat.length >= 1, JSON.stringify(gt.repeat));
 
-      await goPage(page, "reports", 3800);
+      await goPage(page, "reports/quality", 3800);   // R89 · B: was "reports" — outcomes are on Service & quality, painted when shown
       const panel = await page.evaluate(() => {
         const p = document.getElementById("report-outcomes-panel");
         const kpis = [...document.querySelectorAll("#report-outcomes-headline .kpi")];
@@ -232,8 +232,9 @@ const apptGroundTruth = (page) => page.evaluate(() => {
         JSON.stringify(listed));
 
       /* Section plumbing: the panel is §5's, chip section-scoped. */
-      await page.click("#reports-nav-quality");
-      await page.waitForTimeout(800);
+      // R89 · B: the pills are tabs; the per-panel strip is opt-in inside the tab on screen (Service & quality).
+      await page.evaluate(() => repShowChips(true));
+      await page.waitForTimeout(400);
       const chips = await page.$$eval("#rep-nav-chips .seg-btn", (els) => els.map((e) => e.dataset.repJump));
       ok("§A5 · the section-scoped chip strip carries rep-nav-apptoutcomes under Service & quality", chips.includes("apptoutcomes"), JSON.stringify(chips));
 
@@ -241,7 +242,7 @@ const apptGroundTruth = (page) => page.evaluate(() => {
          empty instead of printing a clean sheet. */
       await page.evaluate(() => { window.__mock.db.appointments.forEach((a) => { a.outcome = null; }); });
       await goPage(page, "dashboard", 700);
-      await goPage(page, "reports", 3800);
+      await goPage(page, "reports/quality", 3800);   // R89 · B: was "reports" — outcomes are on Service & quality, painted when shown
       const thin = await page.evaluate(() => ({
         pct: (document.getElementById("outcomes-unrecorded-pct") || {}).textContent,
         noshow: (document.getElementById("report-outcomes-noshows") || {}).textContent.replace(/\s+/g, " "),
@@ -253,7 +254,7 @@ const apptGroundTruth = (page) => page.evaluate(() => {
       /* EMPTY window: no appointments at all — emptyState, no fake numbers. */
       await page.evaluate(() => { window.__mock.db.appointments.length = 0; });
       await goPage(page, "dashboard", 700);
-      await goPage(page, "reports", 3800);
+      await goPage(page, "reports/quality", 3800);   // R89 · B: was "reports" — outcomes are on Service & quality, painted when shown
       const empty = await page.evaluate(() => ({
         headline: (document.getElementById("report-outcomes-headline") || {}).innerHTML,
         advTxt: (document.getElementById("report-outcomes-adviser") || {}).textContent.replace(/\s+/g, " "),
@@ -274,7 +275,7 @@ const apptGroundTruth = (page) => page.evaluate(() => {
       const adv = await page.evaluate(() => ({
         hidden: document.getElementById("report-outcomes-panel").classList.contains("hidden"),
         headline: (document.getElementById("report-outcomes-headline") || {}).innerHTML,
-        qualityBtn: !!document.getElementById("reports-nav-quality"),
+        qualityBtn: !!document.getElementById("reports-tabs-quality"),   // R89 · B: the section pill is a tab now
       }));
       ok("§A8a · #report-outcomes-panel is hidden for an adviser", adv.hidden);
       eq("§A8b · …and empty, not merely hidden", adv.headline, "");
@@ -398,8 +399,11 @@ const apptGroundTruth = (page) => page.evaluate(() => {
         let band = null;
         for (let el = tile; el; el = el.previousElementSibling) { if (el.classList && el.classList.contains("dh-band-h")) { band = el.dataset.band; break; } }
         const h = document.getElementById("dh-readiness-headline");
-        const rollupTiles = [...document.querySelectorAll("#dh-readiness .dh-readiness-item")].map((it) => ((it.getAttribute("onclick") || "").match(/'(dh-tile-[a-z-]+)'/) || [])[1]);
-        const rollupSum = [...document.querySelectorAll("#dh-readiness .dh-readiness-count")].map((e) => Number(e.textContent)).reduce((a, b) => a + b, 0);
+        /* R89 · A: was the .dh-readiness-item rows; the readiness list is the to-do list now (its counted,
+           non-clean rows carry data-tile / data-n). */
+        const rollupRows = [...document.querySelectorAll("#dh-readiness .dh-check[data-band='counted']:not(.dh-clean)")].map((c) => { const t = document.getElementById(c.dataset.tile); return { label: t ? t.querySelector(".lbl").textContent.replace(/\s*▾\s*$/, "").trim() : "", count: Number(c.dataset.n), tileId: c.dataset.tile, tile: c.dataset.tile }; });
+        const rollupTiles = rollupRows.map((r) => r.tileId);
+        const rollupSum = rollupRows.map((r) => r.count).reduce((a, b) => a + b, 0);
         return {
           n: tile ? tile.querySelector(".num").textContent.trim() : null,
           lbl: tile ? tile.querySelector(".lbl").textContent.trim() : null,
@@ -591,7 +595,7 @@ const apptGroundTruth = (page) => page.evaluate(() => {
       /* MISSING EMAIL — the panel's rows are row-items with the fix cell now. */
       const me = await page.evaluate(() => {
         const w = document.querySelector("#dh-missing-panel .dh-fix[data-client]");
-        return w ? { id: w.dataset.client, left: (document.querySelector("#dh-missing-panel h3 .dh-left-n") || {}).textContent } : null;
+        return w ? { id: w.dataset.client, left: (document.querySelector('.dh-check[data-panel="dh-missing-panel"] .dh-check-head .dh-left-n') || {}).textContent   /* R89 · A: was #dh-missing-panel h3 — the heading is the to-do row's head now */ } : null;
       });
       ok("§D7pre · fixture sanity — a client with a live case is missing an email", !!me, JSON.stringify(me));
       if (me) {
@@ -628,7 +632,10 @@ const apptGroundTruth = (page) => page.evaluate(() => {
       await mkCase(page, { first: "R77E", last: "NoLoan" + t, case: { completed_at: new Date(Date.now() - 20 * 86400000).toISOString(), lender: "R77E", mortgage_account_number: "R77E-1", loan_amount: null } });
       await goPage(page, "data", 3600);
       const h1 = await txt(page, "#dh-readiness-headline");
-      ok("§E1 · the RENDER site carries the new reason", /to clear — automations and reports read these exact fields\.$/.test(h1 || ""), h1);
+      /* R89 · A: was "…to clear — automations and reports read these exact fields." The headline is the
+         second clause of Data health's ONE line now ("Checks across N clients: …"), so the reason clause
+         went (prose rule, ≤25 words); the pin kept is that both sites write the same sentence. */
+      ok("§E1 · the RENDER site carries the headline sentence", /data-quality issues? across \d+ checks? to clear\.$/.test(h1 || ""), h1);
       ok("§E1b · \"before importing\" is gone from the page", !/before importing/.test(h1 || ""), h1);
       await page.click("#dh-tile-loan");
       await page.waitForTimeout(700);
@@ -640,7 +647,7 @@ const apptGroundTruth = (page) => page.evaluate(() => {
       await page.waitForTimeout(1200);
       const h2 = await txt(page, "#dh-readiness-headline");
       ok("§E2 · the DECREMENT site rewrites the same sentence — the two can never drift",
-        /to clear — automations and reports read these exact fields\.$/.test(h2 || "") && !/before importing/.test(h2 || ""), h2);
+        /data-quality issues? across \d+ checks? to clear\.$/.test(h2 || "") && !/before importing/.test(h2 || ""), h2);   // R89 · A: see §E1
       eq("§E · no console errors", realErrs(page).slice(errBefore), []);
       await page.close();
     }

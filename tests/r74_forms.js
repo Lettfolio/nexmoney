@@ -152,17 +152,22 @@ const tasksFor = (page, caseId) => page.evaluate(async (id) => {
       const errBefore = realErrs(page).length;
       await goPage(page, "settings", 3500);
 
+      /* R89 · C: was #settings-dirty-bar, shown only while dirty, with its own #settings-dirty-save beside
+         a separate "Save settings" button — the bar IS the one Save now: the sticky #settings-save footer,
+         always on the form tabs for the Owner, which says whether anything is unsaved (.has-changes, the
+         same #settings-dirty-n / #settings-dirty-where lines) and whose Save is #save-settings-btn. */
       const clean = await page.evaluate(() => ({
-        bar: !!document.querySelector("#settings-dirty-bar"),
-        hidden: document.querySelector("#settings-dirty-bar").classList.contains("hidden"),
+        bar: !!document.querySelector("#settings-save"),
+        hidden: !document.querySelector("#settings-save").classList.contains("has-changes"),
+        n: (document.querySelector("#settings-dirty-n") || {}).textContent || "",
       }));
       ok("A1a · the page carries an unsaved-changes bar…", clean.bar);
-      ok("A1b · …and it is not shown while nothing is dirty", clean.hidden);
+      ok("A1b · …and it claims nothing is unsaved while nothing is dirty", clean.hidden && clean.n === "No unsaved changes", JSON.stringify(clean));
 
       await setField(page, '#settings-form [name="company_name"]', "NexMoney R74");
       await wait(page, 400);
       const dirty1 = await page.evaluate(() => ({
-        hidden: document.querySelector("#settings-dirty-bar").classList.contains("hidden"),
+        hidden: !document.querySelector("#settings-save").classList.contains("has-changes"),
         n: (document.querySelector("#settings-dirty-n") || {}).textContent || "",
         where: (document.querySelector("#settings-dirty-where") || {}).textContent || "",
         marked: (() => { const el = document.querySelector('#settings-form [name="company_name"]');
@@ -209,10 +214,10 @@ const tasksFor = (page, caseId) => page.evaluate(async (id) => {
 
       // Save routes each group to its own handler — and the writes really land.
       const companyBefore = await settingValue(page, "company_name");
-      await page.click("#settings-dirty-save");
+      await page.click("#save-settings-btn");   // R89 · C: was #settings-dirty-save
       await wait(page, 2500);
       const saved = await page.evaluate(() => ({
-        hidden: document.querySelector("#settings-dirty-bar").classList.contains("hidden"),
+        hidden: !document.querySelector("#settings-save").classList.contains("has-changes"),
         marks: document.querySelectorAll("#page-settings .is-dirty").length,
       }));
       const companyAfter = await settingValue(page, "company_name");
@@ -235,7 +240,7 @@ const tasksFor = (page, caseId) => page.evaluate(async (id) => {
       await wait(page, 2500);
       const reverted = await page.evaluate(() => ({
         company: document.querySelector('#settings-form [name="company_name"]').value,
-        hidden: document.querySelector("#settings-dirty-bar").classList.contains("hidden"),
+        hidden: !document.querySelector("#settings-save").classList.contains("has-changes"),
       }));
       eq("A4b · …and the field goes back to what is saved", reverted.company, "NexMoney R74");
       ok("A4c · …with the bar gone", reverted.hidden, JSON.stringify(reverted));
@@ -259,12 +264,14 @@ const tasksFor = (page, caseId) => page.evaluate(async (id) => {
       ok("A5c · …whose aria-checked agrees with the select's value", (sw.checked === "true") === (sw.value === "on" || sw.value === "1"), JSON.stringify(sw));
       ok("A5d · …and which is labelled by its own field", sw.labelled, JSON.stringify(sw));
       const beforeSw = sw.value;
+      await page.click("#settings-tabs-automations");   // R89 · C — the switch lives on the Automations tab
+      await wait(page, 400);
       await page.click('#settings-form [name="playbook_auto_tasks"] ~ .set-switch');
       await wait(page, 400);
       const afterSw = await page.evaluate(() => {
         const sel = document.querySelector('#settings-form [name="playbook_auto_tasks"]');
         const btn = sel.parentElement.querySelector(".set-switch");
-        return { value: sel.value, checked: btn.getAttribute("aria-checked"), dirty: !document.querySelector("#settings-dirty-bar").classList.contains("hidden") };
+        return { value: sel.value, checked: btn.getAttribute("aria-checked"), dirty: document.querySelector("#settings-save").classList.contains("has-changes") };
       });
       ok("A5e · pressing the switch flips the SELECT's value (one writer, not two)", afterSw.value !== beforeSw, JSON.stringify({ beforeSw, afterSw }));
       ok("A5f · …and the dirty bar sees it like any other edit", afterSw.dirty, JSON.stringify(afterSw));
@@ -305,29 +312,21 @@ const tasksFor = (page, caseId) => page.evaluate(async (id) => {
         noteCol && noteCol.inCell && noteCol.ownsField, JSON.stringify(noteCol));
       ok("A7b · …so it is not spanning the whole row any more", noteCol && !/1 \/ -1|1 \/ 3/.test(noteCol.spansGrid), JSON.stringify(noteCol));
 
-      /* THE SCROLL-SPY (D#17). */
-      const spyTop = await page.evaluate(async () => {
-        window.scrollTo(0, 0);
-        await new Promise((r) => setTimeout(r, 600));
-        return [...document.querySelectorAll("#settings-jump-chips .seg-btn.active")].map((b) => b.id);
-      });
-      eq("A8a · nothing is highlighted above the first section", spyTop, []);
+      /* THE SCROLL-SPY (D#17). R89 · C: was a scroll-spy over the jump chips (nothing lit above the first
+         section; reading Documents lit "Automations", never the collapsed Advanced targets). The chips are
+         TABS now and there is no spy: a tab shows its room. The property carried over: Documents is in
+         Automations, and opening Automations shows it while the Integrations (old Advanced) panel stays shut. */
+      const spyTop = await page.evaluate(() => document.querySelectorAll("#settings-jump-chips .seg-btn").length);
+      eq("A8a · no jump chips, so nothing can be mis-highlighted", spyTop, 0);
       const spyDocs = await page.evaluate(async () => {
-        /* Scroll the Documents heading just PAST the bar's own line — that is the moment the spy
-           is supposed to switch to it, and the moment it used to answer "SMS" instead, because
-           #set-sec-outlook and #set-sec-sms sit inside the collapsed Advanced accordion and a
-           0×0 box reads as "already scrolled past" at every position. */
+        activatePageTab("settings", "automations");
+        await new Promise((r) => setTimeout(r, 500));
         const h = document.getElementById("set-sec-documents");
-        h.scrollIntoView({ block: "start" });
-        window.scrollBy(0, 24);
-        await new Promise((r) => setTimeout(r, 700));
-        return [...document.querySelectorAll("#settings-jump-chips .seg-btn.active")].map((b) => b.id);
+        return { tab: currentPageTab(), docs: !!h && h.offsetParent !== null, sms: document.getElementById("set-sec-sms").offsetParent !== null };
       });
-      /* R87 · owner-admin: was ["settings-nav-documents"] — the 14 chips are now the 5 group headings (05 #12), and
-         Documents sits inside the "Automations" group, so reading it highlights that group's chip. The property
-         (the spy never answers with a collapsed Advanced target) is unchanged. */
-      eq("A8b · reading Documents highlights its group, Automations (it said SMS at 425ca06 — the two Advanced targets measure 0×0 while the accordion is shut)",
-        spyDocs, ["settings-nav-automations"]);
+      eq("A8b · Documents is on the Automations tab, and the SMS (old Advanced) section is not", spyDocs, { tab: "automations", docs: true, sms: false });
+      await page.evaluate(() => activatePageTab("settings", "firm"));
+      await wait(page, 300);
 
       /* R72 contracts this round must not have touched. */
       const kept72 = await page.evaluate(() => ({
@@ -784,23 +783,28 @@ const tasksFor = (page, caseId) => page.evaluate(async (id) => {
       const errBefore = realErrs(page).length;
       for (const p of ["settings", "emails", "clients", "pipeline", "diary", "vault"]) await goPage(page, p, 2200);
       const adminSettings = await page.evaluate(() => ({
-        bar: !!document.querySelector("#settings-dirty-bar"),
+        bar: !!document.querySelector("#settings-save"),
         myPhone: !!document.querySelector("#my-phone"),
         bankGroup: !!document.querySelector("#set-group-bank"),
         blockers: !!document.querySelector("#set-group-blockers"),
       }));
       await goPage(page, "settings", 3000);
-      ok("G1 · an administrator gets the same bar (My details is theirs to save)", adminSettings.bar);
+      /* R89 · C: was "an administrator gets the same bar", which routed their My-details edit — the bar is the
+         firm form's one Save now, and an administrator's firm form is read-only, so it is hidden for them;
+         their own details save with My details' own button, and the edit is still marked and still guarded. */
+      ok("G1 · the Save footer exists but is hidden for an administrator (read-only form)", adminSettings.bar && await page.evaluate(() => document.querySelector("#settings-save").classList.contains("hidden")));
       ok("G2 · …no bank group (Owner-only in the database, so there is nothing to show)", !adminSettings.bankGroup, JSON.stringify(adminSettings));
       ok("G3 · …but the rules that block work are still legible to them", adminSettings.blockers, JSON.stringify(adminSettings));
+      await page.evaluate(() => activatePageTab("settings", "team"));
+      await wait(page, 400);
       await setField(page, "#my-phone", "01202 777888");
       await wait(page, 500);
       const adminDirty = await page.evaluate(() => ({
-        shown: !document.querySelector("#settings-dirty-bar").classList.contains("hidden"),
+        shown: !!document.querySelector("#my-details-panel .is-dirty") && settingsIsDirty(),
         where: (document.querySelector("#settings-dirty-where") || {}).textContent || "",
       }));
-      ok("G4 · an administrator's own edit raises the bar and is routed to My details", adminDirty.shown && /My details/i.test(adminDirty.where), JSON.stringify(adminDirty));
-      await page.click("#settings-dirty-save");
+      ok("G4 · an administrator's own edit is marked unsaved and routed to My details", adminDirty.shown && /My details/i.test(adminDirty.where), JSON.stringify(adminDirty));
+      await page.click("#save-my-details-btn");   // R89 · C: was #settings-dirty-save
       await wait(page, 2000);
       eq("G5 · …and it really saves", await page.evaluate(async () => {
         const { data } = await window.__mockDb.from("profiles").select("id,phone").eq("id", "p1").maybeSingle();

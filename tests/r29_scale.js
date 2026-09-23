@@ -449,6 +449,13 @@ async function seedScale(page, n) {
       const logBefore = await errLogLen(page);
       await goto(page, "reports", 500);
       await waitStable(page, "#page-reports");
+      /* R89 · B: Reports is tabbed and paints only the tab on screen; this block reads This month (the
+         scoreboard, whose MI board is its Pipeline view), Pipeline MI and Money & book — paint each from
+         the same read, as a tab click does. */
+      await page.evaluate(async () => {
+        for (const k of ["mi", "book", "month"]) { repTabClick = true; activatePageTab("reports", k); repTabClick = false; await new Promise((r) => setTimeout(r, 1500)); }
+        repSetAdvView("pipeline"); await new Promise((r) => setTimeout(r, 800)); repSetAdvView("month");
+      });
 
       const kpiHtml = await page.$eval("#report-kpis", (e) => e.innerHTML).catch(() => "");
       ok("D1 · #report-kpis rendered and non-empty", kpiHtml.length > 0);
@@ -503,6 +510,9 @@ async function seedScale(page, n) {
       ok("E2 · #money-banked rendered and non-empty", bankedHtml.length > 0);
       ok("E3 · #money-banked carries no NaN/undefined (no £NaN)", noNaN(bankedHtml), bankedHtml.slice(0, 300));
 
+      // R89 · B: #money-rateends / #money-cold / #money-advisers are retired from the Money tab (link, don't
+      // copy — they are the Reports rate-end book, Protection, and the adviser scoreboard); the bounds
+      // below now read 0 rows and still hold.
       const rateEndsRows = await rowCount(page, "#money-rateends tr");
       ok("E4 · rate-ends table bounded to top-5 (≤ 6 rows incl. header)", rateEndsRows >= 0 && rateEndsRows <= 6, rateEndsRows);
       const coldRows = await rowCount(page, "#money-cold .row-item");

@@ -66,6 +66,19 @@ async function newPage(browser, persona) {
 async function openReports(page) {
   await page.click('[data-page="reports"]');
   await page.waitForTimeout(1200);
+  /* R89 · B: Reports is tabbed and paints only the tab on screen, and the one per-adviser table shows
+     one view at a time. This file reads panels from every tab and the month breakdown (#month-advisers,
+     the "Submitted & completed" view), so paint each tab the role is offered from the same read (as a
+     tab click does), return to the first, and show that view. Nothing asserted below changed. */
+  await page.evaluate(async () => {
+    const ks = pageTabsAllowed("reports").map((t) => t.key).filter((k) => k !== "money");
+    for (const k of ks.slice(1).concat(ks[0])) {
+      repTabClick = true; activatePageTab("reports", k); repTabClick = false;
+      await new Promise((r) => setTimeout(r, 900));
+    }
+    if (document.getElementById("report-adv-view-submitted")) repSetAdvView("submitted");
+  });
+  await page.waitForTimeout(300);
 }
 // Re-run the whole Reports load against a different month, exactly as the picker does.
 async function setMonth(page, mv) {
@@ -339,6 +352,7 @@ const shiftMv = (mv, n) => {
         /stage change/i.test(monthScope) && /last touched/i.test(monthScope), JSON.stringify(monthScope));
 
       // All time: one row per reason, plus the "(not recorded)" bucket for the legacy rows.
+      await page.evaluate(() => { repTabClick = true; activatePageTab("reports", "mi"); repTabClick = false; });   // R89 · B: the losses panel is on the Pipeline MI tab
       await page.click("#report-losses-scope-btn");
       await page.waitForTimeout(400);
       const table = await page.evaluate(() => {
@@ -369,6 +383,7 @@ const shiftMv = (mv, n) => {
       eq("B3 · the total reconciles with every lost case", totalRow[1], String(lost.length));
 
       // …and back to the month scope, which must be a strict subset.
+      await page.evaluate(() => { repTabClick = true; activatePageTab("reports", "mi"); repTabClick = false; });   // R89 · B: the losses panel is on the Pipeline MI tab
       await page.click("#report-losses-scope-btn");
       await page.waitForTimeout(400);
       const monthTotal = await page.evaluate(() => {
@@ -574,6 +589,7 @@ const shiftMv = (mv, n) => {
 
       ok("S7 · the list is collapsed until the tile is clicked",
         await page.evaluate(() => document.querySelector("#report-nps-panel").classList.contains("hidden")));
+      await page.evaluate(() => { repTabClick = true; activatePageTab("reports", "book"); repTabClick = false; });   // R89 · B: the review-score tile is on Money & book
       await page.click("#report-nps-tile");
       await page.waitForTimeout(400);
       const list = await page.evaluate(() => ({

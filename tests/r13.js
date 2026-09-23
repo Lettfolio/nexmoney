@@ -195,7 +195,7 @@ const readBlobJson = (page) => page.evaluate(async () => (window.__blob ? JSON.p
       await admin.close();
 
       const page = await newPage(browser, "p4", { skipTour: true });
-      await goto(page, "settings");
+      await goto(page, "settings/data");   // R89 · C: was "settings" — the export panel is on the Data tab
       ok("A1 · the Owner sees the export panel", await page.$eval("#firm-export-panel", (e) => !e.classList.contains("hidden")));
 
       await armBlobCapture(page);
@@ -239,7 +239,7 @@ const readBlobJson = (page) => page.evaluate(async () => (window.__blob ? JSON.p
       // Restore is unnecessary here — the failure is simulated by monkeypatching a single table read.
       await page.reload();
       await page.waitForTimeout(SETTLE);
-      await goto(page, "settings");
+      await goto(page, "settings/data");   // R89 · C: was "settings" — the export panel is on the Data tab
       await armBlobCapture(page);
       await page.evaluate(() => {
         const orig = window.__mockDb.from.bind(window.__mockDb);

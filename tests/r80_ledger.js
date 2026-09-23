@@ -153,7 +153,7 @@ const promoterDom = (page) => page.evaluate(() => ({
   {
     console.log("\n— §A · promoters never asked: membership from fixture ground truth (p4)");
     const page = await boot(browser, "p4");
-    await goPage(page, "reports");
+    await goPage(page, "reports/quality");   // R89 · B: was "reports" — the advocacy panel is on Service & quality, painted when shown
     const gt = await promoterGT(page);
     const dom = await promoterDom(page);
     ok("A0 · fixtures — promoters wait, both ask-records are represented, one opted out, one has no email",
@@ -233,7 +233,7 @@ const promoterDom = (page) => page.evaluate(() => ({
   {
     console.log("\n— §B · ✆ Call task / ✉ Queue referral request (p4)");
     const page = await boot(browser, "p4");
-    await goPage(page, "reports");
+    await goPage(page, "reports/quality");   // R89 · B: was "reports" — the advocacy panel is on Service & quality, painted when shown
     const gt = await promoterGT(page);
     const first = gt.waiting.find((w) => !w.optedOut && !w.noEmail);
     ok("B0 · fixture — an unflagged (emailable) promoter exists to drive the verbs on", !!first, JSON.stringify(gt.waiting));
@@ -318,7 +318,7 @@ const promoterDom = (page) => page.evaluate(() => ({
     console.log("\n— §C · owner gate unchanged (p1 Kim admin, p2 Wayne adviser)");
     for (const persona of ["p1", "p2"]) {
       const page = await boot(browser, persona);
-      await goPage(page, "reports");
+      await goPage(page, "reports/quality");   // R89 · B: was "reports" — the advocacy panel is on Service & quality, painted when shown
       const g = await page.evaluate(() => ({
         hidden: document.querySelector("#report-advocacy-panel").classList.contains("hidden"),
         anyBlock: document.querySelectorAll("#report-advocacy-grid .adv-block").length,

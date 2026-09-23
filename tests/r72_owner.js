@@ -184,6 +184,10 @@ const pickChip = async (page, k) => {
   {
     const page = await boot(browser, "p4");
     await goPage(page, "reports", 4000);
+    /* R89 · B: the strip is the "Who's using it" (activity) VIEW of the one adviser table now; pick it
+       once — the choice is remembered, so every later arrival on Reports below opens on it too. */
+    await page.evaluate(() => repSetAdvView("activity"));
+    await page.waitForTimeout(2500);
 
     const shape = await page.evaluate(() => {
       const t = document.getElementById("report-adoption-table");
@@ -293,12 +297,15 @@ const pickChip = async (page, k) => {
   {
     const page = await boot(browser, "p1");
     await goPage(page, "reports", 4000);
+    /* R89 · B: was "no scoreboard panel at all". The panel is the ONE adviser table now and Kim gets its
+       Pipeline / Submitted views (the MI board and the month breakdown she always saw) — but still no
+       activity view and no adoption strip: that view rides the money gate, exactly as the strip did. */
     const adminView = await page.evaluate(() => ({
-      panelHidden: !!(document.getElementById("report-scoreboard-panel") || {}).classList.contains("hidden"),
+      views: [...document.querySelectorAll("#report-adv-seg > .seg-btn")].map((b) => b.dataset.seg),
       strip: ((document.getElementById("report-adoption") || {}).innerHTML || "").trim(),
     }));
-    ok("§A7 · an administrator gets no scoreboard panel and no adoption strip (it rides the money gate)",
-      adminView.panelHidden && adminView.strip === "", JSON.stringify(adminView));
+    ok("§A7 · an administrator gets no activity view and no adoption strip (it rides the money gate)",
+      !adminView.views.includes("activity") && adminView.strip === "", JSON.stringify(adminView));
     eq("§A7b · no console errors (admin)", realErrs(page), []);
     await page.__ctx.close();
   }
@@ -541,10 +548,15 @@ const pickChip = async (page, k) => {
     eq("§D2 · EVERY role's last step is Retention",
       [lists.owner, lists.admin, lists.adviser].map((l) => l[l.length - 1].target),
       ['#topnav button[data-page="retention"]', '#topnav button[data-page="retention"]', '#topnav button[data-page="retention"]']);
+    /* R89 · F — was: targets data-page="emails" / "data" and "#nav-money". Those nav items are tabs of
+       Operations and Reports now, so the steps point at the entry that holds them; the steps (and their
+       titles) are still there. */
     ok("§D2b · the admin tour names the email queue and Data health",
-      lists.admin.some((s) => /data-page="emails"/.test(s.target)) && lists.admin.some((s) => /data-page="data"/.test(s.target)), JSON.stringify(lists.admin));
-    ok("§D2c · the owner tour keeps its money framing (Reports + Monday money)",
-      lists.owner.some((s) => /data-page="reports"/.test(s.target)) && lists.owner.some((s) => s.target === "#nav-money"), JSON.stringify(lists.owner));
+      lists.admin.some((s) => /data-page="operations"/.test(s.target) && /email/i.test(s.t)) && lists.admin.some((s) => /data-page="operations"/.test(s.target) && /Data health/.test(s.t)), JSON.stringify(lists.admin));
+    /* R89 · D: was /Monday money/ in the step title — Monday money is the Money TAB of Reports, and the step
+       is titled the way the tab title reads ("Reports › Money"). The money framing is the same step. */
+    ok("§D2c · the owner tour keeps its money framing (Reports + its Money tab)",
+      lists.owner.some((s) => /data-page="reports"/.test(s.target)) && lists.owner.some((s) => /data-page="reports"/.test(s.target) && /Reports › Money/.test(s.t)), JSON.stringify(lists.owner));
     eq("§D2d · the legacy 'staff' role and anything unrecognised fall back to the adviser tour",
       [lists.legacy, lists.unknown], [lists.adviser.map((s) => s.t), lists.adviser.map((s) => s.t)]);
     await page.__ctx.close();

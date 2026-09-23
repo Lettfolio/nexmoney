@@ -106,18 +106,19 @@
       <button data-page="retention"><span class="si">🔁</span>Retention</button>
       <div class="nav-group-head" aria-hidden="true">Money</div>
       <button data-page="reports"><span class="si">📊</span>Reports</button>
-      <!-- R7 — Monday money. Every figure on the page is firm-wide money, so the nav item itself
-           is Owner-only. Hidden in the markup and revealed by showApp() once the role is known, so
-           it can never flash for an adviser between the shell appearing and my_role() answering. -->
-      <button data-page="money" id="nav-money" class="hidden"><span class="si">💷</span>Monday money</button>
+      <!-- R89 · F — Monday money is the Owner's Money tab of Reports now (PAGE_TABS.reports, when:
+           isOwner); its nav item (#nav-money) is gone and nav("money") / #money land on the tab. -->
       <!-- R14 — the password vault. Every staff role sees it (the DB's SELECT policy is all-staff by
            default), so unlike Monday money it is NOT hidden in the markup — it just renders. -->
       <button data-page="vault"><span class="si">🔑</span>Vault</button>
+      <!-- R89 · A — when the role gate leaves the Firm group ONE entry (an adviser: Settings), it does not
+           fold: applyNavRole hides the toggle and shows this plain label instead. -->
+      <div class="nav-group-head hidden" id="nav-firm-head" aria-hidden="true">Firm</div>
       <button type="button" class="nav-group-toggle" id="nav-firm-toggle" aria-expanded="true" aria-controls="nav-firm-group">Firm <span class="nav-caret" aria-hidden="true">▾</span></button>
       <div id="nav-firm-group">
-        <button data-page="emails"><span class="si">✉️</span>Emails</button>
-        <button data-page="import"><span class="si">📤</span>Import</button>
-        <button data-page="data"><span class="si">🩺</span>Data health</button>
+        <!-- R89 · F — Emails, Import and Data health are the three tabs of Operations. Hidden in
+             the markup like every gated item (applyPageRoleGateNav reveals it for Owner/Administrator). -->
+        <button data-page="operations" class="hidden"><span class="si">🧰</span>Operations</button>
         <button data-page="settings"><span class="si">⚙️</span>Settings</button>
       </div>
     </nav>
@@ -324,7 +325,7 @@
     <!-- Pipeline -->
     <section id="page-pipeline" class="page hidden">
       <div class="page-head">
-        <h2>Case pipeline</h2>
+        <h2>Pipeline</h2>   <!-- R89 · D (01 #10): was "Case pipeline" — the heading says what the sidebar and the tab title say -->
         <div class="page-tools">
           <!-- R88 · B (panel 03 #3) — search · Mine|All|Unassigned is ONE kit row (listToolsHtml), rendered into
                #board-tools by app.js at load; #board-search is moved into it (its listeners come with it).
@@ -379,7 +380,7 @@
            mention of GI on this page (table columns, filters, the dashboard's own Protection & fees
            drawer) stays short, on the same rule the rest of the app uses for a term once it has
            been said in full nearby. -->
-      <h2>Protection &amp; GI <span class="page-h2-expand">(General Insurance)</span></h2>
+      <h2>Protection <span class="page-h2-expand">&amp; GI (General Insurance)</span></h2>   <!-- R89 · D (01 #10): the name is the sidebar's; GI is the subtitle -->
       <!-- R88 · C — ONE LIST ON THE KIT, ONE ROW PER CLIENT. The tools row (search · Mine|Unassigned|All)
            is rendered by listToolsHtml() into #prot-tools at script load, keeping #prot-search and
            #prot-scope-*. The KPI tiles are ONE line (#prot-summary, filled by renderProtectionPage,
@@ -541,84 +542,52 @@
       </div>
     </section>
 
-    <!-- Import -->
-    <!-- R87 · owner-admin (05 #9) — THE DOORS ARE IN WEEKLY ORDER. The 2,000-case migration is done;
-         the Revolution export is the file that arrives every week and the AI bulk import is the rare
-         door, so the Revolution panel now leads and carries the primary treatment, and the AI import
-         follows as the quieter .panel-secondary. Every id inside both panels is unchanged; only the
-         DOM order and which panel carries the secondary skin have swapped (r75 A5 re-pointed). -->
-    <section id="page-import" class="page hidden">
-      <!-- ==================================================================
-           R8-REV · REVOLUTION SYNC
-           Everything is keyed into Revolution first; this reads the weekly
-           Stonebridge client_data_export_V2 and shows, field by field, what
-           would change HERE. Three deliberate rules, stated in the fold:
-             · headers are recognised by NAME, never by position
-             · nothing is written until a human confirms it, per field
-             · nothing is emailed, and no stage moves, as a side effect
-           =============================================================== -->
-      <h2>Revolution sync</h2>
-      <p class="panel-sub" id="rev-intro">Weekly: drop the Stonebridge client export here. It shows what would change and writes only what you tick.</p>
-      <details class="rep-howcounted how-fold" id="rev-how"><summary>How the sync works</summary><div class="rep-howcounted-body">
-        <p>Everything is keyed into Revolution first, so this reads <em>from</em> it: it matches each row of the weekly client data export to a client and a case you already hold, shows the field-by-field difference, and writes only what you tick. Column headings are recognised by name, never by position. It never queues an email, and it never moves a case stage on its own.</p>
-      </div></details>
-      <div class="panel" id="rev-input-panel">
-        <div class="rev-lastsync" id="rev-lastsync">Last import: checking…</div>
-        <div class="drop-zone-slot" id="rev-file-slot"></div>
-        <textarea id="rev-text" rows="6" aria-label="Paste the Revolution export" placeholder="…or paste the export here — the first row must be the column headings"></textarea>
-        <div class="rev-actions">
-          <button class="btn btn-primary" id="rev-read-btn">Read the export</button>
-          <button class="btn" id="rev-reset-btn" hidden>Start again</button>
-          <span id="rev-status" class="panel-sub" style="margin:0;"></span>
-        </div>
-      </div>
-      <div id="rev-mapping"></div>
-      <div id="rev-preview"></div>
-      <div id="rev-result"></div>
-
-      <h2 id="import-ai-head" style="margin-top:28px;">Bring in data from anywhere</h2>
-      <p class="panel-sub" id="import-intro">One-off: a spreadsheet, an email or rough notes. AI sorts it into clients and cases; nothing is saved until you confirm.</p>
-      <div class="panel panel-secondary" id="import-ai-panel">
-        <!-- R75 · B1 — the raw <input type=file> is gone; mountDropZone() builds the
-             styled zone (and the input, with the SAME id/accept/aria-label) into this
-             slot at boot. One component, four doors. -->
-        <div class="drop-zone-slot" id="import-file-slot"></div>
-        <textarea id="import-text" rows="9" aria-label="Paste rows or text to import" placeholder="…or paste rows / text here"></textarea>
-        <div style="margin-top:10px;display:flex;align-items:center;gap:12px;">
-          <button class="btn btn-primary" id="analyse-btn">✨ Analyse with AI</button>
-          <span id="import-status" class="panel-sub" style="margin:0;"></span>
-        </div>
-      </div>
-      <div id="import-preview"></div>
-    </section>
-
     <!-- Reports -->
+    <!-- R89 · B — REPORTS AS REAL TABS (R89-DESIGN slice B; evidence panel-r87/05-owner-admin.md #1 #2 #3 #7 #11 #12).
+         The five section pills were scroll-spies over one 11,600px page that painted all 21 panels on every
+         open. Each REPORT_SECTIONS entry (reports-money.js) is now a tab — My numbers / This month /
+         Pipeline MI / Money & book / Service & quality / Referrals out — plus the Owner's Money tab (the
+         Monday money page, nested). Only the tab on screen is rendered (repRenderTab); the others stay
+         empty until they are opened. Every panel keeps its id. The strip is rendered into .page-tabs-slot
+         by activatePageTab() (PAGE_TABS.reports in app.js, built from REPORT_SECTIONS). -->
     <section id="page-reports" class="page hidden">
       <div class="page-head">
         <h2>Reports</h2>
         <input type="month" id="report-month" aria-label="Report month">
+        <!-- R89 · B — the level-2 chip strip is opt-in, as in R87; its door sits in the page head now
+             that the section pills it hung off are tabs. Shown only on a tab with 2+ panels. -->
+        <button type="button" class="btn btn-sm btn-ghost rep-chips-toggle" id="reports-jump-toggle" aria-controls="rep-nav" aria-expanded="false" onclick="repToggleChips()" title="Show or hide one chip per panel on this tab" hidden>Panels ▾</button>
       </div>
-      <!-- R42 · F3 — SECTION NAV. Reports answers five questions and stacks seventeen panels to do
-           it; #rep-nav below is one chip PER PANEL (R11-4, untouched), which is the right tool once
-           you know where you are going and the wrong one for "take me to the money". Five buttons,
-           one per section, sitting above it.
-           Deliberately EMPTY and `hidden` here for exactly the reason #rep-nav is: half these
-           sections are Owner-only and each PANEL owns its own gate, so the buttons are built by
-           buildReportSectionNav() at the END of loadReports by asking the panels what they decided.
-           NOT sticky — #rep-nav is the sticky strip and two sticky bars would sit on top of each
-           other. -->
-      <div class="rep-sections-nav" id="reports-jump" hidden>
-        <div class="pipe-segment rep-nav-chips" id="reports-jump-chips" role="group" aria-label="Jump to a section of Reports"></div>
-      </div>
-      <!-- R11-4 — JUMP NAV. Reports is ~7,700px of stacked panels and the only way to reach the
-           bottom half was the scroll wheel. One chip per panel, sticky under the page header.
-           Deliberately EMPTY in the markup and `hidden`: the panel list depends on the signed-in
-           role (every money panel below is Owner-only), so it is built by buildReportsJumpNav()
-           at the END of loadReports — after each panel has decided whether it exists — rather
-           than rendered here and then corrected, which would flash money chips at an adviser. -->
+      <div class="page-tabs-slot"></div>
+      <!-- R89 · B — the level-2 strip (one chip per panel of the tab on screen). ONE element, moved into
+           the active tab panel by repAfterTab(); chips jump, nothing spies on the scroll any more. -->
       <div class="rep-nav" id="rep-nav" hidden>
-        <div class="pipe-segment rep-nav-chips" id="rep-nav-chips" role="group" aria-label="Jump to a section of this report"></div>
+        <div class="pipe-segment rep-nav-chips" id="rep-nav-chips" role="group" aria-label="Jump to a panel on this tab"></div>
       </div>
+      <!-- R87 · owner-admin — the basis/scope lines below are <div class="panel-sub"> (not <p>) so a
+           howFold() <details> can sit inside them without the parser closing the element. -->
+      <p class="panel-sub hidden" id="report-money-note"></p>
+      <!-- R5-F4 — REPORTS_ROW_CAP. Every Reports select is explicitly bounded; when one comes back
+           holding exactly the cap the figures below describe a subset of the book, and this line
+           says so instead of letting the page truncate in silence. -->
+      <p class="dq-notice hidden" id="report-cap-notice"></p>
+      <div class="page-tab-panel hidden" data-tabpanel="mine">
+      <!-- R5-F1 (Daniel-approved policy change) — the adviser's own money, and only their own.
+           Every figure on this card is scoped to cases assigned to the signed-in person; nothing
+           firm-wide and nothing belonging to another adviser appears on it. Hidden for the Owner,
+           whose fuller figures are below. -->
+      <div class="panel hidden" id="report-mine-panel">
+        <h3>My numbers</h3>
+        <div class="panel-sub" id="report-mine-scope"></div>
+        <div class="kpi-row" id="report-mine" style="margin:12px 0 0;"></div>
+        <!-- R68 · M7 — the adviser's own "fees earned this month vs my target" bar. Its own
+             container BELOW the tiles, mirroring #month-fee-target's position under #month-kpis
+             on the firm card, so the two read the same way round. Empty when the reader is not
+             a My-numbers user; a plain sentence (no bar) when no target has been set for them. -->
+        <div id="report-mine-target"></div>
+      </div>
+      </div>
+      <div class="page-tab-panel hidden" data-tabpanel="month">
       <!-- R74 · A4a (panel D#12) — THE HERO. This page opened on a 5-line paragraph about three
            money bases; the number the owner is actually judged on — fee value earned on the
            month's completions, against the monthly target — was the fourth tile of a strip inside
@@ -629,9 +598,6 @@
            it is money, and money on this page is Owner-only. -->
       <div class="rep-hero hidden" id="report-hero"></div>
       <div class="rep-hero-sec hidden" id="report-hero-strip"></div>
-      <!-- R87 · owner-admin — the basis/scope lines below are <div class="panel-sub"> (not <p>) so a
-           howFold() <details> can sit inside them without the parser closing the element. -->
-      <p class="panel-sub hidden" id="report-money-note"></p>
       <!-- R74 · A4a — the three-money-bases paragraph moves behind a closed disclosure. It is not
            deleted and not shortened (r42 §E pins it verbatim): it is the reference you read once
            and then never again, and it was standing between the reader and the page. Same fold
@@ -654,33 +620,12 @@
       <p class="panel-sub hidden" id="report-basis-legend">Three money bases on this page, headline first — <strong>earned</strong> (the headline): proc + broker + sols fee value on a case, counted in the month it <em>completed</em>, paid or not · <strong>outstanding</strong>: earned but not yet received — whether it has been invoiced or is still to be invoiced · <strong>cash (banked)</strong> (secondary): money actually received, counted in the month it was paid. Every figure below says which one it is.</p>
         </div>
       </details>
-      <!-- R5-F4 — REPORTS_ROW_CAP. Every Reports select is explicitly bounded; when one comes back
-           holding exactly the cap the figures below describe a subset of the book, and this line
-           says so instead of letting the page truncate in silence. -->
-      <p class="dq-notice hidden" id="report-cap-notice"></p>
-      <!-- R42 · F3 — §1. The adviser's own money, and nothing else -->
-      <h3 class="report-section-head" id="rsec-mine">My numbers</h3>
-      <!-- R5-F1 (Daniel-approved policy change) — the adviser's own money, and only their own.
-           Every figure on this card is scoped to cases assigned to the signed-in person; nothing
-           firm-wide and nothing belonging to another adviser appears on it. Hidden for the Owner,
-           whose fuller figures are below. -->
-      <div class="panel hidden" id="report-mine-panel">
-        <h3>My numbers</h3>
-        <div class="panel-sub" id="report-mine-scope"></div>
-        <div class="kpi-row" id="report-mine" style="margin:12px 0 0;"></div>
-        <!-- R68 · M7 — the adviser's own "fees earned this month vs my target" bar. Its own
-             container BELOW the tiles, mirroring #month-fee-target's position under #month-kpis
-             on the firm card, so the two read the same way round. Empty when the reader is not
-             a My-numbers user; a plain sentence (no bar) when no target has been set for them. -->
-        <div id="report-mine-target"></div>
-      </div>
-      <!-- R42 · F3 — §2. Everything scoped to the month picker in the page head -->
-      <h3 class="report-section-head" id="rsec-month">This month</h3>
       <div class="panel" id="report-month-panel">
         <h3 id="month-report-title">This month</h3>
         <div class="kpi-row" id="month-kpis" style="margin:12px 0 8px;"></div>
         <div id="month-fee-target"></div>
-        <div id="month-advisers"></div>
+        <!-- R89 · B — #month-advisers (the per-adviser submitted / completed table) moved into the scoreboard
+             below as its "Submitted & completed" view: one per-adviser table on the page, not five. -->
         <!-- R42 · F7 — the tail ("Completed £" is the fee value earned … see "Fees banked (paid)"
              below) said the earned-vs-banked thing #report-basis-legend says four panels higher up,
              on the page that legend was written for. The Proc/Broker/Sols glossary is this line's own
@@ -688,19 +633,61 @@
         <p class="panel-sub hidden" id="month-legend" style="margin:12px 0 0;">Proc £ = procuration fee (paid by the lender) · Broker £ = fee charged to the client · Sols £ = solicitor referral fee. Figures on this panel are scoped to the month selected above (bases: see legend above).</p>
       </div>
       <p class="report-month-note" id="report-month-note">Also scoped to the month selected above.</p>
-      <div class="panel" id="report-scoreboard-panel">
+      <!-- R89 · B — ONE PER-ADVISER TABLE (05 #2c, #11). The month scoreboard, the Pipeline MI scoreboard,
+           the "Is anyone using it?" strip, the Monthly business per-adviser rows and Monday money's "Per
+           adviser" were five tables about four people. They are now views of this one panel behind a
+           "By adviser" toggle (#report-adv-views, renderAdvViews): one table on screen at a time, each
+           view keeping its own ids and its own role gate (month + activity: Owner; pipeline: Owner and
+           Administrator; submitted: everyone, fee columns Owner-only as before). Quiet rows stay behind
+           Show all. The panel shows when at least one view is allowed. -->
+      <div class="panel hidden" id="report-scoreboard-panel">
         <h3>Adviser scoreboard</h3>
-        <p class="panel-sub" id="report-scoreboard-scope"></p>
-        <div id="report-advisers"></div>
-        <!-- R72 · A1 (panel H5a) — THE ADOPTION STRIP. The scoreboard above says what the book
-             did; it has never said whether anyone is USING the app to do it, which on a rollout
-             where only one of four logins has ever been opened is the single most important fact
-             the owner can be told. Filled by renderAdoptionStrip(); it rides this panel's own
-             Owner gate (showMoney()) rather than owning a second one. -->
-        <div id="report-adoption"></div>
+        <div class="rep-adv-views" id="report-adv-views"></div>
+        <div class="rep-adv-view hidden" id="rep-adv-view-month" data-adv-view="month">
+          <div class="panel-sub" id="report-scoreboard-scope"></div>
+          <div id="report-advisers"></div>
+        </div>
+        <div class="rep-adv-view hidden" id="report-mi-scoreboard-panel" data-adv-view="pipeline">
+          <div class="panel-head-row rep-adv-view-head">
+            <div class="panel-sub" id="report-mi-scoreboard-scope"></div>
+            <button type="button" class="btn btn-sm mi-csv-btn" id="report-mi-csv-scoreboard" title="Download this table as CSV">⭳ CSV</button>
+          </div>
+          <div id="report-mi-scoreboard"></div>
+        </div>
+        <div class="rep-adv-view hidden" id="rep-adv-view-submitted" data-adv-view="submitted">
+          <div id="month-advisers"></div>
+        </div>
+        <div class="rep-adv-view hidden" id="rep-adv-view-activity" data-adv-view="activity">
+          <div id="report-adoption"></div>
+        </div>
       </div>
-      <!-- R42 · F3 — §3. Where the work is and where it goes — counts, not money -->
-      <h3 class="report-section-head" id="rsec-mi">Pipeline MI</h3>
+      </div>
+      <div class="page-tab-panel hidden" data-tabpanel="mi">
+      <!-- R89 · B — ONE FUNNEL (05 #2b). "Funnel & conversion" (live, Pipeline MI) and "Pipeline funnel"
+           (the month cohort) were two panels whose scope paragraphs existed to explain each other. One
+           panel now, the MI funnel, with a view toggle: Live now (Owner / Administrator — the MI funnel,
+           conversion and win rate) or Created in <month> (everyone — the month cohort, which keeps its
+           ids #report-funnel-panel / #report-funnel-scope / #report-funnel as the view). It sits outside
+           #report-mi-section so an adviser keeps the cohort funnel they always had. -->
+      <div class="panel" id="report-mi-funnel-panel">
+        <div class="panel-head-row">
+          <h3>Funnel</h3>
+          <div class="rep-funnel-views" id="report-funnel-views"></div>
+        </div>
+        <div class="rep-funnel-view hidden" id="report-mi-funnel-live" data-funnel-view="live">
+          <!-- R87 · owner-admin (T1) — one line stays; the detail folds. -->
+          <div class="panel-sub" id="report-mi-funnel-scope"><strong>Everything LIVE right now, by stage</strong> — not affected by the month picker.
+            <details class="rep-howcounted how-fold" id="report-mi-funnel-how"><summary>How this is counted</summary><div class="rep-howcounted-body"><p>Every open case, regardless of when it was created. Historical conversion below is from milestone dates. The month cohort — cases created in the selected month — is the other view of this panel.</p></div></details></div>
+          <div id="report-mi-funnel"></div>
+          <div class="rep-mi-conv" id="report-mi-conversion"></div>
+          <div class="rep-mi-win" id="report-mi-winrate"></div>
+          <button type="button" class="btn btn-sm mi-csv-btn" id="report-mi-csv-funnel" title="Download this panel as CSV">⭳ CSV</button>
+        </div>
+        <div class="rep-funnel-view hidden" id="report-funnel-panel" data-funnel-view="cohort">
+          <p class="panel-sub" id="report-funnel-scope"></p>
+          <div id="report-funnel"></div>
+        </div>
+      </div>
       <!-- ==================================================================
            R19 — PIPELINE MI. Owner/Admin-only management information: a
            pipeline funnel & conversion (from milestone DATES, not the ~36
@@ -716,27 +703,12 @@
       <div class="mi-section hidden" id="report-mi-section">
         <h3 class="mi-section-head">Pipeline MI</h3>
         <div class="panel-sub" id="report-mi-scope"></div>
-        <div class="grid-2">
-          <div class="panel" id="report-mi-funnel-panel">
-            <h3>Funnel &amp; conversion<button type="button" class="btn btn-sm mi-csv-btn" id="report-mi-csv-funnel" title="Download this panel as CSV">⭳ CSV</button></h3>
-            <!-- R37 · P1-corrected — this panel and "Pipeline funnel" further down read as
-                 duplicates and are not: this one is a LIVE snapshot of the whole book, that one is
-                 the selected month's cohort. They are not merged (both questions are real ones);
-                 the scope is simply made unmissable on each, with a pointer to the other. -->
-            <!-- R87 · owner-admin (T1) — one line stays; the cross-pointer to the other funnel folds. -->
-            <div class="panel-sub" id="report-mi-funnel-scope"><strong>Everything LIVE right now, by stage</strong> — not affected by the month picker.
-              <details class="rep-howcounted how-fold" id="report-mi-funnel-how"><summary>How this is counted</summary><div class="rep-howcounted-body"><p>Every open case, regardless of when it was created. Historical conversion below is from milestone dates. The month-cohort view — cases created in the selected month — is “Pipeline funnel” further down this page.</p></div></details></div>
-            <div id="report-mi-funnel"></div>
-            <div id="report-mi-conversion" style="margin-top:14px;"></div>
-            <div id="report-mi-winrate" style="margin-top:12px;"></div>
-          </div>
           <div class="panel" id="report-mi-velocity-panel">
             <h3>Velocity — cycle times<button type="button" class="btn btn-sm mi-csv-btn" id="report-mi-csv-velocity" title="Download this panel as CSV">⭳ CSV</button></h3>
             <p class="panel-sub">Median (headline) and average days between milestones. Only cases with both dates count.</p>
             <div id="report-mi-velocity"></div>
             <p class="panel-sub" id="report-mi-bottleneck" style="margin:10px 0 0;"></p>
           </div>
-        </div>
         <div class="panel" id="report-mi-revenue-panel">
           <h3>Revenue — run-rate &amp; forecast<button type="button" class="btn btn-sm mi-csv-btn" id="report-mi-csv-revenue" title="Download this panel as CSV">⭳ CSV</button></h3>
           <div class="kpi-row" id="report-mi-forecast-headline" style="margin:8px 0 12px;"></div>
@@ -744,22 +716,11 @@
           <p class="panel-sub" id="report-mi-runrate-basis" style="margin:10px 0 0;"></p>
           <div id="report-mi-forecast" style="margin-top:14px;"></div>
         </div>
-        <div class="panel" id="report-mi-scoreboard-panel">
-          <h3>Adviser scoreboard — pipeline &amp; outcomes<button type="button" class="btn btn-sm mi-csv-btn" id="report-mi-csv-scoreboard" title="Download this panel as CSV">⭳ CSV</button></h3>
-          <div class="panel-sub" id="report-mi-scoreboard-scope"></div>
-          <div id="report-mi-scoreboard"></div>
-        </div>
       </div>
       <!-- R33 — the #report-diag-section block that stood here has MOVED to Settings (see
            #diag-details at the bottom of #page-settings). It is a configuration/support artefact,
            not management information: the R32 panel found owners scrolling past it on every
            Reports read to get to the money panels. Every id inside it is unchanged. -->
-      <div class="grid-2">
-        <div class="panel" id="report-funnel-panel">
-          <h3>Pipeline funnel</h3>
-          <p class="panel-sub" id="report-funnel-scope"></p>
-          <div id="report-funnel"></div>
-        </div>
         <div class="panel" id="report-sources-panel">
           <!-- R77 · A2b — the Losses panel's exact scope toggle, on the panel that needed it most:
                a single month of lead_source is usually too few rows to read. -->
@@ -770,7 +731,6 @@
           <p class="panel-sub" id="report-sources-scope">Set the lead source on cases to build this up.</p>
           <div id="report-sources"></div>
         </div>
-      </div>
       <!-- B3 / R5-20 — where the work went. Populated by renderThreadedPanels(); month-scoped by
            default (by the stage-change date where the event log has one, else last touched), with
            an all-time toggle. -->
@@ -782,45 +742,39 @@
         <p class="panel-sub" id="report-losses-scope"></p>
         <div id="report-losses"></div>
       </div>
-      <!-- R42 · F3 — §4. Live money: what is owed, what the book is worth, what is coming -->
-      <h3 class="report-section-head" id="rsec-money">Money &amp; book</h3>
-      <!-- R42 · F3 — the live-note MOVED here, under the §4 header, and its sentence is still
-           literally true: "the panels below" used to mean owed · rate-end · lead response · review
-           scores · advocacy · conveyancers · forecast · completions · introducers · LTV, and §4 + §5
-           are that same set, reordered — nothing month-scoped has been moved below it. The losses
-           panel, which is month-scoped by default and carries its own All time toggle, stays ABOVE
-           it in §3 where it always was. Re-check this sentence if a panel ever moves across it. -->
+      </div>
+      <div class="page-tab-panel hidden" data-tabpanel="book">
+      <!-- R89 · B — Money & book. Money owed is drawn ONCE, on the Money tab (it is the chase list the
+           Monday statement works against); here it is the "Owed on completed cases" tile, which opens
+           it. The forecast below is the Pipeline MI forecast — one model (miForecastModel), one number. -->
       <p class="report-live-note" id="report-live-note">Live snapshot — the panels below are not affected by the month selected above.</p>
       <div class="kpi-row" id="report-kpis"></div>
-
-      <!-- ==================================================================
-           R7-1 — MONEY OWED. Lives on Reports rather than in a page of its own:
-           it is a live money panel about completed cases, and every other
-           firm-wide money figure it has to reconcile against (fees earned,
-           fees banked, outstanding) is already on this page one scroll away.
-           Owner-only, same gate as the rest of Reports' money.
-           The fee_aging_60 Watchtower alerts link here (see gotoMoneyOwed).
-           ================================================================== -->
-      <div class="panel hidden" id="report-owed-panel">
+      <!-- R89 · B — the review-score drill-down sits under the tile that opens it (Avg review score). -->
+      <!-- S7 / R5-47 — the review-score drill-down. A score is a person; this lists them so the
+           tile can be answered ("who gave us a 6?") instead of only admired. -->
+      <div class="panel hidden" id="report-nps-panel">
         <div class="panel-head-row">
-          <h3>Money owed — unpaid fees on completed cases</h3>
-          <div class="owed-tools">
-            <span class="segment" role="group" aria-label="How to group the unpaid fees">
-              <button type="button" class="btn btn-sm seg-btn seg-first scope-active" id="owed-group-lender" aria-pressed="true">By lender</button>
-              <button type="button" class="btn btn-sm seg-btn seg-last" id="owed-group-adviser" aria-pressed="false">By adviser</button>
-            </span>
-            <button type="button" class="btn btn-sm" id="owed-csv-btn" title="Download every unpaid fee line, including the proc and sols columns">⭳ CSV</button>
-          </div>
+          <h3>Review scores — every respondent</h3>
+          <button type="button" class="btn btn-sm" onclick="toggleNpsList()">Hide</button>
         </div>
-        <div class="panel-sub" id="report-owed-basis"></div>
-        <div class="kpi-row" id="report-owed-buckets" style="margin:12px 0 4px;"></div>
-        <!-- R42 · F3 — the four ageing buckets above ARE the answer for most reads; the per-lender / per-adviser ledger under them is the chase list, wanted on the day you chase. #owed-csv-btn sits in the panel head row and exports the same rows without opening this. -->
+        <p class="panel-sub" id="report-nps-scope"></p>
+        <!-- R42 · F3 — the respondent list. toggleNpsList() opens this drawer when it reveals the panel — the tile click IS the request to read the list, and making it a second click would be a disclosure inside a disclosure. -->
         <details class="report-ledger">
-          <summary>Show every unpaid fee line<span class="ledger-n"></span></summary>
-          <div id="report-owed-table"></div>
+          <summary>Show every respondent<span class="ledger-n"></span></summary>
+          <div id="report-nps-list"></div>
         </details>
       </div>
-
+      <!-- R89 · B — ONE FORECAST (05 #2a). The 4-stage STAGE_WEIGHT forecast (25/50/80/95) is gone: this
+           panel shows the SAME weighted figure as Pipeline MI › Revenue (MI_STAGE_DEFAULT_WEIGHT, six
+           stages, Application/Offer calibrated from history), bucketed by expected completion date, with
+           the target-gap line. Populated by renderBookForecast(); Owner-only. -->
+      <div class="panel hidden" id="report-forecast-panel">
+        <h3>Commission forecast — live pipeline</h3>
+        <div class="kpi-row" id="report-forecast-headline"></div>
+        <div id="report-forecast-buckets"></div>
+        <div id="report-forecast-target"></div>
+        <div class="panel-sub" id="report-forecast-hint"></div>
+      </div>
       <!-- ==================================================================
            R7-2 — RATE-END BOOK VALUE. The 24-month maturity ledger, its
            expandable per-case rows, and the RECOVER lane (past-rate-end
@@ -835,17 +789,6 @@
           <div id="report-rateend-table"></div>
         </details>
         <div id="report-rateend-recover" style="margin-top:18px;"></div>
-      </div>
-
-      <div class="panel" id="report-forecast-panel">
-        <h3>Commission forecast — live pipeline</h3>
-        <div class="kpi-row" id="report-forecast-headline" style="margin:8px 0 12px;"></div>
-        <div id="report-forecast-buckets"></div>
-        <!-- R77 · A1a — the forecast meets the target: the ≤30-days-vs-monthly-target gap line
-             (#report-forecast-target-line) and the no-date clause wired to the existing
-             toggleForecastNoneList. Populated by renderForecastBuckets(); owner-only with it. -->
-        <div id="report-forecast-target"></div>
-        <p class="panel-sub" id="report-forecast-hint" style="margin:10px 0 0;">Live cases from DIP to exchange, weighted by stage conversion, bucketed by expected completion date.</p>
       </div>
       <!-- ==================================================================
            R77 · A4 — BUSINESS MIX BY CASE TYPE. Completions YTD and the live
@@ -884,8 +827,8 @@
           <div id="report-ltv"></div>
         </details>
       </div>
-      <!-- R42 · F3 — §5. How well the firm is serving the people it already has -->
-      <h3 class="report-section-head" id="rsec-quality">Service &amp; quality</h3>
+      </div>
+      <div class="page-tab-panel hidden" data-tabpanel="quality">
       <!-- ==================================================================
            R7-5 — LEAD RESPONSE. How long the firm takes to answer a website
            enquiry, by source and by adviser, and what share of those enquiries
@@ -903,21 +846,6 @@
         <div id="report-leadresp-source"></div>
         <div id="report-leadresp-adviser" style="margin-top:18px;"></div>
       </div>
-      <!-- S7 / R5-47 — the review-score drill-down. A score is a person; this lists them so the
-           tile can be answered ("who gave us a 6?") instead of only admired. -->
-      <div class="panel hidden" id="report-nps-panel">
-        <div class="panel-head-row">
-          <h3>Review scores — every respondent</h3>
-          <button type="button" class="btn btn-sm" onclick="toggleNpsList()">Hide</button>
-        </div>
-        <p class="panel-sub" id="report-nps-scope"></p>
-        <!-- R42 · F3 — the respondent list. toggleNpsList() opens this drawer when it reveals the panel — the tile click IS the request to read the list, and making it a second click would be a disclosure inside a disclosure. -->
-        <details class="report-ledger">
-          <summary>Show every respondent<span class="ledger-n"></span></summary>
-          <div id="report-nps-list"></div>
-        </details>
-      </div>
-
       <!-- ==================================================================
            R9-2 — THE ADVOCACY DASHBOARD. Five questions the firm could not
            previously answer about the only lead source that costs nothing:
@@ -983,6 +911,8 @@
         <div id="report-outcomes-adviser"></div>
         <div id="report-outcomes-noshows" style="margin-top:18px;"></div>
       </div>
+      </div>
+      <div class="page-tab-panel hidden" data-tabpanel="referrals">
       <!-- ====================================================================
            R66 · M6b — §6. REFERRALS OUT.
 
@@ -1003,7 +933,6 @@
            this panel — an adviser can see the whole firm's referrals here, and
            the "Mine" default simply opens on their own.
            ==================================================================== -->
-      <h3 class="report-section-head" id="rsec-referrals">Referrals out</h3>
       <div class="panel" id="report-referrals-panel">
         <div class="panel-head-row">
           <h3>Referrals out — who we sent where</h3>
@@ -1020,8 +949,7 @@
         </details>
         <button type="button" class="btn btn-sm" id="report-ref-csv" title="Download this period's referrals as a CSV">⭳ CSV</button>
       </div>
-    </section>
-
+      </div>
     <!-- ====================================================================
          R7-4 — MONDAY MONEY. One page, read once a week, answering "where is
          the firm's money right now". Every figure is computed client-side from
@@ -1031,9 +959,10 @@
          number it came from rather than argued with.
          Owner-only — the nav item and the page body are both gated.
          ==================================================================== -->
-    <section id="page-money" class="page hidden">
-      <div class="page-head">
-        <h2>Monday money</h2>
+    <section id="page-money" class="page hidden" data-tabpanel="money">
+      <!-- R89 · D (01 #10): the tab's own "Monday money" h2 went — the page says "Reports" and the tab "Money"
+           (title "Reports › Money"); the tools row keeps Refresh, the Operations tabs' pattern (.ops-tab-head). -->
+      <div class="page-head ops-tab-head">
         <button class="btn btn-sm" id="money-refresh">↻ Refresh</button>
       </div>
       <div class="panel-sub" id="money-scope"></div>
@@ -1041,15 +970,13 @@
       <div id="money-body">
         <!-- ================================================================
              R44 — STONEBRIDGE PAYMENT RECONCILIATION.
-             R87 · owner-admin (05 #3) — THE RITUAL LEADS. The weekly commission statement (the one
-             control on this page that DOES something) sat at y≈1,886px under six read-only panels;
-             it is now the first thing in #money-body, then the rate card it checks against, then the
-             read-only panels. Nothing is deleted: the six panels keep their ids and their renderers
-             (R89 merges them into Reports). Both recon panels are inside #money-body so they inherit
-             this page's Owner gate, and both are also hidden/emptied explicitly by loadMoneyPage()'s
-             non-owner branch. Neither writes anything to a case on import — the review below the list
-             is where a human confirms, one line at a time.
-             ============================================================== -->
+             R87 · owner-admin (05 #3) — THE RITUAL LEADS: the weekly statement drop zone is first.
+             R89 · B — then the rate card it checks against (R87's order), last week's banked figure, and
+             Money owed (the chase list — drawn ONCE, here; Reports › Money & book links to it). The six read-only panels that
+             restated Reports (owed by age, top rate-ends, quotes gone cold, movement, leads by source,
+             per adviser) are gone: #money-links names where each one lives. Both recon panels are
+             inside #money-body so they inherit this page's Owner gate, and loadMoneyPage()'s non-owner
+             branch empties them explicitly. Neither writes to a case on import. -->
         <div class="panel" id="money-recon-panel">
           <div class="panel-head-row">
             <h3>Weekly commission statement</h3>
@@ -1062,7 +989,6 @@
           <div id="recon-statements"></div>
           <div id="recon-review" class="hidden"></div>
         </div>
-
         <div class="panel" id="money-procrates-panel">
           <div class="panel-head-row">
             <h3>Proc fee rates (Stonebridge)</h3>
@@ -1072,73 +998,53 @@
           <p class="panel-sub" id="procrates-status"></p>
         </div>
 
-        <!-- R87 · owner-admin — the read-only panels, below the ritual. Same ids, same order among
-             themselves; R89 decides their future. -->
         <div class="panel" id="money-banked-panel">
           <h3>Banked last week</h3>
           <div class="kpi-row" id="money-banked" style="margin:12px 0 0;"></div>
         </div>
-        <div class="panel" id="money-owed-panel">
-          <div class="panel-head-row">
-            <h3>Owed to you, by age</h3>
-            <button type="button" class="btn btn-sm" id="money-owed-open" title="Open the full Money owed list on Reports">Open the full list →</button>
-          </div>
-          <div class="panel-sub" id="money-owed-basis"></div>
-          <div id="money-owed"></div>
-        </div>
-        <div class="grid-2">
-          <div class="panel" id="money-rateends-panel">
-            <h3>Top rate-ends in the next 60 days</h3>
-            <div class="panel-sub" id="money-rateends-basis"></div>
-            <div id="money-rateends"></div>
-          </div>
-          <div class="panel" id="money-cold-panel">
-            <h3>Protection quotes gone cold</h3>
-            <div class="panel-sub" id="money-cold-basis"></div>
-            <div id="money-cold"></div>
+        <!-- R7-1 — MONEY OWED (moved here from Reports by R89 · B, every id unchanged). Owner-only, the
+             same gate as the rest of this page. The fee_aging_60 Watchtower alerts land here (gotoMoneyOwed). -->
+      <div class="panel hidden" id="report-owed-panel">
+        <div class="panel-head-row">
+          <h3>Money owed — unpaid fees on completed cases</h3>
+          <div class="owed-tools">
+            <span class="segment" role="group" aria-label="How to group the unpaid fees">
+              <button type="button" class="btn btn-sm seg-btn seg-first scope-active" id="owed-group-lender" aria-pressed="true">By lender</button>
+              <button type="button" class="btn btn-sm seg-btn seg-last" id="owed-group-adviser" aria-pressed="false">By adviser</button>
+            </span>
+            <button type="button" class="btn btn-sm" id="owed-csv-btn" title="Download every unpaid fee line, including the proc and sols columns">⭳ CSV</button>
           </div>
         </div>
-        <div class="grid-2">
-          <div class="panel" id="money-movement-panel">
-            <h3>Movement</h3>
-            <div class="panel-sub" id="money-movement-basis"></div>
-            <div id="money-movement"></div>
-          </div>
-          <div class="panel" id="money-leads-panel">
-            <h3>New leads last week, by source</h3>
-            <div class="panel-sub" id="money-leads-basis"></div>
-            <div id="money-leads"></div>
-          </div>
-        </div>
-        <div class="panel" id="money-advisers-panel">
-          <h3>Per adviser</h3>
-          <div class="panel-sub" id="money-advisers-basis"></div>
-          <div id="money-advisers"></div>
-        </div>
+        <div class="panel-sub" id="report-owed-basis"></div>
+        <div class="kpi-row" id="report-owed-buckets" style="margin:12px 0 4px;"></div>
+        <!-- R42 · F3 — the four ageing buckets above ARE the answer for most reads; the per-lender / per-adviser ledger under them is the chase list, wanted on the day you chase. #owed-csv-btn sits in the panel head row and exports the same rows without opening this. -->
+        <details class="report-ledger">
+          <summary>Show every unpaid fee line<span class="ledger-n"></span></summary>
+          <div id="report-owed-table"></div>
+        </details>
       </div>
+
+        <!-- R89 · B — link, don't copy: where the six retired read-only panels live now. -->
+        <div class="panel-sub rep-money-links" id="money-links"></div>
+      </div>
+    </section>
     </section>
 
-    <!-- Data health -->
-    <section id="page-data" class="page hidden">
+    <!-- R89 · F — OPERATIONS. Emails & SMS, Import and Data health were three sidebar rooms an adviser
+         never opens; they are one page with three tabs. Each old section keeps its id (#page-emails,
+         #page-import, #page-data) as its tab panel, so every reader inside them still finds them. -->
+    <!-- R89 · A — ONE HEADING. The page's h2 is "Operations"; the three sections' own h2s (Email activity,
+         Revolution sync / Bring in data, Data health) became the tab labels, so nothing on the page says
+         its name twice. Each panel keeps its tools row (.page-head without a heading). -->
+    <section id="page-operations" class="page hidden">
       <div class="page-head">
-        <h2>Data health</h2>
-        <button class="btn" id="data-refresh">↻ Refresh</button>
+        <h2>Operations</h2>
       </div>
-      <!-- R74 · A5b — "Clients total" left the tile wall and lives here. It is not a fault, it has
-           nothing to drill into, and as the FIRST tile of a wall of faults it was reading as one.
-           Filled by loadDataHealth so the number stays live. -->
-      <p class="panel-sub" id="dh-page-sub">Automatic data-quality checks — fix these to keep automations and reporting accurate.</p>
-      <p class="dq-notice hidden" id="data-cap-notice"></p>
-      <!-- R31-C — book-readiness rollup: one at-a-glance summary of the data-quality faults below,
-           populated by loadDataHealth. Sits above the tile row (#dh-tile-* live inside #data-content). -->
-      <div id="dh-readiness"></div>
-      <div id="data-content"></div>
-    </section>
+      <div class="page-tabs-slot"></div>
 
     <!-- Emails -->
-    <section id="page-emails" class="page hidden">
-      <div class="page-head">
-        <h2>Email activity</h2>
+    <section id="page-emails" class="page hidden" data-tabpanel="emails">
+      <div class="page-head ops-tab-head">
         <div class="page-tools">
           <!-- R11-5 — the "Failed only" checkbox that used to live here is gone; every status it
                could reach (and the four it could not) is now a chip with a live count above the
@@ -1214,19 +1120,82 @@
       </div>
     </section>
 
+    <!-- Import -->
+    <!-- R87 · owner-admin (05 #9) — THE DOORS ARE IN WEEKLY ORDER. The 2,000-case migration is done;
+         the Revolution export is the file that arrives every week and the AI bulk import is the rare
+         door, so the Revolution panel now leads and carries the primary treatment, and the AI import
+         follows as the quieter .panel-secondary. Every id inside both panels is unchanged; only the
+         DOM order and which panel carries the secondary skin have swapped (r75 A5 re-pointed). -->
+    <section id="page-import" class="page hidden" data-tabpanel="import">
+      <!-- ==================================================================
+           R8-REV · REVOLUTION SYNC
+           Everything is keyed into Revolution first; this reads the weekly
+           Stonebridge client_data_export_V2 and shows, field by field, what
+           would change HERE. Three deliberate rules, stated in the fold:
+             · headers are recognised by NAME, never by position
+             · nothing is written until a human confirms it, per field
+             · nothing is emailed, and no stage moves, as a side effect
+           =============================================================== -->
+      <h3 class="ops-door-h" id="rev-head">Revolution sync</h3>
+      <p class="panel-sub" id="rev-intro">Weekly: drop the Stonebridge client export here. It shows what would change and writes only what you tick.</p>
+      <details class="rep-howcounted how-fold" id="rev-how"><summary>How the sync works</summary><div class="rep-howcounted-body">
+        <p>Everything is keyed into Revolution first, so this reads <em>from</em> it: it matches each row of the weekly client data export to a client and a case you already hold, shows the field-by-field difference, and writes only what you tick. Column headings are recognised by name, never by position. It never queues an email, and it never moves a case stage on its own.</p>
+      </div></details>
+      <div class="panel" id="rev-input-panel">
+        <div class="rev-lastsync" id="rev-lastsync">Last import: checking…</div>
+        <div class="drop-zone-slot" id="rev-file-slot"></div>
+        <textarea id="rev-text" rows="6" aria-label="Paste the Revolution export" placeholder="…or paste the export here — the first row must be the column headings"></textarea>
+        <div class="rev-actions">
+          <button class="btn btn-primary" id="rev-read-btn">Read the export</button>
+          <button class="btn" id="rev-reset-btn" hidden>Start again</button>
+          <span id="rev-status" class="panel-sub" style="margin:0;"></span>
+        </div>
+      </div>
+      <div id="rev-mapping"></div>
+      <div id="rev-preview"></div>
+      <div id="rev-result"></div>
+
+      <h3 class="ops-door-h ops-door-h-2" id="import-ai-head">Bring in data from anywhere</h3>
+      <p class="panel-sub" id="import-intro">One-off: a spreadsheet, an email or rough notes. AI sorts it into clients and cases; nothing is saved until you confirm.</p>
+      <div class="panel panel-secondary" id="import-ai-panel">
+        <!-- R75 · B1 — the raw <input type=file> is gone; mountDropZone() builds the
+             styled zone (and the input, with the SAME id/accept/aria-label) into this
+             slot at boot. One component, four doors. -->
+        <div class="drop-zone-slot" id="import-file-slot"></div>
+        <textarea id="import-text" rows="9" aria-label="Paste rows or text to import" placeholder="…or paste rows / text here"></textarea>
+        <div style="margin-top:10px;display:flex;align-items:center;gap:12px;">
+          <button class="btn btn-primary" id="analyse-btn">✨ Analyse with AI</button>
+          <span id="import-status" class="panel-sub" style="margin:0;"></span>
+        </div>
+      </div>
+      <div id="import-preview"></div>
+    </section>
+
+    <!-- Data health -->
+    <section id="page-data" class="page hidden" data-tabpanel="data">
+      <!-- R89 · A — DATA HEALTH ONCE (05 #6). The readiness list, the tile wall and the panels were the
+           same numbers three times. Now: this one line (clients checked + the issue headline,
+           #dh-readiness-headline, painted by loadDataHealth), the tiles as the header row, and under them
+           the to-do list — one row per check, its fix list folded beneath it (#dh-readiness is that list
+           now; it lives inside #data-content). The h2 is the tab label. -->
+      <div class="page-head ops-tab-head">
+        <p class="panel-sub" id="dh-page-sub">Automatic data-quality checks.</p>
+        <div class="page-tools"><button class="btn" id="data-refresh">↻ Refresh</button></div>
+      </div>
+      <p class="dq-notice hidden" id="data-cap-notice"></p>
+      <div id="data-content"></div>
+    </section>
+    </section>
+
     <!-- Settings -->
     <section id="page-settings" class="page hidden">
-      <h2>Settings</h2>
-      <!-- R37 · P-settings — JUMP NAV, the same one Reports has had since R11-4 and for the same
-           reason: Settings is a flat five-screen scroll and "where is the document chase interval"
-           was a scroll-and-hope. Deliberately EMPTY and `hidden` in the markup — half these
-           sections are Owner-only or Admin-only and each one already owns its own gate, so the
-           chips are READ off the rendered page at the end of renderSettings() rather than
-           declared here, which is what stops an adviser being offered a chip for a panel they
-           have no panel for. -->
-      <div class="rep-nav" id="settings-jump" hidden>
-        <div class="pipe-segment rep-nav-chips" id="settings-jump-chips" role="group" aria-label="Jump to a section of Settings"></div>
-      </div>
+      <div class="page-head"><h2>Settings</h2></div>
+      <!-- R89 · C — FIVE TABS (R89-DESIGN slice C; panel-r87/TABS.md). The five jump-nav chips became
+           real tabs: Firm & rules / Automations / Integrations (the three panels INSIDE the one
+           #settings-form) / Team & security / Data. activatePageTab draws the strip here; an adviser
+           (My details + Security = one tab) gets no strip. -->
+      <div class="page-tabs-slot"></div>
+      <div data-tabpanel="firm" id="settings-status">
       <!-- R68 · M15 — EMAIL SENDING STATUS. First thing on the page, above even the export panel,
            because it is the only line in this back office that answers "can we actually email a
            client right now". Everything below it that says "requires a Resend key" or "requires
@@ -1241,16 +1210,21 @@
            two rows are about exactly that — they point at it. Painted by renderSettingsGolive();
            Owner and Administrator only, like the strip. -->
       <div id="settings-golive" class="hidden"></div>
+      </div>
       <form id="settings-form" class="panel"></form>
-      <button class="btn btn-primary" id="save-settings-btn">Save settings</button>
-      <span id="settings-saved" class="saved-msg hidden">Saved ✓</span>
+
+      <!-- R89 · C — Settings › Team & security. -->
+      <div data-tabpanel="team" id="settings-tab-team">
+      <!-- R26 — the Owner's per-adviser targets (read-only for an Administrator), built by
+           renderAdviserTargetsEditor into this slot. -->
+      <div id="adviser-targets-slot"></div>
 
       <!-- B4 UI (R5-8) — every signed-in staff member's own contact/sign-off, independent of the
            Owner-only form above (M1's self-update RLS policy covers exactly this row). Hidden
            outright when the database predates M1 — there is no column to write to. -->
-      <div class="panel hidden" id="my-details-panel" style="margin-top:24px;">
+      <div class="panel hidden" id="my-details-panel">
         <h3>My details</h3>
-        <p class="panel-sub">Used to sign off automated emails to your clients.</p>
+        <p class="panel-sub">Your phone and sign-off, used to sign off automated emails to your clients. This is the only place they are edited.</p>
         <div class="settings-grid">
           <label>Phone
             <input id="my-phone" type="tel" placeholder="e.g. 01202 900123">
@@ -1269,14 +1243,14 @@
            Administrator roster column from get_team_mfa(). Deliberately OUTSIDE #settings-form
            (nothing here is a settings row) and with NO jump-nav chip (r37 pins the chip set
            per role; it sits directly under My details, one scroll from that chip). -->
-      <div class="panel hidden" id="security-panel" style="margin-top:24px;">
+      <div class="panel hidden" id="security-panel">
         <h3>Security</h3>
         <p class="panel-sub" id="security-sub">Two-step sign-in: a 6-digit code from an authenticator app, asked for after your password.</p>
         <div id="security-mfa"></div>
         <div id="security-team" class="hidden"></div>
       </div>
 
-      <div class="panel" style="margin-top:24px;" id="introducers-panel">
+      <div class="panel" id="introducers-panel">
         <h3>Introducers</h3>
         <p class="panel-sub">Estate agents, accountants and other referrers. Give them a portal login and they can watch their referrals progress (and nothing else).</p>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
@@ -1318,6 +1292,10 @@
         <div id="team-roster"></div>
         <p id="team-role-msg" class="panel-sub hidden" style="margin-top:8px;"></p>
       </div>
+      </div>
+
+      <!-- R89 · C — Settings › Data. -->
+      <div data-tabpanel="data" id="settings-tab-data">
 
       <!-- R87 · owner-admin (05 #12) — the Data & backup panel moved DOWN to sit with Change history
            and Diagnostics: the three are the "Data" group the five-chip jump nav names, and the
@@ -1334,7 +1312,7 @@
            Downloads folder. Hidden for everyone but the Owner (renderSettings toggles it); the
            reads it makes are RLS'd anyway, so a non-Owner's export would be a partial file
            labelled as a backup, which is worse than no button. -->
-      <div class="panel hidden" id="firm-export-panel" style="margin-top:24px;">
+      <div class="panel hidden" id="firm-export-panel">
         <h3>Data &amp; backup</h3>
         <!-- R87 · owner-admin (T1) — one warning line stays in the open (it changes what the reader does
              with the file); the four-paragraph explainer keeps every word behind a closed fold. -->
@@ -1378,7 +1356,7 @@
            inside that form is swept into the settings upsert by Save, and these controls are not
            settings. Collapsed by default — it is here to be found when something is wrong, not to
            be read every time somebody opens Settings. -->
-      <details id="diag-details" class="case-details settings-details hidden" style="margin-top:24px;">
+      <details id="diag-details" class="case-details settings-details hidden">
         <summary>Diagnostics</summary>
         <div class="mi-section hidden" id="report-diag-section">
           <h3 class="mi-section-head">Diagnostics</h3>
@@ -1395,17 +1373,19 @@
           </div>
         </div>
       </details>
-      <!-- R74 · B1 (panel D#9) — THE UNSAVED-CHANGES BAR. Settings is five screens of fields with
-           THREE save buttons on it (the settings form's, My details', Adviser targets') and no
-           statement anywhere that anything is unsaved: navigating away discarded the edit without
-           a word (reproduced). One bar, pinned to the bottom of the page while ANY of those three
-           groups is dirty, counting the fields and routing Save to the handler that owns each one
-           — the three writers are unchanged, this only presses them. Last in the section so it is
-           after everything it can be about, and inside it so it disappears with the page. -->
-      <div class="settings-dirty-bar hidden" id="settings-dirty-bar" role="status" aria-live="polite">
-        <span class="sdb-msg"><strong id="settings-dirty-n">0 unsaved changes</strong><span class="sdb-where" id="settings-dirty-where"></span></span>
-        <button type="button" class="btn btn-sm" id="settings-discard-btn">Discard</button>
-        <button type="button" class="btn btn-sm btn-primary" id="settings-dirty-save">Save</button>
+      </div>
+      <!-- R74 · B1 (panel D#9) — THE UNSAVED-CHANGES BAR, and since R89 · C THE ONE SAVE. It was a bar that
+           appeared on the first edit beside a "Save settings" button (plus "Save targets", "Save my
+           details" and its own Save: four). Now it is the form's only Save: a sticky footer, shown for the
+           Owner while one of the form tabs (Firm & rules / Automations / Integrations) is on screen,
+           saying whether anything is unsaved and saving every CHANGED field on every tab (untouched
+           fields are never written). A dirty My details / Adviser targets edit is routed to its own
+           writer, as the R74 bar did. -->
+      <div class="settings-dirty-bar settings-save-bar hidden" id="settings-save" role="region" aria-label="Save settings">
+        <span class="sdb-msg" role="status" aria-live="polite"><strong id="settings-dirty-n">No unsaved changes</strong><span class="sdb-where" id="settings-dirty-where"></span></span>
+        <span id="settings-saved" class="saved-msg hidden">Saved ✓</span>
+        <button type="button" class="btn btn-sm hidden" id="settings-discard-btn">Discard</button>
+        <button type="button" class="btn btn-primary" id="save-settings-btn">Save</button>
       </div>
     </section>
 
@@ -1494,7 +1474,7 @@
      R81 · A3 — NX_BUILD_TAG below is the deploy handshake: each JS file ends by stamping its own
      window.__nxTag_*, and app.js's boot compares all four. EVERY round that edits ANY of
      index.html / core.js / reports-money.js / app.js bumps the tag IN ALL FOUR PLACES. -->
-<script>window.NX_BUILD_TAG = "r88";</script>
+<script>window.NX_BUILD_TAG = "r89";</script>
 <script src="/admin/core.js"></script>
 <script src="/admin/reports-money.js"></script>
 <script src="/admin/app.js"></script>

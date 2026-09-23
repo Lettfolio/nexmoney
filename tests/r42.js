@@ -231,15 +231,12 @@ async function wipeToZeroInformational(page) {
 
 /* Parse the readiness rollup's rows off the DOM — same technique tests/r31.js's readinessItems()
    uses: label, shown count, and the real tile id the row's inline onclick targets. */
+/* R89 · A: was the #dh-readiness .dh-readiness-item rows (label / count / onclick tile id), now the
+   to-do list's rows — Data health says each number once: the readiness list is gone, and #dh-readiness
+   is the to-do list whose non-clean counted rows (.dh-check[data-band=counted]) are exactly the checks
+   it listed, carrying their tile id (data-tile) and live count (data-n); the label is the tile's. */
 async function readinessItems(page) {
-  return page.$$eval("#dh-readiness .dh-readiness-item", (els) =>
-    els.map((el) => {
-      const label = el.querySelector(".dh-readiness-label");
-      const count = el.querySelector(".dh-readiness-count");
-      const onclick = el.getAttribute("onclick") || "";
-      const m = onclick.match(/getElementById\('([^']+)'\)/);
-      return { label: label ? label.textContent.trim() : "", count: count ? Number(count.textContent.trim()) : NaN, tileId: m ? m[1] : null };
-    }));
+  return page.evaluate(() => [...document.querySelectorAll("#dh-readiness .dh-check[data-band='counted']:not(.dh-clean)")].map((c) => { const t = document.getElementById(c.dataset.tile); return { label: t ? t.querySelector(".lbl").textContent.replace(/\s*▾\s*$/, "").trim() : "", count: Number(c.dataset.n), tileId: c.dataset.tile, tile: c.dataset.tile }; }));
 }
 
 /* Exact strings copied byte-for-byte off admin/index.html (textContent, tags stripped) — the
@@ -272,57 +269,31 @@ const EMAILS_R9_NOTE_TEXT = "An unanswered review request is followed up once. A
       await clearNxKeys(page);
       await goto(page, "reports", 2200);
 
-      /* R66 · M6b — Reports gained a SIXTH section, "Referrals out" (#rsec-referrals), at the
-         bottom of the page. The three assertions in this block that pinned the count at five were
-         encoding the R42 contract, not a rule about Reports never growing, so they are widened to
-         six rather than deleted: the ORDER and the first five names are still asserted exactly. */
-      const headIds = await page.$$eval("h3.report-section-head", (els) => els.map((e) => e.id));
-      eq("§A1 · exactly the six rsec ids, in DOM order", headIds, ["rsec-mine", "rsec-month", "rsec-mi", "rsec-money", "rsec-quality", "rsec-referrals"]);
+      /* R89 · B — CONTRACT CHANGE. The six sections are TABS now (panel-r87 05 #1): the h3#rsec-*
+         headers, the #reports-jump pills, their sticky stacking and the scroll-to-header jumps are gone.
+         What §A protected — six groups, in this order, declared once in REPORT_SECTIONS, each reachable
+         from one control — is asserted on the tabs instead. "money" is renamed "book" (the Owner's
+         Money TAB is Monday money). Was: §A1 rsec ids, §A3/§A4 sticky strips, §A6/§A7 scroll jumps. */
+      const panelKeys = await page.$$eval("#page-reports > [data-tabpanel]", (els) => els.map((e) => e.dataset.tabpanel));
+      eq("§A1 · exactly the six section tab panels (+ Money), in DOM order", panelKeys, ["mine", "month", "mi", "book", "quality", "referrals", "money"]);
 
       const sections = await page.evaluate(() => REPORT_SECTIONS.map((s) => s[0]));
-      eq("§A2 · REPORT_SECTIONS declares the same six keys in the same order", sections, ["mine", "month", "mi", "money", "quality", "referrals"]);
+      eq("§A2 · REPORT_SECTIONS declares the same six keys in the same order", sections, ["mine", "month", "mi", "book", "quality", "referrals"]);
 
-      const posInfo = await page.evaluate(() => {
-        const j = document.getElementById("reports-jump"), n = document.getElementById("rep-nav");
-        return {
-          jumpPos: getComputedStyle(j).position,
-          repNavPos: getComputedStyle(n).position,
-          jumpTop: parseFloat(getComputedStyle(j).top) || 0,
-          repNavTop: parseFloat(getComputedStyle(n).top) || 0,
-        };
-      });
-      /* R74: #reports-jump IS sticky now, and deliberately. R42's reasoning — "two sticky bars
-         would sit on top of each other" — held while the strip below it carried all twenty panel
-         chips and was three rows tall. R74 · A4c scopes that strip to the SELECTED section (four
-         to six chips, one row), so the pair fits, and a level-1 control that scrolls out of reach
-         the instant you use it was the D#6 complaint. What R42's check was protecting is that the
-         two never overlap; that is now asserted directly, off the measured offsets both bars are
-         given by measureRepJumpOffsets(). */
-      eq("§A3 · #reports-jump is sticky (R74 · A4c) …", posInfo.jumpPos, "sticky");
-      ok("§A3b · …and the panel strip is stacked BELOW it, never on top of it",
-        posInfo.repNavTop > posInfo.jumpTop, JSON.stringify(posInfo));
-      eq("§A4 · #rep-nav IS still position:sticky (R11-4, unchanged)", posInfo.repNavPos, "sticky");
+      eq("§A3 · the section pills (#reports-jump) are gone — the page-tab strip replaces them", await page.evaluate(() => !document.getElementById("reports-jump") && !!document.querySelector("#reports-tabs.page-tabs")), true);
 
-      // Owner sees month/mi/money/quality (mine is theirs to lose — see §B) — click every one of
-      // them and prove the page actually moves and the target header lands in view.
-      const keys = await page.evaluate(() => [...document.querySelectorAll("#reports-jump-chips [data-reports-jump]")].map((b) => b.dataset.reportsJump));
-      // R66 · M6b — "referrals" joins the owner's chip set: the section is visible to every staff
-      // role (no money on it), so it is on the bar for the owner too.
-      eq("§A5 · owner's visible chip set is exactly month/mi/money/quality/referrals", keys, ["month", "mi", "money", "quality", "referrals"]);
+      const keys = await page.evaluate(() => [...document.querySelectorAll("#reports-tabs > [data-tab]")].map((b) => b.dataset.tab));
+      eq("§A5 · owner's tab set is exactly month/mi/book/quality/referrals + Money", keys, ["month", "mi", "book", "quality", "referrals", "money"]);
 
-      for (const key of keys) {
-        await page.evaluate(() => window.scrollTo(0, 0));
-        await wait(page, 200);
-        const before = await page.evaluate(() => window.scrollY);
-        await page.click(`#reports-nav-${key}`);
-        await wait(page, 1000);
-        const after = await page.evaluate((k) => {
-          const head = document.getElementById(`rsec-${k}`);
-          const r = head.getBoundingClientRect();
-          return { y: window.scrollY, top: r.top, bottom: r.bottom, vh: window.innerHeight };
-        }, key);
-        ok(`§A6 · clicking #reports-nav-${key} scrolls the page`, after.y > before, { before, after });
-        ok(`§A7 · …and #rsec-${key} lands inside the viewport`, after.top >= -2 && after.top <= after.vh, after);
+      for (const key of keys.filter((k) => k !== "money")) {
+        await page.click(`#reports-tabs-${key}`);
+        await wait(page, 1200);
+        const st = await page.evaluate((k) => ({
+          shown: [...document.querySelectorAll("#page-reports > [data-tabpanel]")].filter((p) => !p.classList.contains("hidden")).map((p) => p.dataset.tabpanel),
+          hash: location.hash,
+        }), key);
+        eq(`§A6 · clicking #reports-tabs-${key} shows that tab's panel alone`, st.shown, [key]);
+        eq(`§A7 · …and the hash names it`, st.hash, `#reports/${key}`);
       }
 
       ok("§A · no console errors", noNewErr(page, errBefore), JSON.stringify(page.__err));
@@ -339,28 +310,22 @@ const EMAILS_R9_NOTE_TEXT = "An unanswered review request is followed up once. A
       const owner = await newPage(browser, "p4");
       const errOwner = (owner.__err || []).length;
       await goto(owner, "reports", 2200);
-      const ownerState = await owner.evaluate(() => ({
-        mineBtn: !!document.getElementById("reports-nav-mine"),
-        mineHeadHidden: document.getElementById("rsec-mine").classList.contains("hidden"),
-      }));
-      ok("§B1 · owner: #reports-nav-mine is absent", !ownerState.mineBtn);
-      ok("§B2 · owner: #rsec-mine carries .hidden", ownerState.mineHeadHidden);
+      // R89 · B: was the #reports-nav-mine pill + #rsec-mine header; the tab strip is the one control now.
+      const ownerTabs = await owner.evaluate(() => [...document.querySelectorAll("#reports-tabs > [data-tab]")].map((b) => b.dataset.tab));
+      ok("§B1 · owner: no My numbers tab", !ownerTabs.includes("mine"), JSON.stringify(ownerTabs));
+      ok("§B2 · owner: …and its panel stays hidden", await owner.evaluate(() => document.querySelector('[data-tabpanel="mine"]').classList.contains("hidden")));
       ok("§B · owner: no console errors", noNewErr(owner, errOwner), JSON.stringify(owner.__err));
       await owner.close();
 
       const adv = await newPage(browser, "p2");
       const errAdv = (adv.__err || []).length;
       await goto(adv, "reports", 2200);
-      const advState = await adv.evaluate(() => ({
-        qualityBtn: !!document.getElementById("reports-nav-quality"),
-        qualityHeadHidden: document.getElementById("rsec-quality").classList.contains("hidden"),
-        mineBtn: !!document.getElementById("reports-nav-mine"),
-        mineHeadHidden: document.getElementById("rsec-mine").classList.contains("hidden"),
-      }));
-      ok("§B3 · adviser: #reports-nav-quality is absent", !advState.qualityBtn);
-      ok("§B4 · adviser: #rsec-quality carries .hidden", advState.qualityHeadHidden);
-      ok("§B5 · adviser: …in contrast, #reports-nav-mine IS present (their own numbers)", advState.mineBtn);
-      ok("§B6 · adviser: …and #rsec-mine does NOT carry .hidden", !advState.mineHeadHidden);
+      // R89 · B: was pills + rsec headers; the tab strip is the one control now.
+      const advTabs = await adv.evaluate(() => [...document.querySelectorAll("#reports-tabs > [data-tab]")].map((b) => b.dataset.tab));
+      ok("§B3 · adviser: no Service & quality tab", !advTabs.includes("quality"), JSON.stringify(advTabs));
+      ok("§B4 · adviser: …and its panel stays hidden", await adv.evaluate(() => document.querySelector('[data-tabpanel="quality"]').classList.contains("hidden")));
+      ok("§B5 · adviser: …in contrast, a My numbers tab IS present (their own numbers)", advTabs.includes("mine"));
+      ok("§B6 · adviser: …and it is where they land", await adv.evaluate(() => !document.querySelector('[data-tabpanel="mine"]').classList.contains("hidden")));
       ok("§B · adviser: no console errors", noNewErr(adv, errAdv), JSON.stringify(adv.__err));
       await adv.close();
     }
@@ -383,6 +348,9 @@ const EMAILS_R9_NOTE_TEXT = "An unanswered review request is followed up once. A
         ["#report-owed-table", "#report-rateend-table", "#report-nps-list", "#report-ltv", "#report-conveyancer-body", "#report-introducers", "#report-ref-list"]);
 
       for (const [sel, rowSel, noun] of ledgers) {
+        /* R89 · B: Reports is tabbed (and Money owed lives on the Money tab) — open the tab the drawer is on,
+           painted as a tab click paints it, before reading it. */
+        if (await page.evaluate((sel) => { const k = repTabOfEl(document.querySelector(sel)); if (!k || currentPageTab("reports") === k) return false; repTabClick = true; activatePageTab("reports", k); repTabClick = false; return true; }, sel)) await wait(page, 2200);
         const before = await page.evaluate(({ sel }) => {
           const box = document.querySelector(sel);
           const det = box.closest("details.report-ledger");
@@ -436,7 +404,7 @@ const EMAILS_R9_NOTE_TEXT = "An unanswered review request is followed up once. A
       console.log("\n— §D · #owed-csv-btn exports with the ledger drawer closed, and leaves it closed (p4)");
       const page = await newPage(browser, "p4");
       const errBefore = (page.__err || []).length;
-      await goto(page, "reports", 2200);
+      await goto(page, "reports/money", 2200);   // R89 · B: was "reports" — Money owed (and its CSV) is on the Money tab
       await armCsvCapture(page);
 
       const before = await page.evaluate(() => document.getElementById("report-owed-table").closest("details.report-ledger").open);
@@ -488,6 +456,7 @@ const EMAILS_R9_NOTE_TEXT = "An unanswered review request is followed up once. A
       eq("§F1 · #month-legend is exactly the trimmed text", monthLegend, MONTH_LEGEND_TEXT);
       ok("§F2 · …and does not carry the deleted basis-repeat tail", !/Fees banked \(paid\)/.test(monthLegend) && !/is the fee value earned/.test(monthLegend), monthLegend);
 
+      await goto(page, "reports/money", 2200);   // R89 · B: Money owed is drawn once, on the Money tab
       const owedBasis = await page.$eval("#report-owed-basis", (e) => e.textContent.trim());
       ok("§F3 · #report-owed-basis ends with the new, shorter basis line", owedBasis.endsWith(OWED_BASIS_ENDING), owedBasis);
       ok("§F4 · …and no longer says 'the same basis as … above'", !/the same basis as/.test(owedBasis), owedBasis);
@@ -541,7 +510,7 @@ const EMAILS_R9_NOTE_TEXT = "An unanswered review request is followed up once. A
       console.log("\n— §H · #doc-chase-note: one sentence + ⓘ Full rules, both interpolating doc_chase_days (p4)");
       const page = await newPage(browser, "p4");
       const errBefore = (page.__err || []).length;
-      await goto(page, "settings", 2200);
+      await goto(page, "settings/automations", 2200);   // R89 · C: was "settings" — Settings is five tabs; what this reads is on the automations tab
 
       const tag = await page.$eval("#doc-chase-note", (e) => e.tagName);
       eq("§H1 · #doc-chase-note is now a <div>", tag, "DIV");
@@ -574,7 +543,7 @@ const EMAILS_R9_NOTE_TEXT = "An unanswered review request is followed up once. A
          now has a strip that probes the server and says which of the three states the firm is
          actually in. The property under test is unchanged (the full rules name the dependency),
          so the assertion reads the new sentence rather than the old one. */
-      ok("§H8 · …and the original full rules (the live-stage widening, the checklist requirement, the sender requirement)", /Enquiry through Exchange/.test(fullTxt) && /Requires email sending to be working/.test(fullTxt) && /Email sending status at the top of this page/.test(fullTxt), fullTxt);
+      ok("§H8 · …and the original full rules (the live-stage widening, the checklist requirement, the sender requirement)", /Enquiry through Exchange/.test(fullTxt) && /Requires email sending to be working/.test(fullTxt) && /Email sending status on the Firm & rules tab/.test(fullTxt), fullTxt);   // R89 · D: was "at the top of this page" — the strip is on another tab now
       // #doc-chase-note keeps its id, and textContent traverses into a closed <details> too, so a
       // reader of the whole note (open or not) always sees both interpolations at once.
       const wholeNoteTxt = await page.$eval("#doc-chase-note", (e) => e.textContent);

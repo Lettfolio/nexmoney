@@ -156,15 +156,12 @@ async function insertCase(page, o) {
 
 /* Parse the readiness rollup's rows off the DOM, in order: label, shown count, and the real tile
    id the row's inline onclick targets (`document.getElementById('<id>')?.scrollIntoView...`). */
+/* R89 · A: was the #dh-readiness .dh-readiness-item rows (label / count / onclick tile id), now the
+   to-do list's rows — Data health says each number once: the readiness list is gone, and #dh-readiness
+   is the to-do list whose non-clean counted rows (.dh-check[data-band=counted]) are exactly the checks
+   it listed, carrying their tile id (data-tile) and live count (data-n); the label is the tile's. */
 async function readinessItems(page) {
-  return page.$$eval("#dh-readiness .dh-readiness-item", (els) =>
-    els.map((el) => {
-      const label = el.querySelector(".dh-readiness-label");
-      const count = el.querySelector(".dh-readiness-count");
-      const onclick = el.getAttribute("onclick") || "";
-      const m = onclick.match(/getElementById\('([^']+)'\)/);
-      return { label: label ? label.textContent.trim() : "", count: count ? Number(count.textContent.trim()) : NaN, tileId: m ? m[1] : null };
-    }));
+  return page.evaluate(() => [...document.querySelectorAll("#dh-readiness .dh-check[data-band='counted']:not(.dh-clean)")].map((c) => { const t = document.getElementById(c.dataset.tile); return { label: t ? t.querySelector(".lbl").textContent.replace(/\s*▾\s*$/, "").trim() : "", count: Number(c.dataset.n), tileId: c.dataset.tile, tile: c.dataset.tile }; }));
 }
 
 (async () => {
@@ -411,7 +408,7 @@ async function readinessItems(page) {
         const sumShown = before.reduce((s, c) => s + c.count, 0);
         eq("C6 · headline total equals the sum of the shown item counts", headlineTotal, sumShown);
       } else {
-        const clean = await page.$eval("#dh-readiness", (e) => e.textContent);
+        const clean = await page.$eval("#dh-page-sub", (e) => e.textContent);   // R89 · A: was #dh-readiness — the clean line is the page's one line now
         ok("C2alt · with zero issues, the empty state renders ('looks clean' + a checkmark)", /looks clean/i.test(clean) && /✅/.test(clean), clean);
       }
       // C7 — sorted worst-first, wherever there's more than one row to order.
@@ -466,16 +463,16 @@ async function readinessItems(page) {
         const orig = Element.prototype.scrollIntoView;
         Element.prototype.scrollIntoView = function (...args) { window.__sivCalls++; return orig.apply(this, args); };
       });
-      const items = await page.$$(".dh-readiness-item");
+      /* R89 · A: was clicking the readiness row (which scrolled to the tile and clicked it). The row is
+         the to-do list's own head now — it sits directly above its list, so it unfolds it in place
+         (C12c: aria-expanded instead of a scroll); the tile keeps the jump-and-open (r25/r27 tile clicks). */
+      const head = await page.$('#dh-readiness .dh-check[data-tile="dh-tile-invalid-email"] .dh-check-btn');
       let clicked = false;
-      for (const it of items) {
-        const label = await it.$eval(".dh-readiness-label", (e) => e.textContent);
-        if (/invalid email/i.test(label)) { await it.click(); clicked = true; break; }
-      }
-      ok("C12b · found and clicked the 'Invalid email' readiness row", clicked);
+      if (head) { await head.click(); clicked = true; }
+      ok("C12b · found and clicked the 'Invalid email' to-do row", clicked);
       await wait(page, 400);
-      const sivCalls = await page.evaluate(() => window.__sivCalls);
-      ok("C12c · clicking the item invoked scrollIntoView (scrolled to the tile/panel)", sivCalls > 0, sivCalls);
+      const expanded = await page.evaluate(() => (document.querySelector('#dh-readiness .dh-check[data-tile="dh-tile-invalid-email"] .dh-check-btn') || {}).getAttribute?.("aria-expanded"));
+      ok("C12c · the row reports itself expanded", expanded === "true", expanded);
       const panelHiddenAfter = await page.$eval("#dh-invalid-email-panel", (e) => e.classList.contains("hidden"));
       ok("C12d · #dh-invalid-email-panel is no longer hidden — clicking the readiness row expanded it", !panelHiddenAfter);
 

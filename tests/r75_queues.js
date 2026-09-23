@@ -408,7 +408,7 @@ async function analyse(page, csv) {
       const page = await boot(browser, "p2");
       const errBefore = realErrs(page).length;
       const advAssign = await page.evaluate(() => {
-        const btn = document.querySelector('#topnav button[data-page="import"]');
+        const btn = document.querySelector('#topnav button[data-page="operations"]');   // R89 · F — was data-page="import"; Import is a tab of Operations (the gated entry)
         window.nav("import");
         return {
           navHidden: !!btn && btn.classList.contains("hidden"),

@@ -290,12 +290,15 @@ const readCase = (page, caseId) => page.evaluate(async (id) => {
          integrations · team · data), and an adviser's Settings is now My details + Security only, so their bar
          has nothing to jump between and hides. The role rule is unchanged: chips are read off the rendered page. */
       console.log("\n— §2 · Settings jump nav: owner 5 = admin 5 > adviser 0 chips (five group headings), correct sets (p4/p1/p2)");
+      /* R89 · C: was the #settings-jump chip bar (#settings-nav-<key>, [data-settings-jump]) — the five group
+         headings are real TABS now (R89-DESIGN slice C): the page-tab strip #settings-tabs, buttons
+         #settings-tabs-<key>[data-tab]. Same five keys per role; an adviser has one tab, so no strip. */
       const readChips = async (page) => page.evaluate(() => {
-        const bar = document.querySelector("#settings-jump");
+        const bar = document.querySelector("#settings-tabs");
         return {
-          barHidden: bar ? bar.hidden : null,
-          keys: [...document.querySelectorAll("#settings-jump-chips [data-settings-jump]")].map((b) => b.dataset.settingsJump),
-          idsMatch: [...document.querySelectorAll("#settings-jump-chips [data-settings-jump]")].every((b) => b.id === `settings-nav-${b.dataset.settingsJump}`),
+          barHidden: bar ? bar.offsetParent === null : true,
+          keys: [...document.querySelectorAll("#settings-tabs > .seg-btn[data-tab]")].map((b) => b.dataset.tab),
+          idsMatch: [...document.querySelectorAll("#settings-tabs > .seg-btn[data-tab]")].every((b) => b.id === `settings-tabs-${b.dataset.tab}`),
         };
       });
 
@@ -304,7 +307,7 @@ const readCase = (page, caseId) => page.evaluate(async (id) => {
       await goto(owner, "settings", 1500);
       const ownerChips = await readChips(owner);
       ok("§2a · owner: the jump bar is visible", ownerChips.barHidden === false, JSON.stringify(ownerChips));
-      ok("§2a · owner: every chip id is settings-nav-<key>", ownerChips.idsMatch, JSON.stringify(ownerChips));
+      ok("§2a · owner: every tab id is settings-tabs-<key> (R89 · C: was settings-nav-<key>)", ownerChips.idsMatch, JSON.stringify(ownerChips));
       eq("§2a · owner sees the five group headings (R87: was 14 sections)", ownerChips.keys.slice().sort(),
         ["automations", "data", "firm", "integrations", "team"]);
 
@@ -326,32 +329,32 @@ const readCase = (page, caseId) => page.evaluate(async (id) => {
       ok("§2d · owner ≥ admin > adviser", ownerChips.keys.length >= adminChips.keys.length && adminChips.keys.length > advChips.keys.length,
         JSON.stringify({ owner: ownerChips.keys.length, admin: adminChips.keys.length, adviser: advChips.keys.length }));
 
-      /* Clicking a plain (non-<details>) chip scrolls its section into view. */
+      /* R89 · C: was "clicking a chip scrolls its section into view" — a tab SHOWS its room instead: the
+         Automations tab puts its section (Stage tasks) on screen near the top, hidden before. */
       const scrollRes = await owner.evaluate(async () => {
-        // R87: the plain chip is "Automations", anchored on the Stage tasks heading.
-        const before = document.querySelector("#set-sec-stage-tasks").getBoundingClientRect().top;
-        document.getElementById("settings-nav-automations").click();
+        const before = document.querySelector("#set-sec-stage-tasks").offsetParent !== null;
+        document.getElementById("settings-tabs-automations").click();
         await new Promise((r) => setTimeout(r, 1200));
         const after = document.querySelector("#set-sec-stage-tasks").getBoundingClientRect().top;
-        const active = [...document.querySelectorAll("#settings-jump-chips .seg-btn.active")].map((b) => b.id);
+        const active = [...document.querySelectorAll('#settings-tabs .seg-btn[aria-pressed="true"]')].map((b) => b.id);
         return { before, after, active };
       });
-      ok("§2e · clicking a chip scrolls its target near the top of the viewport", scrollRes.after < 250, JSON.stringify(scrollRes));
-      eq("§2f · the clicked chip becomes the sole active one", scrollRes.active, ["settings-nav-automations"]);
+      ok("§2e · clicking a tab puts its section on screen near the top (hidden before)", !scrollRes.before && scrollRes.after > 0 && scrollRes.after < 900, JSON.stringify(scrollRes));
+      eq("§2f · the clicked tab becomes the sole pressed one", scrollRes.active, ["settings-tabs-automations"]);
 
-      /* Clicking a chip whose target lives inside a collapsed <details> opens that details first. */
-      const beforeOpen = await owner.evaluate(() => document.getElementById("set-sec-advanced").open);
-      eq("fixture · the Advanced accordion starts collapsed", beforeOpen, false);
+      /* R89 · C: was "a chip whose target lives inside the collapsed Advanced <details> opens it" — the Advanced
+         fold is the Integrations TAB now (#set-sec-advanced is its panel), so there is nothing to open. */
+      const beforeOpen = await owner.evaluate(() => document.getElementById("set-sec-advanced").classList.contains("hidden"));
+      eq("fixture · the Integrations panel starts hidden", beforeOpen, true);
       const detailsRes = await owner.evaluate(async () => {
-        // R87: the <details>-wrapped target is the Advanced fold itself, under the "Integrations" chip.
-        document.getElementById("settings-nav-integrations").click();
+        document.getElementById("settings-tabs-integrations").click();
         await new Promise((r) => setTimeout(r, 1200));
         const det = document.getElementById("set-sec-advanced");
         const target = document.getElementById("set-sec-outlook");
-        return { open: det.open, top: target.getBoundingClientRect().top };
+        return { open: !det.classList.contains("hidden"), top: target.getBoundingClientRect().top };
       });
-      ok("§2g · a chip for a <details>-wrapped section opens that details", detailsRes.open === true, JSON.stringify(detailsRes));
-      ok("§2h · …and still scrolls the (now-visible) target into view", detailsRes.top < 250, JSON.stringify(detailsRes));
+      ok("§2g · the Integrations tab shows the old Advanced section", detailsRes.open === true, JSON.stringify(detailsRes));
+      ok("§2h · …with its Outlook heading on screen", detailsRes.top > 0 && detailsRes.top < 900, JSON.stringify(detailsRes));
 
       ok("§2 · no console errors (owner)", noNewErr(owner, errOwner), JSON.stringify(owner.__err));
       ok("§2 · no console errors (admin)", noNewErr(admin, errAdmin), JSON.stringify(admin.__err));
@@ -366,7 +369,7 @@ const readCase = (page, caseId) => page.evaluate(async (id) => {
       console.log("\n— §3 · Pipeline MI's funnel sub says LIVE right now; #report-funnel-scope says CREATED in <month>, cross-ref admin/owner only (p4/p2)");
       const owner = await newPage(browser, "p4");
       const errOwner = (owner.__err || []).length;
-      await goto(owner, "reports", 1500);
+      await goto(owner, "reports/mi", 1500);   // R89 · B: was "reports" — the funnel is on the Pipeline MI tab, painted when shown
       const ownerText = await owner.evaluate(() => ({
         miSub: document.querySelector("#report-mi-funnel-panel .panel-sub") ? document.querySelector("#report-mi-funnel-panel .panel-sub").textContent : null,
         scope: document.querySelector("#report-funnel-scope") ? document.querySelector("#report-funnel-scope").innerHTML : null,
@@ -377,12 +380,14 @@ const readCase = (page, caseId) => page.evaluate(async (id) => {
 
       const adv = await newPage(browser, "p2");
       const errAdv = (adv.__err || []).length;
-      await goto(adv, "reports", 1500);
+      await goto(adv, "reports/mi", 1500);   // R89 · B: was "reports"
       const advText = await adv.evaluate(() => ({
         miPanelVisible: (() => { const el = document.querySelector("#report-mi-funnel-panel"); return el ? el.offsetParent !== null : false; })(),
         scope: document.querySelector("#report-funnel-scope") ? document.querySelector("#report-funnel-scope").innerHTML : null,
       }));
-      ok("fixture · adviser: Pipeline MI is not visible at all", !advText.miPanelVisible, JSON.stringify(advText));
+      /* R89 · B: ONE funnel panel now (#report-mi-funnel-panel), which the adviser keeps for its month-cohort
+         view; the LIVE MI view inside it is what an adviser must not get. Was: the whole panel invisible. */
+      ok("fixture · adviser: the live MI funnel is not visible at all", !(await adv.evaluate(() => { const el = document.querySelector("#report-mi-funnel-live"); return !!el && el.offsetParent !== null; })), JSON.stringify(advText));
       ok("§3d · adviser: #report-funnel-scope still says CREATED in <month>", advText.scope && /Cases CREATED in/.test(advText.scope), advText.scope);
       ok("§3e · adviser: …but carries NO cross-reference to Pipeline MI (they cannot see it)", !!advText.scope && !/Pipeline MI/.test(advText.scope), advText.scope);
 
@@ -783,7 +788,8 @@ const readCase = (page, caseId) => page.evaluate(async (id) => {
       await wait(page, 900);
       const nowOnEmails = await page.evaluate(() => ({
         pageVisible: !document.querySelector("#page-emails").classList.contains("hidden"),
-        current: document.querySelector('#topnav button[data-page="emails"]') ? document.querySelector('#topnav button[data-page="emails"]').getAttribute("aria-current") : null,
+        // R89 · F — was button[data-page="emails"]; Emails is a tab of Operations, whose entry is the current one
+        current: document.querySelector('#topnav button[data-page="operations"]') ? document.querySelector('#topnav button[data-page="operations"]').getAttribute("aria-current") : null,
       }));
       ok("§9f · clicking #dh-stuck-link navigates to the Emails page", nowOnEmails.pageVisible && nowOnEmails.current === "page", JSON.stringify(nowOnEmails));
 
@@ -898,7 +904,9 @@ const readCase = (page, caseId) => page.evaluate(async (id) => {
       await goto(admin, "reports", 1500);
       const adminNote = await admin.$eval("#report-money-note", (e) => ({ hidden: e.classList.contains("hidden"), text: e.textContent }));
       ok("§12a · admin: the money note is visible", !adminNote.hidden, JSON.stringify(adminNote));
-      ok("§12b · admin: …and names the page ending on purpose (\"ENDS where\")", /ENDS where/.test(adminNote.text), adminNote.text);
+      /* R89 · B: Reports is tabs now — the money tabs are simply not offered, so there is no "page end" to
+         name. The line keeps its job (money is Owner-only; Pipeline MI is her view) in ≤ 20 words (05 #7). */
+      ok("§12b · admin: …and says the money is Owner-only in ≤ 20 words", /Owner-only/.test(adminNote.text) && adminNote.text.trim().split(/\s+/).length <= 20, adminNote.text);
       ok("§12c · admin: …and points at Pipeline MI as the admin view of the money", /Pipeline MI/.test(adminNote.text), adminNote.text);
 
       const owner = await newPage(browser, "p4");

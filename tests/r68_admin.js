@@ -694,8 +694,11 @@ const advisingPool = (page) => page.evaluate(async () => {
       ok("D1a · an empty palette now offers verbs", verbs.length >= 10, `got ${verbs.length}`);
       ok("D1b · every verb row is an ordinary .palette-row with a data-verb", verbs.every((v) => !!v.verb && !!v.title));
       ok("D1c · the eight navigation verbs the round asked for are all there",
-        ["goto-pipeline", "goto-clients", "goto-retention", "goto-protection", "goto-diary", "goto-reports", "goto-emails", "goto-settings"]
-          .every((id) => verbs.some((v) => v.verb === id)), JSON.stringify(verbs.map((v) => v.verb)));
+        /* R89 · A: was eight incl. goto-emails. Emails is a tab of Operations now, an Owner/Administrator
+           page an adviser bounces off, so its verbs (Go to Operations + one per tab) carry the same gate;
+           this persona is an adviser — the seven remain and the Operations verbs are absent. */
+        ["goto-pipeline", "goto-clients", "goto-retention", "goto-protection", "goto-diary", "goto-reports", "goto-settings"]
+          .every((id) => verbs.some((v) => v.verb === id)) && !verbs.some((v) => /^goto-(operations|emails|import|data)$/.test(v.verb)), JSON.stringify(verbs.map((v) => v.verb)));
       ok("D1d · …plus New case, New client, Book appointment, Log a call, Accept leads, Write to client",
         ["new-case", "new-client", "book-appointment", "log-call", "accept-leads", "write-client"]
           .every((id) => verbs.some((v) => v.verb === id)), JSON.stringify(verbs.map((v) => v.verb)));

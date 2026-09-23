@@ -536,7 +536,7 @@ const radarRowText = (page, name) => page.evaluate((n) => { const r = [...docume
       console.log("\n— §B2 · playbook_auto_tasks: rendered, explained, and actually the gate (p4 owner)");
       const p4 = await newPage(browser, "p4");
       const errBefore = (p4.__err || []).length;
-      await goto(p4, "settings", 1800);
+      await goto(p4, "settings/automations", 1800);   // R89 · C: was "settings" — Settings is five tabs; what this reads is on the automations tab
 
       const setUi = await p4.evaluate(() => {
         const sel = document.querySelector('#settings-form [name="playbook_auto_tasks"]');
@@ -583,7 +583,7 @@ const radarRowText = (page, name) => page.evaluate((n) => { const r = [...docume
       await p4.evaluate(() => { if (window.closeModal) window.closeModal(); });
 
       // Back ON, and the same move now writes.
-      await goto(p4, "settings", 1800);
+      await goto(p4, "settings/automations", 1800);   // R89 · C: was "settings" — Settings is five tabs; what this reads is on the automations tab
       await p4.selectOption('#settings-form [name="playbook_auto_tasks"]', "on");
       await p4.click("#save-settings-btn");
       await wait(p4, 2000);

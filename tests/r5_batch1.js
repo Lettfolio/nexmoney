@@ -236,7 +236,7 @@ async function main() {
       await p2.close();
 
       const p4 = await newPage(browser, "p4");
-      await p4.click('.nav-link[data-page="emails"], [data-page="emails"]');
+      await p4.click('#topnav button[data-page="operations"]'); await p4.click('#operations-tabs-emails');   // R89 · F — was [data-page="emails"]; emails is a tab of Operations
       await p4.waitForTimeout(900);
       const ownerVisible = await p4.evaluate(() => {
         const b = document.querySelector("#run-now-btn");
@@ -430,7 +430,7 @@ async function main() {
     console.log("\n— R5-43 · the no-email failure (p1 Kim)");
     {
       const page = await newPage(browser, "p1");
-      await page.click('[data-page="emails"]');
+      await page.click('#topnav button[data-page="operations"]'); await page.click('#operations-tabs-emails');   // R89 · F — was [data-page="emails"]; emails is a tab of Operations
       await page.waitForTimeout(1000);
       const row = await page.evaluate(() => {
         const r = [...document.querySelectorAll("#email-list .row-item")].find((x) => /no email on file|no address on file/i.test(x.textContent));
@@ -478,7 +478,7 @@ async function main() {
         await db.from("clients").update({ email: "moved.house@example.com" }).eq("id", row.client_id);
         return { id: row.id, was: row.to_email, client: row.client_id };
       });
-      await page.click('[data-page="emails"]');
+      await page.click('#topnav button[data-page="operations"]'); await page.click('#operations-tabs-emails');   // R89 · F — was [data-page="emails"]; emails is a tab of Operations
       await page.waitForTimeout(1100);
       const flagged = await page.evaluate((id) => {
         const rows = [...document.querySelectorAll("#email-list .row-item")];

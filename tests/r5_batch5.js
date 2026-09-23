@@ -407,7 +407,7 @@ const sendCalls = (page) => page.evaluate(() => window.__sendCalls || []);
       ok("fixture · …and in June 2026", /Luke Richards/.test(jun26Before));
 
       // Now the handover: Settings → roster → Luke → No access → reassign to Wayne.
-      await page.click('[data-page="settings"]');
+      await page.click('[data-page="settings"]'); await page.waitForTimeout(600); await page.click("#settings-tabs-team");   // R89 · C: the roster is on Settings › Team & security
       await page.waitForTimeout(1200);
       await page.selectOption('#team-roster select.team-role[data-id="p3"]', "none");
       await page.waitForTimeout(1400);
@@ -514,7 +514,7 @@ const sendCalls = (page) => page.evaluate(() => window.__sendCalls || []);
         await db.from("case_tasks").update({ assigned_to: "p4" }).eq("assigned_to", "p2").is("done_at", null);
         await db.from("appointments").update({ staff_id: "p4" }).eq("staff_id", "p2").gte("starts_at", new Date().toISOString());
       });
-      await page.click('[data-page="settings"]');
+      await page.click('[data-page="settings"]'); await page.waitForTimeout(600); await page.click("#settings-tabs-team");   // R89 · C: the roster is on Settings › Team & security
       await page.waitForTimeout(1200);
       await page.selectOption('#team-roster select.team-role[data-id="p2"]', "none");
       await page.waitForTimeout(1400);
@@ -557,7 +557,7 @@ const sendCalls = (page) => page.evaluate(() => window.__sendCalls || []);
       ok("fixture · and the probe moved nothing (a missing function cannot have side effects)",
         before.live.length > 0, JSON.stringify({ live: before.live.length }));
 
-      await page.click('[data-page="settings"]');
+      await page.click('[data-page="settings"]'); await page.waitForTimeout(600); await page.click("#settings-tabs-team");   // R89 · C: the roster is on Settings › Team & security
       await page.waitForTimeout(1200);
       await page.selectOption('#team-roster select.team-role[data-id="p3"]', "none");
       await page.waitForTimeout(1400);

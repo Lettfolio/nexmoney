@@ -318,6 +318,7 @@ async function setSetting(page, key, value) {
       const page = await boot(browser, "p4");
       await seedProduction(page);
       await goPage(page, "reports", 4200);
+      await page.evaluate(() => repSetAdvView("activity")); await page.waitForTimeout(2500);   // R89 · B: the adoption strip is the activity VIEW of the one adviser table
       const strip = await waitFor(page, () => {
         const t = document.getElementById("report-adoption-table");
         return t && t.querySelectorAll("tr.adopt-row").length ? true : null;
@@ -367,6 +368,7 @@ async function setSetting(page, key, value) {
       });
       await goPage(page, "dashboard", 1200);
       await goPage(page, "reports", 4200);
+      await page.evaluate(() => repSetAdvView("activity")); await page.waitForTimeout(2500);   // R89 · B: the adoption strip is the activity VIEW of the one adviser table
       const s2 = await readStrip(page);
       const d2 = s2.rows.filter((r) => r.id === "p4")[0];
       eq("B5a · a colleague who signed in and changed nothing reads `never` active beside a sign-in date",
@@ -392,6 +394,7 @@ async function setSetting(page, key, value) {
       const page = await boot(browser, "p4", () => { window.__mockMigrations = { m12: false }; });
       await seedProduction(page);   // …and the seed makes no difference, because nothing can read it
       await goPage(page, "reports", 4200);
+      await page.evaluate(() => repSetAdvView("activity")); await page.waitForTimeout(2500);   // R89 · B: the adoption strip is the activity VIEW of the one adviser table
       const strip = await readStrip(page);
       ok("C1a · the panel still renders in full", !!strip && strip.rows.length > 0, JSON.stringify(strip && strip.cols));
       eq("C1b · the Signed in column exists but says nothing about anybody",
@@ -426,6 +429,7 @@ async function setSetting(page, key, value) {
         };
       });
       await goPage(page, "reports", 4200);
+      await page.evaluate(() => repSetAdvView("activity")); await page.waitForTimeout(2500);   // R89 · B: the adoption strip is the activity VIEW of the one adviser table
       const s = await readStrip(page);
       eq("C2a · an object where an array was promised is 'we do not know', not a crash",
         [...new Set(s.rows.map((r) => r.signin))], ["unknown"]);
@@ -445,6 +449,7 @@ async function setSetting(page, key, value) {
         };
       });
       await goPage(page, "reports", 4200);
+      await page.evaluate(() => repSetAdvView("activity")); await page.waitForTimeout(2500);   // R89 · B: the adoption strip is the activity VIEW of the one adviser table
       const s = await readStrip(page);
       ok("C3a · a rejected read is caught and answered as 'we do not know'",
         !!s && s.rows.length > 0 && s.rows.every((r) => r.signin === "unknown"), JSON.stringify(s && s.rows.map((r) => r.signin)));

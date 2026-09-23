@@ -299,9 +299,10 @@ const getDQ = (page) => page.evaluate(async () => (await window.__mockDb.rpc("ge
    rather than position is the only reliable way in — same technique tests/r42.js's §J4 uses). */
 async function rateEndRollupCount(page) {
   return page.evaluate(() => {
-    const items = Array.from(document.querySelectorAll("#dh-readiness .dh-readiness-item"));
-    const row = items.find((el) => (el.querySelector(".dh-readiness-label") || {}).textContent === "Completed, no rate-end");
-    return row ? Number(row.querySelector(".dh-readiness-count").textContent) : null;
+    /* R89 · A: was the readiness row labelled "Completed, no rate-end"; the readiness list is the
+       to-do list now — its rate-end row (data-tile) carries the count (data-n); clean → absent → null. */
+    const row = document.querySelector("#dh-readiness .dh-check[data-band='counted'][data-tile='dh-tile-rateend']:not(.dh-clean)");
+    return row ? Number(row.dataset.n) : null;
   });
 }
 function rateEndPanelIds(page) {

@@ -146,7 +146,7 @@ const isAbout30d = (iso) => {
       gt.ffs.length >= 2 && gt.docs.length >= 2 && gt.comms.length >= 40,
       JSON.stringify({ ffs: gt.ffs.length, docs: gt.docs.length, comms: gt.comms.length }));
 
-    await goPage(page, "settings");
+    await goPage(page, "settings/data");   // R89 · D: was "settings" — the firm export is on Settings › Data (R89 · C's five tabs)
     await page.click("#firm-export-btn");
     await wait(page, 700);
     ok("§A1 · the export still asks first (R74's house confirm, not weakened)", !!(await page.$("#ovl-confirm-ok")));
@@ -443,13 +443,14 @@ const isAbout30d = (iso) => {
     console.log("\n— §E · what's-new never greets a brand-new user, and entries carry roles");
     /* E1 · FIRST-EVER sign-in (p3, tour_seen_at null): no band, marker stamped current. */
     const page = await boot(browser, "p3");
+    const REL = await page.evaluate(() => WHATSNEW_RELEASE);
     const first = await page.evaluate(() => ({
       hidden: document.getElementById("whatsnew-band").classList.contains("hidden"),
       html: (document.getElementById("whatsnew-band").innerHTML || "").trim().length,
       marker: localStorage.getItem("nx_whatsnew_last_p3"),
     }));
     ok("§E1 · a first-ever sign-in shows NO what's-new and silently stamps the current release",
-      first.hidden && first.html === 0 && first.marker === "79", JSON.stringify(first));
+      first.hidden && first.html === 0 && first.marker === String(REL), JSON.stringify(first));   // R89 · D: was "79" — the release is read at runtime (89 now)
 
     /* E2 · DAY TWO: the tour is done (tour_seen_at set), the marker is current — still quiet.
        The old behaviour greeted exactly this person with changes predating their existence. */
@@ -488,22 +489,25 @@ const isAbout30d = (iso) => {
     /* E5 · the owner DOES see the owner-tagged entry, and dismissing stamps the marker. */
     const own = await boot(browser, "p4", { init: () => { try { localStorage.setItem("nx_whatsnew_last_p4", "72"); } catch (e) {} } });
     const ownBand = await own.evaluate(() => (document.getElementById("whatsnew-band").textContent || "").replace(/\s+/g, " ").trim());
-    ok("§E5a · the owner sees the owner-tagged entry", /exports withhold/i.test(ownBand), ownBand);
+    /* R89 · D: was /exports withhold/ (the R79 owner-tagged clause). The band shows the NEWEST release only, and
+       R89's one entry is tagged owner/admin — so the owner-tagged clause the owner sees is now the Operations one. */
+    ok("§E5a · the owner sees the owner-tagged entry", /Operations page/i.test(ownBand), ownBand);
     await own.click("#whatsnew-dismiss");
     await wait(own, 300);
     const dismissed = await own.evaluate(() => ({
       hidden: document.getElementById("whatsnew-band").classList.contains("hidden"),
       marker: localStorage.getItem("nx_whatsnew_last_p4"),
     }));
-    ok("§E5b · dismissing hides it and stamps the current release", dismissed.hidden && dismissed.marker === "79", JSON.stringify(dismissed));
+    ok("§E5b · dismissing hides it and stamps the current release", dismissed.hidden && dismissed.marker === String(await own.evaluate(() => WHATSNEW_RELEASE)), JSON.stringify(dismissed));   // R89 · D: was "79"
     await own.__ctx.close();
 
     /* E6 · a pre-marker returning user who dismissed the R72 line under the LEGACY key is
        treated as seen-up-to-72: only the R79 entries come back. */
     const leg = await boot(browser, "p4", { init: () => { try { localStorage.setItem("nx_whatsnew_r72", "seen"); } catch (e) {} } });
     const legBand = await leg.evaluate(() => (document.getElementById("whatsnew-band").textContent || "").replace(/\s+/g, " ").trim());
-    ok("§E6 · the legacy nx_whatsnew_r72 dismissal is honoured — no R72 clauses, R79 ones only",
-      !/bulk playbooks/i.test(legBand) && !/go-live list/i.test(legBand) && /30 days/.test(legBand), legBand);
+    /* R89 · D: was "R79 ones only" (/30 days/) — the newest release for an owner is R89 now. */
+    ok("§E6 · the legacy nx_whatsnew_r72 dismissal is honoured — no R72 clauses, the newest release's only",
+      !/bulk playbooks/i.test(legBand) && !/go-live list/i.test(legBand) && /Operations page/.test(legBand), legBand);
     await leg.__ctx.close();
   }
 

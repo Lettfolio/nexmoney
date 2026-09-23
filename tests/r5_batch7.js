@@ -69,7 +69,7 @@ async function newPage(browser, persona) {
 
 // Paste rows into the import box and run Analyse, exactly as an operator would.
 async function analyse(page, csv) {
-  await page.click('[data-page="import"]');
+  await page.click('#topnav button[data-page="operations"]'); await page.click('#operations-tabs-import');   // R89 · F — was [data-page="import"]; import is a tab of Operations
   await page.waitForTimeout(250);
   await page.fill("#import-text", csv);
   await page.click("#analyse-btn");

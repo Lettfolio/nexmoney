@@ -94,7 +94,9 @@ const gotoSettings = async (page) => {
   // handler ends up calling and works for every persona (nav() itself auto-expands the group
   // when it lands on a page inside it), so this one change fixes every gotoSettings() call in
   // this file without needing to special-case which persona is calling it.
-  await page.evaluate(() => window.nav("settings"));
+  /* R89 · C: was nav("settings") — Settings is five tabs; the roster and My details this file drives are on
+     Team & security (an adviser has only that tab, so this is the same page for them). */
+  await page.evaluate(() => window.nav("settings/team"));
   await page.waitForTimeout(1200);
 };
 const readProfile = (page, id) => page.evaluate((pid) =>
@@ -303,9 +305,13 @@ const readProfile = (page, id) => page.evaluate((pid) =>
         selects: document.querySelectorAll("#team-roster select").length,
         inputs: document.querySelectorAll("#team-roster input").length,
         textareas: document.querySelectorAll("#team-roster textarea").length,
-        buttons: document.querySelectorAll("#team-roster button").length,
+        /* R89 · C: was every button — the administrator's OWN row now carries one door, "Edit in My details"
+           (#team-self-edit): your phone and sign-off are shown read-only in the roster and edited only in My
+           details (single source, 05 #4). It edits nothing in the roster, so the roster itself stays read-only. */
+        buttons: document.querySelectorAll("#team-roster button:not(#team-self-edit)").length,
+        selfDoor: document.querySelectorAll("#team-roster #team-self-edit").length,
       }));
-      eq("R5-24 · zero interactive controls anywhere in the roster", controls, { selects: 0, inputs: 0, textareas: 0, buttons: 0 });
+      eq("R5-24 · zero interactive controls anywhere in the roster (bar the door to your own My details)", controls, { selects: 0, inputs: 0, textareas: 0, buttons: 0, selfDoor: 1 });
 
       // Role changes are refused server-side regardless of what the UI shows an Admin.
       const roleAttempt = await page.evaluate(async () => {

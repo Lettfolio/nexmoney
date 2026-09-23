@@ -334,7 +334,7 @@ const readCsvName = (page) => page.evaluate(() => window.__csvName);
     {
       console.log("\n— §E · Part B · a landmine case object (a throwing getter) proves renderPipelineMI's catch is genuinely unconditional; the rest of MI still renders (p4)");
       const page = await newPage(browser, "p4");
-      await goto(page, "reports");
+      await goto(page, "reports/mi");   // R89 · B: was "reports" — Pipeline MI is a tab, painted when shown
 
       const r = await page.evaluate(async () => {
         const { data: cases } = await window.__mockDb.from("cases").select("*");
@@ -418,7 +418,7 @@ const readCsvName = (page) => page.evaluate(() => window.__csvName);
         // sum-of-.count behaviour itself is already proven directly in §A6.
         window.logClientError("error", "r21-diag-CCC", { where: "diag.js:3", stack: "URIError: r21-diag-CCC\n at diag.js:3:1" });
       });
-      await goto(page, "settings");
+      await goto(page, "settings/data");   // R89 · fixer: was "settings" — Session health lives on the Data tab (R89 · C), and the stored/first tab is Firm & rules, so its buttons were not clickable
       await openDiagDetails(page);
       await wait(page, 400);
 
@@ -442,7 +442,7 @@ const readCsvName = (page) => page.evaluate(() => window.__csvName);
       const page = await newPage(browser, "p4");
 
       await page.evaluate(() => { window.logClientError("error", "r21-clear-probe", { where: "clear.js:1" }); });
-      await goto(page, "settings");
+      await goto(page, "settings/data");   // R89 · fixer: was "settings" — Session health lives on the Data tab (R89 · C), and the stored/first tab is Firm & rules, so its buttons were not clickable
       await openDiagDetails(page);
       await wait(page, 400);
 
@@ -473,7 +473,7 @@ const readCsvName = (page) => page.evaluate(() => window.__csvName);
         window.logClientError("error", "r21-csv-AAA", { where: "csv.js:1", stack: "TypeError: r21-csv-AAA\n at csv.js:1:1" });
         window.logClientError("error", "r21-csv-BBB", { where: "csv.js:2", stack: "RangeError: r21-csv-BBB\n at csv.js:2:1" });
       });
-      await goto(page, "settings");
+      await goto(page, "settings/data");   // R89 · fixer: was "settings" — Session health lives on the Data tab (R89 · C), and the stored/first tab is Firm & rules, so its buttons were not clickable
       await openDiagDetails(page);
       await wait(page, 400);
 

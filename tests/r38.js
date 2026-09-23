@@ -229,7 +229,7 @@ async function groupHeadings(page, containerSel) {
       const errBefore = (page.__err || []).length;
 
       const total = await page.evaluate(() => document.querySelectorAll("#topnav button[data-page]").length);
-      eq("§A1a · #topnav has 13 data-page buttons", total, 13);
+      eq("§A1a · #topnav has 10 data-page buttons", total, 10);   // R89 · F — was 13: Emails/Import/Data health → Operations tabs, Monday money → a Reports tab
 
       const retBtn = await page.evaluate(() => !!document.querySelector('#topnav button[data-page="retention"]'));
       ok("§A1b · the Retention button exists", retBtn);

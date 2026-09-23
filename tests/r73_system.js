@@ -408,6 +408,9 @@ const ALL_PAGES = ["dashboard", "pipeline", "diary", "clients", "protection", "r
       ok("B9 · the KPI delta separator is a text colour, not a line colour",
         sep.absent || sep.ratio >= 3, JSON.stringify(sep));
 
+      // R89 · B: the adoption strip is the "Who's using it" (activity) view of the one adviser table now.
+      await page.evaluate(() => repSetAdvView("activity"));
+      await page.waitForTimeout(2500);
       // Adoption strip: the alarm that never styled (h4 vs `.panel h3 .count`).
       const adopt = await page.evaluate(() => {
         const c = document.querySelector(".adopt-h .count");
@@ -444,6 +447,8 @@ const ALL_PAGES = ["dashboard", "pipeline", "diary", "clients", "protection", "r
           return b ? [...b.classList].filter((x) => x !== "badge").join(",") : (c.textContent || "").trim();
         });
       });
+      // R89 · B: Monday money's "Per adviser" table (#money-adviser-table) is retired — it IS the adviser
+      // table's activity view on Reports — so the Money half now reads empty and Reports carries the rule.
       await goPage(page, "money", 3600);
       const overdueMoney = await page.evaluate(() => [...document.querySelectorAll("#money-adviser-table tr")].slice(1).map((r) => {
         const c = r.cells[r.cells.length - 1];

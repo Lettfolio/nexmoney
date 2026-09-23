@@ -149,12 +149,19 @@ const finishMove = (page) => page.evaluate(() => window.__r77mv);
     {
       const page = await boot(browser, "p4");
       const errBefore = realErrs(page).length;
-      await goPage(page, "reports", 2500);
+      await goPage(page, "reports/book", 2500);   // R89 · B: was "reports" — this panel is on the book tab, painted when shown
 
       // Expected figures from the mock db, by the panel's own documented rules.
       const exp = await page.evaluate(async () => {
         const { data: all } = await window.__mockDb.from("cases").select("*").order("id");
-        const W = { decision_in_principle: 0.25, application: 0.5, offer: 0.8, exchange: 0.95 };
+        /* R89 · B — ONE FORECAST: the 4-stage STAGE_WEIGHT table (DIP 25 · application 50 · offer 80 ·
+           exchange 95) is gone; the line reads the MI forecast (six live stages, MI_STAGE_DEFAULT_WEIGHT,
+           Application/Offer calibrated from history when ≥5 completions and ≥5 cases reached the stage).
+           Recomputed here by that rule, off the store. Was: W = the 4-stage table. */
+        const W = { enquiry: 0.1, fact_find: 0.2, decision_in_principle: 0.4, application: 0.6, offer: 0.85, exchange: 0.95 };
+        let rApp = 0, rOff = 0, rComp = 0, aC = 0, oC = 0;
+        (all || []).forEach((c) => { if (c.submitted_at) rApp++; if (c.offer_issued_date) rOff++; if (c.completed_at) rComp++; if (c.submitted_at && c.completed_at) aC++; if (c.offer_issued_date && c.completed_at) oC++; });
+        if (rComp >= 5) { if (rApp >= 5) W.application = aC / rApp; if (rOff >= 5) W.offer = oC / rOff; }
         const d30 = localDateStr(Date.now() + 30 * 86400000);
         let h30 = 0, noneN = 0, noneW = 0;
         (all || []).forEach((c) => {
@@ -198,7 +205,7 @@ const finishMove = (page) => page.evaluate(() => window.__r77mv);
         await loadSettings();
       });
       await goPage(page, "dashboard", 800);
-      await goPage(page, "reports", 2500);
+      await goPage(page, "reports/book", 2500);   // R89 · B: was "reports" — this panel is on the book tab, painted when shown
       const aheadTxt = norm(await page.$eval("#report-forecast-target-line", (e) => e.textContent));
       ok("A4 · with a tiny target the same line reads \"£X ahead of target\", never a negative gap",
         /vs monthly target £1 → £[\d,]+ ahead of target$/.test(aheadTxt), aheadTxt);
@@ -209,10 +216,12 @@ const finishMove = (page) => page.evaluate(() => window.__r77mv);
         await loadSettings();
       });
       await goPage(page, "dashboard", 800);
-      await goPage(page, "reports", 2500);
+      await goPage(page, "reports/book", 2500);   // R89 · B: was "reports" — this panel is on the book tab, painted when shown
       const unsetTxt = norm(await page.$eval("#report-forecast-target-line", (e) => e.textContent));
-      eq("A5 · no target set: the line says so and points at Settings › Targets",
-        unsetTxt, "No monthly fee target is set, so there is no gap to read this against — set one in Settings › Targets.");
+      /* R89 · D: was "…set one in Settings › Targets." — Settings has no Targets section; the fee target is on
+         the Firm & rules tab, which the link now opens (nav("settings", true, "firm")). */
+      eq("A5 · no target set: the line says so and points at Settings › Firm & rules",
+        unsetTxt, "No monthly fee target is set, so there is no gap to read this against — set one in Settings › Firm & rules.");
       ok("A5b · …with a live Settings link", !!(await page.$("#report-forecast-target-set")));
 
       ok("§A · no console errors", noNewErr(page, errBefore), JSON.stringify(realErrs(page)));
@@ -385,7 +394,7 @@ const finishMove = (page) => page.evaluate(() => window.__r77mv);
     {
       const page = await boot(browser, "p4");
       const errBefore = realErrs(page).length;
-      await goPage(page, "reports", 2500);
+      await goPage(page, "reports/mi", 2500);   // R89 · B: was "reports" — this panel is on the mi tab, painted when shown
 
       const scope1 = await page.$eval("#report-sources-scope", (e) => e.textContent.trim());
       ok("D1 · default scope line unchanged (this-month wording)",
@@ -458,7 +467,7 @@ const finishMove = (page) => page.evaluate(() => window.__r77mv);
     {
       const page = await boot(browser, "p4");
       const errBefore = realErrs(page).length;
-      await goPage(page, "reports", 2500);
+      await goPage(page, "reports/mi", 2500);   // R89 · B: was "reports" — this panel is on the mi tab, painted when shown
 
       const exp = await page.evaluate(async () => {
         const { data: all } = await window.__mockDb.from("cases").select("*").order("id");
@@ -536,7 +545,7 @@ const finishMove = (page) => page.evaluate(() => window.__r77mv);
         const { data: cl } = await db.from("clients").insert({ first_name: "Nok", last_name: "R77Kindless", email: "r77.kindless@example.com" }).select("id").single();
         await db.from("cases").insert({ client_id: cl.id, stage: "enquiry", broker_fee: 250, assigned_to: "p2" });
       });
-      await goPage(page, "reports", 2500);
+      await goPage(page, "reports/book", 2500);   // R89 · B: was "reports" — this panel is on the book tab, painted when shown
 
       const exp = await page.evaluate(async () => {
         const { data: all } = await window.__mockDb.from("cases").select("*").order("id");
@@ -569,7 +578,7 @@ const finishMove = (page) => page.evaluate(() => window.__r77mv);
       const shown = await page.$eval("#report-mix-panel", (e) => !e.classList.contains("hidden"));
       ok("F1 · the panel is on the owner's page, in Money & book", shown);
       const inNav = await page.evaluate(() => {
-        const s = REPORT_SECTIONS.find((x) => x[0] === "money");
+        const s = REPORT_SECTIONS.find((x) => x[0] === "book");   // R89 · B: the section key "money" is renamed "book" (Money is the Owner's Monday-money tab)
         return s && s[3].includes("#report-mix-panel") && REPORT_JUMP_SECTIONS.some((x) => x[0] === "mix");
       });
       ok("F1b · …and the jump nav knows it (money section + its own chip entry)", inNav);
@@ -587,7 +596,7 @@ const finishMove = (page) => page.evaluate(() => window.__r77mv);
 
       // Owner-only: an adviser gets neither the panel nor its chip.
       const p2 = await boot(browser, "p2");
-      await goPage(p2, "reports", 2500);
+      await goPage(p2, "reports/book", 2500);   // R89 · B: was "reports" — this panel is on the book tab, painted when shown
       const advHidden = await p2.$eval("#report-mix-panel", (e) => e.classList.contains("hidden"));
       ok("F6 · an adviser's Reports hides the panel (showMoney gate, like its neighbours)", advHidden);
       await p2.close();

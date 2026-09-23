@@ -195,7 +195,7 @@ async function setTargetsViaEditor(page, map) {
       console.log("\n— A · #adviser-targets-section present and wired on Settings (p4)");
       page = await newPage(browser, "p4");
       const errBefore = (page.__err || []).length;
-      await goto(page, "settings");
+      await goto(page, "settings/team");   // R89 · C: was "settings" — Settings is five tabs; the targets editor is on Team & security
 
       const sectionExists = await page.$("#adviser-targets-section");
       ok("A1 · #adviser-targets-section exists", !!sectionExists);

@@ -345,7 +345,7 @@ const openDrawer = async (page, panelId) => {
     {
       const page = await newPage(browser, "p3");
       const gate = await page.evaluate(() => {
-        const btn = document.querySelector('#topnav button[data-page="data"]');
+        const btn = document.querySelector('#topnav button[data-page="operations"]');   // R89 · F — was data-page="data"; Data health is a tab of Operations
         window.nav("data");
         return {
           hidden: !!btn && btn.classList.contains("hidden"),
