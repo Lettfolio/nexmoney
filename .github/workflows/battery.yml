@@ -15,14 +15,18 @@ concurrency:
 
 jobs:
   build-check:
+    # Same image as the shards: db/check-schema-drift.js launches Chromium to read the mock's registry.
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    container:
+      image: mcr.microsoft.com/playwright:v1.56.0-noble
+      options: --user root
+    env:
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
       - run: npm ci
+      - run: npm i --no-save playwright@1.56.0
       - run: node build.js --hash
       - run: node db/check-schema-drift.js
 
