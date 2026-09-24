@@ -179,7 +179,12 @@ Run a slice locally the same way: `bash tests/run-battery.sh 1 40` (≈3 suites)
 summary lines; on a red shard every suite's `*.out` is the artifact `battery-logs-shard-<n>` (Actions run page →
 Artifacts); locally they land in `/tmp/battery-<n>-of-<of>/` (`BATTERY_LOGDIR` overrides). **THE DATE-FLAKE
 WINDOW:** the runner's clock is UTC, like the sandbox, so the 23:00–00:00 UTC hour (London already tomorrow) can
-redden a date-sensitive suite — a red shard in that hour: re-run the job before believing it.
+redden a date-sensitive suite — a red shard in that hour: re-run the job before believing it. **RUNNER ≠ SANDBOX
+(learned on run #2):** a shard takes ~35 min there (2 vCPU), not 22; the runner's network is OPEN, so lender
+favicons (`<img class="lfav">`) render where the sandbox strips them on error — DOM snapshots must mask them
+(r90_case_split `maskFav`); anything a suite needs from disk must come from the repo (`xlsx` is a devDependency
+since R91 — r44/r48 `require.resolve` it; never a `/tmp/...` path); an un-awaited `page.evaluate` must catch,
+because a late rejection on a slow runner kills the process before any ✗ prints (r65_pipeline `startMove`).
 
 **R90 · F notes — "Under the floor", CARVE #3 (`tests/r90_carve.js` 68; oracle `panel-r87/dom-dump.js` +
 `dom-diff.js`, baseline `panel-r87/dump-base/`).** Three page families moved out of app.js VERBATIM (cut/paste,

@@ -94,7 +94,11 @@ const modalHtml = (page) => page.evaluate(() => document.querySelector("#modal")
 /* Masks. LIGHT: only what differs between two loads of the same tree seconds apart (the mock seeds
    its timestamps from the load clock). HEAVY: also every calendar date and day count, so the stored
    fixture still compares on another day (the mock's fixture dates are relative to today). */
-const maskLight = (s) => String(s)
+/* R91 · CI: lender favicons are live <img class="lfav"> requests to Google that the app REMOVES on error
+   (lfavFail). The sandbox has no route to Google, GitHub's runners do — so the same tree renders with or
+   without the <img> depending on the network. Strip them before comparing; the fixture was recorded without. */
+const maskFav = (s) => String(s).replace(/<img class="lfav"[^>]*>/g, "");
+const maskLight = (s) => maskFav(s)
   .replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?/g, "<ISO>")
   .replace(/\b\d{1,2}:\d{2}(:\d{2})?\b/g, "<HM>");
 const MON = "(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*";

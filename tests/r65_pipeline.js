@@ -170,7 +170,12 @@ const mailsOf = (page, id) => page.evaluate(async (i) =>
 /* Kick off an opt-in stage move and let its overlay paint. The promise is NOT awaited here — it
    only resolves once the dialog is answered, which is the point. */
 function startMove(page, caseId, stage) {
-  return page.evaluate(({ id, s }) => window.moveCaseToStage(id, s, { promptStageEntry: true }), { id: caseId, s: stage });
+  const p = page.evaluate(({ id, s }) => window.moveCaseToStage(id, s, { promptStageEntry: true }), { id: caseId, s: stage });
+  /* R91 · CI: the promise is deliberately left un-awaited while the overlay is inspected. If the page's
+     execution context goes away in that window (seen once on a GitHub runner: "Execution context was
+     destroyed"), an unobserved rejection kills the whole process before a single ✗ is printed. Resolve it
+     to a tagged string instead, so the check that awaits it fails visibly and the suite runs on. */
+  return p.catch((e) => "REJECTED: " + (e && e.message || e));
 }
 /* R87 · slice B (panel 03 #8): the stage-entry overlays have TWO exits now — "Don't advance"
    (#se-cancel) and "Save & advance" (#se-ok). "Skip — advance anyway" (#se-skip) is gone because an

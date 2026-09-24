@@ -78,7 +78,9 @@ const SETTLE = 1500;
    <script src="https://cdn..."> tag. This file never opens anything else out
    of /tmp/r44 — every fixture workbook below is built in-page from invented
    rows. */
-const XLSX_PATH = "/tmp/r44/node_modules/xlsx/dist/xlsx.full.min.js";
+/* R91 · CI: xlsx is a devDependency now (package.json), so the library resolves from the repo's own
+   node_modules on any machine; the sandbox's historical /tmp/r44 copy is the fallback. */
+const XLSX_PATH = (() => { try { return require.resolve("xlsx/dist/xlsx.full.min.js"); } catch (e) { return "/tmp/r44/node_modules/xlsx/dist/xlsx.full.min.js"; } })();
 
 let pass = 0;
 const failures = [];

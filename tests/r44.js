@@ -86,7 +86,9 @@ const SETTLE = 1500;
    every fixture workbook below is built in-page from invented rows. If this
    path ever moves, `npm ls xlsx --prefix /tmp/r44` (or a fresh
    `npm install xlsx --prefix /tmp/some-dir`) finds/recreates it. */
-const XLSX_PATH = "/tmp/r44/node_modules/xlsx/dist/xlsx.full.min.js";
+/* R91 · CI: xlsx is a devDependency now (package.json), so the library resolves from the repo's own
+   node_modules on any machine; the sandbox's historical /tmp/r44 copy is the fallback. */
+const XLSX_PATH = (() => { try { return require.resolve("xlsx/dist/xlsx.full.min.js"); } catch (e) { return "/tmp/r44/node_modules/xlsx/dist/xlsx.full.min.js"; } })();
 
 let pass = 0;
 const failures = [];
