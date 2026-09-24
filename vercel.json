@@ -4,56 +4,261 @@
   "installCommand": "npm install --no-audit --no-fund",
   "cleanUrls": true,
   "trailingSlash": false,
+  "redirects": [
+    {
+      "source": "/guides",
+      "destination": "/faq",
+      "statusCode": 301
+    },
+    {
+      "source": "/forum",
+      "destination": "/faq",
+      "statusCode": 301
+    },
+    {
+      "source": "/useful-links",
+      "destination": "/faq",
+      "statusCode": 301
+    },
+    {
+      "source": "/portal",
+      "destination": "/contact",
+      "statusCode": 301
+    },
+    {
+      "source": "/exclusives",
+      "destination": "/mortgages",
+      "statusCode": 301
+    },
+    {
+      "source": "/calculators/:slug+",
+      "destination": "/calculators",
+      "statusCode": 301
+    },
+    {
+      "source": "/protection",
+      "destination": "/services#protection",
+      "statusCode": 301
+    },
+    {
+      "source": "/protection/:slug+",
+      "destination": "/services#protection",
+      "statusCode": 301
+    },
+    {
+      "source": "/general-insurance",
+      "destination": "/services#insurance",
+      "statusCode": 301
+    },
+    {
+      "source": "/general-insurance/:slug+",
+      "destination": "/services#insurance",
+      "statusCode": 301
+    },
+    {
+      "source": "/other-services",
+      "destination": "/services#specialist",
+      "statusCode": 301
+    },
+    {
+      "source": "/other-services/conveyancing",
+      "destination": "/services#conveyancing",
+      "statusCode": 301
+    },
+    {
+      "source": "/other-services/:slug+",
+      "destination": "/services#specialist",
+      "statusCode": 301
+    },
+    {
+      "source": "/mortgages/buy-to-let",
+      "destination": "/buy-to-let-mortgages-dorset",
+      "statusCode": 301
+    },
+    {
+      "source": "/mortgages/complex-buy-to-let",
+      "destination": "/buy-to-let-mortgages-dorset",
+      "statusCode": 301
+    },
+    {
+      "source": "/mortgages/recycle",
+      "destination": "/buy-to-let-mortgages-dorset",
+      "statusCode": 301
+    },
+    {
+      "source": "/mortgages/remortgaging",
+      "destination": "/remortgage-bournemouth",
+      "statusCode": 301
+    },
+    {
+      "source": "/mortgages/capital-raising",
+      "destination": "/remortgage-bournemouth",
+      "statusCode": 301
+    },
+    {
+      "source": "/mortgages/first-time-buyer",
+      "destination": "/first-time-buyer-mortgages-bournemouth",
+      "statusCode": 301
+    },
+    {
+      "source": "/mortgages/help-to-buy",
+      "destination": "/first-time-buyer-mortgages-bournemouth",
+      "statusCode": 301
+    },
+    {
+      "source": "/mortgages/help-to-buy-1",
+      "destination": "/first-time-buyer-mortgages-bournemouth",
+      "statusCode": 301
+    },
+    {
+      "source": "/mortgages/help-to-buy-2",
+      "destination": "/first-time-buyer-mortgages-bournemouth",
+      "statusCode": 301
+    },
+    {
+      "source": "/mortgages/right-to-buy",
+      "destination": "/first-time-buyer-mortgages-bournemouth",
+      "statusCode": 301
+    },
+    {
+      "source": "/mortgages/shared-ownership",
+      "destination": "/mortgages#shared",
+      "statusCode": 301
+    },
+    {
+      "source": "/mortgages/home-mover",
+      "destination": "/mortgages#homemover",
+      "statusCode": 301
+    },
+    {
+      "source": "/mortgages/self-build",
+      "destination": "/mortgages#selfbuild",
+      "statusCode": 301
+    },
+    {
+      "source": "/mortgages/:slug+",
+      "destination": "/mortgages",
+      "statusCode": 301
+    },
+    {
+      "source": "/about/share-the-love",
+      "destination": "/share-the-love-terms",
+      "statusCode": 301
+    },
+    {
+      "source": "/about/introducers-partners",
+      "destination": "/contact",
+      "statusCode": 301
+    },
+    {
+      "source": "/about/:slug+",
+      "destination": "/about",
+      "statusCode": 301
+    },
+    {
+      "source": "/careers/:slug+",
+      "destination": "/about",
+      "statusCode": 301
+    }
+  ],
   "headers": [
     {
       "source": "/(.*)",
       "headers": [
-        { "key": "Strict-Transport-Security", "value": "max-age=63072000; includeSubDomains; preload" },
-        { "key": "X-Content-Type-Options", "value": "nosniff" },
-        { "key": "X-Frame-Options", "value": "DENY" },
-        { "key": "Content-Security-Policy", "value": "frame-ancestors 'none'" },
-        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
-        { "key": "Permissions-Policy", "value": "camera=(), microphone=(), geolocation=(), payment=(), usb=()" }
+        {
+          "key": "Strict-Transport-Security",
+          "value": "max-age=63072000; includeSubDomains; preload"
+        },
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "X-Frame-Options",
+          "value": "DENY"
+        },
+        {
+          "key": "Content-Security-Policy",
+          "value": "frame-ancestors 'none'"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "strict-origin-when-cross-origin"
+        },
+        {
+          "key": "Permissions-Policy",
+          "value": "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+        }
       ]
     },
     {
       "source": "/admin/:path*",
       "headers": [
-        { "key": "X-Robots-Tag", "value": "noindex, nofollow" },
-        { "key": "Cache-Control", "value": "no-store" },
-        { "key": "Content-Security-Policy", "value": "frame-ancestors 'none'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdn.sheetjs.com" }
+        {
+          "key": "X-Robots-Tag",
+          "value": "noindex, nofollow"
+        },
+        {
+          "key": "Cache-Control",
+          "value": "no-store"
+        },
+        {
+          "key": "Content-Security-Policy",
+          "value": "frame-ancestors 'none'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdn.sheetjs.com"
+        }
       ]
     },
     {
       "source": "/admin/(.*)\\.(js|css|png|svg|webmanifest)",
       "headers": [
-        { "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" }
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=0, must-revalidate"
+        }
       ]
     },
     {
       "source": "/portal/:path*",
       "headers": [
-        { "key": "X-Robots-Tag", "value": "noindex, nofollow" },
-        { "key": "Cache-Control", "value": "no-store" }
+        {
+          "key": "X-Robots-Tag",
+          "value": "noindex, nofollow"
+        },
+        {
+          "key": "Cache-Control",
+          "value": "no-store"
+        }
       ]
     },
     {
       "source": "/clienthub/:path*",
       "headers": [
-        { "key": "X-Robots-Tag", "value": "noindex, nofollow" },
-        { "key": "Cache-Control", "value": "no-store" }
+        {
+          "key": "X-Robots-Tag",
+          "value": "noindex, nofollow"
+        },
+        {
+          "key": "Cache-Control",
+          "value": "no-store"
+        }
       ]
     },
     {
       "source": "/assets/(.*)",
       "headers": [
-        { "key": "Cache-Control", "value": "public, max-age=86400, stale-while-revalidate=604800" }
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=86400, stale-while-revalidate=604800"
+        }
       ]
     },
     {
       "source": "/(style\\.css|enhance\\.js|logo\\.svg|favicon\\.svg|apple-touch-icon\\.png|og-image\\.jpg)",
       "headers": [
-        { "key": "Cache-Control", "value": "public, max-age=86400, stale-while-revalidate=604800" }
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=86400, stale-while-revalidate=604800"
+        }
       ]
     }
   ]
