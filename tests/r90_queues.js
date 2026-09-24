@@ -34,8 +34,8 @@ const BASE = `http://localhost:${PORT}/admin/mock.html`;
    multi-property layouts no single utility states, and five class-less <h3>s kept inline
    because `.panel h3:not([class])` styles them (a class would un-style them). Lower is
    fine; higher fails. */
-const STYLE_CEILING = { "admin/app.js": 143, "admin/diary.js": 11, "admin/import.js": 9, "admin/vault.js": 0, "admin/reports-money.js": 31, "admin/index.html": 19 };
-const UTIL_MAX_RULES = 25;   // the brief's cap; R90 · C uses 24
+const STYLE_CEILING = { "admin/app.js": 143, "admin/diary.js": 11, "admin/import.js": 9, "admin/vault.js": 0, "admin/reports-money.js": 31, "admin/index.html": 18 };   // R91 · 3d: index.html 19 → 18 (#month-legend's margin became .u-m-12-0-0; ceilings only go DOWN)
+const UTIL_MAX_RULES = 25;   // the brief's cap; R90 · C used 24, R91 · 3d added the 25th (.u-m-12-0-0) — the block is full
 
 let pass = 0;
 const failures = [];

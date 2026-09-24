@@ -630,7 +630,8 @@
              below) said the earned-vs-banked thing #report-basis-legend says four panels higher up,
              on the page that legend was written for. The Proc/Broker/Sols glossary is this line's own
              job and stays; the basis question now has exactly one answer on this page. -->
-        <p class="panel-sub hidden" id="month-legend" style="margin:12px 0 0;">Proc £ = procuration fee (paid by the lender) · Broker £ = fee charged to the client · Sols £ = solicitor referral fee. Figures on this panel are scoped to the month selected above (bases: see legend above).</p>
+        <!-- R91 · 3d — ≤ 25 words (was 40); the inline margin became the u-* utility. -->
+        <p class="panel-sub hidden u-m-12-0-0" id="month-legend">Proc £ = lender procuration fee · Broker £ = client fee · Sols £ = solicitor referral fee. Scoped to the month selected above.</p>
       </div>
       <p class="report-month-note" id="report-month-note">Also scoped to the month selected above.</p>
       <!-- R89 · B — ONE PER-ADVISER TABLE (05 #2c, #11). The month scoreboard, the Pipeline MI scoreboard,
@@ -739,7 +740,7 @@
           <h3>Losses — why cases didn't proceed</h3>
           <button type="button" class="btn btn-sm" id="report-losses-scope-btn" onclick="toggleLossesScope()">All time</button>
         </div>
-        <p class="panel-sub" id="report-losses-scope"></p>
+        <div class="panel-sub" id="report-losses-scope"></div>
         <div id="report-losses"></div>
       </div>
       </div>
@@ -1480,7 +1481,7 @@
      window.__nxTag_*, and app.js's boot compares all SEVEN (R90 · F). EVERY round that edits ANY
      of index.html / core.js / reports-money.js / diary.js / import.js / vault.js / app.js bumps
      the tag IN ALL SEVEN PLACES. -->
-<script>window.NX_BUILD_TAG = "r90";</script>
+<script>window.NX_BUILD_TAG = "r91";</script>
 <script src="/admin/core.js"></script>
 <script src="/admin/reports-money.js"></script>
 <script src="/admin/diary.js"></script>

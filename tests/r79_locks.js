@@ -482,7 +482,8 @@ const isAbout30d = (iso) => {
       const el = document.getElementById("whatsnew-band");
       return { hidden: el.classList.contains("hidden"), text: (el.textContent || "").replace(/\s+/g, " ").trim() };
     });
-    ok("§E4a · the adviser gets the all-roles entry", !advBand.hidden && /30 days/.test(advBand.text), JSON.stringify(advBand));
+    /* R91 · 6: was /30 days/ (R79's all-roles clause) — R91 added an all-roles entry, so the adviser's newest release is R91 now. */
+    ok("§E4a · the adviser gets the all-roles entry", !advBand.hidden && /one worklist on Today/i.test(advBand.text), JSON.stringify(advBand));
     ok("§E4b · …and NEVER the owner-tagged one (exports are not their screen)", !/exports withhold/i.test(advBand.text), advBand.text);
     await adv.__ctx.close();
 
@@ -491,7 +492,9 @@ const isAbout30d = (iso) => {
     const ownBand = await own.evaluate(() => (document.getElementById("whatsnew-band").textContent || "").replace(/\s+/g, " ").trim());
     /* R89 · D: was /exports withhold/ (the R79 owner-tagged clause). The band shows the NEWEST release only, and
        R89's one entry is tagged owner/admin — so the owner-tagged clause the owner sees is now the Operations one. */
-    ok("§E5a · the owner sees the owner-tagged entry", /Operations page/i.test(ownBand), ownBand);
+    /* R91 · 6: was /Operations page/ (R89's owner/admin entry) — the owner's newest release is R91's all-roles entry now,
+       and the band shows the newest release only; E4b still proves an owner-tagged clause never reaches an adviser. */
+    ok("§E5a · the owner sees the newest release's entry", /one worklist on Today/i.test(ownBand) && !/Operations page/i.test(ownBand), ownBand);
     await own.click("#whatsnew-dismiss");
     await wait(own, 300);
     const dismissed = await own.evaluate(() => ({
@@ -507,7 +510,7 @@ const isAbout30d = (iso) => {
     const legBand = await leg.evaluate(() => (document.getElementById("whatsnew-band").textContent || "").replace(/\s+/g, " ").trim());
     /* R89 · D: was "R79 ones only" (/30 days/) — the newest release for an owner is R89 now. */
     ok("§E6 · the legacy nx_whatsnew_r72 dismissal is honoured — no R72 clauses, the newest release's only",
-      !/bulk playbooks/i.test(legBand) && !/go-live list/i.test(legBand) && /Operations page/.test(legBand), legBand);
+      !/bulk playbooks/i.test(legBand) && !/go-live list/i.test(legBand) && /one worklist on Today/i.test(legBand), legBand);   // R91 · 6: was /Operations page/ (newest is R91)
     await leg.__ctx.close();
   }
 

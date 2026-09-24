@@ -349,10 +349,17 @@ const expectedRows = (src) => {
       eq("B1 · each seeded case is ONE row", [x.length, y.length, z.length, w.length], [1, 1, 1, 1]);
       ok("B2 · the tasked case's row is headed by its TASK (the alerts never take over a My Day row) — and rides UP to Urgent with its critical (rows only move up)",
         x[0] && !x[0].alert && x[0].onclicks.some((o) => /^briefDone\(/.test(o)) && x[0].band === "brief-sec-hot" && x[0].cls.includes("hot"), JSON.stringify(x[0]));
-      ok("B3 · …its two alerts are sub-lines on that row: the critical with Snooze…/Dismiss, the warning with ✓ Done",
+      /* R91 · 5: was "the warning with ✓ Done" — the task-headed row then showed ✓ Done twice (the task's verb and the
+         warning's), each closing something different. A sub-line's close now reads "Clear" (same wtDoneAlert write). */
+      ok("B3 · …its two alerts are sub-lines on that row: the critical with Snooze…/Dismiss, the warning with Clear",
         x[0] && x[0].sides.length === 2
         && x[0].sides.some((s) => s.alert === xCrit.id && s.verbs.join("|") === "⏰ Snooze…|Dismiss")
-        && x[0].sides.some((s) => s.alert === xWarn.id && s.verbs.join("|") === "✓ Done"), JSON.stringify(x[0] && x[0].sides));
+        && x[0].sides.some((s) => s.alert === xWarn.id && s.verbs.join("|") === "Clear"), JSON.stringify(x[0] && x[0].sides));
+      const doubleDone = await page.evaluate(() => [...document.querySelectorAll("#page-dashboard .row-main")].filter((m) =>
+        [...m.querySelectorAll("button")].filter((b) => b.textContent.trim() === "✓ Done" && b.closest(".row-main") === m).length > 1).length
+        + [...document.querySelectorAll("#briefing-list .brief-row")].filter((r) =>
+          [...r.querySelectorAll("button")].filter((b) => b.textContent.trim() === "✓ Done" && b.closest(".brief-row") === r).length > 1).length);
+      eq("B3b · R91 · 5: no Today row (nor its .row-main) carries two “✓ Done”", doubleDone, 0);
       ok("B4 · a quiet case with a warning is one row headed by the alert, in Today, the radar as its sub-line",
         y[0] && y[0].alert === yWarn.id && y[0].band === "brief-sec-warm" && y[0].sides.length === 1 && y[0].sides[0].radar === Y.caseId && y[0].sides[0].verbs.join("|") === "Add next step", JSON.stringify(y[0]));
       ok("B5 · a quiet case alone is a Worth doing row whose verbs are Open + Add next step",
@@ -371,7 +378,7 @@ const expectedRows = (src) => {
         const { data } = await window.__mockDb.from("watch_alerts").select("resolved_at").eq("id", id).single();
         return { resolved: !!(data && data.resolved_at), still: !!document.querySelector(`#briefing-list [data-alert-id="${id}"]`) };
       }, xWarn.id);
-      ok("B8 · ✓ Done on a warning resolves it with no dialog, and the line leaves My Day", afterDone.resolved && !afterDone.still && dialogs === 0, JSON.stringify({ ...afterDone, dialogs }));
+      ok("B8 · Clear (R91 · 5: was ✓ Done) on a warning sub-line resolves it with no dialog, and the line leaves My Day", afterDone.resolved && !afterDone.still && dialogs === 0, JSON.stringify({ ...afterDone, dialogs }));
       /* Dismiss on a critical — the reason is required and logged. */
       await page.click(`#briefing-list .brief-side[data-alert-id="${xCrit.id}"] .brief-wt-dismiss`);
       await page.waitForTimeout(1500);

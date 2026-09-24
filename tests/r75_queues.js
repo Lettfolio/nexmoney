@@ -453,8 +453,15 @@ async function analyse(page, csv) {
       ok("C2 · a “£ at risk” clause joins the strip", !!risk.text && /at risk$/.test(risk.text), JSON.stringify(risk));
       ok("C2b · …and its title says the basis (the loan on the no-outcome cases, added up)",
         /loan on each of the/.test(risk.title || "") && /added up/.test(risk.title || ""), risk.title);
+      /* R91 · 3a: was one #ret-outcome-sub paragraph carrying the figure AND its basis (~130 words). Now the sub is
+         ONE ≤ 25-word line (the figure rides on it) and the basis moved, word for word, into #ret-outcome-how —
+         the block right after it inside the same "How this list is counted" fold. */
       const riskSub = await page.$eval("#ret-outcome-sub", (e) => e.textContent);
-      ok("C2c · the basis is in the sub as well, in words", /at risk<\/strong>|at risk/.test(riskSub) && /not a fee forecast/.test(riskSub), riskSub.slice(-300));
+      const riskHow = await page.$eval("#ret-outcome-how", (e) => e.textContent);
+      ok("C2c · the sub is one line (≤ 25 words) that still names the £ at risk", /at risk/.test(riskSub) && riskSub.trim().split(/\s+/).length <= 25, riskSub);
+      ok("C2c2 · …and the basis moved into the block after it, in words", /at risk is the loan on those/.test(riskHow) && /not a fee forecast/.test(riskHow) && /matured in the last 12 months/.test(riskHow),
+        riskHow.slice(-300));
+      ok("C2c3 · …both inside the one closed fold", await page.evaluate(() => { const f = document.getElementById("ret-rates-how-fold"); return !!f && f.contains(document.getElementById("ret-outcome-sub")) && f.contains(document.getElementById("ret-outcome-how")) && f.querySelectorAll("details").length === 0; }));
       const noneN = (chips.find((c) => c.outcome === "none") || {}).n || 0;
       const riskNum = Number((risk.text || "").replace(/[^0-9]/g, ""));
       ok("C2d · the figure is a real total, not a placeholder", noneN === 0 || riskNum > 0, JSON.stringify({ noneN, riskNum }));

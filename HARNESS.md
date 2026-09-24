@@ -166,6 +166,21 @@ node tests/r90_case_split.js
 node tests/r90_queues.js
 ```
 
+## CI
+
+**R91 · 1.** `.github/workflows/battery.yml` runs on every push to main, every PR and by hand (workflow_dispatch);
+a newer push to the same ref cancels the running one. Job `build-check` (`npm ci`, `node build.js --hash`,
+`node db/check-schema-drift.js`, ~30 s) gates four `battery` shards (`fail-fast: false`, 60 min each) in
+`mcr.microsoft.com/playwright:v1.56.0-noble` as root, the checkout symlinked to `/root/nx` because every suite
+hard-codes `REPO=/root/nx` / `PORT=8099`. Each shard is `bash tests/run-battery.sh <n> 4`: smoke.js, then a
+server on 8099 BEFORE any suite, then every 4th `tests/*.js` (C-sorted) under `timeout 900`, one line per suite
+(`name rc=N Ns :: <last passed/failed line>`), the failing suites' last 40 lines at the end, non-zero if any rc≠0.
+Run a slice locally the same way: `bash tests/run-battery.sh 1 40` (≈3 suites). **LOGS:** the job output has the
+summary lines; on a red shard every suite's `*.out` is the artifact `battery-logs-shard-<n>` (Actions run page →
+Artifacts); locally they land in `/tmp/battery-<n>-of-<of>/` (`BATTERY_LOGDIR` overrides). **THE DATE-FLAKE
+WINDOW:** the runner's clock is UTC, like the sandbox, so the 23:00–00:00 UTC hour (London already tomorrow) can
+redden a date-sensitive suite — a red shard in that hour: re-run the job before believing it.
+
 **R90 · F notes — "Under the floor", CARVE #3 (`tests/r90_carve.js` 68; oracle `panel-r87/dom-dump.js` +
 `dom-diff.js`, baseline `panel-r87/dump-base/`).** Three page families moved out of app.js VERBATIM (cut/paste,
 comments included; app.js 39,247 → 34,542 lines), the R78/R81 recipe repeated. **THE CARVE MAP — what lives where:**
@@ -210,10 +225,10 @@ comments included; app.js 39,247 → 34,542 lines), the R78/R81 recipe repeated.
   - **C — ONE QUEUE MACHINE.** `QUEUE_KINDS` (app.js, `email` / `sms`: table, list, ids, nouns, tags) is read by
     `queueTable(kind)` (bulk bar, retry-all row, checkbox, wiring) and `queueVerbs(kind)` (retry, bulk cancel,
     retry-all); the old global names (`retryEmail`, `retrySms`, `retryAllFailed*`) are one-line shims onto it.
-    **u-\* utilities**: the fenced `/* R90 · C utilities */ … /* end R90 · C utilities */` block in admin.css (24
-    rules, cap 25, `!important` on purpose because each replaces an inline style, no @media). Inline `style="`
+    **u-\* utilities**: the fenced `/* R90 · C utilities */ … /* end R90 · C utilities */` block in admin.css (25
+    rules since R91 · 3d — the cap, full: the next one must retire one, `!important` on purpose because each replaces an inline style, no @media). Inline `style="`
     CEILINGS asserted by r90_queues A4 (`STYLE_CEILING`): app 143 · diary 11 · import 9 · vault 0 ·
-    reports-money 31 · index.html 19 — a new inline style needs a utility class instead, or the ceiling raised
+    reports-money 31 · index.html 18 (R91 · 3d: was 19) — a new inline style needs a utility class instead, or the ceiling raised
     in the same commit with a reason.
   - **D — THE COMMENT RULES** (every admin script): a comment says WHY a non-obvious line exists, ≤ 3 lines where
     that loses nothing (≤ 6 for a banner; keep the original in full rather than lose a why); a changelog essay

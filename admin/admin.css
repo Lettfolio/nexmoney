@@ -819,10 +819,7 @@ main input:focus, main select:focus, main textarea:focus,
 
 /* ---------- Notes ---------- */
 .note { background: #f4f7fb; border: 1px solid #eaeff6; border-radius: 8px; padding: 9px 12px; margin-bottom: 8px; font-size: 13px; }
-.note .note-ic { margin-right: 5px; }
 .note.note-refiled { background: #f7f7f8; border-color: #ececf0; }
-.note.note-refiled .note-body { text-decoration: line-through; color: var(--muted); }
-.note.note-refiled .note-ic { opacity: .5; }
 .note-refiled-badge { margin-left: 6px; vertical-align: middle; }
 .note-refile-btn { margin-left: 8px; padding: 1px 7px; font-size: 11px; line-height: 1.5; }
 /* The timeline's own strike — same meaning, inline rather than in a card. */
@@ -3762,9 +3759,9 @@ details.hdr-more > .hdr-more-menu > .hidden { display: none; }
 #ret-pipeline-panel { margin-top: 18px; }
 /* The h3's ERC-only count (was an inline style). */
 #ret-rates-h3 .count.erc-count { background: #fbe9e7; color: var(--red); }
-/* A retention row's optional second line: the call pack and "assign to me" share it. */
-.ret-row > .row-sub { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 14px; }
-.ret-row > .row-sub > .rate-callpack { margin: 0; }
+/* R91 · 4: a retention row has no second line — the call pack rides at the end of the fact line (which ellipsises
+   on a desktop), so its "(estimate)" basis stays inline there. */
+.ret-row .row-fact-t .money-basis { display: inline; margin-top: 0; }
 .ret-row .ret-row-outcome, .ret-row .ret-row-lastc { color: inherit; }
 /* Cap and dedupe footnotes under a kit list (they were .empty boxes). */
 .list-foot { font-size: 12.5px; color: var(--muted); margin: 10px 2px 4px; }
@@ -3875,6 +3872,7 @@ details.hdr-more > .hdr-more-menu > .hidden { display: none; }
 .u-m-6-0-0 { margin: 6px 0 0 !important; }
 .u-m-8-0-0 { margin: 8px 0 0 !important; }
 .u-m-10-0-0 { margin: 10px 0 0 !important; }
+.u-m-12-0-0 { margin: 12px 0 0 !important; }   /* R91 · 3d: #month-legend (rule 25 of 25) */
 .u-m-12-0-4 { margin: 12px 0 4px !important; }
 .u-center { text-align: center !important; }
 .u-muted { color: var(--muted) !important; }

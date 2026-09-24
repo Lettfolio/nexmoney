@@ -1019,9 +1019,11 @@ function renderLossesPanel(all, mv) {
   if (btn) btn.textContent = lossesAllTime ? "This month" : "All time";
   const scopeEl = $("#report-losses-scope");
   if (scopeEl) {
-    scopeEl.textContent = lossesAllTime
-      ? `Every case marked not proceeding, all time (${rowsAll.length}). "Σ fees lost" is the fee value on the case when it stopped — what walked away, not money owed.`
-      : `Marked not proceeding in ${monthLabel(lossState.mv)} (${scoped.length} of ${rowsAll.length} all time), dated by the stage change or last touched. "Σ fees lost" is the fee value on the case when it stopped.`;
+    /* R91 · 3c: one ≤ 25-word line (was 32); what "Σ fees lost" means moved into the fold. */
+    scopeEl.innerHTML = (lossesAllTime
+      ? `Every case marked not proceeding, all time (${rowsAll.length}). `
+      : `Marked not proceeding in ${esc(monthLabel(lossState.mv))} (${scoped.length} of ${rowsAll.length} all time), dated by the stage change or last touched. `)
+      + howFold({ id: "report-losses-how", title: "How this is counted", html: `<p>“Σ fees lost” is the fee value on the case when it stopped — what walked away, not money owed.</p>` });
   }
   if (!scoped.length) {
     $("#report-losses").innerHTML = `<div class="empty">${lossesAllTime ? "No cases have been marked not proceeding." : `No cases were marked not proceeding in ${esc(monthLabel(lossState.mv))}.`}</div>`;
@@ -3353,7 +3355,7 @@ function renderMoneyOwed(all) {
      …)" is the legend's own definition of OUTSTANDING, plus a second copy of "aged from completion date" one clause
      after the first. … */
   $("#report-owed-basis").innerHTML =
-    `Completed cases with a fee that has no paid date — proc, solicitor and broker counted separately, aged from the completion date. `
+    `Completed cases with a fee not yet paid — proc, solicitor and broker counted separately, aged from completion. `   // R91 · 3c: ≤ 25 words with the basis chip (was 28)
     + howFold({ id: "report-owed-how", title: "How this is counted", html: `<p>Every completed case carrying a fee amount with no paid date against it — proc, solicitor and broker fees counted separately, each on its own paid date (falling back to the case's single paid date where the fee has none). `
       + `A broker fee marked <strong>waived</strong> is excluded (money you chose not to charge is not money you are owed); a waived status has no effect on proc or solicitor fees. `
       + `Aged from the completion date.</p>` })
@@ -3751,7 +3753,7 @@ function renderLeadResponse(leads, cases) {
   /* R87 · owner-admin (05 #8, 06 #11): "first_contact_at − created_at" and "ceil(0.9 × n)" were audit trails
      for the builder… */
   $("#report-leadresp-basis").innerHTML =
-    `Website enquiries from the last <strong>${m.windowDays} days</strong> (${m.nLeads}): how long until a person first made contact. `
+    `Website enquiries in the last <strong>${m.windowDays} days</strong> (${m.nLeads}): how long until someone first made contact. `   // R91 · 3c: ≤ 25 words with the basis chip (was 26)
     + ((leads || []).length >= LEAD_RESP_ROW_CAP ? `<strong class="u-red">Only the newest ${LEAD_RESP_ROW_CAP.toLocaleString("en-GB")} enquiries were read — these figures describe that subset, not the whole book.</strong> ` : "")
     + `<span class="money-basis">(enquiries · first contact − arrived · last ${m.windowDays} days)</span>`
     + howFold({ id: "report-leadresp-how", title: "How this is counted", html: `<p>Response time runs from the enquiry arriving to the moment a person accepted the lead, or discarded it having made contact — and is counted only where both moments exist. `
@@ -5108,4 +5110,4 @@ async function r44ConfirmTicked() {
 
 /* R81 · A3 — deploy handshake stamp. Every round that edits ANY of index.html / core.js /
    reports-money.js / app.js bumps the tag IN ALL FOUR PLACES (see nxCheckBuildTags in app.js). */
-window.__nxTag_reportsmoney = "r90";   // R89
+window.__nxTag_reportsmoney = "r91";   // R89

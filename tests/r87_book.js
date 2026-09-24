@@ -196,12 +196,17 @@ const visibleProse = (page, sectionSel) => page.evaluate((sel) => {
           basis: (document.getElementById("ret-rates-basis") || {}).textContent || "",
           money: (document.getElementById("ret-rates-money-basis") || {}).textContent || null,
           funnel: (document.getElementById("ret-outcome-sub") || {}).textContent || "",
+          funnelHow: (() => { const h = document.getElementById("ret-outcome-how"); return h && d.contains(h) ? h.textContent : ""; })(),   // R91 · 3a
           folds: document.querySelectorAll("#ret-rates-panel details.how-fold").length,
         } : null;
       });
       ok("B2 · the rates panel carries exactly ONE howFold, closed", !!fold && fold.tag === "DETAILS" && !fold.open && /how-fold/.test(fold.cls) && fold.folds === 1, JSON.stringify(fold && { open: fold.open, folds: fold.folds }));
       ok("B2b · …holding the R74 reconciliation in words", /already ended and \d+ still to end make the \d+ in the \d+-month window/.test(fold.basis) && /rows in all/.test(fold.basis), fold.basis.slice(-200));
       ok("B2c · …and the R72 funnel's population sentence", /matured in the last 12 months/.test(fold.funnel) || /outcome recorded/.test(fold.funnel), fold.funnel.slice(0, 160));
+      /* R91 · 3a: the funnel line is ONE ≤ 25-word line now; its population sentence moved into #ret-outcome-how, the
+         block right after it in this same fold (was: all of it in #ret-outcome-sub). */
+      ok("B2c2 · …the funnel is one ≤ 25-word line, its population sentence in #ret-outcome-how inside this fold",
+        words(fold.funnel) <= 25 && /matured in the last 12 months/.test(fold.funnelHow), JSON.stringify({ w: words(fold.funnel), how: fold.funnelHow.slice(0, 120) }));
       if (persona === "p4") ok("B2d · …and the R61 money basis for the money-holder", /value at risk/.test(fold.money || "") && /proxy/.test(fold.money || ""), fold.money);
       else eq("B2d · …and no money basis for an adviser", fold.money, null);
 

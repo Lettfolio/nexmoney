@@ -1,0 +1,62 @@
+# R91 · 1: the Playwright battery on every push to main / PR, in four shards (HARNESS.md "## CI").
+# Suites hard-code REPO=/root/nx and PORT=8099, so the job runs as root in the Playwright image whose
+# version matches the sandbox (1.56.0) and symlinks the checkout to /root/nx.
+name: battery
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: battery-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - run: node build.js --hash
+      - run: node db/check-schema-drift.js
+
+  battery:
+    needs: build-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    container:
+      image: mcr.microsoft.com/playwright:v1.56.0-noble
+      options: --user root
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    env:
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+      BATTERY_LOGDIR: /tmp/battery-logs
+    steps:
+      - name: Tools the suites shell out to (git for r90_case_split's base read, python3 for the static server)
+        run: apt-get update -qq && apt-get install -y -qq git python3 curl >/dev/null
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Link the checkout to /root/nx
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          ln -sfn "$GITHUB_WORKSPACE" /root/nx
+      - run: npm ci
+      - run: npm i --no-save playwright@1.56.0
+      - name: Battery shard ${{ matrix.shard }} of 4
+        run: bash tests/run-battery.sh ${{ matrix.shard }} 4
+      - name: Upload suite logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: battery-logs-shard-${{ matrix.shard }}
+          path: /tmp/battery-logs/*.out

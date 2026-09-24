@@ -1431,8 +1431,6 @@ const REFILE_BADGE = '<span class="badge grey note-refiled-badge" title="This no
 function refileBtnHtml(noteId) {
   return ` <button type="button" class="btn btn-sm note-refile-btn" data-note-id="${esc(noteId)}" onclick="refileNote('${jsArg(noteId)}', event)" title="This note is on the wrong case — move a copy to the right one and mark this one as filed in error">Re-file…</button>`;
 }
-/* R40: noteRowHtml() is gone; admin.css's .note-body / .note-ic rules outlived its markup (dead CSS,
-   left for a CSS pass — r87_shell D12 reads this line). */
 const tlDayLabel = (ts) => new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", weekday: "short", day: "numeric", month: "short" }).format(new Date(ts)).replace(",", "");
 // Relative age that reads correctly for FUTURE items (upcoming appointments show "in Nd").
 const tlWhen = (ts) => { const t = new Date(ts).getTime(); if (isNaN(t)) return ""; return t > Date.now() ? "in " + Math.max(1, Math.ceil((t - Date.now()) / 86400000)) + "d" : fmtAgo(ts); };
@@ -4580,7 +4578,7 @@ function runFirstRunTour(opts) {
    never signed in. Dismissing it is a browser preference exactly like the import rules fold (nx_import_blurb) and
    the Retention month chip (nx_ret_month) — which is also why a suite that asserts on this band must clear the key
    first, the same standing rule every stored choice in this app carries. … */
-const WHATSNEW_RELEASE = 89;   // R89 · D: was 79 — one R89 entry, tagged owner/admin (an adviser's sidebar did not change; they keep the R79 line)
+const WHATSNEW_RELEASE = 91;   // R91 · 6: was 89 — one all-roles R91 entry, so an adviser no longer reads the R79 line
 const WHATSNEW_LEGACY_KEY = "nx_whatsnew_r72";
 const whatsNewKey = () => "nx_whatsnew_last_" + ((ME && ME.id) || "anon");
 /* Short clauses, in the words the screens themselves use — the band must stay ONE line on a
@@ -4591,6 +4589,7 @@ const WHATSNEW_ENTRIES = [
   { rel: 79, roles: null, text: "document and fact-find links now expire after 30 days, with a Regenerate button on the case" },
   { rel: 79, roles: ["owner"], text: "firm exports withhold client link tokens" },
   { rel: 89, roles: ["owner", "admin"], text: "fewer rooms: Emails, Import and Data health are tabs of one Operations page, and Reports and Settings open in tabs" },
+  { rel: 91, roles: null, text: "one worklist on Today, clients named on every list, records in the address bar" },
 ];
 function whatsNewStamp() { lsSet(whatsNewKey(), String(WHATSNEW_RELEASE)); }
 function dismissWhatsNew() {
@@ -6349,8 +6348,7 @@ function callPackVal(v, pct) {
 const hasCallPack = (c) => !!c && CALLPACK_COLS.some((k) => c[k] != null && c[k] !== "");
 /* The one-line version, for a list row. Only the figures that ARE recorded appear: on a dense row "Balance
    £322,000 · reverts to — · pays —/mo" is three quarters punctuation… */
-function callPackLineHtml(c, withUplift) {
-  if (!hasCallPack(c)) return "";
+function callPackBitsHtml(c, withUplift) {
   const has = (k) => c[k] != null && c[k] !== "";
   const bits = [];
   if (has("current_balance")) bits.push(`Balance <strong>${fmtM(c.current_balance)}</strong>`);
@@ -6360,7 +6358,12 @@ function callPackLineHtml(c, withUplift) {
   /* R12b · W-15c: the uplift rides on the END of this line rather than taking one of its own. These rows sit
      in a half-width drawer with a fixed scroll height… */
   const up = withUplift ? upliftInlineHtml(c) : "";
-  return `<div class="s rate-callpack" title="Figures recorded on the case. Anything not shown here has not been recorded — it is not zero.">${bits.join(" · ")}${up}</div>`;
+  return bits.join(" · ") + up;
+}
+const CALLPACK_TIP = "Figures recorded on the case. Anything not shown here has not been recorded — it is not zero.";
+function callPackLineHtml(c, withUplift) {
+  if (!hasCallPack(c)) return "";
+  return `<div class="s rate-callpack" title="${CALLPACK_TIP}">${callPackBitsHtml(c, withUplift)}</div>`;
 }
 /* The estimate's tooltip — one place, so the row version and the modal version cannot drift. */
 function upliftTip(est) {
@@ -7312,7 +7315,15 @@ function rateEndOutcomeTally(feed, extras, o) {
     });
   }
   if (total) {
-    retOutcomeSubHtml = `<p class="panel-sub" id="ret-outcome-sub">${counts.none ? `<strong>${counts.none} of ${total}</strong> rates that ended in the last 12 months have <strong>no outcome recorded</strong> — nobody knows whether those clients stayed, went, or sold. Press the <strong>No outcome</strong> chip to bring exactly those rows up; the <strong>🔄 Renewed elsewhere</strong> and <strong>🏠 Property sold</strong> verbs (a row's More ▾) and <strong>🔁 Start retention case</strong> each record one, in a click and a confirm.` : `Every rate that ended in the last 12 months has an outcome recorded against it. ✅`} Counted over rates that <strong>matured in the last 12 months</strong>${counts.renewed_elsewhere + counts.sold ? ", plus outcomes recorded in the same 12 months on rates that have since left this list — recording “sold” clears the rate-end date and recording “renewed” moves it to the new deal, so those cases can only be counted on the date the outcome was written (and cannot be listed: they are no longer rates ending)" : ""}. “Retained” is read from the linked retention case reaching Completed; the other two are read from the 📌 note the outcome form writes on the case.${money && counts.none ? ` <strong>${fmtM(atRisk)} at risk</strong> is the loan on those ${atRiskRows} case${atRiskRows === 1 ? "" : "s"} added up — the borrowing whose fate nobody here knows${atRiskUnpriced ? `, over the ${atRiskRows - atRiskUnpriced} that carry a loan amount (${atRiskUnpriced} do not and count as nothing)` : ""}. It is not a fee forecast.` : ""} ${scope === "mine" ? "Your cases only — switch to All above for the firm." : "Every adviser's cases."}</p>`;
+    /* R91 · 3a: ONE LINE (≤ 25 words: the count, the £ at risk for the money-holder, whose), then the how-counted
+       text as its own block in the same fold — a second fold inside #ret-rates-how-fold would break R87's one fold. */
+    retOutcomeSubHtml = `<p class="panel-sub" id="ret-outcome-sub">${counts.none ? `<strong>${counts.none} of ${total}</strong> rates ended in the last 12 months have no outcome recorded.${money ? ` <strong>${fmtM(atRisk)} at risk</strong>.` : ""}` : `Every rate that ended in the last 12 months has an outcome recorded. ✅`} ${scope === "mine" ? "Your cases only." : "Every adviser's cases."}</p>`
+      + `<div id="ret-outcome-how">`
+      + (counts.none ? `<p>Nobody knows whether those clients stayed, went, or sold. Press the <strong>No outcome</strong> chip to bring exactly those rows up; the <strong>🔄 Renewed elsewhere</strong> and <strong>🏠 Property sold</strong> verbs (a row's More ▾) and <strong>🔁 Start retention case</strong> each record one, in a click and a confirm.</p>` : "")
+      + `<p>Counted over rates that <strong>matured in the last 12 months</strong>${counts.renewed_elsewhere + counts.sold ? ", plus outcomes recorded in the same 12 months on rates that have since left this list — recording “sold” clears the rate-end date and recording “renewed” moves it to the new deal, so those cases can only be counted on the date the outcome was written (and cannot be listed: they are no longer rates ending)" : ""}. “Retained” is read from the linked retention case reaching Completed; the other two are read from the 📌 note the outcome form writes on the case.</p>`
+      + (money && counts.none ? `<p><strong>${fmtM(atRisk)} at risk</strong> is the loan on those ${atRiskRows} case${atRiskRows === 1 ? "" : "s"} added up — the borrowing whose fate nobody here knows${atRiskUnpriced ? `, over the ${atRiskRows - atRiskUnpriced} that carry a loan amount (${atRiskUnpriced} do not and count as nothing)` : ""}. It is not a fee forecast.</p>` : "")
+      + (scope === "mine" ? `<p>Switch to All above for the firm.</p>` : "")
+      + `</div>`;
   }
   return { error: null, counts, total, money, atRisk, atRiskRows, atRiskUnpriced };
 }
@@ -7416,9 +7427,15 @@ function renderRetPageRow(a, feed, opts) {
     + (a.rate_end_estimated ? ` <span class="approx" title="${esc(TIP_APPROX)}">≈ estimate</span>` : "")
     + (tooEarly ? ` <span class="badge grey rate-too-early" title="${esc(rateTooEarlyTip(feed))}">too early — ${Math.round(a.days_to_rate_end / 30)}mo out</span>` : "")
     + rowLastContactHtml(a, feed, o) + rowOutcomeStateHtml(a, o)
-    + (money ? ` <span class="rate-money" title="Value at risk: the loan on the case. The last fee (${mny.lastFee ? fmtM(mny.lastFee) : "none recorded"}) is the proxy for the fee at stake.">· Loan <strong>${mny.loan ? fmtM(mny.loan) : "—"}</strong></span>` : "");
-  const tome = startable && !tooEarly ? retentionToMeHtml(a.case_id, cp) : "";
-  const sub = [callPackLineHtml(cp, rateErcEnded(a)), tome].filter(Boolean).join("");
+    + (money ? ` <span class="rate-money" title="Value at risk: the loan on the case. The last fee (${mny.lastFee ? fmtM(mny.lastFee) : "none recorded"}) is the proxy for the fee at stake.">· Loan <strong>${mny.loan ? fmtM(mny.loan) : "—"}</strong></span>` : "")
+    /* R91 · 4: NO SUB-LINE (it took rows to 89–111px at 1440). The call pack rides at the end of the one fact line,
+       which ellipsises on a desktop and wraps on a phone; "assign to me" is a More ▾ verb below, not a checkbox. */
+    + (hasCallPack(cp) ? ` <span class="rate-callpack" title="${CALLPACK_TIP}">· ${callPackBitsHtml(cp, rateErcEnded(a))}</span>` : "");
+  const toMe = startable && !tooEarly ? retentionAssigneeFor(cp) : null;
+  if (toMe && toMe.id && ME && ME.id && toMe.id !== ME.id) {
+    more.unshift({ label: "🔁 Start — assign to me", cls: "btn-retention ret-tome-verb", onclick: `startRetentionCase('${id}', event, { toMe: true })`,
+      title: `Start the retention case assigned to you. Without this it goes to ${staffName(toMe.id)} — ${toMe.why}.` });
+  }
   return rowItemHtml({
     id: `ret-${a.case_id}`, cls: "ret-row",
     cb: { name: "ret-cb", value: a.case_id, checked: !!(o.sel && o.sel.has(a.case_id)) },
@@ -7428,7 +7445,6 @@ function renderRetPageRow(a, feed, opts) {
     contact: ph && ph.phone ? { phone: ph.phone, smsOptOut: !!ph.smsOptOut, first: ph.first || a.client_name, rateEnd: a.rate_end_date } : null,
     verbs, more,
     moreTitle: "Book review, and the two rate-end outcomes (renewed elsewhere · property sold).",
-    sub,
   });
 }
 /* R7-2 — the dedupe footnote. Said wherever the feed is drawn, because a count that does not match
@@ -8528,14 +8544,14 @@ window.startRetentionCase = async function (caseId, ev, opts) {
     /* R12b · W-14a: resolve the assignee BEFORE the confirm, so the dialog can name the person this is about
        to become somebody's job for… */
     const defaultWho = retentionAssigneeFor(c);
-    const wantMe = o.assignTo === undefined ? retentionWantsMe(caseId) : false;
+    const wantMe = o.assignTo === undefined ? (!!o.toMe || retentionWantsMe(caseId)) : false;   // R91 · 4: toMe = the Retention row's "Start — assign to me" verb
     const assignTo = o.assignTo !== undefined ? (o.assignTo || null)
       : (wantMe ? ((ME && ME.id) || defaultWho.id) : defaultWho.id);
     const assignName = assignTo ? staffName(assignTo) : "nobody";
     const assignLine = assignTo == null
       ? "• nobody is assigned to it — there is no adviser on the completed case and you are not on the team list"
       : wantMe
-        ? `• it will be assigned to YOU (${assignName}) — you ticked "to me"; without that it would have gone to ${staffName(defaultWho.id)}, ${defaultWho.why}`
+        ? `• it will be assigned to YOU (${assignName}) — you chose "to me"; without that it would have gone to ${staffName(defaultWho.id)}, ${defaultWho.why}`
         : `• it will be assigned to ${assignName} — ${defaultWho.why}`;
     /* R13 · M-31: a retention case is time-critical and the assignee is INHERITED, not chosen, so the one
        moment to say "they are on holiday" is here, in the dialog that is already asking. */
@@ -9367,7 +9383,7 @@ function briefSubLineHtml(it) {
 }
 /* R88 · A: the verbs a check carries, on its own row or as a sub-line. `open` is the row's Open (the case) or
    "" on a sub-line, whose host row already has one. */
-function briefAlertVerbsHtml(a, open) {
+function briefAlertVerbsHtml(a, open, side) {
   if (!a) return open || "";
   let door = "";
   const link = R7_ALERT_LINKS[a.rule];
@@ -9380,7 +9396,11 @@ function briefAlertVerbsHtml(a, open) {
   const close = a.severity === "crit"
     ? `<button class="btn btn-sm brief-wt-snooze" onclick="snoozeAlert('${id}','crit','${cid}')" title="Critical check — hide it until a date you pick. A reason is required and is written to the case.">⏰ Snooze…</button>`
       + `<button class="btn btn-sm brief-wt-dismiss" onclick="resolveAlert('${id}','crit','${cid}')" title="Critical check — close it now. A reason is required and is written to the case; it is raised again if the problem is still there.">Dismiss</button>`
-    : `<button class="btn btn-sm brief-wt-done" onclick="wtDoneAlert('${id}')" title="Done — closes this check. It is raised again on the next run if the problem is still there.">✓ Done</button>`;
+    /* R91 · 5: on a SUB-LINE the same close reads "Clear" — ✓ Done is the row's own verb, and a task-headed row
+       carrying a warning showed two ✓ Done that did different things. */
+    : side
+      ? `<button class="btn btn-sm brief-wt-done" onclick="wtDoneAlert('${id}')" title="Clear — closes this check. It is raised again on the next run if the problem is still there.">Clear</button>`
+      : `<button class="btn btn-sm brief-wt-done" onclick="wtDoneAlert('${id}')" title="Done — closes this check. It is raised again on the next run if the problem is still there.">✓ Done</button>`;
   return (open || "") + door + close;
 }
 /* R88 · A: ONE SUB-LINE for a folded-in item on a row that already exists for its case: what it is in a few
@@ -9396,7 +9416,7 @@ function briefSideHtml(it) {
   const sev = wtSevKey(a);
   return `<div class="s brief-side brief-side-alert brief-side-${sev}" data-alert-id="${esc(a.id || "")}" data-sev="${sev}" title="${esc(it.sub || "")}">`
     + `<span class="brief-side-t">${BRIEF_SIDE_ICON[sev] || "•"} ${esc(it.title || "")}</span>`
-    + `<span class="brief-side-acts">${briefAlertVerbsHtml(a, "")}</span></div>`;
+    + `<span class="brief-side-acts">${briefAlertVerbsHtml(a, "", true)}</span></div>`;
 }
 /* The data a row carries about what it merged, so a reader (and a suite) can see that a case is
    on the page once and which lists it came from. */
@@ -21992,7 +22012,7 @@ async function loadEmails() {
   const smsSummary = $("#sms-summary");
   if (smsSummary) {
     smsSummary.innerHTML = nSmsQueued
-      ? `The next <strong>8:05am</strong> SMS run (09:05 in British Summer Time) will send <strong>${nSmsQueued}</strong> waiting SMS. “Send SMS now” sends ${nSmsQueued === 1 ? "it" : "them"} straight away instead of waiting for it.`
+      ? `The next <strong>8:05am</strong> SMS run (09:05 in BST) will send <strong>${nSmsQueued}</strong> waiting SMS — “Send SMS now” sends ${nSmsQueued === 1 ? "it" : "them"} straight away.`   // R91 · 3b: ≤ 25 words (was 27)
       : `Nothing waiting to send — the 8:05am SMS run has nothing to pick up.`;
   }
   // R78 · A2 — smsFailedOnly/smsRows were computed above (wave 2 needed them); the property
@@ -26411,6 +26431,6 @@ const PALETTE_VERBS = [
 
 /* R81 · A3: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / app.js bumps the tag IN ALL SEVEN PLACES. */
-window.__nxTag_app = "r90";   // R89
+window.__nxTag_app = "r91";   // R89
 
 init();

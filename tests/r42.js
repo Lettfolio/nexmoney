@@ -242,7 +242,10 @@ async function readinessItems(page) {
 /* Exact strings copied byte-for-byte off admin/index.html (textContent, tags stripped) — the
    ground truth §E/§F/§I compare against, not something this file invented. */
 const BASIS_LEGEND_TEXT = "Three money bases on this page, headline first — earned (the headline): proc + broker + sols fee value on a case, counted in the month it completed, paid or not · outstanding: earned but not yet received — whether it has been invoiced or is still to be invoiced · cash (banked) (secondary): money actually received, counted in the month it was paid. Every figure below says which one it is.";
-const MONTH_LEGEND_TEXT = "Proc £ = procuration fee (paid by the lender) · Broker £ = fee charged to the client · Sols £ = solicitor referral fee. Figures on this panel are scoped to the month selected above (bases: see legend above).";
+/* R91 · 3d: was "Proc £ = procuration fee (paid by the lender) · Broker £ = fee charged to the client · Sols £ =
+   solicitor referral fee. Figures on this panel are scoped to the month selected above (bases: see legend above)."
+   (40 words) — now ≤ 25 under the PROSE rule; same three terms, same scope clause. */
+const MONTH_LEGEND_TEXT = "Proc £ = lender procuration fee · Broker £ = client fee · Sols £ = solicitor referral fee. Scoped to the month selected above.";
 const OWED_BASIS_ENDING = "— basis: outstanding (see legend above)";
 /* R87 · owner-admin: was "The 8am cron job sends whatever is sitting in the email queue. …" — "cron job" said to a
    broker is jargon (05 small stuff, 06 #11); the two-sentence shape this section pins is unchanged. */
